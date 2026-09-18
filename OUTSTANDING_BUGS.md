@@ -40,6 +40,57 @@
 > coverage must label its later assertions as FAST-path observations rather than count them as
 > slow-path coverage.
 >
+> #### *** CENSUSED 2026-09-17 BY THE grok SEAT. THE CLASS IS LIVE, THE POPULATION IS **THE FOUNDING
+> #### ROW AND NOTHING ELSE**, AND THE RULE'S OWN REMEDY IS MORE EXPENSIVE THAN THE MECHANISM NEEDS. ***
+>
+> **DO NOT CLOSE THIS ROW AS "CENSUS EMPTY."**  The zero is a zero of *new unlabeled fully-vacuous
+> rows*; the founding row is still shipped, still inside `gate_arm.sh`'s pinned `ARMBDT_RESULT`
+> **43/43**, and still vacuous for the reason the rule names -- **a gate-counted always-green slot in
+> its own denominator.**
+>
+> **MEMBERSHIP IS NOT MECHANICALLY ENUMERABLE, and the deriver-keyed-on-a-correlate rule predicted
+> exactly why.**  A `LDM`/`STM`/`LDRD` grep fails BOTH halves of membership and sweeps in six
+> non-members (the `#378` WARM/COLD pair, which is the *opposite* polarity -- a fast-path repair;
+> the memcpy fold; `#389` LDRD, which is ONE `memory_rw(datalen=8)`, not two page checks; `#386`
+> SWP, which never consults `host_load`; and a 1-register `LDMIA`).  **The grep-able CANDIDATE
+> GENERATOR -- not the class -- is a `host_load`/`host_store` test INSIDE a register loop, which in
+> this tree is `arm_pop` and `arm_push` ONLY.**  After that grep a per-row reading is still owed.
+>
+> **TWO PREMISE CORRECTIONS, and the second makes the remedy cheaper:**
+> * **"every later access IN THAT SESSION" OVERSTATES IT.**  The warm unit is `DYNTRANS_PAGESIZE`
+>   4096, indexed `addr >> 12`.  **Returning to the `GXemul>` prompt runs
+>   `invalidate_translation_caches(..., INVALIDATE_ALL)`**, so the warm does not survive a prompt.
+>   (`put b` does not re-insert -- `CACHE_NONE | NO_EXCEPTIONS`, and the RAM insert is gated on
+>   `!no_exceptions` -- but a `DM_DYNTRANS_OK` DEVICE page does, which is harmless on testarm RAM and
+>   would not be if a cold page were ever moved onto a device.)
+> * **"MORE ASSERTIONS MEAN MORE SESSIONS" IS TRUE BUT NOT REQUIRED.**  What the mechanism demands is
+>   **more FIRST-ACCESSES TO A COLD PAGE**, and a fresh process is not the only way to get one: a
+>   prompt return already invalidates.  Two cold observations can be two ONE-REGISTER instructions in
+>   ONE process with a prompt between them.  *Nothing splits a multi-access instruction's own loop --
+>   no debugger command runs between register i and i+1 -- so the intra-instruction half of the rule
+>   stands unchanged.*
+>
+> **AND P2 IS NARROWER THAN FILED:** a slow-path mutant is invisible to access 2+ only where the
+> helper HAS a fast arm.  `X(swp)` and PPC `lmw`/`stmw` loop `memory_rw` every iteration and take no
+> fast path, so a mutant of that call still reaches later registers.  A mutant editing SHARED control
+> flow (the running `addr`, the `*np` writeback) is also not this class.
+>
+> **ONE NEW FINDING, and it is labelling debt rather than a floor breach:** `ARM_STM_PC_DB_R7`'s
+> **`w0` conjunct** is a P4 miss -- the PC store is access 1 (cold, residue 7) and kills
+> `M_PUSHPC_NONE`, but `w0` is access 2 (fast, at `0x21003`) and is NOT labelled as a FAST-path
+> observation.  The row is not vacuous (its PC half still kills), so this is **debt on this row, not
+> a new queue id and not L2.**
+>
+> *Denominator, so the zero is checkable: 2 helpers with the shape x 3 shipped LDM/STM probes
+> (`arm_bdt`, `arm_endian`, `arm_memcpy`) x 3 multi-access legs in the slow-path instrument.  There
+> is no shipped `lmw`/`stmw`/`ld.d` probe, and `arm_writeback_probe.py` has no LDM/STM rows at all.*
+>
+> *** HONEST LIMIT, STATED BY THE SEAT ITSELF: it did NOT re-run the mutant table.  The founding kill
+> (`R1` red / `R2` green under a second-access slow-path mutant) is taken from the round record, not
+> re-measured -- so this census is a READING, and the founding row's vacuity is the only MEASURED
+> element in it. ***
+>
+> *Evidence: `_scratchpad/grokpush_20260917/grok_multiaccess.txt` and its brief.*
 > ### OPEN -- filed 2026-09-11 from the GPT-6 Astra PowerPC-detector answer. ALL THREE WERE
 > ### VOLUNTEERED: I asked about detector rows and it returned these unprompted.
 >
@@ -216,7 +267,7 @@
 > on a pass-1 seat's quoted sentence without the evidence under it.** The original entry follows,
 > unaltered except for this severity marker.
 >
-> **`lcaisaphys`** (MEDIUM, was HIGH) -- `dev_lca.c` `DEVICE_ACCESS(lca_isa)`, the two nested `cpu->memory_rw` calls at
+> **`lcaisaphys`** (MEDIUM, was HIGH -- and see the 2026-09-17 note at the end: I raised this to HIGH, was REFUTED, and put it back) -- `dev_lca.c` `DEVICE_ACCESS(lca_isa)`, the two nested `cpu->memory_rw` calls at
 > `:291-292` (write) and `:295-296` (read): both omit `PHYSICAL` and hand an already-physical address
 > (`LCA_ISA_BASE + relative_addr`) to the translator as a VIRTUAL one.  While the guest runs unmapped this is
 > invisible; **the moment a guest enables page tables every sparse access page-walks, lands in `not_found`, and
@@ -227,6 +278,53 @@
 > ignores entirely -- named now so a future round does not discover it mid-design.  The rung-3 fixture ALREADY
 > EXISTS (`regress/lca_isalane_probe.py`, `-E alpha -e alphabook1`), so the attempt is cheap and is owed.
 > Provenance: `regress/artifacts/lcaisalane/opus_pass1_20260910.md:218-222` (finding F7).
+>
+> > *** I RAISED THIS TO HIGH ON 2026-09-17 AND WROTE THAT THE DOWNGRADE HAD "NO RECORDED WARRANT
+> > ANYWHERE".  **THAT WAS FALSE.**  The warrant is TEN LINES ABOVE this entry. ***
+> >
+> > It is the block beginning *"SEVERITY CORRECTED 2026-09-11, SAME DAY AS FILING: HIGH -> MEDIUM"*,
+> > and it is careful: the "dies under any real OS" claim is a CHAIN OF THREE PREMISES, and only the
+> > first holds.  **(b)** enabling page tables does not necessarily produce a miss -- valid entries
+> > can give an identity mapping.  **(c)** no in-tree LCA guest is shown to enable paging at all.
+> >
+> > **WHY MY GREP MISSED IT, because the mechanism matters more than the miss:** I searched for the
+> > ROW ID and for `was HIGH`.  The rationale is a **shared section header covering three rows** and
+> > contains NEITHER.  A pattern that matched nothing returned a confident absence, and I wrote that
+> > absence down as a fact.
+> >
+> > *** AND THE ERROR IS THE ONE THE BLOCK ITSELF WARNS ABOUT, TEN LINES DOWN. ***  Its author
+> > wrote: *"I filed this HIGH on a pass-1 seat's quoted sentence without the evidence under it."*
+> > **I then raised it to HIGH on a seat's quoted sentence without the evidence under it.**  Same
+> > error, same row, same week, with the warning in plain sight.
+> >
+> > **WHAT SURVIVES, and it is not nothing:** the grok seat REFUTED premise (b) on the code --
+> > that premise is about K0SEG VAs, not about `0x1d0000000`, and a coincidental valid PTE at that
+> > VA would alias ISA onto RAM, **which is WORSE than `not_found`** and is still a reason for
+> > `PHYSICAL`.  **Premise (c) -- reachability -- stands UNREFUTED**, and severity turns on (c).
+> >
+> > **SO: MEDIUM stands, the FIX is still right, and the round is still worth taking.**  Grok also
+> > refuted the `IOC_HAE` collision noted above (I/O space does not use HAE -- HRM S6.2.8; the note
+> > is a wrong transfer from sparse MEMORY, which this file does not implement).  Settling (c) is
+> > the cheap next step: it is one question -- does any in-tree LCA guest enable paging?
+> >
+> > *** SETTLED THE SAME DAY, BY INVENTORY: **THERE IS NO IN-TREE LCA GUEST AT ALL.** ***
+> > `_images/` holds luna88k (m88k), macppc (PowerPC), landisk (SH4), a wdc scratch disk and a
+> > 70 KB `boot` blob -- **no Alpha image of any kind**, and no Alpha mention in its README.  All
+> > ten `alphabook1` users under `regress/` are HAND-BUILT PROBES, not operating systems.  So
+> > premise (c) holds, and more strongly than it was written.
+> >
+> > **A PROBE CAN STILL PAGE**, so the defect is reachable at rung 3 and the witness plan is sound:
+> > `alpha_pfnoffset_probe.py` already does `swpctx` four times, planting the PCB and tables while
+> > `ptbr` is still 0.  **The two facts do not conflict, and the ladder already separates them:
+> > rung measures REACHABILITY-PROOF STRENGTH, not HARM.**  A probe makes the row ELIGIBLE;
+> > severity is ordered by harm and gate blind-spots, and the affected real-guest population in
+> > this tree is EMPTY.  That is what keeps it MEDIUM -- **not** any claim that it is unreachable.
+> >
+> > *** THE WARRANT IS TIME-INDEXED AND ITS EXPIRY IS NAMED: MEDIUM rests on "there is no Alpha
+> > guest image in `_images/`".  **Adding one EXPIRES the premise and the severity must be
+> > re-argued.**  An absence record must name its warrant, and any change touching that warrant
+> > re-runs the measurement. ***
+
 >
 > **`lcaisasize`** (MEDIUM) -- same handler, `:280`: `relative_addr >>= 5` discards bits 4:0, and **HRM
 > `_scratchpad/21066_66a_hrm.txt:8850` (S6.2.6.1) says bits <4:3> ARE the transfer size**, with `:9198-9199`
@@ -5571,7 +5669,7 @@ straddling access beginning inside a device, which the late split leaves returni
    it is the argument for fixing it once at the choke point instead of per caller.
 5. **Device handlers now see two calls for a >1-page access into a multi-page device.** No
    handler was found that rejects an unexpected length except register-width devices
-   (`dev_sgi_gbe.c:726`, `dev_sgi_ip32.c:698`, `dev_kn01.c:89`, ~15 in `dev_pcc2.c`), and a
+   (`dev_sgi_gbe.c:726`, `dev_sgi_ip32.c:728` -- *** BUT SEE THE CORRECTION BELOW: that site is `macepci', and it does NOT reject; it warns UNLATCHED and falls through ***, `dev_kn01.c:89`, ~15 in `dev_pcc2.c`), and a
    naturally aligned ≤4-byte register access cannot cross a page. MANUAL for the reading,
    **UNKNOWN for reachability** — the committed differential's D1/D2 rows are the standing
    check.
@@ -19464,3 +19562,2181 @@ EOF, every line in full, EOF and exit 0 required.  Other detectors in `regress/`
 carry silence rows keyed on a literal or a grammar; which of them are FLOOR-graded, and so owe the same closure, has not
 been censused.  **The deriver, not a list:** grep `regress/*_probe.py` for rows whose name or note says `silent` /
 `quiet` / `noise`, and read each oracle.  Not owed by any shipped round: each row's grade was ruled in its own round.
+
+### `pit8253flood` (MED) -- filed 2026-09-16 from `#530`'s closing pass 5, found while measuring something else
+
+**`dev_8253.c` has TWO GUEST-DRIVABLE `fatal()` ARMS WITH NO LATCH, and a previous round of this project put them
+there.**  An ordinary 16-bit MSB write to counter 1 or counter 2 reaches:
+
+```c
+	case 1:	fatal("TODO: DMA refresh?\n");
+		break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
+	case 2:	fatal("TODO: 8253 tone generation?\n");
+		break;
+```
+
+**`#223` did the de-fatalisation and did not bound what it left behind.**  Both arms used to end the process; both now
+announce, unconditionally, once per write.  `grep -cE 'static int|warned|\(once\)' src/devices/dev_8253.c` returns
+**ZERO** -- the file carries no latch of any kind.
+
+**MEASURED, not estimated:** the `#530` c5 measuring seat's 150-row 8253 prototype counts the emissions and prints the
+count -- **18 of each per session, 36 per run**.  It moves no row (the probe parses `print` output), which is why it is
+a filed item and not a `#530` finding.
+
+*** THIS IS THE CARRIER'S OWN STANDING RULE UNMET, AT A SITE THIS PROJECT CREATED. ***  *"A guest-drivable `fatal()`
+needs a latch and not a verbosity flag"* -- and the reason is measured elsewhere in the tree: `fatal()` has **no
+early-out at all** (`src/core/debugmsg.c`, the `fatal()` body against `debug()`'s `if ((quiet_mode && !ss) || v < 0)
+return;`), so `-q` cannot silence it.  The house idiom is **N = 1 per DEVICE INSTANCE plus an explicit `(once)`
+marker**, which is ~82% of all suppression markers in `src/devices/`.
+
+It is also the DE-ESCALATION CLAUSE seen from the other side: `#223` removed a host kill -- correctly -- and with it
+the accidental tripwire that made the path self-announcing exactly once, leaving an unbounded announce that nothing
+counts.
+
+**WHAT IT OWES WHEN TAKEN** (it is NOT owed by any shipped round, and `#530` deliberately did not ride it along):
+* the rung-3 ATTEMPT the lifecycle ruling requires -- and most of a witness already exists, since the c5 seat's
+  prototype reaches both arms from an ordinary guest store on an unmodified machine;
+* the per-instance latch in the `(once)` idiom;
+* an ACCEPT row proving the legal MSB write still lands.  *** THE WARRANT GIVEN HERE WAS WRONG AND IS
+  CORRECTED IN PLACE (L4, 2026-09-17, Fable 5.1 adjudication; codex raised it independently). ***  This
+  bullet used to read *"the de-escalation clause applies, because the fix removes nothing but the flood"*.
+  **That REVERSES the clause's own premise.**  The clause binds a fix that REMOVES A HOST-FATAL GUARD,
+  because doing so destroys the accidental tripwire that made guard growth self-announcing.  `#223` removed
+  every kill in this file four rounds ago and the live `exit()` count is ZERO, so this round removes no such
+  guard and **the de-escalation clause is INAPPLICABLE** -- stated explicitly rather than left blank, because
+  an unrun check and an inapplicable one must not render the same.
+  **BUT CLAUSE (d) IS APPLICABLE AND THIS ENTRY NEVER MENTIONED IT:** the fix ADDS predicates where the code
+  had none (`if (!d->warned_x)` at each latched site), so under DEPENDS-ON each owes a null-repair mutant.
+  The smallest is ONE WORD -- `d->warned_tone` to `static int warned_tone` -- and every emission-count row
+  stays GREEN under it, because a single-machine probe has one device instance.  That shape is live in the
+  tree (`dev_pcc2.c:486`, `dev_osiop.c`, `dev_dec21143.c`), so a copy-paste reproduces it by accident; the
+  recommended kill is a SOURCE-LEVEL PRESENCE ROW asserting no `static int` occurs in this file.  Behavioural
+  accept rows still have value on ordinary regression grounds -- a count-only detector would miss a latch
+  guard accidentally enclosing the servicing code -- but that is a separate justification, not an invocation
+  of the host-kill clause;
+* **a sibling census, not an assumption:** the neighbouring `default: fatal("[ 8253: huh? writing to counter %i but
+  neither from msb nor lsb? ]")` is the same shape and must be counted, not guessed at.  Related rows: `floodclass`,
+  `staticlatchscope`.
+
+*One caution for whoever takes it, from the same seat's reading: an MSB write to counter **0** takes a different path
+(`timer_add` / `timer_update_frequency` with `hz = 1193182/counter`), so a row that programs a SMALL counter installs a
+high-frequency host timer.  Keep the programmed counter large.*
+
+*** PASS 1 RAN 2026-09-17 (panel_20260917_063557, NINE seats, PANEL_COMPLETE, no seat failure).
+THE PANEL CHANGED THIS ROUND SUBSTANTIALLY AND THE SCOPE IS NOW FIVE SITES, NOT SEVEN. ***
+
+* **`:351`/`:354` ARE DEAD CODE.**  `DEV_8253_LENGTH` is 4 and there is ONE registration tree-wide, so
+  `relative_addr` is in {0,1,2,3} exactly; `I8253_TIMER_CNTR0/1/2` are 0/1/2 and `I8253_TIMER_MODE` is
+  3, so all four values have named cases and the outer `default:` can never fire.  Three packet-fed
+  seats correctly refused to settle this and each named the missing fact -- the registered mapping
+  length, which the brief failed to inline.  Latching them would be the addition licence's
+  "cannot hurt".
+* **LATCH `:342`, AND REWRITE ITS MESSAGE TEXT.**  *** THIS BULLET SAID "DO NOT LATCH :342 IN THIS
+  ROUND" AND WAS OVERTURNED BY FABLE 5.1 ON 2026-09-17. ***  The reasoning it replaces -- that `:342`
+  is the only surviving symptom of the live defect now filed as `pit8253bcdbinary`, so latching it is
+  member 3 used to suppress a real event -- **confused a BOUNDED ANNOUNCE with SILENCE**.  A `(once)`
+  latch still announces on every boot that raises it; only REPETITION is dropped, and repetition
+  carries no information once the defect is FILED, which it now is.  Not latching it would end this
+  round with a guest-drivable UNBOUNDED `fatal()` still in the file under a rationale that reads as
+  principle and is not.  The text owes a rewrite because *"not yet implemented"* implies a REFUSAL
+  while the write is ACCEPTED:  `[ 8253: BCD format accepted; count decoded as binary
+  (pit8253bcdbinary) (once) ]`.  When `pit8253bcdbinary`'s own fix later deletes this site, the
+  detector row is re-pinned to `==0` under the ORACLE-CORRECTION ORDER -- re-pin, show the committed
+  build RED, then edit.
+  *** AND THE WAY THIS SURVIVED IS THE LESSON: the same instruction was written into TWO records
+  deliberately, 'so the scope change cannot be lost if only one file is read'.  I reversed it in the
+  `pit8253bcdbinary` block and left this copy live for half an hour.  **Duplicating a fact for safety
+  means every correction of it owes BOTH copies**, and only a grep that searched for the surviving
+  text -- not the corrected text -- found this one. ***
+* **`:198`/`:200` ACCEPT THE STORE -- nothing is declined there.**  `counter[1]`/`[2]` are stored and
+  read back to the guest, `hz[]` is computed, and `:187`'s `debug()` has already announced the
+  programming event.  So these are option-set member 4, not member 3.  Whether the announce should
+  then be LATCHED or DELETED OUTRIGHT is the panel's one live split (Opus says delete, grok says
+  latch) and is with the adjudicator.
+* **member 7 IMPLEMENT is NOT AVAILABLE for `:200`** -- there is no audio backend in the tree.  The
+  rejection is for AVAILABILITY, not because a latch is right; that distinction is the carrier's own
+  2026-09-06 rule.
+* **FIVE separate named `int` fields, NOT a bitfield.**  The discriminator is the tree's own at
+  `dev_wdc.c:93-102` -- RUNTIME MUTUAL EXCLUSIVITY, not site count.  Separate fields make the `#490`
+  collision class structurally impossible instead of merely guarded.
+* **The de-escalation clause is INAPPLICABLE** (no host-fatal guard is removed; `#223` did that four
+  rounds ago) **but CLAUSE (d) IS APPLICABLE** and the brief never mentioned it: the fix ADDS
+  predicates where there were none, so each owes a null-repair mutant.  The smallest is one word --
+  `d->warned_tone` to `static int warned_tone` -- and EVERY emission-count row stays green under it,
+  because a single-machine probe has one device instance.  That shape is live in the tree
+  (`dev_pcc2.c:486`, `dev_osiop.c` x6, `dev_dec21143.c` x2), so a copy-paste reproduces it.  The
+  recommended kill is a SOURCE-LEVEL PRESENCE ROW.
+* **The emission-count detector is ONE-SIDED as briefed** (glm): a site silently deleted or demoted to
+  `debug()` passes any "count <= 1" row.  Rows must assert ==1 on first drive AND +0 on repeat.
+* **A WITNESS-ORDERING CONSTRAINT** (codex): a device-signature control word DESTROYS the
+  initial-format condition `:204`/`:270` require, because `mode_byte` is shared across counters -- the
+  defect already tracked as `pitclobber`.  Those observations must PRECEDE any programming, and a
+  signature on another counter is not neutral.
+* **`dev_8253.c:68` carries a dormant `#define debug fatal` comment.**  One uncomment turns 12
+  `debug()` calls into an unlatched flood and invalidates any site census.  If this round touches
+  flood control here, delete the line or record why it stays.
+* **The counter-0 high-frequency-timer hazard is NARROWER than the brief said**: `timer_add` appears
+  only inside `case 0:`, so rows for `:198` (counter 1) and `:200` (counter 2) are unconstrained.
+* TWO NEW DEFECTS were found while answering and are filed separately: `pit8253lsbnotimer` (MED) and
+  `pit8253bcdbinary` (MED-HIGH).  **The panel has arguably demoted THIS row beneath both.**
+
+### `macepciwidth` (MED) -- filed 2026-09-17 from `#529`'s repair-14 panel, found by the Opus measuring seat
+
+**`#529` FIXED THE WIDTH CLASS IN `DEVICE_ACCESS(crime)` AND LEFT THE IDENTICAL CLASS UNTOUCHED IN
+`DEVICE_ACCESS(macepci)`, 530 LINES DOWN THE SAME FILE -- and the sibling is WORSE, because it does
+not decline at all.**  Verified by reading, not taken from the seat:
+
+```c
+ 722| DEVICE_ACCESS(macepci)
+ ...
+ 728| 	if (len != 4)
+ 729| 		fatal("[ macepci: unimplemented len %i ]\n", len);
+ 730|
+ 731| 	if (writeflag == MEM_WRITE) {
+ 732| 		idata = memory_readmax64(cpu, data, len);
+```
+
+There is **no `goto`, no `return` and no latch**.  A narrow access prints -- unlatched, so it FLOODS --
+and then **falls through into the switch with the wrong length anyway**, which is precisely the
+behaviour `#529`'s comment enumerates as the reason its own `goto` exists.
+
+*** AND IT CORRECTS A RECORDS DEFECT IN THIS FILE, which I made worse before I made it better. ***
+The straddling-access entry above cites this site in a list of *"register-width devices that REJECT an
+unexpected length"*.  **`macepci` does not reject.**  The citation was ALSO stale (`:698`, moved to
+`:728` by `#529`'s own diff), and correcting only the NUMBER left the false CLAIM standing -- *a
+correction is not safer than the thing it corrects*.  Both halves are now fixed.
+
+**SEVERITY, stated honestly:** MED rather than HIGH.  No witness exists yet -- whether a guest driver
+issues a narrow access to macepci config space is UNKNOWN, and the `#529` witness does not transfer
+(it was at CRIME).  **A round taking this owes the rung-3 ATTEMPT first**, per the 2026-08-27 ruling.
+The option set is the six-membered one; the tree's own answer for this exact shape is `#529`'s --
+DECLINE + LATCHED ANNOUNCE with `(once)` in the text.
+
+---
+
+### `crimectlflood` (LOW-MED) -- filed 2026-09-17, same provenance.  **IT HAS A DETECTOR COST, AND
+### THAT IS THE WHOLE REASON TO FILE IT RATHER THAN JUST FIX IT.**
+
+`dev_sgi_ip32.c:377-379` is a guest-drivable UNLATCHED `fatal()` -- every CONTROL write carrying a
+bit the model does not implement prints, with no `(once)` marker and no latch:
+
+```c
+ 375| 			idata &= ~CRIME_CONTROL_ENDIANESS;
+ 376|
+ 377| 			if (idata != 0)
+ 378| 				fatal("[ CRIME_CONTROL: unimplemented "
+ 379| 				    "control 0x%016llx ]\n", (long long)idata);
+```
+
+It is the same class as `pit8253flood` and belongs to `floodclass`.
+
+> *** BUT LATCHING IT WOULD RED A SHIPPED DETECTOR ROW, AND THE COUPLING IS EXACT. ***
+> `regress/crime_width_probe.py:1256` is
+> `row("p acc ctl msg", count(t, "CRIME_CONTROL: unimplemented", clean), 3, ...)` -- it COUNTS this
+> very message and expects **3**, one per accepted CONTROL write (`0x01` sd, `0x0001` sw, `0x0201` sw).
+> A latch takes that count to **1** and reds the row.
+
+**So this is not a free tidy-up.**  Whoever takes it must re-pin that row IN THE ORACLE-CORRECTION
+ORDER -- re-pin first, measure the committed build RED under the new expectation, THEN change the
+code -- or the fix and the detector land together and nothing distinguishes a repair from a test
+fitted to a binary.
+
+*Filed rather than fixed for that reason, and because the flood is bounded in practice: the message
+fires only on CONTROL writes with unmodelled bits, which the `#530`/`#529` probes drive deliberately
+and a real guest driver largely does not.*
+
+### `crimesplitwidth` (LOW, LATENT) -- filed 2026-09-17 on Fable's ruling, item (6) of its order
+
+**THE SPLIT WIDTHS 3/5/6/7 ARE UNREACHABLE AT CRIME *CONDITIONAL ON A CONSTANT*, AND THE DETECTOR HAS NO
+ROWS FOR THEM.**  Filed rather than rowed because the condition holds today and the addition licence does
+not accept "cannot hurt" -- but it is written down because the condition is one `#define` away from false.
+
+**THE DERIVATION, both halves verified by reading rather than taken from the seat:**
+
+* a real MIPS guest emits `len` in `{1, 2, 4, 8}` exactly -- the unaligned forms (`lwl/swl/ldl/sdl`) emit
+  *aligned* 4- and 8-byte accesses (codex, from `cpu_mips_instr_unaligned.c`);
+* **but `src/cpus/memory_rw.c:523` CLAMPS a straddling access at a device's end** --
+  `len = mem->devices[i].length - paddr;` -- and that expression can be 1..7 in general;
+* it is inert at CRIME **only because `DEV_CRIME_LENGTH` is `0x280`** (`dev_sgi_ip32.c:75`), which is
+  `8 x 80`, so for a naturally aligned access `length - paddr` is always a multiple of the access width.
+
+> **CHANGE THAT ONE CONSTANT TO A NON-MULTIPLE OF 8 AND WIDTHS 3/5/6/7 BECOME REACHABLE AT A HANDLER WHOSE
+> DETECTOR HAS NEVER SEEN THEM.**  `#529`'s decline arm treats every non-4, non-8 width alike, so the FIX
+> is almost certainly correct for them -- what is missing is any row that would notice if it were not.
+
+*** AND THE CONSTANT IS NOT FREE TO CHANGE, WHICH IS THE REASSURING HALF AND IS WORTH RECORDING SO NOBODY
+RE-DERIVES IT: *** `dev_sgi_ip32.c:77` sizes the register array with the same constant --
+`uint64_t reg[DEV_CRIME_LENGTH / sizeof(uint64_t)]` -- so a non-multiple of 8 would also change the array
+length and truncate the division.  A future edit would have to defeat both.
+
+**PROVENANCE, and it is a three-cornered disagreement that ended in a condition rather than a number.**
+deepseek argued the domain must carry the lane and PC as free factors; codex read the producer and showed
+the lane is constrained by exact-offset dispatch, so the domain is reachability-constrained rather than a
+cross-product; then the Opus adjudication showed codex's own argument is CONDITIONAL on
+`DEV_CRIME_LENGTH`.  Fable's ruling keeps D1 **OPEN**, explicitly as a CONDITION rather than a count:
+*"state it as a condition, not 2"*.
+
+**DISPOSITION: LOW and LATENT.**  No witness, no reachable path today, and a round that rowed it would be
+adding rows for a state the machine cannot enter -- the "cannot hurt" the addition licence refuses.  It
+earns a round only if `DEV_CRIME_LENGTH` changes or a second device shows the same clamp reaching a handler
+that does discriminate on width.
+
+### `pciaddrreadclobber` (LOW, LATENT, NO WITNESS) -- filed 2026-09-17 while triaging `macepciwidth`'s severity
+
+**A READ of the PCI ADDR register runs the WRITE path: it decomposes `idata`, which on a read is still
+its initialiser 0, and latches bus 0 / device 0 / function 0 / register 0 -- so the read both returns 0
+and CLOBBERS the address a previous write latched.**
+
+    dev_sgi_ip32.c, DEVICE_ACCESS(macepci):
+        case 0xcf8:     /*  PCI ADDR  */
+                bus_pci_decompose_1(idata, &bus, &dev, &func, &pcireg);
+                bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, pcireg);
+                break;
+
+`idata` is declared `uint64_t idata = 0` and assigned ONLY inside `if (writeflag == MEM_WRITE)`, so on a
+read it is zero.  The arm tests `writeflag` nowhere.  Real hardware returns the last value written to
+0xcf8; this returns 0 and discards the latch.
+
+*** THE SIBLING CENSUS IS THE FINDING, AND IT REVERSES THE OBVIOUS READING. ***  This looked like a
+macepci outlier.  It is not -- **all THREE PCI bridges in the tree share it**, byte for byte in shape:
+
+    src/devices/dev_sgi_ip32.c   DEVICE_ACCESS(macepci)      case 0xcf8
+    src/devices/dev_cpc700.c     DEVICE_ACCESS(cpc700_pci)   case 0
+    src/devices/dev_eagle.c      (eagle)                     case 0
+
+so it is an UPSTREAM IDIOM, not damage this fork did, and a round that "fixed" macepci alone would
+leave the class open in two other files while making the tree inconsistent.  *This is the carrier's own
+one-grep rule paying: grep the SIBLING HANDLERS' disposition before choosing one.*
+
+**WHY IT IS LOW AND NOT MED, stated as the condition rather than as a feeling:** the damage requires a
+guest that READS 0xcf8 between writing it and reading 0xcfc.  The common driver idiom is write-ADDR
+then read-DATA, which never touches this path.  **No witness exists and none was attempted** -- that is
+recorded as ATTEMPTED-NOT-YET rather than as absence, per the lifecycle rule that `none' must mean
+"tried and could not" rather than "did not think to".
+
+**WHAT IT OWES IF TAKEN:** the rung-3 attempt; a decision on whether a read should return the latched
+address (needs a stored copy -- the BACKED ACCEPT member, which carries the addition licence) or simply
+decline; and the fix must land in ALL THREE files or in none, since the census is what makes it a class.
+
+*** NOT A SEVERITY UPGRADE FOR `macepciwidth`, WHICH WAS THE QUESTION THAT FOUND THIS. ***  That row
+stays MED, and the reason is now CHECKED rather than assumed: the `len != 4` fall-through is NOT
+memory-unsafe.  `memory_readmax64`/`memory_writemax64` are both bounded by `len`; the only array index
+reachable through `bus_pci_data_access` is `cfg_base[ofs & (PCI_CFG_MEM_SIZE - 1)]`, which is MASKED,
+and config writes go through the `dev->cfg_reg_write` callback rather than a direct index.  The cost of
+the fall-through is an unlatched flood plus wrong-value semantics (a truncated `idata` into
+`bus_pci_decompose_1`, partial-width config reads), which is correctness, not memory safety.  **The
+queue entry's phrase "the sibling is WORSE" is true of the DECLINE BEHAVIOUR and false of SEVERITY, and
+is recorded here so a future round does not read it as grounds to escalate.**
+
+### `pit8253lsbnotimer` (MED-HIGH) -- filed 2026-09-17 by the kimi-k3:cloud seat; **WIDENED the same day**
+
+*** THIS ROW WAS UNDER-SCOPED, AND THE DATASHEET QUESTION IT FILED AS OPEN IS ANSWERED LOCALLY.
+Fable 5.1 found the governing sentence; I verified it and both masks by reading. ***
+
+`_scratchpad/i8254.txt:168-172`: *"CRM and CRL are cleared when the Counter is programmed.  In this way
+if the Counter has been programmed for one byte counts (either most significant byte only or least
+significant byte only) **the other byte will be zero**."*
+
+**THE MODEL DOES THE OPPOSITE IN BOTH ONE-BYTE ARMS:**
+
+    :175   LSB arm   counter[n] &= 0xff00    keeps a STALE MSB   (and installs no timer)
+    :179   MSB arm   counter[n] &= 0x00ff    keeps a STALE LSB   *** and THIS arm calls timer_add ***
+
+So the defect is not only *the LSB arm starts no timer*: **the composed count is WRONG IN BOTH ARMS**,
+and the MSB-only arm is the one that computes `hz` and installs the host timer -- so a stale low byte
+yields a **wrong host timer rate on counter 0**, the same consequence as `pit8253bcdbinary` reached by
+a different route.  Severity raised MED -> MED-HIGH: the original filing described the weaker half.
+
+**The datasheet also names the FIX SHAPE rather than leaving it to design:** clear `counter[sel]` at
+the CONTROL WORD (`dev_8253.c:310-312`), which is exactly where the datasheet says the CR is cleared.
+
+*Recorded because the failure is mine and it is a class: I read this datasheet an hour earlier FOR THIS
+ROW, grepped it for `BCD`, and read the hits.  The CR-clearing rule is 500 lines away and mentions
+neither `BCD` nor `LSB` in terms that grep matched.  **A targeted grep over a primary source answers
+the question you asked it, not the question you should have asked.***
+
+**A COUNTER PROGRAMMED IN LSB-ONLY MODE (RW=01) IS SILENTLY DEAD: the LSB arm updates `counter[]` and
+nothing else -- no `hz[]` recompute, no `timer_add`, no `timer_update_frequency`, and NO diagnostic.**
+
+```c
+        case I8253_TIMER_LSB:
+                d->counter[relative_addr] &= 0xff00;
+                d->counter[relative_addr] |= (idata & 0xff);
+                break;                       /* <- no hz[], no timer, no message */
+        case I8253_TIMER_MSB:
+                d->counter[relative_addr] &= 0x00ff;
+                d->counter[relative_addr] |= ((idata & 0xff) << 8);
+                if (d->counter[relative_addr] != 0)
+                        d->hz[relative_addr] = ...;          /* rate recomputed  */
+                debug("[ 8253: counter %i set to %i (%i Hz) ]\n", ...);
+                switch (relative_addr) {
+                case 0: if (d->timer0 == NULL) d->timer0 = timer_add(d->hz[0], ...);
+                        else timer_update_frequency(d->timer0, d->hz[0]);
+```
+
+**RW=01 is a LEGITIMATE 8253 mode** (`I8253_TIMER_LSB 0x10`, `src/include/thirdparty/i8253reg.h`), not
+an invalid value, so this is not a refusal decision -- the model simply implements one half of a
+two-half register and not the other.
+
+**TWO CONSEQUENCES, AND THE SECOND IS ARGUABLY WORSE THAN THE FIRST:**
+* a counter programmed LSB-only **never starts**, silently -- and for counter 0 that is the interrupt
+  source, so a guest using LSB-only programming gets no timer interrupts and no warning;
+* if a timer was **already installed** by an earlier MSB write, a later LSB-only write changes
+  `counter[]` while the running timer keeps the OLD frequency -- so the model's recorded counter and
+  its actual rate **diverge**, which no diagnostic reports.
+
+**PROVENANCE, and it is worth recording precisely: this was found by a PACKET-FED seat
+(`kimi-k3:cloud`) from the inlined function alone, while answering a brief about something else.**  It
+is option-set member 7 (IMPLEMENT) rather than a latch question, and it is a DIFFERENT defect from
+`pit8253flood` -- same file, same handler, unrelated mechanism.  Verified here by reading before
+filing; the seat's claim was exact.
+
+**WHAT IT OWES IF TAKEN:** the rung-3 attempt; a decision on whether the LSB arm should recompute
+`hz[]` and install/update the timer the way the MSB arm does (the symmetry argument) or whether the
+real 8253 defers until both halves are written in 16-bit mode -- **that is a DATASHEET question and
+`_scratchpad/i8254.pdf` / `i8254.txt` is present locally**, so it is answerable without guessing; and
+a row that programs LSB-only and observes whether the timer runs.
+
+*** AND THE DATASHEET MAKES THIS WORSE THAN FILED, not better.  `_scratchpad/i8254.txt`, READ: ***
+
+    :219      RW1 RW0 = 0 1 is "Read Write least significant byte only" -- a first-class programming
+              mode, listed beside MSB-only and 16-bit
+    :528      "The following conventions apply to all mode timing diagrams:  1) Counters are
+              programmed for binary (not BCD) counting and for reading writing least significant byte
+              (LSB) only"
+
+**EVERY MODE TIMING DIAGRAM IN THE INTEL DATASHEET IS DRAWN IN LSB-ONLY MODE.**  It is not an exotic
+corner -- it is the manufacturer's canonical illustration case, and it is the one programming mode in
+which this model never starts a timer at all.
+
+*** CAUTION FOR WHOEVER TAKES IT, inlined so it is not rediscovered: an MSB write to counter 0 calls
+`timer_add(hz, ...)` with `hz = 1193182 / counter`, so a row programming a SMALL counter installs a
+HIGH-FREQUENCY HOST TIMER.  Keep the programmed counter large. ***
+
+### `pit8253bcdbinary` (MED, LIVE, guest-visible) -- filed 2026-09-17, found by the Opus 5 seat on `pit8253flood` pass 1
+
+*** SEVERITY CORRECTED MED-HIGH -> MED by Fable 5.1 the same day, and the correction is about REACH,
+not impact.  The impact stands exactly as filed.  codex searched the guest sources and found NO guest
+that programs BCD and none that programs counter 1 at all; I had set MED-HIGH on impact alone without
+weighing whether anything reaches it. ***
+
+**THE 8253 ACCEPTS A BCD CONTROL WORD AND THEN INTERPRETS THE COUNT AS BINARY, SO A BCD-PROGRAMMED
+COUNTER RUNS AT THE WRONG RATE -- AND FOR COUNTER 0 THAT IS THE HOST TIMER, SO GUEST TIMEKEEPING IS
+WRONG BY UP TO ~4x.**  Every element verified by reading before filing:
+
+* `I8253_TIMER_BCD` occurs **exactly twice in the whole tree** -- the `#define` at
+  `src/include/thirdparty/i8253reg.h:99` and one `if` at `dev_8253.c:339`.  **There is no BCD
+  arithmetic anywhere in the fork.**
+* the bit is nevertheless **ACCEPTED**: `dev_8253.c:310` is `d->mode_byte = idata`, unmasked.
+* the count is then read as **BINARY**: `:181-184` computes
+  `hz = I8253_TIMER_FREQ / (float) d->counter[n]`.
+* arithmetic, worked rather than asserted: a guest programming BCD `0x9999` means decimal **9999**
+  (~119.3 Hz).  The model reads 0x9999 as **39321** and computes **30.3 Hz** -- **3.93x wrong**.
+* for counter 0, `hz[0]` is what `timer_add` / `timer_update_frequency` install (`:192-196`), so the
+  error is the REAL host timer frequency, not a cosmetic field.
+
+*** AND THIS IS WHY IT IS FILED NOW RATHER THAN LATER: `pit8253flood` WAS ABOUT TO LATCH THE ONLY
+SURVIVING SYMPTOM. ***  `fatal("[ 8253: BCD not yet implemented ]")` at `:342` is the single signal
+that this defect is live.  A warn-once latch converts a loud recurring signal into one line and then
+silence -- **member 3 used to suppress a real event, which is exactly what the flood-versus-event
+distinction exists to prevent.**  In the seat's words: *"it is the only surviving symptom of a live,
+guest-visible correctness defect, and a warn-once latch converts a loud recurring signal into one line
+and then silence."*
+
+> *** THAT CONSEQUENCE WAS **OVERTURNED** BY FABLE 5.1 ON 2026-09-17, THE SAME DAY IT WAS WRITTEN,
+> AND THE SUPERSEDED INSTRUCTION IS DELETED RATHER THAN DEMOTED. ***  This block used to read:
+> *"CONSEQUENCE FOR `pit8253flood`: DO NOT LATCH `:342` IN THAT ROUND."*  **LATCH IT.**
+>
+> **The reasoning it replaces confused a BOUNDED ANNOUNCE with SILENCE.**  A `(once)` latch still
+> announces the event on every boot that raises it; only REPETITION is dropped, and repetition
+> carries no information once the defect is FILED -- which it now is, by this row.  Leaving `:342`
+> unlatched would end that round with a guest-drivable UNBOUNDED `fatal()` still in the file, under a
+> rationale that reads as principle and is not.
+>
+> **AND THE MESSAGE TEXT OWES A REWRITE, which is the part the original framing missed:** *"BCD not
+> yet implemented"* implies a REFUSAL, and the write is ACCEPTED.  The shape ruled is
+> `[ 8253: BCD format accepted; count decoded as binary (pit8253bcdbinary) (once) ]`.  When the fix
+> for THIS row later deletes the site, its detector row is re-pinned to `==0` under the
+> ORACLE-CORRECTION ORDER -- re-pin first, show the committed build RED, then edit the code.
+
+**WHAT IT OWES IF TAKEN:** the rung-3 attempt; a decision between IMPLEMENTING BCD counting (member 7)
+and DECLINING the BCD bit at the control-word write (refusing to accept a mode the model cannot
+honour, which is honest and is one line); and `_scratchpad/i8254.pdf` / `i8254.txt` is present locally,
+so the datasheet question -- what a real 8254 does with a BCD count -- is answerable without guessing.
+
+*** GROUNDED IN THE PRIMARY SOURCE THE SAME DAY IT WAS FILED.  `_scratchpad/i8254.txt` (Intel 8254
+datasheet) was verified present and READ, rather than cited on the strength of a paragraph: ***
+
+    :213-216  the control word's BCD bit -- 0 is "Binary Counter 16-bits", 1 is "Binary Coded Decimal
+              (BCD) Counter (4 Decades)"
+    :671-673  "The largest possible initial count is 0  this is equivalent to 2^16 for binary counting
+              and 10^4 for BCD counting"
+    :677-678  the counter "wraps around to the highest count  either FFFF hex for binary counting or
+              9999 for BCD counting"
+
+**So the datasheet states the defect directly: a BCD counter is a 4-decade counter whose range is
+10^4 and which wraps at 9999, while the model applies 16-bit BINARY arithmetic to the same bytes.**
+The Opus seat's 0x9999 example is not an arbitrary worst case -- it is the datasheet's OWN maximum BCD
+count.  A round taking this row does NOT need to reason from first principles about what BCD means.
+
+*A sibling the same seat found and which belongs with this one: `d->mode[]` is set at `:312`/`:379-381`
+and read only by a `debug()` at `:324`; its one functional reference at `:125` is COMMENTED OUT.  So
+the PIT's COUNTING MODE is unmodelled in the same way BCD is, and `mode[]` cannot be used as an oracle
+by any row.*
+
+### `lcastubparity` (MED) -- filed 2026-09-17 on Fable 5.1's ruling in `#530`'s closing pass 6
+
+**TWO OF `#530`'s FIFTEEN KILLS ARE ONE-ROW KILLS THAT RIDE AN EMULATOR TODO STUB IN A DIFFERENT
+DEVICE.  IMPLEMENTING THAT STUB TURNS BOTH MUTANTS INTO 352/352 TOTAL ESCAPES.**
+
+    W23      351/352   sole red `stub3 w2'   (probe_W23.raw, verified: exactly one FAIL)
+    cdxZL3   351/352   sole red `stub3 z1'   (probe_cdxZL3.raw, verified: exactly one FAIL)
+
+Both rows observe `dev_pckbc.c:944` -- a `static int x; x++` stub that the file itself marks
+**`TODO (port 0x61)`**, shared across ports 0x61-0x6f and counting BOTH directions.  The kill depends
+on that stub's exactly-one-parity-flip behaviour.
+
+*** THE TRIGGER IS AN IMPROVEMENT TO A DIFFERENT DEVICE, WHICH IS THE LEAST-SUSPECTED KIND OF
+REGRESSION. ***  Nobody editing `dev_pckbc.c` to implement the PC speaker port has any reason to look
+at an LCA ISA-lane detector.  The two rows go green, the two mutants sweep clean, and `#530`'s round
+record silently becomes false.
+
+**AND THE EXISTING GUARD IS NOT SUFFICIENT, which is why this is a ROW and not just a header line.**
+The probe header discloses the dependency at `:143-146`, and `nox` reds exactly the four `stub<l> live`
+rows -- but Fable's ruling names the hole: **a real 0x61 implementation could keep "two reads differ"
+TRUE (so the liveness rows stay green) while breaking the exactly-one-parity-flip COUNT property the
+kill actually rests on.**  The tripwire tests a weaker property than the one being relied on.
+
+> **RULED: file the row AND keep the disclosure -- both, not either.**  The header sentence is, in the
+> adjudicator's words, *"where knowledge goes to not-fire"*: nothing surfaces it at the moment someone
+> touches `dev_pckbc.c`.  The row carries the TRIGGER so a future reader meets it from the other side.
+
+**WHAT IT OWES IF TAKEN:** re-measure `W23` and `cdxZL3` against whatever replaces the stub, and either
+re-pin the two rows onto a channel the implemented port still provides, or add a second carrier for
+each cell so neither mutant has a sole carrier.  **It is NOT a defect in `dev_pckbc.c`** -- the stub is
+honest about being a stub.  It is a coupling between a detector and a TODO, recorded so that fixing the
+TODO does not silently cost two kills.
+
+*Provenance: the Opus 5 seat raised it as a residual worth a named queue item; Fable 5.1 ruled it earns
+one and supplied the reason the `nox` tripwire does not cover it.  The sole-red claims were verified
+against both raw logs before filing.*
+
+
+### `seatauditgap` (MED, RECORDS) -- filed 2026-09-17 at the owner's direction, from a ledger audit
+
+**37 OF THE 143 ROWS THAT SHIPPED CODE OR ARE SHIPPING IT ARE MISSING A MANDATED SEAT, AND SIXTEEN OF
+THOSE TOUCH EMULATOR SOURCE.**  The standing directive is a full nine-seat panel on every fix with
+Fable reviewing and adjudicating; it has not been met, and nothing in the tree reported that.
+
+    missing codex   33        missing grok    37
+    missing fable5  26        missing opus5   28
+    rows missing at least one of codex/grok/fable5: 37  (16 emulator, 14 harness, 7 not yet committed)
+
+**TEN of the sixteen emulator rows are missing ALL THREE.**  *** `sgirergbroundtrip` has ZERO seat
+entries of any kind and shipped under `7a41b3f`. ***
+
+**DO NOT QUOTE THOSE COUNTS -- RUN THE DERIVER**, `regress/artifacts/seataudit_20260917/seat_audit.py`.
+They move with the ledger, and a transcribed count in a records file is what this project keeps having
+to correct.
+
+*** THE AUDIT'S LIMIT IS PART OF THE FINDING: the ledger records what was WRITTEN DOWN, not what was
+FIRED. ***  Section H of `precommit_check.sh` has the same limit and says so.  A row here is either a
+REVIEW gap (fire the seats) or an UNREAD REVIEW (the answers exist in a panel dir and nobody wrote them
+back) -- different remedies, and this project has three times found real defects inside the second.
+
+**WHY NO GATE CAUGHT IT:** section H verifies that a STARTED, non-filing STAGE carries nine recorded
+seats.  It never asks whether a shipped ROW was ever read by a named seat.  **A per-row seat-coverage
+check is the structural fix and is FILED, not built** -- it changes what every commit must pass and
+owes two negative controls, which is an owner decision rather than a round's.
+
+**PER-ROW COVERAGE -- WHICH LLM CHECKED EACH FIX -- IS AT
+`regress/artifacts/seataudit_20260917/COVERAGE.txt`**, one line per fix with a cell per seat carrying
+that seat's strongest grade (`C`/`M`/`B`/`U`), `*` for answered-but-ungraded and `.` for never
+checked.  **143 fix rows: 102 have all nine seats, 41 have at least one gap, and FOUR have no seat
+entry at all** (`alphapfnoffset`, `alphaswpctxptbr`, `asiceventaddr`, `witnessinvisible`).  The
+dashboard renders the same data as a row x seat grid, where a blank cell IS the gap.
+
+**WHAT IT OWES:** the full panel on
+`regress/artifacts/seataudit_20260917/BRIEF.md` (the combined diff is
+`regress/artifacts/seataudit_20260917/unreviewed.diff`, 64 KB / 31 hunks, self-contained), then a Fable
+review AND adjudication, Fable last.  Findings disposition under the LATE-DISSENT rule: wrong record ->
+corrected in place; measured false pass -> follow-up commit; everything else -> its own queue item
+carrying the dissent verbatim.  Never amended under a closed round's number.
+
+
+### `gdromdmaxferflood` (MED, floodclass) -- filed 2026-09-17 by the **agy** seat, late-review panel
+
+**`dev_dreamcast_gdrom.c`'s `Transfering %i bytes` diagnostic is an UNLATCHED `fatal()` on the
+NORMAL DMA path** -- it fires on every legal guest DMA transfer, with no `d->warned` bit and no
+`(once)` marker, in a file that already carries twelve properly latched sites and an enumerated
+`GDROM_W_*` bit-position scheme built exactly for this.
+
+**DISPOSITION: FILED, not fixed in-round, and the reason is measured rather than procedural.**
+agy raised it while reviewing `7c9dd9e` (#462), which is where it now sits -- but
+
+    git show 7c9dd9e^:src/devices/dev_dreamcast_gdrom.c | grep -n Transfering
+
+returns the identical UNLATCHED `fatal()` one line up.  **`#462` MOVED and re-formatted it; it did
+not introduce it.**  So this is not a measured false pass of `#462` and not a wrong record -- it is
+LATE-DISSENT disposition 3, a new queue item carrying the finding as provenance.  *Never amended
+under a closed round's number.*
+
+**WHAT IT OWES:** the flood is on the success path, so the `(once)` idiom is the wrong shape --
+latching it would suppress a diagnostic that is genuinely per-transfer information.  The option set
+needs naming before a fix is designed; `#462`'s own comment says the line was re-pointed at
+`d->data_len` deliberately, and a row (`nodata notx`) PINS it MEASURED RED at 50/51.  **A latch
+would move that row**, so this is not the one-line change it looks like.
+
+**Found by a seat reviewing a DIFFERENT question** -- the standing license working exactly as
+intended, and the fourth time this session that a seat checking one claim found another.
+
+
+### `diskimageternaryoob` (HIGH, coverage/(d)-floor) -- filed 2026-09-17, kimi seat via the late-review panel
+
+**`#491`'s CLAMP CAN BE NULLED BY SWAPPING TWO TERNARY ARMS, AND NOTHING IN THIS TREE WOULD
+NOTICE.**  The shipped line in `fread_helper()` is
+
+    lentoread = len > (size_t) remain? remain : (off_t) len;      /*  min(len, remain)  */
+
+Swap the arms and it is `max(len, remain)`.  When `len < remain`, `lentoread` EXCEEDS the caller's
+`len`, and the very next statement is `fread(buf, 1, lentoread, ...)` -- **a write past the end of
+the caller's buffer.**
+
+**VERIFIED IN SOURCE before filing** (`src/disk/diskimage.c`, the `lentoread` assignment and the
+`fread` immediately below it).  The mutant is one token, it is the canonical clause-(d) shape --
+*keep the guard, null its repair* -- and it leaves **zero compiler warnings**, because the two casts
+`#491` added stay exactly where they are.
+
+> *** THE REASON NOTHING CATCHES IT: `#491`'s ONLY DETECTOR IS THE BUILD-WARNING GATE. ***  That
+> gate's oracle is "gcc emits no `-Wsign-compare`", and the mutant emits none.  **The row's
+> detector is structurally incapable of observing the defect its own fix prevents** -- the
+> check-that-cannot-fail shape, arrived at from the detector side.
+
+**AND THE PATH IS MEASURED SILENT, which is what raises this from tidy to HIGH.**  `#472`'s own
+comment records: *"a 1024-byte read at offset 511 returned 512 overlay bytes where exactly one was
+correct, and reported SUCCESS, so nothing surfaced to the caller."*  So an over-read here does not
+announce itself either -- it corrupts and returns success.
+
+**WHAT IT OWES, and the natural instrument already exists:** `build-asan/` is configured and the
+tree carries `gate_asan_sweep.sh`.  An overlay-path read with `len < remain` under ASAN turns this
+from an invisible over-read into a hard, attributable report.  **That is a detector row, not a
+product change -- the shipped code is CORRECT and must not be touched.**
+
+*Severity is for the COVERAGE GAP, not for a live defect: `min` is what ships today.  It is ranked
+HIGH rather than MED because the admitted edit is one token, the consequence is a heap over-read,
+and the detector that would have to catch it is blind by construction.*
+
+*Provenance: the kimi seat, packet-fed via the `kimi-k3:cloud` substitute, so this is ATTACK
+REASONING and not a repo-fact reading -- the source verification above is the main loop's, done
+because a packet-fed seat cannot open the file.  It was the sharpest mutant of a nine-seat panel.*
+
+
+### `pcc2c040returnmutant` (MED, coverage/(d)-floor) -- filed 2026-09-17 per the LATE-DISSENT rule
+
+**THREE SEATS INDEPENDENTLY RE-FOUND A GAP THE SHIPPED CODE ALREADY ADMITS IN A COMMENT, AND NO
+QUEUE ITEM CARRIED IT.**  `src/devices/dev_pcc2.c` says, in product code:
+
+    `assert = 0' -> `return' at THIS line is a one-token mutant every shipped row passes.
+
+**VERIFIED IN SOURCE:** `assert = 0;` sits at the foot of the C040 block, and `INTERRUPT_ASSERT` /
+`INTERRUPT_DEASSERT(d->cpu_irq)` are the next statements after the enclosing `}`.  **A `return`
+there skips BOTH**, so the IRQ line is left in whatever state it held instead of being deasserted --
+a stranded interrupt, not merely a missed suppression.
+
+**WHY THIS IS A NEW ROW AND NOT A REOPENING OF `pcc2c040assertrow`.**  That row is CLOSED and it was
+closed on a DIFFERENT mutant: its own note records it as *"`#512`'s own declared floor breach ...
+`assert = 0` is the repair's effect, so nulling it is (d)'s canonical form"*.  **That is the VALUE
+form.  This is the CONTROL-FLOW form**, and the two fail at different places -- value-nulling loses
+the suppression, `return` additionally loses the deassert.  *Never amend shipped code under a closed
+round's number.*
+
+**DISPOSITION 3 (file as a new item), NOT disposition 2, and the distinction is honest rather than
+convenient: NOBODY HAS MEASURED IT.**  minimax, deepseek and kimi are all PACKET-FED -- they cannot
+build -- and grok read rather than ran.  So this is a PREDICTION from four independent readers plus
+the commit's own comment.  A measured escape would make it L2.
+
+**The dissent verbatim, as provenance** (minimax, `_scratchpad/panel_20260917_100431/ollama_minimax.txt`):
+
+> *"This is a real, named detector gap.  `assert = 0` -> `return` skips the
+> `INTERRUPT_DEASSERT(d->cpu_irq)` below.  If the shipped detector rows do not assert that
+> deassertion happens when C040 is set, this mutant is not pinned.  **This is the highest-yield Q2
+> finding in the brief.**"*
+
+**WHAT IT OWES:** one row whose oracle observes DEASSERTION (not merely "no assert"), then the
+mutant built and scored.  If it escapes, L2 against the composite.
+
+*The records lesson is the one worth carrying: **a gap disclosed in a CODE COMMENT is invisible to
+the queue.**  Clause (e) makes a disclosed hole legitimate, but disclosure has to land where the
+queue can see it -- the row closed, the comment stayed, and four readers had to re-derive it.*
+
+
+### `cpusexitsweep` (HIGH, census/scope) -- filed 2026-09-17.  **`exitsweep` CLOSED OVER `src/devices/` ONLY, AND `src/cpus/` WAS NEVER CENSUSED.**
+
+**THE GAP IS IN THE CLOSED ROW'S OWN TITLE:** `exitsweep` reads *"terminating sites across
+**src/devices/** -- MEASURED 360 on HEAD 733a4b6"*.  It is closed, and it is correct about what it
+measured.  **`src/cpus/` was simply outside its scope, and no row has ever covered it.**
+
+**AND A SECOND SHAPE COMPOUNDS IT: `cpu->running = 0` IS NOT `exit(`.**  It ends the emulator
+gracefully rather than killing the process, so even an `exit(`-keyed sweep of `src/cpus/` would walk
+straight past it.  *That is the deriver-keyed-on-a-correlate class again -- the third instance
+today.*
+
+**THE POPULATION -- run the deriver, do not quote these** (`grep -roh` over `src/cpus/*.c`, working
+tree, 2026-09-17):
+
+    src/cpus/     exit(        111 occ RAW  ->  **73 IN CODE**
+    src/cpus/     running = 0   52 occ RAW  ->  **41 IN CODE**
+
+> #### *** CORRECTED WITHIN THE HOUR, 2026-09-17: THOSE FIRST FIGURES WERE THE **RAW STRING
+> #### COUNT**, AND IN THIS CODEBASE THAT MEANS THEY COUNTED THE PROJECT'S OWN COMMENTS ABOUT
+> #### THE PATTERN. ***
+>
+> Caught while enumerating `cpu_alpha_palcode.c` site by site: `:413` came back as a site and is a
+> **COMMENT** -- the very paragraph quoted above, which says the file "has FOUR sites that meet an
+> unrecognised selector with `fatal()` and `cpu->running = 0`".  **The census counted its own
+> documentation.**
+>
+> Re-derived with block comments, line comments and string literals STRIPPED first:
+>
+>     file                          raw  code        file                        raw  code
+>     cpu_arm.c                      16    16        cpu_mips_instr.c              5     0  ***
+>     cpu_arm_instr.c                12    11        cpu_sh_instr.c                2     0  ***
+>     cpu_alpha_palcode.c             9     8        cpu_ppc_instr.c               1     0  ***
+>     cpu_m88k_instr_loadstore.c      3     3        cpu_m88k_instr.c              1     0  ***
+>     cpu_dyntrans.c                  2     1        cpu.c                         1     1
+>
+> **FOUR FILES HAVE ZERO REAL SITES** and were listed as having them.  `exit(` is inflated ~34%.
+>
+> > **THE SHARPENED LESSON, and it is specific to a project like this one: A STRING-KEYED CENSUS IS
+> > INFLATED BY ITS OWN DOCUMENTATION WHENEVER THE CODEBASE'S COMMENTS DISCUSS THE PATTERN BEING
+> > COUNTED.**  This fork's comments are unusually dense about exactly `exit(` and `running = 0`,
+> > because de-fatalisation is its main campaign -- so it is the WORST case for that method, and
+> > the method was mine.
+>
+> *Third instance today of a deriver keyed on a correlate, and the first where the correlate was
+> the project's own prose about the class.  The raw figure also moved 52 -> 53 between two of my
+> own runs, because the second used `running\s*=\s*0` where the first used a fixed string: **a
+> deriver names its pattern, or its output is ambiguous between two runs of itself.***
+
+    per file:  cpu_arm.c 16   cpu_arm_instr.c 12   cpu_alpha_palcode.c 9   cpu_mips_instr.c 5
+               cpu_m88k_instr_loadstore.c 3   cpu_sh_instr.c 2   cpu_dyntrans.c 2
+               cpu_ppc_instr.c 1   cpu_ppc.c 1   cpu_m88k_instr.c 1
+
+> *** THE COUNT IS AN UPPER BOUND, NOT THE CLASS, AND THIS FILE'S OWN RULE SAYS SO: a deriver must
+> key on what DEFINES the class. **Not every `cpu->running = 0` is a defect -- `PAL_halt` is a
+> LEGITIMATE halt.** What defines the class is reachability from a GUEST-SUPPLIED SELECTOR, which no
+> regex tests. These figures are a triage population, not a finding. ***
+
+## THE MOTIVATING INSTANCES, VERIFIED IN SOURCE
+
+`src/cpus/cpu_alpha_palcode.c`'s `alpha_prom_call()` reads **a0, a1, a2 and a3 straight out of guest
+registers** (`cpu->cd.alpha.r[ALPHA_A0..A3]`), then:
+
+    the GETENV arm      default: fatal("... PROM getenv %i: TODO"); cpu->running = 0;
+    the PROM-call arm   default: fatal("... PROM call, a0=0x%"PRIx64); cpu->running = 0;
+
+**So a guest that sets a register and makes a PAL call stops the emulator.**  Two arms, both
+guest-selected.
+
+## *** THE FILE ALREADY KNEW, AND THAT IS THE RECORDS FINDING ***
+
+A comment in that same file states it outright:
+
+> *"this file has FOUR sites that meet an unrecognised selector with `fatal()` and
+> `cpu->running = 0` -- the two GXemul-PROM `default:` arms, the privileged-from-user check, and
+> `wrent` ... This arm deliberately does NOT follow them, in the fork's de-fatalising direction.  A
+> reader must not conclude the file has no contrary practice; it has four instances of it."*
+
+The round that wrote it was de-fatalising a NEIGHBOURING arm, disclosed the four honestly, and moved
+on -- which was right for that round.  **But no queue item carries them, so the disclosure lives
+only in a code comment.**
+
+> **THAT IS THE SECOND INSTANCE TODAY OF A GAP DISCLOSED IN PRODUCT CODE AND INVISIBLE TO THE
+> QUEUE** (the first being `pcc2c040returnmutant`).  Clause (e) makes a disclosed hole legitimate --
+> but disclosure has to land where the queue can see it, or four readers re-derive it later.
+
+## WHAT IT OWES
+
+A census of `src/cpus/` on the same footing as `exitsweep` did `src/devices/`, **keyed on
+reachability from a guest-supplied value rather than on the string**, with each site triaged under
+the seven-member option set.  **Ranked HIGH for the CENSUS, not for any single site** -- the two
+palcode arms are the only ones verified guest-drivable so far, and 163 sites is a population to
+triage, not 163 defects.
+
+*Note `src/cpus/` is a materially less-hardened population than `src/devices/`, and the file's own
+comment says why in passing: the latched-announce marker `(once)` appears ~41 times under
+`src/devices` and **NOT ONCE** under `src/cpus`.*
+
+
+### `armmsrmodekill` (HIGH) -- filed 2026-09-17. **A PRIVILEGED GUEST `MSR` ENDS THE EMULATOR
+### PROCESS.** Volunteered by the grok seat while it was refuting a DIFFERENT brief, then
+### CONFIRMED on a second firing by a full instruction-to-`switch` trace.
+
+**`cpu_arm.c` `arm_load_register_bank()` `default:` -> `fatal(); exit(1)` on any reserved
+`M[4:0]`.**  One ARM instruction from the boot mode kills the host:
+
+    MSR CPSR_c, #0x14        encoding 0xE321F014, on -E testarm
+
+`testarm` boots **SVC32 (`0x13`), privileged** (`arm_cpu_new` sets `ARM_MODE_SVC32` on both the
+prom and non-prom arms).  `0x14` is the first hole above it and is none of the seven modelled
+modes (USR32/SYS32/FIQ32/IRQ32/SVC32/ABT32/UND32).  **There is no `arm_mode_ok` anywhere.**
+
+*** GATE 14's 358 REAL-DECODE CHECKS NEVER FEED THIS ENCODING. ***  That is the gate blind-spot
+this row is ranked on.
+
+## THE CHAIN, AND THE THREE THINGS THAT LOOK LIKE FILTERS AND ARE NOT
+
+`X(msr_imm)` masks to flags **only when the CURRENT mode is exactly `ARM_MODE_USR32`** -- SYS32 is
+not in that test, and boot is SVC32, so it does not fire.  The same-mode skip does not fire
+(`0x13 != 0x14`).  The c-bit is set, so the mode field is writable.  The store is then
+**unfiltered**, and `arm_load_register_bank()` falls to `default:` and calls `exit(1)`.
+
+*** DO NOT WITNESS WITH `MSR CPSR_c, #0`.  IT IS THE `#449`-SHAPE TRAP. ***  DDI 0100I's prose
+(A2.5.1) makes M[4:0] privileged while the EXTRACTED Table A4-1 shows `PrivMask = 0x0000000F`
+(a stagger hazard -- see the extracted-table calibration rule).  **Under the `0x0F` reading `#0`
+would keep M4 and land on USR32 `0x10`, which IS modelled and does NOT kill** -- so a `#0` probe
+could go GREEN ON A LIVE DEFECT.  `0x14` survives both readings, because M4 is already 1 from
+SVC32 and bits 3:0 of `0x14` are `0x4`.  Also usable: `0x15/0x16/0x18/0x19/0x1a/0x1c/0x1d/0x1e`.
+
+#### *** REASON CORRECTED (MSRZERO-REASON-CORRECTION), SAME SESSION.  THE ADVICE ABOVE SURVIVES; THE
+#### REASONING FOR IT IS WRONG ON THIS EMULATOR. ***
+
+The paragraph above says `#0` "could go GREEN ON A LIVE DEFECT" -- a `#449`-shape fake-green.
+**Measured against the source: it does not.**  `ARM_MODE_USR26` is `0x00`
+(`src/include/cpu_arm.h:104`), `arm_load_register_bank()` cases on exactly the seven **32-bit**
+modes, and `grep -c 'case ARM_MODE_USR26'` across `src/` is **ZERO**.  So `#0` writes mode 0,
+reaches the same `default:`, and **kills the host exactly as `0x14` does.**  There is no fake-green.
+
+> **STILL DO NOT WITNESS WITH `#0`, FOR THE OTHER REASON: it rows the 26-BIT hole, not the
+> RESERVED 32-BIT hole.**  The defect under test is a reserved `M[4:0]` in a 32-bit-mode CPU; mode 0
+> is a different (and architecturally distinct) unmodelled case that happens to share the arm.
+> `0x14` is the first reserved hole above SVC32 and is the right stimulus.
+
+*The `PrivMask = 0x0F` hazard from the EXTRACTED Table A4-1 is real as a READING hazard and is why
+`0x14` was chosen -- but it does not produce a green run here, because the value it would land on
+(`0x10`, USR32) is only reachable if the mask actually applies, and this emulator's store does not
+apply it.  I stated a trap that the fork's own code does not have.*
+
+**This is the advice-survives-the-exemplar pattern the carrier documents**: the instruction held,
+the reason did not, and a wrong reason gets reused.  Caught by the seat that had supplied the
+original finding, when asked to break its own claim.
+
+**Architecture, checked rather than assumed:** A2.5.7 / A4.1.39 -- a reserved `M[4:0]` is
+**UNPREDICTABLE**, and MSR lists **Exceptions: None**.  Real hardware neither takes an undefined
+exception nor stops.  *UNPREDICTABLE permits a no-op; it does not permit `exit(1)`.*
+
+## DISPOSITION: ONE ROUND, MEMBER 3 (DECLINE + LATCHED ANNOUNCE) AT BOTH `default:` ARMS
+
+*** SAVE (`:559`) IS **NOT** FIRST-HIT REACHABLE, AND THAT DOES NOT SPLIT THE ROUND. ***
+`arm_save_register_bank()` runs BEFORE the write, on the OLD mode -- from boot that is SVC32, a
+modelled case, so it returns normally.  **The process dies in LOAD.**  Save's `default:` becomes
+reachable only once Load has installed a reserved mode and returned, which today never happens.
+**So a LOAD-ONLY fix CREATES the Save kill** -- sibling parity, one round, not a second row.
+
+**MEMBER 1 DELETE IS WRONG HERE**, and the earlier reading that reached for it was wrong:
+fall-through leaves `cpsr` holding a reserved mode and `r[]` on the previous bank, converting
+process death into silent wrong-bank execution and then into a second kill on the next legal
+`MSR` back.  **Member 5 FAULT is AVAILABLE on ARM** (`arm_exception(UND)` exists and `arm_cdp`
+uses it) **and is still wrong**: MSR takes no exception, so raising UND invents guest-visible
+behaviour the hardware does not have.  Members 4/6/7 die on the addition licence and on there
+being no architecture to implement -- 26-bit modes are named in the header and not implemented.
+
+**WHERE THE DECLINE HAS TO SIT, and this is the load-bearing design point:** callers write `cpsr`
+*between* save and load.  A Load-only skip-the-`memcpy` leaves `cpsr` reserved, which turns
+`msr_spsr` / `mrs_spsr` / `bdt_load` `default:` arms into `running = 0` landmines.  **Refuse the
+mode-field write BEFORE save, or roll `cpsr` back inside Load.**  One latch shared by both
+defaults, `(once)`, per CPU.
+
+**Second guest path, same first hit:** `MSR SPSR_c, #0x14` (SPSR is unvalidated and switches no
+bank) then `MOVS PC, LR` or `LDM {..,pc}^` -- the DPI copies SPSR into CPSR with **no mask** and
+Load dies identically.  Direct CPSR `MSR` is the cheaper witness.
+
+## THE WITNESS (owed; cheaper than `armthumbabortkill`, and it cannot fake-green on MMU-off)
+
+`-E testarm`, plant over a load stub as `arm_bfx_width_probe.py` / `arm_flags_probe.py` do.
+**Survival alone is VACUOUS by the CHANNEL rule** -- a `running = 0` halt, a crash and a declined
+`MSR` can all read as "died" or all as "not EOF" depending on the cut.  The discriminator is the
+MESSAGE plus the pty state, taken together:
+
+    this defect  exit(1)   pty EOF mid-step, process DEAD,  "arm_load_register_bank: unimplemented mode 20"
+    running = 0            prompt RETURNS,   process ALIVE, no such line; `print pc` still works
+    crash                  pty EOF,          process DEAD,  no such line
+    post-fix decline       prompt RETURNS,   process ALIVE, one `(once)` line; MRS r0,cpsr still 0x13 in bits 4:0
+
+*** THE MESSAGE PRINTS **20**, NOT `0x14` -- the `fatal()` uses `%i`. ***  A probe grepping for
+the hex matches nothing and reports a clean, confident, wrong answer.
+
+**DE-ESCALATION COST:** removing a host-fatal guard deletes the accidental tripwire, so the
+detector owes ACCEPT ROWS proving legal mode writes still land -- one per adjacent modelled mode
+reachable by the same store (`0x10` USR32, `0x11` FIQ32, `0x12` IRQ32, `0x17` ABT32, `0x1b` UND32,
+`0x1f` SYS32), each discharged by a MEASURED KILL under a joint guard-growth mutant rather than
+by existing.
+
+## RANK
+
+**Runs BEFORE `armthumbabortkill`.**  Both are HIGH; this one is PROCESS DEATH rather than
+`running = 0`, its witness is cheaper (no CP15, no page table, no Thumb entry), and it does not
+carry the Thumb row's fake-green hazard.
+
+*** HONEST LIMIT, STATED BY THE SEAT: SOURCE TRACE ONLY.  No guest was executed this pass, so the
+reachability is CONFIRMED-BY-READING and the rung-3 probe is still owed. ***
+
+*Evidence: `_scratchpad/grokpush_20260917/grok_msrkill.txt` and `BRIEF_msrkill.md`;
+`grok_armkill.txt` for the original volunteered finding.*
+
+
+### `gdromacceptdmanum` (HIGH, FLOOR CLAUSE (b)) -- filed 2026-09-17 by the Fable late-review seat.
+### **A FIXED SITE OF `#462` IS INVISIBLE TO THE 62-ROW DETECTOR.**
+
+`regress/gdrom_default_probe.py`:
+
+    row("accept dma", "yes" if ("Transfering" in t and alive) else "no", "yes",
+        "a LEGAL arming is still accepted and enters the transfer path")
+
+**The oracle is SUBSTRING PRESENCE. No row reads the NUMBER.**  But `#462`'s fix at
+`src/devices/dev_dreamcast_gdrom.c:1493-1497` is precisely about *which number is printed* --
+its own comment says *"prints data_len, the count actually transferred"*:
+
+    fatal("[ dreamcast_gdrom_dma: Transfering %i bytes to 0x%08" ...
+
+So **reverting `(int) d->data_len` back to `length` -- a VERBATIM REINSTATEMENT AT A FIXED SITE --
+changes 408 to 0 and every one of the 62 rows stays green.**  Vacuity floor clause (b) requires the
+detector to fail on exactly that, at EVERY fixed site.  The accept session leaves `length` at 0
+while `data_len` is 408; the probe header already records the expected text as
+`Transfering 408 bytes to 0x00000000 (guest asked for 0)`.
+
+**THE REPAIR IS ONE LINE** -- match the number, not the word:
+
+    "yes" if ("Transfering 408 bytes" in t and alive) else "no"
+
+*** IT IS NOT APPLIED, AND THE REASON IS THAT THE ARTIFACT CANNOT VERIFY IT. ***  The preserved
+`artifacts/gdromdmadefault/repairB_20260917/logs/probe_base.raw` holds **ROW OUTPUT, not the guest
+transcript** -- `grep -o 'Transfering [0-9]* bytes'` returns **ZERO matches** on it while
+`accept dma` reads `yes yes ok`, because the string the oracle tests lives in the probe's internal
+`t`, which is never written to the log.  **Tightening the oracle on that evidence would be blind,
+and a wrong literal reds the gate.**
+
+> **THE GENERAL LESSON, worth more than this row: a preserved probe log answers "what did the ROWS
+> score", NEVER "what did the GUEST print".**  Any oracle question about guest text has to be
+> settled by a RUN, not by the artifact -- and this is the first time that limit has been hit here.
+
+**WHAT IT OWES, in order:**
+1. Re-run the base leg with the tightened oracle and confirm `accept dma` still passes -- this is
+   the oracle-correction rule's order discriminator, run forwards: prove the literal matches the
+   real transcript BEFORE relying on it.
+2. Build the `length`-reverted mutant (`(int) d->data_len` -> `length` at that site) and confirm it
+   REDS `accept dma` and nothing else.  A single-cell kill is the wanted signature.
+3. Only then commit, and record the clause-(b) site as covered in the contract matrix.
+
+**GRADE: BELIEVED** -- the Fable seat read it and did not build it, and said so.  Its own words:
+*"`accept dma` -- L2 by the letter of clause (b), NOT yet repaired ... One-line repair: match
+`Transfering 408 bytes`. BELIEVED (not built)."*
+
+*This is the second clause-(b)-family gap found in this detector in one day, after the
+`{arm} x {width}` class closure.  The class-closure amendment is engaged: if a third arrives, the
+next repair owes the CLOSURE over the whole oracle-strength space, not another single cell.*
+
+*Evidence: the Fable late-review adjudication, 2026-09-17; `regress/gdrom_default_probe.py`;
+`src/devices/dev_dreamcast_gdrom.c`.*
+
+
+### `untrackeddetectors` (HIGH, EXPOSURE) -- filed 2026-09-17. **TWO SHIPPED DETECTORS EXIST ON
+### DISK, ARE MEASURED, AND ARE IN NO COMMIT.**  Surfaced by `check_probe_wiring.py` once its own
+### misleading message was corrected.
+
+    regress/crime_width_probe.py      ??  untracked   -- `git log --all` EMPTY
+    regress/lca_isalane_probe.py      ??  untracked   -- `git log --all` EMPTY
+
+**`crime_width_probe.py` IS THE INSTRUMENT BEHIND TODAY'S `#529` DISCHARGE** (the `ctl0c` pair
+measured 202/204).  **`lca_isalane_probe.py` is the 352-row `#530` detector** and is the file
+grok's `lcaisaphys` witness spec says to copy its helpers from.  Neither is in the repository.
+A fresh clone has the measurements and not the instruments.
+
+#### *** SCOPE CORRECTION, SAME HOUR (UNTRACKEDDETECTORS-SCOPE-CORRECTION).  THE SENTENCE ABOVE OVERSTATES IT. ***
+
+`crime_width_probe.py` IS invoked by `regress/gate_arm.sh:1658`, which reads as *the committed
+battery is broken today*.  **It is not.**  `git show HEAD:regress/gate_arm.sh | grep -c
+crime_width_probe` is **ZERO** -- only the MODIFIED WORKING COPY invokes it.  A fresh clone today
+is internally consistent: no reference, no file, no break.
+
+> **THE EXPOSURE IS PROSPECTIVE, AND IT IS A COMMIT-ORDERING CONSTRAINT:**
+> *** `regress/gate_arm.sh` AND `regress/crime_width_probe.py` MUST BE STAGED IN THE SAME COMMIT.
+> Committing the gate without the probe is what CREATES a committed battery invoking a file that is
+> not in the repository. ***
+
+**AND A SWEEP FOR OTHER INSTANCES CAME BACK CLEAN, after the first sweep raised a FALSE ALARM.**
+Matching on BASENAME reported `gdrom_pio_null_probe.py` as missing at HEAD; the committed gate names
+it at `artifacts/gdrompionull/gdrom_pio_null_probe.py` and **it is tracked there**.  Re-run with FULL
+PATHS, **every probe named by either committed gate is tracked**.  *The basename was a correlate of
+the path, and the check inherited the correlate's error -- the same shape as the deriver rule, in a
+check written to enforce it.*
+
+**`lca_isalane_probe.py` is in NO gate**, so it carries no ordering constraint -- only the plain
+exposure that a 99 KB / 1370-line measured detector sits in no commit.
+
+**NEITHER PROBE HAS AN `EXPECT_ROWS` ROW.**  Both carry a `_DONE` sentinel and a
+`_RESULT=` line, so they are complete instruments in every other respect.
+
+> #### *** THIS SENTENCE USED TO READ "(floor clause (c)), the same gap `gdrom_default_probe.py`
+> #### has", AND THAT WAS A CONFLATION -- CORRECTED 2026-09-17 by the grok seat fired to attack
+> #### exactly this claim, which it refuted with the files. ***
+>
+> **`EXPECT_ROWS` is a DETECTOR-SELF-COUNT pin.  Clause (c)'s measured object is a NULL PRODUCT
+> MEDIUM** -- `#446`'s 217-byte comment-only source, `sgirergbroundtrip`'s `nullmedium` leg at
+> **1/10** with `/etc/hostname` as the BIN, `wdcchunking`'s `Mc_null` killed at COMPILE.  Those
+> are different things, and calling the missing row a clause-(c) gap makes an above-floor
+> detector look like an L2 breach.
+>
+> **Measured against `gdrom_default_probe.py`, which the sentence named: clause (c) is
+> DISCHARGED.**  Against a garbage binary every `session()` dies and `GDROM_DEF_CONTROL` is
+> `DEAD` (the `rows and` is load-bearing -- `all([])` is True); against a comment-only
+> `dev_dreamcast_gdrom.c` it does not compile; against an emulator with the GDROM gone,
+> **`impl ok`** (CNTHI store/readback) and **`scan uniq`** (EQUALITY at 56) go red and the DMA
+> rows go with them.  *`live` and `devsig` do NOT carry it in that third medium -- `live` is a
+> RAM round-trip and `devsig` is the SH4 IPRD reset value, not a GDROM signature.  I named
+> those three as the identity carriers and two of them were wrong; **the project's own CHANGELOG
+> had already ruled that `live` "is a liveness control and CANNOT DO MORE"**, so that was a
+> mislabel the record had corrected once already.*
+>
+> **And the denominator cuts against the original worry:** `EXPECT_ROWS` appears in **13 of 99**
+> `regress/*.py`, and the 13 are a CLUSTER with a reason -- the SH-4 family, whose gate uses
+> `check_min` rather than an equality pin, plus the no-guest source-grep probes
+> (`sgi_eaddr_probe.py`, `arcbios_shift_probe.py`, `hpcmips_ctor_probe.py`) where `live`/`devsig`
+> cannot exist at all and a row-count pin is the ONLY identity available.  The runtime-guest
+> siblings -- `gdrom_{data,toclen,decline,cond}_probe.py`, `asic_badaddr_probe.py`,
+> `pcc2_default_probe.py` -- carry none either, and all shipped above the floor.  **If a missing
+> `EXPECT_ROWS` were L2, every one of them would be L2 too.**
+>
+> *A hygiene self-pin is still available and is NOT owed: `if len(rows) != 62: n = 0` before the
+> `_RESULT=` print costs nothing and moves no row.  **A new identity ROW is the wrong shape** --
+> it makes the score 63/63 against a gate `check` pinned at 62, so it reds the gate unless the
+> pin moves in the same commit.  Do not manufacture that as a floor repair.*
+
+*I wrote the overstated sentence from the working tree without asking git what HEAD contains.*
+
+*** THE CHECKER HAD BEEN SAYING SO AND NOBODY COULD READ IT. ***  `check_probe_wiring.py` reported
+`GHOST  the MANIFEST names <file> and regress/ has no such file -- delete the entry`.  **That is a
+WRONG RECORD: the files are plainly there.**  `domain()` is `git ls-files` -- COMMITTED-OR-STAGED,
+which its own docstring states in capitals, with the incident that caused it -- so an UNTRACKED
+probe is reported while sitting in `regress/`.  A reader who followed the message found the file,
+concluded the check was broken, and dismissed a true finding.  **The message now says
+`it is NOT COMMITTED OR STAGED (domain() reads git ls-files, not the directory)`.**
+
+**SCALE, so the two are not lost in it:** 150 GHOST rows, of which **148 are per-round artifact
+copies** (frozen probes, mutant scripts) and **exactly 2 are top-level detectors**.  The 148 are
+lower stakes and are a separate question (should `artifacts/` .py files be in the MANIFEST at all).
+**The 2 are the exposure.**
+
+**WHAT IT OWES:** decide per file -- `git add` it, or delete its MANIFEST entry if it is genuinely
+scratch.  Both look real: both are gate-relevant, both have measured artifact trails.  *Do not
+resolve this by deleting MANIFEST entries for files that are carrying live measurements.*
+
+---
+
+### `gdromcontractresidual` (LOW, RECORDS) -- filed 2026-09-17, the two same-commit L4s from
+### grok pass 3 that were NOT applied in that commit.
+
+The repair chain CLOSED with six same-commit L4s named.  **Four were applied; these two were not**,
+and they are filed rather than left implied:
+
+1. **DESIGNED TO CATCH folds loss / relocation / latch-scoping into the width matrix and still
+   parenthesises a bare `M3`.**  Old `M3` relocates the clear past `break`; repair-B
+   `M3_gdromsuccesswidth` is `if (len == 4)` at the success arm.  **Two different mutants, one
+   label.**  One matrix cannot carry both the width product and the per-arm-at-word verbs without
+   overclaiming byte-SET for latch-scoping.  Split the label.
+2. **`gdromdmasilent` (`if (idata != 0)` -> `if (idata == 1)`) is listed as escaping every row.**
+   `arm bytetrig`, `nodata byte` and `accept byte` all trigger with `0x5a`, so by reading all three
+   would now RED it.  **Predicted, not measured.**  The same header already teaches that a kill
+   record is time-indexed; this is that lesson applied to an ESCAPE record.  **Do not silently drop
+   the entry -- DATE it against the table it actually escaped.**
+
+*Evidence: `_scratchpad/grokpush_20260917/grok_enumverify.txt`.*
+
+
+### `manifestscope` (MED, HARNESS) -- filed 2026-09-17. **`check_probe_wiring.py` HAS TWO JOBS
+### GLUED TOGETHER, AND THE SECOND ONE IS DROWNING THE FIRST.**
+
+150 GHOST rows. **148 are per-round artifact copies; exactly 2 are top-level detectors** -- and
+those 2 (`crime_width_probe.py`, `lca_isalane_probe.py`) are a live exposure that stayed invisible
+for exactly as long as a reader had learned to skim past GHOST lines.
+
+**THE DIAGNOSIS:** the FAIL taxonomy does a WIRING job (`UNWIRED DETECTOR`, `GATED WITNESS`, the
+EXEMPTION family -- about detectors and witnesses) and a CENSUS job (`UNCLASSIFIED`, `GHOST`,
+`BAD CLASS`, `MISFILED` -- about every `*.py` `domain()` returns).  `#471` added the census on
+purpose: making the scan recursive pulled in kill-table copies, a `_probe.py` suffix is `MISFILED`
+as `tool` and `UNWIRED` as `detector`, so every nested file had to be classified.
+**The 148 are the CENSUS job firing on files the WIRING job does not care about.**
+
+MEASURED, not transcribed (`grep -c`, and a key-extract over the MANIFEST literal):
+
+    MANIFEST keys        692        of which under artifacts/   582        top-level   110
+    GHOST rows           150        artifacts/                  148        top-level     2
+
+*** AND THREE MANIFEST KEYS ARE **GHOST BY CONSTRUCTION, PERMANENTLY**: ***
+
+    artifacts/crimewidthkill/opus_close7_20260915/scripts2/laneP.sh
+    artifacts/crimewidthkill/opus_close7_20260915/scripts2/laneQ.sh
+    artifacts/crimewidthkill/opus_close7_20260915/scripts2/mkfreeze.sh
+
+`domain()` is `git ls-files -- *.py`.  **A `.sh` key can never be in the returned set**, so those
+three FAIL on every run whatever anyone does to them -- committed or not.  That is the census job
+eating itself, and it is the cleanest possible demonstration that the MANIFEST has outgrown the
+domain it is checked against.
+
+## *** MY PROPOSED FIX WAS WRONG, AND THE REASON IS ONE MEASURED FACT ***
+
+I proposed scoping the MANIFEST to top-level `regress/*.py`.  **Exactly one `artifacts/**.py` IS
+EXECUTED BY A GATE** -- `gate_sh_rounding.sh:1029`:
+
+    GPNPROBE=artifacts/gdrompionull/gdrom_pio_null_probe.py
+    if [ ! -f "$GPNPROBE" ]; then gate_skip "gdrompio: $GPNPROBE absent"
+
+a live `CLASS_DETECTOR`, tracked, and the selftest's M13/M14/M15 exist **specifically so that path
+cannot go invisible**.  It is `#465`, WIRED IN PLACE rather than promoted -- later rounds promoted
+(`arm_bdt_probe.py` says "PROMOTED from `regress/artifacts/armbdt/`"); this one did not.
+
+> **So flattening the scan would drop a live detector out of the check while the gate still runs
+> it -- and note its guard is `gate_skip`, i.e. SILENT COVERAGE LOSS SCORED AS A SKIP.  That is
+> `#465` returning, and `#471`'s M14 mutant is precisely this failure and is supposed to red.**
+
+**Each of the four obvious options admits a named failure:**
+
+* **(a) scope the MANIFEST only** -> hundreds of tracked `artifacts/**.py` become `UNCLASSIFIED`.
+  Net FAIL gets WORSE, not 150 -> 2.
+* **(a) flatten `domain()` only** -> every nested MANIFEST entry becomes `GHOST`.  Also worse; this
+  IS the M14 mutant.
+* **(a) both** -> the 148 vanish AND `gdrom_pio_null_probe.py` leaves the check while the gate runs
+  it.  The next person to delete the `GPNPROBE` invocation gets a green check.
+* **(b) add an ARTIFACT class** -> **already shipped as `CLASS_RESEARCH`** ("a NON-SHIPPING artefact
+  preserved as EVIDENCE... not owed a gate").  The 148 happened WITH that class in place, because
+  `GHOST` tests TRACKEDNESS, not class.  A fifth name for the same census changes nothing.
+* **(c) dated exemptions** -> `EXEMPT` means "debt that EXPIRES"; artifact copies will never be
+  wired, so 148 immortal exemptions is a switched-off check.  **This is the mechanism to avoid,
+  not the precedent.**
+* **(d) delete the artifact keys** -> that is (a)'s first failure mode.
+
+## THE DESIGN TO BUILD -- **(a')**, and it matches the check's own stated question
+
+> **`domain()` excludes `artifacts/` the way `gate_hygiene.sh` ALREADY DOES, EXCEPT paths a gate
+> actually invokes -- today exactly `artifacts/gdrompionull/gdrom_pio_null_probe.py`.  The MANIFEST
+> then classifies only that set.**
+
+`gate_hygiene.sh` already excludes `artifacts/` from its censuses, with the measured reason that
+frozen copies are evidence and not live harness code.  This is that precedent, applied to the
+checker rather than to a gate.
+
+**NOT BUILT, AND DELIBERATELY SO.** This changes a checker that every commit runs, so it owes TWO
+NEGATIVE CONTROLS and ships as **its own harness round**, not as a rider on a defect round:
+1. prove the exception FIRES -- delete the `GPNPROBE` invocation from a scratch copy of
+   `gate_sh_rounding.sh` and the check must go RED on an unwired detector;
+2. prove a frozen artifact copy is NOT demanded -- add one and the check must stay GREEN.
+*(`#471`'s own M13/M14/M15 are the model for both.)*
+
+**ALSO OWED IN THAT ROUND, because it is the same sentence:** the docstring still says the domain
+is *"a few dozen files in ONE FLAT DIRECTORY"*.  After `#471`, `domain()` is `git ls-files -- *.py`
+with **no flat filter** and the fallback `os.walk`s.  **The founding argument against
+grandfathering no longer describes the file it is written in.**
+
+*Evidence: `regress/artifacts/probewiring/MANIFESTSCOPE_grok_20260917.txt` and its brief.  Every
+number above re-derived locally before filing.*
+
+
+### `ip30abortkill` (HIGH) -- filed 2026-09-17. *** ONE GUEST LOAD OR STORE AT `0x0ff10020` ON THE
+### ADVERTISED `-E sgi -e ip30` RAISES **SIGABRT**, AND AN `exit(` SWEEP CANNOT SEE IT. ***
+
+`abort()` contains no `exit(`, so three sweeps of this queue walked past it. Census, measured:
+**8 `abort()` in `src/devices/`, of which 4 are in `dev_sgi_ip30.c`** (`:78`, `:127`, `:135`,
+`:145`). Of the other four, `dev_le.c:273` is a comment naming `le_tx_abort()`, `bus_pci.c:222`
+is init, and `dev_sgi_ip22.c:315`/`:339` are the CONSTRUCTION class already held as
+`ctorabortclass` -- `machine_sgi.c` aborts before `dev_sgi_ip22_init`, so those are not a guest
+path. **ip30 is the one that constructs and then dies on access.**
+
+    dev_sgi_ip30.c:44   DEV_SGI_IP30_LENGTH  0x80000, registered :387
+    machine_sgi.c:417   device_add(... "sgi_ip30 addr=0x0ff00000")
+    machine_sgi.c:744   machine_entry_add_subtype(me, "IP30", 30, "ip30", "octane", NULL)
+
+**TWO FACTS FOUND BY READING THE ARM, WHICH THE HUNTING SEAT DID NOT STATE, AND BOTH RAISE THE
+SEVERITY:**
+
+* **`case 0x10020` has NO `writeflag` test and runs `d->isr = idata;` FIRST.** `idata` is
+  initialised to 0 at `:87` and assigned only under `if (writeflag == MEM_WRITE)` at `:89-90`.
+  **So a guest LOAD at `0x0ff10020` ZEROES THE INTERRUPT STATUS REGISTER and then aborts** --
+  guest-state corruption and a host death in one arm, on a path the `Set ISR` comment invites a
+  reader to assume is write-only. `case 0x10028` shares the missing test; `case 0x10030` IS
+  writeflag-tested and its reads are correct. **The three arms are not uniform and owe separate
+  rows.**
+* **The tick abort is armed by a LEGAL write to an IMPLEMENTED register.** `case 0x10000`
+  implements `imask0` and accepts the write (`:99-105`); `:74-78` then aborts whenever
+  `d->imask0 & (1<<50)`. The announcing access SUCCEEDS and the host dies later, out of band,
+  from `DEVICE_TICK`.
+
+**Option set:** member **7 IMPLEMENT** is the strong candidate -- each of the four sites carries
+its intended model beside it as a commented-out `cpu_interrupt(...)`, i.e. a stubbed path with no
+predicate refusing anything, which is the tell member 7 exists for. Member **3 DECLINE + LATCHED
+ANNOUNCE** is the fallback. Member 5 FAULT is architecturally available (MIPS) but inert as
+written, because `abort()` fires before any `return 0`.
+
+**Gate coverage: NONE.** No ip30 probe exists under `regress/`; gate 9 may construct the machine
+but nothing feeds `0x10020`. Same blind spot as `armmsrmodekill`.
+
+**Honest limits.** Reachability is CONFIRMED BY READING and NOT YET MEASURED -- the round owes a
+rung-3 probe on unmodified `-E sgi -e ip30` before any edit, with a separate row for the armed-tick
+path. There is no in-tree Octane boot image, so this ranks probe-HIGH, the same standing as
+`mapledmaaddr` and `vmedefaultkill`.
+
+**It was named once and never queued:** the 2026-08-17 `exitsweep` correction in this file already
+says *"No `abort()` is guest-reachable is FALSE"*. It has been a known, unqueued exposure for a
+month, because every id in the area counts `exit(` -- `exitsweep`, `exitunowned76`, `cpusexitsweep`
+-- and the one abort-shaped id, `ctorabortclass`, is scoped to construction.
+
+### `mvme187memcoob` (MED) -- filed 2026-09-17. **A 132-BYTE HOST OOB READ THAT THE `exit(1)` BESIDE
+### IT IS CURRENTLY HIDING.**
+
+`dev_mvme187.c:68` indexes a 124-byte struct with a guest offset of up to 255, **before the switch
+and unconditionally on every access, reads included**:
+
+    odata = ((uint8_t*)&d->memcreg)[relative_addr];
+
+The device is registered with length **0x200** (`:127-129`) and `:63-66` folds the high half down
+(`relative_addr &= ~0x100`), so the index domain is `0..255`. **`sizeof(struct memcreg)` is 124**,
+derived here by counting the 62 `volatile u_char` declarations in
+`src/include/thirdparty/mvme_memcreg.h` -- 31 registers each followed by a 3-byte pad -- which
+independently reproduces the hunting seat's figure. **Offsets 124..255 read 132 bytes past the
+struct.** Constructed at `machine_mvme88k.c:88`.
+
+**Why this is a rider and not a second kill:** the `default:` arm already `exit(1)`s, so today the
+OOB value never reaches the guest and the kill itself is already inside `exitunowned76`. **The
+exposure is what a DE-FATALISATION would create** -- the `asicindexcase` shape exactly, where the
+`exit(1)` is doing duty as the bounds check. A round that de-fatalises this file owes the clamp in
+the same diff: **a bound, not a `case`.** Filed now so it is queued before that round rather than
+discovered inside it.
+
+
+### `adjudglmtag` (MED, HARNESS) -- filed 2026-09-17, **FIXED THE SAME DAY.**
+### *** A LIVE SEAT WAS REPORTED `NO ANSWER (0b)`, AND THIS FILE'S OWN COMMENT HAD
+### PREDICTED THE FAILURE IN THOSE WORDS. ***
+
+`tools/adjudicate.sh` fires its cloud seats in one loop and CHECKS them in a second, and the
+second must carry the `${m%%:*}` SHORT FORM of the first, because that is how the output
+filenames are built. The 2026-08-29 migration `glm-5.3-flash` -> `glm-5.3` changed the **fire**
+loop and not the **check** loop. So the run wrote `glm-5.3.txt` while the check hunted
+`glm-5.3-flash.txt`, and it printed `glm-5.3-flash: NO ANSWER (0b)` and `ADJUDICATORS: 2/3`.
+
+**glm had answered with 8,693 bytes, four defects, and the single most important finding of that
+adjudication** -- an oracle polarity that would have certified a live defect GREEN.
+
+The comment immediately above the broken line reads: *"Updating the fire loop alone would leave
+this one looking for `glm-5.2.txt`, which the run never writes -- so a LIVE seat would be
+reported as a missing one. That is the seat-failure-counted-as-agreement shape arriving through
+a rename rather than through a wall."* **The structure knew; the edit did not.**
+
+**FIXED:** both loops now agree on `glm-5.3`. **The fix is a RETYPE and therefore has the same
+failure mode at the next migration.** Deriving the check list from the fire list with
+`${m%%:*}` is the structural form and is deliberately NOT done here -- it changes a script every
+adjudication runs and owes its own negative controls, so it ships as its own harness round.
+
+### `gdromacceptdmadebt` (LOW) -- filed 2026-09-17. **COVERAGE DEBT ON THE CLAUSE-(b) REPAIR.**
+### Not a floor breach: clause (c) was adjudicated the same day and came back DISCHARGED.
+
+The repair tightened `accept dma`'s oracle from SUBSTRING PRESENCE (`"Transfering" in t`) to
+COUNT-BEARING (`"Transfering 408 bytes" in t`), and three legs proved the breach was real (leg 3:
+SHIPPED oracle + `M_lenrev` = 62/62, the escape). What the tightened form still cannot see:
+
+1. **`d->data_len` -> `d->cnt` or a hardcoded `408`.** On this staging those three are the SAME
+   VALUE -- TOC `case 0x14` accepts only `d->cnt != 408` as the decline, and `alloc_data()` does
+   `d->data_len = d->cnt`. The mutant still prints `Transfering 408 bytes` and **both the old and
+   the new oracle stay green.** The oracle distinguishes that cluster from `length`
+   (`dma_reg[+0x08]`), which this session never writes, and not from its own members.
+2. *** THE KILL DEPENDS ON THE GUEST NEVER WRITING THE DMA LENGTH REGISTER, and this is the
+   sharpest of the five. *** Write `+0x08 = 408` and `length == data_len`, so `M_lenrev` prints
+   `Transfering 408 bytes` again and leg 2's SOLE RED disappears. **The device comment's own
+   example is `0x3800`**, so a guest that programs a length is ordinary rather than exotic. The
+   stronger session programs a **DISTINCT** length and pins BOTH halves of
+   `Transfering %i bytes ... (guest asked for %i)` -- a new session, not an oracle edit.
+3. **`accept byte` still uses the substring form**, verified at `regress/gdrom_default_probe.py:1608`.
+   It is a DIFFERENT cell (the SUCCESS arm's shadow-clear pair-oracle) and `accept dma` is the
+   print site clause (b) was measured against, so this is **not** a (b) hole -- but it is the old
+   form left sitting beside the repair of it, which is the shape a future reader mistakes for a
+   decision.
+4. `nodata notx` counts `t.count("Transfering")` -- harmless for a decline row wanting 0, and not
+   a pin of the number.
+5. **The row still does not prove 408 bytes MOVED.** `accept data` (want `0x10` at the
+   destination) remains the movement oracle; the tightened `accept dma` proves the LOG LINE
+   carries the count. The contract must not be read as claiming otherwise.
+
+**FILED, not fixed** -- the stopping rule takes in-round only a MEASURED FALSE PASS or a WRONG
+RECORD. The wrong record in this family was the `EXPECT_ROWS`/clause-(c) conflation, corrected in
+place the same day. Items 1 and 2 are contract-honesty items: they matter exactly if the probe
+header's "prints `data_len`" bullet is read as "UNIQUELY `data_len`", which it should not be.
+
+### `crimeramexit` (LOW) -- filed 2026-09-17 on Fable's ruling. **TWO SURVIVING `exit(1)` IN
+### `DEVICE_ACCESS(crime)`'s RAM-SIZE PRELUDE -- MACHINE-CONFIG GATED, NOT GUEST-DRIVABLE.**
+
+    src/devices/dev_sgi_ip32.c:244-247   if (physical_ram_in_mb > 1024)        { fatal; exit(1); }
+    src/devices/dev_sgi_ip32.c:255-260   if (physical_ram_in_mb % mb_per_bank) { fatal; exit(1); }
+
+Both predicates read `cpu->machine->physical_ram_in_mb`, which is set from the **command line**,
+not by any guest store -- so neither is reachable by a guest and neither belongs in the
+guest-reachable host-death queue. **That is exactly why it is filed rather than fixed:** *not this
+round's fix, but not a silence either.* A future `exit(` census that counts these as live
+guest-reachable kills is overcounting; one that omits them without saying why is a blank where a
+reason belongs.
+
+### `pitmodebyteshared` (MED) -- filed 2026-09-17 on Fable 5.1's records finding.
+### **`dev_8253.c` KEEPS **ONE** `mode_byte` FOR ALL THREE COUNTERS.**
+
+The struct says it plainly, and the juxtaposition is the whole finding:
+
+    dev_8253.c:78    uint8_t  mode_byte;     <-- SCALAR
+    dev_8253.c:80    int      mode[3];       <-- per counter
+    dev_8253.c:81    int      counter[3];    <-- per counter
+
+`:310` `d->mode_byte = idata;` is its ONLY writer, and `:166`, `:259` and `:280` all read
+`d->mode_byte & 0x30` as **the RW format of whichever counter is currently being accessed**. So
+programming any one counter overwrites the recorded RW format of the other two, and a subsequent
+access to an untouched counter is decoded in the format its neighbour asked for.
+
+**It had NO ledger row and existed only as a residual bullet under `#440`'s CHANGELOG block** --
+which is the records half of the finding and the reason it is queued now: a defect that lives
+only in a closed round's residual list is one a fresh session cannot find.
+
+
+### `ip30abortkill` -- **RUNG-3 WITNESS BUILT AND MEASURED 2026-09-17.  FIX DESIGN ADJUDICATED.**
+
+    IP30ABORT_CONTROL=OK      IP30ABORT_RESULT=6/9      three kill rows RED
+    (regress/artifacts/ip30abortkill/probe_HEAD_20260917.out)
+
+Measured on unmodified `-E sgi -e ip30`, no `device_add` introduced to reach the site. **A guest
+LOAD at `0x0ff10020` kills the host**; so does a load at `0x10028`; so does a WRITE at `0x10030`
+-- while a READ at `0x10030` is serviced. **The three arms are provably not uniform.** Raw
+disposition captured separately: `KILLED BY SIGNAL 6 (SIGABRT) after 0.6 s`, and the tree
+installs no SIGABRT handler. Both ladder controls green (`live`, and `devsig` = `case 0x20`
+answering `0xffffffff80010000`, which RAM cannot produce).
+
+> #### *** THE FIRST RUN OF THAT PROBE SCORED ALL THREE KILL ROWS GREEN ON A LIVE HOST DEATH,
+> #### AND THE MECHANISM MUST BE CARRIED INTO EVERY EOF-ORACLE PROBE IN THIS TREE. ***
+>
+> `rd()` **returns immediately on EOF** rather than waiting out its timeout, so the `spin` that
+> exists to give a dying child time to die is **skipped exactly when the child dies**. A single
+> `waitpid(WNOHANG)` then samples ~0 s after EOF while the kernel is still writing a 6 MB core,
+> reports "still running", and the kill row goes GREEN. **POLL WITH A DEADLINE; NEVER SAMPLE
+> ONCE.**
+>
+> **`arm_msrmode_probe.py` is the one that matters**: its every kill row is an EOF oracle, so
+> built on the sampling form its witness would certify the MSR defect fixed while it is live.
+
+*A second apparatus error in the same run: my `devsig`/`acc 18` oracles wanted truncated values,
+but `lw` SIGN-EXTENDS on this 64-bit R10000, so a correct device reddened. The apparatus was
+wrong, not the model.*
+
+#### FIX: **member 3 (latched announce) + member 4 on the stores, and the `writeflag` test in the same diff**
+
+*** MY MEMBER-7 PREMISE WAS REFUTED BY A REPO FACT. *** I filed that member 7 IMPLEMENT was the
+strong candidate because each site carries its intended model beside it as a commented-out
+`cpu_interrupt(...)`. **The API it names no longer exists** -- `cpu_interrupt(` occurs five times in the
+whole tree, one warning comment in `dev_lca.c` and these four commented-out calls, with no
+definition and no declaration; the live API is `interrupt_assert` through `struct interrupt`
+(`cpu_mips.c:1884`). **Uncommenting does not compile.** The tell was right; the inference that it
+was cheap was wrong.
+
+> #### *** CORRECTED SAME DAY BY THE PASS-1 PANEL: "MEMBER 7 IS NOT AVAILABLE" IS THE WRONG
+> #### SENTENCE, AND FILING THE FOLLOW-UP ROW ON IT WOULD SHIP A FALSE PREMISE. ***
+>
+> **Member 7 is AVAILABLE-BUT-UNWARRANTED.** What does not exist is `cpu_interrupt()`; the LIVE
+> API -- `interrupt_assert`/`interrupt_deassert` through `struct interrupt` -- exists and is
+> exactly what `dev_sgi_ip32.c` uses for CRIME. So member 7 is not blocked by a missing API. It
+> is declined because **delivery is a subsystem nobody has costed**. *"Not available" would make
+> the filed follow-up row unbuildable by definition, when it is ordinary unscheduled work.*
+>
+> **And disposition 4's word "SEPARATE" was the weakest thing in the packet** (grok and the kimi
+> substitute, independently). The missing `writeflag` test is **the store-arm of this same
+> de-fatalisation** -- same three `case` labels, same function, same common tail -- so it is ONE
+> DIFF either way: *keep a store and a load must not execute it; decline the store and the load
+> is already safe.* It is separate only at `0x10030`, which is already tested. **Calling it
+> "separate" is what made the scope-creep question askable at all.**
+>
+> **And my own Q2 was refuted by my own packet** (kimi and deepseek, independently): I asked
+> whether keeping `d->isr = idata` is member 4 given the store feeds *"a register nothing reads
+> for any purpose"* -- while the same packet states that `case 0x10030`'s READ returns `d->isr`,
+> and the witness measures it (`acc 30 rd` alive). The register **is** read. The question was
+> malformed; the store feeds a live read path, which is member 4 on its own terms.
+>
+> **STILL OPEN:** minimax says **Q3 cannot be settled from the packet** -- what a read at
+> `0x10020` should return post-fix needs an IP30/HEART source, and there is no HEART manual under
+> `_scratchpad/`. An honest UNKNOWN outranks a confident guess. And **agy proposes reaching the
+> tick with `step 70000`** (`tickshift` 16 = 65536 cycles), which would make the tick row
+> buildable **without** free-run and contradicts the witness limit recorded above. Carried as a
+> named question, not adopted.
+
+`machine_sgi.c:415` for case 30 is literally `// TODO: Interrupts!` -- no `INTERRUPT_CONNECT`, no
+HEART lines, and the serial is already routed *around* HEART onto `cpu.2`. The fossil literals use
+a **deleted numbering scheme** (`8 + x`), so translating them onto `INTERRUPT_ASSERT(cpu.2)` is a
+wrong model rather than a restore, and a cheap HEART sharing `cpu.2` with the 16550 breaks on
+deassert. **`#516` refused member 7 on `lca_interrupt_assert` after naming the same tell.**
+**Member 7 is the follow-up row** (implement HEART the way `dev_sgi_ip32.c` implements CRIME).
+
+**Member 5 FAULT is available and wrong:** `memory_rw.c` turns a device `return 0` into
+`EXCEPTION_DBE` on MIPS, but these offsets are not unmapped space -- they have storage, comments,
+and a PROM that already talks to `0x10018`.
+
+**The `writeflag` test is a separate defect and is not optional.** De-fatalise `0x10020` without
+it and the host lives on with a **guest-clobbered ISR** -- worse than today. That is the
+`asicindexcase`/`mvme187memcoob` shape: the kill is currently also the direction check.
+
+**The tick (`:78`) is member 3 applied to a callback**, exactly as `#516` did -- you do not
+decline a tick, because the guest already completed a legal write to an implemented register.
+**The latch must be two bits** (tick vs ISR-recalc); one shared bit lets the first shape silence
+the second, which is LCA's own lesson. **`0x10000` is *the* accept row for the tick**, because
+that write is what used to arm the death.
+
+**Sibling census:** `dev_sgi_ip19.c`, `dev_sgi_ip20.c` and **this file's own `default:`** all use
+`debug()` + `return 1`. The ISR arms are the file's outliers, not the house idiom.
+
+**WITNESS LIMIT, STATED RATHER THAN GLOSSED:** the probe covers the three ACCESS kills and **not**
+the tick kill. `tickshift` is 16, so the tick fires every 65536 cycles and a handful of `step`s
+cannot reach it -- that needs free-run, the same distinction the carrier records for host-timer
+paths. **The tick row is owed and is not claimed.**
+
+
+### `8259cmdhalt` (MED) and `lunafbhalt` (MED) -- filed 2026-09-17.
+### *** TWO FINDINGS FROM ONE SEAT ANSWER THAT I READ AND DID NOT QUEUE. ***
+
+The `exithunt` seat returned FOUR findings. I filed two, acted on the `abort()` one -- which
+produced a measured rung-3 witness and a real HIGH -- and left these two unrecorded.
+**`lunafb` had ZERO mentions in the entire ledger**, so `dev_lunafb.c` had never been queued at
+all. That is the unread-review class arriving one step later than usual: the review *was* read,
+and then half-acted-on.
+
+    dev_8259.c    cpu->running = 0  at :140, :231, :235      (:173 is inside a comment)
+    dev_lunafb.c  cpu->running = 0  at :93, :160, :166, :185
+
+Both are **functional halts, not host deaths** -- the process lives and the emulated CPU stops.
+That ranks BELOW a `SIGABRT`/`exit(1)` and ABOVE a silent wrong value, and it is invisible to
+**both** an `exit(` sweep and an `abort()` sweep, which is how the class survived three censuses.
+
+`8259cmdhalt`: the command-port arm `fatal()`s, halts, **and still returns 1**, so the access
+reports success while the strand stops. The seat's reachability claim -- `DEV_8259_LENGTH` is 2
+so the `default:` arm is dead, the live door is offset 0, and `strb r0,[pic]` with r0=0 suffices
+on CATS -- is **BELIEVED and deliberately not re-verified here**.
+
+`lunafbhalt` is the more interesting of the two because **luna88k is a machine this project has a
+rig for and does boot**, unlike ip30. The seat believes the OpenBSD boot path uses BMSEL, which
+is implemented, so the halt is believed off the boot path; that is not verified either. Member 5
+FAULT *is* architecturally available on M88K and `return 0` would deliver it — today the halt
+runs first.
+
+**Severity and reachability are marked owed, not guessed.** A census is auditing the class; these
+rows exist so the findings cannot be lost a second time while it runs.
+
+
+### `highrankunmeasured` (MED) -- filed 2026-09-17 by the Fable 5.1 adjudicator, answering
+### *"what am I not asking?"*.  **THE ORDER BETWEEN THE TWO OPEN HIGHs WAS SET WITHOUT THE
+### MEASUREMENT THAT WOULD SETTLE IT.**
+
+Carrier doctrine is settled here and is not in question: **rung is a FLOOR ON ADMISSIBILITY;
+SEVERITY orders the queue.** What is not settled is the severity input, because real-guest
+reachability is measured for *neither* HIGH.
+
+**`ip30abortkill`** has a rung-3 witness and a measured `SIGABRT` — but:
+
+    gate_asan_sweep.sh:593   for s in ip12 ip28 ip30 ip32 ip35   ... and it is GREEN
+
+So **ip30 is constructed and run in-tree today and the ISR aborts are on no path anything
+travels.** Only one gate names ip30 at all, there is no in-tree Octane boot image, and the
+device's own header says it is *"just comprised of hardcoded guesses so far. (Ugly.)"* The
+defect is real for a guest that touches those addresses — which a booting Linux/IP30 would,
+since the code cites that very driver three times — and hypothetical for anything running here.
+
+**`armmsrmodekill`** kills the **process** (not a halt, not a probe-only path) on ARM, whose
+decode *is* exercised across `testarm`/`barearm`/`cats`. Its real-guest reachability is **also**
+unmeasured — and `regress/arm_msrmode_probe.py` is BUILT and UNRUN, so that measurement is one
+run away.
+
+> **DISPOSITION: do not re-rank on argument. Run the arm probe.** It is the cheap measurement
+> that informs the order of the expensive work, which is exactly why the adjudicator put it
+> ahead of the larger ip30 build in the ship order.
+
+This row exists so the ranking is not silently decided by which defect was found most recently.
+
+*Records note, because it is the third instance: this row was filed into `ledger.json` without
+its `OUTSTANDING_BUGS.md` entry, and section P caught it — as it did for `adjudglmtag` and
+`gdromacceptdmadebt` earlier the same day. **Three is a habit, not an accident.** The ledger is
+where the script writes; the human queue is a second step that keeps not happening. The gate is
+load-bearing precisely because the discipline is not reliable.*
+
+
+### `lunadefaultstop` (MED) and `lunaabsentmaskdecl` (LOW) -- filed 2026-09-17.
+### *** NAMED BY SEATS THREE TIMES SINCE 2026-09-06 AND NEVER GIVEN A LEDGER ID. ***
+
+The halt-class census was asked whether my dropped-findings failure was a **pattern**. It is, and
+it answered with a bounded denominator rather than an impression:
+
+| named ID | in ledger as an `id`? |
+|---|---|
+| `ip30abortkill`, `mvme187memcoob` | yes -- filed from the exithunt |
+| `8259cmdhalt`, `lunafbhalt` | yes, **only because this session filed them** |
+| `lunadefaultstop` | **no** -- named 2026-09-06, again by the exithunt table, again by the census |
+| `lunaabsentmaskdecl` | **no** -- same 2026-09-06 "file as rows" list |
+
+Verified: `lunadefaultstop` appears **once** in `CHANGELOG.md`, **zero** times in this file, and
+was **absent** from `ledger.json`. So it was found, written into a round record, and never
+queued — for eleven days.
+
+**THE DEFECT.** `src/devices/dev_luna88k.c:923`, in the unimplemented-address arm:
+
+    // Stop the emulation immediately.
+    cpu->running = 0;
+    return 0;
+
+**The device is ALWAYS installed** — no `x11_md.in_use` conditional, unlike `lunafb` — and its
+window runs `0x3ffffff0` … `BMAP_START`, **roughly 1.76 GB**. One supervisor store to any
+unimplemented offset in that range stops the CPU **on the machine this project actually boots**.
+Boot to `login:` is clear, or the rig would not boot, so the door is a probe rather than the PROM
+path.
+
+**RANKED #1 of the guest-reachable halts**, above `8259cmdhalt`, precisely because it is
+unconditional on a booted machine where `lunafbhalt` turns out to be X11-only.
+
+*It is a FUNCTIONAL HALT, not a host death — the process lives and the strand stops. That ranks
+below a `SIGABRT`/`exit(1)` and above a silent wrong value, and it is invisible to an `exit(`
+sweep **and** an `abort()` sweep, which is how the class survived three censuses.*
+
+**`lunaabsentmaskdecl` is filed as a placeholder only** — its substance is not re-derived and is
+owed. The point of that row is the pattern: two items from one "file as rows" instruction,
+eleven days old, neither queued.
+
+
+### `mapledmahang` (MED) and `guestloopdenial` (LOW) -- filed 2026-09-17 from the signal-death hunt.
+### *** A THIRD CLASS: THE GUEST TAKES THE EMULATOR AWAY WITHOUT KILLING IT. ***
+
+The hunt was aimed at host deaths that arrive as a **signal** rather than a call — SIGFPE from a
+guest divisor, SIGSEGV, guest-bounded loops — because `exit(` and `abort()` have both now been
+swept and neither has a keyword for this. It returned one unbounded hang and four denial-scale
+loops, with denominators: `for (` 289, `while (` 60, `do {` 6, `for (;;)` **2**.
+
+**`mapledmahang` — `dev_dreamcast_maple.c`.**
+
+    :409   for (;;) {
+    :429       last_message = buf[3] & 0x80;     <- buf is read from GUEST RAM at d->dmaaddr
+    :532       addr += datalen_cmd * 4;
+    :535       if (last_message) break;          <- the ONLY exit
+    :588   case 0x18 MAPLE_STATE, case 1: maple_do_dma_xfer(cpu, d)
+
+A guest that never sets bit 7 of that byte loops forever, inside an ordinary register write.
+
+**This is neither of the two classes this queue already tracks.** An `exit(`/`abort()` is a
+**host death**; `cpu->running = 0` is a **functional halt** — process lives, strand stops. Here
+the process is alive, the strand is running, and the user's machine is gone. **No sweep looks
+for it, because there is no keyword** — which is precisely the property that let the `abort()`
+class survive three censuses.
+
+Verified not a duplicate: `mapledmaaddr` is the DMAADDR read value and `mapledmaadvance` is
+address advancement past the command. Neither is the loop bound. (There *is* an `exit(1)` at
+`:426` inside the loop on a different condition — so the function has a terminating path and
+still has no trip cap.)
+
+**Disposition is deliberately not decided.** The obvious shape is a trip cap plus a latched
+announce — member 3 applied to a loop — but *choosing the bound* is the design question, and the
+addition licence wants a measured delta or a transferred warrant, never a number that feels safe.
+
+**`guestloopdenial`** collects four bounded-but-huge loops as one class, because the shape and
+the disposition question are identical: a guest-supplied count or coordinate used directly as a
+loop bound with no cap and no yield.
+
+| site | scale | machine |
+|---|---|---|
+| `dev_sgi_re.c:1477` MTE linear fill — `dst1 - dst0 + 1` **underflows uint32** | ~2²⁰ passes × ≤4 KiB ≈ **4 GiB** of `memory_rw` | sgi/ip32 |
+| `dev_sgi_re.c:1516-1574` MTE tiled fill — 12-bit coords, no cap | **16,777,216** getputpixel | sgi/ip32 |
+| `dev_pvr.c:171-204` SH4 DMAC — TCR 0 means 16M | **16,777,216** transfers in one store | dreamcast |
+| `dev_osiop.c:433` SCRIPTS MOVE — 24-bit guest count | **16,777,215** byte accesses per MOVE | mvme88k |
+
+**The PVR one is the interesting member**: there the 16M *is* the hardware contract, so a cap
+would be a deliberate divergence from the spec rather than a fix. That is a different argument
+from the other three, which is exactly why the class is filed once rather than four times.
+
+
+### `probedeathoracle` (LOW) -- filed **and closed** 2026-09-17.
+### *** AN EMPTY RESULT WITH ITS DENOMINATOR.  THE DEFECT WAS BORN TODAY AND DIED TODAY. ***
+
+Today's worst apparatus finding was a probe that reported `alive` for a process that had already
+raised `SIGABRT`. The obvious follow-up was: **how many other probes carry that shape?** If
+several did, every one of them could be certifying live defects as fixed.
+
+**Answer: zero shipped live probes still mis-score this way**, and the census says so with its
+method attached.
+
+**Method — keyed on MECHANISM, not on names**, and it explicitly refused to count `artifacts/**`
+frozen copies, which would have inflated the class roughly **fifteenfold** by re-counting the
+same five files. Live population: `regress/*.py` = **99**, minus 10 harness/selftest/census
+scripts and one source-only probe = **88 launchers**.
+
+| death-as-oracle mechanism | live count |
+|---|---|
+| EOF-as-alive (`alive = rd(...)`) | **33** |
+| session borrowed from one of those 33 | 11 |
+| prompt/dump "still answering" | 3 |
+| `subprocess.run` wait-status | 6 |
+| `WNOHANG` at all | **5** |
+
+Of the five: three poll (`pcc2_width`, `pcc2_c040`, `xscale_inten`), `arm_msrmode` polls 12 s,
+and `luna_absentcpu_probe.py` **does sample once — but it is not the alive oracle**, being called
+from `died()` only after `step_at` has already failed on EOF.
+
+> **Once-only in the live tree: 1. Waitpid-once as the survive oracle: 0.**
+
+**And the seat named the construction rather than the keyword, which is what makes this
+reusable.** The bug is *not* "has `WNOHANG`". It is the three-part combination: `rd()` returns on
+an empty `os.read` so the spin is skipped exactly on death; **that return is ignored**; and
+`alive` is then taken from a single `waitpid(WNOHANG)`. Any one of the three alone is harmless —
+which is why the 33 EOF-as-alive probes are correct as written: they consume `rd()`'s return.
+
+**DISPOSITION: no tree-wide edit.** In the seat's words, *"a tree-wide rewrite would manufacture
+findings."* The boundary is recorded so a future round does not rediscover the class and sweep
+it.
+
+
+### `probeblockingwait` (LOW) -- filed 2026-09-17.
+### *** THE MIRROR OF THE FALSE-GREEN CLASS, AND IT WAS OUTSIDE THAT CENSUS BY CONSTRUCTION. ***
+
+`regress/maple_dmaaddr_probe.py:173` is `_, stat = os.waitpid(pid, 0)` -- a **blocking** wait with
+no deadline -- and `mapledmahang` is a path on which the emulator **never exits**. If that probe
+ever drives a maple DMA list with no LAST bit, the wait never returns and **the harness hangs,
+reporting nothing at all**.
+
+Today's `probedeathoracle` census closed the opposite failure: a probe reporting **alive** for a
+process that had already died. This is the same mistake with the sign flipped -- a probe that
+cannot report anything because it waits forever on a process that will not die. Both come from
+keying an oracle on process death without a deadline.
+
+> **And it was invisible to that census by construction: `probedeathoracle` keyed on `WNOHANG`,
+> so a BLOCKING `waitpid` was outside its population.** A census keyed on the mechanism it
+> expects cannot see the mechanism it does not.
+
+**Filed, not fixed.** The path is not currently driven by anything, and the remedy -- SIGKILL
+after a deadline rather than patience -- belongs with whichever round builds the `mapledmahang`
+witness, because that is the round that first makes the path reachable.
+
+
+### `cpusexitsweep` -- **CENSUS METHOD CORRECTED 2026-09-17.  IT COULD NOT SEE A THIRD OF ITS OWN
+### POPULATION, AND THE CONCEALMENT IS THREE-LAYERED.**
+
+A sweep of `src/cpus/` for the three classes the device sweeps found led with a **method**
+finding rather than a defect list, and it is the sharper result.
+
+| spelling | hits | files |
+|---|---|---|
+| `running = 0` (what the census keyed on) | **54** | 11 |
+| `running = false` (**invisible to it**) | **20** | 10 |
+
+The missed files include `cpu_dyntrans.c`, `cpu_mips_instr_loadstore.c`,
+`cpu_ppc_instr_loadstore.c` and `cpu_sh_instr.c` — **four that the sweeping seat's own table did
+not list either**. The `= false` population is the m88k / i960 / RISC-V / MIPS-reboot family.
+
+**And a third layer: `ABORT_EXECUTION` is a MACRO** — defined at `cpu_i960_instr.c:45`,
+`cpu_m88k_instr.c:45` and `cpu_sh_instr.c:45`, invoked as a bare identifier. **Neither assignment
+spelling appears at any use site.** A grep for either finds the three definitions and none of the
+uses.
+
+*(Comments and `#if 0` inflate both raw counts, so 54/20 are upper bounds on the live population
+rather than the population — `cpu_dyntrans.c` has one live `= 0`, the `bad` label, with two more
+commented out.)*
+
+> **This is the session's dominant failure family arriving inside a shipped census row.** The
+> deriver measured a *correlate* — one spelling of the assignment — rather than the thing, which
+> is *does this path stop the emulated CPU*. `staticlatchscope` is the recorded precedent, where
+> three name-keyed censuses of one class all came back wrong.
+
+**The fix is a re-derivation, not a sweep.** No code changes; the row's count is the deliverable.
+
+#### And an empty result worth as much: **`abort()` is absent from `src/cpus/` — 0 calls.**
+
+The only hit is a **comment** at `memory_alpha.c:195` — *"must not abort()/exit() the host"* —
+documenting a death `#194` **removed**. Lookalikes a careless grep counts: `abortdyntrans`,
+`abort_dump:`, and "abort execution" in prose. Also absent: `raise(`, `SIGABRT`,
+`__builtin_trap`.
+
+*I reported "1" for this earlier today by grepping `abort(` and counting that line of prose —
+the same correlate-keying mistake, mine, in the session that keeps finding it.*
+
+**No Maple-style unbounded instruction-path loop exists there either.** The one shared "I do not
+know this instruction" halt is `cpu_dyntrans.c`'s `bad` label, included into every dyntrans CPU —
+one site with many faces rather than many sites.
+
+
+### `mpipirealloc` (LOW) -- filed 2026-09-17. **AN UNCAPPED HOST ALLOCATION GROWN BY ACCRETION.**
+
+`dev_mp.c:198-200` -- a write to `DEV_MP_IPI_ONE` or `DEV_MP_IPI_MANY`:
+
+    d->n_pending_ipis[i] ++;
+    CHECK_ALLOCATION(d->ipi[i] = (int *) realloc(d->ipi[i],
+        d->n_pending_ipis[i] * sizeof(int)));
+
+**No cap of any kind**, and **nothing drains the queue except the target CPU reading it** — the
+only consumer is `DEV_MP_IPI_READ` at `:211`. A guest that sends IPIs and never reads them grows
+the host heap four bytes at a time, **with a `realloc` on every write**, so it costs resident
+memory *and* repeated copying. The test machines always install it (`machine_test.c:148`, `:333`).
+
+> *** `CHECK_ALLOCATION` turns a **failed** realloc into a clean `exit(1)` — which is why this is
+> not a crash — but it does nothing about a long run of **successful** ones, which is the entire
+> defect. **A guard against failure is not a guard against growth.** ***
+
+**LOW, below `guestloopdenial`**, on shape rather than size: growth by accretion needs sustained
+guest cooperation, where a tight loop needs one write. Same family — the guest takes the host away
+without killing it — different road.
+
+#### And the heap-overflow axis is **closed as empty, with its denominator**
+
+I pointed the hunt at `512 * count` on a 32-bit `int`, which overflows at count 8,388,608 and
+would give a small allocation followed by a large write. **Measured: `count` is 1–256, so the wrap
+is unreachable.** In its own words: *"a manufactured WDC heap overflow would be a wrong record."*
+
+**130+** allocation calls in `src/devices/` and ~15 in `src/cpus/`, the large majority
+`malloc(sizeof(struct …_data))` at DEVINIT. **16 guest-derived sizes across 10 files**, each
+traced to its writer → **0 overflow, 15 capped or field-width bounded, 1 unbounded growth.**
+
+**Adjacent, flagged as outside the directories asked about:** `dev_mb89352.c`'s `transfer_count`
+(fed from the 24-bit TCH/TCM/TCL triple) is `want_len` for DATA OUT **and the CDB**, so a command
+buffer can reach **16,777,215 bytes** on a field-width cap with no software cap behind it. SCSI
+READ/WRITE is capped at 64 MiB by `#163`. Recorded rather than filed separately — it is a bound,
+not an overflow, and belongs with whoever next touches mb89352, which `b120` already owns.
+
+
+### `changelogroundgap` (LOW) -- filed 2026-09-17. **SHIPPED BUT NEVER WRITTEN UP: the inverse
+### records gap, and no gate in this tree looks for it.**
+
+Seven rounds shipped code with **no CHANGELOG round block**, four of them unmentioned anywhere
+in the file, measured against a live denominator of **293** round-block headings:
+
+    round  commits                    mentions  subject
+    #436  2134a98 abd7bad 7172859    0  CHANGELOG mentions   the detectors could all have stopped detecting, and nothin
+    #439  020a672 374706b            13 CHANGELOG mentions   the 8253 counter-latch: the driving seat REFUSED the panel
+    #441  9de16b7 799f48f            1  CHANGELOG mentions   sh4bcr: two guest instructions ended the emulator process
+    #443  6bec468 3536d86            13 CHANGELOG mentions   sh4pcicexit: one guest LOAD ended the host, on 116 of 137 
+    #466  9ca9cca                    0  CHANGELOG mentions   asiceventaddr: state the domain restriction where the even
+    #487  6faba0f eb8fafb            0  CHANGELOG mentions   landiskaux: the census is RE-TAKEN and the panel's gate is
+    #493  3521a22                    0  CHANGELOG mentions   wdcaltoffset: a durable rung-3 witness for a live sev-high
+
+**None is a void number** — this project has one (`#289`), so a missing heading is a breach only
+if the number shipped, and all seven did. Three are ordinary defect fixes (`#441 sh4bcr`,
+`#443 sh4pcicexit`, `#493 wdcaltoffset`).
+
+> *** `sh4bcr` and `sh4pcicexit` are the two rounds the VACUITY FLOOR names as its founding
+> evidence. **The most-cited exemplars in the rule set have no round block.** ***
+
+**Why nothing caught it:** H checks seats were fired, G checks an answer that arrived was
+recorded, `check_cited_artifacts.py` checks a cited path exists. Every one of them starts from a
+record and tests it — so a record that was never written is outside all of them by construction.
+
+**Disposition: recorded, NOT reconstructed.** A consolidated assessed-not-changed entry at the
+head of CHANGELOG.md names each round and its commits; fabricating seven retroactive blocks out
+of commit messages would manufacture records, which is worse than the gap. The reconstruction is
+this row's deliverable, to be done from each round's own artifacts.
+
+*The closing checker is a ledger-row-to-CHANGELOG-heading existence test, forward-only from a
+cutoff (`check_bugfile_sync.py` idiom). **Filed, not built** — two negative controls, its own
+harness round.*
+
+
+### `evdeadarchive` (LOW) -- filed 2026-09-17. **297 CITATIONS TO AN ARCHIVE THAT WAS NEVER
+### BUILT -- and the answers they point at survive somewhere else.**
+
+`tools/pipeline/evidence/` is cited by **297 `ev` fields across 27 rows**. It was **never
+tracked**: `git log --all -- 'tools/pipeline/evidence'` returns 0 commits, and `--diff-filter=A`
+over `*evidence*` returns nothing ever added to the index. These are not decayed citations —
+they name the PIPELINE.md doctrine's prescribed layout, written into rows at its 2026-08-15
+adoption, for a scheme nobody implemented.
+
+> *** The answers SURVIVE. *** `_scratchpad/panel_20260815_*` holds ten panel dirs for that
+> date, each with `agy / codex / grok / kimi / ollama_{deepseek,glm,minimax}` files. **Only the
+> path is fictional** — so this is a RE-POINT, not a recovery.
+
+**Scale, derived by walking the decoded ledger rather than by grep:**
+
+| | n |
+|---|---|
+| `ev` fields (row + entry) | **3222** (3209 non-empty) |
+| cite `_scratchpad/` | **1923** |
+| cite `pipeline/evidence/` | **297**, across 27 rows |
+| cite neither | 989 |
+
+*The audit that raised this reported `>=1999` and `>=999`, flagging both as truncated greps, and
+gave 297 as complete. The walk reproduces **297 exactly** and shows the two bounds were low by
+~1.6x and ~1.9x. An honest lower bound is a good record and a bad number — it is
+indistinguishable from a measurement one hop from the tool that made it.*
+
+**Why no checker sees it — a scope boundary, not a checker defect.** `check_cited_artifacts.py`
+does exactly this job, but its header sets the altitude deliberately (*"checks committed records,
+never scratchpad state"*, fable5's `#462` Decision 4c) and it reads CHANGELOG round blocks, not
+ledger `ev` fields. Widening it is a scope change the adjudication that created it bounded on
+purpose.
+
+**LOW**, for the reason the citation-form ruling already gives: **no gate, probe or script reads
+an `ev` field functionally.** A reader following one gets a loud, immediate failure rather than a
+wrong answer — the safe direction. The cost is audit expense, and 27 rows that cannot be verified
+from their own fields.
+
+
+### `scorehyphenfp` (LOW) -- CLOSED 2026-09-17. **A CHECKER WHOSE PRESCRIBED REPAIR WOULD HAVE
+### SHIPPED A FALSE STATEMENT.**
+
+`check_score_claims.py` read the ordinal pair `entries-4/8` as a stale score claim of 4/8: its
+lookbehind excluded a digit, `x` and `/` **but not a hyphen**. Its message then says *"if that is
+a deliberate historical quote, write '8-row' on the same line"* — which, on a line about array
+entries, silences the check by writing something untrue into a probe.
+
+> **A check whose repair corrupts the thing it guards** — the shape the carrier records for the
+> build-tree clearance recipe, reached from a new direction.
+
+**Audited for siblings with a denominator, not patched on the one instance:** 710 N/M matches
+across 121 `regress/` files; the hyphen-aware form keeps **706** and drops exactly **four**, all
+ordinal pairs — `entries-4/8`, `len-3/5`, `opcode-59/63`, `pass 2-3 / 6-7`. **Three of the four
+were latent**, firing only once their probe gains a gate pin.
+
+Controlled both ways before landing: eight real score claims still match, six non-scores rejected.
+`SCORE_CLAIMS_PASS`.
+
+### `ledgercommitsshape` (LOW) -- filed 2026-09-17. **ONE FIELD, TWO SHAPES, AND THE WRONG
+### ANSWER LOOKS LIKE DATA.**
+
+`commits` is a space-separated **string** in 382 rows and a **list** in 37 (`NoneType` in 93).
+`", ".join(row["commits"])` on a string row renders `7a41b3f` as `7, a, 4, 1, b, 3, f` — **which
+reads as seven commits, not as an error.**
+
+**Not a data defect:** both shapes parse and every shipped tool handles them. It is a schema
+inconsistency that makes each new consumer a coin-flip, with this project's signature failure
+mode — a plausible wrong answer that does not look like a failure.
+
+**FILED, NOT NORMALISED.** Rewriting 382 rows of the single source of truth with no measured
+defect behind it is the addition licence's "cannot hurt" wearing records clothes. The cheap
+durable fix is a `commits_of(row)` accessor adopted where consumers are written — a tooling
+change owing its own negative controls.
+
+*Found by falling into it. It was obvious only because a SHA is recognisable; a field of short
+tokens would have rendered identically and read as real.*
+
+
+### `sh4dmacnote` (LOW) -- filed 2026-09-17. **THE GENERIC SH4 DMAC SIGNALS TRANSFER END THROUGH
+### NO CHANNEL AT ALL -- and the comment that said otherwise has been corrected.**
+
+`sh4_dmac_transfer`'s header claimed it *"Clears the lowest bit of the corresponding channel's
+CHCR when done."* **It never writes CHCR.** Measured over the function's whole 178-line extent
+(braces walked, not grepped): the only `dmac_chcr` reference inside it is the read into a local.
+File-wide there are exactly three mentions — that read, the `DEVICE_ACCESS` read, and the guest's
+own store. The `CHCR_*` lines that look like writes are switch labels.
+
+**The contrast:** `dev_pvr.c` DOES signal completion on its own DMA path
+(`cpu->cd.sh.dmac_chcr[channel] |= CHCR_TE;`). The tree's two DMA paths disagree.
+
+> *** The COMMENT is wrong and is fixed. Whether the BEHAVIOUR is wrong is **not measured**, and
+> that distinction is the whole row. *** `#453`'s own analysis records that the only RS encoding
+> reaching this point is the single-address external case, **which performs no transfer** — and
+> not signalling the end of a transfer that did not happen is not a defect.
+
+**What would settle it:** a rung-3 probe driving the generic DMAC on a path that *does* transfer,
+reading CHCR back through `DEVICE_ACCESS` and asking whether TE is set. If no such path is
+reachable, the row closes as documented-only — a real answer, not a failure.
+
+**LOW** — a HANG-class candidate with no witness and a named reason it may be vacuous.
+
+*Provenance, and it is the point: found by the grok seat in `panel_20260917_100431` while reading
+the enclosing function for a different question — in an answer **stamped across six rows**, so the
+finding had no cell of its own. Section O's boilerplate cluster and section G's unread review are
+the same defect seen from two sides: **the stamp is what made it unfindable.***
+
+
+### `gdromdmaflood` (MED) -- filed 2026-09-17. **AN UNLATCHED GUEST-DRIVABLE `fatal()` ON THE
+### *SUCCESS* PATH -- ordinary correct guest traffic floods the log.**
+
+`dev_dreamcast_gdrom.c` prints `[ dreamcast_gdrom_dma: Transfering %i bytes to 0x%08x (guest
+asked for %i) ]` on the **accepted** transfer path with no latch. `fatal()` has no `-q`
+early-out, so it cannot be silenced by verbosity.
+
+> **How it was settled, because the obvious check misleads.** The enclosing function *does*
+> contain `if (!(d->warned & GDROM_W_DMANODATA))` about thirty lines above — so a reader
+> scanning for "is there a `d->warned` test nearby" finds one and stops. **Brace depth settles
+> it: that block closes before the print**, which sits outside it. *A latch in the same function
+> is not a latch on this line.*
+
+**Why the success path is the bad place for it.** Every other flood this queue tracks sits on a
+*refusal* arm, where the guest must do something unusual to provoke it. This one is on the path a
+working driver takes.
+
+**Not introduced by `#462`, and the seat said so itself** — that round moved the print below the
+`d->data == NULL` check and corrected it to print `d->data_len`, which is why the line is right
+about its *content* and unlatched about its *frequency*.
+
+**`floodclass` does not cover this site** — checked; the row mentions neither `gdrom`,
+`dreamcast` nor `Transfering`.
+
+**Disposition deliberately not chosen here.** The house idiom is member 3 (decline + latched
+announce) — but this is a *success*, not a decline, and a `(once)` latch would silence the
+transfer log after the first DMA, which may be the diagnostic someone wants. The option set for a
+noisy-but-correct print is not the de-fatalisation set, and naming the right menu is the first job
+of whoever takes this.
+
+*Provenance: the deepseek seat, `panel_20260917_100431`, in an answer **stamped across six rows**
+— so the finding had no cell of its own. Third real defect recovered today from a review that was
+written, delivered, and never read as its own answer.*
+
+
+### `boilerplateprefix` (LOW) -- CLOSED 2026-09-17. **A CHECKER THAT COMPARED THE OPENING SENTENCE
+### INSTEAD OF THE NOTE -- WRONG IN BOTH DIRECTIONS.**
+
+`check_boilerplate.py` keyed on `note[:60]`, so seat cells carrying each seat's own finding but
+sharing an identifying preamble clustered as boilerplate — **while satisfying the check's own
+stated rule** (*"each seat its own sentence from its own file"*).
+
+| key | clusters | genuine | notes differ |
+|---|---|---|---|
+| OLD `note[:60]` | 64 | 44 | **20** |
+| NEW full note | 54 | **54** | **0** |
+
+> *** It failed in both directions, and the second half is the surprise: genuine stamps rose
+> **44 → 54**. *** A 60-character bucket holding a real stamp *alongside* other notes scored as
+> one mixed cluster — so **the prefix key was hiding ten real stamps by merging them**.
+> Truncation cost recall as well as precision; it never bought either.
+
+**All seven live reds were false**, each with seven genuinely distinct notes — section O was
+blocking commits on nothing.
+
+**Controlled both ways:** `BOILERPLATE_PASS`; an injected identical paragraph across four seat
+cells post-cutoff reds it and names the row; removing it restores green.
+
+*A harness bug of mine is recorded in the file because it produced a wrong number first:
+`shared_notes` returns its key with newlines replaced by spaces **for display**, so a verification
+comparing a recomputed key against the returned one silently matches nothing for any note with a
+newline. Recompute the bucket; never compare against the display key. **Third time this session a
+check of mine keyed on a correlate of the thing rather than the thing.***
+
+
+### `wallverdictand` (LOW) -- filed 2026-09-17. **A GENUINE WALL SCORED AS `answered`, BECAUSE THE
+### SEAT STREAMED ENOUGH TEXT TO LOOK LIKE IT HAD A VERDICT.**
+
+`seat_verdicts.py`: `is_walled = _is_wall(t[-600:], t[-4000:]) and not v`. The tail test is right
+and fires; **`and not v` suppresses it.**
+
+On `panel_20260917_085545/kimi.txt` — **2,448,106 bytes** ending mid-plan with
+`provider.auth_error: 403 You've reached your weekly (7-day) usage limit` — `_is_wall` returns
+True and `verdict_of` returns `PARTIAL CENSUS ONLY` from somewhere in the stream, so the seat was
+tallied *"8 answered, 0 walled"*.
+
+> **It contradicts the file's own documented rule:** *"STRONG ones are a notice on their own;
+> WEAK ones (`quota`, `rate limit`) need"* the extra condition — and then applies the extra
+> condition to both. `usage limit` and `quota will reset` are both in `WALL_STRONG`.
+
+**Measured, not generalised:** 2,369 seat files across 356 panel dirs; **166 walls by the tail
+test, 2 hidden** — this one (today, on the in-flight `#530`) and `panel_20260820_005715/codex.txt`.
+
+**Why the guard exists, so nobody removes it blindly:** the file records the wall test twice
+firing on live seats merely *discussing* rate limits. The fix for that was the **tail restriction**,
+which is the real discriminator; `and not v` is belt-and-braces that now costs more than it buys
+for strong patterns.
+
+**Fix shape, filed not applied:** report WALLED on a STRONG tail pattern regardless of `v`; keep
+`and not v` for WEAK only. Owes two negative controls, and it is a third checker change in one
+session — its own harness round, not a rider.
+
+*The seat itself was **covered, not lost**: the `kimi-k3:cloud` substitute answered DO NOT CLOSE on
+the same panel.*
+
+
+### `cellechoesbrief` (MED) -- filed 2026-09-17. **TEN LEDGER CELLS RECORDED THE BRIEF BACK AS THE
+### SEAT'S ANSWER, AND NO GATE CAN SEE IT.**
+
+**Root cause, one character class:** the extraction matched `CLOSE|KEEP-OPEN|NOT CHECKABLE` as a
+**substring**, so `CLOSE` fired on the word **`closed`** — which appears in the brief's own
+headings (`### 1. \`lcashiftub\` (LOW, closed) — …`) and in seat narration (*"I'll verify each
+closed row"*). It then took the **first** matching line, which for a seat that echoes the brief
+(codex) or narrates its plan (grok) is not its verdict.
+
+**Measured: 9 codex cells were brief headings, 1 grok cell was a 926-char preamble. 53 of 63 were
+genuine.** All ten repaired from the seats' real per-row verdict tables.
+
+> *** Why it is worse than an unread review, in the Fable seat's words: **"an unread review filed
+> under a RECORDED seat — section G cannot see it because an entry exists."** *** Section G asks
+> *did a seat that answered get recorded*; a cell containing the brief answers yes. **The blank
+> that would have been caught was filled with something shaped like an answer.**
+
+*My own audit under-counted 9 as 6 — it required a severity token and three headings carry only
+`(closed)`. Sixth correlate-keyed check of the session, inside the audit of the fifth, which is why
+the repair re-extracted **all 63** with a corrected key and diffed, rather than patching the rows
+the audit named.*
+
+**Structural landing spot, filed not built:** flag a ledger cell whose text appears verbatim in the
+`brief_sent.md` of the panel dir its own `ev` field cites. Both files are on disk and already
+linked, so the comparison is cheap. Owes two negative controls; its own harness round.
+
+
+### `exemptcliff` (MED) -- filed 2026-09-17. **ELEVEN PROBE EXEMPTIONS EXPIRE ON THE SAME DAY,
+### THREE DAYS OUT.**
+
+Date histogram over `check_probe_wiring.py`'s `EXEMPT` table: **11 entries dated `2026-09-20`**,
+plus one `2026-09-19` and one `2026-09-21` — **thirteen expire inside three days, eleven together.**
+
+> *** The pile-up is an accident of a deliberate choice. *** The file's own comment explains the
+> date: *"2026-09-20 matches the fbpending_bound:2026-09-20 deadline already standing in
+> gate_offline.sh's SM_EXEMPT, so #442's two debts fall due together."* **Aligning two debts was a
+> good idea; nine more have since been written to the same date, and nobody chose that** — each new
+> exemption copied the date it found.
+
+**What it costs if nothing is done:** on 2026-09-20 the checker reds on eleven probes at once, and
+a gate that reds on eleven unrelated things is the shape this project already names — *a rule that
+retro-fails at scale gets switched off, and a disabled rule is worse than no rule.*
+
+**Honest options:** wire them, re-date them individually with their own warrants, or retire the
+ones whose rounds are closed. **Not** a single edit pushing the whole table forward — that is how
+the pile-up formed.
+
+*One of the eleven is `ppc_rldicl_probe.py`, whose repair is uncommitted and whose row
+(`ppcwitnessmaskoracle`) is open — so that debt comes due on an oracle nothing executes.*
+
+
+### `ip30abortkill` -- **FIXED AS `#531`, 2026-09-17.  WITNESS PAIR: PRE-FIX 8/21 -> POST-FIX 21/21 on ONE 21-row instrument.**
+
+> *** THE SHIPPED INSTRUMENT IS NOW **28 ROWS**, NOT 21, AND THE WITNESS PAIR ABOVE WAS NOT RE-MEASURED ON IT.  Stated rather than smoothed. ***  The instrument grew twice AFTER the witness pair was taken -- 21 -> 27 at the pass-2 class closure, 27 -> 28 at the §F2 sibling-parity repair -- and every added row exists for DETECTOR STRENGTH, not to witness the defect.  The pair is therefore valid for what it claims (the fix changes the behaviour, measured on one instrument, pre and post) and is NOT a claim about the instrument that ships.
+>
+> **The shipped instrument's POST-FIX figure IS measured: 28/28** (`killtable3_20260918/base.raw`, sentinel `IP30ABORT_DONE`).  What is not measured is its PRE-FIX counterpart.  **OWED: one clone build to take PRE-FIX at 28 rows**, which would give a matched pair on the instrument that actually ships.  Deliberately not run while a measuring seat is in flight.  *(The 18-row pair 11/18 -> 18/18 is SUPERSEDED: pass 2 found four defects, and repairing them grew the instrument.  The re-pin's own order proof stays on the 18-row form by design.)*
+
+Four guest-reachable `abort()` calls in `dev_sgi_ip30.c` on the advertised `-E sgi -e ip30`.
+**Three `exit(` sweeps of this queue walked past all four**, because `abort()` contains no
+`exit(` — a census keyed on `exit(` cannot see a host death spelled `abort()`.
+
+`0x10020` had **no `writeflag` test and ran its store first**, so a guest LOAD wrote `idata`
+(zero on a read) into the interrupt-status register and *then* killed the host.
+
+**The disposition came from `heart.h`**, the header this file cites three times: `set_isr` and
+`clear_isr` are write-side, `isr` is **read-only**. So writes keep their stores with a latched
+announce, reads of the write-side registers decline, and `0x10030`'s clear-on-write is dropped —
+**the file's own `TODO: is this correct?` answered NO by its own source.**
+
+**Two L1 row defects the fix exposed, repaired in-round:** `acc 20000` expected a counter not to
+count (`0x161c − 0x1234 = 1000`, the tick stride) and was **red on a correct build**; `isr keep`
+read the first of three loads instead of the last, invisible pre-fix because its seeding write
+aborted.
+
+**The re-pin owed a red and got one:** three `txt` rows pinned the pre-fix message text, so the
+re-pinned oracle was measured on a pre-fix clone — **8/18, those three rows failing** — before
+being trusted.
+
+**Still owed before close: panel pass 2 on the real diff.**
+
+
+### `asiceventaddr` -- **A THIRD PARTIAL GUARD IN ONE HEADER, from an unread review.** Recorded
+### 2026-09-17.
+
+`dreamcast_sysasicvar.h`: `SYSASIC_EVENT_TO_ADDR(e)` carries the compile assertion
+`SYSASIC_EVENT_RANGE_OK(e)`. **`SYSASIC_EVENT_TO_BITMASK(e)` on the very next line is
+`(1 << ((e) & 31))` with no guard**, and at `(e & 31) == 31` that is a signed `1 << 31` —
+undefined in C99, as this tree states in its own words in `cpu_ppc.h`.
+
+> **Latent, not live**, and the seat's framing is corrected on that point: derived over every
+> defined event — **21 constants, max 67** — and `67 & 31 = 3`. **No defined event reaches it.**
+> The first event at 31, 63, 95 or 127 arms it.
+
+**The file's own history is the argument.** Its comment records that *"#468 guarded only the
+upper end, and a pass-2 seat measured the hole within the hour"* — the first guard tested
+`(e) < 96`, which `-1` satisfies, producing an address four bytes below the base. That is twice;
+the unguarded BITMASK macro is **the third instance of the same shape in one header**.
+
+**The remedy is already in the file and costs one token:** give BITMASK the same
+`+ SYSASIC_EVENT_RANGE_OK(e)` that ADDR carries — not an addition under the licence, but the
+existing guard applied to the sibling it was written for.
+
+*Count caution: my first sweep said 22 constants / max 96. The 96 came from a `#define` quoted
+**inside a comment**. The seat's 21/67 was right and mine was wrong.*
+
+
+### `ip30asdvasdvnb` -- an UNLATCHED guest-drivable `fatal()` with a nonsense message, in the
+### second ip30 device.  Found 2026-09-17 by the `#531` pass-2 grok seat.  **FILED, not fixed.**
+
+`src/devices/dev_sgi_ip30.c`, `DEVICE_ACCESS(sgi_ip30_2)`, `case 0x114 + 0x40 * (12 - 8)`:
+
+```c
+	case 0x114 + 0x40 * (12 - 8):
+		fatal("[ IP30: asdvasdvnb ]
+");
+		odata = 0x80000000;
+		break;
+```
+
+**It is NOT one of `#531`'s four sites** -- it carries no `abort()` and no `exit(`, so it kills
+nothing, and `#531` is scoped to the four host deaths.  That is why it is filed rather than
+folded in: the round-scope rule takes ONE site, and a second joins only in the same semantic
+class.  A host kill and a log flood are different classes.
+
+> ### *** THAT WARRANT KEYS ON **IMPACT**, WHICH IS A CORRELATE OF THE DEFECT -- the exact error
+> ### this project has spent a session cataloguing, committed in the sentence excluding a row.
+> ### Named by the kimi seat in the §F2 adjudication as the disposition most likely wrong. ***
+>
+> The reopening rule's real test is its own parenthetical: a second site joins *"in the SAME
+> device and SAME semantic class under the third doctrine arm **(so one fix design covers
+> both)**, and covered by the SAME detector with no new oracle."*  **Whether both sites KILL is
+> not the question; whether ONE FIX DESIGN covers both is.**
+>
+> **The filing is CORRECT, and on the real test it fails on THREE independent counts rather than
+> the one I gave:**
+> 1. **NOT the same device.** `sgi_ip30_2` is a separate `DEVICE_ACCESS` and a separate
+>    registration; sharing a `.c` file is not sharing a device.
+> 2. **NOT one fix design.** `#531`'s design is de-fatalise-plus-latch. This arm COMPUTES THE
+>    RIGHT VALUE and returns it, so its disposition is member 1 DELETE -- drop a stray
+>    diagnostic. Those are different edits with different warrants.
+> 3. **NOT the same detector.** The probe drives `-E sgi -e ip30` and no row reaches that
+>    offset, so covering it needs a NEW ORACLE, which the rule excludes outright.
+>
+> *A wrong reason gets reused: the next round filing a sibling would have copied "different
+> impact" and eventually applied it to two sites that DO share a fix design.*
+
+**Two defects in one line, and the second is the one a reader will not expect:**
+* **UNLATCHED.**  Every guest read of that offset prints.  `floodclass` already records
+  guest-drivable log floods as a CLASS, and the house idiom is member 3 -- decline plus a
+  LATCHED announce, `N = 1` per device instance with an unqualified `(once)` marker.
+* **THE MESSAGE IS A KEYBOARD MASH.**  `asdvasdvnb` says nothing to anyone.  The arm is in
+  fact IMPLEMENTED -- it returns `0x80000000`, the "alive" value the neighbouring comment
+  documents from Linux/IP30 -- so this is a debug leftover sitting on a *working* path.
+
+**Provenance, checked rather than assumed: it is UPSTREAM RESIDUE, not fork-added.**  It is
+present at HEAD before `#531` and the fork never touched it.
+
+**Disposition when it is taken:** the arm computes the right value and is not refusing
+anything, so the option-set member is **1 DELETE** (drop the stray diagnostic entirely), not 3
+-- there is no event to announce.  A bounded announce here would ship a wrong record in
+product code, exactly as the `+0x188` footbridge case established.  *Witness: a rung-3 probe
+reading that offset and counting emissions; the `#531` probe's vehicle reaches this device
+already.*
+
+
+### `ip30setisrassign` -- **MED.** `set_isr` ASSIGNS where the set/clear register PAIR implies OR
+
+`dev_sgi_ip30.c` `case 0x10020` does `d->isr = idata`, so a write CLOBBERS every other pending
+interrupt bit. Its sibling `clear_isr` at `0x10028` is a correct `&= ~idata`.
+
+**MEASURED** by the `#531` pass-2 opus5 seat on the shipped build: set `0x00ff` then `0x5a00`
+gives ISR `0x5a00`, **not** `0x5aff`; while set `0x00ff` then clear `0x000f` correctly gives
+`0x00f0`. Evidence: `regress/artifacts/ip30abortkill/opus_killtable_20260917/isrsem.log`.
+
+**A set/clear register PAIR exists precisely because the set is an OR** — otherwise the clear
+register would be redundant. `#531` invokes `heart.h`'s authority for two decisions in these very
+arms (write-side at `0x10020`/`0x10028`, read-only at `0x10030`) and leaves this third one.
+
+> *** FLAGGED BY grok AT DESIGN TIME AND CARRIED BY NO QUEUE ROW UNTIL 2026-09-17 -- the
+> unread-review class. ***
+
+**NOT folded into `#531`:** it is a BEHAVIOUR change to a path that round only de-fatalises, and
+the addition licence wants a measured delta or a transferred warrant rather than "while we are
+here". `#531` records it as ASSESSED, NOT CHANGED. *(The `#531` packet's own warrant for that
+originally read "neither of which exists", which was self-contradicted by this very measurement
+in the same packet -- corrected: the disposition stands on SCOPE, not on absence of evidence.)*
+
+**WITNESS when taken:** the `#531` probe's vehicle reaches this arm already -- seed via
+`0x10020`, set a disjoint mask, read back at `0x10030`. One session.
+
+### `ip22legacyabort` -- **LOW** (corrected from HIGH the same day). Two `abort()` calls that NO GUEST CAN REACH
+
+`dev_sgi_ip22.c:314` and `:338` carry `fatal("TODO: ip22 legacy interrupt rewrite!"); abort();`
+in the write arms of the `local0`/`local1` IRQ masks. **2 `abort()`, 0 `exit(` in the file.**
+
+> *** SEVERITY CORRECTED HIGH -> LOW, AND THE CORRECTION IS MINE TO OWN: I RANKED IT AS A
+> `#531` SIBLING WITHOUT CHECKING THE ONE FACT `#531`'s WARRANT TURNS ON. ***
+
+`#531` is live because `-E sgi -e ip30` is advertised **and the device is installed** — its
+rung-3 probe reached the code and killed the host. `dev_sgi_ip22` is different:
+
+* `dev_sgi_ip22_init` has exactly TWO call sites in the tree, `machine_sgi.c:270` and `:278`,
+  and **BOTH ARE COMMENTED OUT**;
+* the file defines `DEVICE_ACCESS(sgi_ip22)` but **no `DEVINIT`**, so autodev/`device_add`
+  cannot register it either;
+* it still COMPILES IN (`Makefile.skel` lists `dev_sgi_ip22.o`), which is exactly why an
+  `abort()` census finds it and a reachability question never gets asked.
+
+**The device is never in any machine's memory map.** Consequence for the ladder: **no witness
+exists or can exist at rungs 2-4**, and installing the device to reach the site is what the
+ladder calls LAUNDERING. So this is DOCUMENTED-ONLY unless something installs it for its own
+reasons. **Kept rather than dropped:** the day anyone uncomments those two lines they become
+live immediately, with no review in between.
+
+**The census lesson is the durable part and is untouched by the reachability finding:** a census
+keyed on `exit(` cannot see a host death spelled `abort()`, reachable or not.
+
+### `seatprescriptiondiff` -- **MED.** A row prescribed BY NAME in a seat's fix-design answer can be lost while `#490`'s rule is OBEYED
+
+**MEASURED INSTANCE, `#531`:** `regress/artifacts/ip30abortkill/FIXDIFF_grok_20260917.txt:239`
+reads *``5. `isr 20 rd` / `isr 28 rd` — load does not clobber ISR; load's **value** is not the
+seeded ISR (don't-mirror)``*. **Both rows, by name, in a durable artifact, before the fix
+shipped.** The round shipped `isr 20 rd val` alone; it cost an extra kill table and a nine-seat
+adjudication pass to rediscover. The opus5 seat independently reported four of grok's six
+prescribed rows never shipped.
+
+**THE STRUCTURAL GAP:** after `#490` the rule is *"a row list rewritten from a panel's findings
+is DIFFED against the pre-table block's own prescribed rows."* That binds the **PRETABLE**. Here
+the prescription **never entered a PRETABLE** — it lived in a SEAT'S FIX-DESIGN ANSWER, and
+nothing diffs a row list against that. **The `#490` rule was obeyed and the row was still lost:
+the diff ran against the wrong source document.**
+
+**And the PRETABLE made it worse than neutral:** it listed both read arms as *"decline, no value
+to pin"*, so the one artifact `#490` mandates diffing against **positively asserted that neither
+row was owed**. *A pre-table block that mis-classifies a cell does not merely fail to catch the
+omission; it CERTIFIES it.* grok's correction is one sentence: **a decline has a value, and it
+is 0.**
+
+**PROPOSED REMEDY, FILED NOT BUILT** (a harness change owing two negative controls): a round
+whose fix design was reviewed by a seat DIFFS its final row list against that seat's prescribed
+rows, as `#490` mandates for the PRETABLE — and the PRETABLE should CARRY those prescriptions
+forward so the two documents cannot disagree silently. Cheapest mechanical form is
+existence-only: if a `FIXDIFF_<seat>_*.txt` sits beside a killtable dir, each numbered
+prescription must map to a shipped row or an explicit no-row sentence.
+
+
+### `seatsreadburnsplit` -- **MED.** `check_seats_read.py` counts THINKING BURNS and genuinely unread answers as one number
+
+**MEASURED 2026-09-18:** of the 25 answers the gate reported as "recorded nowhere", **two were
+THINKING BURNS** — a seat failure — and 23 were real unread answers. Their dispositions are
+**opposite**: a burn is a SEAT DOWN to record (there is nothing to read), an unread answer is
+content that may hold a defect.
+
+    panel_20260826_222557 / deepseek   response 0 chars, thinking 142,280, done_reason=length
+    panel_20260907_104814 / glm        response 0 chars, thinking 114,797, done_reason=**stop**
+
+The second is the harder variant this project already documents: **`done_reason` reads `stop`
+and `eval_count` is null, so both signature fields look NORMAL** and only the empty `response`
+is diagnostic.
+
+**This is the project's own "a blank cell and a seat failure must not look alike" rule, and the
+checker built to enforce it is itself blind to the distinction.** It reports a burn under a
+heading that says *"Read them and add a ledger entry"* — but there is nothing to read.
+
+**PROPOSED FIX, filed not built** (a checker change owing two negative controls): parse each
+Ollama answer's JSON and split the count — report burns as SEAT DOWN and only the rest as
+unread. The discriminator is already written and used by `seat_verdicts.py`: an **empty
+`response`** is the detection; `done_reason` decides only the disposition.
+
+*Found while clearing the 25-answer backlog to 23/23. Discovered by testing every one of the 25
+rather than by reading them in order — the two burns would otherwise have been "read", found
+empty, and quietly skipped.*
+
+
+## 2026-09-18 — TWO ROWS FROM ONE UNREAD-REVIEW SWEEP
+
+### `lcalenzerodrop` (HIGH) — `#530`'s closing pass was ratified by ONE seat while FOUR said DO NOT CLOSE
+
+`#530`'s CLOSING PASS (`_scratchpad/panel_20260917_085545`) was recorded with three seats and the
+round closed. **The dir holds five, and four dissent**: codex *"DO NOT CLOSE YET"*, and glm,
+deepseek and minimax each *"NOT A VALID CLOSING PASS"*. The round closed on `agy`, the single GO.
+
+The four converge independently on one contradiction: if the fix's own comment premise
+*`len 0 has no producer`* is TRUE then `if (len == 0) return 0;` is **dead code**, so a DROP of it
+is observationally identical to base, scores **352/352**, and contradicts the round's claim that no
+leg scored 352/352. Codex adds an omitted **WIDTH** class (`writeflag == MEM_WRITE && len <= 8`,
+also predicted 352/352) and flags an *expected, not measured* 352/352.
+
+**Two buildable mutants decide it**, both named in the row's `hold_question`. Filed under the
+LATE-DISSENT RULE with the dissent carried verbatim on the `lcaisalane` row — closure changes the
+LICENSE, never the truth-value, and nothing is amended under `#530`'s number.
+
+### `stagetokens` (MED) — the gates reddened because the record got more honest; PASS 2 owed
+
+Recording 23 unread seat answers took sections H and I from **0 violations at HEAD to 19**. Neither
+existing stage token was TRUE of the situation (`RE_READ` says SINGLE-SEAT; `ANNOTATION` asserts a
+pre-2026-08-16 vintage), so a new one was minted and negative-controlled on both gates. Two sibling
+tools were found blind to tokens they should share — `check_fable_queue.py` had never known
+`RE_READ`, and `gen_dashboard.py` knew none of them, so annotations rendered as **fabricated fable
+cells**. Shipped as `#532`; its pass-2 questions are the row's `hold_question`.

@@ -1,0 +1,84 @@
+HEART REGISTER REFERENCE -- fetched 2026-09-17 WITH THE OWNER'S APPROVAL, on this
+project's own vmesbcp2 / 21066 / ddi0406 / ppc_uisa precedent, and then VERIFIED LOCALLY
+against the fork rather than taken from the page.
+
+SOURCE: Linux `arch/mips/include/asm/sgi/heart.h`, via
+        https://codebrowser.dev/linux/linux/arch/mips/include/asm/sgi/heart.h.html
+
+*** WHY THIS SOURCE AND NOT AN SGI MANUAL: `dev_sgi_ip30.c` CITES IT ITSELF, three times --
+`case 0x10020: /* Set ISR, according to Linux/IP30 */`, `case 0x10028: /* Clear ISR, according
+to Linux/IP30 */`, and again at :197.  The document the code was written FROM is the Linux
+header, so it is the document that settles what the code MEANT. ***
+
+VERBATIM:
+
+    struct ip30_heart_regs { /* 0x0ff00000 */
+      u64 imr[HEART_MAX_CPUS];    /* + 0x10000 */
+      u64 set_isr;                /* + 0x10020 */
+      u64 clear_isr;              /* + 0x10028 */
+      u64 isr;                    /* + 0x10030 */
+      u64 count;                  /* + 0x20000 */
+      u64 compare;                /* + 0x30000 */
+    };
+
+    @imr:       "HEART_IMR0 to HEART_IMR3 - per-cpu interrupt mask register"
+    @set_isr:   "HEART_SET_ISR - set interrupt status register"
+    @clear_isr: "HEART_CLR_ISR - clear interrupt status register"
+    @isr:       "HEART_ISR - interrupt status register (read-only)"
+    count:      52-bit counter        compare: 24-bit compare
+    #define HEART_XKPHYS_BASE ((void *)(IO_BASE | 0x000000000ff00000ULL))
+
+VERIFIED LOCALLY, OFFSET BY OFFSET, BEFORE ANY OF IT WAS CITED:
+
+    offset      heart.h                   fork dev_sgi_ip30.c
+    0x0ff00000  struct base               machine_sgi.c:417 "sgi_ip30 addr=0x0ff00000"  MATCH
+    0x10000     imr[] per-cpu mask        case 0x10000 -> d->imask0                     MATCH
+    0x10020     set_isr   WRITE-side      case 0x10020 -> d->isr = idata, NO writeflag   below
+    0x10028     clear_isr WRITE-side      case 0x10028 -> d->isr &= ~idata, NO writeflag below
+    0x10030     isr  *** READ-ONLY ***    case 0x10030 -> HAS A WRITE ARM                below
+    0x20000     count (52-bit)            reg_0x20000, tick does += 1000                MATCH
+    0x30000     compare (24-bit)          reg_0x30000                                   MATCH
+
+=========================== WHAT IT SETTLES ===========================
+
+Q3 -- WHAT SHOULD A READ AT 0x10020 RETURN AFTER THE FIX?
+
+  **set_isr and clear_isr are WRITE-SIDE registers.**  The architectural triple is
+  set / clear / status: WRITE set_isr to set bits, WRITE clear_isr to clear bits, READ isr
+  for status.  A READ of set_isr has no defined meaning -- it is not a status register.
+
+    * DO NOT mirror d->isr at 0x10020.  That fabricates semantics the hardware does not have,
+      and the addition licence forbids "cannot hurt".
+    * DECLINE the read.  Conservative AND now carrying a TRANSFERRED WARRANT rather than a
+      guess, which is exactly what the licence asks for.
+
+  *** AND THIS UPGRADES THE writeflag TEST FROM DEFENSIVE TO CORRECT. ***  It was argued as a
+  direction guard.  The reference makes it ARCHITECTURE: executing a write-side register's
+  store arm on a READ is wrong on its own terms, independently of the host death it causes.
+
+=========================== A NEW FINDING ===========================
+
+*** heart.h documents `isr` (0x10030) as READ-ONLY, AND THE FORK IMPLEMENTS A WRITE ARM. ***
+
+    case 0x10030:   /*  Interrupt Status Register  */
+            if (writeflag == MEM_WRITE) {
+                    /*  Clear-on-write  (TODO: is this correct?)  */
+                    d->isr &= ~idata;
+
+  **The code asked the question in its own comment and the cited document answers it: NO.**
+  Clearing goes through clear_isr at 0x10028, which this same file already implements.  So the
+  model has TWO clear paths where the architecture has ONE, and the fabricated one is the one
+  carrying the self-doubting TODO.
+
+  Disposition is NOT decided here.  It is IN SCOPE for the same round (same case labels, same
+  function, same detector) and it is a member 6 BACKED ACCEPT standing WITHOUT a warrant, which
+  the addition licence does not permit.  Options: decline the write, or keep it with the
+  warrant stated as an emulator-compatibility choice rather than as architecture.
+
+=========================== HONEST LIMIT ===========================
+
+**A LINUX HEADER IS A DRIVER AUTHOR'S MODEL OF THE HARDWARE, NOT SGI'S SPECIFICATION.**  It is
+strong evidence about what the REGISTERS ARE and about what this emulator MEANT (because this
+emulator cites it); it is not a hardware contract.  Where the two could differ -- whether real
+HEART silicon returns something specific on a read of set_isr -- this document cannot say, and
+no claim here depends on it: DECLINING a read is safe under either reading.

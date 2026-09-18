@@ -1,0 +1,126 @@
+I'll treat this as a design review, not a ratification: first the session sources of truth, then re-derive the four `abort()` sites, interrupt wiring, and the writeflag/tick questions from `GXEMUL-SEC/` itself.HEAD matches the checkpoint. Next I’ll open the IP30 device, machine wiring, and sibling SGI files and re-derive every load-bearing claim rather than take the brief’s line numbers.The four `abort()` sites match the brief. Next I’ll check whether `cpu_interrupt` is actually wired on this machine, and whether a tick even has a `cpu` in scope.`cpu_interrupt` is not in the current headers. I’ll confirm whether it still exists anywhere, then compare how IP32 and the other SGI devices actually raise interrupts.**VERDICT: Member 3 this round (latched announce, host stops dying), with member 4 on the ISR stores that already run; the writeflag test is a separate defect and MUST ship in the same diff. Member 7 is the right *tell* and the wrong *round*.**
+
+I re-derived this from `GXEMUL-SEC/` (HEAD `9c91999`). Packet-fed ratification is not the basis.
+
+---
+
+## Premises: what held, what did not
+
+**Held (opened the file):** four `abort()` at `:78`, `:127`, `:135`, `:145`; `DEV_SGI_IP30_LENGTH` `0x80000`; `DM_DEFAULT` at `:387`; device at `0x0ff00000`; subtype advertised; tick registered; `0x10020/28/30` inside the window; IP22 is `ctorabortclass` (`machine_sgi.c` `abort()`s in `case 22/24` *before* `dev_sgi_ip22_init`). IP30 constructs: `sgi_eaddr_probe.py` lists `ip30` in `REACHING` (exit 1, not 134). `idata = 0` at `:87`, filled only on `MEM_WRITE` at `:89-90`. `case 0x10020` stores then aborts with no `writeflag` test; `0x10028` same shape; `0x10030` *is* tested and its reads already return `d->isr`. `case 0x10000` accepts `imask0`; the tick then `abort()`s on bit 50.
+
+**Failed (the load-bearing one):** “member 7 is available because the intended model is sitting there as `cpu_interrupt(...)`.” That API is gone. A repo-wide search of `src/` finds `cpu_interrupt(` only in comments and in those four commented-out calls (plus a warning in `dev_lca.c` not to call it). No declaration in `cpu.h` / `cpu_mips.h` / `interrupt.h`. Uncommenting does not compile.
+
+**Not settled from this tree (said plainly):** whether HEART bit 50 is a documented timer IRQ. There is no HEART manual under `_scratchpad/`, and no Linux IP30 header in-tree. The abort is on that bit; the comment *guesses* a compare against `0x30000` and then does not implement the compare. I am not treating bit 50 as architecture.
+
+---
+
+## Q1 — member 7 is not available as “turn the comments back on”
+
+MIPS *can* deliver: `cpu_mips.c` registers `"%s.%i"` for `i=2..7` and `mips_cpu_interrupt_assert` ORs `COP0_CAUSE`. That is the CPU pin, not HEART.
+
+What IP30 actually has:
+
+- `machine_sgi.c` case 30: `// TODO: Interrupts!` then `device_add("sgi_ip30 ...")`. No `INTERRUPT_CONNECT`, no HEART lines registered.
+- Serial is already `ns16550 irq=%s.cpu[%i].2` — **around** HEART, onto the first hardware pin.
+- IP32’s sibling (`dev_crime_init`) is the real member-7 shape: `INTERRUPT_CONNECT` to `cpu.2`, then 32 named child lines, then `crime_interrupt_reassert`.
+- The fossils use a **deleted numbering scheme**. IP22’s own comment: IRQ numbers are `8 + x`. The tick’s `cpu_interrupt(cpu, 8+1+50)` is 59 in that scheme, not MIPS IP2. Translating those literals onto `INTERRUPT_ASSERT(cpu.2)` would be a wrong model, not a restore.
+
+A “cheap” HEART that asserts `cpu.2` whenever `isr & imask0` would share a non-exclusive pin with the 16550: assert ORs, deassert ANDs off, so one deassert kills the other user’s line. CRIME exists so that does not happen. Doing it properly is a controller plus a machine re-route. That is a subsystem, which is exactly why `#516` refused member 7 on `lca_interrupt_assert` even after naming the tell.
+
+**Member 7 is the follow-up row (implement HEART like CRIME), not this de-fatalisation.**
+
+---
+
+## Q2 — FAULT is available and still the wrong member
+
+`memory_rw.c`: device `return 0` becomes `res = -1`, then `mips_cpu_exception(..., EXCEPTION_DBE, ...)`. FAULT works on this CPU.
+
+`abort()` before any `return 0` does **not** argue for FAULT. That is a description of the current kill, not a design warrant. FAULT is `return 0` *instead of* `abort()`. These offsets are not unmapped space: they have storage, comments, and a PROM that already talks to the neighbour at `0x10018`. `dev_unreadable.c` (`return 0` for a hole) is the FAULT idiom; this is not a hole. CRIME `#529` considered `return 0` for a bad width and rejected it for the same reason: it would raise DBE for a register that is there.
+
+---
+
+## Q3 — yes: writeflag is a separate defect, same diff, own row
+
+This is the `asicindexcase` / `mvme187memcoob` shape: the kill is currently also the bounds/direction check.
+
+`case 0x10020` does `d->isr = idata` **before** `abort()`. On a load, `idata` is still 0, so the guest **zeroes ISR** and then the host dies. De-fatalise without the test and the host lives with a clobbered interrupt-status register. That is worse than today.
+
+`case 0x10028` shares the missing test; with `idata==0` the `&= ~idata` is a no-op, so it does not corrupt *today*. Still add the test: after the kill is gone, a load must not sit in a write-shaped arm, and `0x10020`/`0x10028` stay twins.
+
+`case 0x10030` already has the test. Reads of ISR work **now** (the abort is inside the write arm). That is an existing accept-side channel; do not break it.
+
+**The fix MUST carry both.** Not a rider for later. Own detector row: a load at `0x10020` must leave ISR unchanged (seed ISR via a post-fix write, then `lw`/`ld` at `0x10020`, then read back via `0x10030`).
+
+---
+
+## Q4 — you do not decline a tick; you stub the callback
+
+Members 1–6 assume an access and a value to refuse. The `:78` abort is in `DEVICE_TICK(sgi_ip30)` (`cpu` *is* in scope — the macro is `void dev_##x##_tick(struct cpu *, void *)`). The guest already completed a legal write to an implemented register. There is nothing left to decline, accept, or fault.
+
+The in-tree answer is `#516` `lca_interrupt_assert`: a callback with no refused value, `fatal+exit` with no guard, legal guest traffic, host death. Disposition there: **latched announce, return, host stops dying.** Interrupts do not start working.
+
+Same here. Do not mint a new option-set member; this is member 3 applied to a callback, which is how the set was already used. Member 7 was minted for that shape and then rejected when delivery was a subsystem. Same rejection.
+
+The tick also does not implement its own comment (no compare of `0x20000` vs `0x30000`). A member-7 timer would have to add that, not just delete `abort()`.
+
+---
+
+## Q5 — de-escalation rows (predicates that used to gate death)
+
+Death is not a bit-mask guard on a legal write except on the tick. The access kills are “you reached this case.”
+
+| Predicate that used to kill | Accept-side row owed |
+|---|---|
+| `imask0 & (1<<50)` in the tick | `0x10000` write of bit 50 still round-trips (already implemented — this *is* the accept row, not a new register). Plus a row that the host then **survives** the next tick. |
+| any access at `0x10020` | neighbouring implemented regs still service: `0x20`, `0x10000`, `0x10018`, `0x10030` **read**, `0x20000`, `0x30000`. And, if stores are kept: a write at `0x10020` updates ISR (read back at `0x10030`). |
+| any access at `0x10028` | same neighbours; write-1s clear the corresponding ISR bits. |
+| **write** at `0x10030` | **read** at `0x10030` already does not abort — pin that it still returns ISR. Post-fix, writes still clear bits if we ACCEPT. |
+| load at `0x10020` (the asicindexcase half) | ISR unchanged. This is not de-escalation; it is the corruption row. |
+
+`0x10000` is not “maybe an accept row.” For the tick it is *the* accept row: that write is what used to arm host death.
+
+Latch: per-instance, and **two bits** (tick vs ISR-recalc). One shared bit lets the first shape silence the second — LCA’s assert/deassert lesson.
+
+---
+
+## Q6 — siblings, grepped, not argued
+
+| File | Unimplemented interrupt-controller register |
+|---|---|
+| **`dev_sgi_ip32.c` (CRIME)** | Member 7, done: stores land, `crime_interrupt_reassert`, `INTERRUPT_ASSERT`. Width declines are member 3 (`return 1`, latched, not `return 0`). |
+| **`dev_sgi_ip22.c`** | Same `abort()` + commented `cpu_interrupt_ack`. Unreachable; construction dies first. |
+| **`dev_sgi_ip19.c`** | Unknown offsets: `debug()` and `return 1`. No abort. |
+| **`dev_sgi_ip20.c`** | `writeflag`-tested; unknown offsets `debug()` + `return 1`. Machine never inits it. |
+| **This file’s own `default:`** | `debug()` + `return 1`. The ISR arms are the outliers, not the house idiom. |
+| **`dev_lca.c` `#516`** | Stubbed interrupt *callback*: member 3, not member 7. |
+
+Members 4, 5, 6 were found by grepping; here the grep finds **CRIME = 7 (out of scope)** and **LCA callback / this file’s `default:` / IP19 = 3 or silent-debug**. The round’s match is LCA + keep the stores that already execute.
+
+---
+
+## S4 — the probe should reach; this stays a fix round
+
+I do not see a reason to demote to documented-only.
+
+- IP30 constructs (`REACHING`).
+- Default CPU is R10000; `COP0_STATUS` starts at 0 (kernel, KSU=0). Even with `KX=0`, `0xffffffffaff10020` sign-extends and hits the ckseg1 window (`memory_mips_v2p.c`: `paddr = vaddr & 0x1fffffff` → `0x0ff10020`). Matches this file’s own PROM address at `:113`.
+- Device is outside the 128 MB RAM mirrors, so RAM does not steal the access.
+- `dump`/`put` use `CACHE_NONE | NO_EXCEPTIONS`; `DM_DEFAULT` skips the handler. **A guest `lw`/`ld`/`sw`/`sd` is required.** That is a probe-shape constraint, not a reachability failure.
+- No boot image needed for rung 3. Inject code in RAM, set PC, `step`.
+- Tick row: `tickshift` 16, so every 65536 cycles after the first fire (`ticks_till_next` starts at 0). A handful of `step`s will not see it; `continue` (or ~64k steps) will. That is the same free-run vs step distinction as other tick kills.
+
+---
+
+## The answer the honesty clause asked for
+
+**Member 3, here, because member 7 is a subsystem that is not wired and whose commented API does not exist; member 4 on the ISR stores because they already compute the register update; the writeflag test is a separate defect and is not optional.**
+
+Concretely, one diff:
+
+1. `0x10020` / `0x10028`: add `writeflag == MEM_WRITE` around the store; on read, do not touch `d->isr` (odata stays 0 unless a later round proves an alias).
+2. Keep the three stores on writes (member 4).
+3. Replace all four `abort()` with a per-instance latched `fatal("... (once)")` — two latch bits, tick vs access.
+4. Tick: increment the counter, if bit 50 set then latch+return. No `INTERRUPT_ASSERT`.
+5. File **`ip30heart`** (or similar): CRIME-shaped HEART, re-route the 16550 through it. That is member 7, costed, not smuggled in.
+
+What this round buys is stated the way `#516` stated it: **the host stops dying.** Interrupts do not start working.

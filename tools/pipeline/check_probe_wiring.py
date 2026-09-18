@@ -151,6 +151,78 @@ CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL, CLASS_RESEARCH)
 #  GATE_MANIFEST and gate_offline's SM_COVERED.  An unlisted file is RED, so a new detector
 #  cannot arrive unnoticed, which is exactly how all four debts below arrived.
 MANIFEST = {
+
+    # -- #531 ip30abortkill ------------------------------------------------------------
+    #  ONE detector and twenty-two tools.  The tools are kill-table drivers, FROZEN probe
+    #  copies (the instrument a given table actually ran, per the frozen-copy rule) and
+    #  one-off measurement scripts.  They are committed because the round's records CITE
+    #  them, and a measurement cited in a durable record must live at a durable path.
+    #
+    #  *** THESE 23 WERE INVISIBLE UNTIL THE ARTIFACTS DIRECTORY WAS STAGED, AND STAGING IT
+    #  TURNED THIS CHECKER RED -- the same shape as #532's stage gates: completing the
+    #  record is what made the gap visible.  That is the manifest working as designed (an
+    #  unlisted file is RED so a new detector cannot arrive unnoticed), not a defect. ***
+    "artifacts/ip30abortkill/ip30_abort_probe.py":
+        (CLASS_DETECTOR, "#531 ip30abortkill: four guest-reachable abort() calls in dev_sgi_ip30.c. "
+                         "33 rows, base 33/33, GREEN once the fix is in -- a DETECTOR by this file's own "
+                         "definition at the top, and labelled one rather than filed as a `witness' to "
+                         "dodge the gate requirement.  *** RUNS IN NO GATE: see EXEMPT. ***"),
+    "artifacts/ip30abortkill/ip30_abort_probe.18row_20260917.frozen.py":
+        (CLASS_TOOL, "the FROZEN 18-row instrument table 1 ran against"),
+    "artifacts/ip30abortkill/opusF2_20260918/probe.frozen.py":
+        (CLASS_TOOL, "frozen instrument for the opus F2 table"),
+    "artifacts/ip30abortkill/opusF2_20260918/mutate_table1.py":
+        (CLASS_TOOL, "opus F2 kill-table driver, table 1"),
+    "artifacts/ip30abortkill/opusF2_20260918/mutate_table2.py":
+        (CLASS_TOOL, "opus F2 kill-table driver, table 2"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/probe.frozen.py":
+        (CLASS_TOOL, "frozen instrument for the opus 2026-09-17 table"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/probe19.frozen.py":
+        (CLASS_TOOL, "frozen 19-row instrument for the same table"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate.py":
+        (CLASS_TOOL, "kill-table driver"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate2.py":
+        (CLASS_TOOL, "kill-table driver"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate3.py":
+        (CLASS_TOOL, "kill-table driver"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate4.py":
+        (CLASS_TOOL, "kill-table driver"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate5.py":
+        (CLASS_TOOL, "kill-table driver"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate500.py":
+        (CLASS_TOOL, "kill-table driver, the 0x500 arm"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate500b.py":
+        (CLASS_TOOL, "kill-table driver, the 0x500 arm, second form"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/mutate524g.py":
+        (CLASS_TOOL, "kill-table driver, the 524g mutant"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/isrsem.py":
+        (CLASS_TOOL, "one-off: ISR set/clear semantics probe"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/latchcount.py":
+        (CLASS_TOOL, "one-off: counts announce sites per latch class"),
+    "artifacts/ip30abortkill/opus_killtable_20260917/tickcross.py":
+        (CLASS_TOOL, "one-off: the tick/ISR latch cross-check"),
+    #  *** CLASSED WITNESS, AND THE REASON IS WRITTEN DOWN BECAUSE THE OPPOSITE MOVE IS A
+    #  KNOWN DODGE IN THIS VERY FILE. ***  The flagship seat found ungated DETECTORS relabelled
+    #  WITNESS here so that the checker would then verify they are ungated -- a check that
+    #  cannot fail.  This is not that: #531's shipped detector is `ip30_abort_probe.py` above,
+    #  classed DETECTOR and dated-exempt in the open.  THIS file is a REACHABILITY measurement
+    #  -- its own docstring calls itself an "ip30 TICK-ROW BUILDABILITY MEASUREMENT" and asks
+    #  whether the FOURTH abort(), inside DEVICE_TICK, can be reached from a STEPPING probe at
+    #  all.  It answered a disagreement between two seats by combining them, and the answer is
+    #  what made two enumerated cells BUILDABLE: step 1/2/8/1000 -> ONE tick; 65536/70000 ->
+    #  TWO; 140000 -> THREE.  Stopping at `step 8' would have disclosed two buildable cells as
+    #  unbuildable.  It shows a symptom that the fix removes, which is the witness shape.
+    "artifacts/ip30abortkill/tick_20260917/ip30_tick_probe.py":
+        (CLASS_WITNESS, "#531 tick-row BUILDABILITY: is the DEVICE_TICK abort() reachable from a stepping probe? MEASURED step 1/2/8/1000 -> ONE tick, 65536/70000 -> TWO, 140000 -> THREE"),
+    "artifacts/ip30abortkill/tick_20260917/boundary.py":
+        (CLASS_TOOL, "one-off: the tick threshold bisection"),
+    "artifacts/ip30abortkill/tick_20260917/smoke.py":
+        (CLASS_TOOL, "one-off: smoke check for the tick harness"),
+    "artifacts/ip30abortkill/tick_20260917/swcontrol.py":
+        (CLASS_TOOL, "one-off: the software control for the tick measurement"),
+    "artifacts/ip30abortkill/sigabrt_disposition_20260917.py":
+        (CLASS_TOOL, "one-off: SIGABRT-vs-clean-exit disposition check"),
+
     # -- detectors a gate RUNS today (the evidence is derived, not asserted here) ---------
     "sgi_re_rgb_probe.py":         (CLASS_DETECTOR, "#505 RGB GET/PUT byte container"),
     #  *** TWO OF THESE THREE CARRIED STALE HEAD SCORES until 2026-09-07: 7/9 and 5/6 were the
@@ -158,9 +230,9 @@ MANIFEST = {
     #  `walk vpn`).  Corrected to the measured values. ***
     "alpha_harness_probe.py":     (CLASS_WITNESS,  "alphaswpctxptbr: swpctx overwrites apcb_ptbr with the flags word -- HEAD 7/10, fix 10/10"),
     "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6, fix 6/6"),
-    "lca_confbus_probe.py":       (CLASS_WITNESS,  "lcaconfbus1kill: an ACCEPTED stq 0x1 to IOC_CONF arms the bus!=0 kill in lca_pci_conf -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
+    "lca_confbus_probe.py":       (CLASS_WITNESS,  "lcaconfbus1kill: an ACCEPTED stq 0x1 to IOC_CONF arms the bus!=0 kill in lca_pci_conf -- HEAD 3/4, the RED row is the defect; POST-FIX GREEN MEASURED 18/18 (artifacts/, LCACONFBUS_RESULT) -- *** but this probe RUNS IN NO GATE, so the coverage exists and is never executed: wiringcliff ***"),
     "lca_irqstub_probe.py":       (CLASS_WITNESS,  "lcairqstubkill: ONE guest store to the 8042 command port reaches lca_interrupt_assert and ends the host -- HEAD 3/6, the RED row is the defect; post-fix green MEASURED 11/11 (#516, killtable_20260909).  *** STILL CLASS_WITNESS, and that is now a JUDGMENT rather than a description: #516 grew it from 6 rows to 11, five of which exist only to defend the repair, so it is detector-shaped and NO GATE RUNS IT.  Kept as WITNESS because it is the witness of record in the ledger, and re-classing it would demand a gate home this round has not designed.  FILED to wiringcliff, which is the row for exactly that question -- not left as a silent third state."),
-    "pcc2_c040_probe.py":         (CLASS_WITNESS,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
+    "pcc2_c040_probe.py":         (CLASS_WITNESS,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; POST-FIX GREEN MEASURED 16/16 on 2026-09-09 (artifacts/pcc2c040kill/ctlq_20260909/repaired_BASE.raw) -- *** but this probe RUNS IN NO GATE: wiringcliff ***"),
     "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
     #  A SECOND, INDEPENDENT path to the same two stubs, through a DIFFERENT device.  The row's
     #  witness of record is `lca_irqstub_probe.py' above (8042, shipped 7c2f8e4); this one is a
@@ -296,6 +368,27 @@ MANIFEST = {
         (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 2"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.FROZEN3.py":
         (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 3"),
+    #  #529 crimewidthkill, landed with the round: the detector and its untracked instruments.
+    #  *** THREE `.sh' ENTRIES WERE REMOVED FROM THIS MANIFEST ON 2026-09-18 BECAUSE THEY WERE
+    #  PERMANENTLY UNSATISFIABLE -- A CHECK THAT CANNOT PASS, which is the mirror of the
+    #  check-that-cannot-fail this project already names. ***
+    #
+    #      artifacts/crimewidthkill/opus_close7_20260915/scripts2/laneP.sh
+    #      artifacts/crimewidthkill/opus_close7_20260915/scripts2/laneQ.sh
+    #      artifacts/crimewidthkill/opus_close7_20260915/scripts2/mkfreeze.sh
+    #        -- CLASS_TOOL: #529's close-7 lane runners and instrument freezer, preserved as run.
+    #
+    #  `domain()' is `.py'-ONLY BY CONSTRUCTION: it runs `git ls-files -- "*.py"' and filters
+    #  `f.endswith(".py")' twice more.  A `.sh' path can therefore NEVER be in the domain, so a
+    #  `.sh' manifest entry is reported GHOST *no matter what* -- staging does not clear it and
+    #  committing does not clear it.  Measured: all three were `git add'ed, `git ls-files' lists
+    #  them, and the checker still called them ghosts.
+    #
+    #  They are DELETED rather than made to pass, because the alternative is worse: widening
+    #  `domain()' to `.sh' would make every untracked-or-unclassified shell driver under
+    #  regress/ newly red, which is a flood this check was never scoped for.  The files remain
+    #  TRACKED (staged 2026-09-18) and their descriptions are preserved here, so nothing is lost
+    #  -- only an entry that could never be discharged.
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.py":
         (CLASS_RESEARCH, "#528 the Opus seat's candidate per-session exit-status repair (adopted in table 7 as unclean())"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.FROZEN3.py":
@@ -1829,6 +1922,21 @@ EXEMPT = {
     "lca_badval_probe.py":         ("2026-09-20",
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #520"),
+    #  #530's detector.  Same footing and the same date as #518's: single-leg, green on the
+    #  fix, and no gate in this tree runs an Alpha machine.
+    #  #531's detector, and it takes the SAME footing and the SAME date as #518/#520/#530
+    #  rather than a longer one -- a later date would hide this debt behind the cliff instead
+    #  of joining it, and the cliff is already a filed row.  Measured before writing this:
+    #  `grep -ln "E sgi|-e ip30" gate_*.sh` matches ONLY gate_asan_sweep.sh, which CONSTRUCTS
+    #  machines and runs no guest session, so there is no gate in this tree that could host it
+    #  today.  *** NOT classified `witness' to escape the requirement: the flagship seat found
+    #  that exact dodge elsewhere in this manifest -- an ungated DETECTOR relabelled WITNESS,
+    #  after which the checker verifies it is ungated -- and named it a check that cannot
+    #  fail.  This entry is the honest form: DETECTOR, ungated, dated, and filed. ***
+    "artifacts/ip30abortkill/ip30_abort_probe.py":
+                                   ("2026-09-20",
+                                    "no gate runs an SGI IP30 guest session (gate_asan_sweep.sh "
+                                    "constructs only); filed to wiringcliff with #518/#520/#530"),
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -2599,8 +2707,15 @@ def main(argv):
                          "(red once fixed) or tool." % f)
     for f in sorted(MANIFEST):
         if f not in on_disk:
-            fails.append("GHOST  the MANIFEST names %s and regress/ has no such file -- "
-                         "delete the entry" % f)
+            #  *** THE MESSAGE USED TO SAY "regress/ has no such file".  THAT IS A WRONG
+            #  RECORD, and it discredits a TRUE finding: domain() is `git ls-files' --
+            #  COMMITTED-OR-STAGED, as its own docstring says in capitals -- so an UNTRACKED
+            #  probe is reported here while sitting plainly in regress/.  A reader who
+            #  followed the old wording found the file, concluded this check was broken, and
+            #  dismissed a real one.  Say what is actually true. ***
+            fails.append("GHOST  the MANIFEST names %s and it is NOT COMMITTED OR STAGED "
+                         "(domain() reads `git ls-files', not the directory) -- `git add' it "
+                         "if it is real, or delete the MANIFEST entry" % f)
 
     rows = []
     for f in on_disk:

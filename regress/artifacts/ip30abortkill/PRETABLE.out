@@ -1,0 +1,123 @@
+PRETABLE -- #531 ip30abortkill, kill table 1 (21-row instrument)
+Written 2026-09-17 BEFORE table 1 runs; this file's own mtime is the order discriminator.
+Mandatory per the pre-table block: this round ships a kill-table-backed detector.
+
+================================================================================
+WHY THIS TABLE EXISTS, STATED PLAINLY
+================================================================================
+The 21-row instrument reads 21/21 post-fix and 8/21 pre-fix.  THAT DISCHARGES NOTHING
+ABOUT THE FLOOR.  Two of the four channel rows added this round -- `isr clr' and
+`isr drop 30' -- are RED PRE-FIX ONLY BECAUSE THEIR SEEDING WRITE ABORTS, so they read
+`died' rather than a wrong value.  The failability rule is explicit: an accept-side row
+is NOT discharged by existing, it is discharged by a MEASURED KILL.  So the L2 floor
+breach the panel found at 0x10028 is OPEN until this table runs.
+
+================================================================================
+1. SIBLING PARITY -- each de-fatalised arm against its nearest sibling
+================================================================================
+  ARM                     ANNOUNCE   STORE KEPT   VALUE ROW PINNING THE STORE
+  0x10020 WRITE (set)     yes        yes          `isr keep'      (0x5a5a round-trip)
+  0x10028 WRITE (clear)   yes        yes          `isr clr'       (0x5050)   <- ADDED
+  0x10030 WRITE (ro)      yes        NO (dropped) `isr drop 30'   (0x5a5a)   <- ADDED
+  0x10020 READ            yes        n/a          -- decline, no value to pin
+  0x10028 READ            yes        n/a          -- decline, no value to pin
+  DEVICE_TICK             yes        counter runs `acc 20000'     (multiple of 1000)
+
+  ASYMMETRY FOUND AND CLOSED: before this round, 0x10020's store was pinned by
+  `isr keep' and 0x10028's store was pinned by NOTHING, while the two arms are
+  otherwise identical in shape.  That asymmetry IS the L2 breach, and four seats
+  reached it independently.  0x10030 is asymmetric BY DESIGN (heart.h: read-only,
+  so the store is deliberately dropped) -- which is why it owes a row asserting the
+  ABSENCE of an effect rather than its presence.
+
+================================================================================
+2. CLAIM -> ROW.  Every added comment sentence asserting an observable consequence.
+   The trigger is SEMANTIC ("does a row could observe this?"), not a verb list.
+================================================================================
+  CLAIM (added comment)                                   ROW / OWED SENTENCE
+  "the counter update above still runs"                   `acc 20000'
+  "odata stays 0 and the tail returns it"                 OWED -- no row reads the
+                                                          0x10020 READ value.  Named
+                                                          here rather than rowed; see 5.
+  "the clear-on-write is DROPPED"                         `isr drop 30'
+  "the store is kept" (0x10020)                           `isr keep'
+  "the store is kept" (0x10028)                           `isr clr'
+  "latch granularity matches the marker's qualification"  NO ROW, AND SAY SO: this is a
+                                                          claim about a STRING and a BIT,
+                                                          not about device behaviour.  No
+                                                          probe row can observe it.  It is
+                                                          pinned by M6 below instead.
+
+================================================================================
+3. GUARD FIELD vs BODY FIELD -- where they differ, and what that owes
+================================================================================
+  ARM        GUARD READS                  BODY READS/WRITES
+  tick       d->imask0, d->warned         d->warned, d->reg_0x20000
+  0x10020    writeflag, d->warned         d->isr, idata, d->warned
+  0x10028    writeflag, d->warned         d->isr, idata, d->warned
+  0x10030    writeflag, d->warned         d->isr (read), odata, d->warned
+
+  THEY DIFFER AT d->isr: no guard reads it, every ISR body touches it.  The
+  disagreeing state that owes a row is therefore "ISR NON-ZERO WHILE THE LATCH IS
+  ALREADY CONSUMED" -- and `isr clr' / `isr drop 30' both build it, because each
+  seeds through 0x10020 (consuming IP30_W_ISR) before acting on a second arm.
+
+  AND THE SHARED-BITFIELD QUESTION, which the guard-field grep does NOT ask:
+  "who else writes d->warned, and can they set my bit?"  Measured: 6 sites, all
+  inside this device, all through the two IP30_W_* macros, none outside.  No
+  foreign writer.  This is the check that could not have caught #490's collision,
+  recorded so the next reader knows its limit.
+
+================================================================================
+4. CHANNEL -- per row, the mutant it kills and the observable that differs.
+   A row whose named channel cannot vary under its named mutant is VACUOUS BY
+   CONSTRUCTION, and that is knowable NOW, before the table runs.
+================================================================================
+  ROW            MUTANT IT KILLS                      OBSERVABLE THAT DIFFERS
+  isr clr        M1: delete d->isr &= ~idata (0x10028) readback 0x5a5a vs 0x5050
+  isr drop 30    M2: re-insert the clear at 0x10030    readback 0x484a vs 0x5a5a
+  tick 50 txt    M3: delete the tick fatal()           announce absent vs present
+  kill 30 txt    M4: delete the 0x10030 fatal()        announce absent vs present
+  tick 50+49     M5: move the guard 1<<50 -> 1<<49     which bit announces
+  (no row)       M6: collapse the two latch bits       SEE BELOW -- THIS IS THE ONE
+                                                       I EXPECT TO ESCAPE
+
+  *** THE CHANNEL LINE'S OWN PREDICTION, WRITTEN BEFORE THE TABLE RUNS, BECAUSE THE
+  RULE IS ONE DAY OLD IN THIS FORM AND ITS CLAIM IS THAT THIS IS KNOWABLE AT WRITING
+  TIME. ***
+
+  M6 (collapse IP30_W_ISR to IP30_W_TICK, i.e. one shared bit) IS PREDICTED TO ESCAPE
+  ALL 21 ROWS.  Derivation: every session in this probe is a FRESH PROCESS, so no row
+  ever exercises a tick announce and an ISR announce in the SAME device lifetime --
+  which is exactly the state a shared bit corrupts.  #490 measured this same mutant
+  shape (`M3shared') escaping for the same reason.
+
+  IF M6 ESCAPES, THAT IS A PREDICTED, DISCLOSED GAP AND NOT A SURPRISE: it is
+  recorded here, before the run, as the cell this detector does not cover.  The
+  question it forces -- whether a fresh-process-per-row probe can EVER see a
+  shared-latch defect -- is a design question about the instrument, not a row I can
+  add, and it is named as such rather than papered over.
+
+================================================================================
+5. OWED SENTENCES (checks discharged N/A, WITH THEIR REASON -- an unrun check and an
+   inapplicable one must not render the same)
+================================================================================
+  * 0x10020/0x10028 READ value: no row asserts odata == 0 on those reads.  The minimax
+    seat raised the asymmetry and I kept the announce; the VALUE is unpinned.  NOT
+    rowed this round: rows are owed PER ENUMERATED MUTANT, and no mutant in 1..6
+    distinguishes it.  DISCLOSED as coverage debt.
+  * M6 above: predicted to escape, disclosed, not rowed -- see 4.
+  * Latch-macro RENUMBERING (deepseek's mutant): N/A, not a floor cell.  All uses go
+    through the macros and no observable differs -- an EQUIVALENT mutant, which is a
+    RESULT, not a gap.
+
+================================================================================
+6. CONTRACT (clause (e)) -- what this detector is designed to catch
+================================================================================
+  CATCHES: reinstating any of the four abort() calls; deleting any of the five
+  announces; deleting either surviving store; re-inserting the dropped 0x10030 clear;
+  moving the tick guard between bits 49 and 50; a read arm that clobbers the ISR.
+  DOES NOT CATCH: latch-bit collapse across device lifetimes (M6, predicted above);
+  latch-macro renumbering (equivalent); the VALUE returned by a declined read;
+  anything in DEVICE_ACCESS(sgi_ip30_2), which is a different device and is filed
+  separately as `ip30asdvasdvnb'.

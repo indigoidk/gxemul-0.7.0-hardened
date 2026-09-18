@@ -44,6 +44,16 @@ FLAGSHIP = "fable5"
 HELD = "[HELD AWAITING SEAT:"
 ANNOTATION = "[RUN UNDER THE PRE-2026-08-16 POLICY]"
 
+#  *** THESE TWO WERE KNOWN TO check_stage_panels.py AND NOT TO THIS FILE, SO A STAGE COULD PASS
+#  SECTION H AND STILL RED SECTION I ON THE SAME LEDGER ENTRY.  Found 2026-09-18 while adding
+#  NOPANEL, by asking what the OTHER checker does with the same tokens. ***  The two gates are
+#  deliberately non-redundant -- H asks whether the seat was FIRED, I asks whether owed flagship
+#  work is WRITTEN DOWN -- but "this stage is not a panel stage at all" is a fact about the
+#  LEDGER ENTRY, not about either question, so both must honour it or they disagree about what
+#  the entry means.  RE_READ has been in the other file since 2026-08-21 and was never mirrored.
+RE_READ = "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]"
+NOPANEL = "[NOT A PANEL STAGE: NO PANEL CONVENED]"
+
 #  Directive dates.  Work that predates a directive cannot be judged by it.
 CUTOFF_FULL_PANEL = "2026-08-16"   # full panel on every stage
 CUTOFF_REGRESS_FABLE = "2026-08-15"  # regress becomes flagship-only
@@ -102,7 +112,7 @@ def main(argv):
             note = ent.get("note", "")
             d = stages.setdefault(ph, {"seats": set(), "newest": "", "held": False,
                                        "annotated": False})
-            if ANNOTATION in note:
+            if ANNOTATION in note or RE_READ in note or NOPANEL in note:
                 d["annotated"] = True
                 continue
             if HELD in note:

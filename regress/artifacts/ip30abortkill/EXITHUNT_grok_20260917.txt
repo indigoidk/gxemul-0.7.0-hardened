@@ -1,0 +1,125 @@
+I'll start from the repo truth (recent log, checkpoint, open-bug queue), then hunt host deaths and silent corruption that an `exit(` sweep would miss.HEAD matches the checkpoint. Next I’ll inventory queued IDs, then hunt host deaths that an `exit(` grep cannot see.Queued IDs are in. Next I’ll hunt host deaths that `exit(` never sees: halt, abort, NULL deref, OOB, and unchecked `memory_rw`.`exit(` is well-swept. I’ll now extract live high-severity kill rows, then read remaining `abort()`/`running = 0` sites for guest reachability.The `exit(` census is already tracked (`exitunowned76`). I’ll shift to abort/NULL/OOB/`running = 0` and read the prior audit so we don’t re-file known sites.IP22/IP30 `abort()` sits in `DEVICE_ACCESS` — an `exit(` sweep would miss it. Checking whether those machines are live and whether the queue already names them.**VERDICT: `ip30abortkill` — one guest load or store on advertised `-E sgi -e ip30` raises `SIGABRT`. An `exit(` sweep cannot see it.**
+
+The `exit(` family in `src/devices/` is well swept. `exitunowned76` already holds the 76 unowned remainder. The next critical bug is an `abort()` in a live `DEVICE_ACCESS`, named once in a **closed** census correction and never given a row.
+
+---
+
+## 1. `ip30abortkill` — HIGH — host death via `abort()`
+
+**File:** `GXEMUL-SEC/src/devices/dev_sgi_ip30.c`
+
+```123:147:GXEMUL-SEC/src/devices/dev_sgi_ip30.c
+	case 0x10020:	/*  Set ISR, according to Linux/IP30  */
+		d->isr = idata;
+		/*  Recalculate CPU interrupt assertions:  */
+fatal("IP30 legacy interrupt rewrite: TODO\n");
+abort();
+	case 0x10028:	/*  Clear ISR, according to Linux/IP30  */
+		d->isr &= ~idata;
+		fatal(...); abort();
+	case 0x10030:	/*  Interrupt Status Register  */
+		if (writeflag == MEM_WRITE) {
+			d->isr &= ~idata;
+			fatal(...); abort();
+```
+
+And the tick, after a **legal** mask write:
+
+```74:78:GXEMUL-SEC/src/devices/dev_sgi_ip30.c
+	if (d->imask0 & ((int64_t)1<<50)) {
+		fatal("IP30 legacy interrupt rewrite: TODO\n");
+		abort();
+```
+
+**Reachability — CONFIRMED for the ISR pair; BELIEVED for the tick.**
+
+- Constructor `machine_sgi.c` case 30 does **not** `abort()`. It `device_add("sgi_ip30 addr=0x0ff00000")`. Subtype is advertised (`IP30` / `ip30` / `octane`). `ctorabortclass` names ip19/ip20/ip22/ip24/ip27, **not** ip30. `#446` already proved construction reaches `arcbios_init` on ip30.
+- Window: `DEV_SGI_IP30_LENGTH = 0x80000` at `0x0ff00000`. Offsets `0x10020` / `0x10028` / `0x10030` / `0x10000` are inside it.
+- `case 0x10020` and `0x10028` have **no `writeflag` test**. A guest `ld` **or** `sd` at `0x0ff10020` dies. Instruction: MIPS `ld`/`sd` (or `lw`/`sw`) from kernel mode on `-E sgi -e ip30`.
+- Tick: write `imask0` at `+0x10000` with bit 50, then wait. That write is implemented and does not abort; the **next `DEVICE_TICK` does**.
+
+**Not IP22.** `dev_sgi_ip22.c:315` / `:339` are the same `abort()` shape, but `machine_sgi.c` `abort()`s **before** `dev_sgi_ip22_init`. That is construction (`ctorabortclass`), not a guest path.
+
+**Member:** 7 IMPLEMENT (the commented `cpu_interrupt` is the intended model) or 3 DECLINE + LATCHED ANNOUNCE if the interrupt rewrite stays out of scope. Member 5 FAULT **is** available (MIPS), but `abort()` fires before any `return 0`.
+
+**Gate:** none. No ip30 probe under `regress/`. Gate 9 may construct it; nothing feeds `0x10020`. Blind-spot, same class as `armmsrmodekill`.
+
+**Severity HIGH:** `abort()` is worse than `exit(1)` (SIGABRT, core). No in-tree Octane image, so this is probe-HIGH not boot-HIGH — same standing as `mapledmaaddr` / `vmedefaultkill` on an advertised machine.
+
+**Queue check:** named in the 2026-08-17 `exitsweep` correction (`OUTSTANDING_BUGS.md`, “No `abort()` is guest-reachable is FALSE”) and in one closed-row seat note. **No `id`.** `exitunowned76` counts `exit(`, not `abort(`. `cpusexitsweep` is `src/cpus/` only.
+
+---
+
+## 2. `8259cmdhalt` — MEDIUM — `cpu->running = 0` (halt, not host death)
+
+**File:** `dev_8259.c` command port (`relative_addr == 0`), unimplemented OCW.
+
+```137:140:GXEMUL-SEC/src/devices/dev_8259.c
+			} else {
+				fatal("[ 8259: unimplemented command 0x%02x ]\n", (int)idata);
+				cpu->running = 0;
+			}
+```
+
+Then it still `return 1`. The access “succeeds”; the strand stops.
+
+**Reachability — CONFIRMED, probe.** `DEV_8259_LENGTH` is 2, so the `default:` arm is dead. The live door is **offset 0, a byte the PIC command port actually takes.** `bus_isa.c` installs this on CATS (`0x7c000020` / `0x7c0000a0`, measured in the `isaorder` row). Guest: ARM `strb` of a command that is not ICW1 (`bit 4`), not `0x0a`/`0x0b`/`0x0c`, not EOI `0x20`/`0x21–0x27`/`0x60–0x67`/`0xe0–0xe7`, not `0x68`/`0xc0–0xc7`. **`strb r0, [pic]` with r0=0 is enough.**
+
+A healthy Linux PIC init mostly writes `0x11` / `0x20`. BELIEVED not on the CATS boot path; CONFIRMED as a one-instruction probe. Gate 14 exercises CATS decode, not PIC OCWs.
+
+**Member:** 2 silent decline or 3 latched. Member 5 FAULT is **not** available (ARM). And the function returns 1 anyway, so FAULT would not fire even on MIPS.
+
+**Why it outranks leftover `exit(` sites:** `armthumbabortkill` shape, on a machine this project actually uses, invisible to `exit(`.
+
+---
+
+## 3. `lunafbhalt` — MEDIUM — same halt shape, on the luna88k framebuffer
+
+**File:** `dev_lunafb.c`. `lunafb_a` `default:` and `lunafb_b` `default:` plus a ROP-not-all-ones write all do `cpu->running = 0; return 0`.
+
+Installed unconditionally from `DEVINIT(luna88k)` at `0xB1000000`. `lunafb_a` is **512 KB** (`0x80000`) and implements only `BMAP_RFCNT` (`0xB1000000`) and `BMAP_BMSEL` (`0xB1040000` — the comment saying `0xb1000000` for both is wrong; the `#define`s are right). Every other offset in that window, and every `lunafb_b` offset that is not plane-1 detect or `BMAP_FN+4*ROP_THROUGH` with `idata == 0xffffffff`, stops the CPU.
+
+**Reachability — CONFIRMED probe on unmodified `-E luna-88k`.** Guest: m88k `st`/`ld` to e.g. `0xB1000004`. OpenBSD’s `omfb_clear_framebuffer` is cited as using BMSEL, which is implemented (ignored), so BELIEVED the luna boot to `login:` does not hit the `default:`. FAULT **is** available (M88K) and `return 0` would actually deliver it — today the halt runs first.
+
+No dedicated row. Not `lunaabsentcpu` (that was a NULL `INTERRUPT_ASSERT`).
+
+---
+
+## 4. `mvme187memcoob` — MEDIUM as a rider, not a new kill
+
+`dev_mvme187.c` indexes **before** the switch:
+
+```68:68:GXEMUL-SEC/src/devices/dev_mvme187.c
+	odata = ((uint8_t*)&d->memcreg)[relative_addr];
+```
+
+Device length **0x200**. After `relative_addr &= ~0x100`, the index is `0..255`. `struct memcreg` is 124 bytes (31 padded registers). **Offsets 124–255 are a host OOB read**, then `default: exit(1)`.
+
+The **kill** is already inside `exitunowned76` (`:80`, `:90`). The **OOB is what `exit(` cannot see**, and it is the `asicindexcase` shape: the `exit(1)` is also the bounds check. A de-fatalisation that does not clamp the index turns a host death into a silent heap read of whatever follows the malloc’d device.
+
+M88K, FAULT available for the kill; the OOB needs a bound, not a member.
+
+---
+
+## S3 — what an `exit(` grep cannot find
+
+| Class | What a keyword grep sees | What is live here |
+|---|---|---|
+| `abort()` | nothing | **IP30, ranked 1.** IP22 is construction-only. `bus_pci.c:222` is init. |
+| `cpu->running = 0` | nothing | **8259, lunafb, luna88k `default:`.** `mb89352halt` already dropped into `b120`. `footbridge_reset` is an intentional halt. |
+| `CHECK_ALLOCATION` → `FAILURE` → `exit(1)` | the macro in `misc.h`, not the call site | Census already named `dev_wdc.c` `malloc(512 * count)` (now ~`:1856`). le / 21143 / gdrom are capped. **No new unqueued guest-sized alloc.** |
+| `assert()` | NDEBUG compiles it out | Only dyntrans page-align internals. |
+| Guest offset as index, no matching bound | nothing unless there is also `exit(` | **mvme187 memcreg**, ranked 4. |
+| Ignored `memory_rw` return | nothing | jazz DMA / maple DMA / `sgi_gbe` tick all discard it under `NO_EXCEPTIONS`. **`#244`/`#95` already zero the buffer**, so this is no longer uninit-stack; a failed PTE fetch becomes phys 0. Residual, not a new HIGH. |
+
+`cpusexitsweep` already owns the CPU-side `exit(` / `running = 0` population (ARM coproc PID≠0, endian switch, XScale steering, `arm_save_register_bank` unimplemented mode — the last of those **is** `armmsrmodekill`). Not re-reported.
+
+---
+
+## Honesty
+
+**Do not open another `exit(` sweep in `src/devices/`.** The 76-site remainder is `exitunowned76`. Maple GUN-bit / default-command, clmpcc STCR, VME default, fbctrl DATA are already in that inventory or have their own rows (`vmedefaultkill`, `fbctrlportkill`).
+
+**The empty result for “new `exit(` host deaths” has a denominator:** 135 filtered `exit(` calls in `src/devices/*.c`, 74 in `src/cpus/*.c`, overlayed on ledger ids including `exitunowned76`, `cpusexitsweep`, `vmedefaultkill`, `fbctrlportkill`, `alphavmkill`, `lcairqstubkill`, `sgirekills`, `mapledmaaddr`, `xscaleinten`. Live unowned `exit(` sites exist; they are tracked.
+
+**The thing the last three sweeps missed is `abort()` on a machine that actually constructs.** Next round: `ip30abortkill`, rung-3 on unmodified `-E sgi -e ip30`, `ld`/`sd` at `0x0ff10020`, plus a mask-bit-50 + tick row. Do not treat the closed `exitsweep` sentence as a work item — it is a citation, not a carrier.

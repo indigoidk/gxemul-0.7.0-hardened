@@ -82,9 +82,37 @@ BADGE_TIP = {"A": "the author did this review (shown, not hidden)",
 STATE_ORDER = {"active": 0, "held": 1, "pending": 2, "closed": 9, "dropped": 10}
 
 
+#  *** AN ANNOTATION IS NOT AN ANSWER, AND UNTIL 2026-09-18 THIS FILE COULD NOT TELL THEM APART.
+#  ***
+#  `check_stage_panels.py` and `check_fable_queue.py` both SKIP entries carrying a stage token
+#  before tallying seats -- an annotation exists to say WHY a stage is short, so counting it as one
+#  of the seats that answered would let marking a gap CLOSE it.  This file never learned that, and
+#  `cell()` matched on `seat` + `phase` alone.
+#
+#  The tokens are conventionally written with `seat: "fable5"`, so every one of them rendered as a
+#  FABLE CELL -- **the dashboard asserted that the flagship seat had answered a stage on which no
+#  panel was ever convened.**  That is not a cosmetic slip: it is the inverted form of the failure
+#  this whole layer exists to prevent.  A missing cell reads as "seat failure, never agreement",
+#  which the legend says out loud; a FABRICATED cell reads as agreement from the one seat whose
+#  agreement carries the most weight, and nothing anywhere contradicts it.
+#
+#  Found 2026-09-18 by asking what the OTHER tools do with a token this file does not know -- the
+#  same question that had just found `check_fable_queue.py` blind to RE_READ.  **Two tools, two
+#  blind spots, one cause: a token was added where it was needed and never mirrored.**
+STAGE_TOKENS = ("[RUN UNDER THE PRE-2026-08-16 POLICY]",
+                "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]",
+                "[NOT A PANEL STAGE: NO PANEL CONVENED]",
+                "[HELD AWAITING SEAT:")
+
+
+def _is_answer(x):
+    note = x.get("note") or ""
+    return not any(t in note for t in STAGE_TOKENS)
+
+
 def cell(row, phase, seat):
     ents = [x for x in row.get("entries", [])
-            if x["seat"] == seat["id"] and x.get("phase") == phase]
+            if x["seat"] == seat["id"] and x.get("phase") == phase and _is_answer(x)]
     if not ents:
         return '<td class="c none"><span class="g">·</span></td>'
     ent = ents[-1]

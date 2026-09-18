@@ -43,9 +43,34 @@
 
 #define	DEV_SGI_IP30_LENGTH		0x80000
 
+/*
+ *  #531: warn-once latches, ONE BIT PER DISTINCT MESSAGE.  The struct is
+ *  memset(0) at DEVINIT (as dev_pcc2.c and dev_wdc.c do), so these start clear.
+ *
+ *  SIX announce paths share TWO bits, and that is deliberate: IP30_W_ISR covers
+ *  FIVE (0x10020 write and read, 0x10028 write and read, 0x10030 write), which
+ *  all print the SAME string byte for byte.
+ *
+ *  THE INVARIANT IS THAT LATCH GRANULARITY MATCHES THE MARKER'S QUALIFICATION.
+ *  Both messages end in an UNQUALIFIED "(once)", which claims exactly one
+ *  emission per device instance -- so one bit apiece is what makes the marker
+ *  true.  Reporting each offset separately would be a different promise: it
+ *  would need the qualified spelling this tree also uses ("(once per offset per
+ *  direction)") and five bits on the ISR side.  Do not add bits without
+ *  changing the strings; do not qualify the strings without adding bits.
+ *
+ *  TWO BITS RATHER THAN ONE, AND THE REASON IS MEASURABLE: a single shared bit
+ *  would let an ordinary guest write to Set-ISR silence the TIMER diagnostic
+ *  forever, because the first ISR-side announce would consume it.  The two are
+ *  different messages reached by unrelated guest actions, and must latch apart.
+ */
+#define	IP30_W_TICK	(1 << 0)	/*  #531: DEVICE_TICK delivery  */
+#define	IP30_W_ISR	(1 << 1)	/*  #531: ISR-side rewrite  */
+
 struct sgi_ip30_data {
 	/*  ip30:  */
 	uint64_t                imask0;         /*  0x10000  */
+	int                     warned;         /*  #531: IP30_W_* latches  */
 	uint64_t                reg_0x10018;
 	uint64_t                isr;            /*  0x10030  */
 	uint64_t                reg_0x20000;
@@ -74,8 +99,55 @@ DEVICE_TICK(sgi_ip30)
 	if (d->imask0 & ((int64_t)1<<50)) {
 		/*  TODO: Only interrupt if reg 0x20000 (the counter)
 			has passed the compare (0x30000).  */
-fatal("IP30 legacy interrupt rewrite: TODO\n");
-abort();
+		/*
+		 *  #531: was fatal() + abort(), and a guest reached it by
+		 *  ARMING imask0 BIT 50 AND WAITING -- one `sd' plus one
+		 *  step, measured (row `tick 50').  Interrupt DELIVERY is a
+		 *  whole subsystem this device does not have, so the host
+		 *  stops dying and the timer interrupt is simply not
+		 *  delivered.  The counter update above still runs.
+		 *
+		 *  *** AND NO ROW PINS THAT, WHICH THIS COMMENT HAS NOW CLAIMED
+		 *  TWICE AND BEEN WRONG BOTH TIMES.  MEASURED 2026-09-18. ***
+		 *  It first credited `tick 49' (the grok seat caught that: the
+		 *  row only scored `alive').  The correction moved the credit to
+		 *  `acc 20000' -- and the opus5 F2 seat then MEASURED that row
+		 *  green with this very increment deleted (`MH_nocounter',
+		 *  27/27).  Its oracle accepts `(readback - 0x1234) % 1000 == 0'
+		 *  and **N = 0 IS ADMISSIBLE**, so a counter that never moves
+		 *  reads back exactly 0x1234, residue 0, and the row passes.
+		 *
+		 *  A CORRECTION IS NOT SAFER THAN THE THING IT CORRECTS, AND
+		 *  THIS COMMENT HAS NOW PROVED IT THREE TIMES.  The third error
+		 *  was in the sentence that replaced this one: it graded the
+		 *  unpinned counter an L3 DE-ESCALATION OBLIGATION.  The fable5
+		 *  adjudicator refuted that, and the refutation is two lines up
+		 *  in this very function --
+		 *
+		 *      d->reg_0x20000 += 1000;              <- UNCONDITIONAL
+		 *      if (d->imask0 & ((int64_t)1<<50)) {  <- the de-fatalised
+		 *                                              predicate
+		 *
+		 *  The counter runs on EVERY tick regardless of bit 50.  The fix
+		 *  neither introduces it nor gates it, so deleting it mutates
+		 *  PRE-EXISTING, FIX-INDEPENDENT behaviour: COVERAGE DEBT, not a
+		 *  clause-(d) obligation.  And the de-escalation ACCEPT SIDE of
+		 *  the predicate that WAS de-fatalised is pinned, by `tick 50'
+		 *  (alive) plus `tick 50 txt' (announce).
+		 *
+		 *  SO THE HONEST STATE IS NARROWER THAN THE LAST TWO SENTENCES
+		 *  CLAIMED: no row observes this counter, that is optional
+		 *  coverage debt, and the round's accept-side claim is TRUE.
+		 *  Each correction here arrived with more confidence than the
+		 *  one before and two of the three were wrong -- which is the
+		 *  rule about corrections earning a SECOND reading, failed
+		 *  three times on seven lines of comment.
+		 */
+		if (!(d->warned & IP30_W_TICK)) {
+			d->warned |= IP30_W_TICK;
+			fatal("[ sgi_ip30: timer interrupt delivery not "
+			    "implemented  (once) ]\n");
+		}
 //		cpu_interrupt(cpu, 8+1 + 50);
 	}
 }
@@ -120,31 +192,121 @@ DEVICE_ACCESS(sgi_ip30)
 		}
 		break;
 
-	case 0x10020:	/*  Set ISR, according to Linux/IP30  */
-		d->isr = idata;
-		/*  Recalculate CPU interrupt assertions:  */
-fatal("IP30 legacy interrupt rewrite: TODO\n");
-abort();
-//		cpu_interrupt(cpu, 8);
-		break;
-
-	case 0x10028:	/*  Clear ISR, according to Linux/IP30  */
-		d->isr &= ~idata;
-		/*  Recalculate CPU interrupt assertions:  */
-fatal("IP30 legacy interrupt rewrite: TODO\n");
-abort();
-//		cpu_interrupt(cpu, 8);
-		break;
-
-	case 0x10030:	/*  Interrupt Status Register  */
+	case 0x10020:	/*  Set ISR (heart.h: set_isr, WRITE-side)  */
+		/*
+		 *  #531: this arm had NO writeflag test and ran the store
+		 *  FIRST, so a guest LOAD zeroed the ISR and then killed the
+		 *  host -- `idata' is 0 on a read.  Rows `kill 20 rd' and
+		 *  `isr keep' pin both halves.
+		 */
 		if (writeflag == MEM_WRITE) {
-			/*  Clear-on-write  (TODO: is this correct?)  */
+			d->isr = idata;
+			if (!(d->warned & IP30_W_ISR)) {
+				d->warned |= IP30_W_ISR;
+				fatal("[ sgi_ip30: interrupt-status rewrite "
+				    "not implemented  (once) ]\n");
+			}
+//		cpu_interrupt(cpu, 8);
+		} else {
+			/*
+			 *  #531: MEMBER 2 -- SILENT DECLINE.  Adopted on the
+			 *  fable5 adjudication of 2026-09-18, and it replaces an
+			 *  announce that was WRONG IN PRODUCT CODE TWO WAYS.
+			 *
+			 *  (1) IT SAID THE WRONG THING.  All five ISR sites print
+			 *  one byte-identical string, "interrupt-status rewrite
+			 *  not implemented" -- and a READ is not a rewrite.
+			 *
+			 *  (2) IT STOLE THE BIT.  One shared IP30_W_ISR latch
+			 *  serves every ISR path, so a single BENIGN guest read
+			 *  of this write-side register consumed the only announce
+			 *  there is and silenced the genuine write-side
+			 *  diagnostic -- including the architecturally-wrong
+			 *  0x10030 write -- permanently, for the device's life.
+			 *
+			 *  The earlier disposition kept the announce on the
+			 *  warrant that "a guest READING a write-side register is
+			 *  an anomaly worth one announce".  The opus5 seat showed
+			 *  that describes a behaviour the code did not have: the
+			 *  arm did not GET an announce, it CONSUMED the shared
+			 *  one.  heart.h makes this register write-side, so a
+			 *  read has no defined meaning -- decline it, quietly,
+			 *  and keep the one announce for a real rewrite.
+			 *
+			 *  odata stays 0 and the common tail returns it; survival
+			 *  is pinned by `kill 20 rd' / `kill 28 rd' as before.
+			 */
+			/*  heart.h names this SET_ISR: write-side.  Declining
+			    rather than mirroring d->isr also avoids inventing a
+			    second read path for a register that already has one
+			    at 0x10030.  */
+		}
+		break;
+
+	case 0x10028:	/*  Clear ISR (heart.h: clear_isr, WRITE-side)  */
+		/*  #531: same missing writeflag test as 0x10020.  On a READ
+		    `idata' is 0, so `&= ~0' was a no-op that still killed the
+		    host -- row `kill 28 rd'.  */
+		if (writeflag == MEM_WRITE) {
 			d->isr &= ~idata;
-			/*  Recalculate CPU interrupt assertions:  */
-fatal("IP30 legacy interrupt rewrite: TODO\n");
-abort();
+			if (!(d->warned & IP30_W_ISR)) {
+				d->warned |= IP30_W_ISR;
+				fatal("[ sgi_ip30: interrupt-status rewrite "
+				    "not implemented  (once) ]\n");
+			}
+//		cpu_interrupt(cpu, 8);
+		} else {
+			/*
+			 *  #531: MEMBER 2 -- SILENT DECLINE.  Adopted on the
+			 *  fable5 adjudication of 2026-09-18, and it replaces an
+			 *  announce that was WRONG IN PRODUCT CODE TWO WAYS.
+			 *
+			 *  (1) IT SAID THE WRONG THING.  All five ISR sites print
+			 *  one byte-identical string, "interrupt-status rewrite
+			 *  not implemented" -- and a READ is not a rewrite.
+			 *
+			 *  (2) IT STOLE THE BIT.  One shared IP30_W_ISR latch
+			 *  serves every ISR path, so a single BENIGN guest read
+			 *  of this write-side register consumed the only announce
+			 *  there is and silenced the genuine write-side
+			 *  diagnostic -- including the architecturally-wrong
+			 *  0x10030 write -- permanently, for the device's life.
+			 *
+			 *  The earlier disposition kept the announce on the
+			 *  warrant that "a guest READING a write-side register is
+			 *  an anomaly worth one announce".  The opus5 seat showed
+			 *  that describes a behaviour the code did not have: the
+			 *  arm did not GET an announce, it CONSUMED the shared
+			 *  one.  heart.h makes this register write-side, so a
+			 *  read has no defined meaning -- decline it, quietly,
+			 *  and keep the one announce for a real rewrite.
+			 *
+			 *  odata stays 0 and the common tail returns it; survival
+			 *  is pinned by `kill 20 rd' / `kill 28 rd' as before.
+			 */
+		}
+		break;
+
+	case 0x10030:	/*  Interrupt Status Register (heart.h: READ-ONLY)  */
+		if (writeflag == MEM_WRITE) {
+			/*
+			 *  #531: THE FILE'S OWN "TODO: is this correct?" IS
+			 *  ANSWERED **NO** by the header this device cites.
+			 *  heart.h marks isr "(read-only)"; clearing goes
+			 *  through clear_isr at 0x10028.  So the clear-on-
+			 *  write is DROPPED rather than kept -- applying it
+			 *  would be inventing a second clear path.  Row
+			 *  `kill 30 wr' pins that the host survives.
+			 */
+			if (!(d->warned & IP30_W_ISR)) {
+				d->warned |= IP30_W_ISR;
+				fatal("[ sgi_ip30: interrupt-status rewrite "
+				    "not implemented  (once) ]\n");
+			}
 //			cpu_interrupt(cpu, 8);
 		} else {
+			/*  #531: unchanged and CORRECT -- this is the one
+			    read heart.h defines.  Row `acc 30 rd'.  */
 			odata = d->isr;
 		}
 		break;

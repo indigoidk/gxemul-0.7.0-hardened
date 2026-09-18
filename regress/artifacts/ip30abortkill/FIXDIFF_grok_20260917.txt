@@ -1,0 +1,246 @@
+I'll start from HEAD, the checkpoint, and the live `sgi_ip30` source so the diff is written against the function as it actually sits, not only the inlined copy.Pass 1 is done and the disposition is settled. I’ll read the live function, a house latch, and the HEART offsets, then write the diff against that rather than the inlined sketch.The live function matches the inlined one. Next I’ll pull a house latch, the HEART offsets, the next round tag, and the probe rows so the diff’s predicates and markers are the ones this tree actually uses.**VERDICT: Write this diff. Decline the `0x10030` write (transferred warrant, not “cannot hurt”). Two per-instance latch bits, house marker `(once)`. The listed detector has three independent clean-sweep holes; name them before the table, do not wait for it.**
+
+Nothing load-bearing is unsettled enough to hold the code. `#NNN` is the only blank: `#529` already sits in uncommitted `dev_sgi_ip32.c`, `#530` is named for the LCA lane, so this round is **`#531` if those two land first**. Retag at commit if the number differs. Residual, not in this diff: HEART `set_isr` is a set (OR), this file still **assigns**. Member 4 keeps the store that already runs.
+
+The enclosing functions were opened in `GXEMUL-SEC/src/devices/dev_sgi_ip30.c` (HEAD `9c91999`). Common tail is still `if (writeflag == MEM_READ) memory_writemax64(...); return 1;` — every arm `break`s. `DEVICE_TICK` has no tail.
+
+---
+
+## Q1 — the diff
+
+Against the real file, not the brief’s fake numbering. No early `return`.
+
+```diff
+--- a/src/devices/dev_sgi_ip30.c
++++ b/src/devices/dev_sgi_ip30.c
+@@ -62,9 +62,19 @@ struct sgi_ip30_data {
+ 
+ 	/*  ip30_5:  */
+ 	uint64_t                reg_0x00000;
++
++	/*  #531: warn-once latches, one bit per site, never shared.
++	    memset(0) at DEVINIT.  A single bit lets a Set-ISR write
++	    silence the timer diagnostic forever.  */
++	int                     warned;
+ };
+ 
+ 
++#define	IP30_W_TICK	(1 << 0)	/*  #531: DEVICE_TICK abort  */
++#define	IP30_W_ISR	(1 << 1)	/*  #531: ISR-side abort (set/clear/isr)  */
++
++
+ DEVICE_TICK(sgi_ip30)
+ {
+ 	struct sgi_ip30_data *d = (struct sgi_ip30_data *) extra;
+@@ -74,8 +84,15 @@ DEVICE_TICK(sgi_ip30)
+ 	if (d->imask0 & ((int64_t)1<<50)) {
+ 		/*  TODO: Only interrupt if reg 0x20000 (the counter)
+ 			has passed the compare (0x30000).  */
+-fatal("IP30 legacy interrupt rewrite: TODO\n");
+-abort();
++		/*  #531: was fatal+abort.  Delivery is a subsystem
++		    (no HEART lines; serial already on cpu.2).  The
++		    counter update above still runs.  Host stops dying;
++		    the timer interrupt is not delivered.  */
++		if (!(d->warned & IP30_W_TICK)) {
++			d->warned |= IP30_W_TICK;
++			fatal("[ sgi_ip30: timer interrupt rewrite not "
++			    "implemented  (once) ]\n");
++		}
+ //		cpu_interrupt(cpu, 8+1 + 50);
+ 	}
+ }
+@@ -121,29 +138,58 @@ DEVICE_ACCESS(sgi_ip30)
+ 		break;
+ 
+ 	case 0x10020:	/*  Set ISR, according to Linux/IP30  */
+-		d->isr = idata;
+-		/*  Recalculate CPU interrupt assertions:  */
+-fatal("IP30 legacy interrupt rewrite: TODO\n");
+-abort();
++		if (writeflag == MEM_WRITE) {
++			d->isr = idata;
++			/*  #531: store kept (member 4).  Recalc is not
++			    implemented; host stops dying.  */
++			if (!(d->warned & IP30_W_ISR)) {
++				d->warned |= IP30_W_ISR;
++				fatal("[ sgi_ip30: interrupt-status rewrite "
++				    "not implemented  (once) ]\n");
++			}
+ //		cpu_interrupt(cpu, 8);
++		} else {
++			/*  #531: set_isr is write-side (heart.h).  A
++			    read has no defined meaning -- do not mirror
++			    d->isr.  odata stays the function's 0
++			    initializer; that is not a modelled value.  */
++			if (!(d->warned & IP30_W_ISR)) {
++				d->warned |= IP30_W_ISR;
++				fatal("[ sgi_ip30: interrupt-status rewrite "
++				    "not implemented  (once) ]\n");
++			}
++		}
+ 		break;
+ 
+ 	case 0x10028:	/*  Clear ISR, according to Linux/IP30  */
+-		d->isr &= ~idata;
+-		/*  Recalculate CPU interrupt assertions:  */
+-fatal("IP30 legacy interrupt rewrite: TODO\n");
+-abort();
++		if (writeflag == MEM_WRITE) {
++			d->isr &= ~idata;
++			/*  #531: store kept (member 4).  Recalc is not
++			    implemented; host stops dying.  */
++			if (!(d->warned & IP30_W_ISR)) {
++				d->warned |= IP30_W_ISR;
++				fatal("[ sgi_ip30: interrupt-status rewrite "
++				    "not implemented  (once) ]\n");
++			}
+ //		cpu_interrupt(cpu, 8);
++		} else {
++			/*  #531: clear_isr is write-side.  Same decline
++			    as set_isr; do not mirror d->isr.  */
++			if (!(d->warned & IP30_W_ISR)) {
++				d->warned |= IP30_W_ISR;
++				fatal("[ sgi_ip30: interrupt-status rewrite "
++				    "not implemented  (once) ]\n");
++			}
++		}
+ 		break;
+ 
+-	case 0x10030:	/*  Interrupt Status Register  */
++	case 0x10030:	/*  Interrupt Status Register; heart.h: read-only  */
+ 		if (writeflag == MEM_WRITE) {
+-			/*  Clear-on-write  (TODO: is this correct?)  */
+-			d->isr &= ~idata;
+-			/*  Recalculate CPU interrupt assertions:  */
+-fatal("IP30 legacy interrupt rewrite: TODO\n");
+-abort();
++			/*  #531: the TODO answers no.  Clearing goes
++			    through clear_isr at 0x10028.  Do not apply
++			    d->isr &= ~idata.  */
++			if (!(d->warned & IP30_W_ISR)) {
++				d->warned |= IP30_W_ISR;
++				fatal("[ sgi_ip30: interrupt-status rewrite "
++				    "not implemented  (once) ]\n");
++			}
+ //			cpu_interrupt(cpu, 8);
+ 		} else {
+ 			odata = d->isr;
+```
+
+Control flow after the edit:
+
+| path | store? | `odata` | tail | host |
+|---|---|---|---|---|
+| tick, bit 50 clear | `reg_0x20000 += 1000` | n/a | fall off | lives |
+| tick, bit 50 set | same increment | n/a | fall off after latch | lives |
+| `0x10020` WRITE | `d->isr = idata` | unused | skip `writemax64`, `return 1` | lives |
+| `0x10020` READ | none | stays `0` | writes `0`, `return 1` | lives |
+| `0x10028` WRITE | `d->isr &= ~idata` | unused | `return 1` | lives |
+| `0x10028` READ | none | stays `0` | writes `0`, `return 1` | lives |
+| `0x10030` WRITE | **none** | unused | `return 1` | lives |
+| `0x10030` READ | none | `d->isr` | writes it, `return 1` | lives (already did) |
+
+The `0` a declined read returns is `memory_rw`’s pre-zero plus the initializer, not a HEART value. Fable’s “do not return 0-as-a-value” is the comment, not a skip of the tail (skipping the tail would still deliver the pre-zero; `return 0` is FAULT, already rejected).
+
+This seat did not apply the hunk to the tree.
+
+---
+
+## Q2 — decline the `isr` write
+
+**Decline it.** Keep clear-on-write only if you have a measured guest that writes `0x10030` expecting clear. There is none.
+
+What the addition licence actually has:
+
+| candidate | warrant? |
+|---|---|
+| **Decline the write** | **Transferred:** Linux `heart.h` — the document this file cites three times — marks `isr` `(read-only)`. Clearing is `clear_isr` at `0x10028`, which this file already implements. The arm’s own `TODO: is this correct?` is answered **no**. Fable 5.1 already ruled this: member 6 BACKED ACCEPT without a warrant. |
+| Keep clear-on-write as “emulator compatibility” | **Neither.** No PROM/Irix/Linux trace in this tree writes `0x10030`. Linux/IP30 would write `0x10028`. “Guests might do it” is “cannot hurt”. |
+| Member 4 (keep the computed value) | **Does not apply.** Member 4 is “the model already computes the **right** value and then discards it.” Maple `#528` is that shape. Here the computed value is the **wrong operation**. |
+
+So the write arm becomes: latch, do not `d->isr &= ~idata`, `break`. It owes a **state** row (write declined **and** ISR unchanged), not merely `alive`. That is Fable’s sentence; `kill 30 wr` as survive-only cannot see this repair (Q5).
+
+---
+
+## Q3 — latch
+
+Two bits, per instance, in `struct sgi_ip30_data`. `DEVINIT` already `memset`s. Crime’s wording: one bit per site, never shared.
+
+| bit | fires on |
+|---|---|
+| `IP30_W_TICK` | `imask0 & (1<<50)` in `DEVICE_TICK` |
+| `IP30_W_ISR` | every ISR-side former abort: set/clear write (recalc stub), set/clear read (direction decline), `isr` write (read-only decline) |
+
+One shared bit lets a Set-ISR write silence the timer diagnostic for the life of the instance. That is the measured reason for two, not three. A third bit for the `0x10030` decline is coverage debt, not this round’s floor — the brief settled two.
+
+**Marker: unqualified `(once)`.**
+
+Census, derived on **this working tree** (`GXEMUL-SEC/src/devices/*.c`), not a quoted total. Method: ripgrep for the family, then open wrapped continuations. Python join-deriver was not runnable in this seat, so this is **not** the 80/13/51% figure, and I am not restating that figure as mine.
+
+Line-based `\(once[^)]*\)` returned **64** hits. **Six are comments about the marker**, not announcements (`g2.c` “once for each channel”, plus comments in gdrom/pcc2/sh4/sgi_re/wdc). After dropping those, **37** product `fatal()` lines carry bare `(once)`.
+
+The same grep is **blind to wraps**. Opened, not inferred:
+
+- `(once per encoding)` — sh4 DMA TS/DM/SM/RS, four wraps at the `(once per` / `encoding)` split, plus one same-line at SCI
+- `(once per channel)` — sh4 DMAC IE, wrapped
+- `(once per offset)` — sh4 PCICONF0, wrapped; ten more same-line
+- `(once per timer)` — sh4 pclock, wrapped
+- `(once per offset per direction)` — gdrom, four same-line
+- `(once per bit)` — sh4, four same-line
+- `(once per direction)` — lca, one
+- `(further occurrences suppressed)` — asc ×3, vga one wrap
+- `(reported once)` — m8820x ×2
+- `(reported once per cpu)` / `(reported once per register)` — luna88k, sh4
+- sh4 `:560` `each enable is reported once` — suppression announce **without** parentheses; a paren-family deriver misses it
+
+**Advice that survives the arithmetic:** a new unqualified site uses `(once)`. Qualification is for a latch that is actually per-offset / per-bit / per-channel. These two bits are per instance, so `(once)`.
+
+---
+
+## Q4 — de-escalation
+
+The diff deletes four host-fatal sites. The accidental tripwire that made guard growth self-announcing is gone. Predicates that used to gate death, from **this** hunk:
+
+| predicate that used to kill | accept-side row owed | in the listed set? |
+|---|---|---|
+| `d->imask0 & ((int64_t)1<<50)` in the tick | `0x10000` write of **bit 50** still round-trips (`sd`, not `sw`) **and** the host survives the next tick | `acc imask` is the neighbour pin; it is **not** this row if it still writes bit 18 via `sw`. Tick row = survival. **Owe an `sd 1<<50` round-trip.** |
+| reaching `case 0x10020` | neighbours still service (`devsig`, `acc 18`, `acc imask`, `acc 30 rd`, `acc 20000`, `acc 30000`); **and**, because the write is kept: a store at `0x10020` updates ISR, read back at `0x10030` | neighbours yes; **`acc 20 wr` is missing** |
+| reaching `case 0x10028` | same neighbours; a store of 1s clears the corresponding ISR bits | **`acc 28 wr` is missing** |
+| `writeflag == MEM_WRITE` at `case 0x10030` | the **read** still returns ISR (`acc 30 rd`); the write is now a **decline**, so the accept-side of death-removal is the read, and the write needs a decline-channel (ISR unchanged), not another accept | `acc 30 rd` yes; decline-channel **no** (see Q5) |
+| load at `0x10020` / `0x10028` (the missing `writeflag` was the kill’s entry condition) | ISR unchanged after the load (seed via `0x10020` write, load, read back at `0x10030`) | “ISR-unchanged” — **must cover both loads**. `0x10028` `&= ~0` is a no-op today, so a row that only checks the ISR cell cannot fail the `0x10028` writeflag; pin **odata is not `d->isr`** (seed ISR to a distinctive value first) |
+
+`0x10000` is the tick’s accept row, not “maybe” one: that write is what used to arm host death.
+
+---
+
+## Q5 — smallest edit that breaks the fix and still passes **that** detector
+
+The listed rows (`live`, `devsig`, `acc 18`, `acc 20000`, `acc 30000`, `acc imask`, `acc 30 rd`, `kill 20 rd`, `kill 28 rd`, `kill 30 wr`, tick, ISR-unchanged) are **survive-or-neighbour**. They do not pin where a kept store lands, they do not pin a declined write’s effect, and the two kill rows at `0x10020`/`0x10028` are **reads**.
+
+**Smallest clean-sweep (one statement):** in the `0x10020` read arm, add `odata = d->isr;`. Host still lives. ISR cell still unchanged. `kill 20 rd` still `alive`. Every neighbour still services. That is the HEART decline, inverted, and the listed instrument cannot see it.
+
+Two more, same score, one statement or two:
+
+| mutant | why it sweeps |
+|---|---|
+| Restore `d->isr &= ~idata` on the `0x10030` **write**, no `abort()` | `kill 30 wr` is survive-only. Guarded and unguarded both live. CHANNEL vacuity. Fable already said this owes a state row. |
+| Restore `fatal(); abort();` only in the `0x10020` **write** arm | `kill 20 rd` is a load. No `kill 20 wr`. |
+| Drop `d->isr = idata` (decline the set-isr write too) | no `acc 20 wr`. Member 4 vanishes silently. Same for dropping the `0x10028` clear. |
+
+A `writeflag` conjunct `&& len == 8` on the set/clear stores is the next shape if the probe’s writes are already 8-byte; still no listed row.
+
+**Close the floor in the detector that ships with this diff, not after:**
+
+1. `acc 20 wr` — store, read back at `0x10030` (member 4 + de-escalation)
+2. `acc 28 wr` — write-1s clear, read back
+3. `kill 20 wr` / `kill 28 wr` — or the abort-on-write-only mutant is a floor breach
+4. `isr 30 wr` — write `0x10030`, ISR **unchanged** (Q2’s decline channel)
+5. `isr 20 rd` / `isr 28 rd` — load does not clobber ISR; load’s **value** is not the seeded ISR (don’t-mirror)
+6. Tick arming is `sd` of bit 50, never `sw`
+
+Until those exist, the three mutants above are L2 the moment the table is run. Name them in the probe header’s contract so an escape is “in the contract” or “a breach of it”, not an argument about overclaiming.
+
+---
+
+**Honesty.** The diff is the code. I did not apply it: this answer is the pass that writes the hunk; pass 2 is owed on the real diff; `#529`/`#530` already own uncommitted product tags. Member 7 stays filed (`ip30heart`): idiom exists on MIPS via CRIME; this file has zero `struct interrupt` members, so the application is a topology, not a uncomment.

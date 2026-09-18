@@ -1,0 +1,96 @@
+PRETABLE 2 -- #531 ip30abortkill, kill table 2 (27-row instrument, the CLASS CLOSURE)
+Written 2026-09-17 BEFORE table 2 runs; this file's own mtime is the order discriminator.
+Mandatory: this round EXTENDS a kill-table-backed detector.
+
+================================================================================
+WHY THERE IS A SECOND TABLE -- THE #499 AMENDMENT, NOT A THIRD GUESS
+================================================================================
+TWO CONSECUTIVE PASSES FOUND BREACHES OF ONE CLASS:
+  pass 2 (codex)  -- the TICK announce was unobserved post-fix
+  pass 2 (opus5)  -- THREE MORE announce cells unobserved, measured at 19/19 each,
+                     plus two latch-MECHANISM cells
+
+So the amendment applies: do NOT repair the cell the last mutant used.  Enumerate the whole
+space from the function's own inputs, close every cell in ONE diff, and let the closing pass
+VERIFY THE ENUMERATION rather than hunt for more cells.  Table 1 already ran and closed five
+cells; table 2 exists to test the closure, not to search.
+
+================================================================================
+1. THE ENUMERATION, FROM THE FUNCTION'S OWN INPUTS
+================================================================================
+ANNOUNCE SITES = {0x10020, 0x10028, 0x10030} x {READ, WRITE}, minus 0x10030-READ
+(serviced -- it is the one arm that answers correctly and announces nothing), plus TICK.
+SIX sites.  Plus the LATCH MECHANISM itself, which is not a site but a shared resource:
+its two failure modes are COLLISION (two classes on one bit) and DEFEAT (mask -> 0).
+
+  #  SITE            ROW THAT ATTRIBUTES IT        ADDED BY
+  1  0x10020 READ    kill 20 rd txt                pre-existing
+  2  0x10028 READ    kill 28 rd txt                pre-existing
+  3  0x10030 WRITE   kill 30 txt                   pass 2 (re-bound; was MISBOUND)
+  4  TICK            tick 50 txt                   pass 2 (new)
+  5  0x10020 WRITE   kill 20 wr txt                *** CLOSURE, new ***
+  6  0x10028 WRITE   kill 28 wr txt                *** CLOSURE, new ***
+  M1 latch COLLISION xbit isr + xbit tick          *** CLOSURE, new ***
+  M2 latch DEFEAT    latch 1x                      *** CLOSURE, new ***
+  V  declined VALUE  isr 20 rd val                 *** CLOSURE, new ***
+
+*** THE ATTRIBUTION RULE, which is the whole class and which NO ROW ENCODED BEFORE: ***
+All five ISR sites print ONE IDENTICAL STRING behind ONE SHARED BIT.  Therefore a row can
+attribute an announce to a SPECIFIC arm only if its session makes a SINGLE ISR access.  A
+multi-access session asserts merely "at least one of these arms announced" -- which is exactly
+how the old `kill 30 txt' sat green while blind to its own named mutant, and why M9/M5 swept
+clean for the measuring seat.  ROWS 5 AND 6 USE SESSIONS THAT WERE ALREADY SINGLE-ACCESS;
+they simply never read the transcript.
+
+================================================================================
+2. CHANNEL -- per row, the mutant it kills and the observable that differs
+================================================================================
+  ROW              MUTANT            OBSERVABLE THAT DIFFERS        PREDICTION
+  kill 20 wr txt   M7_silent20wr     announce absent vs present     KILL (20/27)
+  kill 28 wr txt   M8_silent28wr     announce absent vs present     KILL (20/27)
+  xbit isr         M6_sharedlatch    ISR announce COUNT 0 vs 1      KILL (26/27)
+  latch 1x         M9_nolatch        ISR announce COUNT 2 vs 1      KILL (26/27)
+  isr 20 rd val    M10_mirror20      readback 0x5a5a vs 0x0         KILL (26/27)
+  isr clr          M1_del28store     readback 0x5a5a vs 0x5050      KILL -- RE-RUN as a
+                                                                    REGRESSION CHECK
+
+*** THE TWO NEW ORACLE SHAPES, AND WHY PRESENCE WAS NOT ENOUGH. ***
+`latch 1x' COUNTS rather than detects.  Under M9 the arm announces on EVERY access, so a
+presence oracle reads `yes' on the fix AND on the mutant -- the CHANNEL vacuity one level
+along.  Only a count varies.  `xbit' puts BOTH announce classes in ONE device lifetime, which
+no fresh-process row can do; that is the only shape that can see a bit collision at all.
+
+================================================================================
+3. WHY M1_del28store IS RE-RUN -- the #462 lesson, applied rather than cited
+================================================================================
+#462 measured that ADDING ROWS PERTURBS OTHER MUTANTS' SCORES.  Six rows were just added, so
+the five kills table 1 established are claims about an instrument that no longer exists.  M1 is
+re-run as the cheapest regression check; if it still reds exactly `isr clr' at 26/27, the added
+rows are independent of it.  *A full re-run of all eleven was considered and rejected as cost
+without a hypothesis -- the new rows are separate sessions, so the mechanism for perturbation
+is absent.  THAT IS A REASONED CLAIM, NOT A MEASURED ONE, AND M1 IS THE ONE TEST OF IT.*
+
+================================================================================
+4. THE TABLE-1 PREDICTION THAT LANDED, recorded because the rule asked to be CHECKED
+================================================================================
+PRETABLE.out predicted, BEFORE table 1 ran, that M6_sharedlatch would ESCAPE ALL 21 ROWS, with
+the derivation: every session is a fresh process, so no row exercises both announce classes in
+one device lifetime.  **MEASURED: M6_sharedlatch 21/21, CLEAN SWEEP.**
+
+That is the pre-table CHANNEL rule's own claim -- *a row's channel under its mutant is knowable
+at WRITING time, before any table runs* -- tested for the first time in this project and HELD.
+The first mandated application was told to CHECK the rule rather than merely obey it; this is
+the answer, and it is a positive one.
+
+================================================================================
+5. OWED / N/A, each with its reason
+================================================================================
+  * WIDTH / len axis (#499's axis): NOT SWEPT.  The probe uses only lw/sw/ld/sd.  DISCLOSED as
+    coverage debt by the measuring seat and carried forward -- not silently absent.
+  * POSITION / translation (clause (f)): NOT SWEPT.  No row asserts WHICH cell an access lands
+    on.  Disclosed.
+  * The two READ-arm announces (sites 1 and 2): already rowed and already killed by table 1's
+    siblings; no new mutant owed.
+  * ip30setisrassign (set_isr ASSIGNS where the pair implies OR): FILED as its own row, not a
+    cell of this enumeration -- it is a BEHAVIOUR defect in a path this round only
+    de-fatalises, and the addition licence declines "while we are here".
