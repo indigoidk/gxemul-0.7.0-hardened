@@ -840,6 +840,21 @@ else
 ' "$out" | sed 's/^/          /'
 fi
 
+#  H2 (#534, fable5 R5): four tools read ledger stage tokens and each once carried its own copy;
+#  every mis-classification this project measured came from one copy not mirroring another.  The
+#  literals and the classifier now live in stage_tokens.py, and this refuses a token spelled as a
+#  CODE string anywhere else in tools/pipeline/ (docstrings and comments exempt -- they describe).
+say ""; say "H2. stage tokens are spelled in one place"
+TOKCHK=$_HERE/pipeline/stage_tokens.py
+if [ ! -f "$TOKCHK" ]; then
+	bad "stage_tokens.py MISSING -- H, I and the dashboard import it"
+elif out=$(python "$TOKCHK" --selfcheck 2>&1); then
+	good "$(printf '%s' "$out" | tail -1)"
+else
+	bad "A STAGE TOKEN IS SPELLED OUTSIDE stage_tokens.py:"
+	printf '%s\n' "$out" | sed 's/^/          /'
+fi
+
 say ""; say "G. every seat that answered in a cited panel is recorded"
 SEATCHK=$_HERE/pipeline/check_seats_read.py
 if [ ! -f "$SEATCHK" ]; then

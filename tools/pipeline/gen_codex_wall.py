@@ -30,8 +30,9 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LEDGER = os.path.join(HERE, "ledger.json")
-QUEUE = os.path.join(HERE, "fable_queue.md")
+#  GXLEDGER / GXQUEUE (#534): the stage-token controls run this against a FIXTURE, as they do the checkers.
+LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
+QUEUE = os.environ.get("GXQUEUE") or os.path.join(HERE, "fable_queue.md")
 
 BEGIN = "<!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->"
 END = "<!-- END GENERATED: codex-wall -->"
@@ -67,9 +68,12 @@ END = "<!-- END GENERATED: codex-wall -->"
 #  KNOWN AND ACCEPTED LIMIT: a real marker WRAPPED ACROSS LINES stays invisible.  Newlines
 #  are excluded deliberately -- admitting them re-opens the phantom surface -- so the
 #  generator requires markers to be written on one line, which is how they are generated.
-MARKER = re.compile(
-    r"\[HELD AWAITING SEAT:[ \t]*([a-z0-9_]+(?:[ \t]*,[ \t]*[a-z0-9_]+)*)[ \t]*\]",
-    re.I)
+#  #534 (R5): the literal AND the strict seat-list shape come from stage_tokens.py, which the
+#  live-hold rule in check_stage_panels.py also parses with -- one parser, so the two cannot
+#  disagree about which seats a marker names.
+sys.path.insert(0, HERE)
+import stage_tokens as st  # noqa: E402
+MARKER = st.HELD_SEATS
 
 PROSE = """
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
@@ -142,6 +146,13 @@ def held_rows(seat=None):
     out = []
     for row in led["rows"]:
         stages = {}
+        #  #534 F2 pass (codex, Opus): list only LIVE holds -- a marker every named seat has since
+        #  answered is history, and advertising it as outstanding made the wall and section H
+        #  disagree about which stages wait (29 listed here against H's 17).
+        by_phase = {}
+        for e in row.get("entries", []):
+            by_phase.setdefault(e.get("phase", "?"), []).append(e)
+        live = {ph: set(st.live_holds(es)) for ph, es in by_phase.items()}
         for e in row.get("entries", []):
             m = MARKER.search(e.get("note", "") or "")
             if not m:
@@ -165,6 +176,8 @@ def held_rows(seat=None):
                         % (row["id"], e.get("phase", "?"), s))
                     s = "?" + s
                 if seat and s != seat:
+                    continue
+                if not s.startswith("?") and s not in live.get(e.get("phase", "?"), ()):
                     continue
                 stages.setdefault(e.get("phase", "?"), set()).add(s)
         if stages:

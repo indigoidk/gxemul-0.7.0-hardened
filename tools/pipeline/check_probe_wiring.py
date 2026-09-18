@@ -165,6 +165,13 @@ MANIFEST = {
     "artifacts/stagetokens/pass2_20260918/opus532/guard/tokguard.py":
         (CLASS_TOOL, "#532 pass 2: Opus's proposed stage-token guard, measured on fixtures A-G"),
 
+    # -- #534 stagetokens repair (2026-09-18): the control harness.  TOOLS: it runs the shipped readers
+    #    from a temp copy against a fixture; its outputs are the evidence cited by #534's CHANGELOG block.
+    "artifacts/stagetokens/controls_534/run_controls.py":
+        (CLASS_TOOL, "#534 stage-token controls v3: 49 expectations, 33 mutants (controls_20260918_v3.out)"),
+    "artifacts/stagetokens/controls_534/run_controls_v1.py":
+        (CLASS_TOOL, "#534 stage-token controls v1 as first run (controls_20260918.out), kept with its output"),
+
     # -- #533 landiskaux -------------------------------------------------------------------
     "landisk_aux_probe.py":
         (CLASS_DETECTOR, "#533 landiskaux: landisk wdc aux register mapped at +0x2c (NetBSD/OpenBSD "

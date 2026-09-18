@@ -25,7 +25,9 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LEDGER = os.path.join(HERE, "ledger.json")
+#  GXLEDGER (#534): the render leg of the stage-token controls feeds a FIXTURE ledger, the same
+#  override check_stage_panels.py and check_fable_queue.py already take.
+LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
 #  `--out PATH` renders somewhere else WITHOUT touching the tracked file, so precommit
 #  section Q can regenerate into a temp path and cmp.  Added when it turned out NOTHING
 #  checked that matrix.html was current with ledger.json -- and the published artifact is
@@ -99,23 +101,62 @@ STATE_ORDER = {"active": 0, "held": 1, "pending": 2, "closed": 9, "dropped": 10}
 #  Found 2026-09-18 by asking what the OTHER tools do with a token this file does not know -- the
 #  same question that had just found `check_fable_queue.py` blind to RE_READ.  **Two tools, two
 #  blind spots, one cause: a token was added where it was needed and never mirrored.**
-STAGE_TOKENS = ("[RUN UNDER THE PRE-2026-08-16 POLICY]",
-                "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]",
-                "[NOT A PANEL STAGE: NO PANEL CONVENED]",
-                "[HELD AWAITING SEAT:")
+#  *** CORRECTED 2026-09-18 (#534 F3): the paragraph above says the dashboard "asserted that the
+#  flagship seat had answered" a stage no panel was convened on.  MEASURED FALSE by fable5 on #532
+#  pass 2: before #532, zero token cells rendered as agreement (1415 ok cells before and after) --
+#  ANNOTATION rendered as a held glyph, NOPANEL as the seat-failure glyph, HELD as its own `d'.  The
+#  finding that survives is narrower: the tool was blind to the tokens, so it rendered them by
+#  accident rather than by rule.  And #532's own fix over-reached the other way: filtering HELD
+#  blanked a real held cell, and filtering ANNOTATION rendered an honest annotation as nothing.
+#
+#  #534: the literals and the classification live in stage_tokens.py (R5).  A HELD entry renders as
+#  itself (R1); an entry that is not an answer renders the distinct glyph below WITH its note as the
+#  tooltip, so an exemption can be read, never mistaken for a blank (R1, ANNOTATION included).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stage_tokens as st  # noqa: E402
+
+TOKEN_GLYPH = "∅"   # empty set: this seat's entry here is a record, not an answer
 
 
-def _is_answer(x):
-    note = x.get("note") or ""
-    return not any(t in note for t in STAGE_TOKENS)
+def _latest(xs):
+    """Date-latest entry, ties to the later-recorded one -- never simply list-last: an older answer
+    appended after a newer hold must not hide the hold (codex, #534 pass 2)."""
+    return max(enumerate(xs), key=lambda t: ((t[1].get("date") or ""), t[0]))[1]
+
+
+def _held_cell(h, seat_id):
+    t = e(" — ".join(p for p in (h.get("date"), "awaiting " + seat_id, h.get("note")) if p))
+    return ('<td class="c hold"><span class="wrap" tabindex="0">'
+            f'<span class="g">⏸</span><span class="tip">{t}</span></span></td>')
 
 
 def cell(row, phase, seat):
-    ents = [x for x in row.get("entries", [])
-            if x["seat"] == seat["id"] and x.get("phase") == phase and _is_answer(x)]
+    stage = [x for x in row.get("entries", []) if x.get("phase") == phase]
+    mine = [x for x in stage if x["seat"] == seat["id"]]
+    #  #534 pass 2 (Opus + codex, measured): a hold renders from its SEMANTICS, never from its `d'
+    #  field -- no real HELD entry carries the hold glyph (25 say "HELD", others "--", "N/A", "" or
+    #  nothing), so all of them rendered as `pend', the seat-failure glyph.  And it renders in the
+    #  column of every seat it AWAITS, not only the column it happens to be filed under.
+    if seat["id"] in st.live_holds(stage):
+        return _held_cell(_latest([h for h in stage if seat["id"] in st.held_seats(h)]), seat["id"])
+    ents = [x for x in mine if st.is_answer(x)]
     if not ents:
-        return '<td class="c none"><span class="g">·</span></td>'
-    ent = ents[-1]
+        held = [x for x in mine if st.is_held(x) and not st.held_seats(x)]
+        if held:                         # a marker in no parseable shape: still a hold, never blank
+            return _held_cell(_latest(held), seat["id"])
+        recs = [x for x in mine if not st.is_answer(x)]
+        if not recs:
+            return '<td class="c none"><span class="g">·</span></td>'
+        #  every record's note, not only the last: a later NOTSEAT must not hide an exemption's reason
+        t = " || ".join(" — ".join(p for p in (r.get("date"), r.get("note")) if p) for r in recs)
+        #  a refused exemption must not render as a calm one (kimi, #534 pass 2)
+        refused = st.stage_token_problems(stage) if any(st.exempts_stage(r) for r in recs) else []
+        if refused:
+            t = "EXEMPTION REFUSED BY SECTION H: " + "; ".join(refused) + " || " + t
+        t = e(t)
+        return ('<td class="c tok"><span class="wrap" tabindex="0">'
+                f'<span class="g">{TOKEN_GLYPH}</span><span class="tip">{t}</span></span></td>')
+    ent = _latest(ents)
     d = ent.get("d", "…")
     cls = D_CLASS.get(d, "pend")
     badge = ent.get("b", "")
@@ -123,6 +164,14 @@ def cell(row, phase, seat):
                        BADGE_TIP.get(badge), ent.get("note")) if p]
     if ent.get("ev"):
         tip.append("evidence: " + ent["ev"])
+    #  #534 F2 pass (codex): both of these lived only in the no-answer branch, so an ANSWER cell hid
+    #  them -- a refused RE_READ rendered calm, and a record filed after the seat's answer vanished.
+    if st.exempts_stage(ent):
+        refused = st.stage_token_problems(stage)
+        if refused:
+            tip.insert(0, "EXEMPTION REFUSED BY SECTION H: " + "; ".join(refused))
+    for r in (x for x in mine if not st.is_answer(x) and not st.is_held(x)):
+        tip.append("record: " + " — ".join(p for p in (r.get("date"), r.get("note")) if p))
     t = e(" — ".join(tip))
     b = f'<sup class="b b-{badge}">{badge}</sup>' if badge else ""
     return (f'<td class="c {cls}"><span class="wrap" tabindex="0">'
@@ -319,6 +368,7 @@ tr.ph.st-closed td.c.ok {{ background:color-mix(in srgb, var(--okbg) 55%, var(--
 .c.ok .g {{ color:var(--ok); }} .c.hold .g {{ color:var(--hold); }}
 .c.bad .g {{ color:var(--bad); font-weight:700; }} .c.pend .g {{ color:var(--pend); }}
 .c.none .g {{ color:var(--line); }}
+.c.tok .g {{ color:var(--muted); }}
 .b {{ font-size:9.5px; font-weight:700; margin-left:1px; color:var(--accent);
   border:1px solid var(--accent); border-radius:2px; padding:0 2px; vertical-align:6px; }}
 .b-s {{ color:var(--hold); border-color:var(--hold); }}
@@ -366,6 +416,7 @@ footer code {{ color:var(--ink); }}
   <span><span class="g" style="color:var(--hold)">⏸</span> held / in work</span>
   <span><span class="g" style="color:var(--bad)">✕</span> objection</span>
   <span><span class="g" style="color:var(--pend)">…</span> no answer / seat failure (not agreement)</span>
+  <span><span class="g" style="color:var(--muted)">∅</span> a record, not an answer (exemption or main-loop note; hover for why)</span>
   <span><span class="g" style="color:var(--line)">·</span> no input — input is possible</span>
   <span><sup class="b">A</sup> the author did this review (shown)</span>
   <span><sup class="b b-s">s</sup> a review by the same model family</span>
@@ -405,6 +456,9 @@ still need all nine seats, per round, before that round proceeds.</footer>
 #  tolerance in the comparison: the render is otherwise fully deterministic (two
 #  consecutive runs are byte-identical), so an exact cmp is the right test once the
 #  newline translation is off.
-open(OUT, "w", encoding="utf-8", newline="\n").write(page)
-sys.stdout.write("wrote %s (%d bytes, %d in work + %d closed, %d seats)\n"
-                 % (OUT, os.path.getsize(OUT), len(open_rows), len(closed_rows), len(seats)))
+#  #534 F2 pass (Opus): IMPORTING this module to call cell() rewrote the TRACKED matrix.html -- a
+#  measuring seat did exactly that by accident.  Only a run as a script writes the file.
+if __name__ == "__main__":
+    open(OUT, "w", encoding="utf-8", newline="\n").write(page)
+    sys.stdout.write("wrote %s (%d bytes, %d in work + %d closed, %d seats)\n"
+                     % (OUT, os.path.getsize(OUT), len(open_rows), len(closed_rows), len(seats)))

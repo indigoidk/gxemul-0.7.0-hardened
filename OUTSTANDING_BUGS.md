@@ -21792,3 +21792,24 @@ landisk's wdc aux register moved from the PC-layout `+0x206` to `+0x2c` (NetBSD/
 Rung-4 witness: the gate_crossfamily rig's own boot logs 12 unmapped accesses at `0x1400002c` pre-fix and 0 after.
 Detector `regress/landisk_aux_probe.py` (1/6 -> 6/6), wired in `gate_sh_rounding.sh`. Delivers WDCTL_IDS, does NOT
 implement nIEN. Residuals filed: `wdcrstbitonly` (the handler's RST-bit test is pinned by nothing wired).
+
+### `stagetokens` -> `#534` (repair of `#532`, in work 2026-09-18)
+
+fable5's `#532` pass-2 ruling adopted: one `tools/pipeline/stage_tokens.py` (literals + classifier) imported by
+check_stage_panels, check_fable_queue, gen_dashboard and gen_codex_wall; entry-scoped `[NOT A SEAT ANSWER]`; the
+no-panel exemption refused when a later answer or an uncited panel contradicts it; HELD renders as itself and every
+non-answer as `∅` with its note.  Two false exemptions removed (`asiceventaddr` now HELD fable5/opus5/deepseek;
+`pcc2c040assertrow` reopened and HELD for its four packet-fed seats by owner decision).
+
+### `heldmasked` (MED) -> FIXED IN `#534` — a full seat count hid a live HELD marker from section H
+
+*Re-disposed on `#534` pass 2: filing it was wrong (an L3 of the round that set the owner's hold). Of the three stages, only `pcc2c040assertrow`'s hold was live; the other two were discharged by strictly-later answers, so the reorder reds nothing closed.*
+
+`check_stage_panels.py` tests `len(got) >= n_seats` before `_held`, so `pcc2c040assertrow`'s owner-decision hold reports
+`ok 9/9`.  Three stages today (one CLOSED: `alphatbinegsel` assess).  Reordering is a section-H behaviour change that
+would newly red a closed row: owes a ruling and its own negative controls.
+
+### Owner decisions 2026-09-18, follow-ups owed after `#534` commits
+* `n6` assess RE-OPENED: the 2026-08-30 fable5 adjudication counts as an answer; fire the seven missing seats.
+* FIRE ALL MISSING SEATS on the four stages discharge-awareness exposed: `pcc2c040kill` review (agy; the round shipped as
+  `9fa07fe`) and assess (6 seats), `proberowsubset` assess (6), `lcabadval` research (6).

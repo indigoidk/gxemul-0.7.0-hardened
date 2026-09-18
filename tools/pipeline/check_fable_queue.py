@@ -41,18 +41,11 @@ LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
 QUEUE = os.environ.get("GXQUEUE") or os.path.join(HERE, "fable_queue.md")
 
 FLAGSHIP = "fable5"
-HELD = "[HELD AWAITING SEAT:"
-ANNOTATION = "[RUN UNDER THE PRE-2026-08-16 POLICY]"
-
-#  *** THESE TWO WERE KNOWN TO check_stage_panels.py AND NOT TO THIS FILE, SO A STAGE COULD PASS
-#  SECTION H AND STILL RED SECTION I ON THE SAME LEDGER ENTRY.  Found 2026-09-18 while adding
-#  NOPANEL, by asking what the OTHER checker does with the same tokens. ***  The two gates are
-#  deliberately non-redundant -- H asks whether the seat was FIRED, I asks whether owed flagship
-#  work is WRITTEN DOWN -- but "this stage is not a panel stage at all" is a fact about the
-#  LEDGER ENTRY, not about either question, so both must honour it or they disagree about what
-#  the entry means.  RE_READ has been in the other file since 2026-08-21 and was never mirrored.
-RE_READ = "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]"
-NOPANEL = "[NOT A PANEL STAGE: NO PANEL CONVENED]"
+#  #534 (R5): every stage token is spelled and classified ONCE, in stage_tokens.py.  This file used
+#  to carry its own copies, and it was the second of four tools to be blind to a token the others
+#  knew (RE_READ, until 2026-09-18).  The history of that miss is in stage_tokens.py's docstring.
+sys.path.insert(0, HERE)
+import stage_tokens as st  # noqa: E402
 
 #  Directive dates.  Work that predates a directive cannot be judged by it.
 CUTOFF_FULL_PANEL = "2026-08-16"   # full panel on every stage
@@ -111,12 +104,16 @@ def main(argv):
             phases_seen.add(ph)
             note = ent.get("note", "")
             d = stages.setdefault(ph, {"seats": set(), "newest": "", "held": False,
-                                       "annotated": False})
-            if ANNOTATION in note or RE_READ in note or NOPANEL in note:
+                                       "annotated": False, "all": []})
+            d["all"].append(ent)
+            #  #534: exempting the stage and being an answer are INDEPENDENT (a single-seat
+            #  re-read is both), so they are asked separately -- never as one if/continue.
+            if st.exempts_stage(ent):
                 d["annotated"] = True
-                continue
-            if HELD in note:
+            if st.is_held(ent):
                 d["held"] = True
+                continue
+            if not st.is_answer(ent):
                 continue
             d["seats"].add(ent.get("seat"))
             d["newest"] = max(d["newest"], ent.get("date", ""))
@@ -126,11 +123,17 @@ def main(argv):
                 continue          # flagship-only by directive; rule 3 covers its absence
             if len(d["seats"]) < 2:
                 continue          # a one-seat stage is a FILING, not a stage that ran
-            if FLAGSHIP in d["seats"] or d["annotated"]:
+            if FLAGSHIP in d["seats"]:
+                continue
+            #  #534 (R4): an exemption that a later answer or an uncited panel contradicts does not
+            #  exempt -- the same refusal check_stage_panels.py applies, from the same function.
+            if d["annotated"] and not st.stage_token_problems(d["all"]):
                 continue
             if d["newest"] < CUTOFF_FULL_PANEL:
                 continue          # predates the directive
-            if d["held"]:
+            #  #534 F2 pass (codex): a hold only counts while it is LIVE -- a discharged marker left a
+            #  short, flagship-less stage passing section I as "held and queued"
+            if d["held"] and st.live_holds(d["all"]):
                 holds += 1
                 if rid not in queue:
                     unqueued_holds.append((rid, ph))

@@ -1,0 +1,107 @@
+**VERDICT: RATIFY-WITH-FINDINGS**
+
+---
+
+### Adversarial Source Verification & Claim Audit
+
+Every cited claim from [`brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_124702/brief_sent.md) was verified against the repository source under [`GXEMUL-SEC/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC):
+
+1. **Self-check and literals clean (F12, §5):**
+   - [`tools/pipeline/stage_tokens.py#L222-L256`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L222-L256) defines `_CORES` and an AST visitor in `literal_offenders()`.
+   - Verified execution: `python tools/pipeline/stage_tokens.py --selfcheck` scans 25 files outside `stage_tokens.py` and returns `STAGE_TOKENS_PASS 25 file(s) scanned, 0 literal(s) outside stage_tokens.py` (exit code 0).
+2. **Census derivation (F2, §5):**
+   - Verified execution: `python tools/pipeline/stage_tokens.py --census tools/pipeline/ledger.json` yields:
+     - `HELD: 46 entries, 38 stages`
+     - `ANNOTATION: 13 entries, 13 stages`
+     - `RE_READ: 2 entries, 2 stages`
+     - `NOPANEL: 9 entries, 9 stages`
+     - `NOTSEAT: 17 entries, 9 stages`
+3. **Control harness execution (§1, §7):**
+   - Verified execution of [`regress/artifacts/stagetokens/controls_534/run_controls.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py): `base` is 33/33 green, and all 18 mutants are killed, matching [`controls_20260918_v2.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/controls_20260918_v2.out).
+4. **Real ledger gates pass:**
+   - [`tools/pipeline/check_stage_panels.py#L267`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py#L267): `check_stage_panels: 243 complete, 23 grandfathered, 254 filed-awaiting-panel, 17 HELD, 0 incomplete` -> `STAGE_PANELS_PASS`.
+   - [`tools/pipeline/check_fable_queue.py#L180`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_fable_queue.py#L180): `check_fable_queue: 4 held-and-queued, 0 stages short without a hold, 0 holds not queued, 0 closed rows owing a regress review` -> `FABLE_QUEUE_PASS`.
+5. **Real HELD `d` classification in ledger (F7):**
+   - Verified across all 46 HELD entries in [`tools/pipeline/ledger.json`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json): `Counter({'HELD': 25, None: 6, 'N/A': 6, '--': 5, '': 4})`. Exactly zero carry `⏸`. Without [`tools/pipeline/gen_dashboard.py#L579-L581`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/gen_dashboard.py#L579-L581), all 25 evaluate through `D_CLASS` to `"pend"`.
+6. **Deepseek burn file on `asiceventaddr` (D1):**
+   - Verified [`_scratchpad/panel_20260826_222557/ollama_deepseek.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260826_222557/ollama_deepseek.txt): carries `response: ""`, `done_reason: "length"`, `eval_count: 65536`, and `142,280` characters of thinking. In [`tools/pipeline/ledger.json#L43677-L43749`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json#L43677-L43749) (row `asiceventaddr`), zero deepseek entries are recorded.
+
+---
+
+### Q1. Adjudication of F1..F16 and D1..D2
+
+- **F1:** **REFINE** — Uphold that `t_reread` was a 1-seat filing and `t_reread2` was required; refine because [`run_controls.py#L224`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L224) has a regex prefix defect (`r"^\s+t_reread"` without boundary `\b`) that accidentally matched `"    t_reread2"` in violations, masking the test mechanism.
+- **F2:** **UPHOLD** — Verified: [`run_controls.py#L53`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L53) `t_annot` date `2026-08-10` predated cutoff `2026-08-16`; `t_annot2` on `D1` (`2026-09-10`) properly isolates and kills `M_annot_not_exempt`.
+- **F3:** **UPHOLD** — Verified: [`stage_tokens.py#L65`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L65) uses `HELD in n`; [`run_controls.py#L104-L105`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L104-L105) (`t_heldelse`) kills `M_held_is_answer` on cell rendering.
+- **F4:** **UPHOLD** — Verified: [`stage_tokens.py#L60`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L60) enforces `(not is_held(e))`; [`run_controls.py#L85-L86`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L85-L86) (`t_heldnop`) ensures section I catches unqueued holds.
+- **F5:** **UPHOLD** — Verified: [`stage_tokens.py#L116,L126,L130`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L116-L130); mutants `M_min_not_max`, `M_ge_not_gt`, and `M_first_panel_only` killed by `t_twonop`, `t_sameday`, `t_twopanel`.
+- **F6:** **REFINE** — Uphold that `heldmasked` was an in-round L3 and live hold prioritization in [`check_stage_panels.py#L201`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py#L201) catches `pcc2c040assertrow`; refine because [`check_stage_panels.py#L209`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py#L209) still evaluates raw `info.get("_held")` on closed rows with `< 9` seats, re-tripping `CLOSED-WHILE-HELD` on discharged holds.
+- **F7:** **UPHOLD** — Verified: [`tools/pipeline/gen_dashboard.py#L579-L581`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/gen_dashboard.py#L579-L581) renders `⏸` from `st.live_holds()` across all awaited columns; `_latest()` uses date-max with tie break.
+- **F8:** **REFINE** — Uphold the code split between clause (i) (universal) and clause (ii) (NOPANEL-only) in [`stage_tokens.py#L201-L218`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L201-L218); overturn the ledger edit on `n6 assess` (see Q2).
+- **F9:** **UPHOLD** — Verified: [`stage_tokens.py#L60`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L60) `NOTSEAT not in n`; `M_notseat_not_dominant` killed by `t_notseatnop` ([`run_controls.py#L101`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L101)).
+- **F10:** **UPHOLD** — Verified: [`tools/pipeline/gen_dashboard.py#L596`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/gen_dashboard.py#L596) prefixes `EXEMPTION REFUSED BY SECTION H: `, killed by `M_dash_hides_refusal`.
+- **F11:** **UPHOLD** — Verified: [`tools/pipeline/gen_dashboard.py#L592`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/gen_dashboard.py#L592) concatenates all record notes with `" || "`.
+- **F12:** **UPHOLD** — Verified: [`tools/pipeline/stage_tokens.py#L222-L224`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L222-L224) core phrase matching kills `M_partial_literal`; explicit `+` concatenation limitation disclosed.
+- **F13:** **UPHOLD** — Verified: [`tools/pipeline/gen_codex_wall.py#L494-L511`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/gen_codex_wall.py#L494-L511) accepts `GXLEDGER`/`GXQUEUE` overrides and uses `st.HELD_SEATS`; killed by `M_wall_notseat`.
+- **F14:** **UPHOLD** — Verified: [`tools/pipeline/check_fix_seats.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_fix_seats.py) is an untracked draft, imports `st.is_answer`, and its control is owed upon shipping.
+- **F15:** **UPHOLD** — Verified: [`run_controls.py#L196,L275`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L196-L275) returns `None` on count != 1 and flags `WRONG`.
+- **F16:** **UPHOLD** — Verified: recorded verbatim in [`CHANGELOG.md#L54-L55`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L54-L55).
+- **D1:** **UPHOLD** — Verified: the deepseek response in [`_scratchpad/panel_20260826_222557/ollama_deepseek.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260826_222557/ollama_deepseek.txt) is completely empty (`response: ""`, length exhaustion). The ledger records no entry from deepseek on `asiceventaddr`. The hold stands.
+- **D2:** **UPHOLD** — Verified: six seats correctly recognized `heldmasked` as an L3 debt. Leaving H blind to owner holds while rows can close green is a gate defect.
+
+---
+
+### Q2. WHICH OF MY ACCEPTED DISPOSITIONS IS WRONG?
+
+**F8's disposition tagging `n6 assess` with `RE_READ` is WRONG.**
+
+1. **Semantic Contradiction:** `n6 assess` in [`tools/pipeline/ledger.json`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json) already had two answering seats (`opus5` and `fable5`, dated 2026-08-15) and a grandfathered exemption (`[RUN UNDER THE PRE-2026-08-16 POLICY]`, dated 2026-08-16). Slapping `[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]` onto `fable5`'s subsequent 2026-08-30 adjudication violates the core definition of `RE_READ` ("SINGLE-SEAT RE-READ"). It repeats the exact fault condemned in [`check_stage_panels.py#L98-L103`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py#L98-L103) ("reaching for the nearest token to turn a gate green").
+2. **Correct Remedy:** The 2026-08-30 entry was an adjudication note, not a seat answer in a panel. In [`stage_tokens.py#L208`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L208):
+   ```python
+   for e in entries:
+       if not is_answer(e) or e in tok:
+           continue
+   ```
+   Tagging entry 4 as `[NOT A SEAT ANSWER]` makes `st.is_answer(e)` return `False`. It is then skipped by clause (i) of `stage_token_problems()`, correctly preserving the 2026-08-16 stage exemption without fabricating a "single-seat re-read" on a multi-seat stage.
+
+---
+
+### Q3. Floor Breach on Repaired Composite (Smallest Edit Escaping 33/33 + H2)
+
+**Edit:** In [`tools/pipeline/stage_tokens.py#L202`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L202):
+```python
+# Existing:
+nop = [e for e in tok if NOPANEL in _note(e)]
+# Mutant edit:
+nop = tok
+```
+*(Net change: 9 characters replacing 44 characters)*
+
+- **Defect:** Extends clause (ii) (uncited panel directory check) to bind `ANNOTATION` and `RE_READ` entries. On the real ledger, this misclassifies and refuses 7 legacy stages that never owed panel directory citations.
+- **Escape Proof:** Verified experimentally against [`run_controls.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py): executes **33/33 green**, and `stage_tokens.py --selfcheck` is **100% clean**. The 33 expectations pass because none of the answering entries in `t_annot`, `t_annot2`, `t_reread`, or `t_reread2` cite a panel directory in `ev` (`ev=""` across all answers in those fixture rows).
+- **Fixture row that must change:** [`run_controls.py#L71-L72`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L71-L72) (`t_annot2`): at least one answering seat must cite a panel directory in its `ev` (e.g. `ev="_scratchpad/panel_20260810_120000/a"`), which the ANNOTATION note does not name.
+
+*(Secondary 8-character escape: deleting `.lower()` in [`stage_tokens.py#L76`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py#L76) also scores 33/33 green because no fixture row tests an uppercase seat name in a hold).*
+
+---
+
+### Q4. What Did All Nine Seats Miss?
+
+1. **Regex Prefix False-Pass in Control Harness:**
+   In [`run_controls.py#L224`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L224):
+   `("CSP t_reread one-seat filing", not has(csp, r"^\s+t_reread"))`
+   `r"^\s+t_reread"` lacks a word boundary (`\b` or `\s`). When `t_reread2` fails and outputs `    t_reread2      open    review    2/9   missing: ...`, `r"^\s+t_reread"` matches `"    t_reread2"`. All nine seats saw `CSP t_reread one-seat filing` in the red list under `M_reread_not_exempt` and assumed `t_reread` was failing, missing that `t_reread` had never failed.
+2. **`check_fable_queue.py` Was Never Taught `live_holds()`:**
+   While [`check_stage_panels.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py) and [`gen_dashboard.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/gen_dashboard.py) were updated to use `st.live_holds()`, [`check_fable_queue.py#L113-L115`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_fable_queue.py#L113-L115) still sets `d["held"] = True` on ANY `st.is_held(ent)`, even fully discharged holds.
+3. **Discharged Hold False-Positive on Short Closed Rows:**
+   In [`check_stage_panels.py#L209`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py#L209):
+   `if info.get("_held"): if row.get("state") == "closed": violations.append(...)`
+   If a closed row has `< 9` seats (e.g., an exempt stage) and carried a historical hold that was discharged, it bypasses line 201 (`len(got) >= n_seats`) and trips `CLOSED-WHILE-HELD` on line 209 because line 209 checks `_held`, not `live`.
+4. **Complete Absence of Multi-Seat Hold Controls:**
+   Every hold fixture in [`run_controls.py#L48-L106`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/stagetokens/controls_534/run_controls.py#L48-L106) (`t_held`, `t_heldnop`, `t_fullhold`, `t_fullclosed`, `t_discharged`, `t_samedayhold`, `t_heldelse`) tests only a single seat. The comma-separated parsing in `HELD_SEATS` has zero fixture coverage for the multi-seat holds used on `pcc2c040assertrow` and `asiceventaddr`.
+
+---
+
+**VERDICT: GO-WITH-CHANGES**
+
+*(Required changes: (1) Re-tag `n6 assess` entry 4 as `NOTSEAT` instead of `RE_READ`; (2) Fix `check_stage_panels.py:209` to evaluate `live` instead of `info.get("_held")`; (3) Add word boundary `\b` to `r"^\s+t_reread\b"` in `run_controls.py:224`; (4) Add an `ev` panel citation to `t_annot2` to kill `nop = tok`).*

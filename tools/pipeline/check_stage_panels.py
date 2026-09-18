@@ -26,6 +26,9 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stage_tokens as st   # #534: the ONE place a token is spelled or classified
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 #  Overridable so controls run against COPIES.  Added 2026-08-17 after a negative control
 #  for the CLOSED-WHILE-HELD clause silently tested NOTHING: it wrote a mutated ledger to a
@@ -63,7 +66,7 @@ STAGES = ("assess", "research", "review")
 
 #  An annotation entry is not a review.  It exists to say WHY a stage is short, and it must
 #  not be counted as one of the seats that answered -- otherwise marking a gap would close it.
-ANNOTATION = "[RUN UNDER THE PRE-2026-08-16 POLICY]"
+ANNOTATION = st.ANNOTATION      # #534: spelled once, in stage_tokens.py
 
 #  A SECOND, DIFFERENT EXEMPTION, and it is deliberately not folded into the first.
 #
@@ -80,7 +83,7 @@ ANNOTATION = "[RUN UNDER THE PRE-2026-08-16 POLICY]"
 #
 #  This is a real recurring category rather than a one-off: any pass that sweeps filed rows can
 #  promote a filing into a short stage without anyone deciding to.
-RE_READ = "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]"
+RE_READ = st.RE_READ      # #534: spelled once, in stage_tokens.py
 
 #  A THIRD EXEMPTION, 2026-09-18, and like the second it exists because neither older token was
 #  TRUE of the situation -- which is the only reason this file ever gains a token.
@@ -123,7 +126,7 @@ RE_READ = "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]"
 #  ship-order ADJUDICATION -- real work on that very row, and not a panel seat answer at all.
 #  The checkable claim both gates need is only ever "no panel was convened on this stage";
 #  everything else is provenance, and provenance belongs in prose a reader can check.**
-NOPANEL = "[NOT A PANEL STAGE: NO PANEL CONVENED]"
+NOPANEL = st.NOPANEL      # #534: spelled once, in stage_tokens.py
 
 #  *** A STAGE DELIBERATELY HELD FOR A NAMED SEAT IS NOT A STAGE THAT MOVED ON. ***
 #
@@ -141,7 +144,7 @@ NOPANEL = "[NOT A PANEL STAGE: NO PANEL CONVENED]"
 #  row is a HARD violation.  You may wait for a seat; you may not close a round while waiting
 #  for one.  Without that clause "HELD" would be a way to mark any gap and walk away, which is
 #  worse than the conflation it replaces.
-HELD = "[HELD AWAITING SEAT:"
+HELD = st.HELD      # #534: spelled once, in stage_tokens.py
 
 
 def main(argv):
@@ -162,11 +165,10 @@ def main(argv):
     for row in ledger["rows"]:
         by_stage = {}
         for ent in row.get("entries", []):
-            if (ANNOTATION in ent.get("note", "") or RE_READ in ent.get("note", "")
-                    or NOPANEL in ent.get("note", "")):
-                by_stage.setdefault(ent.get("phase"), {})["_annotated"] = True
-                continue
-            if HELD in ent.get("note", ""):
+            by_stage.setdefault(ent.get("phase"), {}).setdefault("_all", []).append(ent)
+            if st.exempts_stage(ent):
+                by_stage[ent.get("phase")]["_annotated"] = True
+            if st.is_held(ent):
                 d = by_stage.setdefault(ent.get("phase"), {})
                 #  A LIST, NOT A SLOT.  This assigned a single value until 2026-08-17, so a
                 #  stage held for TWO seats kept only the LAST marker and reported one.
@@ -179,16 +181,35 @@ def main(argv):
                 #  seat early, and the missing seat's blank then reads as agreement.
                 d.setdefault("_held", []).append(ent.get("note", ""))
                 continue
+            if not st.is_answer(ent):
+                continue           # ANNOTATION / NOPANEL / NOTSEAT entries are not seat answers
             d = by_stage.setdefault(ent.get("phase"), {})
             d.setdefault("seats", set()).add(ent.get("seat"))
             d["newest"] = max(d.get("newest", ""), ent.get("date", ""))
 
         for stage in STAGES:
             info = by_stage.get(stage)
-            if not info or "seats" not in info:
+            if not info:
                 continue                       # stage never ran; not this check's business
+            if "seats" not in info:
+                #  #534 F2 pass (codex, Opus): a stage whose only entry is a LIVE hold was skipped
+                #  here, before any hold test, so a CLOSED row could carry one with H green.
+                live0 = st.live_holds(info.get("_all", []))
+                if live0 and row.get("state") == "closed":
+                    violations.append((row["id"], "CLOSED-WHILE-HELD", stage, 0,
+                                       ["a round may not close while a stage awaits a seat"]))
+                elif live0:
+                    held.append((row["id"], stage, 0, ", ".join(live0), "",
+                                 (row.get("hold_question") or "").strip()))
+                continue
             got, newest = info["seats"], info.get("newest", "")
-            if len(got) >= n_seats:
+            #  #534 (heldmasked, an L3 of this round per its pass 2): a LIVE hold -- a named seat not
+            #  answered in this stage at a strictly later date -- beats a full count.  Before this,
+            #  the count test ran first, so an owner-decision hold over nine misdirected answers
+            #  reported `ok 9/9` and the row could be CLOSED with H, I and the wall all green
+            #  (Opus, measured).  A DISCHARGED marker does not hold a full stage.
+            live = st.live_holds(info.get("_all", []))
+            if len(got) >= n_seats and not live:
                 complete += 1
                 if listing:
                     print("  ok    %-14s %-9s %d/%d" % (row["id"], stage, len(got), n_seats))
@@ -196,24 +217,30 @@ def main(argv):
             #  HELD is checked BEFORE the one-seat "filed" shortcut, so a stage that is
             #  genuinely waiting on a named seat is reported as waiting even if only one
             #  other seat has answered so far.
-            if info.get("_held"):
+            #  ... and ONLY a live hold holds a SHORT stage either.  A marker every named seat has
+            #  since answered is history: treating it as a hold printed "awaiting: fable5" over
+            #  pcc2c040kill's 8/9 review whose real gap is agy (codex + Opus, #534 F2 pass).
+            if live:
                 if row.get("state") == "closed":
                     violations.append((row["id"], "CLOSED-WHILE-HELD", stage, len(got),
                                        ["a round may not close while a stage awaits a seat"]))
                 else:
                     #  Every marker, de-duplicated, order preserved -- so two holds report
                     #  two seats and the operator sees the whole debt.
-                    names = []
-                    for mark in info["_held"]:
-                        nm = mark.split(HELD, 1)[1].split("]", 1)[0].strip()
-                        if nm and nm not in names:
-                            names.append(nm)
+                    names = list(live)
                     held.append((row["id"], stage, len(got), ", ".join(names),
                                      newest, (row.get("hold_question") or "").strip()))
                 continue
             if len(got) == 1:
                 filed.append((row["id"], stage))
                 continue
+            if info.get("_annotated"):
+                #  #534: an exemption is REFUSED when a later answer or an uncited panel shows it
+                #  does not describe the stage as it now stands (stage_tokens.stage_token_problems).
+                probs = st.stage_token_problems(info.get("_all", []))
+                if probs:
+                    violations.append((row["id"], "TOKEN-REFUSED", stage, len(got), probs))
+                    continue
             if newest < CUTOFF or info.get("_annotated"):
                 grandfathered += 1
                 if listing:

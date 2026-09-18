@@ -1,3 +1,116 @@
+# `#534` (stagetokens repair): four tools read one ledger field, and each had its own copy of what it meant
+
+**`#532` shipped without a pass 2.  The pass then ran and did not ratify it** (fable5, `claude-fable-5-1`,
+`regress/artifacts/stagetokens/pass2_20260918/fable5_adjudication_20260918.md`; nine seats in
+`panel_20260918_083716` plus the Opus seat).  This round is the repair it adopted, and it is harness-only: no
+`src/` file changes.  Witness `harness:` -- the controls below fail on mutants of the tools themselves.
+
+## THE CAUSE, STATED ONCE
+
+Four readers of `entries[].note` -- `check_stage_panels.py`, `check_fable_queue.py`, `gen_dashboard.py`,
+`check_fix_seats.py` -- each carried their own copy of the stage tokens.  Every mis-classification measured in
+`#532` and its pass 2 was one copy not mirroring another.  **So the literals AND the classification now live in
+`tools/pipeline/stage_tokens.py`**, and precommit section **H2** refuses a token spelled as a code string anywhere
+else in `tools/pipeline/` (an AST walk: docstrings and comments describe tokens, and are exempt).
+
+**AN ENTRY HAS TWO INDEPENDENT PROPERTIES** -- *is it an answer?* and *does it exempt its whole stage?* -- and
+`#532`'s code asked them as one `if ... continue`.  A single-seat re-read is BOTH; the new entry-scoped
+`[NOT A SEAT ANSWER]` is NEITHER.
+
+## WHAT CHANGED, BY RULING
+
+* **R2 -- entry-scoped marker.**  Fourteen entries that meant only *"this entry is not a seat answer"* carried the
+  STAGE-scoped no-panel token, which would have pre-silenced any panel later recorded on those stages.  Converted.
+* **R3 / F1 -- two exemptions were FALSE.**  `asiceventaddr`'s panel was pass 2 on its own commit `9ca9cca` (ran
+  6/9: now HELD for fable5, opus5 and deepseek, whose answer there is a thinking burn).  `pcc2c040assertrow`'s
+  panel WAS convened on it; fable5 recommended filing the re-fire, **the owner chose REOPEN AND HOLD**, so its four
+  packet-fed seats are HELD with the question they are held for.
+* **R4 -- the guard.**  A no-panel exemption is REFUSED when a tallied answer is dated after it, or cites a panel
+  dir the exemption does not name.  Wired into sections H **and** I.  *(First shipped scoped to NOPANEL alone; pass 2
+  showed only the uncited-panel clause is retroactive, so the later-answer clause now binds every exemption -- below.)*
+* **R1 -- the dashboard.**  Every non-answer renders `∅` with its note as tooltip.  *(The first form of "HELD renders as
+  itself" was measured FALSE on the real ledger by pass 2 and rebuilt -- below.)*
+* **F2 -- one deriver.**  `stage_tokens.py --census [ledger]`: 0 no-panel stages at `686d179~1`, 13 at `686d179`,
+  **9 after this round**, all nine honest.
+* **F3 -- corrected in `#532`'s own block**: no cell was fabricated (1,415 `ok` cells before and after), and its
+  `25,154` reproduces at no render boundary.
+
+## CONTROLS -- classification, not exit status
+
+`regress/artifacts/stagetokens/controls_534/run_controls.py` runs the shipped readers from a COPY against a
+fixture ledger.  First table **base 16/16, five mutants killed** (`controls_20260918.out`, run by
+`run_controls_v1.py`); after pass 2 **base 33/33, eighteen mutants killed** (`controls_20260918_v2.out`).  codex's pass-2 point is why
+it checks classification: its RE_READ mutant passes every exit-status control and dies only on the RENDER leg.
+H2's literal check reds on all four pre-`#534` copies of the tools and stays green on a docstring-only fixture.
+
+## PASS 2 DID NOT RATIFY IT, AND EVERY FINDING WAS REPAIRED IN-ROUND (L1: nothing had shipped)
+
+`panel_20260918_122908` + the Opus seat: DO NOT RATIFY from codex, grok, deepseek and Opus; RATIFY-WITH-FINDINGS
+from agy, glm, minimax and kimi (substitute).  **Opus MEASURED 13 of 13 mutants passing all 16 controls and H2.**
+The table above was green because its fixture was built from the rulings, and the rulings' readers took shortcuts
+(a one-seat filing never reaches the exemption test; a pre-cutoff date grandfathers before it) that no row reached.
+
+* **`heldmasked` WAS AN L3, NOT A FILING** (six seats; Opus closed `pcc2c040assertrow` in a copy and H, I and the
+  wall stayed green).  `stage_tokens.live_holds()` applies the carrier's strictly-later discharge rule; section H
+  now tests a LIVE hold before the count.  Of "three stages", one hold was live and two were discharged -- so the
+  closed row a reorder was said to red does not red.
+* **R1 WAS FALSE ON THE REAL LEDGER.**  Cells classified by `d`, and no real HELD entry carries the hold glyph: all
+  25 real held cells rendered as seat failures.  Holds now render from `live_holds`, in EVERY AWAITED seat's column,
+  latest-by-date rather than list-last; a refused exemption says so in its tooltip; record tooltips show every note.
+* **R4's scope was drawn on the wrong line.**  Clause (i) (a later answer) now binds every exemption token; only
+  clause (ii) (an uncited panel) stays NOPANEL-only, because only (ii) is retroactive.  One real stage then
+  refused -- `n6` assess, whose 2026-08-30 entry is a single-seat reading adjudication.  *It was tagged a re-read here;
+  that tag was REVERTED in the adjudication pass below as self-dealing, and the owner then re-opened the stage.*
+* **NOTSEAT now DOMINATES** an exemption token in the same entry, as its docstring already promised.  HELD likewise
+  -- a behaviour flip from the pre-#534 readers, which tested exemptions first (kimi).
+* **H2 matches each token's core phrase**, so a fragment spelling (`"PRE-2026-08-16 POLICY"`) is refused.
+  *(A token assembled by explicit `+` escaped it -- disclosed here first, then FIXED in the adjudication pass below.)*
+* **deepseek's hold on `asiceventaddr` STANDS** on measurement (response empty, `done_reason` length,
+  `eval_count` 65536) -- the deepseek seat's own "overreach" reading was answered by the file.
+* **The controls: base 33/33, 18 mutants all killed** (`controls_20260918_v2.out`; v1 kept beside it with its
+  script).  One mutant was RETIRED AS EQUIVALENT once NOTSEAT dominance made it unobservable -- a result, recorded.
+  And the driver itself scored a mutant whose find-text was missing as KILLED; it now scores it WRONG, controlled.
+* `gen_codex_wall.py` takes `st.HELD_SEATS` (one parser for the wall and the live-hold rule) and GXLEDGER/GXQUEUE.
+
+## THE ADJUDICATION PASS (`panel_20260918_124702` + Opus) FOUND THE REPAIR HALF-APPLIED -- REPAIRED AGAIN (L1)
+
+DO NOT RATIFY from codex, grok and Opus; RATIFY-WITH-FINDINGS from agy, glm, deepseek, minimax, kimi (substitute).
+**Opus MEASURED eight more escapes against the v2 controls; codex found a one-character one** (split held seats on
+`;`, 33/33) -- because every fixture hold named exactly ONE seat while the owner's live hold names four.
+
+* **Discharge applied everywhere.**  The live-hold rule qualified only the FULL-count shortcut; short stages still read
+  answered markers as holds, so `pcc2c040kill` review printed *"awaiting fable5"* (answered 09-09) over its real gap,
+  **agy**.  H, I and the wall now use `live_holds()` alike.  Four real stages then reddened -- `pcc2c040kill` assess and
+  review, `proberowsubset` assess, `lcabadval` research -- and each now carries a hold naming the seats ACTUALLY missing.
+* **A closed row cannot hide a hold behind zero answers or a malformed marker** (a hold that names no parseable seat
+  holds until rewritten).  Seat names compare case-insensitively; the parser is case-sensitive like `is_held` (zero
+  non-canonical markers in the ledger).
+* **Clause (i) skips later answers that themselves predate the full-panel directive** (kimi): a pre-policy stage stays
+  grandfathered.
+* **`n6`: MY RE_READ TAG IS REVERTED.**  Five of seven seats rejected or could not settle it -- grok: *"the author
+  silencing the one real refusal"*.  The stage is HELD for fable5 with the three-way question; the owner's flagship
+  seat rules, not the rule's author.
+* The dashboard's refused-exemption warning and later-record notes now reach ANSWER cells too; the literal check folds
+  explicit `+` concatenation (so F12's disclosure is withdrawn -- it is fixed); `gen_dashboard.py` no longer writes the
+  tracked `matrix.html` when imported (the Opus seat rewrote it by importing it; regenerated before commit).
+* **Controls v3: base 49/49, 33 mutants all killed** (`controls_20260918_v3.out`, after the last seat's `t_selflate`).  H2 is now asserted to flag EXACTLY a
+  planted offender file, not merely to pass.  A `t_reread` regex that also matched `t_reread2` was mis-attributing a kill.
+
+## THE LAST SEAT, AND TWO OWNER DECISIONS
+
+**fable5 (`claude-fable-5-1`; badge `s`, same family as the author): RATIFY-WITH-FINDINGS, nothing at L2.**  It measured
+one more escape -- clause (i) ignoring a later answer by the seat that WROTE the exemption scored 48/48 + H2 and would
+have flipped `n6`, the one real disputed stage; every `*late` fixture used kimi.  Rowed as `t_selflate` (L1).  Four
+further edits pass with zero real-ledger effect and are DISCLOSED in the controls' contract.  Two L4s corrected: the
+re-read tag sentence above, and `stage_tokens.py` counting `check_fix_seats.py` among the tools it now covers.
+
+It ruled `n6`'s 2026-08-30 entry an ADJUDICATION RECORD.  **The owner chose otherwise: the entry is a real answer, the
+assess stage is re-opened, and it owes its seven missing seats** -- now held for them by name.  And for the four gaps
+discharge-awareness exposed (`pcc2c040kill` review 8/9 missing agy -- a SHIPPED round -- and three 3/9 stages), **the
+owner chose FIRE ALL MISSING SEATS** over Fable's fire-one-hold-three.  Both are follow-up steps after this commit.
+
+`check_fix_seats.py` was rewired too, but it is another round's untracked draft and does not ship here.
+
 # `#533` (landiskaux): landisk's wdc aux register sat at the PC-layout `+0x206`, so the kernel's soft reset landed on unmapped memory
 
 **One `case`, and the address is a primary-source constant rather than a derivation.** `dev_wdc.c`'s
@@ -139,7 +252,7 @@ ask **was this panel convened ON THIS ROW?**
 
 | row | recorded seats | verdict |
 |---|---|---|
-| `asiceventaddr` | **8** | NOT a stage — all eight cite `panel_20260826_222557`, a pass 2 on a COMMENT-ONLY commit to a vendored header |
+| `asiceventaddr` | **8** | NOT a stage — all eight cite `panel_20260826_222557`, a pass 2 on a COMMENT-ONLY commit to a vendored header. ***FALSE — corrected by `#534` (fable5 F1): that commit, `9ca9cca`, IS this row's own commit, so the stage RAN 6/9. It is now HELD for fable5, opus5 and deepseek (a thinking burn in that panel).*** |
 | `diskimagesign`, `pcc2genctlc040alias`, `sh4dmacie` | 8 each | REAL stages — they share `panel_20260917_100431`, whose brief IS convened on them |
 | `pcc2c040assertrow`, `pcc2c040returnmutant` | 8 / 2 | NOT subjects — that brief's five `### commit` headings do not include them; they are SIBLING rows of the `#512` work |
 
@@ -190,13 +303,23 @@ would close it.
 Controlled by rendering with the pre-fix generator: it emits **25,154 more characters**, and those
 are exactly the fabricated cells.
 
+> ### *** BOTH HALVES OF THAT CONTROL WERE WRONG.  Corrected by `#534` (fable5, `#532` pass 2, F3). ***
+>
+> **No cell was fabricated.** Measured on the pre-fix generator: zero token entries rendered as agreement --
+> 1,415 `ok` cells before the change and 1,415 after.  ANNOTATION rendered as the held glyph, NOPANEL as the
+> seat-failure glyph, HELD as its own `d`.  The tool was blind to the tokens and rendered them by ACCIDENT, which
+> is a real defect; "the dashboard asserted the flagship had answered" is not what it did.  **And `25,154`
+> reproduces nowhere**: by render boundary the delta is 30,242 / 22,589 / 28,385 bytes -- a frozen number.  The
+> fix itself then over-reached: filtering HELD blanked real held cells and filtering ANNOTATION blanked honest
+> annotations.  `#534` renders HELD as itself and every non-answer as a distinct `∅` with its note as tooltip.
+
 **One cause for both: a token was added where it was needed and never mirrored.** The cheap
 question that found them is the one worth carrying — *before relying on a token, ask what every
 OTHER tool that reads this field does with it.*
 
 ## WHAT WAS CLEARED, AND WHAT REMAINS
 
-19 -> 7 in section H, 16 -> 7 in section I. Nine stages annotated; six closed rows named
+19 -> 7 in section H, 16 -> 7 in section I. Nine stages annotated *(`#534` F2: the deriver `stage_tokens.py --census` gives **13 NOPANEL entries / 13 stages at `686d179`** and 0 at its parent; "nine" above and "eleven of the twelve" earlier were hand counts of one population, and of those 13, TWO were FALSE (`asiceventaddr`, `pcc2c040assertrow` -- `#534` F1/R3) and TWO were entry-scoped records (`lcalenzerodrop`, `stagetokens` -- `#534` R2); the other entry-scoped uses were written after `686d179`.  Listed by `git show 686d179:tools/pipeline/ledger.json`, not counted by hand)*; six closed rows named
 individually in `fable_queue.md` for their flagship-only `regress` review (a prose mention does
 not count — an id counts only where it HEADS an entry); two stages held-and-queued in one action,
 per the directive that holding and queueing are one action and not two.
