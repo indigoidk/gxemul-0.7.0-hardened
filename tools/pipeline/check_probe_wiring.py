@@ -169,6 +169,17 @@ MANIFEST = {
     "artifacts/lcalenzerodrop/opus_getenv_20260918/opus_lcalen8_getenv_probe.py":
         (CLASS_WITNESS, "lcalenzerodrop: the PROM GETENV producer reaches lca_isa at len > 8 -- base puts s[3] on the "
                         "SCR at port 0x3ff, `&& len <= 8' leaves the preset (opus_lcalen8_getenv_20260918.out)"),
+    #  #530 PASS 2 (closing pass 7): the measuring seat's instrument and its two scripts.  CLASSED WITNESS for the
+    #  probe, and not to dodge a gate: it is the shipped width row GENERALISED to ten wide cells, run once to MEASURE
+    #  that every variant the shipped row misses is reachable and observable at another cell (RESULTS.txt, 102 legs).
+    #  Whether any of those cells becomes a gate row is the D1 question held for fable5 on `lcaisalane`.
+    "artifacts/lcalenzerodrop/opus_p2_20260918/lca_widecell_probe.py":
+        (CLASS_WITNESS, "#530 pass 2: the width row generalised to 10 wide cells (C=16/64/256/1024, lanes 0-3, k=16, "
+                        "a two-chunk write); every escape of the shipped row killed at another reachable cell"),
+    "artifacts/lcalenzerodrop/opus_p2_20260918/scripts/mkvariants.py":
+        (CLASS_TOOL, "#530 pass 2: generates the one-edit variants from the 8bd97e4 blob, each an exact-once replacement"),
+    "artifacts/lcalenzerodrop/opus_p2_20260918/scripts/summarize.py":
+        (CLASS_TOOL, "#530 pass 2: tabulates score and getenv value per (cell, binary); refuses a leg with no sentinel"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/check_pred.py":
         (CLASS_TOOL, "closing pass 5: checks each mutant's score against its written prediction"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5.py":

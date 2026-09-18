@@ -1,0 +1,432 @@
+# `#530` PASS 2 ON 8bd97e4 -- THE WIDTH ROW `regress/lca_widewrite_probe.py` (closing pass 7)
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly.  **Check the premises, not just the derivations.**  Where I state something as
+fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/` AT COMMIT `8bd97e4`.**  There are THREE
+pristine-2021-upstream copies of GXemul under the project root (`./src/` and two under
+`_archive/audit-results-*/builds/`).  They are NOT this fork.  If your line numbers
+disagree with mine by hundreds you are reading one of them — say so rather than
+reconciling.
+
+**If you cannot read files that is expected** — every fact you need is inlined.  Name any
+premise you cannot settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim — an index range, an offset, a count of
+reachable addresses — ENUMERATE it rather than reasoning about it.**  Walk the values.
+A derivation that skips one masking line reads exactly like a correct one.
+
+**And ENUMERATE THE RIGHT DOMAIN — a domain is itself a premise.**  Ask what the PRODUCER of
+these values can actually emit before you walk them.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+**Seats that read files: scope your reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.
+Do not read `GXEMUL-SEC/regress/artifacts/` or `GXEMUL-SEC/tools/pipeline/ledger.json`** --
+everything this pass needs from them is inlined below.  To read the committed version of a
+file, use `git -C GXEMUL-SEC show 8bd97e4:<path>`.
+
+---
+
+## 0. THE VERDICT LINE I AM ASKING FOR
+
+    VERDICT: CLOSES | DOES NOT CLOSE -- <one line naming the deciding item>
+
+`CLOSES` means: this pass found ZERO floor breaches surviving your own adjudication, and you can
+state the denominator (which cells and which variant shapes you checked).  A bare "no findings"
+without a denominator is not a closing answer.
+
+## 1. WHAT SHIPPED, AND WHAT THIS PASS IS FOR
+
+`#530` removed a terminating call from `DEVICE_ACCESS(lca_isa)` in `src/devices/dev_lca.c`
+(the DEC 21066 "LCA" chipset's sparse ISA I/O window on the Alpha `alphabook1` machine).  The old
+code computed `ofs = relative_addr & 3` and, when `ofs > len`, printed a message and ended the
+emulator process -- so an ordinary guest BYTE access to an ISA port that is 2 or 3 mod 4 ended
+the emulator.  The fix, and its 352-row detector `regress/lca_isalane_probe.py`, went through six
+review passes before this one.
+
+**Closing pass 6's flagship ruling (2026-09-17) found the FIX sound and found ONE detector gap:**
+a width-conditioned variant, `if (writeflag == MEM_WRITE && len <= 8)`, went undetected by all
+352 rows, because that probe is driven by guest INSTRUCTIONS and the widest Alpha store (STQ) is
+8 bytes -- no instruction-driven row can express `len > 8`.  The ruling pre-committed the
+disposition before anything was measured:
+
+> *"escapes AND len>8 is guest-reachable -> L2, add a len>8 row in-round"* ... *"`&byte, len`
+> diverges WITHIN the probed width set (catchable, so a contract line suffices); codex's
+> `len<=8` diverges only OUTSIDE it (uncatchable, so it cannot be discharged that way)."*
+
+`len > 8` was shown guest-reachable (section 4), so a row was built: **`regress/lca_widewrite_probe.py`
+-- THE SUBJECT OF THIS PASS.**  It shipped in 8bd97e4 together with the fix.
+
+**Scope, per this project's repair-chain rule:** review EFFORT is on the new row; the FLOOR
+question -- *is there a variant, within the fix's own dependency set, that no shipped row
+distinguishes from the shipped code?* -- is asked of the COMPOSITE detector (both probes).
+
+### The round's files (`git show --format= --numstat 8bd97e4`, artifacts excluded)
+
+    +/-      file                                  in this packet
+    17/7     src/devices/dev_lca.c                 INLINED (section 3, the whole function)
+    194/0    regress/lca_widewrite_probe.py        INLINED in part (section 5: contract + the session); the
+                                                   omitted part is a pty harness copied from the parent probe
+    1382/0   regress/lca_isalane_probe.py          SUMMARIZED (the 352-row parent); its 12-line header note
+                                                   about the width row is INLINED in section 5
+    148/0    CHANGELOG.md                          NOT SHOWN -- the round's record; its claims are in this brief
+    20/0     OUTSTANDING_BUGS.md                   NOT SHOWN -- records only
+    206/0    tools/pipeline/check_probe_wiring.py  SUMMARIZED -- classifies the new file as a DETECTOR with a
+                                                   dated exemption (no gate in the tree runs an Alpha machine)
+    31/4     tools/pipeline/ledger.json            NOT SHOWN -- records only
+    5/5      tools/pipeline/matrix.html            NOT SHOWN -- generated
+    1/0      regress/pass2_ledger.tsv              NOT SHOWN -- ANOTHER round's receipt line (#535), carried by agreement
+    1144 files under regress/artifacts/lcaisalane/ and regress/artifacts/lcalenzerodrop/
+                                                   NOT SHOWN -- the logs of passes 1-6 and of this row's measurement
+
+## 2. THE RULES THIS PASS APPLIES (inlined, because four seats cannot read them: glm, deepseek, minimax, and kimi-k3:cloud when it stands in for the kimi CLI)
+
+* **Floor clause (d) -- the repair must be observable.**  A detector must distinguish the shipped
+  fix from a variant that KEEPS the guard but nulls its effect: a predicate weakened or qualified
+  (`if (X)` -> `if (X && Y)`), a mask narrowed, a bound relaxed.
+* **Its bound (DEPENDS-ON).**  The variants enumerated are (1) the predicates DOMINATING the diff's
+  edited lines, walked up only to the ENCLOSING FUNCTION BOUNDARY, and (2) operand swaps drawn only
+  from lvalues the guarded BODY reads.
+* **Joint cells (adopted 2026-09-04).**  *"DEPENDS-ON enumerates JOINT cells over the guard's operands
+  and the body-read lvalues EXACTLY WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM.  For each
+  lvalue take the PARTITION the body's own tests induce ... A value or combination the body never
+  tests as a case is DISCLOSED under clause (e)."*
+* **Clause (e) -- the contract.**  The probe header names which variants it is designed to catch;
+  a variant outside the stated contract is DISCLOSED debt, not a breach.
+* **L2** = a floor breach, repaired in-round however late it is found.  **L4** = a wrong record
+  (prose claiming coverage a measurement refutes), corrected in place.
+* **Class closure.**  *"When two consecutive passes find breaches of one class, the next repair owes
+  the CLASS closure: enumerate the full space from the function's own inputs, close every cell in
+  ONE diff, and write into the contract which cells are covered and which are deliberately not."*
+
+**Note the tension I see, and please rule on it rather than on my reading of it:** the body of
+`lca_isa` tests `len` only against 0.  By the joint-cells letter, a variant keyed on `len > 8` (or
+`len > 16`) introduces a partition the body never tests -- clause (e).  Pass 6's ruling instead
+made `len <= 8` an L2 on the ground that it diverges only OUTSIDE the probed set.  Both cannot be
+the whole rule, and question Q2 below turns on which governs.
+
+## 3. THE ENCLOSING FUNCTION, WHOLE, AS COMMITTED (`8bd97e4:src/devices/dev_lca.c`)
+
+```c
+DEVICE_ACCESS(lca_isa)
+{
+	unsigned int ofs, i;
+	uint8_t byte;
+
+	relative_addr >>= 5;
+
+	/*
+	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
+	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+	 *  the rule the write arm already applied wherever the old guard let
+	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
+	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
+	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
+	 *  of an unaligned load or store that memory_rw splits at 1 KB),
+	 *  and the read arm discarded the
+	 *  fetched byte at ofs == len.
+	 *  One byte is forwarded whatever len is (the size field a<4:3> is
+	 *  not decoded here).  len 0 has no producer; refuse it before the %.
+	 */
+	if (len == 0)
+		return 0;
+	ofs = (relative_addr & 3) % len;
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+
+	return 1;
+}
+```
+
+The diff (`git show --format= 8bd97e4 -- src/devices/dev_lca.c`), comment lines elided:
+
+```diff
+-	ofs = relative_addr & 3;
+-	if (ofs > len) {
+-		fatal("[ ofs=%i len=%i in lca_isa access function. "
+-		    "aborting ]\n", ofs, len);
+-		exit(1);
+-	}
++	if (len == 0)
++		return 0;
++	ofs = (relative_addr & 3) % len;
+ 
+ 	if (writeflag == MEM_WRITE) {
+-		byte = data[ofs % len];
++		byte = data[ofs];
+```
+
+**`relative_addr` on entry** is the offset into the 2 MB sparse window `lca_isa` is registered over
+(`memory_device_register(..., "lca_isa", LCA_PCI_SIO, 0x10000 << 5, ...)`, `LCA_PCI_SIO` =
+`0x1c0000000`).  After `>>= 5` it is the ISA PORT number P; the discarded low five bits (call them
+k) are never read.  `LCA_ISA_BASE` is where the real ISA devices are registered.
+
+## 4. THE ONLY PRODUCER OF `len > 8` I FOUND (inlined, `8bd97e4`)
+
+`src/core/memory.c`:
+
+```c
+void store_buf(struct cpu *cpu, uint64_t addr, const char *s, size_t len)
+{
+	size_t psize = 1024;	/*  1024 256 64 16 4 1  */
+
+	while (len != 0) {
+		if ((addr & (psize-1)) == 0) {
+			while (len >= psize) {
+				cpu->memory_rw(cpu, cpu->mem, addr,
+				    (unsigned char *)s, psize, MEM_WRITE,
+				    CACHE_DATA);
+				addr += psize;
+				s += psize;
+				len -= psize;
+			}
+		}
+		psize >>= 2;
+	}
+
+	while (len-- != 0)
+		store_byte(cpu, addr++, *s++);
+}
+```
+
+`src/cpus/cpu_alpha_palcode.c`, `alpha_prom_call()` -- reached by the guest instruction
+`CALL_PAL 0x3fffffe` (the word the Alpha machine setup stores at the PROM entry point):
+
+```c
+	case PROM_R_GETENV:
+		/*  a1 = variable id, a2 = char *buf, a3 = bufsize  */
+		switch (a1) {
+		...
+		case PROM_E_BOOTED_FILE:
+			s = cpu->machine->boot_kernel_filename;
+			break;
+		case PROM_E_BOOTED_OSFLAGS:
+			s = cpu->machine->boot_string_argument;
+			break;
+		...
+		}
+		/*  Copy at most a3 bytes.  */
+		len = a3;
+		if (strlen(s) < len)
+			len = strlen(s) + 1;
+		store_buf(cpu, a2, s, len);
+		break;
+	...
+	/*  Return from the PROM call.  */
+	cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+```
+
+`a2` and `a3` are guest registers.  `boot_string_argument` comes from the `-o` command-line option
+via `strdup(optarg)` (`src/core/main.c`) -- no length cap in the emulator.
+
+`src/cpus/memory_rw.c`: non-PHYSICAL accesses are split at 1 KB (`#define MRW_SPLIT_MASK 0x3ff`;
+the loop `while (len > granule - offset)`), and the device handler is then called with the
+chunk's length unchanged (`res = mem->devices[i].f(cpu, mem, paddr, data, len, writeflag, ...)`).
+On a READ, the dispatcher zeroes the caller's buffer before calling the device (`#95`:
+`if (writeflag == MEM_READ) memset(data, 0, len);`).
+
+**MY ENUMERATION OF THE WIDE CELLS THIS PRODUCER REACHES -- please WALK it, do not trust it.**  A
+store_buf chunk of size C is issued only at an address aligned to C, and never crosses a 1 KB
+boundary, so it reaches `lca_isa` whole.  With A = 32P + k (P = port, k = the five discarded bits):
+
+    C = 16     k in {0, 16}, any P        lane = P & 3 in {0,1,2,3}      8 cells
+    C = 64     k = 0, P even              lane in {0, 2}                 2 cells
+    C = 256    k = 0, P % 8 == 0          lane = 0                       1 cell
+    C = 1024   k = 0, P % 32 == 0         lane = 0                       1 cell
+                                                                        -------
+                                              WRITE direction only:    12 cells
+
+C = 64/256/1024 also need a string of at least C - 1 characters (so `len >= C`), which `-o` can
+supply.  **The row covers ONE of the twelve: (C=16, k=0, lane 3).**  No READ-direction wide
+producer was found (store_buf only writes; PROM PUTS reads one byte at a time).
+
+## 5. THE NEW ROW (`8bd97e4:regress/lca_widewrite_probe.py`)
+
+Its contract, verbatim from the file's header:
+
+```
+CONTRACT (clause e).  DESIGNED TO CATCH: any guard that declines a len > 8 WRITE to lca_isa, in either
+the guard form or the write-arm-conjunct form.  DISCLOSED, NOT CAUGHT: (i) which of the 16 bytes
+reaches the port -- only s[3] does, and the other 15 are dropped; that is `lcawidefold', whose reopen
+condition ("a guest found issuing GETENV into the ISA window") THIS ROW MEETS; (ii) the READ side --
+store_buf only writes, and no wide-read producer was found, so a read twin would drive a path no guest
+reaches; (iii) widths 64/256/1024 -- 16 was measured; the others share the same `len > 8' predicate.
+```
+
+The session, CONDENSED -- helper definitions and comments elided at `...`; every line shown is
+verbatim (the machine is booted `-E alpha -e alphabook1 -M 64 -o ABCDEFGHIJKLMNOP`
+with a dummy kernel; commands go to the emulator's debugger over a pty; `step N` executes N guest
+instructions; `print t4` reads a register):
+
+```python
+BOOTSTR = "ABCDEFGHIJKLMNOP"          # strlen 16, so len = min(a3=16, 17) = 16
+ZERO, T0, T1, T2, T3, T4 = 31, 1, 2, 3, 4, 5
+A0, A1, A2, A3 = 16, 17, 18, 19
+CALL_PAL_PROM = (0x00 << 26) | 0x3fffffe
+SENT = 0x0bad1d8a                             # pre-seed: a faulting load leaves it
+K0SEG       = 0xfffffc0000000000
+def k0(p):  return K0SEG | p
+LCA_PCI_SIO = 0x1c0000000
+def SP(port): return LCA_PCI_SIO + (port << 5)
+SCRATCH, CODE = 0x01020000, 0x01040000
+
+SCR, PRESET = 0x2ff, 0x5a                     # the ns16550 scratch register (COM2 base 0x2f8 + 7)
+WANT = ord(BOOTSTR[(SCR & 3) % 16])           # s[3] == 'D' == 0x44 -- derived, not typed in
+RA = 26                                       # Alpha ra = r26
+p1 = [LDQ(T2, 0, T0)] + load_const(T1, PRESET) + [STB(T1, 0, T2)]           # preset the SCR
+p2 = [LDQ(T2, 0, T0)] + sent(T3) + [LDBU(T3, 0, T2)]                         # CONTROL: reads back
+p3 = (load_const(A0, 0x22) + load_const(A1, 0x8) + [LDQ(A2, 0, T0)]
+      + load_const(A3, 16) + [LDQ(RA, 8, T0), CALL_PAL_PROM])               # GETENV, 16-byte store
+p4 = [LDQ(T2, 0, T0)] + sent(T4) + [LDBU(T4, 0, T2)]                         # the SCR afterwards
+RET = k0(CODE) + 4 * (len(load_const(T0, SCRATCH)) + len(p1) + len(p2) + len(p3))
+consts = [k0(SP(SCR)), RET]                   # slot 0: the SCR; slot 8: where the PROM call returns
+phases = [(p1, None), (p2, "t3"), (p3, None), (p4, "t4")]
+...
+row("wide alive", "alive" if alive else "died", "alive", "the guest survives an inline CALL_PAL 0x3fffffe")
+row("wide live", t3, PRESET, "LIVENESS + DEVICE SIGNATURE: a 1-byte store round-trips through the SCR")
+row("wide getenv", t4, WANT, "a 16-byte store_buf write lands s[3] on the SCR; M2 (`&& len <= 8') leaves the PRESET")
+```
+
+(`0x2ff << 5 = 0x5fe0`: not 1024-, 256- or 64-aligned, 16-aligned -- so exactly one 16-byte chunk.
+A session whose prints do not all arrive is retried once with tripled patience.)
+
+**Measured** -- predictions written to a file BEFORE any run, every value matched, and the shipped
+file re-run as shipped with identical scores:
+
+    base                            3/3   wide getenv = 0x44 ('D')
+    `&& len <= 8` (write arm)       2/3   wide getenv = 0x5a (the preset: the store fell into the READ arm)
+    `len == 0 || len > 8` (guard)   2/3   wide getenv = 0x5a (the preset: refused)
+
+The committed `dev_lca.c` is md5-identical (`8084ff07...`) to the source that run measured.
+
+**Settled by an earlier run, disclosed rather than hidden:** the row's FIRST construction executed
+the `CALL_PAL` without loading `ra`; `alpha_prom_call` returns THROUGH `ra`, so the call returned
+to address 0 and every build read 0 alike.  The pre-run predictions file had said in advance that a
+base short of 3/3 means the ROW is broken, so it was read that way, and `RET` is now computed from
+the instruction layout.
+
+The PARENT probe's header now says (verbatim, `8bd97e4:regress/lca_isalane_probe.py`):
+
+```
+#  *** DISCHARGED 2026-09-18 -- THE ROW NOW EXISTS, IN ITS OWN FILE: regress/lca_widewrite_probe.py. ***
+#  It drives the non-instruction path this header names -- a PROM GETENV (CALL_PAL 0x3fffffe) whose
+#  a2 is the ns16550 SCR -- so store_buf issues ONE 16-byte memory_rw into lca_isa.  Measured, every
+#  value predicted before any run (artifacts/lcalenzerodrop/widewrite_20260918/PRETABLE.out):
+#      base 3/3 (SCR <- s[3] = 'D');  `&& len <= 8' 2/3;  `len == 0 || len > 8' 2/3
+#  Both mutants that swept THIS file's 352 rows clean are killed there.  Kept in a SEPARATE file on
+#  purpose: folding it in here would move 352 measured rows and owe a full re-measure to show nothing
+#  shifted, for no gain in coverage.  The width cell is therefore COVERED, not merely disclosed -- but
+#  by that file, so an edit that deletes it re-opens this cell and this header says where to look.
+```
+
+## 6. SETTLED PREMISES (so nobody spends an answer re-deriving them)
+
+* **The fix is sound** -- pass 6's flagship ruling, *"The fix, the L4 grading, and the m_lenzero
+  disposition are all sound -- the gap is the detector's width coverage, not the repair."*
+* **`len == 0` has no producer** -- store_buf bottoms out at 1-byte accesses, and a CPU access is
+  1..8 bytes; measured EQUIVALENT (37/37).  (`memory_rw`'s truncation only clips `len` DOWN and is
+  NOT the warrant -- three seats showed that on pass 6.)
+* **`len > 8` reaches `lca_isa` whole** -- section 4, and measured: the row's base leg shows the
+  16-byte write arriving.
+* **For every `len >= 4`, `(P & 3) % len == P & 3`**, so the shipped WRITE arm forwards
+  `data[P & 3]` for every width from 4 to 1024.  It forwards ONE byte whatever the width; the other
+  bytes of a wide store are dropped -- that is a separate reopened row (`lcawidefold`) and is NOT
+  this pass's question.
+* **The parent's 352 rows are all instruction-driven, `len <= 8`.**  So any variant that is
+  identical to the shipped code for `len <= 8` scores 352/352 on the parent BY CONSTRUCTION.
+
+## 7. QUESTIONS
+
+**Q1 -- CHECK THESE CANDIDATE WEAKENINGS.**  Each is a single edit to the function in section 3.
+For each, say whether it is **EQUIVALENT** to the shipped code, or **DISTINGUISHED** by a shipped row
+(name the row), or **NOT DISTINGUISHED** -- and give the FIRST input (width, k, port/lane,
+direction) at which it and the shipped code differ.  My predictions are in the last column;
+they are derivations, not measurements, so check them.
+
+    id   the edit                                                         my prediction
+    (a)  `if (writeflag == MEM_WRITE) {`
+           -> `if (writeflag == MEM_WRITE && len <= 16) {`                  NOT distinguished; differs at C=64
+    (b)  `if (len == 0)` -> `if (len == 0 || len > 16)`                    NOT distinguished; differs at C=64
+    (c)  `if (writeflag == MEM_WRITE) {`
+           -> `if (writeflag == MEM_WRITE && (len <= 8 || (relative_addr & 3) == 3)) {`
+                                                                            NOT distinguished; differs at C=16, lane 0
+    (d)  `ofs = (relative_addr & 3) % len;`
+           -> `ofs = (relative_addr & 3) % (len > 8 ? 8 : len);`           EQUIVALENT everywhere
+    (e)  `if (len == 0)`
+           -> `if (len == 0 || (len > 8 && relative_addr < 0x200))`        NOT distinguished; differs at C=16, port < 0x200
+    (f)  `byte = data[ofs];` -> `byte = data[len > 8 ? 0 : ofs];`           DISTINGUISHED by `wide getenv` (0x41 vs 0x44)
+    (g)  insert as the FIRST statement, before `relative_addr >>= 5;`:
+           `if (len > 8 && (relative_addr & 0x10)) return 0;`               NOT distinguished; differs at C=16, k=16
+    (h)  `for (i=0; i<len; i++)` -> `for (i=0; i<len && i<8; i++)`          EQUIVALENT (the #95 pre-zero; and no wide read)
+
+**Q2 -- THE RULE QUESTION, and it decides whether this pass closes.**  For every variant you find
+NOT distinguished AND reachable: is it a **floor breach (L2)** that owes rows in-round, or
+**clause-(e) debt** that owes only an honest contract?  Name the rule you apply -- pass 6's
+*"diverges only outside the probed set"* criterion, or the joint-cells letter (*values the body never
+tests are disclosed*) -- and say why the other does not govern.  Then:
+
+* if ANY is L2: pass 6 and this pass have found breaches of ONE class (width), so the
+  **class-closure** amendment applies.  Is my twelve-cell enumeration in section 4 the right space
+  to close?  What does it omit or over-count?  Which cells would one diff row, and which would the
+  contract disclose, with what warrant?
+* if NONE is L2: are the contract's clause (iii) (*"the others share the same `len > 8'
+  predicate"*) and the parent header's *"The width cell is therefore COVERED, not merely disclosed"*
+  **wrong records (L4)**?  I think the second overstates: it is true of the two variants that were
+  measured and false of (a), (b), (c), (e), (g) if they are undetected.
+
+**Q3 -- PREMISE AUDIT OF THE ROW ITSELF.**
+* Does each row's observable actually vary under the variant it is meant to catch?  (`wide alive`
+  looks survive-only to me -- name any variant under which it alone goes red, or say it has none.)
+* Is `wide live` a real device-signature control -- could RAM, or a missing device, return 0x5a?
+* Is `RET` correct, and would a variant that broke the PROM return be read as a construction
+  failure rather than as a detection?  (Both variant legs printed t4 = 0x5a, i.e. the program
+  reached phase 4.)
+* **Is GETENV really the only producer of `len > 8` into this window on `alphabook1`?**  Could a
+  PHYSICAL access -- which the 1 KB split exempts -- deliver a larger length (a device DMA into the
+  sparse window)?  Name it, or say you checked and found none.
+
+**Q4 -- OPTION-SET COMPLETENESS.**  For the width class, the dispositions I can see are: (1) one row
+per reachable cell in one diff; (2) a representative subset plus an honest disclosure of the rest;
+(3) disclosure only; (4) one GETENV session that sweeps every reachable (C, k, lane) cell with an
+ANCHORED oracle (the forwarded byte names which string offset arrived).  Is there a member I did
+not name -- grep the fork for how other wide-producer rows were handled -- and which would you
+choose?
+
+**Q5 -- If, while verifying a claim, you found something ELSE, say so.**
+
+## 8. WHERE I MIGHT BE FOOLING MYSELF
+
+* The Q1 predictions are DERIVED, not measured.  A measuring seat is building (a), (c), (e) and (g)
+  in parallel with this pass; please do not wait for it, and please do not assume it will agree.
+* My twelve-cell count assumes GETENV/store_buf is the only wide producer; a PHYSICAL producer would
+  make the width space larger and possibly unbounded.
+* I wrote the parent header's "COVERED, not merely disclosed" sentence myself, the same day, before
+  asking this question -- so I am the least reliable reader of it.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.

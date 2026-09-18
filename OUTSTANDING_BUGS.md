@@ -21847,7 +21847,8 @@ Also from a peer session's #533 late review: `landiskauxorder`, `wdcaddr2`.
 **base 3/3; `&& len <= 8` and `len == 0 || len > 8` 2/3 each** — both of which swept
 `lca_isalane_probe.py`'s 352 rows clean.  Every value predicted before any run; the shipped file re-run
 as shipped.  This is the one pass `#530`'s `CLOSE6_VERDICT` said was owed, so `#530` commits with it and
-`dev_lca.c` then carries no live host kill.  Both rows close in the follow-up records commit.
+`dev_lca.c` then carries no live host kill.  Both rows were to close in the follow-up records commit -- *** PASS 2
+HELD THAT; see the 2026-09-18 (night) block below. ***
 
 ### `lcawidefold` (LOW) — its reopen trigger has FIRED
 
@@ -21857,3 +21858,17 @@ reaches the port as ONE byte and fifteen are dropped.  The question is now live:
 forward each to successive ports, or decline wide stores into ISA space?  The 21066 cannot issue a
 16-byte ISA cycle, which argues for documented-only — but "no producer" is no longer the warrant.
 
+## 2026-09-18 (night) — `#530` PASS 2 DOES NOT CLOSE: the width row covers 1 of 12 reachable wide cells
+
+### `lcaisalane` / `lcalenzerodrop` — the closure promised above is HELD
+Pass 2 on 8bd97e4 (`regress/artifacts/lcaisalane/p2_8bd97e4_20260918/`; measured in `regress/artifacts/lcalenzerodrop/opus_p2_20260918/`): seven one-edit
+variants pass every shipped row, and each is killed by the same GETENV instrument at another reachable cell.  Three wrong
+records in the row's own text are owed.  Whether the escapes are floor breaches (class closure owed) or disclosed debt is
+the rule question now before the §F2 pass and fable5.  **Construction gap, from the measuring seat:** nothing asserts the
+GETENV length exceeds 8 -- an edit of `a3` from 16 to 4 would turn the row into a len-4 row that passes silently.
+
+### Annotated from the pass, not new rows
+* `lcawidefold` — a GETENV to a MISALIGNED a2 is issued as sixteen 1-byte writes, all forwarded (kimi), so the row's
+  "15 of 16 dropped" is alignment-dependent.
+* `lcaisaphys` — the nested forward works only because ptbr==0 identity-maps `0x1d00002ff` (grok): the row's premise,
+  confirmed from the source.

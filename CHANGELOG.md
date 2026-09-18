@@ -146,6 +146,27 @@ because it will bite in two days:** `check_probe_wiring.py` carries a cluster of
 once.  That is `wiringcliff`'s to resolve, and this block says so rather than committing onto it
 silently.
 
+## PASS 2 (closing pass 7), 2026-09-18 -- DOES NOT CLOSE ON SEVEN OF EIGHT SCRIPTABLE SEATS; THE RULE QUESTION GOES TO THE
+## §F2 PASS AND fable5
+
+`panel_20260918_180558` reviewed the width row (the effort) and the composite (the floor question); it is preserved with
+both briefs in `regress/artifacts/lcaisalane/p2_8bd97e4_20260918/`.  codex was refused by its content filter on the first firing --
+after browsing `regress/*.py`, which the brief's own Q4 invited -- and answered on its one §C5 re-fire, narrowed to seven
+named files.  The Opus seat MEASURED (`regress/artifacts/lcalenzerodrop/opus_p2_20260918/`): 102 legs on unmodified alphabook1, every
+value predicted first, zero retries.
+
+* **Unanimous, and measured:** the row distinguishes NONE of seven one-edit variants -- a width cut-off at 16 (write-arm
+  and guard forms), wide writes serviced only at lane 3, a refusal below port 0x200, a refusal at k = 16 (two shapes), and
+  a refusal of a multi-chunk write's second chunk.  Each is killed by the same GETENV instrument at another reachable cell:
+  C=64 at the ns16550 MCR/MSR, C=16 at lanes 0/1/2, the 8042 via port 0x60, a 32-byte two-chunk write.
+* **THREE WRONG RECORDS in this commit's own detector text, owed in place:** the contract's *"any guard that declines a
+  len > 8 WRITE"*; its clause (iii), *"the others share the same `len > 8' predicate"*; and the parent header's *"The width
+  cell is therefore COVERED, not merely disclosed"* -- one cell of twelve is rowed.
+* **THE SPLIT (D1):** L2 floor breaches owing the class closure (codex, glm, kimi, deepseek, minimax -- each on a different
+  subset), or clause-(e) debt now that a shipped instrument can reach every cell (agy, grok, and the measuring seat, which
+  reads pass 6's *"uncatchable"* as a condition on discharge by contract).  It goes to the §F2 adjudication pass, and
+  fable5 rules LAST.  **The chain is OPEN until they rule.**
+
 # `#535` (pcc2c040mienannounce): #512's detector had one uncovered cell -- and it ran in no gate at all
 
 **Late-dissent disposition 2: a MEASURED false pass against a shipped detector's floor, repaired in a follow-up

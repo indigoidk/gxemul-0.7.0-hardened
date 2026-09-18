@@ -1,0 +1,138 @@
+I'll treat this as a premise audit, not a ratification: first the committed sources at `8bd97e4`, then walk the width cells and each Q1 variant against both probes.Git was blocked at the first-stop; I'll read the committed sources and probes from the tree and re-derive the width cells from those files.The function and probe match the packet. Next I’ll walk `store_buf`/`memory_rw` and hunt any other `len > 8` producer into this window.**VERDICT: DOES NOT CLOSE -- contract (e) says "any" `len > 8` WRITE decline; (c) is a write-arm conjunct that declines reachable `len > 8` writes and no shipped row distinguishes it.**
+
+Repair is to **narrow the contract and disclose (a)(b)(c)(e)(g)**, not to grow the row set and not to close the 12-cell producer space. Pass 6's two measured mutants remain killed. The fix is still sound.
+
+I read `GXEMUL-SEC/src/devices/dev_lca.c`, `memory.c` `store_buf`, `cpu_alpha_palcode.c`, `memory_rw.c`, `memory_alpha.c`, `bus_isa.c`, `dev_ns16550.c`, and both probes. `git show 8bd97e4` was denied here; the working-tree `lca_isa` and `lca_widewrite_probe.py` match the inlined 8bd97e4 text. No gate, no mutant build.
+
+---
+
+## Premises I re-derived rather than ratified
+
+1. **The 12-cell walk is arithmetically correct for GETENV/`store_buf`.** `LCA_PCI_SIO` is 1024-aligned, so alignment of `A = 32P + k` is only `32P+k`. I walked C ∈ {16,64,256,1024} against that. Counts 8+2+1+1 = 12, WRITE only, stand.
+
+2. **The 12-cell list is not the floor space.** It omits the **port** axis that (e) uses (`P < 0x200`). Closing it would still miss (e). It is a producer inventory, not the body's tested partitions.
+
+3. **Pass 6's "diverges only outside the probed set → L2" cannot remain the row-demand rule.** Applied again it recurses: after a C=16 row, `len <= 16` diverges at C=64; after that, `len <= 64` at C=256. That is the unbounded chain the joint-cells letter exists to stop. It was the right criterion when **every** `len > 8` input was invisible. It is not the rule now that one reachable `len > 8` WRITE is rowed.
+
+4. **`wide live` is not a RAM-discriminating device signature.** A 1-byte STB/LDBU of `0x5a` at the same sparse VA would round-trip on RAM. It **does** reject unmapped (Alpha failed device read returns 0, not `0x5a`). The RAM discriminator in this session is **`wide getenv` = `0x44`**: RAM at `SP(0x2ff)` would return `s[0] = 'A' = 0x41`.
+
+5. **The frozen Opus `a3=64` witness is still C=16.** Port `0x3ff` is odd, so `0x3ff<<5 = 0x7fe0` is 16-aligned and **not** 64-aligned. `store_buf` issues four 16-byte chunks. Do not cite it as covering (a)/(b).
+
+---
+
+## Q1 — candidate weakenings
+
+Derivations, not measurements. First differing input named. Parent rows are all `len <= 8`, so anything identical on that set is 352/352 there by construction.
+
+| id | vs shipped | first difference | vs your prediction |
+|---|---|---|---|
+| **(a)** `WRITE && len <= 16` | **NOT distinguished** | C=64, k=0, P even, WRITE (write arm skipped → read-arm fallthrough; port keeps PRESET) | agree |
+| **(b)** `len == 0 \|\| len > 16` | **NOT distinguished** | C=64, k=0, P even, WRITE (`return 0`; same PRESET) | agree |
+| **(c)** `WRITE && (len <= 8 \|\| (P & 3) == 3)` | **NOT distinguished** | C=16, k=0, **lane 0** (also 1, 2), WRITE. The row's port `0x2ff` **is** lane 3, so `wide getenv` stays `0x44` | agree |
+| **(d)** `% (len > 8 ? 8 : len)` | **EQUIVALENT** everywhere reachable | `P&3 ∈ {0,1,2,3}`; for every `len >= 4`, both `%` forms equal `P&3` | agree |
+| **(e)** `len == 0 \|\| (len > 8 && P < 0x200)` | **NOT distinguished** | C=16, **port < 0x200**, WRITE. Row port `0x2ff > 0x200`. COM1/COM2 are all `> 0x200`; PIC/PIT/8042 are not | agree |
+| **(f)** `data[len > 8 ? 0 : ofs]` | **DISTINGUISHED by `wide getenv`** | C=16, k=0, lane 3, WRITE: `0x41` `'A'` vs `0x44` `'D'` | agree |
+| **(g)** pre-shift `if (len > 8 && (relative_addr & 0x10)) return 0` | **NOT distinguished** | C=16, **k=16**, any lane, WRITE. Row uses `SP(SCR)` so k=0; bit 4 of pre-shift `relative_addr` is exactly k's `0x10` | agree |
+| **(h)** `i < len && i < 8` | **EQUIVALENT** | WRITE never reaches the loop. READ: `#95` `memset(data,0,len)` before the handler; `ofs` is 0..3 so the live byte is in the first 8; tails stay 0. No wide-read producer | agree |
+
+Measured (inlined, not re-run here): `&& len <= 8` and `len == 0 || len > 8` are **DISTINGUISHED** by `wide getenv` (2/3, t4=`0x5a`). Those are the pass-6 pair. They are not in the table because they are already caught.
+
+Lane is a function of the port (parent header is right: shift first, then `P&3`). You cannot keep the SCR at `0x2ff` and change lane. Distinguishing (c) needs a different port.
+
+---
+
+## Q2 — which rule governs, and is this L2?
+
+**Joint-cells letter governs row demand. Pass 6's "uncatchable" criterion does not, any more.**
+
+Body of `lca_isa` tests `len` only as `== 0`, and `writeflag` as WRITE vs READ. It uses `(relative_addr & 3)` as an **index**, not as a case. Under the letter:
+
+- a value/combination the body never tests as a case is **clause (e)**;
+- `len <= 8`, `len <= 16`, `len > 8 && lane == 3`, `len > 8 && P < 0x200`, `len > 8 && k==16` are all extra conjuncts on untested partitions.
+
+Pass 6 was still right **then**: `&& len <= 8` is the canonical (d) form on the write-arm predicate, it scored 352/352, and `len > 8` is guest-reachable. That made the whole `len > 8` half of a dominating predicate invisible. **One** reachable `len > 8` WRITE row discharges that floor cell. Recursively demanding a row for every remaining producer cell is how this becomes the `#392` chain.
+
+So **(a)(b)(c)(e)(g) are not L2 row-demand.** Class-closure of the 12-cell producer space is **not** owed. That space is the wrong one anyway (no port axis; (e) lives off it).
+
+**What does not close is the contract, which is a floor-clause (e) statement:**
+
+> DESIGNED TO CATCH: **any** guard that declines a `len > 8` WRITE … in either the guard form or the write-arm-conjunct form.
+
+(c) **is** a write-arm conjunct that declines reachable `len > 8` writes (lanes 0–2). (a) and (b) decline C≥64. None of those is distinguished. Under that "any", they are **in-contract and uncaught** — an (e) falsification, L2 on the **record**, not a licence to row the producer.
+
+The repair that the anti-runaway bound supports: **narrow designed-to-catch to the two measured forms at the probed cell** `(C=16, k=0, lane 3, COM2 SCR, WRITE)`, and **disclose** (a)(b)(c)(e)(g) by the cell where each first differs. That is option-set member (2), done honestly.
+
+**L4 on the two sentences you named:**
+
+- Contract (iii) ("64/256/1024 … share the same `len > 8` predicate") is **true of M2/KILLLEN8** and **false as a reason (a)(b) are covered**. It already lists those widths as DISCLOSED, NOT CAUGHT, so it is a **sloppy warrant**, not a silent cover-up. Tighten it: *16 was measured; 64/256/1024 are untested; mutants that fire only there are debt.*
+- Parent *"The width cell is therefore COVERED, not merely disclosed"* is **true of the two pass-6 mutants** (the next sentence names them) and **false if "the width cell" means the class**. That is dropped-qualifier, same family as (iii). Rename it to the pass-6 `len > 8` decline cell.
+
+Neither L4 is a reason to add rows.
+
+**(c) is the closest call for a real L2 row.** It is the `#499` shape: repair at the cell the last mutant used, sibling lane open. I still put it in (e) because the extra conjunct's `len > 8` half is not a body-tested partition of `len`, and CHANNEL cannot demand a new row. If a measuring seat shows (c) reddening an existing parent row I have not seen, that finding beats this derivation.
+
+---
+
+## Q3 — the row itself
+
+**`wide alive`.** Survive-only. I cannot name a variant under which it **alone** goes red. Reinstating `exit(1)` on `len > 8` reds **both** `wide alive` and `wide getenv` (`t4` missing). `return 0` and write-arm skip leave the host up (no Alpha exception path in `memory_rw.c`). CHANNEL: vacuous as a sole carrier; keep it as a hang/death companion.
+
+**`wide live`.** Liveness: 1-byte STB/LDBU of `0x5a` through sparse → `lca_isa` → dense ns16550 SCR (`bus_isa.c` really does install COM2 at `LCA_ISA_BASE+0x2f8`; default arm stores `reg[7]`). Unmapped/missing returns 0, not `0x5a`, not SENT (Alpha does not leave the register on a failed device read). RAM at that PA **would** return `0x5a`. Comment overclaims "DEVICE SIGNATURE". The signature is `wide getenv == 0x44`.
+
+**`RET`.** Correct. Prefix `load_const(T0, SCRATCH)` is 1 insn (lo=0), p1=4, p2=4, p3=9, total 18; `RET = k0(CODE)+72`, first insn of p4. A PROM-return break gives `t4` None/SENT/0, **not** `0x5a`. The measured mutant legs printed `t4=0x5a`, so they reached phase 4 and are not misread as construction failure. PRETABLE's "base short of 3/3 means the ROW is broken" is the right split; Run 1 proved it.
+
+**GETENV / `store_buf` is the only guest `len > 8` producer into this window on `alphabook1` that I found.** Checked:
+
+- Alpha instructions max STQ/LDQ = 8.
+- `store_buf` callers: GETENV (`a2` guest-controlled) and `machine_alpha.c` init at `HWRPB_ADDR=0x10000000`, not `LCA_PCI_SIO`.
+- PUTS is 1-byte **reads**. Other PROM `a0` halt.
+- `store_{16,32,64}bit_word` are 2/4/8.
+- PHYSICAL skips the 1 KB split (`memory_rw.c`) and **could** pass arbitrary `len`. No alphabook1 device does: `dev_lca.c` has no PHYSICAL; `bus_isa` does not instantiate an 8237; `dev_wdc.c` has no PHYSICAL in this tree and is not even added without an IDE image; LCA DMA windows are declined stubs (#518).
+- A PCI master DMA into `0x1c0000000` is not modelled. If one appears, the width space is no longer the 12 cells.
+
+Caveat on the nested forward: `lca_isa` calls `memory_rw(LCA_ISA_BASE+P, …, CACHE_NONE)` **without** PHYSICAL. That is a vaddr `0x1d00002ff`. It works because `ptbr==0` identity-maps it (`memory_alpha.c`). Pre-existing, not this row's defect; the dummy-kernel probe sits in that regime.
+
+---
+
+## Q4 — option set
+
+Named four. Two more from the tree:
+
+5. **Debugger `put` of 16 bytes into the sparse window** — not a guest producer; the fork's pcc2 "wide write" rows are this shape (operator width, not `store_buf`). Weaker than GETENV.
+6. **The frozen Opus GETENV replica** (BOOTED_FILE, port `0x3ff`, `a3=64`) — same C=16 lane-3 cell, and **not runnable** (slices a grown parent header). Evidence, not a row.
+
+No in-tree precedent for a `store_buf`-driven detector other than this file.
+
+**Choose (2):** one representative cell plus honest disclosure of the rest. That is what shipped, minus honesty about (a)(b)(c)(e)(g).
+
+(4) (one session, several GETENVs, anchored byte) is the right **strengthening** if someone wants it, not the floor. Cheap extra cells, none of them owed: `0x2fc` (MCR, lane 0, **64-aligned**) with a long `-o` would catch (a)(b)(c) in one shot; `SP(SCR)+16` catches (g); `0x60` catches (e). File them. Do not hold the close for them.
+
+(1) is the `#392` reading of "any". (3) is what pass 6 already rejected for the `len > 8` half as a whole.
+
+---
+
+## Q5 — else
+
+- **M2's write-arm skip clobbers host `boot_string_argument`.** Fallthrough into the read arm writes `data[i]`, and `store_buf` passes `s` as that buffer. Mutant blast, not a fix defect; the probe does not observe it.
+- GETENV's `default:` sets `cpu->running = 0` and **still** `store_buf`s, then returns through `ra`. Not this row.
+- PAL software convention clobbers `t0`; this emulator's `alpha_prom_call` does not. `T0` still holding `SCRATCH` for p4 is an emulator accident. If PAL ever clobbers `r1`, p4 becomes a construction failure (`t4` SENT/0), not a detection.
+- `check_probe_wiring.py` classifies this as DETECTOR with a `2026-09-20` Alpha-ungated exemption, same footing as the parent. That part is honest.
+
+---
+
+## Denominator (what I checked)
+
+**Floor cells (DEPENDS-ON, enclosing function only):**
+
+- Predicates dominating the diff: `len == 0` (no producer; pass 6 equivalent), `writeflag == MEM_WRITE` (parent R/W × lane × {1,2,4,8} plus this WRITE).
+- (d) on the write arm: `&& len <= 8` and `len == 0 || len > 8` — distinguished by `wide getenv`.
+- Operand swap from body-read lvalues: (d) `%8` equivalent; (f) `data[0]` distinguished.
+- Body-tested partitions: `len {0, >0}`, `writeflag {R,W}`, `ofs {0,1,2,3}` at instruction widths (parent). `len > 8` is **not** a body-tested case.
+
+**Shapes walked:** guard widening, write-arm extra conjunct (plain, OR-lane, AND-port), pre-shift refuse on k, ofs-modulus change, data-index change, read-fill cap.
+
+**Not L2, must be disclosed:** (a) C=64; (b) C=64; (c) C=16 lane≠3; (e) C=16 P<`0x200`; (g) C=16 k=16.
+
+**Zero (d) mutants of the dominating predicates survive.** The surviving finding is an **overbroad (e) contract**, repaired by narrowing and disclosure, in-round as records.
+
+I did not measure (a)(c)(e)(g). If a measuring seat shows one of them reddening `wide getenv` or a parent row, that measurement beats this. I do not expect that for (c) at port `0x2ff`.

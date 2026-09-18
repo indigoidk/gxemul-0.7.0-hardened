@@ -1,0 +1,52 @@
+VERDICT: DOES NOT CLOSE -- four reachable clause-(d) variants escape the full composite detector: (c) `len<=8 || lane==3` diverges at the very width the new row measures (C=16, lane 0), and (a)/(b)/(g) diverge at C=64 / C=64 / k=16; under pass 6's own precedent these are L2s, and the contract's "ANY guard that declines a len > 8 WRITE" claim is falsified by them.
+
+**Denominator.** I adjudicated the eight Q1 candidates against the composite detector (352 parent rows + 3 wide rows) over the producible input domain (2 directions × widths {1..8 instruction, 16/64/256/1024 store_buf} × lanes {0..3} × k ∈ {0,16}), the 12-cell enumeration's arithmetic, the row's internal arithmetic (RET, WANT, 0x5fe0 alignment), and the two records (contract clause iii; parent header note). The len≤8 subspace I take from pass 6's settled ruling — the parent probe is summarized, not inlined, so I cannot re-derive its lane/width density, and I say so rather than guess.
+
+## Q1 — the candidates (REASONED; author's predictions checked)
+
+| id | my call | first differing input | vs. author |
+|---|---|---|---|
+| (a) `&& len<=16` | NOT distinguished | C=64, k=0, lane 0, WRITE | agree |
+| (b) `\|\| len>16` guard | NOT distinguished | C=64, k=0, lane 0, WRITE | agree |
+| (c) `len<=8 \|\| lane==3` | NOT distinguished | **C=16, k=0, lane 0**, WRITE | agree |
+| (d) `% (len>8?8:len)` | EQUIVALENT everywhere (P&3 < 8, so both give P&3 for all len≥4; identical for len≤8) | — | agree |
+| (e) `len>8 && P<0x200` | NOT distinguished (see Q2: debt, not rows) | C=16, k=0, any lane, port <0x200, WRITE | agree |
+| (f) `data[len>8?0:ofs]` | DISTINGUISHED by `wide getenv` (0x41 'A' ≠ 0x44) | C=16, k=0, lane 3 | agree |
+| (g) `len>8 && (A&0x10)` first | NOT distinguished (bit 4 of A is k's bit 4; probe cell 0x5fe0 has it clear, k=16 cells refused) | C=16, k=16, lane 0, WRITE | agree |
+| (h) `i<len && i<8` | EQUIVALENT — READ premise: #95 memsets the buffer on every dispatch, so data[8..] is already zero; and no wide read exists | — | agree |
+
+All eight of the author's predictions are confirmed by my own enumeration. The two EQUIVALENT calls rest on the inlined #95 line (READ).
+
+## Q2 — the rule question (this decides the pass)
+
+**I apply pass 6's criterion; the joint-cells letter governs only enumeration granularity beyond clause (d)'s named forms.** Three grounds: (1) a later, specific, pre-committed ruling on this exact function binds over an earlier general letter — reversing it here without new evidence unbinds every prior pass; (2) the letter cannot be read to govern clause (d) at all: every `if (X && Y)` introduces a case the body may not test — that is what a weakening *is* — so the letter-as-author-reads-it would empty clause (d) of its own named example; (3) the floor's stated purpose is that the repair be *observable*, which makes **guest-reachability of the divergent cell** the operative test, not whether the body branches on the value. The body's own tests are a proxy for observability, and it fails exactly here: `len` is the repair's load-bearing operand (the diff put it into `% len`) — under the letter's literal reading no len-keyed variant could ever be owed a row, which contradicts pass 6 and the class-closure amendment's premise that a width class can be breached at all.
+
+**The reconciled line I hold:** a variant is L2 if it is a clause-(d) form keyed on the diff's own operands, escapes the composite, and diverges on a reachable cell **whose dimension is closable** (all producible values witnessable). Variants keyed on a dimension closure cannot reach are clause-(e) debt — but only if the contract honestly says so.
+
+* **(a), (b): L2.** These are pass 6's `len <= 8` with the threshold moved to 16; divergent cells (C=64/256/1024) are reachable (given the premises in the unsettled list). The row at 16 kills thresholds < 16 only; thresholds ≥ 16 are live.
+* **(c): L2, and the sharpest one.** It diverges at C=16 — the *measured* width — in the lane dimension, which the body itself distinguishes (ofs). The row is lane-3-shaped and (c) carves out exactly lane 3. It is inside the contract's designed-to-catch sentence ("ANY guard that declines a len > 8 WRITE") and outside every disclosure (i)–(iii), none of which names lane/k/port subcells of C=16.
+* **(g): L2.** k has only two producible values {0,16}; both are witnessable, so the k dimension is closable and a len×k refusal owes legs at k=16.
+* **(e): clause-(e) debt, plus an L4.** Port-magnitude has infinite residue — after any finite sweep, a threshold above the highest probed port escapes — so it cannot be closed by rows and belongs under disclosure with the body-mask warrant (the code masks relative_addr to 2 bits; only the forwarded address carries P). But the contract as written *claims* it ("ANY guard that declines a len > 8 WRITE"), so as written (e) falsifies the record: correct the sentence, add the disclosure, and optionally witness the coarse divide (one low port, one high port) since the legs are free.
+
+**Class closure (applies: pass 6 + this pass, one class).** The twelve-cell enumeration is the right code-input space — I walked it: store_buf chunks {1024,256,64,16,4,1} (READ, the loop), each C-chunk C-aligned (the `if` is outside the inner `while`, so advances stay aligned — READ), C | 1024 so no chunk crosses a 1 KB granule, k = A&31 ∈ {0,16} at C=16, lane sets {0..3}/{0,2}/{0}/{0} — 8+2+1+1 = 12, all write-direction. It omits nothing it should count and over-counts nothing. What it *omits as disclosure*: len 9–15 (no producer), wide reads (no producer), and the fine port structure above. Closing all 12 cells kills every len-threshold (any T has a producible width each side except T≥1024, which is equivalent-on-reachable-space) and every lane/k carve-out — in **one session, one diff**, with anchored oracles (distinct bytes per string offset, so a row kills both refusals and misroutes like (f)). Feasibility caveat: each cell needs a write-echoing port at the right (lane, alignment); if some lane (lane 2 — ns16550 IIR/MSR are read-only) has no echo port on alphabook1, that cell is uncloseable by any guest-driven row and must be disclosed with that warrant.
+
+**Both records are L4s regardless of the L2 ruling.** Clause (iii)'s warrant — "the others share the same `len > 8' predicate" — is false: a predicate with a *higher* threshold behaves identically at 16, so the representative cell does not represent it. The parent header's "The width cell is therefore COVERED, not merely disclosed" is false: one cell of twelve is covered. The author's self-suspicion (section 8) is correct.
+
+## Q3 — the row
+
+* **`wide alive` is not redundant:** it alone goes red on the crash class — any variant restoring a fatal/exit on a wide access, which is the *original bug's own form* (`if (len > 8) { fatal(); exit(1); }`). On clause-(d) null-the-effect variants it stays green by design.
+* **`wide live` is a real control:** it witnesses a write+readback round trip through the same 1-byte forward path the wide store uses. A missing device returns the bus default (not 0x5a); RAM-backed ISA would also pass — but that still validates exactly the channel the oracle needs, since the forwarded byte is what the oracle reads either way.
+* **RET is correct** (counts the T0-load + p1..p3, all 4-byte instructions, p4 placed at RET), and evidenced: both mutant legs printed t4 = 0x5a, so all legs reached phase 4. A broken PROM return would print the 0x0bad1d8a sentinel and fail loud — and no lca_isa edit can break it, since CALL_PAL fetch and `pc = r[RA]` never traverse the ISA window. REASONED.
+* **GETENV-only: NOT SETTLEABLE from the packet.** The settling fact: every `memory_rw` call site passing the PHYSICAL flag with a variable/long len in `src/devices/`, `src/cpus/`, `src/core/` (a device DMA into [0x1c0000000, +0x200000)), plus the elided cases of the `alpha_prom_call` switch (the "..." hides other store_buf or copy paths), plus the PUTS case body (asserted, not inlined). Note: any *other* store_buf caller leaves the 12-cell space unchanged (same chunk domain), so only a PHYSICAL/direct producer could enlarge it.
+
+## Q4 — option set
+
+You did not name **(5): a host-side unit row** — link `dev_lca.c`, call `DEVICE_ACCESS(lca_isa)` directly over synthesized (A, len, writeflag, data), with a recording stub for `memory_rw`. It closes every cell *including* cells with no echo port and unproducible widths (9–15, wide reads), making even the PHYSICAL-producer premise moot for the device's own behavior. Its admissibility depends on project rules not in the packet (the wiring checker's exemption note suggests rows are machine-driven) — that is a ruling for the panel, and I cannot grep the fork for precedent: the settling artifact is the ledger's dispositions for prior multi-cell classes. If guest-driven rows are required, choose **(4)** with anchored oracles and coarse port coverage; otherwise (5) dominates.
+
+## Q5 — found while verifying
+
+* The row is adversary-shaped: it witnesses exactly one (width, k, lane, port) point, and (c) is the proof it can be fit to. The cure is the sweep, not more single-point rows.
+* After full closure, port-magnitude thresholds above the highest probed port remain — disclose, don't chase.
+* Arithmetic all verified: 0x2ff<<5 = 0x5fe0, 16-aligned, mod 64/256/1024 = 0x20/0xE0/0x3E0; WANT = BOOTSTR[3] = 'D' = 0x44; len = min(16,17) = 16 (strlen 16 is not < 16, so a3 stands); the mutant legs' fall-through into the read arm writes into store_buf's source string, which does not confound the SCR oracle.
+
+**Premises not settleable from the packet** (each with its settling fact): no length cap on `-o` (the 'o' case in `main.c` at 8bd97e4); no PHYSICAL wide producer (the grep above); PROM PUTS byte-at-a-time (its case body); the parent probe's lane/width density within len ≤ 8 (accepted from pass 6's settled ruling); echo semantics of lane-2 ports and alphabook1's ISA device list (gates cell closability). The "12" stands or falls with the first two.

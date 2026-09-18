@@ -1,0 +1,178 @@
+```
+VERDICT: DOES NOT CLOSE — Q1 finds 5 of 8 candidate variants (a, b, c, e, g) that no shipped
+row distinguishes from the shipped code; all decline some len > 8 WRITE that the shipped code
+accepts, at reachable cells per section 4's 12-cell enumeration; under the new row's own contract
+("any guard that declines a len > 8 WRITE") they are L2; pass 6 and this pass then constitute two
+consecutive width-class breaches, so the class-closure amendment applies and the next repair owes
+the full width space in one diff. The contract's clause (iii) and the parent header's
+"COVERED, not merely disclosed" sentence are L4 wrong records (or overstatements) for these
+variants.
+
+Denominator I checked: 8 candidate variants (Q1's list) × 12 reachable (C, k, lane) cells
+(section 4) × the contract's catch scope. The new row covers 1 of 12 reachable cells; the
+parent's 352 rows cover only len ≤ 8. The composite covers 1 of 12 reachable cells in the
+width class. I did NOT verify GETENV's uniqueness as a wide producer (PHYSICAL / DMA not
+addressed in the packet — see Q3.4); if a PHYSICAL producer exists, the width space is
+unbounded and the 12-cell count undercounts.
+
+I am packet-fed and did not read files; every claim below is READ from the inlined packet or
+REASONED from it.
+```
+
+---
+
+### Q1 audit (READ the packet, REASONED the cells)
+
+I walked each variant against the function in section 3, the producer in section 4, and the row
+in section 5. All 8 brief predictions match.
+
+| id | my call | first differing cell | reasoning |
+|----|---------|----------------------|-----------|
+| (a) | NOT DISTINGUISHED | C=64, k=0, lane=0 (e.g., P=0, port 0) | Both probes use len ≤ 8 (parent) and len = 16 (new); `len ≤ 16` is true at both |
+| (b) | NOT DISTINGUISHED | C=64, k=0, lane=0 | Same; the `\|\| len > 16` fires only at C ≥ 64 |
+| (c) | NOT DISTINGUISHED | C=16, k=0, lane=0 (P=0) | The row uses SCR = 0x2ff → lane = 3, where the `lane == 3` exception fires |
+| (d) | EQUIVALENT everywhere | — | `(P & 3) % len == (P & 3)` for any len > 4 (since P & 3 < 4 < len), and `(P & 3) % 8 == (P & 3)` likewise; both forms yield ofs = P & 3 |
+| (e) | NOT DISTINGUISHED | C=16, k=0, P < 0x200 (e.g., P=0) | After >>= 5, the predicate is on PORT P; row uses P=0x2ff=767, outside range |
+| (f) | DISTINGUISHED by `wide getenv` | any len > 8 with ofs ≠ 0; row at lane 3 sees 0x41 ('A') under variant vs 0x44 ('D') under shipped | (f) is not in the contract's catch scope (it changes WHICH byte, not WHETHER the write); caught as a side effect |
+| (g) | NOT DISTINGUISHED | C=16, k=16, any P (lane = P & 3) | `relative_addr & 0x10` is bit-4 of ORIGINAL relative_addr = 32P + k; for k=0 bit=0, for k=16 bit=1; row uses 0x2ff → relative_addr = 0x5fe0, k=0 |
+| (h) | EQUIVALENT for all guest-reachable cases | — | Dispatcher pre-zeros the read buffer (#95); no wide READ producer was found; also out of floor scope — the for-loop is in the READ arm, not dominating the diff's edited lines |
+
+Of the 8 candidates: 3 are EQUIVALENT or DISTINGUISHED (d, f, h); **5 are NOT DISTINGUISHED** (a, b, c, e, g). [REASONED]
+
+---
+
+### Q2 — the rule question (REASONED)
+
+**Pass 6's criterion governs** for these 5 variants.
+
+The substantive definition in floor clause (d) is "KEEPS the guard but nulls its effect". The
+joint-cells letter ("body-untested partitions are disclosed under clause e") and pass 6's
+criterion ("escapes AND reachable = L2") are not full alternatives; they are layers:
+
+1. The joint-cells letter governs UNNAMED partitions. `len > 8` was unnamed (body only tests
+   `len == 0`), so by the letter it was disclosed.
+2. Pass 6's criterion upgrades a disclosed partition to L2 IF the partition is REACHABLE AND
+   the contract names it.
+3. The new row's contract names "any guard that declines a len > 8 WRITE", so `len > 8` is in
+   contract scope.
+4. Once in contract scope, any variant that declines some len > 8 WRITE at a reachable cell is
+   L2 unless a shipped row catches it at that cell.
+
+Variants (a), (b), (c), (e) are clearly in contract scope ("guard form or write-arm-conjunct
+form" declining len > 8 WRITEs). Variant (g) is an early-return, not literally a guard or
+write-arm-conjunct; the contract's letter is ambiguous. The contract should be tightened to
+include "any mechanism that declines a len > 8 WRITE" — that's what its intent ("any guard
+that declines...") plainly means. Either way, (g) is undetected.
+
+**Class closure applies.** Pass 6 (original `&& len ≤ 8`) and this pass ((a)–(g)) are two
+consecutive width-class breaches. The next repair owes:
+
+- **Every reachable cell** covered by rows that distinguish the shipped code from the class of
+  width-weakening variants.
+- **The contract** updated to honestly state which cells are covered and which are deliberately
+  not.
+
+**Is the 12-cell enumeration in section 4 the right space?** It is the right
+parameterization of the **reachable-input** dimension (C × k × lane × direction). It is NOT the
+**variant** dimension. The variant space is predicates × cells. The 12-cell count enumerates
+inputs where a len > 8 WRITE can arrive; it does NOT enumerate the (variant, cell) pairs the
+detector must distinguish. For class closure, the right space is the joint one — and any
+honest sweep must cover both dimensions.
+
+**What it omits:** READ direction (no wide read producer inlined, but PHYSICAL is not
+addressed — see Q3.4); DMA into the sparse window; operand swaps from lvalues the body reads
+beyond the explicit Q1 list.
+
+**What it over-counts:** nothing in the input dimension — I walked all 12 cells and the
+count is correct. (C=16, k=0): 4 cells; (C=16, k=16): 4 cells; (C=64, k=0, P even): 2 cells
+(lane 0 and 2); (C=256, k=0, P%8==0): 1 cell (lane 0); (C=1024, k=0, P%32==0): 1 cell
+(lane 0). Total 12. The row covers ONE: (C=16, k=0, lane 3). [REASONED]
+
+**Disposition I'd recommend (option 4):** one GETENV session sweeping every reachable cell
+with an anchored oracle. A string of length ≥ 1024; ports at every reachable (C, k, lane)
+cell; each oracle print names which string offset arrived (forwarded byte must equal s[lane]).
+If a variant declines any cell, the oracle returns the PRESET (or the dispatcher's pre-zero
+for READ) instead of s[lane]. One session covers all 12 cells, and the contract can name
+exactly which cells are exercised.
+
+**The contract's clause (iii)** ("the others share the same `len > 8' predicate") and the
+parent header's "COVERED, not merely disclosed" are **wrong as written** for variants whose
+predicate is non-uniform across the width space. For the SHIPPED code they are true (no len >
+8 predicate). For VARIANTS like (a) `&& len ≤ 16`, the predicate differs across C. These
+sentences overstate and are L4 wrong records. The brief itself flags this in section 8.
+
+---
+
+### Q3 — premise audit of the row (REASONED from packet)
+
+* **`wide alive` is survive-only.** The CALL_PAL 0x3fffffe is a CPU-instruction emulation
+  that none of the listed variants crashes (they return 0 or skip the write, never abort).
+  No variant under which `wide alive` alone goes red. It is a construction control, not a
+  detection control; it adds no distinguishing power beyond `wide live`. Not a defect — but
+  not load-bearing either.
+
+* **`wide live` IS a real device-signature control.** The SCR register at COM2 base 0x2f8 + 7
+  = 0x2ff is in ISA I/O space (lca_isa's sparse window), not in main RAM. If the device were
+  missing or RAM were returned, the read would yield 0 (dispatcher pre-zero on READ for an
+  unknown device's bytes other than ofs) or whatever the device returns — not 0x5a. The
+  PRESET 0x5a is written via `p1`'s 1-byte store through the same path. So `wide live`
+  confirms device presence AND liveness. (Note: it is run BEFORE the wide write, so it does
+  not depend on the wide-write variant.) RAM alone cannot return 0x5a because the SCR is not
+  in RAM.
+
+* **RET is correct, given the instruction layout.** Both variant legs printed t4 = 0x5a, so
+  the program reached phase 4. If the PROM return were broken, phase 4 would not execute and
+  we'd see no t4 print; that would read as a construction failure, not a detection. The
+  variants measured do not break the PROM return (they affect lca_isa, not alpha_prom_call),
+  so RET works.
+
+* **GETENV as the only producer of `len > 8` into this window on `alphabook1`: NOT
+  SETTLEABLE FROM THE PACKET.** Section 4 inlines store_buf and alpha_prom_call; no READ
+  producer is found; no PHYSICAL or DMA path is addressed. The brief explicitly asks about
+  PHYSICAL accesses (which the 1 KB split exempts) and DMA into the sparse window. I name
+  this as a premise that needs a file lookup: grep `GXEMUL-SEC/src/` for any device whose
+  `memory_rw` / DMA path can target `LCA_PCI_SIO` (0x1c0000000) with len > 8. If one
+  exists, the 12-cell enumeration undercounts and the width space is potentially unbounded.
+
+---
+
+### Q4 — option-set completeness (REASONED)
+
+Options I see:
+
+1. One row per reachable cell in one diff (12 rows).
+2. Representative subset + honest disclosure (what the brief did; disclosure overstated).
+3. Disclosure only (rejected by pass 6 for good reason).
+4. One GETENV session sweeping every reachable cell with an anchored oracle (forwarded byte
+   names which string offset arrived).
+
+I cannot grep the fork for other wide-producer row precedents (Q4 asks me to). If the fork
+has an established pattern for similar width classes, I do not see it from the packet. Of
+the four options named, **option 4 is the strongest**: one session, one oracle, every cell,
+and the contract can name exactly which cells are exercised. Option 1 is brute-force but
+verifiable. Option 2 is what the brief did — and the disclosure must be honest (it isn't).
+Option 3 is what pass 6 rejected.
+
+---
+
+### Q5 — other findings (REASONED)
+
+1. **The new row's effective coverage is 1 of 12 reachable cells**, while its contract names
+   12. The 11-cell gap is the class-closure obligation. [REASONED]
+
+2. **The contract's clause (iii) and the parent header's "COVERED, not merely disclosed" are
+   L4 wrong records** for non-uniform variants (a), (b), (c), (e), (g). True for the original
+   `&& len ≤ 8` (uniform decline); false for these. The brief itself flags this. [REASONED]
+
+3. **`wide alive` is a construction control**, not load-bearing for detection. If the row
+   were `wide live + wide getenv`, the catch would be identical. Not a defect, but a place
+   the row could be slimmed without loss. [REASONED]
+
+4. **Variant (h) is out of floor scope.** The for-loop predicate is in the READ arm, not
+   dominating the diff's edited lines. The brief asks about it; the answer is EQUIVALENT,
+   but the question is moot under the dominance rule. [REASONED]
+
+5. **Premises not checkable from the packet:** (i) GETENV's uniqueness as a wide producer
+   (PHYSICAL/DMA not addressed); (ii) whether the contract's "guard form or write-arm-
+   conjunct form" includes early-returns (variant (g)); (iii) precedents in the fork for
+   wide-producer rows. Each is named above with the single fact that would settle it.

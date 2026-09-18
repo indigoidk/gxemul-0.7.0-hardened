@@ -1,0 +1,58 @@
+VERDICT: DOES NOT CLOSE -- Q1 variants (a), (b), (c), (e), (g) are reachable len>8 width guards not distinguished by any shipped row, so the composite detector still has floor breaches; the contract and parent header overstate coverage.
+
+## Q1 — Candidate weakenings
+
+REASONED from the inlined function and row construction; not measured.
+
+| id | edit | disposition | first differing input |
+|----|------|-------------|----------------------|
+| (a) | `writeflag == MEM_WRITE && len <= 16` | NOT DISTINGUISHED | width=64, k=0, lane 0, MEM_WRITE |
+| (b) | `len == 0 || len > 16` | NOT DISTINGUISHED | width=64, k=0, lane 0, MEM_WRITE |
+| (c) | `writeflag == MEM_WRITE && (len <= 8 || (relative_addr & 3) == 3)` | NOT DISTINGUISHED | width=16, k=0, lane 0, MEM_WRITE |
+| (d) | `ofs = (relative_addr & 3) % (len > 8 ? 8 : len)` | EQUIVALENT everywhere | — |
+| (e) | `len == 0 || (len > 8 && relative_addr < 0x200)` | NOT DISTINGUISHED | width=16, k=0, lane 0, port < 0x200, MEM_WRITE |
+| (f) | `byte = data[len > 8 ? 0 : ofs]` | DISTINGUISHED by `wide getenv` | row cell C=16, k=0, lane 3, MEM_WRITE; variant yields 0x41 vs 0x44 |
+| (g) | insert before shift: `if (len > 8 && (relative_addr & 0x10)) return 0` | NOT DISTINGUISHED | width=16, k=16, lane 0, MEM_WRITE |
+| (h) | `for (i=0; i<len && i<8; i++)` | EQUIVALENT | — |
+
+The row uses C=16, k=0, lane 3, port 0x2ff. Variants (a), (b), (c), (e), (g) all behave identically to shipped code on that cell, and the parent probe’s 352 rows are all len<=8, so they are undetected by the composite.
+
+## Q2 — Rule question and disposition
+
+These undetected reachable variants are **L2 floor breaches**, not clause-(e) debt.
+
+Governing rule: **pass 6’s “diverges only outside the probed set, but guest-reachable” criterion**, because the variants are inside the new row’s stated contract. The contract says:
+
+> DESIGNED TO CATCH: any guard that declines a len > 8 WRITE to lca_isa, in either the guard form or the write-arm-conjunct form.
+
+Variants (a), (b), (c), (e), (g) are exactly such guards: they decline a len>8 write on some reachable cell. They are not disclosed as outside the contract, and they are reachable by `store_buf`/GETENV with a longer `-o` string or different buffer alignment. Therefore they owe rows in-round.
+
+The joint-cells letter does not excuse them here because the DEPENDS-ON bound includes predicates dominating the diff’s edited lines, and the floor clause explicitly names qualified guards and relaxed bounds. The body never tests `len` thresholds, but the guard’s `len` operand is one of the edited operands; pass 6 already ruled that a reachable len>8 divergence cannot be discharged by a contract line. The same applies to len>16 and lane/k-conditioned len>8 variants.
+
+Since pass 6 found one width breach and this pass finds more width breaches, **class closure applies**. The next repair owes the full reachable width space.
+
+The twelve-cell enumeration in section 4 is correct for the demonstrated `store_buf` producer:  
+C=16, k∈{0,16}, all four lanes = 8 cells;  
+C=64, k=0, lanes 0 and 2 = 2 cells;  
+C=256, k=0, lane 0 = 1 cell;  
+C=1024, k=0, lane 0 = 1 cell.  
+It omits any physical/DMA wide producer if one exists, and it over-counts only if some lanes cannot be made observable by a readable device register; such cells would then be clause-(e) disclosed, not silently ignored.
+
+The contract’s clause (iii) (“the others share the same `len > 8` predicate”) and the parent header’s “The width cell is therefore COVERED, not merely disclosed” are **L4 wrong records**: they are refuted by (a), (b), (c), (e), (g).
+
+## Q3 — Premise audit of the row
+
+- **`wide alive`** has no discriminating power for the intended width variants; it is a survive-only construction sanity check. Under the measured base, `&& len<=8`, and `len==0||len>8` variants it remains alive. No single width variant makes `wide alive` alone go red.
+- **`wide live`** is a real device-signature control. It first stores 0x5a to the ns16550 scratch register and reads it back. A missing device would likely return 0 or some unmapped value, not 0x5a; RAM at that address returning exactly 0x5a is not credible from the packet but cannot be measured here. It is a reasonable control.
+- **`RET`** is correct as derived: it points to the first instruction of phase 4, immediately after the CALL_PAL instruction block. A variant that broke the PROM return would make the base leg fail as well, and would be read as a row construction failure, not a detection. The measured variant legs reached phase 4, so the return path worked for those cases.
+- **GETENV as the only producer** cannot be fully settled from the packet. The inlined sources show `store_buf` via GETENV as the only demonstrated wide producer into the sparse window; no wide-read producer is shown. A physical/DMA producer is not excluded. The single fact that would settle it: whether any `memory_rw` caller with `writeflag == MEM_WRITE` and `len > 8` can target `LCA_PCI_SIO` on `alphabook1` other than `store_buf`.
+
+## Q4 — Option-set completeness
+
+Option 4 is the natural class-closure diff if feasible: one GETENV session that sweeps every reachable (C, k, lane) cell with an anchored oracle, using the forwarded byte to identify which string offset arrived. If some lanes lack a readable device register, those cells become disclosed clause-(e) debt rather than rows. Otherwise one row per observable cell is the fallback.
+
+No additional option beyond those four is evident from the packet.
+
+## Q5 — Other findings
+
+The parent header’s “COVERED, not merely disclosed” is an L4 overstatement for the reasons above. The new row’s contract clause (iii) is likewise too broad. Both should be corrected to state exactly which width cells are covered and which are disclosed, once the class closure is implemented.

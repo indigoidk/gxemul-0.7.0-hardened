@@ -1,0 +1,81 @@
+VERDICT: DOES NOT CLOSE -- (a), (b), and (c) escape the composite detector; I apply pass 6’s ruling as a width-class precedent.
+
+I read only the seven permitted files, using `git show 8bd97e4:<path>`. I independently enumerated the address/width combinations and evaluated the committed instruction encoder. I did not rerun the emulator; the supplied measurement results remain reported evidence.
+
+My review denominator is the eight Q1 edits, all twelve GETENV-derived wide cells, and the composite’s instruction-driven parent plus its single wide-write case.
+
+For Q1, your classifications hold on the established producer domain. “First” below means the smallest reachable width and first affected lane/offset class; the port is a concrete representative, not a claim about the machine’s lowest mapped port.
+
+| Edit | Classification | First differing reachable cell |
+|---|---|---|
+| **(a)** | **NOT DISTINGUISHED** | `(64, k=0, lane=0, WRITE)`, e.g. port `0x2fc`. The write becomes a read. |
+| **(b)** | **NOT DISTINGUISHED** | Same cell. The write is refused. |
+| **(c)** | **NOT DISTINGUISHED** | `(16, k=0, lane=0, WRITE)`, e.g. `0x2fc`. Lanes 0, 1, and 2 become reads. |
+| **(d)** | **EQUIVALENT** | No differing input. |
+| **(e)** | **NOT DISTINGUISHED** | `(16, k=0, lane=0, WRITE)` below port `0x200`; port `0x64` with the parent’s self-test command provides an observable example. |
+| **(f)** | **DISTINGUISHED** by `wide getenv` | First affected lane is 1 at width 16, e.g. `0x2f9`. The shipped lane-3 row observes `0x41` instead of `0x44`. |
+| **(g)** | **NOT DISTINGUISHED** | `(16, k=16, lane=0, WRITE)`, e.g. `0x2fc`. The shipped row has `k=0`. |
+| **(h)** | **EQUIVALENT through the dispatcher** | No differing guest-visible input through the checked dispatch path, including a hypothetical wide read. |
+
+For the UART write examples, choose a forwarded byte different from the preset register value. Reachability alone does not guarantee an observable difference at an unmapped port.
+
+The arithmetic checks were:
+
+- Producer widths, walked downward: `1024, 256, 64, 16, 4, 1`. Thus **64, not 17**, is the first established width exposing (a)/(b).
+- For (d), lanes `0,1,2,3` produce indices `0,0,0,0` at length 1; `0,1,0,1` at 2; `0,1,2,0` at 3; and `0,1,2,3` at every length from 4 onward. Replacing a denominator greater than 8 with 8 changes none.
+- For (h), the only potentially nonzero position is `0`, `1`, `2`, or `3`. Positions `8` onward already contain zero because [the dispatcher clears the read buffer before calling the handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485). The absence of a known wide-read producer is therefore unnecessary to this equivalence proof.
+
+For Q2, **my adjudication is L2 for (a), (b), and (c); clause-(e) debt for (e) and (g).**
+
+I treat pass 6 as a specific exception establishing coverage obligations for the reachable **width class**, rather than an exception for the literal constant `8`. Under that interpretation, moving the cutoff to `16` cannot discharge the obligation. Candidate (c) additionally uses the lane partition already present in the handler.
+
+The joint-cells limit still governs new address partitions:
+
+- **(e)** introduces an arbitrary port boundary the body does not test.
+- **(g)** tests bits discarded before the edited calculation. The parent explicitly discloses this class in [its existing contract](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py:194). Its inserted predicate also is not an existing dominating predicate.
+
+This is an explicit resolution of the supplied rule conflict. If the unchanged joint-cells letter instead governs *all* new width thresholds, the width escapes become debt—but pass 6’s contrary classification then needs an explicit correction. The source code cannot choose that governance rule.
+
+The twelve-cell enumeration is correct **as a projection of GETENV/store_buf outputs**. I walked every starting offset in the registered window, applying the producer’s descending size selection:
+
+| Width | Reachable `(k, lane)` pairs | Starting addresses counted |
+|---|---|---:|
+| 16 | `(0,0), (16,0), (0,1), (16,1), (0,2), (16,2), (0,3), (16,3)` | 131,072 |
+| 64 | `(0,0), (0,2)` | 32,768 |
+| 256 | `(0,0)` | 8,192 |
+| 1024 | `(0,0)` | 2,048 |
+
+That is **174,080 address/width pairs projecting to twelve cells**. None crosses a 1 KB boundary or the window’s end.
+
+However:
+
+- Twelve is not an enumeration of every port-dependent variant. Each projected cell contains many ports; representative coverage cannot establish arbitrary address predicates.
+- Under the body-partition rule, the two `k` values at width 16 are equivalent: the handler discards them. Collapsing those duplicates leaves **eight width/lane obligations**, of which the new row exercises one.
+- Other producers remain unresolved, as discussed below.
+
+With my ruling, consecutive width-class breaches trigger class closure. One diff should cover the eight established width/lane cells. Covering all twelve combinations is a reasonable strengthening, while retaining explicit disclosure of arbitrary address/data qualifiers and the unresolved producer inventory.
+
+There are also record corrections regardless of that ruling:
+
+- Clause (iii) correctly says the larger widths were not measured. Their satisfying `len > 8` does **not** establish coverage against `len > 16`.
+- The parent’s “width cell … COVERED” statement should name the two distinguished mutant shapes and the actual `(16,0,3,WRITE)` case.
+- The new contract’s “any guard” wording overstates its demonstrated coverage.
+
+For Q3:
+
+- **`wide alive`:** None of the eight candidates, or the two supplied measured variants, makes this row alone fail. A terminating variant during GETENV also prevents the final value observation. This is a process-survival control, not an independent discriminator of write acceptance; a stopped guest can also leave its debugger process alive.
+- **`wide live`:** It is a useful round-trip control, but **not a device signature**. The scratch register is an ordinary stored byte in [the UART implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c:298), so RAM could reproduce `0x5a`. A genuinely missing device at these out-of-RAM addresses ordinarily reads zero in the checked dispatcher and fails the control. Also, ordinary RAM backing the sparse address would yield `'A'` after the wide copy, so `wide getenv` provides additional discrimination. That does not justify calling `wide live` itself a device signature.
+- **`RET`:** Correct. Evaluating the committed encoder gives phase lengths `1, 4, 4, 9, 4`. Initialization occupies instruction 0; phases 1–3 occupy `1–4`, `5–8`, and `9–17`. CALL_PAL is instruction 17 at `0xfffffc0001040044`; phase 4 begins at **`0xfffffc0001040048`**, exactly `RET`.
+- **Return-failure classification:** The script does not implement an automatic “construction failure” disposition. It retries missing prints once, then scores missing or incorrect values as failures. A failing baseline must be adjudicated externally as an invalid construction/run. A return failure occurring only in a variant is not automatically a construction failure. The reported `t4=0x5a` results support the intended refusal/fallthrough explanation for these particular runs.
+- **Other wide producers:** **Unsettled globally.** GETENV is the wide producer identified in the permitted files; the other checked PAL memory operations use byte, word, or quadword helpers. PHYSICAL accesses really do bypass the split, as do accesses with a null translator. These seven files do not contain the complete machine/device DMA inventory, so I cannot honestly say “checked alphabook1 and found none.” The dispatcher alone does not exclude a larger device transfer.
+
+For Q4, another option is a **direct handler differential test**, anchored by the guest-level row, together with equivalence or unreachability proofs where appropriate. That could cover more inputs, but would not itself prove guest reachability.
+
+I would choose **(1), implemented as a parameterized collection of isolated guest cases**, covering all twelve combinations in one diff. Reuse the parent’s established device oracles where alignment prevents using the scratch register. Keep the expected source byte distinct from the preset and every alternative source position being tested.
+
+There is a concrete reason to prefer isolation over an unchecked single-session sweep: **write-arm fallthrough overwrites the GETENV source string**. `store_buf` passes its source buffer to `memory_rw`; the mutant then enters the read arm and writes zeros and the fetched byte into that buffer. A later GETENV can consequently see a shorter string and issue smaller accesses. A single-session sweep needs an explicit source-restoration mechanism before each case.
+
+For Q5, two additional corrections follow directly from the checked code:
+
+- **Contract (i) conflates byte selection with dropped bytes.** The sixteen supplied bytes are `A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P`. Only offset 3 contains `D`, so this row distinguishes every other in-bounds index substitution at its tested cell. It does not require delivery of the other fifteen bytes. Those are different properties.
+- **The probe has no failure exit status.** It prints `FAIL`, `WIDEWRITE_RESULT`, and `WIDEWRITE_DONE`, then exits normally. Any runner must parse the result; process exit status alone does not enforce this detector.

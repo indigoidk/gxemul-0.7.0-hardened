@@ -1,0 +1,89 @@
+VERDICT: DOES NOT CLOSE — Q1(c) (lane-conditioned write-arm conjunct) and Q1(e) (port-conditioned guard) are guest-reachable, undetected by every shipped row, and keyed on operands the guarded body's own behavior *does* distinguish (which byte is forwarded / which device address receives it), so they are L2 on either candidate rule; with pass 6 that is two consecutive width-class breaches, and the pass owes the class closure (rows over the 12-cell width space, plus correction of the "COVERED, not merely disclosed" line and contract clause (iii)).
+
+Denominator of my walk: variants (a)–(h) as single edits to §3's function, over the input space {WRITE, READ} × (len ∈ {1,2,4,8} instruction-driven [READ, settled §6, not re-derived] + len ∈ {16,64,256,1024} via store_buf) × the 12 (C,k,lane) cells of §4, which I re-enumerated independently below. Survivors of adjudication: (c), (e) L2; (a), (b), (g) rule-dependent (analysis in Q2); (d), (h) equivalent; (f) killed. Non-zero ⇒ does not close.
+
+---
+
+**Premise re-verifications (the brief demanded enumeration, so I walked these)**
+
+- §4 table — REASONED, confirmed by my own walk. store_buf emits only C ∈ {1,4,16,64,256,1024}, each at a C-aligned address (the `if ((addr & (psize-1)) == 0)` gate), and `#define MRW_SPLIT_MASK 0x3ff` with `while (len > granule - offset)` passes each chunk whole (1024 at offset 0: `1024 > 1024` false — READ). With A = 32P + k: C=16 needs 16|(32P+k) ⇒ k ∈ {0,16}, any P ⇒ 2×4 = 8 cells ✓; C=64 ⇒ k=0, P even ⇒ lanes {0,2}, 2 ✓; C=256 ⇒ k=0, 8|P ⇒ lane 0, 1 ✓; C=1024 ⇒ k=0, 32|P ⇒ lane 0, 1 ✓. Total 12. The table is correct *given* the producer premise (Q3).
+- Row cell: SP(0x2ff) = base + 0x5fe0; 0x5fe0 & 15 = 0, & 63 = 0x20 — READ/REASONED: exactly one 16-chunk, k=0, lane = 0x2ff & 3 = 3 ✓. WANT = BOOTSTR[(3) % 16] = BOOTSTR[3] = 'D' = 0x44 ✓, and (P&3) % 16 = 3 matches the shipped ofs ✓ (§6: (P&3)%len == P&3 for len ≥ 4 is arithmetically trivial ✓).
+- RET — REASONED correct: it is k0(CODE) + 4 × (count of every instruction before p4), i.e., the first instruction after the CALL_PAL; T0 is untouched by p1–p3 by inspection of the inlined bodies; slot 0 (k0(SP(SCR))) is re-fetched by every phase's `LDQ(T2,0,T0)`. The measured base 3/3 (READ) confirms the committed layout.
+
+---
+
+**Q1 — adjudication of the eight edits**
+
+| id | verdict | first input where codes differ |
+|---|---|---|
+| (a) `&& len <= 16` | NOT distinguished | WRITE, C=64, k=0, lane 0 (or 2) — nothing reachable has 16 < C < 64 (chunk alphabet is power-of-4) |
+| (b) guard `len > 16` | NOT distinguished | WRITE, C=64, k=0, lane 0/2 (no wide read producer, so read side is moot) |
+| (c) `&& (len <= 8 ‖ lane==3)` | NOT distinguished | WRITE, C=16, k=0, lane 0 (then lanes 1,2; also k=16 × lanes 0–2) |
+| (d) `% (len>8 ? 8 : len)` | EQUIVALENT | P&3 ≤ 3 < 8 < len for every len > 8, reachable or not ⇒ % len ≡ % 8 |
+| (e) guard `len>8 && P<0x200` | NOT distinguished | WRITE, C=16, k=0, any lane, P < 0x200 (guard site is post-shift ⇒ it's P, not the byte offset) |
+| (f) `data[len>8 ? 0 : ofs]` | DISTINGUISHED by `wide getenv` | row cell: 0x41 ('A') vs 0x44 — anchored oracle catches it ✓ author's prediction ✓ |
+| (g) pre-shift `len>8 && (rel_addr & 0x10)` | NOT distinguished | WRITE, C=16, k=16, any lane (bit 4 of the pre-shift offset is a discarded k bit; C ≥ 64 forces k=0) |
+| (h) read loop `i<8` bound | EQUIVALENT | ofs < 4 < 8 so data[ofs] is set either way; ≥ 8 tail is pre-zeroed by dispatcher line 95 (READ); no reachable wide read |
+
+All eight author predictions check out under enumeration (REASONED). The measurements for (f)-family and the two scored mutants are READ, not re-derived.
+
+---
+
+**Q2 — which rule governs**
+
+I apply the **joint-cells letter, read through observable distinction** — "the body's own code distinguishes them" must mean *the shipped code's guest-observable behavior varies over the partition*, not "the body contains an `if` testing it". Consequences:
+
+- **pass 6's "diverges only outside the probed set ⇒ L2" does not govern as a general rule.** It keys breach-ness to an accident of the probe's domain, and if applied uniformly it empties clause (e): *every* disclosed cell is by definition "outside the probed set," so disclosure could never discharge anything. Clause (e) was textually adopted; it must carve a real exception. (Pass 6's *disposition* was still fine — the row it demanded was cheap and, per below, the width space turned out to contain real joint cells.)
+- **A purely textual reading of the letter ("len is tested only against 0") is equally wrong in the other direction.** The write arm reads `data[ofs]` and forwards to `LCA_ISA_BASE + relative_addr`; which string byte is forwarded and which device register receives it are observable behaviors that vary with **lane** and with **port**, without any comparison. Those partitions are body-induced by *use*, so cells conditioned on lane or port are JOINT cells and clause (e) does not reach them.
+
+Under that rule:
+- **(c) is L2.** Lanes are body-distinguished (lane selects the forwarded byte *and* the low address bits). C=16/k=0/lanes 0–2 are reachable (a3=16, a2 at SP(0x2f8+…), e.g. MCR at 0x2fc or IER at 0x2f9 for read-back). No shipped row diverges there. — and note this is L2 **even under pass 6's criterion**, so the rule conflict does not rescue closure.
+- **(e) is L2 on the cell question** (port identity is body-distinguished via the forward address; C=16 at P<0x200 is reachable input). Whether a distinguishing *row* is buildable needs a fact not in the packet — see P2 below.
+- **(a), (b), (g) are clause-(e) debt under this rule** (len-magnitude and k are never observably distinguished by the body — k is erased by `>>= 5` before any read); they would be L2 under pass 6's criterion. Since (c)/(e) trigger the L2 branch anyway, I recommend the closure diff row the cells that kill them (below), upgrading debt to kills where the row is one line.
+
+**L2 branch taken: class closure.** Is the 12-cell table the right space? — Mostly, with named edges:
+
+- *Right:* it enumerates the producer's full emission alphabet correctly (verified above). No cell is over-counted as unreachable: all 12 are a2/a3/-o-reachable.
+- *Omits (excludable with warrants, not silently):* (i) the 4- and 1-byte store_buf tail chunks and **misaligned-a2 byte bursts** — device-visible identical to instruction-driven len 4/1 rows, excludable by equivalence, but the contract should *say* so; (ii) the whole table is **conditional on the producer premise** (Q3/P1): a non-store_buf writer emitting, say, len=32 would add buckets the predicates can isolate (a `len<=16` is already (a); a `len<=24` would isolate 32).
+- *One diff closes:* extend the widewrite session (Q4 option 4) to sweep: (16,k=0, lanes 0,1,2) — kills (c); (16,k=0, lane 3 at a low port) — kills (e) *if* a device backs a low port (P2); (16,k=16,lane 3: a2 = SP(0x2ff)+0x10) — kills (g)-family; (64,k=0,lane 0: P=0x2f8, loopback MCR for read-back, 64-char string) — kills (a),(b); (256, P=0x2f8) and (1024, P≡0 mod 32) — kill the len≤64 / len≤256 bucket predicates. If no r/w device exists at P≡0 mod 32 (P2), that one cell is disclosed *with that warrant*.
+- **Records to correct (L4):** the parent header's *"The width cell is therefore COVERED, not merely disclosed"* is true only of the two measured len>8-keyed mutants and false of (a),(b),(c),(e),(g) as unscoped prose — scope it in place. Contract clause (iii) (*"the others share the same `len > 8` predicate"*) is a valid warrant **only against len>8-keyed variants**; (a) and (b) are keyed on len>16 and refute it as a width warrant. Correct both when the closure diff lands, not before — today they are, as written, wrong records (READ the lines; REASONED the refutation).
+
+---
+
+**Q3 — audit of the row itself**
+
+- **`wide alive` (REASONED): no enumerated variant goes red on it alone.** Every in-space variant that kills the session does so at p3 (before t4 exists) ⇒ `wide getenv` is also red; every variant leaving the guest alive leaves all prints ⇒ alive green. It is a zero-marginal-cost tripwire whose only alone-red scenarios are out-of-class (e.g., a heap smash after t4 prints). Keep it, but it detects nothing the composite doesn't.
+- **`wide live` is a real control (REASONED).** The window is device-registered (READ); absent/faulting access leaves the pre-zeroed buffer ⇒ 0x00 ≠ 0x5a; the SENT seed 0x0bad1d8a ≠ 0x5a guards the load-fault path; SCR power-on is 0x00. No plausible false green from RAM or a missing device at 0x1c0000000.
+- **RET / misread risk:** correct as enumerated above. Within DEPENDS-ON (one function boundary) no variant can break the PROM return path independently of device behavior; both measured variant legs printed t4 (READ), proving phase 4 was reached, and the pre-registered "base < 3/3 ⇒ row broken" convention (READ) is what caught the original RA-less construction. No misread channel identified.
+- **Only-producer premise — NOT CHECKABLE FROM THE PACKET.** I cannot see store_buf's caller list, other PALcode stores, or alphabook1's device DMA. What settles it: an enumeration of (1) all callers of store_buf or any analogous multi-byte writer whose destination/length a guest controls, and (2) all MEM_WRITE memory_rw calls on the PHYSICAL path (exempt from the 1 KB split per the brief's own note, so capable of len > 1024) whose address can be pointed into [LCA_PCI_SIO, +0x200000) — i.e., device/DMA writers on alphabook1. I found no counter-example in the packet, but absence here proves nothing. Note the exposure is concrete: a producer emitting len ∉ {powers of 4} adds buckets (len=32 at k=0, all lanes) that predicate families like `len<=24` would isolate — the 12-cell closure is conditional on this premise and the contract should inherit the condition.
+
+---
+
+**Q4 — option-set completeness**
+
+Two members not in the list:
+
+5. **Mutation-complete closure:** enumerate the variant set directly (the Q1 table + bucket predicates len≤{8,16,64,256} + lane/port/k conjuncts) and require every non-equivalent mutant to score red somewhere in one measurement pass — clause (d) implemented by contrapositive, and the right *verification* method for whichever closure diff ships.
+6. **Static class tripwire:** a wiring/lint rule (the tree already has `check_probe_wiring.py`, READ) flagging any new len-, lane-, port-, or k-conditioned predicate in `lca_isa`'s guard or arms beyond the two shipped lines. Dynamic rows age; this catches the class syntactically. (7, folding into the parent, was considered and reasonably rejected in the parent's header for re-measure cost.)
+
+My choice: (4) with the full 12-cell sweep, in the existing separate file, verified per (5), with (6) as the long-term guard and the two L4 record fixes attached.
+
+---
+
+**Q5 — other findings**
+
+1. **The fold premise is alignment-dependent (REASONED, from inlined store_buf).** Contract item (i) and `lcawidefold` say "only s[3] reaches the port." True for *aligned* wide chunks. But a GETENV with a2 ≡ 1 or 2 mod 4 fails every alignment gate down to psize=1 and is emitted as **sixteen len=1 memory_rw calls**, each taking the WRITE arm with ofs=0 — so *all sixteen bytes are forwarded*, in order (and k=18-style starts even straddle into port P+1). Consequences: `lcawidefold`'s dropped-15-bytes behavior has a trivial guest workaround (misalign a2), which changes that row's severity and should be one line in its contract; and the wide-write shape space contains a byte-burst shape the 12-cell table doesn't mention (harmless here — len=1 device behavior is parent-covered — but it belongs in the closure's exclusion warrant).
+2. **Clause (iii) and the parent's "COVERED" sentence are overstatements today** — L4 candidates, detailed in Q2. The author flagged being the least reliable reader of his own sentence; this seat confirms the suspicion on the merits.
+3. **`wide getenv`'s oracle is genuinely anchored** (WANT derived from the string and SCR, not typed) — this is what makes (f) a kill and the (4)-sweep feasible; worth stating because it is the load-bearing property of the whole row.
+
+---
+
+**Premises I could not settle from the packet (each with its settling fact)**
+
+- **P1 — producer completeness** ("GETENV/store_buf is the only wide writer into this window"): settle by the caller enumeration in Q3 above, including PHYSICAL-path DMA writers on alphabook1.
+- **P2 — device map below port 0x200** (whether (e)'s cell has an observable target, and whether any P≡0 mod 32 register exists for the C=1024 cell): settle by alphabook1's device registrations at LCA_ISA_BASE.
+- **P3 — "no wide-read producer"** (contract item (ii)): settled only for store_buf/PUTS as inlined; the same caller enumeration on the READ side settles it generally.
+- **P4 — parent's 352-row coverage shape** (len ≤ 8, instruction-driven): accepted as settled per §6; I did not re-derive it.
+- The reported measurements (base 3/3, two mutants 2/3, md5-identical source) are cited as READ record, not verified by me.
+
+The single deciding item, restated: **(c) — and independently (e) — are reachable, undetected weakenings over operands the shipped body observably distinguishes; that is an L2 on either rule, two consecutive width-class breaches, and the class closure (12-cell sweep + record corrections) has not shipped. The pass does not close.**
