@@ -21813,3 +21813,13 @@ would newly red a closed row: owes a ruling and its own negative controls.
 * `n6` assess RE-OPENED: the 2026-08-30 fable5 adjudication counts as an answer; fire the seven missing seats.
 * FIRE ALL MISSING SEATS on the four stages discharge-awareness exposed: `pcc2c040kill` review (agy; the round shipped as
   `9fa07fe`) and assess (6 seats), `proberowsubset` assess (6), `lcabadval` research (6).
+
+### `n6` assess -- full panel fired by owner decision (2026-09-18, `panel_20260918_133231`)
+All seven missing seats answered: the record defect is real (8 guest-reachable `exit(1)` at `dev_footbridge.c` lines
+565/574/589/604/613/622/712/737; 2 more in DEVINIT).  ACCEPT `+0x188` first (codex, grok, agy) -- but THREE probe arms
+depend on that kill and all must move in the same commit (codex).  deepseek's split, recorded: decline group first.
+
+### `fiqenableread` (LOW) -- a read of FIQ_ENABLE_SET (+0x288) returns 0, not `d->fiq_enable` (grok, n6 assess)
+
+### `pcc2c040mienannounce` (LOW) -- predicted: an announce gated on !MIEN passes all 16 rows (agy, late seat on `pcc2c040kill`)
+Plus a stale "does NOT catch" probe comment contradicted by the 9 L2 rows below it (wrong record) and t2/t3 rebinding.

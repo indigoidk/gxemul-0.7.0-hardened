@@ -1,0 +1,89 @@
+# VERDICT: GO-WITH-CHANGES
+
+---
+
+## 1. Adversarial Review of Questions (Q1–Q3)
+
+### Q1. Record Defect (P1)
+**Finding:** The record defect is **REAL**.
+- In [`OUTSTANDING_BUGS.md:2688`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2688) and [`CHANGELOG.md:18272-18274`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L18272-L18274), the summary of Round #218–#223 asserts: `#218–#223 OF + footbridge/mp/kn02ba/8253 guest-reachable exit(1)s -> graceful`.
+- In [`CHANGELOG.md:18299`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L18299), Round #220 is defined as: `devices/dev_footbridge.c: the reset port's col-0 exit(1) debug hack removed (cpu->running=0 already halts); a PCI-config access decoding to bus 255 reads as no-device instead of exit(1)`.
+- However, the deferred device-exit list in [`OUTSTANDING_BUGS.md:2689-2694`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2689-L2694) (`dev_adb.c`, `dev_clmpcc.c`, `dev_igsfb.c`, `dev_lca.c`, `dev_m8820x.c`, `dev_pcc2.c`, `dev_mb8696x.c`, `dev_mvme187.c`, Dreamcast, CP15) completely omits `dev_footbridge.c`.
+- In the active code, **eight live guest-reachable host-terminating `exit(1)` calls** remain inside [`dev_footbridge_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L498-L757).
+
+**Exact Record Correction Required:**
+> *"Round #220 removed only two special-case debug exits (`footbridge_reset` at line 449 and PCI bus 255 in `footbridge_pci` at line 479). The primary MMIO handler `DEVICE_ACCESS(footbridge)` retained eight guest-reachable `exit(1)` calls (lines 565, 574, 589, 604, 613, 622, 712, 737) across interrupt control and SDRAM window registers, plus a ninth on `TIMER_EXTERNAL` subsequently removed by #432. The summary claim that footbridge's guest-reachable host-halts were made graceful was incomplete, and footbridge should have remained on the deferred device-exit list."*
+
+---
+
+### Q2. Evaluation of Premises (P2–P4)
+
+#### Premise P2: Census and the "Ninth" Exit
+- **Census of `exit(` in [`dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c):** **CONFIRMED.**
+  There are 14 occurrences of `exit(`. Exactly 4 are in comments ([line 244](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L244), [line 449](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L449), [line 479](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L479), [line 663](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L663)). Of the 10 live calls:
+  - **Two are construction-time** in [`DEVINIT(footbridge)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L763): [`line 841`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L841) and [`line 877`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L877). These fire only on unknown machine types during machine setup, before guest execution begins.
+  - **Eight are guest-reachable** in [`dev_footbridge_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L498):
+    1. [`line 565`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L565): write to `IRQ_STATUS` (`+0x180`)
+    2. [`line 574`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L574): write to `IRQ_RAW_STATUS` (`+0x184`)
+    3. [`line 589`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L589): read from `IRQ_ENABLE_SET` (`+0x188`)
+    4. [`line 604`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L604): read from `IRQ_ENABLE_CLEAR` (`+0x18c`)
+    5. [`line 613`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L613): write to `FIQ_STATUS` (`+0x280`)
+    6. [`line 622`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L622): write to `FIQ_RAW_STATUS` (`+0x284`)
+    7. [`line 712`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L712): read from `SDRAM_BA_MASK` (`+0x100`)
+    8. [`line 737`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L737): read from `SDRAM_BA_OFFSET` (`+0x104`)
+- **Adversarial Correction to the "Ninth" Claim:** **REFUTED IN PART.**
+  P2 states: *"the ninth (a divide-by-zero on a guest-written timer encoding) was fixed by #432."*
+  This conflates two distinct issues fixed in commit `35302f2` (#432):
+  1. The divide-by-zero occurred in [`DEVICE_TICK(footbridge)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L236) via `random() % d->timer_load[i]`, causing a hardware trap (`SIGFPE`/`SIGILL`), **not** an `exit(1)` call.
+  2. The actual 9th `exit(1)` was the guest-reachable `case TIMER_1_CONTROL` handling of `TIMER_EXTERNAL` (`0x0C`: both `TIMER_FCLK_16` and `TIMER_FCLK_256` set), which called `fatal("TODO: footbridge timer: both 16 and 256?\n"); exit(1);` (documented in [`dev_footbridge.c:663-673`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L663-L673) and filed as row `n5` in [`_scratchpad/brief_exitsweep_assess.md:89`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/brief_exitsweep_assess.md#L89)).
+
+#### Premise P3: Dispositions and Semantic Partitioning
+- **ACCEPT at `+0x188` (`IRQ_ENABLE_SET` read):** **CONFIRMED.**
+  Per DC21285 Table 7-10 ([`dc21285.txt:6826`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt#L6826)) and Section 7.3.32 ([`dc21285.txt:6911-6925`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt#L6911-L6925)), offset `0x188` is `IRQEnable` on read and `IRQEnableSet` on write. Reading it is a documented, legal operation.
+  In [`dev_footbridge.c:586`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L586), the model already assigns `odata = d->irq_enable;` and immediately calls `fatal()` + `exit(1)`. Deleting `fatal()` and `exit(1)` while returning `odata` (ACCEPT) without a latch or warning is correct.
+- **Partitioning of `+0x18c`:** **SPLIT REQUIRED.**
+  `+0x18c` cannot share a round group with the status-register writes:
+  1. `+0x180`, `+0x184`, `+0x280`, `+0x284` are **writes to read-only registers**.
+  2. `+0x18c` is a **read of a write-only register** (`IRQEnableClear`).
+  3. `+0x18c` has a critical data leakage bug: line 601 assigns `odata = d->irq_enable;` before exiting. Simply de-fatalizing with decline must **suppress** `d->irq_enable` (returning 0 / undefined), or it leaks internal state. This requires distinct logic and a dedicated oracle, justifying its own sub-group.
+- **SDRAM Mask/Offset (`+0x100`, `+0x104`):** **CONFIRMED.**
+  Per DC21285 Sections 7.3.9 and 7.3.10 ([`dc21285.txt:5844, 5897`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt#L5844)), both registers are legal R/W. The current model accepts writes but kills on reads ([`dev_footbridge.c:712, 737`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L712)). Describing a read as "invalid access" would be false in product code; it is an "unimplemented read".
+
+#### Premise P4: Reshaping, Probe Repointing, and Accept Oracle
+- **Blast Radius (1 arm -> 3):** **CONFIRMED.**
+  Exactly three probes plant `0xE5907188` (`ldr r7,[r0,#392]`, reading `+0x188`):
+  1. [`regress/footbridge_sites_probe.py:103`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L103) (`KILL_LOAD`)
+  2. [`regress/fbpending_witness.py:195`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L195) (`KILL`)
+  3. [`regress/fbpending_drain_probe.py:226`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L226) (`kill` arm)
+  In [`regress/gate_arm.sh:1099`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1099), the gate explicitly asserts: `check "footbridge: the one-instruction kill arm still dies" ... "$(grep -cE '^K1 .*ok$' "$FBLOG")" "1"`.
+  If `+0x188` is made graceful without repointing K1 in [`footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L291), `gate_arm.sh` immediately turns **RED**.
+- **Repoint Target (`+0x100` vs `+0x18c`):** **CONFIRMED TEMPORARY, NOT DURABLE.**
+  Repointing to `+0x100` (`SDRAM_BA_MASK` read) avoids repointing to `+0x18c` (which is in the next interrupt round). However, `+0x100` will itself cease to kill once the SDRAM group lands. Using host crash as a failability test consumes product bugs as test scaffolding; once all eight kills are resolved, the probe must transition to an architectural failability check.
+- **Accept Oracle (OR-accumulation):** **CONFIRMED.**
+  In [`dev_footbridge.c:580`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L580), writes accumulate with `d->irq_enable |= idata`. An accept row that writes $V$ then reads back $V$ is indistinguishable from plain RAM. An oracle writing $V_1$ then $V_2$ and asserting $V_1 \mid V_2$ verifies the hardware handler's distinct accumulation logic.
+  *Structural Caveat:* The accept sequence must run in its own probe arm (or dedicated phase), **not** in the common `BODY` ([`footbridge_sites_probe.py:92-101`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L92-L101)), otherwise arm L dies on the pre-fix build and breaks the liveness controls.
+
+---
+
+### Q3. Sequencing and Detector Obligations
+
+**Round to Execute First: Group 1 (ACCEPT at `+0x188`).**
+It resolves an active correctness bug where legal guest reads kill the host emulator, with minimal production code diff.
+
+**Detector Obligations for Group 1:**
+1. **Atomic Repoint of All 3 Kill Arms:**
+   - [`regress/footbridge_sites_probe.py:103`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L103)
+   - [`regress/fbpending_witness.py:195`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L195)
+   - [`regress/fbpending_drain_probe.py:226`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L226)
+   Must be repointed to `+0x100` (`SDRAM_BA_MASK` read: `ldr r7,[r0,#256]`, planting `0xE5907100`), updating fatal regexes to expect `sdram_ba_mask` instead of `ENABLE SET`.
+2. **Dedicated Non-Vacuous Accept Arm:**
+   - Add a separate arm executing consecutive writes to `+0x188` (e.g. `0x10` then `0x20`), followed by reading `+0x188`, verifying readback equals `0x30` (`OR-accumulation`).
+   - Must not share the base `BODY` sequence to prevent negative controls from terminating prematurely on pre-fix binaries.
+3. **Subsequent Round Detector Debt (for Groups 2–4):**
+   - **Per-Site Latch Bitmask:** Must allocate independent latch bits in `struct footbridge_data` (not a single shared `d->warned`) to prevent benign MMIO traffic from silencing subsequent diagnostics.
+   - **`+0x18c` Data Zeroing:** Must explicitly test that reading `IRQ_ENABLE_CLEAR` does not expose `d->irq_enable`.
+   - **Architectural Failability Transition:** Before the final kill site (`+0x100`/`+0x104`) is removed, the probe must replace host-death failability with a non-fatal structural sentinel (e.g. state-latch confirmation).
+
+---
+
+# VERDICT: GO-WITH-CHANGES

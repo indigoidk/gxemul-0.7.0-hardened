@@ -1,0 +1,65 @@
+VERDICT: P1 and P2 are READ-true from the inlined code; P3 is partially REASONED-true but its +0x188 ACCEPT target is inconsistent with the visible exits; P4 cannot be settled from the packet — +0x100 is a live kill but only a temporary repoint target.
+
+---
+
+**P1 — READ true.**  
+The inlined code shows eight guest-reachable `exit(1)` calls in `dev_footbridge.c`:
+- line 565 — IRQ_STATUS write
+- line 574 — IRQ_RAW_STATUS write
+- line 589 — IRQ_ENABLE_SET read
+- line 604 — IRQ_ENABLE_CLEAR read
+- line 613 — FIQ_STATUS write
+- line 622 — FIQ_RAW_STATUS write
+- line 712 — SDRAM_BA_MASK read
+- line 737 — SDRAM_BA_OFFSET read
+
+Two further exits at lines 841 and 877 are in the DEVINIT machine-type switch, so they are construction-time, not guest-reachable. The record’s claim that guest-reachable footbridge host-halts were made graceful is therefore false.
+
+---
+
+**P2 — READ true.**  
+Comment-aware census from the inlined snippets: 10 live `exit(` calls.  
+Two are in DEVINIT (lines 841, 877).  
+Eight are guest-access kills, exactly as listed above.  
+The row title says nine; the ninth was not an `exit` but a divide-by-zero on a guest-written timer encoding, fixed by #432. That #432 fix is not verifiable from the packet, but the exit count is clear.
+
+---
+
+**P3 — Partially REASONED, with one real defect.**  
+The invalid-direction and SDRAM parts match the code:
+- WRITES to IRQStatus `+0x180`, FIQStatus `+0x280`, IRQRawStatus `+0x184`, FIQRawStatus `+0x284` are read-only registers and currently call `exit(1)` on write.
+- READ of IRQEnableClear `+0x18c` is write-only and currently calls `exit(1)` on read, while also returning `d->irq_enable` before the exit — the proposal correctly says it must NOT return that value.
+- SDRAM Base Address Mask `+0x100` / Offset `+0x104` reads are legal R/W registers the model does not implement; the code exits on read, and the proposal correctly reclassifies them as “unimplemented read” rather than “invalid access.”
+
+However, the ACCEPT target `+0x188` is not visible as an IRQEnable read in the inlined exits. The only nearby read-kill at lines 586–589 is labelled **“read from ENABLE SET?”** and its write branch uses `d->irq_enable |= idata`, which is enable-set semantics, not a plain R/W IRQEnable. If `+0x188` is IRQEnable (documented R/W), there is no exit for it in the supplied census; if `+0x188` is IRQEnableSet, ACCEPT would bless a read of a write-only register.  
+**Single fact needed:** the case label and address macro at line 579, or the DC21285 register map as used by this file.
+
+`+0x18c` should be its own round-group, because it has the extra requirement of not returning `d->irq_enable`.
+
+---
+
+**P4 — Cannot be settled from the packet.**  
+`+0x100` is indeed a live kill and is one hop from the device, so it can serve as an immediate repoint target. But it stops being a kill once group 3 lands (SDRAM reads become non-fatal). Therefore `+0x100` is not durable; the kill-arm probe would need another repoint or a latch-based oracle after group 3.  
+The claim that the accept row’s oracle should be the handler’s OR-accumulation signature rather than a readback is plausible from `d->irq_enable |= idata`, but the detector code is not in the packet.
+
+---
+
+**Q1 — Record correction should say:**  
+“At head, `src/devices/dev_footbridge.c` retains eight guest-reachable `exit(1)` calls: IRQ_STATUS write, IRQ_RAW_STATUS write, IRQ_ENABLE_SET read, IRQ_ENABLE_CLEAR read, FIQ_STATUS write, FIQ_RAW_STATUS write, SDRAM_BA_MASK read, SDRAM_BA_OFFSET read. Two further exits in DEVINIT are construction-time and not guest-reachable. The prior removal was incomplete.”
+
+---
+
+**Q2 — P2-P4 confirm/refute:**  
+- P2: confirm — count matches.
+- P3: refute in part — the ACCEPT target is misaddressed or mislabelled; the rest matches.
+- P4: refute as a durable claim — `+0x100` is temporary; the OR-accumulation oracle is plausible but unverified.
+
+---
+
+**Q3 — First round and detector owes:**  
+Do the **invalid-direction DECLINE group** first: writes to IRQStatus/IRQRawStatus/FIQStatus/FIQRawStatus and the read of IRQEnableClear. These are unambiguously invalid from the code, do not require repointing K1 away from `+0x188`, and remove five kills without creating a green-to-red transition.
+
+Detector obligations:
+- Accept rows for each of the five invalid accesses, expecting **no host exit** but a bounded, latched announce.
+- Use a **per-site latch bitmask**, not one shared latch, so each invalid access is independently proven and a failure at one site cannot be masked by another.
+- Include a **failability leg** now: once the last kill is gone, the gate must still be able to prove guest code reached the device via the latch bits and the OR-accumulation signature, not via host death.

@@ -1,0 +1,41 @@
+**VERDICT: P1 TRUE (record defect real, 8 guest-reachable `exit(1)` calls remain); P2 census CONFIRMED (10 total / 2 DEVINIT / 8 guest-reachable) but the historical narrative has a small unresolved gap; P3 partition structurally sound but DC21285 spec claims are NOT checkable from packet; P4 correctly identifies the K1 sequencing problem, +0x100 is a valid transient repoint.**
+
+---
+
+**P1 — record defect real.** [READ] The inlined HEAD code contains 10 `exit(1)` calls. Eight are in the MMIO access handler and are guest-reachable:
+- L565 (write to IRQ_STATUS)
+- L574 (write to IRQ_RAW_STATUS)
+- L589 (read of IRQ_ENABLE_SET, after `odata = d->irq_enable;`)
+- L604 (read of IRQ_ENABLE_CLEAR, after `odata = d->irq_enable;`)
+- L613 (write to FIQ_STATUS)
+- L622 (write to FIQ_RAW_STATUS)
+- L712 (read of SDRAM_BA_MASK)
+- L737 (read of SDRAM_BA_OFFSET)
+
+Two are in `DEVINIT(footbridge)` at L841, L877 — construction-time, not guest-reachable. The record claim that the guest-reachable kills "were made graceful" is contradicted. TRUE.
+
+**P2 — census confirmed, with one historical gap.** [READ+REASONED] The 10/2/8 split matches the inlined code exactly. The arithmetic is *not* fully closed: the brief's narrative ("row said NINE; #432 fixed the ninth; Round #220 removed two") implies 6 should remain at HEAD, but 8 do. **Single fact that would settle it: the pre-Round-#220 commit's exit(1) census in `dev_footbridge.c`.** Not checkable from packet. Possible reconciliations: (a) the original row had 10 guest-reachable (not 9); (b) one of Round #220's removals regressed; (c) the "two" the brief cites includes a DEVINIT call. None of these are knowable from packet alone.
+
+**P3 — disposition partition.** [READ for code structure, NOT-CHECKABLE for spec]
+- *Group 1 (+0x188 ACCEPT):* Structurally clean. The inlined code does `odata = d->irq_enable; … exit(1);` on read — the value is already computed. "Delete the kill, keep the value, no message" is literally a one-line deletion. Spec grounding ("DC21285 Table 7-10 documents it as readable") **not in packet**.
+- *Group 2 (DECLINE+BOUNDED LATCHED):* Five sites — writes to +0x180/+0x184/+0x280/+0x284, read of +0x18c. The +0x18c refinement ("must additionally NOT return `d->irq_enable`") is *correct and non-trivial*: it distinguishes +0x18c from +0x188 structurally — both currently leak `d->irq_enable` through `odata`, but the leak is legitimate for the documented-read register and illegitimate for the write-only one. Per-site bitmask earns its keep. Spec classifications **not in packet**.
+- *Group 3 (DECLINE+ACCURATE):* +0x100/+0x104. "Legal R/W, unimplemented" classification **not in packet**. The distinction between "unimplemented read" and "invalid access" is meaningful and matches the inlined code's two different `fatal()` text variants — but the *choice* of label is a spec call.
+- *Is +0x18c its own round-group?* No — it belongs in group 2 with one extra constraint. That's why per-site bitmask, not one shared latch.
+
+**P4 — K1 repoint.** [REASONED]
+- `+0x100` is currently a guest-reachable kill on read (verified) — valid transient target.
+- The brief's flag is real: `+0x100` *also* stops killing when group 3 lands. So K1 needs *two* repointings: once in the group-1 commit (current probe target dies), once in the group-3 commit (transient target dies). The brief identifies the first but not the second explicitly. This is a real defect in the partition plan as stated.
+- Preference for `+0x100` over `+0x18c` is asserted but not justified. Plausible reason not in the brief: `+0x18c` is too close in semantics to `+0x188` (the very register being ACCEPT-fixed), making the probe near-tautological; `+0x100` is a different register class (SDRAM vs IRQ) and gives broader coverage.
+
+**Q1 — what the record correction must say.**
+> Round #220 (and the #218-#223 round as a whole) did NOT make the footbridge's guest-reachable kills graceful. At HEAD, eight guest-reachable `exit(1)` calls remain: 1 read-side (`+0x188`, documentedly readable per DC21285 Table 7-10 — should ACCEPT), 5 direction-invalid (`+0x180`/`+0x184`/`+0x280`/`+0x284` writes, `+0x18c` read; should DECLINE+BOUNDED LATCHED), 2 unimplemented (`+0x100`/`+0x104` reads; should DECLINE+ACCURATE "unimplemented read"). The ninth item in the row — divide-by-zero on guest-written timer encoding — was correctly retired by #432 and is no longer in the file. Construction-time kills at L841/L877 (DEVINIT `default:` arms) are out of scope for this row.
+
+**Q3 — first round and detector obligations.**
+- *First round:* **Group 1 (+0x188 ACCEPT).** Reasons, ranked: smallest diff (one line); clearest spec backing (if the spec claim holds); only group whose fix immediately retires a kill that an existing gate row (K1) currently depends on; oracle is the handler's OR-accumulation signature, which is testable end-to-end without reading +0x188 back.
+- *Detector obligations:*
+  - Accept row oracle = OR-accumulation. Concretely: write a bit to +0x188, observe the interrupt line assert when `d->irq_status` carries it; do *not* read back +0x188 as the proof (the whole point is that read no longer kills and now just returns `d->irq_enable`).
+  - **Per-site latch bitmask**, not one shared latch. Five sites × 1 bit; shared latch loses the diagnostic of which direction was hit.
+  - **No failability leg in group 1.** Group 1 still leaves 7 guest-reachable kills in the file. A "no exit(1) on bad access" test would go red.
+  - **Failability leg belongs with group 3** — the round that retires the last *guest-reachable* kill. That commit must also retire K1 (or repoint K1 a second time); the brief does not state this explicitly, and it should.
+
+**Single defect worth naming above all others:** the brief's plan repoints K1 once (in the group-1 commit) but `+0x100` — the chosen repoint target — also dies when group 3 lands. K1 needs a second repointing (or retirement) at the group-3 commit, and the brief does not say so. If group 3 lands without that second move, the gate will go red *by the same success that retires the last kill*, exactly the failure mode the brief warns about for group 1 but does not extend to group 3.

@@ -1,0 +1,125 @@
+RATIFY-WITH-FINDINGS
+
+---
+
+### Context & Review Stage
+
+This review is the late seat (`agy`) answering the Pass 2 brief for `#512` (`pcc2c040kill`), evaluated against the codebase at **HEAD** where `#512` has already shipped as commit `9fa07fe` (plus subsequent in-tree updates).
+
+Below are the answers to the brief's specific questions, an audit of where HEAD differs from the brief's 11-row proposal, and the findings that remain live at HEAD.
+
+---
+
+### Q1 (LOAD-BEARING): Which of the five dispositions is wrong?
+
+**Disposition 1 is wrong.**
+
+1. **The Encounter Axis is not two cells.**
+   Disposition 1 asserts that the encounter axis was closed by adding a single repeated write (`c040 noassert2`, `repeat=2`) covering two cells: `FIRST` and `LATER`. That partition is valid only for `warned` *conditioned on C040 remaining set*.
+   
+   The C040 suppression block in [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L410-L417) reads **two** device-state lvalues:
+   - `d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040`
+   - `d->warned & (1u << PCC2_W_C040)`
+
+   Their product is **four cells (2 × 2)**, not two:
+   | | `warned == 0` | `warned == 1` |
+   |---|---|---|
+   | **C040 clear** | `irq live` (fresh machine) | **Empty in the 11-row brief** (recovery cell) |
+   | **C040 set** | `c040 noassert` | `c040 noassert2` |
+
+   The unrowed cell is **C040 cleared after the latch has already fired**. Disposition 1 claimed the axis was closed while Disposition 5 simultaneously filed "no recovery observation" as clause-(e) contract debt. That was a contradiction: recovery is the fourth cell of the exact product defining the axis. A one-clause sticky mutant:
+   ```c
+   if ((d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) || (d->warned & (1u << PCC2_W_C040))) {
+   ```
+   scores a clean **11/11 sweep** against the brief's suite.
+
+2. **Disposition 3 was incompletely applied.**
+   Disposition 3 rightly mandated `irq pending` (`SCCTX == 0x33`) to ensure that delivery suppression is distinguishable from "no request was ever created". However, in the brief's 11-row suite, this check was applied **only to the positive live session**. `assert_row()` returned `r11d` and `r112b` for the C040 sessions, but discarded them. If a C040 store had inadvertently destroyed the pending device request, both C040 rows would have passed vacuously.
+
+*(Both defects were acknowledged and corrected before shipping in `9fa07fe`: row `c040 recover` closed the fourth product cell, and `c040 pending` / `c040x2 pending` / `c040rec pending` completed the liveness checks).*
+
+---
+
+### Q2: What is the smallest edit to the SHIPPED FIX that still scores 11/11?
+
+Against the **11-row instrument in the brief**, three distinct mutants score 11/11:
+
+1. **Sticky suppression / Never recovers (1-clause edit):**
+   ```c
+   if ((d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) || (d->warned & (1u << PCC2_W_C040)))
+   ```
+   After the first C040 write sets the latch, all subsequent recalculations suppress interrupts even when C040 is cleared. `irq live` still passes because it runs on a fresh machine (`warned == 0`), and both C040 rows pass. Scores **11/11**.
+
+2. **Suppression via MIEN clobbering (collateral state corruption):**
+   ```c
+   assert = 0;
+   d->pcctwo_reg[PCCTWO_GENCTL] &= ~PCC2_MIEN;
+   ```
+   The brief's rows observed only execution endpoints (`pc`) and pre-write state; they never read back GENCTL post-suppression. Clearing MIEN achieves suppression while corrupting unrelated architectural state, scoring **11/11**.
+
+3. **Latch overwrite instead of OR (`M_warnassign`, 1 token):**
+   ```c
+   d->warned = (1u << PCC2_W_C040);  /* '=' instead of '|=' */
+   ```
+   This clears every other warning bit accumulated by prior device activity. The 11-row suite (and indeed the 16-row suite) checks only whether prior traffic suppresses C040 (`c040 predirty`), never whether prior latch bits survive C040. Scores **11/11** (and survives 16/16).
+
+*(Note on non-escapes)*:
+- **C040 tested before MIEN**: The two checks both write local `assert = 0` before the `INTERRUPT_*` dispatch tail. Reordering them produces identical behavior on these inputs.
+- **`assert = 0` $\to$ `return;`**: This does **not** escape. It is killed by `c040 noassert` (scores 9/10 in table 2, and 14/16 at HEAD). The claim in `dev_pcc2.c` that it was an escape of the assert rows was an error in the comment, refuted by measurement and corrected on 2026-09-17.
+
+---
+
+### Q3: Is the apparatus sound?
+
+1. **PC after `reg` as breakpoint attribution:**
+   - **Sound in discrimination**: Vector 1 breakpoint is `0x8` (which spins on `br .`), while completion is `CODE + 4*(len(insns) + 1)` (`0x1001c` or `0x10020`). Because `0x8` spins, a guest reaching the vector cannot subsequently reach completion, making the two endpoints mutually exclusive.
+   - **Parser detail**: `m88k_cpu_register_dump()` formats PC as `pc  = 0x%08PRIx32`, which matches `r"pc\s*=\s*0x([0-9a-f]{8})"`.
+   - **Attribution caveat**: `("continue", 6.0)` is a blind drain without an `until` token. `reg` is typed regardless of whether a breakpoint was hit. If execution hangs or stops early, `pcs[-1]` can be the leftover PC from `step` (the `I_ST_SCR` instruction). Because that address does not match either breakpoint, it fails closed, but the assertion that "both rows stop at a breakpoint" is an inference from PC rather than direct breakpoint-hit token attribution.
+
+2. **GENCTL rewrites and pending SCC TX state:**
+   - **Sound**: Writing `GENCTL` does **not** disturb the pending SCC TX request.
+   - In [`src/devices/dev_clmpcc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_clmpcc.c), asserting IER asserts the line level-style. In [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L440), `pcctwo_interrupt_common` ORs `PCC2_IRQ_INT` into `SCCTX`.
+   - Stores to `PCCTWO_GENCTL` only modify `GENCTL` and re-evaluate `reassert_interrupts()`; they do not touch `SCCTX`. `M_latchinside` scoring 10/11 proves that the request remains pending through the first C040 write to trigger the interrupt on the second.
+
+3. **Apparatus Defect (Landmine in `assert_row`):**
+   - [`assert_row()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py#L454-L457) initializes registers `r2` and `r5-r13`, but **omits `r3`**.
+   - Line 448 appends `I_ST_SCR`, which encodes `st r5, r3, 0`.
+   - Because `r3` is uninitialized, it defaults to `0x00000000`. On every completion path, `st r5, r3, 0` writes `r5` (`PSR_INDCLR` = `0x80000000`) to physical address `0x0`—clobbering the m88k hardware reset vector slot! While harmless to vector 1 (`0x8`) in this harness, it violates the contract that the completion store is to `SCRATCH` memory.
+
+---
+
+### Where HEAD Differs from the Brief
+
+HEAD contains several critical additions and corrections beyond the brief's 11-row draft:
+
+1. **Expanded to 16 rows (`9fa07fe`):**
+   Instead of 11 rows, [`regress/pcc2_c040_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py) at HEAD defines 16 rows across 5 kill tables:
+   - Added `c040 recover` (line 524): tests C040 cleared after latch set, killing `M_sticky` (11/12).
+   - Added `c040 genctl` (line 536): reads back `r14 == 0x06`, verifying GENCTL was not clobbered, killing `M_mienclobber` (12/13).
+   - Added `c040 pending`, `c040x2 pending`, `c040rec pending` (lines 548-550): verifies `SCCTX == 0x33` in each C040 session, closing the Disposition 3 liveness gap.
+2. **`assert_row()` signature & body changed:**
+   - Parameter `then_genctl=None` added to support recovery writes.
+   - `LD_BU(14, GENCTL)` added to read back GENCTL into `r14`.
+   - Return tuple expanded from 6 to 7 elements.
+3. **Accept-row `genctl ctlq` repaired (2026-09-09, `1f2b27a`):**
+   - In the brief, `genctl ctlq` was keyed on `"C040 interrupt assertions" in t` (the pre-fix fatal string retired by `#512`). It was unfailable (always green).
+   - At HEAD, line 231 hoists `SAYS = "C040 (MC68040 EIPL)"` and `genctl ctlq` tests `SAYS in t`, catching guard-widening mutant `M_widen` (15/16).
+4. **`dev_pcc2.c` comment refutation (2026-09-17):**
+   - Lines 380-399 in [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L380-L399) were corrected to document that `assert = 0` $\to$ `return;` is KILLED (14/16) and was an escape only of the obsolete 7-row detector.
+
+---
+
+### Findings Still Live at HEAD
+
+1. **Uninitialized `r3` in `assert_row()` ([`regress/pcc2_c040_probe.py:454`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py#L454)):**
+   `assert_row()` sets `r2`, `r5-r13`, but never initializes `r3=SCRATCH`. The completion sequence's `I_ST_SCR` (`st r5, r3, 0`) writes `0x80000000` to physical address `0x00000000` (reset vector) on every completion run.
+2. **Unidirectional latch check / `M_warnassign` escape:**
+   `d->warned = (1u << PCC2_W_C040);` (assignment instead of bitwise OR) scores 16/16. `c040 predirty` tests only that prior warnings do not block C040, but no row tests that prior warnings survive C040 firing.
+3. **Announce channel unverified at MIEN-set:**
+   All announce tests (`c040 says`, `c040 once`, `c040 predirty`) run with `GENCTL = 0x04` (MIEN clear). A mutant conditioning the announce on `!MIEN` (`if (!(GENCTL & PCC2_MIEN)) fatal(...)`) satisfies all delivery rows and all announce rows, scoring 16/16.
+4. **Caller-site residual:**
+   All C040 rows enter `reassert_interrupts()` exclusively via `st.b` to `GENCTL`. The other 9 caller sites in `dev_pcc2.c` remain untested under C040 assertion.
+5. **Latent transcript variable shadowing ([`regress/pcc2_c040_probe.py:498, 522`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py#L498)):**
+   `t2` and `t3` (originally bound to survival transcripts at lines 238 and 277) are rebound by `assert_row()` at lines 498 and 522. Any future test added below these lines reading `t2` or `t3` will silently inspect a delivery transcript instead of a survival transcript.
+6. **Contradictory pre-L2 probe comments ([`regress/pcc2_c040_probe.py:373-382`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py#L373-L382)):**
+   The probe still carries the historical comment declaring that "this detector ... does NOT catch a fix that announces correctly and fails to suppress the assertion", which is contradicted by the 9 L2 rows immediately following it.

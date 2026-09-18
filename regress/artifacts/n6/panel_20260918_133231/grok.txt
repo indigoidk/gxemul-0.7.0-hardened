@@ -1,0 +1,125 @@
+I'll treat this as an assess-stage review of `n6`: verify the live `exit(` sites against the repo, then answer P1–P4 and Q1–Q3 from the code rather than from the brief.HEAD matches the checkpoint. Next I’ll census live `exit(` sites in `dev_footbridge.c` and check the n6 ledger, datasheet, and K1 probe independently.Ten live `exit(` sites match the census. I’ll now read the IRQ/SDRAM arms, datasheet, K1 probe, and the n6 ledger to test the partition, not just the count.The census matches. Next I’ll check the #218–#223 “graceful” claim, register offsets, the datasheet, and the three K1 probes so the partition isn’t taken from the brief.**VERDICT: REAL.** The #218–#223 summary claims footbridge guest-reachable `exit(1)`s were made graceful; **eight guest-access kills remain**. First round is **ACCEPT at `+0x188` (IRQEnable read)** in the same commit as a **3-arm K1 repoint to `+0x100`**, with an **OR-accumulation accept row on its own arm**. Do not treat the 2026-08-30 reshape as settled doctrine: **P2’s “ninth was divide-by-zero” is false**, **`+0x18c` is its own round-group**, and **the four status writes are not yet licensed as latched-announce**.
+
+Tree: `GXEMUL-SEC/src/` at HEAD `09ded75`. File-reading seat; no gate, no `run.sh`, no battery.
+
+---
+
+## Premises
+
+### P1 — TRUE
+Live guest-reachable `exit(1)` calls remain. `#220` is **not** the lie: CHANGELOG names exactly the two sites it removed (reset-port col-0 halt → `cpu->running = 0`; PCI config bus 255 → return 1). The lie is the **summary that grouped “footbridge” with fully-swept files**.
+
+Wrong sentence, still live at `OUTSTANDING_BUGS.md` nineteenth-round highlight:
+
+> `#218–#223 OF + footbridge/mp/kn02ba/8253 guest-reachable exit(1)s → graceful`
+
+The remainder list under it names adb / clmpcc / igsfb / lca / m8820x / pcc2 / … and **does not name `dev_footbridge.c`**. `REVIEW_FINDINGS.md` is already precise (`#220 footbridge reset / PCI-bus-255`). CHANGELOG’s `#220` row is already precise. Correct the summary and the remainder list; do not “fix” `#220`.
+
+### P2 — count TRUE; parenthetical FALSE
+Comment-aware census of **live** `exit(` in `dev_footbridge.c` (comments that mention `exit` are not calls):
+
+| # | site | guest-access? |
+|---|---|---|
+| 1 | `IRQ_STATUS` write (`:565`) | yes |
+| 2 | `IRQ_RAW_STATUS` write (`:574`) | yes |
+| 3 | `IRQ_ENABLE_SET` read (`:589`) | yes |
+| 4 | `IRQ_ENABLE_CLEAR` read (`:604`) | yes |
+| 5 | `FIQ_STATUS` write (`:613`) | yes |
+| 6 | `FIQ_RAW_STATUS` write (`:622`) | yes |
+| 7 | `SDRAM_BA_MASK` read (`:712`) | yes |
+| 8 | `SDRAM_BA_OFFSET` read (`:737`) | yes |
+| 9 | `DEVINIT` unimpl machine type (`:841`) | **no** |
+| 10 | `DEVINIT` unimplemented machine type (`:877`) | **no** |
+
+**10 live / 2 construction / 8 guest-access.** No `abort(`. Title-said-nine is stale (already de-counted in the ledger title). Default arm (`:745`) `fatal()`s **without** `exit`.
+
+**The ninth `exit(1)` was `TIMER_EXTERNAL` (both prescaler bits), removed by `#432`.** The divide-by-zero was **SIGFPE / exit 136** on `random() % timer_load[i]`, also `#432`, **never an `exit(` site**. Conflating them is the brief’s load-bearing error. CHANGELOG R6 states both facts separately (`TIMER_EXTERNAL no longer kills` vs `SIGFPE (exit 136)`).
+
+### P3 — site partition mostly right; two design calls still open
+Offsets checked against `dc21285reg.h` and Table 7-10 (`dc21285.txt:6823-6833`) plus the unstaggered controller prose (`:6803`): Status/RawStatus read-only; EnableClear/Soft write-only; Enable and EnableSet share `188h`/`288h`.
+
+| site | datasheet | model today | disposition |
+|---|---|---|---|
+| `+0x188` read | IRQEnable, **read-only**, reset 0 (`:6911-6924`) | `odata = d->irq_enable` then `exit(1)` | **ACCEPT** — delete kill, keep value, **no latch, no message** |
+| `+0x180`/`+0x184`/`+0x280`/`+0x284` writes | `--` / “Status and RawStatus are read-only” | `fatal`+`exit(1)` | decline; **announce vs silent is not settled** |
+| `+0x18c` read | `--` / EnableClear **write-only** (`:6937-6947`) | `odata = d->irq_enable` then `exit(1)` | decline **and must not complete with that `odata`** |
+| `+0x100`/`+0x104` **reads** | legal R/W (§7.3.9/7.3.10) | `exit(1)` on read; writes already no-op / `fatal` without exit | decline + *“unimplemented read”*, **or IMPLEMENT if a warrant appears** |
+
+**`+0x18c` is its own round-group.** Same device, same “wrong direction” family, **not the same fix design**: a decline that keeps `odata = d->irq_enable` and then hits the common tail (`:754-755`) **introduces** the mask leak the kill currently prevents (`odata` is assigned **before** `exit`). The four writes have no returned-data obligation. Round-scope clause (c): new oracle → not the same detector contract. A shared probe script is fine; a shared “one helper, five sites” splice is how you ACCEPT an undefined read and DECLINE a documented one.
+
+In-file sibling the brief never named: `FIQ_ENABLE_CLEAR` at `+0x28c` (`:631-634`) **already ignores reads** and returns the `:501` zero through the common tail. That is the repair template for `+0x18c`, not “return the field and drop the `exit`”.
+
+**Not in the kill census, but sibling-parity for ACCEPT:** `FIQ_ENABLE_SET` at `+0x288` (`:626-629`) is the documented FIQEnable **read** (Table 7-10 `288h FIQEnable / FIQEnableSet`). It does **not** exit and does **not** return `d->fiq_enable` — it returns 0. File it; do not fold it into the ACCEPT round (different symptom, no host-halt, n6’s subject is kills).
+
+SDRAM: the model does **not** implement storage. Known-mask writes `break;` without storing; unknown-mask writes `fatal` without `exit`. Only the **read** kills. Decline-on-read returning the `:501` zero is observationally identical to “always-zero implemented” until a guest writes a nonzero mask and reads it back. IMPLEMENT stays unlicensed until that guest or an in-tree SDRAM-sizing precedent exists.
+
+Latched announce on the four status **writes** is **not** implied by the datasheet. The clean prose is “writes have no effect” on those registers. House idiom is N=1 latched `(once)`. That is a later-round design call, not an assess fact. Do not ship a wrong “invalid access” message on a legal SDRAM read, and do not ship “unimplemented; ignored” on the IRQEnable read.
+
+### P4 — 3-arm blast radius TRUE; `+0x100` RIGHT with the parenthetical as planned cost, not a refutation
+Verified by opening the three files, not by running them:
+
+| probe | plant | scores death? | gate today |
+|---|---|---|---|
+| `footbridge_sites_probe.py:103` | `0xE5907188` `ldr r7,[r0,#392]` | K1 wants `"ENABLE SET"` in fatals **and** `exit==1` (`:291`) | **yes** — `gate_arm.sh` `check "footbridge: the one-instruction kill arm still dies"` on `^K1 .*ok$` |
+| `fbpending_drain_probe.py:226` | same word | `K["status"] == "HOST-DIED"` (`:659`) | **not yet** — dated-exempt in `check_probe_wiring.py` until **2026-09-20** (today is 2026-09-18) |
+| `fbpending_witness.py:195` | same word | `HOST-DIED` (`:588`) | **never** — mention, not invocation |
+
+Blast radius is **three arms**, not one row. All three move in the ACCEPT commit. A round that only edits `footbridge_sites_probe.py` leaves two detectors broken, one of them two days from a gate.
+
+**`+0x100` is the right K1 target for ACCEPT**, encoding `0xE5907100` / `ldr r7,[r0,#256]`, fatal text `read from sdram_ba_mask`. It is a **last-group** consumable, so ACCEPT (group 1) and the invalid-direction work (group 2, including `+0x18c`) do not force a second move. **Yes, it stops being a kill when the SDRAM round lands** — that is why the cluster’s finishing commit converts the failability leg to a **mutation** leg, not a reason to aim at `+0x18c` (two hops: move now, move again when `+0x18c` is declined). Equivalent last-group spare: `+0x104`. Do not convert K1 in place to SURVIVED: A1 (`VENDOR_ID 0x1011`) already proves reachability; K1’s job is failability.
+
+Accept-row oracle: **not** “read `+0x188` and get 0”. `memset` leaves `irq_enable == 0` (`DEVINIT:769`); 0 is what RAM and an absent device return — the trap this probe’s own header already records. Signature is the handler’s `|=` (`:580`): write V1 then V2 to `+0x188`, read back **V1|V2**. Last-write-wins decode fails that. **Own arm, not `BODY`**: `BODY` runs on T/L/K; a `+0x188` read in `BODY` kills isolation arm L pre-fix.
+
+K1 **does** witness the ACCEPT site. K1 does **not** witness the five invalid-direction sites (neither arm touches them). The ledger `witness` field already recorded that L4 on 2026-09-11; do not revive it.
+
+Stale citations the ACCEPT commit also owes: probe header and `gate_arm.sh` still say `dev_footbridge.c:495-497`; the read-kill is `:585-589`. `fbpending_witness.py` still says `:492-497`.
+
+---
+
+## Q1 — record defect
+
+**Real.** `#220` did what it said. The nineteenth-round **highlight** and the **remainder list** did not.
+
+Correction, exactly:
+
+1. Replace “footbridge … guest-reachable `exit(1)`s → graceful” with: **`#220` made two footbridge sites graceful (reset-port GP16 halt, PCI config bus 255); eight guest-access `exit(1)` calls remain in `dev_footbridge.c`.**
+2. Add `dev_footbridge.c` to the deferred remainder list (the list that currently cannot resurface this file).
+3. Do not quote “nine”. The ninth **exit** was `TIMER_EXTERNAL`, `#432`. The divide-by-zero was SIGFPE, also `#432`, a different defect.
+4. Leave the `#220` CHANGELOG row and the n6 `id` alone.
+
+---
+
+## Q2 — P2–P4
+
+Covered above. Short form:
+
+- **P2:** 10/2/8 confirmed from the file. “Ninth = divide-by-zero” **refuted**.
+- **P3:** ACCEPT at `+0x188` confirmed from Table 7-10 + `:6911-6924` + the model already computing `d->irq_enable`. Four status writes + `+0x18c` are invalid-direction, but **`+0x18c` is its own group** (leak oracle). SDRAM reads are unimplemented legal R/W; message must not say “invalid”. Four-write announce policy **open**.
+- **P4:** 1→3 confirmed. `+0x100` confirmed as one-hop last-group target. Accumulation oracle confirmed. Parenthetical is the group-3 bill, already named.
+
+---
+
+## Q3 — first round, and what its detector owes
+
+**One round: ACCEPT the `+0x188` IRQEnable read.**
+
+Why first, and why alone:
+
+- Highest-plausibility guest path (`dc21285reg.h` also names the same offset `IRQ_ENABLE` — the register a spl save/restore reads).
+- Different semantic class from the seven refusals (right value computed, then discarded). Round-scope does not join it to a decline.
+- It **is** K1. Fixing it without the harness move turns a green gate red by succeeding.
+- The other seven still kill, so failability survives at `+0x100`.
+
+Not this round: the four status writes, `+0x18c`, SDRAM, `+0x288` FIQEnable silent-zero, construction-time `DEVINIT` exits.
+
+**Detector debt (ACCEPT only):**
+
+1. **Same commit, three plants:** `0xE5907188` → `0xE5907100` in `footbridge_sites_probe.py`, `fbpending_drain_probe.py`, `fbpending_witness.py`. Matcher `"ENABLE SET"` → `"sdram_ba_mask"`. K1 label, gate comment, and the three stale `:495-497` citations move with them.
+2. **Order:** on the committed **pre-fix** binary, repointed K still dies at `+0x100` with that fatal text; the new ACCEPT arm is **red for the reason under test** (ENABLE SET fatal + exit 1). Then delete the kill.
+3. **ACCEPT arm, not `BODY`:** write nonzero V1 to `+0x188`, write distinct nonzero V2 to `+0x188`, read `+0x188`, assert **V1|V2**. Isolation arm L must still survive. MMU-on arm T must still not see `0x1011`.
+4. **Failability of that row:** least-observable non-equivalent growth — keep the read, return 0; or return last write instead of `|=`. The accumulation row must redden. Deleting `exit` and leaving `odata = d->irq_enable` is the **fix**, not a mutant.
+5. **No latch, no message** at `+0x188`. A `(once)` here is a wrong record in product code.
+6. **Per-site latch bitmask** is **not** this round’s. It is owed when the first decline group ships, against `#490`’s shared-latch escape. One shared `warned` would let a status-write suppress the first useful `+0x18c` / SDRAM report.
+7. **Last-kill mutation leg** is **not** this round’s. After ACCEPT, `+0x100` still dies. The bill comes due in the SDRAM commit (or earlier if someone reorders groups).
+
+Named measurement I did **not** run, and why it would still help: execute `footbridge_sites_probe.py` on HEAD and show K1 green / L survived. The source-level coupling is already visible; a log would only confirm the planted word still reaches `:589`.
