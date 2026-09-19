@@ -18,7 +18,9 @@ THE TRICK: MEASURE THE COUNTER, DO NOT WAIT FOR IT TO OVERFLOW.
   3. It then FREEZES the timer by writing TIMER_1_LOAD = 0x00FFFFFF while keeping
      TIMER_FCLK_256: the rate falls to 50e6/(0xFFFFFF*256) = 0.0116 Hz, one tick per
      86 s.  *** A LOAD WRITE DOES NOT CLEAR pending_timer_interrupts *** (only a
-     TIMER_x_CONTROL write WITHOUT TIMER_ENABLE does, dev_footbridge.c:583), so the
+     TIMER_x_CONTROL write WITHOUT TIMER_ENABLE does -- dev_footbridge.c, the
+     `pending_timer_interrupts[timer_nr] = 0` store in the `else` of `if (idata &
+     TIMER_ENABLE)`), so the
      backlog survives the freeze.  That turns a moving quantity into a static one.
   4. It then DRAINS AND COUNTS.  DEVICE_TICK writes timer_value = random() %
      effective_cycles(load, ctrl, 0) whenever the backlog is > 0, and with load
@@ -47,7 +49,7 @@ THE TRICK: MEASURE THE COUNTER, DO NOT WAIT FOR IT TO OVERFLOW.
 ARM X -- THE PLACEMENT DISCRIMINATOR, and the reason it is not merely a second run.
   dev_footbridge.c never calls timer_remove() and never lowers the core frequency when
   the guest DISABLES a timer: TIMER_x_CONTROL without TIMER_ENABLE zeroes the counter
-  once (:583) and leaves the struct timer running.  So timer_tickN keeps incrementing a
+  once (the same `= 0` store) and leaves the struct timer running.  So timer_tickN keeps incrementing a
   counter that DEVICE_TICK will never look at.  Arm X arms the timer, immediately
   disables it, free-runs, re-enables (which does NOT clear the counter) and then
   measures.  A non-zero result proves the counter accrues while the device is disabled
@@ -60,8 +62,11 @@ ARMS
      the device's answers.  (machine_cats.c's boot page tables map only the low 256 MB;
      the footbridge is at PA 0x42000000.)
   K  failability control: arm D's prologue plus ONE instruction, a read of
-     IRQ_ENABLE_SET, which dev_footbridge.c answers with fatal() then exit(1).  A probe
-     in which nothing can die proves nothing by surviving.
+     IRQ_ENABLE_CLEAR (+0x18c, write-only per the DC21285), which dev_footbridge.c's
+     `case IRQ_ENABLE_CLEAR` read branch answers with fatal() then exit(1).  A probe in
+     which nothing can die proves nothing by surviving; K must die WITH its complaint AND
+     exit 1, and every surviving arm must reap exit 0.  #539 moved this from +0x188 (now
+     a readable register); the round that declines +0x18c retires the bridge.
 
 Every RAM output word is poisoned with 0xDEADBEEF first and every verdict row requires
 the values it consults to be PRESENT.  Every planted instruction is checked, as it
@@ -223,8 +228,8 @@ def build(mmu_on=False, disable_during_accrual=False, kill=False):
         emit(0x54, NOP, "")
         emit(0x58, NOP, "")
     if kill:
-        p.append((0x5c, 0xE5907188, "ldr r7,[r0,#392]",
-                  "arm K: IRQ_ENABLE_SET -> fatal()+exit(1)"))
+        p.append((0x5c, 0xE590718C, "ldr r7,[r0,#396]",
+                  "arm K: IRQ_ENABLE_CLEAR read -> fatal()+exit(1) (#539: was +0x188)"))
         emit(0x60, NOP, "")
         return p
     #  accrual loop -- publishes liveness and a fresh VENDOR_ID every iteration
@@ -400,13 +405,59 @@ class Session:
                 got[k] = int(m.group(1), 16)
         return got
 
-    def close(self):
-        for f in (lambda: os.write(self.fd, b"quit\n"), lambda: time.sleep(0.3),
-                  lambda: os.close(self.fd), lambda: os.waitpid(self.pid, 0)):
+    def close(self, patience=20.0):
+        try:
+            os.write(self.fd, b"quit\n")
+        except OSError:
+            pass
+        # Drain through EOF; closing a live master can SIGHUP the child.
+        deadline = time.monotonic() + patience
+        eof = False
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            if not self.rd(min(0.1, left)):
+                eof = True
+                break
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        #  #539 (pass 2): BOUNDED reap.  A child that survives the master close (SIGHUP ignored or
+        #  blocked, or stopped) would hang a blocking waitpid forever; poll, then kill, then wait.
+        pid, st, gone = 0, None, False
+        t1 = time.time()
+        while pid == 0 and time.time() - t1 < 10.0:
             try:
-                f()
-            except Exception:
+                pid, st = os.waitpid(self.pid, os.WNOHANG)
+            except OSError:
+                gone = True      # ECHILD: already reaped elsewhere -- its pid may be recycled; never kill it
+                break
+            if pid == 0:
+                time.sleep(0.05)
+        harness_killed = False
+        if pid == 0 and not gone:
+            #  F2 (#539): a kill WE fire is labelled, so a red from it is attributed to the harness --
+            #  a healthy child SIGKILLed by a too-short budget would otherwise read like a product
+            #  signal death (byte-identical to the y_sigkill mutant).  Budgets: 20 s drain + 10 s here.
+            harness_killed = True
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except OSError:
                 pass
+            try:
+                _, st = os.waitpid(self.pid, 0)
+            except OSError:
+                st = None
+        code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+        sig = os.WTERMSIG(st) if st is not None and os.WIFSIGNALED(st) else None
+        if harness_killed and sig == signal.SIGKILL:
+            sig = "HARNESS-KILL(%s)" % sig     # our kill; a kill landing on a zombie reaps the
+                                                # product's own status and stays unlabelled
+        elif not eof and sig is not None:
+            sig = "HARNESS-CLOSE(%s)" % sig   # the drain deadline expired; our close() HUP'd a live child
+        return dict(exit=code, signal=sig)
 
 
 def plant(s, prog):
@@ -467,8 +518,7 @@ def run_arm(label, mmu_on=False, disable=False, accrue=None, max_drain_s=30.0):
     prog = build(mmu_on=mmu_on, disable_during_accrual=disable)
     s = Session()
     if not s.wait(timeout=120):
-        s.close()
-        return dict(label=label, status="NO-PROMPT")
+        return dict(label=label, status="NO-PROMPT", **s.close())
     plant(s, prog)
     bad, cov, ex = step_and_check(s, prog, PROLOGUE_N)
     #  ACCRUAL.  The SIGALRM timer is stopped at the debugger prompt
@@ -494,11 +544,11 @@ def run_arm(label, mmu_on=False, disable=False, accrue=None, max_drain_s=30.0):
             break
     r = s.regs()
     status = "HOST-DIED" if s.dead else ("SURVIVED" if ok else "INTERRUPT-LOST")
-    s.close()
+    end = s.close()
     return dict(label=label, status=status, regs=r, badis=bad, executed=ex,
                 covered=cov, want={CODE + o for o, *_ in prog},
                 accrued=accrued, mid=mid, out=out, phase=phase,
-                drain_s=time.time() - t0)
+                drain_s=time.time() - t0, **end)
 
 
 #  Arm E walks the drain body in SEGMENTS, each entered by setting pc directly.
@@ -530,8 +580,8 @@ def run_drainenc():
     prog = build()
     s = Session()
     if not s.wait(timeout=120):
-        s.close()
-        return dict(status="NO-PROMPT", badis=[], covered=set(), nsteps=0, executed=[])
+        return dict(status="NO-PROMPT", badis=[], covered=set(), nsteps=0,
+                    executed=[], **s.close())
     plant(s, prog)
     bad, cov, ex = step_and_check(s, prog, PROLOGUE_N)
     for head, n in E_SEGMENTS:
@@ -543,25 +593,24 @@ def run_drainenc():
         cov |= c2
         ex += e2
     status = "HOST-DIED" if s.dead else "SURVIVED"
-    s.close()
-    return dict(status=status, badis=bad, covered=cov, nsteps=len(ex), executed=ex)
+    end = s.close()
+    return dict(status=status, badis=bad, covered=cov, nsteps=len(ex), executed=ex, **end)
 
 
 def run_kill():
     prog = build(kill=True)
     s = Session()
     if not s.wait(timeout=120):
-        s.close()
-        return dict(status="NO-PROMPT", saw=False)
+        return dict(status="NO-PROMPT", saw=False, **s.close())
     plant(s, prog)
     step_and_check(s, prog, PROLOGUE_N + 3)
     died = s.dead
     if not died:
         s.send("reg", timeout=10)
         died = s.dead
-    saw = "ENABLE SET" in s.buf
-    s.close()
-    return dict(status="HOST-DIED" if died else "SURVIVED", saw=saw)
+    end = s.close()
+    saw = "ENABLE CLEAR" in s.buf
+    return dict(status="HOST-DIED" if died else "SURVIVED", saw=saw, **end)
 
 
 def main():
@@ -630,12 +679,17 @@ def main():
         ok &= bool(good)
         print("  %-4s %-46s %s" % ("ok" if good else "FAIL", tag, detail))
 
+    def survived(a):
+        return a["status"] == "SURVIVED" and a.get("exit") == 0
+
     rD, rX, rT = D.get("regs", {}), X.get("regs", {}), T.get("regs", {})
-    ranD = D["status"] == "SURVIVED" and D.get("out") is not None
-    ranX = X["status"] == "SURVIVED" and X.get("out") is not None
+    ranD = survived(D) and D.get("out") is not None
+    ranX = survived(X) and X.get("out") is not None
     row("R0 every arm produced data",
-        ranD and ranX and T["status"] != "NO-PROMPT" and K["status"] != "NO-PROMPT",
-        "D=%s X=%s T=%s K=%s" % (D["status"], X["status"], T["status"], K["status"]))
+        ranD and ranX and survived(T) and survived(E) and K["status"] != "NO-PROMPT",
+        "; ".join("%s=%s exit=%s signal=%s" %
+                  (name, a["status"], a.get("exit"), a.get("signal"))
+                  for name, a in (("D", D), ("X", X), ("T", T), ("E", E), ("K", K))))
     row("C1 liveness: RAM through the same decode",
         rD.get(5) == 0x11223344 and rX.get(5) == 0x11223344,
         "D r5=0x%x  X r5=0x%x" % (rD.get(5, -1), rX.get(5, -1)))
@@ -650,16 +704,20 @@ def main():
         "wrote 0x12345678, read D=0x%08x X=0x%08x" % (rD.get(7, -1), rX.get(7, -1)))
     drain_words = {CODE + o for o in range(0x70, 0xe8, 4)}
     row("E  encodings: prologue AND drain body, as EXECUTED",
-        not D.get("badis") and not X.get("badis") and not E["badis"]
+        survived(E) and not D.get("badis") and not X.get("badis") and not E["badis"]
         and not (drain_words - E["covered"]),
         "%d mismatches; drain offsets not stepped: %s"
         % (len(D.get("badis", [])) + len(X.get("badis", [])) + len(E["badis"]),
            " ".join("0x%x" % a for a in sorted(drain_words - E["covered"])) or "none"))
     row("K  failability: the kill instruction really kills",
-        K["status"] == "HOST-DIED" and D["status"] == "SURVIVED",
-        "K=%s (complaint seen: %s)" % (K["status"], K["saw"]))
+        K["status"] == "HOST-DIED" and K["saw"] and K.get("exit") == 1
+        and survived(D),
+        "K=%s exit=%s signal=%s (complaint seen: %s)" %
+        (K["status"], K.get("exit"), K.get("signal"), K["saw"]))
     row("T  the MMU-ON control cannot see the device",
-        rT.get(6) != VENDOR and rT.get(7) != LOADBACK,
+        #  F2 (#539): the keys must be PRESENT -- None != VENDOR is True, so a register-parse miss
+        #  greened this row once survived() forbade the halt outcome.
+        survived(T) and 6 in rT and 7 in rT and rT[6] != VENDOR and rT[7] != LOADBACK,
         "T r6=0x%x r7=0x%x" % (rT.get(6, -1), rT.get(7, -1)))
     row("L1 the guest ran during the accrual",
         ranD and D["out"][1] not in (None, POISON) and D["out"][1] > 1000,

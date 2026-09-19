@@ -1,0 +1,105 @@
+VERDICT: REVISE the design brief. ACCEPT is correct for `+0x188`; the “seven invalid-direction sites” premise is false, and the expanded rows distinguish 9/11 listed variants.
+
+READ: the reviewed fork is `GXEMUL-SEC`, HEAD `408accf780daeb53d04b661a463c88de7c339831`. NOT CHECKED: runtime measurements, excluded artifacts, the ledger, and records outside the permitted scope. I executed 0/3 probes and edited no files. The variant results below are REASONED predictions.
+
+**Q1(a). ACCEPT is right.** READ: Intel documents `+0x188` as IRQEnable on reads, with reset value zero; writes at that address set enable bits. The fork already obtains `d->irq_enable` before terminating. Keeping that assignment and reaching the common read-output tail implements the documented read. ([Intel 278115-001, §7.3.31–33, p. 7-47](https://datasheets.chipdb.org/Intel/STRONG/TECHDOCS/27811501.PDF#page=137); [dev_footbridge.c:578](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578), [common tail:754](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:754).)
+
+The census is correct, but its semantic classification is not:
+
+- READ: **8/10** executable `exit(1)` calls are in this handler: lines **565, 574, 589, 604, 613, 622, 712, 737**.
+- READ: **2/10** are construction-time calls: lines **841, 877**.
+- READ: Among the **7/8** handler sites remaining after this fix, **5/7** concern invalid directions: writes to `+0x180`, `+0x184`, `+0x280`, `+0x284`, and a read of `+0x18c`.
+- READ: The other **2/7**, reads of `+0x100` and `+0x104`, are documented readable SDRAM configuration registers. Their relevant fields are R/W. They are missing model behavior, not invalid guest directions. ([Handler source:560](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:560); [Intel §7.3.9–10, pp. 7-27–28](https://datasheets.chipdb.org/Intel/STRONG/TECHDOCS/27811501.PDF#page=117).)
+
+READ: `+0x288` falls through its case without assigning `odata`, so it returns the zero initialized at entry even after FIQ-enable writes. ([dev_footbridge.c:501](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:501), [FIQ case:626](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:626).)
+
+REASONED: Keep that sibling separately scheduled under this expressly one-site remit. The hardware read semantics match, but **0/7 proposed E rows** exercise FIQEnable. Using the same detector file does not supply that missing coverage. NOT CHECKED: its separate `fiqenableread` filing, which is outside the permitted evidence.
+
+**Q1(b). `+0x100` works as a temporary control of the existing failure.** READ: its branch prints `sdram_ba_mask` and explicitly exits with status 1. It lies outside the timer-fold interval. ([dev_footbridge.c:507](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:507), [SDRAM branch:709](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:709).)
+
+REASONED, enumerating the supplied instruction: `0xE5907100` has condition AL, immediate addressing, pre-indexing, positive offset, word width, no writeback, load direction, base `r0`, destination `r7`, and immediate `0x100 = 256`. Its addressing mode matches the old control; only the displacement changes.
+
+READ: all **3/3** control arms have the MMU-off prologue. The boot translation table repeats the low 256 MB of physical addresses across virtual regions; `0x42000000` therefore aliases to `0x02000000` with that MMU mapping. “Returns zero” is not the essential negative-control requirement: the existing sites probe explicitly also permits failure to obtain a value, provided it does not obtain the device signature. ([Sites prologue:82](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:82), [translation table:239](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:239), [negative control:249](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:249).)
+
+REASONED: The substitution preserves what each current control actually checks, including the two weaker death-only checks. It does not make those checks stronger automatically.
+
+**Q1(c), including newer fact (1): qualified agreement.** If `irq_status` remains zero, **every enable pattern** takes the deassert path. The deciding lines are **581–584**, not the source-bit table. Initialization zeroes the field; only the interrupt callbacks subsequently set or clear it. ([dev_footbridge.c:581](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:581), [initialization:769](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:769), [callback:378](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:378).)
+
+READ: debugger entry stops timers at line **800**, and stepping returns at **835–836** before their restart at **840**. That supports the reported behavior of these cold stepped runs. NOT CHECKED: the reported field measurements themselves. Single-step is not a general guarantee of zero device status: existing pending state and device tick callbacks still matter. ([debugger.c:799](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:799), [machine.c:726](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c:726).)
+
+READ: ARM IRQ delivery is explicitly skipped while single-stepping at **cpu_dyntrans.c:206**. REASONED: an erroneous assertion can therefore leave every listed register, diagnostic, and survival comparison unchanged. This is why variant (j) escapes. ([cpu_dyntrans.c:204](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204).)
+
+The patterns remain valid choices. REASONED arithmetic, checked by enumeration:
+
+- `P = 0x00002002`: bits **{1, 13}**.
+- Original `Q = 0x20000000`: bit **{29}**.
+- Revised `Q = 0x60000000`: bits **{29, 30}**.
+- With revised Q: `P & Q = 0`, `P | Q = 0x60002002`, byte result `0x02`, halfword result `0x2002`, and clearing P leaves `0x60000000`.
+
+READ: these selections avoid reserved positions `{0,20,21,26}`. Their validity and their inactivity during this run are separate claims. ([dc21285reg.h:295](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:295).)
+
+**Q1(d). The scoped dependency claim holds.** READ: searching source text and permitted regression scripts found **1 diagnostic producer and 3 direct consumers**: the handler and the three named probes. The ARM gate indirectly depends on it through K1; it does not grep `ENABLE SET` itself. Hygiene references concern probe structure/names, rather than that diagnostic. ([Sites:291](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:291), [drain:562](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:562), [witness:445](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:445), [gate:1098](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1098).)
+
+NOT CHECKED: a tree-wide absence claim outside that scope.
+
+**Q1(e). Bind termination status in both affected probes.** READ: **1/3** controls requires diagnostic plus exit 1; **2/3** require only `HOST-DIED`. The latter two discard `waitpid` status, and classify their surviving arms before closing the child. ([Drain close:403](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:403), [drain verdict:658](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:658), [witness close:342](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:342), [witness verdict:587](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:587).)
+
+REASONED: While retaining a death control, require normal exit 1 and the intended diagnostic; reject signals and unknown status. Require normal exit 0 for surviving arms. Merely recording status changes no verdict. Incorporating it into those assertions exposes late nonzero exits or signals that currently pass. Premature exit 0 remains ambiguous without a completion/quit handshake.
+
+**Q2. Variant comparison.** All entries are REASONED. “EQUIVALENT” means indistinguishable under these rows, not correct behavior.
+
+The brief names E1–E4 in Q2 but proposes E0–E6 elsewhere. Both interpretations follow. For the expanded version, I use revised Q and place E3/E6 after E2 but before E5 clears P.
+
+| Variant | E1–E4 plus existing rows | Expanded E0–E6 plus existing rows |
+|---|---|---|
+| (a) Remove enable-value assignment | **E1:** zero instead of P | **E1** |
+| (b) Return raw IRQ status | **E1:** zero instead of P in the stated run | **E1** |
+| (c) Return masked IRQ status | **E1:** zero instead of P | **E1** |
+| (d) Return FIQ enable | **E1:** untouched FIQ enable is zero | **E1** |
+| (e) Keep diagnostic, remove exit | Existing **I1** fails; **E4** also fails | Same |
+| (f) Terminate when `len != 4` | **E3:** byte read terminates | **E3**, or E6 if scheduled first |
+| (g) Terminate when enable is zero | **EQUIVALENT:** all enable reads follow nonzero writes | **E0:** reset-state read terminates |
+| (h) Replace write accumulation with assignment | **E2:** Q instead of `P | Q` | **E2** |
+| (i) Leave the three controls at `+0x188` | **K1:** control survives without its expected diagnostic/exit | Same; both other probes’ **K** checks also fail |
+| (j) Use OR in the IRQ assertion condition | **EQUIVALENT** | **EQUIVALENT** |
+| (k) Also silently accept `+0x18c` reads | **EQUIVALENT** | **EQUIVALENT:** E5 writes `+0x18c` and reads `+0x188` |
+
+Counts for the **11/11 explicitly listed variants**: **8/11 distinguished** by the literal Q2 row set; **9/11 distinguished** by the expanded set.
+
+READ: I1 already rejects any captured footbridge diagnostic, so E4 makes that requirement explicit but is not the first coverage of (e). ([footbridge_sites_probe.py:197](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:197), [I1:290](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:290).)
+
+There is a reporting distinction for (f)/(g): E3/E0 names the triggering test operation. READ: the current runner collects registers only after successful stepping, then prints C1 first. With that reporting structure unchanged, an early process exit makes **C1 the first printed failure**. The proposed row placement has not been implemented. ([Runner:175](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:175), [C1:242](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:242).)
+
+REASONED: To observe **(j)**, compare the actual CPU IRQ latch immediately after E1, while raw status is zero: expected deasserted, variant asserted. Reading IRQStatus does not observe this error. Neither does checking the footbridge’s separate `irq_asserted` bookkeeping field, which the enable-write branch does not update. ([CPU latch:796](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:796), [enable-write branch:579](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:579).)
+
+REASONED: **(k)** needs a separate read-direction assertion. After the later refusal change, that assertion should require the chosen refusal result, survival, and unchanged enable state, plus the diagnostic bound if announcements are selected. Seed nonzero enable state so an accidental enable-value echo is observable. Permanent expected host death would encode the defect as the contract.
+
+READ: section 5 also mentions **(l)**, but section 6 never lists it. REASONED: retaining the diagnostic when either bit 30 or 31 is set is **EQUIVALENT with original Q**; revised Q sets bit 30, so **E4 and existing I1** observe it. Including this inferred twelfth variant gives **10/12 distinguished** under the expanded design.
+
+**Q3. The option set needs clarification, not an additional member.** REASONED:
+
+- **DELETE:** removing the register behavior loses the required value.
+- **DECLINE:** inappropriate for this supported, documented read.
+- **DECLINE + LATCHED ANNOUNCE:** likewise inappropriate.
+- **ACCEPT:** correct; return existing state silently.
+- **FAULT:** incorrect disposition here.
+- **BACKED ACCEPT:** the backing state already exists.
+- **IMPLEMENT:** exposing that existing state is sufficient; broader controller implementation is unnecessary for this read.
+
+READ: ARM has a data-abort implementation, but a failing device callback does **not** automatically reach it. The callback-failure branch supplies exception delivery for MIPS and M88K, then returns failure; the ARM load path assumes an exception already happened. Thus FAULT is not an available one-line callback-return choice on this path. ([memory_rw.c:603](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), [ARM load:233](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:233), [ARM abort support:662](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:662).)
+
+**Q4, including newer fact (2). Agree with the nonfatal default-arm claim.** READ: **dev_footbridge.c:746** emits the diagnostic; **754–757** writes the initialized zero result and returns success. **debugmsg.c:384–391** establishes that `fatal()` prints and returns. There is no process termination in that path. The offset must reach `default` after address folding and remain inside the device mapping. ([Default arm:745](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:745), [fatal definition:384](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384).)
+
+REASONED: Prefer replacing the death dependency this round, then accepting `+0x188`:
+
+1. Use the default-arm diagnostic as a fresh, instruction-associated handler-reachability control. Require the expected message, continued responsiveness, and normal exit 0; retain the clean comparison arm and existing value signatures.
+2. Separately demonstrate that each probe can report failure using a controlled wrong expectation, and verify that the failure reaches its verdict and applicable gate. A printed handler message alone does not establish this.
+3. Continue with the **5/7 invalid-direction sites** and separately assess the **2/7 readable SDRAM registers**.
+
+This avoids two control migrations. The default diagnostic remains an implementation dependency, so retain the guest-visible signature checks as well. READ: the datasheet itself specifies zero without an error for a nonexistent CSR read; normal continuation therefore has hardware support. ([Intel §3.1.2, p. 3-1](https://datasheets.chipdb.org/Intel/STRONG/TECHDOCS/27811501.PDF#page=35).)
+
+**Standing licence.** Beyond the corrected SDRAM classification:
+
+- REASONED: E6 must precede E5’s clear, or re-establish its input state. After E5, its expected halfword would be zero, not `0x2002`.
+- READ/REASONED: intermediate E values need separate observations or storage. The present runner takes one final register snapshot; repeatedly overwriting one destination would erase earlier evidence.
+- REASONED: variant (e) is not precisely “DECLINE + LATCHED ANNOUNCE”: it returns the accepted value and prints on every read. Its observable defect here is the unwanted diagnostic.

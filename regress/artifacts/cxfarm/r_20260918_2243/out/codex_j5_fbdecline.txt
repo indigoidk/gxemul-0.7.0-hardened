@@ -1,0 +1,117 @@
+VERDICT — **REASONED:** choose **3, DECLINE + latched announce, for 7/7 J5 sites**; `+0x288` needs **7, IMPLEMENT the missing read using existing state**, grouped with the `+0x188` readback round. **FAULT is unavailable through ARM’s current device-failure path.**
+
+**READ:** the three named probes contradict the ordering premise: **3/3 currently use `+0x188`; 0/3 use `+0x100`**. Their controls therefore need attention before the separately scoped IRQ read repair lands.
+
+**READ:** HEAD is `cdbe7d7`; the handler, register header, relevant memory code, and three named probes have no tracked differences from HEAD. References below use:
+
+- **F** = [src/devices/dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c)
+- **H** = [src/include/thirdparty/dc21285reg.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h)
+- **D** = [_scratchpad/dc21285.txt](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt)
+
+**READ — census.** The following covers 7/7 requested exits plus the non-exiting FIQ sibling. Quoted interrupt-table columns are **Address / Read / Write**.
+
+| Site; register; header definition | Trigger | Datasheet | Before exit; opposite-direction arm |
+|---|---|---|---|
+| **F:565**, `IRQ_STATUS +0x180`; **H:332** | Write | **D:6824:** “180h IRQStatus --”. Read-only; masked active status, **D:6888–6896**. | **F:560–567:** diagnostic, no device-state change, then exit. Read computes `irq_status & irq_enable`. |
+| **F:574**, `IRQ_RAW_STATUS +0x184`; **H:333** | Write | **D:6825:** “184h IRQRawStatus --”. Read-only; active sources before masking, **D:6903–6909**. | **F:569–576:** diagnostic, no device-state change, then exit. Read computes `irq_status`. |
+| **F:604**, `IRQ_ENABLE_CLEAR +0x18c`; **H:336** | Read | **D:6827:** “18Ch -- IRQEnableClear”. Write-only, **D:6940–6947**. | **F:601–604:** computes `odata = irq_enable`, diagnoses, exits before delivering it. Write clears the selected enable bits and recomputes the IRQ output, **F:594–599**. |
+| **F:613**, `FIQ_STATUS +0x280`; **H:339** | Write | **D:6829:** “280h FIQStatus --”. Read-only; masked active status, **D:6888–6896**. | **F:608–615:** diagnostic, no device-state change, then exit. Read computes `fiq_status & fiq_enable`. |
+| **F:622**, `FIQ_RAW_STATUS +0x284`; **H:340** | Write | **D:6830:** “284h FIQRawStatus --”. Read-only; must contain the same raw sources as IRQRawStatus, **D:6903–6909**. | **F:617–624:** diagnostic, no device-state change, then exit. Read computes `fiq_status`. |
+| **F:712**, `SDRAM_BA_MASK +0x100`; **H:140** | Read | **D:5422:** “SDRAM base address mask 100h”. Mask and window-disable fields are **R/W**, **D:5849–5873**; reserved fields read zero. | **F:709–733:** no read value computed; diagnostic then exit. Write recognizes the listed size constants, otherwise diagnoses; **neither branch stores anything**. |
+| **F:737**, `SDRAM_BA_OFFSET +0x104`; **H:153** | Read | **D:5423:** “SDRAM base address offset 104h”. Offset field is **R/W**, **D:5902–5914**; reserved fields read zero. | **F:734–743:** no read value computed; diagnostic then exit. Zero writes are silent, nonzero writes diagnose; **neither stores anything**. |
+| **F:626–629**, `FIQ_ENABLE_SET +0x288`; **H:341–342** | Read; **no exit** | **D:6831:** “288h FIQEnable FIQEnableSet”. Read returns the enable mask; write sets selected bits, **D:6911–6935**. | No read assignment. Initial `odata = 0` reaches the common read tail. Write performs `fiq_enable |= idata`; no FIQ-output update here. |
+
+**READ — the deciding prose:**
+
+- **D:6888:** “This read-only register is a bit-wise AND of RawStatus and IRQEnable/FIQEnable.”
+- **D:6903:** “The IRQRawStatus and FIQRawStatus read-only registers always contain identical data.”
+- **D:6940:** “This write-only register is used to clear bits in the IRQEnable/FIQEnable register.” **D:6944–6947** specifies write-one-to-clear; zero bits have no effect.
+- **D:5853–5857**, SDRAM mask: “When 1: Causes the corresponding bit in the SDRAM base address register to act as a read-only 0 bit.” A zero instead permits that base-address bit to be read/write.
+- **D:5906–5910**, SDRAM offset: “This field contains the upper address bits for PCI-generated SDRAM accesses”; each bit supplies the address where the corresponding mask bit is zero.
+- **D:5846–5847 and 5899–5900:** both SDRAM registers must be written before initialize-complete is set.
+
+**READ:** D’s extracted bitfield tables interleave some adjacent rows. In particular, the reserved-field “Read only as 0” text must not be mistaken for a restriction on the neighboring R/W mask or offset field.
+
+**READ:** F initializes `odata` to zero at **501**, copies it to the read buffer at **754–755**, and returns handled at **757**. [`fatal()` at debugmsg.c:384](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) prints and returns.
+
+**REASONED — dispositions and observables.** Option 3 is my choice for this removal round, not something mandated by the datasheet. **5/7 sites use undocumented directions; 2/7 are documented reads whose implementation is absent.** Those categories should receive different explanations even though they share the same rejection mechanism.
+
+For the proposed decline contract, writes leave state unchanged; reads deliver deterministic zero through the common tail; the handler remains handled. Zero is an emulator fallback, **not a claimed hardware value**.
+
+| Site | Disposition and deciding fact | Observable that distinguishes it |
+|---|---|---|
+| IRQ_STATUS write | **3.** Read-only register; no write operation to accept. | Latched diagnostic; subsequent masked/raw status and enable state unchanged; process survives. |
+| IRQ_RAW_STATUS write | **3.** Read-only register; no write operation to accept. | Latched diagnostic; raw source state unchanged; process survives. |
+| IRQ_ENABLE_CLEAR read | **3.** Write-only address. Its precomputed mask is **not** a documented read result. | Zero result while the actual enable mask remains nonzero, plus latched diagnostic. The legitimate enable-read address still exposes the mask. |
+| FIQ_STATUS write | **3.** Read-only register. | Latched diagnostic and survival; FIQ enable state unchanged. Existing broken FIQ status makes status-only observation weak. |
+| FIQ_RAW_STATUS write | **3.** Read-only register. | Latched diagnostic and survival; existing zero raw-status read alone cannot establish rejection. |
+| SDRAM_BA_MASK read | **3**, explicitly “read unimplemented.” No existing mask state or answer. | Diagnostic and zero fallback, including after a legal nonzero configuration write; survival. A stored readback would instead demonstrate backed acceptance. |
+| SDRAM_BA_OFFSET read | **3**, explicitly “read unimplemented.” No existing offset state or answer. | Diagnostic and zero fallback after a legal nonzero offset write; survival. |
+| FIQ_ENABLE read | **7**, narrowly implementing readback from existing `fiq_enable`. | Returned mask follows enable-set and enable-clear state, independently of IRQ enables; no diagnostic or premature exit. |
+
+**REASONED:** a shared per-device latch can cover 7/7 J5 rejections. Each individual site’s announce observation then needs a fresh instance; repeated attempts on one instance must not repeat the message. A fresh instance must announce again.
+
+**READ:** the shared-field precedent is `warned_badlen` at [dev_wdc.c:1605](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1605) and **1639**. Those particular messages lack the literal marker; the explicit per-instance rule and `(once)` marker appear at **1899–1900** and **1928**.
+
+**REASONED:** simple DELETE leaves repeated diagnostics and, at `+0x18c`, an invented readable alias. Silent DECLINE lacks the chosen announce. BACKED ACCEPT would introduce SDRAM state without implementing its address-window effects. Faithful SDRAM support belongs to **7, IMPLEMENT**; choosing 3 here leaves that functionality explicitly unsupported. Survival or a single zero read cannot distinguish all these alternatives.
+
+**READ / REASONED — ARM FAULT availability.** A device’s `return 0` does **not** deliver a guest abort:
+
+1. ARM instantiates the shared worker with `MEM_ARM`: [tmp_arm_tail.c:38](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_arm_tail.c:38).
+2. The worker calls the device at [memory_rw.c:587](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:587), converts zero to `-1` at **595–596**, and enters the failure branch at **603**.
+3. That branch generates exceptions only under `MEM_MIPS` and `MEM_M88K`, **608–623**, then returns `MEMORY_ACCESS_FAILED` at **624**. There is no ARM exception call.
+4. Ordinary ARM loads return before assigning the destination register at [cpu_arm_instr_loadstore.c:233](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:233); stores return at **367–372**. Both assume an exception already happened. Address writeback at **376–381** is also bypassed.
+5. Normal dispatch already advanced `next_ic`: [cpu_dyntrans.c:114](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:114).
+
+**REASONED:** execution ordinarily continues with the failed transfer skipped. “Silently treated as done” therefore needs qualification: the memory layer reports failure, and a load does **not** commit even the buffer’s prefilled zero. A verbosity-dependent failure diagnostic is possible.
+
+**READ:** actual ARM translation faults separately set fault state and call `arm_exception(...DATA_ABT)` at [memory_arm.c:257](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:257), particularly **271–273**. That path does not handle device rejection. Physically absent memory likewise has zero-fill and optional emulator-halt handling, not an ARM abort: **memory_rw.c:676–683** and [memory.c:645](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:645).
+
+**REASONED:** option 5, as defined in the question, is unavailable without additional ARM fault implementation.
+
+**READ — FIQEnable’s contract.** **D:6913–6915** says:
+
+> This read-only register is used to mask the interrupt input sources and defines which active sources generate an interrupt request to the SA-110 on nIRQ/nFIQ. The value of this register can only be changed by writing to the EnableSet and EnableClear registers.
+
+**D:6919–6924** identifies enabled sources with a one, disabled sources with a zero, and reset value zero.
+
+**REASONED:** the defects differ mechanically. `+0x188` already computes the answer at **F:586** and then exits: literal **4, ACCEPT**. `+0x288` never assigns the answer: literal **7, IMPLEMENT missing readback**, using storage already present at **F:84**. It is not **6, invent storage**.
+
+It should join the **enable-readback round** because it shares the documented contract and value-observation method, but needs its own row. It is not one of the seven exits. Repairing readback does not establish working FIQ delivery.
+
+**READ — ordering correction.**
+
+| Probe | Current control target | Current decisive check |
+|---|---|---|
+| [footbridge_sites_probe.py:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:103) | `+0x188` | **291:** “ENABLE SET” diagnostic and exit status 1. |
+| [fbpending_drain_probe.py:226](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:226) | `+0x188` | **658–660:** K reports `HOST-DIED`, D survives. Diagnostic presence is displayed, not required. |
+| [fbpending_witness.py:195](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:195) | `+0x188` | **587–590:** K reports `HOST-DIED`, A survives. Diagnostic presence is displayed, not required. |
+
+**REASONED:** these dependencies already belong ahead of the `+0x188` repair. Moving them temporarily to `+0x100` would merely defer the dependency to J5.
+
+**READ — candidate replacement mechanisms found in the permitted tree:**
+
+| Candidate | Evidence | What it can establish |
+|---|---|---|
+| Another device’s explicit kill | [dev_rtl8139c.c:188](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_rtl8139c.c:188); also [dev_iq80321_7seg.c:87](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_iq80321_7seg.c:87) | Existing device-access exits. **NOT CHECKED:** a usable route from these CATS probe sessions. |
+| Deliberate host `abort()` | [machine_sgi.c:174](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:174), IP19 setup | Detection of an actual host abort; different machine and execution phase. |
+| Existing failure-path `abort()` | [interrupt.c:198](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/interrupt.c:198) | Host failure on unresolved interrupt connection. Again, not Footbridge guest access. |
+| Harness-side synthetic classification | [hpcmips_ctor_probe.py:421](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/hpcmips_ctor_probe.py:421), especially **426–435** | Executable checks of fabricated abort/status/output combinations. Tests classification, not actual child death. |
+| Harness-side deliberately wrong value | [sgi_eaddr_probe.py:190](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_eaddr_probe.py:190) | Corrupts the expected comparison value and requires rejection. Tests value discrimination. |
+
+**REASONED:** the soundest replacement is a **controlled harness failure exercised through the same observation and verdict path**, preferably including an actually reaped failing child for the process-status part. The existing synthetic classifier rows are a useful precedent, but alone do not validate PTY closure or reaping.
+
+After removal, none of these can truthfully establish “Footbridge can still end the process.” The replacement claim is “the harness detects failure”; separate guest-visible values establish device reachability. Depending on another unfixed device kill creates the same future ordering problem.
+
+**READ:** “last exits” also needs scope: the access handler contains 8/8 explicit exits counted here, with 1/8 assigned to the separate IRQ round. Constructor exits remain at **F:841 and 877**. Removing the access exits is not proof that every transitive device operation is incapable of ending the host.
+
+**READ / REASONED — additional findings from this read-through:**
+
+- **Timer value writes violate read-only semantics.** **F:649–653** accepts writes to all **4/4 TimerNValue addresses** through the fold at **507–509**. **D:7046 and 7081–7089** makes them read-only. The observable is a later changed value while the timer is disabled.
+- **FIQ raw/status functionality is absent.** `fiq_status` is zero-initialized at **F:769**, read at **610/619**, and never updated in this file. Source callbacks update only `irq_status`, **375–402**. This contradicts the identical-raw-status requirement at **D:6903**. ARM additionally leaves FIQ registration as TODO at [cpu_arm.c:212](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:212).
+- **Both software-interrupt registers are unimplemented.** `IRQ_SOFT` and `FIQ_SOFT`, **H:337/344**, have no cases in **F:512–752** and therefore diagnose without changing the source state. **D:6954–6962** defines their software-interrupt function.
+- **Timer control has further mismatches.** It stores the whole input and reads it back, **F:657–660**, despite reserved high bits reading zero and ignoring writes, **D:7133–7134**. Enabling reloads the counter through **F:672–673,269**, whereas **D:7127–7128** says re-enabling resumes the current value. Periodic CLEAR reloads even when already clear, **F:696–705**, contrary to **D:7139–7140**.
+- **The documented no-window SDRAM mask is not recognized.** Table 7-7 includes the no-window encoding, **D:5878–5895**; F’s accepted size cases **715–725** omit it, so that legal write reaches the diagnostic.
+- **FIQ_ENABLE_CLEAR read is a different case from FIQEnable read.** It already returns the default zero without changing state, **F:631–634**; **D:6832/6940** defines no readable register there. Its silence is a rejection-policy asymmetry, not missing enable-mask readback.
+
+**NOT CHECKED:** runtime outcomes, builds, or probe executions. No edits or executions of the emulator/tests were performed; the excluded artifacts and documents were not read.

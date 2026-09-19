@@ -1,0 +1,78 @@
+VERDICT — REASONED: A fix now; B add M5a0 now; C replace the live-defect dependency with a controlled subprocess abort; D correct the prose. D inspection is 10/11 complete; 1/11 is excluded by your reading scope.
+
+Citations refer to the current working files over HEAD `cdbe7d7`, including uncommitted changes. **NOT CHECKED:** runtime behavior or the supplied mutation matrix; no edits, builds, or test runs performed.
+
+**A — `exemptcal`: fix now.**
+
+**READ:**
+
+- [`DATE_RE`, checker:2398](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2398) checks only `^\d{4}-\d{2}-\d{2}$`.
+- The production [MALFORMED EXEMPTION branch, checker:3225](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:3225) tests only that regex, records the diagnostic, and sets `EXEMPT(BAD-DATE)`.
+- The sole executable [`d < today`, checker:3230](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:3230) compares strings. Its other occurrence is explanatory prose at [checker:2979](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2979).
+- The sole [`fromisoformat()`, checker:2996](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2996) parses M5’s earliest regex-matching detector date without catching `ValueError`.
+- All **11/11** EXEMPT dates are `2026-09-27`, a valid, unexpired date on September 18. [EXEMPT, checker:2330](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2330)
+
+**REASONED:** `2026-09-99` passes production’s date check and remains lexically unexpired through September. The selftest crash needs a qualification: the impossible date must be selected as earliest. Changing only one entry to `2026-09-99`, with the other **10/11** still dated September 27, does **not** trigger that exception.
+
+The smallest coherent repair is a shared, nonthrowing parser that requires the exact format and successful calendar parsing. Route failure into production’s existing MALFORMED branch. In M5, route parsing failure into a named `FAIL M5a/M5b`, retaining both false result slots and continuing the suite. Keep the inclusive expiry rule, `<`.
+
+Add **M5g**, a calendar-invalid date such as `2026-09-99`, to the existing malformed-date cases. Require exit `1` and `MALFORMED EXEMPTION  <selected probe>`. Existing M5c/d/e cover unpadded, empty, and `"soon"` inputs; none tests calendar validity. [checker:3003](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:3003)
+
+That mutation pins **production** validation. It does not independently pin the outer M5 error handling: [`case()`, checker:2896](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2896) invokes normal checker mode. An invalid-earliest fixture exercising selftest setup should additionally verify the named failure and retained denominator.
+
+**READ:** `--today` is also unvalidated: its following argument is assigned directly; only an absent value defaults to the real clock. Reuse the calendar validator there. [checker:3154](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:3154)
+
+**B — `m5dayb`: add now.**
+
+**READ:** [`_pick_exempt_detector()`, checker:2803](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2803) sorts by **name**, requires DETECTOR classification and exactly one extracted source occurrence; it does not select the earliest date. M5 independently derives that minimum. [checker:2988](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2988)
+
+**REASONED:** Add M5a0 using that minimum minus one day, expecting exit `0` and `PROBEWIRING_PASS`. It changes none of the existing **22/22 case definitions**. Its missing-date branch must reserve three failed slots instead of two.
+
+The deciding fact is that **11/11 deadlines coincide**. With `!=`, the on-date case remains green and the after-date case remains red—both expected outcomes. M0/M2b also stop exposing that mutation on the common stamped date. The before-date case deterministically rejects it. M5a already distinguishes `<` from `<=`. This conclusion follows from the comparisons; the reported **18/18 matrix cells remain NOT CHECKED**.
+
+The exact pin is:
+
+```sh
+if [ "${_stden:-0}" -eq 22 ] 2>/dev/null; then
+```
+
+at [precommit_check.sh:578](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh:578). Raise it to `23` for B alone; update the messages at lines 579 and 581. Adding A’s production calendar case as well requires `24`; count any separately added setup case too.
+
+**C — `hpcmipsc2`: rebase C2 on a controlled subprocess abort.**
+
+**READ:** [C2, hpcmips_ctor_probe.py:518](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/hpcmips_ctor_probe.py:518) launches mvme1600 and requires `ABORT_OTHER`. It displays the last output line but does **not** assert the PCI diagnostic. The constructor initializes `pci_data` to NULL and passes it to `bus_pci_add()`, whose NULL guard calls `abort()`. [machine_mvmeppc.c:55](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvmeppc.c:55), [bus_pci.c:220](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:220)
+
+[F3:426](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/hpcmips_ctor_probe.py:426) directly checks `classify(-SIGABRT, "boom") == ABORT_OTHER`. The [classifier:152](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/hpcmips_ctor_probe.py:152) requires negative SIGABRT status and both lookup diagnostic strings for `ABORT_LOOKUP`; otherwise SIGABRT becomes `ABORT_OTHER`. The gate actually invokes the probe and requires C2’s green row. [gate_arm.sh:1622](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1622)
+
+**REASONED:** F3 does **not** prove everything C2 proves. C2 also exercises the binary, process launch, captured output, and actual signal status through [`_run()`:188](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/hpcmips_ctor_probe.py:188). A deliberately aborting helper passed through `_run()` preserves process/signal handling coverage, but loses the **real emulator construction and diagnostic path**. Repeating F3’s pure function call would lose that subprocess coverage too.
+
+**READ / REASONED:** No documented **permanent** emulator refusal suitable for C2 was established. SGI and pmax aborts explicitly say TODO/legacy rewrite. [machine_sgi.c:267](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:267), [machine_pmax.c:365](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_pmax.c:365) The exclusive-interrupt guard deliberately aborts, but documents an internal consistency error, not a permanent public refusal contract. [interrupt.c:225](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/interrupt.c:225) Ordinary unknown-subtype refusal exits `1`, which cannot satisfy C2. [main.c:541](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:541)
+
+Retain F3 and C2’s identity while making C2’s subprocess failure controlled; document the lost emulator coverage.
+
+**D — correct the remaining generalization.**
+
+The output statements below are **READ** at the linked locations. Exit behavior is **REASONED for normal completion after failed predictions**, excluding unrelated exceptions. “Verdict” distinguishes an aggregate pass/fail decision from a score or descriptive observation.
+
+| Probe / READ citation | Verdict or summary actually printed | Exit after failure | Completion sentinel |
+|---|---|---:|---|
+| [fbpending_drain_probe.py:711](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:711) | `FBDRAIN_CONTROL=OK/FAILED`; `FBDRAIN_VERDICT=PASS/FAIL/REPORT-ONLY` | **1** for failed control rows or asserted bound | No separate DONE; terminal `FBDRAIN_VERDICT=…`; report path also prints `PROBE_WALL=…` |
+| [wdc_altoffset_probe.py:682](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:682) | Prose `VERDICT`: `WITNESS CONFIRMED…` or `SOMETHING DID NOT HOLD…` | **0** | `ALTOFF_DET_DONE` |
+| [wdc_altoffset_sig_probe.py:244](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_sig_probe.py:244) | Per-leg `yes/NO`, `YES -- DEFECT PRESENT` / `no -- declined`; no aggregate pass/fail | **0** | `ALTOFF_SIG_DONE` |
+| [wdc_altoffset_4bit_probe.py:214](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_4bit_probe.py:214) | Prediction count; per-leg `DEFECT PRESENT`, `declined`, or `INDETERMINATE`; no aggregate pass/fail | **0** | `ALTOFF_4BIT_DONE` |
+| [wdc_addtoinbuf_probe.py:833](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_addtoinbuf_probe.py:833) | Row `ok/FAIL`, prediction count, `AS PREDICTED/MISMATCH`; no aggregate verdict | **0** | `ADDTOINBUF_RUNG3_DONE` |
+| [ppc_rldicl_probe.py:623](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:623) | `SCORE n/m`, `FAILING: …`; no aggregate pass/fail token | **0** | `PPC_RLDICL_PROBE_DONE` |
+| [alpha_tbi_probe.py:583](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_tbi_probe.py:583) | `ALPHATBI_RESULT=n/m`, conditional `FAILING: …`; no aggregate pass/fail token | **1** | `ALPHATBI_DONE` |
+| [lca_badval_probe.py:704](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:704) | `LCABADVAL_RESULT=n/m`; `LCABADVAL_WITNESS=PASS/FAIL` | **1** | `LCABADVAL_DONE` |
+| [lca_widewrite_probe.py:283](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py:283) | `WIDEWRITE_RESULT=n/m`; no aggregate pass/fail token | **1** | `WIDEWRITE_DONE` |
+| [lca_isalane_probe.py:1381](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py:1381) | `LCAISALANE_RESULT=n/m`; `LCAISALANE_WITNESS=PASS/FAIL` | **1** | `LCAISALANE_DONE` |
+| `artifacts/ip30abortkill/ip30_abort_probe.py` | **NOT CHECKED — artifacts exclusion** | **NOT CHECKED** | **NOT CHECKED** |
+
+**REASONED:** Thus **5/10 inspected probes** can complete with failed predictions and exit zero. Fbpending needs special care: failed controls produce `REPORT-ONLY` plus exit `1`; a default report-only run does not assert a backlog cap.
+
+Two prose corrections remain:
+
+- [“Wiring jobs, not design ones,” checker:2307](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2307) contradicts the block’s own bound-setting and single-leg-mode requirements. Describe each probe’s required oracle, completion check, configuration, and instrument changes.
+- [“Could only score its exit status,” checker:2357](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2357) is false for PPC: its score, failing-row list, and DONE marker are available, while its ordinary red completion exits zero.
+
+Additional **READ** premise correction: production normally classifies tracked/staged Python files, not every untracked file on disk; recursive filesystem enumeration is the fallback. [checker:2638](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2638) The introductory selftest prose also still says “18 mutants,” despite the current denominator pin of `22`. [checker:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:103)

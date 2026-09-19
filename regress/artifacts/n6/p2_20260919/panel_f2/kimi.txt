@@ -1,0 +1,788 @@
+kimi version 0.36.0
+• This is a complex adjudication task. I'm being re-fired as a seat (presumably fable5, since it says "fable5 has not yet ruled (it fires LAST, after this pass)" — actually wait, let me re-read).
+
+  The prompt says: "You are re-fired with EVERY seat's pass-2 findings consolidated below" — so this is the §F2 ADJUDICATION PASS for n6 / #539. I'm a seat that must adjudicate F1-F23 and D1-D3.
+
+  Key instructions:
+  - VERDICT LINE FIRST
+  - Read-only; run nothing (but the operational rule says building/running a single detector or mutant in my own temp dir is fine, but "Read-only; run nothing" is stated in the header — so I should NOT run anything)
+  - File-reading seats: the tree is `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`, frozen v2 diffs at `_scratchpad/n6/p2/diff539_4files.v2.patch` and `diff539_gate.v2.patch`, pass-2 packet at `_scratchpad/n6/p2/brief_n6_p2_BUILT.md`
+  - Every fact I need is inlined; say NOT CHECKABLE rather than guess — but I do have file-reading tools, so I can check the diffs.
+
+  I need to:
+  1. Q1: Adjudicate F1-F23, D1-D3 — UPHOLD / OVERTURN / REFINE / CANNOT SETTLE, one line each with reason
+  2. Q2: Which of the 17 accepted dispositions is wrong, and which of the 3 rejections (F16, F17, F18)
+  3. Q3: What did all nine miss? In particular: is there a state where the new bounded reap (poll 5s, SIGKILL, wait) itself produces a wrong verdict on a HEALTHY run under load?
+  4. End with the seat record line.
+
+  Also: "A seat adjudicating its own finding is doing self-review: say so, and be HARDER on it, including whether the FIX I made in response is right, not merely whether the finding was."
+
+  Since I'm a fresh seat being re-fired (this looks like fable5's adjudication pass, actually — "§F2 ADJUDICATION PASS" — fable5 is the adjudicator seat that fires last). Wait: "fable5 has not yet ruled (it fires LAST, after this pass, once the same limit resets)". Hmm, so fable5 fires after this pass. So who am I? The header says "§F2 ADJUDICATION PASS — the panel shares its pass-2 findings. One numbered packet, my disposition on each." So "my" is the author/operator, and I'm a seat asked to adjudicate. I'm probably the kimi CLI seat re-fired for adjudication, or a dedicated adjudication seat. The seat record line at the end should identify me. Given this is Kimi Code CLI, I'm the "kimi CLI" seat. Let me just produce a seat record line like "kimi CLI (Kimi Code CLI, §F2 adjudication re-fire)".
+
+  Let me do actual verification. I should read the diffs and relevant probe files. The task says read-only, run nothing. I can Read files. Let me check:
+
+  1. `_scratchpad/n6/p2/diff539_4files.v2.patch` — the 4-file diff
+  2. `_scratchpad/n6/p2/diff539_gate.v2.patch` — gate diff
+  3. The probes in GXEMUL-SEC tree: `regress/` probably has `footbridge_sites_probe.py`, `fbpending_drain_probe.py`, `fbpending_witness.py`
+  4. `src/devices/dev_footbridge.c` for the IRQ_ENABLE_SET read branch and TIMER code.
+
+  Let me verify key claims:
+
+  - F1: bounded reap — check the probes' close() implementations.
+  - F2: sites probe teardown — check it matches the pending probes' teardown.
+  - F3: gate check for distinct row ids.
+  - F4: gate excerpt grep `E(C1|A1|[0-6])`.
+  - F5: gate label text.
+  - F6: A2 row note "(MAX_VAL)".
+  - F7: 7.3.33 IRQEnableClear.
+  - F8: drain header rewrite.
+  - F9: sites header Q rotated immediate correction.
+  - F10: sites header (k) spill wording.
+  - F11: TIMER_1_LOAD write branch wording.
+  - F12: contract TESTED PATTERNS bit 31.
+  - F13: D1 "every planted word" sentence in contract.
+  - F15: (q) disclosure.
+  - F18: minimax encoding concern — ARM single data transfer: bit 25 (I bit) — I=0 means immediate offset, I=1 means register offset. Yes, that's correct: in ARM LDR/STR, bit 25 is the I bit; I=0 → immediate offset; I=1 → register (shifted register) offset. So minimax is wrong; F18 refutation is right. Note: this is the opposite of data-processing, where I=1 means immediate operand2. So the refutation is correct.
+  - F23: (j) disclosure wording.
+
+  For Q3 — what did all nine miss? I need to think hard. Let me think about the bounded reap and possible issues:
+
+  The new close() pattern: drain master to EOF, then bounded WNOHANG poll (5s), then SIGKILL, then blocking waitpid. Potential issues:
+
+  1. **PID reuse / wrong-child SIGKILL**: after the child exits and is reaped... actually the bounded reap does waitpid(WNOHANG) poll, so if child exits it's reaped. If not, SIGKILL then blocking wait. If the child exits between the last WNOHANG poll and the SIGKILL, and the PID gets reused within that window — killing an innocent process. On Linux, PID reuse within milliseconds is unlikely but possible under heavy load (pid_max small, heavy fork churn). The probe would then waitpid() on a pid that... waitpid on a re-used pid that is not its child returns ECHILD. So the blocking waitpid after SIGKILL could raise ChildProcessError if the child was already reaped by... no wait, the child is this process's child until reaped; PID reuse only happens after reaping. Actually if the child exited but wasn't reaped, it's a zombie holding the PID — no reuse. SIGKILL to a zombie is harmless (kill returns success or ESRCH? kill on a zombie succeeds — zombies still have pid entries; signal delivery to zombie is a no-op success). Then blocking waitpid reaps it. So the kill-after-exit race is benign on POSIX. OK.
+
+  2. **SIGKILL to a child in the middle of writing its exit complaint**: irrelevant — the child is supposed to have exited.
+
+  3. **The real Q3 question: can the bounded reap produce a WRONG VERDICT on a HEALTHY run under load?** The drain-to-EOF: after sending quit, the probe reads from the master pty until EOF. EOF on a pty master happens when the last slave fd is closed — i.e., when the child exits (assuming no grandchildren hold the slave open). Under load, the child may take a while to exit after quit; the drain blocks reading until EOF. If the drain has no timeout... wait, drain-to-EOF blocks until EOF. If the child hangs (survives), the drain itself hangs — the bounded reap comes AFTER the drain. Hmm, does the drain have a timeout? The pass-1 design (codex L3's drain-to-EOF) — need to check whether the read loop is bounded. If the drain read is unbounded, F1's fix doesn't fully fix the hang: a child that survives SIGHUP would hang the DRAIN, not the waitpid. The finding F1 says "Unbounded waitpid after the master close" — "after the master close" — so the order is: close master → drain? or drain → close? Let me re-read.
+
+  F1: "Unbounded `waitpid` after the master close in drain/witness `close()` — a child that survives SIGHUP hangs the probe". Fix: "ALL THREE probes now reap with a bounded WNOHANG poll (5 s), then SIGKILL, then the blocking wait".
+
+  So the close() sequence is presumably: send quit, drain to EOF (or close master?), then reap. Need to read the actual code to check whether the drain itself is bounded. If drain-to-EOF is unbounded and a grandchild (e.g., the child's children) inherit the slave fd, EOF never comes. Does gxemul fork? No. So EOF comes when gxemul exits. But under LOAD, is there a state where the healthy run's EOF is delayed > 5s? The 5s bound is on the reap poll, not the drain. If drain is unbounded... the reap never gets reached on a hang. But on a HEALTHY run under load: quit → gxemul exits → EOF. The drain completes. Then WNOHANG poll: is 5s enough for the kernel to make the zombie visible? waitpid WNOHANG on a zombie returns immediately. The child exiting → SIGCHLD → zombie instantly. There's no real delay between EOF and zombie availability... actually EOF on pty master comes when the slave side is closed, which happens during process exit (fd closing) — exit() and zombie creation are essentially atomic from the parent's perspective (the kernel closes fds then sets zombie state; a reader could see EOF slightly before the zombie is waitable). But WNOHANG poll loops for 5s, so any micro-delay is absorbed. If poll expires (5s without zombie — practically impossible for a healthy exited child... unless the process was SIGSTOPped? Under extreme load, could the child be stopped? No.) then SIGKILL then blocking wait — still correct verdict.
+
+  BUT: here's a sharper Q3 candidate. **What if the child, on a healthy run under heavy load, is slow to exit (e.g., swapping, disk thrash) and the DRAIN is what's unbounded?** The verdict question is about wrong verdict, not hang. A hang is not a wrong verdict per se... though a hung probe under an external timeout might be scored as FAIL. Hmm.
+
+  Another candidate: **SIGKILL racing the child's exit-status capture**. Sequence: poll WNOHANG 5s (child already zombie → reaped at first poll with exit 0). Fine.
+
+  What about the case where quit is sent, drain starts, and the HEALTHY child under load takes > some drain timeout to print its prompt/exit? If the drain has a timeout and treats timeout as EOF, then closing master early → SIGHUP → child killed → exit status nonzero/signal → the K predicate (which requires exit != 0 to RED on mutant, or == 0 on base?) — wait, on base, CONTROL=OK requires K exit=1?? From table 2: "base_v2: drain CONTROL=OK (K exit=1, D/X/T/E exit=0)". Interesting — on BASE, the K row (kill control, read of +0x18c write-only IRQEnableClear) exits 1 with the complaint — that's the expected "control" behavior: reading a write-only register produces a diagnostic and nonzero exit even in the base emulator. So K exit=1 on base is EXPECTED. The mutant x_exit2 makes it exit 2, and the predicate requires... red K means the predicate fires. OK.
+
+  Now Q3: "is there a state in which the new bounded reap itself produces a wrong verdict on a HEALTHY run under load?" Consider: healthy run, heavy load. quit sent. Child begins exit. Drain-to-EOF... The bounded reap: poll 5 s. Under extreme load (e.g., the machine is so loaded that the child's exit path — flushing stdio, kernel teardown — takes > 5 s AFTER the slave is closed? No: EOF means fds closed, which happens in do_exit; zombie status available right after. The gap between EOF and waitable zombie is microscopic. So the 5s poll can't expire on a healthy child.
+
+  UNLESS: the drain-to-EOF itself is what blocks, and the reap is never the issue. OR the drain reads until EOF but the probe reads EOF when *it* closes... no.
+
+  Hold on — another angle: **SIGKILL delivered to a REUSED PID**. I argued zombies prevent reuse. Correct on POSIX. Not it.
+
+  **Wrong verdict via exit-status truncation**: exit codes are 8-bit. x_exit2 exits 2; predicate reds on exit != 1? If a healthy base run under load has the K child exit 1 (expected), fine. 
+
+  What about **SIGKILL race where the child exits 0 (healthy non-K rows D/X/T/E exit=0), and the probe's bounded reap... returns signal 9 instead of 0?** Sequence: poll WNOHANG — first poll at t=0 might run BEFORE the child becomes a zombie even though EOF seen? As argued, EOF ≈ after fd close, zombie right after. But wait — is that ordering guaranteed? The pty master returns EOF (read returns 0) when all slave fds are closed. In do_exit(), the kernel closes files (exit_files) BEFORE setting PF_EXITING/zombie (exit_notify). So yes, EOF strictly precedes zombie-availability by a tiny window. The first WNOHANG poll could return 0 (no state change) if scheduled in that window; the poll loops (presumably with a sleep) for 5s, so the second poll gets it. Fine — unless the poll loop is implemented as a single WNOHANG then 5s sleep then SIGKILL without re-polling! "bounded WNOHANG poll (5 s), then SIGKILL, then the blocking wait" — if the implementation is: `for _ in range(50): r = waitpid(WNOHANG); if r: break; sleep(0.1)` then SIGKILL — fine. If it's: `waitpid(WNOHANG); sleep(5); waitpid(WNOHANG); SIGKILL; waitpid()` — still fine, 5s absorbs. Either way OK.
+
+  So the bounded reap itself seems sound for a healthy run. But Q3 asks what ALL NINE missed. Let me think about other candidates across the whole change:
+
+  **Candidate A: The (q) escape + table 2 substitution.** F15 discloses (q) escapes; table 2 uses x_exit2/y_sigkill to make the exit term load-bearing. Fine.
+
+  **Candidate B: drain-to-EOF unbounded.** F1 fixed the waitpid but what bounds the DRAIN? If a mutant makes the child ignore quit AND keep the pty open (grandchild, or the mutant itself just loops), the drain read blocks forever — the bounded reap is never reached because it runs AFTER the drain. Did the fix bound the drain? F1 says "reap with a bounded WNOHANG poll" — the REAP is bounded, but the drain-to-EOF read loop before it — is it bounded? THIS could be what everyone missed: F1's fix bounds the reap but the hang state moved to (or always was in) the DRAIN. The finding said "Unbounded waitpid after the master close" — "after the master close" implies order: close master → ... wait, if master is closed, there's no drain. Hmm, "drain/witness close()" — the sequence in close() might be: quit → close(slave?) → drain master to EOF → close master → waitpid. If the child survives, drain-to-EOF never sees EOF → hang in drain, before the waitpid. So F1's described hang ("unbounded waitpid") presupposes the drain COMPLETED (i.e., EOF happened without the child exiting — possible if the child closed its slave fds but kept running! gxemul on quit... no. Or if the probe's drain treats some condition as EOF prematurely — e.g., a read timeout treated as EOF, or EIO). On Linux, reading a pty master after the child exits but while... actually read on master when slave is closed returns EIO (or 0). If the drain loop treats EIO/0 as EOF and breaks, then closes master, then waitpid — child might still be alive (survived SIGHUP? no handler... agy's point). So the hang is theoretical. F1 accepted as hardening. Fine.
+
+  But the MISSING thing: **does the drain loop have a total-time bound?** If not, a child that survives quit (e.g., a mutant that makes gxemul loop forever in the read branch — plausible! a mutant could corrupt the switch so quit is never processed... no, quit is monitor-level) — actually the relevant hang: mutant child never exits → drain never EOFs → probe hangs BEFORE the bounded reap. The bounded reap doesn't help. Is the drain bounded? I need to READ THE CODE. This is the kind of thing to check. If the drain is unbounded, then F1's fix is incomplete — the "hangs the probe" state persists in the drain, and that's what all nine missed (they all focused on the waitpid). Actually wait — F14 files "ignored quit / delayed shutdown" as needing a pty mock, not built. And the "Where I might be fooling myself" (c) says "the drain-to-EOF + bounded reap shape was never exercised on a child that ignores quit". So they half-noticed. But the specific gap: bounded reap AFTER unbounded drain = the bound never engages in the one state it was built for. Let me verify by reading the probe.
+
+  **Candidate C: 5s poll under load producing WRONG verdict.** As analyzed: no for healthy child. But what about: the poll expires (child slow to exit — but EOF already seen means child already dead). What if drain is EOF-triggered by EIO while child alive? On Linux pty: when child is alive but has closed its stdout... gxemul's stdout isn't necessarily the pty slave? The harness launches gxemul with stdin/stdout on the pty slave. When gxemul is alive, slave open, no EOF. Fine.
+
+  **Candidate D: K1 on sites probe = "18/19 red" — meaning on x_exit2, sites reports 18 of 19 rows red, and K1 is the red one that matters.** On base_v2 sites 19/19 PASS. So the K row in sites passes on base (exit 1 expected?? hmm — in sites, K1 reds on mutant but passes on base... "sites 18/19 red K1" means 18 rows red and K1 is among them? Or 18/19 red with K1 being the 19th? Unclear inline; NOT CHECKABLE without reading table2 log — but it's the operator's own measurement, take as given.)
+
+  **Candidate E: What about `waitpid` on a child that's not ours / ChildProcessError in Python after SIGKILL if the poll already reaped it?** If the WNOHANG poll reaps the child on its last iteration (race: child exits, poll reaps, loop exits) then SIGKILL... would the code still SIGKILL? Properly written: `if reaped: break` then skip SIGKILL. If sloppily written: after loop, unconditional `os.kill(pid, SIGKILL)` — but pid already reaped → kill raises ProcessLookupError (ESRCH) — or worse, PID REUSED between reap and kill → SIGKILL to an innocent process! Under load with heavy forking (a gate running many probes), the window between reap and SIGKILL could allow PID reuse → SIGKILL kills an unrelated process (maybe another probe's gxemul!) → WRONG VERDICT on a healthy run. THIS is a concrete Q3 answer: the bounded reap can produce a wrong verdict on a healthy run under load IF the SIGKILL is sent unconditionally after the poll loop without checking whether the poll reaped the child, because a reaped PID can be recycled. I MUST READ THE CODE to see if the SIGKILL is guarded. This is exactly the kind of thing all nine might have missed — they checked "bounded, then SIGKILL, then wait" as a shape, but the guard matters.
+
+  Also symmetric: `os.kill(pid, SIGKILL)` where the child already exited and was reaped by... the blocking wait at the end: `waitpid(pid, 0)` after SIGKILL — if SIGKILL raised or if child already reaped, waitpid raises ChildProcessError → probe crashes → wrong verdict/crash on healthy run? If code does: poll-loop reaps → break → then unconditionally os.kill → ProcessLookupError exception → probe traceback → gate sees probe crash → red/fail on HEALTHY base run. That's a wrong verdict on a healthy run! The fix: catch ProcessLookupError, or guard SIGKILL with "not reaped". Need to read the actual code.
+
+  So my priority: READ the three probes' close() implementations. Also check the sites probe teardown (F2), and the drain boundedness (Candidate B).
+
+  Also check the gate diff for F3/F4/F5 and the contract file for F12/F13/F23. And dev_footbridge.c for the core change sanity (case IRQ_ENABLE_SET read: odata = d->irq_enable, no fatal).
+
+  Also D3: (r) width handling — "caught by E3/E6 by construction: `if (len == 4)` leaves odata 0 → E3 reds". Wait — E3 wants 0x02: if len!=4 leaves odata=0, then read of IRQEnableSet with len 1/2 returns 0 — E3 expects... the row E3 pins read value 0x02? Hmm, the arithmetic: `if (len == 4)` leaves odata 0 → E3 reds — meaning E3 checks the returned value equals something nonzero. Need to check the actual read branch: does the pre-fix code have `if (len == 4) odata = d->irq_enable;`? And the new read branch for IRQ_ENABLE_SET — is it also len-guarded? If the new read branch returns d->irq_enable regardless of len... Let me look at the actual code. Also for the CLEAR kill control: reading +0x18c (write-only register) — in the base emulator, what does reading IRQ_ENABLE_CLEAR return? Presumably the pre-existing code has a fatal or returns 0 with complaint. The K control relies on "complaint + exit 1". Actually the probes add their OWN mutants; K = kill control where the child is built to complain and exit 1 on read of +0x18c. That's probe-side. OK.
+
+  Let me also think about F19 (A1 0x1011 model value — DeviceID:VendorID packing — DC21285 vendor ID is 0x1011 (DEC), device ID for 21285 is 0x0004? So packed would be 0x00041011. The row tests reading 0x1011 — a model simplification. Accepted earlier with a gate comment. Fine.)
+
+  Now, other misses to consider for Q3 (what did ALL NINE miss):
+
+  1. **Drain boundedness** (does the drain-to-EOF have a timeout? If not, F1's hardening is half-built; the surviving-child hang persists in the drain phase).
+  2. **SIGKILL-after-reap PID reuse / unconditional SIGKILL exception** (wrong verdict on healthy run under load — direct answer to Q3's particular question).
+  3. **waitpid blocking after SIGKILL: SIGKILL can't be caught, so the blocking wait terminates — fine. Unless the child is in uninterruptible sleep (D state, e.g., NFS/disk hang) — SIGKILL on a D-state child doesn't take effect until it leaves D → blocking waitpid hangs the probe anyway! Under heavy I/O load (the gate writing logs), a child in D state... SIGKILL pending until D exits. So even the bounded reap's final blocking wait can hang on a healthy-ish run under pathological I/O. That's a real Q3 state: the "blocking wait" after SIGKILL is unbounded and D-state sleep defeats SIGKILL temporarily. On a healthy run the child has already exited though (EOF seen), so waitpid returns immediately. The blocking wait only matters on the SIGKILL path which only matters if poll expired which on healthy run can't happen. So no.
+
+  4. **The 5-second bound vs. loaded machine for the mutant runs**: table 2's y_sigkill — complaint then SIGKILL — the drain: child SIGKILLed → EOF quickly. Fine.
+
+  5. **Something about F3's distinct-ids check**: `sort -u | wc -l == 7` — if the rows are E0..E6 plus EC1, EA1 (9 E-rows in arm E? "arm E with rows EC1,EA1,E0,E1,E2,E3,E6,E5,E4" = 9 rows). The gate check "seven green E lines" — which seven? E0-E6 (the numeric ones) presumably, since F3 added "E0-E6 are seven DISTINCT row ids". So the gate greps E[0-6] lines... F4's fix `E(C1|A1|[0-6]) ` — hmm that matches EC1, EA1, E0-E6 — that's 9, not 7. Wait F4 is about the gate EXCERPT grep (an echo for the log), cosmetic. F3's check is "E0-E6 are seven DISTINCT row ids". OK. But subtle: `sort -u | wc -l == 7` counts distinct ids among matched lines — if the same row id appears twice (duplicate) and another is missing, sort -u gives 6, caught. If a row id appears with trailing garbage making `E1` and `E1 ` distinct? Depends on extraction. Probably fine. NOT the big miss.
+
+  6. **What about the sites probe collecting `fatals` AFTER the drain (F2 fix) — but E4's oracle `not E["fatals"]`: the drain now happens, so fatals collected from drained output include the child's exit complaint... wait E4 must be red on a mutant keeping ANY diagnostic. On BASE, healthy, fatals empty → pass. Under load, could a healthy base run emit a spurious diagnostic that lands in fatals? E.g., the K control row's complaint (K exit=1 is EXPECTED on base — "complaint + exit 1" is the control behavior!). Wait — on base, the K row DOES complain (reading write-only +0x18c) and exit 1, and that's CONTROL=OK. So the complaint text from the K read goes to... the child's stderr/stdout, which is the pty, which the drain reads — does the K complaint get collected into `fatals`?! If fatals collects "footbridge" diagnostics from the whole session including the K control's expected complaint, then `not E["fatals"]` would be FALSE on the healthy base → E4 red on base → but base_v2 says sites 19/19 PASS. So either fatals is scoped per-arm/before K, or the K complaint text differs from what fatals greps. It passed on base, so OK empirically. But under LOAD — could output interleave? PTY is per-child, each arm its own child presumably. Fine.
+
+  Hmm wait, actually — I realize I should reconsider: in the drain/witness probes, "CONTROL=OK (K exit=1...)" — K is the kill control arm; the probe checks that the K child DID exit 1 (the kill control works). If under load the K child's complaint is printed but its exit status is captured as... exit codes reliable. Fine.
+
+  7. **The `#529 orphan hunk in gate_arm.sh excluded from the commit (HEAD-based partial blob)`** — a commit-hygiene item, not reviewable here; NOT CHECKABLE.
+
+  8. **F22/F20/F21** — seat records; my adjudication: these are process records; UPHOLD as recordings. F18 refutation is technically correct (I bit semantics) — UPHOLD the refutation. For Q2 "which rejection is wrong" — I should scrutinize F16, F17, F18. F16: two different files 744 vs 897 — plausible; can I check? The stale copy under `_scratchpad/r6pass2_fb/` — I could look for it. It's in the GXEMUL-SEC tree? The scratchpad path `_scratchpad/r6pass2_fb/` — under GXEMUL-SEC/_scratchpad or the outer _scratchpad? The p2 packet is `_scratchpad/n6/p2/brief_n6_p2_BUILT.md` — relative to CWD? CWD is C:\DocumentNoSnc\CC\GXEMUL. The tree given is GXEMUL-SEC. Hmm, "the tree is C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\ ... the frozen v2 diffs are _scratchpad/n6/p2/..." — so _scratchpad is inside GXEMUL-SEC. There's a GXEMUL-SEC/_scratchpad directory (I see it in the listing). OK.
+
+  So plan of reads (parallel):
+  - `_scratchpad/n6/p2/diff539_4files.v2.patch` (probably big; page it)
+  - `_scratchpad/n6/p2/diff539_gate.v2.patch`
+  - The three probes in GXEMUL-SEC/regress/ — find exact paths. Probably `regress/footbridge_sites_probe.py` etc. or under `regress/artifacts`? Let me Glob.
+  - `GXEMUL-SEC/src/devices/dev_footbridge.c` — the IRQ_ENABLE_SET read branch and TIMER_1_LOAD write branch.
+  - Maybe the brief `_scratchpad/n6/p2/brief_n6_p2_BUILT.md` — 64 KB, page selectively.
+
+  Given the volume, I could delegate to explore agents, but the instructions say "Read-only; run nothing" — reading is fine. Doing it myself with targeted reads is fine too. The diffs are the ground truth for the fixes; the working tree has "the uncommitted #539 edits, now at their pass-2-corrected v2 state".
+
+  Let me be careful about response budget: this is an adjudication, output should be structured but not bloated. One line per F/D item. Then Q2 and Q3 essays, short. Seat record line at end.
+
+  Let me start reading. First, locate files.
+
+  Priority questions to answer from code:
+  A. close() in the three probes: order of drain vs reap; is the drain bounded; is SIGKILL guarded (only if poll failed to reap); is the blocking wait wrapped so an already-reaped child doesn't crash; does it catch ProcessLookupError/ChildProcessError?
+  B. Sites probe teardown now same as pending probes; fatals after drain (F2).
+  C. Gate diff: F3 distinct check, F4 grep, F5 label, A1 comment (F19), contract statements (F12, F13, F23).
+  D. dev_footbridge.c: IRQ_ENABLE_SET read branch (len guard? odata init?), TIMER_1_LOAD write branch (F11's wording), IRQ_ENABLE_CLEAR read behavior (what base does on +0x18c read — needed for K control sanity and D3's `if (len == 4)` arithmetic).
+  E. F9/F10 header text in sites probe; F8 drain header; F6 A2 note "(MAX_VAL)"; F7 "7.3.33".
+  F. Encodings (F18): the 13 words — bit 25 = 0 for ldr/str immediate — I can verify a couple by decoding if the probe lists them.
+
+  Let me fire parallel reads/globs now.
+
+  Actually, let me think about what the Q3 "particular" answer should be. The question: "is there a state in which the new bounded reap (poll 5 s, SIGKILL, wait) itself produces a wrong verdict on a HEALTHY run under load?" My leading candidates:
+
+  (i) Unconditional SIGKILL after a poll loop that DID reap → ProcessLookupError (harmless if caught; crash if not) or PID-reuse kill of an innocent (if pid recycled post-reap — tiny window but real under fork-heavy load, e.g., parallel gate). Depends on code — MUST READ.
+
+  (ii) The 5s bound is wall-clock; under load the healthy child has already exited before reap starts (EOF), so no.
+
+  (iii) If the drain-to-EOF is bounded by a timeout that treats timeout as EOF, then under load a slow-but-healthy child could hit the drain timeout → probe proceeds to close master → SIGHUP → child terminated → reap gets SIGTERM/SIGHUP status → exit != 0 → on rows where exit==0 is required (D/X/T/E on base), a RED on healthy base = wrong verdict. Is the drain bounded with timeout-as-EOF? MUST READ. This is the sharpest "healthy run under load → wrong verdict" path: load → slow child → premature EOF decision → SIGHUP → nonzero status → red row on base. All nine reviewed the reap bound, nobody asked what bounds the drain and what timeout-as-EOF does to the verdict on a healthy-but-slow child.
+
+  Also: SIGHUP on pty master close — closing the master sends SIGHUP to the foreground process group of the slave. agy/minimax said default disposition terminates. Under load, between close and child death, reap poll... fine.
+
+  (iv) Another: Python's os.waitpid interrupted by SIGCHLD handling — no.
+
+  (v) The blocking wait after SIGKILL: if SIGKILL was sent to a child in D-state (uninterruptible disk sleep — plausible under heavy I/O load on the shared log dir!), waitpid blocks until it dies — hang, not wrong verdict. But on a HEALTHY run the child already exited. Only the mutant path reaches SIGKILL. Fine.
+
+  So Q3 answer: YES, conditionally — depending on (a) whether the drain has a timeout that mimics EOF, and (b) whether SIGKILL is guarded against already-reaped. I'll read the code and report precisely.
+
+  Also Q2: which accepted disposition is most likely WRONG? Candidates among the 17:
+  - F1 accepted as hardening — fine either way (D1 ruling: hardening). The RISK in F1 is the fix itself (see Q3) — if the SIGKILL is unguarded, the fix introduced a new failure mode. That would make F1's ACCEPTED-with-fix the wrong disposition (the finding was right, the FIX may be wrong — exactly what the prompt warns: judge the fix, not just the finding).
+  - F15 (q) escape accepted as disclosure — is disclosure enough? The predicate "K row ignores exit" escaping means the K predicate's exit term was untested UNTIL table 2 — but table 2 was then BUILT and measured (x_exit2/y_sigkill). So F15 + F14-in-part together are covered by measurement. OK.
+  - F3's sort -u check: correct shape. OK.
+  - F11: "the literal `!(idata & TIMER_ENABLE)` occurs 0x" — accepted and reworded to "the else of if (idata & TIMER_ENABLE)". Hmm — is that right? In gxemul footbridge timer code, the write branch typically: `if (idata & TIMER_ENABLE) d->timer_enable...`? Need to look. The finding says the arm as written was commentary, not a compilable construct (a build-mutant that isn't a mutant — like (m),(n) earlier?). The rewording to "case TIMER_1_LOAD's write branch; the else of if (idata & TIMER_ENABLE)" — verify dev_footbridge.c actually has that shape. If TIMER_1_LOAD write branch doesn't have an if(idata & TIMER_ENABLE), the fix is wrong again. MUST READ dev_footbridge.c timer section.
+  - F7 (7.3.33 vs 7.3.32): TOC claim — DC21285 manual: 7.3.31 IRQ enable, 7.3.32 IRQ enable set, 7.3.33 IRQ enable clear? Plausible. NOT CHECKABLE without the manual; packet-fed for me unless the manual is in-tree. Accept as likely right; low substance.
+  - F12: bit 31 never tested — accepted into contract. Fine as honesty. But is it a GAP that needs a row? P=bits 1,13; Q=bits 29,30. Bit 31 (sign) — a mutant sign-extending bit 31... The (j) mutant escaped for related reasons. Filing in contract is honest. Could argue a row with bit-31 patterns (e.g., 0x80000002) would kill sign-extension mutants — is that the expensive finding being cheaply contracted-away? Hmm. Q says "Which of my accepted dispositions is wrong" — F12's acceptance (contract note, no row) might under-buy: adding a third pattern R=0x8000... would be cheap. But is there a plausible mutant that sets/uses bit 31 and escapes all current rows? E.g., mutant treating irq_enable as signed... thin. I'll note it as a refinement suggestion, not the "wrong" one.
+  - F2: fix — sites probe teardown "now uses the same teardown as the pending probes; fatals collected AFTER the drain." Verify in code. If fatals collection moved after drain, does the drain ALSO collect into fatals (i.e., does the drain parser pick up diagnostics printed during shutdown — including the K-row expected complaint → false E4 red)? On base it passed (19/19), so no. OK.
+  - F19: model value 0x1011 — accepted with a comment; the real packed-config row deferred. Fine as disclosure.
+
+  My pick for Q2 "wrong accepted disposition": pending code read, most likely F1 (the fix's guard details) or F11 (if the else doesn't exist). And among rejections, F18 is correctly rejected (encoding fact is checkable and true: ARM LDR/STR I=0 → immediate; minimax confused it with data-processing where I=1 → immediate). F16/F17: F16 plausible (two files); F17 — "if-branch is NO-PROMPT (no arm runs); every executed arm plants P/Q" — glm's Q4.2 said the if-branch does not plant P/Q; author says the if-branch never runs an arm. Can verify in sites probe code: find run_arm and the if-branch. MUST READ.
+
+  Now D3: "(r) width handling is a gap" vs "caught by E3/E6 by construction: if (len == 4) leaves odata 0 → E3 reds". Verify in dev_footbridge.c: the IRQ_ENABLE_SET read branch (new) — does it do `odata = d->irq_enable;` unconditionally, or under `if (len == 4)`? And E3: read of IRQEnableSet expecting 0x02? Wait E3/E6 are Set/Clear arithmetic rows. The (r) mutant: width handling — e.g., handle len 1/2 differently. If the new read branch ignores len and always returns full 32-bit, then a len-1 read returns 0x2002 truncated? Actually in gxemul, odata is then stored to memory with len bytes by the caller — the caller (memory_rw framework) truncates odata to len bytes? Typically dev_footbridge access returns odata and the bus layer writes len bytes of it. So a len-1 read of IRQEnableSet would return low byte regardless. The (f) mutant was the "death form" occupying the width cell. The author's arithmetic: for the CLEAR register (write-only), a read returns... the K control is the probe-side complaint. Hmm, D3 is about "(d) enumeration open cell" — the twelve mutants' cells. (r) = width handling as a VALUE form (return wrong width data without dying). Author: caught by E3 (wants 0x02) and E6 (wants 0x2002) by construction, because if len != 4 then odata stays 0 → E3 reds. Wait that describes the PRODUCT code's `if (len == 4) odata = d->irq_enable;` — a mutant removing the len guard or changing widths would return 0 → E3 reds. I can verify E3's expectation in the probe and the len guard in dev_footbridge.c. CANNOT SETTLE vs UPHOLD: if the code shows `if (len == 4)` in the read path AND E3/E6 assert exact values for 4-byte reads, then a width mutant that only mis-handles len==1 reads... E3/E6 use len 4. A mutant that returns garbage ONLY for len==1 (value form) — does any row read with len 1? If E3 reads IRQEnableSet with len 4 only, a len-1-value-mutant escapes unless a row reads len 1. Author's arithmetic "`if (len == 4)` leaves odata 0 → E3 reds" addresses a mutant that BREAKS len-4 handling, not one that only affects len 1/2. So the question: does (r) mean "wrong value on sub-word read" and do E3/E6 perform sub-word reads? Need to check the probe rows' access widths. If all rows are len 4, a len-1-only value mutant escapes and minimax is right that it's a gap — but is it in scope? The change only touched the len-4 read path... The pre-existing behavior for len!=4 returns 0 (odata initialized 0) — unchanged by #539. A mutant in the width cell would be a PRODUCT change outside #539's diff hunk. Mutation testing convention: mutants are within the touched hunk. If the touched hunk is `case IRQ_ENABLE_SET: odata = d->irq_enable; break;` (no len guard in the hunk), then a width mutant isn't expressible as a small change to that line — except deleting the surrounding `if(len==4)` if that's part of the hunk. Check the diff. I'll adjudicate D3 based on what the diff shows: if the len guard is inside the changed region, a width-mutant (delete the guard → sub-word reads return full word → caller truncates anyway? or returns odata untruncated?) — in gxemul, device access functions return odata and the caller copies len bytes: `memory_device_dyntrans_access` or the generic `dev_*_access` return value is used with len by the bus. Actually in gxemul the device access function signature: `DEVICE_ACCESS(name) { ... switch(relative_addr) { case X: if (writeflag) ... else odata = ...; } return odata; }` and the caller handles len via `data` buffer copy of len bytes from odata. So len only affects how many bytes the caller copies. The `if (len == 4)` guard in some gxemul devices is to refuse sub-word access. For footbridge, need to look.
+
+  OK. Enough theorizing — READ THE CODE. Plan:
+
+  1. Glob for the probes and the p2 scratchpad files.
+  2. Read diff539_4files.v2.patch (paged), diff539_gate.v2.patch.
+  3. Read the three probes' close()/teardown.
+  4. Read dev_footbridge.c relevant sections (IRQ_ENABLE_SET/CLEAR, TIMER_1_LOAD).
+  5. Check F17 if-branch in sites probe run_arm.
+  6. Maybe peek at TABLE2.log if present (regress/artifacts/n6/killtable_20260919/table2_v2/TABLE2.log) — it's inlined; optional.
+
+  I can parallelize. Given the volume, maybe delegate some verification to an explore subagent? The instructions encourage delegation for substantial multi-file exploration. But this adjudication needs precise judgments I should form myself; I'll do targeted reads myself — it's maybe 6-10 reads. Fine.
+
+  Note the operational rule: don't run gates; read-only. I'll only Read/Grep/Glob. 
+
+  Also the seat record line at the end: format presumably like "seat: kimi CLI (Kimi Code CLI) — §F2 adjudication — read-only, tree + frozen diffs". I'll craft one consistent with prior seat records (F20 mentions ledger scored by transport `ollama_kimi.txt` — hmm, that's kimi-k3's transport file. For kimi CLI the transport might be different; I don't know the ledger filename for my seat. I'll write a generic seat record: "SEAT RECORD: kimi CLI (Kimi Code CLI, §F2 adjudication pass) — file-reading seat, read-only, no gates run." Avoid inventing a transport filename... Actually for honesty, include what I know: I'm Kimi Code CLI running on the user's machine; the seat name in this panel is "kimi CLI". Good.
+
+  Let me go. First batch: Glob + Reads in parallel.
+
+  Actually wait — where exactly are things? Working dir C:\DocumentNoSnc\CC\GXEMUL. Tree = GXEMUL-SEC\. So:
+  - GXEMUL-SEC/_scratchpad/n6/p2/diff539_4files.v2.patch
+  - GXEMUL-SEC/_scratchpad/n6/p2/diff539_gate.v2.patch
+  - GXEMUL-SEC/_scratchpad/n6/p2/brief_n6_p2_BUILT.md
+  - GXEMUL-SEC/src/devices/dev_footbridge.c
+  - probes: GXEMUL-SEC/regress/... let me Glob "regress/**/*.py" or find footbridge files.
+
+  Let me do: Glob GXEMUL-SEC/regress/**footbridge*.py, plus the three named probes; Read the two diffs. In parallel.
+
+• **VERDICT: the dispositions largely stand, but F1's *fix* (not its finding) needs a guard check I can only settle by reading the reap code, and the drain-before-reap bound is the panel-wide blind spot.** Reading the frozen diffs and the v2 probes now.
+
+• The `_scratchpad/n6/p2/` glob found nothing under GXEMUL-SEC. Maybe it's at the outer `_scratchpad/n6/p2/` (C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\n6\p2\). Let me check both. Also glob for the diff files by name.total 245
+drwxr-xr-x 1 User00 197121     0 Sep 19 03:53 .
+drwxr-xr-x 1 User00 197121     0 Sep 19 02:13 ..
+-rw-r--r-- 1 User00 197121 12439 Sep 19 02:10 brief_n6_p2.tpl.md
+-rw-r--r-- 1 User00 197121 64376 Sep 19 02:10 brief_n6_p2_BUILT.md
+drwxr-xr-x 1 User00 197121     0 Sep 19 02:11 codex_ded
+-rw-r--r-- 1 User00 197121  3210 Sep 19 02:08 codex_p2_check.md
+-rw-r--r-- 1 User00 197121 25431 Sep 19 03:41 codex_panel_final.txt
+-rw-r--r-- 1 User00 197121 34458 Sep 19 02:07 diff539_4files.patch
+-rw-r--r-- 1 User00 197121 39846 Sep 19 03:45 diff539_4files.v2.patch
+-rw-r--r-- 1 User00 197121  3658 Sep 19 02:02 diff539_gate.patch
+-rw-r--r-- 1 User00 197121  4003 Sep 19 03:45 diff539_gate.v2.patch
+-rw-r--r-- 1 User00 197121 12930 Sep 19 03:53 f2_packet.tpl.md
+-rw-r--r-- 1 User00 197121 12930 Sep 19 03:53 f2_packet_BUILT.md
+-rw-r--r-- 1 User00 197121   562 Sep 19 03:53 f2_panel_launch.log
+-rw-r--r-- 1 User00 197121  2139 Sep 19 02:24 panel_launch.log
+---
+---
+./_scratchpad/n6/p2/brief_n6_p2.tpl.md
+./_scratchpad/n6/p2/brief_n6_p2_BUILT.md
+./_scratchpad/n6/p2/diff539_4files.patch
+./_scratchpad/n6/p2/diff539_4files.v2.patch
+./_scratchpad/n6/p2/diff539_gate.patch
+./_scratchpad/n6/p2/diff539_gate.v2.patch
+The scratchpad is at the outer `_scratchpad/n6/p2/` (working dir root), and the probes are in `GXEMUL-SEC/regress/`. Let me read the v2 diffs. diff539_4files.v2.patch is ~40 KB — readable in 1-2 Reads (1000 lines cap). Gate diff is 4 KB. Let me read both.I have the gate diff and the first 500 lines of the 4-file diff. I need the rest of the 4-file diff (lines 500-742), which covers the rest of footbridge_sites_probe.py and presumably dev_footbridge.c and maybe a contract file. Let me read the rest.
+
+  Also key observations so far:
+
+  1. **close() structure** (drain probe and witness, identical shape):
+  ```python
+  def close(self, patience=5.0):
+      try: os.write(self.fd, b"quit\n")
+      except OSError: pass
+      # Drain through EOF
+      deadline = time.monotonic() + patience
+      while True:
+          left = deadline - time.monotonic()
+          if left <= 0 or not self.rd(min(0.1, left)):
+              break
+      try: os.close(self.fd)
+      except OSError: pass
+      # bounded reap
+      pid, st = 0, None
+      t1 = time.time()
+      while pid == 0 and time.time() - t1 < 5.0:
+          try: pid, st = os.waitpid(self.pid, os.WNOHANG)
+          except OSError: break
+          if pid == 0: time.sleep(0.05)
+      if pid == 0:
+          try: os.kill(self.pid, signal.SIGKILL)
+          except OSError: pass
+          try: _, st = os.waitpid(self.pid, 0)
+          except OSError: st = None
+      code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+      sig = os.WTERMSIG(st) if st is not None and os.WIFSIGNALED(st) else None
+      return dict(exit=code, signal=sig)
+  ```
+
+  Critical observations:
+
+  (a) **The drain loop**: `while True: left = deadline - now; if left <= 0 or not self.rd(min(0.1, left)): break`. So the drain IS bounded — by `patience` (5.0 s). It breaks on timeout OR when `self.rd(...)` returns falsy (EOF / no data?). Need to know what `self.rd` returns: presumably reads with a timeout and returns data (or None/'' on timeout/EOF). **KEY QUESTION: does rd() distinguish EOF from timeout?** If rd returns b'' both on timeout and on EOF, the loop breaks on the first 0.1 s of silence — meaning the "drain to EOF" is really "drain until 0.1 s of quiet". That's a HUGE deal for Q3: on a HEALTHY run under load, if the child takes > 0.1 s to die after quit (loaded machine, scheduler delay), the drain sees 0.1 s of no-output and breaks → master closed → SIGHUP to a live child → child killed by SIGHUP → reap collects... the child exits via SIGHUP (signal 1) or, if it was mid-quit-processing, exit 0. Then `exit` could be None with signal=1 → `survived()` requires exit == 0 → FALSE → rows requiring survived() RED on a healthy run. THAT is a wrong-verdict-on-healthy-run-under-load path, and it is NOT in any of the 23 findings. But wait — I need to check rd()'s semantics first. If rd(timeout) returns True/False for "got data" vs "EOF", with EOF distinct from timeout... The loop condition `not self.rd(min(0.1, left))` breaks when rd returns falsy. If rd returns None on timeout and b'' on EOF, both falsy → same break. If rd returns True on data, False on EOF, and loops internally until timeout... need to read rd(). It's in the Session class earlier in the file, not in the diff. I must read the probe files themselves.
+
+  Actually also: the drain deadline is `patience=5.0` — but the drain breaks on `left <= 0` (5 s) OR `not rd(0.1)`. If rd(t) returns falsy only at EOF (i.e., rd internally retries until t elapses and returns falsy only on EOF/timeout-of-t), then under load a healthy child that takes > 0.1 s to emit nothing... hmm, depends on rd. READ rd().
+
+  (b) **The bounded reap's `except OSError: break`**: if waitpid(WNOHANG) raises ECHILD (child already reaped elsewhere? No other reaper... or child never existed — fork failure?), it breaks with pid==0, st=None → then `if pid == 0:` → os.kill(self.pid, SIGKILL) — **if waitpid raised ECHILD because the child was already reaped (or never our child), the PID may have been REUSED → SIGKILL to an innocent process**. When could waitpid raise ECHILD here? If something else in the process already reaped it — e.g., a previous close() call on the same Session (close() called twice? run_arm calls s.close() once... but look: `if not s.wait(timeout=120): return dict(..., **s.close())` — and in the normal path `end = s.close()` at the end — each path calls close() once. But wait — in run_arm: early return calls s.close() inside dict(); normal path calls s.close() once. OK, single call. However — SIGCHLD handler? None. So ECHILD shouldn't happen in practice. But if it did (e.g., double close due to an exception path?), os.kill(self.pid, SIGKILL) after ECHILD break → PID reuse kill. Narrow, but real. Also note: the `break` on OSError leaves pid==0 which triggers the SIGKILL branch — the OSError-from-waitpid path falls INTO the kill path, not away from it. That's arguably a bug: ECHILD → don't kill, the child is gone. The fix should have been: on ECHILD, set pid=self.pid (treat as reaped) and break, skipping SIGKILL.
+
+  (c) **The final blocking waitpid after SIGKILL**: SIGKILL can't be blocked/caught, so the child dies... unless D-state. Under heavy I/O load (shared log dir, gate writing), a child in uninterruptible sleep won't die immediately; waitpid blocks until it does. Hang risk small; and on the healthy path we never reach it (child already zombie via poll). OK.
+
+  (d) **`code = os.WEXITSTATUS(st) if ...`** fine.
+
+  (e) **On the healthy path timing**: quit written → child reads quit, exits. Drain loop: rd(0.1) gets remaining output; EOF when child closes slave. Loop breaks on EOF (rd falsy). Then close(fd), then reap poll: child zombie already or within 50 ms polls. exit 0 collected. Good. The race: **rd() returns falsy on 0.1 s of silence BEFORE the child has printed/exited** — if the child under load takes > 0.1 s between the quit write and its exit, and rd treats "no data within 0.1 s" as falsy, the loop breaks early, master closed while child alive → SIGHUP. On Linux, closing the master of a pty sends SIGHUP to the slave's foreground process group → child dies with SIGHUP (signal 1) → reap: st signaled → exit=None, signal=1 → survived() FALSE → **healthy base run goes RED on R0/D/X/T/E rows**. This is exactly Q3's question: is there a state where the bounded reap produces a wrong verdict on a healthy run under load? The reap per se is fine; but the new close() SHAPE (drain with 0.1 s quiet-quit → close → reap) can manufacture a signaled exit on a healthy but slow child. The old code slept 0.3 s unconditionally then closed — same SIGHUP risk actually (0.3 s fixed sleep, then close master while child may still be alive under load — same exposure!). So arguably not a regression vs the old code; but the new code CLAIMS to fix the teardown race (F2: "the inherited race") and the 0.1-s-quiet break may make the premature close MORE likely than the old fixed 0.3 s sleep if rd() returns on timeout... depends on rd. MUST READ rd().
+
+  Let me now read the rd() implementation in the actual probe file (GXEMUL-SEC/regress/fbpending_drain_probe.py) and also the sites probe's rd and close.
+
+  Also from the diff: run_kill in drain probe: `saw = "ENABLE SET" in s.buf` → now `"ENABLE CLEAR" in s.buf` — and it moved AFTER `end = s.close()`. Note: s.buf — does the drain in close() APPEND to s.buf? The drain loop calls self.rd(...) — does rd append to self.buf? If rd appends drained data to self.buf, then moving `saw` AFTER close() means the complaint captured during drain is included. In the witness run_kill: `end = s.close(); seen = "ENABLE CLEAR" in s.buf` — same. So rd must append to s.buf. Check rd().
+
+  Another subtle thing: **the drain consumes s.buf**? If rd appends to buf and also the main loop parsing uses s.buf... After close(), run_kill checks s.buf for the complaint. In the pre-fix code, close() did NOT drain (just slept 0.3 and closed), so the complaint had to arrive before close via earlier rd calls. Now the drain captures it. OK.
+
+  But in run_arm (drain probe), `end = s.close()` then verdict rows use D.get("out") etc. — the drain could ALSO append stray output to s.buf AFTER regs() was parsed. Does anything parse s.buf after close besides the complaint check? In run_arm, no — verdict rows use stored values. OK.
+
+  Now, F2: sites probe teardown — need to see the sites probe's close() in the rest of the diff (lines 500-742). Let me read.
+
+  Also note the drain probe header fix (F8/F11): "TIMER_x_CONTROL write WITHOUT TIMER_ENABLE does -- dev_footbridge.c, the `pending_timer_interrupts[timer_nr] = 0` store in the `else` of `if (idata & TIMER_ENABLE)`" — need to verify dev_footbridge.c actually has `else` with `pending_timer_interrupts[timer_nr] = 0`. Let me grep dev_footbridge.c.
+
+  Also F11 wording "the TIMER_x_LOAD write arm" in witness LOADBACK comment — the diff line 274: `LOADBACK = 0x00345678 # 0x12345678 & TIMER_MAX_VAL, the TIMER_x_LOAD write arm`. Hmm — F11 said the finding was that "TIMER_x_LOAD write arm" is commentary not a construct, and the fix was "`case TIMER_1_LOAD`'s write branch" and "the `else` of `if (idata & TIMER_ENABLE)`". In the sites probe header: "dev_footbridge.c:548 stores `idata & TIMER_MAX_VAL`" → "`case TIMER_1_LOAD`'s write branch (one case serves all four timers through the fold) stores `idata & TIMER_MAX_VAL`". But in witness line 274 it still says "the TIMER_x_LOAD write arm" — is that the "commentary" language F11 complained about? F11 was about the SITES probe presumably (or the brief). The witness comment says "the TIMER_x_LOAD write arm" — if F11's objection was that "TIMER_x_LOAD write arm" is commentary not a construct (there's no TIMER_x_LOAD case; there's one case with a fold), then the witness's LOADBACK comment still carries the flagged phrasing. Hmm, but F11 listed "`idata & TIMER_MAX_VAL` occurs 3x" — the fix chose `case TIMER_1_LOAD`'s write branch for citation. The witness comment "the TIMER_x_LOAD write arm" wasn't necessarily in scope. Minor. Let me check the actual wording in the current witness file — diff line 274 shows `LOADBACK = 0x00345678 # 0x12345678 & TIMER_MAX_VAL, the TIMER_x_LOAD write arm`. Hmm wait, actually looking again: F11 says "TIMER_x_LOAD write arm is commentary, not a construct; idata & TIMER_MAX_VAL occurs 3x; the literal !(idata & TIMER_ENABLE) occurs 0x. ACCEPTED -> `case TIMER_1_LOAD`'s write branch; 'the else of if (idata & TIMER_ENABLE)'". So the fixes: citations changed to `case TIMER_1_LOAD`'s write branch and the else-of phrasing. The witness LOADBACK comment retained "the TIMER_x_LOAD write arm"? From the diff: yes, line 274 shows "the TIMER_x_LOAD write arm". If F11's objection applies there too, it's an incomplete fix — but "TIMER_x_LOAD write arm" in the LOADBACK comment... the objection was that there IS no "TIMER_x_LOAD write arm" as a construct in the C code — it's one case folding four timers. Hmm, but as English commentary pointing at behavior it's tolerable; F11's seat objection was about a CITATION. I'll flag as a REFINE note: the same phrasing F11 flagged survives at witness line LOADBACK — wait, actually, was F11 specifically about the sites probe? "F11 `TIMER_x_LOAD write arm` is commentary, not a construct" — from grok, kimi CLI, codex panel, codex ded. And the acceptance: "-> `case TIMER_1_LOAD`'s write branch; 'the else of if (idata & TIMER_ENABLE)'". The sites header got fixed (diff line 471). The witness LOADBACK comment (diff line 274) says "the TIMER_x_LOAD write arm" — still the flagged phrase. Hmm, but wait — the witness's pre-fix text was "0x12345678 & TIMER_MAX_VAL, dev_footbridge.c:548" and it became "0x12345678 & TIMER_MAX_VAL, the TIMER_x_LOAD write arm". So the fix REPLACED a precise line citation (:548) with the phrase F11 flagged as non-construct! Hold on, F6 was "A2 row note still said by :548 -> (MAX_VAL)". F11's acceptance text says the fix is "`case TIMER_1_LOAD`'s write branch". But the witness got "the TIMER_x_LOAD write arm" instead — inconsistent with the announced fix, and the flagged phrase. Let me verify by reading the current witness file around LOADBACK. Actually the diff already shows it clearly: `LOADBACK = 0x00345678         # 0x12345678 & TIMER_MAX_VAL, the TIMER_x_LOAD write arm`. Yes. So the F11 fix was applied in the sites probe but the witness's corresponding comment uses exactly the "TIMER_x_LOAD write arm" wording. Unless F11 was only about sites. Either way — a small residual. I'll flag it as REFINE F11: one flagged phrasing survives in fbpending_witness.py (LOADBACK comment).
+
+  Hmm wait, actually, let me re-read F11: "`TIMER_x_LOAD write arm` is commentary, not a construct; `idata & TIMER_MAX_VAL` occurs 3x; the literal `!(idata & TIMER_ENABLE)` occurs 0x". So the finding had three parts about citations in the packet/brief. The dispositions changed specific lines. The LOADBACK comment in the witness still says "the TIMER_x_LOAD write arm" — and since TIMER_x_LOAD doesn't exist as a case (it's TIMER_1_LOAD folding four timers), the phrase is the same class of non-citation. But is it? "the TIMER_x_LOAD write arm" could be read as "the write arm for the TIMER_x_LOAD registers" — English, fine. The finding said "commentary, not a construct" — meaning when used AS A CITATION (like "dev_footbridge.c:xxx" replacement) it fails to point at code. In the witness it's a comment next to a constant, tolerable. I'll note it as a minor residual, not a verdict-changer.
+
+  Also `!(idata & TIMER_ENABLE)` 0x → "the else of if (idata & TIMER_ENABLE)" — need to verify the else exists in dev_footbridge.c. If the C code is:
+  ```c
+  if (idata & TIMER_ENABLE) { ... } else { d->pending_timer_interrupts[timer_nr] = 0; ... }
+  ```
+  then OK. Grep dev_footbridge.c.
+
+  Now the remaining diff lines 500-742 for the sites probe (its close(), E rows, headers F9/F10, A2 note F6, contract?) and the 4th file (probably dev_footbridge.c and/or a contract doc). "4files" — which four? drain probe, witness, sites probe, and... dev_footbridge.c? The gate is separate (diff539_gate). So 4 files = 3 probes + dev_footbridge.c. The contract statements (F12/F13/F23) — where do they live? Maybe in the sites probe header (the "contract" = the probe's header comment?). Let me read the rest.
+
+• Gate diff verified. Now the rest of the 4-file diff (sites probe teardown, dev_footbridge.c) plus the `rd()` semantics in the live probes.
+
+• Now I have the full 4-file diff. Key observations:
+
+  **The core product change** (dev_footbridge.c): in `case IRQ_ENABLE_SET`'s else (read) branch: keeps `odata = d->irq_enable;`, deletes `fatal("[ WARNING: footbridge read from ENABLE SET? ]\n"); exit(1);`. Note: the read branch is under `if (writeflag) {...} else { odata = d->irq_enable; }` — the write branch does Set/Clear logic with INTERRUPT_ASSERT/DEASSERT. Wait, looking at the hunk: `@@ -583,10 +583,12` shows context: `else INTERRUPT_DEASSERT(d->irq);` then `} else {` — so this is the write/read split of case IRQ_ENABLE_SET. Read → odata = d->irq_enable. No len guard visible in this hunk — but is there a len guard elsewhere? The D3 arithmetic said "`if (len == 4)` leaves odata 0 → E3 reds". I don't see `if (len == 4)` in this hunk. Need to check dev_footbridge.c around the case for a len guard, and also check the IRQ_ENABLE_CLEAR read branch (still fatal+exit? the K control relies on it) and TIMER branches (F11's else). Let me read the actual dev_footbridge.c around lines 540-640.
+
+  Also important: the sites probe E rows:
+  - E0: ldr r7,[r0,#392] (0x188 read before writes) → 0
+  - E1: str P to Set, read back → P (0x2002)
+  - E2: str Q=0x60000000 to Set, read back → P|Q = 0x60002002
+  - E3: ldrb → 0x02
+  - E6: ldrh → 0x2002
+  - E5: str P to Clear, read Set → Q
+  - E4: no footbridge diagnostic, exit 0
+  - EC1/EA1: liveness/reachability within arm E.
+
+  Note the E-row register assignments: E0→r7, E1→r1, E2→r2, E3→r9 (byte read into r9 — note r9 was loaded with Q earlier, then overwritten by ldrb — fine), E6→fp (r11), E5→ip (r12). The regs parse loop now covers n in (0,1,2,3,5,6,7,8,9,10,11,12) with REGNAME mapping for 10,11,12 → sl, fp, ip.
+
+  Wait — potential issue: **the `reg` regex**. `re.search(r"\b%s\s*=\s*0x([0-9a-fA-F]+)" % REGNAME.get(n, "r%d" % n), buf[mark:])`. For n=1: `\br1\s*=` — with `\b` before `r1`, could `\br1\b`... there's no `\b` after `r1`, so `r1\s*=` — but "r12=..." contains "r1"? `\br1\s*=` against "r12 = 0x..." — after "r1" comes "2", which is not `\s*=`, so no match there; the regex engine searches and finds "r1 = 0x" if present. But what about "r1" matching inside "r12"? `\br1` matches at "r12"'s start (word boundary before r), then requires `\s*=` after "r1" — "2..." fails → backtrack, no alternative → moves on. OK safe. What about r11 vs fp? REGNAME maps 11→"fp", 10→"sl", 12→"ip". So the search looks for "fp = 0x", "sl = 0x", "ip = 0x" — the emulator's spelling. But does the emulator's `reg` dump print "sl"/"fp"/"ip" or "r10"/"r11"/"r12"? REGNAME comment says cpu_arm.h ARM_REG_NAMES. But careful: does the reg dump maybe print BOTH names or "r11 (fp)"? Can't know without checking cpu_arm.h ARM_REG_NAMES. Hmm — but the probe measured 19/19 on base and red on mutants, so the parse demonstrably works in practice. The table 2 results show E rows function. OK.
+
+  But here's a sharper thing: `\bip\s*=` — "ip" could appear in other text? buf[mark:] is the reg dump region only. Fine.
+
+  **F18 check (minimax encoding concern)**: the words: 0xE5907188 = ldr r7,[r0,#392]: bits 27-26 = 01 (single data transfer), bit 25 (I) = 0 → immediate offset. 0xE5907188: E=1110 cond, bits 27-25 = 010 → I=0 → immediate. Yes: 0xE5907188 binary: 1110 0101 1001 0000 0111 0001 1000 1000. Bits [27:25] = 010 → I=0 (immediate offset), P=1, U=1, B=0, W=0, L=1 → LDR immediate offset +392. Correct — minimax wrong, refutation right. 0xE5D09188 = ldrb r9,[r0,#392]: 1110 0101 1101 ... bit 22 (B)=1 → byte. 0xE1DAB0B8 = ldrh fp,[sl,#8]: 1110 0001 1101 1010 1011 0000 1011 1000 — bits 27-25 = 000, bits 7-4 = 1011 → halfword transfer, immediate offset high nibble 0000/low 1000 = #8. Correct. 0xE280AD06 = add sl,r0,#0x180: 1110 0010 1000 0000 1010 1101 0000 0110 — data processing, I=1, ADD, op2 = 0xD06 → rotate 13, imm 0x06 → 0x06 ROR 26? Wait, rotate field is 0xD=13, rotation = 13*2 = 26, imm8 = 0x06 → 0x06 ROR 26 = 0x06 >> 26 rotated... 0x06 ROR 26 = 0x06 * 2^6 = 0x180? ROR 26 on 32-bit: 0x00000006 ROR 26 → (6 >> 26) | (6 << 6) = 0x180. Yes → #0x180. Correct. The header says "Q is (0x06 ROR 4)" — Q=0x60000000: imm8 0x06 ROR 4 → 6 >> 4 | 6 << 28 = 0x60000000. Yes. P=0x2002 — bits 1 and 13: not a rotated immediate (correct: a rotated imm8 can have bits spanning at most 8 consecutive bits after rotation; 0x2002 has bits 1 and 13, span 12 > 8 → not encodable). F9 fix verified as stated in header.
+
+  **F3**: gate now greps `^E[0-6] .*ok$` count == 7 AND `grep -oE '^E[0-6] ' | sort -u | wc -l` == 7. Correct shape. Note the E-row print lines: `row("E0", ...)` prints with `%-4s` formatting → "E0  " — `^E[0-6] ` matches with single space after 2-char id? `%-4s` left-justifies in 4 chars: "E0  " (two trailing spaces) → `^E[0-6] ` matches "E0 " (the first of two spaces). Fine. And `^E[0-6] .*ok$` requires line ENDING in "ok" — row() prints "ok" or "FAIL" at end presumably. Fine.
+
+  Hmm, one subtlety: EC1 and EA1 start with "E" too — `^E[0-6]` does NOT match "EC1" (C is not 0-6) — good, and the count-7 check counts only E0-E6. The excerpt grep `E(C1|A1|[0-6]) ` matches EC1/EA1/E0-E6 — for the excerpt echo. F4 fine.
+
+  **F5**: gate label now "Set ORs (E2 = P|Q; Clear is pinned by E5)" — verified in gate diff line 52. But wait — E5's check in the gate: is there a gate check pinning E5's value? The gate checks added: count-7, distinct-7, E0 got=0x00000000, E2 got=0x60002002. E5's Q value (0x60000000) is not pinned at the gate level, but E5 row exists in the probe (results.append(row("E5", ..., E["regs"].get(12), Q))). The count-7 requires E5's line green. Fine.
+
+  **F2 (sites teardown)**: verified — sites probe now: quit, bounded drain (`while time.time()-t1 < 5.0: if not rd(0.1): break`), fatals collected AFTER drain, close, bounded reap with WNOHANG poll + SIGKILL + blocking wait, exit/signal printed per arm. Matches pending probes' shape. ✔.
+
+  **Now the crucial rd() semantics** — I still need to read rd() in the sites probe and pending probes to answer Q3 precisely. The sites probe's drain: `while time.time() - t1 < 5.0: if not rd(0.1): break`. If rd(0.1) returns falsy on a 0.1 s quiet (timeout, no data) rather than only on EOF, then on a healthy run under load: after quit, child takes > 0.1 s to exit → rd times out → break → close master → SIGHUP → child killed → exit=None signal=1 → row reds (l_ok requires exit==0, e_ok requires exit==0, I1/E4 red) → **wrong verdict on a healthy run under load**. If rd returns falsy ONLY on EOF (blocking/select until data or EOF within the timeout, and on timeout returns... something truthy?), then no.
+
+  From the pending probe's close: `while True: left = deadline - now; if left <= 0 or not self.rd(min(0.1, left)): break` — bounded by 5 s total AND by rd's falsy return. Same question.
+
+  Also: what does rd do with the data — append to buf? For `saw = "ENABLE CLEAR" in s.buf` after close(), rd must append. Let me read the actual Session classes.
+
+  Also for the reap: `except OSError: break` → falls through to `if pid == 0:` → SIGKILL path. As noted: ECHILD → SIGKILL to possibly-reused PID. But when would waitpid raise ECHILD? Only if no such child — i.e., already reaped. In this code, is there any other waitpid? No. So ECHILD only if the fork failed... then os.kill(self.pid) — self.pid would be... pty.fork() raises on failure rather than returning. So ECHILD unreachable in practice. Narrow. Still: the OSError break conflates ECHILD with transient errors. Minor.
+
+  **Bigger Q3 candidate**: the SIGKILL-after-poll path is reached only when the child is genuinely stuck (5 s of WNOHANG returning 0). Then os.kill(SIGKILL) — if the PID was... no, zombie holds pid; not reaped; kill to zombie is harmless success; then blocking waitpid reaps. But if the child is ALIVE (stuck), SIGKILL kills it, waitpid returns signal 9 → exit=None signal=9 → rows requiring exit==0 red. On a HEALTHY base run, can the poll fail for 5 s while the child is alive-and-would-have-exited-0? The child gets quit... under extreme load the child might take > 5 s to process quit and exit? The drain phase: 5 s (pending probes) / 5 s (sites). Wait — actually, is the 0.1-s-rd falsy-on-timeout the real behavior? If rd returns falsy on timeout, the drain typically exits 0.1 s after quit (child prints nothing after quit unless it echoes). Then close master ~0.1-0.2 s after quit. If the child hasn't finished exiting by then → SIGHUP. On an idle machine, gxemul's quit processing: the debugger `quit` command → exit(0) — fast, but is it faster than ~0.1 s? Almost always, yes; under load (the gate running, other probes), a scheduling delay > 0.1 s is entirely plausible. THEN: SIGHUP kills the child before it exits 0 → signal=1, exit=None → EVERY row requiring exit==0 (R0, I1, E4, survived() rows in pending probes) goes red on a HEALTHY base run. This is a LOAD-DEPENDENT FALSE RED introduced by the pass-2 teardown itself — the very class Q3 asks about: "the new bounded reap (poll 5 s, SIGKILL, wait)" — strictly the reap isn't the culprit; the culprit is the drain's break-on-quiet + close-before-exit. But from the verdict's perspective the new close() shape (drain+close+reap) manufactures a signaled exit on a healthy-but-slow child.
+
+  BUT WAIT — I need to check rd()'s return semantics before asserting this. If rd(timeout) returns True only when data arrived, False on timeout OR EOF — then the drain breaks on first 0.1 s quiet. If rd returns False ONLY on EOF (and on timeout returns True? weird), different. Most natural implementation: `def rd(self, t): r,_,_ = select([fd],[],[],t); if r: data=os.read(fd,65536); if data: self.buf+=data; return True; return False (EOF); return False (timeout)`. In that natural shape, timeout → False → break. So after quit, 0.1 s of no-output → break → close → SIGHUP race. The OLD code slept 0.3 s then closed — giving the child 0.3 s to exit. The NEW code gives the child as little as ~0.1 s (first rd times out immediately if no output pending). So the new teardown is arguably WORSE for the slow-child race on the healthy path: old: fixed 0.3 s grace; new: 0.1 s quiet → close. HOWEVER: after quit, does gxemul print anything? The `quit` command in gxemul's debugger — it may print nothing and exit immediately. The read-after-quit: child exits → EOF. So rd returns False either via EOF (child dead — GOOD) or via 0.1 s timeout (child alive — BAD, premature close). The race window is real: quit → child scheduled late (>0.1 s) → timeout-break → SIGHUP. Probability low but nonzero; under load (Q3's scenario) elevated. And the consequence: signal=1 (SIGHUP) → exit=None → survived() False → red rows on base. WRONG VERDICT on healthy run under load. And F1's bounded reap doesn't mitigate; it's upstream of the reap. THIS is what all nine missed: they all reviewed the REAP bound (the second half) and nobody audited the DRAIN's break condition (the first half) — F1/F2's fix replaced "sleep 0.3 then close" with "drain until 0.1 s quiet then close", and on a healthy run under load the 0.1-s-quiet can precede the child's exit, so the close SIGHUPs a live child and the reap faithfully reports signal=1 — a red R0/I1/E4 on a healthy base.
+
+  Wait, actually — hmm, but does closing the master REALLY SIGHUP the child here? The child (gxemul under pty fork) — pty.fork() makes the child the session leader with the slave as controlling tty. Closing the master → SIGHUP to the foreground process group of the slave → gxemul (if it's in the foreground pgrp, which it is as the session leader). Default disposition: terminate. agy/minimax's D1 argument confirms default SIGHUP terminates gxemul. So yes: premature close → SIGHUP → signal death.
+
+  BUT: there's a subtlety — the drain loop for the pending probes breaks on `not self.rd(min(0.1, left))`. If the child echoes "quit" or prints a prompt during shutdown, rd returns True, loop continues; quiet 0.1 s → break. The OLD pending-probe code: `time.sleep(0.3)` then close — 0.3 s grace. New: ~0.1 s grace (if no output). So the fix NARROWED the grace from 0.3 s to 0.1 s on the quiet path. Under load, worse. Unless rd's timeout semantics differ. MUST READ rd().
+
+  Also — WAIT. Actually, let me reconsider: does EOF vs timeout matter for correctness of `saw`? For run_kill: child dies by itself (fatal+exit) during stepping; by the time close() runs, child already dead → EOF immediately → drain gets the complaint → saw=True. Fine.
+
+  Let me now read the rd() implementations. Sites probe rd (module-level, since sites uses rd(0.1) as a function with buf as global?) — in the sites diff, run_arm uses `rd(0.1)` (not self.rd) and `buf` is presumably a global or closure list. And pending probes use self.rd. Let me read both files' Session/rd code.
+
+  Also to verify D3's arithmetic (`if (len == 4)` leaves odata 0), I need dev_footbridge.c's access function head and the IRQ_ENABLE_SET/CLEAR cases. The diff hunk for the SET read branch showed NO len guard inside the case — just `odata = d->irq_enable;`. So where does `if (len == 4)` live? Maybe the whole DEVICE_ACCESS has no len guard and odata defaults... The D3 ruling says "(r) ... is caught by E3/E6 by construction (E3 wants 0x02, E6 0x2002); ... `if (len == 4)` leaves odata 0 -> E3 reds". Hmm, but E3 IS a byte read (ldrb) — E3 expects 0x02 via a BYTE read. If the device code had `if (len == 4) odata = ... else 0`, then E3 (len 1) would get 0 and FAIL on base! But base passes E3 with 0x02. So there is NO `if (len == 4)` guard on the read path — the case returns the full word and the bus lane-selects. So the D3 ruling's arithmetic "`if (len == 4)` leaves odata 0 -> E3 reds" looks FACTUALLY WRONG for this device: E3 passes on base with a byte read, which proves the read branch answers byte reads with the full word (caller truncates). The "(r) width mutant" — what would it be? A mutant that adds a len guard or changes width handling: e.g., `if (len != 4) return 0`? That would red E3 (byte read → 0 ≠ 0x02) and E6. So E3/E6 DO catch width mutants — but by the LANE logic (sub-word reads must return the low lanes), not by "if (len == 4) leaves odata 0". The ruling's CONCLUSION (caught by E3/E6) is right; its stated MECHANISM (`if (len == 4)` leaves odata 0 → E3 reds) is inverted — on base, a byte read must NOT leave odata 0, or E3 would fail. Let me verify by reading dev_footbridge.c around the case to confirm there's no len guard. If confirmed: D3's conclusion UPHOLD but the arithmetic as stated is wrong — REFINE the record (the mechanism is the lane-truncation: the CSR drives D[31:0] and the SA-110 takes the lane, as the E3/E6 header says). That's a small but real correction to a ruling I was asked to scrutinize. Actually — where did the author get "`if (len == 4)`"? Maybe from another gxemul device (many devices DO guard len==4). If footbridge's access function has no len guard at all, the ruling's parenthetical is wrong. Check.
+
+  Also check the IRQ_ENABLE_CLEAR read branch still has fatal+exit (K control depends on it) — the K1 rows measured red on x_exit2/y_sigkill confirm, but base K exit=1 confirms the fatal+exit is intact in the working tree. The diff doesn't touch CLEAR. I should still glance at the CLEAR case to confirm it exists as described (fatal "[ ... ENABLE CLEAR ... ]" + exit(1)) — the K row greps "ENABLE CLEAR" in fatals. Let me read dev_footbridge.c around the IRQ cases.
+
+  Also F11's `else` of `if (idata & TIMER_ENABLE)` — verify in TIMER_1_CONTROL case that there is `} else { d->pending_timer_interrupts[timer_nr] = 0; }`. Grep.
+
+  Also F7: TOC claim 7.3.32/7.3.33 — NOT CHECKABLE from the tree (no DC21285 manual in-tree, presumably). I'll say NOT CHECKABLE, accept on the seats' concordance (grok + kimi CLI independent), substance nil.
+
+  F16: check `_scratchpad/r6pass2_fb/` — the claim: stale copy 744 lines vs fork's 897. Which file? Probably a copy of a probe. Let me find `_scratchpad/r6pass2_fb/`. The author says agy measured both. I can quickly wc -l both to confirm the rejection's factual basis.
+
+  F17: glm's "run_arm if-branch does not plant P/Q" — author: if-branch is NO-PROMPT. From the sites diff: run_arm's `if` — looking at the sites probe diff lines 586-594: there's an else-branch with `send("put w ... DATA+8, P)")` etc. The if-branch (presumably `if label.startswith("T")` or MMU handling?) — line 587: `else:` — the `if` above it (line ~586, not fully shown) handles something else (probably the T arm skipping the plants, or prompt-failure). The visible structure: `else: send(DATA), send(DATA+4), send(DATA+8 P), send(DATA+12 Q), plant prog, pc=...`. So the if-branch is some case where planting is skipped — likely the T arm (MMU on, no plants?) or... Actually for the SITES probe, glm's Q4.2 said "run_arm if-branch does not plant P/Q". The author says the if-branch is NO-PROMPT (no arm runs). Hmm, but the else contains the plant. What's the if? Need to see the sites probe's run_arm fully. Let me read footbridge_sites_probe.py run_arm.
+
+  For the DRAIN probe, F17 might refer to drain's run_arm if-branch (NO-PROMPT early return — shown in diff: `if not s.wait(timeout=120): return dict(..., **s.close())` — that returns before plant; P/Q... the drain probe doesn't have P/Q — the sites probe does. So F17 is about the sites probe's run_arm: which if-branch skips planting P/Q? If it's `if not prompt: return NO-PROMPT`, then indeed no arm runs without planting. But if it's the T-arm branch (T doesn't plant?), T might run without P/Q — but T doesn't score E rows, so fine. Let me read the sites probe run_arm.
+
+  OK, batch of reads:
+  1. GXEMUL-SEC/regress/footbridge_sites_probe.py — run_arm + rd + close region (lines ~120-330).
+  2. GXEMUL-SEC/regress/fbpending_drain_probe.py — Session class incl. rd (lines ~300-470 maybe; close at 405-450). Actually the diff shows close at line 405-450 in new file; rd is earlier in Session. Read lines 280-460.
+  3. GXEMUL-SEC/src/devices/dev_footbridge.c — lines ~400-650 (VENDOR_ID, TIMER_1_LOAD, IRQ cases, CONTROL else).
+  4. wc -l for F16 files (find _scratchpad/r6pass2_fb first).
+
+  Let me do these in parallel: Read sites probe (lines 1-120 for rd def? rd may be module-level function defined near top), read drain probe Session, read dev_footbridge.c section, and a Bash find/wc for r6pass2_fb.
+
+  Sites probe: I'll read the whole file (it's probably ~450 lines). Drain probe: read 300-460. Witness rd similar to drain (identical Session copied) — check drain only, witness presumably identical; diff showed identical close() in both, so rd likely identical too.
+
+  dev_footbridge.c: read around 400-620.This is decisive. `rd(t)` semantics:
+
+  ```python
+  def rd(t=0.4):
+      r, _, _ = select.select([fd], [], [], t)
+      if fd not in r:
+          return True          # <-- TIMEOUT returns TRUE ("keep draining")
+      try:
+          d = os.read(fd, 65536)
+      except OSError:
+          dead = True
+          return False         # <-- EIO (slave closed) returns FALSE
+      if not d:
+          dead = True
+          return False         # <-- EOF returns FALSE
+      buf += ...
+      return True
+  ```
+
+  So rd returns FALSE only on EOF/EIO (child gone), TRUE on timeout (no data yet). The drain loop `while ...: if not rd(0.1): break` therefore breaks ONLY on EOF/EIO (child dead or slave closed), or on the 5 s deadline. **My candidate "0.1 s quiet → premature close → SIGHUP" is WRONG** — timeout returns True, the loop continues until the deadline. Good thing I read the code instead of theorizing. The drain is bounded at 5 s (patience) in the pending probes and 5.0 in the sites probe. So:
+
+  - Healthy child: quit → exits promptly → EOF → drain breaks immediately (fast). Reap poll gets exit 0. Correct.
+  - Healthy but SLOW child under load (takes 3 s to process quit): drain keeps looping (rd timeout → True) for up to 5 s → child exits at 3 s → EOF → break → close → reap exit 0. Correct.
+  - Healthy child slower than 5 s to exit (extreme load / swapping): drain deadline expires → close master while child alive → SIGHUP → child dies by signal (default disposition) → reap poll: signaled, exit=None → survived() false → R0/I1/E4 etc. RED on a healthy run. **This is the residual wrong-verdict-on-healthy-run-under-load state.** It existed before too (0.3 s sleep then close — worse!), so it's not a regression; the new code narrowed the exposure from 0.3 s fixed to 5 s patience. So the pass-2 teardown strictly improves it. But it does NOT eliminate it: a healthy child that needs > 5 s after quit to die (loaded CI box, gxemul flushing state) gets SIGHUPed and the reap faithfully reports signal=1 → red on base. The verdict rows treat signal-death-during-teardown as failure. That's the answer to Q3's particular question: YES — but the state is not in the reap; it's in close-before-exit when patience expires; the reap merely reports it accurately. The reap itself (poll 5 s, SIGKILL, wait) cannot produce a wrong verdict on a healthy run: once the drain saw EOF, the child is dead or a zombie; the first WNOHANG poll reaps it; SIGKILL is unreachable; even if reached (child alive), the verdict SHOULD be red for a child that ignored quit — that's the designed behavior.
+
+  Wait — one more reap-path check: after the drain deadline expiry and close, the poll runs 5 s MORE. So total patience is 10 s (5 drain + 5 reap) before SIGKILL. Good.
+
+  And the `except OSError: break` in the reap poll → falls into `if rpid == 0:` → SIGKILL. ECHILD (already reaped — unreachable here as analyzed) would SIGKILL a potentially recycled PID. Unreachable in this code (no other reaper; single close call per Session). On double-close... is close() ever called twice on the same session? In drain probe run_arm: early NO-PROMPT path returns `dict(..., **s.close())` — once. Normal path: `end = s.close()` — once. run_kill: once. run_drainenc: once. OK.
+
+  One more: **SIGKILL to a live child in D-state** → blocking waitpid hangs until D resolves. Under pathological I/O load this could hang the probe despite the "bounded" reap — but the verdict consequence is a hang (external timeout → probe FAIL), not a wrong PASS/FAIL on healthy. On a healthy run we never get there. Fine — worth one line in Q3.
+
+  Now — the sites probe drain: `while time.time() - t1 < 5.0: if not rd(0.1): break`. rd in sites returns False only on EOF/EIO and sets dead[0]. BUT NOTE: in sites' rd, on EOF it sets `dead[0] = True`. Does anything downstream use dead[0] AFTER close? The status was already fixed ("SURVIVED") before teardown. The fatals are collected after the drain (buf got the shutdown output). OK. And note: in sites run_arm, the drain loop uses `rd(0.1)` — the module-level nested rd — same semantics (timeout→True). ✔.
+
+  Another subtlety in the sites probe drain: `while time.time() - t1 < 5.0: if not rd(0.1): break` — if the child exits and EOFs, dead[0]=True — but status was latched "SURVIVED" earlier — exit=0 reaped. I1 requires L["exit"] == 0 and not L["fatals"]. Fine.
+
+  BUT WAIT — one more on the sites drain: it breaks on rd falsy (EOF) — good. But if child is alive and quiet for the full 5 s (ignored quit / stuck), loop exits on time, close → SIGHUP → reap. Same as pending. Fine.
+
+  Now: **F17 check** — sites run_arm: `if not wait(timeout=120): status = "NO-PROMPT" else: <plant DATA..Q, prog, step...>`. So the if-branch is NO-PROMPT: no arm runs, no plants. glm's Q4.2 claimed "run_arm if-branch does not plant P/Q" — TRUE literally (the NO-PROMPT branch doesn't plant anything, including the four DATA words) but the author is right that it's the no-run branch: every EXECUTED arm plants P/Q (all four DATA puts are in the else, unconditional, before the program loop). Also note: even arm T (MMU on) plants P/Q into RAM — they're just data. So F17 REJECT upheld. ✔. Actually — hmm, one more consideration: the E-row values P/Q are planted at DATA+8/+12 for EVERY arm (L, T, K, E) — uniform. Fine.
+
+  **F16 check**: `_scratchpad/r6pass2_fb/` — need to find it. The author said: stale copy under `_scratchpad/r6pass2_fb/` is 744 lines, the fork's is 897. Which file? Probably a probe copy. Let me find and wc. It's probably at the outer `_scratchpad/r6pass2_fb/`. Quick check.
+
+  **dev_footbridge.c verification**: need to see the IRQ_ENABLE_SET/CLEAR case region (does CLEAR read branch still fatal+exit? is there a len guard anywhere near? what's the structure around line 583?), TIMER_1_LOAD write branch (`idata & TIMER_MAX_VAL`), TIMER_x_CONTROL's else (`pending_timer_interrupts[timer_nr] = 0`), and VENDOR_ID case. Read the region ~410-620.
+
+  Let me also verify the witness's LOADBACK comment ("the TIMER_x_LOAD write arm") — seen in the diff, confirmed at line 274 of the diff. And check whether "TIMER_x_LOAD write arm" phrasing was the F11-flagged one — the sites header now says "`case TIMER_1_LOAD`'s write branch (one case serves all four timers through the fold)". The witness kept "the TIMER_x_LOAD write arm". Minor inconsistency with F11's announced fix. Note it.
+
+  Read dev_footbridge.c now — need the area around the IRQ enable cases and timer cases. Let me grep for line numbers first, then read precisely. Do: Grep "IRQ_ENABLE_SET|IRQ_ENABLE_CLEAR|TIMER_1_LOAD|TIMER_MAX_VAL|TIMER_ENABLE|pending_timer_interrupts\[timer_nr\] = 0|DC21285_VENDOR_ID" with line numbers, then Read the regions.bin
+logs
+regress
+run.sh
+src
+---
+GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/footbridge_sites_probe.frozen.py
+GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/table2_v2/footbridge_sites_probe.py.frozen
+GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/table2_v2/footbridge_sites_probe_base_v2.raw
+GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/table2_v2/footbridge_sites_probe_x_exit2.raw
+GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/table2_v2/footbridge_sites_probe_y_sigkill.raw
+GXEMUL-SEC/regress/footbridge_sites_probe.py
+GXEMUL-SEC/regress/m8820x_sites_probe.py
+GXEMUL-SEC/regress/__pycache__/footbridge_sites_probe.cpython-312.pyc
+---
+  425 GXEMUL-SEC/regress/footbridge_sites_probe.py
+  425 total
+The Bash command failed partially (find with mixed syntax / wc on non-existent glob), but I got the key data. `_scratchpad/r6pass2_fb/` exists at outer root with bin/logs/regress/src — it's a fork. Let me check the F16 file sizes: "the stale copy under `_scratchpad/r6pass2_fb/` is 744 lines, the fork's is 897". Wait, re-read F16: "The 744-vs-897 'premise stated two ways' (glm). REJECTED: two different files — the stale copy under `_scratchpad/r6pass2_fb/` is 744 lines, the fork's is 897 (agy measured both)." So there are two copies of some file (probably footbridge_sites_probe.py or the brief?) — one at 744 lines under _scratchpad/r6pass2_fb/, one at 897 in the fork. Hmm wait, but which file? The current GXEMUL-SEC/regress/footbridge_sites_probe.py is 425 lines. Hmm, 744 vs 897 must be some other file — maybe fbpending_drain_probe.py? Or the brief? Let me check quickly: wc -l on _scratchpad/r6pass2_fb/regress/*.py candidates and GXEMUL-SEC/regress/fbpending_drain_probe.py.
+
+  Actually — wait. `_scratchpad/r6pass2_fb/` has src, regress, bin... it IS a fork/copy of the tree ("the fork's is 897"). Hmm, "the stale copy under _scratchpad/r6pass2_fb/ is 744 lines, the fork's is 897" — so _scratchpad/r6pass2_fb contains BOTH the stale copy AND the fork? Or the stale copy is under r6pass2_fb and the fork is elsewhere? Let me just wc the plausible files. Which file was glm talking about (744 vs 897 — "premise stated two ways")? Probably the drain probe: current GXEMUL-SEC/regress/fbpending_drain_probe.py — let me count. And inside r6pass2_fb/regress/. Quick bash.
+
+  Now dev_footbridge.c structure — from the grep:
+  - :515 `odata = 0x1011; /* DC21285_VENDOR_ID */` — case VENDOR_ID at ~514. ✔ (A1 model value; F19 — the gate comment documents it.)
+  - :578 case IRQ_ENABLE_SET: write: `d->irq_enable |= idata; if (irq_status & irq_enable) ASSERT else DEASSERT`; else (read): `odata = d->irq_enable;` (post-#539). NO len guard anywhere — the grep for `if \(len` returned NOTHING (no match lines for that pattern — indeed no `if (len` lines appear in the output). So the D3 ruling's mechanism "`if (len == 4)` leaves odata 0 → E3 reds" is NOT in this file — there is no len guard. The read branch returns the full 32-bit word regardless of len; the bus takes the lane (E3 byte → 0x02, E6 halfword → 0x2002 work on base — confirmed by table 2 base 19/19 and E rows green). So a width-mutant (r) in VALUE form — e.g., a mutant adding `if (len != 4) odata = 0;` — reds E3 (0 ≠ 0x02) and E6. The CONCLUSION of D3 (caught by E3/E6) is right; the stated arithmetic (`if (len == 4)` leaves odata 0) describes code that does not exist in this file — the author's parenthetical cites a mechanism from other gxemul devices. REFINE D3's rationale, uphold its conclusion. Actually wait — I should double check there's no `if (len != 4)` in the whole file — the grep pattern `if \(len` found no lines at all, so no len test anywhere in dev_footbridge.c. Confirmed: width handling is entirely the caller's lane-select. Hmm — but hold on: how does the bus handle a byte read? In gxemul, DEVICE_ACCESS returns odata (uint64_t), and the generic framework (memory_rw / dyntrans) copies `len` bytes from odata little-endian. So byte read of 0x2002 → 0x02. ✔. And the "(r) width mutant" as a small edit to THIS hunk: the hunk is the read branch of case IRQ_ENABLE_SET (`odata = d->irq_enable;`). A width mutant isn't expressible as an edit to that line — there's no len to mutate. The (f) "death form" occupied the width cell in table 1 per the author. So D3's conclusion stands, with a corrected mechanism: E3/E6 pin the lane behavior; a width-form mutant would have to add code, and adding `len != 4 → 0` reds E3/E6. Fine — I'll mark D3 UPHOLD with a REFINE of the stated mechanism (the `if (len == 4)` arithmetic is from other devices; this file has no len test; the catching mechanism is the lane contract E3/E6 pin).
+
+  - :595 case IRQ_ENABLE_CLEAR: write: `d->irq_enable &= ~idata; ...`; the read branch (else) — not shown in grep output beyond line 598. The K control relies on the CLEAR read branch still doing fatal()+exit(1). The diff didn't touch it. Table 2 base has K exit=1 — measured. But let me visually confirm the else branch still has fatal+exit — read lines 595-615. Also confirm TIMER_1_CONTROL's else at 670-680: `pending_timer_interrupts[timer_nr] = 0` inside `} else {`? The grep shows :677 `d->pending_timer_interrupts[timer_nr] = 0;` inside a brace block ending :678 `}` then INTERRUPT_DEASSERT at :679 then :680 `}`. Need the if/else structure: is the `= 0` store in the `else` of `if (idata & TIMER_ENABLE)`? Read lines 658-685.
+
+  - :642 TIMER_1_LOAD write: `d->timer_load[timer_nr] = idata & TIMER_MAX_VAL; reload_timer_value(...)`. ✔ F11's "case TIMER_1_LOAD's write branch" — one case folding four timers via timer_nr presumably. Check that TIMER_1_LOAD case folds (case TIMER_1_LOAD with timer_nr computed from offset). Read lines ~630-656.
+
+  So read dev_footbridge.c 570-700.
+
+  Also for F7 (7.3.32 vs 7.3.33): no manual in tree — NOT CHECKABLE; accept concordant seats. Note: the v2 sites header says "write-only per 7.3.33 (IRQEnableClear)" — consistent with the fix.
+
+  F20/F21/F22: process records — can't verify transports from here; accept as records. F22's measurement is owed — concur.
+
+  F14: table 2 built, measured; mock filed. The partial acceptance is sound: the exit term now load-bearing on measured mutants; the ignored-quit leg filed. One caveat for Q2/Q3: table 2's y_sigkill measures that the reap REPORTS the signal (exit=None signal=9) — and the drain/witness red K. Good. But note table 2 was run by the same main loop (author's self-flag (b)) — no independent measuring seat; Opus owed. Concur.
+
+  F13: D1 sentence added — verified in sites header diff lines 537-538: "(d) D1 compares the disassembly of every STEPPED word; the landing pad is planted and never stepped, and a step that ends the process is not compared." ✔.
+
+  F12: TESTED PATTERNS stated — diff lines 522-523 ✔.
+
+  F23: contract now says "(a) no row observes the CPU IRQ line ... it needs a free-running arm with a positive delivery control, filed with IRQSoft" — diff lines 529-533 ✔ ("no row here observes the CPU IRQ line" — matches the accepted wording; the free-running arm stays filed). ✔.
+
+  F6: A2 note now "TIMER_1_LOAD masked to 24 bits (MAX_VAL)" — diff line 667 ✔.
+
+  F8: drain header rewritten — diff lines 28-35 ✔ ("a read of IRQ_ENABLE_CLEAR (+0x18c, write-only per the DC21285)... #539 moved this from +0x188 (now a readable register)").
+
+  F9: sites header — diff lines 519-520: "P is not a rotated ARM immediate (bits 1 and 13); Q is (0x06 ROR 4) and is loaded the same way for uniformity." ✔.
+
+  F10: diff lines 496-497: "the same deletion spilled onto the CLEAR read branch -- with or without its diagnostic -- makes K survive, so K1 reds on the exit status it requires." ✔.
+
+  F4: gate excerpt grep `E(C1|A1|[0-6]) ` ✔ (gate diff line 10).
+
+  F3: distinct-7 check ✔ (gate lines 46-49). One nit: `grep -oE '^E[0-6] ' | sort -u | wc -l` — counts distinct among E0-E6 lines; if a duplicated id replaced a missing one, count-7 ok but distinct-6 → caught. ✔. But wait: could `^E[0-6] ` match more than one line per row (e.g., if the probe prints E-row id elsewhere)? The probe prints each row once via row(). Fine.
+
+  F5: gate label ✔ (line 52).
+
+  F19: gate comment "MODEL value: real hardware packs DeviceID:VendorID... the round that fixes packed config reads changes this pin in the same commit" ✔ (gate lines 19-22).
+
+  F18: refutation correct — ARM SDT I=0 → immediate offset; verified encodings by hand above (0xE5907188: bits[27:25]=010 → immediate; 0xE5D09188 ldrb; 0xE1DAB0B8 ldrh imm; 0xE280AD06 add imm). Also D1 disassembly check measured 0 mismatches on every run — empirically closed. UPHOLD the rejection; minimax's concern is a seat error (confused with data-processing I-bit). ✔.
+
+  F16: still need the wc. Let me check what file glm meant — "744 vs 897". Check r6pass2_fb/regress/*.py line counts vs GXEMUL-SEC's. Current sites probe is 425 lines (so not that). fbpending_drain_probe.py? Let me wc. Actually the "premise stated two ways" — glm saw two copies of a file with different line counts and thought the packet contradicted itself about one file. Author: two different files (stale copy vs fork's). Verify: find the 744-line and 897-line files.
+
+  F1: UPHOLD as hardening (D1: agy/minimax right that the hang is unreachable today — gxemul installs no SIGHUP handler... wait, is that true? gxemul might install signal handlers. NOT CHECKABLE quickly — actually I could grep for SIGHUP/signal in gxemul src. Let me do a quick grep. If gxemul ignores SIGHUP anywhere, the hang state IS reachable. Quick grep "SIGHUP|signal(" in GXEMUL-SEC/src. Worth 10 seconds — it sharpens D1.)
+
+  The fix itself: bounded reap verified in all three probes — shape is identical; poll 5 s WNOHANG, SIGKILL guarded by `if pid == 0` (only when poll didn't reap), blocking wait wrapped in try/except OSError → st=None. Two residual nits: (1) `except OSError: break` in the poll loop falls INTO the SIGKILL branch (ECHILD → kill a possibly-recycled PID) — unreachable today (single reaper), but the guard should have been `break` out past the kill; (2) the drain's 5 s patience is what actually bounds the pre-reap phase; on expiry the close SIGHUPs a live child and the reap honestly reports signal=1 — on a healthy run under extreme load (>5 s to die after quit) that's a false red. Pre-existing class (old code: 0.3 s), narrowed not eliminated. (3) SIGKILL to a D-state child + blocking wait can still hang — bounded-reap is bounded only when the child is in a killable state. All three are refinements, not overturns.
+
+  F2: verified — sites teardown now identical shape; fatals after drain ✔. One nit: sites' drain `while time.time() - t1 < 5.0: if not rd(0.1): break` — rd's EOF path sets dead[0]=True, but status was already latched; no verdict impact. Also note sites' close is inline in run_arm rather than a Session method — cosmetic divergence from "SAME teardown" claim (shape same, code not shared). Fine.
+
+  F15/F14: accepted-in-part + disclosure; table 2 measured. The remaining filed items (exit-1-without-complaint, ignored-quit) need the pty mock. Sound. One sharpening: y_sigkill's K row red — the drain probe's K predicate requires exit==1 AND complaint; on y_sigkill exit=None → red. But note x_exit2/y_sigkill only exercise the K predicate's exit term; the complaint term's independence (complaint absent, exit 1) is the filed mock leg. Concur with ruling.
+
+  F20: recorded; scored by transport — process ruling, UPHOLD (can't verify from here; the ledger rule is the operator's).
+
+  F21: recorded; template note sensible. UPHOLD.
+
+  F22: seat failure recorded; measurement owed. UPHOLD — and note this pass-2's table 2 was measured by the main loop only; the independent measurement remains owed, so table 2's "every K row red" is single-source. That's already in the author's self-doubt (b). Concur.
+
+  Now D2: keep `not E["fatals"]` — verified in code: `e_ok = E["status"] == "SURVIVED" and E["exit"] == 0 and not E["fatals"]`. E4 doesn't pin a phrase; any footbridge diagnostic reds it. Stricter than naming ENABLE SET text — good, since the new code path emits NO diagnostic; a mutant keeping "ENABLE SET?" text or any other footbridge diagnostic reds E4. UPHOLD. One nit: `fatals` regex is `\[...footbridge...\]` — a diagnostic not matching that bracket pattern (e.g., printed without the `[ ... ]` wrapper, or with "Footbridge" capitalized differently) escapes E4. fatal() in gxemul prints... the pattern requires "footbridge" lowercase inside brackets. The deleted diagnostic was "[ WARNING: footbridge read from ENABLE SET? ]" — matches. A mutant diagnostic with different casing wouldn't. Minor; the class is bracketed fatal() output from this device, which conventionally contains "footbridge". Acceptable; worth one line.
+
+  D1: ruling hardening — agy/minimax's unreachable-hang argument is checkable: does gxemul install a SIGHUP handler? grep. If none, hang-unreachable today; bound is defense; L1 grading fine. UPHOLD regardless (the bound is 3 lines; the "load-bearing because rows read status" argument also holds: now that rows consume exit status, a hung waitpid is a hung GATE, not just a hung probe).
+
+  D3: as analyzed — UPHOLD conclusion, REFINE mechanism (no `if (len == 4)` exists in this file; the catching mechanism is E3/E6's lane contract through the caller's truncation; and a width-mutant on this hunk would have to ADD a len test, which E3/E6 red). Actually hmm — wait. Let me reconsider what "(r) width handling" as a mutant could be, given the hunk. The changed lines are just the read branch (odata = d->irq_enable; minus fatal/exit). Width mutants of `odata = d->irq_enable;`... none. So (r) can't be planted as a small mutation of the changed hunk at all — which is an even stronger reason it wasn't in table 1. But minimax's point was the (d) ENUMERATION (the twelve cells). The author's "value form of (f)" — (f) presumably flipped something width-related in the write arm? Without table 1's (d) enumeration in front of me (it's in the p2 brief — 64 KB; the (d) enumeration might be inlined there), I'll take the visible code: width is caller-side; E3/E6 pin lanes; conclusion upheld, mechanism corrected. Let me quickly grep the brief for the (d) enumeration to be fair. Actually the brief is 64 KB — grep for "(r)" or "width" in brief_n6_p2_BUILT.md.
+
+  Q2 — which accepted disposition is WRONG? My candidates after verification:
+  - F11's fix is INCOMPLETE: the witness's LOADBACK comment (diff line 274) still reads "the TIMER_x_LOAD write arm" — the exact phrase class F11 flagged ("commentary, not a construct") — while the sites header got the proper `case TIMER_1_LOAD` citation. So the announced fix ("-> `case TIMER_1_LOAD`'s write branch") was applied in two places but the witness kept the flagged phrasing. That's the strongest "wrong accepted disposition": not that the finding was wrong, but the disposition claims a fix that one of the three citation sites doesn't show. Hmm wait — actually, was the witness's LOADBACK comment one of the sites F11 flagged? F11's text: "`TIMER_x_LOAD write arm` is commentary, not a construct; `idata & TIMER_MAX_VAL` occurs 3x; the literal `!(idata & TIMER_ENABLE)` occurs 0x (grok, kimi CLI, codex panel, codex ded). ACCEPTED -> `case TIMER_1_LOAD`'s write branch; 'the `else` of `if (idata & TIMER_ENABLE)`'". The drain header got "the `pending_timer_interrupts[timer_nr] = 0` store in the `else` of `if (idata & TIMER_ENABLE)`" ✔ (diff lines 10-12) — and I verified the C has that else at :677. The sites header got "`case TIMER_1_LOAD`'s write branch" ✔. The witness header at line 235 got "dev_footbridge.c `case TIMER_1_VALUE`" ✔, but the LOADBACK constant comment at diff line 274 reads "the TIMER_x_LOAD write arm" — the flagged phrase survives there. So F11's disposition is PARTIALLY wrong/incomplete: one instance of the flagged wording remains, in fbpending_witness.py's LOADBACK comment. That's a concrete, checkable answer for Q2. Impact: cosmetic-comment class, not verdict-bearing — but the question asks which accepted disposition is WRONG, and F11 is the one whose fix doesn't match its announcement everywhere. Hmm — but is "TIMER_x_LOAD write arm" in that comment actually wrong? There IS no `case TIMER_x_LOAD`; the case is TIMER_1_LOAD folding four timers (verify: the case label at ~640 is TIMER_1_LOAD with timer_nr derived — let me confirm the fold). If the case is literally `case TIMER_1_LOAD:` then "TIMER_x_LOAD write arm" as a code pointer is the same non-construct. I'll verify with the read.
+
+  - Also D3's stated mechanism is wrong (no `if (len == 4)` in the file) — but D3 is a ruling on a disagreement, not one of the 17 accepted findings. I'll handle it under D3.
+
+  - Any other accepted disposition wrong? F3's distinct check: fine. F16 rejection: pending wc check. F1: fix shape verified; the two residual nits are refinements, and D1's "hardening" grade stands. 
+
+  So Q2 answer: F11's disposition is the wrong one (fix incomplete — the flagged phrasing survives in the witness's LOADBACK comment; either fix it there too or narrow the disposition). And among rejections: F16/F17/F18 all stand (F16 pending the wc check; F18's refutation is technically correct — I hand-verified the I-bit semantics and the encodings; minimax confused the SDT I-bit with the DP I-bit).
+
+  Wait — I should double-check F18 more carefully because it's a factual refutation and I claimed hand-verification. ARM single data transfer (LDR/STR immediate): bits 27-26 = 01, bit 25 = I = 0 → immediate offset (the offset is a 12-bit immediate); I = 1 → register offset (shifted register). YES — for SDT, I=0 means immediate. (Opposite of data processing, where I=1 means immediate operand2.) 0xE590718C: 1110 0101 1001 0000 0111 0001 1000 1100 → bits[27:25]=010, I=0, P=1,B=0,W=0,L=1, Rn=0000(r0), Rd=0111(r7), offset=0x18C=396 ✔ "ldr r7,[r0,#396]" ✔. And D1 (disassembly comparison) measured 0 mismatches — the emulator's own disassembler agrees. So minimax's "bit 25 = 0 → register-offset form" is backwards for LDR/STR. Seat error confirmed. F18 rejection UPHOLDS.
+
+  Q3 — what did all nine miss? Let me consolidate:
+
+  1. **The reap poll's `except OSError: break` falls into the SIGKILL branch.** In all three probes: `while rpid == 0 and ...: try: waitpid(WNOHANG) except OSError: break` — after the break, `if rpid == 0: os.kill(pid, SIGKILL)`. If waitpid raises ECHILD (child already reaped — unreachable in today's single-close flow, but one double-close or a future SIGCHLD-handler refactor away), the code SIGKILLs a PID the system is free to recycle. The kill should be guarded by "poll expired without error", not by "pid == 0" alone. Cheap fix: set `rpid = self.pid` (or a `reaped`/`` flag) in the except. Nobody named it; F1's reviewers checked the poll-kill-wait shape, not the error path's fall-through.
+
+  2. **The verdict-bearing patience is the DRAIN's, and its expiry manufactures a false red on a healthy run under load.** If a healthy child takes > patience (5 s) to die after quit (loaded CI host), the drain deadline fires, the master closes under a live child → SIGHUP → child dies signal 1 → the reap honestly reports exit=None/signal=1 → `survived()`/I1/E4/R0 red on base. Not a regression (the old fixed 0.3 s was worse), and rd's True-on-timeout means the common case is fine; but "bounded reap" language oversells it: the teardown can still turn a slow-but-healthy child into a signal death, and now that rows consume the exit status, that signal death is verdict-bearing. A guard (`if st signaled AND we closed before EOF: status=TEARDOWN-INCONCLUSIVE`, or retry-quit before close) would keep a loaded machine from going red. This is the direct answer to the "particular" question: the REAP itself cannot misreport a healthy run (once EOF is seen the child is dead and the first WNOHANG poll reaps it; SIGKILL unreachable); the state that CAN is upstream — patience expiry → close-under-live-child → SIGHUP → reap faithfully reports the SIGHUP as a red. All nine reviewed the reap; nobody priced the drain-deadline path.
+
+  Hmm wait — actually let me double-check one thing: on drain-deadline expiry in the pending probes, `left <= 0` breaks the loop; then close(fd) → SIGHUP. But ALSO note: after quit, gxemul's debugger... does `quit` require confirmation? gxemul's debugger `quit` command exits immediately (I believe). Fine.
+
+  And one more: **SIGKILL + blocking wait on a D-state child** — the "bounded" reap's final waitpid is unbounded; a child stuck in uninterruptible I/O (loaded host, slow disk — the shared LOGDIR) ignores SIGKILL until it leaves D. Rare, and only reachable on the already-dead path; mention as the third state.
+
+  3. **(q)/F15 class**: covered by table 2. Not missed.
+
+  4. Anything else missed? Let me think about the E-row construction once more... 
+
+  - **E rows' dependency chain**: E3/E6/E5 all depend on the state left by E1/E2 (P|Q set). The ordering E0,E1,E2,E3,E6,E5 is load-bearing (E6 wants 0x2002 while P set — after E3's byte read, before E5's clear). Stated in the header ("Execution order is E0,E1,E2,E3,E6,E5: E6 wants 0x2002, which is true only while P is set"). ✔ good.
+
+  - **E2's bit 30 diagnostic claim**: "bit 30 set so a diagnostic kept for the top bits fires here" — the deleted code had ONE diagnostic for any read; there's no top-bit-specific diagnostic. This is about a hypothetical mutant keeping a diagnostic conditional on high bits. Fine.
+
+  - **The `saw` check**: drain probe run_kill: `saw = "ENABLE CLEAR" in s.buf` — the fatal text for the CLEAR read branch — what does it actually say? Need to check dev_footbridge.c's CLEAR read branch fatal text contains "ENABLE CLEAR". Check lines 595-615. If the fatal says e.g. "[ WARNING: footbridge read from ENABLE CLEAR? ]" → contains "ENABLE CLEAR" ✔. Verify.
+
+  - **Sites K row**: `k_ok = any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1` — fatals regex `\[...footbridge.....\]` ✔.
+
+  - **Witness K**: `seen = "ENABLE CLEAR" in s.buf` ✔ same text dependency.
+
+  - **A subtle one: arm E uses r8 (sl? no—r8) for P and the byte read clobbers r9 (was Q)** — E5 uses r8 (P) again for the Clear write: `str r8,[r0,#396]` — r8 still P ✔ (r9/Q clobbered by E3 but not needed after E2... wait E5 needs only P; ✔). E5 read into ip (r12) → expects Q = P|Q with P cleared = Q ✔. Registers parse: n in (...,11,12) with fp/ip spellings ✔.
+
+  - **EC1/EA1 use r5/r6** — E arm runs BODY first (C1 liveness r5, A1 vendor r6) then ENABLE — the row() calls read E["regs"].get(5)/(6) ✔. And the parse loop covers 0,1,2,3,5,6,7,8,9,10,11,12 — but NOT r4 (base) — fine.
+
+  - **One thing: E rows and the D1 disassembly check** — E's planted words are checked via step lines in run_arm (the loop over prog[:-1]); arm E's prog includes ENABLE rows; landing pad excluded ✔. nbad sums L,T,K,E ✔.
+
+  - **The gate's `grep -cE '^E[0-6] .*ok$'` == 7** — and rows print `%-4s` so "E0  IRQEnable..." — wait, row() prints `%-4s %-40s got=...` → "E0   IRQEnable reads 0 before..." — `^E[0-6] .*ok$` matches ✔. EC1/EA1 lines start "EC1"/"EA1" — not matched by `^E[0-6]` ✔ good (F4's overbroad was about the excerpt only).
+
+  - **Now, is there anything about `ctrl_ok = c1 and c2 and c3 and c4 and ec1 and ea1`** — CONTROL now includes arm E's liveness/reachability ✔.
+
+  - **`survived()` in pending probes requires exit == 0** — on the NO-PROMPT path, close() returns exit/signal of... child failed to prompt; quit written; drain; close; reap — a hung child gets SIGKILLed → exit=None → survived False → R0 red ✔ correct direction.
+
+  - **One more potential miss: the drain probe's `run_arm` NO-PROMPT early return now includes **s.close()** — good; previously it leaked... fine.
+
+  - **witness run_kill: `saw` computed AFTER close** — the complaint arrives during drain ✔. But hmm: in run_kill, if the child dies during stepping, s.dead set via rd's OSError/EOF during wait()... buf already holds the complaint (fatal prints before exit). ✔.
+
+  - **What about `signal` import in the pending probes?** The diff added `import ... signal` to sites (line 555: `import os, pty, re, select, signal, sys, time`). Did drain/witness already import signal? The close() uses signal.SIGKILL. If drain/witness lacked `import signal`, the SIGKILL path would raise NameError — but only on the SIGKILL path (rare), and it's inside `try: os.kill(...) except OSError: pass` — NameError is NOT OSError → propagates → probe crash. Check: does fbpending_drain_probe.py / fbpending_witness.py import signal? Table 2's y_sigkill exercised... no wait — y_sigkill is a MUTANT child dying by SIGKILL itself; the probe's reap poll reaps it (signal=9) — the probe never SENDS SIGKILL in that run (child died on its own). So the probe's own os.kill(signal.SIGKILL) path may NEVER have been executed in any measurement! If `signal` isn't imported in the pending probes, that path crashes with NameError when first exercised (the ignored-quit case — which is filed, not built!). Let me grep imports in both pending probes. THIS could be a real miss: an unexercised error path with a possible NameError. The diff for drain/witness didn't show an import change (the sites diff showed the import line change; drain/witness diffs didn't touch imports — so if they didn't already import signal, it's missing!). Check now.
+
+  That's a strong candidate for Q3/Q2. Let me verify.
+
+• Structure of the C cases is visible. Now I need four targeted checks: the CLEAR read branch text, the TIMER_CONTROL else, the `signal` import in the two pending probes, and the F16 line counts.---
+  775 GXEMUL-SEC/regress/fbpending_drain_probe.py
+  697 GXEMUL-SEC/regress/fbpending_witness.py
+ 1472 total
+---
+---
+
+
+• Findings:
+
+  1. **`signal` IS imported** in both pending probes (line 78 / 113) — my NameError candidate is dead. Good thing I checked. (The diff didn't show it because it was already there, or added in an earlier hunk not shown — either way, present.)
+
+  2. **CLEAR read branch confirmed**: `odata = d->irq_enable; fatal("[ WARNING: footbridge read from ENABLE CLEAR? ]\n"); exit(1);` — contains "ENABLE CLEAR" ✔ (K's `saw`/fatals grep matches), still fatal+exit(1) ✔ (K control intact). Note: CLEAR read also RETURNS irq_enable before dying — irrelevant since it exits.
+
+  3. **TIMER_1_CONTROL else confirmed**: `if (idata & TIMER_ENABLE) { reload_timer_value(...); } else { d->pending_timer_interrupts[timer_nr] = 0; }` — F11's "the `else` of `if (idata & TIMER_ENABLE)`" is now literally accurate ✔. And TIMER_1_LOAD write branch: `d->timer_load[timer_nr] = idata & TIMER_MAX_VAL;` — one case, timer_nr folded ✔ — "case TIMER_1_LOAD's write branch (one case serves all four timers through the fold)" accurate ✔.
+
+  4. **No `if (len` anywhere in dev_footbridge.c** — the grep found zero `if (len` lines. Confirmed: D3's stated mechanism ("`if (len == 4)` leaves odata 0 -> E3 reds") cites code that does not exist in this file. The width/lane behavior is entirely caller-side. D3's CONCLUSION ((r) caught by E3/E6) still holds because E3/E6 pin the sub-word lanes and any width-form edit to this hunk would have to ADD a len test, which E3/E6 red. So: D3 conclusion UPHOLD, mechanism REFINE.
+
+  Hmm wait — actually, let me reconsider whether the caller really lane-truncates. E3 (ldrb) passed on base with got=0x02 per table 2 (base 19/19 PASS — E3 is one of the 19). So empirically yes. ✔
+
+  5. **F16**: the wc output for `_scratchpad/r6pass2_fb/regress/*.py` printed nothing before the first `---`?? Actually looking at the output: the first line is `---`, meaning `wc -l _scratchpad/r6pass2_fb/regress/*.py` produced no output (no .py files directly there, or glob failed silently? wc with no matches → error to stderr, suppressed). The r6pass2_fb dir has bin/logs/regress/src. Let me look deeper — the 744-vs-897 pair: which files? Current probes: drain 775, witness 697, sites 425. Neither 744 nor 897. dev_footbridge.c is 899 lines — close to 897! "the fork's is 897" — hmm, GXEMUL-SEC/src/devices/dev_footbridge.c is 899 lines. The stale copy under r6pass2_fb/src/... could be 897 (pre-#539? no — pre-#539 would be 2 lines FEWER... #539 added a 6-line comment and removed 3 lines: net +3... hmm, diff said +10/-... let me count: the dev_footbridge.c hunk was @@ -583,10 +583,12 — +2 net. So pre-#539 = 897, post = 899! And the stale copy under r6pass2_fb would be 897 if it predates #539's comment... wait but F16 says the stale copy is 744 and the fork's is 897. Which file is 744? Maybe glm was comparing dev_footbridge.c copies: one at 744 lines (much older) and one at 897. The "premise stated two ways" — glm saw two line-count claims in the packet. Let me check: wc -l _scratchpad/r6pass2_fb/src/devices/dev_footbridge.c and any other dev_footbridge.c copies. Actually the F16 text says "the stale copy under `_scratchpad/r6pass2_fb/` is 744 lines, the fork's is 897 (agy measured both)". So under r6pass2_fb there are two things: a stale copy (744) and the fork's copy (897). Hmm, or "the fork" = r6pass2_fb itself and the stale copy is elsewhere? Ambiguous. Let me just find dev_footbridge.c files and their line counts. Quick find.
+
+  Actually, is F16 worth more effort? It's a rejected finding about line counts of copies — cosmetic. The rejection's factual basis: two different files with different lengths. I can verify quickly: find all dev_footbridge.c under _scratchpad/r6pass2_fb and wc them, plus GXEMUL-SEC's (899). If I find a 744 and an 897, the rejection stands as stated. If not, say NOT CHECKABLE/partially. One quick bash.
+
+  6. **SIGHUP**: no SIGHUP references in GXEMUL-SEC/src (grep empty) and no signal( in main.c/debugger.c — supports agy/minimax's "no handler, default disposition terminates" (D1). Let me broaden slightly: grep -rn "signal(" GXEMUL-SEC/src/ | head — to see if ANY signal handler is installed (SIGINT etc. don't matter for SIGHUP). The grep I ran only covered main.c/debugger.c and found nothing. A broader grep would be nice but the SIGHUP-specific one came back empty — that's the load-bearing one. ✔ D1's "unreachable today" premise confirmed: gxemul installs no SIGHUP handler → a healthy child never survives the master close → the unbounded waitpid hang state is not reachable via SIGHUP-ignorance; only via a stopped (SIGSTOP) or D-state child. So F1 = hardening, correctly graded. UPHOLD.
+
+  7. F7 (7.3.33 vs 7.3.32): no datasheet in tree → NOT CHECKABLE from here; two independent seats (grok, kimi CLI) cited the TOC; substance nil either way. Accept.
+
+  Now F16 check and then I'm done verifying. Also — one more look at a possible miss for Q3: let me reconsider the sites probe drain loop once more:
+
+  ```python
+  t1 = time.time()
+  while time.time() - t1 < 5.0:
+      if not rd(0.1):
+          break
+  ```
+  rd returns False only on EOF/EIO (dead). So this drains until EOF or 5 s. ✔. But NOTE: unlike the pending probes, the sites probe's loop has NO `left`-based shrinking — rd(0.1) called until 5 s wall. Equivalent bound. Fine.
+
+  And the pending probes' close: drain deadline `patience` (5.0 default) — then close, then reap with its OWN 5.0 poll. Total worst-case ~10 s + blocking wait after SIGKILL. Fine.
+
+  One more possible miss to consider: **`os.waitpid(pid, os.WNOHANG)` when the child was already reaped by... nothing. Fine. And `os.kill(pid, SIGKILL)` when poll expired: child alive and stuck → SIGKILL → wait. If the child is stopped (SIGSTOP — e.g., someone Ctrl-Z's the gate terminal? pty child has its own session; SIGTSTP from terminal goes to the probe's pgrp, not the child's... the probe runs under the gate's shell; Ctrl-Z would stop the PROBE, not the gxemul child (separate session via pty.fork). OK.)
+
+  8. **A cleaner Q3 candidate I should double check — the `except OSError: break` → SIGKILL fall-through**: verified present in all three probes identically:
+  ```python
+  while rpid == 0 and time.time() - t1 < 5.0:
+      try: rpid, st = os.waitpid(pid, os.WNOHANG)
+      except OSError: break
+      if rpid == 0: time.sleep(0.05)
+  if rpid == 0:
+      try: os.kill(pid, signal.SIGKILL) except OSError: pass
+      ...
+  ```
+  If waitpid raises ECHILD (no unwaited child), rpid stays 0 → SIGKILL sent to `pid` — a PID the kernel may have recycled to an unrelated process. Reachability today: waitpid ECHILD requires the child to have been reaped already or never existed; close() is called once per session; no other waitpid exists... EXCEPT: look at the drain probe's run_arm NO-PROMPT path and normal path — each calls close() exactly once. BUT: pty.fork() failure raises; self.pid... in Session.__init__ presumably. Single reap. So ECHILD unreachable today; the hazard is latent (future double-close, or an exception mid-close retried). It's a real code-smell none of the nine named: the poll loop's error exit feeds the kill branch. I'll name it in Q3 as the sharpest code-level miss, with the honest reachability caveat (unreachable today; one-line guard).
+
+  Also for Q3 completeness: **the false-red state on a healthy run under load**: patience expiry → close under live child → SIGHUP → exit=None/signal=1 → survived() false → red rows (R0/I1/E4 in sites; R0/K-adjacent rows in pending). Exists, narrowed (0.3 s → 5 s), not eliminated. AND the D-state substate of the reap's final blocking wait. Both are "the reap/close shape on healthy run under load" answers. Also note: the verdict impact is fail-LOUD (red), never a false PASS — the failure direction is safe; it costs a spurious gate failure, not a missed defect. Worth stating.
+
+  9. Anything else all nine missed? Let me scan the sites E-row register-parse once more for a subtle bug... `for n in (0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12): mm = re.search(r"\b%s\s*=\s*0x([0-9a-fA-F]+)" % REGNAME.get(n, "r%d" % n), buf[mark:])`. For n=8: "r8" — `\br8\s*=` — could match inside... "r8" appears only as r8. For n=9: "r9" — but "r9" could ALSO match the tail of... nothing else ends in r9. For n=10/11/12 uses sl/fp/ip — but wait: does the ARM reg dump print sl/fp/ip? REGNAME comment says cpu_arm.h ARM_REG_NAMES — I can verify cpu_arm.h quickly. If the emulator actually prints "r10"/"r11"/"r12" instead, the parse would find NOTHING for 10/11/12 → regs.get(11) None → E6 row FAILs on base — but base passed 19/19, so the spellings must be right (measured). ✔ Empirically closed.
+
+  Hmm — one more: `re.search(r"\b%s..." % "ip")` — `\bip\s*=` — could "ip" match inside another token like... in a reg dump region, unlikely; measured green. Fine.
+
+  10. One more scan of the gate additions: `check "footbridge: E0-E6 are seven DISTINCT row ids" "$(grep -oE '^E[0-6] ' "$FBLOG" | sort -u | wc -l | tr -d ' ')" "7"`. If the probe crashes before printing E rows, count-7 fails first. If it prints E0 twice and E6 never: count could still be 7 (dup) but distinct=6 → caught ✔. What if it prints E0..E6 AND an extra E3 (8 lines)? count check == 7 fails ✔. Good.
+
+  Also the `check` function — presumably `check name got want`. Fine.
+
+  11. The excerpt grep change: `grep -E "^(  arm |C[0-9]|A[0-9]|I1|K1|D1|E(C1|A1|[0-6]) )"` — matches "E0 " ... wait, the row lines are "E0   IRQEnable..." (id padded to 4 by %-4s → "E0  " then space then note). `E(C1|A1|[0-6]) ` — "E0 " matches (E, 0, space) ✔; "EC1 " matches ✔; "EA1 " ✔. But "A2b" row: `A[0-9]` matches "A2" ✔ (already there). What about "EC1"/"EA1" also matching `A[0-9]`? "EA1" starts with E, no. OK. F4 fix verified. Cosmetic anyway.
+
+  12. F19's gate comment: verified present.
+
+  13. Now — the last piece for F16. Run the find/wc.
+
+  Also should I spot-check TABLE2.log existence to confirm the "still owed" claims? The artifacts dir listing showed the .raw files for table2_v2 (base_v2/x_exit2/y_sigkill for all three probes) — exists ✔. TABLE2.log — check presence quickly in the same bash. Also the frozen md5s could be checked but that's overkill; the raws' presence corroborates.
+
+  Let me also double check the claim in the witness header F-fix: "odata = d->irq_enable" in CLEAR read branch happens BEFORE fatal — meaning a read of +0x18c returns the value AND dies. Fine.
+
+  One more possible-miss scan — **the drain probe's header now says K reads IRQ_ENABLE_CLEAR and "the round that declines +0x18c retires the bridge"**. And in run_kill the complaint check `"ENABLE CLEAR" in s.buf` — s.buf includes the drain output since rd appends ✔ (rd: `self.buf += d.decode(...)`).
+
+  And **witness run_kill saw computed after close** — but wait: in witness run_kill, the K child dies by fatal() DURING stepping; the complaint text goes to the pty; buf captures it via wait() loops during step_and_check and the later `s.send("reg")`. By close() time it's almost certainly already in buf; the drain adds the rest. ✔.
+
+  Potential subtle issue in the K predicates: drain probe's K row requires `K["saw"]` — computed from s.buf — and `K.get("exit") == 1`. In table 2's x_exit2, exit=2 → red ✔ measured. On base, exit=1 ✔. All good.
+
+  NOW — let me also sanity-check F14's claim about which failure modes remain unmeasured: "exit 1 without complaint" (the complaint term's independence) and "ignored quit / delayed shutdown" (teardown path) — filed as fbptymock. From the code: the K predicate has THREE terms: status==HOST-DIED, saw (complaint), exit==1. x_exit2 exercises exit-term (2 vs 1) with complaint present; y_sigkill exercises signaled-death (exit None) with complaint present (complaint then SIGKILL). NOT exercised: complaint ABSENT + exit 1 (would the row red? yes: saw False → red — trivially by construction, but unmeasured), and exit==1 + status SURVIVED (impossible-ish). And survived(D)'s exit==0 term on a mutant where D exits nonzero... x_exit2/y_sigkill only mutate the CLEAR read; D doesn't read CLEAR → D unaffected → the D-side exit term NOT independently measured (does a mutant that kills arm D red the rows? That's what (m),(n)-class mutants in table 1 did presumably). Fine — the filed mock covers the complaint-absent leg. Concur with ACCEPTED IN PART.
+
+  OK, run the F16 check + a couple of corroborations (TABLE2.log presence, cpu_arm.h ARM_REG_NAMES for completeness), then write the verdict.
+
+  Actually let me also quickly check the codex ded claim "13/13 encodings" — the ENABLE table has 13 entries (0x2c..0x5c = 13 words: E0 ldr, ldr r8, str, ldr r1, ldr r9, str, ldr r2, ldrb, add, ldrh, str, ldr ip, NOP = 13 ✔). And the kill word 0xE590718C matches "ldr r7,[r0,#396]" ✔ (offset 396 = 0x18C ✔).
+
+  For D1's remaining bit: also confirm no SIGQUIT/SIGINT handler irrelevant. SIGHUP grep was empty ✔.
+
+  Bash: find r6pass2_fb dev_footbridge copies + wc; ls table2 dir; grep ARM_REG_NAMES cpu_arm.h.744 _scratchpad/r6pass2_fb/src/devices/dev_footbridge.c
+---
+899 GXEMUL-SEC/src/devices/dev_footbridge.c
+---
+GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/table2_v2/TABLE2.log
+---
+grep: GXEMUL-SEC/src/cpus/cpu_arm.h: No such file or directory
+F16: the stale copy under `_scratchpad/r6pass2_fb/` is 744 lines ✔ (verified). The fork's being 897 — GXEMUL-SEC's dev_footbridge.c is 899 (post-#539 with the +6/-3 comment hunk → pre-#539 HEAD would be 897). ✔ So "the fork's is 897" = the working tree's file at HEAD (899 now with the uncommitted #539 edits; 897 at HEAD). F16's rejection is factually grounded: glm compared two different files. UPHOLD rejection. ✔
+
+  TABLE2.log exists ✔.
+
+  cpu_arm.h path wrong — probably GXEMUL-SEC/src/cpus/ has a different layout, or it's src/include? Doesn't matter: empirically the parse works (base 19/19 green incl. E6 using fp and E5 using ip). The REGNAME comment cites cpu_arm.h ARM_REG_NAMES; the measurement settles it. No need.
+
+  Let me quickly find cpu_arm.h for completeness? `Glob GXEMUL-SEC/src/**/cpu_arm.h`. Eh — it's corroborated by the green base run; skip. Actually, one cheap check since "the emulator's spellings" is a load-bearing claim for E3/E6/E5 parsing... but table 2 base_v2 sites 19/19 PASS means regs 9 (E3), 11 (E6), 12 (E5) all parsed and matched. Empirically closed. Done verifying.
+
+  Now also reconcile: table 2 says "sites 18/19 red K1" on x_exit2 — 18 of 19 rows red? That reads oddly — on x_exit2 (CLEAR read: complaint then exit(2)), only rows touching the K arm should red... 18/19 red would mean nearly everything reds. Hmm, maybe the phrasing means "18/19 rows, red: K1" — i.e., the run scored 18/19 and the red row is K1? On x_exit2 the probe should FAIL overall (K1 red: exit=2 ≠ 1) with 18 green + 1 red = "ROWS=18 of 19". Yes — "sites 18/19 red K1" = ROWS=18 of 19, the red one being K1. Consistent. ✔ And witness/drain "CONTROL=FAILED red K (exit=2)" ✔.
+
+  Everything checks. Now compose the adjudication.
+
+  One more thought for Q2 — "which of my 17 accepted dispositions is wrong". My findings:
+
+  (a) **F11 — the fix is incomplete**: the witness's LOADBACK comment (diff line 274 → GXEMUL-SEC/regress/fbpending_witness.py) still reads "0x12345678 & TIMER_MAX_VAL, the TIMER_x_LOAD write arm" — the same non-construct phrasing F11 flagged, while the announced fix ("`case TIMER_1_LOAD`'s write branch") was applied only to the sites header and drain header. There IS no `case TIMER_x_LOAD` in dev_footbridge.c (verified: it's `case TIMER_1_LOAD` at :638 folding four timers). So the disposition as stated ("ACCEPTED -> `case TIMER_1_LOAD`'s write branch") is not true of every flagged instance. Cosmetic, comment-only — but it's the one acceptance whose claimed end-state I can falsify by reading. 
+
+  Hmm — hold on, was the witness LOADBACK comment among what F11 flagged? F11's three items: "`TIMER_x_LOAD write arm` is commentary, not a construct; `idata & TIMER_MAX_VAL` occurs 3x; the literal `!(idata & TIMER_ENABLE)` occurs 0x". The "occurs 3x" item is about citation ambiguity in the probes' headers (which line to cite). The flagged phrase "TIMER_x_LOAD write arm" appears NOW in the witness (post-fix). Was it there pre-fix, or did the fix INTRODUCE it there? Pre-fix witness line: "LOADBACK = 0x00345678 # 0x12345678 & TIMER_MAX_VAL, dev_footbridge.c:548". Post: "..., the TIMER_x_LOAD write arm". So the fix REPLACED a stale line-number citation (:548 — which F6 flagged in the sites probe's A2 note) with the phrase F11 flagged. So in the witness, the F6-class fix (drop :548) was applied using the F11-class phrasing (TIMER_x_LOAD write arm). Net: one stale citation replaced by a non-construct citation. So F11's acceptance is half-done; the witness comment should read "case TIMER_1_LOAD's write branch" like the sites header. That's my Q2 pick. It's cosmetic — but the question demands I name one, and this is the one I can prove.
+
+  (b) Also worth noting under Q2: F1's disposition ("defence, not a measured defect") is RIGHT, and the fix is right in shape — with two residual nits (ECHILD→SIGKILL fall-through; drain-patience expiry false-red) that belong to Q3, not to F1's verdict.
+
+  (c) Rejections: F16 UPHOLD (verified 744 vs 897/899 — two files); F17 UPHOLD (verified: the if-branch is `if not wait(timeout=120): status="NO-PROMPT"` — no arm runs; every executed arm plants all four DATA words incl. P/Q); F18 UPHOLD (refutation technically correct; I hand-decoded 0xE5907188/0xE590718C/0xE5D09188/0xE1DAB0B8/0xE280AD06: SDT with I=0 IS the immediate-offset form; minimax applied the data-processing I-bit convention to SDT; and D1's stepped-disassembly comparison measured 0 mismatches on every run, which is the empirical closure).
+
+  D1: UPHOLD (verified: no SIGHUP handler anywhere in GXEMUL-SEC/src — grep empty — so agy/minimax's "default disposition terminates" holds; the hang state needs a stopped or D-state child; the bound is hardening and now that rows consume exit status, it also guards the gate from a hung probe. Grading L1 fine.)
+
+  D2: UPHOLD (verified code: `e_ok = ... and not E["fatals"]` — phrase-free; a kept diagnostic with any text reds E4. The ruling is the stricter, correct one.)
+
+  D3: UPHOLD the conclusion, REFINE the stated mechanism. Verified: there is NO `if (len == 4)` (nor any len test) in dev_footbridge.c — the grep for `if (len` returned zero hits. The read branch returns the full word unconditionally; sub-word lanes are the caller's truncation, which is exactly what E3/E6 pin on base (byte 0x02, halfword 0x2002 — green in base_v2). A width-form mutant on this hunk would have to ADD a length test, and any such test that zeroes sub-word reads reds E3 and E6. So (r) is indeed caught by E3/E6 by construction, no measurement owed — but the ruling's parenthetical ("`if (len == 4)` leaves odata 0 → E3 reds") describes a guard that exists in OTHER gxemul devices, not this one; strike that clause from the record.
+
+  Q3 — what all nine missed:
+
+  1. **The reap poll's error path falls INTO the kill branch** (all three probes, identical shape): `except OSError: break` leaves `pid == 0`, so the code below treats "waitpid failed" as "child still running" and SIGKILLs. Today unreachable (single reaper, one close per session, no SIGCHLD handler), but the guard is wrong-side: ECHILD means "no such child" — the one state where killing is certainly wrong (PID may be recycled). A one-line `reaped`/`gone` flag separates the two exits. Nobody named it; everyone reviewed the happy path of poll→kill→wait. Severity: latent, not measured.
+
+  2. **The verdict-bearing clock in the new teardown is the DRAIN's patience, and its expiry manufactures a false red on a healthy run under load.** rd() returns True on timeout and False only on EOF/EIO (verified in both Session.rd and the sites' nested rd) — good. But if a healthy child needs > 5 s to die after quit (loaded host; gxemul teardown flushing state while the gate and sibling probes compete for the CPU), the drain deadline fires, `os.close(fd)` drops the master under a live child, SIGHUP kills it (no handler — verified, so default terminate), and the bounded reap then HONESTLY reports exit=None signal=1 → survived()/I1/E4/R0 go red on a healthy base. The reap itself cannot misreport (once EOF is seen, the child is dead and the first WNOHANG poll reaps it; SIGKILL is unreachable on a healthy run) — the wrong-verdict state is upstream of the reap, in close-before-death, and the pass-2 reviewers all priced the reap and none priced the drain deadline. Direction is fail-loud (a spurious gate failure, never a false pass), and it is narrower than the old fixed 0.3 s, but "bounded reap" should not read as "teardown cannot red a healthy run". If a round wants to close it: on drain-deadline expiry, mark the arm INCONCLUSIVE rather than scoring the reaped signal against exit==0 rows.
+
+  3. **The reap's final `waitpid(pid, 0)` is still unbounded**, and SIGKILL does not help a child in uninterruptible sleep (D state — the gate's shared log directory on a loaded disk is the plausible route). Rare, fail-loud, and inherited; but it means F1's "bounded" is bounded only against killable states. One clause in the contract would do.
+
+  4. Maybe also: **nobody re-measured the E-row parse path's dependency on the emulator's register SPELLINGS** (sl/fp/ip via REGNAME) — it's empirically closed by base_v2 19/19 (E3/E6/E5 parse r9/fp/ip green), so it's covered, not missed. Skip.
+
+  And the (c) self-doubt item (drain+reap never exercised on a quit-ignoring child): the filed fbptymock covers it; my item 2 is the healthy-side dual of that same unexercised path.
+
+  Self-review note: none of F1-F23 is MY finding (this seat — kimi CLI — contributed to F6, F7, F8, F11 in pass 2 per the attributions: kimi CLI co-flagged F6, F7, F8, F11). So F6/F7/F8/F11 are partly my own pass-2 findings — self-review applies to those four. Be harder:
+  - F6 (mine, with others): verified fixed in the sites A2 note ("(MAX_VAL)"). BUT my pass-2 finding was scoped to the sites probe's A2 row note; the same ":548" staleness class lived in the witness's LOADBACK comment and the fix there swapped ":548" for the F11-flagged "TIMER_x_LOAD write arm" — I flagged the stale citation but not the replacement's quality in the witness. Incomplete scoping on my part.
+  - F7 (mine, with grok): 7.3.32→7.3.33 — NOT CHECKABLE from this tree (no DC21285 datasheet in-tree); concordant with grok and the fix is in the sites header ("write-only per 7.3.33 (IRQEnableClear)"). Cosmetic either way.
+  - F8 (mine, with codex ded): drain header rewritten — verified.
+  - F11 (mine, with others): the `else` phrasing and `case TIMER_1_LOAD` citation verified accurate in the C (lines 674-678, 638-648) — but see above: the flagged phrase survives in the witness LOADBACK comment, which makes my own finding's disposition the one I now call out in Q2. Self-review: I should have grepped for the phrase across all three probes, not just the two headers I was reading.
+
+  Now write the answer. Format:
+  - VERDICT LINE FIRST (done at top of my reply — I already gave one before reading; now the final answer leads with the verdict line proper).
+  - Q1: one line each for F1..F23, D1..D3.
+  - Q2.
+  - Q3.
+  - Seat record line.
+
+  Keep each adjudication to one line. Use UPHOLD / OVERTURN / REFINE / CANNOT SETTLE. For F20/F21/F22 (process records) UPHOLD = correctly recorded. 
+
+  F1: UPHOLD (hardening; verified no SIGHUP handler in src → hang unreachable today; reap shape verified in all three probes; two residual nits → Q3).
+  F2: UPHOLD (verified: sites now drains bounded-5 s to EOF, fatals collected after drain, bounded reap identical shape).
+  F3: UPHOLD (gate distinct-7 via sort -u verified).
+  F4: UPHOLD (excerpt grep now E(C1|A1|[0-6]) ; cosmetic).
+  F5: UPHOLD (label corrected).
+  F6: UPHOLD with self-review note (fixed in sites A2 note; same class survived in witness LOADBACK — see Q2).
+  F7: UPHOLD, NOT CHECKABLE from tree (no datasheet in-tree); concordant seats; substance nil.
+  F8: UPHOLD (drain header rewritten, verified).
+  F9: UPHOLD (header now correct: P not encodable — bits 1,13 span > 8; Q = 0x06 ROR 4; both RAM-loaded).
+  F10: UPHOLD (wording verified in header).
+  F11: REFINE — the announced fix is true in sites/drain headers (verified against :638-648 and :674-678) but the flagged phrase "TIMER_x_LOAD write arm" survives in fbpending_witness.py's LOADBACK comment; my own finding, incompletely closed.
+  F12: UPHOLD (TESTED PATTERNS stated; bit 31 untested now contractual — cheap and honest).
+  F13: UPHOLD (contract sentence (d) present).
+  F14: UPHOLD the partial (x_exit2/y_sigkill measured, artifacts present incl. TABLE2.log; mock legs filed — correct scope cut).
+  F15: UPHOLD as disclosure (probe-side weakening, no product mutant; exit term now load-bearing via table 2).
+  F16: UPHOLD rejection (verified: r6pass2_fb copy 744 lines; tree file 899 post-edit = 897 at HEAD; two files).
+  F17: UPHOLD rejection (verified: if-branch is `NO-PROMPT`, no arm runs; all executed arms plant P/Q at DATA+8/+12).
+  F18: UPHOLD rejection (I-bit: for LDR/STR, I=0 IS immediate-offset; hand-decoded all five E/K words; D1 measured 0 mismatches — minimax applied the data-processing convention; seat error).
+  F19: UPHOLD (gate comment documents the model value; packed-config row belongs to that round).
+  F20: UPHOLD (process record; transport-scored per ledger rule).
+  F21: UPHOLD (new seat-failure class correctly recorded; template note right).
+  F22: UPHOLD (seat failure, not agreement; measurement still owed; table 2 meanwhile is single-source — the author's (b) is the right level of distrust).
+  F23: UPHOLD (contract now says "no row observes the CPU IRQ line"; free-running arm filed with IRQSoft — verified in header).
+  D1: UPHOLD hardening ruling (verified: zero SIGHUP handlers in GXEMUL-SEC/src; hang needs stopped/D-state child; bound is 3 lines and now guards the gate, L1 grade right).
+  D2: UPHOLD (e_ok = ... and not E["fatals"] — phrase-free, strictly stronger; a kept diagnostic of any text reds E4).
+  D3: UPHOLD conclusion / REFINE mechanism (verified: no `if (len == 4)` or any len test exists in dev_footbridge.c; lanes are caller-side truncation, pinned green by E3/E6 on base; a width mutant must ADD a len test, which E3/E6 red; strike the "`if (len == 4)`" clause from the record).
+
+  Q2: F11 is the wrong acceptance (provable residual). Also note F6's scoping as the runner-up. Rejections F16/F17/F18 all stand — F18 is the one worth stating the proof for.
+
+  Q3: the three misses (ECHILD→SIGKILL fall-through; drain-patience false-red on healthy-but-slow child; unbounded final wait vs D-state). Plus the honest note that item 2 is the healthy-side dual of the filed fbptymock leg.
+
+  Seat record line: identify as kimi CLI (Kimi Code CLI), §F2 adjudication re-fire, file-reading seat, read-only (Read/Grep/Glob/wc only), no gates run, tree at HEAD a11eaac + v2 edits + frozen diffs cross-checked.
+
+  Length: keep tight. This is a panel packet; structured, numbered. Write it now.
+
+• All verification done — every claim I adjudicate below was checked against the v2 diffs, the working tree, or both. Here is the ruling.
+
+  **VERDICT: 20 UPHOLD, 0 OVERTURN, 3 REFINE (F11 — my own finding, incompletely fixed; D3 — right conclusion, wrong stated mechanism; F1 — right call, two unnamed residual states). The wrong accepted disposition is F11. The panel-wide miss: everyone audited the reap's bound; nobody priced the drain deadline's false-red on a healthy-but-slow child, and nobody traced the reap poll's OSError exit into the SIGKILL branch.**
+
+  ## Q1 — F1..F23, D1..D3
+
+  - **F1 UPHOLD** — Verified: zero `SIGHUP` references in `GXEMUL-SEC/src/`, so agy/minimax's "default disposition terminates" holds and the hang is unreachable today; hardening, correctly graded. Bounded reap (poll 5 s → SIGKILL → wait) verified in all three probes. Residuals in Q3.
+  - **F2 UPHOLD** — Verified in `footbridge_sites_probe.py:270-302`: quit, bounded drain to EOF, `fatals` collected *after* the drain, then the same poll/kill/wait reap.
+  - **F3 UPHOLD** — Gate now has both `^E[0-6] .*ok$` count==7 and the `sort -u | wc -l`==7 distinct-id check (`diff539_gate.v2.patch:44-49`).
+  - **F4 UPHOLD** — Excerpt grep is now `E(C1|A1|[0-6]) `; cosmetic, correct.
+  - **F5 UPHOLD** — Label now reads "Set ORs (E2 = P|Q; Clear is pinned by E5)".
+  - **F6 UPHOLD** — *(self-review: my pass-2 finding)* A2 note fixed to "(MAX_VAL)". But I scoped it to the sites probe; see F11/Q2 for where the same staleness class survived.
+  - **F7 UPHOLD, but NOT CHECKABLE from this tree** — *(self-review: mine, with grok)* No DC21285 datasheet in-tree; 7.3.33=IRQEnableClear rests on two concordant seat citations. Header fix verified; substance nil either way.
+  - **F8 UPHOLD** — *(self-review: mine, with codex ded)* Drain header rewritten; verified at diff lines 28-35.
+  - **F9 UPHOLD** — Header now correct: P (bits 1,13 — span > 8, not a rotated imm8) and Q = 0x06 ROR 4; both RAM-loaded. Hand-verified against the encodings.
+  - **F10 UPHOLD** — "with or without its diagnostic ... K1 reds on the exit status it requires" verified in the sites header.
+  - **F11 REFINE** — *(self-review: mine, harder)* The announced fix is true where I checked: `case TIMER_1_LOAD`'s write branch exists (`dev_footbridge.c:638-648`, one case folding four timers), and the `else` of `if (idata & TIMER_ENABLE)` holds the `= 0` store (`:674-678`). **But the flagged phrase survives**: `fbpending_witness.py`'s LOADBACK comment now reads "the TIMER_x_LOAD write arm" (diff line 274) — the fix replaced a stale `:548` with the very non-construct wording the finding flagged. My finding, incompletely closed; I grepped two headers, not all three probes.
+  - **F12 UPHOLD** — TESTED PATTERNS sentence present (P = bits 1,13; Q = bits 29,30; bit 31 untested).
+  - **F13 UPHOLD** — Contract clause (d) present: landing pad excluded, terminating step not compared.
+  - **F14 UPHOLD in part** — Table 2 artifacts incl. `TABLE2.log` exist as inlined; the two mock-requiring legs correctly filed, not built. Right scope cut.
+  - **F15 UPHOLD as disclosure** — Probe-side weakening, no product mutant; table 2 makes the exit term load-bearing on measured mutants.
+  - **F16 UPHOLD (rejection)** — Verified by measurement: `_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c` is 744 lines; the tree file is 899 with the #539 comment (897 at HEAD). Two files; glm's "two ways" was two objects.
+  - **F17 UPHOLD (rejection)** — Verified: the if-branch is `if not wait(timeout=120): status = "NO-PROMPT"` — no arm runs; every executed arm plants all four DATA words including P/Q (`footbridge_sites_probe.py:232-241`).
+  - **F18 UPHOLD (rejection)** — minimax is wrong on the encoding: in ARM single-data-transfer, bit 25 (I) = 0 **is** the immediate-offset form (I=1 selects shifted-register); the data-processing convention minimax applied is inverted for this class. Hand-decoded all five E/K words (0xE5907188/8C, 0xE5D09188 ldrb, 0xE1DAB0B8 ldrh imm, 0xE280AD06 add #0x180) — all immediate, all matching their stated mnemonics; D1's stepped-disassembly check measured 0 mismatches on every run. Seat error, correctly recorded.
+  - **F19 UPHOLD** — Gate comment documents 0x1011 as a MODEL value and names the round that re-pins it; a row now would be the packed-config round's scope.
+  - **F20 UPHOLD** — Process record; transport-scoring per the ledger rule is the right call. Not checkable from here.
+  - **F21 UPHOLD** — New seat-failure class correctly classified (tool cap < brief size); the template note is the right durable fix.
+  - **F22 UPHOLD** — 429 is a seat failure, not agreement; the measurement is owed and, until it lands, table 2 is single-source. The author's self-doubt (b) is calibrated, not excessive.
+  - **F23 UPHOLD** — Contract now says "no row observes the CPU IRQ line" with the free-running arm filed with IRQSoft; verified in the header.
+  - **D1 UPHOLD (hardening)** — The unreachable-today premise is now measured (no SIGHUP handler); the bound is three lines and, since rows now consume exit status, also guards the gate from a hung probe. L1 grade right.
+  - **D2 UPHOLD** — `e_ok = E["status"] == "SURVIVED" and E["exit"] == 0 and not E["fatals"]` (sites probe, diff line 700): phrase-free, strictly stronger than naming the ENABLE SET text. A kept diagnostic of *any* wording reds E4.
+  - **D3 UPHOLD the conclusion, REFINE the mechanism** — (r) is indeed caught by E3/E6 by construction, but **the stated arithmetic cites code that does not exist**: there is no `if (len == 4)` — no len test of any kind — in `dev_footbridge.c` (grep for `if (len` returns zero hits). The read branch returns the full word unconditionally; sub-word lanes are the caller's truncation, which E3/E6 pin green on base (0x02 / 0x2002). A width-form mutant on this hunk would have to *add* a length test, and any such test reds E3 and E6. No measurement owed; strike the "`if (len == 4)` leaves odata 0" clause from the record — that guard lives in other gxemul devices, not this one.
+
+  ## Q2 — which disposition is wrong
+
+  **F11's.** It is the one acceptance whose claimed end-state I can falsify by reading: the announced replacement ("`case TIMER_1_LOAD`'s write branch") was applied to the sites and drain headers but not to `fbpending_witness.py`, where the LOADBACK comment now carries the flagged phrase "TIMER_x_LOAD write arm" — there is no such case label in the C. Cosmetic, comment-only, no verdict impact; but "accepted → fixed" is not true of every flagged instance, and it was my finding, so the miss is mine twice over. Runner-up: **F6** for the same reason — I scoped the stale-citation finding to the sites A2 note and never re-grepped the class across all three probes.
+
+  The three rejections all stand; F16 and F17 are now verified by direct measurement/reading (above), and F18's refutation is technically correct — the I-bit semantics are the reverse of what minimax assumed for this encoding class.
+
+  ## Q3 — what all nine of us missed
+
+  1. **The reap poll's error exit falls *into* the SIGKILL branch** — identical shape in all three probes: `except OSError: break` leaves `pid == 0`, and `if pid == 0:` then sends SIGKILL. `waitpid` raising ECHILD means "no such child" — the one state where the PID is free to be recycled and killing it is certainly wrong. Unreachable today (one reaper, one `close()` per session, no SIGCHLD handler), so latent, not measured; but the guard should be a `gone`/`reaped` flag, not `pid == 0`. Nine seats reviewed poll→kill→wait; all nine reviewed only the happy path.
+  2. **The verdict-bearing clock is the drain's patience, and its expiry manufactures a false red on a healthy run under load.** `rd()` returns True on timeout and False only on EOF/EIO (verified in both the Session method and the sites' nested `rd`), so the common case is fine. But a healthy child that needs > 5 s to die after quit (loaded CI host, gate plus sibling probes competing) hits the drain deadline; `os.close(fd)` then drops the master under a *live* child, SIGHUP kills it (default disposition — verified no handler), and the bounded reap honestly reports `exit=None signal=1` → `survived()`/I1/E4/R0 red on a healthy base. To the particular question: **the reap itself cannot misreport a healthy run** — once EOF is seen the child is dead and the first WNOHANG poll reaps it, SIGKILL unreachable; the wrong-verdict state is upstream, in close-before-death, and pass 2 narrowed it (0.3 s fixed → 5 s patience) without eliminating it, while making it verdict-bearing by binding the exit status. Fail-loud, never false-pass; the closure is "drain-deadline expiry ⇒ INCONCLUSIVE, not scored", or a retry-quit before close. This is the healthy-side dual of the filed `fbptymock` leg — the quit-ignoring child and the slow-to-die child are the same unexercised path from opposite ends.
+  3. **The reap's final `waitpid(pid, 0)` is still unbounded**, and SIGKILL does not help a child in uninterruptible sleep (D state — plausible under the gate's shared log directory on a loaded disk). Rare and inherited, but "bounded reap" is bounded only against killable states; one contract clause would keep the wording honest.
+
+  SEAT RECORD: kimi CLI (Kimi Code CLI), §F2 adjudication re-fire — file-reading seat, read-only (Read/Grep/Glob/`wc` only, no gates, nothing executed); adjudicated against the working tree (HEAD a11eaac + v2 edits), `diff539_4files.v2.patch`, `diff539_gate.v2.patch`; F6/F7/F8/F11 self-reviewed as this seat's own pass-2 findings; table-2 measurements taken as inlined (artifacts' presence corroborated, contents not re-run).
+
+To resume this session: kimi -r session_ab76cc84-0498-4852-9151-ad8f6feb889a

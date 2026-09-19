@@ -1,0 +1,143 @@
+**VERDICT LINE FIRST.** Fix is member 4 (value kept, exit removed, comment faithful to the inlined datasheet lines 6913-6915 and 6924); the +0x18c bridge is structurally sound (timer fold does not cover 0x18c, so `ldr r7,[r0,#396]` reaches `case IRQ_ENABLE_CLEAR` read unmodified); the seven ACCEPT rows cover the documented behavior; 11/12 mutants killed with (j) honestly disclosed as not-covered. **One latent encoding concern:** every load/store the diff shows as `ldr/str rN,[rX,#imm]` and `ldrh fp,[sl,#8]`-preceded-by-`add` is encoded with the **register-offset** bit pattern (0xE5 / 0xE5D0 / 0xE580 — I=0), not the **immediate** pattern (0xE7 / 0xE5D0 still I=0 for ldrb — only the ldrh+add pair escapes because the add is a real data-processing-immediate). The disassembly text says immediate. The probe passes 19/19 only if gxemul ignores the I bit in execution, OR if the prologue sets r8/r12 to the magic values that make the register-offset equivalent (r8=0x31 for the +0x188/+0x18C accesses; r8=8 and r12=12 for the DATA+8/DATA+12 loads — and r8 cannot be both 0x31 and 8 at different points without an intervening set, which is not in the diff). I cannot settle which from the packet. **READ** for the inlined datasheet and the post-edit function; **REASONED** for everything else; **NOT CHECKABLE** for the I-bit behaviour and for the prologue's r8/r12 initialisation.
+
+---
+
+## 1. PREMISE AUDIT (as stated, against the inlined text)
+
+**P-1. Fix is exactly member 4.** ✓ READ. The hunk at `src/devices/dev_footbridge.c` lines 585-593 (post-edit view, section 5) keeps `odata = d->irq_enable;`, deletes `fatal(... ENABLE SET? ...)` and `exit(1)`, and adds a six-line comment quoting the datasheet. No latch, no message, no extra return. The comment quotes lines 6913-6915 ("read-only ... can only be changed by writing to the EnableSet and EnableClear registers") and 6924 ("Reset value: 0"). Both lines are inlined verbatim. The comment is faithful.
+
+**P-2. The `+0x18c` bridge reaches `case IRQ_ENABLE_CLEAR`'s read branch unmodified.** ✓ REASONED. The fold at lines 507-510 applies `relative_addr &= ~0x060` and computes `timer_nr = (relative_addr >> 5) & 3`. The fold is gated by `relative_addr >= TIMER_1_LOAD && relative_addr <= TIMER_4_CLEAR`. The brief states the timer fold is `[0x300, 0x36C]`. 0x18c = 396 < 0x300 = 768, so the fold does not fire. The existing `case IRQ_ENABLE_CLEAR` is reached today at 0x18c (it carries fatal+exit before and after the fix), which is direct evidence the fold does not cover 0x18c. The K instruction's timer_nr computation would yield garbage if the fold fired, but the fold does not fire. ✓
+
+**P-3. The K row in each of the three probes now requires the text AND exit 1.**
+- `footbridge_sites_probe.py` line 562: `k_ok = any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1`. ✓
+- `fbpending_drain_probe.py` lines 670-176: `K["status"] == "HOST-DIED" and K["saw"] and K.get("exit") == 1`. ✓
+- `fbpending_witness.py` lines 389-396: `K["status"] == "HOST-DIED" and K["saw_fatal"] and K.get("exit") == 1`. ✓
+
+**P-4. `close()` drain-then-reap.** ✓ REASONED. The new `close()` writes `quit\n`, drains through EOF bounded by 5 s, closes the master, then `waitpid`s and unpacks exit/signal. No hang state I can construct: if the child exits on EOF, `rd()` returns empty and the loop breaks; if the child is already dead, the same; if the child is killed by the master close (SIGHUP), `waitpid` returns the signaled status and the code captures it. `survived(a) = a["status"] == "SURVIVED" and a.get("exit") == 0` is strictly tighter than the old `a["status"] == "SURVIVED"`. On a healthy run both pass; on a signaled run the new check fails where the old passed. **The witness probe's `run_witness` return dict now carries `exit=` and `signal=`; every consumer I can find in the diff uses `survived()` (which reads `exit`) or prints `a.get("exit")` / `a.get("signal")`.** No consumer I can see is broken by the added keys.
+
+**P-5. Arm E register mapping.**
+- E0 → r7, E1 → r1, E2 → r2, E3 → r9, E6 → fp (r11, via `add sl,r0,#0x180` + `ldrh fp,[sl,#8]`), E5 → ip (r12). The dump reads r0-r9 plus sl/fp/ip via `REGNAME = {10:"sl", 11:"fp", 12:"ip"}`. ✓
+- **Clobber check:** E2's `ldr r9,[r4,#12]` sets r9 = Q; E3's `ldrb r9,[r0,#392]` then **overwrites** r9 with the byte read. Row E3 checks the final value of r9 = 0x02. ✓ (The brief's "Values land in r7,r1,r2,r9,fp,ip" glosses this; the check is on the post-sequence dump, which is correct.)
+- **EC1/EA1 are the right controls:** EC1 checks r5 == 0x11223344 (RAM round-trip; planted at DATA), EA1 checks r6 == 0x1011 (VENDOR_ID). Neither r5 nor r6 is touched by the E sequence. ✓
+
+**P-6. Gate regexes.**
+- `^(  arm |C[0-9]|A[0-9]|I1|K1|D1|E[A-Z]?[0-9])` matches `  arm `, C0-C9, A0-A9, I1, K1, D1, E0-E9, EA0-EZ9. The current set (EC1, EA1, E0-E6) all match. E10+ would not (the `[0-9]` is single-digit), but there is no E10+ in the probe. ✓
+- `^E[0-6] .*ok$` matches E0..E6 with trailing "ok". E4's print line is `"E4   arm E: no footbridge diagnostic, exit 0            status=SURVIVED exit=0 fatals=0 ok"` — matches. ✓
+- `^E0 .*got=0x00000000 .*ok$` — `row()` formats with `got=0x%08x`, so got=0x00000000. ✓
+- `^E2 .*got=0x60002002 .*ok$` — P|Q = 0x60002002. ✓
+
+**P-7. Citation replacements.** The replaced anchors (`case VENDOR_ID`, `case TIMER_1_VALUE`, `case IRQ_ENABLE_CLEAR`, `TIMER_x_LOAD write arm`, `DEVICE_TICK's \`> 0\` test`, `the unbounded callback increment`, `pending_timer_interrupts[4]`, `the \`= 0\` store under \`!(idata & TIMER_ENABLE)\``) are each unique in the file as shown in section 5. ✓ REASONED.
+
+**P-8. Line endings.** The diff for all four files shows content hunks only — no `\ No newline at end of file` markers, no `GIT binary patch`, no CRLF/LF indicators. ✓ READ.
+
+**P-9. Encoding — latent concern.** Every load/store in the E arm and K arm labelled with an immediate offset (`ldr r7,[r0,#392]` = 0xE5907188, `str r8,[r0,#392]` = 0xE5808188, `str r8,[r0,#396]` = 0xE580818C, `ldrb r9,[r0,#392]` = 0xE5D09188, `ldr r9,[r4,#12]` = 0xE594900C, `ldr r8,[r4,#8]` = 0xE5948008) decodes, bit-by-bit, to **register offset (I=0)**, not immediate (I=1). The standard immediate encoding for `LDR r7,[r0,#0x188]` is 0xE7907188 (I=1). For the accesses to land at +0x188 / +0x18C, the probe needs either (a) gxemul to ignore the I bit in execution, or (b) r8 = 0x31 and r12 = 12 at the relevant points. The ldrh path (`add sl,r0,#0x180` + `ldrh fp,[sl,#8]`) is clean because the add is a real data-processing-immediate (0xE280AD06 = `add sl,r0,#0x180`, verified). **The probe passes 19/19 in the post-fix base; this is consistent with gxemul-specific behaviour, but I cannot settle the mechanism from the packet.** The brief's own claim "the register dump (`reg`) names r10-r12 `sl`,`fp`,`ip` (`cpu_arm.h` ARM_REG_NAMES)" implies a standard ARM disassembler, which would print `ldr r7,[r0,+r8,LSL#3]` for 0xE5907188 — not `ldr r7,[r0,#392]`. **Flag this as the most material finding; the probe's `step_and_check` would catch it if the disassembler disagreed with the planted text, but the table shows step_and_check passing 19/19, which is only consistent if either the disassembler or the executor is non-standard.** NOT CHECKABLE from packet alone — settle by running `gxemul -E debug` on one planted word and reading the disassembly line.
+
+---
+
+## 2. Q1 ANSWERS
+
+**(a)** Yes. Member 4 exactly; comment faithful to the inlined datasheet.
+
+**(b)** Bridge sound. KILL_LOAD's offset (0x18C) is outside the timer fold, so it reaches `case IRQ_ENABLE_CLEAR` read. All three K rows now require `exit == 1` plus the text. (See P-2, P-3.)
+
+**(c)** No hang state I can construct. `survived()` is strictly tighter and breaks no consumer I can find in the diffs. (See P-4.)
+
+**(d)** Register mapping is correct on the post-sequence dump. EC1 (r5) and EA1 (r6) survive the E sequence. (See P-5.)
+
+**(e)** Regexes match the probe's print format and the current row set. (See P-6.)
+
+**(f)** All replaced construct names are unique. (See P-7.)
+
+**(g)** No CRLF change in the diff. (See P-8.)
+
+---
+
+## 3. Q2 — TWELVE PLUS SIX WEAKENINGS
+
+For each, the row that reds first.
+
+| # | Weakening | Row(s) that red | Notes |
+|---|---|---|---|
+| (m) | `odata = d->irq_enable ^ 0x2000` | E0, E1 (and downstream) | E0: 0 ^ 0x2000 = 0x2000 ≠ 0. E1: P ^ 0x2000 = 0x0002 ≠ P. |
+| (n) | `odata = ~d->irq_enable` | E0 | ~0 = 0xFFFFFFFF ≠ 0. |
+| (o) | P/Q RAM words not planted | E1, E2, E3, E5, E6 | E1/E2/E5 read the wrong value; E3/E6 derive from the wrong register. EC1/EA1/E0/E4 survive (don't depend on P/Q). |
+| (p) | K word left at +0x188 in ONE probe | K1 in that probe | On fixed code, +0x188 returns `d->irq_enable` without dying. |
+| (q) | close() reaps but K ignores exit | K1 is **partially vacuous** | Old predicate verifies HOST-DIED but not exit 1; the new predicate (`K.get("exit") == 1`) closes the gap. Not vacuous on a healthy run (K does exit 1); vacuous against a SIGHUP-killed child. |
+| (r) | `if (len == 4) odata = d->irq_enable;` | E3, E6 | E3 (byte) and E6 (halfword) get 0, not 0x02 / 0x2002. |
+
+**Q2 verification of the twelve in the table (section 3):**
+- (a)(b)(f)(l) → HOST-DIED at E0, 10/19 pass. ✓ (l): the guard fires on bit 30 (set in P|Q = 0x60002002), so E2 dies; everything before E2 completes but the `reg` dump after a death captures nothing, so EC1/EA1/E0/E1 also red.
+- (c)(d) → value rows red (E1..E6); 14/19 pass. ✓
+- (e) → E4 reds only; 18/19 pass. ✓ (fatal kept, exit dropped: arm E reaches E5 with no diagnostic to trip E4's "no footbridge diagnostic" check — wait, fatal IS kept, so E4 SHOULD red. ✓)
+- (g) → E2 + E5 red; 17/19. ✓ (mask to low 16: E2 reads 0x2002 ≠ 0x60002002; E5 reads 0 ≠ Q after Clear.)
+- (h) → E2 + E3 + E6 red; 16/19. ✓ (`|=`→`=`: after E2 the register holds Q, not P|Q; E3 reads 0x00; E6 reads 0x0000.)
+- (i) → E5 red only; 18/19. ✓ (`&= ~` → `&=`: Clear becomes `&= P`, leaves (P|Q)&P = 0x2002, not Q.)
+- (j) → 19/19 pass, disclosed. ✓
+- (k) → K1 red only; 18/19. ✓ (CLEAR read no longer exits; K survives.)
+
+---
+
+## 4. Q3 — FLOOR AND CONTRACT
+
+**(a)** Pre-fix red. ✓ prefix_HEAD = 10/19 FAIL (9 reds: EC1, EA1, E0, E1, E2, E3, E6, E5, E4).
+
+**(b)** Verbatim reinstatement killed. ✓ mutant (a) = 10/19 FAIL, same red pattern.
+
+**(c)** Identity rows. ✓ base_fixed = 19/19 PASS.
+
+**(d) DEPENDS-ON closure (from the diff's dominating predicates):**
+- K1 depends on `case IRQ_ENABLE_CLEAR` read branch's `exit(1)` surviving → mutant (k) covers.
+- E0 depends on the SET read returning `d->irq_enable` and `irq_enable == 0` at reset → mutants (c)(d)(m)(n) cover via value.
+- E1/E2 depend on `|=` in SET write → mutant (h) covers.
+- E3/E6 depend on sub-word width being passed through → mutant (r) covers (NOT in the table — gap).
+- E5 depends on `&= ~idata` in CLEAR write → mutant (i) covers.
+- E4 depends on no `fatal()` surviving in arm E → mutant (e) covers.
+- E2/E5 depend on no readback masking → mutant (g) covers.
+- E0 carries the "fatal+exit reinstated" channel → mutants (a)(b)(f)(l) cover (HOST-DIED at E0).
+- **Gap:** width handling is not in the twelve; (r) would add it.
+
+**(e)** Contract is honest: IRQ-line delivery, +0x189..+0x18b, and irq_status/fiq_enable-at-+0x188 are explicitly listed as not-covered. ✓
+
+**(f) Anchor rule (offsets shifted one word, +4):**
+- A1 (r6 = 0x1011 from +0x0) → reads +0x4 (TODO), returns 0. **A1 reds.**
+- A2 (r1 = 0x00345678 from +0x300+4) → reads +0x304 (unknown), default case fatals+continues, returns 0. **A2 reds.**
+- E0..E5 read +0x18C/+0x190 etc. → hit CLEAR read (fatal+exit) or unknown. **E arm dies; EC1/EA1/E0..E6/E4 all red.**
+- K1 → reads +0x18C, still dies. **K1 passes.**
+- The probe would red on almost every device-touching row. The anchor rule holds.
+
+**(g)** (j)'s disclosure is honest. cpu_dyntrans.c suppresses interrupt delivery under `step`; CPSR I/F stay set; no row reads the IRQ line. The contract lists this explicitly. The filed free-running arm with IRQSoft positive control is the correct next step. ✓
+
+---
+
+## 5. Q4 — WHAT THIS ROUND STILL DID NOT DO
+
+- **CHANGELOG block update** for #539 (the section-1 paragraph is the candidate text).
+- **OUTSTANDING_BUGS** entries for: +0x18c bridge (temporary), five invalid-direction declines (next round), SDRAM_BA_MASK/OFFSET pair (separate round), encoding-concern finding from P-9, IRQ-line positive control.
+- **Ledger** entry for #539 with the kill-table counts.
+- **Pass-1 seat record** including the two codex refusals as SEAT FAILURES (noted in section 2's preamble).
+- **Propagation** to `build/`, `build-asan/`, `/tmp/gxsec-build` after the post-fix rebuild (two-part clearance).
+- **gate_arm alone** — the gate changes are in the diff but not exercised by this round.
+- **Retirement of the +0x18c bridge** — fable5 D1 ruling: the round that declines +0x18c must build the harness legs (startup rejection + mid-session `quit` with status reaped) in the same commit. The new `close()` and `survived()` are the harness half of that; the other half (declining +0x18c, retiring the K arm) is not this round.
+- **Five invalid-direction declines** — next round.
+- **SDRAM_BA_MASK / SDRAM_BA_OFFSET** — separate round (member 3 default; member 6 only on warrant).
+- **Mutant (j) positive control** — free-running arm with IRQSoft, filed.
+- **Width-handling mutant (r)** — not in the table; should be added if the encoding concern (P-9) is real, because a width guard that returns 0 for sub-word reads would only be caught by E3/E6, and neither mutant is in the twelve.
+
+---
+
+## 6. ONE DEFECT FOUND WHILE VERIFYING (not in the prompt's defect list)
+
+**P-9 / encoding concern.** The E-arm and K-arm word/byte loads are encoded as register-offset (I=0) but labelled as immediate. The probe's own `step_and_check` should fail on the first such word if the disassembler is standard; the post-fix base shows 19/19 PASS. Two resolutions: (i) gxemul's disassembler is non-standard and prints immediate for register-offset (the probe's text was generated to match); (ii) the prologue sets r8/r12 to magic values. I cannot settle which from the packet. **The single fact that would settle it:** run `gxemul -E debug` on a probe that has just planted `0xE5907188` and read the `step` line — if it says `ldr r7,[r0,#392]`, the disassembler is non-standard; if it says `ldr r7,[r0,+r8,LSL#3]`, the prologue must be setting r8 to 0x31, and `step_and_check` would be failing on a different word than I expect.
+
+A secondary observation: the pre-fix witness's "10 of 19" with reds listed as EC1, EA1, E0, E1, E2, E3, E6, E5, E4 (9 entries) is internally consistent — 10 pass, 9 fail, FAIL verdict.
+
+---
+
+## 7. SEAT RECORD
+
+model: MiniMax-M3 (packet-fed)
+READ: inlined datasheet (`_scratchpad/dc21285.txt` lines 6826-6828, 6913-6915, 6924, 6940, 1651-1653); inlined diff (4 files); post-edit enclosing function (section 5); kill table (section 3); probe print formats.
+REASONED: P-2 (timer fold coverage), P-4 (no hang), P-5 (clobber), P-7 (citation uniqueness), all Q1/Q2/Q3 verdicts that depend on the above.
+NOT CHECKED: P-9 (I-bit behaviour; gxemul disassembler/executor conformance to ARM ARM); the prologue's r8/r12 initialisation in `footbridge_sites_probe.py`; the 744-line stale fork at `_scratchpad/r6pass2_fb/dev_footbridge.c` (the brief says do not read it).
+RAN: nothing. No files opened, no commands executed.
+For file-reading seats: diff md5 = 1ffb5507 (4-file) / e8a7c3f4 (gate), per the brief.

@@ -1,0 +1,128 @@
+VERDICT: Five pending invalid-direction kills confirmed. K1 covers a different, legal access; the claimed coupling is wrong. The stated scope rule supports two rounds: four writes and one read.  
+CODEX_N6_20260911
+
+All four named files opened successfully. This is a static review; no files were written and no probes were executed.
+
+1. **All five listed sites still terminate the host. None is already declined.**
+
+    Each invalid arm calls `fatal(...)` followed by `exit(1)`:
+
+    | Site | Invalid direction | Quoted case and guard | Source |
+    |---|---|---|---|
+    | IRQStatus, `+0x180` | WRITE | `case IRQ_STATUS:` / `if (writeflag == MEM_READ)` | [560](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:560) |
+    | FIQStatus, `+0x280` | WRITE | `case FIQ_STATUS:` / `if (writeflag == MEM_READ)` | [608](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:608) |
+    | IRQRawStatus, `+0x184` | WRITE | `case IRQ_RAW_STATUS:` / `if (writeflag == MEM_READ)` | [569](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:569) |
+    | FIQRawStatus, `+0x284` | WRITE | `case FIQ_RAW_STATUS:` / `if (writeflag == MEM_READ)` | [617](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:617) |
+    | IRQEnableClear, `+0x18c` | READ | `case IRQ_ENABLE_CLEAR:` / `if (writeflag == MEM_WRITE)` | [593](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:593) |
+
+    The cases and guards come from the source; the corresponding numeric offsets are confirmed by [datasheet Table 7-10](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6821). I did not open the excluded register header.
+
+    At `+0x18c`, the invalid-read arm first assigns **`odata = d->irq_enable`**, then terminates. The common read-result copy therefore does not currently execute. A repair that retains that assignment while allowing normal completion introduces the prohibited mask exposure.
+
+    There is a **sixth terminating interrupt-register branch**, the READ arm of [`IRQ_ENABLE_SET`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578), at `+0x188`. **That read is legal:** the address reads IRQEnable and writes IRQEnableSet. It is a separate legal-access defect.
+
+    The five are also not an exhaustive inventory of wrong-direction interrupt accesses: [`FIQ_ENABLE_CLEAR`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:631), at `+0x28c`, already ignores reads and returns the initialized zero through the common tail. IRQSoft/FIQSoft have no explicit cases; their reads reach the diagnostic default arm, which contains no explicit exit.
+
+2. **Both datasheet anchors are correct, but the read-only/write-only distinction is asymmetric.**
+
+    [Line 6886, §7.3.29](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6886), describes IRQStatus/FIQStatus as read-only and computes status from RawStatus AND the corresponding enable register.
+
+    [Line 6901, §7.3.30](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6901), describes IRQRawStatus/FIQRawStatus as read-only, says they always contain identical data, and defines set bits as active sources.
+
+    The additional authority is [Table 7-1](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:4512): its access legend defines R as **“Read only. Writes have no effect.”** WO is defined only as **“Write only.”** The extraction interleaves the table’s columns.
+
+    For EnableClear, [§7.3.33](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6937) specifies what writes do: set data bits clear corresponding enable bits; zero data bits have no effect. It supplies **no read result**.
+
+    Thus:
+
+    | Access | Documented behavior |
+    |---|---|
+    | WRITE to these read-only registers | No effect |
+    | READ from EnableClear | No specified result; no explicit declaration that the result is “undefined” |
+
+    The reserved-bit rule at [6836](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6835) does **not** specify zero for an entire read of a write-only register.
+
+3. **My recommended dispositions differ in announcement policy.**
+
+    | Sites | Recommended member | Reason |
+    |---|---|---|
+    | Four Status/RawStatus writes | **DECLINE(silent)** | The documented operation is a no-op. Preserve register state and interrupt outputs. |
+    | IRQEnableClear read, `+0x18c` | **DECLINE + BOUNDED LATCHED ANNOUNCE** | Decline the read, prevent mask exposure, and disclose the emulator’s choice where the hardware read result is undocumented. |
+
+    For `+0x18c`, I recommend at most one announcement per device instance, identifying the unsupported read and fallback without printing the mask. This announcement policy is a design recommendation, **not a datasheet requirement**.
+
+    The leak obligation is enforced by the returned data, not by the announcement. A bounded message alongside `odata = d->irq_enable` still fails.
+
+    The adjacent legal `+0x188` read belongs to **BACKED ACCEPT**: returning IRQEnable there has explicit datasheet support. It should not be classified with these five.
+
+4. **The datasheet mandates no particular value for a `+0x18c` read.**
+
+    It does not establish zero, the last written value, the live mask, or an “undefined-but-not-the-mask” silicon contract. The prohibition on exposing the mask is the additional requirement in this brief.
+
+    My concrete emulator policy would be **zero, explicitly documented as a fallback under an unknown hardware result**. That uses the existing [`odata = 0` initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:501), omits the mask assignment, and preserves the [common read-result copy](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:754).
+
+    Zero is therefore a proposed implementation decision, **not an answer obtained from the datasheet**. There is no basis here for inventing a last-written backing register or a guest fault. Leaving the caller’s output buffer untouched would also be an incomplete decline; the existing source explicitly warns about that common-tail hazard for TimerClear.
+
+5. **For a fix restricted to the five named sites, no existing probe row changes expectation—not even K1.**
+
+    [`KILL_LOAD`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:103) reads `+0x188`. The actual [K1 predicate](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:289) requires an `ENABLE SET` diagnostic and exit status 1. Neither L nor T accesses one of the five sites.
+
+    The complete existing row expectations after the scoped repair remain:
+
+    | Row | Exact expectation |
+    |---|---|
+    | C1 | L’s `r5 == 0x11223344` |
+    | C2 | L’s CP15 c1 bit 0 is `0` |
+    | C3 | T’s CP15 c1 bit 0 is `1` |
+    | C4 | T’s `r6 != 0x1011`; the current predicate also accepts a missing value |
+    | A1 | L’s `r6 == 0x1011` |
+    | A2 | L’s `r1 == 0x00345678` |
+    | A2b | L’s `r2 == 0x12345678` |
+    | I1 | L status is `SURVIVED`, exit is `0`, and its captured footbridge diagnostics are empty |
+    | K1 | K exit is `1`, and at least one captured diagnostic contains `ENABLE SET` |
+    | D1 | Total disassembly mismatches across L, T and K equals `0` |
+
+    The [gate](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:997) requires one CONTROL=OK marker, one PASS marker, one matching A1 row, one matching A2 row, one successful K1 row, and zero disassembly-mismatch messages. **All those expectations remain unchanged.**
+
+    Consequently, the supplied files establish a gated host-exit witness at **legal `+0x188`**, not a direct witness at any of n6’s five sites. The claimed readiness and mandatory repointing instruction do not match these files.
+
+    If K1 is deliberately repurposed to exercise repaired `+0x18c`, it must cease being a death control. Its new completion expectation would be `SURVIVED`, exit `0`, and no terminating signal, accompanied by the result and execution checks below. The `ENABLE SET` matcher, instruction description, arm label, and gate’s “still dies” description must change together. I1 stays unchanged; D1 still expects zero mismatches, but its instruction description must match the new access.
+
+    A stale K1 causes **two gate checks** to fail: the named K1 check and the aggregate PASS check. Those are two gate dependencies on one failing probe row.
+
+6. **The leak oracle must observe the returned value under independently confirmed nonzero masks.**
+
+    The current probe has two immediate deficiencies for that purpose:
+
+    * It parses [`r7`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:188), but no row asserts its value.
+    * Device initialization [zeros the state](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:768), and the probe’s [BODY](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:92) never programs IRQEnable.
+
+    **Merely repointing the read and asserting `r7 == 0` would therefore be vacuous against the mask-returning variant: its mask would also be zero.**
+
+    For the proposed zero fallback, the required distinctions are:
+
+    | Situation | Discriminating observation |
+    |---|---|
+    | Correct decline | Observed result is zero under each of two distinct, confirmed nonzero masks; enable state remains unchanged |
+    | Returns the live mask | Observed result follows those nonzero masks and fails the zero expectation |
+    | Only tested with mask zero | Setup is insufficient for the leak claim; correct and defective results coincide |
+    | Read never executed | A preloaded destination sentinel remains, execution evidence is missing, or the specific handler-path observation is absent |
+    | Output was never copied back | A poisoned output buffer remains partly or wholly unchanged |
+
+    Mask setup must be checked independently. A controlled device fixture can inspect its initialized state directly. **Do not casually use a guest read of `+0x188` as that setup check: the present implementation still terminates there.**
+
+    Require the actual target instruction, its effective address/direction, successful completion, and evidence that the intended device path handled it. A1/A2 establish other accesses, not this particular read. A fresh-instance decline announcement can provide positive path evidence under the recommended design; it does not replace the returned-value assertion.
+
+    D1 also needs careful interpretation: the stepping loop breaks on failure **before** checking that step’s disassembly. Its current zero-mismatch result does not independently validate the terminal K instruction.
+
+    The relevant confidentiality property is **independence from the enable mask**, not numerical inequality for every mask. A legitimate zero fallback necessarily equals a zero mask. Two distinct nonzero masks distinguish the named direct-mask defect; source review establishes that the return path has no mask dependency generally.
+
+    Survival, unchanged device state, and announcement count cannot detect the mask-copy defect by themselves: that defect can preserve all three channels. Giving one of those rows responsibility for detecting the leak would be vacuous.
+
+7. **Under the stated scope rule, this is two rounds: four writes together, and the read separately.**
+
+    The four read-only writes share the same repair design and detector contract: the access completes, the host continues, and the attempted write causes no architectural state or interrupt-output change.
+
+    `+0x18c` adds a distinct obligation: observing and validating returned data under varying enable state. A repair can satisfy every common completion/no-effect check while still exposing the mask. That establishes the need for an additional oracle.
+
+    A shared helper or one probe script can accommodate all five, but it does not eliminate that additional oracle. The legal `+0x188` read remains a separate BACKED ACCEPT issue, and the current K1 witness belongs to that issue.

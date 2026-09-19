@@ -1,0 +1,123 @@
+# VERDICT: GO-WITH-CHANGES
+
+The core design disposition (**ACCEPT** for the `+0x188` `IRQEnable` read at [`src/devices/dev_footbridge.c:586-590`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L586-L590)) is verified against the DC21285 hardware specification and is correct. The census, register arithmetic, instruction encodings, reachability mechanics, and failability control citations are verified against tree HEAD `408accf`.
+
+However, the brief contains **two internal contradictions** and **an omitted mutant**, and requires specific operational adjustments before landing:
+1. **Contradiction on Q (Section 5 line 467 vs line 472):** Line 467 specifies `Q = 0x60000000` (bits 29 and 30, requiring `0x60002002` at E2) to observe mutant `Q2(l)`. Line 472 reverts to `Q = 0x20000000` (bit 29 only). **Change required:** Standardize on `Q = 0x60000000` (`P | Q = 0x60002002`).
+2. **Omitted mutant `Q2(l)` in Section 6:** Section 5 line 468 cross-references `(Q2(l))` ("a variant that keeps the diagnostic only for bits 30/31 (Q2(l))"), but Section 6's candidate weakenings list ends at `(k)`. **Change required:** Formally include `Q2(l)` in the review record and kill table.
+3. **Mutant `Q2(g)` coverage condition:** The brief asks whether rows E1–E4 plus existing rows catch (g). **They do NOT.** E1–E4 run *after* writing P, so `d->irq_enable != 0`. Mutant `Q2(g)` escapes E1–E4 and is caught **only** by `E0`.
+4. **Mutant `Q2(j)` escape:** Mutant `Q2(j)` escapes **all** proposed rows (E0–E6) because the CPU boots with the CPSR `I` bit set ([`src/cpus/cpu_arm.c:127`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L127)), preventing interrupt dispatch under single-step. This gap must be documented.
+
+---
+
+## 1. Review of Questions (Section 6)
+
+### Q1 — Premise Audit
+
+* **(a) Is ACCEPT right, and should `fiqenableread` join this round?**
+  * **ACCEPT is right:** Intel 278115-001 (`dc21285.txt`) Table 7-10 defines address `0x188` as `Read: IRQEnable, Write: IRQEnableSet`. The register description (Offset 188h/288h) confirms it is a documented, architected read-only register holding the interrupt enable mask. GXemul already computes the exact value in [`dev_footbridge.c:586`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L586) (`odata = d->irq_enable;`) before terminating via `fatal(); exit(1);`. The read is fully legal and expected; declining or faulting would break conforming guest drivers.
+  * **`fiqenableread` should stay separate:** Grepping the fork shows `fiqenableread` ([`OUTSTANDING_BUGS.md:38`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L38)) addresses `+0x288` (`FIQ_ENABLE_SET`), where [`dev_footbridge.c:626-629`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L626-L629) ignores read accesses and returns default `0` without calling `fatal()` or `exit(1)`. `fiqenableread` does **not** kill the host, has no host-death witness, and carries no failability control. Joining it violates the one-halt/one-site reopening scope of Campaign `n6` Round 1.
+
+* **(b) Is `+0x100` a sound TEMPORARY control?**
+  * **Yes.** `SDRAM_BA_MASK` is defined as `0x100` in [`src/include/thirdparty/dc21285reg.h:140`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L140).
+  * In [`src/devices/dev_footbridge.c:709-713`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L709-L713), reading `0x100` unconditionally logs `fatal("[ footbridge read from sdram_ba_mask ]\n")` and calls `exit(1)`.
+  * The instruction `ldr r7, [r0, #256]` encodes to `0xE5907100` (condition `0xE`, load word `0x59`, base `r0`, dest `r7`, offset `0x100` / 256).
+  * When stepped in `footbridge_sites_probe.py`, `fbpending_drain_probe.py`, and `fbpending_witness.py`, it exercises the identical MMU-off physical access at `0x42000100`, emits `sdram_ba_mask`, and exits with code 1.
+
+* **(c) Are P (bits 1, 13) and Q (bit 29 or 29+30) inert on `-E cats`?**
+  * **Yes.** In [`src/devices/dev_footbridge.c:810-831`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L810-L831), 32 interrupt lines are created, initialized to 0. Bit 1 is `IRQ_SOFTINT` ([`dc21285reg.h:298`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L298)), asserted only by writes to `+0x190`. Bit 13 is `IRQ_XCS_L1` ([`dc21285reg.h:310`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L310)). Bit 29 is `IRQ_MASTER_ABORT` and Bit 30 is `IRQ_TARGET_ABORT` ([`dc21285reg.h:326-327`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L326-L327)). None are asserted during the cold debugger probe run.
+  * Therefore, `d->irq_status & (P | Q)` remains `0`, and [`dev_footbridge.c:584`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L584) calls `INTERRUPT_DEASSERT(d->irq)`.
+  * **If an interrupt were asserted:** On ARM, the CPSR reset state has `ARM_FLAG_I` set ([`src/cpus/cpu_arm.c:127`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L127)), so GXemul's dyntrans engine ([`src/cpus/cpu_dyntrans.c:208`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L208)) will not deliver it. If interrupts were unmasked, the PC would branch to the IRQ vector at `0x18`, hijacking control flow and failing disassembly checks on all subsequent single-steps.
+
+* **(d) Tree-wide dependency on `ENABLE SET`:**
+  * Exhaustive repository search confirms that outside historical `regress/artifacts/` logs and metadata records ([`tools/pipeline/ledger.json`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json), [`tools/pipeline/matrix.html`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/matrix.html)), the string `ENABLE SET` appears **only** in:
+    * [`src/devices/dev_footbridge.c:588`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L588)
+    * [`regress/footbridge_sites_probe.py:48, 103, 291`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L48)
+    * [`regress/fbpending_drain_probe.py:227, 562`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L227)
+    * [`regress/fbpending_witness.py:74, 196, 445`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L74)
+  * No gate scripts, hygiene checks, or boot-log allowlists grep for or depend on `ENABLE SET`.
+
+* **(e) Binding `waitpid` status in drain and witness kill arms:**
+  * **Yes, bind them.** Currently, `fbpending_drain_probe.py:405` and `fbpending_witness.py:353` invoke `os.waitpid(self.pid, 0)` in `close()` and discard the status.
+  * Binding `waitpid` to assert `WIFEXITED(st) and WEXITSTATUS(st) == 1` ensures the kill arm verifies an actual `exit(1)` rather than an unhandled crash signal (e.g. `SIGSEGV`).
+  * On surviving arms, GXemul cleanly exits 0 upon receiving `quit\n` (as already proven by `footbridge_sites_probe.py:290` `L["exit"] == 0`). Binding `exit == 0` on surviving arms does not break any existing row.
+
+---
+
+### Q2 — Candidate Weakenings & Mutant Score
+
+| Mutant | Description | Caught? | First Red Row | Mechanism |
+| :--- | :--- | :--- | :--- | :--- |
+| **(a)** | Delete `odata = d->irq_enable;` | **Yes** | **E1** | `odata` stays `0`; E1 reads `0` instead of `P` (`0x00002002`). |
+| **(b)** | `odata = d->irq_status;` | **Yes** | **E1** | `irq_status` is `0`; E1 reads `0` instead of `P`. |
+| **(c)** | `odata = d->irq_status & d->irq_enable;` | **Yes** | **E1** | Value is `0`; E1 reads `0` instead of `P`. |
+| **(d)** | `odata = d->fiq_enable;` | **Yes** | **E1** | `fiq_enable` is `0`; E1 reads `0` instead of `P`. |
+| **(e)** | Keep `fatal()`, drop only `exit(1)` | **Yes** | **E4** (or **I1**) | Host survives but emits diagnostic; caught by `E4` (and `I1` via `not L["fatals"]`). |
+| **(f)** | Reinstate `fatal()+exit(1)` only when `len != 4` | **Yes** | **E3** | `E3` performs byte read `ldrb` (`len == 1`); triggers `len != 4`, killing host at E3. |
+| **(g)** | Reinstate only when `d->irq_enable == 0` | **Conditional** | **E0** only (**Missed by E1–E4**) | E1 writes P before reading, so E1–E4 always see `irq_enable != 0`. **Only E0** reads prior to any write and catches this mutant. |
+| **(h)** | Write arm `|=` becomes `=` | **Yes** | **E2** | E2 writes Q; with `=`, P is lost and readback returns `Q` instead of `P \| Q`. |
+| **(i)** | Fix lands, controls NOT moved | **Yes** | **K1** | Arm K reading `0x188` survives; K1 fails (`exit != 1`), breaking `gate_arm.sh:1099`. |
+| **(j)** | Write assert condition becomes `status \| enable` | **NO** | **ESCAPES** | Calling `INTERRUPT_ASSERT(d->irq)` sets `irq_asserted = 1`, but CPU has `ARM_FLAG_I` set; no interrupt is taken and no row observes IRQ line. |
+| **(k)** | Read deletion applied to `+0x18c` (`IRQ_ENABLE_CLEAR`) | **NO** | **ESCAPES** | E5 writes to `+0x18c` and reads `+0x188`. No row reads `+0x18c`. `+0x18c` is a DECLINE site reserved for Round 2. |
+| **(l)** | Reinstated only for bits 30/31 (`d->irq_enable & 0xC0000000`) | **Yes** | **E2** (if `Q = 0x60000000`) | If Q includes bit 30 (`0x60000000`), E2 triggers the fatal/exit and reds. If Q is `0x20000000`, it escapes. |
+
+---
+
+### Q3 — Option-Set Completeness
+
+* The option set (DELETE, DECLINE, DECLINE+LATCHED ANNOUNCE, ACCEPT, FAULT, BACKED ACCEPT, IMPLEMENT) is complete.
+* **ACCEPT** is uniquely appropriate.
+* **FAULT** is synthetically possible on ARM in GXemul (`arm_exception(cpu, ARM_EXCEPTION_DATA_ABT)` via [`src/cpus/memory_arm.c:273`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L273)), but is architecturally **wrong** for a documented readable register. Real DC21285 silicon never aborts on reads of `IRQEnable`.
+* **BACKED ACCEPT** / **IMPLEMENT** are unnecessary: the backing variable `d->irq_enable` is already fully implemented, maintained by set/clear registers, and active in interrupt evaluation.
+
+---
+
+### Q4 — Order of the Campaign & Long-Term Failability
+
+* **ACCEPT first is sound:** Moving the three failability controls to `+0x100` (`SDRAM_BA_MASK`) requires a single-instruction change (`0xE5907100`) and preserves the 1-instruction kill delta across all three probes.
+* **Long-term failability when all 8 halts are eliminated:** Once Round 2 removes the seven DECLINE halts, `dev_footbridge.c` will contain zero guest-reachable exits. The three probes will require a non-exit failability control:
+  * In `footbridge_sites_probe.py`, failability is already partly anchored by value controls (Arm T negative control `C4`, `A1` signature `0x1011`, `C1` RAM readback).
+  * The permanent replacement for the kill arm should be a **differential mutation leg** or an access to an unmapped physical address that induces a bus decline/fault, rather than relying on core-logic emulator exits. Building this in Round 2 rather than Round 1 avoids premature redesign of the test harness.
+
+---
+
+## 2. Cited Claims vs. Source Verification Table
+
+Every factual assertion in [`brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_005103/brief_sent.md) verified against `GXEMUL-SEC`:
+
+| Brief Citation | Cited Claim | Source File & Line Evidence | Verification Status |
+| :--- | :--- | :--- | :--- |
+| **Sec 1, L32-36** | `DEVICE_ACCESS(footbridge)` has 8 guest-reachable `exit(1)` sites | [`src/devices/dev_footbridge.c:565, 574, 589, 604, 613, 622, 712, 737`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L565-L737) | **CONFIRMED** (exact 8 lines) |
+| **Sec 1, L32-33** | Footbridge mapped at physical `0x42000000` on `-E cats` | [`src/machines/machine_cats.c:63-64`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L63-L64) | **CONFIRMED** |
+| **Sec 1, L68-70** | `+0x188` computes `odata = d->irq_enable;` then fatal+exit | [`src/devices/dev_footbridge.c:586-590`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L586-L590) | **CONFIRMED** |
+| **Sec 2, L79-82** | Census: 10 live `exit(1)` (8 in access, 2 in `DEVINIT` at 841, 877) | [`src/devices/dev_footbridge.c:841, 877`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L841); `tools/pipeline/exit_census.py` | **CONFIRMED** (verified via `exit_census.py`) |
+| **Sec 2, L82-84** | Timer fold window is `[0x300, 0x36C]`; `IRQ_ENABLE_SET` is `0x188` | [`src/include/thirdparty/dc21285reg.h:335, 375, 390`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L335) | **CONFIRMED** |
+| **Sec 2, L85-87** | Boot translation table maps only low 256 MB | [`src/cpus/cpu_arm.c:239-255`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L239-L255), called at [`machine_cats.c:131`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L131) | **CONFIRMED** |
+| **Sec 2, L91-94** | Sites probe checks text + exit 1; drain & witness discard `waitpid` | [`regress/footbridge_sites_probe.py:291`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L291); [`fbpending_drain_probe.py:405`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L405); [`fbpending_witness.py:353`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L353) | **CONFIRMED** |
+| **Sec 2, L97-98** | `SDRAM_BA_MASK` is `+0x100`, word `0xE5907100`, fatal at 711-712 | [`src/include/thirdparty/dc21285reg.h:140`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L140); [`src/devices/dev_footbridge.c:711-712`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L711-L712) | **CONFIRMED** |
+| **Sec 4, L380-396** | Kill pair in sites probe (`KILL_LOAD`, lines 103, 290-291) | [`regress/footbridge_sites_probe.py:103, 290-291`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L103) | **CONFIRMED** |
+| **Sec 4, L398-401** | `gate_arm.sh` K1 grading check | [`regress/gate_arm.sh:1098-1099`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1098-L1099) | **CONFIRMED** |
+| **Sec 4, L404-423** | `fbpending_drain_probe.py` kill word & check | [`regress/fbpending_drain_probe.py:226, 562, 659`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L226) | **CONFIRMED** |
+| **Sec 4, L427-448** | `fbpending_witness.py` kill word & check | [`regress/fbpending_witness.py:195, 445, 588`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L195) | **CONFIRMED** |
+| **Sec 5, L469-471** | Reserved bits 0, 20, 21, 26; Timers 4-7; ISA line 10 | [`src/include/thirdparty/dc21285reg.h:297-323`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L297-L323); [`src/devices/dev_footbridge.c:835`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L835) | **CONFIRMED** |
+| **Sec 5, L477-479** | CHANGELOG #220 record precision | [`CHANGELOG.md:18810`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L18810) | **CONFIRMED** |
+
+---
+
+## 3. Standing Licence: Findings & Anomalies Found During Verification
+
+1. **Section 5 Internal Contradiction (Line 467 vs 472):**
+   * Line 467 states: `"and Q becomes 0x60000000 (bits 29 AND 30) so E2 wants 0x60002002: a variant that keeps the diagnostic only for bits 30/31 (Q2(l)) is otherwise observed by nothing."`
+   * Line 472 states: `"Q = 0x20000000 (bit 29, received master abort). Is that choice safe on this machine? (Q1c)"`
+   * **Resolution:** Q must be set to `0x60000000` to prevent mutant `(l)` from escaping.
+2. **Missing Mutant `Q2(l)` in Section 6:**
+   * Line 468 explicitly cites `(Q2(l))`, but Section 6 only lists `(a)` through `(k)`. Mutant `(l)` must be formally added to the Q2 review set.
+3. **Stale Line Numbers in Existing Probe Comments:**
+   * [`regress/footbridge_sites_probe.py:49`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L49) and [`regress/fbpending_witness.py:74, 196`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L74) cite `dev_footbridge.c:495-497` and `dev_footbridge.c:492-497`.
+   * Due to intervening timer commits (#432, #442, #474), the current site is at `587-590`. When migrating the probes to `+0x100`, these comments should point to `711-712`.
+
+---
+
+## FINAL VERDICT
+
+**GO-WITH-CHANGES** (Proceed with implementation after resolving the Q/E2 definition to `0x60000000`, incorporating mutant `Q2(l)`, and mandating row `E0` for mutant `Q2(g)`).

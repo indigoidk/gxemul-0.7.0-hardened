@@ -1,0 +1,134 @@
+VERDICT: REVISE THE BRIEF. The IRQEnable read fix is supported, the proposed narrow-read values are correct, and the control moves are statically valid. E6 needs explicit ordering, and the brief misclassifies the SDRAM reads.
+
+**READ — repository check:** HEAD is `408accf780daeb53d04b661a463c88de7c339831`. The requested device, header, machine, CPU, and probe files have no differences from HEAD. `gate_arm.sh` has an unrelated existing addition; its footbridge section matches HEAD. The brief’s quoted enclosing function matches **261/261 quoted lines**.
+
+**NOT CHECKED:** execution of the proposed rows or moved controls. This was a read-only source review; nothing was edited, built, or run.
+
+For Part 1, the distinction between the current tree and the proposed change is essential. **READ:** today, every read reaching `IRQ_ENABLE_SET` assigns `odata`, prints `ENABLE SET`, and exits before the common tail. Thus, on literal unmodified HEAD, no such load completes; E0 would terminate a sequential session immediately. The following verdicts evaluate the brief’s intended behavior **after deleting that diagnostic and exit**. See [dev_footbridge.c:578](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578) and [the common tail:754](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:754).
+
+| Row | Verdict | REASONED expected result and READ basis |
+|---|---|---|
+| E0 | **RIGHT** | `0x00000000`. Initialization zeroes the entire device state; no preceding enable write changes it. `dev_footbridge.c:768–769,586`. |
+| E1 | **RIGHT** | `0 \| P = 0x00002002`. The write ORs into `irq_enable`; the read copies that field. `dev_footbridge.c:580,586`. |
+| E2 | **RIGHT** | `P \| Q = 0x60002002`. The second write accumulates rather than replaces. `dev_footbridge.c:580`. |
+| E3 | **RIGHT**, before E5 | `0x00000002`, zero-extended. The byte returned is the low byte of `odata`. Width evidence below. |
+| E4 | **RIGHT** | Removing both statements removes this diagnostic. Merely deleting `exit(1)` would fail E4. `dev_footbridge.c:587–589`. |
+| E5 | **RIGHT** | `(P \| Q) & ~P = 0x60000000`, exactly Q. `dev_footbridge.c:593–599`. |
+| E6 | **DEPENDS on placement** | After E2 **before E5**, `0x00002002` is correct. After E5, it is **`0x00000000`**, because Q’s low halfword is zero. “After E2” alone does not exclude the intervening clear. |
+
+**READ — width path:** ARM initializes the guest as little-endian at [cpu_arm.c:123](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:123). The load/store template selects `datalen = 1` for a byte and `datalen = 2` for a halfword at [cpu_arm_instr_loadstore.c:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:103). It passes that length to `memory_rw` at line 233. The aligned address `0x42000188` is unchanged by the alignment operation at line 229.
+
+The device passes `len` unchanged to `memory_writemax64`. Its little-endian loop writes `buf[i] = data & 255`, then shifts right: [memory.c:99](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:99). ARM then loads `data[0]` for `ldrb`, or `data[0] + (data[1] << 8)` for unsigned `ldrh`: [cpu_arm_instr_loadstore.c:240](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:240).
+
+**REASONED:** `0x60002002` therefore produces `[02]` or `[02,20]`, yielding precisely E3’s `0x02` and E6’s `0x2002`. The helper selects the **low byte(s) of `odata`**; it has no address argument for selecting a lane. At this aligned little-endian register address, those also correspond to the low-address lanes. This does not establish adjacent-address behavior: the device switches on the exact offset, without a general register-alignment rewrite.
+
+For Part 2, **READ:** every operation writing `irq_status` in this file is:
+
+- Initialization: `memset(d, 0, ...)`, [dev_footbridge.c:769](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:769).
+- Assertion callback: `d->irq_status |= interrupt->line`, [dev_footbridge.c:378](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:378).
+- Deassertion callback: `d->irq_status &= ~interrupt->line`, [dev_footbridge.c:397](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:397).
+
+The assertion callback can mathematically set any supplied mask. It is incorrect to describe the selected bits as intrinsically impossible for that function. The relevant restriction is **machine wiring**.
+
+**READ:** interrupt handlers are registered with `line = (uint32_t)1 << i`; local timer connections use bits 4–7, and CATS’ ISA cascade uses bit 10: [dev_footbridge.c:812](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:812), lines 817, 829–835. The default DEC21143 PCI device uses bit 18 on CATS: [bus_pci.c:1222](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:1222). The IDE route goes through the ISA cascade at `bus_pci.c:495–509`; the VGA construction adds no interrupt connection at `bus_pci.c:435–445`. There is no implemented `IRQ_SOFT` switch arm.
+
+**REASONED:** stock CATS wiring can set **0/4 selected bits** `{1,13,29,30}`. Starting with the fresh enable state used here, E1/E2 cannot assert the CPU IRQ line. Enabling the software-interrupt bit does not itself generate a software interrupt.
+
+Even if the line asserted, the read still returns `irq_enable`, independently of `irq_status`. Moreover, interrupt delivery is explicitly suppressed during single-step: [cpu_dyntrans.c:204](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204). **REASONED:** that assertion would not change an E-row read value under the stated session conditions.
+
+**READ:** CLEAR performs `d->irq_enable &= ~idata` and recomputes the IRQ output at [dev_footbridge.c:593](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:593). Hence E5 preserves Q exactly.
+
+There is **no reserved-bit mask before `|=`**. `idata` comes directly from `memory_readmax64` at lines 504–505; the destination is `uint32_t` at line 81. That type imposes register width, not a reserved-bit filter. The little-endian input assembly is at [memory.c:55](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:55).
+
+The datasheet’s source labels are, **READ**, quoted below. The bit-1 quotation is confined to the source columns because the extracted “How Cleared” column is displaced.
+
+| Bit | Datasheet quotation |
+|---|---|
+| 1 | “1        Soft interrupt” — [dc21285.txt:6846](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6846) |
+| 13 | “13     xcs_l[1]                    Specific to external device” — [line 6867](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6867) |
+| 29 | “29     Received master abort       W1C bit in PCI status register” — [line 6882](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6882) |
+| 30 | “30     Received target abort       W1C bit in PCI status register” — [line 6883](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6883) |
+
+**REASONED:** if all selected bits were masked off on SET, E1, E2, E3, E5, and E6 would return zero and fail: **5/7 rows**. E0 and E4 would remain satisfied: **2/7 rows**.
+
+For Part 3, these are the current controls, **READ**:
+
+| Probe | Current kill word and instruction text | Diagnostic and scoring predicate |
+|---|---|---|
+| Sites | `0xE5907188`, `ldr r7,[r0,#392]`, at program offset `0x2c`: [line 103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:103) | K1 requires an `ENABLE SET` match and exit code 1: [line 291](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:291). Normal exit is checked when decoding status at lines 208–212. |
+| Drain | Same word/text, program offset `0x5c`: [line 226](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:226) | `saw = "ENABLE SET" in s.buf` at line 562 is reporting only. Row K requires K `HOST-DIED` and D `SURVIVED`: [lines 658–660](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:658). |
+| Witness | Same word/text, program offset `0x48`: [line 195](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:195) | `seen = "ENABLE SET" in s.buf` at line 445 is reporting only. Row K requires K `HOST-DIED` and A `SURVIVED`: [lines 587–590](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:587). |
+
+**REASONED — supplied replacement:** `0xE5907100` decodes as condition AL, immediate addressing, pre-indexed, addition, word transfer, no writeback, load, `Rn=r0`, `Rd=r7`, displacement `0x100`. Thus the supplied `ldr r7,[r0,#256]` is correct. The decoder obtains the displacement from `iword & 0xfff`: [cpu_arm_instr.c:4718](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4718), especially lines 4734–4736.
+
+**READ → REASONED — route to the exit:**
+
+- CATS maps the device at `0x42000000`: [machine_cats.c:63](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c:63).
+- MMU-off translation preserves the 32-bit address: [memory_arm.c:54](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:54).
+- The mapping length is `0x400`; registration uses `DM_DEFAULT`, with no direct RAM backing: `dev_footbridge.c:56,798–800`.
+- Memory dispatch subtracts the device base and passes the offset and length to the handler: [memory_rw.c:494](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:494), lines 587–589. Neither alignment, page splitting, nor device-end truncation changes this aligned word access.
+- `SDRAM_BA_MASK` is `0x100`: [dc21285reg.h:140](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:140). It is outside `[0x300,0x36c]`; the timer fold at `dev_footbridge.c:507–509` is the only handler offset rewrite.
+- The read branch has no further condition: it prints `[ footbridge read from sdram_ba_mask ]` and calls `exit(1)`: [dev_footbridge.c:709](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:709).
+
+Therefore the replacement reaches the specified exit for **3/3 controls**, statically, under the supplied preconditions.
+
+**Sites K1 needs its expected diagnostic changed; its exit-status requirement stays 1.** Also update the instruction’s expected disassembly and descriptive `0x188` labels. The gate’s predicate already asks only for successful K1, so that predicate remains valid: [gate_arm.sh:1098](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1098). Its adjacent explanatory comment would become stale.
+
+**READ:** the brief’s status-discard correction is accurate. Drain’s [Session.close:403](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:403) calls `waitpid` through a lambda and discards its return. Witness’s [Session.close:342](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:342) discards it directly at line 353.
+
+**REASONED — minimal status-binding changes would touch:**
+
+| Probe | Required locations |
+|---|---|
+| Drain | `Session.close`, lines 403–409, to retain/return the raw wait status; `run_kill`, lines 550–564, to carry it into the result; `main`’s K predicate, lines 658–660, to require `WIFEXITED && WEXITSTATUS == 1` alongside the existing death predicate. |
+| Witness | `Session.close`, lines 342–355; `run_kill`, lines 432–448; `main`’s K predicate, lines 587–590, for the equivalent requirement. |
+
+Binding status alone still permits an unrelated normal exit with code 1. Requiring the already-recorded replacement diagnostic would also bind the result to the intended device complaint; that would strengthen the current drain/witness predicates.
+
+For surviving arms, propagate the status through drain’s `run_arm:496–501` and `run_drainenc:545–547`, and witness’s `run_witness:420–429` and `run_encodings:464–467`, then incorporate normal exit 0 into their success predicates.
+
+**REASONED:** ordinary debugger shutdown should satisfy exit 0: `quit` sets shutdown flags at [debugger_cmds.c:1629](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1629), and normal main completion returns 0 at [main.c:821](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:821). This does not change the guest’s expected values. It does change the acceptance predicate by rejecting late abnormal deaths that currently escape observation.
+
+**NOT CHECKED:** whether any previously passing execution would change verdict. The discarded statuses cannot establish that, and these close routines use a fixed delay before closing the PTY rather than confirming completed shutdown.
+
+For Part 4, **READ:** [dev_footbridge.c:626](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:626) updates `fiq_enable` only on writes and then breaks. On reads, `odata` remains its initial zero from line 501 and reaches the common tail. There is no diagnostic or exit.
+
+The datasheet states:
+
+> “288h                                            FIQEnable     FIQEnableSet”
+
+— **READ**, [dc21285.txt:6831](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6831).
+
+> “This read-only register is used to mask the interrupt input sources and defines which active sources  
+> generate an interrupt request to the SA-110 on nIRQ/nFIQ. The value of this register can only be  
+> changed by writing to the EnableSet and EnableClear registers.”
+
+— **READ**, [dc21285.txt:6913](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6913). The field table identifies `IRQEnable/FIQEnable` as readable at line 6919 and gives reset value zero at line 6924.
+
+**REASONED:** the FIQ read is a different defect class under the distinction in the question: a missing value assignment producing a successful wrong answer, versus IRQ’s computed answer discarded by process termination. It therefore **does not qualify under that narrow reopening rule**, despite sharing the device and reusable value-checking machinery. Existing E-rows do not access the FIQ register.
+
+A pinning row is: from fresh FIQ state, word-write `P=0x00002002` to `+0x288`, then word-read `+0x288`; expect **`0x00002002`**, whereas today’s code returns **zero**. This uses the same exact-value oracle as E1; it needs no new IRQ/FIQ-line oracle. A reset-only zero read would not expose the defect.
+
+For Part 5, these are the **FALSE** premises or internally inconsistent specifications I found:
+
+1. **“The remaining sites are all invalid-direction accesses.”** [Brief:33–35](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/n6/brief_n6_design_BUILT.md:33), repeated at lines 74–75 and 99. The datasheet marks the SDRAM mask and offset fields R/W at [dc21285.txt:5853](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:5853) and [5906](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:5906). After the proposed IRQ fix, **5/7 remaining handler exits** concern invalid directions; **2/7 concern documented SDRAM reads**. Their missing model implementation does not make their read direction illegal. This does not invalidate `+0x100` as a temporary existing control.
+
+2. **“The probes’ MMU-on access aliases to RAM.”** [Brief:85–87](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/n6/brief_n6_design_BUILT.md:85). The translation to `0x02000000` is correct, but **3/3 probes specify `-M 32`**, so this address is at the end of configured RAM. The zero comes from the out-of-RAM fill at `memory_rw.c:662–683`; `memory.c:605–606` suppresses the warning/halt for these nearby addresses. The expected zero remains correct; its stated mechanism is wrong. The boot-table mapping is directly visible at `cpu_arm.c:239–255`.
+
+3. **Q is not consistently specified.** [Brief:467](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/n6/brief_n6_design_BUILT.md:467) sets Q to `0x60000000`, but lines 472–473 and Q1(c), line 489, retain `0x20000000`/bit 29 alone. The supplied request resolves this in favor of `0x60000000`; the document still needs that resolution applied throughout.
+
+4. **The referenced mutation specification is incomplete/stale.** Brief line 468 references **Q2(l)**, but [Q2:499–512](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/n6/brief_n6_design_BUILT.md:499) ends at `(k)`. Its row-domain heading also still names E1–E4 rather than the expanded proposal. The newly referenced conditional diagnostic therefore has no defined Q2 entry to check.
+
+These remain **UNSETTLED / NOT CHECKED**:
+
+- **E6’s executable placement.** Brief lines 463–466 put both the clear and halfword read “after E2.” The clear at `dev_footbridge.c:595` makes their relative order decisive. The source supports the value, but the supplied brief does not supply the completed sequence or its observation points.
+- **Preservation of observed results after adding shutdown-status checks.** The discard sites cited above prevent that conclusion from existing result dictionaries. Normal exit 0 is the expected successful behavior, not a measured result of this review.
+- **External history and bookkeeping assertions.** Archive counts, panel history, filing status such as `fiqenableread`, record corrections, and a tree-wide dependency census are not established by these source reads. Relevant brief references include lines 11, 77, 91–96, 477–478, 485, and 493–494.
+
+The exit census itself is **READ and confirmed**: **8/10 live exits** are in the access handler at lines `565,574,589,604,613,622,712,737`; **2/10** are construction paths at `841,877`.
+
+The additional question is: **How will E6 actually encode and verify its access to `+0x188`?** The ARM halfword decoder extracts only an 8-bit immediate at [cpu_arm_instr.c:4347](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4347), so a direct immediate `ldrh [r0,#392]` is unavailable. No E6 instruction sequence was supplied to check.
+
+For the premise denominator, I counted **17 named premise groups**: **10/17 confirmed**—source transcription, exit census, IRQ read contract, mapping/decode, SET/CLEAR behavior, pattern validity/inertness, IRQ independence during stepping, current control predicates, replacement-control route, and FIQ behavior—plus the **4/17 refuted** and **3/17 unsettled** groups listed above. Control verification below is static.
+
+**Rows checked 7/7; premises refuted 4/17; controls verified 3/3.**

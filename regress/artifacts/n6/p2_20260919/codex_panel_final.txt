@@ -1,0 +1,210 @@
+
+codex
+GO-WITH-CHANGES
+
+The device edit is sound. Acceptance should wait for bounded process teardown and corrections to the gate’s coverage claims.
+
+**Q1 — premise audit**
+
+- **(a) READ — yes.** [dev_footbridge.c, `IRQ_ENABLE_SET`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578) preserves `odata = d->irq_enable`, removes the diagnostic and terminating call, and retains the common readback tail. No latch or replacement behavior was added. The supplied datasheet supports the comment: line 6826 identifies the read register as `IRQEnable`; lines 6913–6915 say “read-only” and “can only be changed by writing to the EnableSet and EnableClear registers”; line 6924 specifies “Reset value: 0.” Initialization also zeroes the field.
+
+- **(b) READ — yes, 3/3 probes bind complaint text and exit 1.** The register header defines CLEAR at `0x18c`; the timer fold starts at `0x300`. The supplied instruction therefore reaches the CLEAR read branch unchanged. Sites requires `ENABLE CLEAR` in its captured diagnostics and exit 1. Drain and witness additionally require `HOST-DIED` and a surviving comparison arm. This establishes a temporary control against the current implementation; write-only hardware semantics do not justify terminating the host.
+
+- **(c) READ + REASONED — teardown remains unbounded.** Both [drain `Session.close`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:404) and [witness `Session.close`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:347) eventually call blocking `waitpid(pid, 0)`. A child that does not process `quit` and survives terminal closure—for example, with SIGHUP ignored or blocked—can hang the probe indefinitely. EOF also does not prove process termination. The five-second deadline bounds the drain loop only.
+
+  Bound reaping too, with explicit timeout/failure reporting and controlled termination of the child. **Something else found:** [sites teardown](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:261) still snapshots diagnostics, sleeps 0.3 seconds, closes the master without draining, and blocks in `waitpid`. That inherited race now affects E4 as well as existing checks.
+
+  Exit information is present on 6/6 explicit session-return paths in each pending probe. For normally completed healthy sessions, `survived()` preserves verdicts; a delayed healthy shutdown that the harness terminates can now fail, so unconditional equivalence would be too strong. Both statically located `run_witness` callers—2/2—consume fields by name; their existing data accesses tolerate the added keys. Consumers outside the permitted scope are **NOT CHECKED**.
+
+- **(d) READ — register assignments are correct.** The six value rows use `E0→r7`, `E1→r1`, `E2→r2`, `E3→r9`, `E6→fp`, `E5→ip`; E4 uses status, exit and diagnostics. BODY’s r1/r2 values are deliberately replaced. Q in r9 is consumed before the byte read overwrites it. P remains in r8 through the CLEAR write. EC1/r5 and EA1/r6 survive unchanged. E6 precedes clearing P. Thus 7/7 rows inspect their intended evidence. EC1/EA1 are suitable controls, enforced through the final conjunction. Minor premise correction: the parser omits r4; it does not literally parse every register r0–r9.
+
+- **(e) READ frozen gate patch + REASONED — formatting matches; exclusivity claims do not.** All 3/3 added checks accept the current padded output. However:
+  - `E[A-Z]?[0-9]` also accepts prefixes such as `EZ7`, `E9` and `EA10`. Use an explicit, delimited E alternative such as `E(C1|A1|[0-6])[[:space:]]`.
+  - Seven matching green lines do not establish seven distinct required IDs. A duplicate can replace a missing row. Require each E0–E6 ID exactly once if that is the promised safeguard.
+  - E2 proves SET accumulation. CLEAR occurs later and is checked by E5; the E2 gate label incorrectly attributes CLEAR coverage to E2.
+
+- **(f) READ — qualified anchors are unique; not every replacement is a literal unique anchor.** Each of these has exactly one match: `case VENDOR_ID:`, `case IRQ_ENABLE_CLEAR:`, `case TIMER_1_LOAD:`, `case TIMER_1_VALUE:`, `DEVICE_TICK(footbridge)`, the `pending_timer_interrupts[timer_nr] = 0` store, and `DC21285_VENDOR_ID`: 7/7 qualified anchors. Each named timer callback also has one definition. But `TIMER_x_LOAD` appears in three comments, and `idata & TIMER_MAX_VAL` appears three times, including two different stores. Prefer `case TIMER_1_LOAD`, write branch. The literal `!(idata & TIMER_ENABLE)` has zero matches; the cited store is in the equivalent `else`. Historical unbounded callbacks are correctly identified as historical. **Something else found:** the sites A2 output still says `by :548` at line 332.
+
+- **(g) READ — CRLF preserved.** HEAD has 727/727 CRLF line endings; the working file has 748/748. Both have zero lone LF endings. The four-file working diff matches the frozen patch.
+
+**Q2 — candidate weakenings**
+
+These are static deductions checked against the supplied table, not fresh executions. For deaths in E, **EC1 is the first printed red row** because registers are dumped only after the entire arm survives; the triggering operation is identified separately.
+
+| Candidate | Result and first red row |
+|---|---|
+| (a) Verbatim reinstatement | Caught: EC1; death at E0. |
+| (b) Termination only at zero | Caught: EC1; death at E0. |
+| (c) Return `irq_status` | Caught: E1. E2/E3/E6/E5 also fail. |
+| (d) Return `fiq_enable` | Caught: E1, with the same failures as (c). |
+| (e) Diagnostic retained | Caught: E4 only. |
+| (f) Sub-word reads terminate | Caught: EC1; first offending access is E3. |
+| (g) Low-16-bit mask | Caught: E2; E5 also fails. |
+| (h) SET assignment replaces OR | Caught: E2; E3/E6 also fail. |
+| (i) CLEAR uses `&= idata` | Caught: E5 only. |
+| (j) Assert condition uses OR | **Escapes.** |
+| (k) CLEAR read termination removed | Caught: K1 in sites; the pending probes’ K predicates also reject survival. |
+| (l) Termination for bits 30/31 | Caught: EC1; death at E2 because bit 30 is set. |
+| (m) XOR `0x2000` | Caught: **E0 first**, returning `0x2000` instead of zero. E1/E2/E6/E5 also fail. |
+| (n) Complement enable | Caught: **E0 first**, returning `0xffffffff`. All six value rows fail. |
+| (o) P/Q planting omitted | Caught: E1 in the specified cold-stub setup; both words remain zero. E2/E3/E6/E5 also fail. |
+| (p) One K instruction remains at `+0x188` | Caught by that probe’s K1 or K. Other probes can remain green. Sites D1 also fails if the instruction word and expected mnemonic disagree. |
+| (q) K ignores exit status | **Escapes the healthy run.** The affected K row loses discrimination against wrong-status termination. Restoring the complete old pending-probe predicate also loses complaint binding. |
+| (r) Sub-word reads silently return zero | Caught: E3 first; E6 also fails. E4 remains green. |
+
+For (o), **READ**: `memory_paddr_to_hostaddr` supplies zeroed RAM, and CATS setup does not initialize these scratch words. This conclusion assumes the specified four-byte stub.
+
+The packet reports 11/12 original mutants caught. The additional cases yield 5/6 predicted catches, with (q) escaping. Their execution is **NOT CHECKED**.
+
+**Q3 — floor and contract**
+
+**(a)–(c): supported by the supplied results, with a qualification.** Pre-fix and verbatim reinstatement each have 10/19 green and 9/19 red rows; fixed has 19/19 green. These satisfy the stated behavioral checks if the reported runs are accepted. The 10/10 pre-existing rows remain green on the fixed base.
+
+The failed E rows are still *printed*; their register evidence is absent. Also, D1’s zero mismatches does not prove complete execution: sites breaks before recording a mismatch when a step loses its prompt. Its “every planted word” wording overstates the check, and landing pads are deliberately excluded.
+
+**(d) READ — dependencies are enforced at the final verdict, but adverse-path coverage is incomplete.** The relevant cells are:
+
+| Consumer | Required dependencies |
+|---|---|
+| Sites E claims | EC1 and EA1; six value equalities; E4 requiring `SURVIVED`, exit 0 and no captured diagnostic; D1; remaining global controls. Individual E value rows do not independently include these controls. |
+| Sites K1 / I1 | K complaint and exit 1; separately, L must survive, exit 0 and produce no captured diagnostic. |
+| Drain `ranD` / `ranX` | `SURVIVED`, exit 0 and output present. These feed R0, L1/L2, P and backlog interpretation. |
+| Drain R0 / E / T / K | R0 additionally requires surviving T/E and a non-startup-failed K; E requires survival plus encoding/coverage checks; T requires survival plus signature inequalities; K requires host death, complaint, exit 1 and surviving D. |
+| Witness `ranA` / `ranE` / `ranT` | Survival and exit 0, plus the prescribed sample counts for A/T. |
+| Witness R0 / E / T / K | R0 combines those arms; E adds encoding/coverage checks; T adds signature inequalities; K requires host death, complaint, exit 1 and surviving A. |
+
+At the device boundary, exercised cells are SET reads of width 4 in states `0/P/P|Q/Q`, widths 1 and 2 in state `P|Q`, SET writes of P/Q, CLEAR write of P, and CLEAR read in all 3/3 controls. The common `MEM_READ` tail supplies the values. Neither outcome of the CPU-line assertion logic is observed as an IRQ-delivery result.
+
+The supplied successful runs do **not** establish failure-path closure for ignored quit, surviving terminal closure, wrong exit status, signal termination, or missing complaint. Those measurements remain necessary for the changed helper contract.
+
+**(e) READ + REASONED — disclosure is useful, but narrow the claims.** The contract explicitly excludes IRQ observation and nonzero byte lanes. However, bit 31 is zero in every tested enable value: the table does not establish independent bit-31 coverage. Likewise, the selected patterns cannot establish coverage of every mask or bit permutation. Describe the tested patterns and predicates explicitly.
+
+**(f) REASONED — A1 is the anchor.** Shifting guest device offsets forward one word makes the vendor read access `+0x04`, which returns zero. A1 fails. A2 alone is insufficient: shifting LOAD to VALUE can retain the same masked write/read result.
+
+**(g) READ + REASONED — (j)’s escape is honest for the shipped rows.** [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204) suppresses delivery during stepping. ARM’s asserted-line flag is internal and absent from the register dump; IRQ_STATUS reads input status and enable, not that flag. The subsequent correct CLEAR write also deasserts the line before the final dump. I found no missed observable channel in the shipped sequence. “No possible step-based test” would be broader than this evidence supports.
+
+**Q4 — remaining work**
+
+The following completion claims are **NOT CHECKED** within the permitted scope:
+
+- CHANGELOG, OUTSTANDING_BUGS, ledger and pass-1 seat record, including the two stated refusals recorded as SEAT FAILURES.
+- Propagation, rebuilding and the prescribed two-part clearance for all 3/3 destinations: `build/`, `build-asan/`, `/tmp/gxsec-build`.
+- A serialized `gate_arm` run against the intended rebuilt binary.
+- The claimed `est/` equality and exclusion of the unrelated #529 gate hunk from the eventual commit.
+
+Additional work identified here: bounded teardown across all three probes; explicit failure-path measurements through their actual helpers; distinct E-row membership checks; correction of the E2 label, stale A2 citation and overbroad coverage wording.
+
+Name the missing measurements concretely: delayed normal shutdown; a child that ignores quit and survives terminal closure; complaint followed by wrong exit status or a signal; exit 1 without complaint. These establish that teardown terminates and that each K predicate rejects the wrong evidence.
+
+The deferred IRQ-delivery test also needs a working positive control: IRQSoft currently has no handler case. The bridge retirement, five direction checks and separate SDRAM round remain deferred work.
+
+One scope deviation: an initial recursive search unintentionally returned matching Python source lines under `regress/artifacts/`. No artifact logs were opened, and those matches were not used as evidence.
+
+Seat record: **GPT-6 / Codex**; **READ** full brief, both frozen patches, four-file working diff and cited SEC source/probe anchors; **RAN: nothing**—no builds, probes, mutants or gates. Frozen MD5s verified: `1ffb5507ac4cb180e082620c13636347` / `e8a7c3f4c88d424dbe7c3323b1816437`; both match the inlined patches.
+
+GO-WITH-CHANGES
+tokens used
+146,415
+GO-WITH-CHANGES
+
+The device edit is sound. Acceptance should wait for bounded process teardown and corrections to the gate’s coverage claims.
+
+**Q1 — premise audit**
+
+- **(a) READ — yes.** [dev_footbridge.c, `IRQ_ENABLE_SET`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578) preserves `odata = d->irq_enable`, removes the diagnostic and terminating call, and retains the common readback tail. No latch or replacement behavior was added. The supplied datasheet supports the comment: line 6826 identifies the read register as `IRQEnable`; lines 6913–6915 say “read-only” and “can only be changed by writing to the EnableSet and EnableClear registers”; line 6924 specifies “Reset value: 0.” Initialization also zeroes the field.
+
+- **(b) READ — yes, 3/3 probes bind complaint text and exit 1.** The register header defines CLEAR at `0x18c`; the timer fold starts at `0x300`. The supplied instruction therefore reaches the CLEAR read branch unchanged. Sites requires `ENABLE CLEAR` in its captured diagnostics and exit 1. Drain and witness additionally require `HOST-DIED` and a surviving comparison arm. This establishes a temporary control against the current implementation; write-only hardware semantics do not justify terminating the host.
+
+- **(c) READ + REASONED — teardown remains unbounded.** Both [drain `Session.close`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:404) and [witness `Session.close`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:347) eventually call blocking `waitpid(pid, 0)`. A child that does not process `quit` and survives terminal closure—for example, with SIGHUP ignored or blocked—can hang the probe indefinitely. EOF also does not prove process termination. The five-second deadline bounds the drain loop only.
+
+  Bound reaping too, with explicit timeout/failure reporting and controlled termination of the child. **Something else found:** [sites teardown](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:261) still snapshots diagnostics, sleeps 0.3 seconds, closes the master without draining, and blocks in `waitpid`. That inherited race now affects E4 as well as existing checks.
+
+  Exit information is present on 6/6 explicit session-return paths in each pending probe. For normally completed healthy sessions, `survived()` preserves verdicts; a delayed healthy shutdown that the harness terminates can now fail, so unconditional equivalence would be too strong. Both statically located `run_witness` callers—2/2—consume fields by name; their existing data accesses tolerate the added keys. Consumers outside the permitted scope are **NOT CHECKED**.
+
+- **(d) READ — register assignments are correct.** The six value rows use `E0→r7`, `E1→r1`, `E2→r2`, `E3→r9`, `E6→fp`, `E5→ip`; E4 uses status, exit and diagnostics. BODY’s r1/r2 values are deliberately replaced. Q in r9 is consumed before the byte read overwrites it. P remains in r8 through the CLEAR write. EC1/r5 and EA1/r6 survive unchanged. E6 precedes clearing P. Thus 7/7 rows inspect their intended evidence. EC1/EA1 are suitable controls, enforced through the final conjunction. Minor premise correction: the parser omits r4; it does not literally parse every register r0–r9.
+
+- **(e) READ frozen gate patch + REASONED — formatting matches; exclusivity claims do not.** All 3/3 added checks accept the current padded output. However:
+  - `E[A-Z]?[0-9]` also accepts prefixes such as `EZ7`, `E9` and `EA10`. Use an explicit, delimited E alternative such as `E(C1|A1|[0-6])[[:space:]]`.
+  - Seven matching green lines do not establish seven distinct required IDs. A duplicate can replace a missing row. Require each E0–E6 ID exactly once if that is the promised safeguard.
+  - E2 proves SET accumulation. CLEAR occurs later and is checked by E5; the E2 gate label incorrectly attributes CLEAR coverage to E2.
+
+- **(f) READ — qualified anchors are unique; not every replacement is a literal unique anchor.** Each of these has exactly one match: `case VENDOR_ID:`, `case IRQ_ENABLE_CLEAR:`, `case TIMER_1_LOAD:`, `case TIMER_1_VALUE:`, `DEVICE_TICK(footbridge)`, the `pending_timer_interrupts[timer_nr] = 0` store, and `DC21285_VENDOR_ID`: 7/7 qualified anchors. Each named timer callback also has one definition. But `TIMER_x_LOAD` appears in three comments, and `idata & TIMER_MAX_VAL` appears three times, including two different stores. Prefer `case TIMER_1_LOAD`, write branch. The literal `!(idata & TIMER_ENABLE)` has zero matches; the cited store is in the equivalent `else`. Historical unbounded callbacks are correctly identified as historical. **Something else found:** the sites A2 output still says `by :548` at line 332.
+
+- **(g) READ — CRLF preserved.** HEAD has 727/727 CRLF line endings; the working file has 748/748. Both have zero lone LF endings. The four-file working diff matches the frozen patch.
+
+**Q2 — candidate weakenings**
+
+These are static deductions checked against the supplied table, not fresh executions. For deaths in E, **EC1 is the first printed red row** because registers are dumped only after the entire arm survives; the triggering operation is identified separately.
+
+| Candidate | Result and first red row |
+|---|---|
+| (a) Verbatim reinstatement | Caught: EC1; death at E0. |
+| (b) Termination only at zero | Caught: EC1; death at E0. |
+| (c) Return `irq_status` | Caught: E1. E2/E3/E6/E5 also fail. |
+| (d) Return `fiq_enable` | Caught: E1, with the same failures as (c). |
+| (e) Diagnostic retained | Caught: E4 only. |
+| (f) Sub-word reads terminate | Caught: EC1; first offending access is E3. |
+| (g) Low-16-bit mask | Caught: E2; E5 also fails. |
+| (h) SET assignment replaces OR | Caught: E2; E3/E6 also fail. |
+| (i) CLEAR uses `&= idata` | Caught: E5 only. |
+| (j) Assert condition uses OR | **Escapes.** |
+| (k) CLEAR read termination removed | Caught: K1 in sites; the pending probes’ K predicates also reject survival. |
+| (l) Termination for bits 30/31 | Caught: EC1; death at E2 because bit 30 is set. |
+| (m) XOR `0x2000` | Caught: **E0 first**, returning `0x2000` instead of zero. E1/E2/E6/E5 also fail. |
+| (n) Complement enable | Caught: **E0 first**, returning `0xffffffff`. All six value rows fail. |
+| (o) P/Q planting omitted | Caught: E1 in the specified cold-stub setup; both words remain zero. E2/E3/E6/E5 also fail. |
+| (p) One K instruction remains at `+0x188` | Caught by that probe’s K1 or K. Other probes can remain green. Sites D1 also fails if the instruction word and expected mnemonic disagree. |
+| (q) K ignores exit status | **Escapes the healthy run.** The affected K row loses discrimination against wrong-status termination. Restoring the complete old pending-probe predicate also loses complaint binding. |
+| (r) Sub-word reads silently return zero | Caught: E3 first; E6 also fails. E4 remains green. |
+
+For (o), **READ**: `memory_paddr_to_hostaddr` supplies zeroed RAM, and CATS setup does not initialize these scratch words. This conclusion assumes the specified four-byte stub.
+
+The packet reports 11/12 original mutants caught. The additional cases yield 5/6 predicted catches, with (q) escaping. Their execution is **NOT CHECKED**.
+
+**Q3 — floor and contract**
+
+**(a)–(c): supported by the supplied results, with a qualification.** Pre-fix and verbatim reinstatement each have 10/19 green and 9/19 red rows; fixed has 19/19 green. These satisfy the stated behavioral checks if the reported runs are accepted. The 10/10 pre-existing rows remain green on the fixed base.
+
+The failed E rows are still *printed*; their register evidence is absent. Also, D1’s zero mismatches does not prove complete execution: sites breaks before recording a mismatch when a step loses its prompt. Its “every planted word” wording overstates the check, and landing pads are deliberately excluded.
+
+**(d) READ — dependencies are enforced at the final verdict, but adverse-path coverage is incomplete.** The relevant cells are:
+
+| Consumer | Required dependencies |
+|---|---|
+| Sites E claims | EC1 and EA1; six value equalities; E4 requiring `SURVIVED`, exit 0 and no captured diagnostic; D1; remaining global controls. Individual E value rows do not independently include these controls. |
+| Sites K1 / I1 | K complaint and exit 1; separately, L must survive, exit 0 and produce no captured diagnostic. |
+| Drain `ranD` / `ranX` | `SURVIVED`, exit 0 and output present. These feed R0, L1/L2, P and backlog interpretation. |
+| Drain R0 / E / T / K | R0 additionally requires surviving T/E and a non-startup-failed K; E requires survival plus encoding/coverage checks; T requires survival plus signature inequalities; K requires host death, complaint, exit 1 and surviving D. |
+| Witness `ranA` / `ranE` / `ranT` | Survival and exit 0, plus the prescribed sample counts for A/T. |
+| Witness R0 / E / T / K | R0 combines those arms; E adds encoding/coverage checks; T adds signature inequalities; K requires host death, complaint, exit 1 and surviving A. |
+
+At the device boundary, exercised cells are SET reads of width 4 in states `0/P/P|Q/Q`, widths 1 and 2 in state `P|Q`, SET writes of P/Q, CLEAR write of P, and CLEAR read in all 3/3 controls. The common `MEM_READ` tail supplies the values. Neither outcome of the CPU-line assertion logic is observed as an IRQ-delivery result.
+
+The supplied successful runs do **not** establish failure-path closure for ignored quit, surviving terminal closure, wrong exit status, signal termination, or missing complaint. Those measurements remain necessary for the changed helper contract.
+
+**(e) READ + REASONED — disclosure is useful, but narrow the claims.** The contract explicitly excludes IRQ observation and nonzero byte lanes. However, bit 31 is zero in every tested enable value: the table does not establish independent bit-31 coverage. Likewise, the selected patterns cannot establish coverage of every mask or bit permutation. Describe the tested patterns and predicates explicitly.
+
+**(f) REASONED — A1 is the anchor.** Shifting guest device offsets forward one word makes the vendor read access `+0x04`, which returns zero. A1 fails. A2 alone is insufficient: shifting LOAD to VALUE can retain the same masked write/read result.
+
+**(g) READ + REASONED — (j)’s escape is honest for the shipped rows.** [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204) suppresses delivery during stepping. ARM’s asserted-line flag is internal and absent from the register dump; IRQ_STATUS reads input status and enable, not that flag. The subsequent correct CLEAR write also deasserts the line before the final dump. I found no missed observable channel in the shipped sequence. “No possible step-based test” would be broader than this evidence supports.
+
+**Q4 — remaining work**
+
+The following completion claims are **NOT CHECKED** within the permitted scope:
+
+- CHANGELOG, OUTSTANDING_BUGS, ledger and pass-1 seat record, including the two stated refusals recorded as SEAT FAILURES.
+- Propagation, rebuilding and the prescribed two-part clearance for all 3/3 destinations: `build/`, `build-asan/`, `/tmp/gxsec-build`.
+- A serialized `gate_arm` run against the intended rebuilt binary.
+- The claimed `est/` equality and exclusion of the unrelated #529 gate hunk from the eventual commit.
+
+Additional work identified here: bounded teardown across all three probes; explicit failure-path measurements through their actual helpers; distinct E-row membership checks; correction of the E2 label, stale A2 citation and overbroad coverage wording.
+
+Name the missing measurements concretely: delayed normal shutdown; a child that ignores quit and survives terminal closure; complaint followed by wrong exit status or a signal; exit 1 without complaint. These establish that teardown terminates and that each K predicate rejects the wrong evidence.
+
+The deferred IRQ-delivery test also needs a working positive control: IRQSoft currently has no handler case. The bridge retirement, five direction checks and separate SDRAM round remain deferred work.
+
+One scope deviation: an initial recursive search unintentionally returned matching Python source lines under `regress/artifacts/`. No artifact logs were opened, and those matches were not used as evidence.
+
+Seat record: **GPT-6 / Codex**; **READ** full brief, both frozen patches, four-file working diff and cited SEC source/probe anchors; **RAN: nothing**—no builds, probes, mutants or gates. Frozen MD5s verified: `1ffb5507ac4cb180e082620c13636347` / `e8a7c3f4c88d424dbe7c3323b1816437`; both match the inlined patches.
+
+GO-WITH-CHANGES

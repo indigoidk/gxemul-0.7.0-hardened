@@ -2679,7 +2679,9 @@
 > breakpoint (catches controlled-PC-into-unmapped that `-p` can't reach); #211 AdEL/AdES no longer clobber
 > Context/EntryHi (BadVAddr only, like silicon); #212 unaligned LL/SC → AdEL/AdES; #213/#214 CONFIG/ENTRYLO1;
 > #215–#217 Alpha/PPC/SH host-crashes → guest faults; #218–#223 OF + footbridge/mp/kn02ba/8253 guest-reachable
-> `exit(1)`s → graceful.
+> `exit(1)`s → graceful.  *[Corrected 2026-09-19 by `#539`: NOT ALL of footbridge's -- #220 removed two of its ten
+> `exit(1)`, eight guest-reachable ones stayed (the `n6` row); `#539` accepted the IRQEnable read, seven remain as
+> `fbdeclinefive` (5) and `fbsdrampair` (2).]*
 > **New deferred (broad device-exit tail):** the same untagged `fatal("…TODO/unimplemented…"); exit(1)` inside
 > many other guest-writable `DEVICE_ACCESS` handlers persists (Fable-A's list: `dev_adb.c`, `dev_clmpcc.c`,
 > `dev_igsfb.c`, `dev_lca.c`, `dev_m8820x.c`, the `dev_pcc2.c` remainder, `dev_mb8696x.c`, `dev_mvme187.c`,
@@ -13931,7 +13933,7 @@ Two adjacent non-width kills are **not** this class: a BADVAL reachable by a *by
 `0x04` to GENCTL (which the alignment rule does not touch), and a BADOFFSET. A third is UNKNOWN
 and was reported as UNKNOWN rather than guessed.
 
-### `n6` footbridge -- the design is done, and an ACCEPT round would RED THE GATE by succeeding
+### `n6` footbridge -- RESOLVED by `#539` (2026-09-19): the IRQEnable read ACCEPTED, the kill control moved to +0x18c -- see the dated block at the end; the design notes below are history
 
 **The title says nine; there are eight.** Three numbers are in circulation and each is right
 about something different: a comment-aware census finds **10** live `exit(`, **2** of which sit
@@ -21814,7 +21816,7 @@ would newly red a closed row: owes a ruling and its own negative controls.
 * FIRE ALL MISSING SEATS on the four stages discharge-awareness exposed: `pcc2c040kill` review (agy; the round shipped as
   `9fa07fe`) and assess (6 seats), `proberowsubset` assess (6), `lcabadval` research (6).
 
-### `n6` assess -- full panel fired by owner decision (2026-09-18, `panel_20260918_133231`)
+### `n6` assess -- full panel fired by owner decision (2026-09-18, `panel_20260918_133231`) -- then SHIPPED as `#539` on 2026-09-19
 All seven missing seats answered: the record defect is real (8 guest-reachable `exit(1)` at `dev_footbridge.c` lines
 565/574/589/604/613/622/712/737; 2 more in DEVINIT).  ACCEPT `+0x188` first (codex, grok, agy) -- but THREE probe arms
 depend on that kill and all must move in the same commit (codex).  deepseek's split, recorded: decline group first.
@@ -21940,3 +21942,63 @@ memory_alpha.c:94: `if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");' -- a
 ### `excvecrecurse` (MED) — cpu_arm.c / cpu_ppc.c (possibly SH, M88K): an exception vector that itself cannot be translated makes the exception routine re-enter pc_to_pointers from inside the failing translation, without bound
 cpu_arm.c / cpu_ppc.c (possibly SH, M88K): an exception vector that itself cannot be translated makes the exception routine re-enter pc_to_pointers from inside the failing translation, without bound -- a predicted host stack overflow
 
+
+## 2026-09-19 (night) — `#539` (`n6`): the footbridge IRQEnable read is ACCEPTED; the kill control moved to +0x18c; the pending probes reap their child
+
+### `n6` -> `#539` (closed): round 1 of the footbridge campaign
+`dev_footbridge.c`'s `case IRQ_ENABLE_SET` READ computed the right value (`odata = d->irq_enable`) and then ended the
+process; IRQEnable 188h is documented read-only, reset 0, changed only via Set/Clear (DC21285 Table 7-10, 7.3.31).
+Option-set member 4: the `fatal()`+`exit(1)` deleted, the value kept, no latch, no message.  Arm E on
+`footbridge_sites_probe.py` (EC1, EA1, E0-E6; 19 rows, gated three ways); the three probes' "the device can still end
+the process" control moved to a READ of `+0x18c` (IRQEnableClear, write-only, 7.3.33) -- a TEMPORARY bridge that the
+decline round retires; `fbpending_drain_probe.py` / `fbpending_witness.py` reap the child's exit status (drain to EOF,
+bounded reap, `HARNESS-KILL`/`HARNESS-CLOSE` labels) and every K row requires the complaint AND exit 1.  Four kill
+tables in a scratch clone: pre-fix RED 10/19; 11/12 mutants killed, (j) ESCAPED as disclosed; x_exit2, y_sigkill and
+z_silentexit each red 3/3 K rows.  **The record sentence this row was opened against is the one at :2681-2682 above**
+("#218-#223 ... footbridge ... guest-reachable `exit(1)`s -> graceful"): corrected in place -- footbridge's ten
+`exit(1)` became eight in #220, seven now; the remaining seven are `fbdeclinefive` (5) and `fbsdrampair` (2).
+
+### `fbdeclinefive` (MED) — the five invalid-direction terminating sites, ONE decline round; retires the +0x18c bridge
+`dev_footbridge.c` at HEAD a11eaac :565, :574, :604, :613, :622 -- writes to read-only status registers, reads of
+write-only registers (Table 7-10).  Starting spec: codex K4's 14-row design minus its SDRAM rows; `+0x18c`'s decline
+must also stop returning `d->irq_enable`.  THIS round builds the durable harness legs in the SAME commit (startup
+rejection through each probe's own launcher; a mid-session `quit` with the status reaped) and retires #539's bridge.
+The datasheet's "nonexistent CSR: zeros are read (no error action is taken)" is the VALUE warrant; the diagnostic is
+policy.  fable5 D1/D4.  (A codex design reading, cxfarm6 q1, was content-flagged; reword or route to grok.)
+
+### `fbsdrampair` (LOW) — SDRAM_BA_MASK / SDRAM_BA_OFFSET reads: documented R/W, write arms discard the value
+HEAD :712, :737.  DECLINE by default (member 3); BACKED ACCEPT only on a warrant -- a guest in the rig set that reads
+them back after writing (0/2 backing fields, 0/2 consumers today; codex M2).  With it: the mask whitelist rejects the
+documented no-window value 0x8ffc0000 (Table 7-7).
+
+### `fbirqdeliverywitness` (MED) — no row observes the CPU IRQ line; mutant (j) escaped 19/19 and is disclosed
+A FREE-RUNNING arm (vector 0x18, CPSR I cleared, write P to Set, breakpoint, `continue`) with IRQSoft (+0x190)
+IMPLEMENTED as its deterministic positive control -- IRQSoft/FIQSoft have NO case today, so this is coupled to member 7
+for that register.  Opus's arm shape: `regress/artifacts/n6/opus_p1_20260919/OPUS_SUMMARY.md`.
+
+### `fbcsrdecodelanes` (LOW) — non-word-aligned CSR offsets fall to `default:` and return 0; hardware selects by A[10:2]
+`dc21285.txt:1651-1653`.  Measured at +0x189 (Opus, pass 1).  Device-wide; not #539's class.
+
+### `fiqenableread` (LOW) — five facets now, one row (fable5 D3)
+(1) +0x288 read returns 0, not `d->fiq_enable`; (2) +0x28c read returns 0 silently while +0x18c ends the process;
+(3) `fiq_status` is never written while the datasheet requires identical raw status (`:6886`); (4) no FIQ output in the
+struct; (5) FIQSoft +0x290 has no case.
+
+### `fbptymock` (LOW) — the teardown's failure paths a product mutant cannot reach
+An ignored `quit`; a delayed normal shutdown.  A pty PROTOCOL MOCK supplied as BIN (codex L3's design).  Wrong-status,
+signal and silent-exit deaths ARE measured (tables 2-3).
+
+### `fbm2findings` (LOW, records) — codex M2's further footbridge findings, none blocking #539
+TimerValue writable though read-only; control reserved bits retained; periodic CLEAR reload; timer reset values; UART
+flag meanings; +0x140/+0x20c unbacked; `irq_asserted` not updated by the enable arms.
+
+### `cxlaunchempty` (LOW, harness) — `tools/cxlaunch.sh` scores an EMPTY brief's 57-byte reply "seat answered"
+Four heredoc-written briefs came out 0 bytes and were launched (2026-09-19 01:25).  Refuse `sz < 200`; require a verdict
+line.  Its wall detector also missed a walled job whose multi-MB `.err` carried NUL bytes: `grep` called it BINARY and
+dropped the usage-limit lines (the peer session's `grep -a` diagnosis, #544 control C18).  Joins #544.
+
+### `brieftplstale` (LOW, records; never-commit file) — the template's tree warning names copies that do not exist
+`./src/` and `_archive/` copies of `dev_footbridge.c` are absent; `_scratchpad/r6pass2_fb/` (744-line stale fork copy)
+is the live hazard.  Derive with the carrier's find/md5 deriver.  §C5 owes: two codex refusals on neutral wording with
+no inlined exit code (the trigger is NOT established), and a file-reading seat's READ cap below the argv cap (the kimi
+CLI stalled on a 64 KB brief).

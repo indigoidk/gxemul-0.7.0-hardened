@@ -1,0 +1,81 @@
+VERDICT: **1 ACCEPT (LOW). 2 REJECT the stated guest-hazard premise; retain corrected latch-isolation coverage work. 3 ACCEPT (LOW), under a new number; prefer an IQ80321 WDC construction oracle.**
+
+**READ:** HEAD is `cdbe7d7`. Review was static and confined to the fork; excluded files were not read. **NOT CHECKED:** execution or the reported mutant scores of **17/17**.
+
+**Row 1 — READ:** The logging premise is correct at default verbosity. [`debugmsg.c:365`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365) computes `ss`, decrements `v` during execution, and increments it during stepping. The early return is at [375](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:375); `fatal()` unconditionally calls `va_debug()` at [384](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384). With `verbose=0`, stepped execution gets `v=0`; free execution gets `v=-1`.
+
+**READ:** The probe launches with `-V`, without `-v` ([probe:104](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:104)). `program()` ends with `step len(insns)` at [213](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:213). The interrupt sessions also execute their C040 stores under `step`: the stores enter `insns` at [453](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:453), and **only afterward** does [479](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:479) issue `continue`. The SH example places its store before the breakpoint and executes it through `continue` ([SH probe:288](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_intprio_probe.py:288), [301](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_intprio_probe.py:301)).
+
+**REASONED:** The channel downgrade therefore leaves **18/18 current oracle outcomes unchanged**. “Free-running” needs the qualification *at default verbosity*; `-v` can expose `debug()` output.
+
+**READ → REASONED:** A free-running GENCTL store needs no host-timer event. MVME187 constructs PCC2 at [machine_mvme88k.c:91](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:91); the byte-write handler stores GENCTL and synchronously calls `reassert_interrupts()` at [dev_pcc2.c:532](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:532). That call directly reaches the C040 announce at [410](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:410).
+
+**REASONED — smallest addition:** One fresh session, with C040 still unlatched:
+
+- Place `ST_B(5, GENCTL)` at `CODE=0x10000`, followed by the existing self-branch.
+- Set `r5=0x04`; add the completion breakpoint at `CODE+4=0x10004`.
+- Execute the store with `continue`.
+- Require actual completion at that breakpoint, normal session termination, and exactly one occurrence of the existing `SAYS` substring.
+
+The current announce is:
+
+```text
+[ pcc2: C040 (MC68040 EIPL) interrupt delivery not implemented; assertion suppressed  (once) ]
+```
+
+**REASONED:** No separate `-q` count variant is necessary to distinguish this specific downgrade. A quiet-specific contract would be additional coverage. **READ:** Simply adding `-q` to this launcher would not provide it: `-V` explicitly disables `-q` at [main.c:529](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:529). Quiet coverage can instead use `quiet on` before `continue` ([debugger_cmds.c:1594](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1594), [debugger.c:849](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:849)).
+
+**Row 2 — READ:** C040 is latched on **`PCC2_W_C040`**, not `PCC2_W_GENCTL_LEN` ([dev_pcc2.c:411](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:411)). The existing pre-dirty row sets only `GENCTL_LEN`, through `ST_H(5, GENCTL)`, before its byte store ([probe:327](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:327)).
+
+**READ:** These are **13/13 named `d->warned` bits**, in enum order ([dev_pcc2.c:140](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:140)). There are **2/2 actual `d->warned |=` sites**: C040 at line 412 and the width helper at line 485. Every `_LEN` entry below reaches that helper only for `MEM_WRITE && len != 1`.
+
+| Bit | Name, prefixed `PCC2_W_` | Register offsets | Every setter/call site in `dev_pcc2.c` |
+|---:|---|---|---|
+| 0 | `GENCTL_LEN` | `02` | [529](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:529) → 485 |
+| 1 | `VECBASE_LEN` | `03` | [540](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:540) → 485 |
+| 2 | `PSCALEADJ_LEN` | `15` | [562](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:562) → 485 |
+| 3 | `TXCTL_LEN` | `16`, `17` | [574](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:574) → 485 |
+| 4 | `TXICR_LEN` | `1a`, `1b` | [595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:595) → 485 |
+| 5 | `SCCERR_LEN` | `1c` | [632](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:632) → 485 |
+| 6 | `SCCICR_LEN` | `1d` | [641](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:641) → 485 |
+| 7 | `SCCTX_LEN` | `1e` | [655](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:655) → 485 |
+| 8 | `SCCRX_LEN` | `1f` | [669](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:669) → 485 |
+| 9 | `SCSIICR_LEN` | `2f` | [689](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:689) → 485 |
+| 10 | `IPL_LEN` | `3e` | [708](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:708) → 485 |
+| 11 | `MASK_LEN` | `3f` | [732](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:732) → 485 |
+| 12 | `C040` | GENCTL C040 selected | [412](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:412), directly |
+
+**READ → REASONED:** Valid byte traffic sets **0/12 other bits**. All **12/12** are width-decline paths. C040 itself is reachable through a legal byte store selecting unsupported delivery. The separate `warned_unimpl` field and function-static warning variables do not belong to this bitset.
+
+The MASK example has an additional problem: MASK is at odd offset `0x3f` ([header:55](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:55)). An m88k halfword store faults before device access ([load/store:169](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:169)). An aligned halfword at IPL selects IPL’s case and sets `IPL_LEN`, not `MASK_LEN`.
+
+**REASONED:** For this guest-store mechanism, **6/12 width bits** are reachable: GENCTL, TxCTL, TxICR, SCCERR, SCCTX and IPL. The remaining **6/12** require the operator path used by the width probe. Thus the claimed ordinary-guest MASK hazard does not support MED severity. Swaps involving the six reachable decline paths remain meaningful regression risks.
+
+**REASONED — disposition and observation:** Strengthen the existing pre-dirty row to cover **12/12 other named bits**. The established operator prelude is at [pcc2_width_probe.py:708](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:708): one debugger `put h` per width block, followed here by the legal C040 guest store. This sets `warned=0x0fff` while leaving C040’s `0x1000` clear.
+
+Require **12/12 preparation declines**, normal completion, and **exactly one C040 announce**; the original presence observation remains `yes`. A swapped latch predicts zero C040 announces. Confined to this pre-dirty session, preparation changes **0/18 existing expected C040-row results**, because the declined writes change no device registers.
+
+MASK-only preparation covers **1/12 alternatives**, or **2/12** when retaining the GENCTL case. It does not close latch isolation.
+
+**Row 3 — READ:** The ordering claim is correct. The path-restricted diff for commit `e16a8b7` confirms #533 appended LANDISK after IQ80321. The current switch has **4/4 explicit cases with breaks**:
+
+| Case | Aux address selection | Case / break in `dev_wdc.c` |
+|---|---|---|
+| `MACHINE_MACPPC` | base `+0x160` | [2099 / 2101](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2099) |
+| `MACHINE_HPCMIPS` | `0x14000386` when base is `0x14000180`; otherwise inherited default | [2102 / 2106](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2102) |
+| `MACHINE_IQ80321` | base `+0x402` | [2107 / 2109](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2107) |
+| `MACHINE_LANDISK` | base `+0x2c` | [2110 / 2121](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2110) |
+
+The fallback is initialized to base `+0x206` at [2095](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2095); there is no `default:` case.
+
+**READ:** “No IQ80321 machine is constructed” is false. [`xscale_inten_probe.py:52`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/xscale_inten_probe.py:52) launches it, and [`gate_arm.sh:1689`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1689) invokes that probe. However, its launch supplies no IDE image. IQ80321 installs the i31244 controller at [machine_iq80321.c:84](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c:84), whose WDC construction is conditional on an IDE disk at [bus_pci.c:700](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:700). **REASONED:** This existing invocation does not exercise the WDC switch.
+
+**REASONED:**
+
+- **Cheaper:** move LANDISK immediately above IQ80321. IQ80321 then becomes last, making removal of its final break harmless. Removing **LANDISK’s** break would instead overwrite `+0x2c` with `+0x402`, which the existing landisk address oracles distinguish ([probe:171](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/landisk_aux_probe.py:171), [179](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/landisk_aux_probe.py:179)). That is the precise fall-through direction.
+- **Sounder; preferred disposition:** add IQ80321 construction coverage **with an IDE fixture**, and inspect `device list`. Require `wdc_altstatus` at base `+0x402`, length `2`. The current construction yields base `0x90000000`, hence aux `0x90000402` ([i80321:455](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:455), [WDC registration:2132](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2132)). Startup survival alone is insufficient.
+- **A loud `default:` is unsuitable:** valid machines use the generic `+0x206` mapping, and the current IQ80321→LANDISK fall-through would stop at LANDISK’s break before reaching it. A helper returning the selected address could remove break dependencies while preserving that fallback.
+
+**NOT CHECKED:** The historical landisk mutant’s measured result. Its discrimination follows statically from the readback oracles. Keep #533 closed and ship this follow-up separately.
+
+**READ → REASONED, integration detail:** The C040 gate explicitly pins **18/18** rows ([gate_arm.sh:1581](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1581)); adding the free-running oracle requires its name and **19/19** expectations. Also, completion must not rely on finding an old prompt: `rd()` searches the accumulated buffer ([probe:116](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:116)). Require the new breakpoint event or a fresh completion-PC response.

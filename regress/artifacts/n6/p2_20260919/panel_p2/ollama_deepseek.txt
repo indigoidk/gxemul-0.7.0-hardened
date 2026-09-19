@@ -1,0 +1,32 @@
+VERDICT: PASS WITH ONE DEFECT — `close()` can block indefinitely in `waitpid()` if the child survives master close; two file-only premises are NOT CHECKABLE from the packet.
+
+**Q1**
+- (a) **READ** from diff lines 578-592 and section 5: the fix is exactly member 4 — `odata = d->irq_enable;` kept, no latch/message. The comment is true against datasheet lines 6913-6915 and 6924: read-only, only changed via Set/Clear, reset 0.
+- (b) **READ/REASONED** from diff and section 5: `0xE590718C` is `ldr r7,[r0,#396]` = +0x18c. The timer fold is gated to [0x300,0x36C], so +0x18c reaches `case IRQ_ENABLE_CLEAR` read branch. All three probes’ K rows now require the `"ENABLE CLEAR"` text and `exit == 1`.
+- (c) **REASONED** — yes, there is a reachable hang state: `close()` drains bounded to 5 s, then closes the master, then calls `waitpid(self.pid, 0)` with no timeout. If the child ignores/does not receive SIGHUP and does not exit, the probe hangs. Whether that occurs in practice depends on gxemul behavior not inlined. `survived()` does not change any existing healthy-run verdict; `run_witness` consumers are unaffected by the added `exit=` field.
+- (d) **READ/REASONED** from diff: the seven rows read r7, r1, r2, r9, fp, ip correctly. EC1/EA1 are the right controls. Full BODY/prologue clobbering cannot be fully settled from the inlined diff, but the packet explicitly states the values land in those registers and r1/r2 are free in arm E.
+- (e) **READ/REASONED** — the three new gate regexes are exact for the stated output format. `E[A-Z]?[0-9]` matches EC1, EA1, E0-E6 and nothing else.
+- (f) **NOT CHECKABLE** from packet — requires grepping the actual file for construct-name uniqueness.
+- (g) **NOT CHECKABLE** from packet — line-ending change cannot be confirmed from the inlined diff.
+
+**Q2**
+- (m) `odata = irq_enable ^ 0x2000` → **E0 reds** (reset read becomes 0x2000).
+- (n) `odata = ~irq_enable` → **E0 reds** (reset read becomes 0xFFFFFFFF).
+- (o) P/Q never planted → **E1 reds** first (readback after Set != P).
+- (p) One probe K left at +0x188 → that probe’s **K row reds** (no death, no `"ENABLE CLEAR"`, exit 0).
+- (q) K row ignores `exit` → the **K rows in fbpending_drain_probe.py and fbpending_witness.py** become vacuous for exit-code changes; footbridge_sites_probe already required `exit == 1`.
+- (r) `if (len == 4) odata = irq_enable;` → **E3 reds first** (byte read returns 0 instead of 0x02); E6 also reds.
+
+**Q3**
+- (a) Yes — pre-fix witness red.
+- (b) Yes — verbatim reinstatement killed.
+- (c) Yes — post-fix base 19/19 green.
+- (d) Dominating predicate cells: in footbridge_sites, EC1/EA1/E0/E1/E2/E3/E6/E5/E4 are dominated by arm E surviving to `reg` dump; K1 dominated by K text/exit. In drain/witness, R0 dominated by `survived(D/X/T/E)` and K not NO-PROMPT; K rows dominated by K status/text/exit and D/A survival; T rows dominated by `survived(T)`.
+- (e) Yes — the contract explicitly lists covered and not-covered cases.
+- (f) **A1 reds** — a one-word offset shift makes VENDOR_ID read hit 0x04, which returns 0, not 0x1011.
+- (g) Honest — no step-visible channel: no row reads IRQ status or CPSR/IRQ, and packet states `cpu_dyntrans.c` suppresses interrupt delivery under `step`.
+
+**Q4**
+Still not done: CHANGELOG block, OUTSTANDING_BUGS, ledger, pass-1 seat record with two codex refusals as SEAT FAILURES, propagation to `build/`, `build-asan/`, `/tmp/gxsec-build`, two-part clearance after rebuild, and `gate_arm` run. Also still pending: the temporary +0x18c bridge, five invalid-direction declines, SDRAM_BA_MASK/OFFSET pair, harness legs, and sub-word decode deviation at +0x189..+0x18b.
+
+Seat record: packet-fed seat; READ inlined diff and enclosing function; RAN nothing; no md5.

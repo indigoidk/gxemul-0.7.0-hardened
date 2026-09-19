@@ -1,0 +1,52 @@
+PRETABLE -- #539 n6 (footbridge IRQ_ENABLE_SET read: ACCEPT, member 4).  Written BEFORE table 1 runs; this file's
+mtime is the order proof.  Tree: GXEMUL-SEC working tree on HEAD a11eaac (dev_footbridge.c unchanged since 408accf).
+Fix: delete fatal()+exit(1) from the `case IRQ_ENABLE_SET` read branch, keep `odata = d->irq_enable`.
+
+SIBLING PARITY.  Sibling of the SET read arm = the CLEAR read arm (`case IRQ_ENABLE_CLEAR`), line-for-line the same
+shape (odata = d->irq_enable; fatal; exit(1)).  Post-diff: SET survives with a value, CLEAR still dies.  The row pinning
+that asymmetry is K1 at +0x18c (the kill arm moved there by this round) -- parity derives the same row D1 chose.
+Sibling on the FIQ side (`case FIQ_ENABLE_SET` read: returns 0, no odata assignment, no exit) is a DIFFERENT class
+(missing value, not a discarded computed value): filed (fiqenableread), no row here, said in the contract.
+
+CLAIM -> ROW.  Added comment sentences asserting an observable consequence:
+  "IRQEnable is read-only ... reset 0"                 -> E0 (reads 0 before any write)
+  "can only be changed by writing to EnableSet/Clear"  -> E1 (Set lands), E2 (Set ORs), E5 (Clear clears)
+  "the exit(1) that followed it is gone"               -> E4 (no diagnostic, exit 0) and the E arm surviving at all
+  sites-probe header "byte and halfword reads return the low lanes (DC21285 3.2, CSR drives D[31:0])" -> E3, E6
+  sites-probe header "K1 reds if the same deletion spills onto the CLEAR read" -> K1 (+0x18c)
+  gate comment "A1's 0x1011 is a MODEL value" -> no row owed; a coupling note for the packed-config round.
+  "no row observes the CPU IRQ line" (contract)         -> explicit no-row sentence, mutant (j) disclosed.
+
+GUARD FIELD vs BODY FIELD.  Predicate dominating the edited lines: the case label (relative_addr == IRQ_ENABLE_SET)
+and `writeflag == MEM_WRITE` (false branch).  Body reads: d->irq_enable only.  Fields the fix DEPENDS ON: irq_enable.
+Operand-swap (d) mutants: the exit reinstated under `irq_enable == 0` (g-shape) -> E0; a body-field swap to
+irq_status / fiq_enable -> E1 (both are 0 throughout the arm -- a value row, not a distinguishing one; disclosed).
+Writers of irq_enable: the SET write arm (|=) and the CLEAR write arm (&= ~) -- both exercised (E1/E2, E5).
+
+CHANNEL -- per row: the mutant it kills and the observable that differs.
+  E0  kills (a) verbatim reinstatement and (b) reinstated only when irq_enable == 0 -- HOST DEATH at the first step
+      of the E sequence (status HOST-DIED, exit 1, r7 absent).  Also reds a constant-nonzero return.
+  E1  kills (c) odata = d->irq_status and (d) odata = d->fiq_enable (value 0 != P) and a wrong constant/bit swap.
+      NOTE (checked at writing time): (c) and (d) are indistinguishable from each other and from `odata = 0`.
+  E2  kills (h) `|=` -> `=` in the SET write arm (value Q != P|Q); kills (g) a mask on the readback (P|Q & 0xffff);
+      and if (l) keeps fatal+exit for bits 30/31, E2's read (bit 30 set) DIES here.
+  E3  kills (f) a width guard that refuses len 1 (death or 0 != 0x02).
+  E6  kills (f) a width guard that refuses len 2 (death or 0 != 0x2002); order-sensitive: runs before E5.
+  E5  kills (i) `&= ~idata` -> `&= idata` in the CLEAR write arm (value != Q) and a deleted clear.
+  E4  kills (e) fatal() kept, exit dropped (fatals non-empty) and (l)'s fatal-only form.  Oracle is
+      `not E["fatals"]` (any footbridge diagnostic), not "no ENABLE SET text".
+  EC1/EA1  controls: arm E ran (RAM readback) and reached the device (VENDOR_ID).  Without them E0 == 0 is what an
+      ABSENT device returns.
+  K1  kills (k) the exit also removed from the CLEAR read (K survives, no ENABLE CLEAR text, exit != 1).
+  I1, C1-C4, A1, A2, A2b, D1: unchanged rows; D1 additionally verifies every E word's disassembly.
+  (j) `irq_status | irq_enable` in the SET write arm's assert: NO ROW CAN VARY -- disclosed in the contract; expected
+      TOTAL ESCAPE and run in the table to record that, not to claim it.
+CHANNEL-line check (the carrier asked the first mandated application to CHECK it): every row's channel under its named
+mutant was knowable at writing time from the arm program alone; the two things NOT knowable by reading were the exact
+death step for (f) (death vs 0 -- either reds) and whether (c)/(d) differ from `odata = 0` (they do not).  The line held.
+
+ACCEPT-ROW FAILABILITY.  The fix removes no guard (pure deletion), so the de-escalation accept rows are E1/E2/E5 and
+their growth mutants are (g) and (l) above -- a guard grown onto the read (mask, top-bit trip).  Both are in the table.
+
+PRESCRIBED ROWS (to be diffed against any later row list): EC1 EA1 E0 E1 E2 E3 E6 E5 E4 + K1 moved to +0x18c.
+Order of execution in arm E: E0, E1, E2, E3, E6, E5.

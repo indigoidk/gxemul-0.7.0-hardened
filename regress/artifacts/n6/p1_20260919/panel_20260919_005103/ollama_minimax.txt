@@ -1,0 +1,66 @@
+```
+VERDICT LINE: ACCEPT the core argument (the +0x188 read IS documented per the inlined
+datasheet; the fix is mechanically correct; the P=0x2002/Q=0x20000000/E0–E6 arithmetic
+checks out), with the following flags: EIGHT premises UNVERIFIED from the packet, TWO
+test gaps in the proposed rows, and ONE of the brief's own questions (Q4) deserves a
+direct answer this round rather than the TEMPORARY +0x100 move.
+```
+
+## Premises I can settle from the packet
+
+- **The datasheet excerpt** (lines 6823–6831, 6910–6920) shows 188h is `IRQEnable` (read) / `IRQEnableSet` (write), and the prose at 6913 calls it "read-only". So a read of +0x188 is documented. **READ.**
+- **The seven other sites are invalid-direction.** 565/574/613/622 are writes to read-only status registers; 604 is a read of a write-only register; 712/737 are reads of write-only SDRAM registers. **READ** (from inlined code + datasheet table).
+- **`odata = d->irq_enable;` is the correct value.** The datasheet at 6919–6920 says the register "indicates that the associated interrupt source is enabled" — i.e. the enable mask. **READ.**
+- **The model treats the +0x188 write and read identically except for the OR-direction:** write does `d->irq_enable |= idata;` and asserts/deasserts the IRQ; read returns `d->irq_enable` and then kills. The fix deletes the kill. **READ.**
+- **0xE5907188 = `ldr r7,[r0,#392]`.** I decoded it: cond=0xE, 01, I=1, P=1, U=1, B=0, W=0, L=1, Rn=0, Rd=7, offset=0x188. **REASONED** (ARMv4 standard encoding, not re-read from a manual).
+- **0xE5907100 = `ldr r7,[r0,#256]`.** Same encoding, offset=0x100. **REASONED.**
+- **Fold math: the four timer-CLEAR addresses 0x30C/0x32C/0x34C/0x36C all reduce to 0x30C under `&= ~0x060`** (bits 5,6 cleared), with `timer_nr = (relative_addr >> 5) & 3` recovering 0/1/2/3 respectively. **REASONED** from inlined code.
+- **E0–E6 arithmetic.** P=0x2002 (bits 1+13), Q=0x20000000 (bit 29), P|Q = 0x20002002; after clearing P from P|Q the residue is bit 29 alone = 0x20000000. Halfword-of-0x20002002 = 0x2002; low byte of 0x20002002 = 0x02; low byte of P alone = 0x02. **REASONED.**
+- **Q2(a–i) mutant coverage.** (a) caught by E1 (read never returns P). (b) caught by E1 (irq_status independent of P). (c) caught by E1 (irq_status&irq_enable = 0 when irq_status=0). (d) caught by E1 (fiq_enable independent of irq_enable). (e) caught by E4 (the log would carry "ENABLE SET"). (f) caught by E3 and E6 (the byte/halfword reads would die). (g) caught by E0 (first read sees irq_enable==0). (h) caught by E2 (assignment loses the OR; second write overwrites rather than accumulates). (i) caught meta — K arm stops killing, the probe FAILs. **REASONED.**
+
+## Premises I CANNOT settle from the packet
+
+I name each, and what single fact would settle it.
+
+1. **What does DEVINIT (claimed lines 841/877) put into `d->irq_enable`?** The brief says "no guest reaches them" but the guest doesn't have to — DEVINIT runs at boot, before the probe's first instruction. **E0's "want 0" depends entirely on DEVINIT not preloading irq_enable to a nonzero value.** Settles by reading the two DEVINIT blocks; they are NOT inlined.
+2. **Do the C constants `IRQ_ENABLE_SET`, `TIMER_1_LOAD`, `TIMER_4_CLEAR`, `TIMER_MAX_VAL` take the values the brief assumes (0x188, 0x300, 0x36C, 24-bit)?** The datasheet names match; the C constants are in `dc21285reg.h` and only the line number is cited. Settles by reading that header (not inlined).
+3. **Are P (bits 1, 13) and Q (bit 29) actually inert on the `-E cats` boot path?** The brief says "no source asserts during the run" but lists no source enumeration. The DEVINIT, the timer wiring, and any boot-time interrupt activity on cats could set these bits before E1. Settles by enumerating cats' wired IRQ sources and the boot-time state (NOT inlined).
+4. **What is the datasheet's stated reset value of IRQEnable?** The inlined excerpt at 6910–6920 names the bit field but does not show the reset value. The brief assumes 0. Settles by reading the "Reset" line of the IRQEnable register table (not inlined).
+5. **Does `memory_writemax64(cpu, data, len, odata)` correctly support `len ∈ {1,2,4}`?** E3 (byte) and E6 (halfword) require this. The model's common tail at line 754–755 passes `len` through unchanged; whether the helper writes the right sub-word is not inlined. Settles by reading that helper.
+6. **The "codex dedicated review" finding on the three-probe controls.** The brief credits this with the corrected claim about waitpid binding; the inlined code supports the conclusion but the cited scratchpad file is not inlined. Settles by reading that scratchpad.
+7. **The "one site per round" rule.** Asserted as a project reopening rule; not derived from any inlined artifact. Settles by reading project rules.
+8. **Tree-wide grep for `ENABLE SET`.** The brief states codex scoped to `src/` and `regress/` only; "the tree-wide claim is NOT CHECKED." I cannot check it either.
+
+## Specific defects in the proposed test set
+
+**D1. E0's "want 0" is fragile (premise 1 above).** If DEVINIT preloads `d->irq_enable` to anything nonzero, E0 red's the FIX, not a mutant. The brief assumes a fact not inlined. The negative control "arm T" the brief cites (an MMU-on access returning 0) is not the same evidence — it proves what an absent device returns, not what `d->irq_enable` is after construction.
+
+**D2. Q2(j) is NOT caught by the proposed rows.** The mutant `INTERRUPT_ASSERT` on `d->irq_status | d->irq_enable` (instead of `&`) would assert the CPU IRQ after writing P, because P is nonzero. **No proposed row checks the CPU IRQ line state under single-step.** The brief itself flags this ("no listed row observes the IRQ line — what row would?") and does not answer. Either drop the mutant from the kill table or add a row that probes the IRQ line (e.g., enable IRQ in CPSR before the write, observe that the next instruction is taken at an unexpected address).
+
+**D3. Q2(k) is acknowledged but not answered.** If the same deletion lands on `IRQ_ENABLE_CLEAR`'s read branch (+0x18c), no row reads 0x18c. After the seven decline sites are de-fatalised next round (the brief's plan), +0x18c silently returns `d->irq_enable` — wrong per the datasheet (write-only register), and undetectable by the current rows. The brief asks "is a row ... owed" but does not propose one.
+
+## Where the brief's own questions deserve a position
+
+- **Q1(a) FIQ_ENABLE_SET (+0x288):** Per the inlined code at lines 626–629, a read of 0x288 falls through the matched case with `odata` untouched (initialised to 0 at line 501), so the model silently returns 0 instead of `d->fiq_enable`. That is the SAME semantic class as the +0x188 bug the brief is fixing (model returns the wrong value for a documented readable register). Under the "one site per round" rule the brief cites, punt it. But call it out by name in the round record so the next ACCEPT round doesn't have to re-derive it. My recommendation: punt with a recorded TODO.
+- **Q1(b) +0x100 as TEMPORARY control:** Mechanically sound — the read branch of SDRAM_BA_MASK (lines 710–712) fatal+exits, the text oracle changes from "ENABLE SET" to "sdram_ba_mask", and the encoding arithmetic is right. But it costs two control moves (now, and again next round). See Q4.
+- **Q1(c) P/Q safety:** UNVERIFIED (premise 3). The brief should at minimum name which sources could plausibly set these bits during a boot-then-probe sequence and explain why each is quiescent. Until then, the proposed P/Q are an assertion, not a fact.
+- **Q1(d) Tree-wide grep:** The brief says this is NOT CHECKED. It should be checked before the round lands, because if `ENABLE SET` appears anywhere in a boot-log allowlist, hygiene list, or other test scaffolding, the move would invalidate that scaffolding.
+- **Q1(e) Binding waitpid in the drain/witness probes:** YES, bind it — and the brief is right that doing so matches what the sites probe already does. This is a strictly tighter contract; it shouldn't red any existing row unless something other than `+0x188` is killing those probes today, in which case the brief has discovered a second bug. Add the binding in the same commit.
+- **Q3 FAULT availability:** FAULT (data-abort the guest) is mechanically available on ARM. The brief is right that it would be WRONG here — the datasheet documents the read, so aborting a documented access is the same class of mistake the original `fatal()` is. ACCEPT is the correct member; FAULT is correctly excluded.
+- **Q4 Order and durable control:** **This is the most important question the brief raises and then ducks.** Two reasons not to move to +0x100:
+
+  1. +0x100 is itself one of the seven DECLINE-class sites, so the next round MUST move the control again. Two moves cost more than one.
+  2. The dependency on a specific device's invalid-direction exit means the probe dies for the right reason only as long as that site is preserved — fragile.
+
+  **A durable control does not depend on the device killing the process.** Candidates the brief should weigh, none of which require a device-side fatal:
+  - A deliberate emulator abort: an instruction the emulator recognises as "die now" (gxemul has `HALT`-like traps; I'd need to confirm what's actually wired).
+  - An undefined instruction encoding the emulator doesn't emulate — e.g. an unallocated CPSR/MSR form, or an unconditional UDF.
+  - A guest-side crash the emulator reports specifically — e.g. an explicit `bkpt` or a deliberate jump into the boot translation table's first-entry reset vector with a poison value.
+
+  Whichever is chosen, it should fail the host the same way (`exit(1)`, fatal string the probe can match, or `HOST-DIED` with a known discriminator). **My recommendation: build the durable control IN THIS ROUND, ship the +0x188 ACCEPT without a probe move, and let the next round handle the seven declines without dragging the probes through a second move.** This costs one extra commit's design work and saves two control moves.
+
+## Standing licence — things noticed while verifying
+
+- The fold comment at lines 689–695 ("FOUR addresses, not one: the fold above normalises 0x30C/0x32C/0x34C/0x36C") is correct only for the four timer-CLEAR addresses; it is silent about the LOAD/VALUE/CONTROL registers, which the same fold ALSO normalises (e.g. 0x320 → 0x300 for LOAD, 0x324 → 0x304 for VALUE, etc.). Not a defect — the comment is just an example, not exhaustive — but if anyone treats the comment as the full list, they will undercount.
+- The write branch of `IRQ_ENABLE_CLEAR` (line 595) is symmetric with `IRQ_ENABLE_SET` and includes the assert/deassert. The read branch's `odata = d->irq_enable` (line 601) is identical to `IRQ_ENABLE_SET`'s read branch (line 586). The asymmetry is only that +0x18c is write-only per the datasheet while +0x188 is read-or-write. Q2(k) flows from this near-duplication.
+- The seven invalid-direction sites cluster as three write-to-read-only pairs (565/574 for IRQ, 613/622 for FIQ) and three read-of-write-only registers (604, 712, 737). The brief's "next round" framing handles them as a class, which is correct.</mm:think>###TASK_COMPLETED###

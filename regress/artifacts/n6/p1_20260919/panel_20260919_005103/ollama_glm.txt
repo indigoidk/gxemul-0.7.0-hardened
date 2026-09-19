@@ -1,0 +1,70 @@
+**VERDICT: ACCEPT for the +0x188 read is CORRECT** — Table 7-10 as inlined documents Read=IRQEnable at 188h, the code at 585-590 already computes the answer before dying, and the deletion is mechanically complete. **Approve the round only after five packet-visible fixes: (1) Q is stated twice with contradictory bits (bit 29 vs bits 29+30) and cites mutant "Q2(l)" which the Q2 list (a)–(k) never enumerates, leaving bit 30's source unnamed; (2) mutant (j) is caught by no listed row; (3) mutant (k) is caught by no listed row and is the likeliest bad edit — a "+0x18c read still refused" row is owed; (4) "all E-rows in the surviving arm" collides with the kill pair's "differ by EXACTLY ONE INSTRUCTION" invariant (probe line 48) unless the K arm's program grows identically; (5) all three probes carry stale `dev_footbridge.c` line cites (495-497/486-499/492-497) for a fatal this packet's own listing puts at 587-589.
+
+## A. Premises verified from the packet (READ)
+
+- **Census**: enumerated `exit(1)` in the inlined function: 565, 574, 589, 604, 613, 622, 712, 737 — exactly eight, matching. The two DEVINIT exits (841/877) are cited, not inlined (G9).
+- **Encodings**: 0xE5907188 = cond AL, LDR, I=0, P=1, U=1, B=0, W=0, L=1, Rn=r0, Rd=r7, imm12=0x188=392 → `ldr r7,[r0,#392]` ✓. 0xE5907100 → imm12=0x100=256 → `ldr r7,[r0,#256]` ✓. 0x188=392 < 0x300=768, so outside the fold range; the fold (507-509) is the only rewrite of `relative_addr` before the switch, and 507-758 is the complete function.
+- **Datasheet**: the "This read-only register" sentence is not a contradiction — the same excerpt's table gives 188h a Write column (IRQEnableSet) and the next clause names Set/Clear as the value's only change channels. The read is documented; "read-only" describes the value's mutability, not the address.
+- **The fix**: 586 computes `odata` *before* the fatal; deleting 587-589 leaves read → value → break → tail (754-755) writes odata → return 1. Honors the #474 guard-body-keep-break principle.
+- **Sibling +0x288**: the inlined 626-634 confirms the brief's characterization — read falls through the `if (MEM_WRITE)` and silently returns 0, not `d->fiq_enable`. Verified from the packet, not just trusted.
+- **Four in-scope "ENABLE SET" referents** (src 587; sites 291; drain 562; witness 445) match codex's scoped finding. The K1 gate greps `^K1 .*ok$` — the row's *shape*, not the oracle text — so the move needs zero gate edits (update the row's description string so it doesn't lie).
+- **E-row arithmetic**: P=0x00002002 (2¹|2¹³); Q(amended)=0x60000000 (2²⁹|2³⁰); E1 wants P; E2 wants 0x60002002; E3 wants 0x02 (low byte of P); E6 wants 0x2002 (low half of P|Q); E5: 0x60002002 & ~0x00002002 = 0x60000000 = Q ✓. E0 is indeed the only row whose read sees `irq_enable == 0`.
+
+## B. Defects
+
+**B1 — Q contradiction.** §5 defines Q=0x20000000 (bit 29), then amends to 0x60000000 (bits 29+30). The amendment is load-bearing (see D, "(l)"), but Q1(c) still asks about "bit 29", and the brief never names bit 30's interrupt source — so the amended Q's inertness is doubly ungrounded. Also "Q2(l)" is cited but absent from the list.
+
+**B2 — E-row placement vs the kill pair.** Line 48: "Arms L and K differ by EXACTLY ONE INSTRUCTION… the entire argument." Planting E0-E6 in "the surviving arm" (arm L) without also extending arm K breaks that invariant. Fix: plant the E-row program in *both* arms after the kill slot — K still dies at slot 0x2c before reaching it, L executes it, delta stays one word. (If E-rows instead get a new arm, say so; note I1's `not L["fatals"]` already reds mutant (e) if E-rows share arm L.)
+
+**B3 — Stale in-tree line cites.** Sites line 49 cites dev_footbridge.c:495-497; witness 74-75 cites 486-499; witness 196 cites 492-497 — all ~92-100 lines below the packet's own listing (587-589). Either predating an earlier round's insertions or written against a pristine copy. The commit that edits these exact lines must re-point them.
+
+**B4 — Mutant (j) uncaught.** No listed row reads CPSR or the IRQ line; all values stay correct. A row that would: after E2's write, clear CPSR.I, single-step one instruction, assert PC is the next planted word (not the vector at 0x18). Requires the probes run masked — not in the packet (G4). Alternative: a monitor-side interrupt-line check if the fork exposes one (can't settle), or record (j) as an accepted gap in the kill table. Silence is the only wrong option.
+
+**B5 — Mutant (k) uncaught, and likeliest bad edit.** The 0x18c read branch (600-604) is line-for-line the same shape as 0x188's — a regex "fix both" creates an undocumented read at a write-only register and nothing reds. Owed now: a K2 kill arm reading +0x18c, expect HOST-DIED + "ENABLE CLEAR" + exit 1. Owed after the decline round: value discrimination — enable=P via +0x188, read +0x18c, expect **not P** (0 under member 2), plus the member-3 message if chosen. The permanent invariant: a +0x18c read must never return `d->irq_enable`.
+
+## C. Q1
+
+**(a)** ACCEPT right (A). fiqenableread should **not** join: not an exit site (absent from the census), not the same disposition class (delete-a-kill vs add-a-value-path), so the reopening rule's same-class test fails as stated. Keep filed; its round is cheap.
+**(b)** Sound, one uncheckable premise: `SDRAM_BA_MASK == 0x100` — the packet shows the case label, not the constant (G1). Everything else the kill arms need is inlined at 710-712: death, exit 1, text; one-word delta preserved in all three probes; arm T untouched.
+**(c)** Design (status-inert bits so `status & enable` stays clear) is right; inertness is **not settleable from the packet** — nothing inlined shows what sets `d->irq_status` (G2, G3). Consequence if a write did assert: no listed row reds on the line (B4), but the drain's `step_and_check(s, prog, PROLOGUE_N + 3)` compares a stepped trace, so a spurious vector entry would red *it* — a false red. Inertness is load-bearing for row stability, not hygiene. Re-ask against the amended Q (bits 29 **and 30**).
+**(d)** Four in-scope referents confirmed (A); tree-wide claim explicitly unverified — G7.
+**(e)** Yes, in two steps: first require the *text* in the drain/witness kill arms (buf is already captured — currently any crash satisfies them); then bind status: kill arms → exit 1; surviving arms → clean close (the lca_isalane late-death gap). REASONED: strict strengthening — can only convert false greens to reds; whether any current run dies late is a run-fact outside the packet. Settling facts: the close() implementations (G6) and the emulator's clean-quit exit code (G10).
+
+## D. Q2 — first red (E0-E6 as proposed)
+
+| mutant | first red |
+|---|---|
+| (a) (b) (c) (d) | E1 (all return 0 or inert status, want P) |
+| (e) | E4 — and I1 if E-rows share arm L (B2) |
+| (f) len≠4 | E3 (byte read dies mid-arm); E6 corroborates |
+| (g) enable==0 | E0 (only zero-seeing read) |
+| (h) `=` for `\|=` | E2 (wants P\|Q, gets Q) |
+| (i) controls unmoved | K1 in the gated sites probe; drain/witness red their own kill expectations but are ungated — K1 is the sole gate-level catcher (sufficient) |
+| (j) | **uncaught** — B4 |
+| (k) | **uncaught** — B5 |
+| "(l)" bits-30/31-keyed reinstatement | E2 (0x60002002 trips it), E4 corroborates — but only with the amended Q; with Q=0x20000000 it is invisible. This is the amendment's whole point, so resolve B1 in favor of 0x60000000 or drop the mutant. |
+
+E5 additionally covers clear-arm mutants not listed (e.g., `&= idata`), E6 the len=2 path.
+
+## E. Q3
+
+ACCEPT is right and the set is complete for this access; BACKED ACCEPT would announce an expected access (the brief's "no event" argument is sound). FAULT would contradict the packet's own datasheet row, so its ARM availability is moot — and is not settleable anyway (no fault path appears in the inlined function). **Found else**: the function's own default case (745-752) is already a non-fatal decline — fatal-and-continue, no exit, odata stays 0 — an in-tree precedent for the next round's member-2/3 semantics that the brief did not cite; also evidence (with 728/740 and the "fatal()+exit(1)" phrasing) that `fatal()` does not exit in this fork, on which E4's entire design depends (G5).
+
+## F. Q4
+
+REASONED: count control transitions. ACCEPT-first costs two (+0x188→+0x100 now; +0x100→leg next round, since the seven-site round kills +0x100 itself); DECLINE-first costs one (controls stay on the still-live 0x188, then jump to the leg). On control economy DECLINE-first is cheaper — an asymmetry the brief's split doesn't state. Tiebreakers for ACCEPT-first: 0x188 is the one *unambiguously* wrong fatal (documented, already answered), the E-rows are designed now, and the decline semantics are still open (member 2 vs 3, E above). The eventual control should be a **mutation leg**: run the kill arms against a deliberately defective binary (the pre-fix tree or a one-line fatal reinstatement), scored like the PRETABLE — that satisfies "a probe that reports SURVIVED for every row is vacuous" with no live exit. Build it this round only if the harness can run a probe against a second binary (G11); otherwise +0x100 is a sound stopgap, but the leg's obligation must be written into the next round now — the next round de-fatalises +0x100 and cannot defer it again.
+
+## G. Premises not settleable from the packet (settling fact each)
+
+1. `SDRAM_BA_MASK == 0x100` — the #define in dc21285reg.h (load-bearing for the move).
+2. The IRQ bit→source table (reserved 0/20/21/26; timers 4-7; bit 1 soft; bit 13 xcs_l[1]; bit 29 master abort; **bit 30 unnamed**) — the bit-definition table in dc21285.txt, not inlined.
+3. P/Q inertness — whatever can set `d->irq_status` bits 1/13/29/30 on cats (device attach list, irq-set callbacks, PCI error paths).
+4. Probes run with CPSR.I set — one prologue listing (decides B4's row form).
+5. `fatal()` non-exiting — its definition (one function). Strong packet-internal support, definition not inlined.
+6. Drain/witness close routines discard waitpid (cited 403/342, not inlined) — those functions' source; corroborated by the inlined returns.
+7. Tree-wide "ENABLE SET" — one grep outside src/ and regress/.
+8. `irq_enable` zero-init and datasheet reset value 0 — DEVINIT allocation lines + the reset-value column (E0's "want 0"; the brief honestly flags E0's absent-device ambiguity, covered by A1/A2).
+9. DEVINIT exits 841/877 unreachable — the DEVINIT body (no bearing this round).
+10. Clean-quit exit code — one instrumented close (Q1e surviving-arm binding).
+11. Mutant-binary probe runs in the harness — the gate tooling (Q4).
+12. Datasheet direction for the two SDRAM reads (5 of the 7 decline sites verified against Table 7-10; the SDRAM pair rests on a table not inlined) — the SDRAM register table in dc21285.txt (next round's classification, not this one's).

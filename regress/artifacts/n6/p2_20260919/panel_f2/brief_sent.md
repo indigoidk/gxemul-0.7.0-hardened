@@ -1,0 +1,148 @@
+# §F2 ADJUDICATION PASS -- n6 / #539: the panel shares its pass-2 findings.  One numbered packet, my disposition on each.
+
+## READ THIS FIRST
+You are re-fired with EVERY seat's pass-2 findings consolidated below, each with MY DISPOSITION and what I changed.  The
+three questions: (1) adjudicate F1..F23 and D1..D3 -- UPHOLD / OVERTURN / REFINE / CANNOT SETTLE, one line each with a
+reason; (2) WHICH OF MY ACCEPTED DISPOSITIONS IS WRONG?  I accepted 17 of 23 findings outright -- a suspicious number,
+and agreement is not evidence; (3) WHAT DID ALL NINE OF US MISS?  A seat adjudicating its own finding is doing
+self-review: say so, and be HARDER on it, including whether the FIX I made in response is right, not merely whether the
+finding was.  VERDICT LINE FIRST.  Read-only; run nothing.  Ordinary engineering language.  Packet-fed seats: every
+fact you need is inlined; say NOT CHECKABLE rather than guess.  File-reading seats: the tree is
+`C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` (working tree on HEAD a11eaac + the uncommitted #539 edits, now at their
+pass-2-corrected v2 state); the frozen v2 diffs are `_scratchpad/n6/p2/diff539_4files.v2.patch` (md5 d5363b35) and
+`diff539_gate.v2.patch` (md5 1c571e08); the pass-2 packet you answered is `_scratchpad/n6/p2/brief_n6_p2_BUILT.md`.
+
+## WHAT PASS 2 REVIEWED, in one paragraph
+#539 deletes the fatal()+exit(1) from dev_footbridge.c's `case IRQ_ENABLE_SET` READ branch (keeps `odata =
+d->irq_enable`; IRQEnable 188h is documented read-only, reset 0 -- DC21285 Table 7-10, 7.3.31), moves the three
+footbridge probes' kill control to a READ of +0x18c (IRQEnableClear, write-only), adds arm E with rows EC1,EA1,E0,E1,
+E2,E3,E6,E5,E4 to footbridge_sites_probe.py (19 rows), binds the child's exit status in fbpending_drain_probe.py and
+fbpending_witness.py (codex L3's drain-to-EOF + survived() drafts), and adds three gate checks.  Kill table 1 (12
+mutants, scratch clone): pre-fix RED 10/19, base 19/19, 11/12 killed, (j) escaped as disclosed.
+
+## THE SEATS THAT ANSWERED PASS 2 (9 by design; 8 transports + the dedicated codex job)
+codex (panel seat, GPT-6 Astra max) GO-WITH-CHANGES; codex DEDICATED job VERIFIED 34/34 hunks, 13/13 encodings; agy
+GO-WITH-CHANGES; grok RATIFY; kimi CLI: first firing STALLED (its Read tool caps at 50 KB, the brief is 64 KB; it
+looped and never answered -- a SEAT FAILURE of a new class), re-fired ONCE with explicit paging -> ACCEPT + 4 doc
+fixes; kimi-k3:cloud ACCEPT WITH FINDINGS; glm ACCEPT + 9 open items; deepseek PASS WITH ONE DEFECT; minimax ACCEPT
+with "one latent encoding concern".  **Opus 5 (the measuring seat) FAILED**: HTTP 429 "session limit, resets 03:40" --
+recorded as a SEAT FAILURE, not agreement; its independent measurement is OWED (below).  **fable5 has not yet ruled**
+(it fires LAST, after this pass, once the same limit resets).
+
+## FINDINGS, WITH MY DISPOSITION (F1-F23)
+ F1  Unbounded `waitpid` after the master close in drain/witness `close()` -- a child that survives SIGHUP hangs the
+     probe (deepseek, glm, kimi-k3, codex panel, codex ded).  ACCEPTED -> ALL THREE probes now reap with a bounded
+     WNOHANG poll (5 s), then SIGKILL, then the blocking wait (patch539c).  agy and minimax argued the hang state is
+     unreachable (gxemul installs no SIGHUP handler; default disposition terminates) -- true today, and the bound costs
+     nothing; the fix is defence, not a measured defect.
+ F2  The sites probe's own teardown still slept 0.3 s, closed the master WITHOUT draining and blocked in waitpid, and
+     it collects `fatals` BEFORE quit -- the inherited race now reaches E4 (codex panel, codex ded).  ACCEPTED -> the
+     sites probe now uses the same teardown as the pending probes; `fatals` is collected AFTER the drain.
+ F3  Gate: seven green E lines != seven distinct rows (a duplicate id could stand in for a missing one) (codex panel).
+     ACCEPTED -> added `E0-E6 are seven DISTINCT row ids` (sort -u | wc -l == 7) beside the count-7 check.
+ F4  Gate excerpt grep `E[A-Z]?[0-9]` is overbroad (matches EZ7, E9, EA10) (codex panel, codex ded).  ACCEPTED ->
+     `E(C1|A1|[0-6]) ` -- cosmetic (the excerpt is an echo), fixed anyway.
+ F5  Gate check label "Set ORs and Clear clears (E2 = P|Q)" misattributes Clear to E2 (codex panel, grok, glm).
+     ACCEPTED -> "Set ORs (E2 = P|Q; Clear is pinned by E5)".
+ F6  `footbridge_sites_probe.py` A2 row note still said `by :548` (agy, grok, kimi CLI, codex panel, codex ded).
+     ACCEPTED -> "(MAX_VAL)".  The pass-2 packet's "every stale citation replaced" was FALSE for this line.
+ F7  "write-only per 7.3.32" is the wrong section: TOC says 7.3.32 = IRQEnableSet, 7.3.33 = IRQEnableClear (grok, kimi
+     CLI).  ACCEPTED -> 7.3.33 (IRQEnableClear).  Substance unchanged.
+ F8  drain header still described arm K as a read of IRQ_ENABLE_SET (kimi CLI, codex ded).  ACCEPTED -> rewritten.
+ F9  Sites header "neither [P nor Q] is a rotated immediate" is FALSE for Q (0x06 ROR 4) (kimi-k3, codex ded).
+     ACCEPTED -> corrected; both still loaded from RAM for uniformity.
+ F10 Sites header said the (k) spill "makes K survive with no diagnostic" while the tabled (k) keeps the diagnostic
+     (kimi-k3).  ACCEPTED -> "with or without its diagnostic ... K1 reds on the exit status it requires".
+ F11 `TIMER_x_LOAD write arm` is commentary, not a construct; `idata & TIMER_MAX_VAL` occurs 3x; the literal `!(idata &
+     TIMER_ENABLE)` occurs 0x (grok, kimi CLI, codex panel, codex ded).  ACCEPTED -> `case TIMER_1_LOAD`'s write
+     branch; "the `else` of `if (idata & TIMER_ENABLE)`".
+ F12 Contract: bit 31 is never set in any tested value; the patterns tested are P (bits 1,13) and Q (bits 29,30) only
+     (codex panel).  ACCEPTED -> stated in the contract as TESTED PATTERNS.
+ F13 D1's "every planted word" overstates: landing pads are excluded and a terminating step is not compared (codex
+     panel, codex ded).  ACCEPTED -> one sentence in the contract; row name unchanged.
+ F14 Failure-path measurements for the new close()/K predicates are owed: complaint + wrong exit status; complaint +
+     signal; exit 1 without complaint; delayed shutdown; ignored quit (codex panel; codex L3 earlier).  ACCEPTED IN
+     PART -> table 2 (below) builds `x_exit2` (complaint then exit(2)) and `y_sigkill` (complaint then SIGKILL) and
+     runs all three probes on each: every K row must red.  "exit 1 without complaint" and "ignored quit / delayed
+     shutdown" need a pty protocol MOCK (codex L3's design) and are FILED, not built (`fbptymock`).
+ F15 (q) "K row ignores exit" ESCAPES the healthy run (codex panel, codex ded, grok, kimi CLI, minimax).  ACCEPTED as
+     a DISCLOSURE: it is a probe-side weakening of a predicate this round added; no product mutant, no row.  Table 2's
+     x_exit2/y_sigkill are what make the predicate's exit term load-bearing.
+ F16 The 744-vs-897 "premise stated two ways" (glm).  REJECTED: two different files -- the stale copy under
+     `_scratchpad/r6pass2_fb/` is 744 lines, the fork's is 897 (agy measured both).  Not a defect.
+ F17 The pass-2 packet's `run_arm` "if-branch does not plant P/Q" (glm Q4.2).  REJECTED: the if-branch is NO-PROMPT
+     (no arm runs); every executed arm plants P/Q.  NOT CHECKABLE for a packet-fed seat; settled by reading.
+ F18 minimax's "latent encoding concern": the ldr/str words have bit 25 = 0 and are therefore REGISTER-offset forms
+     mislabelled as immediate.  REFUTED: in the ARM single-data-transfer encoding I=0 is the IMMEDIATE offset form
+     (I=1 selects a register offset); codex ded and kimi CLI hand-decoded all 13 words as immediate; the probe's own
+     D1 (the emulator's disassembly of each stepped word) reported 0 mismatches on every run.  Recorded as a seat
+     error; no change.
+ F19 A1's 0x1011 is a MODEL value (hardware packs DeviceID:VendorID) -- fable5 p1 standing licence, echoed by codex
+     ded's TIMER_x findings.  ACCEPTED earlier -> the gate's A1 comment says so; a row would be the packed-config round's.
+ F20 kimi-k3's seat record says "Claude Opus 4.7" -- a packet-fed transport mis-identifying itself.  RECORDED; scored
+     by transport (`ollama_kimi.txt`), as the ledger rule says.
+ F21 The kimi CLI's first firing looped on its 50 KB read cap and produced no answer (new seat-failure class: a brief
+     larger than the seat's tool cap).  RECORDED; re-fired once with explicit line ranges -> answered.  A brief-size
+     note for the template (never-commit file): a file-reading seat may have a READ cap below the argv cap.
+ F22 Opus 5 seat: HTTP 429 session limit.  SEAT FAILURE; its measurement (base on its own build; (m),(n),(r); the
+     probe-side controls (o),(q); the anchor shift) is OWED -- re-fired after 03:40 or the round records the
+     main-loop measurement as the only one.
+ F23 (j) disclosure wording: "no step-based row can see it" is broader than the evidence -- internal-state inspection
+     (the CPU's irq_asserted flag) could observe it while stopped, though no debugger command exposes it today (codex
+     panel, codex ded).  ACCEPTED -> the contract says "no row here observes the CPU IRQ line" (not "no step-based
+     test is possible"); the free-running arm stays filed.
+
+## DISAGREEMENTS (both sides in their own words)
+ D1  Is the unbounded waitpid a DEFECT or a hardening?  codex/glm/deepseek/kimi-k3: "can hang indefinitely" / "now
+     load-bearing because rows read the status".  agy/minimax: "GXemul does not handle SIGHUP; default disposition
+     terminates ... no hang state I can construct".  MY RULING: hardening, applied (F1) -- the bound is three lines and
+     the alternative is a probe that can hang a gate; graded L1 (pre-ship construction), not a measured defect.
+ D2  Should E4's oracle name the ENABLE SET text?  grok (pass 1) and the p2 packet: `not E["fatals"]` (any footbridge
+     diagnostic) is stricter; codex panel: "E4 does not require a particular diagnostic phrase" (a statement, not an
+     objection).  MY RULING: keep `not E["fatals"]` (fable5 p1 Q4.5) -- a mutant keeping a diagnostic with DIFFERENT
+     text must still red E4.
+ D3  Does the (d) enumeration have an open cell?  grok: "I do not see an open (d) cell the body's own tests
+     distinguish"; minimax: "(r) width handling is a gap -- not in the twelve"; codex ded: (r) CAUGHT by E3/E6.
+     MY RULING: (r) is the value form of (f) and is caught by E3/E6 by construction (E3 wants 0x02, E6 0x2002); it was
+     not in table 1 because (f) already occupied the width cell with the death form.  Table 2 does NOT add it (the
+     rows' arithmetic settles it: `if (len == 4)` leaves odata 0 -> E3 reds).  Overturn me if you think a measurement
+     is owed rather than an arithmetic.
+
+## WHAT IS STILL OWED, and where I might be fooling myself
+* TABLE 2 (after the corrections; the three probes FROZEN, md5 sites 61283854 / drain 317e83b4 / witness e445cc6d;
+  `regress/artifacts/n6/killtable_20260919/table2_v2/TABLE2.log`, 03:45-03:53):
+    base_v2:   sites 19/19 PASS; drain CONTROL=OK (K exit=1, D/X/T/E exit=0); witness CONTROL=OK, VERDICT=PASS.
+    x_exit2  (CLEAR read: complaint then exit(2)):   sites 18/19 red K1; drain CONTROL=FAILED red K (exit=2);
+                                                      witness CONTROL=FAILED red K (exit=2).   3/3 K rows RED.
+    y_sigkill (CLEAR read: complaint then SIGKILL):  sites 18/19 red K1; drain red K (exit=None signal=9);
+                                                      witness red K (exit=None signal=9).       3/3 K rows RED.
+  So the exit term of every K predicate is load-bearing on a measured mutant, and the bounded reap returned the
+  signal status rather than hanging.  Every restore cmp'd CLEAN against SEC and rebuilt fresh.
+* The Opus measurement (F22).  The fable5 ruling.  Records (CHANGELOG block, OUTSTANDING_BUGS, ledger, the pass-1/2
+  seat records including three codex refusals and two walls as SEAT FAILURES).  Propagation to build/, build-asan/,
+  /tmp/gxsec-build + rebuild + two-part clearance.  gate_arm alone.  The #529 orphan hunk in gate_arm.sh excluded
+  from the commit (HEAD-based partial blob).
+* Where I might be fooling myself: (a) I accepted 17 findings and rejected 3 -- the accepted ones came from many seats
+  and cost little, which is exactly the shape of ratifying cheap findings while missing an expensive one; (b) table 2
+  is measured by the same main loop that wrote the rows, with no independent measuring seat this pass; (c) the
+  drain-to-EOF + bounded reap shape was never exercised on a child that ignores quit -- F14's mock is filed, not built.
+
+## QUESTIONS
+ Q1 Adjudicate F1-F23, D1-D3.
+ Q2 Which of my 17 accepted dispositions is wrong, and which of my 3 rejections (F16, F17, F18)?
+ Q3 What did all of us miss?  In particular: is there a state in which the new bounded reap (poll 5 s, SIGKILL, wait)
+    itself produces a wrong verdict on a HEALTHY run under load?
+End with the seat record line.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.

@@ -1,0 +1,159 @@
+I'll start by reading the full offloaded brief, then verify the load-bearing premises against the tree rather than ratifying them.The offloaded prompt path missed; I’ll pull the built design brief and verify the cited sources against `GXEMUL-SEC`.The built brief is in `_scratchpad/n6`. Next I’ll read it in full and check the cited source against `GXEMUL-SEC`.I have the full brief. Next I’ll re-derive the census, offsets, probe arms, and datasheet claims from `GXEMUL-SEC` rather than taking them as given.Census and offsets match so far. Next I’ll check IRQ bit assignments, the FIQ sibling, waitpid handling, and whether ARM can actually deliver a FAULT here.Checking one more load-bearing detail: whether the sites probe can score multiple E-row values from a single final `reg`, and how `ldrh` is spelled in existing ARM probes.**VERDICT: RATIFY ACCEPT at `+0x188`, one site, same-commit control move — with four brief defects that will ship a vacuous detector if they go unfixed.**
+
+ACCEPT is right. The four defects are: (1) Q is stated as both `0x20000000` and `0x60000000`; (2) E6 is specified “after E2” but numbered after E5, which clears P and makes `0x2002` false; (3) `footbridge_sites_probe.py` samples registers once at the end, so E0–E6 cannot all be scored from r7; (4) the “seven-site DECLINE group” is two classes, and `+0x100` is a documented R/W register, not an invalid-direction site.
+
+Tree: `GXEMUL-SEC/src/` at HEAD `408accf`. Line numbers match the brief (function at 498, kill at 587–589). Not the 2021 `./src/`.
+
+---
+
+## Q1 — premises
+
+**(a) ACCEPT is right.** Datasheet Table 7-10 (`dc21285.txt:6826`) overlays `188h` as IRQEnable (read) / IRQEnableSet (write). Prose at `:6911–6924` calls it a read-only register, reset 0, changed only via Set/Clear. The model already does `odata = d->irq_enable` at 586, then `fatal`+`exit(1)` at 587–589. Member 4 is exactly “delete the kill, keep the value, no message.” A latched announce would print “unexpected” about a documented read.
+
+Sibling `+0x288` (`FIQ_ENABLE_SET`): **do not join.** The read arm is
+
+```
+if (writeflag == MEM_WRITE)
+    d->fiq_enable |= idata;
+break;
+```
+
+No `odata = d->fiq_enable`, no `exit(1)`. Guest gets 0 from the common tail. That is a missing implementation (filed `fiqenableread`), not a host-kill of a correct value. Same device, different class, new oracles — reopening rule says stay separate. Header TODO `o) FIQs.` is the warrant.
+
+Header overlay is real: `IRQ_ENABLE` and `IRQ_ENABLE_SET` are both `0x188` (`dc21285reg.h:334–335`). One `case` with a `writeflag` split is the hardware.
+
+Census re-derived: ten live `exit(1)` in `dev_footbridge.c` (565, 574, 589, 604, 613, 622, 712, 737, 841, 877) plus three comment mentions. Eight guest-reachable, two `DEVINIT`. Brief is right.
+
+Timer fold `[TIMER_1_LOAD, TIMER_4_CLEAR] = [0x300, 0x36C]` does not rewrite `0x188` or `0x100`. Device length is `0x400`. `machine_cats.c:63–64` attaches at `0x42000000`.
+
+**(b) `+0x100` works as a TEMPORARY kill control; it is a bad campaign classification.**
+
+Sound as a control, today:
+
+| what `+0x188` gave | what `+0x100` gives |
+|---|---|
+| `ldr r7,[r0,#392]` = `0xE5907188` | `ldr r7,[r0,#256]` = `0xE5907100` (encoding checked) |
+| text `"ENABLE SET"` | text `"sdram_ba_mask"` (`:711`) |
+| unconditional `exit(1)` on read | same (`:712`) |
+| MMU-off prologue | unchanged; still inside the `0x400` window |
+| one-instruction L/K delta | preserved if only that slot changes |
+
+D1 will want the emulator spelling `"ldr r7,[r0,#256]"` (decimal, as `"#768"` is for `0x300`).
+
+**But `+0x100` is not an invalid-direction site.** Datasheet 7.3.9 (`:5844–5873`) marks SDRAM Base Address Mask as R/W (bits 27:18 and 31). There is no `d->sdram_ba_mask`; the write arm validates named sizes and stores nothing. A read is a documented access the model does not answer — IMPLEMENT/BACKED ACCEPT next, not DECLINE. Using it as K is fine for this commit; calling the leftover seven “the DECLINE group” is not.
+
+A cleaner temporary K, if they want the next round’s DECLINE to include the control honestly: **write `+0x180` (IRQStatus)**. Table 7-10 Write column is `--`. Text `"write to irq status"`. Still one instruction (`str` vs NOP). Not required; `+0x100` is acceptable if the next round does not inherit “DECLINE” from this choice.
+
+Sites K1 already requires text **and** `exit==1`. Drain and witness do **not**. Drain’s K row (`fbpending_drain_probe.py:658–660`) is only `HOST-DIED` vs D `SURVIVED`; `saw` is printed, not AND-ed. Witness `:587–590` is the same shape. Moving the planted word is load-bearing for those two; updating the substring is currently cosmetic unless this round binds it.
+
+**(c) P/Q are inert on these probes, with a bound.**
+
+Enumerated from `dc21285reg.h` / Table 7-11:
+
+- P = `0x00002002` = bit 1 (`IRQ_SOFTINT`) + bit 13 (`IRQ_XCS_L1`)
+- Reserved bits really are 0, 20, 21, 26
+- CATS ISA cascade is line 10 (`dev_footbridge.c:835`)
+- CATS PCI (dec21143) is line 18 (`bus_pci.c:1223–1224`)
+- Timers are bits 4–7, locally connected; `TIMER_ENABLE` is clear at `memset`/`DEVINIT` (`timer_control` seeded `TIMER_MODE_PERIODIC` only)
+
+`irq_status`/`irq_enable` start 0 (`memset` at 769). `IRQ_SOFT` (`0x190`) is not in the switch (default: `fatal`, no `exit`). Nothing in `src/` asserts `IRQ_MASTER_ABORT` (bit 29) or target-abort (30) onto the footbridge irq bit. Sites probe never writes `0x190`. A2 writes `TIMER_1_LOAD`, which DEASSERTs timer 1, and does not set `TIMER_ENABLE`.
+
+Write of P with `irq_status==0` takes the `INTERRUPT_DEASSERT` branch (`:581–584`). Even if a stray bit overlapped P, `cpu_dyntrans.c:204–206` suppresses delivery under `step`. Existing sites rows (A1 r6, A2 r1, I1 survival) do not read the IRQ line. **An unexpected assert would not change those verdicts.**
+
+**The brief contradicts itself on Q.** Section 5 says Q becomes `0x60000000` (bits 29 and 30) so E2 wants `0x60002002`, then the “Proposed:” line still says Q = `0x20000000` (bit 29 only), and Q1c asks only about bit 29. Use **`0x60000000`**. Bit 30 is what makes Q2(l) (diagnostic only for bits 30/31) visible at E2. Bit 29 alone lets that mutant through.
+
+**(d) `"ENABLE SET"` in `src/` + `regress/*.{py,sh}`:** product `fatal` in `dev_footbridge.c:588`; three probe sites (`footbridge_sites_probe.py:291`, `fbpending_drain_probe.py:562`, `fbpending_witness.py:445`). `gate_arm.sh` grades `^K1 .*ok$`, not the text. No hygiene/allowlist hit in that scope. `gate_arm.sh:1096` still cites stale `:495-497` (kill is 587–589); move that comment with K1.
+
+**(e) Yes, bind `waitpid` and require exit 1 on the two kill arms this round moves.** Sites already does (`:208–211`, I1 wants L `exit==0`, K1 wants K `exit==1`). Drain/witness `close()` waitpids and discards the status (`drain:405`, `witness:353`). That is the #538 class. Binding it:
+
+- Kill arm: require `WIFEXITED && status==1` (and AND in the new text). On HEAD the death is `exit(1)`, so existing K should stay green.
+- Surviving arm: optional `exit==0` after `close()`. A death after the last observation would then fail rather than pass. Unlikely to flip D/A on HEAD; it is the point of the bind.
+
+Do not require `saw` without moving the planted word first — that would red K on a still-dying `+0x188` if someone bound text before the move.
+
+---
+
+## Q2 — weakenings (which row reds first)
+
+Assume E0–E6 exist, are scored, Q = `0x60000000`, E6 runs **before** E5, and results are published (see “else” below). “Existing rows” = A1/A2/I1/K1/C*.
+
+| mutant | caught? | first red |
+|---|---|---|
+| **(a)** drop `odata = d->irq_enable` (read returns 0) | yes | **E1** (E0 wants 0 — vacuous for this mutant; that is why E0 is not enough) |
+| **(b)** `odata = d->irq_status` | yes | **E1** (status is 0, not P) |
+| **(c)** `odata = d->irq_status & d->irq_enable` | yes | **E1** (same, status 0) |
+| **(d)** `odata = d->fiq_enable` | yes | **E1** (fiq_enable stays 0; probes never write FIQ) |
+| **(e)** keep `fatal()`, drop only `exit(1)` | yes | **E4**, and **I1** if E lives on arm L (`not L["fatals"]`). Value rows still pass: `odata` is set, `fatal` does not return, common tail runs |
+| **(f)** kill only when `len != 4` | yes, iff E3 and E6 both exist | **E3** (len=1), then E6 (len=2). Word rows E0/E1/E2/E5 escape. This is why both widths are owed |
+| **(g)** kill only when `d->irq_enable == 0` | yes | **E0** (the operand-swap the brief named). Later rows never run on a same-arm death |
+| **(h)** `|=` becomes `=` | yes | **E2** (wants P\|Q; `=` leaves Q). E1 is blind (`0\|P` equals `=P`). E5 is also blind if E2 already left Q and P is disjoint |
+| **(i)** fix lands, controls not moved | yes | **K1** (sites: still wants `"ENABLE SET"` + exit 1). Drain/witness K: HOST-DIED fails because K now survives |
+| **(j)** write-arm assert becomes `irq_status \| irq_enable` | **no listed row** | none. Writing P with status 0 would ASSERT the CPU IRQ; single-step never delivers (`cpu_dyntrans.c:204–206`); no row reads the IRQ line or `irq_asserted`. This is the **write** arm, which this diff does not touch — clause-(e) disclose, do not demand a row from this floor. A catch would be a free-running arm with I-bit clear, which is a different probe shape |
+| **(k)** same deletion on `IRQ_ENABLE_CLEAR` read (`+0x18c`) | **not by E5** | E5 writes `+0x18c` and reads `+0x188`. Datasheet `:6827` / `:6937` : `18Ch` is write-only. The CLEAR read branch already does `odata = d->irq_enable` then kills — copy-paste of the SET read. A search-replace that deletes both fatals is the realistic spill. **Owe one sibling-spill row this round:** a throwaway arm that reads `+0x18c`, wants `"ENABLE CLEAR"` + exit 1. Do **not** put it on L (it would kill the accept arm). Next decline round converts that row from death to a decline-channel (survive + latch text, buffer unchanged / 0) |
+
+**Q2(l)** (named in the row list, missing from the Q2 enumeration): keep `fatal`+`exit` only when bits 30/31 of `d->irq_enable` are set. With Q = `0x60000000`, **E2’s read reds** (bit 30 is on). With Q = `0x20000000` it is a clean sweep of E0–E6. That is the whole reason Q grew.
+
+**ldrb / ldrh encodings** (enumerate, don’t guess): ldrb r7,[r0,#392] = `0xE5D07188` (pit probe’s `0xE5D00000|(rd<<12)|imm` form; spelling `"ldrb r7,[r0,#392]"`). ldrh r7,[r0,#392] = `0xE1D071B8` (`arm_writeback_probe.py:209` pins `ldrh r1,[r0] == 0xe1d010b0`). Confirm both through the emulator’s step line before D1 depends on them. `memory_writemax64` LE (`memory.c:99–103`) yields E3 = `0x02`, E6 = `0x2002` from `P|Q = 0x60002002`.
+
+---
+
+## Q3 — option set
+
+Weighed: DELETE (loses the already-computed value), DECLINE / DECLINE+LATCH (wrong record: “unexpected” about a documented read), ACCEPT (proposed), BACKED ACCEPT (storage already exists), IMPLEMENT (the value path is already written).
+
+**FAULT is not available on ARM**, and would be wrong here even if it were. `memory_rw.c:603–624` raises a guest exception on `res<=0` only under `MEM_MIPS` and `MEM_M88K`. There is no `MEM_ARM` in that file (grep is empty). `return 0` on cats is `MEMORY_ACCESS_FAILED` plus the `#95` pre-zero — a silent 0, not `ARM_EXCEPTION_DATA_ABT`. Datasheet says the register is readable, so FAULT is the wrong member on the merits anyway.
+
+No unweighed member. The address overlay is hardware, not ALIAS-as-a-disposition.
+
+Keep the `break`. An early `return` skips `:754–757` and hands the guest an untouched buffer — the sketch rule, and this function does not currently have that defect.
+
+---
+
+## Q4 — campaign order
+
+**ACCEPT first, move K to a remaining `exit(1)`, do not invent a durable non-death control in this commit.**
+
+A legal IRQEnable read is the path a guest interrupt handler actually takes. Leaving it as `exit(1)` while first declining illegal-direction accesses is the wrong severity order. Two control moves (now, then when the last death goes) are cheaper than another round of a legal read killing the host.
+
+Do **not** build the durable replacement this round. After the last guest `exit(1)` in this device is gone, K’s argument has to change from “something can still end the process” to a decline-channel (latched text on an illegal access vs L which does not touch it). That rewrite belongs to the round that removes the last death. Doing it now is a second detector design in the ACCEPT commit.
+
+The assess-panel alternative (seven declines first, keep `+0x188` as K until last) saves one move and is coherent **only if** those seven are one class. They are not (Q1b). Split next:
+
+1. five invalid-direction deaths (status/raw writes, ENABLE CLEAR read, FIQ status/raw writes) — DECLINE+latch, house idiom `N=1` `(once)`
+2. two documented R/W SDRAM registers with no storage — IMPLEMENT/BACKED ACCEPT, not DECLINE
+
+---
+
+## Implementation constraints the brief did not name (will ship a vacuous E-suite)
+
+1. **`run_arm` samples regs once, after the last step, and only r0,1,2,3,5,6,7** (`footbridge_sites_probe.py:188–194`). Final r7 can hold only the last read. E0–E5 are lost unless each result is published to RAM (drain-probe pattern) or `reg` is sampled between E instructions. Do **not** clobber r1 (A2) or r6 (A1); those are scored from the same final `reg`.
+
+2. **Execution order is not the E-number order.** E6 is specified “after E2”, want `0x2002`. E5 clears P, after which a halfword is `0x0000`. Run **E0, E1, E2, E3, E6, E5**. E4 is a buf scan, order-free.
+
+3. **Do not put E0–E6 on arm L if L is still the isolation arm.** I1 is `SURVIVED && exit==0 && not L["fatals"]` and the header says L/K differ by exactly one instruction. Either: (i) a fourth arm E for the value rows, L keeps NOP at the kill slot, K is `+0x100`; or (ii) E sequence *after* the kill slot so K dies before it and L steps it — then I1’s “untouched” comment is a lie (irq_enable becomes P then Q) but the one-instruction delta at 0x2c holds. Prefer (i). T must not score E rows (MMU-on aliases to RAM).
+
+4. **E3’s `0x02` is also what RAM returns after a word store of P.** It is a width pin, not a device-signature. Keep A1/A2 as the signature; do not claim E3 distinguishes device from RAM.
+
+5. **Test-first:** on HEAD, the first `+0x188` read still dies. K (today) is that witness. E1–E6 cannot show values on HEAD; they are post-fix floor rows. Do not invent a “pre-fix E1 red because value is 0” story — HEAD never returns the value.
+
+6. **PRETABLE CHANNEL for the new rows**, named at writing time:
+
+   - E0 kills (g) via host-death / missing 0
+   - E1 kills (a)(b)(c)(d) via value ≠ P
+   - E2 kills (h) and (l) via value ≠ P\|Q (and death under (l))
+   - E3/E6 kill (f) via death at len 1/2
+   - E4 kills (e) via leftover `"ENABLE SET"`
+   - E5 kills a CLEAR-is-NOP mutant via value ≠ Q
+   - K1 kills (i)
+   - new `+0x18c` arm kills (k)
+
+---
+
+## Else (standing licence)
+
+- Probe comments still cite `dev_footbridge.c:495-497` / `:486-499` / `:492-497`. Function is 498, kill is 587–589. L4 when those files move.
+- `IRQ_SOFT` (`0x190`) is documented write-only and unimplemented (default `fatal`, no `exit`). Not this round.
+- `#218–#223` “made graceful”: I did not find that phrase in `CHANGELOG.md` / `REVIEW_FINDINGS.md` from a file grep; the records step should quote the actual sentence it corrects, not this brief’s paraphrase.
+- Drain K does not require `saw` at all. When moving, AND the new text into the predicate or the text oracle stays decorative.
+
+**Ship: delete `fatal`+`exit(1)` in the `IRQ_ENABLE_SET` read arm, keep `odata = d->irq_enable` and the `break`, quote datasheet reset-0 / read-only, move three K plants to a remaining death (temporary `+0x100` is OK), bind waitpid+text on drain/witness K, add E0–E6 with the sampling and order fixes above, add a `+0x18c`-still-kills arm, Q = `0x60000000`, leave FIQ and the seven leftovers for later split rounds.**

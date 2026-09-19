@@ -1071,7 +1071,7 @@ done
 #  reads CP15 c1 back and requires bit 0 clear.  Negative-controlled in both directions.
 FBLOG=$LOGDIR/footbridge_sites.log
 python3 footbridge_sites_probe.py "$PMAX" "$STUB" > "$FBLOG" 2>&1 || true
-grep -E "^(  arm |C[0-9]|A[0-9]|I1|K1|D1)" "$FBLOG" | sed 's/^/       /'
+grep -E "^(  arm |C[0-9]|A[0-9]|I1|K1|D1|E(C1|A1|[0-6]) )" "$FBLOG" | sed 's/^/       /'
 
 if ! grep -q "FOOTBRIDGE_SITES_" "$FBLOG"; then
     note "footbridge probe produced no verdict; last lines follow"
@@ -1084,19 +1084,38 @@ else
           "$(grep -c 'FOOTBRIDGE_SITES_CONTROL=OK' "$FBLOG")" "1"
     check "footbridge: every row green" \
           "$(grep -c 'FOOTBRIDGE_SITES_PASS' "$FBLOG")" "1"
-    #  VALUES, NOT SURVIVAL.  0x1011 is DC21285_VENDOR_ID (dev_footbridge.c:423) and can only
+    #  VALUES, NOT SURVIVAL.  0x1011 is DC21285_VENDOR_ID (dev_footbridge.c `case VENDOR_ID`)
+    #  and is a MODEL value: real hardware packs DeviceID:VendorID into a word read at +0x0,
+    #  so the round that fixes packed config reads changes this pin in the same commit.  It can only
     #  have come back through this device; an unmapped read survives too, it just returns 0.
     check "footbridge: VENDOR_ID 0x1011 through a real guest ldr" \
           "$(grep -cE '^A1 .*got=0x00001011 .*ok$' "$FBLOG")" "1"
-    #  The vanishing top byte IS the handler's signature: :548 stores idata & TIMER_MAX_VAL.
+    #  The vanishing top byte IS the handler's signature: `case TIMER_1_LOAD`'s write branch stores
+    #  idata & TIMER_MAX_VAL.
     #  RAM, or any decode that merely absorbed the store, returns 0x12345678 unchanged.
     check "footbridge: TIMER_1_LOAD masked to 24 bits by the handler" \
           "$(grep -cE '^A2 .*got=0x00345678 .*ok$' "$FBLOG")" "1"
     #  THE PROBE'S OWN FAILABILITY CONTROL.  Arms L and K differ by ONE instruction; K reads
-    #  IRQ_ENABLE_SET, an UNFIXED fatal()+exit(1) at :495-497.  Without it, "SURVIVED" on every
-    #  row is satisfied by a probe whose guest code never reached the device at all.
+    #  IRQ_ENABLE_CLEAR (+0x18c, write-only per the DC21285), an UNFIXED fatal()+exit(1) in its
+    #  `case IRQ_ENABLE_CLEAR` read branch.  Without it, "SURVIVED" on every row is satisfied
+    #  by a probe whose guest code never reached the device at all.  #539 moved it here from
+    #  +0x188 (IRQEnable, documented read-only, now readable -- the E rows below); the round
+    #  that declines +0x18c retires this bridge and builds the harness legs in its place.
     check "footbridge: the one-instruction kill arm still dies" \
           "$(grep -cE '^K1 .*ok$' "$FBLOG")" "1"
+    #  #539: IRQEnable (+0x188) is readable -- reset 0, Set ORs, Clear clears, byte and
+    #  halfword reads return the low lanes -- and arm E raises no footbridge diagnostic.
+    #  Seven value/text rows, pinned by count AND by the two that carry the datasheet claims.
+    check "footbridge: IRQEnable ACCEPT rows E0-E6 all green" \
+          "$(grep -cE '^E[0-6] .*ok$' "$FBLOG")" "7"
+    #  Seven green lines are not seven rows: a duplicated id could stand in for a missing one, so
+    #  the DISTINCT ids are counted too (with the count above, each E0-E6 appears exactly once).
+    check "footbridge: E0-E6 are seven DISTINCT row ids" \
+          "$(grep -oE '^E[0-6] ' "$FBLOG" | sort -u | wc -l | tr -d ' ')" "7"
+    check "footbridge: IRQEnable reads 0 at reset (E0)" \
+          "$(grep -cE '^E0 .*got=0x00000000 .*ok$' "$FBLOG")" "1"
+    check "footbridge: Set ORs (E2 = P|Q; Clear is pinned by E5)" \
+          "$(grep -cE '^E2 .*got=0x60002002 .*ok$' "$FBLOG")" "1"
     #  The defence against the hand-assembled-encoding trap: every planted word is compared
     #  against the disassembly the emulator printed AS IT STEPPED IT.
     check "footbridge: no planted word failed its disassembly check" \

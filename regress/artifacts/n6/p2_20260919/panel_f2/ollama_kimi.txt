@@ -1,0 +1,54 @@
+VERDICT: Uphold 21 of 23 findings as graded and no rejection (F16–F18) overturned from the packet; REFINE F1/D1 (the fix bounds the wrong blocking call and is not costless) and F2/D2 (the fix silently widened `fatals` across the kill boundary); the wrong accepted disposition is F1's "fixed, costs nothing"; the common miss is the teardown funnel — an unbounded drain read ahead of the bounded reap, a SIGKILL-induced false-RED state on healthy-but-slow children, and the un-reviewed exclusion that keeps the expected kill complaint out of E4.
+
+## Q1 — Adjudication (one line each)
+
+- **F1 — REFINE (finding upheld, disposition wrong).** READ: fix is a bounded WNOHANG poll, SIGKILL, then blocking wait. REASONED: in the very state the finding describes (child survives teardown), the probe blocks *earlier*, in the drain-to-EOF `read()`, and never reaches the bounded reap — and the SIGKILL path adds a cost the disposition denies (see Q2/Q3).
+- **F2 — REFINE (fix direction right, side effect un-reviewed).** READ: `fatals` now collected AFTER the drain. REASONED: the drained stream now includes the deliberate kill complaint ("CLEAR read: complaint then …" per table 2's mutant names); base stays 19/19 PASS, so some exclusion exists, but no finding reviewed its shape.
+- **F3 — UPHOLD**, with one gap: REASONED the distinct-7 check covers E0–E6 only; the duplicate-substitution hole remains for EC1/EA1 unless they have their own presence/distinctness checks (NOT CHECKABLE from packet).
+- **F4 — UPHOLD the analysis, REFINE the fix.** REASONED: the corrected pattern `E(C1|A1|[0-6]) ` anchors on a trailing space; the packet itself writes the rows comma-separated ("EC1,EA1,E0,…"), and if the excerpt uses that form the fix matches *nothing* and false-reds. Settle fact: the excerpt's actual separator.
+- **F5 — UPHOLD.** Label correction; consistent with F12's stated patterns.
+- **F6 — UPHOLD.** READ: author concedes "every stale citation replaced" was false for this line.
+- **F7 — UPHOLD.** Citation fix; TOC content NOT CHECKABLE but two independent seats agree and substance is unchanged.
+- **F8 — UPHOLD.** Header corrected to match the new kill control.
+- **F9 — UPHOLD.** Q = 0x06 ROR 4 is a rotated immediate; the old sentence was false on its face (REASONED from ARM encoding).
+- **F10 — UPHOLD.** Wording now matches the tabled behavior; packet internally consistent.
+- **F11 — UPHOLD.** Grep counts (3x / 0x) NOT CHECKABLE by me; replacement text is at least referential to a construct, not commentary.
+- **F12 — UPHOLD.** Honest contract statement; consequence (bit-31 mutants escape) is now disclosed rather than hidden.
+- **F13 — UPHOLD.** One-sentence scope correction; row name unchanged is fine.
+- **F14 — UPHOLD, with the caveat that the unbuilt mock is where the remaining risk lives** (author's own (c)); ties directly into Q3.
+- **F15 — UPHOLD.** REASONED: (q) escaping the healthy run is what a dead predicate term means; table 2's x_exit2/y_sigkill correctly make the term load-bearing. Disclosure is the right disposition.
+- **F16 — UPHOLD.** REASONED coherent: two different files. Residual hazard, NOT CHECKABLE: does any runtime path (probe import, gate grep) consume the stale 744-line copy? Settle fact: one grep of consumers.
+- **F17 — CANNOT SETTLE from the packet.** The author's resolution (if-branch is NO-PROMPT, never executes an arm) is plausible; settling fact: can the no-prompt branch be entered in a real probe run, and if so is any row judged without P/Q planted?
+- **F18 — UPHOLD (rejection correct).** REASONED from the ISA independent of the packet: in ARM single data transfer, bit 25 I=0 selects the *immediate* offset, I=1 the (shifted) register offset — minimax inverted the flag. The probe's own disassembly row (D1) reporting 0 mismatches corroborates.
+- **F19 — UPHOLD.** Model-value licence stated at the gate; correct scope.
+- **F20 — UPHOLD.** Ledger-by-transport is the rule as stated (READ).
+- **F21 — UPHOLD.** READ: new seat-failure class (brief > tool cap) is real and the template note is the right artifact.
+- **F22 — UPHOLD, and flag the consequence.** READ: all table-2 numbers are single-harness until Opus re-fires; author's (b) is the correct worry.
+- **F23 — UPHOLD.** The narrowed wording ("no row here observes the CPU IRQ line") is strictly more defensible than "no step-based test is possible."
+- **D1 — REFINE.** Keep the L1/hardening grade (agy/minimax's unreachability point stands today, READ), but reject the sentence "the bound costs nothing" — Q3 names a cost, and F1's fix doesn't reach the defended state.
+- **D2 — UPHOLD the oracle choice, REFINE its justification.** REASONED: `not E["fatals"]` is only "stricter" if the expected kill complaint is excluded by a rule as strict as the oracle; after F2 that exclusion is load-bearing and is described nowhere in the packet. Settle fact: is it exact-string, positional, or counted?
+- **D3 — UPHOLD, one cheap measurement advised.** REASONED: for the value forms (wrong odata at len==1/2, or odata left 0), E3's 0x02 and E6's 0x2002 catch by arithmetic — including off-by-one address forms, since P's adjacent bytes (0x20, 0x00) differ from expected. But the panel's own history ((q), (j)) says "caught by construction" deserves one measured (r) when cheap; not owed, merely recommended.
+
+## Q2 — Which accepted disposition is wrong
+
+**F1's.** Not the finding — the disposition's two claims: "fixed" and "costs nothing." REASONED, both fail on the packet's own text:
+
+1. **Not fixed in the state it was filed under.** The defended scenario is a child that survives teardown (SIGHUP-surviving / quit-ignoring). In that state there is no EOF, so the probe blocks in the *drain* `read()` — unbounded — before the bounded reap ever executes. The packet bounds only the reap ("bounded WNOHANG poll (5 s), then SIGKILL"; READ) and describes the drain as plain "drain-to-EOF" (READ), i.e., no stated deadline. The hang wasn't removed; it moved one call earlier, out of reach of the SIGKILL. The author's own (c) concedes the shape was never exercised against a quit-ignoring child (F14's `fbptymock` is filed, not built — READ), which is precisely the input that distinguishes "fixed" from "incomplete." Settle fact: does the drain loop carry its own deadline (select/poll with timeout, escalate to SIGKILL)? One look at the three probes settles it; if yes, this criticism shrinks to wording.
+
+2. **Not costless.** Before the patch, a slow-but-healthy child delayed a verdict; after it, the same child is SIGKILLed at 5 s and the K predicate — which table 2 shows expects exit=1 on a healthy run (READ: "drain CONTROL=OK (K exit=1 …)") — reds on a healthy build. That is a probe-induced false verdict introduced by the "free" fix.
+
+**On the rejections:** none overturned from the packet. F18 is affirmatively correct (bit-25 semantics inverted by minimax; REASONED from the ISA, corroborated by the D1 disassembly row). F16 stands with the residual settle-fact above. F17 is not checkable from the packet either way; the author's reading is internally consistent.
+
+## Q3 — What all nine of us missed
+
+Q3's specific question, answered: **yes.** REASONED from the packet's own table 2: on a healthy run K expects exit=1, and y_sigkill proved a signal-9 reap turns K red. The new bounded reap manufactures exactly that signature out of a *healthy* child whenever the child takes longer than 5 s to become reapable after its last output: scheduler starvation on a loaded host, core-dump writing, slow teardown — and, most concretely, the owed `build-asan/` propagation (READ, listed as still owed): LeakSanitizer runs at `exit()`, and on a malloc-heavy emulator under load it can blow a 5 s window. The first asan run of these probes is precisely where patch539c can red a healthy gate, and the red is then attributed to the build, not to the probe's own escalation. Fix shape: the forced-SIGKILL outcome should be its own teardown class in the K predicate (probe-attributed), not folded into the child's verdict — or the poll should confirm the child is still making no progress before escalating.
+
+The wider miss, in three parts:
+
+1. **The teardown funnel was patched at the bottom, not at the blocking point.** Nine seats accepted "reap bounded ⇒ hang fixed." The drain is the blocking call in the filed scenario and carries no stated bound. The mock that would expose this (F14's) was filed by the same pass that graded F1 "fixed."
+2. **F2 moved the `fatals` boundary past the kill event without anyone re-auditing the oracle.** Old code collected `fatals` before quit, so the deliberate kill complaint could never appear in it; new code collects after the drain, so it always does (READ: base stays green ⇒ an exclusion exists). D2's strictness claim — "a mutant keeping a diagnostic with DIFFERENT text must still red E4" — now silently rests on that exclusion: a mutant emitting filter-matching text *during the rows* escapes E4, and no finding, disposition, or gate check describes the filter. One gate check would retire this: exactly one kill complaint, and it is the last diagnostic line.
+3. **Row-verdict independence on a teardown-only mutant.** READ: x_exit2 (which changes nothing except the teardown exit) reds "sites 18/19 … K1." If that means 18 of 19 rows red, then nearly every sites-row verdict includes the teardown exit term — rows are not independent oracles, which quietly undercuts per-row attribution in kill table 1 (a mutant breaking the kill path red-marks functionally-correct rows). Not necessarily wrong, but it should be stated which row stayed green and why. CANNOT SETTLE from the packet; settle fact: do row verdicts include the exit term, and which row greened?
+
+Also recorded as owed, echoing the author: the Opus measurement (F22) is the only independent check on table 2's numbers; until it lands, "3/3 K rows RED" is single-harness.
+
+**Seat record:** transport=api packet-fed blind seat (no tree, no commands run, nothing measured); answered Q1–Q3 from inlined text only; NOT CHECKABLE items named with settle facts: F17 branch semantics, 744-line-copy consumers (F16), drain-deadline presence and teardown attribution (F1/Q3), kill-complaint exclusion rule (F2/D2), excerpt separator (F4), x_exit2 green-row identity; all other claims labelled READ or REASONED inline.

@@ -189,6 +189,25 @@ MANIFEST = {
         (CLASS_TOOL, "#536: adds these MANIFEST lines -- the round's own tools, classified by the round"),
     "artifacts/wiringcliff/r536_20260918/apply536_precommit.py":
         (CLASS_TOOL, "#536: corrects precommit_check.sh section R's comment, which named the old 2026-09-20 date"),
+    #  #539 n6 (footbridge IRQEnable read ACCEPTED): the frozen instruments the kill tables ran, and the Opus seat's
+    #  pass-1 harness.  FROZEN copies are the exact probe text a table scored (the tables cite their md5); the gated
+    #  detector is regress/footbridge_sites_probe.py itself.  Tables 2-5 froze their probes as *.py.frozen (not .py).
+    "artifacts/n6/killtable_20260919/footbridge_sites_probe.frozen.py":
+        (CLASS_WITNESS, "#539 table 1 instrument (md5 e7df250e): the 19-row sites probe as scored on 12 mutants and the pre-fix HEAD"),
+    "artifacts/n6/killtable_20260919/pending_probes_postfix/fbpending_drain_probe.frozen.py":
+        (CLASS_WITNESS, "#539: the drain probe with its K arm at +0x18c and the status binding, as run post-fix (11/11 controls)"),
+    "artifacts/n6/killtable_20260919/pending_probes_postfix/fbpending_witness.frozen.py":
+        (CLASS_WITNESS, "#539: the witness probe likewise, as run post-fix (12/12, PASS)"),
+    "artifacts/n6/opus_p1_20260919/opus_e.py":
+        (CLASS_WITNESS, "#539 pass 1, Opus seat: rows E0-E6 measured on a post-fix build in its own clone before the round's probe existed (e_prefix/e_postfix.raw)"),
+    "artifacts/n6/opus_p1_20260919/opus_m.py":
+        (CLASS_RESEARCH, "#539 pass 1, Opus seat: the +0x100 / +0x18c kill-site verification and the d->irq_status == 0 measurement"),
+    "artifacts/n6/opus_p1_20260919/opus_m3b.py":
+        (CLASS_RESEARCH, "#539 pass 1, Opus seat: sub-word read lanes and the register-dump spellings (sl/fp/ip) it reported"),
+    "artifacts/n6/opus_p1_20260919/opus_q4.py":
+        (CLASS_RESEARCH, "#539 pass 1, Opus seat: the default-arm diagnostic-presence control candidate (not adopted: fable5 D1)"),
+    "artifacts/n6/killtable_20260919/apply539_manifest.py":
+        (CLASS_TOOL, "#539: adds these MANIFEST lines -- the round's own artifacts, classified by the round"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/check_pred.py":
         (CLASS_TOOL, "closing pass 5: checks each mutant's score against its written prediction"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5.py":

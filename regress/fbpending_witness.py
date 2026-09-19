@@ -2,9 +2,10 @@
 """`fbpending`: a RUNG-3 cold-debugger witness that the emulated footbridge clock
 STOPS for 42.9 s in every 85.9 s, on an UNMODIFIED in-tree `-E cats`.
 
-THE DEFECT.  dev_footbridge.c:73 declares `int pending_timer_interrupts[4]`; the four
-callbacks at :86-92 do `->pending_timer_interrupts[N] ++` with no bound; and
-DEVICE_TICK(footbridge) at :259-277 delivers a tick ONLY under `if (... [i] > 0)`.
+THE DEFECT (as it stood before its fix; the citations are to the pre-fix file and are kept
+as history).  dev_footbridge.c declared `int pending_timer_interrupts[4]`; the four timer
+callbacks did `->pending_timer_interrupts[N] ++` with no bound; and DEVICE_TICK(footbridge)
+delivered a tick ONLY under `if (... [i] > 0)`.
 Nothing decrements the counter except a guest write to TIMER_x_CLEAR, so a guest that
 programs a fast timer and does not acknowledge drives the counter to INT_MAX, where `++`
 is signed overflow (UB) and, in practice, wraps to INT_MIN.  For the next 2^31
@@ -21,7 +22,7 @@ therefore delivered in full.  2^31 / 50e6 = 42.95 s to the wrap and 2^32 / 50e6 
 85.90 s to the return, giving the 42.9-in-85.9 duty cycle this probe plots.
 
 THE GUEST-VISIBLE DISCRIMINATOR, and why it needs no interrupt plumbing.  TIMER_1_VALUE
-(dev_footbridge.c:557-562) is READ/WRITE: a read returns d->timer_value[0], a write
+(dev_footbridge.c `case TIMER_1_VALUE`) is READ/WRITE: a read returns d->timer_value[0], a write
 stores `idata & TIMER_MAX_VAL`.  DEVICE_TICK overwrites that same field with
 `random() % footbridge_effective_cycles(load, control, 0)` -- and with load == 1 that
 modulus is 1, so EVERY delivered tick writes exactly 0.  So the guest:
@@ -31,8 +32,9 @@ modulus is 1, so EVERY delivered tick writes exactly 0.  So the guest:
 
 Each 0 is one delivered tick, counted by the guest into RAM.  Pre-wrap that count climbs
 at the device-tick rate; post-wrap it FREEZES and the sentinel the guest wrote survives
-indefinitely.  No interrupt controller, no IRQ enable (which would hit an unrelated
-fatal()+exit(1) at dev_footbridge.c:486-499), no guest OS, no disk image.
+indefinitely.  No interrupt controller, no IRQ enable, no guest OS, no disk image.
+(This used to add "an IRQ enable read would hit an unrelated fatal()+exit(1)"; #539
+removed that exit, and the enable registers play no part in this witness.)
 
 *** WHY A FROZEN COUNTER IS NOT MERELY "THE EMULATOR STOPPED", which is the whole
     difficulty of a negative measurement.  Three quantities run CONCURRENTLY in the same
@@ -71,9 +73,12 @@ ARMS
      against a separate `unassemble` of words that might never run.
   T  negative control.  MMU left on.  Must not return 0x1011 or 0x00345678.
   K  failability control.  Arm A's prologue plus ONE instruction, a guest read of
-     IRQ_ENABLE_SET (footbridge+0x188), which dev_footbridge.c:486-499 answers with
-     fatal() then exit(1).  A probe in which nothing can die proves nothing by
-     surviving; K must kill the host and A must not.
+     IRQ_ENABLE_CLEAR (footbridge+0x18c, write-only per the DC21285), which
+     dev_footbridge.c's `case IRQ_ENABLE_CLEAR` read branch answers with fatal() then
+     exit(1).  A probe in which nothing can die proves nothing by surviving; K must
+     kill the host (its complaint AND exit 1) and A must not (exit 0).  #539 moved this
+     from +0x188, which is a documented read-only register and now answers reads; the
+     bridge is retired by the round that declines +0x18c.
 
 CONTROLS ARE NOT OPTIONAL AND ABSENT DATA MUST FAIL.  Every RAM word is poisoned with
 0xDEADBEEF before the run, every verdict row first requires the values it consults to be
@@ -137,8 +142,8 @@ LASTID = DATA + 0x2c          # last VENDOR_ID read      <- device still dispatc
 POISON = 0xDEADBEEF
 
 SENTINEL = 0x00AB0000         # survives `idata & TIMER_MAX_VAL` (0x00FFFFFF)
-VENDOR   = 0x1011             # dev_footbridge.c:423
-LOADBACK = 0x00345678         # 0x12345678 & TIMER_MAX_VAL, dev_footbridge.c:548
+VENDOR   = 0x1011             # dev_footbridge.c `case VENDOR_ID` (DC21285_VENDOR_ID)
+LOADBACK = 0x00345678         # 0x12345678 & TIMER_MAX_VAL, `case TIMER_1_LOAD`'s write branch
 
 EMU_HZ      = 50000000.0
 PREDICT_OFF = 2147483648.0 / EMU_HZ      # 42.95 s: the wrap
@@ -192,8 +197,8 @@ LOOP = [
     (0x74, 0xEAFFFFF3, "b 0x8048",          "re-arm the sentinel"),
 ]
 LANDING = (0x78, NOP, NOPTXT, "landing pad -- planted, never reached")
-KILL    = (0x48, 0xE5907188, "ldr r7,[r0,#392]",
-           "arm K: read IRQ_ENABLE_SET -> fatal()+exit(1) at dev_footbridge.c:492-497")
+KILL    = (0x48, 0xE590718C, "ldr r7,[r0,#396]",
+           "arm K: read IRQ_ENABLE_CLEAR -> fatal()+exit(1) (#539: was +0x188)")
 
 SENT_A = (0xE3A088AB, "mov r8,#0xab0000")     # 0x00AB0000
 SENT_E = (0xE3A08000, "mov r8,#0")            # arm E: the ONE immediate that differs
@@ -339,20 +344,59 @@ class Session:
                 got[k] = int(m.group(1), 16)
         return got
 
-    def close(self):
+    def close(self, patience=20.0):
         try:
             os.write(self.fd, b"quit\n")
-            time.sleep(0.3)
         except OSError:
             pass
+        # Drain through EOF; closing a live master can SIGHUP the child.
+        deadline = time.monotonic() + patience
+        eof = False
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            if not self.rd(min(0.1, left)):
+                eof = True
+                break
         try:
             os.close(self.fd)
         except OSError:
             pass
-        try:
-            os.waitpid(self.pid, 0)
-        except Exception:
-            pass
+        #  #539 (pass 2): BOUNDED reap.  A child that survives the master close (SIGHUP ignored or
+        #  blocked, or stopped) would hang a blocking waitpid forever; poll, then kill, then wait.
+        pid, st, gone = 0, None, False
+        t1 = time.time()
+        while pid == 0 and time.time() - t1 < 10.0:
+            try:
+                pid, st = os.waitpid(self.pid, os.WNOHANG)
+            except OSError:
+                gone = True      # ECHILD: already reaped elsewhere -- its pid may be recycled; never kill it
+                break
+            if pid == 0:
+                time.sleep(0.05)
+        harness_killed = False
+        if pid == 0 and not gone:
+            #  F2 (#539): a kill WE fire is labelled, so a red from it is attributed to the harness --
+            #  a healthy child SIGKILLed by a too-short budget would otherwise read like a product
+            #  signal death (byte-identical to the y_sigkill mutant).  Budgets: 20 s drain + 10 s here.
+            harness_killed = True
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                _, st = os.waitpid(self.pid, 0)
+            except OSError:
+                st = None
+        code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+        sig = os.WTERMSIG(st) if st is not None and os.WIFSIGNALED(st) else None
+        if harness_killed and sig == signal.SIGKILL:
+            sig = "HARNESS-KILL(%s)" % sig     # our kill; a kill landing on a zombie reaps the
+                                                # product's own status and stays unlabelled
+        elif not eof and sig is not None:
+            sig = "HARNESS-CLOSE(%s)" % sig   # the drain deadline expired; our close() HUP'd a live child
+        return dict(exit=code, signal=sig)
 
 
 def plant(s, prog):
@@ -400,8 +444,8 @@ def run_witness(head, sentinel, slices, slice_s, label):
     prog = head + prologue(sentinel[0], sentinel[1]) + LOOP + [LANDING]
     s = Session()
     if not s.wait(timeout=120):
-        s.close()
-        return dict(status="NO-PROMPT", label=label, samples=[], regs={}, badis=[], catchup=0)
+        return dict(status="NO-PROMPT", label=label, samples=[], regs={}, badis=[],
+                    catchup=0, **s.close())
     plant(s, prog)
     bad, _, _ = step_and_check(s, prog, PROLOGUE_N)
     r = s.regs()
@@ -424,17 +468,16 @@ def run_witness(head, sentinel, slices, slice_s, label):
     else:
         status = "SURVIVED"
     catchup = s.buf.count(TIMERMSG)
-    s.close()
+    end = s.close()
     return dict(status=status, label=label, regs=r, badis=bad,
-                samples=samples, catchup=catchup)
+                samples=samples, catchup=catchup, **end)
 
 
 def run_kill():
     prog = MMU_OFF + prologue(*SENT_A) + [KILL, (0x4c, NOP, NOPTXT, "")]
     s = Session()
     if not s.wait(timeout=120):
-        s.close()
-        return dict(status="NO-PROMPT", saw_fatal=False, badis=[], nsteps=0)
+        return dict(status="NO-PROMPT", saw_fatal=False, badis=[], nsteps=0, **s.close())
     plant(s, prog)
     bad, _, ex = step_and_check(s, prog, PROLOGUE_N + 1)
     died = s.dead
@@ -442,10 +485,10 @@ def run_kill():
         #  The exit may land between the write and our read; one more poke settles it.
         s.send("reg", timeout=10)
         died = s.dead
-    seen = "ENABLE SET" in s.buf
-    s.close()
+    end = s.close()
+    seen = "ENABLE CLEAR" in s.buf
     return dict(status="HOST-DIED" if died else "SURVIVED", saw_fatal=seen,
-                badis=bad, nsteps=len(ex))
+                badis=bad, nsteps=len(ex), **end)
 
 
 def run_encodings():
@@ -454,17 +497,16 @@ def run_encodings():
     prog = MMU_OFF + prologue(*SENT_E) + LOOP + [LANDING]
     s = Session()
     if not s.wait(timeout=120):
-        s.close()
         return dict(status="NO-PROMPT", regs={}, badis=[], covered=set(), want=set(),
-                    nsteps=0, executed=[])
+                    nsteps=0, executed=[], **s.close())
     plant(s, prog)
     bad, covered, ex = step_and_check(s, prog, PROLOGUE_N + 2 * len(LOOP))
     r = s.regs()
     want = {CODE + off for off, *_ in prog if off != LANDING[0]}
     status = "HOST-DIED" if s.dead else "SURVIVED"
-    s.close()
+    end = s.close()
     return dict(status=status, regs=r, badis=bad, covered=covered, want=want,
-                nsteps=len(ex), executed=ex)
+                nsteps=len(ex), executed=ex, **end)
 
 
 def main():
@@ -557,14 +599,19 @@ def main():
         ok &= bool(good)
         print("  %-4s %-47s %s" % ("ok" if good else "FAIL", tag, detail))
 
+    def survived(a):
+        return a["status"] == "SURVIVED" and a.get("exit") == 0
+
     rA, rE, rT = A["regs"], E["regs"], T["regs"]
-    ranA = A["status"] == "SURVIVED" and len(S) == SLICES
-    ranE = E["status"] == "SURVIVED"
-    ranT = T["status"] == "SURVIVED" and len(T["samples"]) == 1
+    ranA = survived(A) and len(S) == SLICES
+    ranE = survived(E)
+    ranT = survived(T) and len(T["samples"]) == 1
 
     row("R0 every arm produced data", ranA and ranE and ranT and K["status"] != "NO-PROMPT",
-        "A=%s(%d/%d samples) E=%s T=%s K=%s"
-        % (A["status"], len(S), SLICES, E["status"], T["status"], K["status"]))
+        "; ".join("%s=%s exit=%s signal=%s" %
+                  (name, a["status"], a.get("exit"), a.get("signal"))
+                  for name, a in (("A", A), ("E", E), ("T", T), ("K", K)))
+        + "; A samples=%d/%d" % (len(S), SLICES))
     row("C1 liveness: RAM through the same decode",
         rA.get(5) == 0x11223344 and rE.get(5) == 0x11223344,
         "A r5=0x%x  E r5=0x%x" % (rA.get(5, -1), rE.get(5, -1)))
@@ -585,11 +632,14 @@ def main():
         "%d mismatches, %d/%d offsets stepped"
         % (len(E["badis"]), len(E["covered"]), len(E["want"])))
     row("K  failability: the kill instruction really kills",
-        K["status"] == "HOST-DIED" and A["status"] == "SURVIVED",
-        "K=%s (device complaint seen: %s), A=%s"
-        % (K["status"], K["saw_fatal"], A["status"]))
+        K["status"] == "HOST-DIED" and K["saw_fatal"] and K.get("exit") == 1
+        and survived(A),
+        "K=%s exit=%s signal=%s (device complaint seen: %s), A=%s"
+        % (K["status"], K.get("exit"), K.get("signal"), K["saw_fatal"], A["status"]))
     row("T  the MMU-ON control cannot see the device",
-        ranT and rT.get(6) != VENDOR and rT.get(7) != LOADBACK,
+        #  F2 (#539): the keys must be PRESENT -- None != VENDOR is True, so a register-parse miss
+        #  greened this row once survived() forbade the halt outcome.
+        ranT and 6 in rT and 7 in rT and rT[6] != VENDOR and rT[7] != LOADBACK,
         "T r6=0x%x r7=0x%x" % (rT.get(6, -1), rT.get(7, -1)))
     ratio = (S[0]["iters"] / S[0]["clob"]) if (S and S[0]["clob"]) else 0
     row("D1 the ticks come from the DEVICE, not an absent read",
@@ -646,7 +696,8 @@ def main():
         print("  The emulated footbridge clock delivered NOTHING for %.1f s of continuous"
               % frozen_span)
         print("  free-running guest execution, while the guest kept running and the device")
-        print("  kept answering reads.  That is dev_footbridge.c:86-92 against :265.")
+        print("  kept answering reads.  That is the unbounded callback increment against")
+        print("  DEVICE_TICK's `> 0` test -- the pre-fix dev_footbridge.c, see the header.")
     good = ok and covered and symptom == "ABSENT"
     print("FBPENDING_VERDICT=%s" % ("PASS" if good else "FAIL"))
     print("PROBE_WALL=%.1fs" % (time.time() - t_probe))

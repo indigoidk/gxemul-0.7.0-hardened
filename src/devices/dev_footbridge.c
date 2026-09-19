@@ -583,10 +583,12 @@ DEVICE_ACCESS(footbridge)
 			else
 				INTERRUPT_DEASSERT(d->irq);
 		} else {
+			/*  #539: a read of 188h is documented -- IRQEnable is
+			    "read-only ... can only be changed by writing to
+			    the EnableSet and EnableClear registers", reset 0
+			    (DC21285 Table 7-10, 7.3.31).  The value below was
+			    always right; the exit(1) that followed it is gone.  */
 			odata = d->irq_enable;
-			fatal("[ WARNING: footbridge read from "
-			    "ENABLE SET? ]\n");
-			exit(1);
 		}
 		break;
 

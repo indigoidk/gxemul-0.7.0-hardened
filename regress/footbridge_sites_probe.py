@@ -35,30 +35,88 @@ VALUES, NOT SURVIVAL (rounds 79/80, and m8820x_sites_probe.py's header says the 
 A row that only asks "did the host stay up" cannot tell a reachable device from an absent
 one -- an unmapped read survives too, it just returns 0.  So the two device rows assert
 values that ONLY dev_footbridge.c can produce:
-  * A1 reads VENDOR_ID and requires 0x1011 (dev_footbridge.c:423, DC21285_VENDOR_ID).
+  * A1 reads VENDOR_ID and requires 0x1011 (dev_footbridge.c `case VENDOR_ID`, the
+    DC21285_VENDOR_ID assignment).
     Nonzero and specific: the hand-assembled-encoding trap this project has been bitten by
     yields 0 from a wrong register field, and 0 is the one answer this row rejects.
   * A2 writes 0x12345678 to TIMER_1_LOAD and reads back 0x00345678.  THE VANISHING TOP BYTE
-    IS THE HANDLER'S OWN SIGNATURE: dev_footbridge.c:548 stores `idata & TIMER_MAX_VAL`
+    IS THE HANDLER'S OWN SIGNATURE: `case TIMER_1_LOAD`'s write branch (one case serves all four
+    timers through the fold) stores `idata & TIMER_MAX_VAL`
     (0x00FFFFFF, dc21285reg.h:371).  RAM, or any decode that merely absorbed the store,
     would return 0x12345678 unchanged.  This row therefore distinguishes "the device
     handled it" from "the write landed somewhere", which A1 alone cannot.
 
 THE KILL PAIR, which is this probe's own failability control.  Arms L and K differ by
-EXACTLY ONE INSTRUCTION.  Arm K adds a guest read of IRQ_ENABLE_SET (base+0x188), which
-dev_footbridge.c:495-497 answers with fatal() then exit(1) -- an UNFIXED site, used here
-rather than repaired, because a probe that reports SURVIVED for every row is vacuous unless
-something in it can still die.  Arm L must live; arm K must exit 1 and say so.  If both
-survived, the guest instructions are not reaching the device at all and every SURVIVED
-verdict above is worthless; if both died, the probe is killing the host for its own reasons.
-The one-instruction delta is the entire argument.
+EXACTLY ONE INSTRUCTION.  Arm K adds a guest read of IRQ_ENABLE_CLEAR (base+0x18c), which
+dev_footbridge.c's `case IRQ_ENABLE_CLEAR` read branch answers with fatal() then exit(1) --
+an UNFIXED site, used here rather than repaired, because a probe that reports SURVIVED for
+every row is vacuous unless something in it can still die.  Arm L must live; arm K must
+exit 1 and say so.  If both survived, the guest instructions are not reaching the device at
+all and every SURVIVED verdict above is worthless; if both died, the probe is killing the
+host for its own reasons.  The one-instruction delta is the entire argument.
+  #539 moved this arm from +0x188 to +0x18c.  +0x188 (IRQEnable) is a DOCUMENTED READ-ONLY
+  register (DC21285 Table 7-10; 7.3.31: "can only be changed by writing to the EnableSet and
+  EnableClear registers", reset 0) and now answers reads -- rows E0-E6 below.  +0x18c is
+  write-only per 7.3.33 (IRQEnableClear), so a kill there is a decline-class site still dying,
+  and the same deletion spilled onto the CLEAR read branch -- with or without its diagnostic --
+  makes K survive, so K1 reds on the exit status it requires.
+  The bridge is TEMPORARY: the round that declines +0x18c retires it and builds the harness
+  legs (startup rejection + mid-session quit, status reaped) in the same commit.
+
+ARM E -- #539's ACCEPT rows, in a FOURTH arm so that arms L/T/K are byte-identical to what
+they were.  E carries its own C1/A1 (E0 = 0 is also what an ABSENT device returns, so the
+E rows are meaningless unless this arm demonstrably reached the device) and then:
+  E0 read IRQEnable before any write            -> 0            (reset value, 7.3.31)
+  E1 write P=0x2002 to Set, read               -> P            (readable; catches a bit
+                                                                  swap, a constant, a wrong
+                                                                  field, a masked value)
+  E2 write Q=0x60000000 to Set, read           -> P|Q          (pins |=; bit 30 set so a
+                                                                  diagnostic kept for the top
+                                                                  bits fires here)
+  E3 ldrb  +0x188                              -> 0x02         (low byte: len 1 reaches the
+  E6 ldrh  +0x188                              -> 0x2002        same case; the CSR drives
+                                                                  D[31:0] and the SA-110 takes
+                                                                  the lane, DC21285 3.2.x)
+  E5 write P to Clear, read Set                -> Q            (Clear works; = the E2 value
+                                                                  with P removed)
+  E4 no BRACKETED diagnostic naming footbridge anywhere in arm E -- the `fatals` regex is
+     `[ ... footbridge ... ]`, the house diagnostic shape; a kept fatal() with its exit gone
+     is caught; a diagnostic rewritten WITHOUT brackets or without the device name is NOT
+     (listed under NOT COVERED below)
+Execution order is E0,E1,E2,E3,E6,E5: E6 wants 0x2002, which is true only while P is set.
+P and Q are loaded from RAM (DATA+8, DATA+12), like 0x12345678: P is not a rotated ARM
+immediate (bits 1 and 13); Q is (0x06 ROR 4) and is loaded the same way for uniformity.
+Values land in r7,r1,r2,r9,fp,ip; r1/r2 are A2's registers in arm L and are free here
+because arm E does not score A2.  TESTED PATTERNS, stated so the contract is checkable:
+P = bits 1,13 and Q = bits 29,30 only; bit 31 and every other bit are untested by value.
+
+CONTRACT (what this detector is designed to catch, and what it is not).  On the SET read
+branch: the exit reinstated (E0 dies), reinstated only when irq_enable == 0 (E0), a wrong
+field/constant/mask/bit-swap (E1, E2), a width guard (E3, E6), a kept diagnostic (E4), a
+diagnostic kept for bit 30 (E4; E2 if it exits -- bit 31 is never set here, so a bit-31-only
+guard is UNTESTED).  On the CLEAR arms: a broken `&= ~`
+(E5), the exit removed from the CLEAR read too (K1).  NOT COVERED: (a) no row observes the
+CPU IRQ line -- an edit to the write arm's assert condition (`irq_status | irq_enable`) is
+invisible to every row here, because cpu_dyntrans.c suppresses interrupt delivery under
+`step` and CPSR I/F stay set; it needs a free-running arm with a positive delivery control,
+filed with IRQSoft; (b) +0x189..+0x18b: real hardware selects the same CSR by A[10:2] and
+returns lanes 1-3, the model routes them to `default:` and returns 0 -- a device-wide decode
+deviation, filed, not rowed; (c) irq_status and fiq_enable are 0 throughout, so a mutant
+returning either at +0x188 is caught by E1/E2 only through the value, not distinguished
+from a constant 0.  (d) D1 compares the disassembly of every STEPPED word; the landing pad is
+planted and never stepped, and a step that ends the process is not compared.  (e) E4 sees only
+a BRACKETED diagnostic that names footbridge (the `fatals` regex); a bare-text diagnostic on
+the read path escapes it.
+TEARDOWN CONVENTION this file's bounded drain rests on: rd() returns True on a select TIMEOUT
+and False only on EOF/EIO, so the post-quit drain loop breaks on EOF or its deadline, never on
+a quiet interval (the same convention as the two pending probes' Session.rd).
 
 EVERY PLANTED WORD IS CHECKED AGAINST THE DISASSEMBLY THE EMULATOR PRINTS AS IT STEPS IT --
 not against a separate `unassemble`, because the step line is the instruction that actually
 executed.  This project has a recorded incident where a wrong register field made a gate row
 measure the wrong thing for months.
 
-COST, measured: see PROBE_WALL below -- 3 cold-debugger launches, no boot.  A booting-rig row
+COST, measured: see PROBE_WALL below -- 4 cold-debugger launches, no boot.  A booting-rig row
 was deliberately NOT written: no rig in this tree boots a footbridge machine at all, which is
 the gap this probe closes, and adding one would put a load-sensitive wall-clock oracle into a
 battery already carrying ~37.
@@ -67,7 +125,7 @@ usage: footbridge_sites_probe.py <gxemul-binary> <four-byte-raw-stub>
 The stub is the same scaffolding gate_arm.sh writes for testarm: `cats` needs a file
 argument to construct, and every word of it is overwritten before anything executes.
 """
-import os, pty, re, select, sys, time
+import os, pty, re, select, signal, sys, time
 
 BIN = sys.argv[1]
 STUB = sys.argv[2]
@@ -100,8 +158,25 @@ BODY = [
     (0x28, 0xE5901300, "ldr r1,[r0,#768]",      "A2: read it back"),
 ]
 KILL_NOP  = (0x2c, NOP,        NOPTXT,             "arm L: no kill site")
-KILL_LOAD = (0x2c, 0xE5907188, "ldr r7,[r0,#392]", "arm K: read IRQ_ENABLE_SET (0x188)")
+KILL_LOAD = (0x2c, 0xE590718C, "ldr r7,[r0,#396]", "arm K: read IRQ_ENABLE_CLEAR (0x18c)")
 TAIL = [(0x30, NOP, NOPTXT, "landing pad -- planted, never stepped")]
+P, Q = 0x00002002, 0x60000000           # #539 arm E values; loaded from DATA+8 / DATA+12
+ENABLE = [                              # #539: the ACCEPT rows, order E0,E1,E2,E3,E6,E5
+    (0x2c, 0xE5907188, "ldr r7,[r0,#392]",   "E0: read IRQ_ENABLE_SET before any write"),
+    (0x30, 0xE5948008, "ldr r8,[r4,#8]",     "r8 = P"),
+    (0x34, 0xE5808188, "str r8,[r0,#392]",   "IRQEnableSet <- P"),
+    (0x38, 0xE5901188, "ldr r1,[r0,#392]",   "E1: read back -> P"),
+    (0x3c, 0xE594900C, "ldr r9,[r4,#12]",    "r9 = Q"),
+    (0x40, 0xE5809188, "str r9,[r0,#392]",   "IRQEnableSet <- Q"),
+    (0x44, 0xE5902188, "ldr r2,[r0,#392]",   "E2: read back -> P|Q (pins |=)"),
+    (0x48, 0xE5D09188, "ldrb r9,[r0,#392]",  "E3: BYTE read -> 0x02"),
+    (0x4c, 0xE280AD06, "add sl,r0,#0x180",   "sl = base+0x180 (ldrh offsets cap at 255)"),
+    (0x50, 0xE1DAB0B8, "ldrh fp,[sl,#8]",    "E6: HALFWORD read -> 0x2002"),
+    (0x54, 0xE580818C, "str r8,[r0,#396]",   "IRQEnableClear <- P"),
+    (0x58, 0xE590C188, "ldr ip,[r0,#392]",   "E5: read back -> Q"),
+    (0x5c, NOP, NOPTXT, "landing pad -- planted, never stepped"),
+]
+REGNAME = {10: "sl", 11: "fp", 12: "ip"}   # the emulator's spellings (cpu_arm.h ARM_REG_NAMES)
 
 
 def run_arm(label, prog):
@@ -168,6 +243,8 @@ def run_arm(label, prog):
     else:
         send("put w 0x%08x, 0x%08x" % (DATA, 0x11223344))
         send("put w 0x%08x, 0x%08x" % (DATA + 4, 0x12345678))
+        send("put w 0x%08x, 0x%08x" % (DATA + 8, P))
+        send("put w 0x%08x, 0x%08x" % (DATA + 12, Q))
         for off, word, _t, _c in prog:
             send("put w 0x%08x, 0x%08x" % (CODE + off, word))
         send("pc=0x%08x" % CODE)
@@ -188,28 +265,61 @@ def run_arm(label, prog):
         if status == "SURVIVED":
             mark = len(buf)
             if send("reg", timeout=30) and not dead[0]:
-                for n in (0, 1, 2, 3, 5, 6, 7):
-                    mm = re.search(r"\br%d\s*=\s*0x([0-9a-fA-F]+)" % n, buf[mark:])
+                for n in (0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12):
+                    mm = re.search(r"\b%s\s*=\s*0x([0-9a-fA-F]+)"
+                                   % REGNAME.get(n, "r%d" % n), buf[mark:])
                     if mm:
                         regs[n] = int(mm.group(1), 16)
             else:
                 status = "HOST-DIED" if dead[0] else "NO-REG"
-    fatals = re.findall(r"(\[[^\r\n\]]*footbridge[^\r\n\]]*\])", buf)
+    #  #539 (pass 2): the SAME teardown as the two pending probes -- quit, DRAIN to EOF (bounded), close
+    #  the master, then a BOUNDED reap (poll 10 s, kill, wait).  The old sleep-0.3-then-close could SIGHUP a
+    #  child still shutting down and then block forever in waitpid; and fatals are collected AFTER the
+    #  drain so a diagnostic printed during shutdown is not missed.
     try:
         os.write(fd, b"quit\n")
-        time.sleep(0.3)
     except OSError:
         pass
+    t1 = time.time()
+    eof = False
+    while time.time() - t1 < 20.0:
+        if not rd(0.1):
+            eof = True
+            break
+    fatals = re.findall(r"(\[[^\r\n\]]*footbridge[^\r\n\]]*\])", buf)
     try:
         os.close(fd)
     except OSError:
         pass
-    try:
-        _, st = os.waitpid(pid, 0)
-    except Exception:
-        st = None
+    rpid, st, gone = 0, None, False
+    t1 = time.time()
+    while rpid == 0 and time.time() - t1 < 10.0:
+        try:
+            rpid, st = os.waitpid(pid, os.WNOHANG)
+        except OSError:
+            gone = True      # ECHILD: already reaped elsewhere -- its pid may be recycled; never kill it
+            break
+        if rpid == 0:
+            time.sleep(0.05)
+    harness_killed = False
+    if rpid == 0 and not gone:
+        #  F2 (#539): a kill WE fire is labelled (see the pending probes' close()): 20 s drain + 10 s reap.
+        harness_killed = True
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            _, st = os.waitpid(pid, 0)
+        except OSError:
+            st = None
     code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
     sig = os.WTERMSIG(st) if st is not None and os.WIFSIGNALED(st) else None
+    if harness_killed and sig == signal.SIGKILL:
+        sig = "HARNESS-KILL(%s)" % sig      # our kill, not a product death (a kill that lands on
+                                             # a zombie reaps the product's own status: unlabelled)
+    elif not eof and sig is not None:
+        sig = "HARNESS-CLOSE(%s)" % sig   # the drain deadline expired; our close HUP'd a live child
     print("  arm %-36s %-9s exit=%-5s signal=%s" % (label, status, code, sig))
     for b in badis:
         print("      DISASSEMBLY MISMATCH: %s" % b)
@@ -234,7 +344,8 @@ t0 = time.time()
 
 L = run_arm("L  live      (MMU off)",      MMU_OFF + BODY + [KILL_NOP] + TAIL)
 T = run_arm("T  trap ctrl (MMU LEFT ON)",  MMU_NOP + BODY + [KILL_NOP] + TAIL)
-K = run_arm("K  kill      (MMU off,+188)", MMU_OFF + BODY + [KILL_LOAD] + TAIL)
+K = run_arm("K  kill      (MMU off,+18c)", MMU_OFF + BODY + [KILL_LOAD] + TAIL)
+E = run_arm("E  enable    (MMU off,#539)", MMU_OFF + BODY + ENABLE)
 print()
 
 results = []
@@ -264,7 +375,7 @@ results.append(c4)
 
 #  ---- the reachability rows.  VALUES, not survival. ----
 a1 = row("A1", "VENDOR_ID through a real guest ldr", L["regs"].get(6), 0x1011)
-a2 = row("A2", "TIMER_1_LOAD masked to 24 bits by :548", L["regs"].get(1), 0x00345678)
+a2 = row("A2", "TIMER_1_LOAD masked to 24 bits (MAX_VAL)", L["regs"].get(1), 0x00345678)
 results.append(a1)
 results.append(a2)
 #  *** NAME THE RIGHT CAUSE, and this branch is here because the first draft named the WRONG
@@ -288,18 +399,36 @@ results.append(row("A2b", "the value the guest actually stored",
 
 #  ---- the kill pair: this probe's own failability control. ----
 l_ok = L["status"] == "SURVIVED" and L["exit"] == 0 and not L["fatals"]
-k_ok = any("ENABLE SET" in f for f in K["fatals"]) and K["exit"] == 1
+k_ok = any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1
 print("%-4s %-40s %-30s %s"
       % ("I1", "isolation arm SURVIVES untouched",
          "status=%s exit=%s" % (L["status"], L["exit"]), "ok" if l_ok else "FAIL"))
 print("%-4s %-40s %-30s %s"
-      % ("K1", "kill arm dies at 0x188, exit 1",
+      % ("K1", "kill arm dies at 0x18c, exit 1",
          "exit=%s" % K["exit"], "ok" if k_ok else "FAIL"))
 print("      kill arm said: %s" % ((K["fatals"] or ["(nothing)"])[-1]))
 results.append(l_ok)
 results.append(k_ok)
 
-nbad = sum(len(a["badis"]) for a in (L, T, K))
+#  ---- #539: IRQEnable is readable.  Arm E first proves it reached the device (its own C1
+#  and A1: E0 == 0 is ALSO what an absent device returns), then the value rows. ----
+ec1 = row("EC1", "arm E liveness: plain RAM readback", E["regs"].get(5), 0x11223344)
+ea1 = row("EA1", "arm E reaches the device: VENDOR_ID", E["regs"].get(6), 0x1011)
+results += [ec1, ea1]
+results.append(row("E0", "IRQEnable reads 0 before any write", E["regs"].get(7), 0))
+results.append(row("E1", "Set <- P, read back", E["regs"].get(1), P))
+results.append(row("E2", "Set <- Q, read back (|=)", E["regs"].get(2), P | Q))
+results.append(row("E3", "byte read: low byte", E["regs"].get(9), P & 0xff))
+results.append(row("E6", "halfword read: low two bytes", E["regs"].get(11), P & 0xffff))
+results.append(row("E5", "Clear <- P, read Set back", E["regs"].get(12), Q))
+e_ok = E["status"] == "SURVIVED" and E["exit"] == 0 and not E["fatals"]
+print("%-4s %-40s %-30s %s"
+      % ("E4", "arm E: no footbridge diagnostic, exit 0",
+         "status=%s exit=%s fatals=%d" % (E["status"], E["exit"], len(E["fatals"])),
+         "ok" if e_ok else "FAIL"))
+results.append(e_ok)
+
+nbad = sum(len(a["badis"]) for a in (L, T, K, E))
 print("%-4s %-40s %-30s %s"
       % ("D1", "every planted word disassembled as meant",
          "%d mismatches" % nbad, "ok" if nbad == 0 else "FAIL"))
@@ -308,9 +437,9 @@ results.append(nbad == 0)
 #  Named, not indexed.  The first version wrote `results[0] and results[1] ...`, which silently
 #  re-points at different rows the moment a row is inserted above -- the same class as pinning a
 #  row by an id that names a family.
-ctrl_ok = c1 and c2 and c3 and c4
+ctrl_ok = c1 and c2 and c3 and c4 and ec1 and ea1
 print()
 print("ROWS=%d of %d" % (sum(1 for r in results if r), len(results)))
 print("FOOTBRIDGE_SITES_CONTROL=%s" % ("OK" if ctrl_ok else "BAD"))
 print("FOOTBRIDGE_SITES_%s" % ("PASS" if all(results) else "FAIL"))
-print("PROBE_WALL=%.1fs for 3 cold-debugger arms" % (time.time() - t0))
+print("PROBE_WALL=%.1fs for 4 cold-debugger arms" % (time.time() - t0))

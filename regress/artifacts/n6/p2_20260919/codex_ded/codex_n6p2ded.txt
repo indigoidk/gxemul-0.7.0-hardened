@@ -1,0 +1,215 @@
+VERDICT: VERIFIED WITH QUALIFICATIONS — 34/34 scoped diff hunks match the tree; 13/13 ENABLE encodings are correct. The remaining qualifications concern shutdown liveness, missing-data predicates, and overstated documentation. Runtime results were not checked.
+
+1. **READ — packet versus working tree**
+
+HEAD is `a11eaac4bd58c3ac12b6acf91a41982a816df471`. After removing the packet’s line-number prefixes and normalizing presentation line endings:
+
+| File | Matching hunks | Finding |
+|---|---:|---|
+| `src/devices/dev_footbridge.c` | 1/1 | Matches |
+| `regress/footbridge_sites_probe.py` | 7/7 | Matches |
+| `regress/fbpending_drain_probe.py` | 10/10 | Matches |
+| `regress/fbpending_witness.py` | 14/14 | Matches |
+| `regress/gate_arm.sh`, footbridge section | 2/2 | Matches |
+
+**0/34 scoped hunks differ.** The packet is explicitly a partial representation of the gate’s full-file diff; its unrelated hunks were not reviewed.
+
+A binary comparison confirms `est/src/devices/dev_footbridge.c` is byte-identical to SEC’s. Both have MD5 `25e72c7c6e3b7c74704d12f9f9174c2c`.
+
+READ — [device handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578): the SET read retains `odata = d->irq_enable`, removes the diagnostic and terminating call, and reaches the common `memory_writemax64` tail. There is no new latch or executable behavior beyond accepting the read. Initialization zeroes the structure. The comment agrees with the datasheet excerpts supplied in the packet; the original datasheet was not independently read.
+
+2. **READ / REASONED — ENABLE words**
+
+READ — [ENABLE](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:150), [decoder bitfields](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4073), and [disassembler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1865).
+
+For the ten ordinary loads/stores, condition=`E`, bits 27:26=`01`, immediate addressing, `P=1`, `U=1`, and `W=0`. Only `ldrb` has `B=1`; stores have `L=0`. `Rn` and `Rd` come from bits 19:16 and 15:12.
+
+| Offset | Word | Expected spelling | Destination/use through dump |
+|---|---|---|---|
+| `2c` | `E5907188` | `ldr r7,[r0,#392]` | r7: E0, retained |
+| `30` | `E5948008` | `ldr r8,[r4,#8]` | r8: P, retained for both stores |
+| `34` | `E5808188` | `str r8,[r0,#392]` | Stores P; no register writeback |
+| `38` | `E5901188` | `ldr r1,[r0,#392]` | r1: E1, retained |
+| `3c` | `E594900C` | `ldr r9,[r4,#12]` | r9: Q, consumed at `40` |
+| `40` | `E5809188` | `str r9,[r0,#392]` | Stores Q; no register writeback |
+| `44` | `E5902188` | `ldr r2,[r0,#392]` | r2: E2, retained |
+| `48` | `E5D09188` | `ldrb r9,[r0,#392]` | r9: E3; intentionally replaces consumed Q |
+| `4c` | `E280AD06` | `add sl,r0,#0x180` | r10/sl: halfword address base, retained |
+| `50` | `E1DAB0B8` | `ldrh fp,[sl,#8]` | r11/fp: E6, retained |
+| `54` | `E580818C` | `str r8,[r0,#396]` | Clears P; no register writeback |
+| `58` | `E590C188` | `ldr ip,[r0,#392]` | r12/ip: E5, retained |
+| `5c` | `E1A00000` | `mov r0,r0` | Landing pad; never stepped |
+
+The special encodings also check out:
+
+- `add`: immediate form, opcode 4, `S=0`, `Rn=0`, `Rd=10`; imm8=`06`, rotation field=`D`, giving `ROR(6,26)=0x180`.
+- `ldrh`: `P=U=I=L=1`, `W=S=0`, `H=1`; `Rn=A`, `Rd=B`; split immediate `0:8` gives 8.
+- Landing pad: register MOV, opcode `D`, `S=0`, `Rd=Rm=0`, no shift.
+
+The printers use decimal load/store offsets, hexadecimal `add` immediates of this magnitude, and aliases `sl/fp/ip`. Whitespace normalization accommodates their tabs. **13/13 spellings agree statically; only 12/13 ENABLE words are scheduled for stepping.**
+
+BODY executes first. Its r1/r2 values are deliberately replaced by E1/E2; r5/r6 remain intact. **8/8 registers used by the six value rows and two controls retain their intended values.**
+
+3. **READ — rows and controls**
+
+At [the E rows](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:369):
+
+| Row | Source | Expected |
+|---|---|---|
+| EC1 | r5 | `11223344` |
+| EA1 | r6 | `00001011` |
+| E0 | r7 | `00000000` |
+| E1 | r1 | `00002002` |
+| E2 | r2 | `60002002` |
+| E3 | r9 | `00000002` |
+| E6 | r11/fp | `00002002` |
+| E5 | r12/ip | `60000000` |
+| E4 | Session result | SURVIVED, exit 0, empty `fatals` |
+
+Precisely, there are **six value `row()` calls**, a separately printed E4, and two control `row()` calls: **nine new rows, eight `row()` calls**.
+
+E4’s predicate is exactly `E["status"] == "SURVIVED" and E["exit"] == 0 and not E["fatals"]`. It does not require a particular diagnostic phrase. Its collection is nevertheless defined by the bracketed, single-line `footbridge` diagnostic regex, captured before shutdown.
+
+`ctrl_ok` correctly contains **6/6 named terms**: `c1`, `c2`, `c3`, `c4`, `ec1`, `ea1`. The resulting detector has **19 rows**.
+
+4. **READ / REASONED — pending probes**
+
+READ — drain [close](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:404) and [predicates](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:647); witness [close](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:347) and [predicates](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:571).
+
+- **12/12 explicit session-return paths** carry both `exit` and `signal`: startup-failure and normal-return paths in three functions per probe. Synthetic `SKIPPED` dictionaries lack them but represent no session.
+- `rd()` returns true on an idle select timeout. Thus shutdown keeps draining until EOF/read error or the five-second deadline, then closes the master and blocks in `waitpid`.
+- **Shutdown is not bounded by five seconds.** A child that survives master closure can leave the blocking reap waiting indefinitely. The deadline also begins after the `quit` write.
+- Capturing status before closing correctly prevents normal shutdown EOF from converting a successful arm into `HOST-DIED`.
+- On a normal exit-0 run, `survived()` preserves the intended verdicts. It deliberately rejects signal termination, nonzero exit, or an unavailable reap status.
+- **3/3 K controls**, including the sites probe, require the CLEAR diagnostic and exit 1. The pending controls additionally require pre-shutdown `HOST-DIED` and a surviving comparison arm.
+- The **2/2 `run_witness` consumers** use named dictionary fields; adding status keys does not disrupt their existing data access.
+
+There is a retained missing-data weakness in **2/2 pending T rows**: a surviving exit-0 session with absent r6/r7 can satisfy `None != VENDOR` and `None != LOADBACK`. The witness additionally requires its sample, but neither T predicate explicitly requires those registers. The new status binding narrows this weakness without eliminating it.
+
+The drain file reports `i/crlf w/crlf`; **10/10 diff hunks are content changes**, with no line-ending conversion.
+
+5. **READ / REASONED — gate expressions**
+
+READ — [gate checks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1109).
+
+The value-row format is:
+
+`"%-4s %-40s got=%-12s want=%-12s %s"`
+
+E4 uses:
+
+`"%-4s %-40s %-30s %s"`
+
+The final `%s` prints `ok` or `FAIL`.
+
+| Gate regex, quoted exactly | Required count | Compatible |
+|---|---:|---|
+| `'^E[0-6] .*ok$'` | 7 | Yes |
+| `'^E0 .*got=0x00000000 .*ok$'` | 1 | Yes |
+| `'^E2 .*got=0x60002002 .*ok$'` | 1 | Yes |
+
+**3/3 checks match the shipped formats.** The aggregate includes E4 and excludes EC1/EA1.
+
+The excerpt expression is `"^(  arm |C[0-9]|A[0-9]|I1|K1|D1|E[A-Z]?[0-9])"`. Its E alternative includes **9/9 current E tags**, but “nothing else” is too strong: it also accepts other E-letter/digit prefixes and has no tag-ending boundary.
+
+The E2 check’s description overclaims “Clear clears”: **E5** supplies that evidence.
+
+6. **REASONED — supplied candidates**
+
+These are static predictions, not executed measurements.
+
+| Candidate | Classification | Failing rows / equivalence |
+|---|---|---|
+| **(m)** XOR `0x2000` | **CAUGHT BY E0** | E0, E1, E2, E6, E5 fail: **14/19** remain green. E3’s low byte is unchanged. |
+| **(n)** complement | **CAUGHT BY E0** | All six value rows fail: **13/19** remain green. |
+| **(o)** P/Q not planted | **CAUGHT BY E1; EQUIVALENT TO (c)/(d) under shipped row observations** | Cold zero-filled RAM makes all six readbacks zero. E1, E2, E3, E6, E5 fail: **14/19** remain green. D1 checks instructions, not RAM constants. |
+| **(p)** one K word remains at `+188` | **CAUGHT BY that probe’s K1/K** | The accepted read survives and supplies no CLEAR complaint. If only the sites instruction word is stale while its expected spelling remains `#396`, D1 also fails. A consistently stale sites tuple has the same failing-row signature as packet candidate (k); this is not equivalence across all three probes. |
+| **(q)** K ignores exit | **ESCAPES on the healthy fixed baseline** | No separate row detects removal of that predicate. The K row loses exit-status evidence; its remaining death/complaint conditions are not tautologies. The literal old pending predicate also omitted the complaint requirement. |
+| **(r)** word-only readback | **CAUGHT BY E3 and E6** | Both receive zero: **17/19** remain green. Distinct from (f)’s terminating width rejection and (g)’s high-bit mask. |
+
+For **(j): ESCAPES, 19/19 predicted green**. READ — [IRQ assertion callback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:796), [single-step delivery guard](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204), and register-dump/settings registration.
+
+The changed SET condition makes the internal CPU `irq_asserted` flag differ between the SET and CLEAR stores. The unchanged CLEAR condition then deasserts it before the final dump. The shipped disassembly, register dump, and parser expose no channel for that intermediate flag.
+
+Thus the disclosure is accurate about **these shipped rows**. “No step-based observation is possible” or “free-running is necessary” would be broader than the evidence: internal-state inspection could observe the flag while execution is stopped.
+
+7. **READ — construct citation counts**
+
+Literal searches of the entire SEC device file give:
+
+| Precise anchor | Occurrences |
+|---|---:|
+| `case VENDOR_ID:` | 1 |
+| `DC21285_VENDOR_ID` | 1 |
+| `case IRQ_ENABLE_SET:` | 1 |
+| `case IRQ_ENABLE_CLEAR:` | 1 |
+| `case TIMER_1_LOAD:` | 1 |
+| `case TIMER_1_CONTROL:` | 1 |
+| `case TIMER_1_VALUE:` | 1 |
+| `DEVICE_TICK(footbridge)` | 1 |
+| `pending_timer_interrupts[timer_nr] = 0` | 1 |
+| `pending_timer_interrupts[i] > 0` | 1 |
+
+**10/10 precise anchors are unique.** The broader wording needs qualification:
+
+| Wording/search | Count and interpretation |
+|---|---|
+| `TIMER_x_LOAD` | 3, all commentary; the executable anchor is `case TIMER_1_LOAD:` |
+| `TIMER_x_CONTROL` | 1, commentary; the executable anchor is `case TIMER_1_CONTROL:` |
+| `idata & TIMER_MAX_VAL` | 3: one comment and two executable assignments |
+| `!(idata & TIMER_ENABLE)` | 0 literal matches; correctly describes the `else` branch |
+| `int pending_timer_interrupts[4]` | 0; explicitly historical wording |
+| `pending_timer_interrupts[N] ++` | 0; explicitly historical wording |
+| `default:` | 5 textual matches, including one comment; four executable labels |
+
+Consequently, a blanket claim that every introduced wording is a unique literal construct name would be false.
+
+8. **READ / REASONED — additional findings**
+
+- The drain header still names **IRQ_ENABLE_SET** as its terminating control, although its instruction and predicate now use CLEAR.
+- The sites A2 row still prints the stale `:548` citation.
+- “Neither [P nor Q] is a rotated immediate” is false for Q: `0x06` rotated right four bits is `0x60000000`. Loading Q from RAM remains correct.
+- The packet’s description of the register parser overstates its range: r4 is omitted. No scored E row needs it.
+- D1’s “every planted word” wording exceeds its implementation: landing pads are excluded, and a terminating step breaks before that step’s disassembly comparison.
+- The sites probe still uses its older sleep/close/reap shutdown and collects `fatals` before shutdown; it did not receive the pending probes’ drain changes.
+
+**NOT CHECKED:** execution of any supplied candidate, the packet’s reported measurements, build propagation, or gate results. The packet reports 11/12 candidates detected; I independently ran **0/12**. Excluded artifacts and records were not read.
+
+Model: **GPT-6 / Codex**. Read/search inventory follows; auxiliary files were inspected through relevant excerpts or searches, and the gate through its footbridge section. MD5s cover the current complete files.
+
+Paths are relative to `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`, except the two explicitly prefixed with `../`.
+
+| File read/searched | Working-file MD5 |
+|---|---|
+| `../_scratchpad/n6/p2/brief_n6_p2_BUILT.md` | `dcbc45ff813e2121d99602ef24c2a01a` |
+| `src/devices/dev_footbridge.c` | `25e72c7c6e3b7c74704d12f9f9174c2c` |
+| `../est/src/devices/dev_footbridge.c` | `25e72c7c6e3b7c74704d12f9f9174c2c` |
+| `regress/footbridge_sites_probe.py` | `e7df250ec28c87a50e4d787c467cad83` |
+| `regress/fbpending_drain_probe.py` | `521bf52703a525d66898635130936e9b` |
+| `regress/fbpending_witness.py` | `16457eebf8e6074a6152028983dc2568` |
+| `regress/gate_arm.sh` | `41733e65d4cebafeae5c59168092add8` |
+| `src/cpus/cpu_arm.c` | `30fc7e93780f8a8ea7d647a85971090b` |
+| `src/cpus/cpu_arm_instr.c` | `010691575a3d8ddbfb030c55dddd7b79` |
+| `src/cpus/cpu_dyntrans.c` | `7a978e55e557179a2e508ffe8ae8494b` |
+| `src/include/cpu_arm.h` | `f0f174a3ffb5e4d5a3b66fc347268a46` |
+| `src/include/thirdparty/dc21285reg.h` | `9f10a788229d91cee971012abeed85c8` |
+| `src/cpus/cpu.c` | `5cc36af4d7308a36ee67324afca66454` |
+| `src/include/interrupt.h` | `4bfa85f0970f7dfa42d1d49f926ac0c2` |
+| `src/core/interrupt.c` | `979d9c6fefc7c5052315e392d3ee2ea1` |
+| `src/debugger/debugger.c` | `72df24aea5650eb1fdf2ad05fcf93729` |
+| `src/debugger/debugger_cmds.c` | `7c948ab0637e2b298955ae5f4f36b847` |
+| `src/debugger/debugger_expr.c` | `0df03a801ee651f9c31919f983fa1f85` |
+| `src/core/main.c` | `309c6a77cc0759f5098295398b397d8f` |
+| `src/console/console.c` | `552612408576e9047a5af2593302fb5f` |
+| `src/net/net.c` | `6f35d745728032ca210fb859ef0b714e` |
+| `src/cpus/cpu_arm_coproc.c` | `61885af061985d51ec57be9150c2dd20` |
+| `src/cpus/cpu_arm_instr_dpi.c` | `63b9ca38fddb181bd0185303bbc79967` |
+| `src/include/cpu.h` | `aab4fb2b305cc4342ebdc666488508ad` |
+| `src/core/settings.c` | `97b09276cdcc67ead4af2241d97ef3c4` |
+| `src/machines/machine_cats.c` | `c82d10efb1091d186eead78bee65d633` |
+| `src/core/memory.c` | `a8d9345c343ff9ab84d546fb6eb3adc3` |
+| `src/cpus/memory_rw.c` | `3d47dd6632be679db41d207fb1238d3c` |
+| `src/include/memory.h` | `c6df57c550707a6415a5f6cfefdceb8a` |
+| `regress/selftest_inactivity.py` | `46967a1addf4ab2bbdb580f19788ebc0` |
+
+**30/30 inventory hashes recorded. Nothing run under review: no builds, emulation, probes, tests, or gates; read-only file, diff, comparison, and hash inspection only.**

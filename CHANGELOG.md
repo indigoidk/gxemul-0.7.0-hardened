@@ -1,3 +1,256 @@
+# `#539` (n6, round 1 of the footbridge campaign): a documented read-only register was answered correctly and then the process was ended -- the exit is gone, the value stays, and the probe that used that exit as its own failability control moved one register over
+
+**The defect.**  `dev_footbridge.c`, `DEVICE_ACCESS(footbridge)`, `case IRQ_ENABLE_SET` (offset `0x188` on the
+`-E cats` DC21285): a guest READ computed `odata = d->irq_enable` -- the right answer -- and then called `fatal("...
+ENABLE SET? ...")` and `exit(1)`.  The DC21285 datasheet (Intel 278115-001, `_scratchpad/dc21285.txt`) says the
+register at 188h is IRQEnable, "read-only ... can only be changed by writing to the EnableSet and EnableClear
+registers", reset value 0 (Table 7-10 at `:6826`, 7.3.31 at `:6913-6915`, `:6924`).  So the model already held the
+right value and a legal guest load ended the emulator.  Option-set member 4, ACCEPT: the `fatal()` and the `exit(1)`
+are deleted, `odata = d->irq_enable;` is kept, and a `/* #539 */` comment quotes the datasheet.  No latch and no
+message, because there is no event to announce; a bounded announce would have printed "unexpected" about a read
+that is expected.  `est/` carries the byte-identical twin.
+
+**Witness (rung 3, on the committed tree).**  The new arm E of `regress/footbridge_sites_probe.py` -- real guest
+`ldr`/`str`/`ldrb`/`ldrh` through the real decode on an unmodified `cats` after the MMU-off prologue -- HOST-DIES at
+its first word on HEAD a11eaac (exit 1, `ENABLE SET` diagnostic; `regress/artifacts/n6/killtable_20260919/
+probe_prefix_HEAD.raw`, 10/19) and is green with the same script once the fix is in (`probe_base_fixed.raw`,
+19/19).  Pre-fix, the death diagnostic is the device signature and the step echo is liveness; post-fix the arm
+carries its own C1 (RAM) and A1 (VENDOR_ID 0x1011) because E0 = 0 is also what an ABSENT device returns.  The Opus 5
+seat had measured the same red/green in its own clone on pass 1 (`regress/artifacts/n6/opus_p1_20260919/
+e_prefix.raw`, `e_postfix.raw`), before the round's own probe existed.
+
+**The detector -- seven ACCEPT rows in arm E, execution order E0,E1,E2,E3,E6,E5, plus E4.**  E0 reads IRQEnable
+before any write (0, the reset value); E1 writes P = 0x00002002 to Set and reads P back; E2 writes Q = 0x60000000 and
+reads P|Q (pins `|=`; bit 30 is set so a diagnostic kept for the top bits would fire here); E3 `ldrb` returns the low
+byte 0x02 and E6 `ldrh` the low half 0x2002 (the CSR drives D[31:0] and the SA-110 takes the lane, `dc21285.txt:
+1651-1653` -- architecture, not policy); E5 writes P to Clear and reads Q back; E4 requires no footbridge diagnostic
+in the arm and exit 0.  E6 runs before E5 because its value is true only while P is set -- the pass-1 panel caught
+the first draft's order, which would have reddened a correct build.  P and Q are loaded from RAM (P is not a
+rotated ARM immediate; Q is, and is loaded the same way for uniformity); `ldrh` immediates cap at 255, so the halfword read is `add sl,r0,#0x180` + `ldrh fp,[sl,#8]`;
+the probe's register parser now reads r0-r9, sl, fp, ip (the emulator's own spellings, `cpu_arm.h` ARM_REG_NAMES).
+Every planted word is checked against the disassembly the emulator printed as it stepped it (row D1).
+`gate_arm.sh` pins the E rows three ways: count 7, E0 `got=0x00000000`, E2 `got=0x60002002`.
+
+**The kill table** (`regress/artifacts/n6/killtable_20260919/TABLE.log`, `TABLE_SUMMARY.md`; PRETABLE.out written
+01:59:21, before table 1 at 02:03; scratch clone `/tmp/gx539`, a `cp -a` of `build/` with every uncommitted `src/`
+file restored to HEAD, baseline rebuilt before mutant 1, the probe frozen for the whole table, every restore `cmp`'d
+against SEC and rebuilt fresh before the next mutant):
+
+| mutant | shape | score | killed by |
+|---|---|---|---|
+| (a) | fatal()+exit(1) reinstated verbatim (floor b) | 10/19 | E arm dies at E0 |
+| (b) | exit reinstated only when `irq_enable == 0` (operand swap onto the body field) | 10/19 | E0 |
+| (c) | `odata = d->irq_status` | 14/19 | E1 (0 != P) |
+| (d) | `odata = d->fiq_enable` | 14/19 | E1 (indistinguishable from (c): both fields are 0 throughout) |
+| (e) | fatal() kept, exit(1) dropped | 18/19 | E4 -- the sole carrier |
+| (f) | a width guard: sub-word reads take the old death | 10/19 | death at E3 |
+| (g) | readback masked to 16 bits | 17/19 | E2, E5 |
+| (h) | SET write arm `|=` -> `=` | 16/19 | E2, E3, E6 |
+| (i) | CLEAR write arm `&= ~idata` -> `&= idata` | 18/19 | E5 |
+| (j) | SET write arm assert `irq_status & irq_enable` -> `\|` | **19/19 ESCAPED** | nothing -- DISCLOSED (below) |
+| (k) | the exit also removed from the CLEAR read | 18/19 | K1 (the moved kill arm) |
+| (l) | fatal()+exit(1) kept only for bits 30/31 | 10/19 | E2's read dies (bit 30 set) |
+
+**The contract (clause e), in the probe header.**  Covered: the SET read branch's exit reinstated in any form, a
+wrong field/constant/mask/bit-swap, a width guard, a kept diagnostic, a diagnostic conditioned on the top bits; the
+CLEAR arms' `&= ~` and the CLEAR read's exit.  NOT covered, by name: (a) the CPU IRQ line -- mutant (j) asserts the
+interrupt on a write with no pending source, and no step-based row can see it (`cpu_dyntrans.c` suppresses
+interrupt delivery under `step`; CPSR I/F stay set); a free-running arm needs a POSITIVE delivery control, and the
+only guest-controllable source, IRQSoft (+0x190), has no `case` in the model -- so the witness is FILED coupled to
+implementing IRQSoft (`fbirqdeliverywitness`), and the family (interrupt-line edits invisible under `step`) is named
+rather than dropped; (b) `+0x189..+0x18b`: real hardware selects the same CSR by A[10:2] and returns lanes 1-3, the
+model routes them to `default:` and returns 0 with a per-access diagnostic -- a device-wide decode deviation, FILED
+(`fbcsrdecodelanes`), not rowed; (c) `irq_status` and `fiq_enable` are 0 throughout, so (c)/(d) are caught by value
+and not distinguished from `odata = 0`.
+
+**The kill arm moved, and to where -- fable5's D1 ruling, against the brief and against the main loop's lean.**  The
+three footbridge probes used the `+0x188` read as their "the device can still end the process" control (arm K in
+the sites probe, gated as K1; the kill arms of `fbpending_drain_probe.py` and `fbpending_witness.py`).  The brief
+proposed a bridge to `+0x100`; the flagship seat ruled for **`+0x18c`** (IRQ_ENABLE_CLEAR read, `ldr r7,[r0,#396]`
+= `0xE590718C`, text `ENABLE CLEAR`): the datasheet says that register is WRITE-ONLY (7.3.33, `:6940`), so "a
+decline-class site still dies" is a true record; it survives the SDRAM round however the campaign is ordered; and
+the same deletion spilled onto the CLEAR read makes K survive with no text, so **K1 is the detector for mutant (k)
+at zero row cost** -- proposed by no seat, derived by the adjudicator.  The bridge is TEMPORARY and says so in all
+three probes and the gate: the round that declines `+0x18c` retires it and builds the durable harness legs in the
+same commit (startup rejection through each probe's own launcher; mid-session `quit` with the status reaped -- the
+kimi CLI's design, sharpened by the codex M1 reading).  The main loop's own lean -- Opus's default-arm
+diagnostic-presence control plus the harness legs, and no bridge -- was NOT adopted: the presence control proves
+only what the value rows already prove, and the legs are a second detector design in three separately implemented
+helpers on a round already carrying seven rows.  One site per round.
+
+**The status binding (F11), and the reading that wrote it.**  The drain and witness probes' `close()` slept 0.3 s,
+closed the pty master (a SIGHUP to a child still shutting down) and DISCARDED `waitpid`'s result -- so their K rows
+accepted any host death and their surviving arms were never checked against an exit code (the peer session's
+`ptywaitstatus` class; two of its members are fixed here).  The codex L3 reading (`_scratchpad/cxfarm3_20260919/
+out/codex_l3_ptyfix_footbridge.txt`) supplied the drafts adopted verbatim: `close()` drains the pty to EOF (bounded
+5 s), closes, then reaps and returns `exit`/`signal`; every session-return path carries them; `survived()` =
+SURVIVED and exit 0 gates R0, T and E; the K rows require the device's complaint AND exit 1.  Post-fix on the clone
+binary: drain 11/11 controls (K exit=1, D/X/T/E exit=0), witness 12/12 PASS (`.../pending_probes_postfix/`).  The
+fable5 seat had found both halves the draft closes -- the text must be AND-ed in, and the 0.3 s close was a
+load-sensitive oracle waiting to add three more to the battery's forty-seven.
+
+**Citations.**  The codex M4 reading measured 11/24 `dev_footbridge.c:NNN` citations in the three probes stale
+(the file grew from the fork's early rounds); every one the diff touches is now a construct name (`case VENDOR_ID`,
+the TIMER_x_LOAD write arm's `idata & TIMER_MAX_VAL`, the `pending_timer_interrupts[timer_nr] = 0` store), and the
+witness's header now says its defect description is historical.  The gate's A1 comment records that 0x1011 is a
+MODEL value (real hardware packs DeviceID:VendorID into the word at +0x0), so the round that fixes packed config
+reads changes that pin in the same commit -- fable5, standing licence.
+
+## THE PANEL -- pass 1 on the design, pass 2 on the diff, the §F2 adjudication pass, fable5 last on each
+
+Pass 1: `_scratchpad/panel_20260919_005103/` (copied to `regress/artifacts/n6/p1_20260919/`).  Answering: agy
+(GO-WITH-CHANGES), grok (ACCEPT, four brief defects), the kimi CLI (197 KB, CONFIRM ACCEPT, the harness-legs design
+and the tree-map finding; its "7.3.31 states no reset value" is FALSE -- `:6924`), glm, deepseek, minimax (no
+verdict line; eight premises it could not settle from the packet), and `kimi-k3:cloud`.  **codex was REFUSED by
+the provider's content filter** (`_scratchpad/n6/CODEX_REFUSAL_p1_20260919.txt`) -- a SEAT FAILURE, not an answer --
+and re-fired ONCE in pointer form (`_scratchpad/cxfarm2_20260919/out/codex_k5_n6panel_refire.txt`: REVISE the brief,
+ACCEPT right).  Three dedicated codex readings (`_scratchpad/n6/codex_dedicated_20260918/`, `codex_p1_20260919/`, and
+the cxfarm4 M1/M2/M4 jobs) plus the Opus 5 seat measuring in its own clone (E0-E6 on a post-fix build; mutants (e)
+and (j) built).  A fourth codex job, M3 (the E-row implementation draft), was refused TWICE -- in its original and in
+neutral wording -- and routed to grok, whose draft agreed with the implementation on every encoding.  The trigger
+is NOT established: the inline pass-1 brief was refused and its pointer form answered; M3's 3.6 KB brief carried
+no inlined exit code and one "kill"; M1, which discusses terminating calls at length, answered.  Recorded as facts,
+not as a mechanism (fable5's F16 correction).
+
+fable5 LAST, after all others (`_scratchpad/n6/fable5_p1_20260919.md`; identity verified from the subagents
+transcript: 71/71 assistant messages `claude-fable-5-1`).  GO on the fix and the rows; five of the main loop's
+sixteen accepted dispositions corrected (F16 causal overclaim; F11 incomplete twice; F8's reasons; F14's three-item
+stale list against M4's 11/24; F2's channel misnamed -- E2 triggers the top-bits diagnostic, E4 observes it); the
+records step's target sentence ("were made graceful") shown not to exist; D1-D4 ruled as above.  Its standing-licence
+findings: the `+0x18c` bridge subsumes (k); `dc21285.txt:1651-1653` settles E3/E6 as architecture and files the
+lane deviation; the template's tree warning named copies that are not there while the live hazard
+(`_scratchpad/r6pass2_fb/`, 744 lines) went unnamed; the gate's A1 pin is a model value.
+
+Pass 2 on the diff: `_scratchpad/panel_20260919_021100/` (copied whole to `regress/artifacts/n6/p2_20260919/`; the
+packet inlined the full diff, the kill table and the enclosing function -- 64 KB).  Answering: codex (GO-WITH-CHANGES:
+bound the teardown; seven green lines are not seven distinct rows; the excerpt grep; the E2 label; three citation
+constructs that were not unique literals; bit 31 untested; the A2 `:548`; failure-path measurements owed), agy
+(GO-WITH-CHANGES: the same `:548`; keep the #529 orphan hunk out of the commit), grok (RATIFY; 7.3.32 -> 7.3.33),
+glm, deepseek (the blocking `waitpid`), minimax (whose "encoding concern" -- that bit 25 = 0 makes the loads
+register-offset forms -- is a seat error: I=0 IS the immediate form, two seats decoded all thirteen words, and D1's
+disassembly check reported 0 mismatches on every run), and `kimi-k3:cloud` (Q IS a rotated immediate; the (k)
+wording).  **The kimi CLI STALLED on its first firing** -- its Read tool caps a file at 50 KB, the brief was 64 KB,
+and it looped for its whole run without answering: a seat failure of a class nobody had named (a brief BELOW the argv
+cap and ABOVE a seat's read cap).  Re-fired once with explicit line ranges, it answered (ACCEPT; the drain header
+still naming IRQ_ENABLE_SET as the K arm; four doc fixes).  A dedicated codex job verified 34/34 hunks against the
+tree and 13/13 ENABLE encodings by bitfield (`_scratchpad/n6/p2/codex_ded/`).  **The Opus 5 measuring seat was
+TERMINATED by the Anthropic session limit** (HTTP 429, "resets 3:40am") after building its base and starting the
+candidate mutants -- a SEAT FAILURE, recorded as such; the peer session's `agent_models.py` shows 57 `claude-opus-5`
+turns then the synthetic error, no silent fallback.  Codex then WALLED at ~02:42 ("usage limit ... 6:59 AM"), after
+both of its answers had landed.
+
+**What pass 2 changed (all in-round, L1 pre-ship construction and L4 wrong records; `patch539c.py`):** every one of
+the three probes now reaps the child with a bounded WNOHANG poll, then SIGKILL, then the wait -- agy and minimax
+argued the hang state is unreachable (gxemul installs no SIGHUP handler), which is true today and is why this is
+graded hardening, not a measured defect; the sites probe's own teardown drains to EOF before closing and collects
+`fatals` after the drain; the gate counts DISTINCT E ids beside the count of seven, its excerpt grep is exact, and the
+E2 label no longer claims Clear; the A2 row's `:548`, the 7.3.32 section number, the drain header's K arm, "neither is
+a rotated immediate" (false for Q: 0x06 ROR 4), the (k) wording, `TIMER_x_LOAD` and `!(idata & TIMER_ENABLE)` (not
+unique literals) are corrected; the contract names its TESTED PATTERNS (P bits 1,13; Q bits 29,30 -- bit 31 untested)
+and D1's scope.  **Then table 2** on the corrected, re-frozen instrument (`.../table2_v2/`): base green on all three
+probes; `x_exit2` (the CLEAR read's complaint followed by `exit(2)`) and `y_sigkill` (complaint then SIGKILL) each
+reddened ALL THREE K rows (sites K1; drain K `exit=2` / `exit=None signal=9`; witness K likewise) -- so the exit term
+of every K predicate is load-bearing on a measured mutant, and the bounded reap returned the signal status instead of
+hanging.  The remaining failure paths (exit 1 without the complaint; an ignored quit; a delayed shutdown) need a pty
+protocol mock and are FILED (`fbptymock`).
+
+§F2 -- the panel shares its findings: `_scratchpad/panel_20260919_035324/` (durable `regress/artifacts/n6/p2_20260919/panel_f2/`), seven live transports
+-- codex WALLED ("usage limit ... 6:59 AM"; its file is the echoed packet plus the notice: a SEAT FAILURE).  The seven
+converged on one real miss: a HEALTHY child slower than the 5 s budget (LeakSanitizer at exit on the asan build; a
+loaded host) is SIGKILLed by the harness and reads byte-identical to `y_sigkill`'s red -- a false red attributed to the
+product.  Applied (v3): budgets 20 s drain + 10 s reap (patience, not an oracle: a healthy child exits in
+milliseconds and the sites probe runs four arms in about a second), and a harness-fired kill is LABELLED
+`HARNESS-KILL(<sig>)` in the reaped status.  grok, reviewing its own RATIFY harder, OVERTURNED my F14 partial: "exit
+1 without the complaint" is a one-line PRODUCT mutant, not a mock -- table 3 built it (`z_silentexit`: the CLEAR read's
+complaint deleted, the exit kept) and every K row reddened, 3/3; grok also found three leftovers (the gate comment's
+`TIMER_x_LOAD`; the drain/witness T rows' `rT.get(6) != VENDOR`, where `None != VENDOR` is True so a register-parse
+miss greened them once `survived()` forbade the halt outcome -- keys now required; the contract's "bits 30/31" while
+bit 31 is never set).  The kimi CLI, answering late at 143 KB, found two more in the v3 teardown, applied as v4: the
+reap poll's `except OSError: break` fell INTO the SIGKILL branch (on ECHILD the pid may be recycled -- a `gone` flag now
+skips it), and a drain-deadline expiry HUP'd a live child unlabelled (now `HARNESS-CLOSE(<sig>)`); its third residual
+-- the final `waitpid` after SIGKILL is unbounded for a child in uninterruptible sleep -- is recorded, not fixed (a
+hang there is a probe timeout, never a wrong verdict).  It also corrected my D3 record: the stated mechanism cited an
+`if (len == 4)` guard that does not exist in `dev_footbridge.c` (grep: 0 len tests); the width form is caught by the lane
+contract E3/E6 pin, which is what the row says.  Refuted on the same pass: glm's "the drain is unbounded" (a
+packet-blind guess -- `rd()` returns True on timeout and breaks only on EOF or the deadline), agy's "the sites drain
+spins 5 s per arm" (the measured wall), and glm's doubt that 0x18c is IRQEnableClear (Table 7-10 line 6827).  Table 4
+then re-ran the v4 base on all three probes: green..
+
+fable5 on pass 2 / §F2: fable5 LAST, after all others (`_scratchpad/n6/fable5_f2_20260919.md`, durable `regress/artifacts/n6/p2_20260919/
+fable5_f2.md`; identity verified from the transcript, 12/12 turns `claude-fable-5-1`, the answer file written by it -- the
+peer session had just measured the Agent-tool seats falling back to `opus-4-8` SILENTLY -- a REFUSAL turn from the
+requested model at the synthesis step, then a `thinking_drop` to opus-4-8, i.e. a safety classifier on the answer's
+vocabulary, not a budget (its first 'budget' reading was corrected within the hour) -- so the packet was kept short,
+in neutral engineering language, and the check was run before crediting).  **SHIP.**  It re-decoded the thirteen arm-E
+encodings by hand, walked floor clauses (a)-(f) and found no breach, and checked the one convention the teardown rests
+on -- `rd()` returns True on a select timeout and False only on EOF/EIO, in both files -- rather than taking the packet's
+word.  Two L4s, applied: E4's real predicate is a BRACKETED diagnostic naming footbridge (the `fatals` regex), so a
+diagnostic rewritten without brackets or without the device name escapes it -- the contract now says so and lists that
+form under NOT COVERED (D2 overturned in part: "different text must still red E4" was true only for text keeping the
+house shape); and the gate's distinct-id check now counts ids over the GREEN lines, which proves "each of E0-E6 is
+green" by itself (over all lines it would have passed a duplicated green E2 beside a red E3).  Two nits applied: the
+HARNESS-KILL label only when the reaped signal IS SIGKILL (a kill landing on a zombie reaps the product's own status),
+and the sites header states its `rd()` convention.  On the roster it ruled the record PROVISIONAL on eight of nine
+seats -- what was missing was INDEPENDENCE of measurement, not measurement -- and named the discharge: one bounded
+build-and-score on agy, the compile-and-measure front end on a road independent of the Agent tool, rather than a hold
+for the Opus reset.  Against itself: its pass-1 claim that no "made graceful" sentence exists was FALSE.
+
+**The independent measurement -- agy, the compile-and-measure front end on a road that shares nothing with the
+Agent tool** (`regress/artifacts/n6/agy_measure_20260919/`).  Its first firing EXITED EARLY: it launched `make` as a
+background task and returned, and the harness killed the build on exit (`agy_measure.FIRST_exited_early.out`) -- a
+seat-failure shape worth one line: a seat that backgrounds its own work and goes idle has answered nothing.  Re-fired
+once, foreground-only, from its own copy `/tmp/gxagy539` (source md5 25e72c7c, the working tree's; the probe frozen at
+md5 1a63c21d, the v5 instrument): **base 19/19 PASS; mutant (a) 10/19 with EC1,EA1,E0,E1,E2,E3,E6,E5,E4 red; z_silentexit
+18/19 with K1 red** -- the main loop's numbers exactly, every build checked FRESH, the final restore `cmp` identical.  The
+round therefore ships on TWO measuring roads, the Opus one recorded as a seat failure..
+
+
+## FILED
+
+* **`fbirqdeliverywitness` (MED)** -- footbridge IRQ-delivery witness: a free-running arm (vector at 0x18, CPSR I
+  cleared, write P to Set, breakpoint, `continue`) with IRQSoft (+0x190, "generates bit [1] of the RawStatus
+  register", `:6960-6962`) IMPLEMENTED as its deterministic positive control; first kill = mutant (j), which escaped
+  this round's 19-row detector 19/19 and is disclosed in its contract.  IRQSoft/FIQSoft have NO `case` today (a
+  guest softint write lands in `default:` and sets nothing -- kimi, pass 1), so the witness is coupled to option-set
+  member 7 for that register.  Opus's arm shape verbatim in `regress/artifacts/n6/opus_p1_20260919/OPUS_SUMMARY.md`.
+* **`fbcsrdecodelanes` (LOW)** -- the model routes `+0x189..+0x18b` (and every non-word-aligned CSR offset) to
+  `default:` and returns 0 with a per-access diagnostic; hardware selects the CSR by A[10:2] and returns the lane
+  (`dc21285.txt:1651-1653`).  Device-wide; not this round's class (fable5 Q4.2).
+* **`fiqenableread` (LOW, existing row -- facets added)** -- FIQ is unmodelled end-to-end: (1) `+0x288` read returns 0,
+  not `d->fiq_enable`; (2) `+0x28c` read returns 0 silently while `+0x18c` ends the process -- a policy asymmetry;
+  (3) `fiq_status` is never written while the datasheet requires identical raw status (`:6886`); (4) no FIQ output
+  in the struct; (5) FIQSoft `+0x290` has no case.  One row, five facets, separate round (fable5 D3; kimi's three
+  became five by reading the code).
+* **`fbdeclinefive` (MED, the NEXT footbridge round)** -- the five invalid-direction terminating sites (`:565`,
+  `:574`, `:604`, `:613`, `:622` at HEAD; writes to read-only status registers and reads of write-only registers,
+  Table 7-10 `:6821-6831`) as ONE decline round: K4's 14-row design minus its two SDRAM rows is the starting spec;
+  `+0x18c`'s decline must also stop returning `d->irq_enable` (codex M2); this round retires the `+0x18c` bridge and
+  builds the M1 harness legs in the same commit.  The datasheet's "nonexistent CSR: zeros are read, no error action"
+  (`:1652`) is the VALUE warrant for a declined read; the diagnostic is emulator policy.
+* **`fbsdrampair` (LOW)** -- SDRAM_BA_MASK/OFFSET reads (`:712`, `:737` at HEAD): documented R/W (`:5853`, `:5906`)
+  with write arms that discard the value.  DECLINE by default (member 3); BACKED ACCEPT (member 6) only on a warrant
+  -- a guest in the rig set that reads them back after writing -- 0/2 backing fields, 0/2 consumers today (codex
+  M2).  With it: the mask whitelist rejects the documented no-window value 0x8ffc0000 (Table 7-7, `:5878`).
+* **`fbm2findings` (LOW, records)** -- codex M2's further footbridge findings, none blocking: TimerValue writable
+  though read-only (4/4), control reserved bits retained, periodic CLEAR reload rule, timer reset values, UART flag
+  meanings, `+0x140`/`+0x20c` unbacked, `irq_asserted` not updated by the enable arms (the field the pending probes
+  reason about).  `_scratchpad/cxfarm4_20260919/out/codex_m2_sdramclass.txt`.
+* **`cxlaunchempty` (LOW, harness)** -- `tools/cxlaunch.sh` accepts a ZERO-BYTE brief, launches codex with an empty
+  prompt, and scores the 57-byte reply "seat answered" (measured 2026-09-19 01:25 on four heredoc-written briefs that
+  came out empty; `_scratchpad/cxfarm5_20260919/FILING_cxlaunch_emptybrief.md`).  Refuse `sz < 200` with a distinct rc;
+  make "seat answered" require a verdict line or a minimum size.  Shared tool; joins the peer's #544.
+* **`fbptymock` (LOW)** -- the #539 teardown's failure paths a product mutant cannot reach (exit 1 without the
+  complaint; an ignored `quit`; a delayed normal shutdown) need a pty PROTOCOL MOCK supplied as BIN (codex L3's design).
+  Wrong-status and signal deaths are measured (table 2).
+* **A records correction in place, not a filing:** `OUTSTANDING_BUGS.md:2681-2682` says "#218-#223 OF +
+  footbridge/mp/kn02ba/8253 guest-reachable `exit(1)`s -> graceful" -- the sentence the `n6` row was opened against.
+  fable5's pass-1 ruling said no such sentence exists; it grepped a paraphrase ("were made graceful") and the sentence
+  is real with different words.  Corrected in place: footbridge's count.
+* **`brieftplstale` (LOW, records; the template is a never-commit file)** -- BRIEF_TEMPLATE's tree warning names
+  `./src/` and `_archive/` copies of `dev_footbridge.c` that do not exist and misses `_scratchpad/r6pass2_fb/`
+  (744-line stale fork copy).  Derive the list with the carrier's find/md5 deriver, never transcribe it.  And §C5
+  gains the M3 fact: two refusals on neutral wording with no inlined exit code -- the trigger is not established.
+
 # `#538` (lcalenzerodrop, closing #530's chain): the width row covered ONE of the four byte lanes -- a variant that serviced wide writes at lane 3 only swept it 3/3
 
 *The MEASURED sections were filled from each table's `TABLE.out` after its run -- never from the predictions.*

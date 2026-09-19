@@ -1,0 +1,139 @@
+I'll start from the full offloaded brief, then verify the working-tree diff against HEAD rather than ratifying the packet.The working tree matches HEAD `a11eaac` with uncommitted #539 edits. Next I’ll open the remaining brief and the actual source rather than trusting the inlined packet.I'll verify the handler, the three probes, and the gate hunks in the working tree next, then check encodings and citations against those files.**VERDICT: RATIFY the product fix and the detector.** One L4 citation this round added (`7.3.32` for EnableClear; TOC says `7.3.33`) — correct in place, not a floor breach. No clean-sweep mutant in the (d) set I can derive from the diff. Kill-table scores are PACKET (artifacts were out of scope).
+
+---
+
+## Q1 — premise audit
+
+**(a) Member 4 — READ (`dev_footbridge.c` IRQ_ENABLE_SET else-arm; `_scratchpad/dc21285.txt` TOC 317 and 6911–6924).**  
+Yes. `odata = d->irq_enable` is kept; `fatal`/`exit(1)` are gone; no latch; no runtime message. The only addition is a comment. That is member 4.
+
+Comment vs datasheet: Table 7-10 (`188h` read = IRQEnable, write = IRQEnableSet) and 7.3.31 prose match the quote (read-only; changed only via EnableSet/EnableClear; reset 0). TOC line 317 names 7.3.31 as IRQEnable. `memset(d, 0, …)` in `DEVINIT` makes the reset pin real. **READ.**
+
+**(b) `+0x18c` bridge — READ.**  
+`IRQ_ENABLE_CLEAR` is `0x18c`. Timer fold is `relative_addr >= TIMER_1_LOAD (0x300) && <= TIMER_4_CLEAR (0x36C)`; `0x18c` is outside, so the case label is unmodified. (Even if the fold ran, `0x18c & ~0x060 == 0x18c`.)
+
+`0xE590718C` is `ldr r7,[r0,#396]`. Word-immediate stores print decimal offsets (`cpu_arm.c` `,#%i`), matching `"ldr r7,[r0,#396]"`.
+
+K rows, all three probes, require the complaint **and** `exit == 1`:
+
+| probe | predicate |
+|---|---|
+| `footbridge_sites_probe.py` | `"ENABLE CLEAR" in fatals` **and** `K["exit"] == 1` |
+| `fbpending_drain_probe.py` | `HOST-DIED` **and** `saw` **and** `exit == 1` **and** `survived(D)` |
+| `fbpending_witness.py` | `HOST-DIED` **and** `saw_fatal` **and** `exit == 1` **and** `survived(A)` |
+
+Sound, and temporary as stated.
+
+**L4 (this round’s comment, not the hardware claim):** `footbridge_sites_probe.py` says `+0x18c` is write-only per **7.3.32**. TOC 318–320: 7.3.32 = IRQEnableSet (188h write); **7.3.33 = IRQEnableClear (18Ch)**. Table 7-10 and the 6940 prose are right; only the section number is off. Gate comment does not repeat the number. Fix the one probe line before commit.
+
+**(c) `close()` / `survived()` / `exit=` — READ (both Session classes and every return site).**  
+Drain loop: `rd()` returns **True on silence** (`fd not in select`) and False on EOF/error, so close waits until EOF or 5 s, then closes the master, then **blocking `waitpid`**. Hang iff the child survives master close (SIGHUP ignored / not session leader). `pty.fork()` makes the child the session leader, so master close should SIGHUP. Same unbounded-`waitpid` class as the old closer; the drain is the new bounded part. **REASONED**, not re-measured. Packet says the post-fix pending probes were 11/11 and 12/12, so they did not hang on that binary.
+
+`survived()` on a healthy run: quit → exit 0. Same colour as before on D/X/T/E/A. Stricter on SIGHUP-as-death (`exit is None` → fail). Packet’s 11/11 and 12/12 say it does not flip a healthy verdict.
+
+`run_witness` gained `exit`/`signal` via `**end` **last**. Every consumer uses named keys (`status`, `regs`, `samples`, `badis`, `covered`, `want`, `nsteps`, `executed`, `catchup`, `saw_fatal`). No collision. Unaffected.
+
+**(d) Arm E — READ (ENABLE list, BODY, `run_arm` step/`reg`, `cpu_arm.h` ARM_REG_NAMES, `cpu_arm.c` printers).**  
+
+| row | insn | dest | want |
+|---|---|---|---|
+| E0 | `ldr r7,[r0,#392]` | r7 | 0 |
+| E1 | `ldr r1,[r0,#392]` | r1 | P |
+| E2 | `ldr r2,[r0,#392]` | r2 | P\|Q |
+| E3 | `ldrb r9,[r0,#392]` | r9 | `P & 0xff` |
+| E6 | `ldrh fp,[sl,#8]` | r11 / `fp` | `P & 0xffff` |
+| E5 | `ldr ip,[r0,#392]` | r12 / `ip` | Q |
+
+BODY uses r1/r2 for A2; ENABLE overwrites them **before** the dump; arm E does not score A2. After each sample insn, nothing later in ENABLE clobbers that dest. `r8` still holds P at the Clear store. `reg` parser now reads r0–r9, `sl`, `fp`, `ip` (`ARM_REG_NAMES`).
+
+Disassembly texts match this emulator, not a manual: DPI immediates print `#0x%x` when `b >= 15`, so `add sl,r0,#0x180` is the real spelling (`0x180 = 384 >= 15`); halfword pre-index prints `ldrh fp,[sl,#8]`; word/byte offsets are decimal (`#392`). `ldrh` immediates are 8-bit (`imm = ((iw>>4)&0xf0)|(iw&0xf)`), so the `add sl` + `#8` split is required.
+
+EC1/EA1 are the right controls: E0’s want is 0, which is also RAM-miss / `default:` / RAW_STATUS. EA1 is VENDOR_ID `0x1011` on the same arm.
+
+E6 before E5: after Clear←P, enable is Q = `0x60000000` and the halfword is 0. **READ** of order in ENABLE.
+
+**(e) `gate_arm.sh` — READ (`row()` and the three new checks).**  
+`row()` is `%-4s %-40s got=%-12s want=%-12s %s` with `hexs = 0x%08x`. So E0 is `got=0x00000000` and E2 is `got=0x60002002`. Those two regexes are exact.
+
+`^E[0-6] .*ok$` want 7 matches E0–E3, E5, E6 **and E4**. E4 is a different printf (`%-4s %-40s %-30s %s`) with no `got=`, but it still ends in `ok`/`FAIL`, so the count includes it. Intended, and it is how E4 is gated at all.
+
+Excerpt `E[A-Z]?[0-9]` matches EC1, EA1, E0–E6 and nothing else this probe prints at column 0. (`  arm E …` is already covered by `  arm `.)
+
+Nit, not a hole: the check *name* `Set ORs and Clear clears (E2 = P|Q)` overclaims. E2 pins `|=` after two Set writes; Clear is E5, held only by the count-of-7. If E5 died and E2 lived, the count check still reds.
+
+**(f) Citations — READ, grep counts in `dev_footbridge.c`.**  
+
+| construct | count |
+|---|---|
+| `case VENDOR_ID` | **1** |
+| `case IRQ_ENABLE_CLEAR` | **1** |
+| `case TIMER_1_VALUE` | **1** (fold serves four timers) |
+| `case TIMER_1_LOAD` | **1** |
+| `pending_timer_interrupts[timer_nr] = 0` | **1** |
+| `!(idata & TIMER_ENABLE)` | **0 as a literal** — the file is `if (idata & TIMER_ENABLE) … else { = 0 }`. The paraphrase is unique as a description of that else. |
+
+`dev_footbridge.c:NNN` is gone from the three probes and the gate footbridge section.
+
+**Something else:** `footbridge_sites_probe.py` A2 **row note** still says `by :548` (pre-existing; old gate logs already had it). Not a `dev_footbridge.c:NNN` form, so it is outside the claim as written. Still a stale same-file number.
+
+**(g) CRLF — READ of the frozen/inlined diff.**  
+Unified content hunks only; no `^M`, no whole-file mode change. **NOT CHECKED** with a binary dump of the working-tree bytes.
+
+---
+
+## Q2 — weakenings (REASONED from fixed code + shipped rows)
+
+| mutant | first red | escapes? |
+|---|---|---|
+| **(m)** `odata = irq_enable ^ 0x2000` | **E0** (`0 ^ 0x2000 = 0x2000 ≠ 0`) | no |
+| **(n)** `odata = ~irq_enable` | **E0** (`~0` ≠ 0) | no |
+| **(o)** P/Q `put w` lost | **E1** (fresh RAM at DATA+8/+12 is 0; E0 still 0; EC1/EA1 still green) | no |
+| **(p)** K word left at `+0x188` in **one** of three probes | that probe’s **K** (SET read now accepts → no death / no `ENABLE CLEAR`) | the other two still kill |
+| **(q)** K ignores `exit` | **sites K1** becomes vacuous against fatal-kept / exit-dropped on CLEAR (`k_ok` is then only the complaint text). Drain/witness K still require `HOST-DIED`, so they still red that shape. | sites K1 vs that one shape |
+| **(r)** `if (len == 4) odata = d->irq_enable` | **E3** (len=1, `odata` stays 0, want `0x02`); E6 also reds | no |
+
+**(a)–(l)** from the packet: channels match the source (REASONED). **NOT CHECKED** against `probe_*.raw`. Coarseness, not a hole: arm E dumps `reg` only on `SURVIVED`, so a late death ((l) at the E2 read) blanks every E row the same way (a) does. Still killed.
+
+---
+
+## Q3 — floor and contract
+
+**(a)** Pre-fix red: packet `prefix_HEAD` 10/19, nine E-arm rows absent after HOST-DIED at E0. Matches the dump-only-if-SURVIVED control flow. **PACKET / REASONED.**
+
+**(b)** Verbatim reinstatement: packet `a_verbatim` 10/19. **PACKET.**
+
+**(c)** Identity: no comment-only mutant in the table. A1 / EA1 / A2 are device-signature rows a null medium would fail. Held by existing rows, not by a tabled identity run.
+
+**(d) DEPENDS-ON, enclosing function only.** Edited lines = SET-read else (delete fatal+exit). Dominating predicates: `case IRQ_ENABLE_SET` and `writeflag != MEM_WRITE`. Remaining body reads only `d->irq_enable`. De-fatalisation (d) cells actually rowed:
+
+- restore death (a); restore only when `irq_enable == 0` (b, E0); restore for top bits (l); width-guard death (f)
+- operand swap to `irq_status` / `fiq_enable` (c,d) — both 0 at E1 after Set←P, so they red E1 by value and are **not distinguished**; contract (c) says so
+- fatal kept, exit dropped (e, E4 sole carrier in this layout)
+
+Accept-side of the removed death: E0/E1/E3/E6. Write-arm `|=` and Clear `&= ~` are de-escalation pins (E2, E5), not the read-branch body. K1 pins the CLEAR-read exit remaining. I do not see an open (d) cell the body’s own tests distinguish.
+
+**(e)** CONTRACT in the probe header names SET-read shapes, CLEAR `&= ~`, K1, and NOT COVERED: (j), `+0x189..+0x18b` → `default:` (fatal, **no** `exit(1)` — READ 747–754), irq_status/fiq_enable indistinguishability.
+
+**(f) Anchor.** If every case label moved one word: **A1/EA1** red (VENDOR_ID `0x1011` vs DEVICE_ID `0x1065` or `default:` 0). **K1** red (K now reads the new SET, which accepts). **E1** dies or mis-values. **E0 does not pin position** (want 0 = RAW_STATUS / `default:` / absent). That is why EA1 exists.
+
+**(g) (j) disclosure is honest.** SET write does `INTERRUPT_ASSERT(d->irq)` on the **CPU** line (`interrupt.h` macro), not `footbridge_interrupt_assert` (that path sets `irq_status` bits). (j) does not change `irq_status`. Guest `IRQ_STATUS` is `irq_status & irq_enable` = 0. `cpu_dyntrans.c:204–209` skips IRQ delivery under `step`. `irq_asserted` is only written in the device-source assert/deassert functions, not in this write arm. No step-visible register. Free-running + IRQSoft stays filed.
+
+---
+
+## Q4 — still not done
+
+Records: no `#539` CHANGELOG round block; `OUTSTANDING_BUGS.md` still has the pre-fix `n6` design notes; ledger / pass-2 receipt / pass-1 seat record (two Codex refusals as **SEAT FAILURES**, not agreement) not written. **READ** of CHANGELOG/OUTSTANDING_BUGS grep.
+
+Propagation: **NOT CHECKED** this seat (no builds, no two-part clearance). `est/src/devices/dev_footbridge.c` already carries the same `#539` else-arm (**READ**). `build/`, `build-asan/`, `/tmp/gxsec-build` still owe part 1 + part 2 after rebuild. `est/`: source tree, part 2 N/A.
+
+`gate_arm.sh` footbridge section is not a substitute for running `gate_arm` alone. The file also still has the unrelated `#529` crime_width hunk — do not ship it in this commit.
+
+Working tree is dirty with other sessions’ files (`dev_lca.c`, `cpu_alpha_palcode.c`, …). Stage **only** the five #539 paths (and the est copy if it is not already identical in the index).
+
+Not this round, already named: retire `+0x18c` + harness legs; five invalid-direction declines; SDRAM pair; (j) free-running arm.
+
+Correct `7.3.32` → `7.3.33` in the sites-probe header before commit (L4, one token). Optional: A2 note `:548`.
+
+---
+
+**Seat record:** grok-4.6 (this pass-2 review). **READ:** `GXEMUL-SEC/src/devices/dev_footbridge.c`, `dc21285reg.h`, `cpu_arm.h`, `cpu_arm.c` (DPI/`ldrh`/`ldr` printers + `reg` dump), `cpu_dyntrans.c:204-209`, `memory.c` `memory_writemax64`, `interrupt.h`, `est/src/devices/dev_footbridge.c` SET arm, `footbridge_sites_probe.py`, `fbpending_drain_probe.py`, `fbpending_witness.py`, `gate_arm.sh` footbridge block, `_scratchpad/dc21285.txt` (TOC 314–321, Table 7-10, 6911–6947), frozen `_scratchpad/n6/p2/diff539_4files.patch` (opened; first hunks match the working tree). **RAN:** nothing (no gates, no builds, no mutants). Frozen md5s **not recomputed** here (hash invocation denied); brief states `1ffb5507` / `e8a7c3f4`.

@@ -1,0 +1,121 @@
+VERDICT: APPROVE the exact two-line deletion and relocation of the three controls. REASONED — The register semantics support it; the proposed rows leave coverage gaps, and the control-arm premise is incorrect.
+
+NOT CHECKED — This is a static review. No code was edited or probes executed. Claims about excluded implementations and the rest of the tree remain explicitly bounded below.
+
+For Part 1, all classifications below are REASONED from the supplied rows and the read code. E0–E2 are taken as word reads, E3 as a byte read, and the controls move to `+0x100` except in variant (i). The relevant implementation is at [dev_footbridge.c:578](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578); `odata` starts at zero at [line 501](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:501).
+
+| Variant | Equivalent under the stated observations? | First differing row and observable |
+|---|---|---|
+| **(a)** Delete assignment | **No** | **E1:** reads `0`, expected `0x00002002`. |
+| **(b)** Read `irq_status` | **No**, with the state qualification below | **E1** in a quiescent session: reads `0`, expected `0x00002002`. **E0 is earlier** if an unrelated raw interrupt is already pending. |
+| **(c)** Read `irq_status & irq_enable` | **No**, assuming the selected sources are inactive | **E1:** reads `0`, expected `0x00002002`. E0 necessarily passes because the enable mask is zero. |
+| **(d)** Read `fiq_enable` | **No** | **E1:** reads `0`, expected `0x00002002`; these rows never enable FIQ sources. |
+| **(e)** Retain `fatal()` | **No** | **E4:** finds `ENABLE SET`. The first offending diagnostic is emitted during E0; the loads can still return their expected values. |
+| **(f)** Retain diagnostic/exit when `len != 4` | **No** | **E3:** prints `ENABLE SET` and exits **1** before returning the expected byte `0x02`. |
+| **(g)** Retain diagnostic/exit when enable is zero | **No** | **E0:** prints `ENABLE SET` and exits **1** before returning zero. |
+| **(h)** Replace write `\|=` with `=` | **No** | **E2:** reads `0x20000000`, expected `0x20002002`. |
+| **(i)** Leave controls at `+0x188` | **No** | Existing **sites K1**, **drain K**, and **witness K** controls fail: their guest load survives and the expected death diagnostic disappears. The sites emulator normally quits with **0**, rather than dying with **1**. E0–E4 themselves are unaffected. |
+| **(j)** Mask read with `0xff` | **No** | **E1:** reads `0x00000002`, expected `0x00002002`. |
+| **(k)** Shift read right eight | **No** | **E1:** reads `0x00000020`, expected `0x00002002`. |
+| **(l)** Diagnostic only for bits 30/31 | **Yes — GAP** | Neither P nor Q sets either bit, so no existing oracle observes the retained diagnostic. |
+| **(m)** Fall through into EnableClear | **No** | **E0:** reaches the Clear read arm, prints `ENABLE CLEAR`, and exits **1** before returning zero. |
+| **(n)** Assert using `irq_status \| irq_enable` | **Yes — GAP at the listed-oracle level**, subject to the execution qualification below | The enable values remain correct, but writing P spuriously asserts the CPU IRQ even with no selected pending source. No listed row directly observes that line or IRQ delivery. |
+| **(o)** Assign `odata` after the `if/else` | **Yes — BENIGN** | Reads obtain the same value. Writes merely assign an unused local: the common tail copies it only for `MEM_READ`. |
+| **(p)** Also remove the Clear read diagnostic/exit | **Yes — GAP** | No listed row reads `+0x18c`; its changed value/diagnostic/termination behavior is unobserved. |
+
+READ — The case’s `break` is **outside** the `if/else` at [dev_footbridge.c:591](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:591). REASONED — Literally deleting that break in (m) also changes writes through fall-through; E0 already detects the read failure.
+
+REASONED — The smallest additions or changes that distinguish the three gaps are:
+
+| Gap | Input and expected observation |
+|---|---|
+| **(l)** | Change Q to `0x60000000`, adding just bit 30. E2 must return **`0x60002002`**, and E4 must still find **zero `ENABLE SET` diagnostics**. This is a diagnostic gap; the returned value itself remains correct. |
+| **(n)** | Extend E1 with CPU IRQ delivery enabled and a guest IRQ-entry counter initially zero, while `(IRQ_RAW_STATUS & P) == 0`. After writing P and allowing IRQ delivery, read the counter: expected **0**. Merely reading IRQStatus is insufficient: its separate AND expression can still return zero while the CPU line is incorrectly asserted. |
+| **(p)** | Add one word read of `+0x18c`: for preservation of the proposed patch’s boundary, expect **`ENABLE CLEAR`, emulator exit 1, and no completed read value**. This distinguishes the scope expansion; it does not claim that hardware requires a host-process exit. |
+
+NOT CHECKED — The permitted files do not fully establish every initial raw interrupt bit or CPU interrupt acceptance during stepping. Consequently, (b)’s exact earliest failure is conditional as shown; (c)’s predicted value uses the intended inactive-source premise; and (n)’s equivalence concerns the listed oracles under uninterrupted stepping, not proven whole-machine execution equivalence.
+
+The six premises in Part 2 audit as follows.
+
+1. **READ — Confirmed within `DEVICE_ACCESS(footbridge)`.**  
+   The only address rewrite before the switch is [dev_footbridge.c:507](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:507), gated by the timer interval and applying `relative_addr &= ~0x060`. The bounds are `0x300` and `0x36c` at [dc21285reg.h:375](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:375) and [line 390](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:390). Both `IRQ_ENABLE` and `IRQ_ENABLE_SET` name `0x188` at [lines 334–335](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:334).  
+   **REASONED —** Input `+0x188` therefore reaches the Set case unchanged. CATS supplies the device base `0x42000000` at [machine_cats.c:63](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c:63).
+
+2. **READ — Confirmed: eight live, explicit access-time calls and two construction-time calls.**  
+   In [dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:498), the eight access-function calls are at **565, 574, 589, 604, 613, 622, 712, and 737**. `DEVINIT` contains the other two at **841 and 877**. Comments mentioning historical exits are not live calls.  
+   **REASONED —** The proposed deletion leaves seven in this access function. The replacement control remains supported by the unconditional read diagnostic/exit at [lines 709–712](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:709), with `SDRAM_BA_MASK == 0x100` at [dc21285reg.h:140](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:140).
+
+3. **READ — Refuted more substantially than “one depends on only one.”**
+
+   | Probe | Requires diagnostic text? | Requires exit status exactly 1? | Evidence |
+   |---|---|---|---|
+   | Sites | Yes | Yes | [footbridge_sites_probe.py:291](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:291) |
+   | Drain | **No**; records it for reporting | **No**; requires `HOST-DIED` | Text recorded at [line 562](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:562); predicate at [line 658](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:658) |
+   | Witness | **No**; records it for reporting | **No**; requires `HOST-DIED` | Text recorded at [line 445](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:445); predicate at [line 587](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:587) |
+
+   **READ —** The drain’s [close routine](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:403) and witness’s [close routine](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:342) discard the `waitpid` result. Neither distinguishes exit 1 from another cause of host death.
+
+   **REASONED —** Relocation must update the guest load, its expected disassembly, the sites probe’s required diagnostic, and the descriptive text. Retaining the K1 label preserves the gate’s existing [K1 check](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1098).
+
+4. **READ / REASONED — Supported for the sources shown, but not fully settled for the complete machine.**  
+   **READ —** State starts zero at [dev_footbridge.c:769](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:769). Raw status is set by OR-ing an incoming line at [line 378](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:378), and cleared at [line 397](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:397). Local timer connections use bits **4–7**, from [the header](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:301) and [the connection loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:829); the CATS ISA connection is bit **10** at [line 835](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:835).
+
+   **REASONED —** Those sources do not intersect `P | Q`. Writing an enable bit also does not itself set raw status. No producer of bits 1, 13, or 29 is identified in the permitted implementation.
+
+   **NOT CHECKED —** The PCI/ISA implementations invoked by [device construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:845), and CPU IRQ handling, are outside scope. I cannot turn the local evidence into an unconditional “nothing on CATS” claim or certify how an unexpected IRQ affects stepping. The read expression itself remains independent of pending status. A guest observation requiring **`IRQ_RAW_STATUS & 0x20002002 == 0`** would make the selected-source premise observable.
+
+5. **READ — Confirmed.**  
+   Under the columns **Address / Read / Write**, the datasheet states:
+
+   > `188h  IRQEnable  IRQEnableSet`
+
+   > `18Ch  --  IRQEnableClear`
+
+   These are [_scratchpad/dc21285.txt:6826](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6826) and [line 6827](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6827). The prose calls IRQEnable a **“read-only register”** at [line 6913](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6913), and says of EnableClear, **“This write-only register is used to clear bits”** at [line 6940](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6940). Enable changes through Set/Clear are specified at line **6915**, and reset zero at **6924**.
+
+6. **NOT CHECKED — The tree-wide absence claim cannot be settled within the reading restriction.**  
+   **READ —** The scoped literal search found the emitting line at `dev_footbridge.c:588` and consumers at `footbridge_sites_probe.py:291`, `fbpending_drain_probe.py:562`, and `fbpending_witness.py:445`. The permitted gate section checks result markers and K1, including [gate_arm.sh:1085](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1085) and [line 1099](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1099); it does not directly grep this diagnostic. This does not establish absence elsewhere.
+
+For Part 3, the enclosing guards and the broader input coverage need distinguishing.
+
+READ — The edited statements are enclosed by only:
+
+- Selection of `case IRQ_ENABLE_SET`, at **dev_footbridge.c:578**.
+- The false branch of `writeflag == MEM_WRITE`, at **579–585**.
+
+REASONED — For this path, the earlier write test at **504** is also false, and the timer-fold condition at **507** must be false. Those earlier conditional bodies do not enclose the edited lines. The later `writeflag == MEM_READ` test at [line 754](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:754) controls output copying; it does not dominate the read body.
+
+READ — The guarded read body reads exactly one device field: **`d->irq_enable`**, a `uint32_t` declared at [line 81](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:81). It does not read `irq_status`, `fiq_enable`, or timer state. The common tail additionally consumes `cpu`, `data`, `len`, and `odata`.
+
+| Input partition | Coverage — REASONED |
+|---|---|
+| `relative_addr == 0x188`, read | E0–E3. |
+| Same address, write | E1 and E2 setup writes. |
+| Timer-fold interval | Existing timer-load signature rows; drain/witness additionally access timer value/control/clear. |
+| Other covered switch selections | Existing vendor reads at `+0x000`; relocated controls at `+0x100`. |
+| Remaining switch selections/default | No supplied or existing probe row covers them, including IRQEnableClear and the FIQ cases. |
+| `writeflag == MEM_READ` | E0–E3; reaches the common output copy. |
+| `writeflag == MEM_WRITE` | E1/E2 setup; skips that copy. |
+| Flag equal to neither constant | No row. Structurally it enters this case’s `else` but skips the output copy; this is not an asserted valid guest access. |
+| Enable value zero | E0. |
+| Enable value P | E1. |
+| Enable value `P \| Q` | E2 and E3. |
+| Other enable values | No row; the read body contains no zero/nonzero or high-bit conditional. |
+| Write-arm condition `irq_status & irq_enable` false/true | False is intended for E1/E2. True is not deliberately held by any row. This condition belongs to the write arm, not the read guard. |
+
+READ — The handler has **no `len` restriction before this case** and passes `len` unchanged to `memory_writemax64`.
+
+| Incoming width | Coverage — REASONED |
+|---|---|
+| **1 byte** | E3, expected `0x02`. |
+| **2 bytes** | **No row.** An aligned halfword read after E2 should return `0x2002`. |
+| **4 bytes** | E0–E2 and the existing guest word-load controls. |
+| **8 bytes or other lengths** | No row. Nothing in this handler prevents case selection if such a call arrives. |
+
+NOT CHECKED — The excluded CPU/memory implementations determine which additional widths can actually arrive from a CATS guest and how unsupported lengths are handled. Handler acceptance alone does not prove a guest instruction route. E4 is a session-output assertion and adds no width coverage.
+
+For Part 4, my additional question is: **Does the readable enable register correctly reflect a subsequent EnableClear write?**
+
+READ — The Clear write updates the same latch at [dev_footbridge.c:595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:595). REASONED — None of E0–E4 observes that transition. Add one row after E2: **write P to `+0x18c`, then word-read `+0x188`; expect exactly Q, `0x20000000`**. This checks the other documented way the newly readable register changes, including preservation of uncleared bits.
+
+**Counts — REASONED: 16/16 variants classified, with the stated state/execution qualifications; 4/6 premises settled with cited lines. Premise 4 is partially supported but not fully established; premise 6 remains NOT CHECKED tree-wide.**

@@ -1,0 +1,57 @@
+VERDICT: ACCEPT for +0x188 is supported by the inlined datasheet and code. The proposed temporary control at +0x100 is sound from the packet. Q1c and Q1d contain premises not checkable from this packet. Q1e: yes, bind the `waitpid` status. Q3: no missing option; FAULT would be wrong if datasheet is right. Q4: build a permanent failability control now if it can be validated; otherwise the temporary move is acceptable.
+
+---
+
+### Q1 — premise audit
+
+**(a) ACCEPT right?**  
+READ: The inlined datasheet table and text make `+0x188` read legal, returning IRQEnable. The code already computes `odata = d->irq_enable;` before the fatal/exit.  
+REASONED: ACCEPT is correct for this site.
+
+The sibling `+0x288` FIQ_ENABLE_SET read is also legal per the same datasheet table, but the inlined code returns `0` silently and does **not** call `fatal()`/`exit(1)`. That is a separate correctness bug, not an exit site. Under the stated one-site-per-round reopening rule, it should stay separate. If the rule is “same semantic class,” it could join, but that expands scope beyond the exit-defect class.
+
+**(b) `+0x100` temporary control sound?**  
+READ: `0xE5907100` decodes as `ldr r7,[r0,#256]`, and `0x100` decimal = 256. The code path at `SDRAM_BA_MASK` read calls `fatal("[ footbridge read from sdram_ba_mask ]\n")` then `exit(1)`.  
+REASONED: Yes, it gives each probe a host death with distinct text and exit 1, exactly the same class of control as `+0x188`. It is temporary by design because `+0x100` is a decline-class site.
+
+**(c) P/Q inert?**  
+UNCHECKABLE from packet. The claim that bits 1, 13, and 29 are never asserted during these probes depends on the full DC21285 interrupt bit table and the `cats` interrupt wiring, which are not inlined.  
+If a write did assert the CPU IRQ, it could alter subsequent single-step behavior, so this must be verified before relying on P/Q.
+
+**(d) Tree-wide dependence on `ENABLE SET` text?**  
+UNCHECKABLE from packet. The brief says codex scoped only `src/` and `regress/` and found four sites; the tree-wide claim is explicitly not checked. This remains open.
+
+**(e) Bind `waitpid` status?**  
+REASONED: Yes. The drain and witness probes currently discard `waitpid` status and accept any host death after seeing the text. Moving the kill arm without binding status would preserve that blind spot. Binding exit 1 does not change surviving-arm verdicts, because those arms should exit 0.
+
+---
+
+### Q2 — candidate weakenings
+
+Using final P = `0x00002002`, Q = `0x60000000`, P|Q = `0x60002002`.
+
+| Mutant | Caught? | First red row |
+|---|---:|---|
+| (a) delete `odata = d->irq_enable;` | Yes | E1 — E0 falsely passes, E1 expects P but gets 0 |
+| (b) `odata = d->irq_status;` | Yes | E1 — same, d->irq_status likely 0 |
+| (c) `odata = d->irq_status & d->irq_enable;` | Yes | E1 — d->irq_status likely 0 |
+| (d) `odata = d->fiq_enable;` | Yes | E1 — fiq_enable unchanged 0 |
+| (e) keep `fatal()`, drop `exit(1)` | Yes | E4 — diagnostic still printed |
+| (f) reinstate fatal+exit only when `len != 4` | Yes | E3 — byte read would die |
+| (g) reinstate only when `d->irq_enable == 0` | Yes | E0 — first read has enable == 0 |
+| (h) write `=` instead of `|=` | Yes | E2 — second write overwrites P |
+| (i) fix lands, controls not moved | Yes | K1 — kill arm survives, control fails |
+| (j) assert condition `d->irq_status \| d->irq_enable` | No listed row catches | Need a row that observes CPU IRQ assertion after writing P with no pending source |
+| (k) also de-fatalise `IRQ_ENABLE_CLEAR` read | No listed row catches | Need a row reading `+0x18c` and expecting refusal/fatal; after decline de-fatalisation, expect decline announce |
+
+---
+
+### Q3 — option-set completeness
+
+No missing option from the listed set. ACCEPT is appropriate for a documented readable register. FAULT would be wrong if the datasheet is correct because the read is legal. The inlined handler has no fault-injection path; it returns `1` and writes `odata`. REASONED: FAULT is not shown to be available in this code path.
+
+---
+
+### Q4 — campaign order
+
+REASONED: Either order is defensible. The real requirement is a failability control that does **not** depend on a defect being present. The best move is to build that permanent control now if it can be specified and tested in the same commit. If not, moving to `+0x100` is an acceptable temporary step, but it guarantees another control move later. A permanent control should be a deliberate, documented kill mechanism outside the footbridge device model, so the one-instruction delta remains valid after all device exits are removed.

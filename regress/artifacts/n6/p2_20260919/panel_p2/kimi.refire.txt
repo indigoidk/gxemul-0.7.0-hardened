@@ -1,0 +1,70 @@
+• I'll read the brief in the four specified ranges first.
+
+• My calls defaulted to full-file reads and got preview-truncated. Re-issuing with the explicit ranges as instructed.
+
+• My parameter passing failed again — the calls went out without offsets. Issuing them now with explicit `line_offset` and `n_lines`.
+
+• The offset parameters keep getting dropped from my calls. Testing with a single call, parameters set explicitly.
+
+• Parameters went through that time. Reading the remaining three ranges in parallel.
+
+• I've read the full brief (1093 lines). Now I'll verify the inlined diff against the working tree. First batch: the device file, the sites probe, and construct-name counts.
+
+• The device file matches the brief's section 5 line-for-line. Now the probes, gate section, header constants, and citation counts.
+
+• Gate section matches the diff. Quick check of what `quit` does in the debugger, for the exit-0 premise.
+
+• One last read-only check: whether the build trees' source copies carry the fix (Q4 propagation).
+
+• VERDICT: The inlined diff is faithful to the working tree at every anchor I could check (13/13 hunk sites across the five named files), the device edit is exactly member 4, and the kill table is internally consistent with the shipped row predicates — but the round ships two self-contradicting probe docs and the brief's section-1 prose overclaims on citations, so: ACCEPT the fix and the detector, REQUIRE three small doc corrections before the records step.
+
+  ## Q1 — premise audit
+
+  **(a) Yes.** READ `dev_footbridge.c:578-593`: the read branch is the five-line `/* #539 */` comment plus `odata = d->irq_enable;` — fatal and exit(1) gone, no latch, no message, nothing else added. The comment's quote tracks the datasheet as quoted in the brief. I checked the datasheet TOC myself: `_scratchpad/dc21285.txt:317` has 7.3.31 = IRQEnable/FIQEnable @188h and `:5461` has the register-table row. The verbatim quoted *sentence* (brief's lines 6913-15) I did not open — partially NOT CHECKED, but numbering and map are confirmed.
+
+  **(b) Yes.** `ldr r7,[r0,#396]` = `0xE590718C` (I hand-decoded all 13 new words; every one matches its text). The fold is gated `[TIMER_1_LOAD, TIMER_4_CLEAR]` = `[0x300, 0x36C]` (READ `dc21285reg.h:375,390`); 0x18c never enters it, and `case IRQ_ENABLE_CLEAR` (0x18c, `:336`) read branch still does odata + fatal("...ENABLE CLEAR?") + exit(1) (READ `dev_footbridge.c:595-608`). All three K rows require text AND exit 1: sites `:356` (`any("ENABLE CLEAR" in f ...) and K["exit"] == 1`), drain `:677-681` (`saw` and `exit==1`), witness `:603-607` (`saw_fatal` and `exit==1`).
+
+  **(c)** The new `close()` (READ in both files, drain `:404-425`, witness `:347-368`): the drain loop is bounded (5 s), the waitpid is not. A hang needs the child to survive master close; gxemul installs no SIGHUP handler (GREP `GXEMUL-SEC/src`: zero hits), so on Linux master close delivers SIGHUP with default terminate — the residual hang requires a stopped/blocked-signal child, narrow, and the *old* code had the same unbounded waitpid with less draining. No regression; REASONED. `survived()` changes no existing row on a healthy run: `quit` sets `emul_shutdown`/`exit_debugger` (READ `debugger_cmds.c:1629-1638`); exit-status-0 itself I did not trace to a final `exit(0)` — the round's own post-fix 19/19, 11/11, 12/12 greens are the measurement. The `exit=`/`signal=` keys collide with no existing dict key at any return site (READ all of them). One genuine improvement worth naming: `run_kill` now computes `saw` *after* `close()`, and close() drains into `s.buf`, so the complaint can't be missed the way the old order could.
+
+  **(d) Yes.** Register landing sites verified by decoding: r7(E0), r1(E1), r2(E2), r9(E3), fp(E6), ip(E5); r8=P and sl are written once and never re-clobbered; BODY's r1/r2 uses (0x20-0x28) precede E1/E2's writes, and arm E doesn't score A2. The dump parser now reads r8/r9/sl/fp/ip with the emulator's spellings (READ sites `:254-258`, `:165`). EC1/EA1 are the right controls — E0==0 is also the absent-device answer, so reachability must be proven first, and both are in `ctrl_ok` (`:394`).
+
+  **(e) Yes, with one note.** `row()` prints `%-4s %-40s got=%-12s want=%-12s %s` (READ sites `:290-291`); the two pinned gate regexes match the padded `got=` field exactly. `^E[0-6] .*ok$` counts E0,E1,E2,E3,E6,E5 *plus E4* (E4 uses the other print, ends "ok") = exactly 7, and EC1/EA1 are excluded by the letter-before-digit. The excerpt grep `E[A-Z]?[0-9]` matches EC1, EA1, E0-E6, E4 and nothing else — I enumerated every print site in the 399-line probe. Note: the count-7 check can't say *which* E row reddened; the E0/E2 pins plus CONTROL=OK bound that.
+
+  **(f) Mostly, and this is where the brief overclaims.** GREP counts in `dev_footbridge.c`: `case VENDOR_ID` 1, `case IRQ_ENABLE_SET` 1, `case IRQ_ENABLE_CLEAR` 1, `case TIMER_1_LOAD` 1, `case TIMER_1_VALUE` 1, ``pending_timer_interrupts[timer_nr] = 0`` 1 — all unique. **But:** `` `!(idata & TIMER_ENABLE)` `` gets **0 hits** — the drain probe header's backquoted citation (`:21-22`) is a paraphrase of the else-branch at `:674-678`, not a greppable construct. And the "all stale `:NNN` replaced" claim is false at `footbridge_sites_probe.py:332`, which still reads `"TIMER_1_LOAD masked to 24 bits by :548"` (the store is at `:642` post-edit).
+
+  **(g) NOT CHECKED.** Read normalizes pure CRLF to LF and I ran nothing. REASONED only: an ending flip would have turned the drain-probe diff into a whole-file rewrite; the inlined hunks are tight with unchanged context. On-disk bytes unverified.
+
+  ## Q2 — weakenings (against the fixed code + shipped rows)
+
+  - **(m)** caught — E0 first (0^0x2000 ≠ 0), then E1/E2/E6/E5; E3 stays green (bit 13 is outside byte 0). 
+  - **(n)** caught — E0 first (0xFFFFFFFF), every value row follows.
+  - **(o)** caught — E1 first: DATA+8/12 never written, guest loads 0 (gxemul zeroes RAM — REASONED, not read), Set|=0 is a no-op, readback 0 ≠ P. E0 stays vacuously green, EC1/EA1 stay green — the defect is correctly isolated to the P/Q plumbing.
+  - **(p)** caught — post-fix, +0x188 returns 0 with no death, so the stale probe's K arm SURVIVES: K1 reds (sites: `k_ok` false; drain/witness: HOST-DIED false and "ENABLE CLEAR" never seen).
+  - **(q)** the K row itself becomes vacuous: `s.dead` is set on *any* process exit (pty EOF), so without `exit==1` and the complaint text the row greens for a clean exit 0 mid-arm, a signal, or a crash — and every other row's failability backing is void. (The sites probe always required text+exit; the drain/witness *old* rows didn't even require the text, so the new predicates close a real hole there.)
+  - **(r)** caught — E3 first (ldrb → 0 ≠ 0x02), then E6; word rows unaffected. Matches the contract's "(E3, E6)".
+
+  ## Q3 — floor and contract
+
+  (a)-(c) hold. I reproduced the red signatures from the shipped predicates rather than trusting the table: death at E0 (prefix/a/b/f, and (l) at E2 when bit 30 lands) means no `reg` dump, so all nine E rows red — matches the table's 10/19 rows exactly. (e) `fatal()` without exit leaves the arm alive with fatals=6 — and arm E reads +0x188 exactly six times (E0,E1,E2,E3,E6,E5); the table's "fatals=6" cross-checks. (g) E1 survives (P ⊂ low 16 bits), E2/E5 red — matches. (h) `=` wipes P: E2,E3,E6 — matches. (i) E5 only, (k) K1 only — match. (d) DEPENDS-ON cells from the diff's own predicates: E0-E6 ← EC1∧EA1 (both in `ctrl_ok`, gate checks CONTROL first); K1 ← I1 and D1; drain/witness K rows contain `survived(D)`/`survived(A)`; R0 contains `survived(T/E)`; PASS ← all 19; the gate's E-count ← the probe printing all nine E lines. Closed. (e) the CONTRACT paragraph (sites `:86-98`) states coverage and the three NOT-COVERED items. (f) offset shift: A1 reds first in print order (`default:` is fatal-*without*-exit returning 0 — READ `:747-753`), then EA1/A2/E1/E2/E3/E6/E5/E4/K1; E0 stays green, which is precisely why E0 is never load-bearing alone. (g) honest — the assert drives only the CPU line; IRQ_STATUS readback is `irq_status & irq_enable` regardless (READ `:560-567`), delivery is suppressed under step and the probe never clears CPSR I/F. No step-visible channel found.
+
+  ## Q4 — not done
+
+  Confirmed by grep: no #539 entry in `CHANGELOG.md` or `OUTSTANDING_BUGS.md`. `build/` and `build-asan/` copies of `dev_footbridge.c` do **not** carry #539 (grep, zero hits); `est/src/devices/dev_footbridge.c` does (`:586`). So: records, build-tree propagation + two-part clearance, and the gate_arm-only run all remain. Also still open and disclosed: the +0x18c bridge retirement, the five invalid-direction declines, SDRAM_BA pair, (j)'s IRQSoft free-running arm, +0x189..18b lanes, packed VENDOR:Device config.
+
+  ## Found while verifying (not in the brief)
+
+  1. **`fbpending_drain_probe.py:63-65` still documents arm K as "a read of IRQ_ENABLE_SET"** — contradicted by its own shipped KILL word at `:227-228` (`0xE590718C`, "IRQ_ENABLE_CLEAR"). The witness's ARMS doc *was* updated (`:75-81`); the drain probe's was missed. The brief's "kill word and text retargeted" is false for this file's header.
+  2. **`footbridge_sites_probe.py:332` — stale `:548`** in the A2 row text (see Q1(f)).
+  3. **"write-only per 7.3.32" is the wrong section number** (brief §1 and sites probe `:59`): the datasheet TOC puts IRQEnableSet at 7.3.32 and **IRQEnableClear at 7.3.33** (`dc21285.txt:318-320`). Substance correct; citation off by one.
+  4. Nits: drain-probe header's ungreppable `` `!(idata & TIMER_ENABLE)` `` (Q1(f)); drain probe usage line says `fbpending_drain.py` (pre-existing, not this round).
+
+  None of these touch the device change or the detector logic; all four are doc/citation fixes in files this round already edited.
+
+  ## Seat record
+
+  - Seat: Kimi Code CLI (kimi), file-reading seat, adversarial pass-2 review.
+  - READ: `_scratchpad/n6/p2/brief_n6_p2_BUILT.md` lines 1-280, 281-600, 601-920, 921-1093 (whole file, 1093 lines); `GXEMUL-SEC/src/devices/dev_footbridge.c:430-789`; `GXEMUL-SEC/regress/footbridge_sites_probe.py:1-399` (whole); `GXEMUL-SEC/regress/fbpending_drain_probe.py:1-748` (whole); `GXEMUL-SEC/regress/fbpending_witness.py:1-674` (whole); `GXEMUL-SEC/regress/gate_arm.sh:1060-1129` (footbridge section); `GXEMUL-SEC/src/debugger/debugger_cmds.c:1625-1654`. GREP (read-only): construct-name counts in `dev_footbridge.c`; constants in `GXEMUL-SEC/src/include/thirdparty/dc21285reg.h`; `:NNN` citation sweep of `GXEMUL-SEC/regress/*.py`; `#539` in `est/`, `build/`, `build-asan/` copies and top-level *.md; SIGHUP in `GXEMUL-SEC/src`; datasheet TOC/map in `_scratchpad/dc21285.txt`.
+  - RAN: nothing. No builds, no probes, no gates, no git, no shell.
+  - Frozen diffs compared against: the brief's inlined section-4 text only; the frozen files `diff539_4files.patch` (md5 1ffb5507) and `diff539_gate.patch` (md5 e8a7c3f4) were NOT opened and their checksums NOT recomputed (running nothing), so diff-vs-HEAD completeness (absence of *unannounced* hunks) is NOT CHECKABLE from here — every *inlined* hunk was verified present and exact in the tree.
+
+KIMI_REFIRE_RC=0

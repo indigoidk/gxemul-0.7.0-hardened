@@ -1,0 +1,164 @@
+# VERDICT: GO-WITH-CHANGES
+
+***
+
+### Summary of Adversarial Review
+
+Every claim, premise, mutant derivation, encoding, and regex in [`_scratchpad/panel_20260919_021100/brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_021100/brief_sent.md) was audited against [`GXEMUL-SEC`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC) at working tree HEAD `a11eaac`. The core fix (Option-set Member 4: keep `odata = d->irq_enable;`, eliminate `fatal()` and `exit(1)`) and the probe changes are sound, clean, and mathematically verified.
+
+However, an adversarial audit reveals **two concrete defects/omissions** that prevent an unqualified `GO`:
+1. **Residual Stale Line Citation in Code**: [`regress/footbridge_sites_probe.py:332`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L332) still contains `"TIMER_1_LOAD masked to 24 bits by :548"`. While the header docstring and gate comments were cleaned of line numbers, line 332 was missed.
+2. **Uncommitted Working-Tree Contamination in `gate_arm.sh`**: [`regress/gate_arm.sh:1728-1786`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1728-L1786) contains an unrelated 59-line working-tree hunk from issue #529 (`crime_width`). Staging must ensure this hunk is not accidentally bundled with #539.
+
+***
+
+### Section 1 & 2: Premise & Code Verification
+
+| Claim / Premise | Status | Evidence / Anchor |
+| :--- | :--- | :--- |
+| **Option-set Member 4 Fix** | **READ** | [`src/devices/dev_footbridge.c:586-592`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L586-L592). `fatal()` and `exit(1)` are gone; `odata = d->irq_enable;` kept verbatim; no latch or side-effect added. |
+| **Datasheet 7.3.31 & Table 7-10** | **READ** | [`src/include/thirdparty/dc21285reg.h:334-336`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L334-L336). Offset 0x188 is `IRQ_ENABLE` / `IRQ_ENABLE_SET`. Documented read-only, reset value 0, altered only by Set/Clear. |
+| **Reset Value 0** | **READ** | [`src/devices/dev_footbridge.c:771`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L771). `memset(d, 0, sizeof(struct footbridge_data));` guarantees `irq_enable == 0` at reset. |
+| **+0x18c Reachability & Timer Fold** | **READ** | [`src/devices/dev_footbridge.c:507-510, 595-608`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L507-L608). Timer fold gates only `[0x300, 0x36C]`. 0x18c passes through to `case IRQ_ENABLE_CLEAR:`, printing `[ WARNING: footbridge read from ENABLE CLEAR? ]\n` and calling `exit(1)`. |
+| **ARM Encoding `0xE590718C`** | **REASONED** | `ldr r7, [r0, #396]`: Pre-indexed load, base r0, dest r7, immediate offset 396 (0x18c). Correct. |
+| **P and Q Bit Allocations** | **REASONED** | P = 0x00002002 (bits 1, 13); Q = 0x60000000 (bits 29, 30). P \| Q = 0x60002002. Neither is a rotated ARM immediate; both loaded from RAM. |
+| **ARM Register Dump Spellings** | **READ** | [`src/include/cpu_arm.h:60-61`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L60-L61). `ARM_REG_NAMES` defines indices 10, 11, 12 as `"sl"`, `"fp"`, `"ip"`. Handled in probe at [`footbridge_sites_probe.py:522-545`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L522-L545). |
+| **LDRH Immediate Ceiling (255)** | **REASONED** | ARMv4 halfword immediate offset is an 8-bit value (`(hi << 4) | lo`). Offset 392 exceeds 255. `add sl, r0, #0x180` (0xE280AD06) + `ldrh fp, [sl, #8]` (0xE1DAB0B8) is valid and required. |
+| **Execution Order E6 before E5** | **REASONED** | E6 tests low halfword `0x2002` (P), which is only present before `Clear <- P` (0x54). If E5 ran before E6, low halfword would be 0x0000. Verified. |
+| **Single-Step Interrupt Suppression** | **READ** | [`src/cpus/cpu_dyntrans.c:204-208`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L204-L208). `if (!single_step)` explicitly suppresses ARM exception dispatch during single stepping. |
+| **Absence of `./src/` at Root & Fork Lines** | **READ** | `./src/` does not exist at root. [`_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c) is 744 lines; SEC's file is 900 lines (897 on HEAD + 3 in patch). |
+| **Byte-Identity of `est/`** | **READ** | Binary compare (`fc.exe /b`) of [`est/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/est/src/devices/dev_footbridge.c) and [`GXEMUL-SEC/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c) confirms 0 byte differences. |
+
+***
+
+### Section 6: Specific Review-Asks (Q1 - Q4)
+
+#### Q1: Premise Audit
+* **(a) Exactness of Member 4 & Comment**:
+  - **READ**: [`src/devices/dev_footbridge.c:586-592`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L586-L592).
+  - The fix deletes only `fatal()` and `exit(1)` and preserves `odata = d->irq_enable;`.
+  - The comment accurately reflects DC21285 Table 7-10 (offset 188h is IRQEnable/IRQEnableSet) and 7.3.31 (read-only, reset 0, altered only by Set/Clear).
+* **(b) +0x18c Bridge Soundness & 3 Probe K Rows**:
+  - **READ**: [`src/devices/dev_footbridge.c:507-510, 595-608`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L507-L608). The timer fold does not touch 0x18c. `0xE590718C` hits `case IRQ_ENABLE_CLEAR:` read branch.
+  - All three probes require both the diagnostic string AND `exit == 1`:
+    1. `footbridge_sites_probe.py:356`: `any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1`.
+    2. `fbpending_drain_probe.py:577, 678`: `saw = "ENABLE CLEAR" in s.buf` and `K["saw"] and K.get("exit") == 1`.
+    3. `fbpending_witness.py:458, 604`: `seen = "ENABLE CLEAR" in s.buf` and `K["saw_fatal"] and K.get("exit") == 1`.
+* **(c) `close()` Draining, `survived()`, and Dictionary Consumers**:
+  - **READ**: [`regress/fbpending_drain_probe.py:404-425`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L404-L425), [`regress/fbpending_witness.py:344-368`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L344-L368).
+  - **REASONED**: When the pty master closes, the kernel sends SIGHUP to the slave session leader. GXemul does not handle SIGHUP (`git grep SIGHUP src/` returns 0 hits); default disposition terminates the emulator. The child cannot survive master close unless held in an uninterruptible kernel D-state (which user-space emulation does not trigger).
+  - `survived()` (`status == "SURVIVED" and exit == 0`) does not alter any healthy arm's verdict, since healthy arms process `"quit\n"` and exit 0.
+  - In `fbpending_witness.py`, unpacking `**end` into `run_witness` adds `exit` and `signal` without deleting or altering any existing keys (`status`, `samples`, `regs`, `badis`, `catchup`). All existing consumers are unaffected.
+* **(d) Arm E Register Alignment & Controls**:
+  - **READ**: [`regress/footbridge_sites_probe.py:507-521, 580-585`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L507-L585).
+  - Register correspondence: E0 -> r7; E1 -> r1; E2 -> r2; E3 -> r9; E6 -> fp (r11); E5 -> ip (r12).
+  - No register is clobbered before dump: r5 (EC1) and r6 (EA1) from BODY remain pristine; r8 (P) is written to Set and Clear; r9 is overwritten by E3 byte read only after Set <- Q completes.
+  - EC1 (RAM readback) and EA1 (VENDOR_ID 0x1011) are the correct positive controls; without them, an absent/unmapped device would yield 0 at E0 and falsely pass.
+* **(e) `gate_arm.sh` Regexes**:
+  - **READ**: [`regress/footbridge_sites_probe.py:288-292`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L288-L292), [`regress/gate_arm.sh:1074, 1094-1100`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1074-L1100).
+  - `^E[0-6] .*ok$` exactly matches the 7 rows: E0, E1, E2, E3, E4, E5, E6 (EC1 and EA1 are excluded because character 2 is non-numeric).
+  - `^E0 .*got=0x00000000 .*ok$` and `^E2 .*got=0x60002002 .*ok$` match `footbridge_sites_probe.py`'s `got=%-12s` output exactly.
+  - `E[A-Z]?[0-9]` matches EC1, EA1, and E0..E6, and matches no other output line from the probe.
+* **(f) Construct Name Uniqueness**:
+  - **READ**: Grep count across [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c):
+    - `case VENDOR_ID`: 1 match (line 514).
+    - `case TIMER_1_LOAD`: 1 match (line 638).
+    - `case IRQ_ENABLE_CLEAR`: 1 match (line 595).
+    - `case TIMER_1_VALUE`: 1 match (line 651).
+    - `pending_timer_interrupts[timer_nr] = 0`: 1 match (line 677).
+    Every construct name is unique.
+* **(g) Line Endings in `fbpending_drain_probe.py`**:
+  - **READ**: Inspected via binary byte count: exactly 748 `\r\n` CRLF sequences, 0 solo `\n` LF sequences. Clean content hunks only.
+
+***
+
+#### Q2: Candidate Weakenings & Mutants
+
+| Mutant | First Red Row | Mechanism / Verdict |
+| :--- | :--- | :--- |
+| **(a) verbatim fatal()+exit(1)** | **E0** (dies) | E0 host-dies; all 9 arm E rows fail (EC1, EA1, E0-E6). |
+| **(b) if irq_enable == 0 exit** | **E0** (dies) | E0 reads at reset (`irq_enable == 0`), host-dies; 10/19 pass. |
+| **(c) odata = d->irq_status** | **E1** | `irq_status == 0`; E0 passes (0==0); E1 reads 0 instead of P; E1, E2, E3, E6, E5 red. |
+| **(d) odata = d->fiq_enable** | **E1** | `fiq_enable == 0`; identical to (c); E1, E2, E3, E6, E5 red. |
+| **(e) fatal() kept, no exit** | **E4** | 6 fatals accumulated across arm E; E4 requires `len(fatals) == 0`. E4 sole carrier. |
+| **(f) sub-word reads refuse** | **E3** (dies) | `ldrb` at 0x48 causes host death; arm E dies; 10/19 pass. |
+| **(g) low 16-bit mask** | **E2** | Low 16 bits of P\|Q is 0x2002 != 0x60002002; E2 and E5 red. |
+| **(h) SET write arm: \|= -> =** | **E2** | Set Q overwrites P; E2 reads Q (not P\|Q); E2, E3, E6 red. |
+| **(i) CLEAR write arm: &= idata**| **E5** | `(P\|Q) & P = P` (0x2002); E5 reads P instead of Q; E5 sole carrier. |
+| **(j) SET assert: & -> \|** | **ESCAPES** | **Disclosed**. `single_step` suppresses CPU interrupt delivery in `cpu_dyntrans.c:206`. |
+| **(k) remove exit from CLEAR read**| **K1** | Host survives reading +0x18c; K1 requires exit 1. K1 sole carrier. |
+| **(l) exit kept for bits 30/31** | **E2** (dies) | Q has bit 30 set; read at E2 hits fatal()+exit(1); arm E dies; 10/19 pass. |
+| **(m) odata = d->irq_enable ^ 0x2000** | **E0** | At reset, `0 ^ 0x2000 = 0x2000 != 0`. E0 reds immediately. |
+| **(n) odata = ~d->irq_enable** | **E0** | At reset, `~0 = 0xffffffff != 0`. E0 reds immediately. |
+| **(o) P/Q RAM words unplanted** | **E1** | Memory at 0x9008 is 0; Set <- 0; E1 reads 0 instead of P. E1 reds. |
+| **(p) K arm word left at +0x188** | **K / K1** | Read to +0x188 survives; K / K1 requires host death with exit 1. K/K1 reds in that probe. |
+| **(q) `close()` reaps, K ignores exit**| **Row K vacuous** | Any crash/signal satisfies `status == HOST-DIED`. Failability control becomes vacuous. |
+| **(r) if (len == 4) odata = ...** | **E3** | `ldrb` (len 1) leaves `odata == 0`. E3 reads 0 instead of 0x02. E3 reds. |
+
+***
+
+#### Q3: Floor and Contract
+* **(a) Vacuity Floor**:
+  - (a) Pre-fix witness is RED (10/19 pass; E arm host-dies at E0).
+  - (b) Verbatim reinstatement killed (10/19 pass).
+  - (c) Identity rows present (E0, E1, E2, E3, E6, E5).
+  - (d) DEPENDS-ON closure enforced: `ctrl_ok` encompasses C1-C4 + EC1 + EA1; `survived()` gates R0, E, T, and K across all probes.
+  - (e) Disclosed contract bounds in probe docstring match implementation reality.
+* **(f) Anchor Rule (Offset Shift by 1 Word)**:
+  - If offsets shifted by +4, `ldr r6, [r0]` in `BODY` (offset 0x0) reads unmapped space (0) instead of VENDOR_ID (0x1011).
+  - **A1** (in live arm) and **EA1** (in arm E) red first.
+* **(g) Mutant (j) Disclosure**:
+  - **READ**: [`src/cpus/cpu_dyntrans.c:204-208`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L204-L208).
+  - Completely honest. `if (!single_step)` unconditionally prevents exception delivery under `step`.
+
+***
+
+#### Q4: Omissions & Round Delta (What the Round Still Did Not Do)
+1. **Records & Ledger**:
+   - `CHANGELOG`: #539 block not yet added.
+   - `OUTSTANDING_BUGS`: Not yet updated.
+   - `tools/pipeline/ledger.json`: Not updated.
+   - Panel pass-1 seat records: Not yet finalized.
+2. **Build & Propagation**:
+   - Changes uncommitted on `GXEMUL-SEC`.
+   - `build/`, `build-asan/`, and `/tmp/gxsec-build` binaries not rebuilt.
+   - Full gate suite (`gate_arm.sh`, etc.) not executed post-rebuild.
+3. **Adversarial Findings / Round Omissions**:
+   - **Stale citation in code**: [`regress/footbridge_sites_probe.py:332`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L332) still contains `:548` (`row("A2", "TIMER_1_LOAD masked to 24 bits by :548", ...)`).
+   - **Dirty gate hunk**: [`regress/gate_arm.sh:1728-1786`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1728-L1786) contains uncommitted lines from #529 (`crime_width`).
+   - **Temporary bridge**: `+0x18c` remains temporary until retired by the decline round.
+   - **Uncovered channels**: Free-running IRQ delivery with `IRQSoft` (mutant j) remains filed, not rowed.
+
+***
+
+### Required Changes Before Commit
+1. In [`regress/footbridge_sites_probe.py:332`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L332), replace `:548` with `the handler` or `TIMER_x_LOAD` to eliminate the last stale line citation in the probe suite.
+2. In [`regress/gate_arm.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh), ensure the #529 hunk at line 1728+ is un-staged or isolated so that #539 commits only its footbridge changes.
+3. Append standard records (`CHANGELOG`, `OUTSTANDING_BUGS`, `ledger.json`), rebuild `build/` and `build-asan/`, and run `gate_arm.sh`.
+
+***
+
+### Seat Record Line
+* **Model**: Gemini 3.8 Flash (High)
+* **What was READ**:
+  - `src/devices/dev_footbridge.c:498-760, 763-802`
+  - `src/include/thirdparty/dc21285reg.h:321-390`
+  - `src/include/cpu_arm.h:58-75`
+  - `src/cpus/cpu_arm.c:796-805`
+  - `src/cpus/cpu_dyntrans.c:204-210`
+  - `regress/footbridge_sites_probe.py:80-145, 260-395, 506-522`
+  - `regress/fbpending_drain_probe.py:220-230, 404-425, 565-580, 647-685`
+  - `regress/fbpending_witness.py:200-205, 344-368, 445-460, 571-610`
+  - `regress/gate_arm.sh:1071-1100, 1728-1786`
+  - `_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c`
+  - `est/src/devices/dev_footbridge.c`
+  - `_scratchpad/panel_20260919_021100/brief_sent.md`
+* **What was RAN**:
+  - **Nothing built; no gates or harness run.** (Read-only static verification: `git diff`, `git status`, file MD5 checksums, CRLF byte counts, unified diff comparison against frozen patches).
+* **Frozen Patch MD5 Checksums**:
+  - `_scratchpad/n6/p2/diff539_4files.patch`: `1ffb5507ac4cb180e082620c13636347` (starts with `1ffb5507`)
+  - `_scratchpad/n6/p2/diff539_gate.patch`: `e8a7c3f4c88d424dbe7c3323b1816437` (starts with `e8a7c3f4`)
+
+***
+
+# VERDICT: GO-WITH-CHANGES

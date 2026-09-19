@@ -1,0 +1,137 @@
+**VERDICT: GO-WITH-CHANGES**
+
+---
+
+### §1. ADJUDICATION OF FINDINGS (F1–F23) AND DISAGREEMENTS (D1–D3)
+
+* **F1 (Unbounded waitpid in drain/witness `close()`):** **REFINE** — Bounding reap prevents hangs on stuck processes, but the implemented 5.0 s `WNOHANG` poll + `SIGKILL` introduces false-positive failures under heavy load, and uses non-monotonic `time.time()` ([`fbpending_drain_probe.py:426`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L426), [`fbpending_witness.py:365`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L365)).
+* **F2 (Sites probe teardown and premature fatals collection):** **REFINE** — Draining before closing avoids the 0.3 s sleep, but [`footbridge_sites_probe.py:278`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L278) still regex-scrapes `fatals` *before* `os.close(fd)` and *before* `os.waitpid` reaps the process, and its `rd(0.1)` returns `True` on timeout ([`footbridge_sites_probe.py:186-187`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L186-L187)).
+* **F3 (Gate distinct E0–E6 row check):** **UPHOLD** — Verified in [`regress/gate_arm.sh:1113-1114`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1113-L1114); `sort -u | wc -l == 7` ensures that duplicate green rows cannot mask a missing E row.
+* **F4 (Gate excerpt grep regex tightening):** **UPHOLD** — Verified in [`regress/gate_arm.sh:1074`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1074); regex tightened to `E(C1|A1|[0-6]) ` so tokens like EZ7 or EA10 cannot false-match.
+* **F5 (Gate check label misattributed Clear to E2):** **UPHOLD** — Verified in [`regress/gate_arm.sh:1117`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1117); label correctly updated to `"Set ORs (E2 = P|Q; Clear is pinned by E5)"`.
+* **F6 (`footbridge_sites_probe.py` A2 row note stale citation):** **UPHOLD** — Verified in [`footbridge_sites_probe.py:358`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L358); `:548` replaced with construct-based `(MAX_VAL)`.
+* **F7 (Datasheet section citation for IRQEnableClear):** **UPHOLD** — Verified in [`_scratchpad/dc21285.txt:6827, 6940-6948`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt#L6827); Table 7-10 lists 18Ch as `IRQEnableClear`, described in Section 7.3.33 (Section 7.3.32 is `IRQEnableSet` at 188h).
+* **F8 (Drain header arm K description):** **UPHOLD** — Verified in [`fbpending_drain_probe.py:64-69`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L64-L69); rewritten to describe read of `IRQ_ENABLE_CLEAR (+0x18c)`.
+* **F9 (Sites header claim on rotated immediates):** **UPHOLD** — Verified mathematically; `Q = 0x60000000` is ARM immediate `0x06 ROR 4`, whereas `P = 0x00002002` (bits 1, 13) cannot fit in an 8-bit rotated immediate; documented accurately in [`footbridge_sites_probe.py:84-85`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L84-L85).
+* **F10 (Sites header description of mutant (k) spill):** **UPHOLD** — Verified in [`footbridge_sites_probe.py:61-62`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L61-L62); mutant (k) drops `exit(1)` but retains `fatal()`, so the diagnostic is still emitted while the process survives.
+* **F11 (`TIMER_x_LOAD` construct naming and zero literal matches):** **UPHOLD** — Verified in [`src/devices/dev_footbridge.c:642, 674`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L642); the literal `!(idata & TIMER_ENABLE)` occurs 0x (it is an `else` branch of `if (idata & TIMER_ENABLE)`), and `case TIMER_1_LOAD` handles all timers.
+* **F12 (Contract bit 31 untested in tested patterns):** **UPHOLD** — Verified in [`footbridge_sites_probe.py:87-88`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L87-L88); patterns P (bits 1, 13) and Q (bits 29, 30) leave bit 31 0, accurately stated under `TESTED PATTERNS`.
+* **F13 (Contract overstatement on D1 checking every planted word):** **UPHOLD** — Verified in [`footbridge_sites_probe.py:102-103, 243`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L102-L103); landing pads are never stepped (`prog[:-1]`), and terminating steps abort before disassembly match.
+* **F14 (Failure-path measurements for `close()`/K predicates):** **OVERTURN** (author's partial rejection overturned) — The author accepted `x_exit2` and `y_sigkill` but refused "exit 1 without complaint" claiming it requires a pty mock (`fbptymock`); in reality, "exit 1 without complaint" is a trivial 1-line product mutant in [`src/devices/dev_footbridge.c:604-606`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L604-L606) (comment out `fatal()`, keep `exit(1)`).
+* **F15 (Mutant (q) "K row ignores exit" escapes healthy run):** **UPHOLD** — Verified against healthy baseline semantics; omitting `exit == 1` passes when the baseline already exits with 1, and Table 2's `x_exit2`/`y_sigkill` prove the predicate is load-bearing on mutants ([`regress/artifacts/n6/killtable_20260919/table2_v2/TABLE2.log:8, 15`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/n6/killtable_20260919/table2_v2/TABLE2.log#L8)).
+* **F16 (744 vs 897 lines "premise stated two ways"):** **UPHOLD** (author's rejection upheld) — Verified by line counts; [`_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c) is 744 lines, whereas [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c) is 899 lines (897 in HEAD a11eaac); they are two distinct files.
+* **F17 (`run_arm` if-branch does not plant P/Q):** **UPHOLD** (author's rejection upheld) — Verified in [`footbridge_sites_probe.py:232-241`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L232-L241); the `if not wait():` branch handles `NO-PROMPT`; every executed arm enters the `else:` block and unconditionally plants P and Q.
+* **F18 (Minimax claim that bit 25 = 0 means register offset):** **UPHOLD** (author's refutation upheld) — In ARM Single Data Transfer (LDR/STR), bit 25 = 0 is immediate offset and bit 25 = 1 is register offset (ARM ARM §A4.1.25); minimax confused it with Data Processing instructions.
+* **F19 (A1 0x1011 is a model value):** **UPHOLD** — Verified in [`src/devices/dev_footbridge.c:423`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L423) and [`regress/gate_arm.sh:1087-1090`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1087-L1090); hardware packs DeviceID:VendorID at offset 0, so 0x1011 is GXemul's simplified model return.
+* **F20 (kimi-k3 transport misidentification):** **UPHOLD** — Administrative recording; transport scoring is governed by physical connection (`ollama_kimi.txt`).
+* **F21 (kimi CLI stall on 50 KB read cap):** **UPHOLD** — Operational recording of tool cap failure on a 64 KB document.
+* **F22 (Opus 5 session limit HTTP 429):** **UPHOLD** — Infrastructure outage recorded as seat failure; independent measurements remain owed.
+* **F23 (Overbroad disclosure wording "no step-based row can see it"):** **UPHOLD** — Verified in [`footbridge_sites_probe.py:94-96`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L94-L96); narrowed accurately to "no row here observes the CPU IRQ line".
+* **D1 (Unbounded waitpid: defect vs hardening):** **UPHOLD** — Ruling as hardening (L1) rather than product defect is correct because GXemul installs no SIGHUP handler and terminates by default upon master close.
+* **D2 (E4 oracle naming ENABLE SET text vs `not E["fatals"]`):** **UPHOLD** — Ruling to keep `not E["fatals"]` in [`footbridge_sites_probe.py:404`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L404) is correct; it is strictly stronger and catches any unexpected diagnostic emitted during arm E.
+* **D3 ((d) enumeration open cell / mutant (r)):** **REFINE** — The arithmetic derivation (E3 requires 0x02 and E6 requires 0x2002, so an unhandled subword read returns 0 and reds E3) is correct, but high-assurance regression in GXEMUL-SEC should add a concrete mutant test for (r) rather than relying solely on arithmetic deduction.
+
+---
+
+### §2. ADJUDICATION OF THE AUTHOR'S DISPOSITIONS (Q2)
+
+#### 1. The Author's 3 Rejections (F16, F17, F18)
+All three rejections were **100% CORRECT**:
+* **F16**: Confirmed by inspecting both files directly. `_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c` contains 744 lines, while `GXEMUL-SEC/src/devices/dev_footbridge.c` contains 899 lines (897 in base HEAD). GLM misattributed line count differences to conflicting statements about the same file.
+* **F17**: Confirmed in [`regress/footbridge_sites_probe.py:232-241`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L232-L241). The `if` branch handles only prompt failure (`NO-PROMPT`); every executed arm runs the `else` block where P and Q are sent via `put w`.
+* **F18**: Confirmed via the ARM Architecture Reference Manual (Single Data Transfer). Bit 25 = 0 indicates an immediate 12-bit offset for LDR/STR. Minimax was demonstrably mistaken.
+
+#### 2. The Author's 17 Accepted Dispositions — What Was Wrong
+The author accepted 17 findings outright, but two dispositions were flawed:
+
+1. **F14 is WRONG in its partial rejection ("exit 1 without complaint" does NOT need a pty mock):**
+   The author built and ran `x_exit2` and `y_sigkill` in Table 2, but excused "exit 1 without complaint" as requiring a pty protocol mock (`fbptymock`).
+   **Evidence:** In [`src/devices/dev_footbridge.c:602-607`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L602-L607):
+   ```c
+   } else {
+       odata = d->irq_enable;
+       fatal("[ WARNING: footbridge read from ENABLE CLEAR? ]\n");
+       exit(1);
+   }
+   ```
+   Commenting out `fatal(...)` while leaving `exit(1);` creates a zero-mock, 1-line product mutant that directly exercises whether the probes detect exit 1 without a diagnostic. Claiming a mock is needed was an unforced analytical error.
+
+2. **F1 & F2 are WRONG in claiming "the bound costs nothing" and "uses the same teardown":**
+   * The 5.0 s reap bound creates false-red risks under load (see §3 below).
+   * In [`footbridge_sites_probe.py:278`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L278), `fatals` is scraped *before* closing `fd` and *before* reaping the process at lines 284–300.
+   * In [`footbridge_sites_probe.py:186-187`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L186-L187), `rd(0.1)` returns `True` when `select()` times out, causing the drain loop at lines 275–277 to spin for the full 5.0 seconds on every arm when no EOF is delivered.
+
+---
+
+### §3. WHAT ALL NINE SEATS MISSED (Q3): LOAD-SENSITIVE FLAKES IN THE BOUNDED REAP
+
+There are concrete states where the new bounded reap produces a **WRONG VERDICT on a HEALTHY run under load**:
+
+1. **The SIGHUP Race on Master PTY Close Under Load:**
+   In [`regress/fbpending_drain_probe.py:414-422`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L414-L422) and [`regress/fbpending_witness.py:353-361`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L353-L361):
+   ```python
+   deadline = time.monotonic() + patience
+   while True:
+       left = deadline - time.monotonic()
+       if left <= 0 or not self.rd(min(0.1, left)):
+           break
+   try:
+       os.close(self.fd)
+   except OSError:
+       pass
+   ```
+   If a healthy emulator run takes more than 5.0 seconds to finish flushing state under host CPU/disk contention or ASAN checks, the drain loop hits `left <= 0` and calls `os.close(self.fd)`. Closing the master pty sends `SIGHUP` to GXemul. Because GXemul has no SIGHUP handler, it terminates with signal 1 (`SIGHUP`).
+   The subsequent reap yields `st` where `os.WIFSIGNALED(st)` is True and `os.WIFEXITED(st)` is False (`code = None, sig = 1`).
+   The oracle in [`fbpending_drain_probe.py:667-668`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L667-L668) requires:
+   ```python
+   def survived(a):
+       return a["status"] == "SURVIVED" and a.get("exit") == 0
+   ```
+   Because `a.get("exit")` is `None`, `survived(a)` evaluates to `False`. **A completely healthy emulator run fails rows R0, C1, A1, A2, and K.**
+
+2. **SIGKILL Timeout on Slow Process Exit:**
+   Even if the process survives pty closure, the reap loop gives it only 5.0 seconds:
+   ```python
+   while pid == 0 and time.time() - t1 < 5.0:
+       ...
+   if pid == 0:
+       os.kill(self.pid, signal.SIGKILL)
+   ```
+   Under extreme load, an ASAN teardown or buffer flush exceeding 5.0 s triggers `SIGKILL`. `code` is `None`, `sig` is 9, and `survived()` returns `False`.
+
+3. **`rd(0.1)` Flaw in `footbridge_sites_probe.py`:**
+   In [`footbridge_sites_probe.py:185-187`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L185-L187):
+   ```python
+   r, _, _ = select.select([fd], [], [], t)
+   if fd not in r:
+       return True
+   ```
+   When `select` times out with no data available, `rd()` returns `True`. Therefore, in lines 275–277:
+   ```python
+   t1 = time.time()
+   while time.time() - t1 < 5.0:
+       if not rd(0.1):
+           break
+   ```
+   `if not rd(0.1):` is `False`. The loop does not break on inactivity; it spins for the entire 5.0 seconds every time unless the child has already closed the pty slave.
+
+4. **Non-Monotonic Clock Usage:**
+   `footbridge_sites_probe.py` lines 274 and 284 use `time.time()` rather than `time.monotonic()`, exposing the loop to NTP step jumps.
+
+---
+
+### §4. REQUIRED CHANGES BEFORE COMMIT
+
+1. In [`regress/footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py):
+   - Fix `rd()` timeout return value or check child liveness explicitly so `close()` breaks promptly on idle.
+   - Switch `time.time()` to `time.monotonic()`.
+   - Ensure `fatals` regex collection occurs after process exit, not before.
+2. In [`regress/fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py) and [`regress/fbpending_witness.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py):
+   - Allow a clean shutdown extra headroom before closing the master PTY, or treat clean SIGHUP exit during teardown gracefully if the probe itself closed the PTY.
+3. Test or record the 1-line product mutant for "exit 1 without complaint" in `case IRQ_ENABLE_CLEAR:`.
+
+---
+
+Seat record: **agy / Gemini 3.8 Flash (High)**; **READ** `brief_sent.md`, both frozen v2 patches (`d5363b35`, `1c571e08`), `TABLE2.log`, `dc21285.txt`, and all cited SEC source/probe files; **RAN: git diff/status, file inspection, line counts, and MD5 hashes only** — no gates, harnesses, or batteries run.
+
+**GO-WITH-CHANGES**
