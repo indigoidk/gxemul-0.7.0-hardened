@@ -1,3 +1,105 @@
+# `#536` (wiringcliff): two probes wired, eleven exemptions re-dated by owner ruling -- and the re-date would have broken the checker's own selftest
+
+`check_probe_wiring.py`'s EXEMPT table carried thirteen entries dated 2026-09-20.  The comparison is `d < today`, so
+the block reds on the 21st, and precommit section R then hard-fails every commit.  **Owner ruling 2026-09-18: wire
+the two that are cheap, re-date the other eleven to 2026-09-27**, each still naming the gate that owes it.
+`exemptcliff` records what that costs -- the one-block cliff re-created a week out, deliberately and dated -- and
+stays open for that reason.
+
+## WIRED -- two sections in `gate_arm.sh`, after the pcc2 c040 section
+
+* **`mk48_nvram_probe.py`** (`#521`, 57 rows, sentinel `MK48_WITNESS_DONE`), on `-E mvme88k -e mvme187`.  Its
+  EXEMPT reason, "no gate drives mvme88k/mvme187", was **FALSE WHEN IT WAS WRITTEN**, not expired.  `gate_arm.sh`
+  had run `pcc2_width_probe.py` on mvme187 since b78bb0f (2026-09-03), and `pcc2_default_probe.py` since ecc4d3b
+  (2026-09-05).  The exemption was written in 21e7560 (2026-09-10).  *My first draft said the reason "expired"; the
+  Opus seat's §F2 pass read the history and corrected it.*
+* **`hpcmips_ctor_probe.py`** (`#444`, 28 construction IDs, ~8 s, no rig image), as a construction check.  Its
+  RESULT line is the sentinel and `^HPCMIPS_CTOR_PASS$` is the verdict.  Its row C2 gets its unrelated-abort control
+  from a LIVE, UNRELATED defect: mvme1600's construction aborts in `bus_pci_add()` ("pci_data == NULL!").  The row
+  checks only the abort CLASS, so a round that fixes mvme1600 turns C2 red and owes its re-derivation.  The probe's
+  own row F3 covers the classifier with a synthetic abort.  Filed as `hpcmipsc2`.
+
+## THE RE-DATE WOULD HAVE BROKEN THE CHECKER'S OWN SELFTEST
+
+`--selftest` cases M5a/M5b pinned `--today 2026-09-19` (green) and `2026-09-21` (red) -- literals either side of the
+old block.  Move the block to 09-27 and M5b runs on a tree with nothing expired.  It goes GREEN, which fails the
+selftest that precommit runs whenever this file is touched: **21/22 on the #536 table with the old literals**
+(`selftest_NEG_literal_days_at_3c41f01.txt`).  Both days are now DERIVED from the earliest dated DETECTOR exemption,
+the same rule `_pick_exempt_detector()` applies to M1-M3.  With no dated detector exemption left they are two FAILS,
+so the pinned denominator cannot shrink.
+
+**AND PASS 2 MOVED M5a ONTO THE STAMPED DATE.**  The first derivation ran M5a on the day BEFORE the earliest date
+and M5b on the day after.  The Opus seat measured that it cannot see `d < today` turned into `d <= today`: 22/22
+on the mutant, while production would red ON the stamped date, a day early.  M5a now runs on that date itself
+(green), and M5b on the day after (red): the `<=` mutant scores **21/22, M5a FAIL**
+(`selftest_NEG_le_mutant_final.txt`).  The §F2 matrix (Opus: six one-token comparison forms x three M5 layouts,
+`regress/artifacts/fbsmlane/r537_20260918/opus5_f2/f2_matrix.txt`) shows the day-before case's only UNIQUE kill
+is `!=`.  The new layout still catches `!=` through M0/M2b on every day except the stamped date.  **The layout was a
+named disagreement, D3, and fable5 ruled it: NEW ships.**  `<=` is the dangerous mutant, quiet on every day but one,
+and NEW catches it deterministically.  `!=` announces itself in production on the next commit.  BOTH -- adding a
+23rd, day-before case -- is optional and not owed, since no floor clause binds a checker's selftest and every
+artifact here measures the 22-case layout.  It is filed as `m5dayb`, carrying glm's argument for it.
+
+## RECORDS CORRECTED IN THE SAME FILES
+
+* **checker:** the comment that paired the block with fbpending_bound's SM date now says one half of that pairing
+  is gone (`#537`), and puts the pairing premise in the past tense -- *it was a proposal; the owner set the SM
+  dates*.  M5f's text is corrected.  The mk48 MANIFEST comment says it was wired by `#536`, and the orphaned EXEMPT
+  paragraph about mk48 is deleted.
+* **`precommit_check.sh` section R:** its comment said the exemptions expire "2026-09-20, chosen to fall due with
+  gate_offline's fbpending_bound".  The dates now live only in the checker.  "18 mutants" becomes the pinned 22,
+  and "the domain is 36 files in one flat directory" becomes "was ... when this was written (#471 has since made
+  the scan recursive)".
+* **MANIFEST:** four `CLASS_TOOL` lines classify this round's `apply536_*.py` editors, kept under
+  `regress/artifacts/wiringcliff/r536_20260918/` beside the output they produced.
+* **The EXEMPT block's own comment said every probe in it "already prints a verdict token and exits nonzero on
+  failure".**  That is false of `mk48_nvram_probe.py`, which this round wires: it prints `MK48_RESULT=n/m` and a DONE
+  sentinel, and exits 0 with rows red, so its gate section scores ROWS.  agy found it on §F2 and my packet never
+  adjudicated it.  fable5 ruled it L4 -- a context line of this round's own hunk -- and it is corrected in-round, not
+  filed.
+
+## MEASURED (`regress/artifacts/wiringcliff/r536_20260918/`)
+
+    checker, today            PROBEWIRING_PASS  70/81 detectors gated, 11 dated-exempt, 32 witnesses   checker_final_today.txt
+    --today 2026-09-26        PASS                                                                     checker_final_2026-09-26.txt
+    --today 2026-09-27        PASS -- valid ON its stamped date                                        checker_final_2026-09-27.txt
+    --today 2026-09-28        FAIL, naming exactly the eleven                                           checker_final_2026-09-28.txt
+    --selftest                22/22                                                                    selftest_final.txt
+    `d <= today` mutant       21/22, M5a FAIL                                                          selftest_NEG_le_mutant_final.txt
+    the old literal days      21/22, M5b FAIL (rc=0 want=1)                                            selftest_NEG_literal_days_at_3c41f01.txt
+
+Both edits commute with the working tree's uncommitted `#529` hunks in the same three files (cmp against
+`HEAD + #536 + #529`), so `#536` ships alone.
+
+**GATE 14 (`gate_arm.sh`), run ALONE 2026-09-18 23:06 - 00:30 (`gate_arm_20260918_2306.log` beside these artifacts;
+the binary under test, `build/gxemul` of 22:13, md5 `b4677f25...`, recorded in its `.TIMES.txt`): PASS, 1044 checks,
+0 FAIL.**  The mk48 section scores 61 checks (57 rows + completion + three totals) and hpcmips 32 (28 IDs +
+completion + two totals + the verdict): 93 rows, all green, the count the dry runs predicted.  The first attempt at
+this gate (21:03) was STOPPED by the owner's pause at 845 checks / 0 FAIL, before these sections; the partial log is
+not cited.  *`build/gxemul` also carries six UNCOMMITTED `src/` edits from other open rounds (`dev_lca.c` among
+them, the peer's `#540`), none of them `#536`'s -- this gate measures the harness, not those.*
+
+## THE PANEL
+
+The same two passes as `#537` -- one brief covered both rounds; see that block for the roster and fable5's identity
+check.  fable5: **SHIP BOTH**; D3 as above; the token sentence as above.  It also found that
+`FINAL_BLOBS_MD5.txt` had been written one minute before the last `gate_arm.sh` edit, so it named a blob that no file
+carries; it is regenerated from the blobs actually staged.  And it found the preserved hpcmips dry-run logs are
+DRIVER-WRAPPED: `hpc_536.log` and its hand-flipped twin `hpc_neg.log` end with an `HPC_RC=0` line that the probe never
+prints.  So they are not byte copies of the probe's output, and nothing greps that line.  (The two mk48 logs end on the
+probe's own sentinel.)  The `_neg` logs are negative controls FLIPPED BY HAND, one row each, to show the section reds
+and names the row.  They are not mutant runs, which is why `hpc_neg.log` reads FAIL over `HPC_RC=0`.
+
+## FILED
+
+* **`hpcmipsc2` (LOW)** -- C2's unrelated-abort control is borrowed from a live defect in a different machine (above).
+  Found by codex on pass 2; its §F2 answer corrected my comment, which had overstated what C2 checks.
+* **`m5dayb` (LOW, optional)** -- the 23rd selftest case, per D3 above.
+* **`exemptcal` (LOW)** -- `DATE_RE` accepts any `\d{4}-\d{2}-\d{2}`.  An impossible date like `2026-09-99`
+  passes production, which compares the strings and would "expire" it at the lexicographic boundary.  The selftest's
+  M5 derivation meanwhile calls `date.fromisoformat()` on it and dies with an uncaught `ValueError` instead of a
+  named FAIL (codex, §F2; the `ValueError` re-checked here).
+
 # `#537` (fbsmlane): #442's harness could never pass its own self-mutant lane -- because of one character -- and the pin it was given certified only that SOME row killed
 
 **Owner ruling 2026-09-18: FIX it, do not re-date it.**  `gate_offline.sh` had carried `fbpending_bound` in

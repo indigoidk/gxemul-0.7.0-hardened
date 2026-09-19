@@ -518,12 +518,15 @@ fi
 #  derivation is auditable rather than trusted.  It is the check_fable_queue substring bug
 #  from earlier the same day, refused in advance.
 #
-#  HARD, and retroactive rather than forward-only-by-date: the domain is 36 files in one
-#  flat directory, and a date cutoff would grandfather exactly the four files it exists for.
-#  Existing gaps are carried as DATED exemptions that EXPIRE (2026-09-20, chosen to fall due
-#  with gate_offline's fbpending_bound), never as silent grandfathering.
+#  HARD, and retroactive rather than forward-only-by-date: the domain was 36 files in one
+#  flat directory when this was written (#471 has since made the scan recursive), and a date
+#  cutoff would have grandfathered exactly the four files it existed for.
+#  Existing gaps are carried as DATED exemptions that EXPIRE, never as silent grandfathering; the
+#  dates live in check_probe_wiring.py's EXEMPT table, not here.  (They were 2026-09-20, chosen to
+#  fall due with gate_offline's fbpending_bound; #537 discharged that debt and #536 moved the
+#  block to 2026-09-27 by owner ruling.)
 #
-#  THE SELFTEST RUNS ONLY WHEN THE CHECKER ITSELF CHANGES.  --selftest applies 18 mutants to
+#  THE SELFTEST RUNS ONLY WHEN THE CHECKER ITSELF CHANGES.  --selftest applies its mutants (22, pinned below) to
 #  temp copies and asserts each exit status, which takes ~14 s -- too slow for every commit,
 #  and pointless when the checker did not move.  Firing it on the one commit that could break
 #  it is the section-E idea: a check nobody has to remember.

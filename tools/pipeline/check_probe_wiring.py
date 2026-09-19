@@ -180,6 +180,15 @@ MANIFEST = {
         (CLASS_TOOL, "#530 pass 2: generates the one-edit variants from the 8bd97e4 blob, each an exact-once replacement"),
     "artifacts/lcalenzerodrop/opus_p2_20260918/scripts/summarize.py":
         (CLASS_TOOL, "#530 pass 2: tabulates score and getenv value per (cell, binary); refuses a leg with no sentinel"),
+    #  #536 wiringcliff: the four editors that produced this round's staged blobs, preserved as run.
+    "artifacts/wiringcliff/r536_20260918/apply536_gate.py":
+        (CLASS_TOOL, "#536: inserts the mk48 + hpcmips sections into gate_arm.sh at a unique anchor; refuses otherwise"),
+    "artifacts/wiringcliff/r536_20260918/apply536_exempt.py":
+        (CLASS_TOOL, "#536: drops the two wired exemptions, re-dates eleven to 2026-09-27, derives the selftest's M5 days"),
+    "artifacts/wiringcliff/r536_20260918/apply536_manifest.py":
+        (CLASS_TOOL, "#536: adds these MANIFEST lines -- the round's own tools, classified by the round"),
+    "artifacts/wiringcliff/r536_20260918/apply536_precommit.py":
+        (CLASS_TOOL, "#536: corrects precommit_check.sh section R's comment, which named the old 2026-09-20 date"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/check_pred.py":
         (CLASS_TOOL, "closing pass 5: checks each mutant's score against its written prediction"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5.py":
@@ -912,12 +921,10 @@ MANIFEST = {
     "artifacts/mk48nvramkill/opus_mk48_nvram_witness_20260910.py":
         (CLASS_WITNESS, "mk48nvramkill (#521): eight offsets inside the device's own 8192-byte registration reach a default: arm that calls exit(1) -- rung 3 on unmodified -E mvme88k -e mvme187, SIXTEEN cells driven (8 offsets x read/write), committed 15/47 with all 15 controls green, fixed 46/47"),
     # -- #521 mk48nvramkill -------------------------------------------------------------
-    #  CLASS_DETECTOR, and EXEMPT below rather than wired.  It is a fast (0.4 s) single-leg
-    #  instrument that runs green on the fix today, so unlike a witness it COULD be gated --
-    #  what it lacks is a home: gate_m88k_rounding.sh is the only gate on this CPU family and
-    #  it drives luna88k, not mvme88k/mvme187.  Giving it an mvme187 leg is a gate change
-    #  owing its own negative controls, i.e. a harness round, not a rider on a device fix.
-    #  Filed to `wiringcliff'.
+    #  CLASS_DETECTOR, WIRED by #536 (2026-09-18) into gate_arm.sh.  It stood EXEMPT on the
+    #  reason "gate_m88k_rounding.sh is the only gate on this CPU family and it drives luna88k,
+    #  not mvme88k/mvme187" -- true of that gate, false of the tree: gate_arm.sh already drives
+    #  mvme187 for the PCC2 probes, so the home already existed and wiring it was the whole job.
     # -- ppcrldiclzero + siblings ------------------------------------------------------
     #  CLASS_WITNESS and correctly ungated: RED on the committed build by design (19/27),
     #  so a gate row would be permanently red until the fix ships.  It is also a FAMILY
@@ -2129,13 +2136,23 @@ MANIFEST = {
 #  a COUNT pin actively obstructs the shrink it claims to want ("6, shrinking not growing" went
 #  RED at 5).  A date expires; shrinking is green by construction.
 #
-#  2026-09-20 matches the fbpending_bound:2026-09-20 deadline already standing in
-#  gate_offline.sh's SM_EXEMPT, so #442's two debts fall due together.  IT IS A PROPOSAL: the
+#  2026-09-20 MATCHED the fbpending_bound:2026-09-20 deadline then standing in
+#  gate_offline.sh's SM_EXEMPT, so #442's two debts fell due together.  IT WAS A PROPOSAL: the
 #  owner set the SM dates and set them TIGHTER than the ones proposed, and a deadline nobody
 #  chose is a deadline nobody owns.
 #
-#  These are wiring jobs, not design ones -- each probe already prints a verdict token and
-#  exits nonzero on failure.  What each needs is a gate that owns it, its rig preconditions,
+#  *** #536/#537, 2026-09-18: ONE HALF OF THAT PAIRING IS GONE. ***  #537 discharged
+#  fbpending_bound's SM_EXEMPT line -- its self-mutant lane runs now.  The other half,
+#  fbpending_drain_probe.py below, is still exempt: #536 wired mk48_nvram_probe.py and
+#  hpcmips_ctor_probe.py into gate_arm.sh and moved the eleven left at 2026-09-20 to 2026-09-27
+#  BY OWNER RULING, so those eleven again fall due as ONE block: the cliff `exemptcliff` names
+#  is re-created a week out, deliberately and dated, not by copying.
+#
+#  These are wiring jobs, not design ones.  NOT every probe here prints a verdict token or exits
+#  nonzero on failure: mk48_nvram_probe.py printed MK48_RESULT=n/m and a DONE sentinel and exited 0
+#  with rows red, so the gate_arm.sh section #536 wired for it scores ROWS, not a token (agy, #536
+#  F2 pass; this sentence claimed otherwise until then).  What each needs is a gate that owns it,
+#  its rig preconditions,
 #  and ONE clean gate run proving it green before it ships.  That last part is why they are
 #  exempted here rather than wired here: gate_hygiene's own comments record FOUR probes that
 #  shipped latently RED because the commit that added them never fired the gate.
@@ -2150,55 +2167,50 @@ EXEMPT = {
     #  gate_sh_rounding.sh, whose `-E landisk` machine it already used.  Deleted in the
     #  SAME edit as the wiring, because a wired probe that keeps an exemption is a
     #  STALE EXEMPTION.  Six exemptions remain.
-    "fbpending_drain_probe.py": ("2026-09-20",
+    #  mk48_nvram_probe.py's and hpcmips_ctor_probe.py's exemptions are DISCHARGED, 2026-09-18
+    #  (#536) -- both wired into gate_arm.sh, mk48 on the mvme187 machine that file already
+    #  drives for the PCC2 probes, hpcmips as a construction check with no rig image.  Deleted
+    #  in the SAME edit as the wiring, for the same reason.
+    "fbpending_drain_probe.py": ("2026-09-27",
                                  "REPORT-ONLY by default: EXPECT_CAP must be set before a "
                                  "gate row can mean anything, so wiring is a design step first"),
-    "hpcmips_ctor_probe.py":    ("2026-09-20",
-                                 "rung 2, ~8 s, no rig image -- wants a construction gate"),
     #  Both #494 probes are TWO-LEG DIFFERENTIALS: they take a PRE-FIX binary and
     #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
     #  a change to the instrument -- a single-leg mode asserting only the fix-side
     #  wants against the gate's own binary -- not a line in a gate script.
-    "wdc_altoffset_probe.py":     ("2026-09-20",
+    "wdc_altoffset_probe.py":     ("2026-09-27",
                                    "two-leg differential; wants a single-leg mode "
                                    "before gate 10 can assert anything"),
-    "wdc_altoffset_sig_probe.py": ("2026-09-20",
+    "wdc_altoffset_sig_probe.py": ("2026-09-27",
                                    "two-leg differential AND needs a ciR: CD-ROM rig "
                                    "the battery does not build today"),
-    "wdc_altoffset_4bit_probe.py": ("2026-09-20",
+    "wdc_altoffset_4bit_probe.py": ("2026-09-27",
                                     "two-leg differential; shares the single-leg-mode "
                                     "debt with its two siblings"),
-    "wdc_addtoinbuf_probe.py":     ("2026-09-20",
+    "wdc_addtoinbuf_probe.py":     ("2026-09-27",
                                     "two-leg differential AND needs a poisoned CD "
                                     "image the battery does not build"),
     #  #520's detector.  NOT a two-leg differential and not awaiting a design -- it is a
     #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
     #  HOME: no gate in this tree runs an Alpha machine at all.  Dated to fall due with
     #  the others so the cliff stays one date rather than becoming a rolling excuse.
-    #  #521's detector.  Single-leg, fast, green on the fix -- it lacks a HOME, not a design:
-    #  the only gate on this CPU family drives luna88k, not mvme88k/mvme187.  Dated to fall
-    #  due with the others so the cliff stays one date rather than a rolling excuse.
     #  #522's detector.  Single-leg, 0.2 s, green on the fix.  It lacks a gate that RUNS a
     #  64-bit PowerPC CPU: gate 9 constructs them but has no result oracle, and both PowerPC
     #  gates drive a 32-bit part.  Closing that is a harness round, filed to wiringcliff.
     #  *** ITS REASON EXPIRES WITH THE rlwimi/rldimi WIRING: gate_ppc.sh now EXECUTES -M 64. ***
     #  What remains is the instrument: this probe prints no RESULT/CONTROL lines, so a gate
     #  could only score its exit status, which gates here never trust.
-    "ppc_rldicl_probe.py":         ("2026-09-20",
+    "ppc_rldicl_probe.py":         ("2026-09-27",
                                     "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); this "
                                     "probe lacks the RESULT/CONTROL protocol a gate parses "
                                     "-- that instrument change is filed to wiringcliff"),
-    "mk48_nvram_probe.py":         ("2026-09-20",
-                                    "no gate drives mvme88k/mvme187; gate_m88k_rounding.sh "
-                                    "is the named home and giving it an mvme187 leg is a "
-                                    "harness round, filed to wiringcliff"),
-    "alpha_tbi_probe.py":          ("2026-09-20",
+    "alpha_tbi_probe.py":          ("2026-09-27",
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home and giving it one is a harness "
                                     "round, filed to wiringcliff"),
     #  #518's detector.  Same footing as #520's, and deliberately the same date so the
     #  cliff stays one date: a single-leg 75-row instrument, green on the fix, with no HOME.
-    "lca_badval_probe.py":         ("2026-09-20",
+    "lca_badval_probe.py":         ("2026-09-27",
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #520"),
     #  #530's detector.  Same footing and the same date as #518's: single-leg, green on the
@@ -2206,10 +2218,10 @@ EXEMPT = {
     #  #530's width row.  SAME footing and SAME date as lca_isalane_probe.py below: no gate in this
     #  tree runs an Alpha machine, and a later date would hide the debt behind the cliff instead of
     #  joining it.  Adding it here is stated in #530's record, not done silently.
-    "lca_widewrite_probe.py":      ("2026-09-20",
+    "lca_widewrite_probe.py":      ("2026-09-27",
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520/#530"),
-    "lca_isalane_probe.py":        ("2026-09-20",
+    "lca_isalane_probe.py":        ("2026-09-27",
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520"),
     #  #531's detector, and it takes the SAME footing and the SAME date as #518/#520/#530
@@ -2222,7 +2234,7 @@ EXEMPT = {
     #  after which the checker verifies it is ungated -- and named it a check that cannot
     #  fail.  This entry is the honest form: DETECTOR, ungated, dated, and filed. ***
     "artifacts/ip30abortkill/ip30_abort_probe.py":
-                                   ("2026-09-20",
+                                   ("2026-09-27",
                                     "no gate runs an SGI IP30 guest session (gate_asan_sweep.sh "
                                     "constructs only); filed to wiringcliff with #518/#520/#530"),
 }
@@ -2803,11 +2815,34 @@ def selftest(verbose=False):
     case("M4  a WITNESS wired into a gate reddens", 1,
          "GATED WITNESS  sh4pcic_witness.py", chk, rg)
 
-    rg, chk = fresh()
-    case("M5a a live exemption is GREEN the day before", 0, "PROBEWIRING_PASS", chk, rg,
-         extra=("--today", "2026-09-19"))
-    case("M5b the same tree is RED the day after", 1, "EXPIRED EXEMPTION", chk, rg,
-         extra=("--today", "2026-09-21"))
+    #  #536: THE TWO DAYS ARE DERIVED FROM THE TABLE, NEVER LITERALS.  They were 2026-09-19 and
+    #  2026-09-21, the days either side of the block every dated exemption then shared -- so
+    #  the day that block was re-dated, M5b would have run on a tree with nothing expired, gone
+    #  GREEN, and failed the selftest.  The frozen-claim-about-a-table-designed-to-change that
+    #  _pick_exempt_detector() refuses for M1-M3, earlier in this selftest.  The
+    #  comparison is `d < today`, so an exemption is valid ON its stamped date: the earliest
+    #  DETECTOR date ITSELF is green and the day after is red.  M5a runs ON the date, not the
+    #  day before, because that is the one day on which `<` and `<=` differ: with `d <= today`
+    #  both day-before and day-after cases passed (codex, #536 pass 2, executed; Opus measured
+    #  22/22 -> 21/22 once M5a moved).  The day-before case's only UNIQUE kill was `!=` (M5b
+    #  still reds `>` and `>=`), and `!=` expires every exemption on every day except its
+    #  stamped date, so it cannot stay quiet in production -- and M0 and M2b, which read the
+    #  real clock, still catch it on any other day.  No dated detector exemption left is two
+    #  FAILS, never a skip -- the denominator must not shrink.
+    _m5 = sorted(EXEMPT[_n][0] for _n in EXEMPT
+                 if MANIFEST.get(_n, (None,))[0] == CLASS_DETECTOR
+                 and DATE_RE.match(EXEMPT[_n][0] or ""))
+    if not _m5:
+        results.extend([False, False])
+        print("  FAIL  M5a/M5b -- no well-formed dated DETECTOR exemption to derive the days from.")
+    else:
+        import datetime as _dt5
+        _d5 = _dt5.date.fromisoformat(_m5[0])
+        rg, chk = fresh()
+        case("M5a a live exemption is GREEN ON its stamped date", 0, "PROBEWIRING_PASS", chk, rg,
+             extra=("--today", _d5.isoformat()))
+        case("M5b the same tree is RED the day after", 1, "EXPIRED EXEMPTION", chk, rg,
+             extra=("--today", (_d5 + _dt5.timedelta(days=1)).isoformat()))
 
     for tag, bad in (("M5c unpadded (the ieee_store shape)", '"2026-9-20"'),
                      ("M5d empty", '""'),
@@ -2841,8 +2876,9 @@ def selftest(verbose=False):
     #  makes EVERY DATED EXEMPTION IMMORTAL -- the one thing the table exists to prevent.
     #
     #  **The blindness was structural, not an oversight about one line.**  M5a-M5e each
-    #  pass `--today` EXPLICITLY, so between them they test the COMPARISON exhaustively
-    #  and the CLOCK IT READS not at all.  The only mutant on the default path was M0,
+    #  pass `--today` EXPLICITLY, so between them they test the COMPARISON -- at its boundary
+    #  since #536 (M5a ON the stamped date, M5b the day after), never exhaustively -- and the
+    #  CLOCK IT READS not at all.  The only mutant on the default path was M0,
     #  whose want is PASS -- so a frozen clock satisfies it.  *A parameter added to make
     #  a test deterministic removed the last coverage of the value it replaces.*
     #
