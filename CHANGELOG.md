@@ -167,6 +167,27 @@ value predicted first, zero retries.
   reads pass 6's *"uncatchable"* as a condition on discharge by contract).  It goes to the §F2 adjudication pass, and
   fable5 rules LAST.  **The chain is OPEN until they rule.**
 
+## §F2 AND THE FLAGSHIP RULING, 2026-09-18 -- ONE FLOOR BREACH, NOT SEVEN
+
+The §F2 pass shared every finding with every seat (`regress/artifacts/lcaisalane/f2_8bd97e4_20260918/`), and **all eight
+overturned my provisional debt ruling**.  fable5 ruled last (identity verified, claude-fable-5-1), and narrower than the
+panel's headline:
+
+* **`vc` is the only floor breach.**  LANE is a floor axis because the body's `data[ofs]` distinguishes all four lanes;
+  a variant servicing wide writes at the rowed lane alone is the `#499` shape.
+* **The other six are clause-(e) debt**, disclosed against classes the parent header ALREADY RULED -- `p_port10` for
+  ports, `lcaisasize` for the discarded sparse bits -- plus width cut-offs above 16 and chunk position.  The new contract
+  must cite them BY NAME, or a future reader sees six variants narrowed away with no warrant.
+* **{mc2, kbc1024} is a covering, not a closure**: a lane-1-only exemption escapes both.  My provisional ruling and the
+  panel's modal answer made the same error from opposite sides -- closing at the address the variant used, not the
+  partition.
+* The older held question (a DROP of `if (len == 0) return 0;`) is DISCHARGED: 352/352, equivalent by no producer; the
+  guard stays as a defensive `% 0` guard.
+
+**`#538` is the closure**: the four C=16 write lanes, a chunk-list assertion pinning the width, the exit-status and
+alive-blind-retry fixes, and the enumerated contract.  The chain closes on its own pass 2, which must kill the lane-1
+covering escape.
+
 # `#535` (pcc2c040mienannounce): #512's detector had one uncovered cell -- and it ran in no gate at all
 
 **Late-dissent disposition 2: a MEASURED false pass against a shipped detector's floor, repaired in a follow-up

@@ -21872,3 +21872,8 @@ GETENV length exceeds 8 -- an edit of `a3` from 16 to 4 would turn the row into 
   "15 of 16 dropped" is alignment-dependent.
 * `lcaisaphys` — the nested forward works only because ptbr==0 identity-maps `0x1d00002ff` (grok): the row's premise,
   confirmed from the source.
+
+### `attribclosingadj` (LOW) — the attribution checker reads 'closing' as a closure claim
+check_commit_attribution.py's CLOSURE regex matches the adjective in 'closing verdict'; 8bd97e4's subject made
+section L go HARD for every later commit (worked around via lcaisalane.reopened).  A checker fix owes two
+negative controls, so it is filed for the checker's owner.

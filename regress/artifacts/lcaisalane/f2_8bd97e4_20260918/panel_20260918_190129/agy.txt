@@ -1,0 +1,89 @@
+VERDICT: L2-CLASS-CLOSURE -- Floor breach `vc` qualifies the write arm by a body-distinguished lvalue (`P & 3`) and escapes undetected, making in-round class closure mandatory under clause (d), clause (e), and the two-pass class closure rule.
+
+---
+
+### 1. Adjudication of Findings (F1..F15) and Disagreements (D1..D3)
+
+#### Findings F1..F15
+* **F1**: **UPHOLD** -- The 102-leg measurement table in Section 3 accurately reflects variant mechanics against the unpatched/patched arms in [`dev_lca.c:295-312`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L295-L312); `frozen` only triggers on `vf` because `data[0] != data[3]`.
+* **F2**: **UPHOLD** -- Verified mathematically from [`memory.c:839-853`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L839-L853): alignment constraints $(addr \ \& \ (C - 1)) == 0$ restrict wide access start offsets to 12 total cells ($C=16 \to 8$, $C=64 \to 2$, $C=256 \to 1$, $C=1024 \to 1$), collapsing to exactly 8 width/lane cells when $k = relative\_addr \ \& \ 0x1f$ is shifted away by `>> 5` in [`dev_lca.c:280`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L280).
+* **F3**: **UPHOLD** -- In [`lca_isalane_probe.py:171`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L171), claiming the width cell is "COVERED, not merely disclosed" was a wrong record (L4) when only 1 of the 12 reachable cells was rowed.
+* **F4**: **UPHOLD** -- In [`lca_widewrite_probe.py:38`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L38), clause (iii)'s claim that other widths "share the same `len > 8` predicate" is refuted by variants partitioning at `len > 16`, `len > 64`, or `len > 256` (`va`, `vb`, `vw64`, `vw256`).
+* **F5**: **REFINE** -- The finding that the contract was falsified is true, but disposing of it by post-hoc narrowing the contract in place is **OVERTURNED** (see Section 2 below); an undetected in-contract variant is an L2 contract breach under the project's own Clause (e) rule.
+* **F6**: **UPHOLD** -- Mechanically exact: in [`lca_widewrite_probe.py:162-170, 178-191`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L162-L191), a crash during `CALL_PAL_PROM` in phase 3 prevents phase 4 from executing, leaving `t4` unprinted (`None`), which causes `wide getenv` to red alongside `wide alive`.
+* **F7**: **UPHOLD** -- In [`lca_widewrite_probe.py:188-189`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L188-L189), UART scratch register (SCR) read/write round-trip tests memory persistence, not unique device identity logic; renaming it to "round-trip control" is an accurate L4 refinement.
+* **F8**: **UPHOLD** -- At port 0x3ff, $relative\_addr = 0x3ff \ll 5 = 0x7fe0$; $0x7fe0 \ \& \ 63 = 32 \ne 0$, so [`memory.c:842`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L842) fails 64-byte alignment and shifts down to $psize=16$ ($0x7fe0 \ \& \ 15 == 0$).
+* **F9**: **UPHOLD** -- Verified across the Alpha subsystem: Alpha load/store instructions top out at STQ (8 bytes), PROM PUTS copies single bytes via `sizeof(ch)` ([`cpu_alpha_palcode.c:114`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c#L114)), leaving `PROM_R_GETENV` $\to$ `store_buf` ([`cpu_alpha_palcode.c:144`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c#L144)) as the sole guest producer of accesses $> 8$ bytes into `lca_isa`.
+* **F10**: **UPHOLD** -- Construction gap verified: in [`lca_widewrite_probe.py:165`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L165), changing `load_const(A3, 16)` to 4 results in `store_buf` issuing a 4-byte write where $(0x2ff \ \& \ 3) \% 4 = 3$, writing `'D'` (0x44) and allowing base, `M2_len8`, and `KILLLEN8` to pass silently.
+* **F11**: **UPHOLD** -- In [`memory.c:844-846`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L844-L846), `store_buf` passes `(unsigned char *)s` (pointing to `machine->boot_string_argument`) directly into `memory_rw`; a write-fallthrough variant reaching [`dev_lca.c:308-309`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L308-L309) zeroes out that host buffer, corrupting subsequent GETENV calls in the same session.
+* **F12**: **UPHOLD** -- [`lca_widewrite_probe.py:192-195`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L192-L195) prints `WIDEWRITE_RESULT` but never calls `sys.exit(non_zero)`, exiting 0 even on row failure.
+* **F13**: **UPHOLD** -- If `a2` is not 16-aligned, [`memory.c:841-853`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L841-L853) falls down to $psize=1$, generating 16 individual 1-byte writes that are all forwarded by [`dev_lca.c:300-302`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L300-L302), dropping 0 bytes instead of 15.
+* **F14**: **UPHOLD** -- [`dev_lca.c:301, 305`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L301) invokes `cpu->memory_rw` with `CACHE_NONE` and no `PHYSICAL` flag, relying entirely on identity mapping when paging is inactive.
+* **F15**: **UPHOLD** -- Recording architectural options (unit harness, static tripwires) as filed options outside the immediate round is standard governance.
+
+#### Disagreements D1..D3
+* **D1**: **OVERTURN AUTHOR'S RULING (`E-DEBT-PLUS-L4`) $\to$ RULE `L2-CLASS-CLOSURE`** -- The author's ruling relies on filing the two-cell strengthening as debt. But `vc` (`&& (len <= 8 || (P & 3) == 3)`) is a textbook floor breach under Clause (d) and the Joint Cells rule (2026-09-04): it qualifies the write arm with `(P & 3) == 3`, which is an lvalue partition directly computed and distinguished by the guarded body (`ofs = (relative_addr & 3) % len` in [`dev_lca.c:297`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L297)). Because `lca_widewrite_probe.py` only probes lane 3, `vc` escapes undetected (3/3). This is an unmitigated floor breach and an in-contract breach under Clause (e), demanding class closure in this round.
+* **D2**: **UPHOLD AUTHOR'S RULING** -- `wide alive` cannot red alone on a wide-access emulator abort; `wide getenv` reds with it.
+* **D3**: **UPHOLD AUTHOR'S RULING** -- SCR is arbitrary scratch RAM within the ns16550; the label is properly refined to a round-trip control.
+
+---
+
+### 2. Which Accepted Disposition Is Wrong?
+
+**The accepted disposition on F5 is wrong.**
+
+In F5, the author writes:
+> *"ACCEPTED as a contract breach -> the contract is narrowed to what the rows measure, and every measured escape is named with the cell that detects it."*
+
+This disposition is self-contradictory and breaks the project's own rule:
+1. Under **Clause (e)** ([`brief_sent.md:48-49`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_190129/brief_sent.md#L48-L49)):
+   > *"A breach OF the contract (an in-contract variant undetected) is itself L2."*
+2. The probe's committed contract ([`lca_widewrite_probe.py:33-34`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L33-L34)) explicitly states:
+   > *"DESIGNED TO CATCH: any guard that declines a len > 8 WRITE to lca_isa, in either the guard form or the write-arm-conjunct form."*
+3. Variants `va`, `vb`, `vc`, `ve`, `vg`, `vt1`, `vt2` are all guards declining `len > 8` writes in exactly those forms, and all 7 score 3/3 (undetected) against the shipped probe.
+
+Accepting that a contract breach occurred and then retroactively rewriting the contract text down to what the probe happened to measure completely evades the L2 mandate. If an author could erase an L2 contract breach by narrowing the contract in place, Clause (e)'s breach penalty would be meaningless. F5 is an **L2 contract breach**, not an L4 text edit.
+
+Furthermore, on **F10**, kicking the construction gap down the road as "owed with the row's next edit" is only valid if no edit is owed. Under `L2-CLASS-CLOSURE`, the edit is owed now, and adopting `{mc2, kbc1024}` pins the width by construction, closing F10 immediately.
+
+---
+
+### 3. What Did All Nine Seats Miss?
+
+1. **`cpu_alpha_palcode.c` truncates GETENV to `strlen(s) + 1`, which breaks `mc2` and `kbc1024` unless `-o BOOTSTR` is lengthened:**
+   In [`cpu_alpha_palcode.c:141-143`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c#L141-L143):
+   ```c
+   len = a3;
+   if (strlen(s) < len)
+       len = strlen(s) + 1;
+   store_buf(cpu, a2, s, len);
+   ```
+   In [`lca_widewrite_probe.py:48`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L48), `BOOTSTR = "ABCDEFGHIJKLMNOP"` (length 16).
+   If a test sets $a3 = 32$ for `mc2` or $a3 = 1024$ for `kbc1024` without lengthening `BOOTSTR`, `strlen(s) < len` triggers ($16 < 32$ and $16 < 1024$), clamping `len` to **17 bytes**.
+   - For `mc2`: Chunk 1 writes 16 bytes, but Chunk 2 becomes a **1-byte write** ($psize=1$), not a wide write.
+   - For `kbc1024`: `len=17` means [`memory.c:843`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L843) never enters `while (len >= 1024)`. A 1024-byte access **never occurs**!
+   To make `{mc2, kbc1024}` physically issue 32-byte and 1024-byte stores, `-o BOOTSTR` in `session()` **must be sized to at least 1024 bytes**. All nine seats overlooked that `palcode.c` clamps the length to the host string length.
+
+2. **The probe header comment misdescribes `cpu_alpha_palcode.c:141-143`:**
+   [`lca_widewrite_probe.py:16, 48`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L16) states:
+   `len = min(a3, strlen(s)+1) = min(16, 17) = 16 (palcode.c:141-143)`.
+   `palcode.c` does *not* compute `min(a3, strlen(s) + 1)`. If $strlen(s) = 20$ and $a3 = 16$, `strlen(s) < len` is false, so `len` remains 16. If $strlen(s) = 16$ and $a3 = 17$, `strlen(s) < len` is true, so `len` is 17. The comment is an incorrect formula.
+
+3. **In `store_buf` ([`memory.c:855-856`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L855-L856)), lines 855-856 are unreachable dead code:**
+   At $psize=1$, $(addr \ \& \ 0) == 0$ is unconditionally true, so `while (len >= 1)` exhausts all remaining bytes down to `len = 0`. The trailing `while (len-- != 0) store_byte(...)` is never executed.
+
+4. **In `mc2`, Chunk 2 accesses buffer offset `s + 16`:**
+   In [`memory.c:848`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L848), `s += psize` advances the pointer by 16 bytes after Chunk 1. In Chunk 2 at port 0x2ff (SCR, lane 3), the byte written to SCR is `(s + 16)[3] = s[19]`. If `BOOTSTR` is not at least 20 bytes long, Chunk 2 reads past the end of `BOOTSTR` on the host.
+
+---
+
+### 4. Minimal Class Closure Set
+To achieve full class closure over all 10 measured escapes (`va, vb, vc, ve, vf, vg, vt1, vt2, vw64, vw256`) and resolve F10:
+* Replace or augment `frozen` with the two-session set **`{mc2, kbc1024}`**:
+  1. **`mc2`**: Port 0x2fe, $k=16$, $a3=32$ (2 chunks of 16 bytes: lane 2 MSR at $s[2]$, lane 3 SCR at $s[19]$). Pins width $> 8$ by construction (closing F10) and detects `vc`, `vg`, `vt1`, `vt2`.
+  2. **`kbc1024`**: Port 0x60, $k=0$, $a3=1024$ (lane 0, chunk size 1024). Anchors the top of the width ladder and detects `va`, `vb`, `vc`, `ve`, `vw64`, `vw256`.
+* **Prerequisite change**: `BOOTSTR` passed via `-o` must be padded to $\ge 1024$ characters so `palcode.c:142-143` does not clamp `len` to 17.
+
+---
+
+**GO-WITH-CHANGES** (Reject `E-DEBT-PLUS-L4`; mandate in-round class closure via `{mc2, kbc1024}` with `-o BOOTSTR` expanded to $\ge 1024$ bytes).

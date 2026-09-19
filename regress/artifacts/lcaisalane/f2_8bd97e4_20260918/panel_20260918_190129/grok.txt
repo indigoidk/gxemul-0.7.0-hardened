@@ -1,0 +1,104 @@
+I'll start from the repo truth and the inlined packet, then re-derive the D1 rule from the named sources rather than from the author's ruling.HEAD is `3c41f01`; I'll read the named sources from that commit, not the dirty working tree.The probes are in. Next I’ll read the handler and the GETENV/store_buf path that actually produce `len > 8`.The handler is in. I’ll check whether `memory_rw` actually delivers `len > 8` into `lca_isa`, and how the parent’s “COVERED” claim is worded.**VERDICT: L2-CLASS-CLOSURE** — `vc` swept the shipped row 3/3 by exempting its own lane, which the body does distinguish; close `{lanes 0–3}` at C=16 WRITE (plus the F10 width pin). Producer cutoffs, k-bits, and `P < 0x200` stay clause (e).
+
+I was on the DEBT side of D1. The ruling that lets the one-cell row stand is the one that adopts that side, so that is the half I tested. It does not hold for `vc`.
+
+---
+
+Re-derived from `DEVICE_ACCESS(lca_isa)` at `3c41f01`, not from the packet’s summary:
+
+```295:309:GXEMUL-SEC/src/devices/dev_lca.c
+	if (len == 0)
+		return 0;
+	ofs = (relative_addr & 3) % len;
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+	// ...
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+```
+
+The body tests `len` only as `{0}` vs `{>0}`, and `% len` collapses every `len >= 4` to `ofs = P & 3`. It does **not** test `> 8` vs `> 16` vs `> 64`. It **does** use `P & 3` as an index and as the dense port. `store_buf`’s 1024/256/64/16 ladder lives in a caller (`memory.c`); DEPENDS-ON stops at the enclosing function and does not import that ladder as a floor axis.
+
+I did not re-run the 102 legs. I re-derived `frozen` / `k16` / `vf` / `vg` / `vt1` / `va` / the 12-cell alignment count against that source; they match section 3.
+
+---
+
+### 1. F1–F15 and D1–D3
+
+| id | ruling | reason |
+|---|---|---|
+| **F1** | UPHOLD | Table is internally consistent with the handler (k-bit fires only pre-shift; `vf` is equivalent at lane 0; `va` needs C>16). Not a re-measurement. |
+| **F2** | UPHOLD, with a qualifier | 12 store_buf cells / 8 after k-collapse re-derive from `(P<<5\|k)` vs psize alignment. GETENV’s copy is `min(a3, strlen(s)+1)`; C=256/1024 also need a host `-o` that long. That is a dropped qualifier on “a guest can reach,” not a new cell. |
+| **F3** | REFINE | L4, yes — but the honest sentence is not “1 of 12, rest disclosed.” Four C=16 WRITE lanes are floor; one is rowed; three are owed. The other eight (k, C≥64) are the disclosed remainder. |
+| **F4** | UPHOLD | Clause (iii) is false: `va`/`vb`/`vw*` are different predicates, and the parent never drives GETENV. |
+| **F5** | OVERTURN in part | Narrowing “any” is the right L4 for `va`/`vb`/`ve`/`vg`/`vt*`. It cannot discharge `vc`. A contract sentence cannot retire a floor cell. |
+| **F6** | UPHOLD | `exit(1)` at `len > 8` kills the process after `t3` and before `t4`, so `wide getenv` reds with `wide alive`. Not alone-red. glm’s crash-class dissent does not survive that. |
+| **F7** | UPHOLD | `wide live` is a 1-byte round-trip; RAM would answer `0x5a` the same way. `wide getenv`’s `0x44` vs RAM’s `s[0]=0x41` is the discriminator. Label, not a missing control. |
+| **F8** | UPHOLD | `0x3ff<<5 = 0x7fe0`; `0x7fe0 & 63 = 32`, so psize 64 never fires. |
+| **F9** | UPHOLD within the allowed files | Only `store_buf` caller in `cpu_alpha_palcode.c` is GETENV; PUTS is 1-byte reads. Other `store_buf` callers outside these six files were not re-audited on this pass. |
+| **F10** | REFINE | Real construction gap, and a destination-byte row cannot close it (`a3=4` still forwards `s[3]='D'`). It is not later debt: it ships in the same L2 diff as the three missing lanes (a two-chunk observation, not a fourth lane). |
+| **F11** | UPHOLD | Fallthrough/read-arm writes zeros into `boot_string_argument` because GETENV passes that host pointer as `data`. Four **separate** sessions for the closure; do not reuse `{mc2 then kbc1024}` as the cell set (see Q3). |
+| **F12** | UPHOLD | The width probe has no `sys.exit`; the parent does. `WIDEWRITE_RESULT` is the only signal. Contract (i) is lcawidefold, not this row. |
+| **F13** | UPHOLD | Misaligned `a2` becomes `store_byte` ×16 into the same port (k walks 0..15); last byte wins. Recorded on lcawidefold. |
+| **F14** | UPHOLD | Nested forward is `CACHE_NONE` and not `PHYSICAL`; it is `lcaisaphys`. |
+| **F15** | UPHOLD | Options, not this diff. |
+| **D1** | OVERTURN (split) | See below. I will not ratify E-DEBT-PLUS-L4. |
+| **D2** | UPHOLD | F6. |
+| **D3** | UPHOLD | F7. |
+
+---
+
+### D1, tested against the side I argued
+
+Pass 6’s discriminator is catchable vs uncatchable, and it asked for **a** `len > 8` row, singular. That still discharges every mutant that declines **all** wide writes (`KILLLEN8`, `&& len <= 8`). `va`/`vb`/`vw*` change the cutoff to a value the body never tests; those constants are `store_buf`’s, and DEPENDS-ON does not walk into callers. `ve`/`vg`/`vt1`/`vt2` invent partitions (`P < 0x200`, k-bit, continuation) the body’s `if`s do not induce. **Those stay (e), with F4/F5 as L4.** Codex’s eight-cell class chases the caller. I still refuse it.
+
+`vc` is a different object. It is the named (d) shape — `if (X)` → `if (X && Y)` — with `Y` a body-used lvalue (`P & 3`). It keeps the exact cell the row occupies (lane 3) and nulls the repair at the other three. Frozen is **3/3**, a clean sweep of the shipped detector. That is `sgimtedepth4dead`’s `&& dst_tlb == MTE_TLB_A` (14/14) and `#499`’s “repaired at the address the mutant used.” Pass 6 emptied width; this pass emptied lane **at that width**. Two consecutive empty-cell breaches of one class: close the class in one diff.
+
+agy was right about 16/64/0x200/0x10 and wrong to dump `vc` in the same bucket. kimi was right about `vc` and wrong about `ve`. My own “closest call” sentence was the finding; calling it debt anyway was the miss.
+
+**Cell set (minimal class closure, not the author’s pair):**
+
+| cell | port example | status |
+|---|---|---|
+| C=16, k=0, lane 0 | MCR `0x2fc` | **owed** |
+| C=16, k=0, lane 1 | 8259 IMR `0x21` | **owed** |
+| C=16, k=0, lane 2 | MSR `0x2fe` | **owed** |
+| C=16, k=0, lane 3 | SCR `0x2ff` | shipped |
+| F10 width pin | two 16-byte chunks (one GETENV, two ports) | **owed in this diff** |
+
+Do not add k=16, C=64/256/1024, or a READ twin. Product code stays untouched. This is detector material, L2, in-round; the chain does not close on 8bd97e4’s one-cell row.
+
+Honest contract after that diff: *designed to catch a guard or write-arm conjunct that declines a `len > 8` WRITE at any of the four C=16 lanes; disclosed: psize cutoffs 16/64/256, k-bit, `P < 0x200`, continuation, READ, and a `len > 8`-gated write-arm fallthrough.* Then `va` is outside the contract rather than the next pass’s “next cell.”
+
+---
+
+### 2. Which accepted disposition is wrong?
+
+**D1 and F5.** Filing `{mc2, kbc1024}` as the closure is the same error in construction form.
+
+That pair is a covering of the **listed** mutants, not a closure of the lane partition:
+
+- `mc2` = lane 2 then lane 3  
+- `kbc1024` = lane 0  
+
+A lane-1-only decline — `&& (len <= 8 || (P & 3) != 1)` — keeps every chunk those two sessions issue, so both stay green. `low16` is the only listed cell that reds it, and it is not in the pair. Shipping that pair as “class closure” would replay `#499` at lane 1 on the next pass.
+
+F10’s “owed with the row’s next edit” is also wrong once D1 is L2: the width pin is part of this diff, because none of the four destination-byte cells can distinguish `a3=16` from `a3=4`.
+
+---
+
+### 3. What all nine missed
+
+1. **Covering ≠ closure.** `{mc2, kbc1024}` detects every mutant in the table and is still blind to a body-legal lane-1 exemption. The author asked for a cell set if L2; that pair is not it.
+
+2. **GETENV is capped by the host string.** `len = min(a3, strlen(boot_string_argument)+1)`. `a3` is a guest register; the string is `-o`. C=256/1024 are not freely guest-reachable. Does not change the four-lane floor; it does mean `kbc1024` is a weak pin to lean on.
+
+3. **A `len > 8`-gated write-arm fallthrough** (`if (len <= 8) return nested;`) still writes the destination byte, then the read arm clobbers the host boot string. Every destination-only width row, including the four-lane set, stays green. The parent catches only the **ungated** fallthrough. Channel gap, disclose it; do not grow the floor for it.
+
+4. **`vf` is equivalent at lane 0.** A lane-0-only strengthening would drop the one listed variant the shipped row actually kills. Lane 3 was the right cell for `vf` and the wrong sole cell for `vc`. Another reason the four-lane set is the unit, not “add whatever reds in section 3.”
+
+I did not run a gate, a battery, or a mutant table. Named measurements I would want if this is challenged: one leg of `&& (len <= 8 || (P & 3) != 1)` against `{mc2, kbc1024}` (predicted 5/5 and 3/3) and against a lane-1 C=16 cell (predicted 2/3).
