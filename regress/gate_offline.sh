@@ -2232,7 +2232,13 @@ SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage
 #                  dev_wdc.c -- which is the OTHER control, already present.  This one needs
 #                  the nine row functions refactored onto a shared helper first: a round, not
 #                  a line.
-SC_EXEMPT="ieee_store:2026-09-02 wdc_identify:2026-09-02"
+#  RE-DATED 2026-09-18 BY OWNER RULING, from 2026-09-02 -- a date that passed with no owner row: the
+#  "no exemption is past its dated deadline" row below went RED on every run from 2026-09-03, and the
+#  first run to OBSERVE it was 2026-09-18, the weekly battery having been disabled.  A re-date is not a
+#  discharge: both reasons above stand unchanged, and this list's SM twin was ruled the other way
+#  ("fix it, do not re-date", #537).  The comparison is a strict `<`, so these are valid ON 2026-09-27
+#  and RED from 2026-09-28.  Owner row: `scexempt` -- discharge, re-decide or delete before then.
+SC_EXEMPT="ieee_store:2026-09-27 wdc_identify:2026-09-27"
 
 sc_missing=""
 for f in "$HERE"/diff_*.c; do

@@ -1,3 +1,28 @@
+# GATE 2 SC_EXEMPT 2026-09-18 -- **two SELFCHECK exemptions had passed their date on 2026-09-02 with no owner row, so gate 2 went red from the 3rd -- and nothing ran it until tonight.**  Re-dated to 2026-09-27 by owner ruling, in their own commit; no product or detector code changed.
+
+`gate_offline.sh`'s `SC_EXEMPT` exempts two differentials from the `@@SELFCHECK@@` comparator control:
+
+* `ieee_store` -- it has NO comparator to feed a mismatch to;
+* `wdc_identify` -- its nine row functions must first be moved onto a shared helper, "a round, not a line".
+
+Both entries carried `2026-09-02`, set in 7e3b120 (2026-08-19) with the fortnight the owner had chosen for the
+selfmutant list.  From 2026-09-03 the row "SELFCHECK manifest: no exemption is past its dated deadline OR malformed"
+reads `got= ieee_store wdc_identify want=none` on every run.  **The first run to OBSERVE it was `#537`'s gate 2 on
+2026-09-18** (`regress/artifacts/fbsmlane/r537_20260918/gate/gate_offline_20260918_1959.log`, 1 FAIL of 346).  The
+weekly battery had been disabled -- `Get-ScheduledTask` read `State: Disabled` at 19:45 that evening -- and the
+last battery (2026-08-30) predates the date.  fable5 predicted the red before gate 2 finished and said not to
+attribute it to `#537`; codex and grok had found it on that round's §F2 pass.
+
+**The owner ruled a re-date to 2026-09-27, not a fix** -- the opposite call from the one made for this list's SM
+twin (`#537`: "fix it, do not re-date").  So nothing is discharged.  Because the comparison is a strict `<`, the
+exemptions are valid ON 2026-09-27 and red from 2026-09-28, and **`scexempt` (MED) now owns the decision** that no
+row owned before: discharge, re-decide, or delete and take the red.  The battery task is re-enabled by the same
+ruling (next run Sunday 2026-09-20 18:00; it fires only while the machine is awake and logged in).
+
+**GATE 2, run alone 2026-09-19 00:42-00:45 with the new dates (`regress/artifacts/scexempt/gate_offline_20260919_0042_redated.log`):
+PASS, 346/346.**  Against `#537`'s run of 19:59 (`..._1959_expired.log`, FAIL 1/346) the sorted check sets differ by
+exactly one line -- that row, `got= ieee_store wdc_identify` -> `none`.  Nothing else in the gate is touched by a date.
+
 # `#536` (wiringcliff): two probes wired, eleven exemptions re-dated by owner ruling -- and the re-date would have broken the checker's own selftest
 
 `check_probe_wiring.py`'s EXEMPT table carried thirteen entries dated 2026-09-20.  The comparison is `d < today`, so
