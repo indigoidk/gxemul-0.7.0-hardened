@@ -115,10 +115,14 @@ def io_write(path, text):
 #  compile means the HOST is sick; a spinning run is an EXPECTED mutant outcome and the whole
 #  reason this control exists.  Sharing one number would also make the SETUP message unable
 #  to name the phase.  Measured on an idle machine across all 12 lanes: slowest build 1.37 s
-#  (diskimage_io / diskimage_geom), slowest run 0.31 s (m8820x).  The margins below are ~88x
+#  (diskimage_io / diskimage_geom), slowest run 0.31 s (m8820x).  The margins below were then ~88x
 #  and ~190x, deliberately enormous: `gate_ab` uses 3x and that MEASURABLY false-FAILed a
 #  45-minute battery under subagent load.  A too-tight timeout turns a busy host into a red
 #  gate, which is the fastest way to get a gate switched off.
+#  #537, 2026-09-18: a 13th lane, fbpending_bound, links ~221 build/ objects.  On a quiet host
+#  (load 0.2-0.8 on 8 cores) its arms build in 3.22-3.53 s and run in 1.69-1.87 s, 10 arms over 5
+#  runs (regress/artifacts/fbsmlane/r537_20260918/opus5_f2/SUMMARY.txt) -- so the margins are now
+#  ~34x and ~32x, still an order of magnitude above gate_ab's 3x.
 BUILD_TIMEOUT = float(os.environ.get("SELFMUTANT_BUILD_TIMEOUT", "120"))
 RUN_TIMEOUT = float(os.environ.get("SELFMUTANT_RUN_TIMEOUT", "60"))
 

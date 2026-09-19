@@ -1,0 +1,79 @@
+VERDICT — both rounds are REASONED-sound; no premise is false; the only defensible weakenings are (d) (quality regression, no break) and (f) (works for the current single-date block, BROKEN for any future table with mixed dates). The asymmetry in P4 is a deliberate trade-off, not a defect. No disposition is missing that the owner's rulings didn't already reject.
+
+---
+
+## Q1 — premise audit
+
+**P1 (mutated file resolution) — TRUE [REASONED + READ-confirmed by N2].**
+The harness's `#include "dev_footbridge.c"` cannot be satisfied by the directory of the source file (whether gcc resolves the symlink to `<mirror>/regress/` or to `GXEMUL-SEC/regress/`, neither contains `dev_footbridge.c`). The helper's own `-I../src -I../src/include -I../src/include/thirdparty` likewise contain no `dev_footbridge.c`. Only the LANE's EXTRA `-I../src/devices` does, and it resolves to `<mirror>/src/devices/`. The N2 arm — same harness, `-I$SEC/src/...` instead of relative — produces a byte-identical binary and SETUPs, which is what P1 predicts. **Not checkable from the packet without seeing the harness source**: whether the harness uses `#include "..."` (quoted) or `#include <...>` (angle). The conclusion holds either way (angle-bracket would skip the source-file directory entirely), so the premise survives.
+
+**P2 (no-args run skips R2) — TRUE [REASONED + READ-confirmed by D0].**
+D0 reports 28 rows with the depth argument and 27 rows without — exactly the R2 delta. R4 prints once per case (seven cases) and the mutant forces all seven red, so the pinned aggregate row R4 still reddens. L0 confirms the lane goes SELFMUTANT_OK end-to-end.
+
+**P3 (flag deltas don't change what is measured) — TRUE [REASONED].**
+`-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE` enable feature-test macros for headers, not behavioural changes to integer-store code. `-ffunction-sections -fdata-sections -Wl,--gc-sections` affect layout and dead-code stripping, not arithmetic. `-std=gnu99` over `-std=c99` enables GNU extensions; the harness compiles in both forms (the helpers already pass under the helper's `-std=c99` line for every other harness in the lane), so the harness uses no GNU-only construct on the measured path. `-L /usr/X11R6/lib -lX11` is link-only, and the linked build/ objects are pristine and don't feed the counter under test.
+
+**P4 (SKIP-as-PASS vs RED-on-no-build/) — REASONED-defensible design choice, NOT a defect.**
+The main #442 lane SKIPs by adding no check at all (its `check` lines are inside a conditional that bails early). A no-check absence is exactly the silent-pass shape the brief calls out as the fifth vacuity class. The self-mutant lane can't easily mimic that without rewriting `selfmutant_one` to know about build/'s absence — and `selfmutant.py`'s contract is pristine-build / mutant-build / compare, with SETUP as the honest failure mode for missing objects. The author accepts one extra RED on a machine without build/ rather than invent a new "explicitly SKIPPED" state that `check` doesn't model. **Trade-off named, not hidden.**
+
+**P5 (M5a/M5b population) — TRUE [REASONED].**
+The actual expiry branch reads EXEMPT dates only for entries whose MANIFEST class is CLASS_DETECTOR (the witness branch never reads EXEMPT). M5a/M5b filter on the same predicate (`MANIFEST.get(_n, (None,))[0] == CLASS_DETECTOR`) and additionally require `DATE_RE.match(...)` so M5c/M5d own the malformed/empty shapes. The selftest's SETUP guard (every MANIFEST file must exist on disk) ensures the earliest-dated detector is always present in the selftest's copy when the test actually runs. **Not checkable from the packet alone**: that EVERY currently-dated EXEMPT entry is in MANIFEST as CLASS_DETECTOR — the brief shows the EXEMPT side for all eleven but the MANIFEST classification for `artifacts/ip30abortkill/ip30_abort_probe.py` (the only artifact-path entry) is not inlined. If that entry were classified as anything other than DETECTOR, it would be silently dropped from `_m5`, and the "earliest" would shift to the next entry. That would still produce a coherent M5a/M5b (the test is about the *table*, not a specific entry), but the named-eleven list in §3 would be off by one. Worth a file-read seat confirming.
+
+---
+
+## Q2 — weakenings
+
+**(a) `printf("\nFBBOUND_PASS\n")` unconditionally — FAILS gate 2.**
+The self-mutant lane's mutant arm never emits a `_FAIL` token, so `selfmutant.py` reports SELFMUTANT_FAIL on the missing-FAIL-token check; gate 2 REDs. Independently, gate 2's own #442 verdict `check "fbpending bound: offline verdict" "$(grep -c '^FBBOUND_PASS$' …)" "1"` would also pass vacuously — but that's the *fifth vacuity class* the brief warns about. PRECOMMIT: FAILS.
+
+**(b) gate 2 verdict grep `^FBBOUND_$` instead of `^FBBOUND_PASS$` — FAILS without the harness fix.**
+The old form `FBBOUND_VERDICT=PASS` starts with `FBBOUND_`, so gate 2's main verdict check would go GREEN on the pre-fix harness — but the self-mutant lane's `<WORD>_FAIL` regex still won't match `FBBOUND_VERDICT=FAIL`, so the lane SETUPs (this is exactly L1 in §3). With the harness fix applied, both checks go GREEN — so weakening (b) is REDUNDANT given the fix and HARMFUL without it. PRECOMMIT: FAILS without the harness fix; PASSES with it (but pointless).
+
+**(c) drop `! -name 'dev_footbridge.o'` — FAILS.**
+The harness `#include`s `dev_footbridge.c` directly (mutated copy) and `dev_footbridge.o` is also linked (pristine). Every non-`static` Footbridge symbol is defined twice → linker error → pristine arm SETUP → lane RED. PRECOMMIT: FAILS.
+
+**(d) R4 condition `failures <= 1` — lane still works; harness quality regresses.**
+The mutant forces R4 red in all 7 cases, so `failures = 7` (at minimum) and `7 > 1` → R4 still FAILs in the mutant arm. The lane catches the mutant. The harness overall verdict (`failures ? "FAIL" : "PASS"`) is unchanged and still emits `FBBOUND_FAIL` in the mutant arm. But the harness now treats a single failing case as a passing run — vacuity in the harness itself, not in the gate. PRECOMMIT PASSES on the lane; the harness is more lenient than the brief intends.
+
+**(e) drop `"$PMAX"` from the mk48 line — FAILS.**
+The probe is invoked with the single argument `gate`, no binary path. Either the probe errors out before producing any rows (then `MK48_WITNESS_DONE` is absent → "probe completed: no" reddens), or it picks up a default/embedded binary that is not the gate's `$PMAX` and produces different row contents (then the named-row `check`s reddens). Either way, the gate's mk48 section reds. PRECOMMIT: FAILS.
+
+**(f) M5b uses LATEST dated detector instead of EARLIEST — works today, BROKEN tomorrow.
+The current re-dated block is uniform 2026-09-27, so LATEST == EARLIEST and the test passes.
+But the day M5a/M5b exists is to verify the expiry logic against a table that has *varied* dates — that's the whole point of deriving from the table. With LATEST, M5a (LATEST − 1) is no longer guaranteed to be a day on which every detector is live: any detector dated before LATEST − 1 is already expired, so the checker REDs and M5a fails. The negative control in §3 already proves the *derivation* is load-bearing — flipping the pole from EARLIEST to LATEST is the symmetric mistake in the other direction. PRECOMMIT: PASSES for the current single-date table; FAILS the first time the table has mixed dates.
+
+---
+
+## Q3 — option-set completeness
+
+The named dispositions cover the owner's rulings:
+- #537: fix the harness (chosen) vs re-date (rejected).
+- #536: wire 2 + re-date 11 as one block (chosen) vs wire all 13 (rejected) vs re-date all 13 (rejected).
+
+Dispositions the brief did NOT name that a candid reviewer might propose:
+
+- **#537 alternative: amend `selfmutant.py`'s regex to accept `FBBOUND_VERDICT=PASS`.** The owner explicitly ruled this out ("fix it, do not re-date it") because the helper is shared by 12 lanes and a regex relaxation to admit `=` would let other harnesses drift the same way. The ruling is defensible; the alternative exists.
+
+- **#537 alternative: print BOTH tokens** (`FBBOUND_VERDICT=PASS` and `FBBOUND_PASS` on separate lines). Satisfies the lane regex AND preserves legacy greps. Costs one extra line per run. Not chosen; defensible either way.
+
+- **#536 alternative: spread the 11 re-dates** (e.g., 4 on 2026-09-27, 4 on 2026-10-04, 3 on 2026-10-11) so the cliff dissolves into a ramp. The owner explicitly chose to *re-create* the cliff as one block: "deliberately and dated, not by copying." That is a load-bearing judgement about review pressure vs deadline complexity, and it is reasonable but not the only reasonable choice.
+
+- **#536 alternative: drop the 11 from EXEMPT and add them to a "known-ungated" allow-list** the checker skips. This is a structural change to the checker's design (the brief's checker treats any DETECTOR not run by a gate as a defect unless dated-exempt). Not chosen; would require a checker redesign.
+
+The named set covers the rulings. None of the un-named alternatives is *missing* in a way the panel needs to surface — they are simply not the owner's choices.
+
+---
+
+## Standing-licence observations
+
+- The `fbpending_bound.why` edit is a 1-line addendum (`+3 / -0`) that explicitly preserves the 2026-08-20 table verbatim, on the grounds that the table described the *old* token form. Good — this is exactly the case where not editing the historical record is the right call, and saying so in the file is the right way to record that.
+
+- The `gate_offline.sh` diff's removal of the stray `' ' ') -lm -L/usr/X11R6/lib -lX11"` line is correct and the §5 explanation is sufficient from the packet (the second `'` opens a quote that runs to `run.sh's` six lines down; all interior lines are blank or `#` comments; the executed command is the literal `' '` with one long argv; rc 127). I cannot verify the exact line count of interior comments without the file, but the structural claim (no code swallowed) follows from every interior line being either blank or starting with `#`.
+
+- The M5 derivation's negative control (use OLD literals 2026-09-19/21 against the RE-DATED table) is exactly the right control: it shows M5b's old `rc=0 want=1` failure, which is the failure mode the derivation exists to prevent. This is the strongest piece of evidence in the packet that the derivation is doing real work.
+
+- One thing I cannot settle from the packet: whether the MANIFEST entry for `artifacts/ip30abortkill/ip30_abort_probe.py` is CLASS_DETECTOR (it must be, for M5a/M5b's "earliest-dated detector" to actually pick from all eleven). The brief's §3 measurement lists this file among the eleven, which is consistent, but doesn't prove the MANIFEST class. A file-reading seat should confirm.
+
+- The `gate_arm.sh` insertions assume the `count` helper is defined earlier in the file. The brief does not show its definition, but every other gate in this tree uses the same idiom, so this is safe to assume.
+
+No other defects surfaced.

@@ -332,13 +332,14 @@ int main(int argc, char *argv[])
 	}
 
 	/*
-	 *  R4 -- THE AGGREGATE, and it exists for a mechanical reason rather than a
-	 *  semantic one: selfmutant.py requires the pinned row id to name EXACTLY ONE
-	 *  row, and R1/R3 each print seven times (once per emulated_hz/load case).  A pin
-	 *  of "R1 " would match seven lines and the helper refuses it.  R4 is the unique
-	 *  name the lane pins, and any case failing above takes it red.
+	 *  R4 -- THE AGGREGATE: red whenever any case above is.  #442 added it as the
+	 *  self-mutant lane's pin, believing R1/R3 -- printed once per emulated_hz/load
+	 *  case -- could not be pinned.  They can: selfmutant.py matches the pin anywhere
+	 *  in the printed line, so one case's R3 row is unique.  And an aggregate pin is
+	 *  VERDICT-EQUIVALENT, so #537 pins R3's "cats, slowest legal" row instead;
+	 *  R4 stays as the every-case summary.
 	 */
-	row("R4 every case bounded (the selfmutant pin)", failures == 0,
+	row("R4 every case bounded", failures == 0,
 	    "%d row failure(s) above", failures);
 
 	/*
@@ -358,6 +359,10 @@ int main(int argc, char *argv[])
 	    "%d rows (expect %d with R2, %d without)",
 	    rows + 1, IDENT_DEEP, IDENT_SHALLOW);
 
-	printf("\nFBBOUND_VERDICT=%s\n", failures ? "FAIL" : "PASS");
+	/*  #537: the house verdict token, `<WORD>_PASS' / `<WORD>_FAIL'.  This printed
+	    `FBBOUND_VERDICT=PASS', which selfmutant.py's `\b([A-Z0-9_]+_PASS)\b' can never
+	    match -- the one deviation that kept this harness's self-mutant lane out of gate 2
+	    since #442 (diagnosed as `fbsmlane', 2026-08-27).  gate_offline.sh greps this line.  */
+	printf("\nFBBOUND_%s\n", failures ? "FAIL" : "PASS");
 	return failures ? 1 : 0;
 }

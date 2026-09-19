@@ -1,3 +1,140 @@
+# `#537` (fbsmlane): #442's harness could never pass its own self-mutant lane -- because of one character -- and the pin it was given certified only that SOME row killed
+
+**Owner ruling 2026-09-18: FIX it, do not re-date it.**  `gate_offline.sh` had carried `fbpending_bound` in
+`SM_EXEMPT` since `#442`, dated 2026-09-20.  The harness always had its `@@SELFCHECK@@` comparator control, but
+its SELF-MUTANT lane never ran, and the two catch different failures.  Ledger row `fbsmlane` diagnosed why on
+2026-08-27 and named the fix shape; this round is that fix, measured, plus the pin the panel found wrong.
+
+## THE DEFECT
+
+`selfmutant.py` reads a verdict only as `\b([A-Z0-9_]+_PASS)\b`.  The harness printed `FBBOUND_VERDICT=PASS` --
+an `=` where the pattern needs `_` -- so no run of it could ever be read as passing, and a lane wired to it could
+only ever report SETUP.  Latent host-side detector debt; nothing guest-visible.
+
+## THE FIX -- four files, no emulator code
+
+* `diff_fbpending_bound.c` prints the house token, `FBBOUND_PASS` / `FBBOUND_FAIL`, and gate 2's `#442` verdict
+  row greps `^FBBOUND_PASS$` in the same edit -- the coupling `fbsmlane` warned about: rename the token without
+  the grep and a dead lane becomes a red gate.
+* `gate_offline.sh` calls the lane with the flags only this harness needs -- it is the one differential that
+  LINKS ~221 `build/` objects instead of compiling standalone -- and with RELATIVE `-I` paths, so the lane
+  compiles the MIRROR's mutated `dev_footbridge.c`.  An absolute `-I` would compile the pristine copy in both
+  arms; `selfmutant.py`'s binary-identity check then SETUPs, so the row reds rather than lies -- measured below
+  as N2.  `fbpending_bound` moves from `SM_EXEMPT` to `SM_COVERED`.
+* **The pin is R3's `cats, slowest legal` row, case-qualified -- not `R4`, the aggregate `#442` added to be
+  pinned.**  See the next section.
+* `selfmutant.py`'s timeout-margin comment gains the 13th lane's timings; `fbpending_bound.why` corrects two
+  sentences; the gate paragraph that said the lane "DOES NOT RUN YET" becomes its discharge note.
+
+**AND A STRAY FRAGMENT `#442` LEFT IN THE SAME FILE.**  `' ' ') -lm -L/usr/X11R6/lib -lX11"` sat below the
+`rtc_range` lane call.  It opened a quote that ran to the apostrophe in "run.sh's" six lines later, and executed a
+command named `' '` on every gate run -- `command not found`, rc 127, reproduced in isolation.  Harmless under
+`set -u`, because only comments were swallowed, but a fragment, not code.  Removed.
+
+## THE PIN -- `#442`'s PREMISE WAS FALSE, AND THE AGGREGATE PIN IT JUSTIFIED IS VERDICT-EQUIVALENT
+
+`#442` added `R4 every case bounded` (`failures == 0`) as the lane's pin, reasoning that `selfmutant.py` requires the
+pinned row id to name exactly one row while R1 and R3 each print seven times.  **The two passes took that apart
+from both ends:**
+
+* **The Opus seat, pass 2, MEASURED that an R4 pin certifies only that SOME row kills.**  Blind R3
+  (`>= 1` -> `>= 0`) and tighten R1 (`trough >= 0` -> `>= 1`) together: R3 detects nothing, R1 reds, R4 follows --
+  and the lane says `SELFMUTANT_OK ... killed by the named row: FAIL R4`.  Each edit alone is green on the fix,
+  which makes the pair a licensed reach-the-guard composite rather than a steered one.
+* **The codex seat, §F2, found the premise itself false:** the helper matches the pin ANYWHERE in the printed line,
+  so R3's row for ONE case names exactly one row.
+
+So the lane pins `R3 the reset still owes one interrupt        cats, slowest legal`.  The string spans the
+harness's row-name padding, so a one-space drift SETUPs loudly rather than silently (measured).  R4 stays as the
+every-case summary, and its printed name loses "(the selfmutant pin)".
+
+*Harder on the finding, as the Opus seat was on its own: the composite lost no DETECTION -- the tightened R1 carries
+R3's check -- so the R4 pin lost "which row", not a caught defect.  Filing it would have been defensible.  What made
+in-round right is that the fix is one string in material not yet shipped (L1).*
+
+## MEASURED (`regress/artifacts/fbsmlane/r537_20260918/`)
+
+    out_run2/  (run537.sh: 221 build/ objects linked; the R4 pin as first written)
+      L0  the lane as gate 2 then called it, post-fix   SELFMUTANT_OK    -- mutant killed, 7 row failures
+      L1  PRE-FIX: HEAD's harness through the lane      SELFMUTANT_SETUP -- "pristine arm did not PASS": this row's symptom
+      N1  R3 blinded (worst_trough >= 1 -> >= 0)        SELFMUTANT_FAIL  -- the lane reds when the detector goes blind
+      N2  absolute -I paths for the relative ones       SELFMUTANT_SETUP -- both arms byte-identical
+      D0  the harness as gate 2's #442 lane builds it   28 rows with the depth argument, 27 without; both FBBOUND_PASS
+
+    f2_pin/out/  (run537b.sh, the same shape, the shipped R3 pin)
+      P0  base                                          SELFMUTANT_OK    -- killed by the named row, FAIL R3 ... cats, slowest legal
+      P3  R3 blinded                                    SELFMUTANT_FAIL  -- "the detector did NOT report a failure"
+      P4  R1 tightened alone                            SELFMUTANT_OK    -- killed via R3; the edit is green on the fix
+      P1  R3 blinded + R1 tightened                     SELFMUTANT_FAIL  -- "detector failed, but NOT via the named row"
+      P2  the same composite under the OLD R4 pin       SELFMUTANT_OK    -- the escape the pin move closes
+
+The Opus seat reproduced P0/P3/P1 with the exact string pulled from `gate_offline.sh`, plus the one-space-short pin
+-> `SELFMUTANT_SETUP` (`opus5_f2/f2pin_SUMMARY.txt`).  **Timing, quiet host** (load 0.2-0.8 on 8 cores, 5 runs, 10
+arms): build 3.22-3.53 s, run 1.69-1.87 s, against `selfmutant.py`'s 120 s / 60 s -- margins ~34x and ~32x
+(`opus5_f2/SUMMARY.txt`).  *A first figure, "3.9-4.5 s / 1.9-2.1 s (Opus seat, 8 runs)", was ONE run of two arms
+on a loaded host; the "8 runs" was whole-lane wall time.  Corrected before commit (Opus seat, §F2).*
+
+*The driver's first run SETUP'd L1 and N1 on a compile error of ITS OWN: its scratch copies lacked the
+configure-generated `GXEMUL-SEC/config.h`, which `misc.h` includes as `"../../config.h"` -- the helper's mirror
+reaches it through a SYMLINKED `src/include`, a real copy does not.  Fixed, re-run whole; run 1 kept as
+`out_run1_apparatus_defect/`.*
+
+**GATE 2, run alone 2026-09-18 19:59-20:01 (`gate/gate_offline_20260918_1959.log`): FAIL, 1 of 346 checks -- and the
+one is not this round's.**  `selfmutant fbpending_bound: the detector still detects, via its named row` is ok, killed by
+the R3 row; the `#442` main lane's verdict, R2 and row-count checks are ok (30 rows).  The only red is `SELFCHECK
+manifest: no exemption is past its dated deadline OR malformed got= ieee_store wdc_identify` -- SC_EXEMPT's two
+2026-09-02 dates, filed as `scexempt` and re-dated by owner ruling in their own commit.  **Against the last battery
+(2026-08-30, gate 2 PASS 345), the check set differs by exactly this lane's row plus that one row turning red**
+(`gate/g2_0830_names.txt` vs `gate/g2_today_names.txt`).  *fable5 predicted this before the gate finished: tonight's run
+is the first that could OBSERVE the SC row red, so do not attribute it to `#537`.*
+
+## RECORDS CORRECTED IN THE SAME FILES
+
+* `gate_offline.sh`'s ieee_store note said "The other five are uncovered debt".  At 2134a98 those five were
+  `sh4_tmu`, `wdc_identify`, `diskimage_io`, `diskimage_geom` and `diskimage_parse`, all discharged by 6014b7e
+  (2026-08-19); `fbpending_bound` arrived the next day with `#442` and was never one of them.  A first correction of
+  mine called it "the last" of the five; the Opus seat's §F2 pass refuted that from the history.
+* The same file's deadline sentence says the gate reds "the day AFTER that date (the comparison is a strict `<`)".
+* `fbpending_bound.why` said "a verdict-only or R1-only assertion would score this as fine".  The VERDICT does see
+  the failure; what it cannot say is WHICH row caught it (codex, §F2).  Its PIN paragraph is rewritten.
+* The lane's own comment said "Two things kept it out since #442", counting the build/-object flags as a cause.  They
+  are a requirement of the call, not a reason for the absence; it now says one thing kept it out and one thing its call
+  needs.  The drift measurement now names its file, `opus5_f2/f2pin_SUMMARY.txt` (fable5, both).
+
+## THE PANEL -- one brief for `#536` and `#537`, two passes, nine seats
+
+Pass 2 `_scratchpad/panel_20260918_190341/` and §F2 `_scratchpad/panel_20260918_193405/`, both copied whole to
+`regress/artifacts/fbsmlane/r537_20260918/panels/` with the briefs as sent.  The durable copy of codex's pass-2
+answer has 120 NUL bytes removed: a UTF-16LE "Access is denied." from a command its read-only sandbox refused, which
+precommit section Y rejects (`NUL_REMOVED.txt` beside it; the original stays in `_scratchpad/`).  Answering in BOTH: codex (GPT-6
+Astra), agy, grok, glm, deepseek, minimax, and kimi through `kimi-k3:cloud` -- the CLI was on its weekly wall
+(`kimi.SKIPPED.txt`), so the seat was COVERED, not lost.  The Opus 5 seat measured on both passes
+(`opus5_answers/`).  **fable5 ruled LAST, after all eight others had answered both passes -- its identity verified
+from the transcript, not the self-report: 84/84 assistant messages carry `claude-fable-5-1`** (`fable5/fable5_answer.md`).
+Its verdict: **SHIP BOTH.**  Its rulings on this round: D1 (the no-objects path) UPHELD as keep-red plus a filing, with
+two of my reasons corrected; two comment nits in `gate_offline.sh`, applied.  Its findings that landed on the round's
+RECORDS -- a stale blob digest, a draft CHANGELOG carrying four since-falsified sentences, and SC_EXEMPT with no owner
+row -- are corrected or filed.  **Two of its findings were refuted by record:** that the weekly battery task was never
+disabled (this session's transcript shows `State: Disabled` at 19:45:08; it was re-enabled by owner ruling BEFORE the
+seat read it), and that the 2026-08-30 hygiene red was filed nowhere (6b4eacf and 9409a82, 2026-08-31, handled it and
+moved the pins).
+
+## FILED
+
+* **`fbnobuild` (LOW)** -- with no `build/` objects, gate 2's `#442` main lane `note`s and the gate stays PASS
+  (rc 0), while the new lane SETUPs under the row name "the detector still detects".  So the only red is on a row
+  named for something else.  Fix shape: `degrade` in both lanes, and truncate `$LOGDIR/diff_fbpending_bound.log`
+  before the main lane.  Without the truncation, the SELFCHECK "every COVERED detector ran its sentinel" row reads
+  the previous run's log.  Reachable only when gate 1 failed, skipped or was not selected; the stale-log half also
+  needs a retained `$LOGDIR` (by default `/tmp/gxregress`).  Opus seat (pass 2 P4; §F2 corrected both warrants);
+  fable5 widened it.  It also carries the freshness clause: standalone runs link whatever `build/` holds, and only the
+  battery's gate 1 rebuilds it and asserts 223 objects.  And it carries the stray-file case: a
+  `regress/dev_footbridge.c` would be compiled SILENTLY by the `#442` lane, because gcc searches the including file's
+  directory first, while the self-mutant lane never reaches it -- so the two lanes would test different code.  A
+  gate-behaviour change owing two negative controls, so it is filed rather than ridden on this round.
+* **`scexempt` (MED)** -- the owner row that SC_EXEMPT never had (fable5).  Re-dated to 2026-09-27 in its own commit, so
+  the same red returns on 2026-09-28 unless the debt is discharged or re-decided.
+
 # `#530` (lcaisalane): a guest BYTE access to an ISA port 2 or 3 mod 4 ended the host, and the one pass that could not close was the detector's width coverage, not the fix
 
 *`#530` lands AFTER `#531`-`#535` although its number is older: it was held open for exactly one

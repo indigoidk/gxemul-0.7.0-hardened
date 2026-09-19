@@ -1,0 +1,137 @@
+**VERDICT: GO-WITH-CHANGES**
+
+---
+
+### Section 4: Questions / Review-Asks
+
+#### Q1 -- Premise Audit (P1–P5)
+
+* **(P1) Resolution of `dev_footbridge.c` under symlink mirror:** **TRUE.**
+  * *Audit against source:* In [`regress/diff_fbpending_bound.c:28`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L28), the inclusion is `#include "dev_footbridge.c"`. Under GCC preprocessing rules for `#include "..."`, the directory of the current file (`regress/`) is searched first. Because `dev_footbridge.c` resides in `src/devices/`, not `regress/`, it is never found in `regress/` regardless of whether the harness file is a symlink or a regular file. 
+  * GCC next searches the `-I` include path in order: `CC` supplies `-I../src -I../src/include -I../src/include/thirdparty` ([`regress/selfmutant.py:66-68`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py#L66-L68)), none of which contain `dev_footbridge.c`. `EXTRA_FLAGS` supplies `-I../src/devices` ([`regress/gate_offline.sh:1063`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1063)). Because `selfmutant.py` invokes GCC from working directory `<mirror>/regress` ([`regress/selfmutant.py:162`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py#L162)), `../src/devices` resolves to `<mirror>/src/devices/dev_footbridge.c`, which is the mutated file written by `link_tree` / `io_write` ([`regress/selfmutant.py:228-242`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py#L228-L242)). Arm N2 in `_scratchpad/p2_536_537/frozen/run537_SUMMARY.txt:13-15` directly proves that using `-I$SEC/src/devices` compiles the pristine copy and is trapped by the binary-identity check as `SELFMUTANT_SETUP`.
+
+* **(P2) Harness execution with no arguments skips R2 and satisfies shallow IDENTITY:** **TRUE.**
+  * *Audit against source:* [`regress/selfmutant.py:168`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py#L168) executes `[binp]` with no command-line arguments. In [`regress/diff_fbpending_bound.c:123-124`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L123-L124), `argc == 1`, leaving `deep == 0`. At lines [251–262](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L251-L262), `deep > 0` is false, so R2 prints `SKIPPED` without calling `row()`. At lines [357–359](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L357-L359), `row("IDENTITY: row count", rows + 1 == (deep > 0 ? IDENT_DEEP : IDENT_SHALLOW), ...)` tests against `IDENT_SHALLOW` (`27`, defined at line 58). Under the mutant ([`regress/selfmutants/fbpending_bound.new:1`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutants/fbpending_bound.new#L1)), reset-to-zero fails row R3 across all 7 cases ([`regress/diff_fbpending_bound.c:236-239`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L236-L239)), causing `failures > 0` and failing pinned aggregate row R4 (`failures == 0`, lines [341–342](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L341-L342)).
+
+* **(P3) Compilation flags do not alter measured harness properties:** **TRUE.**
+  * *Audit against source:* Gate 2 compiles with `$CC -O2 -std=gnu99 -I...` ([`regress/gate_offline.sh:1279`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1279)). The selfmutant lane CC string uses `-std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections -Wl,--gc-sections` overridden by `EXTRA_FLAGS`'s `-std=gnu99`. Later `-std=` overrides earlier in GCC. `-D_POSIX_C_SOURCE` and `-D_DEFAULT_SOURCE` do not alter integer counter logic or standard library memory routines. Function/data section GC (`-Wl,--gc-sections`) dead-strips unreferenced symbols but retains the entire reachable call graph from `main()`. The measured timer interrupt counts, peak/trough calculations, and row checks are identical.
+
+* **(P4) Asymmetry when `build/` has no objects:** **TRUE.**
+  * *Audit against source:* In [`regress/gate_offline.sh:1275-1277`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1275-L1277), the main #442 lane explicitly guards `if [ -z "$FBOBJS" ]; then note "... SKIPPED, not passed"` and registers no `check` invocation. In contrast, the selfmutant lane ([`regress/gate_offline.sh:1061-1064`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1061-L1064)) calls `selfmutant_one` unconditionally. Without `build/src/*.o`, the link step inside `selfmutant.py` fails, emitting `SELFMUTANT_SETUP` ([`regress/selfmutant.py:268-270`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py#L268-L270)), causing [`regress/gate_offline.sh:907-908`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L907-L908) to fail (`check ... "0" "1"`). This asymmetry is **right**: selfmutants operate under a fail-closed doctrine where setup failure must never be masked as a pass or silently skipped. Furthermore, gate 2 runs after `gate_build` in `run.sh` ([`regress/run.sh:10`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/run.sh#L10)), so `build/` objects are always present during battery runs.
+
+* **(P5) Derivation of M5a/M5b from the earliest dated DETECTOR exemption:** **TRUE.**
+  * *Audit against source:* In [`tools/pipeline/check_probe_wiring.py:3208-3240`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3208-L3240), `d < today` expiry is strictly evaluated only for `cls == CLASS_DETECTOR`. The witness branch ([lines 3233–3240](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3233-L3240)) asserts only that the witness is ungated. `_m5` in `selftest()` ([`check_probe_wiring.staged.py:2826-2829`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2981-L2984)) filters by `MANIFEST.get(_n, (None,))[0] == CLASS_DETECTOR and DATE_RE.match(EXEMPT[_n][0] or "")`. The claim that selftest refuses to start unless every MANIFEST file is on disk is verified at [`check_probe_wiring.py:2887-2893`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2887-L2893): `absent = [f for f in sorted(MANIFEST) if not os.path.isfile(os.path.join(src_regress, f))]` triggers `PROBEWIRING_SELFTEST_SETUP` (rc=2) if any file is missing.
+
+* **Conclusion for Q1:** None of the premises (P1–P5) is false. All five are verified true against the tree.
+
+---
+
+#### Q2 -- Candidate Weakenings
+
+* **(a) The harness prints `FBBOUND_PASS` unconditionally (`printf("\nFBBOUND_PASS\n")`):**
+  * **Gate 2:** **FAILS (RED).** The mutant arm does not emit `FBBOUND_FAIL`; [`regress/selfmutant.py:362-365`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py#L362-L365) detects missing `failtok` and prints `SELFMUTANT_FAIL`. The check line going red in `gate_offline.sh` is:
+    ```bash
+    check "selfmutant fbpending_bound: the detector still detects, via its named row" "0" "1"
+    ```
+  * **Gate_arm.sh:** PASSES.
+  * **Precommit:** PASSES.
+
+* **(b) Gate 2's #442 verdict row greps `FBBOUND_` instead of `^FBBOUND_PASS$`:**
+  * **Gate 2:** **PASSES (NO RED LINE).** On pristine code, `FBBOUND_PASS` matches `FBBOUND_`, count is 1. The selfmutant lane parses tokens inside Python independently of this shell grep.
+  * **Gate_arm.sh:** PASSES.
+  * **Precommit:** PASSES.
+  * *Note on vacuity:* This is a silent weakening. On a broken build printing `FBBOUND_FAIL`, `grep -c 'FBBOUND_'` matches 1, vacuously passing the check.
+
+* **(c) The lane's EXTRA flags drop `! -name 'dev_footbridge.o'` from the object list:**
+  * **Gate 2:** **FAILS (RED).** Because `diff_fbpending_bound.c:28` includes `dev_footbridge.c` directly, linking `dev_footbridge.o` causes multiple definition errors at link time (`dev_footbridge_init`, `footbridge_read`, etc.). `selfmutant.py:268` emits `SELFMUTANT_SETUP`. The check line going red is:
+    ```bash
+    check "selfmutant fbpending_bound: the detector still detects, via its named row" "0" "1"
+    ```
+  * **Gate_arm.sh:** PASSES.
+  * **Precommit:** PASSES.
+
+* **(d) R4's condition becomes `failures <= 1`:**
+  * **Gate 2:** **PASSES (NO RED LINE).** Under the mutant, row R3 fails across all 7 cases in `cases[]` ([`regress/diff_fbpending_bound.c:166-239`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L166-L239)), so `failures == 7`. Because `7 <= 1` is false, R4 still goes red (`FAIL R4 every case bounded (the selfmutant pin) 7 row failure(s) above`). The selfmutant helper still sees the kill on the named row and reports `SELFMUTANT_OK`.
+  * **Gate_arm.sh:** PASSES.
+  * **Precommit:** PASSES.
+
+* **(e) `gate_arm.sh`'s mk48 section loses `"$PMAX"`:**
+  * **Gate 2:** PASSES.
+  * **Gate_arm.sh:** **FAILS (RED).** [`regress/mk48_nvram_probe.py:78`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/mk48_nvram_probe.py#L78) reads `BIN = sys.argv[1]`, assigning `BIN="gate"`. Subprocess execution fails with `FileNotFoundError` at line 142. The probe crashes before reaching `print("MK48_WITNESS_DONE")` at line 333. The check line going red in `gate_arm.sh` is:
+    ```bash
+    check "mk48 nvram probe completed" "no" "yes"
+    ```
+  * **Precommit:** PASSES. (Probe wiring checks invocation syntax via `hits[basename]`, which still sees `python3 -u mk48_nvram_probe.py`).
+
+* **(f) M5b's derivation uses the LATEST dated exemption instead of the earliest:**
+  * **Gate 2:** PASSES.
+  * **Gate_arm.sh:** PASSES.
+  * **Precommit:** **PASSES (NO RED LINE).** In the staged table, all 11 dated detector exemptions have identical dates (`2026-09-27`), so `_m5[0] == _m5[-1] == "2026-09-27"`. Even if the table had staggered dates, M5b running on `latest + 1 day` sees all exemptions expired and still exits 1 with `EXPIRED EXEMPTION`, satisfying `rc=1 want=1`.
+
+---
+
+#### Q3 -- Option-Set Completeness
+
+* **For #537:**
+  1. *Fix helper regex:* Adjust `selfmutant.py:273-274` to accept `\b([A-Z0-9_]+(=|_)(PASS|FAIL))\b` or explicit verdict tokens.
+  2. *Add argument/flag to `selfmutant.py`:* Allow `selfmutant_one` to pass an explicit expected pass/fail token pattern.
+  3. *Print dual tokens:* Print both `FBBOUND_VERDICT=PASS` and `FBBOUND_PASS` in the harness.
+* **For #536:**
+  1. *Staggered expiry:* Distribute the 11 remaining exemptions across multiple deadlines (e.g. 2026-09-27, 2026-10-04, 2026-10-11) instead of re-creating a single monolithic cliff.
+  2. *Reclassify differentials:* Convert two-leg differentials (`wdc_*`) into single-leg mode asserting post-fix invariants without building a comparison baseline leg.
+  3. *Retire/Quarantine unsupported architectures:* Demote Alpha probes to advisory witnesses if no Alpha gate execution is viable in tree.
+
+---
+
+### Verification of Cited Claims & Arithmetic Enumeration
+
+#### 1. Enumeration of Exemptions at HEAD (`3c41f01`)
+Enumerating `EXEMPT` in [`tools/pipeline/check_probe_wiring.py:2150-2234`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2150-L2234) against `MANIFEST` at HEAD:
+* **Total dated detector exemptions:** Exactly **13** (all dated `2026-09-20`):
+  1. `fbpending_drain_probe.py`
+  2. `hpcmips_ctor_probe.py` *(discharged/wired in #536)*
+  3. `wdc_altoffset_probe.py`
+  4. `wdc_altoffset_sig_probe.py`
+  5. `wdc_altoffset_4bit_probe.py`
+  6. `wdc_addtoinbuf_probe.py`
+  7. `ppc_rldicl_probe.py`
+  8. `mk48_nvram_probe.py` *(discharged/wired in #536)*
+  9. `alpha_tbi_probe.py`
+  10. `lca_badval_probe.py`
+  11. `lca_widewrite_probe.py`
+  12. `lca_isalane_probe.py`
+  13. `artifacts/ip30abortkill/ip30_abort_probe.py`
+
+#### 2. Enumeration of Exemptions Post-#536
+* Wired: `mk48_nvram_probe.py`, `hpcmips_ctor_probe.py` -> `gate_arm.sh:1587-1628`.
+* Re-dated to `2026-09-27`: Exactly **11** (the remaining 11 listed above).
+
+#### 3. Verification of File Disclosure Line Counts (§F, line 374–379)
+Evaluating diffs against `HEAD 3c41f01`:
+* `regress/diff_fbpending_bound.c`: **+5 / -1** non-blank lines (matches brief).
+* `regress/gate_offline.sh`: **+18 / -4** non-blank lines (matches brief).
+* `regress/gate_arm.sh`: **+35 / -0** non-blank lines (+41 total, 6 blank lines; matches brief).
+* `tools/pipeline/check_probe_wiring.py`: **+50 / -22** non-blank lines (matches brief).
+* `regress/selfmutants/fbpending_bound.why`:
+  * Brief claims: `3  0` non-blank lines.
+  * Measured diff: **+2 / -0** non-blank lines (+3 total added lines; line 1 is blank `+`). **[DISCREPANCY]**
+
+---
+
+### Standing Licence: Findings & Required Changes
+
+1. **Precommit Blocking Hazard (Untracked Artifacts):**
+   `check_probe_wiring.staged.py:183-189` registers three files in `MANIFEST`:
+   * `artifacts/wiringcliff/r536_20260918/apply536_gate.py`
+   * `artifacts/wiringcliff/r536_20260918/apply536_exempt.py`
+   * `artifacts/wiringcliff/r536_20260918/apply536_manifest.py`
+   In the working tree, these three files currently exist on disk but are **untracked** in git. When `check_probe_wiring.py` runs inside a git repository, `domain()` queries `git ls-files` and fails with:
+   `FAIL GHOST the MANIFEST names artifacts/wiringcliff/r536_20260918/... and it is NOT COMMITTED OR STAGED`.
+   **Required Change:** All three files under `regress/artifacts/wiringcliff/r536_20260918/` must be staged (`git add`) as part of #536.
+
+2. **File Disclosure Arithmetic Correction:**
+   In §F line 377, update `regress/selfmutants/fbpending_bound.why` from `3 0` to `2 0` non-blank lines (or note 3 total, 2 non-blank).
+
+---
+
+**GO-WITH-CHANGES**

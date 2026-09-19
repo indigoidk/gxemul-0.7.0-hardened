@@ -1,0 +1,74 @@
+I'll start by reading the full pass-2 brief and the session first-stop files so the review is against the packet, not a truncated copy.The brief is complete. Next I’ll check the frozen copies and the helper/probe sources against the inlined claims, not the working tree.Frozen summaries match the brief. Next I’ll open the helper, harness, and both probes to re-derive the load-bearing claims.**VERDICT: RATIFY both diffs' behaviour, with one L4 in #537 that must not ship.** The token rename, the relative `-I../src/devices`, the two `gate_arm.sh` sections, the eleven re-dates, and the derived M5 days are sound against the frozen files and the inlined measurements. Do not commit `gate_offline.sh` while the SM_COVERED comment still says, in the present tense, that this lane does not run.
+
+---
+
+## Q1 — premises
+
+**P1 is true.** Quoted `#include "dev_footbridge.c"` does not find the file in the harness directory (symlink or realpath: `GXEMUL-SEC/regress/` has no such file). The helper’s own `-I` list is `../src`, `../src/include`, `../src/include/thirdparty` — none of those directories contains `dev_footbridge.c`. The EXTRA flag `-I../src/devices` is the first search that does, and it is relative to the helper’s `cd <mirror>/regress`, so it is the mirror’s written copy. The harness being a symlink does not change that: even if gcc takes the realpath of the including file, it still looks in `GXEMUL-SEC/regress/` first, still misses, then walks `-I`. N2 measured the other polarity: absolute `-I$SEC/src/devices` compiles the pristine file in both arms → identical binaries → `SELFMUTANT_SETUP`.
+
+**P2 is true.** `selfmutant.py` runs `[binp]` with no argv. `deep` stays 0, R2 prints `SKIPPED`, IDENTITY uses `IDENT_SHALLOW` (27). The committed mutant is reset-to-0; only R3 moves (seven cases); R4 is `failures == 0` and goes red. L0: `FAIL R4 every case bounded ... 7 row failure(s)`. D0 shallow: 27 rows, `IDENTITY ok`, `FBBOUND_PASS`.
+
+**P3 is true for this mutant, with one honest limit.** Last `-std=` wins, so the lane is `gnu99` like the #442 compile. `-D_POSIX_C_SOURCE` / `-D_DEFAULT_SOURCE` do not touch `pending_timer_interrupts`. `-ffunction-sections -Wl,--gc-sections` is the helper’s documented inert-mutant hazard, but `footbridge_pending()` is reached by the ticks this harness calls; L0 killed the mutant, so it was not discarded. Limit: this is the only lane that links `build/` objects compiled *without* those defines. That is an ABI-layout risk in general. It did not bite here (L0 and D0 both PASS).
+
+**P4 is true as a description, and the skip is the better unnamed member.** With no `build/` objects, `find` is empty (`2>/dev/null`), the pristine arm fails to link, the helper prints `SELFMUTANT_SETUP`, and `selfmutant_one` still demands `SELFMUTANT_OK` → the row reds. The #442 lane `note`s `SKIPPED, not passed` and adds no check. A skip that scores as a pass is vacuous; a red on a machine that never built is noise. The battery always has `build/` after gate 1, so this is not a false-pass hole — but it is an option neither round named (see Q3). Not a floor breach.
+
+**P5 is true.** Expiry runs only in the `CLASS_DETECTOR` arm (`d < today`); the witness arm never reads an EXEMPT date; a non-detector in EXEMPT is `ORPHAN EXEMPTION`. Enumerated staged `EXEMPT` (eleven, all `CLASS_DETECTOR`, all `2026-09-27`):
+
+`fbpending_drain_probe.py`, `wdc_altoffset_probe.py`, `wdc_altoffset_sig_probe.py`, `wdc_altoffset_4bit_probe.py`, `wdc_addtoinbuf_probe.py`, `ppc_rldicl_probe.py`, `alpha_tbi_probe.py`, `lca_badval_probe.py`, `lca_widewrite_probe.py`, `lca_isalane_probe.py`, `artifacts/ip30abortkill/ip30_abort_probe.py`.
+
+Earliest == every date. `PROBEWIRING_SELFTEST_SETUP` fires if any MANIFEST path is missing from live `regress/`; `fresh()` then copies that set, so the earliest-dated detector is in the copy whenever the selftest starts. (M5f is a different mechanism: it *rewrites* one exemption to yesterday and uses the real clock. It does not depend on the 09-27 literals.)
+
+---
+
+## Q2 — weakenings
+
+| | gate 2 | gate_arm.sh | precommit | what reds |
+|---|---|---|---|---|
+| **(a)** unconditional `FBBOUND_PASS` | **FAIL** | n/a | n/a | `selfmutant fbpending_bound: the detector still detects` (`SELFMUTANT_FAIL`: mutant arm has `_PASS`, no `_FAIL`). #442 `^FBBOUND_PASS$` stays 1 — that row goes vacuous. |
+| **(b)** grep `FBBOUND_` | **PASS** on a healthy tree | n/a | n/a | nothing. The #442 verdict row then also matches `FBBOUND_FAIL` (still count 1). Vacuous against a failing harness; the self-mutant lane still uses the helper’s tokens. |
+| **(c)** drop `! -name 'dev_footbridge.o'` | **FAIL** | n/a | n/a | same selfmutant check, via `SELFMUTANT_SETUP`: harness `#include`s the `.c` and the extra `.o` is a second definition of the same globals; link dies on both arms. #442’s own `FBOBJS` still excludes it, so that lane stays green. |
+| **(d)** `failures <= 1` | **PASS** | n/a | n/a | nothing against *this* mutant (seven R3 fails, `7 <= 1` is false, R4 still reds). Blind to a single failure above R4. Coverage debt, not a red. |
+| **(e)** drop `"$PMAX"` | n/a | **FAIL** | n/a (checker does not run the probe) | `mk48 nvram probe completed`. **The parenthetical is false:** the line is `python3 -u mk48_nvram_probe.py "$PMAX" gate`; losing `"$PMAX"` leaves argv `["…/mk48_nvram_probe.py", "gate"]`, so `BIN="gate"`, not the `len(sys.argv) < 2` usage path. `session()` does not catch `FileNotFoundError`; the first spawn dies before any `row()` and before `MK48_WITNESS_DONE`. Same colour, wrong mechanism. |
+| **(f)** M5b from the **latest** date | n/a | n/a | **`--selftest` PASS today** | nothing today: all eleven dates are `2026-09-27`, so latest == earliest. The day those dates span two or more days, latest-based **M5a** runs on a tree whose earliest exemption is already expired (`d < today`) and wants `PROBEWIRING_PASS` — selftest red. That is the frozen-claim-about-a-table-designed-to-change this derivation exists to close, one choice later. Earliest is the right bound because M5a must be a day on which *zero* dated detector exemptions have expired. |
+
+---
+
+## Q3 — option set
+
+Owner rulings stand. Members neither round named:
+
+1. **Skip the new self-mutant call when `find` returns no objects** (P4). Same shape as the #442 lane: a note, no check. Red-when-unbuilt is the member that shipped.
+2. **Teach `selfmutant.py` `WORD_VERDICT=PASS` as well as `WORD_PASS`.** Special-cases the helper for the one deviant; the rename is the house form and L1 already showed the old token cannot pass the pristine arm.
+3. **Print both tokens.** Survives old greps; leaves a second spelling to rot. Rename + the one grep update is the smaller surface (measured: D0 has 0 `FBBOUND_VERDICT` lines).
+4. **Let the eleven expire on 2026-09-20** (hard stop) rather than re-create the cliff on 2026-09-27. Named as a member, not a recommendation — the ruling was one block, one week out.
+5. **Stagger the eleven.** Hides debt behind the first date; the EXEMPT comments already refuse that.
+6. **Relabel an ungated DETECTOR as WITNESS.** The staged file itself calls that a check that cannot fail.
+
+Dual-token and helper-special-case are worse than the rename. Skip-when-unbuilt is the one I would still take.
+
+---
+
+## L4, in-round — do not ship this paragraph
+
+`gate_offline.sh` immediately under the new `SM_COVERED=... fbpending_bound` still says, present tense:
+
+> `fbpending_bound, dated 2026-09-20. ... the SELF-MUTANT LANE DOES NOT RUN YET ... its pristine arm builds in the mirror but does not emit the PASS token`
+
+That is the file’s own “present tense by the very hunk that falsified it” (the comment a few hundred lines above). Code, `SM_EXEMPT`, and the `selfmutant_one` call contradict it. **Wrong record; fix in this round.** Delete or rewrite that paragraph so it states that the lane runs and that `ieee_store:2099-01-01` is the remaining exemption.
+
+Lesser comment miss, not behavioural: the new hpcmips block says the last line (`HPCMIPS_CTOR_PASS` / `_FAIL`) “doubles as the completion sentinel.” The `if` greps `^HPCMIPS_CTOR_RESULT=`, which is the line above and is present on FAIL too. That is the better sentinel; the comment is the thing that’s wrong.
+
+---
+
+## Arithmetic, enumerated (not reasoned)
+
+HEAD DETECTOR exemptions dated 2026-09-20: **13** (the eleven above plus `mk48_nvram_probe.py` and `hpcmips_ctor_probe.py`). After this edit: **11**, all 2026-09-27. mk48 `row()` calls: 8 controls + 6 sibling-offset + `csr rise` + 9 `rt` + 16 `rd` + 16 `wr` + `msg silent` = **57**, and the `for v in` list is those 57 names. hpcmips `for v in`: 3+5+1+5+1+5+6+1+1 = **28**; `EXPECT_ROWS = 28`. `SM_COVERED` is 13 stems; `diff_*.c` is those 13 plus `ieee_store` still in `SM_EXEMPT`.
+
+---
+
+## Else, while checking
+
+- `count` is `grep -ac --` (BRE). `^$v  .*ok$` is a real regex; the two-space pad after `%-16s` is what stops `rd 1ff0` eating `rd 1ff0 obs`. That is load-bearing and it holds.
+- mk48 in `gate_arm.sh` is the same `$PMAX` + guest-session shape the three PCC2 sections already use; the expired “no gate drives mvme187” reason is actually expired.
+- `SC_COVERED` already listed `fbpending_bound` before this round (selfcheck ≠ self-mutant). Not a miss.
+- Pre-existing “Six exemptions remain” comments above the EXEMPT table were already stale at HEAD (13, not 6). This round does not owe a census rewrite; it does owe the one paragraph that this hunk itself falsifies.

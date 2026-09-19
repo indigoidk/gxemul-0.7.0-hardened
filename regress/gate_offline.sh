@@ -1046,7 +1046,29 @@ selfmutant_one diff_diskimage_geom.c  src/disk/diskimage.c   diskimage_geom "mus
 #  selfmutant.py's and the outputs are byte-identical.
 selfmutant_one diff_sh4_tmu.c        src/devices/dev_sh4.c       sh4_tmu    "boundary"
 selfmutant_one diff_rtc_range.c      src/devices/dev_rtc.c       rtc_range  "2^32: timer NOT removed"
-' ' ') -lm -L/usr/X11R6/lib -lX11"
+#  #537 (owner: fix it, do not re-date): fbpending_bound's lane.  One thing kept it out since #442,
+#  and one thing its call needs.
+#  (1) selfmutant.py reads a verdict only as `<WORD>_PASS'/`<WORD>_FAIL', which this harness's
+#  `FBBOUND_VERDICT=PASS' could never match -- it now prints the house form FBBOUND_PASS/_FAIL, and
+#  the #442 verdict row further down greps that (the fix shape `fbsmlane' named on 2026-08-27).
+#  (2) it is the one harness that links build/ objects instead of compiling standalone, so the
+#  flags carry them.
+#  The -I paths are RELATIVE on purpose: the lane builds in `<mirror>/regress', so ../src/devices
+#  is the MIRROR's copy of dev_footbridge.c -- the mutated one.  An absolute -I to GXEMUL-SEC would
+#  compile the PRISTINE copy in both arms; selfmutant.py's binary-identity check then reports SETUP,
+#  so the row reds rather than lies -- but the lane would never test anything.
+#  The stray line that stood below the rtc_range call since #442, `' ' ') -lm ... -lX11"', opened a
+#  quote that ran to the apostrophe in "run.sh's" six lines later and executed a command named ' '
+#  on every run (`command not found', rc 127; harmless under set -u, but a fragment, not code).
+#  THE PIN IS R3, CASE-QUALIFIED -- not the aggregate R4 #442 added for it.  R4 is `failures == 0`,
+#  VERDICT-EQUIVALENT: blind R3 while tightening R1 and an R4 pin stays OK (Opus seat, #537 pass 2),
+#  certifying only that SOME row kills.  selfmutant.py matches the pin anywhere in the printed line,
+#  so R3's row for one case -- R3 prints once per case -- names exactly one row (codex, #537 F2 pass).
+#  The pin spans the harness's row-name padding (8 spaces): one space fewer and the helper SETUPs,
+#  so drift is loud, not silent (measured, Opus seat, #537 F2 pass:
+#  regress/artifacts/fbsmlane/r537_20260918/opus5_f2/f2pin_SUMMARY.txt).
+selfmutant_one diff_fbpending_bound.c src/devices/dev_footbridge.c fbpending_bound "R3 the reset still owes one interrupt        cats, slowest legal" \
+    "-std=gnu99 -I../src/include -I../src/include/thirdparty -I../src/devices $(find "$SEC/../build/src" -name '*.o' ! -name 'main.o' ! -name 'dev_footbridge.o' 2>/dev/null | sort | tr '\n' ' ') -L/usr/X11R6/lib -lX11"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -1060,28 +1082,30 @@ selfmutant_one diff_rtc_range.c      src/devices/dev_rtc.c       rtc_range  "2^3
 #  Filed as `selfmutant6` -- doing them silently in this round would break the
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
-SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom sh4_tmu rtc_range"
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound"
 #  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
-#  deadline nobody owns, and this gate goes RED on that date whether or not the work is done.
-#  fbpending_bound, dated 2026-09-20.  *** THE HARNESS HAS A FAILABILITY CONTROL -- its
-#  @@SELFCHECK@@ block is present and the SC manifest covers it -- but the SELF-MUTANT LANE
-#  DOES NOT RUN YET, and the two catch different failures, so this is a real gap and not a
-#  formality. ***  The lane builds in a MIRRORED tree and this harness is the only one that
-#  links against ~221 build objects rather than compiling standalone; its pristine arm builds
-#  in the mirror but does not emit the PASS token, and finding out why is its own piece of
-#  work rather than a flag.
+#  deadline nobody owns, and this gate goes RED the day after that date (the comparison is a strict
+#  `<`) whether or not the work is done.
+#  fbpending_bound's exemption, dated 2026-09-20, is DISCHARGED by #537 -- its lane runs above.
+#  This paragraph said the SELF-MUTANT LANE "DOES NOT RUN YET" because its pristine arm "does not
+#  emit the PASS token", with the reason left as its own piece of work.  The reason was the token:
+#  the harness printed `FBBOUND_VERDICT=PASS` where selfmutant.py reads `<WORD>_PASS` (found as
+#  `fbsmlane`, 2026-08-27), so no run of it could pass.  The @@SELFCHECK@@ control was always live;
+#  the two catch different failures, which is why the missing one was a real gap.
 #
-#  WHAT IS NOT MISSING, so the exemption is not read as "untested": the mutants were built and
-#  run by hand against the tracked tree on 2026-08-20, and every one is killed by a named row.
+#  THE FOUR MUTANTS MEASURED BY HAND against the tracked tree on 2026-08-20, each killed by a named
+#  row -- the lane automates the second one, pinned on the R3 row it is designed to kill (see the
+#  pin's own comment above).  Still a liveness control, as this file says of the whole lane, not a
+#  census:
 #    pre-fix          FAIL R1 x7 and R2 with trough -2147483648 (the overflow itself)
 #    reset to 0       FAIL R3 x7   (R1 stays green -- the bound still works, only the debt)
 #    one callback     FAIL R1 x7
 #    no ceiling       FAIL R1 on the two high-emulated_hz cases; R2 peak 2147483647
 #  The `.old`/`.new`/`.why` fragments are committed and describe exactly that, so the lane is
 #  a wiring job, not a design one.
-SM_EXEMPT="ieee_store:2099-01-01 fbpending_bound:2026-09-20"
+SM_EXEMPT="ieee_store:2099-01-01"   # #537: fbpending_bound moved to SM_COVERED
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}
@@ -1112,8 +1136,10 @@ check "selfmutant manifest: every COVERED stem has a real selfmutant_one call" \
       "${sm_unbacked:-none}" "none"
 #  ieee_store carries a far-future date because GATE 3 covers it -- against TOTAL comparator
 #  death only, and by the vacuity-prone `grep -c PASS == 0` form this helper was written to
-#  avoid, so it is a weaker exemption than it looks.  The other five are uncovered debt with
-#  real deadlines.
+#  avoid, so it is a weaker exemption than it looks.  The other five -- sh4_tmu, wdc_identify,
+#  diskimage_io, diskimage_geom, diskimage_parse -- WERE uncovered debt with real deadlines; all five
+#  were discharged by 6014b7e (2026-08-19).  fbpending_bound, added by #442 the next day, was
+#  discharged by #537, so ieee_store is the only entry left.
 #
 #  DATED ENTRIES, NOT A COUNT.  The first version asserted `wc -w == 6` under a row named
 #  "6, shrinking not growing" -- and a seat measured that SHRINKING IT IS RED (got=5 want=6),
@@ -1272,7 +1298,7 @@ else
         #  pins that R2 actually ran.
         "$FBBIN" 2147487744 > "$FBLOG" 2>&1
         sed 's/^/       /' "$FBLOG" | tail -20
-        check "fbpending bound: offline verdict" "$(grep -c 'FBBOUND_VERDICT=PASS' "$FBLOG")" "1"
+        check "fbpending bound: offline verdict" "$(grep -c '^FBBOUND_PASS$' "$FBLOG")" "1"
         check "fbpending bound: R2 actually ran (not SKIPPED)"               "$(grep -c 'R2 no signed overflow.*direct ticks' "$FBLOG")" "1"
         check_min "fbpending bound: rows actually run"               "$(grep -cE '^  (ok|FAIL) ' "$FBLOG")" 15
     fi

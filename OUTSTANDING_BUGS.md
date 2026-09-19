@@ -6937,7 +6937,7 @@ Two footbridge counters cross the SIGALRM boundary as plain `int` (#442 added th
 both conventions for one hazard.** Nothing hoists today at -O3 because `random()` is a compiler
 barrier — which is luck, not design, since the fix does not control that call.
 
-### `fbsmlane` — held
+### `fbsmlane` — RESOLVED by `#537` (2026-09-18): the lane runs, pinned on R3 -- see the dated block at the end
 The `fbpending_bound` self-mutant lane does not run; shipped as a dated `SM_EXEMPT` (2026-09-20)
 rather than left red, because a registered-but-broken lane reports SETUP forever and trains the
 reader to ignore it. **Not untested:** the harness carries its own `@@SELFCHECK@@` control, and all
@@ -21877,3 +21877,40 @@ GETENV length exceeds 8 -- an edit of `a3` from 16 to 4 would turn the row into 
 check_commit_attribution.py's CLOSURE regex matches the adjective in 'closing verdict'; 8bd97e4's subject made
 section L go HARD for every later commit (worked around via lcaisalane.reopened).  A checker fix owes two
 negative controls, so it is filed for the checker's owner.
+
+## 2026-09-18 (night) — `#537` and `#536`: the fbpending_bound lane runs; two probes wired, eleven exemptions re-dated
+
+### `fbsmlane` -> `#537` (closed): the lane runs, pinned on R3
+`diff_fbpending_bound.c` printed `FBBOUND_VERDICT=PASS`, which `selfmutant.py`'s `<WORD>_PASS` can never read, so the
+lane could only SETUP.  Now it prints `FBBOUND_PASS`/`_FAIL`, gate 2 greps `^FBBOUND_PASS$`, and the lane runs.  **The pin
+`#442` built for it (R4, the aggregate) was verdict-equivalent**, and its premise -- that R1/R3 cannot be pinned -- was
+false.  It now pins R3's `cats, slowest legal` row.  Gate 2 on 2026-09-18: 345/346, the lane row green; the one red is
+`scexempt`, below.
+
+### `wiringcliff` / `exemptcliff` -> `#536`: two wired, eleven re-dated to 2026-09-27 by owner ruling
+`mk48_nvram_probe.py` and `hpcmips_ctor_probe.py` now run in `gate_arm.sh`.  The other eleven exemptions **fall due as ONE
+block again on 2026-09-28** -- valid on the 27th, red from the 28th -- so both rows stay open.  The selftest's M5 days are
+derived from the table now, and M5a runs ON the stamped date.
+
+### `scexempt` (MED) — gate 2's SC_EXEMPT expired 2026-09-02 with no owner; re-dated to 2026-09-27, returns 2026-09-28
+`ieee_store` and `wdc_identify` are exempt from the SELFCHECK comparator control.  Both dates passed on 2026-09-02, so
+gate 2's "no exemption is past its dated deadline" row went red from 2026-09-03.  The first run to observe that red was
+2026-09-18, because the weekly battery was disabled.  The owner ruled a re-date to 2026-09-27 in its own commit.  The
+debts are unchanged: `ieee_store` has no comparator by design, and `wdc_identify` needs its nine row functions moved onto
+one.  Decide before 2026-09-28.
+
+### `fbnobuild` (LOW) — no build/ objects: the #442 lane `note`s to PASS, #537's lane reds under the wrong row name
+Fix shape: `degrade()` in both lanes, and truncate `diff_fbpending_bound.log` before the #442 lane, with two negative
+controls.  The row also carries F14's freshness clause and the stray `regress/dev_footbridge.c`, which the two lanes
+would treat differently.
+
+### `hpcmipsc2` (LOW) — hpcmips C2's unrelated-abort control is mvme1600's live PCI defect
+Fixing mvme1600 turns the newly gated C2 red.  Re-base it on a synthetic abort; row F3 already has one.
+
+### `exemptcal` (LOW) — the checker's DATE_RE accepts 2026-09-99
+Production compares the date strings, so an impossible date passes.  The selftest's `fromisoformat()` would crash on
+such a date instead of reporting it.  Validate exemption dates as calendar dates.
+
+### `m5dayb` (LOW, optional) — a 23rd selftest case, M5a0, the day before the stamped date
+It would restore deterministic `!=` detection on the stamped date itself.  fable5 ruled it optional, not owed.  The
+measured matrix is in `regress/artifacts/fbsmlane/r537_20260918/opus5_f2/f2_matrix.txt`.
