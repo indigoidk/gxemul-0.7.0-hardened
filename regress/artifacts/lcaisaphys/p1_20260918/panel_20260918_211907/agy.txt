@@ -1,0 +1,147 @@
+VERDICT: GO -- two-token addition (`CACHE_NONE | PHYSICAL`) in [`dev_lca_isa_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L275-L312) is the minimal, correct fix; verified against source tree at commit `e0be9b2`.
+
+---
+
+## 1. Enumeration of Arithmetic Claims in the Brief
+
+Every arithmetic assertion stated in [`brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md) was re-derived and audited:
+
+1. **Sparse Address Stride / Port Offset ([§2, line 34](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L34)):** `relative_addr >>= 5` decodes each 32-byte sparse ISA cycle into a 16-bit ISA port ($2^5 = 32$ bytes/port). Verified in [`dev_lca.c:280`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L280).
+2. **Buffer Lane Selection ([§2, line 38](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L38)):** `ofs = (relative_addr & 3) % len`. For byte accesses (`len == 1`), `(port & 3) % 1 = 0`. For quadword accesses (`len == 8`), `ofs = port & 3`. Refuses `len == 0` before the modulo ([`dev_lca.c:295-297`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L295-L297)).
+3. **Internal Base Arithmetic ([§2, lines 56–57](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L56-L57)):**
+   $$\text{LCA\_ISA\_BASE} = \text{LCA\_PCI\_SIO} + \text{0x10000000} = \text{0x1c0000000} + \text{0x10000000} = \text{0x1d0000000}$$
+   Verified against [`dev_lca.c:47`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L47).
+4. **Physical Address Bitmask ([§2, lines 74, 77](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L74)):** `vaddr & 0x000003ffffffffffULL` extracts the 42-bit physical address space ($2^{42} = 4\text{ TB}$). Verified in [`memory_alpha.c:63, 74`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L63).
+5. **L1 Page Table Frame Number (PFN) ([§3, lines 91–92](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L91-L92)):**
+   $$\text{PFN} = \text{P\_ZERO} \gg \text{PAGESHIFT} = \text{0x01050000} \gg 13 = \text{0x828} \quad (2088_{10})$$
+   $$\text{0x828} \ll 13 = \text{0x1050000}$$
+   Verified against [`lca_isaphys_probe.py:108, 115`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py#L108). The earlier spec draft claim of `0x20a0` was a right-shift by 11 ($0x01050000 \gg 11 = 0x20a0$), which would point past RAM ($0x4140000 > 64\text{ MB}$).
+6. **UART LSR Target Address ([§3, line 108](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L108)):**
+   $$\text{LCA\_ISA\_BASE} + \text{0x3fd} = \text{0x1d0000000} + \text{0x3fd} = \text{0x1d00003fd}$$
+   Sparse outer address: $\text{0x1c0000000} + (\text{0x3fd} \ll 5) = \text{0x1c0000000} + \text{0x7fa0} = \text{0x1c0007fa0}$.
+7. **UART SCR Target Address ([§3, line 109](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L109)):**
+   $$\text{LCA\_ISA\_BASE} + \text{0x3ff} = \text{0x1d0000000} + \text{0x3ff} = \text{0x1d00003ff}$$
+8. **Witness Row Tally ([§3, lines 97–112](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L97-L112)):**
+   Total rows: 13.
+   Controls (rows 1–8) + identity row (row 13) = $8 + 1 = 9$ green rows on committed build.
+   Defect rows (rows 9–12) = 4 red rows.
+   Score on committed build: $9/13$. Post-fix score: $13/13$.
+9. **Census of `memory_rw` calls passing `PHYSICAL` ([§4, lines 130–137](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_211907/brief_sent.md#L130-L137)):**
+   $38 \text{ (NO\_EXCEPTIONS | PHYSICAL)} + 16 \text{ (bare PHYSICAL)} + 2 \text{ (CACHE\_NONE | PHYSICAL)} = 56 \text{ calls}$ across 17 files.
+
+---
+
+## 2. Claim-by-Claim Verification with `file:line` Evidence
+
+### §1. Tree State and Shipped Checks
+- **Git Commit:** Head is `e0be9b2ab8d60ac9e09464b5fee1127fa85a7817`.
+- **Last Commit touching `dev_lca.c`:** Commit `8bd97e4d1fcd` (`#530 lcaisalane`), confirmed via `git log -1 -- src/devices/dev_lca.c`.
+- **CHANGELOG:** `grep lcaisaphys CHANGELOG.md` yields exit code 1 (no match).
+- **Witness Status:** [`regress/lca_isaphys_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py) is present as an untracked file (`??`).
+
+### §2. The Defect and Mechanics
+- In [`dev_lca.c:301-306`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L301-L306):
+  ```c
+  if (writeflag == MEM_WRITE) {
+      byte = data[ofs];
+      return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+          relative_addr, &byte, 1, writeflag, CACHE_NONE);
+  }
+  cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+      &byte, 1, MEM_READ, CACHE_NONE);
+  ```
+  Both calls pass `CACHE_NONE` with no `PHYSICAL` flag.
+- In [`memory_rw.c:245-253`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L245-L253):
+  Because `misc_flags & PHYSICAL` is false and `cpu->translate_v2p` is set for Alpha, execution enters the `else` branch and invokes `cpu->translate_v2p(cpu, vaddr, &paddr, ...)`.
+- In [`memory_alpha.c:62-91`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L62-L91):
+  - K0SEG addresses (`0xfffffc0000000000` to `0xfffffdffffffffff`) are direct-mapped.
+  - When `base == 0` (`apcb_ptbr == 0`), the identity hack maps `vaddr` directly to `paddr`.
+  - When `base != 0`, `0x1d0000000 + relative_addr` is not in K0SEG, so it enters the 3-level page table walk ([`memory_alpha.c:96-188`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L96-L188)).
+  - Any invalid PTE terminates at `not_found` ([`memory_alpha.c:192-199`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L192-L199)), printing:
+    `[ alpha_translate_v2p: 0x00000001d00003fd wasn't found ]`
+    and returning 0 (`MEMORY_ACCESS_FAILED`).
+- In [`memory_rw.c:259-269`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L259-L269):
+  When `translate_v2p` returns 0, on `MEM_READ` it zeroes the caller's buffer (`memset(data, 0, len)`) and returns `MEMORY_ACCESS_FAILED`.
+- In [`dev_lca.c:305-312`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L305-L312):
+  The read arm ignores the `memory_rw` return code, formats `data[ofs] = 0x00`, and returns 1 (false success). The write arm returns `MEMORY_ACCESS_FAILED` and drops the store.
+
+### §3. The Witness Verification
+- Measured results in [`lca_isaphys_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py) match the 13 table rows exactly.
+- Rows 1–8 and 13 are green. Rows 9–12 are red on the unpatched build.
+- `LCAISAPHYS_CONTROL=DEAD` guard ([`lca_isaphys_probe.py:262-268`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py#L262-L268)) protects rows 2–7.
+
+### §4. Precedent Census Audit
+A full AST/token audit of all `memory_rw` invocations in `GXEMUL-SEC/src/devices/*.c` confirmed:
+- Total calls passing `PHYSICAL`: **56** across **17** files.
+  - `NO_EXCEPTIONS | PHYSICAL` / `PHYSICAL | NO_EXCEPTIONS`: **38 calls** in 10 files ([`dev_dreamcast_maple.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c) 12, [`dev_dec21143.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dec21143.c) 9, [`dev_pvr.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pvr.c) 3, [`dev_sgi_re.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c) 3, [`dev_jazz.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c) 2, [`dev_px.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_px.c) 2, [`dev_scc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_scc.c) 2, [`dev_sgi_gbe.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_gbe.c) 2, [`dev_ssc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ssc.c) 2, [`dev_luna88k.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c) 1).
+  - Bare `PHYSICAL`: **16 calls** in 6 files ([`dev_sgi_mec.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c) 7, [`dev_pccmos.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pccmos.c) 3, [`dev_sh4.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c) 2, [`dev_ps2_spd.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_spd.c) 2, [`dev_dreamcast_gdrom.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c) 1, [`dev_ram.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c) 1).
+  - `CACHE_NONE | PHYSICAL`: **2 calls** in 1 file ([`dev_ps2_stuff.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_stuff.c) 2).
+
+### §4. RAM-Path Conditions Verification
+In [`memory_rw.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c):
+- `cache` is referenced only at lines 252 (inside `else` of `misc_flags & PHYSICAL`), 610/620/646/698 (`MEM_MIPS` / `MEM_M88K` only), and lines 748, 758 (RAM path).
+- Any address in the `LCA_ISA_BASE` window ($0x1d0000000$) matches the registered ISA device range in [`memory_rw.c:480`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L480) and exits via `goto do_return_ok` at line 626.
+- Any unmapped port in the window exceeds `mem->physical_max` ($64\text{ MB}$) at line 663 and exits via `goto do_return_ok` at line 712.
+- The RAM path (lines 717–785) is **never reached**. Thus, `CACHE_NONE | PHYSICAL` and bare `PHYSICAL` are strictly identical in machine behavior for this access.
+
+---
+
+## 3. Adversarial Review of Section 6 Questions
+
+### Q1. Premise Audit
+1. **Could the nested address legitimately be virtual?**
+   **No.** The nested address is synthesized entirely within the emulator by adding `LCA_ISA_BASE = 0x1d0000000` to the decoded 16-bit ISA port ([`dev_lca.c:47, 301, 305`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L47)). ISA devices (`ns16550`, `i8042`, `mc146818`, etc.) are registered in physical memory at `0x1d0000000` by [`bus_isa_init`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L568-L570). A guest never requests `0x1d0000000`; it requests a sparse cycle at `0x1c0000000 + (port << 5)`. Handing `0x1d0000000` to virtual translation looks up an unmapped 33-bit user VA in the guest's page table.
+2. **Does any other device forward with a missing `PHYSICAL`?**
+   **No.** Across all of `src/devices/*.c`, only 3 `memory_rw` calls omit `PHYSICAL`: the two in [`dev_lca.c:301, 305`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L301), and one in `dev_ether.c:188` (which handles guest-provided buffer DMA pointers, not internal device-to-device MMIO forwards). `dev_lca.c` is the sole device performing nested MMIO bridge forwarding without `PHYSICAL`.
+3. **Severity Assessment (MED vs HIGH):**
+   **HIGH.** While localized to the LCA chipset (AlphaBook1, Noname/AXPpci33), the failure renders the entire ISA bus completely dead the moment any guest OS boots and arms paging via `CALL_PAL swpctx`. Console serial, keyboard, mouse, and RTC fail, while unlatched `fatal()` messages flood host stderr on every guest port poll. For the affected machines, it is fatal to OS execution.
+
+### Q2. Candidate Weakenings Evaluation
+- **(a) `PHYSICAL` on WRITE call only:**
+  - *Equivalence:* **DIFFERENT.**
+  - *First divergence:* First sparse read after paging arm (row 9, `UART_LSR` at port `0x3fd`).
+  - *Outcome:* Row 9 (`sp lsr`) FAILS (returns false 0x00); Row 11 (`r miss`) FAILS (translator prints miss). Rows 10 and 12 are green. Score: 11/13.
+- **(b) `PHYSICAL` on READ call only:**
+  - *Equivalence:* **DIFFERENT.**
+  - *First divergence:* First sparse write after paging arm (row 10, `UART_SCR` at port `0x3ff`).
+  - *Outcome:* Row 10 (`w lands`) FAILS (scratch register not updated); Row 12 (`w miss`) FAILS (miss message printed). Rows 9 and 11 are green. Score: 11/13.
+- **(c) `NO_EXCEPTIONS | PHYSICAL` on both:**
+  - *Equivalence:* **DIFFERENT (Catastrophic Regression).**
+  - *First divergence:* Row 2 (`live`, 8042 self-test write to `SP(KBC_CMD)` before arming).
+  - *Outcome:* In [`memory_rw.c:584`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L584), device access is guarded by `if (!no_exceptions || (mem->devices[i].flags & DM_READS_HAVE_NO_SIDE_EFFECTS))`. ISA devices are registered with `DM_DEFAULT` (0). Passing `NO_EXCEPTIONS` causes device handlers to be skipped entirely. Row 2 fails to get `0x55`, tripping the `CONTROL=DEAD` guard. Score: 0/0 (`LCAISAPHYS_CONTROL=DEAD`).
+- **(d) Bare `PHYSICAL` (dropping `CACHE_NONE`) on both:**
+  - *Equivalence:* **EQUIVALENT.**
+  - *First divergence:* None.
+  - *Outcome:* As proven in §2 above, `cache` is never inspected on any path reachable by an ISA device address. Leaves all 13 rows green (13/13). The proposal retains `CACHE_NONE` purely as the minimal 1-token-per-site delta.
+- **(e) `PHYSICAL` only when `relative_addr < 0x200`:**
+  - *Equivalence:* **DIFFERENT.**
+  - *First divergence:* Row 9 (port `0x3fd >= 0x200`).
+  - *Outcome:* Standard ISA peripherals live at ports $\ge 0x200$ (COM1 at $0x3f8$, COM2 at $0x2f8$, LPT at $0x378$, floppy at $0x3f0$). Leaves defect rows 9–12 RED. Score: 9/13.
+
+### Q3. Option-Set Completeness
+- Option (1) (`CACHE_NONE | PHYSICAL` on the two calls) is the smallest, least invasive, and strictly correct fix.
+- Option (2) (Direct device callback) requires bypassing the memory bus infrastructure and reimplementing device lookup inside `dev_lca.c`.
+- Option (3) (Registering ISA devices directly at sparse strides) breaks the architecture of `bus_isa.c`, which assumes standard contiguous ISA port mapping.
+- Option (4) (Synthesizing K0SEG addresses) leaks CPU segmentation concepts into PCI/ISA bridge code and needlessly invokes translation.
+Option (1) is the only clean and minimal option.
+
+### Q4. Witness Audit
+1. **Control Claims:**
+   - `alive`: verifies host survives without abort.
+   - `live`: verifies end-to-end sparse window forwarding and device response while `ptbr == 0`.
+   - `flat lsr`: verifies UART hardware is alive at physical `0x1d00003fd` via flat mapping.
+   - `ram plant`: verifies physical RAM backing under identity mapping.
+   - `ptbr miss`: verifies that after `swpctx`, raw virtual addresses walk the page table and miss.
+   - `ptbr sent`: verifies walking load fails to complete into destination register.
+   - `pte2 todo`: verifies the walk aborted at level 1 without hitting unhandled PTE2 logic.
+2. **`CONTROL=DEAD` Guard:**
+   Sound and necessary. A broken `swpctx` or failed paging setup would leave identity mapping active, causing the defect rows to falsely pass on an unpatched binary. The guard prevents false green reporting.
+3. **Independence from K0SEG:**
+   Outer K0SEG translation cannot cause the defect. [`memory_alpha.c:62-65`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L62-L65) direct-maps K0SEG before checking `ptbr`. Row 8 (`sp lsr ans`) proves the outer access successfully executed and returned, and the printed error address `0x00000001d00003fd` proves the inner address was generated by `lca_isa` and passed to `memory_rw`.
+
+### Additional Finding
+In [`dev_lca.c:305-312`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L305-L312), the read arm does not check the return value of `cpu->memory_rw` and always returns 1, while the write arm propagates the return value. While harmless with `PHYSICAL` in place (valid ISA devices return success), it explains why read misses returned silent zeroes with false success. Furthermore, the missing translation in [`memory_alpha.c:197`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L197) is completely unlatched, which caused the observed message flood.
+
+---
+
+VERDICT: GO

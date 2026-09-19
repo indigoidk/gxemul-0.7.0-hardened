@@ -1,0 +1,31 @@
+VERDICT: 2 -- DECLINE silently (return 0) is the correct fix; it fails the translation cleanly, leaves the destination register unchanged per the tree’s existing Alpha idiom, and avoids member 4’s bogus physical-address mapping.
+
+**Q1 — Premises**  
+- READ: The code contains `if (vaddr == 0xfffffffd80000000ULL) { fatal(...); exit(1); }` in the `base == 0` arm.  
+- REASONED: Whether `0xfffffffd80000000` is inside NetBSD/alpha’s self-mapped page table cannot be settled from the packet. The brief gives VPT base `0xfffffffc00000000` but no range; the address is higher by `0x1_8000_0000`, so it may be within the VPT window, but this is not checkable here.  
+- REASONED: Member 4 (drop only `exit(1)`, keep identity) maps to paddr `0x3fd80000000`, far past RAM and with no device. A load/store to that paddr would likely return zero or a bus failure, silently succeeding at the translation layer and handing the guest wrong data. A decline (`return 0`) is better: `memory_rw` zeroes a read buffer and returns `MEMORY_ACCESS_FAILED`; load/store aborts and leaves the destination unchanged. That matches the existing failed-translation contract.
+
+**Q2 — Member comparison**  
+- **1 DELETE block**: Effectively ACCEPT — identity mapping remains, `return 2`. Load/store attempt bogus paddr; no host death but wrong translation. I-fetch fetches from bogus paddr.  
+- **2 DECLINE silently (`return 0`)**: Load/store: translation fails → buffer zeroed / access abandoned, dest unchanged. I-fetch: translation fails → `cpu_dyntrans` re-looks-up, second failure → fatal at `:729-733` (still dies until `alphaifetchkill` fixed). Witness: `alive` survives, `continued` executes next instruction; I-fetch at this VA still dies.  
+- **3 DECLINE + LATCHED ANNOUNCE**: Same as 2, plus a one-time message. Witness: same, with message.  
+- **4 ACCEPT (drop `exit(1)` only)**: Identity mapping to nonexistent paddr; load/store silently wrong; I-fetch fetches garbage.  
+- **5 FAULT**: Not available on Alpha.  
+- **6 BACKED ACCEPT**: Not sufficiently specified in the packet to evaluate.  
+- **7 IMPLEMENT kernel VM**: Out of scope.  
+
+Member 2 is the minimal correct choice; it is consistent with the tree’s `#215` idiom (abandon access, leave dest unchanged, print once per miss). Member 3 adds a latch but is not required by the existing pattern.
+
+**Q3 — Second residue**  
+The `fatal("AYONA3\n")` on the walk path is the same vaddr, same semantic class (unconditional host kill on translation), same detector (witness can be extended to `ptbr != 0`), and no new oracle. It joins this round under the reopening rule. The current witness only covers `ptbr == 0`; a new test must exercise the walk path.
+
+**Q4 — Witness**  
+The controls `live` and `hwrpb sig` prove the `base == 0` arm and HWRPB remap work, so the death after `alive` is attributable to the defect. The kill’s own text is a sufficient attribution guard because it is unique to this site. Rows the detector will owe after choosing member 2:  
+- load (already covered)  
+- store (new)  
+- I-fetch (disclosed to `alphaifetchkill`)  
+- destination value under chosen member (unchanged for load/store)  
+- latch firing once (only if member 3 is chosen).
+
+**Q5 — Order of rounds**  
+`alphaifetchkill` should go first. If it goes first, it fixes the generic I-fetch translation-failure kill, so this round’s I-fetch cell is already resolved by that row; this round then only needs load/store cells. If this round goes first, the I-fetch cell remains open and the witness would still show host death on an I-fetch at this VA until `alphaifetchkill` lands. Measurable consequence: after `alphaifetchkill`, an I-fetch at `0xfffffffd80000000` survives; before it, the same I-fetch kills the host.

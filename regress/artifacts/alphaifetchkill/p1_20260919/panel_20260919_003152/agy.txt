@@ -1,0 +1,128 @@
+VERDICT: e -- GO-WITH-CHANGES: Option (e) must add an immediate check and return in `run_instr` when `!cpu->running`, otherwise the unrolled loop spins on `nothing_call` and epilogue `low_pc` recalculation clobbers `cpu->pc`.
+
+***
+
+## 1. Verification of Cited Claims Against Source (`GXEMUL-SEC/src/`)
+
+Every cited fact and line reference from [brief_sent.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_003152/brief_sent.md) was verified against the repository under `GXEMUL-SEC`:
+
+| Brief Claim | Source Location | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- |
+| **HEAD commit `cdbe7d7`** | `git log -1` | **VERIFIED** | HEAD is `cdbe7d75735ae3836635d91d70819a09f564fd1a` (`#537 fbsmlane`). |
+| **`cpu_dyntrans.c` last commit `de1398e`** | `git log -1 -- src/cpus/cpu_dyntrans.c` | **VERIFIED** | Commit `de1398e1aa8a08a70dccd7725b4e968a9f9b1296` ("Hardening/fidelity/debuggability rounds 17–25 (#155–#250)"). |
+| **`alphaifetchkill` not in CHANGELOG** | `git grep -c "alphaifetchkill" CHANGELOG.md` | **VERIFIED** | 0 matches (exit code 1). |
+| **Rung 3 witness artifact** | [RESULT.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphaifetchkill/witness_HEAD_20260918/RESULT.out#L11-L16), [transcript_B.txt](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphaifetchkill/witness_HEAD_20260918/transcript_B.txt#L72-L76) | **VERIFIED** | Armed PCB swpctx, sentinel `t2=0xbad1d8a` kept, `JMP` to raw VA `0x1044000` produces two `[ alpha_translate_v2p: 0x0000000001044000 wasn't found ]` lines, followed by `FATAL: could not find physical address of the exception handler?quit` and exit status `wait=256` (`WEXITSTATUS == 1`). |
+| **`DYNTRANS_PC_TO_POINTERS_GENERIC` entry** | [`cpu_dyntrans.c:622`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L622) | **VERIFIED** | `void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)` starts at line 622. |
+| **Exception handler retry & fatal exit** | [`cpu_dyntrans.c:685-733`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L685-L733) | **VERIFIED** | Lines 720–723 retry translation with `cpu->translate_v2p(cpu, cpu->pc, &paddr, FLAG_INSTR)`. Lines 729–733 execute `fatal(...)` and `exit(1)`. |
+| **Falling through to `physaddr = paddr`** | [`cpu_dyntrans.c:736`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L736) | **VERIFIED** | `physaddr = paddr;` follows immediately after the `!ok` block; `paddr` is uninitialized stack garbage if both lookups fail. |
+| **Setting `cur_ic_page` and `next_ic`** | [`cpu_dyntrans.c:830-833`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L830-L833) | **VERIFIED** | Sets `cur_ic_page = &ppp->ics[0];` and `next_ic = cur_ic_page + DYNTRANS_PC_TO_IC_ENTRY(cached_pc);`. |
+| **Alpha translation walk TODOs** | [`memory_alpha.c:120-128`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L120-L128) | **VERIFIED** | Level 1/2/3 invalid checks contain TODO comments regarding Access Violation / Translation Not Valid faults, followed by `goto not_found;`. |
+| **Alpha `not_found` returns 0 without moving PC** | [`memory_alpha.c:192-199`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L192-L199) | **VERIFIED** | Prints `fatal("[ alpha_translate_v2p: 0x... wasn't found ]\n", vaddr);` and returns 0 without touching [`cpu->pc`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L698). |
+| **Run loop dereferences `next_ic` without checking `running`** | [`cpu_dyntrans.c:114`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L114), [`cpu_dyntrans.c:190`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L190) | **VERIFIED** | [`DYNTRANS_RUN_INSTR_DEF`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L177) calls `DYNTRANS_PC_TO_POINTERS(cpu);` at line 190, and never checks `cpu->running` before macro `I` (`ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic);`). |
+| **Unimplemented instruction stop precedent** | [`cpu_dyntrans.c:2002-2024`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L2002-L2024) | **VERIFIED** | Sets `about_to_enter_single_step = true; cpu->running = 0; debugger_reset(); ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call; cpu->cd.DYNTRANS_ARCH.next_ic ++;`. |
+| **Accounting reset & epilogue PC sync** | [`cpu_dyntrans.c:267`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L267), [`cpu_dyntrans.c:394-406`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L394-L406) | **VERIFIED** | `cpu->n_translated_instrs = 0;` at line 267; lines 394–401 calculate `low_pc = (next_ic - cur_ic_page) / sizeof(...)` and reconstruct `cpu->pc`. |
+
+***
+
+## 2. Adversarial Review of Brief Questions (Section 4)
+
+### Q1: Audit of Premises
+
+#### 1. "Is it true that NO other architecture in this tree can reach `:729-733` today?"
+**PREMISE IS FALSE.**
+The brief asserts: *"MIPS, ARM, PPC and SH move the PC to a real handler before returning, so they get past the retry."* This assumes the exception vector translation always succeeds. A full audit of all architecture translators reveals:
+- **Alpha** ([`memory_alpha.c:43`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L43) [`alpha_translate_v2p`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L43)): Unconditionally hits `:729-733` on every instruction translation miss because `cpu->pc` is unchanged, forcing an identical second failure.
+- **ARM** ([`memory_arm.c:114`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L114) [`arm_translate_v2p_mmu`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L114)): On failure, calls [`arm_exception(cpu, ARM_EXCEPTION_PREF_ABT)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L269), setting `cpu->pc = 0x0000000c` (or `0xffff000c`) ([`cpu_arm.c:731`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L731)). **If the vector page itself is unmapped** (e.g. L1 descriptor `& 3 == 0` at [`memory_arm.c:157`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L157)), the retry translation at [`cpu_dyntrans.c:721`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L721) **fails again and reaches `:729-733`**.
+- **PowerPC** ([`memory_ppc.c:245`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L245) [`ppc_translate_v2p`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L245)): Calls [`ppc_exception`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L318) ([`memory_ppc.c:322`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L322)), setting `cpu->pc = 0x400` ([`cpu_ppc.c:337`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L337)). However, [`ppc_exception`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L335) **does NOT clear `PPC_MSR_IR`**. If `0x400` is unmapped in BATs and page table, the retry translation fails and **reaches `:729-733`**.
+- **SuperH** ([`memory_sh.c:332`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L332) [`sh_translate_v2p`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L332)): Sets `cpu->pc = vbr + 0x100` ([`cpu_sh.c:955`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L955)). If `vbr` is in virtual space (P0/P3) and misses UTLB, or falls into reserved ranges ([`memory_sh.c:380`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L380)), retry fails and **reaches `:729-733`**.
+- **M88K** ([`memory_m88k.c:103`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c#L103) [`m88k_translate_v2p`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c#L103)): *(Omitted completely by the brief)*. Calls [`m88k_exception`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c#L689) ([`memory_m88k.c:417`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c#L417)), vectoring to `VBR + 8 * vector` ([`cpu_m88k.c:863`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c#L863)). If unmapped in BATC/PATC, retry fails and **reaches `:729-733`**.
+- **MIPS** ([`memory_mips_v2p.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_mips_v2p.c)): Vectors to KSEG0 (`0x80000xxx`), which translates directly without TLB lookups.
+- **i960 & RISCV**: `translate_v2p == NULL`; `ok = 1` unconditionally at [`cpu_dyntrans.c:683`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L683).
+
+`:729-733` is reached on any architecture whenever an exception vector virtual address fails translation (double translation fault). Alpha is unique only in that it double-faults on the original instruction address.
+
+#### 2. "Does the single-step trace read (`:287`, `:325`) really handle its own failure?"
+**NO.**
+In [`cpu_dyntrans.c:287-291`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L287-L291):
+```c
+if (!cpu->memory_rw(cpu, cpu->mem, cached_pc, &instr[0],
+    sizeof(instr), MEM_READ, CACHE_INSTRUCTION)) {
+	fatal("XXX_run_instr(): could not read the instruction\n");
+} else { ... }
+```
+When `memory_rw` fails, it logs to `fatal(...)` and **falls straight through** to line 325 (`I;`), executing `ic = next_ic++; ic->f(cpu, ic);`. It does not return, abort, or halt.
+
+#### 3. "Is `nothing_call` usable from inside `pc_to_pointers`, or only from an instruction handler?"
+**`nothing_call` CANNOT BE USED FROM INSIDE `pc_to_pointers` WITHOUT MODIFYING `run_instr`.**
+[`nothing_call`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_alpha_head.c#L66) is an instruction callback ([`tmp_alpha_head.c:60-64`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_alpha_head.c#L60-L64)) designed to execute inside `I;` to consume one dispatch slot without advancing `ninstrs` or `pc` (`cpu->cd.alpha.next_ic--; cpu->ninstrs--;`).
+If `pc_to_pointers` points `next_ic` to `&nothing_call`:
+1. In single-step mode, `memory_rw` fails at `:287`, and `:325` runs `nothing_call`.
+2. In normal mode ([`cpu_dyntrans.c:351-374`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L351-L374)), the loop runs 120 unrolled `I;` calls per iteration. Each `I;` executes `nothing_call` which decrements `next_ic`, executing hundreds of dummy iterations until `n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT`.
+3. **PC corruption in the epilogue**: At line 395 ([`cpu_dyntrans.c:395-400`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L395-L400)), `low_pc = (next_ic - cur_ic_page) / sizeof(...)`. If `cur_ic_page` was set to `nothing_call`, `low_pc == 0`, which clears the in-page offset of `cpu->pc`. If `cur_ic_page` was stale heap memory, `low_pc` is arbitrary garbage that clobbers `cpu->pc`.
+
+***
+
+### Q2: Option Selection and Code Shape
+
+**Selected Option**: **Option (e) (or Option (c)), modified with an immediate bailout in `DYNTRANS_RUN_INSTR_DEF`**.
+
+#### Enclosing Function Exits and State
+1. **Inside [`DYNTRANS_PC_TO_POINTERS_GENERIC`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L622)** ([`cpu_dyntrans.c:729-733`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L729-L733)):
+   ```c
+   if (!ok) {
+   	debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+   	    "failed to translate instruction fetch address 0x%" PRIx64,
+   	    (uint64_t)cpu->pc);
+   	cpu->running = 0;
+   	debugger_reset();
+   	return;
+   }
+   ```
+   - *State on return from `pc_to_pointers`*: `cpu->pc` holds the exact faulting VA (`0x1044000`). `cur_ic_page` and `next_ic` remain untouched.
+2. **Inside [`DYNTRANS_RUN_INSTR_DEF`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L177)** immediately following line 190 ([`cpu_dyntrans.c:190`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L190)):
+   ```c
+   	DYNTRANS_PC_TO_POINTERS(cpu);
+
+   	if (!cpu->running)
+   		return 0;
+   ```
+   - *Run loop behavior*: Bails out immediately with `return 0;`.
+   - *Result*: Avoids `memory_rw` failure at `:287`, avoids the unrolled 120-instruction loop at `:351-374`, avoids epilogue PC reconstruction at `:394-406`, and returns control to [`machine_run()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L708) which halts the simulation cleanly.
+
+***
+
+### Q3: The Witness as a Detector
+
+To prove that the host survives, the CPU is stopped, and no garbage executes, the detector rows must assert:
+1. **Host survival**:
+   - `alive(clean exit) == True` and wait status `st == 0` in [vm_neighbour_measure.frozen.py:104](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphaifetchkill/witness_HEAD_20260918/vm_neighbour_measure.frozen.py#L104).
+   - Pattern count `"could not find physical" == 0` and `"FATAL" == 0` (no host crash/abort).
+2. **CPU stopped cleanly**:
+   - `cpu->running == 0`, prompting the interactive debugger `GXemul>` to appear and accept commands.
+   - Subsequent `step 2` in [cmdsB](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphaifetchkill/witness_HEAD_20260918/vm_neighbour_measure.frozen.py#L150) executes 0 instructions.
+3. **No garbage execution**:
+   - `print pc` produces exactly `0x1044000` (the faulting VA, confirming `pc` was neither advanced nor clobbered to the page base by the dyntrans epilogue).
+   - Arming sentinel `t2` remains `0xbad1d8a`.
+   - `[ alpha_translate_v2p: 0x0000000001044000 wasn't found ]` occurs at most twice (initial walk + retry), rather than streaming repeatedly.
+
+***
+
+## 3. Additional Findings
+
+1. **Additional `exit(1)` in Alpha Walker**:
+   [`memory_alpha.c:75-78`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L75-L78) contains a separate unhandled host exit:
+   ```c
+   if (vaddr == 0xfffffffd80000000ULL) {
+   	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+   	exit(1);
+   }
+   ```
+   Any access to this kernel VA under `base == 0` will terminate the host process directly from the translation function, bypassing dyntrans recovery.
+2. **Omission of M88K**:
+   The brief lists only MIPS, ARM, PPC, and SH in Section 1, omitting M88K ([`memory_m88k.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c)), which also uses dyntrans and can reach `:729-733` on vector translation failures.
+
+***
+
+## Verdict
+
+**GO-WITH-CHANGES**

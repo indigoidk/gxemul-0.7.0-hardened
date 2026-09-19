@@ -1,0 +1,51 @@
+**VERDICT: CLOSES — `vc_ne1` reds `low16 getenv` (the lane-1 escape the two-cell covering misses), and all four lane cells have a variant in §3 that proves they can go red; zero open.**
+
+---
+
+**Q1 — Floor coverage (4 of 4).** Each lane cell is pinned by at least one measured red in §3:
+
+| Cell (lane, port) | Pinned by | Red row |
+|---|---|---|
+| `wide` (3, 0x2ff) | `vc_ne3`, `vf`, `M2_len8`, `KILLLEN8` | `wide getenv` |
+| `l0w16` (0, 0x2fc) | `vc_ne0`, `M2_len8`, `KILLLEN8` | `l0w16 getenv` |
+| `low16` (1, 0x021) | `vc_ne1`, `ve`, `M2_len8`, `KILLLEN8` | `low16 getenv` |
+| `l2w16` (2, 0x2fe) | `vc_ne2`, `M2_len8`, `KILLLEN8` | `l2w16 getenv` |
+
+`vc` (`&& (len <= 8 || (P & 3) == 3)`) reds three of four, confirming lane 3 is the only serviced lane and the floor needs all four. `vf` reds lanes 1/2/3 and passes lane 0 — explicitly the "wrong lane byte" shape (`data[0]` for `data[ofs]`) the contract names (READ from `vf`'s red set). The lane-1 escape `{mc2, kbc1024}` misses is killed by `vc_ne1` at `low16` (REASONED from the variant name and red set; the `{mc2, kbc1024}` covering is not in this diff and cannot be checked from the packet).
+
+**Q2 — Contract.** Eight disclosed classes (i)–(viii) are honestly warranted; none is mis-disclosed.
+
+- (i) widths above 16: `va`/`vb` at 13/13 is consistent with "not caught here, caught elsewhere" — but the "MEASURED killed at a wider cell in opus_p2_20260918 (va, vb, vw64, vw256)" claim cannot be verified from this packet (see "cannot settle" below).
+- (ii) port-conditioned: `ve` at 12/13 reds `[low16 getenv,]` (port 0x21 < 0x200) and passes the three ports ≥ 0x2fc — exactly the "incidental, not a contract claim" shape the header warns of. Honest.
+- (iii)–(viii) are all on different axes from the ruled floor (k, chunk index, direction, non-lane bytes, data values, forward count). `vg`, `vt1`, `vt2` at 13/13 and `vd`/`vh` labeled EQUIVALENT are consistent.
+
+All four catch claims in the contract are backed by a measured red:
+- `len == 0 || len > 8' guard → M2_len8 reds 4/4 cells. ✓
+- `&& len <= 8' conjunct → KILLLEN8 reds 4/4 cells. ✓
+- LANE-conditioned → vc reds 3/4; vc_ne0/1/2/3 each red one. ✓
+- wrong lane byte → vf reds lanes 1/2/3 (lane 0 passes, as required). ✓
+
+**Q3 — Harness.** Both fixes are right as written.
+
+- Retry guard `if alive and any(...)` (F6) is correct: a dead session is not retried. The original retried dead sessions.
+- `sys.exit(0 if ok == len(rows) else 1)` is correct: FAIL exits non-zero.
+
+A host death cannot score as a pass: the `X alive` row goes red on a dead session (alive=False ⇒ got="died" ≠ want="alive"), so `WIDEWRITE_RESULT` is at most 12/13 and `sys.exit(1)` fires. The race window between print capture and `waitpid` does not affect this — `alive` is determined before the print check.
+
+**Q4 — Parent's L4.** The correction is accurate. The original "COVERED, not merely disclosed" was true for the two specific mutants measured at the time and false for the class — a lane-conditioned guard (`(P & 3) == 3`) passed the lane-3-only row. The correction does not overclaim: it says #538 closes the WIDTH FLOOR (lane × write arm at C=16), and explicitly enumerates eight classes still not caught, citing the parent's `p_port10` and `lcaisasize` by name. That is a floor closure, not a universal closure, and the header says so (REASONED; cannot check the parent's L4 wording without reading the file).
+
+---
+
+**Minor note — the "0xf1 at l2w16".** This is consistent with the MSR's read-back OR behavior: under `vf` (`data[0]`), `s[0]=0x41` lands on port 0x2fe, and the MSR echoes with `| 0xb0`, giving got=0xf1; want=`MSRX(s[2])=0xf3`; mismatch → RED. Under base, got=`MSRX(s[3])`... wait, want=`MSRX(s[2])=0xf3`, and base writes `s[2]=0x43` which the MSR echoes to 0xf3 — match, PASS. So the 0xf1 is the correct got value under vf, and the test correctly distinguishes base from vf. (REASONED from the `MSRX` lambda in the diff and the reported value.)
+
+**Cannot settle from the packet** (would need file access):
+
+1. `dev_lca.c` `DEVICE_ACCESS(lca_isa)` — the exact `ofs` formula and write-arm body (Premise 1). Settled by reading the function.
+2. `memory.c` `store_buf` — the chunking ladder (Premise 2). Settled by reading the function.
+3. `PRETABLE.out` — the predictions-before-runs document. The TABLE.out in §3 is consistent with the brief's prose, but the exact predicted register values per leg are not inlined; the `0x41/0x41/0xf1` claim rests on the brief's summary.
+4. Each variant's source diff — `va`/`vb`/`vc`/`vd`/`ve`/`vf`/`vg`/`vh`/`vt1`/`vt2`/`vc_ne0..3` are identified only by their kill patterns. `vf`'s shape is inferred from `[wide, low16, l2w16]` passing `l0w16`; the 0xf1 value is consistent with `data[0]` plus MSR echo, but the exact edit is not inlined.
+5. The `{mc2, kbc1024}` covering's cell roster — the claim that it misses lane 1 is taken on the brief's authority.
+6. `opus_p2_20260918` results for `vw64`/`vw256` (used to support disclosed class (i)). Not inlined.
+7. The parent's `p_port10` and `lcaisasize` headers (cited but not shown). Settled by reading `lca_isalane_probe.py`'s header.
+
+None of (1)–(7) blocks the verdict: the floor closure is a property of the four-cell roster plus the variant kill patterns in §3, both of which are inlined and check out.

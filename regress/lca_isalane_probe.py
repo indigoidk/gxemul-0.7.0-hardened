@@ -162,15 +162,25 @@
 #  ROW.
 #
 #  *** DISCHARGED 2026-09-18 -- THE ROW NOW EXISTS, IN ITS OWN FILE: regress/lca_widewrite_probe.py. ***
-#  It drives the non-instruction path this header names -- a PROM GETENV (CALL_PAL 0x3fffffe) whose
-#  a2 is the ns16550 SCR -- so store_buf issues ONE 16-byte memory_rw into lca_isa.  Measured, every
-#  value predicted before any run (artifacts/lcalenzerodrop/widewrite_20260918/PRETABLE.out):
-#      base 3/3 (SCR <- s[3] = 'D');  `&& len <= 8' 2/3;  `len == 0 || len > 8' 2/3
+#  It drives the non-instruction path this header names -- a PROM GETENV (CALL_PAL 0x3fffffe) -- so
+#  store_buf issues ONE 16-byte memory_rw into lca_isa.  (#538 pass 2, Opus: the four lines that stood
+#  here described that file's FIRST version in the present tense -- "whose a2 is the ns16550 SCR",
+#  "base 3/3 ... 2/3".  Its first version, measured then with every value predicted before any run
+#  (artifacts/lcalenzerodrop/widewrite_20260918/PRETABLE.out), was ONE cell at the SCR: base 3/3,
+#  `&& len <= 8' 2/3, `len == 0 || len > 8' 2/3.  #538 made it four cells, one per byte lane, 13 rows;
+#  its own header carries the current scores.)
 #  Both mutants that swept THIS file's 352 rows clean are killed there.  Kept in a SEPARATE file on
 #  purpose: folding it in here would move 352 measured rows and owe a full re-measure to show nothing
-#  shifted, for no gain in coverage.  The width cell is therefore COVERED, not merely disclosed -- but
-#  by that file, so an edit that deletes it re-opens this cell and this header says where to look.
-#  `lcawidefold' (only s[3] of a 16-byte store reaches the port) REOPENS: that row IS the guest its
+#  shifted, for no gain in coverage.
+#  *** CORRECTED BY #538 -- AN L4, RULED AT #530's PASS 2.  This said "The width cell is therefore COVERED,
+#  not merely disclosed", which was true of the two variants named above and false of the class: that file's
+#  first version rowed ONE of the four byte lanes, and a variant servicing wide writes at lane 3 only swept
+#  it 3/3 (artifacts/lcalenzerodrop/opus_p2_20260918/RESULTS.txt).  #538 rows all four lanes at C=16, k=0,
+#  and that file's own CONTRACT enumerates what it still does not catch, citing THIS header's p_port10 and
+#  lcaisasize classes by name.  The width floor lives in that file, so an edit that deletes it re-opens the
+#  floor, and this header says where to look. ***
+#  `lcawidefold' (only s[P & 3] of a 16-byte store reaches the port -- s[3] at the SCR, the lane-3 cell;
+#  #538 pass 2 corrected the lane-3-specific wording) REOPENS: that row IS the guest its
 #  reopen condition names.
 #  `len == 0' is refused and DISCLOSED (no producer); a DIRECTION swap (a store forwarded as a read, or the reverse)
 #  *** WAS CALLED `a different class, caught by the value rows'.  IT IS A CELL OF THIS CLASS (the SWAP shape), and the

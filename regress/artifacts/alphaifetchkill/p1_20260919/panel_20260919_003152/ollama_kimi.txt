@@ -1,0 +1,55 @@
+VERDICT: (e), implemented ungated in `DYNTRANS_PC_TO_POINTERS_GENERIC` — the refutations of (a) and (b) follow from the packet's own inlined flow plus the `:2002-2024` precedent, and the only premise that would justify Alpha-gating is precisely the one whose derivation does not hold as stated ("they move PC ⇒ they get past the retry" omits the premise that the handler VA translates). Line-cited facts not inlined (`:287/:325`, `:394`, the precedent's tail) are named as not-checkable rather than guessed.
+
+## What the packet proves
+
+- (READ) The mechanism matches the inlined code: first `translate_v2p` fails → fast-table retry on `cpu->pc` → `translate_v2p` retry → `fatal` + `exit(1)` at `:729-733`.
+- (REASONED) "Alpha always reaches it" is justified, and internally corroborated: the retry's fast-table lookup uses the same VA that just missed (pc unmoved), so it deterministically misses; the retry translate is the same call on the same VA. The witness's two *identical* `wasn't found` lines for `0x1044000` are the packet's own proof that pc did not move — had it moved, line two would name the handler VA.
+- (REASONED) The defect is correctly localized to `:729-733`, not to `alpha_translate_v2p`: the arming control shows the same translator missing *gracefully* on the data side (sentinel kept, process alive). The translator is survivable; the dyntrans fetch retry is the killer. (e) targets the right site.
+- (REASONED) (a) is refuted, and more strongly than the packet states: even if `paddr` were benign rather than garbage, the packet says the epilogue reconstructs pc from instruction pointers (`:394`) — so after (a)'s fall-through allocates a page at a wrong physaddr, the epilogue rewrites `cpu->pc` to that page's address. The "pc still the faulting VA" detector row fails at the epilogue *before any execution*. The refutation does not depend on paddr being garbage.
+- (REASONED) (b) is refuted as stated (return leaves `next_ic` unset/stale; `:114/:190` dereference it without consulting `running`), and the packet contains internal corroboration: the in-tree safe-stop precedent sets `next_ic = &nothing_call` as part of stopping — that act only has meaning if the dispatcher consumes `next_ic` at or after a stop.
+- (READ) (d) is authoritatively scoped out; the data side's sentinel behavior (no PALcode fault delivery) is consistent with scoping fault delivery out.
+
+## The derivation that fails as stated
+
+- (READ) The author asserts MIPS/ARM/PPC/SH move pc to a real handler on translate failure.
+- (REASONED) "So they get past the retry" **does not follow**: the retry succeeds only if the handler's VA is in the fast table or translates. The packet states no such invariant. On any arch whose exception-vector VA is page-table-dependent, a half-built guest page table — exactly the all-zero-L1 class in the witness — fails the retry and reaches `exit(1)`. "No other architecture can reach `:729-733` today" is not established.
+- Single settling fact (one per arch): quote each translator's failure path and state whether the pc it installs is guaranteed translatable by construction (architecturally unmapped vector space) or merely usually-mapped.
+- (REASONED) This is what fixes (e)-ungated over (c): if no other arch can reach the site, gating adds a dead branch to generic code; if any can, (c) preserves a guest-triggerable process-kill in a `-SEC` fork. Ungated (e) weakly dominates under both truth values of the unsettled premise.
+
+## Not checkable from the packet (named, with the single settling fact)
+
+1. **The `:394` epilogue.** The packet says pc is reconstructed from instruction pointers but shows no gate. The existing `nothing_call` precedent would yield a nonsensical offset (`next_ic = &nothing_call(+1)` minus `cur_ic_page->ic`) unless something re-pins `cpu->pc` or skips reconstruction — `about_to_enter_single_step = true` is the plausibly-intended gate, but the packet never says what it gates. Settling fact: quote `:394±15` and the lines immediately after the precedent's `next_ic++` at `:2002-2024`, showing who pins/restores `cpu->pc` across that redirect.
+2. **Why the precedent does `next_ic++`.** Which consumer requires it (inner-loop post-increment symmetry vs `:394` offset math) determines whether (e) should `++` from inside `pc_to_pointers`, where there is no local `ic` to mirror. Settling fact: identify the reader of `next_ic` after a stop.
+3. **The single-step trace read (`:287`, `:325`)** — a possible *second* exit-on-failure site on the debugger path. If its failure branch is fatal, the promised "-V the debugger prompt appears" row is false and (e) leaves a latent kill. Settling fact: quote the failure branch at `:287/:325`.
+4. **Whether `:114/:190` reload `ic = next_ic` immediately before each dereference** (i.e., setting only `next_ic` inside `pc_to_pointers` suffices), and what consumes `cur_ic_page` on entry with `running==0`. Settling fact: the ~10 lines around `:114` and `:190`.
+5. Whether the witness ran under `-V` — affects interpretation of "exited status 1", not the defect. Minor.
+6. The Q1-arch question itself (per-arch, as above) — answerable from the packet only by logic, and the logic says "not entailed."
+
+## Q2 — exits and required state, as far as the packet supports
+
+Packet-visible outcomes of the function: (i) success → `cur_ic_page`/`next_ic` set at `:830-833`; (ii) today's fatal; (iii) the new stop exit. The contract (iii) must satisfy:
+
+- latched message, exactly once, fatal severity minus exit;
+- `cpu->running = 0`;
+- `next_ic = &nothing_call` (the `++` question is item 2 above);
+- `cpu->pc` == faulting VA on return **and after `:394`** — the epilogue must be gated for this exit or pc re-pinned; *how* is item 1;
+- `cur_ic_page` left in whatever state `:114/:190` tolerate with `running==0` — item 4.
+
+The run loop's next action (REASONED): entry dereferences `next_ic` (the nothing_call — state-neutral), the `running==0` condition ends the chunk and the run, the epilogue runs (hence item 1 is load-bearing), control returns to the caller; under `-V` the prompt appears (`debugger_reset()`), else the machine ticks with a stopped CPU. On `nothing_call`'s usability from here: (REASONED) nothing in the packet restricts it to handler context — `pc_to_pointers` owns `next_ic` exactly as the precedent does; the genuine differences are items 1, 2, 4.
+
+I decline to write literal code beyond this contract: that requires `:394` and `:2002-2024` verbatim, which are not in the packet.
+
+## Q3 — detector rows
+
+- **R1 host survives:** no `FATAL: could not find physical address` line; no exit-status-1 at the fault; the process still accepts control afterward.
+- **R2 pc pinned:** `pc == 0x1044000` immediately after the stop *and after the run fully unwinds* — this is the row that forces item-1 resolution.
+- **R3 stopped:** `running==0`; no further guest-side effects attributable to that CPU.
+- **R4 latch:** force a second trigger (a manual step attempt) → message count stays 1.
+- **R5 no garbage executes:** guest-visible delta across the fault is *exactly* the architectural effect of the one `JMP` (pc = target, ra = old pc+4). `nothing_call` is state-neutral, so R5 passing also proves nothing else ran.
+- **R6 no regression:** the arming control (raw-VA data load misses, sentinel kept) behaves as in the witness.
+- **R7 (new, from the audit):** the same armed scenario single-stepped under `-V` with trace on, exercising `:287/:325`; host death here means the trace read is a second latent exit and (e) is incomplete until it's handled or shown unreachable.
+
+## Something else found
+
+- (REASONED) For Alpha the retry's fast-table lookup is *dead code by construction* (same VA key that just missed). The entire retry block was written for archs that move pc on failure — "The PC is now set to the exception handler" — and Alpha violates that assumption. This sharpens the Q1 finding: the assumption is load-bearing in the code's comment, not just the brief.
+- (REASONED) No internal contradiction in §0: HEAD `cdbe7d7` with last-touch `de1398e` and CHANGELOG count 0 are consistent with a row being filed now. No self-contradiction found anywhere in the brief; the defect narrative, witness transcript, and fix scoping are mutually consistent. The weak link is solely the other-architectures inference named above.

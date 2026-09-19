@@ -21914,3 +21914,29 @@ such a date instead of reporting it.  Validate exemption dates as calendar dates
 ### `m5dayb` (LOW, optional) — a 23rd selftest case, M5a0, the day before the stamped date
 It would restore deterministic `!=` detection on the stamped date itself.  fable5 ruled it optional, not owed.  The
 measured matrix is in `regress/artifacts/fbsmlane/r537_20260918/opus5_f2/f2_matrix.txt`.
+
+## 2026-09-19 — `#538` closes `#530`'s chain; seven rows filed from four panels
+
+`lcalenzerodrop` and `lcaisalane` CLOSE with `#538`.  Filed, each with its full note in the ledger:
+
+### `alphaifetchkill` (HIGH) — cpu_dyntrans.c:729-733: a failed INSTRUCTION-FETCH translation that raises no exception ends the host ("FATAL: could not find physical address of the exception handler?"; exit(1))
+cpu_dyntrans.c:729-733: a failed INSTRUCTION-FETCH translation that raises no exception ends the host ("FATAL: could not find physical address of the exception handler?"; exit(1)) -- and on Alpha, which delivers no memory-management fault, every cold instruction-fetch miss takes that path
+
+### `ptywaitstatus` (MED) — regress/*.py pty probes: the emulator child's WAIT STATUS does not reach the liveness verdict in 56 of 73 pty probes
+regress/*.py pty probes: the emulator child's WAIT STATUS does not reach the liveness verdict in 56 of 73 pty probes -- a host death AFTER the final observation passes, and a dead attempt whose last print is missing can still qualify for a retry
+
+### `physupdtlb` (MED) — memory_rw.c: a PHYSICAL (and not NO_EXCEPTIONS) access that reaches RAM calls update_translation_table with vaddr == paddr, installing or REPLACING a VA==PA dyntrans translation over whatever the guest maps at that VA
+memory_rw.c: a PHYSICAL (and not NO_EXCEPTIONS) access that reaches RAM calls update_translation_table with vaddr == paddr, installing or REPLACING a VA==PA dyntrans translation over whatever the guest maps at that VA
+
+### `alphapcbbvirt` (MED) — cpu_alpha_palcode.c: swpctx and wrfen access the PCB through load_/store_64bit_word, which pass no PHYSICAL
+cpu_alpha_palcode.c: swpctx and wrfen access the PCB through load_/store_64bit_word, which pass no PHYSICAL -- so the PCB base is translated as a VIRTUAL address, and with paging on a physical PCBB walks the guest's tables (ptbr can silently become 0)
+
+### `lcaisaphyshit` (MED) — #540 lcaisaphys: the MISROUTE case
+#540 lcaisaphys: the MISROUTE case -- with a guest page table that MAPS the inner VA 0x1d00003fd, the pre-fix sparse ISA forward lands in whatever page the guest mapped there (derived by reading, not witnessed)
+
+### `ayona3` (LOW) — memory_alpha.c:94: `if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");'
+memory_alpha.c:94: `if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");' -- a meaningless, unlatched debug line on the WALK path (ptbr != 0 or user mode), printed on every walk of that VA
+
+### `excvecrecurse` (MED) — cpu_arm.c / cpu_ppc.c (possibly SH, M88K): an exception vector that itself cannot be translated makes the exception routine re-enter pc_to_pointers from inside the failing translation, without bound
+cpu_arm.c / cpu_ppc.c (possibly SH, M88K): an exception vector that itself cannot be translated makes the exception routine re-enter pc_to_pointers from inside the failing translation, without bound -- a predicted host stack overflow
+

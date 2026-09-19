@@ -1,0 +1,96 @@
+VERDICT: 3 -- latched decline preserves diagnostic intent under #215 without silent 4 TB memory fabrication or host termination
+
+---
+
+### 1. Verification of Cited Claims Against Source
+
+| Brief Claim | Source Location | Status | Evidence / Notes |
+| :--- | :--- | :--- | :--- |
+| Commit HEAD `cdbe7d7`, `memory_alpha.c` clean | `git rev-parse`, `git status` | **VERIFIED** | HEAD is `cdbe7d7`; [`memory_alpha.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c) is unmodified in working tree. |
+| Last log on `memory_alpha.c`: `2956c7e` (#509) | `git log -1` | **VERIFIED** | `2956c7e #509 sgimtedepth4dead: depth == 4' is unreachable, so tiled MTE always took CI`. |
+| `grep -c alphavmkill CHANGELOG.md -> 0` | `CHANGELOG.md` | **VERIFIED** | 0 occurrences in `CHANGELOG.md`. |
+| Defect site: `exit(1)` on `vaddr == 0xfffffffd80000000ULL` | [`memory_alpha.c:75-78`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L75-L78) | **VERIFIED** | Sits in `!userMode && base == 0` arm of [`alpha_translate_v2p`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L43-L199); calls `fatal(...)` and `exit(1)`. |
+| Second residue: `fatal("AYONA3\n")` | [`memory_alpha.c:94`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L94) | **VERIFIED** | Sits on walk path (`base != 0`); prints `AYONA3` without calling `exit()`. |
+| Failed translation zeroes read buffer (#244) and returns `MEMORY_ACCESS_FAILED` | [`memory_rw.c:259-269`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L259-L269) | **VERIFIED** | `if (!ok) { if (writeflag == MEM_READ) memset(data, 0, len); return MEMORY_ACCESS_FAILED; }`. |
+| Load/store abandons access on `!memory_rw` (#215); register unchanged | [`cpu_alpha_instr_loadstore.c:68-74`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L68-L74), [`:112-118`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L112-L118) | **VERIFIED** | In [`LS_GENERIC_N`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L44-L128), `if (!cpu->memory_rw(...)) return;` exits before register write [`:93`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L93). No Alpha exception is dispatched. |
+| Instruction fetch translation failure terminates host via `exit(1)` | [`cpu_dyntrans.c:670-734`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L670-L734) | **VERIFIED** | On `!ok`, [`cpu_dyntrans.c:698`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L698) reads `cached_pc = cpu->pc`. Because Alpha translation sets no exception PC, second lookup [`:721`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L721) fails again and hits `fatal(...); exit(1);` at [`:730-733`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L730-L733). |
+| Witness controls and attribution | [`alpha_vmkill_probe.py:148-208`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L148-L208) | **VERIFIED** | `live` checks planted RAM ([`:152`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L152)); `hwrpb sig` checks remap ([`:153`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L153)); attribution asserts `VMMSG` in output ([`:199`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L199)). |
+
+---
+
+### 2. Adversarial Review of Section 5 Questions
+
+#### Q1 -- Premises and Address Arithmetic
+1. **Is `0xfffffffd80000000` special to NetBSD/alpha?**
+   **Yes.** NetBSD/alpha configures an 8 GB self-mapped Virtual Page Table (VPT) at `0xfffffffc00000000` (level-1 index `i1 = 0x3fe`, `i2 = 0x0`, `i3 = 0x0`). 
+   Address `0xfffffffd80000000` has indices `i1 = 0x3fe`, `i2 = 0x300` (768), `i3 = 0x0`, placing it at offset exactly **6.0 GB** into the 8 GB VPT. 
+   In 3-level Alpha paging with 8 KB pages and 8-byte PTEs, offset 6 GB in the VPT indexes the PTE for virtual address:
+   $$\frac{6 \times 1024^3 \text{ bytes}}{8 \text{ bytes/PTE}} \times 8192 \text{ bytes/page} = 6 \text{ TB} = \text{0x0000060000000000}$$
+   Sign-extending bit 42 gives `0xfffffe0000000000`, which is the exact base of **K1SEG** (Alpha kernel virtual memory).
+   Anders Gavare encountered this address during early NetBSD boot when the kernel accessed the page table entry for the beginning of K1SEG, prompting the message `"Alpha kernel virtual memory seems to want to be used"`.
+2. **Member 4 (ACCEPT) Failure Mode**:
+   Under Member 4, [`memory_alpha.c:74`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L74) executes:
+   `*return_paddr = 0xfffffffd80000000ULL & 0x000003ffffffffffULL = 0x000003fd80000000ULL` (~4 TB physical).
+   In [`memory_rw.c:663-714`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L663-L714), this address is well past `mem->physical_max` (64 MB) and no device matches. 
+   - On **READ**: [`memory_rw.c:683`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L683) zeroes the buffer and jumps to [`do_return_ok`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L784), returning `MEMORY_ACCESS_OK`. The guest load silently receives `0x0`!
+   - On **WRITE**: the data is dropped, returning `MEMORY_ACCESS_OK`.
+   - On **I-FETCH**: opcode `0x00000000` (`call_pal 0`) is fetched.
+3. **Is 0 (Member 2/3) better?**
+   **Strictly better.** Returning `0` reports translation failure. Caller [`cpu_alpha_instr_loadstore.c:73`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L73) detects `!memory_rw` and abandons the access under `#215`, leaving destination registers intact rather than corrupting guest registers with fabricated zeroes.
+
+---
+
+#### Q2 -- Member Analysis & Adversarial Catch on Member 1
+- **Critical Catch: Member 1 ("DELETE the whole block") is identical to Member 4 (ACCEPT)**:
+  In [`memory_alpha.c:73-90`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L73-L90), `*return_paddr = vaddr & 0x000003ffffffffffULL;` runs *before* line 75, and line 90 returns `2`. 
+  Deleting lines 75-78 simply falls through to `return 2`. Therefore, **Member 1 is Member 4**. If Member 1 meant deleting lines 73-91 (`if (!userMode && base == 0)`), bootstrap translation would be destroyed, causing cold boot to fail immediately.
+- **Load / Store / I-Fetch Breakdown**:
+  - **Member 2 (Silent DECLINE, `return 0`)**: Load abandons (`t4` unchanged = `0x0bad1d8a`), store abandons, I-fetch dies at [`cpu_dyntrans.c:732`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L732). Witness scores **5/5**.
+  - **Member 3 (DECLINE + Latched Announce)**: Same execution semantics as Member 2, but emits a single latched warning on the first access. Witness scores **5/5**.
+  - **Member 4 (ACCEPT)**: Load silently returns `0x0` (`t4` becomes `0x0`), store drops data, I-fetch executes zero opcode. Witness scores **5/5** (because [`alpha_vmkill_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L205-L207) asserts only `alive` and `MARK`, not `t4`'s value).
+- **Selection**: **Member 3**. It stops process termination, avoids silent memory corruption, adheres to `#215` destination preservation, and retains diagnostic logging without log flooding.
+
+---
+
+#### Q3 -- The Second Residue (`AYONA3` at Line 94)
+Line 94 ([`memory_alpha.c:94`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L94)) is:
+```c
+if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+```
+- **Does it join this round?** **No.**
+- **Reasoning**:
+  1. *Semantic class difference*: Line 94 has no `exit(1)` and does not kill the emulator; it is purely diagnostic noise.
+  2. *Detector separation*: Line 94 is on the `base != 0` walk path. [`alpha_vmkill_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py) runs under `ptbr == 0` and cannot stimulate or verify line 94 without arming page tables.
+  Under the carrier's governance rules (same semantic class, same detector, no new oracle), line 94 must be handled in a separate hygiene/cleanup ticket.
+
+---
+
+#### Q4 -- The Witness and Detector Obligations
+- **Controls**: [`alpha_vmkill_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py) controls are mathematically sound:
+  - `live` proves raw-VA identity mapping to RAM at `base == 0` ([`:152`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L152)).
+  - `hwrpb sig` loads `0x10000008`, which at `-M 64` is unmapped unless the HWRPB remap at [`memory_alpha.c:80`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L80) is active ([`:153`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L153)).
+- **Attribution Guard**: Checking for `"Alpha kernel virtual memory seems to want to be used"` ([`:199`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py#L199)) is unique across the entire codebase.
+- **Detector Obligations for Member 3**:
+  A full regression detector must assert:
+  1. `t4 == 0x0bad1d8a` (`SENT` preserved under `#215`, confirming access abandonment vs Member 4's `0x0`).
+  2. Store access survives without modifying backing memory.
+  3. Latch verification: the announce string appears exactly once across multiple accesses.
+
+---
+
+#### Q5 -- Round Ordering with `alphaifetchkill`
+- **Dependency**: An I-fetch at `0xfffffffd80000000` currently dies at [`memory_alpha.c:77`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L77). Under Member 3 (`return 0`), I-fetch falls through to [`cpu_dyntrans.c:732`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L732) (`alphaifetchkill`).
+- **Order Determination**: `alphavmkill` **MUST GO FIRST**.
+  - If `alphavmkill` goes first: Load and store cells are completely cured and verified green by [`alpha_vmkill_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/w541/alpha_vmkill_probe.py) immediately. The I-fetch cell transitions to `cpu_dyntrans.c:732` and is disclosed against `alphaifetchkill`.
+  - If `alphaifetchkill` went first: `memory_alpha.c:77` would still terminate I-fetch, and neither load nor store would be fixed.
+  - Measurable consequence: Ordering `alphavmkill` first unblocks load/store testing without waiting for an Alpha MM exception delivery rewrite.
+
+---
+
+### Conclusion
+
+**GO-WITH-CHANGES**
+1. Correct the option set in the brief: collapse Member 1 into Member 4 (or clarify that deleting lines 75-78 is an ACCEPT variant).
+2. Explicitly adopt **Member 3** (DECLINE with latched `fatal_once` or `warn_once`).
+3. Exclude line 94 (`AYONA3`) from this round; keep it in a separate clean-up ticket.
+4. Update the subsequent detector plan to assert register preservation (`t4 == SENT`) to definitively guard against silent Member 4 regression.

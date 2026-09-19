@@ -1,3 +1,125 @@
+# `#538` (lcalenzerodrop, closing #530's chain): the width row covered ONE of the four byte lanes -- a variant that serviced wide writes at lane 3 only swept it 3/3
+
+*The MEASURED sections were filled from each table's `TABLE.out` after its run -- never from the predictions.*
+
+**Detector-only.  No product line changes.**  `#530` (8bd97e4) shipped `regress/lca_widewrite_probe.py`, the width row its
+closing pass 6 owed: one PROM GETENV write of 16 bytes at (C=16, k=0, lane 3), and a contract claiming it caught *"any
+guard that declines a len > 8 WRITE"*.
+
+## WHAT PASS 2 FOUND, AND WHAT THE FLAGSHIP RULED
+
+`#530`'s pass 2 (`regress/artifacts/lcaisalane/p2_8bd97e4_20260918/`) and its §F2 adjudication pass
+(`panel_20260918_190129`) measured seven one-edit variants the row cannot see -- the Opus seat, 102 legs on unmodified
+alphabook1, every value predicted first (`regress/artifacts/lcalenzerodrop/opus_p2_20260918/`).  The §F2 pass overturned
+my provisional "debt" ruling eight of eight.  **fable5 ruled last (identity verified, claude-fable-5-1), narrower than the
+panel's headline:**
+
+* **ONE floor breach, `vc`** -- `&& (len <= 8 || (P & 3) == 3)` services wide writes at the rowed lane only.  LANE is a
+  floor axis because the body's `data[ofs]` distinguishes all four lanes, so the floor is {write arm} x {lane 0-3}.
+* **The other six are clause-(e) debt, disclosed against ALREADY-RULED classes** -- width cut-offs above 16 (the body tests
+  `len` only against 0), ports (`p_port10`), the discarded sparse bits (`lcaisasize`), chunk position (a stateless handler).
+* **The popular two-cell fix {mc2, kbc1024} is a COVERING, not a closure** -- a lane-1-only exemption escapes both
+  (grok, glm).  *Closing at the address the variant used, rather than closing the partition, is the `#499` error -- and my
+  provisional ruling and the panel's modal answer made it from opposite sides.*
+
+## THE CLOSURE
+
+* **Four cells, one per lane, each an ISOLATED session** (a read-arm fall-through writes zeros into store_buf's source,
+  so shared sessions would confound): `wide` (SCR 0x2ff, lane 3 -- the shipped cell, its row names kept), `l0w16` (MCR
+  0x2fc, lane 0), `low16` (8259 IMR 0x21, lane 1), `l2w16` (MSR 0x2fe, lane 2).  13 rows.
+* **The width is pinned by CONSTRUCTION** -- no forwarded byte distinguishes a 16-byte chunk from a 4-byte one at the same
+  address, so each cell declares its chunk list and the probe asserts the chunk landing on each observed register is wider
+  than 8.
+* **Two harness defects of the first version fixed:** the retry now fires only on a session that is still ALIVE (it used to
+  retry a dead one, and could record a host death as a pass); the exit status is non-zero on FAIL.
+* **The contract ENUMERATES**: what is caught at each lane, and eight disclosed classes, each with its warrant -- `p_port10`
+  and `lcaisasize` cited by name.  **Three wrong records corrected in place:** the parent header's *"The width cell is
+  therefore COVERED"*, the old clause (iii)'s shared-predicate warrant, and the `live` row's "device signature" label.
+
+## MEASURED -- 17 of 17 as predicted (`regress/artifacts/lcalenzerodrop/closure538_20260918/logs/TABLE.out`)
+
+Every prediction, red-row sets included, was written first in `PRETABLE.out`, whose mtime predates the frozen instrument
+(the driver checked the order and printed `ORDER_OK`).  The baseline was named and `cmp`'d (SEC `dev_lca.c` == 8bd97e4's);
+16 variant binaries were built in a scratch clone and every one differs from base; the clone was restored and verified
+before any leg ran.
+
+    variant    predicted  measured  red rows
+    base       13/13      13/13     none
+    M2_len8     9/13       9/13     all four getenv rows          (the shipped width conjunct, reinstated)
+    KILLLEN8    9/13       9/13     all four getenv rows          (the guard form)
+    vc         10/13      10/13     l0w16, low16, l2w16           (THE FLOOR BREACH: wide writes serviced at lane 3 only)
+    vc_ne0     12/13      12/13     l0w16
+    vc_ne1     12/13      12/13     low16                          (R6's lane-1 exemption -- the covering escape)
+    vc_ne2     12/13      12/13     l2w16
+    vc_ne3     12/13      12/13     wide
+    vf         10/13      10/13     wide, low16, l2w16            (data[0] for data[ofs] on a wide chunk)
+    ve         12/13      12/13     low16                          (INCIDENTAL: port 0x21 < 0x200, disclosed (ii))
+    va, vb     13/13      13/13     none                           (disclosed (i): width thresholds above 16)
+    vg, vt1    13/13      13/13     none                           (disclosed (iii): k-keyed, the lcaisasize class)
+    vt2        13/13      13/13     none                           (disclosed (iv): chunk position)
+    vd, vh     13/13      13/13     none                           (EQUIVALENT)
+
+## PASS 2 (panel_20260918_221636) -- ten answers + fable5 LAST: CLOSES, 0/4 lane cells open
+
+Nine answers say CLOSES: agy, glm, deepseek, minimax, kimi-k3, the kimi CLI, grok, codex and opus5.  Each gives the
+denominator 0/4 open: vc_ne0..3 red exactly their own lane's `getenv` row.
+
+codex_adv538p2 said DOES NOT CLOSE, but ON EVIDENCE LIMITS ONLY: the four files I allowed it.  It named no surviving
+floor mutant, and its unsettled premises are settled outside that list.  P1 (whole-chunk delivery) is settled by
+KILLLEN8's `[ writing to device 'lca_isa' addr 00005fe0 failed ]`, the handler's len > 8 refusal firing on the real
+binary.  P4 (presets kept) is settled by the per-leg raw logs.
+
+**fable5 (claude-fable-5-1, identity verified) ruled CLOSES, CONTINGENT on a full re-run on the final instrument.**
+The instrument changed after the table, so "a comparison owes ONE instrument":
+
+- **THE HARNESS (L1, unshipped): the emulator's WAIT STATUS never reached `alive`.**  `alive` came only from pty read
+  timing, so a death after the last observation, or a silent hang, PASSED.  codex demonstrated it with an in-memory
+  mock of the real `session()`; the Opus seat had flagged it as hardening.
+  - Fix: drain the pty to EOF after `quit`, THEN close, reap, and require a clean exit.  Draining first matters,
+    because closing the master first SIGHUPs the child and scores a clean run as a death.
+  - Measured both ways: status 0 on a clean run, 256 on alphavmkill's `exit(1)`.
+  - The committed parent (`lca_isalane_probe.py`) and 54 other pty probes are filed as the class `ptywaitstatus`,
+    with the peer's codex J6 reading: all 55 non-USED files have the blind spot.
+- **`l2w16 live` was not a round-trip control.**  The MSR resets to 0 and ORs 0xb0 on every access, so preset 0x00
+  read 0xb0 whether or not the write landed.  The preset is now 0x01.
+- **The probe now creates `alpha_dummy.bin`.**  It is untracked, so a fresh clone would red every row.
+- **The contract is re-worded as L4s, each moving no cell into or out of the floor:**
+  - (ii) port bits ABOVE the lane (`P & 3` are lane bits, inside the floor);
+  - (iv) any STATEFUL decline;
+  - (vii) EQUIVALENT: a3 = 16 against a 16-byte string transfers no NUL at all;
+  - (viii) an added forward AFTER the lane byte is visible;
+  - new (ix): lane 2's value bits under the MSR's `| 0xb0`;
+  - new (x): the inner forward's width;
+  - new (xi): the chunk ladder, confirmed at measurement by KILLLEN8, and disclosed for the future (a source presence
+    pin is filed);
+  - `== L` for L != 3, and address misroutes, are labelled DERIVED.
+- **The parent header's first-version present tense (:164-169) and its lane-3-specific fold (:179) are corrected in
+  place, comment-only.**
+- **Receipts:** `logs/bins.md5` (18 hashes; only w_base == w_restored) and `logs/BUILD_PHASE.out`.
+
+## THE ONE-INSTRUMENT RE-RUN -- 17 of 17 reproduced, every session clean (`regress/artifacts/lcalenzerodrop/closure538_20260918/rerun_20260919_0030/logs/TABLE.out`)
+
+The same 17 variant binaries were md5-checked against `logs/bins.md5` before any leg (`BINS_MATCH`), and the frozen
+instrument's mtime was checked against `PRETABLE_RERUN.out`, written 2026-09-18 23:11 (`ORDER_OK`).  **Every leg
+reproduced the first table's score and red-row set exactly, and every session of every leg exited cleanly (68 of 68)**,
+so the wait-status harness moved no score -- as predicted, since none of the 16 variants ends the host.  The one value
+that moved did so by design: under a declining variant (M2_len8, KILLLEN8, vc, vc_ne2) `l2w16 getenv` reads 0xb1 (the
+new preset kept, | 0xb0), and `l2w16 live` reads 0xb1 on every leg -- a real round trip now.  The committed probe
+differs from the re-run's frozen instrument ONLY by its MEASURED paragraph (`diff` the two).
+
+**The chain closes on the re-run's reproduction of the table.**  This closes `#530`'s pass-2 repair chain:
+`lcalenzerodrop` and `lcaisalane` are CLOSED, and the next commit records this commit's sha in their `commits` fields.
+
+## RECORDS IN THE SAME COMMIT
+
+* The seat entries of four panels, each answer read in full, with a durable copy of each panel dir beside its row:
+  `lcaisaphys` pass 1 (`#540`), this round's pass 2, `alphavmkill` pass 1 (`#541`), `alphaifetchkill` pass 1.
+* Seven rows filed from those panels: `alphaifetchkill` (HIGH, witnessed at rung 3), `ptywaitstatus`, `physupdtlb`,
+  `alphapcbbvirt`, `lcaisaphyshit`, `excvecrecurse` (MED) and `ayona3` (LOW).
+* Five STALE `HELD AWAITING SEAT` markers defanged on `lcabadval`, `lcaconfbus1kill` and `lcairqstubkill` -- each names a
+  seat that answered in the same stage at a strictly later date.  The two LIVE ones (`lcabadval` assess,
+  `lcaconfbus1kill` review, both awaiting opus5) are kept.
+
 # GATE 2 SC_EXEMPT 2026-09-18 -- **two SELFCHECK exemptions had passed their date on 2026-09-02 with no owner row, so gate 2 went red from the 3rd -- and nothing ran it until tonight.**  Re-dated to 2026-09-27 by owner ruling, in their own commit; no product or detector code changed.
 
 `gate_offline.sh`'s `SC_EXEMPT` exempts two differentials from the `@@SELFCHECK@@` comparator control:

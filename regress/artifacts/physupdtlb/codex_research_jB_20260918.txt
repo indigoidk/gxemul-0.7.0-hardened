@@ -1,0 +1,51 @@
+VERDICT: REAL -- a bare-PHYSICAL RAM access can install or replace a VA==PA entry in the CPU’s virtual translation cache.
+
+Only the six permitted files were read. The insertion defect is established statically; some requested details about normal guest execution lie outside that scope.
+
+1. **The guard reading is correct.**
+
+   `PHYSICAL` sets `paddr = vaddr`, bypassing translation and leaving `ok = 2`. Once a non-null RAM backing pointer is obtained, the publication guard has no `PHYSICAL` exclusion. It additionally checks the MIPS R2000/R3000 isolated-cache condition. See [memory_rw.c:235](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:235), [memory_rw.c:245](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:245), and [memory_rw.c:728](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:728).
+
+   Both generated updater forms accept it:
+
+   | Form | Key and behavior |
+   |---|---|
+   | `MODE32` | Uses the virtual page number; installs `host_load`, `host_store`, and `phys_addr`. An existing VA with a different PA has its mapping replaced. [cpu_dyntrans.c:1552](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1552), [cpu_dyntrans.c:1593](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1593), [cpu_dyntrans.c:1713](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1713). |
+   | `!MODE32` | Uses three indices derived solely from VA bits; installs the corresponding load/store/PA entries and likewise replaces a different PA. [cpu_dyntrans.c:1555](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1555), [cpu_dyntrans.c:1654](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1654), [cpu_dyntrans.c:1732](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1732). |
+
+   Neither carries an ASID or physical-access provenance tag. There are width/alignment checks, an M88K rejection of explicitly flagged `MEMORY_USER_ACCESS`, ARM user-page bookkeeping, and watchpoint suppression of fast stores. None excludes these bare-PHYSICAL calls; MIPS has no corresponding user-page distinction here. [cpu_dyntrans.c:1493](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1493), [cpu_dyntrans.c:1525](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1525), [cpu_dyntrans.c:1600](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1600), [cpu_dyntrans.c:1779](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1779).
+
+   **Even a physical read can publish a writable entry:** the non-instruction path passes `ok - 1`, which is `1`. Also, the scan that would set `dyntrans_device_danger` is disabled by `#if 0`. [memory_rw.c:746](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:746), [memory_rw.c:440](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:440).
+
+2. **MIPS persistence is established locally, but not through every guest transition.**
+
+   MIPS selects these two updater/invalidation implementations directly. A KUSEG address receives the same VA-only entry; the updater imposes no segment restriction. [cpu_mips.c:116](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:116).
+
+   “Until a guest TLB write” is too strong. Entries can disappear through replacement eviction or explicit VA-, PA-, or whole-cache invalidation. The 64-bit VA invalidator matches using `cpu->vaddr_mask`, without an ASID. [cpu_dyntrans.c:1572](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1572), [cpu_dyntrans.c:1227](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1227), [cpu_dyntrans.c:1276](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1276).
+
+   The RAM write’s subsequent **code** invalidation does not remove `host_load`/`host_store`; it clears code-page associations. The shown MIPS exception-entry code also changes status and PC without explicitly flushing those mappings. [memory_rw.c:757](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:757), [cpu_dyntrans.c:1447](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1447), [cpu_mips.c:2206](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:2206).
+
+   A surviving entry can bypass architectural translation: the generic instruction lookup accepts the cached PA before calling `translate_v2p`, with no user-mode or ASID check there. [cpu_dyntrans.c:656](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:656).
+
+   **Unsettled within this scope:** whether routine guest EntryHi/ASID writes, Status writes, TLB instructions, or return-to-user handling remove it first; and the exact user-mode data-load/store path. Those implementations are not present in the permitted files—`cpu_mips.c` includes external MMU/generated code. Consequently, I cannot certify an end-to-end user-mode witness. [cpu_mips.c:75](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:75), [cpu_mips.c:2228](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:2228).
+
+3. **MEC is the strongest normal-use candidate.**
+
+   Machine RAM registration is outside the allowlist, so intended RAM traffic can be identified, but direct core-RAM routing versus a registered RAM mirror cannot always be proved.
+
+   | Device | Machine / CPU | Physical access and normal-use assessment |
+   |---|---|---|
+   | SGI MEC | SGI O2/IP32, MIPS; exact configured CPU model is not established here. The file explicitly describes NetBSD/OpenBSD root-on-NFS use. [dev_sgi_mec.c:28](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:28). | Seven ordinary descriptor/buffer operations: RX descriptor read, payload write, status write at [148](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:148), [180](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:180), [200](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:200); TX descriptor, inline payload, fragment reads and completion write at [251](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:251), [294](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:294), [333](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:333), [370](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:370). These are intended RAM accesses, not accesses to MEC’s registers. |
+   | Dreamcast GD-ROM | Dreamcast, SH-4; identified by the device description and SH4/Holly context. [dev_dreamcast_gdrom.c:28](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:28), [dev_dreamcast_gdrom.c:153](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:153). | Normal staged-data DMA masks the destination and performs a bare physical write. The documented example becomes `0x0c008000`. Whether this reaches core RAM directly or a RAM device/mirror requires the excluded machine map. [dev_dreamcast_gdrom.c:1501](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1501). |
+   | Generic RAM | No unique machine or CPU; both configuration and backing address are supplied by callers. [dev_ram.c:146](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:146). | Only `DEV_RAM_MIRROR` makes the physical recursive call to `otheraddress + relative_addr`. A RAM-backed mirror reaches RAM; a device-backed mirror need not. The initializer explicitly supports possible device targets. Ordinary `DEV_RAM_RAM` uses `memcpy` instead. [dev_ram.c:77](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:77), [dev_ram.c:107](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:107), [dev_ram.c:157](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:157). |
+
+   MEC’s tick routinely processes descriptors, and its RX descriptor read precedes checking for an available packet. [dev_sgi_mec.c:147](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:147), [dev_sgi_mec.c:400](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:400). The predicted witness symptom is a guest VA returning descriptor/packet-page contents despite the architectural TLB describing another mapping; a writable cached entry could also misdirect stores. This is a predicted observation, not a guest run performed here.
+
+4. **Severity: serious guest memory-integrity defect, with potentially high guest-isolation impact.**
+
+   The incorrect publication and replacement are proven. Guest corruption, incorrect execution, and confidentiality/integrity failures are plausible consequences when the entry is consumed. A demonstrated guest privilege escalation or host compromise is not established.
+
+   Two additional findings matter:
+
+   - The dyntrans-capable **device** publication branch also lacks a `PHYSICAL` exclusion—and lacks the RAM branch’s `!no_exceptions` check. Reaching a RAM device/mirror therefore does not inherently prevent pollution. Remediation should cover both publication sites. [memory_rw.c:526](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:526).
+   - Existing-VA remapping updates the fast tables without refreshing the VPH record’s saved PA/host pointer. PA-based invalidation consults that saved PA, so stale bookkeeping can compound this defect. [cpu_dyntrans.c:1692](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1692), [cpu_dyntrans.c:1298](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1298).

@@ -1,0 +1,39 @@
+VERDICT: CLOSES — per §1's own rule: diff delivered (6 hunks, READ), floor roster 4/4 lanes rowed with a runtime assert, zero open cells **0/4**, and the lane-1 escape `vc_ne1` is red at `low16` in §3 — conditional on the measurement-priority premises the packet cannot show (named below).
+
+## Q1 — the floor, cell by cell (READ table, REASONED arithmetic)
+
+Floor = {write arm} × {lane} at C=16, k=0, lane = `P & 3`:
+
+| cell | port | lane | pinning row | red-proven by (§3) |
+|---|---|---|---|---|
+| `wide` | 0x2ff | 3 | `wide getenv` | `vc_ne3` (also M2_len8, KILLLEN8, vf) |
+| `l0w16` | 0x2fc | 0 | `l0w16 getenv` | `vc_ne0` (also vc, M2_len8, KILLLEN8) |
+| `low16` | 0x021 | 1 | `low16 getenv` | `vc_ne1` — the lane-1 escape (also vf, M2_len8, KILLLEN8) |
+| `l2w16` | 0x2fe | 2 | `l2w16 getenv` | `vc_ne2` (also vc, vf, M2_len8, KILLLEN8) |
+
+Open cells: **0/4 checked (4/4 rowed)**. The `assert sorted(...) == [0,1,2,3]` (READ) makes the enumeration self-checking; the identity row pins the roster count (READ). REASONED: every red set in §3 is exactly what the probe code + variant semantics predict — `vc` (services only lane 3) is green at `wide` and red at the other three; `vf` (forwards `data[0]`=s[0]=0x41) is red at lanes 1–3 and green at `l0w16` where `data[0]==data[ofs]`; the spot values (vf → 0x41/0x41/0xf1, presets 0x5a/0x03/0xff/0xb0) match `MSRX(0x41)=0xf1` and the lane-byte derivation `s[lane]` = 0x41/0x42/0x43/0x44. The chunk replay of `sim_store_buf((tgt<<5), 16)` yields `[16]` for all four targets (0x5fe0/0x5f80/0x420/0x5fc0 all 16-aligned, none 64-aligned), and the `c > 8` width pin is real, not by-value.
+
+## Q2 — the contract
+
+REASONED: all eight disclosures are internally coherent. (vii)'s arithmetic checks (16-char string, NUL at offset 16, chunk covers 0–15, lane byte at offset ≤3). (viii) is honestly a detector blindness (latch rows), not a mis-disclosure: the ruled floor's axes are defined by what rows distinguish, and count is not one. Nothing disclosed sits inside the ruled {arm × lane} floor. **Two warrants are external to the packet and therefore unverifiable here:** (i) rests on kills "measured in opus_p2_20260918"; (ii)/(iii) rest on the parent's `p_port10`/`lcaisasize` rulings. Neither header is inlined.
+
+**One real wording defect (soft, not a floor opening):** the contract claims to catch `(P & 3) == L` *"for any lane L"*; §3 measures only `== 3` (vc), plus all four `!= L`. `== 0/1/2` were never built. They are absorbed by the brief's own "demand is per lane, not per variant" rule — every lane has both a measured red (refusal) and a measured green (servicing, via the other lanes' `vc_neL`) — but given this round exists *because* a header generalised a class from one instance, the contract sentence should say "==3 measured, other ==L unmeasured, red by the same rows." Flag it; fix is one clause.
+
+## Q3 — harness fixes
+
+READ + REASONED: both correct as written. Retry is gated `alive and any(printed(...) is None)`; a dead session fails its `alive` row regardless of prints; `sys.exit(0 iff ok == len(rows))` includes it. Within the shown logic there is **no** path where a host death scores a pass — the only residual is in code the diff doesn't show: the single settling fact is *how `alive` is assigned in the elided middle of `session()`* (must be sampled before the close/waitpid tail). The added `waitpid(pid, 0)` would block on a live child — availability nit only, assuming the elided tail kills it; §3's 17 completed legs (claimed) match that assumption. Retries are isolation-safe: each retry is a fresh session with a fresh boot string.
+
+## Q4 — the parent's L4 correction
+
+REASONED: accurate, no reverse overclaim. It names the rule (fable5 R1/R2), the artifact (RESULTS.txt, external), the exact failure shape (lane-3-only rowed, swept 3/3), keeps the "where to look" pointer, and correctly claims the widewrite file now cites `p_port10`/`lcaisasize` by name (READ: disclosures (ii)/(iii) do). "The width floor lives in that file" is now the true, weaker claim.
+
+## Premises not settleable from the packet
+
+1. **TABLE.out's reality** (17/17 as predicted) — settles closure; settling fact: the file's content/re-run.
+2. **PRETABLE priority** — settling fact: mtimes of PRETABLE.out vs the frozen instrument.
+3. **frozen == this file minus one paragraph** — settling fact: diff of the two.
+4. **Settled premises §4** (`ofs = (rel & 3) % len`, write arm forwards `data[ofs]`, store_buf chunking) — settling fact: `dev_lca.c` write arm / `memory.c` store_buf. Not inlined; everything derived from them is at least self-consistent (see Q1 cross-checks).
+
+## Extra find
+
+The strongest packet-level evidence for the table's genuineness is also its only failure mode: the probe code, the eight variant semantics, and §3's red sets/values are *perfectly* cross-consistent (vf's lane-0 green is the sharpest example — an author fabricating a table would most naturally have made the "wrong lane byte" variant red everywhere). That consistency is necessary for closure; condition 1–3 above remain what converts it into sufficiency.

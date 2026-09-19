@@ -1,0 +1,49 @@
+VERDICT: (e) -- the inlined refutations of (a)/(b) leave no non-exiting alternative, and the unimplemented-instruction precedent is the only packet-supported safe stop, **provided** the shape explicitly preserves the faulting PC.
+
+## Q1 — Premises, labeled
+
+**READ** (from the packet):  
+- The code snippet at `:622`–`:733` shows the fatal `exit(1)` on the second failed `translate_v2p`.  
+- `alpha_translate_v2p` returns 0 on miss without moving `cpu->pc`; the retry uses the same PC and fails again.  
+- Codex found: `exit(1) -> cpu->running = 0` alone falls through to `physaddr = paddr` with no paddr supplied; a bare `return` skips setting `cur_ic_page`/`next_ic` and the loop dereferences `next_ic` without checking `running`.
+
+**REASONED** (from the inlined facts):  
+- Alpha reaches the fatal exit because the “exception handler” is the same faulting VA; the retry is guaranteed to fail. This follows from the stated `alpha_translate_v2p` behavior.
+
+**CANNOT SETTLE from the packet**:  
+- “NO other architecture can reach `:729-733` today” — the packet only asserts that MIPS/ARM/PPC/SH move PC to a real handler; it does not inline their failure paths. Single fact to settle: each translator’s failure return state on an instruction-fetch miss.  
+- “The single-step trace read (`:287`, `:325`) handles its own failure” — not inlined. Single fact: code at those lines showing a miss path that does not fall through to uninitialized state.  
+- “`nothing_call` is usable from inside `pc_to_pointers`” — not inlined. Single fact: symbol scope/definition order and whether it is initialized before `pc_to_pointers` can be called.
+
+## Q2 — Exact shape for (e), with caveat
+
+Adopt the unimplemented-instruction precedent, but **do not fall through** to `physaddr = paddr`:
+
+```c
+if (!ok) {
+    /* latched message */
+    cpu->running = 0;
+    debugger_reset();
+    ic = next_ic = &nothing_call;
+    next_ic++;
+    return;   /* before any physaddr use or page setup */
+}
+```
+
+**State on return**:  
+- `cur_ic_page` — unchanged (possibly stale); not used because the loop exits.  
+- `next_ic` — points into `nothing_call`, so no garbage dereference.  
+- `cpu->pc` — **must be explicitly preserved as the faulting VA** (e.g., save before setting `next_ic` and restore after `debugger_reset` or before any epilogue). The packet itself warns the precedent is not drop-in because the epilogue reconstructs PC from instruction pointers; without a save/restore, `cpu->pc` may become the address of `nothing_call`, failing the Q3 requirement “pc still the faulting VA.”
+
+**Run loop next**: sees `cpu->running == 0` and exits after this iteration, or executes `nothing_call` once safely; under `-V` the debugger prompt appears.
+
+## Q3 — Witness as a detector
+
+The rows must prove **all three**: host survives, CPU stopped, no garbage executes. Specifically:  
+- Host exit status is **0** (or at least not the fatal status 1).  
+- The latched message appears **exactly once**.  
+- Debugger prompt appears under `-V`.  
+- `cpu->pc` remains **0x1044000** after stop.  
+- No translated page is allocated/executed for the faulting VA; `cur_ic_page`/`next_ic` do not cause a fault.
+
+If any row is missing, the shape is insufficient. The packet’s own warning about epilogue PC reconstruction means the naive `nothing_call` assignment alone may not satisfy the `pc` row; an explicit save/restore of the faulting VA is required.

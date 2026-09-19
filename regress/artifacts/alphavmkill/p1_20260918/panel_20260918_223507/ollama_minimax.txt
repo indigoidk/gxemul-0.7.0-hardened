@@ -1,0 +1,110 @@
+```
+VERDICT: 2 -- matches the file's existing unlatched `not_found` idiom (#215/#244); the minimum that stops the host dying without fabricating a paddr or adding a feature. Member 6 is opaque from the packet and cannot be ranked.
+```
+
+---
+
+## Q1 -- Premises as stated
+
+**Premise A: "0xFFFFFFFD80000000 is special to any guest (NetBSD/alpha's VPT base is 0xFFFFFFFC00000000; is this address inside the self-mapped page table)?"** -- REASONED, not checkable.
+- VPTBASE = 0xFFFFFFFC00000000 (per packet). Alpha VPT holds 2^32 PTEs × 8 B = 32 GB, so VPT spans 0xFFFFFFFC00000000 .. 0xFFFFFFFC7FFFFFFF.
+- Offset of the suspect VA from VPTBASE = 0x180000000 (6 GB). Divided by 8 B/entry = PTE #0x30000000, which corresponds to physical page 0x30000000 (≈ 6 TiB).
+- So **this VA is NOT inside the VPT** -- it is 0x180000000 past VPTBASE, well beyond the self-mapped L1 region (the first 8 KiB). The brief's wording "is this address inside the self-mapped page table?" is a question, not an assertion, and my answer is **no**.
+- Single fact that would settle it: a kernel-symbol table for NetBSD/alpha (or OpenBSD/alpha, Digital UNIX) naming any text/data/stack segment at exactly 0xFFFFFFFD80000000. Not in packet.
+
+**Premise B: "member 4 (drop only `exit(1)`, keep the identity result) hands the guest a WRONG TRANSLATION that silently succeeds"** -- REASONED.
+- The base==0 arm's identity map masks with `0x000003ffffffffff` (34 bits). 0xFFFFFFFD80000000 & 0x3FFFFFFFFF = **0x3FD80000000** (≈ 274 GiB). That is roughly 16× the largest physical address the rest of the base==0 arm contemplates (the HWRPB remap tops out near 0x7f000000 + 0xffffff ≈ 2 GiB).
+- Single fact that would settle it: what `memory_rw.c` does when handed a physical address past the top of RAM and past any device register. The packet does not inline that. **Not checkable from the packet.**
+- But it is almost certainly worse than `return 0`: silent wrong-data beats no-data (member 2/3) for a debugger; a fatal there would also be a defect. Member 4 is strictly worse on this address.
+
+**Premise C: "member 5 FAULT is NOT available on Alpha"** -- READ (from packet: option-set carrier rule + the `#215` idiom `if (!cpu->memory_rw(...)) return;` with no exception path, plus the 2026-09-08 grok assess).
+
+**Premise D: "Alpha's translator moves no PC, so on Alpha EVERY I-fetch translation failure ends the host at cpu_dyntrans.c:729-733"** -- READ (from packet). Cannot independently verify the dyntrans source, but the brief's reading is internally consistent (re-lookup, re-translate, fatal on second miss).
+
+---
+
+## Q2 -- Which member, and why that one over its neighbours
+
+For access type A = load, B = store, C = I-fetch at 0xFFFFFFFD80000000 with ptbr==0, supervisor:
+
+| Member | A (load) | B (store) | C (I-fetch) | Witness after fix |
+|---|---|---|---|---|
+| 1 DELETE whole block | arm removed; falls to walk; ptbr==0 walk fails; **not_found fatal -- host dies worse than today** | same | same | "alive" DIED at not_found -- strictly worse than 3/5 today |
+| **2 DECLINE silently** | `return 0`; destination unchanged per `#215` idiom | `return 0`; nothing stored | still dies at `cpu_dyntrans.c:729-733` (separate defect `alphaifetchkill`) | live pass, hwrpb pass, alive pass (rd=unchanged), continued pass; I-fetch cell disclosed to alphaifetchkill |
+| 3 DECLINE + LATCHED | same as 2 plus a `(once)` print | same as 2 plus print | same as 2 | same scores; one extra `(once)` line in transcript |
+| 4 ACCEPT (keep identity, drop exit) | guest reads paddr 0x3FD80000000 ≈ garbage | guest writes there | `cpu_dyntrans.c` reads that paddr as code | "alive" returns a junk value, not "unchanged" -- fails the "DEFECT" cell (which demands survive) AND introduces a silent-wrong-data defect |
+| 5 FAULT | not available | not available | not available | N/A |
+| 6 BACKED ACCEPT | **opaque from packet** -- the brief defines 1..5,7 by name but only labels 6 "BACKED ACCEPT". I cannot tell whether it (a) returns the identity with some backing-store guard, (b) is a synonym for 4 with extra wording, or (c) refers to a backing-store abstraction not present in this emulator. **Not checkable from the packet.** Single fact that would settle it: the option-set carrier's definition of member 6. | | | |
+| 7 IMPLEMENT kernel VM | out of scope | | | |
+
+Why **2 over 3**: the carrier's stated idiom is "print once per miss", but the actual existing `not_found` site is **unlatched** (it prints every miss). Member 3 is what the idiom *should* be; member 2 is what the idiom *is*. Member 2 is the minimum. Both are correct; the panel should pick 2 if it wants round-minimum change and 3 if it wants to upgrade the file's unlatched print to a latch in passing. I am picking 2 because the latch is a separable improvement that can be filed against `not_found` itself.
+
+Why 2 over 4: see Premise B -- silent wrong paddr is worse than no-data.
+
+Why 2 over 1: deleting the arm destroys the legitimate base==0 mapping for HWRPB, PROM argspace, and the generic identity case.
+
+Why 6 is not a candidate: **not checkable from the packet**. If 6 turns out to mean "decline + backing-store accounted for in the translator's stats", it might equal 2. If it means "accept with backing", it is worse than 2. I will not guess.
+
+---
+
+## Q3 -- The second residue
+
+Same file (memory_alpha.c). Same semantic class (translator-kills-emulator on a specific VA). Same defect intent. **But the inlined witness only exercises the base==0 arm (ptbr == 0).** The walk-path residue at `:94` requires ptbr != 0 to trigger, which the inlined witness does not set up.
+
+Reading the reopening rule strictly (same detector): the witness as inlined does NOT cover the walk path, so under a strict reading the second residue is **its own row**. Reading the rule by defect class (same VA, same intent, same one-line fix): it joins this round because the fix is identical ("delete the check" or "return 0 in place of the fatal").
+
+My call: **join this round, with the caveat that an additional rung-3 witness on the walk path is owed if you want both cells of the row to be machine-checked rather than reasoned**. The fix in the patch is one deletion either way; splitting the rows buys nothing and costs a round. If the panel insists on per-cell evidence, split.
+
+---
+
+## Q4 -- The witness
+
+- `live` (raw-VA load through base==0 arm) proves the arm's identity mapping works for ordinary RAM cells. READ result 0xaaaa0000aaaa is consistent.
+- `hwrpb sig` (load at 0x10000008) proves the HWRPB remap in the base==0 arm fires and returns the planted signature "HWRPB". READ consistent.
+- `alive` is the defect cell.
+- `continued` (PC after the load = 0x1234) is the test that the load did NOT trap, hang, or skip the next instruction. It cannot exist on a host that died, which is itself the "absent" line in the measured transcript.
+
+Attribution guard: the kill's own text on the transcript + `vmmsg=1`. **Sufficient** for distinguishing this defect from `alphaifetchkill`'s `cpu_dyntrans.c:729-733` text (different fatal string) and from any other host death. The "scores 0/0 never 3/5" rule makes the 3/5 measurement unambiguous.
+
+What the detector owes after member 2:
+- `alive` cell: read of 0xFFFFFFFD80000000 returns the destination's *unchanged* prior value (the idiom); host does not die.
+- `continued` cell: the instruction after the load executes and writes 0x1234.
+- `live`, `hwrpb sig`: unchanged.
+- `vmmsg`: no fatal text on the transcript.
+- **Store cell**: not exercised by the inlined witness. Owed as a rung-3 store probe at the same VA (plant a value, attempt raw-VA store, readback, confirm unchanged and host alive).
+- **I-fetch cell**: see Q5.
+
+If member 3: same, plus exactly one `(once)` line in the transcript.
+
+---
+
+## Q5 -- Order of rounds
+
+Two orderings, two measurable consequences:
+
+**Order A -- this row first (member 2), then alphaifetchkill:**
+- After member 2: load and store at 0xFFFFFFFD80000000 stop killing the host (PASS). I-fetch at the same VA still kills the host, but now at `cpu_dyntrans.c:729-733` (FAIL with a different fatal string).
+- Disclose this row's I-fetch cell to alphaifetchkill.
+- After alphaifetchkill is independently fixed: I-fetch also passes.
+- **Net result: two rounds, sequential, each cleanly closed.** This is what the brief recommends ("DISCLOSE the I-fetch cell against that row").
+
+**Order B -- alphaifetchkill first, then this row:**
+- After alphaifetchkill alone: I-fetch translation failures on Alpha no longer die at `cpu_dyntrans.c:729-733`. But I-fetch at 0xFFFFFFFD80000000 still hits `memory_alpha.c`'s `fatal(...); exit(1);` BEFORE reaching the dyntrans handler, so the host still dies -- just at a different, earlier site, with this defect's fatal string.
+- Then this row fixes member 2; I-fetch finally passes.
+- **Net result: alphaifetchkill's commit message will claim "Alpha I-fetch translation failures no longer kill the host", which is technically false for this specific VA at the time it lands.** The claim is only true after the second round. That is a worse commit-history than Order A.
+
+**Recommendation: Order A.** The measurable consequence is clean: this round's commit removes exactly one class of host death (the inlined-translator kills), and alphaifetchkill's commit removes a different class (the dyntrans assumption); each commit's claim is true at the moment it lands.
+
+---
+
+## Other things found while verifying
+
+1. **The fatal message is wrong even on its own terms.** The check is inside `if (!userMode && base == 0)`, i.e., ptbr == 0. The message says *"Alpha kernel virtual memory seems to want to be used. Not yet implemented."* -- but with ptbr == 0, the guest is **not** asking for VM; it is in the pre-VM identity-mapped regime, and the address in question (K1SEG at offset 0x80000000 mapping to physical 2 GiB) is a legitimate direct-mapped kernel access that the emulator just does not implement (K1SEG is not in the first arm; only K0SEG is). The author's diagnostic is incorrect; the access is not a "VM wanting to be used" signal. Worth noting in the patch's commit message so a future reader doesn't reinstate the check thinking it is a useful tripwire.
+
+2. **Member 6 is opaque from the packet.** Re-stating: the brief labels members 1, 2, 3, 4, 5, 7 by behaviour; member 6 is labelled "BACKED ACCEPT" with no inline definition. I cannot rank it. **Single fact that would settle it: the option-set carrier's text for member 6.**
+
+3. **The `*return_paddr = vaddr & 0x000003ffffffffffULL;` line is dead-store in the fatal path.** It runs before the `if (vaddr == ...)` and the result is unused once `exit(1)` is called. Cosmetic, but a member-2 patch can drop it (or leave it; it doesn't matter once the function returns 0).
+
+4. **The witness's `continued` value 0x1234 is at a fixed PC, not a relative offset.** This means the witness is fragile against any unrelated change that perturbs the instruction stream around the planted load. Not a defect in this brief, but a property of the witness to note.
+
+5. **Premise on K0SEG range.** The packet does not inline `ALPHA_K0SEG_BASE` / `ALPHA_K0SEG_END` constants, only the mask `0x000003ffffffffff`. REASONED: 0xFFFFFFFD80000000 lies above K0SEG's range for any plausible physical-address size (the upper 32 bits 0xFFFFFFFD exceed K0SEG's 0xFFFFFC??). So the fall-through into the base==0 arm in the witness is consistent. **Not independently verified.**

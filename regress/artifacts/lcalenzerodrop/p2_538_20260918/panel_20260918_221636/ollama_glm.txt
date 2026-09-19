@@ -1,0 +1,32 @@
+**VERDICT: CLOSES — 0/4 lane cells open (floor = {write arm} × {lane 0..3} at C=16, k=0; 4/4 checked); the named lane-1 escape `(P&3) != 1` is measured red at `low16` (vc_ne1, 12/13, red exactly `[low16 getenv]`), and every cell's pinning row is red-capable somewhere in §3.**
+
+## Q1 — enumeration
+
+Floor (READ, §1) is four cells; the diff's `CELLS` rows exactly those four and its assert pins the partition `[0,1,2,3]` (READ). Lane arithmetic (REASONED from the probe's `(a>>5 & 3) % c`): 0x2fc→0, 0x021→1, 0x2fe→2, 0x2ff→3 — matches the cell comments.
+
+Per cell, pinning row and the §3 leg proving it red-capable (READ):
+- **lane 0 / l0w16 (MCR 0x2fc):** `l0w16 getenv`; red under M2_len8, KILLLEN8, vc, **vc_ne0** (12/13, red=`[l0w16 getenv]`).
+- **lane 1 / low16 (8259 IMR 0x21):** `low16 getenv`; red under M2_len8, KILLLEN8, vc, vf, ve, **vc_ne1** (12/13, red=`[low16 getenv]`) — the lane-1 escape the covering {mc2, kbc1024} misses.
+- **lane 2 / l2w16 (MSR 0x2fe):** `l2w16 getenv`; red under M2_len8, KILLLEN8, vc, vf, **vc_ne2**.
+- **lane 3 / wide (SCR 0x2ff):** `wide getenv`; red under M2_len8, KILLLEN8, vf, **vc_ne3**.
+
+Zero: **0/4**. Two REASONED strengthening facts from the READ table: (a) the four vc_neL legs each red exactly one *distinct* cell — the measured red sets are themselves the lane partition, so the four cells are not secretly equivalent; (b) base is 13/13, so no cell is vacuously red. Both directions are measured for every lane.
+
+## Q2 — the contract
+
+None of (i)–(viii) is inside the ruled floor — all are axes orthogonal to lane, and §1 (READ) itself rules ports, k, thresholds-above-16 and position as clause-(e) debt. Backed by measured red: guard (KILLLEN8), write-conjunct (M2_len8), `!= L` for all four L, `== 3` (vc), wrong lane byte (vf, including the MSRX-transformed 0xf1 — internally exact). **One claim is not directly legged:** `== L` for L ∈ {0,1,2}. REASONED: it is entailed with no extra assumptions (such a variant declines three lanes, and a refusal at each of those lanes is independently measured red three ways), but no leg runs it. The closure doesn't need it; the contract wording "for any lane L" slightly outruns the table. Warrant nits: (iv)'s stated warrant ("the handler holds no state") doesn't support the disclosure — a one-edit can add state; the operative fact is that each cell issues exactly one chunk. (v) is an emulator-wide negative warranted only for the PROM producers named. (ii)'s `ve` red is honestly labeled incidental.
+
+## Q3 — harness fixes
+
+Both right as written (READ of the inlined code, REASONED of paths): a dead session is never retried; missing prints then compare `None != want` → red → exit 1. `sys.exit(0 if ok == len(rows) else 1)` gives 0 only at full marks. **No death→pass path in the shown code**: death reds either the alive row (prints complete — a phantom red in the *fail* direction) or all value rows. Residual, not checkable from the packet: how `alive` is computed and how `printed()` parses sit in un-inlined bodies of `session()`/`printed()` — the only place a false green could hide. No leg shows an "alive" red, so the phantom-red path never fired.
+
+## Q4 — the L4 correction
+
+Accurate, no overclaim (READ-checked): v1 really caught the two named mutants (READ: #530 table, both 2/3); a lane-3-only service really swept v1 — corroborated by this table's vc being green at `wide` and red at exactly the three new lanes; #538 really rows all four lanes (CELLS + assert); the new contract really cites p_port10 and lcaisasize by name. **One silent sibling change**: the rewritten docstring also moves the witness from "13/16 on the committed build" to "on the pre-fix build" — not part of the announced L4. "Pre-fix" is the correct designation for a witness; whether both phrases name the same build I cannot settle (settling fact: what `lca_isalane_probe.py` scores on the tree under review).
+
+## Else found
+
+1. **A mis-stated premise in §4 — the lane formula.** §4 says `ofs = (relative_addr & 3) % len`. The packet's own #530 derivation computes `(0x2ff & 3) % 16` — applying `&3` to the *port* — and the probe computes `((a >> 5) & 3) % c`. At k=0 every cell address is 16-aligned, so under the literal reading (relative_addr = window offset, e.g. 0x5fe0) **all four cells compute lane 0**, contradicting the READ measurements (base 13/13 on lane-derived wants; #530's 0x44). The premise survives only under the port reading, which "relative_addr" doesn't naturally bear. It does not flip the verdict — the measurements pin the effective rule — but §4 is the section other seats are told to trust, and as written it mis-derives every lane. Settling fact (one glance for a file seat): the literal `ofs` expression in `dev_lca.c`'s write arm.
+2. **The one unsettled transfer premise.** All 17 legs ran on 8bd97e4's `dev_lca.c`; the tree under review also carries the uncommitted #540 `PHYSICAL` edit, whose irrelevance to these 13 rows is asserted, not shown, while the closure rule demands a pass on *this* diff. Declared out-of-round, so it does not flip the verdict — but record it. Settling fact: re-run `base` and `vc_ne1` on the working-tree binary, or show the nested forwards' target addresses are identity-mapped (where PHYSICAL is a no-op).
+3. Not checkable from the packet, named: PRETABLE mtime pre-registration; "differs from the frozen instrument only by the MEASURED paragraph"; the opus_p2 citations (seven-variant roster; va/vb/vw64/vw256 killed at wider cells); the parent header's prior ruling of p_port10/lcaisasize.
+4. Minor (REASONED): the 8042 `kind` branch (KBC_CMD/KBC_DAT/FLAT) is dead code — no cell uses it; unexercised scaffolding inside a detector, not a defect.

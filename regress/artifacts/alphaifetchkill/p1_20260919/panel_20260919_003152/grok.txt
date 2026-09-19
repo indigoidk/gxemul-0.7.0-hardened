@@ -1,0 +1,146 @@
+I'll verify the brief's premises against the named Alpha/dyntrans sources rather than ratify them, then answer Q1–Q3 with a verdict.The kill site and Alpha miss path match the brief; next I’ll read the run loop, `nothing_call`, and the other translators’ failure paths.**VERDICT: (e) -- `alpha_translate_v2p` returns 0 without moving `cpu->pc`, so the “handler” retry is the same miss; stop like unimplemented, but do not copy `next_ic++` / `ic->f()`.**
+
+Checked against HEAD `cdbe7d7`. I read the four named files, then the other translators’ failure paths because Q1 asks for them. Packet-fed seats should treat those extra readings as named, not as brief-supplied facts.
+
+---
+
+### Q1 — premises, as questions
+
+**Has this shipped?** Confirmed: `CHANGELOG.md` has no `alphaifetchkill` hit in the tree I grepped; the kill at `cpu_dyntrans.c` `:729-733` is still `fatal` + `exit(1)`.
+
+**The defect is real.** `alpha_translate_v2p` `not_found` prints and `return 0` with **no** `cpu->pc` write (`memory_alpha.c` after the walk TODOs). `DYNTRANS_PC_TO_POINTERS_GENERIC` then assumes “the PC is now the exception handler”, reloads `cached_pc = cpu->pc`, and translates the **same** VA again. Two misses, then `:729-733`. Witness `transcript_B.txt` matches: two `[ ... 0x0000000001044000 wasn't found ]` lines, then `FATAL: could not find physical address of the exception handler?` with no newline, process `wait=256`.
+
+**“No other architecture can reach `:729-733` today” is too strong.** I read each `FLAG_INSTR` miss path:
+
+| translator | miss does | reaches `:729-733`? |
+|---|---|---|
+| **Alpha** | `return 0`, PC unchanged | **Yes (witnessed)** |
+| **MIPS** | `mips_cpu_exception` sets PC to ckseg0/1 (`0xffffffff80000000` / `...bfc00200`); those identity-map (`memory_mips_v2p.c` kseg0/1 arm) | Not via this site |
+| **ARM MMU** | `arm_exception` sets PC to vector **and calls `quick_pc_to_pointers` recursively** | Unmapped vector is **stack overflow**, not `:729-733`. MMU-off always succeeds |
+| **PPC** | `ppc_exception` sets PC to `exception_nr*0x100` **and calls `ppc_pc_to_pointers` recursively**. BAT/601/64-bit TODOs `exit(1)` earlier | Same recursion shape as ARM |
+| **SH** | `sh_exception` moves PC (VBR+offset, or `0xa0000000` on BL-already-set / reset). `0xa0000000` is P2 identity-map. A different `exit(1)` lives at `memory_sh.c` FLAG_INSTR unimplemented, **not** `:729-733` | Not this site |
+| **M88K** | `m88k_exception` sets `cpu->pc = VBR + 8*vector` and returns 0 (**no** recursive `pc_to_pointers` on the implemented instruction-access vector) | **Yes, if the handler VA also misses** — the generic’s *second* `translate_v2p` returns 0 and hits `:729-733` |
+| **RISC-V / i960** | `translate_v2p` is never installed in `cpu_riscv.c` / `cpu_i960.c` | Identity; cannot miss |
+
+So Alpha is the only arch that reaches the site **by design**. M88K can reach the **retry-fail** arm when VBR is unmapped. That is why (c) (Alpha-only, others keep `exit(1)`) is the wrong cut: the kill is in shared dyntrans, and “handler unmapped” is still a guest-reachable host death. The right predicate is **“PC did not move, or the retry missed”**, not `#ifdef DYNTRANS_ALPHA`.
+
+**(a) and (b) are refuted**, as the Codex job said. `paddr` is a block-local `uint64_t` with no value on failure; `:736` `physaddr = paddr` is garbage. A bare `return` skips `:830-833`. The `I` macro (`:114`) is `ic = next_ic++; ic->f(cpu, ic)` with **no** `running` check. `run_instr` calls `DYNTRANS_PC_TO_POINTERS` at `:190` and then `I` at `:325`.
+
+**Single-step `:287` does *not* handle its own failure.** On `memory_rw` fail it prints `XXX_run_instr(): could not read the instruction` and **still executes `I`**. It does not stop the CPU, does not set `next_ic`, does not return. Today Alpha never gets there because `:729-733` has already `exit(1)`’d. After (e), a `step` (the witness is `step 2`) will: stop in `pc_to_pointers`, then **one more** `alpha_translate_v2p` miss from the disassembly read, then `I` of `nothing_call`. The detector must not treat that third `wasn't found` as a regression.
+
+**`nothing_call` is usable from `pc_to_pointers`.** `cpu_dyntrans.c` is `#include`d into the same TU as the `static` `nothing_call` (`tmp_alpha_head.c` via `cpu_alpha.c`, then `tmp_alpha_tail.c` compiles `DYNTRANS_PC_TO_POINTERS_GENERIC`). Same include order on every dyntrans arch. `instr(nothing)` is:
+
+```c
+cpu->cd.alpha.next_ic --;
+cpu->ninstrs --;
+```
+
+It is a **spin**: `I` increments `next_ic`, `nothing` decrements it back onto itself. That is how translated dispatch “gets out” without executing guest code. It is **not** only an instruction-handler object.
+
+**Brief nits, not verdict-changing:**
+
+- `transcript_B.txt` has **three** `wasn't found` lines: one data miss at `0x1056000` (arming control — host stays up, `t2` keeps `0xbad1d8a`) and two I-fetch misses at `0x1044000`. The JMP mechanism is as stated.
+- The FATAL line has **no `\n`**; the transcript concatenates `?quit`.
+- “Debugger prompt under `-V`” is the wrong lever. `about_to_enter_single_step` is what forces `debugger()` in `emul.c` (`:1033-1039`). `-K` is also implicit (`emul.c` `#259`). The witness is already inside `GXemul>`.
+- `memory_alpha.c:194-196` says the caller “raises the fault”. The I-fetch caller does not; it `exit(1)`s. Data `memory_rw` just fails the access. `#541` already owns a rationale correction of that comment — do not fight it here.
+
+---
+
+### Q2 — option and exact shape
+
+**(d) is a feature** (ITB/ACV via PALcode). Dummy `kentry[]` exists (`cpu_alpha.c:99-103`); the walk TODOs are still TODOs; there is no miss → PAL path. Out of scope.
+
+**(e), in the shared generic, not Alpha-ifdef.** `(c)` is the same stop with a worse predicate.
+
+`DYNTRANS_PC_TO_POINTERS_GENERIC` is `void`. Today it has **one** exit: fall off the end after `:830-833` set `cur_ic_page` / `next_ic`. The new path is a **second** exit: early `return` from the `if (!ok)` arm, **before** `physaddr = paddr`.
+
+Replace `:720-733` with this shape (not a drop-in of `:2002-2034`):
+
+```c
+		if (!ok) {
+			cached_pc = cpu->pc;
+			/* existing fast-table lookup of cached_pc ... */
+			if (!ok && cpu->pc != /* the VA we just failed */)
+				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+				    FLAG_INSTR);
+			if (!ok) {
+				static int warned; /* per-arch TU; CPU is stopping */
+				if (!warned) {
+					warned = 1;
+					fatal("instruction fetch: no translation"
+					    " for pc=0x%016" PRIx64
+					    " (once)\n", (uint64_t)cpu->pc);
+				}
+				about_to_enter_single_step = true;
+				cpu->running = 0;
+				debugger_reset();
+				cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+				/* NO next_ic++; NO ic->f() */
+				return;
+			}
+		}
+```
+
+The PC-unchanged test is the Alpha case expressed from the function’s own state: if `translate_v2p` did not move PC, do not retry the same miss (drops the JMP from two walk diagnostics to one). If PC *did* move (MIPS/SH/M88K), keep today’s retry. If the retry still misses (M88K unmapped VBR), **stop**, do not `exit(1)`.
+
+**Why the unimplemented sequence is not copy-paste:**
+
+| unimplemented (`:2023-2034`) | this site |
+|---|---|
+| Inside an `I` (this instruction *is* the stop) | `pc_to_pointers` is a helper; the next `I` has not run |
+| `next_ic = &nothing_call; next_ic++; ic->f()` | `next_ic = &nothing_call;` only. The `++`/`f()` pair is because they consume this `I`. Copying it here leaves `next_ic` **past** `nothing_call`; the caller’s `I` then executes **.data after the static** |
+| `cur_ic_page` already the page of the bad opcode | Must **leave `cur_ic_page` alone**. Pointing it at `&nothing_call` makes the epilogue (`:394-400`) compute `low_pc == 0` and **snap `cpu->pc` to the page base** of the faulting VA |
+
+**On the early return:**
+
+- `cpu->pc` — still the faulting VA (JMP/BR already wrote it; `end_of_page` already advanced to the next page base; cold `run_instr` already had it).
+- `next_ic` — `&nothing_call`.
+- `cur_ic_page` — previous page or NULL.
+- `running` — 0.
+
+**What the run loop does next**
+
+1. **Caller = `run_instr` `:190`.** Interrupt check. `:265` `cached_pc = cpu->pc` (faulting VA). `:267` **zeroes `n_translated_instrs` after we returned** — that is the Codex accounting trap; it is the same as unimplemented and is acceptable. Single-step may print `could not read` (`:287-290`) and still `I`. `I` runs `nothing`, which parks `next_ic` on itself. Free-run burns `nothing_call` until `N_SAFE_DYNTRANS_LIMIT`. Epilogue: `low_pc = (&nothing_call - old cur_ic_page) / sizeof(IC)` is almost certainly **not** in `[0, PAGE+1]`, so the `if/else if` chain does **not** rewrite `pc`. `machine_run` skips this CPU next timeslice (`machine.c:708`). `about_to_enter_single_step` opens the debugger.
+
+2. **Caller = `jsr` / `jsr_0` / `br` / `br_return` / `call_pal` / `end_of_page`** (`cpu_alpha_instr.c` `:72`, `:108`, `:149`, `:184`, `:211`, `:757`). Handler returns into the unrolled `I` loop; remaining `I`s spin on `nothing_call`. Same epilogue. JMP/BR have already set `cpu->pc` to the target; that is the value to keep.
+
+3. **Do not** `physaddr = paddr`, do not allocate a TC page, do not `memory_paddr_to_hostaddr` on garbage.
+
+Latch: `(once)` on a function-static is enough **because the CPU stops** (no flood). A new `cpu->cd.alpha` field is an addition `#541` is already making for a **different** `exit(1)` (`memory_alpha.c:75-78`, identity-map kernel VA). Do not share that field; different site, different round.
+
+---
+
+### Q3 — witness as detector
+
+Existing artefact: `regress/artifacts/alphaifetchkill/witness_HEAD_20260918/` (rung 3, unmodified `-E alpha -e alphabook1`). Pre-fix Session B: `alive=False wait=256`, two I-fetch misses at `0x1044000`, one FATAL. Session A (neighbours, `ptbr==0`) is the **alphavmkill** neighbour, not this row’s kill.
+
+Promote that session; do not replace it with a host-only assert. CHANNEL (row → mutant → observable):
+
+| row | kills | observable |
+|---|---|---|
+| **arming control** (already in the transcript) | “paging isn’t on” | `ldq` of raw `0x1056000` keeps sentinel `0xbad1d8a`; host alive; one data `wasn't found` |
+| **host survives** | verbatim `exit(1)` reinstatement (floor b) | `wait != 256`; **no** `could not find physical address of the exception handler` |
+| **CPU stopped** | `running = 0` omitted | further `step` does not execute at `0x1044000`; `machine_run` sees `running==0`; under the witness debugger, `GXemul>` returns |
+| **no garbage / `next_ic` parked** | `return` without `&nothing_call` (falls through on the **mapped** page after the JMP — `0xfffffc000104002c`) | PC stays `0x1044000`; no stores after the JMP |
+| **PC held (anchor)** | `cur_ic_page = &nothing_call` (epilogue snaps to page base) or `next_ic++` without `nothing()` | `print pc` == `0x0000000001044000`, not `0x1044000 & ~0x1fff` |
+| **latch once** | unlatched new `fatal` | new message count = 1 after a second entry (debugger `step` / `continue`) |
+| **accept / liveness** | guard that also refuses K0SEG | the nine setup instructions at `0xfffffc0001040000` still step |
+
+**Re-pin, in order:** if you skip the same-VA retry, the JMP’s `wasn't found` count goes **2 → 1** (plus the single-step disassembly miss if the row uses `step`). Measure the committed build **red** under the new count before editing (`oracle-correction`). Do not claim “2” as a post-fix pin.
+
+**Clause (d) mutants the detector owes**, from predicates this fix depends on:
+
+1. `exit(1)` restored at `:732` — (b).
+2. `running = 0` kept, `next_ic` not set — (d), garbage fall-through.
+3. unimplemented drop-in (`next_ic++` without matching `nothing()` here) — (d).
+4. `cur_ic_page` aimed at `nothing_call` — (d), PC snap. The PC-held row is the channel.
+
+Contract (e): this detector pins **“instruction-fetch translation returned 0 and no usable handler mapping; host lives, this CPU stops, PC is the faulting VA.”** It does **not** pin ITB/ACV delivery, PAL `kentry`, or the identity-map `exit(1)` at `memory_alpha.c:75-78`.
+
+---
+
+### Something else
+
+- **Callers of `alpha_pc_to_pointers` besides JMP:** `end_of_page`, `br`/`beq`/…, `call_pal` if PAL moved PC, and the `run_instr` entry. Same function; JMP is enough for the floor. Sequential fetch off the end of a mapped page is the cheap extra row if the probe can do it without a new session.
+- **`to_be_translated` `:812-816`** is the opposite failure (mapping exists, instruction **read** fails) and already `goto bad` → unimplemented stop. Do not conflate it with this site.
+- **Data path is already non-fatal** (`#194`). This round is the I-fetch hole that comment claimed was the caller’s job.

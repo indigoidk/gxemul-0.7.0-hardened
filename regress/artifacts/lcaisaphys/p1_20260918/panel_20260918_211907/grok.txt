@@ -1,0 +1,112 @@
+I'll audit the brief's premises against the named sources first, then answer Q1–Q4 with a verdict. Starting with the repo state and the four files the brief allows.Git from this seat is blocked, so I’ll verify the four named sources and the checkpoint against the brief’s claims.CACHE_NONE is 2, not 0, so I’ll enumerate the RAM-path cache tests and look for sibling forwards that omit `PHYSICAL`.**VERDICT: GO -- nested `LCA_ISA_BASE + port` is physical by construction; `CACHE_NONE | PHYSICAL` on both arms is the smallest correct repair.**
+
+I re-derived the defect from `dev_lca.c`, `memory_rw.c`, and `memory_alpha.c`. I did **not** re-run the probe (checkpoint says `gate_arm.sh` may still own the machine; the brief forbids harness runs). The 9/13 table is the author's measurement, not mine.
+
+---
+
+## Premises that held
+
+- **Not shipped.** Checkpoint HEAD is `e0be9b2`; `dev_lca.c` last changed in `#530` (`8bd97e4`). The two nested calls still pass `CACHE_NONE` only (`dev_lca.c` write `return cpu->memory_rw(..., CACHE_NONE)`, read the same).
+- **`PHYSICAL` is the only skip.** `memory_rw.c`: `if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) paddr = vaddr; else translate_v2p(...)`. `PHYSICAL` is `32`.
+- **Inner address is not K0SEG.** `LCA_PCI_SIO = 0x1c0000000`, `LCA_ISA_BASE = 0x1d0000000`. Port `0x3fd` → inner `0x1d00003fd`. K0SEG is `0xfffffc0000000000`..`0xfffffdffffffffff`. `0x1d00003fd` is in **USEG** (`0`..`0x000003ffffffffff`), so it **walks** once `ptbr != 0`.
+- **Identity hacks are both `!userMode`.** K0SEG identity and `base == 0` identity each require `!userMode`. `base = apcb_ptbr << 13`, so `ptbr == 0` iff `base == 0`. The brief's settled line dropped that conjunct; it does not matter for this probe (`swpctx` loads PCB fields and does **not** write `cpu->cd.alpha.ps`).
+- **ISA targets are `DM_DEFAULT`.** `ns16550`, `8253`, `8259`, `pccmos`, `pckbc` all register `DM_DEFAULT`. `NO_EXCEPTIONS` therefore skips the handler (`!no_exceptions || DM_READS_HAVE_NO_SIDE_EFFECTS` is false).
+- **Registration is physical.** `DEVINIT(lca)` passes `LCA_ISA_BASE` to `bus_isa_init` as `isa_portbase`; COM1 is `isa_portbase + 0x3f8`.
+
+## Premises that need a qualifier
+
+1. **Failure mode is the unmapped case only.** With an invalid L1, a read is a successful false zero (`#244` zeroes the inner byte; the read arm **ignores** the inner return and `return 1`); a write is abandoned (`write` arm `return`s `MEMORY_ACCESS_FAILED == 0`; Alpha has no `MEM_MIPS`/`MEM_M88K` fault in that block) **and** each miss prints the unlatched `wasn't found` line. If a guest has a **valid** PTE for VA `0x1d00003fd` (legal in USEG), the inner access is a **silent misroute into guest memory**, not a miss. Same missing token; worse symptom. This witness does not cover that cell (and does not need to, for reproduction).
+
+2. **`CACHE_NONE | PHYSICAL` and bare `PHYSICAL` are not the same encoding.** `CACHE_NONE` is **`2`**, not `0`. `cache = misc_flags & 0x3` is `2` vs `0` (`CACHE_DATA`). They are equivalent **at this site** (enumerated below), not identical.
+
+3. **The `56` census** was not re-counted here. The two `CACHE_NONE | PHYSICAL` sites in `dev_ps2_stuff.c` exist. The older note that `dev_sh4.c` / `dev_pccmos.c` / Maple already used that pair is correctly withdrawn.
+
+---
+
+## Q1 — premise audit
+
+**Is the nested address ever legitimately virtual?** No. The guest never names `0x1d0000000`. It names the sparse window (`LCA_PCI_SIO + (port << 5)`), typically via K0SEG. `lca_isa` **constructs** `LCA_ISA_BASE + port` as the address `bus_isa_init` registered. A guest PTE covering `0x1d0000000` would be a collision with an emulator-internal physical, not a contract.
+
+**Sibling with the same shape** (device-constructed physical, `memory_rw` without `PHYSICAL`): in `src/devices/`, the only other `CACHE_NONE`-and-no-`PHYSICAL` call is `dev_ether.c` (guest-written `idata` as a DMA destination). That is a **guest pointer**, not a constructed PA. PROM/arcbios `CACHE_NONE` calls are also guest VAs and are correctly virtual. I did not find a second constructed-PA forward missing `PHYSICAL`. (Did not census `src/promemul` beyond the arcbios hits.)
+
+**Severity: HIGH, not MED.** This is not a rare encoding. Every Alpha OS writes a non-zero PTBR; from that moment the entire sparse ISA window (console UART at `0x3f8`, 8042, PIC, PIT, CMOS) is dead, and every access floods. Host process stays up (`fatal()` prints). Alpha already has no interrupt delivery (`#516`), so **polled ISA is the remaining I/O** — this round kills that. HIGH.
+
+---
+
+## Q2 — weakenings (enumerate)
+
+Site inputs: inner `paddr = 0x1d00003fd` (read) / `0x1d00003ff` (write), both device hits on ns16550; `len == 1`; Alpha unit (no `MEM_MIPS`/`MEM_M88K`).
+
+| | vs fix | first difference | §3 after this edit |
+|---|---|---|---|
+| **(a) WRITE only** | DIFFERENT | first post-arm **read** | `sp lsr` + `r miss` stay FAIL; `w lands` + `w miss` go green |
+| **(b) READ only** | DIFFERENT | first post-arm **write** | opposite of (a) |
+| **(c) `NO_EXCEPTIONS \| PHYSICAL`** | DIFFERENT | device dispatch: handler **not called**. On read, `#95` still `memset`s the byte to 0 **before** the skip, so the guest still sees a successful zero **without** a walk. Write reports success for a store that never happened. | `sp lsr` and `w lands` stay FAIL; **`r miss`/`w miss` go green** (no translator line). Score 11/13, not 13/13. A miss-only detector is blind to (c). |
+| **(d) drop `CACHE_NONE`** | **EQUIVALENT at this site** | none, on this address | all four defect rows green, same as the fix |
+| **(e) `PHYSICAL` iff `relative_addr < 0x200`** | DIFFERENT | first port `>= 0x200`. After `>>= 5`, `relative_addr` **is the port**. UART LSR/SCR are `0x3fd`/`0x3ff`. | this witness stays 9/13. PIC/PIT/KBC (`< 0x200`) would be repaired; **COM1 would not.** |
+
+**(d) enumerated, as asked.** After `PHYSICAL`, translate is skipped. Remaining `cache` uses:
+
+1. `FLAG_INSTR` on translate — skipped.
+2. `#ifdef MEM_MIPS` R3000 cache block — **not in the Alpha unit**.
+3. Device-found path (`paddr` in some `devices[i]`) — **`cache` is never read** (dyntrans install keys on `DM_DYNTRANS_OK`, which these ISA devices do not have).
+4. `paddr >= physical_max` (device miss): `memory_warn_about_unimplemented_addr`, then zero-fill on read, `goto do_return_ok`. The only `cache != CACHE_NONE` test there is inside `#if 0` **and** `MEM_MIPS`.
+5. RAM path (`paddr < physical_max`): `update_translation_table` uses `cache == CACHE_INSTRUCTION`; `invalidate_code_translation` also fires on **read** when `ok == 2 && cache == CACHE_DATA`. **This handler never forwards into RAM** (`0x1d0000000 + port` is ~7.25 GB; `-M 64` is 64 MB).
+
+So (d) is equivalent **here**. It would **not** be equivalent if the inner address ever became RAM: bare `PHYSICAL` makes `cache == CACHE_DATA` and a read would invalidate code translations. Keeping `CACHE_NONE` is the right extra token, not an idiom appeal.
+
+Floor note for the later detector: (a) and (b) are the two single-site reinstatements; (c) is a joint-flag mutant that greens the miss rows; (d) is equivalent (disclose, do not demand a row); (e) is a conditioned predicate on the port.
+
+---
+
+## Q3 — option set
+
+Named: (1) two `PHYSICAL` tokens; (2) call the target handler directly; (3) register ISA devices on the sparse window.
+
+**Unnamed member that would fool this probe:** wrap the inner address with `ALPHA_PHYS_TO_K0SEG` and still omit `PHYSICAL`. K0SEG identity runs **before** the walk, so this probe (kernel PS) would go 13/13, and a later `userMode` access would walk again. More tokens than (1), and it is a PS-dependent identity hack rather than a statement that the address is physical.
+
+Other members of the refusal set (decline / latch / fault / backed accept / delete) do not apply: this is not a refused value. The sparse window **is** implemented; it forwards to the wrong address class. Member 7 (implement) is already the current function, broken.
+
+**(3) is not correct** even as a restructuring: sparse encoding is 32 bytes per port **and** the valid byte sits at lane `(port & 3) % len` (`#530`). Planting ns16550 at `0x3f8 << 5` does not reproduce that packing.
+
+**(2)** reimplements `memory_rw`'s device lookup, `#95` pre-zero, and length clamp. Larger, not smaller.
+
+**(1) is the smallest correct member.**
+
+---
+
+## Q4 — witness
+
+Each control matches its note:
+
+| row | what it actually proves |
+|---|---|
+| `live` | sparse → `lca_isa` → 8042 protocol byte `0x55` under `ptbr == 0` (liveness + device signature, not RAM/zero) |
+| `flat lsr` | ns16550 is at the **flat** PA; `0x60` is TXRDY\|TSRE. Does not enter `lca_isa` |
+| `ram plant` | `P_RAM` is a real identity-mapped cell |
+| `ptbr miss` + `ptbr sent` | that VA now walks and the load does not complete (`SENT` kept) |
+| `pte2 todo` absent | walk died at invalid **L1**, not L2 (`TODO: pte2` is only on `pte2` invalid) |
+| `sp lsr ans` | outer sparse **read completed** (a false zero also completes; `t6 != SENT`) |
+
+**`CONTROL=DEAD` (rows 2–7) is sufficient for its stated purpose:** a failed `swpctx` leaves identity on, which would **green** the defect rows on HEAD and look like “no defect”. `ptbr miss`/`ptbr sent` catch that.
+
+**Could the defect rows be red because the outer K0SEG access itself failed?** Not on this vehicle.
+
+- Outer VA is `k0(SP(port))` = `0xfffffc01c0007fa0` for LSR, inside K0SEG, identity **before** any walk, and `swpctx` does not set `userMode`.
+- Outer fail would leave `t6 == SENT` (`sp lsr ans` = faulted) and would print a miss at the **K0SEG** VA, not at `0x1d00003fd`.
+- The brief's table (`sp lsr ans` completed, `sp lsr == 0`, inner miss **present** at `0x1d00003fd` / `0x1d00003ff`) is uniquely the inner-walk signature.
+
+`ZERO_PFN` is computed (`0x01050000 >> 13 = 0x828`); the `0x20a0` trap is real and caught. Pointer block re-base to K0SEG before the arm is required: debugger `put d` and post-arm raw-VA pointer loads would themselves walk.
+
+Small witness gaps, not blockers: `sp lsr ans` is **after** the DEAD gate, so an outer-fail still scores (data rows red, miss rows possibly false-green). Harmless for reproduction. The mapped-PTE misroute is unrowed.
+
+---
+
+## Else
+
+- **Read/write asymmetry is load-bearing.** Read ignores inner `memory_rw` and always `return 1` → successful false zero. Write `return`s the inner status → `0` after a miss. That is why `sp lsr ans` is “completed” on HEAD.
+- **`#516` is independent.** Fixing this does not deliver ISA IRQs. Polled UART starts working; interrupt-driven I/O still does not.
+- No `lca_isa` equivalent for `LCA_PCI_SPARSE` / `LCA_ISA_MEMBASE`: those are either unregistered or direct physical maps, not this shifter.
+- I did not re-measure 9/13. Probe source is consistent with that table.
+
+**Ship the two `| PHYSICAL` tokens. Kill-table later must include (a), (b), and (c); (d) is equivalent here; (e) is a port-conditioned hole.**

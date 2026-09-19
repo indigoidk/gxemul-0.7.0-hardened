@@ -1,0 +1,36 @@
+VERDICT: NOT-RATIFY -- option (e) is underspecified; the brief itself flags the precedent is "not a drop-in" yet does not specify the adaptation, leaving cur_ic_page, the instruction-accounting reset (:267), and PC reconstruction (:394) unaddressed.
+
+**Premise audit:**
+
+- **P1 (READ, supported):** `exit(1)` at `:729-733` ends the host on handler-translation failure. Code and witness agree.
+- **P2 (READ, supported):** Alpha's `translate_v2p` returns 0 without moving `cpu->pc`. Witness shows two identical lines at the same VA, consistent with no fault delivery.
+- **P3 (CLAIMED, NOT SETTLED):** "NO other architecture in this tree can reach `:729-733`." The packet proves Alpha *does* reach it; it does not prove MIPS/ARM/PPC/SH *cannot*. This is asserted, not demonstrated. **Not checkable from the packet**; would need each translator's failure path.
+- **P4 (CLAIMED, NOT INLINED):** "dispatch loop dereferences `next_ic` without checking `running` (:114, :190)" -- stated but lines not quoted. Cannot independently verify from packet.
+- **P5 (PARTIALLY INLINED):** Unimplemented-instruction path quoted at `:2002-2024` shows `ic = next_ic = &nothing_call; next_ic++;`. Plausible as a precedent.
+- **P6 (REASONED, DEFECTIVE):** Option (e) is the recommended fix but is materially incomplete.
+
+**The defect in option (e):**
+
+The brief itself states (emphasis mine): *"It is a design precedent, **not a drop-in**: the run entry resets instruction accounting after PC conversion (:267), and the epilogue reconstructs the PC from instruction pointers (:267, :394)."*
+
+Option (e) as listed ("next_ic -> nothing_call, debugger_reset()") does not address any of these three concerns:
+
+1. **`cur_ic_page`:** The brief correctly notes option (b) is refuted because it "skips setting `cur_ic_page`/`next_ic` (:830-833)." Option (e) only addresses `next_ic`. It does not state what `cur_ic_page` holds on return, nor whether the dispatch loop touches it after `pc_to_pointers` returns. If `cur_ic_page` is stale/NULL, the dispatch loop may still crash. The brief does not distinguish why (e) survives this where (b) does not.
+
+2. **Instruction-accounting reset at `:267`:** The brief says this runs "after PC conversion." If `pc_to_pointers` returned without converting, what does the reset do with an unconverted PC? Crash? Corrupt count? Silently wrong? Not addressed.
+
+3. **PC reconstruction at `:394`:** If `next_ic` points to `nothing_call`, the instruction pointers fed to this reconstruction are the `nothing_call` template, not the faulting VA. The witness asks (Q3) that `pc` still equal the faulting VA -- option (e) provides no mechanism to preserve `cpu->pc`. It sets `running = 0` but never snapshots the faulting PC before the run loop's epilogue overwrites it via reconstruction.
+
+**Other gaps:**
+
+- **`nothing_call` definition and safety:** Not inlined. Whether it is a pure nop, whether it touches `cur_ic_page`, or whether it expects `ic_page` state is unknown from the packet.
+- **Q1 sub-question "single-step trace read (:287, :325) really handle its own failure":** Lines referenced but not quoted. Cannot settle.
+- **Q3 detector rows:** The brief asks which rows prove "host survives AND CPU stopped AND no garbage executes." For "no garbage executes," option (e) must demonstrate that the instruction *preceding* the failed translation (e.g., the `JMP`) has fully retired and that no instruction at the faulting VA is fetched. The brief does not address instruction retirement boundaries around `pc_to_pointers`.
+- **`-V` debugger prompt:** Mechanism unexplained. `debugger_reset()` + `running = 0` does not, by themselves in the inlined code, obviously produce a debugger prompt; this relies on out-of-packet behavior.
+
+**Bottom line:** The defect at `:729-733` is real, and Alpha's failure mode is convincingly witnessed. But the recommended fix (e) is presented as complete while the brief simultaneously identifies three concrete integration hazards it does not resolve. A seat that ratifies (e) on this packet is trusting the author to have worked those out off-page.
+
+**Not checkable from the packet, named for the next pass:**
+- Whether any non-Alpha translator can also reach `:729-733` (settle by reading each `memory_*.c` failure path).
+- Whether the dispatch loop accesses `cur_ic_page` after `pc_to_pointers` returns (settle by reading the run loop body around `:114`, `:190`, `:267`, `:394`).
+- Definition and side-effect profile of `nothing_call` (settle by reading its definition in `cpu_dyntrans.c`).

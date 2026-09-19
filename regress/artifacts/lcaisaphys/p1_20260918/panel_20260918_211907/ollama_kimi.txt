@@ -1,0 +1,48 @@
+VERDICT: GO — the two-token `CACHE_NONE | PHYSICAL` fix is entailed by the inlined dispatcher/translator code; every arithmetic claim in the brief reproduces; the premises that cannot be settled from the packet do not touch the deciding derivation.
+
+## Premise audit
+
+- **Core mechanism — holds.** READ: both nested calls pass `CACHE_NONE` without `PHYSICAL`; READ: the quoted `memory_rw.c` then takes `else { translate_v2p(...) }`; READ: the quoted Alpha translator misses low VAs once `base != 0`. The defect derivation follows from quoted text alone.
+- **"Works ONLY while ptbr == 0" — slightly strong, and in the direction that helps the brief.** REASONED: post-arm the outcome depends on guest tables — normally the `wasn't found` miss, but a guest that legitimately maps VA `0x1d00003fd` would translate *successfully to the wrong target* (silent I/O redirection, worse than a miss). "Undefined once ptbr != 0" is the correct wording; it strengthens severity.
+- **`!userMode` caveat.** READ: both identity rules are gated on `!userMode`; the userMode argument at the inner translate call is elided (`...`) in the packet. Pre-arm forwards made while the guest CPU is in user mode would walk and miss too. Not material (post-arm, kernel-mode ISA traffic fails deterministically). *Settling fact: the full translate-call argument list in `memory_rw.c`.*
+- **"Every existing LCA probe runs with ptbr == 0, which is why nothing has ever seen it" — NOT CHECKABLE from the packet.** The packet contains no other probe, and the causal clause is speculation. *Settling fact: grep the existing LCA probes for swpctx / `CALL_PAL 0x30`.* Does not affect the fix.
+- **"Every ISA target is registered DM_DEFAULT (0)" — NOT CHECKABLE, asserted.** It underwrites the REASONED (c) analysis below (the quoted dispatch line has no `writeflag` term, so under `NO_EXCEPTIONS` both arms skip the handlers). *Settling fact: the flags argument at the five `bus_isa_init` registration sites.*
+- **The author's own flagged gap — confirmed open from the packet.** The two RAM-path conditions that read `cache` are not inlined, so (d) ≡ fix is REASONED (device address above `physical_max` never reaches RAM paths), not shown. *Settling facts: the text of those two conditions, and `physical_max` for `-e alphabook1`.* Also, "not compiled into the Alpha unit" is imprecise if this tree links `memory_rw.c` once for all CPU families — then the MIPS/M88K blocks are compiled but not executed for an Alpha cpu; the conclusion is unchanged either way. *Settling fact: build layout of `memory_rw.c`.*
+- **"Report success for a store that never happened" (the (c) write arm) — partially NOT CHECKABLE.** The "never happened" half is entailed by the quoted dispatch line; the "report success" half needs `memory_rw`'s no-device-match return convention, which is not quoted. The never-called half alone is dispositive against (c).
+- **The elided `#244` block.** `if (!ok) { /* zero a read buffer */ ... }` — the `...` hides the condition under which zeroing happens. *Settling fact: the contents of that block.* Relevant to what (c) read-failures would return.
+
+**Arithmetic enumeration (all reproduce):**
+- `0x1c0000000 + 0x10000000 = 0x1d0000000` ✓
+- `0x01050000 >> 13 = 2088 = 0x828` ✓
+- Census: 12+9+3+3+2+2+2+2+2+1 = 38 ✓; 7+3+2+2+1+1 = 16 ✓; 38+16+2 = 56 ✓; 10 files ✓
+- Rows: 12 content + row-count line = 13 ✓; 4 red → 9/13 ✓
+- Miss addresses: `0x1d0000000 + 0x3fd/0x3ff` ✓; sparse round-trip `0x3fd << 5 = 0x7fa0`, `>> 5 = 0x3fd` ✓ — the printed inner addresses confirm the shift/forward math end-to-end.
+
+**Predicted post-fix witness outcome (REASONED):** pre-arm the identity rules already yield `paddr == vaddr`, so `PHYSICAL` changes nothing pre-arm and removes exactly the inner translate post-arm → 13/13, no currently-green row can redden.
+
+## Q1
+- **Legitimately-virtual path: none.** REASONED: the operand is host-physical by construction (§5 settled as stated); guest tables can only mis-translate it. `PHYSICAL` asserts the address space the operand lives in, not guest intent.
+- **Siblings: NOT CHECKABLE.** The census enumerated only calls *with* `PHYSICAL`; the sibling question needs the complement set — forwards of a constant base+offset *without* it. Its existence of 56 flagged calls makes a no-flag outlier visible in principle, but the no-flag calls were never classified. *Settling fact: census of `memory_rw(cpu` sites in `src/devices/*.c` whose address argument is a registered physical window — note `dev_lca.c` itself may contain forwards beyond `lca_isa`; only `lca_isa` is inlined.*
+- **Severity:** REASONED HIGH is defensible (serial console dead under any paging guest, i.e. boot-visible on `alphabook1`, plus a guest-paced unlatched host log flood); MED only if scored as the flood alone. Not a deciding item either way.
+
+## Q2 — first-differing input and §3 aftermath
+- **(a) write-only:** first differs at the first post-arm sparse **read** (LSR poll). Reds remaining: `sp lsr`, `r miss` → 11/13. Not equivalent.
+- **(b) read-only:** symmetric; reds: `w lands`, `w miss` → 11/13. Not equivalent.
+- **(c) `NO_EXCEPTIONS | PHYSICAL`:** first differs **before** paging — at the first inner dispatch ever, because the quoted skip is paging-independent. Control row `live` (0x55) dies → `CONTROL=DEAD`, `RESULT=0/0`; the probe catches it as a window-kill before the defect rows, and even guard-free its red signature differs (no miss lines, since nothing translates). This is the brief's second window-death. Not equivalent.
+- **(d) bare `PHYSICAL`:** equivalent on every quoted path (translate skipped; device dispatch doesn't read `cache`); witness-identical 13/13. The residual is exactly the author's un-enumerated RAM-condition caveat — the theoretical first-differ is a forwarded address inside a RAM range, impossible for `0x1d0000xxx` on this machine *given* the two named settling facts. Accept (d) as equivalent-in-effect here, but note the proof has one un-enumerated premise, by the author's own admission.
+- **(e) `PHYSICAL` only if `relative_addr < 0x200`:** at that point `relative_addr` is already the un-shifted port, and the defect ports are 0x3fd/0x3ff — **all ≥ 0x200** (all of COM1 is). Leaves every defect row red: unchanged 9/13. Not equivalent; fixes nothing the witness measures; no rationale exists.
+
+## Q3
+Unnamed members worth placing in the set, both rejected: **(4)** teach `memory_rw`/the translator to treat no-`PHYSICAL` device-space addresses as physical (fixes the class, changes every device's semantics — large blast radius); **(5)** latch/quiet the `wasn't found` print (treats the flood symptom, leaves the data path dead). Caching a translated paddr at init is (2) in disguise. Agree **(1) is the smallest correct member**: two tokens, touches only this window's inner call, makes pre- and post-arm behavior identical by construction, and keeps the existing `CACHE_NONE`.
+
+## Q4
+- Controls prove their notes: `live` is itself a sparse read of a real 0x55 pre-arm (exercises the very forward); `flat lsr` gives the device signature via an independent path; `ram plant` + `ptbr miss` + `ptbr sent` are a clean before/after on **one VA**, proving paging actually armed rather than translation being globally broken; `pte2 todo` absent matches the quoted level-1 `not_found` early-out.
+- The `CONTROL=DEAD` guard is sufficient (conservative: 0/0), and attribution is isolated by address-tagged miss rows — `0x1d00003fd/0x1d00003ff` is neither the arming VA nor any K0SEG outer address.
+- **The named alternative cause (outer K0SEG dying post-arm) is ruled out twice:** READ — K0SEG identity is the first rule, ahead of the walk, in kernel mode; and REASONED — had the outer access failed, `r miss`/`w miss` would read *absent* (their `want`) while `sp lsr` stayed red. The reported pattern (inner-tagged misses present) matches inner-only failure.
+- **Two non-blocking witness gaps I noticed:** (i) no row tracks the outer **write** completion — pre-fix the write arm returns the inner `MEMORY_ACCESS_FAILED` into the outer dispatcher, whose fall-through behavior (and any further print) is unobserved and unquoted; (ii) post-arm rows exercise COM1 only — acceptable, the defect is address-level through one shared forward.
+
+## Something else found while verifying
+- The read arm ignores the inner `memory_rw` return value entirely (pre-existing). Post-fix the inner call cannot miss, so it stays benign — comment-worthy, not part of this fix.
+- `ptbr sent` surviving as `0xbad1d8a` implies the guest-load path raises rather than zero-filling the destination — i.e. the `#244` zero-fall-through that the *inner* forward hits is not what instruction loads observe. Consistent with the table, but the elided `#244` block is one of the settling facts named above; worth confirming rather than assuming both failure surfaces behave alike.
+
+**One measurement I would name (none needed for this verdict):** a guest-OS boot smoke on `-e alphabook1` post-fix, purely to corroborate real-world reachability of the sparse window under a paging OS; the inlined code plus the probe's isolation already carry the review.

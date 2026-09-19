@@ -1,0 +1,53 @@
+VERDICT: UNSETTLED -- the permitted files explicitly label halt-PCBB physical, but do not specify swpctx’s address contract or install an initial ctx.
+
+HEAD is `cdbe7d7`. This verdict is limited to the five permitted files.
+
+1. **The strongest physical-address anchor remains `pcs_halt_pcbb`.**
+
+   It explicitly says “phys addr of halt PCB.” That supports the physical interpretation, but applying it to `swpctx(a0)` is an inference; this header does not explicitly connect those interfaces. [alpha_rpb.h:316](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_rpb.h:316)
+
+   The OSF/1 PCB definition describes its members without specifying the PCB base’s address space. The `alpha_pal_swpctx` wrapper passes `ctx` unchanged in `$16` and returns `$0`; it neither converts the address nor documents its address space. [alpha_cpu.h:55](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:55), [alpha_cpu.h:449](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:449)
+
+   **`machine_alpha.c` passes no initial PCB to `swpctx` and never assigns `cpu->cd.alpha.ctx`.** Its boot `a0` is a first-free **page-frame number**, not a PCB pointer. It zeroes each PCS, sets flags/type, and copies the PCS records into guest memory. [machine_alpha.c:86](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:86), [machine_alpha.c:148](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:148), [machine_alpha.c:196](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:196)
+
+   Those records contain an inline `pcs_hwpcb[128]`. Their destination is `PCS_ADDR = HWRPB_ADDR + 0x1c00`, with `HWRPB_ADDR` explicitly labeled **virtual at boot**—not K0SEG. That copy does not establish the active PCBB. Likewise, setting `rpb_phys = 0x14000` establishes the HWRPB’s physical address, not a `swpctx` argument. [alpha_rpb.h:234](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_rpb.h:234), [alpha_rpb.h:41](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_rpb.h:41), [alpha_rpb.h:50](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_rpb.h:50), [machine_alpha.c:104](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:104)
+
+2. **The caller-side sequence is certain; the exact unmapped-access outcome is not.**
+
+   `swpctx` first saves all nine outgoing fields, then publishes the old `ctx` in `v0`, then assigns `ctx = a0`. The incoming fields are loaded in the same order shown below. There are **seven 64-bit and two 32-bit accesses** in each direction. [cpu_alpha_palcode.c:230](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:230), [cpu_alpha_palcode.c:269](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:269), [cpu_alpha_palcode.c:273](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:273)
+
+   | Order | Byte offset | Field | Width |
+   |---|---:|---|---:|
+   | 1 | 0 | KSP | 64 |
+   | 2 | 8 | USP | 64 |
+   | 3 | 16 | PTBR | 64 |
+   | 4 | 24 | CPC | 32 |
+   | 5 | 28 | ASN | 32 |
+   | 6 | 32 | UNIQUE | 64 |
+   | 7 | 40 | FLAGS | 64 |
+   | 8 | 48 | DECRSV0 | 64 |
+   | 9 | 56 | DECRSV1 | 64 |
+
+   Both widths call `memory_rw` with `CACHE_DATA` and no explicit `PHYSICAL`. Store helpers return status, which `swpctx` ignores. Load helpers ignore status themselves and decode an initially uninitialized local byte buffer. [memory.c:782](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:782), [memory.c:806](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:806), [memory.c:886](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:886), [memory.c:913](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:913)
+
+   Crucially, **load 3 only fills local `new_ptbr`**. The handler does not install it until all nine loads have returned. Reading a zero PTBR therefore does not itself disable translation for loads 4–9. The fields are then assigned, followed by translation-cache invalidation. [cpu_alpha_palcode.c:278](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:278), [cpu_alpha_palcode.c:293](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:293), [cpu_alpha_palcode.c:314](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:314)
+
+   Under your assumed translation behavior, an unmapped incoming physical address is consequently submitted as an unmapped virtual address. **If the callbacks return normally**, the handler continues through all loads and commits their returned values; it has no failure branch or rollback. The earlier outgoing saves have the same addressing concern, independently of whether incoming `a0` is mapped.
+
+   These files cannot establish whether failure zero-fills the buffer, leaves bytes untouched, changes CPU state, or terminates execution. Thus “nine zero loads,” a particular fault message/count, and a deterministic resulting PTBR are **not established**.
+
+   `wrfen` similarly changes cached flags first, then performs an unchecked store at `ctx + 40`. [cpu_alpha_palcode.c:221](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:221)
+
+3. **No validated rung-3 witness was produced or run.**
+
+   I can provide defensive validation criteria, but not a step-by-step vulnerability-reproduction setup. Independently, the whitelist excludes the translation/failure implementation and debugger interface needed to substantiate the requested cold-debugger recipe.
+
+   | Validation requirement | Evidence needed |
+   |---|---|
+   | Liveness | Execution demonstrably reaches and returns from the intended PAL operation. |
+   | Walk signature | A translation observation attributable specifically to PCB data accesses; nonzero PTBR alone is insufficient. |
+   | Context integrity | Outgoing saves and incoming loads are checked separately, including both 32-bit members. |
+   | Pre-/post-fix distinction | A confirmed physical-access correction removes PCB accesses’ dependence on virtual mappings while preserving context values and return behavior. |
+   | `wrfen` coverage | The backing PCB flags and cached flags agree after the operation. |
+
+One additional issue: `store_64bit_word` sign-extends addresses whose upper 32 bits are zero; `load_64bit_word` and `store_32bit_word` do not perform that adjustment. Any physical-access correction should account for that asymmetry. [memory.c:766](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:766)

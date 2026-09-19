@@ -1,0 +1,155 @@
+I'll verify the brief's premises against the named sources first, then answer the five questions. Starting with git HEAD, the checkpoint, and the inlined files.HEAD matches the brief. Next I’ll open the four named source files and the witness, then check the VPT/K0SEG premises.The kill site is confirmed. Next I’ll check the translation-failure callers, K0SEG/VPT constants, and what an identity map of that VA actually does.**VERDICT: 3** -- member 4 is a successful map to paddr `0x3fd80000000` (zeros, `return 2`); NetBSD VPT membership does not make that the right value, and I-fetch stays the dyntrans kill.
+
+File-reading seat. Tree is `GXEMUL-SEC/src/` at `cdbe7d7`. Named files plus, to settle premises, `alpha_cpu.h`, `alpha_rpb.h`, `memory.c:memory_warn_about_unimplemented_addr`, `cpu_alpha_instr.c:to_be_translated`, and NetBSD `vmparam.h` (not in this tree).
+
+---
+
+## §C0 -- not shipped
+
+Confirmed at firing time:
+
+- `git log -1 -- src/cpus/memory_alpha.c` → `2956c7e` `#509` (unchanged by this working tree)
+- `alphavmkill` is absent from `CHANGELOG.md`
+- both residues still sit in `memory_alpha.c` (`exit(1)` in the `base == 0` arm; `fatal("AYONA3\n")` on the walk)
+
+---
+
+## Q1 -- premises, as questions
+
+**Is `0xfffffffd80000000` special?** Yes, for NetBSD, and not in the way that would license ACCEPT.
+
+NetBSD `sys/arch/alpha/include/vmparam.h:123` is exactly the brief's constant:
+
+```c
+#define VPTBASE  ((vaddr_t)0xfffffffc00000000)  /* Virt. pg table */
+```
+
+An 8 KB page × 8-byte PTEs × 2^30 pages is an 8 GB window: `[0xfffffffc00000000, 0xfffffffe00000000)`. `0xfffffffd80000000` is 6 GB into that window (same L1 slot, `i1 = 1022`). It is **not** `VPTBASE` itself.
+
+It is **not** K0SEG. `ALPHA_K0SEG_END` is `0xfffffdffffffffff`; this VA is K1SEG (`ALPHA_K1SEG_BASE` `0xfffffe0000000000`). The K0SEG arm does not swallow it. Exact equality, not a range: `+8` never hits the kill.
+
+Linux/Alpha is a different VPT layout (`VMALLOC_END = -PGDIR_SIZE`, last PGDIR slot). This constant is a NetBSD VPT interior, not an architectural singleton.
+
+**That does not make the kill a VPT implementation.** VPT is a recursive map of an existing page table. The kill lives in `!userMode && base == 0`, i.e. **before** a table exists. A guest that used VPT with `ptbr == 0` would be wrong on real hardware too (MM fault, not identity). Once `ptbr != 0`, this VA is supposed to **walk** — which is the AYONA3 path, not the kill path. I found no in-tree guest that uses this constant (same finding as the 2026-09-08 assess).
+
+**Member 4 is a wrong translation that silently succeeds.** The identity store is *already done* before the kill:
+
+```c
+*return_paddr = vaddr & 0x000003ffffffffffULL;  /* 0x3fd80000000 */
+```
+
+None of the three remaps match, so that value sticks. `0x3fd80000000` is ~4.37 TB. On the witness machine (`-M 64`) `physical_max` is 64 MB. `memory_rw.c` then takes the “outside of physical RAM” arm:
+
+- `memory_warn_about_unimplemented_addr` does **not** fail: `paddr` is far past `physical_max + 0x40000`, and the probe does not pass `-T`, so `halt_on_nonexistant_memaccess` stays 0 and the helper returns `false`
+- a **read** `memset`s the buffer to 0 and `goto do_return_ok` — **success**
+- a **write** is a silent drop, also success
+- Alpha has no DBE/IBE on that path (`#ifdef MEM_MIPS` / `MEM_M88K` only)
+
+So member 4 is: host lives, load dest becomes **0**, store appears to land, translation reports writable (`return 2`). A 0 in a VPT slot looks like `PTE_VALID = 0`. That is an accident of unmapped-phys zero-fill, not a modelled empty page table, and it becomes a real mapping if anything is ever placed near 4 TB.
+
+**Member 2/3 is better for a guest than that.** `#215` abandons the load/store and **does not write the destination**. `#244` zeroes the `memory_rw` buffer; the instruction never copies it. Dest stays whatever it was (the witness’s `0x0bad1d8a`). No translation is installed. Stale dest is still not an MM fault — FAULT is unavailable — but it is not a fabricated successful map.
+
+**I-fetch reading, checked against `cpu_dyntrans.c:670-733`.** It holds.
+
+- `alpha_translate_v2p` never writes `cpu->pc` (no PAL MM delivery, `flags` unused)
+- on `!ok`, dyntrans does `cached_pc = cpu->pc` (unchanged), re-looks-up, re-translates, then `fatal("FATAL: could not find physical address of the exception handler?"); exit(1);`
+- so a **decline** (`return 0`) recovers load and store and **does not** recover I-fetch of this VA
+
+Something else on that path: `cpu_alpha_instr.c:812-815` `to_be_translated` does `fatal("... read failed: TODO\n"); goto bad;` (a “nothing” instruction, not `exit`). Under member 2/3 that site is **not reached** — `pc_to_pointers` dies first. Under member 4, I-fetch translation *succeeds*, `host_page` is NULL, the fetch reads zeros, and the I-fetch cell leaves the `alphaifetchkill` set. That is a reason not to ACCEPT: it hides this VA from the class-kill census.
+
+`#194`/`#215` comments saying the translator “signalled a fault” / “the caller raises the fault” are still false (`alphafaultclaim`). Do not copy them into the new comment.
+
+---
+
+## Q2 -- member 3, over its neighbours
+
+| Member | Load at the VA | Store | I-fetch | Witness after |
+|---|---|---|---|---|
+| **1 DELETE** the `if` | same as 4 (`*return_paddr` already set, `return 2`) | same as 4 | same as 4 | 5/5, dest **0** (unscored today) |
+| **2 silent `return 0`** | `#215` abandon, dest **unchanged**, host lives | abandon | dyntrans `:729-733` still `exit(1)` | 5/5, dest SENTINEL |
+| **3 `return 0` + `(once)`** | same as 2, plus one announce | same as 2 | same as 2 | 5/5, dest SENTINEL, `vmmsg=1` then 0 |
+| **4 drop only `exit(1)`** | success, dest **0**, warn maybe | silent drop, success | translate **succeeds**; zeros; not the dyntrans kill | 5/5, dest 0 |
+| **5 FAULT** | unavailable (no Alpha MM delivery) | — | — | — |
+| **6 BACKED ACCEPT** | would invent PT storage; no measured delta / transferred warrant | — | — | — |
+| **7 IMPLEMENT kernel VM** | feature; out of scope. VPT/walk already *is* the implementation once `ptbr != 0` | — | — | — |
+
+**Why 3 over 2:** the author planted a signal; `#194`’s `not_found` is the in-file miss idiom (`return 0`) but is unlatched. House idiom is N=1 `(once)`, function-static here (not a device instance). Silent decline throws away the only tripwire.
+
+**Why 3 over 4/1:** member 4’s value is the ugly-hack K0SEG mask on a K1SEG/VPT address. ACCEPT requires the *right* value. Zero-from-unmapped-RAM is not a PTE, and `return 2` caches it writable.
+
+**Why not 5/7:** FAULT is PAL MM delivery (`kentry[ALPHA_KENTRY_MM]`, MMCSR/VA, teaching `pc_to_pointers` that PC moved). That is `alphaifetchkill`’s family, not this landmine. IMPLEMENT of the walk is already the `ptbr != 0` path.
+
+Shape: inside the existing `if (vaddr == …)` on the `base == 0` arm, keep a latched `fatal`, `return 0` **before** the identity `return 2`. Do not widen to “all of K1SEG”.
+
+---
+
+## Q3 -- AYONA3 does **not** join under the reopening rule
+
+Same file, same VA token, **not** the same class:
+
+- the kill is “paging is off, refuse this VA with host death”
+- AYONA3 is on the walk path (`ptbr != 0` or user mode). Once a table exists, kernel VM **is** the walk; the nonce says “not implemented” about a path that is
+
+Also: **not witnessed** (the probe is `ptbr == 0` and never reaches line 94), and pinning “no `AYONA3` print” is a **new oracle**.
+
+**Rider deletion is still right** — one line, unlatched flood, a lie on the live walk. Do not claim the witness covers it. If it is not deleted, file it LOW; do not give it its own MED/HIGH row.
+
+Do **not** convert AYONA3 into the same latch. Announcing “unimplemented” on a successful-table walk is the wrong event.
+
+---
+
+## Q4 -- witness
+
+**Controls do what their notes claim.** Measured `probe_HEAD.raw`: `live=0xaaaa0000aaaa`, `hwrpb sig=0x4250525748`, `alive=False`, `vmmsg=1`, `3/5`.
+
+- `live`: `P_RAM = 0x01056000` is not K0SEG and hits none of the three remaps, so it is the identity half of `base == 0`. Planted value back ⇒ that arm ran.
+- `hwrpb sig`: `0x10000008` is past `-M 64` under identity (`HWRPB_PADDR = 0x14000` in `alpha_rpb.h`). Only `(vaddr & ~0x7fff) == 0x10000000` produces `"HWRPB"`. RAM / zero-fill / sentinel cannot.
+
+**Attribution is sufficient for this site.** The kill text is not the dyntrans text. Step 2 is a **data** `ldq`; the instruction itself is fetched from K0SEG `CODE`. A death at `:729-733` would be a different sentence and would score `0/0`, not `3/5`.
+
+**Gaps the witness honestly leaves (its own header says so):**
+
+- dest (`t4`) is printed and **not scored**. After 2/3 it stays `0x0bad1d8a`; after 4 it is `0`. Today’s 5/5 would green both. **The dest row is the clause-(d) discriminator against ACCEPT.**
+- no store cell (the kill is any access)
+- no I-fetch cell (correct, if we disclose)
+
+**Detector rows once member 3 is chosen** (witness stays disposition-free; these are new):
+
+| row | pins |
+|---|---|
+| keep `live`, `hwrpb sig` | vehicle still in the `base == 0` arm |
+| `alive` + `continued` on a **load** | host lives; `#215` returns to the next insn |
+| **dest == SENTINEL** after that load | decline, not ACCEPT-to-zero |
+| **store** at the VA: host lives + continued | de-escalation; the old `exit(1)` was access-wide |
+| **latch**: first access prints `(once)`, second does not | N=1 |
+| identity / row-count | as now |
+
+**Do not** ship an I-fetch survive-oracle. After this fix it still dies at dyntrans; a survive row would be red on a correct translator. Contract sentence: I-fetch of this VA is the dyntrans class-kill, not this detector.
+
+Accept-side of de-escalation: the tripwire was one equality, not a growing mask. Adjacent VAs already identity-map. `live` / `hwrpb sig` are that accept side. Do not widen the predicate.
+
+---
+
+## Q5 -- this round first; disclose I-fetch
+
+`alphaifetchkill` as a **string** is not in HEAD (`OUTSTANDING_BUGS.md` / `CHANGELOG.md` / ledger grep 0). The **site** `cpu_dyntrans.c:729-733` is real and the brief’s mechanism is right. Treat the row as named-in-brief, not as a filed HEAD item.
+
+**This round takes load/store; I-fetch is disclosed against that site.**
+
+| order | measurable consequence |
+|---|---|
+| **This first (member 3)** | load/store at this VA stop killing (witness 5/5 + dest SENTINEL). I-fetch of this VA still `exit(1)`, **same site, worse message**. The VA remains a translation-miss specimen for the ifetch round. |
+| **ifetch first** | needs a policy for *every* Alpha I-fetch miss (stop / nop / spin / build MM delivery). This measured host-kill stays live until that design lands. |
+| **This with member 4** | I-fetch of this VA **leaves** the miss set (translate succeeds). The later census loses a specimen and the guest sees zeros / `CALL_PAL 0` instead of a loud miss. |
+
+Holding a one-predicate, witnessed landmine for a feature-shaped class-kill is the wrong trade. Member 3 is what keeps the I-fetch cell honest for the later round.
+
+---
+
+## Found besides the questions
+
+1. **`flags` is unused** (`FLAG_NOEXCEPTIONS`, `FLAG_INSTR`, write). Debugger `dump`/`put`/`unassemble` of this VA still die today; member 3 recovers those too. Same unused-`flags` fact as `alphapteprot`, not a seventh Alpha round.
+2. **`#215`’s “already signalled a fault” is false.** Abandon-without-delivery is the behaviour to keep; do not restate the fault claim in the latch comment.
+3. **`not_found` remains an unlatched `fatal`.** Out of scope; it is the flood `#194` should have latched. Do not “match” it.
+4. **`vptptr` / `PAL_OSF1_wrvptptr` is written and not read** by the walker (the `vptptr` line is commented out). PAL VPTPTR does not feed this kill. Out of scope.
+5. **Member 4 I-fetch is not a host `exit`:** `pc_to_pointers` gets `ok != 0`, `memory_paddr_to_hostaddr` is NULL, `to_be_translated` reads zeros through the unmapped-phys success path. That is a silent wrong I-stream, not `alphaifetchkill`.

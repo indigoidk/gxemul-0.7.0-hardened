@@ -1,0 +1,2084 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+[1mworkdir:[0m C:\DocumentNoSnc\CC\GXEMUL
+[1mmodel:[0m gpt-6-astra
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m max
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a0b776-5936-78a3-8e5c-5cdfac5ba3f8
+--------
+[36muser[0m
+# `#540` (lcaisaphys) PASS 1 -- the dedicated adversarial job: an equivalence check, a premise audit, a cell map
+
+    VERDICT: GO | GO-WITH-CHANGES | NO-GO -- <one line naming the deciding item>
+
+**Put the verdict line first.**  The tree under review is `GXEMUL-SEC/` at commit `e0be9b2`, where `dev_lca.c` is
+unchanged since `8bd97e4`.  Ignore any other `src/` under the project root.  Those copies are pristine 2021 upstream,
+and their line numbers differ by hundreds.
+
+**Read ONLY these files. Do not browse anything else:**
+
+    GXEMUL-SEC/src/devices/dev_lca.c        DEVICE_ACCESS(lca_isa), and LCA_ISA_BASE at its #define
+    GXEMUL-SEC/src/cpus/memory_rw.c         the translate step, the device dispatch, and every read of `cache'
+    GXEMUL-SEC/src/cpus/memory_alpha.c      alpha_translate_v2p()
+    GXEMUL-SEC/src/devices/bus_isa.c        where the ISA devices are registered at the portbase
+    GXEMUL-SEC/regress/lca_isaphys_probe.py the rung-3 witness (13 rows)
+
+**The proposed fix.**  In `DEVICE_ACCESS(lca_isa)`, both nested `cpu->memory_rw(...)` forwards to
+`LCA_ISA_BASE + relative_addr` change their misc flags from `CACHE_NONE` to `CACHE_NONE | PHYSICAL`, on the write call
+and on the read call.  The reason: `LCA_ISA_BASE + port` is the PHYSICAL address the ISA devices were registered at.
+Without `PHYSICAL` it is translated as a VIRTUAL address, and translation is identity only while ptbr == 0.
+
+## TASK 1 -- EQUIVALENCE, candidate by candidate
+
+For each candidate below, say **EQUIVALENT** or **DIFFERENT** relative to the proposed fix.  If DIFFERENT, name the
+first input at which the two differ: ptbr state, direction, port, access width, or lane `(relative_addr & 3) % len`.
+Also name which rows of `lca_isaphys_probe.py` observe that difference and which stay green.  If no row observes it,
+say **NO ROW**.
+
+    (a)  PHYSICAL on the write call only
+    (b)  PHYSICAL on the read call only
+    (c)  NO_EXCEPTIONS | PHYSICAL on both calls
+    (d)  bare PHYSICAL on both calls (CACHE_NONE dropped)
+    (e)  PHYSICAL on both, but only when relative_addr < 0x200 (i.e. not for the ns16550 at 0x3f8)
+    (f)  PHYSICAL on both, but only when relative_addr >= 0x200
+    (g)  PHYSICAL on both, AND the read arm returns the inner call's status instead of the unconditional `return 1`
+
+Then list every candidate that comes back **NO ROW**.  An unseen weakening means the witness, once it becomes the
+detector, has a gap.
+
+## TASK 2 -- PREMISE AUDIT, with file:line for each
+
+Mark each premise TRUE, FALSE or UNSETTLED-FROM-THESE-FILES, and cite the line that settles it:
+
+    P1  memory_rw skips translate_v2p entirely when misc_flags carries PHYSICAL.
+    P2  alpha_translate_v2p is identity for a K0SEG vaddr in supervisor mode, and identity when the ptbr base is 0.
+    P3  with ptbr != 0 and a zero L1 entry, the walk prints "wasn't found" and returns 0; memory_rw then zeroes a
+        READ buffer and returns MEMORY_ACCESS_FAILED.
+    P4  every ISA device reached through LCA_ISA_BASE is registered DM_DEFAULT, so NO_EXCEPTIONS would make memory_rw
+        skip its handler.  (I checked the five registrations: dev_ns16550.c, dev_8259.c, dev_8253.c, dev_pccmos.c and
+        dev_pckbc.c all pass DM_DEFAULT.  Check bus_isa.c for any device it registers some other way.)
+    P5  for a device address, CACHE_NONE | PHYSICAL and bare PHYSICAL take the SAME path through memory_rw.
+        ENUMERATE every read of the `cache' value in memory_rw.c and say which ones a device address reaches.
+    P6  in the witness, the OUTER access is made through K0SEG, so after the arm only the INNER forward walks.
+    P7  lca_isa's read arm ignores the inner call's return value and returns 1 regardless.
+
+## TASK 3 -- THE CELL MAP, clause (d)
+
+The fix adds no predicate.  It changes a flag on two calls, so the guarded body is the whole function.  Enumerate
+the cells the function's own code distinguishes: direction {read, write} x ptbr {0, armed}.  Add any further axis
+the body really tests, such as `len == 0` or the lane `ofs`.  For each cell, say which probe row goes red when the
+fix is absent **in that cell only**.  If no row does, say **NO ROW**, and say whether the cell is reachable by a guest.
+
+**Anything else you found while verifying a claim: say so, briefly.**
+[35m[3mcodex[0m[0m
+I’ll read only the five listed files and check the candidates, premises, and probe coverage against them.
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"LCA_ISA_BASE|DEVICE_ACCESS\\(lca_isa\\)|cache|translate_v2p|MEMORY_ACCESS_FAILED|NO_EXCEPTIONS|PHYSICAL|portbase|device_add|memory_device_register|DM_|row|K0SEG|ptbr|lane\" GXEMUL-SEC/src/devices/dev_lca.c GXEMUL-SEC/src/cpus/memory_rw.c GXEMUL-SEC/src/cpus/memory_alpha.c GXEMUL-SEC/src/devices/bus_isa.c GXEMUL-SEC/regress/lca_isaphys_probe.py"[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 106ms:[0m
+GXEMUL-SEC/src/devices/bus_isa.c:176:	uint64_t isa_portbase, uint64_t isa_membase)
+GXEMUL-SEC/src/devices/bus_isa.c:187:	d->isa_portbase = isa_portbase;
+GXEMUL-SEC/src/devices/bus_isa.c:221:		    interrupt_base_path, (long long)(isa_portbase + 0x20));
+GXEMUL-SEC/src/devices/bus_isa.c:223:		    device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:233:			    interrupt_base_path,(long long)(isa_portbase+0xa0));
+GXEMUL-SEC/src/devices/bus_isa.c:235:			    device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:243:	    (long long)(isa_portbase + 0x40));
+GXEMUL-SEC/src/devices/bus_isa.c:244:	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:247:	    interrupt_base_path, 8, (long long)(isa_portbase + 0x70));
+GXEMUL-SEC/src/devices/bus_isa.c:248:	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:252:	    (long long)(isa_portbase + 0x3f8), 1 - kbd_in_use);
+GXEMUL-SEC/src/devices/bus_isa.c:253:	machine->main_console_handle = (size_t)device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:257:	    (long long)(isa_portbase + 0x2f8));
+GXEMUL-SEC/src/devices/bus_isa.c:258:	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:267:	    (long long)(isa_portbase + lptbase));
+GXEMUL-SEC/src/devices/bus_isa.c:268:	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:274:		    (long long)(isa_portbase + 0x1f0));
+GXEMUL-SEC/src/devices/bus_isa.c:277:			device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:284:		    (long long)(isa_portbase + 0x170));
+GXEMUL-SEC/src/devices/bus_isa.c:287:			device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:294:		    (long long)(isa_portbase + 0x3f0));
+GXEMUL-SEC/src/devices/bus_isa.c:295:		device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:301:			    isa_membase + 0xa0000, isa_portbase + 0x3c0,
+GXEMUL-SEC/src/devices/bus_isa.c:309:	    isa_portbase + 0x60, PCKBC_8042, tmpstr, tmpstr2,
+GXEMUL-SEC/src/cpus/memory_alpha.c:41: *  alpha_translate_v2p():
+GXEMUL-SEC/src/cpus/memory_alpha.c:43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_alpha.c:46:	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+GXEMUL-SEC/src/cpus/memory_alpha.c:55:	//     ptbr_value <- PTBR
+GXEMUL-SEC/src/cpus/memory_alpha.c:57:	//     ptbr_value <- SYSPTBR
+GXEMUL-SEC/src/cpus/memory_alpha.c:59:	//   ptbr_value <- PTBR
+GXEMUL-SEC/src/cpus/memory_alpha.c:62:	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:70:	 *  Before virtual memory has been set up, ptbr is most likely zero.
+GXEMUL-SEC/src/cpus/memory_alpha.c:172:	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+GXEMUL-SEC/src/cpus/memory_alpha.c:197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+GXEMUL-SEC/regress/lca_isaphys_probe.py:3:every row asserts the CORRECT behaviour, so it is RED on the committed build and GREEN after the fix.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:5:THE DEFECT.  DEVICE_ACCESS(lca_isa) in src/devices/dev_lca.c forwards each sparse-window access to the
+GXEMUL-SEC/regress/lca_isaphys_probe.py:6:real ISA device with a NESTED `cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + port, ...)', on both arms,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:7:with misc flags CACHE_NONE -- no PHYSICAL.  So the 33-bit PHYSICAL address 0x1d00003fd is handed to the
+GXEMUL-SEC/regress/lca_isaphys_probe.py:8:Alpha translator as a VIRTUAL one.  While ptbr == 0 the translator's identity hack (memory_alpha.c,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:10:which run with ptbr == 0, has ever seen it.  Once a guest arms a page table, the inner address WALKS
+GXEMUL-SEC/regress/lca_isaphys_probe.py:13:miss prints `[ alpha_translate_v2p: 0x00000001d00003fd wasn't found ]'.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:15:THE VEHICLE.  One unmodified `-E alpha -e alphabook1' process.  Controls first while ptbr == 0, then
+GXEMUL-SEC/regress/lca_isaphys_probe.py:16:CALL_PAL 0x30 (swpctx) with a PCB whose ptbr names an all-ZERO L1 page (PFN 0x828 -- NOT 0: ptbr 0 IS
+GXEMUL-SEC/regress/lca_isaphys_probe.py:18:accesses.  Every OUTER access is K0SEG,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:23:    WANTED ON THE COMMITTED BUILD: 9/13 -- rows 1-8 and 13 green, rows 9-12 RED.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:24:    AFTER `CACHE_NONE | PHYSICAL' ON BOTH NESTED CALLS: 13/13, the same script.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:26:    MEASURED ON THE COMMITTED BUILD, 2026-09-18: 9/13, no retry, the four defect rows exactly
+GXEMUL-SEC/regress/lca_isaphys_probe.py:28:    *** The spec predicted "8/13 (rows 1-8 and 13 green)" -- the ROWS were right and the TALLY was not:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:29:    rows 1-8 plus row 13 is nine.  Its second arithmetic slip after the PFN (see ZERO_PFN). ***
+GXEMUL-SEC/regress/lca_isaphys_probe.py:31:    If any ARMING CONTROL (rows 2-7) is red, the vehicle was never armed.  The probe then prints
+GXEMUL-SEC/regress/lca_isaphys_probe.py:33:    swpctx leaves identity mapping on, which greens the defect rows on the committed build and would
+GXEMUL-SEC/regress/lca_isaphys_probe.py:36:SPEC.  regress/artifacts/lcaisaphys/WITNESSSPEC_grok_20260917.txt (the rows, constants and traps) and
+GXEMUL-SEC/regress/lca_isaphys_probe.py:42:load goes through K0SEG.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:44:ENCODER, session(), printed(), k0/SP/FLAT, SENT and load_const are copied from lca_isalane_probe.py;
+GXEMUL-SEC/regress/lca_isaphys_probe.py:45:CALL_PAL, the PCB layout and the "plant everything while ptbr is still 0" order from
+GXEMUL-SEC/regress/lca_isaphys_probe.py:92:K0SEG        = 0xfffffc0000000000
+GXEMUL-SEC/regress/lca_isaphys_probe.py:93:def k0(p):   return K0SEG | p
+GXEMUL-SEC/regress/lca_isaphys_probe.py:95:LCA_ISA_BASE = LCA_PCI_SIO + 0x10000000       # where the handler FORWARDS to (dev_lca.c)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:97:def FLAT(port): return LCA_ISA_BASE + port          # the internal flat mapping
+GXEMUL-SEC/regress/lca_isaphys_probe.py:108:ZERO_PFN  = P_ZERO >> PAGESHIFT               # 0x828.  NOT 0: ptbr 0 is the identity path
+GXEMUL-SEC/regress/lca_isaphys_probe.py:112:#  never typed.  A typed 0x20a0 would point ptbr at 0x20a0 << 13 = 0x4140000, past -M 64 RAM: the walk
+GXEMUL-SEC/regress/lca_isaphys_probe.py:113:#  would still miss (an unbacked L1 goes to not_found) and every row would read the same -- for the
+GXEMUL-SEC/regress/lca_isaphys_probe.py:120:def miss(addr): return "[ alpha_translate_v2p: 0x%016x wasn't found ]" % addr
+GXEMUL-SEC/regress/lca_isaphys_probe.py:173:rows = []
+GXEMUL-SEC/regress/lca_isaphys_probe.py:174:def row(name, got, want, note=""):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:176:    rows.append((name, ok))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:180:# ---------------------------------------------------------------- setup: ALL planted while ptbr == 0,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:181:#  all through K0SEG (the debugger's `put d' goes through memory_rw WITHOUT PHYSICAL, so after the arm a
+GXEMUL-SEC/regress/lca_isaphys_probe.py:182:#  non-K0SEG `put d' would walk).  The swpctx happens inside the guest program, after every plant.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:183:slots = [k0(SCRATCH),          #  0  re-base T0 to K0SEG before the arm (the departure named above)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:194:          #  ptbr AND flags both the zero page's PFN (pfnoffset trap 1: a swap of the two PCB fields
+GXEMUL-SEC/regress/lca_isaphys_probe.py:196:          "put d 0x%x, 0x%x" % (k0(P_PCB + 16), ZERO_PFN),   # apcb_ptbr
+GXEMUL-SEC/regress/lca_isaphys_probe.py:200:prog  = load_const(T0, SCRATCH)                                        # raw VA: identity, ptbr == 0
+GXEMUL-SEC/regress/lca_isaphys_probe.py:202:#  A  8042 self-test through the SPARSE window, ptbr == 0                       -> t2 = 0x55
+GXEMUL-SEC/regress/lca_isaphys_probe.py:211:#  E  ARM: swpctx with a PCB whose ptbr names the all-zero L1 page
+GXEMUL-SEC/regress/lca_isaphys_probe.py:232:#  is retried ONCE with tripled patience.  Without this, a slow run under load reads as a failed row.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:244:print("%-14s %-24s %-24s %-56s %s" % ("row", "got", "want", "note", ""))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:247:row("alive", "alive" if alive else "died", "alive",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:249:CTRL_FIRST = len(rows)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:250:row("live", hx(t2), hx(KBC_REPLY),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:251:    "LIVENESS through lca_isa, ptbr == 0: 8042 self-test reply")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:252:row("flat lsr", hx(None if t3 is None else t3 & LSR_FIXED), hx(LSR_FIXED),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:254:row("ram plant", hx(t4), hx(VAL_A),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:256:row("ptbr miss", "present" if MISS_ARM in txt else "absent", "present",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:258:row("ptbr sent", hx(t5), hx(SENT),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:260:row("pte2 todo", "present" if "TODO: pte2" in txt else "absent", "absent",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:262:armed = all(ok for _, ok in rows[CTRL_FIRST:])
+GXEMUL-SEC/regress/lca_isaphys_probe.py:265:    print("                         row is read.  Fix the SETUP; do not read this as 'no defect'.")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:270:row("sp lsr ans", "completed" if (t6 is not None and t6 != SENT) else "faulted", "completed",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:274:row("sp lsr", hx(None if t6 is None else t6 & LSR_FIXED), hx(t3 & LSR_FIXED),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:276:row("w lands", hx(t7), hx(SCR_VALUE),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:278:row("r miss", "present" if MISS_RD in txt else "absent", "absent",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:280:row("w miss", "present" if MISS_WR in txt else "absent", "absent",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:282:row("row count", len(rows) + 1, 13, "IDENTITY: the row count this file emits")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:284:ok = sum(1 for _, o in rows if o)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:285:print("LCAISAPHYS_RESULT=%d/%d" % (ok, len(rows)))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:287:sys.exit(0 if ok == len(rows) else 1)
+GXEMUL-SEC/src/cpus/memory_rw.c:60: *	MEMORY_ACCESS_FAILED
+GXEMUL-SEC/src/cpus/memory_rw.c:63: *  (MEMORY_ACCESS_FAILED is 0.)
+GXEMUL-SEC/src/cpus/memory_rw.c:86: *  and what update_translation_table() caches.  The granule the SPLIT needs is a different
+GXEMUL-SEC/src/cpus/memory_rw.c:101: *  path for a multi-page translated access, which is rare (large transfers are PHYSICAL
+GXEMUL-SEC/src/cpus/memory_rw.c:121: *  to 0xfff (exactly the drift this macro exists to prevent), leaves every row green.  A
+GXEMUL-SEC/src/cpus/memory_rw.c:137: *  memblock, so the copy walks host memory that is contiguous PHYSICALLY while the guest's
+GXEMUL-SEC/src/cpus/memory_rw.c:156: *    - post-#430 it fires only on PHYSICAL accesses.  A TRANSLATED 4096-byte write across a
+GXEMUL-SEC/src/cpus/memory_rw.c:158: *      and 4 host lookups and never reaches here; PHYSICAL costs 0 and 2.  A chunk of at
+GXEMUL-SEC/src/cpus/memory_rw.c:174: *  and the row that certified it was VACUOUS until the differential was given
+GXEMUL-SEC/src/cpus/memory_rw.c:178: *  ONLY WHEN A TRANSLATION ACTUALLY HAPPENS.  Under PHYSICAL (or with no translate_v2p)
+GXEMUL-SEC/src/cpus/memory_rw.c:186:	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:200:		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+GXEMUL-SEC/src/cpus/memory_rw.c:216:				return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:237:	int cache, no_exceptions, offset;
+GXEMUL-SEC/src/cpus/memory_rw.c:241:	no_exceptions = misc_flags & NO_EXCEPTIONS;
+GXEMUL-SEC/src/cpus/memory_rw.c:242:	cache = misc_flags & CACHE_FLAGS_MASK;
+GXEMUL-SEC/src/cpus/memory_rw.c:245:	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:248:		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:252:		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+GXEMUL-SEC/src/cpus/memory_rw.c:260:			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+GXEMUL-SEC/src/cpus/memory_rw.c:268:			return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:274:	 *  cache / RAM dispatch (several of which return early — notably the
+GXEMUL-SEC/src/cpus/memory_rw.c:275:	 *  R3000 cached path via memory_cache_R3000()), so every store that
+GXEMUL-SEC/src/cpus/memory_rw.c:277:	 *  fast store table by update_translation_table(), and R3000 cached
+GXEMUL-SEC/src/cpus/memory_rw.c:528:				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+GXEMUL-SEC/src/cpus/memory_rw.c:533:					    DM_DYNTRANS_WRITE_OK))
+GXEMUL-SEC/src/cpus/memory_rw.c:550:					    DM_EMULATED_RAM) {
+GXEMUL-SEC/src/cpus/memory_rw.c:585:				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+GXEMUL-SEC/src/cpus/memory_rw.c:592:						return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:610:					    cache == CACHE_INSTRUCTION?
+GXEMUL-SEC/src/cpus/memory_rw.c:620:					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+GXEMUL-SEC/src/cpus/memory_rw.c:624:					return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:640:	 *  Data and instruction cache emulation:
+GXEMUL-SEC/src/cpus/memory_rw.c:645:		/*  if not uncached addess  (TODO: generalize this)  */
+GXEMUL-SEC/src/cpus/memory_rw.c:646:		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+GXEMUL-SEC/src/cpus/memory_rw.c:649:			if (memory_cache_R3000(cpu, cache, paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:679:					return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:698:				if (cache != CACHE_NONE && !no_exceptions &&
+GXEMUL-SEC/src/cpus/memory_rw.c:718:	 *  Uncached access:
+GXEMUL-SEC/src/cpus/memory_rw.c:740:	    /*  Ugly hack for R2000/R3000 caches:  */
+GXEMUL-SEC/src/cpus/memory_rw.c:748:		    (cache == CACHE_INSTRUCTION?
+GXEMUL-SEC/src/cpus/memory_rw.c:758:	    || (ok == 2 && cache == CACHE_DATA)
+GXEMUL-SEC/src/devices/dev_lca.c:47:#define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+GXEMUL-SEC/src/devices/dev_lca.c:112:	    stated narrowly on purpose: THE HOST STOPS DYING.  Interrupts do not start
+GXEMUL-SEC/src/devices/dev_lca.c:275:DEVICE_ACCESS(lca_isa)
+GXEMUL-SEC/src/devices/dev_lca.c:284:	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+GXEMUL-SEC/src/devices/dev_lca.c:301:		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+GXEMUL-SEC/src/devices/dev_lca.c:305:	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+GXEMUL-SEC/src/devices/dev_lca.c:532:	    0x00000000,		/*  PCI portbase: TODO  */
+GXEMUL-SEC/src/devices/dev_lca.c:535:	    LCA_ISA_BASE,	/*  ISA portbase  */
+GXEMUL-SEC/src/devices/dev_lca.c:543:	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+GXEMUL-SEC/src/devices/dev_lca.c:545:	    DM_DEFAULT, NULL);
+GXEMUL-SEC/src/devices/dev_lca.c:547:	memory_device_register(devinit->machine->memory, "lca_isa",
+GXEMUL-SEC/src/devices/dev_lca.c:549:	    DM_DEFAULT, NULL);
+GXEMUL-SEC/src/devices/dev_lca.c:551:	memory_device_register(devinit->machine->memory, "lca_ioc",
+GXEMUL-SEC/src/devices/dev_lca.c:553:	    DM_DEFAULT, NULL);
+GXEMUL-SEC/src/devices/dev_lca.c:569:	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$f = '"'GXEMUL-SEC/src/devices/dev_lca.c'; "'$s = Get-Content -LiteralPath $f; foreach ($span in @(@(40,49), @(270,320))) { for ($i = $span[0]; $i -le $span[1]; $i++) { '"'{0}:{1}: {2}' -f "'$f,$i,$s[$i-1] } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$f = '"'GXEMUL-SEC/src/cpus/memory_rw.c'; "'$s = Get-Content -LiteralPath $f; for ($i=175; $i -le 340; $i++) { '"'{0}:{1}: {2}' -f "'$f,$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$f = '"'GXEMUL-SEC/src/cpus/memory_alpha.c'; "'$s = Get-Content -LiteralPath $f; for ($i=35; $i -le 210; $i++) { '"'{0}:{1}: {2}' -f "'$f,$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$f = '"'GXEMUL-SEC/src/devices/bus_isa.c'; "'$s = Get-Content -LiteralPath $f; for ($i=165; $i -le 320; $i++) { '"'{0}:{1}: {2}' -f "'$f,$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$f = '"'GXEMUL-SEC/regress/lca_isaphys_probe.py'; "'$s = Get-Content -LiteralPath $f; for ($i=1; $i -le $s.Length; $i++) { '"'{0}:{1}: {2}' -f "'$f,$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 328ms:[0m
+GXEMUL-SEC/src/devices/dev_lca.c:40: #include "interrupt.h"
+GXEMUL-SEC/src/devices/dev_lca.c:41: #include "machine.h"
+GXEMUL-SEC/src/devices/dev_lca.c:42: #include "memory.h"
+GXEMUL-SEC/src/devices/dev_lca.c:43: #include "misc.h"
+GXEMUL-SEC/src/devices/dev_lca.c:44: 
+GXEMUL-SEC/src/devices/dev_lca.c:45: #include "thirdparty/alpha_lcareg.h"
+GXEMUL-SEC/src/devices/dev_lca.c:46: 
+GXEMUL-SEC/src/devices/dev_lca.c:47: #define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+GXEMUL-SEC/src/devices/dev_lca.c:48: #define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+GXEMUL-SEC/src/devices/dev_lca.c:49: 
+GXEMUL-SEC/src/devices/dev_lca.c:270: 
+GXEMUL-SEC/src/devices/dev_lca.c:271: 	return 1;
+GXEMUL-SEC/src/devices/dev_lca.c:272: }
+GXEMUL-SEC/src/devices/dev_lca.c:273: 
+GXEMUL-SEC/src/devices/dev_lca.c:274: 
+GXEMUL-SEC/src/devices/dev_lca.c:275: DEVICE_ACCESS(lca_isa)
+GXEMUL-SEC/src/devices/dev_lca.c:276: {
+GXEMUL-SEC/src/devices/dev_lca.c:277: 	unsigned int ofs, i;
+GXEMUL-SEC/src/devices/dev_lca.c:278: 	uint8_t byte;
+GXEMUL-SEC/src/devices/dev_lca.c:279: 
+GXEMUL-SEC/src/devices/dev_lca.c:280: 	relative_addr >>= 5;
+GXEMUL-SEC/src/devices/dev_lca.c:281: 
+GXEMUL-SEC/src/devices/dev_lca.c:282: 	/*
+GXEMUL-SEC/src/devices/dev_lca.c:283: 	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
+GXEMUL-SEC/src/devices/dev_lca.c:284: 	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+GXEMUL-SEC/src/devices/dev_lca.c:285: 	 *  the rule the write arm already applied wherever the old guard let
+GXEMUL-SEC/src/devices/dev_lca.c:286: 	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
+GXEMUL-SEC/src/devices/dev_lca.c:287: 	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
+GXEMUL-SEC/src/devices/dev_lca.c:288: 	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
+GXEMUL-SEC/src/devices/dev_lca.c:289: 	 *  of an unaligned load or store that memory_rw splits at 1 KB),
+GXEMUL-SEC/src/devices/dev_lca.c:290: 	 *  and the read arm discarded the
+GXEMUL-SEC/src/devices/dev_lca.c:291: 	 *  fetched byte at ofs == len.
+GXEMUL-SEC/src/devices/dev_lca.c:292: 	 *  One byte is forwarded whatever len is (the size field a<4:3> is
+GXEMUL-SEC/src/devices/dev_lca.c:293: 	 *  not decoded here).  len 0 has no producer; refuse it before the %.
+GXEMUL-SEC/src/devices/dev_lca.c:294: 	 */
+GXEMUL-SEC/src/devices/dev_lca.c:295: 	if (len == 0)
+GXEMUL-SEC/src/devices/dev_lca.c:296: 		return 0;
+GXEMUL-SEC/src/devices/dev_lca.c:297: 	ofs = (relative_addr & 3) % len;
+GXEMUL-SEC/src/devices/dev_lca.c:298: 
+GXEMUL-SEC/src/devices/dev_lca.c:299: 	if (writeflag == MEM_WRITE) {
+GXEMUL-SEC/src/devices/dev_lca.c:300: 		byte = data[ofs];
+GXEMUL-SEC/src/devices/dev_lca.c:301: 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+GXEMUL-SEC/src/devices/dev_lca.c:302: 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+GXEMUL-SEC/src/devices/dev_lca.c:303: 	}
+GXEMUL-SEC/src/devices/dev_lca.c:304: 
+GXEMUL-SEC/src/devices/dev_lca.c:305: 	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+GXEMUL-SEC/src/devices/dev_lca.c:306: 	    &byte, 1, MEM_READ, CACHE_NONE);
+GXEMUL-SEC/src/devices/dev_lca.c:307: 
+GXEMUL-SEC/src/devices/dev_lca.c:308: 	for (i=0; i<len; i++)
+GXEMUL-SEC/src/devices/dev_lca.c:309: 		data[i] = i == ofs? byte : 0x00;
+GXEMUL-SEC/src/devices/dev_lca.c:310: 
+GXEMUL-SEC/src/devices/dev_lca.c:311: 	return 1;
+GXEMUL-SEC/src/devices/dev_lca.c:312: }
+GXEMUL-SEC/src/devices/dev_lca.c:313: 
+GXEMUL-SEC/src/devices/dev_lca.c:314: 
+GXEMUL-SEC/src/devices/dev_lca.c:315: /*
+GXEMUL-SEC/src/devices/dev_lca.c:316:  *  #518 (lcabadval): one bounded announce per (device instance, reason).  Six
+GXEMUL-SEC/src/devices/dev_lca.c:317:  *  IOC write arms used to end the host with fatal()+exit(1) on any value outside
+GXEMUL-SEC/src/devices/dev_lca.c:318:  *  a tiny accepted set -- and the sets were WRONG, not merely harsh: the 21066
+GXEMUL-SEC/src/devices/dev_lca.c:319:  *  HRM (Table 6-6) lists THIRTEEN legal W_MASK encodings where the model took
+GXEMUL-SEC/src/devices/dev_lca.c:320:  *  one, and S6.4.14 REQUIRES SROM to write ZERO to W_BASE1, which was fatal.
+
+[32m succeeded in 347ms:[0m
+GXEMUL-SEC/src/cpus/memory_rw.c:175:  *  -fno-optimize-sibling-calls.  No caller in the tree passes an access large enough for
+GXEMUL-SEC/src/cpus/memory_rw.c:176:  *  this to bite today; it is insurance, and it costs about fifteen lines.
+GXEMUL-SEC/src/cpus/memory_rw.c:177:  *
+GXEMUL-SEC/src/cpus/memory_rw.c:178:  *  ONLY WHEN A TRANSLATION ACTUALLY HAPPENS.  Under PHYSICAL (or with no translate_v2p)
+GXEMUL-SEC/src/cpus/memory_rw.c:179:  *  paddr == vaddr, there is no per-page mapping to redo, and splitting would buy nothing
+GXEMUL-SEC/src/cpus/memory_rw.c:180:  *  while turning one large DMA into thousands of calls -- so those go straight through and
+GXEMUL-SEC/src/cpus/memory_rw.c:181:  *  the memblock split keeps doing its job unchanged.
+GXEMUL-SEC/src/cpus/memory_rw.c:182:  */
+GXEMUL-SEC/src/cpus/memory_rw.c:183: int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:184: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+GXEMUL-SEC/src/cpus/memory_rw.c:185: {
+GXEMUL-SEC/src/cpus/memory_rw.c:186: 	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:187: 		size_t granule = (size_t) MRW_SPLIT_MASK + 1;
+GXEMUL-SEC/src/cpus/memory_rw.c:188: 		size_t offset = (size_t) (vaddr & MRW_SPLIT_MASK);
+GXEMUL-SEC/src/cpus/memory_rw.c:189: 
+GXEMUL-SEC/src/cpus/memory_rw.c:190: 		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+GXEMUL-SEC/src/cpus/memory_rw.c:191: 		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+GXEMUL-SEC/src/cpus/memory_rw.c:192: 		    the loop and hand the whole thing to the worker.  The subtraction
+GXEMUL-SEC/src/cpus/memory_rw.c:193: 		    cannot wrap, because offset < granule always.
+GXEMUL-SEC/src/cpus/memory_rw.c:194: 
+GXEMUL-SEC/src/cpus/memory_rw.c:195: 		    STATED EXACTLY, because the first version of this comment implied more
+GXEMUL-SEC/src/cpus/memory_rw.c:196: 		    than it delivers: this form does not SERVICE such a length, it declines
+GXEMUL-SEC/src/cpus/memory_rw.c:197: 		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+GXEMUL-SEC/src/cpus/memory_rw.c:198: 		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+GXEMUL-SEC/src/cpus/memory_rw.c:199: 		    at two million chunks.  No caller passes anything remotely like it (the
+GXEMUL-SEC/src/cpus/memory_rw.c:200: 		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+GXEMUL-SEC/src/cpus/memory_rw.c:201: 		    and filed rather than handled.  */
+GXEMUL-SEC/src/cpus/memory_rw.c:202: 		while (len > granule - offset) {
+GXEMUL-SEC/src/cpus/memory_rw.c:203: 			size_t head = granule - offset;
+GXEMUL-SEC/src/cpus/memory_rw.c:204: 
+GXEMUL-SEC/src/cpus/memory_rw.c:205: 			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+GXEMUL-SEC/src/cpus/memory_rw.c:206: 			    writeflag, misc_flags)) {
+GXEMUL-SEC/src/cpus/memory_rw.c:207: 				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+GXEMUL-SEC/src/cpus/memory_rw.c:208: 				    THAT: the worker zeroes only the chunk IT was given, so a
+GXEMUL-SEC/src/cpus/memory_rw.c:209: 				    failure before the last chunk used to leave the caller's
+GXEMUL-SEC/src/cpus/memory_rw.c:210: 				    remaining bytes untouched -- uninitialised host stack, for
+GXEMUL-SEC/src/cpus/memory_rw.c:211: 				    a caller that ignores the return value.  Unsplit, one call
+GXEMUL-SEC/src/cpus/memory_rw.c:212: 				    covered the whole length.  Zero the rest here so the
+GXEMUL-SEC/src/cpus/memory_rw.c:213: 				    guarantee is the same as it was.  */
+GXEMUL-SEC/src/cpus/memory_rw.c:214: 				if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:215: 					memset(data, 0, len);
+GXEMUL-SEC/src/cpus/memory_rw.c:216: 				return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:217: 			}
+GXEMUL-SEC/src/cpus/memory_rw.c:218: 
+GXEMUL-SEC/src/cpus/memory_rw.c:219: 			vaddr += head;
+GXEMUL-SEC/src/cpus/memory_rw.c:220: 			data += head;
+GXEMUL-SEC/src/cpus/memory_rw.c:221: 			len -= head;
+GXEMUL-SEC/src/cpus/memory_rw.c:222: 			offset = 0;
+GXEMUL-SEC/src/cpus/memory_rw.c:223: 		}
+GXEMUL-SEC/src/cpus/memory_rw.c:224: 	}
+GXEMUL-SEC/src/cpus/memory_rw.c:225: 
+GXEMUL-SEC/src/cpus/memory_rw.c:226: 	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+GXEMUL-SEC/src/cpus/memory_rw.c:227: }
+GXEMUL-SEC/src/cpus/memory_rw.c:228: 
+GXEMUL-SEC/src/cpus/memory_rw.c:229: 
+GXEMUL-SEC/src/cpus/memory_rw.c:230: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:231: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+GXEMUL-SEC/src/cpus/memory_rw.c:232: {
+GXEMUL-SEC/src/cpus/memory_rw.c:233: 	const int offset_mask = MRW_OFFSET_MASK;
+GXEMUL-SEC/src/cpus/memory_rw.c:234: 
+GXEMUL-SEC/src/cpus/memory_rw.c:235: 	int ok = 2;
+GXEMUL-SEC/src/cpus/memory_rw.c:236: 	uint64_t paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:237: 	int cache, no_exceptions, offset;
+GXEMUL-SEC/src/cpus/memory_rw.c:238: 	unsigned char *memblock;
+GXEMUL-SEC/src/cpus/memory_rw.c:239: 	int dyntrans_device_danger = 0;
+GXEMUL-SEC/src/cpus/memory_rw.c:240: 
+GXEMUL-SEC/src/cpus/memory_rw.c:241: 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+GXEMUL-SEC/src/cpus/memory_rw.c:242: 	cache = misc_flags & CACHE_FLAGS_MASK;
+GXEMUL-SEC/src/cpus/memory_rw.c:243: 
+GXEMUL-SEC/src/cpus/memory_rw.c:244: 
+GXEMUL-SEC/src/cpus/memory_rw.c:245: 	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:246: 		paddr = vaddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:247: 	} else {
+GXEMUL-SEC/src/cpus/memory_rw.c:248: 		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:249: 		    (writeflag? FLAG_WRITEFLAG : 0) +
+GXEMUL-SEC/src/cpus/memory_rw.c:250: 		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+GXEMUL-SEC/src/cpus/memory_rw.c:251: 		    + (misc_flags & MEMORY_USER_ACCESS)
+GXEMUL-SEC/src/cpus/memory_rw.c:252: 		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+GXEMUL-SEC/src/cpus/memory_rw.c:253: 
+GXEMUL-SEC/src/cpus/memory_rw.c:254: 		/*
+GXEMUL-SEC/src/cpus/memory_rw.c:255: 		 *  If the translation caused an exception, or was invalid in
+GXEMUL-SEC/src/cpus/memory_rw.c:256: 		 *  some way, then simply return without doing the memory
+GXEMUL-SEC/src/cpus/memory_rw.c:257: 		 *  access:
+GXEMUL-SEC/src/cpus/memory_rw.c:258: 		 */
+GXEMUL-SEC/src/cpus/memory_rw.c:259: 		if (!ok) {
+GXEMUL-SEC/src/cpus/memory_rw.c:260: 			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+GXEMUL-SEC/src/cpus/memory_rw.c:261: 			    the caller's read buffer untouched; zero it so
+GXEMUL-SEC/src/cpus/memory_rw.c:262: 			    callers that ignore the return value (e.g. the DEC
+GXEMUL-SEC/src/cpus/memory_rw.c:263: 			    PROM string helpers) consume deterministic 0 bytes
+GXEMUL-SEC/src/cpus/memory_rw.c:264: 			    instead of uninitialised host stack. Same zero-fill
+GXEMUL-SEC/src/cpus/memory_rw.c:265: 			    ethos as the failed-device-read path (#95).  */
+GXEMUL-SEC/src/cpus/memory_rw.c:266: 			if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:267: 				memset(data, 0, len);
+GXEMUL-SEC/src/cpus/memory_rw.c:268: 			return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:269: 		}
+GXEMUL-SEC/src/cpus/memory_rw.c:270: 	}
+GXEMUL-SEC/src/cpus/memory_rw.c:271: 
+GXEMUL-SEC/src/cpus/memory_rw.c:272: 	/*
+GXEMUL-SEC/src/cpus/memory_rw.c:273: 	 *  #250: data write-watchpoint. Checked here, before the device /
+GXEMUL-SEC/src/cpus/memory_rw.c:274: 	 *  cache / RAM dispatch (several of which return early �?" notably the
+GXEMUL-SEC/src/cpus/memory_rw.c:275: 	 *  R3000 cached path via memory_cache_R3000()), so every store that
+GXEMUL-SEC/src/cpus/memory_rw.c:276: 	 *  reaches this slow path is covered. Watched pages are kept off the
+GXEMUL-SEC/src/cpus/memory_rw.c:277: 	 *  fast store table by update_translation_table(), and R3000 cached
+GXEMUL-SEC/src/cpus/memory_rw.c:278: 	 *  data already comes through here. Show the store (writer pc, target,
+GXEMUL-SEC/src/cpus/memory_rw.c:279: 	 *  width, value) and request entry into the debugger after the current
+GXEMUL-SEC/src/cpus/memory_rw.c:280: 	 *  instruction, via the same about_to_enter_single_step mechanism as
+GXEMUL-SEC/src/cpus/memory_rw.c:281: 	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+GXEMUL-SEC/src/cpus/memory_rw.c:282: 	 */
+GXEMUL-SEC/src/cpus/memory_rw.c:283: 	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+GXEMUL-SEC/src/cpus/memory_rw.c:284: 	    !single_step && !about_to_enter_single_step &&
+GXEMUL-SEC/src/cpus/memory_rw.c:285: 	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+GXEMUL-SEC/src/cpus/memory_rw.c:286: 		char valbuf[3 * 16 + 1];
+GXEMUL-SEC/src/cpus/memory_rw.c:287: 		size_t vi, vn = len < 16 ? len : 16;
+GXEMUL-SEC/src/cpus/memory_rw.c:288: 		valbuf[0] = '\0';
+GXEMUL-SEC/src/cpus/memory_rw.c:289: 		for (vi = 0; vi < vn; vi++)
+GXEMUL-SEC/src/cpus/memory_rw.c:290: 			snprintf(valbuf + strlen(valbuf),
+GXEMUL-SEC/src/cpus/memory_rw.c:291: 			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
+GXEMUL-SEC/src/cpus/memory_rw.c:292: 			    vi ? " " : "", data[vi]);
+GXEMUL-SEC/src/cpus/memory_rw.c:293: 		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
+GXEMUL-SEC/src/cpus/memory_rw.c:294: 		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
+GXEMUL-SEC/src/cpus/memory_rw.c:295: 		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+GXEMUL-SEC/src/cpus/memory_rw.c:296: 		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+GXEMUL-SEC/src/cpus/memory_rw.c:297: 		about_to_enter_single_step = true;
+GXEMUL-SEC/src/cpus/memory_rw.c:298: 	}
+GXEMUL-SEC/src/cpus/memory_rw.c:299: 
+GXEMUL-SEC/src/cpus/memory_rw.c:300: #if 0
+GXEMUL-SEC/src/cpus/memory_rw.c:301: 	/*
+GXEMUL-SEC/src/cpus/memory_rw.c:302: 	 *  For quick-and-dirty debugging of 32-bit code, typically
+GXEMUL-SEC/src/cpus/memory_rw.c:303: 	 *  unknown ROM code:  Write out a summary of accessed memory ranges.
+GXEMUL-SEC/src/cpus/memory_rw.c:304: 	 */
+GXEMUL-SEC/src/cpus/memory_rw.c:305: 	if (cpu->running && paddr < 0x00300000)
+GXEMUL-SEC/src/cpus/memory_rw.c:306: 	{
+GXEMUL-SEC/src/cpus/memory_rw.c:307: 		static int swriteflag = -1, lastswriteflag;
+GXEMUL-SEC/src/cpus/memory_rw.c:308: 		static int32_t start = -1, stop = -1;
+GXEMUL-SEC/src/cpus/memory_rw.c:309: 		static int32_t laststart = -1, laststop = -1;
+GXEMUL-SEC/src/cpus/memory_rw.c:310: 
+GXEMUL-SEC/src/cpus/memory_rw.c:311: 		if (start == -1)
+GXEMUL-SEC/src/cpus/memory_rw.c:312: 		{
+GXEMUL-SEC/src/cpus/memory_rw.c:313: 			start = stop = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:314: 			swriteflag = writeflag;
+GXEMUL-SEC/src/cpus/memory_rw.c:315: 		}
+GXEMUL-SEC/src/cpus/memory_rw.c:316: 		else
+GXEMUL-SEC/src/cpus/memory_rw.c:317: 		{
+GXEMUL-SEC/src/cpus/memory_rw.c:318: 			if (paddr == stop + len && writeflag == swriteflag)
+GXEMUL-SEC/src/cpus/memory_rw.c:319: 			{
+GXEMUL-SEC/src/cpus/memory_rw.c:320: 				stop = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:321: 			}
+GXEMUL-SEC/src/cpus/memory_rw.c:322: 			else
+GXEMUL-SEC/src/cpus/memory_rw.c:323: 			{
+GXEMUL-SEC/src/cpus/memory_rw.c:324: 				if (start != laststart || stop != laststop || swriteflag != lastswriteflag)
+GXEMUL-SEC/src/cpus/memory_rw.c:325: 				{
+GXEMUL-SEC/src/cpus/memory_rw.c:326: 					printf("%s  %08x -- %08x  %i-bit\n",
+GXEMUL-SEC/src/cpus/memory_rw.c:327: 						swriteflag ? "WRITE" : "READ ",
+GXEMUL-SEC/src/cpus/memory_rw.c:328: 						(int)start, (int)(stop + len - 1), (int)len*8);
+GXEMUL-SEC/src/cpus/memory_rw.c:329: 				}
+GXEMUL-SEC/src/cpus/memory_rw.c:330: 
+GXEMUL-SEC/src/cpus/memory_rw.c:331: 				laststart = start; laststop = stop; lastswriteflag = swriteflag;
+GXEMUL-SEC/src/cpus/memory_rw.c:332: 
+GXEMUL-SEC/src/cpus/memory_rw.c:333: 				start = stop = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:334: 				swriteflag = writeflag;
+GXEMUL-SEC/src/cpus/memory_rw.c:335: 			}
+GXEMUL-SEC/src/cpus/memory_rw.c:336: 		}
+GXEMUL-SEC/src/cpus/memory_rw.c:337: 
+GXEMUL-SEC/src/cpus/memory_rw.c:338: 		// Make sure the access is not put into quick lookup tables:
+GXEMUL-SEC/src/cpus/memory_rw.c:339: 		ok |= MEMORY_NOT_FULL_PAGE;
+GXEMUL-SEC/src/cpus/memory_rw.c:340: 	}
+
+[32m succeeded in 365ms:[0m
+GXEMUL-SEC/src/devices/bus_isa.c:165:  *       in VGA console mode should have it set.
+GXEMUL-SEC/src/devices/bus_isa.c:166:  *
+GXEMUL-SEC/src/devices/bus_isa.c:167:  *  (*3) Similar to *2 above; machines that always boot up with VGA console
+GXEMUL-SEC/src/devices/bus_isa.c:168:  *       should have this flag set, so that the keyboard is always used.
+GXEMUL-SEC/src/devices/bus_isa.c:169:  *
+GXEMUL-SEC/src/devices/bus_isa.c:170:  *  The interrupt_base_path is the name of the bus, CPU, or controller onto
+GXEMUL-SEC/src/devices/bus_isa.c:171:  *  which this ISA bus will be attached, e.g. "machine[0].lca" or
+GXEMUL-SEC/src/devices/bus_isa.c:172:  *  "machine[0].cpu[0].pic1".
+GXEMUL-SEC/src/devices/bus_isa.c:173:  */
+GXEMUL-SEC/src/devices/bus_isa.c:174: struct bus_isa_data *bus_isa_init(struct machine *machine,
+GXEMUL-SEC/src/devices/bus_isa.c:175: 	char *interrupt_base_path, uint32_t bus_isa_flags,
+GXEMUL-SEC/src/devices/bus_isa.c:176: 	uint64_t isa_portbase, uint64_t isa_membase)
+GXEMUL-SEC/src/devices/bus_isa.c:177: {
+GXEMUL-SEC/src/devices/bus_isa.c:178: 	struct bus_isa_data *d;
+GXEMUL-SEC/src/devices/bus_isa.c:179: 	char tmpstr[300], tmpstr2[300];
+GXEMUL-SEC/src/devices/bus_isa.c:180: 	int wdc0_irq = 14, wdc1_irq = 15;
+GXEMUL-SEC/src/devices/bus_isa.c:181: 	int i, tmp_handle, kbd_in_use;
+GXEMUL-SEC/src/devices/bus_isa.c:182: 	int lptbase = 0x378;
+GXEMUL-SEC/src/devices/bus_isa.c:183: 
+GXEMUL-SEC/src/devices/bus_isa.c:184: 	CHECK_ALLOCATION(d = (struct bus_isa_data *) malloc(sizeof(struct bus_isa_data)));
+GXEMUL-SEC/src/devices/bus_isa.c:185: 	memset(d, 0, sizeof(struct bus_isa_data));
+GXEMUL-SEC/src/devices/bus_isa.c:186: 
+GXEMUL-SEC/src/devices/bus_isa.c:187: 	d->isa_portbase = isa_portbase;
+GXEMUL-SEC/src/devices/bus_isa.c:188: 	d->isa_membase  = isa_membase;
+GXEMUL-SEC/src/devices/bus_isa.c:189: 
+GXEMUL-SEC/src/devices/bus_isa.c:190: 	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+GXEMUL-SEC/src/devices/bus_isa.c:191: 		/*  Connect to the interrupt which we're interrupting
+GXEMUL-SEC/src/devices/bus_isa.c:192: 		    at (usually a CPU):  */
+GXEMUL-SEC/src/devices/bus_isa.c:193: 		INTERRUPT_CONNECT(interrupt_base_path, d->irq);
+GXEMUL-SEC/src/devices/bus_isa.c:194: 
+GXEMUL-SEC/src/devices/bus_isa.c:195: 		/*  Register the 16 possible ISA interrupts:  */
+GXEMUL-SEC/src/devices/bus_isa.c:196: 		for (i=0; i<16; i++) {
+GXEMUL-SEC/src/devices/bus_isa.c:197: 			struct interrupt templ;
+GXEMUL-SEC/src/devices/bus_isa.c:198: 			char name[300];
+GXEMUL-SEC/src/devices/bus_isa.c:199: 			snprintf(name, sizeof(name),
+GXEMUL-SEC/src/devices/bus_isa.c:200: 			    "%s.isa.%i", interrupt_base_path, i);
+GXEMUL-SEC/src/devices/bus_isa.c:201: 			memset(&templ, 0, sizeof(templ));
+GXEMUL-SEC/src/devices/bus_isa.c:202: 			templ.line = i;
+GXEMUL-SEC/src/devices/bus_isa.c:203: 			templ.name = name;
+GXEMUL-SEC/src/devices/bus_isa.c:204: 			templ.extra = d;
+GXEMUL-SEC/src/devices/bus_isa.c:205: 			templ.interrupt_assert = isa_interrupt_assert;
+GXEMUL-SEC/src/devices/bus_isa.c:206: 			templ.interrupt_deassert = isa_interrupt_deassert;
+GXEMUL-SEC/src/devices/bus_isa.c:207: 			interrupt_handler_register(&templ);
+GXEMUL-SEC/src/devices/bus_isa.c:208: 		}
+GXEMUL-SEC/src/devices/bus_isa.c:209: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:210: 
+GXEMUL-SEC/src/devices/bus_isa.c:211: 	kbd_in_use = ((bus_isa_flags & BUS_ISA_PCKBC_FORCE_USE) ||
+GXEMUL-SEC/src/devices/bus_isa.c:212: 	    (machine->x11_md.in_use))? 1 : 0;
+GXEMUL-SEC/src/devices/bus_isa.c:213: 
+GXEMUL-SEC/src/devices/bus_isa.c:214: 	if (machine->machine_type == MACHINE_PREP) {
+GXEMUL-SEC/src/devices/bus_isa.c:215: 		/*  PReP with obio controller has both WDCs on irq 13!  */
+GXEMUL-SEC/src/devices/bus_isa.c:216: 		wdc0_irq = wdc1_irq = 13;
+GXEMUL-SEC/src/devices/bus_isa.c:217: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:218: 
+GXEMUL-SEC/src/devices/bus_isa.c:219: 	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+GXEMUL-SEC/src/devices/bus_isa.c:220: 		snprintf(tmpstr, sizeof(tmpstr), "8259 irq=%s addr=0x%llx",
+GXEMUL-SEC/src/devices/bus_isa.c:221: 		    interrupt_base_path, (long long)(isa_portbase + 0x20));
+GXEMUL-SEC/src/devices/bus_isa.c:222: 		d->pic1 = machine->isa_pic_data.pic1 = (struct pic8259_data *)
+GXEMUL-SEC/src/devices/bus_isa.c:223: 		    device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:224: 		d->ptr_to_pending_timer_interrupts =
+GXEMUL-SEC/src/devices/bus_isa.c:225: 		    machine->isa_pic_data.pending_timer_interrupts;
+GXEMUL-SEC/src/devices/bus_isa.c:226: 		d->ptr_to_last_int = &machine->isa_pic_data.last_int;
+GXEMUL-SEC/src/devices/bus_isa.c:227: 
+GXEMUL-SEC/src/devices/bus_isa.c:228: 		if (bus_isa_flags & BUS_ISA_NO_SECOND_PIC)
+GXEMUL-SEC/src/devices/bus_isa.c:229: 			bus_isa_flags &= ~BUS_ISA_NO_SECOND_PIC;
+GXEMUL-SEC/src/devices/bus_isa.c:230: 		else {
+GXEMUL-SEC/src/devices/bus_isa.c:231: 			snprintf(tmpstr, sizeof(tmpstr),
+GXEMUL-SEC/src/devices/bus_isa.c:232: 			    "8259 irq=%s.isa.2 addr=0x%llx",
+GXEMUL-SEC/src/devices/bus_isa.c:233: 			    interrupt_base_path,(long long)(isa_portbase+0xa0));
+GXEMUL-SEC/src/devices/bus_isa.c:234: 			d->pic2 = machine->isa_pic_data.pic2 = (struct pic8259_data *)
+GXEMUL-SEC/src/devices/bus_isa.c:235: 			    device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:236: 		}
+GXEMUL-SEC/src/devices/bus_isa.c:237: 	} else {
+GXEMUL-SEC/src/devices/bus_isa.c:238: 		bus_isa_flags &= ~BUS_ISA_EXTERNAL_PIC;
+GXEMUL-SEC/src/devices/bus_isa.c:239: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:240: 
+GXEMUL-SEC/src/devices/bus_isa.c:241: 	snprintf(tmpstr, sizeof(tmpstr), "8253 irq=%s.isa.%i addr=0x%llx "
+GXEMUL-SEC/src/devices/bus_isa.c:242: 	    "in_use=0", interrupt_base_path, 0,
+GXEMUL-SEC/src/devices/bus_isa.c:243: 	    (long long)(isa_portbase + 0x40));
+GXEMUL-SEC/src/devices/bus_isa.c:244: 	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:245: 
+GXEMUL-SEC/src/devices/bus_isa.c:246: 	snprintf(tmpstr, sizeof(tmpstr), "pccmos irq=%s.isa.%i addr=0x%llx",
+GXEMUL-SEC/src/devices/bus_isa.c:247: 	    interrupt_base_path, 8, (long long)(isa_portbase + 0x70));
+GXEMUL-SEC/src/devices/bus_isa.c:248: 	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:249: 
+GXEMUL-SEC/src/devices/bus_isa.c:250: 	snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.isa.%i addr=0x%llx "
+GXEMUL-SEC/src/devices/bus_isa.c:251: 	    "name2=tty0 in_use=%i", interrupt_base_path, 4,
+GXEMUL-SEC/src/devices/bus_isa.c:252: 	    (long long)(isa_portbase + 0x3f8), 1 - kbd_in_use);
+GXEMUL-SEC/src/devices/bus_isa.c:253: 	machine->main_console_handle = (size_t)device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:254: 
+GXEMUL-SEC/src/devices/bus_isa.c:255: 	snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.isa.%i addr=0x%llx "
+GXEMUL-SEC/src/devices/bus_isa.c:256: 	    "name2=tty1 in_use=0", interrupt_base_path, 3,
+GXEMUL-SEC/src/devices/bus_isa.c:257: 	    (long long)(isa_portbase + 0x2f8));
+GXEMUL-SEC/src/devices/bus_isa.c:258: 	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:259: 
+GXEMUL-SEC/src/devices/bus_isa.c:260: 	if (bus_isa_flags & BUS_ISA_LPTBASE_3BC) {
+GXEMUL-SEC/src/devices/bus_isa.c:261: 		bus_isa_flags &= ~BUS_ISA_LPTBASE_3BC;
+GXEMUL-SEC/src/devices/bus_isa.c:262: 		lptbase = 0x3bc;
+GXEMUL-SEC/src/devices/bus_isa.c:263: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:264: 
+GXEMUL-SEC/src/devices/bus_isa.c:265: 	snprintf(tmpstr, sizeof(tmpstr), "lpt irq=%s.isa.%i addr=0x%llx "
+GXEMUL-SEC/src/devices/bus_isa.c:266: 	    "name2=lpt in_use=0", interrupt_base_path, 7,
+GXEMUL-SEC/src/devices/bus_isa.c:267: 	    (long long)(isa_portbase + lptbase));
+GXEMUL-SEC/src/devices/bus_isa.c:268: 	device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:269: 
+GXEMUL-SEC/src/devices/bus_isa.c:270: 	if (bus_isa_flags & BUS_ISA_IDE0) {
+GXEMUL-SEC/src/devices/bus_isa.c:271: 		bus_isa_flags &= ~BUS_ISA_IDE0;
+GXEMUL-SEC/src/devices/bus_isa.c:272: 		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+GXEMUL-SEC/src/devices/bus_isa.c:273: 		    "addr=0x%llx", interrupt_base_path, wdc0_irq,
+GXEMUL-SEC/src/devices/bus_isa.c:274: 		    (long long)(isa_portbase + 0x1f0));
+GXEMUL-SEC/src/devices/bus_isa.c:275: 		if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+GXEMUL-SEC/src/devices/bus_isa.c:276: 		    diskimage_exist(machine, 1, DISKIMAGE_IDE))
+GXEMUL-SEC/src/devices/bus_isa.c:277: 			device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:278: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:279: 
+GXEMUL-SEC/src/devices/bus_isa.c:280: 	if (bus_isa_flags & BUS_ISA_IDE1) {
+GXEMUL-SEC/src/devices/bus_isa.c:281: 		bus_isa_flags &= ~BUS_ISA_IDE1;
+GXEMUL-SEC/src/devices/bus_isa.c:282: 		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+GXEMUL-SEC/src/devices/bus_isa.c:283: 		    "addr=0x%llx", interrupt_base_path, wdc1_irq,
+GXEMUL-SEC/src/devices/bus_isa.c:284: 		    (long long)(isa_portbase + 0x170));
+GXEMUL-SEC/src/devices/bus_isa.c:285: 		if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+GXEMUL-SEC/src/devices/bus_isa.c:286: 		    diskimage_exist(machine, 3, DISKIMAGE_IDE))
+GXEMUL-SEC/src/devices/bus_isa.c:287: 			device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:288: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:289: 
+GXEMUL-SEC/src/devices/bus_isa.c:290: 	if (bus_isa_flags & BUS_ISA_FDC) {
+GXEMUL-SEC/src/devices/bus_isa.c:291: 		bus_isa_flags &= ~BUS_ISA_FDC;
+GXEMUL-SEC/src/devices/bus_isa.c:292: 		snprintf(tmpstr, sizeof(tmpstr), "fdc irq=%s.isa.%i "
+GXEMUL-SEC/src/devices/bus_isa.c:293: 		    "addr=0x%llx", interrupt_base_path, 6,
+GXEMUL-SEC/src/devices/bus_isa.c:294: 		    (long long)(isa_portbase + 0x3f0));
+GXEMUL-SEC/src/devices/bus_isa.c:295: 		device_add(machine, tmpstr);
+GXEMUL-SEC/src/devices/bus_isa.c:296: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:297: 
+GXEMUL-SEC/src/devices/bus_isa.c:298: 	if (bus_isa_flags & BUS_ISA_VGA) {
+GXEMUL-SEC/src/devices/bus_isa.c:299: 		if (machine->x11_md.in_use || bus_isa_flags & BUS_ISA_VGA_FORCE)
+GXEMUL-SEC/src/devices/bus_isa.c:300: 			dev_vga_init(machine, machine->memory,
+GXEMUL-SEC/src/devices/bus_isa.c:301: 			    isa_membase + 0xa0000, isa_portbase + 0x3c0,
+GXEMUL-SEC/src/devices/bus_isa.c:302: 			    machine->machine_name);
+GXEMUL-SEC/src/devices/bus_isa.c:303: 		bus_isa_flags &= ~(BUS_ISA_VGA | BUS_ISA_VGA_FORCE);
+GXEMUL-SEC/src/devices/bus_isa.c:304: 	}
+GXEMUL-SEC/src/devices/bus_isa.c:305: 
+GXEMUL-SEC/src/devices/bus_isa.c:306: 	snprintf(tmpstr, sizeof(tmpstr), "%s.isa.1", interrupt_base_path);
+GXEMUL-SEC/src/devices/bus_isa.c:307: 	snprintf(tmpstr2, sizeof(tmpstr2), "%s.isa.12", interrupt_base_path);
+GXEMUL-SEC/src/devices/bus_isa.c:308: 	tmp_handle = dev_pckbc_init(machine, machine->memory,
+GXEMUL-SEC/src/devices/bus_isa.c:309: 	    isa_portbase + 0x60, PCKBC_8042, tmpstr, tmpstr2,
+GXEMUL-SEC/src/devices/bus_isa.c:310: 	    kbd_in_use, bus_isa_flags & BUS_ISA_PCKBC_NONPCSTYLE? 0 : 1);
+GXEMUL-SEC/src/devices/bus_isa.c:311: 
+GXEMUL-SEC/src/devices/bus_isa.c:312: 	if (kbd_in_use)
+GXEMUL-SEC/src/devices/bus_isa.c:313: 		machine->main_console_handle = tmp_handle;
+GXEMUL-SEC/src/devices/bus_isa.c:314: 
+GXEMUL-SEC/src/devices/bus_isa.c:315: 	bus_isa_flags &= ~(BUS_ISA_PCKBC_NONPCSTYLE | BUS_ISA_PCKBC_FORCE_USE);
+GXEMUL-SEC/src/devices/bus_isa.c:316: 
+GXEMUL-SEC/src/devices/bus_isa.c:317: 	if (bus_isa_flags != 0)
+GXEMUL-SEC/src/devices/bus_isa.c:318: 		fatal("WARNING! bus_isa(): unimplemented bus_isa_flags 0x%x\n",
+GXEMUL-SEC/src/devices/bus_isa.c:319: 		    bus_isa_flags);
+GXEMUL-SEC/src/devices/bus_isa.c:320: 
+
+[32m succeeded in 385ms:[0m
+GXEMUL-SEC/src/cpus/memory_alpha.c:35: #include "misc.h"
+GXEMUL-SEC/src/cpus/memory_alpha.c:36: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:37: #include "thirdparty/alpha_rpb.h"
+GXEMUL-SEC/src/cpus/memory_alpha.c:38: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:39: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:40: /*
+GXEMUL-SEC/src/cpus/memory_alpha.c:41:  *  alpha_translate_v2p():
+GXEMUL-SEC/src/cpus/memory_alpha.c:42:  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:43: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_alpha.c:44: 	uint64_t *return_paddr, int flags)
+GXEMUL-SEC/src/cpus/memory_alpha.c:45: {
+GXEMUL-SEC/src/cpus/memory_alpha.c:46: 	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+GXEMUL-SEC/src/cpus/memory_alpha.c:47: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+GXEMUL-SEC/src/cpus/memory_alpha.c:48: 	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+GXEMUL-SEC/src/cpus/memory_alpha.c:49: 	
+GXEMUL-SEC/src/cpus/memory_alpha.c:50: 	// TODO: From the Alpha "arm_book.book":
+GXEMUL-SEC/src/cpus/memory_alpha.c:51: 	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+GXEMUL-SEC/src/cpus/memory_alpha.c:52: 	// 	{initiate Access Violation fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:53: 	// IF (VIRBND in use) THEN
+GXEMUL-SEC/src/cpus/memory_alpha.c:54: 	//   IF (VA LTU VIRBND) THEN
+GXEMUL-SEC/src/cpus/memory_alpha.c:55: 	//     ptbr_value <- PTBR
+GXEMUL-SEC/src/cpus/memory_alpha.c:56: 	//   ELSE
+GXEMUL-SEC/src/cpus/memory_alpha.c:57: 	//     ptbr_value <- SYSPTBR
+GXEMUL-SEC/src/cpus/memory_alpha.c:58: 	// ELSE
+GXEMUL-SEC/src/cpus/memory_alpha.c:59: 	//   ptbr_value <- PTBR
+GXEMUL-SEC/src/cpus/memory_alpha.c:60: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:61: 	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:62: 	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:63: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+GXEMUL-SEC/src/cpus/memory_alpha.c:64: 		return 2;
+GXEMUL-SEC/src/cpus/memory_alpha.c:65: 	}
+GXEMUL-SEC/src/cpus/memory_alpha.c:66: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:67: 	/*
+GXEMUL-SEC/src/cpus/memory_alpha.c:68: 	 *  UGLY hack for now:
+GXEMUL-SEC/src/cpus/memory_alpha.c:69: 	 *
+GXEMUL-SEC/src/cpus/memory_alpha.c:70: 	 *  Before virtual memory has been set up, ptbr is most likely zero.
+GXEMUL-SEC/src/cpus/memory_alpha.c:71: 	 *  In that case, simply map everything vaddr == paddr.
+GXEMUL-SEC/src/cpus/memory_alpha.c:72: 	 */
+GXEMUL-SEC/src/cpus/memory_alpha.c:73: 	if (!userMode && base == 0) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:74: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+GXEMUL-SEC/src/cpus/memory_alpha.c:75: if (vaddr == 0xfffffffd80000000ULL) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:76: 	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:77: 	exit(1);
+GXEMUL-SEC/src/cpus/memory_alpha.c:78: }
+GXEMUL-SEC/src/cpus/memory_alpha.c:79: #if 1
+GXEMUL-SEC/src/cpus/memory_alpha.c:80: 		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:81: 			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+GXEMUL-SEC/src/cpus/memory_alpha.c:82: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:83: 		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:84: 			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+GXEMUL-SEC/src/cpus/memory_alpha.c:85: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:86: 		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:87: 		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:88: 			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+GXEMUL-SEC/src/cpus/memory_alpha.c:89: #endif
+GXEMUL-SEC/src/cpus/memory_alpha.c:90: 		return 2;
+GXEMUL-SEC/src/cpus/memory_alpha.c:91: 	}
+GXEMUL-SEC/src/cpus/memory_alpha.c:92: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:93: 	// debug("base = 0x%016"PRIx64"\n", base);
+GXEMUL-SEC/src/cpus/memory_alpha.c:94: if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:95: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:96: 	uint64_t addr, pte1, pte2, pte3;
+GXEMUL-SEC/src/cpus/memory_alpha.c:97: 	int i1, i2, i3;
+GXEMUL-SEC/src/cpus/memory_alpha.c:98: 	unsigned char *pt_entry_ptr;
+GXEMUL-SEC/src/cpus/memory_alpha.c:99: 	const int pageSizeShift = 13;
+GXEMUL-SEC/src/cpus/memory_alpha.c:100: 	// const int pageSize = 1 << pageSizeShift;
+GXEMUL-SEC/src/cpus/memory_alpha.c:101: 	const int bitsPerLevel = 10;
+GXEMUL-SEC/src/cpus/memory_alpha.c:102: 	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+GXEMUL-SEC/src/cpus/memory_alpha.c:103: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:104: 	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+GXEMUL-SEC/src/cpus/memory_alpha.c:105: 	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+GXEMUL-SEC/src/cpus/memory_alpha.c:106: 	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+GXEMUL-SEC/src/cpus/memory_alpha.c:107: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:108: 	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+GXEMUL-SEC/src/cpus/memory_alpha.c:109: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:110: 	addr = base + i1 * sizeof(uint64_t);
+GXEMUL-SEC/src/cpus/memory_alpha.c:111: 	
+GXEMUL-SEC/src/cpus/memory_alpha.c:112: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+GXEMUL-SEC/src/cpus/memory_alpha.c:113: 	if (pt_entry_ptr == NULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:114: 		goto not_found;
+GXEMUL-SEC/src/cpus/memory_alpha.c:115: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:116: 	pte1 = *(uint64_t *)(pt_entry_ptr);
+GXEMUL-SEC/src/cpus/memory_alpha.c:117: 	pte1 = LE64_TO_HOST(pte1);
+GXEMUL-SEC/src/cpus/memory_alpha.c:118: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:119: 	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+GXEMUL-SEC/src/cpus/memory_alpha.c:120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:121: 		// TODO:
+GXEMUL-SEC/src/cpus/memory_alpha.c:122: 		// IF level1_pte<KRE> EQ 0 THEN
+GXEMUL-SEC/src/cpus/memory_alpha.c:123: 		//   {initiate Access Violation fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:124: 		// ELSE
+GXEMUL-SEC/src/cpus/memory_alpha.c:125: 		//   {initiate Translation Not Valid fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:126: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:127: 		// fatal("TODO: pte1 not valid.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:128: 		goto not_found;
+GXEMUL-SEC/src/cpus/memory_alpha.c:129: 	}
+GXEMUL-SEC/src/cpus/memory_alpha.c:130: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+GXEMUL-SEC/src/cpus/memory_alpha.c:132: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+GXEMUL-SEC/src/cpus/memory_alpha.c:134: 	if (pt_entry_ptr == NULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:135: 		goto not_found;
+GXEMUL-SEC/src/cpus/memory_alpha.c:136: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+GXEMUL-SEC/src/cpus/memory_alpha.c:138: 	pte2 = LE64_TO_HOST(pte2);
+GXEMUL-SEC/src/cpus/memory_alpha.c:139: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+GXEMUL-SEC/src/cpus/memory_alpha.c:141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:142: 		// TODO:
+GXEMUL-SEC/src/cpus/memory_alpha.c:143: 		// IF level2_pte<KRE> EQ 0 THEN
+GXEMUL-SEC/src/cpus/memory_alpha.c:144: 		//   {initiate Access Violation fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:145: 		// ELSE
+GXEMUL-SEC/src/cpus/memory_alpha.c:146: 		//   {initiate Translation Not Valid fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:147: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:148: 		fatal("TODO: pte2 not valid.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:149: 		goto not_found;
+GXEMUL-SEC/src/cpus/memory_alpha.c:150: 	}
+GXEMUL-SEC/src/cpus/memory_alpha.c:151: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+GXEMUL-SEC/src/cpus/memory_alpha.c:153: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+GXEMUL-SEC/src/cpus/memory_alpha.c:155: 	if (pt_entry_ptr == NULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:156: 		goto not_found;
+GXEMUL-SEC/src/cpus/memory_alpha.c:157: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+GXEMUL-SEC/src/cpus/memory_alpha.c:159: 	pte3 = LE64_TO_HOST(pte3);
+GXEMUL-SEC/src/cpus/memory_alpha.c:160: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+GXEMUL-SEC/src/cpus/memory_alpha.c:162: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:164: 		fatal("TODO: pte3 not valid.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:165: 		goto not_found;
+GXEMUL-SEC/src/cpus/memory_alpha.c:166: 	}
+GXEMUL-SEC/src/cpus/memory_alpha.c:167: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:168: 	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+GXEMUL-SEC/src/cpus/memory_alpha.c:169: 	    `offset = paddr & offset_mask', which was therefore always zero, so every
+GXEMUL-SEC/src/cpus/memory_alpha.c:170: 	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+GXEMUL-SEC/src/cpus/memory_alpha.c:171: 	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+GXEMUL-SEC/src/cpus/memory_alpha.c:172: 	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+GXEMUL-SEC/src/cpus/memory_alpha.c:173: 	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+GXEMUL-SEC/src/cpus/memory_alpha.c:174: 	    watchpoint -- which keeps a page off the fast store table -- makes it
+GXEMUL-SEC/src/cpus/memory_alpha.c:175: 	    reproducible.)  Measured: a cold guest ldq
+GXEMUL-SEC/src/cpus/memory_alpha.c:176: 	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+GXEMUL-SEC/src/cpus/memory_alpha.c:177: 	    landed at the base for the same reason.
+GXEMUL-SEC/src/cpus/memory_alpha.c:178: 	
+GXEMUL-SEC/src/cpus/memory_alpha.c:179: 	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+GXEMUL-SEC/src/cpus/memory_alpha.c:180: 	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+GXEMUL-SEC/src/cpus/memory_alpha.c:181: 	    literal beside the shift is how the two drift.  `|' rather than `+' because
+GXEMUL-SEC/src/cpus/memory_alpha.c:182: 	    that is what every other CPU's walk in this tree writes; here they are equal,
+GXEMUL-SEC/src/cpus/memory_alpha.c:183: 	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+GXEMUL-SEC/src/cpus/memory_alpha.c:184: 	    still ignored, the protection bits untested, and `return 2' still reports
+GXEMUL-SEC/src/cpus/memory_alpha.c:185: 	    every walked page writable.  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:186: 	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+GXEMUL-SEC/src/cpus/memory_alpha.c:187: 	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+GXEMUL-SEC/src/cpus/memory_alpha.c:188: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:189: 	// TODO.
+GXEMUL-SEC/src/cpus/memory_alpha.c:190: 	return 2;
+GXEMUL-SEC/src/cpus/memory_alpha.c:191: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:192: not_found:
+GXEMUL-SEC/src/cpus/memory_alpha.c:193: 	/*  No match.  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:194: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+GXEMUL-SEC/src/cpus/memory_alpha.c:195: 	    abort()/exit() the host; report no-translation (0) so the caller
+GXEMUL-SEC/src/cpus/memory_alpha.c:196: 	    raises the fault (keeps the emulator alive and debuggable).  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:197: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+GXEMUL-SEC/src/cpus/memory_alpha.c:198: 	return 0;
+GXEMUL-SEC/src/cpus/memory_alpha.c:199: }
+GXEMUL-SEC/src/cpus/memory_alpha.c:200: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:201: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:202: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:203: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:204: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:205: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:206: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:207: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:208: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:209: 
+GXEMUL-SEC/src/cpus/memory_alpha.c:210: 
+
+[32m succeeded in 383ms:[0m
+GXEMUL-SEC/regress/lca_isaphys_probe.py:1: #!/usr/bin/env python3
+GXEMUL-SEC/regress/lca_isaphys_probe.py:2: """lca_isaphys_probe.py -- the rung-3 WITNESS for `lcaisaphys' (#540).  A WITNESS, not a detector:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:3: every row asserts the CORRECT behaviour, so it is RED on the committed build and GREEN after the fix.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:4: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:5: THE DEFECT.  DEVICE_ACCESS(lca_isa) in src/devices/dev_lca.c forwards each sparse-window access to the
+GXEMUL-SEC/regress/lca_isaphys_probe.py:6: real ISA device with a NESTED `cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + port, ...)', on both arms,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:7: with misc flags CACHE_NONE -- no PHYSICAL.  So the 33-bit PHYSICAL address 0x1d00003fd is handed to the
+GXEMUL-SEC/regress/lca_isaphys_probe.py:8: Alpha translator as a VIRTUAL one.  While ptbr == 0 the translator's identity hack (memory_alpha.c,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:9: `if (!userMode && base == 0)') maps it straight through -- which is why no probe in this tree, all of
+GXEMUL-SEC/regress/lca_isaphys_probe.py:10: which run with ptbr == 0, has ever seen it.  Once a guest arms a page table, the inner address WALKS
+GXEMUL-SEC/regress/lca_isaphys_probe.py:11: the guest's tables and misses: a read answers a FALSE ZERO with success (the failed inner read leaves a
+GXEMUL-SEC/regress/lca_isaphys_probe.py:12: zeroed byte, and the read arm packs it and returns 1), a write is silently ABANDONED (#215), and every
+GXEMUL-SEC/regress/lca_isaphys_probe.py:13: miss prints `[ alpha_translate_v2p: 0x00000001d00003fd wasn't found ]'.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:14: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:15: THE VEHICLE.  One unmodified `-E alpha -e alphabook1' process.  Controls first while ptbr == 0, then
+GXEMUL-SEC/regress/lca_isaphys_probe.py:16: CALL_PAL 0x30 (swpctx) with a PCB whose ptbr names an all-ZERO L1 page (PFN 0x828 -- NOT 0: ptbr 0 IS
+GXEMUL-SEC/regress/lca_isaphys_probe.py:17: the identity path, i.e. today's behaviour; and NOT the spec's 0x20a0, see ZERO_PFN), then the defect
+GXEMUL-SEC/regress/lca_isaphys_probe.py:18: accesses.  Every OUTER access is K0SEG,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:19: which the translator identity-maps before any walk: a raw sparse VA would walk the window itself and
+GXEMUL-SEC/regress/lca_isaphys_probe.py:20: never enter the handler (the spec's trap 1).  The defect is the INNER forward, at 0x1d00003fd (read)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:21: and 0x1d00003ff (write).
+GXEMUL-SEC/regress/lca_isaphys_probe.py:22: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:23:     WANTED ON THE COMMITTED BUILD: 9/13 -- rows 1-8 and 13 green, rows 9-12 RED.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:24:     AFTER `CACHE_NONE | PHYSICAL' ON BOTH NESTED CALLS: 13/13, the same script.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:25: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:26:     MEASURED ON THE COMMITTED BUILD, 2026-09-18: 9/13, no retry, the four defect rows exactly
+GXEMUL-SEC/regress/lca_isaphys_probe.py:27:     (artifacts/lcaisaphys/witness_HEAD_20260918/probe_HEAD.raw; build/ == HEAD on every file of the path).
+GXEMUL-SEC/regress/lca_isaphys_probe.py:28:     *** The spec predicted "8/13 (rows 1-8 and 13 green)" -- the ROWS were right and the TALLY was not:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:29:     rows 1-8 plus row 13 is nine.  Its second arithmetic slip after the PFN (see ZERO_PFN). ***
+GXEMUL-SEC/regress/lca_isaphys_probe.py:30: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:31:     If any ARMING CONTROL (rows 2-7) is red, the vehicle was never armed.  The probe then prints
+GXEMUL-SEC/regress/lca_isaphys_probe.py:32:     LCAISAPHYS_CONTROL=DEAD and LCAISAPHYS_RESULT=0/0 and scores NOTHING (spec amendment 8): a failed
+GXEMUL-SEC/regress/lca_isaphys_probe.py:33:     swpctx leaves identity mapping on, which greens the defect rows on the committed build and would
+GXEMUL-SEC/regress/lca_isaphys_probe.py:34:     read as "no defect" -- a wrong-reason result presented as a measurement.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:35: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:36: SPEC.  regress/artifacts/lcaisaphys/WITNESSSPEC_grok_20260917.txt (the rows, constants and traps) and
+GXEMUL-SEC/regress/lca_isaphys_probe.py:37: amendment 8 in regress/artifacts/armmsrmodekill/SPEC_AMENDMENTS_READ_BEFORE_BUILDING.md.  ONE DEPARTURE,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:38: for a trap the spec does not name: the parent probe's pointer block lives at SCRATCH, a RAW 32-bit
+GXEMUL-SEC/regress/lca_isaphys_probe.py:39: address, which resolves only under identity mapping.  After swpctx every raw-VA load walks and misses,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:40: so a pointer loaded through SCRATCH after the arm would never arrive and the defect accesses would
+GXEMUL-SEC/regress/lca_isaphys_probe.py:41: never run.  T0 is therefore re-based to k0(SCRATCH) by one LDQ BEFORE swpctx, and every later pointer
+GXEMUL-SEC/regress/lca_isaphys_probe.py:42: load goes through K0SEG.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:43: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:44: ENCODER, session(), printed(), k0/SP/FLAT, SENT and load_const are copied from lca_isalane_probe.py;
+GXEMUL-SEC/regress/lca_isaphys_probe.py:45: CALL_PAL, the PCB layout and the "plant everything while ptbr is still 0" order from
+GXEMUL-SEC/regress/lca_isaphys_probe.py:46: alpha_pfnoffset_probe.py.  Neither file is imported.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:47: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:48: Usage:  lca_isaphys_probe.py <gxemul-binary> [label]      (set LCAISAPHYS_RAW=<path> to keep the transcript)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:49: """
+GXEMUL-SEC/regress/lca_isaphys_probe.py:50: import os, pty, re, select, sys, time
+GXEMUL-SEC/regress/lca_isaphys_probe.py:51: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:52: BIN   = sys.argv[1]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:53: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:54: MACH  = "alphabook1"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:55: DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:56: if not os.path.exists(DUMMY):                 # as alpha_pfnoffset_probe.py: an 8-byte dummy kernel
+GXEMUL-SEC/regress/lca_isaphys_probe.py:57:     with open(DUMMY, "wb") as f:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:58:         f.write(b"\0" * 8)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:59: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:60: # ---------------------------------------------------------------- encoder (memory format only)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:61: ZERO, T0, T1, T2, T3, T4, T5, T6, T7 = 31, 1, 2, 3, 4, 5, 6, 7, 8
+GXEMUL-SEC/regress/lca_isaphys_probe.py:62: A0 = 16                                       # a0: the PCB address for swpctx
+GXEMUL-SEC/regress/lca_isaphys_probe.py:63: V  = 22                                       # t8: holds store VALUES only and is never printed, so
+GXEMUL-SEC/regress/lca_isaphys_probe.py:64:                                               # the six printed destinations t2..t7 stay unique
+GXEMUL-SEC/regress/lca_isaphys_probe.py:65: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:66: def mem(op, ra, rb, disp):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:67:     assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+GXEMUL-SEC/regress/lca_isaphys_probe.py:68:     return (op << 26) | (ra << 21) | (rb << 16) | (disp & 0xffff)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:69: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:70: def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:71: def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:72: def LDBU(ra, disp, rb):      return mem(0x0a, ra, rb, disp)   # BWX byte load  -> memory_rw len 1
+GXEMUL-SEC/regress/lca_isaphys_probe.py:73: def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)   # quadword load  -> memory_rw len 8
+GXEMUL-SEC/regress/lca_isaphys_probe.py:74: def STB (ra, disp, rb):      return mem(0x0e, ra, rb, disp)   # BWX byte store -> memory_rw len 1
+GXEMUL-SEC/regress/lca_isaphys_probe.py:75: def CALL_PAL(n):             return n & 0x3ffffff
+GXEMUL-SEC/regress/lca_isaphys_probe.py:76: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:77: def load_const(reg, val):                     # 32-bit only, exactly as the parent
+GXEMUL-SEC/regress/lca_isaphys_probe.py:78:     lo = val & 0xffff
+GXEMUL-SEC/regress/lca_isaphys_probe.py:79:     hi = (val >> 16) & 0xffff
+GXEMUL-SEC/regress/lca_isaphys_probe.py:80:     if lo >= 0x8000:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:81:         hi = (hi + 1) & 0xffff
+GXEMUL-SEC/regress/lca_isaphys_probe.py:82:     ops = [LDAH(reg, hi if hi < 0x8000 else hi - 0x10000)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:83:     if lo:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:84:         ops.append(LDA(reg, lo if lo < 0x8000 else lo - 0x10000, reg))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:85:     return ops
+GXEMUL-SEC/regress/lca_isaphys_probe.py:86: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:87: SENT = 0x0bad1d8a                             # the parent's pre-seed: a load that does not complete
+GXEMUL-SEC/regress/lca_isaphys_probe.py:88: def sent(reg): return load_const(reg, SENT)   # leaves it; low byte 0x8a has bits 5-6 CLEAR, so it
+GXEMUL-SEC/regress/lca_isaphys_probe.py:89:                                               # cannot fake LSR_FIXED under the 0x60 mask
+GXEMUL-SEC/regress/lca_isaphys_probe.py:90: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:91: # ---------------------------------------------------------------- addresses and constants
+GXEMUL-SEC/regress/lca_isaphys_probe.py:92: K0SEG        = 0xfffffc0000000000
+GXEMUL-SEC/regress/lca_isaphys_probe.py:93: def k0(p):   return K0SEG | p
+GXEMUL-SEC/regress/lca_isaphys_probe.py:94: LCA_PCI_SIO  = 0x1c0000000                    # lca_isa, THE HANDLER UNDER TEST, is registered here
+GXEMUL-SEC/regress/lca_isaphys_probe.py:95: LCA_ISA_BASE = LCA_PCI_SIO + 0x10000000       # where the handler FORWARDS to (dev_lca.c)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:96: def SP(port):   return LCA_PCI_SIO  + (port << 5)   # the guest-visible sparse address
+GXEMUL-SEC/regress/lca_isaphys_probe.py:97: def FLAT(port): return LCA_ISA_BASE + port          # the internal flat mapping
+GXEMUL-SEC/regress/lca_isaphys_probe.py:98: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:99: KBC_CMD, KBC_DAT        = 0x64, 0x60          # 8042, both 0 mod 4 -> ofs 0
+GXEMUL-SEC/regress/lca_isaphys_probe.py:100: KBC_SELFTEST, KBC_REPLY = 0xAA, 0x55          # a protocol reply: RAM, a reset value or a zero-fill
+GXEMUL-SEC/regress/lca_isaphys_probe.py:101:                                               # cannot produce it
+GXEMUL-SEC/regress/lca_isaphys_probe.py:102: UART_LSR, LSR_FIXED = 0x3fd, 0x60             # ns16550 sets TXRDY|TSRE on every access; RXRDY masked
+GXEMUL-SEC/regress/lca_isaphys_probe.py:103: UART_SCR, SCR_VALUE = 0x3ff, 0x5a             # ns16550 scratch: stores and returns the byte
+GXEMUL-SEC/regress/lca_isaphys_probe.py:104: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:105: SCRATCH, CODE = 0x01020000, 0x01040000        # the parent's pointer block and code
+GXEMUL-SEC/regress/lca_isaphys_probe.py:106: P_ZERO, P_RAM, P_PCB = 0x01050000, 0x01056000, 0x01058000
+GXEMUL-SEC/regress/lca_isaphys_probe.py:107: PAGESHIFT = 13
+GXEMUL-SEC/regress/lca_isaphys_probe.py:108: ZERO_PFN  = P_ZERO >> PAGESHIFT               # 0x828.  NOT 0: ptbr 0 is the identity path
+GXEMUL-SEC/regress/lca_isaphys_probe.py:109: VAL_A     = 0xaaaa0000aaaa                    # planted at P_RAM; what an identity-mapped load reads
+GXEMUL-SEC/regress/lca_isaphys_probe.py:110: #  *** THE SPEC'S PFN IS WRONG, AND THIS ASSERT IS HOW IT WAS CAUGHT. ***  The spec writes "PFN
+GXEMUL-SEC/regress/lca_isaphys_probe.py:111: #  0x01050000 >> 13 = 0x20a0"; the shift gives 0x828 (0x20a0 is the >> 11 value).  COMPUTED here,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:112: #  never typed.  A typed 0x20a0 would point ptbr at 0x20a0 << 13 = 0x4140000, past -M 64 RAM: the walk
+GXEMUL-SEC/regress/lca_isaphys_probe.py:113: #  would still miss (an unbacked L1 goes to not_found) and every row would read the same -- for the
+GXEMUL-SEC/regress/lca_isaphys_probe.py:114: #  WRONG REASON, with `pte2 todo' green over a table that was never read.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:115: assert ZERO_PFN == 0x828 and (ZERO_PFN << PAGESHIFT) == P_ZERO
+GXEMUL-SEC/regress/lca_isaphys_probe.py:116: assert P_ZERO % (1 << PAGESHIFT) == 0, "the L1 page must be page-aligned"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:117: assert max(SCRATCH, CODE, P_ZERO, P_RAM, P_PCB) < 64 * 1024 * 1024, "-M 64"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:118: assert P_RAM < 0x80000000, "load_const builds P_RAM, so bit 31 must be clear"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:119: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:120: def miss(addr): return "[ alpha_translate_v2p: 0x%016x wasn't found ]" % addr
+GXEMUL-SEC/regress/lca_isaphys_probe.py:121: MISS_ARM = miss(P_RAM)                        # the ARMING control's walk -- present on both builds
+GXEMUL-SEC/regress/lca_isaphys_probe.py:122: MISS_RD  = miss(FLAT(UART_LSR))               # 0x00000001d00003fd -- the defect, read arm
+GXEMUL-SEC/regress/lca_isaphys_probe.py:123: MISS_WR  = miss(FLAT(UART_SCR))               # 0x00000001d00003ff -- the defect, write arm
+GXEMUL-SEC/regress/lca_isaphys_probe.py:124: assert FLAT(UART_LSR) >> 33 == 0 and P_RAM >> 33 == 0, "all three walks use L1[0], the zero entry"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:125: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:126: # ---------------------------------------------------------------- the session
+GXEMUL-SEC/regress/lca_isaphys_probe.py:127: def session(cmds, settle, spin):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:128:     pid, fd = pty.fork()
+GXEMUL-SEC/regress/lca_isaphys_probe.py:129:     if pid == 0:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:130:         os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:131:                        "0x20000000:" + DUMMY])
+GXEMUL-SEC/regress/lca_isaphys_probe.py:132:         os._exit(127)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:133:     buf = ""
+GXEMUL-SEC/regress/lca_isaphys_probe.py:134:     def rd(t):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:135:         nonlocal buf
+GXEMUL-SEC/regress/lca_isaphys_probe.py:136:         end = time.time() + t
+GXEMUL-SEC/regress/lca_isaphys_probe.py:137:         while time.time() < end:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:138:             r, _, _ = select.select([fd], [], [], 0.1)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:139:             if not r:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:140:                 continue
+GXEMUL-SEC/regress/lca_isaphys_probe.py:141:             try:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:142:                 d = os.read(fd, 65536)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:143:                 if not d:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:144:                     return False
+GXEMUL-SEC/regress/lca_isaphys_probe.py:145:                 buf += d.decode("latin-1", "replace")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:146:             except OSError:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:147:                 return False
+GXEMUL-SEC/regress/lca_isaphys_probe.py:148:         return True
+GXEMUL-SEC/regress/lca_isaphys_probe.py:149:     alive = rd(settle)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:150:     for i, c in enumerate(cmds):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:151:         try:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:152:             os.write(fd, (c + "\n").encode("latin-1"))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:153:         except OSError:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:154:             alive = False; break
+GXEMUL-SEC/regress/lca_isaphys_probe.py:155:         if not rd(spin if i == len(cmds) - 1 else 0.45):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:156:             alive = False; break
+GXEMUL-SEC/regress/lca_isaphys_probe.py:157:     try:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:158:         os.write(fd, b"quit\n"); rd(0.5)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:159:     except OSError:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:160:         pass
+GXEMUL-SEC/regress/lca_isaphys_probe.py:161:     try:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:162:         os.close(fd)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:163:     except OSError:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:164:         pass
+GXEMUL-SEC/regress/lca_isaphys_probe.py:165:     return buf.replace("\r", ""), alive
+GXEMUL-SEC/regress/lca_isaphys_probe.py:166: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:167: def printed(t, reg):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:168:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:169:     return None if not m else int(m.group(1), 16)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:170: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:171: def hx(v): return "absent" if v is None else "0x%x" % v
+GXEMUL-SEC/regress/lca_isaphys_probe.py:172: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:173: rows = []
+GXEMUL-SEC/regress/lca_isaphys_probe.py:174: def row(name, got, want, note=""):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:175:     ok = (got == want)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:176:     rows.append((name, ok))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:177:     print("%-14s %-24s %-24s %-56s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:178:     return ok
+GXEMUL-SEC/regress/lca_isaphys_probe.py:179: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:180: # ---------------------------------------------------------------- setup: ALL planted while ptbr == 0,
+GXEMUL-SEC/regress/lca_isaphys_probe.py:181: #  all through K0SEG (the debugger's `put d' goes through memory_rw WITHOUT PHYSICAL, so after the arm a
+GXEMUL-SEC/regress/lca_isaphys_probe.py:182: #  non-K0SEG `put d' would walk).  The swpctx happens inside the guest program, after every plant.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:183: slots = [k0(SCRATCH),          #  0  re-base T0 to K0SEG before the arm (the departure named above)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:184:          k0(SP(KBC_CMD)),      #  8
+GXEMUL-SEC/regress/lca_isaphys_probe.py:185:          k0(SP(KBC_DAT)),      # 16
+GXEMUL-SEC/regress/lca_isaphys_probe.py:186:          k0(FLAT(UART_LSR)),   # 24
+GXEMUL-SEC/regress/lca_isaphys_probe.py:187:          k0(FLAT(UART_SCR)),   # 32
+GXEMUL-SEC/regress/lca_isaphys_probe.py:188:          k0(P_PCB),            # 40
+GXEMUL-SEC/regress/lca_isaphys_probe.py:189:          k0(SP(UART_LSR)),     # 48
+GXEMUL-SEC/regress/lca_isaphys_probe.py:190:          k0(SP(UART_SCR))]     # 56
+GXEMUL-SEC/regress/lca_isaphys_probe.py:191: setup  = ["put d 0x%x, 0x%x" % (k0(SCRATCH + 8 * i), v) for i, v in enumerate(slots)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:192: setup += ["put d 0x%x, 0x0"  %  k0(P_ZERO),                   # L1[0] = 0 even if RAM were dirty
+GXEMUL-SEC/regress/lca_isaphys_probe.py:193:           "put d 0x%x, 0x%x" % (k0(P_RAM), VAL_A),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:194:           #  ptbr AND flags both the zero page's PFN (pfnoffset trap 1: a swap of the two PCB fields
+GXEMUL-SEC/regress/lca_isaphys_probe.py:195:           #  is a confound only when they differ -- cheap insurance, including on a pre-#507 bisect).
+GXEMUL-SEC/regress/lca_isaphys_probe.py:196:           "put d 0x%x, 0x%x" % (k0(P_PCB + 16), ZERO_PFN),   # apcb_ptbr
+GXEMUL-SEC/regress/lca_isaphys_probe.py:197:           "put d 0x%x, 0x%x" % (k0(P_PCB + 40), ZERO_PFN)]   # apcb_flags
+GXEMUL-SEC/regress/lca_isaphys_probe.py:198: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:199: # ---------------------------------------------------------------- the program, one `step N'
+GXEMUL-SEC/regress/lca_isaphys_probe.py:200: prog  = load_const(T0, SCRATCH)                                        # raw VA: identity, ptbr == 0
+GXEMUL-SEC/regress/lca_isaphys_probe.py:201: prog += [LDQ(T0, 0, T0)]                                               # T0 = k0(SCRATCH)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:202: #  A  8042 self-test through the SPARSE window, ptbr == 0                       -> t2 = 0x55
+GXEMUL-SEC/regress/lca_isaphys_probe.py:203: prog += [LDQ(T1, 8, T0)] + load_const(V, KBC_SELFTEST) + [STB(V, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:204: prog += [LDQ(T1, 16, T0)] + sent(T2) + [LDBU(T2, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:205: #  B  the LSR through the FLAT mapping, which never enters lca_isa               -> t3 & 0x60 = 0x60
+GXEMUL-SEC/regress/lca_isaphys_probe.py:206: prog += [LDQ(T1, 24, T0)] + sent(T3) + [LDBU(T3, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:207: #  C  the arming control's RAM cell, a raw VA under identity                     -> t4 = VAL_A
+GXEMUL-SEC/regress/lca_isaphys_probe.py:208: prog += load_const(T1, P_RAM) + sent(T4) + [LDQ(T4, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:209: #  D  baseline for the write observer: 0 into the scratch register through FLAT
+GXEMUL-SEC/regress/lca_isaphys_probe.py:210: prog += [LDQ(T1, 32, T0), STB(ZERO, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:211: #  E  ARM: swpctx with a PCB whose ptbr names the all-zero L1 page
+GXEMUL-SEC/regress/lca_isaphys_probe.py:212: prog += [LDQ(A0, 40, T0), CALL_PAL(0x30)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:213: #  F  the same raw VA again: it now WALKS and misses at L1[0]                     -> t5 = SENT
+GXEMUL-SEC/regress/lca_isaphys_probe.py:214: prog += load_const(T1, P_RAM) + sent(T5) + [LDQ(T5, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:215: #  G  DEFECT READ: sparse LSR.  Outer k0 (identity) -> lca_isa -> inner 0x1d00003fd  -> t6
+GXEMUL-SEC/regress/lca_isaphys_probe.py:216: prog += [LDQ(T1, 48, T0)] + sent(T6) + [LDBU(T6, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:217: #  H  DEFECT WRITE: sparse SCR <- 0x5a.  Inner 0x1d00003ff
+GXEMUL-SEC/regress/lca_isaphys_probe.py:218: prog += [LDQ(T1, 56, T0)] + load_const(V, SCR_VALUE) + [STB(V, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:219: #  I  the observer: the scratch register through FLAT                           -> t7
+GXEMUL-SEC/regress/lca_isaphys_probe.py:220: prog += [LDQ(T1, 32, T0)] + sent(T7) + [LDBU(T7, 0, T1)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:221: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:222: REGS = ["t2", "t3", "t4", "t5", "t6", "t7"]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:223: cmds  = setup
+GXEMUL-SEC/regress/lca_isaphys_probe.py:224: cmds += ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:225: cmds += ["pc=0x%x" % k0(CODE), "step %d" % len(prog)]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:226: cmds += ["print %s" % r for r in REGS]
+GXEMUL-SEC/regress/lca_isaphys_probe.py:227: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:228: print("lca_isaphys_probe -- binary=%s label=%s machine=%s  (%d instructions, one step)"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:229:       % (BIN, LABEL, MACH, len(prog)))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:230: txt, alive = session(cmds, 3.0, 4.0)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:231: #  As the parent's run(): a session whose prints did not all arrive TIMED OUT rather than measured, and
+GXEMUL-SEC/regress/lca_isaphys_probe.py:232: #  is retried ONCE with tripled patience.  Without this, a slow run under load reads as a failed row.
+GXEMUL-SEC/regress/lca_isaphys_probe.py:233: retried = False
+GXEMUL-SEC/regress/lca_isaphys_probe.py:234: if any(printed(txt, r) is None for r in REGS):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:235:     retried = True
+GXEMUL-SEC/regress/lca_isaphys_probe.py:236:     txt, alive = session(cmds, 9.0, 12.0)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:237: print("LCAISAPHYS_RETRIED=%s" % ("yes" if retried else "none"))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:238: if os.environ.get("LCAISAPHYS_RAW"):
+GXEMUL-SEC/regress/lca_isaphys_probe.py:239:     open(os.environ["LCAISAPHYS_RAW"], "w", encoding="utf-8").write(txt)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:240: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:241: t2, t3, t4, t5, t6, t7 = (printed(txt, r) for r in REGS)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:242: print("  RAW: live=%s flatLSR=%s ram=%s armed=%s spLSR=%s scr=%s alive=%s"
+GXEMUL-SEC/regress/lca_isaphys_probe.py:243:       % (hx(t2), hx(t3), hx(t4), hx(t5), hx(t6), hx(t7), alive))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:244: print("%-14s %-24s %-24s %-56s %s" % ("row", "got", "want", "note", ""))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:245: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:246: # ---------------------------------------------------------------- controls: GREEN on both builds
+GXEMUL-SEC/regress/lca_isaphys_probe.py:247: row("alive", "alive" if alive else "died", "alive",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:248:     "the host must not exit (fatal() prints; it does not exit)")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:249: CTRL_FIRST = len(rows)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:250: row("live", hx(t2), hx(KBC_REPLY),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:251:     "LIVENESS through lca_isa, ptbr == 0: 8042 self-test reply")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:252: row("flat lsr", hx(None if t3 is None else t3 & LSR_FIXED), hx(LSR_FIXED),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:253:     "DEVICE SIGNATURE at the defect port, via FLAT")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:254: row("ram plant", hx(t4), hx(VAL_A),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:255:     "the arming VA is a real RAM cell under identity")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:256: row("ptbr miss", "present" if MISS_ARM in txt else "absent", "present",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:257:     "PAGING IS ON: the same VA now walks and misses")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:258: row("ptbr sent", hx(t5), hx(SENT),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:259:     "the walked load did not complete (dest keeps the sentinel)")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:260: row("pte2 todo", "present" if "TODO: pte2" in txt else "absent", "absent",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:261:     "construction: the walk stopped at the ZERO L1 entry")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:262: armed = all(ok for _, ok in rows[CTRL_FIRST:])
+GXEMUL-SEC/regress/lca_isaphys_probe.py:263: if not armed:
+GXEMUL-SEC/regress/lca_isaphys_probe.py:264:     print("LCAISAPHYS_CONTROL=DEAD  an arming control is red -- the vehicle was never armed, so no defect")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:265:     print("                         row is read.  Fix the SETUP; do not read this as 'no defect'.")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:266:     print("LCAISAPHYS_RESULT=0/0")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:267:     print("LCAISAPHYS_DONE")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:268:     sys.exit(2)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:269: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:270: row("sp lsr ans", "completed" if (t6 is not None and t6 != SENT) else "faulted", "completed",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:271:     "the sparse read RETURNED (a false zero also returns)")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:272: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:273: # ---------------------------------------------------------------- the defect: RED on the committed build
+GXEMUL-SEC/regress/lca_isaphys_probe.py:274: row("sp lsr", hx(None if t6 is None else t6 & LSR_FIXED), hx(t3 & LSR_FIXED),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:275:     "sparse LSR after the arm == this session's FLAT LSR")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:276: row("w lands", hx(t7), hx(SCR_VALUE),
+GXEMUL-SEC/regress/lca_isaphys_probe.py:277:     "a sparse store after the arm reaches the scratch register")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:278: row("r miss", "present" if MISS_RD in txt else "absent", "absent",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:279:     "no translator miss on the INNER read, 0x1d00003fd")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:280: row("w miss", "present" if MISS_WR in txt else "absent", "absent",
+GXEMUL-SEC/regress/lca_isaphys_probe.py:281:     "no translator miss on the INNER write, 0x1d00003ff")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:282: row("row count", len(rows) + 1, 13, "IDENTITY: the row count this file emits")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:283: 
+GXEMUL-SEC/regress/lca_isaphys_probe.py:284: ok = sum(1 for _, o in rows if o)
+GXEMUL-SEC/regress/lca_isaphys_probe.py:285: print("LCAISAPHYS_RESULT=%d/%d" % (ok, len(rows)))
+GXEMUL-SEC/regress/lca_isaphys_probe.py:286: print("LCAISAPHYS_DONE")
+GXEMUL-SEC/regress/lca_isaphys_probe.py:287: sys.exit(0 if ok == len(rows) else 1)
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$s = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/bus_isa.c'; for ("'$i=174; $i -le 320; $i++) { '"'{0}: {1}' -f "'$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$s = Get-Content -LiteralPath '"'GXEMUL-SEC/regress/lca_isaphys_probe.py'; for ("'$i=1; $i -le 90; $i++) { '"'{0}: {1}' -f "'$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$s = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/memory_alpha.c'; for ("'$i=43; $i -le 202; $i++) { '"'{0}: {1}' -f "'$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 256ms:[0m
+1: #!/usr/bin/env python3
+2: """lca_isaphys_probe.py -- the rung-3 WITNESS for `lcaisaphys' (#540).  A WITNESS, not a detector:
+3: every row asserts the CORRECT behaviour, so it is RED on the committed build and GREEN after the fix.
+4: 
+5: THE DEFECT.  DEVICE_ACCESS(lca_isa) in src/devices/dev_lca.c forwards each sparse-window access to the
+6: real ISA device with a NESTED `cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + port, ...)', on both arms,
+7: with misc flags CACHE_NONE -- no PHYSICAL.  So the 33-bit PHYSICAL address 0x1d00003fd is handed to the
+8: Alpha translator as a VIRTUAL one.  While ptbr == 0 the translator's identity hack (memory_alpha.c,
+9: `if (!userMode && base == 0)') maps it straight through -- which is why no probe in this tree, all of
+10: which run with ptbr == 0, has ever seen it.  Once a guest arms a page table, the inner address WALKS
+11: the guest's tables and misses: a read answers a FALSE ZERO with success (the failed inner read leaves a
+12: zeroed byte, and the read arm packs it and returns 1), a write is silently ABANDONED (#215), and every
+13: miss prints `[ alpha_translate_v2p: 0x00000001d00003fd wasn't found ]'.
+14: 
+15: THE VEHICLE.  One unmodified `-E alpha -e alphabook1' process.  Controls first while ptbr == 0, then
+16: CALL_PAL 0x30 (swpctx) with a PCB whose ptbr names an all-ZERO L1 page (PFN 0x828 -- NOT 0: ptbr 0 IS
+17: the identity path, i.e. today's behaviour; and NOT the spec's 0x20a0, see ZERO_PFN), then the defect
+18: accesses.  Every OUTER access is K0SEG,
+19: which the translator identity-maps before any walk: a raw sparse VA would walk the window itself and
+20: never enter the handler (the spec's trap 1).  The defect is the INNER forward, at 0x1d00003fd (read)
+21: and 0x1d00003ff (write).
+22: 
+23:     WANTED ON THE COMMITTED BUILD: 9/13 -- rows 1-8 and 13 green, rows 9-12 RED.
+24:     AFTER `CACHE_NONE | PHYSICAL' ON BOTH NESTED CALLS: 13/13, the same script.
+25: 
+26:     MEASURED ON THE COMMITTED BUILD, 2026-09-18: 9/13, no retry, the four defect rows exactly
+27:     (artifacts/lcaisaphys/witness_HEAD_20260918/probe_HEAD.raw; build/ == HEAD on every file of the path).
+28:     *** The spec predicted "8/13 (rows 1-8 and 13 green)" -- the ROWS were right and the TALLY was not:
+29:     rows 1-8 plus row 13 is nine.  Its second arithmetic slip after the PFN (see ZERO_PFN). ***
+30: 
+31:     If any ARMING CONTROL (rows 2-7) is red, the vehicle was never armed.  The probe then prints
+32:     LCAISAPHYS_CONTROL=DEAD and LCAISAPHYS_RESULT=0/0 and scores NOTHING (spec amendment 8): a failed
+33:     swpctx leaves identity mapping on, which greens the defect rows on the committed build and would
+34:     read as "no defect" -- a wrong-reason result presented as a measurement.
+35: 
+36: SPEC.  regress/artifacts/lcaisaphys/WITNESSSPEC_grok_20260917.txt (the rows, constants and traps) and
+37: amendment 8 in regress/artifacts/armmsrmodekill/SPEC_AMENDMENTS_READ_BEFORE_BUILDING.md.  ONE DEPARTURE,
+38: for a trap the spec does not name: the parent probe's pointer block lives at SCRATCH, a RAW 32-bit
+39: address, which resolves only under identity mapping.  After swpctx every raw-VA load walks and misses,
+40: so a pointer loaded through SCRATCH after the arm would never arrive and the defect accesses would
+41: never run.  T0 is therefore re-based to k0(SCRATCH) by one LDQ BEFORE swpctx, and every later pointer
+42: load goes through K0SEG.
+43: 
+44: ENCODER, session(), printed(), k0/SP/FLAT, SENT and load_const are copied from lca_isalane_probe.py;
+45: CALL_PAL, the PCB layout and the "plant everything while ptbr is still 0" order from
+46: alpha_pfnoffset_probe.py.  Neither file is imported.
+47: 
+48: Usage:  lca_isaphys_probe.py <gxemul-binary> [label]      (set LCAISAPHYS_RAW=<path> to keep the transcript)
+49: """
+50: import os, pty, re, select, sys, time
+51: 
+52: BIN   = sys.argv[1]
+53: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+54: MACH  = "alphabook1"
+55: DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+56: if not os.path.exists(DUMMY):                 # as alpha_pfnoffset_probe.py: an 8-byte dummy kernel
+57:     with open(DUMMY, "wb") as f:
+58:         f.write(b"\0" * 8)
+59: 
+60: # ---------------------------------------------------------------- encoder (memory format only)
+61: ZERO, T0, T1, T2, T3, T4, T5, T6, T7 = 31, 1, 2, 3, 4, 5, 6, 7, 8
+62: A0 = 16                                       # a0: the PCB address for swpctx
+63: V  = 22                                       # t8: holds store VALUES only and is never printed, so
+64:                                               # the six printed destinations t2..t7 stay unique
+65: 
+66: def mem(op, ra, rb, disp):
+67:     assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+68:     return (op << 26) | (ra << 21) | (rb << 16) | (disp & 0xffff)
+69: 
+70: def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+71: def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+72: def LDBU(ra, disp, rb):      return mem(0x0a, ra, rb, disp)   # BWX byte load  -> memory_rw len 1
+73: def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)   # quadword load  -> memory_rw len 8
+74: def STB (ra, disp, rb):      return mem(0x0e, ra, rb, disp)   # BWX byte store -> memory_rw len 1
+75: def CALL_PAL(n):             return n & 0x3ffffff
+76: 
+77: def load_const(reg, val):                     # 32-bit only, exactly as the parent
+78:     lo = val & 0xffff
+79:     hi = (val >> 16) & 0xffff
+80:     if lo >= 0x8000:
+81:         hi = (hi + 1) & 0xffff
+82:     ops = [LDAH(reg, hi if hi < 0x8000 else hi - 0x10000)]
+83:     if lo:
+84:         ops.append(LDA(reg, lo if lo < 0x8000 else lo - 0x10000, reg))
+85:     return ops
+86: 
+87: SENT = 0x0bad1d8a                             # the parent's pre-seed: a load that does not complete
+88: def sent(reg): return load_const(reg, SENT)   # leaves it; low byte 0x8a has bits 5-6 CLEAR, so it
+89:                                               # cannot fake LSR_FIXED under the 0x60 mask
+90: 
+
+[32m succeeded in 263ms:[0m
+43: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+44: 	uint64_t *return_paddr, int flags)
+45: {
+46: 	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+47: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+48: 	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+49: 	
+50: 	// TODO: From the Alpha "arm_book.book":
+51: 	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+52: 	// 	{initiate Access Violation fault}
+53: 	// IF (VIRBND in use) THEN
+54: 	//   IF (VA LTU VIRBND) THEN
+55: 	//     ptbr_value <- PTBR
+56: 	//   ELSE
+57: 	//     ptbr_value <- SYSPTBR
+58: 	// ELSE
+59: 	//   ptbr_value <- PTBR
+60: 
+61: 	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+62: 	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+63: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+64: 		return 2;
+65: 	}
+66: 
+67: 	/*
+68: 	 *  UGLY hack for now:
+69: 	 *
+70: 	 *  Before virtual memory has been set up, ptbr is most likely zero.
+71: 	 *  In that case, simply map everything vaddr == paddr.
+72: 	 */
+73: 	if (!userMode && base == 0) {
+74: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+75: if (vaddr == 0xfffffffd80000000ULL) {
+76: 	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+77: 	exit(1);
+78: }
+79: #if 1
+80: 		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+81: 			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+82: 
+83: 		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+84: 			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+85: 
+86: 		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+87: 		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+88: 			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+89: #endif
+90: 		return 2;
+91: 	}
+92: 
+93: 	// debug("base = 0x%016"PRIx64"\n", base);
+94: if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+95: 
+96: 	uint64_t addr, pte1, pte2, pte3;
+97: 	int i1, i2, i3;
+98: 	unsigned char *pt_entry_ptr;
+99: 	const int pageSizeShift = 13;
+100: 	// const int pageSize = 1 << pageSizeShift;
+101: 	const int bitsPerLevel = 10;
+102: 	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+103: 
+104: 	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+105: 	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+106: 	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+107: 
+108: 	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+109: 
+110: 	addr = base + i1 * sizeof(uint64_t);
+111: 	
+112: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+113: 	if (pt_entry_ptr == NULL)
+114: 		goto not_found;
+115: 
+116: 	pte1 = *(uint64_t *)(pt_entry_ptr);
+117: 	pte1 = LE64_TO_HOST(pte1);
+118: 
+119: 	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+121: 		// TODO:
+122: 		// IF level1_pte<KRE> EQ 0 THEN
+123: 		//   {initiate Access Violation fault}
+124: 		// ELSE
+125: 		//   {initiate Translation Not Valid fault}
+126: 
+127: 		// fatal("TODO: pte1 not valid.\n");
+128: 		goto not_found;
+129: 	}
+130: 
+131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+132: 
+133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+134: 	if (pt_entry_ptr == NULL)
+135: 		goto not_found;
+136: 
+137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+138: 	pte2 = LE64_TO_HOST(pte2);
+139: 
+140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+142: 		// TODO:
+143: 		// IF level2_pte<KRE> EQ 0 THEN
+144: 		//   {initiate Access Violation fault}
+145: 		// ELSE
+146: 		//   {initiate Translation Not Valid fault}
+147: 
+148: 		fatal("TODO: pte2 not valid.\n");
+149: 		goto not_found;
+150: 	}
+151: 
+152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+153: 
+154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+155: 	if (pt_entry_ptr == NULL)
+156: 		goto not_found;
+157: 
+158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+159: 	pte3 = LE64_TO_HOST(pte3);
+160: 
+161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+162: 
+163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+164: 		fatal("TODO: pte3 not valid.\n");
+165: 		goto not_found;
+166: 	}
+167: 
+168: 	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+169: 	    `offset = paddr & offset_mask', which was therefore always zero, so every
+170: 	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+171: 	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+172: 	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+173: 	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+174: 	    watchpoint -- which keeps a page off the fast store table -- makes it
+175: 	    reproducible.)  Measured: a cold guest ldq
+176: 	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+177: 	    landed at the base for the same reason.
+178: 	
+179: 	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+180: 	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+181: 	    literal beside the shift is how the two drift.  `|' rather than `+' because
+182: 	    that is what every other CPU's walk in this tree writes; here they are equal,
+183: 	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+184: 	    still ignored, the protection bits untested, and `return 2' still reports
+185: 	    every walked page writable.  */
+186: 	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+187: 	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+188: 
+189: 	// TODO.
+190: 	return 2;
+191: 
+192: not_found:
+193: 	/*  No match.  */
+194: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+195: 	    abort()/exit() the host; report no-translation (0) so the caller
+196: 	    raises the fault (keeps the emulator alive and debuggable).  */
+197: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+198: 	return 0;
+199: }
+200: 
+201: 
+202: 
+
+[32m succeeded in 285ms:[0m
+174: struct bus_isa_data *bus_isa_init(struct machine *machine,
+175: 	char *interrupt_base_path, uint32_t bus_isa_flags,
+176: 	uint64_t isa_portbase, uint64_t isa_membase)
+177: {
+178: 	struct bus_isa_data *d;
+179: 	char tmpstr[300], tmpstr2[300];
+180: 	int wdc0_irq = 14, wdc1_irq = 15;
+181: 	int i, tmp_handle, kbd_in_use;
+182: 	int lptbase = 0x378;
+183: 
+184: 	CHECK_ALLOCATION(d = (struct bus_isa_data *) malloc(sizeof(struct bus_isa_data)));
+185: 	memset(d, 0, sizeof(struct bus_isa_data));
+186: 
+187: 	d->isa_portbase = isa_portbase;
+188: 	d->isa_membase  = isa_membase;
+189: 
+190: 	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+191: 		/*  Connect to the interrupt which we're interrupting
+192: 		    at (usually a CPU):  */
+193: 		INTERRUPT_CONNECT(interrupt_base_path, d->irq);
+194: 
+195: 		/*  Register the 16 possible ISA interrupts:  */
+196: 		for (i=0; i<16; i++) {
+197: 			struct interrupt templ;
+198: 			char name[300];
+199: 			snprintf(name, sizeof(name),
+200: 			    "%s.isa.%i", interrupt_base_path, i);
+201: 			memset(&templ, 0, sizeof(templ));
+202: 			templ.line = i;
+203: 			templ.name = name;
+204: 			templ.extra = d;
+205: 			templ.interrupt_assert = isa_interrupt_assert;
+206: 			templ.interrupt_deassert = isa_interrupt_deassert;
+207: 			interrupt_handler_register(&templ);
+208: 		}
+209: 	}
+210: 
+211: 	kbd_in_use = ((bus_isa_flags & BUS_ISA_PCKBC_FORCE_USE) ||
+212: 	    (machine->x11_md.in_use))? 1 : 0;
+213: 
+214: 	if (machine->machine_type == MACHINE_PREP) {
+215: 		/*  PReP with obio controller has both WDCs on irq 13!  */
+216: 		wdc0_irq = wdc1_irq = 13;
+217: 	}
+218: 
+219: 	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+220: 		snprintf(tmpstr, sizeof(tmpstr), "8259 irq=%s addr=0x%llx",
+221: 		    interrupt_base_path, (long long)(isa_portbase + 0x20));
+222: 		d->pic1 = machine->isa_pic_data.pic1 = (struct pic8259_data *)
+223: 		    device_add(machine, tmpstr);
+224: 		d->ptr_to_pending_timer_interrupts =
+225: 		    machine->isa_pic_data.pending_timer_interrupts;
+226: 		d->ptr_to_last_int = &machine->isa_pic_data.last_int;
+227: 
+228: 		if (bus_isa_flags & BUS_ISA_NO_SECOND_PIC)
+229: 			bus_isa_flags &= ~BUS_ISA_NO_SECOND_PIC;
+230: 		else {
+231: 			snprintf(tmpstr, sizeof(tmpstr),
+232: 			    "8259 irq=%s.isa.2 addr=0x%llx",
+233: 			    interrupt_base_path,(long long)(isa_portbase+0xa0));
+234: 			d->pic2 = machine->isa_pic_data.pic2 = (struct pic8259_data *)
+235: 			    device_add(machine, tmpstr);
+236: 		}
+237: 	} else {
+238: 		bus_isa_flags &= ~BUS_ISA_EXTERNAL_PIC;
+239: 	}
+240: 
+241: 	snprintf(tmpstr, sizeof(tmpstr), "8253 irq=%s.isa.%i addr=0x%llx "
+242: 	    "in_use=0", interrupt_base_path, 0,
+243: 	    (long long)(isa_portbase + 0x40));
+244: 	device_add(machine, tmpstr);
+245: 
+246: 	snprintf(tmpstr, sizeof(tmpstr), "pccmos irq=%s.isa.%i addr=0x%llx",
+247: 	    interrupt_base_path, 8, (long long)(isa_portbase + 0x70));
+248: 	device_add(machine, tmpstr);
+249: 
+250: 	snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.isa.%i addr=0x%llx "
+251: 	    "name2=tty0 in_use=%i", interrupt_base_path, 4,
+252: 	    (long long)(isa_portbase + 0x3f8), 1 - kbd_in_use);
+253: 	machine->main_console_handle = (size_t)device_add(machine, tmpstr);
+254: 
+255: 	snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.isa.%i addr=0x%llx "
+256: 	    "name2=tty1 in_use=0", interrupt_base_path, 3,
+257: 	    (long long)(isa_portbase + 0x2f8));
+258: 	device_add(machine, tmpstr);
+259: 
+260: 	if (bus_isa_flags & BUS_ISA_LPTBASE_3BC) {
+261: 		bus_isa_flags &= ~BUS_ISA_LPTBASE_3BC;
+262: 		lptbase = 0x3bc;
+263: 	}
+264: 
+265: 	snprintf(tmpstr, sizeof(tmpstr), "lpt irq=%s.isa.%i addr=0x%llx "
+266: 	    "name2=lpt in_use=0", interrupt_base_path, 7,
+267: 	    (long long)(isa_portbase + lptbase));
+268: 	device_add(machine, tmpstr);
+269: 
+270: 	if (bus_isa_flags & BUS_ISA_IDE0) {
+271: 		bus_isa_flags &= ~BUS_ISA_IDE0;
+272: 		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+273: 		    "addr=0x%llx", interrupt_base_path, wdc0_irq,
+282: 		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+283: 		    "addr=0x%llx", interrupt_base_path, wdc1_irq,
+284: 		    (long long)(isa_portbase + 0x170));
+285: 		if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+286: 		    diskimage_exist(machine, 3, DISKIMAGE_IDE))
+287: 			device_add(machine, tmpstr);
+288: 	}
+289: 
+290: 	if (bus_isa_flags & BUS_ISA_FDC) {
+291: 		bus_isa_flags &= ~BUS_ISA_FDC;
+292: 		snprintf(tmpstr, sizeof(tmpstr), "fdc irq=%s.isa.%i "
+293: 		    "addr=0x%llx", interrupt_base_path, 6,
+294: 		    (long long)(isa_portbase + 0x3f0));
+295: 		device_add(machine, tmpstr);
+296: 	}
+297: 
+298: 	if (bus_isa_flags & BUS_ISA_VGA) {
+299: 		if (machine->x11_md.in_use || bus_isa_flags & BUS_ISA_VGA_FORCE)
+300: 			dev_vga_init(machine, machine->memory,
+301: 			    isa_membase + 0xa0000, isa_portbase + 0x3c0,
+302: 			    machine->machine_name);
+303: 		bus_isa_flags &= ~(BUS_ISA_VGA | BUS_ISA_VGA_FORCE);
+304: 	}
+305: 
+306: 	snprintf(tmpstr, sizeof(tmpstr), "%s.isa.1", interrupt_base_path);
+307: 	snprintf(tmpstr2, sizeof(tmpstr2), "%s.isa.12", interrupt_base_path);
+308: 	tmp_handle = dev_pckbc_init(machine, machine->memory,
+309: 	    isa_portbase + 0x60, PCKBC_8042, tmpstr, tmpstr2,
+310: 	    kbd_in_use, bus_isa_flags & BUS_ISA_PCKBC_NONPCSTYLE? 0 : 1);
+311: 
+312: 	if (kbd_in_use)
+313: 		machine->main_console_handle = tmp_handle;
+314: 
+315: 	bus_isa_flags &= ~(BUS_ISA_PCKBC_NONPCSTYLE | BUS_ISA_PCKBC_FORCE_USE);
+316: 
+317: 	if (bus_isa_flags != 0)
+318: 		fatal("WARNING! bus_isa(): unimplemented bus_isa_flags 0x%x\n",
+319: 		    bus_isa_flags);
+320: 
+
+[35m[3mcodex[0m[0m
+The probe checks byte accesses only, so every tested lane is `ofs == 0`. It also tests low ports only before arming PTBR; candidate (f) would therefore leave all 13 rows green. The premise audit has two qualifications so far: K0SEG uses a masked direct mapping, and `bus_isa.c` lists more devices than the five whose registration flags were supplied.
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '\\bcache\\b' GXEMUL-SEC/src/cpus/memory_rw.c"[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$s = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/memory_rw.c'; for ("'$i=638; $i -le $s.Length; $i++) { '"'{0}: {1}' -f "'$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$s = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/memory_rw.c'; for ("'$i=343; $i -le 637; $i++) { '"'{0}: {1}' -f "'$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 160ms:[0m
+237:	int cache, no_exceptions, offset;
+242:	cache = misc_flags & CACHE_FLAGS_MASK;
+252:		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+274:	 *  cache / RAM dispatch (several of which return early — notably the
+610:					    cache == CACHE_INSTRUCTION?
+620:					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+640:	 *  Data and instruction cache emulation:
+646:		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+649:			if (memory_cache_R3000(cpu, cache, paddr,
+698:				if (cache != CACHE_NONE && !no_exceptions &&
+748:		    (cache == CACHE_INSTRUCTION?
+758:	    || (ok == 2 && cache == CACHE_DATA)
+
+[32m succeeded in 244ms:[0m
+638: #ifdef MEM_MIPS
+639: 	/*
+640: 	 *  Data and instruction cache emulation:
+641: 	 */
+642: 
+643: 	switch (cpu->cd.mips.cpu_type.mmu_model) {
+644: 	case MMU3K:
+645: 		/*  if not uncached addess  (TODO: generalize this)  */
+646: 		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+647: 		    !((vaddr & 0xffffffffULL) >= 0xa0000000ULL &&
+648: 		      (vaddr & 0xffffffffULL) <= 0xbfffffffULL)) {
+649: 			if (memory_cache_R3000(cpu, cache, paddr,
+650: 			    writeflag, len, data))
+651: 				goto do_return_ok;
+652: 		}
+653: 		break;
+654: 	default:
+655: 		/*  R4000 etc  */
+656: 		/*  TODO  */
+657: 		;
+658: 	}
+659: #endif	/*  MEM_MIPS  */
+660: 
+661: 
+662: 	/*  Outside of physical RAM?  */
+663: 	if (paddr >= mem->physical_max) {
+664: #ifdef MEM_MIPS
+665: 		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+666: 			/*  Ok, this is PROM stuff  */
+667: 		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+668: 			/*  Sprite reads from this area of memory...  */
+669: 			/*  TODO: is this still correct?  */
+670: 			if (writeflag == MEM_READ)
+671: 				memset(data, 0, len);
+672: 			goto do_return_ok;
+673: 		} else
+674: #endif /* MIPS */
+675: 		{
+676: 			if (paddr >= mem->physical_max && !no_exceptions)
+677: 				if (memory_warn_about_unimplemented_addr
+678: 				    (cpu, mem, writeflag, paddr, len))
+679: 					return MEMORY_ACCESS_FAILED;
+680: 
+681: 			if (writeflag == MEM_READ) {
+682: 				/*  Return all zeroes? (Or 0xff? TODO)  */
+683: 				memset(data, 0, len);
+684: 
+685: #if 0
+686: /*
+687:  *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+688:  *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+689:  *  the amount of RAM on some machine.
+690:  *
+691:  *  TODO: Figure out if it is not needed anymore, and remove it completely.
+692:  */
+693: #ifdef MEM_MIPS
+694: 				/*
+695: 				 *  For real data/instruction accesses, cause
+696: 				 *  an exceptions on an illegal read:
+697: 				 */
+698: 				if (cache != CACHE_NONE && !no_exceptions &&
+699: 				    paddr >= mem->physical_max &&
+700: 				    paddr < mem->physical_max+1048576) {
+701: 					mips_cpu_exception(cpu,
+702: 					    EXCEPTION_DBE, 0, vaddr, 0,
+703: 					    0, 0, 0);
+704: 				}
+705: #endif  /*  MEM_MIPS  */
+706: #endif
+707: 			}
+708: 
+709: 			/*  Hm? Shouldn't there be a DBE exception for
+710: 			    invalid writes as well?  TODO  */
+711: 
+712: 			goto do_return_ok;
+713: 		}
+714: 	}
+715: 
+716: 
+717: 	/*
+718: 	 *  Uncached access:
+719: 	 *
+720: 	 *  1)  Translate the physical address to a host address.
+721: 	 *
+722: 	 *  2)  Insert this virtual->physical->host translation into the
+723: 	 *      fast translation arrays (using update_translation_table()).
+724: 	 *
+725: 	 *  3)  If this was a Write, then invalidate any code translations
+726: 	 *      in that page.
+727: 	 */
+728: 	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+729: 	    writeflag);
+730: 	if (memblock == NULL) {
+731: 		if (writeflag == MEM_READ)
+732: 			memset(data, 0, len);
+733: 		goto do_return_ok;
+734: 	}
+735: 
+736: 	offset = paddr & offset_mask;
+737: 
+738: 	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+739: #ifdef MEM_MIPS
+740: 	    /*  Ugly hack for R2000/R3000 caches:  */
+741: 	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+742:             !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+743: #endif
+744: 	    && !(ok & MEMORY_NOT_FULL_PAGE)
+745: 	    && !no_exceptions)
+746: 		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+747: 		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+748: 		    (cache == CACHE_INSTRUCTION?
+749: 			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+750: 		    paddr & ~offset_mask);
+751: 
+752: 	/*
+753: 	 *  If writing, or if mapping a page where writing is ok later on,
+754: 	 *  then invalidate code translations for the (physical) page address:
+755: 	 */
+756: 
+757: 	if ((writeflag == MEM_WRITE
+758: 	    || (ok == 2 && cache == CACHE_DATA)
+759: 	    ) && cpu->invalidate_code_translation != NULL)
+760: 		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
+761: 
+762: 	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+763: 		/*  #165: (Codex/Fable) split accesses that cross a memblock
+764: 		    boundary (e.g. large DMA transfers) at the boundary,
+765: 		    instead of exiting the whole emulator.  */
+766: 		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+767: 		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+768: 
+769: 		if (writeflag == MEM_WRITE)
+770: 			memcpy(memblock + offset, data, len_head);
+771: 		else
+772: 			memcpy(data, memblock + offset, len_head);
+773: 
+774: 		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+775: 		    len - len_head, writeflag, misc_flags);
+776: 	}
+777: 
+778: 	/*  And finally, read or write the data:  */
+779: 	if (writeflag == MEM_WRITE)
+780: 		memcpy(memblock + offset, data, len);
+781: 	else
+782: 		memcpy(data, memblock + offset, len);
+783: 
+784: do_return_ok:
+785: 	return MEMORY_ACCESS_OK;
+786: }
+787: 
+788: /*  #430: this file is included more than once per translation unit (see cpu_alpha.c), so
+789:     the per-inclusion macros must not leak into the next inclusion.  MRW_CAT/MRW_CAT2 are
+790:     inclusion-independent and are left defined behind their own guard.  */
+791: #undef MEMORY_RW_ONE_PAGE
+792: #undef MRW_OFFSET_MASK
+793: #undef MRW_SPLIT_MASK
+794: 
+
+[32m succeeded in 251ms:[0m
+343: #if 0
+344: 	/*
+345: 	 *  For quick-and-dirty test to see which memory addresses are in use,
+346: 	 *  making a "waterfall spectrum"...
+347: 	 */
+348: 	if (cpu->running && (paddr < 0x200000 ||
+349: 		(paddr >= 0x0c000000 && paddr < 0x0d000000)))
+350: 	{
+351: 		int64_t xsize = 1920, ysize = 1080;
+352: 		static int y = 0;
+353: 		static int count = 0;
+354: 		static uint8_t* buf = NULL;
+355: 
+356: 		if (buf == NULL)
+357: 		{
+358: 			buf = (uint8_t*)malloc(xsize * ysize*3);
+359: 			memset(buf, 0xff, xsize * ysize*3);
+360: 		}
+361: 
+362: 		uint64_t paddr2 = paddr - 0x0c000000;
+363: 		
+364: 		if (paddr < 0x200000)
+365: 			paddr2 = paddr + 16*1048576;
+366: 
+367: 		int64_t max = 16*1048576 + (2*1048576);
+368: 
+369: 		int64_t x = xsize * paddr2 / max;
+370: 
+371: 		if (x >= 0 && x < xsize)
+372: 		{
+373: 			if (writeflag)
+374: 			{
+375: 				int c = buf[(x+y*xsize)*3+0];
+376: 				if (c == 255)
+377: 					c = 128;
+378: 				else if (c > 0)
+379: 				{
+380: 					c = c - 8;
+381: 				}
+382: 
+383: 				buf[(x+y*xsize)*3+1] = c;
+384: 				buf[(x+y*xsize)*3+2] = c;
+385: 			}
+386: 			else
+387: 			{
+388: 				int c = buf[(x+y*xsize)*3+1];
+389: 				if (c == 255)
+390: 					c = 128;
+391: 				else if (c > 0)
+392: 				{
+393: 					c = c - 8;
+394: 				}
+395: 
+396: 				buf[(x+y*xsize)*3+0] = c;
+397: 				buf[(x+y*xsize)*3+2] = c;
+398: 			}
+399: 		}
+400: 		
+401: 		for (int meg = 0; meg < 18; ++meg)
+402: 			buf[((xsize * (meg * 0x100000LL) / max) +y*xsize)*3+1] = 64;
+403: 
+404: 		count ++;
+405: 		if (count >= 8192)
+406: 		{
+407: 			count = 0;
+408: 			y ++;
+409: 			
+410: 			if (y >= ysize)
+411: 			{
+412: 				static int n = 0;
+413: 				char name[40];
+414: 				snprintf(name, sizeof(name), "memory_%05i.ppm", n++);
+415: 				FILE* f = fopen(name, "w");
+416: 				printf("writing out %s\n", name);
+417: 				fprintf(f, "P6\n%i %i\n255\n", (int)xsize, (int)ysize);
+418: 				fwrite((char*)buf, 1, (int)(xsize*ysize*3), f);
+419: 				fclose(f);
+420: 				memset(buf, 0xff, xsize*ysize);
+421: 				y = 0;
+422: 			}
+423: 		}
+424: 		
+425: 		// Make sure the access is not put into quick lookup tables:
+426: 		ok |= MEMORY_NOT_FULL_PAGE;
+427: 	}
+428: #endif
+429: 
+430: 	/*
+431: 	 *  Memory mapped device?
+432: 	 *
+433: 	 *  TODO: if paddr < base, but len enough, then the device should
+434: 	 *  still be written to!
+435: 	 */
+436: 	if (paddr >= mem->mmap_dev_minaddr && paddr < mem->mmap_dev_maxaddr) {
+437: 		uint64_t orig_paddr = paddr;
+438: 		int i, start, end, res;
+439: 
+440: #if 0
+441: 
+442: TODO: The correct solution for this is to add RAM devices _around_ the
+443: dangerous device. The solution below incurs a slowdown for _everything_,
+444: not just the device in question.
+445: 
+446: 		/*
+447: 		 *  Really really slow, but unfortunately necessary. This is
+448: 		 *  to avoid the folowing scenario:
+449: 		 *
+450: 		 *	a) offsets 0x000..0x123 are normal memory
+451: 		 *	b) offsets 0x124..0x777 are a device
+452: 		 *
+453: 		 *	1) a read is done from offset 0x100. the page is
+454: 		 *	   added to the dyntrans system as a "RAM" page
+455: 		 *	2) a dyntranslated read is done from offset 0x200,
+456: 		 *	   which should access the device, but since the
+457: 		 *	   entire page is added, it will access non-existant
+458: 		 *	   RAM instead, without warning.
+459: 		 *
+460: 		 *  Setting dyntrans_device_danger = 1 on accesses which are
+461: 		 *  on _any_ offset on pages that are device mapped avoids
+462: 		 *  this problem, but it is probably not very fast.
+463: 		 *
+464: 		 *  TODO: Convert this into a quick (multi-level, 64-bit)
+465: 		 *  address space lookup, to find dangerous pages.
+466: 		 */
+467: 		for (i=0; i<mem->n_mmapped_devices; i++)
+468: 			if (paddr >= (mem->devices[i].baseaddr & ~offset_mask)&&
+469: 			    paddr <= ((mem->devices[i].endaddr-1)|offset_mask)){
+470: 				dyntrans_device_danger = 1;
+471: 				break;
+472: 			}
+473: #endif
+474: 
+475: 		start = 0; end = mem->n_mmapped_devices - 1;
+476: 		i = mem->last_accessed_device;
+477: 
+478: 		/*  Scan through all devices:  */
+479: 		do {
+480: 			if (paddr >= mem->devices[i].baseaddr &&
+481: 			    paddr < mem->devices[i].endaddr) {
+482: 				/*  Found a device, let's access it:  */
+483: 				mem->last_accessed_device = i;
+484: 
+485: 				/*  #95: zero the caller's buffer up front on a read
+486: 				    so a device handler that fills only part of it --
+487: 				    or whose access is len-clamped just below -- can
+488: 				    never hand back uninitialised host memory to the
+489: 				    guest.  Root-cause fix for the uninit-read class
+490: 				    (cf. per-device #91/#93/#94).  */
+491: 				if (writeflag == MEM_READ)
+492: 					memset(data, 0, len);
+493: 
+494: 				paddr -= mem->devices[i].baseaddr;
+495: 				if (paddr + len > mem->devices[i].length) {
+496: 					/*  Note the truncation per the
+497: 					    warn-loudly ethos, but only at
+498: 					    debug verbosity (-v) and at most
+499: 					    8 times (single-threaded), since
+500: 					    probing at the end of a device's
+501: 					    mapped range is common and benign
+502: 					    (cf. the unwarned zero-fill in
+503: 					    #95/#119 above).  */
+504: 					static int n_trunc_msgs = 0;
+505: 					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+506: 					    VERBOSITY_DEBUG) &&
+507: 					    n_trunc_msgs < 8) {
+508: 						n_trunc_msgs ++;
+509: 						debugmsg_cpu(cpu,
+510: 						    SUBSYS_MEMORY,
+511: 						    mem->devices[i].name,
+512: 						    VERBOSITY_DEBUG,
+513: 						    "%s truncated at end of"
+514: 						    " device: offset 0x%llx,"
+515: 						    " len %i -> %i",
+516: 						    writeflag == MEM_WRITE ?
+517: 						    "write" : "read",
+518: 						    (long long) paddr,
+519: 						    (int) len,
+520: 						    (int) (mem->devices[i].
+521: 						    length - paddr));
+522: 					}
+523: 					len = mem->devices[i].length - paddr;
+524: 				}
+525: 
+526: 				if (cpu->update_translation_table != NULL &&
+527: 				    !(ok & MEMORY_NOT_FULL_PAGE) &&
+528: 				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+529: 					int wf = writeflag == MEM_WRITE? 1 : 0;
+530: 					unsigned char *host_addr;
+531: 
+532: 					if (!(mem->devices[i].flags &
+533: 					    DM_DYNTRANS_WRITE_OK))
+534: 						wf = 0;
+535: 
+536: 					if (writeflag && wf) {
+537: 						if (paddr < mem->devices[i].
+538: 						    dyntrans_write_low)
+539: 							mem->devices[i].
+540: 							dyntrans_write_low =
+541: 							    paddr &~offset_mask;
+542: 						if (paddr >= mem->devices[i].
+543: 						    dyntrans_write_high)
+544: 							mem->devices[i].
+545: 						 	dyntrans_write_high =
+546: 							    paddr | offset_mask;
+547: 					}
+548: 
+549: 					if (mem->devices[i].flags &
+550: 					    DM_EMULATED_RAM) {
+551: 						/*  MEM_WRITE to force the page
+552: 						    to be allocated, if it
+553: 						    wasn't already  */
+554: 						uint64_t *pp = (uint64_t *)mem->
+555: 						    devices[i].dyntrans_data;
+556: 						uint64_t p = orig_paddr - *pp;
+557: 						host_addr =
+558: 						    memory_paddr_to_hostaddr(
+559: 						    mem, p & ~offset_mask,
+560: 						    MEM_WRITE);
+561: 					} else if ((paddr | offset_mask) <
+562: 					    mem->devices[i].length) {
+563: 						host_addr = mem->devices[i].
+564: 						    dyntrans_data +
+565: 						    (paddr & ~offset_mask);
+566: 					} else {
+567: 						/*  #155: (Codex/Fable)
+568: 						    don't install dyntrans
+569: 						    fast-path access to a
+570: 						    device page that is not
+571: 						    fully backed; keep it on
+572: 						    the bounded slow path.  */
+573: 						host_addr = NULL;
+574: 					}
+575: 
+576: 					if (host_addr != NULL)
+577: 						cpu->update_translation_table(
+578: 						    cpu, vaddr & ~offset_mask,
+579: 						    host_addr, wf,
+580: 						    orig_paddr & ~offset_mask);
+581: 				}
+582: 
+583: 				res = 0;
+584: 				if (!no_exceptions || (mem->devices[i].flags &
+585: 				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+586: 					bool running_before_device_access = cpu->running;
+587: 					res = mem->devices[i].f(cpu, mem, paddr,
+588: 					    data, len, writeflag,
+589: 					    mem->devices[i].extra);
+590: 
+591: 					if (running_before_device_access && !cpu->running)
+592: 						return MEMORY_ACCESS_FAILED;
+593: 				}
+594: 
+595: 				if (res == 0)
+596: 					res = -1;
+597: 
+598: 				/*
+599: 				 *  If accessing the memory mapped device
+600: 				 *  failed, then return with an exception.
+601: 				 *  (Architecture specific.)
+602: 				 */
+603: 				if (res <= 0 && !no_exceptions) {
+604: 					debug("[ %s device '%s' addr %08lx "
+605: 					    "failed ]\n", writeflag?
+606: 					    "writing to" : "reading from",
+607: 					    mem->devices[i].name, (long)paddr);
+608: #ifdef MEM_MIPS
+609: 					mips_cpu_exception(cpu,
+610: 					    cache == CACHE_INSTRUCTION?
+611: 					    EXCEPTION_IBE : EXCEPTION_DBE,
+612: 					    0, vaddr, 0, 0, 0, 0);
+613: #endif
+614: #ifdef MEM_M88K
+615: 					/*  TODO: This is enough for
+616: 					    OpenBSD/mvme88k's badaddr()
+617: 					    implementation... but the
+618: 					    faulting address should probably
+619: 					    be included somewhere too!  */
+620: 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+621: 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+622: 					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+623: #endif
+624: 					return MEMORY_ACCESS_FAILED;
+625: 				}
+626: 				goto do_return_ok;
+627: 			}
+628: 
+629: 			if (paddr < mem->devices[i].baseaddr)
+630: 				end = i - 1;
+631: 			if (paddr >= mem->devices[i].endaddr)
+632: 				start = i + 1;
+633: 			i = (start + end) >> 1;
+634: 		} while (start <= end);
+635: 	}
+636: 
+637: 
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$s = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/memory_rw.c'; for ("'$i=49; $i -le 67; $i++) { '"'{0}: {1}' -f "'$i,$s[$i-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 167ms:[0m
+49:  *			a placeholder for data when reading from memory
+50:  *	len		the length of the 'data' buffer
+51:  *	writeflag	set to MEM_READ or MEM_WRITE
+52:  *	misc_flags	CACHE_{NONE,DATA,INSTRUCTION} | other flags
+53:  *
+54:  *  If the address indicates access to a memory mapped device, that device'
+55:  *  read/write access function is called.
+56:  *
+57:  *  This function should not be called with cpu == NULL.
+58:  *
+59:  *  Returns one of the following:
+60:  *	MEMORY_ACCESS_FAILED
+61:  *	MEMORY_ACCESS_OK
+62:  *
+63:  *  (MEMORY_ACCESS_FAILED is 0.)
+64:  */
+65: 
+66: /*
+67:  *  #430: THE PAGE SIZE, IN ONE PLACE.
+
+[35m[3mcodex[0m[0m
+Candidate (c) fails the `live` control at row 2, then the script exits before emitting rows 8–13. I also found eight reads of `cache`: none executes for a PHYSICAL access to a matched device on Alpha, which supports (d)’s equivalence on this path. Candidate (g)’s status change has no failing-forward case in the witness.
+[35m[3mcodex[0m[0m
+The cell map has coverage for armed reads and writes only at `len == 1, ofs == 0`, using the two UART ports. Wider accesses and nonzero lanes have no detecting row. Dropping PHYSICAL only before arming also leaves the relevant ISA forwards unchanged, so those controls cannot detect flag removal in that PTBR state.
+[35m[3mcodex[0m[0m
+VERDICT: GO-WITH-CHANGES -- candidate (f) survives all 13 rows; armed low-port coverage is missing.
+
+The proposed two-call fix is sound. The changes needed are to detector coverage and premise wording. This is a static review of the five permitted files; the outcomes below are predictions, not new runs.
+
+For the comparisons, `port` means `relative_addr` **after** `>>= 5`; `len` is the outer access width. Every inner forward transfers one byte. “Armed” means the witness’s nonzero PTBR with zero `L1[0]`.
+
+The candidate results are:
+
+| Candidate | Equivalence and first distinguishing input | Rows observing the difference | Rows staying green |
+|---|---|---|---|
+| **(a)** Write only | **DIFFERENT**: armed **read**, e.g. port `0x3fd`, `len=1`, `ofs=0`. | **9** `sp lsr`, **11** `r miss` | 1–8, 10, 12–13 |
+| **(b)** Read only | **DIFFERENT**: armed **write**, e.g. port `0x3ff`, `len=1`, `ofs=0`. | **10** `w lands`, **12** `w miss` | 1–9, 11, 13 |
+| **(c)** `NO_EXCEPTIONS \| PHYSICAL` | **DIFFERENT already at PTBR=0**: the first sparse write, port `0x64`, `len=1`, `ofs=0`, skips the 8042 handler. Its subsequent read is also skipped. | **2** `live` | 1, 3–7. **Rows 8–13 are not emitted.** |
+| **(d)** Bare `PHYSICAL` | **EQUIVALENT** on the Alpha registered-device path under review; see the complete `cache` inventory below. | **NO ROW** | 1–13 |
+| **(e)** Only ports `<0x200` | **DIFFERENT**: armed read at `0x3fd`, then write at `0x3ff`; both `len=1`, `ofs=0`. | **9–12** | 1–8, 13 |
+| **(f)** Only ports `>=0x200` | **DIFFERENT**: armed low-port access, e.g. write to `0x64`, `len=1`, `ofs=0`. The witness exercises those low ports only before arming. | **NO ROW** | 1–13 |
+| **(g)** Return inner read status | **DIFFERENT as a function contract**: a nonempty read whose physical inner call returns failure. PTBR=0 suffices; no particular width or lane is required. | **NO ROW** | 1–13 |
+
+For **(c)**, row 2 fails and the control gate prints `CONTROL=DEAD`, reports `0/0`, and exits with status 2. Calling its later defect rows “red” would misdescribe the actual script. See [probe:250](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:250) and [probe:262](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:262).
+
+For **(g)**, I assume byte packing remains intact and only the final return changes. The additional distinguishing axis is **inner status**, not PTBR, width, or lane. The dispatcher has a failure return for a failed handler at [memory_rw.c:603](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603). However, these files do **not** establish a concrete numeric ISA port that produces that failure while the CPU continues running; I cannot honestly supply one. The witness uses successful device operations after the fix.
+
+**NO ROW candidates: (d), (f), (g).** Candidate (d) is equivalent on this path. Candidate (f) is an unseen weakening. Candidate (g) is an undetected change to failure handling.
+
+The premise audit is:
+
+- **P1 — TRUE.** `PHYSICAL` bypasses the translation-related splitting condition at [memory_rw.c:186](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:186). The worker then assigns `paddr = vaddr` instead of calling `translate_v2p` at [memory_rw.c:245](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:245).
+
+- **P2 — FALSE as written; the narrower premise needed by this witness is true.** K0SEG receives a **masked direct mapping**, `vaddr & 0x000003ffffffffffULL`, rather than numerical `vaddr == paddr`. Both direct paths require `!userMode`. The base-zero path also contains special remappings and an exit case. See [memory_alpha.c:62](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:62) and [memory_alpha.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:73). For the witness’s ordinary flat ISA addresses, that base-zero path does preserve the address.
+
+- **P3 — TRUE for the inner addresses that reach the walk.** A zero L1 entry fails the valid-bit test and jumps to `not_found` at [memory_alpha.c:120](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:120); that path prints the diagnostic and returns zero at [memory_alpha.c:197](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:197). `memory_rw` then zeroes a read buffer and returns failure at [memory_rw.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:259). Nonzero PTBR alone does not force a K0SEG access to walk.
+
+- **P4 — UNSETTLED-FROM-THESE-FILES as a universal claim.** Accepting your supplied checks for the five devices, their handlers are skipped under `NO_EXCEPTIONS`: the gate tests `DM_READS_HAVE_NO_SIDE_EFFECTS`, in **both directions**, at [memory_rw.c:583](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583). But the bus also adds **LPT**, conditional **WDC**, **FDC**, and **VGA** devices at [bus_isa.c:265](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:265), [bus_isa.c:270](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:270), [bus_isa.c:290](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:290), and [bus_isa.c:298](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:298). Their registration flags are not shown here. Additional devices invalidate the five-device census, but do not establish a counterexample to `DM_DEFAULT`.
+
+- **P5 — TRUE for a matched registered device on Alpha.** Both flag forms bypass translation and take identical device handling paths. A matched device exits before the RAM/cache section: failure returns at line 624; success jumps from line 626 to `do_return_ok`. See [memory_rw.c:624](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:624). This conclusion does not require assuming a numeric value for `CACHE_NONE`.
+
+- **P6 — TRUE for the outer sparse-I/O accesses.** The pointer slots contain `k0(SP(...))`, including the two armed accesses, at [probe:183](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:183); those pointers are used at [probe:215](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:215). Within each sparse-I/O pair, only the unfixed inner forward walks. **The whole program also deliberately performs a raw RAM walk after arming**, at [probe:213](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:213).
+
+- **P7 — TRUE.** The read call’s result is discarded at [dev_lca.c:305](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:305); the buffer is packed and the function unconditionally returns 1 at [dev_lca.c:308](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:308).
+
+There are **eight reads of `cache`** in `memory_rw.c`. Line 237 declares it; line 242 assigns it, without reading its previous value.
+
+| Read | Purpose | Does a device address reach this read? |
+|---|---|---|
+| [252](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:252) | Select translation’s instruction flag | A translated access can; **both PHYSICAL forms skip it**. |
+| [610](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:610) | Select MIPS device-failure exception | Failed devices on **MIPS** can; absent on Alpha. |
+| [620](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:620) | Select M88K device-failure exception | Failed devices on **M88K** can; absent on Alpha. |
+| [646](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:646) | R3000 cache eligibility | No matched device reaches it. PHYSICAL also short-circuits before this read. |
+| [649](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:649) | Argument to `memory_cache_R3000` | No matched device reaches it. |
+| [698](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:698) | Out-of-RAM exception condition | **Never:** inside `#if 0`. |
+| [748](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:748) | RAM translation-table permissions | No matched device reaches it. |
+| [758](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:758) | RAM code-invalidation condition | No matched device reaches it. |
+
+Thus an Alpha PHYSICAL access to a matched device executes **none** of those eight reads. Merely falling inside the overall device-address envelope is insufficient; the dispatcher must actually match a device.
+
+For the cell map, the body distinguishes `len == 0`, direction, loop extent, and the selected lane `i == ofs`. PTBR is the requested execution context; the function itself does not test PTBR or a `0x200` threshold. See [dev_lca.c:295](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:295).
+
+For `len > 0`, these columns partition every feasible width/lane combination. Each entry names rows that turn red when PHYSICAL is omitted **throughout that cell only**:
+
+| Direction | PTBR | `len=1, ofs=0` | `len>1, ofs=0` | `ofs=1`, feasible when `len≥2` | `ofs=2`, feasible when `len≥3` | `ofs=3`, feasible when `len≥4` |
+|---|---|---|---|---|---|---|
+| Read | 0 | **NO ROW**; row 2 exercises it but stays green | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+| Write | 0 | **NO ROW**; row 2 exercises it but stays green | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+| Read | Armed | **9, 11**, at `0x3fd` | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+| Write | Armed | **10, 12**, at `0x3ff` | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+
+All positive-length cell classes above are guest-reachable. Normal four-byte accesses supply examples for every lane; the function documents the CPU’s four/eight-byte accesses at [dev_lca.c:283](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:283). The witness uses `LDBU`/`STB` for every sparse access, so **all its lanes are zero**, including ports whose low two bits are 1 or 3. See [probe:72](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:72).
+
+For **`len == 0`**, all four direction/PTBR combinations are **NO ROW**: the function returns zero before either forward, so deleting PHYSICAL cannot change their behavior. The local contract says this length has no producer at [dev_lca.c:293](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:293); an exhaustive guest-caller proof is outside the permitted files.
+
+The PTBR-zero cells are expected equivalence cases for these ISA addresses. The missing armed wider/lane cases are coverage gaps. Even the covered armed byte cells certify only the two UART ports: candidate **(f)** demonstrates their missing low-port coverage.
+
+One additional qualification: nonzero PTBR can produce a successful mapping, including an identity mapping; failure is not inevitable. This witness forces failure by explicitly zeroing **L1[0]**, not the entire page. That is sufficient for its addresses, whose L1 index is zero. See [probe:124](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:124) and [probe:192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:192).
+[2mtokens used[0m
+70,634

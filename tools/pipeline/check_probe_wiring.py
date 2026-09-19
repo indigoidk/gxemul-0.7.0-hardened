@@ -157,9 +157,9 @@ MANIFEST = {
     #  checkers and FROZEN instrument copies -- the instrument each table actually ran, per the
     #  frozen-copy rule -- committed because #530's record cites them.
     "lca_widewrite_probe.py":
-        (CLASS_DETECTOR, "#530 width row: a 16-byte store_buf write via PROM GETENV (CALL_PAL 0x3fffffe) "
-                         "into the ns16550 SCR.  base 3/3; `&& len <= 8' and `len == 0 || len > 8' 2/3 each -- "
-                         "both swept the 352-row lca_isalane_probe.py clean.  *** RUNS IN NO GATE: see EXEMPT. ***"),
+        (CLASS_DETECTOR, "#530 width row, CLASS-CLOSED by #538: one 16-byte store_buf write via PROM GETENV per byte "
+                         "lane (C=16, k=0), four isolated sessions, 13 rows.  base 13/13; every lane-exempting "
+                         "variant reds its own lane (closure538_20260918).  *** RUNS IN NO GATE: see EXEMPT. ***"),
     #  CLASSED WITNESS, and not to dodge a gate: it is a one-off REACHABILITY measurement by an Opus
     #  seat (08:16, before the width row was built) that the GETENV producer reaches lca_isa at
     #  len > 8 -- an independent replication of the row via a DIFFERENT variable (BOOTED_FILE), port
@@ -229,6 +229,17 @@ MANIFEST = {
         (CLASS_TOOL, "the width row's MEASURED instrument (run 2); regress/lca_widewrite_probe.py is it, with only DUMMY's path made relative"),
     "artifacts/lcalenzerodrop/widewrite_20260918/logs/run1_L1_no_return_address/lca_widewrite.frozen.run1.py":
         (CLASS_TOOL, "RUN 1 -- the L1 construction failure (no ra before the inline CALL_PAL), preserved"),
+    #  #538 (lcalenzerodrop): the lane-class closure's kill table and its one-instrument re-run.
+    "artifacts/lcalenzerodrop/closure538_20260918/lca_widewrite.frozen.py":
+        (CLASS_TOOL, "#538 table 1's FROZEN instrument (17 legs, 17/17 as predicted); superseded in code by pass 2's harness fix"),
+    "artifacts/lcalenzerodrop/closure538_20260918/mk538.frozen.py":
+        (CLASS_TOOL, "#538: the 16 one-edit variants of 8bd97e4's dev_lca.c, each an exact-once replacement"),
+    "artifacts/lcalenzerodrop/closure538_20260918/rerun_20260919_0030/lca_widewrite.frozen.py":
+        (CLASS_TOOL, "#538 the ONE-INSTRUMENT RE-RUN's frozen instrument -- the shipped probe but for its MEASURED paragraph"),
+    #  alphaifetchkill (filed in #538's records batch): the rung-3 witness's frozen instrument, cited by the row.
+    "artifacts/alphaifetchkill/witness_HEAD_20260918/vm_neighbour_measure.frozen.py":
+        (CLASS_WITNESS, "alphaifetchkill: paging armed, one JMP to a raw VA -> two misses at that VA, the FATAL text, "
+                        "wait status 256 on the committed binary (RESULT.out, transcript_B.txt)"),
 
 
     # -- #532 stagetokens pass 2 (2026-09-18): the Opus seat's scratch variants of two checkers.  TOOLS: nothing

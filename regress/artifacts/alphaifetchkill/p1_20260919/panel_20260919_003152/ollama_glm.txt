@@ -1,0 +1,51 @@
+VERDICT: (e) — applied generically, not (c) — decided by the caller-side contract: the loop's unconditional dereference of `next_ic` at :114/:190 forces a harmless filler on the stop path, and the pc-reconstruction epilogue at :267/:394 must additionally be latch-guarded or the "stopped" cpu reads a garbage pc. Option (e) as written is a three-site patch, not a one-liner.
+
+## Premise audit
+
+**READ (packet-internal, consistent):** The witness transcript — two identical `wasn't found` lines for `0x1044000`, then FATAL, exit 1 — matches the inlined excerpt exactly: first translate fails, retry translates `cpu->pc`, fails, hits `exit(1)`.
+
+**REASONED — the load-bearing premise is self-supporting without the TODO citation.** The second `wasn't found` line carries the *same VA* as the first. If Alpha's failed translate had moved `cpu->pc`, the second line would show the handler's VA. So the packet itself proves, for the witnessed miss class, that `cpu->pc` was left unmoved — I do not need to trust the `memory_alpha.c:120-126` claim to accept the mechanism. That claim ("Alpha delivers no mm fault **in this tree**", "**always** reaches it") is universal and **not settleable from the packet**; settling fact: the full text of `alpha_translate_v2p` in the fork. My verdict does not depend on it, because I fix the generic path, not an Alpha branch.
+
+**REASONED — refutations of (a) and (b) follow from the excerpt.** (a) `paddr` is a local written only through successful calls; both failed → indeterminate → `physaddr = paddr` is garbage. (b) early return leaves `cur_ic_page`/`next_ic` stale. **But refutation (b) rests on an uncheckable premise**: that :114/:190 truly lack a running check. If they check, (b) becomes viable and the filler unnecessary. Settling fact: the exact statements at those two call sites. I flag this because it is exactly the kind of author-stated premise a panel ratifies.
+
+**NOT SETTLEABLE — and overstrong as stated:** "MIPS, ARM, PPC and SH move the PC, so **no other architecture can reach** :729-733." No translator is inlined; I read none. Worse, the strong form is refutable by reason alone: any arch whose *handler VA itself* fails to translate (corrupted guest vectors, bogus ptbr) reaches the same `exit(1)`. Correct claim: "no other arch reaches it via an ordinary code miss." This kills (c) on the merits: the defect lives in generic code, an Alpha-only carve-out means injecting an arch conditional into a generic macro, and it preserves a known host-killer for a weirder-but-reachable guest state. Fix it once, generically. Settling fact: failure paths of every `*_translate_v2p` in `GXEMUL-SEC/src/cpus/` plus the roster of arches instantiating the generic macro.
+
+## Q1
+
+- **Other arches:** cannot settle from the packet; the "cannot reach" form is false as stated (see above).
+- **Trace read :287/:325:** no content inlined — cannot settle. Stakes: under `-V`, a trace read that doesn't tolerate translation failure dies before or after the stop. The post-fix witness must therefore include a `-V` run; if it dies there, that is a *second row*.
+- **`nothing_call` from inside pc_to_pointers:** REASONED yes as to scope (precedent and macro are both in `cpu_dyntrans.c` per the brief, so a file-static is visible). The real question is the caller's fetch convention — does the refill return with `next_ic` pointing *at* the first instruction to execute, or pre-advanced? The precedent's `ic = next_ic = &nothing_call; next_ic++;` implies pre-advance *in the handler context*; copying that `++` blindly into a function that returns to a refill site could make the one deref land on `nothing_call+1`. Not settleable; deciding fact: the fetch statements at :114/:190.
+
+## Q2 — shape
+
+Replace `fatal(...); exit(1);` with:
+
+```c
+if (!cpu->ifetch_stop_latched) {          /* once per stop event */
+    cpu->ifetch_stop_latched = 1;
+    fatal("STOPPING cpu%i: no translation for instruction fetch at 0x%016llx\n",
+        cpu->cpu_id, (uint64_t)cpu->pc);
+}
+cpu->running = 0;
+debugger_reset();                         /* precedent :2002-2024 */
+next_ic = &nothing_call;                  /* per call-site convention, q.v. */
+return;                                   /* never reach physaddr = paddr */
+```
+
+Plus the two sites the option text omits: (i) at the :267/:394 epilogue, `if (!cpu->ifetch_stop_latched)` around the pc reconstruction — otherwise pc := f(`&nothing_call`, stale `cur_ic_page`) = garbage, and Q3's pc row fails; (ii) clear the latch at the run entry where the precedent's `about_to_enter_single_step` is reset, so a debugger `continue` re-stops and re-prints.
+
+State on return: `cpu->pc` = faulting VA, untouched; `cur_ic_page` stale, never used for execution; `next_ic` = filler, executed exactly once as a no-op; `running = 0`. Run loop next: unconditional deref consumes `nothing_call` (no guest-visible effect), the running check ends the loop, the latched epilogue skips reconstruction, the run returns; with `-V` the prompt appears (not settleable that the main loop does this — low stakes), without it, clean termination.
+
+## Q3 — detector rows
+
+1. Exit status **0**, no `FATAL:` line (today: 1).
+2. Latch message **exactly once**; total `wasn't found` lines **exactly 2** — no third, proving a stop, not a loop.
+3. `-V` run: prompt appears; register readback shows `pc == 0x0000000001044000` — proves the epilogue guard works; a garbage pc here catches the `nothing_call` reconstruction bug directly.
+4. With instruction tracing on: **zero guest instructions retired after the latch line** — proves no garbage executed.
+5. **Witness gap — my strongest "something else":** with one machine, "host survives" is indistinguishable from a clean shutdown, which is close to the headline defect being reviewed ("ends the emulator process"). Add a second running machine (e.g., a MIPS spinning a loop); its transcript must continue after the alpha stop line. The current witness cannot prove the row's claim; this config can.
+
+## Else
+
+- The comment "The PC is now set to the exception handler" is part of the defect — false on Alpha, and it is what made the retry look sane. Rewrite it in this row.
+- The arming control (data load misses, sentinel kept, host alive) shows data-path misses are silently tolerated — a separate fidelity gap, correctly out of scope, but the row must not claim anything about data-path fault delivery.
+- The latch needs its semantics pinned (once-per-event vs once-ever) or `continue` behavior is unspecified.

@@ -1,0 +1,31 @@
+VERDICT: GO-WITH-CHANGES — the two `PHYSICAL` tokens are the correct minimal fix, but the witness must explicitly rule out post-`swpctx` outer K0SEG failure, and the `CACHE_NONE|PHYSICAL` vs bare `PHYSICAL` equivalence is not fully checkable from the packet.
+
+**Premise audit**
+
+- READ from inlined code: `lca_isa` forwards `LCA_ISA_BASE + relative_addr` to `memory_rw` with `CACHE_NONE` and no `PHYSICAL`; `memory_rw` sends non-`PHYSICAL` addresses through `translate_v2p` when available.
+- READ from inlined `alpha_translate_v2p`: K0SEG is identity-mapped only when `!userMode`; `ptbr == 0` is an identity hack. The forwarded address `0x1d0000000` is not in K0SEG, so with paging on it walks guest tables and fails.
+- REASONED: the observed read-zero/write-silent/miss-message behavior follows from the inlined code; `memory_rw` returns `MEMORY_ACCESS_FAILED` on translation failure, and `lca_isa` ignores the inner read return, returning success with a zeroed byte.
+- NOT CHECKABLE from packet: the claim that `LCA_ISA_BASE` is physical by construction. The brief states it, but `bus_isa_init` registration is not inlined. Single settling fact: the device registration/memory-map code showing ISA devices at `0x1d0000000`.
+- NOT CHECKABLE from packet: the `CACHE_NONE | PHYSICAL` vs bare `PHYSICAL` equivalence. The brief itself says it has not enumerated the RAM-path conditions; those are not inlined.
+
+**Q1 — Premise audit**
+
+- No legitimate path makes `LCA_ISA_BASE + port` virtual; it is a fixed device address, not a guest mapping.
+- Sibling defects cannot be checked from the packet; a source census would settle it.
+- Severity: if the premise holds, this is at least MED; the unlatched guest-drivable message flood plausibly raises it to HIGH.
+
+**Q2 — Candidate weakenings**
+
+- (a) WRITE-only `PHYSICAL`: not equivalent; read defect remains (`sp lsr` still `0x0`, `r miss` still present).
+- (b) READ-only `PHYSICAL`: not equivalent; write defect remains (`w lands` still `0x0`, `w miss` still present).
+- (c) `NO_EXCEPTIONS | PHYSICAL` on both: not equivalent; `no_exceptions` true plus `DM_DEFAULT` skips the ISA handlers, so even the `live` row under `ptbr==0` would fail.
+- (d) Bare `PHYSICAL` on both: likely equivalent if `CACHE_NONE` is truly unused on this path; not fully checkable from packet.
+- (e) `PHYSICAL` only when `relative_addr < 0x200`: not equivalent; the defect port `0x3fd` is above `0x200`, so the witness rows stay red.
+
+**Q3 — Option-set completeness**
+
+(1) the two `PHYSICAL` tokens is the smallest correct fix. (2) and (3) are restructurings. No unnamed option is evident from the packet.
+
+**Q4 — Witness**
+
+The controls are mostly sound, but the `CONTROL=DEAD` guard is only as good as rows 2–7. The main confound is post-`swpctx` outer K0SEG identity: if `swpctx` leaves `userMode` true, the outer K0SEG access would also fail, causing the same red rows even without the inner defect. Row `sp lsr ans completed` likely controls this, but it is not explicitly labeled as a post-arm K0SEG entry check. Single settling fact: add a row after arming that performs a K0SEG access to a known `lca_isa` port on a control build with `PHYSICAL` forced, and confirm it returns the expected value.

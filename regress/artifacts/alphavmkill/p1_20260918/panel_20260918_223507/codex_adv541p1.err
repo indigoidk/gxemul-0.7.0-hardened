@@ -1,0 +1,2801 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+[1mworkdir:[0m C:\DocumentNoSnc\CC\GXEMUL
+[1mmodel:[0m gpt-6-astra
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m max
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a0b7bb-94b8-7840-b520-74729f76fc0a
+--------
+[36muser[0m
+# `alphavmkill` PASS 1 -- the dedicated adversarial job: a premise audit, and each candidate traced cell by cell
+
+    VERDICT: <candidate letter> -- <one line naming the deciding item>
+
+**Put the verdict line first.**  The tree under review is `GXEMUL-SEC/` at HEAD `cdbe7d7`.  Ignore any other `src/`
+under the project root: those copies are pristine 2021 upstream.
+
+**Read ONLY these files. Do not browse anything else:**
+
+    GXEMUL-SEC/src/cpus/memory_alpha.c                 alpha_translate_v2p()
+    GXEMUL-SEC/src/cpus/memory_rw.c                    the translate step, the failure path, the out-of-RAM path
+    GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c    what a failed memory_rw does to a load or store
+    GXEMUL-SEC/src/cpus/cpu_dyntrans.c                 the instruction-fetch translation path (around lines 670-735)
+
+**The site.**  Inside `alpha_translate_v2p`'s `if (!userMode && base == 0)` arm there is:
+
+    if (vaddr == 0xfffffffd80000000ULL) {
+            fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+            exit(1);
+    }
+
+A rung-3 witness measured it on the committed build.  One supervisor-mode LDQ from that address ends the emulator
+process, and the kill's own text is on the transcript.
+
+## TASK 1 -- TRACE EACH CANDIDATE THROUGH THREE CELLS
+
+For each candidate below, say what happens in each of three cells:
+
+- **LOAD**: an LDQ from that VA.
+- **STORE**: an STQ to that VA.
+- **FETCH**: the PC set to that VA.
+
+For each cell, say whether the emulator process survives.  For the load, say what the destination register holds.
+For the store, say where the bytes go.  Cite file:line for every step.
+
+    (a)  delete only `exit(1)': keep the fatal(), fall through to the identity result (paddr = vaddr & 0x3ffffffffff)
+    (b)  replace the block with `return 0' (decline; the translation fails)
+    (c)  (b) plus a once-per-run latch on the fatal()
+    (d)  delete the whole block (fatal and exit), so the identity result is returned silently
+
+Then answer: does any candidate make the FETCH cell survive?  If a failed instruction-fetch translation ends the
+process anyway at `cpu_dyntrans.c:729-733` ("could not find physical address of the exception handler?"), say so and
+cite it.
+
+## TASK 2 -- PREMISE AUDIT, with file:line for each
+
+Mark each premise TRUE, FALSE or UNSETTLED-FROM-THESE-FILES:
+
+    P1  alpha_translate_v2p raises no exception and does not change cpu->pc when it returns 0.
+    P2  memory_rw zeroes a READ buffer and returns MEMORY_ACCESS_FAILED when translate_v2p returns 0.
+    P3  cpu_alpha_instr_loadstore.c abandons a load or store whose memory_rw failed, leaving the destination unchanged.
+    P4  an access to physical address 0x3fd80000000 (far past RAM, no device) is zero-filled on read and dropped on
+        write, and returns success -- cite the out-of-RAM path.
+    P5  the `(vaddr & ~0xffffff) == 0xfffffe0000000000' remap in the same arm does not match 0xfffffffd80000000.
+    P6  on Alpha, every instruction-fetch translation failure reaches `cpu_dyntrans.c:729-733' and ends the process.
+
+## TASK 3 -- WHICH CANDIDATE, AND WHAT A DETECTOR MUST ROW
+
+Name the candidate you would ship and the one you would reject most firmly, each with its deciding cell.  Then map the
+cells a detector must row for your candidate: a load, a store, a fetch, the destination's value, and the announcement
+count.  For each, give the observable that differs between your candidate and the committed code.
+
+**If you found anything else while verifying a claim, say so briefly.**
+[35m[3mcodex[0m[0m
+I’ll read only the four specified files and trace each candidate through the load, store, and fetch paths.
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditFiles = @('"'GXEMUL-SEC/src/cpus/memory_alpha.c', 'GXEMUL-SEC/src/cpus/memory_rw.c', 'GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c', 'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'); rg -n 'alpha_translate_v2p|fffffffd80000000|fffffe0000000000|translate_v2p|MEMORY_ACCESS_FAILED|MEMORY_ACCESS_OK|physical_max|physical_mem|memory_rw|exception handler|exit\\(|fatal\\(|userMode|paddr|MEM_READ|MEM_WRITE' -- "'$auditFiles'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 60ms:[0m
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:68:	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:69:	    MEM_READ, CACHE_DATA)) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:70:		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:72:		    abandon the access instead of exit()ing the host.  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:112:	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:113:	    MEM_WRITE, CACHE_DATA)) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:114:		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:116:		    abandon the access instead of exit()ing the host.  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:149:	/*  fatal("X3: addr=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:152:	/*  fatal("  l2 = %p\n", l2);  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:154:	/*  fatal("  l3 = %p\n", l3);  */
+GXEMUL-SEC/src/cpus/memory_alpha.c:41: *  alpha_translate_v2p():
+GXEMUL-SEC/src/cpus/memory_alpha.c:43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_alpha.c:44:	uint64_t *return_paddr, int flags)
+GXEMUL-SEC/src/cpus/memory_alpha.c:47:	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+GXEMUL-SEC/src/cpus/memory_alpha.c:62:	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:63:		*return_paddr = vaddr & 0x000003ffffffffffULL;
+GXEMUL-SEC/src/cpus/memory_alpha.c:71:	 *  In that case, simply map everything vaddr == paddr.
+GXEMUL-SEC/src/cpus/memory_alpha.c:73:	if (!userMode && base == 0) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:74:		*return_paddr = vaddr & 0x000003ffffffffffULL;
+GXEMUL-SEC/src/cpus/memory_alpha.c:75:if (vaddr == 0xfffffffd80000000ULL) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:76:	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:77:	exit(1);
+GXEMUL-SEC/src/cpus/memory_alpha.c:81:			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+GXEMUL-SEC/src/cpus/memory_alpha.c:83:		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+GXEMUL-SEC/src/cpus/memory_alpha.c:84:			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+GXEMUL-SEC/src/cpus/memory_alpha.c:88:			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+GXEMUL-SEC/src/cpus/memory_alpha.c:94:if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:112:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+GXEMUL-SEC/src/cpus/memory_alpha.c:127:		// fatal("TODO: pte1 not valid.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:133:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+GXEMUL-SEC/src/cpus/memory_alpha.c:148:		fatal("TODO: pte2 not valid.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:154:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+GXEMUL-SEC/src/cpus/memory_alpha.c:164:		fatal("TODO: pte3 not valid.\n");
+GXEMUL-SEC/src/cpus/memory_alpha.c:168:	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+GXEMUL-SEC/src/cpus/memory_alpha.c:169:	    `offset = paddr & offset_mask', which was therefore always zero, so every
+GXEMUL-SEC/src/cpus/memory_alpha.c:186:	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+GXEMUL-SEC/src/cpus/memory_alpha.c:195:	    abort()/exit() the host; report no-translation (0) so the caller
+GXEMUL-SEC/src/cpus/memory_alpha.c:197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:52:		fatal("statistics gathering with no filename set is"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:159:		fatal("NOOOOOO\n"); exit(1);		\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:256:		// fatal("THUMB execution not implemented.\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:287:			if (!cpu->memory_rw(cpu, cpu->mem, cached_pc, &instr[0],
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:288:			    sizeof(instr), MEM_READ, CACHE_INSTRUCTION)) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:289:				fatal("XXX_run_instr(): could not read "
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:301:					fatal("WARNING: ihd func not yet"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:306:					cpu->memory_rw(cpu, cpu->mem, cached_pc
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:308:					    sizeof(instr), MEM_READ,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:552:			fatal("%i", (int)d);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:557:			fatal("\"%s\"", strbuf);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:563:				fatal("...");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:566:			fatal("&%s", symbol);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:569:				fatal("0x%" PRIx32, (uint32_t)d);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:571:				fatal("0x%" PRIx64, (uint64_t)d);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:575:			fatal(",");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:579:		fatal(",..");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:648:	/*  fatal("X3: cached_pc=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:651:	/*  fatal("  l2 = %p\n", l2);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:653:	/*  fatal("  l3 = %p\n", l3);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:671:		uint64_t paddr;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:672:		if (cpu->translate_v2p != NULL) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:679:			ok = cpu->translate_v2p(
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:680:			    cpu, vaddr, &paddr, FLAG_INSTR);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:682:			paddr = cached_pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:687:			 *  The PC is now set to the exception handler.
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:688:			 *  Try to find the paddr in the translation arrays,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:689:			 *  or if that fails, call translate_v2p for the
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:690:			 *  exception handler.
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:692:			/*  fatal("TODO: instruction vaddr=>paddr translation "
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:694:			fatal("!! cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:703:				paddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:715:				paddr = l3->phys_addr[x3];
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:721:				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:726:			    "paddr = 0x%x\n", (int)cpu->pc, (int)paddr);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:727:			fatal("!? cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:730:				fatal("FATAL: could not find physical"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:731:				    " address of the exception handler?");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:732:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:736:		physaddr = paddr;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:747:		unsigned char *host_page = memory_paddr_to_hostaddr(cpu->mem,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:748:		    physaddr, MEM_READ);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:790:		/*  fatal("CREATING page %lli (physaddr 0x%" PRIx64"), table "
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1078:				fatal("L2 reuse: %p\n", l2);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1079:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1092:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1101:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1126:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1151:		exit(1);*/
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1156:		fatal("xxx_invalidate_tlb_entry(): huh? Refcount bug.\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1157:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1172:			fatal("TRYING TO RETURN A NON-CLEAN L3 PAGE!\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1173:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1179:			fatal("xxx_invalidate_tlb_entry(): Refcount bug L2.\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1180:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1208: *  In the case when all translations are invalidated, paddr doesn't need
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1225:	/*  fatal("invalidate(): ");  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1229:		/*  fatal("vaddr 0x%08x\n", (int)addr_page);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1260:		/*  fatal("all, upper4 (PowerPC segment)\n");  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1277:		/*  fatal("all\n");  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1294:		fatal("HUH? Invalidate: Not vaddr, all, or paddr?\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1296:	/*  fatal("addr 0x%08x\n", (int)addr_page);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1300:		    == cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1332:	    vaddr_page, paddr_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1452:			paddr_page = cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1453:			    .paddr_page & ~(DYNTRANS_PAGESIZE-1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1456:			    (flags & INVALIDATE_PADDR && paddr_page == addr) ||
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1494:	unsigned char *host_page, int writeflag, uint64_t paddr_page)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1502:	if (paddr_page > 0xffffffffULL) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1503:		fatal("update_translation_table(): v=0x%016" PRIx64", h=%p w=%i"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1505:		    paddr_page);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1506:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1509:	/*  fatal("update_translation_table(): v=0x%x, h=%p w=%i"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1511:	    (int)paddr_page);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1520:	/*  fatal("update_translation_table(): v=0x%016" PRIx64", h=%p w=%i"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1522:	    (uint64_t)paddr_page);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1526:	assert((paddr_page & (DYNTRANS_PAGESIZE-1)) == 0);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1586:		cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page = paddr_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1589:		    writeflag & MEM_WRITE;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1597:		cpu->cd.DYNTRANS_ARCH.phys_addr[index] = paddr_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1624:				fatal("Huh? l2 Refcount problem.\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1625:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1629:			fatal("INTERNAL ERROR L2 reuse\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1630:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1644:				fatal("Huh? l3 Refcount problem.\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1645:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1650:			fatal("INTERNAL ERROR L3 reuse\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1651:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1656:		l3->phys_addr[x3] = paddr_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1670:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1679:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1693:		if (writeflag & MEM_WRITE)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1706:		if (cpu->cd.DYNTRANS_ARCH.phys_addr[index] == paddr_page) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1707:			if (writeflag & MEM_WRITE)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1717:			cpu->cd.DYNTRANS_ARCH.phys_addr[index] = paddr_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1726:		if (l3->phys_addr[x3] == paddr_page) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1727:			if (writeflag & MEM_WRITE)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1735:			l3->phys_addr[x3] = paddr_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1751:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1763:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1773:	 *  the fast store table so every store to it traps to memory_rw, where
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1780:	    machine_watchpoint_match(cpu->machine, paddr_page,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1833:				fatal("BREAKPOINT: pc = 0x%" PRIx32"\n(The "
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1837:				fatal("BREAKPOINT: pc = 0x%" PRIx64"\n(The "
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1843:					fatal("ERROR! Breakpoint in a delay"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1903:		fatal("INTERNAL ERROR: ic->f not set!\n");
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1907:		fatal("INTERNAL ERROR: ic->f == NULL!\n");
+GXEMUL-SEC/src/cpus/memory_rw.c:28: *  Generic memory_rw(), with special hacks for specific CPU families.
+GXEMUL-SEC/src/cpus/memory_rw.c:32: *	MEMORY_RW should be mips_memory_rw
+GXEMUL-SEC/src/cpus/memory_rw.c:41: *  memory_rw():
+GXEMUL-SEC/src/cpus/memory_rw.c:51: *	writeflag	set to MEM_READ or MEM_WRITE
+GXEMUL-SEC/src/cpus/memory_rw.c:60: *	MEMORY_ACCESS_FAILED
+GXEMUL-SEC/src/cpus/memory_rw.c:61: *	MEMORY_ACCESS_OK
+GXEMUL-SEC/src/cpus/memory_rw.c:63: *  (MEMORY_ACCESS_FAILED is 0.)
+GXEMUL-SEC/src/cpus/memory_rw.c:85: *  MRW_OFFSET_MASK is the HOST-page granule: what memory_paddr_to_hostaddr() is asked for
+GXEMUL-SEC/src/cpus/memory_rw.c:91: *                             *return_paddr = (d2 & 0xfffffc00) | (vaddr & 0x3ff)
+GXEMUL-SEC/src/cpus/memory_rw.c:107:    this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+GXEMUL-SEC/src/cpus/memory_rw.c:136: *  host pointer for THAT page.  memory_paddr_to_hostaddr() returns a pointer into a 1 MB
+GXEMUL-SEC/src/cpus/memory_rw.c:144: *  MEMORY_ACCESS_OK anyway, so this was a MISSING FAULT as well as a wrong page.
+GXEMUL-SEC/src/cpus/memory_rw.c:178: *  ONLY WHEN A TRANSLATION ACTUALLY HAPPENS.  Under PHYSICAL (or with no translate_v2p)
+GXEMUL-SEC/src/cpus/memory_rw.c:179: *  paddr == vaddr, there is no per-page mapping to redo, and splitting would buy nothing
+GXEMUL-SEC/src/cpus/memory_rw.c:186:	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:214:				if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:216:				return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:236:	uint64_t paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:245:	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:246:		paddr = vaddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:248:		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:266:			if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:268:			return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:283:	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+GXEMUL-SEC/src/cpus/memory_rw.c:285:	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+GXEMUL-SEC/src/cpus/memory_rw.c:293:		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
+GXEMUL-SEC/src/cpus/memory_rw.c:294:		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
+GXEMUL-SEC/src/cpus/memory_rw.c:295:		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+GXEMUL-SEC/src/cpus/memory_rw.c:305:	if (cpu->running && paddr < 0x00300000)
+GXEMUL-SEC/src/cpus/memory_rw.c:313:			start = stop = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:318:			if (paddr == stop + len && writeflag == swriteflag)
+GXEMUL-SEC/src/cpus/memory_rw.c:320:				stop = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:333:				start = stop = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:348:	if (cpu->running && (paddr < 0x200000 ||
+GXEMUL-SEC/src/cpus/memory_rw.c:349:		(paddr >= 0x0c000000 && paddr < 0x0d000000)))
+GXEMUL-SEC/src/cpus/memory_rw.c:362:		uint64_t paddr2 = paddr - 0x0c000000;
+GXEMUL-SEC/src/cpus/memory_rw.c:364:		if (paddr < 0x200000)
+GXEMUL-SEC/src/cpus/memory_rw.c:365:			paddr2 = paddr + 16*1048576;
+GXEMUL-SEC/src/cpus/memory_rw.c:369:		int64_t x = xsize * paddr2 / max;
+GXEMUL-SEC/src/cpus/memory_rw.c:433:	 *  TODO: if paddr < base, but len enough, then the device should
+GXEMUL-SEC/src/cpus/memory_rw.c:436:	if (paddr >= mem->mmap_dev_minaddr && paddr < mem->mmap_dev_maxaddr) {
+GXEMUL-SEC/src/cpus/memory_rw.c:437:		uint64_t orig_paddr = paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:468:			if (paddr >= (mem->devices[i].baseaddr & ~offset_mask)&&
+GXEMUL-SEC/src/cpus/memory_rw.c:469:			    paddr <= ((mem->devices[i].endaddr-1)|offset_mask)){
+GXEMUL-SEC/src/cpus/memory_rw.c:480:			if (paddr >= mem->devices[i].baseaddr &&
+GXEMUL-SEC/src/cpus/memory_rw.c:481:			    paddr < mem->devices[i].endaddr) {
+GXEMUL-SEC/src/cpus/memory_rw.c:491:				if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:494:				paddr -= mem->devices[i].baseaddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:495:				if (paddr + len > mem->devices[i].length) {
+GXEMUL-SEC/src/cpus/memory_rw.c:516:						    writeflag == MEM_WRITE ?
+GXEMUL-SEC/src/cpus/memory_rw.c:518:						    (long long) paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:521:						    length - paddr));
+GXEMUL-SEC/src/cpus/memory_rw.c:523:					len = mem->devices[i].length - paddr;
+GXEMUL-SEC/src/cpus/memory_rw.c:529:					int wf = writeflag == MEM_WRITE? 1 : 0;
+GXEMUL-SEC/src/cpus/memory_rw.c:537:						if (paddr < mem->devices[i].
+GXEMUL-SEC/src/cpus/memory_rw.c:541:							    paddr &~offset_mask;
+GXEMUL-SEC/src/cpus/memory_rw.c:542:						if (paddr >= mem->devices[i].
+GXEMUL-SEC/src/cpus/memory_rw.c:546:							    paddr | offset_mask;
+GXEMUL-SEC/src/cpus/memory_rw.c:551:						/*  MEM_WRITE to force the page
+GXEMUL-SEC/src/cpus/memory_rw.c:556:						uint64_t p = orig_paddr - *pp;
+GXEMUL-SEC/src/cpus/memory_rw.c:558:						    memory_paddr_to_hostaddr(
+GXEMUL-SEC/src/cpus/memory_rw.c:560:						    MEM_WRITE);
+GXEMUL-SEC/src/cpus/memory_rw.c:561:					} else if ((paddr | offset_mask) <
+GXEMUL-SEC/src/cpus/memory_rw.c:565:						    (paddr & ~offset_mask);
+GXEMUL-SEC/src/cpus/memory_rw.c:580:						    orig_paddr & ~offset_mask);
+GXEMUL-SEC/src/cpus/memory_rw.c:587:					res = mem->devices[i].f(cpu, mem, paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:592:						return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:607:					    mem->devices[i].name, (long)paddr);
+GXEMUL-SEC/src/cpus/memory_rw.c:624:					return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:629:			if (paddr < mem->devices[i].baseaddr)
+GXEMUL-SEC/src/cpus/memory_rw.c:631:			if (paddr >= mem->devices[i].endaddr)
+GXEMUL-SEC/src/cpus/memory_rw.c:649:			if (memory_cache_R3000(cpu, cache, paddr,
+GXEMUL-SEC/src/cpus/memory_rw.c:663:	if (paddr >= mem->physical_max) {
+GXEMUL-SEC/src/cpus/memory_rw.c:665:		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+GXEMUL-SEC/src/cpus/memory_rw.c:667:		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+GXEMUL-SEC/src/cpus/memory_rw.c:670:			if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:676:			if (paddr >= mem->physical_max && !no_exceptions)
+GXEMUL-SEC/src/cpus/memory_rw.c:678:				    (cpu, mem, writeflag, paddr, len))
+GXEMUL-SEC/src/cpus/memory_rw.c:679:					return MEMORY_ACCESS_FAILED;
+GXEMUL-SEC/src/cpus/memory_rw.c:681:			if (writeflag == MEM_READ) {
+GXEMUL-SEC/src/cpus/memory_rw.c:699:				    paddr >= mem->physical_max &&
+GXEMUL-SEC/src/cpus/memory_rw.c:700:				    paddr < mem->physical_max+1048576) {
+GXEMUL-SEC/src/cpus/memory_rw.c:728:	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+GXEMUL-SEC/src/cpus/memory_rw.c:731:		if (writeflag == MEM_READ)
+GXEMUL-SEC/src/cpus/memory_rw.c:736:	offset = paddr & offset_mask;
+GXEMUL-SEC/src/cpus/memory_rw.c:749:			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+GXEMUL-SEC/src/cpus/memory_rw.c:750:		    paddr & ~offset_mask);
+GXEMUL-SEC/src/cpus/memory_rw.c:757:	if ((writeflag == MEM_WRITE
+GXEMUL-SEC/src/cpus/memory_rw.c:760:		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
+GXEMUL-SEC/src/cpus/memory_rw.c:762:	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+GXEMUL-SEC/src/cpus/memory_rw.c:767:		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+GXEMUL-SEC/src/cpus/memory_rw.c:769:		if (writeflag == MEM_WRITE)
+GXEMUL-SEC/src/cpus/memory_rw.c:779:	if (writeflag == MEM_WRITE)
+GXEMUL-SEC/src/cpus/memory_rw.c:785:	return MEMORY_ACCESS_OK;
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; if (($auditLine -ge 210 -and $auditLine -le 320) -or ($auditLine -ge 586 -and $auditLine -le 872)) { '"'{0,4}: {1}' -f "'$auditLine, $_ } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; '"'{0,4}: {1}' -f "'$auditLine, $_ }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/memory_alpha.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; '"'{0,4}: {1}' -f "'$auditLine, $_ }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/memory_rw.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; if (($auditLine -ge 39 -and $auditLine -le 303) -or ($auditLine -ge 650 -and $auditLine -le 795)) { '"'{0,4}: {1}' -f "'$auditLine, $_ } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 262ms:[0m
+   1: /*
+   2:  *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+   3:  *
+   4:  *  Redistribution and use in source and binary forms, with or without
+   5:  *  modification, are permitted provided that the following conditions are met:
+   6:  *
+   7:  *  1. Redistributions of source code must retain the above copyright
+   8:  *     notice, this list of conditions and the following disclaimer.
+   9:  *  2. Redistributions in binary form must reproduce the above copyright  
+  10:  *     notice, this list of conditions and the following disclaimer in the 
+  11:  *     documentation and/or other materials provided with the distribution.
+  12:  *  3. The name of the author may not be used to endorse or promote products
+  13:  *     derived from this software without specific prior written permission.
+  14:  *
+  15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+  19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  25:  *  SUCH DAMAGE.
+  26:  */
+  27: 
+  28: #include <stdio.h>
+  29: #include <stdlib.h>
+  30: #include <string.h>
+  31: 
+  32: #include "cpu.h"
+  33: #include "machine.h"
+  34: #include "memory.h"
+  35: #include "misc.h"
+  36: 
+  37: #include "thirdparty/alpha_rpb.h"
+  38: 
+  39: 
+  40: /*
+  41:  *  alpha_translate_v2p():
+  42:  */
+  43: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+  44: 	uint64_t *return_paddr, int flags)
+  45: {
+  46: 	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+  47: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+  48: 	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+  49: 	
+  50: 	// TODO: From the Alpha "arm_book.book":
+  51: 	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+  52: 	// 	{initiate Access Violation fault}
+  53: 	// IF (VIRBND in use) THEN
+  54: 	//   IF (VA LTU VIRBND) THEN
+  55: 	//     ptbr_value <- PTBR
+  56: 	//   ELSE
+  57: 	//     ptbr_value <- SYSPTBR
+  58: 	// ELSE
+  59: 	//   ptbr_value <- PTBR
+  60: 
+  61: 	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+  62: 	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+  63: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+  64: 		return 2;
+  65: 	}
+  66: 
+  67: 	/*
+  68: 	 *  UGLY hack for now:
+  69: 	 *
+  70: 	 *  Before virtual memory has been set up, ptbr is most likely zero.
+  71: 	 *  In that case, simply map everything vaddr == paddr.
+  72: 	 */
+  73: 	if (!userMode && base == 0) {
+  74: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+  75: if (vaddr == 0xfffffffd80000000ULL) {
+  76: 	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+  77: 	exit(1);
+  78: }
+  79: #if 1
+  80: 		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+  81: 			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+  82: 
+  83: 		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+  84: 			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+  85: 
+  86: 		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+  87: 		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+  88: 			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+  89: #endif
+  90: 		return 2;
+  91: 	}
+  92: 
+  93: 	// debug("base = 0x%016"PRIx64"\n", base);
+  94: if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+  95: 
+  96: 	uint64_t addr, pte1, pte2, pte3;
+  97: 	int i1, i2, i3;
+  98: 	unsigned char *pt_entry_ptr;
+  99: 	const int pageSizeShift = 13;
+ 100: 	// const int pageSize = 1 << pageSizeShift;
+ 101: 	const int bitsPerLevel = 10;
+ 102: 	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+ 103: 
+ 104: 	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+ 105: 	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+ 106: 	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+ 107: 
+ 108: 	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+ 109: 
+ 110: 	addr = base + i1 * sizeof(uint64_t);
+ 111: 	
+ 112: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 113: 	if (pt_entry_ptr == NULL)
+ 114: 		goto not_found;
+ 115: 
+ 116: 	pte1 = *(uint64_t *)(pt_entry_ptr);
+ 117: 	pte1 = LE64_TO_HOST(pte1);
+ 118: 
+ 119: 	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+ 120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+ 121: 		// TODO:
+ 122: 		// IF level1_pte<KRE> EQ 0 THEN
+ 123: 		//   {initiate Access Violation fault}
+ 124: 		// ELSE
+ 125: 		//   {initiate Translation Not Valid fault}
+ 126: 
+ 127: 		// fatal("TODO: pte1 not valid.\n");
+ 128: 		goto not_found;
+ 129: 	}
+ 130: 
+ 131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+ 132: 
+ 133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 134: 	if (pt_entry_ptr == NULL)
+ 135: 		goto not_found;
+ 136: 
+ 137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+ 138: 	pte2 = LE64_TO_HOST(pte2);
+ 139: 
+ 140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+ 141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+ 142: 		// TODO:
+ 143: 		// IF level2_pte<KRE> EQ 0 THEN
+ 144: 		//   {initiate Access Violation fault}
+ 145: 		// ELSE
+ 146: 		//   {initiate Translation Not Valid fault}
+ 147: 
+ 148: 		fatal("TODO: pte2 not valid.\n");
+ 149: 		goto not_found;
+ 150: 	}
+ 151: 
+ 152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+ 153: 
+ 154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 155: 	if (pt_entry_ptr == NULL)
+ 156: 		goto not_found;
+ 157: 
+ 158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+ 159: 	pte3 = LE64_TO_HOST(pte3);
+ 160: 
+ 161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+ 162: 
+ 163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+ 164: 		fatal("TODO: pte3 not valid.\n");
+ 165: 		goto not_found;
+ 166: 	}
+ 167: 
+ 168: 	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+ 169: 	    `offset = paddr & offset_mask', which was therefore always zero, so every
+ 170: 	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+ 171: 	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+ 172: 	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+ 173: 	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+ 174: 	    watchpoint -- which keeps a page off the fast store table -- makes it
+ 175: 	    reproducible.)  Measured: a cold guest ldq
+ 176: 	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+ 177: 	    landed at the base for the same reason.
+ 178: 	
+ 179: 	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+ 180: 	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+ 181: 	    literal beside the shift is how the two drift.  `|' rather than `+' because
+ 182: 	    that is what every other CPU's walk in this tree writes; here they are equal,
+ 183: 	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+ 184: 	    still ignored, the protection bits untested, and `return 2' still reports
+ 185: 	    every walked page writable.  */
+ 186: 	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+ 187: 	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+ 188: 
+ 189: 	// TODO.
+ 190: 	return 2;
+ 191: 
+ 192: not_found:
+ 193: 	/*  No match.  */
+ 194: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+ 195: 	    abort()/exit() the host; report no-translation (0) so the caller
+ 196: 	    raises the fault (keeps the emulator alive and debuggable).  */
+ 197: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+ 198: 	return 0;
+ 199: }
+ 200: 
+
+[32m succeeded in 274ms:[0m
+   1: /*
+   2:  *  Copyright (C) 2005-2018  Anders Gavare.  All rights reserved.
+   3:  *
+   4:  *  Redistribution and use in source and binary forms, with or without
+   5:  *  modification, are permitted provided that the following conditions are met:
+   6:  *
+   7:  *  1. Redistributions of source code must retain the above copyright
+   8:  *     notice, this list of conditions and the following disclaimer.
+   9:  *  2. Redistributions in binary form must reproduce the above copyright
+  10:  *     notice, this list of conditions and the following disclaimer in the
+  11:  *     documentation and/or other materials provided with the distribution.
+  12:  *  3. The name of the author may not be used to endorse or promote products
+  13:  *     derived from this software without specific prior written permission.
+  14:  *
+  15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+  19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  25:  *  SUCH DAMAGE.
+  26:  *
+  27:  *
+  28:  *  Alpha load/store instructions.  (Included from cpu_alpha_instr_inc.c.)
+  29:  *
+  30:  *
+  31:  *  Load/store instructions have the following arguments:
+  32:  *  
+  33:  *  arg[0] = pointer to the register to load to or store from (uint64_t)
+  34:  *  arg[1] = pointer to the base register (uint64_t)
+  35:  *  arg[2] = offset (as an int32_t)
+  36:  *
+  37:  *  NOTE:
+  38:  *	Alpha byte and word loads (8- and 16-bit) are unsigned, while
+  39:  *	32-bit long words are sign-extended up to 64 bits during a load!
+  40:  */
+  41: 
+  42: 
+  43: #ifndef LS_IGNORE_OFFSET
+  44: static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
+  45: {
+  46: #ifdef LS_B
+  47: 	unsigned char data[1];
+  48: #endif
+  49: #ifdef LS_W
+  50: 	unsigned char data[2];
+  51: #endif
+  52: #ifdef LS_L
+  53: 	unsigned char data[4];
+  54: #endif
+  55: #ifdef LS_Q
+  56: 	unsigned char data[8];
+  57: #endif
+  58: 	uint64_t addr = *((uint64_t *)ic->arg[1]);
+  59: 	uint64_t data_x;
+  60: 
+  61: 	addr += (int32_t)ic->arg[2];
+  62: #ifdef LS_UNALIGNED
+  63: 	addr &= ~7;
+  64: #endif
+  65: 
+  66: #ifdef LS_LOAD
+  67: 	/*  Load:  */
+  68: 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+  69: 	    MEM_READ, CACHE_DATA)) {
+  70: 		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+  71: 		    already signalled a fault (cf. #194's no-translation return);
+  72: 		    abandon the access instead of exit()ing the host.  */
+  73: 		return;
+  74: 	}
+  75: 
+  76: 	data_x = data[0];
+  77: #ifndef LS_B
+  78: 	data_x += (data[1] << 8);
+  79: #ifndef LS_W
+  80: 	data_x += (data[2] << 16);
+  81: 	data_x += ((uint64_t)data[3] << 24);
+  82: #ifdef LS_L
+  83: 	data_x = (int64_t)(int32_t)data_x;
+  84: #endif
+  85: #ifndef LS_L
+  86: 	data_x += ((uint64_t)data[4] << 32);
+  87: 	data_x += ((uint64_t)data[5] << 40);
+  88: 	data_x += ((uint64_t)data[6] << 48);
+  89: 	data_x += ((uint64_t)data[7] << 56);
+  90: #endif
+  91: #endif
+  92: #endif
+  93: 	*((uint64_t *)ic->arg[0]) = data_x;
+  94: #else
+  95: 	/*  Store:  */
+  96: 	data_x = *((uint64_t *)ic->arg[0]);
+  97: 	data[0] = data_x;
+  98: #ifndef LS_B
+  99: 	data[1] = data_x >> 8;
+ 100: #ifndef LS_W
+ 101: 	data[2] = data_x >> 16;
+ 102: 	data[3] = data_x >> 24;
+ 103: #ifndef LS_L
+ 104: 	data[4] = data_x >> 32;
+ 105: 	data[5] = data_x >> 40;
+ 106: 	data[6] = data_x >> 48;
+ 107: 	data[7] = data_x >> 56;
+ 108: #endif
+ 109: #endif
+ 110: #endif
+ 111: 
+ 112: 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+ 113: 	    MEM_WRITE, CACHE_DATA)) {
+ 114: 		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+ 115: 		    already signalled a fault (cf. #194's no-translation return);
+ 116: 		    abandon the access instead of exit()ing the host.  */
+ 117: 		return;
+ 118: 	}
+ 119: 
+ 120: #ifdef LS_LLSC
+ 121: #ifndef LS_LOAD
+ 122: 	*((uint64_t *)ic->arg[0]) = 1;
+ 123: #endif
+ 124: #endif
+ 125: 
+ 126: #endif
+ 127: }
+ 128: #endif
+ 129: 
+ 130: 
+ 131: static void LS_N(struct cpu *cpu, struct alpha_instr_call *ic)
+ 132: {
+ 133: 	unsigned char *page;
+ 134: 	uint64_t addr = (*((uint64_t *)ic->arg[1]))
+ 135: #ifndef LS_IGNORE_OFFSET
+ 136: 	    + (int32_t)ic->arg[2]
+ 137: #endif
+ 138: 	    ;
+ 139: 
+ 140: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+ 141: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+ 142: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+ 143: 	uint32_t x1, x2, x3, c;
+ 144: 	struct DYNTRANS_L2_64_TABLE *l2;
+ 145: 	struct DYNTRANS_L3_64_TABLE *l3;
+ 146: 	x1 = (addr >> (64-DYNTRANS_L1N)) & mask1;
+ 147: 	x2 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+ 148: 	x3 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+ 149: 	/*  fatal("X3: addr=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+ 150: 	    (uint64_t) addr, (int) x1, (int) x2, (int) x3);  */
+ 151: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+ 152: 	/*  fatal("  l2 = %p\n", l2);  */
+ 153: 	l3 = l2->l3[x2];
+ 154: 	/*  fatal("  l3 = %p\n", l3);  */
+ 155: #ifdef LS_LOAD
+ 156: 	page = l3->host_load[x3];
+ 157: #else
+ 158: 	page = l3->host_store[x3];
+ 159: #endif
+ 160: 
+ 161: #ifdef LS_UNALIGNED
+ 162: 	addr &= ~7;
+ 163: #endif
+ 164: 
+ 165: #ifdef LS_LLSC
+ 166: #ifdef LS_LOAD
+ 167: 	/*  TODO: cache-line size!  */
+ 168: 	cpu->cd.alpha.load_linked_addr = addr & ~63;
+ 169: 	cpu->cd.alpha.ll_flag = 1;
+ 170: #else
+ 171: 	/*  TODO: only invalidate per cache line, not everything!  */
+ 172: 	if (cpu->cd.alpha.ll_flag == 1) {
+ 173: 		int i;
+ 174: 		for (i=0; i<cpu->machine->ncpus; i++)
+ 175: 			cpu->machine->cpus[i]->cd.alpha.ll_flag = 0;
+ 176: 	} else {
+ 177: 		*((uint64_t *)ic->arg[0]) = 0;
+ 178: 		return;
+ 179: 	}
+ 180: #endif
+ 181: #endif
+ 182: 
+ 183: 	c = addr & 8191;
+ 184: 
+ 185: #ifndef LS_B
+ 186: 	if (c &
+ 187: #ifdef LS_W
+ 188: 	    1
+ 189: #endif
+ 190: #ifdef LS_L
+ 191: 	    3
+ 192: #endif
+ 193: #ifdef LS_Q
+ 194: 	    7
+ 195: #endif
+ 196: 	    ) {
+ 197: 		LS_GENERIC_N(cpu, ic);
+ 198: 		return;
+ 199: 	}
+ 200: 	else
+ 201: #endif
+ 202: 
+ 203: 	if (page != NULL) {
+ 204: #ifdef LS_LOAD
+ 205: #ifdef HOST_BIG_ENDIAN
+ 206: 		uint64_t data_x;
+ 207: 		data_x = page[c];
+ 208: #ifndef LS_B
+ 209: 		data_x += (page[c+1] << 8);
+ 210: #ifndef LS_W
+ 211: 		data_x += (page[c+2] << 16);
+ 212: 		data_x += ((uint64_t)page[c+3] << 24);
+ 213: #ifndef LS_L
+ 214: 		data_x += ((uint64_t)page[c+4] << 32);
+ 215: 		data_x += ((uint64_t)page[c+5] << 40);
+ 216: 		data_x += ((uint64_t)page[c+6] << 48);
+ 217: 		data_x += ((uint64_t)page[c+7] << 56);
+ 218: #endif
+ 219: #endif
+ 220: #endif
+ 221: #ifdef LS_L
+ 222: 		*((uint64_t *)ic->arg[0]) = (int64_t)(int32_t)data_x;
+ 223: #else
+ 224: 		*((uint64_t *)ic->arg[0]) = data_x;
+ 225: #endif
+ 226: #else
+ 227: #ifdef LS_B
+ 228: 		*((uint64_t *)ic->arg[0]) = page[c];
+ 229: #endif
+ 230: #ifdef LS_W
+ 231: 		uint16_t d = *((uint16_t *) (page + c));
+ 232: 		*((uint64_t *)ic->arg[0]) = d;
+ 233: #endif
+ 234: #ifdef LS_L
+ 235: 		int32_t d = *((int32_t *) (page + c));
+ 236: 		*((uint64_t *)ic->arg[0]) = (int64_t)d;
+ 237: #endif
+ 238: #ifdef LS_Q
+ 239: 		uint64_t d = *((uint64_t *) (page + c));
+ 240: 		*((uint64_t *)ic->arg[0]) = d;
+ 241: #endif
+ 242: #endif
+ 243: #else
+ 244: 		/*  Store:  */
+ 245: #ifdef HOST_BIG_ENDIAN
+ 246: 		uint64_t data_x = *((uint64_t *)ic->arg[0]);
+ 247: 		page[c] = data_x;
+ 248: #ifndef LS_B
+ 249: 		page[c+1] = data_x >> 8;
+ 250: #ifndef LS_W
+ 251: 		page[c+2] = data_x >> 16;
+ 252: 		page[c+3] = data_x >> 24;
+ 253: #ifndef LS_L
+ 254: 		page[c+4] = data_x >> 32;
+ 255: 		page[c+5] = data_x >> 40;
+ 256: 		page[c+6] = data_x >> 48;
+ 257: 		page[c+7] = data_x >> 56;
+ 258: #endif
+ 259: #endif
+ 260: #endif
+ 261: #else
+ 262: 		/*  Native byte order:  */
+ 263: #ifdef LS_B
+ 264: 		page[c] = *((uint64_t *)ic->arg[0]);
+ 265: #endif
+ 266: #ifdef LS_W
+ 267: 		uint32_t d = *((uint64_t *)ic->arg[0]);
+ 268: 		*((uint16_t *) (page + c)) = d;
+ 269: #endif
+ 270: #ifdef LS_L
+ 271: 		uint32_t d = *((uint64_t *)ic->arg[0]);
+ 272: 		*((uint32_t *) (page + c)) = d;
+ 273: #endif
+ 274: #ifdef LS_Q
+ 275: 		uint64_t d = *((uint64_t *)ic->arg[0]);
+ 276: 		*((uint64_t *) (page + c)) = d;
+ 277: #endif
+ 278: #endif
+ 279: 
+ 280: #ifdef LS_LLSC
+ 281: #ifndef LS_LOAD
+ 282: 		*((uint64_t *)ic->arg[0]) = 1;
+ 283: #endif
+ 284: #endif
+ 285: 
+ 286: #endif	/*  !LS_LOAD  */
+ 287: 	} else
+ 288: 		LS_GENERIC_N(cpu, ic);
+ 289: }
+ 290: 
+
+[32m succeeded in 336ms:[0m
+  39: 
+  40: /*
+  41:  *  memory_rw():
+  42:  *
+  43:  *  Read or write data from/to memory.
+  44:  *
+  45:  *	cpu		the cpu doing the read/write
+  46:  *	mem		the memory object to use
+  47:  *	vaddr		the virtual address
+  48:  *	data		a pointer to the data to be written to memory, or
+  49:  *			a placeholder for data when reading from memory
+  50:  *	len		the length of the 'data' buffer
+  51:  *	writeflag	set to MEM_READ or MEM_WRITE
+  52:  *	misc_flags	CACHE_{NONE,DATA,INSTRUCTION} | other flags
+  53:  *
+  54:  *  If the address indicates access to a memory mapped device, that device'
+  55:  *  read/write access function is called.
+  56:  *
+  57:  *  This function should not be called with cpu == NULL.
+  58:  *
+  59:  *  Returns one of the following:
+  60:  *	MEMORY_ACCESS_FAILED
+  61:  *	MEMORY_ACCESS_OK
+  62:  *
+  63:  *  (MEMORY_ACCESS_FAILED is 0.)
+  64:  */
+  65: 
+  66: /*
+  67:  *  #430: THE PAGE SIZE, IN ONE PLACE.
+  68:  *
+  69:  *  It was a local inside the function.  The wrapper below needs the same number, and two
+  70:  *  copies of a page size that can silently diverge is the shape this tree has been bitten
+  71:  *  by before -- so it is hoisted to a macro and the local now reads it.  Note the Alpha
+  72:  *  value: it is 8 KB, not 4 KB, so anything that splits at "the page boundary" must use
+  73:  *  THIS and never a literal 4096.  A review seat caught exactly that hazard in the design
+  74:  *  brief, which had said "4 KB page" throughout.
+  75:  */
+  76: #ifdef MEM_ALPHA
+  77: #define	MRW_OFFSET_MASK		0x1fff
+  78: #else
+  79: #define	MRW_OFFSET_MASK		0xfff
+  80: #endif
+  81: 
+  82: /*
+  83:  *  #430: THE SPLIT GRANULE IS 1 KB, AND IT IS NOT THE SAME NUMBER AS THE MASK ABOVE.
+  84:  *
+  85:  *  MRW_OFFSET_MASK is the HOST-page granule: what memory_paddr_to_hostaddr() is asked for
+  86:  *  and what update_translation_table() caches.  The granule the SPLIT needs is a different
+  87:  *  thing -- the smallest unit at which a translator in this tree can send two adjacent
+  88:  *  virtual addresses to unrelated physical ones -- and it is SMALLER:
+  89:  *
+  90:  *      memory_arm.c:198-207   descriptor type 3 on a non-XScale core is a 1 KB page,
+  91:  *                             *return_paddr = (d2 & 0xfffffc00) | (vaddr & 0x3ff)
+  92:  *      memory_sh.c:116        SH4_PTEL_SZ_1K gives mask 0xfffffc00
+  93:  *      memory_mips_v2p.c      the VR41xx path likewise has 1 KB logic
+  94:  *
+  95:  *  A first draft of this split used the 4 KB mask and a review seat produced the
+  96:  *  counterexample: with a 1 KB mapping, a four-byte access at 0x13fe crosses a translation
+  97:  *  boundary but NOT a 4 KB one, so the loop never fired and the defect survived exactly
+  98:  *  where MEMORY_NOT_FULL_PAGE says it is most likely.  Splitting finer is always SAFE --
+  99:  *  each chunk is then inside one mapping for every translator here, and the worker's own
+ 100:  *  host-page arithmetic is unchanged -- so the only cost is more worker calls on the slow
+ 101:  *  path for a multi-page translated access, which is rare (large transfers are PHYSICAL
+ 102:  *  and exempt).  Correctness at a known granule beats a faster one that is wrong on ARM.
+ 103:  */
+ 104: #define	MRW_SPLIT_MASK		0x3ff
+ 105: 
+ 106: /*  The one-page worker; its name is derived from MEMORY_RW because cpu_alpha.c includes
+ 107:     this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+ 108:     via tmp_alpha_tail.c), so a plainly named static would be a redefinition.  */
+ 109: #ifndef MRW_CAT2
+ 110: #define	MRW_CAT2(a,b)		a##b
+ 111: #define	MRW_CAT(a,b)		MRW_CAT2(a,b)
+ 112: #endif
+ 113: #define	MEMORY_RW_ONE_PAGE	MRW_CAT(MEMORY_RW, _one_page)
+ 114: 
+ 115: /*
+ 116:  *  The one relationship between the two that MUST hold, asserted at COMPILE TIME because it
+ 117:  *  cannot be asserted at run time by the offline differential.
+ 118:  *
+ 119:  *  MEM_ALPHA is never compiled by that differential -- its fixture is 4 KB-specific -- so a
+ 120:  *  review seat MEASURED that widening MRW_OFFSET_MASK, or hardcoding the worker's local back
+ 121:  *  to 0xfff (exactly the drift this macro exists to prevent), leaves every row green.  A
+ 122:  *  static assertion costs nothing and covers the Alpha build the test cannot reach.  The
+ 123:  *  name is derived because this file is included twice per translation unit.
+ 124:  */
+ 125: typedef char MRW_CAT(MEMORY_RW, _split_le_page)
+ 126:     [(MRW_SPLIT_MASK) <= (MRW_OFFSET_MASK) ? 1 : -1];
+ 127: 
+ 128: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 129: 	unsigned char *data, size_t len, int writeflag, int misc_flags);
+ 130: 
+ 131: 
+ 132: /*
+ 133:  *  #430: TRANSLATE ONCE PER PAGE, NOT ONCE PER ACCESS.
+ 134:  *
+ 135:  *  The worker below translates the START vaddr and then copies the whole length from the
+ 136:  *  host pointer for THAT page.  memory_paddr_to_hostaddr() returns a pointer into a 1 MB
+ 137:  *  memblock, so the copy walks host memory that is contiguous PHYSICALLY while the guest's
+ 138:  *  span is contiguous VIRTUALLY.  Those coincide only by luck, and the moment the length
+ 139:  *  carries past the page boundary the guest reads -- or OVERWRITES -- whatever physical
+ 140:  *  page happens to follow.  Measured offline against a deliberately non-monotonic map: a
+ 141:  *  straddling read returned the physically-following page's bytes, and a straddling WRITE
+ 142:  *  left the guest's intended page untouched while corrupting an unrelated one.  Measured
+ 143:  *  too: when the tail page had no valid translation the old code returned
+ 144:  *  MEMORY_ACCESS_OK anyway, so this was a MISSING FAULT as well as a wrong page.
+ 145:  *
+ 146:  *  The existing split at the end of the worker is NOT this guard and must not be mistaken
+ 147:  *  for it: it fires at BITS_PER_MEMBLOCK (1 MB) granularity and its job is to stop the memcpy
+ 148:  *  running off the end of a host allocation.
+ 149:  *
+ 150:  *  It is ONE BOUNDARY IN 1024, not 256: MRW_SPLIT_MASK is 0x3ff, so the split granule is
+ 151:  *  1024 bytes and 1 MB / 1024 = 1024.  The old "256" came from dividing 1 MB by a 4 KB page
+ 152:  *  -- a granule this split does not use, as the note above says: "The granule the SPLIT
+ 153:  *  needs is a different one."  (And per that note the real page here is 8 KB anyway.)
+ 154:  *
+ 155:  *  Two properties of the memblock split, both MEASURED:
+ 156:  *    - post-#430 it fires only on PHYSICAL accesses.  A TRANSLATED 4096-byte write across a
+ 157:  *      1 MB boundary is chunked at the 1024-byte SPLIT granule, so it costs 4 translations
+ 158:  *      and 4 host lookups and never reaches here; PHYSICAL costs 0 and 2.  A chunk of at
+ 159:  *      most one granule, granule-aligned, cannot cross 1 MB.
+ 160:  *    - its head can NEVER be a device, in either version: device dispatch `goto
+ 161:  *      do_return_ok`s first.  Measured with a device straddling the memblock boundary --
+ 162:  *      one device call, offset 0xffe, len 4, zero host lookups.
+ 163:  *
+ 164:  *  A LOOP, not recursion.  A recursive split costs a real frame per chunk when the compiler
+ 165:  *  does NOT eliminate the tail call -- measured at -O0, 1,834,896 bytes of stack for a 16 MB
+ 166:  *  access -- and a large enough access then dies on the stack rather than returning an
+ 167:  *  answer.
+ 168:  *
+ 169:  *  CORRECTION, and it is the reason this paragraph is worded carefully: the first draft said
+ 170:  *  "gcc does not turn the tail call into a loop at -O2".  MEASURED, IT DOES -- gcc 15.2.1
+ 171:  *  performs the sibling-call optimisation at -O2 and -O3, leaving a 96-byte span.  So the
+ 172:  *  loop is still the right implementation (it does not depend on an optimisation being
+ 173:  *  applied, and -O0 builds and other compilers are real), but the justification was wrong,
+ 174:  *  and the row that certified it was VACUOUS until the differential was given
+ 175:  *  -fno-optimize-sibling-calls.  No caller in the tree passes an access large enough for
+ 176:  *  this to bite today; it is insurance, and it costs about fifteen lines.
+ 177:  *
+ 178:  *  ONLY WHEN A TRANSLATION ACTUALLY HAPPENS.  Under PHYSICAL (or with no translate_v2p)
+ 179:  *  paddr == vaddr, there is no per-page mapping to redo, and splitting would buy nothing
+ 180:  *  while turning one large DMA into thousands of calls -- so those go straight through and
+ 181:  *  the memblock split keeps doing its job unchanged.
+ 182:  */
+ 183: int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 184: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+ 185: {
+ 186: 	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+ 187: 		size_t granule = (size_t) MRW_SPLIT_MASK + 1;
+ 188: 		size_t offset = (size_t) (vaddr & MRW_SPLIT_MASK);
+ 189: 
+ 190: 		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+ 191: 		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+ 192: 		    the loop and hand the whole thing to the worker.  The subtraction
+ 193: 		    cannot wrap, because offset < granule always.
+ 194: 
+ 195: 		    STATED EXACTLY, because the first version of this comment implied more
+ 196: 		    than it delivers: this form does not SERVICE such a length, it declines
+ 197: 		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+ 198: 		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+ 199: 		    at two million chunks.  No caller passes anything remotely like it (the
+ 200: 		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+ 201: 		    and filed rather than handled.  */
+ 202: 		while (len > granule - offset) {
+ 203: 			size_t head = granule - offset;
+ 204: 
+ 205: 			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+ 206: 			    writeflag, misc_flags)) {
+ 207: 				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+ 208: 				    THAT: the worker zeroes only the chunk IT was given, so a
+ 209: 				    failure before the last chunk used to leave the caller's
+ 210: 				    remaining bytes untouched -- uninitialised host stack, for
+ 211: 				    a caller that ignores the return value.  Unsplit, one call
+ 212: 				    covered the whole length.  Zero the rest here so the
+ 213: 				    guarantee is the same as it was.  */
+ 214: 				if (writeflag == MEM_READ)
+ 215: 					memset(data, 0, len);
+ 216: 				return MEMORY_ACCESS_FAILED;
+ 217: 			}
+ 218: 
+ 219: 			vaddr += head;
+ 220: 			data += head;
+ 221: 			len -= head;
+ 222: 			offset = 0;
+ 223: 		}
+ 224: 	}
+ 225: 
+ 226: 	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+ 227: }
+ 228: 
+ 229: 
+ 230: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 231: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+ 232: {
+ 233: 	const int offset_mask = MRW_OFFSET_MASK;
+ 234: 
+ 235: 	int ok = 2;
+ 236: 	uint64_t paddr;
+ 237: 	int cache, no_exceptions, offset;
+ 238: 	unsigned char *memblock;
+ 239: 	int dyntrans_device_danger = 0;
+ 240: 
+ 241: 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+ 242: 	cache = misc_flags & CACHE_FLAGS_MASK;
+ 243: 
+ 244: 
+ 245: 	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+ 246: 		paddr = vaddr;
+ 247: 	} else {
+ 248: 		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+ 249: 		    (writeflag? FLAG_WRITEFLAG : 0) +
+ 250: 		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+ 251: 		    + (misc_flags & MEMORY_USER_ACCESS)
+ 252: 		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+ 253: 
+ 254: 		/*
+ 255: 		 *  If the translation caused an exception, or was invalid in
+ 256: 		 *  some way, then simply return without doing the memory
+ 257: 		 *  access:
+ 258: 		 */
+ 259: 		if (!ok) {
+ 260: 			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+ 261: 			    the caller's read buffer untouched; zero it so
+ 262: 			    callers that ignore the return value (e.g. the DEC
+ 263: 			    PROM string helpers) consume deterministic 0 bytes
+ 264: 			    instead of uninitialised host stack. Same zero-fill
+ 265: 			    ethos as the failed-device-read path (#95).  */
+ 266: 			if (writeflag == MEM_READ)
+ 267: 				memset(data, 0, len);
+ 268: 			return MEMORY_ACCESS_FAILED;
+ 269: 		}
+ 270: 	}
+ 271: 
+ 272: 	/*
+ 273: 	 *  #250: data write-watchpoint. Checked here, before the device /
+ 274: 	 *  cache / RAM dispatch (several of which return early �?" notably the
+ 275: 	 *  R3000 cached path via memory_cache_R3000()), so every store that
+ 276: 	 *  reaches this slow path is covered. Watched pages are kept off the
+ 277: 	 *  fast store table by update_translation_table(), and R3000 cached
+ 278: 	 *  data already comes through here. Show the store (writer pc, target,
+ 279: 	 *  width, value) and request entry into the debugger after the current
+ 280: 	 *  instruction, via the same about_to_enter_single_step mechanism as
+ 281: 	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+ 282: 	 */
+ 283: 	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+ 284: 	    !single_step && !about_to_enter_single_step &&
+ 285: 	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+ 286: 		char valbuf[3 * 16 + 1];
+ 287: 		size_t vi, vn = len < 16 ? len : 16;
+ 288: 		valbuf[0] = '\0';
+ 289: 		for (vi = 0; vi < vn; vi++)
+ 290: 			snprintf(valbuf + strlen(valbuf),
+ 291: 			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
+ 292: 			    vi ? " " : "", data[vi]);
+ 293: 		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
+ 294: 		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
+ 295: 		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+ 296: 		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+ 297: 		about_to_enter_single_step = true;
+ 298: 	}
+ 299: 
+ 300: #if 0
+ 301: 	/*
+ 302: 	 *  For quick-and-dirty debugging of 32-bit code, typically
+ 303: 	 *  unknown ROM code:  Write out a summary of accessed memory ranges.
+ 650: 			    writeflag, len, data))
+ 651: 				goto do_return_ok;
+ 652: 		}
+ 653: 		break;
+ 654: 	default:
+ 655: 		/*  R4000 etc  */
+ 656: 		/*  TODO  */
+ 657: 		;
+ 658: 	}
+ 659: #endif	/*  MEM_MIPS  */
+ 660: 
+ 661: 
+ 662: 	/*  Outside of physical RAM?  */
+ 663: 	if (paddr >= mem->physical_max) {
+ 664: #ifdef MEM_MIPS
+ 665: 		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+ 666: 			/*  Ok, this is PROM stuff  */
+ 667: 		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+ 668: 			/*  Sprite reads from this area of memory...  */
+ 669: 			/*  TODO: is this still correct?  */
+ 670: 			if (writeflag == MEM_READ)
+ 671: 				memset(data, 0, len);
+ 672: 			goto do_return_ok;
+ 673: 		} else
+ 674: #endif /* MIPS */
+ 675: 		{
+ 676: 			if (paddr >= mem->physical_max && !no_exceptions)
+ 677: 				if (memory_warn_about_unimplemented_addr
+ 678: 				    (cpu, mem, writeflag, paddr, len))
+ 679: 					return MEMORY_ACCESS_FAILED;
+ 680: 
+ 681: 			if (writeflag == MEM_READ) {
+ 682: 				/*  Return all zeroes? (Or 0xff? TODO)  */
+ 683: 				memset(data, 0, len);
+ 684: 
+ 685: #if 0
+ 686: /*
+ 687:  *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+ 688:  *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+ 689:  *  the amount of RAM on some machine.
+ 690:  *
+ 691:  *  TODO: Figure out if it is not needed anymore, and remove it completely.
+ 692:  */
+ 693: #ifdef MEM_MIPS
+ 694: 				/*
+ 695: 				 *  For real data/instruction accesses, cause
+ 696: 				 *  an exceptions on an illegal read:
+ 697: 				 */
+ 698: 				if (cache != CACHE_NONE && !no_exceptions &&
+ 699: 				    paddr >= mem->physical_max &&
+ 700: 				    paddr < mem->physical_max+1048576) {
+ 701: 					mips_cpu_exception(cpu,
+ 702: 					    EXCEPTION_DBE, 0, vaddr, 0,
+ 703: 					    0, 0, 0);
+ 704: 				}
+ 705: #endif  /*  MEM_MIPS  */
+ 706: #endif
+ 707: 			}
+ 708: 
+ 709: 			/*  Hm? Shouldn't there be a DBE exception for
+ 710: 			    invalid writes as well?  TODO  */
+ 711: 
+ 712: 			goto do_return_ok;
+ 713: 		}
+ 714: 	}
+ 715: 
+ 716: 
+ 717: 	/*
+ 718: 	 *  Uncached access:
+ 719: 	 *
+ 720: 	 *  1)  Translate the physical address to a host address.
+ 721: 	 *
+ 722: 	 *  2)  Insert this virtual->physical->host translation into the
+ 723: 	 *      fast translation arrays (using update_translation_table()).
+ 724: 	 *
+ 725: 	 *  3)  If this was a Write, then invalidate any code translations
+ 726: 	 *      in that page.
+ 727: 	 */
+ 728: 	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+ 729: 	    writeflag);
+ 730: 	if (memblock == NULL) {
+ 731: 		if (writeflag == MEM_READ)
+ 732: 			memset(data, 0, len);
+ 733: 		goto do_return_ok;
+ 734: 	}
+ 735: 
+ 736: 	offset = paddr & offset_mask;
+ 737: 
+ 738: 	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+ 739: #ifdef MEM_MIPS
+ 740: 	    /*  Ugly hack for R2000/R3000 caches:  */
+ 741: 	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+ 742:             !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+ 743: #endif
+ 744: 	    && !(ok & MEMORY_NOT_FULL_PAGE)
+ 745: 	    && !no_exceptions)
+ 746: 		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+ 747: 		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+ 748: 		    (cache == CACHE_INSTRUCTION?
+ 749: 			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+ 750: 		    paddr & ~offset_mask);
+ 751: 
+ 752: 	/*
+ 753: 	 *  If writing, or if mapping a page where writing is ok later on,
+ 754: 	 *  then invalidate code translations for the (physical) page address:
+ 755: 	 */
+ 756: 
+ 757: 	if ((writeflag == MEM_WRITE
+ 758: 	    || (ok == 2 && cache == CACHE_DATA)
+ 759: 	    ) && cpu->invalidate_code_translation != NULL)
+ 760: 		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
+ 761: 
+ 762: 	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+ 763: 		/*  #165: (Codex/Fable) split accesses that cross a memblock
+ 764: 		    boundary (e.g. large DMA transfers) at the boundary,
+ 765: 		    instead of exiting the whole emulator.  */
+ 766: 		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+ 767: 		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+ 768: 
+ 769: 		if (writeflag == MEM_WRITE)
+ 770: 			memcpy(memblock + offset, data, len_head);
+ 771: 		else
+ 772: 			memcpy(data, memblock + offset, len_head);
+ 773: 
+ 774: 		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+ 775: 		    len - len_head, writeflag, misc_flags);
+ 776: 	}
+ 777: 
+ 778: 	/*  And finally, read or write the data:  */
+ 779: 	if (writeflag == MEM_WRITE)
+ 780: 		memcpy(memblock + offset, data, len);
+ 781: 	else
+ 782: 		memcpy(data, memblock + offset, len);
+ 783: 
+ 784: do_return_ok:
+ 785: 	return MEMORY_ACCESS_OK;
+ 786: }
+ 787: 
+ 788: /*  #430: this file is included more than once per translation unit (see cpu_alpha.c), so
+ 789:     the per-inclusion macros must not leak into the next inclusion.  MRW_CAT/MRW_CAT2 are
+ 790:     inclusion-independent and are left defined behind their own guard.  */
+ 791: #undef MEMORY_RW_ONE_PAGE
+ 792: #undef MRW_OFFSET_MASK
+ 793: #undef MRW_SPLIT_MASK
+ 794: 
+
+[32m succeeded in 342ms:[0m
+ 210: #endif
+ 211: #ifdef DYNTRANS_M88K
+ 212: 		if (cpu->cd.m88k.irq_asserted &&
+ 213: 		    !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND))
+ 214: 			m88k_exception(cpu, M88K_EXCEPTION_INTERRUPT, 0);
+ 215: #endif
+ 216: #ifdef DYNTRANS_MIPS
+ 217: 		int enabled, mask;
+ 218: 		int status = cpu->cd.mips.coproc[0]->reg[COP0_STATUS];
+ 219: 		if (cpu->cd.mips.cpu_type.exc_model == EXC3K) {
+ 220: 			/*  R3000:  */
+ 221: 			enabled = status & MIPS_SR_INT_IE;
+ 222: 		} else {
+ 223: 			/*  R4000 and others:  */
+ 224: 			enabled = (status & STATUS_IE)
+ 225: 			    && !(status & STATUS_EXL) && !(status & STATUS_ERL);
+ 226: 			/*  Special case for R5900/C790/TX79:  */
+ 227: 			if (cpu->cd.mips.cpu_type.rev == MIPS_R5900 &&
+ 228: 			    !(status & R5900_STATUS_EIE))
+ 229: 				enabled = 0;
+ 230: 		}
+ 231: 		mask = status & cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
+ 232: 		    & STATUS_IM_MASK;
+ 233: 
+ 234: 		if (enabled && mask)
+ 235: 			mips_cpu_exception(cpu, EXCEPTION_INT, 0, 0, 0, 0, 0,0);
+ 236: #endif
+ 237: #ifdef DYNTRANS_PPC
+ 238: 		if (cpu->cd.ppc.dec_intr_pending && cpu->cd.ppc.msr & PPC_MSR_EE) {
+ 239: 			if (!(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
+ 240: 				ppc_exception(cpu, PPC_EXCEPTION_DEC);
+ 241: 			cpu->cd.ppc.dec_intr_pending = 0;
+ 242: 		}
+ 243: 		if (cpu->cd.ppc.irq_asserted && cpu->cd.ppc.msr & PPC_MSR_EE)
+ 244: 			ppc_exception(cpu, PPC_EXCEPTION_EI);
+ 245: #endif
+ 246: #ifdef DYNTRANS_SH
+ 247: 		if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+ 248: 		    && ((cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+ 249: 		    < cpu->cd.sh.int_level)
+ 250: 			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+ 251: #endif
+ 252: 	}
+ 253: 
+ 254: #ifdef DYNTRANS_ARM
+ 255: 	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+ 256: 		// fatal("THUMB execution not implemented.\n");
+ 257: 		// cpu->running = false;
+ 258: 		// return 0;
+ 259: 		
+ 260: 		arm_cpu_interpret_thumb_SLOW(cpu);
+ 261: 		return 1;
+ 262: 	}
+ 263: #endif
+ 264: 
+ 265: 	cached_pc = cpu->pc;
+ 266: 
+ 267: 	cpu->n_translated_instrs = 0;
+ 268: 
+ 269: 	cpu->cd.DYNTRANS_ARCH.cur_physpage = (struct DYNTRANS_TC_PHYSPAGE *)
+ 270: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+ 271: 
+ 272: 	if (single_step || cpu->machine->instruction_trace
+ 273: 	    || cpu->machine->register_dump) {
+ 274: 		/*
+ 275: 		 *  Single-step:
+ 276: 		 */
+ 277: 		struct DYNTRANS_IC *ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+ 278: 		if (cpu->machine->register_dump) {
+ 279: 			debug("\n");
+ 280: 			cpu_register_dump(cpu->machine, cpu, 1, 0x1);
+ 281: 		}
+ 282: 		if (single_step || cpu->machine->instruction_trace) {
+ 283: 			/*  TODO/Note: This must be large enough to hold
+ 284: 			    any instruction for any ISA:  */
+ 285: 			unsigned char instr[1 <<
+ 286: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT];
+ 287: 			if (!cpu->memory_rw(cpu, cpu->mem, cached_pc, &instr[0],
+ 288: 			    sizeof(instr), MEM_READ, CACHE_INSTRUCTION)) {
+ 289: 				fatal("XXX_run_instr(): could not read "
+ 290: 				    "the instruction\n");
+ 291: 			} else {
+ 292: #ifdef DYNTRANS_DELAYSLOT
+ 293: 				int len =
+ 294: #endif
+ 295: 				    cpu_disassemble_instr(
+ 296: 				    cpu->machine, cpu, instr, 1, cpu->pc);
+ 297: #ifdef DYNTRANS_DELAYSLOT
+ 298: 				/*  Show the instruction in the delay slot,
+ 299: 				    if any:  */
+ 300: 				if (cpu->instruction_has_delayslot == NULL)
+ 301: 					fatal("WARNING: ihd func not yet"
+ 302: 					    " implemented?\n");
+ 303: 				else if (cpu->instruction_has_delayslot(cpu,
+ 304: 				    instr)) {
+ 305: 					int saved_delayslot = cpu->delay_slot;
+ 306: 					cpu->memory_rw(cpu, cpu->mem, cached_pc
+ 307: 					    + len, &instr[0],
+ 308: 					    sizeof(instr), MEM_READ,
+ 309: 					    CACHE_INSTRUCTION);
+ 310: 					cpu->delay_slot = DELAYED;
+ 311: 					cpu->pc += len;
+ 312: 					cpu_disassemble_instr(cpu->machine,
+ 313: 					    cpu, instr, 1, cpu->pc);
+ 314: 					cpu->delay_slot = saved_delayslot;
+ 315: 					cpu->pc -= len;
+ 316: 				}
+ 317: #endif
+ 318: 			}
+ 319: 		}
+ 320: 
+ 586: /*
+ 587:  *  XXX_tc_allocate_default_page():
+ 588:  *
+ 589:  *  Create a default page (with just pointers to instr(to_be_translated)
+ 590:  *  at cpu->translation_cache_cur_ofs.
+ 591:  */
+ 592: static void DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF(struct cpu *cpu,
+ 593: 	uint64_t physaddr)
+ 594: { 
+ 595: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+ 596: 
+ 597: 	ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+ 598: 	    + cpu->translation_cache_cur_ofs);
+ 599: 
+ 600: 	/*  Copy the entire template page first:  */
+ 601: 	memcpy(ppp, cpu->cd.DYNTRANS_ARCH.physpage_template, sizeof(
+ 602: 	    struct DYNTRANS_TC_PHYSPAGE));
+ 603: 
+ 604: 	ppp->physaddr = physaddr & ~(DYNTRANS_PAGESIZE - 1);
+ 605: 
+ 606: 	cpu->translation_cache_cur_ofs += sizeof(struct DYNTRANS_TC_PHYSPAGE);
+ 607: 
+ 608: 	cpu->translation_cache_cur_ofs --;
+ 609: 	cpu->translation_cache_cur_ofs |= 63;
+ 610: 	cpu->translation_cache_cur_ofs ++;
+ 611: }
+ 612: #endif	/*  DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF  */
+ 613: 
+ 614: 
+ 615: 
+ 616: #ifdef DYNTRANS_PC_TO_POINTERS_FUNC
+ 617: /*
+ 618:  *  XXX_pc_to_pointers_generic():
+ 619:  *
+ 620:  *  Generic case. See DYNTRANS_PC_TO_POINTERS_FUNC below.
+ 621:  */
+ 622: void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+ 623: {
+ 624: #ifdef MODE32
+ 625: 	uint32_t
+ 626: #else
+ 627: 	uint64_t
+ 628: #endif
+ 629: 	    cached_pc = cpu->pc, physaddr = 0;
+ 630: 	uint32_t physpage_ofs;
+ 631: 	int ok, pagenr, table_index;
+ 632: 	uint32_t *physpage_entryp;
+ 633: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+ 634: 
+ 635: #ifdef MODE32
+ 636: 	int index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+ 637: #else
+ 638: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+ 639: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+ 640: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+ 641: 	uint32_t x1, x2, x3;
+ 642: 	struct DYNTRANS_L2_64_TABLE *l2;
+ 643: 	struct DYNTRANS_L3_64_TABLE *l3;
+ 644: 
+ 645: 	x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+ 646: 	x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+ 647: 	x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+ 648: 	/*  fatal("X3: cached_pc=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+ 649: 	    (uint64_t)cached_pc, (int)x1, (int)x2, (int)x3);  */
+ 650: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+ 651: 	/*  fatal("  l2 = %p\n", l2);  */
+ 652: 	l3 = l2->l3[x2];
+ 653: 	/*  fatal("  l3 = %p\n", l3);  */
+ 654: #endif
+ 655: 
+ 656: 	/*  Virtual to physical address translation:  */
+ 657: 	ok = 0;
+ 658: #ifdef MODE32
+ 659: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL) {
+ 660: 		physaddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+ 661: 		ok = 1;
+ 662: 	}
+ 663: #else
+ 664: 	if (l3->host_load[x3] != NULL) {
+ 665: 		physaddr = l3->phys_addr[x3];
+ 666: 		ok = 1;
+ 667: 	}
+ 668: #endif
+ 669: 
+ 670: 	if (!ok) {
+ 671: 		uint64_t paddr;
+ 672: 		if (cpu->translate_v2p != NULL) {
+ 673: 			uint64_t vaddr =
+ 674: #if defined(MODE32) && defined(DYNTRANS_MIPS)
+ 675: 			/*  32-bit MIPS is _sign_ extend, not zero.  */
+ 676: 			    (int32_t)
+ 677: #endif
+ 678: 			    cached_pc;
+ 679: 			ok = cpu->translate_v2p(
+ 680: 			    cpu, vaddr, &paddr, FLAG_INSTR);
+ 681: 		} else {
+ 682: 			paddr = cached_pc;
+ 683: 			ok = 1;
+ 684: 		}
+ 685: 		if (!ok) {
+ 686: 			/*
+ 687: 			 *  The PC is now set to the exception handler.
+ 688: 			 *  Try to find the paddr in the translation arrays,
+ 689: 			 *  or if that fails, call translate_v2p for the
+ 690: 			 *  exception handler.
+ 691: 			 */
+ 692: 			/*  fatal("TODO: instruction vaddr=>paddr translation "
+ 693: 			    "failed. vaddr=0x%" PRIx64"\n", (uint64_t)cached_pc);
+ 694: 			fatal("!! cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+ 695: 
+ 696: 			/*  If there was an exception, the PC has changed.
+ 697: 			    Update cached_pc:  */
+ 698: 			cached_pc = cpu->pc;
+ 699: 
+ 700: #ifdef MODE32
+ 701: 			index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+ 702: 			if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL) {
+ 703: 				paddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+ 704: 				ok = 1;
+ 705: 			}
+ 706: #else
+ 707: 			x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+ 708: 			x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N))
+ 709: 			    & mask2;
+ 710: 			x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N
+ 711: 			    - DYNTRANS_L3N)) & mask3;
+ 712: 			l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+ 713: 			l3 = l2->l3[x2];
+ 714: 			if (l3->host_load[x3] != NULL) {
+ 715: 				paddr = l3->phys_addr[x3];
+ 716: 				ok = 1;
+ 717: 			}
+ 718: #endif
+ 719: 
+ 720: 			if (!ok) {
+ 721: 				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+ 722: 				    FLAG_INSTR);
+ 723: 			}
+ 724: 
+ 725: 			/*  printf("EXCEPTION HANDLER: vaddr = 0x%x ==> "
+ 726: 			    "paddr = 0x%x\n", (int)cpu->pc, (int)paddr);
+ 727: 			fatal("!? cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+ 728: 
+ 729: 			if (!ok) {
+ 730: 				fatal("FATAL: could not find physical"
+ 731: 				    " address of the exception handler?");
+ 732: 				exit(1);
+ 733: 			}
+ 734: 		}
+ 735: 
+ 736: 		physaddr = paddr;
+ 737: 	}
+ 738: 
+ 739: 	physaddr &= ~(DYNTRANS_PAGESIZE - 1);
+ 740: 
+ 741: #ifdef MODE32
+ 742: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] == NULL) {
+ 743: #else
+ 744: 	if (l3->host_load[x3] == NULL) {
+ 745: #endif
+ 746: 		int q = DYNTRANS_PAGESIZE - 1;
+ 747: 		unsigned char *host_page = memory_paddr_to_hostaddr(cpu->mem,
+ 748: 		    physaddr, MEM_READ);
+ 749: 		if (host_page != NULL) {
+ 750: 			cpu->update_translation_table(cpu, cached_pc & ~q,
+ 751: 			    host_page, 0, physaddr);
+ 752: 		}
+ 753: 	}
+ 754: 
+ 755: 	if (cpu->translation_cache_cur_ofs >= dyntrans_cache_size) {
+ 756: 		debugmsg(SUBSYS_CPU, "dyntrans", VERBOSITY_INFO,
+ 757: 		    "resetting the translation cache");
+ 758: 
+ 759: 		cpu_create_or_reset_tc(cpu);
+ 760: 	}
+ 761: 
+ 762: 	pagenr = DYNTRANS_ADDR_TO_PAGENR(physaddr);
+ 763: 	table_index = PAGENR_TO_TABLE_INDEX(pagenr);
+ 764: 
+ 765: 	physpage_entryp = &(((uint32_t *)cpu->translation_cache)[table_index]);
+ 766: 	physpage_ofs = *physpage_entryp;
+ 767: 	ppp = NULL;
+ 768: 
+ 769: 	/*  Traverse the physical page chain:  */
+ 770: 	while (physpage_ofs != 0) {
+ 771: 		ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+ 772: 		    + physpage_ofs);
+ 773: 
+ 774: 		/*  If we found the page in the cache, then we're done:  */
+ 775: 		if (ppp->physaddr == physaddr)
+ 776: 			break;
+ 777: 
+ 778: 		/*  Try the next page in the chain:  */
+ 779: 		physpage_ofs = ppp->next_ofs;
+ 780: 	}
+ 781: 
+ 782: 	/*
+ 783: 	 *  If the offset is 0, then no translation exists yet for this
+ 784: 	 *  physical address. Let's create a new page, and add it first in
+ 785: 	 *  the chain.
+ 786: 	 */
+ 787: 	if (physpage_ofs == 0) {
+ 788: 		uint32_t previous_first_page_in_chain;
+ 789: 
+ 790: 		/*  fatal("CREATING page %lli (physaddr 0x%" PRIx64"), table "
+ 791: 		    "index %i\n", (long long)pagenr, (uint64_t)physaddr,
+ 792: 		    (int)table_index);  */
+ 793: 
+ 794: 		previous_first_page_in_chain = *physpage_entryp;
+ 795: 
+ 796: 		/*  Insert the new page first in the chain:  */
+ 797: 		*physpage_entryp = physpage_ofs =
+ 798: 		    cpu->translation_cache_cur_ofs;
+ 799: 
+ 800: 		/*  Allocate a default page, with to_be_translated entries:  */
+ 801: 		DYNTRANS_TC_ALLOCATE(cpu, physaddr);
+ 802: 
+ 803: 		ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+ 804: 		    + physpage_ofs);
+ 805: 
+ 806: 		/*  Point to the other pages in the same chain:  */
+ 807: 		ppp->next_ofs = previous_first_page_in_chain;
+ 808: 	}
+ 809: 
+ 810: 	/*  Here, ppp points to a valid physical page struct.  */
+ 811: 
+ 812: #ifdef MODE32
+ 813: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL)
+ 814: 		cpu->cd.DYNTRANS_ARCH.phys_page[index] = ppp;
+ 815: #else
+ 816: 	if (l3->host_load[x3] != NULL)
+ 817: 		l3->phys_page[x3] = ppp;
+ 818: #endif
+ 819: 
+ 820: 	/*
+ 821: 	 *  If there are no translations yet on this page, then mark it
+ 822: 	 *  as non-writable. If there are already translations, then it
+ 823: 	 *  should already have been marked as non-writable.
+ 824: 	 */
+ 825: 	if (ppp->translations_bitmap == 0) {
+ 826: 		cpu->invalidate_translation_caches(cpu, physaddr,
+ 827: 		    JUST_MARK_AS_NON_WRITABLE | INVALIDATE_PADDR);
+ 828: 	}
+ 829: 
+ 830: 	cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+ 831: 
+ 832: 	cpu->cd.DYNTRANS_ARCH.next_ic = cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+ 833: 	    DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+ 834: 
+ 835: 	/*  printf("cached_pc=0x%016" PRIx64"  pagenr=%lli  table_index=%lli, "
+ 836: 	    "physpage_ofs=0x%016" PRIx64"\n", (uint64_t)cached_pc, (long long)
+ 837: 	    pagenr, (long long)table_index, (uint64_t)physpage_ofs);  */
+ 838: }
+ 839: 
+ 840: 
+ 841: /*
+ 842:  *  XXX_pc_to_pointers():
+ 843:  *
+ 844:  *  This function uses the current program counter (a virtual address) to
+ 845:  *  find out which physical translation page to use, and then sets the current
+ 846:  *  translation page pointers to that page.
+ 847:  *
+ 848:  *  If there was no translation page for that physical page, then an empty
+ 849:  *  one is created.
+ 850:  *
+ 851:  *  NOTE: This is the quick lookup version. See
+ 852:  *  DYNTRANS_PC_TO_POINTERS_GENERIC above for the generic case.
+ 853:  */
+ 854: void DYNTRANS_PC_TO_POINTERS_FUNC(struct cpu *cpu)
+ 855: {
+ 856: #ifdef MODE32
+ 857: 	uint32_t
+ 858: #else
+ 859: 	uint64_t
+ 860: #endif
+ 861: 	    cached_pc = cpu->pc;
+ 862: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+ 863: 
+ 864: #ifdef MODE32
+ 865: 	int index;
+ 866: 	index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+ 867: 	ppp = cpu->cd.DYNTRANS_ARCH.phys_page[index];
+ 868: 	if (ppp != NULL)
+ 869: 		goto have_it;
+ 870: #else
+ 871: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+ 872: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; if (($auditLine -ge 30 -and $auditLine -le 176) -or ($auditLine -ge 870 -and $auditLine -le 948)) { '"'{0,4}: {1}' -f "'$auditLine, $_ } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/memory_rw.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; if (($auditLine -ge 59 -and $auditLine -le 130) -or ($auditLine -ge 183 -and $auditLine -le 279) -or ($auditLine -ge 430 -and $auditLine -le 438) -or ($auditLine -ge 478 -and $auditLine -le 502) -or ($auditLine -ge 587 -and $auditLine -le 643) -or ($auditLine -ge 655 -and $auditLine -le 714)) { '"'{0,4}: {1}' -f "'$auditLine, $_ } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 418ms:[0m
+  59:  *  Returns one of the following:
+  60:  *	MEMORY_ACCESS_FAILED
+  61:  *	MEMORY_ACCESS_OK
+  62:  *
+  63:  *  (MEMORY_ACCESS_FAILED is 0.)
+  64:  */
+  65: 
+  66: /*
+  67:  *  #430: THE PAGE SIZE, IN ONE PLACE.
+  68:  *
+  69:  *  It was a local inside the function.  The wrapper below needs the same number, and two
+  70:  *  copies of a page size that can silently diverge is the shape this tree has been bitten
+  71:  *  by before -- so it is hoisted to a macro and the local now reads it.  Note the Alpha
+  72:  *  value: it is 8 KB, not 4 KB, so anything that splits at "the page boundary" must use
+  73:  *  THIS and never a literal 4096.  A review seat caught exactly that hazard in the design
+  74:  *  brief, which had said "4 KB page" throughout.
+  75:  */
+  76: #ifdef MEM_ALPHA
+  77: #define	MRW_OFFSET_MASK		0x1fff
+  78: #else
+  79: #define	MRW_OFFSET_MASK		0xfff
+  80: #endif
+  81: 
+  82: /*
+  83:  *  #430: THE SPLIT GRANULE IS 1 KB, AND IT IS NOT THE SAME NUMBER AS THE MASK ABOVE.
+  84:  *
+  85:  *  MRW_OFFSET_MASK is the HOST-page granule: what memory_paddr_to_hostaddr() is asked for
+  86:  *  and what update_translation_table() caches.  The granule the SPLIT needs is a different
+  87:  *  thing -- the smallest unit at which a translator in this tree can send two adjacent
+  88:  *  virtual addresses to unrelated physical ones -- and it is SMALLER:
+  89:  *
+  90:  *      memory_arm.c:198-207   descriptor type 3 on a non-XScale core is a 1 KB page,
+  91:  *                             *return_paddr = (d2 & 0xfffffc00) | (vaddr & 0x3ff)
+  92:  *      memory_sh.c:116        SH4_PTEL_SZ_1K gives mask 0xfffffc00
+  93:  *      memory_mips_v2p.c      the VR41xx path likewise has 1 KB logic
+  94:  *
+  95:  *  A first draft of this split used the 4 KB mask and a review seat produced the
+  96:  *  counterexample: with a 1 KB mapping, a four-byte access at 0x13fe crosses a translation
+  97:  *  boundary but NOT a 4 KB one, so the loop never fired and the defect survived exactly
+  98:  *  where MEMORY_NOT_FULL_PAGE says it is most likely.  Splitting finer is always SAFE --
+  99:  *  each chunk is then inside one mapping for every translator here, and the worker's own
+ 100:  *  host-page arithmetic is unchanged -- so the only cost is more worker calls on the slow
+ 101:  *  path for a multi-page translated access, which is rare (large transfers are PHYSICAL
+ 102:  *  and exempt).  Correctness at a known granule beats a faster one that is wrong on ARM.
+ 103:  */
+ 104: #define	MRW_SPLIT_MASK		0x3ff
+ 105: 
+ 106: /*  The one-page worker; its name is derived from MEMORY_RW because cpu_alpha.c includes
+ 107:     this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+ 108:     via tmp_alpha_tail.c), so a plainly named static would be a redefinition.  */
+ 109: #ifndef MRW_CAT2
+ 110: #define	MRW_CAT2(a,b)		a##b
+ 111: #define	MRW_CAT(a,b)		MRW_CAT2(a,b)
+ 112: #endif
+ 113: #define	MEMORY_RW_ONE_PAGE	MRW_CAT(MEMORY_RW, _one_page)
+ 114: 
+ 115: /*
+ 116:  *  The one relationship between the two that MUST hold, asserted at COMPILE TIME because it
+ 117:  *  cannot be asserted at run time by the offline differential.
+ 118:  *
+ 119:  *  MEM_ALPHA is never compiled by that differential -- its fixture is 4 KB-specific -- so a
+ 120:  *  review seat MEASURED that widening MRW_OFFSET_MASK, or hardcoding the worker's local back
+ 121:  *  to 0xfff (exactly the drift this macro exists to prevent), leaves every row green.  A
+ 122:  *  static assertion costs nothing and covers the Alpha build the test cannot reach.  The
+ 123:  *  name is derived because this file is included twice per translation unit.
+ 124:  */
+ 125: typedef char MRW_CAT(MEMORY_RW, _split_le_page)
+ 126:     [(MRW_SPLIT_MASK) <= (MRW_OFFSET_MASK) ? 1 : -1];
+ 127: 
+ 128: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 129: 	unsigned char *data, size_t len, int writeflag, int misc_flags);
+ 130: 
+ 183: int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 184: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+ 185: {
+ 186: 	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+ 187: 		size_t granule = (size_t) MRW_SPLIT_MASK + 1;
+ 188: 		size_t offset = (size_t) (vaddr & MRW_SPLIT_MASK);
+ 189: 
+ 190: 		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+ 191: 		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+ 192: 		    the loop and hand the whole thing to the worker.  The subtraction
+ 193: 		    cannot wrap, because offset < granule always.
+ 194: 
+ 195: 		    STATED EXACTLY, because the first version of this comment implied more
+ 196: 		    than it delivers: this form does not SERVICE such a length, it declines
+ 197: 		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+ 198: 		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+ 199: 		    at two million chunks.  No caller passes anything remotely like it (the
+ 200: 		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+ 201: 		    and filed rather than handled.  */
+ 202: 		while (len > granule - offset) {
+ 203: 			size_t head = granule - offset;
+ 204: 
+ 205: 			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+ 206: 			    writeflag, misc_flags)) {
+ 207: 				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+ 208: 				    THAT: the worker zeroes only the chunk IT was given, so a
+ 209: 				    failure before the last chunk used to leave the caller's
+ 210: 				    remaining bytes untouched -- uninitialised host stack, for
+ 211: 				    a caller that ignores the return value.  Unsplit, one call
+ 212: 				    covered the whole length.  Zero the rest here so the
+ 213: 				    guarantee is the same as it was.  */
+ 214: 				if (writeflag == MEM_READ)
+ 215: 					memset(data, 0, len);
+ 216: 				return MEMORY_ACCESS_FAILED;
+ 217: 			}
+ 218: 
+ 219: 			vaddr += head;
+ 220: 			data += head;
+ 221: 			len -= head;
+ 222: 			offset = 0;
+ 223: 		}
+ 224: 	}
+ 225: 
+ 226: 	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+ 227: }
+ 228: 
+ 229: 
+ 230: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 231: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+ 232: {
+ 233: 	const int offset_mask = MRW_OFFSET_MASK;
+ 234: 
+ 235: 	int ok = 2;
+ 236: 	uint64_t paddr;
+ 237: 	int cache, no_exceptions, offset;
+ 238: 	unsigned char *memblock;
+ 239: 	int dyntrans_device_danger = 0;
+ 240: 
+ 241: 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+ 242: 	cache = misc_flags & CACHE_FLAGS_MASK;
+ 243: 
+ 244: 
+ 245: 	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+ 246: 		paddr = vaddr;
+ 247: 	} else {
+ 248: 		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+ 249: 		    (writeflag? FLAG_WRITEFLAG : 0) +
+ 250: 		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+ 251: 		    + (misc_flags & MEMORY_USER_ACCESS)
+ 252: 		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+ 253: 
+ 254: 		/*
+ 255: 		 *  If the translation caused an exception, or was invalid in
+ 256: 		 *  some way, then simply return without doing the memory
+ 257: 		 *  access:
+ 258: 		 */
+ 259: 		if (!ok) {
+ 260: 			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+ 261: 			    the caller's read buffer untouched; zero it so
+ 262: 			    callers that ignore the return value (e.g. the DEC
+ 263: 			    PROM string helpers) consume deterministic 0 bytes
+ 264: 			    instead of uninitialised host stack. Same zero-fill
+ 265: 			    ethos as the failed-device-read path (#95).  */
+ 266: 			if (writeflag == MEM_READ)
+ 267: 				memset(data, 0, len);
+ 268: 			return MEMORY_ACCESS_FAILED;
+ 269: 		}
+ 270: 	}
+ 271: 
+ 272: 	/*
+ 273: 	 *  #250: data write-watchpoint. Checked here, before the device /
+ 274: 	 *  cache / RAM dispatch (several of which return early �?" notably the
+ 275: 	 *  R3000 cached path via memory_cache_R3000()), so every store that
+ 276: 	 *  reaches this slow path is covered. Watched pages are kept off the
+ 277: 	 *  fast store table by update_translation_table(), and R3000 cached
+ 278: 	 *  data already comes through here. Show the store (writer pc, target,
+ 279: 	 *  width, value) and request entry into the debugger after the current
+ 430: 	/*
+ 431: 	 *  Memory mapped device?
+ 432: 	 *
+ 433: 	 *  TODO: if paddr < base, but len enough, then the device should
+ 434: 	 *  still be written to!
+ 435: 	 */
+ 436: 	if (paddr >= mem->mmap_dev_minaddr && paddr < mem->mmap_dev_maxaddr) {
+ 437: 		uint64_t orig_paddr = paddr;
+ 438: 		int i, start, end, res;
+ 478: 		/*  Scan through all devices:  */
+ 479: 		do {
+ 480: 			if (paddr >= mem->devices[i].baseaddr &&
+ 481: 			    paddr < mem->devices[i].endaddr) {
+ 482: 				/*  Found a device, let's access it:  */
+ 483: 				mem->last_accessed_device = i;
+ 484: 
+ 485: 				/*  #95: zero the caller's buffer up front on a read
+ 486: 				    so a device handler that fills only part of it --
+ 487: 				    or whose access is len-clamped just below -- can
+ 488: 				    never hand back uninitialised host memory to the
+ 489: 				    guest.  Root-cause fix for the uninit-read class
+ 490: 				    (cf. per-device #91/#93/#94).  */
+ 491: 				if (writeflag == MEM_READ)
+ 492: 					memset(data, 0, len);
+ 493: 
+ 494: 				paddr -= mem->devices[i].baseaddr;
+ 495: 				if (paddr + len > mem->devices[i].length) {
+ 496: 					/*  Note the truncation per the
+ 497: 					    warn-loudly ethos, but only at
+ 498: 					    debug verbosity (-v) and at most
+ 499: 					    8 times (single-threaded), since
+ 500: 					    probing at the end of a device's
+ 501: 					    mapped range is common and benign
+ 502: 					    (cf. the unwarned zero-fill in
+ 587: 					res = mem->devices[i].f(cpu, mem, paddr,
+ 588: 					    data, len, writeflag,
+ 589: 					    mem->devices[i].extra);
+ 590: 
+ 591: 					if (running_before_device_access && !cpu->running)
+ 592: 						return MEMORY_ACCESS_FAILED;
+ 593: 				}
+ 594: 
+ 595: 				if (res == 0)
+ 596: 					res = -1;
+ 597: 
+ 598: 				/*
+ 599: 				 *  If accessing the memory mapped device
+ 600: 				 *  failed, then return with an exception.
+ 601: 				 *  (Architecture specific.)
+ 602: 				 */
+ 603: 				if (res <= 0 && !no_exceptions) {
+ 604: 					debug("[ %s device '%s' addr %08lx "
+ 605: 					    "failed ]\n", writeflag?
+ 606: 					    "writing to" : "reading from",
+ 607: 					    mem->devices[i].name, (long)paddr);
+ 608: #ifdef MEM_MIPS
+ 609: 					mips_cpu_exception(cpu,
+ 610: 					    cache == CACHE_INSTRUCTION?
+ 611: 					    EXCEPTION_IBE : EXCEPTION_DBE,
+ 612: 					    0, vaddr, 0, 0, 0, 0);
+ 613: #endif
+ 614: #ifdef MEM_M88K
+ 615: 					/*  TODO: This is enough for
+ 616: 					    OpenBSD/mvme88k's badaddr()
+ 617: 					    implementation... but the
+ 618: 					    faulting address should probably
+ 619: 					    be included somewhere too!  */
+ 620: 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+ 621: 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+ 622: 					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+ 623: #endif
+ 624: 					return MEMORY_ACCESS_FAILED;
+ 625: 				}
+ 626: 				goto do_return_ok;
+ 627: 			}
+ 628: 
+ 629: 			if (paddr < mem->devices[i].baseaddr)
+ 630: 				end = i - 1;
+ 631: 			if (paddr >= mem->devices[i].endaddr)
+ 632: 				start = i + 1;
+ 633: 			i = (start + end) >> 1;
+ 634: 		} while (start <= end);
+ 635: 	}
+ 636: 
+ 637: 
+ 638: #ifdef MEM_MIPS
+ 639: 	/*
+ 640: 	 *  Data and instruction cache emulation:
+ 641: 	 */
+ 642: 
+ 643: 	switch (cpu->cd.mips.cpu_type.mmu_model) {
+ 655: 		/*  R4000 etc  */
+ 656: 		/*  TODO  */
+ 657: 		;
+ 658: 	}
+ 659: #endif	/*  MEM_MIPS  */
+ 660: 
+ 661: 
+ 662: 	/*  Outside of physical RAM?  */
+ 663: 	if (paddr >= mem->physical_max) {
+ 664: #ifdef MEM_MIPS
+ 665: 		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+ 666: 			/*  Ok, this is PROM stuff  */
+ 667: 		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+ 668: 			/*  Sprite reads from this area of memory...  */
+ 669: 			/*  TODO: is this still correct?  */
+ 670: 			if (writeflag == MEM_READ)
+ 671: 				memset(data, 0, len);
+ 672: 			goto do_return_ok;
+ 673: 		} else
+ 674: #endif /* MIPS */
+ 675: 		{
+ 676: 			if (paddr >= mem->physical_max && !no_exceptions)
+ 677: 				if (memory_warn_about_unimplemented_addr
+ 678: 				    (cpu, mem, writeflag, paddr, len))
+ 679: 					return MEMORY_ACCESS_FAILED;
+ 680: 
+ 681: 			if (writeflag == MEM_READ) {
+ 682: 				/*  Return all zeroes? (Or 0xff? TODO)  */
+ 683: 				memset(data, 0, len);
+ 684: 
+ 685: #if 0
+ 686: /*
+ 687:  *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+ 688:  *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+ 689:  *  the amount of RAM on some machine.
+ 690:  *
+ 691:  *  TODO: Figure out if it is not needed anymore, and remove it completely.
+ 692:  */
+ 693: #ifdef MEM_MIPS
+ 694: 				/*
+ 695: 				 *  For real data/instruction accesses, cause
+ 696: 				 *  an exceptions on an illegal read:
+ 697: 				 */
+ 698: 				if (cache != CACHE_NONE && !no_exceptions &&
+ 699: 				    paddr >= mem->physical_max &&
+ 700: 				    paddr < mem->physical_max+1048576) {
+ 701: 					mips_cpu_exception(cpu,
+ 702: 					    EXCEPTION_DBE, 0, vaddr, 0,
+ 703: 					    0, 0, 0);
+ 704: 				}
+ 705: #endif  /*  MEM_MIPS  */
+ 706: #endif
+ 707: 			}
+ 708: 
+ 709: 			/*  Hm? Shouldn't there be a DBE exception for
+ 710: 			    invalid writes as well?  TODO  */
+ 711: 
+ 712: 			goto do_return_ok;
+ 713: 		}
+ 714: 	}
+
+[32m succeeded in 438ms:[0m
+  30:  *  Note: This might be a bit hard to follow, if you are reading this source
+  31:  *  code for the first time. It is basically a hack to implement "templates"
+  32:  *  with normal C code, by using suitable defines/macros, and then including
+  33:  *  this file.
+  34:  */
+  35: 
+  36: 
+  37: #ifndef STATIC_STUFF
+  38: #define	STATIC_STUFF
+  39: /*
+  40:  *  gather_statistics():
+  41:  */
+  42: static void gather_statistics(struct cpu *cpu)
+  43: {
+  44: 	char ch, buf[60];
+  45: 	struct DYNTRANS_IC *ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+  46: 	int i = 0;
+  47: 	uint64_t a;
+  48: 	int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - (size_t)
+  49: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page) / sizeof(struct DYNTRANS_IC);
+  50: 
+  51: 	if (cpu->machine->statistics.file == NULL) {
+  52: 		fatal("statistics gathering with no filename set is"
+  53: 		    " meaningless\n");
+  54: 		return;
+  55: 	}
+  56: 
+  57: 	/*  low_pc must be within the page!  */
+  58: 	if (low_pc < 0 || low_pc > DYNTRANS_IC_ENTRIES_PER_PAGE)
+  59: 		return;
+  60: 
+  61: 	buf[0] = '\0';
+  62: 
+  63: 	while ((ch = cpu->machine->statistics.fields[i]) != '\0') {
+  64: 		if (i != 0)
+  65: 			strlcat(buf, " ", sizeof(buf));
+  66: 
+  67: 		switch (ch) {
+  68: 		case 'i':
+  69: 			snprintf(buf + strlen(buf), sizeof(buf),
+  70: 			    "%p", (void *)ic->f);
+  71: 			break;
+  72: 		case 'p':
+  73: 			/*  Physical program counter address:  */
+  74: 			cpu->cd.DYNTRANS_ARCH.cur_physpage = (struct DYNTRANS_TC_PHYSPAGE *)
+  75: 			    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+  76: 			a = cpu->cd.DYNTRANS_ARCH.cur_physpage->physaddr;
+  77: 			a &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+  78: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  79: 			a += low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT;
+  80: 			if (cpu->is_32bit)
+  81: 				snprintf(buf + strlen(buf), sizeof(buf),
+  82: 				    "0x%08" PRIx32, (uint32_t)a);
+  83: 			else
+  84: 				snprintf(buf + strlen(buf), sizeof(buf),
+  85: 				    "0x%016" PRIx64, (uint64_t)a);
+  86: 			break;
+  87: 		case 'v':
+  88: 			/*  Virtual program counter address:  */
+  89: 			a = cpu->pc;
+  90: 			a &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+  91: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  92: 			a += low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT;
+  93: 			if (cpu->is_32bit)
+  94: 				snprintf(buf + strlen(buf), sizeof(buf),
+  95: 				    "0x%08" PRIx32, (uint32_t)a);
+  96: 			else
+  97: 				snprintf(buf + strlen(buf), sizeof(buf),
+  98: 				    "0x%016" PRIx64, (uint64_t)a);
+  99: 			break;
+ 100: 		}
+ 101: 		i++;
+ 102: 	}
+ 103: 
+ 104: 	fprintf(cpu->machine->statistics.file, "%s\n", buf);
+ 105: }
+ 106: 
+ 107: 
+ 108: #define S		gather_statistics(cpu)
+ 109: 
+ 110: 
+ 111: #if 1
+ 112: 
+ 113: /*  The normal instruction execution core:  */
+ 114: #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic);
+ 115: 
+ 116: #else
+ 117: 
+ 118: /*  For heavy debugging:  */
+ 119: #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++;	\
+ 120: 		{	\
+ 121: 			int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - \
+ 122: 			    (size_t)cpu->cd.DYNTRANS_ARCH.cur_ic_page) / \
+ 123: 			    sizeof(struct DYNTRANS_IC);			\
+ 124: 			printf("cur_ic_page=%p ic=%p (low_pc=0x%x)\n",	\
+ 125: 			    cpu->cd.DYNTRANS_ARCH.cur_ic_page,		\
+ 126: 			    ic, low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT); \
+ 127: 		} \
+ 128: 		ic->f(cpu, ic);
+ 129: 
+ 130: #endif
+ 131: 
+ 132: /*  static long long nr_of_I_calls = 0;  */
+ 133: 
+ 134: /*  Temporary hack for finding NULL bugs:  */
+ 135: /*  #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; 			\
+ 136: 		nr_of_I_calls ++;					\
+ 137: 		if (ic->f == NULL) {					\
+ 138: 			int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - \
+ 139: 			    (size_t)cpu->cd.DYNTRANS_ARCH.cur_ic_page) / \
+ 140: 			    sizeof(struct DYNTRANS_IC);			\
+ 141: 			cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) << \
+ 142: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT);		\
+ 143: 			cpu->pc += (low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT);\
+ 144: 			printf("Crash at %016" PRIx64"\n", cpu->pc);	\
+ 145: 			printf("nr of I calls: %lli\n", nr_of_I_calls);	\
+ 146: 			printf("Next ic = %p\n", cpu->cd.		\
+ 147: 				DYNTRANS_ARCH.next_ic);			\
+ 148: 			printf("cur ic page = %p\n", cpu->cd.		\
+ 149: 				DYNTRANS_ARCH.cur_ic_page);		\
+ 150: 			cpu->running = 0;				\
+ 151: 			return 0;					\
+ 152: 		}							\
+ 153: 		ic->f(cpu, ic);  */
+ 154: 
+ 155: /*  Temporary hack for MIPS, to hunt for 32-bit/64-bit sign-extension bugs:  */
+ 156: /*  #define I		{ int k; for (k=1; k<=31; k++)	\
+ 157: 	cpu->cd.mips.gpr[k] = (int32_t)cpu->cd.mips.gpr[k];\
+ 158: 	if (cpu->cd.mips.gpr[0] != 0) {			\
+ 159: 		fatal("NOOOOOO\n"); exit(1);		\
+ 160: 	}						\
+ 161: 	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic); }
+ 162: */
+ 163: #endif	/*  STATIC STUFF  */
+ 164: 
+ 165: 
+ 166: 
+ 167: #ifdef	DYNTRANS_RUN_INSTR_DEF
+ 168: /*
+ 169:  *  XXX_run_instr():
+ 170:  *
+ 171:  *  Execute one or more instructions on a specific CPU, using dyntrans.
+ 172:  *  (For dualmode archs, this function is included twice.)
+ 173:  *
+ 174:  *  Return value is the number of instructions executed during this call,
+ 175:  *  0 if no instructions were executed.
+ 176:  */
+ 870: #else
+ 871: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+ 872: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+ 873: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+ 874: 	uint32_t x1, x2, x3;
+ 875: 	struct DYNTRANS_L2_64_TABLE *l2;
+ 876: 	struct DYNTRANS_L3_64_TABLE *l3;
+ 877: 
+ 878: 	x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+ 879: 	x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+ 880: 	x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+ 881: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+ 882: 	l3 = l2->l3[x2];
+ 883: 	ppp = l3->phys_page[x3];
+ 884: 	if (ppp != NULL)
+ 885: 		goto have_it;
+ 886: #endif
+ 887: 
+ 888: 	DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);
+ 889: 	return;
+ 890: 
+ 891: 	/*  Quick return path:  */
+ 892: have_it:
+ 893: 	cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+ 894: 	cpu->cd.DYNTRANS_ARCH.next_ic = cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+ 895: 	    DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+ 896: 
+ 897: 	/*  printf("cached_pc=0x%016" PRIx64"  pagenr=%lli  table_index=%lli, "
+ 898: 	    "physpage_ofs=0x%016" PRIx64"\n", (uint64_t)cached_pc, (long long)
+ 899: 	    pagenr, (long long)table_index, (uint64_t)physpage_ofs);  */
+ 900: }
+ 901: #endif	/*  DYNTRANS_PC_TO_POINTERS_FUNC  */
+ 902: 
+ 903: 
+ 904: 
+ 905: #ifdef DYNTRANS_INIT_TABLES
+ 906: 
+ 907: /*  forward declaration of to_be_translated and end_of_page:  */
+ 908: static void instr(to_be_translated)(struct cpu *, struct DYNTRANS_IC *);
+ 909: static void instr(end_of_page)(struct cpu *,struct DYNTRANS_IC *);
+ 910: #ifdef DYNTRANS_DUALMODE_32
+ 911: static void instr32(to_be_translated)(struct cpu *, struct DYNTRANS_IC *);
+ 912: static void instr32(end_of_page)(struct cpu *,struct DYNTRANS_IC *);
+ 913: #endif
+ 914: 
+ 915: #ifdef DYNTRANS_DUALMODE_32
+ 916: #define TO_BE_TRANSLATED    ( cpu->is_32bit? instr32(to_be_translated) : \
+ 917: 			      instr(to_be_translated) )
+ 918: #else
+ 919: #define TO_BE_TRANSLATED    ( instr(to_be_translated) )
+ 920: #endif
+ 921: 
+ 922: #ifdef DYNTRANS_DELAYSLOT
+ 923: static void instr(end_of_page2)(struct cpu *,struct DYNTRANS_IC *);
+ 924: #ifdef DYNTRANS_DUALMODE_32
+ 925: static void instr32(end_of_page2)(struct cpu *,struct DYNTRANS_IC *);
+ 926: #endif
+ 927: #endif
+ 928: 
+ 929: /*
+ 930:  *  XXX_init_tables():
+ 931:  *
+ 932:  *  Initializes the default translation page (for newly allocated pages), and
+ 933:  *  for 64-bit emulation it also initializes 64-bit dummy tables and pointers.
+ 934:  */
+ 935: void DYNTRANS_INIT_TABLES(struct cpu *cpu)
+ 936: {
+ 937: #ifndef MODE32
+ 938: 	struct DYNTRANS_L2_64_TABLE *dummy_l2;
+ 939: 	struct DYNTRANS_L3_64_TABLE *dummy_l3;
+ 940: 	int x1, x2;
+ 941: #endif
+ 942: 	int i;
+ 943: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+ 944: 
+ 945: 	CHECK_ALLOCATION(ppp =
+ 946: 	    (struct DYNTRANS_TC_PHYSPAGE *) malloc(sizeof(struct DYNTRANS_TC_PHYSPAGE)));
+ 947: 
+ 948: 	ppp->next_ofs = 0;
+
+[35m[3mcodex[0m[0m
+The declined load leaves its destination unchanged: the helper returns before copying the zeroed read buffer. The declined fetch retries the same PC and reaches the second exit. I also found a qualification to P4: an external warning helper can return failure before the out-of-RAM zero-fill path.
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'memory_warn_about_unimplemented_addr|alpha.*exception|cpu->pc|flags|FLAG_INSTR|to_be_translated|PC_TO_POINTERS' -- GXEMUL-SEC/src/cpus/memory_alpha.c GXEMUL-SEC/src/cpus/memory_rw.c GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c GXEMUL-SEC/src/cpus/cpu_dyntrans.c"[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; if (($auditLine -ge 177 -and $auditLine -le 211) -or ($auditLine -ge 320 -and $auditLine -le 365) -or ($auditLine -ge 486 -and $auditLine -le 540) -or ($auditLine -ge 945 -and $auditLine -le 995)) { '"'{0,4}: {1}' -f "'$auditLine, $_ } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 105ms:[0m
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:89:			a = cpu->pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:141:			cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) << \
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:143:			cpu->pc += (low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT);\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:144:			printf("Crash at %016" PRIx64"\n", cpu->pc);	\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:185:	DYNTRANS_PC_TO_POINTERS32(cpu);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:187:	DYNTRANS_PC_TO_POINTERS(cpu);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:190:	DYNTRANS_PC_TO_POINTERS(cpu);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:239:			if (!(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:265:	cached_pc = cpu->pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:296:				    cpu->machine, cpu, instr, 1, cpu->pc);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:311:					cpu->pc += len;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:313:					    cpu, instr, 1, cpu->pc);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:315:					cpu->pc -= len;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:398:		cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:400:		cpu->pc += (low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:403:		cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:405:		cpu->pc += (DYNTRANS_IC_ENTRIES_PER_PAGE <<
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:410:		cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:412:		cpu->pc += ((DYNTRANS_IC_ENTRIES_PER_PAGE + 1) <<
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:453:		    && !(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:589: *  Create a default page (with just pointers to instr(to_be_translated)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:616:#ifdef DYNTRANS_PC_TO_POINTERS_FUNC
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:620: *  Generic case. See DYNTRANS_PC_TO_POINTERS_FUNC below.
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:622:void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:629:	    cached_pc = cpu->pc, physaddr = 0;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:680:			    cpu, vaddr, &paddr, FLAG_INSTR);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:694:			fatal("!! cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:698:			cached_pc = cpu->pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:721:				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:722:				    FLAG_INSTR);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:726:			    "paddr = 0x%x\n", (int)cpu->pc, (int)paddr);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:727:			fatal("!? cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:800:		/*  Allocate a default page, with to_be_translated entries:  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:852: *  DYNTRANS_PC_TO_POINTERS_GENERIC above for the generic case.
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:854:void DYNTRANS_PC_TO_POINTERS_FUNC(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:861:	    cached_pc = cpu->pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:888:	DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:901:#endif	/*  DYNTRANS_PC_TO_POINTERS_FUNC  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:907:/*  forward declaration of to_be_translated and end_of_page:  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:908:static void instr(to_be_translated)(struct cpu *, struct DYNTRANS_IC *);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:911:static void instr32(to_be_translated)(struct cpu *, struct DYNTRANS_IC *);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:916:#define TO_BE_TRANSLATED    ( cpu->is_32bit? instr32(to_be_translated) : \
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:917:			      instr(to_be_translated) )
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:919:#define TO_BE_TRANSLATED    ( instr(to_be_translated) )
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1013:	vaddr_page, int flags)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1022:	if (flags & JUST_MARK_AS_NON_WRITABLE) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1057:	if (flags & JUST_MARK_AS_NON_WRITABLE) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1201: *  flags should be one of
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1215:void DYNTRANS_INVALIDATE_TC(struct cpu *cpu, uint64_t addr, int flags)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1228:	if (flags & INVALIDATE_VADDR) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1232:		DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, addr_page, flags);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1245:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1259:	if (flags & INVALIDATE_ALL && flags & INVALIDATE_VADDR_UPPER4) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1276:	if (flags & INVALIDATE_ALL) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1293:	if (!(flags & INVALIDATE_PADDR))
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1303:			    flags);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1304:			if (flags & JUST_MARK_AS_NON_WRITABLE)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1324:void DYNTRANS_INVALIDATE_TC_CODE(struct cpu *cpu, uint64_t addr, int flags)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1336:	/*  printf("DYNTRANS_INVALIDATE_TC_CODE addr=0x%08x flags=%i\n",
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1337:	    (int)addr, flags);  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1339:	if (flags & INVALIDATE_PADDR) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1397:		 *  entry can be set to "to_be_translated". This is slow in
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1455:			if (flags & INVALIDATE_ALL ||
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1456:			    (flags & INVALIDATE_PADDR && paddr_page == addr) ||
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1457:			    (flags & INVALIDATE_VADDR && vaddr_page == addr)) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1800:		MODE_uint_t curpc = cpu->pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1835:				    (uint32_t)cpu->pc);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1839:				    (uint64_t)cpu->pc);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1940:		uint64_t baseaddr = cpu->pc;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2006:		    "UNIMPLEMENTED instruction at 0x%" PRIx32, (uint32_t)cpu->pc);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2009:		    "UNIMPLEMENTED instruction at 0x%" PRIx64, (uint64_t)cpu->pc);
+GXEMUL-SEC/src/cpus/memory_rw.c:52: *	misc_flags	CACHE_{NONE,DATA,INSTRUCTION} | other flags
+GXEMUL-SEC/src/cpus/memory_rw.c:129:	unsigned char *data, size_t len, int writeflag, int misc_flags);
+GXEMUL-SEC/src/cpus/memory_rw.c:184:	unsigned char *data, size_t len, int writeflag, int misc_flags)
+GXEMUL-SEC/src/cpus/memory_rw.c:186:	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:206:			    writeflag, misc_flags)) {
+GXEMUL-SEC/src/cpus/memory_rw.c:226:	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+GXEMUL-SEC/src/cpus/memory_rw.c:231:	unsigned char *data, size_t len, int writeflag, int misc_flags)
+GXEMUL-SEC/src/cpus/memory_rw.c:241:	no_exceptions = misc_flags & NO_EXCEPTIONS;
+GXEMUL-SEC/src/cpus/memory_rw.c:242:	cache = misc_flags & CACHE_FLAGS_MASK;
+GXEMUL-SEC/src/cpus/memory_rw.c:245:	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+GXEMUL-SEC/src/cpus/memory_rw.c:251:		    + (misc_flags & MEMORY_USER_ACCESS)
+GXEMUL-SEC/src/cpus/memory_rw.c:252:		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+GXEMUL-SEC/src/cpus/memory_rw.c:296:		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+GXEMUL-SEC/src/cpus/memory_rw.c:528:				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+GXEMUL-SEC/src/cpus/memory_rw.c:532:					if (!(mem->devices[i].flags &
+GXEMUL-SEC/src/cpus/memory_rw.c:549:					if (mem->devices[i].flags &
+GXEMUL-SEC/src/cpus/memory_rw.c:584:				if (!no_exceptions || (mem->devices[i].flags &
+GXEMUL-SEC/src/cpus/memory_rw.c:646:		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+GXEMUL-SEC/src/cpus/memory_rw.c:677:				if (memory_warn_about_unimplemented_addr
+GXEMUL-SEC/src/cpus/memory_rw.c:747:		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+GXEMUL-SEC/src/cpus/memory_rw.c:775:		    len - len_head, writeflag, misc_flags);
+GXEMUL-SEC/src/cpus/memory_alpha.c:44:	uint64_t *return_paddr, int flags)
+GXEMUL-SEC/src/cpus/memory_alpha.c:183:	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+
+[32m succeeded in 191ms:[0m
+ 177: int DYNTRANS_RUN_INSTR_DEF(struct cpu *cpu)
+ 178: {
+ 179: 	MODE_uint_t cached_pc;
+ 180: 	int low_pc, n_instrs;
+ 181: 
+ 182: 	/*  Ugly... fix this some day.  */
+ 183: #ifdef DYNTRANS_DUALMODE_32
+ 184: #ifdef MODE32
+ 185: 	DYNTRANS_PC_TO_POINTERS32(cpu);
+ 186: #else
+ 187: 	DYNTRANS_PC_TO_POINTERS(cpu);
+ 188: #endif
+ 189: #else
+ 190: 	DYNTRANS_PC_TO_POINTERS(cpu);
+ 191: #endif
+ 192: 
+ 193: 	cpu->wants_to_idle = false;
+ 194: 
+ 195: 	/*
+ 196: 	 *  Interrupt assertion?  (This is _below_ the initial PC to pointer
+ 197: 	 *  conversion; if the conversion caused an exception of some kind
+ 198: 	 *  then interrupts are probably disabled, and the exception will get
+ 199: 	 *  priority over device interrupts.)
+ 200: 	 *
+ 201: 	 *  TODO: Turn this into a family-specific function somewhere...
+ 202:  	 */
+ 203: 
+ 204: 	/*  Note: Do not cause interrupts while single-stepping. It is
+ 205: 	    so horribly annoying.  */
+ 206: 	if (!single_step) {
+ 207: #ifdef DYNTRANS_ARM
+ 208: 		if (cpu->cd.arm.irq_asserted && !(cpu->cd.arm.cpsr & ARM_FLAG_I))
+ 209: 			arm_exception(cpu, ARM_EXCEPTION_IRQ);
+ 210: #endif
+ 211: #ifdef DYNTRANS_M88K
+ 320: 
+ 321: 		if (cpu->machine->statistics.enabled)
+ 322: 			S;
+ 323: 
+ 324: 		/*  Execute just one instruction:  */
+ 325: 		I;
+ 326: 
+ 327: 		n_instrs = 1;
+ 328: 	} else if (cpu->machine->statistics.enabled) {
+ 329: 		/*  Gather statistics while executing multiple instructions:  */
+ 330: 		n_instrs = 0;
+ 331: 		for (;;) {
+ 332: 			struct DYNTRANS_IC *ic;
+ 333: 
+ 334: 			S; I; S; I; S; I; S; I; S; I; S; I;
+ 335: 			S; I; S; I; S; I; S; I; S; I; S; I;
+ 336: 			S; I; S; I; S; I; S; I; S; I; S; I;
+ 337: 			S; I; S; I; S; I; S; I; S; I; S; I;
+ 338: 
+ 339: 			cpu->n_translated_instrs += 24;
+ 340: 			if (cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT)
+ 341: 				break;
+ 342: 		}
+ 343: 	} else {
+ 344: 		/*
+ 345: 		 *  Execute multiple instructions:
+ 346: 		 *
+ 347: 		 *  (This is the core dyntrans loop.)
+ 348: 		 */
+ 349: 		n_instrs = 0;
+ 350: 
+ 351: 		for (;;) {
+ 352: 			struct DYNTRANS_IC *ic;
+ 353: 
+ 354: 			I; I; I; I; I;   I; I; I; I; I;
+ 355: 			I; I; I; I; I;   I; I; I; I; I;
+ 356: 			I; I; I; I; I;   I; I; I; I; I;
+ 357: 			I; I; I; I; I;   I; I; I; I; I;
+ 358: 			I; I; I; I; I;   I; I; I; I; I;
+ 359: 
+ 360: 			I; I; I; I; I;   I; I; I; I; I;
+ 361: 
+ 362: 			I; I; I; I; I;   I; I; I; I; I;
+ 363: 			I; I; I; I; I;   I; I; I; I; I;
+ 364: 			I; I; I; I; I;   I; I; I; I; I;
+ 365: 			I; I; I; I; I;   I; I; I; I; I;
+ 486: #if defined(DYNTRANS_ALPHA)
+ 487: 	    6
+ 488: #else
+ 489: #if defined(DYNTRANS_SH) || defined(DYNTRANS_M88K) || defined(DYNTRANS_RISCV) || defined(DYNTRANS_I960)
+ 490: 	    8	/*  For 32-bit and 64-bit SuperH, M88K, i960, and RISC-V  */
+ 491: #else
+ 492: 	    4	/*  Default value for most archs  */
+ 493: #endif
+ 494: #endif
+ 495: 	    ;
+ 496: 
+ 497: 	if (n_args >= 0 && n_args <= n_args_to_print) {
+ 498: 		print_dots = 0;
+ 499: 		n_args_to_print = n_args;
+ 500: 	}
+ 501: 
+ 502: #ifdef DYNTRANS_M88K
+ 503: 	/*  Special hack for M88K userspace:  */
+ 504: 	if (!(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE))
+ 505: 		show_symbolic_function_name = 0;
+ 506: #endif
+ 507: 
+ 508: 
+ 509: 	/*
+ 510: 	 *  TODO: The type of each argument should be taken from the symbol
+ 511: 	 *  table, in some way.
+ 512: 	 *
+ 513: 	 *  The code here does a kind of "heuristic guess" regarding what the
+ 514: 	 *  argument values might mean. Sometimes the output looks weird, but
+ 515: 	 *  usually it looks good enough.
+ 516: 	 *
+ 517: 	 *  Print ".." afterwards to show that there might be more arguments
+ 518: 	 *  than were passed in register.
+ 519: 	 */
+ 520: 	for (x=0; x<n_args_to_print; x++) {
+ 521: 		int64_t d = cpu->cd.DYNTRANS_ARCH.
+ 522: #ifdef DYNTRANS_ALPHA
+ 523: 		    r[ALPHA_A0
+ 524: #endif
+ 525: #ifdef DYNTRANS_ARM
+ 526: 		    r[0
+ 527: #endif
+ 528: #ifdef DYNTRANS_I960
+ 529: 		    r[I960_G0
+ 530: #endif
+ 531: #ifdef DYNTRANS_MIPS
+ 532: 		    gpr[MIPS_GPR_A0
+ 533: #endif
+ 534: #ifdef DYNTRANS_M88K
+ 535: 		    r[2		/*  r2..r9  */
+ 536: #endif
+ 537: #ifdef DYNTRANS_PPC
+ 538: 		    gpr[3
+ 539: #endif
+ 540: #ifdef DYNTRANS_RISCV
+ 945: 	CHECK_ALLOCATION(ppp =
+ 946: 	    (struct DYNTRANS_TC_PHYSPAGE *) malloc(sizeof(struct DYNTRANS_TC_PHYSPAGE)));
+ 947: 
+ 948: 	ppp->next_ofs = 0;
+ 949: 	ppp->translations_bitmap = 0;
+ 950: 	ppp->translation_ranges_ofs = 0;
+ 951: 	/*  ppp->physaddr is filled in by the page allocator  */
+ 952: 
+ 953: 	for (i=0; i<DYNTRANS_IC_ENTRIES_PER_PAGE; i++)
+ 954: 		ppp->ics[i].f = TO_BE_TRANSLATED;
+ 955: 
+ 956: 	/*  End-of-page:  */
+ 957: 	ppp->ics[DYNTRANS_IC_ENTRIES_PER_PAGE + 0].f =
+ 958: #ifdef DYNTRANS_DUALMODE_32
+ 959: 	    cpu->is_32bit? instr32(end_of_page) :
+ 960: #endif
+ 961: 	    instr(end_of_page);
+ 962: 
+ 963: 	/*  End-of-page-2, for delay-slot architectures:  */
+ 964: #ifdef DYNTRANS_DELAYSLOT
+ 965: 	ppp->ics[DYNTRANS_IC_ENTRIES_PER_PAGE + 1].f =
+ 966: #ifdef DYNTRANS_DUALMODE_32
+ 967: 	    cpu->is_32bit? instr32(end_of_page2) :
+ 968: #endif
+ 969: 	    instr(end_of_page2);
+ 970: #endif
+ 971: 
+ 972: 	cpu->cd.DYNTRANS_ARCH.physpage_template = ppp;
+ 973: 
+ 974: 
+ 975: 	/*  Prepare 64-bit virtual address translation tables:  */
+ 976: #ifndef MODE32
+ 977: 	if (cpu->is_32bit)
+ 978: 		return;
+ 979: 
+ 980: 	dummy_l2 = (struct DYNTRANS_L2_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L2_64_TABLE));
+ 981: 	dummy_l3 = (struct DYNTRANS_L3_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L3_64_TABLE));
+ 982: 
+ 983: 	cpu->cd.DYNTRANS_ARCH.l2_64_dummy = dummy_l2;
+ 984: 	cpu->cd.DYNTRANS_ARCH.l3_64_dummy = dummy_l3;
+ 985: 
+ 986: 	for (x1 = 0; x1 < (1 << DYNTRANS_L1N); x1 ++)
+ 987: 		cpu->cd.DYNTRANS_ARCH.l1_64[x1] = dummy_l2;
+ 988: 
+ 989: 	for (x2 = 0; x2 < (1 << DYNTRANS_L2N); x2 ++)
+ 990: 		dummy_l2->l3[x2] = dummy_l3;
+ 991: #endif
+ 992: }
+ 993: #endif	/*  DYNTRANS_INIT_TABLES  */
+ 994: 
+ 995: 
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$auditPath = '"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$auditLine = 0; Get-Content -LiteralPath $auditPath | ForEach-Object { $auditLine++; if ($auditLine -ge 1790 -and $auditLine -le 2040) { '"'{0,4}: {1}' -f "'$auditLine, $_ } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 179ms:[0m
+1790: 
+1791: 
+1792: /*****************************************************************************/
+1793: 
+1794: 
+1795: #ifdef DYNTRANS_TO_BE_TRANSLATED_HEAD
+1796: 	/*
+1797: 	 *  Check for breakpoints.
+1798: 	 */
+1799: 	if (!single_step_breakpoint && !cpu->translation_readahead) {
+1800: 		MODE_uint_t curpc = cpu->pc;
+1801: 		int i;
+1802: 		for (i=0; i<cpu->machine->breakpoints.n; i++)
+1803: 			if (curpc == (MODE_uint_t)
+1804: 			    cpu->machine->breakpoints.addr[i]) {
+1805: 				/*
+1806: 				 *  #248: count every hit, and honor a
+1807: 				 *  per-breakpoint ignore-count so that
+1808: 				 *  "breakpoint add addr, N" runs past the
+1809: 				 *  first N hits before stopping. Setting
+1810: 				 *  single_step_breakpoint (without single_step)
+1811: 				 *  makes the TAIL execute this instruction once
+1812: 				 *  and mark it for re-translation, so the check
+1813: 				 *  fires again on the next hit.
+1814: 				 */
+1815: 				cpu->machine->breakpoints.hitcount[i] ++;
+1816: 				if (cpu->machine->breakpoints.ignore_left[i] > 0
+1817: #ifdef DYNTRANS_DELAYSLOT
+1818: 				    && cpu->delay_slot == NOT_DELAYED
+1819: #endif
+1820: 				    ) {
+1821: 					cpu->machine->breakpoints.
+1822: 					    ignore_left[i] --;
+1823: 					single_step_breakpoint = 1;
+1824: 					break;
+1825: 				}
+1826: 				if (!cpu->machine->instruction_trace) {
+1827: 					int tmp_old_quiet_mode = quiet_mode;
+1828: 					quiet_mode = 0;
+1829: 					DISASSEMBLE(cpu, ib, 1, 0);
+1830: 					quiet_mode = tmp_old_quiet_mode;
+1831: 				}
+1832: #ifdef MODE32
+1833: 				fatal("BREAKPOINT: pc = 0x%" PRIx32"\n(The "
+1834: 				    "instruction has not yet executed.)\n",
+1835: 				    (uint32_t)cpu->pc);
+1836: #else
+1837: 				fatal("BREAKPOINT: pc = 0x%" PRIx64"\n(The "
+1838: 				    "instruction has not yet executed.)\n",
+1839: 				    (uint64_t)cpu->pc);
+1840: #endif
+1841: #ifdef DYNTRANS_DELAYSLOT
+1842: 				if (cpu->delay_slot != NOT_DELAYED)
+1843: 					fatal("ERROR! Breakpoint in a delay"
+1844: 					    " slot! Not yet supported.\n");
+1845: #endif
+1846: 				single_step_breakpoint = 1;
+1847: 				single_step = true;
+1848: 				goto stop_running_translated;
+1849: 			}
+1850: 	}
+1851: #endif	/*  DYNTRANS_TO_BE_TRANSLATED_HEAD  */
+1852: 
+1853: 
+1854: /*****************************************************************************/
+1855: 
+1856: 
+1857: #ifdef DYNTRANS_TO_BE_TRANSLATED_TAIL
+1858: 	/*
+1859: 	 *  If we end up here, then an instruction was translated. Let's mark
+1860: 	 *  the page as containing a translation at this part of the page.
+1861: 	 */
+1862: 
+1863: 	/*  Make sure cur_physpage is in synch:  */
+1864: 	cpu->cd.DYNTRANS_ARCH.cur_physpage = (struct DYNTRANS_TC_PHYSPAGE *)
+1865: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+1866: 
+1867: 	{
+1868: 		int x = addr & (DYNTRANS_PAGESIZE - 1);
+1869: 		int addr_per_translation_range = DYNTRANS_PAGESIZE / (8 *
+1870: 		    sizeof(cpu->cd.DYNTRANS_ARCH.cur_physpage->
+1871: 		    translations_bitmap));
+1872: 		x /= addr_per_translation_range;
+1873: 
+1874: 		cpu->cd.DYNTRANS_ARCH.cur_physpage->
+1875: 		    translations_bitmap |= ((uint32_t)1 << x);
+1876: 	}
+1877: 
+1878: 
+1879: 	/*
+1880: 	 *  Now it is time to check for combinations of instructions that can
+1881: 	 *  be converted into a single function call.
+1882: 	 *
+1883: 	 *  Note: Single-stepping or instruction tracing doesn't work with
+1884: 	 *  instruction combinations. For architectures with delay slots,
+1885: 	 *  we also ignore combinations if the delay slot is across a page
+1886: 	 *  boundary.
+1887: 	 */
+1888: 	if (!single_step && !single_step_breakpoint
+1889: 	    && !cpu->machine->instruction_trace
+1890: #ifdef DYNTRANS_DELAYSLOT
+1891: 	    && !in_crosspage_delayslot
+1892: #endif
+1893: 	    && cpu->cd.DYNTRANS_ARCH.combination_check != NULL
+1894: 	    && cpu->machine->allow_instruction_combinations) {
+1895: 		cpu->cd.DYNTRANS_ARCH.combination_check(cpu, ic,
+1896: 		    addr & (DYNTRANS_PAGESIZE - 1));
+1897: 	}
+1898: 
+1899: 	cpu->cd.DYNTRANS_ARCH.combination_check = NULL;
+1900: 
+1901: 	/*  An additional check, to catch some bugs:  */
+1902: 	if (ic->f == TO_BE_TRANSLATED) {
+1903: 		fatal("INTERNAL ERROR: ic->f not set!\n");
+1904: 		goto bad;
+1905: 	}
+1906: 	if (ic->f == NULL) {
+1907: 		fatal("INTERNAL ERROR: ic->f == NULL!\n");
+1908: 		goto bad;
+1909: 	}
+1910: 
+1911: 
+1912: 	/*
+1913: 	 *  ... and finally execute the translated instruction:
+1914: 	 */
+1915: 
+1916: 	/*  (Except when doing read-ahead!)  */
+1917: 	if (cpu->translation_readahead)
+1918: 		return;
+1919: 
+1920: 	/*
+1921: 	 *  Special case when single-stepping: Execute the translated
+1922: 	 *  instruction, but then replace it with a "to be translated"
+1923: 	 *  directly afterwards.
+1924: 	 */
+1925: 	if ((single_step_breakpoint && cpu->delay_slot == NOT_DELAYED)
+1926: #ifdef DYNTRANS_DELAYSLOT
+1927: 	    || in_crosspage_delayslot
+1928: #endif
+1929: 	    ) {
+1930: 		single_step_breakpoint = 0;
+1931: 		ic->f(cpu, ic);
+1932: 		ic->f = TO_BE_TRANSLATED;
+1933: 		return;
+1934: 	}
+1935: 
+1936: 
+1937: 	/*  Translation read-ahead:  */
+1938: 	if (!single_step && !cpu->machine->instruction_trace &&
+1939: 	    cpu->machine->breakpoints.n == 0) {
+1940: 		uint64_t baseaddr = cpu->pc;
+1941: 		uint64_t pagenr = DYNTRANS_ADDR_TO_PAGENR(baseaddr);
+1942: 		int i = 1;
+1943: 
+1944: 		cpu->translation_readahead = MAX_DYNTRANS_READAHEAD;
+1945: 
+1946: 		while (DYNTRANS_ADDR_TO_PAGENR(baseaddr +
+1947: 		    (i << DYNTRANS_INSTR_ALIGNMENT_SHIFT)) == pagenr &&
+1948: 		    cpu->translation_readahead > 0) {
+1949: 			void (*old_f)(struct cpu *,
+1950: 			    struct DYNTRANS_IC *) = ic[i].f;
+1951: 
+1952: 			/*  Already translated? Then abort:  */
+1953: 			if (old_f != TO_BE_TRANSLATED)
+1954: 				break;
+1955: 
+1956: 			/*  Translate the instruction:  */
+1957: 			ic[i].f(cpu, ic+i);
+1958: 
+1959: 			/*  Translation failed? Then abort.  */
+1960: 			if (ic[i].f == old_f)
+1961: 				break;
+1962: 
+1963: 			cpu->translation_readahead --;
+1964: 			++i;
+1965: 		}
+1966: 
+1967: 		cpu->translation_readahead = 0;
+1968: 	}
+1969: 
+1970: 
+1971: 	/*
+1972: 	 *  Finally finally :-), execute the instruction.
+1973: 	 *
+1974: 	 *  Note: The instruction might have changed during read-ahead, if
+1975: 	 *  instruction combinations are used.
+1976: 	 */
+1977: 
+1978: 	ic->f(cpu, ic);
+1979: 
+1980: 	return;
+1981: 
+1982: 
+1983: bad:	/*
+1984: 	 *  Nothing was translated. (Unimplemented or illegal instruction.)
+1985: 	 */
+1986: 
+1987: 	/*  Clear the translation, in case it was "half-way" done:  */
+1988: 	ic->f = TO_BE_TRANSLATED;
+1989: 
+1990: 	if (cpu->translation_readahead)
+1991: 		return;
+1992: 
+1993: 
+1994: 	/*
+1995: 	 *  Abort the emulation.  In principle, it may have been more accurate
+1996: 	 *  to treat invalid/unimplemented instructions as something that
+1997: 	 *  should cause e.g. an exception (depending on how the particular
+1998: 	 *  CPU works), but chances are that this is an unimplemented
+1999: 	 *  instruction that should be implemented for real.
+2000: 	 */
+2001: 
+2002: 	about_to_enter_single_step = true;
+2003: 
+2004: 	if (cpu->is_32bit)
+2005: 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+2006: 		    "UNIMPLEMENTED instruction at 0x%" PRIx32, (uint32_t)cpu->pc);
+2007: 	else
+2008: 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+2009: 		    "UNIMPLEMENTED instruction at 0x%" PRIx64, (uint64_t)cpu->pc);
+2010: 
+2011: 	if (!(single_step || cpu->machine->instruction_trace))
+2012: 		DISASSEMBLE(cpu, ib, 1, 0);
+2013: 
+2014: 	cpu->running = 0;
+2015: 
+2016: 	/*  Note: Single-stepping can jump here.  */
+2017: stop_running_translated:
+2018: 
+2019: 	// This makes sure that we stop in the debugger, even if e.g.
+2020: 	// "step 100" was executing and 50 steps remained.
+2021: 	debugger_reset();
+2022: 
+2023: 	ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+2024: 	cpu->cd.DYNTRANS_ARCH.next_ic ++;
+2025: 
+2026: #ifdef DYNTRANS_DELAYSLOT
+2027: 	/*  Special hack: If the bad instruction was in a delay slot,
+2028: 	    make sure that execution does not continue anyway:  */
+2029: 	if (cpu->delay_slot)
+2030: 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+2031: #endif
+2032: 
+2033: 	/*  Execute the "nothing" instruction:  */
+2034: 	ic->f(cpu, ic);
+2035: 
+2036: #endif	/*  DYNTRANS_TO_BE_TRANSLATED_TAIL  */
+2037: 
+
+[35m[3mcodex[0m[0m
+The four files support (c) as a limited data-access mitigation: it preserves the load destination and abandons the store, but FETCH still exits. They also show why exit status and announcement count alone are insufficient detector rows: some outcomes match the committed code, so the detector must record continuation and the deciding diagnostic.
+[35m[3mcodex[0m[0m
+VERDICT: c -- LOAD preserves its destination on decline; FETCH still dies at cpu_dyntrans.c:732.
+
+I would ship **(c) as a limited data-access mitigation**, with the remaining FETCH kill explicitly recorded. This is a static review of the four allowed files.
+
+The cells below assume supervisor mode, `base == 0`, and an access that reaches the translator. Cached accesses can bypass it: [cpu_alpha_instr_loadstore.c:203](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:203), [cpu_dyntrans.c:664](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:664).
+
+I read **(b) literally** as a silent `return 0` inside the address guard, and **(c)** as that decline plus the original diagnostic once per run. If (b) instead retains an unlatched `fatal()`, only its announcement count changes.
+
+The common execution steps are:
+
+- **Identity result:** the mask produces **`0x3fd80000000`**; none of the three special remaps matches; translation returns `2`. See [memory_alpha.c:74](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:74), [memory_alpha.c:80](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:80), [memory_alpha.c:83](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:83), [memory_alpha.c:87](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:87), [memory_alpha.c:90](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:90).
+- **Declined LOAD:** the instruction calls `memory_rw`; translation returns zero; `memory_rw` zeroes the temporary buffer and returns failure; the instruction returns **before writing the destination**. See [cpu_alpha_instr_loadstore.c:68](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:68), [memory_rw.c:248](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:248), [memory_rw.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:259), [cpu_alpha_instr_loadstore.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:73), [cpu_alpha_instr_loadstore.c:93](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:93).
+- **Declined STORE:** the instruction prepares its bytes and calls `memory_rw`; translation failure returns before device/RAM dispatch; the instruction abandons the store. See [cpu_alpha_instr_loadstore.c:96](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:96), [cpu_alpha_instr_loadstore.c:112](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:112), [memory_rw.c:268](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:268), [cpu_alpha_instr_loadstore.c:117](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:117).
+
+**The out-of-RAM qualification matters.** Before zero-filling or returning success, this path calls `memory_warn_about_unimplemented_addr()`. A nonzero result returns failure immediately: [memory_rw.c:676](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:676). Its definition is outside the allowed files.
+
+Below, **W** denotes that helper’s result. If W is zero, reads are zero-filled, writes are dropped, and the access succeeds: [memory_rw.c:683](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:683), [memory_rw.c:712](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:712), [memory_rw.c:785](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:785). If W is nonzero, the load/store failure handling above applies. The helper’s own effects on process survival are unsettled from these files.
+
+| Candidate | LOAD | STORE | FETCH |
+|---|---|---|---|
+| **(a)** | Prints the site diagnostic, then takes the identity/out-of-RAM path. **If W returns normally, the shown callers survive.** W=0: destination becomes **zero**, through the successful assignment at loadstore:93. W≠0: destination stays unchanged. Unconditional process survival is unsettled because W is uninspected. | Prints the diagnostic; identity maps to `0x3fd80000000`. **No bytes reach RAM or a device.** W=0: dropped with success. W≠0: declined with failure. Shown callers survive either normal return; helper behavior remains unsettled. | Translation returns `2`, so it **bypasses the failed-translation exit**. It survives that decision, but **whole-FETCH survival is unsettled**; details below. |
+| **(b)** | **Survives.** Translation declines; temporary read buffer becomes zero; the instruction returns without assigning it. **Destination unchanged.** | **Survives.** Translation declines before dispatch. **Bytes go nowhere.** | **Dies.** First decline → retry at unchanged PC → second decline → `exit(1)` at dyntrans:732. |
+| **(c)** | **Survives; destination unchanged**, through the same decline chain. Prints the site announcement only on the first hit in the run. | **Survives; bytes go nowhere**, through the same decline chain. Shares the same announcement latch. | **Dies**, through the same retry/exit chain as (b). A fresh latch permits one site announcement despite two translation attempts. |
+| **(d)** | Same identity/out-of-RAM results as (a), with **no site announcement**: W=0 gives destination **zero**; W≠0 leaves it unchanged. Unconditional process survival remains unsettled. | Same conditional success/failure as (a); **bytes go nowhere**, with no site announcement. Unconditional process survival remains unsettled. | Same successful translation decision as (a), without its announcement. **Whole-FETCH survival remains unsettled.** |
+
+For **(b)/(c) FETCH**, the exact chain is:
+
+1. Translate the PC with `FLAG_INSTR`: [cpu_dyntrans.c:679](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:679).
+2. On failure, reload `cached_pc` from the unchanged `cpu->pc`: [cpu_dyntrans.c:698](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:698).
+3. Recheck the same unsuccessful cache entry and retry translation at that same PC: [cpu_dyntrans.c:714](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:714), [cpu_dyntrans.c:721](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:721).
+4. Print **“could not find physical address of the exception handler?”** and call `exit(1)`: [cpu_dyntrans.c:729](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:729), [cpu_dyntrans.c:732](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:732).
+
+For **(a)/(d)**, success skips that recovery block and proceeds to physical-to-host lookup: [cpu_dyntrans.c:685](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:685), [cpu_dyntrans.c:736](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:736), [cpu_dyntrans.c:747](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:747). Instruction translation is subsequently delegated to `to_be_translated`: [cpu_dyntrans.c:800](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:800), [cpu_dyntrans.c:919](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:919), [cpu_dyntrans.c:954](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:954). The required Alpha implementation and physical-memory helper are outside the permitted files.
+
+Thus **(b)/(c) definitely do not save FETCH**. These files establish that **(a)/(d) bypass this particular exit**, but do not establish complete FETCH survival. Claiming all four necessarily die would also exceed the evidence.
+
+The premise audit is:
+
+| Premise | Finding |
+|---|---|
+| **P1** | **TRUE.** The zero-return path logs and returns; it neither invokes an Alpha exception nor assigns `cpu->pc`. The fault descriptions elsewhere in the function are TODO comments. See [memory_alpha.c:120](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:120), [memory_alpha.c:192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192). The proposed early returns likewise add neither action. |
+| **P2** | **TRUE for these eight-byte cells.** Translation failure zeroes the worker’s READ buffer and returns `MEMORY_ACCESS_FAILED`: [memory_rw.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:259). This is not an unconditional whole-buffer guarantee for arbitrary split reads; see the additional finding below. |
+| **P3** | **TRUE.** A failed load returns before destination assignment; a failed store returns immediately. See [cpu_alpha_instr_loadstore.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:73), [cpu_alpha_instr_loadstore.c:93](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:93), [cpu_alpha_instr_loadstore.c:117](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:117). |
+| **P4** | **UNSETTLED-FROM-THESE-FILES.** Given no device and an address beyond RAM, zero-fill/drop/success follows **only if the warning helper permits it**. Its earlier failure return prevents an unconditional TRUE: [memory_rw.c:663](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:663), [memory_rw.c:676](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:676), [memory_rw.c:683](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:683), [memory_rw.c:712](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:712). |
+| **P5** | **TRUE.** The masked value is `0xfffffffd80000000`, which differs from `0xfffffe0000000000`; that remap does not run: [memory_alpha.c:83](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:83). |
+| **P6** | **FALSE as an unqualified statement about every instruction-fetch translation.** The specified cold generic FETCH does terminate on persistent Alpha decline, as traced above. But the tracing/single-step `CACHE_INSTRUCTION` read handles failure locally by logging, then continues toward instruction execution: [cpu_dyntrans.c:287](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:287), [cpu_dyntrans.c:325](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:325). That read also passes `FLAG_INSTR`: [memory_rw.c:252](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:252). |
+
+I would reject **(d)** most firmly, with **LOAD** deciding: it removes the site announcement while accepting the fabricated mapping. Whenever the out-of-RAM helper permits success, the destination is overwritten with zero. **(c)** consistently declines the access and preserves the destination, though it still supplies no guest exception and leaves FETCH fatal.
+
+The detector for **(c)** needs these rows. The committed guard prints once and exits before returning translation: [memory_alpha.c:75](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:75).
+
+| Detector row | Candidate (c) versus committed code |
+|---|---|
+| **LOAD** | Observe continuation after the instruction handler returns. **(c): continuation reached. Committed: process exits first.** |
+| **STORE** | Observe continuation and absence of memory changes. **(c): continuation reached, no bytes written. Committed: exits before writing.** Unchanged memory alone does not distinguish them. |
+| **FETCH** | **Both exit with status 1.** The differential is the deciding diagnostic: **(c) reaches the exception-handler-address fatal at dyntrans:730; committed exits at the original guard.** A fresh (c) run produces the site announcement followed by that second fatal. |
+| **Destination value** | Initialize an ordinary destination register to a nonzero sentinel. **(c): a completed post-load observation reports the unchanged sentinel. Committed: no post-load observation is reached.** The pre-exit value alone is not different. This also detects identity-fallthrough candidates when they overwrite it with zero. |
+| **Announcement count** | Across repeated LOAD/STORE attempts in one run, **(c): exactly one site announcement while all handlers return**. Committed also prints once, but dies on the first attempt. **Count alone is insufficient; pair it with continued progress.** The latch must suppress only logging, never the subsequent `return 0`. |
+
+Two additional findings surfaced:
+
+- The comments disagree with the implementation: one says the caller raises the fault, another says the translator already did. Neither happens on this decline path: [memory_alpha.c:194](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:194), [cpu_alpha_instr_loadstore.c:70](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:70).
+- For a split READ that fails after successful chunks, earlier bytes remain populated: the wrapper advances `data`, and failure zeroes only the remaining portion. This qualifies a broader reading of P2: [memory_rw.c:214](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:214), [memory_rw.c:220](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:220), [memory_rw.c:226](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:226).
+[2mtokens used[0m
+76,436

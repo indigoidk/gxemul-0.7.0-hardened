@@ -1,0 +1,75 @@
+VERDICT: CLOSES -- all four C=16 byte lanes are pinned by dedicated rows and proven red-capable (0 open / 4 floor cells), killing the lane-1 exemption.
+
+---
+
+### Adversarial Verification of Settled Premises (§4)
+
+1. **Premise 1: `ofs = (relative_addr & 3) % len` and write arm forwards `data[ofs]`**
+   * **Source Evidence:** [`dev_lca.c:280`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L280) performs `relative_addr >>= 5;`, transforming the sparse address offset into the ISA port $P$.
+   * [`dev_lca.c:297`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L297) computes `ofs = (relative_addr & 3) % len;` (which is $(P \ \& \ 3) \pmod{\text{len}}$).
+   * [`dev_lca.c:308-310`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L308-L310) takes `byte = data[ofs];` and forwards it via `cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, writeflag, ...);`.
+   * **Verdict:** **VERIFIED**. For $\text{len} = 16$, $(P \ \& \ 3) \pmod{16} = P \ \& \ 3 \in [0, 3]$, indexing `data[0..3]`.
+
+2. **Premise 2: [`store_buf`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L837-L857) chunk decomposition $\{1024, 256, 64, 16, 4, 1\}$ and GETENV transfer length**
+   * **Source Evidence:** [`memory.c:839-853`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L839-L853) initializes `psize = 1024;`, checks alignment `(addr & (psize-1)) == 0`, loops while `len >= psize` forwarding `psize` bytes, and divides `psize >>= 2;` per iteration.
+   * For the 4 configured cells in [`CELLS`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L203-L208) with $a_3 = 16$ and 16-char string $s$, $\text{len} = \min(a_3, \text{strlen}(s) + 1) = 16$.
+   * Addresses $SP(P) = 0\text{x}1c0000000 + (P \ll 5)$ for $P \in \{0\text{x}2\text{ff}, 0\text{x}2\text{fc}, 0\text{x}021, 0\text{x}2\text{fe}\}$ satisfy `(addr & 15) == 0`. Even though ports $0\text{x}2\text{fc}$ and $0\text{x}2\text{fe}$ are aligned to 64 bytes (`0x5f80` and `0x5fc0`), `len >= 64` evaluates to false, so chunking bypasses 64 and emits exactly one 16-byte chunk at $\text{psize} = 16$.
+   * **Verdict:** **VERIFIED**.
+
+3. **Premise 3: Single session per cell required because read-arm fall-through zeros [`store_buf`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L837-L857)'s source**
+   * **Source Evidence:** In [`memory.c:844-846`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L844-L846), [`store_buf`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L837-L857) passes `(unsigned char *)s` (the host boot string) as `data` into `cpu->memory_rw`.
+   * When mutant `M2_len8` (`&& len <= 8`) declines a write with $\text{len} = 16$, execution falls through into the read arm in [`dev_lca.c:317-318`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L317-L318):
+     ```c
+     for (i=0; i<len; i++)
+         data[i] = i == ofs? byte : 0x00;
+     ```
+     This directly overwrites the caller's source string `s` in host RAM with zero bytes. If subsequent cells shared the process, the boot string would be corrupted and truncated.
+   * **Verdict:** **VERIFIED**. One isolated emulator process per cell is mandatory.
+
+---
+
+### Questions & Review-Asks (§5)
+
+#### Q1: Does It Close?
+The ruled floor is $\{\text{write arm}\} \times \{\text{lane } 0, 1, 2, 3\} \text{ at } C=16$:
+
+| Floor Cell | Target Port & Register | Pinning Row | Proving Variant in §3 |
+| :--- | :--- | :--- | :--- |
+| **Lane 0** | Port `0x2fc` (ns16550 MCR, $P \ \& \ 3 = 0$) | `l0w16 getenv` | Red on `vc_ne0` (12/13), `vc` (10/13), `M2_len8` (9/13), `KILLLEN8` (9/13) |
+| **Lane 1** | Port `0x021` (8259 IMR, $P \ \& \ 3 = 1$) | `low16 getenv` | Red on `vc_ne1` (12/13), `vc` (10/13), `vf` (10/13), `ve` (12/13), `M2_len8` (9/13) |
+| **Lane 2** | Port `0x2fe` (ns16550 MSR, $P \ \& \ 3 = 2$) | `l2w16 getenv` | Red on `vc_ne2` (12/13), `vc` (10/13), `vf` (10/13), `M2_len8` (9/13), `KILLLEN8` (9/13) |
+| **Lane 3** | Port `0x2ff` (ns16550 SCR, $P \ \& \ 3 = 3$) | `wide getenv` | Red on `vc_ne3` (12/13), `vf` (10/13), `M2_len8` (9/13), `KILLLEN8` (9/13) |
+
+* **Lane-1 Escape Killed:** Variant `vc_ne1` (`&& (len <= 8 || (P & 3) != 1)`), which escapes 2-cell coverings, is red at `low16 getenv` ([`TABLE.out:6`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcalenzerodrop/closure538_20260918/logs/TABLE.out#L6)).
+* **Zero with Denominator:** **0 open cells / 4 floor cells**.
+
+#### Q2: The Contract
+1. **Disclosed Classes (i)–(viii):**
+   * *(i) Width thresholds above 16:* Warranted by [`dev_lca.c:295`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L295) (`if (len == 0)`). No test against widths $> 16$ exists in the handler. Outside C=16 floor.
+   * *(ii) Port-conditioned refusals (`p_port10`):* Warranted by [`dev_lca.c:297`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L297), which performs no port magnitude checks. Outside lane floor.
+   * *(iii) Discarded sparse bits $a_{4:0}$ ($k$):* Warranted by [`dev_lca.c:280`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L280) (`relative_addr >>= 5;`). Discards $k$; outside floor.
+   * *(iv) Chunk position $\ge 2$:* Stateless handler; warranted.
+   * *(v) Read direction:* No wide read producer in guest architecture; ruled floor is write-arm only.
+   * *(vi) Delivery of non-lane bytes (`lcawidefold`):* Handler is architecturally an 8-bit bus bridge forwarding 1 byte per access ([`dev_lca.c:308-310`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L308-L310)).
+   * *(vii) Data values:* Boot string lane characters `'A'..'D'` are non-zero.
+   * *(viii) Forward count:* Observed targets are registers storing the latest written state.
+   * **Verdict:** All 8 disclosures are honestly warranted; none is inside the ruled floor.
+2. **Contract Claims Backed by Measured Reds:** Every claimed catch pattern (guard form `KILLLEN8`, write-arm conjunct `M2_len8`, lane exemptions `vc`, `vc_ne0..3`, and lane misrouting `vf`) is backed by measured reds in [`TABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcalenzerodrop/closure538_20260918/logs/TABLE.out).
+
+#### Q3: The Harness Fixes
+* **Retry Condition:** [`lca_widewrite_probe.py:262`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L262) evaluates `if alive and any(printed(txt, x) is None for x in names):`. If the emulator dies/crashes, [`session`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L106-L148) catches EOF/EIO on the pty read and returns `alive = False`, preventing retry.
+* **Exit Status:** [`lca_widewrite_probe.py:286`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L286) calls `sys.exit(0 if ok == len(rows) else 1)`.
+* **Host Death Leakage:** Cannot score as a pass. If the host terminates, `alive` is `False`, the `<cell> alive` row fails (`"died" != "alive"`), printed register values become `None` (failing `live` and `getenv`), and the probe exits with status 1.
+
+#### Q4: The Parent's L4
+* The replacement hunk in [`lca_isalane_probe.py:172-178`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L172-L178) replaces the assertion that the width cell was covered with an exact description of the pass-2 finding (lane-3-only sweep), references [`lca_widewrite_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py) as the 4-lane closure at C=16, and cites `p_port10` and `lcaisasize` for remaining disclosures. It is fully accurate and does not overclaim.
+
+---
+
+### Additional Verified Details
+* **Strict Pre-Commitment:** [`PRETABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcalenzerodrop/closure538_20260918/PRETABLE.out) has filesystem mtime `19:38:29`, strictly predating `lca_widewrite.frozen.py` (`21:03:19`) and `logs/TABLE.out` (`21:44:07`).
+* **Clean Tree Separation:** Uncommitted working tree edits in [`dev_lca.c:310, 314`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L310-L314) (`CACHE_NONE | PHYSICAL`) belong to round `#540` and do not affect width or lane arithmetic.
+
+---
+
+GO

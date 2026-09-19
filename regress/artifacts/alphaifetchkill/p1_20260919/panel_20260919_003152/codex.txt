@@ -1,0 +1,2870 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+[1mworkdir:[0m C:\DocumentNoSnc\CC\GXEMUL
+[1mmodel:[0m gpt-6-astra
+[1mprovider:[0m openai
+[1mapproval:[0m never
+[1msandbox:[0m read-only
+[1mreasoning effort:[0m max
+[1mreasoning summaries:[0m none
+[1msession id:[0m 01a0b826-5045-7a20-86a7-315138a34a24
+--------
+[36muser[0m
+# `alphaifetchkill` PASS 1 -- a failed Alpha instruction-fetch translation ends the emulator process
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated wrongly.  **Check the premises,
+not just the derivations.**  **VERDICT LINE FIRST.**  **THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`** at HEAD
+`cdbe7d7`.  Pristine-2021 copies elsewhere under the project root are NOT this fork.  **If you cannot read
+files, that is expected**: every fact you need is inlined; name any premise you cannot settle.
+
+**Seats that read files: read ONLY** `GXEMUL-SEC/src/cpus/cpu_dyntrans.c`, `GXEMUL-SEC/src/cpus/memory_alpha.c`,
+`GXEMUL-SEC/src/cpus/cpu_alpha.c`, `GXEMUL-SEC/src/cpus/cpu_alpha_instr.c`.
+
+    VERDICT: <option> -- <one line naming the deciding item>
+
+## 0. HAS THIS ALREADY SHIPPED? (run at brief-writing time)
+
+    git log -1 -- src/cpus/cpu_dyntrans.c   ->  de1398e Hardening/fidelity/debuggability rounds 17–25 (#155–#250)
+    grep -c alphaifetchkill CHANGELOG.md   ->  0 (the row is being filed now)
+
+## 1. THE DEFECT, WITNESSED AT RUNG 3 ON THE COMMITTED BUILD
+
+`regress/artifacts/alphaifetchkill/witness_HEAD_20260918/`: one unmodified `-E alpha -e alphabook1` process.  Paging is
+armed (swpctx to a PCB whose ptbr names an all-zero L1 page).  The arming control holds: a raw-VA load walks, misses,
+and keeps its sentinel.  Then ONE `JMP` to a raw VA (0x1044000).  The transcript shows two
+`[ alpha_translate_v2p: 0x0000000001044000 wasn't found ]` lines, then
+`FATAL: could not find physical address of the exception handler?`, and the process exits with status 1.
+
+**The mechanism**, from `cpu_dyntrans.c`, `DYNTRANS_PC_TO_POINTERS_GENERIC` (`:622` on):
+
+```c
+	if (!ok) {
+		uint64_t paddr;
+		if (cpu->translate_v2p != NULL) {
+			...
+			ok = cpu->translate_v2p(cpu, vaddr, &paddr, FLAG_INSTR);
+		} ...
+		if (!ok) {
+			/*  The PC is now set to the exception handler.  Try to find the paddr in the translation
+			    arrays, or if that fails, call translate_v2p for the exception handler.  */
+			cached_pc = cpu->pc;
+			... look cached_pc up in the fast table ...
+			if (!ok)
+				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr, FLAG_INSTR);
+			if (!ok) {
+				fatal("FATAL: could not find physical address of the exception handler?");
+				exit(1);                                               <-- THE DEFECT (:729-733)
+			}
+		}
+		physaddr = paddr;
+	}
+	... physaddr is used to find/allocate the translated page; cur_ic_page / next_ic are set at :830-833 ...
+```
+
+**Why Alpha always reaches it:** `alpha_translate_v2p` returns 0 on a miss WITHOUT moving `cpu->pc` (Alpha delivers no
+memory-management fault in this tree -- the walk's own TODOs at `memory_alpha.c:120-126` say so).  So the "exception
+handler" is the same PC, the retry fails the same way, and the host exits.  MIPS, ARM, PPC and SH move the PC to a
+real handler before returning, so they get past the retry.
+
+## 2. WHAT THE CODEX RESEARCH JOB FOUND (read-only, `_scratchpad/cxfarm_e8a2bc_20260918/codex_jA.txt`)
+
+* **Replacing only `exit(1)` with `cpu->running = 0` is NOT enough**: it falls through to `physaddr = paddr` with no
+  paddr supplied (`:736`).
+* **A bare `return` is NOT enough**: it skips setting `cur_ic_page`/`next_ic` (`:830-833`), and the dispatch loop
+  dereferences `next_ic` without checking `running` (`:114`, `:190`).
+* **The in-tree precedent for stopping a CPU safely** is the unimplemented-instruction path (`:2002-2024`):
+  `about_to_enter_single_step = true; ... cpu->running = 0; debugger_reset(); ic = next_ic = &nothing_call;
+  next_ic++;`.  It is a design precedent, not a drop-in: the run entry resets instruction accounting after PC
+  conversion, and the epilogue reconstructs the PC from instruction pointers (`:267`, `:394`).
+
+## 3. THE OPTION SET (grep the tree first)
+
+    (a) exit(1) -> cpu->running = 0 + a latched message, and NOTHING else       -- refuted above (garbage paddr)
+    (b) return without a translation                                             -- refuted above (next_ic unset)
+    (c) (e) for Alpha only; other architectures keep today's exit
+    (d) deliver an Alpha ITB/ACV fault through PALcode                           -- a FEATURE (out of scope)
+    (e) STOP THE CPU SAFELY, the unimplemented-instruction way: latched message, running = 0, next_ic -> nothing_call,
+        debugger_reset(); the guest sees a stopped CPU, the host survives (and under -V the debugger prompt appears)
+
+## 4. QUESTIONS
+
+**Q1 -- PREMISES, as questions.**  Is it true that NO other architecture in this tree can reach `:729-733` today (read
+each translator's failure path, or say which you did not)?  Does the single-step trace read (`:287`, `:325`) really
+handle its own failure?  Is `nothing_call` usable from inside `pc_to_pointers`, or only from an instruction handler?
+
+**Q2 -- WHICH OPTION**, and the exact code shape.  Inline the enclosing function's exits and state, for your shape,
+what `cur_ic_page`, `next_ic` and `cpu->pc` hold on return, and what the run loop does next.
+
+**Q3 -- THE WITNESS AS A DETECTOR.**  Which rows prove the host survives AND the CPU is stopped AND no garbage
+executes (e.g. `pc` still the faulting VA, the debugger prompt, the latch once)?
+
+If, while verifying a claim, you found something ELSE -- say so.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+[35m[3mcodex[0m[0m
+VERDICT: (e), provisional -- stopping safely requires valid dispatch state and preserved PC accounting; I’ll check those requirements in the four permitted files.
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DYNTRANS_PC_TO_POINTERS_GENERIC|nothing_call|next_ic|cur_ic_page|could not find physical|translate_v2p|single_step|n_translated_instrs|running|debugger_reset|MEMORY_ACCESS_FAILED' GXEMUL-SEC/src/cpus/cpu_dyntrans.c GXEMUL-SEC/src/cpus/memory_alpha.c GXEMUL-SEC/src/cpus/cpu_alpha.c GXEMUL-SEC/src/cpus/cpu_alpha_instr.c"[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 229ms:[0m
+GXEMUL-SEC/src/cpus/memory_alpha.c:41: *  alpha_translate_v2p():
+GXEMUL-SEC/src/cpus/memory_alpha.c:43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_alpha.c:197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:89:	cpu->translate_v2p = alpha_translate_v2p;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:255: *  If running is 1, cpu->pc should be the address of the instruction.
+GXEMUL-SEC/src/cpus/cpu_alpha.c:257: *  If running is 0, things that depend on the runtime environment (eg.
+GXEMUL-SEC/src/cpus/cpu_alpha.c:262:        int running, uint64_t dumpaddr)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:270:	if (running)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:278:	if (cpu->machine->ncpus > 1 && running)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:286:	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:30: *  Individual functions should keep track of cpu->n_translated_instrs.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:57:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:65:	if (!cpu->running) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:66:		cpu->n_translated_instrs --;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:67:		cpu->cd.alpha.next_ic = &nothing_call;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:91:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:101:	 *  already in, then just set cpu->cd.alpha.next_ic.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:104:		cpu->cd.alpha.next_ic = cpu->cd.alpha.cur_ic_page +
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:142:	 *  already in, then just set cpu->cd.alpha.next_ic.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:145:		cpu->cd.alpha.next_ic = cpu->cd.alpha.cur_ic_page +
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:177:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:200:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:326:	cpu->cd.alpha.next_ic = (struct alpha_instr_call *) ic->arg[0];
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:342:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:348:	cpu->cd.alpha.next_ic = (struct alpha_instr_call *) ic->arg[0];
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:760:	cpu->n_translated_instrs --;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:785:	low_pc = ((size_t)ic - (size_t)cpu->cd.alpha.cur_ic_page)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1309:				    cpu->cd.alpha.cur_ic_page +
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:45:	struct DYNTRANS_IC *ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:48:	int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - (size_t)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:49:	    cpu->cd.DYNTRANS_ARCH.cur_ic_page) / sizeof(struct DYNTRANS_IC);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:75:			    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:114:#define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:119:#define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++;	\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:121:			int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - \
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:122:			    (size_t)cpu->cd.DYNTRANS_ARCH.cur_ic_page) / \
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:124:			printf("cur_ic_page=%p ic=%p (low_pc=0x%x)\n",	\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:125:			    cpu->cd.DYNTRANS_ARCH.cur_ic_page,		\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:135:/*  #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; 			\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:138:			int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - \
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:139:			    (size_t)cpu->cd.DYNTRANS_ARCH.cur_ic_page) / \
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:147:				DYNTRANS_ARCH.next_ic);			\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:149:				DYNTRANS_ARCH.cur_ic_page);		\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:150:			cpu->running = 0;				\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:161:	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic); }
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:206:	if (!single_step) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:257:		// cpu->running = false;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:267:	cpu->n_translated_instrs = 0;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:270:	    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:272:	if (single_step || cpu->machine->instruction_trace
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:277:		struct DYNTRANS_IC *ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:282:		if (single_step || cpu->machine->instruction_trace) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:339:			cpu->n_translated_instrs += 24;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:340:			if (cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:370:			cpu->n_translated_instrs += 120;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:371:			if (cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:377:		cpu->n_translated_instrs -= N_DYNTRANS_IDLE_BREAK;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:392:	n_instrs += cpu->n_translated_instrs;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:395:	low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - (size_t)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:396:	    cpu->cd.DYNTRANS_ARCH.cur_ic_page) / sizeof(struct DYNTRANS_IC);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:622:void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:672:		if (cpu->translate_v2p != NULL) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:679:			ok = cpu->translate_v2p(
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:689:			 *  or if that fails, call translate_v2p for the
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:721:				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:730:				fatal("FATAL: could not find physical"
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:830:	cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:832:	cpu->cd.DYNTRANS_ARCH.next_ic = cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:852: *  DYNTRANS_PC_TO_POINTERS_GENERIC above for the generic case.
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:888:	DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:893:	cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:894:	cpu->cd.DYNTRANS_ARCH.next_ic = cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1799:	if (!single_step_breakpoint && !cpu->translation_readahead) {
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1810:				 *  single_step_breakpoint (without single_step)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1823:					single_step_breakpoint = 1;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1846:				single_step_breakpoint = 1;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1847:				single_step = true;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1848:				goto stop_running_translated;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1865:	    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1888:	if (!single_step && !single_step_breakpoint
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1925:	if ((single_step_breakpoint && cpu->delay_slot == NOT_DELAYED)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1930:		single_step_breakpoint = 0;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1938:	if (!single_step && !cpu->machine->instruction_trace &&
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2002:	about_to_enter_single_step = true;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2011:	if (!(single_step || cpu->machine->instruction_trace))
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2014:	cpu->running = 0;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2017:stop_running_translated:
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2021:	debugger_reset();
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2023:	ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2024:	cpu->cd.DYNTRANS_ARCH.next_ic ++;
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$s=Get-Content -LiteralPath $p; 550..925 | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$s=Get-Content -LiteralPath $p; 1..425 | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/memory_alpha.c'; "'$s=Get-Content -LiteralPath $p; 1..$s.Count | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 370ms:[0m
+    1: /*
+    2:  *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  */
+   27: 
+   28: #include <stdio.h>
+   29: #include <stdlib.h>
+   30: #include <string.h>
+   31: 
+   32: #include "cpu.h"
+   33: #include "machine.h"
+   34: #include "memory.h"
+   35: #include "misc.h"
+   36: 
+   37: #include "thirdparty/alpha_rpb.h"
+   38: 
+   39: 
+   40: /*
+   41:  *  alpha_translate_v2p():
+   42:  */
+   43: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+   44: 	uint64_t *return_paddr, int flags)
+   45: {
+   46: 	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+   47: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+   48: 	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+   49: 	
+   50: 	// TODO: From the Alpha "arm_book.book":
+   51: 	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+   52: 	// 	{initiate Access Violation fault}
+   53: 	// IF (VIRBND in use) THEN
+   54: 	//   IF (VA LTU VIRBND) THEN
+   55: 	//     ptbr_value <- PTBR
+   56: 	//   ELSE
+   57: 	//     ptbr_value <- SYSPTBR
+   58: 	// ELSE
+   59: 	//   ptbr_value <- PTBR
+   60: 
+   61: 	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+   62: 	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+   63: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+   64: 		return 2;
+   65: 	}
+   66: 
+   67: 	/*
+   68: 	 *  UGLY hack for now:
+   69: 	 *
+   70: 	 *  Before virtual memory has been set up, ptbr is most likely zero.
+   71: 	 *  In that case, simply map everything vaddr == paddr.
+   72: 	 */
+   73: 	if (!userMode && base == 0) {
+   74: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+   75: if (vaddr == 0xfffffffd80000000ULL) {
+   76: 	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+   77: 	exit(1);
+   78: }
+   79: #if 1
+   80: 		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+   81: 			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+   82: 
+   83: 		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+   84: 			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+   85: 
+   86: 		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+   87: 		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+   88: 			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+   89: #endif
+   90: 		return 2;
+   91: 	}
+   92: 
+   93: 	// debug("base = 0x%016"PRIx64"\n", base);
+   94: if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+   95: 
+   96: 	uint64_t addr, pte1, pte2, pte3;
+   97: 	int i1, i2, i3;
+   98: 	unsigned char *pt_entry_ptr;
+   99: 	const int pageSizeShift = 13;
+  100: 	// const int pageSize = 1 << pageSizeShift;
+  101: 	const int bitsPerLevel = 10;
+  102: 	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+  103: 
+  104: 	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+  105: 	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+  106: 	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+  107: 
+  108: 	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+  109: 
+  110: 	addr = base + i1 * sizeof(uint64_t);
+  111: 	
+  112: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+  113: 	if (pt_entry_ptr == NULL)
+  114: 		goto not_found;
+  115: 
+  116: 	pte1 = *(uint64_t *)(pt_entry_ptr);
+  117: 	pte1 = LE64_TO_HOST(pte1);
+  118: 
+  119: 	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+  120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+  121: 		// TODO:
+  122: 		// IF level1_pte<KRE> EQ 0 THEN
+  123: 		//   {initiate Access Violation fault}
+  124: 		// ELSE
+  125: 		//   {initiate Translation Not Valid fault}
+  126: 
+  127: 		// fatal("TODO: pte1 not valid.\n");
+  128: 		goto not_found;
+  129: 	}
+  130: 
+  131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+  132: 
+  133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+  134: 	if (pt_entry_ptr == NULL)
+  135: 		goto not_found;
+  136: 
+  137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+  138: 	pte2 = LE64_TO_HOST(pte2);
+  139: 
+  140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+  141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+  142: 		// TODO:
+  143: 		// IF level2_pte<KRE> EQ 0 THEN
+  144: 		//   {initiate Access Violation fault}
+  145: 		// ELSE
+  146: 		//   {initiate Translation Not Valid fault}
+  147: 
+  148: 		fatal("TODO: pte2 not valid.\n");
+  149: 		goto not_found;
+  150: 	}
+  151: 
+  152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+  153: 
+  154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+  155: 	if (pt_entry_ptr == NULL)
+  156: 		goto not_found;
+  157: 
+  158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+  159: 	pte3 = LE64_TO_HOST(pte3);
+  160: 
+  161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+  162: 
+  163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+  164: 		fatal("TODO: pte3 not valid.\n");
+  165: 		goto not_found;
+  166: 	}
+  167: 
+  168: 	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+  169: 	    `offset = paddr & offset_mask', which was therefore always zero, so every
+  170: 	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+  171: 	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+  172: 	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+  173: 	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+  174: 	    watchpoint -- which keeps a page off the fast store table -- makes it
+  175: 	    reproducible.)  Measured: a cold guest ldq
+  176: 	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+  177: 	    landed at the base for the same reason.
+  178: 	
+  179: 	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+  180: 	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+  181: 	    literal beside the shift is how the two drift.  `|' rather than `+' because
+  182: 	    that is what every other CPU's walk in this tree writes; here they are equal,
+  183: 	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+  184: 	    still ignored, the protection bits untested, and `return 2' still reports
+  185: 	    every walked page writable.  */
+  186: 	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+  187: 	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+  188: 
+  189: 	// TODO.
+  190: 	return 2;
+  191: 
+  192: not_found:
+  193: 	/*  No match.  */
+  194: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+  195: 	    abort()/exit() the host; report no-translation (0) so the caller
+  196: 	    raises the fault (keeps the emulator alive and debuggable).  */
+  197: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+  198: 	return 0;
+  199: }
+  200: 
+
+[32m succeeded in 391ms:[0m
+  550: 
+  551: 		if (d > -256 && d < 256)
+  552: 			fatal("%i", (int)d);
+  553: 		else if (memory_points_to_string(cpu, cpu->mem, d, 1)) {
+  554: 			memset(strbuf, 0, sizeof(strbuf));
+  555: 			memory_conv_to_string(cpu,
+  556: 			    cpu->mem, d, strbuf, sizeof(strbuf));
+  557: 			fatal("\"%s\"", strbuf);
+  558: 			// TODO: This shows "..." when the string is longer
+  559: 			// _or exactly the max length_. An improvement would
+  560: 			// be to detect the case where the string is exactly
+  561: 			// the max length and not show "..." then.
+  562: 			if (strlen(strbuf) >= sizeof(strbuf)-1)
+  563: 				fatal("...");
+  564: 		} else if (symbol != NULL && ot == 0 &&
+  565: 		    show_symbolic_function_name)
+  566: 			fatal("&%s", symbol);
+  567: 		else {
+  568: 			if (cpu->is_32bit)
+  569: 				fatal("0x%" PRIx32, (uint32_t)d);
+  570: 			else
+  571: 				fatal("0x%" PRIx64, (uint64_t)d);
+  572: 		}
+  573: 
+  574: 		if (x < n_args_to_print - 1)
+  575: 			fatal(",");
+  576: 	}
+  577: 
+  578: 	if (print_dots)
+  579: 		fatal(",..");
+  580: }
+  581: #endif	/*  DYNTRANS_FUNCTION_TRACE_DEF  */
+  582: 
+  583: 
+  584: 
+  585: #ifdef DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF
+  586: /*
+  587:  *  XXX_tc_allocate_default_page():
+  588:  *
+  589:  *  Create a default page (with just pointers to instr(to_be_translated)
+  590:  *  at cpu->translation_cache_cur_ofs.
+  591:  */
+  592: static void DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF(struct cpu *cpu,
+  593: 	uint64_t physaddr)
+  594: { 
+  595: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+  596: 
+  597: 	ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+  598: 	    + cpu->translation_cache_cur_ofs);
+  599: 
+  600: 	/*  Copy the entire template page first:  */
+  601: 	memcpy(ppp, cpu->cd.DYNTRANS_ARCH.physpage_template, sizeof(
+  602: 	    struct DYNTRANS_TC_PHYSPAGE));
+  603: 
+  604: 	ppp->physaddr = physaddr & ~(DYNTRANS_PAGESIZE - 1);
+  605: 
+  606: 	cpu->translation_cache_cur_ofs += sizeof(struct DYNTRANS_TC_PHYSPAGE);
+  607: 
+  608: 	cpu->translation_cache_cur_ofs --;
+  609: 	cpu->translation_cache_cur_ofs |= 63;
+  610: 	cpu->translation_cache_cur_ofs ++;
+  611: }
+  612: #endif	/*  DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF  */
+  613: 
+  614: 
+  615: 
+  616: #ifdef DYNTRANS_PC_TO_POINTERS_FUNC
+  617: /*
+  618:  *  XXX_pc_to_pointers_generic():
+  619:  *
+  620:  *  Generic case. See DYNTRANS_PC_TO_POINTERS_FUNC below.
+  621:  */
+  622: void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+  623: {
+  624: #ifdef MODE32
+  625: 	uint32_t
+  626: #else
+  627: 	uint64_t
+  628: #endif
+  629: 	    cached_pc = cpu->pc, physaddr = 0;
+  630: 	uint32_t physpage_ofs;
+  631: 	int ok, pagenr, table_index;
+  632: 	uint32_t *physpage_entryp;
+  633: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+  634: 
+  635: #ifdef MODE32
+  636: 	int index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+  637: #else
+  638: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+  639: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+  640: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+  641: 	uint32_t x1, x2, x3;
+  642: 	struct DYNTRANS_L2_64_TABLE *l2;
+  643: 	struct DYNTRANS_L3_64_TABLE *l3;
+  644: 
+  645: 	x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+  646: 	x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+  647: 	x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+  648: 	/*  fatal("X3: cached_pc=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+  649: 	    (uint64_t)cached_pc, (int)x1, (int)x2, (int)x3);  */
+  650: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+  651: 	/*  fatal("  l2 = %p\n", l2);  */
+  652: 	l3 = l2->l3[x2];
+  653: 	/*  fatal("  l3 = %p\n", l3);  */
+  654: #endif
+  655: 
+  656: 	/*  Virtual to physical address translation:  */
+  657: 	ok = 0;
+  658: #ifdef MODE32
+  659: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL) {
+  660: 		physaddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+  661: 		ok = 1;
+  662: 	}
+  663: #else
+  664: 	if (l3->host_load[x3] != NULL) {
+  665: 		physaddr = l3->phys_addr[x3];
+  666: 		ok = 1;
+  667: 	}
+  668: #endif
+  669: 
+  670: 	if (!ok) {
+  671: 		uint64_t paddr;
+  672: 		if (cpu->translate_v2p != NULL) {
+  673: 			uint64_t vaddr =
+  674: #if defined(MODE32) && defined(DYNTRANS_MIPS)
+  675: 			/*  32-bit MIPS is _sign_ extend, not zero.  */
+  676: 			    (int32_t)
+  677: #endif
+  678: 			    cached_pc;
+  679: 			ok = cpu->translate_v2p(
+  680: 			    cpu, vaddr, &paddr, FLAG_INSTR);
+  681: 		} else {
+  682: 			paddr = cached_pc;
+  683: 			ok = 1;
+  684: 		}
+  685: 		if (!ok) {
+  686: 			/*
+  687: 			 *  The PC is now set to the exception handler.
+  688: 			 *  Try to find the paddr in the translation arrays,
+  689: 			 *  or if that fails, call translate_v2p for the
+  690: 			 *  exception handler.
+  691: 			 */
+  692: 			/*  fatal("TODO: instruction vaddr=>paddr translation "
+  693: 			    "failed. vaddr=0x%" PRIx64"\n", (uint64_t)cached_pc);
+  694: 			fatal("!! cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+  695: 
+  696: 			/*  If there was an exception, the PC has changed.
+  697: 			    Update cached_pc:  */
+  698: 			cached_pc = cpu->pc;
+  699: 
+  700: #ifdef MODE32
+  701: 			index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+  702: 			if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL) {
+  703: 				paddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+  704: 				ok = 1;
+  705: 			}
+  706: #else
+  707: 			x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+  708: 			x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N))
+  709: 			    & mask2;
+  710: 			x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N
+  711: 			    - DYNTRANS_L3N)) & mask3;
+  712: 			l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+  713: 			l3 = l2->l3[x2];
+  714: 			if (l3->host_load[x3] != NULL) {
+  715: 				paddr = l3->phys_addr[x3];
+  716: 				ok = 1;
+  717: 			}
+  718: #endif
+  719: 
+  720: 			if (!ok) {
+  721: 				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+  722: 				    FLAG_INSTR);
+  723: 			}
+  724: 
+  725: 			/*  printf("EXCEPTION HANDLER: vaddr = 0x%x ==> "
+  726: 			    "paddr = 0x%x\n", (int)cpu->pc, (int)paddr);
+  727: 			fatal("!? cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+  728: 
+  729: 			if (!ok) {
+  730: 				fatal("FATAL: could not find physical"
+  731: 				    " address of the exception handler?");
+  732: 				exit(1);
+  733: 			}
+  734: 		}
+  735: 
+  736: 		physaddr = paddr;
+  737: 	}
+  738: 
+  739: 	physaddr &= ~(DYNTRANS_PAGESIZE - 1);
+  740: 
+  741: #ifdef MODE32
+  742: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] == NULL) {
+  743: #else
+  744: 	if (l3->host_load[x3] == NULL) {
+  745: #endif
+  746: 		int q = DYNTRANS_PAGESIZE - 1;
+  747: 		unsigned char *host_page = memory_paddr_to_hostaddr(cpu->mem,
+  748: 		    physaddr, MEM_READ);
+  749: 		if (host_page != NULL) {
+  750: 			cpu->update_translation_table(cpu, cached_pc & ~q,
+  751: 			    host_page, 0, physaddr);
+  752: 		}
+  753: 	}
+  754: 
+  755: 	if (cpu->translation_cache_cur_ofs >= dyntrans_cache_size) {
+  756: 		debugmsg(SUBSYS_CPU, "dyntrans", VERBOSITY_INFO,
+  757: 		    "resetting the translation cache");
+  758: 
+  759: 		cpu_create_or_reset_tc(cpu);
+  760: 	}
+  761: 
+  762: 	pagenr = DYNTRANS_ADDR_TO_PAGENR(physaddr);
+  763: 	table_index = PAGENR_TO_TABLE_INDEX(pagenr);
+  764: 
+  765: 	physpage_entryp = &(((uint32_t *)cpu->translation_cache)[table_index]);
+  766: 	physpage_ofs = *physpage_entryp;
+  767: 	ppp = NULL;
+  768: 
+  769: 	/*  Traverse the physical page chain:  */
+  770: 	while (physpage_ofs != 0) {
+  771: 		ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+  772: 		    + physpage_ofs);
+  773: 
+  774: 		/*  If we found the page in the cache, then we're done:  */
+  775: 		if (ppp->physaddr == physaddr)
+  776: 			break;
+  777: 
+  778: 		/*  Try the next page in the chain:  */
+  779: 		physpage_ofs = ppp->next_ofs;
+  780: 	}
+  781: 
+  782: 	/*
+  783: 	 *  If the offset is 0, then no translation exists yet for this
+  784: 	 *  physical address. Let's create a new page, and add it first in
+  785: 	 *  the chain.
+  786: 	 */
+  787: 	if (physpage_ofs == 0) {
+  788: 		uint32_t previous_first_page_in_chain;
+  789: 
+  790: 		/*  fatal("CREATING page %lli (physaddr 0x%" PRIx64"), table "
+  791: 		    "index %i\n", (long long)pagenr, (uint64_t)physaddr,
+  792: 		    (int)table_index);  */
+  793: 
+  794: 		previous_first_page_in_chain = *physpage_entryp;
+  795: 
+  796: 		/*  Insert the new page first in the chain:  */
+  797: 		*physpage_entryp = physpage_ofs =
+  798: 		    cpu->translation_cache_cur_ofs;
+  799: 
+  800: 		/*  Allocate a default page, with to_be_translated entries:  */
+  801: 		DYNTRANS_TC_ALLOCATE(cpu, physaddr);
+  802: 
+  803: 		ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+  804: 		    + physpage_ofs);
+  805: 
+  806: 		/*  Point to the other pages in the same chain:  */
+  807: 		ppp->next_ofs = previous_first_page_in_chain;
+  808: 	}
+  809: 
+  810: 	/*  Here, ppp points to a valid physical page struct.  */
+  811: 
+  812: #ifdef MODE32
+  813: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL)
+  814: 		cpu->cd.DYNTRANS_ARCH.phys_page[index] = ppp;
+  815: #else
+  816: 	if (l3->host_load[x3] != NULL)
+  817: 		l3->phys_page[x3] = ppp;
+  818: #endif
+  819: 
+  820: 	/*
+  821: 	 *  If there are no translations yet on this page, then mark it
+  822: 	 *  as non-writable. If there are already translations, then it
+  823: 	 *  should already have been marked as non-writable.
+  824: 	 */
+  825: 	if (ppp->translations_bitmap == 0) {
+  826: 		cpu->invalidate_translation_caches(cpu, physaddr,
+  827: 		    JUST_MARK_AS_NON_WRITABLE | INVALIDATE_PADDR);
+  828: 	}
+  829: 
+  830: 	cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+  831: 
+  832: 	cpu->cd.DYNTRANS_ARCH.next_ic = cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+  833: 	    DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+  834: 
+  835: 	/*  printf("cached_pc=0x%016" PRIx64"  pagenr=%lli  table_index=%lli, "
+  836: 	    "physpage_ofs=0x%016" PRIx64"\n", (uint64_t)cached_pc, (long long)
+  837: 	    pagenr, (long long)table_index, (uint64_t)physpage_ofs);  */
+  838: }
+  839: 
+  840: 
+  841: /*
+  842:  *  XXX_pc_to_pointers():
+  843:  *
+  844:  *  This function uses the current program counter (a virtual address) to
+  845:  *  find out which physical translation page to use, and then sets the current
+  846:  *  translation page pointers to that page.
+  847:  *
+  848:  *  If there was no translation page for that physical page, then an empty
+  849:  *  one is created.
+  850:  *
+  851:  *  NOTE: This is the quick lookup version. See
+  852:  *  DYNTRANS_PC_TO_POINTERS_GENERIC above for the generic case.
+  853:  */
+  854: void DYNTRANS_PC_TO_POINTERS_FUNC(struct cpu *cpu)
+  855: {
+  856: #ifdef MODE32
+  857: 	uint32_t
+  858: #else
+  859: 	uint64_t
+  860: #endif
+  861: 	    cached_pc = cpu->pc;
+  862: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+  863: 
+  864: #ifdef MODE32
+  865: 	int index;
+  866: 	index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+  867: 	ppp = cpu->cd.DYNTRANS_ARCH.phys_page[index];
+  868: 	if (ppp != NULL)
+  869: 		goto have_it;
+  870: #else
+  871: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+  872: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+  873: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+  874: 	uint32_t x1, x2, x3;
+  875: 	struct DYNTRANS_L2_64_TABLE *l2;
+  876: 	struct DYNTRANS_L3_64_TABLE *l3;
+  877: 
+  878: 	x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+  879: 	x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+  880: 	x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+  881: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+  882: 	l3 = l2->l3[x2];
+  883: 	ppp = l3->phys_page[x3];
+  884: 	if (ppp != NULL)
+  885: 		goto have_it;
+  886: #endif
+  887: 
+  888: 	DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);
+  889: 	return;
+  890: 
+  891: 	/*  Quick return path:  */
+  892: have_it:
+  893: 	cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+  894: 	cpu->cd.DYNTRANS_ARCH.next_ic = cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+  895: 	    DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+  896: 
+  897: 	/*  printf("cached_pc=0x%016" PRIx64"  pagenr=%lli  table_index=%lli, "
+  898: 	    "physpage_ofs=0x%016" PRIx64"\n", (uint64_t)cached_pc, (long long)
+  899: 	    pagenr, (long long)table_index, (uint64_t)physpage_ofs);  */
+  900: }
+  901: #endif	/*  DYNTRANS_PC_TO_POINTERS_FUNC  */
+  902: 
+  903: 
+  904: 
+  905: #ifdef DYNTRANS_INIT_TABLES
+  906: 
+  907: /*  forward declaration of to_be_translated and end_of_page:  */
+  908: static void instr(to_be_translated)(struct cpu *, struct DYNTRANS_IC *);
+  909: static void instr(end_of_page)(struct cpu *,struct DYNTRANS_IC *);
+  910: #ifdef DYNTRANS_DUALMODE_32
+  911: static void instr32(to_be_translated)(struct cpu *, struct DYNTRANS_IC *);
+  912: static void instr32(end_of_page)(struct cpu *,struct DYNTRANS_IC *);
+  913: #endif
+  914: 
+  915: #ifdef DYNTRANS_DUALMODE_32
+  916: #define TO_BE_TRANSLATED    ( cpu->is_32bit? instr32(to_be_translated) : \
+  917: 			      instr(to_be_translated) )
+  918: #else
+  919: #define TO_BE_TRANSLATED    ( instr(to_be_translated) )
+  920: #endif
+  921: 
+  922: #ifdef DYNTRANS_DELAYSLOT
+  923: static void instr(end_of_page2)(struct cpu *,struct DYNTRANS_IC *);
+  924: #ifdef DYNTRANS_DUALMODE_32
+  925: static void instr32(end_of_page2)(struct cpu *,struct DYNTRANS_IC *);
+
+[32m succeeded in 395ms:[0m
+    1: /*
+    2:  *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  Common dyntrans routines. Included from cpu_*.c.
+   29:  *
+   30:  *  Note: This might be a bit hard to follow, if you are reading this source
+   31:  *  code for the first time. It is basically a hack to implement "templates"
+   32:  *  with normal C code, by using suitable defines/macros, and then including
+   33:  *  this file.
+   34:  */
+   35: 
+   36: 
+   37: #ifndef STATIC_STUFF
+   38: #define	STATIC_STUFF
+   39: /*
+   40:  *  gather_statistics():
+   41:  */
+   42: static void gather_statistics(struct cpu *cpu)
+   43: {
+   44: 	char ch, buf[60];
+   45: 	struct DYNTRANS_IC *ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+   46: 	int i = 0;
+   47: 	uint64_t a;
+   48: 	int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - (size_t)
+   49: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page) / sizeof(struct DYNTRANS_IC);
+   50: 
+   51: 	if (cpu->machine->statistics.file == NULL) {
+   52: 		fatal("statistics gathering with no filename set is"
+   53: 		    " meaningless\n");
+   54: 		return;
+   55: 	}
+   56: 
+   57: 	/*  low_pc must be within the page!  */
+   58: 	if (low_pc < 0 || low_pc > DYNTRANS_IC_ENTRIES_PER_PAGE)
+   59: 		return;
+   60: 
+   61: 	buf[0] = '\0';
+   62: 
+   63: 	while ((ch = cpu->machine->statistics.fields[i]) != '\0') {
+   64: 		if (i != 0)
+   65: 			strlcat(buf, " ", sizeof(buf));
+   66: 
+   67: 		switch (ch) {
+   68: 		case 'i':
+   69: 			snprintf(buf + strlen(buf), sizeof(buf),
+   70: 			    "%p", (void *)ic->f);
+   71: 			break;
+   72: 		case 'p':
+   73: 			/*  Physical program counter address:  */
+   74: 			cpu->cd.DYNTRANS_ARCH.cur_physpage = (struct DYNTRANS_TC_PHYSPAGE *)
+   75: 			    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+   76: 			a = cpu->cd.DYNTRANS_ARCH.cur_physpage->physaddr;
+   77: 			a &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+   78: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+   79: 			a += low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT;
+   80: 			if (cpu->is_32bit)
+   81: 				snprintf(buf + strlen(buf), sizeof(buf),
+   82: 				    "0x%08" PRIx32, (uint32_t)a);
+   83: 			else
+   84: 				snprintf(buf + strlen(buf), sizeof(buf),
+   85: 				    "0x%016" PRIx64, (uint64_t)a);
+   86: 			break;
+   87: 		case 'v':
+   88: 			/*  Virtual program counter address:  */
+   89: 			a = cpu->pc;
+   90: 			a &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+   91: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+   92: 			a += low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT;
+   93: 			if (cpu->is_32bit)
+   94: 				snprintf(buf + strlen(buf), sizeof(buf),
+   95: 				    "0x%08" PRIx32, (uint32_t)a);
+   96: 			else
+   97: 				snprintf(buf + strlen(buf), sizeof(buf),
+   98: 				    "0x%016" PRIx64, (uint64_t)a);
+   99: 			break;
+  100: 		}
+  101: 		i++;
+  102: 	}
+  103: 
+  104: 	fprintf(cpu->machine->statistics.file, "%s\n", buf);
+  105: }
+  106: 
+  107: 
+  108: #define S		gather_statistics(cpu)
+  109: 
+  110: 
+  111: #if 1
+  112: 
+  113: /*  The normal instruction execution core:  */
+  114: #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic);
+  115: 
+  116: #else
+  117: 
+  118: /*  For heavy debugging:  */
+  119: #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++;	\
+  120: 		{	\
+  121: 			int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - \
+  122: 			    (size_t)cpu->cd.DYNTRANS_ARCH.cur_ic_page) / \
+  123: 			    sizeof(struct DYNTRANS_IC);			\
+  124: 			printf("cur_ic_page=%p ic=%p (low_pc=0x%x)\n",	\
+  125: 			    cpu->cd.DYNTRANS_ARCH.cur_ic_page,		\
+  126: 			    ic, low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT); \
+  127: 		} \
+  128: 		ic->f(cpu, ic);
+  129: 
+  130: #endif
+  131: 
+  132: /*  static long long nr_of_I_calls = 0;  */
+  133: 
+  134: /*  Temporary hack for finding NULL bugs:  */
+  135: /*  #define I	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; 			\
+  136: 		nr_of_I_calls ++;					\
+  137: 		if (ic->f == NULL) {					\
+  138: 			int low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - \
+  139: 			    (size_t)cpu->cd.DYNTRANS_ARCH.cur_ic_page) / \
+  140: 			    sizeof(struct DYNTRANS_IC);			\
+  141: 			cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) << \
+  142: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT);		\
+  143: 			cpu->pc += (low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT);\
+  144: 			printf("Crash at %016" PRIx64"\n", cpu->pc);	\
+  145: 			printf("nr of I calls: %lli\n", nr_of_I_calls);	\
+  146: 			printf("Next ic = %p\n", cpu->cd.		\
+  147: 				DYNTRANS_ARCH.next_ic);			\
+  148: 			printf("cur ic page = %p\n", cpu->cd.		\
+  149: 				DYNTRANS_ARCH.cur_ic_page);		\
+  150: 			cpu->running = 0;				\
+  151: 			return 0;					\
+  152: 		}							\
+  153: 		ic->f(cpu, ic);  */
+  154: 
+  155: /*  Temporary hack for MIPS, to hunt for 32-bit/64-bit sign-extension bugs:  */
+  156: /*  #define I		{ int k; for (k=1; k<=31; k++)	\
+  157: 	cpu->cd.mips.gpr[k] = (int32_t)cpu->cd.mips.gpr[k];\
+  158: 	if (cpu->cd.mips.gpr[0] != 0) {			\
+  159: 		fatal("NOOOOOO\n"); exit(1);		\
+  160: 	}						\
+  161: 	ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic); }
+  162: */
+  163: #endif	/*  STATIC STUFF  */
+  164: 
+  165: 
+  166: 
+  167: #ifdef	DYNTRANS_RUN_INSTR_DEF
+  168: /*
+  169:  *  XXX_run_instr():
+  170:  *
+  171:  *  Execute one or more instructions on a specific CPU, using dyntrans.
+  172:  *  (For dualmode archs, this function is included twice.)
+  173:  *
+  174:  *  Return value is the number of instructions executed during this call,
+  175:  *  0 if no instructions were executed.
+  176:  */
+  177: int DYNTRANS_RUN_INSTR_DEF(struct cpu *cpu)
+  178: {
+  179: 	MODE_uint_t cached_pc;
+  180: 	int low_pc, n_instrs;
+  181: 
+  182: 	/*  Ugly... fix this some day.  */
+  183: #ifdef DYNTRANS_DUALMODE_32
+  184: #ifdef MODE32
+  185: 	DYNTRANS_PC_TO_POINTERS32(cpu);
+  186: #else
+  187: 	DYNTRANS_PC_TO_POINTERS(cpu);
+  188: #endif
+  189: #else
+  190: 	DYNTRANS_PC_TO_POINTERS(cpu);
+  191: #endif
+  192: 
+  193: 	cpu->wants_to_idle = false;
+  194: 
+  195: 	/*
+  196: 	 *  Interrupt assertion?  (This is _below_ the initial PC to pointer
+  197: 	 *  conversion; if the conversion caused an exception of some kind
+  198: 	 *  then interrupts are probably disabled, and the exception will get
+  199: 	 *  priority over device interrupts.)
+  200: 	 *
+  201: 	 *  TODO: Turn this into a family-specific function somewhere...
+  202:  	 */
+  203: 
+  204: 	/*  Note: Do not cause interrupts while single-stepping. It is
+  205: 	    so horribly annoying.  */
+  206: 	if (!single_step) {
+  207: #ifdef DYNTRANS_ARM
+  208: 		if (cpu->cd.arm.irq_asserted && !(cpu->cd.arm.cpsr & ARM_FLAG_I))
+  209: 			arm_exception(cpu, ARM_EXCEPTION_IRQ);
+  210: #endif
+  211: #ifdef DYNTRANS_M88K
+  212: 		if (cpu->cd.m88k.irq_asserted &&
+  213: 		    !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND))
+  214: 			m88k_exception(cpu, M88K_EXCEPTION_INTERRUPT, 0);
+  215: #endif
+  216: #ifdef DYNTRANS_MIPS
+  217: 		int enabled, mask;
+  218: 		int status = cpu->cd.mips.coproc[0]->reg[COP0_STATUS];
+  219: 		if (cpu->cd.mips.cpu_type.exc_model == EXC3K) {
+  220: 			/*  R3000:  */
+  221: 			enabled = status & MIPS_SR_INT_IE;
+  222: 		} else {
+  223: 			/*  R4000 and others:  */
+  224: 			enabled = (status & STATUS_IE)
+  225: 			    && !(status & STATUS_EXL) && !(status & STATUS_ERL);
+  226: 			/*  Special case for R5900/C790/TX79:  */
+  227: 			if (cpu->cd.mips.cpu_type.rev == MIPS_R5900 &&
+  228: 			    !(status & R5900_STATUS_EIE))
+  229: 				enabled = 0;
+  230: 		}
+  231: 		mask = status & cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
+  232: 		    & STATUS_IM_MASK;
+  233: 
+  234: 		if (enabled && mask)
+  235: 			mips_cpu_exception(cpu, EXCEPTION_INT, 0, 0, 0, 0, 0,0);
+  236: #endif
+  237: #ifdef DYNTRANS_PPC
+  238: 		if (cpu->cd.ppc.dec_intr_pending && cpu->cd.ppc.msr & PPC_MSR_EE) {
+  239: 			if (!(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
+  240: 				ppc_exception(cpu, PPC_EXCEPTION_DEC);
+  241: 			cpu->cd.ppc.dec_intr_pending = 0;
+  242: 		}
+  243: 		if (cpu->cd.ppc.irq_asserted && cpu->cd.ppc.msr & PPC_MSR_EE)
+  244: 			ppc_exception(cpu, PPC_EXCEPTION_EI);
+  245: #endif
+  246: #ifdef DYNTRANS_SH
+  247: 		if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+  248: 		    && ((cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+  249: 		    < cpu->cd.sh.int_level)
+  250: 			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+  251: #endif
+  252: 	}
+  253: 
+  254: #ifdef DYNTRANS_ARM
+  255: 	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+  256: 		// fatal("THUMB execution not implemented.\n");
+  257: 		// cpu->running = false;
+  258: 		// return 0;
+  259: 		
+  260: 		arm_cpu_interpret_thumb_SLOW(cpu);
+  261: 		return 1;
+  262: 	}
+  263: #endif
+  264: 
+  265: 	cached_pc = cpu->pc;
+  266: 
+  267: 	cpu->n_translated_instrs = 0;
+  268: 
+  269: 	cpu->cd.DYNTRANS_ARCH.cur_physpage = (struct DYNTRANS_TC_PHYSPAGE *)
+  270: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+  271: 
+  272: 	if (single_step || cpu->machine->instruction_trace
+  273: 	    || cpu->machine->register_dump) {
+  274: 		/*
+  275: 		 *  Single-step:
+  276: 		 */
+  277: 		struct DYNTRANS_IC *ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+  278: 		if (cpu->machine->register_dump) {
+  279: 			debug("\n");
+  280: 			cpu_register_dump(cpu->machine, cpu, 1, 0x1);
+  281: 		}
+  282: 		if (single_step || cpu->machine->instruction_trace) {
+  283: 			/*  TODO/Note: This must be large enough to hold
+  284: 			    any instruction for any ISA:  */
+  285: 			unsigned char instr[1 <<
+  286: 			    DYNTRANS_INSTR_ALIGNMENT_SHIFT];
+  287: 			if (!cpu->memory_rw(cpu, cpu->mem, cached_pc, &instr[0],
+  288: 			    sizeof(instr), MEM_READ, CACHE_INSTRUCTION)) {
+  289: 				fatal("XXX_run_instr(): could not read "
+  290: 				    "the instruction\n");
+  291: 			} else {
+  292: #ifdef DYNTRANS_DELAYSLOT
+  293: 				int len =
+  294: #endif
+  295: 				    cpu_disassemble_instr(
+  296: 				    cpu->machine, cpu, instr, 1, cpu->pc);
+  297: #ifdef DYNTRANS_DELAYSLOT
+  298: 				/*  Show the instruction in the delay slot,
+  299: 				    if any:  */
+  300: 				if (cpu->instruction_has_delayslot == NULL)
+  301: 					fatal("WARNING: ihd func not yet"
+  302: 					    " implemented?\n");
+  303: 				else if (cpu->instruction_has_delayslot(cpu,
+  304: 				    instr)) {
+  305: 					int saved_delayslot = cpu->delay_slot;
+  306: 					cpu->memory_rw(cpu, cpu->mem, cached_pc
+  307: 					    + len, &instr[0],
+  308: 					    sizeof(instr), MEM_READ,
+  309: 					    CACHE_INSTRUCTION);
+  310: 					cpu->delay_slot = DELAYED;
+  311: 					cpu->pc += len;
+  312: 					cpu_disassemble_instr(cpu->machine,
+  313: 					    cpu, instr, 1, cpu->pc);
+  314: 					cpu->delay_slot = saved_delayslot;
+  315: 					cpu->pc -= len;
+  316: 				}
+  317: #endif
+  318: 			}
+  319: 		}
+  320: 
+  321: 		if (cpu->machine->statistics.enabled)
+  322: 			S;
+  323: 
+  324: 		/*  Execute just one instruction:  */
+  325: 		I;
+  326: 
+  327: 		n_instrs = 1;
+  328: 	} else if (cpu->machine->statistics.enabled) {
+  329: 		/*  Gather statistics while executing multiple instructions:  */
+  330: 		n_instrs = 0;
+  331: 		for (;;) {
+  332: 			struct DYNTRANS_IC *ic;
+  333: 
+  334: 			S; I; S; I; S; I; S; I; S; I; S; I;
+  335: 			S; I; S; I; S; I; S; I; S; I; S; I;
+  336: 			S; I; S; I; S; I; S; I; S; I; S; I;
+  337: 			S; I; S; I; S; I; S; I; S; I; S; I;
+  338: 
+  339: 			cpu->n_translated_instrs += 24;
+  340: 			if (cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT)
+  341: 				break;
+  342: 		}
+  343: 	} else {
+  344: 		/*
+  345: 		 *  Execute multiple instructions:
+  346: 		 *
+  347: 		 *  (This is the core dyntrans loop.)
+  348: 		 */
+  349: 		n_instrs = 0;
+  350: 
+  351: 		for (;;) {
+  352: 			struct DYNTRANS_IC *ic;
+  353: 
+  354: 			I; I; I; I; I;   I; I; I; I; I;
+  355: 			I; I; I; I; I;   I; I; I; I; I;
+  356: 			I; I; I; I; I;   I; I; I; I; I;
+  357: 			I; I; I; I; I;   I; I; I; I; I;
+  358: 			I; I; I; I; I;   I; I; I; I; I;
+  359: 
+  360: 			I; I; I; I; I;   I; I; I; I; I;
+  361: 
+  362: 			I; I; I; I; I;   I; I; I; I; I;
+  363: 			I; I; I; I; I;   I; I; I; I; I;
+  364: 			I; I; I; I; I;   I; I; I; I; I;
+  365: 			I; I; I; I; I;   I; I; I; I; I;
+  366: 			I; I; I; I; I;   I; I; I; I; I;
+  367: 
+  368: 			I; I; I; I; I;   I; I; I; I; I;
+  369: 
+  370: 			cpu->n_translated_instrs += 120;
+  371: 			if (cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT)
+  372: 				break;
+  373: 		}
+  374: 	}
+  375: 
+  376: 	if (cpu->wants_to_idle) {
+  377: 		cpu->n_translated_instrs -= N_DYNTRANS_IDLE_BREAK;
+  378: 
+  379: 		// TODO: More arch specific interrupt checks
+  380: 		if (false
+  381: #ifdef DYNTRANS_M88K
+  382: 		    || (cpu->cd.m88k.irq_asserted && !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND))
+  383: #endif
+  384: 		    ) {
+  385: 			debugmsg_cpu(cpu, SUBSYS_CPU, "idle", VERBOSITY_DEBUG, "not idling; exception");
+  386: 			cpu->wants_to_idle = false;
+  387: 		}
+  388: 
+  389: 		cpu->has_been_idling = true;
+  390: 	}
+  391: 
+  392: 	n_instrs += cpu->n_translated_instrs;
+  393: 
+  394: 	/*  Synchronize the program counter:  */
+  395: 	low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - (size_t)
+  396: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page) / sizeof(struct DYNTRANS_IC);
+  397: 	if (low_pc >= 0 && low_pc < DYNTRANS_IC_ENTRIES_PER_PAGE) {
+  398: 		cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+  399: 		    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  400: 		cpu->pc += (low_pc << DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  401: 	} else if (low_pc == DYNTRANS_IC_ENTRIES_PER_PAGE) {
+  402: 		/*  Switch to next page:  */
+  403: 		cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+  404: 		    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  405: 		cpu->pc += (DYNTRANS_IC_ENTRIES_PER_PAGE <<
+  406: 		    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  407: 	} else if (low_pc == DYNTRANS_IC_ENTRIES_PER_PAGE + 1) {
+  408: 		/*  Switch to next page and skip an instruction which was
+  409: 		    already executed (in a delay slot):  */
+  410: 		cpu->pc &= ~((DYNTRANS_IC_ENTRIES_PER_PAGE-1) <<
+  411: 		    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  412: 		cpu->pc += ((DYNTRANS_IC_ENTRIES_PER_PAGE + 1) <<
+  413: 		    DYNTRANS_INSTR_ALIGNMENT_SHIFT);
+  414: 	}
+  415: 
+  416: #ifdef DYNTRANS_MIPS
+  417: 	/*  Update the count register (on everything except EXC3K):  */
+  418: 	if (cpu->cd.mips.cpu_type.exc_model != EXC3K) {
+  419: 		uint32_t old;
+  420: 		int32_t diff1, diff2;
+  421: 		cpu->cd.mips.coproc[0]->reg[COP0_COUNT] -= cpu->cd.mips.count_register_read_count;
+  422: 		cpu->cd.mips.count_register_read_count = 0;
+  423: 		old = cpu->cd.mips.coproc[0]->reg[COP0_COUNT];
+  424: 		diff1 = cpu->cd.mips.coproc[0]->reg[COP0_COMPARE] - old;
+  425: 		cpu->cd.mips.coproc[0]->reg[COP0_COUNT] =
+
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_alpha_instr.c'; "'$s=Get-Content -LiteralPath $p; foreach ($r in @(@(1,220),@(720,850),@(1370,$s.Count))) { $r[0]..$r[1] | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_alpha.c'; "'$s=Get-Content -LiteralPath $p; 1..150 | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }; rg -n '"'include|DYNTRANS|nothing|exception' GXEMUL-SEC/src/cpus/cpu_alpha.c GXEMUL-SEC/src/cpus/cpu_alpha_instr.c"[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$s=Get-Content -LiteralPath $p; foreach ($r in @(@(416,470),@(585,660),@(1750,$s.Count))) { $r[0]..$r[1] | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] } }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 375ms:[0m
+    1: /*
+    2:  *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  Alpha CPU emulation.
+   29:  *
+   30:  *  TODO: Many things.
+   31:  *
+   32:  *  See http://www.eecs.harvard.edu/~nr/toolkit/specs/alpha.html for info
+   33:  *  on instruction formats etc.
+   34:  */
+   35: 
+   36: #include <ctype.h>
+   37: #include <stdio.h>
+   38: #include <stdlib.h>
+   39: #include <string.h>
+   40: #include <unistd.h>
+   41: 
+   42: #include "cpu.h"
+   43: #include "interrupt.h"
+   44: #include "machine.h"
+   45: #include "memory.h"
+   46: #include "misc.h"
+   47: #include "settings.h"
+   48: #include "symbol.h"
+   49: 
+   50: #define	DYNTRANS_8K
+   51: #define	DYNTRANS_PAGESIZE	8192
+   52: #include "tmp_alpha_head.c"
+   53: 
+   54: 
+   55: /*  Alpha symbolic register names:  */
+   56: static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+   57: 
+   58: void alpha_irq_interrupt_assert(struct interrupt *interrupt);
+   59: void alpha_irq_interrupt_deassert(struct interrupt *interrupt);
+   60: 
+   61: 
+   62: /*
+   63:  *  alpha_cpu_new():
+   64:  *
+   65:  *  Create a new Alpha CPU object by filling the CPU struct.
+   66:  *  Return 1 on success, 0 if cpu_type_name isn't a valid Alpha processor.
+   67:  */
+   68: int alpha_cpu_new(struct cpu *cpu, struct memory *mem,
+   69: 	struct machine *machine, int cpu_id, char *cpu_type_name)
+   70: {
+   71: 	int i = 0;
+   72: 	struct alpha_cpu_type_def cpu_type_defs[] = ALPHA_CPU_TYPE_DEFS;
+   73: 
+   74: 	/*  Scan the cpu_type_defs list for this cpu type:  */
+   75: 	while (cpu_type_defs[i].name != NULL) {
+   76: 		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+   77: 			break;
+   78: 		}
+   79: 		i++;
+   80: 	}
+   81: 	if (cpu_type_defs[i].name == NULL)
+   82: 		return 0;
+   83: 
+   84: 	cpu->is_32bit = 0;
+   85: 	cpu->byte_order = EMUL_LITTLE_ENDIAN;
+   86: 
+   87: 	cpu->memory_rw = alpha_memory_rw;
+   88: 	cpu->run_instr = alpha_run_instr;
+   89: 	cpu->translate_v2p = alpha_translate_v2p;
+   90: 	cpu->update_translation_table = alpha_update_translation_table;
+   91: 	cpu->invalidate_translation_caches =
+   92: 	    alpha_invalidate_translation_caches;
+   93: 	cpu->invalidate_code_translation = alpha_invalidate_code_translation;
+   94: 
+   95: 	cpu->cd.alpha.cpu_type = cpu_type_defs[i];
+   96: 
+   97: 	cpu->cd.alpha.r[ALPHA_SP] = 0xfffffc000000ff00ULL;
+   98: 
+   99: 	/*  Set up dummy kentry pointers to something which crashes
+  100: 	    the machine:  */
+  101: 	store_32bit_word(cpu, 0x10010, 0x3fffffc);
+  102: 	for (i=0; i<N_ALPHA_KENTRY; i++)
+  103: 		cpu->cd.alpha.kentry[i] = 0x10010;
+  104: 
+  105: 	/*  Bogus initial context (will be overwritten on first
+  106: 	    context switch):  */
+  107: 	cpu->cd.alpha.ctx = 0x10100;
+  108: 
+  109: 	CPU_SETTINGS_ADD_REGISTER64("pc", cpu->pc);
+  110: 	for (i=0; i<N_ALPHA_REGS; i++)
+  111: 		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+  112: 		    cpu->cd.alpha.r[i]);
+  113: 
+  114: 	/*  Register the CPU interrupt pin:  */
+  115: 	{
+  116: 		struct interrupt templ;
+  117: 
+  118: 		memset(&templ, 0, sizeof(templ));
+  119: 		templ.line = 0;
+  120: 		templ.name = cpu->path;
+  121: 		templ.extra = cpu;
+  122: 		templ.interrupt_assert = alpha_irq_interrupt_assert; 
+  123: 		templ.interrupt_deassert = alpha_irq_interrupt_deassert; 
+  124: 		interrupt_handler_register(&templ);
+  125: 	}
+  126: 
+  127: 	return 1;
+  128: }
+  129: 
+  130: 
+  131: /*
+  132:  *  alpha_cpu_dumpinfo():
+  133:  */
+  134: void alpha_cpu_dumpinfo(struct cpu *cpu, bool verbose)
+  135: {
+  136: 	debugmsg(SUBSYS_MACHINE, "cpu", VERBOSITY_INFO, "%s", cpu->name);
+  137: }
+  138: 
+  139: 
+  140: /*
+  141:  *  alpha_cpu_list_available_types():
+  142:  *
+  143:  *  Print a list of available Alpha CPU types.
+  144:  */
+  145: void alpha_cpu_list_available_types(void)
+  146: {
+  147: 	int i, j;
+  148: 	struct alpha_cpu_type_def tdefs[] = ALPHA_CPU_TYPE_DEFS;
+  149: 
+  150: 	i = 0;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:37:#include "float_emul.h"
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:41: *  nop:  Do nothing.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:67:		cpu->cd.alpha.next_ic = &nothing_call;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:742:#include "tmp_alpha_misc.c"
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:771: *  valid data for the translated instruction, or a "nothing" instruction if
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:795:		const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:796:		const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:797:		const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:798:		uint32_t x1 = (addr >> (64-DYNTRANS_L1N)) & mask1;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:799:		uint32_t x2 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:800:		uint32_t x3 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N-
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:801:		    DYNTRANS_L3N)) & mask3;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:802:		struct DYNTRANS_L2_64_TABLE *l2 = cpu->cd.alpha.l1_64[x1];
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:803:		struct DYNTRANS_L3_64_TABLE *l3 = l2->l3[x2];
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:826:#define DYNTRANS_TO_BE_TRANSLATED_HEAD
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:827:#include "cpu_dyntrans.c"
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:828:#undef	DYNTRANS_TO_BE_TRANSLATED_HEAD
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1320:#define DYNTRANS_TO_BE_TRANSLATED_TAIL
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1321:#include "cpu_dyntrans.c"
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1322:#undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
+GXEMUL-SEC/src/cpus/cpu_alpha.c:36:#include <ctype.h>
+GXEMUL-SEC/src/cpus/cpu_alpha.c:37:#include <stdio.h>
+GXEMUL-SEC/src/cpus/cpu_alpha.c:38:#include <stdlib.h>
+GXEMUL-SEC/src/cpus/cpu_alpha.c:39:#include <string.h>
+GXEMUL-SEC/src/cpus/cpu_alpha.c:40:#include <unistd.h>
+GXEMUL-SEC/src/cpus/cpu_alpha.c:42:#include "cpu.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:43:#include "interrupt.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:44:#include "machine.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:45:#include "memory.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:46:#include "misc.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:47:#include "settings.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:48:#include "symbol.h"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:50:#define	DYNTRANS_8K
+GXEMUL-SEC/src/cpus/cpu_alpha.c:51:#define	DYNTRANS_PAGESIZE	8192
+GXEMUL-SEC/src/cpus/cpu_alpha.c:52:#include "tmp_alpha_head.c"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:673:#include "memory_rw.c"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:679:#include "tmp_alpha_tail.c"
+
+[32m succeeded in 415ms:[0m
+    1: /*
+    2:  *  Copyright (C) 2005-2020  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  Alpha instructions.
+   29:  *
+   30:  *  Individual functions should keep track of cpu->n_translated_instrs.
+   31:  *  (If no instruction was executed, then it should be decreased. If, say, 4
+   32:  *  instructions were combined into one function and executed, then it should
+   33:  *  be increased by 3.)
+   34:  */
+   35: 
+   36: 
+   37: #include "float_emul.h"
+   38: 
+   39: 
+   40: /*
+   41:  *  nop:  Do nothing.
+   42:  */
+   43: X(nop)
+   44: {
+   45: }
+   46: 
+   47: 
+   48: /*
+   49:  *  call_pal:  PALcode call
+   50:  *
+   51:  *  arg[0] = pal nr
+   52:  */
+   53: X(call_pal)
+   54: {
+   55: 	/*  Synchronize PC first:  */
+   56: 	uint64_t old_pc, low_pc = ((size_t)ic - (size_t)
+   57: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+   58: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+   59: 	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+   60: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+   61: 	old_pc = cpu->pc;
+   62: 
+   63: 	alpha_palcode(cpu, ic->arg[0]);
+   64: 
+   65: 	if (!cpu->running) {
+   66: 		cpu->n_translated_instrs --;
+   67: 		cpu->cd.alpha.next_ic = &nothing_call;
+   68: 	} else if (cpu->pc != old_pc) {
+   69: 		/*  The PC value was changed by the palcode call.  */
+   70: 		/*  Find the new physical page and update the translation
+   71: 		    pointers:  */
+   72: 		alpha_pc_to_pointers(cpu);
+   73: 	}
+   74: }
+   75: 
+   76: 
+   77: /*
+   78:  *  jsr:  Jump to SubRoutine
+   79:  *
+   80:  *  arg[0] = ptr to uint64_t where to store return PC
+   81:  *  arg[1] = ptr to uint64_t of new PC
+   82:  */
+   83: X(jsr)
+   84: {
+   85: 	uint64_t old_pc = cpu->pc, low_pc;
+   86: 	uint64_t mask_within_page = ((ALPHA_IC_ENTRIES_PER_PAGE-1)
+   87: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT) |
+   88: 	    ((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+   89: 
+   90: 	low_pc = ((size_t)ic - (size_t)
+   91: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+   92: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+   93: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+   94: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT) + 4;
+   95: 
+   96: 	*((int64_t *)ic->arg[0]) = cpu->pc;
+   97: 	cpu->pc = *((int64_t *)ic->arg[1]);
+   98: 
+   99: 	/*
+  100: 	 *  If this is a jump/return into the same code page as we were
+  101: 	 *  already in, then just set cpu->cd.alpha.next_ic.
+  102: 	 */
+  103: 	if ((old_pc & ~mask_within_page) == (cpu->pc & ~mask_within_page)) {
+  104: 		cpu->cd.alpha.next_ic = cpu->cd.alpha.cur_ic_page +
+  105: 		    ((cpu->pc & mask_within_page) >> 2);
+  106: 	} else {
+  107: 		/*  Find the new physical page and update pointers:  */
+  108: 		alpha_pc_to_pointers(cpu);
+  109: 	}
+  110: }
+  111: 
+  112: 
+  113: /*
+  114:  *  jsr_trace:  Jump to SubRoutine (with function call trace enabled)
+  115:  *
+  116:  *  Arguments same as for jsr.
+  117:  */
+  118: X(jsr_trace)
+  119: {
+  120: 	cpu_functioncall_trace(cpu, *((int64_t *)ic->arg[1]));
+  121: 	instr(jsr)(cpu, ic);
+  122: }
+  123: 
+  124: 
+  125: /*
+  126:  *  jsr_0:  JSR/RET, don't store return PC.
+  127:  *
+  128:  *  arg[0] = ignored
+  129:  *  arg[1] = ptr to uint64_t of new PC
+  130:  */
+  131: X(jsr_0)
+  132: {
+  133: 	uint64_t old_pc = cpu->pc;
+  134: 	uint64_t mask_within_page = ((ALPHA_IC_ENTRIES_PER_PAGE-1)
+  135: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT)
+  136: 	    | ((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+  137: 
+  138: 	cpu->pc = *((int64_t *)ic->arg[1]);
+  139: 
+  140: 	/*
+  141: 	 *  If this is a jump/return into the same code page as we were
+  142: 	 *  already in, then just set cpu->cd.alpha.next_ic.
+  143: 	 */
+  144: 	if ((old_pc & ~mask_within_page) == (cpu->pc & ~mask_within_page)) {
+  145: 		cpu->cd.alpha.next_ic = cpu->cd.alpha.cur_ic_page +
+  146: 		    ((cpu->pc & mask_within_page) >> 2);
+  147: 	} else {
+  148: 		/*  Find the new physical page and update pointers:  */
+  149: 		alpha_pc_to_pointers(cpu);
+  150: 	}
+  151: }
+  152: 
+  153: 
+  154: /*
+  155:  *  jsr_0_trace:  JSR/RET (with function call trace enabled)
+  156:  *
+  157:  *  Arguments same as for jsr_0.
+  158:  */
+  159: X(jsr_0_trace)
+  160: {
+  161: 	cpu_functioncall_trace_return(cpu);
+  162: 	instr(jsr_0)(cpu, ic);
+  163: }
+  164: 
+  165: 
+  166: /*
+  167:  *  br:  Branch (to a different translated page)
+  168:  *
+  169:  *  arg[0] = relative offset (as an int32_t)
+  170:  */
+  171: X(br)
+  172: {
+  173: 	uint64_t low_pc;
+  174: 
+  175: 	/*  Calculate new PC from this instruction + arg[0]  */
+  176: 	low_pc = ((size_t)ic - (size_t)
+  177: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+  178: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+  179: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  180: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  181: 	cpu->pc += (int32_t)ic->arg[0];
+  182: 
+  183: 	/*  Find the new physical page and update the translation pointers:  */
+  184: 	alpha_pc_to_pointers(cpu);
+  185: }
+  186: 
+  187: 
+  188: /*
+  189:  *  br:  Branch (to a different translated page), write return address
+  190:  *
+  191:  *  arg[0] = relative offset (as an int32_t)
+  192:  *  arg[1] = pointer to uint64_t where to write return address
+  193:  */
+  194: X(br_return)
+  195: {
+  196: 	uint64_t low_pc;
+  197: 
+  198: 	/*  Calculate new PC from this instruction + arg[0]  */
+  199: 	low_pc = ((size_t)ic - (size_t)
+  200: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+  201: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+  202: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  203: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  204: 
+  205: 	/*  ... but first, save away the return address:  */
+  206: 	*((int64_t *)ic->arg[1]) = cpu->pc + 4;
+  207: 
+  208: 	cpu->pc += (int32_t)ic->arg[0];
+  209: 
+  210: 	/*  Find the new physical page and update the translation pointers:  */
+  211: 	alpha_pc_to_pointers(cpu);
+  212: }
+  213: 
+  214: 
+  215: /*
+  216:  *  beq:  Branch (to a different translated page) if Equal
+  217:  *
+  218:  *  arg[0] = relative offset (as an int32_t)
+  219:  *  arg[1] = pointer to int64_t register
+  220:  */
+  720:  *  arg[0] = pointer to destination uint64_t
+  721:  */
+  722: X(clear)
+  723: {
+  724: 	reg(ic->arg[0]) = 0;
+  725: }
+  726: 
+  727: 
+  728: /*
+  729:  *  rdcc:  Read the Cycle Counter into a 64-bit register.
+  730:  *
+  731:  *  arg[0] = pointer to destination uint64_t
+  732:  */
+  733: X(rdcc)
+  734: {
+  735: 	reg(ic->arg[0]) = cpu->cd.alpha.pcc;
+  736: 
+  737: 	/*  TODO: actually keep the pcc updated!  */
+  738: 	cpu->cd.alpha.pcc += 20;
+  739: }
+  740: 
+  741: 
+  742: #include "tmp_alpha_misc.c"
+  743: 
+  744: 
+  745: /*****************************************************************************/
+  746: 
+  747: 
+  748: X(end_of_page)
+  749: {
+  750: 	/*  Update the PC:  (offset 0, but on the next page)  */
+  751: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+  752: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  753: 	cpu->pc += (ALPHA_IC_ENTRIES_PER_PAGE
+  754: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  755: 
+  756: 	/*  Find the new physical page and update the translation pointers:  */
+  757: 	alpha_pc_to_pointers(cpu);
+  758: 
+  759: 	/*  end_of_page doesn't count as an executed instruction:  */
+  760: 	cpu->n_translated_instrs --;
+  761: }
+  762: 
+  763: 
+  764: /*****************************************************************************/
+  765: 
+  766: 
+  767: /*
+  768:  *  alpha_instr_to_be_translated():
+  769:  *
+  770:  *  Translate an instruction word into an alpha_instr_call. ic is filled in with
+  771:  *  valid data for the translated instruction, or a "nothing" instruction if
+  772:  *  there was a translation failure. The newly translated instruction is then
+  773:  *  executed.
+  774:  */
+  775: X(to_be_translated)
+  776: {
+  777: 	uint64_t addr, low_pc;
+  778: 	uint32_t iword;
+  779: 	unsigned char *page;
+  780: 	unsigned char ib[4];
+  781: 	void (*samepage_function)(struct cpu *, struct alpha_instr_call *);
+  782: 	int opcode, ra, rb, func, rc, imm, load, loadstore_type, fp, llsc;
+  783: 
+  784: 	/*  Figure out the (virtual) address of the instruction:  */
+  785: 	low_pc = ((size_t)ic - (size_t)cpu->cd.alpha.cur_ic_page)
+  786: 	    / sizeof(struct alpha_instr_call);
+  787: 	addr = cpu->pc & ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+  788: 	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+  789: 	addr += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  790: 	addr &= ~((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+  791: 	cpu->pc = addr;
+  792: 
+  793: 	/*  Read the instruction word from memory:  */
+  794: 	{
+  795: 		const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+  796: 		const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+  797: 		const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+  798: 		uint32_t x1 = (addr >> (64-DYNTRANS_L1N)) & mask1;
+  799: 		uint32_t x2 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+  800: 		uint32_t x3 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N-
+  801: 		    DYNTRANS_L3N)) & mask3;
+  802: 		struct DYNTRANS_L2_64_TABLE *l2 = cpu->cd.alpha.l1_64[x1];
+  803: 		struct DYNTRANS_L3_64_TABLE *l3 = l2->l3[x2];
+  804: 		page = l3->host_load[x3];
+  805: 	}
+  806: 
+  807: 	if (page != NULL) {
+  808: 		/*  fatal("TRANSLATION HIT!\n");  */
+  809: 		memcpy(ib, page + (addr & 8191), sizeof(ib));
+  810: 	} else {
+  811: 		/*  fatal("TRANSLATION MISS!\n");  */
+  812: 		if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+  813: 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+  814: 			fatal("to_be_translated(): read failed: TODO\n");
+  815: 			goto bad;
+  816: 		}
+  817: 	}
+  818: 
+  819: 	/*  Alpha instruction words are always little-endian. Convert
+  820: 	    to host order:  */
+  821: 	{
+  822: 		uint32_t *p = (uint32_t *) ib;
+  823: 		iword = LE32_TO_HOST( *p );
+  824: 	}
+  825: 
+  826: #define DYNTRANS_TO_BE_TRANSLATED_HEAD
+  827: #include "cpu_dyntrans.c"
+  828: #undef	DYNTRANS_TO_BE_TRANSLATED_HEAD
+  829: 
+  830: 
+  831: 	opcode = (iword >> 26) & 63;
+  832: 	ra = (iword >> 21) & 31;
+  833: 	rb = (iword >> 16) & 31;
+  834: 	func = (iword >> 5) & 0x7ff;
+  835: 	rc = iword & 31;
+  836: 	imm = iword & 0xffff;
+  837: 
+  838: 	switch (opcode) {
+  839: 	case 0x00:						/*  CALL_PAL  */
+  840: 		ic->f = instr(call_pal);
+  841: 		ic->arg[0] = (size_t) (iword & 0x3ffffff);
+  842: 		break;
+  843: 	case 0x08:						/*  LDA  */
+  844: 	case 0x09:						/*  LDAH  */
+  845: 		if (ra == ALPHA_ZERO) {
+  846: 			ic->f = instr(nop);
+  847: 			break;
+  848: 		}
+  849: 		/*  TODO: A special case which is common is to add or subtract
+  850: 		    a small offset from sp.  */
+ 1370: 
+ 1369: 
+ 1368: 
+ 1367: 
+ 1366: 
+ 1365: 
+ 1364: 
+ 1363: 
+ 1362: 
+ 1361: 
+ 1360: 
+ 1359: 
+ 1358: 
+ 1357: 
+ 1356: 
+ 1355: 
+ 1354: 
+ 1353: 
+ 1352: 
+ 1351: 
+ 1350: 
+ 1349: 
+ 1348: 
+ 1347: 
+ 1346: 
+ 1345: 
+ 1344: 
+ 1343: 
+ 1342: 
+ 1341: 
+ 1340: 
+ 1339: 
+ 1338: 
+ 1337: 
+ 1336: 
+ 1335: 
+ 1334: 
+ 1333: 
+ 1332: 
+ 1331: 
+ 1330: 
+ 1329: 
+ 1328: 
+ 1327: 
+ 1326: 
+ 1325: 
+ 1324: 
+
+[32m succeeded in 437ms:[0m
+  416: #ifdef DYNTRANS_MIPS
+  417: 	/*  Update the count register (on everything except EXC3K):  */
+  418: 	if (cpu->cd.mips.cpu_type.exc_model != EXC3K) {
+  419: 		uint32_t old;
+  420: 		int32_t diff1, diff2;
+  421: 		cpu->cd.mips.coproc[0]->reg[COP0_COUNT] -= cpu->cd.mips.count_register_read_count;
+  422: 		cpu->cd.mips.count_register_read_count = 0;
+  423: 		old = cpu->cd.mips.coproc[0]->reg[COP0_COUNT];
+  424: 		diff1 = cpu->cd.mips.coproc[0]->reg[COP0_COMPARE] - old;
+  425: 		cpu->cd.mips.coproc[0]->reg[COP0_COUNT] =
+  426: 		    (int32_t) (old + n_instrs);
+  427: 		diff2 = cpu->cd.mips.coproc[0]->reg[COP0_COMPARE] -
+  428: 		    cpu->cd.mips.coproc[0]->reg[COP0_COUNT];
+  429: 
+  430: 		if (cpu->cd.mips.compare_register_set) {
+  431: #if 1
+  432: /*  Not yet.  TODO  */
+  433: 			if (cpu->machine->emulated_hz > 0) {
+  434: 				if (cpu->cd.mips.compare_interrupts_pending > 0)
+  435: 					INTERRUPT_ASSERT(
+  436: 					    cpu->cd.mips.irq_compare);
+  437: 			} else
+  438: #endif
+  439: 			{
+  440: 				if (diff1 > 0 && diff2 <= 0)
+  441: 					INTERRUPT_ASSERT(
+  442: 					    cpu->cd.mips.irq_compare);
+  443: 			}
+  444: 		}
+  445: 	}
+  446: #endif
+  447: #ifdef DYNTRANS_PPC
+  448: 	/*  Update the Decrementer and Time base registers:  */
+  449: 	{
+  450: 		uint32_t old = cpu->cd.ppc.spr[SPR_DEC];
+  451: 		cpu->cd.ppc.spr[SPR_DEC] = (uint32_t) (old - n_instrs);
+  452: 		if ((old >> 31) == 0 && (cpu->cd.ppc.spr[SPR_DEC] >> 31) == 1
+  453: 		    && !(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
+  454: 			cpu->cd.ppc.dec_intr_pending = 1;
+  455: 		old = cpu->cd.ppc.spr[SPR_TBL];
+  456: 		cpu->cd.ppc.spr[SPR_TBL] = (uint32_t) (old + n_instrs);
+  457: 		if ((old >> 31) == 1 && (cpu->cd.ppc.spr[SPR_TBL] >> 31) == 0)
+  458: 			cpu->cd.ppc.spr[SPR_TBU] ++;
+  459: 	}
+  460: #endif
+  461: 
+  462: 	cpu->ninstrs += n_instrs;
+  463: 
+  464: 	/*  Return the nr of instructions executed:  */
+  465: 	return n_instrs;
+  466: }
+  467: #endif	/*  DYNTRANS_RUN_INSTR  */
+  468: 
+  469: 
+  470: 
+  585: #ifdef DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF
+  586: /*
+  587:  *  XXX_tc_allocate_default_page():
+  588:  *
+  589:  *  Create a default page (with just pointers to instr(to_be_translated)
+  590:  *  at cpu->translation_cache_cur_ofs.
+  591:  */
+  592: static void DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF(struct cpu *cpu,
+  593: 	uint64_t physaddr)
+  594: { 
+  595: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+  596: 
+  597: 	ppp = (struct DYNTRANS_TC_PHYSPAGE *)(cpu->translation_cache
+  598: 	    + cpu->translation_cache_cur_ofs);
+  599: 
+  600: 	/*  Copy the entire template page first:  */
+  601: 	memcpy(ppp, cpu->cd.DYNTRANS_ARCH.physpage_template, sizeof(
+  602: 	    struct DYNTRANS_TC_PHYSPAGE));
+  603: 
+  604: 	ppp->physaddr = physaddr & ~(DYNTRANS_PAGESIZE - 1);
+  605: 
+  606: 	cpu->translation_cache_cur_ofs += sizeof(struct DYNTRANS_TC_PHYSPAGE);
+  607: 
+  608: 	cpu->translation_cache_cur_ofs --;
+  609: 	cpu->translation_cache_cur_ofs |= 63;
+  610: 	cpu->translation_cache_cur_ofs ++;
+  611: }
+  612: #endif	/*  DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF  */
+  613: 
+  614: 
+  615: 
+  616: #ifdef DYNTRANS_PC_TO_POINTERS_FUNC
+  617: /*
+  618:  *  XXX_pc_to_pointers_generic():
+  619:  *
+  620:  *  Generic case. See DYNTRANS_PC_TO_POINTERS_FUNC below.
+  621:  */
+  622: void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+  623: {
+  624: #ifdef MODE32
+  625: 	uint32_t
+  626: #else
+  627: 	uint64_t
+  628: #endif
+  629: 	    cached_pc = cpu->pc, physaddr = 0;
+  630: 	uint32_t physpage_ofs;
+  631: 	int ok, pagenr, table_index;
+  632: 	uint32_t *physpage_entryp;
+  633: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+  634: 
+  635: #ifdef MODE32
+  636: 	int index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+  637: #else
+  638: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+  639: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+  640: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+  641: 	uint32_t x1, x2, x3;
+  642: 	struct DYNTRANS_L2_64_TABLE *l2;
+  643: 	struct DYNTRANS_L3_64_TABLE *l3;
+  644: 
+  645: 	x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+  646: 	x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+  647: 	x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+  648: 	/*  fatal("X3: cached_pc=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+  649: 	    (uint64_t)cached_pc, (int)x1, (int)x2, (int)x3);  */
+  650: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+  651: 	/*  fatal("  l2 = %p\n", l2);  */
+  652: 	l3 = l2->l3[x2];
+  653: 	/*  fatal("  l3 = %p\n", l3);  */
+  654: #endif
+  655: 
+  656: 	/*  Virtual to physical address translation:  */
+  657: 	ok = 0;
+  658: #ifdef MODE32
+  659: 	if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL) {
+  660: 		physaddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+ 1750: 		printf("Y: %i in use, but refcount = %i!\n", n, l3->refcount);
+ 1751: 		exit(1);
+ 1752: 	}
+ 1753: 
+ 1754: 	n = 0;
+ 1755: 	for (i=0; i<=mask3; i++)
+ 1756: 		if (l3->host_load[i] != NULL)
+ 1757: 			n++;
+ 1758: 	if (n != l3->refcount) {
+ 1759: 		printf("YHL: %i in use, but refcount = %i!\n", n, l3->refcount);
+ 1760: 		printf("Entry r = %i\n", r);
+ 1761: 		printf("Valid = %i\n",
+ 1762: cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid);
+ 1763: 		exit(1);
+ 1764: 	}
+ 1765: }
+ 1766: #endif
+ 1767: 
+ 1768: #endif	/*  !MODE32  */
+ 1769: 	}
+ 1770: 
+ 1771: 	/*
+ 1772: 	 *  #250: if this page overlaps a data write-watchpoint, keep it out of
+ 1773: 	 *  the fast store table so every store to it traps to memory_rw, where
+ 1774: 	 *  the watchpoint is evaluated. NOP unless a watchpoint is set; only
+ 1775: 	 *  the watched page(s) are affected, so a run without watchpoints is
+ 1776: 	 *  behaviourally identical. index (MODE32) and l3/x3 (!MODE32) are
+ 1777: 	 *  valid here for both the new-mapping and update branches.
+ 1778: 	 */
+ 1779: 	if (cpu->machine->watchpoints.n != 0 &&
+ 1780: 	    machine_watchpoint_match(cpu->machine, paddr_page,
+ 1781: 	    DYNTRANS_PAGESIZE)) {
+ 1782: #ifdef MODE32
+ 1783: 		cpu->cd.DYNTRANS_ARCH.host_store[index] = NULL;
+ 1784: #else
+ 1785: 		l3->host_store[x3] = NULL;
+ 1786: #endif
+ 1787: 	}
+ 1788: }
+ 1789: #endif	/*  DYNTRANS_UPDATE_TRANSLATION_TABLE  */
+ 1790: 
+ 1791: 
+ 1792: /*****************************************************************************/
+ 1793: 
+ 1794: 
+ 1795: #ifdef DYNTRANS_TO_BE_TRANSLATED_HEAD
+ 1796: 	/*
+ 1797: 	 *  Check for breakpoints.
+ 1798: 	 */
+ 1799: 	if (!single_step_breakpoint && !cpu->translation_readahead) {
+ 1800: 		MODE_uint_t curpc = cpu->pc;
+ 1801: 		int i;
+ 1802: 		for (i=0; i<cpu->machine->breakpoints.n; i++)
+ 1803: 			if (curpc == (MODE_uint_t)
+ 1804: 			    cpu->machine->breakpoints.addr[i]) {
+ 1805: 				/*
+ 1806: 				 *  #248: count every hit, and honor a
+ 1807: 				 *  per-breakpoint ignore-count so that
+ 1808: 				 *  "breakpoint add addr, N" runs past the
+ 1809: 				 *  first N hits before stopping. Setting
+ 1810: 				 *  single_step_breakpoint (without single_step)
+ 1811: 				 *  makes the TAIL execute this instruction once
+ 1812: 				 *  and mark it for re-translation, so the check
+ 1813: 				 *  fires again on the next hit.
+ 1814: 				 */
+ 1815: 				cpu->machine->breakpoints.hitcount[i] ++;
+ 1816: 				if (cpu->machine->breakpoints.ignore_left[i] > 0
+ 1817: #ifdef DYNTRANS_DELAYSLOT
+ 1818: 				    && cpu->delay_slot == NOT_DELAYED
+ 1819: #endif
+ 1820: 				    ) {
+ 1821: 					cpu->machine->breakpoints.
+ 1822: 					    ignore_left[i] --;
+ 1823: 					single_step_breakpoint = 1;
+ 1824: 					break;
+ 1825: 				}
+ 1826: 				if (!cpu->machine->instruction_trace) {
+ 1827: 					int tmp_old_quiet_mode = quiet_mode;
+ 1828: 					quiet_mode = 0;
+ 1829: 					DISASSEMBLE(cpu, ib, 1, 0);
+ 1830: 					quiet_mode = tmp_old_quiet_mode;
+ 1831: 				}
+ 1832: #ifdef MODE32
+ 1833: 				fatal("BREAKPOINT: pc = 0x%" PRIx32"\n(The "
+ 1834: 				    "instruction has not yet executed.)\n",
+ 1835: 				    (uint32_t)cpu->pc);
+ 1836: #else
+ 1837: 				fatal("BREAKPOINT: pc = 0x%" PRIx64"\n(The "
+ 1838: 				    "instruction has not yet executed.)\n",
+ 1839: 				    (uint64_t)cpu->pc);
+ 1840: #endif
+ 1841: #ifdef DYNTRANS_DELAYSLOT
+ 1842: 				if (cpu->delay_slot != NOT_DELAYED)
+ 1843: 					fatal("ERROR! Breakpoint in a delay"
+ 1844: 					    " slot! Not yet supported.\n");
+ 1845: #endif
+ 1846: 				single_step_breakpoint = 1;
+ 1847: 				single_step = true;
+ 1848: 				goto stop_running_translated;
+ 1849: 			}
+ 1850: 	}
+ 1851: #endif	/*  DYNTRANS_TO_BE_TRANSLATED_HEAD  */
+ 1852: 
+ 1853: 
+ 1854: /*****************************************************************************/
+ 1855: 
+ 1856: 
+ 1857: #ifdef DYNTRANS_TO_BE_TRANSLATED_TAIL
+ 1858: 	/*
+ 1859: 	 *  If we end up here, then an instruction was translated. Let's mark
+ 1860: 	 *  the page as containing a translation at this part of the page.
+ 1861: 	 */
+ 1862: 
+ 1863: 	/*  Make sure cur_physpage is in synch:  */
+ 1864: 	cpu->cd.DYNTRANS_ARCH.cur_physpage = (struct DYNTRANS_TC_PHYSPAGE *)
+ 1865: 	    cpu->cd.DYNTRANS_ARCH.cur_ic_page;
+ 1866: 
+ 1867: 	{
+ 1868: 		int x = addr & (DYNTRANS_PAGESIZE - 1);
+ 1869: 		int addr_per_translation_range = DYNTRANS_PAGESIZE / (8 *
+ 1870: 		    sizeof(cpu->cd.DYNTRANS_ARCH.cur_physpage->
+ 1871: 		    translations_bitmap));
+ 1872: 		x /= addr_per_translation_range;
+ 1873: 
+ 1874: 		cpu->cd.DYNTRANS_ARCH.cur_physpage->
+ 1875: 		    translations_bitmap |= ((uint32_t)1 << x);
+ 1876: 	}
+ 1877: 
+ 1878: 
+ 1879: 	/*
+ 1880: 	 *  Now it is time to check for combinations of instructions that can
+ 1881: 	 *  be converted into a single function call.
+ 1882: 	 *
+ 1883: 	 *  Note: Single-stepping or instruction tracing doesn't work with
+ 1884: 	 *  instruction combinations. For architectures with delay slots,
+ 1885: 	 *  we also ignore combinations if the delay slot is across a page
+ 1886: 	 *  boundary.
+ 1887: 	 */
+ 1888: 	if (!single_step && !single_step_breakpoint
+ 1889: 	    && !cpu->machine->instruction_trace
+ 1890: #ifdef DYNTRANS_DELAYSLOT
+ 1891: 	    && !in_crosspage_delayslot
+ 1892: #endif
+ 1893: 	    && cpu->cd.DYNTRANS_ARCH.combination_check != NULL
+ 1894: 	    && cpu->machine->allow_instruction_combinations) {
+ 1895: 		cpu->cd.DYNTRANS_ARCH.combination_check(cpu, ic,
+ 1896: 		    addr & (DYNTRANS_PAGESIZE - 1));
+ 1897: 	}
+ 1898: 
+ 1899: 	cpu->cd.DYNTRANS_ARCH.combination_check = NULL;
+ 1900: 
+ 1901: 	/*  An additional check, to catch some bugs:  */
+ 1902: 	if (ic->f == TO_BE_TRANSLATED) {
+ 1903: 		fatal("INTERNAL ERROR: ic->f not set!\n");
+ 1904: 		goto bad;
+ 1905: 	}
+ 1906: 	if (ic->f == NULL) {
+ 1907: 		fatal("INTERNAL ERROR: ic->f == NULL!\n");
+ 1908: 		goto bad;
+ 1909: 	}
+ 1910: 
+ 1911: 
+ 1912: 	/*
+ 1913: 	 *  ... and finally execute the translated instruction:
+ 1914: 	 */
+ 1915: 
+ 1916: 	/*  (Except when doing read-ahead!)  */
+ 1917: 	if (cpu->translation_readahead)
+ 1918: 		return;
+ 1919: 
+ 1920: 	/*
+ 1921: 	 *  Special case when single-stepping: Execute the translated
+ 1922: 	 *  instruction, but then replace it with a "to be translated"
+ 1923: 	 *  directly afterwards.
+ 1924: 	 */
+ 1925: 	if ((single_step_breakpoint && cpu->delay_slot == NOT_DELAYED)
+ 1926: #ifdef DYNTRANS_DELAYSLOT
+ 1927: 	    || in_crosspage_delayslot
+ 1928: #endif
+ 1929: 	    ) {
+ 1930: 		single_step_breakpoint = 0;
+ 1931: 		ic->f(cpu, ic);
+ 1932: 		ic->f = TO_BE_TRANSLATED;
+ 1933: 		return;
+ 1934: 	}
+ 1935: 
+ 1936: 
+ 1937: 	/*  Translation read-ahead:  */
+ 1938: 	if (!single_step && !cpu->machine->instruction_trace &&
+ 1939: 	    cpu->machine->breakpoints.n == 0) {
+ 1940: 		uint64_t baseaddr = cpu->pc;
+ 1941: 		uint64_t pagenr = DYNTRANS_ADDR_TO_PAGENR(baseaddr);
+ 1942: 		int i = 1;
+ 1943: 
+ 1944: 		cpu->translation_readahead = MAX_DYNTRANS_READAHEAD;
+ 1945: 
+ 1946: 		while (DYNTRANS_ADDR_TO_PAGENR(baseaddr +
+ 1947: 		    (i << DYNTRANS_INSTR_ALIGNMENT_SHIFT)) == pagenr &&
+ 1948: 		    cpu->translation_readahead > 0) {
+ 1949: 			void (*old_f)(struct cpu *,
+ 1950: 			    struct DYNTRANS_IC *) = ic[i].f;
+ 1951: 
+ 1952: 			/*  Already translated? Then abort:  */
+ 1953: 			if (old_f != TO_BE_TRANSLATED)
+ 1954: 				break;
+ 1955: 
+ 1956: 			/*  Translate the instruction:  */
+ 1957: 			ic[i].f(cpu, ic+i);
+ 1958: 
+ 1959: 			/*  Translation failed? Then abort.  */
+ 1960: 			if (ic[i].f == old_f)
+ 1961: 				break;
+ 1962: 
+ 1963: 			cpu->translation_readahead --;
+ 1964: 			++i;
+ 1965: 		}
+ 1966: 
+ 1967: 		cpu->translation_readahead = 0;
+ 1968: 	}
+ 1969: 
+ 1970: 
+ 1971: 	/*
+ 1972: 	 *  Finally finally :-), execute the instruction.
+ 1973: 	 *
+ 1974: 	 *  Note: The instruction might have changed during read-ahead, if
+ 1975: 	 *  instruction combinations are used.
+ 1976: 	 */
+ 1977: 
+ 1978: 	ic->f(cpu, ic);
+ 1979: 
+ 1980: 	return;
+ 1981: 
+ 1982: 
+ 1983: bad:	/*
+ 1984: 	 *  Nothing was translated. (Unimplemented or illegal instruction.)
+ 1985: 	 */
+ 1986: 
+ 1987: 	/*  Clear the translation, in case it was "half-way" done:  */
+ 1988: 	ic->f = TO_BE_TRANSLATED;
+ 1989: 
+ 1990: 	if (cpu->translation_readahead)
+ 1991: 		return;
+ 1992: 
+ 1993: 
+ 1994: 	/*
+ 1995: 	 *  Abort the emulation.  In principle, it may have been more accurate
+ 1996: 	 *  to treat invalid/unimplemented instructions as something that
+ 1997: 	 *  should cause e.g. an exception (depending on how the particular
+ 1998: 	 *  CPU works), but chances are that this is an unimplemented
+ 1999: 	 *  instruction that should be implemented for real.
+ 2000: 	 */
+ 2001: 
+ 2002: 	about_to_enter_single_step = true;
+ 2003: 
+ 2004: 	if (cpu->is_32bit)
+ 2005: 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+ 2006: 		    "UNIMPLEMENTED instruction at 0x%" PRIx32, (uint32_t)cpu->pc);
+ 2007: 	else
+ 2008: 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+ 2009: 		    "UNIMPLEMENTED instruction at 0x%" PRIx64, (uint64_t)cpu->pc);
+ 2010: 
+ 2011: 	if (!(single_step || cpu->machine->instruction_trace))
+ 2012: 		DISASSEMBLE(cpu, ib, 1, 0);
+ 2013: 
+ 2014: 	cpu->running = 0;
+ 2015: 
+ 2016: 	/*  Note: Single-stepping can jump here.  */
+ 2017: stop_running_translated:
+ 2018: 
+ 2019: 	// This makes sure that we stop in the debugger, even if e.g.
+ 2020: 	// "step 100" was executing and 50 steps remained.
+ 2021: 	debugger_reset();
+ 2022: 
+ 2023: 	ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+ 2024: 	cpu->cd.DYNTRANS_ARCH.next_ic ++;
+ 2025: 
+ 2026: #ifdef DYNTRANS_DELAYSLOT
+ 2027: 	/*  Special hack: If the bad instruction was in a delay slot,
+ 2028: 	    make sure that execution does not continue anyway:  */
+ 2029: 	if (cpu->delay_slot)
+ 2030: 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+ 2031: #endif
+ 2032: 
+ 2033: 	/*  Execute the "nothing" instruction:  */
+ 2034: 	ic->f(cpu, ic);
+ 2035: 
+ 2036: #endif	/*  DYNTRANS_TO_BE_TRANSLATED_TAIL  */
+ 2037: 
+
+[35m[3mcodex[0m[0m
+The trace-read check only logs failure; execution still reaches `I` at line 325. The four permitted files also contain uses of `nothing_call`, but no definition, so they cannot establish its visibility or accounting behavior inside PC conversion. I’ll make those limits explicit in the proposed stop path.
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'pc_to_pointers|n_translated_instrs|nothing_call|exit\\(|exception|fault|running\\s*=' GXEMUL-SEC/src/cpus/cpu_alpha.c GXEMUL-SEC/src/cpus/cpu_alpha_instr.c GXEMUL-SEC/src/cpus/memory_alpha.c; "'$p='"'GXEMUL-SEC/src/cpus/cpu_alpha.c'; "'$s=Get-Content -LiteralPath $p; 620..679 | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[35m[3mexec[0m[0m
+[1m"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$s=Get-Content -LiteralPath $p; 925..1025 | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_alpha_instr.c'; "'$s=Get-Content -LiteralPath $p; 1290..1324 | ForEach-Object { '"'{0,5}: {1}' -f "'$_,$s[$_-1] }'[0m in C:\DocumentNoSnc\CC\GXEMUL
+[32m succeeded in 253ms:[0m
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:30: *  Individual functions should keep track of cpu->n_translated_instrs.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:66:		cpu->n_translated_instrs --;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:67:		cpu->cd.alpha.next_ic = &nothing_call;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:72:		alpha_pc_to_pointers(cpu);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:108:		alpha_pc_to_pointers(cpu);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:149:		alpha_pc_to_pointers(cpu);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:184:	alpha_pc_to_pointers(cpu);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:211:	alpha_pc_to_pointers(cpu);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:505: *  but never consulted).  Alpha's default, non-trapping underflow behaviour
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:757:	alpha_pc_to_pointers(cpu);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:760:	cpu->n_translated_instrs --;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:976:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1029:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1099:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1124:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1148:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1173:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1193:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1219:		default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1314:	default:if (!cpu->translation_readahead)
+GXEMUL-SEC/src/cpus/memory_alpha.c:52:	// 	{initiate Access Violation fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:77:	exit(1);
+GXEMUL-SEC/src/cpus/memory_alpha.c:123:		//   {initiate Access Violation fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:125:		//   {initiate Translation Not Valid fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:144:		//   {initiate Access Violation fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:146:		//   {initiate Translation Not Valid fault}
+GXEMUL-SEC/src/cpus/memory_alpha.c:195:	    abort()/exit() the host; report no-translation (0) so the caller
+GXEMUL-SEC/src/cpus/memory_alpha.c:196:	    raises the fault (keeps the emulator alive and debuggable).  */
+GXEMUL-SEC/src/cpus/cpu_alpha.c:390:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:421:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:478:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:498:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:526:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:540:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:565:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+GXEMUL-SEC/src/cpus/cpu_alpha.c:602:		default:fatal("unimpl JSR!");
+GXEMUL-SEC/src/cpus/cpu_alpha.c:663:	default:debug("UNIMPLEMENTED opcode 0x%x\n", opcode);
+  620: 			debug("\t<%s>", symbol);
+  621: 		debug("\n");
+  622: 		break;
+  623: 	case 0x31:
+  624: 	case 0x35:
+  625: 	case 0x38:
+  626: 	case 0x39:
+  627: 	case 0x3a:
+  628: 	case 0x3b:
+  629: 	case 0x3c:
+  630: 	case 0x3d:
+  631: 	case 0x3e:
+  632: 	case 0x3f:
+  633: 		floating = 0;
+  634: 		switch (opcode) {
+  635: 		case 0x31: mnem = "fbeq"; floating = 1; break;
+  636: 		case 0x35: mnem = "fbne"; floating = 1; break;
+  637: 		case 0x38: mnem = "blbc"; break;
+  638: 		case 0x39: mnem = "beq"; break;
+  639: 		case 0x3a: mnem = "blt"; break;
+  640: 		case 0x3b: mnem = "ble"; break;
+  641: 		case 0x3c: mnem = "blbs"; break;
+  642: 		case 0x3d: mnem = "bne"; break;
+  643: 		case 0x3e: mnem = "bge"; break;
+  644: 		case 0x3f: mnem = "bgt"; break;
+  645: 		}
+  646: 		tmp = iw & 0x1fffff;
+  647: 		if (tmp & 0x100000)
+  648: 			tmp |= 0xffffffffffe00000ULL;
+  649: 		tmp <<= 2;
+  650: 		tmp += dumpaddr + sizeof(uint32_t);
+  651: 		debug("%s\t", mnem);
+  652: 		if (floating)
+  653: 			debug("f%i,", ra);
+  654: 		else
+  655: 			debug("%s,", alpha_regname[ra]);
+  656: 		debug("0x%" PRIx64, (uint64_t) tmp);
+  657: 		symbol = get_symbol_name(&cpu->machine->symbol_context,
+  658: 		    tmp, &offset);
+  659: 		if (symbol != NULL)
+  660: 			debug("\t<%s>", symbol);
+  661: 		debug("\n");
+  662: 		break;
+  663: 	default:debug("UNIMPLEMENTED opcode 0x%x\n", opcode);
+  664: 	}
+  665: 
+  666: 	return sizeof(uint32_t);
+  667: }
+  668: 
+  669: 
+  670: #define MEMORY_RW       alpha_userland_memory_rw
+  671: #define MEM_ALPHA
+  672: #define MEM_USERLAND
+  673: #include "memory_rw.c"
+  674: #undef MEM_USERLAND
+  675: #undef MEM_ALPHA
+  676: #undef MEMORY_RW
+  677: 
+  678: 
+  679: #include "tmp_alpha_tail.c"
+
+[32m succeeded in 267ms:[0m
+  925: static void instr32(end_of_page2)(struct cpu *,struct DYNTRANS_IC *);
+  926: #endif
+  927: #endif
+  928: 
+  929: /*
+  930:  *  XXX_init_tables():
+  931:  *
+  932:  *  Initializes the default translation page (for newly allocated pages), and
+  933:  *  for 64-bit emulation it also initializes 64-bit dummy tables and pointers.
+  934:  */
+  935: void DYNTRANS_INIT_TABLES(struct cpu *cpu)
+  936: {
+  937: #ifndef MODE32
+  938: 	struct DYNTRANS_L2_64_TABLE *dummy_l2;
+  939: 	struct DYNTRANS_L3_64_TABLE *dummy_l3;
+  940: 	int x1, x2;
+  941: #endif
+  942: 	int i;
+  943: 	struct DYNTRANS_TC_PHYSPAGE *ppp;
+  944: 
+  945: 	CHECK_ALLOCATION(ppp =
+  946: 	    (struct DYNTRANS_TC_PHYSPAGE *) malloc(sizeof(struct DYNTRANS_TC_PHYSPAGE)));
+  947: 
+  948: 	ppp->next_ofs = 0;
+  949: 	ppp->translations_bitmap = 0;
+  950: 	ppp->translation_ranges_ofs = 0;
+  951: 	/*  ppp->physaddr is filled in by the page allocator  */
+  952: 
+  953: 	for (i=0; i<DYNTRANS_IC_ENTRIES_PER_PAGE; i++)
+  954: 		ppp->ics[i].f = TO_BE_TRANSLATED;
+  955: 
+  956: 	/*  End-of-page:  */
+  957: 	ppp->ics[DYNTRANS_IC_ENTRIES_PER_PAGE + 0].f =
+  958: #ifdef DYNTRANS_DUALMODE_32
+  959: 	    cpu->is_32bit? instr32(end_of_page) :
+  960: #endif
+  961: 	    instr(end_of_page);
+  962: 
+  963: 	/*  End-of-page-2, for delay-slot architectures:  */
+  964: #ifdef DYNTRANS_DELAYSLOT
+  965: 	ppp->ics[DYNTRANS_IC_ENTRIES_PER_PAGE + 1].f =
+  966: #ifdef DYNTRANS_DUALMODE_32
+  967: 	    cpu->is_32bit? instr32(end_of_page2) :
+  968: #endif
+  969: 	    instr(end_of_page2);
+  970: #endif
+  971: 
+  972: 	cpu->cd.DYNTRANS_ARCH.physpage_template = ppp;
+  973: 
+  974: 
+  975: 	/*  Prepare 64-bit virtual address translation tables:  */
+  976: #ifndef MODE32
+  977: 	if (cpu->is_32bit)
+  978: 		return;
+  979: 
+  980: 	dummy_l2 = (struct DYNTRANS_L2_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L2_64_TABLE));
+  981: 	dummy_l3 = (struct DYNTRANS_L3_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L3_64_TABLE));
+  982: 
+  983: 	cpu->cd.DYNTRANS_ARCH.l2_64_dummy = dummy_l2;
+  984: 	cpu->cd.DYNTRANS_ARCH.l3_64_dummy = dummy_l3;
+  985: 
+  986: 	for (x1 = 0; x1 < (1 << DYNTRANS_L1N); x1 ++)
+  987: 		cpu->cd.DYNTRANS_ARCH.l1_64[x1] = dummy_l2;
+  988: 
+  989: 	for (x2 = 0; x2 < (1 << DYNTRANS_L2N); x2 ++)
+  990: 		dummy_l2->l3[x2] = dummy_l3;
+  991: #endif
+  992: }
+  993: #endif	/*  DYNTRANS_INIT_TABLES  */
+  994: 
+  995: 
+  996: 
+  997: #ifdef DYNTRANS_INVAL_ENTRY
+  998: /*
+  999:  *  XXX_invalidate_tlb_entry():
+ 1000:  *
+ 1001:  *  Invalidate one translation entry (based on virtual address).
+ 1002:  *
+ 1003:  *  If the JUST_MARK_AS_NON_WRITABLE flag is set, then the translation entry
+ 1004:  *  is just downgraded to non-writable (ie the host store page is set to
+ 1005:  *  NULL). Otherwise, the entire translation is removed.
+ 1006:  */
+ 1007: static void DYNTRANS_INVALIDATE_TLB_ENTRY(struct cpu *cpu,
+ 1008: #ifdef MODE32
+ 1009: 	uint32_t
+ 1010: #else
+ 1011: 	uint64_t
+ 1012: #endif
+ 1013: 	vaddr_page, int flags)
+ 1014: {
+ 1015: #ifdef MODE32
+ 1016: 	uint32_t index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+ 1017: 
+ 1018: #ifdef DYNTRANS_ARM
+ 1019: 	cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5] &= ~((uint32_t)1 << (index & 31));
+ 1020: #endif
+ 1021: 
+ 1022: 	if (flags & JUST_MARK_AS_NON_WRITABLE) {
+ 1023: 		/*  printf("JUST MARKING NON-W: vaddr 0x%08x\n",
+ 1024: 		    (int)vaddr_page);  */
+ 1025: 		cpu->cd.DYNTRANS_ARCH.host_store[index] = NULL;
+ 1290: 			ic->arg[1] = (size_t) &cpu->cd.alpha.f[ra];
+ 1291: 		else
+ 1292: 			ic->arg[1] = (size_t) &cpu->cd.alpha.r[ra];
+ 1293: 		ic->arg[0] = (iword & 0x001fffff) << 2;
+ 1294: 		/*  Sign-extend:  */
+ 1295: 		if (ic->arg[0] & 0x00400000)
+ 1296: 			ic->arg[0] |= 0xffffffffff800000ULL;
+ 1297: 		/*  Branches are calculated as PC + 4 + offset.  */
+ 1298: 		ic->arg[0] = (size_t)(ic->arg[0] + 4);
+ 1299: 		/*  Special case: branch within the same page:  */
+ 1300: 		{
+ 1301: 			uint64_t mask_within_page =
+ 1302: 			    ((ALPHA_IC_ENTRIES_PER_PAGE-1) << 2) | 3;
+ 1303: 			uint64_t old_pc = addr;
+ 1304: 			uint64_t new_pc = old_pc + (int32_t)ic->arg[0];
+ 1305: 			if ((old_pc & ~mask_within_page) ==
+ 1306: 			    (new_pc & ~mask_within_page)) {
+ 1307: 				ic->f = samepage_function;
+ 1308: 				ic->arg[0] = (size_t) (
+ 1309: 				    cpu->cd.alpha.cur_ic_page +
+ 1310: 				    ((new_pc & mask_within_page) >> 2));
+ 1311: 			}
+ 1312: 		}
+ 1313: 		break;
+ 1314: 	default:if (!cpu->translation_readahead)
+ 1315: 			fatal("[ UNIMPLEMENTED Alpha opcode 0x%x ]\n", opcode);
+ 1316: 		goto bad;
+ 1317: 	}
+ 1318: 
+ 1319: 
+ 1320: #define DYNTRANS_TO_BE_TRANSLATED_TAIL
+ 1321: #include "cpu_dyntrans.c"
+ 1322: #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
+ 1323: }
+ 1324: 
+
+[35m[3mcodex[0m[0m
+The Alpha callers support a stop flag checked immediately after the current instruction handler returns. That preserves the completed jump’s count and prevents another dispatch; the epilogue must then skip PC reconstruction. I also found a separate `exit(1)` in Alpha’s bootstrap mapping path, outside the witnessed page-table miss.
+[35m[3mcodex[0m[0m
+VERDICT: (e) -- require explicit dispatch and epilogue guards; copying the unimplemented-instruction stop sequence alone is insufficient.
+
+I inspected only the four permitted files under `GXEMUL-SEC/src/`. The fatal exit remains present. I did not independently verify the supplied commit ID or transcript, and ran no harness or detector.
+
+**Q1. Several premises need qualification.**
+
+- **Alpha’s witnessed mechanism is supported.** `alpha_translate_v2p()` reaches `not_found` without changing `cpu->pc` or supplying `*return_paddr`. Its second translation attempt therefore fails identically in the described state. This establishes the uncached, failed-walk case—not every Alpha instruction fetch. [memory_alpha.c:192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192)
+- **“No other architecture can reach this exit” is unproved.** I did not read MIPS, ARM, PPC, SH, M88K, or any other non-Alpha translator, consistent with your restriction. Changing PC to an exception vector does **not** establish that translating that vector succeeds. I cannot supply a verified non-Alpha counterexample from these four files.
+- **The trace read does not safely terminate execution on failure.** Lines 287–290 print a diagnostic; the successful-read `else` controls disassembly only. Control still reaches statistics collection and unconditional `I` at line 325. It neither checks `running` nor repairs instruction pointers. [cpu_dyntrans.c:287](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:287)
+- **`nothing_call` is not inherently restricted to instruction handlers, but its definition is missing from the permitted evidence.** These files show uses, not its declaration, initialization, or handler body. Thus its visibility at PC conversion and its accounting behavior remain unverified. Crucially, the existing stop tail increments `next_ic` **and immediately calls `ic->f`** at line 2034. Copying that increment without the immediate call would leave the next dispatch pointing past the sentinel. [cpu_dyntrans.c:2023](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2023)
+
+**Q2. Choose shared containment at the second translation failure, with an explicit stop state.**
+
+I reject (a) and bare (b). I see no established architecture-exclusivity premise supporting (c). PAL fault delivery remains a separate feature.
+
+Here is the control-flow shape I would accept. It requires **new per-CPU fields** `bool ifetch_stopped` and `uint64_t ifetch_stop_pc`, initialized appropriately, plus verification that the existing `nothing_call` declaration is visible. This is a proposed design, **not a compiled patch**; unchanged lookup and allocation code is abbreviated.
+
+```c
+void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+{
+        /* Existing declarations and initial cache lookup. */
+
+        if (!ok) {
+                uint64_t paddr;
+
+                /* Existing first translation attempt. */
+
+                if (!ok) {
+                        /* Existing handler cache lookup and retry. */
+
+                        if (!ok) {
+                                bool report = !cpu->ifetch_stopped;
+
+                                if (report)
+                                        cpu->ifetch_stop_pc = cpu->pc;
+                                cpu->ifetch_stopped = true;
+                                cpu->running = 0;
+                                about_to_enter_single_step = true;
+
+                                if (report)
+                                        fatal("Instruction-fetch translation "
+                                            "failed at 0x%016" PRIx64
+                                            "; CPU stopped\n",
+                                            cpu->ifetch_stop_pc);
+
+                                debugger_reset();
+                                cpu->pc = cpu->ifetch_stop_pc;
+                                cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+                                return;  /* No paddr consumption. */
+                        }
+                }
+
+                physaddr = paddr;
+        }
+
+        /* Existing successful physical-page lookup/allocation. */
+        cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+        cpu->cd.DYNTRANS_ARCH.next_ic =
+            cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+            DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+        return;
+}
+
+void DYNTRANS_PC_TO_POINTERS_FUNC(struct cpu *cpu)
+{
+        /* Existing lookup; a hit jumps to have_it. */
+
+        DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);
+        return;                 /* Propagates stopped state unchanged. */
+
+have_it:
+        cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+        cpu->cd.DYNTRANS_ARCH.next_ic =
+            cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+            DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+        return;
+}
+```
+
+On the failure return:
+
+| State | Value |
+|---|---|
+| `cur_ic_page` | Unchanged: previous page, or its initialization value on first entry |
+| `next_ic` | Exactly `&nothing_call`, without incrementing it |
+| `cpu->pc` | Saved post-failure PC; on Alpha, the failed fetch VA |
+| `running` | `0` |
+| `ifetch_stopped` | `true` |
+
+**Leaving `cur_ic_page` unchanged is safe only with the following guards.** It is not a usable translation of the failed address.
+
+At run entry, move accounting initialization before conversion and return before interrupts, tracing, or `cur_physpage` construction if conversion stops the CPU. For an in-flight failure, leave the unrolled batch immediately after its current handler returns. Track the number of dispatch slots issued in the incomplete batch:
+
+```c
+#define I do {                                                     \
+        ic = cpu->cd.DYNTRANS_ARCH.next_ic++;                        \
+        ++issued_in_batch;                                         \
+        ic->f(cpu, ic);                                            \
+        if (cpu->ifetch_stopped) {                                 \
+                n_instrs = issued_in_batch;                        \
+                goto dispatch_done;                               \
+        }                                                         \
+} while (0)
+```
+
+The enclosing run-function exits must have this shape:
+
+```c
+int DYNTRANS_RUN_INSTR_DEF(struct cpu *cpu)
+{
+        int issued_in_batch = 0;
+        int n_instrs = 0;
+        /* Other existing locals. */
+
+        cpu->n_translated_instrs = 0;
+        if (!cpu->running)
+                return 0;
+
+        /* A running CPU starts a new attempt, including explicit resume. */
+        cpu->ifetch_stopped = false;
+        cpu->wants_to_idle = false;
+
+        /* Existing mode-selected PC_TO_POINTERS call. */
+        if (cpu->ifetch_stopped)
+                return 0;
+
+        /* Existing interrupt delivery. */
+        if (cpu->ifetch_stopped)
+                return 0;
+
+        /* Existing ARM Thumb path, including its return 1. */
+
+        /*
+         * Existing cached_pc / cur_physpage setup and dispatch branches.
+         * Remove the old, later n_translated_instrs reset.
+         * Use the amended I above.
+         * After each complete batch's += 24 or += 120,
+         * set issued_in_batch = 0.
+         * Keep the normal single-step n_instrs = 1.
+         */
+
+dispatch_done:
+        /* Existing idle/accounting adjustments. */
+        n_instrs += cpu->n_translated_instrs;
+
+        if (cpu->ifetch_stopped) {
+                cpu->pc = cpu->ifetch_stop_pc;
+        } else {
+                /* Existing PC reconstruction, lines 394–414. */
+        }
+
+        /* Existing architecture counter updates. */
+        cpu->ninstrs += n_instrs;
+        return n_instrs;
+}
+```
+
+Consequences for the inspected Alpha callers:
+
+- Initial conversion failure returns zero before dereferencing instruction pointers.
+- A jump-triggered failure counts the completed jump and exits before another `S` or `I`.
+- `end_of_page` still performs its existing decrement, so that synthetic dispatch is not counted as a guest instruction. [cpu_alpha_instr.c:748](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:748)
+- The epilogue preserves the failed VA without subtracting unrelated instruction-pointer addresses.
+- This path never executes `nothing_call`; its handler’s undocumented accounting is therefore not part of the safety argument.
+
+The diagnostic latch is once per stopped episode; explicit resume permits another report. The existing two translator miss messages are separate.
+
+This establishes the intended behavior for the visible Alpha callers. A complete shared implementation still needs review of other architectures’ nested dispatch/delay-slot callers, the sentinel declaration, and debugger resume handling. Those are outside the permitted files. The independent trace-read failure also needs an explicit stop/return if it is being fixed; its current logging branch is not sufficient.
+
+**Q3. None of the supplied rows demonstrates successful containment.**
+
+The supplied witness establishes the current failure. Its data-load sentinel establishes the arming control, not safety after instruction-fetch failure. A repaired detector needs these observations:
+
+| Required observation | What it establishes |
+|---|---|
+| Same process answers a debugger command after failure; under `-V`, a subsequent prompt appears | Host remains alive and responsive |
+| `running == 0`, with PC still `0x0000000001044000` **after the run function returns** | CPU stopped and epilogue preserved the failed VA |
+| No dispatch at the failed target or fall-through; register/memory sentinels retain their expected values | No unintended guest execution |
+| Instruction count includes the completed jump but no failed target instruction | Correct accounting |
+| One terminal stop diagnostic, with no repetition while remaining stopped | Latch behavior |
+
+A prompt or correct PC alone does not prove that no unintended instruction executed before stopping.
+
+Missing measurements worth requesting are initial-entry failure, failure inside an unrolled batch, single-step/trace and statistics modes, page-boundary transition, and a failed VA with a **nonzero page offset**. Each exercises a distinct accounting or pointer-use edge. The supplied VA is page-aligned.
+
+I also found three separate issues:
+
+- Alpha’s bootstrap mapping path still contains another `exit(1)`. [memory_alpha.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:73)
+- The delay-slot trace read ignores its return value before disassembly, at shared lines 306–313.
+- Alpha’s instruction-read failure jumps to `bad` before `ib` is known valid; outside single-step/trace, the shared bad tail then disassembles that buffer. [cpu_alpha_instr.c:812](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:812)
+[2mtokens used[0m
+77,374
+VERDICT: (e) -- require explicit dispatch and epilogue guards; copying the unimplemented-instruction stop sequence alone is insufficient.
+
+I inspected only the four permitted files under `GXEMUL-SEC/src/`. The fatal exit remains present. I did not independently verify the supplied commit ID or transcript, and ran no harness or detector.
+
+**Q1. Several premises need qualification.**
+
+- **Alpha’s witnessed mechanism is supported.** `alpha_translate_v2p()` reaches `not_found` without changing `cpu->pc` or supplying `*return_paddr`. Its second translation attempt therefore fails identically in the described state. This establishes the uncached, failed-walk case—not every Alpha instruction fetch. [memory_alpha.c:192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192)
+- **“No other architecture can reach this exit” is unproved.** I did not read MIPS, ARM, PPC, SH, M88K, or any other non-Alpha translator, consistent with your restriction. Changing PC to an exception vector does **not** establish that translating that vector succeeds. I cannot supply a verified non-Alpha counterexample from these four files.
+- **The trace read does not safely terminate execution on failure.** Lines 287–290 print a diagnostic; the successful-read `else` controls disassembly only. Control still reaches statistics collection and unconditional `I` at line 325. It neither checks `running` nor repairs instruction pointers. [cpu_dyntrans.c:287](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:287)
+- **`nothing_call` is not inherently restricted to instruction handlers, but its definition is missing from the permitted evidence.** These files show uses, not its declaration, initialization, or handler body. Thus its visibility at PC conversion and its accounting behavior remain unverified. Crucially, the existing stop tail increments `next_ic` **and immediately calls `ic->f`** at line 2034. Copying that increment without the immediate call would leave the next dispatch pointing past the sentinel. [cpu_dyntrans.c:2023](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2023)
+
+**Q2. Choose shared containment at the second translation failure, with an explicit stop state.**
+
+I reject (a) and bare (b). I see no established architecture-exclusivity premise supporting (c). PAL fault delivery remains a separate feature.
+
+Here is the control-flow shape I would accept. It requires **new per-CPU fields** `bool ifetch_stopped` and `uint64_t ifetch_stop_pc`, initialized appropriately, plus verification that the existing `nothing_call` declaration is visible. This is a proposed design, **not a compiled patch**; unchanged lookup and allocation code is abbreviated.
+
+```c
+void DYNTRANS_PC_TO_POINTERS_GENERIC(struct cpu *cpu)
+{
+        /* Existing declarations and initial cache lookup. */
+
+        if (!ok) {
+                uint64_t paddr;
+
+                /* Existing first translation attempt. */
+
+                if (!ok) {
+                        /* Existing handler cache lookup and retry. */
+
+                        if (!ok) {
+                                bool report = !cpu->ifetch_stopped;
+
+                                if (report)
+                                        cpu->ifetch_stop_pc = cpu->pc;
+                                cpu->ifetch_stopped = true;
+                                cpu->running = 0;
+                                about_to_enter_single_step = true;
+
+                                if (report)
+                                        fatal("Instruction-fetch translation "
+                                            "failed at 0x%016" PRIx64
+                                            "; CPU stopped\n",
+                                            cpu->ifetch_stop_pc);
+
+                                debugger_reset();
+                                cpu->pc = cpu->ifetch_stop_pc;
+                                cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+                                return;  /* No paddr consumption. */
+                        }
+                }
+
+                physaddr = paddr;
+        }
+
+        /* Existing successful physical-page lookup/allocation. */
+        cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+        cpu->cd.DYNTRANS_ARCH.next_ic =
+            cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+            DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+        return;
+}
+
+void DYNTRANS_PC_TO_POINTERS_FUNC(struct cpu *cpu)
+{
+        /* Existing lookup; a hit jumps to have_it. */
+
+        DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);
+        return;                 /* Propagates stopped state unchanged. */
+
+have_it:
+        cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp->ics[0];
+        cpu->cd.DYNTRANS_ARCH.next_ic =
+            cpu->cd.DYNTRANS_ARCH.cur_ic_page +
+            DYNTRANS_PC_TO_IC_ENTRY(cached_pc);
+        return;
+}
+```
+
+On the failure return:
+
+| State | Value |
+|---|---|
+| `cur_ic_page` | Unchanged: previous page, or its initialization value on first entry |
+| `next_ic` | Exactly `&nothing_call`, without incrementing it |
+| `cpu->pc` | Saved post-failure PC; on Alpha, the failed fetch VA |
+| `running` | `0` |
+| `ifetch_stopped` | `true` |
+
+**Leaving `cur_ic_page` unchanged is safe only with the following guards.** It is not a usable translation of the failed address.
+
+At run entry, move accounting initialization before conversion and return before interrupts, tracing, or `cur_physpage` construction if conversion stops the CPU. For an in-flight failure, leave the unrolled batch immediately after its current handler returns. Track the number of dispatch slots issued in the incomplete batch:
+
+```c
+#define I do {                                                     \
+        ic = cpu->cd.DYNTRANS_ARCH.next_ic++;                        \
+        ++issued_in_batch;                                         \
+        ic->f(cpu, ic);                                            \
+        if (cpu->ifetch_stopped) {                                 \
+                n_instrs = issued_in_batch;                        \
+                goto dispatch_done;                               \
+        }                                                         \
+} while (0)
+```
+
+The enclosing run-function exits must have this shape:
+
+```c
+int DYNTRANS_RUN_INSTR_DEF(struct cpu *cpu)
+{
+        int issued_in_batch = 0;
+        int n_instrs = 0;
+        /* Other existing locals. */
+
+        cpu->n_translated_instrs = 0;
+        if (!cpu->running)
+                return 0;
+
+        /* A running CPU starts a new attempt, including explicit resume. */
+        cpu->ifetch_stopped = false;
+        cpu->wants_to_idle = false;
+
+        /* Existing mode-selected PC_TO_POINTERS call. */
+        if (cpu->ifetch_stopped)
+                return 0;
+
+        /* Existing interrupt delivery. */
+        if (cpu->ifetch_stopped)
+                return 0;
+
+        /* Existing ARM Thumb path, including its return 1. */
+
+        /*
+         * Existing cached_pc / cur_physpage setup and dispatch branches.
+         * Remove the old, later n_translated_instrs reset.
+         * Use the amended I above.
+         * After each complete batch's += 24 or += 120,
+         * set issued_in_batch = 0.
+         * Keep the normal single-step n_instrs = 1.
+         */
+
+dispatch_done:
+        /* Existing idle/accounting adjustments. */
+        n_instrs += cpu->n_translated_instrs;
+
+        if (cpu->ifetch_stopped) {
+                cpu->pc = cpu->ifetch_stop_pc;
+        } else {
+                /* Existing PC reconstruction, lines 394–414. */
+        }
+
+        /* Existing architecture counter updates. */
+        cpu->ninstrs += n_instrs;
+        return n_instrs;
+}
+```
+
+Consequences for the inspected Alpha callers:
+
+- Initial conversion failure returns zero before dereferencing instruction pointers.
+- A jump-triggered failure counts the completed jump and exits before another `S` or `I`.
+- `end_of_page` still performs its existing decrement, so that synthetic dispatch is not counted as a guest instruction. [cpu_alpha_instr.c:748](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:748)
+- The epilogue preserves the failed VA without subtracting unrelated instruction-pointer addresses.
+- This path never executes `nothing_call`; its handler’s undocumented accounting is therefore not part of the safety argument.
+
+The diagnostic latch is once per stopped episode; explicit resume permits another report. The existing two translator miss messages are separate.
+
+This establishes the intended behavior for the visible Alpha callers. A complete shared implementation still needs review of other architectures’ nested dispatch/delay-slot callers, the sentinel declaration, and debugger resume handling. Those are outside the permitted files. The independent trace-read failure also needs an explicit stop/return if it is being fixed; its current logging branch is not sufficient.
+
+**Q3. None of the supplied rows demonstrates successful containment.**
+
+The supplied witness establishes the current failure. Its data-load sentinel establishes the arming control, not safety after instruction-fetch failure. A repaired detector needs these observations:
+
+| Required observation | What it establishes |
+|---|---|
+| Same process answers a debugger command after failure; under `-V`, a subsequent prompt appears | Host remains alive and responsive |
+| `running == 0`, with PC still `0x0000000001044000` **after the run function returns** | CPU stopped and epilogue preserved the failed VA |
+| No dispatch at the failed target or fall-through; register/memory sentinels retain their expected values | No unintended guest execution |
+| Instruction count includes the completed jump but no failed target instruction | Correct accounting |
+| One terminal stop diagnostic, with no repetition while remaining stopped | Latch behavior |
+
+A prompt or correct PC alone does not prove that no unintended instruction executed before stopping.
+
+Missing measurements worth requesting are initial-entry failure, failure inside an unrolled batch, single-step/trace and statistics modes, page-boundary transition, and a failed VA with a **nonzero page offset**. Each exercises a distinct accounting or pointer-use edge. The supplied VA is page-aligned.
+
+I also found three separate issues:
+
+- Alpha’s bootstrap mapping path still contains another `exit(1)`. [memory_alpha.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:73)
+- The delay-slot trace read ignores its return value before disassembly, at shared lines 306–313.
+- Alpha’s instruction-read failure jumps to `bad` before `ib` is known valid; outside single-step/trace, the shared bad tail then disassembles that buffer. [cpu_alpha_instr.c:812](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:812)

@@ -1,0 +1,83 @@
+VERDICT: 3 — DECLINE + latched announce, i.e. the tree's own #215/not_found failed-translation idiom applied at the stub. Deciding item: on the `base==0` arm this VA admits no honest translation (identity resolves, by the arm's own mask, to paddr `0x3fd80000000`, past RAM, no device), so every ACCEPT variant is a *silently wrong success* — and member 4 additionally keeps printing the exact string the witness uses as its kill signature.
+
+---
+
+## Premise audit (what settles and what doesn't)
+
+- READ: the defect is `fatal(...)` **+ `exit(1)`** inside `!userMode && base==0`; the brief marks `exit(1)` as the kill. ✓
+- REASONED (from inlined code): `fatal()` **returns** in this tree — `not_found` does `fatal(...); return 0;`. Consequence: the second residue (`fatal("AYONA3\n")`, no exit) is a **print, not a kill**. The brief's Q3 label ("meaningless unlatched message") is internally consistent.
+- REASONED (arithmetic on packet values): `0xfffffffd80000000 & 0x000003ffffffffff` (mask = 2⁴²−1) = `0x3fd80000000`. Matches Q1's number. So Q1's arithmetic premise is sound; "keep the identity mapping" is a misnomer — for this VA it is a **truncating** map, not identity.
+- REASONED (string check): `0x4250525748` = little-endian bytes "HWRPB". The `hwrpb sig` control is self-consistent.
+- NOT SETTLEABLE from the packet, named:
+  1. **ALPHA_K0SEG_BASE/END values** — the k0seg arm is checked *before* the base==0 arm; whether the probe VA escapes it is not verifiable here. Corroborated by the brief's MEASURED 3/5 (death carries this site's text), but the settling fact is the two macro values.
+  2. **memory_rw.c `#244` zeroes a read buffer / returns MEMORY_ACCESS_FAILED, and `#215` abandons on failure** — quoted, not inlined. Settling fact: those two excerpts. If either is wrong, "destination register left UNCHANGED" (the load-store idiom) needs re-derivation. No internal contradiction found: zeroing the *buffer* is compatible with the *register* staying untouched because #215 returns before the copy.
+  3. **"Alpha has no exception delivery"** (member 5 unavailable) — not inlined. Corroborated by the residue's own text ("kernel virtual memory ... Not yet implemented"), which is evidence of an incomplete Alpha VM/exception path. Settling fact: presence/absence of Alpha exception-delivery code in the Alpha CPU files.
+  4. **The cpu_dyntrans.c:670-734 reading** — line numbers quoted, code not inlined. The sub-premises *I can* check are internally consistent (translator moves no PC ⇔ everything else in §2), so *if* the re-lookup uses unchanged `cpu->pc`, the second failure and the `exit(1)` follow. But the load-bearing fact — the actual body of :670-734, and whether any Alpha-specific fetch-failure path exists — is exactly what the brief flags. Settling fact: that excerpt. This decision gates Q5's framing.
+  5. **NetBSD/alpha VPT base/extent** — external OS fact. Packet arithmetic only: probe = claimed base + `0x180000000` (6 GiB). Whether it falls inside the self-map needs the VPT *extent*, which is not given (with 8 KiB pages and a 43-bit VA it would be 8 GiB, putting the probe inside — but those parameters are not in the packet). Also note: VPT access presupposes a running VM (`ptbr != 0`), a path on which residue 1 never fires anyway (see below).
+  6. **What an access to paddr `0x3fd80000000` returns** (past RAM, no device, alphabook1) — decides members 1/4's guest-visible value. Not in the packet. Settling fact: memory_rw's device-miss behavior on this machine.
+  7. Meaning of member **6 BACKED ACCEPT** — undefined in the packet; unreviewable until "backed" is defined.
+
+No self-contradiction found among the inlined facts. The nearest thing to a mis-stated premise is the **"identity" framing**: the mask makes members 1/4 a truncated, wrong translation, not an identity.
+
+---
+
+## Q1 — premises as questions
+
+- Inside the VPT? Not settleable from the packet (extent missing); base arithmetic done above. **It does not move the member choice**: a real guest only touches the VPT with VM up (`ptbr != 0`) — the walk path — where residue 1 never fires and residue 2 merely prints. It *does* strengthen the case for deleting residue 2 (a legitimate VPT touch shouldn't emit garbage).
+- Does member 4 hand a wrong translation that silently succeeds? YES (REASONED from the mask arithmetic + "past RAM" stipulation). What that access returns is **not settleable** (item 6 above) — which is itself the point: member 4 ships a success whose returned bytes the packet cannot name.
+- Is decline (0) better or worse for the guest? Better on every axis reachable from the packet: load leaves the destination register *deterministically unchanged* (#215 idiom, READ) instead of loading unnameable bytes; store abandons instead of writing into a void (or worse, into whatever device might exist there); and member 3 leaves one operator signal. A decline is a *loud* failure; accept is a *silent wrong success*.
+
+## Q2 — member matrix (load / store / I-fetch at the magic VA; witness output)
+
+Assumption named: member 1 "DELETE the whole block" = the defect-`if`. If it means the whole `base==0` arm, it also deletes the HWRPB/PROM/argspace remaps — and the witness's `hwrpb sig` row exists precisely to catch that (REASONED; see below).
+
+| member | load | store | I-fetch | witness |
+|---|---|---|---|---|
+| 1 delete | succeeds → paddr `0x3fd80000000`, value **not settleable** | write into void (behavior not settleable) | executes bytes from that paddr — indeterminate, may hit other fatals | 5/5 *iff* the unmapped read doesn't kill (not settleable) |
+| 2 decline, silent | abandoned, dest unchanged | abandoned | return 0 → dies at cpu_dyntrans generic kill (premise 4, unchecked) = `alphaifetchkill` signature | 5/5 |
+| 3 decline + latched announce | as 2, + one print on first hit | as 2 | as 2 | 5/5 + exactly one announce on transcript |
+| 4 drop only exit(1) | as 1, + unlatched print of the kill-string on every access | as 1 | as 1 | 5/5, but transcript is saturated with the attribution string while the host survives |
+| 5 fault | NOT AVAILABLE (packet-stated; corroborated, not settled) | — | — | — |
+| 6 backed accept | not reviewable — "backed" undefined | — | — | — |
+| 7 implement VM | out of scope by the round's own rule | — | — | — |
+
+Why 3 over its neighbours:
+- **vs 2**: the tree's idiom for a failed translation is print-then-decline (`not_found`, READ). A *silent* decline of a planted-residue trigger removes the only operator signal that the stub boundary was hit.
+- **vs 4 (and 1)**: both ship the wrong translation (Q1). Worse, 4 keeps printing, unlatched, the **exact string the witness uses as its kill signature** — after a member-4 fix, that text on a transcript no longer means death, so the attribution guard is destroyed for every future probe at this site, and a polling guest floods it. 4 is self-defeating as a fix.
+- **vs 3-unlatched**: a guest loop on this VA would flood; a `(once)` latch is the minimal signal that preserves diagnosability.
+- **vs 1**: deleting the block is accept-minus-print; same wrong translation, less noise, still silently wrong. Decline is the honest answer where no translation exists.
+
+## Q3 — the second residue
+
+**It joins this round.** Rule check: same file ✓; same detector ✓ (same probe VA; capture of `ptbr != 0` state is a config knob, not a new detector); no new oracle ✓ (its evidence is "AYONA3" on a transcript the witness already captures, vmmsg=1). The only arguable clause is "same semantic class": residue 1 kills the host, residue 2 is print-only (REASONED from fatal()-returns). If the panel keys semantic class on *effect*, it's a separate row — but it is a trivial one, because its fix needs no member choice (a meaningless message is deleted, no neighbour analysis required). Either disposition, two things must not happen: it must not be left in (its trigger set is *wider* than residue 1's — everything that reaches the walk, including **user-mode** accesses, prints it; the brief's parenthetical "(ptbr != 0)" understates this), and a detector row for it must exist: supervisor `ptbr != 0` access at the magic VA → no "AYONA3", and translation proceeds per the guest page tables.
+
+## Q4 — the witness
+
+- Controls: `live` proves the probe path itself (raw-VA load through the base==0 identity arm to a planted RAM cell) is non-lethal and readback works. `hwrpb sig` proves the *same arm's remap sub-arms* still function — REASONED: this control discriminates against any fix that mangles the `base==0` arm (member-1-as-arm-deletion, or sloppy edits), not against members 1(block)/2/3/4, which all preserve it. The LE value 0x4250525748 = "HWRPB" checks out.
+- Attribution guard: sufficient **against the currently named alternatives** — the other known host-kill in scope (`cpu_dyntrans` generic fetch kill) carries a different string, so the guard discriminates between this defect and that one. Two named limits: (a) it cannot discriminate against an unknown third kill that prints nothing or prints this string — not settleable from the packet; (b) the guard is meaningful only because the current fatal paths pair text with exit — any member that keeps printing the text (member 4) poisons it, so under member 2/3 the detector must assert **absence** of the kill text (absent entirely) and under member 3 additionally **exactly one** latched announce.
+- Owed rows once member 3 is chosen (the current witness, load-only, **cannot distinguish 1/2/3/4 — all score 5/5**; this is a real blind spot, see below):
+  1. load at magic VA (sup, ptbr==0): survives **and destination register byte-identical to its pre-load value** — this is the row that separates decline from accept;
+  2. store at magic VA: survives; announce fires; no observable memory effect (store target paddr itself is unobservable — name it if a device is later found there);
+  3. latch row: two consecutive loads ⇒ exactly one announce;
+  4. I-fetch at magic VA: deferred/disclosed row — expected current signature is the `cpu_dyntrans` generic kill text, **not** this site's text (owned by `alphaifetchkill`);
+  5. regression rows: `live`, `hwrpb sig` stay green; `continued` = 0x1234;
+  6. residue-2 row from Q3.
+- Minor: "5/5 after any fix" presupposes the five points post-fix, but the fifth point today *is* the attribution text, which must flip meaning after the fix — the post-fix scorecard needs re-basing (announce-once is the natural replacement).
+
+## Q5 — order of rounds
+
+This round should **take its load/store cells and disclose the I-fetch cell against `alphaifetchkill`**.
+
+Measurable consequence of this order: a fetch probe at the magic VA kills the host **before** the fix (this site's text) and **after** the fix (generic kill text) — zero regression, with the signature *swapping* as the receipt of disclosure, and the attribution guard already reads that swap as "different defect" by design. Alphavmkill ships green 5/5 on its load-based witness; `alphaifetchkill` gains a clean, attributably-labelled reproducer at the magic VA that its fix can then turn green.
+
+Measurable consequence of `alphaifetchkill` going first: this defect's `exit(1)` still pre-empts any fetch probe at the magic VA, so `alphaifetchkill` **cannot be measured there** until this round ships — it must be probed at other untranslatable VAs; then this round can ship its fetch cell fully green instead of disclosed, at the cost of serializing two rounds and of making this round's fetch-cell semantics depend on whatever behavior `alphaifetchkill` installs (coupling). Also named: if the unchecked premise 4 (the :670-734 reading) is wrong — e.g. there *is* Alpha-specific fetch-failure handling — the entire "disclose the fetch cell" framing collapses and Q5 must be re-decided. Settling fact: the body of `cpu_dyntrans.c:670-734`.
+
+---
+
+## Found while verifying (not asked)
+
+1. **The witness cannot see the member choice.** Every plausible member that stops the death scores 5/5 on the current four behaviors; only owed-row Q4.1 (destination value) makes decline-vs-accept observable. Today the round's chosen semantics are untested by its own witness.
+2. **Member 4 is internally hostile to the witness**: it keeps printing the attribution string without dying. Choosing it would require deleting/inverting the guard. This is the sharpest single argument for decline over accept.
+3. **Residue 2's trigger is wider than stated**: it fires for user mode and any `ptbr != 0` supervisor access, not just "the walk path (ptbr != 0)". Harmless after deletion, but the detector row should include the user-mode case.
+4. **Member 1 is underspecified** ("the whole block": defect-`if` vs whole `base==0` arm); the `hwrpb sig` control is what enforces the narrow reading.
+5. The K0SEG constants are unstated in the packet, so "the probe reaches the base==0 arm" rests on the brief's MEASURED signature rather than on checkable arithmetic — worth one line in the detector notes.

@@ -1,0 +1,48 @@
+**VERDICT: GO — the two `PHYSICAL` tokens are entailed by the inlined `memory_rw` + `alpha_translate_v2p` code plus the stated registration contract, and the fix provably cannot regress ptbr==0 behavior (see derivation); every weakening except (d) is refuted from the packet itself, and (d)'s unproven equivalence is not needed.**
+
+## Arithmetic, enumerated
+
+- [READ operands, REASONED sum] 0x1c0000000 + 0x10000000 = 0x1d0000000 ✓; +0x3fd = 0x1d00003fd, +0x3ff = 0x1d00003ff ✓.
+- [REASONED] 0x01050000 >> 13 = 17,104,896 / 8,192 = 2088 = 0x828 ✓.
+- [REASONED] 9/13 = 13 rows − the 4 marked FAIL ✓. Census: 12+9+3+3+2+2+2+2+2+1 = 38 ✓; 7+3+2+2+1+1 = 16 ✓; +2 = 56 ✓. Internally consistent.
+- [READ] §3's table I take as the packet's stated results. I cannot label anything MEASURED; I audit its internal consistency, which holds (see Q4).
+
+## Derivation check — holds, with one strengthening
+
+[REASONED] At ptbr==0 the translator returns `vaddr & 0x3ffffffffff`; for vaddr = 0x1d00003fd (< 2^42) that equals vaddr. So **pre-arm, `PHYSICAL` and the ptbr==0 identity are bit-identical at this address** — the fix is a no-op where behavior is already green ("live 0x55", "flat lsr 0x60") and pins the identity where the hack stops holding. The fix therefore cannot regress ptbr==0 behavior regardless of every unsettled premise below. The read path ignoring the inner return and answering `return 1` with #244's zeroed `byte` predicts exactly "sp lsr ans: completed / sp lsr: 0x0"; the write path propagating the return predicts "w lands 0x0 / w miss present". The table matches the code.
+
+## Premises I cannot settle from the packet
+
+- **P1** — the five ISA targets registered `DM_DEFAULT (0)`. [READ as stated, not inlined.] Settles Q2(c) only. Fact: the flags argument at each `bus_isa_init` registration.
+- **P2** — dev_ns16550 implements SCR (offset 7) as read/write. Needed for "w lands" to go green **under the fix**; if false, the fixed build scores 12/13 and the panel may misread the fix as partial. Fact: the offset-7 case in dev_ns16550.c, or the fixed-build probe score.
+- **P3** — the probe matches `wasn't found` lines **by inner address**, not generically. Load-bearing for the witness: the ptbr-miss **control necessarily prints one such line**, so a generic matcher makes "r miss / w miss: want absent" unsatisfiable — the fix would false-fail those rows. The row labels ("at 0x1d00003fd") suggest address matching, but the matcher is not inlined. Fact: the match lines in lca_isaphys_probe.py.
+- **P4** — no alphabook1 RAM range covers 0x1d0000000+, so the two RAM-path `cache` conditions are unreachable. Bears only on Q2(d), not on the fix. Fact: the machine's physical_max and those two conditions.
+- **P5** — "every existing LCA probe runs with ptbr==0." Explanatory only. Fact: grep the other probes for swpctx/ptbr.
+- **P6** — `ALPHA_K0SEG_BASE` > 0x1d0000000. Not inlined; corroborated by the 42-bit mask and the witness's own inner-address fatals. Fact: the constant.
+- **P7** — siblings: the census counts only calls **passing** PHYSICAL; the number of device-side `memory_rw` calls *lacking* it is not stated. Fact: that enumeration.
+
+## Q1
+
+(a) [REASONED] No legitimate virtual path. The inner address is an emulator-constructed constant naming a physical registration (stated; corroborated by "flat lsr" reaching a live device at exactly 0x1d00003fd). The current code works only if the guest happens to identity-map 0x1d0000000+ in its own tables — accidental compat, and it breaks for any other mapping of that VA range. (b) Not settleable — P7. (c) HIGH is defensible: guest-drivability is demonstrated, and false-success reads plus dropped stores plus an unlatched per-access fatal are a bad class. But the packet leaves one link unproven: that a paging guest's ISA path uses the **sparse** window at all. The **flat** window survives for a paging guest that addresses it via K0SEG (the witness itself does this for the SCR readback). If real guests use flat-via-K0SEG, the sparse death is latent and this is a solid MED. Either way the fix stands. Settling fact: whether any paging guest or probe touches 0x1c0000000.
+
+## Q2 — [REASONED from READ code]
+
+- **(a) write only**: reads still walk → sp lsr red, r miss red; w lands/w miss green. 11/13. First differs from the fix at the first post-arm sparse **read**.
+- **(b) read only**: writes still walk (flood on the write arm persists) → w lands red, w miss red. 11/13. First differs at the first post-arm sparse **write**.
+- **(c) `NO_EXCEPTIONS|PHYSICAL`**: per the inlined dispatch line plus P1, handlers are never called → no fatal (r/w miss green) but no device data either: sp lsr red — and `byte` is **uninitialized** in the read path, so the answer may be stack garbage, not a deterministic 0 — and w lands red with the inner write reporting success for a store that never happened (that last claim is stated, not inlined; the skip path's return is not shown). Strictly worse than the current honest failure. 11/13 with a false-success hazard. First differs at the first post-arm access, any port.
+- **(d) bare `PHYSICAL`**: equivalent iff P4 holds; the inlined evidence (translate call skipped under PHYSICAL; `#ifdef MEM_MIPS/M88K` absent in an Alpha build) supports it, but the author admits the RAM-path conditions are un-enumerated. Probably 13/13, unproven, and it gratuitously drops a flag whose exact combination exists in-tree (dev_ps2_stuff.c, per census). No reason to prefer it.
+- **(e) `relative_addr < 0x200`**: refuted by the packet's own ports — 0x3fd/0x3ff (the serial console block 0x3f8–0x3ff) are ≥ 0x200, so **all four defect rows stay red**; 9/13, identical to the defect. First differs at any post-arm sparse access to port ≥ 0x200 — i.e., at the witness's own first defect access.
+
+## Q3
+
+Un-named members exist. **(4) Translator-side identity**: extend the K0SEG-style identity (or the ptbr==0 "UGLY hack") to cover 0x1c0000000/0x1d0000000 regardless of ptbr. Different and wrong — that VA range is guest-mappable, so it would override legitimate guest translations and hide the misdirection. **(5) Quiet/latch the fatal only** — symptom suppression; false-zero reads and dropped stores persist. Also, (3) is worse than "restructuring": re-registering the ISA devices at the sparse window breaks the currently-green **flat** path (the "flat lsr" control uses it; ptbr==0 guests use it). (1) is the smallest correct member: two tokens, no dispatch or registration change, and the idiom is precedented on this very bus (dev_pccmos already forwards bare PHYSICAL per the census).
+
+## Q4
+
+Each control proves its note [REASONED]: "live 0x55" (standard 8042 self-test reply) proves sparse forwarding at ptbr==0; "flat lsr 0x60" (standard empty-16550 LSR) proves registration at the defect port; "ram plant" guards the miss from being vacuous; "ptbr miss" + "ptbr sent" (poison intact) prove the arm; "pte2 todo" proves the miss is at our zero L1 entry, excluding accidental hits; "sp lsr ans" distinguishes wrong-data from hang. The CONTROL=DEAD guard (rows 2–7) is sufficient **against arming failures**. The outer-failure confound is excluded — but only conditionally: an outer K0SEG miss would fatal the **outer** address, not 0x1d00003fd/0x1d00003ff, so the miss rows pin the failure to the inner forward **if** the matcher is address-specific (P3). Residual holes, both named above: P2 and P3. One mechanic I could not reconcile from the packet: with #244 zeroing read buffers on translate failure, a failed guest load ought to zero the destination, yet "ptbr sent" reports the poison 0xbad1d8a intact — the elided code after `if (!ok)` presumably writes back only on success; not shown, but the row is a green control on the defect build and does not bear on the verdict.
+
+## Found elsewhere
+
+[REASONED] (i) The read path ignores the inner `memory_rw` return and answers success unconditionally — even post-fix, an inner read that legitimately fails yields success-with-zero; pre-existing, orthogonal to #540, a follow-up row, not a change here. (ii) The flood's amplifier is `alpha_translate_v2p` fatal-ing on every guest miss; no lca fix should touch it. (iii) fatal() evidently does not exit on this build — two miss lines plus the RESULT line from one process — consistent, but fatal()'s definition is never inlined.
+
+**Measurement not inlined that I would name:** one probe run on the **fixed** build, expected 13/13 — it settles P2 and P3 simultaneously, and no one should treat 13/13 as predicted without it.

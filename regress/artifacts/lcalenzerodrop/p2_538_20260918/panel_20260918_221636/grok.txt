@@ -1,0 +1,93 @@
+I'll start from the offloaded brief and the four named files, then check the inlined table against the floor enumeration instead of treating the author's close claim as given.The four named files are in hand; next I’ll check the handler and `store_buf` against the floor cells, then the retry/exit paths.I have the handler, `store_buf`, the four cells, and the table. Next I’ll pin each floor cell to a red row and test the eight disclosures against the body, not the header.**VERDICT: CLOSES -- 0/4 lane cells open; `vc_ne1` reds `low16 getenv` (the lane-1 exemption the two-cell covering missed)**
+
+Checked against `GXEMUL-SEC/` at `cdbe7d7` plus the inlined working-tree diff. Handler and `store_buf` opened; `#540`'s `PHYSICAL` tokens ignored. Did not run gates. Did not re-run the 17-leg table.
+
+---
+
+### Premises (challenged, not ratified)
+
+1. **`ofs = (relative_addr & 3) % len`, write arm forwards `data[ofs]`.** True *after* `relative_addr >>= 5` (`dev_lca.c`, `DEVICE_ACCESS(lca_isa)`). Post-shift, `relative_addr` is the port `P`; `ofs` is the lane. The probe’s `a >> 5` matches that, not a pre-shift `& 3` (which would be `k & 3`).
+
+2. **`store_buf` chunks {1024,256,64,16,4,1}, aligned, whole; GETENV `min(a3, strlen+1)`.** Chunking matches `memory.c`. All four cells are `port<<5` (32-aligned) with `n=16`, so each is one 16-byte `memory_rw` — I replayed that. The `min` formula in the probe matches the usual PAL rule; I did not open palcode (not in the allowed set).
+
+3. **One session per cell because a read-arm fall-through zeros `store_buf`’s source.** True. `store_buf` passes the host string as `data`. If the write-arm conjunct fails, the function does not return and the read arm does `data[i] = i==ofs ? byte : 0x00` over that same buffer. Isolated `execv` sessions are required, not decorative.
+
+**Named, not settled from the allowed files:** “GETENV is the only wide producer”; PROM PUTS being byte-sized; the opus_p2 wider-cell kills cited under (i); that the working-tree file differs from `lca_widewrite.frozen.py` by the MEASURED paragraph only; PRETABLE mtime vs the frozen copy.
+
+---
+
+### Q1 -- 0 open / 4 floor cells
+
+Floor as ruled: **{write arm} × {lane 0,1,2,3} at C=16, k=0.** Four cells, not eight (READ is (v), not this floor).
+
+| Cell | Port (`P&3`) | Pinning row | Discriminating red in §3 |
+|---|---|---|---|
+| write × lane 0 | `0x2fc` (0) | `l0w16 getenv` | `vc_ne0` 12/13 `red=[l0w16 getenv]` |
+| write × lane 1 | `0x021` (1) | `low16 getenv` | **`vc_ne1` 12/13 `red=[low16 getenv]`** |
+| write × lane 2 | `0x2fe` (2) | `l2w16 getenv` | `vc_ne2` 12/13 `red=[l2w16 getenv]` |
+| write × lane 3 | `0x2ff` (3) | `wide getenv` | `vc_ne3` 12/13 `red=[wide getenv]` |
+
+Also, independently: `M2_len8` / `KILLLEN8` red all four getenv (9/13); `vc` (`== 3`) reds the three unrowed-by-`#530` lanes and leaves `wide` green (10/13); `vf` reds lanes 1–3 and cannot see lane 0 (10/13). WANT arithmetic matches PRETABLE (`0x44/0x41/0x42/0xf3`). Channel is live: every getenv has preset ≠ WANT.
+
+Lane-1 is killed. No lane cell is open. **0/4.**
+
+`== L` for L∈{0,1,2} is not a separate §3 leg (only `== 3` as `vc`). That is not an open cell: those forms would red the other-lane getenv rows, which already went red, and each cell’s discriminating case is the `!= L` exemption, all four measured.
+
+---
+
+### Q2 -- contract
+
+**Catch side, backed by a measured red:**
+
+- Guard `len == 0 \|\| len > 8` → `KILLLEN8` 9/13.
+- Write-arm `&& len <= 8` → `M2_len8` 9/13.
+- Lane-conditioned `!= L` for every L, and `== 3` → `vc_ne0..3`, `vc`.
+- Wrong lane byte `data[0]` → `vf` 10/13 at lanes 1–3, as the header says.
+
+**Disclosures (i)–(viii): none is inside {write}×{lane} at C=16.**
+
+| | Warrant from the body | In this floor? |
+|---|---|---|
+| (i) `len <= 16/64/256` | Body tests `len` only against 0, then uses it as `%` divisor. For P&3∈{0,1,2,3}, `%16` and `%8` are identity (`vd` 13/13 is the proof). `va`/`vb` 13/13 on these cells is the expected miss. | No |
+| (ii) port-constant | No compare of `P` to a literal. `ve` reddening `low16` is because that cell was placed at `0x21`, not because the contract claims ports. | No |
+| (iii) k / a<4:0> | Discarded by `>>= 5` before `ofs`. `vg`/`vt1` 13/13 at k=0. | No |
+| (iv) chunk pos ≥ 2 | No static state in the handler. One chunk per session; `vt2` 13/13. | No |
+| (v) READ | `store_buf` is `MEM_WRITE` only. Floor was write-arm. PUTS: not checked here. | No |
+| (vi) non-lane bytes | Handler forwards one byte (`data[ofs]`). Different defect (`lcawidefold`). | No |
+| (vii) data = 0 | Body does not test the byte. These cells never forward 0 (see ELSE). | No |
+| (viii) forward count | Rows read a latch, not a count. | No |
+
+`vd` / `vh` 13/13 as EQUIVALENT is right: `% (len>8?8:len)` does not move ofs on these lanes; the read-loop cap cannot fire on write-only cells.
+
+---
+
+### Q3 -- harness
+
+Both fixes are right as written.
+
+Retry is `if alive and any(printed(...) is None ...)`. A dead first session is not retried; `alive` is then `"died"` against want `"alive"`, getenv is `None` ≠ WANT, `sys.exit(1)`. That is exactly the old “retry a dead session, second process looks clean” hole.
+
+Exit is `sys.exit(0 if ok == len(rows) else 1)` after `WIDEWRITE_DONE`. FAIL cannot return 0.
+
+**Host death scored as a pass:** no path I can see in this file. Death after all prints still fails `alive` if `alive` is false; death before getenv leaves `None` on that row. Residual (same as the parent `dsession`): `rd()` treats a settle/spin *timeout* as alive (`return True` at the deadline unless it saw EOF). That is the load-retry, not a death-as-pass. The `quit` path swallows errors and does not update `alive`; that is after the observations.
+
+The identity row (`row count` 13) fails if a cell throws before appending, so a short emit cannot silently 12/12.
+
+---
+
+### Q4 -- parent L4
+
+The correction is accurate and does **not** overclaim the other way.
+
+Old “COVERED, not merely disclosed” was true of the two variants the parent names (`&& len <= 8`, `len == 0 \|\| len > 8`) and false of the class (`vc` swept the one-cell instrument 3/3). The new text says `#538` rows all four C=16 k=0 lanes and points at this file’s CONTRACT for what is still not caught. It does not re-assert COVERED. “An edit that deletes it re-opens the floor” is the right pointer.
+
+---
+
+### ELSE
+
+- **(vii) is sloppy on the terminator.** `a3=16` against a 16-char string → `lenv=16`. The NUL is at index 16 and is **not** in the transfer. “Terminator at ≥ 15” is the wrong picture; the 16 bytes are all letters and the lane index is ≤ 3. The disclosure (this detector does not pin a zero byte) still holds.
+- **`vg` / `vt1` “first statement” is ambiguous.** The function’s first statement is already `relative_addr >>= 5`. Inserted *after* the shift, `relative_addr & 0x10` / `& 0x1f` are **port** bits and would red the 0x2fX cells (and `vt1` would red all four). 13/13 only matches a **pre-shift** k-bit test. The scores save the disclosure; the PRETABLE wording does not.
+- **Dead machinery:** `pat`/`ALPH`, `FLAT`/`KBC_*`, and the `kind != "sp"` arm are unused at the shipped CELLS. Harmless; they are not rows.
+- **Sibling shape, not a floor hole:** lane 1 is an 8259 IMR at `0x21`; the other three are ns16550 at `0x2fX`. That is why `ve` is incidental. `vc_ne1` is still a lane mutant (`(P & 3) != 1`), not a port one.
+
+Roster completeness is the panel’s property, not this seat’s. On the enumeration the stop condition named — diff delivered, lane-1 killed, **0/4** open — this diff closes the chain.

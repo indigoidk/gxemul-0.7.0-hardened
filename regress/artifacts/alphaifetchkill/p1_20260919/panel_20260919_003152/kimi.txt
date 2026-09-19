@@ -1,0 +1,559 @@
+kimi version 0.36.0
+• Let me understand this task. The user wants me to review a brief about a defect in GXEMUL-SEC tree at HEAD cdbe7d7. I need to:
+
+  1. Give a VERDICT line first.
+  2. Check premises, not just derivations.
+  3. Read only specific files: `GXEMUL-SEC/src/cpus/cpu_dyntrans.c`, `GXEMUL-SEC/src/cpus/memory_alpha.c`, `GXEMUL-SEC/src/cpus/cpu_alpha.c`, `GXEMUL-SEC/src/cpus/cpu_alpha_instr.c`.
+  4. Answer Q1, Q2, Q3.
+  5. Not run gates/batteries. Building a single detector/mutant in my own temp directory is fine.
+
+  The options:
+  - (a) exit(1) -> cpu->running = 0 + latched message, nothing else — refuted (garbage paddr)
+  - (b) return without a translation — refuted (next_ic unset)
+  - (c) (e) for Alpha only; other architectures keep today's exit
+  - (d) deliver Alpha ITB/ACV fault through PALcode — feature, out of scope
+  - (e) STOP THE CPU SAFELY: latched message, running = 0, next_ic -> nothing_call, debugger_reset(); guest sees stopped CPU, host survives
+
+  I need to verify:
+  - The code at cpu_dyntrans.c:622+ (DYNTRANS_PC_TO_POINTERS_GENERIC), :729-733 fatal/exit
+  - alpha_translate_v2p failure path in memory_alpha.c — returns 0 without moving PC
+  - Other architectures' translators — but wait, the rules say read ONLY the four files. Hmm, but Q1 asks "Is it true that NO other architecture in this tree can reach :729-733 today (read each translator's failure path, or say which you did not)?" The operational rule says seats that read files read ONLY the four listed. So I should check what I can from the four files, and name what I didn't verify. Actually, the instruction says "Seats that read files: read ONLY" those four files. So I cannot read memory_mips.c etc. But maybe the translators for other architectures are in different files not in the list — I should name that I did not verify them per the seat rules. But wait — maybe I can grep? The rule says read only those four files. Let me respect that: read only the four files. But Q1 asks about other architectures — I can say which I did not read.
+
+  Hmm, but actually let me think. The brief says "Seats that read files: read ONLY cpu_dyntrans.c, memory_alpha.c, cpu_alpha.c, cpu_alpha_instr.c." That's a constraint on reading files. Grep on those files is fine. I'll comply.
+
+  Also the witness: `regress/artifacts/alphaifetchkill/witness_HEAD_20260918/` — reading artifacts? The rule says read ONLY the four files. I'll comply strictly and rely on the inlined transcript.
+
+  Let me start by reading the four files. cpu_dyntrans.c is likely huge (2000+ lines). cpu_alpha_instr.c could be enormous (generated). Let me read strategically but thoroughly around the relevant areas.
+
+  Plan:
+  1. Read cpu_dyntrans.c around DYNTRANS_PC_TO_POINTERS_GENERIC (:600-900), the dispatch loop (:100-300), the epilogue (:390-400), the unimplemented-instruction path (:1990-2030), single-step trace (:280-330).
+  2. Read memory_alpha.c fully (probably small, ~200 lines).
+  3. Read cpu_alpha.c relevant parts (alpha_init? translate setup).
+  4. cpu_alpha_instr.c — check nothing_call usage, instruction handler conventions.
+
+  Let me begin. First, check file sizes and the HEAD commit.
+
+  Actually, first verify HEAD is cdbe7d7 and git log of the file. Let me do that plus reads in parallel.
+
+  Let me structure:
+
+  Bash: cd GXEMUL-SEC && git log -1 --format='%H %s' HEAD -- check. Also wc -l the four files.
+
+  Then Read cpu_dyntrans.c in chunks.
+
+  The verdict: likely (e), possibly (c)+(e) combined. The brief's option (e) says stop CPU safely for all architectures; (c) says (e) for Alpha only, others keep exit. Since the brief claims only Alpha can reach the path today, (e) applied universally is harmless for others (dead code in practice) and simpler; but (c) is more conservative. The panel wants us to check premises. Key premise checks:
+
+  - P1: alpha_translate_v2p returns 0 on miss without moving cpu->pc, and Alpha delivers no MM fault (TODOs at memory_alpha.c:120-126). Verify by reading memory_alpha.c.
+  - P2: The fatal/exit at :729-733. Verify.
+  - P3: Refutation of (a): after the failed retry, physaddr = paddr uses garbage. Verify code shape at :736.
+  - P4: Refutation of (b): return skips cur_ic_page/next_ic setup at :830-833; dispatch loop derefs next_ic without checking running (:114, :190). Verify.
+  - P5: nothing_call precedent at :2002-2024. Verify what it does exactly and whether it's usable from within pc_to_pointers.
+  - P6: The single-step trace reads at :287/:325 handle their own failure. Verify.
+  - P7: run entry resets instruction accounting after PC conversion (:267) and epilogue reconstructs PC (:394). Verify.
+
+  Then Q2: exact code shape for (e). Need to write the actual patch shape: in the !ok branch after the retry fails:
+
+  ```c
+  if (!ok) {
+      fatal(...)? no — latched message once
+      cpu->running = 0;
+      cpu->... single_step? 
+      cur_ic_page = NULL? 
+      next_ic = &nothing_call? 
+  }
+  ```
+
+  Wait — the precedent at :2002-2024 (unimplemented instruction) is inside an instruction handler context where ic is available. Inside pc_to_pointers, we have cpu, and we need to set cur_ic_page and next_ic. Let me think about what the function returns and how the dispatch loop uses it.
+
+  I need to read the actual code. Let me do that now.
+
+  Also need to check: does pc_to_pointers get called from places other than the dispatch loop (e.g., single-step trace at :287/:325, combination checking)? If option (e) sets next_ic = &nothing_call, callers that then dereference cur_ic_page... Let me look.
+
+  Also check what `nothing_call` is — in cpu_dyntrans.c there's typically `static void nothing_call(struct cpu *cpu, struct alpha_instr_call *ic)` or a generic `to_be_translated`/`nothing_call` that does nothing. Let me read.
+
+  Also the "latched message" — need a static flag or cpu->something to print once. In the tree, there might be a pattern like `static int warned = 0` or cpu->running_slowly... Let me look for existing latch patterns in the file.
+
+  Let me also verify the claim that MIPS/ARM/PPC/SH move PC to handler before returning — that's in other files (memory_mips.c etc.), which I'm not allowed to read per seat rules. I can note: "per seat rules I did not read memory_mips.c etc.; within the four files, I can see cpu_dyntrans.c's retry logic assumes translate_v2p moved the PC." Actually wait — can I at least grep for translate_v2p assignments in cpu_alpha.c to confirm alpha's translator is alpha_translate_v2p? That's within the allowed files. Yes.
+
+  Hmm, but strictly, is the premise about other architectures checkable? The brief itself says Q1: "read each translator's failure path, or say which you did not". So I say which I did not read. Fine.
+
+  Let me also consider: could other architectures reach :729-733? In cpu_dyntrans.c, DYNTRANS_PC_TO_POINTERS_GENERIC is shared. The retry calls translate_v2p for the exception handler PC. If an architecture doesn't move the PC on fault... e.g., SH? The brief says MIPS/ARM/PPC/SH move PC. I can't verify. But there's another angle: even for architectures that move the PC, the retry translate could still fail (e.g., the exception handler VA itself untranslated — MIPS kseg0 is usually direct-mapped so rarely fails). So "no other architecture can reach it today" is a strong premise; I can note it as unverified but plausible, and it doesn't change the verdict: option (e) as a universal safety net is fine regardless.
+
+  Also check: does the fatal path also exist in other translation arrays (like DYNTRANS_PC_TO_POINTERS with 32-bit vs 64-bit)? Let me read the whole pc_to_pointers function carefully.
+
+  Another key check for option (e) shape: after pc_to_pointers returns, the run loop at :114/:190 — need to see:
+
+  ```c
+  DYNTRANS_RUN_INSTR...
+  ic = cpu->cd.DYNTRANS_ARCH.next_ic;
+  ic->f(cpu, ic); ... 
+  ```
+
+  If we set next_ic = &nothing_call, then the loop will execute nothing_call repeatedly? No wait — if cpu->running = 0, the while loop `while (cpu->running)` exits. But the brief says the dispatch loop dereferences next_ic WITHOUT checking running (:114, :190). So the structure might be `do { ... } while (running)` or it derefs before the loop condition check. Let me read.
+
+  Also the epilogue at :394 reconstructs PC: `cpu->pc = ...` from cur_ic_page and next_ic offset. If cur_ic_page is NULL or next_ic = &nothing_call (not in any page), the reconstruction might compute garbage or crash. The precedent at :2002-2024 handles it how? Let me look at what happens after unimplemented instruction sets those values — probably there's a check in the epilogue for cur_ic_page != NULL. Need to read.
+
+  Let me now read the files. cpu_dyntrans.c probably ~2100 lines. I'll read it in three chunks (1-1000, 1000-2100). Actually let me target: read 1-450 (run loop + trace + epilogue), 600-900 (pc_to_pointers), 1950-2100 (unimplemented precedent + nothing_call). Plus grep for nothing_call, about_to_enter_single_step, debugger_reset in the file.
+
+  memory_alpha.c — read fully.
+
+  cpu_alpha.c — grep for translate_v2p assignment, read around it; also alpha-specific run loop overrides? Check if alpha uses generic pc_to_pointers.
+
+  cpu_alpha_instr.c — check nothing_call definition maybe there; instruction call conventions. It's likely huge (generated instructions). Just grep.
+
+  Let me fire off the first batch: git log check + wc + reads of cpu_dyntrans.c chunks + memory_alpha.c. I can do multiple Read calls in parallel plus one Bash.
+
+  Actually, per the operational rule: no gates; building a single detector in own temp dir is fine. I probably don't need to build anything; static analysis suffices. I might optionally compile-check a proposed patch shape? That would require modifying the tree — not asked. The task is a review verdict, not an implementation. So produce: verdict line, premise checks with file:line evidence, Q1/Q2/Q3 answers with exact code shape.
+
+  Let me go.
+
+  First batch (parallel):
+  - Bash: git -C GXEMUL-SEC log -1 --format='%H %s' ; git log -1 --format='%h %s' -- src/cpus/cpu_dyntrans.c ; wc -l on the four files
+  - Read cpu_dyntrans.c lines 1-450
+  - Read cpu_dyntrans.c 600-900
+  - Read cpu_dyntrans.c 1950-end
+  - Read memory_alpha.c full
+
+  Then follow-ups.
+
+• I'll verify the premises against the actual tree before ratifying anything. Starting with the git state and the four permitted files.cdbe7d75735ae3836635d91d70819a09f564fd1a #537 fbsmlane: #442's harness printed a verdict token its own self-mutant lane could never read -- the lane runs, pinned on R3
+de1398e Hardening/fidelity/debuggability rounds 17–25 (#155–#250)
+  2037 src/cpus/cpu_dyntrans.c
+   200 src/cpus/memory_alpha.c
+   680 src/cpus/cpu_alpha.c
+  1324 src/cpus/cpu_alpha_instr.c
+  4241 total
+
+
+• Good. Now I've confirmed:
+
+  - HEAD is cdbe7d7. ✓
+  - `DYNTRANS_PC_TO_POINTERS_GENERIC` at :622, fatal/exit at :729-733. ✓ (exactly as brief states)
+  - `physaddr = paddr;` at :736. ✓
+  - `cur_ic_page`/`next_ic` set at :830-833. ✓
+  - Dispatch `I` macro at :114: `ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic);` — dereferences next_ic without checking running. ✓
+  - Run instr at :177; PC_TO_POINTERS call at :185-190. ✓
+  - `n_translated_instrs = 0` reset at :267 AFTER pc_to_pointers. ✓ (brief's claim)
+  - Epilogue PC reconstruction at :394-414. ✓ Note: it uses next_ic and cur_ic_page. If cur_ic_page is garbage/NULL, low_pc computed from pointer diff... Note: at :395-396, low_pc = (next_ic - cur_ic_page)/sizeof(IC). If cur_ic_page is NULL and next_ic = &nothing_call+1, the subtraction is pointer subtraction on unrelated pointers — technically UB but in practice gives some huge number; the checks `low_pc >= 0 && low_pc < DYNTRANS_IC_ENTRIES_PER_PAGE` etc. would fail, so cpu->pc stays as-is. Hmm interesting: with cur_ic_page = NULL, (size_t)next_ic - 0 = address of nothing_call+1 — divided by sizeof gives a huge positive number, none of the three cases match, so cpu->pc is left unchanged. That's actually benign for keeping pc = faulting VA. But wait — the precedent at :2023-2024 sets `ic = next_ic = &nothing_call; next_ic++;` — it does NOT touch cur_ic_page. In that path (to_be_translated), cur_ic_page was already set to the current page, so epilogue computes low_pc from nothing_call pointer minus cur_ic_page — again unrelated pointers, huge value, PC not updated. So the precedent relies on low_pc being out of range. OK.
+
+  - Single-step trace read at :287-291: `if (!cpu->memory_rw(...)) { fatal("XXX_run_instr(): could not read the instruction\n"); }` — so it "handles" failure only by a fatal() message, NOT by stopping; then falls through to execute `I` at :325 regardless? Wait, let me look: if memory_rw fails, fatal(...) but NOT exit. fatal doesn't exit (in this tree fatal prints; exit is explicit). Then... the else branch is skipped, so no disassembly, then statistics, then `I;` executes at :325. So single-step trace read "handles its own failure" only by printing — it still executes the ic. Important for option (e): under -V/single-step, after our stop, next_ic points at nothing_call, so `I` executes nothing_call — fine. And memory_rw failure of the trace read at the faulting VA would print "could not read the instruction" via fatal. Actually wait — under -V (debugger single step), when we stop with running=0... the run loop is `for(;;) { I; I; I... }` — no, the loops run N_SAFE_DYNTRANS_LIMIT instructions; they don't check cpu->running in the I macro! Let me check: how does the loop exit when cpu->running = 0?
+
+  Looking at the main loop at :351-373: it's `for(;;) { I; I; ... I; cpu->n_translated_instrs += 120; if (>= N_SAFE) break; }`. There's no check of cpu->running in the loop! So how does the unimplemented-instruction stop work? Via nothing_call: `ic = next_ic = &nothing_call; next_ic++;` then `ic->f(cpu,ic)` executes nothing_call. What does nothing_call do? Need to find its definition. Presumably nothing_call sets cpu->running... no wait. Hmm. The loop keeps executing next_ic entries — after nothing_call at &nothing_call+1... wait, next_ic was set to &nothing_call then incremented, so next_ic = &nothing_call + 1. nothing_call is a static struct? Let me find its definition. It's `static struct DYNTRANS_IC nothing_call;`? Or array? Need to grep.
+
+  Actually, I recall in gxemul cpu_dyntrans.c there's:
+
+  ```c
+  static void instr(nothing_call)(struct cpu *cpu, struct DYNTRANS_IC *ic)
+  {
+      /*  ...  */
+  }
+  ```
+
+  Hmm, but nothing_call is used as `&nothing_call` — so it's a struct DYNTRANS_IC variable named nothing_call whose f points to a function that does... Let me grep. It might be declared in cpu.h or in each cpu_*.c. Let me grep for nothing_call in the allowed files... it's likely defined in cpu_dyntrans.c itself. My read of 1-450 didn't show it; it's probably between 450-600 or elsewhere. Also `about_to_enter_single_step` is a global from debugger.
+
+  Also need to check: how does the run loop terminate when running=0? The I macro doesn't check running. So after nothing_call executes once... next_ic = &nothing_call+1, which is... if nothing_call is a single struct (not array), &nothing_call+1 points past it — garbage! But the precedent code executes `ic->f(cpu, ic)` with ic = &nothing_call (before increment) at :2034. Then returns from to_be_translated handler. Back in run loop: `I` continues: `ic = next_ic++` → ic = &nothing_call+1 → ic->f — GARBAGE?! Unless... hmm wait. Let me re-read.
+
+  :2023: `ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;`
+  :2024: `cpu->cd.DYNTRANS_ARCH.next_ic ++;`
+  :2034: `ic->f(cpu, ic);` — executes nothing_call's f with ic = &nothing_call.
+
+  Then this instruction handler returns. We're back in the run loop where the original `I` invocation was `ic = next_ic++; ic->f(cpu,ic);` — that I's ic->f was to_be_translated, which we just returned from. So the current I completes. The NEXT I does `ic = next_ic++` = &nothing_call + 1... 
+
+  Unless nothing_call is an array of DYNTRANS_IC structs! If `nothing_call` is declared as `struct DYNTRANS_IC nothing_call[N]` where each entry's f is the nothing function... then &nothing_call decays... hmm, `&nothing_call` of an array is pointer-to-array, type mismatch. Actually if it's an array, `nothing_call` decays to &nothing_call[0], and `&nothing_call` would be wrong type. The assignment `next_ic = &nothing_call` suggests nothing_call is a scalar struct. Then next_ic++ → one past. Hmm, but then the next I dereferences one-past — unless the nothing_call function itself does something, or unless... wait, maybe nothing_call is declared as an array of 1? Or maybe there IS a running check somewhere. Let me look at how DYNTRANS_RUN_INSTR returns — maybe the outer caller checks cpu->running and the inner loop's 120 I's with garbage... no.
+
+  I need to find the definition of nothing_call. Let me grep cpu_dyntrans.c and cpu_alpha_instr.c.
+
+  Also the brief's Q1 asks: "Is nothing_call usable from inside pc_to_pointers, or only from an instruction handler?" This matters because in the precedent, after setting next_ic, it EXECUTES ic->f itself (:2034) from within the handler. If we do the same from pc_to_pointers, we'd set cur_ic_page/next_ic and return; then run_instr proceeds to the dispatch which will execute next_ic... but next_ic must point at a valid IC. If nothing_call is a single struct, setting next_ic = &nothing_call and then the loop does ic = next_ic++ → ic = &nothing_call (valid, executes nothing's f), then next_ic = &nothing_call+1 and the next iteration reads one-past garbage → crash. So how does the precedent avoid that? cpu->running = 0... but the loop doesn't check running!
+
+  Wait — maybe nothing_call's f function itself longjmps or... Or maybe nothing_call IS an array: e.g. `static struct DYNTRANS_IC nothing_call[1]`? Hmm, `&nothing_call` with array gives pointer to array — incompatible pointer type warning but same address. Then next_ic++ → &nothing_call[1] — one past the single-element array. Still garbage.
+
+  Hold on — maybe the run loop is not where execution continues. Let me re-check: is there a check on cpu->running somewhere between? In run_instr... the I macro at :114 has no check. Hmm, but wait — maybe in this tree nothing_call's function sets cpu->running = 0 AND the outer framework: run_instr returns after the for loop hits N_SAFE_DYNTRANS_LIMIT (executing 120 garbage...). No.
+
+  Let me actually grep for nothing_call and read its definition and how it's allocated. In upstream gxemul 0.6/0.7, in cpu_dyntrans.c there's:
+
+  ```c
+  static void instr(nothing_call)(struct cpu *cpu, struct DYNTRANS_IC *ic)
+  {
+  	debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR, "nothing_call()");
+  }
+  ```
+
+  Hmm no. Let me actually recall upstream gxemul: In cpu_dyntrans.c, `to_be_translated` bad path does:
+
+  ```c
+  	cpu->running = 0;
+  	debugger_reset();
+  	ic = cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+  	cpu->cd.DYNTRANS_ARCH.next_ic ++;
+  	...
+  	ic->f(cpu, ic);
+  ```
+
+  And nothing_call is defined... in upstream, I believe there's:
+
+  ```c
+  /*
+   *  nothing_call():
+   */
+  static void instr(nothing)(...)...
+  ```
+
+  Hmm I don't remember exactly. Let me grep the tree. It's in the allowed files probably (cpu_dyntrans.c). Also, wait — how does the loop stop then? In upstream gxemul, after setting next_ic=&nothing_call and executing it, the handler returns to the dispatch loop; next_ic now points to &nothing_call+1... Actually hold on, maybe nothing_call is declared as an array big enough: `static struct DYNTRANS_IC nothing_call[N_SAFE_DYNTRANS_LIMIT + 1]` or something. If so, executing repeatedly is safe, and the loop ends at the n_translated limit, then run_instr returns 0-ish, and the main cpu loop in emul.c checks cpu->running and stops scheduling this CPU. That would make sense!
+
+  Let me grep: `nothing_call` in cpu_dyntrans.c, and check where it's defined/declared. Also check `about_to_enter_single_step` (declared in debugger.h? it's a global). And check `debugger_reset`.
+
+  Also Q1 asks about the single-step trace read failure handling (:287/:325) — confirmed: on memory_rw failure it only prints fatal(...) and still executes I at :325. Under option (e), if the user single-steps the stopped CPU... running=0 means the CPU isn't scheduled at all, so single-step of a stopped CPU... the debugger 'step' on a non-running CPU? Actually if cpu->running=0, machine is "stopped"? In gxemul, cpu->running=0 leads to the debugger being entered when single_step or all CPUs halted. Let me check cpu_alpha.c for how run loop scheduling treats running=0. Actually that's in emul.c / machine — not in allowed files. Hmm. The brief says "under -V the debugger prompt appears" — that's the precedent behavior from the unimplemented path, which we can witness from the existing tree behavior. Fine.
+
+  Now, also verify cpu_alpha.c: that alpha uses DYNTRANS_PC_TO_POINTERS generic, translate_v2p = alpha_translate_v2p, and check alpha's run_instr includes cpu_dyntrans.c. Also check whether alpha has its own pc_to_pointers override (some archs define DYNTRANS_PC_TO_POINTERS_FUNC). And check nothing_call availability: is it a per-arch static defined in cpu_dyntrans.c STATIC_STUFF section or defined per-arch? Since cpu_dyntrans.c is #included from cpu_alpha.c with macros, statics are per-arch instantiation. nothing_call — if declared static in cpu_dyntrans.c, it's available in alpha's translation unit. Let me grep.
+
+  Also: are there OTHER callers of DYNTRANS_PC_TO_POINTERS besides run_instr entry? E.g., in cpu_dyntrans.c itself (combinations?), or in cpu_alpha.c / cpu_alpha_instr.c (e.g., in exception or PALcode handling, or `alpha_pc_to_pointers` called from debugger disassembly?). Grep for pc_to_pointers in the allowed files. If some caller uses it outside the run loop (e.g., single-step trace, disassembly), option (e)'s side effects (running=0, debugger_reset) could trigger in unexpected contexts. Important premise to check.
+
+  Let me also read lines 450-600 of cpu_dyntrans.c to see what's between (TC_ALLOCATE etc.) and find nothing_call definition. And read the middle chunk 900-1930 for nothing_call, to_be_translated head, end_of_page, etc. Actually let me grep first for efficiency.
+
+• Premises at :622, :729-733, :736, :830-833, :114 all confirmed verbatim. Now I need `nothing_call`'s definition, other callers of `pc_to_pointers`, and how Alpha wires its translator.
+
+• Interesting! Key finding: `nothing_call` is used at cpu_dyntrans.c:2023 but where is it DEFINED? The grep of cpu_dyntrans.c shows only the use at :2023. And cpu_alpha_instr.c:67 uses it: `cpu->cd.alpha.next_ic = &nothing_call;`. So nothing_call must be defined in a header or in cpu_alpha.c... Let me grep cpu_alpha.c for nothing_call — the last grep didn't include it in the pattern... actually it did include `nothing_call` — no matches in cpu_alpha.c except the shown ones (translate_v2p at :89, running refs). So nothing_call is NOT defined in cpu_alpha.c, NOT in cpu_dyntrans.c (only used at :2023), but used in cpu_alpha_instr.c:67. So it must be defined in a header — but I'm only allowed the four files. Hmm. cpu_alpha_instr.c:67 uses it — let me read that file around line 60-220 to see the context (those are branch/jump handlers that call alpha_pc_to_pointers after changing PC — e.g., JMP/JSR/BR/RET handlers).
+
+  Wait, actually — maybe nothing_call is defined in cpu.h or alpha_cpu.h as a static? A static struct in a header included by each cpu_*.c? Let me check what nothing_call is by reading cpu_alpha_instr.c:50-80. The declaration could be `extern struct DYNTRANS_IC nothing_call;` — no. Let me read cpu_alpha_instr.c fully (1324 lines) — well, the relevant parts: top (1-250) for context of pc_to_pointers calls and nothing_call, and :740-780.
+
+  Also — where is nothing_call DEFINED? Maybe in cpu_dyntrans.c between lines 450-600 which I haven't read. My grep covered the whole file though — only :2023 matched "nothing_call" in cpu_dyntrans.c. So the definition is elsewhere: probably cpu.h (struct cpu has cd.alpha... no). Let me grep the include headers... but seat rules: read ONLY the four files. Hmm. But to answer Q1 ("Is nothing_call usable from inside pc_to_pointers?") I need its definition. The definition is presumably in a header (cpu.h or cpu_alpha.h). The seat rule says read only those four files. But maybe I can find the definition text within the four files — cpu_alpha_instr.c:67 usage implies it's visible there. Let me read cpu_alpha_instr.c top to see includes and any declaration.
+
+  Actually, wait: cpu_dyntrans.c is #included FROM cpu_alpha.c (typical gxemul layout). And cpu_alpha_instr.c is ALSO #included from cpu_alpha.c (or from cpu_dyntrans.c). So all these share one translation unit (alpha). nothing_call might be defined in cpu.h as a global per-arch? No — `&nothing_call` used with generic DYNTRANS_IC in cpu_dyntrans.c (which is compiled per-arch with different struct types: struct alpha_instr_call vs mips_instr_call etc.). So nothing_call must be a per-arch-typed object — declared where both cpu_dyntrans.c and cpu_alpha_instr.c can see it: probably in cpu.h under a per-cpu-family struct, or as `static struct DYNTRANS_IC nothing_call;` in cpu_alpha.c... but grep found no definition in cpu_alpha.c. Hmm, unless the declaration is in a header like `cpu_dyntrans.h` or in `cpu.h` via a macro. 
+
+  Hold on — grep pattern `nothing_call` in cpu_alpha.c returned matches only at lines shown (89, 255-286) — none of which are nothing_call. So no. Let me look at cpu_alpha_instr.c around :60-70 to see how nothing_call is declared there (maybe there's an extern or it's in alpha header included). I'll read cpu_alpha_instr.c lines 1-250 and 740-770, and also grep for "nothing_call" declaration shape. Also read cpu_alpha.c fully? 680 lines — it's one of the four allowed files; let me read it to understand alpha_init (translate_v2p wiring at :89), and any nothing_call declaration... grep says no nothing_call in cpu_alpha.c. So the declaration must come via a header. cpu_alpha_instr.c includes? Let me read its top.
+
+  Let me also read cpu_dyntrans.c 450-600 to complete my picture (TC_ALLOCATE etc.), and 920-1930 selectively — particularly to_be_translated head (to see `ic` variable context at the bad path) — I saw the tail 1930-2037 already. The bad: path at :1983 is inside to_be_translated function which has `ic` as parameter — so `ic = ... = &nothing_call` is valid there. And after executing nothing_call's f at :2034, returns. The run loop then continues with next_ic = &nothing_call+1... unless nothing_call is an ARRAY with many entries. Let me find its definition via grep in the four files — only 2 hits (usage). So definition is in a header I can't read per seat rules?? Hmm, but I can't fully answer Q1's "is nothing_call usable" without knowing its type/storage. 
+
+  Option: build a tiny compile test? The operational rule allows building a single detector/mutant in my own temp dir. But compiling the whole emulator is heavy; and reading headers is against seat rules. Hmm — but wait, is the seat rule meant to limit review scope to keep seats from wandering, or a hard rule? "Seats that read files: read ONLY [the four]." I'll treat it as hard for reading files. But I can still determine nothing_call's nature indirectly:
+
+  1. cpu_alpha_instr.c:67 usage: `cpu->cd.alpha.next_ic = &nothing_call;` — let me read the surrounding function (probably a branch handler that, on some condition, stops? Let me read).
+
+  2. From usage at :2023-2024 and :2034: after `next_ic = &nothing_call; next_ic++;`, it executes `ic->f(cpu, ic)` where ic = &nothing_call. Then to_be_translated returns; the run loop's NEXT I reads `ic = next_ic++` = &nothing_call + 1. For this to be safe, nothing_call must be an array (decaying use would be `nothing_call` not `&nothing_call`...). Hmm, `&nothing_call` where nothing_call is `struct alpha_instr_call nothing_call[2]` — `&nothing_call` is `struct alpha_instr_call (*)[2]`, assigning to `struct alpha_instr_call *` — type mismatch warning, but same address. Possible but ugly. OR the loop never reaches the next I because... let me check how run loop breaks on running==0. Looking at run_instr again: the main loop at :351 has NO running check. Hmm, but wait — what about the caller of run_instr? That's in emul.c/machine.c — not readable. But within the allowed files: cpu->running = 0 then executing 120 iterations of garbage would crash — but the witness for the EXISTING unimplemented-instruction path shows the emulator stops cleanly (this is shipped, long-standing behavior from upstream gxemul; upstream gxemul has exactly this code and it works). So nothing_call must be safe to execute repeatedly — meaning &nothing_call+1, +2, ... must be valid IC entries. In upstream gxemul (I recall from memory — and must flag as memory, not file evidence), there is in cpu_dyntrans.c... hmm.
+
+  Actually wait. Let me reconsider: maybe nothing_call is declared in a header as an array, e.g. in cpu.h: `extern struct alpha_instr_call nothing_call[...]` — no, type differs per arch.
+
+  Better: check upstream gxemul 0.7 cpu_dyntrans.c... not allowed. But I CAN read the archive copy? NO — "Pristine-2021 copies elsewhere under the project root are NOT this fork." Seat rules forbid reading other files anyway.
+
+  Hmm, but actually — I could answer Q1 partially: "nothing_call's definition is not in any of the four permitted files (grep shows only two uses); its storage duration/array-ness cannot be settled from the permitted files. HOWEVER, the precedent at :2002-2034 plus cpu_alpha_instr.c:67's identical use prove it's link-visible and usable from alpha's translation unit, including from instruction handlers that are NOT to_be_translated (cpu_alpha_instr.c:67 is in a different handler)." Whether it's safe inside pc_to_pointers depends on run-loop behavior — which I can reason about from the four files: after pc_to_pointers returns, run_instr at :265+ proceeds; the dispatch loops execute `I` = next_ic++ ... The number of I executions before any running check: the for(;;) loops run until n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT with NO running check in I. So if next_ic = &nothing_call (single struct), after 1 execution next_ic = &nothing_call+1 → UB. UNLESS nothing_call's f function sets next_ic back or breaks out... OR nothing_call is an array of at least N_SAFE_DYNTRANS_LIMIT+1 entries. OR the epilogue... no.
+
+  Wait, actually — I bet nothing_call IS an array. cpu_alpha_instr.c:67: `cpu->cd.alpha.next_ic = &nothing_call;` — let me read that context. If nothing_call were a scalar, `&nothing_call` is fine. Let me read cpu_alpha_instr.c:40-120 to see. And to find the definition, maybe grep "nothing_call" didn't match a definition because it's defined via macro like `struct DYNTRANS_IC nothing_call[N_SAFE_DYNTRANS_LIMIT + 1] = {{ ... }}`? That would contain the literal "nothing_call" — grep would match. It only matched 2 places across the four files. So the definition is in a fifth file (header). 
+
+  Hmm wait — maybe it's defined in cpu_dyntrans.c but spelled differently? No, :2023 uses `&nothing_call`.
+
+  So definition is in a header. Candidates: cpu.h, cpu_alpha.h, misc.h, debugger.h. I cannot read them per seat rule. I'll name this as a premise I could not settle from permitted files, and note what additional fact would settle it (the declaration of nothing_call — scalar vs array — and its f's behavior). But I can still give a verdict: option (e)'s SHAPE must be robust regardless: set cur_ic_page = NULL and next_ic = &nothing_call... but if nothing_call is scalar, repeated execution is UB.
+
+  Hmm wait, actually let me reconsider — maybe I'm wrong about the loop not checking running. Let me re-read run_instr... :351 `for (;;) {` — 120 I's then `n_translated_instrs += 120; if >= N_SAFE break;`. No running check. So the precedent path works only if nothing_call entries beyond the first are valid OR the nothing function itself manipulates next_ic (e.g., nothing_call's f = instr(nothing) which does `cpu->cd.alpha.next_ic = &nothing_call;` resetting itself each time! That would make it self-sustaining: each execution resets next_ic to &nothing_call... but next_ic++ happens in I BEFORE the call... then f resets next_ic = &nothing_call... wait no, I does `ic = next_ic++; ic->f(...)`. If f sets next_ic = &nothing_call again, then next I: ic = &nothing_call, next_ic = &nothing_call+1... hmm that doesn't loop cleanly either. If f sets next_ic = &nothing_call (not +1), then next I gets ic=&nothing_call, next_ic becomes &nothing_call+1 again — wait no: next_ic++ sets next_ic = &nothing_call+1 after fetching. Then f resets next_ic = &nothing_call. So each I executes &nothing_call and resets. That works with a scalar! And indeed cpu_alpha_instr.c:67 shows EXACTLY `cpu->cd.alpha.next_ic = &nothing_call;` inside some handler — maybe that IS the nothing handler for alpha? Let me read cpu_alpha_instr.c:50-80!
+
+  That's likely: 
+
+  ```c
+  static void instr(nothing)(struct cpu *cpu, struct alpha_instr_call *ic)
+  {
+      ...
+      cpu->cd.alpha.next_ic = &nothing_call;   // keep executing nothing
+  }
+  ```
+
+  Hmm but then where's nothing_call defined... maybe in cpu.h as `extern struct alpha_instr_call nothing_call;`? and defined in... some .c not in our list? cpu_alpha.c grep found no "nothing_call" — so NOT defined in cpu_alpha.c. Then defined in cpu_dyntrans.c? No match except :2023. cpu_alpha_instr.c? Only :67. memory_alpha.c? No (I read the whole file). So the definition is in another .c file or header — outside the permitted four. That's a genuine gap: name it.
+
+  BUT — wait. Maybe I should double check the grep on cpu_alpha_instr.c — it returned matches at :67 plus pc_to_pointers lines, but my pattern included nothing_call and only :67 matched. And translate_v2p didn't match there. OK.
+
+  Let me read cpu_alpha_instr.c around :40-230 and :740-770 to see the handler contexts (these are the branch handlers calling alpha_pc_to_pointers — CRITICAL: pc_to_pointers is called from instruction handlers, not just run_instr entry! So option (e) fires from inside an instruction handler mid-page too). Also :67's context.
+
+  This is important for Q2: alpha_pc_to_pointers is called from JMP/BR/RET/JSR handlers (cpu_alpha_instr.c:72,108,149,184,211) and :757 (probably in a combination or reboot?). If pc_to_pointers stops the CPU (option e), the calling handler continues executing after the call — e.g., a JMP handler would then return; the run loop continues executing remaining I's with next_ic = &nothing_call... so the stop shape MUST leave next_ic pointing at executable nothing entries for up to ~120 iterations (or whatever remains until the N_SAFE break... wait, the loop breaks only on n_translated_instrs >= N_SAFE — hmm, but n_translated increments by 120 each outer iteration; if running=0 nothing forces early exit — the loop keeps going until the limit. So up to N_SAFE_DYNTRANS_LIMIT nothing executions. That's the same as the existing precedent — fine, provided nothing_call is self-sustaining (as :67 suggests) or an array.
+
+  Also — the witness: how does the CURRENT tree behave on the unimplemented path? It works (shipped since upstream). So whatever nothing_call is, the precedent is proven in practice. Good enough for the verdict, with the caveat named.
+
+  Now let me also confirm the run entry order claim (:267 resets n_translated_instrs AFTER pc_to_pointers at :185-190) — confirmed. And epilogue :394-414 reconstructs pc from next_ic/cur_ic_page — confirmed. For option (e) shape: if we set next_ic = &nothing_call and leave cur_ic_page pointing at the PREVIOUS page (stale), the epilogue computes low_pc = (&nothing_call+... - cur_ic_page)/sizeof — garbage huge number → none of the three cases → cpu->pc unchanged → pc stays at faulting VA. The precedent at :2023 does exactly this (doesn't touch cur_ic_page). Good — but the brief asks Q2: "what cur_ic_page, next_ic and cpu->pc hold on return". Under (e) done the precedent way: cur_ic_page = stale previous page (or whatever it was), next_ic = &nothing_call+1 (if we mimic :2023-2024) or &nothing_call (if we let the loop's I do the increment), pc = unchanged faulting VA. Then run loop executes nothing calls until limit, epilogue leaves pc unchanged, run_instr returns n_instrs (small), caller sees cpu->running == 0 and deschedules; under -V, debugger_reset() + about_to_enter_single_step → debugger prompt. 
+
+  Also, Q1 third sub-question: "Is nothing_call usable from inside pc_to_pointers, or only from an instruction handler?" — pc_to_pointers is in the same translation unit (cpu_dyntrans.c included from cpu_alpha.c), nothing_call is visible there (:2023 uses it in cpu_dyntrans.c already!). So YES, usable from pc_to_pointers — :2023 is literally in cpu_dyntrans.c. And cpu_alpha_instr.c:67 shows use from another handler. So the symbol is in scope inside DYNTRANS_PC_TO_POINTERS_GENERIC (same file, later/earlier order matters — need the declaration to be visible at :622; since :2023 uses it, declaration must be before :2023; if the definition/declaration is at, say, the top via header, fine; if it's defined at :1900ish, then use at :622 would need a forward declaration. Since I can't see its definition, flag: "may need a forward declaration above :622 if the definition sits below it" — but actually since cpu_dyntrans.c is included as a whole into cpu_alpha.c, and pc_to_pointers_generic is at :622 while nothing_call's use at :2023 compiles today, the symbol must be declared somewhere at/before :2023 in the translation unit. If that declaration comes from a header (included before cpu_dyntrans.c), then it's also visible at :622 — no problem. If it's defined at, e.g., line 1900 of cpu_dyntrans.c... grep found no definition, so it's from a header → visible everywhere. OK: usable, near-certainly no forward-decl issue. But strictly: "definition not in the four files; its declaration evidently comes via an included header (or the file wouldn't compile today), so it is visible at :622 as well."
+
+  Hmm wait, one more possibility: nothing_call might be a member of the cpu struct or machine struct! Like `cpu->nothing_call`? No — the code says `&nothing_call`, a bare identifier. OK.
+
+  Also cpu_alpha_instr.c:67 — let me actually read it now. And read the branch handlers to see the pc_to_pointers call context (do they check anything after? do they use ic after?). And :757.
+
+  Also verify: the arming control in the witness — "raw-VA load walks, misses, keeps sentinel" — that's the LOAD path: memory_rw → alpha's memory access path... where does a failed DATA translation go? For loads/stores, alpha uses the generic memory_rw? The witness says the load keeps its sentinel — i.e., guest load returns without faulting, data unchanged. That's from the dyntrans memory access path (not in the four files? it's in cpu_dyntrans.c? There might be a memory access section... cpu_dyntrans.c is only 2037 lines; the memory access template is usually in memory.c or cpu_dyntrans.c — not needed for the verdict).
+
+  Now, another premise to check: "alpha_translate_v2p returns 0 on a miss WITHOUT moving cpu->pc" — CONFIRMED by reading memory_alpha.c: not_found path at :192-198: fatal(...) print + return 0; no pc modification anywhere in the function. Also confirm the two `wasn't found` lines in the transcript = two calls from pc_to_pointers (:679 first, :721 retry) — consistent: first call with vaddr=0x1044000, retry with cpu->pc (unchanged, still 0x1044000) → same message twice. ✓. Note: memory_alpha.c:120-126 TODOs confirmed verbatim. ✓ Also note :148 and :164 — pte2/pte3 not valid have fatal("TODO...") prints but no exit — fine.
+
+  Also note memory_alpha.c:75-78: there's ANOTHER exit(1) in alpha_translate_v2p (vaddr == 0xfffffffd80000000 with base==0) — but that's a different path (kernel vmem not-yet-implemented), not this defect.
+
+  Also the K0SEG/direct-map path returns 2 for kernel addresses — so alpha PALcode at 0x2000-ish physical via kseg? The exception-retry logic assumes translate moved PC to handler; alpha never does.
+
+  Now the "no other architecture can reach :729-733 today" premise: I can only partially verify from the four files. The retry logic at :696-723 assumes the translator moved cpu->pc (comment says so). For Alpha it doesn't. For other archs — their translators live in memory_mips.c etc. — NOT permitted to read. I'll say: verified for Alpha (reachable, witnessed); the "NO other architecture" universal claim is NOT verifiable from the permitted files — I did not read memory_{mips,arm,ppc,sh,m88k,riscv,...}.c. Also note: even if every other translator moves the PC, the retry could still fail if the handler VA is untranslated (e.g., MIPS ERL+vector in kseg1 usually maps, but a bogus EBase on a modern MIPS could miss) — so the exit(1) is a latent host-kill for ALL archs, alpha is just the deterministic trigger. That supports (e) for ALL archs rather than (c) Alpha-only — simpler, no #ifdef, and the "keep exit for others" in (c) preserves a host-kill for hypothetical/buggy translator states. But — counter-consideration for (c): changing behavior for other archs without a witness. The defect row is alphaifetchkill; minimal-change principle says fix what's witnessed. But the code is shared (DYNTRANS_PC_TO_POINTERS_GENERIC is one function compiled per arch); making it Alpha-only means #ifdef DYNTRANS_ALPHA around the new path — doable but uglier, and the generic safe-stop is behavior-identical for archs that never reach it. I'll weigh in Q2/Q3 and the verdict. The brief's option list: "(c) (e) for Alpha only; other architectures keep today's exit". So (c) IS (e)-for-alpha-only. The real choice: (e)-universal vs (c)=(e)-alpha-only. Given the panel brief frames (e) as "STOP THE CPU SAFELY... the guest sees a stopped CPU, the host survives", and (c) as the scoped variant, my verdict should pick. Minimal-diff + shared-function reality: (e) universal is ONE small change with zero effect on archs that never reach it (they keep... no wait — they'd no longer exit(1) IF they reach it). Risk assessment: for other archs, reaching :729 means the emulator is already in an unrecoverable translator state; stopping the CPU instead of exiting is a strict improvement for debuggability but DOES change behavior (a previously-loud crash becomes a silent stop). Hmm. There's an argument that exit(1) for unreachable states is a fine assertion. But the witness shows the emulator CAN'T distinguish "translator bug" from "guest did something odd" — on Alpha it's a normal guest action. For MIPS etc., a guest jumping to an unmapped VA then having the exception vector untranslated is also a guest-reachable state (e.g., guest sets EBase to garbage). Actually on MIPS, translate of the handler: mips translation of kseg0/kseg1 doesn't need TLB. But with ERL, handler is 0xbfc00200 — kseg1, always translates. EXL off: vector at EBase — guest-programmable → guest CAN make it unmapped → exit(1). So other archs plausibly reachable too. That nudges to (e) universal.
+
+  However — minimal changes and the harness conventions in this repo (they file one row per defect, gated on witnesses): the verdict options are what they are; I'll pick (e) universal but note (c) is the conservative fallback and the delta is one #ifdef. Hmm, wait — actually let me reconsider. The brief says option (c) is "(e) for Alpha only; other architectures keep today's exit". If the change is in the shared generic function, "Alpha only" requires `#ifdef DYNTRANS_ALPHA ... #else fatal+exit #endif`. That's fine and explicit. The argument for (c): don't change unwitnessed behavior of other archs. The argument for (e): the exit(1) is equally wrong for any arch that reaches it (host killed by guest action), and the safe-stop is already the tree's own precedent for "can't continue this CPU". 
+
+  I'll give the verdict as (e), and state: apply it unconditionally in the generic function; if the project insists on scoping to witnessed rows, (c) is acceptable but strictly worse for MIPS-class guests that can reach the same state via a bogus exception base. Hmm, but is that assertion about MIPS verifiable here? Not from the four files. I should be candid: "from the four files I cannot verify other translators; the universal-(e) argument rests on the shared function, not on a witnessed second arch."
+
+  Actually — hold on. Let me reconsider what decides (e) vs (c). The brief's Q1 first sub-question asks exactly this. My honest answer: verified Alpha; others unread (not permitted). Given uncertainty, the safe engineering choice that does NOT depend on the unverified universal premise is (e) universal — because (e) is harmless when unreached (dead path) and better when reached. (c)'s only advantage is preserving a fatal assertion for "impossible" states — but the premise that those states are impossible is exactly what's unverified. So (e). 
+
+  Now let me nail the exact code shape for Q2. I need to see:
+  1. cpu_alpha_instr.c:40-230 — nothing_call context at :67, branch handlers with pc_to_pointers at :72,:108,:149,:184,:211.
+  2. :740-770 (:757).
+  3. cpu_dyntrans.c:450-600 — anything relevant between run_instr end and pc_to_pointers (TC_ALLOCATE defs; also maybe nothing_call-related? grep said no).
+  4. The to_be_translated function head (~:1820-1930) to see `ic`, `ib`, DISASSEMBLE macro — for the latch/message shape.
+  5. cpu_alpha.c:1-120 — init, translate_v2p wiring; and check whether alpha defines DYNTRANS_PC_TO_POINTERS_FUNC as alpha_pc_to_pointers (generic wrapper) — cpu_alpha.c grep showed no pc_to_pointers?? The grep of cpu_alpha.c for pc_to_pointers found NO matches! But cpu_alpha_instr.c calls alpha_pc_to_pointers. So alpha_pc_to_pointers must be defined in cpu_dyntrans.c instantiation (DYNTRANS_PC_TO_POINTERS_FUNC expands to alpha_pc_to_pointers via macro concat: `DYNTRANS_PC_TO_POINTERS_FUNC` = `DYNTRANS_INSTR(pc_to_pointers)`-ish). The defines are in cpu_alpha.c maybe spelled differently — grep found nothing, so the define must come from a header (cpu.h or cpu_dyntrans.h?). Hmm wait, grep pattern was `pc_to_pointers|PC_TO_POINTERS` on cpu_alpha.c — no matches. But cpu_dyntrans.c is included from cpu_alpha.c with DYNTRANS_PC_TO_POINTERS_FUNC defined... maybe defined in cpu.h per-arch? Whatever — not critical. What IS critical: alpha_pc_to_pointers = the FUNC at :854 which calls GENERIC at :888. ✓ (I read that.)
+
+  6. Check where DYNTRANS_RUN_INSTR is and whether there's a running check before dispatch — read 450-600 to see the end of run_instr (return value handling) — I saw up to :450; run_instr continues to ~:520? Let me read 450-620.
+
+  Also for Q2's "inline the enclosing function's exits": DYNTRANS_PC_TO_POINTERS_GENERIC has a single exit (falls off the end at :838) — no early returns. Its caller DYNTRANS_PC_TO_POINTERS_FUNC: quick path `goto have_it` else generic + return. And callers of alpha_pc_to_pointers: run_instr entry (:190, via macro), and six alpha instruction handlers. So the stop shape executes in two contexts:
+    - Context A (run entry): after return, run_instr proceeds at :193+: interrupt checks (alpha has none in the #ifdef list — checking :206-252: ARM/M88K/MIPS/PPC/SH only; alpha not present — so nothing touches state), :265 cached_pc = cpu->pc (faulting VA), :267 n_translated=0, :269 cur_physpage = cur_ic_page (STALE — cur_ic_page not updated by our stop path... careful! at :269-270, cur_physpage is set from cur_ic_page unconditionally. If cur_ic_page is stale-but-valid, cur_physpage is stale-but-valid — only USED in statistics path (`S` macro / gather_statistics at :74-76) and... anywhere else? cur_physpage use in the four files: gather_statistics only, I think. If statistics disabled, harmless. If statistics ENABLED and we stopped: single-step/statistics branch at :328 executes S;I;... with next_ic=&nothing_call — gather_statistics at :48 computes low_pc from next_ic-cur_ic_page — garbage → but :58 guards `low_pc < 0 || > ENTRIES` → return. OK benign.)
+    - Then dispatch at :325 (single-step) or :328/:343 loops. With next_ic = &nothing_call(+1?) — executes nothing(s) until limit/return.
+    - Epilogue :395-414: low_pc from (next_ic - cur_ic_page) — garbage, out of range → pc unchanged. ✓ (faulting VA preserved)
+    - Context B (inside a branch handler, e.g. JMP at :72): handler set cpu->pc = target, called pc_to_pointers; our stop path runs; handler returns (must check handler code after the call — does it use ic or next_ic afterward? read cpu_alpha_instr.c:60-80). Then the run loop's next I executes next_ic = nothing_call. ✓ —  but careful: the CURRENT ic's f already ran (the JMP handler itself); the I macro already incremented next_ic before calling f... wait no — in context B, the handler calling alpha_pc_to_pointers is executing INSIDE an I step. pc_to_pointers sets next_ic = &nothing_call. When the handler returns, the loop's NEXT I fetches &nothing_call. ✓ Same as precedent.
+
+  7. The "latched message" — need a latch so a looping guest doesn't spam. Precedent uses debugmsg_cpu(...VERBOSITY_ERROR...) every time. For our shape: a static int warned latch, or cpu->? Precedent doesn't latch (unimplemented instr spam is bounded by running=0 — execution STOPS, so it prints once per stop). Since our stop also sets running=0, the message prints once per stop naturally — no separate latch needed IF running=0 sticks. But the brief says "latched message" — under -V the user may resume? debugger_reset() forces the debugger; user could 'continue' → the CPU re-runs → pc still faulting VA → pc_to_pointers fails again → stop again → message again. That's per-stop, acceptable; a file-static latch is trivial to add. I'll include a static latch keyed per-cpu? Keep it simple: static int warned per translation unit? That would suppress for all CPUs after first. Fine for an error of this kind. Actually simplest and matching tree style: just print every time (precedent does). But brief option (e) says "latched message" — I'll show a minimal static latch and note it.
+
+  8. debugger_reset() + about_to_enter_single_step: precedent sets about_to_enter_single_step = true BEFORE the message (:2002). These symbols: declared in debugger.h (extern) — used at :2002/:2021 in cpu_dyntrans.c already → visible at :729 too (same file, and they're externs from a header). ✓ usable in our path.
+
+  9. nothing_call execution in our path: precedent EXECUTES ic->f at :2034 from within to_be_translated. Should our pc_to_pointers path also execute it? NO — precedent executes it because to_be_translated was itself called AS ic->f and must leave consistent state... actually why does it execute nothing_call itself? Probably to consume... hmm. If we mimic inside pc_to_pointers, we'd set next_ic = &nothing_call; next_ic++ — then back in run_instr dispatch, the first I fetches &nothing_call+1?? WAIT. Precedent: :2023 `ic = next_ic = &nothing_call;` :2024 `next_ic++;` :2034 `ic->f(cpu, ic);` — executes nothing at &nothing_call, leaving next_ic = &nothing_call+1. Then to_be_translated returns to the loop; next I fetches ic = &nothing_call+1, next_ic = &nothing_call+2... So EITHER nothing_call is an array with ≥2+ entries all pointing to a nothing function, OR the nothing function resets next_ic. cpu_alpha_instr.c:67 (`next_ic = &nothing_call;` inside some handler) suggests the nothing HANDLER itself does exactly this reset — wait, that would mean: nothing's f sets next_ic = &nothing_call (back to base) each time it's executed! Then: I fetches &nothing_call+1?? No wait — if nothing_call is a SCALAR and its f resets next_ic = &nothing_call, then: after precedent, next_ic = &nothing_call+1; next I: ic = &nothing_call+1 — NOT &nothing_call — ic->f = garbage?! Unless &nothing_call+1 IS within an array whose every entry has f=nothing. Hmm hm hm. UNLESS the nothing handler reads `ic` not next_ic... 
+
+  Let me just read cpu_alpha_instr.c:50-90 to see what function contains :67. That will resolve it. If :67 is inside `X(nothing)` — i.e., alpha's nothing instruction implementation — then nothing_call is presumably `struct alpha_instr_call nothing_call = { instr(nothing) }` (scalar), and instr(nothing) does `cpu->cd.alpha.next_ic = &nothing_call;`... but that alone doesn't fix the +1 offset... UNLESS the run loop... hmm, wait: maybe instr(nothing) does `cpu->cd.alpha.next_ic --`? or sets next_ic = &nothing_call and the loop... Let me think again with exact semantics:
+
+  Precedent end state: next_ic = &nothing_call + 1 (one past). Loop: `ic = next_ic++` → ic = &nothing_call+1, next_ic = &nothing_call+2. `ic->f(cpu,ic)` → if (&nothing_call)[1].f is instr(nothing), it runs; and if instr(nothing) sets next_ic = &nothing_call + 1 (i.e., `next_ic = &nothing_call; next_ic++;`? no, :67 alone is just `next_ic = &nothing_call;`)... 
+
+  If instr(nothing) at :67 sets next_ic = &nothing_call (base), then after first nothing execution: next_ic = &nothing_call. Next I: ic = &nothing_call, next_ic = &nothing_call+1, f runs, resets next_ic = &nothing_call. So it PING-PONGS between &nothing_call and &nothing_call+1. For that to be safe, BOTH entries 0 and 1 must have f = instr(nothing)?? Only if the first fetch after the precedent is &nothing_call+1 whose f must be valid.
+
+  So: either nothing_call is an array of ≥2 entries each with f=nothing, or... hmm. OR the precedent's own execution at :2034 plus handler reset makes it consistent: :2034 executes (&nothing_call).f — if that sets next_ic = &nothing_call (:67!), then on handler return next_ic = &nothing_call. Then loop I: ic = &nothing_call, next_ic = +1, f executes, resets to &nothing_call. Stable at entry 0! So the +1 from :2024 is UNDONE by the execution at :2034 (via :67's reset). That works with a SCALAR nothing_call whose f resets next_ic = &nothing_call. 
+
+  Then for OUR pc_to_pointers stop path: we set next_ic = &nothing_call (+ increment? DON'T increment, DON'T execute — just `cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;`). Then the dispatch I: ic = &nothing_call, next_ic = +1, nothing's f executes and resets next_ic = &nothing_call. Stable. EVERY iteration executes entry 0. SAFE with scalar. This hinges on :67 being inside instr(nothing) and on next_ic reset — MUST verify by reading cpu_alpha_instr.c:40-90.
+
+  Alternatively simpler and precedent-exact: copy :2023-2024 + :2034 (set, increment, execute once) — but executing an ic from pc_to_pointers is weird (pc_to_pointers has no `ic` in scope; we'd make a local). The cleaner shape: just set next_ic = &nothing_call and let the dispatch loop execute it naturally. But that DEPENDS on :67 reset behavior. Must verify.
+
+  10. Also check: does anything between pc_to_pointers return and dispatch clobber next_ic in run_instr? :193-270 — no next_ic writes except via exceptions (alpha: none). ✓ And in context B (branch handler), after alpha_pc_to_pointers returns, does the handler write next_ic? Need to read the handlers (e.g., :60-75, :100-115). Reading cpu_alpha_instr.c:40-230 covers all.
+
+  11. cur_ic_page: should our stop path ALSO set cur_ic_page? If we set next_ic = &nothing_call but leave cur_ic_page stale: epilogue low_pc = (&nothing_call - stale_page)/sizeof → out of range → pc preserved. gather_statistics guarded. The debug-I variant (:119-128) would print garbage low_pc but that's #if'd out. So leaving cur_ic_page stale is what the precedent does (:2023 doesn't touch it). For extra safety we COULD set cur_ic_page = NULL — but then low_pc = huge positive... same outcome; and any deref of cur_ic_page? In dispatch, no (only next_ic used). Keep precedent-compatible: don't touch cur_ic_page, or set it NULL — I'll recommend matching precedent (untouched) and note the epilogue arithmetic is technically UB on unrelated pointers but is exactly what the shipped precedent already does; not a new risk introduced by this change.
+
+  Hmm — wait, one subtlety in context A (run entry): cur_ic_page at :269-270 is cast into cur_physpage — fine. But ALSO: what if this is the FIRST run_instr call and cur_ic_page is NULL (fresh CPU)? Epilogue: (next_ic - NULL)/sizeof = huge → out of range → pc preserved. gather_statistics: same guard. OK.
+
+  12. What about `cpu->running = 0` — after run_instr returns, who notices? Not in the four files (emul.c). But precedent relies on the same. ✓ And `debugger_reset()` + `about_to_enter_single_step` produce the -V debugger prompt — precedent-proven. ✓
+
+  13. Q3 — witness rows as detector: which transcript rows prove (a) host survives: process still alive after the JMP — e.g., a subsequent row (prompt, or continued guest output, or clean exit status 0 via quit); (b) CPU stopped: `running=0` evidence — under -V the debugger prompt row; no further guest instructions executed (trace stops); (c) no garbage executes: pc still 0x1044000 in the debugger `regs` dump / the latched message appears exactly once; and cur_ic_page/next_ic consistency — no second `wasn't found` storm, no UNIMPLEMENTED spam. Concretely: run `-V`, script: arm paging, raw-VA load (control holds), JMP 0x1044000 → expect: ONE "instruction fetch translation failed" line naming pc=0x1044000, debugger prompt, `r`/`regs` shows pc == 0x1044000, then `quit` exits 0. The two old `wasn't found` lines + FATAL + exit 1 must be GONE. Also non--V run: emulator halts CPU, machine stops (all CPUs halted → exit 0?) — need to name what the current non--V behavior is when cpu->running=0 for the only CPU: in gxemul, when all CPUs stop, emulation ends cleanly (exit 0) — precedent behavior for unimplemented instruction. So witness rows: "process exits 0" (not 1), message once, no FATAL.
+
+  Hmm — also the brief Q3 mentions "the latch once" — the message must appear exactly once even if... well, CPU stopped so once.
+
+  14. Also verify brief's claim about single-step trace read handling its own failure (:287/:325): CONFIRMED — at :287-291 memory_rw failure → fatal("XXX_run_instr(): could not read the instruction\n") — just a message, NO exit, then falls through and executes I at :325 anyway. So under -V single-step at the stopped state... wait, if cpu->running=0 the debugger's 'step' — does debugger allow stepping a non-running cpu? about_to_enter_single_step + debugger_reset enters debugger; if user types 'step', run_instr is called with single_step=1: pc_to_pointers at entry FAILS again (pc still faulting VA) → our stop path again (message again — unless latched) → then :287 memory_rw(cached_pc=0x1044000) — the trace read: memory_rw on an untranslated VA for Alpha... does memory_rw use translate_v2p? For CACHE_INSTRUCTION it would walk → fail → prints "could not read the instruction" (fatal only) → then I executes nothing_call → returns. So each 'step' re-stops cleanly; no garbage executes; pc unchanged. That's CONSISTENT with (e) — good. And it shows the trace-read failure path tolerates the stop (prints an extra message — cosmetic). Note in Q1 answer: yes it "handles" failure only cosmetically (message, no exit, executes current ic anyway) — with our stop, that ic is nothing_call. ✓ No NEW hazard.
+
+  15. One more premise from the brief §2: "the run entry resets instruction accounting after PC conversion (:267), and the epilogue reconstructs the PC from instruction pointers (:394)" — both confirmed. Implication for our shape: returning early from pc_to_pointers WITHOUT setting next_ic would leave stale next_ic → dispatch executes stale page entry = garbage GUEST code — that's why (b) is refuted. ✓ Confirmed refutation of (b): :830-833 skipped → next_ic stale (points into some other page) → :114/:325 executes it. YES.
+
+  And refutation of (a): running=0 only → falls to :736 physaddr = paddr (uninitialized? paddr is declared at :671 `uint64_t paddr;` — set only inside the ok paths; on total failure it's UNINITIALIZED) → translation page allocated for garbage physaddr → next_ic set into it → executes garbage. Wait — but with running=0 the loops STILL execute (no running check in I!) — so (a) is doubly broken: garbage paddr page AND the loop doesn't even check running. Confirmed (a) refuted. ✓ Actually interesting — this strengthens the need for the nothing_call mechanism: the I loop never checks running; the ONLY way to stop safely is to point next_ic at nothing entries. ✓
+
+  16. Also confirm the claim "dispatch loop dereferences next_ic without checking running (:114, :190)" — :114 is the I macro; :190 is the PC_TO_POINTERS call in run_instr. Hmm, :190 is not a deref — the brief meant the I at... whatever, the substance (I doesn't check running) is confirmed. Slight imprecision in the brief's line ref, worth one line in "something else" section? Eh — :190 is the conversion call; the deref is :114. Fine, minor.
+
+  Now read the remaining pieces: cpu_alpha_instr.c:1-240 and 740-770; cpu_dyntrans.c:450-600 (run_instr tail + TC_ALLOCATE); to_be_translated head ~1800-1935 (see DISASSEMBLE/ib and function signature for context); cpu_alpha.c:1-120 (init wiring) — and maybe cpu_alpha.c around 240-300 not needed. Let me also check alpha exception/PALcode in cpu_alpha_instr.c around :757 (what calls pc_to_pointers there — maybe `X(reboot)` or hwswtrappc?). Read.
+
+• Core premises confirmed verbatim at the cited lines. Now the decisive questions: what `nothing_call` is, how the Alpha handlers call `alpha_pc_to_pointers` mid-instruction, and the run-entry/dispatch context. Reading those spots now.
+
+• Now I have almost everything. Key findings from this batch:
+
+  1. `cpu_alpha_instr.c:65-67` — `X(call_pal)` already contains EXACTLY the option-(e) idiom at handler level:
+  ```c
+  	if (!cpu->running) {
+  		cpu->n_translated_instrs --;
+  		cpu->cd.alpha.next_ic = &nothing_call;
+  	}
+  ```
+  So: when a PALcode call sets running=0, the handler sets `next_ic = &nothing_call` (NO increment, NO self-execution). This is a SECOND in-tree precedent, and it proves:
+     - `nothing_call` is usable with the bare assignment `next_ic = &nothing_call;` (no ++).
+     - After this handler returns, the run loop's next I fetches ic = &nothing_call, next_ic = &nothing_call+1... and executes nothing_call's f. For this to be safe repeatedly, nothing_call's f must reset next_ic = &nothing_call (self-sustaining) — OR nothing_call is an array. Either way, this is SHIPPED behavior: call_pal paths (e.g., PAL_halt?) already rely on it. So the mechanism "next_ic = &nothing_call + running=0" is already proven in this very file.
+
+     Actually wait — even better: this tells me the exact, minimal, proven shape for option (e) inside pc_to_pointers: set `cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;` and `cpu->running = 0;`, plus the debugger bits from the to_be_translated precedent (about_to_enter_single_step, debugger_reset) and a message. No need to execute ic->f ourselves (call_pal doesn't), no need for next_ic++ (call_pal doesn't).
+
+  2. `nothing_call`'s definition: still not in the four files. It's used in cpu_dyntrans.c:2023 and cpu_alpha_instr.c:67. Both compile today, so its declaration is visible via headers included at top of the alpha translation unit. Since cpu_dyntrans.c is included into cpu_alpha.c before... hmm, wait, actually order: cpu_alpha.c includes cpu_dyntrans.c which includes... cpu_alpha_instr.c is included from where? Probably from cpu_dyntrans.c (tmp include) or cpu_alpha.c. Either way, single TU. nothing_call must be declared before :622 of cpu_dyntrans.c for use in pc_to_pointers — its use at :2023 proves declaration exists SOMEWHERE at/before that point in the TU; if the declaration is textual below :622 (e.g., defined at line 1500), then use at :729 would need a forward declaration. I cannot see the definition (not in the four files → it's in a header, almost certainly cpu.h or alpha_cpu.h as `extern struct alpha_instr_call nothing_call;` — no wait, if it were in cpu.h it'd need per-arch types... it could be declared in a header with the arch-specific type since cpu.h includes per-arch headers... anyway). Honest statement: definition not in permitted files; two in-file uses prove it is declared in the Alpha TU; the only residual risk is declaration ORDER, trivially settled by whoever writes the patch (compile error if wrong — a build-time check, not a runtime risk). Actually — hold on, I could grep for "nothing_call" in the four files one more time... already did: only 2 hits. OK.
+
+     Hmm, actually wait. Is it possible nothing_call is defined in tmp_alpha_misc.c (included at cpu_alpha_instr.c:742)? That's a generated file not in my permitted list. Possible. Doesn't matter — same conclusion.
+
+  3. `X(end_of_page)` at :748-761 calls alpha_pc_to_pointers — so pc_to_pointers is also called on page-boundary crossings. Same context-B reasoning applies.
+
+  4. Branch handlers (jsr, jsr_0, br, br_return via br, beq→br, etc.) call alpha_pc_to_pointers AFTER setting cpu->pc — and do NOTHING after the call (they return). So a stop inside pc_to_pointers is safe: handler returns, loop's next I fetches next_ic = &nothing_call. ✓ None of them examine the result or touch next_ic after a failed cross-page jump. ✓
+
+  5. run_instr tail: :462-465 — `cpu->ninstrs += n_instrs; return n_instrs;`. No running check inside; the caller (emul.c, not permitted) handles running==0 — same as both precedents rely on.
+
+  6. cpu_alpha.c:87-93 — alpha wires memory_rw, run_instr, translate_v2p = alpha_translate_v2p (:89 ✓), update_translation_table, invalidate... Confirmed.
+
+  7. Also confirmed: in run_instr, after PC_TO_POINTERS, Alpha has no interrupt-assertion block (:206-251 covers ARM/M88K/MIPS/PPC/SH only) — so nothing between :190 and :265 touches alpha state.
+
+  Remaining unknowns to name:
+  - nothing_call's storage (scalar vs array) and its f's behavior — not in permitted files; mitigated by two independent shipped uses (:2023-2034 and call_pal :65-67) that both rely on next_ic=&nothing_call being a stable, repeatable stop state.
+  - Other architectures' translators (memory_mips.c etc.) — not permitted to read; cannot verify the universal premise "no other arch can reach :729-733". 
+  - The non--V caller behavior (emul.c run loop) when running=0 — not in permitted files; relied upon via precedent.
+
+  One more thing to verify: the brief's §2 claim "the run entry resets instruction accounting after PC conversion (:267)" ✓ confirmed. "epilogue reconstructs the PC (:394)" ✓ confirmed :394-414.
+
+  Also brief's claim "the dispatch loop dereferences next_ic without checking running (:114, :190)" — :114 is `I` (no running check ✓); :190 is the PC_TO_POINTERS call, not a deref — the substance stands (no running check anywhere in dispatch), minor line-ref sloppiness.
+
+  Also verify Q1's sub-question 2: "Does the single-step trace read (:287, :325) really handle its own failure?" — :287-291: memory_rw failure → fatal("...could not read the instruction\n") — message ONLY, no exit, no stop; execution continues to :325 `I`. So it "handles" failure only cosmetically: it prints and then executes the ic anyway. With option (e) in place, that ic is nothing_call → harmless. Without (e) (today, if the entry conversion had somehow succeeded but the trace read fails)... irrelevant. Answer: it tolerates failure by printing and pressing on; under (e) the object it presses on with is nothing_call. ✓ No new hazard. Note also that for the witness scenario under -V: each manual `step` at the stopped debugger would re-enter run_instr, conversion fails again at :190, stop path fires again → message repeats per step (unless latched) and trace read prints "could not read the instruction". Cosmetic, worth one line in the patch note.
+
+  Now, do I have everything for the verdict? Let me also double check the exact shape I recommend against the fall-through at :736:
+
+  Recommended patch (option e), inside DYNTRANS_PC_TO_POINTERS_GENERIC, replacing :729-733:
+
+  ```c
+  			if (!ok) {
+  				static int warned = 0;   /* hmm — static in a template included per-arch: fine, one per arch */
+  				if (!warned) {
+  					fatal("instruction fetch translation failed: "
+  					    "vaddr=0x%" PRIx64" not translatable; stopping cpu%i\n",
+  					    (uint64_t)cpu->pc, cpu->cpu_id);
+  					warned = 1;
+  				}
+  				about_to_enter_single_step = true;
+  				cpu->running = 0;
+  				debugger_reset();
+  				cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+  				return;
+  			}
+  ```
+
+  Wait — but there's a subtlety: `return` from GENERIC returns to DYNTRANS_PC_TO_POINTERS_FUNC (:888-889), which returns to its caller. State on return: cur_ic_page UNTOUCHED (stale or NULL on first entry), next_ic = &nothing_call, cpu->pc = faulting VA (unchanged — alpha didn't move it; the retry at :698 re-cached cached_pc = cpu->pc = same). physaddr/paddr unused. ✓
+
+  But hold on — MODE32 vs 64-bit: nothing_call type — in the generic function, is `nothing_call` typed as struct DYNTRANS_IC? At :2023 it's used as `&nothing_call` assigned to next_ic — same expression works at :729. ✓ But careful: DYNTRANS_PC_TO_POINTERS_GENERIC is compiled for MODE32 too in dualmode archs; nothing_call for 32-bit mode... :2023 is in to_be_translated which is per-mode as well (instr32(...) variants exist per :911-913). Is there a nothing_call32 for MODE32? At :2023, which mode's to_be_translated is it in? The tail I read (:1983-2036) — is that inside a MODE32 conditional? For ALPHA there's no dualmode (alpha is 64-bit only), so irrelevant for THIS defect. But if option (e) is applied universally in the generic function, dualmode archs (ARM? MIPS? which are DYNTRANS_DUALMODE_32?) compiling the MODE32 instantiation would reference nothing_call — the same symbol :2023 references in the same instantiation context... wait, is :2023 in a MODE32-instantiated section? DYNTRANS_TO_BE_TRANSLATED_TAIL — the to_be_translated function is instantiated per mode for dualmode archs (instr32(to_be_translated) exists). And it uses &nothing_call at :2023 in BOTH instantiations? If it compiles today for dualmode archs in both modes, then &nothing_call works in both instantiations — so my patch's identical reference is fine wherever :2023 compiles. ✓ (DYNTRANS_PC_TO_POINTERS_GENERIC is instantiated in the same per-mode contexts — it has #ifdef MODE32 branches, so yes it's compiled per-mode too.) So symbol availability is exactly as proven by :2023. 
+
+  Hmm, wait — actually one more check: is `nothing_call` perhaps declared as a macro that expands differently? `&nothing_call` — can't be a function-like macro; could be an object-like macro expanding to e.g. `cpu->cd.alpha.nothing_ic`... possible! Then &nothing_call = &(cpu->cd.alpha.nothing_ic) — fine too, same usage works. Either way, textual use at :729 identical to :2023 compiles. ✓
+
+  Now, about my recommendation of `return` vs letting it fall through with ok... Alternative shape: set next_ic and `return` — clean. Some might prefer not early-returning but guarding the rest with `if (ok)`. Early return is simplest and matches the function's existing single-exit... it HAS no early returns today (single exit at end) — but the brief asks for exact shape; early return from the !ok branch is minimal and readable. FUNC's generic-call site (:888) does `DYNTRANS_PC_TO_POINTERS_GENERIC(cpu); return;` — so a return from GENERIC is indistinguishable from normal completion to FUNC — FUNC must not then execute have_it path — it doesn't (returns right after). ✓
+
+  What about `cur_ic_page`? Leave untouched (precedent :2023 also leaves it). Epilogue (:395-414): low_pc computed from (&nothing_call − cur_ic_page) — if cur_ic_page is a valid stale page pointer, the diff is some huge value (or negative), caught by the range checks → pc unchanged. Technically ptrdiff on unrelated pointers is UB — but the shipped precedent already does exactly this on every unimplemented-instruction stop, so the patch introduces no NEW class of UB. Worth one candid line. (If one wanted to be squeaky-clean, set cur_ic_page = NULL... no — NULL makes the subtraction equally UB and ALSO gather_statistics's guard still catches it. Leave as precedent does. Actually hmm: if cur_ic_page is NULL (first-ever conversion fails — exactly the witness case? No — the witness had paging armed and was running translated code, so cur_ic_page was valid-stale; but a FIRST-call failure could have cur_ic_page NULL) — the arithmetic yields huge positive → guard catches. Same behavior. Fine.)
+
+  `cpu->n_translated_instrs`: run entry resets it at :267 AFTER conversion, so our stop leaves it 0 → n_instrs small/zero → return value ~0. call_pal precedent even decrements it (:66) when stopping mid-stream; in context B our stop happens inside a handler — n_translated_instrs accounting: the handler itself doesn't adjust (branch handlers don't decrement) — end_of_page does (:760). Our stop path: n_translated_instrs keeps counting the nothing executions? No — the I macro doesn't touch n_translated_instrs; only the outer loop adds +120 per batch. So the batch completes to the limit (executing nothings), run_instr returns ~120-ish. Hmm — that means after a stop, run_instr reports ~N instructions "executed" though they were nothings. Precedent behaves the same way (to_be_translated's stop also lets the batch finish on nothings — and it even does n_translated_instrs accounting hacks at :66 for call_pal... that's for PALcode). Cosmetically imperfect, identical to precedent. Not a blocker; mention it? One line in Q2 maybe. Actually wait — does the batch REALLY keep going after running=0? The for(;;) loop has no running check — YES it keeps executing I's (nothings) until n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT. Both precedents rely on this being safe. It is (shipped). It wastes a few hundred nanoseconds executing nothings. Fine.
+
+  Also `wants_to_idle` — :193 sets false. Irrelevant.
+
+  Under -V: debugger_reset() (:2021 precedent) + about_to_enter_single_step → debugger prompt. ✓ matches brief.
+
+  One more consideration for the latch: `static int warned` inside a per-arch-instantiated template → one flag per arch-mode instantiation. For SMP alpha machines with N CPUs all hitting fetch kills, one latch suppresses later CPUs' messages — acceptable? The precedent prints every time (no latch). Since running=0 stops the CPU, repeats only happen via debugger 'step' or... a second CPU failing. I'd honestly follow the precedent and NOT latch, or latch per-cpu via a cpu struct flag... Simplest honest recommendation: print every time (like :2005-2009), because the stop means it prints at most once per stop event, and under -V stepping it repeats — which is arguably USEFUL (each step shows why nothing advances). The brief says "latched message" — I'll show the shape with a plain debugmsg_cpu/fatal like the precedent and note that a static latch is optional; the once-ness is already guaranteed per stop by running=0. Hmm, but the option text says "latched message, running = 0, ..." — I'll not quibble; I'll present the shape and note latch-vs-precedent. Keep verdict on (e).
+
+  VERDICT: (e). Deciding item: the call_pal precedent at cpu_alpha_instr.c:65-67 — the tree ALREADY stops a CPU mid-handler with exactly `running=0 + next_ic=&nothing_call`, and the dispatch loop's missing running-check (:114) makes that the ONLY safe stop mechanism; (a) and (b) refutations verified at :736 and :830-833.
+
+  Also choose: (e) universal vs (c) alpha-scoped? My verdict line: (e) — and applied in the shared generic function without an #ifdef... Hmm, let me think once more. Arguments:
+
+  For (e) universal (no ifdef):
+  - The function is shared; an #ifdef DYNTRANS_ALPHA splits a 5-line block — ugly but possible.
+  - Other archs' translators unread (not permitted) → the premise "only Alpha can reach it" is UNVERIFIED. If false (reachable elsewhere — e.g., any translator that fails to move PC, or a handler VA that doesn't translate), (c) keeps a guest-triggerable host exit(1) for those archs.
+  - If unreachable elsewhere, (e) is dead code there — zero behavioral change.
+  So (e) universal dominates under uncertainty. The only cost of (e) universal: if some arch maintainer WANTED the loud crash for "impossible" states — but the tree's own direction (#194 comment in memory_alpha.c: "must not abort()/exit() the host; ... keeps the emulator alive and debuggable") says the opposite.
+
+  Verdict: (e), unconditionally in the generic function. Deciding item: the dispatch loop never checks running (:114, :351-373), so the only safe stop is steering next_ic to nothing_call — the mechanism the tree already uses twice (:65-67 call_pal, :2002-2024 unimplemented).
+
+  Now Q3 — the witness as detector. Rows that prove the three properties, concretely for the alphaifetchkill witness run (-E alpha -e alphabook1, paging armed, raw-VA load control, JMP 0x1044000):
+
+  1. Host survives: the process does NOT exit at the JMP — transcript continues after the second 'wasn't found' point... under the fix, exactly ONE new line e.g. "instruction fetch translation failed: pc=0x0000000001044000, stopping cpu0" and NO "FATAL: could not find physical address of the exception handler?" and NO exit-status-1 row. Instead: under -V, a debugger prompt row; non--V, clean emulation end with exit status 0 (all CPUs stopped — same as the unimplemented-instruction witness rows elsewhere in the tree).
+  2. CPU stopped: no further guest instruction trace/PC advance after the stop row; under -V the debugger prompt appears (debugger_reset + about_to_enter_single_step); `pc` in the register dump reads 0x1044000 (the faulting VA), proving the epilogue didn't reconstruct garbage.
+  3. No garbage executes: exactly ONE stop message (no storm of wasn't-found/UNIMPLEMENTED lines); after the stop, zero guest-visible state changes (register dump identical before/after); the raw-VA load control row still holds its sentinel (proving the stop didn't disturb the data path); and a manual `step` in the debugger re-stops at the same pc with at most the cosmetic "could not read the instruction" line.
+
+  Negative controls that must be GONE: exit status 1; the FATAL line; any execution at physical garbage (which would show as PC drifting or an UNIMPLEMENTED-instruction line from a bogus page).
+
+  Also Q1 answers:
+  - "NO other arch can reach :729-733 today?" — Alpha: YES reachable, verified by reading memory_alpha.c (no pc movement on miss; returns 0; TODOs at :120-126 verbatim as brief says) and the witness mechanism. Other archs: NOT READ (seat rules) — their translators live in memory_{mips,arm,ppc,sh,...}.c, outside the permitted four. So the universal premise is UNSETTLED by this seat; note the retry logic's own comment (:686-690) shows the mechanism ASSUMES the translator moved the PC — any translator violating that assumption hits exit(1). Also note: even with a PC-moving translator, the retry translates the HANDLER address, which itself can miss (handler VA untranslatable) → the exit is reachable in principle for any arch. Verdict (e) does not depend on this premise; (c) does.
+  - Single-step trace read (:287/:325): handles failure only cosmetically — fatal() message, no exit/stop, then executes I anyway. Under (e) that's nothing_call — safe. Confirmed by reading.
+  - nothing_call usable from pc_to_pointers? YES: it's referenced at cpu_dyntrans.c:2023 in the same file (so in scope, provided its declaration precedes :729 in the TU — its use at :2023 proves visibility in this TU; the author should confirm declaration order at build time, a compile-time check) and at cpu_alpha_instr.c:67 from an ordinary instruction handler (call_pal) — NOT only from to_be_translated. Its DEFINITION is not in the four permitted files (grep: only the two uses), so its type/storage can't be settled by this seat; the two shipped uses prove the idiom `next_ic = &nothing_call` + running=0 is a stable terminal state the dispatch loop can execute indefinitely.
+
+  Something else found while verifying (the "if you found something ELSE" clause):
+  1. memory_alpha.c:75-78 — a SECOND exit(1) inside alpha_translate_v2p itself (vaddr==0xfffffffd80000000 when ptbr base==0): "Alpha kernel virtual memory seems to want to be used. Not yet implemented." Different trigger, same host-kill class — worth its own row someday; NOT part of this fix.
+  2. memory_alpha.c:94 — `fatal("AYONA3\n")` debug leftover on the same vaddr in the walked path. Cosmetic cruft.
+  3. Brief's line-ref nit: "the dispatch loop dereferences next_ic without checking running (:114, :190)" — :190 is the conversion call site, not a deref; the deref is the I macro at :114 (and :325). Substance correct.
+  4. The to_be_translated precedent executes the nothing itself (:2034) with a next_ic++ (:2024); the call_pal precedent does NEITHER (:65-67). For the pc_to_pointers path the call_pal shape (bare assignment, no ++, no self-exec) is the right one to copy, because pc_to_pointers is not itself an executing ic — the dispatch loop will fetch and execute nothing_call naturally on the next I. (If you copy :2023-2024's ++ into pc_to_pointers, the first fetch is &nothing_call+1 — safe only if nothing_call's f resets next_ic, which I could not verify from the permitted files. DON'T include the ++. This is a real trap in the brief's option text, which quotes ":2023-2024 ... ic = next_ic = &nothing_call; next_ic++" as the precedent to follow.)
+
+  Oh wait — point 4 is important. The brief §2 quotes the precedent including `next_ic++`. If a patch author copies that verbatim into pc_to_pointers WITHOUT also executing the ic (:2034), the loop starts at &nothing_call+1. In the to_be_translated precedent, :2034's execution of (&nothing_call).f presumably resets next_ic back (that's the only way the scalar case works) — but I can't verify nothing_call's f from the permitted files. The SAFE shape, proven by call_pal (:67), is the bare `next_ic = &nothing_call;` with no ++ and no self-execution. I'll make that explicit in Q2.
+
+  Let me also double-check the run-entry interrupt blocks for alpha once more — :206-252: `#ifdef DYNTRANS_ARM/M88K/MIPS/PPC/SH` — alpha absent ✓. And THUMB block :254-263 is ARM-only ✓. So for alpha, after PC_TO_POINTERS at :190: :193 wants_to_idle=false, :265 cached_pc=cpu->pc, :267 n_translated=0, :269-270 cur_physpage=cur_ic_page, then dispatch. ✓
+
+  And Q2's "what the run loop does next": it executes I's (nothing_call) until the batch limit (:371), falls to epilogue (:395) where low_pc is out of range so cpu->pc stays 0x1044000, updates ninstrs, returns n_instrs (~120+0); caller sees running=0 (emul.c — outside permitted files, precedent-proven) and stops scheduling the CPU; under -V, debugger_reset()+about_to_enter_single_step drop to the prompt.
+
+  In context B (JMP at 0x1044000 from within jsr_0/br handler — which is what the witness's JMP hits): handler set cpu->pc=target (:138 in jsr_0), called alpha_pc_to_pointers (:149); our stop path fires; handler returns immediately (nothing after the call ✓); the I that invoked the handler completes; next I fetches nothing_call; batch runs out on nothings. cpu->pc stays 0x1044000 through the epilogue. ✓
+
+  Also for Q2: "Inline the enclosing function's exits and state" — GENERIC's exits: only the end-of-function fall-through today (:838); my shape adds ONE early return at the !ok branch. FUNC's exits: :889 (after generic) and the have_it fall-through (:893-899). State on the new exit: cur_ic_page = whatever it was on entry (stale valid page, or NULL on first-ever conversion — both tolerated by the epilogue's range checks :397-413 and by gather_statistics's guard :58); next_ic = &nothing_call; cpu->pc = faulting VA 0x1044000; running=0; about_to_enter_single_step=true; translation arrays/tc untouched (no garbage page allocated — the :739-833 body is skipped, so no bogus physaddr page is created — unlike option (a)).
+
+  Also should the stop path skip the `physaddr &= ...` etc.? Yes — return before :736. ✓
+
+  Now — one more possible shape detail: should the message print cached_pc or cpu->pc? On alpha they're identical (translator doesn't move pc). Use cpu->pc (what the user cares about). Mention both same.
+
+  Latch: brief says latched. Precedent doesn't latch. I'll write the shape with a `static int` latch per the brief but note precedent prints unlatched and that the once-per-stop property comes free from running=0; the latch only matters for repeated -V stepping. Actually — a static int in the template is per-arch-instantiation, fine. Show it.
+
+  Do I need to check `about_to_enter_single_step` and `debugger_reset()` visibility at :729? They're used at :2002/:2021 — same file, same TU. If they're externs from debugger.h (included at top of cpu_dyntrans.c or the including cpu_alpha.c), visible at :729. If declared... they're not defined in cpu_dyntrans.c (grep found only uses). They must come from a header — visible everywhere in the TU. ✓ compile-time confirmable.
+
+  `single_step`, `instruction_trace` — globals, used at :206 etc. fine.
+
+  One more Q3 row: "the latch once" — with the latch, repeated -V steps print the stop line once; without latch, once per stop. Either acceptable; detector: count of stop lines == 1 for the unattended run.
+
+  I think I'm done with reading. Should I build a mutant to test? The operational rule encourages building a single detector/mutant in my own temp dir. That would mean copying the four files + headers... building gxemul alpha requires the whole src tree + configure. That's heavy and approaches "driving the harness"? No — building is fine, running a single detector is fine; gates are not. But building the full emulator takes minutes and my verdict doesn't depend on dynamic evidence — every mechanism claim is verified statically against shipped, witnessed precedent. The one dynamic unknown (nothing_call's f behavior) is NOT observable without reading a fifth file anyway, and is already load-bearing in two shipped paths. I'll skip the build and name what I didn't do. Actually, could I compile just a syntax-check of the patch? It'd need the whole TU — same cost, low value. Skip; say so.
+
+  Verdict line first, per instructions. Then premise table, Q1, Q2 (exact shape), Q3, something-else. Keep it tight but complete. Use the user's language: English (the brief is English).
+
+  Format: VERDICT line first as demanded. Then sections. Reasonably concise but this is a review panel submission — they want the derivations. I'll keep it structured.
+
+• All four files read (cpu_dyntrans.c 1–600, 600–920, 1930–2037; memory_alpha.c whole; cpu_alpha_instr.c 1–240, 730–790; cpu_alpha.c 60–120), plus targeted greps across them. I did not read any fifth file; I did not run or build anything — every load-bearing claim below is static and verified against the cited lines.
+
+  **VERDICT: (e) — the deciding item is `cpu_alpha_instr.c:65-67`: `call_pal` already stops a CPU mid-handler with exactly `running=0; next_ic=&nothing_call;`, and the dispatch loop's missing `running` check (`cpu_dyntrans.c:114`) makes steering `next_ic` the *only* safe stop. Apply it unconditionally in the generic function, not Alpha-only.**
+
+  ## Premise audit (checked, not ratified)
+
+  | Brief claim | Verdict | Evidence |
+  |---|---|---|
+  | Defect at `cpu_dyntrans.c:729-733` | TRUE | `fatal("FATAL: could not find physical address of the exception handler?"); exit(1);` at :730-732 |
+  | (a) refuted: garbage paddr | TRUE | `uint64_t paddr;` (:671) is uninitialized on total failure; fall-through to `physaddr = paddr;` (:736) then allocates a translation page for garbage (:739-833) |
+  | (b) refuted: `next_ic` unset | TRUE | `cur_ic_page`/`next_ic` set only at :830-833; a bare return leaves the stale pointer, and `I` (:114) dereferences it with no `running` check anywhere in the batch loops (:325, :331-342, :351-373) |
+  | Alpha translator returns 0 without moving `cpu->pc` | TRUE | `memory_alpha.c:192-198` (`not_found:` prints, `return 0;`); no pc write anywhere in the function; TODOs at :120-126 verbatim as quoted. The witness's two identical `wasn't found` lines = the :679 call and the :721 retry both seeing the same unmoved pc |
+  | Run entry resets accounting after conversion (:267); epilogue reconstructs pc (:394) | TRUE | :265-270 and :394-414 as described |
+  | nothing_call precedent at :2002-2024 | TRUE, with a correction | see below |
+  | NO other arch can reach :729-733 | **UNSETTLED by this seat** | Other translators live in `memory_{mips,arm,ppc,sh,...}.c`, outside the four permitted files; I did not read them. The retry's own comment (:686-690) shows the mechanism *assumes* the translator moved the PC — any translator violating that, or any handler VA that itself won't translate, reaches the exit. Since (e) is dead code where unreached, the verdict does not depend on this premise; (c) does |
+
+  ## Q1
+
+  - **Other architectures:** Alpha reachable — verified. Universal "no other arch" — not verifiable from the permitted files; named, not guessed.
+  - **Single-step trace read (:287/:325):** handles failure only cosmetically — `fatal("...could not read the instruction")` at :289-290, no exit/stop, then executes `I` at :325 anyway. Under (e) that ic is `nothing_call`, so this is safe. Confirmed.
+  - **nothing_call usable from pc_to_pointers?** Yes. It is referenced at `cpu_dyntrans.c:2023` — same file, so the symbol is in scope at :729 (declaration-order is a compile-time check, not a runtime risk), and at `cpu_alpha_instr.c:67` from an ordinary instruction handler — it is not confined to `to_be_translated`. Its **definition is in none of the four permitted files** (grep: only the two uses), so its storage class is unsettled here; but two independent shipped paths already rely on `next_ic = &nothing_call` + `running=0` being a stable terminal state the batch loop can execute to its limit.
+
+  ## Q2 — option (e), exact shape
+
+  Replace :729-733 with:
+
+  ```c
+  			if (!ok) {
+  				static int fetch_kill_warned = 0;
+  				if (!fetch_kill_warned) {
+  					fetch_kill_warned = 1;
+  					fatal("instruction fetch translation failed: "
+  					    "pc=0x%" PRIx64" not translatable; stopping cpu\n",
+  					    (uint64_t)cpu->pc);
+  				}
+  				about_to_enter_single_step = true;
+  				cpu->running = 0;
+  				debugger_reset();
+  				cpu->cd.DYNTRANS_ARCH.next_ic = &nothing_call;
+  				return;
+  			}
+  ```
+
+  **Do not copy the `next_ic++` from :2024.** That increment in the `to_be_translated` precedent is paired with the handler *executing* the nothing itself at :2034; the other precedent, `call_pal` (:65-67), uses the bare assignment with no `++` and no self-execution — and that is the correct shape here, because `pc_to_pointers` is not an executing ic: the dispatch loop will fetch and execute `nothing_call` naturally on the next `I`. A patch that copies `next_ic++` into this path starts the loop at `&nothing_call + 1`, whose safety depends on `nothing_call`'s unread definition. The brief's §2 quote of the precedent includes the `++` — that is a trap.
+
+  Exits and state: `GENERIC` today has a single exit (fall-through at :838); this adds one early return. On that return: `cur_ic_page` untouched (stale valid page, or NULL on a first-call failure — both are tolerated: the epilogue's range checks at :397-413 reject the out-of-range `low_pc`, so **`cpu->pc` stays at the faulting VA 0x1044000**; `gather_statistics`'s guard at :58 likewise). `next_ic = &nothing_call`; `running = 0`; the :739-833 body is skipped, so no bogus translation page is allocated (the (a)-class garbage is gone). `FUNC`'s generic-call site (:888-889) returns immediately either way. What happens next, both contexts:
+
+  - **Run entry** (:190): Alpha has no interrupt block at :206-251 (ARM/M88K/MIPS/PPC/SH only), so execution reaches :265-270 (`cached_pc` = faulting VA, `n_translated_instrs = 0`, stale-but-valid `cur_physpage`), then dispatch executes `nothing_call`s until the batch limit (:371), epilogue leaves pc unchanged, `run_instr` returns ~120 at :465.
+  - **Mid-handler** (the witness's `JMP` hits `jsr_0`/`br`: :149, :184, :108, :211, and `end_of_page` :757): every one of these handlers calls `alpha_pc_to_pointers` as its **last** action and returns immediately — verified; none touches `next_ic` afterward. The current `I` completes, the next fetches `nothing_call`.
+
+  Caller response to `running=0` is in `emul.c` — outside the permitted files — but both shipped precedents depend on exactly that path; under `-V`, `debugger_reset()` + `about_to_enter_single_step` give the prompt, as the unimplemented-instruction witness already demonstrates.
+
+  Latch note: the unimplemented precedent prints unlatched; once-per-stop comes free from `running=0`. The static latch above only suppresses repeats from manual `step`ping at the stopped prompt; dropping it is also defensible.
+
+  Universal vs Alpha-only: apply **unconditionally** in the generic function. Where the path is unreachable it is dead code; where reachable (the premise I could not settle), `exit(1)` is a guest-triggerable host kill, which this tree's own #194 note (`memory_alpha.c:194-196`) already repudiates. (c) buys nothing but an `#ifdef` and preserves the kill for unwitnessed archs.
+
+  ## Q3 — the witness as detector
+
+  Proving rows, in the existing `alphaifetchkill` rung-3 scenario:
+
+  - **Host survives:** transcript continues past the JMP; the `FATAL: could not find physical address of the exception handler?` line and exit-status-1 row are **gone**; non-`-V` run ends with status 0 (all CPUs stopped — same ending the unimplemented-instruction rows produce).
+  - **CPU stopped:** exactly one stop line naming `pc=0x1044000`; no guest instruction executes after it (no PC drift, no further trace); under `-V` the debugger prompt appears, and a register dump shows `pc = 0x1044000` — the faulting VA, proving the epilogue reconstructed nothing.
+  - **No garbage executes:** the stop line appears **once** (no `wasn't found` storm, no `UNIMPLEMENTED instruction` line from a garbage physical page); the arming control row still shows the raw-VA load's sentinel intact; a manual `step` at the prompt re-stops at the same pc, emitting at most the cosmetic `could not read the instruction` line (:289).
+
+  ## Something else found while verifying
+
+  1. `memory_alpha.c:75-78` — a **second host-kill** inside `alpha_translate_v2p` itself: `exit(1)` on `vaddr == 0xfffffffd80000000` when ptbr base is 0 ("Not yet implemented"). Different trigger, same class; wants its own row, not this patch.
+  2. `memory_alpha.c:94` — leftover `fatal("AYONA3\n")` debug print on the same vaddr in the walked path.
+  3. Brief nit: ":190" is the conversion call site, not a `next_ic` deref — the deref is the `I` macro at :114 (and :325). Substance unaffected.
+  4. The pc-preservation argument rests on pointer subtraction over unrelated objects (`next_ic` − stale `cur_ic_page`, :395-396), technically UB — but the shipped :2023 precedent already does exactly this on every unimplemented-instruction stop, so (e) introduces no new class of risk.
+
+  What I did **not** do: read any file beyond the four (so `nothing_call`'s definition, other archs' translators, and `emul.c`'s `running=0` handling are named as unsettled, not asserted), and build/run no detector — none was needed; every mechanism above is pinned to a shipped, in-file precedent.
+
+To resume this session: kimi -r session_59277c91-879c-46a0-b513-454d13e108ff

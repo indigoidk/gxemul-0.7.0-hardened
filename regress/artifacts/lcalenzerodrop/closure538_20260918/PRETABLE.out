@@ -1,0 +1,58 @@
+PRETABLE -- #538, the LANE-class closure of #530's width row (regress/lca_widewrite_probe.py).  Written 2026-09-18
+BEFORE any leg of this table runs; this file's mtime is the order proof.  The instrument is the four-cell probe built
+per fable5's #530 §F2 ruling (R1/R2), frozen beside this file before the first leg.
+
+THE CELLS (replayed offline from the probe's own sim_store_buf; each is ONE 16-byte chunk at k = 0):
+    wide   port 0x2ff  lane 3  ns16550 SCR   preset 0x5a -> WANT 0x44 ('D' = s[3])
+    l0w16  port 0x2fc  lane 0  ns16550 MCR   preset 0x03 -> WANT 0x41 ('A' = s[0])
+    low16  port 0x021  lane 1  8259 IMR      preset 0xff -> WANT 0x42 ('B' = s[1])
+    l2w16  port 0x2fe  lane 2  ns16550 MSR   preset 0xb0 -> WANT 0xf3 ('C' = s[2], read back OR 0xb0)
+Rows per cell: <cell> alive, <cell> live, <cell> getenv; plus `row count'.  13 rows.  Base must be 13/13.
+
+================================================================ PREDICTIONS (score; which getenv rows red)
+variant    edit (one, exact-once, against the 8bd97e4 dev_lca.c)                     predicted   red rows
+base       none                                                                      13/13       none
+M2_len8    `if (writeflag == MEM_WRITE) {' -> `... && len <= 8) {'                   9/13        all four getenv (preset kept)
+KILLLEN8   `if (len == 0)' -> `if (len == 0 || len > 8)'                             9/13        all four getenv (preset kept)
+vc         write arm `&& (len <= 8 || (relative_addr & 3) == 3)'                     10/13       l0w16, low16, l2w16
+vc_ne0     write arm `&& (len <= 8 || (relative_addr & 3) != 0)'                     12/13       l0w16
+vc_ne1     write arm `&& (len <= 8 || (relative_addr & 3) != 1)'   (R6's escape)     12/13       low16
+vc_ne2     write arm `&& (len <= 8 || (relative_addr & 3) != 2)'                     12/13       l2w16
+vc_ne3     write arm `&& (len <= 8 || (relative_addr & 3) != 3)'                     12/13       wide
+vf         `byte = data[ofs];' -> `byte = data[len > 8 ? 0 : ofs];'                  10/13       wide (0x41), low16 (0x41), l2w16 (0xf1)
+va         write arm `&& len <= 16'                              DISCLOSED (i)       13/13       none
+vb         `if (len == 0)' -> `if (len == 0 || len > 16)'        DISCLOSED (i)       13/13       none
+ve         `if (len == 0)' -> `... || (len > 8 && relative_addr < 0x200))'           12/13       low16 -- INCIDENTAL (port 0x21 < 0x200);
+                                                                 DISCLOSED (ii)                  the contract does not claim it
+vg         first statement: `if (len > 8 && (relative_addr & 0x10)) return 0;'      13/13       none (every cell is k = 0)
+                                                                 DISCLOSED (iii)
+vt1        first statement: `if (len > 8 && (relative_addr & 0x1f)) return 0;'      13/13       none (k = 0)
+                                                                 DISCLOSED (iii)
+vt2        static continuation refusal (the opus_p2 shape)       DISCLOSED (iv)      13/13       none (one chunk per session)
+vd         `% len' -> `% (len > 8 ? 8 : len)'                    EQUIVALENT          13/13       none
+vh         read loop `i < len' -> `i < len && i < 8'             EQUIVALENT          13/13       none (write-only cells)
+
+A base short of 13/13 means the INSTRUMENT is broken, and no variant score means anything (the rule that caught the
+first version's run 1).  A floor variant (M2_len8, KILLLEN8, vc, vc_ne0..3, vf) scoring 13/13 is a floor breach of THIS
+diff and blocks the commit.
+
+================================================================ THE FOUR PRE-TABLE CHECKS
+SIBLING PARITY -- the four cells are one machinery at four lanes: same a3 (16), same k (0), same string, one register
+  each, preset != WANT at every cell.  The one asymmetry is the register KIND: the MSR reads back OR 0xb0, so its preset
+  is written 0x00 and read 0xb0, and its WANT is s[2] | 0xb0; the xform is applied to BOTH sides, so the row compares
+  like with like.  No arm is de-fatalised by this diff (detector-only), so no completion-event parity is owed.
+CLAIM -> ROW -- the contract's DESIGNED TO CATCH sentence maps to rows: the guard and write-arm-conjunct forms -> all
+  four getenv rows (M2_len8, KILLLEN8); a lane-conditioned form -> that lane's getenv row (vc, vc_ne0..3); a wrong lane
+  byte -> the lane 1-3 getenv rows (vf; lane 0 cannot see it, since s[0] is the lane-0 byte).  Disclosures (i)-(viii)
+  claim NO row, each with its warrant in the header.  The `live' rows claim a round-trip control only (#530 F7).
+GUARD FIELD vs BODY FIELD -- the guarded write arm reads `data[ofs]' (ofs = (relative_addr & 3) % len) and forwards to
+  LCA_ISA_BASE + relative_addr.  LANE (relative_addr & 3) flows into a body-read lvalue -> a floor axis -> rowed at all
+  four values.  The port beyond the lane flows only into the forward address -> the parent's p_port10 class, disclosed.
+  `len' is tested only against 0 -> width thresholds are disclosed (i).  The discarded bits a<4:0> -> lcaisasize (iii).
+CHANNEL -- every getenv row: the register value after the GETENV.  Under a variant that declines, refuses or drops the
+  wide store into the read arm, the register KEEPS ITS PRESET (preset != WANT at all four cells, checked above); under a
+  misroute (vf) it gets s[0], which differs from WANT at lanes 1-3.  So the channel varies under every floor variant by
+  construction.  The `live' rows vary under none of them BY DESIGN (a round-trip control); the `alive' rows vary only
+  under a reinstated process-ending call, which also reds getenv (t4-style print missing) -- survive-only companions.
+  *** CHECKING THE CHANNEL LINE, as the carrier asks the first applications to: every prediction above names the
+  row that differs and why, BEFORE any run.  The table will say whether that held. ***

@@ -1,0 +1,38 @@
+VERDICT: GO -- the two-token `PHYSICAL` addition is the minimal correct fix; the defect reasoning, K0SEG/PFN arithmetic, and precedent census are internally consistent.
+
+---
+
+## Premises I can settle from the packet
+
+- **LCA math.** `LCA_PCI_SIO + 0x10000000 = 0x1d0000000`. Verified. (REASONED)
+- **PFN.** `0x01050000 >> 13 = 0x828`, so the L1 page at PFN 0x828 is correctly stated as the all-zero arming page. (REASONED)
+- **Witness row arithmetic.** 9/13 green = 8 controls (`alive`, `live`, `flat lsr`, `ram plant`, `ptbr miss`, `ptbr sent`, `pte2 todo`, `sp lsr ans`) + `row count`; 4 reds = `sp lsr`, `w lands`, `r miss`, `w miss`. Matches. (READ)
+- **Precedent census adds up.** 38 + 16 + 2 = 56. Per-file counts (dev_dreamcast_maple.c 12, dev_dec21143.c 9, dev_pccmos.c 3, dev_sh4.c 2, etc.) are stated in full and are checkable, though I have not re-derived them. (READ; not independently verified.)
+- **NO_EXCEPTIONS hazard.** The dispatch clause `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS)) res = ...f(...)` together with `DM_DEFAULT = 0` means an ISA target with `NO_EXCEPTIONS` is never invoked. The brief's "SECOND window-death" analysis is sound. (REASONED)
+- **Translation-failure path.** With `ptbr != 0`, `alpha_translate_v2p` skips the identity branch and walks. An all-zero L1 page makes every L1 PTE invalid, so the walk terminates at `fatal(...); return 0;`. `memory_rw`'s `!ok` branch zeroes the read buffer and returns `MEMORY_ACCESS_FAILED`. (REASONED from the excerpts.)
+
+## Premises I cannot settle from the packet
+
+1. **`r miss` / `w miss` rows becoming "absent" with the fix.** The fix is `CACHE_NONE | PHYSICAL` and does not touch the handler's return-value handling. Whether a physical address with no registered device causes `memory_rw` to raise a fault (which would make the row green) or to return a non-fault failure code that the handler then swallows (which would leave the row red) is **not determined by anything inlined in §2 or §3**. The brief assumes (a). This is the single fact that would settle whether the witness goes 11/13 or 13/13 under the patch.
+2. **`CACHE_NONE | PHYSICAL` ≡ bare `PHYSICAL` at this call site.** The brief explicitly admits it has not enumerated the two RAM-path conditions in `memory_rw.c` that read `cache`. (READ -- the brief flags this itself.)
+3. **"Every existing LCA probe runs with ptbr == 0."** Stated, not enumerated. Plausible (the function only works at all under that condition), but the brief asks the panel to take it on trust.
+
+## One real defect in the brief (not in the code)
+
+The brief's own correction of the earlier "dev_sh4.c / dev_pccmos.c / Maple" misclassification is correct *as far as it goes* -- but it leaves an asymmetry unaddressed: **with the proposed `CACHE_NONE | PHYSICAL`, the new flag combination now appears in exactly 4 sites across the tree** (2 of which are this patch). No file in `src/devices/` previously combined `CACHE_NONE` with `PHYSICAL`. The brief argues this is fine because `CACHE_NONE` is unreachable here, but the negative-evidence absence (zero precedents for the *combination*) is a stronger signal than the bare-token census, and the brief does not weight it. (REASONED.)
+
+## On Q2(a)-(e)
+
+- **(a) WRITE-only:** fixes `w lands`, `w miss`; leaves `sp lsr`, `r miss` red. **Different.** First divergent input: any sparse read after the arm.
+- **(b) READ-only:** symmetric. **Different.**
+- **(c) `NO_EXCEPTIONS | PHYSICAL` both:** strictly worse than the defect, per the §4 analysis. **Different and broken.**
+- **(d) Bare `PHYSICAL` both:** behaviorally equivalent at this site *if* the unverified RAM-path `cache` reads are indeed unreachable; otherwise divergent on whatever input first exercises them. (REASONED.)
+- **(e) `relative_addr < 0x200`:** the handler's `relative_addr` is post-`>>= 5`, so it spans up to 0x800000; `< 0x200` covers a tiny slice and leaves the rest of the window broken. **Different and insufficient.**
+
+## On Q1 severity
+
+MED is too low. Every shipped Alpha OS enables paging during or before `main()`. With the defect, the entire ISA window (keyboard, serial, RTC, PIT, PIC) is non-functional for any guest that has armed its page tables -- which is to say, all of them. The `fatal("... wasn't found ...")` flood is guest-reachable through any pointer-touching code path that straddles this range. HIGH. (REASONED.)
+
+## Summary
+
+The fix is correct in intent and minimal in form. The one open question that could move the verdict is whether `memory_rw` faults vs. returns-failure for an unmapped physical address with `PHYSICAL` set -- the brief assumes faulting, the packet does not prove it. That is a witness-design question, not a fix question. GO.

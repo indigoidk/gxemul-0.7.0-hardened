@@ -1,0 +1,73 @@
+VERDICT: GO-WITH-CHANGES -- candidate (f) survives all 13 rows; armed low-port coverage is missing.
+
+The proposed two-call fix is sound. The changes needed are to detector coverage and premise wording. This is a static review of the five permitted files; the outcomes below are predictions, not new runs.
+
+For the comparisons, `port` means `relative_addr` **after** `>>= 5`; `len` is the outer access width. Every inner forward transfers one byte. “Armed” means the witness’s nonzero PTBR with zero `L1[0]`.
+
+The candidate results are:
+
+| Candidate | Equivalence and first distinguishing input | Rows observing the difference | Rows staying green |
+|---|---|---|---|
+| **(a)** Write only | **DIFFERENT**: armed **read**, e.g. port `0x3fd`, `len=1`, `ofs=0`. | **9** `sp lsr`, **11** `r miss` | 1–8, 10, 12–13 |
+| **(b)** Read only | **DIFFERENT**: armed **write**, e.g. port `0x3ff`, `len=1`, `ofs=0`. | **10** `w lands`, **12** `w miss` | 1–9, 11, 13 |
+| **(c)** `NO_EXCEPTIONS \| PHYSICAL` | **DIFFERENT already at PTBR=0**: the first sparse write, port `0x64`, `len=1`, `ofs=0`, skips the 8042 handler. Its subsequent read is also skipped. | **2** `live` | 1, 3–7. **Rows 8–13 are not emitted.** |
+| **(d)** Bare `PHYSICAL` | **EQUIVALENT** on the Alpha registered-device path under review; see the complete `cache` inventory below. | **NO ROW** | 1–13 |
+| **(e)** Only ports `<0x200` | **DIFFERENT**: armed read at `0x3fd`, then write at `0x3ff`; both `len=1`, `ofs=0`. | **9–12** | 1–8, 13 |
+| **(f)** Only ports `>=0x200` | **DIFFERENT**: armed low-port access, e.g. write to `0x64`, `len=1`, `ofs=0`. The witness exercises those low ports only before arming. | **NO ROW** | 1–13 |
+| **(g)** Return inner read status | **DIFFERENT as a function contract**: a nonempty read whose physical inner call returns failure. PTBR=0 suffices; no particular width or lane is required. | **NO ROW** | 1–13 |
+
+For **(c)**, row 2 fails and the control gate prints `CONTROL=DEAD`, reports `0/0`, and exits with status 2. Calling its later defect rows “red” would misdescribe the actual script. See [probe:250](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:250) and [probe:262](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:262).
+
+For **(g)**, I assume byte packing remains intact and only the final return changes. The additional distinguishing axis is **inner status**, not PTBR, width, or lane. The dispatcher has a failure return for a failed handler at [memory_rw.c:603](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603). However, these files do **not** establish a concrete numeric ISA port that produces that failure while the CPU continues running; I cannot honestly supply one. The witness uses successful device operations after the fix.
+
+**NO ROW candidates: (d), (f), (g).** Candidate (d) is equivalent on this path. Candidate (f) is an unseen weakening. Candidate (g) is an undetected change to failure handling.
+
+The premise audit is:
+
+- **P1 — TRUE.** `PHYSICAL` bypasses the translation-related splitting condition at [memory_rw.c:186](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:186). The worker then assigns `paddr = vaddr` instead of calling `translate_v2p` at [memory_rw.c:245](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:245).
+
+- **P2 — FALSE as written; the narrower premise needed by this witness is true.** K0SEG receives a **masked direct mapping**, `vaddr & 0x000003ffffffffffULL`, rather than numerical `vaddr == paddr`. Both direct paths require `!userMode`. The base-zero path also contains special remappings and an exit case. See [memory_alpha.c:62](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:62) and [memory_alpha.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:73). For the witness’s ordinary flat ISA addresses, that base-zero path does preserve the address.
+
+- **P3 — TRUE for the inner addresses that reach the walk.** A zero L1 entry fails the valid-bit test and jumps to `not_found` at [memory_alpha.c:120](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:120); that path prints the diagnostic and returns zero at [memory_alpha.c:197](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:197). `memory_rw` then zeroes a read buffer and returns failure at [memory_rw.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:259). Nonzero PTBR alone does not force a K0SEG access to walk.
+
+- **P4 — UNSETTLED-FROM-THESE-FILES as a universal claim.** Accepting your supplied checks for the five devices, their handlers are skipped under `NO_EXCEPTIONS`: the gate tests `DM_READS_HAVE_NO_SIDE_EFFECTS`, in **both directions**, at [memory_rw.c:583](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583). But the bus also adds **LPT**, conditional **WDC**, **FDC**, and **VGA** devices at [bus_isa.c:265](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:265), [bus_isa.c:270](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:270), [bus_isa.c:290](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:290), and [bus_isa.c:298](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:298). Their registration flags are not shown here. Additional devices invalidate the five-device census, but do not establish a counterexample to `DM_DEFAULT`.
+
+- **P5 — TRUE for a matched registered device on Alpha.** Both flag forms bypass translation and take identical device handling paths. A matched device exits before the RAM/cache section: failure returns at line 624; success jumps from line 626 to `do_return_ok`. See [memory_rw.c:624](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:624). This conclusion does not require assuming a numeric value for `CACHE_NONE`.
+
+- **P6 — TRUE for the outer sparse-I/O accesses.** The pointer slots contain `k0(SP(...))`, including the two armed accesses, at [probe:183](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:183); those pointers are used at [probe:215](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:215). Within each sparse-I/O pair, only the unfixed inner forward walks. **The whole program also deliberately performs a raw RAM walk after arming**, at [probe:213](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:213).
+
+- **P7 — TRUE.** The read call’s result is discarded at [dev_lca.c:305](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:305); the buffer is packed and the function unconditionally returns 1 at [dev_lca.c:308](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:308).
+
+There are **eight reads of `cache`** in `memory_rw.c`. Line 237 declares it; line 242 assigns it, without reading its previous value.
+
+| Read | Purpose | Does a device address reach this read? |
+|---|---|---|
+| [252](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:252) | Select translation’s instruction flag | A translated access can; **both PHYSICAL forms skip it**. |
+| [610](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:610) | Select MIPS device-failure exception | Failed devices on **MIPS** can; absent on Alpha. |
+| [620](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:620) | Select M88K device-failure exception | Failed devices on **M88K** can; absent on Alpha. |
+| [646](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:646) | R3000 cache eligibility | No matched device reaches it. PHYSICAL also short-circuits before this read. |
+| [649](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:649) | Argument to `memory_cache_R3000` | No matched device reaches it. |
+| [698](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:698) | Out-of-RAM exception condition | **Never:** inside `#if 0`. |
+| [748](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:748) | RAM translation-table permissions | No matched device reaches it. |
+| [758](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:758) | RAM code-invalidation condition | No matched device reaches it. |
+
+Thus an Alpha PHYSICAL access to a matched device executes **none** of those eight reads. Merely falling inside the overall device-address envelope is insufficient; the dispatcher must actually match a device.
+
+For the cell map, the body distinguishes `len == 0`, direction, loop extent, and the selected lane `i == ofs`. PTBR is the requested execution context; the function itself does not test PTBR or a `0x200` threshold. See [dev_lca.c:295](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:295).
+
+For `len > 0`, these columns partition every feasible width/lane combination. Each entry names rows that turn red when PHYSICAL is omitted **throughout that cell only**:
+
+| Direction | PTBR | `len=1, ofs=0` | `len>1, ofs=0` | `ofs=1`, feasible when `len≥2` | `ofs=2`, feasible when `len≥3` | `ofs=3`, feasible when `len≥4` |
+|---|---|---|---|---|---|---|
+| Read | 0 | **NO ROW**; row 2 exercises it but stays green | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+| Write | 0 | **NO ROW**; row 2 exercises it but stays green | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+| Read | Armed | **9, 11**, at `0x3fd` | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+| Write | Armed | **10, 12**, at `0x3ff` | **NO ROW** | **NO ROW** | **NO ROW** | **NO ROW** |
+
+All positive-length cell classes above are guest-reachable. Normal four-byte accesses supply examples for every lane; the function documents the CPU’s four/eight-byte accesses at [dev_lca.c:283](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:283). The witness uses `LDBU`/`STB` for every sparse access, so **all its lanes are zero**, including ports whose low two bits are 1 or 3. See [probe:72](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:72).
+
+For **`len == 0`**, all four direction/PTBR combinations are **NO ROW**: the function returns zero before either forward, so deleting PHYSICAL cannot change their behavior. The local contract says this length has no producer at [dev_lca.c:293](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:293); an exhaustive guest-caller proof is outside the permitted files.
+
+The PTBR-zero cells are expected equivalence cases for these ISA addresses. The missing armed wider/lane cases are coverage gaps. Even the covered armed byte cells certify only the two UART ports: candidate **(f)** demonstrates their missing low-port coverage.
+
+One additional qualification: nonzero PTBR can produce a successful mapping, including an identity mapping; failure is not inevitable. This witness forces failure by explicitly zeroing **L1[0]**, not the entire page. That is sufficient for its addresses, whose L1 index is zero. See [probe:124](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:124) and [probe:192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py:192).
