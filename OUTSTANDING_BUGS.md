@@ -22002,3 +22002,40 @@ dropped the usage-limit lines (the peer session's `grep -a` diagnosis, #544 cont
 is the live hazard.  Derive with the carrier's find/md5 deriver.  §C5 owes: two codex refusals on neutral wording with
 no inlined exit code (the trigger is NOT established), and a file-reading seat's READ cap below the argv cap (the kimi
 CLI stalled on a 64 KB brief).
+
+## 2026-09-19 (morning) — e8a2bc: `#540` re-tabled at 28 rows; the Agent-tool seats' REFUSAL FALLBACK measured; `#541` detector rebuilt; `#544` two more misreports
+
+### `agentrefusal` (HIGH, records) — an Agent-tool seat that REFUSES mid-run is silently finished by claude-opus-4-8, under the requested seat's identity line
+MEASURED from the subagent transcripts' per-message `model` and `stop_reason` fields (`_scratchpad/agent_models.py`;
+durable output `regress/artifacts/lcaisalane/refable_20260919/agent_models_20260919.out`): six "fable"/"opus" agents in
+one session ended a turn with `stop_reason: "refusal"` -- always at the SYNTHESIS step, after reading -- and a
+`thinking_drop` attachment then named claude-opus-4-8, which re-ran that turn and the rest of the run.  The answer
+kept the requested model's identity line, so the "exact model id" liveness line is a CHECK THAT CANNOT FAIL.
+Wrong records it produced (L4, corrected in place with `[NOT A SEAT ANSWER]`): lcaisalane review + research (#530 p2
++ its adjudication pass), lcalenzerodrop assess + review (#538's design and pass 2), alphavmkill research (#541 p1);
+#541 p2's Opus and Fable answers (not yet recorded).  **REMEDY, MEASURED:** resume the SAME agent (SendMessage) with a
+short verdict-first follow-up that re-checks the load-bearing facts -- the resumed turns ran on claude-fable-5-1 with
+no refusal and produced the first-hand rulings (`refable_530_538/fable5_rulings_own.md`: #530 AGREE, #538 CLOSES, the
+len == 0 half RIGHT as an UNREACHABLE floor-shaped cell).  A neutral packet ALONE did not prevent the refusal.  An
+earlier note blamed a quota; that was wrong and was corrected with the peer the same hour.
+**Owed:** a tracked checker (the refusal and model-change test as a precommit/credit gate), filed rather than built
+here -- it changes what every Agent-seat credit requires.
+
+### `lcaandlen` (LOW -> CLOSES on #540's detector) — `% len` weakened to `& (len - 1)` at #530's selector line
+A LATE finding against the closed `lcaisalane` (pass 2 of #540, codex_adv).  The owed len-3 rows detect it: leg
+M_andlen of `regress/artifacts/lcaisaphys/killtable2_20260919/` reads `r3 ofs0` 0x690000 and `w3 ofs0` 0xc3 -- the
+predicted values.  Closes with #540 as `detector:regress/lca_isaphys_probe.py -- r3 ofs0 / w3 ofs0, leg M_andlen`.
+
+### `lcauninitbyte` (LOW) — `DEVICE_ACCESS(lca_isa)`'s read arm packs `byte` whether or not the inner read succeeded
+The only failing path is `halt_on_nonexistant_memaccess`, which stops every CPU before the guest consumes the byte
+(fable5, #540 pass 2 G6).  Dead in effect; recorded so the absence is a claim with its warrant.
+
+### `alphavmkillfirst` (LOW, disclosed) — an exit keyed to the FIRST VMKILL access's direction is not detected
+#541 pass 2 F4.  The latch block does not test `flags`, so first-access direction is not a body-induced partition:
+clause (e), in the #541 test's contract.  Two extra sessions would detect it; filed, not rowed.
+
+**`#544` (in work, rows `cxseatcheck` and `cxlaunchempty` above) also closes two more misreports, measured this
+morning.**  `cxlaunch.sh`: stderr carrying NUL bytes (codex streams the files it reads) made grep call the stream BINARY and drop
+every `ERROR:` line after the first NUL -- a walled seat read "cause NOT established" (control C18 replays the real
+2.7 MB stderr).  `seat_verdicts.py`: the old sentence fallback scored a REAL answer REFUSED on #544's own pass-1 panel
+(minimax); across 2618 seat files it had exactly one unique hit, that false one.  Both fixed in #544 with controls.

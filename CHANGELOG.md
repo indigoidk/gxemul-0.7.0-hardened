@@ -1,3 +1,40 @@
+# Records (e8a2bc, 2026-09-19): five "fable5" rulings on record were written by claude-opus-4-8 -- the Agent-tool seat REFUSED at its synthesis step and the tool silently finished the answer; corrected in place, with first-hand Fable re-rulings
+
+**No product or test code changes.**  Ledger corrections and filings, found by checking the owner's standing directive
+("verify fable usage, not opus") against the subagent transcripts rather than against the seats' own identity lines.
+
+**THE FINDING, MEASURED.**  `_scratchpad/agent_models.py` reads each subagent transcript's per-message `model` and
+`stop_reason` fields (durable output: `regress/artifacts/lcaisalane/refable_20260919/agent_models_20260919.out`).  Six
+Agent-tool seat runs launched as `fable` (five) or `opus` (one) each ended a turn with `stop_reason: "refusal"` at the
+SYNTHESIS step, after reading the packet; a `thinking_drop` attachment then named `claude-opus-4-8`, which re-ran that
+turn and the rest of the run.  **The answers still printed the requested model's identity line** -- so the "exact model
+id" liveness line these packets ask for is a check that cannot fail.  An earlier note to the peer session blamed a
+quota; that was wrong, and was corrected within the hour.
+
+**WRONG RECORDS CORRECTED IN PLACE (L4)**, each entry now tagged `[NOT A SEAT ANSWER]` with the correction and kept as an
+opus-4-8 READING: `lcaisalane` review and research (#530 pass 2 and its adjudication pass,
+`panel_20260918_190129/fable5_f2.md`), `lcalenzerodrop` assess and review (#538's design and pass 2,
+`panel_20260918_221636/fable5_p2.md`), `alphavmkill` research (#541 pass 1, `panel_20260918_223507/fable5_p1.md`).
+#541 pass 2's Opus and Fable answers were opus-4-8 too; they are not yet recorded and will be recorded as readings.
+
+**THE REMEDY, MEASURED.**  A re-spawn with a neutrally worded packet refused again at the same step.  RESUMING THE SAME
+AGENT with a short, verdict-first follow-up that re-checks the load-bearing facts ran entirely on `claude-fable-5-1`, with
+no refusal, and produced the first-hand rulings now on record (`regress/artifacts/lcaisalane/refable_20260919/
+fable5_rulings_own.md`):
+- **#530 pass 2: AGREE** -- `vc` is the one floor breach (lane is the only body-induced axis flowing into `data[ofs]`);
+  the other six variants are clause (e).
+- **#538 pass 2: CLOSES** -- on the one-instrument re-run each single-lane variant is detected by exactly its own lane's
+  row; lane floor 0/4 open.
+- **#530's research question: RIGHT, with a sharper warrant** -- the `len == 0` half is DISCHARGED, but as an UNREACHABLE
+  floor-shaped cell (no producer issues a 0-byte access), not as "not floor"; the absence stays falsifiable.
+**The two closed rounds' closures stand** -- they rested on measured tables, and the genuine Fable rulings agree.
+`alphavmkill`'s research stage now carries a HELD fable5 marker with its question; it is taken at #541's pass 3.
+
+**FILED:** `agentrefusal` (HIGH, records -- the tracked credit check is its own harness round), `lcaandlen` (LOW; #540's
+len-3 rows already detect it), `lcauninitbyte` (LOW, dead in effect), `alphavmkillfirst` (LOW, disclosed).  State notes
+on `lcaisaphys`, `alphavmkill`, `cxseatcheck`, `cxlaunchempty` and `alphaifetchkill` carry this session's in-flight work
+for the dashboard.
+
 # `#539` (n6, round 1 of the footbridge campaign): a documented read-only register was answered correctly and then the process was ended -- the exit is gone, the value stays, and the probe that used that exit as its own failability control moved one register over
 
 **The defect.**  `dev_footbridge.c`, `DEVICE_ACCESS(footbridge)`, `case IRQ_ENABLE_SET` (offset `0x188` on the
