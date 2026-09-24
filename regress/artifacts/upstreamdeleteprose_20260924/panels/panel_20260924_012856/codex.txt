@@ -1,0 +1,1769 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\cc\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0d21a-5b5b-74b2-b595-16cca9d206f6
+--------
+user
+# ADJUDICATION PASS (SF2) -- `#547` upstreamdeleteprose (U) and `#546`'s attribution rider (R): the whole panel's findings, shared
+
+Project root C:\DocumentNoSnc\cc\GXEMUL; the tree under review is `GXEMUL-SEC/`.  2026-09-24.  **This is the THIRD
+pass on this packet, not another review.**  Pass 2 went to nine seats (codex, agy, grok, the kimi seat through
+kimi-k3:cloud -- its CLI was on its weekly limit --, glm, deepseek, minimax, the Opus measuring seat, and a dedicated
+second codex job).  Every finding they made is consolidated below with MY disposition.  Your job is to adjudicate it --
+including where I sided with you, which is the ruling you are least likely to test.
+
+**FIRST LINE, exactly:** `VERDICT: U=<SHIP | SHIP WITH NOTES | DO NOT SHIP>; R=<SHIP | SHIP WITH NOTES | DO NOT SHIP>`
+then answer the three questions at the end.  Please do not simply ratify.  If you cannot read files that is expected:
+everything a question depends on is inlined.  Seats that read files: stay within `GXEMUL-SEC/src/`, `GXEMUL-SEC/test/`,
+`GXEMUL-SEC/regress/gate_upstream.sh` and `GXEMUL-SEC/tools/pipeline/check_commit_attribution.py`; please do not read
+`GXEMUL-SEC/regress/artifacts/` or `GXEMUL-SEC/tools/pipeline/ledger.json` -- what they hold is inlined.
+
+## 1. THE MATERIAL
+
+**U** -- uncommitted, a one-word comment change (numstat `1 1 src/devices/dev_sgi_re.c`; HEAD 3e33201d):
+
+```
+diff --git a/src/devices/dev_sgi_re.c b/src/devices/dev_sgi_re.c
+index 8e9727d5..2eff3075 100644
+--- a/src/devices/dev_sgi_re.c
++++ b/src/devices/dev_sgi_re.c
+@@ -507,7 +507,7 @@ DEVICE_ACCESS(sgi_re)
+ 			 *  #513: ACCEPT.  A guest read of a len == 8 TLB slot ended
+ 			 *  the host.  The write arm directly above already computes
+ 			 *  and stores the value, so the disposition is member 4 of
+-			 *  the option set -- delete the kill and RETURN THE VALUE --
++			 *  the option set -- remove the kill and RETURN THE VALUE --
+ 			 *  rather than a decline: nothing is unimplemented here.
+ 			 *  This loop is the exact inverse of the write loop, cell for
+ 			 *  cell and shift for shift.
+```
+
+Measured before pass 2: upstream's `test/check_delete_calls.sh` exits 1 on a `git archive` export of HEAD
+(`Error: src/devices/dev_sgi_re.c is not in check_delete_calls.exceptions!`) and 0 with U applied; the two
+`dev_sgi_re.c` versions preprocess to byte-identical text and compile to byte-identical objects.
+
+**R** -- committed in 3e33201d; `tools/pipeline/check_commit_attribution.py` (precommit section L) matched ledger shas
+against git's `%h` by exact comparison and now matches a 7-40 hex token as a PREFIX of `%H`:
+
+```
+diff --git a/tools/pipeline/check_commit_attribution.py b/tools/pipeline/check_commit_attribution.py
+index b73e598f..90296a9e 100644
+--- a/tools/pipeline/check_commit_attribution.py
++++ b/tools/pipeline/check_commit_attribution.py
+@@ -140,6 +140,21 @@ SUBJECT_STOPWORDS = {"carrier", "census"}   #  "census" added 2026-09-07: same m
+ #  ordinary round into a hard failure.
+ CLOSURE = re.compile(r"\b(closed|closes|closing)\b", re.I)
+ 
++#  *** A LEDGER SHA NAMES A COMMIT WHEN IT IS A PREFIX OF THE FULL HASH -- AND THE FIRST FORM
++#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS THE REPOSITORY GROWS. ***  Measured
++#  2026-09-24: the rows carry the 7-character form git printed when each closed; after 4264ee20
++#  git's own %h became 8 characters, `h in commits` stopped matching, and six correctly
++#  attributed rows hard-failed at HEAD -- a red gate on every commit, raised by nothing in the
++#  ledger.  The mirror case failed too: a row written at 8 characters did not match a
++#  7-character %h.  Section F's receipt check met this on its first version and matches by
++#  prefix; so does this, on %H.  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/)
++SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
++
++
++def names(field, full):
++    """True when some 7-40 character hex token in `field` is a prefix of the full hash."""
++    return any(full.startswith(t) for t in SHA.findall(field or ""))
++
+ 
+ def git(*args):
+     return subprocess.run(["git", "-C", SEC] + list(args),
+@@ -224,11 +239,13 @@ def main(argv):
+                 else (r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i)))
+             for i in matchable}
+ 
+-    log = [l.split("\t", 1) for l in
+-           git("log", "--format=%h\t%s", "-%d" % DEPTH).splitlines() if "\t" in l]
++    #  %H to MATCH (see names() above); %h to print, and for records_only()'s own `git show`, where
++    #  git resolves the abbreviation it has just printed -- a lookup, never a comparison.
++    log = [l.split("\t", 2) for l in
++           git("log", "--format=%H\t%h\t%s", "-%d" % DEPTH).splitlines() if l.count("\t") >= 2]
+ 
+     hard, soft, ok = [], [], 0
+-    for h, subj in log:
++    for full, h, subj in log:
+         for rid, pat in pats.items():
+             if not pat.search(subj):
+                 continue
+@@ -247,12 +264,12 @@ def main(argv):
+                 #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
+                 #  whose `reopened` field names the commit is a known reopening and is reported,
+                 #  not graded.  Any other closure/state contradiction stays HARD.
+-                if h in (row.get("reopened") or ""):
++                if names(row.get("reopened"), full):
+                     print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
+                     ok += 1
+                 else:
+                     hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
+-            elif h in commits:
++            elif names(row.get("commits"), full):
+                 ok += 1
+             elif records_only(h):
+                 #  Writing ABOUT a row is not authoring it.  Silent for a closed row (the
+@@ -309,7 +326,7 @@ def main(argv):
+     #  ever names is never examined, so its attribution could be wrong indefinitely.  Only
+     #  rows with commits are worth listing: an open row nobody has committed against yet is
+     #  simply not started.
+-    subjects = " \n".join(sub for _h, sub in log)
++    subjects = " \n".join(sub for _full, _h, sub in log)
+     unnamed = sorted(rid for rid, row in matchable.items()
+                      if (row.get("commits") or "").strip() and not pats[rid].search(subjects))
+     print("  NEVER NAMED in any scanned subject, yet carry commits: %d -- %s"
+```
+
+**R-CORRECTIONS** -- uncommitted, proposed for `#547`: comment-only corrections to that file, arising from this review
+(the checker's output is byte-identical after them and its Python AST is unchanged):
+
+```
+diff --git a/tools/pipeline/check_commit_attribution.py b/tools/pipeline/check_commit_attribution.py
+index 90296a9e..49e9639d 100644
+--- a/tools/pipeline/check_commit_attribution.py
++++ b/tools/pipeline/check_commit_attribution.py
+@@ -142,11 +142,14 @@ CLOSURE = re.compile(r"\b(closed|closes|closing)\b", re.I)
+ 
+ #  *** A LEDGER SHA NAMES A COMMIT WHEN IT IS A PREFIX OF THE FULL HASH -- AND THE FIRST FORM
+-#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS THE REPOSITORY GROWS. ***  Measured
+-#  2026-09-24: the rows carry the 7-character form git printed when each closed; after 4264ee20
+-#  git's own %h became 8 characters, `h in commits` stopped matching, and six correctly
+-#  attributed rows hard-failed at HEAD -- a red gate on every commit, raised by nothing in the
+-#  ledger.  The mirror case failed too: a row written at 8 characters did not match a
+-#  7-character %h.  Section F's receipt check met this on its first version and matches by
+-#  prefix; so does this, on %H.  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/)
++#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS ITS OBJECT COUNT GROWS. ***  Measured
++#  2026-09-24: the rows carry the 7-character form git printed when each closed; a repack at
++#  2026-09-23 23:57 (24,350 packed objects) made git's own %h 8 characters -- the automatic
++#  length follows the object count, not any commit -- so `h in commits` stopped matching, and
++#  six HARD lines on five correctly attributed rows (stagetokens twice) failed at HEAD -- a red
++#  gate on every commit, raised by nothing in the ledger.  The mirror case failed too: a row
++#  written at 8 characters did not match a 7-character %h.  Section F's receipt check met this
++#  on its first version and matches by prefix; so does this, on %H.
++#  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/; this sentence said "after
++#  4264ee20" and "six ... rows" until the nine-seat review of 2026-09-24 corrected both.)
+ SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
+ 
+@@ -176,5 +179,13 @@ def records_only(h):
+     #  tools/pipeline/ is the ledger, the queue, the dashboard renderings and the checkers'
+     #  own manifests: writing there is recording, never shipping.  Anything OUTSIDE it that
+-    #  is not .md/.txt is still authorship, so a fix that edits a checker's LOGIC still counts.
++    #  is not .md/.txt is still authorship.
++    #
++    #  *** THIS COMMENT ALSO SAID "so a fix that edits a checker's LOGIC still counts", AND
++    #  FOR THE CHECKERS THAT LIVE HERE IT IS FALSE. ***  tools/pipeline/ holds check_*.py
++    #  themselves, so a commit editing ONLY a checker's logic here is graded as a record:
++    #  measured 2026-09-24 on bbfc942e, which changed this file's SUBJECT_STOPWORDS.  At
++    #  3e33201d, 3 of the 60 scanned commits edit pipeline code, and dropping the exemption for
++    #  .py/.sh changes no verdict today.  FILED (attrcheckgaps), not changed here: it changes
++    #  grading and owes its own controls.
+     #
+     #  *** AND regress/artifacts/ IS A RECORD TOO -- WIDENED 2026-08-31, THE SECOND TIME THIS
+```
+
+**NEW CONTROLS, all measured after pass 2** (predictions sealed before each run; each variant applied in memory from
+the real path, so no tree file was edited; every figure asserted by a verifier whose own negative control reds its
+injected breaks).  Q0 here is the committed code, working ledger, depth 60, at 3e33201d: `0 hard, 10 soft`.
+
+| control | input | committed code | the construction it separates |
+|---|---|---|---|
+| Q10a / Q10b | abbreviation 12 / 40 | identical to Q0 modulo hash width | `elif len(h) <= 8 and names(...)` (codex): 8 HARD at 12 |
+| Q11 | fbsmlane.commits = `dbe7d757` (a SUBSTRING of `cdbe7d75...`, not a prefix) | HARD fbsmlane | `t in full` (grok): PASS |
+| Q0 itself | -- | 0 HARD | first-token-only `names()` (deepseek): HARD `09ded75c stagetokens`, whose commits field is `686d179 09ded75` -- the real ledger already carried the case |
+| Q12 | fbsmlane.commits = `4264ee2 cdbe7d7` (target second) | PASS | first-token-only: HARD fbsmlane |
+| Q13 | depth 800 (all 795 commits), abbreviation 7 vs 8 | 0 HARD, identical modulo width | `SHA.findall(...)[:2]` (Opus): 5 HARD; `SHA.findall((field or "")[:40])` (Opus): 2 HARD -- both byte-identical to Q0 at depth 60 |
+| Q14 | `records_only()` without the `tools/pipeline/` exemption for .py/.sh | byte-identical to Q0 | measures that the exemption hides no verdict in today's window |
+| Q15 | fbdeclinefive.state = "in work" (4264ee20's subject says "closed"; the row names it) | HARD "commit says CLOSED; row is 'in work'" | `names(row.get("reopened") or row.get("commits"), full)` (Opus): REOPENED, PASS; `SHA.findall(field or full)` (Opus): REOPENED, PASS |
+
+## 2. FINDINGS AND MY DISPOSITIONS
+
+**On U**
+
+* **F1** [codex, grok, agy, glm, kimi, minimax, Opus] The exceptions test is `grep -q $a` with `$a` unquoted: an
+  UNANCHORED BASIC REGEX of the flagged path against the list, not the literal substring match my brief said -- dots are
+  wildcards.  `debugger.c` and `debugger_cmds.c` pass only through stale C++-era `.cc` entries; 8 of the 9 entries name
+  files that do not exist.  **ACCEPTED**; the records say so.  Option (b) stays rejected: it would excuse the whole file,
+  permanently, by the fork's first edit to upstream's test.
+* **F2** [codex, grok, agy, glm, kimi, Opus] "the script discards grep's `Binary file ... matches` lines" is
+  grep-version-dependent: WSL's grep 3.12 prints the notice on STDERR, which the filter never sees (it leaked into the
+  09-20 battery log); git-bash's grep 3.0 prints it on stdout and the filter removes it.  **ACCEPTED**; records corrected.
+* **F3** [glm, Opus] "the seven characters `delete` followed by a space" miscounts: `delete ` is seven characters
+  counting its space.  **ACCEPTED** (wording).
+* **F4** [codex] "turns gate 8 green" overclaims: only gate 8's `check_delete_calls.sh` row was measured.
+  **ACCEPTED**; the records name the row, and the whole gate is left to the weekly battery (it needs gate 7's baselines).
+* **F5** [codex, glm, Opus] "red for sixteen days BECAUSE gate 8 runs only weekly" is wrong.  The batteries of 09-06 and
+  09-13 left no verdict (the scheduled task's last run is 09-20, next 09-27), so cadence alone would have shown it on
+  09-13; and I measured that NOTHING runs `tools/nightly_check.sh`, the dead-man switch whose whole job is reporting a
+  battery that never ran -- it is in neither precommit nor the session hooks.  **ACCEPTED**; records corrected; **to FILE
+  `batterymissedruns` (MED)** with `#547`: the dead-man switch is never run.
+* **F6** [all seats] A precommit landing spot is owed and is a FILING.  It must check the INDEX or HEAD, never the
+  worktree: Opus measured that right now the worktree exits 0 while the index and HEAD exit 1 -- so gate 8 itself, which
+  runs in the worktree, would report GREEN over a failing HEAD -- and glm that the script's fixed `tmp_delete.out` lets a
+  concurrent run empty the loop into a silent pass.  `git grep --cached` costs 0.05 s.  **to FILE `deletecheckhead` (MED)** with `#547`:
+  the tripwire and gate 8's domain together.
+* **F7** [all] witness `none -- comment-only`, naming the evidence.  **ACCEPTED.**
+* **F8** [codex, grok, Opus] the house idiom is "drop the exit(1)" (seven times, `dev_sh4.c`); "remove" is accurate and
+  nothing pins the wording.  **ACCEPTED; "remove" kept.**
+* **F9** [Opus] pristine upstream passes its own check by the same accident, and the fork's de1398e1 added two `delete `
+  help strings that the check never saw.  **RECORDED** in `deletecheckhead`.
+
+**On R**
+
+* **F10** [codex (both jobs), Opus] `records_only()` (a) exempts `tools/pipeline/*.py` -- checker CODE -- so its comment's
+  claim that a checker-logic fix still counts is false (measured on bbfc942e; 3 of 60 window commits; Q14: nothing hidden
+  today); (b) passes `%h` to `git show`, which a same-named ref shadows (Opus, a tag `030e961` in a scratch clone) --
+  `records_only(full)` is equivalent on all current data.  **Comment CORRECTED** (R-CORRECTIONS); **logic to FILE
+  `attrcheckgaps` (MED)** with `#547`.
+* **F11** [codex, grok, Opus] `git()` discards failures: `GIT_DIR=/nonexistent` gives `scanned 0 commits deep ...
+  ATTRIBUTION_PASS`, and section L greps only for the PASS token (the sibling `check_checkpoint.py` refuses this case).
+  **To FILE in `attrcheckgaps`.**
+* **F12-F16** [codex, grok, deepseek, Opus, kimi] the constructions in the table.  **Q10-Q15 ADDED**; each measured.
+* **F17** [grok, minimax] the hex-word hole reaches `commits` too (`bad_commits` accepts any 7-40 hex token, e.g.
+  "effaced").  **RECORDED**, extending note 2.
+* **F18** [agy] `not commits` tests whitespace tokens while `names()` extracts hex -- identical before and after R.
+  **RECORDED.**
+* **F19** [agy, glm, minimax, grok, kimi] Q6 is vacuous as matcher coverage: section L reads the WORKTREE ledger.
+  **ACCEPTED**: Q6 is kept only as the committed ledger's result on a fresh clone; no claim rests on it.
+* **F20** [kimi] the verifier's negative control: 3 breaks gave 4 failures because one appended line broke both Q9's
+  verdict and Q9 == Q0.  **EXPLAINED.**
+* **F21** [glm] "the inlined diff is one added line short in hunk 1" -- **REFUTED** by count: hunk 1 carries all 15
+  added lines, +23/-6 in total, which kimi's recount also found.
+* **F22** [glm] REOPENED lines print git's current `%h`.  **ACCEPTED** (display only).
+* **F23** [kimi, Opus] "after 4264ee20 git's abbreviation became 8" is wrong: a REPACK at 2026-09-23 23:57 (24,350 packed
+  objects) did it -- Opus reproduced 7 vs 8 characters on one history by packing -- so the pre-fix verdict depended on
+  local gc state.  **CORRECTED** (R-CORRECTIONS; CHANGELOG in place).
+* **F24** [Opus] "six correctly attributed rows" is SIX HARD LINES ON FIVE ROWS -- stagetokens twice.  **CORRECTED**
+  (R-CORRECTIONS; CHANGELOG in place).
+* **F25** [Opus] ledger row `lcaisalane`'s `reopened` text carries two U+0008 characters where `\b(closing)\b` was
+  meant (a JSON escape, committed in e0be9b2a).  **CORRECTED in place**, that field only.
+* **F26** [Opus] the carrier and the brief template still say three pristine-upstream copies sit under the project
+  root; they moved on 2026-09-13 to `C:\DocumentNoSnc\cc\GXEMUL_upstream_2021` (confirmed: `./src` is gone); the
+  MOVED.txt notes carry a literal CR and BEL where `\r` and `\a` were meant; and a directory named `GXEMUL-SEC` plus a
+  carriage return sits at the project root.  **to FILE `carrierstalecopies` (LOW)** with `#547`, for the owner: those files are not
+  this session's to edit, and deleting the stray directory is the owner's call.
+* **F27** [kimi] no control exercises `records_only()`'s own lookup, and note 1 (prefix uniqueness) has no tripwire.
+  **RECORDED.**
+
+## 3. DISAGREEMENTS -- each side in its own words, then my ruling
+
+* **D1 -- note 2, "recorded, not changed" (constructed `reopened` inputs).**  glm: *"Its stated reason is contradicted by
+  its own recorded facts ... the exposure that recurs is the false NEGATIVE from innocent drift ... codify 'reopened
+  begins with the sha token' as the field's written convention."*  kimi: *"on constructed input the new code fails LOUD
+  ... where the old substring code failed SILENT ... the right direction for a gate."*  agy: *"leading-token-only would
+  break rows recording multiple reopening commits."*  Opus: *"right, but not for the brief's reason ... the branch is
+  entered once in 795 commits ... applied inside the SHARED names(), leading-token-only turns Q0 red; if ever, at the
+  reopened call site only."*  **RULING: UPHOLD not-changed, on kimi's and Opus's reasons; ADOPT glm's codification as ONE
+  comment sentence at the reopened test**, proposed text: *"`reopened` names its commit(s) as their own tokens; names()
+  is boundary-anchored, so a sha glued to letters is invisible and the row HARDs."*
+* **D2 -- note 1 (prefix uniqueness).**  glm: *"`full.startswith(t)` is an exact test ... uniqueness is load-bearing only
+  where an abbreviation is resolved."*  codex and grok: prefix matching does not by itself establish that a token names
+  ONE commit.  **RULING: glm's objection REJECTED** -- an ambiguous token passes `startswith` for EVERY commit it
+  prefixes, so the row is credited with each; the comparison is exact, the naming is not.  Moot today: Opus resolved all
+  184 unique ledger tokens unambiguously, and no 7-character prefix collides in 795 commits.
+* **D3 -- Q7.**  agy: *"cosmetic mutation coverage ... git can abbreviate below 7 chars down to 4 via --abbrev=4."*
+  codex, grok, minimax, Opus: Q7 is what separates the `{6,40}` construction.  **RULING: Q7 stands** -- `bad_commits()`
+  fixes the field contract at 7-40, and Q7 keeps `names()` from reading `reopened` under a looser contract than the one
+  that validates `commits`.
+* **D4 -- the numstat.**  glm: one added line short; kimi: +23/-6 checks out.  **Settled by count: F21.**
+
+## 4. WHAT IS STILL OWED, AND WHERE I MIGHT BE FOOLING MYSELF
+
+* I have ACCEPTED or RECORDED twenty-seven findings and REJECTED or REFUTED two.  That ratio is itself suspicious.
+* SEVEN of those dispositions are "RECORDED" or "FILED" on one 350-line checker (F10, F11, F17, F18, F27, and the two
+  halves of D1).  Is `attrcheckgaps` the right sink, or is the checker owed a round now?
+* R is committed, so a breach found now is a follow-up commit, never an amendment.  None has been measured on current
+  data: every construction found so far is separated by a control that now exists.
+* The whole of gate 8 on HEAD+U is NOT measured -- only its delete row.
+
+## 5. QUESTIONS
+
+1. Adjudicate **F1-F27** and **D1-D4**: UPHOLD / OVERTURN / REFINE / CANNOT SETTLE, one line each with a reason.  Skip
+   the ones you have nothing to add to, but say which you skipped.
+2. **WHICH OF MY ACCEPTED OR RECORDED DISPOSITIONS IS WRONG?**  Twenty-seven accepted in a row is not evidence.  If you
+   raised a finding, be HARDER on my handling of it than on anyone else's -- and check that the FIX is right, not only
+   that the finding was.
+3. **WHAT DID ALL NINE OF US MISS?**  You now have the whole panel's output.
+
+If, while verifying a claim, you found something ELSE -- say so.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll check the disputed rulings against the permitted files and inlined controls, focusing on whether the proposed fixes support the claims made for them. I’ll leave the gates and battery untouched.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/tools/pipeline/check_commit_attribution.py'" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 28 'option set --|#513: ACCEPT' GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/test/check_delete_calls.sh'; Get-Content -LiteralPath 'GXEMUL-SEC/test/check_delete_calls.exceptions'; Get-Content -LiteralPath 'GXEMUL-SEC/regress/gate_upstream.sh'" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 106ms:
+479-	 *
+480-	 *  *** THE CATCH-ALL IS NO LONGER UNTOUCHED: #499 DE-FATALISED IT and that row
+481-	 *  is CLOSED.  The sentence is #497's and was true when written; it is left
+482-	 *  standing with its correction rather than rewritten, because a reader
+483-	 *  arriving from #497's records needs to see which half moved. ***  The READ
+484-	 *  arms are
+485-	 *  `sgirekills`, the CATCH-ALL is `sgireunmapped` (two different rows: one is a
+486-	 *  direction, the other an unmatched address with no width predicate at all), as is
+487-	 *  DEVICE_ACCESS(sgi_de)'s own width kill, whose accept set is {4,8}
+488-	 *  rather than {8} (sgidewidth).
+489-	 */
+490-	if (relative_addr >= CRIME_RE_TLB_A && relative_addr < CRIME_RE_TLB_B) {
+491-		if (len != 8) {
+492-			if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+493-				d->warned |= SGIRE_W_TLBA_LEN;
+494-				fatal("[ sgi_re: unimplemented len=%i for "
+495-				    "CRIME_RE_TLB_A -- declined.  (once) ]\n",
+496-				    (int) len);
+497-			}
+498-		} else if (writeflag == MEM_WRITE) {
+499-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+500-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+501-				d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1];
+502-				debug("d->re_tlb_a[%i] = 0x%04x\n", tlbi, d->re_tlb_a[tlbi]);
+503-				tlbi++;
+504-			}
+505-		} else {
+506-			/*
+507:			 *  #513: ACCEPT.  A guest read of a len == 8 TLB slot ended
+508-			 *  the host.  The write arm directly above already computes
+509-			 *  and stores the value, so the disposition is member 4 of
+510:			 *  the option set -- remove the kill and RETURN THE VALUE --
+511-			 *  rather than a decline: nothing is unimplemented here.
+512-			 *  This loop is the exact inverse of the write loop, cell for
+513-			 *  cell and shift for shift.
+514-			 *
+515-			 *  *** IT MUST WRITE odata, NOT data[]. ***  The function's
+516-			 *  common tail is
+517-			 *      if (writeflag == MEM_READ)
+518-			 *              memory_writemax64(cpu, data, len, odata);
+519-			 *  so anything stored into data[] here is overwritten before
+520-			 *  it reaches the guest.  A first draft of this fix filled
+521-			 *  data[] and would have returned zeroes while looking right.
+522-			 */
+523-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+524-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+525-				odata = (odata << 16) | d->re_tlb_a[tlbi];
+526-				tlbi++;
+527-			}
+528-		}
+529-	} else if (relative_addr >= CRIME_RE_TLB_B && relative_addr < CRIME_RE_TLB_C) {
+530-		if (len != 8) {
+531-			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+532-				d->warned |= SGIRE_W_TLBB_LEN;
+533-				fatal("[ sgi_re: unimplemented len=%i for "
+534-				    "CRIME_RE_TLB_B -- declined.  (once) ]\n",
+535-				    (int) len);
+536-			}
+537-		} else if (writeflag == MEM_WRITE) {
+538-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+539-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+540-				d->re_tlb_b[tlbi] = data[hwi]*256 + data[hwi+1];
+541-				debug("d->re_tlb_b[%i] = 0x%04x\n", tlbi, d->re_tlb_b[tlbi]);
+542-				tlbi++;
+543-			}
+544-		} else {
+545:			/*  #513: ACCEPT -- the inverse of the write loop.  See the
+546-			    CRIME_RE_TLB_A arm for why this sets odata, not data[].  */
+547-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+548-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+549-				odata = (odata << 16) | d->re_tlb_b[tlbi];
+550-				tlbi++;
+551-			}
+552-		}
+553-	} else if (relative_addr >= CRIME_RE_TLB_C && relative_addr < CRIME_RE_TLB_C + 0x200) {
+554-		if (len != 8) {
+555-			if (!(d->warned & SGIRE_W_TLBC_LEN)) {
+556-				d->warned |= SGIRE_W_TLBC_LEN;
+557-				fatal("[ sgi_re: unimplemented len=%i for "
+558-				    "CRIME_RE_TLB_C -- declined.  (once) ]\n",
+559-				    (int) len);
+560-			}
+561-		} else if (writeflag == MEM_WRITE) {
+562-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+563-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+564-				d->re_tlb_c[tlbi] = data[hwi]*256 + data[hwi+1];
+565-				debug("d->re_tlb_c[%i] = 0x%04x\n", tlbi, d->re_tlb_c[tlbi]);
+566-				tlbi++;
+567-			}
+568-		} else {
+569:			/*  #513: ACCEPT -- the inverse of the write loop.  See the
+570-			    CRIME_RE_TLB_A arm for why this sets odata, not data[].  */
+571-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+572-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+573-				odata = (odata << 16) | d->re_tlb_c[tlbi];
+574-				tlbi++;
+575-			}
+576-		}
+577-	} else if (relative_addr >= CRIME_RE_TEX && relative_addr < CRIME_RE_TEX + 0xe0) {
+578-		if (len != 8) {
+579-			if (!(d->warned & SGIRE_W_TEX_LEN)) {
+580-				d->warned |= SGIRE_W_TEX_LEN;
+581-				fatal("[ sgi_re: unimplemented len=%i for "
+582-				    "CRIME_RE_TEX -- declined.  (once) ]\n",
+583-				    (int) len);
+584-			}
+585-		} else if (writeflag == MEM_WRITE) {
+586-			int tlbi = ((relative_addr & 0xff) >> 3) & 0xff;
+587-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+588-				d->re_tex[tlbi] = data[hwi]*256 + data[hwi+1];
+589-				debug("d->re_tex[%i] = 0x%04x\n", tlbi, d->re_tex[tlbi]);
+590-				tlbi++;
+591-			}
+592-		} else {
+593-			/*
+594-			 *  #513: DECLINE + LATCHED ANNOUNCE -- and TEX is the ONE arm
+595-			 *  of the six that is NOT an accept.  The warrant is specific
+596-			 *  and is recorded as `sgitexindex':
+597-			 *
+--
+684-			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040005
+685-			 *  ...
+686-			 *
+687-			 *  followed by
+688-			 *  [ sgi_mte: STARTING TRANSFER: mode=0x00000011
+689-			 *    dst0=0x0000000040000000, dst1=0x0000000040007fff
+690-			 *    (length 0x8000), dst_y_step=0 bg=0x0, bytemask=0xffffffff ]
+691-			 *
+692-			 *  indicating that it really meant to put both 0x80040000
+693-			 *  and 0x80040001 into the first LINEAR_A entry.
+694-			 *
+695-			 *  The first guess would be a bug in the implementation of
+696-			 *  one or more instructions in the emulator while coming up
+697-			 *  with those values, but debugging the PROM so far has NOT
+698-			 *  revealed any such bug. It may even be that the PROM code
+699-			 *  is buggy (?) and never really set the LINEAR entries
+700-			 *  correctly. Perhaps the hardware simply ignores the
+701-			 *  weird values and does not fill it (using the MTE)
+702-			 *  when asked to.
+703-			 */
+704-			// printf("CRIME_RE_LINEAR_A IDATA = %016llx\n", (long long)idata);
+705-			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+706-			d->re_linear_a[tlbi] = idata >> 32ULL;
+707-			d->re_linear_a[tlbi+1] = idata;
+708-			debug("[ d->re_linear_a[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+709-				tlbi, d->re_linear_a[tlbi], tlbi+1, d->re_linear_a[tlbi+1]);
+710-		} else {
+711-			/*
+712:			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+713-			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+714-			 *
+715-			 *  The [tlbi+1] here has the SAME exposure as the write's
+716-			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+717-			 *
+718-			 *  *** AN EARLIER WORDING OF THIS SENTENCE SAID THE TWO ARE
+719-			 *  "bounded only by the len == 8 guard keeping tlbi even".
+720-			 *  THAT IS FALSE: WIDTH DOES NOT IMPLY ALIGNMENT.  The guard
+721-			 *  tests LENGTH.  What keeps tlbi even is the CPU-side
+722-			 *  alignment described at the write arm above -- ld/sd raise
+723-			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+724-			 *  the address itself.  Corrected on this round's pass 2;
+725-			 *  the older surrounding comment had it right and my new one
+726-			 *  did not. ***  This fix
+727-			 *  deliberately does NOT add a clamp -- an unlicensed addition
+728-			 *  here would change the index behaviour that sgilinearoob is
+729-			 *  filed to fix across all five arms with ONE design.
+730-			 */
+731-			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+732-			odata = ((uint64_t) d->re_linear_a[tlbi] << 32)
+733-			    | d->re_linear_a[tlbi+1];
+734-		}
+735-	} else if (relative_addr >= CRIME_RE_LINEAR_B && relative_addr < CRIME_RE_LINEAR_B + 0x80) {
+736-		if (len != 8) {
+737-			/*
+738-			 *  #497: THIS GUARD IS ALSO THE ONLY BOUNDS CHECK.  Unlike the
+739-			 *  TLB/TEX arms, the store below is FIXED ARITY -- it ignores len
+740-			 *  and always writes [tlbi] and [tlbi+1].  tlbi is
+--
+763-			 *  means `put d' must NOT be used to "witness" the over-run:
+764-			 *  it bypasses the guest instruction path, so a reproduction
+765-			 *  built on it would be laundering rather than witnessing.
+766-			 *  The over-run itself stays filed as sgilinearoob, and it is
+767-			 *  NOT guest-reachable while this guard stands.
+768-			 *
+769-			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+770-			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+771-			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+772-			 *  behaviour and a SILENT clobber of the adjacent register array,
+773-			 *  reaching a DRAWING-engine register from a rendering-engine
+774-			 *  write -- not a wild write outside the allocation, and not
+775-			 *  something plain ASAN would flag.  Declining keeps it shut.
+776-			 */
+777-			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+778-				d->warned |= SGIRE_W_LINB_LEN;
+779-				fatal("[ sgi_re: unimplemented len=%i for "
+780-				    "CRIME_RE_LINEAR_B -- declined.  (once) ]\n",
+781-				    (int) len);
+782-			}
+783-		} else if (writeflag == MEM_WRITE) {
+784-			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+785-			d->re_linear_b[tlbi] = idata >> 32ULL;
+786-			d->re_linear_b[tlbi+1] = idata;
+787-			debug("[ d->re_linear_b[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+788-				tlbi, d->re_linear_b[tlbi], tlbi+1, d->re_linear_b[tlbi+1]);
+789-		} else {
+790-			/*
+791:			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+792-			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+793-			 *
+794-			 *  The [tlbi+1] here has the SAME exposure as the write's
+795-			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+796-			 *
+797-			 *  *** AN EARLIER WORDING OF THIS SENTENCE SAID THE TWO ARE
+798-			 *  "bounded only by the len == 8 guard keeping tlbi even".
+799-			 *  THAT IS FALSE: WIDTH DOES NOT IMPLY ALIGNMENT.  The guard
+800-			 *  tests LENGTH.  What keeps tlbi even is the CPU-side
+801-			 *  alignment described at the write arm above -- ld/sd raise
+802-			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+803-			 *  the address itself.  Corrected on this round's pass 2;
+804-			 *  the older surrounding comment had it right and my new one
+805-			 *  did not. ***  This fix
+806-			 *  deliberately does NOT add a clamp -- an unlicensed addition
+807-			 *  here would change the index behaviour that sgilinearoob is
+808-			 *  filed to fix across all five arms with ONE design.
+809-			 */
+810-			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+811-			odata = ((uint64_t) d->re_linear_b[tlbi] << 32)
+812-			    | d->re_linear_b[tlbi+1];
+813-		}
+814-	} else {
+815-		if (writeflag == MEM_WRITE) {
+816-			if (!(d->warned & SGIRE_W_UNMAP_WR)) {
+817-				d->warned |= SGIRE_W_UNMAP_WR;
+818-				fatal("[ sgi_re: unimplemented write to "
+819-				    "address 0x%llx, data=0x%016llx -- "
+
+ succeeded in 154ms:
+#!/bin/sh
+
+rm -f tmp_delete.out
+LC_ALL=C grep -R "delete " src|grep -v \\.svn|cut -d \: -f 1|sort|uniq |grep -v "inary file" > tmp_delete.out 2> /dev/null
+
+ANYERRORS=0
+
+for a in `cat tmp_delete.out`; do
+	# Is $a a known exception?
+	if grep -q $a test/check_delete_calls.exceptions; then
+		:
+	else
+		printf "\nError: $a is not in check_delete_calls.exceptions!"
+		ANYERRORS=1
+	fi
+done
+
+rm -f tmp_delete.out
+
+if [ z$ANYERRORS = z1 ]; then
+	printf "\n\n"
+	false
+fi
+
+./HISTORY
+./src/debugger/debugger.cc
+./src/debugger/debugger_cmds.cc
+./src/include/refcount_ptr.h
+./src/include/thirdparty/debug_new.h
+./src/include/thirdparty/fast_mutex.h
+./src/include/thirdparty/static_assert.h
+./src/main/debug_new.cc
+./src/main/ComponentFactory.cc
+#!/bin/bash
+# GATE 8 -- run upstream GXemul's own tests, on all three builds.
+#
+# Why this gate is worth having when seven others already exist: everything else in this
+# harness was authored by the same process that made the ~290 corrections. These tests
+# were written by upstream, before the fork existed, so they encode UPSTREAM's definition
+# of correct rather than ours. That independence is the point.
+#
+# WHAT IT ADDS THAT WE DID NOT ALREADY HAVE. The rigs do load kernels, so loader coverage
+# was not zero -- but it was narrow. Measured:
+#
+#   our rigs load : a.out (bsd.pmax), ELF32 LSB MIPS (arc), ELF32 MSB PPC (macppc),
+#                   gzip (landisk .rd)
+#   this adds     : ELF64 (RISC-V LSB and SH5 MSB -- a separate code path from ELF32),
+#                   b.out i960, MIPS16, and a NEGATIVE case (FileLoader_NonsenseFile),
+#                   which is exactly the malformed-input handling the fork hardened
+#
+# The fork changed SEVEN files under src/file/. Even with this gate, ECOFF, Mach-O, SREC
+# and Android still have no corpus here.
+#
+# TWO MISTAKES THIS GATE MADE ON ITS FIRST RUN, both fixed and both worth recording:
+#
+#  1. It used `-e testmips`. That is the SUBTYPE flag; the machine type flag is `-E`.
+#     Every invocation therefore produced `Sorry, emulation "" (subtype "testmips") is
+#     unknown.` -- and the gate compared that identical error across three builds and
+#     reported 22 checks passing. Upstream's own configure comment still shows `-e`,
+#     which is where the wrong flag came from; it predates the flag change.
+#  2. Its only guard was a 100-byte floor on output, which an error message clears
+#     easily. A floor proves VOLUME, not VALIDITY. Every case now asserts a
+#     format-specific marker that only the real loader path can print -- "ELF64 LSB",
+#     "b.out", "a.out" and so on -- so an error, a usage message or an empty run all fail.
+#
+# DELIBERATELY NOT INCLUDED: test/floatingpoint/fptest.c. It needs a cross-compiler to
+# build a program that runs inside the emulator, and gate 2 already proves MORE about the
+# one function fix #287 changed: it checks 20 million inputs and shows the difference from
+# upstream is exactly what was intended, with nothing extra changed and nothing missed,
+# and it has its own self-test proving it can fail. fptest would add the floating-point
+# path end to end inside a guest -- worth having, but the most setup for the least new
+# information. See README.md.
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
+
+SEC=$ROOT/GXEMUL-SEC
+T=$SEC/test
+PRISTINE=/tmp/gx-pristine/gxemul
+PREBATCH=/tmp/gx-prebatch/gxemul
+HEAD=$ROOT/build/gxemul
+
+gate_begin "upstream-test-suite"
+need_file "$T"
+need_exec "$HEAD"
+
+# --- upstream's static hygiene check ---------------------------------
+# Every file calling `delete` must appear in its exceptions list. Costs milliseconds.
+if [ -f "$T/check_delete_calls.sh" ]; then
+    ( cd "$SEC" && sh test/check_delete_calls.sh ) > "$LOGDIR/check_delete.out" 2>&1
+    check "upstream check_delete_calls.sh" "$?" "0"
+    [ -s "$LOGDIR/check_delete.out" ] && head -6 "$LOGDIR/check_delete.out" | sed 's/^/       /'
+else
+    degrade "check_delete_calls.sh absent"
+fi
+echo
+
+# --- upstream's loader corpus, three-way ------------------------------
+if [ ! -x "$PRISTINE" ] || [ ! -x "$PREBATCH" ]; then
+    degrade "baseline builds absent -- run gate_ab.sh --build for the three-way"
+    gate_end; exit $?
+fi
+
+# Normalise the two things that legitimately differ between builds and between runs: the
+# version string baked in by configure, and gxemul's random temp filename.
+run_case() {   # machine, testfile, binary, outfile
+    timeout 20 stdbuf -o0 "$3" -V -E "$1" "$T/$2" </dev/null 2>&1 \
+        | sed -e 's|/tmp/gxemul\.[A-Za-z0-9]*|<TMP>|g' \
+              -e 's/^GXemul [^ ]*/GXemul <VER>/' > "$4"
+}
+
+# THE LIST OF DIFFERENCES WE MEANT TO MAKE.
+#
+# This fork changed about 290 things on purpose, so "upstream and current differ" is not
+# by itself a problem -- just counting differences is useless when hundreds are deliberate.
+# What makes the comparison workable is sorting each difference into one of three boxes:
+#
+#     the same                          -> fine
+#     differs, and it is fix #N         -> fine, and #N is named below
+#     differs, and nobody knows why     -> REGRESSION
+#
+# Each entry below cancels out exactly one intended change, so anything still left over is
+# unexplained by definition. Adding an entry is a deliberate act: it says "we changed this
+# on purpose, under this fix number".
+#
+#   #260 -- net diagnostics were routed through debugmsg(SUBSYS_NET, ...), which prefixes
+#           them with "net: ". Upstream printed them bare.
+intended_norm() {
+    sed -e 's/^\(  *\)net: /\1/'
+}
+
+note "upstream loader corpus across pristine / pre-batch / HEAD"
+note "'raw' = differences vs upstream; 'unexpl' = what remains after known-intended ones"
+printf "  %-26s %-11s %-10s %-11s %s\n" "case" "loader-ran" "raw-diff" "unexplained" "pre=HEAD"
+
+# machine : file : marker only the real loader path can print
+for spec in "testmips:FileLoader_ELF_MIPS:ELF32 MSB" \
+            "testmips:FileLoader_ELF_MIPS16:ELF32 MSB" \
+            "testriscv:FileLoader_ELF_RISCV64:ELF64 LSB" \
+            "testsh:FileLoader_ELF_SH5:ELF64 MSB" \
+            "testm88k:FileLoader_A.OUT_M88K:a.out" \
+            "barei960:FileLoader_B.OUT_i960:b.out" \
+            "testmips:FileLoader_NonsenseFile:symbol"; do
+    m=${spec%%:*}; rest=${spec#*:}; f=${rest%%:*}; marker=${rest#*:}
+    if [ ! -f "$T/$f" ]; then degrade "$f absent"; continue; fi
+
+    run_case "$m" "$f" "$PRISTINE" "$LOGDIR/up_pri.txt"
+    run_case "$m" "$f" "$PREBATCH" "$LOGDIR/up_pre.txt"
+    run_case "$m" "$f" "$HEAD"     "$LOGDIR/up_head.txt"
+
+    ran=$(grep -ac -- "$marker" "$LOGDIR/up_head.txt")
+
+    # raw differences, before adjudication
+    raw=$(diff "$LOGDIR/up_pri.txt" "$LOGDIR/up_head.txt" | grep -c '^[<>]')
+
+    # after erasing every KNOWN-INTENDED change, nothing may remain
+    intended_norm < "$LOGDIR/up_pri.txt"  > "$LOGDIR/up_pri_n.txt"
+    intended_norm < "$LOGDIR/up_pre.txt"  > "$LOGDIR/up_pre_n.txt"
+    intended_norm < "$LOGDIR/up_head.txt" > "$LOGDIR/up_head_n.txt"
+    unexplained=$(diff "$LOGDIR/up_pri_n.txt" "$LOGDIR/up_head_n.txt" | grep -c '^[<>]')
+    b=$(cmp -s "$LOGDIR/up_pre_n.txt" "$LOGDIR/up_head_n.txt" && echo same || echo DIFF)
+
+    printf "  %-26s %-11s %-10s %-11s %s\n" "$f" \
+        "$([ "$ran" != 0 ] && echo yes || echo NO)" "$raw" "$unexplained" "$b"
+
+    # POSITIVE ASSERTION FIRST. Without it, three builds agreeing on an error message
+    # counts as agreement -- which is exactly what this gate did on its first run.
+    check_min "$f: loader ran ('$marker')"          "$ran"         1
+    check     "$f: unexplained diffs vs upstream"   "$unexplained" "0"
+    check     "$f: pre-batch == HEAD"               "$b"           "same"
+    if [ "$unexplained" != 0 ] || [ "$b" = DIFF ]; then
+        diff "$LOGDIR/up_pri_n.txt" "$LOGDIR/up_head_n.txt" | head -8 | sed 's/^/       /'
+    fi
+done
+
+gate_end
+exit $?
+
+ succeeded in 172ms:
+#!/usr/bin/env python3
+"""DOES THE LEDGER KNOW ABOUT THE WORK THAT SHIPPED?
+
+Usage:
+    check_commit_attribution.py [--list] [--all]
+
+The ledger is this project's single source of truth and `gen_dashboard.py` renders the board
+from it.  So a row whose work has SHIPPED but whose `commits` field is empty makes the board
+under-report finished work and over-report the open queue -- and every decision taken off that
+board is then taken off a stale picture.
+
+MEASURED 2026-08-19, which is why this exists.  Of the 40 most recent commits, 33 were named
+by NO ledger row.  Most of those are legitimate (a receipt, a records fix, harness work that
+closes nothing).  The sharp subset is not:
+
+    commit 6014b7e   subject "selfmutant6 CLOSED: the fifth control, ..."
+                     ledger row `selfmutant6`   state=held   commits=(empty)
+
+A commit that announces a row CLOSED, against a row the board still shows as open, is a wrong
+record in the direction that matters: it is invisible work.  Thirteen rows were in some form
+of this state when the check was written.
+
+------------------------------------------------------------------------------------------
+WHAT IT CHECKS, and the three grades are deliberately different failures:
+
+  HARD   a commit subject names row R with a CLOSURE word, and R.state != "closed".
+         EXCEPT when R.reopened names that commit: a closure a later pass of the same round
+         superseded, with the board saying so (2026-09-05, pcc2widthkills at b78bb0f).
+         The commit says the work is done; the board says it is not.  One of the two is
+         wrong and neither can be believed until someone looks.
+
+  HARD   R.state == "closed" and a commit subject names R, but R.commits does not list it.
+         A closed row that does not name what closed it cannot be attributed -- the same
+         defect `nightly_check.sh` fixes for the battery verdict.
+
+  SOFT   a commit subject names an OPEN row and R.commits is empty.  Progress commits on an
+         open row are ordinary and this is NOT a failure; it is listed so the drift stays
+         visible rather than accumulating silently.
+
+  SOFT   a commit subject names a CLOSED row whose `commits` is EMPTY.  That is a
+         DOCUMENTED-ONLY closure -- a duplicate credited elsewhere, or a row closed with no
+         code -- and `check_witness.py` already treats the same shape as legitimate ("nothing
+         shipped"), so hard-failing it here would put the two checks in contradiction.  Found
+         by this check's FIRST REAL USE, not by a control: rtcdet closed as a duplicate of
+         rtcgate with empty commits on purpose, while the commit subjects said "rtcdet", and
+         the check demanded the row name a commit it had deliberately declined to claim.
+
+         It stays SOFT rather than silent because the shape is also how someone would DODGE
+         the check -- close a row that really did ship with empty commits and the hard rule
+         evaporates.  Only the closure note distinguishes the two, and only a reader can
+         judge it, so the check names the row and declines to grade it.
+
+------------------------------------------------------------------------------------------
+*** THE BLINDNESS IS REPORTED, NOT HIDDEN, AND THAT IS THE POINT OF THE LAST SECTION. ***
+
+Row ids shorter than MIN_ID characters (`n2`, `d1`, `a4`, `b1w`, ...) are NOT matched, because
+a two-character token matches English text and would fire on unrelated subjects.  A check that
+silently skips a third of its subjects while printing a green line is this project's own named
+vacuity class -- "a check whose blindness is reported as a green line".  So the skipped ids are
+PRINTED EVERY RUN, with their count, whether or not anything failed.  If you want them covered,
+the fix is to give them longer ids, not to lower MIN_ID.
+
+*** THE SECOND BLINDNESS: THIS CHECK IS SUBJECT-DRIVEN, so a row is covered only if some
+commit happens to NAME it. ***  Found by a negative control that injected three breaks into
+`rtcgate` and saw none of them: two commits shipped that row's work and neither subject says
+"rtcgate".  Every injection was invisible, and read at first like three detector failures.
+A row can therefore have wrong attribution forever and this check will never look at it.
+That set is PRINTED EVERY RUN alongside the short-id set, for the same reason: a check that
+silently covers a third of its subjects while printing a green line is the vacuity class this
+project named.  Widening it (matching commit BODIES, or a `rows:` trailer) is a real option
+and is deliberately not taken here -- bodies quote other rows constantly, which would trade
+this silent gap for loud false positives.
+
+Matching is on the SUBJECT LINE only, at word boundaries.  The body is excluded deliberately:
+commit bodies here quote other rows constantly ("filed separately as n2/n4/tfreq"), and a
+mention is not a claim of authorship.
+
+*** RECORDS-ONLY COMMITS ARE NOT AUTHORSHIP EITHER, AND THE FIRST VERSION OF THIS CHECK GOT
+THAT WRONG. ***  It reported three commits -- ef01e28, 716934d, 8631dc0, all named "m8820x:
+..." -- as a closed row failing to name what closed it.  Verifying instead of believing showed
+all three touch ONLY OUTSTANDING_BUGS.md: they are the round's reproduction and research
+records, and the row correctly names its five CODE commits.  A row is authored by what shipped,
+not by what was written about it.  So a commit whose every path ends in .md is never a hard
+failure; it is listed as soft when the row is open, and ignored when the row is closed.
+
+That distinction is the check's own version of the rule it exists to serve, and getting it
+wrong would have made the gate fire on every research commit this project makes -- the fastest
+possible way to have a gate switched off.
+"""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SEC = os.path.normpath(os.path.join(HERE, "..", ".."))
+LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
+
+#  How far back to read.  Not "all history": the ledger's `commits` convention is recent, and
+#  older rows were closed under different bookkeeping.  Overridable for an audit.
+DEPTH = int(os.environ.get("GXATTR_DEPTH", "60"))
+
+#  Below this length a row id is a word, not an identifier.  See the blindness note above.
+MIN_ID = 4
+
+#  *** A ROW ID THAT IS ORDINARY PROJECT VOCABULARY FALSE-POSITIVES ON PROSE. ***
+#  Measured 2026-08-26: commit 2e1e662's subject reads "...and two more carrier
+#  claims measured false", where "carrier" means the auto-loaded instruction file.
+#  It collided with the CLOSED row `carrier`, the commit carried real code, and this
+#  check hard-failed a commit that has nothing to do with that row.
+#
+#  THE HEADER ABOVE PREDICTS THIS FAILURE FOR THE OTHER FIELD: it declines to match
+#  commit BODIES because "bodies quote other rows constantly, which would trade this
+#  silent gap for loud false positives."  The unstated assumption was that SUBJECTS
+#  do not quote row names as prose.  In a project whose subjects are written in its
+#  own vocabulary, they do.
+#
+#  MIN_ID does not help -- it guards SHORT ids against general English, and this one
+#  is seven characters.  The problem is not length but that the token is a common
+#  word HERE.
+#
+#  So for these ids ONLY, a match requires the token to look like an IDENTIFIER --
+#  backticked or quoted -- never bare prose.  NOT a blanket exemption: a subject that
+#  names `carrier` in backticks still matches and is still graded.  The set is printed
+#  every run, because a check that silently skips subjects while printing a green line
+#  is the vacuity class this file's own header names.
+SUBJECT_STOPWORDS = {"carrier", "census"}   #  "census" added 2026-09-07: same measured
+                                            #  class as "carrier" -- a row id that is also
+                                            #  an ordinary English word, so a subject using
+                                            #  it as PROSE ("my sibling census had a
+                                            #  backwards filter") hard-failed against the
+                                            #  CLOSED row `census'.  Controlled both ways
+                                            #  on the day: the prose subject stops matching,
+                                            #  and a backticked `census' STILL matches.
+
+#  A commit subject claiming the work is finished.  Deliberately narrow -- "gate", "record"
+#  and "file" are progress verbs here, not closure verbs, and including them would turn every
+#  ordinary round into a hard failure.
+CLOSURE = re.compile(r"\b(closed|closes|closing)\b", re.I)
+
+#  *** A LEDGER SHA NAMES A COMMIT WHEN IT IS A PREFIX OF THE FULL HASH -- AND THE FIRST FORM
+#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS ITS OBJECT COUNT GROWS. ***  Measured
+#  2026-09-24: the rows carry the 7-character form git printed when each closed; a repack at
+#  2026-09-23 23:57 (24,350 packed objects) made git's own %h 8 characters -- the automatic
+#  length follows the object count, not any commit -- so `h in commits` stopped matching, and
+#  six HARD lines on five correctly attributed rows (stagetokens twice) failed at HEAD -- a red
+#  gate on every commit, raised by nothing in the ledger.  The mirror case failed too: a row
+#  written at 8 characters did not match a 7-character %h.  Section F's receipt check met this
+#  on its first version and matches by prefix; so does this, on %H.
+#  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/; this sentence said "after
+#  4264ee20" and "six ... rows" until the nine-seat review of 2026-09-24 corrected both.)
+SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
+
+
+def names(field, full):
+    """True when some 7-40 character hex token in `field` is a prefix of the full hash."""
+    return any(full.startswith(t) for t in SHA.findall(field or ""))
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", SEC] + list(args),
+                          capture_output=True, text=True).stdout
+
+
+def records_only(h):
+    """True when every path this commit touched is documentation.
+
+    Cheap and cached by the caller: only consulted for commits that already matched a row id,
+    which is a handful per run rather than the whole log."""
+    paths = [p for p in git("show", "--name-only", "--format=", h).splitlines() if p.strip()]
+    #  *** THE LEDGER IS A RECORD, AND THE FIRST VERSION OF THIS DID NOT KNOW THAT. ***  It
+    #  recognised only .md/.txt, so a commit touching ONLY tools/pipeline/ledger.json and
+    #  fable_queue.md -- a pure bookkeeping commit that closes a row and queues its held
+    #  stage -- was scored as AUTHORSHIP and hard-failed.  Caught on this check's own first
+    #  week, by its own output, on a commit written to satisfy a sibling gate.
+    #
+    #  tools/pipeline/ is the ledger, the queue, the dashboard renderings and the checkers'
+    #  own manifests: writing there is recording, never shipping.  Anything OUTSIDE it that
+    #  is not .md/.txt is still authorship.
+    #
+    #  *** THIS COMMENT ALSO SAID "so a fix that edits a checker's LOGIC still counts", AND
+    #  FOR THE CHECKERS THAT LIVE HERE IT IS FALSE. ***  tools/pipeline/ holds check_*.py
+    #  themselves, so a commit editing ONLY a checker's logic here is graded as a record:
+    #  measured 2026-09-24 on bbfc942e, which changed this file's SUBJECT_STOPWORDS.  At
+    #  3e33201d, 3 of the 60 scanned commits edit pipeline code, and dropping the exemption for
+    #  .py/.sh changes no verdict today.  FILED (attrcheckgaps), not changed here: it changes
+    #  grading and owes its own controls.
+    #
+    #  *** AND regress/artifacts/ IS A RECORD TOO -- WIDENED 2026-08-31, THE SECOND TIME THIS
+    #  PREDICATE HAS BEEN TOO NARROW FOR THE SAME REASON. ***  It fired HARD on 3d30a20, a
+    #  records commit whose only non-exempt path was
+    #  regress/artifacts/sgideprimop/killtable_20260831/PRETABLE.out -- a pre-table block,
+    #  which is evidence written ABOUT a round before its table runs.
+    #
+    #  That directory holds preserved measurement logs, frozen copies of the tooling a table
+    #  ran, session transcripts and pre-table blocks.  `check_probe_wiring.py` already
+    #  classifies its python as CLASS_RESEARCH -- in its own words, "evidence, not detectors
+    #  the battery owes a run" -- so the two checkers now agree about what that tree is.
+    #
+    #  The boundary is unchanged and is what keeps this from becoming a hole: a SHIPPED
+    #  detector lives in regress/ ITSELF (regress/sgi_re_unmapped_probe.py), not under
+    #  artifacts/, and is still authorship.  Only the evidence directory is exempt.
+    return bool(paths) and all(
+        p.lower().endswith((".md", ".txt"))
+        or p.startswith("tools/pipeline/")
+        or p.startswith("regress/artifacts/")
+        for p in paths)
+
+
+#  A `commits` value that is neither a hash list nor a DELIBERATE non-repo note.  Two rows
+#  legitimately say "outside the repo (ops)" for work that has no commit at all, so demanding
+#  hashes would be wrong -- what must be caught is the PLACEHOLDER: a value written to be
+#  replaced later, which nobody replaced.
+#
+#  MEASURED 2026-08-20: two CLOSED rows carried the literal string "PENDING" and section K
+#  accepted them, because check_witness.py skips only an EMPTY commits field.  A field nothing
+#  validates is a field that drifts, and this one drifted the same day it was written.
+PLACEHOLDER = re.compile(r"^(pending|tbd|todo|xxx|\?+|-+)$", re.I)
+NONREPO = re.compile(r"outside the repo|\bops\b|no commit", re.I)
+
+
+def bad_commits(rows):
+    """Rows whose `commits` is a placeholder rather than hashes or a stated non-repo note."""
+    out = []
+    for rid, row in sorted(rows.items()):
+        c = (row.get("commits") or "").strip()
+        if not c or NONREPO.search(c):
+            continue
+        for tok in c.split():
+            if PLACEHOLDER.match(tok) or not re.fullmatch(r"[0-9a-f]{7,40}", tok):
+                out.append((rid, row.get("state", "?"), c))
+                break
+    return out
+
+
+def main(argv):
+    listing = "--list" in argv
+    ledger = json.load(io.open(LEDGER, encoding="utf-8"))
+    rows = {r["id"]: r for r in ledger["rows"]}
+
+    short = sorted(i for i in rows if len(i) < MIN_ID)
+    matchable = {i: r for i, r in rows.items() if len(i) >= MIN_ID}
+    #  A stopword id must appear as an IDENTIFIER (backticked or quoted); every other
+    #  id keeps the word-boundary form.  See SUBJECT_STOPWORDS above for the measured
+    #  false positive that motivated this.
+    pats = {i: re.compile(
+                (r"[`\"']%s[`\"']" % re.escape(i)) if i in SUBJECT_STOPWORDS
+                else (r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i)))
+            for i in matchable}
+
+    #  %H to MATCH (see names() above); %h to print, and for records_only()'s own `git show`, where
+    #  git resolves the abbreviation it has just printed -- a lookup, never a comparison.
+    log = [l.split("\t", 2) for l in
+           git("log", "--format=%H\t%h\t%s", "-%d" % DEPTH).splitlines() if l.count("\t") >= 2]
+
+    hard, soft, ok = [], [], 0
+    for full, h, subj in log:
+        for rid, pat in pats.items():
+            if not pat.search(subj):
+                continue
+            row = matchable[rid]
+            commits = (row.get("commits") or "").split()
+            state = row.get("state", "")
+            #  *** THE CLOSURE CONTRADICTION IS TESTED FIRST, AND THE ORDER IS LOAD-BEARING.
+            #  ***  It sat below the `h in commits` early-out until a negative control caught
+            #  it: a row can NAME the commit and still contradict it -- state "in work" under
+            #  a commit whose subject says CLOSED -- and the early-out scored that as
+            #  attributed.  The injected break went undetected and the run stayed green.
+            #  Being listed is not the same as agreeing.
+            if CLOSURE.search(subj) and state != "closed":
+                #  *** A THIRD CASE, MEASURED 2026-09-05: BOTH WERE RIGHT AT THEIR TIMES. ***  b78bb0f
+                #  closed `pcc2widthkills`; its own pass 2 reopened it the same day and thirteen
+                #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
+                #  whose `reopened` field names the commit is a known reopening and is reported,
+                #  not graded.  Any other closure/state contradiction stays HARD.
+                if names(row.get("reopened"), full):
+                    print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
+                    ok += 1
+                else:
+                    hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
+            elif names(row.get("commits"), full):
+                ok += 1
+            elif records_only(h):
+                #  Writing ABOUT a row is not authoring it.  Silent for a closed row (the
+                #  research records of a finished round are not drift); soft for an open one,
+                #  where it is still useful to see the row is being worked.
+                if state != "closed":
+                    soft.append((h, rid, state, "records-only commit (.md/.txt)", subj))
+            elif state == "closed" and not commits:
+                #  Documented-only closure: see the header.  Named, never graded.
+                soft.append((h, rid, state,
+                             "closed documented-only (empty commits) -- read the closure note",
+                             subj))
+            elif state == "closed":
+                hard.append((h, rid, state, "closed row does not name this code commit", subj))
+            elif not commits:
+                #  *** HARD, NOT SOFT -- AND THIS BRANCH USED TO BE SOFT, WHICH IS HOW THE
+                #  CHECK MISSED ITS OWN MOTIVATING CASE. ***  A ninth-seat review measured
+                #  optrow, smdatefmt and constblind all sitting here at once, every one of
+                #  them genuinely shipped, and this tool reported ATTRIBUTION_PASS over the
+                #  top of them.  That is the newest vacuity class -- blindness reported as a
+                #  green line -- inside the check written against exactly that class.  It is
+                #  also the mechanism that produced a 5-0 mis-vote: five seats read a stale
+                #  sentence in a row whose record had not caught up with its code.
+                #
+                #  It is safe to be hard because `commits` is NOT closure-only: twelve OPEN
+
+
+
+    for label, items in (("HARD", hard), ("SOFT", soft)):
+        for h, rid, state, why, subj in items:
+            print("  %-6s %-9s %-14s %-8s %s" % (label, h, rid, state, why))
+            if listing:
+                print("         %s" % subj[:88])
+    print()
+    print("  scanned %d commits deep; %d subject/row matches already attributed" % (len(log), ok))
+    #  ALWAYS printed, pass or fail -- the blindness is part of the result, not a footnote.
+    print("  NOT MATCHABLE (id shorter than %d chars, would match English): %d -- %s"
+          % (MIN_ID, len(short), " ".join(short) if short else "none"))
+    print("  Rows with these ids are INVISIBLE to this check. Lengthen the id to cover one.")
+    #  ALWAYS printed too -- same doctrine as the line above.
+    _sw = sorted(i for i in matchable if i in SUBJECT_STOPWORDS)
+    print("  STOPWORD IDS (ordinary project vocabulary; matched only when written as\n        an identifier, e.g. backticked): %d -- %s"
+          % (len(_sw), " ".join(_sw) if _sw else "none"))
+
+    #  The second blindness -- see the header.  A row that SHIPPED but that no commit subject
+    #  ever names is never examined, so its attribution could be wrong indefinitely.  Only
+    #  rows with commits are worth listing: an open row nobody has committed against yet is
+    #  simply not started.
+    subjects = " \n".join(sub for _full, _h, sub in log)
+    unnamed = sorted(rid for rid, row in matchable.items()
+                     if (row.get("commits") or "").strip() and not pats[rid].search(subjects))
+    print("  NEVER NAMED in any scanned subject, yet carry commits: %d -- %s"
+          % (len(unnamed), " ".join(unnamed) if unnamed else "none"))
+    print("  Those rows shipped work this check cannot see. It reads SUBJECTS, not diffs.")
+
+    ph = bad_commits(rows)
+    if ph:
+        print()
+        for rid, st, c in ph:
+            print("  HARD   %-9s %-14s %-8s commits is not a hash: %r"
+                  % ("--", rid, st, c))
+        print("  A `commits` value that is neither hashes nor a stated non-repo note is a")
+        print("  PLACEHOLDER nobody came back to.  Section K accepts it -- it skips only an")
+        print("  EMPTY field -- so this is the only check that sees it.")
+
+    if hard or ph:
+        print()
+        print("ATTRIBUTION_FAIL  %d hard, %d soft, %d placeholder"
+              % (len(hard), len(soft), len(ph)))
+        return 1
+    print("ATTRIBUTION_PASS  0 hard, %d soft" % len(soft))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'delete |drop the exit\\(1\\)' GXEMUL-SEC/src/debugger GXEMUL-SEC/src/devices/dev_sh4.c" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$line = 0; Get-Content -LiteralPath '"'GXEMUL-SEC/tools/pipeline/check_commit_attribution.py' | ForEach-Object { "'$line++; if ($line -ge 210) { '"'{0,4}: {1}' -f "'$line, $_ } }' in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$line = 0; Get-Content -LiteralPath '"'GXEMUL-SEC/test/check_delete_calls.sh' | ForEach-Object { "'$line++; '"'{0,4}: {1}' -f "'$line, $_ }; Get-Content -LiteralPath '"'GXEMUL-SEC/test/check_delete_calls.exceptions'" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 125ms:
+GXEMUL-SEC/src/devices/dev_sh4.c:1409: *  Fixed in the #438/#441 shape -- keep the diagnostic, drop the exit(1) -- with two
+GXEMUL-SEC/src/devices/dev_sh4.c:1726: *  Fixed in the #438 shape: keep the diagnostic, drop the exit(1), service the
+GXEMUL-SEC/src/devices/dev_sh4.c:1850: *  Fixed in the #438/#441/#443 shape -- keep the diagnostic, drop the exit(1), ignore
+GXEMUL-SEC/src/debugger\debugger_cmds.c:66:		printf("  delete x      delete breakpoint nr x\n");
+GXEMUL-SEC/src/debugger\debugger_cmds.c:119:			printf("syntax: breakpoint delete x\n");
+GXEMUL-SEC/src/debugger\debugger_cmds.c:335:		printf("  delete x         delete watchpoint nr x\n");
+GXEMUL-SEC/src/debugger\debugger_cmds.c:389:			printf("syntax: watchpoint delete x\n");
+GXEMUL-SEC/src/debugger\debugger.c:688:				case '3':	/*  3~ = delete  */
+
+ succeeded in 171ms:
+   1: #!/bin/sh
+   2: 
+   3: rm -f tmp_delete.out
+   4: LC_ALL=C grep -R "delete " src|grep -v \\.svn|cut -d \: -f 1|sort|uniq |grep -v "inary file" > tmp_delete.out 2> /dev/null
+   5: 
+   6: ANYERRORS=0
+   7: 
+   8: for a in `cat tmp_delete.out`; do
+   9: 	# Is $a a known exception?
+  10: 	if grep -q $a test/check_delete_calls.exceptions; then
+  11: 		:
+  12: 	else
+  13: 		printf "\nError: $a is not in check_delete_calls.exceptions!"
+  14: 		ANYERRORS=1
+  15: 	fi
+  16: done
+  17: 
+  18: rm -f tmp_delete.out
+  19: 
+  20: if [ z$ANYERRORS = z1 ]; then
+  21: 	printf "\n\n"
+  22: 	false
+  23: fi
+  24: 
+./HISTORY
+./src/debugger/debugger.cc
+./src/debugger/debugger_cmds.cc
+./src/include/refcount_ptr.h
+./src/include/thirdparty/debug_new.h
+./src/include/thirdparty/fast_mutex.h
+./src/include/thirdparty/static_assert.h
+./src/main/debug_new.cc
+./src/main/ComponentFactory.cc
+
+ succeeded in 190ms:
+ 210: 
+ 211: 
+ 212: #  A `commits` value that is neither a hash list nor a DELIBERATE non-repo note.  Two rows
+ 213: #  legitimately say "outside the repo (ops)" for work that has no commit at all, so demanding
+ 214: #  hashes would be wrong -- what must be caught is the PLACEHOLDER: a value written to be
+ 215: #  replaced later, which nobody replaced.
+ 216: #
+ 217: #  MEASURED 2026-08-20: two CLOSED rows carried the literal string "PENDING" and section K
+ 218: #  accepted them, because check_witness.py skips only an EMPTY commits field.  A field nothing
+ 219: #  validates is a field that drifts, and this one drifted the same day it was written.
+ 220: PLACEHOLDER = re.compile(r"^(pending|tbd|todo|xxx|\?+|-+)$", re.I)
+ 221: NONREPO = re.compile(r"outside the repo|\bops\b|no commit", re.I)
+ 222: 
+ 223: 
+ 224: def bad_commits(rows):
+ 225:     """Rows whose `commits` is a placeholder rather than hashes or a stated non-repo note."""
+ 226:     out = []
+ 227:     for rid, row in sorted(rows.items()):
+ 228:         c = (row.get("commits") or "").strip()
+ 229:         if not c or NONREPO.search(c):
+ 230:             continue
+ 231:         for tok in c.split():
+ 232:             if PLACEHOLDER.match(tok) or not re.fullmatch(r"[0-9a-f]{7,40}", tok):
+ 233:                 out.append((rid, row.get("state", "?"), c))
+ 234:                 break
+ 235:     return out
+ 236: 
+ 237: 
+ 238: def main(argv):
+ 239:     listing = "--list" in argv
+ 240:     ledger = json.load(io.open(LEDGER, encoding="utf-8"))
+ 241:     rows = {r["id"]: r for r in ledger["rows"]}
+ 242: 
+ 243:     short = sorted(i for i in rows if len(i) < MIN_ID)
+ 244:     matchable = {i: r for i, r in rows.items() if len(i) >= MIN_ID}
+ 245:     #  A stopword id must appear as an IDENTIFIER (backticked or quoted); every other
+ 246:     #  id keeps the word-boundary form.  See SUBJECT_STOPWORDS above for the measured
+ 247:     #  false positive that motivated this.
+ 248:     pats = {i: re.compile(
+ 249:                 (r"[`\"']%s[`\"']" % re.escape(i)) if i in SUBJECT_STOPWORDS
+ 250:                 else (r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i)))
+ 251:             for i in matchable}
+ 252: 
+ 253:     #  %H to MATCH (see names() above); %h to print, and for records_only()'s own `git show`, where
+ 254:     #  git resolves the abbreviation it has just printed -- a lookup, never a comparison.
+ 255:     log = [l.split("\t", 2) for l in
+ 256:            git("log", "--format=%H\t%h\t%s", "-%d" % DEPTH).splitlines() if l.count("\t") >= 2]
+ 257: 
+ 258:     hard, soft, ok = [], [], 0
+ 259:     for full, h, subj in log:
+ 260:         for rid, pat in pats.items():
+ 261:             if not pat.search(subj):
+ 262:                 continue
+ 263:             row = matchable[rid]
+ 264:             commits = (row.get("commits") or "").split()
+ 265:             state = row.get("state", "")
+ 266:             #  *** THE CLOSURE CONTRADICTION IS TESTED FIRST, AND THE ORDER IS LOAD-BEARING.
+ 267:             #  ***  It sat below the `h in commits` early-out until a negative control caught
+ 268:             #  it: a row can NAME the commit and still contradict it -- state "in work" under
+ 269:             #  a commit whose subject says CLOSED -- and the early-out scored that as
+ 270:             #  attributed.  The injected break went undetected and the run stayed green.
+ 271:             #  Being listed is not the same as agreeing.
+ 272:             if CLOSURE.search(subj) and state != "closed":
+ 273:                 #  *** A THIRD CASE, MEASURED 2026-09-05: BOTH WERE RIGHT AT THEIR TIMES. ***  b78bb0f
+ 274:                 #  closed `pcc2widthkills`; its own pass 2 reopened it the same day and thirteen
+ 275:                 #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
+ 276:                 #  whose `reopened` field names the commit is a known reopening and is reported,
+ 277:                 #  not graded.  Any other closure/state contradiction stays HARD.
+ 278:                 if names(row.get("reopened"), full):
+ 279:                     print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
+ 280:                     ok += 1
+ 281:                 else:
+ 282:                     hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
+ 283:             elif names(row.get("commits"), full):
+ 284:                 ok += 1
+ 285:             elif records_only(h):
+ 286:                 #  Writing ABOUT a row is not authoring it.  Silent for a closed row (the
+ 287:                 #  research records of a finished round are not drift); soft for an open one,
+ 288:                 #  where it is still useful to see the row is being worked.
+ 289:                 if state != "closed":
+ 290:                     soft.append((h, rid, state, "records-only commit (.md/.txt)", subj))
+ 291:             elif state == "closed" and not commits:
+ 292:                 #  Documented-only closure: see the header.  Named, never graded.
+ 293:                 soft.append((h, rid, state,
+ 294:                              "closed documented-only (empty commits) -- read the closure note",
+ 295:                              subj))
+ 296:             elif state == "closed":
+ 297:                 hard.append((h, rid, state, "closed row does not name this code commit", subj))
+ 298:             elif not commits:
+ 299:                 #  *** HARD, NOT SOFT -- AND THIS BRANCH USED TO BE SOFT, WHICH IS HOW THE
+ 300:                 #  CHECK MISSED ITS OWN MOTIVATING CASE. ***  A ninth-seat review measured
+ 301:                 #  optrow, smdatefmt and constblind all sitting here at once, every one of
+ 302:                 #  them genuinely shipped, and this tool reported ATTRIBUTION_PASS over the
+ 303:                 #  top of them.  That is the newest vacuity class -- blindness reported as a
+ 304:                 #  green line -- inside the check written against exactly that class.  It is
+ 305:                 #  also the mechanism that produced a 5-0 mis-vote: five seats read a stale
+ 306:                 #  sentence in a row whose record had not caught up with its code.
+ 307:                 #
+ 308:                 #  It is safe to be hard because `commits` is NOT closure-only: twelve OPEN
+ 309:                 #  rows carry it.  So an open row with a CODE commit naming it and an EMPTY
+ 310:                 #  field has no legitimate reading -- it is drift, whatever the state says.
+ 311:                 #  (Records-only and documented-only commits are already filtered above, so
+ 312:                 #  this fires on shipped CODE alone.)
+ 313:                 hard.append((h, rid, state,
+ 314:                              "work shipped and the row does not name it (commits EMPTY)",
+ 315:                              subj))
+ 316:             else:
+ 317:                 soft.append((h, rid, state,
+ 318:                              "open row, commits=%s" % " ".join(commits), subj))
+ 319: 
+ 320:     for label, items in (("HARD", hard), ("SOFT", soft)):
+ 321:         for h, rid, state, why, subj in items:
+ 322:             print("  %-6s %-9s %-14s %-8s %s" % (label, h, rid, state, why))
+ 323:             if listing:
+ 324:                 print("         %s" % subj[:88])
+ 325:     print()
+ 326:     print("  scanned %d commits deep; %d subject/row matches already attributed" % (len(log), ok))
+ 327:     #  ALWAYS printed, pass or fail -- the blindness is part of the result, not a footnote.
+ 328:     print("  NOT MATCHABLE (id shorter than %d chars, would match English): %d -- %s"
+ 329:           % (MIN_ID, len(short), " ".join(short) if short else "none"))
+ 330:     print("  Rows with these ids are INVISIBLE to this check. Lengthen the id to cover one.")
+ 331:     #  ALWAYS printed too -- same doctrine as the line above.
+ 332:     _sw = sorted(i for i in matchable if i in SUBJECT_STOPWORDS)
+ 333:     print("  STOPWORD IDS (ordinary project vocabulary; matched only when written as\n        an identifier, e.g. backticked): %d -- %s"
+ 334:           % (len(_sw), " ".join(_sw) if _sw else "none"))
+ 335: 
+ 336:     #  The second blindness -- see the header.  A row that SHIPPED but that no commit subject
+ 337:     #  ever names is never examined, so its attribution could be wrong indefinitely.  Only
+ 338:     #  rows with commits are worth listing: an open row nobody has committed against yet is
+ 339:     #  simply not started.
+ 340:     subjects = " \n".join(sub for _full, _h, sub in log)
+ 341:     unnamed = sorted(rid for rid, row in matchable.items()
+ 342:                      if (row.get("commits") or "").strip() and not pats[rid].search(subjects))
+ 343:     print("  NEVER NAMED in any scanned subject, yet carry commits: %d -- %s"
+ 344:           % (len(unnamed), " ".join(unnamed) if unnamed else "none"))
+ 345:     print("  Those rows shipped work this check cannot see. It reads SUBJECTS, not diffs.")
+ 346: 
+ 347:     ph = bad_commits(rows)
+ 348:     if ph:
+ 349:         print()
+ 350:         for rid, st, c in ph:
+ 351:             print("  HARD   %-9s %-14s %-8s commits is not a hash: %r"
+ 352:                   % ("--", rid, st, c))
+ 353:         print("  A `commits` value that is neither hashes nor a stated non-repo note is a")
+ 354:         print("  PLACEHOLDER nobody came back to.  Section K accepts it -- it skips only an")
+ 355:         print("  EMPTY field -- so this is the only check that sees it.")
+ 356: 
+ 357:     if hard or ph:
+ 358:         print()
+ 359:         print("ATTRIBUTION_FAIL  %d hard, %d soft, %d placeholder"
+ 360:               % (len(hard), len(soft), len(ph)))
+ 361:         return 1
+ 362:     print("ATTRIBUTION_PASS  0 hard, %d soft" % len(soft))
+ 363:     return 0
+ 364: 
+ 365: 
+ 366: if __name__ == "__main__":
+ 367:     sys.exit(main(sys.argv[1:]))
+
+codex
+The hash-prefix change still looks sound within its stated contract. Two dispositions need closer attention: the proposed `reopened` sentence overstates what the matcher guarantees, and “no verdict changed today” does not validate the deferred lookup and Git-failure cases. I’m checking those distinctions with in-memory fixtures.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 2 'drop|exit\\(1\\)' GXEMUL-SEC/src/devices/dev_sh4.c" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import ast, contextlib, io, json, re
+from pathlib import Path
+from types import SimpleNamespace
+p = Path('GXEMUL-SEC/tools/pipeline/check_commit_attribution.py')
+source = p.read_text(encoding='utf-8')
+ns = {'__name__': 'adjudication_fixture', '__file__': str(p.resolve())}
+exec(compile(source, str(p), 'exec'), ns)
+full = 'cdbe7d75' + '0' * 32
+for label, field in [('standalone', 'cdbe7d7'), ('ASCII-glued', 'xcdbe7d7'), ('unicode-glued', '\\u00e9cdbe7d7'), ('underscore-glued', 'prefix_cdbe7d7_suffix'), ('not-first', '4264ee2 cdbe7d7')]:
+    print('names', label, ns['names'](field, full))
+
+def fixture(label, rows, log, failed_log=False, old=False):
+    test = dict(ns)
+    body = source
+    if old:
+        body = body.replace('if names(row.get(\"reopened\"), full):', 'if h in (row.get(\"reopened\") or \"\"):')
+        body = body.replace('elif names(row.get(\"commits\"), full):', 'elif h in commits:')
+        exec(compile(body, str(p), 'exec'), test)
+    test['io'] = SimpleNamespace(open=lambda *a, **kw: io.StringIO(json.dumps({'rows': rows})))
+    test['git'] = lambda *args: log if args[0] == 'log' else 'src/example.c\\n'
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        status = test['main']([])
+    summary = [l.strip() for l in out.getvalue().splitlines() if l.startswith('ATTRIBUTION_') or '  HARD ' in l or '  REOPENED ' in l]
+    print(label, 'exit', status, '|', ' | '.join(summary))
+
+fixture('empty-ledger/nonempty-log', [], full + '\\tcdbe7d75\\trowalpha closed\\n')
+fixture('duplicate-id/second-wins', [
+    {'id': 'rowalpha', 'state': 'in work', 'commits': ''},
+    {'id': 'rowalpha', 'state': 'closed', 'commits': full}],
+    full + '\\tcdbe7d75\\trowalpha closed\\n')
+fixture('two-rows-one-closure', [
+    {'id': 'rowalpha', 'state': 'closed', 'commits': full},
+    {'id': 'rowbravo', 'state': 'in work', 'commits': full}],
+    full + '\\tcdbe7d75\\trowalpha closed; rowbravo ongoing\\n')
+for old in (False, True):
+    fixture('nonrepo-plus-prose/old='+str(old), [
+        {'id': 'rowalpha', 'state': 'closed', 'commits': 'no commit (cdbe7d75)'}],
+        full + '\\tcdbe7d75\\trowalpha work\\n', old=old)
+'@ | python -B -" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 83ms:
+86-/*
+87- *  #447: DEVICE_ACCESS(sh4)'s OWN value guards -- a separate cluster from the PCIC
+88: *  one above, in the switch #443 did not touch.  Four of them called exit(1) on one
+89- *  ordinary guest store; the witness is regress/sh4_val_witness.py.
+90- *
+--
+129-/*
+130- *  #448: the four CHCR field decoders in sh4_dmac_transfer().  Each guarded a `default:`
+131: *  arm that called exit(1), so ONE ordinary guest store ended the host process -- and it
+132- *  was EASIER TO REACH THAN ANY #447 SITE, because only `case 0x200:` survives the RS
+133- *  switch.  A wholly legal configuration (4-byte transfers, both addresses incrementing)
+--
+154- *  #449: the refresh-timer interrupt enables, and this one is NOT reached from a store.
+155- *  The guest write to RTCSR lands and returns normally; sh4_timer_tick() then read the
+156: *  enable bits and called exit(1) -- about nine milliseconds later, at 110 Hz.  Every
+157- *  SH-4 probe in this tree observes the STORE SITE, so all of them were blind to it.
+158- *
+--
+229- *  #453: the LAST guest-reachable host death in this file, and the one #448 deliberately
+230- *  *** CORRECTED 2026-09-17 (L4): THIS WAS NOT THE LAST.  At `f532bb6' the SH4_TCR0/1/2 WRITE arm
+231: *  of DEVICE_ACCESS(sh4) still carried `if (cpu->cd.sh.pclock == 0) { fatal(...); exit(1); }' --
+232- *  a guest store to a Timer Control Register reaches that arm.  #459 removed it.  Scope, stated
+233- *  honestly: the PATH is guest-reachable, but firing it also needs `pclock == 0', a machine-setup
+--
+526-	d->bsc_rfcr ++;
+527-	/*
+528:	 *  #449: this called exit(1), and it is reached from a HOST TIMER CALLBACK rather
+529-	 *  than from a guest store.  A guest write to RTCSR lands, the handler returns
+530-	 *  normally, and the process dies here about nine milliseconds later.  MEASURED on
+--
+558-		 *
+559-		 *  "the interrupt is NOT delivered" reads as though a refresh interrupt
+560:		 *  becomes pending and is then dropped.  Nothing becomes pending: CMF and
+561-		 *  OVF are never set on any path in this device, and RTCNT has no `case`
+562-		 *  at all, so there is no compare-match to raise.  The honest statement is
+--
+849-	/*
+850-	 *  *** THIS ARM IS WHY THE DEFECT WAS BROAD.  Only `case 0x200:` above returns
+851:	 *  normally, so FIFTEEN of the sixteen resource-select encodings reached exit(1)
+852-	 *  -- and a wholly legal transfer configuration (4-byte, both addresses
+853-	 *  incrementing) still ended the host, on its resource-select alone. ***
+--
+1171-	 *  The memory_writemax64() call is EXPLICIT rather than load-bearing, and saying so
+1172-	 *  costs nothing while claiming otherwise would be false.  Three review seats
+1173:	 *  predicted that dropping it hands the guest stale host bytes; that was MEASURED and
+1174-	 *  it does NOT happen, because memory_rw.c:484-491 -- correction #95 -- already
+1175-	 *  zeroes the caller's buffer before every device read, as the root-cause fix for
+--
+1400-
+1401-/*
+1402: *  #443: an unsupported PCIC transaction called exit(1) -- ELEVEN sites.  A MEASURED
+1403- *  census of all 137 word offsets in both directions (274 emulator processes) found
+1404- *  116 of them kill the host on a plain 32-bit READ and 125 on a write.  ONE guest
+--
+1407- *  the same instruction takes an SH exception and the host survives.
+1408- *
+1409: *  Fixed in the #438/#441 shape -- keep the diagnostic, drop the exit(1) -- with two
+1410- *  things about HOW that are load-bearing and would look like tidy-up to a later reader.
+1411- *
+1412- *  (1) *** THE STORE AT THE TOP OF THIS FUNCTION IS UPSTREAM OF EVERY GUARD. ***  A
+1413: *  write lands in pcic_reg[] BEFORE the switch runs, so exit(1) was the only thing that
+1414- *  ever stopped a guest reading an invalid value back.  DELETING IT ALONE WOULD TURN A
+1415- *  HOST KILL INTO SILENT STATE CORRUPTION -- a strictly worse failure.  A pass-1 seat
+--
+1669-
+1670-	default:/*  #443: an offset this device does not implement.  Reads answer 0 and
+1671:		    writes are dropped -- deliberately NOT "let pcic_reg[] act as
+1672-		    anonymous storage", which would invent read/write registers that
+1673-		    no modelled behaviour consumes and let a guest build state
+--
+1717-/*
+1718- *  #441: BCR2 and BCR3 are 16-bit registers, and the committed code answered a
+1719: *  guest access of any other width with fatal() + exit(1) -- so TWO GUEST
+1720- *  INSTRUCTIONS ended the emulator, taking every emulated process and any
+1721- *  unflushed disk overlay with them.  Reproduced at rung 3 on an unmodified
+--
+1724- *  check.  The kill was the width test, not the device.
+1725- *
+1726: *  Fixed in the #438 shape: keep the diagnostic, drop the exit(1), service the
+1727- *  access.  Servicing rather than ignoring is deliberate for an access that
+1728- *  COVERS the register: these two were the only length checks in the file, and
+--
+1732- *
+1733- *  TWO LIMITS, both measured by a pass-2 seat and stated rather than papered
+1734: *  over.  (1) A PARTIAL access -- len 1 -- is dropped, so from the second one
+1735- *  onward these registers DO silently swallow a write, and free-running the
+1736- *  demoted line is invisible because debug() computes v = verbose - 1 = -1 and
+--
+1739- *  above resolve BE lanes the OTHER way (they take the last two bytes of a
+1740- *  wide access, not the first) and they PROMOTE a 1-byte write rather than
+1741: *  dropping it, so this fix cites them for the principle and then differs from
+1742- *  them on both axes.  Tracked as `sh4bsclane`; not reopened here, because one
+1743- *  round takes one site and there is no SH-4 document in this tree to settle
+--
+1843-
+1844-/*
+1845: *  #447: four value guards in the switch below ended the host process with exit(1) on
+1846- *  ONE ordinary guest store -- TCR, DMATCR, ICR and RCR1.  MEASURED on an unmodified
+1847- *  -E landisk, each with a matched surviving control at the SAME address and the SAME
+1848- *  width, so it is the VALUE that kills and not the address or the access width.
+1849- *
+1850: *  Fixed in the #438/#441/#443 shape -- keep the diagnostic, drop the exit(1), ignore
+1851- *  the write -- and the four arms differ in a way that is invisible at the call site:
+1852- *
+1853: *    RCR1    the store was UPSTREAM of the guard.  Dropping exit(1) alone would have
+1854- *            turned a host kill into SILENT STATE CORRUPTION.  Moved below the guard.
+1855- *    TCR     `timer_hz` was set from `idata & 3` BEFORE the guard and the debug() line
+--
+2118-			 *  said "INTERNAL ERROR ... Aborting", which reads as a construction
+2119-			 *  fault -- something that cannot happen -- and that is why four rounds
+2120:			 *  of SH-4 exit(1) work walked past it.  It is reached by an ordinary
+2121-			 *  store to a TCR register, and by nothing else -- TCR0 at 0xffd80010,
+2122-			 *  with TCR1 (0xffd8001c) and TCR2 (0xffd80028) reaching this same arm
+--
+2228-			 *  a divisor the guest did not ask for, because TPSC2 selects
+2229-			 *  a clock source outside the two bits that switch decodes --
+2230:			 *  and the debug() line had already announced it.  exit(1)
+2231-			 *  hid that.  Drop the exit and leave the guard where it was
+2232-			 *  and the write installs a WRONG timer frequency instead,
+--
+2349-			/*
+2350-			 *  #447: the store below is DOWNSTREAM of this guard, so
+2351:			 *  dropping exit(1) already rejects the value -- unlike RCR1
+2352-			 *  and unlike every arm of dev_sh4_pcic_access(), where the
+2353-			 *  store runs first and a restore is needed.  Recorded because
+--
+2818-			int chars_avail = console_charavail(d->scif_console_handle);
+2819-			if (chars_avail > 255) {
+2820:				fatal("[ SH4: Too many chars avail; dropping some ]\n");
+2821-				chars_avail = 255;
+2822-			}
+--
+2905-			 *  #447: *** THE STORE WAS UPSTREAM OF THE GUARD. ***  It ran
+2906-			 *  first and the guard second, so a rejected value had ALREADY
+2907:			 *  landed in rtc_rcr1 and exit(1) was the only thing stopping
+2908-			 *  the guest reading it back.  Dropping the exit and nothing
+2909-			 *  else turns a host kill into SILENT STATE CORRUPTION -- the
+--
+2957-
+2958-#ifdef SH4_DEBUG
+2959:		exit(1);
+2960-#endif
+2961-	}
+--
+3132-	if (!interrupt_handler_lookup(tmp, &d->timer_irq[0])) {
+3133-		fatal("Could not find interrupt '%s'.\n", tmp);
+3134:		exit(1);
+3135-	}
+3136-	snprintf(tmp, sizeof(tmp), "machine[0].cpu[0].irq[0x%x]",
+--
+3138-	if (!interrupt_handler_lookup(tmp, &d->timer_irq[1])) {
+3139-		fatal("Could not find interrupt '%s'.\n", tmp);
+3140:		exit(1);
+3141-	}
+3142-	snprintf(tmp, sizeof(tmp), "machine[0].cpu[0].irq[0x%x]",
+--
+3144-	if (!interrupt_handler_lookup(tmp, &d->timer_irq[2])) {
+3145-		fatal("Could not find interrupt '%s'.\n", tmp);
+3146:		exit(1);
+3147-	}
+3148-
+
+ succeeded in 1435ms:
+names standalone True
+names ASCII-glued False
+names unicode-glued True
+names underscore-glued True
+names not-first True
+empty-ledger/nonempty-log exit 0 | ATTRIBUTION_PASS  0 hard, 10 soft
+duplicate-id/second-wins exit 0 | ATTRIBUTION_PASS  0 hard, 10 soft
+two-rows-one-closure exit 0 | ATTRIBUTION_PASS  0 hard, 10 soft
+nonrepo-plus-prose/old=False exit 0 | ATTRIBUTION_PASS  0 hard, 10 soft
+nonrepo-plus-prose/old=True exit 1 | HARD   cdbe7d75  rowalpha       closed   closed row does not name this code commit | ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder
+
+codex
+One fixture-isolation mistake invoked the checker’s default ledger read, outside your requested boundary. I discarded that run’s results. I’m correcting the fixture to assert that ledger and Git reads use only synthetic inputs. No gates ran and no files changed.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import contextlib, io, json
+from pathlib import Path
+from types import SimpleNamespace
+p = Path('GXEMUL-SEC/tools/pipeline/check_commit_attribution.py')
+source = p.read_text(encoding='utf-8')
+full = 'cdbe7d75' + '0' * 32
+
+def fixture(label, rows, log, old=False):
+    ns = {'__name__': 'adjudication_fixture', '__file__': str(p.resolve())}
+    body = source
+    if old:
+        body = body.replace('if names(row.get(\"reopened\"), full):', 'if h in (row.get(\"reopened\") or \"\"):')
+        body = body.replace('elif names(row.get(\"commits\"), full):', 'elif h in commits:')
+    exec(compile(body, str(p), 'exec'), ns)
+    assert ns['main'].__globals__ is ns
+    calls = []
+    def fake_open(*args, **kw):
+        calls.append('synthetic ledger')
+        return io.StringIO(json.dumps({'rows': rows}))
+    def fake_git(*args):
+        assert args[0] in ('log', 'show'), args
+        calls.append('synthetic git ' + args[0])
+        return log if args[0] == 'log' else 'src/example.c\\n'
+    ns['io'] = SimpleNamespace(open=fake_open)
+    ns['git'] = fake_git
+    assert ns['main'].__globals__['io'].open is fake_open
+    assert ns['main'].__globals__['git'] is fake_git
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        status = ns['main']([])
+    assert calls[:2] == ['synthetic ledger', 'synthetic git log'], calls
+    summary = [l.strip() for l in out.getvalue().splitlines() if l.startswith('ATTRIBUTION_') or '  HARD ' in l or '  REOPENED ' in l]
+    print(label, 'exit', status, '|', ' | '.join(summary))
+
+fixture('empty-ledger/nonempty-log', [], full + '\\tcdbe7d75\\trowalpha closed\\n')
+fixture('duplicate-id/second-wins', [
+    {'id': 'rowalpha', 'state': 'in work', 'commits': ''},
+    {'id': 'rowalpha', 'state': 'closed', 'commits': full}],
+    full + '\\tcdbe7d75\\trowalpha closed\\n')
+fixture('two-rows-one-closure', [
+    {'id': 'rowalpha', 'state': 'closed', 'commits': full},
+    {'id': 'rowbravo', 'state': 'in work', 'commits': full}],
+    full + '\\tcdbe7d75\\trowalpha closed; rowbravo ongoing\\n')
+for old in (False, True):
+    fixture('nonrepo-plus-prose/old='+str(old), [
+        {'id': 'rowalpha', 'state': 'closed', 'commits': 'no commit (cdbe7d75)'}],
+        full + '\\tcdbe7d75\\trowalpha work\\n', old=old)
+fixture('closure-reopened-unicode', [
+    {'id': 'rowalpha', 'state': 'in work', 'commits': '', 'reopened': '\\u00e9cdbe7d7'}],
+    full + '\\tcdbe7d75\\trowalpha closed\\n')
+fixture('closure-reopened-ascii', [
+    {'id': 'rowalpha', 'state': 'in work', 'commits': '', 'reopened': 'xcdbe7d7'}],
+    full + '\\tcdbe7d75\\trowalpha closed\\n')
+'@ | python -B -" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 141ms:
+empty-ledger/nonempty-log exit 0 | ATTRIBUTION_PASS  0 hard, 0 soft
+duplicate-id/second-wins exit 0 | ATTRIBUTION_PASS  0 hard, 0 soft
+two-rows-one-closure exit 1 | HARD   cdbe7d75  rowbravo       in work  commit says CLOSED; row is 'in work' | ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder
+nonrepo-plus-prose/old=False exit 0 | ATTRIBUTION_PASS  0 hard, 0 soft
+nonrepo-plus-prose/old=True exit 1 | HARD   cdbe7d75  rowalpha       closed   closed row does not name this code commit | ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder
+closure-reopened-unicode exit 0 | REOPENED cdbe7d75 rowalpha       in work  row names this commit as the closure its later passes superseded | ATTRIBUTION_PASS  0 hard, 0 soft
+closure-reopened-ascii exit 1 | HARD   cdbe7d75  rowalpha       in work  commit says CLOSED; row is 'in work' | ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import contextlib, io, json, re
+from pathlib import Path
+from types import SimpleNamespace
+p = Path('GXEMUL-SEC/tools/pipeline/check_commit_attribution.py')
+source = p.read_text(encoding='utf-8')
+full = 'cdbe7d75' + '0' * 32
+
+def run(field, old):
+    ns = {'__name__': 'adjudication_fixture', '__file__': str(p.resolve())}
+    text = source.replace('elif names(row.get(\"commits\"), full):', 'elif h in commits:') if old else source
+    exec(compile(text, str(p), 'exec'), ns)
+    rows = [{'id':'rowalpha', 'state':'closed', 'commits':field}]
+    def fake_open(*args, **kwargs): return io.StringIO(json.dumps({'rows':rows}))
+    def fake_git(*args):
+        assert args[0] in ('log','show')
+        return full + '\\tcdbe7d75\\trowalpha work\\n' if args[0]=='log' else 'src/example.c\\n'
+    ns['io'] = SimpleNamespace(open=fake_open)
+    ns['git'] = fake_git
+    assert ns['main'].__globals__ is ns
+    assert ns['main'].__globals__['io'].open is fake_open
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out): status=ns['main']([])
+    return status, ns['bad_commits']({row['id']:row for row in rows}), out.getvalue().splitlines()[-1]
+for field in ['cdbe7d75', '(cdbe7d75)', 'outside the repo (ops); compared against (cdbe7d75)', 'outside the repo (ops); compared against (4264ee20)', '4264ee20 cdbe7d7']:
+    for old in (True, False):
+        print(repr(field), 'old-match' if old else 'R-match', run(field,old))
+body = Path('GXEMUL-SEC/src/devices/dev_sh4.c').read_text(encoding='utf-8')
+print('dev_sh4 exact phrase count:', body.count('drop the exit(1)'))
+print('dev_sh4 regex drop/dropping exit variants:', len(re.findall(r'(?:drop|dropping)\\s+(?:the\\s+)?exit(?:\\(1\\))?', body, re.I)))
+'@ | python -B -" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 162ms:
+'cdbe7d75' old-match (0, [], 'ATTRIBUTION_PASS  0 hard, 0 soft')
+'cdbe7d75' R-match (0, [], 'ATTRIBUTION_PASS  0 hard, 0 soft')
+'(cdbe7d75)' old-match (1, [('rowalpha', 'closed', '(cdbe7d75)')], 'ATTRIBUTION_FAIL  1 hard, 0 soft, 1 placeholder')
+'(cdbe7d75)' R-match (1, [('rowalpha', 'closed', '(cdbe7d75)')], 'ATTRIBUTION_FAIL  0 hard, 0 soft, 1 placeholder')
+'outside the repo (ops); compared against (cdbe7d75)' old-match (1, [], 'ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder')
+'outside the repo (ops); compared against (cdbe7d75)' R-match (0, [], 'ATTRIBUTION_PASS  0 hard, 0 soft')
+'outside the repo (ops); compared against (4264ee20)' old-match (1, [], 'ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder')
+'outside the repo (ops); compared against (4264ee20)' R-match (1, [], 'ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder')
+'4264ee20 cdbe7d7' old-match (1, [], 'ATTRIBUTION_FAIL  1 hard, 0 soft, 0 placeholder')
+'4264ee20 cdbe7d7' R-match (0, [], 'ATTRIBUTION_PASS  0 hard, 0 soft')
+dev_sh4 exact phrase count: 3
+dev_sh4 regex drop/dropping exit variants: 7
+
+codex
+I found a new R regression in the corrected synthetic controls: a non-repository note containing a parenthesized hash can now count as commit attribution. Restoring the old membership test makes that case HARD; R passes it, and `bad_commits()` accepts the note in both cases. This is distinct from the already-recorded hex-word ambiguity.
+web search: 
+web search: site.git-scm.com/docs/git-config core.abbrev auto approximate number packed objects ...
+codex
+VERDICT: U=SHIP; R=DO NOT SHIP
+
+U is supported by the supplied delete-row result and preprocessing/object equivalence. R needs a **follow-up commit**: I measured a new false PASS caused by changing `commits` from whitespace-token matching to extraction from prose. Details are under question 3.
+
+For question 1:
+
+| Item | Adjudication | Reason |
+|---|---|---|
+| F1 | UPHOLD | The regex finding is correct. Quoting `$a` alone would still leave regex interpretation and unanchored matching. |
+| F4 | UPHOLD | The evidence establishes the delete row’s result; it establishes no verdict for the whole gate. |
+| F5 | REFINE | Filing is appropriate. Closure should demonstrate that an independently invoked monitor detects a deliberately missed battery run. |
+| F6 | REFINE | **INDEX or HEAD is not interchangeable.** Precommit must inspect the proposed index, including its exceptions file; a committed-revision check can inspect HEAD. |
+| F8 | REFINE | I counted **three** exact occurrences of “drop the exit(1)” and seven broader drop/dropping variants. Keeping “remove” remains correct. |
+| F10 | REFINE | The comment correction describes the exemption accurately. Q14 establishes present-data equivalence, not correct treatment of missing attribution or the lookup itself. |
+| F11 | REFINE | Filing identifies ownership, but a successful Git read must become a prerequisite for PASS. Current-data controls cannot validate the failure path. |
+| F17 | REFINE | The hex-word observation is correct but incomplete: R also changes which text in a permitted non-repository note can confer attribution. |
+| F23 | REFINE | Specify Git’s **approximate packed-object count**, rather than undifferentiated object-count growth. Packing can change that estimate without adding history. [Git documentation](https://git-scm.com/docs/git-config/2.52.0#Documentation/git-config.txt-coreabbrev) |
+| F27 | REFINE | Keep the limitations explicit. Neither current token uniqueness nor Q14 substitutes for collision and lookup controls. |
+| D1 | REFINE | Retaining multiple-token matching is justified; the proposed comment overstates both its boundary rule and when the row becomes HARD. |
+| D2 | UPHOLD | Exact prefix comparison does not establish unique identification. Your rejection of glm’s objection is correct. |
+| D3 | UPHOLD | Seven characters is this field’s contract, independently of Git’s permitted display widths. Q7 tests that contract. |
+
+Skipped, with no additional objection to your dispositions: **F2, F3, F7, F9, F12–F16, F18–F22, F24–F26, and D4.**
+
+For question 2, the clearest wrong or incomplete acceptances are these:
+
+- **F6’s “INDEX or HEAD.”** A HEAD-only precommit check examines the previous revision. It can reject the staged repair while accepting a newly staged regression. The filing needs separate snapshot requirements for precommit and committed-revision checks.
+- **D1’s proposed sentence.** The boundaries exclude ASCII alphanumerics, not every letter. My synthetic closure fixtures made `écdbe7d7` produce REOPENED/PASS and `xcdbe7d7` produce HARD. Underscores also permit matching. Furthermore, one malformed occurrence does not force HARD when another valid token names the same commit.
+- **F8 and F23’s corrected wording** still needs the qualifications above.
+- **“Every construction found so far is separated by a control”** is too broad. Your own F27 expressly identifies unexercised lookup behavior and uniqueness. Q10–Q15 separate the listed matcher mutations.
+
+A precise replacement for D1’s sentence is:
+
+> `reopened` may name multiple commits using 7–40 lowercase-hex tokens bounded by the field edge or characters outside ASCII `[0-9A-Za-z]`; this closure/state contradiction is HARD if none prefixes the scanned commit.
+
+`attrcheckgaps` is a reasonable tracking location. It is insufficient as an indefinite disposition now that there is an additional, measured regression introduced by R. I would give the checker a focused follow-up round, prioritizing that regression and F11’s failure handling. The remaining pre-existing findings need explicit controls and closure criteria; they need not all become amendments to this packet.
+
+For question 3, the principal missed interaction is **`NONREPO` validation combined with the new `commits` matcher**.
+
+In the [checker](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py:224), `bad_commits()` exempts fields containing a non-repository note. R then searches those fields for embedded hexadecimal tokens.
+
+I exercised the real `main()` with synthetic ledger and Git inputs: a closed row, a subject naming it, a code-changing commit whose full hash starts `cdbe7d75`, and displayed hash `cdbe7d75`. The comparison column restores the prior `elif h in commits` condition while keeping the fixture otherwise identical.
+
+| `commits` field | Prior membership test | R |
+|---|---|---|
+| `cdbe7d75` | PASS | PASS |
+| `(cdbe7d75)` | FAIL | FAIL: invalid field |
+| `outside the repo (ops); compared against (cdbe7d75)` | HARD | **PASS** |
+| `outside the repo (ops); compared against (4264ee20)` | HARD | HARD |
+
+The third row is the new regression. A contextual reference inside an explicitly non-repository note becomes authorship credit. The existing validator accepts the note in both versions, so it does not contain the matcher’s broadened interpretation.
+
+**The follow-up should preserve the `commits` hash-list grammar while applying prefix comparison, and distinguish non-repository notes from attribution lists.** Add the third and fourth rows as paired controls and retain multiple-token/width coverage. This warrants withholding R’s sign-off even though no occurrence has been established in today’s ledger.
+
+Two further findings emerged from synthetic fixtures; both predate R:
+
+- **Ledger completeness can disappear silently.** `rows: []` with nonempty history returns PASS. Duplicate row IDs silently overwrite earlier rows; a later attributed duplicate suppressed an earlier closure contradiction. Any reliance on a separate schema check needs an explicit enforced prerequisite.
+- **Closure words apply to every matched row in the subject.** `rowalpha closed; rowbravo ongoing` makes an open `rowbravo` HARD even when its commit is correctly listed. This matters when one carrier closes U while naming newly filed follow-ups.
+
+The checker’s opening documentation also still calls an open row with empty `commits` SOFT, while its later implementation explicitly makes the code-authorship case HARD.
+
+Verification limitation: one initial fixture-isolation mistake invoked the default ledger read, contrary to your boundary. I discarded those results and reran the reported fixtures with asserted synthetic ledger/Git bindings. No gates ran and no files changed.
+tokens used
+66,911
+VERDICT: U=SHIP; R=DO NOT SHIP
+
+U is supported by the supplied delete-row result and preprocessing/object equivalence. R needs a **follow-up commit**: I measured a new false PASS caused by changing `commits` from whitespace-token matching to extraction from prose. Details are under question 3.
+
+For question 1:
+
+| Item | Adjudication | Reason |
+|---|---|---|
+| F1 | UPHOLD | The regex finding is correct. Quoting `$a` alone would still leave regex interpretation and unanchored matching. |
+| F4 | UPHOLD | The evidence establishes the delete row’s result; it establishes no verdict for the whole gate. |
+| F5 | REFINE | Filing is appropriate. Closure should demonstrate that an independently invoked monitor detects a deliberately missed battery run. |
+| F6 | REFINE | **INDEX or HEAD is not interchangeable.** Precommit must inspect the proposed index, including its exceptions file; a committed-revision check can inspect HEAD. |
+| F8 | REFINE | I counted **three** exact occurrences of “drop the exit(1)” and seven broader drop/dropping variants. Keeping “remove” remains correct. |
+| F10 | REFINE | The comment correction describes the exemption accurately. Q14 establishes present-data equivalence, not correct treatment of missing attribution or the lookup itself. |
+| F11 | REFINE | Filing identifies ownership, but a successful Git read must become a prerequisite for PASS. Current-data controls cannot validate the failure path. |
+| F17 | REFINE | The hex-word observation is correct but incomplete: R also changes which text in a permitted non-repository note can confer attribution. |
+| F23 | REFINE | Specify Git’s **approximate packed-object count**, rather than undifferentiated object-count growth. Packing can change that estimate without adding history. [Git documentation](https://git-scm.com/docs/git-config/2.52.0#Documentation/git-config.txt-coreabbrev) |
+| F27 | REFINE | Keep the limitations explicit. Neither current token uniqueness nor Q14 substitutes for collision and lookup controls. |
+| D1 | REFINE | Retaining multiple-token matching is justified; the proposed comment overstates both its boundary rule and when the row becomes HARD. |
+| D2 | UPHOLD | Exact prefix comparison does not establish unique identification. Your rejection of glm’s objection is correct. |
+| D3 | UPHOLD | Seven characters is this field’s contract, independently of Git’s permitted display widths. Q7 tests that contract. |
+
+Skipped, with no additional objection to your dispositions: **F2, F3, F7, F9, F12–F16, F18–F22, F24–F26, and D4.**
+
+For question 2, the clearest wrong or incomplete acceptances are these:
+
+- **F6’s “INDEX or HEAD.”** A HEAD-only precommit check examines the previous revision. It can reject the staged repair while accepting a newly staged regression. The filing needs separate snapshot requirements for precommit and committed-revision checks.
+- **D1’s proposed sentence.** The boundaries exclude ASCII alphanumerics, not every letter. My synthetic closure fixtures made `écdbe7d7` produce REOPENED/PASS and `xcdbe7d7` produce HARD. Underscores also permit matching. Furthermore, one malformed occurrence does not force HARD when another valid token names the same commit.
+- **F8 and F23’s corrected wording** still needs the qualifications above.
+- **“Every construction found so far is separated by a control”** is too broad. Your own F27 expressly identifies unexercised lookup behavior and uniqueness. Q10–Q15 separate the listed matcher mutations.
+
+A precise replacement for D1’s sentence is:
+
+> `reopened` may name multiple commits using 7–40 lowercase-hex tokens bounded by the field edge or characters outside ASCII `[0-9A-Za-z]`; this closure/state contradiction is HARD if none prefixes the scanned commit.
+
+`attrcheckgaps` is a reasonable tracking location. It is insufficient as an indefinite disposition now that there is an additional, measured regression introduced by R. I would give the checker a focused follow-up round, prioritizing that regression and F11’s failure handling. The remaining pre-existing findings need explicit controls and closure criteria; they need not all become amendments to this packet.
+
+For question 3, the principal missed interaction is **`NONREPO` validation combined with the new `commits` matcher**.
+
+In the [checker](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py:224), `bad_commits()` exempts fields containing a non-repository note. R then searches those fields for embedded hexadecimal tokens.
+
+I exercised the real `main()` with synthetic ledger and Git inputs: a closed row, a subject naming it, a code-changing commit whose full hash starts `cdbe7d75`, and displayed hash `cdbe7d75`. The comparison column restores the prior `elif h in commits` condition while keeping the fixture otherwise identical.
+
+| `commits` field | Prior membership test | R |
+|---|---|---|
+| `cdbe7d75` | PASS | PASS |
+| `(cdbe7d75)` | FAIL | FAIL: invalid field |
+| `outside the repo (ops); compared against (cdbe7d75)` | HARD | **PASS** |
+| `outside the repo (ops); compared against (4264ee20)` | HARD | HARD |
+
+The third row is the new regression. A contextual reference inside an explicitly non-repository note becomes authorship credit. The existing validator accepts the note in both versions, so it does not contain the matcher’s broadened interpretation.
+
+**The follow-up should preserve the `commits` hash-list grammar while applying prefix comparison, and distinguish non-repository notes from attribution lists.** Add the third and fourth rows as paired controls and retain multiple-token/width coverage. This warrants withholding R’s sign-off even though no occurrence has been established in today’s ledger.
+
+Two further findings emerged from synthetic fixtures; both predate R:
+
+- **Ledger completeness can disappear silently.** `rows: []` with nonempty history returns PASS. Duplicate row IDs silently overwrite earlier rows; a later attributed duplicate suppressed an earlier closure contradiction. Any reliance on a separate schema check needs an explicit enforced prerequisite.
+- **Closure words apply to every matched row in the subject.** `rowalpha closed; rowbravo ongoing` makes an open `rowbravo` HARD even when its commit is correctly listed. This matters when one carrier closes U while naming newly filed follow-ups.
+
+The checker’s opening documentation also still calls an open row with empty `commits` SOFT, while its later implementation explicitly makes the code-authorship case HARD.
+
+Verification limitation: one initial fixture-isolation mistake invoked the default ledger read, contrary to your boundary. I discarded those results and reran the reported fixtures with asserted synthetic ledger/Git bindings. No gates ran and no files changed.

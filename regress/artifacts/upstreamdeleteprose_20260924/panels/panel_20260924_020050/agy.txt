@@ -1,0 +1,123 @@
+VERDICT: R'=SHIP WITH NOTES; RECORDS=SHIP WITH NOTES
+
+### 1. Answers to Review-Asks (Section 5)
+
+#### Question 1: Is [`lists()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L178-L180) exactly the pre-R grammar where it should be, and nothing more?
+**Yes.** 
+* **Pre-R Grammar Restoration:** In commit [3e33201d](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py), pre-R checked `h in commits`, where `commits = (row.get("commits") or "").split()`. It tested whole whitespace tokens against git's lowercase `%h`. R introduced `names()` with `SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")` which parsed arbitrary embedded hex substrings, creating a regression on ops notes like `outside the repo (ops); compared against (cdbe7d75)`.
+* **R' Implementation:** [`lists()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L178-L180) in [check_commit_attribution.py:178-180](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L178-L180):
+  ```python
+  TOKEN = re.compile(r"[0-9a-f]{7,40}")
+  def lists(field, full):
+      return any(TOKEN.fullmatch(t) and full.startswith(t) for t in (field or "").split())
+  ```
+  `TOKEN.fullmatch(t)` strictly enforces that each token is a discrete whitespace token composed solely of 7–40 lowercase hex characters. A token like `(cdbe7d75)` fails `TOKEN.fullmatch` due to punctuation, restoring pre-R rejection.
+* **Grammar Equivalence:** The only difference between [`lists()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L178-L180) and pre-R's `h in commits` is the intended width-independence: matching via `full.startswith(t)` (prefix of 40-char `%H`) rather than `t == h` (equality against git's variable-length `%h`).
+* **Floor Constraint:** If `commits` contained a 6-character hex token, pre-R would have matched it under a repository configured with `core.abbrev=6`, whereas R' rejects it. This difference is intentional: `{7,40}` enforces the project ledger's 7-character floor (consistent with [`bad_commits()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L256-L267) at [check_commit_attribution.py:264](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L264)).
+
+---
+
+#### Question 2: Does [`git()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L183-L195) now fail closed WITHOUT failing anything legitimate?
+**Yes.**
+* **Fail-Closed Mechanics:** In [check_commit_attribution.py:183-195](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L183-L195):
+  ```python
+  if r.returncode != 0:
+      print("  HARD   --        (git)          --       git %s exited %d: %s"
+            % (args[0], r.returncode, " ".join(r.stderr.split())[:160]))
+      print()
+      print("ATTRIBUTION_FAIL  git could not read the repository")
+      sys.exit(2)
+  ```
+  When git exits non-zero (e.g. `GIT_DIR=/nonexistent`, returning 128), it exits 2 and outputs a line starting with `  HARD`. In [tools/precommit_check.sh:805-812](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L805-L812), Section L runs `elif out=$(python "$ATTRCHK" 2>&1); then`. Non-zero exit directs execution into the `else` block, which greps `^  HARD`, incrementing `fail` and preventing a green run over an unreadable repository.
+* **Audit of Normal Invocations:** [`git()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L183-L195) is invoked at only two locations:
+  1. `git("log", "--format=%H\t%h\t%s", "-%d" % DEPTH)` at [line 290](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L290). In a valid repository with history, `git log` always exits 0, even when `DEPTH` (60) exceeds the total commit count.
+  2. `git("show", "--name-only", "--format=", h)` at [line 203](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L203). Because `records_only()` is now passed `full` (%H) directly from the `git log` output at [line 322](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L322), the target object is guaranteed to exist. `git show` succeeds and exits 0 on normal code commits, documentation commits, root commits, and merge commits.
+* No legitimate repository operation produces a non-zero exit from [`git()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L183-L195).
+
+---
+
+#### Question 3: Does any single edit to R' keep every control above green yet change a verdict on this repository's current ledger or history?
+**No.**
+* The 29-control suite pins output byte-for-byte against golden outputs at depths 60, 130, and 800.
+* Measured directly on this repository: the entire commit history from root to HEAD contains 795 commits. Depth 800 encompasses the repository's entire historical record.
+* Because depth 800 evaluates to `ATTRIBUTION_PASS 0 hard, 72 soft` and is pinned byte-for-byte, any mutant or edit to R' that changed a verdict on any historical or current commit would alter the output stream at depth 800 (and/or depth 60 / 130), causing the control test suite to fail immediately.
+* Specific mutations evaluated against controls:
+  - Relaxing `TOKEN` to `{6,40}`: Killed by Q7 (6-char control).
+  - Mutating `records_only(full)` back to `records_only(h)`: Killed by Q21b (scratch tag resolving ahead of abbreviation).
+  - Dropping `TOKEN.fullmatch(t)` in [`lists()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L178-L180): Killed by Q19a (`(cdbe7d75)`).
+  - Mutating `git()` exit status from 2: Killed by Q20.
+
+---
+
+#### Question 4: Verification of Corrected Sentences (with file:line evidence)
+
+Every corrected sentence was evaluated adversarially against the repository sources and commit history:
+
+1. **Repack Timing and Packed-Object Count:**
+   - *Claim:* `a git gc at about 2026-09-23 23:54 (pack-366ba631 created 23:54:45, packed-refs rewritten 23:54:32; 24,350 objects packed) made git's own %h 8 characters -- the automatic length follows git's approximate packed-object count, not any commit` ([check_commit_attribution.py:147-150](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L147-L150)).
+   - *Evidence:* `git count-objects -v` outputs `in-pack: 24350`. File system inspection of `.git/objects/pack/` confirms `pack-366ba63102a086a5c1475906bc6be11345ca26a3.pack` timestamped `2026-09-23 23:54`. Git's core calculation sets default abbreviation length to $\approx 2 \cdot \log_{16}(N)$, which transitions from 7 to 8 at $N > 16,384$ objects. **TRUE.**
+
+2. **Pre-R Failure Counts (Six HARD lines on five rows):**
+   - *Claim:* `six HARD lines on five correctly attributed rows (stagetokens twice) failed at HEAD` ([check_commit_attribution.py:151](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L151) and [CHANGELOG.md:94](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L94)).
+   - *Evidence:* Executing pre-R exact comparison `h in commits` with `%h` at 8 characters against HEAD ([3e33201d](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py)) yields exactly 6 HARD lines over 5 unique row IDs:
+     - `cdbe7d75 fbsmlane`
+     - `8bd97e4d lcaisalane`
+     - `bb8efbf0 pcc2c040mienannounce`
+     - `09ded75c stagetokens`
+     - `e16a8b7c landiskaux`
+     - `686d179c stagetokens` (2nd occurrence)
+     Rows: `['fbsmlane', 'landiskaux', 'lcaisalane', 'pcc2c040mienannounce', 'stagetokens']`. **TRUE.**
+
+3. **Section F Receipt Floor:**
+   - *Claim:* `Section F's receipt check matches by prefix ... keeping the ledger's own 7-40 floor, which section F does not have` ([check_commit_attribution.py:154-156](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L154-L156)).
+   - *Evidence:* [tools/precommit_check.sh:886](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L886) checks `awk -v p="$PREV" '!/^#/ && $1 != "" { if (index(p, $1) == 1) found=1 } END { exit !found }'`. It permits any non-empty `$1` prefix with no length floor. **TRUE.**
+
+4. **Docstring SOFT/HARD Specification:**
+   - *Claim:* `A commit that shipped CODE against an open row with an EMPTY commits is HARD -- main() says why` ([check_commit_attribution.py:38-40](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L38-L40)).
+   - *Evidence:* [check_commit_attribution.py:335-352](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L335-L352): when `state != "closed"`, commit is not records-only, and `not commits`, it appends to `hard`: `"work shipped and the row does not name it (commits EMPTY)"`. **TRUE.**
+
+5. **Pipeline Code Exemption Statistics:**
+   - *Claim:* `At 3e33201d, 28 of the 60 scanned commits touch pipeline code and 3 of those are graded records-only BECAUSE of this exemption; dropping it for .py/.sh changes no verdict at depth 60 and gives 8 HARD at full depth` ([check_commit_attribution.py:218-220](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L218-L220)).
+   - *Evidence:* Testing the last 60 commits at [3e33201d](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py):
+     - Exactly 28 commits modify `.py` or `.sh` files under `tools/pipeline/`.
+     - Exactly 3 commits (`4653ecfb`, `e2e5a195`, `7d7e0559`) evaluate as records-only solely due to this path exemption.
+     - Dropping the exemption for `.py`/`.sh` at depth 60 results in (0 HARD, 10 SOFT) — identical verdict.
+     - Dropping the exemption at full depth (800) results in (8 HARD, 68 SOFT) — exactly 8 HARD failures. **TRUE.**
+
+6. **Ref Lookup Priority over Abbreviation:**
+   - *Claim:* `git show <abbrev> resolves a same-named REF first: a tag 030e961 misgraded a records commit as code` ([check_commit_attribution.py:286-288](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L286-L288)).
+   - *Evidence:* Per git revision parsing rules (`gitrevisions(7)`), references (`refs/tags/<name>`, `refs/heads/<name>`) take precedence over short SHA prefix object resolution. Commit `030e961f` is a records commit touching only documentation; a tag `030e961` pointing to a code commit causes `records_only()` taking `%h` to inspect the tagged code commit instead. **TRUE.**
+
+---
+
+### 2. Adversarial Findings (Something Else Discovered)
+
+#### Finding A: Factually Inaccurate Assertion Regarding `ledger.json` in Section 3
+* **Brief Claim:** Section 3 states:
+  > *"and three ledger text fields that held two U+0008 characters each where \b was meant ... each now reads a literal backslash-b; **no other byte of the ledger changed**, and the checker's output is identical before and after..."*
+* **Source Discrepancy:** Running `git diff --stat tools/pipeline/ledger.json` reveals **62 line modifications** (31 insertions, 31 deletions). Inspecting `git diff -U0 tools/pipeline/ledger.json` shows multiple substantive changes in the working tree beyond the three U+0008 repairs:
+  1. `hygienecensus.commits` modified from `""` to `"3e33201d"` (attributing commit [3e33201d](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py)).
+  2. The rows for `dashmalformedheld` and `stateaudit0923` are swapped and modified at lines 50500–50540.
+  3. Rows `alphaifetchkill` and `lcaisasize` contain text diffs.
+* **Impact:** The claim that *"no other byte of the ledger changed"* is demonstrably false regarding the working tree state of `tools/pipeline/ledger.json`.
+
+#### Finding B: Incomplete Framing in `CHANGELOG.md` Regarding `#547`'s Resolution
+* **Observation:** In [CHANGELOG.md:101](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L101) and [105-107](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L105-L107):
+  ```markdown
+  when it is a PREFIX of `%H`; `%h` is printed, and passed only to `records_only()`'s own `git show` lookup.
+  ...
+  *(Corrected in place 2026-09-24 by `#547`, from the rider's nine-seat review: this paragraph said six HARD "rows" -- six lines on five rows; it dated the abbreviation change to #545 itself -- a repack made it; and it said `%h` is "only printed" -- `records_only()` also passes it to `git show`.)*
+  ```
+* **Critique:** While this accurately documents what commit `#546` ([3e33201d](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py)) shipped, `#547` (R') itself now replaces `records_only(h)` with `records_only(full)` at [check_commit_attribution.py:322](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L322). As of R', `%h` is once again *only printed*. A reader reviewing `#546`'s amended text in [CHANGELOG.md](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md) without `#547`'s own entry will conclude that `records_only()` currently consumes `%h`, which is contradicted by R'.
+
+#### Finding C: Code Hygiene / Naming Mismatch in `check_commit_attribution.py`
+* At [check_commit_attribution.py:198](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L198): the signature remains `def records_only(h):`, while the call site at [line 322](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L322) passes `full`. The parameter name `h` inside `records_only()` is a misleading remnant.
+* At [check_commit_attribution.py:298](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py#L298): `commits = (row.get("commits") or "").split()` is computed in `main()`, but line 320 passes `row.get("commits")` to `lists()`, which splits it a second time.
+
+---
+
+### Final Decision
+**GO-WITH-CHANGES**
+
+* **Required Change:** Amend the brief's Section 3 claim regarding `ledger.json` to accurately account for the working copy diff (31 insertions/deletions, including `hygienecensus.commits = "3e33201d"` and row reordering), or revert extraneous working copy edits so that only the three U+0008 corrections remain.
+* **Recommended Note:** Clarify in the `#547` changelog entry that `#547` replaces `%h` with `%H` in `records_only()`, restoring `%h` to print-only status.

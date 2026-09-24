@@ -22234,3 +22234,80 @@ git-bash/WSL use could trigger).  Each is measured or read on the F6d deriver (5
 * **The gate's `whole_full=$(printf '%s\n' $whole_files | awk ...)` expands `$whole_files` UNQUOTED** (grok, the F6d
   pass), so a whole-buffer probe file named with a glob character would expand there; 0 of today's tokens carries one,
   NTFS forbids `*` and `?`, and the deriver refuses any token outside `name:count` before a write.
+
+## 2026-09-24 — GXEMUL [087a90]: `#547` upstreamdeleteprose + the rider's follow-up R'; what its three nine-seat passes file
+
+Evidence for every item: `regress/artifacts/upstreamdeleteprose_20260924/` (the three panels, the Opus seat's answers
+`opus5_*.md`, the dedicated codex jobs) and `regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/` (every
+measurement, its sealed prediction and its verifier).
+
+### `attrcheckgaps` (MED, harness) — what still walks past `tools/pipeline/check_commit_attribution.py` after R'
+
+R' closed the three paths that were measured to pass or misgrade on this repository's own inputs (a non-repo note's sha
+credited; `git()` failing open; a ref shadowing the `%h` lookup).  These remain, each measured or read by a seat named --
+**the first is the one to build first** (the flagship seat's ruling):
+* **No tripwire for an ambiguous ledger token** (kimi, deepseek, Opus, fable5): prefix matching credits every commit a
+  token prefixes, silently, where the old exact test failed loud (git lengthened the abbreviation).  Today all 184 unique
+  tokens resolve to one object (Opus, `git cat-file --batch-check`, 0.1 s) -- one manual resolution, which nothing
+  repeats.  A per-run resolution check is the fix.
+* **The `tools/pipeline/` exemption grades checker CODE as records** (codex, both jobs; Opus): at 3e33201d 28 of the 60
+  scanned commits touch pipeline `.py`/`.sh` and 3 are graded records-only because of it; dropping it changes nothing at
+  depth 60 and gives 8 HARD at full depth (Q18) -- whether each is drift or a mis-attribution is a reading.  And
+  `regress/pass2_ledger.tsv` is a records file that the predicate does NOT exempt: 43 commits in history are graded as
+  code only because they touch it, 13 of them named in some row's `commits` (Opus).  Fixing either changes grading and
+  owes its own controls.
+* **Section L grades the WORKTREE ledger, not the one the commit records** (Opus): 21 attributed / 10 soft against the
+  worktree, 20 / 11 against the index on 2026-09-24.
+* **The cp1252 decode crash** (Opus): Python here decodes git's output as cp1252, so a commit subject containing a curly
+  quote (U+201D, UTF-8 bytes including 0x9D) crashes the checker; section L then blocks with no reason shown.  No subject
+  in history has one today.  Fails CLOSED, but blocks every commit until fixed.  Fix: `encoding="utf-8",
+  errors="replace"` in `git()`.
+* **`GXATTR_DEPTH=0` passes an empty scan** (codex, Opus); **`rows: []`
+  and duplicate row ids pass**, and **a closure word in a subject grades every row the subject names** (codex).
+* **`reopened` has no validation** (agy); **a merge commit with an empty combined diff reads as code** (agy); **a
+  whole hex token inside a non-repo note still credits** (kimi -- pre-R parity, Q19c); **the records-only label says
+  `(.md/.txt)` while the predicate also exempts two directories** (grok).
+
+### `deletecheckhead` (MED, harness) — upstream's `delete ` check runs only in the weekly battery, over the worktree
+
+`test/check_delete_calls.sh` is gate 8's delete row and nothing else runs it, so `#513`'s comment failed it at HEAD from
+2026-09-08 until `#547`.  A precommit tripwire is cheap (`git grep --cached`, 0.05 s -- Opus) but must read the INDEX:
+the worktree can pass while the index and HEAD fail (measured on 2026-09-24), and a HEAD-scoped check would block the
+very commit that fixes it (Opus, grok).  The script also writes a fixed `tmp_delete.out` in the repo root, so a concurrent
+run can empty its loop into a silent pass (glm).  Gate 8's own domain is disputed and recorded both ways: HEAD, because the
+battery grades committed state (Opus); the worktree, because gate 8's other rows run the worktree binary (grok).  Also
+recorded: 7 of the list's 9 entries name absent files, and the debugger's `.c` files pass only through stale `.cc`
+entries under an unanchored regex (all seats); the phrase came from the carrier's own vocabulary (Opus).
+
+### `batterymissedruns` (HIGH, harness) — the weekly batteries of 2026-09-06 and 2026-09-13 left no verdict, and nothing said so
+
+`_scratchpad/nightly/` holds no verdict between 2026-08-30 and 2026-09-20; the scheduled task's last run is 09-20 (result
+1), next 09-27.  `tools/nightly_check.sh` -- the dead-man switch whose whole job is reporting a battery that never ran --
+is run by nothing: not precommit, not the session hooks (main loop, measured; Opus).  The missed runs cost gate 8 a week
+of visibility, and the one battery that did run (09-20) was RED on gates 6 and 8 and went unacted for four days.  HIGH by
+the flagship seat's ruling: the carrier names a never-run battery its sharpest gap.  Closure should show an independently
+invoked monitor detecting a deliberately missed run (codex).
+
+### `svbackspace` (MED, harness) — `seat_verdicts.py`'s wall patterns hold U+0008 where `\b` was meant
+
+Since 1cec2daf (2026-08-27) the wall detector's `WALL_STRONG` (`\b429\b`) and `WALL_MARK` (`\berror\b`) carry literal
+backspace bytes, so `{"error":"rate limit exceeded ..."}` and `Error code: 429 ...` are NOT recognised as walls (Opus,
+`sv_wall.py`).  The selftest has no case for either.  Restoring `\b429\b` blindly would also flag a bare number the file's
+own rules forbid, so the fix needs that decision first.  The exposure is narrower than first stated (fable5, measured):
+`panel.sh`'s own seat check matches `usage limit|quota|rate.?limit|\b403\b|...` independently, so both examples ARE
+caught by the operator-facing check; only the ledger-side verdict extractor misses them.  (The same U+0008 defect was in three ledger fields, fixed by
+`#547`, and sits in the carrier -- `carrierstalecopies`.)  **And the main loop reintroduced it while drafting THIS entry**:
+a `\b` written through a Bash heredoc into Python lost one backslash level and landed as two raw backspace bytes --
+the carrier's own `chr(92)` rule, unconsulted -- caught by an `od` scan before any tracked file held it.  Five instances
+in one class is the structure-first trigger: **the landing spot is a check, not prose** -- extend precommit section Y
+from NUL to every C0 control byte except tab, newline and carriage return in tracked text, plus a scan of the ledger's
+DECODED strings (a JSON `\b` escape is invisible to a byte scan).  A harness change owing two negative controls.
+
+### `carrierstalecopies` (LOW, owner) — the carrier's map of the project root is out of date
+
+The carrier (`CLAUDE.md`, both copies) and `tools/BRIEF_TEMPLATE.md` still say three pristine-upstream copies sit under
+the project root; they moved on 2026-09-13 to `C:\DocumentNoSnc\cc\GXEMUL_upstream_2021` (`./src` is gone).  The
+`MOVED.txt` notes carry a literal CR and BEL where `\r` and `\a` were meant, so the paths they give are wrong; a directory
+named `GXEMUL-SEC` plus a carriage return sits at the project root (minimax: a path hazard -- MED if a tool trips on it);
+and the carrier holds the U+0008 defect at one line in both copies.  Owner's files: not edited by a session holding
+other units' uncommitted carrier edits, and deleting the stray directory is the owner's call.

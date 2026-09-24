@@ -2,7 +2,10 @@
 """DOES THE LEDGER KNOW ABOUT THE WORK THAT SHIPPED?
 
 Usage:
-    check_commit_attribution.py [--list] [--all]
+    check_commit_attribution.py [--list]
+
+    (This line also advertised `[--all]` from the file's first commit, and nothing ever read it;
+    removed 2026-09-24 as a wrong record, found by the codex seat.)
 
 The ledger is this project's single source of truth and `gen_dashboard.py` renders the board
 from it.  So a row whose work has SHIPPED but whose `commits` field is empty makes the board
@@ -33,9 +36,16 @@ WHAT IT CHECKS, and the three grades are deliberately different failures:
          A closed row that does not name what closed it cannot be attributed -- the same
          defect `nightly_check.sh` fixes for the battery verdict.
 
-  SOFT   a commit subject names an OPEN row and R.commits is empty.  Progress commits on an
-         open row are ordinary and this is NOT a failure; it is listed so the drift stays
-         visible rather than accumulating silently.
+  SOFT   a commit subject names an OPEN row that does not list the commit, and either the
+         commit is RECORDS-ONLY, or it shipped code and the row's non-empty `commits` names
+         other commits ("open row, commits=...").  Progress on an open row is ordinary, so it
+         is listed rather than failed and the drift stays visible.  THE GRADES ARE TAKEN IN
+         ORDER, and the order decides them: a closure word in the subject grades a non-closed
+         row HARD (or REOPENED) before anything else is asked; a row that lists the commit is
+         attributed next; only then do records-only and the rest apply -- and a code commit
+         against an open row whose `commits` is EMPTY is HARD (main() says why).  (This
+         paragraph named only the records-only case, and called the empty-`commits` code case
+         SOFT too, until the 2026-09-24 review.)
 
   SOFT   a commit subject names a CLOSED row whose `commits` is EMPTY.  That is a
          DOCUMENTED-ONLY closure -- a duplicate credited elsewhere, or a row closed with no
@@ -80,8 +90,10 @@ THAT WRONG. ***  It reported three commits -- ef01e28, 716934d, 8631dc0, all nam
 ..." -- as a closed row failing to name what closed it.  Verifying instead of believing showed
 all three touch ONLY OUTSTANDING_BUGS.md: they are the round's reproduction and research
 records, and the row correctly names its five CODE commits.  A row is authored by what shipped,
-not by what was written about it.  So a commit whose every path ends in .md is never a hard
-failure; it is listed as soft when the row is open, and ignored when the row is closed.
+not by what was written about it.  So a commit whose every path ends in .md is not a hard
+failure on that ground; it is listed as soft when the row is open, and ignored when the row is
+closed.  (This said "never a hard failure" until 2026-09-24 -- but a closure word in the subject
+grades a non-closed row HARD before the records test is reached.)
 
 That distinction is the check's own version of the rule it exists to serve, and getting it
 wrong would have made the gate fire on every research commit this project makes -- the fastest
@@ -141,31 +153,69 @@ SUBJECT_STOPWORDS = {"carrier", "census"}   #  "census" added 2026-09-07: same m
 CLOSURE = re.compile(r"\b(closed|closes|closing)\b", re.I)
 
 #  *** A LEDGER SHA NAMES A COMMIT WHEN IT IS A PREFIX OF THE FULL HASH -- AND THE FIRST FORM
-#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS THE REPOSITORY GROWS. ***  Measured
-#  2026-09-24: the rows carry the 7-character form git printed when each closed; after 4264ee20
-#  git's own %h became 8 characters, `h in commits` stopped matching, and six correctly
-#  attributed rows hard-failed at HEAD -- a red gate on every commit, raised by nothing in the
-#  ledger.  The mirror case failed too: a row written at 8 characters did not match a
-#  7-character %h.  Section F's receipt check met this on its first version and matches by
-#  prefix; so does this, on %H.  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/)
+#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS ITS PACKED-OBJECT COUNT GROWS. ***  Measured
+#  2026-09-24: the rows carry the 7-character form git printed when each closed; a repack at
+#  about 2026-09-23 23:54 -- most likely `git gc --auto`, detached by #545's own commit (4264ee20,
+#  23:50, the only commit in that window; pack-366ba631 created 23:54:45, packed-refs rewritten
+#  23:54:32; 24,350 objects packed) -- made git's own %h 8 characters: the automatic length follows
+#  git's approximate packed-object count, and the commit's part was to trigger the repack.  So
+#  `h in commits` stopped matching, and
+#  six HARD lines on five correctly attributed rows (stagetokens twice) failed at HEAD -- a red
+#  gate on every commit, raised by nothing in the ledger.  The mirror case failed too, in the
+#  `commits` check, which compared WHOLE TOKENS: a row written at 8 characters did not match a
+#  7-character %h.  Section F's receipt check matches by prefix for a related reason (its first
+#  version compared a short receipt with a full hash exactly and never matched); so does this,
+#  on %H -- keeping the ledger's own 7-40 floor, which section F does not have.  The floor also
+#  binds a whole token inside a non-repository note, which bad_commits() does not validate:
+#  under core.abbrev=6 a 6-character token there was credited before this fix and is not now
+#  -- a deliberate narrowing, pinned by Q22 (at git's automatic minimum, 7, it cannot arise).
+#  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/; this block said "after
+#  4264ee20" and "six ... rows" until the nine-seat review of 2026-09-24 corrected both.)
 SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
 
 
 def names(field, full):
-    """True when some 7-40 character hex token in `field` is a prefix of the full hash."""
+    """True when some 7-40 character hex token in a FREE-TEXT field is a prefix of the full hash.
+
+    For `reopened` only.  `commits` is a LIST and is read by lists() below."""
     return any(full.startswith(t) for t in SHA.findall(field or ""))
 
 
+#  *** `commits` IS A WHITESPACE-SEPARATED HASH LIST, AND THE PREFIX FIX FIRST READ IT AS PROSE. ***
+#  Measured 2026-09-24 by the codex seat's adjudication pass: bad_commits() accepts a
+#  non-repository NOTE in this field ("outside the repo (ops) ..."), and names() extracts a hex
+#  token from anywhere -- so a note that merely MENTIONS a sha, "(cdbe7d75)", credited that
+#  commit as authorship where the whole-token test before it graded HARD.  A `commits` token
+#  names a commit only when the WHOLE token is 7-40 lowercase hex and prefixes the full hash.
+TOKEN = re.compile(r"[0-9a-f]{7,40}")
+
+
+def lists(field, full):
+    """True when a whole whitespace token of a `commits` list is a 7-40 hex prefix of the full hash."""
+    return any(TOKEN.fullmatch(t) and full.startswith(t) for t in (field or "").split())
+
+
 def git(*args):
-    return subprocess.run(["git", "-C", SEC] + list(args),
-                          capture_output=True, text=True).stdout
+    r = subprocess.run(["git", "-C", SEC] + list(args), capture_output=True, text=True)
+    #  *** FAIL CLOSED.  This returned stdout and dropped the status, so a git that could not
+    #  read the repository gave an empty log and "scanned 0 commits deep ... ATTRIBUTION_PASS"
+    #  -- a gate passing on nothing (measured 2026-09-24 with GIT_DIR=/nonexistent by three
+    #  seats).  The first line is shaped like a HARD row because section L prints only those.
+    if r.returncode != 0:
+        print("  HARD   --        (git)          --       git %s exited %d: %s"
+              % (args[0], r.returncode, " ".join(r.stderr.split())[:160]))
+        print()
+        print("ATTRIBUTION_FAIL  git could not read the repository")
+        sys.exit(2)
+    return r.stdout
 
 
 def records_only(h):
     """True when every path this commit touched is documentation.
 
-    Cheap and cached by the caller: only consulted for commits that already matched a row id,
-    which is a handful per run rather than the whole log."""
+    Cheap, and NOT cached -- this said "cached by the caller" until 2026-09-24: it runs once per
+    matched (commit, row) pair that reaches it, which is a handful per run rather than the whole
+    log."""
     paths = [p for p in git("show", "--name-only", "--format=", h).splitlines() if p.strip()]
     #  *** THE LEDGER IS A RECORD, AND THE FIRST VERSION OF THIS DID NOT KNOW THAT. ***  It
     #  recognised only .md/.txt, so a commit touching ONLY tools/pipeline/ledger.json and
@@ -174,8 +224,19 @@ def records_only(h):
     #  week, by its own output, on a commit written to satisfy a sibling gate.
     #
     #  tools/pipeline/ is the ledger, the queue, the dashboard renderings and the checkers'
-    #  own manifests: writing there is recording, never shipping.  Anything OUTSIDE it that
-    #  is not .md/.txt is still authorship, so a fix that edits a checker's LOGIC still counts.
+    #  own manifests: writing there is recording, never shipping.  Anything outside it -- and
+    #  outside regress/artifacts/, below -- that is not .md/.txt is still authorship.
+    #
+    #  *** THIS COMMENT ALSO SAID "so a fix that edits a checker's LOGIC still counts", AND
+    #  FOR THE CHECKERS THAT LIVE HERE IT IS FALSE. ***  tools/pipeline/ holds the checkers'
+    #  own sources, .py and .sh, so a commit editing ONLY a checker's logic here is graded as a
+    #  record: measured 2026-09-24 on bbfc942e, which changed this file's SUBJECT_STOPWORDS.
+    #  At 3e33201d, 28 of the 60 scanned commits touch pipeline code and 3 of those are graded
+    #  records-only BECAUSE of this exemption; dropping it for .py/.sh changes no verdict at
+    #  depth 60 and gives 8 HARD at full depth -- whether each is hidden drift or a
+    #  mis-attribution is a READING: 7 change checker logic, 748c9daf only adds a MANIFEST entry,
+    #  and bbfc942e and 86ea7c0e are harness edits inside commits whose subjects name other rows.  FILED
+    #  (attrcheckgaps), not changed here: it changes grading and owes its own controls.
     #
     #  *** AND regress/artifacts/ IS A RECORD TOO -- WIDENED 2026-08-31, THE SECOND TIME THIS
     #  PREDICATE HAS BEEN TOO NARROW FOR THE SAME REASON. ***  It fired HARD on 3d30a20, a
@@ -239,8 +300,10 @@ def main(argv):
                 else (r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i)))
             for i in matchable}
 
-    #  %H to MATCH (see names() above); %h to print, and for records_only()'s own `git show`, where
-    #  git resolves the abbreviation it has just printed -- a lookup, never a comparison.
+    #  %H to MATCH (names() and lists() above) and to LOOK UP (records_only()); %h to PRINT.  The
+    #  lookup took %h until 2026-09-24, and this comment called that "a lookup, never a
+    #  comparison" -- but `git show <abbrev>` resolves a same-named REF first: a tag `030e961`
+    #  misgraded a records commit as code (measured by the Opus seat in a scratch clone).
     log = [l.split("\t", 2) for l in
            git("log", "--format=%H\t%h\t%s", "-%d" % DEPTH).splitlines() if l.count("\t") >= 2]
 
@@ -263,15 +326,18 @@ def main(argv):
                 #  closed `pcc2widthkills`; its own pass 2 reopened it the same day and thirteen
                 #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
                 #  whose `reopened` field names the commit is a known reopening and is reported,
-                #  not graded.  Any other closure/state contradiction stays HARD.
+                #  not graded.  Any other closure/state contradiction stays HARD.  `reopened` may
+                #  name several commits as 7-40 lowercase-hex tokens bounded by the field's edges or
+                #  by characters outside ASCII [0-9A-Za-z]; the contradiction is HARD when none of
+                #  them prefixes the scanned commit (wording from the codex seat, 2026-09-24).
                 if names(row.get("reopened"), full):
                     print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
                     ok += 1
                 else:
                     hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
-            elif names(row.get("commits"), full):
+            elif lists(row.get("commits"), full):
                 ok += 1
-            elif records_only(h):
+            elif records_only(full):
                 #  Writing ABOUT a row is not authoring it.  Silent for a closed row (the
                 #  research records of a finished round are not drift); soft for an open one,
                 #  where it is still useful to see the row is being worked.

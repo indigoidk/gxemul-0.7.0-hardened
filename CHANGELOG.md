@@ -1,3 +1,89 @@
+# `#547` (upstreamdeleteprose, attrabbrev): one word of a comment turns gate 8's delete row green at HEAD -- and the nine-seat review that `#546`'s attribution rider owed finds a regression in that rider, two fail-open paths behind it, and fourteen wrong sentences, most of them mine
+
+**The defect (U).**  `#513` (e302c98c, 2026-09-08) wrote "delete the kill" into a comment in `src/devices/dev_sgi_re.c`.
+Upstream's `test/check_delete_calls.sh` -- gate 8's `check_delete_calls` row -- greps `src/` for the seven characters
+`delete ` (the space counted) and fails on any file its exceptions list does not excuse, so the committed tree has failed
+that row ever since.  The weekly battery of 2026-09-20 reported it (gate 8, one row, beside a `dev_sh4.c` instance that
+lived only in another unit's uncommitted text); the batteries of 09-06 and 09-13 left no verdict at all, and nothing in
+precommit runs the check.
+
+**The fix (U).**  "remove the kill".  Test-first on a pure `git archive` of HEAD: exit 1, `Error:
+src/devices/dev_sgi_re.c is not in check_delete_calls.exceptions!`; with the change, exit 0
+(`regress/artifacts/upstreamdeleteprose_20260924/gate8_HEAD_export.out`, `gate8_working.out`).  The two versions
+preprocess to identical text and compile to identical objects (`cpp_both.out`): no compiled code changed.  **Only the
+delete row is measured; the whole of gate 8 is left to the weekly battery**, since its other rows need gate 7's baselines.
+Option (b) -- adding the file to the exceptions list -- was rejected by every seat: the list is matched as an UNANCHORED
+BASIC REGEX of the flagged path (the dots are wildcards), 7 of its 9 entries name files that do not exist, the debugger's
+two `.c` files pass only through stale C++-era `.cc` entries, and an entry would excuse the file forever.  The house verb
+is "drop the exit(1)" (three times verbatim, all in `dev_sh4.c`); "remove" is accurate and nothing pins the wording.
+
+**R' -- the follow-up to `#546`'s rider.**  `#546` bundled a fix to section L (`tools/pipeline/check_commit_attribution.py`)
+with only two seats' review, and recorded the nine-seat pass as OWED.  That pass ran here, with an SF2 adjudication pass and
+the repair chain's pass on the repair.  It found, in R (committed as 3e33201d):
+* **a regression R introduced** (codex, SF2): R extracted a hex token from ANYWHERE in `commits`, but `bad_commits()`
+  accepts a non-repository NOTE there, so a note that merely MENTIONS a sha -- `outside the repo (ops); compared against
+  (cdbe7d75)` -- credited that commit as authorship, where the whole-token test before R graded HARD;
+* **two inherited paths**: `git()` dropped git's exit status, so a git that could not read the repository printed `scanned 0
+  commits deep ... ATTRIBUTION_PASS` (codex, grok, Opus); and `git show <abbrev>` resolves a same-named REF first, so a tag
+  named like a commit's abbreviation made a records commit grade as code (Opus).
+
+R' repairs all three: `lists()` reads `commits` as WHOLE tokens -- a token names a commit only when the whole token is
+7-40 lowercase hex and prefixes `%H` -- while `names()` keeps reading the free-text `reopened`; `git()` fails closed (exit
+2, and a HARD-shaped line, since section L prints only those); `records_only()` takes `%H`.  **Controls, every prediction
+sealed first** (`regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/`): R' is byte-identical to HEAD on 19 earlier
+inputs and to the golden Q0 when run exactly as section L runs it (no environment); Q19a (the note), Q20 (`GIT_DIR` gone)
+and Q21b (a tag `7a361f47` in a scratch clone, which flips the committed code's grade of `m88kexcdetectorl2` from SOFT to
+HARD) separate the three repairs; Q22c-Q25 separate every surviving variant the seats named -- the 6-character token floor
+(`core.abbrev=6`: a deliberate NARROWING, since pre-R fails 7 HARD at that width anyway), a guard that accepts a failed git
+log carrying output, the default depth, and the exit code section L keys on.  Each verifier carries a negative control
+(`VERIFY_rp.out` 29/29, `VERIFY_q23.out` 9/9, and three more).
+
+**The chain.**  Pass 2 and the SF2 pass found the three defects above; **the R' pass found no defect in R' on current data,
+but it did find breaches in the CONTROL suite** -- the default-value, exit-code and stdout-guard variants escaped every
+control then in place.  So, by the flagship seat's ruling, the chain does not close on the R' pass: it closes on the pass
+over the repair to the controls (Q22c-Q25) -- **one seat's measured reading, not a nine-seat panel**: the flagship seat's
+20 variants x 11 inputs, 14 killed and 6 survivors each classified (two equivalent, one needing a git failure no input can
+reach, one unreachable by any ledger input, one equivalent on current data, one that fails MORE).
+
+**Wrong records, corrected in place -- fourteen, and the review found most of them in corrections of mine.**  In the
+checker: the repack's time and cause (a repack at about 23:54 -- most likely `git gc --auto` triggered by `#545`'s own
+commit -- not "after 4264ee20", and not 23:57, which was an mtime refresh); six HARD LINES on FIVE rows; the mirror case's
+scope (the `commits` check); section F's missing 7-40 floor; the pipeline exemption's real counts (28 of 60 commits touch
+pipeline code, 3 are graded records-only by it, 8 HARD at full depth whose drift-or-misattribution is a reading); the
+`%h` lookup; the docstring's SOFT paragraph (branch ORDER decides the grades); "never a hard failure"; "cached by the
+caller"; the `regress/artifacts/` exemption; the dead `[--all]` usage option (advertised since the file's first commit,
+never read); and codex's exact wording for what `reopened` may hold.  In `#546`'s block, three sentences, each noted in
+place.  In the ledger, three text fields held two U+0008 characters where `\b` was meant (`lcaisalane.reopened` since
+3c41f011, `fbsmlane.state_note` since 18ea5646, `citestale.state_note`): each now reads a literal backslash-b, and the
+checker's output is identical before and after -- `reopened` IS read, but only for a row that is not closed, and
+lcaisalane is closed; `state_note` is never read.  **This round's own brief said the fields are "not read"; four seats
+blocked the records on that sentence and the `%h` one, and both are corrected.**  AND I REINTRODUCED THE CLASS while
+drafting the filing about it: a `\b` written through a Bash heredoc into Python lost one backslash level and landed as two
+raw backspace bytes -- the carrier's `chr(92)` rule, unconsulted -- caught by an `od` scan before any tracked file held it.
+
+**The panel.**  Three passes -- `panels/panel_20260924_004832` (pass 2), `panel_20260924_012856` (SF2),
+`panel_20260924_020050` (R') under `regress/artifacts/upstreamdeleteprose_20260924/`, each with a dedicated codex job
+(`panels/codex_dedicated_*.txt`) and the Opus measuring seat (`opus5_*.md`, claude-opus-5-5 throughout by its transcript).
+Answering all three: codex (GPT-6 Astra), agy, grok 4.7, glm, deepseek, minimax, and the kimi seat through `kimi-k3:cloud`
+-- the kimi CLI was on its weekly limit in every panel (`kimi.txt`, 350 bytes), so the seat was COVERED, not lost.  The
+rider's two pre-commit reviews are `attrabbrev_20260924/{codex_rider,grok_rider}.txt`.  **The flagship seat fired LAST**
+(Fable 5.1, claude-fable-5-1 throughout by its transcript; `fable5_final.md`): U=SHIP; R'=SHIP WITH NOTES; RECORDS=SHIP
+WITH NOTES, with the chain ruling above, `[--all]` as a wrong record, `batterymissedruns` at HIGH, and the repack
+wording made consistent.  **Dissents, recorded rather than absorbed:** codex's R=DO NOT SHIP on the SF2 pass (the
+regression, repaired by R'); both codex jobs' R'=DO NOT SHIP on the R' pass (the stdout guard, now Q23; the 6-character
+floor, now Q22 as a deliberate narrowing); RECORDS=DO NOT SHIP from grok, deepseek, the kimi substitute and the codex
+panel job on the R' pass (the two sentences above, corrected).
+
+**FILED** (OUTSTANDING_BUGS 2026-09-24): `attrcheckgaps` (MED -- the ledger-token uniqueness tripwire FIRST, then the
+pipeline exemption, section L grading the worktree ledger, a cp1252 crash on a curly-quote subject, an empty-depth pass,
+and the rest); `deletecheckhead` (MED -- an INDEX-scoped precommit tripwire for the delete check); `batterymissedruns`
+(HIGH -- two batteries never ran and nothing runs the dead-man switch); `svbackspace` (MED -- the wall detector's U+0008
+patterns, and a proposed section-Y extension to control bytes); `carrierstalecopies` (LOW, the owner's -- the carrier's
+map of the project root).
+
+**Gates.**  The precommit hook on this commit; gate 8's delete row on the committed tree (a `git archive` of the new HEAD,
+exit 0); every attribution control above; the two-part clearance for `dev_sgi_re.c` on all four trees.
+
 # `#546` (hygienecensus): gate 6's readiness census was 24 probes stale and RED at HEAD -- re-derived by a tool, never by hand, and the tool itself went through seven review passes before it could be trusted to write the gate
 
 **The defect.**  `regress/gate_hygiene.sh` (gate 6) carries a census of the regression probes that drive the emulator
@@ -91,17 +177,23 @@ repository); and the owed gate-6 run on the final files, below.
 
 **The rider that lets this commit land (bundled, as bbfc942e bundled its stopword): section L compared hash
 ABBREVIATIONS, and git lengthened them.**  The first attempt at this commit was refused by section L with six HARD
-rows the ledger attributes correctly.  `tools/pipeline/check_commit_attribution.py` tested `h in commits` (exact)
+lines on five rows the ledger attributes correctly (stagetokens twice).  `tools/pipeline/check_commit_attribution.py` tested `h in commits` (exact)
 and `h in reopened` (substring) against git's `%h`; the rows carry the 7-character form git printed when each closed,
-and after #545 (4264ee20) git's automatic abbreviation became 8 characters -- so the gate was red at HEAD for EVERY
+and a repack at about 2026-09-23 23:54 -- most likely `git gc --auto`, detached by #545's own commit (4264ee20) -- made
+git's automatic abbreviation 8 characters (the length follows git's approximate packed-object count) -- so the gate was
+red at HEAD for EVERY
 commit, from nothing in the ledger.  The mirror case failed too: `fbdeclinefive.commits` was written at 8 characters
 and hard-failed at `core.abbrev=7` (my prediction missed it; `PREDICTIONS_addendum.txt` records the miss, sealed
-before the edit).  Fixed the way section F's receipt check already was: a 7-40 character hex token names a commit
-when it is a PREFIX of `%H`; `%h` is only printed.  Controls, predictions first: pre-fix 6 HARD at 8 characters and 1
+before the edit).  Fixed the way section F's receipt check already was -- by prefix, though keeping the ledger's own
+7-40 floor, which section F does not have: a 7-40 character hex token names a commit when it is a PREFIX of `%H`; `%h` is printed, and passed only to `records_only()`'s own `git show` lookup.  Controls, predictions first: pre-fix 6 HARD at 8 characters and 1
 at 7; post-fix 0 at both, the two outputs identical modulo hash width; `pcc2widthkills`' REOPENED path intact at
 depth 130; and three negative controls -- a different real sha, a sha sharing seven characters that is not a prefix,
 and the full 40-character hash -- as predicted (`regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/RESULT.txt`).
-The same defect had reported 14 lines of fake SOFT drift.
+The same defect had reported 14 lines of fake SOFT drift.  *(Corrected in place 2026-09-24 by `#547`, from the rider's
+nine-seat review: this paragraph said six HARD "rows" -- six lines on five rows; it dated the abbreviation change to
+#545 itself -- a repack made it, which that commit most likely triggered; and it said `%h` is "only printed" -- `records_only()` also passes it to `git show`.  `#547` then read `commits` as a list of WHOLE tokens again -- this
+paragraph's "a 7-40 character hex token" let a non-repository note that merely mentioned a sha credit it -- and made that
+lookup take `%H`, so `%h` is print-only again.  The nine-seat pass the next paragraph calls OWED ran in `#547`.)*
 Reviewed on the diff before commit by two seats, codex (GPT-6 Astra, max) and grok 4.7 (xhigh) -- both SHIP WITH NOTES, agreeing on every note: the one mutant that survived the first controls
 (`{7,40}` -> `{6,40}`) is now killed by a six-character `reopened` control (Q7, predictions sealed first); the
 free-text `reopened` edges they constructed (a hex-only English word; a sha glued to letters) occur nowhere in the

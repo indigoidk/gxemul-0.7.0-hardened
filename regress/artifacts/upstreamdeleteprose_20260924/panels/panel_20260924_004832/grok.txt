@@ -1,0 +1,47 @@
+I'll verify both questions against the `GXEMUL-SEC` tree rather than taking the brief's premises as given. First I'll locate the gate, the comment diff, and the attribution checker.The gate script and the attribution checker are in `GXEMUL-SEC`. I'll read those next and check the comment diff against the real `delete ` scan, not the brief's summary.The comment is already rewritten in the working tree. Next I’ll enumerate every `delete ` hit and check the abbreviation story against git, not against the brief.VERDICT: U=SHIP WITH NOTES; R=SHIP WITH NOTES
+
+U-1. The matcher is a case-sensitive, same-line search for the seven bytes `delete ` (the word, then one space). `grep -R` has no `-F`, but those seven bytes contain no basic-regex metacharacter, so the pattern is literal. It does not see a tab, a newline, or `Delete `. On the grep that produced the 09-20 log line `grep: src/debugger/debugger.o: binary file matches`, that notice is stderr from the first process in the pipeline. The `2>/dev/null` is attached only to the last `grep`, and `grep -v "inary file"` only sees stdout. Those binary paths never become the `Error:` list. The `inary file` filter is the older stdout wording (`Binary file … matches`).
+
+U-2. At HEAD, `git grep -a -l -F "delete " HEAD -- src` returns exactly four paths:
+
+1. `src/debugger/debugger.c`
+2. `src/debugger/debugger_cmds.c`
+3. `src/devices/dev_sgi_re.c` (the comment at line 510; the working tree already has `remove`)
+4. `src/include/refcount_ptr.h` (`delete m_p;` and the comment `delete the object`)
+
+`dev_sh4.c` is not among them, at HEAD or in the worktree. After the one-line change, only 1, 2, and 4 still match. The diff is the inlined hunk (`1` insertion, `1` deletion). The changed line sits inside the block comment at lines 506–522, so a preprocessor deletes it and later line numbers do not move. I did not re-run `gcc -E` or the 32752-byte object compare.
+
+U-3. The exception test is `grep -q $a` with `$a` unquoted: the flagged path is an unanchored basic regex, and the exceptions file is the haystack. The nine lines, against this tree:
+
+1. `./HISTORY` — not under `src/`, so this script never visits it.
+2. `./src/debugger/debugger.cc` — no such file. `src/debugger/debugger.c` is a literal substring of that line, which is why the help text `delete ` is exempt.
+3. `./src/debugger/debugger_cmds.cc` — no such file. Same substring exemption for `debugger_cmds.c`.
+4. `./src/include/refcount_ptr.h` — present, and it is a real C++ `delete`.
+5. `./src/include/thirdparty/debug_new.h` — absent.
+6. `./src/include/thirdparty/fast_mutex.h` — absent.
+7. `./src/include/thirdparty/static_assert.h` — absent.
+8. `./src/main/debug_new.cc` — `src/main/` does not exist.
+9. `./src/main/ComponentFactory.cc` — same.
+
+So two of the three surviving hits pass only because `.c` is a prefix of the stale `.cc` line. Adding `src/devices/dev_sgi_re.c` (with or without `./`) exempts every `delete ` in that file from then on, including a later real `delete` expression. Among current `src/devices/dev_s*.c` names, the path-as-regex matches `./src/devices/dev_sgi_re.c` for `dev_sgi_re.c` only (`dev_sgi_gbe.c`, `dev_sgi_mec.c`, `dev_sgi_ip*.c`, `dev_sh4.c`, `dev_scc.c` all fail the character after the common prefix). Option (b) is the wrong granularity. Option (c) stops being upstream’s check, which is the reason gate 8 exists.
+
+U-4. Option (a) is the right member. The sentence still says member 4 and `RETURN THE VALUE`; `delete` there is the verb, and member 4 is already named `ACCEPT` two lines above. Two members the packet did not name: a capital `Delete`, which this case-sensitive grep does not see, and breaking the line so the space is not on the same line. Both keep the flagged word by dodging the scanner. The in-tree phrasing of the same idea is `drop the exit(1)` in `dev_sh4.c` (three comments). `remove` is accurate; `drop` is the local verb. Not a reason to hold the hunk.
+
+U-5. A landing spot is owed, and it is a filing, not this commit. `tools/precommit_check.sh` does not mention `check_delete_calls`. Gate 8 is only reached from `regress/run.sh`, and `tools/nightly_check.sh` records the full battery as Sundays 18:00. `#513` (`e302c98c`) is 2026-09-08 07:21 -0500, sixteen days before today. Pasting the upstream script into precommit is cheap and unsound: it greps the whole worktree, and precommit already recorded the 2026-08-21 case where a concurrent uncommitted `src/` edit blocked an unrelated commit. The 09-20 `dev_sh4.c` hit was that same shape. A sound tripwire greps the index or `HEAD`, then applies the same exception test. I did not re-open the verdict directory, so the “no verdict between 08-30 and 09-20” claim is unchecked.
+
+U-6. `none -- comment-only …` is the honest term. `check_witness.py` defines `harness:` as the round whose subject is the test apparatus. This commit does not touch the test. The same file says bare `none` asserts that no code changed; the gloss is what keeps that sentence true of a one-word comment. `commits` still has to name the sha. `records_only()` does not treat a `.c` path as a record, so an empty `commits` field on a subject that names the row is a section L hard failure. I did not open `ledger.json`.
+
+R-1. None of the five dispositions is wrong. Note 2 is the one that looks wrong, and it survives. With 7-character tokens kept (Q0 fails if they are rejected) and the sha allowed anywhere in `reopened`, a 7-hex-letter word that really is a prefix of the scanned commit is a name. Resolving the token with git does not remove that case. Leading-token-only does, and that is a different rule than “the field names the commit.” Recording it, and not folding that rule change into this fix, is the sound call. I did not re-count the two `reopened` rows.
+
+R-2. No edit I can show keeps every listed control green and flips today’s depth-60 hard/ok result. Q0 is that result. Two edits the table does not kill:
+
+- Replace `full.startswith(t)` with `t in full`. Q4’s token `cdbe7d76` is not a prefix of `cdbe7d75735ae3836635d91d70819a09f564fd1a`, and it is not a substring of it either (the eighth character is `5`, and those eight bytes do not recur). Q4 stays hard either way. Whether any current ledger token sits in the middle of a scanned hash is a measurement I did not run, because it needs `ledger.json`.
+- Change the default `DEPTH` of 60. Every control in the table passes `GXATTR_DEPTH` explicitly. Section L does not, so the production window moves and Q0/Q2 stay green.
+
+R-3. Both earlier seats missed three things in the matcher they otherwise described correctly.
+
+- Q4 does not pin prefix-matching. The corrected gloss says `cdbe7d76` is not a prefix. The hash also does not contain that token anywhere, so a substring mutant passes Q4, Q5, Q7, and the “0 hard” rows.
+- The hex-word hole is not confined to free-text `reopened`. `names()` is the same function on `commits`, and `bad_commits` accepts every whitespace token matching `[0-9a-f]{7,40}`. A second token `effaced` is placeholder-clean and attributes every scanned commit whose hash starts with those seven bytes.
+- `git()` returns stdout only. A failed `git log` yields an empty scan, `bad_commits` still runs, and a ledger with no placeholder prints `ATTRIBUTION_PASS` over zero commits. That hole predates the diff; it is in the function the diff rewrote the call site of.
+
+The abbrev mechanism itself is real. HEAD is `3e33201d` / `3e33201d16eb436619a8aff3455494b92c11fbc8`, and default `%h` is 8 characters. `4264ee20` is `4264ee2033a2b4b4a6665259e782da355300ad4a` (one commit behind HEAD): the 7-character form is `4264ee2`, which is not an exact list element of the stored `4264ee20`, and `4264ee20` is a prefix of the full hash. `b78bb0f` is `b78bb0f6b2ab7b7bb58323ad2a12a205116100b6`, 125 commits behind HEAD, so it is log entry 126: inside depth 130 and outside depth 60, which is why Q2 sees `REOPENED` and Q0 does not. `b78bb0` is a prefix and is six characters, so `{7,40}` rejects it and `{6,40}` accepts it. Object format is sha1. `git rev-list --count HEAD` is 795, not 794; `--all` is 800. `git log --abbrev=7 --format=%h` for all 795 HEAD commits is uniformly 7 hex digits. A collision would have lengthened a line, so the uniqueness note still holds. The commit also added `regress/artifacts/.../pre_P3.out`, which this packet’s control table does not mention. I did not open that file.
