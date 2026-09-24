@@ -1,0 +1,113 @@
+I'll review repair 3c against the frozen instrument and the handler, checking the premises in the brief rather than re-deriving its conclusions. First I'll read the X14 rows, the contract comments, and the producer pair.The frozen instrument is in place. Next I’ll read the X14 block, the contract text, and the producer so the row claims can be checked against what those rows actually observe.VERDICT: DO NOT SHIP -- the nine targeted edits are closed, and not-rowing the producer is the right scope call, but 3c's own new claims still name channels the rows do not read. One is a one-line store in the IRQ_STATUS read, `d->fiq_enable |= d->irq_asserted`, which every one of the 864 rows accepts and which NOT COVERED does not name.
+
+## Q1
+
+**(a)** The nine are closed. I traced each edit against the frozen checks, and the r3c table's failure counts match that trace (`TABLE.txt`: TD01 n=2, TD02 n=1, TD03 n=2, TD04 n=2, TD12 n=1, IA12 n=2, IA13 n=2, IA14 n=1, IA16 n=1).
+
+| Row (× timer state where noted) | Edit it now reddens | Observable that moves |
+|---|---|---|
+| DEVINIT reads, both ticks | a legal read that calls the CPU line at those values | `ZCPU(0,0)` |
+| Set 0x40 then Clear 0x10, both ticks | TD03 `\|\| timer_control[0]`, TD12 `\|\| pending[0]` | Clear asserts; counts are (2, 0), the check wants (1, 1) |
+| NEW Clear 0x20, both ticks | TD01 `&& !timer_control[0]`, TD02 `&& !pending[0]` | Clear deasserts; counts are (0, 1), the check wants (1, 0) |
+| DEVINIT declines, both ticks | TD04, decline deasserts when `timer_control[0]` | `ZCPU(0,0)` after `ZZERO()` |
+| line-4 IRQ_STATUS read | IA12 clears `irq_status`; IA13 deasserts | `irq_status == 0x10`; `ZCPU(0,0)` |
+| re-arm | IA14 deasserts during the declines; IA16 returns 0; also IA01 and IA15, because IRQ_RAW_STATUS's value is now read | whole-sequence `ZCPU(1,0)`; `RA[]` wants |
+
+Set-then-Clear's (1, 1) is unambiguous for a Clear-arm edit: the Set arm still contributes the one assert, so the Clear must contribute exactly one deassert. The assert polarity is the new row, where enable becomes `0x30 & ~0x20 = 0x10` and `0x18 & 0x10` is nonzero.
+
+One X14 row still claims a channel it does not read. The new name says "keeps 0x10 pending and enabled." The check reads `irq_enable == 0x10`, `ZCPU(1,0)`, `rv`, and `fatal_calls`. It never reads `irq_status`. The assert plus enable `0x10` shows bit 4 was set at the drive decision. It does not show the bit is still set afterward. COVERED incorporates "the channels in each row's name," so that word is a claim. The other 20 names match a channel the check reads (the 11 rows the diff did not touch: 2 operand cells, 7 lines, 2 line-4 Clears; plus the 8 strengthened checks other than this name).
+
+The IRQ_STATUS read check reads the value, `irq_status`, `irq_enable`, `irq_asserted`, the announce count, and `ZCPU(0,0)`. It does not read `fiq_status` or `fiq_enable`. COVERED's new parenthetical calls that row "(value, fields, output)." In that same paragraph "fields" means the four registers.
+
+**(b)** The rest of the COVERED census matches the loops I counted: X7's check is `rv == 1 && fatal_calls == f0`; the Clear attribution matches `CY[]` (X12/X13), `W8[]` (X9's len-4 Clear of 0 and 0x70, latches clear), and X10's single latched `0x70`; `LINE[7]` is `{4,5,6,7,10,11,18}`. NOT COVERED's enable-at-len-8, narrow destination, and latched Clear of 0 are honest: `XF_len8`, `XC_dest`, and `XZ_clr0` are green in the table, n=0. The exact-value bullet's `idata == 0` example matches `XZ_clr0`. Its note that `idata != 0x20` is red matches the two prediction mismatches (`S7`, `idata_A2_ne20`), both killed by the new row, which writes `0x20`.
+
+## Q2
+
+The edit, in the IRQ_STATUS read arm, same shape as IA12:
+
+```c
+odata = d->irq_status & d->irq_enable, d->fiq_enable |= (uint32_t) d->irq_asserted;
+```
+
+`irq_asserted` is 1 only after `x14_line`, which has four call sites. Only the status-read row and the re-arm row then execute this arm. Neither reads `fiq_enable` afterward. On the re-arm row `fiq_status` is 0, so FIQ_STATUS and FIQ_RAW still return 0. Every other row has `irq_asserted == 0`, so the `|=` does not change a field those rows do check.
+
+Rows expected to stay green: all 864. Denominator: the 21 X14 rows plus the P/X1–X13 loops below, swept for an instance with `irq_asserted == 1`. I did not compile it. A confirming run is this one mutant of the frozen device against the frozen 864-row file.
+
+The "other legal accesses" sentence does not cover it: this is the access that sentence treats as rowed. The exact-value sentence does not cover it either: `irq_asserted` is a 0/1 flag this block deliberately constructs, which is why the 2^32 exclusion exists for the four registers.
+
+## Q3
+
+The accepted disposition that is wrong is R2's filing half. Not-rowing stands.
+
+The deciding rule is §C.2: predicates that dominate an edited decline, walked to the function boundary. `footbridge_interrupt_assert` and `_deassert` are other functions. Seeding `irq_status` through the real assert does not put their state space in the floor. The chain prediction is not that rule. The Opus scratch reddened PR01–PR04 and PR07 with five producer rows inside an 881-row file; that slice is a detector.
+
+`fbirqstuck` is F13: the enable arms call `INTERRUPT_ASSERT` / `INTERRUPT_DEASSERT` without updating `irq_asserted`, so a later device deassert leaves the CPU line high. PR01 (`|=` to `=`), PR03 (`if (d->irq_enable)`), and PR04 (the `~`) are the pair's bit logic. A round that closes F13 can finish without ever seeing them.
+
+"only to BUILD its instances" is false. The status-read row's `ok` requires the assert call to leave `irq_status == 0x10`, `irq_asserted == 1`, and one CPU assert. The table already shows that slice is live: PR09 is red on those four line-4 rows.
+
+| Item | | 
+|---|---|
+| R1 | UPHOLD. All nine red, counts as in Q1. |
+| R2 | REFINE. Do not row, under §C.2. File the bit-logic on its own item. Keep F13 as the stuck-high bug. |
+| R3 | UPHOLD. `+0x188`/`+0x288` share no case with a decline. `XF_len8` green. |
+| R4 | UPHOLD the disclosure. `ZCLR` is len 4; X9–X13 share one counter pair. `XC_dest` green. |
+| R5 | UPHOLD. `XZ_clr0` green. X7 reads `rv` and the announce count. |
+| R6 | UPHOLD. Frozen device: both fields are assigned only in the two producer functions. |
+| R7 | UPHOLD. P8's Clear of `0x10` leaves status `0x18` and enable `0x20`, disjoint, and checks the enable. |
+| R8 | UPHOLD. X9's all-zero Set of `0x70` is status 0, enable `0x70`. |
+| R9 | UPHOLD. F1 is red in the 864 table. `e_dir_A1_irq_status` and `e_dir_A1_irq_enable` are red; `e_dir_A1_fiq_enable` and `e_dir_A1_fiq_status` stay green. |
+| R10 | UPHOLD. X9/X10 mask an 8-byte read with `~0ULL` over a 32-bit value, so the upper word has to be 0. |
+| R11 | UPHOLD. The Clear split in Q1(b) matches the loops. |
+| R12 | UPHOLD. The verdict token is the last `printf`. The count greps search the whole log. |
+| R13 | UPHOLD. The timer block seeds `pending_timer_interrupts`; the #545 blocks did not, until X14. |
+| R14 | REFINE. W03 is still green. THE SPACE now names `irq.extra`, `pcibus`, `console_handle`, and the timer handles; the NOT COVERED colon list still does not. |
+| R15 | UPHOLD. Masking one bit that no row sets leaves the seven raised lines alone. |
+| R16 | UPHOLD as disclosed by the "other timers / beyond X14's cells" head. TD06 is `timer_control[0]` at len 1, which no X14 read uses. |
+| R17 | UPHOLD as pre-existing timer text. The "DISABLED timer can never hold a pending interrupt" sentence is still in the frozen file, present tense, above the #545 block. |
+| D4 | UPHOLD. The nine were green on 862 and are red on 864. |
+
+## Q4
+
+False or stale sentences in the text 3c added:
+
+- "only to BUILD its instances." The status-read row checks the assert call's status, flag, and CPU count. PR09 is red on four rows.
+- "That pair is `fbirqstuck`'s round." F13 is the stuck-high interaction. PR01, PR03, and PR04 are not that defect.
+- "passes all 862 rows" for deleting `~`. The file is 864 rows. The mechanism still holds: the only producer call is `x14_line` → `footbridge_interrupt_assert` (frozen file line 141). Nothing calls `_deassert`. I did not re-open `t_deassert.txt`.
+- "red on the 862 rows" for F1. F1 is red on the 864-row table too. The numeral is the old run.
+- The new row's name, "keeps 0x10 pending," as in Q1(a).
+
+IDENTITY, from the loops:
+
+- Timer block: 32 `check`/`check_u` calls (A1–A3, B1–B3, C1, D1–D3, E1–E4, F1, G1, H1–H2, and 14 TIMER_CLEAR rows). Self-check restores `rows` and is not one of them.
+- P: 78. P0 is 5; the five-site loop is 13 per write site and 14 for the one read site (66); P6 is 1; P7 is 2; P8 is 2; P9 is 2.
+- X1–X5: 12 + 11 + 3 + 10 + 2 = 38.
+- X6: 64 + 48 + 24 + 64 + 48 = 248 (widths 4, 3, 3, 4, 3; writes ×2 data; read ×1; ×4 states ×2 occurrences).
+- X7: 4 × 37 = 148. X8: 6.
+- X1–X8: 38 + 248 + 148 + 6 = 440.
+- X9: 4 × 25 = 100. X10: 4 × 18 = 72. X11: 4 × 20 = 80. X12: 20. X13: 20.
+- X14: 2 operand + 7 lines + 2 reads + 2 Set/Clear + 2 declines + 2 new + 1 status read + 2 Clears + 1 re-arm = 21.
+- IDENTITY: 1.
+- 32 + 1 + 78 + 440 + 313 = 864. The 313 is 100 + 72 + 80 + 20 + 20 + 21. The +2 from 862 is the two new Clear rows inside `for (tk = 0; tk < 2; tk++)`.
+
+Gate pins match those counts: P 78, X[1-8] 440, X6 248, X7 148, X8 6, X9 100, X10 72, X11 80, X12 20, X13 20, X14 21.
+
+Premises I re-derived from the frozen device and the live ARM/ISA/PCI sources: the five arms are decline-and-latch and do not write `irq_status`; `fiq_status` has no writer; the producer pair are the only writers of `irq_status` and `irq_asserted`; `addr &= ~(datalen - 1)` then one `memory_rw`, and `memory_rw` passes that `len` to the device unless the access crosses a page or the device end; DEVINIT sets `pending_bound = 1`, `timer_control = TIMER_MODE_PERIODIC`, `timer_load = TIMER_MAX_VAL`, and leaves `timer_value` 0. The seven lines are the four timer connects (4–7), cats ISA via `irq_path_isa` `…10` (and `ali_m5229`'s `…10.isa`), netwinder ISA via `…11`, and cats `dec21143` at 18. `s3_virge` and `igsfb` connect no interrupt.
+
+## Q5
+
+R2, unnamed:
+
+- Row the five-row slice the scratch already measured (two lines up, then down one at a time; the commented NetBSD condition; a raise of a line that is not enabled). That does not take on assert/deassert × lines × enable × history.
+- File PR01, PR03, and PR04 as their own item, and leave `fbirqstuck` as F13.
+- If the worry is a half-claim, say in the contract that the single raise from a zero status is checked, which is what PR09 already demonstrates.
+
+R4, unnamed:
+
+- One len-1 Clear on the X14 split counters, one state. X12 already visits len 1 and 2, on a shared pair, so it cannot see the destination. One split-counter row catches `len < 4 ? timer_irq[0] : irq` without a width × data × state matrix.
+- Give X12/X13 the same CPU-versus-timer counters. That changes the shared-pair contract those blocks state.
+
+## Else
+
+The two table mismatches are the predictions, and the correction note matches the code: the new row is the only Clear of `0x20`, so `idata != 0x20` at that arm is red by the value the row happens to write. `XZ_clr0` staying green is why the replacement example holds.
+
+Seat: Grok 4.7. Read the frozen `diff_footbridge.c` (X14, the contract, P/X loops, timer rows), frozen `dev_footbridge.c` (the five arms, the producer, DEVINIT), frozen `gate_offline.sh` (the count checks), the live ARM load/store alignment, `memory_rw.c`'s device call, `bus_isa.c`, `bus_pci.c`, and the cats/netwinder machine files. Read `SUMMARY.txt`, `PRETABLE_Q2d.out`, `PRETABLE_Q2d.corrections`, `PREDICTIONS.tsv`, and `TABLE.txt`. Did not run the detector, the gate, or the mutant; a hash compare of frozen against `GXEMUL-SEC/` was denied by the shell policy.

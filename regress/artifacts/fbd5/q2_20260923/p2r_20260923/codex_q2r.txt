@@ -1,0 +1,97 @@
+VERDICT: The 491 rows catch seven of the nine non-equivalent supplied variants, but leave legal-access coverage gaps and do not establish the claimed closure.
+
+**TASK 1**
+
+Counts are derived by inspection. For composite X6/X9 assertions, the printed mismatch is `got 0, want 1`; the underlying difference is also identified below.
+
+| Variant | First failing row, exactly, and difference | Complete failure set / surviving behavior |
+|---|---|---|
+| V1 | `P7 IRQ_STATUS read after the declines (0x10)` — returns **0**, expected **16**. | **1/491 fails.** The raw-status warning flag has already been set. |
+| V2 | `X2 legal len 1 read of IRQ_RAW_STATUS = low lanes` — returns **0**, expected **24**. | **9/491 fail:** both X2 narrow IRQ_RAW_STATUS reads; `X2 the legal narrow reads announce nothing` (**1**, expected **0**); and X9 IRQ_RAW_STATUS reads at lengths 1 and 2 in all three states. X3’s absolute announcement count still reaches five. |
+| V3 | None. | **0/491 fail; real change.** No checked IRQ_STATUS read has enable `0x10`. With pending IRQ bit `0x10`, write `IRQ_ENABLE_SET = 0x10`, then read IRQ_STATUS: **0 instead of 0x10**. Once that reachable state is established, one read is the shortest distinguishing suffix. |
+| V4 | None. | **0/491 fail; EQUIVALENT.** When `fiq_enable` is zero, skipping `fiq_enable &= ~idata` changes nothing. This arm has no other effect. No distinguishing sequence exists. |
+| V5 | `X9 IRQ Set write 0 (all-zero, latches clear)` — composite **0**, expected **1**; deassert-call increment **0**, expected **1**. | **2/491 fail:** this row and `X9 IRQ Set write 0x70 (all-zero, latches clear)`. The latter also leaves enable **0**, expected **0x70**. |
+| V6 | `X6 write IRQ_STATUS len 1 data 0 all-zero first: declined, fields/irq kept, once` — composite **0**, expected **1**; announcement increment **0**, expected **1**. | **30/491 fail:** six first-access X6 IRQ_STATUS/all-zero cells; `X7 IRQ Set write 0x70 (all-zero) re-arms NO latch` (**1**, expected **0**); 22 all-zero X9 rows—all except IRQ Set write `0x70`; and `X9 IRQ Clear write 0x70 (seeded, latches clear)`. Those 23 X9 rows finish with **4** announcements instead of **5**. |
+| V7 | `X1 read IRQ_ENABLE_CLEAR: len 1 as the FIRST access announces once` — **0**, expected **1**. | **8/491 fail:** both narrow X1 IRQ_ENABLE_CLEAR announcement rows, plus its six first-access X6 cells at lengths 1 and 2 across all three states. Returned zero remains correct. |
+| V8 | `X8 wide IRQ_STATUS read = 0x00010010 (all 32 bits)` — **16**, expected **65552**. | **2/491 fail:** that row and `X9 legal len 4 read of IRQ_STATUS (wide, latches clear)`. |
+| V9 | None. | **0/491 fail; real change.** A reset-based readback witness is: write IRQ_ENABLE_SET `0x100`; write IRQ_ENABLE_CLEAR `0x100`; read IRQ_ENABLE_SET—**0x100 instead of 0**. From a reachable state with bit `0x100` already enabled and pending, the single Clear write also distinguishes the interrupt output: assert instead of deassert. |
+| V10 | `X9 IRQ Clear write 0 (seeded, latches clear)` — composite **0**, expected **1**; assert/deassert increments **0/1**, expected **1/0**. | **3/491 fail:** seeded Clear writes `0` and `0x70`, and wide Clear write `0`. Wide Clear write `0x70` still asserts under both predicates. |
+
+V9 survives because every tested legal Clear datum fits within `0xff`; widening the *initial enable* does not exercise a wide *clear mask*.
+
+**TASK 2**
+
+The denominator needs an explicit distinction: a row catching `&& field` does not establish coverage of every single condition on that field. V3 demonstrates that distinction directly.
+
+Here I count existing runtime Boolean predicates paired with scalar device fields, allowing pure single-field conditions, including comparisons with constants. Warning flags have the code-established domain `{0,1}`. Register fields use the handler/harness state domain, including the synthetic FIQ states.
+
+The predicates encountered up to the function boundary are:
+
+- Entry write-data decision, `writeflag == MEM_WRITE`, line 514.
+- Timer-range decision, `relative_addr >= TIMER_1_LOAD && relative_addr <= TIMER_4_CLEAR`, line 517.
+- The selected switch case, then that case’s direction and latch decisions, listed below.
+
+The two prologue **decision evaluations** dominate the decline sites; neither particular outgoing edge encloses all five sites. The common readback decision at line 777 follows the declines and therefore does not dominate them. The interrupt-output decision at line 613 belongs exclusively to the legal branch and also does not dominate the decline.
+
+| Site: case / direction / latch lines | Direction predicate | Scalar fields read under either branch |
+|---|---|---|
+| IRQ_STATUS: 570 / 571 / 573 | `writeflag == MEM_READ` | `irq_status`, `irq_enable`, `warned_irq_status_w` |
+| IRQ_RAW_STATUS: 583 / 584 / 586 | `writeflag == MEM_READ` | `irq_status`, `warned_irq_raw_w` |
+| IRQ_ENABLE_CLEAR: 610 / 611 / 617 | `writeflag == MEM_WRITE` | `irq_enable`, `irq_status`, `warned_irq_clear_r` |
+| FIQ_STATUS: 628 / 629 / 631 | `writeflag == MEM_READ` | `fiq_status`, `fiq_enable`, `warned_fiq_status_w` |
+| FIQ_RAW_STATUS: 639 / 640 / 642 | `writeflag == MEM_READ` | `fiq_status`, `warned_fiq_raw_w` |
+
+Each latch predicate is `!` its listed warning field. The compound assignment reads `irq_enable`; the nested output predicate reads `irq_status`. IRQ_ENABLE_CLEAR also supplies `d->irq` to the interrupt macros. I keep those macros opaque rather than inventing additional callback-field reads from unavailable definitions.
+
+There are **13 site/field incidences**, producing **26 direction/latch pairs**. Each common prologue predicate can additionally depend on any of the **nine distinct scalar fields**, adding 18 pairs: **44 enumerated pairs**. Case labels are included in the dominance inventory, but a runtime field conjunct cannot be appended to a C constant case label; changing the switch expression or adding a new case-body guard would define another mutation family.
+
+Under the unrestricted single-field-condition interpretation, **13 covered of 44 enumerated**:
+
+| Covered pairs | Count | Rows that pin them |
+|---|---:|---|
+| Entry write-data predicate × each warning flag | 5 | `X9 IRQ Set write 0x70 (seeded, latches clear)` detects suppressing decoding with flags clear; `P8 legal EnableClear write: 0x30 & ~0x10` detects suppressing it with flags set. |
+| IRQ_STATUS direction × `warned_irq_status_w` | 1 | `P0 IRQ_STATUS read = irq_status & irq_enable (0x10)` and `P7 IRQ_STATUS read after the declines (0x10)`. |
+| IRQ_ENABLE_CLEAR direction × `warned_irq_clear_r` | 1 | `X5 a legal ZERO EnableClear write announces nothing` and `P8 legal EnableClear write: 0x30 & ~0x10`. |
+| FIQ_RAW_STATUS direction × `warned_fiq_raw_w` | 1 | `P0 FIQ_RAW_STATUS read = fiq_status (0x60)` and `P7 FIQ_RAW_STATUS read after the declines (0x60)`. |
+| Each site’s latch predicate × its own warning flag | 5 | Its P1–P5 rows ending `: announced exactly once` and `: #2 announced nothing more (latched)`. |
+
+The five exact P-row prefixes in the last entry are `P1 write IRQ_STATUS`, `P2 write IRQ_RAW_STATUS`, `P3 read IRQ_ENABLE_CLEAR`, `P4 write FIQ_STATUS`, and `P5 write FIQ_RAW_STATUS`.
+
+The **31 uncovered pairs** are:
+
+- **16 local register-field pairs:** both direction and latch predicates paired with every non-warning field in the site table. Zero/nonzero cases have witnesses, but arbitrary constant conditions do not. V3 is one concrete survivor.
+- **4 entry-decoding/register-field pairs:** the entry predicate paired with `irq_status`, `irq_enable`, `fiq_status`, or `fiq_enable`. Again, the fixtures do not exhaust their values.
+- **9 timer-range/field pairs:** all nine fields. `0x32C decrements timer index 1` catches suppressing folding when a field is zero. No row catches suppressing it when these fields are nonzero/set: the later timer read is TIMER_1_VALUE, whose address needs no index folding.
+- **IRQ_RAW_STATUS direction × `warned_irq_raw_w`: none.**
+- **FIQ_STATUS direction × `warned_fiq_status_w`: none.**
+
+For the last two, adding `&& !<own warning flag>` survives: after the decline, the legal read returns zero, but X7 never examines its value. The FIQ_STATUS example concerns the harness’s synthetic nonzero FIQ state; the frozen product has no writer of `fiq_status`.
+
+For the narrower **zero/nonzero condition family**, the count is **33 covered of 44**, comprising **24/26 local pairs** and **9/18 prologue pairs**. This narrower count must not be presented as exhaustive coverage of the supplied V3-style conditions.
+
+**TASK 3**
+
+Two prose claims need correction:
+
+- [diff_footbridge.c:841](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/diff_footbridge.c:841):  
+  > “X9 (below X8) is the other half of the legal side: every legal access with the latches still CLEAR.”
+
+  The [X9 header at line 965](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/diff_footbridge.c:965) repeats:
+  > “EVERY LEGAL ACCESS WITH THE LATCHES STILL CLEAR, from each state.”
+
+  X9 tests writes only at length 4. It omits byte/halfword enable writes and four read addresses present in X7: FIQ_ENABLE_SET, FIQ_ENABLE_CLEAR, VENDOR_ID, and TIMER_1_VALUE.
+
+- [diff_footbridge.c:849](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/diff_footbridge.c:849):  
+  > “The DEPENDS-ON bound these rows use: the predicates dominating each edited decline (case label, direction test, latch), and the lvalues read by BOTH branches under the direction test -- the four interrupt fields and the five latches.”
+
+  As a CFG-dominance enumeration, this omits the entry data-fetch and timer-range decisions. The nine scalar fields are the **union across the five sites**, not the read set of each site.
+
+The three-state fixture description itself accurately describes the constructed inputs. It does not establish complete legal semantics with flags set: X7 asserts only the subsequent announcement count.
+
+**TASK 4**
+
+Does the gate verify the expected row identities, or merely their number?
+
+At [gate_offline.sh:604](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/gate_offline.sh:604), it counts distinct successful names. Replacing a required scenario with another passing assertion under a different unique name could preserve those counts. The current pins do match the loops: X6 **162**, X7 **105**, X9 **69**, total **491**.
+
+Read only the frozen [device](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/dev_footbridge.c), [current harness](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/diff_footbridge.c), [prerepair harness](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/diff_footbridge.prerepair.c), and [gate](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2r/frozen/gate_offline.sh); all four MD5 prefixes matched. No edits, builds, or test execution.

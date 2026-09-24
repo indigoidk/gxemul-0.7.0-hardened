@@ -1,0 +1,127 @@
+VERDICT: FAIL — a one-character change escapes all 862 rows; all 19 X14 rows can fail, and the row-count arithmetic is correct.
+
+TASK 1. The following are independent, hypothetical one-line replacements in `dev_footbridge.c`. None was applied or executed. Test locations refer to the [X14 block](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/diff_footbridge.c:1330); replacement locations refer to the [register cases](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/dev_footbridge.c:570).
+
+Every X14 row checks the relevant access return values. Rows checking Clear’s interrupt drive also require the timer-interrupt counters to remain unchanged.
+
+| X14 row, in execution order | Device behaviour checked | Device line → replacement that makes it fail |
+|---|---|---|
+| 1. Disjoint `0x18/0x30`, Clear `0x10` | Enable becomes `0x20`; CPU deasserts once; no report. | 613 → `if (d->irq_status && d->irq_enable)` |
+| 2. No status, Clear `0x10` | Enable becomes `0x20`; CPU deasserts despite nonzero enable; no report. | 613 → `if (d->irq_enable)` |
+| 3. Only line 4 enabled/pending | Clear zero preserves enable and asserts CPU once. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 4))` |
+| 4. Only line 5 enabled/pending | Same behaviour for line 5. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 5))` |
+| 5. Only line 6 enabled/pending | Same behaviour for line 6. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 6))` |
+| 6. Only line 7 enabled/pending | Same behaviour for line 7. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 7))` |
+| 7. Only line 10 enabled/pending | Same behaviour for line 10. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 10))` |
+| 8. Only line 11 enabled/pending | Same behaviour for line 11. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 11))` |
+| 9. Only line 18 enabled/pending | Same behaviour for line 18. | 613 → `if (d->irq_status & d->irq_enable & ~(1u << 18))` |
+| 10. DEVINIT timer seeds: reads | Five legal reads return `0x10, 0x18, 0x40, 0x60, 0x30`, without reports. | 571 → `if (writeflag == MEM_READ && !d->timer_control[0])` |
+| 11. DEVINIT timer seeds: Set/Clear | Set `0x40`, then Clear `0x10`, leaves enable `0x60`, without reports. | 611 → `if (writeflag == MEM_WRITE && !d->timer_control[0]) {` |
+| 12. DEVINIT timer seeds: declines | Five declines report five times, return zero for the declined read, and preserve the four interrupt fields. | 573 → `else if (!d->warned_irq_status_w && !d->timer_control[0]) {` |
+| 13. DEVINIT seeds plus pending tick: reads | Same five read values and no reports with timer 0 pending count equal to 1. | 571 → `if (writeflag == MEM_READ && !d->pending_timer_interrupts[0])` |
+| 14. DEVINIT seeds plus pending tick: Set/Clear | Same enable result `0x60`, without reports, with a pending tick. | 611 → `if (writeflag == MEM_WRITE && !d->pending_timer_interrupts[0]) {` |
+| 15. DEVINIT seeds plus pending tick: declines | Same five reports, zero declined-read value, and field preservation with a pending tick. | 573 → `else if (!d->warned_irq_status_w && !d->pending_timer_interrupts[0]) {` |
+| 16. Real line-4 assertion: status read | Producer sets status `0x10`, sets `irq_asserted`, and asserts CPU once; subsequent status read returns `0x10` silently. | 571 → `if (writeflag == MEM_READ && !d->irq_asserted)` |
+| 17. Real line-4 assertion: Clear `0x10` | Enable becomes zero and CPU deasserts once, without reports. | 611 → `if (writeflag == MEM_WRITE && !d->irq_asserted) {` |
+| 18. Real line-4 assertion: Clear `0x400` | Enable remains `0x10` and CPU asserts once, without reports. | 613 → `if ((d->irq_status & d->irq_enable) && !d->irq_asserted)` |
+| 19. Real assertion: decline/read/Clear/re-decline sequence | First five declines report five times; intervening legal accesses preserve the latches; repeated declines add no reports. | 612 → `d->irq_enable &= ~idata; if (d->irq_asserted) d->warned_irq_status_w = 0;` |
+
+**No X14 row has an immutable passing result.** Every row can fail through device behaviour.
+
+Their observations nevertheless differ: rows 11/14 do not check interrupt calls; row 19 does not check legal-read values or interrupt-field preservation. “DEVINIT seeds” means values installed by `x14_new()`, not execution of DEVINIT itself.
+
+TASK 2. Delete the single `~` at [device line 407](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/dev_footbridge.c:407), inside `footbridge_interrupt_deassert()`:
+
+```c
+d->irq_status &= interrupt->line;
+```
+
+The original is:
+
+```c
+d->irq_status &= ~interrupt->line;
+```
+
+With line 4 pending, deasserting line 4 should change status from `0x10` to zero. The changed line leaves it at `0x10`. A guest subsequently reads incorrect values from both `IRQ_RAW_STATUS` and, with that bit enabled, `IRQ_STATUS`.
+
+This is a minimum nonempty textual edit: **one character deleted**.
+
+I checked the executed paths represented by every group:
+
+| Rows checked | Why the change is invisible |
+|---|---|
+| 32 timer rows | Timer interrupt callbacks are counting stubs installed by `arm_irqs()`. |
+| P0–P9 and X1–X13: 810 rows | CPU and timer callbacks are counting stubs; none calls the real deassert function. |
+| X14: 19 rows | `x14_line()` calls real **assert** only. CPU deassert callbacks still point to the counter stub. |
+| IDENTITY: 1 row | Neither executed row count nor observed results change. |
+
+The harness contains **zero calls to `footbridge_interrupt_deassert()`**, and never installs it as a callback. Consequently, this edit leaves every row’s execution unchanged. This is a static conclusion, not a claim of an executed mutation test.
+
+The contract does not exclude this status-clearing operation. Its interrupt-**level** exclusion does not cover the demonstrated register-readback error; its other exclusions concern different operations or conditional inputs.
+
+TASK 3. **All supplied count pins are correct.**
+
+| Block | Row-producing arithmetic | Rows |
+|---|---:|---:|
+| Original timer tests | A 3 + B 3 + C 1 + D 3 + E 4 + F 1 + G 1 + H 2 + timer-Clear tests 14 | 32 |
+| P | P0 5 + decline loop `(5×13 + 1 declined-read check)` + P6 1 + P7 2 + P8 2 + P9 2 | 78 |
+| X1 | 2 widths × `(5 announcement checks + 1 declined-read check)` | 12 |
+| X2 | 2 widths × 5 reads + 1 report-count check | 11 |
+| X3 | Three checks following access batches | 3 |
+| X4 | 5 sites × 2 checks | 10 |
+| X5 | Two direct checks | 2 |
+| X6 | 4 states × 2 occurrences × `(8 + 6 + 3 + 8 + 6)` site/width/data combinations | 248 |
+| X7 | 4 states × `(8 writes + 9×3 reads + 2 eight-byte reads)` | 148 |
+| X8 | 5 read values + 1 report-count check | 6 |
+| X9 | 4 states × `(5×3 reads + 2 eight-byte reads + 8 writes)` | 100 |
+| X10 | 4 states × `(2×4 + 3×3 read widths + 1 write)` | 72 |
+| X11 | 4 states × 5 first sites × 4 different second sites | 80 |
+| X12 | 4 states × 5 Clear writes | 20 |
+| X13 | 4 states × 5 Clear writes | 20 |
+| X14 | 2 operand cases + 7 lines + 2×3 timer-state checks + 1 producer/read + 2 Clears + 1 latch sequence | 19 |
+| IDENTITY | One check | 1 |
+
+Thus:
+
+```text
+X1–X8 = 12 + 11 + 3 + 10 + 2 + 248 + 148 + 6 = 440
+
+Total = 32 + 78 + 440 + 100 + 72 + 80 + 20 + 20 + 19 + 1
+      = 862
+```
+
+Comparison with the frozen 707-row file confirms:
+
+```text
+X6:  216 → 248   +32
+X7:  140 → 148    +8
+X9:   92 → 100    +8
+X10:  64 → 72     +8
+X11:  20 → 80    +60
+X13:   0 → 20    +20
+X14:   0 → 19    +19
+
+707 + 32 + 8 + 8 + 8 + 60 + 20 + 19 = 862
+```
+
+The helper loops and nested decline/access loops add no separate rows. Each 20,000-tick loop produces one subsequent check; the 400-iteration child setup produces no rows itself. The two SELFCHECK probe rows are explicitly removed from the counters.
+
+TASK 4. These comments contain false claims about the current code:
+
+- **Test line 1325:** “irq_asserted was never 1: its only writer is footbridge_interrupt_assert(), which no block called.” The **only-writer** claim is false: deassert writes `irq_asserted = 0` at device line 410. The corresponding only-writer claims about `irq_status` at test lines 114 and 892 are also false because of device line 407.
+
+- **Test lines 1317–1320:** “never with both operands nonzero and DISJOINT”. P8 already performs Clear `0x10` with status `0x18` and enable `0x30`, producing disjoint operands `0x18` and `0x20`. This exists in the 707-row file too. P8 lacked an interrupt-drive assertion; the input combination was already exercised.
+
+- **Test lines 943–944:** “X9 rows it only where (irq_status & the new enable) is nonzero or both operands are zero”. X9’s all-zero-state IRQ Set `0x70` has status zero and new enable `0x70`. The accompanying conclusion that `&&` survives remains correct, but that description of its operands is false.
+
+- **Test lines 952–953:** “`&& !timer_control[0]` passes every row here; the guest sites probe catches it only because its prologue arms timer 1”. X14 now seeds nonzero `TIMER_MODE_PERIODIC`. Adding that condition to a decline guard suppresses a required report and fails both DEVINIT decline rows.
+
+- **Test lines 461–463:** “fbclearread: `case TIMER_1_CLEAR:` carries NO writeflag test, while the case immediately above it (TIMER_1_CONTROL) does.” The current device has `if (writeflag == MEM_WRITE)` at line 719.
+
+- **Test lines 541–543 and gate lines 665–667:** “a DISABLED timer can never hold a pending interrupt”. `footbridge_pending()` increments without checking enable, and disabling the timer does not remove its registered callback. A disabled timer can accumulate pending ticks.
+
+- **Test lines 201–202:** “EVERY REAL ROW IN THIS FILE COMPARES NUMBERS.” E2 compares `"positive"`, E3 `"serviceable"`, and F1/G1 `"survived"`.
+
+Files read: the supplied frozen [device](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/dev_footbridge.c), [862-row test](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/diff_footbridge.c), [707-row test](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/diff_footbridge.707.c), and [gate script](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2e/frozen/gate_offline.sh). Both supplied MD5 prefixes matched.
+
+Ran: read-only PowerShell metadata/content/hash commands, `rg`, and in-memory `python -B` scripts for source comparison, reference checks, and arithmetic. No edits, builds, gate runs, test binaries, or mutants were executed.

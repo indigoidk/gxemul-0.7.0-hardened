@@ -1,0 +1,265 @@
+--- a/regress/footbridge_sites_probe.py
++++ b/regress/footbridge_sites_probe.py
+@@ -157,9 +205,54 @@
+     (0x24, 0xE5802300, "str r2,[r0,#768]",      "A2: TIMER_1_LOAD <- 0x12345678"),
+     (0x28, 0xE5901300, "ldr r1,[r0,#768]",      "A2: read it back"),
+ ]
+-KILL_NOP  = (0x2c, NOP,        NOPTXT,             "arm L: no kill site")
+-KILL_LOAD = (0x2c, 0xE590718C, "ldr r7,[r0,#396]", "arm K: read IRQ_ENABLE_CLEAR (0x18c)")
++KILL_NOP  = (0x2c, NOP,        NOPTXT,             "arm L: no kill site (the +0x18c kill retired by #545)")
+ TAIL = [(0x30, NOP, NOPTXT, "landing pad -- planted, never stepped")]
++REG = dict(r0=0, r1=1, r2=2, r3=3, r4=4, r5=5, r6=6, r7=7, r8=8, r9=9, sl=10, fp=11, ip=12, sp=13, lr=14)
++def _mov(rd, imm):                          # imm < 256, rotate 0
++    return 0xE3A00000 | (REG[rd] << 12) | imm, "mov %s,#0x%x" % (rd, imm)
++def _ldr(rd, off):
++    return 0xE5900000 | (REG[rd] << 12) | off, "ldr %s,[r0,#%d]" % (rd, off)
++def _str(rd, off):
++    return 0xE5800000 | (REG[rd] << 12) | off, "str %s,[r0,#%d]" % (rd, off)
++def _w(off, wt, comment):
++    return (off, wt[0], wt[1], comment)
++#  #545: arm S -- the five declined sites, twice each, one legal sibling read between, one process.
++SITES = [
++    _w(0x2c, _mov("r8", 0x30),  "IRQ enable <- 0x30 (bits 4,5)"),
++    _w(0x30, _str("r8", 0x188), ""),
++    _w(0x34, _mov("r9", 0xc0),  "FIQ enable <- 0xc0 (bits 6,7)"),
++    _w(0x38, _str("r9", 0x288), ""),
++    _w(0x3c, _mov("r2", 0x10),  "the IRQ decline value, inside 0x30"),
++    _w(0x40, _str("r2", 0x180), "N1: write IRQ_STATUS (read-only) #1"),
++    _w(0x44, _ldr("r7", 0x184), "S2: legal IRQ_RAW_STATUS read between -> 0"),
++    _w(0x48, _str("r2", 0x180), "N1: write IRQ_STATUS #2 -- must NOT announce again"),
++    _w(0x4c, _str("r2", 0x184), "N2: write IRQ_RAW_STATUS (read-only) #1"),
++    _w(0x50, _ldr("sl", 0x180), "S1: legal IRQ_STATUS read between -> 0 (0 & 0x30)"),
++    _w(0x54, _str("r2", 0x184), "N2: write IRQ_RAW_STATUS #2"),
++    _w(0x58, _ldr("r9", 0x18c), "N3: read IRQ_ENABLE_CLEAR (write-only) #1 -> 0"),
++    _w(0x5c, _ldr("fp", 0x188), "S3: legal IRQEnable read between -> 0x30 (intact)"),
++    _w(0x60, _ldr("r8", 0x18c), "N3: read IRQ_ENABLE_CLEAR #2 -> 0"),
++    _w(0x64, _mov("ip", 0x40),  "the FIQ decline value, inside 0xc0"),
++    _w(0x68, _str("ip", 0x280), "N4: write FIQ_STATUS (read-only) #1"),
++    _w(0x6c, _ldr("r2", 0x280), "S4: legal FIQ_STATUS read between -> 0 (0 & 0xc0)"),
++    _w(0x70, _str("ip", 0x280), "N4: write FIQ_STATUS #2"),
++    _w(0x74, _str("ip", 0x284), "N5: write FIQ_RAW_STATUS (read-only) #1"),
++    _w(0x78, _ldr("lr", 0x284), "S5: legal FIQ_RAW_STATUS read between -> 0"),
++    _w(0x7c, _str("ip", 0x284), "N5: write FIQ_RAW_STATUS #2"),
++    _w(0x80, _ldr("r1", 0x184), "SF1: FINAL raw IRQ status after every decline -> 0"),
++    _w(0x84, _ldr("sp", 0x284), "SF2: FINAL raw FIQ status after every decline -> 0"),
++    (0x88, NOP, NOPTXT, "landing pad -- planted, never stepped"),
++]
++#  #545: the five announce texts, one per site, in the device's own spelling.  ACCESS-LOCAL: each N row
++#  counts ITS text, so a misnamed register reds the row for the site that misnamed it.
++TEXTS = {
++    "N1": "footbridge write to irq status? (once)",
++    "N2": "footbridge write to irq_raw_status (once)",
++    "N3": "footbridge read from ENABLE CLEAR? (once)",
++    "N4": "footbridge write to fiq status? (once)",
++    "N5": "footbridge write to fiq_raw_status (once)",
++}
++H1_NAME = "no-such-machine-fbd5"      # the unknown -E name for leg H1; the diagnostic must name it
+ P, Q = 0x00002002, 0x60000000           # #539 arm E values; loaded from DATA+8 / DATA+12
+ ENABLE = [                              # #539: the ACCEPT rows, order E0,E1,E2,E3,E6,E5
+     (0x2c, 0xE5907188, "ldr r7,[r0,#392]",   "E0: read IRQ_ENABLE_SET before any write"),
+@@ -176,14 +269,17 @@
+     (0x58, 0xE590C188, "ldr ip,[r0,#392]",   "E5: read back -> Q"),
+     (0x5c, NOP, NOPTXT, "landing pad -- planted, never stepped"),
+ ]
+-REGNAME = {10: "sl", 11: "fp", 12: "ip"}   # the emulator's spellings (cpu_arm.h ARM_REG_NAMES)
++REGNAME = {10: "sl", 11: "fp", 12: "ip", 13: "sp", 14: "lr"}   # the emulator's spellings (cpu_arm.h ARM_REG_NAMES)
+ 
+ 
+-def run_arm(label, prog):
+-    """Plant `prog`, step it one instruction at a time, report registers and liveness."""
++def run_arm(label, prog, emul="cats", quit_leg=False):
++    """Plant `prog`, step it one instruction at a time, report registers and liveness.
++    #545: `emul` is the -E name (leg H1 passes an unknown one and expects NO prompt); `quit_leg`
++    runs leg H2 after the register read -- quit, then one more ordinary interaction, observed
++    BEFORE teardown."""
+     pid, fd = pty.fork()
+     if pid == 0:
+-        os.execvp(BIN, [BIN, "-V", "-T", "-E", "cats", "-M", "32",
++        os.execvp(BIN, [BIN, "-V", "-T", "-E", emul, "-M", "32",
+                         "0x%x:%s" % (CODE, STUB)])
+         os._exit(127)
+     buf = ""
+@@ -232,9 +328,10 @@
+         except OSError:
+             dead[0] = True
+             return False
+-        return wait(mark=_mark, echo=x if x else None)
++        return wait(mark=_mark, echo=x if x else None, timeout=timeout)
+ 
+     status, regs, badis = "?", {}, []
++    h2 = {}                        # #545 leg H2 observations, all taken BEFORE teardown
+     #  KEYWORD, and this is not style.  A positional wait(120) silently becomes mark=120 under
+     #  the pinned parameter order -- a real behaviour change, and the exact mistake the
+     #  m8820x probe's conversion had to fix in the same commit.
+@@ -265,13 +362,25 @@
+         if status == "SURVIVED":
+             mark = len(buf)
+             if send("reg", timeout=30) and not dead[0]:
+-                for n in (0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12):
++                for n in (0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
+                     mm = re.search(r"\b%s\s*=\s*0x([0-9a-fA-F]+)"
+                                    % REGNAME.get(n, "r%d" % n), buf[mark:])
+                     if mm:
+                         regs[n] = int(mm.group(1), 16)
+             else:
+                 status = "HOST-DIED" if dead[0] else "NO-REG"
++        if status == "SURVIVED" and quit_leg:
++            #  #545 leg H2.  The prologue is VERIFIED from the fresh `reg` above (values, not the fact
++            #  that steps were issued), then `quit`, then ONE MORE ordinary interaction.  `dead` is
++            #  read here, before any teardown, and the reap below must say exit 0.  Do not
++            #  short-circuit the second send because `dead` is already set: the observation IS that
++            #  send() reports the death.
++            h2["prologue_ok"] = (len(badis) == 0 and 3 in regs and (regs[3] & 1) == 0
++                                 and regs.get(5) == 0x11223344 and regs.get(6) == 0x1011
++                                 and regs.get(1) == 0x00345678)
++            h2["quit_rc"] = send("quit", timeout=10)
++            h2["next_rc"] = send("reg", timeout=10)
++            h2["dead_before_close"] = dead[0]
+     #  #539 (pass 2): the SAME teardown as the two pending probes -- quit, DRAIN to EOF (bounded), close
+     #  the master, then a BOUNDED reap (poll 10 s, kill, wait).  The old sleep-0.3-then-close could SIGHUP a
+     #  child still shutting down and then block forever in waitpid; and fatals are collected AFTER the
+@@ -323,8 +432,11 @@
+     print("  arm %-36s %-9s exit=%-5s signal=%s" % (label, status, code, sig))
+     for b in badis:
+         print("      DISASSEMBLY MISMATCH: %s" % b)
++    #  #545 leg H1: the startup-rejection diagnostic must name THIS run's -E input (machine.c:240).
++    reject = ('Sorry, emulation "%s" is unknown' % emul) in buf
+     return {"status": status, "regs": regs, "exit": code, "signal": sig,
+-            "fatals": fatals, "badis": badis}
++            "fatals": fatals, "badis": badis, "reject": reject, "h2": h2,
++            "prompt": "GXemul>" in buf}
+ 
+ 
+ def hexs(v):
+@@ -344,8 +456,10 @@
+ 
+ L = run_arm("L  live      (MMU off)",      MMU_OFF + BODY + [KILL_NOP] + TAIL)
+ T = run_arm("T  trap ctrl (MMU LEFT ON)",  MMU_NOP + BODY + [KILL_NOP] + TAIL)
+-K = run_arm("K  kill      (MMU off,+18c)", MMU_OFF + BODY + [KILL_LOAD] + TAIL)
+ E = run_arm("E  enable    (MMU off,#539)", MMU_OFF + BODY + ENABLE)
++S = run_arm("S  declines  (MMU off,#545)", MMU_OFF + BODY + SITES)
++QL = run_arm("Q  quit leg  (MMU off,#545)", MMU_OFF + BODY + [KILL_NOP] + TAIL, quit_leg=True)   # not `Q`: that is arm E's constant
++H = run_arm("H  startup reject (-E %s)" % H1_NAME, [], emul=H1_NAME)
+ print()
+ 
+ results = []
+@@ -362,7 +476,8 @@
+ #  is never acceptable is arm T producing the device's answer, because then arm L's 0x1011 is
+ #  not evidence of anything.  ***
+ t_vendor = T["regs"].get(6)
+-c4 = t_vendor != 0x1011
++#  #545: the key must be PRESENT -- `None != 0x1011` is True, so a register-parse miss used to green this row.
++c4 = 6 in T["regs"] and t_vendor != 0x1011
+ print("%-4s %-40s got=%-12s want=%-12s %s"
+       % ("C4", "MMU-on arm CANNOT see the device", hexs(t_vendor), "!= 0x1011",
+          "ok" if c4 else "FAIL"))
+@@ -372,6 +487,12 @@
+     print("      *** cats translation table changed (machine_cats.c:131, cpu_arm.c:239-255)")
+     print("      *** or the device moved into the low 256 MB.  Re-derive before believing A1/A2.")
+ results.append(c4)
++#  #545: arm T's exit status was recorded and never required; a control arm that died is not a control.
++c5 = T["status"] == "SURVIVED" and T["exit"] == 0
++print("%-4s %-40s %-30s %s"
++      % ("C5", "MMU-on arm SURVIVES, exit 0", "status=%s exit=%s" % (T["status"], T["exit"]),
++         "ok" if c5 else "FAIL"))
++results.append(c5)
+ 
+ #  ---- the reachability rows.  VALUES, not survival. ----
+ a1 = row("A1", "VENDOR_ID through a real guest ldr", L["regs"].get(6), 0x1011)
+@@ -397,18 +518,68 @@
+ results.append(row("A2b", "the value the guest actually stored",
+                    L["regs"].get(2), 0x12345678))
+ 
+-#  ---- the kill pair: this probe's own failability control. ----
++#  ---- the isolation arm, and the two HARNESS LEGS (#545) that replaced the kill bridge. ----
+ l_ok = L["status"] == "SURVIVED" and L["exit"] == 0 and not L["fatals"]
+-k_ok = any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1
+ print("%-4s %-40s %-30s %s"
+       % ("I1", "isolation arm SURVIVES untouched",
+          "status=%s exit=%s" % (L["status"], L["exit"]), "ok" if l_ok else "FAIL"))
+-print("%-4s %-40s %-30s %s"
+-      % ("K1", "kill arm dies at 0x18c, exit 1",
+-         "exit=%s" % K["exit"], "ok" if k_ok else "FAIL"))
+-print("      kill arm said: %s" % ((K["fatals"] or ["(nothing)"])[-1]))
+ results.append(l_ok)
+-results.append(k_ok)
++#  H1: no prompt AND the diagnostic naming this run's input AND WIFEXITED && == 1 (a signal death has
++#  exit None).  Five different startup refusals all exit 1 with no prompt, so the TEXT clause is the one
++#  that discriminates (measured, pass 1).
++h1_ok = (H["status"] == "NO-PROMPT" and not H["prompt"] and H["reject"]
++         and H["exit"] == 1 and H["signal"] is None)
++print("%-4s %-40s %-30s %s"
++      % ("H1", "startup leg: unknown -E named, exit 1",
++         "status=%s exit=%s named=%s" % (H["status"], H["exit"], H["reject"]),
++         "ok" if h1_ok else "FAIL"))
++print("      startup leg said: %s" % ('Sorry, emulation "%s" is unknown.' % H1_NAME if H["reject"]
++                                        else "(the diagnostic did not name the input)"))
++results.append(h1_ok)
++#  H2: the fresh-reg prologue check AND exit 0 are both load-bearing -- a child dead BEFORE the prologue
++#  finished shows `next send fails` and `dead` identically (measured, pass 1).
++q2 = QL["h2"]
++h2_ok = (QL["status"] == "SURVIVED" and q2.get("prologue_ok") is True and q2.get("next_rc") is False
++         and q2.get("dead_before_close") is True and QL["exit"] == 0 and QL["signal"] is None
++         and not QL["fatals"])
++print("%-4s %-40s %-30s %s"
++      % ("H2", "quit leg: verified prologue, dead, exit 0",
++         "prologue=%s next=%s dead=%s exit=%s" % (q2.get("prologue_ok"), q2.get("next_rc"),
++                                                  q2.get("dead_before_close"), QL["exit"]),
++         "ok" if h2_ok else "FAIL"))
++results.append(h2_ok)
++
++#  ---- #545: arm S -- the five declined sites, one process. ----
++sc1 = row("SC1", "arm S liveness: plain RAM readback", S["regs"].get(5), 0x11223344)
++sa1 = row("SA1", "arm S reaches the device: VENDOR_ID", S["regs"].get(6), 0x1011)
++results += [sc1, sa1]
++results.append(row("S1", "IRQ_STATUS read (0 & 0x30) between declines", S["regs"].get(10), 0))
++results.append(row("S2", "IRQ_RAW_STATUS read between declines", S["regs"].get(7), 0))
++results.append(row("S3", "IRQEnable intact through the declines", S["regs"].get(11), 0x30))
++results.append(row("S4", "FIQ_STATUS read (0 & 0xc0) between declines", S["regs"].get(2), 0))
++results.append(row("S5", "FIQ_RAW_STATUS read between declines", S["regs"].get(14), 0))
++results.append(row("SF1", "FINAL raw IRQ status after all declines", S["regs"].get(1), 0))
++results.append(row("SF2", "FINAL raw FIQ status after all declines", S["regs"].get(13), 0))
++n3v_ok = S["regs"].get(9) == 0 and S["regs"].get(8) == 0 and 9 in S["regs"] and 8 in S["regs"]
++s_alive = S["status"] == "SURVIVED" and S["exit"] == 0 and S["signal"] is None
++n_ok = {}
++for tag in ("N1", "N2", "N3", "N4", "N5"):
++    cnt = sum(1 for f in S["fatals"] if TEXTS[tag] in f)
++    ok = s_alive and cnt == 1 and (n3v_ok if tag == "N3" else True)
++    n_ok[tag] = ok
++    print("%-4s %-40s %-30s %s"
++          % (tag, "%s announced ONCE over two accesses" % TEXTS[tag].split(" (once)")[0][11:],
++             "count=%d%s" % (cnt, " r9=%s r8=%s" % (hexs(S["regs"].get(9)), hexs(S["regs"].get(8)))
++                                if tag == "N3" else ""),
++             "ok" if ok else "FAIL"))
++    results.append(ok)
++n0_cnt = sum(1 for t in TEXTS.values() if sum(1 for f in S["fatals"] if t in f) == 1)
++n0_ok = s_alive and n0_cnt == 5 and len(S["fatals"]) == 5
++print("%-4s %-40s %-30s %s"
++      % ("N0", "five sites, one process, five distinct once",
++         "distinct-once=%d fatals=%d exit=%s" % (n0_cnt, len(S["fatals"]), S["exit"]),
++         "ok" if n0_ok else "FAIL"))
++results.append(n0_ok)
+ 
+ #  ---- #539: IRQEnable is readable.  Arm E first proves it reached the device (its own C1
+ #  and A1: E0 == 0 is ALSO what an absent device returns), then the value rows. ----
+@@ -428,7 +599,7 @@
+          "ok" if e_ok else "FAIL"))
+ results.append(e_ok)
+ 
+-nbad = sum(len(a["badis"]) for a in (L, T, K, E))
++nbad = sum(len(a["badis"]) for a in (L, T, E, S, QL))
+ print("%-4s %-40s %-30s %s"
+       % ("D1", "every planted word disassembled as meant",
+          "%d mismatches" % nbad, "ok" if nbad == 0 else "FAIL"))
+@@ -437,9 +608,9 @@
+ #  Named, not indexed.  The first version wrote `results[0] and results[1] ...`, which silently
+ #  re-points at different rows the moment a row is inserted above -- the same class as pinning a
+ #  row by an id that names a family.
+-ctrl_ok = c1 and c2 and c3 and c4 and ec1 and ea1
++ctrl_ok = c1 and c2 and c3 and c4 and c5 and ec1 and ea1 and sc1 and sa1
+ print()
+ print("ROWS=%d of %d" % (sum(1 for r in results if r), len(results)))
+ print("FOOTBRIDGE_SITES_CONTROL=%s" % ("OK" if ctrl_ok else "BAD"))
+ print("FOOTBRIDGE_SITES_%s" % ("PASS" if all(results) else "FAIL"))
+-print("PROBE_WALL=%.1fs for 4 cold-debugger arms" % (time.time() - t0))
++print("PROBE_WALL=%.1fs for 6 cold-debugger arms" % (time.time() - t0))

@@ -1,0 +1,66 @@
+PRETABLE -- #545 adjudication repair (the reset-state family, Fable 5.1 Q2), written BEFORE the repair table runs.
+THIS FILE IS NEVER AMENDED.  Corrections go to PRETABLE_Q2.corrections beside it, so this file's mtime stays an order
+proof for ALL of its text (the lesson of PRETABLE.out's F40/G19: a file amended twice proves order for no portion).
+Tree: GXEMUL-SEC HEAD f685d75 + the #545 working set: dev_footbridge.c md5 783c0c7f (UNCHANGED by this repair),
+diff_footbridge.c md5 116083d0 before this repair (333 rows, IDENTITY 333).
+Measured BEFORE this file, on the pre-repair instrument (Q2.log, 14:15): FIX 333/333 + 37/37; Q1..Q5 each 333/333 offline
+and 37/37 guest -- five TOTAL escapes, exactly as the adjudicating seat predicted by reading.  L2 (floor clause (d)):
+each mutant conjoins a body-read operand onto the DIRECTION predicate that dominates an edited decline.
+
+== SIBLING PARITY ==
+  The five decline sites vs the LEGAL direction of the same case.  Declines (X6): {seeded, all-zero} x latch {clear =
+    first, set = repeat}.  Legal accesses: latch SET only, both states (X7); latch CLEAR only in the SEEDED state (X2 len
+    1/2 reads, X8 len 4 reads at wide seeds, X5 the zero Clear write).  ASYMMETRY: LEGAL x ALL-ZERO x LATCH-CLEAR has no
+    row, and it is the reset state -- jointly reachable through the device's own data flow (DEVINIT's memset).
+    OWED: X9, every legal access with the latches CLEAR, in every state.
+  Seed width: every X6/X7 seed fits in ONE byte (0x18/0x30/0x60/0xc0); X8 widened the LEGAL READ values only, so a
+    decline or a latch clearer keyed on bits 8-31 of a field passes every row (Fable Q2's (e) cell).  OWED: a WIDE
+    state (0x80010018 / 0x00010030 / 0x40020060 / 0x000200c0, X8's seeds) as a third state of X6, X7 and X9.
+
+== CLAIM -> ROW ==
+  diff_footbridge.c X6/X7 CONTRACT: "the cells above are the whole class for these five sites" -- MEASURED FALSE (Q1..Q5).
+    Rewritten: the class is ACCESS {declined, legal} x STATE {seeded, all-zero, wide} x LATCH {clear, set}; X9 carries
+    LEGAL x LATCH-CLEAR; the DEPENDS-ON bound is stated as BOTH branches under the direction test (Fable Q1, D1).
+  new X9 header "a legal access from latch-clear announces nothing, returns its value and consumes no latch" -> every X9
+    row: announce 0 during the access, and the five declines that follow announce EXACTLY 5.
+  new X9 header "the enable writes behave as written" -> X9 write rows: the enable field as expected, the other three
+    unchanged, IRQ Set/Clear exactly one assert or one deassert by (irq_status & new enable), FIQ Set/Clear none.
+
+== GUARD FIELD vs BODY FIELD ==
+  Dominating predicates at each edited decline, up to the function boundary: the case label; the DIRECTION test
+    (`writeflag == MEM_READ` at IRQ_STATUS, IRQ_RAW_STATUS, FIQ_STATUS, FIQ_RAW_STATUS; `writeflag == MEM_WRITE` at
+    IRQ_ENABLE_CLEAR); the latch `!d->warned_*`.
+  Body-read lvalues, BOTH branches under the direction test: the read branches read irq_status/irq_enable/fiq_status/
+    fiq_enable; the Clear write branch reads and writes irq_enable, reads irq_status, calls ASSERT/DEASSERT; the
+    decline branches read and write only their own latch.
+  The (d) forms this adds: `&& F` and `&& !F` on the direction test, F in {irq_status, irq_enable, fiq_status,
+    fiq_enable}.  `&& F` diverts a legal access when F == 0 (all-zero -> X9 all-zero); `&& !F` diverts when F != 0
+    (seeded, wide -> X9 seeded/wide).  Q1..Q5 are the `&& F` members the adjudication named.
+  Disagreeing state owed: all-zero with the latches clear, and a state with bits above byte 0 (wide).
+
+== CHANNEL: each new row, the mutant it is for, and the observable that differs ==
+  X9 <access> (<state>), 69 rows = 3 states x (5 legal reads x widths 1/2/4 + 8 enable writes).
+    Q1 IRQ_STATUS `writeflag == MEM_READ && d->irq_enable`   -> X9 legal len 1/2/4 read of IRQ_STATUS (all-zero):
+       the diverted read announces "write to irq status?" (1 != 0) and consumes that latch (decline-all 4 != 5).  3 rows.
+    Q2 IRQ_RAW_STATUS `&& d->irq_status`                     -> X9 ... IRQ_RAW_STATUS (all-zero), same channel.  3 rows.
+    Q3 FIQ_STATUS `&& d->fiq_enable`                         -> X9 ... FIQ_STATUS (all-zero).  3 rows.
+    Q4 FIQ_RAW_STATUS `&& d->fiq_status`                     -> X9 ... FIQ_RAW_STATUS (all-zero).  3 rows.
+    Q5 IRQ_ENABLE_CLEAR `writeflag == MEM_WRITE && d->irq_enable` -> X9 IRQ Clear write 0 and 0x70 (all-zero): the
+       write is declined as a read (announce 1), the deassert does not happen (0 != 1), decline-all 4 != 5.  2 rows.
+    PREDICTION: FIX 491/491; each Q reds EXACTLY its listed X9 rows and nothing else (the old rows stay green -- that is
+    the escape being repaired).
+  X6/X7 wide (X6 +54 rows, X7 +35 rows) -- two CONTROLS proving the wide axis can fail; not floor mutants:
+    W1 (insertion-class): IRQ_STATUS's decline branch also does `d->irq_status &= 0xffff;`
+       -> X6 "write IRQ_STATUS ... wide" first AND repeat: XSAME fails (0x80010018 -> 0x0018); invisible at byte seeds.
+       Predicted 12 red rows (3 widths x 2 data x 2 occurrences), all X6 IRQ_STATUS wide, and nothing else.
+    W2 (B1-class, inside the closure per the adjudication's Q1): IRQ_STATUS's READ branch also clears its latch when
+       `d->irq_status >> 16` -> X7 "legal len 1/2/4 read of IRQ_STATUS (wide) re-arms NO latch": the re-decline
+       announces 1 != 0; invisible at byte seeds.  Predicted 3 red rows, nothing else.
+  Carried kills: every mutant of TABLE4 (49) and Q2's five are re-run on the new instrument; rows are only ADDED and
+    no existing row name changes, so every earlier kill must still hold.  A kill that disappears is a result.
+
+== DISCLOSED, NOT ROWED (clause e) ==
+  The guest reset-state reads the adjudication recommended (+0x180/+0x184/+0x280/+0x284 at the head of arm S, scored
+    on a buffer mark): NOT added.  The floor is carried offline by X9; arm S keeps its order-not-emitter limit (G18).
+  WIDE DATA on a declined write (a decline store keyed on bits 8-31 of idata): the data axis stays {0, 0x70}.
+  Joint (multi-field) conjuncts on the direction test beyond the three states above.

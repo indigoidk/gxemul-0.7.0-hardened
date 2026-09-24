@@ -1,0 +1,70 @@
+VERDICT: DO NOT SHIP -- class (B)'s enumeration is incomplete: the fetch half is closed only at the Clear; a fetch past `len` at the declined status writes passes all 864 rows and no line shown in this packet discloses it. One NOT COVERED sentence (or producing the existing one in the unchanged text of 15a1c2a2) flips this to SHIP.
+
+Labels: READ = stated in the packet (including the packet's own measurements, taken as given); REASONED = my derivation from the inlined text. Nothing here is MEASURED by me.
+
+## Q1 — verify the enumeration
+
+**(a) Class (A).** X14's multi-access rows, as far as the packet shows:
+
+1. READ: the two DEVINIT declines rows (no tick / tick pending), five declines each — claim the five fields + `irq_asserted` kept; checked after EACH decline by `ZDECLINE()` (ZSNAP at entry, `ZKEPT()` per decline). Verified in the diff.
+2. READ: the re-arm row (5 declines + 5 legal reads + 1 Clear + 5 declines = 16 accesses) — kept fields checked after each decline (`ZDECLINE`), after each read (`&& ZKEPT()` added in the RA loop), and after the Clear. REASONED: the reads/Clear compare against the snapshot taken at batch-1's `ZDECLINE` entry; that is sound, since nothing legitimate changes the fields in between, and the end check re-verifies absolute values.
+3. The DEVINIT reads and Set/Clear rows: per the author, single-access or value-claims-only. REASONED: `R3E_CXT1` RED 3 is consistent with this list but cannot prove its completeness — CXT1 probes only +0x180-decline toggles; a multi-access row with no +0x180 decline is unprobed by it. PREMISE NOT SETTLEABLE: the loop structure/check placement of the DEVINIT reads and Set/Clear rows (code not inlined). Settling fact: the unchanged X14 section of 15a1c2a2. It is moot for closure, because any field-toggle at any of the five sites fires inside the re-arm row's 16 per-access-checked accesses and is caught at its first firing — the re-arm row is a universal detector for the five sites.
+4. REASONED: the class-(A) space is **not** X14-only. The COVERED preamble assigns "the four fields" to every row except X7 and X14, so X11's pairs (2 accesses), X12/X13 (Clear + five declines = 6 accesses), and X6's repeat rows (structure not settleable — preset latch vs. two declines) carry kept-field claims read **at the row's end only**. These cells are closed by carriage, which I verified from the packet: any four-field toggle at a decline site fires odd-parity in a single-access sibling (X6 "first" rows cover every site × width × data × state; latch-keyed toggles fire once in X13, whose end check catches; the re-arm row catches everything firing in its windows), and `irq_asserted` writes outside X14 are exactly the disclosed STORE class (T5). But the carriage is stated nowhere; DD3's "X14's only multi-access rows with a kept claim" is true at best X14-scoped and false as a class enumeration.
+
+**(b) Class (B).** Rows passing narrow buffers:
+
+* **Write-back past `len`**: covered directly at every rowed read — X6's declined read (+0x18c, widths 1/2/4) and X9/X10's legal reads at all widths, via `pad_kept` at every width (READ, diff). REASONED corroboration: WB4 RED 96 = X6 16 (site × {1,2} × 4 states × 2 ord) + X9 40 + X10 40; WB8 RED 144 = 96 + the len-4 rows (8+20+20=48). The arithmetic is exact — it confirms both the row space and that `pad_kept` guards len-4 (bytes 4..7), not just len<4. X14's len-4 reads are carried by X9/X10's len-4 pad (same common tail).
+* **Fetch past `len`**: covered only at the Clear, X12/X13, len 1/2, via poison + the enable value (READ). NOT covered, and unobservable by any row: at the four declined **writes** (idata is discarded — the decline arms' only state write is the latch, which is keyed on the latch flag, not idata; a fetch does not modify the buffer, so `pad_kept` sees nothing), and at any len-4 write whose fetch widens to 8 (the extra bytes land in idata bits 32–63, truncated if the fields are 32-bit). PREMISE NOT SETTLEABLE: whether the unchanged NOT COVERED text discloses these; and the field widths (`irq_status/irq_enable/fiq_*` — the ZSNAP casts `irq_asserted` but not the other four, which is evidence they are already `uint32_t`).
+
+**(c)** REASONED: every *changed* COVERED line is true of the 864 (the widths/8-byte line matches §C.5's alignment arithmetic, which I re-derived: 0x180/0x188/0x280/0x288 are 8-aligned, 0x184/0x18c/0x284 are not); every changed NOT COVERED line is honest (each names a measured-green or filed escape: BO1/PC1, CXD1, the STORE class, FMT01, the refined FS02 — which I verified against the inlined E-row check). The one surface with no shown line is the fetch residue in (b).
+
+## Q3 — adjudication
+
+* **T1 UPHOLD** — the fix is right and measured on exactly the rows named; REFINE: record the carriage for the non-X14 multi-access rows (Q1a).
+* **T2 UPHOLD the write-back half; OVERTURN "the fetch half 3d took."** 3d's poison closes only the Clear's fetch. The fetch cells at declined writes (and len-4 writes) are closed by nothing shown.
+* **T3 UPHOLD** — disclosure is the only closure (a row only fixes the fields it sets); BO1/PC1 green on both.
+* **T4 UPHOLD** — CXD1 green on both; the widened destination line matches the measurement (X14's `fiq_enable` ∈ {0, 0xc0}).
+* **T5 UPHOLD** — none in the floor, none in a claimed channel; disclosed; W1–W8 as ready rows.
+* **T6 UPHOLD.**
+* **T7 UPHOLD the rewrites; CANNOT SETTLE the folder copies** (no file access; see Q4).
+* **T8 UPHOLD** — GLM1/GLM2 red on both instruments; consistent with the inlined arms.
+* **T9 CANNOT SETTLE from the packet** (x14_new's signature not inlined); internally consistent — F1's green-until-DEVINIT behavior corroborates `devinit` as the 5th argument.
+* **T10 UPHOLD** — REASONED: CXS2 is keyed on `!warned_irq_clear_r`, which the re-arm row's +0x18c decline sets, so only E3's two rows see it; the measurement matches.
+* **T11 UPHOLD the filing** — the gate is untouched by 3e; a summary-vs-harness gap is a records item.
+* **T12 UPHOLD** — keeping both rows is conservative; the row-demand rule is the right cite.
+* **DD1 UPHOLD** — CXT1 green on 3d proved codex right; 3e closes it.
+* **DD2 UPHOLD** — the caller class can only be closed by disclosure; the class sentence does it.
+* **DD3 REFINE** — see Q1a: X14-consistent but unproven-complete by CXT1 alone, and the class space is not X14-only; add the carriage sentence.
+
+**Which accepted disposition is wrong: T2's**, in its claim that 3d took the fetch half. (T1's is incomplete in the same direction.)
+
+## Q2 — the floor question: NOT a clean zero
+
+**The edit the 864 cannot see (REASONED, unconditional):**
+```c
+idata = memory_readmax64(cpu, data,
+    (writeflag == MEM_WRITE && relative_addr == IRQ_STATUS) ? 4 : len);
+```
+At X6's +0x180 write declines (len 1/2) it reads the 0xa5 poison — and discards it: no field changes, the latch/announce logic is idata-free, `rv` is 1, and `pad_kept` passes because a fetch does not write the buffer. X12/X13 never see it (scoped off the Clear); X14's +0x180 declines are len 4, so it is a no-op there. 864/864 GREEN. This is deepseek's own class (B) shape with the one observable site removed; in the real emulator it is an OOB read of a `data[1]` buffer.
+
+**Conditional second edit (REASONED):** `... data, len == 4 ? 8 : len)` — passes 864/864 iff the enable/status fields are 32-bit (extra bytes truncated); the cast asymmetry in `ZSNAP` says they are.
+
+No row can ever see either: a fetch leaves no trace in a byte-checkable buffer. Disclosure is the only possible closure.
+
+**Denominator swept** (from the inlined handler + the records' own surface): five arms × {direction test, latch test/guard/clearer, drive test + destination, fetch, announce text, write-back over width} × the two head tests × the Clear body × the common tail, crossed with guest-reachable widths (§C.5) and the four rowed states. Every axis is rowed-caught or named-disclosed **except the fetch axis's silent cells** — pending the unsettled premise that the unchanged text already discloses them.
+
+## Q4 — records
+
+One changed sentence is false as written (READ, the diff): the `ZSNAP` comment — "a KEPT field is checked after EACH access of **a multi-access row**, never only at its end" — is false of X11/X12/X13 (and X6's repeats), which end-check the four fields. It is true only X14-scoped; insert "X14's". Every other changed sentence I could check against the packet is true (the E-row `fbirqstuck` refinement, "0x10 & ~0x400", the X12 POISON text, the row-count line, the 3d "six named rows at four check sites" per T7). **I cannot `ls` anything.** Artifacts whose existence the changed comments cite and whose listing would settle T7/Q4: `q2_20260923/q2{e,f,g}_opus/SUMMARY.txt` (each ending in its completion sentinel), `PREDICTIONS.corrections.txt`, `PRETABLE_Q2f.out`, `PREDICTIONS.txt/.tsv`, the `r3e_20260923` table, and the earlier-cited `t_deassert.txt`, `table4_20260919`, `q2c_opus`, `r3*_20260923` folders.
+
+## Q5 — closing
+
+The chain does not close from this packet: the closing pass must verify the enumeration, and (B)'s fetch half has an unconditional invisible cell that no shown contract line covers. **The one fact that settles it:** the unchanged NOT COVERED text of 15a1c2a2 (between the shown hunks) — does it disclose a fetch past `len` where the rows cannot read it? If yes, this pass is VALID and the chain closes with the denominator above. If no, the fix is one records sentence — "a FETCH past `len` that no row can read — at the declined status writes (the data is discarded) and at len-4 writes (truncated above bit 31) — passes every row; only the Clear's fetch has a value channel" — plus the carriage sentence for the non-X14 multi-access rows; no code, no rows; re-verify next pass.
+
+## Found elsewhere
+
+* The WB4=96 / WB8=144 arithmetic checks out exactly under the row descriptions — real corroboration of the row space and of `pad_kept` at every width.
+* R3E_WB8 was "GREEN, rc 0" on 3d because it silently overran the harness's own `buf[4]`; on 3e it is caught 144 ways, but whichever family still owns a 4-byte read buffer remains unguarded and still overruns under the mutant — harmless for detection; and it confirms X6/X9/X10's buffers must be ≥8 bytes (else the FIX's 864/864 with `pad_kept` would be reading unpoisoned garbage).
+* `R3E_CXT1` RED 3 is being read as verifying DD3; it does not — it only proves those three rows catch one mutant shape.
+
+**Seat record.** Model: AI packet-fed seat (Claude, Anthropic). Read: the brief, §C premises 1–10, the inlined handler and producer, the full 14-hunk 3e diff, the variant table, §F2, §E. Ran: nothing, per the operational rule; all results above are READ-from-packet or REASONED-from-packet.

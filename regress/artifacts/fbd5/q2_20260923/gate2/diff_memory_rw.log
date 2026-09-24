@@ -1,0 +1,43 @@
+  FAIL  @@SELFCHECK@@/str                                     
+          got  a
+          want b
+  FAIL  @@SELFCHECK@@/num                                     
+          got  1
+          want 2
+  ok    SELFCHECK the comparator can still fail       str+num
+--- A. control: an access wholly inside one page is untouched ---
+  ok    A1 in-page read                                        aa aa aa aa
+--- B. THE REPRODUCTION: a straddling READ ---
+  ok    B1 straddling read takes the VIRT-next page            aa aa bb bb
+  ok    B2   it translates once per page                       2
+  ok    B3   and maps each page it touched                     2
+--- C. a straddling WRITE, which is the worse half ---
+  ok    C1 the head page took its bytes                        77 77
+  ok    C2 the VIRT-next page took the tail                    77 77
+  ok    C3 the PHYS-next page was NOT corrupted                cc cc
+--- D. a straddling access that STARTS INSIDE A DEVICE ---
+  ok    D1 device head, RAM tail, both correct                 d0 d0 bb bb
+  ok    D2   the device was handed only its own bytes          2
+--- E. a faulting TAIL is now a reported failure, not a silent wrong page ---
+  ok    E1 a straddling write with a bad tail returns FAILED   0
+  ok    E2   and still did not touch the PHYS-next page        cc cc
+  ok    E3 a straddling read with a bad tail returns FAILED    0
+  ok    E4   head kept, tail zeroed (partial, by design)       aa aa 00 00
+--- G. a 1 KB mapping: the granule a 4 KB split silently misses ---
+  ok    G1 a read across a 1 KB mapping boundary               a1 a1 b1 b1
+  ok    G2   and it translated both 1 KB regions               2
+--- H. a fault on the FIRST chunk still zeroes the WHOLE read buffer ---
+  ok    H1 a first-chunk fault returns FAILED                  0
+  ok    H2   and no byte of the buffer is left uninitialised   00 00 00 00
+--- Z. a ONE-BYTE tail, which an off-by-one in the loop test hides behind ---
+  ok    Z1 a 1-byte tail across the 1 KB edge                  a1 b1
+  ok    Z2 a 1-byte tail across the 4 KB edge                  aa bb
+--- F. the design rows: what must NOT be split, and what must not cost stack ---
+  ok    F1 a 16 MB PHYSICAL access splits per MEMBLOCK, not per page 16
+  ok    F3 a 16 MB translated access translates once per 1 KB  16384
+        (measured stack span 0 bytes)
+  ok    F2 the split is a loop: stack does not grow per page   flat
+  ok    IDENTITY row count -- guards against a stale copy      23
+
+23 rows, 0 failures   (fatal=0 debug=0 debugmsg=0 warn=0)
+DIFF_MEMORY_RW_PASS

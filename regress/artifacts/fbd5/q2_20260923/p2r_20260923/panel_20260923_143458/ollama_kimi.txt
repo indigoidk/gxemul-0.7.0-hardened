@@ -1,0 +1,46 @@
+VERDICT: DO NOT SHIP -- the rows, pins and arithmetic all verify clean, but two ADDED sentences overstate coverage in exactly the genus this repair exists to kill: the X9 header says "EVERY LEGAL ACCESS WITH THE LATCHES STILL CLEAR" while X9 rows 5 of the 9 read-registers X7 itself enumerates (the packet's own loop bounds, `5*3+8` vs `8+9*3`), and the rewritten CONTRACT claims `ACCESS x STATE x LATCH` without naming that the five-latch vector is rowed only at 00000 (X6-fresh / X9) and 11111 (X7) -- a conjunct on a second site's latch passes every one of the 491 rows even though all five latches are inside the §C.2 bound. The fix is comment-only: scope the X9 claim and add the mixed-latch boundary to the Not-in-class list. No row changes needed.
+
+---
+
+## Q1 -- premise audit
+
+**(a) REASONED.** In the five inlined arms, each decline is dominated by exactly three predicates: the case label, the direction test (`writeflag == MEM_READ` / `MEM_WRITE`), and `!d->warned_*`. None is missing in the shown text, and `irq_status/irq_enable/fiq_status/fiq_enable` are indeed the only field lvalues the read branches touch. The grid direction x state x latch is rowed for the site-fixed and UNIFORM latch cases: declined x clear (X6 first) and declined x set (X6 repeat), legal x set (X7), legal x clear (X9). It is NOT rowed for mixed five-latch vectors (see Q3), so "the whole class" is true only under a uniform-latch reading the contract does not state. NOT CHECKABLE from the packet: the excerpt begins mid-switch (`case UART_FLAGS`), so the premise "nothing above the switch dominates these arms" (e.g. `odata = 0` init, on which "declined read returns 0" depends, plus any len/addr guard) cannot be re-walked "to the function boundary". Settling fact: the head of `dev_footbridge_access`.
+
+**(b) REASONED.** All 24 write cells worked out from the inlined handler vs the inlined X9 rule (`(is & ne) ? assert+1 : deassert+1` for IRQ; untouched for FIQ):
+
+| state | IRQ Set 0 | IRQ Set 0x70 | IRQ Clr 0 | IRQ Clr 0x70 | FIQ x4 |
+|---|---|---|---|---|---|
+| all-zero | ne=0, is&ne=0, DEA | ne=0x70, &is=0, DEA | ne=0, DEA | ne=0, DEA | none |
+| seeded | ne=0x30, &is=0x10, ASS | ne=0x70, &is=0x10, ASS | ne=0x30, ASS | ne=0x00, DEA | none |
+| wide | ne=0x00010030, &is=0x00010010, ASS | ne=0x00010070, &is=0x00010010, ASS | ne=0x00010030, ASS | ne=0x00010000, &is=0x00010000, ASS | none |
+
+24/24 match; the wide IRQ-Clear-0x70 leg (assert where seeded deasserts) is exactly the cell that needs the third state. The `~W8[j].data` complement is 32-bit and matches `&= ~idata` truncated to `uint32_t` at width 4. Ternary nesting in the `ok` expression is right-associative as written (READ).
+
+**(c) REASONED, enumerated.** Wide fields above byte 0: `0x80010018&~0xff=0x80010000`, `0x00010030→0x00010000`, `0x40020060→0x40020000`, `0x000200c0→0x00020000` -- all four non-zero, true. Masked products: `is&ie = 0x80010018 & 0x00010030 = 0x00010010`; `fs&fe = 0x40020060 & 0x000200c0 = 0x00020040` -- both non-zero above byte 0, true. Note for the record: across all three states the only bits ever set above byte 0 are {16,31} (irq_status), {16} (irq_enable), {17,30} (fiq_status), {17} (fiq_enable) -- the wide state's low byte duplicates seeded exactly. "Bits 8-31 exercised" is true pointwise, not bitwise.
+
+**(d) READ/REASONED.** True, with one caveat. The X6/X7 loops only append `wide` at index 2 (`st < 2 -> st < 3`); seeded/all-zero keep names and indices; no row is renamed in these hunks (the one X3 rename is attributed to the 333-row instrument, not this diff). Caveat: the IDENTITY row's pinned value changes 333 -> 491; its meaning ("count == pin") is unchanged, but a strict reading of "no pre-repair row changed its meaning" should name this.
+
+## Q2 -- smallest invisible change
+
+REASONED. At IRQ_STATUS: `if (writeflag == MEM_READ && !(d->irq_enable & 1u))`. Bit 0 of irq_enable is 0 in all three states (0x30 / 0 / 0x00010030), so the edit is behavior-identical on every row; a live guest with any odd irq_enable value gets its legal read declined, announced, latch-consumed, and returned 0 -- precisely the harm #545 removed. Row expected to stay green: `X9 legal len 4 read of IRQ_STATUS (all-zero, latches clear)` (and all 490 others). Equally invisible: a decline-body store `d->irq_status &= ~0x100u;` (bit 8 is never set in any state, so W1's own 12 rows stay green while a guest IRQ[8] pending bit is destroyed).
+
+## Q3 -- class or instance
+
+REASONED: instances, not the class. Unrowed cells inside §C.2: **(i)** write IRQ_RAW_STATUS, any width/data, any state, latch vector `warned_fiq_raw_w=1`, others 0. The mutant `else if (!d->warned_irq_raw_w && !d->warned_fiq_raw_w)` greens every block visible in the packet: X6 cells run on fresh instances (both latches clear at first decline); X9's D5 order and X7's S5 order both put FIQ_RAW last, so IRQ_RAW is always declined while warned_fiq_raw_w is still clear. CAVEAT: P0-P9 and X1-X5 row bodies are not in the hunk; if any of them declines FIQ_RAW before IRQ_RAW on one instance, the mutant reds there. Settling fact: those row bodies. **(ii)** Declined write with wide DATA (e.g. 0x100) -- already in the contract's disclosed exclusions. **(iii)** Any conjunct keyed on a field value/bit outside the three sample states (Q2) -- inherent to three-point sampling, but not named in Not-in-class either.
+
+## Q4 -- records
+
+READ/REASONED. Two sentences: (1) X9 header "EVERY LEGAL ACCESS WITH THE LATCHES STILL CLEAR" and the X6/X7 header's "every legal access with the latches still CLEAR" -- X9 rows k < 5*3+8 = 23 cells/state while X7 rows k < 8+9*3 = 35; legal reads of VENDOR_ID, TIMER_1_VALUE (and two more of X7's nine) with latches CLEAR are rowed nowhere. Under the literal standard this panel applied to "the cells above are the whole class ... MEASURED FALSE", this is the same overstatement, unscoped. (2) The new CONTRACT's `LATCH (clear, set)` clause: defensible per-site/uniform, false as a vector claim, and the Not-in-class list does not name the 00000/11111 boundary -- one line would fix it. NOT CHECKABLE: "PRETABLE_Q2.out written 14:19:25, never amended" and all MEASURED log contents (Q2.log, Q2R.log, CARRIED_KILLS) -- settling fact: the files. Everything else I could enumerate checked true (READ from the packet): 33+78+222=333; 33+78+311+69=491; 333+54+35+69=491; X6 = 27 cells x 2 occurrences x {2 -> 3} states = 108 -> 162 (+54); X7 = 35 x {2 -> 3} = 70 -> 105 (+35); X9 = 23 x 3 = 69; pins 491/311/162/105/6/69 match the diff; the red counts (Q1-Q4: 3 = len 1/2/4 all-zero; Q5: 2 = Clear 0/0x70 all-zero; W1: 12 = 3w x 2data x 2occ wide; W2: 3 = 3 widths wide) are each exactly consistent with the stated edits.
+
+## Q5 -- the guest row
+
+REASONED. Leaving them out is right on this bound: X9 dominates the proposed four guest rows -- same source text compiled in, and a strictly finer oracle (value over width, all four fields preserved, interrupt counters, exact announce arithmetic). The only premise the guest could add -- that latch zero-init and reset-field values come from the real devinit path rather than X9's `calloc` -- is already carried better by the probe's existing first-decline rows than by four reset-state legal reads, and a devinit edit is outside #545's closure in any case. Arm S's disclosed "order, not emitter" limit stands. No change requested.
+
+## Else found while verifying
+
+* X9's terminal `fatal_calls == 5` cannot by itself see a phantom-consume (1 phantom + 4 declines = 5); the row is saved only by the mid-row `fatal_calls == 0` evaluated right after the legal access. Correct as written (READ), but the row's soundness rests on that ordering -- worth knowing before anyone "simplifies" it.
+* The wide state's low bytes are byte-identical to seeded, so wide contributes nothing at byte 0 and sets only four distinct high bits total (16, 17, 30, 31) across the four fields; the "(e) cell" is narrowed, not closed (feeds Q2/Q3).
+
+## Seat record
+
+Model: Claude (Anthropic), packet-fed seat. Read: the inlined packet only -- the five handler arms, both repair diffs, §C, §E; no files, no tree, no frozen copies. Ran: nothing -- no tool, gate, build or mutant; every check above is hand enumeration and bit arithmetic on the inlined text. Nothing here is MEASURED.

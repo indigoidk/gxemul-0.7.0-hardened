@@ -1,0 +1,59 @@
+VERDICT: DO NOT SHIP — class (B) closure is incomplete: `pad_kept` observes write-back past `len` only, not fetch past `len`; the COVERED claim that X6 covers “both directions” is false.
+
+### Q1 — Verify the enumeration
+
+**(a) Class (A) — X14 rows with more than one access and a kept-field claim**
+
+READ/REASONED from packet:
+- DEVINIT declines rows, ×2: each makes five declines; claims fields and `irq_asserted` kept. 3e’s `ZDECLINE()` now snapshots before the five declines and checks `ZKEPT()` after each. Covered.
+- Re-arm row: five declines, five legal reads, one Clear, five declines. Claims fields and `irq_asserted` kept. 3e checks after each decline via `ZDECLINE()`, and after each legal read and the Clear via `ZKEPT()` using the snapshot left by the prior `ZDECLINE()`. Since that snapshot equals the expected fields if the declines pass, this is equivalent to a fresh snapshot. No kept claim remains endpoint-only.
+- DEVINIT Set/Clear row: two accesses, but claims enable/drive, not kept fields. Not a class-A row.
+
+No class-A defect found.
+
+**(b) Class (B) — narrow buffer rows**
+
+READ from diff:
+- X6: declined accesses, all widths, read and write. `pad_kept(b, W[wi])` is evaluated after the call. For reads this catches write-back past `len`. For writes the handler does not write back to `data`, so `pad_kept` passes regardless of whether the handler fetched past `len`. The fetch half is **not observed** in X6 writes.
+- X9/X10: legal reads, widths 1/2/4 and 8 at the readable registers. `pad_kept` catches write-back past `len`. No fetch occurs on reads.
+- X11–X13: X12/X13 Clear writes use 0xa5 poison above the width to catch fetch past `len` in those writes. X11’s reads are len-4 declines; write-back is carried by X6/X9/X10.
+
+Therefore the COVERED line “X6 … both directions” is false for the fetch half in declined writes. That is an enumeration gap.
+
+**(c) COVERED / NOT COVERED**
+
+The COVERED sentence claiming X6/X9/X10 observe bytes above width untouched in both directions is not true for X6 writes. The NOT COVERED lines do not disclose this gap.
+
+### Q2 — Floor question
+
+I cannot give a measured zero. The smallest unseen edit I can name from the packet is a fetch-past-`len` mutant in a declined write at len 1 or 2 on X6. `pad_kept` will not see it, and the declined arms ignore `idata`, so no state change will expose it. If that mutant is green on 3e, it is a contract breach and likely a floor breach under the class-B trigger. Denominator: I ran no sweep.
+
+### Q3 — Adjudications
+
+- T1: UPHOLD.
+- T2: REFINE — write-back half closed; fetch half not closed by `pad_kept`.
+- T3: UPHOLD.
+- T4: UPHOLD.
+- T5: UPHOLD.
+- T6: UPHOLD.
+- T7: UPHOLD.
+- T8: UPHOLD.
+- T9: UPHOLD.
+- T10: UPHOLD.
+- T11: UPHOLD.
+- T12: UPHOLD.
+- DD1: UPHOLD.
+- DD2: UPHOLD.
+- DD3: OVERTURN — class (A) enumeration is complete; class (B) is not.
+
+Wrong accepted disposition: **T2** — accepting pad_kept as closing class (B) is wrong because it does not observe fetch past `len` in writes.
+
+### Q4 — Records
+
+From the packet alone I cannot `ls` the cited artifacts. The comments cite `q2_20260923/q2{e,f,g}_opus/`; the brief says they were copied. I cannot verify existence or contents.
+
+### Q5 — Closing
+
+Not valid to close the chain. The required measurement: run a mutant on 3e that fetches 4 bytes regardless of `len` in a declined write at len 1/2 on X6. If green, class (B) remains open and 3e must add an observation for fetch-past-`len` in writes or narrow the COVERED claim.
+
+**Seat record:** packet-fed seat; read the inlined diff, records, and questions; ran nothing.

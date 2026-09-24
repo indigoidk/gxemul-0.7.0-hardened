@@ -1,0 +1,54 @@
+VERDICT: The five-site decline fix is sound as far as the inlined code shows, but the brief has an arithmetic count defect (“ten” exits vs enumerated nine), and two detector weakenings may escape: shared latch bit if D rows run in separate processes, and swallowing the legal IRQ_STATUS read when the expected value is 0. Several premises cannot be settled from the packet (struct latch idiom, FAULT availability, launcher helpers, hygiene dependencies).
+
+## Q1 — premise audit
+
+**(a) Datasheet directions — READ.**  
+Table 7-10 lines 6824–6831 confirm:
+- 180h Read IRQStatus, Write “--”
+- 184h Read IRQRawStatus, Write “--”
+- 18Ch Read “--”, Write IRQEnableClear
+- 280h Read FIQStatus, Write “--”
+- 284h Read FIQRawStatus, Write “--”
+
+So the five undefined directions are as stated.  
+Member 3 (decline + latched announce) is defensible for all five. The write arms leave state unchanged; the +0x18c read returns 0 and does not leak `d->irq_enable`.  
+The brief’s justification for return 0 via the “nonexistent CSR” rule at :1652 is **REASONED, not READ** — these registers exist; the quote covers nonexistent CSRs, not wrong-direction access to existing CSRs. Return 0 is policy, not datasheet-mandated.  
+FAULT availability cannot be settled from the packet; no FAULT path appears in the inlined function, but sibling handlers are not shown.
+
+**(b) Bit-field vs five ints — cannot settle from packet.**  
+The struct `footbridge_data` definition is not inlined. The brief says “or five int latches in the file’s existing style,” but no latch fields are shown. Collision hazard exists only if other code writes `warned_access`; not verifiable here.
+
+**(c) K1/K2 legs — cannot settle from packet.**  
+The launcher `send()`/`wait()` implementations are not inlined. The described checks are plausible, but observability of “dead before cleanup” through each probe’s helpers cannot be confirmed from the given text.
+
+**(d) Enumerating exits — READ from inlined function.**  
+In the function shown, `exit(1)` occurs at lines:
+565, 574, 606, 615, 624, 714, 739.
+After this round, the first five are removed; 714 and 739 remain, both reads of SDRAM_BA_MASK/OFFSET. DEVINIT exits at 843/879 are construction-time, not guest-reachable.  
+The statement “no footbridge access these probes make ends the process except the SDRAM pair” is **true** if probes do not read those two SDRAM registers.  
+**Defect:** The brief says “ten live exit(1)” but then enumerates 5 + 2 + 2 = 9. That is an arithmetic inconsistency.
+
+**(e) Dependencies on complaint texts — cannot settle from packet.**  
+`gate_hygiene.sh` / allowlists are not inlined. The current sites-probe K row (line 402) depends on `"ENABLE CLEAR"`, but that dependency is removed when the kill bridge retires.
+
+## Q2 — candidate weakenings
+
+- **(c) one latch bit shared by two sites — may escape.**  
+If the detector runs each D row in a fresh emulator process, the latch is cleared at start. The first access to the second site will announce (bit clear), the second access will be suppressed, giving count 1 — exactly what the row expects. The escape depends on process model; not stated in the packet.
+
+- **(f) swallow the legal direction of the same register — may escape for IRQ_STATUS.**  
+A1 expects `IRQ_STATUS read +0x180 -> 0` with enable 0x30 and status 0. A mutant that always returns 0 for IRQ_STATUS reads passes A1 because the expected correct value is also 0. No accept row in the packet expects a non-zero IRQ_STATUS value.
+
+All other listed weakenings are caught by the stated rows.
+
+## Q3 — option-set completeness
+
+From the packet, the option set appears complete for the five sites. DELETE would fall through to the default arm (unlatched, per-access diagnostic), which is worse. ACCEPT would leak `d->irq_enable` for +0x18c. FAULT cannot be assessed without the fork. No missing member is evident from the inlined text.
+
+## Q4 — smallest green-but-proves-nothing leg edit
+
+In K2, remove the assertion that the next ordinary interaction fails with `dead` before cleanup; keep only `WEXITSTATUS == 0`. The leg stays green but proves only normal shutdown, not death-after-execution. The row expected to stay green is the K2 leg itself.
+
+**Other finding:** `FIQ_ENABLE_CLEAR` (line 633) updates `d->fiq_enable` but does not assert/deassert the FIQ interrupt output, unlike `IRQ_ENABLE_CLEAR` (595). This is outside the five sites but is a separate existing defect.
+
+Seat record: model — packet-fed ChatGPT; read — inlined brief only; ran — nothing.

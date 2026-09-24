@@ -1,0 +1,58 @@
+**VERDICT: Proceed with amendments — the core premises (datasheet directions, the seven exits, detector logic) are internally consistent with the inlined code, but the packet contains one arithmetic self-mismatch (exit census: "ten" claimed, nine enumerated), one unresolved tension (witness "green post-fix with the same script" vs the SDRAM rows A6/D6 that the same script is said to contain), and two live FIQ asymmetries visible in the inlined code itself (+0x288 read returns 0, not `fiq_enable`; +0x28c read silently declines — the same datasheet "–" class as +0x18c yet it will never announce). None of these block the round; all belong on the record.**
+
+What follows is reasoned from the packet only. Where a premise needs the tree, I name the single fact that would settle it.
+
+---
+
+## Premise audit (Q1)
+
+**(a) Datasheet directions — verified against the inlined Table 7-10.** READ: 180h/184h/280h/284h write = `--`; 18Ch read = `--`. Exactly as stated, and 7.3.29/7.3.32/7.3.33 confirm "read-only"/"write-only". Member 3 (decline + latched announce) is defensible for all five. On FAULT: **not settleable from the packet** — nothing about gxemul's ARM exception dispatch (`dev_unreadable`, `memory_rw` return path) is inlined. The single settling fact: whether a device-access return can raise a data abort on ARM in this fork. But note a datasheet argument *against* FAULT that needs no tree: the CSR rule (`:1652`) reads zeros with "no error action taken" for a nonexistent CSR, and no error story is given for writes to RO space — a FAULT would invent hardware behaviour. That supports member 3 over 4/5 regardless of what the grep would show.
+
+**(b) Latch storage.** Not settleable: the file's existing latch idiom is described ("per-instance latch field + `fatal()`", `(once)` majority) but no existing field is quoted, so I cannot judge whether one `uint32_t warned_access` matches house style better than five `int`s. What the packet *does* settle: storage must be one-bit-per-site — the brief's own "0/5 share an exact message" is true of the five quoted texts (all distinct), and a shared aggregate makes weakening (c) below undetectable by design. Collision hazard of the bit-field is only the bit-assignment collision itself; the only writers visible in the inlined code are this function and DEVINIT's memset.
+
+**(c) K1/K2 vs the old kill arm.** READ (from the inlined K row): the old arm proved *guest-driven* death is detected (complaint contains `ENABLE CLEAR` AND exit 1). The new legs prove two different things: K1 proves startup-rejection (exit exactly 1, diagnostic names the input); K2 proves the harness notices a clean exit after live guest steps (`dead` before cleanup, exit 0). **Gap: nothing in K1+K2 proves the harness detects an abnormal mid-session death after guest steps** — the thing the old arm actually exercised. Given the deliberate residual exiters (SDRAM pair) and the risk of a crash introduced by this very edit, that gap is worth one sentence in the round notes. On observability: the inlined `rd()` contract (True on timeout, False on EOF/EIO) makes "next interaction fails" observable on the read side; **whether `send()` on a dead pty raises or hangs is not inlined** — settling fact: the `Session`/nested-helper `send()` body in each of the three launchers.
+
+**(d) Exit enumeration of the inlined function.** Seven, matching §1's SEVEN exactly: 565 (write +0x180), 574 (write +0x184), 606 (read +0x18c), 615 (write +0x280), 624 (write +0x284), 714 (read +0x100), 739 (read +0x104). Post-round, the only guest-reachable exits remaining are the two SDRAM reads — so the §4 statement is true **iff the probes touch +0x100/+0x104**.
+**Arithmetic defect:** §2 says "ten live `exit(1)`" and then enumerates **nine** line numbers (565, 574, 606, 615, 624, 714, 739, 843, 879). Count the list: 5 + 2 + 2 = 9. Either a tenth exists that is not listed anywhere in the packet (DEVINIT is not inlined beyond the two claimed) or the number is wrong. Settling fact: the actual `exit(1)` count and, if ten, the tenth line number.
+
+**(e) Text dependencies.** READ: the three K rows all grep the literal `ENABLE CLEAR` (sites probe line 402 inlined; the tuples carry it) and require exit 1 — these are exactly what this round removes, so nothing *surviving* in-packet depends on the texts. Whether `gate_hygiene.sh`'s boot-log rules or an allowlist mention `footbridge`/`ENABLE CLEAR`: **not settleable from the packet**; the settling fact is a grep of those files, which I cannot do.
+
+## The same-script tension (witness claim)
+
+READ: §4 names "the SDRAM rows A6/A7/D6/D7" as rows of `footbridge_sites_probe.py` and also promises the witness is "green post-fix **with the same script**". If A6/A7 execute a read of +0x100/+0x104, they exit(1) pre- **and** post-fix (they are explicitly *not* this round), so the script cannot go green. The two statements are jointly true only if the SDRAM rows exist as numbering but are absent/xfail at HEAD. **Not settleable from the packet.** Settling fact: whether A6/D6 are wired into a rung in the probe at 9c28ca5, and under what expected status.
+
+## Found something else — two FIQ asymmetries in the inlined code
+
+1. **FIQEnable read returns 0, always.** Table 7-10 row 288h: Read = FIQEnable. But `case FIQ_ENABLE_SET` (lines 628–631) sets `odata` only on write; a read falls through with `odata = 0`. READ against the #539 IRQ counterpart (586–592), which *was* fixed to return `d->irq_enable`. This is a live wrong-value bug on a *documented* direction, asymmetric with the round that just shipped. Nothing in A4/A5/D4/D5 reads +0x288 back, so it neither blocks nor is caught by this round.
+2. **FIQ_ENABLE_CLEAR read (+0x28c) silently declines** (lines 633–636: no `else` body): returns 0, no announce, no exit — pre- and post-round. Datasheet-wise it is the *identical* class as +0x18c read (both `--`). After this round the tree will carry three dispositions for one datasheet class: +0x18c → latched announce; +0x190 (IRQSoft read — no case exists, so it lands in `default:`) → **un**latched announce; +0x28c → silent. Worth an explicit exclusion note, since the round's own reopening rule is stated as "same semantic class".
+3. Related: **no `IRQ_SOFT` case at all** — writes to +0x190 hit the default arm. Consequence below (Q2f).
+
+(Option-set completeness, Q3: DELETE/FAULT/BACKED ACCEPT are adequately rejected in-packet — FAULT invents hardware behaviour per the CSR rule, BACKED ACCEPT for +0x18c is the leak M2/K4 D3 names. IMPLEMENT has no warrant: there is no state behind a "–" direction. The gap is not a missing member but the un-weighed *siblings* above.)
+
+## Weakening map (Q2)
+
+- **(a) exit(1) kept at one site:** that site's own D row reds — "missing continuation", exactly as designed.
+- **(b) unlatched announce:** first D row reds (count = 2 across the two accesses).
+- **(c) one bit shared by two sites:** the *second* site's D row reds (count = 0). Not the first. Pin order matters, so per-site bits it must be.
+- **(d) +0x18c decline keeps `odata = d->irq_enable`:** D3 reds (0x30 ≠ 0). Verified against the inlined tail: lines 756–757 write `odata` back on any read that survives, so the leak is real post-decline.
+- **(e) write stores into `irq_status`:** D1's readback reds (raw/status 0x10).
+- **(f) decline also swallows the legal read (IRQ_STATUS always 0):** **ESCAPES every new row.** All A-row expectations are computed with `irq_status = 0`, where 0 is the *correct* value — A1 only distinguishes AND from OR (0x30). No new row raises a status bit, and with IRQSoft unmodelled the packet shows **no guest-writable path that sets `d->irq_status`** (timer-expiry code is not inlined). Settling fact: what sets `d->irq_status`, so a row can be built that raises a bit and re-reads +0x180. This is the one weakening with no red row.
+- **(g) misnamed announce text:** reds iff the D-row count matches the exact expected string. The packet says "a COUNT of the announce text" but not the match expression. Settling fact: the literal grep pattern in the D rows.
+- **(h) K1 accepts any nonzero:** escapes all detector rows — the leg *is* the check. Only the gate's leg pins or review catch it.
+- **(i) K2 passes on early death:** reds only because the spec'd prologue verification (fresh `reg`: MMU bit, RAM 0x11223344, VENDOR 0x1011, timer mask) fails on a dead child. A leg that *drops* the liveness-verify escapes.
+- **(j) latch cleared by a read:** for write sites, reds only if the D row interleaves its state-check read between the two writes; if the readback comes after both writes, count stays 1 and it escapes. Step order inside D1 is not stated in the packet — name it. For D3 (a read site), a per-read clear gives count 2 — reds.
+- **(k) legs in one launcher only:** escapes the product rows entirely; the other two probes lose their K arms with no replacement. Reds only if `gate_arm.sh`'s two new leg-pins are per-probe. Not inlined — name it.
+
+## Q4 — smallest hollow leg edit
+
+Loosen K1's predicate to "any nonzero exit" and drop the requirement that the diagnostic name the offending input; on HEAD, startup rejection genuinely exits 1 with a naming diagnostic, so the weakened leg stays green forever and proves nothing about exit-code correctness or message content. Symmetrically, K2 stays green by dropping the `dead`-before-cleanup ordering (any later failure accepted). The row I expect to stay green: **both gate leg-pins and every A/D row** — nothing in the product-side detectors exercises the legs, which is precisely the risk: the pins must pin the *predicates* (exit `== 1`, names-the-input, `dead` *before* cleanup), not the leg outcomes on a healthy system.
+
+## Smaller verified items
+
+- READ: `0xE590718C` decodes as `ldr r7, [r0, #0x18C]` and 0x18C = 396 — the kill tuples are consistent. The stream offsets (0x2c/0x5c/0x48) differ per probe; plausible, not verifiable.
+- READ: A3's "zero write preserves 0x20" matches `d->irq_enable &= ~idata` at line 597.
+- READ: 899 vs 744 lines for the two file copies cannot be checked from the packet and does not affect any finding above — the function inlined is internally line-consistent with every HEAD line number cited for it.
+
+---
+
+**Seat record:** model: an LLM assistant (panel seat, packet-fed). What I read: this brief only — the inlined datasheet excerpt, the inlined 498–760 function body, the inlined K-row fragments. What I ran: nothing. Claims above labelled READ are from the packet; REASONED are derivations from it; four items are explicitly named as not-settleable-from-packet with their settling facts (exit census tenth line; SDRAM-row rung wiring; D-row match expression; launcher `send()`/gate pin granularity; what sets `d->irq_status`).

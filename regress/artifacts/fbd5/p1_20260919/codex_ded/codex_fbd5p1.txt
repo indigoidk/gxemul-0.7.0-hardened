@@ -1,0 +1,513 @@
+VERDICT: REVISE. All 5/5 terminating sites are correctly identified, but the brief overstates several premises and the proposed rows’ coverage: there are nine live exits, no existing diagnostic latches in this file, and important FIQ and harness observations remain unspecified.
+
+READ means inspected working-tree source or datasheet text. REASONED means derived from those files, without execution. NOT CHECKED means historical evidence, runtime behavior, or material outside the permitted reading scope.
+
+Anchors below use **F** = [dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c), **S** = [sites probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py), **D** = [drain probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py), **W** = [witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py), and **DS** = [datasheet](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt).
+
+For question 1, the five locations and directions are **TRUE, 5/5**:
+
+| Site | Terminating direction | Branch / complaint / exit in F | Datasheet anchor |
+|---|---|---|---|
+| IRQ_STATUS, `+0x180` | WRITE | 560 / 564 / **565** | Table 7-10:6824; §7.3.29:6888, “read-only … bit-wise AND” |
+| IRQ_RAW_STATUS, `+0x184` | WRITE | 569 / 573 / **574** | Table:6825; §7.3.30:6903–6909, read-only |
+| IRQ_ENABLE_CLEAR, `+0x18c` | READ | 595 / 604–605 / **606** | Table:6827; §7.3.33:6940, “write-only” |
+| FIQ_STATUS, `+0x280` | WRITE | 610 / 614 / **615** | Table:6829; §7.3.29:6888 |
+| FIQ_RAW_STATUS, `+0x284` | WRITE | 619 / 623 / **624** | Table:6830; §7.3.30:6903–6909 |
+
+The offsets independently match `dc21285reg.h:332–343`. The CATS mapping is `0x42000000` at `machine_cats.c:63–65`.
+
+The remaining section 2 premises need these dispositions:
+
+| Premise | Disposition and settling anchor |
+|---|---|
+| All three existing terminating controls read `+0x18c`, using the supplied instruction | **TRUE — READ.** S:161, D:231, W:200. Decimal 396 = `0x18c`. |
+| Their K predicates require the complaint and exit 1 | **TRUE — READ, 3/3.** S:402; D:612,713; W:489,635. The pending probes also require `HOST-DIED`; sites does not explicitly require that status in its K predicate. |
+| The bridge is designated temporary, to be retired with replacement controls | **TRUE as a recorded contract.** S:63–64 and `gate_arm.sh:1102–1103` say this. Whether the cited panels adopted it is **NOT CHECKABLE within scope**. |
+| Three separately implemented launchers exist | **TRUE — READ, 3/3.** S:`run_arm`, D:`Session`, W:`Session`; each independently forks and executes. |
+| Durable K1/K2 pairs already exist | **FALSE if read as current implementation.** There are **0/3** such pairs. Section 2 describes the intended specification. The sites row presently called `K1` is the old terminating-access control. |
+| An unknown `-E` name exits 1 before a prompt and names the input | **TRUE — READ/REASONED**, for a genuinely unknown name. Exact source quotations follow below. |
+| `quit` exits 0 through normal shutdown | **TRUE — READ/REASONED.** `debugger_cmds.c:1636–1637` sets shutdown flags; `emul.c:1041–1042` leaves the loop, then stops timers and deinitializes CPUs; `main.c:807–821` performs cleanup and returns 0. |
+| Every surviving arm is required to reap exit 0 | **FALSE as a universal current assertion.** D:682–689 and W:602–610 enforce it for their surviving arms. S enforces it for L and E at 401,424, but never checks T’s exit status. |
+| Existing reachability evidence comes from values | **TRUE — READ.** S:377–378,419–420. VENDOR is the model’s `0x1011`; timer arithmetic is `0x12345678 & 0x00ffffff = 0x00345678`; E2 is `0x2002 \| 0x60000000 = 0x60002002`. |
+| Teardown sends quit, drains up to 20 seconds, closes, polls reap for 10 seconds, then conditionally kills | **TRUE as the normal control-flow shape, 3/3.** S:279–315; D:408–452; W:347–391. |
+| `rd()` returns False **only** on EOF/EIO | **FALSE literally.** All three catch **any `OSError`** from `os.read`, without testing its errno. A select timeout does return True. S:192–206; D:295–308; W:225–238. |
+| The entire reap is bounded | **FALSE if that is intended.** The WNOHANG polling phase is bounded; the subsequent `waitpid(pid, 0)` after SIGKILL is blocking. |
+| Already-reaped children are guarded against further killing; harness signals are labeled | **TRUE as implemented, 3/3.** The `gone` guard and `HARNESS-KILL` / `HARNESS-CLOSE` branches exist. The waitpid handler also catches any `OSError`, rather than checking specifically for ECHILD. |
+| Session-return paths include `exit` and `signal` | **TRUE for explicit normal returns: 13/13.** One sites return, six drain returns, six witness returns. This does not cover uncaught exceptions or deliberately constructed `SKIPPED` dictionaries. |
+| The `+0x18c` read computes `odata = d->irq_enable` before terminating | **TRUE — READ.** Assignment at **F:603**, termination at **606**. It does not reach the common readback tail at 756–757 today. |
+| A zero result for that declined read is directly established by the quoted hardware rule | **NOT CHECKABLE as that specific hardware behavior.** DS:1652 explicitly concerns a **nonexistent CSR**. Table 7-10 marks this address’s read direction `--`; it does not explicitly equate a read of an existing write-only register with a nonexistent CSR. Zero is a reasonable **model policy supported by analogy**, not a uniquely established silicon result. |
+| The four status-register writes have no documented write operation | **TRUE — READ.** Table 7-10 and §§7.3.29–30. Preserving functional state and interrupt output is the proposed decline policy, not an additional quoted hardware guarantee. |
+| Per-instance latched announcements with suppression markers exist elsewhere | **TRUE — READ.** Examples include `dev_asc.c:258–261`, `dev_lca.c:337–340`, `dev_sgi_ip32.c:314–317`. It is not a universal invariant: process-static warning latches also exist. |
+| The September 17 census established `(once)` as the majority spelling | **NOT CHECKABLE from the supplied, permitted historical evidence.** I did not reconstruct that dated census. |
+| `fatal()` cannot be silenced by `-q` | **TRUE — READ.** `debugmsg.c:384–390` directly calls `va_debug`; the quiet-mode check belongs to `debug()` at 375. `fatal()` itself does not terminate. |
+| A packed `warned_access` is only a proposal | **TRUE.** No such field exists in F. Neither do five existing announcement ints. |
+| The default read arm prints on every access and returns zero without exiting | **TRUE — READ.** F:501,747–759. Its write direction also prints per access. |
+| The handler receives length and does not generally normalize CSR offsets to word boundaries | **TRUE — READ.** `memory_rw.c:494,587–589` passes the relative address and length; F:507–509 only folds timer selection bits. CPU load/store alignment still applies before dispatch. |
+| “Word-aligned cases only” describes the entire switch | **FALSE literally.** `DEVICE_ID` is `0x02` (`dc21285reg.h:49`), with a case at F:518. It is accurate for the five sites and the IRQ-enable cases under discussion. |
+| E3/E6 assert low-lane byte/halfword behavior | **TRUE — READ.** S:421–422; `memory.c:99–107`. Their claimed historical **measurement is NOT CHECKED**. |
+| There are ten live `exit(1)` calls | **FALSE — READ.** There are **nine**, enumerated below. |
+
+For the unknown-name path, [main.c:346](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:346) assigns `type = optarg`. At 541–544:
+
+> `res = machine_name_to_type(type, subtype, …);`  
+> `if (!res)`  
+> `    exit(1);`
+
+[ machine.c:240](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c:240) prints:
+
+> `fatal("\nSorry, emulation \"%s\"", stype);`  
+> …  
+> `fatal(" is unknown.\n");`
+
+It returns 0 at 258. Argument processing occurs at `main.c:686`, before `emul_run()` at 807 and its debugger entry. Thus the diagnostic names the supplied input, and this path cannot reach the ordinary debugger prompt.
+
+The live-exit enumeration is **9/9**:
+
+- **565, 574, 606, 615, 624:** the five proposed sites.
+- **714, 739:** reads of SDRAM_BA_MASK / SDRAM_BA_OFFSET.
+- **843, 879:** DEVINIT defaults for unsupported machine types.
+
+Pattern: `^\s*exit\s*\(\s*1\s*\)\s*;`, checked against the surrounding source. The brief’s own line list contains nine numbers. There are **7/9** calls in `DEVICE_ACCESS(footbridge)` and **2/9** in construction. Removing five leaves **4/9** file-wide: two access calls and two construction calls. The behavior of `exit_census.py` itself is **NOT CHECKED**; no census program was run or read outside scope.
+
+For question 2, fixed-string searches of F give:
+
+| Proposed exact complaint | Matching occurrences |
+|---|---:|
+| `[ WARNING: footbridge write to irq status? (once) ]` | 0 |
+| `[ footbridge write to irq_raw_status (once) ]` | 0 |
+| `[ WARNING: footbridge read from ENABLE CLEAR? (once) ]` | 0 |
+| `[ WARNING: footbridge write to fiq status? (once) ]` | 0 |
+| `[ footbridge write to fiq_raw_status (once) ]` | 0 |
+
+That is **0/5 proposed texts present** in the one device file. I used `rg -n -F` with those five strings as separate patterns. All five old complaints remain at the anchors in the first table.
+
+Across **21/21 `regress/*.sh` files**, there are **0/21 direct consumers** matching the old complaints or `ENABLE CLEAR`. The search included their distinctive register-name fragments, case-insensitively.
+
+The direct text consumers are exactly **3/103 Python files**:
+
+| Consumer | Actual dependency |
+|---|---|
+| S:289,402 | Extract bracketed messages containing `footbridge`; require an extracted message containing `ENABLE CLEAR` and exit 1. |
+| D:612,713 | Search the complete session buffer for `ENABLE CLEAR`; require `HOST-DIED` and exit 1. |
+| W:489,635 | Same substring dependency, then `HOST-DIED` and exit 1. |
+
+S additionally rejects **any** extracted footbridge diagnostic in L and E at 401,424.
+
+`gate_arm.sh:1104–1105` is an **indirect consumer**: it requires the old `K1 … ok` row. Its overall PASS check at 1085–1086 also carries that dependency. It does not grep the complaint itself.
+
+`gate_hygiene.sh:769–776` checks `panic`, `FATAL`, `zero-length`, `FIFO overrun`, `short DATA_IN DMA`, `short DATA_OUT DMA`, `unimplemented format`, and `could not find physical`. Its bounded marker is `{ asc: data in` at 823. None matches these footbridge complaints. Calling `fatal()` does not automatically put the literal word `FATAL` in its output.
+
+For question 3, F:60–85 contains **15/15 fields**:
+
+| Field | Type | Where established or changed in F |
+|---|---|---|
+| `irq` | `struct interrupt` | Connected at 797 |
+| `pcibus` | `struct pci_data *` | 847 |
+| `console_handle` | `int` | 809 |
+| `timer_load[4]` | `uint32_t` | 642,890 |
+| `timer_value[4]` | `uint32_t` | 269,362,655 |
+| `timer_control[4]` | `uint32_t` | 662,889 |
+| `timer_irq[4]` | `struct interrupt` | Connected at 832 |
+| `timer[4]` | `struct timer *` | 331–334 |
+| `pending_timer_interrupts[4]` | `int` | 117,119,677,704 |
+| `pending_bound[4]` | `int` | 323,794 |
+| `irq_asserted` | `int` | Set 1 at 385; cleared at 400 |
+| `irq_status` | `uint32_t` | Assert/deassert callbacks at 378,397 |
+| `irq_enable` | `uint32_t` | Set/clear writes at 580,597 |
+| `fiq_status` | `uint32_t` | **Only initial zeroing in this file** |
+| `fiq_enable` | `uint32_t` | 630,635 |
+
+All begin zeroed by `memset` at 771, before the explicit initialization above.
+
+There are **0/15 diagnostic-latch fields**. `irq_asserted` is an interrupt-output bookkeeping latch, not a warning-suppression latch. Thus the choice is **neither “existing bit-field style” nor “existing per-site-int style” in this file**. The brief’s “five ints in the file’s existing style” is unsupported.
+
+For the requested comparative grep, I treated “bit-field” as a packed integer bitmask, not C’s `field : width` syntax. The corpus was **122 recursive `.c` files**, including F; denominators below exclude F, leaving **121**.
+
+| Classification | Pattern used with `rg -l … src/devices -g '*.c'` | Files |
+|---|---|---:|
+| Packed warning mask | `\b\w*warn\w*\s*\|=` | **6/121** |
+| Boolean warning latch assigned 1 | `\b\w*warn\w*(\s*\[[^\]]+\])?\s*=\s*1\s*;` | **11/121** |
+
+The six packed-mask files are `dev_dreamcast_gdrom.c`, `dev_lca.c`, `dev_pcc2.c`, `dev_sgi_ip30.c`, `dev_sgi_ip32.c`, and `dev_sgi_re.c`.
+
+The eleven boolean-int files are `dev_asc.c`, `dev_dec21143.c`, `dev_disk.c`, `dev_osiop.c`, `dev_pcc2.c`, `dev_pckbc.c`, `dev_ps2_gs.c`, `dev_pvr.c`, `dev_scc.c`, `dev_vga.c`, and `dev_wdc.c`. Declarations were checked: these are ints, but many are process-static. Only **5/121 files** have per-instance boolean warning fields: asc, osiop, pckbc, vga, wdc. `pcc2` belongs to both overall categories, giving **16/121 distinct files**, not seventeen.
+
+Using the narrower literal `warned` instead of `warn` gives **6/121 versus 10/121**; it omits `dev_dec21143.c`’s `warn` and `warn_fs`.
+
+A new `warned_access` has no existing writers to collide with. Sharing or resetting its proposed bits would introduce a new collision risk; named, distinct bits would make that reviewable. Neither storage choice is compelled by F’s current style.
+
+For question 4, these are **REASONED expectations**, not measured results. All five D accesses currently terminate at their first access; their successful results require the proposed policy change. The zero raw-status fixtures must remain inactive while being observed.
+
+| Proposed row | Arithmetic and expectation | Supplied candidates it distinguishes |
+|---|---|---|
+| **A1** IRQ_STATUS read | `0 & 0x30 = 0`. Replacing AND with OR gives `0x30`. | **Does not catch (f)**: constant zero gives the expected zero. AND→OR is a separate example in the brief. |
+| **D1** two IRQ_STATUS writes of `0x10` | Decline preserves raw `0`, status `0 & 0x30 = 0`, enable `0x30`; one announcement across two writes. An illicit status store gives raw `0x10` and status `0x10 & 0x30 = 0x10`. | (a), (b), (g), and (e) at this IRQ site. |
+| **A2** IRQ_RAW_STATUS read | Raw value is `0`. Returning enable instead gives `0x30`. | No additional guaranteed discriminator among (a)–(k); constant-zero legal reads still pass. |
+| **D2** two IRQ_RAW_STATUS writes | Same unchanged IRQ-state expectation and illicit-store arithmetic as D1. | (a), (b), (g), and (e) at this IRQ site. |
+| **A3** legal IRQ_ENABLE_CLEAR writes | `0x30 & ~0x10 = 0x20`; then `0x20 & ~0 = 0x20`. | Catches deletion/swallowing of this legal clear direction—a version of (f). It does not catch the specifically supplied constant-zero IRQ_STATUS example. |
+| **D3** two IRQ_ENABLE_CLEAR reads | Proposed policy yields `0,0`; enable remains `0x30`. Retaining F:603 yields `0x30,0x30`. An actual enable-clearing side effect changes the subsequent `+0x188` observation. | (a), (b), (d), (g); some forms of (j), discussed below. |
+| **A4** FIQ_STATUS read | Given internal enable `0xc0`, `0 & 0xc0 = 0`; OR would give `0xc0`. | Constant-zero legal reads still pass. |
+| **D4** FIQ_STATUS writes, “likewise” | Expected raw/status remain zero and internal enable remains `0xc0`. If “likewise” means writing `0x10`, an illicit **FIQ** store gives raw `0x10`, but status remains `0x10 & 0xc0 = 0`. A raw-status observation is essential. | (a), (b), (g). An analogue of (e) needs the appropriate raw-field observation. Literal (e), storing into **irq_status**, needs an IRQ observation too. |
+| **A5** FIQ_RAW_STATUS read | `fiq_status = 0`. Returning internal FIQ enable instead would give `0xc0`. | Constant-zero legal reads still pass. |
+| **D5** FIQ_RAW_STATUS writes, “likewise” | Same FIQ-state expectations and qualifications as D4. | (a), (b), (g); field-corruption coverage depends on what is actually observed. |
+
+D3 needs its own `0x30` setup: it cannot simply inherit A3’s final `0x20`.
+
+A4/D4 and A5/D5 are underspecified by “likewise”: the brief does not explicitly give their write operand, observation sequence, or how unchanged FIQ enable is established. **F:628–631 returns zero on a legal `+0x288` read**, because it handles only writes. Writing `0xc0` establishes that internal value by source reasoning, but the existing guest read cannot verify it.
+
+The complete supplied-candidate accounting is:
+
+| Candidate | Coverage as written |
+|---|---|
+| **(a)** Retained exit at one site | Its corresponding D row fails continuation/exit-zero requirements: **5/5 sites**. |
+| **(b)** Unlatched announcement | Corresponding D count is 2 instead of 1: **5/5 sites**, provided both accesses occur in one device instance. |
+| **(c)** Two sites share a latch bit | **Not guaranteed.** Separate cold launches for each D row let both pass. Both sites must be exercised and counted in the same instance. The brief does not specify that arrangement. |
+| **(d)** Retained enable-mask return at `+0x18c` | **D3 catches it**, with nonzero enable `0x30`. |
+| **(e)** A declined write stores into `irq_status` | D1/D2 catch it through IRQ raw/status readback. D4/D5 need cross-field observations to catch that literal wrong-field store; “FIQ likewise” alone does not establish them. |
+| **(f)** Legal IRQ_STATUS reads always return zero | **Escapes all ten stated A/D rows.** Their legal IRQ_STATUS fixture expects zero. A3 distinguishes a swallowed clear write, not this supplied example. |
+| **(g)** Complaint misnames the register | Corresponding D row catches it **if it counts its exact expected text in that row’s access interval**. Counting arbitrary footbridge messages, or only aggregate totals over all sites, is weaker. |
+| **(h)** K1 accepts any nonzero exit | **No A/D row catches it.** The intended unknown-name launch returns 1 under both predicates, so the positive K1 leg itself does not distinguish them either. |
+| **(i)** K2 accepts death before completing the prologue | **No A/D row catches it.** The prescribed fresh-register/completion assertions are what prevent this; a successful ordinary K2 run cannot prove those assertions were retained. |
+| **(j)** A read clears a latch | **Not guaranteed.** D3 catches a latch reset by each `+0x18c` read. A latch reset by an intervening legal read can escape two adjacent declined writes. The needed interleaving is unspecified. |
+| **(k)** Legs implemented in only one launcher | **No A/D row establishes 3/3 launcher coverage.** If the other launchers retain their old K checks, those checks fail when run after the device change. But the shown ARM gate invokes only sites, so it does not establish that those other launchers were updated or exercised. |
+
+There are direct discriminators for **5/11 candidate labels**—(a), (b), (d), (e), (g)—with the site qualifications above; **2/11**, (c), (j), depend on unspecified sequencing. **4/11**, (f), (h), (i), (k), have no discriminator in the ten A/D rows.
+
+No stated row distinguishes the literal constant-zero IRQ_STATUS candidate **(f)** or K1’s weakened nonzero predicate **(h)**. The harness’s own predicate integrity and coverage cannot be inferred merely from a green run of its intended successful cases.
+
+For question 5, each launcher needs the following observations:
+
+| Launcher | K1: startup rejection | K2: verified prologue, then quit |
+|---|---|---|
+| **Sites `run_arm`** | Its `-E cats` argument is fixed at S:186. Nested `wait()` returns False and `dead[0]` records EOF/read error. `run_arm` returns `NO-PROMPT` and decoded exit status, but **does not return the unknown-name diagnostic**, full buffer, or startup-death observation. `fatals` only retains bracketed footbridge messages. A new branch/result observation is needed inside this launcher. | The fresh `reg` parsing at S:265–274 already supplies r3, r5, r6 and **r1** for the timer mask. It must happen after verified prologue execution and before quit. Then an ordinary interaction must return False with `dead[0] == True`, sampled before S:279 cleanup. That result is not currently exposed; a new K2 branch/result is needed. |
+| **Drain `Session`** | Constructor fixes `cats` at D:291. After allowing the intended name through this same constructor, `wait()` supplies False, `s.dead` supplies death, `s.buf` supplies the named diagnostic and prompt absence, and `close()` supplies decoded exit/signal. No existing function combines these into K1. | `step_and_check()` supplies execution/coverage facts; `regs()` at D:397 supplies fresh **r3,r5,r6,r7**. `send()` returns the next interaction’s Boolean and `s.dead` records death. Sample both before `close()`. A new K2 orchestration/result is needed, not a new PTY mechanism. |
+| **Witness `Session`** | Same available facts through W:`wait`, `dead`, `buf`, `close`; constructor fixes `cats` at W:221. No existing K1 aggregate. | W:`step_and_check` and `regs()` at 333 provide the prologue facts and **r3,r5,r6,r7**. `send()` plus `dead` supplies the pre-cleanup failure observation; `close()` supplies exit status. No existing K2 aggregate. |
+
+For **all 3/3 K1 legs**, the acceptance facts must be: no actual prompt, EOF/death observed, diagnostic identifies the chosen unknown name, and normal exit **exactly 1**. A timeout or an unrelated launcher failure is insufficient.
+
+For **all 3/3 K2 legs**, the fresh register response must contain the required keys and values:
+
+- `(r3 & 1) == 0`;
+- `r5 == 0x11223344`;
+- `r6 == 0x1011`;
+- timer signature `0x00345678`, in sites’ r1 or the pending probes’ r7.
+
+Completion is separate from those values: the existing sites prologue reaches offset `0x28`; drain defines 21 instructions through `0x50`; witness defines 18 through `0x44`. The step records must establish the intended completion point. Then quit, failed ordinary interaction with `dead` **before cleanup**, and normal exit **exactly 0** must all be recorded.
+
+**The sites `wait()` returns the Boolean `False` when the child exits at startup without printing a prompt.** It is not `waitpid()` and does not return exit 1. `rd()` sets `dead[0]`, `run_arm` assigns `NO-PROMPT`, and teardown later obtains the exit status. A timeout also returns False, which is why that Boolean alone cannot establish K1.
+
+Another source-level defect relevant to editing these helpers: S:`send(x, timeout=60)` ignores its `timeout` argument when calling `wait()` at 235. Both `Session.send()` implementations forward it.
+
+For question 6, **one round is defensible for the five terminating undefined-direction accesses**, but “one class” must not erase their differences.
+
+All five share one device, one refusal policy, and the proposed detector. They do not yet share existing coverage: the current sites probe deliberately reaches **1/5** terminating sites, `+0x18c`.
+
+The split is **4/5 writes and 1/5 read**. The four writes need unchanged functional state plus independent announcement suppression. The read additionally needs removal of F:603 and delivery of the chosen zero value through the readback tail. A literal identical edit at all five sites is therefore insufficient. FIQ’s missing observability also prevents treating its rows as interchangeable with IRQ rows.
+
+For question 7, these further findings affect disposition or the strength of the brief:
+
+- **A sibling already declines silently:** FIQ_ENABLE_CLEAR read at **F:633–636** leaves `odata` zero and reaches the common tail without a complaint or exit. It has exactly the same datasheet direction classification as IRQ_ENABLE_CLEAR. The brief should explicitly weigh this precedent for silent decline.
+- **Another legal read is missing:** FIQ_ENABLE at `+0x288` is documented at DS:6831,6911–6924, but F:628–631 returns zero regardless of `fiq_enable`. This is a legal-direction implementation gap, analogous in principle to the prior IRQ-enable repair.
+- **FIQ raw state is not implemented consistently with the datasheet:** DS:6903 says IRQRawStatus and FIQRawStatus “always contain identical data.” The file updates only `irq_status` in its interrupt callbacks; `fiq_status` remains its initial zero. The all-zero proposed FIQ rows conceal this difference.
+- **Other undefined-direction accesses already survive:** Timer-clear reads are silently declined at F:683–709; reads of IRQSoft/FIQSoft fall through the default arm. These reinforce that termination is not the device’s universal refusal mechanism.
+- **The pending probes rely on a separate hardware deviation:** DS:7046 and §7.3.40:7087 make TimerNValue read-only. F:654–655 accepts writes, and both pending probes use such writes to plant their sentinel. Their witness is evidence about this model’s behavior, not a hardware-conforming timer program.
+- **Row names collide:** existing sites A1, A2 and D1 mean VENDOR, timer mask and disassembly, respectively. The proposed rows reuse all three names. `gate_arm.sh:1092,1097` already pins the existing A1/A2 values; new names or explicit disambiguation are necessary.
+- **Interrupt-output preservation is not observed by the stated value checks.** The sites probe already documents that omission at S:98–101. “State unchanged” must not be reported as proof that the output line remained unchanged unless an observation actually measures it.
+- **The SDRAM pair remains a different class:** DS §§7.3.9–10 define writable/readable fields; F:711–745 discards writes and terminates reads. After the proposed five changes, these are the remaining **2/7** terminating access sites. None of the three supplied probe programs reads those addresses.
+- **The normal VENDOR word signature is model-specific.** `gate_arm.sh:1088–1089` explicitly notes the real packed DeviceID:VendorID word. Its `0x1011` pin is useful reachability evidence for this model, not full PCI register fidelity.
+
+The option-set comparison is therefore:
+
+| Option | Assessment for these five sites |
+|---|---|
+| DELETE | Deleting the whole case loses its legal direction and falls into the unlatched default. Deleting only exits leaves repeated complaints and, at `+0x18c`, the enable-mask return. |
+| DECLINE | Viable; silent FIQ_ENABLE_CLEAR and timer-clear reads provide local precedents. |
+| DECLINE + LATCHED ANNOUNCE | Viable emulator policy, provided each site has independent suppression and the read has an explicit value policy. The datasheet does not require an announcement. |
+| ACCEPT | Existing computation of the enable mask is not documentation that the write-only address may expose it. |
+| FAULT | Not available simply by copying `dev_unreadable`’s `return 0`. That handler returns failure, but `memory_rw.c:603–624` dispatches device-failure exceptions for MIPS and M88K, **not ARM**. ARM translation faults exist elsewhere; a proper device-abort path would require additional work and a hardware warrant. |
+| BACKED ACCEPT | Appropriate to documented register state, not a justification for inventing storage or readback in an undefined direction. |
+| IMPLEMENT | Relevant to the separate legal FIQ-enable/raw-status gaps. It does not supply missing documentation for these five directions. |
+
+The smallest supplied weakening that remains green is **(h)**: accepting any nonzero startup exit still accepts the actual expected exit 1. Likewise, removing K2’s verified-prologue requirement can leave its normal quit case green. Those are limitations of the proposed harness evidence, not results of an executed mutation.
+
+Model: **GPT-6 / Codex**; exact deployment identifier is not exposed. Historical panel results, claimed past measurements, Git HEAD identity, and `exit_census.py` behavior were **NOT CHECKED**. The working-tree function and the supplied line anchors agree.
+
+Files read or searched: **266/266 working-tree MD5s below**, including files scanned only for the requested grep counts. `src/` and `regress/` paths are relative to `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`; `_scratchpad/` paths are relative to `C:\DocumentNoSnc\CC\GXEMUL`.
+
+<details>
+<summary>Working-tree MD5 manifest</summary>
+
+```text
+df1fcae826bcff58b2380a609f865d1e _scratchpad/dc21285.txt
+b0035b2040fcfe57f9d4f4a4d4ab034e _scratchpad/fbd5/brief_fbd5_design_BUILT.md
+
+3f1ec346330206937eec9ebdd642d29e src/core/debugmsg.c
+d1d25cca8564d28d3835fa79c47c1ea0 src/core/emul.c
+5617d3c47ee1ff137e7d7999c4242028 src/core/emul_parse.c
+9730162dd10aa6ca0ad649101747b3e3 src/core/float_emul.c
+979d9c6fefc7c5052315e392d3ee2ea1 src/core/interrupt.c
+309c6a77cc0759f5098295398b397d8f src/core/main.c
+a8d9345c343ff9ab84d546fb6eb3adc3 src/core/memory.c
+57cc05a150c8470d8d5c22477570b32a src/core/misc.c
+97b09276cdcc67ead4af2241d97ef3c4 src/core/settings.c
+b73b3bf4b457f136eb129ed49a6b68bd src/core/timer.c
+60a7e3c8ab365fa81e62884ff5d3c02c src/cpus/cpu_arm_instr_loadstore.c
+3d40ea8e659c13af3205fd5c23b6b69e src/cpus/memory_arm.c
+3d47dd6632be679db41d207fb1238d3c src/cpus/memory_rw.c
+7c948ab0637e2b298955ae5f4f36b847 src/debugger/debugger_cmds.c
+dc085d37020012630a61450096f05288 src/devices/autodev.c
+9fba02edbedf23089a535b287f395276 src/devices/autodev_head.c
+15720a1bc34c42a56bc5eb5c56186901 src/devices/autodev_middle.c
+7c7ac02896b8b111754dd38f6ea4e635 src/devices/autodev_tail.c
+9c57535def2046ed7bacd82f68d3dd68 src/devices/bus_isa.c
+20d13aad1ae7f7bd6f933872359e191d src/devices/bus_pci.c
+a081564373cf81c2cf177b75ccbbc20d src/devices/dev_8253.c
+dbbb0e90c64b7275d8270aa466e7f7c4 src/devices/dev_8259.c
+df3e620c21f0d770d438d68c9636b4f3 src/devices/dev_adb.c
+4c56ae0db0f47e78c810854529970cf9 src/devices/dev_ahc.c
+3ae3357a59a03983447ac915ef5bf508 src/devices/dev_algor.c
+5d7ac7a0989f72062c310e58e08703db src/devices/dev_asc.c
+6d2969679aa612c6fa165ebe4d7b488a src/devices/dev_bebox.c
+c2bcf0b769acd90f965cbb695500ea7f src/devices/dev_bt431.c
+5e2fd01c859ba9e85c85768c81cc3bc1 src/devices/dev_bt455.c
+c633df5e3dfa679437301f9b1f976b9e src/devices/dev_bt459.c
+210b30f7b05529eba2e8bef367af1129 src/devices/dev_clmpcc.c
+50e92dba3a88ba73cdc67425a425c8a2 src/devices/dev_colorplanemask.c
+8d72846eb5e4c8a105063549cdae9322 src/devices/dev_cons.c
+a5548900f13d7d82331abf77557aa9da src/devices/dev_cpc700.c
+1ca658aa9480d8133aa09af99cc64f35 src/devices/dev_dc7085.c
+f5c26a4958447411af2953f44fe87a40 src/devices/dev_dec21030.c
+fd27eec813bec6711fcfdab8db49ed8a src/devices/dev_dec21143.c
+e9997f51a4c0e453f67c4a47bf9da1dc src/devices/dev_dec5800.c
+56a7c3ce2e94040be986801e6278262a src/devices/dev_dec_ioasic.c
+a5d544427df51969001ef8a9a05a6c30 src/devices/dev_disk.c
+7230cc32060832373e01230b3483fcb1 src/devices/dev_dreamcast_asic.c
+1df5383fb40a47e483653eb47becd31c src/devices/dev_dreamcast_g2.c
+3b7e1d4ca39d8c5c4c241eddb70d039b src/devices/dev_dreamcast_gdrom.c
+3bce9915bc75e098e527b6524b226144 src/devices/dev_dreamcast_maple.c
+9f8301a49abde2ec729b132a83516b32 src/devices/dev_dreamcast_rtc.c
+133e31f6e61d50e6ae6f94a2d838b712 src/devices/dev_eagle.c
+f4955db10c0b942bc6508086ca20dc81 src/devices/dev_ether.c
+cacdd29f114e6eeedeaadbeb5c799424 src/devices/dev_fb.c
+51689f8dd1d3e1472456b658f620dcb2 src/devices/dev_fbctrl.c
+7b965e863fc364ef1b3a65755e5fbcda src/devices/dev_fdc.c
+25e72c7c6e3b7c74704d12f9f9174c2c src/devices/dev_footbridge.c
+fc2426c40cb5f578cd2924abb58e138d src/devices/dev_gc.c
+26010c7d233a3ad55ac050a4c2629ebb src/devices/dev_gt.c
+62c2ec1022b374ac4d4e13a9660d3020 src/devices/dev_hammerhead.c
+4d8c956db88a9bf115f5cf556390dd8a src/devices/dev_i80321.c
+50ff13f62e9a1e4b4fe0fad8412c8db0 src/devices/dev_igsfb.c
+da2ced3173f05166e10120829e0c09d6 src/devices/dev_iq80321_7seg.c
+7cb835322a83c21b4dcc1fc8a7334bce src/devices/dev_irqc.c
+1f48a4c55806c76a67aae8f6854dcace src/devices/dev_jazz.c
+df0811f5f3b3808490240ffbab80dfa4 src/devices/dev_kn01.c
+bc46dcc0acbaf3c0abb00628f0c5da62 src/devices/dev_kn02.c
+c25e7e7b8c4252c4a5edc993df818640 src/devices/dev_kn02ba.c
+ec94af6c70ad137b15a4b969f1673379 src/devices/dev_kn220.c
+4157b2d66493af5c050ad2a9adfaa3d2 src/devices/dev_kn230.c
+e2201bb4d32a1c9a02cc5bf0dd50c93e src/devices/dev_lca.c
+3eab9c96d4823113941271ad415daf5d src/devices/dev_le.c
+0fbc0f9c72938a0542afaa5e93b672df src/devices/dev_lpt.c
+6ecc6908bcf5234053a181b759f8c3e9 src/devices/dev_luna88k.c
+2e39fc4128704cb7a8105a50dc7ca3a5 src/devices/dev_lunafb.c
+0d12cfafa98a7d633341151f522709c6 src/devices/dev_m8820x.c
+87f1cd81a64401864f6eae29a5c05b84 src/devices/dev_malta_lcd.c
+7eab1e6e538d29833e807bd22f56d7e9 src/devices/dev_mb8696x.c
+7dd3c468ec7abc95535ed1686de3deab src/devices/dev_mb89352.c
+ecacd5dc13c9e5c203569d532e7c6c25 src/devices/dev_mc146818.c
+dae31a6b914992908ba741d2bc315601 src/devices/dev_mk48txx.c
+bb97e0daeb22f6d10dfa560efec98801 src/devices/dev_mp.c
+ebf853425a584a7a68aac850f36690ad src/devices/dev_mvme187.c
+3984855413bfa74b6db90b650fe3c98e src/devices/dev_ne2000.c
+6b5ac57e56854a72025b29a430f72cd0 src/devices/dev_ns16550.c
+feb4780ae7641c2292234bcdfb4c1c68 src/devices/dev_ohci.c
+ed656255c9516f2d6b1e97b5342c20c8 src/devices/dev_osiop.c
+079230a732f71f8aeea93e2d7914102a src/devices/dev_palmbus.c
+21f6b1356707fbf1bda2801ca5df9ddf src/devices/dev_pcc2.c
+fe1ec874d311501528ad32aa7e36f1d8 src/devices/dev_pccmos.c
+35608fec97f91105ac87d7a2556359bc src/devices/dev_pcic.c
+ba7df2cba4eee4654a83a4aab70b1f82 src/devices/dev_pckbc.c
+e0eeb41f0726886f7d844c90d4b2b939 src/devices/dev_pmagja.c
+c5123a82b7f2e178366469aee42bf281 src/devices/dev_pmppc.c
+8d90d15e0f5240a126d74356e9896b0e src/devices/dev_prep.c
+f38bb2aeffc2d0b93b525dae47f93793 src/devices/dev_ps2_ether.c
+844e185d4d17ebec864cf2f33f54d1d7 src/devices/dev_ps2_gif.c
+64731b012f41e4c34cc7c92313d79737 src/devices/dev_ps2_gs.c
+4706bffc125d4c3e303709fc5aa4c9b2 src/devices/dev_ps2_spd.c
+d3a9d9a64d8d0c92fde0471ea2d434f0 src/devices/dev_ps2_stuff.c
+6af38de7eef85e602136c1768cb1b56d src/devices/dev_pvr.c
+df90fbfe61c258aa350c2ea2ed99120e src/devices/dev_px.c
+86061e25a2eeb88add81b721ce704f81 src/devices/dev_ram.c
+2b94de4588b0c1db0a67af1fc4c9254a src/devices/dev_random.c
+3c9dd6cf479064ac86e233a724240a65 src/devices/dev_rs5c313.c
+9ff4cc4b55fa3b9f00fc728022a1d41a src/devices/dev_rtc.c
+b65bebdb9bda0186c451ebbdc4abfd70 src/devices/dev_rtl8139c.c
+68f0d188bd509f5d865d0fbf46e554d9 src/devices/dev_scc.c
+a63d99cc4cefc36700435668870a0575 src/devices/dev_sfb.c
+4a226592a85b76fff4bd2d34d6f35e13 src/devices/dev_sgi_gbe.c
+06bb88a03e571bcc47ac3920396f8f0c src/devices/dev_sgi_ip19.c
+e32a6aaaf3380319b87e6b0396a1af4c src/devices/dev_sgi_ip20.c
+5e4bb736f85ee4bc28bfaf42edd898bf src/devices/dev_sgi_ip22.c
+ff5729f844beeb617d09acd55c6e9f6b src/devices/dev_sgi_ip30.c
+8c1d1545eeddd12fd49f52ccede60262 src/devices/dev_sgi_ip32.c
+4e83c288fcd56ed7ee422ffdb1b26fbb src/devices/dev_sgi_mardigras.c
+055872383757e491e03ef05fc63726d1 src/devices/dev_sgi_mec.c
+6e2c68731a6fc73ee656596816d5ec46 src/devices/dev_sgi_re.c
+e1209623e43573115fff52cffb275dd3 src/devices/dev_sh4.c
+bd2948555cf68f3c3c31678ac1a37a56 src/devices/dev_sii.c
+a0b4d8b30f70d23d1d7be00e90211ac8 src/devices/dev_sn.c
+b9cc6031984eba64aed1b39ce6476bbb src/devices/dev_ssc.c
+942d777a68276b9694e20ab549c04945 src/devices/dev_turbochannel.c
+e26dea7dbde9f468cd0fde05324417bb src/devices/dev_uninorth.c
+3be3ebd58c333d5dc1b54260d7223706 src/devices/dev_unreadable.c
+18c03d55c23904823a07f6a75997272c src/devices/dev_v3.c
+e80cf7dcd2f8500cb64756ec39c67da5 src/devices/dev_vga.c
+2516a82bc777fe780f2dc6ccc00fd6c3 src/devices/dev_vme.c
+05b3a7ab01f5363631a772c41c7d2a18 src/devices/dev_vr41xx.c
+714071619d8f98e85fe48ae566139345 src/devices/dev_wdc.c
+79700b66bb50d5e8e64aee55d469ea10 src/devices/dev_z8530.c
+5eade46308b875ae0b5cb1a28b8a5fcf src/devices/dev_zero.c
+fa305a96c7bd498f7ddc16a3ecfec93f src/devices/device.c
+766d65fcee16be676ba05987683d57ed src/devices/fb_include.c
+b64d270530b8e6ada3e03f6131681554 src/devices/font8x10.c
+74d258755dd58b64cb1565394a8fad9e src/devices/font8x16.c
+de69b90b0c095d3d154f57754e030247 src/devices/font8x8.c
+d85ee77680152cf418ed1d692d2bc16f src/devices/fonts/Xconv_raw_to_c.c
+b64d270530b8e6ada3e03f6131681554 src/devices/fonts/font8x10.c
+74d258755dd58b64cb1565394a8fad9e src/devices/fonts/font8x16.c
+de69b90b0c095d3d154f57754e030247 src/devices/fonts/font8x8.c
+a0ac1e4a8b269f3a6105bb1624433ab2 src/devices/lk201.c
+ebe0280fdb514422df55fa8a7d477e0b src/include/misc.h
+9f10a788229d91cee971012abeed85c8 src/include/thirdparty/dc21285reg.h
+3d487c7b3b06bb42246d340f8d51ae4f src/machines/machine.c
+c82d10efb1091d186eead78bee65d633 src/machines/machine_cats.c
+
+f037514b8dd0c2ea8e55e5f7c3b34470 regress/absorb_census.py
+81618a23a4731915f0f2e5cfd28aefdf regress/alpha_harness_probe.py
+e7d1bfa1f9e556fa31db1805be724842 regress/alpha_pfnoffset_probe.py
+4ab7c42e802b78b4eb8ca524a989b7fa regress/alpha_swpctx_v0_probe.py
+aea8c652564a6d35c114fd42d61b606a regress/alpha_tbi_probe.py
+9a51101712f090e348bef79dbc8d65ba regress/arcbios_shift_probe.py
+e9ec39a03c7c451b0aa43437b5e7b0cc regress/arm_bdt_probe.py
+9ecaad56fb5ad1e7799b3e647a514ee0 regress/arm_bfx_width_probe.py
+12e832be969a4e3fbd169979f96d3d1e regress/arm_endian_probe.py
+4c83995878513a6ced51514906433152 regress/arm_flags_probe.py
+749acc7a9a6305c2fc8b29c68d42611d regress/arm_fold_marker_probe.py
+6c1a3936444ca8681faf727277f24c98 regress/arm_idle_probe.py
+863b63456fdbe3f3790294fe001bade3 regress/arm_memcpy_probe.py
+d72901783f06a89e9e9690d4943b78cc regress/arm_msrmode_probe.py
+16fd34cc1d890ca1cb686a2146353fb9 regress/arm_strlen_probe.py
+bbe4b608d10056e6f5237bd06fb0678d regress/arm_writeback_probe.py
+ad9fee1aca71a0e70c86dda8b304354a regress/asic_badaddr_probe.py
+4730d13830e023ad40992531a44ee145 regress/build_asan.sh
+ff0f689a73c99a0f49cc330da4e7f822 regress/crime_width_probe.py
+f826d81bfad57ae08d6445e2f749bb76 regress/diag_div_sweep.py
+79b7f0ce2320ddcff34ae9f22113aeff regress/diff_autodev_gen.sh
+c9bf16a1468be4336700b2816dd90a17 regress/drive_guest.py
+318ba77c201cbfe88df5311a4795770a regress/fbpending_drain_probe.py
+57ef8d54ab6b13171ee48c333ba7f413 regress/fbpending_witness.py
+1a63c21d0e440c0bfc8259e0faea9fd5 regress/footbridge_sites_probe.py
+0ab6317cbc8613d630d56c4e2490db11 regress/gate_ab.sh
+633e1c9227ad004aaf12dcc4b85d6f22 regress/gate_arm.sh
+584849a86ae2703c3bda2b128ac891f0 regress/gate_asan_sweep.sh
+f8c085b98d281731ad45a95c4bd2d941 regress/gate_build.sh
+c07dc18c198966b04a08a3771f9eddf9 regress/gate_crossfamily.sh
+12e179ad7ed0f0da12d725551276bace regress/gate_hygiene.sh
+92b129daf35eeb001c11d5af4cc5b6b5 regress/gate_m88k_rounding.sh
+f13bab5323260e92fc462553611505a6 regress/gate_mips.sh
+bc3c3a9728ca44e67452a9132cddc3db regress/gate_mips_folds.sh
+9dbc86297155973a36b9511680b5d1b3 regress/gate_mips_rounding.sh
+2f34025278950ec8fe60faffa896577f regress/gate_offline.sh
+3df198dd8c5ddf92bbd4a88db25a5438 regress/gate_ppc.sh
+571e9d4e9b93921533a9bd7f4a7ae772 regress/gate_ppc_halt.sh
+18ebdfeb9448b307ab398e89265b28ee regress/gate_sh_rounding.sh
+5132d3c8452168312c363779608a7757 regress/gate_upstream.sh
+bc5971b42dba9374e5760b61ac21a125 regress/gdrom_cond_probe.py
+9baa3b0401cee48de5e944ca99caadcb regress/gdrom_data_probe.py
+6e73ce49d368fcb3b89121c26d61d05d regress/gdrom_decline_probe.py
+ed9464e12c6a2af30e458edc6dbe2f51 regress/gdrom_default_probe.py
+023dbc584239d6634393da1bbad61a5d regress/gdrom_toclen_probe.py
+58244881b5c0495f58a92c102e65265d regress/hpcabort_witness.py
+a5129412f865cb60d505f7b9c70a64ac regress/hpcmips_ctor_probe.py
+535356d0c607cff21170353d20814b56 regress/landisk_aux_probe.py
+132eb365406ef73a51654a4d6a9b3b1a regress/lca_badval_probe.py
+729c970907ee173b4f28f63af2d18255 regress/lca_confbus_probe.py
+681bffdfd50c8c6151c0b307f76c33a8 regress/lca_confwidth_probe.py
+5d8fa0cffb3473e658d49ff08bfc4728 regress/lca_irqstub_probe.py
+0ce2d31e2dda0b1a948dd1d0d16f0b7d regress/lca_irqstub_uart_probe.py
+8fed24f1f60f765a77caeb986cb81b8e regress/lca_isalane_probe.py
+87924ad999158e029f688d2719751cd0 regress/lca_isaphys_probe.py
+08f040ec4946f45f86f4d118c60cfea0 regress/lca_widewrite_probe.py
+63b3aa8c1e887efb42a5c6c573f843e1 regress/lib.sh
+8c4255591a8f9c2d14596c86785aa7dc regress/luna_absentcpu_probe.py
+70caaa1589b774299ca015efdcd144a3 regress/luna_intmask_probe.py
+4852b4b57409639cd10872f36c1d037d regress/m8820x_sites_probe.py
+d08e43cf95e29234a3375d9076fec6f2 regress/m88k_exc_probe.py
+0a840850c675fd241c9b43c43335f816 regress/m88k_idle_probe.py
+cd7360bcb1fdba871b67cf779b2a3728 regress/m88k_rounding_probe.py
+f4ac0c5c40be588c602483ae88ca6825 regress/maple_dmaaddr_probe.py
+f838f7b32d419623ef5c8e2a743d0d82 regress/mips_fixedmode_probe.py
+8373f9766c9ecfcd9ff9da34407ef904 regress/mips_fold_probe.py
+571169f8f7d3f3d2f02058a3df6324f8 regress/mips_rounding_probe.py
+1f560336b14894baa6b096cbd02ce454 regress/mips_subnorm_probe.py
+2055070a1bf65ef5f7091de2e89908a2 regress/mk48_nvram_probe.py
+dc2a7a5b4d3302814ee3f8e28f8058f4 regress/pcc2_c040_probe.py
+f986fafbabd927c67c1e7d4238327701 regress/pcc2_default_probe.py
+7d57113aa7df9fc2f54afb8923e8792c regress/pcc2_width_probe.py
+1b18961c62b4778e35aefb04e57973f8 regress/pcc2_width_witness.py
+3f536309aeac1dd6aa94024b47b4729f regress/pit8253_latch_probe.py
+8722c831840ad1637d74d38b2b23af2c regress/ppc_halt_probe.py
+575088b09722a89ac2d260022d4d1f75 regress/ppc_rldicl_probe.py
+54fd845307731061a3be3a495512b735 regress/ppc_rldimi_probe.py
+2cb2683030be628d33dcea5d9ac996e6 regress/ppc_rlwimi_probe.py
+87417042f9fd9ac8e3144c31a10d89b0 regress/ppc_rounding_probe.py
+b03e9631f1bae5653d9f19407d051c93 regress/readiness_predicate_test.py
+71fa7ac96ff91f92879256692fc4d524 regress/run.sh
+26417531d0679df3fac6c914bb3ef540 regress/selfmutant.py
+2613c1dde220537e3d59c05e6dc89e00 regress/selftest_absorb.py
+dbb4d09498502304b940699fd81ae03e regress/selftest_budget.py
+46967a1addf4ab2bbdb580f19788ebc0 regress/selftest_inactivity.py
+e79b147156a3c5040c5625d6e95b6a7a regress/selftest_logdir.py
+00ab9a20c964dfeff3e7351cd2a2ac82 regress/selftest_mutation.sh
+05e0d5ef4f07f09eb2e4492d233ce5cf regress/selftest_mutation_295.sh
+a34f1fdf72b2d7ac8829678c1626f1dd regress/sgi_de_primop_probe.py
+78c68a19b9f7ecdd36efeadb28ae78ca regress/sgi_de_width_probe.py
+9b1d7cddd1ff4ee030e4222f0d90479b regress/sgi_eaddr_probe.py
+348f53129b61e4d6202940bbbb067d63 regress/sgi_mte_fill_probe.py
+eefddaa056976fda7cda86b81a4a6d42 regress/sgi_re_colourdefault_probe.py
+1daecf6096f7f443fb71c455f7937474 regress/sgi_re_randompixel_probe.py
+cbe1c089c2e849e2e0fe50f832c50938 regress/sgi_re_rgb_probe.py
+ffda6d30f3f6b02a60d504607a71cd57 regress/sgi_re_unmapped_probe.py
+966a5a1358dd4142d1208326caabf842 regress/sgi_re_width_probe.py
+3f20c1823f1fa03983d484868a7b2105 regress/sh4_bsc_width_probe.py
+ada641c6e1837ddaeff25129e8e98809 regress/sh4_chcr_probe.py
+78feae335569a24e3a73e718e5febb73 regress/sh4_chcr_witness.py
+c621c3ce8c0cdf9005b60c7d5ddb21ad regress/sh4_pcic_probe.py
+fd59c932cdf9727c72140a7f9c0cd4f9 regress/sh4_rtcsr_probe.py
+a5a68c1a03d872a673ed9202a7cb1988 regress/sh4_rtcsr_witness.py
+d85b121928d041cd1438f443d07695fc regress/sh4_sci_probe.py
+96d7a41d420391b453b884317d3c777d regress/sh4_sci_witness.py
+a30e8ae58b59ce801b3c1f63f6c01cf2 regress/sh4_tlbda2_probe.py
+67675798101d28c1892c92942e974268 regress/sh4_tlbda2_witness.py
+3b9f65964d8c3a31f2c09b48e422218a regress/sh4_val_probe.py
+914130717d621016727215053a06406d regress/sh4_val_witness.py
+11d67dfd587089423f5d4aee5e5cddb2 regress/sh4pcic_witness.py
+769ae9fd5dd18d40c5cbf080dff6af85 regress/sh_halt_probe.py
+773213646104cf12454d6cbb13f0542c regress/sh_intprio_probe.py
+218fef0b2355d4780fe892d5128015fa regress/sh_iprbcd_probe.py
+3e523d735c5102ba98977de696b40394 regress/sh_pclock_probe.py
+002c3b47880cc00eb224b3ebd7a8381d regress/sh_rounding_probe.py
+12bde65ec4e860a93ef962acf7cc3fbd regress/sh_tlbmulti_probe.py
+96d2cb8648895efd5f4f1ba76f18c1c6 regress/wdc_addtoinbuf_probe.py
+1622a6784db0dd28d5293cdce9e9d14e regress/wdc_altdigin_probe.py
+5ae62dd6b808b9d03d5ddb368ba75f32 regress/wdc_altoffset_4bit_probe.py
+e9c9ac60b5ba89e49cee74982e2174ca regress/wdc_altoffset_probe.py
+651dfb5ce74b61e917d59339a46820f6 regress/wdc_altoffset_sig_probe.py
+48f2c1818e1139065446b6666a70aa08 regress/wdc_flood_probe.py
+d75a0da20c6e5b4c6a79af064823ef7b regress/wdc_latch_census.py
+e9e4f54e68f9676015b248f1ff319437 regress/xscale_inten_probe.py
+```
+
+</details>
+
+Nothing run: no emulator, probes, gates, builds, census programs, or mutations. Only read, search, and hash operations; no edits.

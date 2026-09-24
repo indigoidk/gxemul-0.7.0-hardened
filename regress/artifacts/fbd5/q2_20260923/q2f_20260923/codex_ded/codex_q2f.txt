@@ -1,0 +1,77 @@
+VERDICT: FAIL — unlisted coverage gaps remain; the 864-row total and gate pins are correct.
+
+**TASK 1.** All pass/fail conclusions below are from source tracing, not mutation runs.
+
+Five X14 assertion locations changed, affecting eight emitted rows; one added assertion runs twice. “DEVINIT variants” below means both “DEVINIT timers” and “DEVINIT timers, a tick pending.”
+
+Each replacement is independently applied to the indicated device line.
+
+| Changed/added X14 row | One-line device change that makes it fail |
+|---|---|
+| DEVINIT variants: five legal reads, test line 1414 | Replace device line 572 with `{ odata = d->irq_status & d->irq_enable; if (d->timer_control[0]) INTERRUPT_ASSERT(d->irq); }`. Violates the new `ZCPU(0,0)`. |
+| DEVINIT variants: Set then Clear, line 1420 | Replace line 616 with `{ if (!d->timer_control[0]) INTERRUPT_DEASSERT(d->irq); }`. Observes `(1,0)` instead of `(1,1)`. |
+| DEVINIT variants: five declines, lines 1425–1426 | Replace line 577 with `d->warned_irq_status_w = 1; if (d->timer_control[0]) INTERRUPT_ASSERT(d->irq);`. Violates `ZCPU(0,0)`. |
+| Device-raised line 4: IRQ_STATUS read, lines 1446–1448 | Replace line 572 with `{ odata = d->irq_status & d->irq_enable; d->irq_asserted = 0; }`. Fails the new post-read `irq_asserted == 1` check. |
+| Device-raised line 4: re-arm sequence, lines 1476–1477 | Replace line 584 with `if (writeflag == MEM_READ && !(d->irq_asserted && d->warned_irq_raw_w))`. The latched IRQ_RAW_STATUS read returns zero instead of the newly checked `0x10`. |
+| **Added:** DEVINIT variants: Clear `0x20`, line 1435 | Replace line 614 with `{ if (!d->timer_control[0]) INTERRUPT_ASSERT(d->irq); }`. Suppresses the required CPU assert. |
+
+**There is an overclaim:** the added rows say “keeps `0x10` pending and enabled,” but assert only the enable value and callback counts—not preservation of `irq_status`. The re-arm row also omits final FIQ-field checks. See [X14 assertions](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/diff_footbridge.c:1435).
+
+**TASK 2.** The smallest defined-behavior escape I found adds six non-whitespace characters to the IRQ_STATUS latch guard at device line 573:
+
+```c
+else if (!(d->warned_irq_status_w++&3)) {
+```
+
+Keep the existing `warned_irq_status_w = 1` body unchanged.
+
+- Declines 1–4 report `1,0,0,0`, matching the original.
+- Decline 5 reports again; the original remains silent.
+- No instance in this test reaches five declines of that site. P1 reaches four; the other blocks reach fewer.
+- No assertion inspects the latch’s numeric value. Consequently, all 864 rows retain their original results.
+- The counter resets before overflow. This is a missing repeated-access history, not an untested register-value predicate or different Boolean latch combination named in NOT COVERED.
+
+There is also a direct guest-visible escape demonstrating Task 1’s overclaim. Replace the Clear case’s assert statement at device line 614 with:
+
+```c
+{ INTERRUPT_ASSERT(d->irq); if (d->timer_control[0]) d->irq_status = 0; }
+```
+
+Only the two added DEVINIT Clear-assert rows exercise that state-changing branch. Both still pass: enable remains `0x10`, one CPU assert occurs, and neither checks status afterward. A subsequent guest IRQ_STATUS read returns zero instead of `0x10`. This gap occurs **inside the sampled X14 cells**, so the “beyond X14’s cells” exclusion does not cover it.
+
+**TASK 3.** The loops and [gate pins](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/gate_offline.sh:591) agree:
+
+| Group | Loop-derived rows |
+|---|---:|
+| Timer rows | 32 |
+| P0–P9 | 78 |
+| X1–X5 | `12+11+3+10+2 = 38` |
+| X6 | `4×2×[2×(4+3+4+3)+3] = 248` |
+| X7 | `4×(8+9×3+2) = 148` |
+| X8 | 6 |
+| X1–X8 combined | **440** |
+| X9 | `4×(15+2+8) = 100` |
+| X10 | `4×(17+1) = 72` |
+| X11 | `4×5×4 = 80` |
+| X12 / X13 | 20 / 20 |
+| X14 | `2+7+2×4+1+2+1 = 21` |
+| Identity | 1 |
+
+Total: `32+78+440+100+72+80+20+20+21+1 = 864`.
+
+Previously X14 had `2×3` instead of `2×4`, giving 19 rows: **864 = 862 + 2**. The selfcheck probes restore their counters and contribute no counted rows. The gate uses a total floor of 864, exact distinct-name group counts, and the test has an exact 864 identity check.
+
+**TASK 4.** False current-code comment claims include:
+
+- [Test line 461](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/diff_footbridge.c:461): “fbclearread: `case TIMER_1_CLEAR:` carries NO writeflag test, while the case immediately above it (TIMER_1_CONTROL) does.”  
+  Device line 719 now explicitly guards the Clear body with `writeflag == MEM_WRITE`.
+
+- [Test line 202](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/diff_footbridge.c:202): “EVERY REAL ROW IN THIS FILE COMPARES NUMBERS.”  
+  E2, E3, F1 and G1 compare nonnumeric strings.
+
+- [Test line 541](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/diff_footbridge.c:541): “It is the worst because of WHICH state it re-opens: a DISABLED timer can never hold a pending interrupt, so the mutant re-opens the defect on precisely the state this round exists for.”  
+  The same premise appears in [gate line 667](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/gate_offline.sh:667). The model’s timer callbacks update pending counts without checking TIMER_ENABLE; disabling does not remove the registered timer.
+
+Files read: frozen [dev_footbridge.c](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/dev_footbridge.c), [diff_footbridge.c](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/diff_footbridge.c), [diff_footbridge.862.c](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/diff_footbridge.862.c), and [gate_offline.sh](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/frozen/gate_offline.sh). Supplied MD5 prefixes matched.
+
+Ran: read-only PowerShell reads/hashes, `rg`, `git diff --no-index`, and Python source/count/latch calculations. No edits, builds, gate execution, or test-binary execution.

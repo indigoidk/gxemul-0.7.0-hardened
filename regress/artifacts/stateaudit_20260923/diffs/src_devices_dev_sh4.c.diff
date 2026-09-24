@@ -1,0 +1,151 @@
+diff --git a/src/devices/dev_sh4.c b/src/devices/dev_sh4.c
+index 2316288..c48927d 100644
+--- a/src/devices/dev_sh4.c
++++ b/src/devices/dev_sh4.c
+@@ -227,6 +227,13 @@ enum {
+ 	SH4_VAL_TLBDA2,			/*  ITLB/UTLB data array 2 not implemented  */
+ /*
+  *  #453: the LAST guest-reachable host death in this file, and the one #448 deliberately
++ *  *** CORRECTED 2026-09-17 (L4): THIS WAS NOT THE LAST.  At `f532bb6' the SH4_TCR0/1/2 WRITE arm
++ *  of DEVICE_ACCESS(sh4) still carried `if (cpu->cd.sh.pclock == 0) { fatal(...); exit(1); }' --
++ *  a guest store to a Timer Control Register reaches that arm.  #459 removed it.  Scope, stated
++ *  honestly: the PATH is guest-reachable, but firing it also needs `pclock == 0', a machine-setup
++ *  condition and not a guest-controlled value -- so "the last" is refuted without claiming a guest
++ *  could drive it on a correctly-configured machine.  Found by grok and codex in
++ *  panel_20260917_100431 and omitted from that round's adjudication packet. ***
+  *  left behind -- CHCR.IE on the one resource select the model ACCEPTS.
+  *
+  *  *** THE KEY IS PER CHANNEL AND CARRIES A SINGLE BIT, because the fault has exactly one
+@@ -235,6 +242,105 @@ enum {
+  *  to ask.  Keying on anything finer would be inventing distinctions the code does not
+  *  make.  Ceiling: one line per channel per device lifetime, so eight in total for an
+  *  eight-channel controller -- and that is MEASURED for channels 0, 1 and 7, not for all
++ *
++ *  *** CORRECTION 2026-09-17: "MEASURED" IS FALSE OF THE CEILING, AND A SINGLE STORE IS WHY.
++ *  Found by the Opus 5 seat's M1_sh4latchleak and upheld by the Fable adjudication (9 of 9). ***
++ *
++ *  The CEILING claim is "one line per channel per DEVICE LIFETIME" -- a claim about the SECOND
++ *  store, not the first.  Rows X4a/X4b drive channels 1 and 7 with `wr()', which issues ONE
++ *  store.  **One store can only measure that the FIRST line appears; it cannot measure that a
++ *  second does not.**  So channels 1 and 7 are measured at (fresh) and NOT at (set), and the
++ *  ceiling is measured for CHANNEL 0 ALONE (rows X1/X3).
++ *
++ *  *** AND THAT LAST SENTENCE WENT STALE IN THE VERY DIFF THAT SHIPPED IT.  Corrected
++ *  2026-09-17, found by the codex seat in panel_20260917_142508 -- an answer that was
++ *  READ AND ACTED ON IN THIS FILE while being recorded in NO ledger entry. ***
++ *
++ *  v2 added X4c/X4d, which are `two_stores' rows at channels 1 and 7.  So (1,set) and
++ *  (7,set) ARE measured, and the ceiling is measured at THREE channels -- 0, 1 and 7 --
++ *  not at channel 0 alone.  The block ~20 lines below states the shipped arrangement
++ *  correctly; this paragraph is the earlier correction it supersedes on this one point.
++ *
++ *  *** A CORRECTION IS NOT SAFER THAN THE THING IT CORRECTS -- third instance, and this
++ *  one shipped in the same commit as the code that falsifies it.  The repair is not to
++ *  remove the paragraph: it is the measured warrant for why a SINGLE store cannot pin a
++ *  ceiling, which is exactly why X4c/X4d exist.  Only its closing tally was overtaken. ***
++ *
++ *  MEASURED CONSEQUENCE, not a reasoned one: a SIXTEEN-CHARACTER mutant appending
++ *  `|| channel != 0' to this predicate scored **27/27 -- a TOTAL ESCAPE**, with base and mutant
++ *  probe output BYTE-IDENTICAL.  A non-equivalence control (two identical stores, chcr=0x00000205)
++ *  shows the difference the detector cannot see: base gives ONE line on channels 1 and 7, the
++ *  mutant gives TWO.  A guest looping a legal DMA on any channel but 0 then draws an
++ *  unsilenceable line per store -- `fatal()' has no `-q' early-out -- which is the single
++ *  behaviour this latch exists to prevent.
++ *  Artifacts: regress/artifacts/seataudit_20260917/opus_measured_20260917/ (M1_chcr.raw,
++ *  base_chcr.raw, ctrl_m1.txt, ctrl_base_m1.txt).
++ *
++ *  GRADED **L2, a clause-(d) joint-cell floor breach**: `channel' indexes the guard's own operand
++ *  `d->val_reported[cls][instance]', which the repair path both reads and writes, so the floor is
++ *  {channel} x {fresh, set}.  Rowed today: (0,fresh) (0,set) (1,fresh) (7,fresh).
++ *  *** THIS PARAGRAPH DESCRIBED A REPAIR THAT WAS THEN REFUSED.  Corrected 2026-09-17 after FOUR
++ *  SEATS independently caught the comment contradicting the diff beside it. ***
++ *
++ *  It used to say "(1,set) and (7,set) are OPEN.  The repair is X4a/X4b using two stores."  Both
++ *  halves are now wrong.  **Changing X4a/X4b from one store to two was measured to TRADE A CELL
++ *  RATHER THAN ADD ONE.**  The oracle `d4 == [ch]' says "after the stimulus, exactly ONE line
++ *  naming ch": with a SINGLE store that pins THE FIRST STORE PRODUCED IT; with TWO stores it pins
++ *  only that the PAIR produced one.  Every other single-store row in that probe targets channel 0,
++ *  so the change would have left (1,fresh) and (7,fresh) UNPINNED.
++ *
++ *  WHAT SHIPPED INSTEAD: the singles are KEPT (X4a/X4b) and the doubles are ADDED (X4c/X4d).
++ *  **All six floor cells are rowed** -- {channel 0, 1, 7} x {fresh, set}:
++ *      (0,fresh) X1     (0,set) X3 and L0
++ *      (1,fresh) X4a    (1,set) X4c
++ *      (7,fresh) X4b    (7,set) X4d
++ *  MEASURED: base 29/29, and the M1 mutant `|| channel != 0' scores 27/29 with X4c and X4d the
++ *  ONLY rows failing -- X4a/X4b correctly UNMOVED, because a single store prints one line whether
++ *  or not the latch engages.  Artifacts: regress/artifacts/sh4dmacie/repairA_20260917/.
++ *
++ *  DISCLOSURE, and it is finer than "channels 2..6 are not rowed" -- that blanket sentence hid a
++ *  partial coverage, so it is replaced rather than kept:
++ *
++ *    channels 0, 1, 7   POSITIVE pins at BOTH cells: a row asserts the latch produces exactly one
++ *                       line and that the ceiling holds.
++ *    channel 3          NEGATIVE pin ONLY.  Row R6 drives CHCR3 with 0x0000c203, and CHCR_IE is
++ *                       0x4, so **R6 does NOT set IE and raises only the #448 encoding line**.
++ *                       But `diags()' counts BOTH families (VAL_RE + IE_RE, deliberately -- a
++ *                       pass-2 seat once found the accept rows blind to the #453 line), and R6
++ *                       asserts exactly ONE diagnostic.  **So a SPURIOUS transfer-end line on
++ *                       channel 3 would red R6, while nothing asserts the latch WORKS there.**
++ *                       That is a real half of the cell and the old wording gave it away for free.
++ *    channels 2, 4, 5, 6  untouched by any row, in either family.
++ *
++ *  *** THE SENTENCE THAT STOOD HERE WAS MEASURABLY FALSE AND IS CORRECTED.  It read: "Rowing 2,
++ *  4, 5 and 6 is NOT owed ... no enumerated mutant distinguishes those channels from 1 and 7."
++ *  FOUR SEATS ENUMERATED EXACTLY SUCH A MUTANT, on 2026-09-17, before this comment shipped: ***
++ *
++ *      grok      `channel == 4'     panel_20260917_100431
++ *      agy       `channel == 2'     panel_20260917_100431, and `channels 2..6' in _142508
++ *      deepseek  `channel == 2'     panel_20260917_142508
++ *      kimi      `channel == 2'     panel_20260917_142508
++ *
++ *  Each escapes by construction: no row drives those channels, so a guard conditioned on one of
++ *  them is invisible to all 29 rows.  The rows-are-owed-PER-ENUMERATED-MUTANT rule therefore
++ *  points the OTHER WAY from what this comment claimed -- the mutants exist, so the rule is
++ *  engaged rather than satisfied.
++ *
++ *  THE HONEST DISCLOSURE, under clause (e): channels 2, 4, 5 and 6 are NOT ROWED, and the reason
++ *  is that their REACHABILITY IS UNMEASURED -- not that no mutant distinguishes them.  The latch
++ *  is indexed by the same `[cls][instance]' array for all eight, which is why a channel-conditioned
++ *  guard is cheap to write; it is not why the cells are unowed.  Closing them costs four
++ *  `two_stores' sessions over {channel} x {fresh, set}.
++ *
++ *  *** AND THE CLASS-CLOSURE AMENDMENT IS ENGAGED, WHICH IS THE PART A FUTURE ROUND MUST NOT MISS:
++ *  two consecutive passes have now found breaches of ONE class (a cell of the channel space left
++ *  empty).  The amendment forbids a third cell-by-cell repair -- the next one owes the CLOSURE,
++ *  enumerated from the function's own inputs and written into the contract. ***
++ *
++ *  *** THE RECORDS LESSON, because this is the fourth correction-of-a-correction in one day: A
++ *  COMMENT WRITTEN ABOUT A PLANNED REPAIR MUST BE RE-READ WHEN THE REPAIR CHANGES.  This one was
++ *  true when the repair was designed, survived the repair being refused and rebuilt, and shipped
++ *  in the same diff as the code that contradicts it. ***
+  *  eight.  A pass-2 seat caught the earlier flat "eight in total" as an overclaim: every
+  *  row in the detector drove channel 0, so seven of the eight latch instances had never
+  *  been used, and a mutant restoring the host death on channels != 0 passed all
+@@ -613,6 +719,26 @@ DEVICE_TICK(sh4)
+  *
+  *  Called whenever a DMA transfer is to be executed.
+  *  Clears the lowest bit of the corresponding channel's CHCR when done.
++ *
++ *  *** THAT SENTENCE IS FALSE AND IS PRE-EXISTING.  Corrected 2026-09-17, found by the
++ *  grok seat in panel_20260917_100431 -- an answer that was STAMPED ACROSS SIX ROWS and
++ *  therefore recorded nowhere as its own finding. ***
++ *
++ *  THIS FUNCTION NEVER WRITES CHCR.  Measured over its whole 178-line extent: the only
++ *  `dmac_chcr' reference in it is the READ into a local at the top.  File-wide there are
++ *  exactly THREE mentions -- that read, the register read in DEVICE_ACCESS, and the
++ *  guest's own store.  Neither DE (the `lowest bit') nor TE is ever set or cleared here.
++ *
++ *  THE CONTRAST THAT MAKES IT CONCRETE: `dev_pvr.c' DOES signal completion on its own
++ *  DMA path -- `cpu->cd.sh.dmac_chcr[channel] |= CHCR_TE;' -- so the two DMA paths in
++ *  this tree disagree about whether the generic DMAC reports transfer end.
++ *
++ *  *** WHAT IS **NOT** CLAIMED HERE, because it is not measured: that a guest hangs.
++ *  #453's own analysis records that the only RS encoding reaching this point is the
++ *  single-address external case, which performs NO TRANSFER -- so "never signals
++ *  completion" may be correct for the one path that arrives.  The COMMENT is wrong
++ *  either way; whether the BEHAVIOUR is wrong needs a witness, and is filed as
++ *  `sh4dmacnote' rather than asserted. ***
+  */
+ void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
+ {

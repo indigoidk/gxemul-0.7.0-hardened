@@ -1,0 +1,45 @@
+VERDICT: DO NOT SHIP -- the CONTRACT's width-domain premise is false: +0x188 and +0x288 are also 8-byte-aligned (0x188=49×8, 0x288=81×8, READ offsets; REASONED arithmetic), so "the two 8-byte-aligned sites" and the summary's "the only two sites an LDRD/STRD can reach" are wrong; the len-8 cells at those two legal arms (including the len-8 READ of +0x188, one of the five readable registers the contract itself rows) are guest inputs by the packet's own producer rule (§C.5's align-to-8 mechanism, READ), unrowed and undisclosed -- NOT COVERED's "below len 4" excludes len 8. One one-line edit there passes all 862 rows. Two CONTRACT green-claims are also stale against repair 3's own kill table (details in Q4).
+
+## THE PREMISE DEFECT (Q1a, Q2, Q4 converge here)
+
+READ: §C.5's mechanism -- `addr &= ~(datalen-1)`, one `memory_rw` of len 8; offsets IRQ_ENABLE_SET 0x188, FIQ_ENABLE_SET 0x288. REASONED: 0x188 and 0x288 are ≡0 mod 8, so an LDRD/STRD at either reaches the handler as ONE len-8 access. The premise is true only scoped to the five declined sites; the CONTRACT states it as the width domain of THE SPACE, which includes the legal arms. I enumerated every len-8 access in the instrument from the diff loops (REASONED): X6's declined writes and X7 k=35/36, X9 k=15/16, X10 r∈{0,2} reads -- all at +0x180/+0x280 only. No row touches +0x188 or +0x288 at len 8. Smallest invisible edit: in IRQ_ENABLE_SET, `odata = (len == 8) ? 0 : d->irq_enable;` (or a `len == 8` conjunct on either Set arm's direction test). Expected green: all 862. Why undisclosed: "below len 4" is not "other than len 4"; the width-domain sentence affirmatively excludes the cell from the space. Note the irony: a nominal STRD at +0x18c aligns down to +0x188 -- so O2's rejected "+0x18c len-8" row had a product-reachable image repair 3 never rowed. Settled from the packet; the only fact that could overturn it is a premise that the load/store path aligns to 4 or cannot target these addresses, which §C.5 denies.
+
+## Q1 -- enumeration
+
+(a) Named and verified (REASONED against the handler): case label (the fold cannot alias onto the five -- folded addresses keep bits ≥0x300, since 0x300-0x36c all have bits 8-9 set and only bits 5-6 are cleared), direction, width, idata, four fields, five latches, drive-test operands, instance fields. Missing: the len-8 cells at +0x188/+0x288 above; and the producer pair as a *subject* -- no row ever calls `footbridge_interrupt_deassert` (x14_line calls only assert; the handler's INTERRUPT_DEASSERT goes to harness stubs -- REASONED from the inlined code), so any edit to the deassert body, or restoring `&& !d->irq_asserted` in the assert (no row asserts twice on one instance), is invisible and NOT COVERED never names the producer's own body.
+
+(b) The 19 X14 rows, edit → differing observable (REASONED, all verified against the handler):
+1. disjoint 0x18/0x30: `&`→`&&` in the Clear drive; CPU pair (0,1) vs (1,0). Enable stays 0x20, so the pair is the only differing channel.
+2. status 0/enable 0x30: enable-alone drive test; deassert vs assert. (Does not catch `&&`; row 1 does -- complementary, correct.)
+3-9. line L alone, Clear 0: single-bit drive masks (`& (1<<b)`, `== (1<<b)`); assert vs deassert on the CPU pair, shared pair pinned unmoved.
+10-11. tk reads: read-path conditions on timer fields/tick at DEVINIT values; the five read values + rv.
+12-13. tk Set-then-Clear: direction-test/fetch conditions on timer fields/tick; enable lands 0x60 vs 0x70. NB: these rows check no interrupt counter, so the drive test at DEVINIT values is unobserved here -- disclosed only via the unread-field bucket.
+14-15. tk declines: F1-class latch conjuncts; announce count 5 + field preservation.
+16. IRQ_STATUS read with irq_asserted: read-value conditions on irq_asserted; the 0x10 read.
+17-18. Clear 0x10 / 0x400 with asserted: drive/fetch conditions on irq_asserted; enable value + CPU pair.
+19. re-arm: N_R05-class (a read clearing another latch while asserted) and N_T10; f0==5 and the second round's silence.
+No vacuous row; every row has an edit whose observable differs.
+
+(c) Every NOT COVERED line is floor-outside as claimed (clause e: the bodies test only direction, own latch, and the drive test's zero/nonzero -- READ from the handler), with two defects: "below len 4" is not the full outside-the-floor width class for the Set arms; and the F1 and `!= 0x10` examples are records now false (Q4).
+
+## Q2 -- answered above. Denominator of my sweep
+
+Edit shapes {direction, latch, fetch, drive, latch-clearer, read-tail} × {five arms, fold predicate, head fetch, producer assert/deassert} × {width, data, fields, latches, instance fields} × {calloc, DEVINIT, producer-driven}. Invisible-and-undisclosed cells found: len-8 at +0x188 (read and write) and +0x288 (write); the producer's deassert body; the producer's already-asserted branch. The drive-at-DEVINIT cell and latch-clearer-at-DEVINIT are invisible but disclosed by the bucket.
+
+## Q3 -- adjudications
+
+G1 UPHOLD the rows, REFINE the enumeration (see verdict). G2 UPHOLD (X9's value checks subsume the read paths; X6's rv is claimed but its loop body is not in the packet -- CANNOT SETTLE from the packet alone). G3 UPHOLD (X13's expectations verified, including the mask truncation). G4 UPHOLD (re-declining both sites catches cross- and self-clearing). G5 UPHOLD. G6 UPHOLD the floor reasoning, REFINE the record ("below len 4" → "other than len 4"). G7 UPHOLD (data is clause-e; len-4 zero-data Clear is rowed in X7/X9). G8 UPHOLD (the tail post-dominates; X6's declined-read-0 and X9/X10's value checks redden a skipped tail). G9 UPHOLD (all three corrections verified in the gate diff; the truncated-log claim now matches the row-count/verdict checks). G10 UPHOLD. O1 UPHOLD (per-row check in Q1b). O2 UPHOLD the rejection of the six rows, OVERTURN the justification at +0x18c: its aligned image is +0x188, which repair 3 does not row -- "the aligned ones duplicate repair 3" is false for that one. O3 UPHOLD (floor-consistent) but see Q5. O4 UPHOLD. O5 UPHOLD. O6 UPHOLD the disclosure (no shared case), see Q5. O7 UPHOLD (row 19 catches both). D1 UPHOLD.
+
+**The wrong accepted disposition: G1 as enumerated** (with O2's +0x18c justification) -- the rows are right, the claimed width closure is false at two further sites. O3, O6, G7, G8 as such are not wrong.
+
+## Q4 -- records
+
+IDENTITY verified from the loops (REASONED; the 216 baseline forces an occurrence axis of 2 -- no other decomposition fits 4 write sites ×3 widths ×2 data ×4 states + read site ×3 ×4, ×2 occurrence = 216): X6 216+32 (=2 sites ×1 width ×2 data ×4 states ×2 occ); X7 4×35→4×37; X9 4×23→4×25; X10 4×16→4×18; X11 20→80 (×4 states); X13 4×5=20; X14 19 enumerated from the check_u calls (2+7+6+1+2+1). Sum 707+155=862. Pins: 78+70(X1-X5)+248+148+6+100+72+80+20+20+19+1=862; X[1-8] 440=400+32+8. All consistent.
+
+False/stale sentences as of today: (1) "the two 8-byte-aligned sites" (CONTRACT) -- false; (2) "(measured F1: `&& !timer_control[0]` passes every row here...)" -- false: your kill table says F1 is red on 862, and the tk five-declines rows (announce 5 at control=0x40) are exactly what kills it; the sentence also now sits inside a bucket ("beyond X14's cells") of which F1 is a counterexample; (3) "`d->irq_enable != 0x10` ... both measured green" -- contradicted by your own "14 of the 57 ... the X14 states hold irq_status = irq_enable = 0x10" if that variant is among the 14 (name-check it; `idata != 0x20` stays green -- no row writes 0x20). CANNOT SETTLE from the packet: whether `fb_distinct 'X[1-8]'` can match the "X1" prefix of X13/X14 names (implementation not inlined; the measured pins matching the predicted arithmetic says no -- take on measurement); whether the seat's five "aligned" Z6 rows included +0x188/+0x288. Everything else I checked in the changed comments is true.
+
+## Q5 -- unnamed options
+
+O3: (i) re-seat the default builder to DEVINIT-faithful for all blocks -- near-zero cost, because no pre-X14 row's expectation reads the re-seated fields (the five arms read only the four fields, the latches and the drive operands, all seeded as before); it would kill F1/N_T-class conjuncts in every state and width, not just X14's; (ii) the narrower variant: re-seat only the drive-observing write rows (X9/X10/X12/X13), closing the drive-at-DEVINIT cell the tk rows provably do not observe. O6: one X14 row at a disjoint Set cell (status 0x20, Set 0x10: `&` deasserts, `&&` asserts) -- one row closes the sibling parity.
+
+Seat record: packet-fed reviewer seat (no file access, no runs, per the operational rule). Read: the inlined handler, the producer pair, the 23-hunk diff, the 6-hunk gate diff, §C, §F2, the kill-table summary. Ran: nothing; every check above is arithmetic over the inlined text.

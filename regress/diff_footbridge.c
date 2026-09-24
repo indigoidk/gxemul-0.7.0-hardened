@@ -108,6 +108,50 @@ static void arm_irqs(struct footbridge_data *d)
 	}
 }
 
+/*  #545 repair 3, X14: every other block's instance is a calloc with its interrupt fields seeded, counting calls
+    on the CPU line d->irq and the four timer interrupts on ONE pair (noop_assert/noop_deassert).  X14 builds its
+    instances here instead: the CPU line on its OWN pair, optionally DEVINIT's timer reset values, and a device
+    line raised through the real footbridge_interrupt_assert() -- with footbridge_interrupt_deassert(), the only
+    writers of irq_status and of irq_asserted.  (The Opus seat's scratch closure experiment, q2c pass; adapted.)  */
+static int cpu_asserts, cpu_deasserts;
+static void cpu_assert(struct interrupt *i) { (void) i; cpu_asserts++; }
+static void cpu_deassert(struct interrupt *i) { (void) i; cpu_deasserts++; }
+static struct footbridge_data *x14_new(uint32_t is, uint32_t ie, uint32_t fs, uint32_t fe, int devinit)
+{
+	struct footbridge_data *x = calloc(1, sizeof(*x));
+	int i;
+	arm_irqs(x);
+	x->irq.interrupt_assert = cpu_assert;
+	x->irq.interrupt_deassert = cpu_deassert;
+	x->irq_status = is; x->irq_enable = ie; x->fiq_status = fs; x->fiq_enable = fe;
+	if (devinit)
+		for (i = 0; i < N_FOOTBRIDGE_TIMERS; i++) {
+			x->timer_control[i] = TIMER_MODE_PERIODIC;
+			x->timer_load[i] = TIMER_MAX_VAL;
+			x->pending_bound[i] = 1;
+		}
+	return x;
+}
+/*  #545 3e: the caller's buffer beyond `len` is not the handler's -- a real ARM narrow load passes data[1],
+    data[2] or data[4] (cpu_arm_instr_loadstore.c) -- so every row that fills b with 0xa5 can check that a read or
+    write left the bytes above its width alone (kimi-k3:cloud, 3d's pass: a write-back of 8 bytes passed).  */
+static int pad_kept(const unsigned char *p, int w)
+{
+	int i;
+	for (i = w; i < 8; i++)
+		if (p[i] != 0xa5)
+			return 0;
+	return 1;
+}
+static void x14_line(struct footbridge_data *x, int n)
+{
+	struct interrupt it;
+	memset(&it, 0, sizeof(it));
+	it.line = (uint32_t) 1 << n;
+	it.extra = x;
+	footbridge_interrupt_assert(&it);
+}
+
 /* --------------------------------------------------------------- harness --- */
 
 static int rows, fails;
@@ -609,11 +653,950 @@ int main(void)
 		free(h);
 	}
 
-	/*  IDENTITY, as every differential here carries.  */
+	/*
+	 *  #545 P-ROWS -- the five undefined-direction accesses that used to end the process are
+	 *  DECLINED with a latched announce.  These rows pin what no stepped guest can (the guest
+	 *  rows live in footbridge_sites_probe.py, arm S): PRESERVATION under a NONZERO status, the
+	 *  read EXPRESSIONS, the widths, and the latch -- fatal() is a counter here, so the announce
+	 *  is counted, never read (the misname check is the guest rows' job).
+	 *
+	 *  SEEDED BY DIRECT FIELD WRITE, NEVER THROUGH +0x188/+0x18c.  A bare calloc'd instance has
+	 *  NULL d->irq callbacks and the enable arms call INTERRUPT_ASSERT(d->irq), so this block
+	 *  installs counting no-ops FIRST; the seeds are still written directly, so that no enable-
+	 *  arm assert is mixed into the interrupt-output counts the rows below compare.
+	 *  Seeds (enumerated, pass 2): 0x18/0x30/0x60/0xc0 -- every field-for-field swap in either
+	 *  status expression yields a DIFFERENT value (0x50 collided: 0x50 & 0x30 == 0x18 & 0x30).
+	 *  fiq_status has no writer in the product; seeding it pins the +0x280/+0x284 expressions
+	 *  against a value the product never produces -- a NARROWING of that gap, not its closure.
+	 */
+	{
+		struct footbridge_data *h = calloc(1, sizeof(struct footbridge_data));
+		unsigned char buf[8];
+		char nm[96], nm2[128];
+		int f0, i;
+		static const struct { uint64_t addr; int wf; int len; const char *what; } dec[] = {
+			{ IRQ_STATUS,       MEM_WRITE, 4, "P1 write IRQ_STATUS"       },
+			{ IRQ_RAW_STATUS,   MEM_WRITE, 4, "P2 write IRQ_RAW_STATUS"   },
+			{ IRQ_ENABLE_CLEAR, MEM_READ,  4, "P3 read IRQ_ENABLE_CLEAR"  },
+			{ FIQ_STATUS,       MEM_WRITE, 4, "P4 write FIQ_STATUS"       },
+			{ FIQ_RAW_STATUS,   MEM_WRITE, 4, "P5 write FIQ_RAW_STATUS"   },
+		};
+		arm_irqs(h);
+		h->irq.interrupt_assert = noop_assert;
+		h->irq.interrupt_deassert = noop_deassert;
+		/*  seeds chosen so MASKED != RAW: a dropped `&` (raw returned as status) reds P0  */
+		h->irq_status = 0x18;  h->irq_enable = 0x30;	/*  masked 0x10, raw 0x18  */
+		h->fiq_status = 0x60;  h->fiq_enable = 0xc0;	/*  masked 0x40, raw 0x60  */
+		fatal_calls = 0;	/*  this block counts announces from a clean baseline  */
+#define P_STATE_OK(tag) do { \
+		snprintf(nm2, sizeof(nm2), "%s -- irq_status preserved", tag); check_u(nm2, h->irq_status, 0x18); \
+		snprintf(nm2, sizeof(nm2), "%s -- irq_enable preserved", tag); check_u(nm2, h->irq_enable, 0x30); \
+		snprintf(nm2, sizeof(nm2), "%s -- fiq_status preserved", tag); check_u(nm2, h->fiq_status, 0x60); \
+		snprintf(nm2, sizeof(nm2), "%s -- fiq_enable preserved", tag); check_u(nm2, h->fiq_enable, 0xc0); } while (0)
+#define PN(suffix) (snprintf(nm, sizeof(nm), "%s: %s", dec[i].what, suffix), nm)
+		/*  the legal reads FIRST, on the seeded state: the expressions, not a constant 0  */
+		memset(buf, 0, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, IRQ_STATUS, buf, 4, MEM_READ, h);
+		check_u("P0 IRQ_STATUS read = irq_status & irq_enable (0x10)", memory_readmax64(cpu, buf, 4), 0x10);
+		dev_footbridge_access(cpu, NULL, IRQ_RAW_STATUS, buf, 4, MEM_READ, h);
+		check_u("P0 IRQ_RAW_STATUS read = irq_status (0x18)", memory_readmax64(cpu, buf, 4), 0x18);
+		dev_footbridge_access(cpu, NULL, FIQ_STATUS, buf, 4, MEM_READ, h);
+		check_u("P0 FIQ_STATUS read = fiq_status & fiq_enable (0x40)", memory_readmax64(cpu, buf, 4), 0x40);
+		dev_footbridge_access(cpu, NULL, FIQ_RAW_STATUS, buf, 4, MEM_READ, h);
+		check_u("P0 FIQ_RAW_STATUS read = fiq_status (0x60)", memory_readmax64(cpu, buf, 4), 0x60);
+		check_u("P0 the legal reads announce nothing", fatal_calls, 0);
+		for (i = 0; i < 5; i++) {
+			int a0 = irq_asserts, d0 = irq_deasserts, rv;
+			f0 = fatal_calls;
+			memory_writemax64(cpu, buf, 4, 0x70);	/*  bits in BOTH enables: 0x70&0x30=0x30, 0x70&0xc0=0x40  */
+			rv = dev_footbridge_access(cpu, NULL, dec[i].addr, buf, dec[i].len, dec[i].wf, h);
+			check_u(PN("handler returned 1 (declined, not failed)"), rv, 1);
+			check_u(PN("announced exactly once"), fatal_calls - f0, 1);
+			if (dec[i].wf == MEM_READ)
+				check_u(PN("the declined read returns 0"), memory_readmax64(cpu, buf, 4), 0);
+			P_STATE_OK(PN("after #1"));
+			check_u(PN("interrupt output untouched"), (irq_asserts - a0) + (irq_deasserts - d0), 0);
+			f0 = fatal_calls;
+			memory_writemax64(cpu, buf, 4, 0x70);
+			dev_footbridge_access(cpu, NULL, dec[i].addr, buf, dec[i].len, dec[i].wf, h);
+			check_u(PN("#2 announced nothing more (latched)"), fatal_calls - f0, 0);
+			memory_writemax64(cpu, buf, 4, 0x70);
+			dev_footbridge_access(cpu, NULL, dec[i].addr, buf, 1, dec[i].wf, h);
+			memory_writemax64(cpu, buf, 4, 0x70);
+			dev_footbridge_access(cpu, NULL, dec[i].addr, buf, 2, dec[i].wf, h);
+			check_u(PN("byte and halfword accesses: still latched"), fatal_calls - f0, 0);
+			P_STATE_OK(PN("after #2, byte, halfword"));
+		}
+		/*  the latches are per SITE: five accesses, five announces, none shared  */
+		check_u("P6 five sites announced five times in one instance", fatal_calls, 5);
+		/*  a legal read after the declines still reads the seeded expressions  */
+		dev_footbridge_access(cpu, NULL, IRQ_STATUS, buf, 4, MEM_READ, h);
+		check_u("P7 IRQ_STATUS read after the declines (0x10)", memory_readmax64(cpu, buf, 4), 0x10);
+		dev_footbridge_access(cpu, NULL, FIQ_RAW_STATUS, buf, 4, MEM_READ, h);
+		check_u("P7 FIQ_RAW_STATUS read after the declines (0x60)", memory_readmax64(cpu, buf, 4), 0x60);
+		/*  a LEGAL EnableClear write still works, next to the declined read of the same address  */
+		memory_writemax64(cpu, buf, 4, 0x10);
+		dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, buf, 4, MEM_WRITE, h);
+		check_u("P8 legal EnableClear write: 0x30 & ~0x10", h->irq_enable, 0x20);
+		check_u("P8 ... announced nothing", fatal_calls, 5);
+#undef PN
+#undef P_STATE_OK
+		free(h);
+		/*  P9: a FRESH instance whose FIRST access to a site is a BYTE write.  A decline that fires only
+		    for len == 4 would let the byte fall through silently -- indistinguishable above, where the
+		    word access had already latched the site.  Here it must announce.  */
+		h = calloc(1, sizeof(struct footbridge_data));
+		arm_irqs(h);
+		h->irq.interrupt_assert = noop_assert;
+		h->irq.interrupt_deassert = noop_deassert;
+		h->irq_status = 0x18;  h->irq_enable = 0x30;
+		fatal_calls = 0;
+		memory_writemax64(cpu, buf, 1, 0x70);
+		dev_footbridge_access(cpu, NULL, IRQ_STATUS, buf, 1, MEM_WRITE, h);
+		check_u("P9 a BYTE write as the first access is declined AND announced", fatal_calls, 1);
+		check_u("P9 ... and stores nothing", h->irq_status, 0x18);
+		free(h);
+		fatal_calls = 0;
+	}
+
+	/*  #545 pass 2 (L2 floor repair, measured by the Opus seat): the P-rows above pinned width and latch at ONE site
+	    each, so a `len == 4` conjunct on any of the other four decline guards, a legal read that re-arms a latch, and
+	    a decline guard widened to swallow a LEGAL narrow read all passed every row.  X1: every site at len 1 and 2 as
+	    the FIRST access announces once (and the narrow declined read returns 0).  X2: legal narrow reads of the
+	    five readable registers return the low lanes and announce nothing.  X3: legal reads of every sibling at every
+	    width, legal enable writes, and reads of other registers re-arm NO latch.  X4/X5 (pass 2, codex): ZERO data
+	    or a zero enable as the first access still declines AND announces; a legal zero Clear write does not.  */
+	{
+		static const struct { uint64_t addr; int wf; const char *what; } s5[] = {
+			{ IRQ_STATUS, MEM_WRITE, "X1 write IRQ_STATUS" }, { IRQ_RAW_STATUS, MEM_WRITE, "X1 write IRQ_RAW_STATUS" },
+			{ IRQ_ENABLE_CLEAR, MEM_READ, "X1 read IRQ_ENABLE_CLEAR" }, { FIQ_STATUS, MEM_WRITE, "X1 write FIQ_STATUS" },
+			{ FIQ_RAW_STATUS, MEM_WRITE, "X1 write FIQ_RAW_STATUS" } };
+		static const struct { uint64_t addr; uint64_t want; const char *what; } rd5[] = {
+			{ IRQ_STATUS, 0x10, "IRQ_STATUS" }, { IRQ_RAW_STATUS, 0x18, "IRQ_RAW_STATUS" },
+			{ FIQ_STATUS, 0x40, "FIQ_STATUS" }, { FIQ_RAW_STATUS, 0x60, "FIQ_RAW_STATUS" },
+			{ IRQ_ENABLE_SET, 0x30, "IRQ_ENABLE_SET" } };
+		unsigned char b[8];
+		char xn[160];
+		int i, w, f0;
+		struct footbridge_data *x;
+#define XSEED(x) do { arm_irqs(x); (x)->irq.interrupt_assert = noop_assert; (x)->irq.interrupt_deassert = noop_deassert; \
+		(x)->irq_status = 0x18; (x)->irq_enable = 0x30; (x)->fiq_status = 0x60; (x)->fiq_enable = 0xc0; } while (0)
+		for (w = 1; w <= 2; w++)
+			for (i = 0; i < 5; i++) {
+				x = calloc(1, sizeof(*x)); XSEED(x);
+				fatal_calls = 0;
+				memory_writemax64(cpu, b, w, 0x70);
+				dev_footbridge_access(cpu, NULL, s5[i].addr, b, w, s5[i].wf, x);
+				snprintf(xn, sizeof(xn), "%s: len %d as the FIRST access announces once", s5[i].what, w);
+				check_u(xn, fatal_calls, 1);
+				if (s5[i].wf == MEM_READ) {	/*  the narrow declined read's VALUE (pass 2)  */
+					snprintf(xn, sizeof(xn), "X1 read IRQ_ENABLE_CLEAR: len %d declined read returns 0", w);
+					check_u(xn, memory_readmax64(cpu, b, w), 0);
+				}
+				free(x);
+			}
+		x = calloc(1, sizeof(*x)); XSEED(x);
+		fatal_calls = 0;
+		for (w = 1; w <= 2; w++)
+			for (i = 0; i < 5; i++) {
+				memset(b, 0, sizeof(b));
+				dev_footbridge_access(cpu, NULL, rd5[i].addr, b, w, MEM_READ, x);
+				snprintf(xn, sizeof(xn), "X2 legal len %d read of %s = low lanes", w, rd5[i].what);
+				check_u(xn, memory_readmax64(cpu, b, w), rd5[i].want & (w == 1 ? 0xff : 0xffff));
+			}
+		check_u("X2 the legal narrow reads announce nothing", fatal_calls, 0);
+		for (i = 0; i < 5; i++) {
+			memory_writemax64(cpu, b, 4, 0x70);
+			dev_footbridge_access(cpu, NULL, s5[i].addr, b, 4, s5[i].wf, x);
+		}
+		check_u("X3 the five declines latch (5 announces)", fatal_calls, 5);
+		f0 = fatal_calls;
+		for (w = 1; w <= 4; w *= 2)
+			for (i = 0; i < 5; i++)
+				dev_footbridge_access(cpu, NULL, rd5[i].addr, b, w, MEM_READ, x);
+		for (i = 0; i < 5; i++) {
+			memory_writemax64(cpu, b, 4, 0x70);
+			dev_footbridge_access(cpu, NULL, s5[i].addr, b, 4, s5[i].wf, x);
+		}
+		check_u("X3 legal reads of every sibling re-arm NO latch", fatal_calls - f0, 0);
+		/*  X3, widened (pass 2): legal WRITES to the four enable registers, and reads of registers outside the
+		    five above (VENDOR_ID, TIMER_1_VALUE, the silent FIQEnableClear read), re-arm no latch either.  */
+		f0 = fatal_calls;
+		memory_writemax64(cpu, b, 4, 0);
+		dev_footbridge_access(cpu, NULL, IRQ_ENABLE_SET, b, 4, MEM_WRITE, x);
+		dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, b, 4, MEM_WRITE, x);
+		dev_footbridge_access(cpu, NULL, FIQ_ENABLE_SET, b, 4, MEM_WRITE, x);
+		dev_footbridge_access(cpu, NULL, FIQ_ENABLE_CLEAR, b, 4, MEM_WRITE, x);
+		dev_footbridge_access(cpu, NULL, VENDOR_ID, b, 4, MEM_READ, x);
+		dev_footbridge_access(cpu, NULL, TIMER_1_VALUE, b, 4, MEM_READ, x);
+		dev_footbridge_access(cpu, NULL, FIQ_ENABLE_CLEAR, b, 4, MEM_READ, x);
+		for (i = 0; i < 5; i++) {
+			memory_writemax64(cpu, b, 4, 0x70);
+			dev_footbridge_access(cpu, NULL, s5[i].addr, b, 4, s5[i].wf, x);
+		}
+		check_u("X3 legal ZERO-data enable writes and other-register reads re-arm NO latch", fatal_calls - f0, 0);
+		free(x);
+		/*  X4 (codex, pass 2): the FIRST access carries ZERO -- a zero-data write, or the +0x18c read with
+		    IRQEnable 0.  A latch guard conditioned on the data (`&& idata`), a +0x18c guard conditioned on
+		    irq_enable, or a direction test rewritten as `!idata`, lets such an access through without an
+		    announce; each must announce once and change no field.  (A WRITE-site guard conditioned on an
+		    enable -- X4 keeps the seeded enables there -- is X6's all-zero-state cells, not X4's.)  */
+		for (i = 0; i < 5; i++) {
+			x = calloc(1, sizeof(*x)); XSEED(x);
+			if (s5[i].wf == MEM_READ)
+				x->irq_enable = 0;
+			fatal_calls = 0;
+			memory_writemax64(cpu, b, 4, 0);
+			dev_footbridge_access(cpu, NULL, s5[i].addr, b, 4, s5[i].wf, x);
+			snprintf(xn, sizeof(xn), "X4 %s: ZERO data/enable as the FIRST access announces once", s5[i].what + 3);
+			check_u(xn, fatal_calls, 1);
+			snprintf(xn, sizeof(xn), "X4 %s: ZERO data/enable changes no field", s5[i].what + 3);
+			check_u(xn, (x->irq_status == 0x18) + (x->irq_enable == (s5[i].wf == MEM_READ ? 0u : 0x30u))
+			    + (x->fiq_status == 0x60) + (x->fiq_enable == 0xc0), 4);
+			free(x);
+		}
+		/*  X5 (codex, pass 2): a LEGAL ZERO EnableClear write is a write, not a declined read -- a direction test
+		    rewritten as `idata` sends it to the decline and announces.  */
+		x = calloc(1, sizeof(*x)); XSEED(x);
+		fatal_calls = 0;
+		memory_writemax64(cpu, b, 4, 0);
+		dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, b, 4, MEM_WRITE, x);
+		check_u("X5 a legal ZERO EnableClear write announces nothing", fatal_calls, 0);
+		check_u("X5 ... and leaves IRQEnable at 0x30", x->irq_enable, 0x30);
+#undef XSEED
+		free(x);
+		fatal_calls = 0;
+	}
+
+	/*
+	 *  #545 CLASS CLOSURE (repair pass 2 -- two consecutive passes found breaches of ONE class, so the
+	 *  whole space is enumerated from the handler's own inputs and closed in one block; carrier rule).  Its own
+	 *  closing pass found the ENUMERATION wrong again -- in the cells (repair 3: X6-X13, below the CONTRACT) and in
+	 *  the INSTANCES every block is built from (repair 3: X14, the last block before IDENTITY).
+	 *
+	 *  X6: EVERY DECLINED ACCESS -- site (5) x width (1, 2, 4, and 8 at the two 8-byte-aligned sites) x data (zero,
+	 *      nonzero; writes only) x state (seeded, all-zero, wide, ones) x occurrence (first, repeated).  Each row
+	 *      requires: the handler returns 1; the announce count moves by exactly 1 on the first access, 0 on the
+	 *      repeat; all four register fields are unchanged; the interrupt output is untouched (no assert, no
+	 *      deassert); and a declined read returns 0 over its whole width.
+	 *  X7: EVERY LEGAL ACCESS IT SAMPLES RE-ARMS NO LATCH -- with all five sites latched: each enable write
+	 *      (Set/Clear, IRQ/FIQ) at len 4 with zero and nonzero data, and each legal read of the readable registers
+	 *      plus VENDOR_ID and TIMER_1_VALUE at widths 1, 2 and 4 (and 8 at IRQ_STATUS and FIQ_STATUS); from the four
+	 *      states, so a divert keyed on a zero field or on any one bit announces in one of them.  After each, the
+	 *      access returned 1 and re-declining all five sites announces nothing.  X7 reads NO value; the value channel
+	 *      of a legal access with the latches set is X10's.
+	 *  X9-X13 (below X8) are the rest of the legal side: X9 with the latches still CLEAR, X10 with every latch SET
+	 *  (value and effect), X11 the cross-site latch ORDER and PRESERVATION, X12 and X13 the legal Clear write's
+	 *  width and data with the latches clear and set.
+	 *
+	 *  CONTRACT (clause e).  THE SPACE, from the handler and from what the PRODUCER emits: the case label (the
+	 *  timer fold maps no address onto these five -- they sit below TIMER_1_LOAD and have bits 5-6 clear); the
+	 *  direction test; the WIDTH, whose domain is what the ARM load/store unit emits -- 1, 2 and 4, and 8 at the
+	 *  8-byte-aligned offsets: of the five decline sites, +0x180 and +0x280 (an LDRD/STRD there is ONE 8-byte
+	 *  access: cpu_arm_instr_loadstore.c's `datalen = 8` and a single memory_rw call; an access to +0x184, +0x18c
+	 *  or +0x284 cannot be 8 bytes, it is aligned down first), and the enable arms at +0x188 and +0x288 too (grok,
+	 *  glm and codex on repair 3's pass: this said "the two 8-byte-aligned sites"); idata (read by the four legal
+	 *  enable writes -- of those
+	 *  only the IRQ Clear write shares its case, and so its direction test, with a decline); the four interrupt
+	 *  fields (read by the legal branches); and the five latches (each read by its own decline).  The bodies
+	 *  compare no field or data against a constant: they test the direction, their own latch and, in the Clear
+	 *  write, whether (irq_status & the new enable) is zero.  That test's operand cells -- both zero, one zero,
+	 *  both nonzero and DISJOINT, intersecting -- are set by the PRODUCER: footbridge_interrupt_assert() and
+	 *  _deassert() are the only writers of irq_status, and the lines a device raises are the timers (4-7), ISA 10
+	 *  (cats) and 11 (netwinder) and PCI 18 (cats); no device raises the other 25.  And an edit can condition any
+	 *  of the arms' tests on a field NO branch of the five reads -- irq_asserted (written only by that pair), the timer
+	 *  fields (DEVINIT: PERIODIC, TIMER_MAX_VAL, a bound of 1; timer_value 0), the pending ticks, and the rest of the
+	 *  instance (the CPU interrupt's own fields, pcibus, console_handle, the timer handles) -- so the INSTANCE a row
+	 *  runs on is part of the space.
+	 *  COVERED -- the rows named, each observing the channels it names: the return value, the announce count, the
+	 *  four fields, the interrupt calls and, for a read, the read data over the width -- and, after X6's declined
+	 *  accesses and X9/X10's legal reads, the bytes above the width untouched: no write-back past len (3e) --
+	 *  except X7 (the return value and the announce count only) and
+	 *  X14's rows (the channels in each row's name and header):
+	 *    declined x width (the site's domain) x data {0, 0x70} x state x first/repeat (X6);
+	 *    the legal READS of the five readable registers x width -- 1, 2 and 4 at all five, and 8 at IRQ_STATUS
+	 *    and FIQ_STATUS (IRQEnable's 8-byte read is NOT covered, below) -- x state, every latch clear (X9) and
+	 *    every latch set (X10; X7 for the announce channel);
+	 *    the eight enable writes at len 4, data {0, 0x70}, every latch clear (X9) and set (X7);
+	 *    the IRQ Clear write -- the one legal write inside an edited case -- at len 1 and 2 with 0x70 and at len 1,
+	 *    2 and 4 with all-ones data (0xff, 0xffff, 0xffffffff) and the buffer's bytes above the width poisoned,
+	 *    every latch clear (X12) and set (X13); at len 4 with
+	 *    0 and 0x70, latches clear (X9), and with 0x70, every latch set (X10);
+	 *    each ordered pair of sites in each of the four states: latch j, then i's first decline announces once,
+	 *    returns 1, reads 0 if it is the declined read, and BOTH stay latched (X11);
+	 *    the drive test's disjoint and status-zero cells, and each of the seven raised lines pending alone, with
+	 *    the CPU line counted apart from the timer interrupts (X14); DEVINIT's timer values, without and with a
+	 *    tick pending, at the five legal reads, a Set and a Clear (the drive in both polarities, and the raw status
+	 *    kept where a Clear leaves a line pending), and the five declines, each with the interrupt output and
+	 *    every field and irq_asserted checked after EACH decline (X14);
+	 *    irq_asserted = 1, raised through the real producer, at the IRQ_STATUS read (the value, the five fields --
+	 *    irq_status, irq_enable, irq_asserted, fiq_status, fiq_enable -- and the output), the Clear write both ways
+	 *    (the enable, the raw status kept, the output), and a re-arm row -- five declines, the legal reads with
+	 *    their values and a Clear, five declines again: 5 announces, one CPU assert, and the fields and
+	 *    irq_asserted kept -- checked after EACH of its accesses (3e) (X14).
+	 *  STATES: seeded, all-zero, wide and ONES -- with all-zero, the ones state makes every single-bit condition on
+	 *  one field divert in one of the two.
+	 *  *** THIS SAID "the cells above are the whole class" and was measured false THREE times on 2026-09-23: the
+	 *  reset state (q2_20260923/Q2.log); then the value channel with the latches set, the cross-site order, the
+	 *  narrow Clear write and any field bit no state set (the Opus seat's 434 variants; X10-X12); then, on the
+	 *  closure's OWN closing pass, an 8-byte access at the two aligned sites (grok), the return value unread on
+	 *  X10-X12 (grok), a narrow Clear write after its latch was set (codex), a decline clearing ANOTHER site's latch
+	 *  (codex) and a field x other-latch condition in any state but the seeded one (glm) -- all measured green on
+	 *  707 rows (q2_20260923/closing_20260923/CL.log, CL2.log) -- and on the same pass the Opus seat's 28 (the
+	 *  drive test's operand and single-line cells, WHICH interrupt a Clear drives, the timer fields at their
+	 *  DEVINIT values, a tick pending, and irq_asserted; q2_20260923/q2c_opus/SUMMARY.txt).  All closed by
+	 *  repair 3, X6-X14. ***
+	 *  NOT COVERED, stated so a later escape is "outside the contract", not a surprise:
+	 *    a condition on one EXACT field or data value (`d->fiq_enable != 0x10`; `idata == 0` at a latched Clear write
+	 *    -- measured green, r3c_20260923): the bodies compare nothing against a constant, and no practical set of
+	 *    seeded states holds every value (a field's domain is finite, 2^32, but not enumerable here).  Some such
+	 *    forms are red only because a row happens to hold the value, not because a row was written to pin it: the
+	 *    `irq_enable`/`irq_status != 0x10` forms at the direction tests of +0x180, +0x184 (since 3c) and +0x18c
+	 *    and at all five latch tests (X14 holds 0x10), and `idata != 0x20` at +0x18c since 3c's Clear 0x20 row;
+	 *    the same forms at +0x280/+0x284's direction tests, and every `fiq_*` form, are green (the Opus seat,
+	 *    3c's pass);
+	 *    JOINT conditions beyond the rowed combinations: two fields beyond the four states; latch vectors other
+	 *    than none, all, the site's own and the X11 pairs (a first decline after two OTHER sites latched); a width
+	 *    and a latch outside the rowed cells;
+	 *    the Set writes (IRQ and FIQ) and the FIQ Clear write below len 4, and the enable arms at len 8 -- an
+	 *    LDRD/STRD at +0x188 or +0x288, or at +0x18c/+0x28c aligned down onto them -- including IRQEnable's 8-byte
+	 *    read: arms that share no case with a decline, so outside the floor; a `len == 4` conjunct on their
+	 *    direction tests, or on the write-data fetch with the Clear address exempted, or `len != 8` on the fetch,
+	 *    passes every row (measured, closing_20260923/CL.log; filed `fbenablewidth`);
+	 *    declined-write DATA other than 0 and 0x70 -- wide, 0x55, odd (measured green: q2c_opus N_D02, N_D03, N_D06,
+	 *    N_D11, N_B10);
+	 *    the ADDRESS axis -- a case label added for another offset, or a widened timer fold, aliasing an address onto
+	 *    an arm.  (An 8-byte access answers ONE register: X9/X10 pin an 8-byte READ's upper word to 0, and an STRD at
+	 *    +0x180 is one decline of IRQ_STATUS, not a second of +0x184 -- this line said the upper word was not
+	 *    covered until the Opus seat measured it red, repair 3's pass.);
+	 *    WHICH interrupt a Clear write drives, outside X14's own instances: X14 counts the CPU line apart only
+	 *    there (len 4; fiq_enable 0 or 0xc0), and X9-X13 count calls on one shared pair, so a destination keyed on
+	 *    the width (codex, repair 3's pass) or on a field X14's instances do not vary (codex, 3d's pass:
+	 *    `fiq_enable & 1`) passes;
+	 *    a mask on one of the 25 bits of the drive test no device raises (a guest cannot set them in irq_status),
+	 *    except bit 16, which the wide state holds: 24 such masks pass, N_SB16 is red on X9, X10, X12 and X13
+	 *    (r3c_20260923);
+	 *    the IRQ Set write's own drive test (the same `if (d->irq_status & d->irq_enable)`, in an arm that shares no
+	 *    case with a decline): X9 rows it where (irq_status & the new enable) is nonzero, where both operands are
+	 *    zero and where only the enable is set -- never with both nonzero and disjoint, so `&&` there passes;
+	 *    X14's operand and single-line cells are the Clear write's;
+	 *    the PRODUCER PAIR's own logic: X14 calls footbridge_interrupt_assert() to build its line-4 instances and
+	 *    checks only that one raise from an empty status (irq_status 0x10, irq_asserted 1, one CPU assert -- PR09
+	 *    reds it), and nothing here calls _deassert(): deleting the `~` in its `irq_status &= ~interrupt->line`
+	 *    passes every row (codex, repair 3's pass; t_deassert.txt, r3_20260923, on 862 rows then; PR04, green on
+	 *    864, r3c_20260923).  The pair's bit logic (PR01, PR03, PR04) is filed under `fbirqstuck` by owner ruling
+	 *    (2026-09-23), apart from that item's stuck-high line (F13), with the Opus seat's ready rows;
+	 *    the CALLER context, as a class: every row passes the same calloc'd cpu -- byte order undefined, pc 0, its
+	 *    machine of type MACHINE_NONE -- and mem NULL, so any condition on caller state that holds for that one
+	 *    fixed caller (and not for a real one) passes every row (the Opus seat, 3c's pass: `mem` and the
+	 *    machine type, MC01-MC05 and MC07; grok, 3d's pass:
+	 *    `cpu->byte_order != EMUL_LITTLE_ENDIAN`, `!cpu->pc`; a cats or netwinder caller with a real mem
+	 *    reddens the first six in the Opus seat's scratch, q2_20260923/q2f_opus/SUMMARY.txt; the Opus seat, 3d's
+	 *    pass: ten more shapes over seven fields, two of them grok's -- cpu->running, byte_order, is_32bit,
+	 *    ninstrs, machine->ncpus, pc, cpsr, CX01-CX10, q2_20260923/q2g_opus/SUMMARY.txt);
+	 *    the announce TEXT: rows count the announces and never read them (TX01) -- including a conversion added
+	 *    to an announce that passes no argument, undefined behaviour in the real fatal(), whose declaration
+	 *    carries no format attribute, so no compiler warns (FMT01; the Opus seat, 3d's pass);
+	 *    a STORE to state no row reads after that access: the timer state (pending ticks, the timer registers)
+	 *    at any of the five arms' legal accesses (SR01-SR09, SR11 -- an IRQ_STATUS read that zeroes timer 1's
+	 *    pending ticks is #474's lost-interrupt class), and, at X14's single-access rows, a latch or the FIQ
+	 *    fields those rows do not name (AS01-AS04, AS08; the Opus seat, 3d's pass -- its scratch rows W1-W8 red
+	 *    28 of its 29 greens, q2_20260923/q2g_opus/).  Since 3e the three X14 rows that CLAIM kept fields (the
+	 *    DEVINIT declines rows, the re-arm row) check the five fields after each access; the DEVINIT reads and
+	 *    Set/Clear rows claim values and the drive, and the same instance's declines row pins the four fields at
+	 *    its end, so a store there to irq_asserted -- the one field of the five that those rows, X9 and X10 never
+	 *    name -- passes (grok, 3e's pass: `d->irq_asserted = 1` on the IRQ_STATUS read);
+	 *    the caller's BUFFER beyond len where no check looks (filed `fbbufbounds`): a FETCH past len whose value no
+	 *    channel uses -- at every declined write, and the Opus seat's FW03, an 8-byte fetch at len 4, equivalent
+	 *    for the guest and a read past a real word store's data[4] -- because the harness's memory helpers do not
+	 *    record the length the device asks for; a STORE past len inside a legal write (codex, 3e's pass:
+	 *    `data[len] = 0` in the Clear write, measured green -- X12/X13 poison the buffer and do not re-check it
+	 *    after the write); and the common tail's write-back past len at the legal reads outside X9/X10's five
+	 *    registers, among them VENDOR_ID (+0x00), the timer value (+0x304; +0x324/+0x344/+0x364 fold onto it),
+	 *    FIQEnable (+0x288) and the FIQEnableClear read (+0x28c) -- which X7 reads, and X3 three of them, with no
+	 *    check above the width -- and the timer LOAD and CLEAR reads at the top of this file, whose 4-byte buffer
+	 *    such a write-back overflows silently: an 8-byte write-back keyed on any one of them passes (the Opus
+	 *    seat, 3e's pass, for VENDOR_ID and the timer value; the flagship seat's final adjudication for the
+	 *    timer reads; all measured, q2_20260923/qwb_20260923/);
+	 *    a latch's HISTORY beyond the rowed repeats -- X6's first and repeat, X11's pairs, P1's four declines at
+	 *    one site: a latch that re-arms after more (codex, 3c's pass: `!(d->warned_irq_status_w++ & 3)`, which
+	 *    re-announces at the fifth) passes;
+	 *    the interrupt output's LEVEL: these rows count calls on stubbed callbacks, so a line left high
+	 *    (`fbirqstuck`) is invisible here, and so is a Clear that clears irq_asserted when it leaves nothing pending
+	 *    and enabled (the Opus seat's FS02): of the Clears entered with irq_asserted 1, only the Clear 0x10 row
+	 *    reaches that state, and it leaves irq_asserted
+	 *    unread on purpose;
+	 *    any other register's semantics; and, beyond X14's cells, a condition in ANY of the arms' tests -- the
+	 *    direction test, a latch test, the write-data fetch, the drive test, a latch clearer -- on a field no branch
+	 *    of the five reads: other timer values (`!d->timer_value[0]`, `d->pending_bound[0] <= 1`: q2c_opus N_T07,
+	 *    N_T08, announce count only), irq_asserted = 1 at the other legal accesses and widths, a pending tick at
+	 *    the other timers, and the rest of the instance (the CPU interrupt's own fields, pcibus, console_handle,
+	 *    the timer handles: W02-W05, green on 864).  (F1, `&& !timer_control[0]` on a latch guard, passed every
+	 *    row until X14's DEVINIT
+	 *    rows -- the guest sites probe caught it only because its prologue arms timer 1, table4_20260919; it is red
+	 *    on the 862 rows, r3_20260923, and on the 864, r3c_20260923.)  fiq_status has NO writer in the product,
+	 *    so every FIQ status value these
+	 *    rows seed is synthetic.
+	 */
+	{
+		static const struct { uint64_t addr; int wf; const char *nm; } S5[] = {
+			{ IRQ_STATUS, MEM_WRITE, "write IRQ_STATUS" }, { IRQ_RAW_STATUS, MEM_WRITE, "write IRQ_RAW_STATUS" },
+			{ IRQ_ENABLE_CLEAR, MEM_READ, "read IRQ_ENABLE_CLEAR" }, { FIQ_STATUS, MEM_WRITE, "write FIQ_STATUS" },
+			{ FIQ_RAW_STATUS, MEM_WRITE, "write FIQ_RAW_STATUS" } };
+		/*  #545 adjudication (Fable 5.1, Q2 (e) cell): the byte seeds left bits 8-31 of every field unexercised,
+		    so a decline store or a latch clearer keyed on them passed every row.  "wide" is X8's seeds -- and it
+		    still left byte 1 of every field, bit 0, bits 18-29 and byte 3 of the enables at 0, so a condition keyed
+		    on one of those bits passed every row (repair pass 2, five seats; Opus measured 30 such edits green).
+		    "ones" sets every bit of every field: with all-zero, a single-bit condition diverts in one of the two.  */
+		static const struct { uint32_t is, ie, fs, fe; const char *nm; } ST[4] = {
+			{ 0x18, 0x30, 0x60, 0xc0, "seeded" }, { 0, 0, 0, 0, "all-zero" },
+			{ 0x80010018, 0x00010030, 0x40020060, 0x000200c0, "wide" },
+			{ 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, "ones" } };
+		static const int W[4] = { 1, 2, 4, 8 };
+		static const struct { uint64_t addr; int wf; uint64_t data; const char *nm; } LW[8] = {
+			{ IRQ_ENABLE_SET, MEM_WRITE, 0, "IRQ Set write 0" }, { IRQ_ENABLE_SET, MEM_WRITE, 0x70, "IRQ Set write 0x70" },
+			{ IRQ_ENABLE_CLEAR, MEM_WRITE, 0, "IRQ Clear write 0" }, { IRQ_ENABLE_CLEAR, MEM_WRITE, 0x70, "IRQ Clear write 0x70" },
+			{ FIQ_ENABLE_SET, MEM_WRITE, 0, "FIQ Set write 0" }, { FIQ_ENABLE_SET, MEM_WRITE, 0x70, "FIQ Set write 0x70" },
+			{ FIQ_ENABLE_CLEAR, MEM_WRITE, 0, "FIQ Clear write 0" }, { FIQ_ENABLE_CLEAR, MEM_WRITE, 0x70, "FIQ Clear write 0x70" } };
+		static const struct { uint64_t addr; const char *nm; } LR[9] = {
+			{ IRQ_STATUS, "IRQ_STATUS" }, { IRQ_RAW_STATUS, "IRQ_RAW_STATUS" }, { FIQ_STATUS, "FIQ_STATUS" },
+			{ FIQ_RAW_STATUS, "FIQ_RAW_STATUS" }, { IRQ_ENABLE_SET, "IRQ_ENABLE_SET" }, { FIQ_ENABLE_SET, "FIQ_ENABLE_SET" },
+			{ FIQ_ENABLE_CLEAR, "FIQ_ENABLE_CLEAR" }, { VENDOR_ID, "VENDOR_ID" }, { TIMER_1_VALUE, "TIMER_1_VALUE" } };
+		unsigned char b[8];
+		char xn[200];
+		int si, st, wi, dv, ord, k, f0, a0, d0, rv, ok;
+		struct footbridge_data *x;
+#define XSET(x, s) do { arm_irqs(x); (x)->irq.interrupt_assert = noop_assert; (x)->irq.interrupt_deassert = noop_deassert; \
+		(x)->irq_status = ST[s].is; (x)->irq_enable = ST[s].ie; (x)->fiq_status = ST[s].fs; (x)->fiq_enable = ST[s].fe; } while (0)
+#define XSAME(x, s) ((x)->irq_status == ST[s].is && (x)->irq_enable == ST[s].ie && (x)->fiq_status == ST[s].fs \
+		&& (x)->fiq_enable == ST[s].fe)
+		for (si = 0; si < 5; si++)
+			for (st = 0; st < 4; st++)
+				for (wi = 0; wi < (S5[si].addr == IRQ_STATUS || S5[si].addr == FIQ_STATUS ? 4 : 3); wi++)
+					for (dv = 0; dv < (S5[si].wf == MEM_WRITE ? 2 : 1); dv++) {
+						x = calloc(1, sizeof(*x)); XSET(x, st);
+						fatal_calls = 0;
+						for (ord = 0; ord < 2; ord++) {
+							a0 = irq_asserts; d0 = irq_deasserts; f0 = fatal_calls;
+							memset(b, 0xa5, sizeof(b));
+							if (S5[si].wf == MEM_WRITE)
+								memory_writemax64(cpu, b, W[wi], dv ? 0x70 : 0);
+							rv = dev_footbridge_access(cpu, NULL, S5[si].addr, b, W[wi], S5[si].wf, x);
+							ok = rv == 1 && fatal_calls - f0 == (ord == 0 ? 1 : 0) && XSAME(x, st)
+							    && irq_asserts == a0 && irq_deasserts == d0
+							    && (S5[si].wf != MEM_READ || memory_readmax64(cpu, b, W[wi]) == 0) && pad_kept(b, W[wi]);
+							snprintf(xn, sizeof(xn), "X6 %s len %d %s %s %s: declined, fields/irq kept, once",
+							    S5[si].nm, W[wi], S5[si].wf == MEM_WRITE ? (dv ? "data 0x70" : "data 0") : "",
+							    ST[st].nm, ord ? "repeat" : "first");
+							check_u(xn, ok, 1);
+						}
+						free(x);
+					}
+		for (st = 0; st < 4; st++)
+			for (k = 0; k < 8 + 9 * 3 + 2; k++) {
+				x = calloc(1, sizeof(*x)); XSET(x, st);
+				for (si = 0; si < 5; si++) {
+					memory_writemax64(cpu, b, 4, 0x70);
+					dev_footbridge_access(cpu, NULL, S5[si].addr, b, 4, S5[si].wf, x);
+				}
+				f0 = fatal_calls;
+				if (k < 8) {
+					memory_writemax64(cpu, b, 4, LW[k].data);
+					rv = dev_footbridge_access(cpu, NULL, LW[k].addr, b, 4, MEM_WRITE, x);
+					snprintf(xn, sizeof(xn), "X7 %s (%s) re-arms NO latch", LW[k].nm, ST[st].nm);
+				} else {
+					int r = k < 8 + 27 ? (k - 8) / 3 : (k == 8 + 27 ? 0 : 2);
+					int w = k < 8 + 27 ? W[(k - 8) % 3] : 8;
+					memset(b, 0, sizeof(b));
+					rv = dev_footbridge_access(cpu, NULL, LR[r].addr, b, w, MEM_READ, x);
+					snprintf(xn, sizeof(xn), "X7 legal len %d read of %s (%s) re-arms NO latch", w, LR[r].nm, ST[st].nm);
+				}
+				for (si = 0; si < 5; si++) {
+					memory_writemax64(cpu, b, 4, 0x70);
+					dev_footbridge_access(cpu, NULL, S5[si].addr, b, 4, S5[si].wf, x);
+				}
+				ok = rv == 1 && fatal_calls == f0;
+				check_u(xn, ok, 1);
+				free(x);
+			}
+#undef XSAME
+#undef XSET
+		fatal_calls = 0;
+	}
+	/*  X8 (adjudication pass, G11): every seed in the P-rows and X1-X5 fits in ONE byte, so a legal read
+	    truncated to 8 bits passed every row.  Wide seeds: each legal word read returns its full 32-bit value
+	    (the masked reads: 0x80010018 & 0x00010030 = 0x00010010, 0x40020060 & 0x000200c0 = 0x00020040).  These
+	    seeds set bits in bytes 0, 2 and 3 only; the ONES state is what exercises byte 1 -- X9, X10, X12 and X13 read
+	    or clear it, X6 and X11 require every field to keep it, X7 reads no value.  */
+	{
+		struct footbridge_data *x = calloc(1, sizeof(*x));
+		unsigned char b[8];
+		arm_irqs(x);
+		x->irq.interrupt_assert = noop_assert;
+		x->irq.interrupt_deassert = noop_deassert;
+		x->irq_status = 0x80010018;  x->irq_enable = 0x00010030;
+		x->fiq_status = 0x40020060;  x->fiq_enable = 0x000200c0;
+		fatal_calls = 0;
+		memset(b, 0, sizeof(b));
+		dev_footbridge_access(cpu, NULL, IRQ_STATUS, b, 4, MEM_READ, x);
+		check_u("X8 wide IRQ_STATUS read = 0x00010010 (all 32 bits)", memory_readmax64(cpu, b, 4), 0x00010010);
+		dev_footbridge_access(cpu, NULL, IRQ_RAW_STATUS, b, 4, MEM_READ, x);
+		check_u("X8 wide IRQ_RAW_STATUS read = 0x80010018", memory_readmax64(cpu, b, 4), 0x80010018);
+		dev_footbridge_access(cpu, NULL, FIQ_STATUS, b, 4, MEM_READ, x);
+		check_u("X8 wide FIQ_STATUS read = 0x00020040", memory_readmax64(cpu, b, 4), 0x00020040);
+		dev_footbridge_access(cpu, NULL, FIQ_RAW_STATUS, b, 4, MEM_READ, x);
+		check_u("X8 wide FIQ_RAW_STATUS read = 0x40020060", memory_readmax64(cpu, b, 4), 0x40020060);
+		dev_footbridge_access(cpu, NULL, IRQ_ENABLE_SET, b, 4, MEM_READ, x);
+		check_u("X8 wide IRQEnable read = 0x00010030", memory_readmax64(cpu, b, 4), 0x00010030);
+		check_u("X8 the wide legal reads announce nothing", fatal_calls, 0);
+		free(x);
+		fatal_calls = 0;
+	}
+	/*  X9 (adjudication pass, 2026-09-23 -- Fable 5.1's Q2, MEASURED before this block existed): the legal
+	    accesses of the five sites -- reads of the four status registers and of IRQEnable (+0x188) at widths 1, 2
+	    and 4, and the eight enable writes at len 4 (X12 has the Clear write's other widths and data) -- WITH THE
+	    LATCHES STILL CLEAR, from each state.  X7 latched all five sites before its legal access,
+	    so a direction test conjoined with a field that is 0 in the RESET state (`writeflag == MEM_READ &&
+	    d->irq_enable` at IRQ_STATUS, its three read mirrors, `writeflag == MEM_WRITE && d->irq_enable` at
+	    IRQEnableClear) sent the legal access into the decline, which announced a phantom complaint, consumed the
+	    latch and -- for the reads -- returned read data 0, the right value in that state; the diverted Clear WRITE
+	    cleared nothing, which in that state is also the right result -- and every row stayed green
+	    (regress/artifacts/fbd5/q2_20260923/Q2.log: 333/333 and 37/37 for all five).  Each cell is ONE row on a
+	    fresh instance: the access returns 1 and announces nothing; a read returns its value over the width and
+	    changes no field; a write sets the enable it targets as written and leaves the other three alone, and IRQ
+	    Set/Clear drive the interrupt output exactly once by (irq_status & the new enable) while FIQ Set/Clear do
+	    not touch it; then the five declines announce EXACTLY 5, because no latch was consumed.  */
+	{
+		static const struct { uint32_t is, ie, fs, fe; const char *nm; } S9[4] = {
+			{ 0x18, 0x30, 0x60, 0xc0, "seeded" }, { 0, 0, 0, 0, "all-zero" },
+			{ 0x80010018, 0x00010030, 0x40020060, 0x000200c0, "wide" },
+			{ 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, "ones" } };
+		static const struct { uint64_t addr; int wf; } D5[5] = {
+			{ IRQ_STATUS, MEM_WRITE }, { IRQ_RAW_STATUS, MEM_WRITE }, { IRQ_ENABLE_CLEAR, MEM_READ },
+			{ FIQ_STATUS, MEM_WRITE }, { FIQ_RAW_STATUS, MEM_WRITE } };
+		static const struct { uint64_t addr; const char *nm; } R5[5] = {
+			{ IRQ_STATUS, "IRQ_STATUS" }, { IRQ_RAW_STATUS, "IRQ_RAW_STATUS" }, { FIQ_STATUS, "FIQ_STATUS" },
+			{ FIQ_RAW_STATUS, "FIQ_RAW_STATUS" }, { IRQ_ENABLE_SET, "IRQEnable" } };
+		static const struct { uint64_t addr; int fiq, set; uint32_t data; const char *nm; } W8[8] = {
+			{ IRQ_ENABLE_SET, 0, 1, 0, "IRQ Set write 0" }, { IRQ_ENABLE_SET, 0, 1, 0x70, "IRQ Set write 0x70" },
+			{ IRQ_ENABLE_CLEAR, 0, 0, 0, "IRQ Clear write 0" }, { IRQ_ENABLE_CLEAR, 0, 0, 0x70, "IRQ Clear write 0x70" },
+			{ FIQ_ENABLE_SET, 1, 1, 0, "FIQ Set write 0" }, { FIQ_ENABLE_SET, 1, 1, 0x70, "FIQ Set write 0x70" },
+			{ FIQ_ENABLE_CLEAR, 1, 0, 0, "FIQ Clear write 0" }, { FIQ_ENABLE_CLEAR, 1, 0, 0x70, "FIQ Clear write 0x70" } };
+		static const int W9[3] = { 1, 2, 4 };
+		unsigned char b[8];
+		char xn[200];
+		int st, k, si, a0, d0, rv, ok;
+		struct footbridge_data *x;
+		for (st = 0; st < 4; st++)
+			for (k = 0; k < 5 * 3 + 2 + 8; k++) {
+				uint32_t is = S9[st].is, ie = S9[st].ie, fs = S9[st].fs, fe = S9[st].fe;
+				x = calloc(1, sizeof(*x));
+				arm_irqs(x);
+				x->irq.interrupt_assert = noop_assert;
+				x->irq.interrupt_deassert = noop_deassert;
+				x->irq_status = is;  x->irq_enable = ie;  x->fiq_status = fs;  x->fiq_enable = fe;
+				fatal_calls = 0;
+				a0 = irq_asserts;  d0 = irq_deasserts;
+				if (k < 17) {
+					int r = k < 15 ? k / 3 : (k == 15 ? 0 : 2), w = k < 15 ? W9[k % 3] : 8;
+					uint64_t want = r == 0 ? (uint64_t) (is & ie) : r == 1 ? (uint64_t) is
+					    : r == 2 ? (uint64_t) (fs & fe) : r == 3 ? (uint64_t) fs : (uint64_t) ie;
+					want &= w == 8 ? ~0ULL : w == 4 ? 0xffffffffULL : w == 2 ? 0xffffULL : 0xffULL;
+					memset(b, 0xa5, sizeof(b));
+					rv = dev_footbridge_access(cpu, NULL, R5[r].addr, b, w, MEM_READ, x);
+					ok = rv == 1 && fatal_calls == 0 && memory_readmax64(cpu, b, w) == want && pad_kept(b, w)
+					    && x->irq_status == is && x->irq_enable == ie && x->fiq_status == fs
+					    && x->fiq_enable == fe && irq_asserts == a0 && irq_deasserts == d0;
+					snprintf(xn, sizeof(xn), "X9 legal len %d read of %s (%s, latches clear)",
+					    w, R5[r].nm, S9[st].nm);
+				} else {
+					int j = k - 17;
+					uint32_t old = W8[j].fiq ? fe : ie;
+					uint32_t ne = W8[j].set ? (old | W8[j].data) : (old & ~W8[j].data);
+					memory_writemax64(cpu, b, 4, W8[j].data);
+					rv = dev_footbridge_access(cpu, NULL, W8[j].addr, b, 4, MEM_WRITE, x);
+					ok = rv == 1 && fatal_calls == 0 && x->irq_status == is && x->fiq_status == fs
+					    && (W8[j].fiq ? (x->fiq_enable == ne && x->irq_enable == ie)
+					                  : (x->irq_enable == ne && x->fiq_enable == fe))
+					    && (W8[j].fiq ? (irq_asserts == a0 && irq_deasserts == d0)
+					        : (is & ne) ? (irq_asserts == a0 + 1 && irq_deasserts == d0)
+					                    : (irq_asserts == a0 && irq_deasserts == d0 + 1));
+					snprintf(xn, sizeof(xn), "X9 %s (%s, latches clear)", W8[j].nm, S9[st].nm);
+				}
+				for (si = 0; si < 5; si++) {
+					memory_writemax64(cpu, b, 4, 0x70);
+					dev_footbridge_access(cpu, NULL, D5[si].addr, b, 4, D5[si].wf, x);
+				}
+				ok = ok && fatal_calls == 5;
+				check_u(xn, ok, 1);
+				free(x);
+			}
+		fatal_calls = 0;
+	}
+	/*  X10-X12 (the first repair's own pass 2, 2026-09-23).  The Opus measuring seat built 434 one-line variants of the
+	    five arms against the 491-row instrument; 153 passed, and the in-bound ones fell into three cells no row had:
+	    the VALUE of a legal access with the latches SET (X7 counts announces only: `writeflag == MEM_READ &&
+	    !d->warned_irq_raw_w` made every +0x184 read after one declined write return 0, guest-visible), the ORDER of
+	    two sites' latches (every multi-site sequence declined the sites in one fixed order, so a site's first decline
+	    was never made with a LATER site already latched), and the legal Clear write's WIDTH and DATA (every legal
+	    write was len 4, with data 0, 0x10 -- P8's -- or 0x70).  The seat measured this row set in scratch -- it reddened every in-bound
+	    variant that passed -- and it is adopted here with the fourth state added and all-ones Clear data.
+	    X10: every latch SET, then each legal read returns 1 and its value over its width (1, 2, 4, and 8 at IRQ_STATUS
+	         and FIQ_STATUS), and a legal IRQ Clear write of 0x70 at len 4 returns 1, clears and drives the output
+	         (5 registers x their widths + 1 write, x 4 states = 18 x 4).
+	    X11: each ordered pair of sites, in each of the four states: latch j, then i's FIRST decline returns 1,
+	         announces exactly once, keeps every field and the interrupt output and (for the declined read) reads 0;
+	         then re-declining j and i announces NOTHING -- both latches kept (20 pairs x 4 states; the seeded rows keep
+	         their original names).
+	    X12: a legal IRQ Clear write at len 1 and 2 with 0x70, and at len 1, 2 and 4 with all-ones data, latches clear
+	         (x 4 states): it returns 1, clears (ne = ie & ~idata, idata the low bytes the width carries -- 3d: the
+	         buffer's bytes above the width hold 0xa5 POISON: a real narrow store's buffer is data[1] or data[2]
+	         (cpu_arm_instr_loadstore.c), so bytes past len are not store data at all, and a fetch past len reads
+	         them; deepseek's `memory_readmax64(cpu, data, 4)` passed every row while they were 0), drives the
+	         output once by (irq_status & ne), announces nothing, and the five declines that follow announce exactly 5.
+	    X13 (repair 3): the same five Clear writes with every latch SET: return 1, clear, drive once, announce nothing,
+	         and the five declines that follow still announce nothing.
+	    Repair 3 (the closure's own closing pass, 2026-09-23) added X14 (the instance cells, last block) and the
+	    8-byte cells (X6, X7, X9, X10), the return
+	    value on X7 and X10-X13, X11's other three states and its re-decline, and X13 -- each for a variant measured
+	    green on 707 rows (q2_20260923/closing_20260923/CL.log, CL2.log).  */
+	{
+		static const struct { uint32_t is, ie, fs, fe; const char *nm; } SY[4] = {
+			{ 0x18, 0x30, 0x60, 0xc0, "seeded" }, { 0, 0, 0, 0, "all-zero" },
+			{ 0x80010018, 0x00010030, 0x40020060, 0x000200c0, "wide" },
+			{ 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, "ones" } };
+		static const struct { uint64_t addr; int wf; const char *nm; } DY[5] = {
+			{ IRQ_STATUS, MEM_WRITE, "write IRQ_STATUS" }, { IRQ_RAW_STATUS, MEM_WRITE, "write IRQ_RAW_STATUS" },
+			{ IRQ_ENABLE_CLEAR, MEM_READ, "read IRQ_ENABLE_CLEAR" }, { FIQ_STATUS, MEM_WRITE, "write FIQ_STATUS" },
+			{ FIQ_RAW_STATUS, MEM_WRITE, "write FIQ_RAW_STATUS" } };
+		static const struct { uint64_t addr; const char *nm; } RY[5] = {
+			{ IRQ_STATUS, "IRQ_STATUS" }, { IRQ_RAW_STATUS, "IRQ_RAW_STATUS" }, { FIQ_STATUS, "FIQ_STATUS" },
+			{ FIQ_RAW_STATUS, "FIQ_RAW_STATUS" }, { IRQ_ENABLE_SET, "IRQEnable" } };
+		static const struct { int w; uint64_t data; const char *nm; } CY[5] = {
+			{ 1, 0x70, "0x70 len 1" }, { 2, 0x70, "0x70 len 2" }, { 1, 0xffffffffULL, "all-ones len 1" },
+			{ 2, 0xffffffffULL, "all-ones len 2" }, { 4, 0xffffffffULL, "all-ones len 4" } };
+		static const int WY[4] = { 1, 2, 4, 8 };
+		unsigned char b[8];
+		char yn[200];
+		int i, j, st, r, w, c, si, a0, d0, f0, rv, ok;
+		struct footbridge_data *x;
+#define YNEW(s) do { x = calloc(1, sizeof(*x)); arm_irqs(x); x->irq.interrupt_assert = noop_assert; \
+		x->irq.interrupt_deassert = noop_deassert; x->irq_status = SY[s].is; x->irq_enable = SY[s].ie; \
+		x->fiq_status = SY[s].fs; x->fiq_enable = SY[s].fe; } while (0)
+#define YSAME(s) (x->irq_status == SY[s].is && x->irq_enable == SY[s].ie && x->fiq_status == SY[s].fs \
+		&& x->fiq_enable == SY[s].fe)
+#define YDECLINE_ALL() do { for (si = 0; si < 5; si++) { memory_writemax64(cpu, b, 4, 0x70); \
+		dev_footbridge_access(cpu, NULL, DY[si].addr, b, 4, DY[si].wf, x); } } while (0)
+		/*  X10  */
+		for (st = 0; st < 4; st++) {
+			for (r = 0; r < 5; r++)
+				for (w = 0; w < (r == 0 || r == 2 ? 4 : 3); w++) {
+					uint32_t is = SY[st].is, ie = SY[st].ie, fs = SY[st].fs, fe = SY[st].fe;
+					uint64_t want = r == 0 ? (uint64_t) (is & ie) : r == 1 ? (uint64_t) is
+					    : r == 2 ? (uint64_t) (fs & fe) : r == 3 ? (uint64_t) fs : (uint64_t) ie;
+					want &= WY[w] == 8 ? ~0ULL : WY[w] == 4 ? 0xffffffffULL : WY[w] == 2 ? 0xffffULL : 0xffULL;
+					YNEW(st);
+					YDECLINE_ALL();
+					f0 = fatal_calls; a0 = irq_asserts; d0 = irq_deasserts;
+					memset(b, 0xa5, sizeof(b));
+					rv = dev_footbridge_access(cpu, NULL, RY[r].addr, b, WY[w], MEM_READ, x);
+					ok = rv == 1 && fatal_calls == f0 && memory_readmax64(cpu, b, WY[w]) == want && pad_kept(b, WY[w])
+					    && YSAME(st)
+					    && irq_asserts == a0 && irq_deasserts == d0;
+					snprintf(yn, sizeof(yn), "X10 legal len %d read of %s (%s, latches SET) returns its value",
+					    WY[w], RY[r].nm, SY[st].nm);
+					check_u(yn, ok, 1);
+					free(x);
+				}
+			{
+				uint32_t is = SY[st].is, ne = SY[st].ie & ~0x70u;
+				YNEW(st);
+				YDECLINE_ALL();
+				f0 = fatal_calls; a0 = irq_asserts; d0 = irq_deasserts;
+				memory_writemax64(cpu, b, 4, 0x70);
+				rv = dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, b, 4, MEM_WRITE, x);
+				ok = rv == 1 && fatal_calls == f0 && x->irq_enable == ne && x->irq_status == is
+				    && x->fiq_status == SY[st].fs && x->fiq_enable == SY[st].fe
+				    && ((is & ne) ? (irq_asserts == a0 + 1 && irq_deasserts == d0)
+				                  : (irq_asserts == a0 && irq_deasserts == d0 + 1));
+				snprintf(yn, sizeof(yn), "X10 IRQ Clear write 0x70 (%s, latches SET) clears and drives", SY[st].nm);
+				check_u(yn, ok, 1);
+				free(x);
+			}
+		}
+		/*  X11  */
+		for (st = 0; st < 4; st++)
+			for (j = 0; j < 5; j++)
+				for (i = 0; i < 5; i++) {
+					if (i == j)
+						continue;
+					YNEW(st);
+					memory_writemax64(cpu, b, 4, 0x70);
+					dev_footbridge_access(cpu, NULL, DY[j].addr, b, 4, DY[j].wf, x);
+					f0 = fatal_calls; a0 = irq_asserts; d0 = irq_deasserts;
+					memory_writemax64(cpu, b, 4, 0x70);
+					if (DY[i].wf == MEM_READ)
+						memset(b, 0xa5, sizeof(b));
+					rv = dev_footbridge_access(cpu, NULL, DY[i].addr, b, 4, DY[i].wf, x);
+					ok = rv == 1 && fatal_calls - f0 == 1 && YSAME(st) && irq_asserts == a0 && irq_deasserts == d0
+					    && (DY[i].wf != MEM_READ || memory_readmax64(cpu, b, 4) == 0);
+					f0 = fatal_calls;
+					memory_writemax64(cpu, b, 4, 0x70);
+					dev_footbridge_access(cpu, NULL, DY[j].addr, b, 4, DY[j].wf, x);
+					memory_writemax64(cpu, b, 4, 0x70);
+					dev_footbridge_access(cpu, NULL, DY[i].addr, b, 4, DY[i].wf, x);
+					ok = ok && fatal_calls == f0 && YSAME(st) && irq_asserts == a0 && irq_deasserts == d0;
+					if (st == 0)
+						snprintf(yn, sizeof(yn), "X11 first %s after %s latched: announced once", DY[i].nm, DY[j].nm);
+					else
+						snprintf(yn, sizeof(yn), "X11 first %s after %s latched (%s): announced once",
+						    DY[i].nm, DY[j].nm, SY[st].nm);
+					check_u(yn, ok, 1);
+					free(x);
+				}
+		/*  X12  */
+		for (st = 0; st < 4; st++)
+			for (c = 0; c < 5; c++) {
+				uint64_t mask = CY[c].w == 4 ? 0xffffffffULL : CY[c].w == 2 ? 0xffffULL : 0xffULL;
+				uint32_t is = SY[st].is, ne = SY[st].ie & ~(uint32_t) (CY[c].data & mask);
+				YNEW(st);
+				fatal_calls = 0; a0 = irq_asserts; d0 = irq_deasserts;
+				memset(b, 0xa5, sizeof(b));      /*  3d: the bytes above the width are NOT zero  */
+				memory_writemax64(cpu, b, CY[c].w, CY[c].data);
+				rv = dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, b, CY[c].w, MEM_WRITE, x);
+				ok = rv == 1 && fatal_calls == 0 && x->irq_enable == ne && x->irq_status == is
+				    && x->fiq_status == SY[st].fs && x->fiq_enable == SY[st].fe
+				    && ((is & ne) ? (irq_asserts == a0 + 1 && irq_deasserts == d0)
+				                  : (irq_asserts == a0 && irq_deasserts == d0 + 1));
+				YDECLINE_ALL();
+				ok = ok && fatal_calls == 5;
+				snprintf(yn, sizeof(yn), "X12 IRQ Clear write %s (%s, latches clear)", CY[c].nm, SY[st].nm);
+				check_u(yn, ok, 1);
+				free(x);
+			}
+		/*  X13  */
+		for (st = 0; st < 4; st++)
+			for (c = 0; c < 5; c++) {
+				uint64_t mask = CY[c].w == 4 ? 0xffffffffULL : CY[c].w == 2 ? 0xffffULL : 0xffULL;
+				uint32_t is = SY[st].is, ne = SY[st].ie & ~(uint32_t) (CY[c].data & mask);
+				YNEW(st);
+				YDECLINE_ALL();
+				f0 = fatal_calls; a0 = irq_asserts; d0 = irq_deasserts;
+				memset(b, 0xa5, sizeof(b));      /*  3d: the bytes above the width are NOT zero  */
+				memory_writemax64(cpu, b, CY[c].w, CY[c].data);
+				rv = dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, b, CY[c].w, MEM_WRITE, x);
+				ok = rv == 1 && fatal_calls == f0 && x->irq_enable == ne && x->irq_status == is
+				    && x->fiq_status == SY[st].fs && x->fiq_enable == SY[st].fe
+				    && ((is & ne) ? (irq_asserts == a0 + 1 && irq_deasserts == d0)
+				                  : (irq_asserts == a0 && irq_deasserts == d0 + 1));
+				YDECLINE_ALL();
+				ok = ok && fatal_calls == f0;
+				snprintf(yn, sizeof(yn), "X13 IRQ Clear write %s (%s, latches SET)", CY[c].nm, SY[st].nm);
+				check_u(yn, ok, 1);
+				free(x);
+			}
+#undef YDECLINE_ALL
+#undef YSAME
+#undef YNEW
+		fatal_calls = 0;
+	}
+	/*
+	 *  X14 (repair 3): the cells no block above can reach, because of HOW ITS INSTANCES ARE BUILT.  The Opus seat
+	 *  measured 28 one-line edits green on 707 rows (q2_20260923/q2c_opus/SUMMARY.txt), the smallest ONE
+	 *  character -- `&` -> `&&` in the Clear write's drive test.  Every instance above is a calloc with its
+	 *  interrupt fields seeded, so:
+	 *    no row CHECKED the drive test (irq_status & the new enable) with both operands nonzero and DISJOINT --
+	 *    P8 makes exactly that access and checks only the enable (codex, repair 3's pass) -- nor with the status
+	 *    zero and the enable not, nor with one of the other lines a device raises pending alone (timers 5-7, ISA
+	 *    10 on cats, 11 on netwinder, PCI 18 on cats): where it was checked it was zero with an operand zero, or
+	 *    nonzero with bit 4 or bit 16 in it;
+	 *    the CPU line and the four timer interrupts share one counter pair, so no row could see a Clear write
+	 *    drive the WRONG interrupt;
+	 *    in the #545 blocks the timer fields sat at 0 where DEVINIT sets PERIODIC, TIMER_MAX_VAL and a bound of 1,
+	 *    and no tick was ever pending (the timer rows at the top of this file seed ticks; they test other arms);
+	 *    irq_asserted was never 1: only the producer pair writes it (assert sets it, deassert clears it), and no
+	 *    block called either.
+	 *  Every row here that checks the interrupt output also requires the shared pair UNMOVED: the CPU line was
+	 *  driven, or left alone, and no timer interrupt was touched.  Repair 3c (this block's own pass -- the Opus seat
+	 *  measured nine edits at cells this header claimed, on channels its rows did not read: a Clear's drive at
+	 *  DEVINIT values in either polarity, a decline driving at those values (TD04) or while irq_asserted (IA14),
+	 *  the status read clearing or driving while irq_asserted, the reads after the latches set returning 0) gave
+	 *  the DEVINIT reads, Set/Clear and declines, the IRQ_STATUS read and
+	 *  the re-arm row the drive, the fields and the read values they claimed, and added the DEVINIT Clear that
+	 *  keeps a line pending (q2_20260923/q2e_opus/SUMMARY.txt).  Repair 3d (3c's own pass): six named rows, at four
+	 *  check sites, now read what their names and COVERED claim -- the raw status at the DEVINIT Clear 0x20
+	 *  (codex, grok, glm:
+	 *  a Clear zeroing it there passed) and at the asserted Clears (the Opus seat's FS01), the FIQ fields at the
+	 *  IRQ_STATUS read and the re-arm row (grok: a read setting fiq_enable passed), and irq_asserted at the
+	 *  re-arm row (a decline clearing it passed) -- with no new row (q2_20260923/r3d_20260923).  Repair 3e (3d's own
+	 *  pass) checks every field and irq_asserted after EACH access of the three rows that claim them kept (codex:
+	 *  a toggle on each +0x180 decline cancelled across the re-arm row's two batches), again with no new row
+	 *  (q2_20260923/r3e_20260923).
+	 *  Width 8 is X6/X7/X9/X10's; +0x184, +0x18c and +0x284 cannot take an 8-byte access.
+	 */
+	{
+		static const int LINE[7] = { 4, 5, 6, 7, 10, 11, 18 };
+		static const struct { uint64_t addr; uint32_t want; } RR[5] = {
+			{ IRQ_STATUS, 0x10 }, { IRQ_RAW_STATUS, 0x18 }, { FIQ_STATUS, 0x40 }, { FIQ_RAW_STATUS, 0x60 },
+			{ IRQ_ENABLE_SET, 0x30 } };
+		static const struct { uint64_t addr; int wf; } DD[5] = {
+			{ IRQ_STATUS, MEM_WRITE }, { IRQ_RAW_STATUS, MEM_WRITE }, { IRQ_ENABLE_CLEAR, MEM_READ },
+			{ FIQ_STATUS, MEM_WRITE }, { FIQ_RAW_STATUS, MEM_WRITE } };
+		static const struct { uint64_t addr; uint32_t want; } RA[5] = {
+			{ IRQ_STATUS, 0x10 }, { IRQ_RAW_STATUS, 0x10 }, { FIQ_STATUS, 0 }, { FIQ_RAW_STATUS, 0 },
+			{ IRQ_ENABLE_SET, 0x10 } };
+		static const char *TS[2] = { "DEVINIT timers", "DEVINIT timers, a tick pending" };
+		unsigned char b[8];
+		char zn[200];
+		int i, k, tk, a0, d0, f0, rv, ok;
+		uint32_t zs[5];
+		struct footbridge_data *x;
+/*  3e: a field an X14 row claims KEPT is checked after EACH of that row's accesses, never only at its end -- a
+    toggle on every +0x180 decline cancelled across the re-arm row's two batches and passed (codex, 3d's
+    pass).  */
+#define ZSNAP() do { zs[0] = x->irq_status; zs[1] = x->irq_enable; zs[2] = x->fiq_status; \
+		zs[3] = x->fiq_enable; zs[4] = (uint32_t) x->irq_asserted; } while (0)
+#define ZKEPT() (x->irq_status == zs[0] && x->irq_enable == zs[1] && x->fiq_status == zs[2] \
+		&& x->fiq_enable == zs[3] && (uint32_t) x->irq_asserted == zs[4])
+#define ZZERO() do { cpu_asserts = cpu_deasserts = 0; a0 = irq_asserts; d0 = irq_deasserts; fatal_calls = 0; } while (0)
+#define ZCPU(as, ds) (cpu_asserts == (as) && cpu_deasserts == (ds) && irq_asserts == a0 && irq_deasserts == d0)
+#define ZCLR(v) do { memory_writemax64(cpu, b, 4, (v)); \
+		rv = dev_footbridge_access(cpu, NULL, IRQ_ENABLE_CLEAR, b, 4, MEM_WRITE, x); } while (0)
+#define ZDECLINE() do { ZSNAP(); for (i = 0; i < 5; i++) { memset(b, 0xa5, sizeof(b)); \
+		if (DD[i].wf == MEM_WRITE) memory_writemax64(cpu, b, 4, 0x70); \
+		rv = dev_footbridge_access(cpu, NULL, DD[i].addr, b, 4, DD[i].wf, x); \
+		ok = ok && rv == 1 && (DD[i].wf == MEM_WRITE || memory_readmax64(cpu, b, 4) == 0) && ZKEPT(); } } \
+		while (0)
+		/*  The drive test's operand cells: both nonzero and disjoint (`&&` for `&` asserts there), and the status
+		    zero with the enable not (a test of the enable alone asserts there).  */
+		x = x14_new(0x18, 0x30, 0x60, 0xc0, 0);
+		ZZERO();
+		ZCLR(0x10);
+		check_u("X14 Clear 0x10 from 0x18/0x30 (disjoint): 0x20, CPU line deasserted once",
+		    rv == 1 && x->irq_enable == 0x20 && ZCPU(0, 1) && fatal_calls == 0, 1);
+		free(x);
+		x = x14_new(0, 0x30, 0, 0, 0);
+		ZZERO();
+		ZCLR(0x10);
+		check_u("X14 Clear 0x10 from 0/0x30 (no status): 0x20, CPU line deasserted once",
+		    rv == 1 && x->irq_enable == 0x20 && ZCPU(0, 1) && fatal_calls == 0, 1);
+		free(x);
+		/*  Each line a device raises, pending and enabled ALONE: a Clear of nothing asserts the CPU line.  */
+		for (k = 0; k < 7; k++) {
+			x = x14_new((uint32_t) 1 << LINE[k], (uint32_t) 1 << LINE[k], 0, 0, 0);
+			ZZERO();
+			ZCLR(0);
+			snprintf(zn, sizeof(zn), "X14 Clear 0, only line %d pending and enabled: CPU line asserted once",
+			    LINE[k]);
+			check_u(zn, rv == 1 && x->irq_enable == (uint32_t) 1 << LINE[k] && ZCPU(1, 0) && fatal_calls == 0, 1);
+			free(x);
+		}
+		/*  DEVINIT's timer reset values, then with a tick pending: the five legal reads return their values and
+		    announce nothing; a Set then a Clear land; the five declines announce exactly 5 and keep the fields.  */
+		for (tk = 0; tk < 2; tk++) {
+			x = x14_new(0x18, 0x30, 0x60, 0xc0, 1);
+			x->pending_timer_interrupts[0] = tk;
+			ZZERO();
+			ok = 1;
+			for (i = 0; i < 5; i++) {
+				memset(b, 0xa5, sizeof(b));
+				rv = dev_footbridge_access(cpu, NULL, RR[i].addr, b, 4, MEM_READ, x);
+				ok = ok && rv == 1 && memory_readmax64(cpu, b, 4) == RR[i].want;
+			}
+			snprintf(zn, sizeof(zn), "X14 %s: the five legal reads return their values", TS[tk]);
+			check_u(zn, ok && fatal_calls == 0 && ZCPU(0, 0), 1);
+			memory_writemax64(cpu, b, 4, 0x40);
+			rv = dev_footbridge_access(cpu, NULL, IRQ_ENABLE_SET, b, 4, MEM_WRITE, x);
+			ok = rv == 1;
+			ZCLR(0x10);
+			snprintf(zn, sizeof(zn), "X14 %s: Set 0x40 then Clear 0x10 leave 0x60", TS[tk]);
+			check_u(zn, ok && rv == 1 && x->irq_enable == 0x60 && fatal_calls == 0 && ZCPU(1, 1), 1);
+			ZZERO();
+			ok = 1;
+			ZDECLINE();
+			snprintf(zn, sizeof(zn), "X14 %s: the five declines announce 5, keep the fields", TS[tk]);
+			check_u(zn, ok && fatal_calls == 5 && x->irq_status == 0x18 && x->irq_enable == 0x60
+			    && x->fiq_status == 0x60 && x->fiq_enable == 0xc0 && ZCPU(0, 0), 1);
+			free(x);
+			/*  repair 3c: the other polarity of the drive at these values -- a Clear that leaves an enabled line
+			    pending must ASSERT (the row above ends where the drive deasserts); 3d: and the raw status stays
+			    0x18, as the name says (codex, grok, glm: a Clear that zeroed it here passed every row)  */
+			x = x14_new(0x18, 0x30, 0x60, 0xc0, 1);
+			x->pending_timer_interrupts[0] = tk;
+			ZZERO();
+			ZCLR(0x20);
+			snprintf(zn, sizeof(zn), "X14 %s: Clear 0x20 keeps 0x10 pending and enabled: CPU line asserted once", TS[tk]);
+			check_u(zn, rv == 1 && x->irq_enable == 0x10 && x->irq_status == 0x18 && ZCPU(1, 0) && fatal_calls == 0,
+			    1);
+			free(x);
+		}
+		/*  irq_asserted = 1, through the real callback: a device raises line 4 with line 4 enabled.  */
+		x = x14_new(0, 0x10, 0, 0, 0);
+		ZZERO();
+		x14_line(x, 4);
+		ok = x->irq_asserted == 1 && x->irq_status == 0x10 && ZCPU(1, 0);
+		ZZERO();
+		memset(b, 0xa5, sizeof(b));
+		rv = dev_footbridge_access(cpu, NULL, IRQ_STATUS, b, 4, MEM_READ, x);
+		check_u("X14 line 4 raised by a device: IRQ_STATUS reads 0x10",
+		    ok && rv == 1 && memory_readmax64(cpu, b, 4) == 0x10 && fatal_calls == 0 && x->irq_status == 0x10
+		    && x->irq_enable == 0x10 && x->irq_asserted == 1 && x->fiq_status == 0 && x->fiq_enable == 0
+		    && ZCPU(0, 0), 1);
+		free(x);
+		for (k = 0; k < 2; k++) {
+			x = x14_new(0, 0x10, 0, 0, 0);
+			x14_line(x, 4);
+			ok = x->irq_asserted == 1;
+			ZZERO();
+			ZCLR(k ? 0x400 : 0x10);
+			snprintf(zn, sizeof(zn), "X14 line 4 raised by a device: Clear %s, the raw status kept, CPU line %s once",
+			    k ? "0x400 keeps it" : "0x10 clears it", k ? "asserted" : "deasserted");
+			/*  3d: a Clear writes the enable only -- the raw status is the sources' (the Opus seat's FS01, a Clear
+			    dropping the masked line from it, passed).  irq_asserted is NOT pinned here: the enable arms never
+			    write it, which is `fbirqstuck`'s defect -- so 1 after the DEASSERTING Clear 0x10 would pin that defect.
+			    After the asserting Clear 0x400, 1 is right, and the re-arm row pins exactly that.  */
+			check_u(zn, ok && rv == 1 && x->irq_enable == (k ? 0x10u : 0u) && x->irq_status == 0x10
+			    && (k ? ZCPU(1, 0) : ZCPU(0, 1)) && fatal_calls == 0, 1);
+			free(x);
+		}
+		x = x14_new(0, 0x10, 0, 0, 0);
+		x14_line(x, 4);
+		ok = x->irq_asserted == 1;
+		ZZERO();
+		ZDECLINE();
+		f0 = fatal_calls;
+		for (i = 0; i < 5; i++) {
+			memset(b, 0xa5, sizeof(b));
+			rv = dev_footbridge_access(cpu, NULL, RA[i].addr, b, 4, MEM_READ, x);
+			ok = ok && rv == 1 && memory_readmax64(cpu, b, 4) == RA[i].want && ZKEPT();
+		}
+		ZCLR(0x400);
+		ok = ok && rv == 1 && ZKEPT();     /*  0x10 & ~0x400: nothing changes  */
+		ZDECLINE();
+		check_u("X14 line 4 raised by a device: 5 declines, then the legal reads and a Clear re-arm no latch",
+		    ok && f0 == 5 && fatal_calls == 5 && ZCPU(1, 0) && x->irq_status == 0x10 && x->irq_enable == 0x10
+		    && x->irq_asserted == 1 && x->fiq_status == 0 && x->fiq_enable == 0, 1);
+		free(x);
+#undef ZDECLINE
+#undef ZKEPT
+#undef ZSNAP
+#undef ZCLR
+#undef ZCPU
+#undef ZZERO
+		fatal_calls = 0;
+	}
+	/*  IDENTITY, as every differential here carries.  #545: 33 -> 333 (the 33 are the 32 timer rows and this one;
+	    then 78 P-rows + 222 X-rows); the adjudication pass, 2026-09-23: 333 -> 491 (X6 +54 and X7 +35 for the wide
+	    state, X9 69); its repair's own pass 2: 491 -> 707 (the ones state: X6 +54, X7 +35, X9 +23; X10 64, X11 20,
+	    X12 20); the closure's closing pass (repair 3): 707 -> 862 (the 8-byte cells: X6 +32, X7 +8, X9 +8, X10 +8;
+	    X11's other three states +60; X13 20; X14 19); repair 3's own pass (3c): 862 -> 864 (X14 +2); 3c's own
+	    pass (3d): 864, no row added -- six X14 rows read more, and X12/X13's buffer bytes above the width; 3d's own
+	    pass (3e): 864 -- X14's three kept-field rows after each access, and the bytes above the width after X6's
+	    declined accesses and X9/X10's legal reads; 3e's own pass (3f): records only.  */
 	{
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%d", rows + 1);
-		check("IDENTITY row count -- guards against a stale copy", buf, "33");
+		check("IDENTITY row count -- guards against a stale copy", buf, "864");
 	}
 
 	printf("\n%d rows, %d failures\n", rows, fails);

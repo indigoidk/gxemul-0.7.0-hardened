@@ -82,6 +82,16 @@ struct footbridge_data {
 
 	uint32_t	fiq_status;
 	uint32_t	fiq_enable;
+
+	/*  #545: one warn-once latch per undefined-direction access that used
+	    to end the process (DC21285 7.3.29-7.3.33: "The Status and RawStatus
+	    are read-only, and EnableClear and Soft are write-only").  Zeroed by
+	    DEVINIT's memset and by the offline differentials' calloc.  */
+	int		warned_irq_status_w;
+	int		warned_irq_raw_w;
+	int		warned_irq_clear_r;
+	int		warned_fiq_status_w;
+	int		warned_fiq_raw_w;
 };
 
 
@@ -560,18 +570,23 @@ DEVICE_ACCESS(footbridge)
 	case IRQ_STATUS:
 		if (writeflag == MEM_READ)
 			odata = d->irq_status & d->irq_enable;
-		else {
-			fatal("[ WARNING: footbridge write to irq status? ]\n");
-			exit(1);
+		else if (!d->warned_irq_status_w) {
+			/*  #545: read-only register (7.3.29); the write is
+			    declined -- no register changes, only this site's
+			    warn-once latch is set -- and announced once.  */
+			d->warned_irq_status_w = 1;
+			fatal("[ WARNING: footbridge write to irq status? "
+			    "(once) ]\n");
 		}
 		break;
 
 	case IRQ_RAW_STATUS:
 		if (writeflag == MEM_READ)
 			odata = d->irq_status;
-		else {
-			fatal("[ footbridge write to irq_raw_status ]\n");
-			exit(1);
+		else if (!d->warned_irq_raw_w) {
+			/*  #545: read-only (7.3.30); declined, announced once.  */
+			d->warned_irq_raw_w = 1;
+			fatal("[ footbridge write to irq_raw_status (once) ]\n");
 		}
 		break;
 
@@ -599,29 +614,35 @@ DEVICE_ACCESS(footbridge)
 				INTERRUPT_ASSERT(d->irq);
 			else
 				INTERRUPT_DEASSERT(d->irq);
-		} else {
-			odata = d->irq_enable;
+		} else if (!d->warned_irq_clear_r) {
+			/*  #545: IRQEnableClear is write-only (7.3.33) and Table
+			    7-10 names no register at 18Ch for reads, so the read
+			    is declined with 0 -- the IRQEnable value that used to
+			    be computed here is 188h's answer, not 18Ch's.  */
+			d->warned_irq_clear_r = 1;
 			fatal("[ WARNING: footbridge read from "
-			    "ENABLE CLEAR? ]\n");
-			exit(1);
+			    "ENABLE CLEAR? (once) ]\n");
 		}
 		break;
 
 	case FIQ_STATUS:
 		if (writeflag == MEM_READ)
 			odata = d->fiq_status & d->fiq_enable;
-		else {
-			fatal("[ WARNING: footbridge write to fiq status? ]\n");
-			exit(1);
+		else if (!d->warned_fiq_status_w) {
+			/*  #545: read-only (7.3.29); declined, announced once.  */
+			d->warned_fiq_status_w = 1;
+			fatal("[ WARNING: footbridge write to fiq status? "
+			    "(once) ]\n");
 		}
 		break;
 
 	case FIQ_RAW_STATUS:
 		if (writeflag == MEM_READ)
 			odata = d->fiq_status;
-		else {
-			fatal("[ footbridge write to fiq_raw_status ]\n");
-			exit(1);
+		else if (!d->warned_fiq_raw_w) {
+			/*  #545: read-only (7.3.30); declined, announced once.  */
+			d->warned_fiq_raw_w = 1;
+			fatal("[ footbridge write to fiq_raw_status (once) ]\n");
 		}
 		break;
 

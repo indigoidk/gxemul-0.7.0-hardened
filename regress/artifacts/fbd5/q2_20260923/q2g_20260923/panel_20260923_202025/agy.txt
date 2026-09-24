@@ -1,0 +1,169 @@
+VERDICT: SHIP
+
+---
+
+### §E — QUESTIONS AND ADVERSARIAL REVIEW
+
+#### Q1 — Did 3d close what it claims?
+
+**(a) Strengthened checks ([`E1`–`E4`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1468-L1516)), the fill ([`E5`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1316-L1337)), and channel observation:**
+
+* **`E1`** ([`regress/diff_footbridge.c:1468`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1468)):
+  * *Target Edit*: `R3D_CXC1` (at the end of Clear write: `if (d->timer_control[0] && (d->irq_status & d->irq_enable)) d->irq_status = 0;`).
+  * *Observable*: [`struct footbridge_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L60-L95)`::irq_status` (previously unread at this check; now asserted `x->irq_status == 0x18`).
+  * *Differs*: `0x18` vs `0` under `R3D_CXC1`. Both `tk=0` and `tk=1` rows go red.
+* **`E2`** ([`regress/diff_footbridge.c:1481-1483`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1481-L1483)):
+  * *Target Edit*: `R3D_GF1` (`IRQ_STATUS` read arm modifies FIQ state: `odata = ..., d->fiq_enable |= (uint32_t) d->irq_asserted;`).
+  * *Observable*: [`struct footbridge_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L60-L95)`::fiq_status == 0 && fiq_enable == 0`.
+  * *Differs*: `fiq_enable` is `1` instead of `0`.
+* **`E3`** ([`regress/diff_footbridge.c:1491-1497`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1491-L1497)):
+  * *Target Edit*: `OQ_FS01` (Clear write clears raw status while asserted: `d->irq_status &= d->irq_asserted ? d->irq_enable : ~0u`) and control `R3D_CXA1`.
+  * *Observable*: [`struct footbridge_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L60-L95)`::irq_status == 0x10`.
+  * *Differs*: For `k=0` (Clear `0x10`), `irq_enable` drops to `0`, causing `OQ_FS01` to clear `irq_status` to `0` instead of keeping `0x10`. `irq_asserted` is intentionally left unpinned because the enable arms in [`dev_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L593-L626) never update `irq_asserted` (the known `fbirqstuck` F13 defect); asserting `1` would pin the defect and asserting `0` is counterfactual.
+* **`E4`** ([`regress/diff_footbridge.c:1514-1516`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1514-L1516)):
+  * *Target Edit*: `R3D_DA1` (`+0x180` decline clears `irq_asserted`: `d->irq_asserted = 0;`) and `R3D_GF1`.
+  * *Observable*: [`struct footbridge_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L60-L95)`::irq_asserted == 1 && fiq_status == 0 && fiq_enable == 0`.
+  * *Differs*: Under `R3D_DA1`, `irq_asserted` is cleared to `0`. Under `R3D_GF1`, `fiq_enable` is `1`.
+* **`E5`** ([`regress/diff_footbridge.c:1316, 1337`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1316-L1337)):
+  * *Target Edit*: `R3D_FW1` (head fetch ignores width: `idata = memory_readmax64(cpu, data, 4);`).
+  * *Observable*: `x->irq_enable == ne`.
+  * *Differs*: Unused bytes in buffer `b` are poisoned with `0xa5`. A 4-byte fetch on a 1- or 2-byte access reads `0xa5` in upper bytes, clearing unexpected bits in `irq_enable` for wide and ones states across 16 rows.
+
+*Unread Channels*: **None**. Every row in families X6, X7, X9, X10, X11, X12, X13, and X14 checks exactly the fields, return values, fatal call counts, data buffers, and interrupt callbacks named in its header and row label.
+
+**(b) Verification of `COVERED` and `NOT COVERED`:**
+* `COVERED` ([`regress/diff_footbridge.c:900-922`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L900-L922)) accurately describes all 864 rows:
+  * X6: 248 rows (4 write sites x 2 data x domain widths + 1 read site x 1 data x 3 widths = 31 cells; 31 x 4 states x 2 ordinals = 248).
+  * X7: 148 rows (37 access configurations x 4 states = 148).
+  * X9: 100 rows (17 read cells + 8 write cells = 25 cells; 25 x 4 states = 100).
+  * X10: 72 rows (17 read cells + 1 Clear write cell = 18 cells; 18 x 4 states = 72).
+  * X11: 80 rows (20 ordered site pairs x 4 states = 80).
+  * X12: 20 rows (5 Clear write specs x 4 states = 20).
+  * X13: 20 rows (5 Clear write specs x 4 states = 20).
+  * X14: 21 rows (1 disjoint + 1 zero-status + 7 device lines + 4 tk=0/tk=1 DEVINIT + 4 tk=0/tk=1 Set/Clear/Decline + 4 asserted line 4 = 21).
+  * Pre-existing timer + identity: 32 timer rows + 1 identity row = 33 rows.
+  * Total = 248 + 148 + 100 + 72 + 80 + 20 + 20 + 21 + 33 = **864 rows**.
+* `NOT COVERED` ([`regress/diff_footbridge.c:935-994`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L935-L994)): Every exclusion is either outside the floor (constant comparisons, address-aliasing, hardware unraised bits, write data values in write-ignored decline arms) or honestly disclosed under carrier clause (e) (caller context `mem`/`machine_type`, announce text, latch history modulo sequences, callback edge vs level).
+
+---
+
+#### Q2 — The Floor Question on the Composite
+
+**The smallest edit to the five decline arms, the two head tests, or the Clear write that the 864 rows cannot see and the contract does not disclose**: **NONE**.
+
+* **Denominator**:
+  * **Domain of the five arms** ([`src/devices/dev_footbridge.c:570-646`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L570-L646)):
+    * Addresses: `+0x180` (IRQ_STATUS), `+0x184` (IRQ_RAW_STATUS), `+0x18c` (IRQ_ENABLE_CLEAR), `+0x280` (FIQ_STATUS), `+0x284` (FIQ_RAW_STATUS).
+    * Direction tests (`writeflag == MEM_READ` vs `MEM_WRITE`): partition `{READ, WRITE}` checked across all 5 sites in both latches-clear (X9) and latches-set (X10, X7) states.
+    * Latch predicates (`!d->warned_*`): partition `{0, 1}` checked for all 5 sites in X6 (first and repeat), X11 (all 20 pairs cross-site), and X14.
+    * Widths: `W = {1, 2, 4, 8}` swept at aligned offsets (`0x180`, `0x280`) and `{1, 2, 4}` at unaligned (`0x184`, `0x18c`, `0x284`) per ARM load/store architectural bounds ([`src/cpus/cpu_arm_instr_loadstore.c:229`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c#L229)).
+    * States: `ST[4]` = `{seeded (0x18/0x30/0x60/0xc0), all-zero, wide (bit 16 / bit 31 set), ones (all 0xffffffff)}`.
+  * **Head tests** ([`src/devices/dev_footbridge.c:514-520`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L514-L520)):
+    * Write data fetch `memory_readmax64`: width truncation / over-read swept across narrow lengths `{1, 2}` with dirty buffer (`0xa5`) in X12/X13 (killing `R3D_FW1`).
+    * Timer fold `relative_addr &= ~0x060`: addresses inside range `0x300..0x36c` do not alias to the five arms (`0x180..0x28c`).
+  * **Clear write body** ([`src/devices/dev_footbridge.c:611-616`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L611-L616)):
+    * Enable mutation `d->irq_enable &= ~idata`: verified at lengths 1, 2, 4 with diverse data in X9, X10, X12, X13, X14.
+    * Drive test `(d->irq_status & d->irq_enable)`: truth table partitioned into:
+      1. Both non-zero & matching: verified in X9/X10/X12/X13/X14.
+      2. Both non-zero & disjoint: verified in X14 (`0x18` & `0x20` -> deassert, kills `&&`).
+      3. Status zero, enable non-zero: verified in X14 (`0` & `0x30` -> deassert, kills `|`).
+      4. Single-line isolations: all 7 device-raised lines (`4, 5, 6, 7, 10, 11, 18`) verified individually in X14.
+    * Side effects: `irq_status` retention verified in E1 (`x->irq_status == 0x18`) and E3 (`x->irq_status == 0x10`, killing `OQ_FS01`).
+  * **Variant Suite Sweep**:
+    * Total mutant suite size: **739 variants** ([`regress/artifacts/fbd5/q2_20260923/r3d_20260923/R3D.log:13-21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3d_20260923/R3D.log#L13-L21)).
+    * Killed: **593 variants** (588 RED + 5 DIED).
+    * Green: **146 variants** (all 146 are formally accounted for and disclosed in `NOT COVERED`: 99 Opus out-of-floor variants, 26 `q2e` disclosures, 8 `opusq2f` caller-context/level variants, 5 extra, 4 closing, 2 carried, 1 codexV, 1 `R3D_LH1`).
+    * Zero undisclosed escapes across the composite.
+
+---
+
+#### Q3 — Adjudication of Findings S1–S22 and Disagreements D1–D4
+
+| Item | Adjudication | Evidence & Rationale |
+|---|---|---|
+| **S1** | **UPHOLD** | Fixed by `E1` ([`diff_footbridge.c:1468`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1468)). Verified kills `R3D_CXC1`. |
+| **S2** | **UPHOLD** | Fixed by `E2` and `E4` ([`diff_footbridge.c:1482, 1516`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1482)). Verified kills `R3D_GF1`. |
+| **S3** | **UPHOLD** | Fixed by `E3` ([`diff_footbridge.c:1496`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1496)). Verified kills `OQ_FS01`. `irq_asserted` rightly left unpinned. |
+| **S4** | **UPHOLD** | Fixed by `E4` ([`diff_footbridge.c:1516`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1516)). Verified kills `R3D_DA1`. |
+| **S5** | **UPHOLD** | Fixed by `E5` ([`diff_footbridge.c:1316, 1337`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1316)). Verified kills `R3D_FW1` across 16 rows. |
+| **S6** | **UPHOLD** | Clause (e) disclosure upheld. `mem` and `machine_type` are never read by [`DEVICE_ACCESS(footbridge)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L508-L781). |
+| **S7** | **UPHOLD** | Announce string formatting is outside the floor; call count is the architectural observable. |
+| **S8** | **UPHOLD** | Clause (e) disclosure upheld. Latch test in code partitions `{0, !=0}`, both rowed. Modulo history is synthetic. |
+| **S9** | **UPHOLD** | Disclosed on LEVEL line. Enable arms do not write `irq_asserted` in product; owned by `fbirqstuck`. |
+| **S10** | **UPHOLD** | Comment rewritten ([`diff_footbridge.c:967-972`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L967-L972)). `PR09` reads status row; `PR01/03/04` separated from F13. |
+| **S11** | **UPHOLD** | Widths spelled out in `COVERED` ([`diff_footbridge.c:904-906`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L904-L906)). IRQEnable 8-byte read explicitly excluded. |
+| **S12** | **UPHOLD** | Exact-value example rewritten from empirical measurements ([`diff_footbridge.c:936-943`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L936-L943)). |
+| **S13** | **UPHOLD** | Accurately recorded that bit 16 is caught by wide state while 24 masks pass ([`diff_footbridge.c:960-962`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L960-L962)). |
+| **S14** | **UPHOLD** | Added rest of instance to `NOT COVERED` ([`diff_footbridge.c:987-988`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L987-L988)). |
+| **S15** | **UPHOLD** | Recap in X14 header accurately cites `TD04` and `IA14` ([`diff_footbridge.c:1374`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1374)). |
+| **S16** | **UPHOLD** | Clarified "for a read, the read data" ([`diff_footbridge.c:901`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L901)). |
+| **S17** | **UPHOLD** | Pre-existing comments unrelated to #545 diff properly filed with R17. |
+| **S18** | **UPHOLD** | Destination gap below len 4 kept disclosed; Clear body is not edited code. Options filed. |
+| **S19** | **UPHOLD** | Owner ruling on producer pair acknowledged; filed under `fbirqstuck`. |
+| **S20** | **UPHOLD** | Confirmed in [`src/core/debugmsg.c:384-391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391): [`fatal()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) returns without exiting. |
+| **S21** | **UPHOLD** | Arithmetic confirmed: 831 family rows + 32 timer rows + 1 identity row = 864 rows. |
+| **S22** | **UPHOLD** | `(len & 1) == 0` is caught by len-1 rows; len-3 is unaligned and not a valid guest input. |
+| **D1** | **UPHOLD codex/grok/glm** | `CXC1` proved that zeroing status after the drive passed 3c. Overturn kimi-k3:cloud. |
+| **D2** | **UPHOLD codex/grok/glm** | 3c rows claimed pending status / FIQ fields without reading them. Overturn agy. |
+| **D3** | **UPHOLD** | Producer pair is owned by `fbirqstuck` (open MED item). |
+| **D4** | **REFINE / UPHOLD Author** | Taking `E3` and `E5` is strictly superior to disclosure. They add 0 rows, fix genuine gaps (`OQ_FS01`, `R3D_FW1`), and the contract was accurately updated to match. |
+
+**Review of Accepted Dispositions**: **None are wrong**.
+* **D4**: Taking E3 and E5 is sound. Adding zero rows while strengthening assertions to catch real mutations is entirely permissible under the repair-chain rule so long as the contract claims are updated in lockstep.
+* **S6**: Disclosing caller context (`mem == NULL`, `MACHINE_NONE`) under clause (e) rather than adding rows is sound because `DEVICE_ACCESS(footbridge)` never reads `mem` or `cpu->machine->machine_type`.
+
+---
+
+#### Q4 — Records Audit
+
+1. **Changed Comments**: Every sentence in the changed header and block comments in [`regress/diff_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c) is true of today's code:
+   * Width 8 coverage is strictly limited to `IRQ_STATUS` and `FIQ_STATUS` (lines 904–906); `IRQEnable` at width 8 is explicitly noted as not covered.
+   * `NOT COVERED` correctly accounts for bit 16 being caught by wide seeds (lines 960–962).
+   * Producer pair notes correctly differentiate F13 from `PR01/03/04` and reference `PR09` (lines 967–972).
+2. **Renamed Row Names vs Checks**:
+   * `"X14 line 4 raised by a device: Clear 0x10 clears it, the raw status kept, CPU line deasserted once"` ([`diff_footbridge.c:1491-1497`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1491-L1497)):
+     * `x->irq_enable == 0u` matches "Clear 0x10 clears it".
+     * `x->irq_status == 0x10` matches "the raw status kept".
+     * `ZCPU(0, 1)` matches "CPU line deasserted once".
+   * `"X14 line 4 raised by a device: Clear 0x400 keeps it, the raw status kept, CPU line asserted once"`:
+     * `x->irq_enable == 0x10u` matches "Clear 0x400 keeps it".
+     * `x->irq_status == 0x10` matches "the raw status kept".
+     * `ZCPU(1, 0)` matches "CPU line asserted once".
+3. **IDENTITY Comment History**:
+   * [`diff_footbridge.c:1524-1534`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1524-L1534): Accurately traces the progression: `33 -> 333 -> 491 -> 707 -> 862 -> 864 (3c) -> 864 (3d: no row added, strengthened checks)`. The string comparison pins `"864"`.
+
+---
+
+#### Q5 — Chain Closing
+
+**The pass is VALID to close the repair chain.**
+1. **Diff Delivered**: 12 hunks between `diff_footbridge.864r3c.c` (`8309c5b7`) and `diff_footbridge.c` (`6c92d7e5`) verified bit-for-bit against [`C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\fbd5\q2g\frozen\`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2g/frozen/) and [`C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/).
+2. **Roster Named & Evaluated**: All 739 variants measured ([`R3D.log`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3d_20260923/R3D.log)).
+3. **Zero Floor Breaches**: The denominator is fully enumerated across all partitions of the 5 decline arms, the head tests, and the Clear write body. 0 mismatches against predictions, 0 rows lost, 0 unread channels, and 0 compiler warnings.
+
+---
+
+### Additional Findings ("Something ELSE")
+* Direct examination of [`src/devices/bus_pci.c:1223-1224`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c#L1223-L1224) and [`src/devices/dev_footbridge.c:835-865`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L835-L865) independently confirms Premise §C.6: only 7 interrupt lines can ever be asserted by devices in GXemul (`timers 4-7`, `cats ISA 10`, `netwinder ISA 11`, `cats dec21143 18`). The remaining 25 lines are physically unconnected in emulation and cannot be asserted by guest software.
+* Direct examination of [`src/cpus/cpu_arm_instr_loadstore.c:101, 229`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c#L229) confirms Premise §C.5: `addr &= ~(datalen - 1)` forces 8-byte accesses (`LDRD`/`STRD`) to 8-byte boundaries (`~7`), proving that offsets `+0x184`, `+0x18c`, and `+0x284` are impossible guest inputs at width 8.
+
+---
+
+### Seat Record
+* **Model**: Gemini 3.8 Flash
+* **Files Read**:
+  * [`_scratchpad/panel_20260923_202025/brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260923_202025/brief_sent.md)
+  * [`GXEMUL-SEC/regress/diff_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c)
+  * [`GXEMUL-SEC/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c)
+  * [`GXEMUL-SEC/src/devices/bus_pci.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c)
+  * [`GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c)
+  * [`GXEMUL-SEC/src/core/debugmsg.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c)
+  * [`GXEMUL-SEC/src/include/thirdparty/dc21285reg.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h)
+  * [`_scratchpad/fbd5/q2g/frozen/*`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2g/frozen/) (`dev_footbridge.c`, `diff_footbridge.c`, `diff_footbridge.864r3c.c`, `gate_offline.sh`)
+  * [`_scratchpad/fbd5/q2f/opus/SUMMARY.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2f/opus/SUMMARY.txt)
+  * [`regress/artifacts/fbd5/q2_20260923/r3d_20260923/*`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3d_20260923/) (`R3D.log`, `PRETABLE_Q2e.out`, `PREDICTIONS.txt`, `diff_FIX.log`, `gen_r3d.py`)
+* **Commands Ran**: File hashing (SHA256 and MD5), non-index git diff verification, pattern matching and regex counts on source files. Zero test gates or batteries executed.
+
+---
+
+GO

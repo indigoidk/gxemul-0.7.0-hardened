@@ -1,0 +1,243 @@
+VERDICT — A: **4/5 facets VERIFIED; 1/5 PARTIAL** because `fiq_status` is zero-initialized, then never updated. B: **the lane-decode defect is VERIFIED, but the universal premise is REFUTED**: **26/27** address-case labels are word-aligned; **767/768** non-word-aligned offsets reach `default:`.
+
+“Returns zero” below means **guest read data**. The handler’s normal C return value is `1`, meaning success. All observations below are static readings or explicitly marked reasoning.
+
+For concise anchors, F means [dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c), H means [dc21285reg.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h), and D means [dc21285.txt](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt). Line numbers refer to the working files read.
+
+**A’s five facets support one incomplete FIQ model, with an access-policy qualification.**
+
+1. **FIQ_ENABLE_SET read — VERIFIED.**
+
+   **READ — [F:628](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:628):**
+   ```c
+   case FIQ_ENABLE_SET:
+       if (writeflag == MEM_WRITE)
+           d->fiq_enable |= idata;
+       break;
+   ```
+   There is no read assignment. `odata` starts at zero at F:501 and reaches `memory_writemax64(cpu, data, len, odata)` at F:757. By contrast, the IRQ read branch contains `odata = d->irq_enable;` at F:591.
+
+   **READ — [D:6911](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6911), §7.3.31:** “The value of this register can only be changed by writing to the EnableSet and EnableClear registers.” Table 7-10 explicitly maps reads at `188h/288h` to IRQEnable/FIQEnable and writes to EnableSet.
+
+   **REASONED — smallest behavior:** read `+0x288` as `d->fiq_enable`. Its existing set/clear writes already maintain that field.
+
+2. **FIQ_ENABLE_CLEAR read versus IRQ_ENABLE_CLEAR read — VERIFIED as policy asymmetry.**
+
+   **READ — [F:633](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:633):**
+   ```c
+   case FIQ_ENABLE_CLEAR:
+       if (writeflag == MEM_WRITE)
+           d->fiq_enable &= ~idata;
+       break;
+   ```
+   Its read leaves `odata == 0`, without a diagnostic. The IRQ read branch at F:603–606 is:
+   ```c
+   odata = d->irq_enable;
+   fatal("[ WARNING: footbridge read from "
+       "ENABLE CLEAR? ]\n");
+   exit(1);
+   ```
+   Consequently, the IRQ value is assigned locally but never copied back to the guest.
+
+   **READ — [D:6937](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6937), §7.3.33:** “This write-only register is used to clear bits in the IRQEnable/FIQEnable register.” Table 7-10 gives **no read register at either address**.
+
+   **REASONED — smallest behavior:** no particular FIQ EnableClear read value is required by this passage. A consistent, nonterminating read policy would remove the asymmetry; choosing zero would be a model policy, not documented enable readback. The defined enable-read addresses remain `188h/288h`.
+
+3. **FIQ raw status never written — PARTIAL literally; VERIFIED after initialization.**
+
+   **READ — [F:770](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:770):** initialization includes:
+   ```c
+   memset(d, 0, sizeof(struct footbridge_data));
+   ```
+   Thus `fiq_status` **is written initially**. There are **0 subsequent update sites** for it in the file. Its two uses are reads: `d->fiq_status & d->fiq_enable` at F:612 and `d->fiq_status` at F:621.
+
+   The interrupt status/mask fields have these explicit update sites:
+
+   | Field | Post-initialization writes |
+   |---|---|
+   | `irq_status` | F:378: `d->irq_status |= interrupt->line;`; F:397: `d->irq_status &= ~interrupt->line;` |
+   | `irq_enable` | F:580: `d->irq_enable |= idata;`; F:597: `d->irq_enable &= ~idata;` |
+   | `fiq_status` | None |
+   | `fiq_enable` | F:630: `d->fiq_enable |= idata;`; F:635: `d->fiq_enable &= ~idata;` |
+
+   Therefore **3/4** status/mask fields have explicit updates after initialization. The related `irq_asserted` bookkeeping flag is written at F:385 (`1`) and F:400 (`0`).
+
+   **READ — [D:6901](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6901), §7.3.30:** “The IRQRawStatus and FIQRawStatus read-only registers always contain identical data.” At D:6888, Status is defined as the bitwise AND of RawStatus and the corresponding enable register.
+
+   **REASONED — smallest behavior:** use one shared raw-source field—today’s `irq_status` can serve that purpose—for both raw reads, and compute FIQStatus as that field AND `fiq_enable`. Independent raw fields invite the divergence already present.
+
+4. **No FIQ output interrupt object — VERIFIED.**
+
+   **READ — [F:60](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:60):** the interrupt-related declarations are:
+
+   - `struct interrupt irq;`
+   - `struct interrupt timer_irq[N_FOOTBRIDGE_TIMERS];`
+   - `int pending_timer_interrupts[N_FOOTBRIDGE_TIMERS];`
+   - `int pending_bound[N_FOOTBRIDGE_TIMERS];`
+   - `int irq_asserted;`
+   - `uint32_t irq_status;`, `uint32_t irq_enable;`
+   - `uint32_t fiq_status;`, `uint32_t fiq_enable;`
+
+   Associated timer machinery consists of `timer_load[]`, `timer_value[]`, `timer_control[]`, and `struct timer *timer[]`. Each timer array has four elements. There is no `struct interrupt fiq`.
+
+   Every assertion/deassertion in the file is accounted for here:
+
+   | Sites | Exact call | Context |
+   |---|---|---|
+   | F:365 | `INTERRUPT_ASSERT(d->timer_irq[i]);` | Device timer tick |
+   | F:386 | `INTERRUPT_ASSERT(d->irq);` | Incoming source assertion |
+   | F:401 | `INTERRUPT_DEASSERT(d->irq);` | Incoming source deassertion |
+   | F:582, F:584 | `INTERRUPT_ASSERT(d->irq);` / `INTERRUPT_DEASSERT(d->irq);` | IRQ EnableSet |
+   | F:599, F:601 | `INTERRUPT_ASSERT(d->irq);` / `INTERRUPT_DEASSERT(d->irq);` | IRQ EnableClear |
+   | F:647 | `INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);` | Timer load write |
+   | F:679 | `INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);` | Timer control write |
+   | F:707 | `INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);` | Timer clear write |
+
+   That is **10/10 sites: 4 assertions, 6 deassertions; 0/10 use an FIQ output**. F:797 connects only `d->irq`. [machine_cats.c:63](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c:63) supplies `footbridge irq=%s.cpu[%i].irq`.
+
+   **READ — [D:6888](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6888), §7.3.29:** “The nIRQ/nFIQ output pin is the NOR of all of the bits in this register.”
+
+   **REASONED — smallest behavior:** provide a connected FIQ output and drive its asserted state from whether `shared_raw_status & fiq_enable` is nonzero, updating it on source and mask changes. A readback repair alone cannot supply this output.
+
+5. **IRQSoft and FIQSoft absent — VERIFIED, 0/2 cases implemented.**
+
+   **READ — H:337/H:344:** `IRQ_SOFT` is `0x190`; `FIQ_SOFT` is `0x290`. Neither appears among the address-switch cases.
+
+   Both guest writes reach **[F:747](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:747)**:
+   ```c
+   fatal("[ footbridge: write to 0x%x: 0x%llx ]\n",
+       (int)relative_addr, (long long)idata);
+   ```
+   The resulting messages identify `0x190` or `0x290` and the written value. No device field is stored, no interrupt is changed, and the handler returns success.
+
+   Here `fatal()` prints; it does not itself terminate. Its implementation at [debugmsg.c:384](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) calls the printing helper and returns.
+
+   **READ — [D:6952](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6952), §7.3.34:** “This write-only register can be used to generate an IRQ/FIQ under software control.” D:6960–6962 says its bit generates RawStatus bit 1 as either zero or one, observable by reading RawStatus.
+
+   **REASONED — smallest behavior:** implement both addresses as writes to the **same shared raw bit 1**, taking its new state from write-data bit 1 and preserving other sources. Recompute both masked outputs. These are aliases for a shared software source, not independent IRQ/FIQ pending bits.
+
+**REASONED — row organization:** use **one A row with five acceptance facets**, titled along the lines of “model shared interrupt sources, FIQ enable/status/output, and IRQ/FIQ software interrupt consistently.” Facet 2 is a policy consistency item within that round, not evidence of a specified FIQ clear-register read value. B is a separate row because address/lane decoding affects the whole CSR handler.
+
+Under the stipulated single-step restriction:
+
+| Facet | What can be observed |
+|---|---|
+| A1 | **Direct register channel:** FIQ enable readback remains zero despite a nonzero legal enable update. No interrupt delivery is needed. |
+| A2 | **Direct host-survival channel:** FIQ clear-register read completes with zero; IRQ clear-register read prints and exits. This does not establish a hardware-defined read-value mismatch. |
+| A3 | **Conditional register channel:** an active source would make unequal IRQ/FIQ raw reads observable without taking an exception. A cold, all-zero comparison proves nothing; this needs an independently established nonzero source. |
+| A4 | **No independent guest channel under no-delivery stepping:** register observations cannot prove that an FIQ output reaches the CPU. |
+| A5 | **Direct register and diagnostic channels:** software-source writes print, while shared raw bit 1 fails to acquire the documented state. Interrupt delivery is unnecessary. |
+
+That is **3/5 direct cold-step channels, 1/5 conditional, 1/5 requiring delivery or another observation mechanism**. **NOT CHECKED:** actual debugger execution, timer/source progress during stepping, or CPU FIQ delivery.
+
+**B’s census has one non-word-aligned exception.**
+
+**READ — F:512–745, with offsets resolved through H:** these are all **27/27 top-level address-case labels**. The five literal labels are grouped but individually enumerated.
+
+| Case label | Offset | F anchor | Current read result before width truncation |
+|---|---:|---:|---|
+| `VENDOR_ID` | `000` | 514 | `0x1011` |
+| `DEVICE_ID` | **`002`** | 518 | `0x1065` |
+| literal `0x04` | `004` | 522 | Zero |
+| `REVISION` | `008` | 530 | `3` |
+| literals `0x0c`, `0x10`, `0x14`, `0x18` | `00c`, `010`, `014`, `018` | 523–526 | Zero |
+| `SDRAM_BA_MASK` | `100` | 711 | Diagnostic, then `exit(1)` |
+| `SDRAM_BA_OFFSET` | `104` | 736 | Diagnostic, then `exit(1)` |
+| `SA_CONTROL` | `13c` | 541 | `PCI_CENTRAL_FUNCTION` = `0x80000000` |
+| `PCI_ADDRESS_EXTENSION` | `140` | 534 | Zero |
+| `UART_DATA` | `160` | 546 | Zero |
+| `UART_RX_STAT` | `164` | 551 | Zero |
+| `UART_FLAGS` | `178` | 556 | `UART_TX_EMPTY` = `0x20` |
+| `IRQ_STATUS` | `180` | 560 | `irq_status & irq_enable` |
+| `IRQ_RAW_STATUS` | `184` | 569 | `irq_status` |
+| `IRQ_ENABLE_SET` | `188` | 578 | `irq_enable` |
+| `IRQ_ENABLE_CLEAR` | `18c` | 595 | Diagnostic, then `exit(1)` |
+| `FIQ_STATUS` | `280` | 610 | `fiq_status & fiq_enable`, presently zero |
+| `FIQ_RAW_STATUS` | `284` | 619 | `fiq_status`, presently zero |
+| `FIQ_ENABLE_SET` | `288` | 628 | Zero |
+| `FIQ_ENABLE_CLEAR` | `28c` | 633 | Zero |
+| `TIMER_1_LOAD` | `300` | 638 | `timer_load[timer_nr]` |
+| `TIMER_1_VALUE` | `304` | 651 | `timer_value[timer_nr]` |
+| `TIMER_1_CONTROL` | `308` | 658 | `timer_control[timer_nr]` |
+| `TIMER_1_CLEAR` | `30c` | 683 | Zero, without clearing |
+
+Thus **26/27 labels are word-aligned**. The nested `switch (idata)` has 11 SDRAM-mask value labels; those are data values, not additional address cases.
+
+**READ — [F:507](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:507):**
+```c
+if (relative_addr >= TIMER_1_LOAD && relative_addr <= TIMER_4_CLEAR) {
+    timer_nr = (relative_addr >> 5) & (N_FOOTBRIDGE_TIMERS - 1);
+    relative_addr &= ~0x060;
+}
+```
+
+The fold covers **`0x300` through `0x36c`, inclusive**, clears timer-selection bits 5–6, and preserves address bits 0–1. The four timer case labels consequently recognize **16 physical register offsets**: bases `300/320/340/360`, each plus `0/4/8/c`.
+
+Including that expansion, **39/1024 byte offsets** select explicit cases: **38 aligned and 1 nonaligned**.
+
+**READ — F:747–759:** `default:` reads print:
+```c
+fatal("[ footbridge: read from 0x%x ]\n", (int)relative_addr);
+```
+They then copy zero `odata` back and return success. Writes print the address/value message quoted above, discard the data, and return success. Addresses printed inside the timer folding range are the **folded** addresses.
+
+**READ — the guest-to-handler path preserves word-lane bits, with an ARM halfword qualification.**
+
+- [cpu_arm_instr_loadstore.c:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:103) chooses `datalen = 1` for byte and `2` for halfword accesses. At line 229 it executes `addr &= ~(datalen - 1);`, then calls `cpu->memory_rw(..., addr, data, datalen, ...)` at line 233.
+- Therefore `ldrb` preserves the complete address. `ldrh` preserves bit 1 but clears bit 0: relative `+0x18a` remains `+0x18a`, whereas `+0x189` becomes `+0x188`. An odd halfword effective address does **not** reach this handler unchanged.
+- ARM translation preserves the page-offset bits; examples are [memory_arm.c:205](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:205), 230 and 244.
+- [memory_rw.c:491](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:491) executes `memset(data, 0, len)` **before dispatch and before device-end length truncation**.
+- Line 494 performs only `paddr -= mem->devices[i].baseaddr;`. There is no word-alignment mask.
+- Lines 495–523 shorten `len` only if the access exceeds the registered device end. Lines 587–589 pass this relative address and length directly to the callback.
+- F:501 separately initializes `odata = 0`; F:756–757 writes it through `memory_writemax64`.
+- [memory.c:99](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:99) writes successive low bytes using `buf[i] = data & 255; data >>= 8;` in little-endian mode. It has **no address argument and performs no lane selection**. ARM initializes little-endian mode at [cpu_arm.c:123](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:123).
+
+For ordinary in-range accesses, the handler therefore receives:
+
+| Guest access | Handler `relative_addr` | Handler `len` |
+|---|---:|---:|
+| `ldrb` at CSR base plus `o` | `o` | 1 |
+| `ldrh` at CSR base plus `o` | `o & ~1` | 2 |
+
+The device-end clamp and memory wrapper’s translation-boundary splitting qualify arbitrary direct memory calls. They do not alter these naturally aligned byte/halfword examples.
+
+**REASONED — aligned low lanes and population counts.**
+
+At every normally returning aligned case in the census table, a byte read gets `odata & 0xff`, and a halfword read gets `odata & 0xffff`. This includes IRQ enable, IRQ status/raw status, the constant-valued cases, and all four timers’ load/value/control registers.
+
+Precisely, **35/38 recognized aligned offsets** return through that common tail; **3/38** terminate instead (`100`, `104`, `18c`). Correct truncation of the model’s value does **not** certify the value itself: FIQ enable readback, UART data, and other stubs remain semantically incomplete.
+
+**READ — registration:** F:56 defines `DEV_FOOTBRIDGE_LENGTH` as **`0x400`**; F:800–802 registers that length. [memory.c:466](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:466) stores `baseaddr`, `endaddr = baseaddr + len`, and `length = len`. CATS supplies base `0x42000000`, giving `[0x42000000, 0x42000400)`.
+
+Within relative `[0, 0x400)`:
+
+| Offset population | Count |
+|---|---:|
+| Word-aligned starts | **256/1024** |
+| Non-word-aligned starts | **768/1024** |
+| Lane `+1` starts reaching `default:` | **256/256** |
+| Lane `+2` starts reaching `default:` | **255/256** |
+| Lane `+3` starts reaching `default:` | **256/256** |
+| All non-word-aligned starts reaching `default:` | **767/768** |
+
+The exception is `+0x002`: it returns Device ID directly. These are handler-offset counts, directly applicable to byte reads; odd-address `ldrh` is rounded as described above.
+
+They are **not 767 proven wrong hardware values**. A zero lane or nonexistent hardware CSR can also correctly read zero. The differing diagnostic remains host-visible.
+
+**REASONED / NOT CHECKED — real driver reachability:** ordinary Footbridge interrupt/timer paths are generally written around word-sized CSR accesses. That expectation does not establish that NetBSD or Linux never byte-accesses a CSR. **Neither OS driver source was checked**, so there is no verified real-driver trigger here. Even finding a byte access at a word-aligned UART register would not by itself demonstrate the upper-lane defect.
+
+**REASONED — the smallest read-decoding correction needs three details beyond a mask.**
+
+[The CSR-read passage, D:1649](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:1649), says the selected CSR is determined by A[10:2] and its data is driven onto D[31:0]. For the little-endian accesses discussed here, the model should retain the original lane, select the word-aligned CSR, obtain its complete 32-bit value, and select the requested bytes—equivalently shifting by eight times the byte lane before width truncation.
+
+The necessary qualifications are:
+
+- **Packed IDs:** merely masking the current switch breaks the working `+0x002` read. The word at `+0x000` must contain **`0x10651011`**, combining Device ID and Vendor ID. [D:4571](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:4571) places them in bits 15:0 and 31:16 respectively. Today the `VENDOR_ID` case contains only the lower half.
+- **Timer fold ordering:** align the read address before testing/folding the timer window, while retaining its lane separately. Otherwise `36d/36e/36f` remain outside the current `<= 36c` fold even though they belong to Timer4Clear’s word. Proper ordering preserves timer selection.
+- **Existing terminating cases:** normalization would newly route nine byte offsets—the upper three lanes of `100`, `104`, and `18c`—into existing read exits. A lane correction alone does not repair those read policies or register semantics.
+
+The ISA and PCI spaces **do not share this CSR callback**. F:805–806 registers `dev_footbridge_isa_access` at `0x79000000`; F:883–885 registers `dev_footbridge_pci_access` at `0x7b000000`. The NetWinder reset callback is separate too. They share the file/state object. Keeping normalization inside `dev_footbridge_access` leaves their address decoding intact.
+
+Finally, D:1642–1645 says nonexistent-CSR writes are discarded with “no error action”; D:1651–1653 says nonexistent-CSR reads return zero with “no error action.” The current default already supplies zero/discard and success. An unconditional diagnostic on every such access is a poor default policy; silence or optional, bounded debug logging fits better. A host diagnostic is not itself a guest bus error, and the passage does not prescribe emulator logging.
+
+Seat record — **Codex, based on GPT-6.** Full reads: `dev_footbridge.c`, `dc21285reg.h`, `machine_cats.c`. Anchored reads/searches: `memory_rw.c`, `memory.c`, `cpu_arm_instr_loadstore.c`, `cpu_arm.c`, `memory_arm.c`, `debugmsg.c`, `memory.h`, `misc.h`, and the datasheet text. **Nothing run beyond read-only text inspection; no emulator, tests, guest programs, builds, or constructed programs; no files changed.** HEAD identity and the reported #539 measurement were not independently checked.

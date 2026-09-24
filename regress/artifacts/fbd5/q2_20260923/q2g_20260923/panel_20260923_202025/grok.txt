@@ -1,0 +1,83 @@
+I'll review the frozen 3d detector against the handler and the claimed 864-row contract, starting from the files rather than the brief's premises.VERDICT: DO NOT SHIP -- the caller disclosure names `mem` and the machine type, and the harness cpu is a calloc: `byte_order` is `EMUL_UNDEFINED_ENDIAN` (0) and `pc` is 0. A real ARM cpu sets `byte_order` to `EMUL_LITTLE_ENDIAN` (1) in `cpu_arm.c`. Conjoining the +0x180 read with `cpu->byte_order != EMUL_LITTLE_ENDIAN` leaves all 864 rows green and is not disclosed.
+
+E1–E4 do read the channels they were repaired to read. The chain stays open on the caller bullet, which is one axis short of the cpu the rows actually call with.
+
+## Q1
+
+**(a)** The strengthened checks, and the observable that now differs:
+
+| Edit | Rows | What the check reads now | Edit it kills |
+|---|---|---|---|
+| E1 | both "Clear 0x20 keeps 0x10 pending and enabled" | `irq_status == 0x18` and `irq_enable == 0x10`, plus one CPU assert | CXC1, status zeroed after the drive: those 2 rows |
+| E2 | "IRQ_STATUS reads 0x10" | value 0x10, `irq_status`, `irq_enable`, `irq_asserted`, `fiq_status`, `fiq_enable`, no interrupt call, all after the read | GF1, `fiq_enable \|= irq_asserted` on that read |
+| E3 | both asserted Clears, renamed "the raw status kept" | `irq_status == 0x10`, the enable (0 or 0x10), the CPU call | FS01, status masked by the post-clear enable: the Clear 0x10 row only (the 0x400 row stays 0x10, matching the table's n=1) |
+| E4 | the re-arm row | end state `irq_status == 0x10`, `irq_enable == 0x10`, `irq_asserted == 1`, both FIQ fields 0, 5 then 0 announces, one CPU assert, the five read values | DA1 on this row; GF1 on this row too |
+| E5 | X12's 20 and X13's 20 | setup, not a new named channel: `memset(b, 0xa5)` then a `len`-byte store. The rows still check `ne = ie & ~(data & width mask)` | FW1, a 4-byte fetch: the 16 narrow Clears in the wide and ones states. Seeded `ie` is 0x30 and all-zero is 0, so the 0xa5 bytes clear nothing there |
+
+`irq_asserted` stays unread on the two asserted-Clear rows. The name and the COVERED parenthetical claim the enable, the raw status, and the output. That matches the check. Pinning `irq_asserted` there would pin `fbirqstuck`.
+
+I walked all 21 X14 names against their checks. The other 17 claim the enable result, the CPU-versus-timer counters, the read values, or the four fields, and those are the values the checks compare. The seven "only line N pending and enabled" names describe the instance the Clear runs on. The postcondition after the colon is the CPU assert, and `ZCPU(1,0)` plus `irq_enable == 1<<N` is what that row reads.
+
+**(b)** The COVERED lines I checked against the loops are true of these 864 rows: read widths are 1, 2, and 4 at all five readable registers and 8 only at IRQ_STATUS and FIQ_STATUS (X9's `k==15` and `k==16`, X10's `r==0||r==2`); IRQEnable has no width-8 iteration; X7's check is `rv==1 && fatal_calls==f0`; the X12/X13 buffers are filled with 0xa5 before the width-limited store. The NOT COVERED lines that name a measured green (exact `fiq_* != 0x10`, bit 16 versus the other 24 unraised masks, the producer `~`, TX01, LH1, FS02's outcome, XC_dest) match the r3d table. The caller bullet is true of the two fields it names and silent on the rest of that cpu. That silence is the breach in Q2.
+
+## Q2
+
+The edit, on the head fetch or equally on the +0x180 direction test:
+
+```c
+if (writeflag == MEM_READ && cpu->byte_order != EMUL_LITTLE_ENDIAN)
+    odata = d->irq_status & d->irq_enable;
+```
+
+`memory_readmax64` takes its little-endian arm for every value other than `EMUL_BIG_ENDIAN` (2). The detector's cpu is `calloc`'d, so `byte_order` is 0 (`EMUL_UNDEFINED_ENDIAN`). `0 != EMUL_LITTLE_ENDIAN` is true, and every current read still runs. `cpu_arm.c` sets a real ARM cpu to `EMUL_LITTLE_ENDIAN`, so the same conjunct skips the read and the guest gets 0. Nothing in `dev_footbridge.c` or this detector writes `byte_order` or `pc`.
+
+Rows expected to stay green: all 864 (32 timer rows + IDENTITY + 78 P + 753 X, X14's 21 included). I did not execute it. The same hole is `&& !cpu->pc` on that direction test: `pc` stays 0 here, and a running guest's does not. The caller bullet names `mem` and the machine type only.
+
+## Q3
+
+- **S1** UPHOLD. E1 reads `irq_status == 0x18` on both Clear 0x20 rows.
+- **S2** UPHOLD. E2 reads both FIQ fields after the read.
+- **S3** UPHOLD. E3 reads `irq_status == 0x10`. The r3d jsonl fails only the Clear 0x10 row under FS01, which is what `status &= enable` does when that clear has just made the enable 0.
+- **S4** UPHOLD. E4 reads `irq_asserted == 1` at the end, after the declines and the Clear.
+- **S5** UPHOLD. The 16 red FW1 rows are the four narrow Clears in X12 and X13, wide and ones. Above the floor, and the new claim matches the fill.
+- **S6** REFINE. Disclosing `mem` and the machine type, rather than rowing them, matches clause (e): the five arms do not read either, and devinit's `machine_type` switch is outside the access function. The bullet stops there. This cpu also freezes `byte_order` and `pc`.
+- **S7** UPHOLD. Announces are a counter. TX01 stays green.
+- **S8** UPHOLD. P1 declines one site four times; `!(n++ & 3)` announces again on the fifth. No row does that.
+- **S9** REFINE. FS02 is still green, and it should stay disclosed. The LEVEL sentence is the wrong reason: the re-arm row now reads `irq_asserted`. FS02 clears it only when the post-clear `status & enable` is 0. The re-arm Clear is 0x400, so that product stays 0x10 and `irq_asserted` stays 1. The Clear 0x10 row is the one that drops it, and that row does not read the flag.
+- **S10** UPHOLD. The status-read row's `ok` is taken before `ZZERO()` and requires `irq_status == 0x10`, `irq_asserted == 1`, and one CPU assert. PR09 fails all four line-4 rows in the r3d jsonl.
+- **S11** UPHOLD. Width 8 is only the two aligned status registers. IRQEnable's 8-byte read is only in NOT COVERED.
+- **S12** UPHOLD. No seeded FIQ value is 0x10, so every `fiq_* != 0x10` conjunct stays true. The line-4 rows hold IRQ 0x10, so those IRQ forms go false there. The r3d table still has the FIQ forms green.
+- **S13** UPHOLD. Counted from TABLE.txt: 24 `N_SB` greens (00–03, 08–09, 12–15, 17, 19–31). `N_SB16` is red, n=10: X9 Clear 0x70 wide, X10 Clear 0x70 wide, and X12/X13's four narrow Clears in wide. Len-4 all-ones zeroes the enable, so masking bit 16 changes nothing there. The seven raised-line masks (04–07, 10, 11, 18) are red on their own rows.
+- **S14** UPHOLD. W03 (`irq.extra`), W04 (`pcibus`), and W05 (`console_handle`) are green, and NOT COVERED now names them.
+- **S15** UPHOLD. The header names TD04. That edit is a decline that deasserts when `timer_control[0]` is set.
+- **S16** UPHOLD. X6 checks read data only on the read sites.
+- **S17** UPHOLD. Those three sentences are still in the timer block and are outside this diff.
+- **S18** UPHOLD. `XC_dest` is green. Which interrupt a narrow Clear drives stays disclosed.
+- **S19** UPHOLD. The new paragraph separates the pair's bit logic (PR01, PR03, PR04, all green) from F13, and `irq_asserted` is written only in that pair.
+- **S20** UPHOLD. `fatal()` in `debugmsg.c` is `va_debug` and a return.
+- **S21** UPHOLD. 32 timer rows + IDENTITY + 78 P + 753 X = 864. 864 − 33 = 831.
+- **S22** UPHOLD. X12 has len-1 Clears, so `(len & 1) == 0` on that direction test is red there. Len 3 is not an ARM access size.
+- **D1** UPHOLD the measurement side. A store after the `if (irq_status & irq_enable)` leaves the CPU call intact. E1 is what makes CXC1 red.
+- **D2** UPHOLD. The Clear 0x20 name and the status-read "fields" claim were ahead of their checks. Both checks now include those fields.
+- **D3** UPHOLD. The pair is outside the access function, and the owner ruling is reflected in the text.
+- **D4** REFINE. Taking E3 and E5 is the right call: COVERED now names the raw status at the asserted Clears and the nonzero bytes above the width, and the checks observe both (FS01 n=1, FW1 n=16). The disposition that is wrong is S6's boundary, not the choice to disclose caller context instead of rowing it.
+
+## Q4
+
+The renamed Clear rows match their checks: "0x10 clears it" requires enable 0 and one deassert; "0x400 keeps it" requires enable 0x10 and one assert; both require `irq_status == 0x10`.
+
+The IDENTITY arithmetic holds: 333+54+35+69=491, 491+54+35+23+64+20+20=707, 707+32+8+8+8+60+20+19=862, then +2=864, and 3d adds no row.
+
+Two sentences in the new comments are off. "Five X14 checks" is five channels across four edited expressions and six runtime rows (the two Clear 0x20 rows, the status read, the two asserted Clears, the re-arm row). And "a real store's are not zero" overstates the ARM store path: a byte store's buffer is `unsigned char data[1]`, so the bytes past `len` are not the store's bytes. The 0xa5 fill is what makes a long fetch visible. The FS02 clause on the LEVEL line states a cause E4 removed, as in S9.
+
+## Q5
+
+This pass is not valid to close. E1–E4 are in place, the diff is the detector only, and the 864-row roster adds up. The missing disclosure is a floor-question miss of the same kind that kept 3c open.
+
+The measurement that would settle it is that one conjunct, scored on this 864-row instrument and nothing else. Green means the caller bullet has to name `byte_order` (and `pc`, same calloc) before a later pass can close. Red means this Q2 is wrong.
+
+Premises I re-derived from the tree, not from the brief: `fiq_status` has no writer, and `irq_status` / `irq_asserted` are assigned only in the producer pair; `fatal()` returns; timers connect at lines 4–7 (`IRQ_TIMER_1` is 4); devinit sets `timer_control` to `TIMER_MODE_PERIODIC` (0x40), `timer_load` to `TIMER_MAX_VAL`, and `pending_bound` to 1; cats ISA is footbridge `.10` and `dec21143` uses irq 18; netwinder `irq_path_isa` is `.11`; LDRD/STRD does `addr &= ~(datalen-1)` with `datalen` 8 before one `memory_rw`. `MACHINE_NONE` is 0, which is what the calloc'd machine already is.
+
+## Seat record
+
+Grok 4.7. Read the frozen `diff_footbridge.c` (harness cpu, contract, X1–X14) and the tree copy at the same line numbers, `dev_footbridge.c` (handler, producer, devinit), `memory.c`, `cpu_arm.c:123`, `cpu_arm_instr_loadstore.c`, `misc.h`, `debugmsg.c`, `dc21285reg.h`, `bus_pci.c`, the r3d TABLE / PREDICTIONS / jsonl rows for FS01, FS02, PR09, and N_SB16, plus the q2e and q2f generators. Did not run the gate or a detector binary. The byte_order result is deduced: the field is 0 in this file and 1 on an ARM cpu, and no row changes it.

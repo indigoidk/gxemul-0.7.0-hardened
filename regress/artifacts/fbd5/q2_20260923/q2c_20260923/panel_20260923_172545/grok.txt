@@ -1,0 +1,114 @@
+The closing pass has to re-check the handler and the row oracles, not the narrative around them. I will verify the frozen instrument, the five arms, and the loop arithmetic before judging any disposition.VERDICT: DO NOT SHIP -- the width axis is not closed. ARM emits length 8 at IRQ_STATUS and FIQ_STATUS, no row passes length 8, and `len != 8` on the read arm is absent from the NOT COVERED list. X12's narrow Clear rows also never read the handler's return, so `if (len != 4) return 0` after a successful narrow clear stays green.
+
+The two F7 premises that were supposed to be checked both hold. The disposition built on them does not. Declines do not read `idata`. The timer fold does not change the five offsets. Signing off length because `len == 4` and `len != 1` went red is the accepted disposition that is wrong.
+
+## Q1 -- the enumeration
+
+**(a)** The five arms test three things, and the contract names all three: the direction test (`writeflag == MEM_READ` or `== MEM_WRITE`), the arm's own `warned_*` latch, and `(irq_status & irq_enable)` after the Clear update. I read the frozen handler (`DEVICE_ACCESS` at line 508, the five arms at 570–647). There is no fourth test in those arms. The tail's `writeflag == MEM_READ` is the same producer domain as the direction test. `writeflag` is only `MEM_READ` (0) or `MEM_WRITE` (1) at the device callback (`memory_rw.c` passes it through). `fiq_status` is never written in this file; the struct is file-local, so §C.5 holds.
+
+**(b)** Channels that actually move, against the loops in the frozen 707-row instrument:
+
+| Covered claim | Rows | Oracle that can go red | Hole in that oracle |
+|---|---|---|---|
+| Declined × {1,2,4} × data {0, 0x70} × 4 states × first/repeat | X6, 216 | return 1, announce 1 then 0, four fields, irq counts, declined read is 0 | Holds for those cells |
+| Legal × {1,2,4} × 4 states × latches clear | X9, 92 | return 1, value or new enable, irq drive, then exactly 5 announces | Writes are length 4 only |
+| Latches set, announce | X7, 140 | `fatal_calls` delta 0 only | Does not see value, fields, irq, or return |
+| Latches set, value | X10, 64 | read data, fields, irq counts; one Clear of 0x70 at length 4 | Return value discarded |
+| Ordered latch pairs | X11, 20 | announce delta 1, four fields, irq counts | Seeded state only (`YNEW(0)`) |
+| Clear width and all-ones, latches clear | X12, 20 | new enable, irq drive, then 5 announces | Return value discarded |
+
+The body-tested interrupt partition is populated on both sides. Assert: X9 Clear of 0 in seeded (`0x18 & 0x30`). Deassert: X9 Clear of 0x70 in seeded (enable becomes 0 while status stays `0x18`), and X12 all-ones length 4 in ones (enable becomes 0). A direction test rewritten as `if (d->irq_status)` is red on that seeded 0x70 cell.
+
+**(c)** Fold, enumerated:
+
+| offset | `offset & 0x60` | `offset & ~0x060` | inside `[0x300, 0x36C]` |
+|---|---|---|---|
+| 0x180 | 0 | 0x180 | no |
+| 0x184 | 0 | 0x184 | no |
+| 0x18c | 0 | 0x18c | no |
+| 0x280 | 0 | 0x280 | no |
+| 0x284 | 0 | 0x284 | no |
+
+Timer addresses stay at or above 0x300 after clearing bits 5–6, so none of them land on these five. A widened fold that includes 0x180 itself is equivalent there. A widened fold that includes 0x1a0 maps 0x1a0 onto 0x180. That is the address axis, and it is outside §C.2. Narrowing the range only moves timer registers. F7's two premises match the handler.
+
+The NOT COVERED items that are genuinely outside the floor: exact field values (no state is `0x10`; V3 stays green), the address axis, joints of two fields the bodies never branch on, latch triples beyond X11's pairs, declined-write data other than 0 and 0x70, other registers' semantics (§C.3), and a latch conjunct on a field neither branch reads (`timer_control[0]`, and also `irq_asserted`, which every row leaves 0). The `(irq_status & enable)` boolean is inside the floor and is rowed, as above. None of those disclosed items is a missing floor row.
+
+What the contract does not disclose, and what §C.2 still counts as an input it listed under width:
+
+Length, from the producer. CATS and NetWinder map the footbridge at `0x42000000`. ARM load/store masks with `addr &= ~(datalen - 1)` and then calls `memory_rw`. `datalen` is 1, 2, 4, or 8 (`LDRD`/`STRD`). The 1024-byte split does not fire for 8 bytes at offset 0x180. Alignment keeps length 8 on the two 8-byte-aligned sites and sends it elsewhere for the other three:
+
+| site | lengths that still select this offset |
+|---|---|
+| IRQ_STATUS 0x180 | 1, 2, 4, **8** |
+| IRQ_RAW 0x184 | 1, 2, 4 |
+| IRQ_ENABLE_CLEAR 0x18c | 1, 2, 4 |
+| FIQ_STATUS 0x280 | 1, 2, 4, **8** |
+| FIQ_RAW 0x284 | 1, 2, 4 |
+
+Every access in the instrument is length 1, 2, or 4 (X1 through X12, the P-rows, X8). Length 8 is a real input at two of the five sites. The COVERED line says "width" and "every width". The NOT COVERED line does not mention any other length.
+
+## Q2 -- an edit the 707 rows miss and the contract does not name
+
+At `case IRQ_STATUS`, change the read test to `if (writeflag == MEM_READ && len != 8)`.
+
+Every existing call uses length 1, 2, or 4, so the conjunct is true on all 707 rows. `X9 legal len 4 read of IRQ_STATUS (ones, latches clear)` stays green, and so does every X6, X8, and X10 read of that register. An `LDRD` of `0x42000180` takes the decline: one announce, `warned_irq_status_w` consumed, tail writes 0. A later genuine bad write to IRQ status is silent. The same conjunct on `case FIQ_STATUS` is the same hole at `0x42000280`.
+
+A second edit, inside a cell the contract calls covered: at the end of the IRQ_ENABLE_CLEAR write arm, after the enable update and the interrupt call, `if (len != 4) return 0;`. X12 checks the new enable, the interrupt counts, and the five following announces. It does not check the return. X9's return check is only on the length-4 writes. All 707 stay green. `memory_rw` turns a 0 return into `MEMORY_ACCESS_FAILED`. A writeback `STRB`/`STRH` to `0x18c` then returns before updating the base register, after the clear has already taken effect. X6's own row text calls return 1 the difference between "declined" and "failed", and X12 does not watch it.
+
+`if (writeflag == MEM_WRITE && idata != 0x20)` on the Clear arm is the same shape for data. Row data is only 0, 0x70, 0xff, 0xffff, and 0xffffffff. A guest clear of bit 5 with data `0x20` is ignored. The NOT COVERED sentence names an exact **field** value. `idata` is not a field.
+
+Shapes swept at the five arms and the two heads, and where they land: single-bit conjuncts on one field (red on all-zero versus ones, X6/X9/X10/X12); exact `field != 0x10` (green, disclosed, no state equals `0x10`); `dir || own_latch` on the four status arms (equivalent, because a latched write that takes the read arm only writes `odata`, and the tail exports `odata` only on a read); the Clear arm's `|| latch` (red on X10, the write arm drives the line); idata zero versus nonzero (red on X9 data 0 versus 0x70); `len == 4` and `len != 1` (red on X12); removing the head fetch (equivalent, declines never read `idata`); `&& !timer_control[0]` and `&& !irq_asserted` (green, disclosed unread-field class, both stay 0 in every row); widened and narrowed fold (equivalent at these five, enumerated above); a new `case` label (disclosed address axis); `writeflag != MEM_WRITE` (equivalent, producer emits only 0 and 1).
+
+## Q3 -- the §F2 dispositions
+
+The wrong one is **F7**. "Refined, not rowed" is right for the fold and for "declines do not read `idata`". It is wrong for length. `&& len == 4` and `&& len != 1` going red does not close the lengths the producer emits, and the contract never names length 8.
+
+- **F1 UPHOLD.** X10's 5×3+1 reads and one Clear, times 4 states, is 64, and the read rows compare the value. That kills `MEM_READ && !warned_irq_raw_w`.
+- **F2 UPHOLD.** X11 is 5×4 = 20 ordered pairs, seeded, announce delta 1. The four surviving `dir || own_latch` status forms are equivalent, as above.
+- **F3 REFINE.** Length 1 and 2 with data 0x70 do redden a width conjunct that changes `irq_enable`. Those rows do not read the return, so they do not hold "this access is handled".
+- **F4 UPHOLD.** All-ones at lengths 1, 2, and 4 reddens `&= ~(idata & 0xff)`. Length-2 wide stays green because `0x00010030` has bits 8–15 clear; length-2 ones, length-4 ones, and length-4 wide go red. That matches the three named X12 failures.
+- **F5 UPHOLD.** All-zero and ones differ in every bit of every field. A one-bit conjunct is false in one of those states and the corresponding X6 or X9 row announces or returns the wrong value.
+- **F6 UPHOLD.** Ones reads in X9 and X10 compare `0xffffffff`, so a byte-1 mask is red there. X8's wide results have byte 1 equal to 0, so X8 alone cannot see that mask.
+- **F7 REFINE.** This is the wrong close. See above.
+- **F8 REFINE.** Exact field values are rightly disclosed, not rowed. The sentence does not cover an exact `idata` constant, and `idata != 0x20` stays green.
+- **F9 UPHOLD.** The X8 name `0x00010010 (all 32 bits)` is a full 32-bit compare of a value whose byte 1 is 0. Keeping the string preserves carried-kill identity. The rewritten X8 comment correctly says bytes 0, 2, and 3, and points byte 1 at the ones state.
+- **F10 UPHOLD.** The X9 header lists the five reads at lengths 1, 2, and 4 and the eight length-4 enable writes, and points at X12. The COVERED sentence above that header is wider than the header and is the false one (Q4).
+- **F11 UPHOLD** for the four sentences it named. "every seed above fits in ONE byte" and X9's bare "returned 0" are gone in the 707-row file. This repair adds a new false sentence, below.
+- **F12 UPHOLD** as a filing. `fb_distinct` counts unique names. A swapped-in name with the same prefix keeps the count. That is a detector-gate limit, and it is not a floor cell of the five arms.
+- **F13 UPHOLD** as a filing. `footbridge_interrupt_assert` sets `irq_asserted` only on its own path. Both enable write arms call `INTERRUPT_ASSERT(d->irq)` and `INTERRUPT_DEASSERT(d->irq)` without touching `irq_asserted`, and deassert then requires `irq_asserted`. Line sticks after enable-while-pending. #545 changed the Clear **read** arm. These write statements are the pre-existing ones. §C.1 froze the product change, and this repair does not touch `dev_footbridge.c`. The rows count stub calls, so they cannot see the stuck line.
+- **F14 UPHOLD.** Settled by §C.4.
+- **D1 UPHOLD.** The 153-to-57 rescore is a measurement. I did not re-run it. The green families that remain (exact value, case alias, `!= MEM_WRITE`, the four equivalent `or_L` forms, the one `idata != 0x20`) match the handler and the state table.
+
+## Q4 -- the records
+
+The sum is right, and it matches the loops:
+
+- 32 timer rows (A1–A3, B1–B3, C1, D1–D3, E1–E4, F1, G1, H1–H2, and the 14 TIMER_CLEAR rows) + the identity row = 33
+- P-rows = 78 (P0 is 5; four write sites × 13; the Clear read site × 14; P6 1; P7 2; P8 2; P9 2)
+- X1–X5 = 38 (X1 12, X2 11, X3 3, X4 10, X5 2)
+- X6 = 4×4×3×2×2 + 1×4×3×1×2 = 192 + 24 = 216
+- X7 = 4×(8+27) = 140
+- X8 = 6
+- X9 = 4×(15+8) = 92
+- X10 = 4×(15+1) = 64
+- X11 = 20
+- X12 = 4×5 = 20
+
+33+78+38+216+140+6+92+64+20+20 = 707. Gate pins X[1–8] = 38+216+140+6 = 400, and X6 through X12 match those products. `X[1-8]` does not swallow X10, because the pattern requires a space after the single digit. Old state names are unchanged, so carried-kill identity for the pre-ones rows is intact. I did not execute the kill file or the gate.
+
+False as of this text:
+
+- The X7 header says the four states are there "so a read that returns 0 is covered, and so is every bit of every field." X7's only check is `fatal_calls - f0 == 0`. The next sentence, that X7 is announce-only, is the true one. The parenthetical contradicts it.
+- The COVERED sentence "legal × width × state × every latch set (X7 announce, X10 value and effect)" overclaims. X10's effect is one length-4 Clear of 0x70. IRQ Set and both FIQ writes with latches set are announce-only. Narrow Clears with latches set are unrowed.
+- "each ordered pair of sites (X11)" drops the word the X11 header has: seeded only.
+- The X8 comment attributes byte 1 to "X6/X7/X9–X12". X7 does not look at bytes. X9, X10, and X12 ones-reads do.
+
+The X9 header, the X10–X12 headers, the fold sentence "maps no address onto these five", the ones-bit sentence, the identity history (491+54+35+23+64+20+20 = 707), and the `fiq_status` sentence are true of this handler and these loops.
+
+## Q5 -- options that were not named
+
+FILE and FIX-NOW were not the whole set. The missing name is **DISCLOSE**: write the producer lengths `{1,2,4,8}`, the exact-`idata` class, and "X10/X11/X12 do not check the return" into the NOT COVERED paragraph, and stop calling width closed. A second missing name, for F3/F4 specifically, is **EXTEND THE ORACLE**: `rv == 1` on the X12 and X10 checks. That is a detector edit in this round, and it is neither a new product fix nor a filed ticket. For F13, a third unnamed option is a detector-only sequence (assert while disabled, enable write, deassert, expect the line low) that goes red on the current product. Filing F12 and F13 is still the right call for this round. The width hole should not be filed the same way, because this repair's contract is the document that claims width is closed.
+
+Something else: the instrument stubs `memory_readmax64` as little-endian and ignores `cpu->byte_order`. A `calloc`'d cpu has `byte_order` 0. `EMUL_LITTLE_ENDIAN` is 1 and `EMUL_BIG_ENDIAN` is 2, and the real function takes the little-endian arm for every value other than 2. The stub and an ARM guest agree. That is not a breach.
+
+Seat record: Grok 4.7. Read the frozen handler, the frozen 707-row instrument (P through X12 and the timer rows), the frozen gate pins, `dc21285reg.h`, `memory.h`, `memory_rw.c` (device callback and the 1024-byte split), and `cpu_arm_instr_loadstore.c` (lengths 1, 2, 4, 8 and the alignment mask). Handler line numbers sit in the 500s and the arms contain the `#545` comments, so this is the fork copy. Shell was denied, so no md5 and no mutant compile. The length-8 claim does not need a compile: no call site in the instrument passes length 8. The gate was not run.

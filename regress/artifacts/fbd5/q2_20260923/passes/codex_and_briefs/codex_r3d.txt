@@ -1,0 +1,74 @@
+VERDICT: FAIL — an unlisted one-line coverage escape remains; the 864-row count and gate pins are correct.
+
+**TASK 1.** The five added observation groups affect **six named X14 rows**, through four `check_u` sites.
+
+These are independent mutations to the frozen [device model](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/q2g/frozen/dev_footbridge.c:508). By source tracing, each passes the previous test and fails the indicated strengthened checks. I did not execute them.
+
+| Added check | One-line mutation |
+|---|---|
+| X12/X13’s nonzero buffer padding | Replace line 515 with `idata = memory_readmax64(cpu, data, 4);`. The four narrow writes now fail in the wide and ones states: **16 rows** across X12/X13. |
+| Raw status after DEVINIT Clear `0x20`, both tick states | Insert after Clear’s drive, before line 617: `if (d->timer_control[0] && (d->irq_status & d->irq_enable)) d->irq_status = 0;` |
+| Raw status after the two asserted Clear writes | At that same point insert `if (d->irq_asserted && !d->warned_irq_clear_r) d->irq_status = 0;`. The latch condition avoids the previously checked re-arm sequence. |
+| `fiq_status` after the asserted IRQ_STATUS read | Replace line 572 with `{ odata = d->irq_status & d->irq_enable; if (d->irq_asserted && !d->warned_irq_status_w) d->fiq_status = 1; }` |
+| `fiq_enable` after that read **and** at the re-arm endpoint | Replace line 572 with `{ odata = d->irq_status & d->irq_enable; if (d->irq_asserted) d->fiq_enable = 1; }`. The intervening FIQ reads still return zero because `fiq_status` remains zero. |
+| `fiq_status` at the re-arm endpoint | Insert `else if (d->irq_asserted) d->fiq_status = 1;` after line 646, before FIQ_RAW_STATUS’s `break`. This changes the repeated declined write, after the legal reads. |
+| `irq_asserted` at the re-arm endpoint | Append `d->irq_asserted = 0;` to line 577, inside the first IRQ_STATUS-write decline. |
+
+The revised X14 names and their expressly listed channels now have corresponding assertions. The standalone asserted-Clear rows deliberately omit the **post-access** `irq_asserted` check; their revised contract does not promise it. The remaining contract omission is Task 2.
+
+One measurement distinction: [TABLE.txt](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3d_20260923/TABLE.txt:257) records `R3D_CXA1` as already failing one previous row, then two current rows. That is an additional detecting row, not a newly killed whole-suite survivor.
+
+**TASK 2.** The smallest survivor I found uses one additional single-bit condition. Replace **only line 614**, Clear’s asserting callback, with this single line:
+
+```c
+{ if (d->fiq_enable & 1) INTERRUPT_ASSERT(d->timer_irq[0]); else INTERRUPT_ASSERT(d->irq); }
+```
+
+Why all 864 rows still pass:
+
+- Outside X14, CPU and timer assertions use `noop_assert`, which ignores its argument and increments the same counter.
+- Every X14 instance has `fiq_enable` equal to `0` or `0xc0`. Bit zero is clear, so its separate CPU counter still receives the call.
+- The ones-state rows actually exercise the changed branch, but cannot distinguish its destination.
+
+This changes guest-visible behavior: with line 5 pending and enabled, and FIQEnable bit zero set, Clear `0` incorrectly asserts timer interrupt 0. The real timer connection feeds Footbridge line 4, introducing a spurious raw pending bit.
+
+The exclusion at test lines 958–959 names wrong destinations **below length 4**. This mutation also escapes at length 4. It uses one field bit already exercised by the rows—not an exact-value condition, an untested joint state, or a latch-history extension.
+
+**TASK 3.** All Footbridge pins match the loops in the frozen [gate](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/q2g/frozen/gate_offline.sh:589).
+
+| Group | Derived count / matching pin |
+|---|---:|
+| P0–P9 | 78 |
+| X1–X8 | `12+11+3+10+2+248+148+6 = 440` |
+| X6 | `4×2×(2×(4+3+4+3)+3) = 248` |
+| X7 | `4×(8+9×3+2) = 148` |
+| X8 | 6 |
+| X9 | `4×(15+2+8) = 100` |
+| X10 | `4×(17+1) = 72` |
+| X11 | `4×5×4 = 80` |
+| X12 / X13 | `4×5 = 20` each |
+| X14 | `2+7+2×4+1+2+1 = 21` |
+
+Including 32 earlier rows and IDENTITY:
+
+`33 + 78 + 440 + 100 + 72 + 80 + 20 + 20 + 21 = 864`.
+
+The self-check probes restore the row counter. The gate’s minimum-864 check and the test’s exact-864 IDENTITY agree. All 21 named-row presence checks also match; neither renamed Clear row creates a duplicate name.
+
+**TASK 4.** Two newly changed passages overstate their rationale:
+
+At [test line 1207](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/q2g/frozen/diff_footbridge.c:1207):
+
+> “the buffer's bytes above the width hold 0xa5, as a real store's are not zero, so a fetch past len clears more”
+
+Bytes beyond the access width are not guaranteed nonzero—or necessarily part of the supplied buffer. Even here, fetching the padding does not always clear more: the zero and byte-sized seeded enables provide counterexamples. The padding makes **some** over-wide fetches observable, as the 16 failing rows demonstrate.
+
+At [test line 1494](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/q2g/frozen/diff_footbridge.c:1494):
+
+> “irq_asserted is NOT pinned here: the enable arms never write it, which is `fbirqstuck`'s defect, and a row pinning it would pin that defect.”
+
+The final clause needs qualification. Requiring it to remain **1 after Clear `0x10` deasserts** would preserve the inconsistency. Requiring **1 after Clear `0x400` leaves the line asserted** would not; the revised re-arm row now requires precisely that state.
+
+Files read: the supplied frozen `dev_footbridge.c`, `diff_footbridge.c`, `diff_footbridge.864r3c.c`, `gate_offline.sh`, and supplied `TABLE.txt`. All three C-file MD5 prefixes matched.
+
+Ran: read-only PowerShell path/content/hash commands, `rg --files` for instruction files, `git diff --no-index`, and in-memory JavaScript counting/pattern checks. No edits, builds, gate runs, or test/mutant executions.

@@ -1,3 +1,212 @@
+# `#545` (fbdeclinefive, round 2 of the footbridge campaign): five register accesses in the direction the DC21285 does not define ended the emulator process -- they are declined now, announced once each, and the detector took four passes to become honest
+
+**The defect.**  `dev_footbridge.c`, `DEVICE_ACCESS(footbridge)`: a guest WRITE to `IRQ_STATUS` (`+0x180`),
+`IRQ_RAW_STATUS` (`+0x184`), `FIQ_STATUS` (`+0x280`) or `FIQ_RAW_STATUS` (`+0x284`), or a guest READ of
+`IRQ_ENABLE_CLEAR` (`+0x18c`), reached `fatal()` then `exit(1)` -- five guest-reachable host kills in one handler.  The
+DC21285 is explicit in one sentence (`dc21285.txt:6803`): *"The Status and RawStatus are read-only, and EnableClear and
+Soft are write-only."*  Table 7-10 lists no register at all in the read direction at `18Ch`.  The `+0x18c` arm also
+computed `odata = d->irq_enable` -- `188h`'s answer, not `18Ch`'s -- and then ended the process before returning it.
+
+**The fix (option-set member 3: DECLINE + LATCHED ANNOUNCE).**  Each arm now declines: no register state changes, the
+handler returns 1 through the common tail, a declined read returns 0, and the site announces ONCE through a per-site
+`int` latch carrying the house `(once)` marker.  Five `int` fields, not one bit-field: the file had no latch of any kind,
+so the house plurality governs, and five independent fields make a shared-bit mutant impossible by construction
+(fable5's Q3 ruling; the bit-field's enum-plus-`_NBITS` defence buys back what the ints give free).  The `+0x18c` leak is
+deleted.  **FAULT (member 5) is not available here**: `memory_rw.c` dispatches a device-access exception for MIPS and
+M88K only, so an ARM device cannot fault a guest -- checked, not assumed.  `+0x28c` (FIQEnableClear's read, the FIQ twin)
+already declined SILENTLY and is deliberately untouched: it has no witness (0 before and after), so the reopening rule
+makes it ineligible; it is `fiqenableread`'s facet (2), and the Opus seat's dissent ("give it the same latched announce
+in this commit") is recorded there VERBATIM under the late-dissent rule.  Four `exit(1)` remain in the file: the SDRAM
+read pair (`fbsdrampair`) and two construction-time paths in DEVINIT.
+
+**The harness legs, in the same commit.**  #539 left the three footbridge probes using a `+0x18c` read as their
+failability control -- a TEMPORARY bridge, retired here.  No access at the five declined sites ends the process any more,
+and the one guest-reachable exit left in the file -- the SDRAM read pair, `fbsdrampair` -- is itself filed for removal, so
+a control keyed to it would be the next temporary bridge.  The control that "this harness notices a dead child" therefore
+comes from the harness: **H1** launches with an unknown `-E` name
+(no prompt anywhere, the diagnostic naming THIS run's input, `WIFEXITED && == 1`) and **H2** quits after a prologue
+VERIFIED by a fresh `reg` (r3 bit 0 clear, RAM 0x11223344, VENDOR 0x1011, the timer-mask signature), then requires the
+next ordinary interaction to fail with `dead` set BEFORE teardown and the reap to be exit 0.  Both H1's text clause and
+H2's two extra clauses are load-bearing and measured: FIVE different startup refusals all exit 1 with no prompt, and a
+child that died BEFORE the prologue produces `next send fails` and `dead` IDENTICALLY.
+
+**The detector, and it took four passes.**  Guest side (`footbridge_sites_probe.py`, 37 rows, 16 of them arm S): the five sites in
+ONE process, each accessed twice with a legal read between, rows S1-S5 (values), SF1/SF2 (final raw reads), N1-N5
+(per-site announce counts), N0 (five distinct once-announces) and NO (the announces arrive in site order).  Offline side
+(`regress/diff_footbridge.c`, 491 rows when this paragraph's families were built, 864 at the end of the chain below; a rung-1 DETECTOR, never a witness): P0-P9 pin preservation under a NONZERO
+seeded status, the read expressions, the widths and the latch; X1-X5 pin byte/halfword-first at every site, narrow legal
+reads, zero-data and zero-enable first accesses, and a legal zero Clear write; **X6/X7 are the CLASS CLOSURE** -- every
+declined access (site x width x data x state x first/repeat: 108 cells) keeps every field and the interrupt output and
+reads 0, and every legal access with the latches SET re-arms none (105 cells); **X9** runs every legal access with the
+latches still CLEAR (69 cells); X8 uses seeds wider than one byte, so a legal read truncated to 8 bits reds, and X6/X7/X9
+all run a third, WIDE state for the same reason (seeded, all-zero, wide).
+
+> **WHY A CLASS CLOSURE AND NOT MORE CELLS.**  Pass 2's measuring seat swept the shipped rows with a `len == 4` conjunct
+> at four of five sites; the repair for that was then swept by eleven more one-edit mutants, most of the same shape (a
+> guard conditioned on data, on an enable, on a field X4 never seeded; a legal access re-arming a latch; a narrow first
+> access storing).  *(The latch re-armers placed in OTHER cases -- B2, B3, F4 -- were ruled INSERTION-class by the
+> adjudicating seat, outside the (d) closure: their rows stay, but they are not graded as floor breaches.)*
+> **Two consecutive passes finding cells of one space is the carrier's trigger**: the next repair enumerates
+> the space from the handler's own inputs and closes every cell in ONE diff, and the contract states which cells are
+> covered and which are not.  Disclosed, not rowed: a latch guard conditioned on a device field the decline never reads
+> (`&& !timer_control[0]` passes every offline row; the guest catches it only because arm S's prologue arms timer 1), the
+> interrupt output after a LEGAL access, and the legs' own predicates (a harness edit can hollow a leg out; the teardown
+> reorder keeps H2 green in all three launchers -- measured, and the probe header says so).
+>
+> **AND THE CLOSURE ITSELF HAD A HOLE, found on the fourth pass.**  It enumerated the DECLINED half over both states and
+> both latch positions, but the LEGAL half only with every latch already SET: X7 latches all five sites before its legal
+> access.  So a legal access from the reset state -- every field 0, every latch clear -- had no row, and the flagship seat
+> predicted by reading that five one-condition edits to the DIRECTION test (`writeflag == MEM_READ && d->irq_enable` at
+> IRQ_STATUS, its three read mirrors, `writeflag == MEM_WRITE && d->irq_enable` at IRQEnableClear) would pass every row:
+> each sends a legal access into the decline, which announces a complaint that did not happen, consumes the latch, and
+> returns 0 -- the right value in that state.  **MEASURED TRUE: all five 333/333 offline and 37/37 guest**
+> (`regress/artifacts/fbd5/q2_20260923/Q2.log`).  A floor breach (clause (d), L2), repaired in-round: **X9** runs every
+> legal access with the latches CLEAR, and a WIDE state joins X6/X7 because every earlier seed fit in one byte.  The bound
+> the rows answer to is now written in the contract: the predicates dominating each edited decline, and the fields read by
+> BOTH branches under the direction test.  The guest reset-state rows the flagship seat recommended are NOT added -- the
+> floor is carried offline, and arm S keeps its disclosed order-not-emitter limit.
+>
+> **AND THE FIRST REPAIR'S OWN PASS 2 FOUND THREE MORE CELLS OF THE SAME SPACE -- the THIRD consecutive pass to do so --
+> so the second repair closed the class in ONE diff, with the contract naming what it does not cover.**  The Opus
+> measuring seat built 434 one-line variants of the five arms and the two head tests; **153 passed the 491 rows**
+> (`q2_20260923/p2r_20260923/opus_q2r/`).  They sat in cells no row held: the VALUE of a legal access with the latches
+> SET (`writeflag == MEM_READ && !d->warned_irq_raw_w` made every `+0x184` read after one declined write return 0 --
+> guest-visible; grok and the codex seat read the same edit independently), the cross-site latch ORDER (every multi-site
+> sequence declined the sites in one fixed order), the legal Clear write's WIDTH and DATA, and any field BIT no seeded
+> state set.  **X10** (every latch set: each legal read keeps its value, a legal Clear write still clears and drives --
+> 64 rows), **X11** (every ordered pair of sites -- 20), **X12** (the Clear write at every width and with all-ones data --
+> 20) and a fourth **ONES** state (0xffffffff in every field, so with all-zero any single-bit condition diverts in one of
+> the two) close them: **707 rows**.  `PRETABLE_Q2b.out` was written before the table and predicted **57** of the 434
+> still green; **57 measured** (`q2_20260923/repair2/OPUS_RESCORE.txt`), every one a condition on one EXACT field value,
+> a new offset aliased onto an arm, a widened timer fold (equivalent at the five offsets, whose bits 5-6 are clear), or an
+> equivalent form -- each named in the contract's NOT COVERED list.  Carried kills 0 lost across 59 entries
+> (`repair2/CARRIED_KILLS_491_to_707.txt`).  A dedicated codex reading's ten variants, answered against the 491 rows after
+> this repair was built, were measured on both instruments: its reading matched the 491 column 10 of 10, and on 707 its
+> one real survivor -- the Clear mask narrowed to a byte -- reds three X12 rows (`q2_20260923/codexV_20260923/CV.log`).
+>
+> **AND THE CLASS CLOSURE'S OWN CLOSING PASS FOUND CELLS OF THE SAME SPACE -- THE FOURTH PASS IN A ROW -- AND MOST OF
+> THEM WERE NOT CELLS OF THE HANDLER'S INPUTS AT ALL, BUT OF THE INSTANCE EVERY ROW RAN ON.**  The panel
+> (`panel_20260923_172545`: codex, grok, glm, deepseek, minimax and the kimi substitute DO NOT SHIP, agy split, the kimi
+> CLI walled) and a dedicated codex job read five cells repair 2 left open, each measured green on 707 rows before it
+> was rowed (`q2_20260923/closing_20260923/CL.log`, `CL2.log`): an 8-byte LDRD/STRD at `+0x180`/`+0x280` -- ONE access
+> of len 8, which no row made (grok); the handler's return value, which no row read (grok); a narrow Clear write after
+> its latch was set (codex); a decline clearing ANOTHER site's latch (codex: X11 never re-declined the earlier site);
+> and a field x other-latch joint outside the seeded state (glm).  The Opus measuring seat then built 136 new one-line
+> variants and found **28 real changes that passed all 707 rows and were NOT in the contract's NOT COVERED list**
+> (`q2_20260923/q2c_opus/` -- `SUMMARY.txt`, `step3_table.txt`), the smallest ONE character: `&` -> `&&` in the Clear
+> write's drive test.  **They share one cause the enumeration could not see: every instance was a calloc with its
+> interrupt fields seeded.**  So the drive test was never run with both operands nonzero and disjoint, or with one
+> device line pending alone; the CPU line and the four timer interrupts were counted on ONE pair, so a Clear driving
+> the wrong interrupt was invisible; the timer fields sat at 0 where DEVINIT sets PERIODIC / `TIMER_MAX_VAL` / a
+> bound of 1; and `irq_asserted` was never 1, because its only writer -- `footbridge_interrupt_assert()` -- was never
+> called.  **Repair 3** adds the 8-byte cells (X6, X7, X9, X10), the return value (X7, X10-X13), X11 in all four states
+> with a re-decline, **X13** (the narrow and all-ones Clear writes with every latch set), and **X14** -- 19 rows on
+> instances built for the purpose: the CPU line on its own counter pair, DEVINIT's timer values with and without a
+> pending tick, and a device line raised through the real producer: **862 rows**.  The seat's own scratch rows for width
+> 8 were not adopted -- six of them made an 8-byte access to `+0x184`, `+0x18c` or `+0x284`, which the load/store unit
+> never issues (it aligns the address down to 8 first), and they were the only reason two equivalent variants went red.
+> `PRETABLE_Q2c.out` and 652 per-variant predictions were written before the table; **652 of 652 measured as predicted,
+> no row a variant reddened on 707 went green, all 28 red** (`q2_20260923/r3_20260923/TABLE.txt`).  The contract now
+> names the producer's domains (the widths the load/store unit emits, the seven lines a device raises, the fields only
+> the producer writes) and the INSTANCE as part of the space, and discloses what X14 does not row: the instance axis
+> beyond its cells, the Set write's own drive test, and a mask on a line no device raises.  Its first table measured
+> NOTHING -- the scratch trees lacked `config.h`, every build failed, and the analyzer said so 652 times
+> (`r3_20260923/failed_run1_noconfig/`).
+>
+> **REPAIR 3'S OWN PASS, AND FOUR MORE AFTER IT -- AND THE CHAIN CLOSED ON A PASS WHOSE EVERY DISSENT WAS ABOUT THE
+> CONTRACT'S WORDS, NOT THE DETECTOR'S COVERAGE.**
+>
+> * **Repair 3's pass** (`panel_20260923_184633`: codex, agy, grok, glm, deepseek and the kimi substitute DO NOT SHIP,
+>   minimax SHIP, the kimi CLI walled; a dedicated codex job; the Opus measuring seat) found NINE one-line edits green on
+>   862 rows at cells X14's COVERED list claims, on channels its rows did not read; the producer pair's own bit logic
+>   green, because nothing calls `footbridge_interrupt_deassert()`; width 8 at the enable arms; the Clear's destination
+>   below len 4; a latched Clear of 0; and a dozen stale sentences.  **Repair 3c** (864 rows) gave five X14 rows the
+>   channels they claimed and added one row per timer state; the producer pair was DISCLOSED and filed under
+>   `fbirqstuck` by owner ruling (2026-09-23), the rest disclosed.  711 variants, 709 as predicted -- the two mismatches
+>   were a false NOT COVERED example, corrected in the comment (`q2_20260923/r3c_20260923/`).
+> * **3c's pass** (`panel_20260923_192724`: codex, grok, glm DO NOT SHIP; agy, deepseek, minimax, kimi-k3:cloud SHIP;
+>   the kimi CLI weekly-walled, covered; codex dedicated FAIL; the Opus seat DO NOT SHIP, 8 edits green on 864): four
+>   seats independently found that 3c's own new row NAMED the pending status and never READ it.  **Repair 3d**, no row
+>   added: six X14 rows read what they claim, and X12/X13 poison the buffer above the width before each narrow Clear.
+>   739 variants, 0 mismatches (`r3d_20260923/`).
+> * **3d's pass** (`panel_20260923_202025`: codex, grok, glm, kimi-k3:cloud DO NOT SHIP; agy, deepseek, minimax SHIP;
+>   codex dedicated FAIL; the Opus seat DO NOT SHIP on records only) met the CLASS-CLOSURE trigger for (A), a
+>   claimed-KEPT field read only at a row's end -- 3c's pass had found one claimed channel unread, and here a toggle on
+>   every +0x180 decline cancelled across the re-arm row's two batches (codex).  (B), the handler's use of the caller's
+>   buffer beyond `len`, was closed ALONGSIDE it by choice: its one claimed-cell instance (3c's pass, deepseek: a 4-byte
+>   fetch at X12's narrow Clear) was a contract breach already repaired by 3d's poisoned buffer, and the read write-back
+>   wider than `len` found here (the kimi substitute) was never a claimed cell -- a real ARM narrow load passes `data[1]`,
+>   `data[2]` or `data[4]` (`cpu_arm_instr_loadstore.c`), so it overflows the caller's buffer, but it sits above the
+>   floor.  **Repair 3e** closed both in ONE diff, no row added: the three X14 rows that claim
+>   kept fields check all five after EACH access (`ZSNAP`/`ZKEPT`), and `pad_kept()` requires the bytes above the width
+>   untouched after X6's declined accesses and X9/X10's legal reads.  748 variants, every prediction held; an 8-byte
+>   write-back went from green -- and SILENT, overflowing the harness's own `buf[4]` with rc 0 -- to red on 144 rows
+>   (`r3e_20260923/`).
+> * **3e's pass** (`panel_20260923_210234`: codex, grok, glm, deepseek DO NOT SHIP; agy, minimax, kimi-k3:cloud SHIP;
+>   the kimi CLI weekly-walled, covered; codex dedicated FAIL; the Opus seat SHIP).  **Every dissent found both closures
+>   correctly IMPLEMENTED and the CONTRACT OVERSTATING them**: per-access checks exist on the three rows that CLAIM kept
+>   fields, not on every multi-access row (grok: `d->irq_asserted = 1` on the IRQ_STATUS read passes -- the DEVINIT
+>   reads row claims values, and `irq_asserted` is the one field of the five no row there names); and `pad_kept` sees a
+>   write-back past `len` only where it runs -- a FETCH past `len` that no channel can see (the harness's memory helpers
+>   record no length), a STORE past `len` inside a legal write (codex: `data[len] = 0` in the Clear write), and the
+>   common tail's write-back at the legal reads outside X9/X10's five registers all pass.  The Opus seat named that
+>   last gap at VENDOR_ID and TIMER_1_VALUE; the main loop re-measured it and found it at +0x288 and +0x28c as well,
+>   and -- once the flagship seat's final adjudication pointed at them -- at the timer LOAD and CLEAR reads, whose
+>   4-byte harness buffer the write-back overflows SILENTLY, and built the `data[len] = 0` store it had called measured
+>   without building (`q2_20260923/qwb_20260923/`, three runs, every prediction held: all seven keyed shapes and the
+>   store green on 864, the IRQ_STATUS-keyed control red on 24, len 8 red on 144; `ORDER_NOTE.txt` there says which
+>   file proves each run's order).  The tail and the fetch are not predicates dominating the five edited arms, so the
+>   remainder is FILED as coverage debt, `fbbufbounds`, not rowed.
+>
+>   *The Opus seat's first turn FELL BACK to claude-opus-4-8 after a refusal (`agent_models.py`); resumed, its verdict and
+>   corrections are claude-opus-5-5's, and the one measurement these records rest on was re-run by the main loop
+>   (`q2_20260923/q2h_opus/MANIFEST_NOTE.txt`).  Its own denominator, corrected in place: 52 file-backed edits over the
+>   five arms, the two head tests, the Clear write and the common tail, 0 floor breaches.*
+>
+> **Repair 3f is RECORDS ONLY** -- the contract now says exactly what the two closures check, names the three buffer
+> gaps and the caller line's count (ten shapes over seven fields): comment-stripped source identical to 3e, output
+> identical, 864/0 (`q2_20260923/r3f_20260923/verify_r3f2.out`).  **The flagship seat, fired LAST** (Fable 5.1, claude-fable-5-1
+> throughout, verified from its transcript; `_scratchpad/fable_final_20260923/FABLE_ANSWER.md`, copied to
+> `q2_20260923/fable_final_20260923/`) ruled **SHIP**: every dissent a wrong record or above-floor debt, zero floor
+> breaches against its own sweep of the five arms' tests and latches, the Clear body, the head test, the timer fold and
+> the tail's width; the chain closes on 3e's pass, a valid pass.  It found FOUR records still wrong, each fixed before
+> this commit and none in code: 3f's "a store to a field they do not name passes" (only `irq_asserted` does -- the
+> same instance's declines row pins the other four), the tail list read as exhaustive (it now says "among them" and
+> adds the timer reads, measured), "each measured green" over two shapes never built (one built since, one unobservable
+> by construction), and this block's own "the trigger met twice" (above).  3f was amended to say so (8c517015,
+> comment-only against the tabled 3e).
+
+**Measured.**  Witness (rung 3, unmodified `-E cats`): five arms HOST-DIED with exit 1 and five DISTINCT texts on the
+pre-fix build; post-fix all five SURVIVE, announce once, and leave every register untouched.  Four kill tables in scratch
+clones (`regress/artifacts/fbd5/{killtable,xtable,table3,table4}_20260919/`), 49 mutants: **every one is killed by the
+composite detector.**  Three are killed only by the guest rows (two announce-text mutants and the timer-field guard) and
+several only offline, exactly as the split in the contract says.  **WHICH INSTRUMENT, because the tables ran on
+successive versions:** table 4's offline half measured the 327-row differential, before the six X8 rows; the two
+8-bit-truncation controls T1/T2 were measured on the final 333 rows.  Of the three offline survivors, Z9 (36/37,
+`table3_20260919/TABLE3.log:47`) and F1 (34/37, `table4_20260919/opus_f2/guest/sites_F1.log`) were measured on the final
+37-row probe, and **M9's only guest measurement was on the 36-row probe of table 2 until 2026-09-23**, when a records audit
+caught it: re-measured then on the final 37-row probe in a fresh clone -- the prediction precedes the result in `R3.log` (the
+same file, 13 s apart, so no mtime witness of order) -- **33/37, red N1, N2, N0, NO** (`regress/artifacts/fbd5/r3_m9_20260923/R3.log`).  **The fourth-pass repair was measured
+the same way** (`q2_20260923/repair/`, predictions in `q2_20260923/PRETABLE_Q2.out`, written before the table): the fix
+491/491; each of the five direction-test variants reds exactly its own X9 cells; two wide-axis controls red exactly the
+X6 and X7 wide rows they were built for; and every one of table 4's 49 variants keeps every row it reddened
+(`repair/CARRIED_KILLS.txt`).  Gates: the quiet-slot run (2026-09-23 22:19-23:34, nothing else on the machine): `run.sh 1 2 4 6` REGRESS_PASS -- gate 2's footbridge rows 864 of 864 with every #545 family pin green (`offline-differential: PASS (357 checks)`), gate 6 PASS -- and gate 14 PASS (1054 checks) on this commit's `gate_arm.sh` blob (HEAD plus #545's two hunks; #529's section excluded, so 1061 - 7), `regress/artifacts/fbd5/q2_20260923/r3f_20260923/{gates_final,gate_arm}/`; the product file's two-part clearance on all four trees (`r3f_20260923/clearance_final.out`).  The 2026-09-19 totals (`gate_arm` 1061, `gate_offline` 351) are
+SUPERSEDED: they ran on the combined working tree, and 1061 counts #529's seven checks on an untracked probe.
+
+**Also in this commit, a wrong record corrected (L4).**  #539's own record says its "E0-E6 distinct GREEN row ids" gate
+fix shipped.  It did not: the partial-blob commit dropped that hunk and HEAD kept the weaker form, which counts ids over
+ALL lines and would pass a duplicated green row beside a red one.  The hunk ships here, and every #545 family pin
+(SC/SA, S1-S5, SF1/SF2, N1-N5) counts DISTINCT GREEN ids for the same reason.
+
+**Seats.**  Nine on the design pass (Fable last); EIGHT on the diff and eight on the adjudication-and-repair pass --
+the kimi CLI and its kimi-k3 transport are ONE seat, and **Fable was HELD on both by owner directive**, recorded as held,
+not as a seat failure and not as agreement; plus two dedicated codex readings and three Opus measuring seats (identity
+verified from the subagent transcripts, not from the answers' own identity lines).  **Fable then fired LAST on
+2026-09-23**, on the adjudication and regress stages (owner: "Fable, then commit"), and ruled DO NOT CLOSE -- the reset-state
+hole above, and seven records that would have shipped wrong -- `regress/artifacts/fbd5/fable_adj_20260923/`.  The
+2026-09-23 chain -- the repair's pass 2, the closing pass on repair 2, and repairs 3, 3c, 3d and 3e's own passes -- ran the full roster every time, each seat's verdict recorded in the ledger, and Fable fired LAST on the final one (SHIP, above).  The kimi CLI walled mid-answer on the adjudication pass (5-hour limit); its 73 KB partial
+body was read and credited, and its substitute transport answered in the same panel.
+
 # Records (e8a2bc, 2026-09-19): five "fable5" rulings on record were written by claude-opus-4-8 -- the Agent-tool seat REFUSED at its synthesis step and the tool silently finished the answer; corrected in place, with first-hand Fable re-rulings
 
 **No product or test code changes.**  Ledger corrections and filings, found by checking the owner's standing directive
@@ -225,7 +434,11 @@ word.  Two L4s, applied: E4's real predicate is a BRACKETED diagnostic naming fo
 diagnostic rewritten without brackets or without the device name escapes it -- the contract now says so and lists that
 form under NOT COVERED (D2 overturned in part: "different text must still red E4" was true only for text keeping the
 house shape); and the gate's distinct-id check now counts ids over the GREEN lines, which proves "each of E0-E6 is
-green" by itself (over all lines it would have passed a duplicated green E2 beside a red E3).  Two nits applied: the
+green" by itself (over all lines it would have passed a duplicated green E2 beside a red E3).  *** CORRECTED
+2026-09-23 (L4): THAT CHECK NEVER SHIPPED.  The partial-blob commit dropped the hunk, and HEAD's `regress/gate_arm.sh`
+still counts E ids over ALL lines; the green-line form sits in the working tree and ships with `#545`.  Found by
+`#545`'s pass-2 panel (F34) and confirmed by the 2026-09-23 records audit
+(`regress/artifacts/stateaudit_20260923/`). ***  Two nits applied: the
 HARNESS-KILL label only when the reaped signal IS SIGKILL (a kill landing on a zombie reaps the product's own status),
 and the sites header states its `rd()` convention.  On the roster it ruled the record PROVISIONAL on eight of nine
 seats -- what was missing was INDEPENDENCE of measurement, not measurement -- and named the discharge: one bounded
@@ -4283,6 +4496,11 @@ The repair-chain rule: this is a repair of DETECTOR material found by a review, 
 on the diff -- OWED, batched into `#518`'s pass-2 panel window rather than fired alone.
 
 # `#517` pcc2genctlc040alias: a vendored header defined C040 twice, and the second definition was a different register's bits
+
+*** CORRECTED 2026-09-23 (L4): the heading's "a different register's bits" is FALSE.  0x03 is FAST | MIEN, two OTHER
+bits of the SAME General Control Register -- as this block's own first paragraph says.  Flagged by the fable5 seat on
+2026-09-18 (`pcc2genctlc040alias` ledger entry [10]) and left uncorrected until the 2026-09-23 records audit
+(`regress/artifacts/stateaudit_20260923/`). ***
 
 **THE DEFECT.** `src/include/thirdparty/mvme_pcctworeg.h` carries `PCC2_C040 0x04` (right -- bit 2 of
 the General Control Register, matching VMESBCP2's GENCTL page and the value `dev_pcc2.c` uses) and,

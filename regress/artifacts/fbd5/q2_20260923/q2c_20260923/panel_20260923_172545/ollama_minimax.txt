@@ -1,0 +1,358 @@
+```
+VERDICT: DO NOT SHIP -- F7's disposition is incomplete (the head predicate's
+len-conditioning is unobserved for Set/FIQ Set/FIQ Clear writes at len 1, 2,
+and the CONTRACT does not disclose that), and the CONTRACT overclaims on two
+specific points.  IDENTITY arithmetic checks out; the 57 still-green Opus
+variants are all discharged.
+```
+
+I cannot read files, so every claim below is from the inlined text alone.
+
+---
+
+## Q1 -- verify the enumeration
+
+### Q1(a) -- is every input / partition named in THE SPACE?
+
+Reading the inlined CONTRACT:
+> "the case label, the direction test, the width, idata (read by the legal
+> Clear write), the four interrupt fields (read by the legal branches) and
+> the five latches"
+
+The bodies of the five arms (verbatim from the packet) read idata in **four**
+places, not one:
+
+| arm | read of idata |
+|---|---|
+| IRQ_ENABLE_SET write | `d->irq_enable \|= idata` |
+| IRQ_ENABLE_CLEAR write | `d->irq_enable &= ~idata` |
+| FIQ_ENABLE_SET write | `d->fiq_enable \|= idata` |
+| FIQ_ENABLE_CLEAR write | `d->fiq_enable &= ~idata` |
+
+The parenthetical "idata (read by the legal Clear write)" is **misleading**:
+it implies idata is only read by Clear. The bodies TEST idata in all four
+enable writes. The clause is technically true (idata *is* read by Clear) but
+omits the other three sites, and that omission is what allows the F7 gap
+(see Q1c / Q2) to slip through. READ.
+
+Width is named; direction is named; the four fields are named; the five
+latches are named. The case label is named. ✓ for the *set* of inputs; ✗
+for the parenthesised description of which arm reads idata.
+
+### Q1(b) -- does each COVERED class have a row family whose channel differs?
+
+```
+COVERED class                                family   channel observed
+-----------------------------------------------------------------
+declined x width x data{0,0x70} x state x {1st,rep}   X6    fatal +-1/0, fields, irq_out, read=0
+legal x width x state x own-latch CLEAR              X9    read value, write effect, irq_out, then 5 declines announce 5
+legal x width x state x every-latch SET, announce    X7    fatal_calls doesn't move; re-decline announces 0
+legal x width x state x every-latch SET, value+effect X10  read value, Clear write effect (irq_out)
+ordered pair (j,i) of site latches                   X11   first decline after j announces once
+legal Clear write at every width and all-ones data   X12   ne = ie & ~(idata & mask); irq_out; then 5 announces
+```
+
+Every row family uses a channel that DOES vary under a one-condition edit in
+the class it covers -- I traced (b_neg 10->0), (or_L 4/5 stays, with the +0x18c
+red because there the write branch drives the irq line), (bit_* 50->0),
+(lane 10->0), (case 5: a new offset aliased onto an arm), (dom 2: widening
+the fold aliases *other* offsets and is EQUIVALENT at the five because all
+five have bits 5,6 clear), (idata 1: exact data value at +0x18c) -- all
+behave as the brief says.
+
+**But there is one gap in the COVERED contract itself.** The CONTRACT says:
+
+> "legal x width x state x own latch clear (X9)"
+
+X9's loop is `for (k = 0; k < 5*3 + 8; k++)` -- 23 cells per state, 92 total.
+The 15 reads are at widths 1, 2, 4 (5 sites × 3 widths). The 8 writes are
+**all at len 4**, as the rewritten X9 header is careful to say:
+
+> "the eight enable writes at len 4 (X12 has the Clear write's other widths
+> and data)"
+
+So COVERED's "legal x width" is true for *reads* at the five sites, true for
+Clear at non-len-4 (X12), but **false** for Set/FIQ Set/FIQ Clear at non-len-4
+widths. The CONTRACT overclaims by one axis. REASONED from the diff.
+
+### Q1(c) -- is every NOT COVERED item genuinely outside the floor?
+
+I enumerated the seven items. The first six are fine:
+
+1. Exact field value: bodies do not branch on a field value. ✓
+2. ADDRESS axis (case label added; widened timer fold): the timer fold
+   `relative_addr &= ~0x060` clears bits 5-6. Enumerating the five offsets
+   after the mask: `0x180 & ~0x060 = 0x180`, `0x184 -> 0x184`,
+   `0x18c -> 0x18c`, `0x280 -> 0x280`, `0x284 -> 0x284`. **None of the
+   five offsets changes.** A widened fold aliases *other* offsets onto the
+   arms (disclosed). A narrowed fold or a fold that clears other bits
+   could alias a five offset to default (implicit via #6 below).
+3. Joint conditions over two fields beyond the four states: finite states
+   cannot enumerate all joint bit combinations. ✓
+4. WIDE DATA on a declined write: the decline body does not read idata
+   (`fatal(...)` only), so nonzero vs zero matters at most as one bit
+   (`!= 0`), which is what X6 covers with {0, 0x70}. ✓
+6. any other register's semantics. ✓
+7. latch guard conditioned on a field neither branch reads. ✓ (measured F1)
+
+**F7's two premises.** I checked them both:
+* (i) "no decline reads idata" -- TRUE. The five decline bodies set a latch
+  and call `fatal(...)`; idata is not named in any decline arm.
+* (ii) "timer fold changes none of the five offsets" -- TRUE (enumerated
+  above: all five have bits 5,6 = 0).
+
+But the **disposition** the brief draws from those premises is
+**incomplete**: the head predicate `if (writeflag == MEM_WRITE) idata =
+memory_readmax64(cpu, data, len)` feeds idata to *all four enable writes*,
+not to Clear alone. The disposition says
+
+> "on the legal side its && len == 4 / && len != 1 forms are now RED
+> (X12's narrow Clear writes)"
+
+That is true **for Clear only** (X12 catches Clear at len 1, 2 with 0x70 and
+all-ones). For Set, FIQ Set and FIQ Clear at len 1, 2 -- which X9 does not
+test (writes are len-4-only) and X12 does not test (Clear-only) and X10
+does not test (Clear-write-only) -- no row observes them. Either those
+widths are floor cells that need rows, or the CONTRACT should explicitly
+disclose them via clause (e). The CONTRACT currently does neither. That is
+the breach I name in Q2.
+
+---
+
+## Q2 -- the smallest edit the 707 rows cannot see and the CONTRACT does not disclose
+
+The simplest form that is detectable by the CONTRACT but slip past the
+rows:
+
+> **Head predicate** `if (writeflag == MEM_WRITE && (len == 4 ||
+> relative_addr == IRQ_ENABLE_CLEAR))`
+
+Effect (compared to the original `if (writeflag == MEM_WRITE)`):
+
+| target | original | with edit |
+|---|---|---|
+| Clear at len 1, 2, 4 | idata read; `ie &= ~idata` | idata read (exempted); same |
+| Set at len 4 | idata read; `ie \|= idata` | idata read (len==4); same |
+| Set at len 1, 2 | idata read; `ie \|= idata` | **idata not read; `ie \|= 0 = ie`** |
+| FIQ Set at len 1, 2 | idata read; `fe \|= idata` | **idata not read; `fe \|= 0 = fe`** |
+| FIQ Clear at len 1, 2 | idata read; `fe &= ~idata` | **idata not read; `fe &= ~0 = fe`** |
+| any read | idata not read; branch reads from `d->` | same |
+
+Now trace each 707 row against the change:
+
+* **X6** (declines): declines don't read idata. Passes. ✓
+* **X7** (latches SET, announces only): the legal-write path is observed
+  only by the announce-count invariant. The edit doesn't move any latch.
+  Passes. ✓
+* **X9** (writes at len 4 only): every write X9 touches is len 4. Passes. ✓
+* **X10** (latches SET, Clear write at len 4 + 5 reads): the Clear-write
+  row is len 4; passes. The reads are unchanged. ✓
+* **X11** (ordered-pair latches): no legal-write observation. Passes. ✓
+* **X12** (Clear at len 1, 2 with 0x70 and all-ones): Clear is exempted
+  by the edit, so idata *is* read; `ne = ie & ~(idata & mask)` matches.
+  Passes. ✓
+* **X8** (wide-byte seeds, read truncation): unaffected. ✓
+* P-rows, X1-X5: unaffected. ✓
+
+All 707 stay green.
+
+The row I would expect a well-formed closure to have is "Set at len 1 with
+data 0x42 in state SEEDED" -- this is the analogue of X12's Clear at len 1
+with 0x70. Its observable would be: `ie |= 0x42` (original) vs `ie |= 0 = ie`
+(edit). No row holds it.
+
+This is **not** in NOT COVERED. The NOT COVERED list mentions "WIDE DATA on
+a declined write", which is about decline data, not write data; and
+"interrupt output after a legal access except where X9/X10/X12 pin it",
+which is about the irq line, not the field change.
+
+A more aggressive variant of the same gap -- the simplest form -- is `if
+(writeflag == MEM_WRITE && len == 4)` (no exemption). That one fails X12
+(Clear at len 1, 2 with 0x70 is RED, exactly as F7's disposition claims),
+but for the same reason: it shows the *direction* of F7's argument but not
+its *extent*.
+
+The CONTRACT should either row the missing cells or explicitly disclose
+them via clause (e). As written, the enumeration has a hole.
+
+REASONED from the inlined handler, X9/X10/X12 bodies and the diff.
+
+---
+
+## Q3 -- F1..F14 and D1, and which ACCEPTED disposition is wrong
+
+| finding | disposition | mine | reason |
+|---|---|---|---|
+| F1 | ACCEPTED -> X10 | UPHOLD | X10 covers 5 reads x 3 widths x 4 states + 1 Clear write x 4 states = 64; b_neg 10->0 consistent |
+| F2 | ACCEPTED -> X11 | UPHOLD | X11 = 20 ordered pairs x 1 state (seeded); fl_neg 10->0, or_L 14->4 |
+| F3 | ACCEPTED -> X12 | UPHOLD | X12 rows Clear at len 1, 2 (0x70) and len 1, 2, 4 (all-ones); c_dir 3->0 |
+| F4 | ACCEPTED -> X12 (all-ones data) | UPHOLD | codex V9's 491-green becomes 3 red on 707 -- the three all-ones Clear cases |
+| F5 | ACCEPTED -> ONES state | UPHOLD | bit_* 50->0 |
+| F6 | ACCEPTED -> ONES state | UPHOLD | lane 10->0 |
+| **F7** | **REFINED, not rowed separately** | **REFINE / OVERTURN (incomplete)** | **(i) is true (no decline reads idata), (ii) is true (enumerated `offset & ~0x060` above). But the disposition overclaims: it says the head predicate is "now RED" via X12, which is only true for Clear. Set/FIQ Set/FIQ Clear at len 1, 2 are unobserved and undisclosed.** See Q2. |
+| F8 | DISCLOSED (clause e) | UPHOLD | bodies test no values; e_dir 20 + e_flag 20 + idata 1 (the one EXACT-data value at +0x18c) are correctly disclosed |
+| F9 | ACCEPTED for comments; row names kept | UPHOLD | carried-kills row identity requires the X8 row names; the new X8 comment is precise (0x80010018 & 0x00010030 = 0x00010010, 0x40020060 & 0x000200c0 = 0x00020040 -- I verified both) |
+| F10 | ACCEPTED (X9 header) | UPHOLD | header now lists reads at 1/2/4 and the 8 enable writes at len 4 |
+| F11 | ACCEPTED (stale sentences) | UPHOLD | "every seed above" -> "every seed in the P-rows and X1-X5"; "bits 8-31 are exercised" removed; "59 variants against TABLE4" -> "59 ENTRIES"; the IDENTITY now states 707 |
+| F12 | FILED as LOW (fbgateidentity) | UPHOLD | the finding is about the detector, not the product |
+| F13 | FILED MED (fbirqstuck) | UPHOLD | real defect in arms #545 did not edit; expanding scope would broaden the patch |
+| F14 | settled | UPHOLD | codex agreed |
+| D1 | settled by measurement | UPHOLD | the Opus seat's 153 greens were real |
+
+**The wrong disposition is F7.** Not because its two premises are false --
+they are true. Because the brief's *conclusion* from those premises
+("REFINED, not rowed separately; head predicate's && len == 4 form is now
+RED (X12's narrow Clear writes)") is incomplete: it accounts for Clear and
+for the closure-of-declines question, but it does not account for Set,
+FIQ Set and FIQ Clear at len 1, 2 -- cells that exist in the floor (the
+head predicate dominates them; idata is read by them) and that are
+uncovered by X9 (writes at len 4 only), X10 (Clear write at len 4 only),
+and X12 (Clear only). The brief's enumeration is incomplete.
+
+A correct disposition would either:
+(a) add rows of the shape X12 for Set, FIQ Set, FIQ Clear at len 1, 2
+(0x70 and all-ones, 4 states -- 24 cells x 4 states = 96 rows for the
+three arms, or however the carrier prefers to enumerate), or
+(b) move the "non-Clear write widths" item explicitly into NOT COVERED,
+saying "width-conditioning for Set/FIQ Set/FIQ Clear writes is disclosed
+via clause (e): the bodies do not test `len` as a case branch".
+
+In addition, the parenthetical "idata (read by the legal Clear write)"
+should be corrected to "idata (read by all four legal enable writes)" or
+"idata (read by the four legal enable arms)".
+
+---
+
+## Q4 -- records
+
+**IDENTITY arithmetic.** The brief says `707 = 33 + 78 + 38 + 216 + 140 + 6
++ 92 + 64 + 20 + 20`. Summing: 33+78=111, +38=149, +216=365, +140=505,
++6=511, +92=603, +64=667, +20=687, +20=**707**. ✓
+
+Decomposition against the loops in the diff:
+
+| slice | count | derivation from loops |
+|---|---|---|
+| 33 | 33 | 32 timer rows + the IDENTITY row itself; the IDENTITY comment now says so |
+| 78 | 78 | P0-P9 across the seeded/all-zero/wide states; not changed by repair 2 |
+| 38 | 38 | X1-X5; derived as `X[1-8]=400` minus `X6+X7+X8 = 216+140+6 = 362` |
+| 216 | 216 | X6 = 4 states x (4 writes x 3 widths x 2 datas + 1 read x 3 widths x 1 data) x 2 occurrences = 4 x 27 x 2 |
+| 140 | 140 | X7 = 4 states x (8 writes + 9 reads x 3 widths) = 4 x 35 |
+| 6 | 6 | X8 (wide-byte seed reads, unchanged) |
+| 92 | 92 | X9 = 4 states x (5 reads x 3 widths + 8 writes) = 4 x 23 |
+| 64 | 64 | X10 = 4 states x (5 reads x 3 widths + 1 Clear write) = 4 x 16 |
+| 20 | 20 | X11 = 5 x 4 ordered pairs (i != j) at seeded state |
+| 20 | 20 | X12 = 5 cells x 4 states |
+
+Each slice matches its loop. The IDENTITY comment's "+54 / +35 / +23 / +64
+/ +20 / +20" delta from 491 to 707 sums to 216 -- correct.
+
+**Gate pins vs the loops.** X6=216, X7=140, X8=6, X9=92, X10=64, X11=20,
+X12=20, X[1-8]=400 (=38+216+140+6), P[0-9]=78. All match. ✓
+
+**Sentences that are false, misleading, or stale:**
+
+1. **CONTRACT, "idata (read by the legal Clear write)"** -- misleading.
+   idata is read by all four enable arms, not only Clear. See Q1(a) and
+   the table above. Stale the moment it lands (and was already stale from
+   the previous CONTRACT).
+
+2. **CONTRACT, "legal x width x state x own latch clear (X9)"** --
+   overclaims. X9's 8 writes are all at len 4 (the rewritten X9 header
+   itself says so). For non-Clear writes at len 1, 2, "width" is not
+   actually covered. Stale the moment it lands. See Q1(b)/Q2.
+
+3. **X8 comment, "Wide seeds set bits in bytes 0, 2 and 3 only"** --
+   *collectively* true (every byte 1 bit is zero across all four wide
+   seeds), but **per-seed** it is false: 0x00010030 has bytes {0x30,
+   0x00, 0x01, 0x00} (no byte 3 bit), and 0x000200c0 has bytes {0xc0,
+   0x00, 0x02, 0x00} (no byte 3 bit). The previous comment did not
+   make this claim; the new one introduces it. The intent (byte 1 is
+   the only byte never set across the wide seeds) is correct and is
+   captured by the second sentence ("the ONES state ... is what
+   exercises byte 1"). Borderline, but worth flagging.
+
+4. **CONTRACT's clause (e) NOT COVERED list does not mention**
+   "non-Clear legal writes at non-len-4 widths". This is the gap
+   from Q2. The CONTRACT claims X12 closes "the legal Clear write at
+   every width and with all-ones data", but the symmetric statement
+   for Set/FIQ Set/FIQ Clear is absent. Either add rows or add the
+   disclosure. Stale the moment it lands.
+
+5. **X11 row-name claim "first %s after %s latched: announced once"**
+   is true for the seeded state. The 20 pairs are seeded-only. ✓
+
+No other sentence I can check from the inlined text is false as of today.
+
+---
+
+## Q5 -- F12 and F13 dispositions
+
+For both, "FILE" is the disposition the brief chose. The other named
+options are: ACCEPT (adopt in this round), REFINE (modify the finding's
+text), DISCLOSE (name in the contract), OVERTURN (reverse a previous
+disposition), CANNOT SETTLE.
+
+For F12 (fbgateidentity): the finding concerns the DETECTOR's gate pins
+(distinct-name counts vs identities), not the product. ACCEPT would mean
+editing gate_offline.sh to pin identities (e.g., by checking that the
+*exact set* of row names is present, not just the count). FILE is
+reasonable because this is a detector change, not a product change.
+DISCLOSE doesn't apply (the contract is about the product). No other
+disposition fits.
+
+For F13 (fbirqstuck): the finding concerns the IRQ line driver in two
+arms #545 did not edit. ACCEPT would mean editing the two arms to set
+`irq_asserted` consistently. FILE is reasonable because it expands the
+patch scope. One disposition not explicitly named: **"FILE-MEDIUM with
+an explicit MED-priority obligation"** -- i.e., record a deadline or an
+escalation. The brief records it as `fbirqstuck` MED, so this is
+substantively what's there. I don't see a disposition the brief missed.
+
+---
+
+## If I found something ELSE
+
+Yes -- the brief's F7 disposition includes the parenthetical "idata
+(read by the legal Clear write)", which I have flagged in Q1(a) and Q4 as
+misleading. This is a substantive defect, not a stylistic one: the
+parenthetical is what allowed the head-predicate gap to be argued away
+in F7's conclusion.
+
+Additionally, the diff's header comment for the X6 loop block claims the
+fourth state "ones" exercises byte 1; the corresponding sentence in the
+X8 comment makes the same claim. Both are true. ✓ But neither comment
+mentions that the WIDE state alone leaves bytes 1 of the *enables* (ie,
+fe) entirely clear -- which is what makes a single-bit condition on
+byte 1 of an enable pass the 491-row instrument. ONES closes that. The
+explanation is correct, just sparse. Not a defect, but worth recording.
+
+---
+
+## Seat record
+
+* Model: packet-fed seat; cannot read files, run commands, or open the
+  repository.
+* What I read: the brief's inlined handler, the inlined diff of
+  diff_footbridge.c and gate_offline.sh, the §F2 dispositions, the §C
+  settled premises, the §C.5 product claim about fiq_status having no
+  writer, the Opus 434/153/57 table, the IDENTITY arithmetic claim, the
+  Q1-Q5 questions.
+* What I ran: nothing. Per the operational rule, I did not invoke any
+  gate, run.sh, or battery. I enumerated the X6/X7/X9/X10/X11/X12 loop
+  counts by hand against the diff and the IDENTITY arithmetic against
+  the brief's claim. I enumerated `offset & ~0x060` for the five offsets
+  (0x180, 0x184, 0x18c, 0x280, 0x284) to verify F7(ii).
+* Measurement I would have wanted but cannot get from the packet: which
+  rows in the carried-kills table correspond to the five edit shapes
+  from §F2 (Opus's a_neg/a_pos/b_neg/b_pos/bit_*/c_*/case/dom/dir_eq/...),
+  and which of those go red under the `&& len == 4` head edit. Naming
+  the rows that *should* exist for Set/FIQ Set/FIQ Clear at len 1, 2
+  would close the gap; the packet names them by family but not by row.
+  This is not in the packet; the row-name list lives in the test log,
+  which I cannot open.
+* Premises I cannot settle from this packet: none blocking. The brief's
+  factual claims (md5 prefixes, file paths, the §C settled premises) are
+  stated; I cannot independently verify them, but none of them affect
+  my verdict because the breach I name is derivable from the inlined
+  handler, the inlined diff, and the inlined loop bounds alone.

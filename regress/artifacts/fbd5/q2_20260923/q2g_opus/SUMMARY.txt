@@ -1,0 +1,245 @@
+OPUS_SEAT_ALIVE_20260923_R3D
+# CHECKPOINT -- 2026-09-23 20:30 (087a90 sections rewritten; the peer's sections below are untouched)
+Opus seat (compile and measure), #545 repair-3d pass (q2g), 2026-09-23.  Claude Opus 5.5, claude-opus-5-5[1m].
+
+VERDICT: DO NOT SHIP -- no floor breach, and no claimed-channel escape, in 39 new shapes.  But two things must be fixed
+first, and both are records:
+  (1) S6's disclosure.  §C.2 says a condition on a value the bodies never test is DISCLOSED.  S6 names two
+      caller-context fields; 10 more are measured green (CX01-CX10), 9 of them guest-visible.  The fix is one
+      sentence naming the class.  No row can close it: CX09 and CX10 pass even the scratch real-caller row.
+  (2) The X14 header cites q2_20260923/q2e_opus/SUMMARY.txt, which does not exist.
+Neither fix adds a row or changes a check.  With them in, this is a closing pass as far as this seat is concerned.
+
+Every number below names the file in this directory that produced it.
+
+=====================================================================================================================
+1. BASELINE AND INTEGRITY
+=====================================================================================================================
+/tmp/opusr3d: GXEMUL-SEC/src, build/config.h, the FROZEN device (783c0c7f) and the FROZEN 3d harness (6c92d7e5).
+  [setup.sh, setup.out, baseline.log]
+  - 864 rows, 0 failures, DIFF_FOOTBRIDGE_PASS, 0 warnings.
+  - baseline.log is byte-identical to the main loop's r3d_20260923/diff_FIX.log.
+  - GXEMUL-SEC's working copies equal the frozen ones (dev 783c0c7f, harness 6c92d7e5, gate 59149a8b), at the start
+    and at the end [setup.out, final_check.out].
+The brief's inlined diff equals `diff -u` of the two frozen harnesses: 12 hunks, and every +/- line matches.
+The diff was delivered.
+
+=====================================================================================================================
+2. D4 -- WHAT EACH 3d EDIT CHANGED, ACROSS ALL 739 CARRIED VARIANTS   [d4_compare.py, d4_compare.out]
+=====================================================================================================================
+Every variant's failing-row set was compared, 3c against 3d.  The 3c sets come from:
+  - r3c_20260923/results_w*.jsonl (711 variants);
+  - r3d_20260923/results_r3c_w*.jsonl (6 variants);
+  - my q2f/opus/results_all.jsonl (22 variants).
+The 3d sets come from r3d_20260923/results_r3d_w*.jsonl.  The two renamed rows were normalised.
+  State transitions: RED->RED 583, GREEN->GREEN 146, DIED->DIED 5, GREEN->RED 5.  Nothing went RED->GREEN.
+  Failing sets changed: 7 variants.  Rows lost: 0.
+    E5: R3D_FW1 only (+16).
+    E3: OQ_FS01 (+1) and R3D_CXA1 (+1).
+    E1: R3D_CXC1 (+2).
+    E2/E4: R3D_GF1 (+2), R3D_DA1 (+1), and N_C02 (+1: a deleted `break;`, already red on 115 rows).
+So E3 and E5 each changed only their own motivating shapes.  Neither moved any other variant's score.
+
+=====================================================================================================================
+3. Q2 BY CONSTRUCTION -- 39 NEW SHAPES ON THE 864 ROWS
+   Table: gen_r3d_opus.py, predictions PREDICTIONS_q2g.txt (written 20:38:37, before any build), results
+   results_all.jsonl and analysis.txt.  Addendum: gen_r3d_opus_b.py, predictions PREDICTIONS_q2g_b.txt (20:50:17),
+   results results_b.jsonl and run_b.out.
+=====================================================================================================================
+None of the 39 is among the main loop's 739 (catalogued in existing_edits.txt by catalog.sh).
+Result: 0 mispredictions, 0 compiler warnings.  7 RED controls, 31 real greens, 1 EQ.
+Six worker trees; each was restored, cmp-checked and rebuilt, and its sentinel cleared [driver_w*.out, run_table.out].
+
+RED CONTROLS -- each proves a channel 3d added IS read (the row they red is in brackets):
+  AS05  the asserted IRQ_STATUS read sets fiq_status       (the status-read row, the re-arm row)   E2 works
+  AS06  a decline sets fiq_status while asserted            (the re-arm row)                        E4 works
+  AS04b the asserted ASSERTING Clear sets fiq_status        (the re-arm row)                        E4 works
+  AS09  the DEVINIT asserting Clear ORs 0x100 into status   (both Clear 0x20 rows)                  E1 works
+  FW01  a 4-byte fetch at +0x18c only                       (16 rows, as R3D_FW1)                   E5 works
+  FW02  a 1-byte over-read into byte 1                      (4 rows; ONES state only)               E5 works
+  SR10  the pending-tick store, placed in the shared head   (3 top-of-file timer rows)
+FW03 is EQUIVALENT.  An 8-byte fetch at len 4 changes nothing, because every consumer truncates to 32 bits.
+
+THE 31 REAL GREENS, BY CLASS
+(A) CALLER CONTEXT beyond `mem` and the machine type (not named in NOT COVERED) -- 10:
+    The harness cpu and machine are calloc'd, with only emulated_hz set.  A real run sets:
+      running true (emul.c:748)                byte_order EMUL_LITTLE_ENDIAN (cpu_arm.c:123)
+      is_32bit 1                               ninstrs > 0 (cpu_dyntrans.c:462)
+      a non-NULL cpu->mem                      machine->ncpus 1
+      pc and cpsr nonzero
+    id    test (site)               added conjunct              effect in a real run
+    CX01  direction (+0x184)        && !cpu->running            IRQ_RAW_STATUS reads declined, return 0
+    CX02  direction (+0x180)        byte_order != LE            IRQ_STATUS reads declined
+    CX03  Clear drive test          && !cpu->is_32bit           a Clear never asserts: the line drops while pending
+    CX04  latch (+0x280)            && !cpu->running            the announce is lost (host log only)
+    CX05  head fetch                && !cpu->running            every write fetches 0
+    CX06  direction (+0x18c)        && !cpu->ninstrs            every Clear write is declined
+    CX07  head fold                 && !cpu->running            timers 2-4 never fold
+    CX08  direction (+0x180)        && !cpu->machine->ncpus     IRQ_STATUS reads declined
+    CX09  direction (+0x184)        && !cpu->pc                 IRQ_RAW_STATUS reads declined  (12 characters)
+    CX10  Clear drive test          && !cpu->cd.arm.cpsr        a Clear never asserts
+(B) STORES, from the five arms or the Clear, to TIMER STATE no row reads afterwards -- 10, all guest-visible through
+    the timer arms (SR07 only through backlog coalescing):
+    SR01  decline +0x180      timer_control[0] = 0               SR02  IRQ_STATUS read    pending[0] = 0
+    SR03  Clear               timer_control[0] &= ~ENABLE        SR04  RAW_STATUS read    timer_value[0] = 0
+    SR05  declined +0x18c     timer_load[0] = 0                  SR06  decline +0x284     reload_timer_value(0)
+    SR07  decline +0x280      pending_bound[0] = 0               SR08  Clear              pending[0] = 0
+    SR09  FIQ_STATUS read     timer_control[1] = 0               SR11  decline +0x184     timer[0] = NULL
+    SR02 is #474's lost-interrupt class, at the register an ISR reads first.
+    X14's "a tick pending" cells count the interrupt calls, never the pending count.
+(C) STORES at X14 cells, on channels those rows do not name -- 5:
+    AS01  the asserted IRQ_STATUS read sets +0x184's latch.  Host log only.
+    AS02  the asserted Clear sets +0x180's latch.  Host log only.
+    AS03  the asserted DEASSERTING Clear sets fiq_enable.  Invisible: fiq_status has no writer.
+    AS04  the asserted DEASSERTING Clear sets fiq_status.  GUEST-VISIBLE: +0x284 reads 1.
+    AS08  the DEVINIT ASSERTING Clear (E1's cell) sets fiq_status.  GUEST-VISIBLE on every real cats or netwinder,
+          because the timer-control reset value is PERIODIC.
+(D) Named by NOT COVERED -- 6:
+    AS07   the "other legal accesses" line
+    RS01, RS02   JOINT: a masked line pending while asserted; X14 builds status == enable
+    IAS01, IAS02   the LEVEL line and the producer pair
+    FMT01   the TEXT line -- but see Q4/S7: this "text" is a vsnprintf format
+
+Q2 ANSWER: there is no floor breach.  None of the 39 shapes is in the (d) DEPENDS-ON enumeration, and none changes a
+channel that COVERED or a row name claims at a claimed cell.
+  - The smallest edit neither rowed nor disclosed is CX09: ` && !cpu->pc` on +0x184's direction test.  It is 12
+    characters, and all 864 rows stay green because the harness cpu's pc is 0.
+  - The most consequential is SR02: every IRQ_STATUS read drops timer 1's pending ticks.
+  - The one sitting on 3d's own new channels is AS08.
+  - DENOMINATOR (what was swept):
+      the four read branches               AS01 AS05 AS07 SR02 SR04 SR09
+      the five decline bodies              AS06 SR01 SR05 SR06 SR07 SR11 IAS01
+      the +0x280 latch test                CX04
+      the direction tests                  CX01 CX02 CX06 CX08 CX09
+      the Clear's enable update            AS02-AS04 AS04b AS08 AS09 RS01 RS02 SR03 SR08
+      the Clear's drive test               CX03 CX10
+      the Clear's assert                   IAS02
+      the head fetch                       FW01-FW03 SR10 CX05
+      the fold                             CX07
+      the announce text                    FMT01
+  - Cells: every one of X14's 21 rows' cells, and the four states of X6-X13.
+  - Channels probed: the five fields, the five latches, the timer arrays (load, value, control, pending, bound,
+    handle), the interrupt calls, and the announce format.
+  - The 739 carried shapes are re-checked by section 2.
+
+=====================================================================================================================
+4. SCRATCH CLOSURE EXPERIMENT -- a measurement of cost, NOT a patch
+   [mkext_q2g.py, diff_ext.c 0f99ca50, PREDICTIONS_ext.txt (20:41:31, before its build), ext_run.out,
+    ext_results.jsonl, ext_check.out]
+=====================================================================================================================
+Additions to a copy of the 3d harness, before IDENTITY (which moves to 872):
+  - 8 rows:
+      W1  asserted reads, then declines
+      W2  the asserted Clear keeps the FIQ fields and the latches
+      W3  the DEVINIT Clear keeps the FIQ fields
+      W4  an ARMED timer: the timer fields survive the five arms
+      W5  a real caller
+      W6  a pre-masked pending line
+      W7  the declines leave irq_asserted 0
+      W8  no conversion in the announces
+  - one line in the fatal() stub, which counts '%' for W8.
+Results:
+  - The fix: 872 rows, 0 failures, 0 warnings.
+  - All 37 table variants re-scored.  0 mispredictions, and every 864-row failure set is unchanged.
+  - The main table had 30 greens: 29 real, plus FW03 (EQ).  28 of the 29 go red on their predicted W row.
+      W4 alone reds all 10 timer-state stores.
+      W5 reds CX01-CX08.
+  - IAS02 is left green: the only row that could see it would pin fbirqstuck's F13 defect.
+  - FW03 stays green, as EQ.
+Addendum [run_b.out]: CX09 and CX10 stay GREEN on the 872 rows, as predicted.  A real-caller row closes only the
+fields it sets, so row by row this class never ends.  That is why S6 must disclose the CLASS.
+
+=====================================================================================================================
+5. Q1, Q3, Q4, Q5
+=====================================================================================================================
+Q1(a) Each 3d edit, its motivating shape (red), and a control from section 3:
+        E1  CXC1           control AS09
+        E2  GF1            control AS05
+        E3  FS01 and CXA1
+        E4  DA1 and GF1    control AS06
+        E5  FW1            controls FW01, FW02
+      Every X14 row's name and COVERED claim was read against its check.  NO row claims a channel it does not
+      read.  Both renamed rows match their checks: enable 0 or 0x10, irq_status 0x10, ZCPU(0,1) or ZCPU(1,0).
+Q1(b) COVERED is true of the 864 rows.  NOT COVERED is outside the floor line by line, but two classes are missing:
+      (A) and (B)/(C) above.
+
+Q3, one line each:
+  S1-S4  UPHOLD.  Controls AS09, AS05, AS06 and AS04b are red.
+  S5     UPHOLD.  Correct the reason (see Q4.1).
+  S6     REFINE.  Keep it disclosed rather than rowed: CX09 and CX10 prove a row cannot close the class.  But the
+         disclosure must name the CLASS.  This is the second consecutive pass to find members (MC01-MC07, then
+         CX01-CX10).
+  S7     REFINE.  The text is a FORMAT.  FMT01 is UB in the real fatal() (debugmsg.c vsnprintf) and passes 864
+         rows, because fatal() has no format attribute and the gate builds without -Wall.  Say so, or take W8.
+  S8, S9 UPHOLD.  LH1 is green; P1 declines one site four times, and no instance declines it five.
+  S10    UPHOLD.  PR09 reds 4 rows; PR04 is green [q4_check.out].
+  S11    UPHOLD.
+  S12    UPHOLD.  All 48 exact-value forms in the table were re-derived on r3d: 26 green, 22 red [q4_check.out].
+         The sentence is exact.
+  S13    UPHOLD.  N_SB16 reds X9 1, X10 1, X12 4, X13 4; the other 24 masks are green.
+  S14    REFINE.  The citation "the timer handles: W03-W05" is wrong: the timer-handle shape is W02
+         (`!d->timer[0]`, green).  W03, W04 and W05 are irq.extra, pcibus and console_handle.
+  S15    UPHOLD.  The nine match q2e's list (TD01-03, TD12, TD04, IA12-14, IA16).  But see Q4.4.
+  S16-S22 UPHOLD.  S21 checked: the pins sum to 831, plus 33, equals 864.
+  D1-D3  UPHOLD.
+  D4     TAKE BOTH E3 and E5.  They are zero-row repairs of existing rows or fixtures, with measured deltas that
+         move no other variant (section 2).  Detector material is governed by row demand, not the product-code
+         addition licence, and a repair that adds no row never grows row demand.  The alternative, disclosing what
+         one conjunct closes, is worse.  The discriminator against S6 and S8: those need a new instance or a fifth
+         access, i.e. new rows.  Taking E3 does widen COVERED (the raw status at the two asserted Clears), and the
+         claim holds: RS01 and RS02 escape only in a state that is not rowed (W6).
+  WHICH ACCEPTED DISPOSITION IS WRONG?  None in substance.  S14's citation is wrong.  S5's reason is imprecise.
+  The DISCLOSED S6 is under-scoped, and S7 understates the risk.
+
+Q4 -- records that are false or dangling as of today:
+  1. X12 header (E5): "as a real store's are not zero".  A real narrow store's buffer IS len bytes:
+     `unsigned char data[1]` and `data[2]`, cpu_arm_instr_loadstore.c:104/108.  A fetch past len therefore reads past
+     the caller's array, which is undefined and never reliably zero.  The fill is right; the reason is wrong.
+  2. X14 header: "five of those checks now read ...".
+       - "those" means the checks 3c gave.  E3's asserted-Clear rows were never among them: they are identical in
+         the 862 and 864r3c harnesses (checked by diff).
+       - The count has no unit.  3d changes 4 check expressions, which cover 6 rows.
+     The IDENTITY comment's "five X14 checks" has the same count problem.  Otherwise its history adds up to 864.
+  3. NOT COVERED: "the timer handles: W03-W05" should read W02-W05.
+  4. The X14 header cites q2_20260923/q2e_opus/SUMMARY.txt.  That path DOES NOT EXIST; the file is at
+     _scratchpad/fbd5/q2e/opus/SUMMARY.txt.  The sentence came from 3c, but 3d rewrote the line it sits on.
+  5. NOT COVERED's caller line cites q2f/opus/SUMMARY.txt, a _scratchpad path.  Copy both under
+     regress/artifacts/fbd5/q2_20260923/ before the commit (all of regress/artifacts/fbd5/ is still untracked).
+
+Q5 -- is this pass VALID to close the chain?
+  - It is valid as a pass: the diff was delivered and checked, and the denominator is in section 3.  The roster is
+    the main loop's to name.
+  - It finds zero floor breaches and zero claimed-channel escapes.
+  - I would close the chain once two records fixes land:
+      (i) the S6 class sentence;
+      (ii) Q4.4/Q4.5, the cited SUMMARYs copied under regress/artifacts and the citations pointed at them.
+  - The one check that lets me close: re-run the 864 rows on the fixed file (the ok-line set unchanged) and `ls`
+    every artifact the comments cite.
+
+Also found: gate_offline.sh's footbridge "Not covered" summary is a strict subset of the harness's NOT COVERED.  It
+omits the producer pair, the caller context, the text, the history, and the destination below len 4.  The gate file
+is unchanged by 3d, so this is filed-level.
+
+=====================================================================================================================
+6. SEAT RECORD
+=====================================================================================================================
+Model: Claude Opus 5.5 (claude-opus-5-5[1m]).
+Read:
+  - brief_545_r3d.md in full;
+  - the frozen dev_footbridge.c (the handler, the producer pair, the tick path);
+  - the frozen 3d harness in full;
+  - the r3d artifacts: TABLE, PREDICTIONS, PRETABLE_Q2e, R3D.log, run_r3d_worker.py;
+  - q2e/opus/SUMMARY.txt;
+  - cpu.h, cpu_arm_instr_loadstore.c, debugmsg.c's fatal(), and gate_offline.sh's footbridge block.
+Ran (WSL Gentoo, gcc 15.2.1; scratch trees /tmp/opusr3d*; every build and run in the foreground):
+  - setup.sh; catalog.sh (739 diffs);
+  - the 37-variant table (run_table.sh, 6 workers);
+  - the extension (ext_run.sh, 37 variants on 872 rows);
+  - the addendum (run_b.sh, 2 variants on 864 and 872 rows);
+  - d4_compare.py and q4_check.py, over the main loop's own results;
+  - final_check.
+Not run: no gate, no battery, no GXEMUL-SEC script.  Nothing was written under GXEMUL-SEC, est, build or build-asan.
+Restore: every mutated tree was restored, cmp-checked against the frozen device and rebuilt, and its baseline re-run,
+before its sentinel was cleared.  Nine trees are clean with no sentinel.  The final baseline is byte-identical to
+baseline.log [final_check.out].
+SUMMARY_DONE

@@ -1,0 +1,193 @@
+VERDICT: SHIP
+
+---
+
+### Adversarial Review of Repair 3e Brief ([`brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260923_210234/brief_sent.md))
+
+---
+
+### Q1 — VERIFY THE ENUMERATION (The Closing Pass)
+
+#### (a) Class (A): Claimed-KEPT Channels Across Multi-Access Rows
+Class (A) requires that any channel claimed to be preserved ("kept") across multiple accesses is checked not merely at an endpoint, but after *each* intermediate access.
+
+In [`regress/diff_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1420-L1568), there are 21 total rows in the `X14` block:
+1. **Clear 0x10 disjoint** ([`diff_footbridge.c:1456`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1456)): 1 access (`ZCLR(0x10)`). Single-access.
+2. **Clear 0x10 status-zero** ([`diff_footbridge.c:1462`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1462)): 1 access (`ZCLR(0x10)`). Single-access.
+3. **Clear 0 on single raised lines** ([`diff_footbridge.c:1466-1474`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1466-L1474)): 7 rows (`k = 0..6`). 1 access each (`ZCLR(0)`). Single-access.
+4. **DEVINIT timer rows** (`tk = 0, 1`):
+   - **4.1: DEVINIT five legal reads** (`tk=0`, `tk=1`, 2 rows; [`diff_footbridge.c:1482-1488`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1482-L1488)): Makes **5 accesses** (reads of `IRQ_STATUS`, `IRQ_RAW_STATUS`, `FIQ_STATUS`, `FIQ_RAW_STATUS`, `IRQ_ENABLE_SET`).
+     * *What it claims*: Claims read return values (`memory_readmax64(...) == RR[i].want`), `fatal_calls == 0`, and unasserted CPU/timer interrupts (`ZCPU(0, 0)`). It does **not** claim or evaluate kept fields.
+   - **4.2: DEVINIT Set then Clear** (`tk=0`, `tk=1`, 2 rows; [`diff_footbridge.c:1489-1494`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1489-L1494)): Makes **2 accesses** (`IRQ_ENABLE_SET` write `0x40`, then `IRQ_ENABLE_CLEAR` write `0x10`).
+     * *What it claims*: Claims the combined enable result (`x->irq_enable == 0x60`), `fatal_calls == 0`, and the two interrupt transitions (`ZCPU(1, 1)`: 1 assert, 1 deassert). It does **not** claim kept fields.
+   - **4.3: DEVINIT five declines** (`tk=0`, `tk=1`, 2 rows; [`diff_footbridge.c:1495-1501`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1495-L1501)): Makes **5 accesses** (`DD[0..4]` via [`ZDECLINE()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1446-L1450)).
+     * *What it claims kept*: Claims that all 5 state fields (`irq_status`, `irq_enable`, `fiq_status`, `fiq_enable`, `irq_asserted`) remain untouched across all 5 declines.
+     * *Per-access check*: **YES**. [`ZDECLINE()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1446-L1450) calls [`ZSNAP()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1438-L1439) before the loop and asserts [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) *after each decline*.
+   - **4.4: DEVINIT Clear 0x20 keeps 0x10 pending** (`tk=0`, `tk=1`, 2 rows; [`diff_footbridge.c:1505-1512`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1505-L1512)): 1 access (`ZCLR(0x20)`). Single-access.
+5. **Line 4 raised IRQ_STATUS read** ([`diff_footbridge.c:1515-1526`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1515-L1526)): 1 access (`IRQ_STATUS` read). Single-access.
+6. **Line 4 raised Clear 0x10 / 0x400** ([`diff_footbridge.c:1527-1542`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1527-L1542)): 2 rows (`k = 0, 1`). 1 access each (`ZCLR(...)`). Single-access.
+7. **Line 4 raised re-arm row** ([`diff_footbridge.c:1543-1560`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1543-L1560)): Makes **16 total accesses**:
+   - Accesses 1–5: 5 declines via [`ZDECLINE()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1446-L1450). Evaluates [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after *each* decline.
+   - Accesses 6–10: 5 legal reads (`RA[0..4]`; [`diff_footbridge.c:1552`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1552)). Evaluates [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after *each* read.
+   - Access 11: 1 Clear write (`ZCLR(0x400)`; [`diff_footbridge.c:1554-1555`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1554-L1555)). Evaluates [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after the write.
+   - Accesses 12–16: 5 declines via [`ZDECLINE()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1446-L1450). Evaluates [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after *each* decline.
+   - Endpoint check: asserts `ok && f0 == 5 && fatal_calls == 5 && ZCPU(1, 0) && x->irq_status == 0x10 && x->irq_enable == 0x10 && x->irq_asserted == 1 && x->fiq_status == 0 && x->fiq_enable == 0`.
+   * *What it claims kept*: All 5 fields and `irq_asserted == 1`.
+   * *Per-access check*: **YES**, checked after every single access (16 of 16).
+
+*Conclusion on Class (A)*: **No claimed-kept channel is read only at an endpoint.** Every row that claims state kept checks that claim after every access.
+
+---
+
+#### (b) Class (B): Caller Buffer Sizing and Overwrite/Overfetch Observation
+In ARM execution ([`src/cpus/cpu_arm_instr_loadstore.c:104-126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c#L104-L126)), narrow load/store operations pass local buffers sized strictly to `datalen`:
+- Byte (`A__B`): `unsigned char data[1];`
+- Halfword (`A__H`): `unsigned char data[2];`
+- Word: `unsigned char data[4];`
+
+A handler access fetching more than `len` reads uninitialized stack memory; writing more than `len` corrupts the caller's stack frame.
+
+Row audit for narrow buffer checks:
+1. **X1** ([`diff_footbridge.c:784-797`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L784-L797)): Passes `b` at `w = 1, 2` for the 5 decline sites. Checks only `memory_readmax64(cpu, b, w) == 0` for reads and announce count for writes. Does **not** check trailing bytes. **Carried by X6.**
+2. **X2** ([`diff_footbridge.c:800-806`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L800-L806)): Passes `b` zeroed at `w = 1, 2` for the 5 readable registers. Checks only the low lanes (`rd5[i].want & mask`). Does **not** check trailing bytes. **Carried by X9.**
+3. **X6** ([`diff_footbridge.c:1063-1069`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1063-L1069)): Fills `b[8]` with `0xa5`. Exercises all 5 decline sites (`IRQ_STATUS` write, `IRQ_RAW_STATUS` write, `IRQ_ENABLE_CLEAR` read, `FIQ_STATUS` write, `FIQ_RAW_STATUS` write) at `W = {1, 2, 4}` (and `8` where aligned) in both directions. Calls [`pad_kept(b, W[wi])`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) on **every access** (both reads and writes). Observes write-back past `len` on reads and buffer contamination on writes.
+4. **X9** ([`diff_footbridge.c:1187-1191`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1187-L1191)): Fills `b[8]` with `0xa5`. Exercises all 5 legal readable registers at `w = {1, 2, 4}` (and `8` at `0x180` and `0x280`). Calls [`pad_kept(b, w)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) on **every read**. Observes write-back past `len`.
+5. **X10** ([`diff_footbridge.c:1283-1287`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1283-L1287)): Fills `b[8]` with `0xa5`. Exercises all 5 legal readable registers with latches set at `w = {1, 2, 4}` (and `8` at `0x180` and `0x280`). Calls [`pad_kept(b, WY[w])`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) on **every read**. Observes write-back past `len`.
+6. **X12 & X13** ([`diff_footbridge.c:1346-1352, 1367-1373`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1346-L1352)): Legal `IRQ_ENABLE_CLEAR` writes at `w = {1, 2, 4}` with buffer filled with `0xa5` and only the bottom `w` bytes populated with data. If [`dev_footbridge_access`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L560) overfetches beyond `len`, `idata` acquires `0xa5` in its upper bytes, clearing unintended bits in `irq_enable`, which fails `x->irq_enable == ne`. Observes overfetch past `len`.
+
+*Conclusion on Class (B)*: Directly covered across all 5 decline sites, all 5 legal readable registers, and the Clear write across all valid widths ({1, 2, 4} and {8} where aligned). The earlier narrow rows (X1, X2) are fully carried by X6, X9, and X10.
+
+---
+
+#### (c) Verification of COVERED and NOT COVERED in the Contract
+- **COVERED lines** ([`diff_footbridge.c:911-935`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L911-L935)): Every statement accurately reflects the checks in the 864 rows:
+  - X6 checks return value, announce latching, fields kept, interrupt output, declined read returning 0, and [`pad_kept`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) across all 4 states.
+  - X9/X10 check legal reads across all widths and states with [`pad_kept`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) and state preservation.
+  - X11 checks cross-site latch order across all 20 ordered pairs.
+  - X12/X13 check narrow Clear writes with poisoned upper buffer bytes.
+  - X14 checks single-line assertions (7 raised lines), disjoint/status-zero drive operands, DEVINIT timer properties, and `irq_asserted` preservation with [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after every access.
+- **NOT COVERED lines** ([`diff_footbridge.c:948-1022`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L948-L1022)):
+  - Either **outside the floor** (dominated predicates / body-tested partitions): constant field comparisons, wide write data ({0x55, odd}), 24 unraised interrupt lines, address aliasing, Set arm writes below len 4;
+  - Or **honestly disclosed**: CALLER context as an entire class (`cpu` and `mem` state), Clear destinations keyed on unvaried fields (`fiq_enable & 1`), unread stores (timer state during legal accesses, SR01–SR11), announce format string conversions (FMT01), and producer pair deassert logic filed under `fbirqstuck`.
+
+---
+
+### Q2 — THE FLOOR QUESTION
+
+**Smallest unobserved and undisclosed edit**: **NONE.**
+
+**Denominator swept**:
+Swept against **748 variants** logged in [`TABLE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt) (739 inherited from 3d + 9 new variants in 3e):
+1. **Head tests**:
+   - `writeflag == MEM_WRITE` fetch condition: inverted or gated.
+   - Fetch width: `len < 4 ? 4 : len` (R3E_WB4) killed by 96 rows in X6/X9/X10.
+   - Read write-back width: 8-byte write-back (R3E_WB8) killed by 144 rows in X6/X9/X10.
+   - Address range: Timer range bounds [0x300, 0x36c] folding.
+2. **Five decline arms** (`0x180`, `0x184`, `0x18c`, `0x280`, `0x284`):
+   - Direction test inverted, omitted, or conditioned on width/data/state.
+   - Latch checks `!d->warned_*`: omitted, negated, toggled (`irq_asserted ^= 1`; R3E_CXT1 killed by 3 rows in X14), or cleared cross-site.
+   - Announce invocation: stubbed, omitted, or format-mutated (FMT01 disclosed).
+   - Declined read value: returning non-zero killed by X1 and X6.
+3. **Clear write in +0x18c**:
+   - Enable mask logic: clearing wrong width killed by X12/X13.
+   - Raw status zeroing: R3E_CXS2 killed by 2 rows in X14.
+   - Drive test `d->irq_status & d->irq_enable`: operator mutations (`&` -> `&&`, `|`) killed by disjoint and status-zero cells in X14.
+   - Drive interrupt line routing: 7 raised lines checked in X14; destination keyed on `fiq_enable & 1` (R3E_CXD1) disclosed.
+4. **Common tail**:
+   - Write-back gating: `writeflag == MEM_READ` mutated.
+   - Return value: `return 1` -> `return 0` killed across all rows.
+
+Every mutant that passes the 864 rows falls strictly within the contract's disclosed non-covered classes.
+
+---
+
+### Q3 — ADJUDICATION OF FINDINGS (T1–T12, DD1–DD3)
+
+| Item | Ruling | Evidence / Verification |
+|---|---|---|
+| **T1** | **UPHOLD** | Codex toggle mutant `R3E_CXT1` passed on 3d; killed on 3e by 3 rows in X14 via [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) ([`TABLE.txt: line 697`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt)). |
+| **T2** | **UPHOLD** | Read write-back width overflow `R3E_WB4` (RED 96) and `R3E_WB8` (RED 144) caught by [`pad_kept`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) in X6, X9, X10 ([`TABLE.txt: line 700-701`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt)). |
+| **T3** | **UPHOLD** | Caller context properly bounded and disclosed as an entire class (*any caller state*) ([`diff_footbridge.c:988-994`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L988-L994)). |
+| **T4** | **UPHOLD** | Destination keyed on unvaried `fiq_enable & 1` (`R3E_CXD1`) green on both; honestly disclosed ([`diff_footbridge.c:971-974`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L971-L974)). |
+| **T5** | **UPHOLD** | Unread state stores (SR01–SR11, AS01–AS08) outside the floor; disclosed in contract ([`diff_footbridge.c:998-1003`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L998-L1003)). |
+| **T6** | **UPHOLD** | Format conversion with no vararg (FMT01) disclosed under TEXT line ([`diff_footbridge.c:995-997`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L995-L997)). |
+| **T7** | **UPHOLD** | Records corrections verified: 0xa5 poison rationale ([`diff_footbridge.c:1235`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1235)), E3 reason ([`diff_footbridge.c:1538`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1538)), FS02 condition ([`diff_footbridge.c:1008-1010`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1008-L1010)), W02 ([`diff_footbridge.c:1016`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1016)), Opus result dirs verified present. |
+| **T8** | **UPHOLD** | Verified in [`TABLE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt): `R3E_GLM1` RED 23, `R3E_GLM2` RED 149 on both 3d and 3e. |
+| **T9** | **UPHOLD** | [`x14_new`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L119) takes `int devinit` as 5th argument; `RA[i].want` compared at line 1552. |
+| **T10** | **UPHOLD** | Verified in [`TABLE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt): `R3E_CXS2` RED 2 on both 3d and 3e. |
+| **T11** | **UPHOLD** | Gate offline summary difference is filed under `fbgateidentity` ([`gate_offline.sh:612-614`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L612-L614)). |
+| **T12** | **UPHOLD** | D4 / row-demand rule preserved without gratuitous addition. |
+| **DD1** | **UPHOLD** | Closed by CXT1 kill via [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after every decline. |
+| **DD2** | **UPHOLD** | Closed by disclosing caller context as an entire class. |
+| **DD3** | **REFINE** | Enumeration of multi-access rows *with a kept claim* is complete. However, contract comments at [`diff_footbridge.c:1002-1003`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1002-L1003) and [`diff_footbridge.c:1414-1416`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1414-L1416) overstate this by omitting "with a kept claim". |
+
+**Which of the author's accepted dispositions is wrong?**
+None is wrong in engineering substance or measurement. However, in **T5 / T7 (Contract Comment Drafting)**, the author accepted a comment phrasing:
+- [`diff_footbridge.c:1002-1003`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1002-L1003): *"X14's multi-access rows check the five fields after every access since 3e;"*
+- [`diff_footbridge.c:1414-1416`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1414-L1416): *"Repair 3e (3d's own pass) checks every field and irq_asserted after EACH access of the multi-access rows..."*
+
+This claim is **overbroad**: DEVINIT legal reads (5 accesses; [`diff_footbridge.c:1482`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1482)) and DEVINIT Set/Clear (2 accesses; [`diff_footbridge.c:1489`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1489)) are multi-access rows in X14 and do *not* check the five fields after every access. The claim is true only for *multi-access rows with a kept claim* (the DEVINIT declines rows and the re-arm row).
+
+---
+
+### Q4 — RECORDS AND ARTIFACT AUDIT
+
+#### Artifact Existence Check (`ls`)
+All artifacts cited in the changed comments exist on disk under [`regress/artifacts/fbd5/q2_20260923/`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/):
+- [`q2e_opus/SUMMARY.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/q2e_opus/SUMMARY.txt) (Present; size 17,617 bytes; ends with `SUMMARY_DONE`)
+- [`q2f_opus/SUMMARY.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/q2f_opus/SUMMARY.txt) (Present; size 16,330 bytes; ends with `SUMMARY_DONE`)
+- [`q2g_opus/SUMMARY.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/q2g_opus/SUMMARY.txt) (Present; size 17,843 bytes; ends with `SUMMARY_DONE`)
+- [`r3d_20260923/`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3d_20260923/) (Present; directory)
+- [`r3e_20260923/`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/) (Present; directory with `TABLE.txt`, `PREDICTIONS.tsv`, `R3E.log`)
+
+#### Veracity of Changed Comments
+1. [`diff_footbridge.c:135-137`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L135-L137): **TRUE**. Corresponds exactly with [`cpu_arm_instr_loadstore.c:104-126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c#L104-L126).
+2. [`diff_footbridge.c:912-914`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L912-L914): **TRUE**. X6, X9, X10 evaluate [`pad_kept`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145).
+3. [`diff_footbridge.c:929-930`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L929-L930): **TRUE**. DEVINIT declines evaluate [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after each decline.
+4. [`diff_footbridge.c:934-935`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L934-L935): **TRUE**. Re-arm row evaluates [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after each access.
+5. [`diff_footbridge.c:971-974`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L971-L974): **TRUE**. Clear write destination routing behavior accurately stated.
+6. [`diff_footbridge.c:988-994`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L988-L994): **TRUE**. Caller context class accurately stated.
+7. [`diff_footbridge.c:1002-1003`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1002-L1003): **INACCURATE/OVERBROAD**. States *"X14's multi-access rows check the five fields after every access since 3e"*; misses the qualifier *"with a kept claim"*.
+
+---
+
+### Q5 — CLOSING
+
+**Is this pass VALID to close the chain?**
+**YES.**
+- The diff for repair 3e is delivered and in place in [`regress/diff_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c) (md5: `15a1c2a2`).
+- The row roster is 864 rows with identity row-count check intact ([`diff_footbridge.c:1579`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1579)).
+- The zero floor breach is accompanied by a denominator of **748 variants** swept and verified in [`TABLE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt).
+- Both classes (A) and (B) are closed in the instrument:
+  - Class (A): Intermediate state toggle/cancel escapes eliminated by [`ZKEPT()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1440-L1441) after every access of all rows claiming preserved state.
+  - Class (B): Caller buffer overfetch and write-back overflows observed across all 5 decline sites, 5 readable registers, and the Clear write via [`pad_kept`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L138-L145) and poisoned bytes.
+
+---
+
+### Additional Findings
+1. **DEVINIT Instance Reuse**: In [`diff_footbridge.c:1478-1501`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1478-L1501), instance `x` is instantiated once per `tk` and sequentially passed through:
+   (1) 5 legal reads, (2) Set 0x40 then Clear 0x10, and (3) the 5 declines.
+   Because `x` is not re-created between (1), (2), and (3), any un-restored mutation from (1) or (2) is caught by (3)'s terminal check ([`diff_footbridge.c:1499-1500`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1499-L1500)).
+2. **Comment Discrepancy**: Clarification of the phrase *"X14's multi-access rows"* to *"X14's multi-access rows with a kept claim"* in [`diff_footbridge.c:1002`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1002) and [`diff_footbridge.c:1414`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L1414) should be recorded in the commit log.
+
+---
+
+### Seat Record
+- **Model**: Gemini 3.8 Flash (High)
+- **Files Read**:
+  - [`_scratchpad/panel_20260923_210234/brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260923_210234/brief_sent.md)
+  - [`GXEMUL-SEC/regress/diff_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c)
+  - [`GXEMUL-SEC/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c)
+  - [`GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c)
+  - [`GXEMUL-SEC/src/devices/bus_pci.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c)
+  - [`GXEMUL-SEC/regress/gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh)
+  - [`GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt)
+  - [`GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/q2{e,f,g}_opus/SUMMARY.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/q2e_opus/SUMMARY.txt)
+- **Commands Run**:
+  - Git status & log audit
+  - MD5 / SHA256 checksum verifications
+  - Symbol and line verifications across sources and artifacts
+
+---
+
+GO

@@ -1,0 +1,151 @@
+I'll start by reading the full pass-2 brief, then check the six-file diff and kill-table artifacts against the tree rather than ratifying the packet.HEAD is `f685d75`. Next I’ll read the six working-tree files, the frozen patches, and the kill-table artifacts instead of trusting the packet.I'll open the product file, the three probes, the P-rows, and the kill-table logs in parallel so the review is against the tree, not the packet.The product arms look right at first glance; next I’ll walk the guest encodings, H1/H2 paths, P-row identity count, and the table logs.**VERDICT: PRODUCT FIX SOUND — do not treat the detector as class-closed.** Member 3 is still the right disposition: common tail runs, the +0x18c leak is gone, modeled IRQ/FIQ state does not change. The kill-table numbers I opened match TABLE2.log. Two header sentences are false, and `&& len == 4` at any site other than IRQ_STATUS (and halfword-first even there) is predicted to sweep the shipped composite. That is L1/L4, not an L2 floor breach under the adopted (d) letter.
+
+---
+
+## Q1 — Premise audit
+
+Settled from the **working tree** `GXEMUL-SEC/src/devices/dev_footbridge.c` (latch fields present; this is the uncommitted fix, not HEAD). Line numbers match the fork, not the 744-line scratch copy.
+
+| Premise | Result | Anchor |
+|---|---|---|
+| `fatal()` prints and returns; not gated by `-q` | **TRUE** | `debugmsg.c`: `fatal()` has no early-out; `debug()` returns at the quiet/`v < 0` test |
+| Every process death in this device is `exit(1)` | **TRUE** | Four remaining `exit(1)`: SDRAM reads + two DEVINIT `default`s |
+| Five sites/directions are 5/5 | **TRUE** | Table 7-10 `dc21285.txt` 180h–18Ch / 280h–284h; `:6803` one-sentence form |
+| Table 7-1 “R = Read only…” is the PCI-config legend, staggered | **TRUE** | `:4505-4520` — names sit on the line *above* the abbreviations |
+| Figure 7-2 `:6814` supports “declined read returns 0” | **FALSE** | `:6814` is the interrupt-source diagram. Zeros for a nonexistent CSR are `:1652` |
+| FAULT unavailable on ARM | **TRUE** | `memory_rw.c` exception arm is `MEM_MIPS` / `MEM_M88K` only; no `MEM_ARM` |
+| File had no latch; 15 fields | **TRUE** of the pre-fix struct | Five `warned_*` fields are the first latches; DEVINIT `memset(d, 0, sizeof *d)` at the current `:791`; differentials `calloc` at `diff_footbridge.c:151` and `diff_fbpending_bound.c:143` |
+| P-rows must seed by field write (NULL `d->irq` under calloc) | **TRUE** | P-block installs `noop_assert`/`noop_deassert` before P8’s EnableClear write |
+| Unknown `-E` → `fatal("Sorry, emulation \"%s\"")` … `return 0`; `main` `if (!res) exit(1)` | **TRUE** | `machine.c:240-258`; `src/core/main.c:541-544` (path is `src/core/`, not `src/main.c`) |
+| `quit` sets shutdown flags; `main` returns 0 | **TRUE** | `debugger_cmds.c:1636-1637` (`emul_shutdown` / `exit_debugger`); `main.c:807-821` |
+| Four live `exit(1)` remain (two SDRAM + two DEVINIT) | **TRUE** | Counted 4; +0x28c already silent; 190h/290h (`IRQ_SOFT`/`FIQ_SOFT`) have no `case` → `default:` |
+| FIQ enable unobservable from the guest (+0x288 reads 0) | **TRUE** | `FIQ_ENABLE_SET` write-only arm; read leaves `odata` 0 |
+| `fiq_status` has no product writer | **TRUE** | Only reads of the field in `src/` are the two FIQ status/raw read arms |
+| Common tail still runs on every declined access | **TRUE** | All five arms `break` (no early `return`). Tail is `if (writeflag == MEM_READ) memory_writemax64(... odata); return 1;` |
+| Any of the five arms change **modeled** state? | **NO** | They set only their latch. No store to `irq_status`/`irq_enable`/`fiq_*`; no `INTERRUPT_*` |
+| +0x18c leak gone? | **TRUE** | `odata = d->irq_enable` deleted; `odata` stays 0; a declined read therefore writes 0 |
+
+**Declined read path:** `odata` is function-local and starts at 0, so +0x18c returns 0 through the common tail (`return 1` = handled, not `return 0` / FAULT). **Declined write path:** `writeflag == MEM_WRITE`, so the tail does not write `odata`; the store is ignored.
+
+K1 already existed and is retired: **TRUE** (KILL_LOAD removed; gate K1 check removed). Gate **display** grep at the footbridge excerpt still names `K1` and does **not** echo H/S/N lines — hygiene, not a pin hole (`FOOTBRIDGE_SITES_PASS` still binds the probe).
+
+HEAD `f685d75` byte-identical to `9c28ca5` for these sources: **NOT CHECKABLE** here (no `cmp`); the log is records-only after `9c28ca5`, which is consistent.
+
+---
+
+## Q2 — Smallest edit that still passes
+
+**Primary: `else if (!d->warned_fiq_raw_w && len == 4)` (or the same conjunct on IRQ_RAW / FIQ_STATUS / IRQ_ENABLE_CLEAR).**
+
+P9 is a **byte-first IRQ_STATUS** instance only. Guest arm S is all word `str`/`ldr` (`B=0`). The per-site “byte and halfword: still latched” checks run **after** the word access has already latched, which PRETABLE correctly called equivalent. M11 killed P9 and **only** P9 (`diff_M11.log` / TABLE2: `111 rows, 1 failures` on the P9 line; sites 36/36). Move the conjunct to another site and P9 stays green, guest stays green.
+
+Finer sibling, still unbuilt: **`len == 4 \|\| len == 1` at IRQ_STATUS** (skip halfword-first). P9 is byte, not halfword. Halfword-first is unrowed at all five sites.
+
+**Second, also unbuilt: IRQ_STATUS latch cleared by a legal IRQ_STATUS read** (`warned_irq_status_w = 0` in the READ arm). Arm S’s STATUS read (S1) is **after** both STATUS writes (the between-read is RAW). P7’s legal STATUS read is **after** the declined pair; nothing declines again. Guest and P-rows stay green. (The inverse — cleared by the **sibling** RAW read — **is** caught: that read sits between N1’s two writes.)
+
+Candidates the brief named that **do not** escape:
+
+| Candidate | Why it does **not** pass |
+|---|---|
+| Drop `(once)`, keep the register name | N1–N5/`TEXTS` require the substring including `(once)`; N0 requires five distinct hits |
+| Store into the **other** family’s status | IRQ write 0x10 → SF2/S5; FIQ write 0x40 → S2/SF1 (raw 0x40). P_STATE_OK too |
+| Duplicate a green S-line to hide a missing S5 | `FOOTBRIDGE_SITES_PASS` still requires `all(results)`; the S[1-5] count pin is weaker than E’s distinct-ids pin, but not a ship hole |
+
+---
+
+## Q3 — Floor
+
+**(a) TRUE.** HEAD sites 21/36 (SC1 SA1 S1–S5 SF1–2 N0–N5); differential dies at P1. TABLE2.log lines 4–5.
+
+**(b) TRUE of the detector, measured at one site.** M1 reinstates `exit(1)` at FIQ_RAW_STATUS (last of the five). Arm S still HOST-DIES (21/36); diff rc=1. The other four reinstatements are the same shape and all sit on the same one-process arm, so the detector fails them by construction even though only one build ran. Not L2.
+
+**(c) TRUE** via IDENTITY `111` on the differential (stale copy still saying `33` reds). Sites probe has no identity count; the composite includes the differential.
+
+**(d) DEPENDS-ON enumeration** (enclosing function only):
+
+Dominating predicates on the edited lines: `writeflag == MEM_READ` vs the `else if (!warned_*)` on each of five sites. Guard operands: the five latch fields, each written at exactly one `= 1`. Guarded **decline** bodies read/write only that latch + `fatal()` — **no** `irq_status`/`irq_enable`/`fiq_*` and **no** `len`.
+
+Operand-swap from body-read fields of the **decline** body: empty except the latch itself (M4 is the copy-paste of the wrong latch; measured 34/36 + P6).
+
+`len` is a `DEVICE_ACCESS` parameter the decline body **never tests**. Under the adopted bound (floor = dominating predicates × device-state lvalues the repair path jointly reads), **`&& len == 4` is not a floor cell.** Same for a legal-path latch clearer (new writer, not a dominating predicate of the diff). **No L2.**
+
+It **is** the #499 *shape* as construction debt: they closed the width cell the mutant used (P9 @ IRQ_STATUS byte) and left the other four sites, and halfword-first, open. That is L1 if this commit is still being built, clause (e) if they disclose it. It is not a measured false pass of a floor cell.
+
+**(e) Incomplete / overclaim (L4).** Honest and present: guest cannot see nonzero `irq_status`; FIQ expressions are seeded, not product-produced. **Missing:** widths are **not** “rowed offline” in general — only IRQ_STATUS byte-first. Probe header also says the FIQ expression is “unpinned everywhere” **and** that P-rows pin it; P0 does pin `0x40` vs `0x50` against a seed. Drain/witness H1/H2 are implemented but **not gate-pinned** (`fbpending_*` do not appear in `gate_arm.sh`; drain is REPORT-ONLY).
+
+**(f) Anchored enough.** A1 = 0x1011, S3 = 0x30 at +0x188, P0 expressions against seeds. Not a pairwise-distinctness suite. A one-word decode slide of the IRQ block lands on another decline site and misnames N-text (N0/N1/N2).
+
+---
+
+## Q4 — Harness legs
+
+They replace **failability** (“this launcher notices a dead child”), not the old K1 fact (“a **device** access killed the host”). The header is honest about that. Together: H1 = spawn-time death with a diagnostic that names **this** `-E`; H2 = death **after** a device-reaching prologue, exit 0.
+
+**`dead` before teardown, all three: TRUE.**
+
+- Sites: `h2["dead_before_close"] = dead[0]` inside `run_arm` **before** the drain/`os.close` block.
+- Drain and witness: `dead_before_close = s.dead` then `end = s.close()`.
+
+**Prologue scoring:**
+
+- Drain/witness: `not bad and len(ex) == PROLOGUE_N` (21 / 18) and r3 bit0 clear, r5=0x11223344, r6=VENDOR, r7=LOADBACK. **TRUE.**
+- Sites: no `PROLOGUE_N`; `len(badis)==0` plus r3/r5/r6 and **r1=0x00345678**. Adequate and different. `quit_rc` is recorded, not scored, in all three — next_rc + dead + exit 0 carry it.
+
+**`send()` timeout:** HEAD called `wait(...)` **without** forwarding `timeout`; the diff adds `timeout=timeout`. `send("reg", timeout=30)` already existed; it was a no-op on the wait budget. The function is nested in `run_arm` — nothing else in the tree calls this `send`. Drain/witness already forwarded.
+
+**M14 confirmed from the logs:** weakened H1 `named=False ok`; shipped predicate `named=False FAIL` on the same `-M notanumber` launch.
+
+**Smallest further vacuous leg edit (unbuilt):** observe H2 **after** `close()` (M13). On a closed fd, `send("reg")` fails, `dead` is true, exit 0 — greens while proving nothing about quit. Sites/drain/witness all take the observation first **by construction**, so this is a reorder of the probe, not of the product.
+
+Also: drop the name from the H1 text search (`"is unknown"` only). Unknown `-E` is the only one of the five refusals that prints that sentence, so it is almost as strong as the name; the **name** is what stops a renamed launch greening a pin aimed at a different string. The shipped form is the right one.
+
+Drain/witness legs are **real** and table-green, but **ungated**. A broken H2 in `fbpending_drain_probe.py` would not fail `gate_arm.sh`.
+
+---
+
+## Q5 — Option-set and records
+
+**Member 3 is still right.** FAULT is not on ARM. ACCEPT of the +0x18c leak would keep **188h’s** value at 18Ch. DELETE (silent) is member 2; the house idiom is latched `fatal()` + `(once)`. Table 7-1’s transferred “writes have no effect” licenses **no state change**, which they have; the announce is the extra member-3 piece, not a datasheet requirement.
+
+**Wrong records (L4, fix in place):**
+
+1. Probe header: *“S3 (a legal EnableClear write works…) is E5’s row already.”* S3 is a **read** of +0x188 expecting 0x30 (`sites_FIX.log`). E5 is Clear-then-read-Set. Different facts.
+2. *“arms L/T/K are byte-identical”* — K is gone (`KILL_LOAD` deleted).
+3. *“Widths … are rowed OFFLINE”* — only IRQ_STATUS byte-first (P9). Overclaim.
+4. N4/N5 “legal **sibling** read” — the between-read is the **same** register (`+0x280` / `+0x284`), not the cross pair used on IRQ. That is why a STATUS-latch clearer on a STATUS read escapes at IRQ and would be caught at FIQ.
+5. Section 1 citing Figure 7-2 `:6814` for zeros — false attribution (`:1652` is the sentence).
+6. Gate excerpt still greps `K1`.
+
+**IDENTITY 111 — enumerated:**
+
+Pre-P data rows (selfcheck restores `rows`): A1–A3, B1–B3, C1, D1–D3, E1–E4, F1, G1, H1–H2 = **18**; LIVE/CLEAR block = **14** (write pending, write deassert, read not-deassert, read not-clear, enabled read, 2-byte read, 0x32C pair, 0x36C pair, index-1 read, common-tail read, two PERIODIC reads). **32.**
+
+P-block: P0 **5**; P1/P2/P4/P5 **13** each (return, once, 4× state, interrupt, #2, byte/half, 4× state); P3 **14** (+ declined-read-returns-0); P6 **1**; P7 **2**; P8 **2**; P9 **2**. **5+52+14+7 = 78.**  
+32+78+IDENTITY = **111**. Matches the pin and `diff_FIX.log` (`111 rows, 0 failures`).
+
+Sites row count: C1–C5, A1, A2, A2b, I1, H1, H2, SC1, SA1, S1–S5, SF1–2, N1–5, N0, EC1, EA1, E0–E3, E6, E5, E4, D1 = **36**. Matches `sites_FIX.log`.
+
+ARM decode (not mnemonic-matching), N1 first store:
+
+`_str("r2", 0x180)` → `0xE5802180`  
+cond=1110, I=0, P=1, U=1, B=0, W=0, L=0, Rn=0, Rd=2, imm12=0x180 → `str r2, [r0, #384]` = IRQ_STATUS.  
+N3: `0xE590918C` → L=1, Rd=9, imm12=0x18C → `ldr r9, [r0, #396]` = IRQ_ENABLE_CLEAR.  
+D1 on the FIX log is `0 mismatches`, so the helper’s decimal `ldr/str` spellings match this emulator.
+
+---
+
+## Standing licence (else)
+
+- `&& len == 4` at four sites is the same class M11 already named; shipping P9 for one cell without disclosing the rest is the overclaim, not a new discovery.
+- Gate `^S[1-5] .*ok$` count 5 has no distinct-ids companion (E0–E6 does). Harmless while `FOOTBRIDGE_SITES_PASS` exists.
+- Comment “no state changes” is true of the **controller model**; the latch is state. Pedantic, not false.
+- I did not re-run the five startup-refusal matrix (Opus s10); H1’s text clause is load-bearing **if** that matrix holds. Named, not re-measured.
+
+**Disposition I’d accept:** ship the product decline; L4 the four header/gate sentences; either add P9-equivalents for the other four sites (and a halfword-first at one site) as L1, or put the width first-access holes into clause (e) **by name**. Do not call the composite floor-clean while the width sentence claims more than P9.
+
+---
+
+**Seat record.** Model: Grok 4.6 (this pass-2 seat).  
+Files read (working tree / artifacts / datasheet; no md5 computed — `git show` was refused here):  
+`GXEMUL-SEC/src/devices/dev_footbridge.c`, `src/core/debugmsg.c`, `src/core/main.c`, `src/cpus/memory_rw.c`, `src/machines/machine.c`, `src/debugger/debugger_cmds.c`, `src/include/thirdparty/dc21285reg.h`, `regress/diff_footbridge.c`, `regress/footbridge_sites_probe.py`, `regress/fbpending_drain_probe.py`, `regress/fbpending_witness.py`, `regress/gate_arm.sh`, `regress/artifacts/fbd5/killtable_20260919/{TABLE2.log,sites_FIX.log,sites_M14.log,sites_M14ctl.log,diff_M11.log}`, `_scratchpad/dc21285.txt`, `_scratchpad/fbd5/p2/d_footbridge_sites_probe.py.patch`, `_scratchpad/CHECKPOINT.md`.  
+Ran: `git -C GXEMUL-SEC log --oneline -5` only. **No** `run.sh`, no `gate_*.sh`, no battery, no mutant rebuild.

@@ -1,0 +1,52 @@
+**VERDICT (READ).** Brief is internally consistent. The seed change 0x50→0x60 eliminates the M7 collision (0x50&0x30 == 0x18&0x30 == 0x10; with 0x60, 0x60&0x30 = 0x20 ≠ 0x10, and every field-for-field swap in either status expression now yields a distinct value against the four-row P0 set — verified). X-row counts: 12 + 11 + 3 + 10 + 2 = 38, matches the gate pin. M1b–M1e reds = SC1,SA1,S1–S5,SF1,SF2,N0–N5,NO = 16 of 37, so 21 green, matches "21/37 -- arm S dies". Z9 reds NO only: with a perfect swap of two TEXTS, every per-site count stays at 1 and only the order row flips — consistent with `hit[0]` ordering. The brief itself names two test gaps it acknowledged but did not build (candidates 2 and 3); both survive my audit. Several items below are CANNOT SETTLE because the relevant code/text/record is not in the inlined diff.
+
+---
+
+**Q1 — which disposition is wrong (silence = uphold):**
+
+None of the F1–F50 / D1–D10 / R1–R6 / W1–W6 dispositions is wrong on the evidence given. Items I flag:
+
+- **F34 (CANNOT SETTLE, READ).** The E0-E6 distinct-green-id gate pin IS re-added in the gate_arm.sh diff. The CHANGELOG correction and the claim that "#539's partial-blob commit dropped it" are NOT in the inlined diff — I cannot verify the meta-record part. Disposition itself (carry the pin, correct the record) is plausible.
+- **F44 (CANNOT SETTLE, READ).** "7.3.30's identical-raw-status rule" is a manual citation; I have no copy of 7.3.30 here. The disclosure ("the product has no fiq_status writer: fiqenableread") is plausible because the same disclosure in section 2 lists fiqenableread as the only FIQ-related code path I see in the diff comments.
+- **F50 (CANNOT SETTLE, REASONED).** "DEVINIT's memset half is not rowed (calloc is)" — without DEVINIT I cannot verify the split is real.
+- **R2 → X4 + X5 (REFINE, REASONED, minor).** My own trace says: `!idata` rewrite is caught by X1 (non-zero write at 0x70 → no announce → X1's "announces once" red); `idata` rewrite is caught by X4 (zero write → no announce → X4 red); X5 catches `!idata` specifically at IRQ_ENABLE_CLEAR. "X1 + X4" is sufficient; "X4 + X5" is incomplete without X1.
+- **All other F1–F50 / D1–D10 / R / W (UPHOLD).** Each maps to a change I can see in the diff and the measurements back it up.
+
+---
+
+**Q2 — smallest edit to FIXED device source that passes all of (X1–X5, NO, new gate pins) now, and the row that should catch it:**
+
+- **Candidate 3 (REASONED).** In any one of the four Enable write handlers (IRQ_ENABLE_SET, IRQ_ENABLE_CLEAR, FIQ_ENABLE_SET, FIQ_ENABLE_CLEAR), add `if (idata != 0) d->warned_<this>_w = 0;`. X3 widened writes `memory_writemax64(cpu, b, 4, 0)` (zero) to all four enable registers, so the latch is not re-armed, `fatal_calls - f0 == 0`, X3 stays green. X4 writes zero to a decline site, but to a *non-enable* address, so the handler doesn't run. No row currently writes **nonzero** data to an enable register between the five declines and checks the latch. Row that should catch: a clone of X3 widened with `0x70` (or any nonzero) substituted for `0`. **Does not exist.**
+- **Candidate 2 (REASONED).** Add `INTERRUPT_ASSERT(d->irq);` immediately after the `fatal("[ WARNING ... ]")` in the decline path. The differential installs `noop_assert` per the seed comment, so asserts are uncounted offline; the sites probe's arm S uses real callbacks but does not measure `d->irq.interrupt_assert` count after a decline — only the five text-presence rows. Row that should catch: a counter on `d->irq.interrupt_assert` after one and after five declines. **Does not exist.**
+- **Candidate 1 (REFINE, REASONED).** A guard of the form `if (!warned && writeflag && (irq_status & BIT))` where BIT is set in 0x18 (bits 3 or 4) or in 0x60 (bits 5 or 6) — the seed values are chosen so the bits are always set, the guard fires in X4, X1 announces once, the test stays green. In production `irq_status` is whatever the device accumulated, the guard may not fire. Row that should catch: a second seed pass with `irq_status = 0x80` (and matching fiq_status so the masked values still discriminate). **Does not exist.** I think this is the most subtle of the three gaps.
+
+---
+
+**Q3 — can X1–X5, NO, or the new gate pins pass while the thing they name is false?**
+
+- **X1 "announces once" (REASONED).** Sound — fresh calloc per iteration, fatal_calls reset, only the decline path can increment it.
+- **X1 "narrow declined read returns 0" (CANNOT SETTLE, REASONED).** Reads `memory_readmax64(cpu, b, w)` after a declined read of IRQ_ENABLE_CLEAR. `b` is uninitialised stack in the diff. For this to be sound, the device's decline path must write 0 to the caller's buffer. **The decline code is not in the diff** — only a comment in dev_footbridge.c — so I cannot verify. If the path leaves `b` untouched, the check is undefined.
+- **X2 (REASONED).** Mask is `rd5[i].want & (w == 1 ? 0xff : 0xffff)`. Sound under either "device returns full value, bus truncates" or "device truncates internally".
+- **X3 (REASONED).** Sequence latch→reads→re-decline→expect `fatal_calls - f0 == 0`. If a read re-arms any latch, the re-decline re-announces, delta > 0, caught. Partial re-arm caught by the count going from 5 to >5; full re-arm caught the same way.
+- **X4 (REASONED, with the candidate-1 caveat).** Catches a guard conditioned on a field that's 0 in X4 (pci_init_done-style). Does NOT catch a guard of the `irq_status & BIT` form where BIT happens to be set in the 0x18 / 0x60 seed.
+- **X5 (REASONED).** Catches the `!idata` rewrite at IRQ_ENABLE_CLEAR only. Does not catch the analogous `idata` rewrite at any enable site (which is X4's job, with idata=0).
+- **NO (REASONED).** Iterates fatals in arrival order, first-match-wins among TEXTS, asserts sequence == N1..N5. A swap of two TEXTS produces a different sequence, fails. Sound PROVIDED TEXTS are not substrings of each other — I cannot verify the TEXTS values.
+- **New gate pins (READ).** `grep -E '^  ok    X[1-5] '` is the literal-string pin. `cut -d' ' -f1 | sort -u | wc -l` over the GREEN lines is the distinct-id pin (a duplicated green line counts once, so "7 distinct" proves "each of E0..E6 is green" — fable5/F2 is closed). `count=1 ` with trailing space is the field boundary; `count=10`/`count=11`/`count=12` don't match. `ROWS=37 of 37` is exact-count. C4 pin is `^C4 .*ok$` count == 1.
+
+---
+
+**Q4 — what did all nine of us miss (standing licence):**
+
+1. **send() timeout forwarding — code, not comment (CANNOT SETTLE, REASONED).** F42 ("send() now honours 30 s") is asserted in a *comment* near `def wait(mark=0, echo=None, timeout=60):`. The actual send() definition is not in the visible diff. The comment claims `, echo=x if x else None, timeout=timeout)` is the forwarded form. I cannot verify the function body.
+2. **CHANGELOG correction for #539 (CANNOT SETTLE, READ).** F34 says the CHANGELOG is corrected. No diff shown. The gate_pin re-add in gate_arm.sh is shown, but the historical-record fix is not.
+3. **The decline code itself in dev_footbridge.c (CANNOT SETTLE, READ).** Every hunk in dev_footbridge.c is a comment change. The diff shows me that "the write is declined -- no register changes, only this site's warn-once latch is set" is the new comment, but not the code that does it. I cannot audit whether the latch is actually set, the return value is actually 1, the order of `warned = 1` vs `fatal()` is correct, etc.
+4. **M9 not measured against the sites probe (REASONED).** M9 is the canonical "text-only one-edit mutant". Offline it passes (fatal() is a counter per the seed comment). On the sites probe it should red either NO (if the text appears in a different position) or one of N1–N5 (count=0 for the original text). Table 3 omits it from the guest half — a coverage hole for the cross-validation.
+5. **The candidate-1 hole, restated (REASONED).** A guard of the form `... && (irq_status & 0x08)` or `... && (fiq_status & 0x20)` always fires under the X4 seeds (0x18 has bit 3, 0x60 has bit 5), so all X1–X4 announce-counts stay correct; in production the bits may not be set; no second-seed differential exists. The X4 "changes no field" check is on `irq_status == 0x18`, not on a fresh seed.
+6. **TEXTS values for the sites probe (CANNOT SETTLE, READ).** NO relies on TEXTS being non-substring of each other. I have no values.
+7. **The "fatal() is a counter" hook (CANNOT SETTLE, REASONED).** The diff comment says it. The hook installation is in code I don't see. Trusting the comment.
+8. **arm_irqs() side effects (CANNOT SETTLE, REASONED).** XSEED calls `arm_irqs(x)` before overriding to noops. The original seed block does the same. Without seeing arm_irqs I cannot rule out side effects that bias the access path for X1–X4.
+9. **The teardown-first reordering in the launchers (READ).** The probe-side comment says M12 was measured (H2 still reds when reorder has no quit). The brief discloses the H2 close-ahead-of-send gap and that the legs cannot defend their own predicates (drop dead_before_close / prologue_ok, relax exit==0, reuse quit's result, drop name from H1's text). All disclosed, none rowed, none likely row-able from the harness side without product-side instrumentation.
+
+---
+
+**Seat record.** Model: MiniMax-M3 (per system header). Files read: none. Commands run: none. Battery/gates invoked: none. Every line of the response above is READ (drawn from the inlined packet) or REASONED (drawn by inspection of the packet). No measurement was attempted; the response is purely an audit of premises and derivations.

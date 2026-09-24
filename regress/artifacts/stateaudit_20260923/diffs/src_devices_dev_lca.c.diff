@@ -1,0 +1,29 @@
+diff --git a/src/devices/dev_lca.c b/src/devices/dev_lca.c
+index a7923f4..e6c7e4e 100644
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -296,14 +296,22 @@ DEVICE_ACCESS(lca_isa)
+ 		return 0;
+ 	ofs = (relative_addr & 3) % len;
+ 
++	/*  #540: LCA_ISA_BASE + port is a PHYSICAL address -- bus_isa_init
++	    registered the ISA devices there.  Forwarded without PHYSICAL it
++	    was translated as a VIRTUAL one, so it depended on the guest's
++	    translation: identity while ptbr == 0 in kernel mode, otherwise a
++	    walk -- a miss answered a false zero or dropped the store, a hit
++	    could misroute the access to whatever the guest mapped there.  Not
++	    NO_EXCEPTIONS: the ISA targets are DM_DEFAULT, and memory_rw would
++	    then skip their handlers altogether.  */
+ 	if (writeflag == MEM_WRITE) {
+ 		byte = data[ofs];
+ 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+-		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
++		    relative_addr, &byte, 1, writeflag, CACHE_NONE | PHYSICAL);
+ 	}
+ 
+ 	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+-	    &byte, 1, MEM_READ, CACHE_NONE);
++	    &byte, 1, MEM_READ, CACHE_NONE | PHYSICAL);
+ 
+ 	for (i=0; i<len; i++)
+ 		data[i] = i == ofs? byte : 0x00;

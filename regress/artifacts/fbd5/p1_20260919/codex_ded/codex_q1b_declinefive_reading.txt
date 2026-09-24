@@ -1,0 +1,124 @@
+VERDICT: **DECLINE all 5/5 unsupported-direction accesses.** Removing their exits leaves **2/7 existing access-path exit sites**, and **4/9 existing whole-file exit sites**. This file currently has **no diagnostic latches**.
+
+READ below means source or datasheet evidence; REASONED identifies deductions. I treated Q5’s explicit request as permission to read the named census script.
+
+READ ([dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:498), `DEVICE_ACCESS(footbridge)`; [dc21285reg.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:332), interrupt offsets) — **Q1**
+
+The five arms comprise **4/5 writes to read-only registers** and **1/5 reads from a write-only register**. Table quotations below retain the column order **“Address Read Write”**, from [Table 7-10](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6821), line 6823.
+
+| Case label; register and offset | Table 7-10 quotation; section | Supported direction today | Unsupported direction today |
+|---|---|---|---|
+| `IRQ_STATUS`; IRQStatus, `+0x180` | “180h IRQStatus --” — 6824; §7.3.29 | Read returns `irq_status & irq_enable`. | Write prints the “write to irq status?” warning, then `exit(1)`; C lines 560–567. |
+| `IRQ_RAW_STATUS`; IRQRawStatus, `+0x184` | “184h IRQRawStatus --” — 6825; §7.3.30 | Read returns `irq_status`. | Write prints “write to irq_raw_status”, then `exit(1)`; 569–576. |
+| `IRQ_ENABLE_CLEAR`; IRQEnableClear, `+0x18c` | “18Ch -- IRQEnableClear” — 6827; §7.3.33 | Write performs `irq_enable &= ~idata`, then asserts or deasserts the CPU IRQ according to the remaining enabled status. | Read assigns `odata = irq_enable`, prints “ENABLE CLEAR?”, then `exit(1)`; 595–608. **The assigned value never reaches the common read-return tail.** |
+| `FIQ_STATUS`; FIQStatus, `+0x280` | “280h FIQStatus --” — 6829; §7.3.29 | Read returns `fiq_status & fiq_enable`. | Write prints the “write to fiq status?” warning, then `exit(1)`; 610–617. |
+| `FIQ_RAW_STATUS`; FIQRawStatus, `+0x284` | “284h FIQRawStatus --” — 6830; §7.3.30 | Read returns `fiq_status`. | Write prints “write to fiq_raw_status”, then `exit(1)`; 619–626. |
+
+The corresponding section statements are:
+
+- **§7.3.29**, heading at 6886, direction at [6888](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6888): “This read-only register is a bit-wise AND of RawStatus and IRQEnable/FIQEnable.” The field is marked `R` at 6892.
+- **§7.3.30**, heading at 6901, [6903](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6903): “The IRQRawStatus and FIQRawStatus read-only registers always contain identical data.” The field is marked `R` at 6907.
+- **§7.3.33**, section number at 6905 in the extraction, register heading at 6937–6938, [6940](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6940): “This write-only register is used to clear bits in the IRQEnable/FIQEnable register.” The field is marked `WO` at 6944; lines 6944–6947 specify that written ones clear corresponding enable bits and zeros have no effect.
+
+READ ([dc21285.txt](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:1640), CSR Write/Read) — **Q2**
+
+Lines **1651–1653** say:
+
+> The selected CSR (the CSR with offset equal to SA-110 address A[10:2]) read data is driven onto D[31:0]. If a nonexistent CSR is selected within the CSR address range, zeros are read (no error action is taken). The SA-110 normally stalls for three cycles.
+
+The write rule, **1643–1645**, says:
+
+> If a nonexistent CSR is selected within the CSR address range, the write data is discarded (no error action is taken).
+
+Additionally, Table 7-1’s access definition at **4513** says: “Read only. Writes have no effect.”
+
+REASONED — These support **zero for the unsupported read**, and **discard/no state change for the unsupported writes**. Applying the nonexistent-CSR read rule to Table 7-10’s `--` read entry is a deduction from the direction-specific mapping; §7.3.33 does not separately state “reading IRQEnableClear returns zero.”
+
+The general rules explicitly say **“no error action” in both directions**. They provide no basis for a guest fault or process termination. This is documentary reasoning, not a silicon observation.
+
+READ ([dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:512), register switch and diagnostic searches) — **Q3**
+
+The denominator is **27 outer register `case` labels**, representing **23 distinct bodies** because five numeric labels share one body. This excludes `default`, the nested SDRAM-mask value switch, and initialization switches.
+
+Using your operational definition—an access returns zero or ignores a write without a message—**18/27 labels, or 14/23 bodies, contain a silent path**:
+
+| Silent path | Labels |
+|---|---|
+| Ignored writes; fixed answers on reads | `VENDOR_ID`, `DEVICE_ID`, `REVISION`, `SA_CONTROL`, `UART_FLAGS` — **5** |
+| Zero reads and ignored writes | `0x04`, `0x0c`, `0x10`, `0x14`, `0x18` — **5**, sharing one body |
+| Zero reads; `UART_RX_STAT` also ignores writes | `PCI_ADDRESS_EXTENSION`, `UART_DATA`, `UART_RX_STAT`, `FIQ_ENABLE_SET`, `FIQ_ENABLE_CLEAR`, `TIMER_1_CLEAR` — **6** |
+| Selected writes silently discarded | `SDRAM_BA_MASK` for its enumerated values; `SDRAM_BA_OFFSET` for zero — **2** |
+
+Thus **16/27** have an entire silent direction; the other **2/27** have only selected silent writes. These are implementation-pattern counts: some are missing implementations of *supported* operations, not datasheet-unsupported directions.
+
+**Announce once: 0/27 labels.** There is no `(once)` diagnostic and no diagnostic-latch field: **0/15 field declarations** in `struct footbridge_data`, lines 60–85. `irq_asserted` tracks interrupt assertion, not whether a warning has been emitted.
+
+**Explicit process termination: 7/27 labels:**
+
+| Case | Direction | Offset | `exit(1)` line |
+|---|---|---:|---:|
+| `IRQ_STATUS` | Write | `0x180` | 565 |
+| `IRQ_RAW_STATUS` | Write | `0x184` | 574 |
+| `IRQ_ENABLE_CLEAR` | Read | `0x18c` | 606 |
+| `FIQ_STATUS` | Write | `0x280` | 615 |
+| `FIQ_RAW_STATUS` | Write | `0x284` | 624 |
+| `SDRAM_BA_MASK` | Read | `0x100` | 714 |
+| `SDRAM_BA_OFFSET` | Read | `0x104` | 739 |
+
+These categories overlap: the two SDRAM cases discard selected writes silently but terminate on reads. There are also **unlatched diagnostics**: `PCI_ADDRESS_EXTENSION`, rejected SDRAM write values, and the outer `default`.
+
+`fatal()` itself only prints through `va_debug`; it does not terminate. READ: [debugmsg.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384), lines 384–391 and 118–138.
+
+READ / REASONED — **Q4**
+
+All **3/3 probes** use the CLEAR read: [sites](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:49), [pending drain](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:64), and [pending witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:75).
+
+Changing **only** `IRQ_ENABLE_CLEAR` leaves **6/7** access exit sites. Completing all five leaves **2/7**: reads of `SDRAM_BA_MASK` and `SDRAM_BA_OFFSET`. The two additional exits in `DEVINIT`, lines 843 and 879, reject unsupported machine types; they are not register accesses.
+
+The sites probe’s exact predicate at [line 402](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:402) is:
+
+```python
+k_ok = any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1
+```
+
+It requires the diagnostic substring in the collected bracketed footbridge messages and a reaped exit code of 1. It does **not** explicitly require `K["status"] == "HOST-DIED"`.
+
+REASONED — A replacement must establish that the harness detects and accurately reports a child’s termination, rather than reporting survival regardless of what happened. The existing sites comment already specifies **startup rejection plus mid-session quit, with status reaped**, at lines 63–64. Those cover termination before a prompt and after an established session. Missing status, timeout, or cleanup-induced death must not masquerade as the expected outcome. Device reachability still needs the existing positive device-value evidence.
+
+The remaining two SDRAM reads are themselves documented supported operations, so moving the control there would attach it to another model defect.
+
+READ ([exit_census.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/exit_census.py:74), counting and classification rules) / REASONED — **Q5**
+
+The script strips C comments, then searches:
+
+```python
+r"\b(exit|abort|_exit)\s*\("
+```
+
+Its per-file count is the number of stripped **lines** containing a match, lines 78–85. Here every matching live line contains one call, so that distinction does not alter the result. It does not expand macros or follow callees.
+
+For this one examined device file:
+
+| Measure | Today | After removing the five calls |
+|---|---:|---:|
+| Live termination sites | **9** | **4** |
+| Within `DEVICE_ACCESS` | **7/9** | **2/4** |
+| Within `DEVINIT` | **2/9** | **2/4** |
+
+Today there are **14 raw matches: 9/14 live and 5/14 inside comments**. The comment matches are at C lines 244, 449, 479, 590 and 665.
+
+The round removes **5/9 existing live sites**, leaving **4/9**. That assumes the calls are removed or commented out; merely making retained calls unreachable would leave the lexical census unchanged. The future raw count depends on what comments remain or are added.
+
+READ / REASONED — **Q6**
+
+- **DECLINE fits these five.** Preserve their supported operations, return zero for the CLEAR read, and ignore the four status writes. Merely deleting `exit(1)` would leave repeated diagnostics and would return `irq_enable` from CLEAR. Removing entire cases would also lose supported behavior and reach the noisy default.
+- **DECLINE + LATCHED ANNOUNCE is an optional host diagnostic policy.** The datasheet does not require it, and this file supplies no existing latch infrastructure. **FAULT** lacks support in the quoted error rules.
+- **Two direct precedents already exist:** `FIQ_ENABLE_CLEAR` silently returns zero on reads, and `TIMER_1_CLEAR` guards its write effects while retaining the common read-return tail. The latter body covers **4/4 timers** through address folding, C lines 507–509 and 683–709.
+- **FIQEnable has a separate supported-read omission.** Table 7-10 line 6831 defines `288h FIQEnable FIQEnableSet`, but `FIQ_ENABLE_SET` currently returns initialized zero on reads even after changing `fiq_enable`. That deserves consideration as **BACKED ACCEPT**, separately from these five declines.
+- **The two SDRAM registers are readable.** §§7.3.9–7.3.10 mark their implemented fields `R/W`, [lines 5844–5914](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:5844). Their missing backing and address effects warrant separate consideration of **BACKED ACCEPT / IMPLEMENT**.
+- **Timer value writes expose another dependency.** The datasheet says “TimerNValue is read-only” at 7046, while C lines 651–655 accept writes. Both pending probes use that writable model state as a sentinel. Correcting it would require reconsidering those witnesses.
+- **Raw-status identity is also missing:** §7.3.30 says IRQRawStatus and FIQRawStatus always agree. The model maintains separate fields; its interrupt callbacks update `irq_status`, while `fiq_status` has no corresponding update in this file.
+
+NOT CHECKED — Silicon, runtime behavior, Git HEAD/worktree equivalence, historical claims in comments, or a repository-wide census. **0/3 probes and 0/1 census scripts executed.**
+
+Seat record — **Codex, GPT-6.** Focused reads: `src/devices/dev_footbridge.c`, `src/include/thirdparty/dc21285reg.h`, `src/core/debugmsg.c` excerpts; the three named probe files; `_scratchpad/dc21285.txt`; and Q5’s `tools/pipeline/exit_census.py`. Read-only searches also returned snippets from `src/include/misc.h` and `regress/{asic_badaddr_probe,pit8253_latch_probe,selfmutant,sh_intprio_probe}.py`. **Nothing run beyond text-reading/search commands; nothing constructed or changed.**

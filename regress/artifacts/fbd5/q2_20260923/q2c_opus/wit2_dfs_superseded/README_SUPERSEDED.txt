@@ -1,0 +1,1 @@
+These are the DEPTH-FIRST differential reports, SUPERSEDED: their class verdicts stand but their 'shortest' witnesses are the first found in depth-first order, not the shortest.  The corrected (iterative deepening) reports are ../wit2/, classified in ../wit2_classes.txt.

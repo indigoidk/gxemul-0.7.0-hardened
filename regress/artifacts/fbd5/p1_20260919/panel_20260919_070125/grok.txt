@@ -1,0 +1,144 @@
+I'll start from the offloaded brief and the live `GXEMUL-SEC` tree at HEAD, then audit the five-site design against the datasheet and the three probe launchers rather than ratifying the packet.HEAD is one records commit past `9c28ca5`. Next I’ll enumerate the five sites, the datasheet table, and the three probe launchers from the live tree.**VERDICT: RATIFY the five-site member-3 de-fatalisation and same-commit kill-bridge retirement, with the corrections below. Do not treat “five” as the complete undefined-direction class, and do not add an announce to a sibling that is already silent.**
+
+HEAD on disk is `f685d75` (records), not `9c28ca5`. `GXEMUL-SEC/src/devices/dev_footbridge.c` still matches the inlined function (lines 498–760, 899-line file). I did not open the stale `_scratchpad/r6pass2_fb` copy.
+
+---
+
+### Q1 — premise audit
+
+**(a) Datasheet directions — four of five as stated; the table excerpt is truncated.**
+
+Quoted from `_scratchpad/dc21285.txt`:
+
+| offset | Table 7-10 (6824–6833) | prose | code today |
+|---|---|---|---|
+| 180h | IRQStatus / `--` | 7.3.29 “This **read-only** register…” (6888) | WRITE `exit(1)` at 565 |
+| 184h | IRQRawStatus / `--` | 7.3.30–33 “**read-only** registers” (6903) | WRITE `exit(1)` at 574 |
+| 18Ch | `--` / IRQEnableClear | 7.3.33 “This **write-only** register…” (6940) | READ assigns `odata = d->irq_enable` then `exit(1)` at 606 |
+| 280h | FIQStatus / `--` | same 7.3.29 (180h/280h) | WRITE `exit(1)` at 615 |
+| 284h | FIQRawStatus / `--` | same 7.3.30 (184h/284h) | WRITE `exit(1)` at 624 |
+
+The brief’s table **stops at 6831**. The next two lines, which I read and the packet did not give me:
+
+```
+28Ch   --            FIQEnableClear
+290h   --            FIQSoft
+```
+
+and 190h is `IRQSoft` write-only (6828), already in the excerpt but not in the five.
+
+**Member 3 is right for these five** because they already announce and then terminate. Keeping the text, latching it, deleting `exit(1)` is the house de-fatalisation, not a new policy.
+
+**Member 4 is wrong at every site.** The four status WRITEs must not store: `irq_status` is the live interrupt mask (`footbridge_interrupt_assert` does `d->irq_status |= line` at 378; the SET/CLEAR arms assert on `irq_status & irq_enable`). The +0x18c READ already computes `d->irq_enable`; keeping that assignment is the leak Codex M2 named.
+
+**Member 5 (FAULT) is not available on ARM.** `memory_rw.c` 603–624 raises a guest exception only under `MEM_MIPS` / `MEM_M88K`. A `return 0` here is `MEMORY_ACCESS_FAILED` with no ARM delivery. `dev_unreadable.c` is a `return 0` device; nothing in `machine_cats` installs it. The CSR rule at 1644/1652 is also “no error action is taken.”
+
+**Member 2 is the file’s own sibling, not a rival theory.** `case FIQ_ENABLE_CLEAR` (633–636): WRITE clears, READ falls through with `odata` still 0, no `fatal`, no `exit`. `case TIMER_1_CLEAR` (698–708): WRITE does the clear, READ is silent. Those are silent declines of the undefined direction. Do **not** add a latched announce to `FIQ_ENABLE_CLEAR` in this round (addition licence: that path does not terminate).
+
+The zeros warrant is analogical, not direct: 1652 is **nonexistent** CSRs. Stronger in-tree warrant for a declined READ returning 0: `FIQ_ENABLE_CLEAR` and `TIMER_1_CLEAR` already do that, and `default:` leaves `odata == 0` then hits the common tail (756–759).
+
+**(b) Latches.** `struct footbridge_data` (60–85) has **zero** latch fields. The file’s idiom is “none.” House majority is per-site `int` (`dev_wdc.c` `warned_*`). In-tree bit-field precedent: `dev_pcc2.c` `warned_unimpl`. A new `uint32_t warned_access` has **no other writer today** (DEVINIT `memset`s the struct). Collision hazard is future tense: one token that treats the word as a boolean, or two sites sharing a bit, silences four of five. **Prefer five `int`s**, or named bit constants with nothing else touching the word. Either beats an aggregate boolean (0/5 texts identical, as the brief says).
+
+**(c) K1/K2 through the three launchers — yes, if coded against each launcher’s actual helpers, not a copy of the sites register map.**
+
+All three exec the same argv shape (`-V -T -E cats -M 32 …`):
+
+- sites: nested `run_arm` (`footbridge_sites_probe.py` 182–188)
+- drain: `Session.__init__` (`fbpending_drain_probe.py` 286–293)
+- witness: `Session.__init__` (`fbpending_witness.py` 210–223)
+
+**K1 is real in product code.** Unused `-E` name → `machine_name_to_type` 240–243 `Sorry, emulation "%s" is unknown.` (the input is in the quotes) → returns 0 → `main.c` 541–544 `if (!res) exit(1);`. That is `WIFEXITED && WEXITSTATUS == 1`, no prompt. `wait()` on EOF sets `dead` and returns False in all three (`sites` 216–217; drain 326–327; witness 256–257).
+
+**K2 is observable through `send()`/`wait()` as written, and only that way.** After a live `reg`, `send("quit")` then another `send(...)`: write to a dead child raises `OSError` (`sites` 232–234; drain 348–350; witness 275–277) or `rd()` hits EOF and sets `dead`. **That observation must happen before `close()`.** `close()` / the sites teardown always writes `quit`, drains, and may `SIGKILL`; checking `dead` after that is manufactured.
+
+Do **not** paste the sites `reg` map into drain/witness. Timer-mask lives in **r1 on sites** (BODY 0x28) and **r7 on drain/witness** (drain emit 0x28; witness prologue 0x28). Drain `regs()` default `(3,5,6,7)` already matches drain/witness. Sites `run_arm` already reads r1 and r3.
+
+K1/K2 replace “the harness can still see a dead child,” **not** “a guest access can still kill.” Device reachability stays on A1/A2/E. That is the right split, provided all three launchers get both legs (Q2k).
+
+**(d) After this round, “no footbridge access these probes make ends the process” is TRUE of the current programs, FALSE of the function.**
+
+Live `exit(1)` in this file, enumerated (the brief’s “ten” is wrong; the parenthetical list is 5+2+2 = **9**):
+
+| line | site | guest-reachable via these probes? | this round? |
+|---|---|---|---|
+| 565 | IRQ_STATUS WRITE | yes if they store | yes, remove |
+| 574 | IRQ_RAW_STATUS WRITE | yes if they store | yes |
+| 606 | IRQ_ENABLE_CLEAR READ | **yes — current K** | yes |
+| 615 | FIQ_STATUS WRITE | yes if they store | yes |
+| 624 | FIQ_RAW_STATUS WRITE | yes if they store | yes |
+| 714 | SDRAM_BA_MASK READ | **no** (no probe issues +0x100) | no (`fbsdrampair`) |
+| 739 | SDRAM_BA_OFFSET READ | **no** (+0x104) | no |
+| 843, 879 | DEVINIT, unknown machine type | no (probes use `-E cats`) | no |
+
+`footbridge_isa` / `_reset` / `_pci` have no live `exit`. `default:` fatals, does not exit. After the five are gone, the probes as written never hit 714/739. A later arm that `ldr`s +0x100 still dies. Keep the brief’s “except the SDRAM pair” qualifier; drop “ten.”
+
+**(e) Complaint-text dependents — three probes, one gate pin, not hygiene.**
+
+`ENABLE CLEAR` is a substring of the +0x18c `fatal`, required by:
+
+- `footbridge_sites_probe.py` 402 (`k_ok`)
+- `fbpending_drain_probe.py` 612
+- `fbpending_witness.py` 489
+
+`gate_arm.sh` 1104–1105 pins `^K1 .*ok$` (the row id, not the text). The display grep at 1074 includes `D1` but **not D2–D5**. `gate_hygiene.sh` does not mention these five strings (it grades boot logs; this tree does not boot `cats`). Retiring K without editing all three probes plus the gate pin leaves a red K1 or a phantom `ENABLE CLEAR` check. Proposed texts keep the old wording plus `(once)`, so a leftover `ENABLE CLEAR in s.buf` on a surviving drain arm would stay quiet unless that arm reads +0x18c.
+
+---
+
+### Q2 — weakenings (which row reds, which escape)
+
+| mutant | first red | escape if |
+|---|---|---|
+| **(a)** `exit(1)` kept at one site | that site’s D row (exit 1, no continuation); if it is +0x18c, old K also stays green | other four D rows |
+| **(b)** unlatched announce | every D “once” count → 2 | counting “≥1” instead of `== 1` |
+| **(c)** two sites share one bit | the second site’s D count → 0 | one aggregate boolean, or D rows that don’t key on **that site’s** text |
+| **(d)** +0x18c keeps `odata = d->irq_enable` | **D3** (want 0 with enable 0x30; leak is 0x30) | |
+| **(e)** WRITE stores into `irq_status` | **D1** (raw/status 0x10). FIQ: **D4** (`fiq_status` has **no other writer** in the file — grep shows only the read arms) | D1 that doesn’t read +0x184 back |
+| **(f)** legal READ of IRQ_STATUS always 0 | **does not red A1 as specified** | **A1 is `status=0, enable=0x30` → AND is already 0.** It catches AND→OR (0x30), not always-0. Same for A4 (`fiq_status` is never written anywhere). Disclose, or get a nonzero RawStatus (IRQ_SOFT is unimplemented; timer assert does not run under `step` because `timer_stop()` holds SIGALRM) |
+| **(g)** announce misnames the register | that site’s D text-count | D rows that match any `[ footbridge` |
+| **(h)** K1 passes on any nonzero | K1 stays green on `-H` / usage / signal death | require `WIFEXITED && status==1` **and** the quoted name in `Sorry, emulation "%s"` |
+| **(i)** K2 passes though prologue never finished | K2 stays green if `reg` values are not checked | require MMU bit clear, RAM `0x11223344`, VENDOR `0x1011`, **that launcher’s** timer-mask |
+| **(j)** latch cleared by a legal READ | D3 (two reads) reds (count 2). **D1/D2/D4/D5 as “two writes” do not** — interleave a legal read between the two writes | |
+| **(k)** legs in one launcher only | the other two probes still die on +0x18c, or silently lose death-detection | sites-only K1/K2 with drain/witness K arms left in place |
+
+Also: put **A1–A5/D1–D5 in a new arm**, not L. I1 is `not L["fatals"]` (sites 401). The proposed texts all match the `[...footbridge...]` collector (289). Mixing them into L makes I1 fail on a correct fix.
+
+---
+
+### Q3 — option-set
+
+Member 3 for all five is the right de-fatalisation. Members the brief under-weighed, found by grepping this file and the table the excerpt cut:
+
+| member | where it already lives | apply here? |
+|---|---|---|
+| **2 silent decline** | `FIQ_ENABLE_CLEAR` READ; `TIMER_1_CLEAR` READ | alternative, not an improvement: these five already print |
+| **4 ACCEPT** | `TIMER_1_VALUE` WRITE (datasheet 7046: TimerNValue is read-only; the model stores anyway) | **no** — would mutate `irq_status` / leak enable |
+| **5 FAULT** | `dev_unreadable.c`; MIPS/M88K only in `memory_rw.c` | **not available** on this CPU |
+| **6 BACKED ACCEPT** | not in this file | no |
+| **7 IMPLEMENT** | `IRQ_SOFT`/`FIQ_SOFT` have **no case** (190h/290h, Table 7-10); they hit `default:` | **different class**, file it. Also **`FIQ_ENABLE_SET` READ** (288h is FIQEnable per 6911–6915) currently returns 0, not `d->fiq_enable` — that is the #539 sibling, not this round |
+
+`default:` (747–753) is unlatched per access, no `exit`. Do not copy it. `PCI_ADDRESS_EXTENSION` (536–538) is unlatched `fatal` on nonzero write, no `exit` — same shape, not a template.
+
+---
+
+### Q4 — smallest vacuous harness edit
+
+**K2 that only asserts `WEXITSTATUS == 0` after `close()`, and never does a post-`quit` `send()` while `dead` is still false.** That row stays green on every surviving arm today (`I1` / drain D / witness A already reap 0). It does not prove “death after guest steps,” and `close()` can manufacture `dead` via `SIGKILL` / master close.
+
+Second-smallest: **K1 that requires only `exit != 0`**, without `Sorry, emulation "<the unused name>"`. `-H` and `usage` are also `exit(1)`.
+
+Third: K1/K2 only in `run_arm`, drain/witness still on +0x18c — Q2(k).
+
+`gate_arm.sh` 1074 must grow from `D1` to the full D set; 1104–1105 must pin the **new** K1/K2, not the retired kill row. Same commit, as the brief already says.
+
+---
+
+### Else, not in the questions
+
+1. **`fiq_status` is never stored** (only read at 612/621). D4/D5 “unchanged” is therefore the only observer of a FIQ status store. There is no FIQ assert path (`TODO: FIQs` in the file header). A4 cannot grow a nonzero-status accept row without new product code.
+2. Width: the kill/decline predicate is `writeflag`, not `len`. A `&& len == 4` extra conjunct escapes word-only D rows. One byte-write D access (the E3/E6 precedent at +0x188) is cheap; otherwise disclose as clause (e).
+3. Unaligned offsets (`+0x181` etc.) still hit `default:`, not these cases — #539 already filed the A[10:2] vs full-`relative_addr` decode. Not this round.
+4. The zeros warrant at 1652 is the wrong sentence; the right ones are 1644 (nonexistent **write** discarded) plus the in-tree silent READ siblings.
+
+---
+
+**Seat record:** Grok 4.6 (this session). Read: `GXEMUL-SEC/src/devices/dev_footbridge.c`, `dev_unreadable.c`, `src/cpus/memory_rw.c` 575–624, `src/core/main.c` 541–544, `src/machines/machine.c` 158–258, `src/debugger/debugger_cmds.c` 1627–1638, `src/include/thirdparty/dc21285reg.h` 330–376, `regress/footbridge_sites_probe.py`, `fbpending_drain_probe.py`, `fbpending_witness.py`, `regress/gate_arm.sh` 1051–1125, `gate_hygiene.sh` (no hit on these texts), `_scratchpad/dc21285.txt` 1635–1653 and 6798–6954. Ran: `git -C GXEMUL-SEC log --oneline -5` only. No gate, no battery, no probe.

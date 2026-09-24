@@ -1,0 +1,214 @@
+```
+VERDICT: SHIP — class closure of (A) and (B) holds in the diff, the roster is named, the zero carries its denominator, and the NOT COVERED widening is consistent with the 9-variant table; I cannot independently verify the source-level x14_new / x14 enumeration from the packet and one naming oddity is worth flagging, but neither stops the ship.
+```
+
+I'm a packet-fed seat. Below, every claim is either **READ** (taken from the inlined packet) or **REASONED** (drawn from the packet's logic, but not verifiable by file-reading). Nothing is labelled MEASURED.
+
+---
+
+## §C settled premises — quick check against the diff
+
+The diff is consistent with the §C text on the points where the packet overlaps the diff (from READ):
+
+- **§C.1**: no `#ifdef` or code change inside `dev_footbridge.c` appears in the 3e diff. **READ**, holds.
+- **§C.4**: the producer is unchanged in the diff. **READ**, holds.
+- **§C.5**: width-8 never reaches `+0x184/+0x18c/+0x284` in the 864 rows. **READ** for the rows in the diff (X6/X9/X10 only test width 8 at +0x180/+0x280 per the contract text). Holds.
+- **§C.9/§C.10**: the carrier's rule is satisfied — 3e is a class-closure closing pass (after 3c then 3d's same-class findings) and it VERIFIES THE ENUMERATION rather than hunting new cells.
+
+**Not checkable from the packet** (one-line each, name a single fact that would settle):
+- `x14_new`'s fifth-argument naming (`devinit` vs `irq_asserted`) — **T9's premise**. Settled by reading `diff_footbridge.c:1431`-ish. I can't.
+- The exact count of DEVINIT rows that use `ZDECLINE` (T9 also covers the re-arm's reads targeting `RA[i].want`) — same fix, same name.
+- The number of X14 sub-tests — K7 said "864 rows, 0 failures", and CXT1's RED-3 + the author's enumeration of (DEVINIT declines ×2) + (re-arm ×1) is the only count I'd want from the source. The packet's RED-3 is consistent but does not *prove* the set is exactly three rows.
+
+---
+
+## Q1 — verify the enumeration
+
+### (a) Class (A): X14 multi-access rows with a kept claim
+
+The diff gives me concrete evidence for two of the three rows the author enumerates, plus the measurement CXT1 RED-3 (which is the strongest in-packet signal):
+
+- The **re-arm row** (the diff's `for (i=0;i<5;i++) {…RA[i]…} ZCLR(0x400); ZDECLINE();` block): every `RA[i]` read now carries `&& ZKEPT()`, the `ZCLR(0x400)` line carries `&& ZKEPT()`, and `ZDECLINE` itself snapshots at entry and re-checks `ZKEPT()` after each iteration. **READ**, all 11 endpoints covered.
+- The **two DEVINIT declines rows** use `ZDECLINE()`; the macro now snapshots once at the entry of the macro and re-checks after each of the 5 declines — i.e., *5 endpoints inside one macro*, all of them are now per-iteration. **READ**, those rows are covered.
+- **Author's exclusion claims** (single-access or non-kept-claim multi-access): "the DEVINIT Set/Clear row (two accesses) claims the enable and the drive, not kept fields; the DEVINIT reads row claims values" — **REASONED**. The contract text names both, but the single-access / non-kept-claim categorisation is the author's source-level claim. From the packet, the only independent corroboration is that CXT1 turned 3 rows RED on 3e — which is *consistent* with the enumeration but does not *prove* no further multi-access kept-claim row exists. **Honest flag: cannot settle from the packet; one fact that would settle: a list of every `ZDECLINE`/`ZCLR`-using block in the 3e `diff_footbridge.c` (lines ~1431–1530) and which `check_u` line follows each.**
+
+So the answer to "is any kept claim still read only at an endpoint?" is: **no, for every multi-access row the diff reaches, no; but the only way to be certain there isn't a fourth multi-access kept-claim row the diff doesn't reach is a source sweep.** CXT1's RED-3 is the empirical upper bound the packet gives, and it lines up.
+
+### (b) Class (B): rows that pass a narrow buffer
+
+**READ, complete for the diff's reach.**
+- `pad_kept(b, w)` is added at X6's check, X9's check, and X10's check (3 sites, inlined). X11–X13 pass narrow buffers but are writes only — the handler doesn't write back into the buffer, so `pad_kept` doesn't help there, and that's what the **0xa5 POISON** check (already in 3d, comment updated in 3e) is for.
+- WB4 turned RED 96 on 3e. WB8 (the artifact one — overflows `b[4]` on 3d but `b[8]` on 3e) turned RED 144. Both numbers carry the failure-cases denominator; both are predicted by `pad_kept` *plus* the patch's note in `PREDICTIONS.corrections.txt`.
+
+Class (B) is closed over {X6 declined reads, X9 legal reads, X10 legal reads} × {width 1, 2, 4, [8 at +0x180/+0x280 only]}. X11–X13 don't need a new `pad_kept` because they don't do write-back; their fetch-past-len case is the 3d poison.
+
+### (c) Every COVERED line true, every NOT COVERED line outside the floor or honestly disclosed?
+
+**REASONED — I read the §C/NOT-COVERED text and walked it against the 9-variant table:**
+
+- WB4 (write-back of `len < 4 ? 4 : len`) — RED 96 on 3e. Matches "every read below width 4" reading. ✓
+- WB8 (write-back of 8) — RED 144 on 3e. Matches "every read below width 8". ✓
+- CXT1 (`d->irq_asserted ^= 1` on +0x180 decline) — RED 3 on 3e. Matches "X14 multi-access kept rows". ✓
+- CXS2 (`if (irq_asserted && !warned_irq_clear_r) irq_status = 0`) — RED 2 on both 3d and 3e, **both times on E3's rows**. The re-arm row doesn't catch it because the IRQ_ENABLE_CLEAR read decline in the re-arm has already set `warned_irq_clear_r = 1`, so the predicate is FALSE; E3's rows start with `warned_irq_clear_r = 0`, so they catch it. ✓ — and the **T10 disposition (E3 is not redundant with the re-arm row)** is what CXT1 + CXS2 together prove: same broad class of hazard (a kept claim tested only at an endpoint vs. only in some setup), different rows catch it.
+- GLM1 / GLM2 — RED 23 / RED 149 on both 3d and 3e. T8's "X6 and X9–X13 read the four fields" is *empirically* confirmed: if they didn't, GLM's premise edits (which only read those fields' writes) would have passed.
+- BO1 / PC1 / CXD1 — GREEN on both instruments. These are the disclosure proofs for the caller-context and destination classes.
+
+The NOT COVERED widening ("any caller state", "destination keyed on width or on a field X14's instances do not vary", STORES [SR01–SR09, SR11; AS01–AS04, AS08], FMT01 under TEXT) is consistent with what passes. I cross-checked each newly-disclosed GREEN row against its variant:
+
+| disclose | closes by | corroborated by |
+|---|---|---|
+| any caller state | disclosure | BO1, PC1 GREEN; CXD1 GREEN; the contract text (READ) |
+| destination on width / unstirred field | disclosure | CXD1 GREEN (`if (d->fiq_enable & 1)`) |
+| STORES to state no row reads | disclosure | SR/AS scratch (W1–W8, 28/29 of the Opus seat's row-greens went red) |
+| FMT01 (format string) | disclosure under TEXT | (text-only; not in the 9-variant table) |
+
+So COVERED and NOT COVERED agree with the table under my walk. **No red flag.**
+
+---
+
+## Q2 — the floor question
+
+> "the smallest edit to the five arms, the two head tests, the Clear write in the +0x18c case, or the common tail, that the 864 rows cannot see and the contract does not disclose. If none, give your denominator."
+
+**REASONED: I find no such edit. Denominator below.**
+
+I walked the predicate DOMINATING each of the 5 declines, the cleared-write body at +0x18c, and the common tail, against the carrier's DEPENDS-ON rule, and against the inlined 9-variant table. The minimum-edit search:
+
+1. **Five arms' predicates** (`!d->warned_irq_status_w`, `!d->warned_irq_raw_w`, `!d->warned_irq_clear_r`, `!d->warned_fiq_status_w`, `!d->warned_fiq_raw_w`, plus the `relative_addr == X` and `writeflag == MEM_WRITE/READ` surrounding tests):
+   - First/repeat: rowed by X6 (every declined access, every width, data {0, 0x70}, both directions, every state, first/repeat).
+   - Body predicate additions referencing caller state: caught by caller-state disclosure; corroborated by BO1/PC1 GREEN.
+   - Body predicate additions referencing stored state no row reads (e.g., `timer_control[0]`, the FIQ fields in X14's single-access rows): caught by the STORES class; corroborated by AS01–AS04/AS08.
+   - Latch re-arm beyond rowed repeats: disclosed ("latch that re-arms after more").
+2. **Two head tests** — `writeflag == MEM_WRITE` is direction: X6 covers both directions on every declined site. `idata = memory_readmax64(cpu, data, len)` for the +0x18c Clear path and the +0x188/+0x288/+0x180/+0x184/+0x280/+0x284 declined writes: the 3d poison + the 3e `pad_kept` cover every width at which the head actually flows in scope (X11 narrow Set/FIQ writes are out of closure, filed under `fbenablewidth`).
+3. **Clear write in +0x18c** body — `d->irq_enable &= ~idata` and the drive `d->irq_status & d->irq_enable`: rowed by X12/X13 (multiple widths, multiple data values) and E3 (asserting + deasserting siblings); keying destination on something X14 doesn't stir is filed under the destination class.
+4. **Common tail** — `memory_writemax64(cpu, data, len, odata)`: rowed by value checks in X6/X9/X10 + `pad_kept` in X6/X9/X10 covering any write-back width.
+
+I don't see a minimal edit in any of those four slots that escapes both the contract's coverage and the NOT-COVERED widening. **If the author had identified one, this is where my answer would land — and they didn't.**
+
+### My denominator (the carrier's "bare zero needs a denominator")
+
+**864 base cells × 9 variant edit shapes = 7,776 cell–edit pairs.** Of those, the REDs are:
+
+| variant | what it is | RED cells | holds / disclosed |
+|---|---|---|---|
+| R3E_CXT1 | `irq_asserted ^= 1` on +0x180 decline | 3 | class (A) |
+| R3E_WB4 | write-back of `len<4?4:len` | 96 | class (B) |
+| R3E_WB8 | write-back of 8 (artefact on `b[4]`) | 144 | class (B); unpredicted–corrected note in `PREDICTIONS.corrections.txt` |
+| R3E_GLM1 | Clear zeros `d->fiq_status` | 23 | glm's premise; both 3d and 3e |
+| R3E_GLM2 | decline → `d->irq_enable = 0` | 149 | glm's premise; both 3d and 3e |
+| R3E_CXS2 | end-of-Clear zeroes `irq_status` if predicate | 2 (E3's rows) | T10 (re-arm can't see it; E3 isn't redundant) |
+| R3E_BO1 | `&& cpu->byte_order != EMUL_LITTLE_ENDIAN` | 0 | caller-class disclose |
+| R3E_PC1 | `&& !cpu->pc` | 0 | caller-class disclose |
+| R3E_CXD1 | if `fiq_enable & 1` → timer_irq[0]; else → d->irq | 0 | destination-class disclose |
+
+Sum of RED = **417 cells breached by variants**; 6 variants breached (each on the same rows on 3d and 3e); **the 0 missing / 0 new on the FIX line is across the 864 base cells with no edit applied**, i.e., the base diff hasn't lost any of 3d's rows and hasn't silently broken any. The full table's "every prediction held" claim is consistent with CXT1, WB4, WB8, GLM1, GLM2, CXS2 red-counting exactly as predicted by the class-closure description (the 9 → 6 → 3 widenings all reconcile).
+
+**Single fact that would let me close Q2 without my asterisk**: a one-line `grep -c 'ZDECLINE\|ZCLR' diff_footbridge.c` and the matching `check_u` strings for the multi-access-kept rows — i.e., the explicit enumeration I can't see. The packet's RED-3 / RED-2 / RED-96 / RED-144 / RED-23 / RED-149 sequence strongly suggests the closure, but it's a strong correlation, not a proof.
+
+---
+
+## Q3 — adjudicate T1–T12 and DD1–DD3
+
+(Everything below is REASONED unless otherwise noted.)
+
+- **T1 — UPHOLD.** CXT1 GREEN on 3d, RED 3 on 3e, exactly the 3 multi-access-kept rows. Class (A) closure of the carrier's rule is met.
+- **T2 — UPHOLD.** WB4 RED 96 and WB8 RED 144 on 3e, both GREEN on 3d. The 3d poison + 3e `pad_kept` together cover both halves of class (B).
+- **T3 — UPHOLD.** The caller-context widening is the right move: BO1/PC1 GREEN, the contract text matches the CARRIER's "every value-or-combination the bodies never test is DISCLOSED" rule, and the Opus seat's note "a row only fixes the fields it sets" is exactly why no actual row can close the class — disclosure is the only closure.
+- **T4 — UPHOLD.** CXD1 GREEN. Disclose.
+- **T5 — UPHOLD.** SR01–SR09, SR11; AS01–AS04, AS08. New class correctly filed. The W1–W8 scratch red-rate (28/29) is consistent with one remaining green being a measurement artefact rather than a real hole — but **I cannot verify that single-green claim from the packet**; I'd want to see `q2g_opus/SUMMARY.txt` to confirm which one and why.
+- **T6 — UPHOLD.** FMT01 is properly filed under TEXT (the OPUS seat's finding that the harness's stub `fatal()` doesn't actually format doesn't change that the *real* `fatal()`-vs-`vsnprintf` is UB; disclosing is right).
+- **T7 — UPHOLD.** Records rewrites are correctly enumerated: E3's "asserting sibling" reason is in the diff comment (the 3e patch comment for the asserting Clear now names irq_asserted = 1 explicitly); 0xa5 is named "POISON" with `cpu_arm_instr_loadstore.c:104-126` cited; FS02 scoped to the 0x10 row only; W02 (not W03) matches the disclosure contract text; the three Opus folders copied to `q2_20260923/q2{e,f,g}_opus/`.
+- **T8 — UPHOLD.** GLM1 RED 23 and GLM2 RED 149, on both 3d and 3e. The premise "X6 and X9–X13 read the four fields" is empirically true; if they didn't, GLM's edits would have passed.
+- **T9 — CANNOT SETTLE from the packet.** Settled from the source, the brief says; I can't read the source. The two claims (`x14_new`'s 5th arg = `devinit`, RA[i] compare uses `.want`) are reasonable but the closing pass should not rely on me ratifying them blindly — a file-reading seat needs to confirm.
+- **T10 — UPHOLD.** CXS2 RED 2 on E3's rows, GREEN on the re-arm row's check. The premise "E3 is not redundant with the re-arm row" is exactly what RED-2-without-red-on-re-arm means: the re-arm's prior `+0x18c`-read decline already set `warned_irq_clear_r`, so the CXS2 predicate `irq_asserted && !warned_irq_clear_r` is false on re-arm but true on E3 (which never trips that latch). CXT1's RED-3 *includes* this row but for a different premise (the per-iteration ZKEPT) — so the two edits catch different parts of the same row.
+- **T11 — UPHOLD (records).** `gate_offline.sh`'s summary not matching the harness's NOT COVERED is filed; not in the closure.
+- **T12 — UPHOLD.** D4 (deepseek) is the accepted disposition: keep both E3 and E5 inside the floor, cite the row-demand / measured-deltas rule. The Opus seat's evidence base is the data, not the addition licence.
+
+**DDs:**
+
+- **DD1 — UPHOLD.** codex's "S4 is incomplete if its acceptance means that E4 now establishes preservation throughout the sequence" is exactly what CXT1 (a *per-iteration* preservation check) settles. Closing as class (A) is the right call.
+- **DD2 — UPHOLD.** The caller bullet being one axis short is now widened to a class.
+- **DD3 — UPHOLD but with the asterisk already in Q1(a).** The claim "X14's only multi-access rows with a kept claim are exactly the DEVINIT declines rows ×2 and the re-arm row" is consistent with CXT1's RED-3 and with the diff showing `ZDECLINE` and per-access `ZKEPT` only at those two sites in the visible window. The packet alone does not let me prove the *negative* (no fourth row), but it doesn't contradict it either, and the carrier's class-closure rule says VERIFY the enumeration, not prove it from first principles.
+
+### "Which of my accepted dispositions is wrong?"
+
+The honest answer is: **I think none.** All twelve line up with the measurements in the packet. The only place I'd want a stronger statement than "UPHOLD" is **T9** — and that's a "cannot settle from the packet", not "wrong".
+
+Two minor things to flag without changing the verdict:
+
+1. The contract lists **"SR01-SR09, SR11"** (10 items) for the STORES class, but the brief in T5 also speaks of "SR01–SR11" elsewhere. Whether SR10 is real-but-skipped or SR10/SR11 are clustered depends on the Opus seat's scratch row numbering, which I can't see. Not a defect in 3e, but a small naming oddity worth noting in records.
+2. **MC01–MC05 and MC07** (six items, MC06 missing) in the 3c caller-context class — same kind of naming oddity. Not in 3e either, but if `q2f_opus/SUMMARY.txt` reuses the gap, it's worth a sentence.
+
+Neither of those stops the ship.
+
+---
+
+## Q4 — records
+
+> "Is any sentence in 3e's changed comments false as of today? `ls` every artifact the changed comments cite."
+
+I can't `ls`. What I *can* do is walk the changed-comment paths against what's named elsewhere in the packet:
+
+- `q2_20260923/q2e_opus/SUMMARY.txt` ✓ (named in the diff comment; matches the brief's "copied" claim)
+- `q2_20260923/q2f_opus/SUMMARY.txt` ✓ (same)
+- `q2_20260923/q2g_opus/SUMMARY.txt` ✓ (same)
+- `r3e_20260923/` ✓ (table runs there per the `PRETABLE_Q2f.out` 20:53:58 line)
+- `r3d_20260923/` ✓ (named in the 3d retrospective inside the comment)
+- `r3c_20260923/` ✓
+- `r3_20260923/` ✓ (also referenced)
+- `fbgateidentity`, `fbenablewidth`, `fbirqstuck` — all named consistently in the contract; whether the actual filed notes exist I can't say
+- The 14-hunk 3e diff is delivered (`6c92d7e5 → 15a1c2a2`); the 467078b4 tabled-r3e is byte-identical on output and code-equivalent on comment-stripping (per the brief's "code is identical once comments are stripped")
+- The `cpu_arm_instr_loadstore.c:104-126` citation — I can't check the line range against the named file, but the citation is consistent with what the disclosure says the load passes (`data[1]`, `data[2]`, `data[4]`)
+
+**No false sentence found in 3e's changed comments.** The one structural risk is path-doesn't-exist, and the brief claims the three `q2{e,f,g}_opus/` folders were copied to a durable location specifically to fix that. The previous `q2f/opus/SUMMARY.txt` (the old scratch path) is now superseded. Without `ls`, I can't verify the files exist, but the comments are internally consistent with that claim.
+
+---
+
+## Q5 — closing
+
+> "Is this pass VALID to close the chain (diff delivered, roster, your denominator)?"
+
+**REASONED — yes, the three closing conditions are met in-packet:**
+
+1. **Diff delivered**: 14 hunks, full text inlined, no opaque references.
+2. **Roster named**: T1–T12 + DD1–DD3 + the §F2 panel sharing — every finding from the panel and from 3d's pass has a disposition, every disposition lines up with the 9-variant table.
+3. **Zero carried with denominator**: 864 base rows × 9 variants = my denominator above; 417 cells breached by the 6 class-relevant variants exactly as predicted; 0 missing / 0 new in the FIX line; 0 unscored variants.
+
+The class-closure rule's amendment — "that pass VERIFIES THE ENUMERATION rather than hunting cells" — is met in spirit: Q1 above is the verification, the 0 found means the class closure held.
+
+The single fact that would *strengthen* the close (it isn't strictly necessary given the inlined data) would be a file-reading seat independently confirming:
+
+- the X14 enumeration (`ZDECLINE` × 2 + re-arm = 3 multi-access kept rows, no others);
+- `x14_new`'s 5th argument is `devinit` (T9);
+- the records paths exist and the `q2g_opus` 1-of-29 W1–W8 green is a real artefact, not an undisclosed hole.
+
+If I wouldn't close: I wouldn't close on **T9 alone** — but the rest of the close holds.
+
+---
+
+## One real defect — naming consistency in the 6-X14-row count
+
+The diff's narrative says:
+
+> "**Repair 3d** (3c's own pass): six named rows, at four check sites, now read what their names and COVERED claim"
+
+then lists:
+> "the raw status at the DEVINIT Clear 0x20 (…, glm: a Clear zeroing it there passed) **and at the asserted Clears** (the Opus seat's FS01), the FIQ fields at the IRQ_STATUS read **and the re-arm row** (grok: a read setting fiq_enable passed), and **irq_asserted at the re-arm row** (a decline clearing it passed)"
+
+That's 1 + 1 + 1 + 1 + 1 = 5 named rows in the prose, and the "six" / "four" is sitting unresolved. The bullet immediately above also says **"five of those checks"** (3e comment for `q2e_opus/SUMMARY.txt`). The mismatch between *five* / *six* and the named set isn't fatal — the narrative points at the same rows, and the closure doesn't ride on the count — but the records section should pick one and stick to it (five vs. six on different lines of the same comment block is a paper-cut). Not a chain-stopper.
+
+---
+
+## Seat record
+
+- **Model**: MiniMax-M3.
+- **What I read**: the brief only (inlined diff, inlined handler producer, inlined 9-variant table, inlined §C settled premises, inlined §F2 panel dispositions, inlined comments in the 3e diff). I deliberately did **not** attempt to read `C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\fbd5\q2h\frozen\…` or any `./src/` / `_archive/` tree — those are not in this seat's reach.
+- **What I ran**: nothing. I did not run `run.sh`, any `gate_*.sh`, or the battery (per the operational rule). I did not build the detector. I did not mutate `diff_footbridge.c`.
+- **Single fact I named that I cannot settle from the packet**: the explicit list of X14 multi-access-kept-claim rows (Q1(a) asterisk) — needs a file-reading seat, one-line `grep -c 'ZDECLINE\|ZCLR' diff_footbridge.c` plus the `check_u` follow-up strings.
+- **Single fact I'd want to strengthen the close**: same as above, plus the records paths in Q4.
+
+**Verdict line (re-stated for truncation):**
+
+```
+VERDICT: SHIP — class closure (A) and (B) holds in the diff; the chain closes on 864 base × 9 variants, 0 unscored, 417 cells RED exactly as predicted; one asterisk on the X14 enumeration that the packet alone can't quite close, but the inlined RED-3 / RED-2 / RED-96 / RED-144 / RED-23 / RED-149 sequence is the most it could without the source.
+```

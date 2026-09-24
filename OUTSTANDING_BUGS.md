@@ -21958,14 +21958,6 @@ z_silentexit each red 3/3 K rows.  **The record sentence this row was opened aga
 ("#218-#223 ... footbridge ... guest-reachable `exit(1)`s -> graceful"): corrected in place -- footbridge's ten
 `exit(1)` became eight in #220, seven now; the remaining seven are `fbdeclinefive` (5) and `fbsdrampair` (2).
 
-### `fbdeclinefive` (MED) — the five invalid-direction terminating sites, ONE decline round; retires the +0x18c bridge
-`dev_footbridge.c` at HEAD a11eaac :565, :574, :604, :613, :622 -- writes to read-only status registers, reads of
-write-only registers (Table 7-10).  Starting spec: codex K4's 14-row design minus its SDRAM rows; `+0x18c`'s decline
-must also stop returning `d->irq_enable`.  THIS round builds the durable harness legs in the SAME commit (startup
-rejection through each probe's own launcher; a mid-session `quit` with the status reaped) and retires #539's bridge.
-The datasheet's "nonexistent CSR: zeros are read (no error action is taken)" is the VALUE warrant; the diagnostic is
-policy.  fable5 D1/D4.  (A codex design reading, cxfarm6 q1, was content-flagged; reword or route to grok.)
-
 ### `fbsdrampair` (LOW) — SDRAM_BA_MASK / SDRAM_BA_OFFSET reads: documented R/W, write arms discard the value
 HEAD :712, :737.  DECLINE by default (member 3); BACKED ACCEPT only on a warrant -- a guest in the rig set that reads
 them back after writing (0/2 backing fields, 0/2 consumers today; codex M2).  With it: the mask whitelist rejects the
@@ -22039,3 +22031,145 @@ morning.**  `cxlaunch.sh`: stderr carrying NUL bytes (codex streams the files it
 every `ERROR:` line after the first NUL -- a walled seat read "cause NOT established" (control C18 replays the real
 2.7 MB stderr).  `seat_verdicts.py`: the old sentence fallback scored a REAL answer REFUSED on #544's own pass-1 panel
 (minimax); across 2618 seat files it had exactly one unique hit, that false one.  Both fixed in #544 with controls.
+
+## 2026-09-23 — GXEMUL [087a90]: the state audit after the 2026-09-22 Windows-Update reboot (`regress/artifacts/stateaudit_20260923/`)
+
+### `stateaudit0923` (HIGH, owner decisions) — nothing on disk was lost; the records and the tree disagree in ten places, all pre-reboot; gate 6 is red at HEAD
+Seats: codex GPT-6 Astra and grok 4.7 (two rounds each: the inventory, then a reverse reconciliation of 81 recorded
+"applied" changes), Fable 5.1 last (identity verified from its transcript).  Name-status against the 2026-09-21 full-tree
+snapshot: 0 deleted.  Every disagreement found is present in that snapshot, so none was caused by the reboot; what the
+reboot cost is the peer session's last four hours of SYNTHESIS (its files survive).  `FINAL.md` in the artifacts dir
+lists D1-D10 and the owner decisions: the gate-6 census population and one bulk pin re-derivation before the
+2026-09-27 battery (gate 6 is red at HEAD: pty 70/46, promptless 40/20, anchor 24/23, echo 24/23, whole-buffer 3/2),
+the thirteen exemptions lapsing 2026-09-28, the #545 commit and its Fable hold, and the other sessions' verified work
+that has waited uncommitted since 2026-09-17.  Two wrong CHANGELOG records were corrected in place today (#539's
+green-line claim, #517's heading); two cited durable copies were made; the peer's out-of-snapshot work was copied,
+never edited, to `peer_carriers/` (1170 files, cmp and md5 verified).
+
+### `dashmalformedheld` (LOW) — a malformed hold filed after a seat's answer renders as the plain answer on the dashboard
+The unrepaired half of `stagetokens` entry [18]'s "ALL REPAIRED": `tools/pipeline/gen_dashboard.py:143-146` keeps the
+malformed-marker fallback inside `if not ents:`, and `:173` drops held records from an answered seat's cell (both
+written by `09ded75`).  The closure checks (H, I, the wall) already refuse the case, so this is display only.  Found
+by reading, not measured; the fix owes a fixture both ways.
+
+## 2026-09-23 — GXEMUL [087a90]: `#545` fbdeclinefive CLOSES (five host kills declined, a 864-row detector); what its passes filed
+
+### `armdesc3kill` (MED) -- an ARM L1 descriptor of type 3 (fine page table) ends the process
+`src/cpus/memory_arm.c:252-254`: the `default:` of the L1 descriptor switch is `fatal("TODO: descriptor for vaddr ...
+unimplemented type %i")` then `exit(1)`.  Type 3 is a LEGAL ARMv4/v5 descriptor (fine page table, 1 KB pages) a guest
+writes into its own translation table, so any guest that uses fine page tables kills the host at its first translation.
+Options: FAULT (member 5 IS available on the translation path -- `fs = FAULT_TRANS_S; goto exception_return`, the file's
+own idiom at `:158`) as the cheap decline, IMPLEMENT (member 7) as the honest one.  Witness: rung 3, MMU ON (the sites
+probe's arm T scaffold), one L1 entry with bits [1:0] = 11.  Found by the kimi CLI on fbdeclinefive pass 1; ranked by
+fable5 Q5 (legal value beats reserved value).
+
+### `armdacr2kill` (MED-LOW) -- DACR field value 2 (reserved) ends the process
+`src/cpus/memory_arm.c:78-79`: `arm_check_access()` `case 2: fatal("arm_check_access(): 1 shouldn't be used"); exit(1);`.
+`cpu_arm_coproc.c:203` stores MCR's operand into `dacr` unfiltered and `memory_arm.c:153` derives `dav` from it, so a
+guest writing 0b10 into any domain field and touching that domain kills the host.  Architecturally reserved /
+UNPREDICTABLE; the fix is one `case 2:` treated as no-access (or as `case 0:`).  Witness: rung 3, MMU ON, DACR written
+by a guest mcr.  kimi CLI, fbdeclinefive pass 1; fable5 Q5.
+
+### `fbirqsoftunimpl` (MED) -- IRQSoft/FIQSoft (+0x190/+0x290) are documented WRITE registers with no case; every
+legal write announces through `default:`, unlatched, and does nothing
+DC21285 7.3.34 (`dc21285.txt:6952-6962`): a write to IRQSoft "generates bit [1] of the RawStatus register" (0 or 1
+from the data's bit 1), observable by reading RawStatus.  The model has no case for either address: a legal write
+prints `[ footbridge: write to 0x190: 0x... ]` on EVERY access and stores nothing -- a documented register announced as
+unknown, and a guest-drivable unlatched log line.  Member 7, ~8 lines: one case, set/clear irq_status bit 1, reassert.
+Witness: rung 3, write +0x190, read +0x184 -> bit 1 (the ONLY guest-controllable route to a NONZERO irq_status under
+single-step, which turns #545's clause-(e) disclosure into a guest row later).  Own row, not a `fiqenableread` facet
+(IRQ-side and live; fable5 Q5).  Opus seat measurement on fbdeclinefive pass 1 (`s12_sibling.out`); codex q2 census
+(`regress/artifacts/fbd5/p1_20260919/codex_ded/codex_q2_fiq_csrlanes_census.txt`: IRQSoft/FIQSoft are aliases for a SHARED raw bit
+1, not independent pending bits).  Ranked above `fiqenableread`; the next EASY resolvable item after #545.
+
+### `fiqenableread` -- facet (2) carries a recorded DISSENT (late-dissent rule, disposition 3)
+Opus 5 seat, fbdeclinefive pass 1, verbatim: "28Ch (FIQEnableClear) -- the exact FIQ twin of 18Ch -- ALREADY declines
+silently and returns 0 today ... the cheapest resolution is to give 28Ch the same latched announce in the same commit
+(one more arm, one more bit; it is the same class and the same file)."  Ruled NOT this round by fable5 on the reopening
+rule's WITNESS clause (a +0x28c read returns 0 before and after any announce: no red-pre/green-post symptom, only a host
+log line) and because one field takes the controller from four dispositions to three, not one -- the honest disposition
+for the FIQ half is this ONE row.  #545's contract states the asymmetry in the probe header.
+
+### `fbirqstuck` (MED) -- the footbridge's CPU interrupt line can stick high while IRQ_STATUS reads 0
+`footbridge_interrupt_deassert()` lowers `d->irq` only when `d->irq_asserted` is set, and the IRQEnableSet and
+IRQEnableClear write arms call `INTERRUPT_ASSERT(d->irq)` without setting it.  So: a device line (cats ISA, line 10)
+asserts while its enable bit is clear (no assert); the guest sets the enable (`W188 0x400` -> ASSERT, `irq_asserted`
+still 0); the line deasserts -> no DEASSERT.  The CPU line stays 1 with nothing pending -- a guest can take interrupts it
+cannot clear.  Found and measured by the Opus seat on #545's repair pass 2 (an in-process differential over every
+access sequence of length 1-3 from reset; `regress/artifacts/fbd5/q2_20260923/p2r_20260923/opus_q2r/dom_witness.txt`, "model check").  Pre-existing:
+the enable arms' bodies are upstream's.  Fix: the enable arms keep `irq_asserted` as the callbacks do.
+*** AND THE PRODUCER PAIR'S OWN BIT LOGIC IS FILED HERE, BY OWNER RULING (2026-09-23), and it is a DIFFERENT defect
+from the stuck-high line above (grok, #545 3c's pass): a round closing F13 can finish without touching it, so the round
+that takes this item owes both. ***  #545's detector calls `footbridge_interrupt_assert()` only to raise one line from
+an empty status (and checks that raise: irq_status 0x10, irq_asserted 1, one CPU assert -- PR09 reds it) and never
+calls `_deassert()`.  So the pair's bit logic passes all 864 rows and is disclosed in the detector's contract: `|=` ->
+`=` in the assert (PR01), the enable test weakened to `if (d->irq_enable)` (PR03), the `~` deleted from `_deassert`'s
+`irq_status &= ~interrupt->line` (PR04; r3_20260923/t_deassert.txt).  READY DETECTOR: the Opus seat's q2e scratch rows
+Y8-Y12 and its PR01/PR02/PR04/PR07 witnesses (q2_20260923/q2e_opus/).  OPTIONS the #545 passes named: a bounded
+producer smoke block of five histories (repeated assert, a second line, a disabled line, deassert of one of two
+pending lines, deassert of the last enabled -- codex); a one-row two-line raise pinning `|=` (minimax); a dedicated
+`diff_footbridge_irq.c` (agy).  The owner chose none of them for #545: disclose and file.
+
+### `fbgateidentity` (LOW, harness) -- gate_offline pins the footbridge families by COUNT of distinct green names, not by WHICH names
+`gate_offline.sh`'s `fb_distinct` counts distinct green row names per family (at 864 rows: P 78, X1-X8 440, X6 248, X7 148, X8 6, X9 100, X10 72, X11 80, X12 20, X13 20, X14 21).  A required row replaced by another uniquely-named passing assertion keeps every count, so an edit to the DETECTOR that swaps a scenario out is invisible to the gate (the dedicated codex reading on #545's first repair, task 4: the brief `regress/artifacts/fbd5/q2_20260923/p2r_20260923/codex_ded_q2r.md`, the answer `.../p2r_20260923/codex_q2r.txt`).  Not a floor question for #545 -- it concerns edits to the detector, not to the product.  Fix shape: pin a digest of the sorted green-name list per family (the names are all unique on the fix), so a swap reds by name.
+And the gate's own footbridge "Not covered" summary lists less than the detector's NOT COVERED contract (the Opus seat, #545 3d's pass, T11) -- a records fix for the same commit that fixes this.
+
+### `fbenablewidth` (LOW) -- the enable arms at len 8, and the Set / FIQ writes below len 4, are unrowed
+#545's floor ends at the five decline arms; the IRQ/FIQ enable arms (+0x188/+0x288) share no case with a decline.  So
+a `len == 4` conjunct on their direction tests, on the write-data fetch with the Clear address exempted, or `len != 8`
+on the fetch, passes every row (measured, q2_20260923/closing_20260923/CL.log), and IRQEnable's 8-byte read (an LDRD at
++0x188) is not read by any row.  An LDRD/STRD at +0x188 or +0x288 -- or at +0x18c/+0x28c, which the ARM load/store
+unit aligns down onto them -- is a guest input.  Disclosed in the contract's NOT COVERED list.  Fix shape: X9/X10
+rows for the enable arms at width 8, and the narrow Set/FIQ writes, each with a measured mutant.
+
+### `fbclrdest` (LOW) -- WHICH interrupt a narrow IRQ Clear write drives is unobserved
+`INTERRUPT_ASSERT(*(len < 4 ? &d->timer_irq[0] : &d->irq))` in the Clear arm passes all 864 rows (XC_dest,
+r3c/r3d tables): X14 counts the CPU line apart from the timer interrupts only at len 4, and X9-X13 count every call
+on one shared pair.  Disclosed (the Clear write's body is not an edited line).  OPTIONS: re-wire X9-X13's `d->irq` to
+X14's CPU counter pair -- zero new rows, X12/X13's narrow Clears then see the destination (the Opus seat, 3c's pass);
+or one len-1 Clear row on X14's split counters (codex, grok, agy, minimax).  Either owes a table: re-wiring changes
+what 40 rows observe.
+
+### `fbcallerctx` (LOW) -- every #545 row calls the handler with mem NULL on a machine of type MACHINE_NONE
+So a condition on `mem` or on the machine type in any of the five arms' tests passes all 864 rows: the Opus seat's
+MC01-MC05 and MC07 (q2f/opus/SUMMARY.txt; green again on 3d, r3d_20260923) -- e.g. `if (writeflag == MEM_READ &&
+!mem)` at +0x184 declines every real caller's IRQ_RAW_STATUS read, and a netwinder-only Clear mask leaves ISA line 11
+unmaskable.  Clause (e): no body of the five reads `mem` or the machine type.  READY DETECTOR: the Opus seat's scratch
+extension (q2f/opus/mkext_q2f.py, diff_ext.c: a cats and a netwinder caller with a real mem, 871 rows, 0 failures on
+the fix, 8 of its 9 greens red).
+
+### `fblatchhistory` (LOW) -- a latch that re-arms after more repeats than any row makes passes
+`else if (!(d->warned_irq_status_w++ & 3))` announces at the first decline and again at the fifth; no instance
+declines one site five times (X6: first and repeat; X11: pairs; P1: four), so it passes all 864 rows (R3D_LH1,
+r3d_20260923; codex's dedicated job, 3c's pass).  Clause (e): the latch test partitions {0, nonzero} and both are
+rowed; a longer history is unbounded (`& 7` needs nine).  A function-static counter is invisible to any row.
+
+### `fbtimercomments` (records, LOW) -- three pre-existing false sentences in diff_footbridge.c / gate_offline.sh
+Filed from #545's passes (R17; codex's dedicated jobs on repair 3's and 3c's passes), not edited in #545 because the
+text is the timer campaign's: "EVERY REAL ROW IN THIS FILE COMPARES NUMBERS" (E2, E3, F1 and G1 compare strings); the
+`fbclearread` paragraph in the present tense ("`case TIMER_1_CLEAR:` carries NO writeflag test") after #474 guarded
+it; and "a DISABLED timer can never hold a pending interrupt" (also in gate_offline.sh): the timer callbacks count
+pending ticks without testing TIMER_ENABLE, and disabling does not remove the registered timer -- a product question
+for the timer campaign as well as a records one.
+
+### `fbbufbounds` (LOW) -- the footbridge handler's use of the caller's buffer beyond `len` is checked only after X6's declines and X9/X10's reads
+A real ARM narrow load or store hands the device a 1-, 2- or 4-byte buffer (`data[1]`, `data[2]`, `data[4]`;
+`cpu_arm_instr_loadstore.c`), so a fetch or a write-back past `len` reads or writes past it.  #545's repair 3e added
+`pad_kept()` -- the bytes above the width still hold the 0xa5 fill -- after X6's declined accesses and X9/X10's legal
+reads.  Three shapes stay unobserved on the 864 rows:
+(1) a FETCH past `len` whose value no channel uses -- at every declined write, and the Opus seat's FW03 (an 8-byte
+fetch at len 4, measured green and equivalent for the guest) -- UNOBSERVABLE HERE BY CONSTRUCTION: the harness's memory
+helpers do not record the length the device asks for;
+(2) a STORE past `len` inside a legal write -- `data[len] = 0` in the Clear write (codex, 3e's pass; measured green,
+`qwb_20260923/QDLEN.log`): X12/X13 poison the buffer before the write and do not re-check it after;
+(3) the common tail's write-back past `len` at the legal reads outside X9/X10's five registers, among them VENDOR_ID
+(+0x00), the timer value (+0x304; +0x324/+0x344/+0x364 fold onto it), FIQEnable (+0x288) and the FIQEnableClear read
+(+0x28c) -- which X7 reads, and X3 three of them, with no check above the width -- and the timer LOAD and CLEAR reads
+near the top of `diff_footbridge.c`, whose 4-byte harness buffer an 8-byte write-back overflows SILENTLY.  An 8-byte
+write-back keyed on any one of them passes every row -- measured for all seven keys
+(`regress/artifacts/fbd5/q2_20260923/qwb_20260923/`: three runs, predictions first -- `ORDER_NOTE.txt` says which file
+proves each run's order -- with the IRQ_STATUS-keyed control red on 24 rows and len 8 red on 144).
+Above #545's floor: the tail and the fetch are not predicates dominating the edited arms, so the round disclosed them
+in the contract (repair 3f) and filed them (the flagship seat's final adjudication upheld the filing).  FIX SHAPE:
+`pad_kept` after every read in X3, X7 and the timer rows and after each narrow write in X12/X13 (no new row, but the
+channel is new on rows that exist, so it owes a table), and a length-recording memory helper for the fetch.

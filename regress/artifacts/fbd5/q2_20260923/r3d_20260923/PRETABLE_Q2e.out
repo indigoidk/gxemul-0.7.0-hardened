@@ -1,0 +1,77 @@
+#545 repair 3d -- PRE-TABLE CHECK, written BEFORE table 1 runs (this file's mtime is the order proof; run_r3d.sh logs
+it first).  Scope: 3c's own pass (panel_20260923_192724: codex, grok, glm, agy, deepseek, minimax, kimi-k3:cloud; the
+kimi CLI walled weekly, covered; the codex dedicated job, q2f/codex_ded; the Opus seat, q2f/opus/SUMMARY.txt).  The
+detector is EXTENDED (no product change), so the block is owed.
+
+WHAT 3d CHANGES (diff_footbridge.c 8309c5b7 -> the r3d copy; no row added, 864 stays):
+  E1  "X14 %s: Clear 0x20 keeps 0x10 pending and enabled" (x2, both timer states): + x->irq_status == 0x18
+  E2  "X14 line 4 raised by a device: IRQ_STATUS reads 0x10": + x->fiq_status == 0 && x->fiq_enable == 0
+  E3  "X14 line 4 raised by a device: Clear %s, CPU line %s once" (x2) renamed "... Clear %s, the raw status kept,
+      CPU line %s once": + x->irq_status == 0x10.  irq_asserted deliberately NOT pinned (see GUARD/BODY below).
+  E4  "X14 line 4 ...: 5 declines, then the legal reads and a Clear re-arm no latch": + x->irq_asserted == 1
+      && x->fiq_status == 0 && x->fiq_enable == 0
+  E5  X12/X13: memset(b, 0xa5, sizeof b) before each Clear write, so the bytes above the width are not zero
+  and the contract's records (COVERED / NOT COVERED / headers / IDENTITY comment).
+
+1. SIBLING PARITY
+   - E1's sibling is the DEVINIT "Set 0x40 then Clear 0x10" row on the same instance kind: its raw status is read by
+     the declines row that follows on that instance (x->irq_status == 0x18) -- parity holds without a change there.
+   - E3's two rows are siblings of each other (k = 0 deasserting, k = 1 asserting): both gain the raw status.  The re-arm
+     row (a third asserted Clear, 0x400) already read it (0x10) -- parity now holds across all three asserted Clears.
+   - E2's sibling is the re-arm row, which also reads IRQ_STATUS while irq_asserted: E4 gives it the FIQ fields too.
+   - The DEVINIT declines row already reads the four fields; the asserted declines (re-arm row) now read irq_asserted
+     and the FIQ fields as well (E4).  The DEVINIT declines cannot show an irq_asserted store: it is 0 there.
+   - E5: X12 and X13 are the only rows with a narrow legal write (the Clear); both get the fill.  X6's narrow writes are
+     declines, whose bodies never read idata -- N/A there, reason recorded.
+
+2. CLAIM -> ROW (each added sentence asserting an observable)
+   - "the raw status stays 0x18, as the name says"                -> E1 rows (mutant R3D_CXC1)
+   - "a Clear writes the enable only -- the raw status is the sources'" -> E3 rows (OQ_FS01; R3D_CXA1 at k = 1)
+   - "irq_asserted is NOT pinned here ... a row pinning it would pin that defect" -> NO ROW, by design: the enable arms
+     never write irq_asserted (fbirqstuck, F13); pinning 1 after a deasserting Clear pins the defect, pinning 0 is false
+     of today's code.  The Opus seat's FS02 stays in NOT COVERED's LEVEL line.
+   - COVERED "(the value, the five fields ... and the output)"    -> E2 row (R3D_GF1)
+   - COVERED "5 announces, one CPU assert, the fields and irq_asserted kept" -> E4 row (R3D_DA1, R3D_GF1)
+   - COVERED/X12 "the buffer's bytes above the width not zero"    -> X12/X13 narrow rows (R3D_FW1)
+   - NOT COVERED additions -- no row, by design, each a clause-(e) disclosure measured in this table: the CALLER
+     context (OQ_MC01-05, OQ_MC07), the announce TEXT (OQ_TX01), a latch's HISTORY (R3D_LH1), FS02 (OQ_FS02).
+   - NOT COVERED corrections (records only): the exact-value example (the Opus seat's measured forms), bit 16 of the
+     unraised 25 (N_SB16 red, carried), the producer pair's text and its filing, F1 on 864, THE SPACE's rest of the
+     instance in the field list, "red since 3c" for `idata != 0x20`.
+
+3. GUARD FIELD vs BODY FIELD
+   N/A for new guards: 3d changes no product line and no guard; #545's guards and bodies are unchanged since r3.
+   Applied instead to the ROWS: each new conjunct reads a field the model writes on the path the row drives --
+     irq_status: written only by the producer pair (never by the Clear or a decline) -> constant across E1/E3/E4;
+     fiq_status / fiq_enable: fiq_status has no writer; fiq_enable only by the FIQ enable arms -> constant (0) on the
+       line-4 instances, which never touch them;
+     irq_asserted: written only by the producer pair -> constant 1 across E4's declines, reads and Clear; E3 leaves
+       it unpinned because a deasserting Clear SHOULD change it and today does not (the F13 defect).
+
+4. CHANNEL (per row: the mutant it kills, the observable that differs under that mutant)
+   E1 keeps rows       R3D_CXC1  irq_status 0x18 -> 0 at a DEVINIT asserting Clear          (r3c green, r3d red x2)
+   E2 status-read row  R3D_GF1   fiq_enable 0 -> 1 after the asserted IRQ_STATUS read        (r3c green, r3d red)
+   E3 k = 0 row        OQ_FS01   irq_status 0x10 -> 0 at the asserted Clear 0x10             (r3c green, r3d red)
+   E3 k = 1 row        R3D_CXA1  irq_status 0x10 -> 0 at an asserted asserting Clear (0x400)  (redundant with the
+                                 re-arm row, which already reads it: r3c red x1, r3d red x2 -- varies, not vacuous)
+   E4 re-arm row       R3D_DA1   irq_asserted 1 -> 0 after a +0x180 decline while asserted   (r3c green, r3d red)
+                       R3D_GF1   fiq_enable 0 -> 1 (the RA[0] read)                          (r3d red)
+   E5 X12/X13 narrow   R3D_FW1   the Clear's idata -- a 4-byte fetch at len 1/2 reads 0xa5 bytes and clears more of
+                                 the enable in the wide and ones states                     (r3c green, r3d red x16)
+   Each named channel CAN vary under its named mutant; none is vacuous by construction.
+
+5. ROWS PRESCRIBED BY THE PRIOR BLOCK (PRETABLE_Q2d.out) -- diffed, none dropped: 3c's ten changed/new X14 rows are all
+   present (E1 and E3 strengthen three of them; the rename keeps both asserted-Clear rows under new names), and no
+   row is removed.  Row count 864 unchanged; X14's 21 distinct names unchanged in number.
+
+6. DISPOSITIONS NOT ROWED (so the pass can check them against this block):
+   R2 producer pair: owner ruling 2026-09-23, disclose + file under fbirqstuck (bit logic PR01/PR03/PR04 named apart
+      from F13, with the Opus seat's ready rows Y8-Y12 and PR witnesses).
+   R4 destination below len 4: stays disclosed (XC_dest); the zero-row re-wire of X9-X13's counters (Opus, q2f) and
+      the one-row X14 len-1 Clear (codex, grok, agy, minimax) are FILED as the item's options.
+   Caller context (MC*): clause (e) -- no body of the five reads `mem` or the machine type; disclosed, filed with the
+      Opus seat's scratch rows (W2a-c) as the ready detector.
+   Latch history (LH1): clause (e) -- the body tests the latch as {0, nonzero} only; both are rowed.
+   Pre-existing false comments (codex dedicated: fbclearread's `case TIMER_1_CLEAR` sentence, "EVERY REAL ROW ...
+      COMPARES NUMBERS", the DISABLED-timer sentence also in gate_offline.sh): filed with R17, not edited here.
+PRETABLE_Q2E_DONE

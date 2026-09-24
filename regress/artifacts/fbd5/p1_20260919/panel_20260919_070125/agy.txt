@@ -1,0 +1,207 @@
+**VERDICT: GO-WITH-CHANGES**
+
+---
+
+### EXECUTIVE SUMMARY & PREMISE AUDIT
+
+The brief's core proposal—declining the 5 undefined-direction accesses in [`dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c) with latched diagnostics (Member 3), retiring the temporary #539 kill bridge at `+0x18c`, and replacing it with durable launcher lifecycle controls (K1/K2)—is architecturally sound and matches the DC21285 hardware specification. However, adversarial verification against the source tree at HEAD `9c28ca5` uncovered two critical defects in the brief’s premises and design:
+
+1. **Arithmetic Premise Error — Live `exit(1)` Count (Brief line 117)**:
+   The brief claims:
+   > *"What `exit_census.py` will count: dev_footbridge.c carries ten live `exit(1)` at HEAD 9c28ca5 (HEAD lines 565, 574, 606, 615, 624 -- this round; 714, 739 -- the SDRAM pair; 843 and 879 in DEVINIT, construction-time)."*
+   
+   **Enumeration**:
+   - Round 2 sites: [line 565](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L565), [line 574](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L574), [line 606](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L606), [line 615](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L615), [line 624](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L624) = 5
+   - SDRAM pair: [line 714](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L714), [line 739](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L739) = 2
+   - DEVINIT construction: [line 843](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L843), [line 879](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L879) = 2
+   - **Total = 5 + 2 + 2 = 9**, NOT 10.
+   Verification against [`exit_census.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/exit_census.py) confirms `dev_footbridge.c` has exactly **9** live calls. Stating 10 is an arithmetic defect.
+
+2. **Detector Row Namespace Collision (Brief lines 397–405)**:
+   The brief proposes detector rows `A1` through `A5` on [`footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py):
+   - Proposed `A1`: `IRQ_STATUS read +0x180 -> 0`
+   - Proposed `A2`: `IRQ_RAW_STATUS read +0x184 -> 0`
+   
+   **Conflict**: [`footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L377-L398) **already uses rows `A1`, `A2`, and `A2b`**:
+   - Existing `A1`: `VENDOR_ID through a real guest ldr` (`0x1011`) ([line 377](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L377))
+   - Existing `A2`: `TIMER_1_LOAD masked to 24 bits (MAX_VAL)` (`0x00345678`) ([line 378](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L378))
+   - Existing `A2b`: `the value the guest actually stored` (`0x12345678`) ([line 397](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L397))
+   
+   Moreover, [`gate_arm.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1091-L1097) explicitly pins these exact rows:
+   ```bash
+   check "footbridge: VENDOR_ID 0x1011 through a real guest ldr" \
+         "$(grep -cE '^A1 .*got=0x00001011 .*ok$' "$FBLOG")" "1"
+   check "footbridge: TIMER_1_LOAD masked to 24 bits by the handler" \
+         "$(grep -cE '^A2 .*got=0x00345678 .*ok$' "$FBLOG")" "1"
+   ```
+   Re-using `A1` and `A2` would create duplicate row IDs, break uniqueness, and risk gate check disruption. These rows must be renamed (e.g., `S1..S5` or `SA1..SA5`).
+
+---
+
+### SECTION-BY-SECTION CLAIM & LINE VERIFICATION
+
+| Cited Claim | File & Line in GXEMUL-SEC / Datasheet | Verification Status | Notes |
+| :--- | :--- | :--- | :--- |
+| File length of `dev_footbridge.c` is 899 lines | [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c) | **VERIFIED** | Exact file line count is 899. (Stale copy in `_scratchpad/r6pass2_fb/` is 744). |
+| Physical base `0x42000000` for `-E cats` | [`src/machines/machine_cats.c:63-64`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L63-L64) | **VERIFIED** | `"footbridge irq=%s.cpu[%i].irq addr=0x42000000"` |
+| Register offsets `+0x180, +0x184, +0x18c, +0x280, +0x284, +0x100, +0x104` | [`src/include/thirdparty/dc21285reg.h:140-340`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h#L140-L340) | **VERIFIED** | `SDRAM_BA_MASK` 0x100, `SDRAM_BA_OFFSET` 0x104, `IRQ_STATUS` 0x180, `IRQ_RAW_STATUS` 0x184, `IRQ_ENABLE_CLEAR` 0x18c, `FIQ_STATUS` 0x280, `FIQ_RAW_STATUS` 0x284. |
+| Datasheet Table 7-10 registers & directions | `dc21285.txt:6821-6831` | **VERIFIED** | 180h R: IRQStatus, W: --; 184h R: IRQRawStatus, W: --; 18Ch R: --, W: IRQEnableClear; 280h R: FIQStatus, W: --; 284h R: FIQRawStatus, W: --. |
+| Datasheet 7.3.29 & 7.3.30 description | `dc21285.txt:6886-6909` | **VERIFIED** | Read-only; bitwise AND of RawStatus and Enable; IRQRawStatus/FIQRawStatus identical. |
+| Datasheet 7.3.33 IRQEnableClear description | `dc21285.txt:6937-6947` | **VERIFIED** | Write-only; writing high clears corresponding enable bit; writing low has no effect. |
+| Datasheet 3.1.1 CSR Write non-existent rule | `dc21285.txt:1644-1646` | **VERIFIED** | "If a nonexistent CSR is selected within the CSR address range, the write data is discarded (no error action is taken)." |
+| Datasheet 3.1.2 CSR Read non-existent rule | `dc21285.txt:1652-1653` | **VERIFIED** | "If a nonexistent CSR is selected within the CSR address range, zeros are read (no error action is taken)." |
+| Five Round 2 exit sites | [`src/devices/dev_footbridge.c:565, 574, 606, 615, 624`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L565) | **VERIFIED** | Exact lines of `exit(1)` for the 5 undefined direction sites. |
+| Two SDRAM exit sites | [`src/devices/dev_footbridge.c:714, 739`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L714) | **VERIFIED** | `SDRAM_BA_MASK` read (714), `SDRAM_BA_OFFSET` read (739). |
+| Two DEVINIT exit sites | [`src/devices/dev_footbridge.c:843, 879`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L843) | **VERIFIED** | Unimplemented machine type exits in [`DEVINIT(footbridge)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L763). |
+| "dev_footbridge.c carries ten live exit(1)" | Brief line 117 vs [`exit_census.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/exit_census.py) | **DISPROVED (DEFECT)** | File carries exactly **9** live calls, not 10. |
+| Kill load opcode `0xE590718C` = `ldr r7,[r0,#396]` | [`regress/footbridge_sites_probe.py:161`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L161) | **VERIFIED** | `396 == 0x18c`. ARM encoding `0xE590718C` loads from `r0 + 0x18c` into `r7`. |
+| Kill sites in drain and witness probes | [`regress/fbpending_drain_probe.py:231`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L231), [`regress/fbpending_witness.py:200`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L200) | **VERIFIED** | Both contain `0xE590718C` targeting `+0x18c`. |
+
+---
+
+### ADVERSARIAL QUESTIONS REVIEW
+
+#### Q1 -- Premise Audit
+
+**(a) Datasheet direction, Member 3 vs 2 vs 4/5, and FAULT availability on ARM:**
+- **Datasheet Direction Verification**:
+  - `+0x180` (IRQStatus): Table 7-10 (`:6824`) defines Read: `IRQStatus`, Write: `--`. Section 7.3.29 (`:6888`) specifies "read-only register".
+  - `+0x184` (IRQRawStatus): Table 7-10 (`:6825`) defines Read: `IRQRawStatus`, Write: `--`. Section 7.3.30 (`:6903`) specifies "read-only register".
+  - `+0x18c` (IRQEnableClear): Table 7-10 (`:6827`) defines Read: `--`, Write: `IRQEnableClear`. Section 7.3.33 (`:6940`) specifies "write-only register".
+  - `+0x280` (FIQStatus): Table 7-10 (`:6829`) defines Read: `FIQStatus`, Write: `--`. Section 7.3.29 (`:6888`) specifies "read-only register".
+  - `+0x284` (FIQRawStatus): Table 7-10 (`:6830`) defines Read: `FIQRawStatus`, Write: `--`. Section 7.3.30 (`:6903`) specifies "read-only register".
+- **Member Disposition**:
+  - Datasheet Sections 3.1.1 and 3.1.2 explicitly state: writes to non-existent CSRs are discarded without error action (`:1645`), and reads return zeros without error action (`:1653`).
+  - Thus, **Member 2 (silent decline)** is the literal hardware behavior. **Member 3 (DECLINE + LATCHED ANNOUNCE)** is justified as emulator debugging policy to alert the developer once without crashing the host.
+- **Is FAULT available on ARM?**
+  - **NO**. Inspecting [`src/cpus/memory_rw.c:603-625`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L603-L625), when a memory-mapped device access returns failure (`res <= 0`), CPU exceptions are dispatched **only** for MIPS (`mips_cpu_exception` at [line 609](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L609)) and M88K (`m88k_exception` at [line 620](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L620)). There is **no ARM exception dispatch** on device failure in [`memory_rw.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c). Device failure simply logs a debug line and returns `MEMORY_ACCESS_FAILED`. Member 5 (FAULT) is physically unavailable in the ARM emulator.
+
+**(b) One `warned_access` bit-field vs five per-site `int` latches:**
+- [`dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c) currently has **zero** warning latches in [`struct footbridge_data`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L60-L85).
+- Across the repository, the predominant house idiom is **separate `int` latches per condition**: [`dev_wdc.c:75-120`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L75-L120) defines 11 separate `int warned_*` fields (`warned_badlen`, `warned_inbuf_overrun`, `warned_empty_drain`, etc.).
+- A single `uint32_t warned_access` bitmask creates a distinct collision hazard: testing `!d->warned_access` instead of `!(d->warned_access & BIT_MASK)` causes the first warning to permanently suppress the other 4. Five independent `int` fields (`warned_irq_status_write`, etc.) eliminate bitwise collision and mask bugs entirely.
+
+**(c) K1/K2 legs in the three launchers and `dead` observability:**
+- **K1** (startup rejection) checks that launching an invalid `-E` name exits with code 1 without reaching a prompt.
+- **K2** (death after execution) checks that after running the prologue and issuing `quit`, the child process terminates cleanly (exit 0) and the subsequent launcher interaction flags `dead == True` *before* cleanup.
+- **Is `dead` observable through `send()`/`wait()` as written?**
+  **YES**. In [`Session.rd()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L295-L308) in [`fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L295-L308) (and identical code in [`fbpending_witness.py:236-248`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L236-L248) and [`footbridge_sites_probe.py:195-206`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L195-L206)):
+  ```python
+  try:
+      d = os.read(self.fd, 65536)
+  except OSError:
+      self.dead = True
+      return False
+  if not d:
+      self.dead = True
+      return False
+  ```
+  When `quit` exits GXemul, reading the master pty encounters EOF (`not d`) or `OSError` (EIO), setting `self.dead = True` and returning `False`. Then `wait()` returns `False`, and `send()` returns `False` while setting `self.dead = True`.
+- **Comparison to old kill arm**: The old kill arm proved that GXemul terminated during guest instruction step execution on a fatal MMIO access. The new K1/K2 controls prove launcher lifecycle integrity (reaping exit 1 on invalid startup; reaping exit 0 on quit and observing process death on subsequent commands). They do not test an in-flight MMIO crash because no footbridge MMIO access kills the host anymore.
+
+**(d) "No footbridge access these probes make ends the process":**
+- **TRUE**. In [`DEVICE_ACCESS(footbridge)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L498-L760), after removing lines 565, 574, 606, 615, and 624, the only remaining `exit(1)` calls are:
+  - [Line 714](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L714): `case SDRAM_BA_MASK` (`+0x100`) read
+  - [Line 739](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L739): `case SDRAM_BA_OFFSET` (`+0x104`) read
+- None of the three probes ([`footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py), [`fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py), [`fbpending_witness.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py)) ever touch `0x100` or `0x104`. With `+0x18c` declined, no probe access reaches any `exit(1)`.
+
+**(e) Tree dependencies on complaint texts or `ENABLE CLEAR`:**
+- A comprehensive repository grep confirms:
+  - `ENABLE CLEAR` appears **only** in [`dev_footbridge.c:605`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L605) and the three kill arm checks being retired: [`regress/footbridge_sites_probe.py:402`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L402), [`regress/fbpending_drain_probe.py:612`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L612), and [`regress/fbpending_witness.py:489`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py#L489).
+  - None of the other 4 complaint texts (`"write to irq status?"`, `"write to irq_raw_status"`, `"write to fiq status?"`, `"write to fiq_raw_status"`) appear anywhere outside [`dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c).
+  - No gate script, hygiene check ([`gate_hygiene.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh)), or boot-log rule matches these strings.
+
+---
+
+#### Q2 -- Candidate Weakenings Analysis
+
+- **(a) Decline keeps `exit(1)` at one of the five sites**:
+  *Reds immediately*. The corresponding D row (e.g., D1 for `+0x180`) expects the arm to survive with exit 0. Reaching `exit(1)` terminates the host during step execution; the row sees `status == HOST-DIED` and `exit == 1`, failing the survival assertion.
+- **(b) Announce unlatched (fires on every access)**:
+  *Reds immediately*. Each D row executes two accesses and counts occurrences of the announcement. If unlatched, count is 2 (want 1).
+- **(c) One latch bit shared by two sites (second never announces)**:
+  - If both sites are executed within the **same arm/process run**: the second site sees the bit already set and produces 0 announcements; the second D row sees count 0 (want 1) and *reds*.
+  - *Escape hazard*: If the test runs each D row in an isolated process with a fresh `memset`, a shared bit between two distinct sites *escapes* unless an arm sequentially exercises both sites.
+- **(d) `+0x18c` decline keeps `odata = d->irq_enable`**:
+  *Reds immediately*. Row D3 performs reads of `+0x18c` with enable initialized to `0x30`. The retained assignment returns `0x30`; D3 asserts `got == 0`, failing the value check.
+- **(e) WRITE decline stores written value into `irq_status`**:
+  *Reds immediately*. Row D1 writes `0x10` to `+0x180`. A subsequent status read returns `0x10` instead of `0`, failing the unchanged state assertion.
+- **(f) Decline also swallows legal direction (IRQ_STATUS READ returns 0 always)**:
+  - **ESCAPES proposed row A1!**
+  - *Proof*: In a cold debugger run without external hardware interrupts, `d->irq_status` is `0` ([`dev_footbridge.c:80`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L80)). Legitimate code computes `odata = d->irq_status & d->irq_enable == 0 & 0x30 == 0`. A buggy mutant returning `0` always produces `0`, perfectly matching `want = 0`. Row A1 only catches OR instead of AND (`d->irq_status | d->irq_enable`), not a constant 0 return.
+- **(g) Announce text misnames the register**:
+  *Reds immediately*. The D row regex searches for the specific register name. A mismatch results in count 0 (want 1).
+- **(h) K1's startup leg passing on ANY nonzero exit**:
+  *Escapes*. If GXemul crashes with SIGSEGV (signal 11) or `execvp` fails (exit 127 in [`Session.__init__`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L293)), an unpinned check passes, masking invalid process failures as clean startup rejections.
+- **(i) K2's quit leg passing when child died BEFORE prologue completed**:
+  *Escapes*. If the harness does not check the prologue register readback (`reg`) prior to sending `quit`, an early startup/prologue crash falsely registers as a successful post-execution death.
+- **(j) Latch cleared by a read**:
+  *Depends on ordering*:
+  - If sequence is Write 1 -> Read -> Write 2: Write 2 fires a second announcement; count becomes 2 (want 1), and D row *reds*.
+  - If sequence is Write 1 -> Write 2 -> Read: the back-to-back writes produce count 1, and the read clears the latch *escapes* unless followed by Write 3.
+- **(k) Harness legs implemented in one launcher only**:
+  *Reds immediately*. If [`fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py) or [`fbpending_witness.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py) retains the old kill arm reading `+0x18c`, the retired kill site no longer crashes the host (`status == SURVIVED`, `exit == 0`), causing their K checks to fail.
+
+---
+
+#### Q3 -- Option-Set Completeness
+
+The brief proposes Member 3 (DECLINE + LATCHED ANNOUNCE) for all five sites.
+- **Did the brief overlook Member 2 (Silent Decline)?**
+  Yes, as an engineering alternative. In [`dev_footbridge.c:628-636`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L628-L636), `FIQ_ENABLE_SET` and `FIQ_ENABLE_CLEAR` **already implement Member 2** for reads:
+  ```c
+  case FIQ_ENABLE_SET:
+      if (writeflag == MEM_WRITE)
+          d->fiq_enable |= idata;
+      break;
+
+  case FIQ_ENABLE_CLEAR:
+      if (writeflag == MEM_WRITE)
+          d->fiq_enable &= ~idata;
+      break;
+  ```
+  On a `MEM_READ`, both fall through the switch without diagnostic or exit, returning `odata = 0`. Similarly, offsets `0x04..0x18` ([lines 522-528](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L522-L528)) implement Member 2. Adopting Member 3 for `IRQ_ENABLE_CLEAR` read while `FIQ_ENABLE_CLEAR` read remains Member 2 creates an asymmetry, though Member 3 is acceptable under the latched diagnostic policy.
+- **Members 1, 4, 5, 6, 7**:
+  - Member 1 (DELETE): Unacceptable; falling through to `default:` spams unlatched warnings on every access.
+  - Member 5 (FAULT): Unacceptable; hardware does not fault, and ARM has no exception plumbing for device access failures in GXemul.
+  - Member 6/7 (ACCEPT / IMPLEMENT): Unacceptable; status registers are strictly hardware-driven and cannot be made writable; clear registers are write-only strobes and cannot be meaningfully read.
+
+---
+
+#### Q4 -- Harness Change Risk
+
+- **Smallest edit to the LEGS that leaves them green while proving nothing**:
+  In leg **K2**, testing `self.dead` *after* calling `s.close()` instead of *before*.
+  In [`Session.close()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L414-L422), `rd()` drains until EOF, which **always sets `self.dead = True`**:
+  ```python
+  s.send("quit")
+  end = s.close()
+  k2_ok = s.dead and end["exit"] == 0
+  ```
+  This check stays green unconditionally, even if the probe never proved that the interactive session observed process death prior to cleanup.
+- **Row expected to stay green**: **Row K2**.
+
+---
+
+### REQUIRED CHANGES PRIOR TO PASS 2 / LANDING
+
+1. **Correct Live `exit(1)` Count**: Change "ten live `exit(1)`" to "nine live `exit(1)`" in the brief and commit message.
+2. **Rename Detector Rows to Prevent Namespace Collision**:
+   Rename proposed rows `A1..A5` on [`footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py) to `S1..S5` (or `SA1..SA5`) so they do not collide with existing rows `A1` (VENDOR_ID 0x1011) and `A2` (TIMER_1_LOAD 0x00345678) or break [`gate_arm.sh:1091-1097`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1091-L1097).
+3. **Update `gate_arm.sh` Filter Pattern**:
+   Update line 1074 of [`gate_arm.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1074) from `D1` to `D[1-5]` (and add the new status row prefix) so the new rows are echoed in gate logs.
+4. **Use Distinct `int` Fields for Latches**:
+   Use five discrete `int` fields in [`struct footbridge_data`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L60-L85) matching [`dev_wdc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L75), rather than a single bitfield, avoiding cross-site suppression bugs.
+5. **Pin Pre-Cleanup Death in K2**:
+   Ensure K2 asserts `self.dead == True` on the interaction immediately following `quit` *before* invoking `Session.close()`.
+
+---
+
+**FINAL VERDICT: GO-WITH-CHANGES**
+
+---
+
+### SEAT RECORD
+- **Model**: Gemini 3.8 Flash (High)
+- **Scope Read**: [`GXEMUL-SEC/src/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src), [`GXEMUL-SEC/regress/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress), `_scratchpad/dc21285.txt`
+- **Commands Executed**: Read-only repo queries (git rev-parse, git diff, regex line searches, file counts, and running `exit_census.py` directly on the local tree). No gates, `run.sh`, or batteries were executed.

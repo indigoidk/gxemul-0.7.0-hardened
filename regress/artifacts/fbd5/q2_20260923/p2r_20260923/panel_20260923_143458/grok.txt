@@ -1,0 +1,106 @@
+I'll audit the frozen copies against the brief's premises before judging the repair, starting with checksums and the handler arms the rows claim to cover.VERDICT: DO NOT SHIP -- a legal IRQ_RAW read after that site's latch is set is never value-checked, so `writeflag == MEM_READ && !d->warned_irq_raw_w` returns 0 for a nonzero `irq_status` and all 491 rows stay green. The new contract calls that cell covered.
+
+The new X9 oracles match the handler. The count pins add up. The hole is the oracle on a cell this diff adds to the class, plus a false sentence about bits 8-31. Line numbers match the frozen file (`IRQ_STATUS` at line 570, `TIMER_1_LOAD` at 659).
+
+## Q1
+
+**(a) The three predicates that gate each decline are rowed. The product is not the §C.2 class.**
+
+Dominating predicates, from the frozen handler, walked out to the function boundary. The timer fold is `relative_addr` in `0x300..0x36C` (`TIMER_1_LOAD` .. `TIMER_4_CLEAR`). None of `0x180`, `0x184`, `0x18c`, `0x280`, `0x284` is in that range, so the fold does not rewrite these addresses.
+
+| Site | Decline runs when | Legal branch reads | Decline reads |
+|---|---|---|---|
+| IRQ_STATUS `0x180` | `writeflag != MEM_READ` and `!warned_irq_status_w` | `irq_status`, `irq_enable` | `warned_irq_status_w` |
+| IRQ_RAW_STATUS `0x184` | `writeflag != MEM_READ` and `!warned_irq_raw_w` | `irq_status` | `warned_irq_raw_w` |
+| IRQ_ENABLE_CLEAR `0x18c` | `writeflag != MEM_WRITE` and `!warned_irq_clear_r` | `irq_enable`, `idata`, `irq_status`, then ASSERT or DEASSERT | `warned_irq_clear_r` |
+| FIQ_STATUS `0x280` | `writeflag != MEM_READ` and `!warned_fiq_status_w` | `fiq_status`, `fiq_enable` | `warned_fiq_status_w` |
+| FIQ_RAW_STATUS `0x284` | `writeflag != MEM_READ` and `!warned_fiq_raw_w` | `fiq_status` | `warned_fiq_raw_w` |
+
+`MEM_READ` is 0 and `MEM_WRITE` is 1. The access path produces only those two. Each site's latch is only ever stored as 0 (calloc / `DEVINIT` memset) or 1 (the decline body). X6 first/repeat covers that pair for declines. X9 covers legal × latch clear, including the value. X7 covers legal × all five latches set for the announce count only.
+
+What the bound names and the rows do not cover:
+
+- Producer of `irq_status` is `footbridge_interrupt_assert` / `_deassert`: `irq_status |= line` / `&= ~line`, and `DEVINIT` registers `line = 1 << i` for `i` in `0..31`. Any bit can be set. Producer of `irq_enable` is a guest `|= idata` / `&= ~idata` with no mask.
+- Producer of `fiq_status` is empty. The frozen device has no assignment to `fiq_status`. Seeded `0x60` and wide `0x40020060` are synthetic. The P-row comment already says this.
+- Bits 8-15 of every field are 0 in all three vectors (enumeration in (c)).
+- Legal × latch set does not check the value the legal branch writes. P7, after all five declines, checks only `IRQ_STATUS == 0x10` and `FIQ_RAW_STATUS == 0x60`. It does not read `IRQ_RAW_STATUS` or `FIQ_STATUS`.
+
+**(b) All 24 enable-write results match the X9 rule.** Handler: IRQ Set is `irq_enable |= idata`, IRQ Clear is `irq_enable &= ~idata`, then ASSERT if `(irq_status & new_enable)` else DEASSERT. FIQ Set/Clear update `fiq_enable` and do not call either. X9 computes the same `ne` and the same `(is & ne)` test. `idata` is `0` or `0x70` at length 4.
+
+| Write | Seeded `is=0x18 ie=0x30` | All-zero | Wide `is=0x80010018 ie=0x00010030` |
+|---|---|---|---|
+| IRQ Set 0 | `ne=0x30`, DEASSERT | `ne=0`, DEASSERT | `ne=0x00010030`, ASSERT (`& = 0x00010010`) |
+| IRQ Set `0x70` | `ne=0x70`, ASSERT (`& = 0x10`) | `ne=0x70`, DEASSERT | `ne=0x00010070`, ASSERT (`& = 0x00010010`) |
+| IRQ Clear 0 | `ne=0x30`, DEASSERT | `ne=0`, DEASSERT | `ne=0x00010030`, ASSERT |
+| IRQ Clear `0x70` | `ne=0`, DEASSERT | `ne=0`, DEASSERT | `ne=0x00010000`, ASSERT (`& = 0x00010000`) |
+| FIQ Set 0 | `ne=0xc0`, neither | `ne=0`, neither | `ne=0x000200c0`, neither |
+| FIQ Set `0x70` | `ne=0xf0`, neither | `ne=0x70`, neither | `ne=0x000200f0`, neither |
+| FIQ Clear 0 | `ne=0xc0`, neither | `ne=0`, neither | `ne=0x000200c0`, neither |
+| FIQ Clear `0x70` | `ne=0x80`, neither | `ne=0`, neither | `ne=0x00020080`, neither |
+
+A zero Set/Clear still calls DEASSERT or ASSERT. The handler always calls one of the two. X9 expects that call. The other three fields stay put. That matches the row.
+
+**(c) Wide products, enumerated.**
+
+`0x80010018 & 0x00010030 = 0x00010010`  
+`0x80010018`  
+`0x40020060 & 0x000200c0 = 0x00020040`  
+`0x40020060`
+
+Each product is nonzero above byte 0: bit 16, bits 16 and 31, bit 17, bits 17 and 30. These are the four constants X8 already expects. Each of the four fields has a bit at or above bit 16.
+
+Byte 1 is `0x00` in all four fields and all four products. Little-endian bytes: `18 00 01 80`, `30 00 01 00`, `60 00 02 40`, `c0 00 02 00`. Bits 8-15 are clear in every state, including after `|= 0x70` (`0x30|0x70=0x70`, `0x00010030|0x70=0x00010070`, `0xc0|0x70=0xf0`, `0x000200c0|0x70=0x000200f0`).
+
+**(d) Existing behavioral rows keep their predicates.** Prerepair versus repaired X6/X7 loops differ only by `st < 2` versus `st < 3`. `ST[0]` and `ST[1]` are the same seeds. The `snprintf` formats and the `ok` expressions are the same. X8 is unchanged. New names are the `wide` cells and X9.
+
+Counted from the loops: X1-X5 = 38, old X6 = 108, old X7 = 70, X8 = 6, sum 222. New X6 = 162 (`+54`), new X7 = 105 (`+35`), X1-X8 = 311. X9 = `3 × (5×3 + 8) = 69`. P-rows, counted from the P block, = 78. Untouched non-P non-X rows = 33. `78+311+69+33 = 491`. The identity row's name is unchanged and its expected integer moves from 333 to 491, which is that row's job. `54+35+69 = 158` and `333+158 = 491`.
+
+## Q2
+
+Smallest edit, on `IRQ_STATUS`:
+
+```c
+if (writeflag == MEM_READ && !(d->irq_enable & 0x100))
+    odata = d->irq_status & d->irq_enable;
+```
+
+Bit 8 is `IRQ_IN_L0`'s line bit (`1 << 8`). EnableSet can store it; no seed has it. On every rowed state the conjunct is true, so the legal branch still runs.
+
+The row that stays green is `X9 legal len 4 read of IRQ_STATUS (all-zero, latches clear)` — the row that kills `&& d->irq_enable`. Also green: `X9 legal len 4 read of IRQ_STATUS (wide, latches clear)`, where bit 16 of `irq_enable` is set and bit 8 is not.
+
+A guest store of `0x100` to `+0x188` and a load of `+0x180` then takes the decline: one phantom announce, that site's latch consumed, and the buffer written as 0.
+
+## Q3
+
+This closes the five measured instances (a conjunct that is false in the all-zero vector, on an access X9 performs) and the wide-bit instances whose bits the seed actually sets (`irq_status >> 16`, `irq_status &= 0xffff`). It does not close the §C.2 class.
+
+Cells of site × direction × width × data × state × latch with no value oracle, inside the bound:
+
+- `IRQ_RAW_STATUS` × READ × len 4 × wide `irq_status=0x80010018` × that site's latch set. X7 has the row and checks only `fatal_calls`. Correct read is `0x80010018`. Inside the bound (`irq_status` and `warned_irq_raw_w`).
+- `FIQ_STATUS` × READ × len 4 × wide × latch set. Same oracle gap. The product never writes `fiq_status`, so a wrong 0 equals the only value the device produces. The differential's own synthetic seed is what makes it visible, and no row looks.
+- `IRQ_STATUS` × READ × len 4 × (`irq_status` nonzero, `irq_enable == 0`) × latch clear. Not one of the three vectors. Reachable: a timer line asserts while the enable is still the reset 0. Inside the bound. `&& (d->irq_enable || !d->irq_status)` is true on all three seeds and false on this one; the declined read returns 0, which is also the correct masked value, so only the announce distinguishes it.
+- Declined write × data other than `0` and `0x70`, and legal EnableClear × len 1 or 2. The contract excludes the first. `len` / `idata` are not in the §C.2 lvalue list.
+
+## Q4
+
+The gate sentence "a WIDE third state in X6/X7, so bits 8-31 of a field are exercised" is false as of the seed that lands with it. Bits 8-15 are clear in all four fields. A latch clear or a decline store keyed on bit 8 still passes every row. That is the (e) cell the wide state was added for, one byte lower than the bits the seed sets.
+
+True in the new comments: X7 used to latch all five sites before the legal access; the all-zero latch-clear legal read had no row; `333 → 491` via `+54`, `+35`, and `69`; X9's "exactly 5" is what the correct handler does. The X9 sentence "returned 0 -- the right value in that state" is about the four reads. The Q5 write is declined, so it has no read value; the announce and the consumed latch are the real signals, and the row checks those.
+
+The header "closed in one block" is false on arrival for the cells in Q3. The exclusion list names wide decline data, two-field conjuncts past the three vectors, legal-side interrupt output except where X9 pins it, and a latch guard on `timer_control[0]`. It does not name bit 8, or a legal read's value while the latch is set.
+
+## Q5
+
+Leaving the guest reset-state reads out is right. A buffer mark at reset cannot see the bug X9 exists for. In the all-zero state the correct `IRQ_STATUS` read is 0 and the decline also writes 0 through the common tail. X9 separates them with `fatal_calls == 0` on the legal access, then `fatal_calls == 5` on the five declines. Both conjuncts are required: a phantom announce that consumes the latch is `1` plus `4` later announces, which sums to 5. The `== 0` check is what turns the row red. I confirmed that in the X9 source; the inlined Q1 result (3 red, all-zero reads only) matches this control flow.
+
+Arm S, as read from `GXEMUL-SEC/regress/footbridge_sites_probe.py` (not in the frozen quartet), stores enables `0x30` and `0xc0` before any status read, and the stepped guest never gets a nonzero `irq_status` (timers stopped; `fiq_status` has no writer). `S1` expects 0. The same `&& irq_enable` edit stays on the legal path there because the enable is already nonzero. A buffer-scored read at the head of arm S would also see 0. The probe's own limit (f) — a narrowed constant 0 — is unchanged by that read. Address identity for `0x180/184/280/284` is already what the existing N/S rows hit.
+
+## Else
+
+`fiq_status` has no writer in the frozen device. Wide FIQ bits pin the expression against a value the product cannot produce. The P-row comment is the accurate one.
+
+P7's post-decline value check is asymmetric: `IRQ_STATUS` and `FIQ_RAW_STATUS` only. That is older than this diff. This diff's contract then calls legal × latch set covered via X7, whose new wide rows still do not read the buffer.
+
+## Seat record
+
+Model: Grok 4.7. Read: frozen `dev_footbridge.c` (handler 500-780, assert/deassert 382-413, `DEVINIT` interrupt loop 832-854), frozen `diff_footbridge.c` and `diff_footbridge.prerepair.c` (P block through identity), frozen `gate_offline.sh` pins at 585-610, `dc21285reg.h` and `interrupt.h` in `GXEMUL-SEC`, and arm S in `GXEMUL-SEC/regress/footbridge_sites_probe.py`. Ran: nothing. The shell was denied, so the four MD5s were not recomputed; no gate, no detector binary. The reported red sets for Q1, Q5, W1, and W2 match the control flow above and were not re-executed.

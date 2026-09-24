@@ -1,0 +1,103 @@
+--- _scratchpad/fbd5/q2h/frozen/diff_footbridge.c	2026-09-23 21:01:11.606736900 -0500
++++ GXEMUL-SEC/regress/diff_footbridge.c	2026-09-23 21:42:00.566860000 -0500
+@@ -909,8 +909,9 @@
+ 	 *  instance (the CPU interrupt's own fields, pcibus, console_handle, the timer handles) -- so the INSTANCE a row
+ 	 *  runs on is part of the space.
+ 	 *  COVERED -- the rows named, each observing the channels it names: the return value, the announce count, the
+-	 *  four fields, the interrupt calls and, for a read, the read data over the width -- and in X6, X9 and X10
+-	 *  the bytes above the width untouched (3e) -- except X7 (the return value and the announce count only) and
++	 *  four fields, the interrupt calls and, for a read, the read data over the width -- and, after X6's declined
++	 *  accesses and X9/X10's legal reads, the bytes above the width untouched: no write-back past len (3e) --
++	 *  except X7 (the return value and the announce count only) and
+ 	 *  X14's rows (the channels in each row's name and header):
+ 	 *    declined x width (the site's domain) x data {0, 0x70} x state x first/repeat (X6);
+ 	 *    the legal READS of the five readable registers x width -- 1, 2 and 4 at all five, and 8 at IRQ_STATUS
+@@ -932,7 +933,7 @@
+ 	 *    irq_status, irq_enable, irq_asserted, fiq_status, fiq_enable -- and the output), the Clear write both ways
+ 	 *    (the enable, the raw status kept, the output), and a re-arm row -- five declines, the legal reads with
+ 	 *    their values and a Clear, five declines again: 5 announces, one CPU assert, and the fields and
+-	 *    irq_asserted kept -- checked after EACH of its access (3e) (X14).
++	 *    irq_asserted kept -- checked after EACH of its accesses (3e) (X14).
+ 	 *  STATES: seeded, all-zero, wide and ONES -- with all-zero, the ones state makes every single-bit condition on
+ 	 *  one field divert in one of the two.
+ 	 *  *** THIS SAID "the cells above are the whole class" and was measured false THREE times on 2026-09-23: the
+@@ -986,27 +987,40 @@
+ 	 *    864, r3c_20260923).  The pair's bit logic (PR01, PR03, PR04) is filed under `fbirqstuck` by owner ruling
+ 	 *    (2026-09-23), apart from that item's stuck-high line (F13), with the Opus seat's ready rows;
+ 	 *    the CALLER context, as a class: every row passes the same calloc'd cpu -- byte order undefined, pc 0, its
+-	 *    machine of type MACHINE_NONE -- and mem NULL, so a condition on ANY caller state in any test passes
+-	 *    every row (the Opus seat, 3c's pass: `mem` and the machine type, MC01-MC05 and MC07; grok, 3d's pass:
++	 *    machine of type MACHINE_NONE -- and mem NULL, so any condition on caller state that holds for that one
++	 *    fixed caller (and not for a real one) passes every row (the Opus seat, 3c's pass: `mem` and the
++	 *    machine type, MC01-MC05 and MC07; grok, 3d's pass:
+ 	 *    `cpu->byte_order != EMUL_LITTLE_ENDIAN`, `!cpu->pc`; a cats or netwinder caller with a real mem
+ 	 *    reddens the first six in the Opus seat's scratch, q2_20260923/q2f_opus/SUMMARY.txt; the Opus seat, 3d's
+-	 *    pass: ten more -- cpu->running, byte_order, is_32bit, ninstrs, machine->ncpus, pc, cpsr, CX01-CX10,
+-	 *    q2_20260923/q2g_opus/SUMMARY.txt);
++	 *    pass: ten more shapes over seven fields, two of them grok's -- cpu->running, byte_order, is_32bit,
++	 *    ninstrs, machine->ncpus, pc, cpsr, CX01-CX10, q2_20260923/q2g_opus/SUMMARY.txt);
+ 	 *    the announce TEXT: rows count the announces and never read them (TX01) -- including a conversion added
+-	 *    to an announce that passes no argument, undefined behaviour in the real fatal(), whose vsnprintf has no
+-	 *    format attribute to warn from (FMT01; the Opus seat, 3d's pass);
++	 *    to an announce that passes no argument, undefined behaviour in the real fatal(), whose declaration
++	 *    carries no format attribute, so no compiler warns (FMT01; the Opus seat, 3d's pass);
+ 	 *    a STORE to state no row reads after that access: the timer state (pending ticks, the timer registers)
+ 	 *    at any of the five arms' legal accesses (SR01-SR09, SR11 -- an IRQ_STATUS read that zeroes timer 1's
+ 	 *    pending ticks is #474's lost-interrupt class), and, at X14's single-access rows, a latch or the FIQ
+ 	 *    fields those rows do not name (AS01-AS04, AS08; the Opus seat, 3d's pass -- its scratch rows W1-W8 red
+-	 *    28 of its 29 greens, q2_20260923/q2g_opus/); X14's multi-access rows check the five fields after every
+-	 *    access since 3e;
++	 *    28 of its 29 greens, q2_20260923/q2g_opus/).  Since 3e the three X14 rows that CLAIM kept fields (the
++	 *    DEVINIT declines rows, the re-arm row) check the five fields after each access; the DEVINIT reads and
++	 *    Set/Clear rows claim values and the drive, so a store there to a field they do not name passes (grok,
++	 *    3e's pass: `d->irq_asserted = 1` on the IRQ_STATUS read);
++	 *    the caller's BUFFER beyond len where no check looks (filed `fbbufbounds`): a FETCH past len whose value no
++	 *    channel uses -- at every declined write, and the Opus seat's FW03, an 8-byte fetch at len 4, equivalent
++	 *    for the guest and a read past a real word store's data[4] -- because the harness's memory helpers do not
++	 *    record the length the device asks for; a STORE past len inside a legal write (codex, 3e's pass:
++	 *    `data[len] = 0` in the Clear write -- X12/X13 poison the buffer and do not re-check it after the write);
++	 *    and the common tail's write-back past len at a legal read outside X9/X10's five registers -- VENDOR_ID
++	 *    (+0x00), the timer value (+0x304; +0x324/+0x344/+0x364 fold onto it), FIQEnable (+0x288) and the
++	 *    FIQEnableClear read (+0x28c), which X3 and X7 read with no check above the width: an 8-byte write-back
++	 *    keyed on any one passes (the Opus seat, 3e's pass, for the first two; q2_20260923/qwb_20260923/);
+ 	 *    a latch's HISTORY beyond the rowed repeats -- X6's first and repeat, X11's pairs, P1's four declines at
+ 	 *    one site: a latch that re-arms after more (codex, 3c's pass: `!(d->warned_irq_status_w++ & 3)`, which
+ 	 *    re-announces at the fifth) passes;
+ 	 *    the interrupt output's LEVEL: these rows count calls on stubbed callbacks, so a line left high
+ 	 *    (`fbirqstuck`) is invisible here, and so is a Clear that clears irq_asserted when it leaves nothing pending
+-	 *    and enabled (the Opus seat's FS02): only the Clear 0x10 row reaches that state, and it leaves irq_asserted
++	 *    and enabled (the Opus seat's FS02): of the Clears entered with irq_asserted 1, only the Clear 0x10 row
++	 *    reaches that state, and it leaves irq_asserted
+ 	 *    unread on purpose;
+ 	 *    any other register's semantics; and, beyond X14's cells, a condition in ANY of the arms' tests -- the
+ 	 *    direction test, a latch test, the write-data fetch, the drive test, a latch clearer -- on a field no branch
+@@ -1411,8 +1425,8 @@
+ 	 *  a Clear zeroing it there passed) and at the asserted Clears (the Opus seat's FS01), the FIQ fields at the
+ 	 *  IRQ_STATUS read and the re-arm row (grok: a read setting fiq_enable passed), and irq_asserted at the
+ 	 *  re-arm row (a decline clearing it passed) -- with no new row (q2_20260923/r3d_20260923).  Repair 3e (3d's own
+-	 *  pass) checks every field and irq_asserted after EACH access of the multi-access rows (codex: a toggle on
+-	 *  each +0x180 decline cancelled across the re-arm row's two batches), again with no new row
++	 *  pass) checks every field and irq_asserted after EACH access of the three rows that claim them kept (codex:
++	 *  a toggle on each +0x180 decline cancelled across the re-arm row's two batches), again with no new row
+ 	 *  (q2_20260923/r3e_20260923).
+ 	 *  Width 8 is X6/X7/X9/X10's; +0x184, +0x18c and +0x284 cannot take an 8-byte access.
+ 	 */
+@@ -1433,7 +1447,7 @@
+ 		int i, k, tk, a0, d0, f0, rv, ok;
+ 		uint32_t zs[5];
+ 		struct footbridge_data *x;
+-/*  3e: a KEPT field is checked after EACH access of a multi-access row, never only at its end -- a toggle on
++/*  3e: a field a row claims KEPT is checked after EACH of that row's accesses, never only at its end -- a toggle on
+     every +0x180 decline cancelled across the re-arm row's two batches and passed (codex, 3d's pass).  */
+ #define ZSNAP() do { zs[0] = x->irq_status; zs[1] = x->irq_enable; zs[2] = x->fiq_status; \
+ 		zs[3] = x->fiq_enable; zs[4] = (uint32_t) x->irq_asserted; } while (0)
+@@ -1572,7 +1586,8 @@
+ 	    X12 20); the closure's closing pass (repair 3): 707 -> 862 (the 8-byte cells: X6 +32, X7 +8, X9 +8, X10 +8;
+ 	    X11's other three states +60; X13 20; X14 19); repair 3's own pass (3c): 862 -> 864 (X14 +2); 3c's own
+ 	    pass (3d): 864, no row added -- six X14 rows read more, and X12/X13's buffer bytes above the width; 3d's own
+-	    pass (3e): 864 -- X14's kept fields after each access, and X6/X9/X10's bytes above the width.  */
++	    pass (3e): 864 -- X14's three kept-field rows after each access, and the bytes above the width after X6's
++	    declined accesses and X9/X10's legal reads; 3e's own pass (3f): records only.  */
+ 	{
+ 		char buf[32];
+ 		snprintf(buf, sizeof(buf), "%d", rows + 1);

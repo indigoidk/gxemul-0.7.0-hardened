@@ -208,6 +208,217 @@ MANIFEST = {
         (CLASS_RESEARCH, "#539 pass 1, Opus seat: the default-arm diagnostic-presence control candidate (not adopted: fable5 D1)"),
     "artifacts/n6/killtable_20260919/apply539_manifest.py":
         (CLASS_TOOL, "#539: adds these MANIFEST lines -- the round's own artifacts, classified by the round"),
+    #  #545 fbdeclinefive: the round's own artifacts -- kill-table mutators, drivers and analyzers, the seats'
+    #  measurement scripts, the frozen instruments the tables scored -- and the 2026-09-23 state audit's derivers,
+    #  classified by the round (artifacts/fbd5/q2_20260923/apply545_manifest.py).  None is a gated detector.
+    "artifacts/fbd5/killtable_20260919/frozen/fbpending_drain_probe.py":
+        (CLASS_WITNESS, "#545 killtable_20260919/frozen: the frozen fbpending_drain_probe.py a kill table or seat ran -- the exact text it scored"),
+    "artifacts/fbd5/killtable_20260919/frozen/fbpending_witness.py":
+        (CLASS_WITNESS, "#545 killtable_20260919/frozen: the frozen fbpending_witness.py a kill table or seat ran -- the exact text it scored"),
+    "artifacts/fbd5/killtable_20260919/frozen/footbridge_sites_probe.py":
+        (CLASS_WITNESS, "#545 killtable_20260919/frozen: the frozen footbridge_sites_probe.py a kill table or seat ran -- the exact text it scored"),
+    "artifacts/fbd5/killtable_20260919/hmut_fbd5.py":
+        (CLASS_TOOL, "#545 killtable_20260919: hmut_fbd5.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/killtable_20260919/mkmut_fbd5.py":
+        (CLASS_TOOL, "#545 killtable_20260919: mkmut_fbd5.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/killtable_20260919/sites_M12.py":
+        (CLASS_RESEARCH, "#545 killtable_20260919: a variant copy of the sites probe a seat ran for one mutant"),
+    "artifacts/fbd5/killtable_20260919/sites_M14.py":
+        (CLASS_RESEARCH, "#545 killtable_20260919: a variant copy of the sites probe a seat ran for one mutant"),
+    "artifacts/fbd5/killtable_20260919/sites_M14ctl.py":
+        (CLASS_RESEARCH, "#545 killtable_20260919: a variant copy of the sites probe a seat ran for one mutant"),
+    "artifacts/fbd5/opus_p2_20260919/hmut_p2.py":
+        (CLASS_TOOL, "#545 opus_p2_20260919: hmut_p2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/opus_p2_20260919/logs/sites_M13.py":
+        (CLASS_RESEARCH, "#545 opus_p2_20260919/logs: a variant copy of the sites probe a seat ran for one mutant"),
+    "artifacts/fbd5/opus_p2_20260919/logs/sites_M13q.py":
+        (CLASS_RESEARCH, "#545 opus_p2_20260919/logs: a variant copy of the sites probe a seat ran for one mutant"),
+    "artifacts/fbd5/opus_p2_20260919/logs/sites_R0.py":
+        (CLASS_RESEARCH, "#545 opus_p2_20260919/logs: a variant copy of the sites probe a seat ran for one mutant"),
+    "artifacts/fbd5/opus_p2_20260919/mkmut_p2.py":
+        (CLASS_TOOL, "#545 opus_p2_20260919: mkmut_p2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/p1_20260919/opus_p1/legmut.py":
+        (CLASS_TOOL, "#545 p1_20260919/opus_p1: legmut.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/p1_20260919/opus_p1/legs.py":
+        (CLASS_RESEARCH, "#545 pass 1, the Opus seat's harness-leg measurement (legs.py)"),
+    "artifacts/fbd5/p1_20260919/opus_p1/mkfix.py":
+        (CLASS_TOOL, "#545 p1_20260919/opus_p1: mkfix.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/p1_20260919/opus_p1/opus_w.py":
+        (CLASS_RESEARCH, "#545 pass 1, the Opus seat's harness-leg measurement (opus_w.py)"),
+    "artifacts/fbd5/p2_20260919/p2r/p2base_frozen/regress/fbpending_drain_probe.py":
+        (CLASS_WITNESS, "#545 p2_20260919/p2r/p2base_frozen/regress: the frozen fbpending_drain_probe.py a kill table or seat ran -- the exact text it scored"),
+    "artifacts/fbd5/p2_20260919/p2r/p2base_frozen/regress/fbpending_witness.py":
+        (CLASS_WITNESS, "#545 p2_20260919/p2r/p2base_frozen/regress: the frozen fbpending_witness.py a kill table or seat ran -- the exact text it scored"),
+    "artifacts/fbd5/p2_20260919/p2r/p2base_frozen/regress/footbridge_sites_probe.py":
+        (CLASS_WITNESS, "#545 p2_20260919/p2r/p2base_frozen/regress: the frozen footbridge_sites_probe.py a kill table or seat ran -- the exact text it scored"),
+    "artifacts/fbd5/q2_20260923/apply545_manifest.py":
+        (CLASS_TOOL, "#545: adds these MANIFEST lines -- the round's own artifacts, classified by the round"),
+    "artifacts/fbd5/q2_20260923/closing_20260923/mkmut_closing.py":
+        (CLASS_TOOL, "#545 q2_20260923/closing_20260923: mkmut_closing.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/codexV_20260923/mkmut_codexv.py":
+        (CLASS_TOOL, "#545 q2_20260923/codexV_20260923: mkmut_codexv.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/mkmut_q2.py":
+        (CLASS_TOOL, "#545 q2_20260923: mkmut_q2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/p2r_20260923/opus_q2r/analyze.py":
+        (CLASS_TOOL, "#545 q2_20260923/p2r_20260923/opus_q2r: analyze.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/p2r_20260923/opus_q2r/classify.py":
+        (CLASS_TOOL, "#545 q2_20260923/p2r_20260923/opus_q2r: classify.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/p2r_20260923/opus_q2r/driver.py":
+        (CLASS_TOOL, "#545 q2_20260923/p2r_20260923/opus_q2r: driver.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/p2r_20260923/opus_q2r/ext_driver.py":
+        (CLASS_TOOL, "#545 q2_20260923/p2r_20260923/opus_q2r: ext_driver.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/p2r_20260923/opus_q2r/patch_wit.py":
+        (CLASS_TOOL, "#545 q2_20260923/p2r_20260923/opus_q2r: patch_wit.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/analyze_q2c.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: analyze_q2c.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/driver_q2c.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: driver_q2c.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/ext_driver.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: ext_driver.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/final_tables.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: final_tables.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/fold_enum.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: fold_enum.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/gen_variants.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: gen_variants.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/mkext.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: mkext.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/mkgated.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: mkgated.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/mkvar.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: mkvar.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/t2_analyze.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: t2_analyze.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/t2_gates.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: t2_gates.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2c_opus/wit2_classify.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2c_opus: wit2_classify.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/analyze.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: analyze.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/driver_q2e.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: driver_q2e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/ext_driver_q2e.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: ext_driver_q2e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/gen_q2e.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: gen_q2e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/mkext_q2e.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: mkext_q2e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/mkvar.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: mkvar.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/wit2_classify.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: wit2_classify.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2e_opus/x14_mine.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2e_opus: x14_mine.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/analyze.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: analyze.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/driver_q2f.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: driver_q2f.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/ext_driver_q2f.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: ext_driver_q2f.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/gen_q2f.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: gen_q2f.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/mkext_q2f.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: mkext_q2f.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/mkvar.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: mkvar.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/wit2_classify_cats.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: wit2_classify_cats.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/wit2_classify_netwinder.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: wit2_classify_netwinder.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2f_opus/x14_mine.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2f_opus: x14_mine.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/analyze.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: analyze.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/d4_compare.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: d4_compare.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/driver_q2g.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: driver_q2g.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/ext_check.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: ext_check.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/ext_driver_q2g.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: ext_driver_q2g.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/gen_r3d_opus.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: gen_r3d_opus.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/gen_r3d_opus_b.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: gen_r3d_opus_b.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/mkext_q2g.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: mkext_q2g.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/q4_check.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: q4_check.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2g_opus/run_b.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2g_opus: run_b.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2h_opus/analyze.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2h_opus: analyze.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2h_opus/collect.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2h_opus: collect.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2h_opus/driver.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2h_opus: driver.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2h_opus/gen_q2.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2h_opus: gen_q2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2h_opus/gen_shapes.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2h_opus: gen_shapes.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/q2h_opus/gen_shapes_b.py":
+        (CLASS_TOOL, "#545 q2_20260923/q2h_opus: gen_shapes_b.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3_20260923/analyze_r3x.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3_20260923: analyze_r3x.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3_20260923/gen_opus_r3x.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3_20260923: gen_opus_r3x.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3_20260923/run_r3x_worker.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3_20260923: run_r3x_worker.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3c_20260923/analyze_r3c.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3c_20260923: analyze_r3c.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3c_20260923/gen_opus_r3x.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3c_20260923: gen_opus_r3x.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3c_20260923/gen_q2e_r3c.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3c_20260923: gen_q2e_r3c.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3c_20260923/run_r3c_worker.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3c_20260923: run_r3c_worker.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3d_20260923/analyze_r3d.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3d_20260923: analyze_r3d.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3d_20260923/gen_r3d.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3d_20260923: gen_r3d.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3d_20260923/mkpred_r3d.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3d_20260923: mkpred_r3d.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3d_20260923/patch_r3d.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3d_20260923: patch_r3d.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3d_20260923/run_r3d_worker.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3d_20260923: run_r3d_worker.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3e_20260923/analyze_r3e.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3e_20260923: analyze_r3e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3e_20260923/gen_r3e.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3e_20260923: gen_r3e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3e_20260923/mkpred_r3e.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3e_20260923: mkpred_r3e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3e_20260923/patch_r3e.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3e_20260923: patch_r3e.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3e_20260923/run_r3e_worker.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3e_20260923: run_r3e_worker.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/r3f_20260923/patch_r3f_records.py":
+        (CLASS_TOOL, "#545 q2_20260923/r3f_20260923: patch_r3f_records.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/repair/mkmut_q2.py":
+        (CLASS_TOOL, "#545 q2_20260923/repair: mkmut_q2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/q2_20260923/repair2/mkmut_q2.py":
+        (CLASS_TOOL, "#545 q2_20260923/repair2: mkmut_q2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/table3_20260919/mkmut_fbd5.py":
+        (CLASS_TOOL, "#545 table3_20260919: mkmut_fbd5.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/table3_20260919/mkmut_p2b.py":
+        (CLASS_TOOL, "#545 table3_20260919: mkmut_p2b.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/fbd5/table4_20260919/opus_f2/mkmut_f2.py":
+        (CLASS_TOOL, "#545 table4_20260919/opus_f2: mkmut_f2.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
+    "artifacts/stateaudit_20260923/derivers/applied_claims.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its applied_claims deriver, preserved as run"),
+    "artifacts/stateaudit_20260923/derivers/attrib_hunks.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its attrib_hunks deriver, preserved as run"),
+    "artifacts/stateaudit_20260923/derivers/cited_paths.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its cited_paths deriver, preserved as run"),
+    "artifacts/stateaudit_20260923/derivers/ledger_audit0923.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its ledger_audit0923 deriver, preserved as run"),
+    "artifacts/stateaudit_20260923/derivers/ledger_rows.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its ledger_rows deriver, preserved as run"),
+    "artifacts/stateaudit_20260923/derivers/tail_session.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its tail_session deriver, preserved as run"),
+    "artifacts/stateaudit_20260923/derivers/uncommitted_claims.py":
+        (CLASS_TOOL, "the 2026-09-23 state audit: its uncommitted_claims deriver, preserved as run"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/check_pred.py":
         (CLASS_TOOL, "closing pass 5: checks each mutant's score against its written prediction"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5.py":

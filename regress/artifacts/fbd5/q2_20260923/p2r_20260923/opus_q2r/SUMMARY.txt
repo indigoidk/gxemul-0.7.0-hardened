@@ -1,0 +1,250 @@
+OPUS_SEAT_ALIVE_20260923_Q2R
+Opus 5 seat (compile and measure), #545 repair pass 2 (q2r), 2026-09-23.  Claude Opus 5.5, claude-opus-5-5[1m].
+
+VERDICT: GAP -- IRQ_RAW_STATUS `if (writeflag == MEM_READ && !d->warned_irq_raw_w)` scores 491/491 green.  After one
+declined write to +0x184, every later legal read of +0x184 returns 0.  Four sibling edits (the same conjunct keyed on any
+other site's latch) are also green, and so are the five FIQ_STATUS mirrors.  Three more in-bound families are also
+green: the cross-site latch order (20 edits), the legal narrow +0x18c write (3 edits) and the case label from outside
+(5 edits).
+
+=====================================================================================================================
+0. INPUTS AND ENVIRONMENT
+=====================================================================================================================
+Frozen copies, md5 checked at the start and again at the end:
+  dev_footbridge.c 783c0c7fb86823c6e9a5ae84be98b965, diff_footbridge.c ff8f87b6df6c5914ddc1e8dc8ba96e30,
+  diff_footbridge.prerepair.c 116083d09fb01ba2b3c865971c5779e7, gate_offline.sh 03cea4dcd26eda7f6e08950e02aa629f.
+Scratch tree: /tmp/opusq2r (WSL Gentoo, gcc 15.2.1).  It holds a copy of GXEMUL-SEC/src, build/config.h beside it, and
+the frozen harness in regress/.  The build line is the gate's own line:
+  gcc -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -ffunction-sections -fdata-sections -Wl,--gc-sections
+      -I$X/src -I$X/src/include -I$X/src/include/thirdparty -o d diff_footbridge.c -lm
+BASELINE (baseline.log): 491 rows, 0 failures, DIFF_FOOTBRIDGE_PASS.  Binary md5 770f5811...
+The only FAIL lines are the two deliberate @@SELFCHECK@@ probes.
+
+=====================================================================================================================
+1. METHOD
+=====================================================================================================================
+driver.py makes each one-line variant by exact string replacement on the FROZEN device.  The anchor must match exactly
+once, or the variant is recorded as ANCHOR-ERROR (none happened).  The driver writes the variant into
+/tmp/opusq2r/src/devices/dev_footbridge.c behind a /tmp/opusq2r/.MUTANT sentinel, builds it, runs the 491 rows and
+records the row count, the failures, the first failing row, and whether the binary is identical to the baseline.
+Every log and every one-hunk diff is in variant_logs_and_diffs.tar.gz (436 logs, 434 diffs).
+At the end of each run the driver restored the device from the FROZEN copy, checked it with cmp, rebuilt, re-ran
+491/0 and confirmed the binary md5 matched the baseline.  Only then did it clear the sentinel.  This held on all four
+runs.  final_check.sh then did the same checks independently (see section 9).
+
+CONTROLS.  The brief's Q1..Q5 (the a_pos rows below) go red on exactly the rows and counts the brief reports:
+3, 3, 3, 3 and 2 rows, all "X9 ... (all-zero, latches clear)".  The driver therefore reproduces the committed
+measurement.  The first 8-variant validation run is in results_subset.tsv.
+
+Notation: A0 = IRQ_STATUS +0x180, A1 = IRQ_RAW_STATUS +0x184, A2 = IRQ_ENABLE_CLEAR +0x18c, A3 = FIQ_STATUS +0x280,
+A4 = FIQ_RAW_STATUS +0x284.
+  "dir"  = the direction test: `writeflag == MEM_READ`, or `writeflag == MEM_WRITE` at A2.
+  "flag" = the latch test `!d->warned_<own site>`.
+  F = one of irq_status, irq_enable, fiq_status, fiq_enable.
+  L0..L4 = the latches of A0..A4.  A latch is "later" if its site comes after the edited site in the fixed order
+  that every multi-site sequence in the harness uses: A0, A1, A2, A3, A4.
+
+=====================================================================================================================
+2. THE TABLE: 434 variants built, 153 green, 281 red.  Full per-variant rows: results.tsv (425),
+   results_dom.tsv (4), results_case.tsv (5).  Grouped: family_table.txt, by_family.txt (with every red row of
+   the thin kills).
+=====================================================================================================================
+family       variant text                          A0              A1              A2              A3              A4
+a_pos (Q1-5) dir && d->F                           4 red (3 rows)  4 red (3)       4 red (2)       4 red (3)       4 red (3)
+               first failing row: "X9 legal len 1 read of <reg> (all-zero, latches clear)"; at A2 "X9 IRQ Clear write 0 (all-zero, ...)"
+a_neg        dir && !d->F                          4 red (15)      4 red (14)      4 red (6)       4 red (14)      4 red (15)
+               first failing row: "P0 <reg> read = ..."; at A2 "P8 legal EnableClear write: 0x30 & ~0x10"
+b_pos        dir && d->L (all 5 latches)           5 red (16-17)   5 red (16-17)   5 red (7)       5 red (16-17)   5 red (16-17)
+               first failing row: P0 at the status arms; at A2 "X5 a legal ZERO EnableClear write announces nothing"
+b_neg        dir && !d->L (all 5 latches)          5 red (1 row)   5 GREEN         5 red (1 row)   5 GREEN         5 red (1 row)
+               A0: only "P7 IRQ_STATUS read after the declines (0x10)" goes red.  A4: only "P7 FIQ_RAW_STATUS read after
+               the declines (0x60)".  A2: only "P8 legal EnableClear write: 0x30 & ~0x10".  Each kill rests on one row.
+c_dir        dir && len==4 | len!=1 | len!=2       3 red (5-9)     3 red (5-9)     3 GREEN         3 red (5-9)     3 red (5-9)
+               first failing row: "X2 legal len 1 (or 2) read of <reg> = low lanes"
+c_flag       flag && len==4 | len!=1               2 red (8-15)    2 red (7-14)    2 red (4-8)     2 red (7-14)    2 red (7-14)
+               first failing row: P9 at A0, X1 "len 1 as the FIRST access announces once" elsewhere
+d_pos        flag && d->F                          4 red (29-30)   4 red           4 red (26-28)   4 red           4 red
+               first failing row: "X6 ... all-zero first" (or P9 / X4)
+d_neg        flag && !d->F                         4 red (65-67)   4 red           4 red (59-60)   4 red           4 red
+               first failing row: "P<n> ...: announced exactly once"
+fl_pos       flag && d->L(other)                   4 red           4 red           4 red           4 red           4 red
+               first failing row: P1..P5 "announced exactly once" or X1
+fl_neg       flag && !d->L(other)                  4 GREEN         3 GREEN, 1 red  2 GREEN, 2 red  1 GREEN, 3 red  4 red
+               green exactly when L is LATER in the order; an earlier L goes red on "P<n> ...: announced exactly once" (73 rows)
+e_dir        dir && d->F != 0x10                   4 GREEN         4 GREEN         4 GREEN         4 GREEN         4 GREEN
+e_flag       flag && d->F != 0x10                  4 GREEN         4 GREEN         4 GREEN         4 GREEN         4 GREEN
+e_ctl        a value that IS a seed (control)      dir ie!=0x30 red (P0); flag is!=0x18 red (P1); A2 dir ie!=0x30 red (P8)
+bit_dir_b1   dir && !(d->F & 0xff00)               4 GREEN         4 GREEN         4 GREEN         4 GREEN         4 GREEN
+bit_dir_b3   dir && !(d->F & 0xff000000)           2 G / 2 red     2 G / 2 red     2 G / 2 red     2 G / 2 red     2 G / 2 red
+               green for F = irq_enable and fiq_enable.  Red for irq_status and fiq_status, on "X8 wide ... read" (A2: "X9 IRQ
+               Clear write 0 (wide, ...)")
+bit_flag_b1  flag && !(d->F & 0xff00)              4 GREEN         4 GREEN         4 GREEN         4 GREEN         4 GREEN
+or_L         dir || d->L                           5 GREEN         4 G / 1 red     2 G / 3 red     2 G / 3 red     1 G / 4 red
+               green for the own latch (equivalent) and for later latches.  At A2 the own latch goes red on "X6 read
+               IRQ_ENABLE_CLEAR len 1 seeded repeat" (the interrupt output is touched)
+or_F         dir || d->F, dir || !d->F             8 red           8 red           8 red           8 red           8 red
+swap_flag    flag operand -> other latch           4 red           4 red           4 red           4 red           4 red
+               first failing row: "#2 announced nothing more (latched)" or "announced exactly once"
+swap_body    decline sets other latch instead      4 red           4 red           4 red           4 red           4 red
+dir_eq       writeflag != MEM_WRITE (A2: != READ)  GREEN (equivalent) at all five arms
+             !idata (A2: idata)                    red at all five arms (X4 zero-data first access; at A2 X5)
+lane *       read or decline-body byte masks       10 GREEN (outside the predicate bound)
+idata *      A2 dir && idata != 0x20 | !(idata>>8) 2 GREEN (outside the lvalue bound)
+dom *        head predicates, not in the brief's list: idata load `&& len == 4` / `&& len != 1`; timer-fold test
+             `>= IRQ_STATUS` / `>= 0x100`          4 GREEN
+case *       `case 0x1a0: case IRQ_STATUS:` and the same at 0x1a4 / 0x1ac / 0x2a0 / 0x2a4        5 GREEN
+
+=====================================================================================================================
+3. EVERY GREEN, CLASSIFIED BY AN IN-PROCESS DIFFERENTIAL (wit_main.c + wit_tu.c; per-variant output in wit/)
+=====================================================================================================================
+Method.  One binary links the FROZEN device (as base_) and the VARIANT (as var_).  Both get the same access sequence.
+After every step it compares:
+  the handler's return value,
+  the whole read buffer,
+  the CPU irq LINE LEVEL,
+  the announce count,
+  the raw ASSERT/DEASSERT call counts,
+and at the end all internal fields.
+Search from RESET: EXHAUSTIVE over all 8,040,200 sequences of length 1..3, then 2,000,000 random sequences of length 4..6.
+The alphabet has 200 ops:
+  reads: 8 registers (0x180-0x18c, 0x280-0x28c) x widths 1/2/4;
+  writes: the same, x data {0, 0x10, 0x70, 0x400, 0x10000, 0x80000000, 0xffffffff};
+  device lines 4 (timer 1), 10 (cats ISA), 11 (netwinder ISA) and 18 (cats PCI, dec21143), each + and -.
+These four lines are wired in the tree: DEVINIT connects the timers, and bus_pci.c routes "footbridge irq 10" and
+"int 18 = PCI" for cats and ISA line 11 for netwinder.  fiq_status has no writer anywhere in the product, so it is 0
+in every reachable state.
+CONTROLS.  BASE against itself: 0 divergences of any kind.  Q1 (a_pos_A0_irq_enable): 298,788 announce divergences
+and 0 guest-visible divergences.  So the brief's Q1..Q5 shape is visible to the HOST ONLY: the read value it
+returns is right in every state where the conjunct fires.
+Results (classify.txt).  One correction by hand: classify.txt lists idata_A2_ne20 as NONE because the data alphabet
+has no 0x20.  dom_witness.txt measures it as GUEST: Set 0x20, Clear 0x20, then IRQEnable reads 0x20 instead of 0.
+
+  EQUIVALENT in every reachable state (35):
+    20  anything keyed on fiq_status (e_dir, e_flag, bit_dir_b1, bit_flag_b1 x 5 arms).  fiq_status is always 0,
+        so the added condition is constant.
+     5  dir_eq: writeflag is only ever MEM_READ or MEM_WRITE.
+     4  or_L with the own latch at A0, A1, A3, A4.  It sends an already-latched declined write into the read branch,
+        whose only effect (odata) is dead on a write.  At A1 and A4 gcc emits a byte-identical binary.
+     1  b_neg_A3_L3o: FIQ_STATUS reads 0 in every reachable state, and with its own latch set nothing is announced.
+     3  lane_A3_read_b1, lane_A3_read_b3, lane_A4_read_b1: FIQ reads are always 0.
+     1  lane_A0_read_b3: no device in the tree drives irq_status bits 24-31.  Equivalent only for these machines.
+     1  lane_A3_body_fe_b3 (INTERNAL): fiq_enable is unobservable, since FIQ_STATUS = 0 & fe and no FIQ output is
+        modelled.
+
+  REAL CHANGE, GUEST-VISIBLE (39 from the differential, plus 7 from dom_witness*.txt; shortest sequence from RESET):
+     5  b_neg_A1 (every latch).  `W180/1=0 ; line4+ ; R184/1` reads 0 instead of 0x10.  The own-latch form
+        `W184/1=0 ; line4+ ; R184/1` does the same.
+     3  c_dir_A2.  `W188/1=0x10 ; W18c/1=0x10 ; R188/1` reads 0x10 instead of 0.  The byte Clear write is declined
+        and announced as a bad READ.
+     9  e_dir on irq_status, irq_enable or fiq_enable at A0, A1, A2.  Example: `W188/1=0x10 ; line4+ ; R180/1` reads
+        0 instead of 0x10.
+     9  bit_dir_b1 on the same fields and arms.  Example: `W188/2=0x400 ; line10+ ; R180/2` reads 0 instead of
+        0x400.  Bit 10 is the cats ISA cascade.
+     6  bit_dir_b3 on irq_enable or fiq_enable at A0, A1, A2.  Example: `W188/4=0xffffffff ; line4+ ; R180/1`.
+     5  lane: A0_read_b1, A1_read_b1, A0_body_is_b1, A0_body_ie_b3, A2_body_ie_b1.
+     2  idata_A2_hi (`W188/1=0x10 ; W18c/2=0xffffffff ; R188/1`) and idata_A2_ne20.
+     4  dom (dom_witness.txt):
+          idata-load `len` forms: a byte Clear write clears nothing.
+          fold widened: R1a0 returns IRQ_STATUS.  R1ac consumes the +0x18c latch.  W1ac=0x400 clears IRQEnable and
+          drops the line.
+     3  case A0, A1, A2 (dom_witness_case.txt): R1a0 and R1a4 return register values, and W1ac clears IRQEnable.
+
+  REAL CHANGE, HOST-VISIBLE ONLY -- the announce and latch channel (70, plus case A3 and A4):
+    10  fl_neg (later latch).  `W184/1=0 ; W180/1=0`: the declined write to +0x180 is never announced.
+    10  or_L (later latch): same effect on the status arms.  At A2 the declined +0x18c read also runs the write branch
+        (a redundant ASSERT/DEASSERT).
+     4  b_neg_A3 (another site's latch).  `W180/1=0 ; R280/1`: the legal FIQ_STATUS read is announced as a bad WRITE
+        and consumes the FIQ_STATUS latch.
+    46  e_* and bit_* on non-fiq_status fields wherever the read value cannot differ.  That means every flag-test form,
+        plus the direction-test forms at A3 and A4 (whose reads are 0 anyway).  Example: `line4+ ; W180/1=0`.
+     2  case A3 and A4: W2a0 consumes the FIQ_STATUS latch, and the real W280 that follows is silent.
+
+  IN THE §C.2 BOUND (union reading, as the task lists it), the real changes are:
+    b_neg 9, fl_neg 10, or_L-later 10, c_dir 3 (len), case 5, e_* 30, bit_* 40.
+  Partition-level cells (the floor, by the carrier's joint-cell rule):
+    b_neg: LEGAL x LATCH-SET, the value/effect channel.
+    fl_neg and or_L-later: the cross-site latch order.
+    c_dir: the legal-write width.
+    case: the case label seen from outside.
+  Clause (e) class (value- or bit-specific; the body never tests these values): e_*, bit_*.
+  Under a strict per-arm reading of "read by both branches", only the OWN-latch forms stay in the bound
+  (b_neg_A1_L1o and b_neg_A3_L3o).  The cross-latch forms then fall under the contract's disclosed "latch guard
+  conditioned on a field neither branch reads".  b_neg_A1_L1o is in the bound under either reading, and it is
+  guest-visible.
+
+=====================================================================================================================
+4. Q1(b): X9 EXPECTED VALUES AGAINST THE HANDLER (x9check.c / x9check.out)
+=====================================================================================================================
+The frozen handler was run on all 24 cells (3 states x 8 enable writes).  The resulting enable and the call it makes
+agree with X9's own formula AND with a derivation by hand that was written into the file before the run.
+Result: 24/24 agree, 0 disagreements.  The calls it makes:
+  seeded:    IRQ Set 0 A, Set 0x70 A, Clear 0 A, Clear 0x70 D
+  all-zero:  all four IRQ writes D
+  wide:      all four IRQ writes A.  Clear 0x70 leaves 0x10000 and is & 0x10000 != 0, so it asserts.
+  FIQ writes: no interrupt call in any state.
+  A = ASSERT, D = DEASSERT.
+
+=====================================================================================================================
+5. Q1(c) / Q1(d)
+=====================================================================================================================
+(c) Masked-read products:
+      seeded: 0x18 & 0x30 = 0x10;              0x60 & 0xc0 = 0x40
+      wide:   0x80010018 & 0x00010030 = 0x00010010;   0x40020060 & 0x000200c0 = 0x00020040
+    Both are non-zero above byte 0 (bits 16 and 17).
+    BUT no state sets any bit in byte 1 (bits 8-15) of ANY field, any of bits 18-29, or any of bits 24-31 of
+    irq_enable or fiq_enable.  Wide sets is {3,4,16,31}, ie {4,5,16}, fs {5,6,17,30}, fe {6,7,17}.
+    Measured: 20 byte-1-keyed and 10 byte-3-keyed (ie/fe) direction-test conjuncts are green.  Byte-1 masks on
+    the IRQ_STATUS and IRQ_RAW_STATUS reads are green too, and they are guest-visible.
+(d) prerepair.log / prerepair_check.sh: the pre-repair harness scores 333/0 against the frozen device.
+    Every one of its 333 row names reappears green in the 491-row run.
+    The repair adds exactly: X6 54 names (all "wide"), X7 35 (all "wide"), X9 69.
+
+=====================================================================================================================
+6. Q4-RELEVANT RECORDS FINDINGS (measured)
+=====================================================================================================================
+ - CONTRACT "legal x set in X7": X7 observes only the announce count.  The value/effect of a legal access with the
+   latches set is carried by P7 (A0 and A4, one seeded cell) and P8 (A2, one seeded cell), and by nothing at A1 or A3.
+ - X9 header "EVERY LEGAL ACCESS WITH THE LATCHES STILL CLEAR": every legal WRITE in the file is len 4.
+ - CONTRACT class "... x LATCH (clear, set)": this is the site's own latch only.  The state of other sites' latches
+   is exercised in one fixed order only.
+ - gate_offline.sh ":600" "so bits 8-31 of a field are exercised": false, see section 5(c).  The X8 row names say
+   "(all 32 bits)", and a byte-1 mask still escapes them.
+ - The DEPENDS-ON list (case label, direction test, latch) omits two predicates that dominate every decline:
+   the head `if (writeflag == MEM_WRITE) idata = ...` and the timer-fold range test.  One-token edits to each are
+   green (dom).
+ - "Not in the class" discloses joint conjuncts over two fields.  It does NOT disclose single-field value-specific
+   or bit-specific conditions (the 70 real-change e_* / bit_* greens).
+
+=====================================================================================================================
+7. SCRATCH CLOSURE EXPERIMENT -- a measurement, not a proposed patch (ext_rows.c, ext_driver.py, results_ext.tsv)
+=====================================================================================================================
+74 rows were inserted before IDENTITY in a scratch copy of the frozen harness:
+  Y1 (20): each ordered site pair -- latch j, then the first decline of i announces exactly once.
+  Y2 (48): every latch set, then each legal read in 3 states x 5 registers x 3 widths returns its value.  Also an IRQ
+           Clear write with every latch set clears the enable and drives the output.
+  Y3 (6):  IRQ Clear write 0x70 at len 1 and 2, in 3 states, latches clear.
+On the frozen device: 565 rows, 0 failures.
+Re-scored against all 148 greens (144 plus the 4 dom variants):
+  now red: all 10 b_neg, all 10 fl_neg, 10 of 14 or_L (the 4 left green are the equivalent own-latch forms),
+           all 3 c_dir, both dom idata-load forms.
+  still green: e_*, bit_*, lane, idata, dir_eq, the own-latch or_L forms, dom fold.
+  (case was not re-scored.  Nothing in Y1-Y3 accesses 0x1a0-0x2a4.)
+
+=====================================================================================================================
+8. SOMETHING ELSE (outside #545's diff; frozen model, measured in dom_witness.txt, "model check" block)
+=====================================================================================================================
+The model's CPU irq line can stick high.  Sequence: `line10+` (while disabled), then `W188/4=0x400`, then `line10-`.
+Afterwards the line is still 1 and IRQ_STATUS reads 0.  Cause: the IRQEnableSet and IRQEnableClear arms call
+INTERRUPT_ASSERT without setting irq_asserted, and footbridge_interrupt_deassert() deasserts only when irq_asserted is
+set.  A consequence for this round: a variant that skips or adds a redundant ASSERT/DEASSERT becomes guest-visible
+only in that inconsistent state.  The harness counts calls, so it sees such variants anyway.
+
+=====================================================================================================================
+9. RESTORE AND WRITE DISCIPLINE (final_check.sh)
+=====================================================================================================================
+/tmp/opusq2r/src/devices/dev_footbridge.c `cmp`s clean against the FROZEN copy.  There is no .MUTANT sentinel.  A
+fresh baseline build is newer than its source and scores 491 rows, 0 failures (baseline_final.log), binary md5
+770f5811...  GXEMUL-SEC/src/devices/dev_footbridge.c, regress/diff_footbridge.c and regress/gate_offline.sh still
+carry their start-of-seat md5s (783c0c7f, ff8f87b6, 03cea4dc).  Nothing was written to GXEMUL-SEC/, est/, build/ or
+build-asan/.  All building happened in /tmp/opusq2r, /tmp/opusq2r_wit, /tmp/opusq2r_x9, /tmp/opusq2r_ext and
+/tmp/opusq2r_dom.  No gate script and no GXEMUL-SEC/regress script was run.

@@ -1,0 +1,240 @@
+OPUS_SEAT_ALIVE_20260923_R3E
+# CHECKPOINT -- 2026-09-23 20:45 (087a90 sections rewritten; the peer's sections below are untouched)
+Opus seat (compile and measure), #545 repair-3e pass (q2h -- the CLOSING pass of the class closure), 2026-09-23.
+Claude Opus 5.5, claude-opus-5-5[1m].
+
+VERDICT: SHIP.  The 3e instrument is correct and both closures' enumerations VERIFY complete for the five-arm floor:
+  - (A) ZSNAP/ZKEPT: the X14 multi-access rows with a KEPT-fields claim are EXACTLY the two DEVINIT-declines rows and
+    the re-arm row, and 3e checks all five fields after EVERY access of each (measured: CXT1 RED3, QCLRFS RED1,
+    QCLRIS RED3, IAS01 RED2, QIASRAW RED2).  DD3 upheld.
+  - (B) pad_kept: the write-back past len is now observed at the five decline sites and the five readable registers,
+    at every width (measured: QWBIE8 RED24 declined read, QWBST8 RED24 legal read, QTAIL0 RED209, WB4 RED96, WB8 RED144).
+    The premise is real -- cpu_arm_instr_loadstore.c:104/108/126 declare data[1]/data[2]/data[4] with matching datalen.
+  0 floor breaches and 0 claimed-channel escapes in 52 FILE-BACKED edits (49 q2h shapes that built on both
+  instruments + 3 brief motivators), 0 mispredictions among them.  [CORRECTED by the follow-up, from my own files:
+  this said "53 measured edits (50 q2h shapes ...)", which counted QIASRD's BUILD FAILURE as a measurement --
+  results_all.jsonl holds 50 entries, 49 built on both.  The QIASRD2 rebuild was measured but its output was never
+  saved to a file, so it is not counted.]  The records defects that made me say DO NOT SHIP on 3d are FIXED (q2{e,f,g}_opus copied, sentinels
+  present; the caller line is now a CLASS).  ONE residual, below the floor and not ship-blocking: the shared common
+  tail's write-back width is NOT pinned at the two NON-decline reads VENDOR_ID/TIMER_1_VALUE (X7 reads them without
+  pad_kept; QWBVEND/QWBTMRV green).  It is outside the five-arm floor and the COVERED claim does not overclaim -- FILE
+  a one-clause NOT COVERED disclosure; do not hold the round for it.
+
+Every number below names the file in this directory (_scratchpad/fbd5/q2h/opus/) that produced it.
+
+=====================================================================================================================
+BASELINE AND INTEGRITY   [setup.sh, baseline_3e.log, baseline_3d.log]
+=====================================================================================================================
+/tmp/opusr3e: GXEMUL-SEC/src, build/config.h, the FROZEN device (783c0c7f) and BOTH frozen harnesses (3e 15a1c2a2 =
+under review, 3d 6c92d7e5).
+  - 3e: 864 rows, 0 failures, 0 warnings, DIFF_FOOTBRIDGE_PASS; baseline_3e.log is BYTE-IDENTICAL to the main loop's
+    r3e_20260923/diff_FIX.log.
+  - 3d: 864 rows, 0 failures, 0 warnings; byte-identical to r3d_20260923/diff_FIX.log.
+  - frozen device == SEC device; frozen 3e harness == SEC harness (cmp clean, start and end).
+  - The brief's inlined 14-hunk diff == `diff -u` of the two frozen harnesses.  Diff delivered.
+
+=====================================================================================================================
+Q1 -- VERIFY THE ENUMERATION (the closing pass's job)
+=====================================================================================================================
+(a) CLASS (A) -- every X14 row making MORE THAN ONE access to dev_footbridge_access, its kept claim, and whether 3e
+    checks it after every access.  Read directly off the frozen rows (frozen/diff_footbridge.c:1419-1560); DD3 is the
+    claim under test.
+
+      row (X14)                              accesses   kept-fields claim?   3e checks after EACH access?
+      DEVINIT declines, tk=0  (line ~1497)   5 (ZDECLINE)   YES              YES -- ZDECLINE()=ZSNAP + ZKEPT x5
+      DEVINIT declines, tk=1                 5 (ZDECLINE)   YES              YES -- same
+      re-arm row              (line ~1543)   5+5+1+5=16     YES              YES -- ZKEPT after each ZDECLINE access,
+                                                                            after each of the 5 reads, and after ZCLR(0x400)
+      DEVINIT reads, tk=0/1   (line ~1482)   5 reads        NO (claims VALUES) values checked per read in the loop
+      DEVINIT Set/Clear,tk0/1 (line ~1489)   2 (Set,Clear)  NO (claims ENABLE+DRIVE) endpoint enable + cumulative ZCPU
+      -- all other X14 rows make ONE access (their end IS the access): the two Clear-0x10 rows, the 7 line-k Clear-0
+         rows, the Clear-0x20 rows, the IRQ_STATUS-read row (checks all 5 fields at its one endpoint), the two
+         line-4 Clear rows.
+
+    ANSWER: the multi-access rows with a KEPT claim are EXACTLY the two DEVINIT-declines rows and the re-arm row --
+    DD3 is CORRECT.  No kept-fields claim is read only at an endpoint.  The DEVINIT reads row claims VALUES (checked
+    per read); the Set/Clear row claims the ENABLE (end state) and the DRIVE (cumulative interrupt count) -- neither
+    is a kept-fields claim, and their field preservation is covered by X9/X10 (which check fiq_status on enable
+    writes) or disclosed (AS/SR).  Measured corroboration: CXT1 (codex's per-decline irq_asserted toggle) is GREEN on
+    3d, RED 3 on 3e -- exactly the 3 rows above (brief_shapes.out; my own build).  QCLRFS (fiq_status changed at the
+    re-arm Clear) RED 1; QCLRIS (irq_status changed there) RED 3; IAS01/QIASRAW (irq_asserted set on a declined
+    write) RED 2 on the DEVINIT-declines rows -- so ZKEPT fires on EACH access kind, not just the toggle.
+
+(b) CLASS (B) -- every row that passes a buffer narrower than 8, and whether a write-back/fetch past len is observed.
+
+      block   narrow buffers          pad_kept?   write-back past len observed?          fetch past len observed?
+      X6      declined, w=1,2,4(,8)    YES (3e)    YES  -- QWBIE8 RED24 (declined +0x18c   n/a on declined reads
+                                                        read), QTAIL0 RED (all reads)
+      X9      legal reads, w=1,2,4(,8) YES (3e)    YES  -- QWBST8 RED (IRQ_STATUS), QTAIL0   n/a (reads)
+      X10     legal reads, w=1,2,4(,8) YES (3e)    YES  -- QWBST8 hit X10, QTAIL0            n/a
+      X11     len-4 declines           no          carried at w=4 by X6/X9/X10             n/a
+      X12/X13 Clear WRITES, w=1,2,4    no          none possible (write path: tail skipped) YES -- ne-check + 0xa5
+                                                                                           poison (3d; deepseek)
+    ANSWER: the write-back past len is now observed at all five decline sites and all five readable registers, at
+    every width (1,2,4; and 8 at IRQ_STATUS/FIQ_STATUS).  The fetch past len on the Clear write is observed by X12/X13
+    via the ne value-check against the 0xa5 poison (the fetch half 3d took).  X11's len-4 declines and the write-back
+    at len 4 are carried by X6/X9/X10.  The (B) enumeration is COMPLETE for the five-arm closure.
+    GAP (out of floor): the shared tail is NOT pinned at the two NON-decline reads VENDOR_ID (+0x00) and TIMER_1_VALUE
+    (+0x304) -- X7 reads them but has no pad_kept and reads no value, and X6/X9/X10 never read them.  QWBVEND/QWBTMRV
+    (tail write-back 8 conditioned on those addresses) are GREEN.  Not a floor breach: those are not edited arms.
+
+(c) COVERED is TRUE and non-vacuous of the 864 rows: the new "bytes above the width untouched (3e)" and "fields and
+    irq_asserted checked after EACH access (3e)" claims each go RED under a matching mutant (QWBST8/QWBIE8/QTAIL0 for
+    B; CXT1/QCLRFS/QCLRIS for A), so neither is a dead check.  Every remaining 3e GREEN in my 50-shape table falls
+    under a disclosed NOT COVERED line (mapping in analysis.txt): CALLER class CX01-CX10; STORE class SR01-SR11 and
+    the single-access latch/FIQ AS01-AS04/AS08; JOINT RS01/RS02; producer/LEVEL IAS02; TEXT/format FMT01; exact-value
+    AS07/QLATCHX; EQ FW03/QZKTR (QIASRD2 too, but its output is unpreserved -- see Q1 re-score).  The sole NOT-explicitly-disclosed green is the VENDOR_ID/TIMER_1_VALUE tail
+    write-back (above).
+
+RE-SCORE OF MY 39 q2g SHAPES ON THE 3e INSTRUMENT   [PREDICTIONS.txt written 21:20:26 BEFORE any 3e build;
+results_all.jsonl; analysis.txt]
+  Of my 31 greens on 3d, EXACTLY ONE turns RED on 3e: IAS01 (irq_asserted=1 on a declined IRQ_STATUS write) -> RED 2,
+  on the two DEVINIT-declines rows, because 3e's ZKEPT catches irq_asserted moving 0->1 during a ZDECLINE access.
+  This is a COVERAGE GAIN, not a breach.  The other 30 greens stay green (+ FW03 EQ), each under a NOT COVERED line.
+  0 mispredictions across the 49 shapes that built on both instruments.  [CORRECTED: this said "across all 50" --
+  analyze.py scored QIASRD's build failure as a "match" because a build failure is not RED; it is not a measurement
+  and is excluded.]  QIASRD BUILD-FAILed as a two-statements-into-a-braceless-if artifact (dangling else).  The comma
+  form QIASRD2 was measured GREEN on both by addendum.sh, BUT ITS OUTPUT WAS NOT SAVED TO A FILE -- that result is
+  unpreserved and is not counted in any denominator here.
+
+=====================================================================================================================
+Q2 -- THE FLOOR QUESTION ON THE COMPOSITE, with a DENOMINATOR   [gen_q2.py, PREDICTIONS.txt, results_all.jsonl,
+analysis.txt, brief_shapes.out]
+=====================================================================================================================
+NO FLOOR BREACH.  The smallest edit to the five arms / two head tests / the +0x18c Clear write / the common tail that
+the 864 rows cannot see AND the contract does not disclose:
+  - WITHIN the five-arm floor: NONE.  Every green floor-edit is disclosed (CALLER, STORE, JOINT, exact-value, TEXT,
+    producer/LEVEL); every floor predicate edit is RED (GLM1 RED23, GLM2 RED149, my FW01/FW02/SR10 controls, QTAIL0,
+    QWBIE8, QWBST8, QCLRFS, QCLRIS, IAS01, QIASRAW).
+  - The one green-and-not-explicitly-disclosed edit is on the SHARED TAIL and lands OUTSIDE the five-arm floor:
+    `memory_writemax64(cpu, data, relative_addr == VENDOR_ID ? 8 : len, odata)` (QWBVEND) and the TIMER_1_VALUE
+    variant (QWBTMRV) -- both GREEN.  X7 reads those registers without pad_kept; X6/X9/X10 never read them.  A real
+    narrow VENDOR_ID load WOULD overflow, so it is a real (if contrived) memory-safety-shaped edit -- but VENDOR_ID
+    and TIMER_1_VALUE are not #545's edited arms, the tail is unchanged by #545, and the COVERED claim (scoped to
+    X6/X9/X10) does not overclaim.  Disposition: COVERAGE DEBT below the floor; FILE a one-clause NOT COVERED line
+    ("the tail write-back at the non-decline reads VENDOR_ID/TIMER_1_VALUE, read by X7 without pad_kept").
+
+DENOMINATOR -- what was swept (52 file-backed edits: the 49 q2h shapes in results_all.jsonl that built on both
+instruments + CXT1/WB4/WB8 in brief_shapes.out; QIASRD excluded as a build failure, QIASRD2 unpreserved -- CORRECTED
+from "53 measured edits: 50 q2h shapes + CXT1/WB4/WB8"):
+  arms/tests probed: the five decline arms' read expressions, latch tests and bodies; the direction tests; the Clear
+    write body and its drive test; the head write-data fetch and the fetch's direction test; the timer-fold test; the
+    common tail's write-back WIDTH (0, len, len<4?4, 8, and conditioned on +0x18c / IRQ_STATUS / VENDOR_ID /
+    TIMER_1_VALUE).
+  closure edges: per-access field changes at each ZDECLINE access kind and at the re-arm Clear (A); a within-access
+    transient (QZKTR, EQ -- ZKEPT is after-access, but the edit is a no-op); irq_asserted at a legal read (QIASRD2,
+    disclosed -- measured but UNPRESERVED, not in the 52); write-back past len on declined and legal reads and at non-decline reads (B).
+  channels probed: the five fields, the five latches, irq_asserted, the timer arrays (load/value/control/pending/
+    bound/handle), the interrupt calls, the announce format, and the buffer bytes above the width.
+  cells: every X6-X13 state x width, and every one of X14's 21 rows.
+  carried variants: the 739 of 3d's table are unchanged on 3e (no row added, same 864 ok-lines: r3e_20260923).
+  RESULT: 0 floor breaches; 1 out-of-floor tail-safety gap at 2 non-decline registers.
+
+=====================================================================================================================
+Q3 -- ADJUDICATE T1-T12 and DD1-DD3 (UPHOLD/OVERTURN/REFINE/CANNOT SETTLE); is the FIX right, not just the finding?
+=====================================================================================================================
+  T1  UPHOLD.  CXT1 GREEN(3d)->RED3(3e), my own build.  Fix right: ZSNAP/ZKEPT after each access is the correct
+      closure; it fires on every access kind (QCLRFS/QCLRIS/IAS01/QIASRAW), not just the toggle.
+  T2  UPHOLD.  WB4 RED96, WB8 RED144 (my build); premise verified in cpu_arm_instr_loadstore.c:104-126.  Fix right.
+  T3  UPHOLD (disclose as a class).  CX01-CX10 green on both; a row closes only the fields it sets (CX09/CX10 stay
+      green vs a real-caller row), so disclosure is the only closure.  Correct.
+  T4  UPHOLD (disclose).  A destination keyed on a field X14's instances do not vary passes -- consistent with the
+      X14-instances reasoning; honest disclosure.
+  T5  UPHOLD (disclose).  SR01-SR11 + AS01-AS04/AS08 green, all named in the STORE line.  Correct.
+  T6  UPHOLD (disclose).  FMT01 green; it is a vsnprintf format, real UB in product fatal(), but the detector counts
+      announces and never reads them -- outside the channel, correctly disclosed under TEXT.
+  T7  UPHOLD.  All cited artifacts now exist; q2{e,f,g}_opus/SUMMARY.txt each end in SUMMARY_DONE (my q2g Q4.4 flag on
+      q2e_opus is resolved).
+  T8  UPHOLD.  GLM1 RED23, GLM2 RED149 on BOTH instruments -- the four fields are read.
+  T9  UPHOLD.  x14_new's 5th arg is `int devinit` (frozen dev... harness line 119); settled from source.
+  T10 UPHOLD.  CXS2 RED2 (E3's rows only) per the brief -- E3 not redundant with the re-arm row.
+  T11 FILED.  gate "Not covered" summary is a subset of the harness NOT COVERED; records, fbgateidentity.
+  T12 UPHOLD.  Take both E3 and E5 -- zero-row repairs with measured deltas that move no other variant.
+  DD1 UPHOLD.  Settled by CXT1 (green on 3d) and closed as class (A).
+  DD2 UPHOLD.  Caller context closed by disclosure (T3).
+  DD3 UPHOLD.  Verified directly against the rows (Q1a): the multi-access kept-claim rows are exactly the two DEVINIT
+      declines rows and the re-arm row; the reads row claims values, the Set/Clear row claims enable+drive.
+  WHICH ACCEPTED DISPOSITION IS WRONG?  None in substance.  The one refinement: T2's class-(B) closure is stated as
+  complete "at every width in X6/X9/X10", which is TRUE for the five arms and five readable registers -- but the
+  SHARED TAIL is unpinned at the two non-decline reads (VENDOR_ID/TIMER_1_VALUE).  T2's disposition stands; the
+  CONTRACT owes one NOT COVERED clause naming that out-of-floor gap.
+
+=====================================================================================================================
+Q4 -- RECORDS: is any changed comment false?  ls every artifact the changed comments cite.
+=====================================================================================================================
+  No sentence in 3e's changed comments is false about the code as it now is:
+   - "in X6, X9 and X10 the bytes above the width untouched (3e)"        TRUE (QWBST8/QWBIE8/QTAIL0 red)
+   - "every field and irq_asserted checked after EACH decline/access (3e)" TRUE (CXT1/IAS01/QIASRAW/QCLRFS red)
+   - X12 header "a real narrow store's buffer is data[1] or data[2] (cpu_arm_instr_loadstore.c)" TRUE (:104,:108)
+   - IDENTITY "3e: 864 -- X14's kept fields after each access, and X6/X9/X10's bytes above the width" TRUE
+   - pad_kept comment "a write-back of 8 bytes passed" (3d)               consistent (WB8 green on 3d)
+  Cited artifacts, all EXIST (regress/artifacts/fbd5/):
+   q2_20260923/q2f_opus/SUMMARY.txt (16330, SUMMARY_DONE)   q2_20260923/q2g_opus/SUMMARY.txt (17843, SUMMARY_DONE)
+   q2_20260923/q2e_opus/SUMMARY.txt (20033, SUMMARY_DONE)   q2_20260923/q2c_opus/SUMMARY.txt (24651, SUMMARY_DONE)
+   q2_20260923/r3e_20260923/  r3d_20260923/  r3c_20260923/  r3_20260923/
+   q2_20260923/closing_20260923/CL.log (CL_DONE), CL2.log (CL_DONE)   q2_20260923/Q2.log (Q2_DONE)
+   q2_20260923/table4_20260919/   src/cpus/cpu_arm_instr_loadstore.c
+  One imprecision (not false): the caller line reads "ten more -- <7 field names>, CX01-CX10" -- 10 SHAPES over 7
+  DISTINCT fields (CX01/04/05/07 all use cpu->running).  Terse, not wrong.
+
+=====================================================================================================================
+Q5 -- CLOSING: is this pass VALID to close the chain?
+=====================================================================================================================
+  YES, and I would close it.  It is a VALID pass: the diff was delivered (14 hunks, == frozen), the denominator is
+  above, the zero is carried WITH its enumeration.  Per the repair-chain stop condition (the first VALID pass that
+  finds ZERO floor breaches; after a class closure it VERIFIES the enumeration rather than hunting cells): this pass
+  finds ZERO floor breaches AND verifies both enumerations complete for the five-arm floor -- (A) the 3 multi-access
+  kept rows all ZKEPT per-access; (B) the five arms + five readable registers all pad_kept at every width.  The chain
+  CLOSES.
+  The one measurement that would let a stricter reader close it WITHOUT the caveat: add the one NOT COVERED clause for
+  the VENDOR_ID/TIMER_1_VALUE tail write-back (a records edit, no row, no re-table) -- then there is no
+  green-and-undisclosed edit anywhere in the sweep.  This does not change the SHIP verdict; it is coverage debt below
+  the floor.
+  Roster: the main loop's to name (I am the Opus compile-and-measure seat; panel_20260923_210234 is in flight).
+
+ALSO FOUND (while verifying): nothing new beyond the VENDOR_ID/TIMER_1_VALUE tail observation and the QIASRD
+construction artifact (both above).  The brief's own r3e table (CXT1/WB4/WB8/GLM1/GLM2/CXS2/BO1/PC1/CXD1) is
+corroborated on my independent builds where I re-ran it (CXT1 RED3, WB4 RED96, WB8 RED144).
+
+=====================================================================================================================
+SEAT RECORD
+=====================================================================================================================
+Model: Claude Opus 5.5 (claude-opus-5-5[1m]).
+Read:
+  - brief_545_r3e.md in full, and its companion r3e_head.md / r3e_f2e.md / the panel launch log;
+  - the FROZEN dev_footbridge.c (handler, producer pair, DEVICE_TICK, reload_timer_value) and BOTH frozen harnesses
+    (3e 15a1c2a2 in full, 3d 6c92d7e5 via diff);
+  - my own q2g outputs (SUMMARY.txt, gen_r3d_opus.py/_b, driver_q2g.py, PREDICTIONS) -- reused;
+  - src/cpus/cpu_arm_instr_loadstore.c (the narrow-load buffer premise);
+  - gate_offline.sh's footbridge block (row-count pins);
+  - the r3e_20260923 artifacts (TABLE.txt tie-out) and the cited q2{c,e,f,g}_opus SUMMARYs.
+Ran (WSL Gentoo, gcc; scratch trees /tmp/opusr3e*; every build and run in the foreground):
+  - setup.sh (both baselines, byte-identical to the main loop logs);
+  - the 50-shape two-instrument table (run.sh, 6 workers -- 39 q2g re-scored + 11 new q2h edges), predictions frozen
+    to PREDICTIONS.txt BEFORE the run; analyze.py scored it (0 mispredictions);
+  - addendum.sh (the QIASRD comma form), brief_shapes.sh (CXT1/WB4/WB8 corroboration), the artifact ls, finalcheck.sh.
+Not run: no gate, no battery, no GXEMUL-SEC script.  Nothing was written under GXEMUL-SEC, est, build or build-asan.
+Restore: every mutated scratch tree was restored from the FROZEN device, cmp-verified, both baselines rebuilt to
+864/0 with fresh binaries, and its sentinel cleared; all nine scratch trees end clean with no sentinel, and the SEC
+working copies still equal the frozen files (finalcheck.sh).
+
+=====================================================================================================================
+FOLLOW-UP (coordinator's four points, answered from my own result files -- nothing re-run)
+=====================================================================================================================
+  1. VERDICT unchanged: SHIP as 3e, with records-only edits to follow.
+  2. QWBVEND and QWBTMRV: build ok, 864 rows, 0 failures on BOTH 3d and 3e (results_all.jsonl).  Offsets are right:
+     VENDOR_ID 0x00 (dc21285reg.h:47), TIMER_1_VALUE 0x304 (:376).  ONE CORRECTION to the proposed NOT COVERED
+     wording: X7 is not the only row.  X3's widened check (diff_footbridge.c:830-831) ALSO reads both registers, at
+     len 4, with no pad_kept -- so say "X3's and X7's".  (Precision, optional: the tail runs AFTER the timer fold, so
+     a key on TIMER_1_VALUE also matches timers 2-4's VALUE registers, 0x324/0x344/0x364.)  Disposition confirmed:
+     one clause, no new row -- outside the five-arm floor, and COVERED is scoped to X6/X9/X10.
+  3. Caller wording accurate: CX01-CX10 = ten shapes over seven fields -- running (CX01, CX04, CX05, CX07), byte_order
+     (CX02), is_32bit (CX03), ninstrs (CX06), machine->ncpus (CX08), pc (CX09), cd.arm.cpsr (CX10) -- all green 864/0
+     on both.  Precision: byte_order and pc are the two fields grok had ALREADY named in the same sentence (CX02 is
+     essentially grok's BO1 edit), so the NEW fields are five.  Suggest "(two of them, byte_order and pc, also grok's)".
+  4. Q5 stands: the pass is VALID and the chain closes -- with the denominator corrected to 52 file-backed edits (see
+     the CORRECTED notes above).  The correction does not change any verdict.
+  Own-process note: my first helper for this follow-up was written to the shared git-bash /tmp, where a stray enum.py
+  shadowed the stdlib and the run failed.  I deleted my helper and re-ran it from the session scratchpad.  No project
+  file and no result file was touched by that failure.
+SUMMARY_DONE

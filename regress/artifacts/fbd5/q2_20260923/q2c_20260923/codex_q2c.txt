@@ -1,0 +1,155 @@
+VERDICT: All nine family-count pins and the 707-row total reconcile, but the COVERED wording overstates the tested combinations and several comments contradict the frozen code.
+
+**TASK 1**
+
+**(a) Inputs and conditions**
+
+[THE SPACE, lines 845–853](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/diff_footbridge.c:845) names all the **arm-local semantic inputs**: address/case, direction, width, `idata`, the four interrupt fields, and the five warning flags. Its account of the arm bodies’ conditions is correct:
+
+- Four status arms test `writeflag == MEM_READ`, then their own `!warned_*`.
+- IRQ Clear tests `writeflag == MEM_WRITE`, then `irq_status & irq_enable` **after updating the enable**; its declined branch tests `!warned_irq_clear_r`.
+
+That covers all **11 arm-local branch predicates**. It is not a literal inventory of the surrounding function’s tests:
+
+1. **Write-data fetch**, [device line 514](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/dev_footbridge.c:514): `writeflag == MEM_WRITE` controls loading `idata` from `data` over `len`. This reuses the named direction/width/data inputs. Among these five arms, the fetched value affects only a **legal IRQ Clear write**. The four declined writes ignore it. Reads leave `idata` at its initial zero.
+
+2. **Timer-range fold**, device lines 517–520: the conjunction tests both `relative_addr >= TIMER_1_LOAD` and `relative_addr <= TIMER_4_CLEAR`; if true, it computes `timer_nr` and clears address bits `0x060`. THE SPACE mentions the fold, but leaves these comparisons implicit.
+
+   The five canonical addresses are outside the current timer interval. Independently, each is a fixed point of the mask:
+
+   | Arm | Address | `address & ~0x060` |
+   |---|---:|---:|
+   | IRQ_STATUS | `0x180` | `0x180` |
+   | IRQ_RAW_STATUS | `0x184` | `0x184` |
+   | IRQ_ENABLE_CLEAR | `0x18c` | `0x18c` |
+   | FIQ_STATUS | `0x280` | `0x280` |
+   | FIQ_RAW_STATUS | `0x284` | `0x284` |
+
+   Thus merely widening the range to include these addresses would not change their dispatch. The computed timer index would also be zero, and these arms do not use it. Widening the range **could admit other addresses**, such as `0x1a0`, which masks to `0x180`.
+
+3. **Common read tail**, device lines 777–778: `writeflag == MEM_READ` controls writing `odata` into the buffer. That direction test matters to both legal reads and the declined Clear read.
+
+CPU/buffer transport and interrupt callbacks are surrounding dependencies fixed by the harness, rather than separately enumerated dimensions of THE SPACE.
+
+**(b) COVERED classes and observable comparisons**
+
+| Claimed class | Actual rows and observations | Assessment |
+|---|---|---|
+| Declined × width × write data `{0,0x70}` × state × first/repeat | **X6**, lines 901–919: return `1`, report delta `1/0`, equality of all four fields, unchanged assert/deassert counters, and zero over the declined read’s width. | Meaningful coverage of all **216 enumerated cells**. The read buffer starts at `0xa5`, so missing writeback is observable. |
+| Legal × width × state, latch clear | **X9**, lines 1015–1056: return value, report count, read value/write effect, four fields, interrupt callbacks, then five first reports. | Meaningful for **92 cells**, but X9 starts **all five flags clear**, and its writes are **width 4 only**, with data `0/0x70`. |
+| Legal with every latch set | **X7** compares reports after the legal operation and five repeated declines. **X10** compares read values, fields and interrupt callbacks; its Clear write checks the resulting enable and output. | X7 genuinely tests announcement/rearming behavior for its sampled operations, but cannot establish value correctness. X10 supplies value/effect checks for **60 reads and four width-4 Clear writes carrying `0x70`**. |
+| Each ordered pair before a first decline | **X11**, lines 1140–1152: report delta exactly one, four fields unchanged, no interrupt callbacks. | Meaningful for **20 pairs**, using the seeded state, width 4 and write data `0x70`. It does **not** compare the declined read’s value or the handler return value. |
+| Legal Clear at every width, including all-ones data | **X9** supplies width-4 `0/0x70`; **X12** supplies narrow `0x70` and all-ones at widths 1/2/4. X12 compares the width-masked result, output direction/count, fields and reports. | Meaningful for these combinations. In particular, the ones state distinguishes clearing one byte, two bytes and four bytes. X12 always starts with flags clear. |
+
+The broad legal-access Cartesian-product claim therefore has gaps:
+
+- No narrow legal Clear write with flags already set.
+- No narrow legal Clear write carrying zero, even with flags clear.
+- No latched all-ones Clear write.
+- Latched width-4 zero Clear writes occur in X7, but their value/output effects are not checked.
+- X10–X12 do not check handler return values.
+
+A concrete static counterexample is changing the Clear write condition to:
+
+`writeflag == MEM_WRITE && (len == 4 || !d->warned_irq_clear_r)`
+
+Every existing Clear-write row still takes the same branch: the narrow rows have that flag clear, and the latched rows use width 4. A narrow legal write after that flag is set would silently lose its clear and interrupt effects. This is a static argument; I did not apply or execute the change.
+
+The zero/ones states exercise both outcomes of individual bit predicates. That alone does not guarantee an observable failure: for example, a legal read diverted into an already-latched decline can remain indistinguishable when its correct value is zero. X7’s announcement-only oracle cannot resolve that distinction.
+
+**(c) NOT COVERED items**
+
+The exclusions appear at [harness lines 859–867](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/diff_footbridge.c:859). Most state a sampling boundary without giving a separate reason for it.
+
+| Exclusion | Could a one-line change break these arms while all rows remain green? | Is the stated reason/boundary true? |
+|---|---|---|
+| Exact field value | **Yes.** An extra legal-read condition excluding `irq_enable == 0x10` can escape these samples. | No exact-constant field comparison exists today. But “the bodies test no values” overlooks the Clear output condition, and “no finite set” is mathematically false: four `uint32_t` fields have a finite `2^128` combined domain. Exhaustion is impractical, not infinite. |
+| Address aliases | **Yes, for admitting extra offsets.** An added case label or expanded fold interval can route an untested address into an arm. | The current fold maps no timer address onto these arms. That does not protect against future aliases. With the mask unchanged, widening the interval alone cannot alter the five fixed-point addresses above. |
+| Joint conditions over two fields | **Yes.** Four state tuples do not cover independent field combinations. | The sampling limitation is true; the fields still belong to these arms’ behavior. |
+| Joint conditions over latches beyond X11 pairs | **Yes.** A first decline after two later sites have latched can acquire an unnoticed dependency on both. | True: X11 sets only one other flag before the target’s first decline; it does not enumerate arbitrary subsets or sequences. |
+| Wide data on declined writes | **Yes.** A warning guard conditioned on an upper data bit can escape. | True: declined-write data remain `0/0x70`; wide **field states** do not supply wide **write data**. |
+| Legal-access interrupt output outside X9/X10/X12’s checks | **Yes.** Suppressing the assert on a latched zero-data Clear write would escape X7’s report-only check. | The limitation is accurately stated. These are nevertheless effects of the five arms. |
+| Other registers’ semantics | **Not intrinsically a behavior of these five arms.** Untested behavior elsewhere can change without affecting these rows. | A legitimate scope boundary, although some other-register semantics are incidentally tested—for example X9’s enable writes and the timer rows. |
+| Guard depending on an otherwise unread field | **Yes.** Adding `!d->timer_control[0]` to a decline guard leaves the interrupt-test instances unchanged because their timer controls are zero. | The offline explanation is supported. The claimed guest-probe detection is not verifiable from these four files. |
+
+The supplied device has no post-initialization writer of `fiq_status`. Nonzero FIQ seeds are synthetic; zero also matches its initialized value.
+
+**TASK 2**
+
+All **nine distinct-name family pins** match the loops.
+
+| Pin | Enumeration |
+|---|---|
+| **P = 78** | P0: 5. P1–P5: `5×13 + 1` extra declined-read-value row. P6: 1. P7/P8/P9: 2 each. Total `5+65+1+1+2+2+2 = 78`. |
+| **X6 = 216** | Four write sites with two data values, plus one read site with one buffer case: `(4×2+1) × 4 states × 3 widths × 2 occurrences`. |
+| **X7 = 140** | `4 states × (8 writes + 9 read registers × 3 widths)`. Writes use width 4. |
+| **X8 = 6** | Five read-value checks plus one report-count check. |
+| **X1–X8 = 400** | X1: `2×5+2=12`; X2: `2×5+1=11`; X3: 3; X4: `5×2=10`; X5: 2. Thus `12+11+3+10+2+216+140+6=400`. |
+| **X9 = 92** | `4 states × (5 reads × 3 widths + 8 writes)`. |
+| **X10 = 64** | `4 states × (5 reads × 3 widths + 1 Clear write)`. |
+| **X11 = 20** | `5 choices of j × 4 choices of i`, excluding `i==j`. |
+| **X12 = 20** | `4 states × (2 narrow 0x70 cases + 3 all-ones cases)`. |
+
+Each P-site’s 13 ordinary rows comprise: return, report, four fields, interrupt output, repeat report, narrow-repeat report, and four fields again.
+
+Before P, there are **32 rows**: A–H contribute `3+3+1+3+4+1+1+2=18`; the timer-Clear block contributes 14. Therefore:
+
+`32 + 78 + 400 + 92 + 64 + 20 + 20 + 1 IDENTITY = 707`.
+
+The self-check probes restore `rows`; their printed success summary does not increment it.
+
+The earlier harness independently reconciles:
+
+`32 + 78 + (38+162+105+6) + 69 + 1 = 491`.
+
+The increment is:
+
+`54 additional X6 + 35 X7 + 23 X9 + 64 X10 + 20 X11 + 20 X12 = 216`.
+
+**No names repeat among the 707 counted rows.** The generated names retain every varying loop dimension: site, state, width, data, occurrence, or ordered-pair endpoints as applicable. The single read-data iteration in X6 prevents its empty data label from colliding. The name buffers are sufficiently large.
+
+[Gate line 609](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/gate_offline.sh:609) strips the numeric result and padding before deduplicating. Its required space after `X[1-8]` excludes X10–X12 from the X1–X8 count.
+
+**TASK 3**
+
+The following comment text is contradicted or overbroad:
+
+1. [diff_footbridge.c:850](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/diff_footbridge.c:850):  
+   > “legal x width x state x own latch clear (X9) and every latch set (X7 announce, X10 value and effect)”
+
+   The full product is absent, particularly narrow Clear writes with flags set. X9 also means **all flags clear**, not every configuration with the target’s flag clear. The same overstatement appears in [gate_offline.sh:596](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/gate_offline.sh:596): “every legal access with every latch set re-arms no latch.”
+
+2. [diff_footbridge.c:860](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/diff_footbridge.c:860):  
+   > “the bodies test no values and no finite set of states holds them all”
+
+   The Clear branch tests the status/new-enable intersection; the field-value domain is finite. “No exact-constant comparisons” and “impractical to exhaust” would be defensible qualifications.
+
+3. [diff_footbridge.c:954](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/diff_footbridge.c:954):  
+   > “These seeds set bits in bytes 0, 2 and 3 only; the ONES state in X6/X7/X9-X12 is what exercises byte 1.”
+
+   The byte arithmetic is correct, but **X11 never uses ones**: line 1144 always calls `YNEW(0)`. The gate’s list at line 602 correctly excludes X11.
+
+4. [diff_footbridge.c:1066](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/diff_footbridge.c:1066):  
+   > “every legal write was len 4 with data 0 or 0x70”
+
+   P8 already writes **`0x10`**, at lines 694–695 in **both** harness revisions. Width 4 is accurate for the earlier legal Clear writes; the data claim is not.
+
+5. [gate_offline.sh:572](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/gate_offline.sh:572):  
+   > “Detection is unaffected either way: every grep below fails on a truncated log.”
+
+   The gate can fail overall while individual presence checks succeed. A log truncated at D2 can already contain A1, both prescaler rows and C1, satisfying their later greps.
+
+6. [gate_offline.sh:694](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2c/frozen/gate_offline.sh:694):  
+   > “The two forked end-to-end rows: these are the ones that prove the HOST SURVIVES, and they are forked so a mutant that re-crashes is a named-row KILL rather than a census FAULT that takes the gate binary with it.”
+
+   This retains the broad rationale that the same file corrects at lines 566–571: an unconditional restored divide failure reaches unforked D2 before F1.
+
+X9’s operative description matches its **92 cells’ assertions**. The historical mutant/guest-run measurements cited in these comments cannot be independently confirmed from the allowed files.
+
+**TASK 4**
+
+An additional question: **Do the production byte-order helpers, warning implementation and interrupt callbacks behave like these stubs?** The harness ignores `cpu` in its conversion helpers and ignores the warning format string, so these tasks do not establish that integration behavior.
+
+This was static inspection only: no edits, builds, harness execution or gate execution.
+
+Read only the four frozen copies: **dev_footbridge.c** (`783c0c7f`), **diff_footbridge.c** (`4d7bdcc3`), **diff_footbridge.491.c** (`ff8f87b6`), and **gate_offline.sh** (`45d2b495`, particularly its preamble and Footbridge section). All four MD5 prefixes matched.

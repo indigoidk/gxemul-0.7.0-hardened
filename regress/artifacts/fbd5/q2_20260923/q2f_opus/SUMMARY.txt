@@ -1,0 +1,206 @@
+OPUS_SEAT_ALIVE_20260923_Q2F
+# CHECKPOINT -- 2026-09-23 19:25 (087a90 sections rewritten; the peer's sections below are untouched)
+Opus seat (compile and measure), #545 repair-3c pass (q2f), 2026-09-23.  Claude Opus 5.5, claude-opus-5-5[1m].
+
+VERDICT: DO NOT SHIP -- 3c closes every cell X14 claimed: each of the ten changed or new rows goes red on its own, and
+every new channel but one does too.  But 8 one-line edits to the five arms and the head tests pass all 864 rows and are
+not disclosed.  6 condition on the CALLER context: the harness calls the handler with mem = NULL and machine type
+MACHINE_NONE, and no real caller does.  1 changes irq_status at the asserted Clear, which that row does not read.
+1 changes the announce TEXT.  7 additive scratch rows (871 rows, 0 failures on the fix) turn every one red except the
+text.  R2 is right: disclose and file the producer pair.
+
+Every number below comes from a file in this directory (named in brackets).
+
+=====================================================================================================================
+1. BASELINE
+=====================================================================================================================
+/tmp/opusq2f: a copy of GXEMUL-SEC/src with the FROZEN device (783c0c7f), build/config.h, and the FROZEN 864-row
+harness (8309c5b7).  [setup.sh, baseline.log]
+  Result: 864 rows, 0 failures, DIFF_FOOTBRIDGE_PASS, 0 warnings.
+  baseline.log is byte-identical to the main loop's r3c_20260923/diff_FIX.log.
+Pins, counted from the row names with the gate's fb_distinct recipe [pins.out, new_names.txt]:
+  P 78; X[1-8] 440; X6 248; X7 148; X8 6; X9 100; X10 72; X11 80; X12 20; X13 20; X14 21.
+  IDENTITY: 864 = 862 + 2.  The two new names are the two "Clear 0x20 keeps 0x10 pending and enabled" rows.
+  No 862-row name is missing.
+
+=====================================================================================================================
+2. Q1(a) -- EACH CHANGED OR NEW X14 ROW GOES RED ON ITS OWN
+   [x14_mine.out: the main loop's own 711 failing-row lists; my probes P_*: analysis.txt, predictions
+    PREDICTIONS_q2f.txt 19:35:31]
+=====================================================================================================================
+"Alone" = the variant's only failing row is this one.  Each P_* probe was measured red on exactly its target row, or
+on the two rows predicted.
+row (tk = the tick-pending version)          channel 3c added            red alone by
+DEVINIT reads (tk 0 / 1)                      no interrupt call           B_DR / B_TR (read value).  The no-call
+                                                                          channel NEVER alone: P_RD0c reds this row AND
+                                                                          the Set/Clear row, because the counters run on
+                                                                          (no reset between them).  Redundant, not
+                                                                          vacuous.
+DEVINIT Set 0x40 then Clear 0x10 (tk 0 / 1)   the drive, ZCPU(1,1)        P_SC0 / TD12
+DEVINIT declines (tk 0 / 1)                   no interrupt call           P_DD0c / P_DD1c (the no-call channel itself)
+DEVINIT Clear 0x20 keeps 0x10 (NEW, tk 0 / 1) CPU asserted once           P_K0 / TD02
+line 4 raised: IRQ_STATUS reads 0x10          fields, no call             P_ISf (fields), P_ISc (no call)
+line 4 raised: re-arm row                     read values, one assert,    P_RAv (values), P_RAf (fields / one assert),
+                                              final fields                IA14 (declines drive nothing)
+Unchanged rows that lost their sole killer under 3c now have one:
+  the disjoint row                 P_DJ.  3c's DEVINIT Set/Clear re-checks the disjoint cell, so N_S01 reds both.
+  the asserted Clear 0x400 row     P_A4.  The re-arm row's one-assert check also sees N_I01.
+Result: all 21 X14 rows go red alone.  No X14 row claims a channel it does not read.  The asserted Clear rows name only
+the enable and the CPU line, so the raw status there is unclaimed -- and FS01 below uses exactly that.
+
+=====================================================================================================================
+3. Q2 BY CONSTRUCTION -- 22 NEW shapes on the 864 rows (none in the main loop's 711)
+   [PREDICTIONS_q2f.txt 19:35:31, written before the run; analysis.txt; per-variant logs in
+    variant_logs_and_diffs.tar.gz]
+=====================================================================================================================
+Totals: 22 built, 0 warnings.  13 red (the 11 probes P_*, and FS04/FS05 on the DEVINIT declines rows' field check),
+9 green.  Every red/green prediction held, 22 of 22.
+Differential for the greens [wit2_main.c, wit2_tu.c; reports in wit2_cats/, wit2_netwinder/]:
+  - Extended here with the CALLER context: the DEVINIT start runs as a real caller (a non-NULL mem; machine type
+    MACHINE_CATS, or MACHINE_NETWINDER); the calloc start runs as the harness does (mem NULL, MACHINE_NONE).
+  - Search: exhaustive to length 3 plus 2M random sequences.  Control: frozen vs frozen shows no divergence.
+  - One replay: FS02 [wit2/REPLAY_FS02_1.txt].
+
+THE 9 GREENS
+ id    arm     exact edit                                                            visible     NOT COVERED names it?
+ MC03  +0x184  if (writeflag == MEM_READ && !mem)                                   guest, all  NO
+                                                                                     line4+ R184: 0, not 0x10 (2 steps)
+ MC04  fetch   if (writeflag == MEM_WRITE && !mem) idata = ...                       guest, all  NO
+                                                                                     W188=0x10 R188: 0 (2 steps)
+ MC01  +0x180  if (writeflag == MEM_READ && cpu->machine->machine_type != MACHINE_NETWINDER)
+                                                                                     guest,      NO (see below)
+                                                                                     netwinder
+ MC02  Clear   if ((d->irq_status & d->irq_enable) && cpu->machine->machine_type != MACHINE_CATS)
+                                                                                     guest,      NO (see below)
+                                                                                     cats
+ MC07  Clear   d->irq_enable &= machine_type == MACHINE_NETWINDER ? ~(idata & 0xff) : ~idata;
+                                                                                     guest,      NO (see below)
+                                                                                     netwinder: ISA line 11 cannot be masked
+ MC05  +0x180  latch guard && machine_type != MACHINE_CATS                          host, cats  NO (see below)
+ FS01  Clear   d->irq_enable &= ~idata, d->irq_status &= d->irq_asserted ? d->irq_enable : ~0u;
+                                                                                     guest, both NO
+                                                                                     4 steps: the ISR's Clear drops the masked
+                                                                                     line from the RAW status
+ TX01  +0x180  the announce names +0x184                                             host (log   NO in the CONTRACT; the P-rows
+                                                                                     text only)  header gives the text to the guest
+                                                                                                 probe (not run by me)
+ FS02  Clear   d->irq_enable &= ~idata, d->irq_asserted &= (irq_status & irq_enable) != 0;
+                                                                                     guest,      YES: the producer-pair and
+                                                                                     5-step      LEVEL lines ("nothing here calls
+                                                                                     replay      _deassert()"; a line left high)
+Note on the machine-type rows: they are named only if "a field no branch of the five reads" (NOT COVERED's opening
+clause) is read to include struct machine.  THE SPACE's own list of what an edit can condition on is the INSTANCE
+(struct footbridge_data), and the machine type is not in it.  `mem` is a parameter, not a field, so no reading covers it.
+
+Q2 ANSWER: MC03, `&& !mem` in +0x184's direction test.
+  - Eight characters.  Guest-visible for every real caller in 2 steps.
+  - All 864 rows stay green, because all 70 of the harness's calls pass mem = NULL.
+  - The most plausible is a machine-type conditional (MC01/MC02/MC07): DEVINIT already switches on machine_type in
+    this file.
+  - At X14's own cells the smallest is FS01.
+
+=====================================================================================================================
+4. SCRATCH CLOSURE EXPERIMENT -- a measurement, not a patch
+   [mkext_q2f.py, diff_ext.c 23446d37, ext_run.out, ext_flips.txt]
+=====================================================================================================================
+7 ADDITIVE rows before IDENTITY:
+  W1        After an asserted Clear 0x10, the raw status and irq_asserted are kept.
+  W2a-c     x2 (cats, netwinder), each with a non-NULL mem: IRQ_STATUS 0x410 and IRQ_RAW_STATUS 0x418; Clear 0x400
+            leaves 0x30 and asserts once; the five declines announce 5 and drive nothing.
+Results:
+  - The fix: 871 rows, 0 failures, 0 warnings.
+  - All 22 re-scored: none of the 13 reds lost.  8 of the 9 greens go red; only TX01 (the text) stays green.
+  - MC01 and MC07 go red only on the netwinder rows; MC02 and MC05 only on the cats rows.
+
+=====================================================================================================================
+5. R2 -- THE PRODUCER PAIR: DISCLOSE AND FILE (UPHELD), AND THE RULE THAT DECIDES IT
+=====================================================================================================================
+Rule: the carrier's DEPENDS-ON bound, clause (1): "the predicates DOMINATING the diff's edited lines, walked up only to
+the ENCLOSING FUNCTION BOUNDARY -- never into callees or callers".
+  - The pair is neither a dominator nor in the access function, and #545 edited none of it.  So it is outside the floor.
+  - §C.2's claim rule is also met: COVERED claims nothing about the pair's logic, and NOT COVERED names it.
+  - The one fact that would overturn the ruling is a COVERED cell whose truth depends on unverified producer
+    behaviour.  There is none.  X14 uses the pair only to raise line 4 from an empty status, and its rows check that
+    raise: irq_asserted 1, irq_status 0x10, one CPU assert.
+Refinements:
+  - File it WITH the ready detector: the q2e scratch rows Y8-Y12 and the PR01/PR02/PR04/PR07 witnesses.  fbirqstuck's
+    round then starts test-first.
+  - The line's "passes all 862 rows" is now 864 (PR04 is green on r3c too).
+
+=====================================================================================================================
+6. ARE COVERED AND NOT COVERED TRUE OF THE 864 ROWS? -- WITH THE DENOMINATOR
+=====================================================================================================================
+Denominator: 733 one-line shapes scored on the 864 rows.
+  - The main loop's 711 plus my 22, over the five arms, the two head tests and the producer pair.
+  - Instance kinds: the four seeded calloc states; DEVINIT with and without a tick; irq_asserted through the producer.
+  - Greens run through the differential under two caller contexts (cats and netwinder with a real mem).
+COVERED -- true of the rows, with ONE exception.
+  - The reads line says "the legal READS of the five readable registers x width (the site's domain)".  IRQEnable
+    (+0x188) is one of the five, and its domain includes 8, but X9/X10 read it at 1, 2 and 4 only.
+  - NOT COVERED meanwhile names "IRQEnable's 8-byte read".  The two lines contradict each other.
+  - Every other claim was checked by a probe that reddens it (section 2).
+NOT COVERED -- every line is outside the floor, but it is incomplete and one example is stale.
+  - Incomplete: it does not name the caller context (MC*), a field or flag store at the asserted Clear (FS01), or the
+    announce text (TX01).
+  - The exact-value example undercounts.  The irq_* `!= 0x10` forms are red at the direction tests of +0x180, +0x184
+    (since 3c) and +0x18c, and at ALL FIVE latch tests.  They are green only at +0x280/+0x284's direction tests, and
+    every fiq_* form is green.  The sentence says "at +0x180 and +0x18c".
+  - `idata != 0x20` is red only since 3c's new "keeps" row, not since X14 at 862.
+
+=====================================================================================================================
+7. THE BRIEF'S QUESTIONS
+=====================================================================================================================
+Q1(b) As in section 6.
+Q3 (one line each):
+  R1     UPHOLD: every new channel reds alone except the reads' no-call check (redundant).
+  R2     UPHOLD (section 5).
+  R3     REFINE: COVERED's reads line still claims IRQEnable x 8.
+  R4     UPHOLD (XC_dest green, disclosed).
+  R5     UPHOLD (XZ_clr0 green).
+  R6-R8  UPHOLD.  R8 verified: X9's all-zero Set 0x70 has status 0 and the enable set.
+  R9     REFINE: the example sentence, as in section 6.
+  R10    UPHOLD.
+  R11    UPHOLD.
+  R12    UPHOLD: verified by reading; the verdict line is printed last and the count checks grep the whole file.
+  R13    UPHOLD.
+  R14    REFINE: THE SPACE names the instance but not the handler's CALLER context (`cpu`'s machine, `mem`).
+  R15    UPHOLD the rejection (the 24 unraised-bit masks are green).
+  R16    UPHOLD.
+  R17    UPHOLD.
+  D4     UPHOLD.
+  Which accepted disposition is wrong?  None in substance.  R14's enumeration is still one axis short (MC*), and the
+  asserted-Clear rows left FS01 unclaimed and undisclosed.
+Q4 Records, false or stale as of today:
+  - The reads line (IRQEnable x 8).
+  - The exact-value example sentence.
+  - "passes all 862 rows" (now 864).
+  Checked true: the pins and IDENTITY (section 1), the helper and header comments' writer statements, the gate's new
+  truncation sentence.
+Q5 Dispositions not named:
+  R2: file WITH the ready detector (section 5).
+  R4: re-wire the OLDER blocks' d->irq to the CPU counter pair X14 uses (XSET/YNEW/X9 install cpu_assert/cpu_deassert
+      on d->irq; their drive checks read that pair).  X12/X13's narrow Clears would then see WHICH interrupt they drive
+      at 1 and 2 bytes -- zero new rows -- and XC_dest would go red.
+
+=====================================================================================================================
+8. SEAT RECORD
+=====================================================================================================================
+Model: Claude Opus 5.5 (claude-opus-5-5[1m]).
+Read:
+  - the brief brief_545_r3c.md in full;
+  - the frozen 864-row harness's X14 block (diff inlined in the brief);
+  - memory.h's DEVICE_ACCESS signature, machine.h's machine types, and the harness's cpu/machine setup;
+  - the main loop's r3c results (711 failing-row lists), TABLE.txt, gen_q2e_r3c.py, diff_FIX.log.
+Ran (WSL Gentoo, gcc 15.2.1; scratch trees /tmp/opusq2f*):
+  setup.sh; x14_mine.py (their data; nothing re-run); run_table.sh (22 variants, from frozen copies);
+  wit2_all.sh (20 reports: 10 as cats, 10 as netwinder); 1 replay; ext_run.sh (22 variants on 871 rows);
+  final_check.sh.
+Not run: no gate, no GXEMUL-SEC script, no guest probe.
+Restore: every mutated tree restored, cmp-checked against the frozen copy, rebuilt and re-run before its sentinel was
+cleared; none remains [driver_w*.out, ext_run.out, final_check.out].  A fresh final baseline reproduces baseline.log.
+GXEMUL-SEC hashes, identical at the start and end of this seat:
+  src/devices/dev_footbridge.c 783c0c7fb86823c6e9a5ae84be98b965
+  regress/diff_footbridge.c    8309c5b779a4f909f45e4863a484f9ac
+  regress/gate_offline.sh      59149a8b660d637cbb73927147ae103b
+Nothing was written under GXEMUL-SEC, est, build or build-asan.
+SUMMARY_DONE

@@ -1,0 +1,329 @@
+--- a/src/devices/dev_footbridge.c
++++ b/src/devices/dev_footbridge.c
+@@ struct footbridge_data (whole) @@
+ struct footbridge_data {
+ 	struct interrupt irq;
+ 
+ 	struct pci_data *pcibus;
+ 
+ 	int		console_handle;
+ 
+ 	uint32_t	timer_load[N_FOOTBRIDGE_TIMERS];
+ 	uint32_t	timer_value[N_FOOTBRIDGE_TIMERS];
+ 	uint32_t	timer_control[N_FOOTBRIDGE_TIMERS];
+ 
+ 	struct interrupt timer_irq[N_FOOTBRIDGE_TIMERS];
+ 	struct timer	*timer[N_FOOTBRIDGE_TIMERS];
+ 	int		pending_timer_interrupts[N_FOOTBRIDGE_TIMERS];
+ 	/*  #442: the per-timer bound on the counter above, one emulated second of
+ 	    that timer's delivered rate, recomputed by reload_timer_value().  */
+ 	int		pending_bound[N_FOOTBRIDGE_TIMERS];
+ 
+ 	int		irq_asserted;
+ 
+ 	uint32_t	irq_status;
+ 	uint32_t	irq_enable;
+ 
+ 	uint32_t	fiq_status;
+ 	uint32_t	fiq_enable;
++
++	/*  #545: one warn-once latch per undefined-direction access that used
++	    to end the process (DC21285 7.3.29-7.3.33: "The Status and RawStatus
++	    are read-only, and EnableClear and Soft are write-only").  Zeroed by
++	    DEVINIT's memset and by the offline differentials' calloc.  */
++	int		warned_irq_status_w;
++	int		warned_irq_raw_w;
++	int		warned_irq_clear_r;
++	int		warned_fiq_status_w;
++	int		warned_fiq_raw_w;
+ };
+@@ DEVICE_ACCESS(footbridge) (the WHOLE enclosing function, every exit path and the common tail) @@
+ DEVICE_ACCESS(footbridge)
+ {
+ 	struct footbridge_data *d = (struct footbridge_data *) extra;
+ 	uint64_t idata = 0, odata = 0;
+ 	int timer_nr = 0;
+ 
+ 	if (writeflag == MEM_WRITE)
+ 		idata = memory_readmax64(cpu, data, len);
+ 
+ 	if (relative_addr >= TIMER_1_LOAD && relative_addr <= TIMER_4_CLEAR) {
+ 		timer_nr = (relative_addr >> 5) & (N_FOOTBRIDGE_TIMERS - 1);
+ 		relative_addr &= ~0x060;
+ 	}
+ 
+ 	switch (relative_addr) {
+ 
+ 	case VENDOR_ID:
+ 		odata = 0x1011;  /*  DC21285_VENDOR_ID  */
+ 		break;
+ 
+ 	case DEVICE_ID:
+ 		odata = 0x1065;  /*  DC21285_DEVICE_ID  */
+ 		break;
+ 
+ 	case 0x04:
+ 	case 0x0c:
+ 	case 0x10:
+ 	case 0x14:
+ 	case 0x18:
+ 		/*  TODO. Written to by Linux.  */
+ 		break;
+ 
+ 	case REVISION:
+ 		odata = 3;  /*  footbridge revision number  */
+ 		break;
+ 
+ 	case PCI_ADDRESS_EXTENSION:
+ 		/*  TODO: Written to by Linux.  */
+ 		if (writeflag == MEM_WRITE && idata != 0)
+ 			fatal("[ footbridge: TODO: write to PCI_ADDRESS_"
+ 			    "EXTENSION: 0x%llx ]\n", (long long)idata);
+ 		break;
+ 
+ 	case SA_CONTROL:
+ 		/*  Read by Linux:  */
+ 		odata = PCI_CENTRAL_FUNCTION;
+ 		break;
+ 
+ 	case UART_DATA:
+ 		if (writeflag == MEM_WRITE)
+ 			console_putchar(d->console_handle, idata);
+ 		break;
+ 
+ 	case UART_RX_STAT:
+ 		/*  TODO  */
+ 		odata = 0;
+ 		break;
+ 
+ 	case UART_FLAGS:
+ 		odata = UART_TX_EMPTY;
+ 		break;
+ 
+ 	case IRQ_STATUS:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->irq_status & d->irq_enable;
+-		else {
+-			fatal("[ WARNING: footbridge write to irq status? ]\n");
+-			exit(1);
++		else if (!d->warned_irq_status_w) {
++			/*  #545: read-only register (7.3.29); the write is
++			    declined -- no state changes -- and announced once.  */
++			d->warned_irq_status_w = 1;
++			fatal("[ WARNING: footbridge write to irq status? "
++			    "(once) ]\n");
+ 		}
+ 		break;
+ 
+ 	case IRQ_RAW_STATUS:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->irq_status;
+-		else {
+-			fatal("[ footbridge write to irq_raw_status ]\n");
+-			exit(1);
++		else if (!d->warned_irq_raw_w) {
++			/*  #545: read-only (7.3.30); declined, announced once.  */
++			d->warned_irq_raw_w = 1;
++			fatal("[ footbridge write to irq_raw_status (once) ]\n");
+ 		}
+ 		break;
+ 
+ 	case IRQ_ENABLE_SET:
+ 		if (writeflag == MEM_WRITE) {
+ 			d->irq_enable |= idata;
+ 			if (d->irq_status & d->irq_enable)
+ 				INTERRUPT_ASSERT(d->irq);
+ 			else
+ 				INTERRUPT_DEASSERT(d->irq);
+ 		} else {
+ 			/*  #539: a read of 188h is documented -- IRQEnable is
+ 			    "read-only ... can only be changed by writing to
+ 			    the EnableSet and EnableClear registers", reset 0
+ 			    (DC21285 Table 7-10, 7.3.31).  The value below was
+ 			    always right; the exit(1) that followed it is gone.  */
+ 			odata = d->irq_enable;
+ 		}
+ 		break;
+ 
+ 	case IRQ_ENABLE_CLEAR:
+ 		if (writeflag == MEM_WRITE) {
+ 			d->irq_enable &= ~idata;
+ 			if (d->irq_status & d->irq_enable)
+ 				INTERRUPT_ASSERT(d->irq);
+ 			else
+ 				INTERRUPT_DEASSERT(d->irq);
+-		} else {
+-			odata = d->irq_enable;
++		} else if (!d->warned_irq_clear_r) {
++			/*  #545: IRQEnableClear is write-only (7.3.33) and Table
++			    7-10 names no register at 18Ch for reads, so the read
++			    is declined with 0 -- the IRQEnable value that used to
++			    be computed here is 188h's answer, not 18Ch's.  */
++			d->warned_irq_clear_r = 1;
+ 			fatal("[ WARNING: footbridge read from "
+-			    "ENABLE CLEAR? ]\n");
+-			exit(1);
++			    "ENABLE CLEAR? (once) ]\n");
+ 		}
+ 		break;
+ 
+ 	case FIQ_STATUS:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->fiq_status & d->fiq_enable;
+-		else {
+-			fatal("[ WARNING: footbridge write to fiq status? ]\n");
+-			exit(1);
++		else if (!d->warned_fiq_status_w) {
++			/*  #545: read-only (7.3.29); declined, announced once.  */
++			d->warned_fiq_status_w = 1;
++			fatal("[ WARNING: footbridge write to fiq status? "
++			    "(once) ]\n");
+ 		}
+ 		break;
+ 
+ 	case FIQ_RAW_STATUS:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->fiq_status;
+-		else {
+-			fatal("[ footbridge write to fiq_raw_status ]\n");
+-			exit(1);
++		else if (!d->warned_fiq_raw_w) {
++			/*  #545: read-only (7.3.30); declined, announced once.  */
++			d->warned_fiq_raw_w = 1;
++			fatal("[ footbridge write to fiq_raw_status (once) ]\n");
+ 		}
+ 		break;
+ 
+ 	case FIQ_ENABLE_SET:
+ 		if (writeflag == MEM_WRITE)
+ 			d->fiq_enable |= idata;
+ 		break;
+ 
+ 	case FIQ_ENABLE_CLEAR:
+ 		if (writeflag == MEM_WRITE)
+ 			d->fiq_enable &= ~idata;
+ 		break;
+ 
+ 	case TIMER_1_LOAD:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->timer_load[timer_nr];
+ 		else {
+ 			d->timer_load[timer_nr] = idata & TIMER_MAX_VAL;
+ 			reload_timer_value(cpu, d, timer_nr);
+ 			/*  debug("[ footbridge: timer %i (1-based), "
+ 			    "value %i ]\n", timer_nr + 1,
+ 			    (int)d->timer_value[timer_nr]);  */
+ 			INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
+ 		}
+ 		break;
+ 
+ 	case TIMER_1_VALUE:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->timer_value[timer_nr];
+ 		else
+ 			d->timer_value[timer_nr] = idata & TIMER_MAX_VAL;
+ 		break;
+ 
+ 	case TIMER_1_CONTROL:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->timer_control[timer_nr];
+ 		else {
+ 			d->timer_control[timer_nr] = idata;
+ 			/*  #432: both prescaler bits set is TIMER_EXTERNAL
+ 			    (0x0C, dc21285reg.h:364) -- a LEGAL named encoding,
+ 			    and it used to reach fatal()+exit(1) right here, so a
+ 			    guest selecting the external clock source KILLED THE
+ 			    HOST.  Arguably likelier than the zero load, since it
+ 			    is a documented mode rather than a malformed value.
+ 			    The rate an external clock would actually give is
+ 			    UNKNOWN and is NOT invented: footbridge_effective_cycles()
+ 			    now gives the encoding a defined, survivable meaning
+ 			    (the unprescaled period), and the real semantics are
+ 			    filed for a round that has a datasheet.  */
+ 			if (idata & TIMER_ENABLE) {
+ 				reload_timer_value(cpu, d, timer_nr);
+ 			} else {
+ 				d->pending_timer_interrupts[timer_nr] = 0;
+ 			}
+ 			INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
+ 		}
+ 		break;
+ 
+ 	case TIMER_1_CLEAR:
+ 		/*  #474: a READ must not perform the clear.  This case carried no
+ 		    writeflag test at all, while TIMER_1_CONTROL immediately above it
+ 		    does -- so a guest READ reloaded the counter, decremented the
+ 		    pending count and DEASSERTED the interrupt.  A guest that merely
+ 		    read the register silently acknowledged a pending timer interrupt;
+ 		    the guest-visible consequence is a LOST interrupt, not a bad value.
+ 
+ 		    FOUR addresses, not one: the fold above normalises 0x30C/0x32C/
+ 		    0x34C/0x36C onto this single case.
+ 
+ 		    GUARD THE BODY, KEEP THE break.  An early return here would skip
+ 		    the function's common tail, which writes odata back on a read, and
+ 		    would hand a guest an untouched buffer -- a defect this code does
+ 		    not currently have.  */
+ 		if (writeflag == MEM_WRITE) {
+ 			if (d->timer_control[timer_nr] & TIMER_MODE_PERIODIC) {
+ 				reload_timer_value(cpu, d, timer_nr);
+ 			}
+ 
+ 			if (d->pending_timer_interrupts[timer_nr] > 0) {
+ 				d->pending_timer_interrupts[timer_nr] --;
+ 			}
+ 
+ 			INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
+ 		}
+ 		break;
+ 
+ 	case SDRAM_BA_MASK:
+ 		if (writeflag == MEM_READ) {
+ 			fatal("[ footbridge read from sdram_ba_mask ]\n");
+ 			exit(1);
+ 		} else {
+ 			switch (idata) {
+ 			case SDRAM_MASK_256KB:
+ 			case SDRAM_MASK_512KB:
+ 			case SDRAM_MASK_1MB:
+ 			case SDRAM_MASK_2MB:
+ 			case SDRAM_MASK_4MB:
+ 			case SDRAM_MASK_8MB:
+ 			case SDRAM_MASK_16MB:
+ 			case SDRAM_MASK_32MB:
+ 			case SDRAM_MASK_64MB:
+ 			case SDRAM_MASK_128MB:
+ 			case SDRAM_MASK_256MB:
+ 				break;
+ 			default:
+ 				fatal("[ footbridge write to sdram_ba_mask "
+ 				    "%#llx ]\n", (long long)idata);
+ 				break;
+ 			}
+ 		}
+ 		break;
+ 	case SDRAM_BA_OFFSET:
+ 		if (writeflag == MEM_READ) {
+ 			fatal("[ footbridge read from sdram_ba_offset ]\n");
+ 			exit(1);
+ 		} else {
+ 			if (idata != 0)
+ 				fatal("[ footbridge write to sdram_ba_offset "
+ 				    "%#llx ]\n", (long long)idata);
+ 		}
+ 		break;
+ 
+ 	default:if (writeflag == MEM_READ) {
+ 			fatal("[ footbridge: read from 0x%x ]\n",
+ 			    (int)relative_addr);
+ 		} else {
+ 			fatal("[ footbridge: write to 0x%x: 0x%llx ]\n",
+ 			    (int)relative_addr, (long long)idata);
+ 		}
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
+ 		memory_writemax64(cpu, data, len, odata);
+ 
+ 	return 1;
+ }

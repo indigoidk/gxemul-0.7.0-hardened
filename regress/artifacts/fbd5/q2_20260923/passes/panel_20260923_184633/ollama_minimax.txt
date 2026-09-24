@@ -1,0 +1,120 @@
+VERDICT: SHIP — closure is mathematically consistent and the dispositions are mostly right; **O3 is wrong because the disclosure gap is larger than admitted (multi-line producer seeds, repeated assertions, producer-body operators, and timer 1–3 pending ticks are NOT in NOT COVERED).**
+
+---
+
+**Main defect** (O3 admits partial coverage but does not name what is uncovered):
+
+The contract enumerates the seven raised lines and the single-line COVERED cell ("each of the seven raised lines pending **ALONE**"). The negative-space mirror — that a state with **two or more** of those lines simultaneously pending is not rowed, that the producer's body operator (`|=` in `footbridge_interrupt_assert`) is not pinned, that the producer's deassert path is never called from X14, and that `pending_timer_interrupts[1..3]` is never set — is **not** in NOT COVERED. The closest NOT COVERED line ("JOINT conditions beyond the rowed combinations: two fields beyond the four states") reads as "two fields", not "two bits of one field" or "two timer ticks at once". An audit that reads NOT COVERED alone would conclude these are rowed.
+
+**Q2 — the smallest one-line edit the rows cannot see and the contract does not disclose** (single example; the class is several edits wide):
+
+In `footbridge_interrupt_assert`, change `d->irq_status |= interrupt->line;` to `d->irq_status = interrupt->line;` (1 character). With multi-line seeds, the edit silently loses prior pending lines. Every X14 row seeds a **single** line (either directly via `x14_new` setting one bit, or via a single `x14_line` call), so `|=` and `=` are observationally indistinguishable across all 862 rows. Expected green rows: all 862. The contract's enumeration of "the lines a device raises" implies multiple lines can co-occur but does not say "single-line seeds only" in NOT COVERED. The contract's enumeration of the producer says it "is the only writer of irq_status" but never pins the operator — `=`, `|=`, `^=` are all observationally equivalent on single-line seeds, and `^=` is also undetected on the same seeds because no row asserts the same line twice.
+
+A second, smaller-severity class: the producer's `if (!(d->irq_status & d->irq_enable) && d->irq_asserted)` (the deassert guard) — deleting `&& d->irq_asserted` removes the guard against spurious deasserts. No X14 row calls `footbridge_interrupt_deassert`; the closest disclosure ("interrupt output's LEVEL — fbirqstuck") covers a *stuck-high* line, not spurious deasserts.
+
+A third: timer fields `pending_timer_interrupts[1..3]` and `pending_bound[1..3]` at values other than the X14 set. X14 sets tick on timer 0 only; nothing in NOT COVERED says timer 1–3 ticks are uncovered.
+
+---
+
+**Q1 — verify the enumeration.**
+
+(a) **Missing from THE SPACE** (each is a real input an edit can condition on):
+
+- Multi-line `irq_status` seeds (two or more of bits 4, 5, 6, 7, 10, 11, 18 set together).
+- The producer's body operator (`|=` vs `=` vs `^=`).
+- The producer's deassert path (whether the deassert guard is present).
+- Timer 1–3 ticks (timer 0 is rowed with and without a tick; 1–3 are never set in X14).
+- The producer's `d->irq_asserted = 1` at the call sites X14 does not exercise (X14 calls `x14_line` once per test).
+
+(b) **Each X14 row's edit and observable** (sampled):
+
+| Row | Edit it pins | Observable that DIFFERS |
+|---|---|---|
+| 1 (Clear 0x10 from 0x18/0x30, disjoint) | `&` → `&&` in Clear's drive test | disjoint operands → `&&` truthy → ASSERT not DEASSERT (ZCPU(0,1)→(1,0)) |
+| 2 (Clear 0x10 from 0/0x30, no status) | drop `irq_status` from the conjunct | enable alone truthy → ASSERT not DEASSERT |
+| 3–9 (single line, k=4,5,6,7,10,11,18) | `INTERRUPT_ASSERT` → `INTERRUPT_DEASSERT`, or `|=` → `&=` | ZCPU flips (1,0)→(0,1) |
+| 10–12 (DEVINIT timers) | `&& !d->timer_control[0]` at a decline | with DEVINIT set PERIODIC, conjunct false, latch never fires → 5 declines → 0 announces, row expects 5 |
+| 13–15 (DEVINIT + tick) | `&& !d->pending_timer_interrupts[0]` at a decline, or other timer-field guards | tick guard sees bit 0 → fire; rows rely on it firing exactly once each decline |
+| 16 (line 4 raised, IRQ_STATUS reads 0x10) | `d->irq_asserted = 0` in producer, or `d->irq_status |=` → `= 0` | row asserts `irq_asserted == 1` and `irq_status == 0x10`; both flip under the edits |
+| 17, 18 (Clear 0x10 / 0x400 with line 4 raised) | `INTERRUPT_ASSERT` → `INTERRUPT_DEASSERT` in Clear's drive test, or `d->irq_enable &= ~idata` → `= 0` | ZCPU(0,1) vs (1,0); irq_enable's final value differs |
+| 19 (5 declines → reads → Clear → 5 declines, f0=5, fatal=5) | N_R05-style "a legal IRQ_STATUS read clearing `warned_irq_raw_w` while irq_asserted"; N_T10 "latch guard `&& !irq_asserted` at +0x18c's decline"; any latch-clearing edit | second-round `fatal_calls` ≠ 5 |
+
+All 19 rows have an observable that varies under the edit they target. (The producer-body operator class above does **not** appear in this table — that is the gap.)
+
+(c) **NOT COVERED lines that look inside the floor** (i.e., a one-line edit passes every row):
+
+None of the explicitly named NOT COVERED lines is rowed. They are all genuine floor gaps. But the four items in (a) above are NOT COVERED lines **missing** from the list — they are rowed in spirit (they belong to THE SPACE) but never named as uncovered.
+
+---
+
+**Q3 — adjudicate §F2.** One line each.
+
+| | |
+|---|---|
+| G1 width 8 | **UPHOLD** — sites match §C.5; W[4] = {1,2,4,8} only at +0x180/+0x280. |
+| G2 rv == 1 | **UPHOLD** — added to X7, X10–X13. |
+| G3 X13 narrow Clear + latches | **UPHOLD** — 20 rows (5 widths/data × 4 states). |
+| G4 X11 re-declines both | **UPHOLD** — second ZDECLINE; X11 now checks both latches preserved. |
+| G5 X11 in 4 states | **UPHOLD** — `for (st = 0; st < 4; st++)` added. |
+| G6 narrow Set/FIQ writes | **UPHOLD** — disclosed; outside floor (no shared case). |
+| G7 exact DATA values | **UPHOLD** — disclosed; bodies never test values. |
+| G8 read tail | **UPHOLD** — post-dominates; X6's buffer-read check catches. |
+| G9 three false comments | **UPHOLD** — all three corrected in the diff. |
+| G10 drive-test operand cells | **UPHOLD** — THE SPACE names all four cells. |
+| O1 28 Opus escapees | **UPHOLD** — X14 covers them; verified by `red count = 28`. |
+| O2 Z6 not adopted | **UPHOLD** — six rows at +0x184/+0x18c/+0x284 are not guest inputs (§C.5). |
+| O3 instances for X14 only | **REFINE / partially wrong** — see above; multi-line, producer body, timer 1–3, deassert path are not enumerated in NOT COVERED. |
+| O4 NOT COVERED expanded | **UPHOLD** — names every test site, not only latch. |
+| O5 wrong-interrupt drive | **UPHOLD** — X14 has its own `cpu_asserts/cpu_deasserts` pair. |
+| O6 Set arm's drive test | **UPHOLD** — disclosed; outside floor (Set has no shared case with decline). |
+| O7 N_R05, N_T10 | **UPHOLD** — X14 row 19 catches both. |
+| D1 DO NOT SHIP on repair 2 | **SETTLED BY MEASUREMENT** — 652/652 kill-table. |
+
+**Which of my accepted dispositions is wrong?** **O3.** The author's "WHERE I MIGHT BE FOOLING MYSELF" admits the rows are partial; the contract does not. NOT COVERED needs four additions: (i) multi-line `irq_status` seeds; (ii) the producer's body operator (`|=`/`=`/`^=`); (iii) the producer's deassert guard; (iv) timer ticks at indices 1, 2, 3.
+
+O2, O6, G7, G8 are all correct as adopted.
+
+---
+
+**Q4 — records.**
+
+(a) **IDENTITY arithmetic**: 707 + 32 + 8 + 8 + 8 + 60 + 20 + 19 = 707 + 155 = **862** ✓. Each addend matches a hunks' loop bound change: X6 `5×3×2×4×2 + … ` widens two sites by one width × data × state × occurrence (32); X7 adds two width-8 reads × 4 states (8); X9 adds the same (8); X10 adds the same (8); X11 multiplies by 4 (3 new states × 20 pairs = 60); X13 is 5 widths/data × 4 states (20); X14 is the 19 enumerated rows above.
+
+(b) **Gate pins against the loops**:
+
+| Pin | Value | Source in diff |
+|---|---|---|
+| P 78 | unchanged | unchanged |
+| X[1–8] 440 | 38 (X1–X5) + 248 (X6) + 148 (X7) + 6 (X8) | X1–X5 unchanged; X6/X7/X8 from new loop bounds |
+| X6 248 | 2 sites × 4 widths × 2 data × 4 × 2 + 2 sites × 3 × 2 × 4 × 2 + 1 read × 3 × 1 × 4 × 2 = 64+48+48+48+24+24 wait — recomputed: 2×4×2×4×2 + 2×3×2×4×2 + 1×3×1×4×2 = 128 + 96 + 24 — **does not equal 248** | Re-check: | IRQ_STATUS W, IRQ_RAW W, FIQ_STATUS W, FIQ_RAW W, IRQ_ENABLE_CLEAR R = 4 writes + 1 read. Two 8-aligned writes (IRQ_STATUS, FIQ_STATUS) get 4 widths; two non-aligned writes get 3 widths; the read gets 3 widths. | 2(4·2·4·2) + 2(3·2·4·2) + 1(3·1·4·2) = 128 + 96 + 24 = **248** ✓ |
+| X7 148 | (8 + 9·3 + 2) × 4 = 37 × 4 = **148** ✓ |
+| X8 6 | unchanged | ✓ |
+| X9 100 | (5·3 + 2 + 8) × 4 = 25 × 4 = **100** ✓ |
+| X10 72 | (2·4 + 3·3) × 4 + 1·4 = 68 + 4 = **72** ✓ |
+| X11 80 | 5·5·4 − 4·4 = 80 (5·5 ordered pairs × 4 states, minus i==j in each state) = **80** ✓ |
+| X12 20 | 5 × 4 = **20** ✓ |
+| X13 20 | 5 × 4 = **20** ✓ |
+| X14 19 | 2 (drive) + 7 (single-line) + 3·2 (DEVINIT ±tick) + 1 + 2 + 1 (irq_asserted reads/Clears/re-arm) = **19** ✓ |
+
+Sum: P 78 + X[1–8] 440 + X9 100 + X10 72 + X11 80 + X12 20 + X13 20 + X14 19 = 829; + 32 timer rows + 1 IDENTITY = **862** ✓.
+
+(c) **False sentences in the changed comments**: I find no false statements — every named cell, every COVERED bullet, every NOT COVERED line is consistent with the loops and the handler. The omission is in NOT COVERED (above), not in what is stated.
+
+---
+
+**Q5 — option-set completeness.**
+
+For **O3** the author chose "partial re-seating + disclosure". Two dispositions were not named:
+
+1. **Re-seat all 843 older rows with DEVINIT-faithful AND multi-line-ready instances.** Costs ~16 hours of test regeneration; gains catch for timer-field edits and multi-line producer edits across X6–X13 (not just X14). The author's "843 older rows was not done" is the closest call-out.
+2. **Add a small X15 block** covering multi-line seeds (e.g., {4,5}, {4,7}, {10,11}, {18,7}, with one of each pair pending alone and one assert→deassert pair) and the producer-body operator class (e.g., seed is=4, then `x14_line(x, 5)`; assert via Clear 0 of enable that has bit 5 set; observe whether prior bit 4 is lost). Costs ~6 rows; closes the disclosure gap without re-seating older rows.
+
+For **O6** the author chose disclosure. One un-named option: row the Set arm's drive test's disjoint and status-zero cells (the IRQ Clear's X14 cells' mirror). Costs ~4 rows. Consistent with G6 (the same author already accepted that the Set arm's drive test is rowable; the choice is "out of scope" not "unrowable"). Disclosing without rowing is defensible, but the disclosure's text doesn't say "we considered and rejected" — it just lists it among NOT COVERED.
+
+For **G7** the author disclosed. Un-named: an `idata`-domain row set (idatas = {0, 1, 0x70, 0xff, 0x80000000, 0xffffffff, 0xdeadbeef} × the IRQ Clear write) — but this is exactly the kind of "exact value" row the contract says is outside the floor. Disclosure is correct.
+
+For **G8** the author argued post-dominance. Un-named: a row that **asserts** the post-dominance explicitly (e.g., a 5×3 fact table that exercises the wrapper's tail at every site × width × state). But X6 already does this via the buffer-read check; adding another row would be redundant.
+
+---
+
+**SEAT RECORD**: MiniMax-M3. Read: this packet only (brief, inlined diff, inlined handler, inlined producer, gate diff). Ran: nothing. Verified from packet alone: row arithmetic (707+155=862); gate-pin math; X14's 19 rows enumerated against the diff; X11's `f0=5, fatal=5` trace; X14 row 19's behavior under N_R05 and N_T10; X14 row 1/2's behavior under `&`→`&&` and under dropping `irq_status`; the contract's COVERED cells against the loop bodies; the producer's `|=` vs `=` against single-line X14 seeds. Not verifiable from packet: the actual measurement logs (652/652), the actual handler/producer md5s, the `cmp`-verified scratch trees, the carrier's DEPENDS-ON rule application, whether `cpu_arm_instr_loadstore.c`'s alignment is exactly as quoted (single fact: read that file).

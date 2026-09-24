@@ -1,0 +1,108 @@
+I'll verify repair 3 from the frozen instrument and the handler, checking the premises in the contract rather than re-deriving only what the brief already states.VERDICT: DO NOT SHIP -- the width-domain premise is false, and O2 is the disposition that is wrong. `addr &= ~(datalen - 1)` then one `memory_rw` of length 8 means an LDRD/STRD also lands on +0x188 and +0x288. The contract calls +0x180 and +0x280 "the two 8-byte-aligned sites" and neither COVERED nor NOT COVERED names length 8 at the Set registers. The instance axis fails the same way: `footbridge_interrupt_deassert` writes `irq_status` and `irq_asserted`, the contract says assert is the only writer, and none of the 862 rows calls deassert.
+
+The closure of the instance axis does not hold. Premise 4 in the brief is right (both producer functions write those fields). The contract and the comment above `x14_new` contradict it.
+
+I re-derived the load/store alignment, the seven raised lines, DEVINIT, and the writers from `GXEMUL-SEC` sources. The frozen handler matches the packet. Premises 1, 3, 6, and 7 hold. Premise 5 holds only inside the five decline addresses: +0x184, +0x18c, and +0x284 are aligned down and never see length 8. It does not hold for the register block. +0x188 (`IRQ_ENABLE_SET`) and +0x288 (`FIQ_ENABLE_SET`) are 8-byte aligned. The Opus summary already said this (`SUMMARY.txt` §5(a)); Z6's read list includes +0x188.
+
+Cats line 10 is `bus_isa_init` on `irq_path_isa` (`….footbridge.10`); `isa_interrupt_common` asserts that one parent line. The `"%s.10.isa"` string is the IDE child under it. Netwinder line 11 is `symphony_83c553`'s `bus_isa_init`. Cats line 18 is `dec21143`'s `irq = 18` on the footbridge PCI path. Timers are `IRQ_TIMER_1..4` = 4..7. The UART arms do not raise lines 2 or 3. That is 7 lines, so 25 others. DEVINIT sets `timer_control = TIMER_MODE_PERIODIC`, `timer_load = TIMER_MAX_VAL`, `pending_bound = 1`, and leaves `timer_value` and `pending_timer_interrupts` at 0. `fiq_status` has no assignment in `GXEMUL-SEC/src`.
+
+## Q1
+
+**(a)** Missing from THE SPACE:
+
+- Length 8 at +0x188 and +0x288. The load/store unit emits it. An STRD at +0x18c is aligned to +0x188 first, so the Clear decline never sees length 8, and the Set arm does.
+- `footbridge_interrupt_deassert` as a writer of `irq_status` (`&= ~line`) and of `irq_asserted` (sets 0). Assert only ORs status bits and sets `irq_asserted` to 1.
+
+**(b)** All 19 X14 rows, and the observable that actually moves. Rows 12–13 and 19 do not hold the drive test.
+
+| # | Row | Edit it distinguishes | Observable that moves |
+|---|---|---|---|
+| 1 | Clear 0x10 from 0x18/0x30 | `` `&` `` to `&&` (`N_S01`) | CPU deassert once becomes an assert; enable 0x20 still happens |
+| 2 | Clear 0x10 from 0/0x30 | `if (d->irq_enable)` (`N_S02`) | same, deassert becomes assert |
+| 3–9 | Clear 0, line {4,5,6,7,10,11,18} alone | mask dropping that bit (`N_S06`, `N_S07`, `N_SB05/06/07/10/11/18`); also assert/deassert of `timer_irq` (`N_I05`, `N_I06`) | CPU assert once becomes a deassert, or the shared timer pair moves |
+| 10–11 | DEVINIT reads, tick 0 and 1 | `!timer_control[0]` on the status read (`N_T04`); `!timer_load[0]` on the raw read (`N_T05`); tick 1 also `!pending_timer_interrupts[0]` on a read | returned word (buffer stays 0xa5) |
+| 12–13 | Set 0x40 then Clear 0x10 | fetch or Clear body skipped when `timer_control[0]` is set (`N_F09`); tick 1 also when pending is set (`N_T06`, `N_F15`) | `irq_enable` is 0x20 or 0x70, not 0x60. Drive counts are not read |
+| 14–15 | five declines under DEVINIT | latch or direction guarded by `!timer_control[0]` or by `timer_control[3]` (`N_T09`); tick 1 also by `!pending[0]` | announce count 5 becomes 0 or 4; fields are checked after |
+| 16 | IRQ_STATUS read after line 4 | read direction `&& !irq_asserted` (`N_T11`) | data 0x10 and announce 0. CPU counts are cleared by `ZZERO` and not checked again |
+| 17 | Clear 0x10 with `irq_asserted` | write or fetch guarded by `!irq_asserted` (`N_T12`, `N_F01`); deassert skipped (`N_I02`); `\|\| irq_asserted` (`N_I04`); wrong IRQ (`N_I06`) | enable stays 0x10, or CPU deassert does not happen |
+| 18 | Clear 0x400 with `irq_asserted` | drive `&& !irq_asserted` (`N_I01`); wrong IRQ (`N_I05`) | CPU assert becomes a deassert, or the timer pair moves |
+| 19 | re-arm | status read clears the raw latch while `irq_asserted` (`N_R05`) | second decline round announces; `fatal_calls` becomes 6. The Clear's enable and drive are not checked, and the other four reads check only `rv == 1` |
+
+**(c)** One claimed cell fails an edit, and one NOT COVERED sentence is now false.
+
+The COVERED line "eight enable writes at len 4, data {0, 0x70}, latches set (X7)" includes IRQ Clear of 0 with every latch set. X7's check is `rv == 1 && fatal_calls == f0`. It does not read `irq_enable` or the interrupt counts. X9's Clear of 0 has the latches clear. X10's latched Clear is data 0x70. This edit passes all 862 rows:
+
+```c
+if (writeflag == MEM_WRITE && !(idata == 0 && d->warned_irq_clear_r)) {
+    /* existing Clear body */
+} else if (!d->warned_irq_clear_r) {
+    /* existing decline */
+}
+```
+
+After the declined read has latched the site, a later Clear of 0 does not re-drive. X3 and X7 perform that write and only require silence.
+
+The NOT COVERED sentence that F1, `&& !timer_control[0]`, "passes every row here" is false on this instrument. X14's DEVINIT decline rows require 5 announces, and DEVINIT leaves `timer_control[0]` at `TIMER_MODE_PERIODIC`. A latch guard of that form announces 0 there. The packet's own kill list already has F1 red.
+
+The Set-arm drive disclosure, the 25-bit mask disclosure, exact `idata != 0x20`, declined data other than 0 and 0x70, the address axis, and `fbirqstuck` are real disclosures. "Below len 4" on the Set and FIQ arms does not name length 8.
+
+## Q2
+
+Smallest edit, in the head predicate, all 862 rows stay green, and the contract does not name it:
+
+```c
+if (writeflag == MEM_WRITE && len != 8)
+    idata = memory_readmax64(cpu, data, len);
+```
+
+Every row that consumes `idata` uses length 1, 2, or 4. The length-8 declined writes do not read `idata`. A guest STRD at +0x188 ORs nothing into `irq_enable`. The same conjunct skips an STRD at +0x288. The false "two sites" sentence is what makes this look equivalent: those two sites do not consume `idata`, and +0x188 does.
+
+Tied, one conjunct, on the producer, also unseen and unnamed: restore `&& !d->irq_asserted` in `footbridge_interrupt_assert`. Every `x14_line` call starts from `irq_asserted == 0`, and nothing calls assert again. The commented NetBSD reason for that conjunct is a second CPU assert while the line is already up. `fbirqstuck` is about level versus a counted edge, not about a second call that no row makes. Deassert is the other half of the same hole: delete `d->irq_status &= ~interrupt->line` and every row still passes, because `arm_irqs` stubs the timer callbacks and no row calls `footbridge_interrupt_deassert`.
+
+Shapes swept and found closed for the five decline sites: direction × own latch × {first, repeat} × widths {1, 2, 4} and 8 at +0x180/+0x280 × data {0, 0x70} × the four states; Clear drive at disjoint, status-zero, enable-zero (X12 all-ones), and the seven single lines, on a separate CPU counter; return value on the rows that capture `rv`; X11's 20 pairs × 4 states including the re-decline. The open cells are the ones named above, not another decline-site width.
+
+## Q3
+
+- **G1 UPHOLD.** Length 8 at the two decline-aligned sites is a real input, and X6/X7/X9/X10 row it.
+- **G2 UPHOLD.** `rv == 1` is now on X7 and X10–X13. X6 and X9 already had it.
+- **G3 UPHOLD.** X13 checks enable, drive, return, and a silent re-decline for the five nonzero Clears with the latches set.
+- **G4 UPHOLD** for a decline that clears another latch on a calloc instance. The re-arm row does not hold the same edit inside an earlier decline that targets a later latch: that later decline in the same `ZDECLINE` sets the latch again before the round is counted.
+- **G5 UPHOLD.** X11 runs the four states.
+- **G6 REFINE.** "Below len 4" is disclosed and outside the shared-case floor. Length 8 at those same arms is a different cell and is not named.
+- **G7 OVERTURN** the "the contract names it" half. `idata != 0x20` is named. A narrow Clear of 0, and a latched Clear of 0, are not in the joint list (that list names two fields, latch vectors, and width×latch). The latched Clear of 0 is claimed COVERED by the X7 bullet, and X7 does not observe its effect.
+- **G8 UPHOLD.** A skipped read tail fails X6's "declined read returns 0 over the width."
+- **G9 UPHOLD.** The three gate sentences now match the checks: a truncated log can still match a per-row grep; an unconditional re-crash dies at unforked D2; X7 samples a subset.
+- **O1 UPHOLD.** Each of the 28 has a row in the table above whose observable moves. I did not re-run the 652.
+- **O2 OVERTURN.** This is the wrong accepted disposition. Z6 is 5 legal length-8 reads, 1 length-8 Clear, and 5 length-8 declines. Six are unaligned (+0x184, +0x284, +0x18c read, the Clear, and three declines) and are not guest inputs. That half is right. The five aligned rows are the +0x180 and +0x280 reads, the +0x180 and +0x280 declines, and the +0x188 read. Repair 3 adopted four. The +0x188 read is not a duplicate. Z6 also never wrote +0x188 or +0x288 at length 8, so "drop Z6" left those stores unnamed.
+- **O3 REFINE.** Leaving the older rows on calloc is coherent only for observables X14 actually checks. The DEVINIT Clear row checks `irq_enable == 0x60` and silence. A drive-test edit guarded by `timer_control[0] == TIMER_MODE_PERIODIC` still passes every row.
+- **O4 UPHOLD.** The NOT COVERED line now lists direction, latch, fetch, drive, and latch-clearer. The F1 example in that line is stale.
+- **O5 UPHOLD.** `ZCPU` requires the shared pair unchanged. Older rows still share one pair, and the X14 header says so.
+- **O6 UPHOLD** under premise 3. X9's Set writes are intersecting or both-zero, plus all-zero Set of 0x70 (status 0, enable 0x70), where `&&` and `&` agree. No Set row is disjoint. The contract discloses that.
+- **O7 UPHOLD** for `N_R05` specifically. The clear sits between the two decline rounds, so the second round announces.
+- **D1 UPHOLD.** The 707-row green results for those edits are real; this pass is about whether 862 plus the new contract closes them.
+
+## Q4
+
+IDENTITY holds: 707 + 32 + 8 + 8 + 8 + 60 + 20 + 19 = 862.
+
+Pins against the loops:
+
+- P 78. P0 is 5; each of 4 write sites is 13 and the read site is 14; P6, two P7, two P8, two P9.
+- X1–X5 is 12 + 11 + 3 + 10 + 2 = 38. X6 is 248 (two write sites at 4 widths × 4 × 2 × 2 = 64 each, two write sites at 3 widths = 48 each, one read at 3 × 4 × 2 = 24). X7 is 4 × (8 + 27 + 2) = 148. X8 is 6. Sum 440, so the `X[1-8]` pin matches. The space after `X[1-8]` keeps X10–X14 out of that grep.
+- X9 is 4 × (15 + 2 + 8) = 100. X10 is 4 × (17 reads + 1 Clear) = 72. X11 is 4 × 20 = 80. X12, X13 are 4 × 5 = 20. X14 is 2 + 7 + 2 × 3 + 1 + 2 + 1 = 19.
+
+False sentences in the new comments:
+
+- "the two 8-byte-aligned sites" and the width domain "8 at +0x180 and +0x280" only.
+- "footbridge_interrupt_assert() is the only writer of irq_status" and "the product's only writer of irq_status and of irq_asserted."
+- "measured F1: `&& !timer_control[0]` passes every row here."
+
+The gate pins and the IDENTITY arithmetic are true. The gate's "narrow Set/FIQ writes" has the same length-8 gap and does not assert the false "two sites" sentence.
+
+## Q5
+
+For O3, the option not named is to replay the existing Clear matrix (X9, X10, X12, X13) on `x14_new`, including one call to `footbridge_interrupt_deassert` and a second `footbridge_interrupt_assert` while `irq_asserted` is already 1. That is a different choice from reseating all 843 rows and from adding 19 fresh rows.
+
+For O6, the option not named is to put the Set drive on those same X14 instances (disjoint, status-zero, the seven lines). Premise 3 allows disclosing it. The predicate text is the same one character that defined the Clear cell.
+
+Seat record: Grok, file review only. Read the four frozen copies, `GXEMUL-SEC` `cpu_arm_instr_loadstore.c`, `memory_rw.c`, `memory.c` (`memory_readmax64` / `memory_writemax64`), `bus_pci.c`, `bus_isa.c`, `interrupt.c`, `dc21285reg.h`, and the Opus `SUMMARY.txt` / `diff_ext.c` Z6 block. Did not run a gate, `run.sh`, or a mutant build. The shell was denied, so the md5 prefixes were not recomputed; the frozen paths are the ones named in the brief. The `len != 8` fetch mutant and the restored `&& !d->irq_asserted` mutant are the two measurements that would confirm the green counts; the row predicates already force them.

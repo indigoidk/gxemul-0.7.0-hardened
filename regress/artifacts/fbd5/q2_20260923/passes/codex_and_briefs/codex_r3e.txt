@@ -1,0 +1,130 @@
+VERDICT: FAIL — an unlisted one-line regression survives; the 864-row count and gate pins are correct.
+
+**TASK 1. Change (1).** The five snapshot fields are `irq_status`, `irq_enable`, `fiq_status`, `fiq_enable`, and `irq_asserted`.
+
+There are **seven X14 rows with multiple access-function calls**:
+
+| X14 row | Calls | What it promises; checked after every call? |
+|---|---:|---|
+| `DEVINIT timers: the five legal reads return their values` | 5 | Values checked individually. **No five-field preservation check**, despite the new blanket comments. |
+| `DEVINIT timers, a tick pending: the five legal reads return their values` | 5 | Same gap. |
+| `DEVINIT timers: Set 0x40 then Clear 0x10 leave 0x60` | 2 | Checks both returns, final enable `0x60`, and aggregate reports/interrupt calls. **No intermediate enable or preserved-field check.** |
+| `DEVINIT timers, a tick pending: Set 0x40 then Clear 0x10 leave 0x60` | 2 | Same gap. |
+| `DEVINIT timers: the five declines announce 5, keep the fields` | 5 | **Yes:** `ZDECLINE()` checks all five snapshot fields after each decline. |
+| `DEVINIT timers, a tick pending: the five declines announce 5, keep the fields` | 5 | **Yes**, likewise. |
+| `line 4 raised by a device: 5 declines, then the legal reads and a Clear re-arm no latch` | 16 | **Yes:** five declines, five reads, Clear, five declines each check `ZKEPT()`. |
+
+The snapshots check preservation relative to their entry state; they do not validate what earlier accesses left behind. The four missing cases are visible in the [DEVINIT sequence](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:1475).
+
+**Change (2).** The following inventory includes every generated row family with a sub-8-byte access, including setup and repeat calls. “Padding checked” means the bytes from `len` through byte 7 are compared with `0xa5`.
+
+| Rows/accesses | Lengths below 8 | Write-back beyond `len` observed? |
+|---|---|---|
+| G1: CONTROL write | 4 | No boundary check; actual buffer is only 4 bytes. |
+| H1/H2: LOAD writes and reads | 4 | No boundary check; actual buffer is 4 bytes. |
+| All 14 timer-Clear rows: both LIVE rows; read/deassert, pending, enabled, narrow-read, both index-anchor pairs, index-1 read, common-tail, and both periodic rows | 4; narrow-read uses 2 | No padding check. These use `buf[4]`, including the length-2 call. |
+| P0–P9, including P1–P5’s first/repeated/byte/halfword accesses | 1, 2, 4 | No. |
+| X1: every decline site, first narrow access and declined-read value rows | 1, 2 | No. |
+| X2: five legal narrow reads and aggregate report row | 1, 2 | No. |
+| X3: all three batch/re-arm rows | 1, 2, 4 | No. |
+| X4: zero-data/enable rows; X5: legal zero Clear rows | 4 | No. |
+| X6: all **216** length-1/2/4 cells, across sites, states, data and first/repeat | 1, 2, 4 | **Yes, after each access**, including declined writes. |
+| X7: all legal-access rows, including their initial and repeated declines | 1, 2, 4 | No. The eight rows whose primary access is length 8 still make length-4 decline calls. |
+| X8: five wide-value reads and aggregate report row | 4 | No. |
+| X9: legal-read rows | 1, 2, 4 | **Yes for the primary read. No for the five subsequent length-4 declines**, also present after length-8 reads. |
+| X9: all 32 legal enable-write rows and subsequent declines | 4 | **No.** |
+| X10: legal-read rows | 1, 2, 4 | **Yes for the primary read. No for the five setup declines**, also present before length-8 reads. |
+| X10: four legal Clear-write rows and setup declines | 4 | **No.** |
+| X11: every ordered-pair row, all four accesses | 4 | No. |
+| X12/X13: every Clear-write row and accompanying declines | 1, 2, 4 | **No**, despite poisoning the buffer. |
+| X14: all 21 rows and every constituent access | 4 | No. |
+
+**Fetches past `len` are never directly monitored.** The [memory helper](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:72) neither records nor validates the requested length.
+
+X12/X13 provide an **indirect** detector: widening a narrow Clear-write fetch into poisoned bytes can clear extra enable bits. The narrow `wide` and `ones` cells expose that. However:
+
+- An extra fetch on a declined write has no checked effect because its `idata` is unused.
+- Fetching beyond four bytes for an enable write can leave all checked results unchanged because the enable fields retain only 32 bits.
+- Padding comparisons detect changed bytes, not reads of those bytes.
+- Legal Clear writes have **no buffer-preservation check at any tested width**.
+
+**TASK 2.** A minimal one-line counterexample replaces [device line 612](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/dev_footbridge.c:612) with:
+
+```c
+d->irq_enable &= ~idata; data[len] = 0;
+```
+
+This adds one byte store beyond the caller’s access width.
+
+By inspection, **all 864 assertions remain unchanged**:
+
+- Every test invocation of this legal IRQ Clear-write branch uses an eight-byte buffer with `len` equal to 1, 2 or 4.
+- None checks the modified buffer byte afterward.
+- `idata` was already fetched, so the register update, interrupt calls, return value and report count remain unchanged.
+- Later padding-checked accesses initialize their buffers again.
+
+For the real exact-sized ARM store buffers described in the supplied context, that extra store crosses the buffer boundary. The NOT COVERED list does **not** name this legal-write buffer gap.
+
+This is a static conclusion; I did not edit, compile or execute the counterexample.
+
+**TASK 3.** The count remains **864**:
+
+```text
+32 timer + 78 P + 440 X1–X8 + 100 X9 + 72 X10
++ 80 X11 + 20 X12 + 20 X13 + 21 X14 + 1 identity = 864
+```
+
+Every family pin in [gate_offline.sh](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/gate_offline.sh:619) matches:
+
+| Pin | Derived from loops | Pinned |
+|---|---:|---:|
+| P0–P9 | `12 + 5×13 + 1` | 78 |
+| X1–X8 | `12+11+3+10+2+248+148+6` | 440 |
+| X6 | `4×2×(2×4×2 + 2×3×2 + 3)` | 248 |
+| X7 | `4×(8 + 9×3 + 2)` | 148 |
+| X8 | `5 + 1` | 6 |
+| X9 | `4×(15 + 2 + 8)` | 100 |
+| X10 | `4×(15 + 2 + 1)` | 72 |
+| X11 | `4×5×4` | 80 |
+| X12 | `4×5` | 20 |
+| X13 | `4×5` | 20 |
+| X14 | `2 + 7 + 2×4 + 1 + 2 + 1` | 21 |
+
+The generated names are distinct within those pins. The gate’s trailing-space requirement prevents `X1` from matching `X10`–`X14`.
+
+All **21 individual name-presence pins** also agree: the prescaler pair, LOAD read-back pair and survival pair each have two matches; the other 18 have one. The gate minimum is 864 and the test’s identity assertion requires exactly 864. The selfcheck probes restore the row counter.
+
+**TASK 4.** These changed comments overstate the implementation:
+
+- [Lines 1002–1003](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:1002):  
+  > X14's multi-access rows check the five fields after every access since 3e;
+
+- [Lines 1413–1416](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:1413):  
+  > Repair 3e (3d's own pass) checks every field and irq_asserted after EACH access of the multi-access rows (codex: a toggle on each +0x180 decline cancelled across the re-arm row's two batches), again with no new row (q2_20260923/r3e_20260923).
+
+- [Lines 1436–1437](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:1436):  
+  > 3e: a KEPT field is checked after EACH access of a multi-access row, never only at its end -- a toggle on every +0x180 decline cancelled across the re-arm row's two batches and passed (codex, 3d's pass).
+
+The four DEVINIT read/Set-Clear rows identified in Task 1 contradict those blanket statements.
+
+The [CONTRACT’s padding claim](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:912),
+
+> and in X6, X9 and X10 the bytes above the width untouched (3e)
+
+also needs qualification: X9/X10 check padding only for their primary legal reads. Their write rows and auxiliary declines do not. The [identity-history comment](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c:1575) repeats both overstatements.
+
+**Every artifact reference in the changed comment blocks exists.** Under `GXEMUL-SEC/regress/artifacts/fbd5/`, I checked:
+
+- `q2_20260923/Q2.log`
+- `q2_20260923/closing_20260923/{CL.log,CL2.log}`
+- `q2_20260923/{q2c_opus,q2e_opus,q2f_opus,q2g_opus}/SUMMARY.txt`
+- The cited `q2c_opus/` and `q2g_opus/` directories
+- `q2_20260923/{r3_20260923,r3c_20260923,r3d_20260923,r3e_20260923}/`
+- `q2_20260923/r3_20260923/t_deassert.txt`
+- `table4_20260919/`
+
+Shortened references such as `CL2.log` and `r3c_20260923` resolve within their stated `q2_20260923` context.
+
+Files read: frozen [dev_footbridge.c](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/dev_footbridge.c), [diff_footbridge.c](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.c), [diff_footbridge.r3d.c](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/diff_footbridge.r3d.c), [gate_offline.sh](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/fbd5/q2h/frozen/gate_offline.sh), and supplied [TABLE.txt](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/r3e_20260923/TABLE.txt). All three supplied MD5 prefixes matched.
+
+Ran: read-only PowerShell file/hash/path queries, `rg`, `git diff --no-index --no-ext-diff`, and in-memory source/count analysis. No edits, builds, tests or mutants were run.

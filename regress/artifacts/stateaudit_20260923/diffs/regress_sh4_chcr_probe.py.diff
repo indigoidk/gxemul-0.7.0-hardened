@@ -1,0 +1,77 @@
+diff --git a/regress/sh4_chcr_probe.py b/regress/sh4_chcr_probe.py
+index b07a42e..c9a3bab 100644
+--- a/regress/sh4_chcr_probe.py
++++ b/regress/sh4_chcr_probe.py
+@@ -90,7 +90,12 @@ ST = {1: 0x2100, 2: 0x2101, 4: 0x2102}    # mov.b/w/l r0,@r1
+ VAL_RE = re.compile(r"\[ sh4: DMA channel \d+: [a-z ]+ \d+ not implemented"
+                     r" -- transfer declined\.  \(once per encoding\) \]")
+ 
+-EXPECT_ROWS = 27
++#  *** 27 -> 29 on 2026-09-17, in the same change as the two rows that moved it: X4c and X4d,
++#  the #453 L2 repair.  MEASURED 29 by the base leg of artifacts/sh4dmacie/repairA_20260917/
++#  BEFORE this pin was touched -- and the W-id identity row RED at got 29 / want 27, which is
++#  exactly what it exists to do: it is the probe's OWN stale-copy guard (floor clause (c)), and
++#  it caught an incomplete edit that the gate's check_min floor would have passed. ***
++EXPECT_ROWS = 29
+ 
+ rows = []
+ 
+@@ -520,6 +525,11 @@ def main():
+         st and alive and d == ["0"],
+         "alive=%s lines=%d %s" % (alive, len(d), d),
+         "alive with one diagnostic.  This is the last guest-reachable host death that was "
++
++#  *** CORRECTED 2026-09-17 (L4): NOT THE LAST.  `f532bb6' still had a pclock==0 fatal()+exit(1)
++#  in the SH4_TCR0/1/2 write arm of DEVICE_ACCESS(sh4), which a guest store to a Timer Control
++#  Register reaches; #459 removed it.  Firing it also needs pclock==0, a machine-setup condition,
++#  so the path is guest-reachable while the trigger is not guest-controlled. ***
+         "in this file; pre-#453 the same store ended the process")
+ 
+     #  ---- X2: the mutant a pass-1 seat named, and it is why X1 alone is not enough ------
+@@ -571,14 +581,43 @@ def main():
+     #  channels 4..7 restart at 0xffa00050 (sh4_dmacreg.h:67-85).
+     for nm, addr, ch in [("X4a channel 1", SH4_CHCR1, "1"),
+                          ("X4b channel 7", SH4_CHCR7, "7")]:
++        #  *** BOTH STIMULI, AND THE SECOND ROW IS AN ADDITION RATHER THAN A REPLACEMENT.
++        #  #453 L2 pass 2, 2026-09-17: the deepseek seat found that changing these rows from
++        #  `wr()' to `two_stores()' TRADED ONE CELL FOR ANOTHER instead of adding one --
++        #  exactly the diagonal move a pre-review had refused in the sibling #462 repair, made
++        #  here by the same author who had just recorded that refusal. ***
++        #
++        #  The oracle `d4 == [ch]' says "after the stimulus, exactly ONE line naming ch".  With a
++        #  SINGLE store that pins THE FIRST STORE PRODUCED IT.  With TWO stores it pins only that
++        #  the PAIR produced one -- **a mutant that silences the first store and lets the second
++        #  produce the sole diagnostic passes unchanged.**  Measured context: after the in-place
++        #  change, NO row in this file drove a single store on channels 1 or 7 (every other `wr()'
++        #  targets SH4_CHCR0, and the reject loop covers CHCR0 and CHCR3), so (1,fresh) and
++        #  (7,fresh) had become unpinned.
++        #
++        #  So both are rowed: `a'/`b' keep the FIRST-store property, `c'/`d' add the CEILING.
++        #  Four cells, {channel 1, 7} x {fresh, set}, which is the floor product the clause-(d)
++        #  enumeration names.
+         b4, a4, s4 = wr(addr, x, nm.split()[0], kw)
+         d4 = IE_RE.findall(b4 or "")
+         row("%s -- host ALIVE, one line, and it NAMES that channel" % nm,
+             s4 and a4 and d4 == [ch],
+             "alive=%s lines=%s" % (a4, d4),
+-            "alive with exactly one diagnostic naming channel %s.  Every other row here "
+-            "drives channel 0, so a mutant that keeps channel 0 correct and kills the "
+-            "host on the rest is invisible without this" % ch)
++            "SINGLE store: alive with exactly one diagnostic naming channel %s, and because it is "
++            "one store this pins that THE FIRST store produced it.  Every other row here drives "
++            "channel 0, so a mutant that keeps channel 0 correct and kills the host on the rest is "
++            "invisible without this" % ch)
++
++        nm2 = nm.replace("X4a", "X4c").replace("X4b", "X4d")
++        b5, a5, s5 = two_stores(x, x, addr, nm2.split()[0])
++        d5 = IE_RE.findall(b5 or "")
++        row("%s -- TWO identical stores, still exactly one line" % nm2,
++            s5 and a5 and d5 == [ch],
++            "alive=%s lines=%s" % (a5, d5),
++            "TWO stores: the CEILING -- one line per channel per device lifetime.  A single store "
++            "can show the FIRST line appears but never that a SECOND does not, and the ceiling is "
++            "a claim about the second.  `|| channel != 0' escaped 27/27 with byte-identical output "
++            "until this row existed" % ())
+ 
+     #  ---- W0 / identity ---------------------------------------------------------------
+     n_ses = len(P.STARTS)

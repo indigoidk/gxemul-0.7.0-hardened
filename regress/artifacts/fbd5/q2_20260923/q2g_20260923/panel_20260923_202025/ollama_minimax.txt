@@ -1,0 +1,107 @@
+VERDICT: SHIP
+
+**Q1(a) — do E1-E5 read what they claim?**
+
+READ from the diff (each edit verified against its row name and COVERED claim):
+
+- **E1**: DEVINIT "Clear 0x20 keeps 0x10 pending and enabled" rows (inside the `for (tk = 0; tk < 2; tk++)` loop, so both timer states covered) now check `x->irq_status == 0x18`. Name says "pending"; check reads `irq_status`. ✓
+- **E2**: "IRQ_STATUS reads 0x10" row now checks `x->fiq_status == 0 && x->fiq_enable == 0`. COVERED says "(value, fields, output)"; check now reads the five named fields plus the read value plus the CPU line. ✓
+- **E3**: Both asserted-Clear rows (inside `for (k = 0; k < 2; k++)`) now check `x->irq_status == 0x10` and are renamed "..., the raw status kept, ...". Name says "raw status kept"; check reads `irq_status`. `irq_asserted` left unpinned — the comment correctly explains why (the enable arms never write it; pinning pins `fbirqstuck`'s F13). ✓
+- **E4**: Re-arm row now checks `x->irq_asserted == 1 && x->fiq_status == 0 && x->fiq_enable == 0`. COVERED says "the fields and irq_asserted kept"; check now reads them. ✓
+- **E5**: X12/X13 each get `memset(b, 0xa5, sizeof(b))` before the `memory_writemax64(cpu, b, CY[c].w, CY[c].data)`. A fetch past `len` now gets 0xa5, not 0, so deepseek's `memory_readmax64(cpu, data, 4)` mutation clears enable bits outside the width. ✓
+
+**Does any row still claim a channel it does not read?** — REASONED: the four edited rows now match their names. I checked the two renamed asserted-Clear rows (E3) and the re-arm row (E4) and the IRQ_STATUS read row (E2) against their new checks — all consistent. **CANNOT SETTLE for the unedited 860 rows from the packet alone**: I cannot enumerate every row name against its check. The 739-variant table (711 from 3c + 22 Opus q2f + 6 new) gives strong empirical coverage; the 0-mismatch count means no probed mutation produced an unexpected green where red was predicted, which is the failure mode for "claims a channel it does not read."
+
+**Q1(b) — COVERED true of 864 rows; NOT COVERED outside the floor or disclosed?**
+
+REASONED: the COVERED/NOT COVERED text changes in the diff (hunks 1-3, 7) align with the edits. Specific items:
+- Hunk 1 spells out widths ("1, 2 and 4 at all five, and 8 at IRQ_STATUS and FIQ_STATUS (IRQEnable's 8-byte read is NOT covered)"). S11 UPHELD.
+- Hunk 1 separates "for a read, the read data" from the write rows. S16 UPHELD.
+- Hunk 2 rewrites the exact-value example from measured forms (the `irq_*`/`fiq_*` forms at the direction tests and latch tests). S12 UPHELD.
+- Hunk 3 adds the caller context (S6), announce TEXT (S7), latch history (S8), LEVEL line (S9), and rest of instance (S14) to NOT COVERED. All are disclosed under clause (e) or filed. S6/S7/S8/S9/S14 UPHELD.
+- Hunk 3 mentions bit 16 of the 25 unraised bits is caught (N_SB16). S13 UPHOLD.
+- Hunk 7 updates the X14 header to name TD04. S15 UPHELD.
+- Hunk 7 also corrects the producer-pair text (PR09 reds the status-read row; the pair's bit logic PR01/PR03/PR04 is filed apart from F13). S10 UPHELD.
+
+**One sentence in NOT COVERED that worries me (REASONED, not REASONED-out):** "the producer pair's own logic" is filed under `fbirqstuck` by owner ruling. The ruling is recorded, but the pair's deassert path (`irq_status &= ~interrupt->line`) is a body of the producer, not the handler. If the pair is filed, a mutation to the deassert body (e.g., removing the `~`) is not a floor breach — it's an `fbirqstuck` item. This is consistent with the owner ruling, but a seat reading the diff cold might wonder why the handler-floor detector doesn't cover the producer. The disclosure text is honest about this.
+
+**Q2 — THE FLOOR QUESTION on the composite**
+
+CANNOT SETTLE exhaustively from the packet. The floor rule (predicates dominating each edited decline, crossed with body-read lvalues' BODY-TESTED partitions, jointly reachable) is a formal derivation that requires reading the handler bodies and the row checks together. The packet provides:
+
+- **Denominator I can name:** 864 rows (X6-X14 + P-rows), 0 failures, 0 compiler warnings; 739 variants (711 from 3c + 22 Opus q2f shapes + 6 new: R3D_CXC1, R3D_GF1, R3D_DA1, OQ_FS01, R3D_CXA1, R3D_FW1, R3D_LH1), 0 mismatches against predictions, 0 rows lost, 0 unscored.
+- **Edit shapes swept:** the 739 listed. The 6 new specifically target the 3d changes (CXC1 zeros irq_status at end of Clear write; GF1 ORs fiq_enable into the read; DA1 zeros irq_asserted at +0x180; FS01 masks irq_status in Clear; CXA1 keys CXC1 on irq_asserted; FW1 reads 4 bytes from the head; LH1 re-announces at the 5th).
+- **Disclosed gaps (cannot-see edits the contract names as outside the floor):** caller context (mem/MACHINE_NONE), announce TEXT, latch history beyond rowed repeats, LEVEL line (FS02), Clear write destination (len < 4), exact field values beyond rowed, joint conditions beyond rowed, producer pair (`fbirqstuck`), the rest of the instance (W03-W05), the IRQ Set's drive test, the unraised-25 mask (24 pass; bit 16 caught).
+
+**Smallest edit I can name the 864 rows cannot see and is NOT disclosed:** REASONED — none I can construct from the packet. The disclosures cover the predicates the rows don't partition. If one exists, it is not visible to me from the inlined text.
+
+**The one measurement that would let me close Q2 with full confidence:** an exhaustive enumeration of every predicate in the five handler arms (direction tests, latch tests, write-data fetches, drive tests, latch clearers) crossed with every body-read lvalue, showing each cell is either rowed or named in NOT COVERED. The 739 variants are a strong sample (0 mismatches means the probed shapes all behaved as predicted), but a sample is not an enumeration.
+
+**Q3 — S1-S22 and D1-D4**
+
+| # | Disposition | One line |
+|---|---|---|
+| S1 | UPHOLD | CXC1 measurement confirms the gap; E1 closes it. |
+| S2 | UPHOLD | GF1 confirms; E2+E4 close it. |
+| S3 | UPHOLD | FS01 confirms; E3 closes it (unpinning irq_asserted is correct). |
+| S4 | UPHOLD | DA1 confirms; E4 closes it. |
+| S5 | UPHOLD | FW1 confirms; E5 closes it (above floor, see D4). |
+| S6 | UPHOLD | Bodies read no `mem`/machine-type; clause (e) disclosure is correct; Opus seat's cats/netwinder scratch rows are the ready detector. |
+| S7 | UPHOLD | Rows count announces; TEXT is not read. Disclosed. |
+| S8 | UPHOLD | Latch partitions {0, nonzero} are both rowed; LH1 stays green on both. Disclosed. |
+| S9 | UPHOLD | FS02 is a LEVEL-line item; `fbirqstuck` territory. Disclosed. |
+| S10 | UPHOLD | PR09/PR01/PR03/PR04 and the 862-vs-864 stale counts are corrected in the diff (hunks 2, 3, 7). |
+| S11 | UPHOLD | Widths now spelled out; IRQEnable 8-byte explicitly NOT COVERED. |
+| S12 | UPHOLD | Rewritten from measured forms; ambiguity removed. |
+| S13 | UPHOLD | Bit 16 caught (N_SB16); 24 pass. |
+| S14 | UPHOLD | W03-W05 green on 864 confirms the rest-of-instance is not rowed; disclosed. |
+| S15 | UPHOLD | TD04 named in the X14 header. |
+| S16 | UPHOLD | "for a read" inserted. |
+| S17 | UPHOLD | Pre-existing false comments are not this diff's round; filed with R17. |
+| S18 | UPHOLD | Clear write destination is not an edited line; the options (one-row len-1 Clear or X9-X13 rewire) go into the filing. |
+| S19 | UPHOLD | Owner ruling 2026-09-23: disclose + file under `fbirqstuck` (MED). |
+| S20 | UPHOLD | `fatal()` returns; no change needed. |
+| S21 | UPHOLD | 32 timer rows + IDENTITY = 33; family pins sum to 831; 831+33=864. No change. |
+| S22 | UPHOLD | `(len & 1) == 0` reds X12's len-1 rows; `len == 3` not a guest input. Not an escape. |
+| D1 | UPHOLD | CXC1 (zeroing status AFTER the drive) passed all 864 on 3c — the drive proves liveness, not retention. |
+| D2 | UPHOLD | CXC1 + GF1 settle it: the rows DID claim unread channels. |
+| D3 | UPHOLD | Owner ruling stands; `fbirqstuck` is an open MED item. |
+| D4 | REFINE | See below. |
+
+**D4 — which is right, taking E3/E5 or disclosing them?**
+
+REASONED: E5 (the head-fetch fill) is clearly above the floor — `memory_readmax64(cpu, data, len)` is not in any edited arm. Taking it costs no row and catches 16 rows of FW1. Defensible.
+
+E3 is in a gray area: the Clear write is inside the edited case (+0x18c), but the *decline* at +0x18c is the read. The write body (`irq_enable &= ~idata; if (...) ASSERT else DEASSERT`) does not touch `irq_status`. So checking `irq_status == 0x10` at the asserted Clear is above the floor for the write path — a clean-sweep body mutant on the Clear write would not touch `irq_status`, and the rows would stay green on that channel even if it mutated the enable/drive (which the rows DO catch).
+
+The author takes E3 because FS01 (a non-body mutation that drops the masked line from `irq_status`) is caught, the cost is zero rows, and COVERED is updated to match. This is defensible: the rows now read `irq_status`; the contract says so; FS01 goes red. A stricter panel would disclose E3 and let FS01 be an `fbirqstuck`-adjacent item caught only by the ready detector. Both are internally consistent. **I uphold the author's call**, but flag that E3 is the choice a future panel might revisit if the contract-vs-floor distinction sharpens.
+
+**Which of my ACCEPTED dispositions is wrong?** None that I can see from the packet. S6 and D4 are the two the author flagged for hardest adjudication; I uphold both with the D4 refine above.
+
+**Q4 — records**
+
+READ from the diff:
+- Renamed row 1: "X14 line 4 raised by a device: Clear 0x10 clears it, the raw status kept, CPU line deasserted once" — check: `irq_enable == 0u && irq_status == 0x10 && ZCPU(0, 1)`. Name matches. ✓
+- Renamed row 2: "X14 line 4 raised by a device: Clear 0x400 keeps it, the raw status kept, CPU line asserted once" — check: `irq_enable == 0x10u && irq_status == 0x10 && ZCPU(1, 0)`. Name matches. ✓
+- COVERED hunk 1 corrections (widths, "for a read"): consistent with the rows. ✓
+- NOT COVERED hunk 3 additions (caller, TEXT, HISTORY, LEVEL, rest of instance): consistent with the measured greens/reds. ✓
+- X14 header hunk 7 (TD04 named; PR09/PR01/03/04/862-vs-864 corrected): consistent with measured forms. ✓
+
+**CANNOT SETTLE:** the IDENTITY comment's history is not shown in the diff. The brief lists "the IDENTITY comment" in the records-revision list but does not inline it. A file-reading seat would need to confirm it is not now stale. From the packet, I see no claim about the IDENTITY comment being edited in 3d, so it is presumably unchanged from 3c — but I cannot verify its 3c accuracy.
+
+**One sentence I want to flag (REASONED):** in the E3 comment block, "the enable arms never write it, which is `fbirqstuck`'s defect" — this is true as of the inlined `dev_footbridge.c` (the IRQ_ENABLE_SET and IRQ_ENABLE_CLEAR handlers do not write `irq_asserted`; only `footbridge_interrupt_assert`/`_deassert` do). ✓
+
+**Q5 — closing**
+
+**YES, VALID to close** if zero floor breaches (which the 739-variant table shows). The diff is delivered (864 rows, no new row, 12 hunks inlined), the roster is named (S1-S22, D1-D4, four seats + Opus seat + codex-dedicated + kimi-k3:cloud + minimax + agy), and the zero is carried with denominator (864/0/0; 739/0/0/0).
+
+**The one measurement that would let me close Q2 with full confidence** (named above): an exhaustive enumeration of every predicate in the five handler arms crossed with every body-read lvalue, showing each cell is rowed or disclosed. The 739-variant table is the strongest empirical evidence in the packet; it is not an enumeration. A file-reading seat can do the enumeration; I cannot from the packet.
+
+---
+
+**Seat record**
+
+- **Model:** MiniMax-M3 (blind seat; packet-only).
+- **What I read:** the entire brief, including the inlined diff (12 hunks), the inlined handler (`DEVICE_ACCESS(footbridge)`), the inlined producer (`footbridge_interrupt_assert`/`_deassert`), the §C settled premises, the §F2 findings table, the §E questions.
+- **What I ran:** nothing. No files read, no commands executed, no tree consulted. All assessments are READ (from the packet) or REASONED (from the packet's stated facts). No measurements were performed; none are labeled MEASURED.
+- **What I cannot settle:** exhaustive floor closure (Q2); the name and full check of the unedited row above the E1 edit (the deasserting DEVINIT Clear row, whose `snprintf` is in earlier diff context not inlined); the IDENTITY comment's history; whether the 860 unedited rows have any channel-claim gap not probed by the 739 variants.

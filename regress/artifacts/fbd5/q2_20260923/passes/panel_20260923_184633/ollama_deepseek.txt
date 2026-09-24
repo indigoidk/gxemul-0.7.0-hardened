@@ -1,0 +1,56 @@
+VERDICT: DO NOT SHIP -- the instance closure is incomplete: `footbridge_interrupt_deassert` is never exercised by any of the 862 rows, and a one-line edit to that producer (e.g., clearing all of `irq_status` instead of only `interrupt->line`) passes every row and is not disclosed in the contract.
+
+## Q1 — verify the enumeration
+
+**(a) Missing from THE SPACE**  
+READ: X14 only calls `x14_line`, which invokes `footbridge_interrupt_assert`; it never calls `footbridge_interrupt_deassert`. The handler’s `IRQ_ENABLE_CLEAR` write path calls `INTERRUPT_DEASSERT(d->irq)`, which in X14 is `cpu_deassert`, not the producer deassert.  
+REASONED: Therefore producer deassert semantics are absent from the enumerated space. Also missing: producer assert’s OR-vs-assignment behavior (`|=` vs `=`), and multiple lines raised through the producer (only single-line cells are rowed).
+
+**(b) X14 rows and their observables**  
+- Disjoint operands (`0x18/0x30`, clear `0x10`): edit `&`→`&&` or enable-alone; observable CPU deassert vs assert.  
+- Status zero with enable nonzero (`0/0x30`, clear `0x10`): edit enable-alone; observable CPU deassert vs assert.  
+- Seven single-line rows: edit masking drive test; observable assert vs deassert for that line.  
+- DEVINIT timer values, with/without tick: edit conditioning on timer fields or pending tick; observable announce counts, legal read values, decline announces.  
+- `irq_asserted = 1` rows: edit gating on `irq_asserted`; observable announce counts and CPU call counts.  
+All rows have an observable that can differ under their intended edit.
+
+**(c) NOT COVERED line false**  
+The line “a mask on one of the 25 bits of the drive test no device raises” is **not outside the floor**; it is actually covered by X14’s seven single-line rows. A mask on an unraised bit excludes all seven raised lines, so every one of those seven rows fails. That line is a false record.
+
+## Q2 — smallest unseen edit
+
+In `footbridge_interrupt_deassert`, change:
+```c
+d->irq_status &= ~interrupt->line;
+```
+to:
+```c
+d->irq_status = 0;
+```
+No row calls `footbridge_interrupt_deassert`, so all 862 rows stay green. The contract does not disclose producer deassert semantics. A similar edit in `footbridge_interrupt_assert` (`|=` → `=`) also passes because no row raises multiple lines through the producer.
+
+## Q3 — adjudicate §F2
+
+- G1–G10: UPHOLD.  
+- O1: UPHOLD.  
+- O2: UPHOLD — unaligned width-8 cells are not guest inputs.  
+- O3: **REFINE** — partial re-seating for X14 only left producer deassert and multiple-line producer assert uncovered.  
+- O4: UPHOLD.  
+- O5: UPHOLD.  
+- O6: UPHOLD — Set arm drive test is outside the floor.  
+- O7: UPHOLD.  
+- D1: UPHOLD.  
+
+**Wrong accepted disposition:** O3. Re-seating instances only for the X14 cells was insufficient; the producer pair itself needed rows, not just instance fields.
+
+## Q4 — records
+
+The NOT COVERED mask line is false as stated above. The IDENTITY arithmetic and gate pins are consistent with the diff:  
+862 = 707 + 32 + 8 + 8 + 8 + 60 + 20 + 19.  
+Gate pins: P 78, X[1-8] 440, X6 248, X7 148, X8 6, X9 100, X10 72, X11 80, X12 20, X13 20, X14 19.
+
+## Q5 — option-set completeness
+
+Yes, the missing disposition was to exercise the producer pair directly: call `footbridge_interrupt_deassert` and `footbridge_interrupt_assert` with multiple lines, or explicitly disclose producer deassert as not covered. Partial re-seating and disclosure did not cover this.
+
+**Seat record:** packet-fed model; read the inlined brief, diff, and handler/producer excerpts; ran nothing.

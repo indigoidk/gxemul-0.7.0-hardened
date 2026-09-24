@@ -1,0 +1,379 @@
+```
+VERDICT: SHIP — 3c closes the measured X14 cells; the R2 disclosure rests on a defensible (if
+unchallenged) reading of the floor rule, and every disposition either has a measurement behind
+it or an explicit denial-by-disclosure.  Weak link: the "by value, not by design" sub-clause in
+NOT COVERED — see Q3, R9/idem.
+```
+
+(Scoping note before the questions: I am the packet-only seat. I did not read any file, did not
+run a gate, did not verify the IDENTITY or the 864/0 measurement. Everything below is from the
+brief, the inlined diff, the inlined handler, and the inlined producer. If a claim needs
+the tree to settle it, I say so.)
+
+---
+
+## Q1 — did 3c close the X14 cells it claims?
+
+### (a) X14 row-channel audit
+
+I tracked six cells visible in the diff (the rest of X14=19 is unchanged from the 862-row run).
+The new/changed checks, and the channel they now read:
+
+| # | Row (tk suffix elided where looped) | New channels read (vs prior) | Edit it lands against |
+|---|---|---|---|
+| 1 | "… five legal reads return their values" | `ZCPU(0,0)` added; the body of the 5-read loop now uses `RA[]` (with `want`) instead of bare `ok && rv==1` | IA16 (latched-and-asserted read returning 0): RA catches the upper-word / wrong-value leak on +0x184/+0x280/+0x284 |
+| 2 | "… Set 0x40 then Clear 0x10 leave 0x60" | `ZCPU(1,1)`; `ZZERO()` before the decline block | TD01/TD03 (`&& !timer_control[0]` / `\|\| timer_control[0]` on the Clear drive) and TD04 (decline deasserting on `timer_control[0]`) — the Set asserts, the Clear deasserts; TD01's guard is inert at DEVINIT (timer_control[0]=0) but ZCPU(1,1) still requires the Clear drive to fire and the deassert to land |
+| 3 | "… 5 declines …" | `ZCPU(0,0)`; reads through the whole field set (irq/fiq status+enable) | TD04 (decline deasserting) and IA14 (decline deasserting while irq_asserted) — ZCPU(0,0) on every decline catches either |
+| 4 | NEW: "… Clear 0x20 keeps 0x10 pending and enabled: CPU line asserted once" | `rv==1 && irq_enable==0x10 && ZCPU(1,0) && fatal_calls==0`; instance started from a producer-built `irq_asserted=1` (status=0x18, enable=0x30) | The OTHER polarity of the drive — a Clear that must ASSERT, with both timer states |
+| 5 | "X14 line 4 raised by a device: IRQ_STATUS reads 0x10" | `irq_status==0x10 && irq_enable==0x10 && irq_asserted==1 && ZCPU(0,0)` appended | IA12/IA13 (IRQ_STATUS read clearing the status / deasserting while irq_asserted) |
+| 6 | "X14 line 4 raised by a device: 5 declines, then the legal reads and a Clear re-arm no latch" | `RA[]` (re-arm reads the values), `ZCPU(1,0)`, `irq_status==0x10 && irq_enable==0x10` appended | IA16 (latched read returning 0); also pins 5 once-latched announces across 10 declines — relies on `fatal_calls==5`, which now lives behind a single latched set |
+
+(Verified from the inlined diff and ZCPU/RA/ZCLR macros in the diff hunks. Not checkable: the
+IDENTITY itself, that the macro names I named are actually wired as I assume, that `x14_new`'s
+argument order is what I inferred from `(0x18, 0x30, 0x60, 0xc0, 1)` and the surrounding
+`ts[tk]`/`pending_timer_interrupts[0] = tk` setup. Single fact that would settle each: the
+file under `GXEMUL-SEC/regress/diff_footbridge.c` at the 8309c5b7 tree.)
+
+I do not see an X14 row that claims a channel it does not read. Specifically:
+- Row 5 says "IRQ_STATUS reads 0x10" — it now reads the read value, the fields, and the output.
+  No over-claim.
+- Row 6 says it covers "the legal reads with their values" — the diff explicitly replaced
+  `ok && rv==1` with `ok && rv==1 && memory_readmax64 == RA[i].want`. The `memset(0xa5,…)`
+  before the read is what makes the value-check meaningful (otherwise the buffer state is
+  whatever x14_new seeded). That detail is present. ✓
+- Row 4's check is `rv == 1 && x->irq_enable == 0x10 && ZCPU(1, 0) && fatal_calls == 0`.
+  The row's name claims "CPU line asserted once"; `ZCPU(1, 0)` is the count, the name is
+  not over-reaching.
+
+What I cannot settle without the tree:
+- The exact `x14_new` argument order and the meaning of `0x18 / 0x30 / 0x60 / 0xc0 / 1`.
+  I am reading those parameter positions from adjacency, not source.
+- Whether `ZCPU(0, 0)` after `ZZERO()` catches every conceivable TD04 / IA14 / IA12 / IA13
+  edit in the field. The 9-escape measurement is the seat's confidence here, not me.
+
+### (b) COVERED / NOT COVERED sanity against the diff
+
+The COVERED block (X14 clause) is now:
+
+> "…DEVINIT's timer values, without and with a tick pending, at the five legal reads, a Set and a Clear (the drive in both polarities), and the five declines, each with the interrupt output (X14); irq_asserted = 1, raised through the real producer, at the IRQ_STATUS read (value, fields, output), the Clear write both ways, and a re-arm row…"
+
+What I can verify against the diff:
+
+- "a Set and a Clear (the drive in both polarities)" — yes. Row 2 (Set+Clear that deasserts;
+  ZCPU=1,1) and Row 4 (Clear from a producer-built `irq_asserted=1`; ZCPU=1,0) are the two
+  polarities of `if (status & enable) ASSERT else DEASSERT`. ✓
+- "each with the interrupt output" — every changed/new row checks `ZCPU(...)` or `fatal_calls`.
+  ✓
+- "the IRQ_STATUS read (value, fields, output)" — Row 5 reads `memory_readmax64 == 0x10`,
+  the three fields, and `ZCPU(0,0)`. ✓
+- "re-arm row -- five declines, the legal reads with their values and a Clear, five declines
+  again: 5 announces, one CPU assert" — Row 6's check is `f0==5 && fatal_calls==5 &&
+  ZCPU(1,0) && irq_status==0x10 && irq_enable==0x10`. 5 announces matches
+  `fatal_calls==5` over a 10-decline sequence (each of the 5 sites latches exactly once).
+  One CPU assert matches the construction's single `INTERRUPT_ASSERT` to set `irq_asserted=1`
+  with no later drive touching it (the Clear must, per the check, keep `status & enable != 0`).
+  ✓
+- "irq_asserted = 1, raised through the real producer" — Row 5 / Row 6's instance is built
+  through `x14_new(…, 1)`. Whether that fifth arg actually invokes the producer (vs a direct
+  field write) is *not checkable from the packet alone*; the constructor name and the COVERED
+  line both strongly suggest the producer path.
+
+What looks shaky:
+
+- The NOT COVERED clause reads:
+  > "`idata != 0x20` and the `irq_enable`/`irq_status != 0x10` forms at +0x180 and +0x18c are red since X14, whose rows happen to write 0x20 and hold 0x10 — by value, not by design"
+
+  This is the part that argues the detector does not promise these. The detector empirically
+  distinguishes a buggy `irq_enable != 0x10` (or `idata != 0x20`) and the diff DOES NOT
+  remove that empirical coverage. Calling this NOT COVERED relies on a distinction
+  ("happens to") that a stricter seat could read as: the detector catches it, so by the
+  floor it must be COVERED. I do not know the project's prior interpretation of "by value,
+  not by design" — the brief does not cite one. Flagged under Q3.
+
+NOT COVERED clauses that the diff newly adds (or revives) — I checked each against the handler:
+
+- "`idata == 0` at a latched Clear write — measured green, r3c_20260923". The only place an
+  `idata == 0` predicate could change a Read of +0x18c is `memory_readmax64` (returns 0 when
+  MEM_WRITE not set; idata is read only on MEM_WRITE per the handler). On a MEM_WRITE Clear
+  with idata==0, `irq_enable &= ~0` is a no-op and the drive fires if status & enable. The
+  r3c measurement is the seat's confidence; I take it.
+- "the Set writes (IRQ and FIQ) and the FIQ Clear write below len 4, and the enable arms at
+  len 8". The enable arms at +0x188/+0x288 share no case with a decline (the body of Set/Clear
+  is `irq_enable |= idata` etc.), and the `& d->(fiq_)enable` operand only matters where the
+  decline sites read `irq_status`-family. Outside the floor. ✓
+- "the PRODUCER PAIR's own logic: X14 calls footbridge_interrupt_assert() only to BUILD its
+  instances, and nothing here calls _deassert() — deleting the `~` in its `irq_status &= ~interrupt->line`
+  passes all 862 rows (codex, repair 3's pass; measured, q2_20260923/r3_20260923/t_deassert.txt)".
+  Plausible — single-call assert + zero deassert means the `|=`/`&= ~` lines both only run on
+  the build-step. **CHECKABLE FROM PACKET: the producer's claim "nothing here calls
+  _deassert()" is a positive statement about the 864-row instrument; the brief does not include
+  the code that establishes it (the seat that named it was the Opus seat, and the brief only
+  quotes the predicate).** I cannot verify from the packet; I trust the brief.
+- "An 8-byte access answers ONE register: X9/X10 pin an 8-byte READ's upper word to 0…". The
+  claim is that X9/X10's rows include an 8-byte read where the upper word is asserted to 0.
+  The handler sets `odata = d->irq_status & d->irq_enable` (32-bit operand), which zero-fills
+  a `uint64_t odata` on assignment (the declaration is `uint64_t`). Plausible. ✓
+
+The rest of the NOT COVERED list (exact values, rest of instance, declined-write data beyond
+{0, 0x70}, address axis, WHICH interrupt below len 4, 25 unraised bits, IRQ Set's disjoint
+case) matches the COVERED list's denials one-for-one; no category was lost in the cut.
+
+---
+
+## Q2 — smallest unscreened edit, not disclosed
+
+I cannot pin this down with the packet alone — the cells I cannot read are X6's read-data
+channel (does X6 ever `memory_readmax64` at +0x180/+0x184/+0x280/+0x284 at a state where
+`status != enable`?), and the exact states X9/X10 reach. Both of those decide whether the
+following two candidates live or die.
+
+**Candidate A** (high prior):
+
+> Single character in the IRQ_STATUS read: `odata = d->irq_status & d->irq_enable;` →
+> `odata = d->irq_status | d->irq_enable;` (the `&` flips to `|`).
+
+Why it is the smallest: one character. It is on the read side of a decline-bearing arm, so
+it is "the five arms". Why it might be unscreened:
+
+- At every X14 read in the diff, `irq_status == irq_enable == 0x10`. The `|` and `&` agree
+  there (0x10 | 0x10 = 0x10, 0x10 & 0x10 = 0x10).
+- At every X6 read in the diff, the read-data channel is checked but the state seeds I can
+  infer are {0, 0x70, 0xffffffff, "seeded"}. At 0, 0x70, and all-1s, `x|y == x&y` whenever
+  `x == y` or one is 0.
+- A "seeded" state may have `status != enable`. At such a state `status | enable > status & enable`,
+  the bug surfaces. But I cannot see X6's seeded state from the packet.
+
+What would settle it: X6's seeded-state value (one fact).
+
+**Candidate B** (lower prior, more interesting):
+
+> Single character in the IRQ_ENABLE_CLEAR drive: `if (d->irq_status & d->irq_enable)`
+> → `if (d->irq_status | d->irq_enable)`.
+
+Same logic. The Set+Clear row at state (status=0x18, enable=0x30 → 0x70 → 0x60) reaches the
+deassert branch (0x18 & 0x60 == 0). With `|`, the buggy condition fires (nonzero) and
+asserts instead. The row's `ZCPU(1, 1)` catches it. So this candidate is **caught** — the
+two-polarity X14 coverage actually does close it.
+
+So Candidate B is screen. Candidate A is the live one. Without X6's read-states I can't
+say it's unscreened — only that it survives the X14 rows. **NOT CHECKABLE FROM PACKET**;
+name the seeded states to settle.
+
+If I have to pick one for the panel, I pick Candidate A and tag it as live-or-dead on X6.
+
+---
+
+## Q3 — adjudicate R1–R17 and D4
+
+- **R1** (9 X14-cell escapes red on 864): **UPHOLD**. The diff inlines the channel updates
+  (ZCPU in rows 1/2/3/5/6, RA[] in rows 1/6, the new row 4). What I cannot independently
+  check is that those 9 edits actually go red; I take the brief's measurement.
+- **R2** (producer pair: DISCLOSED + `fbirqstuck`, NOT ROWED): **UPHOLD, with reservation.**
+  Reservation: this is a scope ruling under the predicate-based floor, and the floor is the
+  project's, not a published theorem. The reasoning chain — "the predicate of IRQ_STATUS read
+  is `status & enable`; that is dominated by `status` and `enable`; row sets up `status` to a
+  boundary value directly OR by a SINGLE producer call, in which case `|=` vs `=` and the
+  NetBSD comment are decision-equivalent on this detector" — is correct iff you accept that
+  the producer's INTERNAL multi-call semantics are not part of the predicate. Under the same
+  floor, the multi-call semantics of the producer ARE exercised by real cats/netwinder
+  configurations where the same instance sees lines 10 & 18 in quick succession; the Opus seat
+  flagged PR02 as the most realistic product-side fix, which the brief does not contest.
+  So this is the right call operationally (Opus's measured 5-row scratch closure had
+  producer rows land red anyway, suggesting the gap is small); it is NOT airtight under a
+  stricter reading of "what dominates the line". Marking as DEFENSIBLE PREDICTION. With one
+  consequence: the contract should remain "the producer pair's own logic is `fbirqstuck`'s
+  round", not "the producer is provably outside the floor".
+- **R3** (width 8 at +0x188/+0x288 / IRQEnable 8-byte read outside the floor): **UPHOLD**.
+  +0x188/+0x288 share no case with any decline; 8-byte reads there are disclosed under
+  `fbenablewidth`. ✓
+- **R4** (WHICH interrupt a Clear drives below len 4): **UPHOLD**. X14 counts CPU separately
+  at len 4; X9-X13 count on the shared pair. Disclosure is honest. Candidate partial fix (a
+  row at len < 4) is not added — see Q5.
+- **R5** (latched Clear of 0 unobserved): **UPHOLD**. X7 reads "rv and announce count only",
+  so an `idata==0` predicate on the write-data fetch is invisible. Disclosure says so. ✓
+- **R6** ("only writer" was wrong for `irq_asserted` — `_deassert()` writes it too): **UPHOLD**
+  as a record. The producer pair inlines `_deassert()` body, and it writes both `irq_status`
+  and `irq_asserted`. Diff's restored text reads "the only writers of irq_status and of
+  irq_asserted". ✓
+- **R7** (P8 makes disjoint access, checked only enable): **UPHOLD** as a record. ✓
+- **R8** (Set drive's operand census wrong: all-zero Set 0x70 has status 0 and the enable
+  nonzero): **UPHOLD** as a record. The phrasing moved from "only where (status & new-enable)
+  is zero with an operand zero, or nonzero with bit 4 or 16" to enumerating the three X9
+  shapes. ✓
+- **R9** (F1 `&& !timer_control[0]` no longer "passes every row here", and `!= 0x10` exact-value
+  example is now red on 862): **UPHOLD** as a record AND as the source of the "by value, not
+  by design" disclosure. **THIS IS THE WEAK LINK IN THE CONTRACT.** The diff's NOT COVERED
+  line admits `idata != 0x20` and `irq_enable/irq_status != 0x10` forms at +0x180/+0x18c are
+  RED, then calls them "not covered, by value, not by design". A seat that reads "covered =
+  every edit the rows pass / fail on" will say: RED == COVERED. The packet does not contain a
+  prior panel ruling on "by value, not by design". I would mark **NEEDS PROJECT PRECEDENT** —
+  it may be defensible (so a future parameter perturbation does not silently regress) or
+  simply wrong. Without that precedent, the contract is at minimum ambiguous.
+- **R10** ("an 8-byte access … not covered" was backwards): **UPHOLD**. The diff's revised
+  sentence clarifies; X9/X10's 8-byte pinning is asserted measured. ✓
+- **R11** (COVERED misattribution — width-4 / 0x70 Clear to X12/X13, X7/X14 channel list
+  overclaimed): **UPHOLD**. The diff restructured the Clear/Set widths and the X14 header to
+  match. ✓
+- **R12** (gate truncation sentence was still false): **UPHOLD**. The diff rewrites it to
+  describe the grep semantics correctly. ✓
+- **R13** ("no tick was ever pending" needed a #545-block qualifier): **UPHOLD**. The diff
+  scopes it: "in the #545 blocks the timer fields sat at 0 … and no tick was ever pending (the
+  timer rows at the top of this file seed ticks; they test other arms)". ✓
+- **R14** (THE SPACE did not name rest of instance — timer_value, CPU interrupt's fields,
+  pcibus, console_handle, timer handles): **UPHOLD** as a record. Disclosure names them now.
+  Opus's W03-W05 (closures on those fields, measured green on 862) confirm the disclosure.
+  ✓
+- **R15** (one bit of the 25 unraised mask IS covered by the seven single-line rows):
+  **UPHOLD THE REJECTION**. The brief is right: a mask on bit N leaves lines 4–7 (and 10/11/18)
+  untouched, so single-line rows are insensitive. The brief's measured 24 N_SB variants green
+  on 864 confirms. The disclosure "a mask on one of the 25 bits of the drive test no device
+  raises" stays. ✓
+- **R16** (timers 2-4, other DEVINIT widths/data, multi-line seeds): **UPHOLD** as disclosure.
+  ✓
+- **R17** (pre-existing false comments in the timer arms): **FILE — not in 3c's scope**. Fine.
+- **D4** (DO NOT SHIP on repair 3): **UPHOLD AS SUPERSEDED by 3c.** Repair 3 was the panel
+  decision on the 862 rows; 3c is its own pass; the cell-closure question is now separate.
+  D4 does not apply to 3c.
+
+**Which disposition is wrong?** None of R1, R3-R17, R15 are wrong as stated. R2 is a
+defensible scope ruling, not a measured settlement. **R9's "by value, not by design" wording
+is the part of the contract I would push back on** — see above. The ruling that decides it
+is the project's, and I do not have it in the packet.
+
+---
+
+## Q4 — records
+
+**False sentences in the changed comments?** I went through every changed hunk in the diff:
+
+1. "X14 %s: the five legal reads return their values" with the added `ZCPU(0, 0)` — true if
+   nothing in the read path can drive an interrupt on these five sites; per the handler,
+   IRQ_ENABLE_SET's read branch (`odata = d->irq_enable`) returns the value but does NOT
+   drive, and the four `IRQ_STATUS`-class reads return values without driving. ✓
+2. "ZCPU(1, 1)" on the Set+Clear row — true iff the Set asserts and the Clear deasserts.
+   At state (status=0x18, enable=0x30 → 0x70 → 0x60): Set's drive sees 0x18 & 0x70 = 0x10
+   (assert); Clear's drive sees 0x18 & 0x60 = 0 (deassert). ✓
+3. "ZCPU(0, 0)" on the 5-declines row — true if declines do not touch `d->irq`. The
+   declines' bodies are all `fatal(...);`; nothing on the `d->irq` path. ✓
+4. Row 4 "Clear 0x20 keeps 0x10 pending and enabled: CPU line asserted once" with
+   `ZCPU(1, 0)` — true iff the drive fires exactly once on the Clear and the producer's
+   construction assert does not count (it must be ZZEROed first or be the only assert in
+   the row). The diff shows `ZZERO()` is called BEFORE `ZCLR(0x20)`. So the assert comes
+   only from the Clear drive. ✓
+5. "the re-arm row … 5 announces, one CPU assert" — true iff `fatal_calls == 5` over a
+   10-decline sequence (five once-latched sites, each fires once) and the only assert
+   comes from the producer's construction (i.e., the Clear inside the row does NOT add
+   asserts or deasserts after the producer). `ZCPU(1, 0)` is the read; consistent. ✓
+6. "every row here that checks the interrupt output also requires the shared pair
+   UNMOVED … no row called either (of the producer pair)" — within the #545 BLOCKS. The
+   diff explicitly limits it ("in the #545 blocks the timer fields sat at 0 …"). ✓
+7. The `(An 8-byte access answers ONE register: X9/X10 pin an 8-byte READ's upper word
+   to 0, ...)` sentence is now correct (R10). ✓
+8. The COVERED width list for Clear is now coherent (`len 1 and 2 with 0x70 and at len
+   1, 2 and 4 with all-ones`, `at len 4 with 0 and 0x70, latches clear (X9), and with
+   0x70, every latch set (X10)`). ✓
+9. The X14 header parenthetical "(F1, `&& !timer_control[0]` on a latch guard, passed
+   every row until X14's DEVINIT rows …)" — true (R9 acceptance). ✓
+10. The "timers 2-4 ticks, other DEVINIT widths/data, multi-line seeds" clause is
+    outside COVERED but listed in NOT COVERED. ✓
+
+I do not see a false sentence in the changed comments.
+
+**IDENTITY arithmetic.** 862 rows (the repair-3 count) plus one new `check_u(zn, …)` that
+runs twice inside the `for (tk=0; tk<2; tk++)` loop ⇒ 862 + 2 = 864. ✓
+
+**Gate pins (gate_offline.sh)** — three lines changed:
+- `footbridge: rows actually run` 862 → 864. Matches IDENTITY. ✓
+- `footbridge: #545 X14 instance cells (drive test, DEVINIT, irq_asserted)` 19 → 21.
+  Matches the +2 distinct row names from the in-loop `check_u`. ✓
+- The truncation sentence rewrote the falsity. (Not pinned by `check_min`/`check` — text
+  in a comment block; the previous text was wrong (R12).)
+
+(A zero needs a denominator: I walked both changed files, all hunks in the diff. I did not
+walk X[1-8] or X[6]-X[13] channels — I lack the rest of the file — and I cannot check that
+X[1-8] 440 + X6 248 + X7 148 + X8 6 + X9 100 + X10 72 + X11 80 + X12 20 + X13 20 + X14 21
+sum correctly against P 78 without seeing the total. Asked, not assumed.)
+
+---
+
+## Q5 — option-set completeness for R2 and R4
+
+For **R2** (producer pair), the named dispositions are: DISCLOSED + FILE (`fbirqstuck`) and
+implicitly ROWED (Opus seat's 5 producer rows, scratch, not adopted). The disposition I do
+NOT see named — and that the seat record did consider, since the Opus seat generated one — is:
+
+> **PARTIAL ROW + DISCLOSED.** Add ONE row (or one short pair) that calls
+> `footbridge_interrupt_assert()` twice with disjoint lines (e.g., 0x10 then 0x20) and
+> checks `irq_status == 0x30`. That catches `|=` → `=` (returns 0x20), `|=` → `^=`
+> (returns 0x30 by accident here, but 0x30|0x40 → 0x70 vs 0x30^0x40 → 0x70 — same, so
+> wouldn't catch `^`; would catch `=` though). Then disclose the rest (the
+> `&& !d->irq_asserted` guard restoration, the `_deassert` `~` deletion, repeated-
+> assertion deletions) with `fbirqstuck`.
+
+This is materially smaller than "row the whole pair's state space" and lands the
+highest-prior edit (PR01) as a row, not a disclosure. I do not have a strong reason the
+author rejected it — but it is a third option, and it was not enumerated.
+
+For **R4** (WHICH interrupt a Clear drives, below len 4), the named disposition is
+DISCLOSED. The disposition not named is:
+
+> **PARTIAL ROW**. Add one row at len 1, data `{0x10, 0x20, 0x40, 0x80}` (timer lines) that
+> Clear-writes and checks the *destination* of the assert (`*(len < 4 ? &d->timer_irq[k]
+> : &d->irq)`). One row + a small dump, narrow cell, no chain.
+
+Same shape as the R2 PARTIAL ROW above: a small row that lands the most realistic edit and
+discloses the rest.
+
+(For R2 and R4, "row it" without qualification is the third option the author rejected on
+practical grounds; "do nothing" is the implicit baseline; the new option is the partial
+row + disclosure.)
+
+---
+
+## Things found while verifying (not in the question set)
+
+1. **`assert(x->irq_status & x->irq_enable)` comment intact in the producer.** The brief
+   says the product keeps the NetBSD `&& !d->irq_asserted` commented out, and 3c did not
+   touch the producer. The brief's framing of PR02 ("restores code the product keeps
+   commented out") is consistent with what's inlined. **NOT** a defect; recording for the
+   panel.
+
+2. **The X14 COVERED clause does not name `IRQ_ENABLE_SET`'s read in row 5/6 explicitly.**
+   Row 5 is the IRQ_STATUS read; RA[4] = IRQ_ENABLE_SET's read value is checked in rows 1
+   and 6. That's covered by "the five legal reads" earlier in the clause. Not a defect;
+   recording because the parenthetical "(value, fields, output)" might over-claim at first
+   reading.
+
+3. **The "by value, not by design" clause is the single largest source of future dispute
+   risk** in the contract. I do not have project precedent to settle it. Re-raising in
+   Q3.
+
+---
+
+## Seat record
+
+- **Model**: MiniMax-M3 (per system header).
+- **Read**: the entire packet (the brief preamble; §C's settled premises; the inlined
+  `DEVICE_ACCESS(footbridge)` handler; the inlined producer pair; the full inline 3c diff;
+  the inline gate diff; §E's questions; §F2's own-pass dispositions).
+- **Ran**: nothing. Per the operational rule I did not execute `run.sh`, `gate_*.sh`, or
+  any detector build. The 864/0 measurement, the nine X14 escapes being red, the Opus seat's
+  scratch results, and the 24 N_SB variants being green on 864 — all come from the brief.
+- **Cannot settle without the tree**: (1) the meaning of `x14_new`'s 5th positional arg (the
+  likely `irq_asserted` initial); (2) X6's read-state coverage (decides whether Candidate A in
+  Q2 lives); (3) whether X14's `x14_new(…, 1)` actually invokes the producer or just sets the
+  field directly; (4) the X[1-8] 440 + X6 248 + … total against P 78; (5) whether the
+  project has a prior interpretation of "by value, not by design".
+- **Confidence on the verdict (SHIP)**: high on "3c closes the 9 measured X14 cells" (the
+  diff is internally coherent and all the channels named are present in the checks),
+  medium on "the producer pair disclosure is correct" (it is a prediction, not a
+  measurement, and the brief admits it), and **low on the "by value, not by design"
+  contract clause** (no project precedent in the packet — recommend the panel push the
+  author for the prior panel ruling).
+
+VERDICT: SHIP — with two named concerns the panel should not silently adopt:
+(a) the R2 / producer-pair disposition is a prediction, not a measurement — flag in the
+    commit message so `fbirqstuck` carries the obligation forward;
+(b) the "by value, not by design" clause in NOT COVERED should be either justified with
+    project precedent or narrowed to the cases that are actually green on a parameter
+    perturbation probe.

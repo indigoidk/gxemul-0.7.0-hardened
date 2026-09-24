@@ -569,7 +569,11 @@ fi
 #  re-introduction of the crash takes the binary down there, before F1's fork.  G1's fork IS
 #  load-bearing (the CONTROL-arm exit(1) is reachable nowhere else in-process) and F1's contains
 #  a narrower class (a zero-guard conditioned on the prescaler bits survives D2 and dies in F1).
-#  Detection is unaffected either way: every grep below fails on a truncated log.
+#  Detection is unaffected either way: a log cut anywhere before its LAST line fails the verdict check
+#  below (DIFF_FOOTBRIDGE_PASS is printed last), and one cut before the summary line fails the row-count
+#  and failure-count checks too -- each greps the whole file, so a per-row presence grep can still find a
+#  row printed before the cut.  (This said "every grep below fails on a truncated log" until #545's repair
+#  3, and then that the counts read the file's last lines until repair 3c; neither was so.)
 FBBIN=$LOGDIR/diff_footbridge
 FBLOG=$LOGDIR/diff_footbridge.log
 if ! $CC -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
@@ -585,8 +589,45 @@ else
     check     "footbridge: row failures" \
               "$(grep -oE '[0-9]+ failures' "$FBLOG" | grep -oE '^[0-9]+')" "0"
     check_min "footbridge: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 33
+              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 864
     check     "footbridge: offline verdict" "$(grep -c 'DIFF_FOOTBRIDGE_PASS' "$FBLOG")" "1"
+    #  #545: the five declined sites.  P0-P9 pin preservation under a NONZERO seeded status, the read
+    #  expressions, the latch per site and byte-first at IRQ_STATUS; X1-X3 (the pass-2 L2 repair) pin
+    #  byte/halfword-first at EVERY site, narrow legal reads, and that no legal access re-arms a latch;
+    #  X4/X5 pin ZERO data / a zero enable as the first access, and a legal zero Clear write.  X6/X7 are
+    #  the CLASS CLOSURE (two consecutive passes found cells of one space): every declined access --
+    #  site x width x data x state x first/repeat -- keeps every field and the interrupt output and reads
+    #  0; each legal access X7 samples, with every latch set, re-arms no latch.  X8: wide (multi-byte) seeds, so a legal read
+    #  truncated to 8 bits reds.  X9 (the adjudication pass, 2026-09-23): the legal accesses with the latches still
+    #  CLEAR -- X7 latched every site first, so five one-conjunct edits to the direction test (`writeflag ==
+    #  MEM_READ && d->irq_enable` and mirrors) passed every row (q2_20260923/Q2.log).  X10-X12 (that repair's own
+    #  pass 2, where the Opus seat's 434 variants found three more cells open): X10 the VALUE of a legal access
+    #  with every latch set, X11 each ordered pair of sites' latches, X12 the legal Clear write's width and data.
+    #  STATES in X6/X7/X9-X13: seeded, all-zero, wide and ONES -- the ones state sets every bit of every field,
+    #  so with all-zero a condition keyed on any single bit diverts in one of the two.  Repair 3 (the closure's own
+    #  closing pass): the 8-byte LDRD/STRD cells at +0x180/+0x280 (X6, X7, X9, X10), the return value (X7,
+    #  X10-X13), X11 in all four states with a re-decline, X13 the narrow Clear write with every latch set, and X14
+    #  the INSTANCE cells no other block could reach -- the drive test's disjoint and single-line cells on a CPU
+    #  counter pair of its own, DEVINIT's timer values with and without a pending tick, and irq_asserted raised
+    #  through the real footbridge_interrupt_assert().  Not covered, and said so in diff_footbridge.c's contract:
+    #  exact field or data values, the address axis, narrow Set/FIQ writes (fbenablewidth), the Set write's own
+    #  drive test, the interrupt LEVEL (fbirqstuck), and joints beyond the rowed cells.
+    #  Kill tables: regress/artifacts/fbd5/{killtable,xtable,table3,table4}_20260919/ and
+    #  regress/artifacts/fbd5/q2_20260923/{repair,repair2,r3_20260923}/.
+    #  COUNTED AS DISTINCT GREEN ROW NAMES, not green lines (adjudication pass, G10): a duplicated green
+    #  line cannot stand in for a missing row.  Every row name in the file is unique on the fix.
+    fb_distinct() { grep -E "^  ok    $1 " "$FBLOG" | sed -E 's/^  ok    //; s/[[:space:]]+[0-9]+$//' | sort -u | wc -l | tr -d ' '; }
+    check "footbridge: #545 P-rows green (P0-P9), distinct names" "$(fb_distinct 'P[0-9]')" "78"
+    check "footbridge: #545 X-rows green (X1-X8), distinct names" "$(fb_distinct 'X[1-8]')" "440"
+    check "footbridge: #545 X6 every declined-access cell green" "$(fb_distinct 'X6')" "248"
+    check "footbridge: #545 X7 every sampled legal access re-arms no latch" "$(fb_distinct 'X7')" "148"
+    check "footbridge: #545 X8 wide legal reads keep all 32 bits" "$(fb_distinct 'X8')" "6"
+    check "footbridge: #545 X9 legal access, latches clear, all states" "$(fb_distinct 'X9')" "100"
+    check "footbridge: #545 X10 legal access, latches SET, value kept" "$(fb_distinct 'X10')" "72"
+    check "footbridge: #545 X11 every ordered pair of site latches, four states" "$(fb_distinct 'X11')" "80"
+    check "footbridge: #545 X12 legal Clear write, every width and data" "$(fb_distinct 'X12')" "20"
+    check "footbridge: #545 X13 legal Clear write, latches SET" "$(fb_distinct 'X13')" "20"
+    check "footbridge: #545 X14 instance cells (drive test, DEVINIT, irq_asserted)" "$(fb_distinct 'X14')" "21"
     #  Name each row that is the SOLE detector of something.
     check "footbridge: the zero-load row is present" \
           "$(grep -c 'load 0 becomes the full 24-bit span' "$FBLOG")" "1"
@@ -662,9 +703,10 @@ else
           "$(grep -c "below the guest's OWN load" "$FBLOG")" "1"
     check "footbridge: the LOAD read-back rows are present" \
           "$(grep -cE 'reads back as 0, not normalised|stays 0 on read-back' "$FBLOG")" "2"
-    #  The two forked end-to-end rows: these are the ones that prove the HOST SURVIVES, and
-    #  they are forked so a mutant that re-crashes is a named-row KILL rather than a census
-    #  FAULT that takes the gate binary with it.
+    #  The two forked end-to-end rows: these are the ones that prove the HOST SURVIVES.  Their
+    #  forks do NOT make every re-crash a named-row kill: an unconditional one takes the binary
+    #  down at the unforked D2 first (ON THE FORKS, CORRECTED, above).  G1's fork is load-bearing
+    #  and F1's holds a narrower class.  (This comment said otherwise until #545's repair 3.)
     check "footbridge: the end-to-end survival rows are present" \
           "$(grep -c 'does not kill the host\|does not exit()' "$FBLOG")" "2"
     check "footbridge: the identity row is present" \

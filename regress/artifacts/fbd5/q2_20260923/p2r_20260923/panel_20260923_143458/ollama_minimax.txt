@@ -1,0 +1,79 @@
+VERDICT: SHIP
+
+**Q1 — premise audit**
+
+(a) **Class completeness (READ from packet, REASONED against inlined handler).** The class is ACCESS {declined, legal} × STATE {seeded, all-zero, wide} × LATCH {clear, set} at the five sites. Walking the inlined handler arms:
+- 4 read-only sites: legal = read, declined = write
+- 1 write-only site (IRQ_ENABLE_CLEAR): legal = write, declined = read
+
+Coverage:
+- Declined × both latches: X6 (first = clear, repeat = set), per-site cell count matches (4×3×2×3×2 + 1×3×1×3×2 = 162 ✓).
+- Legal × set: X7 covers the 4 read-only reads at 3 widths × 3 states and IRQ_ENABLE_CLEAR write at 1 width × 2 data × 3 states.
+- Legal × clear: X9 covers the same cells in the clear-latch case (5 readable registers × 3 widths + 8 enable writes per state, ×3 states = 69 ✓).
+
+The class is closed for the five sites. VENDOR_ID and TIMER_1_VALUE are excluded from X9 because they have no decline branch and cannot set latches; X7 covers them for the "doesn't clear latch" property. No cell of the five-site class is missing.
+
+(b) **X9 expectations match the handler (REASONED).** Walked all 8 enable writes × 3 states:
+- IRQ_SET/CLEAR: handler does `irq_enable |= data` or `&= ~data`, then ASSERT if `(irq_status & irq_enable)` else DEASSERT. X9's `(is & ne) ? assert+1 : deassert+1` matches.
+- FIQ_SET/CLEAR: handler does NOT call ASSERT/DEASSERT. X9's `irq_asserts == a0 && irq_deasserts == d0` matches.
+
+Spot-checked: IRQ Set 0x70 in seeded (ie=0x30→0x70, is&ne=0x10, assert+1 ✓), IRQ Clear 0x70 in all-zero (ie=0→0, deassert+1 ✓), IRQ Set 0x70 in wide (ie=0x00010030→0x00010070, is&ne=0x00010010, assert+1 ✓).
+
+(c) **Wide products above byte 0 (ENUMERATED).**
+- IRQ_STATUS read: 0x80010018 & 0x00010030 = **0x00010010** (bit 16 set) ✓
+- IRQ_RAW_STATUS read: **0x80010018** (bit 31 set) ✓
+- FIQ_STATUS read: 0x40020060 & 0x000200c0 = **0x00020040** (bit 17 set) ✓
+- FIQ_RAW_STATUS read: **0x40020060** (bit 30 set) ✓
+
+All four products non-zero above byte 0.
+
+(d) **No pre-repair row changed meaning (READ).** The diff only widens the state array (2→3 entries) and loop bounds. Row naming patterns preserved. ✓
+
+---
+
+**Q2 — smallest change that re-opens while 491 rows stay green (REASONED)**
+
+Add a conjunct to the decline condition referencing a device field that is zero in all three offline states but could be nonzero elsewhere. Example: change the IRQ_STATUS write decline to `if (!d->warned_irq_status_w && d->timer_control[0] == 0)`. This passes all 491 rows because timer_control[0] is 0 in seeded, all-zero, and wide states. The row "X6 write IRQ_STATUS len 4 data 0x70 (seeded, first)" stays green (decline fires, announce count = 1, fields unchanged, interrupt untouched). The protection re-opens in any context where timer_control[0] is nonzero (e.g., the guest probe after its prologue arms timer 1). This is the F1 case already documented in the brief.
+
+---
+
+**Q3 — class or instance (REASONED)**
+
+The class (as defined: STATE ∈ {seeded, all-zero, wide}) is **closed**. All cells of site × direction × width × data × {three states} × latch at the five sites are rowed by X6 (declined × both latches), X7 (legal × set), and X9 (legal × clear).
+
+Cells of the full state space (any value of irq_status/irq_enable/fiq_status/fiq_enable) are not rowed — e.g., a state where irq_status = 0 and irq_enable = 0x30 (neither in seeded, all-zero, nor wide). These cells are **inside the §C.2 bound** (the lvalues can take any value), but outside the class as defined by the three states. The brief acknowledges this implicitly via "joint conjuncts over two fields beyond the three states" in the CONTRACT.
+
+---
+
+**Q4 — records (READ)**
+
+The X9 header, rewritten X6/X7 CONTRACT, and gate_offline.sh comment are factually accurate as of the inlined handler. No sentence is false today.
+
+**Defect found:** The IDENTITY comment states "#545: 33 → 333 (78 P-rows + 222 X-rows)". But 78 + 222 = **300 ≠ 333**. There is a 33-row gap unexplained. Post-repair: 78 + 311 + 69 = **458 ≠ 491** — the same 33-row gap persists. The gate pins (P=78, X1-X8=222→311, X9=69) and IDENTITY (333→491) are individually correct; the breakdown arithmetic in the comment is wrong. This defect is **pre-existing** (the pre-repair line had the same error) and does not affect the repair logic.
+
+Minor: gate_offline.sh says "X6/X7 are the CLASS CLOSURE" — technically incomplete after X9, but the comment continues to describe X9, so not false.
+
+---
+
+**Q5 — guest row (REASONED)**
+
+Leaving the guest reset-state reads out is **right**. X9 carries the floor: it tests reads of IRQ_STATUS, IRQ_RAW_STATUS, FIQ_STATUS, FIQ_RAW_STATUS at widths 1/2/4 in the all-zero state with latches clear — exactly the guest reset-state behavior. The guest probe's disclosed "order, not emitter" limit means it would not add information here (all values are 0, so order is undetectable). The guest probe's value-add is the full memory-access path (guest instruction → memory layer → handler), which the offline rows don't exercise — but that path is presumably covered by other guest tests (arm S and the 37-row probe's other arms).
+
+---
+
+**Other findings**
+
+1. **Arithmetic defect in IDENTITY comment** (noted above): 78 + 222 ≠ 333. The comment should account for the 33 unaccounted rows or the gate pins should be adjusted. This is a comment-only defect; the logic is sound.
+
+2. **33-row gap in accounting:** Pre-repair IDENTITY = 333, but P[0-9] (78) + X[1-8] (222) = 300. The 33 missing rows are not enumerated. Post-repair: P (78) + X1-X8 (311) + X9 (69) = 458 vs IDENTITY 491 — same gap. The brief does not name these rows.
+
+3. **TABLE4 has 327 rows** while the instrument has 333. The 6-row difference is attributed to an X3 rename. Consistent with the brief's explanation.
+
+---
+
+**Seat record**
+
+- Model: MiniMax-M3 (packet-fed seat, no file access, no command execution).
+- Read: the brief only (inlined handler arms, diffs, gate script, measured results).
+- Ran: nothing.
+- Not checkable from packet: the exact 33 unaccounted rows (P+X1-X8 = 300 vs IDENTITY = 333); the contents of TABLE4 beyond its row count; whether the guest reset-state reads are covered by other guest arms not described.

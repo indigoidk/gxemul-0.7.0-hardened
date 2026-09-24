@@ -1071,7 +1071,7 @@ done
 #  reads CP15 c1 back and requires bit 0 clear.  Negative-controlled in both directions.
 FBLOG=$LOGDIR/footbridge_sites.log
 python3 footbridge_sites_probe.py "$PMAX" "$STUB" > "$FBLOG" 2>&1 || true
-grep -E "^(  arm |C[0-9]|A[0-9]|I1|K1|D1|E(C1|A1|[0-6]) )" "$FBLOG" | sed 's/^/       /'
+grep -E "^(  arm |C[0-9]|A[0-9]|I1|H[12]|D1|E(C1|A1|[0-6])|S(C1|A1|[1-5]|F[12])|N[0-5O]) " "$FBLOG" | sed 's/^/       /'
 
 if ! grep -q "FOOTBRIDGE_SITES_" "$FBLOG"; then
     note "footbridge probe produced no verdict; last lines follow"
@@ -1095,23 +1095,60 @@ else
     #  RAM, or any decode that merely absorbed the store, returns 0x12345678 unchanged.
     check "footbridge: TIMER_1_LOAD masked to 24 bits by the handler" \
           "$(grep -cE '^A2 .*got=0x00345678 .*ok$' "$FBLOG")" "1"
-    #  THE PROBE'S OWN FAILABILITY CONTROL.  Arms L and K differ by ONE instruction; K reads
-    #  IRQ_ENABLE_CLEAR (+0x18c, write-only per the DC21285), an UNFIXED fatal()+exit(1) in its
-    #  `case IRQ_ENABLE_CLEAR` read branch.  Without it, "SURVIVED" on every row is satisfied
-    #  by a probe whose guest code never reached the device at all.  #539 moved it here from
-    #  +0x188 (IRQEnable, documented read-only, now readable -- the E rows below); the round
-    #  that declines +0x18c retires this bridge and builds the harness legs in its place.
-    check "footbridge: the one-instruction kill arm still dies" \
-          "$(grep -cE '^K1 .*ok$' "$FBLOG")" "1"
+    #  THE PROBE'S OWN FAILABILITY CONTROLS -- #545 replaced the kill bridge (arm K, a +0x18c read
+    #  the device used to answer with exit(1); #545 declines it) with two HARNESS legs, pinned by
+    #  their DISCRIMINATING tokens, not by the rows existing:
+    #    H1 an unknown -E name: NO prompt, the diagnostic NAMING the input, WIFEXITED && == 1.
+    #       Five different startup refusals all exit 1 with no prompt, so the text is the pin.
+    #    H2 quit after a VERIFIED prologue (fresh-reg values), the next send dead BEFORE
+    #       teardown, reaped exit 0 -- a child dead before the prologue shows `dead` identically,
+    #       so the prologue clause and exit 0 are both required, and both are in the row.
+    check "footbridge: H1 startup leg green (unknown -E named, exit 1)" \
+          "$(grep -cE '^H1 .*named=True .*ok$' "$FBLOG")" "1"
+    check "footbridge: H1's diagnostic names the rejected input" \
+          "$(grep -c 'Sorry, emulation "no-such-machine-fbd5" is unknown' "$FBLOG")" "1"
+    check "footbridge: H2 quit leg green (prologue verified, dead, exit 0)" \
+          "$(grep -cE '^H2 .*prologue=True next=False dead=True exit=0 .*ok$' "$FBLOG")" "1"
+    #  #545: the five declined sites, ONE process (arm S).  N0 counts five DISTINCT once-announces
+    #  (a shared or aggregate latch reads 4 or 1); N1-N5 count each site's text over the whole arm and NO
+    #  requires the announces in site order (ORDER, not emitter); S1-S5 and SF1/SF2 pin every
+    #  interrupt register unchanged through the declines, with the FINAL raw reads after the last write
+    #  of every pair.  Every family is pinned by its DISTINCT green ids (a duplicated green line cannot
+    #  stand in for a missing id -- pass 2), and the probe's own total by ROWS=.
+    check "footbridge: the sites probe ran all 37 rows green (ROWS=37 of 37)" \
+          "$(grep -cE '^ROWS=37 of 37$' "$FBLOG")" "1"
+    check "footbridge: arm S controls SC1, SA1 -- two DISTINCT green ids" \
+          "$(grep -E '^S(C1|A1) .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "2"
+    check "footbridge: N0 five sites, one process, five distinct once" \
+          "$(grep -cE '^N0 .*distinct-once=5 fatals=5 exit=0 .*ok$' "$FBLOG")" "1"
+    check "footbridge: NO the five announces arrive in access order" \
+          "$(grep -cE '^NO .*order=N1,N2,N3,N4,N5 .*ok$' "$FBLOG")" "1"
+    check "footbridge: N1-N5 each announced exactly once (count=1)" \
+          "$(grep -cE '^N[1-5] .*count=1 .*ok$' "$FBLOG")" "5"
+    check "footbridge: N1-N5 are five DISTINCT green row ids" \
+          "$(grep -E '^N[1-5] .*count=1 .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "5"
+    check "footbridge: S1-S5 the legal reads between the declines -- five DISTINCT green ids" \
+          "$(grep -E '^S[1-5] .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "5"
+    check "footbridge: S3 IRQEnable intact at 0x30 through the declines" \
+          "$(grep -cE '^S3 .*got=0x00000030 .*ok$' "$FBLOG")" "1"
+    check "footbridge: SF1/SF2 final raw status reads -- two DISTINCT green ids, both 0" \
+          "$(grep -E '^SF[12] .*got=0x00000000 .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "2"
+    #  #545: the corrected controls -- C4 now requires the key present; C5 requires arm T's exit 0.
+    check "footbridge: C4 the MMU-on arm cannot see the device (key present)" \
+          "$(grep -cE '^C4 .*ok$' "$FBLOG")" "1"
+    check "footbridge: C5 the MMU-on control arm survives, exit 0" \
+          "$(grep -cE '^C5 .*ok$' "$FBLOG")" "1"
     #  #539: IRQEnable (+0x188) is readable -- reset 0, Set ORs, Clear clears, byte and
     #  halfword reads return the low lanes -- and arm E raises no footbridge diagnostic.
     #  Seven value/text rows, pinned by count AND by the two that carry the datasheet claims.
     check "footbridge: IRQEnable ACCEPT rows E0-E6 all green" \
           "$(grep -cE '^E[0-6] .*ok$' "$FBLOG")" "7"
     #  Seven green lines are not seven rows: a duplicated id could stand in for a missing one, so
-    #  the DISTINCT ids are counted too (with the count above, each E0-E6 appears exactly once).
-    check "footbridge: E0-E6 are seven DISTINCT row ids" \
-          "$(grep -oE '^E[0-6] ' "$FBLOG" | sort -u | wc -l | tr -d ' ')" "7"
+    #  the DISTINCT ids are counted OVER THE GREEN LINES -- seven distinct green ids proves
+    #  "each of E0-E6 is green" by itself (fable5, #539 F2: counting ids over all lines would
+    #  pass a duplicated green E2 beside a red E3).
+    check "footbridge: E0-E6 are seven DISTINCT green row ids" \
+          "$(grep -E '^E[0-6] .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "7"
     check "footbridge: IRQEnable reads 0 at reset (E0)" \
           "$(grep -cE '^E0 .*got=0x00000000 .*ok$' "$FBLOG")" "1"
     check "footbridge: Set ORs (E2 = P|Q; Clear is pinned by E5)" \

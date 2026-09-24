@@ -1,0 +1,103 @@
+**VERDICT: CORE ARGUMENT CORRECT; ONE ARITHMETIC DEFECT, SEVERAL PREMISES UNCHECKABLE FROM PACKET.**
+
+---
+
+## DEFECTS
+
+### D1. Arithmetic: "ten live `exit(1)`" lists nine lines
+
+The brief states: *"dev_footbridge.c carries ten live `exit(1)` at HEAD 9c28ca5 (HEAD lines 565, 574, 606, 615, 624 -- this round; 714, 739 -- the SDRAM pair; 843 and 879 in DEVINIT, construction-time)."*
+
+Enumerating the parenthetical: 565, 574, 606, 615, 624 = 5; 714, 739 = 2; 843, 879 = 2. **Total = 9, not 10.** Either a tenth line is omitted from the list (and would change the census), or the count is wrong (and `exit_census.py` would report 9, contradicting the brief's expectation). The five-this-round / two-SDRAM split itself is consistent with the inlined code (lines 565, 574, 606, 615, 624, 714, 739 are all visible in the inlined function and are the seven guest-reachable `exit(1)` sites). The defect is in the total count, not the classification.
+
+---
+
+## PREMISES UNCHECKABLE FROM PACKET (named, with the single fact that would settle each)
+
+### U1. The DEVINIT exits at lines 843 and 879
+These lines are not inlined (the inlined function ends at line 760; a blank line at 762). The claim that they are "construction-time" (not guest-reachable) cannot be verified from the packet. **Settling fact:** the `footbridge_init` / DEVINIT body at those two lines (whether each is inside an init-time guard, or is an unconditional `exit(1)` reachable from any path).
+
+### U2. The "three separately implemented launchers" claim
+The brief states there are three launchers — "sites' nested helpers; drain's and witness's `Session` classes". None are inlined. **Settling fact:** the function/class signature and the lines that launch the emulator binary in each of the three probes (`footbridge_sites_probe.py`, drain, witness).
+
+### U3. "`fatal()` cannot be silenced by `-q`"
+This is the entire warrant for needing a latch field rather than a verbosity flag. **Settling fact:** the `fatal()` definition (or the `quiet` / `-q` handling around it).
+
+### U4. "(once) is the majority spelling" / the house announce idiom
+The brief says this was "censused 2026-09-17". No examples are inlined. **Settling fact:** a grep of `fatal(` with `(once)` across the source tree.
+
+### U5. SDRAM_BA_MASK / SDRAM_BA_OFFSET are "documented READ/WRITE"
+The datasheet excerpts only cover the interrupt controller (Table 7-10, 7.3.29, 7.3.32–7.3.33). No SDRAM register excerpt is inlined. The brief's "different class" argument rests on the claim that the datasheet permits the write direction. **Settling fact:** the SDRAM register row in the datasheet's register table (the Read/Write columns for +0x100 / +0x104).
+
+### U6. FAULT availability on ARM for this machine
+Q1(a) asks "Is FAULT even available on ARM for this machine (grep the fork: `dev_unreadable`, `memory_rw` exception dispatch for ARM)?" — the brief itself does not answer this. **Settling fact:** whether `dev_unreadable` or the ARM `memory_rw` exception dispatch raises a data-abort (or equivalent) for a write-only or read-only address, versus a no-op.
+
+### U7. Other tree dependencies on the five complaint texts or on "ENABLE CLEAR"
+Q1(e) asks this and the brief does not enumerate any other consumers. The sites probe's K row at line 402 is the only one inlined. **Settling fact:** grep of `"ENABLE CLEAR"`, `"irq status"`, `"irq_raw_status"`, `"fiq status"`, `"fiq_raw_status"` across the regress/, tools/, and gate scripts (excluding `artifacts/`, `ledger.json`, CHANGELOG, OUTSTANDING_BUGS).
+
+### U8. The "file's existing idiom" for latch fields
+Q1(b) asks which matches the file's idiom. No existing latch field in `dev_footbridge.c` is inlined. **Settling fact:** any `static int`/`uint32_t` flag in the file already used to deduplicate `fatal()` calls.
+
+---
+
+## READ-FROM-PACKET FINDINGS (verified against inlined text)
+
+### R1. The five sites' datasheet directions are correct
+- IRQ_STATUS +0x180, IRQ_RAW_STATUS +0x184, FIQ_STATUS +0x280, FIQ_RAW_STATUS +0x284: Table 7-10 shows "Write: --" for all four. The datasheet prose (7.3.29, 7.3.32) confirms read-only.
+- IRQ_ENABLE_CLEAR +0x18c: Table 7-10 shows "Read: --", write-only. Prose at 7.3.37 confirms "This write-only register".
+- The five are exactly the undefined-direction class. ✓
+
+### R2. The five `exit(1)` sites in DEVICE_ACCESS match the inlined code
+- L565: `IRQ_STATUS` write arm — `fatal(...write to irq status?); exit(1);`
+- L574: `IRQ_RAW_STATUS` write arm — `fatal(...irq_raw_status); exit(1);`
+- L606: `IRQ_ENABLE_CLEAR` read arm — `odata = d->irq_enable; fatal(...ENABLE CLEAR?); exit(1);`
+- L615: `FIQ_STATUS` write arm — `fatal(...write to fiq status?); exit(1);`
+- L624: `FIQ_RAW_STATUS` write arm — `fatal(...fiq_raw_status); exit(1);`
+All five are reached only on the undefined direction (the legal direction's branch has no `exit(1)`). ✓
+
+### R3. The +0x18c leak defect is real (and the brief catches it)
+Line 603: `odata = d->irq_enable;` runs before the fatal/exit. A decline that removes only `exit(1)` would hand the guest `d->irq_enable` through `odata` at line 757. The brief's D3 row explicitly tests for this (`"catches the retained odata = d->irq_enable: 0x30"`). ✓
+
+### R4. The kill-arm instruction is correct
+`0xE590718C` decodes as `LDR r7, [r0, #0x18C]` (cond=E, I=0, P=1, U=1, B=0, W=0, L=1, Rn=0, Rd=7, imm12=0x18C). The disassembled text `ldr r7,[r0,#396]` (where 396 = 0x18C) is correct, and 0x18C = IRQ_ENABLE_CLEAR. ✓
+
+### R5. The default arm does not exit
+Lines 747–753 call `fatal(...)` and fall through to the common tail (line 756–759), which writes `odata` (zero) and returns 1. This is consistent with "the default arm prints ... on every read that reaches it and returns 0 -- unlatched, per access, no exit." ✓
+
+### R6. Q1(d): after this round, "no footbridge access these probes make ends the process" is TRUE
+After removing the five `exit(1)` at 565/574/606/615/624, the remaining guest-reachable `exit(1)` in DEVICE_ACCESS is the SDRAM pair at 714 and 739. The probe rows listed (A1–A5, D1–D5) access +0x180, +0x184, +0x18c, +0x280, +0x284 only. None of these are +0x100 or +0x104. So the statement holds conditional on the probes not growing SDRAM rows (the brief explicitly says "the SDRAM rows A6/A7/D6/D7 are NOT this round"). ✓
+
+### R7. The "five distinct announce texts" claim is correct
+The five texts at lines 537–538, 564, 604, 614, 623 are all distinct. No two share an exact message — so one shared boolean would let the first site suppress the other four. ✓
+
+---
+
+## REASONED CAVEATS (not measured, but worth naming)
+
+### C1. The CSR "zeros are read" rule is in a different address space
+The brief's "VALUE warrant for a declined READ is 0" cites `:1652`, which is the SA-110 **CSR** read rule (address 0x41xxxxxx). The footbridge lives at 0x42000000 — a memory-mapped device, not a CSR. The analogy is reasonable (a declined read should return a benign value, and 0 is the obvious choice), but the brief presents it as datasheet-derived when it is really a model-policy choice. The five-row "return 0" decision is defensible either way; just don't claim it as a datasheet warrant.
+
+### C2. The "model must leave ... UNCHANGED" for a declined WRITE is also a policy choice
+For a write to a read-only register, the datasheet says nothing (Table 7-10 "Write: --"). "Leave state unchanged" is the only non-destructive choice, but the brief states it as a derivation rather than as the obvious safe default. Acceptable.
+
+### C3. Q4: smallest "cheat" that leaves K1/K2 green while proving nothing
+- **K1 cheat:** don't launch anything; always record exit 1. The K1 row would pass but the launcher is never exercised. The "unknown-emulation diagnostic names that input" check would never run.
+- **K2 cheat:** skip the `reg` prologue verification; send `quit`; reap exit 0. The K2 row would pass on any well-behaved emulator, but the prologue-is-live check (MMU off, RAM 0x11223344, VENDOR 0x1011, timer mask) would never run.
+- **The row that "stays green" with the smallest edit:** K2 without the `reg` step — many emulators exit 0 on `quit`, so this passes by default. K1 is harder to fake silently (the launcher has to actually produce exit 1 with a diagnostic naming the input).
+
+### C4. The "5 = 1 class under the reopening rule" argument
+The five sites share device, semantic class (undefined direction), and detector. This is a defensible single-round grouping. The SDRAM pair is correctly excluded as a different class ("missing value" vs "undefined direction"). ✓
+
+---
+
+## NOTHING ELSE FOUND
+
+The brief's core argument (five undefined-direction sites, one fix design, kill bridge retires, durable harness legs land) is consistent with the inlined code and datasheet. The only hard defect is the "ten vs nine" count. The rest are either uncheckable premises (named above with their settling fact) or reasoned caveats.
+
+---
+
+**Seat record:**
+- Model: MiniMax-M3 (per system header).
+- Read: the brief as inlined (sections 1–6, the inlined code 498–760, the datasheet excerpts at lines 1651–1653, 6820–6945, the kill-arm tuples at lines 161, 200, 231, 347, and the sites-probe K row at 402–411).
+- Ran: nothing (no files, no commands).
+- Did not attempt: grepping the fork for `dev_unreadable`, `memory_rw`, latch-field idiom, "(once)" census, gate_hygiene, or other uncheckable premises — named them instead.

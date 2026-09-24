@@ -1,0 +1,154 @@
+STEP 3 -- 136 NEW one-line shapes (none in the 434), scored on the frozen 707 rows; greens classified by the
+differential (exhaustive to length 3 from DEVINIT's reset over 304 ops, to 2 from the harness's calloc instance, 2M
+random of length 4-6); a witness is from DEVINIT's reset.  Z = what the 28 scratch closure rows do to it.
+
+id      arm   707    class     exact new line  ||  red: holders and first failing row  /  green: witness, contract, Z
+N_B01   A0    GREEN  INTERNAL  d->warned_irq_status_w = len;  ||  W180/2=0x0 [devinit, 1]  ||  equivalent: only the latch's nonzero VALUE differs, and it is only ever tested for zero  ||  Z: still green
+N_B02   A2    RED    -         d->warned_irq_clear_r = writeflag;  ||  158 rows [P,X3,X6,X7]: P3 read IRQ_ENABLE_CLEAR: #2 announced nothing more (latched)
+N_B03   A3    GREEN  NONE      d->warned_fiq_status_w = !d->warned_fiq_status_w;  ||  -  ||  equivalent  ||  Z: still green
+N_B04   A4    GREEN  NONE      d->warned_fiq_raw_w++;  ||  -  ||  equivalent  ||  Z: still green
+N_B05   A1    RED    -         d->warned_irq_raw_w = d->irq_enable;  ||  41 rows [X6,X7]: X6 write IRQ_RAW_STATUS len 1 data 0 all-zero repeat: declined, fields/irq kept, once
+N_B06   A0    RED    -         d->warned_irq_status_w = 1 + d->irq_status;  ||  41 rows [X6,X7]: X6 write IRQ_STATUS len 1 data 0 ones repeat: declined, fields/irq kept, once
+N_B07   A2    RED    -         d->warned_irq_clear_r = 1; odata = d->irq_enable;  ||  12 rows [P,X1,X6]: P3 read IRQ_ENABLE_CLEAR: the declined read returns 0
+N_B08   A0    GREEN  NONE      d->warned_irq_status_w = 1; odata = 0;  ||  -  ||  equivalent  ||  Z: still green
+N_B09   A1    RED    -         d->warned_irq_raw_w = 1; d->irq_status &= ~idata;  ||  83 rows [P,X10,X11,X6]: P2 write IRQ_RAW_STATUS: after #1 -- irq_status preserved
+N_B10   A0    GREEN  HOST      d->warned_irq_status_w = (idata != 0x55);  ||  W180/1=0x55 W180/1=0x0 [devinit, 2]  ||  NOT COVERED parenthetical (data stays 0/0x70), NOT its heading 'WIDE DATA'  ||  Z: still green
+N_C01   A0    RED    -         IRQ_STATUS arm: break removed  ||  51 rows [P,X1,X10,X11,X2,X4,X6,X8,X9]: P0 IRQ_STATUS read = irq_status & irq_enable (0x10)
+N_C02   A4    RED    -         FIQ_RAW_STATUS arm: break removed  ||  76 rows [P,X10,X11,X6]: P5 write FIQ_RAW_STATUS: after #1 -- fiq_enable preserved
+N_C03   A2    RED    -         IRQ_ENABLE_CLEAR arm: break removed  ||  50 rows [P,X1,X12,X5,X6,X9]: P3 read IRQ_ENABLE_CLEAR: the declined read returns 0
+N_D01   A0    RED    -         else if (!d->warned_irq_status_w && idata != 0x70) {  ||  135 rows [P,X1,X11,X12,X3,X6,X9]: P1 write IRQ_STATUS: announced exactly once
+N_D02   A1    GREEN  HOST      else if (!d->warned_irq_raw_w && idata < 0x100) {  ||  W184/2=0x400 [devinit, 1]  ||  NOT COVERED: wide data on a declined write  ||  Z: still green
+N_D03   A3    GREEN  HOST      else if (!d->warned_fiq_status_w && idata != 0x55) {  ||  W280/1=0x55 [devinit, 1]  ||  NOT COVERED parenthetical (data stays 0/0x70), NOT its heading 'WIDE DATA'  ||  Z: still green
+N_D04   A0    GREEN  NONE      if (writeflag == MEM_READ && !idata)  ||  -  ||  equivalent  ||  Z: still green
+N_D05   A4    RED    -         if (writeflag == MEM_READ || !idata)  ||  13 rows [X4,X6]: X4 write FIQ_RAW_STATUS: ZERO data/enable as the FIRST access announces once
+N_D06   A1    GREEN  HOST      if (writeflag == MEM_READ || idata > 0xff)  ||  W184/2=0x400 [devinit, 1]  ||  NOT COVERED: wide data on a declined write  ||  Z: still green
+N_D07   A0    GREEN  NONE      odata = d->irq_status & d->irq_enable & ~idata;  ||  -  ||  equivalent  ||  Z: still green
+N_D08   A1    GREEN  NONE      odata = d->irq_status | idata;  ||  -  ||  equivalent  ||  Z: still green
+N_D09   A2    GREEN  NONE      } else if (!d->warned_irq_clear_r && !idata) {  ||  -  ||  equivalent  ||  Z: still green
+N_D10   A3    RED    -         if (writeflag == MEM_READ || idata == 0x70)  ||  134 rows [P,X1,X11,X12,X3,X6,X9]: P4 write FIQ_STATUS: announced exactly once
+N_D11   A4    GREEN  HOST      else if (!d->warned_fiq_raw_w && (idata & 1) == 0) {  ||  W284/1=0xffffffff [devinit, 1]  ||  NOT COVERED parenthetical (data stays 0/0x70), NOT its heading 'WIDE DATA'  ||  Z: still green
+N_F01   head  GREEN  GUEST     if (writeflag == MEM_WRITE && !d->irq_asserted) idata = memory_readmax64(...)  ||  W188/1=0x10 line4+ W18c/1=0x10 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z5 line 4 asserted by a device: Clear 0x10 clears and deasse)
+N_F02   head  RED    -         if (writeflag == MEM_WRITE && d->irq_enable) idata = memory_readmax64(...)  ||  2 rows [X9]: X9 IRQ Set write 0x70 (all-zero, latches clear)
+N_F03   head  RED    -         if (writeflag == MEM_WRITE && !d->irq_enable) idata = memory_readmax64(...)  ||  29 rows [P,X10,X12,X9]: P8 legal EnableClear write: 0x30 & ~0x10
+N_F04   head  RED    -         if (writeflag == MEM_WRITE && !d->fiq_status) idata = memory_readmax64(...)  ||  29 rows [P,X10,X12,X9]: P8 legal EnableClear write: 0x30 & ~0x10
+N_F05   head  RED    -         if (writeflag == MEM_WRITE && d->fiq_enable) idata = memory_readmax64(...)  ||  2 rows [X9]: X9 IRQ Set write 0x70 (all-zero, latches clear)
+N_F06   head  RED    -         if (writeflag == MEM_WRITE && !d->warned_irq_clear_r) idata = memory_readmax64(...)  ||  4 rows [P,X10]: P8 legal EnableClear write: 0x30 & ~0x10
+N_F07   head  RED    -         if (writeflag == MEM_WRITE && d->warned_irq_status_w == 0) idata = memory_readmax64(...)  ||  4 rows [P,X10]: P8 legal EnableClear write: 0x30 & ~0x10
+N_F08   head  RED    -         if (writeflag == MEM_WRITE && len != 2) idata = memory_readmax64(...)  ||  6 rows [X12]: X12 IRQ Clear write 0x70 len 2 (seeded, latches clear)
+N_F09   head  GREEN  GUEST     if (writeflag == MEM_WRITE && !d->timer_control[0]) idata = memory_readmax64(...)  ||  W188/1=0x10 R188/1 [devinit, 2]  ||  NOT DISCLOSED  ||  Z: red (Z4 DEVINIT timer state: Set 0x40 then Clear 0x10 leave IRQEn)
+N_F10   head  GREEN  NONE      if (writeflag == MEM_WRITE && relative_addr != IRQ_STATUS) idata = memory_readmax64(...)  ||  -  ||  equivalent  ||  Z: still green
+N_F11   head  GREEN  NONE      if (writeflag == MEM_WRITE && relative_addr != IRQ_RAW_STATUS && relative_addr != FIQ_STATUS && relative_addr != FIQ_RAW_STATUS) idata = memory_readmax64(...)  ||  -  ||  equivalent  ||  Z: still green
+N_F12   head  GREEN  NONE      if (writeflag == MEM_WRITE || relative_addr == IRQ_ENABLE_CLEAR) idata = memory_readmax64(...)  ||  -  ||  equivalent  ||  Z: still green
+N_F13   head  RED    -         if (writeflag == MEM_WRITE && relative_addr != IRQ_ENABLE_CLEAR) idata = memory_readmax64(...)  ||  22 rows [P,X10,X12,X9]: P8 legal EnableClear write: 0x30 & ~0x10
+N_F14   head  GREEN  NONE      if (writeflag == MEM_WRITE && !timer_nr) idata = memory_readmax64(...)  ||  -  ||  equivalent  ||  Z: still green
+N_F15   head  GREEN  GUEST     if (writeflag == MEM_WRITE && !d->pending_timer_interrupts[0]) idata = memory_readmax64(...)  ||  line4+ t1-hosttick W188/1=0x10 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z7 timer 1 tick pending: Clear 0x10 clears, announces nothin)
+N_H01   head  GREEN  GUEST     if (relative_addr <= TIMER_4_CLEAR) {  ||  W188/1=0x10 line4+ R1a0/4 [devinit, 3]  ||  NOT COVERED: the address axis (a widened fold)  ||  Z: still green
+N_H02   head  GREEN  NONE      relative_addr &= ~0x0e0;  ||  -  ||  equivalent  ||  Z: still green
+N_H03   head  RED    -         relative_addr &= ~0x160;  ||  17 rows [T,X3,X7]: [LIVE] a WRITE of TIMER_1_CLEAR decrements pending
+N_H04   head  GREEN  NONE      timer_nr = (relative_addr >> 5) & 7;  ||  -  ||  equivalent  ||  Z: still green
+N_H05   head  GREEN  NONE      if (relative_addr >= TIMER_1_LOAD && relative_addr <= TIMER_4_CLEAR + 0x10) {  ||  -  ||  NOT COVERED: other registers' semantics (no divergence on this alphabet)  ||  Z: still green
+N_I01   A2    GREEN  GUEST     if ((d->irq_status & d->irq_enable) && !d->irq_asserted)  ||  W188/1=0x10 line4+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z5 line 4 asserted by a device: Clear 0x400 keeps line 4 ena)
+N_I02   A2    GREEN  GUEST     if (!d->irq_asserted) INTERRUPT_DEASSERT(d->irq);  ||  W188/1=0x10 line4+ W18c/1=0x10 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z5 line 4 asserted by a device: Clear 0x10 clears and deasse)
+N_I03   A2    RED    -         if (d->irq_asserted) INTERRUPT_DEASSERT(d->irq);  ||  17 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (seeded, latches clear)
+N_I04   A2    GREEN  GUEST     if (d->irq_status & d->irq_enable || d->irq_asserted)  ||  W188/1=0x10 line4+ W18c/1=0x10 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z5 line 4 asserted by a device: Clear 0x10 clears and deasse)
+N_I05   A2    GREEN  GUEST     INTERRUPT_ASSERT(d->timer_irq[0]);  ||  line10+ W188/2=0x400 W18c/4=0x10 R184/4 [devinit, replay]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 4 pending and enabled: one assert)
+N_I06   A2    GREEN  GUEST     INTERRUPT_DEASSERT(d->timer_irq[3]);  ||  line4+ W188/1=0x10 W18c/1=0x10 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z1 Clear 0x10 from 0x18/0x30: enable 0x20, disjoint from sta)
+N_I07   A2    RED    -         INTERRUPT_DEASSERT(d->irq);  ||  15 rows [X10,X12,X9]: X9 IRQ Clear write 0 (seeded, latches clear)
+N_I08   A2    RED    -         INTERRUPT_ASSERT(d->irq);  ||  17 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (seeded, latches clear)
+N_I09   A2    RED    -         if (d->irq_status & d->irq_enable & ~d->fiq_status)  ||  7 rows [X10,X12,X9]: X9 IRQ Clear write 0 (ones, latches clear)
+N_L01   A0    RED    -         else if (!d->warned_irq_status_w || len == 1) {  ||  11 rows [P,X6]: P1 write IRQ_STATUS: byte and halfword accesses: still latched
+N_L02   A1    RED    -         else if (!d->warned_irq_raw_w && len != 2) {  ||  9 rows [X1,X6]: X1 write IRQ_RAW_STATUS: len 2 as the FIRST access announces once
+N_L03   A3    RED    -         else if (!d->warned_fiq_status_w && len != 4) {  ||  128 rows [P,X11,X12,X3,X4,X6,X9]: P4 write FIQ_STATUS: announced exactly once
+N_L04   A4    RED    -         else if (!d->warned_fiq_raw_w && len < 4) {  ||  128 rows [P,X11,X12,X3,X4,X6,X9]: P5 write FIQ_RAW_STATUS: announced exactly once
+N_L05   A2    RED    -         } else if (!d->warned_irq_clear_r && len <= 2) {  ||  124 rows [P,X11,X12,X3,X4,X6,X9]: P3 read IRQ_ENABLE_CLEAR: announced exactly once
+N_L06   A0    GREEN  HOST      else if (!d->warned_irq_status_w && len != 8) {  ||  W180/8=0x0 [devinit, 1]  ||  NOT DISCLOSED  ||  Z: red (Z6 declined len 8 access to 0x180: announced once, then latc)
+N_L07   A0    GREEN  GUEST     if (writeflag == MEM_READ && len != 8)  ||  W188/1=0x10 line4+ R180/8 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z6 legal len 8 read of 0x180 returns its value, announces no)
+N_L08   A2    GREEN  NONE-A8   if (writeflag == MEM_WRITE && len <= 4) {  ||  (unaligned len 8 only: W188/1=0x10 W18c/8=0x10 R188/1 [devinit, 3])  ||  equivalent for guests: len 8 reaches only 8-aligned offsets (LDRD/STRD align down), never this one  ||  Z: red (Z6 legal len 8 Clear 0x10: enable 0x20, one deassert, announ)
+N_L09   A1    RED    -         if (writeflag == MEM_READ || len == 1)  ||  9 rows [X1,X6]: X1 write IRQ_RAW_STATUS: len 1 as the FIRST access announces once
+N_L10   A3    GREEN  HOST      else if (!d->warned_fiq_status_w || len == 8) {  ||  W280/1=0x0 W280/8=0x0 [devinit, 2]  ||  NOT DISCLOSED  ||  Z: red (Z6 declined len 8 access to 0x280: announced once, then latc)
+N_L11   A4    GREEN  NONE-A8   if (writeflag == MEM_READ && len < 8)  ||  (unaligned len 8 only: R284/8 [devinit, 1])  ||  equivalent for guests: len 8 reaches only 8-aligned offsets (LDRD/STRD align down), never this one  ||  Z: red (Z6 legal len 8 read of 0x284 returns its value, announces no)
+N_R01   A0    RED    -         odata = d->irq_status & d->irq_enable, d->warned_irq_status_w = 0;  ||  13 rows [X3,X7]: X3 legal reads of every sibling re-arm NO latch
+N_R02   A1    RED    -         odata = d->irq_status, d->warned_irq_raw_w = 0;  ||  13 rows [X3,X7]: X3 legal reads of every sibling re-arm NO latch
+N_R03   A2    RED    -         d->irq_enable &= ~idata, d->warned_irq_clear_r = 0;  ||  9 rows [X3,X7]: X3 legal ZERO-data enable writes and other-register reads re-arm NO latch
+N_R04   A3    RED    -         odata = d->fiq_status & d->fiq_enable, d->warned_fiq_status_w &= !(d->fiq_enable >> 24);  ||  3 rows [X7]: X7 legal len 1 read of FIQ_STATUS (ones) re-arms NO latch
+N_R05   A0    GREEN  HOST      odata = d->irq_status & d->irq_enable, d->warned_irq_raw_w &= !d->irq_asserted;  ||  W188/1=0x70 line4+ W184/2=0x70 R180/1 W1ac/4=0x10 W184/4=0x80000000 [devinit, 6]  ||  NOT DISCLOSED  ||  Z: still green
+N_R06   A4    RED    -         odata = d->fiq_status, d->warned_irq_status_w = d->warned_irq_status_w && len != 2;  ||  5 rows [X3,X7]: X3 legal reads of every sibling re-arm NO latch
+N_R07   A2    RED    -         d->irq_enable &= ~idata, d->warned_irq_status_w &= (idata != 0);  ||  5 rows [X3,X7]: X3 legal ZERO-data enable writes and other-register reads re-arm NO latch
+N_S01   A2    GREEN  GUEST     if (d->irq_status && d->irq_enable)  ||  W188/1=0x10 line10+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z1 Clear 0x10 from 0x18/0x30: enable 0x20, disjoint from sta)
+N_S02   A2    GREEN  GUEST     if (d->irq_enable)  ||  W188/1=0x10 W18c/1=0x0 [devinit, 2]  ||  NOT DISCLOSED  ||  Z: red (Z1 Clear 0x10 from 0x18/0x30: enable 0x20, disjoint from sta)
+N_S03   A2    RED    -         if (d->irq_status | d->irq_enable)  ||  9 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (seeded, latches clear)
+N_S04   A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~idata)  ||  -  ||  equivalent  ||  Z: still green
+N_S05   A2    RED    -         if (d->irq_status & ~d->irq_enable)  ||  10 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (seeded, latches clear)
+N_S06   A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~0x400u)  ||  W188/2=0x400 line10+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 10 pending and enabled: one assert)
+N_S07   A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & 0xffff00ffu)  ||  W188/2=0x400 line10+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 10 pending and enabled: one assert)
+N_S08   A2    GREEN  NONE      if (d->irq_status & d->irq_enable & 0x7fffffffu)  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_S09   A2    RED    -         if (d->irq_status & d->irq_enable & 0xffffu)  ||  7 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (wide, latches clear)
+N_S10   A0    GREEN  NONE      if (writeflag <= MEM_READ)  ||  -  ||  equivalent  ||  Z: still green
+N_S11   A1    GREEN  NONE      if (!writeflag)  ||  -  ||  equivalent  ||  Z: still green
+N_S12   A3    RED    -         if (writeflag == MEM_READ || writeflag == MEM_WRITE)  ||  147 rows [P,X1,X11,X12,X3,X4,X6,X9]: P4 write FIQ_STATUS: announced exactly once
+N_S13   A1    GREEN  NONE      else if (d->warned_irq_raw_w == 0) {  ||  -  ||  equivalent  ||  Z: still green
+N_S14   A4    GREEN  NONE      else if (d->warned_fiq_raw_w < 1) {  ||  -  ||  equivalent  ||  Z: still green
+N_S15   A0    RED    -         else if (!d->warned_irq_status_w || !d->warned_irq_raw_w) {  ||  28 rows [P,X6]: P1 write IRQ_STATUS: #2 announced nothing more (latched)
+N_S16   A2    GREEN  NONE      if (writeflag & MEM_WRITE) {  ||  -  ||  equivalent  ||  Z: still green
+N_S17   A2    RED    -         if (d->irq_status & (d->irq_enable | idata))  ||  9 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (seeded, latches clear)
+N_S18   A2    RED    -         if (d->irq_status & d->irq_enable & ~d->fiq_enable)  ||  7 rows [X10,X12,X9]: X9 IRQ Clear write 0 (ones, latches clear)
+N_SB00  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 0))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB01  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 1))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB02  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 2))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB03  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 3))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB04  A2    RED    -         if (d->irq_status & d->irq_enable & ~(1u << 4))  ||  1 rows [X9]: X9 IRQ Clear write 0 (seeded, latches clear)
+N_SB05  A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~(1u << 5))  ||  W188/4=0x20 line5+ W18c/4=0x400 [devinit, replay]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 5 pending and enabled: one assert)
+N_SB06  A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~(1u << 6))  ||  W188/4=0x40 line6+ W18c/4=0 [devinit, replay]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 6 pending and enabled: one assert)
+N_SB07  A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~(1u << 7))  ||  W188/4=0x80 line7+ W18c/4=0 [devinit, replay]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 7 pending and enabled: one assert)
+N_SB08  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 8))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB09  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 9))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB10  A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~(1u << 10))  ||  W188/2=0x400 line10+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 10 pending and enabled: one assert)
+N_SB11  A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~(1u << 11))  ||  W188/2=0xffffffff line11+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 11 pending and enabled: one assert)
+N_SB12  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 12))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB13  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 13))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB14  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 14))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB15  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 15))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB16  A2    RED    -         if (d->irq_status & d->irq_enable & ~(1u << 16))  ||  6 rows [X10,X12,X9]: X9 IRQ Clear write 0x70 (wide, latches clear)
+N_SB17  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 17))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB18  A2    GREEN  GUEST     if (d->irq_status & d->irq_enable & ~(1u << 18))  ||  W188/4=0xffffffff line18+ W18c/1=0x0 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z2 Clear 0 with only line 18 pending and enabled: one assert)
+N_SB19  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 19))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB20  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 20))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB21  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 21))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB22  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 22))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB23  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 23))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB24  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 24))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB25  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 25))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB26  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 26))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB27  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 27))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB28  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 28))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB29  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 29))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB30  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 30))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_SB31  A2    GREEN  NONE      if (d->irq_status & d->irq_enable & ~(1u << 31))  ||  -  ||  equivalent on cats/netwinder: no device drives that bit  ||  Z: still green
+N_T01   A0    GREEN  NONE      if (writeflag == MEM_READ && !timer_nr)  ||  -  ||  equivalent  ||  Z: still green
+N_T02   A2    GREEN  NONE      if (writeflag == MEM_WRITE && timer_nr == 0) {  ||  -  ||  equivalent  ||  Z: still green
+N_T03   A1    GREEN  NONE      else if (!d->warned_irq_raw_w || timer_nr) {  ||  -  ||  equivalent  ||  Z: still green
+N_T04   A0    GREEN  GUEST     if (writeflag == MEM_READ && !d->timer_control[0])  ||  W188/1=0x10 line4+ R180/1 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z4 DEVINIT timer state: legal reads return their values, ann)
+N_T05   A1    GREEN  GUEST     if (writeflag == MEM_READ && !d->timer_load[0])  ||  line4+ R184/1 [devinit, 2]  ||  NOT DISCLOSED  ||  Z: red (Z4 DEVINIT timer state: legal reads return their values, ann)
+N_T06   A2    GREEN  GUEST     if (writeflag == MEM_WRITE && !d->pending_timer_interrupts[0]) {  ||  W188/2=0x10 t1-hosttick W18c/4=0x10 R188/2 [devinit, 4]  ||  NOT DISCLOSED  ||  Z: red (Z7 timer 1 tick pending: Clear 0x10 clears, announces nothin)
+N_T07   A3    GREEN  HOST      else if (!d->warned_fiq_status_w && !d->timer_value[0]) {  ||  W308/4=0xc0 W280/1=0x0 [devinit, 2]  ||  NOT COVERED: latch guard on a field neither branch reads  ||  Z: still green
+N_T08   A1    GREEN  HOST      else if (!d->warned_irq_raw_w && d->pending_bound[0] <= 1) {  ||  W308/4=0xc0 W184/1=0x0 [devinit, 2]  ||  NOT COVERED: latch guard on a field neither branch reads  ||  Z: still green
+N_T09   A4    GREEN  HOST      if (writeflag == MEM_READ || d->timer_control[3])  ||  W284/1=0x0 [devinit, 1]  ||  NOT DISCLOSED  ||  Z: red (Z4 DEVINIT timer state: the five declines announce 5)
+N_T10   A2    GREEN  HOST      } else if (!d->warned_irq_clear_r && !d->irq_asserted) {  ||  W188/1=0x10 line4+ R18c/1 [devinit, 3]  ||  NOT COVERED: latch guard on a field neither branch reads  ||  Z: still green
+N_T11   A0    GREEN  GUEST     if (writeflag == MEM_READ && !d->irq_asserted)  ||  W188/1=0x10 line4+ R180/1 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z5 line 4 asserted by a device: IRQ_STATUS reads 0x10, annou)
+N_T12   A2    GREEN  GUEST     if (writeflag == MEM_WRITE && !d->irq_asserted) {  ||  W188/1=0x10 line4+ W18c/1=0x10 [devinit, 3]  ||  NOT DISCLOSED  ||  Z: red (Z5 line 4 asserted by a device: Clear 0x10 clears and deasse)
+N_X1    A2    RED    -         if ((d->irq_status & d->irq_enable) && !d->warned_irq_raw_w)  ||  2 rows [X10]: X10 IRQ Clear write 0x70 (wide, latches SET) clears and drives
+N_X2    A0    RED    -         d->warned_irq_status_w = 1; d->irq_status &= (len == 2 && (d->irq_enable >> 31)) ? 0u : ~0u;  ||  4 rows [X6]: X6 write IRQ_STATUS len 2 data 0 ones first: declined, fields/irq kept, once
+N_X3    A2    RED    -         d->irq_enable &= ~idata, d->warned_irq_raw_w &= (d->irq_enable >> 24) != 0xff;  ||  2 rows [X7]: X7 IRQ Clear write 0 (ones) re-arms NO latch
+
+  GREEN GUEST disclosed/eq                 1
+  GREEN GUEST undisclosed                  24
+  GREEN HOST disclosed/eq                  8
+  GREEN HOST undisclosed                   4
+  GREEN INTERNAL disclosed/eq              1
+  GREEN NONE disclosed/eq                  48
+  GREEN NONE-A8 disclosed/eq               2
+  RED                                      48
+  UNDISCLOSED real changes (28): N_F01:GUEST N_F09:GUEST N_F15:GUEST N_I01:GUEST N_I02:GUEST N_I04:GUEST N_I05:GUEST N_I06:GUEST N_L06:HOST N_L07:GUEST N_L10:HOST N_R05:HOST N_S01:GUEST N_S02:GUEST N_S06:GUEST N_S07:GUEST N_SB05:GUEST N_SB06:GUEST N_SB07:GUEST N_SB10:GUEST N_SB11:GUEST N_SB18:GUEST N_T04:GUEST N_T05:GUEST N_T06:GUEST N_T09:HOST N_T11:GUEST N_T12:GUEST
+  of which guest-visible: 24; host-visible (announce) only: 4
+  of which the 28 scratch Z rows turn red: 27 (N_R05 not)
+FINAL_TABLES_DONE

@@ -1,0 +1,27 @@
+VERDICT: SHIP
+
+Q1(a) — READ/REASONED. The inlined handler shows each edited decline is dominated by the case label, the direction test, and the per-site latch. X6 covers declined accesses with latch clear→set via first/repeat; X7 covers legal accesses with latch already set; X9 covers legal accesses with latch clear. States seeded, all-zero, and wide are all present. No missing cell under the §C.2 bound.
+
+Q1(b) — REASONED. I enumerated the eight enable writes against the handler. For IRQ Set/Clear, the handler computes `irq_enable` then asserts if `irq_status & irq_enable` is nonzero, otherwise deasserts; exactly one interrupt call always occurs. For FIQ Set/Clear, no interrupt call is made. The X9 rule matches this in all three states.
+
+Q1(c) — REASONED. Wide-state products:
+- IRQ_STATUS = `0x80010018 & 0x00010030` = `0x00010010`
+- IRQ_RAW_STATUS = `0x80010018`
+- FIQ_STATUS = `0x40020060 & 0x000200c0` = `0x00020040`
+- FIQ_RAW_STATUS = `0x40020060`
+
+All four are nonzero above byte 0.
+
+Q1(d) — READ. The diff only adds the wide state to existing X6/X7 loops and adds the new X9 block. Existing row names and meanings are unchanged.
+
+Q2 — REASONED. One small change that all 491 rows would miss: change the IRQ_STATUS read branch to  
+`if (writeflag == MEM_READ && d->irq_enable != 0xdeadbeef)`.  
+For the three states exercised (`0x30`, `0`, `0x00010030`), the condition is true, so legal reads still return the correct value and announce nothing. X6, X7, and X9 all stay green. A state with `irq_enable == 0xdeadbeef` would then treat a legal read as a decline, announcing and returning 0. Example row that stays green: `X9 legal len 4 read of IRQ_STATUS (wide, latches clear)`.
+
+Q3 — REASONED. The repair closes the class defined by the §C.2 bound, not the full product space. A cell not rowed: legal write to `IRQ_ENABLE_CLEAR`, width 1, data `0x80000000`, state wide, latch clear. This is outside the bound because `idata` is not read by both branches under the direction test.
+
+Q4 — READ/REASONED. I found no false or stale sentence in the added comments. The comments match the inlined handler and diff. Minor imprecision: “lvalues read by BOTH branches” is really the union of lvalues read in either branch, but this is not a false claim in context.
+
+Q5 — REASONED. Leaving the guest reset-state reads out is right. X9 carries the offline floor directly against the real access function in the all-zero, latch-clear state. The guest rows would add integration coverage, but arm S’s disclosed “order, not emitter” limit means they are not required for this specific code-level risk.
+
+Seat record: packet-fed seat; read the inlined brief only; ran nothing.

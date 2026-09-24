@@ -1,0 +1,400 @@
+kimi version 0.36.0
+• The user wants me to read a specific file in full and review it adversarially exactly as its own Questions/Review-asks section directs. Let me read the file first.Let me understand the task. The user wants me to:
+  1. Read `/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md` in full — done.
+  2. Review it adversarially exactly as its own Questions/Review-asks section directs — that's section 5, "QUESTIONS" Q1-Q4.
+  3. Not summarize it back.
+  4. End with GO / NO-GO / GO-WITH-CHANGES.
+
+  The brief itself says:
+  - Tree under review: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` at HEAD f685d75 plus uncommitted #545 working set.
+  - Check premises, not just derivations.
+  - "If you cannot read files, that is expected: the repair diff and every result are inlined." — But I CAN read files. So I should verify the inlined claims against the actual tree.
+  - Q1: Adjudicate F1-F50 / D1-D10 / R1-R6 as disposed — the dispositions are in `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\fbd5\p2\` (P2_FINDINGS.md F1-F50/D1-D10, CODEX_DED_TRIAGE.md R1-R6/W1-W6/D1-D4). Silence = uphold; one line each for any I'd change. Which accepted disposition is wrong?
+  - Q2: The repair's own floor on the shipped composite: name the smallest edit to the fixed device source that passes all of it now, and the row expected to catch it.
+  - Q3: Can any of X1-X5, NO, or the new gate pins pass while the thing it names is false?
+  - Q4: What did all nine miss? Standing licence for anything else found.
+  - End with a seat record: model, files read, nothing run / what you ran.
+  - Operational rule: do NOT run run.sh, gate_*.sh, or the battery. Building and running a single detector or mutant in my own temp dir is fine and encouraged.
+
+  The user wants an adversarial review. They explicitly said "Do not summarise it back to me." So I need to actually do the review work: verify claims against the tree, hunt for the smallest passing-but-broken edit, and answer Q1-Q4 concretely.
+
+  This is a substantial task. Let me plan:
+
+  1. Read the actual source: `GXEMUL-SEC/src/devices/dev_footbridge.c` around the five decline sites (line ~572 and the five guards).
+  2. Read `GXEMUL-SEC/regress/diff_footbridge.c` — the offline differential with P-rows and X-rows.
+  3. Read `GXEMUL-SEC/regress/footbridge_sites_probe.py` — arm S, N rows, NO row.
+  4. Read `GXEMUL-SEC/regress/fbpending_drain_probe.py` and `fbpending_witness.py` — H1/H2.
+  5. Read `GXEMUL-SEC/regress/gate_offline.sh` and `gate_arm.sh` — the gate pins.
+  6. Read the p2 findings files in `_scratchpad/fbd5/p2/` for Q1 adjudication.
+  7. Possibly build a mutant in a temp dir to verify a suspected hole (encouraged but not required).
+
+  Given the size, I should do much of this myself since I need deep understanding. Let me use parallel reads. The key adversarial questions:
+
+  Q3 is the sharpest: can any new row pass while the named thing is false? Let me think about candidates from the diff:
+
+  - X1: for each of 5 sites, w in {1,2}, first access at len w must announce once. The row checks `fatal_calls == 1` after one access. Could this pass while false? If a `len==4` conjunct were added to one guard, X1 should catch it at len 1/2. But wait — X1 creates a fresh calloc instance per site per width, so the latch starts unset. The check is `fatal_calls == 1`. If a decline announced TWICE per access (double fatal), X1 would catch (2 != 1). OK.
+
+    But note: X1 only tests len 1 and 2, not len 8. Hmm — what's the natural width? The P-rows presumably test len 4. Is len 8 possible? Footbridge registers are 32-bit; an 8-byte access might be split by the memory subsystem. The comment says len 1 and 2 as first access. What about len 8? If the bus splits 8-byte accesses into two 4-byte ones, the first would latch and the second wouldn't announce — fine. Not obviously a hole but worth noting: X1 doesn't test len 8.
+
+  - X2: legal narrow reads return low lanes. `rd5[i].want & (w == 1 ? 0xff : 0xffff)`. For w=1: want & 0xff. The values: IRQ_STATUS 0x10, IRQ_RAW 0x18, FIQ_STATUS 0x40, FIQ_RAW 0x60, IRQ_ENABLE_SET 0x30. All fit in a byte. So `& 0xff` never actually masks anything — the mask clause is vacuous for these seeds. If a mutant returned the high lanes (e.g., value << 8), w=1 would catch it (0x10 << 8 = 0x1000, read low byte = 0x00 ≠ 0x10). Actually for narrow reads, `memory_readmax64(cpu, b, w)` reads w bytes. If the device returned the value shifted, it would differ. But here's a subtlety: does the device even DO narrow reads correctly? The product change — five accesses from fatal to declined. Wait, X2's reads are of the five READABLE registers (IRQ_STATUS read is legal, IRQ_RAW_STATUS read legal, FIQ_STATUS read legal, FIQ_RAW_STATUS read legal, IRQ_ENABLE_SET read legal — the enable register read at +0x188). These are legal reads, not declines. The question is whether the device handles len<4 reads by returning low lanes. If the device actually returned garbage for narrow reads on the real tree, X2 would fail on FIX... but FIX passed 149/149, so the device handles them.
+
+    Hole candidate: X2 seeds are all small (≤ 0x60), so `want & 0xffff` for w=2 is also vacuous. A mutant that returns the full 32-bit value but writes only w bytes to buf... hmm. Actually the real hole: the `& (w==1 ? 0xff : 0xffff)` mask suggests the author worried about the device returning more than w bytes and readmax reading them. But since all wants fit in the mask anyway, the mask never distinguishes. If fiq_status were seeded 0x160, the mask would matter. Minor.
+
+  - X3: after 5 declines latch (5 announces), do legal reads re-arm? The sequence: latch all 5, f0 = fatal_calls (5), then reads of rd5 at widths 1,2,4, then re-do the 5 declines, check fatal_calls - f0 == 0. Wait — but if latches were re-armed, the re-decline would announce, so fatal_calls - f0 would be 5. So this detects re-arming. But: could a mutant pass X3 while a legal read re-arms a latch? The re-decline after the reads uses len 4 with 0x70. If the mutant's re-arm only happens for... hmm, the reads are at w in {1,2,4}, all five rd5 addresses. The s5 sites include IRQ_ENABLE_CLEAR read (declined). The rd5 includes IRQ_ENABLE_SET read but NOT IRQ_ENABLE_CLEAR read (that's a decline site, not a legal read). OK.
+
+    Hole: X3's widened part does legal WRITES with data 0 (`memory_writemax64(cpu, b, 4, 0)`) to the four enable registers. The brief itself flags in Q2: "a legal Set/Clear write that re-arms a latch only when its data is NONZERO (X3's widened writes carry 0)". That's the author's own candidate — Q2 asks me to name the smallest edit. Also X3 writes: IRQ_ENABLE_SET write with 0 — does that even count as legal? Writing 0 to SET sets nothing; writing 0 to CLEAR clears nothing. Legal, yes.
+
+    Another hole in X3: it checks `fatal_calls - f0 == 0` after re-declining. But it doesn't check state preservation after the re-decline. P_STATE_OK was checked in the P-row loop earlier on a different instance `h`, not on `x`. If the re-decline (4th access) corrupted state... the P-rows pin preservation for the FIRST decline per site (on fresh instance per iteration? Let me check the P-row loop: `for (i = 0; i < 5; i++) { ... dev_footbridge_access(... dec[i] ...); check P_STATE_OK...}` — need to see whether h is fresh per i. From the diff, P_STATE_OK(tag) checks fields preserved. It's plausible the P loop uses one h across all 5 sites (fatal_calls baseline f0 per site). Either way.
+
+    Bigger X3 hole candidate: the re-arm detection only works if the re-decline would announce. But the re-decline is the SAME access as before (len 4, 0x70, same wf). If a mutant re-arms the latch but only announces on... no, announcing is what latches gate. If latch re-armed → announce. Fine.
+
+    BUT: X3 only checks that legal accesses don't re-arm. What about a DECLINE at site A re-arming site B's latch? Sequence: all 5 decline (5 announces), then reads, then re-decline all 5 → 0 new announces. If site A's decline re-armed site B, the re-decline of B would announce. Caught. What about a decline re-arming ITSELF but with a counter that allows exactly 2 announces total? Pathological.
+
+  - X4: zero data/enable as first access announces once + no field change. For the read site (IRQ_ENABLE_CLEAR read), they set irq_enable = 0 (the guard might be conditioned on irq_enable). Check: `fatal_calls == 1`, and the 4-field preservation check. Note the preservation check uses `(x->irq_enable == (s5[i].wf == MEM_READ ? 0u : 0x30u))` — sum of 4 booleans == 4. OK. Could X4 pass while the named thing is false? The named thing: "ZERO data/enable as the first access still declines AND announces". A mutant `&& idata` on the guard would let the zero write through silently → fatal_calls == 0 → caught (Z1/Z1b/Z2 measured red). What about a guard `&& (idata || !idata)` — vacuous. What about decline happening but announce suppressed when data zero: `if (!idata) skip announce`? Then fatal_calls == 0, caught. Hmm.
+
+    X4 hole: it tests data 0 at len 4 only. What about a mutant conditioned on `len == 4 && idata == 0x70`? That's a test-specific hack, not a plausible minimal edit.
+
+    Another: X4's field-preservation check sums booleans. `(x->irq_status == 0x18) + ...` — if the decline with zero data wrote 0 to irq_status... caught. OK.
+
+    Real X4 hole candidate: for the WRITE sites, X4 sets data 0. But the decline is "declined — no register changes". A mutant that performs the write when idata==0 (i.e., guard `if (idata) decline else accept`)? That's the `!idata` writeflag inversion — that's Z3? R2 was writeflag → !idata/idata. Z3 red: X4 write IRQ_STA. And Z4 red on X5. So measured.
+
+  - X5: legal ZERO EnableClear write announces nothing, enable kept at 0x30. A mutant `writeflag → idata` sends zero-write to decline branch → announce → caught (Z4). What about the mutant that treats the zero write as legal but ALSO clears enable to 0? Caught by second check. OK.
+
+  - NO row: the five announces arrive in access order. Implementation:
+    ```python
+    order = []
+    for f in S["fatals"]:
+        hit = [t for t in ("N1".."N5") if TEXTS[t] in f]
+        order.append(hit[0] if len(hit) == 1 else "?")
+    no_ok = s_alive and order == ["N1","N2","N3","N4","N5"]
+    ```
+    Holes:
+    1. If S["fatals"] contains MORE than 5 lines (e.g., 6 fatal lines with the 5 in order plus an extra), order would have 6 elements ≠ list → red. Fine, strict.
+    2. If a fatal line contains TWO texts (e.g., a concatenation), hit has 2 → "?" → red. OK.
+    3. `TEXTS[t] in f` — substring match. If one site's text is a substring of another's... The texts: "footbridge write to irq status?" etc. Need to check actual texts. If TEXTS["N1"] is a substring of some other line, a single line could hit one... it takes hit[0] if exactly 1. If a line matches none (e.g., an unrelated warning), "?" → red. So NO requires EXACTLY the five lines each matching exactly one text in order. Seems tight.
+    4. BUT: `s_alive` — need definition. If s_alive is computed from the earlier arm-S liveness row... it's plausible. 
+    5. Real hole: NO binds order over S["fatals"], which is presumably the collected fatal lines from arm S only. If arm S's diagnostics are collected per-arm correctly, fine.
+    6. Another: what if two sites exchange texts AND order? Z9 (IRQ_STATUS and IRQ_RAW_STATUS exchange texts) red on NO only — measured. So NO works for the swap. But what if the announce for site i fires during a DIFFERENT access (e.g., during the interleaved legal read)? Then order would break → caught. OK.
+    7. What about the FIRST element matching: `hit[0] if len(hit)==1`. If a fatal text of N1 also contains TEXTS["N2"] as substring... need actual texts. The five texts from dev_footbridge.c: "footbridge write to irq status?", "footbridge write to irq raw status?" (guess), "footbridge read from irq enable clear?", etc. Without reading, can't be sure. Substring inclusion across texts seems unlikely given distinct register names... but "irq status" is a substring of... "irq raw status"? No — "write to irq status?" vs "write to irq raw status?" — "irq status?" is not a substring of "irq raw status?" because of "raw " in between. But "irq" is common; the full text with register name differs. Need to read the actual texts.
+
+  - Gate pins (gate_offline.sh): 
+    - `grep -cE '^  ok    P[0-9] '` == 78. Wait: P-row names like "P0 IRQ_STATUS read = ...". Format `  ok    P[0-9] ` — but P10 would be two digits; they said P0-P9, 78 rows. 78 P-rows from... the diff says "78 P-rows". `P[0-9] ` matches P0..P9 with trailing space. But do row names have "P0" then space? "P0 IRQ_STATUS read..." yes. But careful: `check_u(PN("handler returned 1..."))` — PN produces "dec[i].what: suffix" where what = "P1 write IRQ_STATUS" etc. So lines start "  ok    P1 write IRQ_STA...". The count 78.
+      Hole: could a P-row be green while the thing is false? The count pin 78 — if the probe printed 78 green P-lines while some behavior wrong... the rows themselves are the checks. The pin just counts. If a mutant made one P-row red but another duplicated... the gate counts green lines; 78 expected. If a row prints twice (duplicate), count could hit 78 with one row actually missing — the F9/F45/F48 finding was exactly this, and the fix was "distinct-green-id pins" in gate_arm — but in gate_offline, the 78/38 pins are plain `grep -cE` counts, NOT distinct-id counts! So a duplicated green P-row line could stand in for a missing/red one... wait, no: if a row is red, its line is "  FAIL  P..." not "  ok    P...". To get 78 green P-lines while one row is red, you'd need 79 P-rows printed with one red, or a duplicate green line. A duplicate green line arises if the probe prints the same row name twice with ok. Hmm, but the IDENTITY row count pin (149) pins the TOTAL rows. So total = 149 pinned by IDENTITY (a self-count — but that's the probe's own `rows` variable, which counts check calls... if a check is duplicated, rows counts it twice, so IDENTITY stays consistent). So: duplicate one P-row (typo in test source — same name used twice), drop a different P-row: green P-count stays 78, IDENTITY stays 149 if total check calls unchanged. Then the dropped behavior is unpinned. But that's a harness-edit scenario, not a product mutant. The gate pins count green lines; the earlier finding (F9/F45/F48) fixed this in gate_arm with distinct-id pins but gate_offline's new pins (78/38) are plain counts — INCONSISTENT with the round's own lesson. Actually wait — do P-row names repeat? `PN(...)` uses dec[i].what so P1..P5 prefixes differ; suffixes like "handler returned 1 (declined, not failed)" repeat across sites but full line differs by prefix. X-row names: "X1 write IRQ_STATUS: len 1 as the FIRST access announces once" — distinct per site/width. X2: "X2 legal len 1 read of IRQ_STATUS = low lanes" distinct. X3 names: two rows both start "X3 legal reads o..." and "X3 legal writes..." — the gate pin `grep -cE '^  ok    X[1-5] '` counts 38. Could a duplicate green line stand in? In principle yes; the count pin can't tell. But the IDENTITY row pins total rows to 149 — the probe's own counter. Since duplication requires editing the detector (harness edit), it's "reviewed, not rowed" per the brief's own doctrine. Hmm, but the earlier seats' F9/F45/F48 were exactly "gate count pins a duplicated green line could satisfy" and the repair added distinct-green-id pins in gate_arm.sh — but the NEW gate_offline pins added in the same diff use plain counts. That's an asymmetry worth flagging in Q3: the 78/38 pins are vulnerable to exactly the F9/F45/F48 failure mode the round claims to have repaired (in the other gate file). However — is it exploitable by a PRODUCT mutant? No: product mutants can't duplicate lines. It's only a harness-edit hole. The doctrine says harness edits are "reviewed, not rowed". Still, the round repaired the identical weakness in gate_arm and left it in gate_offline's new pins. Flag as inconsistency.
+
+    Also: `grep -cE '^  ok    P[0-9] '` — the P-rows include P0-P9; pattern `P[0-9] ` requires single digit then space. Row names: "P0 ...", "P1 write IRQ_STATUS: ...", ..., "P9 ...". Fine if exactly 78 such lines. But WAIT: does `P[0-9] ` also match "P1" inside... anchored at start `^  ok    P`, fine.
+
+    Another: IDENTITY row count "149" — `check("IDENTITY row count -- guards against a stale copy", buf, "149")` where buf = rows+1. This pins the row count to a constant in the source. A mutant of the PRODUCT can't change this. Fine.
+
+  - gate_arm.sh pins:
+    - `ROWS=37 of 37` — self-reported by probe. A product mutant can't fake... well, a product mutant that kills the process early would reduce rows. M1b-e gave 21/37. OK.
+    - Distinct-id pins use `cut -d' ' -f1 | sort -u | wc -l`. For SC1/SA1: `grep -E '^S(C1|A1) .*ok$'`. Hole: does `.*ok$` allow "...ok" where the status field isn't the last? Lines end with "ok" or "FAIL" presumably. `^SC1 .*ok$` — a line "SC1 ... ok" matches; also "SC1 ... not-ok"? ends with "ok"... "not-ok" ends with "ok"! If the FAIL marker is "FAIL", fine; if any line ends with "not ok"... they print "ok"/"FAIL" per the probe code shown (`"ok" if n0_ok else "FAIL"`). OK.
+    - `cut -d' ' -f1` on lines like "SC1 the control ... ok" gives "SC1". Distinct count 2. Fine.
+    - NO pin: `grep -cE '^NO .*order=N1,N2,N3,N4,N5 .*ok$'` == 1. Hole: if order printing for a red case shows "order=N1,N2,..." partially? The pin requires exact order string AND ok. Fine. But what if there are zero NO lines? count 0 ≠ 1 → red. OK.
+    - N1-N5 pin: `'^N[1-5] .*count=1 .*ok$'` — note `count=1 ` with space (F9 fix: "count=1" prefix could match "count=10"? with the space it can't... "count=1 " — if count were 10, text is "count=10 " which does NOT contain "count=1 " — correct, the space after 1 prevents prefix match... wait "count=10" contains "count=1" followed by "0", and the pattern requires "count=1 " with trailing space, so "count=10 " doesn't match. Good — that was the "field boundary" fix).
+      But: distinct-id pin for N1-N5 greps `'^N[1-5] .*count=1 .*ok$'`. Hmm, what about N0 and NO matching `^N[1-5]`? No — N0 is "N0", [1-5] excludes 0; NO is "NO", O not in 1-5. OK.
+      Hole: `.*count=1 .*` — could a red row's diagnostic contain "count=1 "? It requires `ok$`. If the row is red it ends "FAIL". OK.
+    - SF1/SF2 pin: `'^SF[12] .*got=0x00000000 .*ok$'` distinct 2. These pin final raw reads == 0. In arm S, irq_status/fiq_status are 0 throughout (guest can't set them? The guest writes... in arm S the product under test, guest does declines; raw status stays 0 since no device event sets it). OK.
+
+  Now Q2: smallest edit to the FIXED device source that passes the whole shipped composite. The author lists three candidates they did NOT build:
+  1. A latch guard conditioned on a register field NOT seeded nonzero in X4.
+  2. A decline that changes the INTERRUPT OUTPUT on a repeated or narrow access (only the first word decline counts asserts).
+  3. A legal Set/Clear write that re-arms a latch only when its data is NONZERO (X3's widened writes carry 0).
+
+  Let me evaluate these and find my own.
+
+  Candidate (a): latch guard `!d->warned_X && d->some_other_field` where some_other_field is 0 in the differential's seeds. X4 zeroes... wait X4 seeds all four fields (0x18/0x30/0x60/0xc0) except for the read site sets irq_enable=0. So a guard conditioned on, say, `d->irq_enable` would fail X4 for the read site (Z2 measured exactly this — red). What fields are NOT seeded? The seeds cover irq_status, irq_enable, fiq_status, fiq_enable. Other fields: e.g., `d->timer_...`, or a subordinate structure. If a guard were `!warned && d->irq_asserted_something`... Hmm. The author's candidate 1: conditioned on a register field not seeded nonzero in X4. X4 seeds the four interrupt fields. So condition on e.g. `d->vendor_something`? But such a guard in the PRODUCT would mean the decline never fires on real hardware either (field always 0) — that's equivalent to removing the announce entirely at that site... which the guest rows N1-N5 would catch (text never appears → count=0). Wait, the guest: arm S touches each site; if the guard requires a field that's 0 in the guest too, no announce → N row red. Unless the field is nonzero in the guest. In the guest, what footbridge fields are nonzero at arm S time? The guest has done E-arm writes? Arm S is one process; the guest wrote IRQ_ENABLE_SET (0x30?) — S3 pins 0x30 in the guest, so irq_enable is 0x30 in the guest. And X4 zeroes irq_enable only for the read site. So a guard `&& d->irq_enable` on the four WRITE sites: X4's write-site instances have irq_enable=0x30 (only the READ site gets 0). Wait, look at X4 code: `if (s5[i].wf == MEM_READ) x->irq_enable = 0;` — so for write sites irq_enable stays 0x30. So a guard `!warned && d->irq_enable` on a WRITE site passes X4 (enable 0x30 nonzero → announces) and passes the guest (enable 0x30) — and it's WRONG (a declined write when enable is 0 would... announce? The real behavior: the write should decline and announce regardless). Does any row catch a write-site guard conditioned on irq_enable? X4 doesn't zero it for write sites. P-rows? P-rows use 0x30 enable, nonzero. So a guard `&& d->irq_enable` on one of the four write-site latches passes EVERYTHING. But is that "the thing it names being false"? The named thing of X4: "zero data / zero enable as the first access still declines and announces". For write sites, X4 tests zero DATA with enable 0x30. The R1 finding was `&& idata` and `&& irq_enable` → X4 "zero data / zero enable as the first access". Hmm — R1 explicitly included `&& irq_enable`, and X4 was supposed to cover it, but X4 only zeroes irq_enable for the READ site. For the write sites, `&& irq_enable` survives! Wait — but does the decline behavior matter when irq_enable==0? The decline still should announce (write to read-only register). With irq_enable==0 and guard `&& d->irq_enable`, the write is silently ignored (no announce). Is that a product misbehavior? Per the change's contract: declined accesses announce once. So yes, misbehavior — and it passes all shipped rows, unless the guest has a row writing a site while enable==0. Guest arm S: does the guest ever clear enable to 0 then attempt a declined write? S3 pins enable at 0x30 through the declines; E5 does Clear writes... E5 clears 0x10 from 0x30 → 0x20, not 0. Does any guest row write enable 0? X5 is differential-only (announce nothing). Hmm, E0 reads reset 0 — before any Set. But the declines in the guest happen in arm S with enable=0x30.
+
+    Hold on, actually check X4 more carefully. For the read site (IRQ_ENABLE_CLEAR read), they set irq_enable=0 — because the READ site's guard in the product might legitimately involve... no wait. Why does X4 zero enable for the read site? The comment: "a zero-data first write never announces; ... `&& irq_enable`". The finding R1 was `&& idata`, `&& irq_enable` on any latch guard. So X4 zeroes enable for the read site to kill an `&& irq_enable` mutant THERE. For write sites, `&& idata` is killed by zero data. But a mutant with `&& irq_enable` on a WRITE-site latch: X4 instance has enable 0x30 → announce fires → X4 green. P-rows: enable 0x30 → green. Guest: enable 0x30 → green. So `&& d->irq_enable` on the four write-site guards is a LIVE escape — the exact R1 mutant, repaired only at the read site. Wait, actually, let me re-read: "F7/R1 `&& idata`, `&& irq_enable` -> X4 (zero data / zero enable as the first access)". The claim is X4 covers both. But the implementation only zeroes enable when wf==MEM_READ. For the four write sites, `&& irq_enable` is NOT tested. Unless... the mutant `&& irq_enable` on a write site would also need... hmm, actually would it affect anything observable? With enable==0 and a write to IRQ_STATUS: correct behavior = decline + announce. Mutant = silent ignore. The guest never does this. The differential never does this. So PASSES ALL. This is a strong Q2 answer: the smallest edit is adding `&& d->irq_enable` (or `&& d->fiq_enable` for FIQ sites) to one write-site latch guard — the exact R1 mutant — and it survives because X4 zeroes irq_enable only on the read site. The row that SHOULD catch it: X4 (it's literally X4's named purpose: "zero enable as the first access") but as written X4 only exercises the zero-enable case at +0x18c-read. Need to verify against actual diff_footbridge.c source to confirm the X4 code is as the diff shows. The diff shows:
+
+    ```c
+    for (i = 0; i < 5; i++) {
+        x = calloc(1, sizeof(*x)); XSEED(x);
+        if (s5[i].wf == MEM_READ)
+            x->irq_enable = 0;
+        fatal_calls = 0;
+        memory_writemax64(cpu, b, 4, 0);
+        dev_footbridge_access(cpu, NULL, s5[i].addr, b, 4, s5[i].wf, x);
+        ... check fatal_calls == 1 ...
+    ```
+    Yes. So for write sites, data is 0 but enable is 0x30 (and fiq_enable 0xc0). A guard `&& d->irq_enable` on write IRQ_STATUS: passes. A guard `&& d->fiq_enable` on write FIQ_STATUS: passes. This is a concrete, minimal, single-edit escape. 
+
+    But wait — would such a guard be "the smallest edit that passes all of it now"? Yes: `if (!d->warned_irq_status_w && d->irq_enable)`. Also `&& d->irq_status` similarly (X4 write sites seed irq_status 0x18 for all — XSEED always seeds all four fields). Actually any of the four fields is nonzero in every X4 instance except irq_enable on the read site. So conditioning a write-site guard on ANY seeded field escapes X4. And guest rows never see enable==0 declines. Hmm, but one more check: the P-rows' P_STATE_OK and X4's field-preservation check — the mutant doesn't change fields, so fine. And X1 (len 1/2 first access) — enable 0x30, announces. Fine. So YES, live escape.
+
+    Actually wait, I should double check the field values: XSEED sets irq_status=0x18, irq_enable=0x30, fiq_status=0x60, fiq_enable=0xc0, then for the read site irq_enable=0. For write sites all four nonzero. So even `&& d->fiq_status` (0x60) works for the IRQ write sites. Confirmed escape.
+
+    Is there a guest row that would catch it? Arm S guest: enable is 0x30 (S3). If a write-site decline with enable 0... no guest row. So the composite passes. STRONG Q2 finding. The row that should catch it: X4 — but only if X4 also zeroed enable (or the conditioned field) for the write sites. Actually more precisely: X4 should run the write sites with EACH of the four fields zeroed in turn, or at least with enable 0. The current X4 names "zero enable as the first access" but only delivers it for one site.
+
+    Hmm wait, actually, let me reconsider: does a write to IRQ_STATUS with irq_enable==0 occur anywhere? P-rows: the first decline per site happens with enable 0x30. What about... no. OK.
+
+    Also candidate: guard conditioned on `d->irq` callback state? The product's d->irq is a cpu irq pointer; in the differential it's noop'd. Conditioning `!warned && d->irq` — nonzero in product and in differential (they set interrupt_assert to noop — the pointer d->irq itself is the irq object from arm_irqs(x), non-NULL). Hmm, XSEED calls arm_irqs(x) then overwrites callbacks. d->irq presumably set by arm_irqs or is a struct member. A guard on a callback pointer like `d->irq.interrupt_assert != NULL`? It's set to noop in the differential, non-NULL. Escapes. But that's weirder.
+
+  Candidate (b): decline that changes interrupt output on repeated/narrow access. The P-rows count asserts only around the FIRST decline per site (`int a0 = irq_asserts...` before the access, checked after). X1 does narrow first accesses on fresh instances but does X1 count asserts? Looking at X1: only fatal_calls and (for read) the value. No assert counting in X1. X3's re-decline loop: no assert counting. So a decline that, on the SECOND access (latched, no announce), calls INTERRUPT_ASSERT — passes? P-rows check asserts only on first decline. X3 re-declines without counting asserts. Guest: arm S — do the guest rows observe interrupt outputs? The guest reads raw status etc.; an spurious assert of d->irq would... in the guest, d->irq connects to the CPU's interrupt line; arm S's rows read irq registers, not the CPU CPSR... The sites probe reads registers via `reg` commands? It's a stepped harness. An interrupt ASSERT with status 0 (irq_status & irq_enable == 0 in guest) — would the product even assert? The decline code calling INTERRUPT_ASSERT unconditionally would change the CPU's interrupt input, but with masked status 0, the CPU... the assert line is just a signal; whether it matters depends. This is getting speculative. The differential answer: yes, only the first word-decline per site counts asserts (the P loop's a0/d0 around the single first access), so a repeated/narrow access side effect on interrupt output is unrowed — matches the author's candidate 2. X1's narrow accesses don't count asserts. Confirmed hole, matches author's own candidate; I can strengthen it: X1 doesn't count asserts at all, so even the FIRST narrow access could flip interrupt output unnoticed.
+
+  Candidate (c): legal Set/Clear write re-arms latch only when data nonzero — X3's widened writes carry 0. Confirmed by reading X3: `memory_writemax64(cpu, b, 4, 0);` before all four enable writes. So a mutant where, e.g., IRQ_ENABLE_SET write with idata != 0 clears warned_irq_status_w: X3's writes are all data 0 → no re-arm → X3 green; then re-decline → no announce → still green. Wait, but if the latch re-armed, the re-decline announces → X3 red. Since data is 0 in X3's writes, the mutant doesn't re-arm → green. Does any other row write nonzero to SET/CLEAR before a re-decline? P-rows: after the five declines, P8 (a legal EnableClear write 0x10)... then what? P9? Let me look at the diff: after declines, "a LEGAL EnableClear write still works" with 0x10, checks enable 0x30→0x20. Is there a re-decline after P8? The diff shows P8 then P9 "a BYTE write ... and store" — need the actual file. If P8's nonzero Clear write were followed by a re-decline of the read-IRQ_ENABLE_CLEAR site, a data-nonzero-re-arm mutant would red. From the diff I can't see a re-decline after P8. The guest E5 does Clear writes (nonzero) but in a different arm/process than... arm S and E are separate processes. So candidate (c) stands: re-arm-on-nonzero-write passes everything. The row expected to catch it: X3's widened-write leg, if it used nonzero data.
+
+  Let me also think of my own Q2 candidates:
+  - A decline that writes to a DIFFERENT field than the one preserved (e.g., write IRQ_STATUS decline clears fiq_enable). P_STATE_OK checks all four fields after each decline — catches it. 
+  - A decline that corrupts state only on the FIFTH access overall (count-dependent)? Pathological.
+  - Change the announce text of one site to another site's text EXACTLY (Z9 measured red on NO). What about changing text to a string that still CONTAINS the expected text as substring (e.g., "footbridge write to irq status? (once)" → "footbridge write to irq status? (once) ")? N rows count occurrences of the text — substring still matches once. NO row: order preserved. Value rows unaffected. So appending extra text to one announce (e.g., an extra word, a typo'd register name ADDED) passes N1-N5, NO, and everything — text is matched by substring `TEXTS[t] in f`. Is that "the thing it names false"? The N rows name "the site's own text appears exactly once" — substring match means a MODIFIED text that retains the substring passes. The misname check ("a misnamed register reds its own row") relies on the text no longer containing the expected substring. If a mutant renamed the register in the text from "irq status" to "irq status" plus garbage, fine; but if the mutant renamed to something where the expected substring persists... The stronger version: swap the texts AND adjust... Z9 caught by NO. What about a text change that keeps substring but changes meaning, e.g. "irq status?" → "irq status??" — cosmetic, passes, arguably fine. But what about the FATAL prefix "[ WARNING: ..." — the guest greps for "(once)"? N0 counts "distinct-once" — how? Probably counts distinct texts among fatal lines containing "(once)". If a mutant's text dropped "(once)", N0 might catch. Substring matching is inherent to log-grepping; acceptable but worth noting in Q3: N1-N5/NO pin substrings, not full lines — an announce with EXTRA content passes (is that bad? marginally).
+
+  - What about a decline that RETURNS 0 (failure) instead of 1? P-rows check `rv == 1`. Guest: a device access returning 0 → the guest load/store would... abort? Probably caught by guest liveness. Covered.
+
+  - The FIQEnableClear read (+0x28c) stays silently declined — disclosed (fiqenableread facet). Fine.
+
+  - X2 hole: `rd5` includes IRQ_ENABLE_SET read — reading the SET register returns the enable (0x30)? In the product, is +0x188 readable returning enable? Yes (#539 made it readable). OK.
+
+  - X1 hole: tests only w=1,2 as FIRST access. What about len 8? If the guard had `len == 4 || len == 8`... hmm, "swallow a legal narrow read" was F-something. A guard widened to decline len-4 READS of IRQ_STATUS (a legal read!)? That would red P0's legal reads / X2. OK.
+
+  - Another X1 hole: X1 checks announce-once for narrow accesses, but NOT state preservation (no P_STATE_OK in X1, except X4 has its own). A narrow decline that writes the register... e.g., len-1 write to IRQ_STATUS stores the byte AND announces once: X1 green (announce==1), X3? The instance is freed after X1's single access. P-rows test len-4 only. So a mutant "len!=4 declines announce but ALSO store the narrow data" passes X1 (announce once), passes P (len 4 decline doesn't store), guest: widths not rowed in guest (comment says so), and does the guest do narrow writes to these sites? Arm S widths "NOT rowed here". The guest's declines are word accesses presumably. X2 reads are legal reads. Hmm — does X1 check the read value for the read site (yes, returns 0) but for WRITE sites, no state check! So: mutant = narrow write to IRQ_STATUS declines with announce AND stores. X1: announce 1 → green. Nothing checks irq_status after X1's narrow write. X4 is len 4. P rows len 4. So state corruption on narrow declines is unrowed — a real hole, bigger than cosmetic: "declined — no register changes" is the contract, and X1 (the width row) doesn't verify preservation. The guest can't reach it (stepped guest, and nonzero seed unreachable — Q2 f acknowledged). The row expected to catch it: X1 (add P_STATE_OK) or X4-style field check. Good Q3 answer for X1: X1 can pass while the decline corrupts state at narrow widths.
+
+    Wait, but would the mutant also pass X3? X3's declines are len 4. Yes. And the guest? Guest declines at len 4 (word). So yes, passes everything. Concrete.
+
+  - X5: "legal ZERO EnableClear write announces nothing, leaves enable 0x30". Hole: X5 only tests IRQ_ENABLE_CLEAR, not FIQ_ENABLE_CLEAR. A direction-test inversion only at the FIQ clear (`writeflag → idata` at +0x28c write)? Z-series: Z4 was X5 red — which site did Z4 mutate? Unknown. If the mutant inverted direction at FIQ_ENABLE_CLEAR write: zero write there → decline branch → announce. What catches it? X4? X4's s5 doesn't include FIQ_ENABLE_CLEAR write (it's a legal write). X3's widened writes include FIQ_ENABLE_CLEAR write with data 0 — if it went to the decline branch, it would announce → X3's "legal writes re-arm NO latch" checks fatal_calls - f0 == 0 after the writes+re-declines. Wait, the announce from the misdirected FIQ_CLEAR write would increment fatal_calls during the f0 window → X3 red. Actually the widened X3 leg does the four enable writes then five re-declines, checking delta == 0. A misdirected zero Clear write announces → delta >= 1 → red. So caught by X3 widened. But ONLY for zero data. With nonzero data, a `writeflag→idata` mutant treats nonzero Clear write as a WRITE (correct direction) — the inversion `idata` sends nonzero writes to the write branch (correct) and zero writes to read branch (wrong). Zero write caught by X3/X5. OK so direction inversions are covered at zero. Fine.
+
+  - Now the NO row and `s_alive`: need to read the probe to see what s_alive is and whether NO could pass while out-of-order. Also whether S["fatals"] might include fatals from OTHER arms (N rows count over the whole arm's diagnostics — if S["fatals"] is arm S only, fine).
+
+  Q1: adjudicate dispositions. I need to read P2_FINDINGS.md and CODEX_DED_TRIAGE.md in `_scratchpad/fbd5/p2/`. Silence = uphold. I should check a sample of the dispositions against the tree — especially the F34 claim (#539's E0-E6 distinct-id fix never shipped; #545 carries it). The gate_arm diff shows the E0-E6 distinct pin changed from `grep -oE '^E[0-6] '` (count over ALL lines) to green-only distinct count. Verify HEAD: does gate_arm.sh at HEAD f685d75 have the old or new form? The brief claims HEAD never had the distinct-green fix. Checkable via git in GXEMUL-SEC.
+
+  Also verify the repair diff matches the working tree (md5 da9e8cf1 — of what? the diff? probably). I can diff HEAD vs working tree for the five files and compare with the inlined diff.
+
+  Also the product diff: only ONE hunk in dev_footbridge.c (comment change at line 572)! Wait — section 3's dev_footbridge.c hunk only changes a COMMENT. The actual product change (five declines) was in the pass-2-reviewed working set already ("from EXACTLY what pass 2 reviewed (HEAD + the pass-2 patches) to the tree now"). So the repair diff is detector-only plus one comment. OK.
+
+  Let me now also examine: the `check_min` for rows run changed 33→149, and gate pins 78/38. 78+38=116, plus other rows (P0-P9 with sub-rows...). IDENTITY says 149 total. The probe prints "149 rows, 0 failures". Consistent.
+
+  Another premise to check: "F44 the seeds violate 7.3.30's identical-raw-status rule — synthetic state, by design". DC21285 spec 7.3.30: raw status register reads mirror...? The claim: in the product there's no fiq_status writer so the synthetic seed is the only way to pin the FIQ read expressions. Fine as disclosed.
+
+  Premise: "0x18 & 0x30 == 0x50 & 0x30 == 0x10". 0x18&0x30 = 0x10. 0x50&0x30 = 0x10. Yes, collision for IRQ masked read if fiq_status swapped for irq_status... wait the collision was: swapping irq_status for fiq_status in the IRQ_STATUS read passed. IRQ_STATUS read = irq_status & irq_enable = 0x18&0x30 = 0x10. If mutant used fiq_status & irq_enable = 0x50&0x30 = 0x10. Same. With fiq_status=0x60: 0x60&0x30 = 0x20 ≠ 0x10. Fixed. And FIQ side: fiq_status & fiq_enable = 0x60&0xc0 = 0x40; mutant irq_status & fiq_enable = 0x18&0xc0 = 0x00 ≠ 0x40. Good. "every field-for-field swap in either status expression yields a DIFFERENT value" — verify: seeds {irq_status=0x18, irq_enable=0x30, fiq_status=0x60, fiq_enable=0xc0}. IRQ_STATUS=0x18&0x30=0x10. Swaps: fiq_status&irq_enable=0x60&0x30=0x20; irq_status&fiq_enable=0x18&0xc0=0; fiq_status&fiq_enable=0x60&0xc0=0x40. All ≠ 0x10 ✓. FIQ_STATUS=0x60&0xc0=0x40. Swaps: irq_status&fiq_enable=0; fiq_status&irq_enable=0x20; irq_status&irq_enable=0x10. All ≠ 0x40 ✓. RAW reads: IRQ_RAW=0x18; swaps: 0x30, 0x60, 0xc0 — wait RAW read = irq_status only; a swap to another field gives 0x30/0x60/0xc0 ≠ 0x18 ✓. FIQ_RAW=0x60; swaps give 0x18/0x30/0xc0 ≠ 0x60 ✓. Enumerated claim holds. 
+
+  But NOTE: 0x60 & 0x30 = 0x20 and... the X4 field-preservation check on the read site: irq_enable==0. Fine.
+
+  Also check: fiq_status=0x60, fiq_enable=0xc0 → FIQ masked 0x40. The P0 check expects 0x40 ✓ (comment "masked 0x40, raw 0x60").
+
+  Now the claim in the diff comment: "0x50 collided: 0x50 & 0x30 == 0x18 & 0x30" — 0x50&0x30 = 0x10, 0x18&0x30=0x10 ✓.
+
+  Guest side premise: "Z9 (IRQ_STATUS and IRQ_RAW_STATUS exchange texts) red on NO only" — consistent with N rows being counts.
+
+  Now, what about the sites-probe NO row hole: `hit = [t for t in ("N1".."N5") if TEXTS[t] in f]`. If arm S's fatals include the five texts but ALSO the same text appears twice (e.g., site 1 announced twice and others once, total 6 lines)? Then order has 6 entries → red. Good. If a text appears once but there are exactly 5 lines in right order — green. What if the emulator prints the warning to stderr AND stdout interleaved, duplicating lines? S["fatals"] construction matters. Need to read the probe.
+
+  What about "N1..N5 counts" being green while the announce fires at the WRONG access but in the right ORDER? Order is per fatal line; access order fixed. If site 2's text fired during site 1's access and site 1's during site 2's, order = N2,N1,... red. OK.
+
+  Another NO hole: `order.append(hit[0] if len(hit)==1 else "?")`. If S["fatals"] is EMPTY and s_alive true: order=[] → `[] == [...]` False → red. But `"?)"`... `",".join(order) or "-"` cosmetic. OK.
+
+  Now the s_alive component: if s_alive is computed correctly. Read the probe.
+
+  Also gate_arm pin: `'^NO .*order=N1,N2,N3,N4,N5 .*ok$'` — the probe prints order=%s with ",".join — matches.
+
+  Also H1: `noprompt=("GXemul>" not in s.buf)` — H1's named diagnostic: 'Sorry, emulation "%s" is unknown'. Does the failure output contain "GXemul>"? The emulator name is gxemul; would an error message contain "GXemul>"? The prompt string "GXemul>" appears only at a real prompt. The unknown-emulation error wouldn't print it. OK. But: H1 also still requires `H1["prompt"] is False` — prompt = s.wait(timeout=120) presumably returns truthy if prompt seen. Wait, in the diff: `prompt = s.wait(timeout=120)` then h1 dict has prompt=prompt AND noprompt. If wait returns False on timeout, prompt=False. noprompt is the tightening (D2: "no prompt ANYWHERE"). Fine.
+
+  H2 in drain probe: "arm D's prologue verified (21 steps...)" vs witness "(18 steps...)" — plausible difference between arms D and A.
+
+  Now Q1 adjudication requires reading the p2 findings files. Let me list that directory and read the two files. They might be large. I'll read them (or the relevant parts).
+
+  Plan of action:
+  1. List `_scratchpad/fbd5/p2/` and read P2_FINDINGS.md + CODEX_DED_TRIAGE.md.
+  2. Read the working-tree files: dev_footbridge.c (the five guards region), diff_footbridge.c (whole file, or at least P/X rows), footbridge_sites_probe.py (arm S + NO + s_alive), fbpending probes' H1/H2 sections, gate_offline.sh + gate_arm.sh footbridge blocks.
+  3. Verify the working tree matches the inlined diff: `cd GXEMUL-SEC && git status && git diff --stat` and diff against HEAD for those files; check HEAD's gate_arm E0-E6 pin (F34 claim).
+  4. Check seed enumeration (done by hand above — holds).
+  5. Maybe build the X4-escape mutant (`&& d->irq_enable` on a write-site guard) in my own temp dir and run the differential to prove it passes. The brief encourages building a single mutant in own temp dir. That would make the Q2 finding measured, not conjectured. But building gxemul takes a while... The differential test — how is it built? Probably compiled as part of the tree or standalone. diff_footbridge.c is in regress/; it likely #includes source files. Let me look at how it's built (maybe regress/Makefile or a script). If it's quick, do it. The operational rule says building and running a single detector or mutant in my own temp dir is fine and encouraged.
+
+  Time budget: this is a deep-review task; the user asked for adversarial review "exactly as its Questions/Review-asks section directs". I'll do the file reading myself (it's the core of the task) and possibly delegate the mutant build to a subagent to save my context. Actually, building may take several minutes; a subagent (coder) could do the build+run and report. But the subagent would need precise instructions. Let me first read the files to confirm the X4 escape, then decide.
+
+  Also verify the actual product guards: read dev_footbridge.c around the five sites to confirm the guard form (`!d->warned_X` etc.), confirm len handling (do guards check len at all? If the decline ignores len, narrow accesses decline — which X1 pins. But does the product handle len for the decline's "returns 0"?), and confirm the five texts (for the substring analysis).
+
+  Also check whether the product's legal narrow READ path returns low lanes (X2 passed on FIX, so yes).
+
+  Let me start with parallel reads. First, the p2 directory listing and key files.
+
+  Files to read (GXEMUL-SEC):
+  - src/devices/dev_footbridge.c — search for "warned_" and read around.
+  - regress/diff_footbridge.c — full (probably ~800 lines).
+  - regress/footbridge_sites_probe.py — the S arm, TEXTS, N rows, NO, s_alive, ROWS= print.
+  - regress/gate_arm.sh footbridge block + gate_offline.sh footbridge block (working tree vs diff).
+  - git log/status for F34 premise.
+
+  And _scratchpad/fbd5/p2/: P2_FINDINGS.md, CODEX_DED_TRIAGE.md.
+
+  Let me fire off initial parallel calls: ls of p2 dir, git status in GXEMUL-SEC, grep for warned_ in dev_footbridge.c.
+
+• I'll work through this as a panel seat: verify premises against the actual tree, then answer Q1–Q4. Starting with the tree state and the five decline sites.CODEX_DED_TRIAGE.md
+P2_FINDINGS.md
+brief_fbd5_p2.md
+brief_fbd5_p2.packet.md
+brief_fbd5_p2.tpl.md
+brief_fbd5_p2_BUILT.md
+brief_fbd5_p2_full.tpl.md
+brief_fbd5_p2_packet.tpl.md
+codex_ded
+codex_p2_check.md
+d_dev_footbridge.c.patch
+d_dev_footbridge_fullfn.patch
+d_diff_footbridge.c.patch
+d_fbpending_drain_probe.py.patch
+d_fbpending_witness.py.patch
+d_footbridge_sites_probe.CODE.patch
+d_footbridge_sites_probe.py.patch
+d_gate_arm.sh.patch
+diff545_6files.patch
+p2_panel_launch.log
+---
+f685d75 records: five "fable5" rulings on record were written by claude-opus-4-8 after a refusal -- corrected in place, first-hand Fable re-rulings filed for #530 and #538
+9c28ca5 #539 receipt: pass-2 receipt for 7836071, gate_arm log and the three-tree propagation clearance filed; n6.commits recorded
+7836071 #539 n6: the footbridge IRQEnable read computed the right value and then ended the process -- the exit is gone, the value stays; the probes' kill control moved to +0x18c and the pending probes reap their child
+ M regress/diff_footbridge.c
+ M regress/fbpending_drain_probe.py
+ M regress/fbpending_witness.py
+ M regress/footbridge_sites_probe.py
+ M regress/gate_arm.sh
+ M regress/gate_offline.sh
+ M regress/gate_sh_rounding.sh
+ M regress/gdrom_default_probe.py
+ M regress/ppc_rldicl_probe.py
+ M regress/sh4_chcr_probe.py
+ M src/cpus/cpu_alpha_palcode.c
+ M src/devices/dev_footbridge.c
+ M src/devices/dev_lca.c
+ M src/devices/dev_pcc2.c
+ M src/devices/dev_sgi_ip32.c
+ M src/devices/dev_sh4.c
+ M src/include/thirdparty/mvme_pcctworeg.h
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/adjudicate.sh
+ M tools/panel.sh
+ M tools/pipeline/check_boilerplate.py
+ M tools/pipeline/check_probe_wiring.py
+ M tools/pipeline/check_score_claims.py
+ M tools/pipeline/fable_queue.md
+ M tools/pipeline/ledger.json
+ M tools/pipeline/matrix.html
+ M tools/precommit_check.sh
+?? _scratchpad/
+
+
+• The grep without a path searched the whole working dir — too broad. The tree under review is `GXEMUL-SEC/`. Let me read the key files there. First, the footbridge device source around the warned_ latches.
+
+• Tree confirmed (HEAD f685d75, #545 working set present). Now reading the five decline sites in the device source.
+
+• The Grep tool searched the whole working directory (I passed no path). Let me be precise now and read the actual GXEMUL-SEC files. I need:
+
+  1. `GXEMUL-SEC/src/devices/dev_footbridge.c` — the five decline sites. Let me grep within that file specifically.The Grep tool is searching the entire working directory despite my intent — I keep forgetting to set `path`. Let me directly read the specific file with the `path` parameter set to the GXEMUL-SEC file.
+
+• The grep needs explicit scoping. Let me read the actual files in the tree under review.
+
+• I have the device source. The five decline sites:
+
+  1. `IRQ_STATUS` (write): `else if (!d->warned_irq_status_w) { latch; fatal(...); }` — text: `"[ WARNING: footbridge write to irq status? (once) ]\n"`.
+  2. `IRQ_RAW_STATUS` (write): text `"[ footbridge write to irq_raw_status (once) ]\n"`.
+  3. `IRQ_ENABLE_CLEAR` (read): `else if (!d->warned_irq_clear_r)` — text `"[ WARNING: footbridge read from ENABLE CLEAR? (once) ]\n"`. Note: on read, odata stays 0 (declined with 0).
+  4. `FIQ_STATUS` (write): text `"[ WARNING: footbridge write to fiq status? (once) ]\n"`.
+  5. `FIQ_RAW_STATUS` (write): text `"[ footbridge write to fiq_raw_status (once) ]\n"`.
+
+  Important observations for the review:
+
+  **Observation A — the guards ignore `len` entirely.** The decline has no width check, so narrow declines work. Good for X1.
+
+  **Observation B — the latch is set BEFORE fatal()** — actually the order: latch set, then fatal. If fatal were a real exit, the latch wouldn't matter... fine, fatal is not exiting anymore? Wait — `fatal()` in the product: does fatal() exit? In gxemul, `fatal()` prints but does NOT exit (exit is separate). Actually in vanilla gxemul, `fatal()` just prints. The old code had `fatal(...); exit(1);` presumably. Here after the fix, only fatal remains. OK.
+
+  **Observation C — CRITICAL for X4 analysis:** In the differential, `fatal` is redefined as a counter. Let me confirm when I read diff_footbridge.c.
+
+  **Observation D — the IRQ_ENABLE_CLEAR read decline:** on a read, `odata` is initialized to 0 at function top; the else-if branch doesn't set odata, so `memory_writemax64(cpu, data, len, odata)` writes 0. So the declined read returns 0. ✓ matches X1's check.
+
+  **Observation E — Q2 candidate confirmed at source level:** The guards are exactly `!d->warned_X`. A mutant adding `&& d->irq_enable` (or `&& d->fiq_enable`, `&& d->irq_status`, `&& d->fiq_status`) to any of the four WRITE-site guards would:
+  - Pass all P-rows (enable=0x30, status=0x18, etc. — all nonzero in the differential seeds).
+  - Pass X4 for write sites — X4 zeroes DATA but only zeroes irq_enable for the READ site (`if (s5[i].wf == MEM_READ) x->irq_enable = 0;`).
+  - Pass the guest rows — the guest never attempts a declined write while enable/status is 0 (arm S has enable=0x30; statuses are 0 in the guest! wait...).
+
+  Hmm wait — in the GUEST, irq_status is 0 throughout arm S (SF1/SF2 pin raw status 0). So a mutant guard `&& d->irq_status` on the IRQ_STATUS write site: in the guest, irq_status == 0, so the decline would NOT announce → N1 count=0 → red. So `&& d->irq_status` is caught by the guest N rows. But `&& d->irq_enable`: in the guest, arm S has irq_enable = 0x30 (S3 pins it). So the announce fires in the guest → N1 green. In the differential X4 write-site instances, irq_enable = 0x30 → announces → green. So `&& d->irq_enable` on a write site passes EVERYTHING. Confirmed as a live escape — this is exactly the author's Q2 candidate 1 ("a latch guard conditioned on a register field NOT seeded nonzero in X4"). Wait, the author said "NOT seeded nonzero in X4" — irq_enable IS seeded nonzero (0x30) for write sites; it's zeroed only for the read site. So the author's candidate 1 is precisely this: conditioned on a field that is never zero in any row that exercises that site. For the write sites, irq_enable is never 0 in any test. And fiq_enable is never 0 anywhere (X4 zeroes only irq_enable, and only for the read site). So the sharpest form: `&& d->fiq_enable` on the FIQ_STATUS or FIQ_RAW_STATUS write guard — fiq_enable is 0xc0 in every differential instance and... wait, in the GUEST, is fiq_enable nonzero? FIQ_ENABLE_SET write — does the guest write it? F27 "arm E's zeros" and "(c) in arm E, irq_status and fiq_enable are both 0 (arm E sets neither)". In arm S — does the guest set fiq_enable? The guest arm S does declines and reads; S-rows read the five readable registers. If the guest never writes FIQ_ENABLE_SET, fiq_enable stays 0 in the guest → a `&& d->fiq_enable` guard would suppress the announce in the guest → N4/N5 red. Need to check the probe. If the guest does set fiq_enable, then `&& d->fiq_enable` passes everything.
+
+  Actually wait — for `&& d->irq_enable` on IRQ write sites: guest arm S has irq_enable=0x30 (S3 pins it). Differential: 0x30. So that escapes regardless of the FIQ question. That's the minimal escape: ONE site, e.g. IRQ_STATUS write guard becomes `!d->warned_irq_status_w && d->irq_enable`. The behavior change: a guest that writes IRQ_STATUS while IRQEnable==0 gets no announce (and no state change — same as fix otherwise). Every shipped row stays green. The row that SHOULD catch it: X4, which claims "zero enable as the first access" but only delivers a zero enable at the +0x18c READ site. This directly answers Q2 and also partially REFUTES the completeness claim of the X4 repair for R1 (`&& irq_enable` was listed as repaired by X4 — but only at the read site!).
+
+  Wait, let me double check R1's text from the brief: "F7/R1 `&& idata`, `&& irq_enable` -> X4 (zero data / zero enable as the first access)". So the disposition claims X4 covers `&& irq_enable`. X4 zeroes irq_enable only when `s5[i].wf == MEM_READ` — i.e., only for the IRQ_ENABLE_CLEAR read site. For the four write sites, X4 uses zero DATA with enable=0x30. A `&& irq_enable` mutant on a WRITE-site latch survives X4. Was the original R1 mutant specifically about the read site? R1 said "`&& idata` on any latch guard (a zero-data first write never announces)" — the codex finding was about write latches (`&& idata`). The `&& irq_enable` variant — F7 — might have been about... the read site (`&& irq_enable` on the read guard makes the declined read silent when enable==0). The repair zeroes enable at the read site — kills F7 there. But the same mutation at a WRITE site is not covered. The brief's disposition "-> X4 (zero data / zero enable as the first access)" overstates: zero enable is tested at ONE of five sites, zero data at four. The combination (zero enable at a write site) is untested. This is a genuine Q1 REFINE/OVERTURN for F7/R1's disposition AND the Q2 smallest-edit answer. 
+
+  Let me also verify X4's field-preservation row can't catch it: mutant doesn't change fields. X1: len 1/2 with data 0x70, enable 0x30 → announce fires. X3: declines fire (enable 0x30). Guest: N rows fire (enable 0x30). ROWS=37 green. gate pins green. CONFIRMED escape (by reading; to be measured if I build it).
+
+  **Observation F — X1 state preservation hole (narrow write stores data):** A mutant where the narrow (len 1/2) decline ALSO writes the register (e.g., guard `len == 4` placed on the STORE... wait, there's no store in the fix — the fix removes the store entirely. The pre-#545 code — what did the write do before? It ended the process (fatal+exit). So there's no store to preserve. A mutant would have to ADD a store: `d->irq_status = idata` inside the decline for len != 4. X1 checks only fatal_calls and (for the read site) the returned value. No field check in X1. So a mutant "declines AND stores at len 1/2" passes X1. Does anything else catch it? P-rows are len 4 (decline, no store — a store at len 4 would red P_STATE_OK). X3 declines are len 4. Guest: widths "NOT rowed here" — but wait, would a guest narrow write even reach the device with len 1? The guest rows use word accesses. So yes: "narrow decline stores" passes everything. Is that a realistic minimal edit? It's one line inside the guard. It violates "no register changes". The row expected to catch it: X1 (if it checked state) — as shipped, X1 names width but not preservation. This is a solid Q3 answer: X1 can pass while "the narrow decline changed no state" is false.
+
+  Hmm, but is "the thing it names" for X1 just "announces once"? X1's name: "len %d as the FIRST access announces once" and "the narrow declined read returns 0". State preservation at narrow widths is arguably X1-adjacent, named in the block comment ("a guard widened to swallow a legal narrow read" is about reads). I'd flag it as Q3/Q4 material: preservation is pinned only at len 4.
+
+  **Observation G — X2 mask vacuity:** all seeds ≤ 0x60 fit in a byte, so `& (w==1 ? 0xff : 0xffff)` never masks anything. The mask looks like it guards against over-wide device writes but is vacuous with these seeds. More importantly: for w=1, want&0xff = want (all wants < 0x100). So X2 at len 1: expects exactly the low byte. If the device returned high lanes shifted down... fine. Vacuous mask is a latent weakness: if someone re-seeds with wider values, X2 silently stops pinning high lanes. Minor; worth one line.
+
+  **Observation H — NO row substring matching:** TEXTS — need to see the actual TEXTS table in the probe. The five fatal texts:
+  - N1: "footbridge write to irq status?" (from "[ WARNING: footbridge write to irq status? (once) ]")
+  - N2: "footbridge write to irq_raw_status" 
+  - N3: "footbridge read from ENABLE CLEAR?"
+  - N4: "footbridge write to fiq status?"
+  - N5: "footbridge write to fiq_raw_status"
+
+  Substring relations: is "footbridge write to irq status?" a substring of any other text? "footbridge write to irq_raw_status" — no, "irq status?" vs "irq_raw_status" differ. "fiq status?" vs "fiq_raw_status" — no. But WAIT: in NO, `hit = [t for t in (...) if TEXTS[t] in f]`. Could TEXTS["N1"] appear in a NON-fatal line? NO iterates S["fatals"] only. Need to see how S["fatals"] is collected. Also whether the TEXTS include the "(once)" — if not, a mutant dropping "(once)" passes N rows? N0 counts "distinct-once" — probably lines containing "(once)". If a mutant dropped " (once)" from one text, N0's distinct count would drop to 4 → red. OK.
+
+  A subtle NO hole: if a fatal line matches TWO texts (len(hit)==2) → "?" → red. Fine. If a fatal line matches ZERO (e.g., an unrelated warning like the footbridge_isa write warning, or timer warnings) → "?" → red. Hmm — could the FIX produce an unrelated fatal in arm S? It passed 37/37, so no.
+
+  **Observation I — s_alive in NO:** need the probe.
+
+  **Observation J — gate_arm distinct-id pins:** `grep -E '^S(C1|A1) .*ok$' | cut -d' ' -f1 | sort -u | wc -l` == 2. Row lines look like "SC1 ..." — cut -d' ' -f1 gives "SC1". OK. But `^N[1-5] .*count=1 .*ok$` for the distinct N pin — note `cut -d' ' -f1` — fine.
+
+  Wait, one potential hole in the NO gate pin: `'^NO .*order=N1,N2,N3,N4,N5 .*ok$'` — the probe prints `order=%s` with `",".join(order) or "-"`. If order list is exact, prints "order=N1,N2,N3,N4,N5 ". The `.*` before `ok$` — fine.
+
+  **Observation K — gate_offline pins 78/38 are plain counts (not distinct-id)** — the F9/F45/F48 lesson applied in gate_arm but not in gate_offline's NEW pins. As analyzed: a product mutant can't duplicate green lines, so this is only a harness-edit hole; but the round's own doctrine rowed exactly this in gate_arm. Inconsistent application. Also: `grep -cE '^  ok    P[0-9] '` — P-row count. But wait, are there P-rows with TWO-digit numbers? "P0".."P9" — the pattern requires `P[0-9] ` with a trailing space — "P10" would not match (it's "P10 " — `P[0-9] ` would match "P1" followed by "0"? No: the regex is literal 'P', one digit, one space. "P10 " has 'P','1','0' — the space test fails at '0'. So P10 wouldn't match. The brief says P0-P9 (10 row families × subrows = 78). OK.
+
+  But hmm — actually there's something else about the gate_offline pins: `grep -cE '^  ok    X[1-5] '` — the X-row names: "X1 write IRQ_STATUS: len 1 as the FIRST access announces once" — starts "X1 ". "X2 legal len 1 read of ..." — "X2 ". "X3 ..." "X4 write IRQ_STATUS: ZERO..." wait — X4 names: `snprintf(xn, ..., "X4 %s: ZERO data/enable as the FIRST access announces once", s5[i].what + 3)` — s5[i].what is "X1 write IRQ_STATUS", +3 skips "X1 " → "write IRQ_STATUS". So X4 rows are "X4 write IRQ_STATUS: ...". OK, all start "X[1-5] ". 
+
+  And the check names in X4's preservation: "X4 %s: ZERO data/enable changes no field" — also X4. Counts: X1: 5 sites × 2 widths = 10 announce rows + 2 read-value rows (w=1,2 for the read site) = 12. X2: 5 regs × 2 widths = 10 + 1 (announce nothing) = 11. X3: 2 rows. X4: 5 sites × 2 = 10. X5: 2. Total 12+11+2+10+2 = 37. Hmm, the pin expects 38. Let me recount. X1: for w in {1,2}, for i in 0..4: one check each = 10; plus for the read site (i where wf==MEM_READ, exactly one site), an extra check per width = 2. Total X1 = 12. X2: for w {1,2} × 5 regs = 10, plus "X2 the legal narrow reads announce nothing" = 11. X3: "X3 the five declines latch (5 announces)" + "X3 legal reads of every sibling re-arm NO latch" + "X3 legal writes and other-register reads re-arm NO latch" = 3! I missed the latch row: `check_u("X3 the five declines latch (5 announces)", fatal_calls, 5);` — that's also named X3. So X3 = 3. Total: 12+11+3+10+2 = 38. ✓ Consistent with the pin and the IDENTITY (78+38 = 116 + others = 149; others = 33 rows from before... 149-116 = 33. ✓ "33 -> 149 (78 P-rows + 38 X-rows)" — the pre-existing 33 + 78 + 38 = 149 ✓ arithmetic consistent).
+
+  **Observation L — the product change's own semantics vs. hardware truth.** The write-decline for IRQ_STATUS etc. — "no register changes" — on real DC21285, writes to read-only registers are presumably ignored. The read of IRQ_ENABLE_CLEAR returns 0 — before #545 it computed... the comment says the value "used to be computed here is 188h's answer". Fine.
+
+  One more product-side thing: the IRQ_ENABLE_SET write path calls INTERRUPT_ASSERT/DEASSERT; XSEED installs noop handlers, and the seeds are written directly so no assert is mixed in — but the X3 widened leg writes IRQ_ENABLE_SET with 0: `d->irq_enable |= 0` → 0x30 unchanged, then `if (d->irq_status & d->irq_enable)` → 0x18 & 0x30 = 0x10 ≠ 0 → INTERRUPT_ASSERT(noop) → irq_asserts++ — but X3 doesn't count asserts in that leg. Fine, noop anyway. But note: X3's widened writes DON'T verify the enable values after the writes! IRQ_ENABLE_SET write 0: |= 0 → 0x30. IRQ_ENABLE_CLEAR write 0: &= ~0 → 0x30. FIQ writes similar. If a mutant's Set write with data 0 cleared the register... X3 wouldn't catch (no state check in that leg), but P8/X5 catch Clear-with-0... X5 checks enable stays 0x30 after a zero Clear (IRQ side). A mutant "Set with 0 clears" — caught by? X5 is only Clear. Hmm: X3 widened writes: after IRQ_ENABLE_SET write of 0, if a mutant did `irq_enable = idata` (store instead of |=): enable becomes 0. Then re-decline... the re-decline announces depend only on latches, not enable. So `|=` → `=` mutant: caught by? X2 reads IRQ_ENABLE_SET expect 0x30 — but X2 runs BEFORE the X3 widened writes on the same instance. Order in the block: X2 reads (10 narrow reads), announce-nothing check, then five len-4 declines (X3 latch row), then re-arm reads, re-declines, check, THEN widened writes (Set/Clear/FIQ Set/FIQ Clear) + other reads, re-declines, check, free. After the widened writes, no enable value check! So a mutant "IRQ_ENABLE_SET stores instead of ORs" — with data 0 — leaves enable 0, passes X3 widened (no re-arm, no announce), passes X5 (Clear-side only)... does any row catch it? P8 in the P block: "a LEGAL EnableClear write still works" — checks enable 0x30 & ~0x10 = 0x20. That's Clear. Is there a Set-row? The guest E2 pins "Set ORs (E2 = P|Q)". E2: Set with P then Q → enable = P|Q — catches store-instead-of-OR? If enable was 0 before (guest E arm: E0 reads reset 0, E1?, E2 = P|Q after two Sets) — store mutant: first Set P → enable P; second Set Q → enable Q ≠ P|Q → E2 red. So `|=`→`=` is caught by guest E2 for IRQ. FIQ side: is there any FIQ enable write row? FIQEnableSet write — guest? X3 widened writes FIQ_ENABLE_SET 0 — a FIQ store mutant: fiq_enable = 0. Then? No FIQ read row of fiq_enable exists (fiq_enable has no readback register! FIQ_ENABLE_SET read — case FIQ_ENABLE_SET: only write branch; read falls to... wait, case FIQ_ENABLE_SET has `if (writeflag == MEM_WRITE) ... break;` — a READ of FIQ_ENABLE_SET hits the case, does nothing, returns odata=0 silently. Hmm interesting — +0x288 read silently returns 0? The brief's fiqenableread facet mentions +0x28c (FIQEnableClear read) declined silently. +0x288 read also silently 0. Anyway — no way to read fiq_enable back. So a mutant "FIQ_ENABLE_SET stores instead of ORs" is observable only through FIQ_STATUS reads (fiq_status & fiq_enable). Differential: X3 widened writes FIQ_ENABLE_SET with 0 on instance x where fiq_enable was 0xc0; mutant makes it 0. Then the re-decline of FIQ sites: announces (latches were set... wait the re-decline after widened writes is the THIRD access per site; latches set in the latch loop; the check is delta==0). Mutant store doesn't touch latches → delta 0 → green. Then free(x). No subsequent FIQ_STATUS read on x. P-rows: do P-rows write FIQ_ENABLE_SET? Not from the diff. So "FIQ Set stores instead of ORs" passes everything? BUT WAIT — is that a pre-existing behavior question rather than a #545 regression? The #545 change didn't touch FIQ_ENABLE_SET. The composite's job is to pin the #545 change; pre-existing FIQ enable semantics are out of scope (and the guest never writes FIQ set... actually the guest might). This is more of a Q4-ish observation: X3's widened writes never verify the written values — the leg pins ONLY "no re-arm, no announce". Since the writes' effects on enable are unreadable (FIQ) or checked elsewhere (IRQ by P8/X5/E-rows), the residual hole is narrow: an enable-corrupting mutant at zero-data writes. Zero-data Set/Clear are no-ops in the fix, so a mutant making them non-noop: Clear with 0 → &= ~0 = unchanged; mutant `&= ~idata` → `&= idata`? with 0 → enable = 0. X5 catches for IRQ Clear (checks 0x30 kept). FIQ Clear with 0 → no check. FIQ Set with 0 → no check. IRQ Set with 0 → check? X3 widened writes IRQ_ENABLE_SET 0 then... no check. But does any later row on x read enable? No. So IRQ Set store-to-0 mutant passes too — BUT the guest E arm writes IRQ_ENABLE_SET with nonzero and reads back (E2), so a store mutant is caught there; a mutant that only corrupts ZERO writes (`if (idata==0) enable=0`) is adversarial-pathological. Fine — I'll note the widened-write leg's lack of value verification as a minor Q3 note, not a headline.
+
+  **Observation M — F34 premise check.** The brief claims HEAD (f685d75) gate_arm.sh lacks the E0-E6 distinct-green-id fix. The diff shows the E0-E6 distinct pin changing from `grep -oE '^E[0-6] ' | sort -u | wc -l` (counts ALL lines, green or not) to `grep -E '^E[0-6] .*ok$' | cut ...`. Let me verify with git: `git show HEAD:regress/gate_arm.sh | grep -n "E\[0-6\]"`. Also verify the whole repair diff matches the working tree: `git diff` for the 6 files vs the inlined diff (md5 da9e8cf1 — of the diff file presumably; there's `_scratchpad/fbd5/p2/diff545_6files.patch` — I can md5 it!). Actually the brief says "(md5 da9e8cf1; ...)" right after "22 hunks" — likely the md5 (truncated) of diff545_6files.patch. Let me check: `md5sum _scratchpad/fbd5/p2/diff545_6files.patch`. And diff the working tree against HEAD to confirm the working tree == HEAD + this diff (for the 6 files; there are other unrelated modifications in the working tree per git status — many other files modified! "the working file also carries an unrelated uncommitted section from another round, which will not be staged" — only gate_arm mentioned, but git status shows MANY modified files: cpu_alpha_palcode.c, dev_lca.c, dev_pcc2.c, etc. Those are "other rounds'" uncommitted work. The brief says the tree under review is HEAD + the #545 working set. The other modified files are noise but shouldn't affect the footbridge review... except gate_sh_rounding.sh, gdrom probes etc. are other gates. Fine.)
+
+  So verify: `cd GXEMUL-SEC && git diff HEAD -- src/devices/dev_footbridge.c regress/diff_footbridge.c regress/footbridge_sites_probe.py regress/fbpending_drain_probe.py regress/fbpending_witness.py regress/gate_offline.sh regress/gate_arm.sh` and compare to the p2 diff file. Let me generate and compare.
+
+  **Observation N — the sites probe NO row and S["fatals"]** — need to read footbridge_sites_probe.py arm S section, TEXTS, and how S["fatals"] is built, s_alive.
+
+  **Observation O — X4 read-site semantics.** For the read site (IRQ_ENABLE_CLEAR read) with irq_enable=0: the decline announces (guard has no enable condition in the fix) → fatal_calls==1 ✓. The preservation check expects irq_enable==0 for the read site — wait, `(x->irq_enable == (s5[i].wf == MEM_READ ? 0u : 0x30u))` — for the read site expects 0 (the value X4 set). ✓. But hmm — X4's zeroing of irq_enable for the read site: does the read site's decline depend on irq_enable in the fix? No. So the zero-enable read-site test kills an `&& irq_enable` mutant THERE (Z2 measured red: "X4 read IRQ_ENAB..."). ✓ consistent with table: Z2 red on X4 read row.
+
+  Now — the Z-mutants in table 3: Z1 red on "X4 write IRQ_STA" — Z1 was `&& idata` at IRQ_STATUS write? And Z1b `&& idata` at FIQ_RAW? Z3 red on "X4 write IRQ_STA" too. Anyway, no Z mutant tested `&& irq_enable` at a write site — the kill table doesn't include it. My Q2 escape is NOT in the measured table. Good — that's the point of Q2 ("Candidates I did NOT build").
+
+  Let me also check: does X4 for the read site also zero DATA? `memory_writemax64(cpu, b, 4, 0)` — b is 8 bytes; writes 4 bytes of 0. For a read, data buffer content is irrelevant... well, the read writes odata=0 into b. Fine.
+
+  **Observation P — `&& idata` at the read site?** For a read, idata is... the device only reads idata `if (writeflag == MEM_WRITE)`. For a read, idata stays 0. A mutant guard `!warned && idata` on the READ site would never fire (idata always 0 on reads) → read decline never announces → X4? X4 read site: fatal_calls expected 1 → would red. But ALSO the guest N3 row reds and the P-row P3 reds. Fine, covered.
+
+  **Observation Q — X3's re-decline check:** `check_u("X3 legal reads of every sibling re-arm NO latch", fatal_calls - f0, 0)`. Between f0 and the check: reads of rd5 at w={1,2,4} then the five len-4 declines. If a legal read re-armed a latch, the re-decline announces → delta > 0 → red. ✓. But note: the re-decline must itself be capable of announcing — latches were set in the latch loop. If a mutant CLEARED all latches during the legal reads (re-arm), all 5 re-announce → delta 5 → red ✓. If a mutant re-arms AND the re-decline doesn't announce because the mutant also broke announcing... that's a compound mutant. Fine.
+
+  Subtle: X3's first check `fatal_calls == 5` after the five len-4 declines — on instance x which ALSO did the X2 reads first (X2 ran on x before the declines). Wait no — re-read the block: `x = calloc; XSEED(x); fatal_calls = 0;` then X2 loop (10 legal narrow reads), check announce nothing, then the five declines, check 5. So if one of the X2 legal reads latched something (a mutant declining a legal read latches its own site?)... covered by "announce nothing" check. ✓.
+
+  **Observation R — the P-rows:** I need to read the full P block in diff_footbridge.c to verify P_STATE_OK usage, P8/P9, assert counting (a0/d0 checked where?), and the "only the first word decline counts asserts" claim (Q2 candidate 2). The diff shows `int a0 = irq_asserts, d0 = irq_deasserts, rv;` inside the 5-site loop and presumably checks after each decline that asserts/deasserts unchanged. But X1's narrow declines and X3's re-declines don't count asserts. So candidate 2 confirmed at diff level; verify in file.
+
+  Also confirm the differential's fatal() is a counter (fatal_calls) and check_u counts rows=149.
+
+  **Observation S — H1/H2 in the pending probes.** Need to read those sections of fbpending_witness.py / fbpending_drain_probe.py: Session class, wait(), close(), the H1/H2 legs, and the "prologue verified" claims (21 steps / 18 steps). Also F41's disclosure "H1/H2 do not reproduce a device-initiated mid-session exit (none remains reachable except the SDRAM pair)" — indeed SDRAM_BA_MASK/OFFSET reads still fatal+exit(1) — confirmed at lines 732-766 of the device. ✓ premise holds.
+
+  **Observation T — `fatal()` semantics in product builds:** In gxemul, fatal() prints to stderr and does NOT exit (exits only when... no, fatal never exits; it's just a louder debug). Actually let me recall misc.h: `fatal(...)` maps to `debug(...)`? In gxemul, fatal() prints and the caller decides to exit. The old code had explicit exit(1) after fatal. So the fix = remove exit(1), add latch. The warns use `fatal(... "(once)")`. In the guest probes, the announce is observed how? Through the emul console output? fatal prints to stderr of the host process — the pty Session captures it? The probes drive `gxemul` via a pty and match texts in the combined output. OK.
+
+  Now, let me also verify the md5 claim: "md5 da9e8cf1" — of the repair diff. `_scratchpad/fbd5/p2/diff545_6files.patch` exists. Check `md5sum`. The md5 is probably truncated to 8 hex chars. Let me compute.
+
+  Also the seeds claim in the diff comment: "0x18/0x30/0x60/0xc0 -- every field-for-field swap in either status expression yields a DIFFERENT value". I verified: IRQ side 0x10 vs swaps {0x20, 0x00, 0x40}; FIQ side 0x40 vs swaps {0x00, 0x20, 0x10}; raw sides 0x18 vs {0x30,0x60,0xc0}, 0x60 vs {0x18,0x30,0xc0}. ✓ All distinct. Also cross-check: is 0x10 distinct from all FIQ-side results {0x40, 0x00, 0x20}? The swap detection is per-expression (P0 checks IRQ read == 0x10 and FIQ read == 0x40 separately), so only within-expression swaps matter. ✓.
+
+  But hold on — one more swap class: swapping the OPERANDS within `irq_status & irq_enable` (i.e., `irq_enable & irq_status`) is invisible — commutative, not detectable by any seed. Not a real defect class. And `&` → `|` mutants: M7/M8 presumably (red on P0/P7/X2). `odata = enable` — G1/G2 red on X2. ✓ table consistent.
+
+  Now let me read diff_footbridge.c fully to verify the P block and X block as shipped (the diff is inlined but I should confirm the working tree matches and see the parts NOT inlined — e.g., the dec[] table, P0-P9 structure, check_u, fatal counter, arm_irqs, noop handlers, and whether the working file differs from the diff).
+
+  Also read the sites probe arm S / NO / TEXTS / s_alive, and the pending probes' H1/H2, gate files. Then the P2_FINDINGS/CODEX_DED_TRIAGE for Q1.
+
+  Let me parallelize reads. diff_footbridge.c might be ~1000+ lines. Let me read it in chunks. First, get file sizes.
+
+• The device side is confirmed — guards are bare `!d->warned_*` with no `len`/data conditioning. Now the detector files and the pass-2 findings record.   929 regress/diff_footbridge.c
+   644 regress/footbridge_sites_probe.py
+   822 regress/fbpending_drain_probe.py
+   742 regress/fbpending_witness.py
+  2327 regress/gate_offline.sh
+  1831 regress/gate_arm.sh
+  7295 total
+600f9c4becff14332f4547c08e1e9223 *../_scratchpad/fbd5/p2/diff545_6files.patch
+  348 ../_scratchpad/fbd5/p2/P2_FINDINGS.md
+   27 ../_scratchpad/fbd5/p2/CODEX_DED_TRIAGE.md
+  375 total
+
+
+error: failed to run prompt: provider.auth_error: 403 You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota
+See log: C:/Users/User00/.kimi-code/logs/kimi-code.log

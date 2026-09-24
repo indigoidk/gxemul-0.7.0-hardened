@@ -1,0 +1,130 @@
+PRETABLE -- fbdeclinefive (#545), written BEFORE table 1 (this file's mtime is the order proof)
+Tree: GXEMUL-SEC at HEAD f685d75 (source identical to 9c28ca5); fix = _scratchpad/fbd5/impl/patch_fbd5.py
+Detector = footbridge_sites_probe.py arm S (guest rows S1-S5, SF1/SF2, N0-N5, controls SC1/SA1) + legs H1/H2 in all
+three launchers + diff_footbridge.c P-rows (P0-P9, 78 rows, IDENTITY 111; seeds irq_status 0x18/enable 0x30,
+fiq_status 0x50/enable 0xc0 so masked != raw -- applied BEFORE this file was finalised, per M8/M11 below) + gate pins.
+DRY RUNS BEFORE TABLE 1 (scratch copies, no tree written): differential on the FIXED device 111 rows PASS; the SAME
+file on the HEAD device dies at P1 (RUN_RC 1, 52 lines) -- the pre-fix red for the offline detector.
+
+== SIBLING PARITY (the arms the diff de-fatalises vs their nearest siblings) ==
+  IRQ_STATUS/IRQ_RAW_STATUS/FIQ_STATUS/FIQ_RAW_STATUS write arms  vs  the READ arms of the same cases: the read arms
+    have a VALUE channel (masked / raw); the write arms after #545 have a DECLINE channel (announce count, state
+    unchanged).  Rows: S1/S2/S4/S5 (value, between declines), N1/N2/N4/N5 (count), SF1/SF2 (final raw), P-rows (seeded).
+  IRQ_ENABLE_CLEAR read arm  vs  IRQ_ENABLE_SET read arm (#539 accepted it, E0-E6): SET returns the value, CLEAR
+    declines with 0 -- asymmetry BY DESIGN (Table 7-10 names no read register at 18Ch); rows N3 (both reads 0, count 1),
+    S3 (enable intact), E5 (the legal Clear write still works), P3/P8.
+  IRQ_ENABLE_CLEAR read  vs  FIQ_ENABLE_CLEAR read (+0x28c): the twin ALREADY declines silently; NOT touched -- no
+    witness (0 before and after), fiqenableread facet (2) carries the Opus dissent verbatim.  OWED SENTENCE, in the
+    probe header: written.
+  IRQSoft/FIQSoft (190h/290h) reach default: and announce every access: fbirqsoftunimpl, not this round.
+
+== CLAIM -> ROW (added comment sentences asserting an observable) ==
+  dev_footbridge.c "the write is declined -- no state changes -- and announced once"  -> N1..N5 (once), S*/SF*/P (state)
+  dev_footbridge.c "the read is declined with 0 -- the IRQEnable value ... is 188h's answer, not 18Ch's" -> N3, P3
+  struct comment "Zeroed by DEVINIT's memset and by the offline differentials' calloc" -> P-rows run on a calloc'd
+    instance and announce exactly 5 (a non-zeroed latch would announce 0)
+  probe header "five different startup refusals ALL exit 1" -> H1 keys on the TEXT (measured pass 1, opus s10)
+  probe header "a child dead BEFORE the prologue ... IDENTICALLY" -> H2 requires prologue values AND exit 0
+  probe header "Widths ... rowed OFFLINE" -> P-rows len 1/2 per site
+
+== GUARD FIELD vs BODY FIELD ==
+  Guard operands (new): warned_irq_status_w, warned_irq_raw_w, warned_irq_clear_r, warned_fiq_status_w,
+    warned_fiq_raw_w -- each written at exactly ONE site (its own decline), read at exactly one site.  grep -c
+    'warned_.*= 1' == 5 after the patch; no other writer.  A guard testing the WRONG field (copy-paste) = mutant M4.
+  Body fields: none (the decline body does nothing but latch + announce); the legal-direction bodies read
+    irq_status/irq_enable/fiq_status/fiq_enable -- pinned by P0/P7 seeded reads and S1-S5.
+  Disagreeing-state row owed: irq_status != 0 with a decline in flight -> P-rows (seeded 0x10), since no guest row
+    can reach it (Q2 f, disclosed for GUEST rows).
+
+== CHANNEL: mutant -> row that reds, and the observable that differs ==
+  M1 keepexit    keep exit(1) at FIQ_RAW_STATUS write     -> arm S HOST-DIED: N0/N1-N5/S*/SF* red (exit 1, missing
+                                                             rows); P5 rows missing (process dies, RUN_RC 1)
+  M2 unlatch     announce on every access at IRQ_STATUS   -> N1 count=2; P1 "#2 announced nothing more" 1 != 0
+  M3 sharelatch  IRQ_STATUS and IRQ_RAW_STATUS share warned_irq_status_w -> N0 distinct-once=4, N2 count=0;
+                                                             P6 fatal_calls 4 != 5, P2 "announced exactly once" 0
+  M4 wrongfield  FIQ_RAW_STATUS tests/sets warned_fiq_status_w (copy-paste) -> same shape as M3 on the FIQ pair:
+                                                             N0=4, N5 count=0; P6 4
+  M5 leak18c     keep odata = d->irq_enable at the 18c read -> N3 r9/r8 = 0x30 not 0; P3 "declined read returns 0" 48
+  M6 store180    the IRQ_STATUS decline stores idata into irq_status -> S1 (0x10&0x30=0x10) / S2 / SF1 = 0x10;
+                                                             P1 "irq_status preserved" 0x70 != 0x10
+  M7 swallow     IRQ_STATUS READ returns constant 0        -> GUEST rows CANNOT see it (disclosed); P0 "IRQ_STATUS read
+                                                             = 0x10" reads 0 -> RED (the reason the P-rows exist)
+  M8 fiqraw      FIQ_STATUS read drops the & (returns fiq_status) -> guest rows blind (fiq_status 0); P0 FIQ_STATUS
+                                                             read = 0x40 vs seeded fiq_status 0x40 -> NOT distinguished
+                                                             (0x40 & 0xc0 == 0x40).  Re-seed: fiq_status 0x50, enable
+                                                             0xc0 -> masked 0x40, raw 0x50 -> RED.  ** SEEDS CHANGED
+                                                             BEFORE TABLE 1: fiq_status = 0x50; irq_status = 0x18,
+                                                             irq_enable = 0x30 -> masked 0x10, raw 0x18. **
+  M9 misname     IRQ_RAW_STATUS announce text says "irq status" -> N2 count=0 (access-local text), N1 count=2;
+                                                             P-rows blind (fatal() counted, not read) -- guest-only
+  M10 latchrd    the 18c read clears warned_irq_clear_r    -> N3 count=2; P3 "#2 announced nothing more" 1
+  M11 lenguard   decline only when len == 4 (byte/half fall through silently) -> P "byte and halfword: still latched"
+                                                             fatal delta 0 either way -> BLIND; state rows: a fallen-
+                                                             through write does nothing -> BLIND.  ** So a len-guarded
+                                                             decline is OBSERVATIONALLY EQUIVALENT to the fix on every
+                                                             channel here (both decline, both change nothing, both
+                                                             announce once via the word access).  Disposition:
+                                                             EQUIVALENT MUTANT, recorded, not a hole -- unless the byte
+                                                             access is the FIRST access to the site: add P9: a fresh
+                                                             instance, byte write FIRST -> announced once. **
+  M12 quitless   (harness) H2 leg without the quit         -> H2: next_rc True, dead False -> RED (legmut)
+  M13 closefirst (harness) teardown before the observation -> H2 must red: with close() first, send("reg") raises on
+                                                             the closed fd -> dead True, next False, exit 0 -> GREEN.
+                                                             ** The sites implementation takes h2 BEFORE the teardown
+                                                             code by construction; this mutant is a REORDER of the
+                                                             probe, i.e. a harness edit; it is the codex Q4 "smallest
+                                                             vacuous change".  Measured as a probe mutant in the
+                                                             clone, not as a product mutant. **
+  M14 h1anyexit  (harness) H1 keyed on exit != 0 only      -> on a correct build stays green; negative control: launch
+                                                             with `-M notanumber` -> exit 1, no prompt, no naming text
+                                                             -> the shipped H1 predicate REDS, the mutant predicate
+                                                             GREENS.  Measured as a harness negative control.
+
+  Rows whose channel cannot vary under any listed mutant: SC1/SA1 (controls, by design), C5.  No vacuous-by-
+  construction row found: every S/N/SF/P row names a mutant above.
+
+== PRESCRIBED ROWS (carried forward; a later row list is DIFFED against this) ==
+  guest: SC1 SA1 S1 S2 S3 S4 S5 SF1 SF2 N0 N1 N2 N3 N4 N5 H1 H2 C5 (+ existing C1-C4 A1 A2 A2b I1 EC1 EA1 E0-E6 D1)
+  offline: P0(5) P1..P5(13/14 each) P6 P7(2) P8(2) + P9 (byte-first fresh instance, from M11)
+  legs in drain/witness: H1 H2 rows replacing K
+  gate: H1 green, H1 text, H2 green, SC1/SA1, N0 exact, N1-5 count=1 (5), N distinct ids (5), S1-5 (5), S3 value,
+        SF1/2 values, C5
+
+== TABLE 1 (09:51, frozen driver run-085140): INSTRUMENT DEFECTS, found by the run, recorded before table 2 ==
+  I1 footbridge_sites_probe.py: the quit-leg arm was bound to the name `Q`, shadowing arm E's constant Q = 0x60000000,
+     so `P | Q` in row E2 raised TypeError after the N rows printed -- every sites run in table 1 lacks its ROWS= and
+     PASS/FAIL lines.  Fix: the arm is `QL`.  (The S/N/H row lines printed before the crash are real but table 1 is
+     NOT the round's table.)
+  I2 fbpending_witness.py: the R0 detail tuple still named the retired `K` -> NameError in main().  Fix: `("H2", H2)`.
+  Both fixed in the patchers (re-applied to fresh scratch copies, compiled, an AST scan finds no `K`/`run_kill` use);
+  the pass-2 diff regenerated (34 hunks, md5 14665812).  Table 2 runs the corrected instrument from a fresh clone; table 1's
+  logs are kept as table1_instrumentdefect/ for the record.
+
+== PASS 2 (Opus measuring seat, 12:0x) -- corrections to this record, made after the fact and marked as such ==
+  M13 closefirst: predicted above as "H2 must red"; MEASURED GREEN (the teardown quits and reaps exit 0; the later reg fails
+    on the closed descriptor with dead set).  The probe header's sentence saying so was a WRONG RECORD (L4) and is corrected.
+  THE CLAUSE-(d) WIDTH CELLS WERE OPEN AT FOUR OF FIVE SITES: P9 pinned byte-first only at IRQ_STATUS, so `len == 4` on any
+    other decline guard escaped every row (A1-A4); a legal read re-arming a latch escaped (B1-B3); a guard widened to swallow
+    a legal narrow read escaped (G1, G2).  L2 floor breach -> repaired in-round with 23 offline X-rows (IDENTITY 111 -> 134),
+    re-measured by the main loop: xtable/XTABLE.log -- FIX 134/134; A1-A4, B1-B3, G1, G2 red; M1-M11 kills intact.
+
+== PASS 2 consolidation (P2_FINDINGS.md), 13:2x -- further corrections to THIS record, appended, never edited in place ==
+  F21 the CHANNEL table's M13 note says "Measured as a probe mutant in the clone"; table 2 did NOT build it.  It was measured
+      first by the Opus pass-2 seat (GREEN) -- see the correction above.
+  F31 "md5 14665812" for the diff was the concatenation BEFORE the per-file relabel; the diff the pass-2 brief inlined is
+      600f9c4b (six files, real paths).
+  F32 "rows whose channel cannot vary: SC1/SA1" is FALSE -- HEAD and M1 turn both red (arm S dies before its registers are read).
+  F33 M6's P-row channel reads "irq_status preserved 0x70 != 0x10"; the preservation pin is the SEED, 0x18 (now 0x18/0x60).
+  F39 M9 reds N1 only because the misnamed text copies IRQ_STATUS's text VERBATIM; a misname to an unrelated text reds N2 and N0.
+  F40 this file was amended after table 1 (the instrument-defect note) and after pass 2 (these notes), so its mtime proves the
+      ORDER only for the text above the first "== TABLE 1" heading.
+
+== 2026-09-23 (Fable 5.1 adjudication, G19) -- appended, never edited in place ==
+  F40 above is ITSELF wrong.  It says this file's mtime "proves the ORDER only for the text above the first TABLE 1
+      heading".  A file's mtime is the time of its LAST write, and this file was amended after table 1 and again after
+      pass 2 -- so its mtime proves the order of NO portion of it, the pre-table text included.
+  AND NO OTHER ARTIFACT PROVES IT EITHER, measured: the earliest surviving copy of the pre-table text is the pass-2
+      brief build, p2_20260919/p2/brief_fbd5_p2_BUILT.md at 2026-09-19 10:28:54 -- AFTER table 1 started (08:51:46,
+      killtable_20260919/table1_instrumentdefect/TABLE1.log).  So "written BEFORE table 1" rests on the author's
+      record alone: UNWITNESSED, not refuted.  The 2026-09-23 repair keeps its pre-table block in a SEPARATE,
+      never-amended file (q2_20260923/PRETABLE_Q2.out) so that its mtime can carry the order.

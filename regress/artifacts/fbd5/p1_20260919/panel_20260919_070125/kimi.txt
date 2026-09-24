@@ -1,0 +1,999 @@
+kimi version 0.36.0
+• Let me carefully work through this. I'm being asked to act as a panel seat reviewing a design brief (PASS 1) for a GXemul footbridge fix. The brief is detailed and explicitly asks me to check premises, not just ratify.
+
+  Key constraints:
+  - Scope reading to `GXEMUL-SEC/src/`, `GXEMUL-SEC/regress/*.py`, and the datasheet at `_scratchpad/dc21285.txt`
+  - Do NOT read `regress/artifacts/`, `tools/pipeline/ledger.json`, CHANGELOG.md, OUTSTANDING_BUGS.md
+  - Do NOT run gates or harness — only read files. Actually "Building and running a single detector or mutant in your own temp directory is fine and encouraged; driving the harness is not." But also I should be careful. Reading is the main thing.
+  - Verdict line first.
+  - Enumerate arithmetic claims.
+  - Answer Q1-Q4.
+  - End with seat record.
+
+  Let me plan what to verify by reading actual files:
+
+  1. The tree under review: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\` — check `devices/dev_footbridge.c` at HEAD 9c28ca5. Verify the inlined function code matches (lines 498-760), the exit(1) sites (565, 574, 606, 615, 624, 714, 739, 843, 879), the struct latch idiom, etc.
+
+  2. Check `_scratchpad/dc21285.txt` for the datasheet quotes (Table 7-10, §7.3.29-33, the CSR access rule at line 1651-1653).
+
+  3. Check `regress/footbridge_sites_probe.py`, and the other probes mentioned (drain, witness — likely `regress/footbridge_drain_probe.py` and `footbridge_witness_probe.py` or similar names). Check the KILL arms, the launchers (Session classes, nested helpers), `send()`/`wait()` helpers, teardown, `gate_arm.sh`, `exit_census.py`.
+
+  4. Check `dev_unreadable.c` for the FAULT option availability; check `memory_rw` exception dispatch for ARM (`cpu_arm.c`, `memory_rw.c`, `memory_rw_v4.c`?), check how other devices decline (grep for "(once)" idiom in src/devices).
+
+  5. Check `gate_arm.sh`, `gate_hygiene.sh` for greps on complaint texts / "ENABLE CLEAR".
+
+  6. Check the stale fork at `_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c` (744 lines) — actually the brief says it's a live hazard (wrong copy), I don't need to read it; but could confirm the fork file is 899 lines.
+
+  Let me enumerate arithmetic claims to check:
+  - File lengths: fork dev_footbridge.c = 899 lines; stale copy = 744 lines.
+  - Line numbers of exit(1): 565, 574, 606, 615, 624, 714, 739, 843, 879 — count: that's 9 lines listed but the brief says "ten live exit(1)". Let me count: 565, 574, 606, 615, 624 (5), 714, 739 (2 = 7), 843, 879 (2 = 9). The brief says ten live `exit(1)` — hmm, maybe there's a tenth elsewhere (e.g. in another function in the file, like DEVINIT... it says "843 and 879 in DEVINIT, construction-time"). Wait: "dev_footbridge.c carries ten live exit(1) at HEAD 9c28ca5 (HEAD lines 565, 574, 606, 615, 624 -- this round; 714, 739 -- the SDRAM pair; 843 and 879 in DEVINIT, construction-time)". 5+2+2 = 9 listed. So either there's a tenth not listed, or the count "ten" is wrong. I should grep the file for exit(1) and enumerate. That's exactly the kind of arithmetic check the brief invites. Also note the brief says "SEVEN guest-reachable sites" — 5 this round + 2 SDRAM = 7. OK.
+
+  - Register offsets: IRQ_STATUS 0x180 = 384 decimal; the kill instruction `ldr r7,[r0,#396]` → 396 = 0x18c = IRQ_ENABLE_CLEAR. Check: 0x18c = 396. Yes. Encoding 0xE590718C: LDR r7, [r0, #0x18c] — opcode decode: E590 indicates LDR immediate offset, cond=E, 1001 1001 0000 0111 0001 1000 1100 → P=1,U=1,B=0,W=0,L=1, Rn=0, Rd=7, offset 0x18c. Correct.
+
+  - Timer fold: `relative_addr >= TIMER_1_LOAD && relative_addr <= TIMER_4_CLEAR`, mask `&= ~0x060`. TIMER_1_LOAD in dc21285reg.h probably 0x300; TIMER_4_CLEAR maybe 0x36c. The fold comment mentions 0x30C/0x32C/0x34C/0x36C. Timer regs every 0x20. TIMER_1_LOAD 0x300, VALUE 0x304, CONTROL 0x308, CLEAR 0x30C. OK.
+
+  - Interrupt register addresses: IRQ_STATUS 0x180, IRQ_RAW_STATUS 0x184, IRQ_ENABLE 0x188 (named IRQ_ENABLE_SET in code?), IRQ_ENABLE_CLEAR 0x18c, IRQ_SOFT 0x190, FIQ_STATUS 0x280, FIQ_RAW_STATUS 0x284, FIQ_ENABLE_SET 0x288, FIQ_ENABLE_CLEAR 0x28c. Note the switch has FIQ_ENABLE_SET (write |=) and FIQ_ENABLE_CLEAR (write &= ~), but what does a READ of 0x288 or 0x28c do? In the code, FIQ_ENABLE_SET case: `if (writeflag == MEM_WRITE) ...; break;` — a read returns odata = 0 silently. Interesting asymmetry with IRQ_ENABLE_SET which returns d->irq_enable on read (datasheet says 188h read = IRQEnable — documented). For FIQ at 0x288, Table 7-10 shows 288h FIQEnable read / FIQEnableSet write — documented read! But the code's FIQ_ENABLE_SET case on read returns 0, not d->fiq_enable. Hmm — is that in scope? The brief says the seven guest-reachable exits are the five + SDRAM pair. A read of 0x288 doesn't exit; it silently returns 0 instead of fiq_enable. That's a value defect, not a process kill — out of scope for this round but worth flagging as "something ELSE I found while verifying" if the datasheet indeed documents 288h read = FIQEnable. The inlined Table 7-10 shows `288h FIQEnable FIQEnableSet` — yes, read documented. So `case FIQ_ENABLE_SET` on MEM_READ returns odata=0 (initial value) rather than d->fiq_enable. Compare IRQ_ENABLE_SET which returns d->irq_enable. That's an asymmetry worth naming. But careful: the #539 change for IRQ_ENABLE_SET added the read; FIQ side was left. This is a genuine find — a value bug, not a termination. It doesn't red this round's rows but is a sibling inconsistency. Name it.
+
+  - Also check: does a WRITE to 0x188 (IRQ_ENABLE_SET) exist? Yes, |= idata. Write to IRQ_SOFT 0x190? Not in the switch — falls to default, which prints and... for write, prints `[ footbridge: write to 0x%x: 0x%llx ]` and returns 1 (no exit). OK.
+
+  - IRQ_SOFT (0x190) — write-only per datasheet; the model doesn't implement it (default arm prints). Not this round.
+
+  - `fatal()` behavior: does fatal() exit? In GXemul, fatal() prints and depending on `exit_on_fatal_error`... Actually in gxemul, `fatal()` does NOT exit by default? Let me recall: gxemul's misc.c `fatal()` prints message; there's `exit_on_fatal_error` flag (controlled by -x? no...). Actually in gxemul, fatal() prints "[ ... ]" and if `exit_on_fatal_error` is set, exits. Hmm. In upstream gxemul, `fatal()` prints and continues unless `exit_on_fatal_error` (set by `-e`? no, `-q` quiet, `-x` ...). Let me check: In gxemul src/misc.cc (new) or src/misc.c (old): `void fatal(char *fmt, ...)` prints; `if (exit_on_fatal_error) exit(1);`. And `-x` enables exit_on_fatal_error? I recall `-x` is "exit on fatal errors"? Hmm, in gxemul man page: `-x` : "exit on fatal errors instead of entering the debugger". Actually in 0.4.x, `exit_on_fatal_error` is default... I need to check the actual fork code. The brief's house idiom says "fatal() cannot be silenced by -q". The default arm uses fatal() on every read — if fatal exited by default, the default arm would kill the process, contradicting the brief ("no exit"). So in this fork, fatal() prints and continues unless exit_on_fatal_error. I should verify by reading src/misc.c (or wherever fatal is) — grep for `exit_on_fatal_error`.
+
+  Also for K2 leg: "the next ordinary interaction fails with `dead` BEFORE cleanup" — need to look at the probes' Session classes to see how they detect dead child (e.g., send() checks process aliveness). The brief names: sites probe's nested helpers; drain's and witness's `Session` classes. Files likely: `regress/footbridge_sites_probe.py`, `footbridge_drain_probe.py`, `footbridge_witness_probe.py`? Let me glob regress/*.py.
+
+  Also `gate_arm.sh`, `exit_census.py` — exit_census.py is in regress/ probably. The brief says "What exit_census.py will count" — so I should enumerate exit(1) in dev_footbridge.c and compare with the claimed lines.
+
+  Also check DEVINIT at 843/879 — construction-time exits (probably failed interrupt pin registration or malloc failure). The function DEVICE_ACCESS ends at 760 per the inline; DEVINIT below.
+
+  Also Q1(a): "Is FAULT even available on ARM for this machine (grep the fork: dev_unreadable, memory_rw exception dispatch for ARM)?" — In gxemul, ARM data abort dispatch: memory_rw calls device access; on failure (return 0?), ARM would need an abort. Check dev_unreadable.c: DEVICE_ACCESS(unreadable) returns... In upstream gxemul, dev_unreadable returns 0 with a debug message? Actually upstream gxemul has devices/dev_unreadable.c which just warns. Also "return 0" from a device access handler — what does memory_rw do? For ARM, `cpu_arm.c` might call `arm_exception` on memory access failure? Let me grep. In gxemul 0.4.x, device access functions return 1 on success, 0 on failure; memory_rw returns the value; for ARM, if memory access fails... hmm, actually I recall ARM load/store in gxemul calls memory_rw and on failure does nothing special (no data abort emulation for most). There's `cpu->cd.arm.` something. Need to check the fork's `memory_rw.c` and `cpu_arm_instr.c` for what happens when memory_rw returns 0 (e.g., `if (!memory_rw(...)) { ... }`). In gxemul ARM, `arm_instr_load_reg` etc. call `memory_rw(cpu, cpu->mem, addr, ...)`; on failure they may print "memory_rw failed" or return. Let me actually grep.
+
+  Let me also check the FIQ_ENABLE read asymmetry and IRQ_SOFT.
+
+  Also Q1(b): latch idiom — grep dev_footbridge.c and other devices for "once" latches, e.g. `warned`, `reported`, `(once)`. The brief claims "(once) being the majority spelling" censused 2026-09-17. Check struct footbridge_data fields — does it have any latch int already? Check other devices for patterns like `int X_printed;`. E.g. dev_ns16550? dev_gt? Let me grep for "(once)" in GXEMUL-SEC/src.
+
+  Q1(e): grep regress/ and harness for the complaint texts: "ENABLE CLEAR", "irq status", "irq_raw_status", "fiq status", "fiq_raw_status", "ENABLE CLEAR" — sites probe line 402 uses "ENABLE CLEAR". gate_hygiene.sh boot-log rules? That's in harness/ at project root, not GXEMUL-SEC — wait, the harness/ directory at root is a different thing (the GXEMUL-SEC has its own battery/ and regress/). Scope says GXEMUL-SEC/regress/*.py. gate_arm.sh is probably in GXEMUL-SEC/regress/ or GXEMUL-SEC/battery/. Let me glob.
+
+  Q2 weakenings: reason about which detector row catches each. Mostly answerable from the inlined rows, but I should map carefully:
+
+  (a) decline keeping exit(1) at one site → that site's D row dies at first access → red. E.g., site +0x180: D1 two writes — first write exits → exit 1 with complaint → row red. Also witness rung red post-fix. So caught.
+
+  (b) unlatched announce → each D row counts text across two accesses: count 2 vs required 1 → red.
+
+  (c) shared latch bit between two sites → the second site's D row gets 0 announces → red (count 0 = silent decline detected). Wait — sharing a bit between two sites: first site announces, second suppressed. The second site's own D row does two accesses and expects exactly 1; gets 0 → red. Caught.
+
+  (d) +0x18c decline keeping odata = d->irq_enable → D3 requires reads return 0,0 with enable 0x30; returning 0x30 → red. Caught.
+
+  (e) write decline storing into irq_status → D1 catches: "raw/status 0x10" — write 0x10 to +0x180, then raw status read shows 0x10. Which row: D1 says "catches a store into irq_status: raw/status 0x10". Yes red. Note: storing into irq_status via a write to IRQ_STATUS would show up in IRQ_RAW_STATUS read (0x184 returns d->irq_status). So D1 must include a subsequent raw read. OK.
+
+  (f) decline swallowing the legal direction (IRQ_STATUS read returns 0 always) → A1: IRQ_STATUS read with enable 0x30 and presumably irq_status set to something nonzero (e.g., set bits 0x30 active+enabled) → expected nonzero; returning 0 → red. Wait, A1 says "IRQ_STATUS read +0x180 -> 0 with enable 0x30 (accept side; catches masked-AND -> OR: 0x30)". Hmm — "-> 0 with enable 0x30" means expected value is 0? That suggests irq_status is 0 at that point (no interrupts pending), so IRQ_STATUS = status & enable = 0. "catches masked-AND -> OR: 0x30" — if the implementation did `irq_status | irq_enable` instead of AND, with enable 0x30 the read would give 0x30 instead of 0. So A1 expects 0. Then weakening (f) "IRQ_STATUS READ returns 0 always" would PASS A1 (expected 0) and... nothing else tests IRQ_STATUS read with pending bits? Hmm. If A1 only tests with status=0, then a mutant that always returns 0 for IRQ_STATUS reads stays green! Unless the prologue raises an interrupt. Wait — but the row says "accept side" — it's checking the legal direction still works. With enable 0x30 and status 0, AND gives 0 — the same as always-0. So (f) escapes detection via A1/D1?! Unless the probe first asserts an interrupt line to set status. The prologue per K2 verifies "RAM 0x11223344, VENDOR 0x1011, the timer-mask value". Timer... A2 is TIMER_1_LOAD masked — that's from premises (A2 TIMER_1_LOAD masked to 24 bits). For the new rows: A1 "IRQ_STATUS read +0x180 -> 0 with enable 0x30". So the probe sets irq_enable to 0x30 (via IRQ_ENABLE_SET write), and reads IRQ_STATUS expecting 0 (since no interrupt asserted). A mutant "read of IRQ_STATUS always returns 0" passes A1. Does any other row read IRQ_STATUS with a nonzero pending? Not among the listed rows. Hmm — but the witness: no. So weakening (f) ESCAPES — that's an answer for Q2: (f) escapes unless A1 asserts an interrupt source first. Actually wait — can the probe assert an interrupt? Via IRQ_SOFT (0x190, write-only, sets software interrupt) — but the model doesn't implement IRQ_SOFT (falls to default arm, prints, no state change). So the probe CANNOT set irq_status nonzero through the model at all! irq_status is only set by... let me think — d->irq_status is modified by device code on interrupt asserts (footbridge interrupt lines?). Actually in gxemul, d->irq and d->irq_status: INTERRUPT_ASSERT(d->irq) signals to the CPU; d->irq_status is set where? Probably in a "footbridge interrupt" handler when devices assert lines — grep needed. Timer interrupts: pending_timer_interrupts and d->timer_irq[]. Hmm, in this fork, d->irq_status might be updated by an interrupt handler registered via INTERRUPT_CONNECT with a handler that sets irq_status bits. DEVINIT lines ~843/879 exits might be failed registrations. So the guest could make irq_status nonzero by enabling a timer with load 0 → immediate interrupt → handler sets irq_status bit? Possibly. But the listed A rows don't do that. So (f) escapes as specified — honest answer: (f) is not caught by any listed row; A1's expected value 0 coincides with the always-0 mutant. Actually hold on, re-read A1: "IRQ_STATUS read +0x180 -> 0 with enable 0x30 (accept side; catches masked-AND -> OR: 0x30)". So yes, expected 0. An always-0 read passes. So (f) escapes. But is (f) plausible as a mutant? It's in the candidate list, so the panel wants to know which row reds first or escapes. I'll answer: (f) escapes the listed rows — the only way to red it is an accept row with a live status bit, which the probe cannot create through the model (IRQ_SOFT unimplemented — default arm just prints; no guest path sets irq_status... wait, timer interrupts set irq_status? Need to check what updates d->irq_status. Let me grep in the file for irq_status writes.)
+
+  Let me now also consider (g) announce text misnames the register: D rows count the announce text — if they match on the exact string, a misnamed text → count 0 → red. If they match on e.g. "footbridge" substring, escapes. Depends on implementation. K4's rows: "the announce ONCE" is "a COUNT of the announce text across two accesses". If the count is of the exact K4 text, misnaming → 0 → red. If the probe greps loosely (e.g., "irq status"), a rename to the wrong register still matches? "misnames the register" — e.g. says "fiq status" for IRQ_STATUS. If probe counts exact strings, red. I'll note dependence on the probe's match string — the probe should match the exact text; if it matches a looser pattern like `WARNING` or `(once)`, (g) escapes. Given the K rows grep "ENABLE CLEAR" (substring of the message), the D rows likely grep substrings too — a misnamed register might still contain the expected substring? The expected text for D1 is `[ WARNING: footbridge write to irq status? (once) ]` — a mutant printing `[ WARNING: footbridge write to fiq status? (once) ]` at the IRQ site would produce a count of the expected string = 0 → red if exact match. But if the mutant renames to something containing the same substring... unlikely. Answer: reds as long as the D rows match the site-specific text (they must; else (g) escapes). Fine.
+
+  (h) K1 startup leg passing on ANY nonzero exit: K1 launches with unused -E name, expects exit 1 with diagnostic naming the input. If it passed on any nonzero, a crash (exit 2 / SIGSEGV → e.g. 139) would pass — weakening escapes/hollow. The row requiring WEXITSTATUS==1 AND diagnostic naming the input catches it; if K1 only checks nonzero, it can't distinguish "usage error" from "segfault" — the leg still proves "unknown emulation is rejected" weakly. Name: K1 pinned by exit==1 + diagnostic text.
+
+  (i) K2 quit leg passing when child died before prologue completed: the leg requires prologue verified complete by fresh reg reads BEFORE quit; if the check is just "child dead after quit" then a death during prologue passes — the witness's own rows... The prologue-verified requirement is what catches it. If dropped, K2 proves nothing about survival.
+
+  (j) latch cleared by a read: D rows do two accesses of the same undefined direction... wait D1: two writes of 0x10 to +0x180 — both writes; a read-clearing latch isn't exercised by two writes. Hmm — "the latch cleared by a read": mutant where reading (any legal read?) clears the latch, so a later write re-announces. D1 does write, write → announce count 2 vs 1 if the latch doesn't stick? No: a read-clear mutant with two writes: first write announces (latch set), second write suppressed (latch still set, no read between) → count 1 → passes! Unless the D row interleaves a read between the two writes. D1 as described: "two writes of 0x10 to +0x180: state unchanged, the announce ONCE". If between the writes the probe reads something (e.g., to check state unchanged — raw/status read!), then a read-clear latch would re-arm → second write announces → count 2 → red. Does D1 check state between writes? "state unchanged" requires reading state — after two writes, or between? If state is checked after both writes, the read-clear mutant escapes (count 1). If the probe reads state after the first write (to verify unchanged) then the second write re-announces → count 2 → red. So (j) is caught iff D1/D3 interleave the state check between the two accesses. D3: "two reads of +0x18c with enable 0x30 -> 0, 0; enables unchanged; announce once" — two reads; a read-clear latch → first read announces, clears?? wait mutant is latch cleared BY a read — but D3's accesses ARE reads of the declining site itself. Hmm, the decline is on reads of +0x18c: first read announces (latch set), then... the same read clears the latch? A read of the same site: order matters — announce then clear → second read announces again → count 2 → red. So D3 catches read-clear trivially since its accesses are reads. For write sites (D1/D2/D4/D5), a read-clear latch escapes unless the state check is interleaved. Good nuance — I should flag: D3 catches (j); D1/D2/D4/D5 catch it only if the "state unchanged" read happens between the two writes. Recommend interleaving.
+
+  (k) harness legs in one launcher only → the other two probes keep... the kill bridge is retired; if legs land only in the sites probe, drain/witness have no death detection → their K arms removed? The brief says K arms are REPLACED in all three; if done in one only, the other two regress to unguarded (or still reference the retired kill arm — KILL_LOAD constant deleted?). gate_arm.sh's two checks pin the legs per probe — if gate checks all three launchers for the legs, caught; the row that stays green is the one launcher with legs. Answer for Q4.
+
+  Q4: smallest edit to the LEGS that leaves them green while proving nothing: e.g., K2 implemented as "after quit, reap and check exit status" without ever testing an interaction on a live session — i.e., quit the session and assert dead; any normal session is dead after quit, so the leg passes vacuously. The "death-after-execution" leg must (1) verify prologue live, (2) quit, (3) attempt ANOTHER interaction expecting `dead`. The hollow version: skip step 3 (or make step 3 a try/except-pass), or K1 that launches a KNOWN-good -E and checks it exits 1 for some other reason... Actually simplest hollow edit: K2's post-quit "fails with dead" implemented by checking the reaped exit status is 0 — which is true for every clean quit, proving nothing about death detection; or K1 checking only "nonzero exit" (h). Name the row expected to stay green: the pin in gate_arm.sh that greps for the leg's presence (textual pin) would stay green while the leg is vacuous. Or: the witness rung can't distinguish. Hmm. Let me think about what's checkable: gate pins "count + value pins for the new rows". A hollow K2 (quit then assert exit 0) stays green everywhere because every healthy session also quits with 0 — it never discriminates. The discriminative power of K2 is: AFTER a real guest-triggered death (should one occur), the harness flags it. A hollow K2 would miss regressions. Which existing row would catch a real death if K2 were hollow? The D rows' "survive with exit 0" — the sites probe itself checks exit status and continuation. So a real kill at a site reds the D row regardless of K2. K2's unique value is catching deaths NOT at the five sites — e.g., a death during/after the prologue from some other change. Hmm.
+
+  Q3: option-set completeness: members: DELETE / DECLINE / DECLINE+LATCHED / ACCEPT / FAULT / BACKED ACCEPT / IMPLEMENT. For write-only read (+0x18c): BACKED ACCEPT (return the write-only register's last-written value — like a write-back cache) is an option some emulators use; the datasheet's "nonexistent CSR reads zeros" supports returning 0 (DECLINE), so BACKED ACCEPT would need storage; not warranted. IMPLEMENT: for IRQ_STATUS write — hardware: writing to a read-only register has no effect (decline) — IMPLEMENT has no meaning. FAULT: does ARM gxemul support data abort injection from a device? Check memory_rw return semantics and ARM abort dispatch. In gxemul 0.4.x/0.6.x ARM, memory_rw on failed device access returns 0, and the instruction code... I believe gxemul ARM does not deliver data aborts from device declines (dev_unreadable just warns and returns 1 with garbage?). Let me actually check the fork. dev_unreadable.c in gxemul: DEVICE_ACCESS(unreadable) { fatal("[ unreadable ... ]"); return 1? } Actually I recall it does `fatal()` and returns 1 with odata=0. Hmm no wait — gxemul has "dev_unreadable" that on read... Let me just read the file.
+
+  Also need to check: does memory_rw for ARM have any exception path? In cpu_arm_instr.c / cpu_arm.c, there's `arm_exception` maybe for undefined instructions. Data abort: `ARM_EXCEPTION_DABT`? grep.
+
+  Also Q1(d): enumerate every exit( in DEVICE_ACCESS(footbridge) after this round: SDRAM pair (714, 739) remain — guest reads of +0x100/+0x104 reach them (guest-reachable!). So the statement "no footbridge access these probes make ends the process" — TRUE only if the probes never read +0x100/+0x104. The statement in the brief is actually "After this round NO footbridge access reachable by these probes ends the process except the SDRAM pair" (§4). Q1(d) asks "is the statement 'no footbridge access these probes make ends the process' TRUE?" — answer: FALSE as stated, because reads of SDRAM_BA_MASK/OFFSET (+0x100/+0x104) still exit(1) and are guest-reachable; TRUE only if these probes never touch +0x100/+0x104 (which is the case — the SDRAM rows A6/A7/D6/D7 are a separate round's, and the current probes' kill arms use +0x18c; need to confirm no probe reads 0x100/0x104). Enumerate exits in the FUNCTION: 714, 739 (guest reads of SDRAM regs). DEVINIT exits (843, 879) are not in the function and not guest-reachable (construction-time: failed malloc/interrupt registration). After this round, within DEVICE_ACCESS: exactly 2 exits, both on reads of +0x100/+0x104. So the truth of the statement depends on probe address sets — verify by grepping the probes for 0x100/0x104/256/260.
+
+  Also Q1(a) sub-question: "Is FAULT even available on ARM for this machine?" — grep for data abort. Let me plan the greps.
+
+  Q1(b): bit-field vs five ints — check struct footbridge_data (in dev_footbridge.c presumably) for existing latch-style fields; grep other devices for "(once)" latches. The brief says K4 proposed one uint32_t warned_access. File's existing idiom: check struct fields — probably plain ints (int irq_enable etc.). Collision hazard: a bit-field is fine since only this function writes it. Which matches idiom: five ints is the file's style (struct of plain fields). But the census says per-instance latch field is the house idiom; form (int vs bitfield) — check e.g. dev_footbridge.c struct.
+
+  Also the DEVINIT memset: "cleared by DEVINIT's memset" — check that DEVINIT memsets the struct (so any added field is zeroed). Verify.
+
+  Also arithmetic: `ldr r7,[r0,#396]` → 0x18c ✓ (396=0x18C). KILL_LOAD tuples at various offsets (0x2c, 0x48, 0x5c) — those are instruction placement offsets in the payload, fine.
+
+  E590718C decode: LDR r7, [r0, #0x18c] ✓ ( Rd=7, Rn=0, imm=0x18C, L=1, U=1, I=0, P=1).
+
+  Check the datasheet table line numbers quoted (6820-6947, 1651-1653) in `_scratchpad/dc21285.txt`. Wait — scope says "GXEMUL-SEC/src/, GXEMUL-SEC/regress/*.py and the named datasheet". The datasheet is `_scratchpad/dc21285.txt` — at project root presumably. Reading it is allowed ("the named datasheet"). Good.
+
+  Also verify "the fork's file is 899 lines" — wc -l GXEMUL-SEC/src/devices/dev_footbridge.c. And HEAD 9c28ca5 — check git log in GXEMUL-SEC (it has .git). But careful: don't run git mutations; git log read-only is fine. Actually is HEAD check needed? The brief says tree at HEAD 9c28ca5. A quick `git -C GXEMUL-SEC rev-parse --short HEAD` confirms. That's read-only, fine.
+
+  Also check the probes: `regress/footbridge_sites_probe.py` and find drain/witness probes: glob GXEMUL-SEC/regress/*.py. Also gate_arm.sh — is it in GXEMUL-SEC/regress/? Glob for it. exit_census.py likewise.
+
+  Also the premise: "default arm prints [ footbridge: read from 0x%x ] on every read" — fatal() is used there. If fatal() exits when exit_on_fatal_error... In gxemul, there's a global `exit_on_fatal_error` set by `-x`? and fatal() prints to stderr regardless of -q (quiet only affects debug()). Verify in src/misc.c (or wherever). If the probes run WITHOUT -x, fatal doesn't exit — matches brief. But do the probes pass -x? If they did, the default arm would kill — but the brief says default arm is "no exit" — consistent only if probes don't use -x. Check a probe's launch args.
+
+  Also: "fatal() cannot be silenced by -q" — check misc.c: quiet_mode affects debug() only. Verify.
+
+  Also the announce idiom census "(once)" — grep GXEMUL-SEC/src for "(once)".
+
+  Also for Q1(c): quote the send()/wait() helpers. Read the three probes' Session classes / nested helpers. Sites probe has "nested helpers" (run_arm function with internal send/wait?). Drain and witness have Session classes. Need actual file names — glob regress/*.py.
+
+  Plan of tool calls (parallelizable reads):
+  1. Bash: `cd GXEMUL-SEC && git rev-parse --short HEAD && wc -l src/devices/dev_footbridge.c` (also wc the stale fork copy for the hazard line-count claim: `wc -l _scratchpad/r6pass2_fb/src/devices/dev_footbridge.c` — from project root).
+  2. Glob: `GXEMUL-SEC/regress/*.py`.
+  3. Grep exit(1) in dev_footbridge.c with line numbers: pattern `exit\(1\)` path GXEMUL-SEC/src/devices/dev_footbridge.c, content mode.
+  4. Read dev_footbridge.c fully (899 lines — fits in one Read of 1000 lines).
+  5. Grep datasheet: read `_scratchpad/dc21285.txt` lines around 1651, 6820-6947. Two Reads with offsets.
+  6. Grep for "once" in GXEMUL-SEC/src (files_with_matches + content).
+  7. Grep for exit_on_fatal_error in GXEMUL-SEC/src.
+  8. Glob for gate_arm.sh and exit_census.py in GXEMUL-SEC.
+  9. Grep probes for 0x100/0x104 addresses.
+  10. dev_unreadable.c read; grep memory_rw.c / cpu_arm*.c for abort/exception dispatch.
+
+  Given the volume, maybe delegate? The instructions say delegation keeps context lean, but this task is a review where I need the details myself to write the verdict. I'll do the reads directly but in parallel batches. It's a lot but manageable — dev_footbridge.c 899 lines, three probes (probably 300-500 lines each), misc.c greps. I'll read selectively: the probes I need mostly the launcher/teardown/K-arm parts — but files are unknown sizes; read them fully if <1000 lines.
+
+  Let me start.
+
+  Batch 1 (parallel):
+  - Bash: `cd GXEMUL-SEC && git rev-parse --short HEAD && git status --porcelain | head; wc -l src/devices/dev_footbridge.c; wc -l ../_scratchpad/r6pass2_fb/src/devices/dev_footbridge.c 2>/dev/null` — careful with cwd: run in project root, use paths. Bash tool cwd param default is session dir (project root). Use `git -C GXEMUL-SEC rev-parse --short HEAD`.
+  - Glob `GXEMUL-SEC/regress/*.py`.
+  - Glob `GXEMUL-SEC/**/gate_arm.sh` and `GXEMUL-SEC/**/exit_census.py` — Glob pattern: `GXEMUL-SEC/**/{gate_arm.sh,exit_census.py}`? Brace expansion supported. Or two globs.
+  - Grep `exit\(1\)` in the device file.
+  - Read datasheet lines 1640-1660 and 6815-6950.
+
+  Then batch 2: read dev_footbridge.c fully; read probes; greps for once/exit_on_fatal_error; dev_unreadable; ARM abort.
+
+  Let me write the first batch. Note: Glob pattern paths — pattern relative to cwd; use `GXEMUL-SEC/regress/*.py`.
+
+  For the datasheet, the file is `_scratchpad/dc21285.txt` — from project root. Line offsets: 1651±: line_offset 1645, n_lines 15. And 6820-6947: line_offset 6818, n_lines 135.
+
+  Also enumerate `exit(1)` count claim: "ten live exit(1)" vs listed nine lines — the grep will settle it.
+
+  Then dev_footbridge.c read (899 lines OK).
+
+  Probes: names unknown; after glob, read the relevant ones: footbridge_sites_probe.py for sure; the drain and witness probes (names like footbridge_drain_probe.py / footbridge_witness_probe.py?). Also gate_arm.sh (in GXEMUL-SEC? brief says gate_arm.sh's footbridge section — likely GXEMUL-SEC/regress/gate_arm.sh or battery/). And exit_census.py.
+
+  Let me fire batch 1 now. I'll keep narration short.
+
+• I'll verify the premises against the actual tree before ruling. Starting with the file census, exit enumeration, and datasheet quotes.f685d75
+899 GXEMUL-SEC/src/devices/dev_footbridge.c
+744 _scratchpad/r6pass2_fb/src/devices/dev_footbridge.c
+
+
+• Findings so far:
+
+  1. HEAD is `f685d75`, NOT `9c28ca5` as the brief states! That's a major premise discrepancy — "THE TREE UNDER REVIEW IS ... at HEAD 9c28ca5 (#539 shipped)". The actual HEAD is f685d75. But wait — the file is 899 lines and the exit(1) lines match exactly (565, 574, 606, 615, 624, 714, 739, 843, 879). And the code inline matches. So maybe the tree content matches the brief but the HEAD hash differs (maybe there are new commits, or the hash was wrong). I need to check git log to see if 9c28ca5 exists and whether f685d75 is a descendant. Also the brief says "ten live exit(1)" but the grep shows NINE live exit(1) statements (565, 574, 606, 615, 624, 714, 739, 843, 879) plus mentions in comments (244, 449, 590, 665). So the count claim "ten live" is WRONG — there are nine. The enumerated list is right (9 lines), the count word "ten" is wrong. Exactly the kind of arithmetic check requested. Unless exit_census.py counts something else — maybe it counts a tenth elsewhere (e.g. in another file? No — "dev_footbridge.c carries ten live exit(1)"). Grep says 9. Let me double check with a broader pattern (maybe `exit (1)` with space, or `exit(EXIT_FAILURE)`). I'll grep `exit\(` in the file.
+
+  2. The datasheet file isn't UTF-8. I'll use Bash sed to extract lines (allowed — Read can't handle it; Bash sed for reading a known file is discouraged but Read failed, so Bash with sed -n is the fallback; the guidance says prefer Read but it errored). Use `sed -n '1645,1660p'` and `'6818,6953p'`. Encoding might be latin-1; fine for grep/sed.
+
+  3. Probes: the three probes are likely `footbridge_sites_probe.py`, `fbpending_drain_probe.py`, `fbpending_witness.py`. gate_arm.sh is at GXEMUL-SEC/regress/gate_arm.sh. Need exit_census.py — glob for it.
+
+  Next batch:
+  - git log to locate 9c28ca5: `git -C GXEMUL-SEC log --oneline -8` and `git -C GXEMUL-SEC merge-base --is-ancestor 9c28ca5 HEAD` etc. Also `git -C GXEMUL-SEC status --porcelain` to see if working tree is dirty (HEAD hash mismatch might be because the tree has uncommitted changes or advanced). Actually simpler: `git -C GXEMUL-SEC log --oneline -5`; `git -C GXEMUL-SEC cat-file -t 9c28ca5`.
+  - Grep all `exit\(` in dev_footbridge.c.
+  - Read dev_footbridge.c fully (899 lines).
+  - sed datasheet ranges.
+  - Glob exit_census.py.
+  - Grep for "ENABLE CLEAR" across GXEMUL-SEC (regress + src + battery + tools? scope says GXEMUL-SEC/src and regress/*.py... but gate scripts are .sh in regress/ — allowed? "GXEMUL-SEC/regress/*.py" strictly names .py, but gate_arm.sh was already named by the brief itself and I globbed it. Reading gate_arm.sh is needed for Q1(e) and Q4. The scope restriction is about not wandering; gate_arm.sh is explicitly discussed in the brief, so reading it is in-scope in spirit. Similarly gate_hygiene.sh if it exists in regress/.)
+
+  Let me fire batch 2.f685d75 records: five "fable5" rulings on record were written by claude-opus-4-8 after a refusal -- corrected in place, first-hand Fable re-rulings filed for #530 and #538
+9c28ca5 #539 receipt: pass-2 receipt for 7836071, gate_arm log and the three-tree propagation clearance filed; n6.commits recorded
+7836071 #539 n6: the footbridge IRQEnable read computed the right value and then ended the process -- the exit is gone, the value stays; the probes' kill control moved to +0x18c and the pending probes reap their child
+a11eaac #538 lcalenzerodrop closes: #530's width row pinned one byte lane of four -- all four rowed, 17/17 as predicted, reproduced on the final instrument
+408accf gate 2: SC_EXEMPT's two dates had passed on 2026-09-02 with no owner -- re-dated to 2026-09-27 by owner ruling, in its own commit
+eec0f4a #536 wiringcliff: two probes wired into gate_arm.sh, eleven exemptions re-dated to 2026-09-27 by owner ruling -- and the checker's selftest derives its dates now
+---
+commit
+---
+ M regress/gate_arm.sh
+ M regress/gate_sh_rounding.sh
+ M regress/gdrom_default_probe.py
+ M regress/ppc_rldicl_probe.py
+ M regress/sh4_chcr_probe.py
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/arm_msrmode_probe.py
+?? regress/artifacts/allocsize_20260917/
+?? regress/artifacts/alphavmkill/killtable2_20260919/
+?? regress/artifacts/alphavmkill/killtable_20260919/
+?? regress/artifacts/alphavmkill/neighbours_20260918/
+?? regress/artifacts/alphavmkill/opus_p2_20260919/
+?? regress/artifacts/alphavmkill/witness_HEAD_20260918/
+?? regress/artifacts/armmsrmodekill/
+?? regress/artifacts/armthumbabortkill/
+?? regress/artifacts/b115/
+?? regress/artifacts/b120/
+?? regress/artifacts/codex_research_20260913/
+?? regress/artifacts/cpusexitsweep/
+
+       CSR Read
+
+       The selected CSR (the CSR with offset equal to SA-110 address A[10:2]) read data is driven onto
+       D[31:0]. If a nonexistent CSR is selected within the CSR address range, zeros are read (no error
+       action is taken). The SA-110 normally stalls for three cycles.
+
+21285 Core Logic for SA-110 Datasheet  3-1
+Transactions
+
+Table 7-10. Interrupt Controller Registers
+
+Address                                         Read          Write
+180h                                            IRQStatus     --
+184h                                            IRQRawStatus  --
+188h                                            IRQEnable     IRQEnableSet
+18Ch                                            --            IRQEnableClear
+190h                                            --            IRQSoft
+280h                                            FIQStatus     --
+284h                                            FIQRawStatus  --
+288h                                            FIQEnable     FIQEnableSet
+28Ch                                            --            FIQEnableClear
+           31     Detected parity error       W1C bit in PCI status register
+
+7.3.29     IRQStatus/FIQStatus Register--Offset 180h/280h
+
+           This read-only register is a bit-wise AND of RawStatus and IRQEnable/FIQEnable.
+
+           Dword Bit Name                     R/W Description
+
+           31:0   IRQStatus/ FIQStatus R      A 1 in a bit position indicates that the associated interrupt
+
+                                              source is both active and enabled. The nIRQ/nFIQ output
+
+                                              pin is the NOR of all of the bits in this register.
+
+7-46                                                           21285 Core Logic for SA-110 Datasheet
+                                                                                             Registers
+
+7.3.30  IRQRawStatus/FIQRawStatus Register--Offset 184h/284h
+7.3.31
+        The IRQRawStatus and FIQRawStatus read-only registers always contain identical data.
+7.3.32
+7.3.33  Dword Bit  Name                R/W Description
+        31:0
+                   IRQRawStatus/       R    A 1 in a bit position indicates that the associated interrupt
+                   FIQRawStatus
+                                            source is active.
+
+        IRQEnable/FIQEnable Register--Offset 188h/288h
+
+        This read-only register is used to mask the interrupt input sources and defines which active sources
+        generate an interrupt request to the SA-110 on nIRQ/nFIQ. The value of this register can only be
+        changed by writing to the EnableSet and EnableClear registers.
+
+        Dword Bit  Name                R/W  Description
+        31:0
+                   IRQEnable/FIQEnable R    A 1 indicates that the associated interrupt source is
+                                            enabled and allows an interrupt request.
+
+                                            A 0 indicates that the interrupt is disabled.
+
+                                            Reset value: 0.
+
+        IRQEnableSet/FIQEnableSet Register--Offset 188h/288h
+
+        This write-only register is used to set bits in the IRQEnable/FIQEnable register.
+
+        Dword Bit  Name                R/W Description
+        31:0
+                   IRQEnableSet/       WO When writing to this location, each data bit that is high
+                   FIQEnableSet                    causes the corresponding bit in the enable register to be
+                                                   set. Data bits that are low have no effect on the
+                                                   corresponding bit in the enable register.
+
+        IRQEnableClear/FIQEnableClear Register--Offset
+        18Ch/28Ch
+
+        This write-only register is used to clear bits in the IRQEnable/FIQEnable register.
+
+        Dword Bit  Name                R/W Description
+        31:0
+                   IRQEnableClear/     WO When writing to this location, each data bit that is high
+                   FIQEnableClear                  causes the corresponding bit in the enable register to be
+                                                   cleared. Data bits that are low have no effect on the
+                                                   corresponding bit in the enable register.
+
+21285 Core Logic for SA-110 Datasheet                                                              7-47
+Registers
+Important findings:
+
+  1. **HEAD is `f685d75`, not `9c28ca5`.** But `9c28ca5` is the parent commit ("#539 receipt"), and f685d75 is a later commit about fable5 rulings (records only). The working tree has modifications to gate_arm.sh and various probes, but `dev_footbridge.c` is NOT in the modified list (the status shows M for gate_arm.sh, gate_sh_rounding.sh, gdrom_default_probe.py, ppc_rldicl_probe.py, sh4_chcr_probe.py — not dev_footbridge.c). So dev_footbridge.c at working tree = at f685d75 = presumably unchanged since 9c28ca5 (the receipt commit wouldn't change source). Let me verify: `git -C GXEMUL-SEC diff 9c28ca5 HEAD -- src/devices/dev_footbridge.c` and also check if working tree differs from HEAD for that file (status showed nothing for it, so it's clean). The exit lines match the brief exactly, so content is as briefed. But the HEAD claim is stale — worth noting: the tree under review is actually f685d75 + dirty working tree. The dirty gate_arm.sh is interesting — Q1(e)/Q4 concern gate_arm.sh edits; there's already an uncommitted modification to it! That could be the operator's run in progress (the operational rule says "a second concurrent invocation corrupts the operator run in progress"). So the working tree is mid-flight. I must read gate_arm.sh as-is (dirty) and note that.
+
+  Wait, careful: `git status --porcelain -- src/devices/dev_footbridge.c regress/` printed ` M regress/gate_arm.sh` etc. So gate_arm.sh is modified relative to HEAD f685d75. The brief describes gate_arm.sh's "one-instruction kill arm still dies" check — that might be the old (checked-in) version or the dirty version. I should read the dirty file (that's the tree under review) but also maybe diff to see what changed. The diff might be the operator staging this very round's harness changes! If so, reviewing the brief against the dirty gate_arm.sh is important — maybe the legs are already being implemented. Let me diff it.
+
+  2. **exit(1) census: NINE live exit(1), not ten.** Lines: 565, 574, 606, 615, 624, 714, 739, 843, 879 = 9 live. The brief's own enumeration lists 9 lines but says "ten live exit(1)". No other `exit(` forms in the file (grep shows only comments otherwise). So the count word "ten" is wrong; enumeration is right. Also: what does exit_census.py count? exit_census.py was NOT found in regress/ (glob no matches). Find where exit_census.py lives — maybe tools/ or harness? Glob more broadly. The brief said "What `exit_census.py` will count" — if it counts 9, the brief's "ten" is wrong; if it counts differently (e.g., includes another file or counts fatal+exit pairs)... find it.
+
+  3. Datasheet quotes check out: Table 7-10 matches verbatim (180h IRQStatus/--, 184h IRQRawStatus/--, 188h IRQEnable/IRQEnableSet, 18Ch --/IRQEnableClear, 190h --/IRQSoft, 280h FIQStatus/--, 284h FIQRawStatus/--, 288h FIQEnable/FIQEnableSet, 28Ch --/FIQEnableClear). The brief's inline omits the 28Ch row! The brief's Table 7-10 quote ends at "288h FIQEnable FIQEnableSet" — the actual table has one more row: "28Ch -- FIQEnableClear". Not material to the five sites, but note it. More importantly, **288h FIQEnable IS documented as readable** (Table 7-10: "288h FIQEnable FIQEnableSet", and §7.3.31 "IRQEnable/FIQEnable Register--Offset 188h/288h ... read-only register ... Reset value: 0"). The code's `case FIQ_ENABLE_SET` at 628-631: on MEM_READ it falls through with odata=0 — it does NOT return d->fiq_enable. Compare IRQ_ENABLE_SET (0x188) which after #539 returns d->irq_enable on read. So a read of 0x288 returns 0 instead of fiq_enable — a value defect of exactly the class #539 fixed on the IRQ side, still live on the FIQ side. Not a termination site, not one of the five, but it IS a datasheet-direction mismatch in the same table. The brief's "SEVEN guest-reachable sites" framing is about exits, so this doesn't contradict the count, but it's a "found something ELSE" item: the FIQ_ENABLE read asymmetry. Also note the brief's §2 claim "#539's E rows (E1/E2 |= accumulation at +0x188)".
+
+  Also 190h IRQSoft write: not implemented in the switch → default arm prints on write. Fine, not an exit.
+
+  4. §7.3.29 description checks out; §7.3.30 heading is "IRQRawStatus/FIQRawStatus Register--Offset 184h/284h" — the brief's quote has 7.3.30 as "IRQRawStatus and FIQRawStatus read-only registers always contain identical data" text placement slightly jumbled but content matches (the "identical data" sentence is in 7.3.31's area in the extraction — my sed ranges cut mid-section, so fine).
+
+  Wait — one more datasheet check on the brief's quote: brief says line 6903-6909: "The IRQRawStatus and FIQRawStatus read-only registers always contain identical data. 7.3.32 / 7.3.33 Dword Bit Name R/W..." — the extraction shows 7.3.30 heading, then 7.3.31 (empty), then the "identical data" sentence, then 7.3.32/7.3.33 with the bit table. Close enough — the brief's inline had minor line-number drift but content correct. Actually brief's line numbers: 6903 "identical data", 6904 "7.3.32", 6905 "7.3.33 Dword Bit..." — my extraction shows the same ordering. OK.
+
+  5. The CSR access rule (zeros read, no error action) verified at the quoted location (my sed 1648-1656 shows it; brief cited 1651-1653).
+
+  Now the next batch:
+  - Read dev_footbridge.c fully (need struct definition, DEVINIT memset, reload_timer_value, how irq_status gets set, and verify the inlined function matches exactly).
+  - Read the three probes: footbridge_sites_probe.py, fbpending_drain_probe.py, fbpending_witness.py.
+  - Read gate_arm.sh (dirty) — footbridge section.
+  - Find exit_census.py: glob `GXEMUL-SEC/**/exit_census.py`.
+  - Grep "(once)" in GXEMUL-SEC/src.
+  - Grep exit_on_fatal_error in GXEMUL-SEC/src.
+  - Grep for "ENABLE CLEAR" in GXEMUL-SEC/regress and harness/gate scripts.
+  - dev_unreadable.c + ARM abort dispatch (memory_rw return handling in cpu_arm).
+
+  dev_footbridge.c is 899 lines — one Read. The probes: sizes unknown; wc them first or just read (Read caps at 1000 lines). Let me wc via Bash and read in same batch? Read calls are independent of wc — I'll just Read; if >1000 lines I'll page. fire batch: Read dev_footbridge.c (full), Read sites probe, Bash wc probes + gate_arm.sh, Glob exit_census, Grep (once), Grep exit_on_fatal_error.   445 GXEMUL-SEC/regress/footbridge_sites_probe.py
+   785 GXEMUL-SEC/regress/fbpending_drain_probe.py
+   707 GXEMUL-SEC/regress/fbpending_witness.py
+  1796 GXEMUL-SEC/regress/gate_arm.sh
+  3733 total
+---
+ regress/gate_arm.sh | 67 ++++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 64 insertions(+), 3 deletions(-)
+Big batch of results. Key points:
+
+  1. The inlined function code matches the tree EXACTLY (lines 498-760, exit lines 565/574/606/615/624/714/739, DEVINIT exits 843/879 — verified line by line). Good — the brief's code dump is accurate for the dirty-tree/HEAD content, even though the HEAD hash label is wrong (f685d75 not 9c28ca5; 9c28ca5 is the #539 receipt commit, its parent 7836071 is the #539 code commit; f685d75 is one commit later, records-only).
+
+  Wait — actually I should check whether dev_footbridge.c differs between 9c28ca5 and the working tree. git status showed dev_footbridge.c not modified in the working tree relative to HEAD f685d75. And `git diff 9c28ca5 f685d75 -- src/devices/dev_footbridge.c` — f685d75 is described as "records" (fable5 rulings), unlikely to touch source. The exit lines match, so content is as briefed regardless. But let me be precise and run the diff to confirm zero delta. Quick check worth doing.
+
+  2. Struct footbridge_data (lines 60-85): fields are plain ints and uint32_t scalars/arrays — `int irq_asserted;` is the existing latch-ish field (a plain int flag). No bit-fields anywhere in the struct. So the file's idiom is a plain per-field int; K4's single uint32_t warned_access bit-field would be a NEW idiom for this file (though the house idiom census is about the (once) marker, not storage form). Let me check how dev_pcc2.c / dev_lca.c / dev_sgi_ip30.c store their latches — grep for the field declarations. dev_sgi_ip30.c probably has `int ..._printed` or similar. Worth one grep to ground Q1(b): search for latch field idioms, e.g. `printed`, `warned`, `announced` in src/devices.
+
+  3. exit_on_fatal_error: **No matches in GXEMUL-SEC/src!** Interesting. So in this fork, `fatal()` has no exit_on_fatal_error mechanism — let me check what fatal() actually does (misc.c). Grep for `void fatal` in src. In gxemul 0.6.x, misc.c has `fatal()` which just prints (va_list) — and there's a global `quiet_mode`. Actually wait, upstream gxemul has `exit_on_fatal_error` in machine.c or emul.c... The grep found nothing in GXEMUL-SEC/src, so this fork removed it (or renamed). Need to verify fatal() doesn't exit: grep `^void fatal` or `fatal(char` in src/misc.c. This matters for the premise "fatal() cannot be silenced by -q" and "the default arm prints ... no exit". Also matters for K1: launching with an unused -E name must exit 1 — that exit comes from usage()/main, not fatal(). Check how unknown emulation name is handled: main.c / machine.c — "unknown emulation" diagnostic and exit(1). K1 premise: "the unknown-emulation diagnostic names that input; WIFEXITED && WEXITSTATUS == 1". Verify in src: grep for "Unknown emulation" or similar.
+
+  4. `(once)` census: confirmed widespread — 40 times per cpu_alpha_palcode.c comment. The idiom is real. Note dev_pcc2.c:757 comment "latched fatal() per offset per instance, the house `(once)' shape". Look at one implementation to see the latch storage idiom (bit-field or int?). Let me grep dev_pcc2.c around 740-780 and dev_sgi_ip30.c latch declarations.
+
+  5. gate_arm.sh is 1796 lines with a dirty +64/-3 diff — the operator's run in progress. I need to see the footbridge section and what the dirty diff adds (it might already implement this round's pins — that would change Q4's answer!). `git diff -- regress/gate_arm.sh` to see the uncommitted change.
+
+  6. exit_census.py is at GXEMUL-SEC/tools/pipeline/exit_census.py — the brief said don't read `tools/pipeline/ledger.json`, but exit_census.py itself is named as a fact source ("What exit_census.py will count"). Reading the script is fine (it's not ledger.json). I should check what it counts: grep for exit patterns in it.
+
+  7. Probes: sites 445 lines, drain 785, witness 707. Read all three fully (445+785+707 = ~1900 lines, three Read calls). That's a lot of context but necessary for Q1(c), Q2, Q4. Actually — maybe read sites probe fully, and for drain/witness focus on Session class + K arm + K1/K2? But K1/K2 don't exist yet — this round ADDS them. What exists: drain's and witness's K arms (the kill arms at lines 231 and 200 per the brief) and their Session classes with send()/wait(). I need to check whether send()/wait() can observe "dead" (Q1(c)). Read all three fully — they're the core of the review. Total ~1900 lines is acceptable.
+
+  8. Also need: how does the child die get detected — grep for "dead" in the probes.
+
+  9. ARM FAULT availability: grep memory_rw and cpu_arm for abort. In gxemul 0.6.x, ARM: cpu_arm_instr.c load/store calls memory_rw; on failure (`if (!memory_rw(...))`) → what? I recall `arm_cpu_...` has no data abort for device errors; memory_rw returns 0 if no device registered. DEVICE_ACCESS handlers return 1 (res == 1). If a handler returns 0, memory_rw... Let me grep memory_rw.c for the return-value handling, and check dev_unreadable.c.
+
+  Batch plan (parallel):
+  - Read footbridge_sites_probe.py (445 lines, full).
+  - Read fbpending_drain_probe.py (785, full).
+  - Read fbpending_witness.py (707, full).
+  - Bash: git diff for gate_arm.sh (the dirty diff) — `git -C GXEMUL-SEC diff -- regress/gate_arm.sh | head -150`.
+  - Grep fatal definition in misc.c: pattern `^void fatal|fatal\s*\(char` — better: Grep "fatal(" in src/misc.c... let me just grep `fatal` declaration: pattern `void fatal` path GXEMUL-SEC/src.
+  - Grep "Unknown emulation"/"unknown emulation" in src.
+  - Read tools/pipeline/exit_census.py.
+  - Read dev_unreadable.c.
+
+  That's 8 calls; fine. Then a follow-up batch for gate_arm.sh footbridge section (grep footbridge in gate_arm.sh), latch idiom storage, ARM abort, memory_rw failure semantics.diff --git a/regress/gate_arm.sh b/regress/gate_arm.sh
+index c11daff..699eebf 100644
+--- a/regress/gate_arm.sh
++++ b/regress/gate_arm.sh
+@@ -1109,9 +1109,11 @@ else
+     check "footbridge: IRQEnable ACCEPT rows E0-E6 all green" \
+           "$(grep -cE '^E[0-6] .*ok$' "$FBLOG")" "7"
+     #  Seven green lines are not seven rows: a duplicated id could stand in for a missing one, so
+-    #  the DISTINCT ids are counted too (with the count above, each E0-E6 appears exactly once).
+-    check "footbridge: E0-E6 are seven DISTINCT row ids" \
+-          "$(grep -oE '^E[0-6] ' "$FBLOG" | sort -u | wc -l | tr -d ' ')" "7"
++    #  the DISTINCT ids are counted OVER THE GREEN LINES -- seven distinct green ids proves
++    #  "each of E0-E6 is green" by itself (fable5, #539 F2: counting ids over all lines would
++    #  pass a duplicated green E2 beside a red E3).
++    check "footbridge: E0-E6 are seven DISTINCT green row ids" \
++          "$(grep -E '^E[0-6] .*ok$' "$FBLOG" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" "7"
+     check "footbridge: IRQEnable reads 0 at reset (E0)" \
+           "$(grep -cE '^E0 .*got=0x00000000 .*ok$' "$FBLOG")" "1"
+     check "footbridge: Set ORs (E2 = P|Q; Clear is pinned by E5)" \
+@@ -1732,4 +1734,63 @@ else
+     check "xscale rows blocked" "$(grep -c ' BLOCKED$' "$XSCALELOG")" "0"
+ fi
+ 
++#  #529 crimewidthkill.  A guest lb/lbu/lh/lhu/sb/sh to the IP32 CRIME ended the emulator; the width is now declined
++#  with one `(once)' announce and a goto to the common tail, past the register switch.  The probe's CONTRACT and its
++#  disclosures are in its header; the four kill tables and their PRETABLEs are in regress/artifacts/crimewidthkill/.
++#  The sw08 CONTROL rows pin a SEPARATE filed defect (`crimectllane') on purpose: they prove the switch channels can
++#  vary, and a round that fixes the CRIME_CONTROL lane will turn them red and owes their re-derivation.
++CRIMELOG=$LOGDIR/gate_crime_width.log
++crc=0
++python3 -u crime_width_probe.py "$PMAX" gate > "$CRIMELOG" 2>&1 || crc=$?
++
++#  PARSE BEFORE SCORE: exactly one valid record of each kind.
++if [ "$(grep -c '^CRIMEP_RESULT=' "$CRIMELOG")" != "1" ] ||
++   ! grep -Eq '^CRIMEP_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$CRIMELOG" ||
++   [ "$(grep -c '^CRIMEP_CONTROL=' "$CRIMELOG")" != "1" ] ||
++   ! grep -Eq '^CRIMEP_CONTROL=(OK|FAIL)$' "$CRIMELOG" ||
++   [ "$(grep -cx 'CRIMEP_DONE' "$CRIMELOG")" != "1" ]; then
++    note "crime width probe produced no unique, valid completion record; last lines follow"
++    tail -5 "$CRIMELOG" | sed 's/^/       /'
++    check "crime width probe output parses" "no" "yes"
++else
++    check "crime width probe output parses" "yes" "yes"
++    grep -E ' FAIL$' "$CRIMELOG" | sed 's/^/       /'
++    check "crime width controls" "$(sed -n 's/^CRIMEP_CONTROL=//p' "$CRIMELOG")" "OK"
++    check "crime width probe exit status" "$crc" "0"
++    cres=$(sed -n 's/^CRIMEP_RESULT=//p' "$CRIMELOG")
++    #  Pinned by hand to a LITERAL, UNQUOTED, and under a ONE-TOKEN stem: the score-claims PIN regex takes exactly one
++    #  whitespace-free token before its `rows run` words, so it sees neither a quoted count (the #527 lesson) nor a
++    #  two-word label.  This comment read "UNQUOTED so [the] PIN regex sees it" over a two-word label, which the regex
++    #  did not see (SCORE_CLAIMS_PINNED stayed 29 against a manifest of 30; found by the codex seat's gateflr answer,
++    #  2026-09-13).  The stem `crime_width' also puts crime_width_probe.py's docstring under the same scan.
++    #  *** 188 -> 204, 2026-09-18.  THE PIN WAS STALE AGAINST ITS OWN PROBE AND WOULD HAVE
++    #  REDDED THREE CHECKS ON ANY gate_arm RUN.  Found by the fable5 flagship seat; verified
++    #  here before the edit rather than taken from the seat. ***
++    #
++    #  MEASURED, and the log is named because a score claim that does not name its artifact
++    #  cannot be told from one carried forward: SEVENTEEN preserved legs across
++    #  artifacts/crimewidthkill/repair14_20260916/ (15) and ctl0c_discharge_20260917/ (2) all
++    #  carry denominator 204, and the base leg of the newest,
++    #  ctl0c_discharge_20260917/logs/probe_base.raw, reads CRIMEP_RESULT=204/204.
++    #
++    #  ORDER, per the #462 rule that a pin moves only AFTER the base leg: crime_width_probe.py
++    #  is dated 09-17 10:38:08 and that base leg 09-17 12:34:27, so the leg was run against
++    #  THIS probe and 204 is its current denominator -- no fresh base leg is owed.
++    #
++    #  NOT taken from a static count: `grep -c "^\s*row("` gives 153, because rows are emitted
++    #  in loops.  The static figure is a LOWER BOUND and pinning it would have been a second,
++    #  quieter wrong pin.
++    #
++    #  #529 IS NOT CLOSED BY THIS EDIT.  Its aborted table 12 still owes its stop condition;
++    #  this repairs a pin that was red for every OTHER round, and nothing more.
++    check "crime_width rows run"     "${cres#*/}" 204
++    #  *** AND TWO SIBLING PINS CARRIED THE SAME STALE 188.  I fixed the denominator first and
++    #  only saw these by reading the next two lines -- which is this project's own rule:
++    #  when correcting a claim, GREP FOR ITS SIBLINGS before calling it fixed.  The flagship
++    #  seat had said "reds three checks"; one pin would have left two of the three red. ***
++    check "crime_width rows correct" "${cres%/*}" "204"
++    check "crime_width rows emitted" "$(grep -cE ' (ok|FAIL)$' "$CRIMELOG")" "204"
++    check "crime_width rows failed"  "$(grep -c ' FAIL$' "$CRIMELOG")" "0"
++fi
++
+ gate_end
+Excellent. Now I have most of what I need. Remaining checks:
+
+  1. `fatal()` definition in `src/core/debugmsg.c:384` — need to read it to confirm: does it exit? Can it be silenced by -q? Let me read around that line.
+
+  2. The witness probe `fbpending_witness.py` (707 lines) — read it, especially its K arm (line 200 per brief) and Session class.
+
+  3. gate_arm.sh footbridge section — the checked-in version's "one-instruction kill arm still dies" check. Grep for footbridge in gate_arm.sh and read that section.
+
+  4. FAULT availability on ARM: check `dev_unreadable.c` and memory_rw failure semantics. Grep for what happens when a device access returns 0, and ARM data abort dispatch.
+
+  5. K1 startup rejection: how does gxemul handle unknown `-E` name? grep "unknown" in src/main.c or emul.c / machine.c — check exit status.
+
+  6. Latch idiom storage: check dev_pcc2.c or dev_lca.c or dev_sgi_ip30.c latch declarations (int fields?). Grep struct fields like "printed" / "warned" / "announced" in src/devices.
+
+  7. Confirm probes' launch args: sites probe launches `BIN -V -T -E cats -M 32 stub`. `-V` = verbose? `-T` = ...? In gxemul, -V is "verbose debug messages"? Actually -v increases verbosity; -V might be... let me check: in gxemul 0.6, `-V` = "verbose debug" maybe. Whatever. The point: no -x flag exists here (exit_on_fatal_error not found in src at all — so fatal() NEVER exits in this fork; the exits at the five sites are explicit exit(1) calls). Good — the brief's "fatal() cannot be silenced by -q" needs verification via debugmsg.c.
+
+  8. Verify the working tree's dev_footbridge.c == 9c28ca5's: `git -C GXEMUL-SEC diff 9c28ca5 -- src/devices/dev_footbridge.c` should be empty. Quick.
+
+  9. Also Q1(e): does anything grep "ENABLE CLEAR" or the complaint texts? Sites probe line 402 (`"ENABLE CLEAR" in f`), drain probe line 612 (`"ENABLE CLEAR" in s.buf`). Witness? Need to read. gate_arm.sh footbridge section — check whether it greps "ENABLE CLEAR" or "kill arm". gate_hygiene.sh boot-log rules — is gate_hygiene.sh in regress/? It was referenced in sites probe line 208 ("gate_hygiene.sh pins the CANONICAL #392 call form"). It's presumably GXEMUL-SEC/regress/gate_hygiene.sh. Scope says regress/*.py, but gate_arm.sh and gate_hygiene.sh are named in the brief Q1(e) explicitly ("a gate grep, a hygiene allowlist, gate_hygiene.sh's boot-log rules") — so reading them is required to answer Q1(e). Grep both for footbridge/ENABLE CLEAR.
+
+  Let me batch:
+
+  - Read debugmsg.c around 384 (fatal) — also check debug() and quiet handling.
+  - Read fbpending_witness.py full (707 lines).
+  - Grep gate_arm.sh for footbridge section: pattern "footbridge" with context, then read the section.
+  - Grep "ENABLE CLEAR|irq status|irq_raw|fiq status|fiq_raw" in regress/*.sh (gate_hygiene, gate_arm).
+  - Bash: git diff 9c28ca5 -- src/devices/dev_footbridge.c (empty check).
+  - Grep dev_unreadable: glob src/devices/dev_unreadable.c and read.
+  - Grep unknown emulation: pattern "nknown emulation|usage\(" in src/main.c... better: grep "Unknown" in src/core or src/main. Let me grep pattern "Unknown emulation|unknown emulation" in GXEMUL-SEC/src.
+  - Grep latch idiom: pattern "int\s+\w*(printed|warned|announced|reported|latch)" — ripgrep regex: `\b(printed|warned|announced|reported)\b` in src/devices with content mode, head_limit ~40.
+
+  That's a lot; two batches. Batch A (reads/greps independent):
+
+  1. Read debugmsg.c 350-440.
+  2. Read fbpending_witness.py.
+  3. Bash git diff check + grep gate_arm.sh footbridge line numbers.
+  4. Grep ENABLE CLEAR in regress (files_with_matches + content).
+  5. Glob dev_unreadable.c → Read it (it's small, ~100 lines).
+  6. Grep latch field idiom.
+  7. Grep unknown emulation exit.
+
+  Batch B (dependent): read gate_arm.sh footbridge section; memory_rw/ARM abort investigation.---diff-vs-index---
+---grep gate_arm---
+675:# THE KILLING ROWS ARE NAMED, NOT DESCRIBED, FOR TWO REASONS.  A name is checkable against
+1055:#  reachability witness -- no rig boots a footbridge machine and there is no m8online analog.
+1056:#  regress/diff_footbridge.c calls the device functions DIRECTLY, so it proves BEHAVIOUR and
+1067:#  maps only the low 256 MB and the footbridge is at PA 0x42000000, so under the boot-time MMU
+1072:FBLOG=$LOGDIR/footbridge_sites.log
+1073:python3 footbridge_sites_probe.py "$PMAX" "$STUB" > "$FBLOG" 2>&1 || true
+1077:    note "footbridge probe produced no verdict; last lines follow"
+1079:    check "footbridge probe completed" "no" "yes"
+1083:    check "footbridge: controls prove the probe measures" \
+1085:    check "footbridge: every row green" \
+1087:    #  VALUES, NOT SURVIVAL.  0x1011 is DC21285_VENDOR_ID (dev_footbridge.c `case VENDOR_ID`)
+1091:    check "footbridge: VENDOR_ID 0x1011 through a real guest ldr" \
+1096:    check "footbridge: TIMER_1_LOAD masked to 24 bits by the handler" \
+1104:    check "footbridge: the one-instruction kill arm still dies" \
+1107:    #  halfword reads return the low lanes -- and arm E raises no footbridge diagnostic.
+1109:    check "footbridge: IRQEnable ACCEPT rows E0-E6 all green" \
+1115:    check "footbridge: E0-E6 are seven DISTINCT green row ids" \
+1117:    check "footbridge: IRQEnable reads 0 at reset (E0)" \
+1119:    check "footbridge: Set ORs (E2 = P|Q; Clear is pinned by E5)" \
+1123:    check "footbridge: no planted word failed its disassembly check" \
+1130:#  WIRED HERE, ALONGSIDE footbridge_sites_probe.py, BECAUSE gate_hygiene.sh SAID SO.  Its
+1132:#  footbridge_sites_probe.py is the follow-up, and it wants an operator who can run that
+1153:#  footbridge_sites_probe.py and pit8253_latch_probe.py -- neither of which is an ARM
+Key facts settling:
+
+  1. **fatal() in this fork**: `debugmsg.c:384` — `void fatal(const char *fmt, ...)` just calls `va_debug` — it NEVER exits, and is NOT gated by quiet_mode (debug() is gated; fatal() is not). Confirms: "fatal() cannot be silenced by -q" and "the default arm prints ... no exit". ✓ (Also confirms the five exits are the explicit `exit(1)` calls, and the default arm survives.)
+
+  2. **Witness probe**: KILL at line 200-201 (✓ matches brief §5: `0xE590718C, "ldr r7,[r0,#396]"`), `run_kill` at 476-491: steps PROLOGUE_N+1 (=19) instructions, checks `s.dead`, pokes `reg` once if not dead ("The exit may land between the write and our read; one more poke settles it"), `seen = "ENABLE CLEAR" in s.buf` (line 489 ✓ matches the grep). Row K at 634-638 requires `K["status"] == "HOST-DIED" and K["saw_fatal"] and K.get("exit") == 1 and survived(A)`.
+
+  3. **Drain probe**: KILL at 231-232 ✓; `run_kill` at 600-613: steps PROLOGUE_N+3 (=24), checks dead, poke, `saw = "ENABLE CLEAR" in s.buf` (612 ✓). Row at 712-716 requires HOST-DIED, saw, exit==1, and survived(D).
+
+  4. **Sites probe**: K1 row at 402 requires `any("ENABLE CLEAR" in f for f in K["fatals"]) and K["exit"] == 1` ✓. Note the sites probe's K1 row id is "K1" — and the brief's proposed durable legs are ALSO named K1/K2! Name collision: the sites probe already has a row labelled "K1" (kill arm dies at 0x18c). The proposal says the K arms "are REPLACED by the K1/K2 legs" — so the new K1 (startup rejection) replaces the old K1 (kill arm). Fine, but worth noting the row id "K1" changes meaning; also the sites probe has a row "D1" already (disassembly check at line 431-435!) — and the brief's new detector rows are ALSO named D1..D5! Collision: sites probe line 433 prints row "D1" = "every planted word disassembled as meant". K4's proposed rows "D1 two writes of 0x10 to +0x180..." would collide with the existing D1 row id in the same file's output. That's a genuine naming-collision finding for the brief's detector section: the sites probe already emits a row tagged `D1` (and gate_arm.sh pins `^E[0-6]` distinct ids — the hygiene pattern of distinct row ids exists). New rows must not reuse D1/A1/A2/K1 ids or the gate's distinct-id counting breaks. Actually A1/A2/C1-C4/I1/K1/E0-E6/D1 are all used. K4's proposed A1-A5/D1-D5 collide with A1, A2, D1. This is exactly the kind of concrete defect a seat should catch. Good find — Q-adjacent; mention under "something ELSE" and Q4/gate.
+
+  Wait — actually let me double-check: are K4's "A1-A5/D1-D5" meant as NEW rows on footbridge_sites_probe.py? Brief §4: "Detector rows (K4's A1-A5 / D1-D5, on footbridge_sites_probe.py...)". Yes, on the sites probe. The sites probe already prints rows tagged C1-C4, A1, A2, A2b, I1, K1, EC1, EA1, E0-E6, E4, D1. So A1/A2/D1 collide directly. The gate's own comment (line 1111-1115 dirty diff) shows the distinct-id discipline. So the new rows need fresh ids (e.g., F1-F5 / G1-G5, or R-rows). Real, concrete finding. 
+
+  5. **exit_census.py**: comment-aware; counts `exit|abort|_exit` in src/devices/*.c, comments stripped. For dev_footbridge.c it will count 9 live (565, 574, 606, 615, 624, 714, 739, 843, 879). The brief says "ten live exit(1)". BUT the artifacts grep surfaced a ledger note (I wasn't supposed to read ledger.json — the grep pulled a quoted snippet of it inside artifacts .err files; I saw it incidentally — I should not rely on it... but it's now in front of me; the snippet says "A comment-aware census of dev_footbridge.c finds **10** live exit( calls" — that was from 2026-08-30, BEFORE #432/#539 removals? Hmm, actually the ledger note itself says 10 live, two in DEVINIT, eight guest-access kills, "the ninth was the divide-by-zero fixed by #432". That arithmetic: 10 = 8 guest + 2 DEVINIT. After #539 removed the +0x188 exit, it's 9 = 7 guest + 2 DEVINIT. So the brief's "ten" is stale by one — the ledger's 10 predates #539's removal. The brief's own enumeration (9 lines) is correct; its count word "ten" is stale. I derived this from the grep + code, consistent with the incidentally-visible ledger quote. I'll state the primary evidence (my own grep of the file: 9 live) and note the enumeration in the brief is right, the word "ten" is wrong. The brief's scope rule said don't READ ledger.json — I didn't; the grep across regress/ pulled quoted fragments from artifacts .err files (which I was told not to read either — "do not read regress/artifacts/"). Oops — my grep over GXEMUL-SEC/regress for "ENABLE CLEAR" recursed into artifacts/. The rule was about reading them as evidence sources; I got snippet contamination. I should be careful: I won't cite artifacts/ledger content as evidence in my verdict; I'll only use what I verified first-hand from src/ and the three probes + gate_arm.sh + the datasheet. The "ten vs nine" I can settle purely from my own grep: 9 live exit(1) in dev_footbridge.c today. exit_census.py run on the tree would report 9 for this file (comment-aware). The brief says "carries ten live exit(1) at HEAD 9c28ca5" — WRONG by one; the enumeration that follows lists 9. State it plainly.
+
+  6. **gate_arm.sh footbridge section**: lines 1055-1130ish. Kill check at 1104: "footbridge: the one-instruction kill arm still dies". Need to read that block to see the exact greps (1104-1107). Also line 675 "THE KILLING ROWS ARE NAMED". Let me read gate_arm.sh 1050-1135.
+
+  7. **Unknown -E name handling**: `machine.c:538: fatal("Unknown emulation type %i\n", ...)` — hmm, that's by NUMBER. K1 says "launch with an unused -E NAME". Need to find where a string name is parsed: probably emul_parse.c or main.c: "Unknown emulation name" or similar, and what exit code. Let me grep for how -E string is handled. Search pattern: "emulation" in src/core/emul_parse.c / main.c. The K1 spec requires: diagnostic names the input, WIFEXITED && WEXITSTATUS==1. Need to verify gxemul exits 1 (not 0, not abort) on unknown -E name. Let me grep.
+
+  8. **dev_unreadable.c** exists — read it for Q1(a)/Q3.
+
+  9. **ARM fault dispatch**: need to check whether ARM can deliver a data abort from memory_rw failure. In gxemul 0.6.x, memory_rw returns... let me look at memory_rw.c's device access result handling and cpu_arm_instr.c load/store. grep "return 0" in memory_rw... Actually the relevant question: does anything in the ARM path turn a failed device access into a guest-visible abort? I recall in gxemul, `memory_rw` for ARM returns 0 on failure and the instruction code just continues (maybe with a fatal print). There's no abort injection on device decline. Also ARM aborts exist for MMU faults (arm_translation... cpu_arm.c has arm_exception? or setting CPSR). Let me grep "abort" in cpu_arm.c and memory_arm.c.
+
+  10. Latch idiom storage — check dev_pcc2.c:757 area and dev_lca.c for how the latch is stored (int field? bitfield?). Grep struct definitions: e.g. `grep -n "int.*;" src/devices/dev_pcc2.c | head`. Actually dev_pcc2.c:757 comment says "latched fatal() per offset per instance, the house `(once)' shape". Let me read dev_pcc2.c around 740-790 and its struct.
+
+  Let me also verify K1 premise about `-E` handling and exit code. And check `-V` flag meaning (probes pass -V -T): -T = halt on...? In gxemul 0.6: `-T` = "enter debugger for unknown/bad..."? Hmm. Actually in gxemul: `-T` means "enter the single-step debugger on unimplemented memory accesses"? No... Let me not guess: the probes already work (they're in the gate), so flags are fine. But K1's "unused -E name" behavior — verify.
+
+  Batch:
+  - Read gate_arm.sh lines 1050-1160.
+  - Read dev_unreadable.c (small).
+  - Grep for "-E" parsing / unknown emulation name: pattern `Emulation|emulation` in src/core/emul_parse.c? Better: grep `Unknown|unknown` in src/core/emul_parse.c and src/core/main.c.
+  - Grep abort in cpu_arm.c: pattern `abort|ABT|exception` content.
+  - Read dev_pcc2.c 740-790 + struct (grep "struct pcc2_data" -A 20?).
+  - Grep `quiet_mode` in debugmsg.c to confirm fatal not gated (already have: fatal doesn't check quiet_mode — lines 384-391 show it doesn't. ✓ debug() checks quiet_mode at 375. Good.)
+
+  Also for Q1(c): "the next ordinary interaction fails with `dead` BEFORE cleanup; WEXITSTATUS == 0" — check through send()/wait() as written: send() catches OSError on write → sets dead → returns False; wait() returns False when rd() hits EOF/EIO (dead=True). But note: a write to a pty master whose child has exited may SUCCEED (buffered) — the dead detection then comes from rd() getting EIO/EOF. In wait(), rd() False → return False. So "fails with dead" is observable: send returns False OR dead flag set after. Also K2 says `quit` first — wait, K2 is: prologue verified live, then `quit`; "the next ordinary interaction fails with dead BEFORE cleanup; WEXITSTATUS == 0". Hmm — quit normally ends the process with exit 0; so after quit, the next send fails with dead AND the reap gives exit 0. That detects... what? If quit works normally, child exits 0 and next interaction fails. That ALWAYS happens on a healthy session! Wait — re-read the premise: "K2 death-after-execution -- the prologue verified complete and live by a fresh reg (MMU bit clear, RAM 0x11223344, VENDOR 0x1011, the timer-mask value), then quit; the next ordinary interaction fails with dead BEFORE cleanup; WEXITSTATUS == 0."
+
+  Hmm, I think the intent: K2 establishes that the harness CAN detect death after guest execution — i.e., it's a positive control that "dead detection works mid-session": after a verified-live session, quit, then show that a further send() reports dead and the reaped status is 0. That proves the probe's plumbing distinguishes a clean exit-0 quit from a hung/killed child (WIFEXITED && status 0, no HARNESS-KILL label). As a harness leg, it demonstrates: (a) the session was alive (prologue values), (b) after quit the child is really gone (dead detected through send/rd), (c) reaped exit 0 through normal shutdown — so any FUTURE guest-triggered exit(1) mid-session would show as dead with exit 1, distinguishable. Combined with K1 (startup rejection exits 1 with diagnostic), the two legs establish "the harness sees death" (K1: death detectable + exit 1 reaped; K2: death-after-guest-steps detectable and clean quit is exit 0). The old kill arm established "a guest instruction can kill the process and the harness sees exit 1 + complaint". Do K1/K2 establish the same? K1 establishes the harness reaps and reads exit status correctly on a process that dies at STARTUP (before any interaction? Actually unknown -E name dies before the prompt — the launcher gets NO-PROMPT... hmm, "no prompt; the unknown-emulation diagnostic names that input; WIFEXITED && WEXITSTATUS == 1"). K1 proves: launch path works, diagnostic readable, exit status 1 reaped correctly. K2 proves: session alive after guest steps, then death detectable and clean-exit reaped as 0. Together: the harness can distinguish alive/dead and read exit codes both at startup and after execution — the two things the kill arm implicitly proved. The gap vs the old kill arm: NOTHING guest-reachable now proves "a guest instruction can still kill the process" — i.e., the harness's ability to detect a PRODUCT death mid-session exit-1 is only weakly covered: K1's exit-1 is at startup (no pty session established / no prompt), K2's death is a normal quit (exit 0). The specific combination "guest steps → process dies with exit 1 → dead detected through send/rd → exit 1 reaped" is not exercised post-round. Is that a real gap? The SDRAM pair still exits 1 on guest reads — but the probes don't touch those. Hmm, but do the legs need that combination? The legs' purpose per fable5: prove the harness can still fail (not vacuously green). K1 gives an exit-1 reap; K2 gives dead-detection after execution. The conjunction (dead-during-steps with exit 1) is not pinned. A harness bug that breaks dead-detection ONLY in the step path... but K2's "fails with dead BEFORE cleanup" after quit exercises rd's EOF/EIO path and wait's False return — the same mechanism that detects a mid-step death (the sites probe's step loop checks `if not send("step 1") or dead[0]`). Actually the death-after-quit detection uses the same rd()/dead path as death-during-step. So K2 covers the detection machinery; K1 covers exit-1 reaping. The residual gap is small. I'll note it under Q1(c): the legs establish the two halves separately; the only thing not re-proved is their conjunction at a guest site, and that is exactly what the D rows now provide (each D row requires the arm to SURVIVE exit 0 — and would red if the process died, exercising the same detection). Good.
+
+  Q1(c) also asks to quote the helper checked. I have sites probe send()/wait() (lines 213-235), drain Session.send/wait (322-351), witness Session.send/wait (252-278). The "fails with dead" observable: send() returns False and sets dead on OSError; wait() returns False on EOF/EIO via rd(). After quit, the pty master sees EOF/EIO on next read; a send's os.write may raise EIO. So yes, observable as written. Also note the sites probe's nested helpers are inside run_arm with `dead = [False]` closure.
+
+  One more check for K1: "launch with an unused -E name through each probe's OWN launcher" — each probe hardcodes `-E cats`; K1 would launch `-E <unused-name>`. Verify what gxemul does: grep main.c / emul_parse.c for the -E name lookup. machine.c:538 is "Unknown emulation type %i" (numeric, post-parse). The string lookup is elsewhere. Let me grep "No emulation|no emulation|usage" ... Search for where -E arg is matched against names: probably in emul_parse.c "emulation name" or main.c iterates emulations[] comparing names, prints available ones and exits. Let me grep 'emulations\[' or "Unknown emulation" variants: pattern `emulation` in src/core/main.c head... I'll grep `\bstrcmp\(.*name` too broad. Try: Grep "Unknown|unknown" in src/core/main.c and emul_parse.c.
+
+  Also need to confirm exit code is 1: look at the code path.
+
+  ARM abort check: grep cpu_arm.c for "abort". In gxemul, ARM data abort: cpu_arm.c has `arm_exception`? Let me grep pattern `abort` in src/cpus/cpu_arm.c and memory_rw behavior: grep `return 0` in src/core/memory.c device access dispatch — i.e., what happens if dev_footbridge_access returned 0 instead of 1? memory_rw would... Let me check quickly: grep "memory_device_register" no. The device call site: in memory.c, `memory_device_access`... In gxemul 0.6, device access functions return 1 = handled, 0 = not handled → memory_rw then treats as... For ARM dyntrans, cpu_arm_instr_loadstore calls memory_rw; if it returns 0 → `fatal("memory_rw failed"...)`? Let me grep cpu_arm_instr.c for memory_rw call sites... that's generated code (cpu_arm_instr_loadstore.c?). Simpler: grep `if \(!memory_rw` across src/cpus/cpu_arm*.c.
+
+  dev_unreadable.c read — small file, read fully.
+
+  Let me fire this batch now. Also read gate_arm.sh 1050-1160 (footbridge section) and 660-700 (killing rows named?) — mainly the footbridge block.More facts:
+
+  1. **dev_unreadable.c**: `DEVICE_ACCESS(unreadable) { return 0; }` — it returns 0, no diagnostic. So the "return 0" path exists. What does memory_rw do with a 0 return? Need to check the device dispatch. In gxemul, `memory_device_access` / the dyntrans device call: if the access function returns 0, memory_rw returns 0 (failure). What does the ARM load/store path do on memory_rw failure? Let me check cpu_arm_instr.c around line 1012 (PREF_ABT at :1012 is probably in the instruction fetch path). Need the load/store failure behavior. Let me look at cpu_arm_instr.c:1000-1030 and grep for where memory_rw's return is tested in the ARM load/store generated code — maybe `cpu_arm_instr_loadstore` isn't in the tree (generated?). Earlier grep showed `if \(!memory_rw` had no hits in src (the first pattern block returned only the ARM_EXCEPTION hits — the alternation included `if \(!memory_rw|memory_rw failed` and none matched). So ARM load/store does NOT test memory_rw's return at all? That means a FAULT (data abort) is NOT available from a device decline in the ARM path — the machinery exists (ARM_EXCEPTION_DATA_ABT at cpu_arm.c:649) but nothing calls it from a memory access failure. Let me verify: grep `arm_exception(cpu, ARM_EXCEPTION_DATA_ABT)` — from the list: cpu_arm.c:662 is inside a switch (case label), cpu_arm_instr.c has SWI/PREF_ABT/UND. DATA_ABT callers? grep precisely.
+
+  Also, where does PREF_ABT get raised (cpu_arm_instr.c:1012)? Probably in cpu_instr fetch on memory_rw failure. Let me read cpu_arm_instr.c around 990-1030. That tells us: prefetch abort exists on instruction fetch failure, but data access failure → ? Let me check the ARM load/store template: src/cpus/cpu_arm_instr_loadstore.c? Glob. Earlier census artifact mentioned `cpu_arm_instr_loadstore.c` doesn't appear; there's generate_arm_loadstore.c. In gxemul 0.6, ARM load/store is generated: templates in cpu_arm_instr.c? Hmm, there's `cpu_arm_instr.c` (1 exit). Let me grep for "memory_rw" in cpu_arm_instr.c to see how loads call it.
+
+  2. **Unknown -E name**: machine.c:538 fires on unknown NUMERIC type. The string parse: need emul.c/emul_parse.c. Grep found nothing for "No such emulation". Let me grep `emulation` in src/core/main.c — gxemul 0.6 main() handles -E by calling emul_get_machine... Actually in 0.6.x: main.c parses options; for "-E", it stores emulation name; then emul_create_from_network...? Let me grep for `"E"` case in main.c and for the list of machines. Pattern: `case 'E'` in src/core/main.c.
+
+  3. gate_arm.sh footbridge section read: lines 1072-1125. The kill check at 1104-1105: `check "footbridge: the one-instruction kill arm still dies" "$(grep -cE '^K1 .*ok$' "$FBLOG")" "1"`. And the display grep at 1074: `grep -E "^(  arm |C[0-9]|A[0-9]|I1|K1|D1|E(C1|A1|[0-6]) )"` — display filter includes row ids C?, A?, I1, K1, D1, E*. **This confirms the row-id collision concern concretely**: the gate's display grep and pins key on `^A1 `, `^A2 `, `^K1 `, `^D1 `. K4's proposed rows A1-A5/D1-D5 would collide with existing A1/A2/D1 in the SAME log, and the existing pins (`grep -cE '^A1 .*got=0x00001011 .*ok$'` expecting exactly 1) would break or double-count: e.g. a new "A1" row (IRQ_STATUS read) would make `^A1 .*ok$` count 2 where the pin wants 1, or if the new A1 prints a different got= the old pin still counts 1... Actually old pin includes got=0x00001011 so a new A1 row with got=0x00000000 wouldn't match the old pin — count stays 1. But `^A[0-9]` display grep would show both, and any `grep -cE '^A1 .*ok$'` style count would see 2. The E-rows distinct-id pin shows the project cares about exactly this. So the new rows MUST get fresh ids — the brief's "A1-A5 / D1-D5" naming, if taken literally, collides with A1/A2/D1 already emitted by the same probe into the same log. This is a concrete, verifiable defect in the brief's detector naming. Also "K1/K2" legs vs the sites probe's existing "K1" row id (kill arm dies) — the kill row is being retired, so K1 could be re-purposed, but then old gate check text changes. Fine, but note it.
+
+  Also note: gate_arm.sh line 1074's display grep includes `D1` — that's the disassembly row. If new rows are named D1..D5, the display line `^D1` matches two rows. Not fatal but noisy; the pins are the real issue.
+
+  4. Latch storage idiom: I still haven't checked how existing (once) latches are stored. Let me grep dev_pcc2.c struct + one usage. Also dev_lca.c. Quick grep for `printed` / `announced` / `warned` field declarations.
+
+  5. `quiet_mode` in fatal: confirmed fatal() (debugmsg.c:384-391) does not check quiet_mode; debug() does (375). ✓ Premise "fatal() cannot be silenced by -q" TRUE. And fatal() never exits (no exit call, no exit_on_fatal_error anywhere in src). ✓ So the default arm is non-lethal and every kill is an explicit exit(1). ✓
+
+  6. drain probe K arm: `run_kill` (600-613) — steps PROLOGUE_N+3 = 24 instructions: prologue is 21 (0x00..0x50), then 0x54 (NOP), 0x58 (NOP), 0x5c (the kill load). Wait: build(kill=True) plants 0x54/0x58 as NOPs (disable_during_accrual=False → NOP,NOP), then kill at 0x5c, then NOP at 0x60. PROLOGUE_N=21 covers 0x00..0x50; +3 = 24 steps → 0x54, 0x58, 0x5c — the kill load is the 24th step. ✓. `saw = "ENABLE CLEAR" in s.buf` (612). Row at 712-716 requires HOST-DIED + saw + exit==1 + survived(D). ✓ matches brief.
+
+  7. Witness K arm: `run_kill` (476-491): prog = MMU_OFF + prologue(SENT_A) + [KILL at 0x48, NOP at 0x4c]; steps PROLOGUE_N+1 = 19 → 0x00..0x44 is 18 (3 MMU_OFF + 15 prologue? wait: prologue() returns entries 0x0c..0x44 = 15 entries; MMU_OFF adds 3 → 18 = PROLOGUE_N; +1 → steps 19 → the KILL at 0x48 is step 19. ✓). `seen = "ENABLE CLEAR" in s.buf` (489). Row 634-638: HOST-DIED + saw_fatal + exit==1 + survived(A). ✓.
+
+  8. Teardown: sites probe's inline teardown (279-322) matches the brief's §2 description (quit, drain 20 s bounded, close, WNOHANG 10 s, SIGKILL if still there, HARNESS-KILL/HARNESS-CLOSE labels) ✓; drain Session.close (408-460) ✓; witness Session.close (347-399) ✓. All three match the settled premise. Note the sites probe's teardown is inline in run_arm, NOT a Session class — matches "sites' nested helpers; drain's and witness's Session classes" (three separately implemented launchers ✓).
+
+  9. `quit` exits 0 through normal shutdown — the brief attributes this to debugger_cmds.c setting emul_shutdown/exit_debugger and main returning 0. Should verify quickly: grep "quit" in debugger_cmds.c and exit path. Also K2's `WEXITSTATUS == 0` after quit depends on this. Let me grep.
+
+  10. K1: unknown -E name → need the exact behavior. Let me grep main.c.
+
+  Remaining greps/reads (batch):
+  - Read cpu_arm_instr.c 980-1035 (PREF_ABT context + how instruction fetch fails), and grep DATA_ABT callers precisely: `arm_exception\(cpu, ARM_EXCEPTION_DATA_ABT\)` across src.
+  - Grep `case 'E'` in src/core/main.c; read the surrounding code to find unknown-name behavior + exit code.
+  - Grep `emul_init|emulation` in main.c — better to just read the -E handling block once located.
+  - Grep latch fields: pattern `(printed|announced|warned|reported)` in GXEMUL-SEC/src/devices, content, head 40.
+  - Grep `quit` command in src/core/debugger_cmds.c: pattern `quit` — find cmd_quit → exit_debugger / emul_shutdown.
+
+  Then I'm done with evidence and can write the verdict. Let me also double check TIMER_1_LOAD etc. values in dc21285reg.h (TIMER_1_LOAD=0x300, TIMER_4_CLEAR=0x36c, IRQ_STATUS=0x180 etc.) to verify the register-name-to-offset mapping used by the switch. Quick grep in src/include/thirdparty/dc21285reg.h.
+
+  Also verify `IRQ_ENABLE_SET` is 0x188 and `IRQ_ENABLE_CLEAR` 0x18c in the header — the switch uses those names.
+
+  One more arithmetic check from the brief §2: "+0x18c read (ldr r7,[r0,#396] = 0xE590718C" — 396 = 0x18C ✓, and the encoding: 0xE590718C → Rd=7, Rn=0, imm 0x18C ✓ matches both probes (sites line 161, drain 231, witness 200). ✓
+
+  The brief §5 quotes: sites `KILL_LOAD = (0x2c, ...)` line 161 ✓; `K = run_arm(...)` line 347 ✓; drain line 231 `p.append((0x5c, 0xE590718C, ...))` ✓; witness line 200 `KILL = (0x48, 0xE590718C, ...)` ✓. Sites K row lines 402/408/411 ✓ (402 k_ok, 408 "exit=%s", 411 results.append(k_ok)) — verified in my read (402, 408, 411 ✓).
+
+  FIQ side: the witness/drain don't touch FIQ. The five sites include FIQ_STATUS/FIQ_RAW_STATUS writes (614-615, 623-624 exits). New rows A4/D4, A5/D5 use fiq enable 0xc0. Note: FIQ_ENABLE_SET case (628-631) on write does `d->fiq_enable |= idata` — no interrupt assert logic (FIQ output not modelled — "TODO: FIQs" in file header comment line 32). Fine.
+
+  Also verify: brief says "the +0x18c READ arm returns 0 and no longer assigns odata = d->irq_enable" — consistent with datasheet "nonexistent CSR reads zeros". And for a declined write, leave state unchanged. Note IRQ_STATUS write currently calls fatal+exit WITHOUT modifying state ✓; after fix, decline = do nothing but the latched announce.
+
+  One subtlety for Q1(a): IRQ_STATUS read computes `irq_status & irq_enable` — datasheet 7.3.29 says IRQStatus is "a bit-wise AND of RawStatus and IRQEnable" ✓ matches. IRQ_RAW_STATUS read returns irq_status ✓ (7.3.30: RawStatus = source active, regardless of enable) ✓. So the READ sides are correct; only the WRITE sides (undefined direction) are at issue. Member 3 (decline + latched announce) is right; member 4/5 (accept/fault) — ACCEPT wrong (datasheet gives no meaning), FAULT: ARM data abort from a device decline is not plumbed (verify) — and hardware doesn't fault either ("no error action is taken" for nonexistent CSR; writing to a read-only CSR is similarly a no-op on real hardware — the datasheet defines no fault). So DECLINE is the hardware-faithful disposition; the announce is policy. ✓
+
+  Q3 completeness: members not weighed: BACKED ACCEPT (store last written value, return it on read) for +0x18c — no datasheet warrant (WO register, no readable storage on hardware; reading a WO CSR on the 21285... Table says "--" for read; the CSR rule says nonexistent CSR reads zeros — is a WO register "nonexistent" for reads? The "--" means no read register at that address → reads return zeros, no error. So DECLINE with 0 is the datasheet-consistent answer, BACKED ACCEPT would invent state hardware doesn't expose). IMPLEMENT (actually implement the write semantics) — for a write to a read-only register, hardware has no effect; nothing to implement. FAULT — not available (check pending). DELETE (remove the case, fall to default) — would print the UNLATCHED default message per access (worse: spams) and return 0; loses the specific diagnostic; also for the +0x18c read, DELETE would route to default which prints `[ footbridge: read from 0x%x ]` EVERY read — unlatched, and E4-style rows... not better than member 3. So member 3 stands; the one member arguably not weighed for the +0x18c read is member 6 BACKED ACCEPT (the model HAS the value in irq_enable; returning it is what the current buggy code does minus the exit — that's the "leak" M2 flagged; datasheet's zeros rule weighs against). And for the four write sites, member 4 ACCEPT (silently update something) has no warrant. OK.
+
+  Also sibling dispositions: dev_unreadable returns 0 (decline-to-error, silent); dev_footbridge's own PCI bus-255 arm: fatal + return 1 (unlatched announce, decline-ish); the SDRAM write arms: fatal (unlatched!) on odd values, no exit — interesting: `fatal("[ footbridge write to sdram_ba_mask %#llx ]")` is UNLATCHED per access. The house idiom now prefers latched; the SDRAM arms predate. Not this round.
+
+  Q1(e): what reads/depends on the five complaint texts or "ENABLE CLEAR": sites probe line 402 (K1 row greps "ENABLE CLEAR" in K fatals), drain line 612, witness line 489 — these three are being REPLACED this round (that's the point). gate_arm.sh: greps `^K1 .*ok$` (1105) — the row id, not the text; the complaint text itself isn't grepped by the gate (the probe does the text match). gate_hygiene.sh — need to check for footbridge/complaint-text references. The sites probe header mentioned gate_hygiene.sh pins the `wait(mark=_mark, echo=...)` call form — a hygiene rule on probe SOURCE shape, not on complaint texts. Let me grep gate_hygiene.sh for footbridge to be sure. Also check whether anything greps "irq status" / "irq_raw_status" / "fiq" texts. Quick grep across regress/*.sh for those strings.
+
+  Batch now:
+  1. Read cpu_arm_instr.c 985-1035.
+  2. Grep `ARM_EXCEPTION_DATA_ABT\)` in src (callers).
+  3. Grep `case 'E'` in src/core/main.c with -A 10.
+  4. Grep latch idiom in src/devices: `(printed|announced|warned|reported|latched)` content head 40.
+  5. Grep in debugger_cmds.c: `"quit"|emul_shutdown|exit_debugger` content head 20.
+  6. Bash: grep -n "footbridge\|irq status\|irq_raw\|fiq" regress/gate_hygiene.sh | head -30 (check hygiene rules).
+  7. Grep dc21285reg.h for the register offsets: pattern `IRQ_STATUS|IRQ_RAW_STATUS|IRQ_ENABLE_SET|IRQ_ENABLE_CLEAR|FIQ_STATUS|FIQ_RAW|FIQ_ENABLE|TIMER_1_LOAD|TIMER_4_CLEAR|SDRAM_BA` content.Nearly everything is settled now. Remaining small items:
+
+  1. ARM DATA_ABT: the ONLY caller is `memory_arm.c:273: arm_exception(cpu, ARM_EXCEPTION_DATA_ABT)` — need the context: is it on MMU fault only, or reachable from a device decline? Read memory_arm.c around 240-290. My expectation: it's in the MMU translation path (fault status), not reachable from a device access return. If so: FAULT is NOT available to a device handler on ARM — the device access API has no abort channel; a handler returning 0 → check what memory_rw does. Let me read memory_arm.c context and the device-call site (memory.c / memory_rw.c) for what a 0 return does on ARM.
+
+  2. Unknown -E NAME: main.c:346-353 just stores the string `type`. The lookup by name must be later — grep for where `type` string is compared, probably in main.c after option parsing: something like `emul_parse...`? In gxemul 0.6: main() calls `emul_start`... hmm. Actually machine names: machine.c has machine names list; `machine_init`... Let me grep for "No emulation" didn't hit; maybe the message is "Unknown emulation name" phrased differently. grep main.c for `type` usage after parsing: pattern `type` too broad. grep for `machine_name_from_name`? In gxemul 0.6.x there's `machine_name_to_number(char *str)` in machine.c — grep it.
+
+  3. debugger_cmds.c doesn't exist in src/core — where is the debugger? Glob for debugger*.c. The brief cited `debugger_cmds.c` for quit → emul_shutdown/exit_debugger. Find the actual file: maybe src/debugger/debugger_cmds.c.
+
+  4. Latch idiom: confirmed — per-instance plain `int` fields named `*_warned` / `*_reported` (dev_asc.c:125-133 four ints, dev_osiop.c:89, dev_pckbc.c:108, dev_luna88k.c:106, dev_vga.c:123; two STATIC ints in dev_scc.c/dev_vga.c — the wrong shape, per-function statics). So the house idiom is per-instance plain ints, plurality spelling `(once)`. For five sites: five ints matches the file's existing struct style (all plain ints/uint32_t). K4's single uint32_t bit-field would be a new idiom; no collision hazard either way (only DEVICE_ACCESS writes it), but five ints matches dev_asc.c's four-int precedent exactly. Also confirm struct footbridge_data has no existing latch — correct, none (fields: irq, pcibus, console_handle, timer arrays, irq_asserted, irq_status/enable, fiq_status/enable). `irq_asserted` is the only flag-ish int.
+
+  5. Also verify quit path quickly once debugger file found.
+
+  Let me also double-check the sites probe K1's reliance: `K["fatals"]` regex `(\[[^\r\n\]]*footbridge[^\r\n\]]*\])` — the current +0x18c complaint is `[ WARNING: footbridge read from ENABLE CLEAR? ]` — contains "footbridge" ✓ and "ENABLE CLEAR" ✓.
+
+  For Q1(e), also grep gate_hygiene.sh for footbridge mentions (boot-log rules / allowlist). gate_hygiene.sh — find it: regress/gate_hygiene.sh presumably. grep for "footbridge" and for the complaint substrings.
+
+  Also Q1(d) full enumeration of exits reachable by THESE probes post-round: probes touch: VENDOR_ID (0x00), TIMER_1_LOAD/VALUE/CONTROL/CLEAR (0x300..), IRQ_ENABLE_SET read/write (0x188), IRQ_ENABLE_CLEAR write (E5 writes 0x18c — legal direction), and currently K reads 0x18c. Post-round: K arms retired. Do any remaining probe instructions touch 0x100/0x104? Sites probe BODY/ENABLE: offsets used: 0 (VENDOR), 768 (0x300), 392 (0x188), 396 (0x18c write in E5 — wait E5 does `str r8,[r0,#396]` = write to IRQ_ENABLE_CLEAR — legal write direction ✓, and E0-E3/E6 read 0x188). Drain: T_LOAD/CTRL/VALUE/CLEAR (0x300/0x308/0x304/0x30C) + VENDOR. Witness: same timer regs + VENDOR. None touch 0x100/0x104. ✓ So after this round, no access these probes make reaches an exit — TRUE, with the SDRAM pair remaining guest-reachable but not probe-reachable (separate round fbsdrampair).
+
+  Also Q1(d) enumerate every exit( in the FUNCTION: post-round, DEVICE_ACCESS(footbridge) contains only 714 and 739 (SDRAM reads). DEVINIT 843/879 construction-time (not in the function). footbridge_isa / footbridge_reset / footbridge_pci: no exits (checked in my full read: footbridge_pci returns 1 after fatal for bus 255; footbridge_reset uses cpu->running=0). ✓
+
+  Now, also for K1 leg: "launch with an unused -E name ... no prompt; the unknown-emulation diagnostic names that input; WIFEXITED && WEXITSTATUS == 1". Verify gxemul's behavior on unknown -E string: find the lookup. Let me grep machine.c for name→number. And main.c for where type string is used.
+
+  Batch:
+  - Read memory_arm.c 230-290.
+  - Grep `name_to_number|machine_name` in src — find the -E string resolution.
+  - Glob debugger file: GXEMUL-SEC/src/**/debugger_cmds.c or debugger*.c.
+  - Bash grep gate_hygiene.sh for footbridge + complaint strings (find file first: ls regress/gate_hygiene.sh).
+  - Grep for where memory_rw handles device return 0: in src/core/memory.c? Actually device dispatch is in memory.c `memory_device_access`? For dyntrans ARM loads, the path is memory_arm.c or cpu_dyntrans.c DEVI macros. The question "what if a device returns 0" — grep `dev->f(` ... maybe overkill. The FAULT question is mostly answered by: DATA_ABT only from memory_arm.c:273 (check context). And dev_unreadable returning 0 — where does that 0 go? For the panel answer: FAULT-as-data-abort is not wired to device declines; the abort exists only for MMU translation faults. Good enough if memory_arm.c:273 is in the translate path.GXEMUL-SEC/regress/build_asan.sh
+GXEMUL-SEC/regress/diff_autodev_gen.sh
+GXEMUL-SEC/regress/gate_ab.sh
+GXEMUL-SEC/regress/gate_arm.sh
+GXEMUL-SEC/regress/gate_asan_sweep.sh
+GXEMUL-SEC/regress/gate_build.sh
+GXEMUL-SEC/regress/gate_crossfamily.sh
+GXEMUL-SEC/regress/gate_hygiene.sh
+GXEMUL-SEC/regress/gate_m88k_rounding.sh
+GXEMUL-SEC/regress/gate_mips.sh
+GXEMUL-SEC/regress/gate_mips_folds.sh
+GXEMUL-SEC/regress/gate_mips_rounding.sh
+GXEMUL-SEC/regress/gate_offline.sh
+GXEMUL-SEC/regress/gate_ppc.sh
+GXEMUL-SEC/regress/gate_ppc_halt.sh
+GXEMUL-SEC/regress/gate_sh_rounding.sh
+GXEMUL-SEC/regress/gate_upstream.sh
+GXEMUL-SEC/regress/lib.sh
+GXEMUL-SEC/regress/run.sh
+GXEMUL-SEC/regress/selftest_mutation.sh
+---
+433:#  15 -> 16 on 2026-08-19: footbridge_sites_probe.py, the first reachability witness this tree
+434:#  has ever had for a footbridge machine.  MEASURED with this gate's own probe_code() census on
+448:#  The m8820x entry above records this shape, the footbridge entry directly above records it
+461:#  footbridge entry above records.  Bumped in the SAME edit that added the probe, which is the
+466:#  Wiring it into gate_arm.sh alongside footbridge_sites_probe.py is the follow-up, and it wants
+498:#  coupling these comments already document (m8820x, footbridge, luna_intmask, sh4_bsc_width) --
+1. **memory_arm.c:228-277**: DATA_ABT is raised ONLY in the MMU translation fault path (`exception_return` — permission/domain faults after translation), i.e. `arm_translate_v2p` failing. A device handler decline (return 0 from DEVICE_ACCESS, or any in-range device) never reaches this — the abort is tied to page-table access checks, not device disposition. Also note line 252-254: an unimplemented descriptor type does fatal+exit(1) — that's a guest-reachable kill in the MMU path (translation table descriptor type 3... wait, `default:` — descriptor types are 0=fault (handled above by `case 0`? the switch had case 1? Actually we see case 2 and default; case 0 (fault) handled earlier probably, case 1 = coarse page table, case 2 = section, default = type 3 (fine page table) → exit(1)! That's a guest-reachable exit in memory_arm.c — descriptor type 3. Not this round's scope (different file, different mechanism — the guest would need to build a fine page table). Hmm — is it reachable by these probes? The probes turn the MMU OFF and never build page tables, so not probe-reachable. It's a separate census item for the ARM gate; mention as "something else found" — it's a guest-reachable exit(1) in the ARM MMU path (descriptor type 3, fine page tables), out of this round's scope but squarely in the campaign's class. Actually wait — let me not overreach: descriptor type 3 = fine page table; a guest OS on cats using fine page tables would kill the host. OpenBSD/NetBSD ARM use... sections or coarse pages typically. It's a real exit(1) reachable by a guest that programs its page tables that way. Worth one line.
+
+  2. **machine_name_to_number**: no matches — so the -E string resolution is named differently. In gxemul 0.6.x, main.c: after parsing, it does something like `emul = emul_new(); ... machine = machine_init...`? The type string is matched in machine.c maybe via `machine_init_available...`? Let me grep main.c for `type` after options — pattern `machine_init_|emul_parse|machine_list|list_emul`. Let me just grep main.c for "type" occurrences near the end. Quick: `grep -n "type" src/core/main.c | tail -20` via Bash? Prefer Grep tool: pattern `\btype\b` in main.c content head 40. Also grep machine.c for `"cats"`.
+
+  3. debugger_cmds.c exists at src/debugger/debugger_cmds.c. Grep quit handler.
+
+  4. gate_hygiene.sh: footbridge mentions are probe-census comments (counts of probes), not complaint-text greps. No hygiene dependency on the five complaint texts. But let me be thorough: grep gate_hygiene.sh for "warn\|once\|WARNING" boot-log rules? The brief asks specifically: "a gate grep, a hygiene allowlist, gate_hygiene.sh's boot-log rules". Let me check if gate_hygiene.sh greps probe outputs for warning texts. Grep pattern `footbridge` gave only census comments. Maybe check what gate_hygiene checks: grep `check ` lines? That's a lot. Targeted: does any gate grep for "WARNING: footbridge"? grep across regress/*.sh for "WARNING: footbridge" — quick Bash grep (Grep tool over regress with glob *.sh).
+
+  Let me finish with:
+  - Grep `\btype\b` in main.c (content, head 40) to find -E name resolution; and grep `"cats"` in src/machines/machine.c? Actually machine names live where? In gxemul 0.6: machine.c has an array? No — 0.6 has machines/machine_*.c each with MACHINE_DEFAULT... hmm, actually gxemul 0.6.x uses `machine.c` with a table `machine_names[]`? Let me grep "cats" in src/machines/ and src/core/.
+  - Grep quit in src/debugger/debugger_cmds.c.
+  - Grep "WARNING: footbridge" across regress/*.sh (glob anchor issue: use path GXEMUL-SEC/regress + pattern, it will search all files incl .py/.sh — fine, but artifacts flood... use glob `*.sh`? glob filter matches full path — use pattern with path regress and glob "*.sh" — the glob note says basename pattern works).
+
+  Wait, the glob filter: "Matched against each file's full absolute path, so ... use a basename pattern (*.ts)". So glob:"*.sh" works.1. `machine_name_to_type` at main.c:541 — find its definition (probably in machines/machine.c) and check: unknown name → diagnostic naming the input + exit(1)? Read machine.c around the function.
+
+  2. quit: debugger_cmds.c:2073 registers "quit" → debugger_cmd_quit; lines 1636-1637 set emul_shutdown = true; exit_debugger = true. So quit → clean shutdown. Then main returns 0 presumably. Good enough: `quit` exits 0 through normal shutdown — verified at the debugger layer; main()'s return — I could check but the probes already reap exit 0 on healthy runs (their survived() checks require exit==0 and pass in the gate), so empirically quit→exit 0 is established by the existing rows. ✓
+
+  3. gate_hygiene/gates: no dependence on the complaint texts (only the two probe mutation scripts under artifacts/n6/, which are this campaign's own scratch — not gates). Q1(e) answer: only the three probes' K arms grep "ENABLE CLEAR" (sites:402, drain:612, witness:489) — all being replaced; gate_arm.sh greps the row ID `^K1 ` not the text; gate_hygiene.sh mentions footbridge only in census comments. ✓
+
+  Now machine_name_to_type: grep it in src.One last check on K1's exit path: machine_name_to_type returns matches; if 0 or ambiguous, main.c:541+ handles it. Let me read main.c around 535-560 to see the failure path (exit code + diagnostic naming the input).
+
+• One last read — the failure path after `machine_name_to_type` in main.c, to settle K1's exit-status premise.
+
+• main.c:541-544: `res = machine_name_to_type(...); if (!res) exit(1);` — unknown -E name → exit 1. Does the diagnostic NAME the input? machine_name_to_type's failure path — let me check what it prints on no match. From the earlier read (158-188), the function returns 1 on match; on no match it returns... I saw up to line 188. Need lines 188-215 to see the failure print. The K1 premise: "the unknown-emulation diagnostic names that input". Let me check quickly — read machine.c 188-215.
+
+  Actually, let me just read it — it's one more small read.machine.c:190-212 handles unknown SUBTYPE. For unknown TYPE (no alias match at all), the loop ends and... need the next lines (217-230ish) to see the "Unknown emulation" print. Let me read 217-235.K1 premise fully verified: unknown -E name → machine.c:240-243 prints `Sorry, emulation "<the input>" is unknown.` (names the input ✓), returns 0 → main.c:543-544 `exit(1)` ✓. WIFEXITED && WEXITSTATUS == 1 ✓. No debugger prompt (it dies during option/setup, before emul start) ✓.
+
+  I now have everything. Let me also reconcile one thing I noticed: the brief says the witness rung-3 rows "D1..D5 and D3's read die at their first undefined-direction access (exit 1 with the site's complaint)". Fine.
+
+  Also one more arithmetic enumeration requested: "Where this brief states an ARITHMETIC claim — an offset, a count — ENUMERATE it". Let me enumerate all arithmetic claims I verified:
+
+  1. Fork file length: 899 lines ✓ (wc). Stale copy 744 lines ✓ (wc).
+  2. exit(1) line numbers: 565, 574, 606, 615, 624 (this round), 714, 739 (SDRAM), 843, 879 (DEVINIT) — ✓ all nine verified by grep + full read. **Count claim "ten live exit(1)" is WRONG: there are NINE.** The brief's own enumeration lists nine lines. (The "ten" figure was true before #539 removed the tenth at +0x188 — stale by exactly one.)
+  3. `ldr r7,[r0,#396]` → 396 = 0x18C = IRQ_ENABLE_CLEAR ✓ (dc21285reg.h:336 `#define IRQ_ENABLE_CLEAR 0x18c`). Encoding 0xE590718C: bits — 1110 0101 1001 0000 0111 0001 1000 1100 → cond=E, 01, I=0,P=1,U=1,B=0,W=0,L=1, Rn=0000, Rd=0111, imm=0x18C ✓ = LDR r7,[r0,#+0x18c] ✓.
+  4. Register offsets: IRQ_STATUS 0x180 (hdr:332), IRQ_RAW_STATUS 0x184 (333), IRQ_ENABLE_SET 0x188 (335), IRQ_ENABLE_CLEAR 0x18c (336), IRQ_SOFT 0x190 (337), FIQ_STATUS 0x280 (339), FIQ_RAW_STATUS 0x284 (340), FIQ_ENABLE_SET 0x288 (342), FIQ_ENABLE_CLEAR 0x28c (343), SDRAM_BA_MASK 0x100 (140), SDRAM_BA_OFFSET 0x104 (153), TIMER_1_LOAD 0x300 (375), TIMER_4_CLEAR 0x36C (390) ✓ — the fold range 0x300..0x36C and mask ~0x060 consistent with 4 timers × 0x20 stride ✓.
+  5. E rows: `#392` = 0x188 ✓ (392=0x188), sites probe E arm uses `[r0,#392]` ✓. E3 byte 0x02 = P & 0xff with P=0x2002 ✓. E6 halfword 0x2002 ✓ (ldrh from base+0x188: sl=base+0x180, #8 → 0x188 ✓).
+  6. TIMER_MAX_VAL mask: A2 0x12345678 & 0x00FFFFFF = 0x00345678 ✓.
+  7. Footbridge base 0x42000000, DEV_FOOTBRIDGE_LENGTH 0x400 → covers 0x42000000..0x420003FF; all five offsets (0x180..0x284) inside ✓. +0x18c ✓.
+  8. The 42.95/85.90 numbers (witness) — not this round's claims; skip (they're in the probe header, previously settled).
+  9. Datasheet line numbers: Table 7-10 at 6821-6831 ✓ (my sed showed 6820-6832 region matching; brief quoted 6820-6831 — close, content exact; note the brief's table quote OMITS the final row "28Ch -- FIQEnableClear" present in the real table at ~6831 — cosmetic, not load-bearing). CSR zeros rule at :1651-1653 ✓ (my 1648-1656 window contained it exactly). §7.3.29 at 6886 ✓, "bit-wise AND" ✓. §7.3.31 IRQEnable "read-only ... Reset value: 0" ✓ (real text confirms). §7.3.33 IRQEnableClear WO ✓. §7.3.30 heading "IRQRawStatus/FIQRawStatus Register--Offset 184h/284h" — brief's inline labeled the raw-status sentence "6903" etc.; ordering in the actual extraction has 7.3.30 heading then 7.3.31 empty then the "identical data" sentence — brief's content accurate, minor line drift (±2).
+  10. HEAD claim: "HEAD 9c28ca5 (#539 shipped)" — WRONG label: 9c28ca5 is the #539 RECEIPT commit; current HEAD is f685d75 (one records-only commit later). BUT the file content is byte-identical between 9c28ca5 and the working tree (git diff empty), so every line number in the brief is accurate against the live tree. Also the working tree is DIRTY: gate_arm.sh has +64/-3 uncommitted (a crime_width pin repair + the E-row distinct-id tightening — NOT this round's legs), and gdrom_default/ppc_rldicl/sh4_chcr probes modified. So "the tree under review" is really f685d75 + uncommitted operator edits. Flag it.
+  11. "0/5 share an exact message" — verify the five texts are pairwise distinct: "irq status?", "irq_raw_status", "ENABLE CLEAR?", "fiq status?", "fiq_raw_status" ✓ distinct. Note "irq status?" vs "fiq status?" differ ✓. And substring trap: "irq status" is NOT a substring of "irq_raw_status" (underscore) ✓, so per-site grep counts are clean... but careful: a probe matching "fiq status?" — the FIQ_STATUS text is "write to fiq status?" and FIQ_RAW is "write to fiq_raw_status" — distinct ✓. However "[ WARNING: footbridge write to irq status? (once) ]" — if the probe greps "irq status" it also matches nothing else ✓.
+  12. The kill-arm verbatim quotes (§5): sites:161 ✓, sites:347 ✓, drain:231 ✓, witness:200 ✓, sites K row 402/408/411 ✓ (402 k_ok = any("ENABLE CLEAR" in f ...) and K["exit"] == 1 ✓; 408 "exit=%s" % K["exit"] ✓; 411 results.append(k_ok) ✓).
+
+  Now other findings:
+
+  A. **FIQ_ENABLE read asymmetry** (found something ELSE): Table 7-10 documents 288h read = FIQEnable; §7.3.31 covers "IRQEnable/FIQEnable Register--Offset 188h/288h ... read-only ... Reset value: 0". The code's `case FIQ_ENABLE_SET` (628-631) answers a READ with odata=0 unconditionally — the initial odata=0 — never d->fiq_enable. Compare #539's fixed IRQ side (591). So a guest reading 0x288 gets 0 even after FIQ_ENABLE_SET writes set bits. It's not a kill site (out of this round's title scope) but it is the SAME class #539 fixed at 0x188, still live at 0x288. The brief's claim "SEVEN guest-reachable sites" is about exits and stays true; but the campaign framing "five register accesses in a direction the datasheet does not define" is complete only for exits — the FIQ enable read is a documented-direction access returning a wrong value. Name it for a future round (it has no exit, so it doesn't gate this one).
+
+  B. **Row-id collision**: the proposed detector ids A1-A5/D1-D5 land on footbridge_sites_probe.py, which ALREADY emits A1 (377), A2 (378), A2b (397), D1 (433), K1 (407). The gate pins `^A1 .*got=0x00001011 .*ok$` count==1 (1092), `^A2 ` (1097), `^K1 .*ok$` count==1 (1105), and the display filter at 1074 includes `A[0-9]|I1|K1|D1`. Reusing A1/D1 ids would double-count or ambiguously match. The round must mint fresh ids (e.g. N1-N5 / X1-X5 or F-rows). Also the K1 id itself is being retired from the sites probe, so reusing K1 for startup-rejection is free — but in drain/witness the current row id is "K" (712, 634) not K1; the legs' naming must not collide there either. The brief didn't specify row IDs for the new detector rows as final — it called them "K4's A1-A5 / D1-D5" — so this is a naming hazard to fix in pass 2, not a design error. Still, exactly the kind of thing to flag.
+
+  C. **(once) idiom & storage**: census confirmed — the house idiom is per-instance `int ..._warned/_reported` fields (dev_asc.c:125-133 four separate ints is the closest precedent — four sites, four ints), plurality marker spelling "(once)". struct footbridge_data (60-85) is all plain ints/uint32_t; no bit-fields anywhere in the file. K4's single uint32_t warned_access bit-pack is compact and memset-safe (DEVINIT memsets the struct at 771 ✓ — verified), and there's no collision hazard (only DEVICE_ACCESS(footbridge) would write it; the interrupt assert/deassert helpers touch irq_status but not this field). But the file's and the tree's idiom is one plain int per site (dev_asc). Either works; five ints is the more literal idiom match, and avoids a bits-0-4 ordering comment. Bit-field ordering hazard: someone must define which bit is which site; five named ints are self-describing. I'd recommend five ints, matching dev_asc.c.
+
+  Also verify DEVINIT memset claim "cleared by DEVINIT's memset" ✓ line 771 `memset(d, 0, sizeof(struct footbridge_data))`.
+
+  D. **fatal() semantics**: debugmsg.c:384-391 — fatal() = va_debug unconditionally; NOT gated by quiet_mode (debug() is, :375), NEVER exits (no exit_on_fatal_error symbol anywhere in src/). ✓ both premises. Also default arm (747-753) → fatal per access, non-lethal, unlatched ✓ as briefed.
+
+  E. **FAULT availability on ARM**: ARM_EXCEPTION_DATA_ABT has exactly ONE caller: memory_arm.c:273, inside the MMU translation fault path (exception_return after arm_check_access / descriptor faults). Device access handlers have no abort channel: DEVICE_ACCESS return value is 1=handled; dev_unreadable.c returns 0 — and nothing in the ARM load/store path converts a device decline into a data abort (no `if (!memory_rw...)` dispatch in cpu_arm_instr.c; PREF_ABT at :1012 is the bkpt instruction, not a memory fault). So FAULT is NOT available as an option for this device on ARM without new core plumbing — and the datasheet wouldn't fault anyway ("no error action is taken"; and a write to a read-only CSR has no defined effect → hardware no-op). DECLINE is the hardware-faithful member. Member 3 stands for all five.
+
+  F. **K1/K2 legs**: K1: unknown -E name → machine.c:240-243 fatal `Sorry, emulation "<input>" is unknown.` names the input ✓; machine_name_to_type returns 0 → main.c:543-544 exit(1) ✓; no prompt (dies before emul run) ✓. So K1's spec is implementable as stated. K2: after a live prologue, `quit` → debugger_cmds.c:1636-1637 sets emul_shutdown + exit_debugger → main returns 0; next send()/rd() observes EOF/EIO → dead=True in all three launchers (sites' nested rd at 192-206, drain Session.rd 295-308, witness Session.rd 225-238 — all set dead on OSError/EOF and return False; send() at drain 338-351 / witness 268-278 sets dead on write OSError and returns False). Observable ✓. "Every surviving arm reaps exit 0" — matches existing survived() checks ✓.
+
+  The one honest gap vs the retired kill arm: the old arm proved the CONJUNCTION "a guest instruction stream → process exit(1) → harness detects dead mid-step AND reaps status 1 AND sees the complaint". K1 proves exit-1-reap at startup (no pty session established); K2 proves dead-detection + exit-0-reap after guest execution. The conjunction "dead DURING steps with exit 1" is not re-established by the legs — it is instead covered structurally by the new D rows (each requires its arm to SURVIVE with exit 0; a death shows as HOST-DIED/missing continuation → red). The brief's claim "do they establish what the old kill arm established" — mostly yes, with that nuance named.
+
+  G. **Q1(d)**: statement "no footbridge access these probes make ends the process" — TRUE post-round, with the precise enumeration: exits remaining in DEVICE_ACCESS(footbridge): 714 (read +0x100), 739 (read +0x104) — guest-reachable but not probe-reachable (no probe plants an access to 0x100/0x104; enumerated probe offsets: sites {0x00, 0x188, 0x18c, 0x300}, drain {0x00, 0x300, 0x304, 0x308, 0x30C}, witness same + none other). DEVINIT exits 843/879 are construction-time (machine type is not guest-chosen) ✓. footbridge_isa/reset/pci have no exits ✓. And per the brief itself, the SDRAM pair is the separate round fbsdrampair — so the statement as the brief phrases it in §4 ("...except the SDRAM pair") is the true one; Q1(d)'s unqualified phrasing is FALSE without that qualifier. Also: arm T's MMU-on reads hit PA 0x02000000 aliasing — no exit there.
+
+  H. **Q1(e)**: dependents on the complaint texts / "ENABLE CLEAR": exactly three — sites:402, drain:612, witness:489 — all three are the K arms being replaced this round. gate_arm.sh:1105 greps the ROW ID `^K1 .*ok$`, not the text. gate_hygiene.sh mentions footbridge only in probe-census comments (433-498). No other gate/hygiene dependency on the five texts. The new latched texts WILL be grepped by the new D rows (count of announce text) — so the texts become load-bearing at probe level, and renaming a register in a text (weakening g) reds only if the D-row match is the site-specific text (it must be — see Q2(g)).
+
+  I. **Q2 weakenings**:
+  (a) exit(1) kept at ONE site → that site's D row dies at its first access (exit 1 + complaint; no continuation) → RED. Also witness rung: stays red post-fix. Caught.
+  (b) unlatched announce → each D row counts announce text across TWO accesses: 2 ≠ 1 → RED. Caught. (Both accesses are in the same arm's buffer — sites probe collects fatals over the whole buf.)
+  (c) shared latch bit between two sites → the second site's D row sees 0 announces where 1 required → RED. Caught. (Requires the probe to exercise both sites' D rows — it does, D1..D5.)
+  (d) +0x18c decline keeping odata=d->irq_enable → D3 reads 0x30 where 0 required → RED. Caught. (And it's the exact leak M2 flagged.)
+  (e) write-decline storing into irq_status → D1: write 0x10 to +0x180 then raw/status read shows 0x10 → RED. Caught — REQUIRES D1's "state unchanged" check to read +0x184/+0x180 after the writes. As written ("state unchanged") it does. ✓
+  (f) decline swallowing the legal direction (IRQ_STATUS read returns 0 always) → **ESCAPES the listed rows**: A1's expected value is 0 (enable 0x30 set but NO interrupt source is active — irq_status is 0 throughout these probes because nothing asserts a footbridge interrupt line in a cold-debugger arm; IRQ_SOFT +0x190 is unimplemented — a write falls to the default arm and changes nothing). No listed row ever makes irq_status nonzero, so "IRQ_STATUS read = status & enable" and "IRQ_STATUS read = 0" are indistinguishable here. Same for A4 (FIQ, enable 0xc0). This is a genuine detector hole to name in pass 2: either accept it (the AND is already pinned by... nothing — actually the AND semantics is pinned only when status nonzero) or add a row that first causes irq_status to go nonzero — the only guest route is a timer interrupt (TIMER_1_CONTROL enable + wait for tick → footbridge_interrupt_assert sets irq_status bit IRQ_TIMER_1) — that needs a free-run slice, which the sites probe deliberately avoids (cold stepper). Cheap alternative: pin it offline in diff_footbridge.c (the direct-call differential), which CAN set d->irq_status directly. Name it.
+  (j) latch cleared by a read → D3 (two READS of +0x18c) catches it trivially (count 2). For the four WRITE sites (D1/D2/D4/D5): caught ONLY IF the "state unchanged" read is interleaved BETWEEN the two writes; if the probe does write, write, then read state, a read-cleared latch still shows count 1 → escapes. Pass 2 must interleave. Name it.
+  (g) misnamed register in text → RED iff D rows match site-specific text (they must); if the probe counts a generic "(once)" or "footbridge" substring, escapes. The sites probe's existing fatals regex is `\[...footbridge...\]` (generic) — if D rows reuse that generic bucket and count it, (g) escapes; they must match the full site text.
+  (h) K1 passing on ANY nonzero exit → escapes detection of a WRONG-reason death (e.g., the binary crashing with exit 2 or a signal on the unknown -E). The spec's `WEXITSTATUS == 1` (exactly) + diagnostic names the input pins it. If K1 is implemented as "nonzero", it greens on a segfault-reaped... no — WIFSIGNALED is not WIFEXITED; "any nonzero exit" still excludes signals if implemented via WEXITSTATUS, but admits exit 2 etc. Weak but not vacuous. The pin must be ==1 plus the named-input diagnostic.
+  (i) K2 passing when the child died BEFORE the prologue completed → the prologue-verified-live requirement (fresh reg with the four values: CP15 bit0 clear, RAM 0x11223344, VENDOR 0x1011, LOADBACK 0x00345678) is exactly what excludes it. If K2 only checks "dead after quit", a NO-PROMPT or dead-at-step-3 child greens it. The leg as specified (prologue verified by reg BEFORE quit) is sound; the hollow variant is the risk.
+  (k) legs in one launcher only → the other two probes silently lose their failability control when the kill arm retires (their K rows are deleted; nothing replaces them) → those probes are vacuously green on survival rows. gate_arm.sh's replacement checks must pin the legs' output tokens for EACH of the three launchers (three separate pins), or this escapes the gate.
+
+  Q3: option set — members weighed: DELETE (fall to default: unlatched print per access, worse signal; also loses site specificity), DECLINE silent (member 2 — viable alternative), DECLINE+LATCHED (member 3 — proposed), ACCEPT (no warrant — datasheet defines no value/effect for these directions), FAULT (NOT AVAILABLE on ARM — no device→abort channel; DATA_ABT only from the MMU fault path, memory_arm.c:273; and hardware takes "no error action"), BACKED ACCEPT (for +0x18c: return irq_enable — that's the current leak minus the exit; no datasheet warrant — reads of a WO address fall under "nonexistent CSR → zeros"; for write sites it would mean storing — no warrant), IMPLEMENT (nothing to implement — hardware defines no effect). So the set is complete; member 3 is right for all five. One extra note: for the four write sites, the hardware's真实 behavior is "no effect, no error" — DECLINE is not just policy, it's the datasheet's shape; the announce is the policy layer and the latch makes it survivable.
+
+  Q4: smallest edit that leaves the legs green while proving nothing:
+  - For K1: checking only "exit nonzero" (variant h) — greens on any failure; or weaker: launching the unused -E name but accepting any output without pinning the named-input diagnostic. Row that stays green: gate pin "K1 leg ran" if the pin greps only a token like `K1 ok`.
+  - For K2: the "quit then assert dead" leg WITHOUT the prologue-liveness reg check — every healthy session also dies on quit with exit 0, so the leg passes vacuously and never discriminates. Even hollower: implement K2 as "quit; reap; exit==0" — i.e. re-describe normal teardown as a leg. The row that stays green: the gate's "legs present" pin and the probes' own PASS lines; nothing can red it because no product change can make "quit → exit 0" false... actually a product regression that makes quit hang WOULD red it via the harness-kill label — but that's already covered by teardown. So hollow K2 adds zero discriminating power beyond what teardown already has.
+  - The real teeth K2 must keep: (1) prologue verified live BEFORE quit (a dead-early child reds it), and (2) the post-quit interaction must be attempted and observed to fail with `dead` BEFORE close() — that exercises the rd()/dead path that a mid-step product death relies on. Removing either leaves the row green forever.
+  - And gate_arm.sh: the two replacement checks must pin K1's exit==1+named-input AND K2's prologue-verified+dead-before-cleanup+exit-0 as separate tokens per probe (6 pins), or the single-launcher variant (k) escapes.
+
+  Also the "row you expect to stay green" for the smallest hollow edit: the gate's own completion rows (probe produced a verdict) and any pin that counts the leg as a LINE rather than its discriminating content — e.g. a pin `grep -c "K2" == 1` stays green under a vacuous K2. Expect the sites probe's existing PASS line to stay green too since the legs aren't part of `results[]`... wait, they must be added to results[] or they don't gate. If the implementer adds legs that print but don't append to results, FOOTBRIDGE_SITES_PASS stays green regardless — the smallest hollow edit of all. gate_arm.sh must therefore pin the leg rows explicitly (like it pins A1/A2/K1 today), not rely on the aggregate.
+
+  One more premise check I should do: the brief §2 says the probes' K rows "require the complaint AND exit 1" — verified for sites (402), drain (712-716: HOST-DIED + saw + exit==1 + survived(D)), witness (634-638: same shape) ✓.
+
+  And the drain probe K arm placement: build(kill=True) puts the kill at 0x5c AFTER the accrual-loop NOPs — i.e., the kill fires after the timer is ARMED (CTRL write at 0x30, LOAD at 0x38). Wait — drain's kill program: prologue arms timer (CTRL_ON at 0x30, LOAD_RUN at 0x38), sentinel loads, then 0x54/0x58 NOPs, 0x5c KILL. It steps PROLOGUE_N+3 = 24 = through 0x5c. ✓. Witness kill at 0x48 replaces LOOP[0] — steps 19 = through 0x48 ✓.
+
+  Also the brief's §5 quote for drain says line 231 `p.append((0x5c, 0xE590718C, ...)` ✓ exact.
+
+  The sites probe K arm: KILL_LOAD at 0x2c replaces KILL_NOP, then TAIL landing pad at 0x30. Stepped instructions: prog[:-1] = all but landing pad → includes 0x2c kill load. The step of the kill instruction: send("step 1") → the load executes → fatal+exit → the emulator prints the complaint, process dies. send returns... the step command's output comes back or the process dies mid-wait → rd() EOF → dead → status HOST-DIED ✓. Then fatals collected from buf ✓, exit 1 reaped ✓.
+
+  Now — am I confident about "0x18c read is one of the SEVEN guest-reachable exits at HEAD"? Yes: 606 in the read branch of IRQ_ENABLE_CLEAR ✓.
+
+  "Five are accesses in a direction the datasheet does not define" — write to RO status regs (4) + read of WO clear (1) ✓ per Table 7-10 (`--` cells). ✓
+
+  "the other two are READS of SDRAM_BA_MASK/OFFSET (+0x100/+0x104), documented READ/WRITE registers whose write arms discard the value" — hmm, datasheet: SDRAM_BA_MASK 0x100 / SDRAM_BA_OFFSET 0x104 — are they documented READ/WRITE? I didn't verify that specific claim against the datasheet. The brief says they're a separate round. Let me not leave it unchecked — it's a premise of the grouping. Quick check: grep the datasheet for SDRAM_BA / "Bank Array" / offset 100h. Actually the register at 0x100-0x104 in the 21285: "SDRAM bank array mask/offset"? Let me grep dc21285.txt for "100h" / SDRAM timing. One quick grep to settle whether 0x100/0x104 reads are documented (which determines whether the SDRAM pair is really a different class). If the datasheet shows them as RO/WO or undefined-read, the class split changes. Worth one grep: pattern "SDRAM" in the datasheet around register tables. Table 7-x... grep -n "100h\|SDRAM" limited.
+
+  Also double check the datasheet's Interrupt table footnote about writes to RO registers ("--" = ?). The table legend may define "--". Not critical.
+
+  Let me also settle Q1(a)'s per-site quoting precisely:
+  - +0x180 IRQ_STATUS: Table 7-10 "180h IRQStatus --" (write undefined); §7.3.29 "This read-only register" ✓
+  - +0x184 IRQ_RAW_STATUS: "184h IRQRawStatus --"; §7.3.30/31-33 "read-only registers" ✓
+  - +0x280/+0x284: same table, FIQ side ✓
+  - +0x18c IRQ_ENABLE_CLEAR: "18Ch -- IRQEnableClear" (read undefined); §7.3.33 "This write-only register" ✓
+
+  All five confirmed from my own datasheet reads.
+
+  One more possible "found something else": memory_arm.c:252-254 — the MMU translation path has fatal+exit(1) on an unimplemented descriptor type (type 3, fine page tables). Guest-reachable (a guest OS building fine page tables on cats), same campaign class, different file/device. The probes don't reach it (MMU off). Name it in one line.
+
+  Also: IRQ_SOFT (0x190) write falls to default arm → unlatched fatal per write. A guest writing IRQSoft spams `[ footbridge: write to 0x190: ... ]` per access but survives. Documented WO register — arguably should be IMPLEMENT (it sets the soft interrupt bit) — filed already per the sites probe header ("filed with IRQSoft"). Mention.
+
+  Also check: does anything else in src grep for the five complaint texts (e.g., a hygiene allowlist counting diagnostics)? My earlier `(once)` grep and "WARNING: footbridge" grep across regress/*.sh found only the n6 scratch scripts. Also within src — the texts live only in dev_footbridge.c. And the probes' fatals regex needs "footbridge" in the text — the proposed K4 texts all contain "footbridge" ✓ so they land in the fatals bucket for counting. But NOTE: E4 row requires `not E["fatals"]` for arm E — arm E writes +0x18c (E5: str r8,[r0,#396] — a WRITE to IRQ_ENABLE_CLEAR, the LEGAL direction). Post-fix, the legal write does not announce ✓ (decline+announce only on the read). Good — E rows unaffected. But wait: E arm also WRITES +0x188/+0x18c — legal directions ✓. And arm E reads +0x188 ✓ legal. So E4 stays green post-round ✓. And arms L/T: BODY touches VENDOR, TIMER_1_LOAD ✓ legal. So no existing row goes red from the announces. The kill-arm K rows DO go red post-fix (K no longer dies) — that's why they must be replaced in the same commit ✓ consistent with the brief.
+
+  Also: the sites probe's `fatals` regex `(\[[^\r\n\]]*footbridge[^\r\n\]]*\])` — counts per arm buffer. New D rows counting announce text "across two accesses" will grep within an arm's buf — same mechanism ✓ feasible.
+
+  What about `IRQ_ENABLE_SET` read returning irq_enable — E rows pin it ✓ already shipped.
+
+  OK — SDRAM datasheet check, then write the answer. Also quickly verify the drain probe's `--only` interplay? Not needed.
+
+  Let me grep the datasheet for the SDRAM registers at 100h/104h.295:   7.3.9   SDRAM Base Address Mask Register--Offset 100h .........................7­27
+296:   7.3.10  SDRAM Base Address Offset Register--Offset 104h ........................7­28
+3879:     case. The PCI address is 100h and the SDRAM address is 208h. To write eight Dwords at PCI
+3880:     addresses 100h through 11Ch (a cache line), the channel must read three blocks from SDRAM
+3883:              The Dword data from SDRAM 208h transfers to PCI 100h, and so on. The first two and last two
+3894:     100h 104h 108h 10Ch               110h 114h 118h 11Ch
+5422:     SDRAM base address mask                    100h
+5423:     SDRAM base address offset                  104h
+5844:7.3.9  SDRAM Base Address Mask Register--Offset 100h
+5897:7.3.10     SDRAM Base Address Offset Register--Offset 104h
+SDRAM registers documented at 7.3.9/7.3.10 (offsets 100h/104h). Quick look at 5844-5860 to confirm R/W status — the class split premise ("documented READ/WRITE registers whose write arms discard the value — a missing value, not an undefined direction"). Let me read those two sections quickly.7.3.9  SDRAM Base Address Mask Register--Offset 100h
+
+       The SDRAM base address mask register must be written by the SA-110 before the initialize
+       complete bit [1] in the SA-110 control register is set.
+
+       Dword Bit  Name                 R/W Description
+       17:0       --
+       27:18      Mask                 R    Read only as 0.
+
+                                       R/W When 1: Causes the corresponding bit in the SDRAM
+                                                   base address register to act as a read-only 0 bit.
+
+                                            When 0: Causes the corresponding bit in the SDRAM
+                                            base address register to act as a read/write bit.
+
+       30:28      --                   R    Reset value: 0.
+       31
+7.3.10     SDRAM Base Address Offset Register--Offset 104h
+
+           The SDRAM base address offset register must be written by the SA-110 before the initialize
+           complete bit [1] in the SA-110 control register is set.
+
+           Dword Bit  Name            R/W Description
+           17:0       --
+           27:18      Offset          R          Read only as 0.
+
+                                      R/W This field contains the upper address bits for PCI-
+                                                  generated SDRAM accesses (see Figure 7-1). Each bit of
+                                                  this register is used as a SDRAM address if the
+                                                  corresponding bit of the SDRAM base address mask
+                                                  register is a 0.
+
+                                                 Reset value: 0.
+Confirmed: SDRAM_BA_MASK (100h) and SDRAM_BA_OFFSET (104h) are documented READ/WRITE registers (bits 27:18 R/W) — a read is a documented direction and should return the stored field. The model discards writes and kills on reads — that's the "missing value" class, correctly separated into fbsdrampair. The brief's class split premise holds.
+
+  I now have everything verified first-hand. Time to write the seat answer. Structure:
+
+  VERDICT LINE FIRST.
+
+  Then:
+  - Premise audit results (what checked true, what's wrong):
+    - TRUE: five sites' datasheet directions; code inline verbatim-accurate (line-for-line at the live tree); kill-arm quotes; probe mechanics; fatal() unquietable and non-exiting; (once) idiom; teardown descriptions; K1 path (machine.c:240 + main.c:543); quit→exit 0 (debugger_cmds.c:1636-7); CSR-zeros warrant (:1652); the +0x18c leak (line 603 assigns before exit); SDRAM class split (7.3.9/7.3.10 R/W).
+    - WRONG/STALE:
+      1. HEAD label: actual HEAD is f685d75; 9c28ca5 is the #539 receipt commit (its child). Content identical (git diff 9c28ca5..HEAD and vs worktree for dev_footbridge.c: empty), so line numbers stand — but the brief's HEAD claim is stale, and the working tree is DIRTY (gate_arm.sh +64/-3 uncommitted: an E-row pin tightening at :1109-1116 and a new crime_width section at the tail; plus gdrom_default/ppc_rldicl/sh4_chcr probes modified). Review was against the dirty tree.
+      2. "ten live exit(1)": NINE. Enumeration correct (565/574/606/615/624/714/739/843/879), count word stale by one (the tenth was +0x188's, removed by #539). exit_census.py is comment-aware (tools/pipeline/exit_census.py) and would report 9 for this file.
+      3. Table 7-10 quote omits the table's last row (28Ch -- FIQEnableClear) — cosmetic.
+  - Q1 answers (a)-(e).
+  - Q2 (a)-(k) with red/escape.
+  - Q3.
+  - Q4.
+  - Something else found: FIQ_ENABLE read asymmetry (0x288 read returns 0, not fiq_enable — documented read per Table 7-10/§7.3.31, same class #539 fixed at 0x188; not an exit site, no row, needs its own round); memory_arm.c:252-254 exit(1) on MMU descriptor type 3 (fine page tables) — guest-reachable in principle (a cats guest using fine page tables), outside this round; row-ID collision A1-A5/D1-D5 vs existing A1/A2/D1/K1 in the same log (gate pins `^A1 `, `^K1 `, display filter `A[0-9]|I1|K1|D1` at gate_arm.sh:1074, distinct-id pin discipline shown at :1111-1116); (j) interleave requirement; IRQ_SOFT unimplemented (write → default arm, unlatched print; filed per probe header).
+  - Seat record.
+
+  Also Q1(a) FAULT availability: not available — the only DATA_ABT caller is memory_arm.c:273 in the MMU translation fault path; device handlers return int with no abort channel; dev_unreadable returns 0 (decline-to-unmapped-ish, silent); no `if(!memory_rw` dispatch in the ARM load/store path. And hardware itself takes "no error action". So member 5 is neither available nor datasheet-warranted.
+
+  Also for Q1(a) per site member check:
+  - +0x180 write: Table 7-10 "--" + §7.3.29 read-only → decline ✓ member 3.
+  - +0x184 write: "--" + §7.3.30-33 read-only ("always contain identical data") → member 3.
+  - +0x280/+0x284: same → member 3.
+  - +0x18c read: "--" read column + §7.3.33 WO → decline; value 0 per :1652 (WO address has no read register → nonexistent-for-read → zeros). Member 3. Note the leak fix (drop odata assignment) is required by the value warrant, already in the brief ✓.
+  - Any site where member 2 (silent) is more honest? The announce is policy; for writes to status registers, a guest writing RO registers is likely a driver bug → announce helps; datasheet silent. Member 3 vs 2 is a policy choice; the house idiom supports 3. Concur with 3 for all five.
+
+  Q1(b): five ints matches idiom (dev_asc.c:125-133 four ints; dev_osiop/pckbc/vga per-instance ints; two static-int counterexamples in dev_scc.c:350/dev_vga.c:635 which are the WRONG shape — per-process not per-instance). struct footbridge_data is all plain fields; DEVINIT memsets (line 771) so either zeroes. Bit-field hazard: none from other writers (only DEVICE_ACCESS touches it), but bit-numbering needs a comment mapping bits 0-4 to sites; five named ints are self-describing and match dev_asc. Vote: five ints.
+
+  Q1(c): quote helpers — sites nested rd/send (192-235), drain Session (295-351), witness Session (225-278). dead observable via send() OSError → dead=True/False return, and rd() EOF/EIO → False+dead. K1/K2 do establish the two halves; the conjunction (mid-step exit-1 death) is not re-pinned by the legs but is covered by every D row's survival requirement + the A rows' liveness. Also K2's "fails with dead BEFORE cleanup" — must be an explicit send/reg after quit; all three send()s return False and set dead on EIO. ✓ feasible as written.
+
+  Q1(d): enumerate exits in DEVICE_ACCESS(footbridge) post-round: ONLY 714 (read +0x100) and 739 (read +0x104). Guest access reaching them: any MMU-off guest read of 0x42000100/0x42000104. These probes never touch those offsets (enumerated probe offsets: sites {0x00,0x188,0x18c-write,0x300}, drain {0x00,0x300,0x304,0x308,0x30C}, witness same). So the statement as phrased in Q1(d) is TRUE for these probes post-round; the unqualified "no footbridge access ends the process" would be FALSE (SDRAM pair) — and the brief's §4 says it correctly with the qualifier. DEVINIT 843/879 construction-only.
+
+  Q1(e): only the three K arms (sites:402, drain:612, witness:489) grep "ENABLE CLEAR"; gate_arm.sh:1104-1105 pins the row ID `^K1 .*ok$`; gate_hygiene.sh references footbridge only in probe-census comments (:433-498); no allowlist greps the five complaint texts. The n6 scratch scripts under artifacts/ reference the +0x18c text but are not gates (and out of scope). So text-renames are safe except through the probe rows being rewritten this round.
+
+  Q4 answer: smallest hollow leg edits + row that stays green: (i) K2 as "quit, reap, assert exit 0" without the pre-quit prologue reg verification and without the post-quit dead-poke → passes on every healthy run, discriminates nothing; the gate row that stays green: the probe-completion/aggregate PASS and any pin that greps the leg's mere presence (e.g. `grep -c "K2"` or counting lines), plus the probes' own `results[]` if the legs aren't appended. Requirement: legs must be appended to results AND pinned at the gate by content (K1: exit==1 + input named; K2: prologue values + dead-before-cleanup + exit 0), six pins across three launchers. The specific row I expect to stay green under a hollow K2: gate_arm.sh's "footbridge: every row green" (FOOTBRIDGE_SITES_PASS) if legs aren't in results[] — the cheapest escape.
+
+  Also name expected-green row for the whole round's weakest pin: the sites probe's D1 (disassembly) row is orthogonal...
+
+  Also mention: witness rung-3 red pre-fix claim — the new D rows on HEAD die at first undefined access: TRUE by inspection (each site's else-branch exits; the arm's remaining steps/regs missing → HOST-DIED → row red). ✓
+
+  One more check on Q2(c): "one latch bit shared by two sites (the second never announces)" — D rows require each site's announce count == 1 across two accesses of ITS site. If bit shared between, say, +0x180 and +0x184: D2 (+0x184 writes) → announce suppressed (bit set by D1's earlier arm? NO — latch is per device INSTANCE, and each arm is a fresh emulator process → fresh instance → bit clear at D2's arm start!). Wait — each D row presumably runs its own arm (fresh process). Then a shared bit between two sites: D1's arm does two writes to +0x180 → announce once ✓; D2's arm (fresh process, fresh struct) does two writes to +0x184 → its bit starts clear → announces once ✓. THE SHARED BIT ESCAPES if each D row is a separate arm! Because the latch is per-instance and each row gets a fresh instance. The shared-bit defect is only observable when BOTH sites are hit in ONE session. So Q2(c): caught only if at least one arm touches two of the five sites and checks both announced. As specified (each D row = its own two accesses), (c) ESCAPES. Hmm — unless the five D rows share one arm. The brief doesn't say. Pass-2 must specify: either one arm walking all five sites (which also tests (c) and cross-site independence), or a sixth row that touches two sites in one session. Good catch — this is exactly the kind of detector-gap the panel wants.
+
+  Similarly (b) unlatched: two accesses in the SAME arm → count 2 ✓ caught regardless.
+
+  And (j) latch-cleared-by-read: D3 catches (two reads same arm); D1/D2/D4/D5 catch only with interleaved state read between the two writes (the read clears the latch → second write re-announces → count 2). As briefed ("state unchanged" check), if the check reads state between the writes, caught; if after both, escapes. Must specify interleave.
+
+  Let me also double check the "announce once per device instance" with fresh process per row: that's the natural implementation (each D row its own run_arm). ✓ consistent.
+
+  Now — Q2(a): decline keeping exit(1) at ONE site: that site's D row: first access → exit 1 → arm dies → no continuation → red ✓. Also the whole-probe verdict reds. Caught.
+
+  Q2(h): K1 on ANY nonzero: if implemented so, a wrong-reason death (exit 2) greens — escapes; spec requires ==1 + named input. Row that reds first if done right: none — it's a leg-hollowing issue; the gate pin must require the exact token.
+
+  Q2(k): legs in one launcher: the other probes' K rows are deleted; if gate_arm.sh replaces "kill arm still dies" with two checks that don't name each probe, the missing legs escape. The sites probe is the only one gate_arm.sh runs for footbridge — wait, does gate_arm.sh run drain/witness? The witness is rung-3 (115 s) — probably not in the gate. Drain probe — is it in a gate? Let me think: gate_arm.sh's footbridge section (1072-1125) runs ONLY footbridge_sites_probe.py. The drain/witness probes are rung-3 / elsewhere (maybe gate_offline or not gated). The brief says gate_arm.sh's check replacement covers the sites probe's legs; drain/witness legs are pinned... by what? "gate_arm.sh's 'the one-instruction kill arm still dies' check is replaced by two checks pinning the legs" — two checks = K1 and K2 pins for the SITES probe (the only probe that gate runs). The drain/witness K arms live in files not driven by gate_arm.sh's footbridge section — but drain's row K is pinned wherever drain is gated (if anywhere). Hmm — I didn't verify whether drain/witness are wired into any gate. Quick check worth doing? grep gate scripts for fbpending. Let me do it — one grep.
+
+  Also should verify the claim in Q4 setup that there are exactly three launchers — yes: sites nested helpers, drain Session, witness Session ✓ (read all three).
+
+  Let me run that last grep, then write the final answer. Also grep for who drives fbpending_drain_probe in gates.
+
+• One last check — which gates drive the drain/witness probes, since the legs must be pinned per launcher.
+
+• Key finding for Q1(c)/Q4: **the drain and witness probes are NOT run by any gate** — gate_offline.sh:1269 says "reproduction is regress/fbpending_drain_probe.py (rung 3) and it is NOT run here". gate_arm.sh runs only footbridge_sites_probe.py. So the drain/witness K-arm retirements are not gate-pinned by gate_arm.sh at all; their K rows exist for when a human/battery runs them. The brief says "the legs go in each" of the three launchers — correct per fable5; but the GATE pin replacement ("gate_arm.sh's check ... replaced by two checks pinning the legs") can only pin the SITES probe's legs. The drain/witness legs would be unpinned by gates (they're rung-3, run on demand / by the battery — the operational rule mentions "the battery"). So the two gate checks cover one of three launchers; the other two launchers' legs rely on their own rows (their probes self-report FAIL via `ok` rollup and exit code when run). That's fine as long as the legs append to each probe's own verdict. For the drain: `row("K ...")` at 712 feeds `ok` → FBDRAIN_CONTROL; witness row K at 634 → FBPENDING_CONTROL. When those probes ARE run, a missing leg reds their control row only if the legs are added to their `ok` rollups. So the requirement: in drain/witness, the new K1/K2 legs must be wired into `ok`/results, replacing row K. Not gate-pinned, but self-pinned. And (k) "legs in one launcher only" → drain/witness would then have NO failability control rows at all (K deleted, no legs) → their control rollup stays green (nothing appended) → escape. So the round must require, per probe, that the legs are appended to that probe's verdict set. State it.
+
+  Also confirms: battery runs them maybe — "the battery" in operational rules. Fine.
+
+  Now I have everything. Writing the final answer.
+
+  Structure per brief: VERDICT LINE FIRST, then premise audit, Q1-Q4, other findings, seat record.
+
+  Keep it tight but complete. Language: English (the brief is English).
+
+  Verdict: DESIGN SOUND, PROCEED WITH AMENDMENTS — member 3 confirmed for all five from first-hand datasheet reads; but I found: one wrong HEAD label, one stale count ("ten" vs 9), a row-ID collision in the proposed detector ids (A1-A5/D1-D5 collide with existing A1/A2/D1/K1 in the same probe log — gate pins key on those ids), two detector gaps (weakening (f) escapes — no row can make irq_status nonzero; weakening (c) escapes if each D row is a fresh instance — need one arm touching ≥2 sites; (j) needs interleaved state reads), plus one out-of-scope find (FIQ_ENABLE read at 0x288 documented but returns 0 — the FIQ twin of #539's bug) and memory_arm.c:254 exit(1) on descriptor type 3.
+
+  Let me make sure about (c) escape reasoning once more. Latch is per device instance (struct field, memset in DEVINIT). Each D row: the brief says "D1 two writes of 0x10 to +0x180: state unchanged, the announce ONCE". If each D row is its own run_arm (fresh process → fresh DEVINIT → fresh struct), a shared bit between +0x180 and +0x184: D1's process announces on first +0x180 write (bit set), second suppressed → count 1 ✓. D2's FRESH process: bit clear at start → first +0x184 write announces → count 1 ✓. So yes, shared bit between two sites escapes per-row-fresh-arm. Caught only if one session touches both sites. Also if D rows share ONE arm that walks all five sites, then a shared bit reds (second site announces 0). The brief doesn't specify arm topology — pass-2 must. Good.
+
+  Also (b): within one arm, two accesses → count 2 vs 1 ✓ caught regardless of topology.
+
+  Q2(f) escape reasoning double-check: A1 expects IRQ_STATUS read → 0 with enable 0x30. irq_status stays 0 because nothing asserts a footbridge interrupt line in these cold stepped arms (timers: the sites probe's arm E writes only enable regs; the BODY arms timer? No — sites probe BODY writes TIMER_1_LOAD only (0x24) and reads it back (0x28) — a LOAD write calls reload_timer_value (arms a core timer!) and deasserts; with TIMER_ENABLE not set (control reset 0... wait DEVINIT sets timer_control[i] = TIMER_MODE_PERIODIC (line 889) and timer_load = TIMER_MAX_VAL — no TIMER_ENABLE bit (0x80), so timers disabled at reset ✓; DEVICE_TICK only acts if control & TIMER_ENABLE ✓. So no tick, no assert, irq_status stays 0 in all stepped arms. drain/witness arms DO enable timer 1 and free-run → footbridge_interrupt_assert sets irq_status bit 4 (IRQ_TIMER_1 = ... IRQ_TIMER_1 is presumably 4) → irq_status nonzero there — but those probes don't read IRQ_STATUS. So in the SITES probe (where A1-A5 live), irq_status is always 0. Confirmed: (f) escapes the sites probe as rowed. The fix direction: an offline row in diff_footbridge.c (directly set d->irq_status and call the access function) or a free-run arm. Name it.
+
+  Also note for (f): the decline "swallowing the legal direction" for the four WRITE sites means: write arm does nothing (correct) but the READ arm also broken — e.g. IRQ_STATUS read returns 0 always. A1 expects 0 anyway → escape. For +0x18c the legal direction is WRITE; a decline swallowing it (write does nothing) → A3 catches (write 0x10 with enable 0x30 → enable must become 0x20; a swallowed write leaves 0x30 → red ✓; also zero-write preserves 0x20 pins the inverse). Good — A3/D3 cover +0x18c's legal direction; A1/A2/A4/A5 do NOT cover the status registers' legal (read) direction against a constant-0 mutant because status is 0. Correct statement of the hole.
+
+  Hmm wait — A2 "IRQ_RAW_STATUS read +0x184 -> 0 (catches odata = irq_enable: 0x30)": with enable 0x30 set (via SET write), raw status correctly = 0; a mutant returning irq_enable gives 0x30 → caught ✓. A mutant returning constant 0 → passes (correct value is 0). So the AND/raw semantics with nonzero status is untested — same hole as (f), one underlying cause: no row can set irq_status. State it once.
+
+  Also A1's "catches masked-AND -> OR: 0x30" ✓ true: status|enable = 0|0x30 = 0x30 ≠ 0 ✓. So A1 catches OR-for-AND but not constant-0. Precisely: the hole is only "returns 0 always" / "returns status only when enable==0"... The narrowest statement: any mutant whose output equals 0 whenever status==0 passes A1/A4. ✓.
+
+  Q4's "name the row you expect to stay green" — for hollow legs: the sites probe's aggregate FOOTBRIDGE_SITES_PASS stays green if legs print but don't append to results[]; and the gate's "footbridge: every row green" check (grep FOOTBRIDGE_SITES_PASS) stays green. That's the row. For a hollow K2 specifically ("quit; assert exit 0" without prologue verification or post-quit poke): green forever on healthy builds and — crucially — ALSO green if the product regresses to dying at quit... no: if the child dies at prologue step 3, "quit" write gets EIO... reap gives exit 1 → hollow K2 checking exit==0 reds. If hollow K2 checks only "dead after quit" (not exit code), a child that died at step 3 reaps exit 1 — dead after quit write ✓ green → vacuous. So specify: K2 must require the four prologue values AND dead-before-cleanup AND WEXITSTATUS==0.
+
+  The smallest edit that leaves legs green while proving nothing, final answer: implement K2 as "send quit; reap; require WIFEXITED && status==0" — no prologue reg check, no post-quit interaction. Every clean run passes it (that's just teardown, which already happens), and it cannot red on any regression the kill arm used to catch, because it never attempts an interaction on a session that should be dead and never proves the session was alive. Row that stays green: gate_arm.sh's FOOTBRIDGE_SITES_PASS / "footbridge: every row green" pin, if the legs are not added to results[] — the legs then exist only as printed text. The gate's two new checks must therefore pin the legs' DISCRIMINATING tokens (K1: the named-input diagnostic + exit==1; K2: prologue-verified + dead-before-cleanup + exit==0), one pair per launcher — and for drain/witness, which NO gate runs (gate_offline.sh:1269 "NOT run here"; gate_arm.sh footbridge section runs only the sites probe), the legs must be wired into each probe's own `ok`/results rollup or (k) escapes silently.
+
+  Also seat record: model = Kimi (Moonshot AI) — I'm Kimi Code CLI. What I read: GXEMUL-SEC/src/devices/dev_footbridge.c (full, 899), src/core/debugmsg.c (360-440), src/core/main.c (530-574, case 'E'), src/machines/machine.c (158-265), src/cpus/memory_arm.c (228-277), src/cpus/cpu_arm_instr.c (985-1035), src/devices/dev_unreadable.c (full), src/include/thirdparty/dc21285reg.h (register defines), src/debugger/debugger_cmds.c (grep), regress/footbridge_sites_probe.py (full 445), regress/fbpending_drain_probe.py (full 785), regress/fbpending_witness.py (full 707), regress/gate_arm.sh (1050-1135 + dirty diff), tools/pipeline/exit_census.py (full), _scratchpad/dc21285.txt (Table 7-10, §§7.3.9-10, 7.3.29-33, CSR rule). Ran: git rev-parse/log/diff/status (read-only), wc, sed/iconv/grep extractions. No gates, no harness, no builds. Ran nothing else.
+
+  Also I should mention the accidental artifacts contamination: my "ENABLE CLEAR" grep over regress/ recursed into regress/artifacts/ (which the brief put out of scope) and returned snippets quoting ledger.json; I did not use them as evidence — the "ten vs nine" conclusion rests on my own grep of the source file. Actually the artifacts snippets are how I noticed the history of "ten", but my verdict's evidence is the source grep. I'll mention this transparently in the seat record — candor. Keep it to one line.
+
+  Verdict wording: "PROCEED, AMENDED" — design confirmed at the datum level; two stale premises (HEAD label, count), one naming collision to fix, three detector gaps to close in pass 2 (f-hole, c-topology, j-interleave), FAULT unavailable (confirmed). 
+
+  Length: this needs to be thorough — it's a panel seat review. But keep it readable. Use the question structure.
+
+• **VERDICT: PROCEED, AMENDED.** The design is right — member 3 (decline + latched announce) is confirmed for all five sites from my own reads of the datasheet and the tree, and FAULT is genuinely unavailable on this ARM core. But two premises in the brief are stale (the HEAD label and the exit count), the proposed detector row IDs collide with IDs the same probe already emits and the gate already pins, and three of the eleven candidate weakenings escape the rows as specified. Findings below, all first-hand.
+
+  ## Premise audit — what checked out, and what did not
+
+  **Confirmed true:**
+
+  - The five directions. Table 7-10 (verified at `_scratchpad/dc21285.txt:6821-6831`) shows `--` for write on 180h/184h/280h/284h and `--` for read on 18Ch; §7.3.29 "This read-only register", §7.3.30/.31-.33 raw-status read-only, §7.3.33 "This write-only register" — all verbatim-accurate. The CSR zeros rule is at `:1651-1653` as quoted. One cosmetic slip: the brief's table quote drops the table's last row, `28Ch -- FIQEnableClear`.
+  - The inlined function is **byte-accurate against the live tree**, line for line: exits at 565, 574, 606, 615, 624 (this round), 714, 739 (SDRAM reads), 843, 879 (DEVINIT, construction-time). The +0x18c leak is real — `dev_footbridge.c:603` assigns `odata = d->irq_enable` before the fatal, exactly as M2/K4 said.
+  - The SDRAM class split: §7.3.9/§7.3.10 (`:5844`, `:5897`) document 100h/104h as R/W registers ("27:18 Mask R/W"), so their read-kill is a missing-value defect, a different class. Correctly excluded.
+  - `fatal()` in this fork (`src/core/debugmsg.c:384-391`) is an unconditional `va_debug` — it **cannot exit** (there is no `exit_on_fatal_error` symbol anywhere in `src/`) and is **not gated by `-q`** (`debug()` is, at `:375`). Both load-bearing premises hold. Every kill is an explicit `exit(1)`; the default arm at `:747-753` is unlatched and non-lethal, as briefed.
+  - The `(once)` census: real, and the storage idiom is **per-instance plain `int` fields** — `dev_asc.c:125-133` (four ints for four sites), `dev_osiop.c:89`, `dev_pcc2.c:108`-style `*_warned`, `dev_luna88k.c:106`, `dev_sh4.c:427`. The two `static int` latches (`dev_scc.c:350`, `dev_vga.c:635`) are the wrong shape (per-process, not per-instance). `struct footbridge_data` (`:60-85`) is all plain ints/uint32_t, no bit-fields; DEVINIT memsets it (`:771`), so either form zeroes.
+  - K1's path, fully verified: unknown `-E` name → `machine.c:240-243` prints `Sorry, emulation "<input>" is unknown.` (**names the input**), returns 0 → `main.c:543-544` `exit(1)`, before any prompt. K2's `quit` → `debugger_cmds.c:1636-1637` sets `emul_shutdown`/`exit_debugger`; surviving arms reaping exit 0 is already what every `survived()` check in all three probes requires.
+  - The three kill arms are quoted exactly (sites `:161/:347/:402-411`, drain `:231/:600-613/:712-716`, witness `:200/:476-491/:634-638`), and `ldr r7,[r0,#396]` = 0xE590718C decodes to LDR r7,[r0,#+0x18C] (396 = 0x18C; `dc21285reg.h:336`). Register defines all match the brief's offsets; the timer fold range 0x300–0x36C and `~0x060` mask check out against `TIMER_1_LOAD=0x300` (`:375`) / `TIMER_4_CLEAR=0x36C` (`:390`).
+  - Teardown descriptions match all three launchers (sites inline `:279-322`; drain `Session.close` `:408-460`; witness `:347-399`) — quit, 20 s bounded drain where `rd()` returns True on timeout and False only on EOF/EIO, close, 10 s bounded WNOHANG reap, labelled harness kills.
+
+  **Wrong or stale:**
+
+  1. **The HEAD label.** Actual HEAD is `f685d75` ("records: five fable5 rulings…"), one commit *after* `9c28ca5` (the #539 receipt). `git diff 9c28ca5..HEAD` and `9c28ca5`→worktree for `dev_footbridge.c` are both empty, so every line number in the brief is accurate — but the tree under review is really f685d75 **plus a dirty working tree**: `regress/gate_arm.sh` carries +64/−3 uncommitted (a tightening of the E-row distinct-id pin at `:1111-1116` and a whole new crime_width section at the tail), and `gdrom_default_probe.py`, `ppc_rldicl_probe.py`, `sh4_chcr_probe.py` are modified. The brief's claim "at HEAD 9c28ca5" is stale; the content claim survives.
+  2. **The exit count.** The brief says "ten live `exit(1)`" and then enumerates **nine** lines. The enumeration is right; the count word is wrong — stale by exactly one (the tenth was +0x188's, removed by #539). I enumerated by grep plus full read: 565, 574, 606, 615, 624, 714, 739, 843, 879. `tools/pipeline/exit_census.py` is comment-aware and will report 9 for this file; pass 2 should pin 9→4 (five removed), not 10→5.
+
+  ## Q1
+
+  **(a) Per-site dispositions.** All five are undefined-direction accesses per Table 7-10, and DECLINE is the hardware shape, not just policy: writes to the read-only status registers have no defined effect (state must not change — the brief's requirement is correct), and a read of the write-only 18Ch falls under "nonexistent CSR … zeros are read" (`:1652`), so 0 is the warranted value and dropping the `odata = d->irq_enable` assignment is mandatory, as K4 said. Member 3 for all five; no site wants member 4/5. **FAULT is not available**: `ARM_EXCEPTION_DATA_ABT` has exactly one caller, `memory_arm.c:273`, inside the MMU translation-fault path (`exception_return` after `arm_check_access`). Device handlers have no abort channel — `dev_unreadable.c` just `return 0`s, and there is no `if (!memory_rw(...))` dispatch in the ARM load/store path (the PREF_ABT at `cpu_arm_instr.c:1012` is the `bkpt` instruction). FAULT would need new core plumbing, and the datasheet wouldn't fault anyway.
+
+  **(b) Five ints, not the bit-field.** The file's struct is plain fields and the tree's latched-announce precedent is one named `int` per site (`dev_asc.c:125-133` is the four-site analog). K4's packed `uint32_t warned_access` has no collision hazard — only `DEVICE_ACCESS(footbridge)` would write it — but it needs a comment mapping bits 0–4 to sites, while five named ints are self-describing. Vote: five ints. Either is zeroed by the DEVINIT memset (`:771`).
+
+  **(c) The K1/K2 legs, quoted helpers.** "Fails with `dead`" is observable as written in all three launchers: `send()` sets `dead` and returns False on write EIO (sites `:225-235`; drain `:338-351`; witness `:268-278`), and `rd()` sets `dead`/returns False on EOF/EIO (sites `:192-206`; drain `:295-308`; witness `:225-238`), with `wait()` returning False through the same path. K1 establishes exit-1-reaped-with-diagnostic at startup; K2 establishes was-alive (fresh `reg` with the four values) → dead-detected-before-cleanup → exit 0. Together they re-establish the kill arm's two halves. The one thing **not** re-pinned is their conjunction — "guest steps, then the process dies with exit 1" — and that is acceptable, because every new D row requires its arm to survive with exit 0, so a mid-session death reds a D row through the same `dead` path. One gap in coverage, not of the legs: **no gate runs the drain or witness probes** — `gate_arm.sh:1072-1125` runs only the sites probe, and `gate_offline.sh:1269` says the drain probe "is NOT run here". The two gate checks replacing "the one-instruction kill arm still dies" (`gate_arm.sh:1104-1105`, which greps the row ID `^K1 .*ok$`, not the complaint text) can pin only the sites probe's legs. In drain and witness the legs must be wired into each probe's own verdict rollup (`ok` at drain `:675-681`, witness `:595-600`) or their retirement is self-greening.
+
+  **(d) Post-round exit enumeration in `DEVICE_ACCESS(footbridge)`:** exactly two remain — `:714` (guest read of +0x100) and `:739` (guest read of +0x104). The DEVINIT pair (`:843/:879`) is construction-time; `footbridge_isa`/`footbridge_reset`/`footbridge_pci` have none (bus-255 returns 1 after its fatal, `:476-481`). Probe offsets, enumerated: sites touches {0x00, 0x188, 0x18c, 0x300}, drain {0x00, 0x300, 0x304, 0x308, 0x30C}, witness the same plus nothing. None touches 0x100/0x104. So "no footbridge access **these probes make** ends the process" is **true** post-round; unqualified it would be false, and the brief's own §4 phrasing ("except the SDRAM pair") is the correct one.
+
+  **(e) Dependents on the complaint texts.** Exactly three readers of `"ENABLE CLEAR"` — sites `:402`, drain `:612`, witness `:489` — all being replaced this round. `gate_arm.sh` pins the row ID, not the text; `gate_hygiene.sh` mentions footbridge only in probe-census comments (`:433-498`). No hygiene allowlist or boot-log rule greps any of the five texts. The texts become load-bearing only through this round's own D rows.
+
+  ## Q2 — which red, which escape
+
+  - **(a) exit kept at one site** → red: that site's D row dies at the first access (exit 1 + complaint, no continuation); the witness rung stays red post-fix.
+  - **(b) unlatched** → red: two accesses in one arm yield count 2 ≠ 1. Topology-independent.
+  - **(c) one bit shared by two sites** → **ESCAPES as specified**, and this is a real pass-2 action item. The latch is per instance; if each D row is its own `run_arm` (fresh process → fresh DEVINIT → bit clear), the shared bit is invisible. Caught only if one session touches ≥2 of the five sites. Specify either a single arm walking all five, or one extra two-sites-in-one-session row.
+  - **(d) +0x18c decline keeping `odata = d->irq_enable`** → red: D3 reads 0x30 where 0 is required.
+  - **(e) write-decline storing into `irq_status`** → red via D1's state check (raw/status reads back 0x10) — valid only if D1 actually re-reads state after the writes; pin that.
+  - **(f) decline swallowing the legal direction (IRQ_STATUS read returns 0 always)** → **ESCAPES.** In the sites probe nothing ever makes `irq_status` nonzero: no row asserts a footbridge interrupt line, the stepped arms never enable a timer (reset `timer_control` has no TIMER_ENABLE, `:889`), and IRQSoft (+0x190) is unimplemented (write falls to the default arm). So A1's correct value is 0 and a constant-0 mutant passes A1/A4 (and A2/A5 catch only `= irq_enable`, not `= 0`). The AND semantics are pinned only against OR-for-AND. Close it offline in `regress/diff_footbridge.c` (set `d->irq_status` directly, call the access function) — the stepped probe structurally cannot.
+  - **(g) misnamed register in the text** → red **iff** the D rows count the site-specific text. The sites probe's existing `fatals` regex (`:289`) is a generic `[...footbridge...]` bucket; counting that bucket lets (g) escape. The rows must match e.g. `write to irq status\? \(once\)` per site.
+  - **(h) K1 passing on any nonzero exit** → hollow: greens on a wrong-reason exit 2. The spec's `WEXITSTATUS == 1` exactly, plus the diagnostic naming the input, is the pin; keep both halves.
+  - **(i) K2 passing when the child died before the prologue** → excluded by the spec's prologue-verified-live requirement (CP15 bit 0 clear, RAM 0x11223344, VENDOR 0x1011, load-back 0x00345678) — sound as written; the hollow variant is the Q4 risk.
+  - **(j) latch cleared by a read** → D3 catches it trivially (its two accesses *are* reads: count 2). For the four write sites it is caught **only if the state-check read is interleaved between the two writes**; write-write-then-read escapes. Pass 2 must interleave.
+  - **(k) legs in one launcher only** → escapes unless pinned per launcher: drain/witness delete row K, and with no legs appended their rollups stay green. See Q1(c) — no gate runs those two probes, so per-probe rollup wiring is the only pin.
+
+  ## Q3 — option-set completeness
+
+  The set is complete. DELETE falls to the default arm's *unlatched* per-access print — strictly worse than member 3 and loses site specificity. ACCEPT and IMPLEMENT have no datasheet warrant for any of the five (no defined value, no defined effect). BACKED ACCEPT for +0x18c is precisely the leak the round removes, and the "nonexistent CSR reads zeros" rule weighs against inventing readable state at a WO address. FAULT is unavailable on ARM (Q1(a)) and datasheet-unwarranted ("no error action is taken"). Sibling dispositions agree: `dev_unreadable` declines silently; the latched `(once)` decline is the house shape for guest-drivable diagnostics. Member 3 stands for all five.
+
+  ## Q4 — the hollow-leg edit, and the row that stays green
+
+  The smallest green-but-vacuous edit: implement **K2 as "send `quit`; reap; require WIFEXITED && status == 0"** — no prologue liveness `reg`, no post-quit interaction. Every healthy run passes it (it is just the teardown the probes already do), it never proves the session was alive, and it never exercises the `dead` path a mid-session product death relies on. The row that stays green: **`gate_arm.sh`'s "footbridge: every row green"** (`grep -c FOOTBRIDGE_SITES_PASS`, `:1085-1086`) — if the legs print but are never appended to the probe's `results[]`, the aggregate PASS is untouched by a vacuous leg, and a gate pin that merely greps the leg's *presence* (a `^K2 ` line) greens too. The two replacement gate checks must therefore pin the legs' discriminating content — K1: named-input diagnostic **and** exit == 1; K2: prologue values **and** dead-before-cleanup **and** exit == 0 — and the probes must append the legs to their verdict sets.
+
+  ## Something else found while verifying
+
+  - **The FIQ twin of #539's bug is still live.** Table 7-10 documents 288h read = FIQEnable and §7.3.31 covers "IRQEnable/FIQEnable … Offset 188h/288h", but `case FIQ_ENABLE_SET` (`dev_footbridge.c:628-631`) answers a read with the initial `odata = 0`, never `d->fiq_enable` — while the IRQ side at `:591` was fixed. Not an exit site, so the "seven" count is unaffected, but it is the same documented-read-returning-wrong-value class, one register away. It wants its own small round (accept, mirroring #539, with E-style rows at 0x288).
+  - **`memory_arm.c:252-254`**: fatal+exit(1) on an unimplemented MMU descriptor type (type 3, fine page tables) — a guest-reachable kill in the ARM translation path, same campaign class, different file. These probes never reach it (MMU off), so it does not gate this round; flagging for the census.
+  - **Row-ID collision, concrete:** K4's ids A1-A5/D1-D5 land on a probe that already emits `A1` (`:377`), `A2` (`:378`), `A2b`, `K1` (`:407`), `D1` (`:433`), and gate_arm.sh pins `^A1 ` / `^A2 ` / `^K1 ` and display-filters `A[0-9]|I1|K1|D1` (`:1074`), with a distinct-id pin discipline the dirty diff just tightened (`:1111-1116`). Mint fresh ids (e.g. N1–N5 / X1–X5); retiring the sites probe's old K1 frees that id for the startup leg, but drain/witness use bare `K`.
+
+  ## Seat record
+
+  Model: Kimi (Kimi Code CLI). Read first-hand: `GXEMUL-SEC/src/devices/dev_footbridge.c` (all 899 lines), `src/core/debugmsg.c`, `src/core/main.c`, `src/machines/machine.c`, `src/cpus/memory_arm.c`, `src/cpus/cpu_arm_instr.c`, `src/devices/dev_unreadable.c`, `src/include/thirdparty/dc21285reg.h`, `src/debugger/debugger_cmds.c` (grep), the three probes in full (445/785/707 lines), `regress/gate_arm.sh` (:1050-1135 plus the uncommitted diff), `regress/gate_hygiene.sh` (greps), `tools/pipeline/exit_census.py` (full), and `_scratchpad/dc21285.txt` (Table 7-10, §§7.3.9-10, §§7.3.29-33, the CSR rule) via sed/iconv since it is not UTF-8. Ran: read-only git (`rev-parse`, `log`, `diff`, `status`), `wc`, `sed`, `grep`. Ran no gate, no probe, no build. One disclosure: my `"ENABLE CLEAR"` grep over `regress/` recursed into `regress/artifacts/` before I excluded it and returned snippets quoting `ledger.json`; I did not use those as evidence — the nine-vs-ten finding rests on my own grep of the source file, and every other claim above on the in-scope reads listed.
+
+To resume this session: kimi -r session_6f7d6d2c-9e7e-4b92-ac22-5a504902f072

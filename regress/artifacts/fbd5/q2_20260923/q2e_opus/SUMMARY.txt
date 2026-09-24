@@ -1,0 +1,259 @@
+OPUS_SEAT_ALIVE_20260923_Q2E
+# CHECKPOINT -- 2026-09-23 18:40 (087a90 sections rewritten; the peer's sections below are untouched)
+Opus seat (compile and measure), #545 repair-3 pass (q2e), 2026-09-23.  Claude Opus 5.5, claude-opus-5-5[1m].
+
+VERDICT: DO NOT SHIP -- 14 one-line edits pass all 862 rows and are not disclosed, all guest-visible from reset.  9 are
+at cells the CONTRACT's COVERED list claims for X14, on channels those rows do not read.  5 are in the producer pair,
+which Q2's edit space includes and NOT COVERED never mentions; the smallest deletes one character.  19 additive scratch
+rows (881 rows, 0 failures on the fix, 0 kills lost) turn all 14 red.
+
+Every number below comes from a file in this directory (named in brackets).
+
+=====================================================================================================================
+1. BASELINE
+=====================================================================================================================
+/tmp/opusq2e: a copy of GXEMUL-SEC/src with the FROZEN device (783c0c7f), build/config.h, and the FROZEN 862-row
+harness (0263974b).  The build is the gate's line plus -Wall.  [setup.sh, baseline.log]
+  Result: 862 rows, 0 failures, DIFF_FOOTBRIDGE_PASS, 0 warnings.
+  baseline.log is byte-identical to the main loop's r3_20260923/diff_FIX.log.
+  (setup.sh first compared against R3X.log.  That file is the run summary, not a harness output, so the comparison
+  was wrong; it now compares against diff_FIX.log.)
+Gate pins, counted from the row names with the gate's own fb_distinct recipe [pins.out]:
+  P 78; X[1-8] 440 (= 12+11+3+10+2+248+148+6); X6 248; X7 148; X8 6; X9 100; X10 72; X11 80; X12 20; X13 20; X14 19.
+  The remaining 33 rows are the 32 timer rows plus IDENTITY.
+  IDENTITY: 862 = 707 + 32 + 8 + 8 + 8 + 60 + 20 + 19.
+  Width-8 rows by name: X6 32, X7 8, X9 8, X10 8.
+  Per-loop arithmetic:
+    X6  = 64 (+0x180) + 48 (+0x184) + 24 (+0x18c) + 64 (+0x280) + 48 (+0x284)
+    X7  = 4 x 37
+    X9  = 4 x 25
+    X10 = 4 x 18
+    X11 = 4 x 20
+    X14 = 2 + 7 + 6 + 1 + 2 + 1
+
+=====================================================================================================================
+2. Q1(b) -- EACH X14 ROW CAN GO RED, AND HOLDS SOMETHING ALONE
+   [x14_mine.out: the main loop's own 652 failing-row lists; mine: B_* in analysis.txt]
+=====================================================================================================================
+Columns: "kills" = how many of the 652 redden the row.  "sole kill" = a variant whose ONLY failing row is this one.
+X14 row                                              kills  sole kill                       observable that differs
+Clear 0x10 from 0x18/0x30 (disjoint)                  23    N_S01 (`&&` for `&`)            CPU deassert count
+Clear 0x10 from 0/0x30 (no status)                    19    B_NS (mine)                     CPU deassert count
+Clear 0, only line 4 pending and enabled              19    B_L4 (mine, contrived; the      CPU assert count
+                                                              natural bit-4 mask is also
+                                                              held by X9 seeded Clear 0)
+Clear 0, only line 5 / 6 / 7 pending                  17 each  N_SB05 / N_SB06 / N_SB07       CPU assert count
+Clear 0, only line 10 / 11 / 18 pending               21 / 20 / 18  N_SB10 + N_S06 / N_SB11 / N_SB18   CPU assert count
+DEVINIT timers: the five legal reads                  44    B_DR (mine)                     read value, announce
+DEVINIT timers: Set 0x40 then Clear 0x10              53    B_DS (mine)                     return value, irq_enable
+DEVINIT timers: the five declines                    120    B_DD (mine)                     announce count, the four fields,
+                                                                                            declined-read value
+tick pending: reads / Set-Clear / declines            44 / 55 / 122  B_TR / B_TS / B_TD (mine)  as the three DEVINIT rows
+line 4 raised: IRQ_STATUS reads 0x10                  16    N_T11, e_dir_A0_irq_enable, V3  read value, announce
+line 4 raised: Clear 0x10 clears it                   25    N_I04, N_F01, N_I02             CPU pair, irq_enable
+line 4 raised: Clear 0x400 keeps it                   20    N_I01                           CPU pair
+line 4 raised: re-arm row                            135    N_T10, e_flag_A0_irq_enable ...  announce totals (5, then 0)
+Result: no X14 row is vacuous.  Each has a one-line edit that no other row catches: 11 rows from the 652, 8 from my
+targeted B_* variants.  Each B_* variant reddens exactly its target row and nothing else.
+The observables above are narrower than the COVERED header claims ("return value, announce count, four fields,
+interrupt calls, read data"):
+  - the DEVINIT/tick Set-Clear rows read no interrupt call;
+  - the DEVINIT/tick declines rows read no interrupt call;
+  - the asserted IRQ_STATUS read reads no field and no call after the read;
+  - the re-arm row reads no legal-read value, no field and no call.
+Section 3's undisclosed greens sit exactly there.
+
+=====================================================================================================================
+3. Q2 BY CONSTRUCTION -- 54 NEW one-line shapes on the 862 rows (none in the main loop's 652)
+   [PREDICTIONS_q2e.txt 18:59:57, written before the run; analysis.txt; per-variant logs in
+    variant_logs_and_diffs.tar.gz]
+=====================================================================================================================
+Totals: 54 built, 0 warnings.  17 red, 37 green.  Every red/green prediction held, 54 of 54.
+Differential for the greens [wit2_main.c, wit2_tu.c; reports in wit2/, classified in wit2_classes.txt]:
+  - The frozen device and the variant run in one process, on the same sequences.
+  - Start state: DEVINIT's reset -- timer values, d->irq connected (line 0, extra non-NULL), a PCI bus, a console slot,
+    timer interrupts wired to the real producer on lines 4-7.
+  - Alphabet: 270 ops.  8-byte accesses only at 8-aligned offsets.  Lines 4, 10, 11, 18.  Timers 1 and 2 enable/tick.
+  - Search: exhaustive to length 3 by iterative deepening, plus 2M random sequences of length 4-6.
+  - Control: frozen vs frozen shows no divergence of any kind.
+  - Three sequences the search did not reach were replayed [wit2/REPLAY_*]: PR02, PR06, IA11.
+Classes of the 37 greens: 32 guest-visible, 5 host-visible (announce) only, 0 equivalent.
+
+THE 14 UNDISCLOSED
+(A) At X14's claimed cells, on channels those rows do not read (9):
+ id    arm     exact line                                                            shortest witness from reset
+ TD01  Clear   if ((d->irq_status & d->irq_enable) && !d->timer_control[0])          W188=0x10 line4+ W18c=0: the CPU line drops
+                                                                                     with line 4 pending and enabled
+ TD02  Clear   if ((d->irq_status & d->irq_enable) && !d->pending_timer_interrupts[0])
+                                                                                     W188=0x400 line10+ hosttick W18c=0 (replay)
+ TD03  Clear   if ((d->irq_status & d->irq_enable) || d->timer_control[0])           W18c=0 (ONE step): the CPU line rises with
+                                                                                     nothing pending
+ TD12  Clear   if ((d->irq_status & d->irq_enable) || d->pending_timer_interrupts[0])
+                                                                                     hosttick W18c=0
+ TD04  +0x180  d->warned_irq_status_w = 1; if (d->timer_control[0]) INTERRUPT_DEASSERT(d->irq);
+                                                                                     W188=0x10 line4+ W180=0: a declined write
+                                                                                     drops the line
+ IA12  +0x180  odata = ..., d->irq_status &= d->irq_asserted ? ~d->irq_enable : ~0u;
+                                                                                     4 steps: the ISR's status read clears the
+                                                                                     status
+ IA13  +0x180  odata = ..., d->irq_asserted ? INTERRUPT_DEASSERT(d->irq) : (void) 0;
+                                                                                     W188=0x10 line4+ R180
+ IA14  +0x180  d->warned_irq_status_w = 1; if (d->irq_asserted) INTERRUPT_DEASSERT(d->irq);
+                                                                                     W188=0x10 line4+ W180=0
+ IA16  +0x180  odata = (d->irq_asserted && d->warned_irq_status_w) ? 0 : d->irq_status & d->irq_enable;
+                                                                                     5 steps
+(B) The producer pair, which no NOT COVERED line mentions (5):
+ PR01  assert    d->irq_status = interrupt->line;      (| deleted)       line4+ line10+ R184: 0x400, not 0x410
+ PR04  deassert  d->irq_status &= interrupt->line;     (~ deleted)       W188=0x10 line4+ line4-
+ PR07  deassert  INTERRUPT_DEASSERT(d->irq); deleted                     W188=0x10 line4+ line4-: the line stays high
+ PR02  assert    if ((d->irq_status & d->irq_enable) && !d->irq_asserted)   (the commented-out NetBSD form)
+                                                                         W188=0xffffffff line4+ W18c=0x10 line10+:
+                                                                         the ISA interrupt is never delivered (replay)
+ PR03  assert    if (d->irq_enable) {                                    W188=0x10 line10+: the CPU line rises for a
+                                                                         line that is not enabled
+
+Q2 ANSWER: PR04, `d->irq_status &= ~interrupt->line;` -> `&= interrupt->line;` in footbridge_interrupt_deassert.
+  - Deletes ONE character.  Guest-visible from reset in 3 steps.
+  - Every one of the 862 rows stays green, because no row ever calls footbridge_interrupt_deassert.
+  - PR01 is its twin on the assert side: every row raises line 4 onto an empty status, where `=` equals `|=`.
+  - The most realistic edit is PR02: re-enabling the condition the product itself keeps commented out, under the
+    comment saying it "prevents hangs with cats".
+  - Inside the five arms, the smallest is TD03 (one conjunct; guest-visible in ONE step).  It is at X14's own claimed
+    cell: "DEVINIT's timer values ... at ... a Clear", with the COVERED header claiming "the interrupt calls".
+
+THE OTHER 23 GREENS -- real, but named by NOT COVERED (* = named only by a line's head, not by the list after its
+colon):
+  irq_asserted = 1 at the other legal accesses and widths:
+    IA01 IA04 IA05 IA06 IA07 IA15 (guest); IA02 IA03 IA11 (host)
+  other timers / other timer values:
+    TD08 (pending[1]); TD09 (timer 1 enabled); W02 (the host timer handle, d->timer[0])
+  *DEVINIT's own values or timer 0's tick, at other widths or data:
+    TD06, TD07, TD13
+  *instance fields THE SPACE never names:
+    W03 (d->irq.extra), W04 (d->pcibus); W05 (d->console_handle, as a latch guard)
+  *drive test x latch joints:
+    J01, J02
+  the interrupt LEVEL (fbirqstuck):
+    PR05, PR06 -- both differ only where an enable arm left the CPU line high with irq_asserted 0
+  other registers:
+    W06
+The 17 red, each on the row it was aimed at [analysis.txt]:
+  the 8 B_* probes;
+  IA08, IA09, IA10 (latch guard/clearers keyed on irq_asserted, re-arm row);
+  TD05, TD10, TD11 (DEVINIT/tick declines rows);
+  PR08, PR09 (the raise's own checks);
+  W01 (X9/X10's len-8 rows PIN the upper word to 0).
+
+=====================================================================================================================
+4. VERDICT ON COMPLETENESS, WITH THE DENOMINATOR
+=====================================================================================================================
+Denominator: 706 one-line shapes over the five arms, the two head predicates and the producer pair.
+  - 652 scored by the main loop, 54 here.
+  - Instance kinds: the calloc'd seeded states (4); DEVINIT with and without a tick; irq_asserted raised through the
+    producer; every timer enabled with every tick pending (the scratch rows).
+  - Greens checked by the differential above.
+THE FLOOR (§C.2) IS COMPLETE ON THIS EVIDENCE.  None of the 706 is an in-floor escape: every escape conditions on a field
+no branch of the five reads, or edits the producer.
+THE CONTRACT IS NOT.
+  - COVERED over-claims X14: 9 measured edits pass cells it names, on channels its header says the rows read.  By
+    §C.2's own rule, that means rowing them or narrowing the claim.
+  - NOT COVERED omits the producer pair's own logic (5 measured).
+  - NOT COVERED's lists after the colon omit instance fields and cells that only their heads cover (8 measured, * above).
+
+=====================================================================================================================
+5. SCRATCH CLOSURE EXPERIMENT -- a measurement, not a patch
+   [mkext_q2e.py, diff_ext.c 0ce7db51, ext_run.out, ext_results.jsonl, ext_flips.txt]
+=====================================================================================================================
+19 ADDITIVE rows (Y1-Y15) before IDENTITY; existing rows untouched.
+  - The fix: 881 rows, 0 failures, 0 warnings.
+  - All 54 shapes re-scored: 0 of the 17 reds lost; 22 of the 37 greens go red, including all 14 undisclosed.
+  - Still green (15, all disclosed): IA02-IA07, IA11, TD06, TD07, TD13, PR05, W02, W06, J01, J02.
+The rows, by what they add:
+  Y1/Y2 (x2: DEVINIT, tick)   The Clear's DRIVE on a full DEVINIT instance: keep (assert), then drop (deassert).
+                              Reddens TD01 TD02 TD03 TD12 W03.
+  Y3/Y4 (x2)                  A full DEVINIT instance (d->irq connected, pcibus, console slot): the five reads, and the
+                              five declines on the CPU pair.  Reddens TD04 W04 W05.
+  Y5                          The asserted IRQ_STATUS read: fields and CPU pair unchanged.  Reddens IA12 IA13.
+  Y6/Y7                       Asserted: the declines drive nothing; then, every latch set, the reads return their
+                              values.  Reddens IA14 IA16 IA01 IA15.
+  Y8/Y9/Y10                   The producer: two lines up, then down one at a time.  Reddens PR01 PR02 PR04 PR06 PR07.
+  Y11                         The NetBSD stale-flag case.  Reddens PR02.
+  Y12                         A raised line that is not enabled drives nothing.  Reddens PR03.
+  Y13/Y14/Y15                 Every timer enabled, every tick pending.  Reddens TD08 TD09.
+The cheaper alternative for the X14 cells: narrow COVERED's channel list to what those rows read.
+
+=====================================================================================================================
+6. THE BRIEF'S OTHER QUESTIONS
+=====================================================================================================================
+Q1(a) Missing from THE SPACE:
+  - The producer's DEASSERT half.  THE SPACE says footbridge_interrupt_assert() is "the only writer of irq_status" and
+    irq_asserted is "written only by that producer"; footbridge_interrupt_deassert writes both.  §C.4 of the brief says
+    so correctly; the comment does not.
+  - Instance fields: d->irq (line/extra, set by DEVINIT's INTERRUPT_CONNECT), d->pcibus, d->console_handle, d->timer[]
+    (non-NULL once a timer is enabled), and the timer_irq[] wiring.
+  - Timer state beyond DEVINIT's reset: timers enabled, which every OS does.
+Q1(c) Every NOT COVERED line is outside the §C.2 floor.  One is inverted: the 8-byte upper word is not "not covered" --
+  X9/X10's len-8 rows pin it to 0 (W01 red on 6 rows).
+Q3 (one line each):
+  G1-G5  UPHOLD.  G1 refined as in Q1(c).
+  G6     UPHOLD (outside the floor, §C.3).
+  G7     UPHOLD.
+  G8     UPHOLD.
+  G9     UPHOLD by reading only, not measured.  The truncated-log and "each legal access X7 samples" wordings match the
+         checks and loops; I did not read the gate's ON THE FORKS paragraph.
+  G10    REFINE: the operand cells are rowed only at len 4, latches clear, calloc instance; J01/J02 show the latched joint
+         is covered only by the joints line's head.
+  O1     UPHOLD (all 28 red; 11 X14 rows have a sole kill among them).
+  O2     UPHOLD (my own aligned-width measurement agrees).
+  O3     THE WRONG ONE, in its claim rather than its choice: 9 of section 3's 14 are at X14's own cells.
+  O4     REFINE: the lists after the colons read as exhaustive and omit W03/W04/TD06/TD07/TD13-type cells, field stores and
+         interrupt calls.
+  O5     UPHOLD.
+  O6     UPHOLD.
+  O7     UPHOLD: IA08-IA10 red on the re-arm row, as predicted.
+  D1     UPHOLD.
+Q4 The pins and IDENTITY hold (section 1).  False as of today:
+  - THE SPACE's "only writer of irq_status" and "irq_asserted (written only by that producer)".
+  - The x14_new comment "the product's only writer of irq_status and of irq_asserted".
+  - The X14 header's "its only writer is footbridge_interrupt_assert()".
+  - The COVERED header's channel list, for X7 and for the four X14 row kinds named in section 2.
+  - NOT COVERED's 8-byte upper-word line (see Q1(c)).
+Q5 Three dispositions not named:
+  (a) Re-seat the instance FACTORY: one y_new-style builder used by every block.  Zero new rows, and DEVINIT-keyed edits
+      would redden X9-X13 themselves.
+  (b) Tighten X14's EXISTING rows' channels (add CPU-pair, field and value checks).  Zero new rows; this catches the 9
+      claimed-cell escapes.
+  (c) Narrow the COVERED claim to the channels read.
+  For O6: rowing the Set arm's two operand cells costs 2 rows.
+
+=====================================================================================================================
+7. SOMETHING ELSE
+=====================================================================================================================
+- The rows never lower a device line, so the producer's deassert half -- the only path by which a device clears
+  irq_status -- is outside every observation.  That is the same class as repair 2's instance gap, one layer down.
+- The X14 DEVINIT instances wire timer_irq[] to the noop counters (arm_irqs), not to the producer as DEVINIT does.
+  Irrelevant to the five arms, but a tick there cannot reach irq_status.
+- The differential here extends my q2c one: timer-2 ops, a fuller DEVINIT reset, aligned 8-byte accesses only.  Its
+  frozen-vs-frozen control shows 0 divergences.
+
+=====================================================================================================================
+8. SEAT RECORD
+=====================================================================================================================
+Model: Claude Opus 5.5 (claude-opus-5-5[1m]).
+Read:
+  - the brief brief_545_r3.md in full;
+  - the frozen 862-row harness (X14 block and helpers) and the frozen device;
+  - DEVINIT; cpu_arm.c's IRQ registration; console.c's handle numbering; bus_pci.c's routing;
+  - the main loop's r3_20260923/ results (652 failing-row lists), TABLE.txt, diff_FIX.log.
+Ran (WSL Gentoo, gcc 15.2.1; scratch trees /tmp/opusq2e*):
+  setup.sh; x14_mine.py (their data; nothing re-run); run_table.sh (54 variants, 4 workers, from frozen copies);
+  wit2_all.sh (38 reports); 4 replays; ext_run.sh (54 variants on 881 rows); final_check.sh.
+Not run: no gate, no GXEMUL-SEC script, no guest probe.
+Restore: every mutated tree restored, cmp-checked against the frozen copy, rebuilt and re-run before its sentinel was
+cleared; none remains [driver_w*.out, ext_run.out, final_check.out].  A fresh final baseline reproduces baseline.log.
+GXEMUL-SEC hashes, identical at the start and end of this seat:
+  src/devices/dev_footbridge.c 783c0c7fb86823c6e9a5ae84be98b965
+  regress/diff_footbridge.c    0263974b8a94150a0f770fa167c6642c
+  regress/gate_offline.sh      51d291c3598b4237fddf6a5d2ccb0635
+Nothing was written under GXEMUL-SEC, est, build or build-asan.
+SUMMARY_DONE

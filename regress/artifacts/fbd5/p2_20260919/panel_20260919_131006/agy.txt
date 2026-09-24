@@ -1,0 +1,142 @@
+**VERDICT: GO-WITH-CHANGES**
+
+---
+
+### PREMISES & SOURCE VERIFICATION UNDER `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`
+
+Every claim in [`brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md) was checked against the source tree at HEAD `f685d75` plus the uncommitted `#545` working set.
+
+1. **Tree state & diff verification:**
+   - [`src/devices/dev_footbridge.c:88-94`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L88-L94) defines the five warn-once latches in [`struct footbridge_data`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L82-L95) (`warned_irq_status_w`, `warned_irq_raw_w`, `warned_irq_clear_r`, `warned_fiq_status_w`, `warned_fiq_raw_w`).
+   - Lines [`572-576`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L572-L576), [`585-589`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L585-L589), [`617-623`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L617-L623), [`630-634`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L630-L634), and [`642-646`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L642-L646) implement the decline, once-announced latching logic in [`DEVICE_ACCESS(footbridge)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L560-L650).
+   - In [`diff_footbridge.c:644-645`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L644-L645) and [`diff_footbridge.c:739`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L739), `fiq_status` is re-seeded to `0x60` (masked `0x40`, raw `0x60`), eliminating the seed collision with `0x50` (`0x50 & 0x30 == 0x18 & 0x30 == 0x10`).
+   - In [`diff_footbridge.c:740-824`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L740-L824), rows `X1` through `X5` (38 rows) are present, bringing the IDENTITY row count at [`diff_footbridge.c:830`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L830) to `149` (`33` original + `78` P-rows + `38` X-rows).
+   - In [`footbridge_sites_probe.py:602-610`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L602-L610), row `NO` is present, verifying that announces arrive in exact access order `["N1", "N2", "N3", "N4", "N5"]`.
+   - In [`gate_offline.sh:588,596,598`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L588-L598), offline differential pins `149` rows, `78` P-rows, and `38` X-rows.
+   - In [`gate_arm.sh:1119-1151`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1119-L1151), the probe total is pinned to `ROWS=37 of 37`, with distinct green-id checks for `SC1/SA1` (2), `N1-N5` (5), `S1-S5` (5), `SF1/SF2` (2), `C4` (1), and `E0-E6` (7).
+   - Uncommitted `#529 crimewidthkill` section at the end of [`regress/gate_arm.sh:1769-1832`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1769-L1832) is verified present in the working tree, confirming the author's disclosure in line 51 of [`brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md#L51).
+
+---
+
+### Q1: ADJUDICATION OF F1–F50 / D1–D10 / R1–R6
+
+All findings not explicitly listed below are **UPHELD** as disposed in Section 2 of [`brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md#L24-L49) and [`P2_FINDINGS.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/P2_FINDINGS.md).
+
+#### Refinements & Corrections to Accepted Dispositions:
+
+- **F4 (legal writes re-arming latches): REFINE.**
+  The author claims F4 is repaired by widening `X3` to include legal enable writes ([`diff_footbridge.c:780-794`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L780-L794)). However, all four enable writes in `X3` execute `memory_writemax64(cpu, b, 4, 0);`—they write only **data 0**. A mutant that clears/re-arms a latch during a **non-zero** enable write (the normal operational case, e.g. `if (idata) d->warned_... = 0;`) passes `X3` untouched. `F4` is only repaired for zero-data enable writes, leaving non-zero legal writes open.
+- **F6 / R6 (narrow declined read scoring): REFINE.**
+  [`P2_FINDINGS.md:69`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/P2_FINDINGS.md#L69) notes narrow declined reads were not scored for *value or return code*. In [`diff_footbridge.c:745-751`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L745-L751), `X1` checks `memory_readmax64(cpu, b, w) == 0`, but discards the return value `rv` of [`dev_footbridge_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L560). A mutant returning 0 (unhandled) rather than 1 on narrow declined reads passes `X1`.
+- **F7 / R1 (latch guard dependency on register state): REFINE.**
+  The author claims `X4` closes latch guards conditioned on `&& idata` or `&& irq_enable`. In [`diff_footbridge.c:801-802`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L801-L802), `x->irq_enable` is cleared to 0 **only** when `s5[i].wf == MEM_READ` (`IRQ_ENABLE_CLEAR`). For the other four write decline sites (`s5[0], s5[1], s5[3], s5[4]`), `x->irq_enable` remains `0x30`. Consequently, a write decline latch guard conditioned on `&& d->irq_enable` passes `X4` completely.
+- **F50 (DEVINIT memset vs calloc): UPHOLD AS REFINED IN BRIEF.**
+  In [`P2_FINDINGS.md:267`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/P2_FINDINGS.md#L267), the author originally rated F50 `CHECKED-FALSE`. In [`brief_sent.md:42`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md#L42), the author corrected this disposition to `DISCLOSED, NOT ROWED`. This change is correct: [`diff_footbridge.c:629,742`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L629) uses `calloc`, which bypasses [`DEVINIT(footbridge)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L784-L793), and guest probe heap allocation without OS memory poisoning cannot guarantee detecting a missing `memset` in [`dev_footbridge_init`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L792).
+- **F34 (#539 distinct green ID gate fix): UPHOLD.**
+  Verified via `git show 7836071 -- regress/gate_arm.sh`. Commit `7836071` committed `grep -oE '^E[0-6] '` (counting over all lines), despite claiming in its log to have shipped distinct green IDs. [`gate_arm.sh:1151`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1151) under `#545` correctly installs `grep -E '^E[0-6] .*ok$' ... | sort -u`.
+
+---
+
+### Q2: THE REPAIR'S OWN FLOOR ON THE SHIPPED COMPOSITE
+
+**Smallest escaping edit to the fixed device source:**
+Add `&& d->irq_enable` to any of the four write decline latch guards in [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c). For example, at line 573:
+```diff
+--- a/src/devices/dev_footbridge.c
++++ b/src/devices/dev_footbridge.c
+@@ -570,3 +570,3 @@
+ 	case IRQ_STATUS:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->irq_status & d->irq_enable;
+-		else if (!d->warned_irq_status_w) {
++		else if (!d->warned_irq_status_w && d->irq_enable) {
+```
+
+**Why it passes all 149 offline rows, all 37 guest rows, and all gate pins:**
+1. In the guest probe ([`footbridge_sites_probe.py:88`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L88)), arm S explicitly writes `0x30` to `IRQ_ENABLE_SET` before triggering the declines. Thus `d->irq_enable == 0x30` is non-zero, the guard evaluates true, exactly one announce is emitted, and all guest rows (`N1`, `N0`, `NO`, etc.) pass.
+2. In the offline differential ([`diff_footbridge.c:644,739`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L644)), instances are seeded with `irq_enable = 0x30`.
+3. In row `X4` ([`diff_footbridge.c:801-805`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L801-L805)), the zero-enable override is strictly guarded by `if (s5[i].wf == MEM_READ) x->irq_enable = 0;`. For `s5[0]` (`IRQ_STATUS` write), `x->irq_enable` remains `0x30`. Even though `idata == 0`, `d->irq_enable` is non-zero, so `!d->warned_irq_status_w && d->irq_enable` is true. `fatal_calls` increments to 1, and `X4` passes green.
+
+**The row expected to catch it:**
+Row `X4` (`"X4 write IRQ_STATUS: ZERO data/enable as the FIRST access announces once"` at [`diff_footbridge.c:806`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L806)).
+The comment at [`diff_footbridge.c:797`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L797) specifically claims to defend against a latch guard conditioned `"on irq_enable"`, but fails to clear `irq_enable` on the write sites.
+
+**Second escaping mutant (re-arm by non-zero legal write):**
+In `case IRQ_ENABLE_CLEAR:`, insert:
+```c
+if (writeflag == MEM_WRITE) {
+    d->irq_enable &= ~idata;
+    if (idata)
+        d->warned_irq_clear_r = 0;
+```
+`X3` widened ([`diff_footbridge.c:781-793`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L781-L793)) tests only writes of `0`, and no guest row in arm S writes to `IRQ_ENABLE_CLEAR` after the `N3` decline. Expected row: `X3 legal writes and other-register reads re-arm NO latch` ([`diff_footbridge.c:793`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L793)).
+
+---
+
+### Q3: EVALUATION OF ADDED ROWS AND PINS
+
+Can any of `X1-X5`, `NO`, or the new gate pins pass while the named property is false?
+
+1. **`X1` ([`diff_footbridge.c:740-753`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L740-L753)): CAN PASS WHILE FALSE.**
+   - **State preservation hole:** `X1` checks `fatal_calls == 1` and, for the read site, `memory_readmax64 == 0`. It **never checks** `x->irq_status`, `x->irq_enable`, `x->fiq_status`, or `x->fiq_enable` (unlike `P9` at [`diff_footbridge.c:713`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L713)). If a byte or halfword write decline stores into the register while announcing, `X1` passes green.
+   - **Return value hole:** `X1` ignores `rv` returned by [`dev_footbridge_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L560). If narrow accesses return 0 (unhandled), `X1` passes green.
+2. **`X2` ([`diff_footbridge.c:756-763`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L756-L763)): SOUND.**
+   Every expected value in `rd5[]` has a non-zero low byte (`0x10, 0x18, 0x40, 0x60, 0x30`), preventing false passes on unwritten zero-initialized buffers. `fatal_calls == 0` ensures no spurious announces occur.
+3. **`X3` ([`diff_footbridge.c:768-803`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L768-L803)): CAN PASS WHILE FALSE.**
+   Named `"X3 legal writes and other-register reads re-arm NO latch"`, but writes only `0`. A legal write re-arming a latch on non-zero data passes while the named property is false.
+4. **`X4` ([`diff_footbridge.c:806-810`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L806-L810)): PARTIALLY VACUOUS FOR NAME.**
+   The row is named `"ZERO data/enable as the FIRST access announces once"`. For `s5[0], s5[1], s5[3], s5[4]`, `enable` is `0x30`, not zero. The multi-condition sum `(cond1) + (cond2) + (cond3) + (cond4) == 4` is mathematically sound and cannot pass with any single condition false.
+5. **`X5` ([`diff_footbridge.c:815-820`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L815-L820)): SOUND.**
+   A zero `EnableClear` write is confirmed to announce nothing and preserve `0x30`.
+6. **Row `NO` ([`footbridge_sites_probe.py:602-610`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L602-L610)): SOUND.**
+   Strict list equality `order == ["N1", "N2", "N3", "N4", "N5"]` prevents text swapping (verified by `Z9` failure in [`sites_Z9.log:37`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/sites_Z9.log#L37)), missing announces, extra announces, or duplicate matches (`hit` length check).
+7. **Gate Pins in [`gate_arm.sh:1119-1151`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1119-L1151): SOUND.**
+   - `ROWS=37 of 37` prevents any single row failure from passing the gate.
+   - Distinct green ID counts using `grep -E '... .*ok$' | cut -d' ' -f1 | sort -u | wc -l | tr -d ' '` prevent duplicate green lines from substituting for failing rows.
+   - `count=1 ` includes the trailing space, preventing prefix matches against `count=10`.
+
+---
+
+### Q4: WHAT DID ALL NINE SEATS MISS?
+
+1. **Unchecked interrupt assertions on repeated and narrow declined accesses:**
+   In [`diff_footbridge.c:674`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L674), `check_u(PN("interrupt output untouched"), (irq_asserts - a0) + (irq_deasserts - d0), 0);` is executed **only once**, immediately after access #1.
+   Neither access #2 (the repeat access testing latching at line 677), nor the byte access (line 680), nor the halfword access (line 682), nor any of `X1-X5` check `irq_asserts` or `irq_deasserts`.
+   If the latched branch erroneously asserts an interrupt (e.g. `else { INTERRUPT_ASSERT(d->irq); }`), all 149 offline rows pass green.
+2. **Display grep omission in [`gate_arm.sh:1074`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1074):**
+   The filter regex `grep -E "^(  arm |C[0-9]|A[0-9]|I1|H[12]|D1|E(C1|A1|[0-6])|S(C1|A1|[1-5]|F[12])|N[0-5O]) "` omits row `A2b` (`the value the guest actually stored`, emitted at [`footbridge_sites_probe.py:534`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py#L534)). While `A2b` is scored in `ROWS=37 of 37` and `FOOTBRIDGE_SITES_PASS`, it is hidden from the gate log display output.
+3. **Absence of state preservation check in `X1`:**
+   While `P9` checked that a byte write stored nothing into `irq_status` ([`diff_footbridge.c:713`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L713)), `X1` ([`diff_footbridge.c:740-753`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L740-L753)) checks only that the access announced once, dropping all field assertions.
+
+---
+
+### SEAT RECORD
+
+- **Model:** Gemini 3.8 Flash (High)
+- **Files Read & Verified:**
+  - [`C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260919_131006/brief_sent.md)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/P2_FINDINGS.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/P2_FINDINGS.md)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/CODEX_DED_TRIAGE.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/fbd5/p2/CODEX_DED_TRIAGE.md)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/TABLE3.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/TABLE3.log)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/diff_FIX.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/diff_FIX.log)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/diff_M1b.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/diff_M1b.log)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/sites_M1b.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/sites_M1b.log)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/sites_Z9.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/table3_20260919/sites_Z9.log)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/gate_20260919/gate_offline_545b.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/gate_20260919/gate_offline_545b.log)
+  - [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/gate_20260919/OFFLINE_TIMES_b.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/gate_20260919/OFFLINE_TIMES_b.txt)
+- **Commands Executed:** Read-only repository status inspections (`git status`, `git diff`, `git log`, `Get-ChildItem`). No gates, harnesses, or test batteries were run, in strict compliance with the panel's operational rule.
+
+---
+
+### FINAL VERDICT
+
+**GO-WITH-CHANGES**
+
+*(The product diff in [`dev_footbridge.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c) is sound and ready. The detector composite is substantially fortified and kills 32/34 offline mutants and all reinstated exit mutants in the guest. Proceeding is approved with the disclosures and refinements recorded above for F4, F6, F7, X1, and Q2.)*

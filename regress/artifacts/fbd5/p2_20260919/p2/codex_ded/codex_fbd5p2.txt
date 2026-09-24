@@ -1,0 +1,143 @@
+VERDICT: L2 — every site still has an all-green predicate edit, and the seeded detector misses a one-field IRQ_STATUS error. All three H2 implementations observe `dead` before teardown.
+
+The files changed during this reading: my first differential read had **111 rows**; the later read had **134**, adding X1–X3. The sites header also changed. Below, “packet” means the brief’s 111-row version; “current” includes those additions. All passing/failing predictions below are from source inspection, not execution.
+
+**1. Smallest local edits found**
+
+These edits leave the requested guest rows, P-rows, current X-rows, and their gate pins unchanged:
+
+| Declined site | Latch predicate edit | What breaks | Expected catcher; why it stays green |
+|---|---|---|---|
+| IRQ_STATUS write, +0x180 | Append `&& idata` to `!d->warned_irq_status_w` | An initial zero write never announces or latches. | N1, P1, P9, X1: every tested write carries nonzero data. |
+| IRQ_RAW_STATUS write, +0x184 | Append `&& idata` to `!d->warned_irq_raw_w` | Same zero-write omission. | N2, P2, X1: no zero write. |
+| IRQ_ENABLE_CLEAR read, +0x18c | Append `&& d->irq_enable` to `!d->warned_irq_clear_r` | A read with IRQEnable zero never announces or latches. | N3, P3, X1/X3: IRQEnable is always seeded/set to `0x30` for these reads. |
+| FIQ_STATUS write, +0x280 | Append `&& idata` to `!d->warned_fiq_status_w` | Same zero-write omission. | N4, P4, X1: no zero write. |
+| FIQ_RAW_STATUS write, +0x284 | Append `&& idata` to `!d->warned_fiq_raw_w` | Same zero-write omission. | N5, P5, X1: no zero write. |
+
+These are failures of the promised announce/latch behavior; the accesses still decline. The [five guards](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:570), [P inputs](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c:660), and [X inputs](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c:732) establish the gap.
+
+`writeflag` also lacks closure:
+
+- At any of the four status cases, replace `writeflag == MEM_READ` with `!idata`.
+- At IRQ_ENABLE_CLEAR, replace `writeflag == MEM_WRITE` with `idata`.
+
+Both forms classify every tested access correctly: reads leave `idata` zero, while every tested write is nonzero. A zero status write then takes the legal-read branch; a legal zero EnableClear write takes the declined-read branch and announces. N/P/X and E5/P8 never supply that distinguishing input. The header’s claim that E5 covers a zero Clear write is false: E5 writes `0x2002`; P8 writes `0x10`.
+
+The strongest additional escape is a **single identifier replacement** in the legal IRQ_STATUS read:
+
+`d->irq_status` → `d->fiq_status`.
+
+P0 and P7 should catch the wrong family, but their seeds collide:
+
+| Expression | Seeded result |
+|---|---:|
+| Correct: `0x18 & 0x30` | `0x10` |
+| Wrong status: `0x50 & 0x30` | `0x10` |
+| Wrong enable: `0x18 & 0x50` | `0x10` |
+
+Thus replacing `d->irq_enable` with `d->fiq_status` also survives. X2 repeats the same collision at narrow widths. Guest status fields are both zero, so guest rows cannot distinguish either replacement. The first replacement is particularly consequential: the product has no `fiq_status` writer, making its IRQ_STATUS answer zero in ordinary product state. See the [seeded expressions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c:639).
+
+For the other predicate forms:
+
+- Inverting a latch test, removing its condition, or substituting another site’s latch is caught by the corresponding first/second announce rows and N0/P6.
+- Replacing a latch operand directly with any of the four register-state fields is caught offline: all four seeds are nonzero, so the first announce disappears.
+- Direct `writeflag` substitutions using those fields fail P0 or the legal Clear companions E5/P8.
+- The obvious wrong-field substitutions in the two raw reads and FIQ_STATUS are separated by P0. The IRQ_STATUS collisions above are the exceptions.
+
+The brief’s unbuilt candidates resolve as follows:
+
+| Candidate | Packet, 111 rows | Current, 134 rows |
+|---|---|---|
+| `&& len == 4` on IRQ_RAW_STATUS, IRQ_ENABLE_CLEAR, FIQ_STATUS, or FIQ_RAW_STATUS latch | Passes: narrow accesses follow an already-latched word access. | X1 closes it at each site. |
+| `&& len != 2` on IRQ_STATUS latch | Passes: P9 starts with a byte, never a halfword. | X1’s halfword-first row closes it. |
+| Legal read clears a latch | Some orders pass. For example, clearing the IRQ_STATUS latch in its own legal read occurs after its two guest writes; P7 also has no subsequent decline. | X3 closes unconditional resets by the five listed readable registers, at widths 1/2/4. |
+| Decline unconditionally stores into the other family’s status | Fails: P_STATE_OK checks both families; final raw guest reads also expose these stores. | Still fails. |
+| Correct register name, but omit `(once)` | Fails N-site and N0: `(once)` is part of each required substring. | Still fails. |
+
+X3’s scope is its five-entry `rd5` list, not every legal register read in the device.
+
+Reinstating a terminating call at **any** of the five sites is covered: arm S reaches every site, and P1–P5 invoke each directly. That conclusion is structural; the brief measured only one such reinstatement.
+
+**2. Harness legs**
+
+| Launcher | `dead` before teardown? | Prologue scored? |
+|---|---|---|
+| [Sites](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:377) | Yes: next `reg`, snapshot, then teardown. | Yes: completed stepping, no disassembly mismatches, fresh r3/r5/r6/r1 values; H2 requires the result. |
+| [Drain](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:625) | Yes, before `s.close()`. | Yes: `not bad`, `len(ex) == 21`, fresh r3/r5/r6/r7 values; H2 requires it. |
+| [Witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:505) | Yes, before `s.close()`. | Yes: `not bad`, `len(ex) == 18`, the same four register checks; H2 requires it. |
+
+All require a normal exit zero. The sites leg additionally rejects footbridge diagnostics.
+
+The smallest meaningful vacating edit is to replace the second send’s result with the saved `quit_rc`. Normal `quit` already returns false after observing EOF and sets `dead`; the row remains green without attempting the promised ordinary interaction. This vacates that particular observation, while the prologue and exit checks retain meaning.
+
+The teardown reorder also passes:
+
+- Drain/witness: move the existing `end = s.close()` before the next-send observation, retaining its saved exit status.
+- Sites: move the H2 observation after the completed teardown.
+
+The subsequent write fails on the closed descriptor; `send()` catches that error and sets `dead`. The recorded exit remains zero. Merely inserting an extra close while retaining later descriptor reads is not equivalent—it can raise an uncaught error.
+
+The current sites header now acknowledges this reorder gap. Its original frozen header claimed the reorder must fail.
+
+H1 is scored in all three launchers. One distinction: sites checks that the whole buffer contains no prompt; drain/witness score `wait()` returning false. Failure to recognize a terminal prompt is weaker than proving no prompt appeared anywhere.
+
+H1/H2 establish startup rejection and session-death handling. They do not reproduce the old guest-MMIO terminating path or independently exercise the step loop’s `HOST-DIED` classification.
+
+The sites `send()` now forwards `timeout`. The [hygiene matcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh:553) accepts either a comma or closing parenthesis after the echo expression, so this addition still matches it.
+
+**3. Gate pins**
+
+Yes, several pins can accept a duplicated green line in place of a missing or red row.
+
+| Pin | What a duplicate can conceal |
+|---|---|
+| SC1/SA1 count = 2 | Two green SC1 lines can substitute for absent SA1. |
+| S1–S5 count = 5 | A duplicate S1 can substitute for absent S2, S4, or S5. S3 has a separate value pin. |
+| SF1/SF2 count = 2 | Two green SF1 lines can substitute for absent SF2. |
+| N1–N5 | A plain duplicate cannot replace a missing ID: the distinct-green-ID pin rejects it. |
+| E0–E6 | Likewise protected against plain duplicate substitution by its distinct-ID pin. |
+| Individually named pins | They require a matching green line, but do not reject a conflicting red line alongside it. |
+
+These are the actual [ARM gate predicates](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1106).
+
+Further limitations:
+
+- Reordering lines changes none of these checks. Reordering alone cannot turn `FAIL` into `ok`.
+- Descriptive labels are generally ignored. Renaming a line can satisfy an expected ID without binding that ID to the intended measurement.
+- N’s `count=1.*` also matches `count=10`; it lacks a field boundary.
+- The N count and distinct-ID checks use different populations: the latter accepts any green N line, regardless of its count field.
+- H1’s pin requires `named=True`, but does not independently require its printed exit/no-prompt observations.
+- The additional H1 diagnostic line is reconstructed by the probe from its Boolean result; it is not independent evidence.
+- The gate does not pin `ROWS=36 of 36`, and its PASS/control searches are unanchored substring searches.
+- This section pins only the sites launcher’s legs, not drain/witness H1/H2.
+
+A qualification matters: with an unchanged, honest probe, an actually failing row suppresses aggregate PASS. Therefore an arbitrary duplicate does **not** automatically turn a genuine product failure into a fully green gate. The gaps matter when a row is deleted, duplicated, mislabeled, or otherwise weakened—the conditions these pins are intended to detect.
+
+**4. Other findings**
+
+The product change itself implements the stated decline policy: all five paths reach the common tail, +0x18c returns zero, and each successful handler call returns one. They change warning latches, not emulated register state. Four explicit terminating calls remain: two SDRAM reads and two construction paths. `fatal()` itself prints and returns.
+
+Several detector claims remain broader than their observations:
+
+- **N1–N5 are not access-local.** They count matching substrings across all of `S["fatals"]`. Exchanging two sites’ announce texts preserves one occurrence of each string, all N rows, and the offline counters. The [counting loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:570) never associates an announcement with its issuing access.
+- **Narrow declined-read output remains unchecked.** P3 checks the first word result; X1 checks only announce count. Neither verifies the byte/halfword zero result.
+- **X1 does not check preservation.** Each fresh narrow instance is discarded after its announce-count assertion.
+- **Interrupt preservation is checked only after the first word decline.** Repeated and narrow accesses have no corresponding interrupt-counter assertion. P8 checks Clear’s value and announcement count, not its interrupt output.
+- The pending-probe headers still describe retired arm K as current.
+- The sites claim that the FIQ expression is “unpinned everywhere” contradicts P0 and current X2. The remaining limitation is that their nonzero FIQ state is synthetic.
+- The P comment says callbacks are NULL although the block installs them. Its `0x70` payload overlaps both enables; it is not contained within either: `0x70 & 0x30 = 0x30`, and `0x70 & 0xc0 = 0x40`.
+
+The row arithmetic checks out, with the version distinction:
+
+- P0: 5.
+- P1/P2/P4/P5: 13 each; P3: 14.
+- P6: 1; P7/P8/P9: 2 each.
+- Total P: `5 + 52 + 14 + 1 + 6 = 78`.
+- Packet: 32 preceding rows + 78 P + identity = **111**.
+- Current X1: 10; X2: 11; X3: 2; total **23**.
+- Current total: **134**. The current offline gate expects 134 and 23 X-rows.
+- Sites remains **36** rows.
+
+Decline remains a reasonable disposition under the brief’s register-direction contract. The detector’s predicate coverage and disclosures need correction: zero-data writes, zero-enable declined reads, independent seed patterns, access-associated diagnostics, and distinct required gate rows would address the principal findings above. Historical run results and datasheet premises were not independently remeasured.
+
+Model: **GPT-6 / Codex**. Files read: the brief; all six requested tree files; the three frozen probe patches; supporting excerpts/searches in `debugmsg.c`, `memory.h`, `dc21285reg.h`, `gate_hygiene.sh`, `gate_offline.sh`, `lib.sh`, and `selfmutant.py`; a `src` search for `fiq_status`. Excluded files were not read. No files changed. **Nothing run beyond read-only file access/searches.**

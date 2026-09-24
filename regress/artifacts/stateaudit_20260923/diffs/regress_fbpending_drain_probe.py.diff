@@ -1,0 +1,180 @@
+diff --git a/regress/fbpending_drain_probe.py b/regress/fbpending_drain_probe.py
+index 2dfbb87..5aef728 100644
+--- a/regress/fbpending_drain_probe.py
++++ b/regress/fbpending_drain_probe.py
+@@ -61,12 +61,13 @@ ARMS
+   T  negative control: MMU left on, so the footbridge is not mapped.  Must not return
+      the device's answers.  (machine_cats.c's boot page tables map only the low 256 MB;
+      the footbridge is at PA 0x42000000.)
+-  K  failability control: arm D's prologue plus ONE instruction, a read of
+-     IRQ_ENABLE_CLEAR (+0x18c, write-only per the DC21285), which dev_footbridge.c's
+-     `case IRQ_ENABLE_CLEAR` read branch answers with fatal() then exit(1).  A probe in
+-     which nothing can die proves nothing by surviving; K must die WITH its complaint AND
+-     exit 1, and every surviving arm must reap exit 0.  #539 moved this from +0x188 (now
+-     a readable register); the round that declines +0x18c retires the bridge.
++  H1/H2 harness legs (#545) -- they REPLACED arm K, a read of IRQ_ENABLE_CLEAR (+0x18c) that
++     the device used to answer with fatal() then exit(1); #545 declines it.  H1: an unknown -E
++     name -- no prompt anywhere in the buffer, the diagnostic naming it, exit 1.  H2: arm D's prologue verified (21 steps, r3/r5/r6/r7),
++     a fresh reg, quit, then one more reg that must fail with `dead` set BEFORE close(), exit 0.
++     Every surviving arm must reap exit 0.  NOT COVERED: moving s.close() ahead of that next
++     send keeps H2 green (the send fails on the closed descriptor), and the legs cannot defend
++     their own predicates -- harness edits, reviewed, not rowed (footbridge_sites_probe.py).
+ 
+ Every RAM output word is poisoned with 0xDEADBEEF first and every verdict row requires
+ the values it consults to be PRESENT.  Every planted instruction is checked, as it
+@@ -188,7 +189,7 @@ def br(cond, target, here):
+ NOP = (0xE1A00000, "mov r0,r0")
+ 
+ 
+-def build(mmu_on=False, disable_during_accrual=False, kill=False):
++def build(mmu_on=False, disable_during_accrual=False):
+     """Returns [(offset, word, expected_disassembly_or_None, comment)]."""
+     p = []
+ 
+@@ -227,11 +228,6 @@ def build(mmu_on=False, disable_during_accrual=False, kill=False):
+     else:
+         emit(0x54, NOP, "")
+         emit(0x58, NOP, "")
+-    if kill:
+-        p.append((0x5c, 0xE590718C, "ldr r7,[r0,#396]",
+-                  "arm K: IRQ_ENABLE_CLEAR read -> fatal()+exit(1) (#539: was +0x188)"))
+-        emit(0x60, NOP, "")
+-        return p
+     #  accrual loop -- publishes liveness and a fresh VENDOR_ID every iteration
+     emit(0x5c, add1("lr"), "ACCRUE: iterations++")
+     emit(0x60, st("lr", "r4", O_ITER), "publish iterations")
+@@ -284,11 +280,12 @@ PROLOGUE_N = 21          # 0x00 .. 0x50 inclusive
+ 
+ # ------------------------------------------------------------------ session
+ class Session:
+-    def __init__(self):
++    def __init__(self, emul="cats"):           # #545: leg H1 passes an unknown name
+         self.buf, self.dead = "", False
++        self.emul = emul
+         self.pid, self.fd = pty.fork()
+         if self.pid == 0:
+-            os.execvp(BIN, [BIN, "-V", "-T", "-E", "cats", "-M", "32",
++            os.execvp(BIN, [BIN, "-V", "-T", "-E", emul, "-M", "32",
+                             "0x%x:%s" % (CODE, STUB)])
+             os._exit(127)
+ 
+@@ -597,20 +594,47 @@ def run_drainenc():
+     return dict(status=status, badis=bad, covered=cov, nsteps=len(ex), executed=ex, **end)
+ 
+ 
+-def run_kill():
+-    prog = build(kill=True)
++
++
++#  #545: THE HARNESS LEGS, replacing arm K.  Arm K read +0x18c, which the device used to answer with
++#  fatal()+exit(1); #545 declines that read, so the control that "this launcher notices a dead child"
++#  now comes from the harness itself:
++#    H1  an unknown -E name: machine.c prints `Sorry, emulation "<name>" is unknown.` and main.c
++#        exits 1 BEFORE any prompt.  Rowed on NO prompt AND the diagnostic naming THIS input AND
++#        WIFEXITED && == 1 -- five different startup refusals all exit 1 with no prompt (measured,
++#        pass 1), so only the text clause discriminates.
++#    H2  the prologue stepped to its end, a FRESH `reg` with r3 bit 0 clear, r5 = 0x11223344,
++#        r6 = VENDOR and r7 = LOADBACK (it really ran), `quit`, then ONE MORE ordinary `reg`: it
++#        must fail with `dead` set BEFORE close(), and close() must reap exit 0.  A child dead
++#        BEFORE the prologue finished shows `next send fails` + `dead` IDENTICALLY (measured), so
++#        the fresh-reg values and exit == 0 are both load-bearing.
++H1_NAME = "no-such-machine-fbd5"
++
++
++def run_legs():
++    #  H1
++    s = Session(emul=H1_NAME)
++    prompt = s.wait(timeout=120)
++    end = s.close()
++    h1 = dict(prompt=prompt, noprompt=("GXemul>" not in s.buf),
++              named=('Sorry, emulation "%s" is unknown' % H1_NAME) in s.buf, **end)
++    #  H2
++    prog = build()
+     s = Session()
+     if not s.wait(timeout=120):
+-        return dict(status="NO-PROMPT", saw=False, **s.close())
++        return dict(h1=h1, h2=dict(status="NO-PROMPT", **s.close()))
+     plant(s, prog)
+-    step_and_check(s, prog, PROLOGUE_N + 3)
+-    died = s.dead
+-    if not died:
+-        s.send("reg", timeout=10)
+-        died = s.dead
++    bad, cov, ex = step_and_check(s, prog, PROLOGUE_N)
++    r = s.regs((3, 5, 6, 7))
++    prologue_ok = (not bad and len(ex) == PROLOGUE_N and 3 in r and (r[3] & 1) == 0
++                   and r.get(5) == 0x11223344 and r.get(6) == VENDOR and r.get(7) == LOADBACK)
++    quit_rc = s.send("quit", timeout=10)
++    next_rc = s.send("reg", timeout=10)          # observed BEFORE close(); never short-circuited
++    dead_before_close = s.dead
+     end = s.close()
+-    saw = "ENABLE CLEAR" in s.buf
+-    return dict(status="HOST-DIED" if died else "SURVIVED", saw=saw, **end)
++    h2 = dict(status="SURVIVED" if prologue_ok else "PROLOGUE-FAILED", prologue_ok=prologue_ok,
++              quit_rc=quit_rc, next_rc=next_rc, dead_before_close=dead_before_close, **end)
++    return dict(h1=h1, h2=h2)
+ 
+ 
+ def main():
+@@ -624,7 +648,10 @@ def main():
+ 
+     skip = dict(label="(not run)", status="SKIPPED", regs={}, badis=[],
+                 covered=set(), executed=[], out=None, mid=None, phase=None)
+-    K = run_kill() if not ONLY else dict(status="SKIPPED", saw=False)
++    LEGS = (run_legs() if not ONLY else
++            dict(h1=dict(prompt=None, named=False, exit=None, signal=None),
++                 h2=dict(status="SKIPPED", exit=None, signal=None)))
++    H1, H2 = LEGS["h1"], LEGS["h2"]
+     E = run_drainenc() if not ONLY else dict(status="SKIPPED", badis=[],
+                                              covered=set(), nsteps=0, executed=[])
+     T = (run_arm("T (MMU ON, negative control)", mmu_on=True, accrue=1.0,
+@@ -666,8 +693,11 @@ def main():
+         for a, w, t in E["executed"]:
+             print("      0x%08x  %08x  %s" % (a, w, t))
+ 
+-    print("\n--- arm K (failability) ---")
+-    print("    status %s, saw the device's own complaint: %s" % (K["status"], K["saw"]))
++    print("\n--- harness legs (#545): H1 startup rejection, H2 quit after a verified prologue ---")
++    print("    H1 prompt=%s named=%s exit=%s signal=%s" % (H1["prompt"], H1["named"], H1.get("exit"), H1.get("signal")))
++    print("    H2 %s prologue=%s quit_rc=%s next_rc=%s dead_before_close=%s exit=%s signal=%s"
++          % (H2["status"], H2.get("prologue_ok"), H2.get("quit_rc"), H2.get("next_rc"),
++             H2.get("dead_before_close"), H2.get("exit"), H2.get("signal")))
+ 
+     print("\n" + "=" * 78)
+     print("CONTROLS")
+@@ -686,10 +716,10 @@ def main():
+     ranD = survived(D) and D.get("out") is not None
+     ranX = survived(X) and X.get("out") is not None
+     row("R0 every arm produced data",
+-        ranD and ranX and survived(T) and survived(E) and K["status"] != "NO-PROMPT",
++        ranD and ranX and survived(T) and survived(E) and H2["status"] != "NO-PROMPT",
+         "; ".join("%s=%s exit=%s signal=%s" %
+                   (name, a["status"], a.get("exit"), a.get("signal"))
+-                  for name, a in (("D", D), ("X", X), ("T", T), ("E", E), ("K", K))))
++                  for name, a in (("D", D), ("X", X), ("T", T), ("E", E), ("H2", H2))))
+     row("C1 liveness: RAM through the same decode",
+         rD.get(5) == 0x11223344 and rX.get(5) == 0x11223344,
+         "D r5=0x%x  X r5=0x%x" % (rD.get(5, -1), rX.get(5, -1)))
+@@ -709,11 +739,18 @@ def main():
+         "%d mismatches; drain offsets not stepped: %s"
+         % (len(D.get("badis", [])) + len(X.get("badis", [])) + len(E["badis"]),
+            " ".join("0x%x" % a for a in sorted(drain_words - E["covered"])) or "none"))
+-    row("K  failability: the kill instruction really kills",
+-        K["status"] == "HOST-DIED" and K["saw"] and K.get("exit") == 1
++    row("H1 startup leg: unknown -E named, no prompt, exit 1",
++        H1["prompt"] is False and H1.get("noprompt") is True and H1["named"]
++        and H1.get("exit") == 1 and H1.get("signal") is None,
++        "prompt=%s named=%s exit=%s signal=%s" %
++        (H1["prompt"], H1["named"], H1.get("exit"), H1.get("signal")))
++    row("H2 quit leg: verified prologue, next send dead before close, exit 0",
++        H2.get("prologue_ok") is True and H2.get("next_rc") is False
++        and H2.get("dead_before_close") is True and H2.get("exit") == 0 and H2.get("signal") is None
+         and survived(D),
+-        "K=%s exit=%s signal=%s (complaint seen: %s)" %
+-        (K["status"], K.get("exit"), K.get("signal"), K["saw"]))
++        "prologue=%s next_rc=%s dead=%s exit=%s signal=%s" %
++        (H2.get("prologue_ok"), H2.get("next_rc"), H2.get("dead_before_close"),
++         H2.get("exit"), H2.get("signal")))
+     row("T  the MMU-ON control cannot see the device",
+         #  F2 (#539): the keys must be PRESENT -- None != VENDOR is True, so a register-parse miss
+         #  greened this row once survived() forbade the halt outcome.

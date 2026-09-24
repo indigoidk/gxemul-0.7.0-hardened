@@ -1,0 +1,31 @@
+diff --git a/regress/gate_offline.sh b/regress/gate_offline.sh
+index 752b046..6e3a7c9 100644
+--- a/regress/gate_offline.sh
++++ b/regress/gate_offline.sh
+@@ -585,8 +585,25 @@ else
+     check     "footbridge: row failures" \
+               "$(grep -oE '[0-9]+ failures' "$FBLOG" | grep -oE '^[0-9]+')" "0"
+     check_min "footbridge: rows actually run" \
+-              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 33
++              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 333
+     check     "footbridge: offline verdict" "$(grep -c 'DIFF_FOOTBRIDGE_PASS' "$FBLOG")" "1"
++    #  #545: the five declined sites.  P0-P9 pin preservation under a NONZERO seeded status, the read
++    #  expressions, the latch per site and byte-first at IRQ_STATUS; X1-X3 (the pass-2 L2 repair) pin
++    #  byte/halfword-first at EVERY site, narrow legal reads, and that no legal access re-arms a latch;
++    #  X4/X5 pin ZERO data / a zero enable as the first access, and a legal zero Clear write.  X6/X7 are
++    #  the CLASS CLOSURE (two consecutive passes found cells of one space): every declined access --
++    #  site x width x data x state x first/repeat -- keeps every field and the interrupt output and reads
++    #  0; every legal access, from seeded and all-zero state, re-arms no latch.  X8: wide (multi-byte)
++    #  seeds, so a legal read truncated to 8 bits reds.
++    #  Kill tables: regress/artifacts/fbd5/{killtable,xtable,table3,table4}_20260919/.
++    #  COUNTED AS DISTINCT GREEN ROW NAMES, not green lines (adjudication pass, G10): a duplicated green
++    #  line cannot stand in for a missing row.  Every row name in the file is unique on the fix.
++    fb_distinct() { grep -E "^  ok    $1 " "$FBLOG" | sed -E 's/^  ok    //; s/[[:space:]]+[0-9]+$//' | sort -u | wc -l | tr -d ' '; }
++    check "footbridge: #545 P-rows green (P0-P9), distinct names" "$(fb_distinct 'P[0-9]')" "78"
++    check "footbridge: #545 X-rows green (X1-X8), distinct names" "$(fb_distinct 'X[1-8]')" "222"
++    check "footbridge: #545 X6 every declined-access cell green" "$(fb_distinct 'X6')" "108"
++    check "footbridge: #545 X7 every legal access re-arms no latch" "$(fb_distinct 'X7')" "70"
++    check "footbridge: #545 X8 wide legal reads keep all 32 bits" "$(fb_distinct 'X8')" "6"
+     #  Name each row that is the SOLE detector of something.
+     check "footbridge: the zero-load row is present" \
+           "$(grep -c 'load 0 becomes the full 24-bit span' "$FBLOG")" "1"

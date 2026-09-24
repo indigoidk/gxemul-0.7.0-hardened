@@ -1,0 +1,89 @@
+**VERDICT: DO NOT SHIP — the instance-axis closure has one concrete hole inside X14's own class and one misstated producer domain: (1) X14's DEVINIT write row never observes the drive channel, so a condition on a *rowed* DEVINIT timer value inside the Clear drive test passes all 862 rows and appears in no NOT COVERED line; (2) THE SPACE declares width 8 reaches only +0x180/+0x280, but per §C.5's own alignment rule 8-byte accesses also land on +0x188/+0x288 (the Set arms), a cell neither rowed nor disclosed in its letter (fbenablewidth names "below len 4" only); (3) the new NOT COVERED still asserts F1 "passes every row here" while the same brief's kill table records F1 red — a stale sentence in the contract being shipped. All three fixes are a few lines; the instrument itself checks out everywhere I could enumerate it.**
+
+---
+
+## 1. What I checked, and how (denominator up front)
+
+READ off the diff only: every X-block's loop bounds and k→row induction against the new gate pins; the X14 block row by row, mapping each row to the edit it exists for and asking whether any observable in that row can differ under that edit; the CONTRACT's THE SPACE / COVERED / NOT COVERED letter by letter against the inlined handler, the producer, and §C.5–C.7; the three corrected gate comments for internal consistency. I ran nothing; I cannot read the frozen copies.
+
+Edit shapes I swept against the 862 rows as described: conjunct injections (`&&`/`||`) on the direction test, the five latch tests, the head fetch, and the two drive tests, keyed on each of {the four interrupt fields, the five latches, irq_asserted, timer_control[i], timer_load[i], timer_value[i], pending_bound[i], pending_timer_interrupts[i]} × instance classes {calloc states (4), DEVINIT, producer-raised} × widths {1,2,4, and 8 at 8-aligned offsets}; plus polarity flips and wrong-intercept drives.
+
+## 2. The arithmetic and pins (Q4 enumeration — all READ, all hold)
+
+- IDENTITY: 32+8+8+8+60+20+19 = 155; 707+155 = 862. ✓
+- X6: per state per site cells = 8+6+3+8+6 = 31; ×4 states ×2 rows/cell (first + repeat) = 248 ✓ (old 216 = 27 cells ×4×2; +32 = 2 sites × 2 data × 4 states × 2). ✓
+- X7: 8 writes + 9×3 reads + 2 = 37 ×4 = 148 ✓. X9: (15+2+8)=25 ×4 = 100 ✓ (r=0 and r=2 at w=8). X10: 17 reads + 1 write = 18 ×4 = 72 ✓. X11: 20 ×4 = 80 ✓. X12/X13: 5×4 = 20 ✓. X14: 2 + 7 + (2×3) + 1 + 2 + 1 = 19 ✓.
+- Gate totals: 78 + 440 + 100+72+80+20+20+19 = 829; + 32 timer rows (the diff's own IDENTITY comment names them) = 861; + IDENTITY = 862. ✓ X[1-8] = 440 ⇒ X1–X5 = 38, unchanged from 400−216−140−6 = 38. ✓
+- The SUPERSET_NOTE 140 flagged rows = exactly the old X7 count and exactly the block whose check changed from printing a delta-0 to printing ok-1. Internally consistent. ✓
+
+## 3. Q1 — the enumeration
+
+**(a) THE SPACE is not complete — two misses, one of them a misstatement.**
+
+**MISS 1 (REASONED, and this is the primary defect): the DEVINIT × drive-test cells are claimed-adjacent, rowed in neither operand polarity, and not disclosed.** THE SPACE declares the instance part of the space and names the timer fields at DEVINIT values; COVERED names "DEVINIT's timer values ... at the five legal reads, a Set then a Clear, and the five declines (X14)". But read the DEVINIT Set+Clear row in the diff: it checks `rv`, `irq_enable == 0x60`, and `fatal_calls == 0` — it does **not** check `ZCPU`. In that row the Set drives (`0x18 & 0x70 = 0x10` → assert) and the Clear de-drives (`0x18 & 0x60 = 0` → deassert); both drive outcomes are unobserved. Every other row in the 862 uses a calloc instance where `timer_control[i] == 0`. Therefore:
+
+- Edit #1: in IRQ_ENABLE_CLEAR's drive test, `(d->irq_status & d->irq_enable) || d->timer_control[0]`. Green on all four states of X1–X13 and on X14's calloc rows (timer_control[0]=0 ⇒ identical). Red nowhere: the only DEVINIT-instance Clear ignores the CPU counters. Undisclosed: NOT COVERED's catch-all names "other timer values (`!d->timer_value[0]`, `d->pending_bound[0] <= 1`)" — `timer_control[0]` at PERIODIC is a **rowed** value, not an "other" one, and the sentence's only `timer_control` citation (F1) is on a latch guard and is stale (below).
+- Edit #2 (mirror polarity): `(d->irq_status & d->irq_enable) && !d->timer_control[0]`. Green everywhere for a different reason: no DEVINIT-instance Clear ever has `irq_status & new_enable ≠ 0` (the tk-loop's only Clear is 0x10, which yields 0). Closing this needs one genuinely new cell, e.g. `ZCLR(0)` on a DEVINIT instance with a pending+enabled line, expecting an assert.
+
+Cheap fix for both: add `ZCPU(1,1)` to the DEVINIT Set+Clear check (kills edit #1) plus one intersecting DEVINIT Clear row (kills edit #2) — or name the class in NOT COVERED. As the brief itself says, "disclosure is only honest if the undisclosed remainder is empty"; it is not.
+
+**MISS 2 (REASONED from §C.5 as stated): the width domain is misenumerated.** THE SPACE asserts "8 at +0x180 and +0x280, the two 8-byte-aligned sites". Per §C.5 (`addr &= ~(datalen-1)`, one `memory_rw` of len 8): +0x188 and +0x288 are also 8-aligned, and an LDRD/STRD at +0x18c (+0x28c) aligns *down to +0x188 (+0x288)*. So len-8 Set writes and Set reads are genuine guest inputs; COVERED rows the Set arms "at len 4" only; NOT COVERED's fbenablewidth line names the Set arms "below len 4" and a `len == 4` conjunct — a len-tolerant conjunct (`... && len != 8` on IRQ_ENABLE_SET) is not that measured shape and not "below len 4". One line, green on 862, in neither list. This matters most for O2 (below): "+0x18c never sees len 8" is true, but the guest's STRD/LDRD at +0x18c *lands* on the unrowed Set arm — the non-input argument disposes of the six Z6 rows as written while the input behind them stays uncovered. Fairness caveat (READ): the measured fbenablewidth shape `len == 4` does divert len 8 too, so a panel could rule this covered in spirit; the contract's letter and THE SPACE's affirmative width sentence still misstate the producer.
+
+Also note (REASONED): §C.5 only establishes the LDRD/STRD path. Not checkable from the packet: whether LDM/STM or any DMA path can also emit len 8 (or other lengths) into this window. One fact settles it: the `memory_rw` call sites in `cpu_arm_instr_loadstore.c` for the multi-transfer instructions.
+
+**(b) X14 row → edit → observable (each holds unless flagged):**
+- Disjoint (0x18/0x30, Clear 0x10): for `&`→`&&`; observable = cpu deassert vs assert via `ZCPU(0,1)`. ✓
+- Status-zero (0/0x30): for an enable-alone drive test; same channel. ✓
+- Seven lines {4,5,6,7,10,11,18}: for single-line masks and wrong-interrupt drives (N_I05/I06); `ZCPU(1,0)` pins the CPU pair *and* the shared timer pair unmoved — matches §C.6's enumeration exactly. ✓ (The 25 dead bits' masks stay disclosed, fine.)
+- DEVINIT legal reads ×{tick 0,1}: for timer-conditioned value/announce edits; observable = the five values + fatal==0. ✓
+- DEVINIT Set+Clear: observes value and rv, **not the drive** — the gap above.
+- DEVINIT declines: for F1-shape latch guards; observable = fatal==5. ✓ F1 reds here — which is why its NOT COVERED sentence is stale.
+- Line-4 raised via the real producer → IRQ_STATUS reads 0x10; Clear 0x10 vs 0x400 (irq_asserted=1): polarity of both drive outcomes observed on the CPU pair. ✓
+- Re-arm row: for N_R05 (latch cleared while asserted) and N_T10; observable = `f0==5 && fatal_calls==5`; a suppressed first-round announce breaks f0==5. ✓
+
+**(c) NOT COVERED vs the floor:** every other line I stress-tested is defensible — exact values (clause e), address axis, fbenablewidth (as a class), Set-arm drive (O6, consistent with §C.3), joint latches beyond the rowed vectors, the interrupt LEVEL. The two exceptions are the ones above. G8's read tail: it post-dominates, and any tamper red-flags X6's decline-read-zero and X9/X10's width rows — no row owed, UPHOLD.
+
+## 4. Q3 — adjudications (one line each)
+
+- **D1 UPHOLD** — the 28-escape measurement claim is consistent with the rowed fixes; the escapes themselves are not re-verifiable here.
+- **G1 UPHOLD** — width-8 cells at exactly the two 8-aligned *decline* sites; row/pin arithmetic matches (§2).
+- **G2 UPHOLD, record REFINE** — disposition correct (S11's 32 reds = X12's 16 + X13's 16 len-1/2 Clear rows, which enumerate ✓), but the premise "captured nowhere" is false: repair-2's X6 already required "the handler returns 1" (READ, in the diff's removed lines).
+- **G3 UPHOLD** — X13 (len 1/2 with 0x70, len 1/2/4 all-ones, latches set) is exactly S12's escape cell; X10 covers the len-4 latched case.
+- **G4 UPHOLD** — X11's re-decline of both j and i catches S13/S14 in both directions (20 ordered pairs). ✓
+- **G5 UPHOLD** — X11 × 4 states is S6's kill. ✓
+- **G6 UPHOLD with REFINE** — floor logic consistent with §C.3; but extend the fbenablewidth sentence to widths *other than* 4 (see Miss 2).
+- **G7 UPHOLD** — idata is never case-tested; the `if (idata)`-style guards I probed are unobservable at zero-data because `ie & ~0 == ie`; disclosure is honest here.
+- **G8 UPHOLD** — observed via value rows; outside the floor by post-dominance; correct call.
+- **G9 UPHOLD** — all three new gate sentences are internally consistent (the truncation comment now correctly says per-row greps survive a cut while the count/verdict checks fail).
+- **G10 UPHOLD** — the drive partition is now named, and its four operand cells exist across X14/X9/all-zero state.
+- **O1 UPHOLD** — the 28 map onto X14/X6-X10 cells whose observables differ (§3b); "all red" not re-checkable here.
+- **O2 REFINE** — right that the six rows test non-inputs; wrong to stop there: the guest access behind them (8-byte at +0x18c/+0x28c) lands on the Set arms and is unrowed and unnamed. Keep the non-adoption, add the disclosure or the rows.
+- **O3 OVERTURN (in execution)** — this is the wrong accepted disposition. Re-seating X14 only is fine; doing it while X14's sole DEVINIT-instance write row leaves the drive channel unwatched re-opens the exact class X14 exists to close (Edits #1/#2). Fix as in §3a (one check + one cell, or a named disclosure), and delete the stale F1 parenthetical that this disposition let stand.
+- **O4 UPHOLD in intent, text REFINE** — the catch-all now names every test, but its examples ("other timer values") exclude the rowed DEVINIT values those very tests sit next to; either row (my preference) or reword.
+- **O5 UPHOLD** — X14's private CPU pair makes wrong-interrupt drives observable; retaining the shared pair elsewhere is now documented. ✓
+- **O6 UPHOLD** — Set arm shares no case with a decline; disclosure matches §C.3. (Rowing it would cost ~2 rows now that x14_new exists; see Q5.)
+- **O7 UPHOLD** — the re-arm row's f0==5 mechanism reddens N_R05 and N_T10 exactly as described. ✓
+
+## 5. Q4 — other records (beyond §2, which all passed)
+
+- FALSE-as-of-today, one sentence: NOT COVERED's "(measured F1: `&& !timer_control[0]` passes every row here ...)". The kill table in this same brief lists F1 red (X14's DEVINIT declines announce 4≠5 under it). Whatever "here" meant historically, shipped in the current contract it contradicts the claim that the undisclosed remainder is empty-by-measure. Fix: reword or delete.
+- The X14 helper comment ("every other block's instance is a calloc ... counting ... on ONE pair") and all X-block headers check against the code. ✓
+- The CONTRACT's fold claim ("they sit below TIMER_1_LOAD and have bits 5-6 clear") is arithmetically true for 0x180–0x18c/0x280–0x284. ✓ (READ.)
+
+## 6. Q5 — options not named
+
+- For O3: (i) **differential-over-instances row** — one block that runs the same sweep on a calloc and a DEVINIT instance and requires identical observables; cheaper than re-seating 843 rows and closes the whole polarity family at once. (ii) **Complete the channel matrix in place** — add `ZCPU` to the existing DEVINIT write row and one intersecting DEVINIT Clear (my §3a); the author considered only "all rows" vs "X14 only", not "X14 with all channels watched". (iii) Have the shared ctor call the device's real init path instead of hand-seeding, so future DEVINIT changes propagate (heavier; the hand-seed is a copy of §C.7 that can silently drift — worth one guard row or a static assert).
+- For O6: (c) row the Set drive's disjoint/intersecting cells with the x14_new machinery (~2 rows) instead of disclosing; the asymmetry (Clear rowed, Set disclosed) is exactly the kind of seam the next pass will probe.
+
+## 7. Named as not checkable from this packet (with the settling fact)
+
+1. "652 of 652 as predicted" and "no row green↔red lost across 707→862" — settled by the row-by-row diff artifact PRETABLE_Q2c.out vs the 18:34 run log.
+2. §C.5's alignment claim — settled by quoting the LDRD/STRD emission in `cpu_arm_instr_loadstore.c`; everything in Miss 2 stands *given* this premise.
+3. §C.6's device-line routing {4–7,10,11,18} — settled by the DEVINIT/`bus_pci.c` lines cited.
+4. §C.7's DEVINIT values — settled by `devinit_footbridge` text; note the harness copies them by hand (drift risk, §6).
+5. `fb_distinct` counts on the real `R3X.log` — settled by running the gate's own greps on that log (I may not run it).
+6. Whether the Opus seat's 28 are exactly the enumerated groups — settled by `q2e/frozen/.../SUMMARY.txt`.
+
+## Seat record
+
+Model: Claude (packet-fed seat; no file, no execution). Read: the brief's inlined diff, handler, producer, §C premises, §F2 dispositions, gate comments — nothing else. Ran: nothing. Primary findings: (1) X14's DEVINIT write row does not observe the drive channel — two one-line clear-drive edits conditioned on the *rowed* DEVINIT timer values pass all 862 rows and are in no NOT COVERED line (O3 overturned in execution); (2) THE SPACE's width domain omits +0x188/+0x288 per §C.5's own rule (O2/G6 refined); (3) the stale "F1 passes every row" sentence contradicts this brief's own kill table (Q4). All pins, the IDENTITY sum, and every X-block's row induction enumerated and verified from the diff alone.

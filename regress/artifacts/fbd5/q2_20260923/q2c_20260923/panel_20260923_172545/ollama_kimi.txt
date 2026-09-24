@@ -1,0 +1,73 @@
+VERDICT: DO NOT SHIP -- the closure's contract is false as written: the width axis of the legal Set/FIQ enable writes is claimed COVERED ("legal x width", X9) but those arms are rowed only at len 4, and a one-line `&& len == 4` conjunct on `IRQ_ENABLE_SET` passes all 707 rows while silently no-op'ing narrow guest writes; and the NOT COVERED list omits a MEASURED green class the packet itself reports (exact-value conditions on `idata`, idata family 1 green at 707). The 707 rows are fine as far as they go; the enumeration/contract they close is not.
+
+## Q1(a) -- inputs/partitions tested vs THE SPACE
+
+READ (handler): the bodies test -- direction (all arms), own latch (the five declines), `d->irq_status & d->irq_enable` after the update (IRQ_ENABLE_SET **and** IRQ_ENABLE_CLEAR writes). THE SPACE names all inputs: case label, direction, width, idata, four fields, five latches; the values they compute with (idata per width via `memory_readmax64`, odata per width via `memory_writemax64`) follow.
+
+READ defect (records, not coverage): the contract says the bodies test "(irq_status & the new enable) **in the Clear write**". The inlined handler shows the identical test in `IRQ_ENABLE_SET`'s write arm. The Set drive *is* rowed (X9 requires IRQ Set/Clear to drive exactly once), so nothing is uncovered -- but the sentence enumerating TESTED predicates is false as written.
+
+## Q1(b) -- each COVERED class has a live observable
+
+From the packet, each family watches a channel that varies under its targeted one-condition edit: X6 (announce delta, field equality, output counters, read-returns-0) -- kills latch/direction/width conjuncts on declines (V1, V2, V7 red as tabled). X9 (returned value per width, per-field equality, drive counters, then exactly-5 re-decline) -- kills the Q1..Q5 direction conjuncts. X7 (announce-only under all-latched) -- kills cross-latch substitutions (V1's mechanism). X10 (value and effect with all latches set) -- kills b_neg (10->0, measured). X11 (ordered pairs, announce delta + fields + output) -- fl_neg 10->0. X12 (post-write `irq_enable`, drive, width-masked data) -- V9 red.
+
+REASONED (verified against inlined handler + the MEM_READ-gated tail): the 4 surviving or_L variants are true equivalents -- at the four STATUS arms a latched write enters the read branch, whose only effect is `odata`, written back only on MEM_READ. Not escapes.
+
+Dead channel noted: "handler returns 1" cannot vary under any one-line edit to these arms (`return 1` unconditional). Harmless weight.
+
+## Q1(c) -- NOT COVERED audit + F7's premises
+
+F7(i) READ: verified -- none of the five decline bodies reads `idata`; none of the five fatal strings prints it. Premise true.
+F7(ii) READ, enumerated: 0x180, 0x184, 0x18c, 0x280, 0x284 all have bits 5-6 zero, so `offset & ~0x060` is the identity on each -- 0x180, 0x184, 0x18c, 0x280, 0x284. Stronger: the fold guard (0x300..0x36c) never fires for the five, and masked timer addresses stay >= 0x300. Premise true; "the timer fold maps no address onto these five" is READ-true.
+
+Two items are NOT genuine non-floor non-issues:
+
+1. **REASONED: `len` on the legal Set/FIQ writes.** Clause-e logic rowed Clear's width (F3) because `idata`'s partition is width-dependent via the head fetch. The same fetch feeds `irq_enable |= idata` and `fiq_enable |=/ &= ~idata`. Width is a body-relevant partition at all four enable arms; it was closed at one (Clear) and the COVERED line then asserts "legal x width". Either rows are owed for Set-IRQ/Set-FIQ/Clear-FIQ at len 1 and 2, or the contract must say why Clear's width is floor and theirs is not. It does neither.
+2. **READ: exact-value `idata` conditions.** NOT COVERED names "one EXACT *field* value". The rescore table shows `writeflag == MEM_WRITE && idata != 0x20` at +0x18c GREEN at 707 -- idata is not a field, so a reader of the contract would be surprised by a measured-green escape the list does not name.
+
+## Q2 -- smallest undisclosed invisible edit
+
+`case IRQ_ENABLE_SET: if (writeflag == MEM_WRITE && len == 4) { ... } else { odata = d->irq_enable; }`.
+
+Every Set/FIQ write in the 707 rows is len 4 (F3's premise: all legal writes were len 4; X9's header: "the eight enable writes at len 4"; LW's struct carries no width and is called with 4; X7/X9/X10/X12 contain no len-1/2 Set write). The conjunct is therefore constant-true on all 707 rows; e.g. the row "X9 IRQ Set write 0x70 (seeded, latches clear)" stays green, and so do all others. A guest len-1/2 Set write now falls into the read-else: `irq_enable` is not set, no drive occurs, odata is discarded (writeback is MEM_READ-gated). A legal access mis-handled, a field not changed when it should be, no announce. Not in the NOT COVERED list (len is in THE SPACE; the contract claims legal x width COVERED). Same edit works at FIQ_ENABLE_SET/CLEAR.
+
+Denominator for everything else I swept at the five arms and the two head predicates: direction-test conjuncts on one field bit (killed by all-zero/ones pair), exact *field* values (measured green, disclosed), latch guards (own/cross-site: X6/X7/X10/X11), len on declines (X6 rows widths 1/2), len on reads (X7/X9/X10), len and lane-mask data on the Clear write (X12), len on the *shared* head fetch (red via X12), fold widen/narrow (disclosed axes), announce-channel text (outside the class's semantics), re-arm instead of set, and omit-store (repeat rows red). The gap above is the one survivor, plus the measured idata exact-value class.
+
+## Q3 -- dispositions
+
+F1 UPHOLD -- X10's fresh-instance, all-latched value+effect checks are exactly the b_neg mechanism; measured 10->0.
+F2 UPHOLD -- X11's fresh-instance ordered pairs match fl_neg (10->0); or_L remainder is provably equivalent (READ, see Q1(b)).
+F3 **OVERTURN as a closure acceptance** -- the rows answer the finding's instance (Clear) but the class it instantiated (width on a legal write arm, four arms) was closed at one; the contract's "legal x width" builds a false claim on it. **This is the wrong acceptance**: the finding was right and the rows are right *for Clear*, but the adoption treated an instance as the axis.
+F4 UPHOLD with the F8-neighbor gap -- all-ones data kills masks (V9 red, measured); exact-value idata remains green and undisclosed.
+F5 UPHOLD -- zero/ones pair kills every single-bit one-field conjunct in at least one state; measured bit_* 50->0.
+F6 UPHOLD -- lane masks red under ones; measured 10->0.
+F7 UPHOLD -- both premises READ-verified above (`idata` unread by declines; fold identity enumerated). One rider: "the fetch's `&& len==4` forms are now RED" holds only for the *shared* placement; arm-local placement at Set/FIQ survives (Q2).
+F8 REFINE -- correct disclosure for fields under clause e; the same logic must name `idata` values, which are measured green and unnamed. Incomplete as written.
+F9 UPHOLD -- the len-4 read genuinely is compared over all 32 result bits; the seed-coverage overclaim moved to the comment, which is now accurate; keeping names preserves carried-kill identity and the rationale is documented.
+F10 UPHOLD -- new X9 header enumerates exactly what the loop builds (5 reads x 3 widths + 8 len-4 writes).
+F11 UPHOLD -- corrected forms are present in this brief and the diff.
+F12 UPHOLD-FILE with a note -- it is detector-integrity, not product floor; but FIX-NOW was available (this repair already edits gate_offline.sh; a hash of the sorted distinct names pins identity). See Q5.
+F13 CANNOT SETTLE in part -- READ: the inlined Set/Clear arms do call INTERRUPT_ASSERT without setting `irq_asserted`. NOT in packet: `footbridge_interrupt_deassert`'s gating on `irq_asserted`; the two callback bodies would settle it. Filing out-of-round is right regardless -- those arms are outside this repair's two-file scope.
+F14 UPHOLD -- nothing in the packet contradicts it.
+D1 UPHOLD -- settled by measurement; the 153->57 rescore corroborates that repair 1 really was porous.
+
+Wrong accepted disposition: **F3** (with F8's disclosure -- not its principle -- the runner-up).
+
+## Q4 -- records, enumerated
+
+IDENTITY arithmetic: 33+78+38+216+140+6+92+64+20+20 = 707 ✓. Against the loops: X6 = 4 states x (4 write-sites x 3 widths x 2 data + 1 read-site x 3) x 2 (first/repeat) = 216 ✓; X7 = 4 x (8+9x3) = 140 ✓; X9 = 4 x (5x3+8) = 92 ✓; X10 = 4 x (5x3 + 1) = 64 ✓; X11 = 5x4 = 20 ✓; X12 = 4 x 5 = 20 ✓; increments 54/35/23/64+20+20 = 216, 491+216 = 707 ✓. Gate pins X[1-8] 400 = 38+216+140+6 ✓, and each family pin matches its loop. X1-X5 = 38 is by difference only (CANNOT SETTLE independently -- those loops predate this diff).
+
+False/stale sentences: (a) the TEST-only sentence omits the Set arm's drive test (Q1(a)); (b) COVERED's "legal x width" is false for the three non-Clear write arms (Q2); (c) the X6 header's "Each cell, as ONE row ... moves by exactly 1 on the first access and 0 on the repeat" cannot describe 216 = 2 rows per (site,width,data,state) cell -- READ-arithmetic forces two rows per four-tuple; the elided body presumably emits per-occurrence rows and the comment should say so (CANNOT SETTLE the body's mechanism, but one of comment or pinned count must be reworded). X8 header, X9 header, IDENTITY comment, and the gate comment's state list are accurate.
+
+## Q5 -- options not named
+
+REJECT (finding disproved by handler or measurement), FIX-NOW (modify the artifact in this same diff -- available for F12 since gate_offline.sh is already in it; FILE LOW instead bets that counts suffice, which is precisely what F12 attacks), ESCALATE/stop-line, DUPLICATE/merge. F13's options are genuinely constrained (dev_footbridge.c is out of scope), so FILE is right there; F12 had a live FIX-NOW it did not name.
+
+## Found while verifying (else)
+
+X7's "9 read targets" cannot be enumerated from the packet (7 named: the five readable sites + VENDOR_ID + TIMER_1_VALUE) -- name the other two or the +35/state count is taken on trust. X10's read rows never check the access function's return value (harmless; it is constant 1). The 57-exactly-as-predicted claim rests on mtimes alone, as the brief itself discloses.
+
+Remedy to clear the verdict: row len 1/2 writes for the three non-Clear enable arms (~24 rows) or reword COVERED to "widths on reads and the Clear write" and add both survivors (write-arm width, exact `idata` values) to NOT COVERED; fix sentences (a) and (c).
+
+## Seat record
+
+Model: Claude Opus 4.6 (1M context). Read: this packet only -- the inlined handler, the full repair-2 diff, the rescore and codex-V tables, the §C/§F2 texts; packet-fed, no files, no commands. Ran: nothing; all arithmetic enumerated by hand against the inlined loops. Claims above are labeled READ (from the packet) or REASONED; nothing is MEASURED.

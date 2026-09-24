@@ -1,0 +1,68 @@
+VERDICT: DO NOT SHIP -- 3c closes all nine R1 escapes (READ, as reported; row-by-row mapping below), but the NEW row's name "Clear 0x20 keeps 0x10 pending and enabled: CPU line asserted once" claims the status channel and its check never reads `x->irq_status` (check = `rv == 1 && x->irq_enable == 0x10 && ZCPU(1, 0) && fatal_calls == 0` -- READ from the inlined diff). That is the exact R1 class the last panel rejected repair 3 for. Fix is one clause (`&& x->irq_status == 0x18`) or narrow the name. Secondary: a stale "passes all 862 rows" in 3c-added text. If a run shows my Q2 mutant red on 864, this flips to SHIP modulo the comment fixes.
+
+## Q1(a) -- changed/new X14 rows, the edit each is for, the new observable
+
+Six row sites touched (5 changed, 1 new; the new one executes once per element of `TS[2]`, so 8 changed instances + 2 new = 10 of the 21 X14 names -- READ from the diff):
+
+1. "the five legal reads return their values" (+`ZCPU(0,0)`) -- rows the reads' interrupt-output channel at DEVINIT values. No one of the nine fires here (irq_asserted = 0 in this block -- REASONED); an unconditional read-arm status mutation is caught one row later by row 2's drive (status 0 & enable -> deassert -> ZCPU(1,1) fails -- REASONED).
+2. "Set 0x40 then Clear 0x10 leave 0x60" (+`ZCPU(1,1)`, then `ZZERO()`) -- for TD01/TD03 (drive conditioned on `timer_control[0]`, =0x40 here) and TD02/TD12 (pending tick; pending = tk, so red at tk=1): the drive must assert at the Set and deassert at the Clear. Observable: the deasserting-polarity drive at DEVINIT values. Bonus the brief does not claim: at the Clear the operands are status 0x18, enable 0x60 -- both nonzero and disjoint -- so this check also closes R7's disjoint-operand observation gap for the Clear write (REASONED).
+3. Declines row (+`ZCPU(0,0)`) -- for TD04 (a +0x180 decline that deasserts at timer_control[0]: (0,1) here). Fields+announces were already checked (READ).
+4. NEW "Clear 0x20 ... asserted once" (x2 states) -- the asserting polarity of the drive at DEVINIT values (TD01/TD02 blocked here; TD03/TD12 are caught by row 2). Observable: exactly one assert, enable 0x10, no announces. RESIDUAL: the name claims "keeps 0x10 pending"; the check reads enable but not `x->irq_status` (READ). The drive proves bit 4 was live at drive time, not that the field retains it afterwards.
+5. Line-4 "IRQ_STATUS reads 0x10" (+ status 0x10, enable 0x10, asserted 1, `ZCPU(0,0)`) -- for IA12 (read clears status) and IA13 (read deasserts while asserted; asserted = 1 because the raise went through the real producer -- READ from the producer verbatim).
+6. Re-arm row (+ five read VALUES via `RA` with `memset(b, 0xa5)`, `ZCPU(1,0)`, final status/enable) -- for IA14 (a decline deasserts while asserted: the declines run asserted) and IA16 (latched+asserted read returns 0: RA wants 0x10). The old loop's fifth read (+0x18c, a repeat decline) is dropped; no cell is lost -- X6 rows first/repeat declines at every site with fields and announces (READ from COVERED). Caveat: the row's middle (which "Clear", where `f0` is taken) is not inlined; `ZCPU(1,0)` at check time is consistent with the unmodified product only if that Clear makes no CPU-line call (the FIQ Clear at +0x28c is the only such Clear -- READ from the handler) -- cannot settle which from the packet.
+
+Any X14 row still claiming an unread channel: YES -- row 4's "pending" (primary). Secondary, header-dependent: the line-4 read row's header says "(value, fields, output)" but the check reads no `fiq_status`/`fiq_enable`; if "fields" means the four fields of the general channel list, an `if (d->irq_asserted) d->fiq_enable = 0;` in the read arm passes every row (REASONED; X6's seeded instances have asserted = 0). Two clauses, or write "the IRQ fields".
+
+## Q1(b) -- COVERED / NOT COVERED of the 864 rows
+
+COVERED: one false channel-cell (row 4, above). The rest verifies: the width-domain sentence's alignment arithmetic is right (0x180/0x188/0x280/0x288 are 0 mod 8; 0x184/0x18c/0x284/0x28c are 4 -- READ/REASONED); the R11 reattributions (len 1/2 -> X12/X13; len-4 0/0x70 latch-clear -> X9; 0x70 latch-set -> X10) and the X7/X14 per-row scoping match the checks shown (READ); the exact-value examples' red/green status matches the reported table, including the two predicted flips (READ). NOT COVERED: every line is outside the floor (producer pair: another function, and the decline bodies read only the `warned_*` latches -- READ from the handler -- so the pair dominates no edited line; enable arms at len 8: §C.3) or an honestly disclosed value-joint (latched Clear 0, len<4 destination, 25-bit masks, Set-drive disjoint, exact values). Records defects live in Q4.
+
+## Q3 -- adjudication
+
+- R1 UPHOLD (mapping above; "all nine red" READ as reported).
+- R2 UPHOLD the disclosure + `fbirqstuck` filing. Deciding rule: §C.2 -- the floor is the dominator closure of the edited decline lines walked to the function boundary; the pair is outside `DEVICE_ACCESS`, writes no `warned_*`, and is a fixture here whose product (a single assert from zero status, enable 0x10) is invariant under PR01-PR07 (READ: every seat's finding; REASONED: invariance). Rowing it claims another function's state space -- the chain the project's rule exists to stop.
+- R3 UPHOLD (no shared case -- READ; alignment arithmetic checks).
+- R4 UPHOLD as disclosure (X14 counts the CPU line apart at len 4 only; X9-X13 count the shared pair -- READ; the cell is unclaimed after the scoping).
+- R5 UPHOLD (idata==0 x latch is a clause-(e) joint; disclosed; reported green).
+- R6 UPHOLD (the producer verbatim shows _deassert writes both fields -- READ; texts corrected).
+- R7 UPHOLD (and see the row-2 bonus: the Clear's disjoint-operand cell is now checked).
+- R8, R9, R10, R11, R12, R13 UPHOLD (each verified against the rewritten text; the truncation sentence is now true: any cut before the last line kills the verdict grep, a cut before the summary kills the count greps -- REASONED).
+- R14 UPHOLD, with the "timer_value 0" clause unsettled (below).
+- R15 UPHOLD the rejection (rows only ever hold raised bits, so a mask on an unraised bit is identity on every rowed value -- REASONED; it is disclosed -- READ).
+- R16 UPHOLD (disclosed -- READ).
+- R17 UPHOLD the filing (pre-existing text, another campaign); CANNOT SETTLE the filings' truth (timer text not inlined).
+- D4 UPHOLD.
+
+WHICH ACCEPTED DISPOSITION IS WRONG: none in direction. R1's implementation leaves the one claimed-but-unread channel (Q2). R2 I would not overturn; §C.2 decides it, and the anti-chain prediction is the project's own principle applied to a fixture.
+
+## Q2 -- the smallest unseen, undisclosed edit
+
+One line, in the IRQ_ENABLE_CLEAR write branch, after the drive if/else:
+
+```c
+if (d->timer_control[0] && (d->irq_status & d->irq_enable)) d->irq_status = 0;
+```
+
+Rows I expect green: all 864 (REASONED). It fires only on a DEVINIT instance (timer_control[0] = 0x40; seeded instances have 0 -- READ §C.7) and only on an asserting-polarity Clear. The only asserting Clear on a DEVINIT instance is the new row, which does not read `x->irq_status`. Row 2's Clear is deasserting (0x18 & 0x60 = 0), so the guard fails and row 3's `x->irq_status == 0x18` passes; X9-X13 and the line-4 rows run on non-DEVINIT instances. Not disclosed: `timer_control[0]` as a partition is the instance axis the X14 block claims ("the INSTANCE a row runs on is part of the space" -- READ), and the status retention is claimed by the new row's own name -- under §C.2 that is a breach, row it or narrow it.
+
+Denominator swept: five arms x read/write x {return, announces, the four fields, interrupt calls, read data} x {seeded, DEVINIT, DEVINIT+pending, line-4-raised, latched} against every changed check expression (READ). Decline-side mutations: red (fields at both partitions). Clear-write: drive rowed in both polarities at DEVINIT, enable rowed, output rowed; status rowed only in the deasserting polarity -- one hole. Head tests: the fetch and the fold are disclosed (READ). Not swept (not inlined, and the honest caveat on my "all 864"): the guest-sites probe's sequence, the timer-part rows' Clear writes, `ZCLR`'s internals, the line-4 "Clear both ways" checks. NAMED MEASUREMENT WANTED: build this one mutant and run the 864-row detector once in a temp dir -- it decides the verdict line.
+
+## Q4 -- records
+
+IDENTITY arithmetic: 864 = 862 + 2; the +2 is one `check_u` executed once per element of `TS[2]` (READ); the identity check prints `rows + 1` = 864, so the counter reads 863 = 861 + 2 (REASONED). Gate pins vs the loops: `check_min` 864, `fb_distinct 'X14'` 21 = 19 + 2 (the two names differ by the TS prefix -- READ); only these two counts changed in the gate, consistent with 3c adding only X14 rows (READ). The r3 comment's "707 -> 862" decomposes exactly: 32+8+8+8+60+20+19 = 155 (READ, arithmetic verified).
+
+False or stale as of today: (i) the NEW producer paragraph says "passes all 862 rows" while the file, its own header and the gate say 864, and the packet reports PR01-PR07 green on the 864 run -- stale number in new text; cite both runs or say 864. (ii) The X14 header's recap of the Opus nine: under the strict parse it names eight shapes -- "a decline ... while irq_asserted" covers IA14 only, and TD04 (a decline deasserting at DEVINIT timer values, while NOT asserted) is unnamed unless "a drive at DEVINIT values in either polarity" is read to include decline-arm drives; say which. (iii) "red since X14" is loose for the `idata != 0x20` form, which went red at 3c (READ: it was green on 862). (iv) "timer_value 0" at DEVINIT -- not settleable from the packet.
+
+## Q5 -- unnamed dispositions
+
+R2: fixture-hardening -- one X14 row could call `_assert` twice, pinning PR01's `|=` and exposing PR02's restored conjunct at irq_asserted = 1, without claiming the pair's closure. Defensibly declined, but it should be recorded as considered-and-declined, not omitted. R4: one len-2 Clear row with `ZCPU` (the CPU-apart counter already exists) closes codex's destination edit; 3c instead scoped the "interrupt calls" channel to the shared pair -- rule-consistent, but this is the single-row alternative, and note the contract already claims the Clear write beyond the floor at len 1/2.
+
+## Something else -- a premise the packet cannot settle
+
+§C.1 records the product change as "decline + once-latched announce ... 0 for the declined read", i.e. the access returns; yet the verbatim product handler still calls `fatal()` at all five sites (READ). Both hold only if this fork's `fatal()` no longer exits. If it does exit, the packet's central product premise is misdescribed (this would be a #545-product issue, not a 3c defect -- the detector stubs `fatal`, and 3c's row logic is self-consistent either way). Settling fact: the fork's `fatal()` definition, or the #545 diff to `dev_footbridge.c`.
+
+Other premises named, each with its settling fact: `ZCLR`/`ZCPU`/`x14_new` definitions (one grep; my Q2 depends on `ZCLR` being a bare write that sets `rv`); the re-arm row's unshown middle (which Clear, where `f0` is captured); whether DEVINIT writes `timer_value` (the init path in `dev_footbridge.c`); the guest-sites probe's accesses; the line-4 "Clear both ways" checks. The packet's reported runs (864/0, the 711-variant table, the nine red) are READ as reported; I verified their internal arithmetic (711 = 652+54+5; 881 = 862+19; 19 hunks + 3 hunks as claimed), not their truth.
+
+## Seat record
+
+Model: packet-fed review seat (language model, no file access, no execution). Read: the full inlined brief -- §C.1-7, §F2 (R1-R17, D4), §E, the verbatim handler and producer pair, the 19-hunk `diff_footbridge.c` diff, the 3-hunk `gate_offline.sh` diff, the Measured section. Ran: nothing -- no commands, no gates, no builds; the one run I want is named under Q2.

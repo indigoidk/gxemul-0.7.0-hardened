@@ -1,0 +1,118 @@
+```
+VERDICT (READ): DIFF CORRECT UNDER ITS OWN TEST DESIGN; COMPOSITE DETECTOR SOUND FOR
+THE 11 MUTANTS MEASURED, WITH ONE PARTIAL HOLE FOR A LEN-GUARD MUTANT ON THE 4 SITES
+NOT COVERED BY P9; SEVERAL PREMISES NOT CHECKABLE FROM THE PACKET (NAMED BELOW).
+NO ROW I'D TRUST IS WRONG. NO CHANNEL I CAN REDERIVE IS BROKEN.
+```
+
+Below: premises as Q1 asked; the four follow-ups; standing-licence findings; seat record.
+
+## Q1 -- premise audit (READ = stated in packet; REASONED = derived from packet)
+
+TRUE, visible in the diff:
+- Five sites, five decline cases, one latch each (5 distinct `warned_*` fields at end of struct; each read in exactly one place, written in exactly one place).
+- Each decline arm REPLACES `fatal(...); exit(1);` with `if (!latch) { latch=1; fatal(... "(once)" ...); }` -- the break is kept, the common tail runs, odata is 0, return value is 1.
+- +0x18c read's `odata = d->irq_enable` leak is REMOVED (diff hunk for IRQ_ENABLE_CLEAR read branch); odata stays at its function-top zero.
+- Four live `exit(1)` remain in the file as the diff shows: SDRAM_BA_MASK read (`fatal(...); exit(1);`) and SDRAM_BA_OFFSET read (`fatal(...); exit(1);`). FIQ_ENABLE_CLEAR (0x28c) is untouched, declines silently (no read branch in that case), odata stays 0. IRQSoft/FIQSoft (0x190/0x290) reach `default:` and announce every access with no exit.
+- Struct had no latch field before: I count exactly 15 fields before the new ones in the diff (struct comment says "15 fields"; this is also a Q3(d) anchor). 
+- IDENTITY 111 = 33 + 78. I enumerated P0 (5), loop (4 writes of 13 + 1 read of 14 = 66), tail (P6 + P7x2 + P8x2 = 5), P9 (2) = 78. 33 + 78 = 111. The brief's row count matches my enumeration. The P3 read loop adds one extra row over the write loops (the "declined read returns 0" check inside `if (dec[i].wf == MEM_READ)`); only i==2 is a read.
+
+TRUE, REASONED from the packet alone (no outside fact needed):
+- Mutant M6 (store into irq_status on decline) is killed: P_STATE_OK runs after every decline (4 state fields each time), and S1/S2 read back what the SITES writes establish as masked/raw. So both guest rows and offline rows catch a storage regression.
+- Mutant M3/M4 (shared/cross-family latch) is killed by N0 distinct-once=4 vs 5 AND P6 fatal_calls=4 vs 5 (BOTH channels, as the channel table says).
+- Mutant M5 (leak irq_enable at 18c) is killed by N3 r9/r8 == 0 AND P3 "declined read returns 0" (48 in the mutant == `0x30`).
+- Mutant M7/M8 disclosure is correct: with host timers stopped at the prompt, a guest cannot make irq_status/fiq_status nonzero. Re-seeding to 0x18/0x30 (masked 0x10) and 0x50/0xc0 (masked 0x40) makes P0 distinguish `& kept` vs `& dropped` (0x40 vs 0x50) and `constant 0` vs `&` (0 vs 0x10). The brief flags this re-seed explicitly. 
+- Mutant M9 (text misname) is guest-only because the P-rows' `fatal_calls` is a counter, not a text read. The TEXTS dict in the probe is access-local. 
+- Gate pin formats match the row print format: `hexs()` produces zero-padded 32-bit (existing A2 pin `0x00345678` confirms the format), and the new pins (`0x00000030`, `0x00000000`) line up with `got=%-12s` at the same width.
+
+NOT CHECKABLE from the packet -- each named with the single fact that would settle it:
+- `fatal()` PRINTS and returns -- settles by reading `src/core/debugmsg.c:384-391`.
+- FAULT not available on ARM -- settles by reading `memory_rw.c:603-625` (specifically: does any `MEM_ARM` arm dispatch an access exception?).
+- The five `dc21285.txt` register-direction claims -- settles by reading Table 7-10 at 6821-6833 and the one-sentence form at 6803.
+- "the file had NO latch of any kind" -- settles by grepping `dev_footbridge.c` at HEAD for `warned_` (the struct diff shows none before the patch, consistent with the claim).
+- Two construction-time `exit(1)` in DEVINIT -- settles by grepping DEVINIT in `dev_footbridge.c`.
+- Five startup refusals all exit 1 -- settles by running the five launches in a scratch dir.
+- The `arm_irqs(h)` helper, `irq_asserts`/`irq_deasserts` counters, `noop_assert`/`noop_deassert` callbacks -- settle by reading `regress/diff_footbridge.c` outside the inlined hunk.
+- The `run_arm()` body's `status = "NO-PROMPT"` assignment -- NOT visible in the inlined hunks. The H1 row's predicate uses this exact string. Without seeing the full function I cannot verify the assignment exists; this is a real "not checkable" that is not labelled as such in the brief.
+- The `wait(mark=..., echo=..., timeout=...)` signature -- the diff adds `timeout=` to its call but `wait()`'s definition isn't inlined.
+- The drain/witness probes' Session-class H1/H2 implementations (cited as "r7 = LOADBACK") -- not inlined.
+- The three "header-prose hunks" of `footbridge_sites_probe.py` -- the brief says the owed sentence is written but doesn't show it.
+- The 600f9c4b / 14665812 patch md5s and the e5d18154 / d19184ee / 0c1fd857 / c9b4340a build md5s -- not checkable without the bytes.
+
+FALSE / WRONG -- none I can identify. The "ten live exit(1)" / "HEAD 9c28ca5" wrongness is in the pass-1 packet (which the brief already records), not in this diff.
+
+## Q2 -- smallest edit that breaks this and still passes (REASONED)
+
+The ONE I find, ranked by plausibility, that the table did NOT build:
+
+1. **`&& len == 4` on IRQ_RAW_STATUS, FIQ_STATUS, FIQ_RAW_STATUS, or IRQ_ENABLE_CLEAR** (not just IRQ_STATUS). P9 is a fresh-instance byte-first test ONLY for IRQ_STATUS. For the other four sites, a byte/halfword write as the FIRST access to a fresh instance would fall through the lenguard silently: odata unchanged (write never stored), no announce. Under the existing per-site P-rows the byte/halfword access is AFTER the word access (which latched), so `fatal_calls - f0 == 0` is satisfied either way. The brief acknowledges this for IRQ_STATUS and adds P9; it does NOT add the equivalent for the other four. Disposition the brief states: "EQUIVALENT MUTANT, recorded, not a hole" -- but that reasoning applies to ALL five sites identically, so the hole is symmetric.
+
+   - Rows expected to stay green: P1-P5's word-access latch tests, P6 (5 announces from the loop's word accesses), N1-N5 (arm S uses 4-byte STRs only), all gate pins.
+   - Why it slips through: no fresh-instance byte-first row exists for those four sites.
+
+2. **Decline that announces the right register but drops "(once)"** -- would slip only if the gate pins don't key on `(once)`. The N-row TEXTS DO include "(once)", and the device's fatal() strings DO include "(once)". The N-row count check uses `TEXTS[tag] in f` (substring), so the device's full string `"footbridge write to irq_raw_status (once)"` matches `TEXTS["N2"] = "footbridge write to irq_raw_status (once)"`. A drop of `(once)` would zero the count. Caught. (Rejecting this candidate.)
+
+3. **Latch cleared by a LEGAL read of a sibling register** -- the latches are only READ by their OWN decline's `if (!latch)` test and only WRITTEN at their OWN decline site. There's no cross-site mutation path in the diff as written. A mutant would have to add one explicitly. The S-row "between" reads (S2 = legal IRQ_RAW_STATUS between the two IRQ_STATUS writes) would catch a mutant that cleared the IRQ_STATUS latch from IRQ_RAW_STATUS's read path -- N1 #2 would announce again, red. The S3 IRQEnable read is between the two IRQ_ENABLE_CLEAR reads, same shape. Caught for these specific pairs.
+
+4. **A gate pin regex that a duplicated green line satisfies** -- `^N[1-5] .*count=1.*ok$` could substring-match `count=10` or `count=11`, but no N[1-5] row produces such a count and the row IDs are bounded. The two-occurrence duplicate would also break `cut -c1-2 | sort -u | wc -l == 5`. Caught.
+
+5. **Decline that stores into the OTHER family's status** (cross-IRQ vs FIQ) -- P_STATE_OK checks both irq_status AND fiq_status after every decline. Caught.
+
+The honest single-name answer is **(1)**. The other four candidates I considered are caught by something already in the table.
+
+## Q3 -- the floor (REASONED)
+
+(a) Fails on pre-fix: confirmed by the table -- 21/36 sites (arm S dies at first decline), differential dies at P1. ✓
+(b) Fails on verbatim reinstatement at every site: not measured as a single mutant, but the strongest of the per-site reinstatements (M1 at FIQ_RAW_STATUS) already gives 21/36; reinstating all five would die at N1, the very first decline in arm S. ✓
+(c) Fails on a null medium: M2 (unlatch) and M3 (shared latch) both red, with the offline rows additionally catching the cross-cutting null. ✓
+(d) DEPENDS-ON closure: predicates dominating edited lines are the five `if (!warned_*)` tests, the `writeflag == MEM_READ` tests, and the read-side expressions `irq_status & irq_enable`, `irq_status`, `fiq_status & fiq_enable`, `fiq_status`. All four expressions are pinned by P0 (seeded values, masked != raw) and re-pinned by P7 (after declines). All five latch tests are pinned by N1-N5 (count=1) and P1-P5 ("#2 announced nothing more") and P6 (total 5). Operand-swap on the read expressions would be caught by P0/P7 as long as the swap crosses raw vs masked. P0's seeds (0x18/0x30 → masked 0x10; 0x50/0xc0 → masked 0x40) are chosen so a swap is observable in both halves. ✓
+(e) Disclosure list is complete and honest as the brief states it: M7 (constant-0 IRQ_STATUS read), M8 (dropped `&` at FIQ_STATUS), M11 (lenguard on the OTHER four sites) -- all three are correctly identified as guest-blind and pinned offline only; M9 (text misname) is correctly identified as P-blind and pinned by guest only. ✓
+(f) Anchored rows: every S, N, SF, P, H row has a numeric or text anchor that is checked literally, not by relative position. No `results[0]` style pinning. C4 was tightened (key must be present, not just nonzero). ✓
+
+One thing that sits at L2 by my reading: the (e) disclosure list is incomplete by omission -- it lists M11 once and shows P9 as the mitigation, but it does NOT enumerate the four sites to which P9 does NOT extend. Calling it an EQUIVALENT MUTANT is fine for one site; for all five sites it is the same argument and the same hole. A reader who only reads the disclosure paragraph could believe M11 is fully closed. It is closed only on IRQ_STATUS.
+
+## Q4 -- the harness legs (REASONED where the packet shows the code; NOT CHECKABLE where it doesn't)
+
+Sites probe (footbridge_sites_probe.py):
+- H1: arm `H` runs `[]` with `emul="no-such-machine-fbd5"`, `quit_leg=False`. The exec line is `[BIN, "-V", "-T", "-E", emul, "-M", "32", "0x%x:%s" % (CODE, STUB)]`. The H1 row predicate is `status == "NO-PROMPT" AND not prompt AND reject AND exit == 1 AND signal is None`. Five conditions, each load-bearing. The TEXT clause is what discriminates five different startup refusals. ✓
+- H2: arm `QL` runs `MMU_OFF + BODY + [KILL_NOP] + TAIL` with `quit_leg=True`. `h2["prologue_ok"]` requires `len(badis)==0 AND 3 in regs AND (regs[3] & 1)==0 AND regs.get(5)==0x11223344 AND regs.get(6)==0x1011 AND regs.get(1)==0x00345678` -- strict-typed `is True`. `h2["dead_before_close"] = dead[0]` is read BEFORE teardown. The H2 row predicate requires `prologue_ok is True AND next_rc is False AND dead_before_close is True AND exit==0 AND signal is None AND not fatals`. Five conditions, each load-bearing. ✓
+- M12 (omit quit): next_rc stays True, dead False → red. Measured.
+- M14 (key on exit != 0 only): the negative control on `-M notanumber` -- the shipped predicate REDS (named=False), the weakened predicate GREENS. Measured. ✓
+- `send()` now forwards `timeout` to `wait()`. The diff adds `timeout=timeout` to the wait call. Old form was positional `wait(mark=_mark, echo=...)` -- the brief notes this could silently become `mark=120` under a positional call. The new form is keyword. ✓ for this call site; whether anything ELSE in the tree depends on the old form is NOT CHECKABLE from the packet.
+
+Drain / witness (fbpending_drain.py / fbpending_witness.py):
+- Cited but NOT inlined. The brief says both use their own Session class and both bind the LOADBACK register to r7. NOT CHECKABLE.
+
+`H["status"] == "NO-PROMPT"`: NOT visible in the inlined run_arm hunks. The status variable starts as "?" and is set to "SURVIVED" after a successful step; the "NO-PROMPT" assignment must exist in the unmodified portion of run_arm. This is the one assignment that the H1 predicate depends on and that the diff does NOT show. NOT CHECKABLE; the single fact that would settle it is the full body of `run_arm` outside the hunks.
+
+## Q5 -- option-set and records (REASONED)
+
+Option-set member 3 (DECLINE) is still right: returns 0 on declined reads, no state change, latched announce, host survives. Every measured mutant (M1-M11) is killed by this disposition + the latch + the announce. The disposition is the minimum-surprise choice for "datasheet says no register here" -- not a fault (which would require arch support), not a store (which would lie to the guest), not a silent return (which would lose the diagnostic the field engineer needs).
+
+Records -- the only thing the diff refutes:
+- The struct comment "Zeroed by DEVINIT's memset and by the offline differentials' calloc" is verified by P6 (5 announces from a fresh calloc instance). The DEVINIT memset half of the claim is NOT directly verified by any row (the sites probe runs through the emulator, not through DEVINIT, and the differential uses calloc). This is fine for a regression row, but the comment claim is stronger than the row set. Minor.
+- The "Four live exit(1) remain" claim: 2 visible in the diff (SDRAM_BA_MASK read, SDRAM_BA_OFFSET read). 2 claimed (DEVINIT) NOT visible in this diff. Partial.
+- Probe header "five different startup refusals ALL exit 1" -- pinned by H1's text clause (named-vs-not). ✓
+- Probe header "a child dead BEFORE the prologue ... IDENTICALLY" -- pinned by H2's combined prologue+exit-0 requirement. ✓
+- The FIQ_ENABLE_CLEAR (0x28c) "already declines silently -- `fiqenableread` facet (2)" claim: visible in the diff (no read branch in that case; odata stays 0). ✓
+
+No wrong records I can find.
+
+## Standing-licence findings (beyond the questions)
+
+1. **(L2-class)** Lenguard mutant is closed on IRQ_STATUS only. P9 needs four siblings (one fresh-instance byte-first per remaining site) for symmetric closure, or an explicit statement that "the lenguard is symmetric-equivalent across all five sites and we accept the equivalence once."
+
+2. **`H["status"] == "NO-PROMPT"`** is the one predicate in the whole packet whose origin is NOT visible in the diff. If that string is not assigned anywhere in the unmodified `run_arm`, the H1 row predicate is silently broken on every build. Worth a single `grep -n NO-PROMPT regress/footbridge_sites_probe.py` outside this review.
+
+3. **The `wait(mark=..., echo=..., timeout=...)` signature** is changed at its single call site but the function definition is not shown. Other call sites of `wait()` in the tree are not enumerated. The brief flags this as a question; I cannot answer it from the packet.
+
+4. **The struct comment's "Zeroed by DEVINIT's memset" half** is not pinned by any row. The calloc half is pinned by P6. Minor, but if the DEVINIT memset is ever removed in a refactor the comment would silently lie.
+
+5. **The drain/witness H1/H2 implementations** are cited as "r7 = LOADBACK" but not inlined. The "ONE-PROCESS" / "BOTH LEGS" claim about the three launchers is not verifiable from the packet.
+
+## Seat record
+
+- Model: MiniMax-M3.
+- Files read: NONE. Operational rule enforced.
+- Nothing run.
+- Premises settled from the packet alone are marked REASONED; the rest are explicitly NOT CHECKABLE with the single fact named.

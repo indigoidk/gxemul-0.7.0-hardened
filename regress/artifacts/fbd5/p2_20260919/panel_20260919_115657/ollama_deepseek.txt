@@ -1,0 +1,45 @@
+VERDICT: PASS — the packet’s own inlined diff and kill table are internally consistent, and I find no fatal defect. One nit: “no state changes” should read “no register state changes” because the five latch fields do change.
+
+## Q1 — Premise audit (READ = from packet, REASONED = derived from inlined text)
+
+- **Common tail runs for every declined access**: TRUE (REASONED from the whole inlined `DEVICE_ACCESS`). Declined writes have `writeflag == MEM_WRITE`, so the final `if (writeflag == MEM_READ)` does not write back, and `return 1` executes. Declined read `IRQ_ENABLE_CLEAR` leaves `odata == 0`, so the tail writes 0 and returns 1.
+- **No register state changes in the five arms**: TRUE for device registers; the arms only set the new `warned_*` latch fields. Literal “no state changes” is false for the latch fields.
+- **+0x18c read leak gone**: TRUE (REASONED). The new `else if (!d->warned_irq_clear_r)` branch has no `odata = d->irq_enable`; `odata` remains 0.
+- **`fatal()` prints and returns, does not exit**: READ from packet’s `debugmsg.c` lines; not independently checkable from this packet.
+- **Five sites/directions true 5/5**: READ from datasheet quotes; external datasheet not inlined enough to verify independently.
+- **FAULT not available on ARM**: READ from `memory_rw.c` lines; not checkable from packet.
+- **Struct zeroed by memset/calloc**: TRUE (READ from diff and stated calloc/memset).
+- **P-rows use NULL callbacks under calloc**: partially REASONED. The packet says calloc leaves `d->irq` NULL, but the inlined P-row code calls `arm_irqs(h)` and then installs `noop_assert`/`noop_deassert`, so by the time device access runs the callbacks are non-NULL no-ops. The substantive claim — P-rows seed by direct field write and never through enable arms — holds.
+- **Five startup refusals exit 1 with no prompt**: READ as measured; not checkable from packet.
+- **Unknown `-E` path fatal + exit(1) before prompt**: TRUE (READ from `machine.c`/`main.c` lines).
+- **FIQ enable unobservable from guest**: TRUE (REASONED from code: no read arm for `FIQ_ENABLE_SET`/`FIQ_ENABLE_CLEAR`; `odata` stays 0).
+
+## Q2 — Smallest edit that breaks this and still passes
+
+**Add `&& len == 4` to the FIQ_RAW_STATUS decline** (or any non-IRQ_STATUS decline).  
+Expected to stay green: **P9**, because P9 only tests a byte-first fresh instance for `IRQ_STATUS`; **P5** still announces once on the word access; guest rows N4/N5 and S4/S5 all use word accesses; P-rows’ byte/halfword accesses occur only after the word access has already latched the site, so the “still latched” check sees `fatal_calls - f0 == 0` either way. Thus the len-guard on another site is observationally equivalent to the fix under the shipped detector.
+
+## Q3 — Floor
+
+- **(a) Fails on pre-fix**: yes — HEAD 21/36 sites, offline dies at P1.
+- **(b) Fails on verbatim reinstatement at every site**: yes — arm S dies at first decline, offline dies at P1.
+- **(c) Fails on null medium**: yes — N0/P6 announce counts red.
+- **(d) DEPENDS-ON closure**: the dominating predicates are `writeflag == MEM_READ` for the read decline and `writeflag != MEM_READ` for the write declines, plus the five distinct `warned_*` fields. Operand-swap forms (shared/wrong latch) are caught by N0 `distinct-once=5` and P6 `fatal_calls == 5`. No closure gap found.
+- **(e) Disclosure list**: complete and honest for M7/M8/M11 guest-blindness and M9 offline-blindness; no hidden gaps found.
+- **(f) Anchoring**: rows use exact values/counts/text, and controls SC1/SA1/H1-text anchor reachability. No relative-only row found.
+
+No L2 breach.
+
+## Q4 — Harness legs
+
+- **Sites launcher H1/H2**: H1 and H2 are implemented as inlined; H2 observes `dead` before teardown, scores `prologue_ok` from `badis` and four register values, and `send()` forwards `timeout` in the visible diff. H1/H2 replace the kill arm’s failability role but do not by themselves prove guest code reached the device — that is now carried by SC1/SA1 and the S/N rows.
+- **Drain/witness launchers**: NOT CHECKABLE from this packet; their H2 code is not inlined.
+- **Smallest vacuous leg edit**: remove `q2.get("prologue_ok") is True` from `h2_ok`. `status == SURVIVED` plus `dead`/`exit=0` can still hold with disassembly mismatches (`badis` nonempty), so the leg stays green while no longer proving the prologue.
+
+## Q5 — Option-set and records
+
+- **Member 3 (DECLINE) still right**: yes, with the note that latch fields change internally.
+- **Row count 111**: correct. P-rows added: P0 = 5; loop = 4×13 + 1×14 = 66; P6 = 1; P7 = 2; P8 = 2; P9 = 2; total 78 added to original 33 = 111.
+- **Wrong record**: only the “no state changes” wording is imprecise; no other wrong record found in the inlined text.
+
+Seat record: packet-only review; no files read, no commands run.

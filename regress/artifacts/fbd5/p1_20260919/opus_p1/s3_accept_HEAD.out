@@ -1,0 +1,59 @@
+=== binary under test ===
+-rwxr-xr-x 1 root root 6155592 Sep 19 07:03 gxemul
+2026-09-19 07:03:35.234559102 -0500
+2026-09-19 04:43:24.890427900 -0500
+=== sentinel check ===
+  no .MUTANT (clean baseline)
+OPUS_W BINARY=./gxemul SET=accept
+
+==== arm A-IRQ legal directions
+  0x00 0xee110f10  mrc 15,0,r0,cr1,cr0,0    | read CP15 c1
+  0x04 0xe3c00001  bic r0,r0,#1             | clear the MMU enable bit
+  0x08 0xee010f10  mcr 15,0,r0,cr1,cr0,0    | MMU OFF -> VA == PA
+  0x0c 0xee113f10  mrc 15,0,r3,cr1,cr0,0    | C2: read CP15 c1 BACK -> r3
+  0x10 0xe3a00442  mov r0,#0x42000000       | footbridge base
+  0x14 0xe3a04a09  mov r4,#0x9000           | scratch RAM
+  0x18 0xe5945000  ldr r5,[r4]              | C1 liveness -> 0x11223344
+  0x1c 0xe5906000  ldr r6,[r0]              | A1 device signature -> 0x1011
+  0x20 0xe5942004  ldr r2,[r4,#4]           | r2 = 0x30 (IRQ enable mask)
+  0x24 0xe5802188  str r2,[r0,#392]         | +0x188 IRQEnableSet <- r2
+  0x28 0xe5901180  ldr r1,[r0,#384]         | read back +0x180 -> r1
+  0x2c 0xe5907184  ldr r7,[r0,#388]         | read back +0x184 -> r7
+  0x30 0xe5948008  ldr r8,[r4,#8]           | r8 = 0x10 (write value, inside 0x30)
+  0x34 0xe580818c  str r8,[r0,#396]         | +0x18c IRQEnableClear <- 0x10 (LEGAL write)
+  0x38 0xe5909188  ldr r9,[r0,#392]         | read back +0x188 -> r9 (IRQEnable)
+  0x3c 0xe5942014  ldr r2,[r4,#20]          | r2 = 0
+  0x40 0xe580218c  str r2,[r0,#396]         | +0x18c IRQEnableClear <- 0 (LEGAL, no-op)
+  0x44 0xe590b188  ldr fp,[r0,#392]         | read back +0x188 -> fp
+  --- REG checkpoint: r3=0x00001136 r5=0x11223344 r6=0x00001011 r8=0x00000010
+  STATUS=SURVIVED exit=0 signal=None eof=True
+  COMPLAINTS (0): NONE
+  regs r1=0x00000000 r2=0x00000000 r5=0x11223344 r6=0x00001011 r7=0x00000000 r8=0x00000010 r9=0x00000020 sl=0x00000000 fp=0x00000020 ip=0x00000000
+
+==== arm A-FIQ legal directions
+  0x00 0xee110f10  mrc 15,0,r0,cr1,cr0,0    | read CP15 c1
+  0x04 0xe3c00001  bic r0,r0,#1             | clear the MMU enable bit
+  0x08 0xee010f10  mcr 15,0,r0,cr1,cr0,0    | MMU OFF -> VA == PA
+  0x0c 0xee113f10  mrc 15,0,r3,cr1,cr0,0    | C2: read CP15 c1 BACK -> r3
+  0x10 0xe3a00442  mov r0,#0x42000000       | footbridge base
+  0x14 0xe3a04a09  mov r4,#0x9000           | scratch RAM
+  0x18 0xe5945000  ldr r5,[r4]              | C1 liveness -> 0x11223344
+  0x1c 0xe5906000  ldr r6,[r0]              | A1 device signature -> 0x1011
+  0x20 0xe594a00c  ldr sl,[r4,#12]          | sl = 0xc0 (FIQ enable mask)
+  0x24 0xe580a288  str sl,[r0,#648]         | +0x288 FIQEnableSet <- sl
+  0x28 0xe5901280  ldr r1,[r0,#640]         | read back +0x280 -> r1
+  0x2c 0xe5907284  ldr r7,[r0,#644]         | read back +0x284 -> r7
+  0x30 0xe5909288  ldr r9,[r0,#648]         | read back +0x288 -> r9 (FIQEnable)
+  0x34 0xe5948010  ldr r8,[r4,#16]          | r8 = 0x40 (write value, inside 0xc0)
+  0x38 0xe580828c  str r8,[r0,#652]         | +0x28c FIQEnableClear <- 0x40 (LEGAL write)
+  0x3c 0xe590c288  ldr ip,[r0,#648]         | read back +0x288 -> ip
+  --- REG checkpoint: r3=0x00001136 r5=0x11223344 r6=0x00001011 r8=0x00000040
+  STATUS=SURVIVED exit=0 signal=None eof=True
+  COMPLAINTS (0): NONE
+  regs r1=0x00000000 r2=0x00000000 r5=0x11223344 r6=0x00001011 r7=0x00000000 r8=0x00000040 r9=0x00000000 sl=0x000000c0 fp=0x00000000 ip=0x00000000
+
+==== SUMMARY (accept) ====
+A-IRQ legal directions   status=SURVIVED   exit=0     complaints=0  
+A-FIQ legal directions   status=SURVIVED   exit=0     complaints=0  
+OPUS_W_WALL=1.0s
+OPUS_W_DONE
