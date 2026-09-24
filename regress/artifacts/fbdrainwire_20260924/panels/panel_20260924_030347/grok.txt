@@ -1,0 +1,56 @@
+I'll audit the premises against the footbridge device, the drain probe, HEAD's gate 14 script, and the wiring checker before judging the proposal.The exemption and the shared callback are in the tree. Next I’ll read the bound math, the probe’s timer and accrual path, and how the wiring checker decides a probe is actually run.VERDICT: PROCEED WITH CHANGES
+
+The cap **762** is the right number to wire, gate 14 is the right home, and the exemption has to come out in that same edit. The contract sentence that those rows catch every raise above 762 is false, and it contradicts the probe header this brief already quotes. Wire the probe with that sentence corrected.
+
+**1. Premise audit.** The bound at this arming is 762, and 762 is the tightest cap that cannot false-fail. The 4 s window is not what makes that true.
+
+Enumeration, with `emulated_hz = 50_000_000`, `TIMER_FCLK_256`, load `256`:
+
+- Divisor: `256 * 256 = 65_536`.
+- `762 * 65_536 = 49_938_432`. Remainder `50_000_000 - 49_938_432 = 61_568`.
+- `61_568 / 65_536 = 481/512 = 0.939453125`. Both 50,000,000 and 65,536 are exact in IEEE-754, and this quotient is dyadic, so `freq = 762.939453125` exactly.
+- Ceiling `68_157_440` does not apply. Floor `1.0` does not apply. C `(int)` truncation of a positive value gives `pending_bound = 762`.
+- The counter is allowed to sit on the bound: from `761` the `else` branch stores `762`; the next callback takes the `>=` branch and stores `1`. A drained count of 762 is a legal fixed-binary result. `--expect-cap 761` false-fails on that tick. `--expect-cap 762` does not.
+
+The probe arms one timer, once, at that final rate. Default `--timer 0` is hardware timer 1 (`TBASE 0x300`, callback `timer_tick0`). `--fast` is a different arming (load 1, no prescaler, bound `(int)50_000_000`) and would false-fail this cap. The prologue’s earlier reloads (load `0x345678`, then control `0x88`) happen under the debugger, where the probe says SIGALRM is stopped (`debugger.c` was not re-read).
+
+`4 * 50_000_000 / 65_536 = 3051.7578125` ticks in exactly 4.000 s. The header’s “backlog 3 at 4 s” is that count wrapped: `N = 3051` gives `((3050) % 762) + 1 = 3`, and `3051 * 65_536 / 50_000_000 = 3.99900672` s. “100 at 46 s” is the same rate at about 46.07 s (`N = 35152`), not a second clock. “375 at 0.5 s” is below the cap (`0.5 * 762.939453125 = 381.47`).
+
+An unbounded counter exceeds 762 at tick 763, which is `763 * 65_536 / 50_000_000 = 1.00007936` s of delivered callbacks. Default 4.0 s is about four times that threshold. Nothing in the verdict checks that the threshold was met. `FBDRAIN_CLOCK_DEAD` is only the poison word `0xDEADBEEF` (zero deliveries). `L1` counts guest loop iterations (`> 1000`), not timer callbacks. A run that delivers 1..762 ticks prints an empty `FBDRAIN_CLOCK_DEAD` and `FBDRAIN_VERDICT=PASS` for both the fix and the removal mutant. The header’s own 0.5 s point is inside that band. Whether a loaded host’s `free_run(4.0)` can coalesce SIGALRM down into that band is not settled from these files.
+
+Accepted from the packet, not re-read here: `machine_cats.c`’s `emulated_hz` (the device uses `cpu->machine->emulated_hz`; the probe hardcodes `50000000.0`).
+
+**2. One timer is enough for the shared function, and not enough for a callback split.** `footbridge_pending` is the only bound. Default `--timer 0` exercises `timer_tick0` only. This edit passes the proposed rows and leaves a guest-armable timer unbounded:
+
+```c
+static void timer_tick1(struct timer *t, void *extra)
+{ ((struct footbridge_data *)extra)->pending_timer_interrupts[1]++; }
+```
+
+The same edit exists for `timer_tick2` and `timer_tick3`. The probe’s own comment at the `--timer` flag says a one-callback fix passes a one-timer row. One invocation also reruns H1, H2, arm E, and arm T, so four timers cost four full processes. The docstring’s “~10 s” is the measurement idea, not a timing of `main()`. Do not multiply gate 14 by four in this edit. Do write, in the gate comment, that indexes 1, 2, and 3 are outside the row.
+
+**3. A single bound edit can pass these rows without restoring the signed overflow.** At the header’s measured point, `N = 3051`:
+
+- Removal (unconditional increment) stores about 3051, and `3051 <= 762` is false. `FBDRAIN_VERDICT=FAIL` if the drain finishes with controls green. That is the test-first mutant, and the arithmetic matches it.
+- `double bound = freq * 2` stores `(int)1525.87890625 = 1525`. `((3050) % 1525) + 1 = 1`. Both arms pass. The counter still wraps, at 1525, and does not go negative.
+- `d->pending_bound[timer_nr] = (int)bound * 4` stores `3048`. `((3050) % 3048) + 1 = 3`, the same backlog the header recorded for the real fix.
+- `= 0` instead of `= 1` stays `<= 762` whenever the frozen value is not 0. The device comment already says this mutant survives the drain probe; the trough row is elsewhere. A freeze that lands on 0 looks like `CLOCK_DEAD` and fails, which is a 1-in-762 flake, not a detector.
+- Deleting the two ceiling lines leaves this arming at 762, because `762.94 < 68_157_440`. On `-E cats` the fastest request is 50,000,000, still under that ceiling, so those lines do not move any bound this guest can arm. The comment at `dev_footbridge.c` says the overflow then returns under `-I 2147483647`. The callback compares before incrementing, so a bound of `INT_MAX` resets at `INT_MAX` and does not execute `++` on `INT_MAX`. That measurement is not re-derived here.
+
+So: removal is caught at the measured operating point; “any raise above 762” is not. `freq * 2` is the named one-token counterexample. It does not restore the 2^31 dead clock. The callback edit in finding 2 does, on a timer this row never arms.
+
+**4. Gate 14, three `check` rows, accrue 4, and the sites-block shape.** `gate_arm.sh` already builds the four-byte stub and runs `-E cats` for `footbridge_sites_probe.py`. A new gate script would move `GATE_MANIFEST`. The `gatedevicesplit` “next device probe” trigger in this file already fired on the SGI width probe. `gate_offline.sh` only mentions this probe to say it is not run there.
+
+Keep three rows, implemented as `check` counts. The brief’s quote stops at the display `grep`. The sites block then ignores the probe’s exit (`|| true`) and fails the gate only in `check`. Copy that. Patterns:
+
+- `FBDRAIN_CONTROL=OK` once
+- `FBDRAIN_VERDICT=PASS` once (`REPORT-ONLY` is what a control failure prints, and it must not count as success)
+- `^FBDRAIN_CLOCK_DEAD=$` once. An unanchored `FBDRAIN_CLOCK_DEAD=` also matches `FBDRAIN_CLOCK_DEAD=D ` and `FBDRAIN_CLOCK_DEAD=X`.
+
+`FBDRAIN_VERDICT=PASS` already requires controls green, both backlogs `<= 762`, and both clocks alive. The other two rows match the sites block’s split and cost nothing. Do not pin `FBDRAIN_BACKLOG_D` to 3 or to 762. The header’s three measured residues are 3, 100, and 375 on one fixed binary. Pass `--accrue 4` explicitly. The 0.5 s setting greens a removal.
+
+**5. Records.** Same edit, delete the `EXEMPT` entry. `exec_sites` counts a command-position `python3 fbpending_drain_probe.py` in a script named by `run.sh`’s `GATES` array; a bare basename is in `HERE_DIRS`. Leaving the entry reds `STALE EXEMPTION`. The comparison is `d < today`, so the stamp `2026-09-27` is still green on that day and first reds on 2026-09-28. The paragraph above `EXEMPT` still says this probe is exempt; rewrite it in the same edit or the next reader puts the line back.
+
+Nothing else in the checker moves. The `MANIFEST` classification is already `CLASS_DETECTOR`. `GATE_MANIFEST` counts gate scripts, not probes. There is no row-count pin for this probe. The “11 rows” sentence in the checker’s header is a census comment; the probe now has 12 `row()` calls (H1 and H2 replaced K). That sentence is not a check. Do not add a `<token> rows run` phrase in the new block: this same gate file records that the score-claims pin regex keys on those words.
+
+**6. Also seen.** The freeze write calls `reload_timer_value`, so `pending_bound` becomes 1 for the drain (`(int)0.01164` hits the floor). The counter is not cleared, and at 0.0116 Hz the next callback is ~86 s away, which is why a short drain still reads the accrual residue. The “measured accrual rate” line divides that residue by wall time, so a correct run with backlog 3 prints about 0.8 Hz against 762.94 Hz asked. Do not pin it. `fbpending_drain_probe.py` is not invoked by any `regress/gate_*.sh` in the tree that was read; `git show HEAD:regress/gate_arm.sh` was not run (shell denied). The working copy’s sites invocation matches the brief’s HEAD quote. No gate was run.

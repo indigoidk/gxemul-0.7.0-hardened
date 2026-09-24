@@ -1308,7 +1308,8 @@ fi
 #  THIS ROW IS A DETECTOR, NOT THE REPRODUCTION, and the distinction is load-bearing here.
 #  It #includes the shipped dev_footbridge.c and calls timer_tickN() directly, which the
 #  witness ladder's mechanical discriminator classes as never-a-reproduction.  The
-#  reproduction is regress/fbpending_drain_probe.py (rung 3) and it is NOT run here.
+#  reproduction is regress/fbpending_drain_probe.py (rung 3) and it is NOT run here --
+#  gate 14 (gate_arm.sh) runs it on all four timers, since #548.
 #
 #  BOTH SHIP BECAUSE NEITHER ALONE IS ENOUGH -- measured, not assumed:
 #    * the rung-3 probe cannot reach the boundary.  The core delivers at most
@@ -1322,8 +1323,10 @@ fi
 #  It links every object EXCEPT main.o and dev_footbridge.o, so it runs the REAL timer.c and
 #  the REAL footbridge rather than re-implementations.  Measured kills: pre-fix fails R1 x7
 #  and R2 with trough -2147483648 (the overflow itself); reset-to-0 fails R3 x7; a fix applied
-#  to one callback only fails R1 x7; no-ceiling fails R1 on the two high-hz cases and R2 with
-#  peak 2147483647.
+#  to one callback only fails R1 x7; no-ceiling fails R1 (and, since R5 exists, R5) on the two
+#  high-hz cases -- and NOT R2, which this said until #548: R2 stays green at peak 2147483647,
+#  trough 1, because the compare precedes the ++ (measured: regress/artifacts/
+#  fbdrainwire_20260924/opus548_measured/runs_p1/diff_fbb_M_noceil.out).
 FBBIN=$LOGDIR/diff_fbpending_bound
 FBLOG=$LOGDIR/diff_fbpending_bound.log
 FBOBJS=$(find "$SEC/../build/src" -name '*.o' ! -name 'main.o' ! -name 'dev_footbridge.o' 2>/dev/null | sort)
@@ -1343,6 +1346,15 @@ else
         check "fbpending bound: offline verdict" "$(grep -c '^FBBOUND_PASS$' "$FBLOG")" "1"
         check "fbpending bound: R2 actually ran (not SKIPPED)"               "$(grep -c 'R2 no signed overflow.*direct ticks' "$FBLOG")" "1"
         check_min "fbpending bound: rows actually run"               "$(grep -cE '^  (ok|FAIL) ' "$FBLOG")" 15
+        #  #548: NAMED ROWS for R6 and R6b, each the sole detector of its cells, pinned as WHOLE
+        #  LINES -- the row name, "ok", and every PRINTED value (owed counts, peaks, end counts) --
+        #  so an edit to the row itself (a weakened condition, a smaller precharge, a drive aimed
+        #  at the wrong timer, a renamed row) cannot pass a wrong value.  Edits that separate the
+        #  printed values from the exercised state are reviewed, not rowed: fbharnessedits.
+        check "fbpending bound: R6 every timer in both re-arm cells" \
+              "$(grep -cxF "  ok   R6 a re-armed timer's bound follows its NEW rate owed/peak/end, 4 timers x 2 structs: 0/762/572 0/1525/567 8192/3051/2090 8192/6103/2089 8192/762/572 8192/1525/567 0/3051/2090 0/6103/2089" "$FBLOG")" "1"
+        check "fbpending bound: R6b four timers at four distinct rates" \
+              "$(grep -cxF "  ok   R6b each timer carries its OWN bound         distinct rates: peaks 762 1525 3051 6103 want 762 1525 3051 6103" "$FBLOG")" "1"
     fi
 fi
 

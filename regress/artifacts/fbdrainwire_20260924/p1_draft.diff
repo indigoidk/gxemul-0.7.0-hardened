@@ -1,0 +1,231 @@
+--- a/regress/gate_arm.sh (HEAD bead6ad9)
++++ b/regress/gate_arm.sh (#548 draft)
+@@ -1160,6 +1160,71 @@
+ fi
+ 
+ #  ---------------------------------------------------------------------------------------
++#  #548 fbdrainwire: #442's RUNG-3 DRAIN PROBE, wired before its exemption lapsed.
++#
++#  The guest arms footbridge timer N at 762.94 Hz (TIMER_FCLK_256, load 256, -E cats' 50 MHz),
++#  free-runs 4 s WITHOUT acking, freezes the timer and counts the backlog one TIMER_x_CLEAR at
++#  a time.  #442's bound resets the counter to 1 once it reaches (int)762.94 = 762, so the
++#  count can never exceed 762 -- the tightest cap that cannot false-fail.
++#
++#  ALL FOUR TIMERS, because ONE WAS MEASURED NOT TO BE ENOUGH (#548 pass 1, the Opus seat): a
++#  bound applied only while the timer is enabled, with timer 0 exempt, reads 3/3 on timer 0
++#  and X=3051 on timer 1, passes BOTH gate-2 differentials (every arm there is enabled), and
++#  brings #442's dead clock back at rung 3.  Arm X -- disabled through the accrual -- is the
++#  only thing in the battery that sees a bound gated on a control bit its CTRL=0 write
++#  clears, and it sees it only on the timer it runs.  About 17 s per timer.
++#
++#  THE CONTRACT (clause e).  The count is ((N-1) mod B)+1 for N delivered ticks and bound B.
++#    CATCHES  the bound REMOVED on any timer (3051 on all four, measured); a bound gated on
++#             TIMER_ENABLE or TIMER_FCLK_256 (arm X); a raise of the bound past N (~3051).
++#    CANNOT   a raise BELOW N wraps and passes (freq * 2 reads 1); no LOWERING, reset-to-0,
++#             `>`, deleted ceiling or bound moved into DEVICE_TICK can show -- the FREEZE sets
++#             the bound to 1 before the drain counts, so a clamp outside the callback
++#             collapses the backlog first (X=1).  Those are gate 2's: diff_fbpending_bound.c.
++#             So is `==` for `>=`, which never fires once a re-arm lowers the bound below
++#             the count: it passed every row here and in gate 2 until #548 gave R6 its
++#             second cell (a re-arm with 4096 owed).
++#             A bound skipped in TIMER_MODE_PERIODIC passes EVERY instrument -- neither this
++#             probe nor gate 2 ever sets that bit.  FILED as `fbboundmodes`.
++#    LOAD     N follows the SIGALRM clock.  Pinned to one core behind 12 busy loops the
++#             removed-bound mutant still read 1183: a starved run LOSES TEETH SILENTLY, it
++#             never reds falsely.
++#
++#  `gatedevicesplit` is OWED (#498): one more device probe in the ARM gate, on this gate's own
++#  -E cats machine like footbridge_sites_probe.py above.  Recorded, not compounded silently.
++for t in 0 1 2 3; do
++    FBDLOG=$LOGDIR/fbpending_drain_t$t.log
++    fdrc=0
++    python3 -u fbpending_drain_probe.py "$PMAX" "$STUB" --expect-cap 762 --accrue 4 --timer "$t" \
++        > "$FBDLOG" 2>&1 || fdrc=$?
++    grep -E '^  FAIL |^FBDRAIN_' "$FBDLOG" | sed 's/^/       /'
++    #  ONE verdict line, and a DECIDING one: REPORT-ONLY (a failed control, or no cap parsed)
++    #  must not read as completion.
++    if [ "$(grep -c '^FBDRAIN_VERDICT=' "$FBDLOG")" != "1" ] ||
++       ! grep -Eqx 'FBDRAIN_VERDICT=(PASS|FAIL)' "$FBDLOG"; then
++        note "fbpending drain probe, timer $t: no unique PASS/FAIL verdict; last lines follow"
++        tail -5 "$FBDLOG" | sed 's/^/       /'
++        check "fbdrain t$t: the probe reached a verdict" "no" "yes"
++        continue
++    fi
++    check "fbdrain t$t: the probe reached a verdict" "yes" "yes"
++    #  THE CONTROLS FIRST.  FBDRAIN_CONTROL=OK is an AGGREGATE that stays OK if a row is DELETED
++    #  from the probe, so the twelve control rows are pinned by DISTINCT GREEN ids as well.
++    check "fbdrain t$t: controls prove the probe measures" \
++          "$(grep -cx 'FBDRAIN_CONTROL=OK' "$FBDLOG")" "1"
++    check "fbdrain t$t: R0 C1 C2 A1 A2 E H1 H2 T L1 L2 P, twelve DISTINCT green ids" \
++          "$(grep -E '^  ok   (R0|C1|C2|A1|A2|E|H1|H2|T|L1|L2|P) ' "$FBDLOG" | awk '{print $2}' | sort -u | wc -l | tr -d ' ')" "12"
++    #  The cap the probe PARSED, both clocks, the verdict, the exit status.  CLOCK_DEAD is matched
++    #  as a WHOLE LINE: an extract compared to "" is green on a log with no such line (measured).
++    check "fbdrain t$t: bounded at the asserted cap 762" \
++          "$(grep -cx 'FBDRAIN_BOUNDED=YES  (cap asserted: 762)' "$FBDLOG")" "1"
++    check "fbdrain t$t: both clocks alive (no zero-tick drain)" \
++          "$(grep -cx 'FBDRAIN_CLOCK_DEAD=' "$FBDLOG")" "1"
++    check "fbdrain t$t: verdict PASS" "$(grep -cx 'FBDRAIN_VERDICT=PASS' "$FBDLOG")" "1"
++    check "fbdrain t$t: probe exit status" "$fdrc" "0"
++done
++
++#  ---------------------------------------------------------------------------------------
+ #  #439/#440 PIT 8253 latch + LSB/MSB selector -- pitlatch / pitclobber.
+ #
+ #  WIRED HERE, ALONGSIDE footbridge_sites_probe.py, BECAUSE gate_hygiene.sh SAID SO.  Its
+--- a/tools/pipeline/check_probe_wiring.py (HEAD bead6ad9)
++++ b/tools/pipeline/check_probe_wiring.py (#548 draft)
+@@ -2499,6 +2499,9 @@
+ #  BY OWNER RULING, so those eleven again fall due as ONE block: the cliff `exemptcliff` names
+ #  is re-created a week out, deliberately and dated, not by copying.
+ #
++#  *** #548, 2026-09-24: THE OTHER HALF IS GONE TOO. ***  fbpending_drain_probe.py is wired
++#  into gate_arm.sh and its entry deleted, so TEN of those eleven remain, still one block.
++#
+ #  These are wiring jobs, not design ones.  NOT every probe here prints a verdict token or exits
+ #  nonzero on failure: mk48_nvram_probe.py printed MK48_RESULT=n/m and a DONE sentinel and exited 0
+ #  with rows red, so the gate_arm.sh section #536 wired for it scores ROWS, not a token (agy, #536
+@@ -2522,9 +2525,9 @@
+     #  (#536) -- both wired into gate_arm.sh, mk48 on the mvme187 machine that file already
+     #  drives for the PCC2 probes, hpcmips as a construction check with no rig image.  Deleted
+     #  in the SAME edit as the wiring, for the same reason.
+-    "fbpending_drain_probe.py": ("2026-09-27",
+-                                 "REPORT-ONLY by default: EXPECT_CAP must be set before a "
+-                                 "gate row can mean anything, so wiring is a design step first"),
++    #  fbpending_drain_probe.py's exemption is DISCHARGED, 2026-09-24 (#548) -- wired into
++    #  gate_arm.sh beside footbridge_sites_probe.py, all four timers, --expect-cap 762.
++    #  Deleted in the SAME edit as the wiring, for the same reason.
+     #  Both #494 probes are TWO-LEG DIFFERENTIALS: they take a PRE-FIX binary and
+     #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
+     #  a change to the instrument -- a single-leg mode asserting only the fix-side
+--- a/regress/fbpending_drain_probe.py (HEAD bead6ad9)
++++ b/regress/fbpending_drain_probe.py (#548 draft)
+@@ -46,14 +46,19 @@
+   which re-arms at a different rate) -- and they exist because a one-token mutant
+   (`freq / 100.0`) destroyed 99% of the guest's clock while passing this probe.
+ 
+-ARM X -- THE PLACEMENT DISCRIMINATOR, and the reason it is not merely a second run.
++ARM X -- the reason it is not merely a second run.
+   dev_footbridge.c never calls timer_remove() and never lowers the core frequency when
+   the guest DISABLES a timer: TIMER_x_CONTROL without TIMER_ENABLE zeroes the counter
+   once (the same `= 0` store) and leaves the struct timer running.  So timer_tickN keeps incrementing a
+   counter that DEVICE_TICK will never look at.  Arm X arms the timer, immediately
+   disables it, free-runs, re-enables (which does NOT clear the counter) and then
+-  measures.  A non-zero result proves the counter accrues while the device is disabled
+-  -- which is exactly the state in which a bound placed in DEVICE_TICK cannot run.
++  measures.  A non-zero result proves the counter accrues while the device is disabled.
++  *** #548: THE HEADING SAID "THE PLACEMENT DISCRIMINATOR" AND X IS NOT ONE -- MEASURED.
++  A bound moved into DEVICE_TICK reads X=1 and PASSES: the FREEZE's LOAD write sets the
++  bound to 1 before the drain counts, so any clamp outside the callback collapses the
++  backlog first.  gate 2 (diff_fbpending_bound.c R1/R2/R5/R6) catches that placement.
++  What X DOES catch is a bound gated on a control bit its CTRL=0 write clears --
++  TIMER_ENABLE or TIMER_FCLK_256 -- which gate 2, every arm of it enabled, cannot see. ***
+ 
+ ARMS
+   D  enabled throughout.  Backlog after T seconds.
+@@ -70,11 +75,15 @@
+      their own predicates -- harness edits, reviewed, not rowed (footbridge_sites_probe.py).
+ 
+ Every RAM output word is poisoned with 0xDEADBEEF first and every verdict row requires
+-the values it consults to be PRESENT.  Every planted instruction is checked, as it
+-EXECUTES, against the emulator's own disassembly (the hand-assembled-encoding trap).
+-
+-usage: fbpending_drain.py <gxemul-binary> <four-byte-raw-stub>
+-                          [--accrue S] [--expect-cap N] [--learn]
++the values it consults to be PRESENT.  Every STEPPED instruction is checked, as it
++EXECUTES, against the emulator's own disassembly (the hand-assembled-encoding trap): the
++21-word prologue, and arm D's drain body (0x70-0xe4) in arm E.  *** #548: THIS SAID "EVERY
++PLANTED INSTRUCTION".  The accrual loop (0x54-0x6c) and arm X's disable and re-enable
++words (0x54/0x58, 0x70/0x74) FREE-RUN unchecked, and on a correct build nothing proves X
++was disabled at all -- it reads 3, like D.  Filed. ***
++
++usage: fbpending_drain_probe.py <gxemul-binary> <four-byte-raw-stub>
++         [--accrue S] [--expect-cap N] [--timer N] [--fast] [--only ARM] [--learn]
+ """
+ import os, pty, re, select, signal, struct, sys, time
+ 
+--- a/regress/diff_fbpending_bound.c (HEAD bead6ad9)
++++ b/regress/diff_fbpending_bound.c (#548 draft)
+@@ -274,22 +274,37 @@
+ 	 *  So: arm two timers at DIFFERENT rates, then RE-ARM one at a third, and
+ 	 *  require each timer's bound to track its own current rate.  Same oracle as
+ 	 *  R5 -- the peak the counter reaches -- so no new oracle is introduced.
++	 *
++	 *  *** #548: A RE-ARM HAS TWO CELLS AND THIS ROW BUILT ONE. ***  The callback's
++	 *  `>=` splits a re-arm by where the count sits against the NEW bound: below it
++	 *  (timer 0, re-armed at count 0) or already past it (timer 2, re-armed with
++	 *  4096 owed).  `==` for `>=` is identical in the first cell and never fires
++	 *  again in the second; it passed every row in the battery, and one guest
++	 *  CONTROL write left it 4529 owed against a bound of 762 (measured).  Owing
++	 *  4096 before timer 0's own re-arm would have TRADED the cells, not added one:
++	 *  a bound recomputed only while a backlog is owed then passed.  Both, one row.
+ 	 */
+ 	{
+-		int peak, trough;
++		int peak, trough, peak2, trough2;
+ 		struct footbridge_data *r6 =
+ 		    (struct footbridge_data *) calloc(1, sizeof(*r6));
+ 
+ 		fake_machine.emulated_hz = 50000000;
+ 		arm(r6, 0, 1, TIMER_ENABLE);			/*  50 MHz  */
+ 		arm(r6, 1, 256, TIMER_ENABLE | TIMER_FCLK_256);	/*  762 Hz  */
++		arm(r6, 2, 1, TIMER_ENABLE);			/*  50 MHz  */
++		drive(r6, 2, 4096, &peak2, &trough2);		/*  4096 owed  */
+ 
+ 		/*  RE-ARM timer 0 much slower.  A frozen bound keeps 50e6 here.  */
+ 		arm(r6, 0, 256, TIMER_ENABLE | TIMER_FCLK_256);
+ 		drive(r6, 0, 4096, &peak, &trough);
++		/*  and timer 2, whose debt is ABOVE the new bound when it lands.  */
++		arm(r6, 2, 256, TIMER_ENABLE | TIMER_FCLK_256);
++		drive(r6, 2, 4096, &peak2, &trough2);
+ 		row("R6 a re-armed timer's bound follows its NEW rate",
+-		    peak == 762, "timer 0 re-armed 50 MHz -> 762 Hz: peak %d want 762",
+-		    peak);
++		    peak == 762 && peak2 == 762,
++		    "re-armed 50 MHz -> 762 Hz: timer 0 at count 0 peak %d, timer 2 owing "
++		    "4096 peak %d; want 762", peak, peak2);
+ 
+ 		/*  And timer 1 must carry ITS own bound, not timer 0's.  */
+ 		drive(r6, 1, 4096, &peak, &trough);
+--- a/src/devices/dev_footbridge.c (HEAD bead6ad9)
++++ b/src/devices/dev_footbridge.c (#548 draft)
+@@ -287,11 +287,11 @@
+ 	 *  at that value can never throttle a legitimately fast timer.
+ 	 *
+ 	 *  IT IS ALSO NOT OPTIONAL, which a purely rate-relative bound hides.
+-	 *  MEASURED: with `-I 2147483647` and load 1 the requested rate is
+-	 *  2147483647.0, so (int)freq is INT_MAX and a bound of "the timer's own
+-	 *  rate" never fires -- the overflow returns, reachable through a
+-	 *  documented command-line flag.  Deleting these two lines is the
+-	 *  smallest edit that still passes the rung-3 probe.
++	 *  With `-I 2147483647` and load 1 the requested rate is 2147483647.0,
++	 *  so (int)freq is INT_MAX: a debt of 2^31-1 ticks, 31.5 s at the core's
++	 *  full delivery rate -- NOT an overflow, as this said until #548: the
++	 *  compare precedes the ++ (R2 measured green at peak INT_MAX).  Deleting
++	 *  these two lines is the smallest edit still passing the rung-3 probe.
+ 	 *
+ 	 *  Floor 1.  *** ITS ORIGINAL JUSTIFICATION WAS MEASURED FALSE and is
+ 	 *  corrected here rather than quietly dropped: *** the comment claimed a
+--- a/regress/gate_offline.sh (HEAD bead6ad9)
++++ b/regress/gate_offline.sh (#548 draft)
+@@ -1308,7 +1308,8 @@
+ #  THIS ROW IS A DETECTOR, NOT THE REPRODUCTION, and the distinction is load-bearing here.
+ #  It #includes the shipped dev_footbridge.c and calls timer_tickN() directly, which the
+ #  witness ladder's mechanical discriminator classes as never-a-reproduction.  The
+-#  reproduction is regress/fbpending_drain_probe.py (rung 3) and it is NOT run here.
++#  reproduction is regress/fbpending_drain_probe.py (rung 3) and it is NOT run here --
++#  gate 14 (gate_arm.sh) runs it on all four timers, since #548.
+ #
+ #  BOTH SHIP BECAUSE NEITHER ALONE IS ENOUGH -- measured, not assumed:
+ #    * the rung-3 probe cannot reach the boundary.  The core delivers at most
+@@ -1322,8 +1323,9 @@
+ #  It links every object EXCEPT main.o and dev_footbridge.o, so it runs the REAL timer.c and
+ #  the REAL footbridge rather than re-implementations.  Measured kills: pre-fix fails R1 x7
+ #  and R2 with trough -2147483648 (the overflow itself); reset-to-0 fails R3 x7; a fix applied
+-#  to one callback only fails R1 x7; no-ceiling fails R1 on the two high-hz cases and R2 with
+-#  peak 2147483647.
++#  to one callback only fails R1 x7; no-ceiling fails R1 on the two high-hz cases -- and NOT
++#  R2, which this said until #548: R2 stays green at peak 2147483647, trough 1, because the
++#  compare precedes the ++ (measured, regress/artifacts/fbdrainwire_20260924/opus5_p1.md).
+ FBBIN=$LOGDIR/diff_fbpending_bound
+ FBLOG=$LOGDIR/diff_fbpending_bound.log
+ FBOBJS=$(find "$SEC/../build/src" -name '*.o' ! -name 'main.o' ! -name 'dev_footbridge.o' 2>/dev/null | sort)

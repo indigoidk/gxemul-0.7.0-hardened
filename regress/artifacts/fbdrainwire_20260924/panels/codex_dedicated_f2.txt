@@ -1,0 +1,157 @@
+VERDICT: SHIP WITH CHANGES
+
+1. **Four accepted dispositions are wrong or incompletely repaired: F5, F6, F14 and F24.**
+
+   F5 overstates class closure; F6 substitutes a narrower test for the missing per-timer assertions; F14’s incorrect wording survives in the revised probe header; F24 replaces an unspecified watchdog with a false bounded-runtime claim.
+
+   **F3’s specific zero-count repair works.** F32 also catches the reported retargeting edit. Neither establishes general protection against further changes to the measurement code.
+
+2. **F6/D4: R6b does not repair R5’s maximum aggregation across its tested rates.**
+
+   At [dev_footbridge.c:333](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:333), append `& ~(timer_nr << 16)` to the assignment’s right-hand side:
+
+   ```c
+   d->pending_bound[timer_nr] = (int) bound & ~(timer_nr << 16);
+   ```
+
+   **Arithmetic, not a rebuilt-mutant measurement:** the 50 MHz case now produces these peaks:
+
+   | Timer | Required | Mutated |
+   |---|---:|---:|
+   | 0 | 50,000,000 | 50,000,000 |
+   | 1 | 50,000,000 | 50,000,000 |
+   | 2 | 50,000,000 | 49,868,928 |
+   | 3 | 50,000,000 | 49,868,928 |
+
+   R5 still sees the correct maximum. The other R1/R5 case bounds are unchanged by this mask. R1/R3 remain satisfied; R0/R2 use timer 0. R6’s initial timer-2 bound still exceeds its 4,096-tick precharge, and its subsequent bound of 762 is unchanged. Every R6b bound is below 65,536, so all four distinct-rate checks remain unchanged. The drain’s bounds of 762 and 1 are also unchanged.
+
+   This is **outside the disclosed contract: a product-code breach**, not a further harness edit or a newly conditioned store. The blanket assertion that lowerings belong to gate 2 remains false.
+
+   Repair R5’s equality **inside the per-timer loop**, retaining R6b for the different problem it detects. Distinct-rate coverage does not dominate per-timer coverage at the seven existing R5 configurations.
+
+3. **F5: a label-axis mutation still passes the reviewed rows.**
+
+   At [dev_footbridge.c:126](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:126), change the **right-hand** bound subscript:
+
+   ```c
+   pending_bound[nr]
+   ```
+
+   to:
+
+   ```c
+   pending_bound[nr & (d->timer_load[nr] - 1)]
+   ```
+
+   **Reading and arithmetic:**
+
+   - R6b’s loads—256, 128, 64 and 32—leave the low two index bits unchanged.
+   - At load 1, every timer reads timer 0’s bound. R1/R5 arm timer 0 first at the same rate as the other timers, concealing that substitution.
+   - R6’s timer-2 precharge occurs while timer 0 still has the same 50 MHz bound. Both subsequent re-arms use load 256.
+   - The slowest case has bound 1 throughout. During the guest drain’s freeze, the substituted unarmed slot also has DEVINIT’s bound 1.
+   - `diff_footbridge.c` never invokes these producer callbacks.
+
+   A mixed configuration exposes the defect: timer 0 at bound 762, timer 1 at load 1/bound 50,000,000. After 4,096 timer-1 callbacks, the mutation yields peak 762/end 286 instead of peak 4,096/end 4,096.
+
+   This is another **product-code breach outside the disclosures**. It changes the fix’s predicate operand without adding a store guard. R6b closes the measured constant-index mistakes, not the entire label axis.
+
+4. **F3: the original zero-count escape is closed, but the new pin counts records rather than distinct arms.**
+
+   The range expression at [gate_arm.sh:1246](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1246) accepts two matching records. It does not require exactly one D and one X record.
+
+   **Independent in-memory measurements:**
+
+   - Executing the actual probe `main()` with a zero-X fixture makes the range check fail.
+   - Changing the print argument at [fbpending_drain_probe.py:824](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:824), `bX` → `bD`, conceals that zero-X fixture. Replaying the gate predicates accepts 41/41.
+   - Changing only the printed label `FBDRAIN_BACKLOG_X` → `FBDRAIN_BACKLOG_D` also accepts 41/41, including when replayed against the stored baseline logs.
+   - Two `BACKLOG_D=3` records plus `BACKLOG_X=0` satisfy the range expression’s expected count of two.
+
+   There is also a direct positive undercount: at [probe line 274](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:274), replace `add1("sl")` with `mov("sl", 1)`. The guest acknowledges the backlog but continually publishes 1. The generated disassembly expectation changes with the instruction; the range check accepts 1. **That consequence is a reading, not an emulator measurement.**
+
+   These further probe edits fall **inside F4’s logic-review disclosure and the spent harness-edit cap**. They do not invalidate the measured repair of `add1("sl")` → `add1("sp")`. They do limit what “both backlogs” and “controls prove the probe measures” can honestly mean.
+
+5. **Passing edits for every new row follow.**
+
+   I treat the packet’s final “any further edit-the-harness finding is FILED” statement as the governing disclosure. Thus the harness edits below are **filed limitations**, while the product mutations in findings 2–3 remain breaches. “Pass” below is established by reading/arithmetic unless an in-memory replay is explicitly identified; it does not mean I rebuilt and ran an emulator mutant.
+
+   | New row | Small passing edit: file, line, exact tokens | Claim broken; classification |
+   |---|---|---|
+   | `FBDRAIN_TIMER` and `fbd_ran` | [probe:114](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:114): replace RHS `TBASE, TBASE + 4, TBASE + 8, TBASE + 12` with `range(0x300, 0x310, 4)` | All four runs operate on timer 0 while printing the requested timer/base. `fbd_ran` still becomes `0123`. I independently executed the modified assembler definitions in memory and confirmed those addresses. **Inside the probe-logic disclosure.** |
+   | UNCAPPED-3052 | [probe:537](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:537): `s.free_run(accrue)` → `s.free_run(0.4)` | Actual accrual shrinks while the nominal `RATE * ACCRUE_S` remains 3052. The shorter run’s backlog remains acceptable even without the bound; the supplied `.4` measurements establish that loss of sensitivity. **Inside the probe-logic disclosure.** |
+   | `[1, 762]` backlog range | [probe:824](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:824): label `FBDRAIN_BACKLOG_X` → `FBDRAIN_BACKLOG_D`—one character | No X record is required; two D records pass. **Measured by in-memory replay; inside the harness-edit disclosure.** |
+   | R6 printed owed count | [differential:309](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:309): append `++` to `r6->pending_timer_interrupts[2]` | `owed2` prints 4096, but the re-arm occurs with 4097. The first bounded callback resets either value to 1, leaving the same peak/end. **Inside the harness-edit disclosure.** |
+   | R6 end-count ownership | [differential:312](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:312): `[2]` → `[0]` | Both sampled ends become timer 0’s 286. The new ownership assertion silently disappears. **Inside the harness-edit disclosure.** |
+   | Gate 2’s named R6 pin | [differential:316](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:316): row-name token `R6` → `R0` | The pin at gate-offline line 1354 searches only the detail substring, not the row name. Counts/verdict remain unchanged. **In-memory log replay confirmed acceptance; inside the harness-edit disclosure.** |
+   | Gate 2’s named R6b pin | [differential:352](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:352): row-name token `R6b` → `R0` | Likewise, gate-offline line 1356 does not pin the name. **In-memory log replay confirmed acceptance; inside the harness-edit disclosure.** |
+   | R6b’s “all four armed FIRST” construction | [differential:343](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:343): append `{` to the first `for` header; delete the second `for (t = 0; t < N_FOOTBRIDGE_TIMERS; t++) {` at line 345 | This merges the loops into arm-one/drive-one. Baseline peaks and both pins remain identical, but the stated ordering protection is gone. **Inside the harness-edit disclosure.** |
+
+   A more consequential R6 self-edit is one inserted statement after line 309:
+
+   ```c
+   r6->pending_timer_interrupts[2] = 0;
+   ```
+
+   The saved owed count remains 4096, but the above-bound cell is erased before re-arm. Both the correct predicate and `==` then produce peak 762/end 286. All R6 conditions and pins pass. **Arithmetic proves this; it is filed under the spent cap.** F32 fixed its particular retargeting defect, not arbitrary separation of the saved count from the exercised state.
+
+6. **The other missed issues are factual, not requests for another harness-hardening round.**
+
+   **F14’s repair is incomplete.** The newly revised [probe header:62](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:62) still says “gate 2 — every arm of it enabled.” [diff_footbridge.c:642](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c:642) explicitly uses `TIMER_MODE_PERIODIC` without ENABLE. The accurate distinction is that the bound differential invokes enabled callbacks and the other differential never invokes those callbacks. **Reading.**
+
+   **F24/F31’s runtime bound is false.** [Session.wait():338](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:338) restarts its timeout whenever any output arrives. Continuous output without a prompt can prevent return indefinitely. The enclosing drain deadline cannot interrupt a blocked `free_run()`, and `close()` is never reached.
+
+   **Independent fixture measurement:** I executed the actual `wait()` method with a fake clock and continuing non-prompt output. A `timeout=20` wait was still running after 61 simulated seconds, when the fixture stopped it. Correct the [addendum’s “own budgets bound it” claim](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/PRETABLE_ADDENDUM_r2.out:20), or supply an absolute deadline.
+
+   **F28 confuses first initialization with upward re-arm.** The bare `M_lowonly` failing from calloc’s zero proves initialization coverage. It does not test a subsequent increase. Prefixing the store at device line 333 with:
+
+   ```c
+   if (!d->pending_bound[timer_nr] || bound < d->pending_bound[timer_nr])
+   ```
+
+   permits initialization and every tested downward re-arm while suppressing subsequent increases. The direct-call rows pass; the guest probe can accept the resulting bound of 1. **Reading/arithmetic.** Under D3’s stated policy, this can be additional store-guard debt, but “table 3 settled” the missing upward-re-arm concern is wrong.
+
+   The record also still contradicts itself: [diff_fbpending_bound.c:18](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:18) says removing the absolute ceiling causes overflow, while the corrected device comment and measured R2 explain why the preceding comparison prevents it.
+
+7. **Individual adjudications:**
+
+   | Item | Ruling and reason |
+   |---|---|
+   | F1 | **REFINE:** repairs option/loop mistakes; the token attests configuration, not actual register selection. |
+   | F2 | **REFINE:** pins a rounded nominal product, not actual elapsed accrual or both inputs independently. |
+   | F3 | **UPHOLD:** the reported zero-count edit now fails; further measurement-code edits remain disclosed. |
+   | F4 | **UPHOLD:** the logic-review exclusion is explicit. |
+   | F5 | **OVERTURN class closure:** finding 3 supplies a surviving label-axis mutation. |
+   | F6 | **OVERTURN repair:** finding 2 preserves the maximum while lowering individual timers. |
+   | F7 | **UPHOLD as disclosed debt:** an unconditioned original store does not make the missing states technically covered. |
+   | F8 | **UPHOLD for the named edits:** the printed values catch the weakened condition and reduced precharge. |
+   | F9 | **UPHOLD:** separating the placement mechanism is correct. |
+   | F10 | **UPHOLD:** reset-to-zero gives zero at multiples of 763. |
+   | F11 | **UPHOLD:** observed starvation results do not establish immunity to false failures. |
+   | F12 | **UPHOLD:** ENABLE coverage and mode/disable limitations are now separated. |
+   | F13 | **UPHOLD:** setting a mode bit and invoking its producer callback are different coverage. |
+   | F14 | **OVERTURN completion:** the revised probe header retains the false generalization. |
+   | F15 | **UPHOLD:** the added starting-state, delivery and no-ack qualifications matter. |
+   | F16 | **UPHOLD:** “while nothing acks” is necessary. |
+   | F17 | **UPHOLD:** including R2 corrects the list. |
+   | F18 | **UPHOLD:** a correct-build nonzero count does not establish that disable executed. |
+   | F19 | **UPHOLD:** branch words are read back without expected-disassembly comparison. |
+   | F20 | **UPHOLD:** “GATED” is the necessary qualification. |
+   | F21 | **UPHOLD:** removing “smallest” and naming no prescaler fixes those claims. |
+   | F22 | **UPHOLD refinement:** `INT_MAX / 68,157,440 = 31.507692…` seconds. |
+   | F23 | **UPHOLD:** R1/R5, rather than R2, detect the no-ceiling mutation. |
+   | F24 | **OVERTURN in part:** channel correction is right; the replacement runtime-bound assertion is false. |
+   | F25 | **UPHOLD:** distinguish mutants from baseline and substantive failures from R4’s aggregate. |
+   | F26 | **UPHOLD:** the revised wording identifies the observed count. |
+   | F27 | **UPHOLD:** R5 kills reset-to-2; additionally the R6 **gate pin**, not its range condition, rejects ends 291/292. |
+   | F28 | **OVERTURN:** failure on first initialization does not cover upward re-arm. |
+   | F29 | **REFINE:** unused priming extrema are harmless; the new greps are substring checks, not whole-line pins. |
+   | F30 | **UPHOLD:** the remaining contradictory comments demonstrate the stated divergence risk. |
+   | F31 | **OVERTURN rationale:** inactivity budgets do not impose an absolute runtime bound. |
+   | F32 | **UPHOLD narrowly:** the reported retargeting leaves end 4096 and is caught. |
+   | D1 | **UPHOLD:** pinning the promised four selected timers was justified. |
+   | D2 | **UPHOLD:** 31.5 seconds follows from the identified core delivery ceiling. |
+   | D3 | **REFINE:** filing is a scope decision; absence of an original predicate is not coverage evidence. |
+   | D4 | **OVERTURN:** distinct-rate R6b and per-timer R5 assertions cover different failures; neither replaces the other. |
+
+8. **Verification scope:** I read the packet first and reviewed its scoped changes. The device and differential hashes match the revision-3 measurement inputs. I independently executed only in-memory assembler definitions, probe verdict fixtures, predicate/log replays, a controlled `wait()` fixture, and arithmetic. I did **not** rebuild mutants or rerun the gates. No files were changed.
+
+   The packet’s clean run of the final revision through gate 14 remains outstanding before commit.

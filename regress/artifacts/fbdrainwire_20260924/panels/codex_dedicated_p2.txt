@@ -1,0 +1,98 @@
+VERDICT: SHIP WITH CHANGES
+
+1. **An unreported escape defeats the drain measurement and the “no zero-tick drain” claim.** In [fbpending_drain_probe.py:271](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:271), change `"sl"` to `"sp"` in `add1("sl")`—one character.
+
+   The guest still acknowledges ticks, but never increments its drained-count register. It publishes zero. D and X still reach phase 3; L1 checks accrual iterations, and E accepts the instruction generated with the changed register. T’s drain timeout does not fail its controls.
+
+   Crucially, `backlog()` treats **POISON**, rather than numeric zero, as a dead clock. The verdict accepts `0 <= 762`. **Measurement:** I executed the actual `main()` verdict code in memory with zero-count fixtures: twelve green IDs, `CLOCK_DEAD=`, `BOUNDED=YES`, PASS, exit 0. Those outputs satisfy all seven gate rows. The instruction-level consequence above is a **source reading**, not a mutant emulator run.
+
+   **NOT CLAIMED disclosure: no.**
+
+2. **The two-clock assertions can silently become one-clock assertions.** At [fbpending_drain_probe.py:801](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:801), change the first `X` to `D`:
+
+   `backlog(X, ranX)` → `backlog(D, ranX)`.
+
+   This preserves all twelve controls while discarding X’s measured backlog and dead-clock flag. **Measurement with the actual verdict code and synthetic fixtures:** the recorded M_en counts, D=3/X=3051, become reported D=3/X=3, PASS, exit 0. Thus the gate’s bounded, both-clocks, verdict and exit rows all pass. The supplied measurements already establish that M_en passes gate 2.
+
+   **NOT CLAIMED disclosure: no.** This is separate from the disclosed uncertainty about whether X was disabled.
+
+3. **The four-timer execution is not pinned.** In [gate_arm.sh:1201](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1201), change `--timer` to `--time`—delete one character.
+
+   The probe’s `_opt()` ignores unknown options and defaults `TIMER_NR` to zero. All four iterations consequently run timer 0, while the gate still labels them t0–t3 and reports 28 green checks. Nothing checks the probe’s timer banner. The wiring checker also remains satisfied.
+
+   This is a **reading**, supported by the recorded passing timer-0 run. **NOT CLAIMED disclosure: no.**
+
+4. **R6 closes the measured global mutants, but its two examples do not establish complete re-arm or per-timer coverage.** Two concrete escapes at [dev_footbridge.c:333](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:333):
+
+   | Small edit | Broken property and why the reviewed rows remain green |
+   |---|---|
+   | Prefix the bound assignment with `if (d->pending_timer_interrupts[timer_nr] != (int)bound)` | A re-arm with debt **equal to** the new bound retains the old bound. R6 tests debt 0 and 4096, never 762. Fresh-arm cases also pass; the recorded drain’s re-arms do not encounter this equality. |
+   | Change the assignment index `timer_nr` to `timer_nr%3` | Timer 3 never receives its own bound. R6 uses only timers 0–2. R5 checks the **maximum** peak across timers, so the correctly bounded first three conceal timer 3’s peak of 1. The guest probe also accepts timer 3’s backlog of 1. |
+
+   **Arithmetic:** the equality-guard mutant produces R6’s existing peaks 762/762. Re-arm timer 2 with exactly 762 owed instead, and its next 4096 callbacks reach 4858 because its old 50,000,000 bound remains.
+
+   Neither escape is specifically disclosed. The index escape also contradicts the blanket statement that lowerings belong to gate 2: some per-timer lowerings escape its maximum aggregation. The added comment should describe **the two tested states and measured mutant union**, rather than a complete partition covering re-arms.
+
+5. **“Clause-(e) … closed here” overstates control-bit coverage.** At [dev_footbridge.c:126](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:126), prepend this conjunct to the bound condition:
+
+   `!(d->timer_control[nr] & TIMER_FCLK_16) &&`
+
+   This removes bounding in both ×16 and EXTERNAL modes. The drain’s callback states are `0x88` and `0`; the bound differential’s cases use `0x80` and `0x88`. None exercises the added condition’s false branch. The other footbridge differential does not invoke the producer callbacks.
+
+   **Reading: all reviewed runtime rows remain green. NOT CLAIMED disclosure: no**—the list names PERIODIC, not these modes.
+
+   Two accompanying sentences are literally false:
+
+   - “Every arm there is enabled” does not describe both gate-2 differentials.
+   - “Neither this probe nor gate 2 ever sets [PERIODIC]” is contradicted by [diff_footbridge.c:642](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c:642), which explicitly sets it. The probe also starts from DEVINIT’s periodic control state.
+
+   The accurate distinction is that **the pending-tick callback is not exercised under those control states**.
+
+6. **The NOT CLAIMED paragraph contains an arithmetic error and an overgeneralized explanation.** At [gate_arm.sh:1184](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1184), “reset-to-0 … cannot show at all” is false.
+
+   For the one-token edit `= 1` → `= 0` at device line 127, the recurrence becomes:
+
+   `count = N mod (B + 1)`.
+
+   With B=762, N=3051 gives 762 and passes; **N=3052 gives zero**, leaves the output poisoned, and fails the dead-clock check. Therefore this mutation is disclosed, but its purported inability to fail is misstated.
+
+   Also:
+
+   - The FREEZE explanation applies to the measured DEVICE_TICK placement. Updating the bound does not itself clamp the counter; “any clamp outside the callback” is too broad.
+   - “Catches … any B >= N” requires **N > 762**. The LOAD paragraph acknowledges the missing delivery floor.
+   - “`==` … never fires” needs the no-acknowledgment condition. Guest acknowledgments can lower the count back to equality.
+
+7. **The load claim is stronger than the measurements support.** “A starved run … never reds falsely” at gate line 1194 is not established by the 3-loop and 12-loop experiments.
+
+   **Reading:** the probe has finite prompt, interrupt, drain and shutdown budgets; L1 also requires more than 1000 guest iterations. Sufficient scheduling starvation can fail these on a correct build. Zero delivered ticks can produce the dead-clock result.
+
+   The supportable statement is that reduced delivery can conceal a missing bound, and the two measured starvation cases did not falsely fail HEAD. The NOT CLAIMED/LOAD text discloses lost sensitivity, **not immunity from all load-induced failures**.
+
+8. **The revised probe header still overstates what is proved.**
+
+   - “A non-zero result proves … disabled” at line 55 conflicts with the later qualification. At line 670, `disable=True` → `disable=False` makes X another D while keeping the rows green. **Not in the contract’s NOT CLAIMED list; explicitly disclosed separately as `fbdrainxdisable`.**
+   - “Every STEPPED instruction … checked … against … disassembly” omits branches. Branch expectations are `None`, and [step_and_check():518](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:518) skips their mnemonic/target comparison. Concrete one-character escape: line 274, `br(0xA, …)` → `br(0xC, …)`, changing `bge OVER` to `bgt OVER`. D/X never reach the limit; T’s exact limit is unasserted; E’s covered offsets remain unchanged. **Not disclosed.** Distinguish word readback from independent disassembly checking.
+   - “Only RUNG-3 witness of either” needs a “currently gated” qualification: the existing `fbpending_witness.py` arms an unprescaled fast timer and can expose the FCLK_256-only bound.
+
+9. **The corrected records need two further corrections.** In [dev_footbridge.c:290](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:290):
+
+   - The stated requested frequency requires an **unprescaled** timer; load 1 alone does not establish it.
+   - Deleting two ceiling lines is not the smallest passing edit—even within the ceiling-removal class. At line 329, `<=` → `!=` makes the ceiling assignment execute only when the value already equals the ceiling. That one-character change effectively removes the ceiling and leaves the drain’s 762 bound unchanged.
+
+   The corrected no-overflow account is supported: the recorded R2 has peak INT_MAX, trough 1, and the comparison precedes increment. The 31.5-second arithmetic is also correct: approximately 31.507692 seconds.
+
+   The premise packet overcounts the R6 matrix: it contains **14 mutants plus baseline**, not 15 mutants. M_fclk has 11 substantive failures, plus the failing R4 aggregate; specify that convention when saying “11 rows.”
+
+10. **The shell itself is correctly written for the current output format; its semantic limitations are the findings above.**
+
+    - Assignment to `FBDLOG` needs no quoting; its subsequent uses, binary, stub and timer argument are quoted.
+    - `fdrc=0` is reset each iteration, and `|| fdrc=$?` captures the probe’s status.
+    - The failure is recorded before `continue`; `check()` increments the global failure count, which survives the loop.
+    - Verdict prefix counting plus `grep -Eqx` rejects missing, duplicate, REPORT-ONLY and suffixed verdicts.
+    - `"  %-4s …"` produces exactly `  ok   ` and `  FAIL `. The control regex matches, and **awk `$2` is the ID**. `sort -u` prevents duplicate IDs replacing a missing ID.
+    - The BOUNDED pattern uses basic grep syntax, so its parentheses are literal. The two spaces match the real output.
+    - The exact empty CLOCK_DEAD line must exist once; absence fails.
+
+    The distinct-ID row proves ID presence, not predicate integrity; the verdict and exit rows accurately check their tokens/status but inherit the probe’s measurement errors. Only verdict records are checked for uniqueness across all values: contradictory extra CONTROL, BOUNDED or CLOCK_DEAD records are not rejected.
+
+    **Verification scope:** I read the supplied six-file, nine-hunk diff and supporting source/artifacts. I independently executed only in-memory verdict fixtures and arithmetic. Bash startup was denied by the sandbox, so I did not rerun shell gates or emulator mutants. The device file has 920 lines before and after, with identical non-comment text; object identity remains a supplied measurement. No files were changed.

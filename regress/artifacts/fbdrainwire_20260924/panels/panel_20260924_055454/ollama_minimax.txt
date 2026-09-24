@@ -1,0 +1,101 @@
+VERDICT: **SHIP WITH CHANGES** — one real documentation gap (the gate block's NOT CLAIMED list omits `fbdrainxdisable` while the probe header files it) and a couple of minor R6 cleanups; the substantive corrections (R2 no-overflow, X non-discriminator, R6 two-cell) are correct against the inlined premises.
+
+---
+
+## 1. Premise audit (every sentence the diff ADDS)
+
+I walked each new sentence against the settled premises. Most are correct; the items below are the ones that need a closer look or are arguably overstated.
+
+### Correct against the premises
+
+- `(int)(50e6/65536) = 762.939453125 = 762`, `((N-1) mod B)+1 = 3` for N=3051, B=762 — arithmetic checks out (3050 mod 762 = 2, count = 3).
+- "ALL FOUR TIMERS, because ONE WAS MEASURED NOT TO BE ENOUGH" — matches the M_en0 narrative exactly: timer 0 alone reads 3/3 (false negative because timer 0 is exempt in M_en0); timer 1 X reads 3051 (true positive). One timer is provably not enough.
+- The two-cell R6 catches both M_eq (timer 2 peak 8192) and M_pendguard (timer 0 peak 4096). M_eq is identical to `>=` on cell 1 (count climbs 0→762 identically whether the comparator is `==` or `>=`), so the cell-1-only alternative WAS unable to catch `==`; the chosen second cell fixes that.
+- "Arm X -- the only RUNG-3 witness of [TIMER_ENABLE, TIMER_FCLK_256]" — gate 2 has every arm enabled, so it physically cannot witness TIMER_ENABLE gating. ✓
+- "Every STEPPED instruction is checked ... 21-word prologue, and arm D's drain body (0x70-0xe4)" — the explicit list plausibly matches the offsets of checked regions; the accrual loop and the X disable/re-enable words ARE left unchecked. ✓
+- "NOT an overflow, as this said until #548: the compare precedes the ++" — R2 measured green at peak INT_MAX, trough 1. The compare-before-++ form caps at bound without stepping past INT_MAX. ✓
+- `PROBEWIRING_PASS 71/81 detectors run by a gate, 10 dated-exempt` — 11 → 10 with this diff, and the wired detector joins the 71. 71+10=81. ✓
+- "FILED as `fbboundmodes`" — listed in the gate's NOT CLAIMED. ✓
+
+### Slightly off (not defects, but worth flagging)
+
+- **Probe header first sentence is preserved from the OLD.** "A non-zero result proves the counter accrues while the device is disabled" is over-broad in isolation: a non-zero result is also what you get if the timer was enabled throughout with a missing/gated bound. The NEW paragraph after it refines this ("What X DOES catch is a bound gated on a control bit...") but the first sentence is logically too strong without that paragraph. I'd invert it ("an above-cap result proves the bound was bypassed during the disabled phase") or fold it into the new paragraph. Not a blocker.
+- **NOT CLAIMED "residue exceeds 762".** For B in (762, N=3051), the count formula is `(3050 mod B)+1`. count exceeds the cap iff residue ≥ 762 (not strictly > 762: at B=2288, residue=762, count=763, which IS above the cap). The probe's `freq*2` worked example is correct; the wording is a hair imprecise. Cosmetic.
+- **NOT CLAIMED "== for >=" clause.** As written, the bullet says "NOT CLAIMED ... so is `==` for `>=`", which implies the rung-3 probe still doesn't catch it. That's true at the rung-3 probe; the diff's contribution is that the GATE-2 R6 (cell 2, timer 2 owing 4096) now catches it. The clause is technically right but a reader could read "== not caught anywhere" which is now false. Worth a "by THIS rung-3 detector" qualifier.
+
+### Doorway to a documentation gap (covered in §2)
+
+- `fbdrainxdisable` is filed in the probe header (which is honest about what the unchecked disable words imply) but NOT mentioned in the gate block's NOT CLAIMED list — and the gate block makes a positive claim that depends on it.
+
+---
+
+## 2. The floor (question 2)
+
+### Gate-14 rows
+
+The clear floor candidate is **a single-instruction edit to `fbpending_drain_probe.py` arm X**: replace the `TIMER_ENABLE=0` write in arm X with a NOP (or otherwise make the disable inert). On HEAD this still passes — D and X both read 3 because the bound applies while the timer appears enabled throughout — so every row in the matrix and the gate passes. The claim "X is the only RUNG-3 witness of TIMER_ENABLE / TIMER_FCLK_256 gating" in the gate block is then silent-lying: the witness depends on the disable actually taking effect, and the probe header itself files `fbdrainxdisable` precisely because it doesn't VERIFY that the disable took effect.
+
+Is this in the gate's NOT CLAIMED list? **No.** It IS mentioned in the probe header as a filed defect, but the gate block's positive claim is what's load-bearing on the panel's reading. **This is a breach, not a disclosed limitation, in the gate block specifically.** Fix is one line: add `fbdrainxdisable` to the gate's NOT CLAIMED list (or rephrase the X-witness claim to "X is the only DETECTOR of gating IF the disable is honored"). The probe already discloses it.
+
+Other gate-14 floors I considered and rejected:
+
+- Editing `--timer "$t"` to `--timer 0` would not break a runtime check (HEAD still passes); the all-four-timers rationale is in the comment, not enforced by code. Documented, not a covert floor.
+- Editing `--expect-cap 762` is caught by the `(cap asserted: 762)` whole-line grep.
+- `--accrue 30` doesn't break any claim; the cap-grep still passes.
+- `grep -cx 'FBDRAIN_BOUNDED=YES  (cap asserted: 762)'` requires **exactly two spaces** between YES and `(cap`. If the probe's format string is ever reworded (one space, three spaces, tab), the count is 0 and the gate fails. Brittle. A defensive rewrite (`grep -cE 'FBDRAIN_BOUNDED=YES.*\(cap asserted: 762\)'`) would survive a format tweak. Minor.
+- The bash flow is correct: `fdrc=0` before the run, `|| fdrc=$?` capture, `continue` skips the wrong-numbers of remaining checks on a no-verdict iteration, awk `{print $2}` is right for "  ok   ID ...". No shell issue.
+
+### R6
+
+For R6, the smallest edit that breaks a CLAIM is **changing `peak == 762 && peak2 == 762` to `peak == 762 || peak2 == 762` in `diff_fbpending_bound.c` row R6**. This is a single character. On HEAD (timer 0 peak 762, timer 2 peak 762): OR-passes — same green as the && form. On M_eq (timer 0 peak 762, timer 2 peak 8192): OR-passes — M_eq now green. The diff's claim "M_eq is red on R6 (timer 2 peak 8192)" is broken.
+
+The brief asks specifically about edits to `dev_footbridge.c`, the probe, or the gate block — R6 lives in `diff_fbpending_bound.c`, so question 2 doesn't technically require me to name this. I name it for completeness, and to flag that R6's row check should arguably defend itself (e.g., `peak == 762 && peak2 == 762 && trough >= 1 && trough2 >= 1`, or report both peaks in the verdict string). Minor.
+
+---
+
+## 3. R6both
+
+The two-cell closure is **complete for the measured battery** (15 mutants, M_eq and M_pendguard red, no other mutant changed, IDENTITY 28 rows). The added comment says only what was measured — M_eq is "identical in the first cell and never fires again in the second", with the rung-3 owe-of-4529 datapoint for M_eq, and the alternative-described regret for trading cells. None of these is overstated.
+
+What's NOT covered: **only lower-rate re-arms are tested** (both cells 50 MHz → 762 Hz). A higher-rate re-arm (e.g., 762 Hz → 50 MHz) is in scope of the row title "a re-armed timer's bound follows its NEW rate" but isn't exercised. If the matrix has no higher-rate-re-arm mutants, this is fine; the row title's generality is just slightly broader than the cells, but not false. Worth a "lower-rate" qualifier in the row comment if a higher-rate-re-arm mutant is ever designed.
+
+Minor R6 cleanups (not defects, but flagged):
+
+- `trough2` is written twice by `drive` and never read. Could be `int peak, trough, peak2, peak2_dummy;` or, better, the priming drive passes NULLs (if `drive` allows it) with a comment.
+- The first `drive(r6, 2, 4096, &peak2, &trough2)` overwrites its own results at the next `drive`. The discarding is intentional (it's the prime), but a reader who only looks at the writes sees a "wasted" measurement. A `/* prime: leave counter at 4096 */` comment or just `drive(r6, 2, 4096, NULL, NULL)` would read better.
+
+---
+
+## 4. Records hunks (true now?)
+
+- **dev_footbridge.c (comment-only):** "NOT an overflow ... the compare precedes the ++" — TRUE. R2 measured green at peak INT_MAX, trough 1. The OLD claim "the overflow returns" was wrong; the NEW corrects it. Comment is 5-for-5 lines, byte-identical objects. ✓
+- **gate_offline.sh:** "no-ceiling fails R1 on the two high-hz cases -- and NOT R2" — TRUE. R2's expectation IS INT_MAX (since `compare precedes the ++` caps at bound = INT_MAX without stepping past). ✓
+- **probe header:** "X is the only RUNG-3 witness of [TIMER_ENABLE, TIMER_FCLK_256]" — TRUE on a probe whose disable actually takes effect; **the probe HEADER files `fbdrainxdisable`** (the X disable words FREE-RUN unchecked) which IS the truthful sibling statement.
+- **checker paragraph:** "TEN of those eleven remain, still one block" — TRUE. 11 → 10 with this diff. The remaining 10 are still a dated-exempt block (no entries added, only the one removed).
+
+All four records hunks are accurate against the inlined premises.
+
+---
+
+## 5. Anything else (members of the option set)
+
+1. **`fbdrainonepass` is filed but not in the diff at all.** The brief lists it as filed-not-fixed ("a single-process four-timer probe mode would halve the cost"). The gate block's NOT CLAIMED includes `fbboundmodes` but does not include `fbdrainxdisable` or `fbdrainonepass`. Of those, `fbdrainxdisable` should join the list (see §2 — it's a positive-claim dependency), and `fbdrainonepass` is an optimization, not a coverage hole, so its absence is fine.
+
+2. **The probe's first-sentence rhetoric carried forward.** "A non-zero result proves the counter accrues while the device is disabled" is logically too strong on its own. The new paragraph refines it; folding it into the new paragraph would tighten the docstring (and incidentally make the `fbdrainxdisable` disclosure closer to the claim it qualifies).
+
+3. **The gate block's comment is itself a long positive claim** ("CATCHES the bound REMOVED on any timer ..."; "a bound gated on a control bit X's CTRL=0 write clears"). This is the kind of statement another panel might mis-confirm without reading the probe. The probe header discloses the witness hole; the gate block does not mirror it.
+
+4. **Format-brittleness of `FBDRAIN_BOUNDED` and `FBDRAIN_CLOCK_DEAD` greps** is real: both rely on the probe printing exactly the format the gate's regex expects. If the probe's printer is reworded, the gate fails. Defensive regexes (`grep -E` with `.*\(cap asserted: 762\)` patterns) would be safer.
+
+5. **No detected defects in the bash flow itself:** `fdrc=0` then `|| fdrc=$?` is right; the `if/continue` for non-verdict iterations is right; the `awk '{print $2}'` is right for "  ok   ID ..." with awk's default whitespace collapsing; the `for t in 0 1 2 3` quoting is right; the `note`/`check` calls are right.
+
+---
+
+## Summary
+
+- **Substantive fixes in the diff are correct** — R2 not-an-overflow, X not-the-placement-discriminator, R6 two-cell. The math (cap=762, count=3, M_devtick X=1, M_x2 reads 1, M_eq timer-2 peak=8192, M_pendguard timer-0 peak=4096) reconciles with the inlined evidence.
+- **Real defect to fix before commit:** the gate block's NOT CLAIMED list should include `fbdrainxdisable`. The probe header already files it; the gate block's positive claim "X is the only RUNG-3 witness" depends on X's disable actually being honored, and a single NOP replaces the disable and the witness silently disappears while the gate remains green.
+- **Nice-to-haves:** tighten the probe's first-sentence over-broad claim; add a `--lower-rate` qualifier to the R6 row comment; defensive regexes for the two-spaces formats in the gate block; null-pointer the priming drive in R6 and drop the unused `trough2`.
+- **One not-checkable-from-packet:** whether the probe's printers output exactly the format strings the gate's `grep -cx` patterns demand (esp. the two-space `FBDRAIN_BOUNDED=YES  (cap asserted: 762)` and the whole-line `FBDRAIN_CLOCK_DEAD=`). The gate passing on HEAD in pass-1 evidence is the only verification of this and is recorded as such.
+
+Recommend: **SHIP WITH CHANGES** — add `fbdrainxdisable` to the gate block's NOT CLAIMED list (one line); optionally tighten wording per items above.

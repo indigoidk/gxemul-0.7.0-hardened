@@ -1,3 +1,115 @@
+# `#548` (fbdrainwire): `#442`'s drain probe wired into gate 14 on all four timers before its exemption lapsed -- and the review it took found three floor breaches in `#442`'s shipped detectors, repaired here, and `#442`'s own comments wrong where measured, corrected here
+
+**The obligation.**  `regress/fbpending_drain_probe.py` is `#442`'s rung-3 detector for the footbridge pending-tick bound
+(`dev_footbridge.c`: `footbridge_pending()` and the bound block in `reload_timer_value()`).  It ran in no gate; its
+`EXEMPT` entry lapsed 2026-09-27, after which every commit's precommit section R reds.  `#548` wires it and deletes the
+entry in the same edit.  **No emulator code changes**: every hunk is `#442`'s detector material or `#442`'s own comments.
+
+**What ships.**
+* `regress/gate_arm.sh` -- the drain block: the probe on **all four timers** (`--expect-cap 762 --accrue 4 --timer t`),
+  41 checks: a unique PASS/FAIL verdict guard; the timer, load and control the run ARMED (`FBDRAIN_TIMER=<t>
+  base=0x<b> load=0x100 ctrl=0x88`); the configuration (`  UNCAPPED prediction: backlog = 3052`); `FBDRAIN_CONTROL=OK`
+  and the twelve control rows as DISTINCT green ids; the parsed cap; ONE D and ONE X backlog, each in [1, 762]; both
+  clocks alive; PASS; exit 0; and after the loop, the four timers each ran and each pinned (`0123`).  Its comment
+  carries the contract: what the rows catch (removal on any timer, a bound gated on TIMER_ENABLE or TIMER_FCLK_256, any
+  B >= N -- all only while N > 762), what they cannot (a raise to 762 < B < N unless the count exceeds 762; `>` and
+  reset-to-0 only at N a multiple of 763; a reset to 2 or to the bound itself; lowering, ceiling, DEVICE_TICK
+  placement), which gate-2 row carries each, and what is filed.
+* `regress/fbpending_drain_probe.py` -- one new output line (`FBDRAIN_TIMER=...`); header corrections (below).
+* `regress/diff_fbpending_bound.c` (gate 2) -- **R6** now builds every timer in BOTH re-arm cells (re-armed at count 0;
+  re-armed owing 8192), each re-armed to its OWN rate, and prints owed/peak/END for all eight; **R6b** arms all four
+  timers first at four distinct rates; **R5** checks the lowest timer's peak as well as the highest.  Same row count
+  (IDENTITY 28), same oracle.
+* `regress/gate_offline.sh` -- two whole-line named-row pins on R6 and R6b; a pointer to gate 14; one correction.
+* `tools/pipeline/check_probe_wiring.py` -- the `EXEMPT` entry deleted; the dated paragraph and the stale "detectors that
+  NOTHING RUNS" heading corrected.
+* `src/devices/dev_footbridge.c` -- one comment corrected, same line count (below).  Its object compiles byte-identically
+  under both build flavours.  Propagated to all four trees (`est/`: source tree, part 2 N/A) and the three build trees
+  rebuilt twice: at 04:44 `build/` and `/tmp/gxsec-build` came out md5-identical and **`build-asan/` did not**
+  (0f0b4489 -> 3b6711cb, from objects older than their sources: filed, `asanstaleobjs`); at 06:38, on the final
+  text, all three md5-identical to their predecessors (`regress/artifacts/fbdrainwire_20260924/builds/`).
+
+**THREE FLOOR BREACHES OF `#442`'s SHIPPED DETECTORS, found here and repaired here (L2).**
+1. **`==` for `>=`** (pass 1: codex, dedicated and panel; MEASURED by the Opus seat).  Identical while the bound is
+   constant, it never fires again once a re-arm LOWERS the bound below an un-acked count.  It passed every row in the
+   battery; at rung 3 one guest CONTROL write left it owing 4529 against a bound of 762 (HEAD: 1).  R6 had re-armed at
+   count 0 only.
+2. **`pending_bound[nr]` -> `pending_bound[0]`** in the comparison (M_cmp0; pass 2, the Opus seat, MEASURED): every
+   gate-2 row arms the timers at equal rates, so reading another timer's bound read the same number.
+3. **`==` on every timer but timer 2** (M_eq_n2; the SF2 pass, the Opus seat, MEASURED, 4529 owed again at rung 3): the
+   first repair built the owed cell on one timer.  Three breaches of one class in a row, so the repair owed the CLASS
+   CLOSURE, and revision 4 is it -- every timer x both re-arm cells, distinct rates, per-timer R5 -- verified by the
+   closing pass: codex x2 (all relational operators on every timer subset, 75 cases; all 256 `nr`-only index maps at
+   each of three sites; 65,536 joint maps) and the Opus seat (below).
+
+**WRONG RECORDS corrected in place (L4)**, each named by its file:
+* `dev_footbridge.c` -- deleting the ceiling brings "the overflow" back.  Measured, gate 2's R2 stays green with the
+  ceiling deleted (peak 2147483647, trough 1): the compare precedes the `++`.  What the ceiling buys is a debt of 2^31-1
+  ticks, 31.5 s at the most the core delivers.
+* `gate_offline.sh` -- "no-ceiling fails ... R2 with peak 2147483647".  It fails R1 and R5, not R2.
+* `diff_fbpending_bound.c` -- the header's "overflows at a higher emulated_hz" (the same error), and R3's comment that
+  the rung-3 probe "cannot see the difference at all" between reset-to-1 and reset-to-0 (it can, at N a multiple of 763,
+  as a dead clock).
+* `fbpending_drain_probe.py` -- arm X headed "THE PLACEMENT DISCRIMINATOR" and said a non-zero X shows the state in
+  which a DEVICE_TICK bound cannot run (a bound moved into DEVICE_TICK reads X = 1 and PASSES: the FREEZE sets the bound
+  to 1 first); "every planted instruction is checked" in the header and "every generated word is still checked" in the
+  assembler's comment (the accrual loop and arm X's disable words free-run, and branch words carry no expected text);
+  and a usage line naming `fbpending_drain.py`.
+The dated artifacts' own false sentences are corrected in `regress/artifacts/fbdrainwire_20260924/CORRECTIONS.md`, not
+edited, because their mtimes are the order proof.
+
+**MEASURED.**  Test-first on HEAD bead6ad9 (the Opus seat, pass 1): the probe passes on all four timers (D = X = 3);
+with the bound removed it reads 3051 on all four and fails.  Starved to one core behind 12 busy loops, the removed-bound
+mutant still read 1183 and failed (below N = 763 it would pass silently -- disclosed).
+Gate 2's harness on the final text, two tables: the author's (`t4_rev4/t4.out`: 17 mutants, and three harness
+self-edits each against the base and `M_eq`) and the Opus seat's, independently (`opus548_measured/c/c_harness.txt`).
+Of the Opus seat's **26 `M_` mutants, SEVEN pass every gate-2 row**: the store guards `M_neqB`, `M_zge`, `M_upskip`
+(filed, `fbbounddebt`); `M_en` and `M_en0`, caught at rung 3 by the drain block's arm X (X = 3051 against D = 3;
+`M_en0` on the final block, `c_blocks.txt`); and `M_nper` and `M_f16`, caught by nothing (filed, `fbboundmodes`).  Of
+its **18 new mutants** of the fix's own predicate, reset and store, **sixteen red on gate 2's rows; `R_bnd`** (a reset
+to the bound) **red only on R6's whole-line pin; `P_win`** (the window) **green everywhere**, rung 3 included (filed,
+`fbbounddebt`).
+Gate 14 on revision 1: PASS, 1082 checks.  **On the final block: PASS, 1095 checks -- 41 of them the drain block's, all
+green -- 4017 s** (`gates_final/gate14.out`).  It ran from a copy assembled from HEAD plus the block
+(`gates_final/gate_arm.TESTED.sh`), because the working `gate_arm.sh` carries another unit's uncommitted section.  The
+committed file differs from that copy only in the block's NOT CLAIMED comment -- the reset-to-bound sentence the
+flagship seat's final pass found missing (`bash -n`; not re-run).  **Gate 2 on the final text: PASS, 359 checks, both
+named-row pins 1, 171 s** (`gates_final/gate2.out`).
+
+**The panel.**  Four panel passes -- pass 1 (`panels/panel_20260924_030347`), pass 2 (`..._055454`), the SF2
+adjudication pass (`..._071301`) and the closing pass (`..._075202`) -- each with a dedicated codex job
+(`panels/codex_dedicated_*.txt`) and the Opus measuring seat (`opus5_p1.md`, `p1b`, `p2`, `p3`, `f2`, `c`;
+claude-opus-5-5 throughout by its transcript, two mid-run refusal events with no model change); between them, the Opus
+seat's tables 2 and 3.  Answering every pass: codex (GPT-6 Astra max), agy, grok 4.7, glm, deepseek (pass 1 on its
+third try after two HTTP 500s; SF2 recovered from a thinking burn by a no-think re-fire), minimax, and the kimi seat
+through `kimi-k3:cloud` (the kimi CLI on its weekly limit every time -- COVERED, not lost).  **The flagship seat fired
+LAST** on pass 1 (`fable5_p1.md`: PROCEED WITH CHANGES, 0 of 11 dispositions wrong, two false sentences in the draft)
+and on the whole round (`fable5_final.md`: SHIP WITH CHANGES -- no ruling changed; 4 of 15 closing-pass dispositions
+wrong, all in records: this block's two mutant counts, the gate block's missing reset-to-bound escape, and a ledger
+script that crashed on a row without entries; all four fixed before this commit; claude-fable-5-1 throughout by its
+transcript).
+**Dissents, recorded rather than absorbed:** deepseek's DO NOT SHIP on the closing pass, counting the filed store guards
+as floor breaches -- overruled on the floor rule's own text, not on the count (grok, both codex jobs, minimax, the kimi
+seat, and the flagship seat: the fix's store is unconditioned and indexed by `timer_nr` alone, so no predicate dominates
+it for DEPENDS-ON to enumerate, and a guard a mutant ADDS there is clause (e)); minimax's pass-2 view that the timer pin was "documented, not a covert
+floor" -- overruled, the four-timer run being this round's measured claim; and the Opus seat's own counter-argument
+that the window mutant `P_win` should be graded like `==` -- answered by the flagship seat on the GENERATING SET, not
+on the consequence.  The body's test is one relational operator, whose generating set is the three regions its
+neighbours differ on: below, at and past the bound.  `==` is an operator substitution that exempts the PAST region, a
+generating-set cell `#442` never rowed -- L2.  `P_win` adds a second boundary at a constant the body never tests, the
+`&& idata != k` shape the carrier grades clause (e).  Grading by consequence would make `M_zge`, `M_neqB` and `M_upskip`
+L2 as well -- deepseek's position -- so the two rulings stand or fall together.
+
+**FILED** (OUTSTANDING_BUGS 2026-09-24): `fbbounddebt` (MED -- first the window `P_win`, whose closure owes the
+CEILING, 68,157,440, from a pre-charge at a high `emulated_hz` like R1's -- a 50 MHz pre-charge caps at 50,000,000 and
+leaves every W in [50e6-762, ceiling) alive; then the store guards `M_neqB`/`M_zge`/`M_upskip`, the 1..B-1 cell first,
+and the field-derived indexes), `fbboundmodes` (MED -- PERIODIC/FCLK_16/EXTERNAL), `fbharnessedits` (LOW),
+`fbdrainxdisable` (LOW), `fbdrainonepass` (LOW), `asanstaleobjs` (LOW -- `build-asan/` held objects older than their
+sources while its `-nt` check passed).  `#442`'s own block (R13, below) carries the late-dissent line.
+
+**Owed, and not this session's to write:** `tools/pipeline/fable_queue.md` still says the probe "runs in no gate at all";
+that file carries other units' uncommitted edits and is not committed here.
+
 # `#547` (upstreamdeleteprose, attrabbrev): one word of a comment turns gate 8's delete row green at HEAD -- and the nine-seat review that `#546`'s attribution rider owed finds a regression in that rider, two fail-open paths behind it, and fourteen wrong sentences, most of them mine
 
 **The defect (U).**  `#513` (e302c98c, 2026-09-08) wrote "delete the kill" into a comment in `src/devices/dev_sgi_re.c`.
@@ -24728,6 +24840,8 @@ and after staging: that census counts *pty readiness* sites and this probe drive
 `py_code` would have counted.
 
 ## R13 (#442) — an unbounded counter stopped the emulated clock for 40 seconds in every 86
+
+> **LATE-DISSENT DISPOSITIONS, 2026-09-24 (`#548`): THREE MEASURED FALSE PASSES against this round's detector floor, repaired in `#548` (disposition 2).**  `==` for `>=` in the bound check (a re-arm that lowers the bound below an un-acked count never resets it: 4529 owed against 762 at rung 3), a comparison reading `pending_bound[0]`, and `==` on three of the four timers each passed every row this round shipped; `#548` closed the class in `regress/diff_fbpending_bound.c` (R6 every timer x both re-arm cells, R6b at four distinct rates, R5 per timer, whole-line pins in `gate_offline.sh`).  Disposition 1, corrected in place by `#548`: this round's comments said deleting the ceiling brings the overflow back (R2 stays green with it deleted -- the compare precedes the `++`) and called the drain probe's arm X the placement discriminator (a bound moved into `DEVICE_TICK` reads X = 1 and passes).  Disposition 3, filed: `fbbounddebt`, `fbboundmodes`, `fbharnessedits`, `fbdrainxdisable`.  The record below is left as written; this line is so no reader sees false closure.
 
 `dev_footbridge.c`. The four timer callbacks incremented `pending_timer_interrupts[]` with no
 bound. On overflow the `int` goes negative, `DEVICE_TICK`'s `> 0` is false, and **the emulated

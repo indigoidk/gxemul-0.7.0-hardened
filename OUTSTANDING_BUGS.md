@@ -21492,6 +21492,8 @@ the pile-up formed.
 *One of the eleven is `ppc_rldicl_probe.py`, whose repair is uncommitted and whose row
 (`ppcwitnessmaskoracle`) is open — so that debt comes due on an oracle nothing executes.*
 
+> **2026-09-24, `#548`:** `fbpending_drain_probe.py` is wired into `gate_arm.sh` (all four timers) and its entry deleted -- one of the eleven discharged, **ten remain**, all dated 2026-09-27 (derived from the `EXEMPT` table), so they still fall due together on 2026-09-28.  The owner's ruling on the cliff is pending.
+
 
 ### `ip30abortkill` -- **FIXED AS `#531`, 2026-09-17.  WITNESS PAIR: PRE-FIX 8/21 -> POST-FIX 21/21 on ONE 21-row instrument.**
 
@@ -21893,6 +21895,8 @@ false.  It now pins R3's `cats, slowest legal` row.  Gate 2 on 2026-09-18: 345/3
 `mk48_nvram_probe.py` and `hpcmips_ctor_probe.py` now run in `gate_arm.sh`.  The other eleven exemptions **fall due as ONE
 block again on 2026-09-28** -- valid on the 27th, red from the 28th -- so both rows stay open.  The selftest's M5 days are
 derived from the table now, and M5a runs ON the stamped date.
+
+> **2026-09-24, `#548`:** `fbpending_drain_probe.py` is wired into `gate_arm.sh` (all four timers) and its entry deleted -- one of the eleven discharged, **ten remain**, all dated 2026-09-27 (derived from the `EXEMPT` table), so they still fall due together on 2026-09-28.  The owner's ruling on the cliff is pending.
 
 ### `scexempt` (MED) — gate 2's SC_EXEMPT expired 2026-09-02 with no owner; re-dated to 2026-09-27, returns 2026-09-28
 `ieee_store` and `wdc_identify` are exempt from the SELFCHECK comparator control.  Both dates passed on 2026-09-02, so
@@ -22311,3 +22315,80 @@ the project root; they moved on 2026-09-13 to `C:\DocumentNoSnc\cc\GXEMUL_upstre
 named `GXEMUL-SEC` plus a carriage return sits at the project root (minimax: a path hazard -- MED if a tool trips on it);
 and the carrier holds the U+0008 defect at one line in both copies.  Owner's files: not edited by a session holding
 other units' uncommitted carrier edits, and deleting the stray directory is the owner's call.
+
+## 2026-09-24 — GXEMUL [087a90]: `#548` fbdrainwire; what its review files
+
+Evidence for every item: `regress/artifacts/fbdrainwire_20260924/` -- the four panels (`panels/`), the dedicated codex
+jobs (`panels/codex_dedicated_*.txt`), the Opus measuring seat (`opus5_*.md`, `opus548_measured/`), the author's tables
+(`t3b_rev3/`, `t4_rev4/`), `CORRECTIONS.md`, and the flagship seat's `fable5_*.md`.
+
+### `fbbounddebt` (MED, harness) — #442's bound: the mutant cells gate 2 does not row, each measured passing
+
+After `#548`, `regress/diff_fbpending_bound.c` rows every timer in both re-arm cells (count 0; owing 8192), every
+timer's bound value (R5, lowest and highest peak), and every index map of `nr` alone (R6b at four distinct rates).
+These pass every row in the battery and are clause (e) -- outside the floor's enumeration -- each MEASURED by the Opus
+seat unless marked:
+* **FIRST: the fix's predicate narrowed to a WINDOW on its own operands**, `count >= bound && count <= bound + W` with
+  W wide enough to hold the owed 8192 (P_win): W = 10000 left 49603 owed against a bound of 762 at rung 3, HEAD 1.  Its
+  consequence is `#442`'s dead clock itself (the flagship seat, final pass, by derivation: accrue a debt near the
+  ceiling at a high `emulated_hz`, re-arm to 50 MHz -- the count is then past bound + W and never resets -- and it
+  overflows (2^31 - 68,157,440) / 50e6, about 42 s, later).  **Closure: owe the CEILING, 68,157,440**
+  (`TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY`, the most a correct build can hold), which needs R6's pre-charge at a
+  high `emulated_hz` like R1's -- a 50 MHz pre-charge caps at 50,000,000 and leaves every W in [50e6-762, ceiling)
+  alive and non-equivalent.  Comparable in cost to R1's existing ceiling-length drives.  Why clause (e) and not L2
+  (the flagship seat): the body's test is one relational operator, whose generating set is below/at/past the bound;
+  `==` exempted the past region, a generating-set cell `#442` never rowed (L2, repaired by `#548`), while P_win adds a
+  second boundary at a constant the body never tests -- the `&& idata != k` shape;
+* **a store guard a mutant ADDS** on the fix's unconditioned `pending_bound[timer_nr] = (int) bound;`: skipped when the
+  owed count equals the new bound (M_neqB), when it lies in 1..B-1 (M_zge -- the commonest real re-arm state; the Opus
+  seat and glm: the cheapest cell worth building), or on an UPWARD re-arm (M_upskip);
+* **an index read from another field**: `pending_bound[nr & (timer_load[nr] - 1)]` (codex, by reading) and
+  `pending_bound[(timer_control[nr] & TIMER_FCLK_256) ? nr : 0]` (grok, by reading).
+The contract in R6's comment names each.  Build the ceiling-owed cell first, then the 1..B-1 cell.
+
+### `fbboundmodes` (MED, harness) — no instrument drives the pending-tick callback under PERIODIC, FCLK_16 or EXTERNAL
+
+A bound skipped while `TIMER_MODE_PERIODIC` is set (M_nper) or while `TIMER_FCLK_16` is set (M_f16) passes the drain
+probe on all four timers AND both gate-2 differentials (the Opus seat, measured; EXTERNAL by reading).  M_nper brings
+#442's dead clock back at rung 3.  The cause is structural: the probe writes 0x88 and 0x00, gate 2 arms 0x80 and 0x88,
+and `diff_footbridge.c` sets PERIODIC but never calls the callbacks, although DEVINIT resets every timer to periodic.
+Cheapest fix (the Opus seat): a periodic and an FCLK_16 case in gate 2's R1 table -- three rows each, IDENT moves, and
+a re-table.
+
+### `fbharnessedits` (LOW, harness) — edits to the instruments' own logic that keep every `#548` pin green
+
+`#548` pins what is cheap and exact (the timer/load/ctrl line, the UNCAPPED line, one D and one X backlog in range, the
+whole R6/R6b lines) and declares the rest "reviewed, not rowed".  The rest, each read or measured by the seat named:
+the probe's TBASE rebound to timer 0 while printing the requested timer (codex); `free_run(0.4)` inside the probe
+(codex); `backlog(D, ranX)` for X (codex; the kimi seat asked that this class carry a tag); `add1("sl")` ->
+`mov("sl", 1)` publishing a constant 1 (codex); the X/D print labels (codex, measured in-memory); R6's owed count bumped
+after sampling, or zeroed after sampling (codex); R6b's two loops merged (codex); a row renamed while its pin reads only
+the detail (codex -- closed by `#548`'s whole-line pins); Opus's three-token R6 edit (driving timer 0 for 3810 ticks and
+reading the end from `[0]`).  Also recorded here because it is the same kind of limit: `Session.wait()` restarts its
+timeout on any output, so continuous output without a prompt can hold the probe indefinitely (codex x2, fake-clock
+fixtures) and nothing outside the probe times it in gate 14.
+
+### `fbdrainxdisable` (LOW, harness) — nothing checks, per run, that the drain probe's arm X was disabled
+
+Arm X's disable and re-enable words (0x54/0x58, 0x70/0x74) free-run and are never compared with the disassembly (arm E
+steps arm D's program), and on a correct build X reads 3, exactly like D.  #548's M_en (X = 3051 against D = 3) is the
+evidence the disable ran in that measurement; nothing repeats it per run, and X is the battery's only gated witness of
+a bound gated on TIMER_ENABLE.  Fix: a control row reading TIMER_x_CONTROL back after the disable, or step those words.
+
+### `fbdrainonepass` (LOW, harness) — a single-process four-timer drain mode would halve gate 14's new cost
+
+`#548` runs the drain probe once per timer, ~17 s each (67 s measured), repeating the H1/H2/E/T legs every time.  One
+process with one H1/H2/E/T set and four D/X pairs would roughly halve it (the flagship seat's option, pass 1).  An
+instrument change owing its own kill table.
+
+### `asanstaleobjs` (LOW, harness) — `build-asan/`'s binary changed on a rebuild whose one edited input compiles identically
+
+`#548` propagated a comment-only `dev_footbridge.c` into the three build trees and rebuilt each (`rm src/cpus/*.o`,
+make).  `build/` and `/tmp/gxsec-build` came out md5-identical to their pre-edit binaries; `build-asan/` did NOT
+(0f0b4489 -> 3b6711cb).  Compiled with `build-asan/`'s exact flags (`-g`, ASAN, UBSAN), HEAD's and `#548`'s
+`dev_footbridge.c` produce BYTE-IDENTICAL objects, and a second rebuild of `build-asan/` reproduced 3b6711cb exactly --
+so the build is deterministic and the first change came from objects the forced rebuild refreshed (a CPU object, or
+`dev_footbridge.o` itself) that had been compiled from different source content, although no source was newer than the
+binary.  Cause NOT established; a source copied with a preserved older mtime is the likely route.  Consequence: an
+ASAN measurement taken before 2026-09-24 04:44 may have run code older than its sources.  Part 2 of the two-part
+clearance (`-nt`) cannot see this class; rebuilding and comparing can.

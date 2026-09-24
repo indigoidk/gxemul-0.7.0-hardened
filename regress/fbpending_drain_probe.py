@@ -46,14 +46,23 @@ THE TRICK: MEASURE THE COUNTER, DO NOT WAIT FOR IT TO OVERFLOW.
   which re-arms at a different rate) -- and they exist because a one-token mutant
   (`freq / 100.0`) destroyed 99% of the guest's clock while passing this probe.
 
-ARM X -- THE PLACEMENT DISCRIMINATOR, and the reason it is not merely a second run.
+ARM X -- the reason it is not merely a second run.
   dev_footbridge.c never calls timer_remove() and never lowers the core frequency when
   the guest DISABLES a timer: TIMER_x_CONTROL without TIMER_ENABLE zeroes the counter
   once (the same `= 0` store) and leaves the struct timer running.  So timer_tickN keeps incrementing a
   counter that DEVICE_TICK will never look at.  Arm X arms the timer, immediately
   disables it, free-runs, re-enables (which does NOT clear the counter) and then
-  measures.  A non-zero result proves the counter accrues while the device is disabled
-  -- which is exactly the state in which a bound placed in DEVICE_TICK cannot run.
+  measures.  #442 measured 3051 on the PRE-FIX build, identical to arm D -- which alone
+  cannot show the disable executed.  #548's M_en did: with the bound gated on ENABLE,
+  X read 3051 against D's 3.  No row re-checks it per run: FILED as `fbdrainxdisable`.
+  *** #548: THE HEADING SAID "THE PLACEMENT DISCRIMINATOR" AND X IS NOT ONE -- MEASURED.
+  A bound moved into DEVICE_TICK reads X=1 and PASSES: the FREEZE's LOAD write sets the
+  bound to 1, and DEVICE_TICK clamps the count before the drain counts it.  gate 2
+  (diff_fbpending_bound.c R1/R2/R5/R6) catches that placement.  What X DOES catch is a
+  bound gated on a control bit its CTRL=0 write clears: TIMER_ENABLE, which
+  diff_fbpending_bound.c -- every arm of which is enabled -- cannot see, and
+  TIMER_FCLK_256, which that file's unprescaled cases catch too.  X is the only GATED
+  rung-3 witness of either. ***
 
 ARMS
   D  enabled throughout.  Backlog after T seconds.
@@ -70,11 +79,16 @@ ARMS
      their own predicates -- harness edits, reviewed, not rowed (footbridge_sites_probe.py).
 
 Every RAM output word is poisoned with 0xDEADBEEF first and every verdict row requires
-the values it consults to be PRESENT.  Every planted instruction is checked, as it
-EXECUTES, against the emulator's own disassembly (the hand-assembled-encoding trap).
+the values it consults to be PRESENT.  Every STEPPED instruction is read back, and every
+stepped NON-branch instruction is compared, as it EXECUTES, with the emulator's own
+disassembly (the hand-assembled-encoding trap): the 21-word prologue, and arm D's drain
+body (0x70-0xe4) in arm E, whose seven branch words carry no expected text and are read
+back only.  *** #548: THIS SAID "EVERY PLANTED INSTRUCTION".  The accrual loop
+(0x54-0x6c) and arm X's disable and re-enable words (0x54/0x58, 0x70/0x74) FREE-RUN
+unchecked.  Filed as `fbdrainxdisable`. ***
 
-usage: fbpending_drain.py <gxemul-binary> <four-byte-raw-stub>
-                          [--accrue S] [--expect-cap N] [--learn]
+usage: fbpending_drain_probe.py <gxemul-binary> <four-byte-raw-stub>
+         [--accrue S] [--expect-cap N] [--timer N] [--fast] [--only ARM] [--learn]
 """
 import os, pty, re, select, signal, struct, sys, time
 
@@ -140,9 +154,11 @@ R = dict(r0=0, r1=1, r2=2, r3=3, r4=4, r5=5, r6=6, r7=7, r8=8, r9=9,
 
 
 # ---------------------------------------------------------------- assembler
-#  Encodings are GENERATED, not typed.  Every generated word is still checked
-#  against the emulator's own disassembly as it executes (arm E of the witness
-#  found this class of error four times in this project).
+#  Encodings are GENERATED, not typed.  Every generated word that is STEPPED is read
+#  back, and each stepped non-branch word is compared with the emulator's own
+#  disassembly as it executes (arm E of the witness found this class of error four
+#  times in this project).  #548: this said EVERY generated word -- the accrual loop
+#  and arm X's disable words free-run, and branch words carry no expected text.
 def _imm12(v):
     for rot in range(16):
         c = ((v << (2 * rot)) | (v >> (32 - 2 * rot))) & 0xFFFFFFFF
@@ -803,6 +819,10 @@ def main():
     print("\n" + "=" * 78)
     print("VERDICT")
     print("=" * 78)
+    #  #548: WHICH timer this run measured, and the load and control it armed, so gate 14
+    #  can pin them -- _opt() ignores an unknown flag (a mistyped --timer runs timer 0), and
+    #  a changed LOAD_RUN or CTRL_ON moves the rate with every other row green.
+    print("FBDRAIN_TIMER=%d base=0x%03x load=0x%x ctrl=0x%x" % (TIMER_NR, TBASE, LOAD_RUN, CTRL_ON))
     print("FBDRAIN_CONTROL=%s" % ("OK" if ok else "FAILED"))
     print("FBDRAIN_BACKLOG_D=%s" % bD)
     print("FBDRAIN_BACKLOG_X=%s" % bX)

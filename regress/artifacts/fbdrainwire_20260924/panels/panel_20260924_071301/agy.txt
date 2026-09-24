@@ -1,0 +1,115 @@
+VERDICT: SHIP WITH CHANGES
+
+---
+
+## 1. Adversarial Evidence & Source Verification
+
+Every claim in [`brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260924_071301/brief_sent.md) was cross-checked against the working tree under `GXEMUL-SEC/`:
+
+### A. Device Model: [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c)
+* **Pre-increment compare prevents signed overflow**: Verified in [`footbridge_pending()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L124-L130). If [`pending_timer_interrupts[nr]`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L73) $\ge$ [`pending_bound[nr]`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L76), it resets to $1$; otherwise it increments. At `INT_MAX`, the check fires before the `++`, preventing UB overflow. R2 stays green under `M_noceil` with peak `2147483647` and trough `1` as recorded in [`dev_footbridge.c:290-294`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L290-L294).
+* **Delivery ceiling and 31.5 s calculation**: Verified in [`reload_timer_value()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L328-L334). The ceiling clamp is `TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY = 1048576 * 65 = 68,157,440 Hz`. At load 1 with no prescaler ([`footbridge_effective_cycles()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L234-L268) returning 1), requested rate at `-I 2147483647` is $2^{31}-1\text{ Hz}$. Delivering $2^{31}-1$ ticks at the core's maximum delivery rate takes $(2^{31}-1) / 68,157,440 = 31.5077\text{ s}$ ([`dev_footbridge.c:291-292`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L291-L292)).
+
+### B. Offline Differential: [`regress/diff_fbpending_bound.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c) & [`regress/gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh)
+* **R6 re-arm two-cell closure and end counts**: Verified in [`diff_fbpending_bound.c:294-323`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L294-L323). Timer 0 re-arms at count 0 (`owed0 = 0`); timer 2 re-arms with 4096 owed (`owed2 = 4096`). Under bound 762, 4096 ticks leave $((4096 - 1) \bmod 762) + 1 = 286$ ticks. The predicate checks `owed0 == 0 && owed2 == 4096 && peak == 762 && peak2 == 762 && end0 >= 1 && end0 <= 762 && end2 >= 1 && end2 <= 762`.
+* **R6 pin in gate 2**: Verified in [`gate_offline.sh:1353-1354`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1353-L1354). Greps for exact printed text `timer 0 at count 0 peak 762 end 286, timer 2 owing 4096 peak 762 end 286; want 762`. Retargeting drive to timer 0 leaves timer 2 at count 4096, which fails both the row predicate (`end2 <= 762`) and the pin (`end 286`).
+* **R6b distinct rates**: Verified in [`diff_fbpending_bound.c:337-356`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L337-L356). Loads $\{256, 128, 64, 32\}$ yield distinct frequencies $\{762, 1525, 3051, 6103\}\text{ Hz}$, pinned in [`gate_offline.sh:1355-1356`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1355-L1356). Catch `pending_bound[0]` alias and `timer_nr % 3` alias (`M_pct3`).
+* **Identity check**: Verified in [`diff_fbpending_bound.c:57, 415-417`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L57). With `deep > 0`, `IDENT_DEEP = 28`, confirmed by [`gate_offline.sh:1348`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1348) and [`t3b.out:2`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t3b_rev3/t3b.out#L2).
+
+### C. Gated Drain Probe: [`regress/gate_arm.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh) & [`regress/fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py)
+* **Four-timer wiring & execution pin**: Verified in [`gate_arm.sh:1207-1252`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1207-L1252). `for t in 0 1 2 3` runs [`fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py) with `--timer "$t"`. Each iteration pins `FBDRAIN_TIMER=$t base=0x...` ([`gate_arm.sh:1227-1230`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1227-L1230)), which populates `fbd_ran="$fbd_ran$t"`, asserted at line 1252 as `0123`.
+* **Rate and accrual pin**: Verified in [`gate_arm.sh:1231-1232`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1231-L1232). Greps for `  UNCAPPED prediction: backlog = 3052`, emitted at [`fbpending_drain_probe.py:659`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L659) via `RATE * ACCRUE_S = (50e6 / 65536) * 4.0 = 3051.758 \approx 3052`.
+* **Backlog range check**: Verified in [`gate_arm.sh:1245-1246`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1245-L1246). Regex `([1-9]|[1-9][0-9]|[1-6][0-9]{2}|7[0-5][0-9]|76[0-2])` ensures both D and X backlogs are in $[1, 762]$, rejecting 0 (`add1("sp")`) and values $> 762$.
+* **Wiring checker**: Verified in [`tools/pipeline/check_probe_wiring.py:2658-2660, 2684-2686`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2658-L2660). Exemption for `fbpending_drain_probe.py` is removed/discharged; 10 dated exemptions remain.
+
+---
+
+## 2. Adjudication of F1..F32 and D1..D4 (Question 1)
+
+* **F1**: **UPHOLD**. Without pinning `FBDRAIN_TIMER=$t base=0x...` and `fbd_ran="0123"`, `--time` or loop corruption leaves 28 checks green while evaluating only timer 0 ([`gate_arm.sh:1227-1230`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1227-L1230)).
+* **F2**: **UPHOLD**. Pinning `  UNCAPPED prediction: backlog = 3052` binds `RATE * ACCRUE_S`, catching `--accrue .4` and `LOAD_RUN` manipulations ([`gate_arm.sh:1231-1232`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1231-L1232)).
+* **F3**: **UPHOLD**. `add1("sp")` publishes 0 (not `POISON`), which is invalid for a live clock resetting to 1; pinning range $[1, 762]$ catches it ([`gate_arm.sh:1245-1246`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1245-L1246)).
+* **F4**: **UPHOLD**. Internal probe Python logic swaps (e.g. `backlog(D, ranX)`) are code-reviewed rather than defended by recursive harness checks.
+* **F5**: **UPHOLD**. Indexing `pending_bound[0]` in [`footbridge_pending()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L124) escaped existing rows; R6b at 4 distinct rates closes this label-axis defect ([`diff_fbpending_bound.c:337-356`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L337-L356)).
+* **F6**: **UPHOLD**. R6b tests every timer individually at distinct rates, making per-timer assertions in R5 redundant against `timer_nr % 3`.
+* **F7**: **UPHOLD**. The store in [`dev_footbridge.c:333`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L333) is unconditional; synthesizing guards (`pending != bound`) is beyond floor requirements and properly filed as `fbbounddebt`.
+* **F8**: **UPHOLD**. Printing `owed0` and `owed2` in [`diff_fbpending_bound.c:397-402`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L397-L402) and pinning the printed line prevents weakening R6 to `||`.
+* **F9**: **UPHOLD**. Freezing bound to 1 explains only `DEVICE_TICK` placement; lowering, reset-to-0, and deleted ceiling miss for distinct algebraic reasons ([`gate_arm.sh:1187-1191`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1187-L1191)).
+* **F10**: **UPHOLD**. Reset-to-0 produces $N \bmod (B+1) = 0$ at $N = 3052 = 4 \times 763$, leaving 0 ticks drained, which triggers `CLOCK_DEAD`.
+* **F11**: **UPHOLD**. Starvation can exhaust prompt/iteration budgets on a correct build; stating the two measured runs did not false-fail is exact ([`gate_arm.sh:1200-1204`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1200-L1204)).
+* **F12**: **UPHOLD**. Probe tests `TIMER_ENABLE` only; other control modes and unverified disable execution are filed as `fbboundmodes`/`fbdrainxdisable` ([`gate_arm.sh:1201-1203`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1201-L1203)).
+* **F13**: **UPHOLD**. [`diff_footbridge.c:642`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c#L642) sets `TIMER_MODE_PERIODIC` but stubs callbacks; `fbboundmodes` properly widened.
+* **F14**: **UPHOLD**. [`diff_fbpending_bound.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c) enables timers, while [`diff_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_footbridge.c) stubs callbacks and never triggers them.
+* **F15**: **UPHOLD**. Residue recurrence $((N-1) \bmod B)+1$ requires zero start, $N \ge 1$, no acks, and $N > 762$ to catch $B \ge N$ ([`gate_arm.sh:1179-1184`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1179-L1184)).
+* **F16**: **UPHOLD**. Intermediate acknowledgments would decrement the count back to equality; "while nothing acks" is required ([`gate_arm.sh:1191-1193`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1191-L1193)).
+* **F17**: **REFINE**. While `M_devtick` fails R2 at depth, R2 tests signed overflow at INT_MAX and catches *none* of the other mutants in that sentence (R2 is green under `M_noceil`, reset-to-0, reset-to-2, raises, lowerings).
+* **F18**: **UPHOLD**. On a correct build X reads 3 like D, proving nothing about disable execution; properly filed as `fbdrainxdisable` ([`fbpending_drain_probe.py:55-57`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L55-L57)).
+* **F19**: **UPHOLD**. [`step_and_check()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L499-L523) skips mnemonic checks when expectation is `None`; branch words are verified by readback word equality only.
+* **F20**: **UPHOLD**. `fbpending_witness.py` is an ungated `CLASS_WITNESS`; `fbpending_drain_probe.py` is the only *gated* rung-3 witness ([`fbpending_drain_probe.py:64`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L64)).
+* **F21**: **UPHOLD**. Requested rate of $2147483647.0\text{ Hz}$ requires no prescaler; one-token edits (`!=` for `<=`) also pass ([`dev_footbridge.c:290-294`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L290-L294)).
+* **F22**: **UPHOLD**. Stating "31.5 s at the most the core delivers" resolves the conflict with the naive 1.0 s calculation ([`dev_footbridge.c:291-292`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L291-L292)).
+* **F23**: **UPHOLD**. Deleted ceiling fails R5 as well as R1 on high-Hz cases; comment corrected in [`gate_offline.sh:1326-1327`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1326-L1327).
+* **F24**: **UPHOLD**. When `FBDRAIN_VERDICT` is not `PASS|FAIL`, `continue` skips subsequent checks; corrected in [`PRETABLE_ADDENDUM_r2.out:15-21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/PRETABLE_ADDENDUM_r2.out#L15-L21).
+* **F25**: **UPHOLD**. Accounting convention clarified to 14 mutants + baseline, and 11 substantive case failures + R4 aggregate.
+* **F26**: **UPHOLD**. "that count exceeds 762" eliminates ambiguity between delivered ticks and residual counter state ([`gate_arm.sh:1185`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1185)).
+* **F27**: **UPHOLD**. Measured RED in Table 3 via R5 slowest-legal case (peak 2, want 1) and revision 3 R6 pin (`end 291/292` vs `286`); properly withdrawn from debt.
+* **F28**: **UPHOLD**. Initial `calloc` zeroes memory, making all initial arms upward transitions from 0; `M_lowonly` fails all rows ([`t3b.out:13`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t3b_rev3/t3b.out#L13)).
+* **F29**: **UPHOLD**. Grepping whole lines fails safe (red) upon formatting drift, and writing through unused pointers (`trough2`) is benign.
+* **F30**: **UPHOLD**. Maintenance risk across 4 files is noted; standard practice across this regression suite.
+* **F31**: **UPHOLD**. Probe's internal timeouts and iteration limits provide sufficient bounded execution without external process wrappers.
+* **F32**: **UPHOLD**. Sampling final `end` counts (286 on both timers) in R6 closes the drive retargeting hole found by Opus 5 ([`diff_fbpending_bound.c:307, 312, 317-321`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L307)).
+
+---
+
+### Disagreements (D1..D4)
+* **D1 (Pin timer)**: **UPHOLD author**. Without the pin, `--timer 0` silently passes while running timer 0 four times, defeating the multi-timer rationale.
+* **D2 (31.5 s delivery rate)**: **UPHOLD author**. Clarifying the 68 MHz core delivery rate reconciles the mathematical derivation with the naive 1.0 s reading.
+* **D3 (Conditioned store mutants)**: **UPHOLD author**. The store at line 333 is unconditional; conditioning mutants test hypothetical code structures rather than existing branches.
+* **D4 (R5 vs R6b)**: **UPHOLD author**. Distinct-rate testing in R6b catches cross-timer indexing bugs (`M_cmp0`, `M_pct3`) that equal-rate per-timer checks in R5 miss entirely.
+
+---
+
+## 3. Which Accepted Disposition Is Wrong? (Question 2)
+
+**The Count:** There were **19 consecutive accepted/refined findings** from **F8 through F26** (18 `ACCEPTED`, 1 `REFINED` at F22). Including the pass-2 acceptance of GLM #2 (F27), the streak was **20**.
+
+**The Wrong Dispositions:**
+
+1. **F27 (GLM #2 — Reset to 2 passes every row)**: In pass 2, the author accepted GLM #2 without measurement, predicted `PASS`, and filed it as `fbbounddebt`. In Table 3, `M_rst2` was **measured RED**:
+   * It fails R5's `"cats, slowest legal"` case where bound is 1 (the counter resets to 2, giving peak 2 against expected 1; [`opus5_p3.md:21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus5_p3.md#L21)).
+   * In revision 3, it fails the R6 pin because period $(762 - 2) = 760$ leaves end counts $291/292$ instead of $286$ ([`t3b.out:10`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t3b_rev3/t3b.out#L10)).
+   Accepting this finding as debt was an unverified concession.
+
+2. **F8 (R6 precharge & predicate pinning)**: In revision 2, the author accepted F8 and believed pinning `owed0` and `owed2` was sufficient. However, as Opus 5 exposed in Table 3 (F32), the revision 2 fix had a major defect: retargeting the post-re-arm drive to timer 0 passed the R6 pin completely. The author's accepted fix for F8 was incomplete until revision 3 added `end0`/`end2`.
+
+3. **F17 (Omission of R2)**: The author accepted adding `R2` to `"All of those are gate 2's (diff_fbpending_bound.c R1/R2/R3/R5/R6/R6b)"` in [`gate_arm.sh:1191`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1191). But R2 tests signed overflow at INT_MAX and is completely green under no-ceiling ([`gate_offline.sh:1327`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1327)), reset-to-0, reset-to-2, raises, and lowerings. Claiming R2 catches "all of those" is technically false.
+
+---
+
+## 4. What Did All Nine Seats Miss? (Question 3)
+
+Across passes 1 and 2, all nine seats overlooked the following concrete issues:
+
+1. **Python Operator Precedence Flaw in [`fbpending_drain_probe.py:825`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L825)**:
+   ```python
+   print("FBDRAIN_CLOCK_DEAD=%s" % ("D " if deadD else "") + ("X" if deadX else ""))
+   ```
+   In Python, `%` binds tighter than `+`. This parses as:
+   `("FBDRAIN_CLOCK_DEAD=%s" % ("D " if deadD else "")) + ("X" if deadX else "")`
+   While it happens to output `"FBDRAIN_CLOCK_DEAD="` when both clocks are alive, `"X"` is string-concatenated to the formatted string rather than formatted via `%s`. If `deadX` is true and `deadD` is false, it prints `"FBDRAIN_CLOCK_DEAD=X"`. If both are true, it prints `"FBDRAIN_CLOCK_DEAD=D X"`. It functions by accident of concatenation rather than proper tuple formatting:
+   ```python
+   print("FBDRAIN_CLOCK_DEAD=%s%s" % ("D " if deadD else "", "X" if deadX else ""))
+   ```
+
+2. **Gate 14 Check Count Accounting Drift**:
+   Revision 1 had 28 checks in the gate-14 drain block ($7 \times 4$), producing the cited total of 1082 checks ([`brief_sent.md:21`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260924_071301/brief_sent.md#L21)). Revisions 2 and 3 add 3 new checks per timer plus 1 after-loop check ($10 \times 4 + 1 = 41$ checks, +13 net checks), increasing Gate 14's total check count to 1095. No seat reconciled this expected count in the verification ledger.
+
+3. **Missing Process Exit Assertion in [`gate_offline.sh:1344`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1344)**:
+   In [`gate_arm.sh:1212, 1250`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1212), probe exit status is strictly captured via `fdrc=$?` and asserted `0`. In [`gate_offline.sh:1344`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1344), `"$FBBIN" 2147487744 > "$FBLOG" 2>&1` does *not* assert process exit status; it relies solely on grepping `^FBBOUND_PASS$`.
+
+4. **Stale Section Comment in [`tools/pipeline/check_probe_wiring.py:2528-2536`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2528-L2536)**:
+   In `MANIFEST`, `fbpending_drain_probe.py` remains categorized under `# -- detectors that NOTHING RUNS. Each carries a dated exemption below.` even though its exemption has been discharged and it is actively run by `gate_arm.sh`.
+
+---
+
+GO-WITH-CHANGES

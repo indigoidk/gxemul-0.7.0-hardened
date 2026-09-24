@@ -1,0 +1,26 @@
+VERDICT: PROCEED WITH CHANGES
+
+1. **A rearm regression can pass all three proposed rows while leaving the exercised timer unbounded.** An equality-only check in [footbridge_pending](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:124) behaves correctly while the bound stays constant, but loses the current `>=` check’s protection when the bound falls below existing debt.
+
+   [reload_timer_value](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:327) replaces `pending_bound` without reducing the pending counter. The probe’s own [freeze operation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:245) creates precisely this transition: **762 → 1**, preserving the backlog. It then drains that backlog without requiring another timer callback under the lowered bound.
+
+   A guest that retains the debt instead can leave an equality-only check permanently behind the counter: subsequent callbacks increase it toward signed overflow. This affects the shared helper, so running all four timers does not close this gap.
+
+2. **I established the counterexample through source tracing and enumeration.** The exact accrual rate is **762.939453125 Hz**. Enumerating all 763 starting counter values from 0 through 762 showed identical next-step behavior for the current comparison and an equality-only comparison at bound 762.
+
+   Enumerating 3,051 callbacks from zero leaves **3 pending** under either comparison. After the freeze:
+
+   | Subsequent action | Current comparison | Equality-only comparison |
+   |---|---:|---:|
+   | Drain before another callback | Measures 3 | Measures 3 |
+   | Deliver one callback before acknowledging | Pending becomes 1 | Pending becomes 4 |
+
+   The first path passes the proposed rows; the second exposes the missing protection. The freeze period is approximately **85.899 seconds**, and the probe ordinarily budgets 30 seconds for draining. Its controls do not require the distinguishing callback.
+
+   I also extracted the shipped final predicate and enumerated all **580,644** positive D/X backlog pairs within 1–762: every pair passes. These are arithmetic and source results, **not a measured compiled-mutant run**.
+
+3. **Require explicit coverage of rearming with outstanding debt.** A deterministic regression should lower the bound below the pending count, deliver one callback, and require recovery to **1 before acknowledging anything**. Confirm that gate 2 already asserts this exact transition, or add that assertion; the permitted files cannot establish its coverage.
+
+   HEAD’s `gate_arm.sh` and `check_probe_wiring.py` confirm the wiring/exemption mechanics, but provide no additional protection for this transition. Wiring can proceed with the narrower claim that it checks the measured backlog; it cannot certify this rearm safety property.
+
+   I read only the permitted source files, used HEAD’s gate copy, and did not read either excluded location.

@@ -1,0 +1,36 @@
+VERDICT: PROCEED WITH CHANGES
+
+1. **Bound = 762 at the probe's rate** (Q1). REASONED. 50e6 / (256·256) = 50,000,000 / 65,536 = 762.9394…; the `(int)` cast in the `pending_bound` assignment truncates toward zero → 762. Upper clamp at 68,157,480 is not engaged; lower clamp at 1.0 is irrelevant. Author's arithmetic checks out.
+
+2. **`--expect-cap 762` is the tightest valid cap** (Q1). REASONED. The bounded counter's residue space is `[1, bound]` (the `>= bound → 1` rule holds `= bound` for one tick before the next tick forces reset, so `bD` can land exactly on `bound`). A cap of 761 would false-fail under the working fix. Author's "tightest cap that cannot false-fail" claim is correct.
+
+3. **Clause-e contract for RAISES is overstated** (Q3 + general). REASONED. The proposed rows are **deterministic only for bound REMOVAL**:
+   - REMOVAL → counter grows unbounded → at T=4 s the drain measures ~3051 → fails `bD ≤ 762`. Deterministic. ✓
+   - RAISE to 763 → residue `[1, 763]`; `bD = 763` fails only ~1/763 of runs. Probabilistic on a single green run.
+   - RAISE to 1000 at T=4 s → 3051/1000 ≈ 3 cycles, residue `[1, 1000]`, expected `bD ≤ 762` much of the time. Often passes, fails sporadically.
+   - RAISE to ~3000+ → more deterministic, but the author should say so explicitly rather than claim "any RAISE above 762."
+   - The reset-to-0 mutant is correctly acknowledged as out of scope (gate 2 carries it).
+   
+   Recommend rewriting clause (e) to: "rows catch bound REMOVAL deterministically and raises up to ~3× the cap probabilistically; reset-to-0 lives in gate 2."
+
+4. **4 s `--accrue` on a loaded host** (Q1). NOT CHECKABLE FROM PACKET. The argument `pre-fix bD = rate · T ≈ 3051` presumes the emulator advances ~4 emulated seconds in ~4 wall seconds. The brief states the catch-up ceiling is 68,157,440 inc/wall-s — a per-step ceiling — but does NOT establish that the free-running accrual phase hits real-time on the slowest expected host. If a loaded host runs the gate, the unbounded counter could fail to reach 762 within 4 wall-seconds, and the row would false-pass even with the bound removed. **Single fact needed:** an unbound-bD measurement at T=4 s on the slowest host the gate ever runs on; if `bD` ever lands below 762, lengthen `--accrue` or repeat-N.
+
+5. **Per-timer coverage** (Q2). REASONED + judgment. `footbridge_pending(d, nr)` is shared today, so a per-callback defect requires un-sharing the four `timer_tickN` wrappers — uncommon but plausible. Default --timer 1 misses it. `--timer` exists for a reason; the author is right to flag this. Cost from packet: sites probe is 1.9 s for three arms; **I do not have the drain probe's per-timer wall time from the packet**, so the precise cost of running all four timers is not inlinable. File-reading seats: please confirm per-timer time so the author can decide.
+
+6. **Q3: single edits that pass the proposed rows while re-opening #442** (REASONED). Yes, several:
+   - Bound raised (any value) with `>=` unchanged: probabilistic false-pass (finding 3).
+   - Wrap comparison `>=` → `>` with bound unchanged at 762: residue shifts to `[1, 763]`; catches ~1/763 of runs.
+   - Wrap target `1` → `0`: counter sits at ~0 → `bD ≈ 0 ≤ 762` deterministically passes. Acknowledged; lives in `diff_fbpending_bound.c`.
+   None are silently introduced by the proposal. Naming them here as evidence for finding 3's contract rewrite.
+
+7. **Wiring idiom — grep regex** (READ). The inlined `gate_arm.sh` block ends with a regex keyed to that probe's own row prefixes (`^( arm |C[0-9]|A[0-9]|…`). The new block needs its own grep for `FBDRAIN_*` rows — e.g., `grep -E "^FBDRAIN_(CONTROL|VERDICT|CLOCK_DEAD)=" "$FBLOG" | sed 's/^/       /'`. The brief says "Add … a run … and three rows" but does not restate the grep, so the implementer needs to be told to include it.
+
+8. **Records** (Q5). REASONED + NOT CHECKABLE. From packet: deleting the EXEMPT entry in `check_probe_wiring.py` is the only **named** record change; adding the gate-14 block is the only **named** source change; no `GATE_MANIFEST` move is needed (no new gate script). I cannot check from the packet whether anything outside `check_probe_wiring.py` reads the EXEMPT dict — the brief excludes `tools/pipeline/ledger.json` and `regress/artifacts/` from this seat's reading. If a wired-probe count, a manifest list, or a downstream dashboard indexes the EXEMPT entries, that needs an atomic edit too. File-reading seats: please confirm.
+
+9. **Items the packet does NOT let me settle, named up front so they don't vanish:**
+   - Per-timer wall time for the drain probe (Q2 cost).
+   - Whether T=4 s accrual exceeds 762 ticks on the slowest expected host (Q1).
+   - **`TIMER_MAX_VAL` value.** The brief asserts the sentinel `0x00FFFFFF` "survives TIMER_x_VALUE's own `idata & TIMER_MAX_VAL` mask" but never states the value. If `TIMER_MAX_VAL < 0x00FFFFFF`, the sentinel is masked down and the modulo CAN then produce it, which breaks step 4 of the probe (the guest's spin condition never triggers, the drain mis-measures). Single fact: read `TIMER_MAX_VAL` in `dev_footbridge.c`.
+   - Whether anything outside `check_probe_wiring.py` consumes the EXEMPT dict.
+
+Items (1), (2), and the reset-to-0 acknowledgement (clause e) are clean. The contract overstatement in (3), the slow-host risk in (4), and the `TIMER_MAX_VAL` dependency in (9) are the three I'd want resolved — or explicitly acknowledged in the commit record — before the exemption is deleted and the row goes hot.

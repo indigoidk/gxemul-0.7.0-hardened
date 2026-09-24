@@ -1,0 +1,95 @@
+The suspicious part is how many findings were accepted. I am going to read the revision-3 sources and check the repairs against the code, starting with the ones this seat filed.VERDICT: SHIP WITH CHANGES
+
+The rows and pins I re-derived do what revision 3 says they do. Two accepted sentences are still false, and one new correction in this packet is false. No new row: the ask-again cap stands.
+
+## 1. F1–F32 and D1–D4
+
+F1 **UPHOLD.** `--timer 0` and a flag `_opt()` ignores both print timer 0. `FBDRAIN_TIMER=$t base=0x300+0x20*t` plus `fbd_ran=0123` fails closed. Bases match the probe (`0x300`, `0x320`, `0x340`, `0x360`).
+
+F2 **UPHOLD.** `50e6/(256*256)*4 = 3051.7578125`, so `%.0f` is 3052. Load `0x800` prints 381 and `--accrue 0.4` prints 305. That line is a fingerprint of `LOAD_RUN` and `--accrue`.
+
+F3 **UPHOLD.** The regex is exactly the integers 1..762: 1–9, 10–99, 100–699, 700–759, 760–762. It rejects 0 and 763+. `add1("sp")` publishes a real 0, so the probe verdict stays PASS and this gate row is the one that goes red.
+
+F4 **UPHOLD.** On a correct build D and X both sit in range, so a runtime row cannot see `backlog(D, ranX)`. Review-not-row, plus the pins, is the coherent cut.
+
+F5 **REFINE.** R6b kills unconditional `pending_bound[0]` and store `timer_nr % 3`: four distinct rates, arm-all-first, 8192 ticks past every bound (762, 1525, 3051, 6103). The axis is not closed. Compare `pending_bound[(timer_control[nr] & TIMER_FCLK_256) ? nr : 0]`: R6b takes the prescaled arm and uses `nr`; every unprescaled R5 case uses slot 0 while all four timers share one rate, so the max peak still matches. R6’s 50 MHz stretch is the same rate on timers 0 and 2. The drain writes `0x88`. Every shipped row stays green. File it beside `fbboundmodes`. Do not add a row in this revision.
+
+F6 **UPHOLD.** R5 still keeps only the max peak, so a low timer 3 stays hidden. An equal-rate per-timer check would still miss `M_cmp0`. Distinct-rate R6b is the stronger row.
+
+F7 **REFINE.** `pending != (int)bound` skips a re-arm that lands on the new bound; `pending == 0 || pending >= (int)bound` skips 1..761. Both pass, and both are real guest re-arms. Filing them is the right ship call. See D3.
+
+F8 **UPHOLD.** I tried to break this fix. `&&` to `||` still prints the live numbers, so on `M_eq` the line is peak 8192 end 8192 and the gate pin is 0. A smaller precharge changes `owing 4096` on the correct binary. A one-token retarget leaves timer 2 at 4096. The gate pin is the oracle that holds `||`.
+
+F9 **UPHOLD.** The mechanisms are split, and the split matches the runs. `DEVICE_TICK` reads D=X=1 because the freeze floors the bound to 1 and `DEVICE_TICK` collapses the counter before the drain. Ceiling deletion leaves the 762 Hz residue (D=X=3). A lowering stays under the cap. `>` and reset-to-0 are the multiple-of-763 cases.
+
+F10 **UPHOLD.** At N=3052 the reset-to-0 count is 0. The guest takes the “sentinel intact” branch at `0xa8` and never stores `O_DRAIN`, so the word stays `0xDEADBEEF` and the probe reports `CLOCK_DEAD`. That name matches the code.
+
+F11 **UPHOLD.** Starve-3 base is D=5/X=30 PASS; starve-12 base is 385/379 PASS. Removed-bound is still 3049 and 1183, both FAIL. Below N=763 is the silent region. The budget sentence is the part the two runs do not prove.
+
+F12 **REFINE.** `fbdrainxdisable` is now in the gate’s NOT CLAIMED list, which is the right fix. The sentence above it still says the ENABLE half is “closed here.” That is the word the finding was about, and the filing contradicts it.
+
+F13 **UPHOLD.** “No instrument drives the callback with” is the accurate cut. `diff_footbridge.c` sets `TIMER_MODE_PERIODIC` and never calls `timer_tick`. DEVINIT’s periodic value is replaced by the probe’s `0x88` before `timer_add`.
+
+F14 **UPHOLD.** Same cut. The new text does not claim `diff_footbridge.c` arms every timer enabled.
+
+F15 **UPHOLD.** The catches are qualified “only while N > 762.” `M_x8` is bound `(int)(762.94*8) = 6103`, and all four logs read 3051. Bound 1525 wrapping to 1 is under NOT CLAIMED, where it belongs.
+
+F16 **UPHOLD.** The R6 comment now carries “while nothing acks.”
+
+F17 **UPHOLD.** The parenthetical is the row inventory R1/R2/R3/R5/R6/R6b. The ceiling correction (R2 stays green) is in `gate_offline.sh`, separately.
+
+F18 **UPHOLD.** The pre-fix “3051, identical to arm D” sentence replaced “a non-zero result proves … disabled.”
+
+F19 **UPHOLD.** The drain body has seven branch words with expected text `None`: `0x9c`, `0xa4`, `0xa8`, `0xc0`, `0xc4`, `0xd8`, `0xe4`. `step_and_check` always compares the word and compares the disassembly only when the expected text is present.
+
+F20 **UPHOLD.** “Only GATED” is the right qualifier. `fbpending_witness.py` stays ungated.
+
+F21 **UPHOLD.** “No prescaler” is in the sentence, “smallest” is gone, and deleting the ceiling pair passes the drain and loses to R1/R5.
+
+F22 **UPHOLD.** `2147483647 / (1048576*65) = 31.5077 s`. The paragraph immediately above defines that product as the most one timer is delivered per wall second.
+
+F23 **UPHOLD.** The no-ceiling record now says R1 and R5, and says R2 stays green, with the measured log named.
+
+F24 **UPHOLD.** Leaving `PRETABLE.out` for its mtime is consistent. The addendum’s `CTRL_ON` cell is still false; do not copy it. See Q3.
+
+F25 **CANNOT SETTLE.** I did not recount the pass-1 matrix. The disposition does not touch the diff.
+
+F26 **UPHOLD.** “That count exceeds 762” is the sentence that removed the ambiguity.
+
+F27 **UPHOLD.** Reset-to-2 from 0 over 4096 ticks ends at 291; from 4096 it ends at 292 (cycle length 761 after the first wrap). That matches table 3, and R5’s bound-1 case peaks at 2. Pulling it out of the debt list is right. The drain still never sees it: the count stays in 2..762.
+
+F28 **UPHOLD.** The first arm raises the bound from calloc’s 0, so a store taken only on a lowering never fires. `M_lowonly` red is the right result.
+
+F29 **UPHOLD.** `drive()` writes both pointers; `trough2`’s address is taken. A whole-line pin going red on a format change is the design.
+
+F30 **REFINE.** The drift this finding described already happened on the `CTRL_ON` sentence: the addendum says the uncapped line sees it, and section 4 replaces that with a second false sentence. No fifth copy.
+
+F31 **UPHOLD.** The probe’s own budgets are the bound that was claimed. An external watchdog was not owed.
+
+F32 **UPHOLD.** `((4096-1) mod 762)+1 = 286` on both arms: timer 2’s first tick turns 4096 into 1, then the remaining 4095 ticks match the from-zero residue. A one-token retarget leaves timer 2 at 4096, outside `[1, 762]`. Aiming both the drive and the end read at timer 0 yields 572, because `4096 % 762 = 286`, not 0. The range allows 572; the pin rejects it. `end2 = end0` plus a retarget would alias two fields that are supposed to be the same number. That is a further harness edit, and the cap says file it.
+
+D1 **UPHOLD.** The four-timer run is the measured claim. A green log that ran timer 0 four times is a false record. The pin is the right response.
+
+D2 **UPHOLD.** `2^31/5e7 = 42.95 s` is the emulated rate. `INT_MAX/(1048576*65) = 31.51 s` is the delivery ceiling. The comment now uses the ceiling, which the previous paragraph defines.
+
+D3 **REFINE.** The pass-1 ruling says an unconditioned store has no predicate to split. It says nothing about a mutant that adds one. `M_neqB` and `M_zge` are outside that sentence. They stay debt: the correct store has no branch to cover, and this revision does not grow another cell. The comment should say they pass, not that the ruling found them harmless.
+
+D4 **UPHOLD.** Distinct-rate R6b sees `M_cmp0`. An equal-rate per-timer R5 would not. R5 staying as it is is right.
+
+## 2. Which accepted dispositions are wrong
+
+Two.
+
+**F5.** R6b is the right kill for the two mutants that were measured. “The repair closes the class” is false. The compare above passes every shipped row, including the new one.
+
+**F12.** The filing landed. “Closed here” is still in the same comment, which is the overstatement that was accepted as fixed.
+
+The other acceptances I re-derived hold. That includes this seat’s own fixes: F8 (the pin holds `||`, the shrink, and the one-token retarget), F9 (the mechanisms now match the runs and the drain loop), and F11 (both starve logs). F10’s “dead clock” matches the unpublished-poison path. F32’s 286/286 matches the callback, and the reported reset-to-2 ends 291/292 match the same model.
+
+## 3. What all nine missed
+
+**Dropping `TIMER_FCLK_256` from `CTRL_ON` (`0x88` to `0x80`) leaves every new drain row green.** `RATE` is `EMU_HZ / (LOAD_RUN * 256)` and never reads `CTRL_ON`, so the uncapped pin still prints 3052. The device then runs at `50e6/256 = 195312.5 Hz`, bound 195312. The same delivery model that produced the measured N=3051 (`floor(rate*4s)`) gives N=781250 and residue `((781249) mod 195312)+1 = 2`. The bounded row, the `[1, 762]` row, both clocks, the verdict and the exit all pass. Section 4 says a `CTRL_ON` edit is caught by those rows. Under the model the green runs already established, this one is not. I did not execute it. The arithmetic is the whole claim.
+
+That is a probe-constant edit, so F4 already files the class. The miss is the false correction. Do not let it into a comment.
+
+The label mutant in F5 is the other one. Unconditional `[0]` is dead. `[0]` whenever the prescaler bit is clear is alive, and it sits on a path R1/R5 already run.

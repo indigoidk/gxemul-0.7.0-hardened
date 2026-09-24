@@ -1,0 +1,1 @@
+NOTE: frozen .py instruments live in _scratchpad/opus548/p2/instruments/ (outside out/p2) so a copy of out/p2 into regress/artifacts adds no UNCLASSIFIED .py to check_probe_wiring.py's recursive scan; md5 in out/p2/FROZEN.md5

@@ -1,0 +1,68 @@
+PRETABLE -- #548 fbdrainwire, written BEFORE the pass-2 kill table (its mtime is the order proof)
+=========================================================================================
+
+Scope: this round EXTENDS a kill-table-backed detector (gate 2's R6 in regress/diff_fbpending_bound.c) and SHIPS new
+detector rows (gate 14's drain block in regress/gate_arm.sh).  Both are #442's detector material.  The pass-1 tables
+(opus548_measured/) ran BEFORE the edit, against the drafted design; the pass-2 table runs against the final text.
+
+1. SIBLING PARITY
+   * drain block vs the footbridge_sites block beside it: controls first (CONTROL=OK) -- same; distinct GREEN ids
+     (twelve control rows) -- same idiom as E0-E6 / N1-N5; a value pin (BOUNDED=YES (cap asserted: 762)) -- same role as
+     the sites block's VENDOR_ID/24-bit-mask pins; a unique completion guard -- the sites block greps a verdict token,
+     the drain block additionally requires PASS|FAIL (REPORT-ONLY is not completion) -- stricter, not asymmetric; exit
+     status -- the sites block ignores it (`|| true`), the drain block pins it (xscale's idiom).  The sites block pins
+     `DISASSEMBLY MISMATCH` = 0; the drain probe prints no such token (its mismatches print as
+     "ENCODING / READBACK MISMATCH" and fail control row E), so the E id in the twelve carries that pin.  NO ROW OWED.
+   * R6 vs R6b: R6b (timer 1 carries its own bound) is untouched; R6 gains timer 2's owed cell.  NO ROW OWED.
+
+2. CLAIM -> ROW (every added sentence asserting an observable consequence)
+   gate_arm.sh block
+     "reads 3/3 on timer 0 and X=3051 on timer 1 ... passes BOTH gate-2 differentials"   M_en0: measured pass 1;
+         rows: t1 verdict/BOUNDED/exit (the owed four-timer rows ARE the carrier).  RE-MEASURE on the final block.
+     "CATCHES the bound REMOVED on any timer"             M_nobound: t0-t3 verdict/BOUNDED/exit rows.  RE-MEASURE.
+     "a bound gated on ... TIMER_ENABLE, and TIMER_FCLK_256"  M_en, M_fclk: verdict rows via arm X.  RE-MEASURE.
+     "any B >= N, which reads N"                          OWED A MEASUREMENT: no B>=N mutant was built in pass 1.
+         Build M_x8 (`double bound = freq * 8.0;`, B = 6103 at 762.94 Hz) and show the verdict rows red.
+     "NOT CLAIMED ..." / "cannot show at all" / "FILED as fbboundmodes"   disclosure, no row.
+     "`==` ... until #548 gave R6 its second cell"        gate 2 R6: M_eq.  RE-MEASURE on the final file.
+     "LOAD ... still read 1183"                           measured pass 1 (runs_p1/M_nobound_starve12_t0.out); no row.
+   fbpending_drain_probe.py header
+     "A bound moved into DEVICE_TICK reads X=1 and PASSES"   M_devtick, measured pass 1; a NOT-caught claim, no row.
+     "gate 2 ... catches that placement" / "TIMER_FCLK_256, which gate 2's unprescaled cases catch too"
+         gate 2 R1/R2/R5/R6 on M_devtick and M_fclk (runs_p1/diff_fbb_M_devtick.out, diff_fbb_M_fclk.out).
+   diff_fbpending_bound.c R6 comment
+     "one guest CONTROL write left it 4529 owed"          measured, runs_eq (the rung-3 re-arm driver).  No row.
+     "Owing 4096 before timer 0's own re-arm would have TRADED the cells"   M_pendguard under R6new, measured.
+   dev_footbridge.c / gate_offline.sh
+     "R2 measured green at peak INT_MAX" / "R2 stays green at peak 2147483647, trough 1"
+         runs_p1/diff_fbb_M_noceil.out.  No row (a correction of a false record).
+
+3. GUARD FIELD vs BODY FIELD -- footbridge_pending()
+   guard reads  pending_timer_interrupts[nr], pending_bound[nr]
+   body writes  pending_timer_interrupts[nr]
+   pending_timer_interrupts[] writers: the callback (:126-129), CONTROL without ENABLE (:698, = 0), TIMER_x_CLEAR
+     (:724-725, -- when > 0), DEVINIT's memset.
+   pending_bound[] writers: reload_timer_value (:333, on EVERY arm or re-arm, under no predicate), DEVINIT (:815, = 1).
+   The two are written at DIFFERENT sites, so a state where they disagree is owed: count ABOVE the bound.  Reached by a
+   re-arm that LOWERS the bound over an owed count (and by the drain probe's FREEZE, where no callback follows).
+   OWED ROW: R6's second cell (timer 2 re-armed with 4096 owed) -- this round's R6both.  The first cell (count below
+   the new bound) is the row R6 already had.
+
+4. CHANNEL -- per row, the mutant it kills and the observable that differs under it
+   gate 14, per timer t:
+     "reached a verdict"        a probe that crashes, hangs to the harness budget, or prints REPORT-ONLY (a control
+                                failed / no cap parsed) -> no unique PASS|FAIL line.
+     "controls prove ..."       any control failing -> FBDRAIN_CONTROL=FAILED.
+     "twelve DISTINCT green ids" a control row DELETED or renamed in the probe -> 11 ids (CONTROL=OK cannot see it).
+     "bounded at the asserted cap 762"  M_nobound / M_en / M_fclk / M_x8 -> BOUNDED=NO; a probe edit that parses a
+                                different cap -> "(cap asserted: N)" differs.
+     "both clocks alive"        a zero-tick drain (poisoned count) -> "FBDRAIN_CLOCK_DEAD=D ..." (whole-line match).
+     "verdict PASS"             every bound mutant above -> VERDICT=FAIL.
+     "probe exit status"        VERDICT=FAIL or a failed control -> exit 1.
+   Under M_nobound the verdict, BOUNDED and exit rows vary (3051 > 762).  No row's named channel is constant under
+   its named mutant.
+   gate 2 R6: M_eq -> timer 2 peak 8192; M_pendguard -> timer 0 peak 4096; M_frozen -> peak 4096/8192;
+     M_idx0 -> R6 (peak 1) and R6b.
+
+TABLE 2 (pass 2) OWES, on the FINAL text: R6both x the 15 pass-1 mutants (identity 28 rows); the gate-14 block,
+extracted verbatim, x {base, M_nobound, M_en, M_en0, M_fclk, M_x8, M_eq, M_devtick, M_nper} on all four timers.

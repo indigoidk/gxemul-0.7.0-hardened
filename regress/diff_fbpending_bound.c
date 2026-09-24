@@ -16,7 +16,9 @@
  *      by the very mechanism the probe uses to observe, so the probe reads a bounded
  *      counter and passes.  A direct call never runs DEVICE_TICK at all.
  *    - a bound with no ABSOLUTE ceiling (mutant m6, cap == (int)freq alone) is correct
- *      at cats' 50 MHz and overflows at a higher emulated_hz.  A guest probe cannot
+ *      at cats' 50 MHz and at a higher emulated_hz lets the debt reach INT_MAX before
+ *      the compare-first reset -- NOT an overflow (#548 measured R2 green with the
+ *      ceiling deleted; this said "overflows" until then).  A guest probe cannot
  *      reach that in bounded time: the core delivers at most TIMER_MAX_CATCHUP *
  *      TIMER_BASE_FREQUENCY == 68,157,440 increments per wall second, so 2^31 of them
  *      take 31.5 s AT BEST.  A direct call does 2^31 increments in seconds.
@@ -173,7 +175,7 @@ int main(int argc, char *argv[])
 		const int ceiling = (int)(TIMER_MAX_CATCHUP * (int)TIMER_BASE_FREQUENCY);
 		size_t c;
 		for (c = 0; c < sizeof(cases)/sizeof(cases[0]); c++) {
-			int worst_peak = INT_MIN, worst_trough = INT_MAX;
+			int worst_peak = INT_MIN, worst_trough = INT_MAX, best_peak = INT_MAX;
 			d = (struct footbridge_data *) calloc(1, sizeof(*d));
 			fake_machine.emulated_hz = cases[c].hz;
 			for (nr = 0; nr < N_FOOTBRIDGE_TIMERS; nr++) {
@@ -181,6 +183,8 @@ int main(int argc, char *argv[])
 				drive(d, nr, (long long)ceiling + 4096, &peak, &trough);
 				if (peak > worst_peak)
 					worst_peak = peak;
+				if (peak < best_peak)
+					best_peak = peak;
 				if (trough < worst_trough)
 					worst_trough = trough;
 			}
@@ -210,6 +214,11 @@ int main(int argc, char *argv[])
 			 *
 			 *  An equality closes it, needs no new oracle, and costs nothing:
 			 *  `f` was already computed for the message above.
+			 *
+			 *  *** #548: ON EVERY TIMER, NOT THE MAXIMUM.  A store lowering timers
+			 *  2-3 alone (`(int) bound & ~(timer_nr << 16)`) hid behind timer 0's
+			 *  correct peak (at the 50 MHz case: the mask only touches bounds of
+			 *  65536 and up).  The lowest peak must match too. ***
 			 */
 			{
 				int want = (int) f;
@@ -218,9 +227,9 @@ int main(int argc, char *argv[])
 				if (want > ceiling)
 					want = ceiling;
 				row("R5 the bound IS this timer's rate",
-				    worst_peak == want,
-				    "%-28s peak %11d  want %11d", cases[c].what,
-				    worst_peak, want);
+				    worst_peak == want && best_peak == want,
+				    "%-28s peak %11d  want %11d  lowest %d", cases[c].what,
+				    worst_peak, want, best_peak);
 			}
 			/*
 			 *  R3 -- ONE INTERRUPT IS STILL OWED, and it is a separate row
@@ -230,8 +239,9 @@ int main(int argc, char *argv[])
 			 *  (dev_luna88k.c:255-257: "restart the nr of pending
 			 *  interrupts", not "forget them").  Measured: this row is the
 			 *  only one of the four that separates reset-to-1 from
-			 *  reset-to-0, and the rung-3 guest probe cannot see the
-			 *  difference at all.
+			 *  reset-to-0, and the rung-3 guest probe sees it only when
+			 *  the delivered count is a multiple of 763, as a dead clock
+			 *  (#548; this said "cannot see the difference at all").
 			 */
 			row("R3 the reset still owes one interrupt",
 			    worst_trough >= 1,
@@ -271,31 +281,115 @@ int main(int argc, char *argv[])
 	 *  `[timer_nr]` (every timer shares timer 0's).  Neither can be seen by a table
 	 *  where all four timers always agree and nothing is ever re-armed.
 	 *
-	 *  So: arm two timers at DIFFERENT rates, then RE-ARM one at a third, and
-	 *  require each timer's bound to track its own current rate.  Same oracle as
-	 *  R5 -- the peak the counter reaches -- so no new oracle is introduced.
+	 *  So: RE-ARM each timer at a different rate and require its bound to track
+	 *  the new one (R6), and give every timer a rate no other timer shares (R6b).
+	 *  Same oracle as R5 -- the peak the counter reaches -- plus the count the
+	 *  timer is LEFT with, so no new oracle is introduced.
+	 *
+	 *  *** #548: A RE-ARM HAS TWO CELLS, AND EVERY TIMER OWES BOTH. ***  The
+	 *  callback's `>=` splits a re-arm by where the count sits against the NEW
+	 *  bound: below it (re-armed at count 0) or at or past it (re-armed owing 8192,
+	 *  PAST every new bound here).  `==` for `>=` agrees below the bound and AT it,
+	 *  but while nothing acks it never fires again once the count is PAST it; it
+	 *  passed every row in the battery, and one guest CONTROL write left it 4529
+	 *  owed against a bound of 762 (measured).  And `nr`
+	 *  indexes both lvalues the guard reads, so the timer is a floor axis too: a
+	 *  first repair that built the owed cell on timer 2 alone let `==` on the other
+	 *  three timers pass everything, 4529 owed again at rung 3 (measured).  So all
+	 *  EIGHT cells, each timer re-armed to its OWN rate (762/1525/3051/6103), so a
+	 *  re-arm that stores into another timer's slot shows as well.  The END counts --
+	 *  ((8192-1) mod B)+1 under the bound -- tie each peak to its own timer.
+	 *
+	 *  THE CONTRACT: covered, every timer x {re-armed at count 0, re-armed owing
+	 *  8192}, downward re-arms from 50 MHz.  NOT rowed, and filed (fbbounddebt): a
+	 *  STORE conditioned by a mutant on the count (`pending != (int)bound` at a
+	 *  count of exactly B, `pending == 0 || pending >= (int)bound` at 1..B-1) or
+	 *  on the direction (a store skipped on an UPWARD re-arm), and an index read
+	 *  from another field (`timer_load[nr]`, `timer_control[nr]`).  The fix's own
+	 *  store is unconditioned and its index is `timer_nr` alone, so these lie
+	 *  OUTSIDE the floor's enumeration (a guard a mutant ADDS; a field the guarded
+	 *  body never reads): clause (e), disclosed and filed.  The 1..B-1 cell is
+	 *  cheap and is filed as worth building.  So is a guard narrowed to a WINDOW
+	 *  on its own operands, `count >= bound && count <= bound + W`: it splits the
+	 *  rowed past-the-bound cell at a value the body never tests, and any W wide
+	 *  enough to hold the 8192 owed here passes every row -- W = 10000 left 49603
+	 *  owed at rung 3 (measured).
+	 *  Owing the largest debt a correct build can hold would close it (filed).
+	 *  The END counts' exactness lives in gate 2's whole-line pin; this row checks
+	 *  only their range.
 	 */
 	{
-		int peak, trough;
-		struct footbridge_data *r6 =
-		    (struct footbridge_data *) calloc(1, sizeof(*r6));
+		static const uint32_t rl[N_FOOTBRIDGE_TIMERS] = { 256, 128, 64, 32 };
+		int s, t, bad = 0, owe, want, owed[2][N_FOOTBRIDGE_TIMERS],
+		    pk[2][N_FOOTBRIDGE_TIMERS], end[2][N_FOOTBRIDGE_TIMERS];
+		char line[640];
+		size_t o = 0;
+
+		/*  Struct 0 re-arms timers 0-1 at count 0 and timers 2-3 owing 8192;
+		    struct 1 swaps the roles.  */
+		fake_machine.emulated_hz = 50000000;
+		for (s = 0; s < 2; s++) {
+			struct footbridge_data *r6 =
+			    (struct footbridge_data *) calloc(1, sizeof(*r6));
+			for (t = 0; t < N_FOOTBRIDGE_TIMERS; t++) {
+				arm(r6, t, 1, TIMER_ENABLE);		/*  50 MHz  */
+				if (((t >> 1) ^ s) & 1)
+					drive(r6, t, 8192, &peak, &trough);
+			}
+			for (t = 0; t < N_FOOTBRIDGE_TIMERS; t++) {
+				owe = (((t >> 1) ^ s) & 1) ? 8192 : 0;
+				want = (int) (50000000.0 / (double) footbridge_effective_cycles(
+				    rl[t], TIMER_ENABLE | TIMER_FCLK_256, 1));
+				owed[s][t] = r6->pending_timer_interrupts[t];
+				arm(r6, t, rl[t], TIMER_ENABLE | TIMER_FCLK_256);
+				drive(r6, t, 8192, &pk[s][t], &trough);
+				end[s][t] = r6->pending_timer_interrupts[t];
+				if (owed[s][t] != owe || pk[s][t] != want ||
+				    end[s][t] < 1 || end[s][t] > want)
+					bad++;
+			}
+			free(r6);
+		}
+		for (s = 0; s < 2; s++)
+			for (t = 0; t < N_FOOTBRIDGE_TIMERS; t++)
+				o += (size_t) snprintf(line + o, sizeof(line) - o, "%s%d/%d/%d",
+				    (s || t) ? " " : "", owed[s][t], pk[s][t], end[s][t]);
+		row("R6 a re-armed timer's bound follows its NEW rate", bad == 0,
+		    "owed/peak/end, 4 timers x 2 structs: %s", line);
+	}
+
+	/*
+	 *  R6b -- EVERY TIMER CARRIES ITS OWN BOUND, AT A RATE NO OTHER TIMER SHARES.
+	 *
+	 *  *** #548: THIS ROW CHECKED TIMER 1 AT 762 Hz -- THE RATE TIMER 0 HAD ALSO
+	 *  ENDED AT -- SO A TIMER READING ANOTHER TIMER'S BOUND READ THE SAME NUMBER AND
+	 *  PASSED. ***  Measured: the compare reading `pending_bound[0]` for every timer
+	 *  passed every row in the battery.  At four DISTINCT rates a timer that stores
+	 *  into, or compares against, another timer's slot -- or an unset one -- reads a
+	 *  different peak.  All four are armed FIRST, so a store that overwrites another
+	 *  timer's slot shows too.  Index maps of `nr` alone are what this closes; an
+	 *  index computed from another field is outside it (fbbounddebt, above).
+	 */
+	{
+		static const uint32_t ld[N_FOOTBRIDGE_TIMERS] = { 256, 128, 64, 32 };
+		int pk[N_FOOTBRIDGE_TIMERS], want[N_FOOTBRIDGE_TIMERS], trough, t, bad = 0;
+		struct footbridge_data *r6b =
+		    (struct footbridge_data *) calloc(1, sizeof(*r6b));
 
 		fake_machine.emulated_hz = 50000000;
-		arm(r6, 0, 1, TIMER_ENABLE);			/*  50 MHz  */
-		arm(r6, 1, 256, TIMER_ENABLE | TIMER_FCLK_256);	/*  762 Hz  */
-
-		/*  RE-ARM timer 0 much slower.  A frozen bound keeps 50e6 here.  */
-		arm(r6, 0, 256, TIMER_ENABLE | TIMER_FCLK_256);
-		drive(r6, 0, 4096, &peak, &trough);
-		row("R6 a re-armed timer's bound follows its NEW rate",
-		    peak == 762, "timer 0 re-armed 50 MHz -> 762 Hz: peak %d want 762",
-		    peak);
-
-		/*  And timer 1 must carry ITS own bound, not timer 0's.  */
-		drive(r6, 1, 4096, &peak, &trough);
-		row("R6b each timer carries its OWN bound",
-		    peak == 762, "timer 1: peak %d want 762", peak);
-		free(r6);
+		for (t = 0; t < N_FOOTBRIDGE_TIMERS; t++)
+			arm(r6b, t, ld[t], TIMER_ENABLE | TIMER_FCLK_256);
+		for (t = 0; t < N_FOOTBRIDGE_TIMERS; t++) {
+			want[t] = (int) (50000000.0 / (double) footbridge_effective_cycles(ld[t],
+			    TIMER_ENABLE | TIMER_FCLK_256, 1));
+			drive(r6b, t, 8192, &pk[t], &trough);
+			if (pk[t] != want[t])
+				bad++;
+		}
+		row("R6b each timer carries its OWN bound", bad == 0,
+		    "distinct rates: peaks %d %d %d %d want %d %d %d %d", pk[0], pk[1],
+		    pk[2], pk[3], want[0], want[1], want[2], want[3]);
+		free(r6b);
 	}
 
 	/*

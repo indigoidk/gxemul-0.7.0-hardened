@@ -287,11 +287,11 @@ static void reload_timer_value(struct cpu *cpu, struct footbridge_data *d,
 	 *  at that value can never throttle a legitimately fast timer.
 	 *
 	 *  IT IS ALSO NOT OPTIONAL, which a purely rate-relative bound hides.
-	 *  MEASURED: with `-I 2147483647` and load 1 the requested rate is
-	 *  2147483647.0, so (int)freq is INT_MAX and a bound of "the timer's own
-	 *  rate" never fires -- the overflow returns, reachable through a
-	 *  documented command-line flag.  Deleting these two lines is the
-	 *  smallest edit that still passes the rung-3 probe.
+	 *  With `-I 2147483647`, load 1 and no prescaler the requested rate is
+	 *  2147483647.0, so (int)freq is INT_MAX: a debt of 2^31-1 ticks, 31.5 s
+	 *  at the most the core delivers -- NOT an overflow, as this said until
+	 *  #548: the compare precedes the ++ (R2 measured green at INT_MAX).
+	 *  Deleting these two lines passes the rung-3 probe; R1/R5 catch it.
 	 *
 	 *  Floor 1.  *** ITS ORIGINAL JUSTIFICATION WAS MEASURED FALSE and is
 	 *  corrected here rather than quietly dropped: *** the comment claimed a

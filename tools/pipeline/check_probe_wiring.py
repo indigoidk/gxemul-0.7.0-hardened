@@ -2369,7 +2369,10 @@ MANIFEST = {
     "sh_iprbcd_probe.py":          (CLASS_DETECTOR, "#458 SH IPRB/IPRC/IPRA-RTC priority table"),
     "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
 
-    # -- detectors that NOTHING RUNS.  Each carries a dated exemption below. --------------
+    # -- detectors that NOTHING RAN when this group was written.  *** #548: NONE OF THE FOUR
+    #    IS UNRUN NOW -- pit8253 and sh4_bsc_width (2026-08-30), hpcmips (#536) and
+    #    fbpending_drain (#548) are gated, and none carries an exemption.  The grouping is
+    #    history; EXEMPT below and the checker's own derivation are the live record. *** ---
     #  pit8253's docstring line 1 calls it a "witness"; its rows assert the FIXED behaviour
     #  ("R1/R2 fail on the PRE-FIX build"), so by the green-once-fixed line it is a DETECTOR.
     #  This is the measured case that rules out classifying by self-label.
@@ -2499,6 +2502,9 @@ MANIFEST = {
 #  BY OWNER RULING, so those eleven again fall due as ONE block: the cliff `exemptcliff` names
 #  is re-created a week out, deliberately and dated, not by copying.
 #
+#  *** #548, 2026-09-24: THE OTHER HALF IS GONE TOO. ***  fbpending_drain_probe.py is wired
+#  into gate_arm.sh and its entry deleted, so TEN of those eleven remain, still one block.
+#
 #  These are wiring jobs, not design ones.  NOT every probe here prints a verdict token or exits
 #  nonzero on failure: mk48_nvram_probe.py printed MK48_RESULT=n/m and a DONE sentinel and exited 0
 #  with rows red, so the gate_arm.sh section #536 wired for it scores ROWS, not a token (agy, #536
@@ -2522,9 +2528,9 @@ EXEMPT = {
     #  (#536) -- both wired into gate_arm.sh, mk48 on the mvme187 machine that file already
     #  drives for the PCC2 probes, hpcmips as a construction check with no rig image.  Deleted
     #  in the SAME edit as the wiring, for the same reason.
-    "fbpending_drain_probe.py": ("2026-09-27",
-                                 "REPORT-ONLY by default: EXPECT_CAP must be set before a "
-                                 "gate row can mean anything, so wiring is a design step first"),
+    #  fbpending_drain_probe.py's exemption is DISCHARGED, 2026-09-24 (#548) -- wired into
+    #  gate_arm.sh beside footbridge_sites_probe.py, all four timers, --expect-cap 762.
+    #  Deleted in the SAME edit as the wiring, for the same reason.
     #  Both #494 probes are TWO-LEG DIFFERENTIALS: they take a PRE-FIX binary and
     #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
     #  a change to the instrument -- a single-leg mode asserting only the fix-side

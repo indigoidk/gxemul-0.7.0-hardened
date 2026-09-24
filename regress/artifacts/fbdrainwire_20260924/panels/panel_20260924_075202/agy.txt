@@ -1,0 +1,102 @@
+VERDICT: SHIP
+
+### Finding 1: Verification of the Enumeration (Question 1)
+* **Re-arm Space Closure in R6:**
+  The callback [`footbridge_pending`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L124-L130) partitions the state into `count < bound` and `count >= bound`. The timer index `nr` in `{0, 1, 2, 3}` ([`dev_footbridge.c:58`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L58)) indexes both `d->pending_timer_interrupts[nr]` and `d->pending_bound[nr]`, making `nr` a floor axis under the join rule.
+  In [`diff_fbpending_bound.c:368-420`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L368-L420), R6 builds all 8 cells of `{timer 0..3} x {re-arm at count 0 (below), re-arm owing 8192 (at/above)}` across two distinct struct instances `s = 0` and `s = 1`:
+  - `s = 0`: timers 0 and 1 are re-armed at count 0; timers 2 and 3 are pre-charged with 8192 direct ticks and re-armed owing 8192.
+  - `s = 1`: timers 0 and 1 are pre-charged with 8192 direct ticks and re-armed owing 8192; timers 2 and 3 are re-armed at count 0.
+  Every timer `t` is re-armed to its own distinct rate via `rl[t] = {256, 128, 64, 32}`:
+  - Timer 0: load 256 $\rightarrow$ 762.94 Hz (bound 762)
+  - Timer 1: load 128 $\rightarrow$ 1525.88 Hz (bound 1525)
+  - Timer 2: load 64 $\rightarrow$ 3051.76 Hz (bound 3051)
+  - Timer 3: load 32 $\rightarrow$ 6103.52 Hz (bound 6103)
+  All 8 printed tuples `owed/peak/end` (`0/762/572 0/1525/567 8192/3051/2090 8192/6103/2089 8192/762/572 8192/1525/567 0/3051/2090 0/6103/2089`) are pinned verbatim as a whole line in [`gate_offline.sh:1354-1355`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1354-L1355).
+  The formula `((8192 - 1) mod B) + 1` mathematically holds for both cells: for count 0, 8192 ticks produce `((8192-1) mod B)+1`; for count 8192, tick 1 resets the count to 1 because `8192 >= B`, and the remaining 8191 ticks from count 1 leave the end count at `1 + (8191 mod B) = ((8192-1) mod B)+1`.
+  No cell in `{0..3} x {below, at/above}` is unrowed.
+
+* **Per-Timer Equality in R5:**
+  In [`diff_fbpending_bound.c:177-232`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L177-L232), R5 tests all 7 guest-reachable `(hz, load, ctrl)` cases across all 4 timers. Revision 4 evaluates `worst_peak == want && best_peak == want` ([`diff_fbpending_bound.c:229`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L229)). Because `best_peak <= peak[nr] <= worst_peak` for all `nr`, requiring both extrema to equal `want` guarantees every individual timer matches `want`. This kills per-timer masking mutants such as `M_mask16` (`d->pending_bound[timer_nr] = (int) bound & ~(timer_nr << 16)`), which lowers timers 2 and 3 at 50 MHz (bit 17 cleared from `0x02FAF080`) while leaving timer 0 at 50,000,000 ([`t4.out:21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L21): `PASS=0 R5=1`).
+  No per-timer value cell of R5 is unrowed.
+
+* **Honesty of the "Not Rowed" List:**
+  The brief's "not rowed, filed" list ([`brief_sent.md:41-46`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260924_075202/brief_sent.md#L41-L46), [`brief_sent.md:55-57`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260924_075202/brief_sent.md#L55-L57), and [`diff_fbpending_bound.c:302-308`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L302-L308)) accurately accounts for items relative to the project floor:
+  - `fbbounddebt`:
+    - `M_neqB` ([`M_neqB.c:333`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/p3/mutants/M_neqB.c#L333)) adds `if (d->pending_timer_interrupts[timer_nr] != (int) bound)`: skips store when count equals `bound`. In R6, count is either 0 or 8192 at re-arm, never matching `bound` in `{762, 1525, 3051, 6103}`.
+    - `M_zge` ([`M_zge.c:333`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/p3/mutants/M_zge.c#L333)) adds `if (d->pending_timer_interrupts[timer_nr] == 0 || d->pending_timer_interrupts[timer_nr] >= (int) bound)`: skips store when `0 < count < bound`. In R6, count is 0 (`pending == 0`) or 8192 (`pending >= bound`).
+    - `M_upskip` ([`M_upskip.c:333`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/f2/mutants/M_upskip.c#L333)) skips store on upward re-arm (`bound >= old_bound`). In R6, initial rate is 50 MHz and all re-arms are downward (50 MHz $\rightarrow$ 762..6103 Hz).
+    Under project rules (`tools/CLAUDE.md:1440-1460`), DEPENDS-ON generates test requirements for guards present in the fix; mutant-added guards on previously unconditional stores are single-operand marginals and coverage debt, not floor breaches. Filing them under `fbbounddebt` is honest and compliant.
+  - `fbboundmodes`: control values never driven by instruments (`TIMER_MODE_PERIODIC`, `TIMER_FCLK_16`, `TIMER_EXTERNAL`).
+  - `fbdrainxdisable`: Arm X's disable and re-enable instructions free-running unchecked during accrual.
+  - `fbharnessedits`: harness modifications reviewed by inspection and pinned by exact output match.
+
+---
+
+### Finding 2: The Floor Question on the Shipped Composite (Question 2)
+Inside the `{timer 0..3} x {count < bound, count >= bound}` space, **NONE**: there is no clean-sweep mutant of the fix's own predicate or store that passes every row.
+Verification of all checked mutant classes:
+1. **Fix Predicate Operator Mutants** ([`dev_footbridge.c:126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L126)):
+   - `==` instead of `>=` on any timer:
+     - Global `M_eq`: caught by R6 ([`t4.out:5`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L5): `R6=FAIL pinR6=0`).
+     - Per-timer `M_eq_n2` (`==` on all timers except timer 2): caught by R6 ([`t4.out:18`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L18): `R6=FAIL pinR6=0`). Struct 1 tests timers 0 and 1 with initial debt 8192, where `8192 == bound` fails to fire, allowing backlog to balloon to 16384.
+   - `>` instead of `>=`:
+     - Fails reset until count reaches `bound + 1`. Caught by R5 on all 7 cases (`worst_peak == want + 1 != want`) and R6.
+   - `<=`, `<`, `!=`:
+     - Resets immediately on count 1, pinning counter at 1. Caught by R0, R1, R5.
+2. **Fix Reset Value Mutants** ([`dev_footbridge.c:127`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L127)):
+   - Reset to 0: caught by R3 across all 7 cases (`worst_trough >= 1` fails with trough 0).
+   - Reset to 2 (`M_rst2`): caught by R5 case 7 (`cats, slowest legal`, bound 1; peak reaches 2 != want 1; [`t4.out:12`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L12): `R5=1`), and R6 pin fails (`pinR6=0`, end counts shift to 582/572/2093/2091).
+3. **Fix Predicate Index Mutants** ([`dev_footbridge.c:126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L126)):
+   - `M_idx0` (`pending_timer_interrupts[0]`): caught by R5, R6, R6b ([`t4.out:9`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L9): `PASS=0 R5=6 R6=FAIL R6b=FAIL pinR6=0 pinR6b=0`).
+   - `M_cmp0` (`pending_bound[0]`): caught by R6 and R6b ([`t4.out:10`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L10): `PASS=0 R6=FAIL R6b=FAIL pinR6=0 pinR6b=0`).
+   - `M_pct3` (`pending_bound[nr % 3]`): caught by R5, R6, R6b ([`t4.out:11`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L11): `PASS=0 R5=6 R6=FAIL R6b=FAIL pinR6=0 pinR6b=0`).
+4. **Fix Store Mutants** ([`dev_footbridge.c:333`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L333)):
+   - Omitted store (`M_nobound`): caught by R5, R6, R6b ([`t4.out:16`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L16): `PASS=0 R5=7 R6=FAIL R6b=FAIL pinR6=0 pinR6b=0`).
+   - Omitted ceiling: caught by R1 and R5 on `-I 1e9` and `-I INT_MAX` ([`diff_fbb_M_noceil.out:16-20`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/runs_p1/diff_fbb_M_noceil.out#L16-L20)).
+   - Store frozen after initial arm (`M_frozen`): caught by R6 ([`t4.out:8`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L8): `PASS=0 R6=FAIL pinR6=0`).
+   - Store skipped on idle timer (`M_idle`): caught by R6 ([`t4.out:6`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L6): `PASS=0 R6=FAIL pinR6=0`).
+   - Store skipped on non-zero timer at count 0 (`M_pend_n0`): caught by R6 ([`t4.out:19`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L19): `PASS=0 R6=FAIL pinR6=0`).
+   - Store masked per-timer (`M_mask16`): caught by R5 ([`t4.out:21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4.out#L21): `PASS=0 R5=1`).
+
+---
+
+### Finding 3: Verification of Records and Added Sentences (Question 3)
+Every sentence added by the 20 diff hunks was scrutinized and verified against the tree:
+1. **[`gate_arm.sh:1163-1205`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1163-L1205):**
+   - Wiring before exemption lapsed: verified ([`check_probe_wiring.py:2687`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2687) was 2026-09-27).
+   - 4 s free-run without acking at 762.94 Hz: verified against [`LOAD_RUN = 0x100`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L127) and [`CTRL_ON = 0x88`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L129) (`50e6 / (256 * 256) = 762.939 Hz`).
+   - Backlog cap 762: verified against [`footbridge_pending`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L126).
+   - Arm X behavior: verified against [`M_en.c:126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/mutants_p1/M_en.c#L126) and [`M_en0.c:126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/mutants_p1/M_en0.c#L126).
+   - Clause (e) contract formula `((N-1) mod B)+1`: verified mathematically.
+   - Pinned control line `load=0x100 ctrl=0x88`: verified against [`gate_arm.sh:1226`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1226) and [`fbpending_drain_probe.py:825`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L825).
+   - 12 distinct control IDs `R0 C1 C2 A1 A2 E H1 H2 T L1 L2 P`: verified against [`fbpending_drain_probe.py:734-784`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L734-L784) and [`gate_arm.sh:1236-1237`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1236-L1237).
+   - Separate D and X range check `[1, 762]`: regex in [`gate_arm.sh:1246`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1246) matches `1..762` strictly.
+   - Uncapped prediction `3052`: `"%.0f" % (50000000.0 / 65536.0 * 4.0)` evaluates to `3052` in Python 3, matching [`fbpending_drain_probe.py:662`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L662) and [`gate_arm.sh:1231`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1231).
+2. **[`check_probe_wiring.py:2528-2689`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2528-L2689):**
+   - None of the four (`pit8253`, `sh4_bsc_width`, `hpcmips`, `fbpending_drain`) is unrun or exempt: verified.
+   - Ten of eleven remain in `EXEMPT`: verified via `len(EXEMPT) == 10`.
+3. **[`fbpending_drain_probe.py:48-89`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L48-L89):**
+   - Arm X is not a placement discriminator (bound in `DEVICE_TICK` reads `X=1` and passes because freeze `LOAD` write resets bound to 1): verified.
+   - Step checking: exactly 21 prologue words (0x00-0x50) stepped; accrual loop (0x54-0x6c) and Arm X disable/re-enable words (0x54/0x58, 0x70/0x74) free-run unchecked; branch words carry `None` for expected text: verified against [`fbpending_drain_probe.py:219-275`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L219-L275) and `E_SEGMENTS` ([`fbpending_drain_probe.py:582-589`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L582-L589)).
+4. **[`dev_footbridge.c:290-295`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L290-L295):**
+   - At `-I 2147483647`, `(int)freq` is `INT_MAX`: 2^31 - 1 ticks take `2147483647 / 68157440 = 31.507 s`. Compare precedes `++`, so counter resets to 1 at `INT_MAX` without overflowing. R2 stays green at peak 2147483647, trough 1 ([`diff_fbb_M_noceil.out:28`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/opus548_measured/runs_p1/diff_fbb_M_noceil.out#L28)).
+5. **[`gate_offline.sh:1310-1355`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1310-L1355):**
+   - References to gate 14 running all four timers and exact output pins for R6 and R6b verified character-by-character against [`run_base.log:29-30`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/run_base.log#L29-L30).
+   - Note on table output in section 3 of `brief_sent.md`: lines 65, 74, etc. display `0/6103/208` instead of `0/6103/2089` because [`t4_548.sh:59`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbdrainwire_20260924/t4_rev4/t4_548.sh#L59) applied `cut -c1-100` to a 101-character string. The actual harness output and the gate pin in [`gate_offline.sh:1355`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1355) contain the complete `0/6103/2089`.
+No false statement remains in the diff.
+
+---
+
+### Finding 4: Chain Closure (Question 4)
+Under the project closure rule (`tools/CLAUDE.md:759-760, 2534`), the repair chain closes on the first valid pass that finds ZERO floor breaches in the shipped composite.
+Revision 4 provides:
+1. Complete 8-cell closure of `{timer 0..3} x {re-armed at count 0, re-armed owing 8192}` in R6.
+2. Complete 4-timer equality verification across all 7 cases in R5 (`worst_peak == want && best_peak == want`).
+3. Verbatim whole-line pinning of R6 and R6b output in Gate 2 ([`gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh)).
+4. Complete 4-timer gating of [`fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py) in Gate 14 ([`gate_arm.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh)), with per-timer load/control/timer pinning, separate backlog interval checks `[1, 762]` for arms D and X, and 12 distinct control IDs.
+5. Discharge and removal of `fbpending_drain_probe.py` from `EXEMPT` in [`check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py).
+6. Zero floor breaches in the shipped composite.
+
+The chain may close on this pass.
+
+GO

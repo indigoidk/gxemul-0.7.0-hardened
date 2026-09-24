@@ -1,0 +1,32 @@
+VERDICT: SHIP WITH CHANGES
+
+I cannot measure; I am auditing from the inlined packet. Two real defects, one process gate, no further record defects found.
+
+1. **Enumeration is verified (REASONED).** R6's diff builds 4 timers × 2 structs × {re-arm-below, re-arm-at/above} = 8 cells, the table column matches (owed pattern `0,0,8192,8192` swapped in struct 1), and each timer re-arms to a distinct rate (762/1525/3051/6103). R6b arms all four timers first at distinct rates then drives — that closes the "store into / read from another timer's slot" class on the index axis `nr` alone. R5's new `best_peak` check, combined with the existing `worst_peak`, closes "lower some timers, hide behind others" (the F6/D4 class — M_eq_n2 R5=0, M_x2 R5=4, M_lowonly R5=6). "Not rowed, filed" is honest: store guards are MUTANT ADDS to the fix's unconditional `pending_timer_interrupts[nr] = 0` (the fix isn't `if pending != bound: pending = 0`; M_neqB / M_zge / M_upskip are different programs that happen to behave identically at the cells the test reaches). Index-from-`timer_load[nr]` / `timer_control[nr]` and un-driven control values (PERIODIC / FCLK_16 / EXTERNAL) are correctly outside this fix's enumeration.
+
+2. **Clean-sweep mutants of the fix's own predicate or store that pass every row (READ).** Three: **M_neqB**, **M_zge**, **M_upskip** — all PASS=1, all explicitly FILED under `fbbounddebt`. The contract text now says so ("STORE conditioned by a mutant ADDS … these cells are not built for proportion"). I have nothing to add on whether this satisfies the project rule; the brief owns that answer.
+
+3. **Records: no false sentence found in the inlined diff (REASONED).** I walked the five comment-bearing hunks:
+   - `dev_footbridge.c`: "compare precedes the ++" — consistent with R2 green at INT_MAX (M_nobound peaks 16384, not 2³¹−1, and the table doesn't show overflow).
+   - `diff_fbpending_bound.c` header: "NOT an overflow" corrected, "rung-3 guest probe sees it only when the delivered count is a multiple of 763" — consistent with `>` only firing above the cap.
+   - `gate_offline.sh`: "fails R1 (and, since R5 exists, R5) on the two high-hz cases — and NOT R2" — consistent with M_nobound failing R5 7/7 and the pre-#548 claim of R2 having peak 2147483647 being contradicted by R2 staying green (compare first).
+   - `fbpending_drain_probe.py`: "ARM X is not [the placement discriminator]" — X=1 under DEVICE_TICK placement is correctly attributed to gate 2's R1/R2/R5/R6, not to X. The accrual-loop / disable-words free-run admission ("Filed as fbdrainxdisable") is honest about what isn't checked per run.
+   - `gate_arm.sh` probe header: `load=0x100 ctrl=0x88` pinned whole, after the 0x88→0x80 grok finding. The pin string `"FBDRAIN_TIMER=$t base=0x$(printf '%03x' $((0x300 + 0x20 * t))) load=0x100 ctrl=0x88"` matches the probe's `print("FBDRAIN_TIMER=%d base=0x%03x load=0x%x ctrl=0x%x" % (TIMER_NR, TBASE, LOAD_RUN, CTRL_ON))` exactly (0x300 + 0x20·t → 0x300/0x320/0x340/0x360; `%x` of 0x100 = 100, of 0x88 = 88).
+   - `check_probe_wiring.py`: "NONE OF THE FOUR IS UNRUN NOW" is consistent with the four dated entries; the `fbpending_drain_probe.py` exemption is DISCHARGED in the same edit, per its own rule.
+
+4. **Floor breach in the SHIPPED COMPOSITE? (REASONED)** Within the inlined gate-2 battery: **none beyond the three FILED**. Every other M_* row has at least one red cell (PASS=0), and R5/R6/R6b all fail appropriately per the contract:
+   - M_eq (predicate == for >=): R6 catches via the owed-8192 cells (peak 16384, want B).
+   - M_eq_n2 (predicate == for >= on timer 2 alone): R6 catches via the other three timers' owed-8192 cells.
+   - M_idle / M_pendguard / M_frozen / M_idx0 / M_cmp0 / M_pct3 / M_rst2 / M_lowonly / M_nobound / M_x2 / M_pend_n0 / M_mask16: each fails R5, R6, or R6b in a measurable, non-overlapping way that matches the diff's per-mutant contract.
+   - H_retarget_base / H_retarget_M_eq / H_pre0_base / H_pre0_M_eq / H_and_M_eq: caught by R6 (or R6+R6b where the harness changes the owed vector).
+   - H_and_base: PASS=1, identical to base — this is a baseline, not a mutant.
+
+   **Defect A (process gate, READ):** Gate 14 (fbpending_drain_probe.py on revision 4) has not yet run. The brief explicitly states it "owes one clean run before commit, ~67 min." The chain rule requires "ZERO floor breaches in the shipped composite" with a record of "what was checked" — gate 14 is part of the composite (gate_arm.sh hunks add the loop, fbpending_drain_probe.py adds the FBDRAIN_TIMER print, check_probe_wiring.py discharges the exemption) and is **not yet checked**. In particular:
+   - `#548's M_en IS the evidence the disable ran` (probe-level: bound gated on ENABLE, X=3051, D=3). M_en is **not in the inlined gate-2 battery**. The only thing catching M_en in the shipped composite is gate 14's `D and X backlog, each in [1, 762]` pin (X=3051 fails the regex `[1-9]|[1-9][0-9]|…|76[0-2]`), and that pin has not been exercised on revision 4.
+   - `fbdrainxdisable` (the X-arm disable-words free-run) is FILED — the diff says so explicitly ("No row re-checks it per run"). It is not a gate-14 breach; it is an admitted gap.
+   - `fbharnessedits` (probe/harness edits that keep pins green, including the R6 three-token edit) is FILED.
+   - `asanstaleobjs`, `fbdrainonepass`, `fbboundmodes`, `fbbounddebt`: all FILED.
+
+   **Defect B (REASONED, conditional):** Whether the three gate-2 clean sweeps (M_neqB / M_zge / M_upskip) constitute floor breaches depends on the project rule. The brief owns the answer ("these cells are not built for proportion, not because a rule excuses them"); I cannot settle this from the packet. If the rule treats "mutant ADDS to an unconditional store" as out of scope, then the composite is clean and the chain closes pending gate 14. If the rule treats "any predicate or store mutant that passes every row" as in-scope, the chain cannot close without (a) the [1, B-1] re-arm cell (which the brief says would catch M_zge's end=573 vs base's end=572) and (b) a count=B cell (which would catch M_neqB's peak=B+1).
+
+**Recommendation.** SHIP WITH CHANGES = (i) run gate 14 on revision 4 and confirm every timer passes with the new pins (the only outstanding check on the shipped composite); (ii) the three FILED mutants remain admitted by the author and the chain closes conditional on (i). If the panel insists that "mutant ADDS" are in-scope, escalate to require the third-cell enumeration before SHIP.

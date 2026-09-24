@@ -1,0 +1,154 @@
+root agent idle; waiting up to 30m0s for 1 background task(s)
+I have launched the selftest for `check_probe_wiring.py` to verify harness behavior. I will proceed with the adversarial review as soon as the run completes.
+Waiting for task completion.
+VERDICT: PROCEED WITH CHANGES
+
+---
+
+### Finding 1: Premise Verification & Verification of Claims
+
+Every claim and inlined code snippet in [`brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260924_030347/brief_sent.md) was checked against the source tree under `GXEMUL-SEC/`:
+
+1. **Has this shipped? (Section 0)**:
+   - Verified. At `HEAD`, `git grep -n "fbpending_drain" regress/gate_*.sh` yields hits only in comments ([`regress/gate_hygiene.sh:558`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L558), [`regress/gate_hygiene.sh:626`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L626), [`regress/gate_offline.sh:1311`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1311)). No gate executes [`regress/fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py).
+
+2. **The Exemption (Section 1)**:
+   - Verified. [`tools/pipeline/check_probe_wiring.py:2681-2683`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2681-L2683) matches verbatim:
+     ```python
+     "fbpending_drain_probe.py": ("2026-09-27",
+                                  "REPORT-ONLY by default: EXPECT_CAP must be set before a "
+                                  "gate row can mean anything, so wiring is a design step first"),
+     ```
+   - From `2026-09-28`, [`tools/pipeline/check_probe_wiring.py:3582-3584`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3582-L3584) will trigger `EXPIRED EXEMPTION`, causing Section R in [`tools/precommit_check.sh:545-548`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L545-L548) to fail. Wiring the probe without deleting the entry triggers `STALE EXEMPTION` ([`tools/pipeline/check_probe_wiring.py:3570-3573`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3570-L3573)).
+
+3. **The Bound Under Test (Section 1)**:
+   - Verified. [`src/devices/dev_footbridge.c:124-139`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L124-L139) and [`src/devices/dev_footbridge.c:327-334`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L327-L334) match verbatim:
+     ```c
+     static void footbridge_pending(struct footbridge_data *d, int nr)
+     {
+     	if (d->pending_timer_interrupts[nr] >= d->pending_bound[nr])
+     		d->pending_timer_interrupts[nr] = 1;
+     	else
+     		d->pending_timer_interrupts[nr] ++;
+     }
+     ```
+     and
+     ```c
+     	{
+     		double bound = freq;
+     		if (!(bound <= (double)TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY))
+     			bound = (double)TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY;
+     		if (!(bound >= 1.0))
+     			bound = 1.0;
+     		d->pending_bound[timer_nr] = (int) bound;
+     	}
+     ```
+
+4. **The Probe Header and Verdict Block (Section 1)**:
+   - Verified. Lines 1–78 and lines 803–817 of [`regress/fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L1-L78) match the inlined text in the brief verbatim.
+
+5. **Existing Gate 14 Footbridge Wiring (Section 1)**:
+   - Verified against `HEAD` at [`regress/gate_arm.sh:1051-1074`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1051-L1074).
+
+---
+
+### Finding 2: Adversarial Audit of Questions 1–5
+
+#### Question 1: Premise & Arithmetic Audit
+* **Arithmetic and Truncation**:
+  [`src/machines/machine_cats.c:56-57`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L56-L57) sets `emulated_hz = 50000000`. With `TIMER_FCLK_256` and load 256, [`src/devices/dev_footbridge.c:234-268`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L234-L268) yields `cycles = 256 * 256 = 65536`.
+  `freq = 50000000.0 / 65536.0 = 762.939453125`.
+  `bound = (int) 762.939453125 = 762`.
+  Because [`footbridge_pending`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L124-L130) resets to `1` when `pending_timer_interrupts[nr] >= pending_bound[nr]`, the counter cycles through `1 .. 762`. Its peak value is structurally `762`. Setting `--expect-cap 762` is indeed the tightest integer bound that will not false-fail on a correct binary.
+* **Can any timer be armed at a DIFFERENT rate by the probe?**:
+  **Yes**.
+  1. [`regress/fbpending_drain_probe.py:112-115`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L112-L115) defines `--fast` (`LOAD_RUN = 1`, `CTRL_ON = 0x80`, unprescaled 50 MHz). Under `--fast`, `pending_bound` is calculated as 50,000,000, not 762. (The proposed gate run does not pass `--fast`, but the capability exists in the probe).
+  2. In Step 3 (freezing the timer), [`regress/fbpending_drain_probe.py:245-246`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L245-L246) writes `TIMER_1_LOAD = 0x00FFFFFF`. In [`src/devices/dev_footbridge.c:663-664`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L663-L664), writing `TIMER_1_LOAD` invokes [`reload_timer_value`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L271-L349), which updates `freq` to `0.0116 Hz` and sets `pending_bound[timer_nr] = 1` (via the `bound >= 1.0` floor). Crucially, `d->pending_timer_interrupts[timer_nr]` is **not** cleared by a load write. And because the timer rate drops to 1 tick per ~86 seconds, no ticks fire during the subsequent ~0.5 s drain phase, freezing the accrued backlog in place.
+* **Does 4 s accrual always exceed 762 ticks on a loaded host?**:
+  At 762.94 Hz, 762 ticks requires `762 / 762.939... = 0.9987` seconds of emulated time. At 4.0 seconds, the uncapped expected backlog is ~3,051 ticks (~4x safety margin).
+  GXemul’s timer engine ([`src/core/timer.c:281-291`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/timer.c#L281-L291)) synchronizes against real wall time via `gettimeofday` and catches up in bursts of up to `TIMER_MAX_CATCHUP = 1048576` ([`src/include/timer.h:55-59`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/timer.h#L55-L59)) ticks per `SIGALRM`.
+  On the **fixed** build, `bD <= 762` holds regardless of whether the count reached 762 or remained lower (the bound is structurally `<= 762`).
+  On an **unbounded mutant**, if host starvation caused the process to receive less than ~1.0 second of wall-clock time during Python’s 4.0 s sleep, the mutant backlog could remain `< 762`, causing a false pass. The 4.0 s window provides adequate headroom under typical test environments.
+
+---
+
+#### Question 2: One Timer or Four?
+* **Can an edit pass a timer-0-only row yet leave another timer unbounded?**:
+  **Yes**.
+  1. A callback-level edit in [`src/devices/dev_footbridge.c:134-139`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L134-L139) (e.g. `timer_tick1` inadvertently bypassing `footbridge_pending` or mutating `pending_timer_interrupts[1]++` directly).
+  2. In [`reload_timer_value`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L333), an edit setting `pending_bound[0]` rather than `pending_bound[timer_nr]`.
+  3. In [`dev_footbridge_access`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L518), a regression in the register fold `(relative_addr >> 5) & 3` affecting timers 2–4 (`0x320`, `0x340`, `0x360`).
+* **Is running all four worth 4x wall time in Gate 14?**:
+  **No**. Each run of [`regress/fbpending_drain_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py) takes ~12–14 seconds. Running all four would consume ~50 seconds in Gate 14.
+  More crucially: **callback isolation across all four timers is already verified in Gate 2 by [`regress/diff_fbpending_bound.c:190-297`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L190-L297)** (`R1 bounded across all 4 timers`, `R5 the bound IS this timer's rate`, `R6b each timer carries its OWN bound`).
+  The role of `fbpending_drain_probe.py` is the full Rung-3 cold-debugger reachability witness (driving real guest instructions through address decode, MMU, and `DEVICE_TICK`). A single timer (Timer 1 / index 0) satisfies Rung 3 without duplicating Gate 2’s unit-level callback coverage.
+
+---
+
+#### Question 3: Single Edits Re-opening #442 While Passing the Proposed Rows
+* **The Ceiling Clamp Removal (The Exact In-Tree Escape)**:
+  Deleting lines 329–330 of [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L329-L330):
+  ```c
+  if (!(bound <= (double)TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY))
+      bound = (double)TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY;
+  ```
+  [`src/devices/dev_footbridge.c:289-294`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L289-L294) explicitly warns about this:
+  > *"MEASURED: with `-I 2147483647` and load 1 the requested rate is 2147483647.0, so (int)freq is INT_MAX and a bound of "the timer's own rate" never fires -- the overflow returns, reachable through a documented command-line flag. Deleting these two lines is the smallest edit that still passes the rung-3 probe."*
+  Because the drain probe runs at 762.94 Hz (well below 68 MHz), deleting this ceiling clamp leaves `bound = 762` on the probe, passing `--expect-cap 762` completely, yet re-opens the integer wrap defect for any guest driven with `-I 2147483647`.
+
+---
+
+#### Question 4: Option Set & Missing Idioms in `gate_arm.sh`
+* **Gate 14 (`gate_arm.sh`) Placement**:
+  Correct. Gate 14 already sets up `$PMAX` and `$STUB` for `-E cats` ([`regress/gate_arm.sh:1072-1073`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1072-L1073)).
+* **Missing Idioms in the Brief's Proposal**:
+  The brief's proposal in Section 2 omits three essential structural conventions used throughout [`regress/gate_arm.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh):
+  1. **Completion Sentinel Guard**:
+     Probes in `gate_arm.sh` wrap their assertions in:
+     ```sh
+     if ! grep -q "^FBDRAIN_VERDICT=" "$FBDLOG"; then
+         note "footbridge drain probe produced no verdict; last lines follow"
+         tail -5 "$FBDLOG" | sed 's/^/       /'
+         check "footbridge drain probe completed" "no" "yes"
+     else
+         check "footbridge drain probe completed" "yes" "yes"
+         ...
+     ```
+     Without this, a crashed/hung probe causes zero-match `check` failures without diagnosing truncated execution.
+  2. **`FBDRAIN_CLOCK_DEAD` Parsing**:
+     [`regress/fbpending_drain_probe.py:809`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py#L809) always emits `FBDRAIN_CLOCK_DEAD=`. Checking it requires extracting the value:
+     ```sh
+     check "footbridge drain: clock not dead" "$(sed -n 's/^FBDRAIN_CLOCK_DEAD=//p' "$FBDLOG")" ""
+     ```
+  3. **Exit Status Capture**:
+     Using `drc=0; python3 fbpending_drain_probe.py ... > "$FBDLOG" 2>&1 || drc=$?` and checking `check "footbridge drain exit status" "$drc" "0"`.
+
+---
+
+#### Question 5: Records, Manifests, and Downstream Triggers
+1. **Exemption Discharge in [`tools/pipeline/check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py)**:
+   - Deleting `"fbpending_drain_probe.py"` from `EXEMPT = { ... }` ([`check_probe_wiring.py:2681-2683`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2681-L2683)) is required to avoid `STALE EXEMPTION`.
+   - In [`tools/precommit_check.sh:554-586`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L554-L586), touching `check_probe_wiring.py` triggers `python check_probe_wiring.py --selftest` and verifies the 22-mutant census.
+   - We verified that upon removing `fbpending_drain_probe.py`, [`_first_exempt()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3154-L3161) cleanly selects [`alpha_tbi_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3155) (the next alphabetical exempt detector with `src.count == 1`), and `check_probe_wiring.py --selftest` passes 22/22.
+2. **`SCORE_CLAIMS_MANIFEST` in [`tools/precommit_check.sh:344`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L344)**:
+   - If the wiring in `gate_arm.sh` includes a literal row pin matching `check "<stem> rows run" ... <N>`, [`tools/pipeline/check_score_claims.py:75`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py#L75) detects it, causing `precommit_check.sh` Section U to flag `SCORE-CLAIM COVERAGE GREW` unless `SCORE_CLAIMS_MANIFEST` is bumped from 31 to 32.
+   - Because `fbpending_drain_probe.py` does not output a `N/M` denominator, adopting the proposal’s 3 checks (`FBDRAIN_CONTROL`, `FBDRAIN_CLOCK_DEAD`, `FBDRAIN_VERDICT`) does not match the PIN regex and does **not** alter `SCORE_CLAIMS_MANIFEST`.
+3. **`GATE_MANIFEST` in [`regress/run.sh:20`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/run.sh#L20)**:
+   - Remains 16 (no gate scripts added or removed).
+4. **Working Copy Collision**:
+   - As noted in line 12 of `brief_sent.md`, the working copy of [`regress/gate_arm.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh) carries uncommitted changes for `#529 crimewidthkill`. Any edits for `#548` must anchor cleanly alongside the `#432` footbridge sites probe block (`HEAD` lines 1051–1160) without stomping `#529`’s tail additions.
+
+---
+
+### Summary of Required Changes to the Proposal
+
+1. **Adopt Standard Gate Idioms in `gate_arm.sh`**:
+   Include the probe execution with exit-code capture, a completion sentinel guard (`if ! grep -q "^FBDRAIN_VERDICT="`), and exact value parsing for `FBDRAIN_CLOCK_DEAD`.
+2. **Synchronized Exemption Deletion**:
+   Delete `fbpending_drain_probe.py` from `EXEMPT` in [`tools/pipeline/check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py) in the same commit.
+3. **Pre-commit Selftest Verification**:
+   Verify that `python tools/pipeline/check_probe_wiring.py --selftest` returns 22/22 after the deletion (as required by [`precommit_check.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh) Section R).
+
+---
+
+GO-WITH-CHANGES
