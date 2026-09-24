@@ -1,0 +1,65 @@
+VERDICT: SHIP — diff implements the settled premises; gate passes on the working tree (`real` output, all 11 rows ok). One arithmetic gap and one context-dependent comment are worth flagging; neither blocks ship.
+
+---
+
+**Q1 — premise audit:**
+
+**(a) Census rows are static source scans.** REASONED. The brief itself partitions the gate into source-scan rows (the census) and pty-log rows (which need gate 4's logs and skip by design). The three `real`/`move`/`add` outputs reproduce census behavior on copies of `regress/` without invoking gate 4. Cannot verify without the gate, but the framing is internally consistent.
+
+**(b) `op[-1:] == "P"` ≡ `op.endswith("P")` for any str.** REASONED TRUE. For non-empty `op`: `op[-1:]` is a 1-char slice equal to `op[-1]`, so `op[-1:] == "P"` iff `op[-1] == "P"`. For empty `op`: both return False. The re-spelling is defensive against the closed-world census, not a semantic change. I cannot enumerate the call-sites that produce `op` from the packet, but the str semantics are equivalent.
+
+**(c) Deriver refusals.** REASONED TRUE. Read the `--write` block in the deriver:
+- Three-way equality on `conv_anchor`/`conv_echo`/`conv_mark` — present.
+- NEWP emptiness — present.
+- A third refusal on `bare` growth (`[ "$bare" -le "$(pin EXPECT_BARE)" ] || …`) is ALSO present; the brief's premise (c) omits it.
+
+**(d) New name-set row fail-closed behavior.** REASONED with caveats:
+- `pty_driving` empty → `whole_files=""` → FAIL (empty ≠ expected). ✓
+- Path with spaces → `IFS= read -r` preserves; double-quoted grep and basename preserve; spaces survive to output. ✓
+- Site only in a comment → `grep -v '^[[:space]]*#'` filters → file excluded. ✓ (correct)
+- Locale-sensitive `sort` → the CURRENT pin (`arm_bdt_probe.py arm_flags_probe.py`) is locale-safe (`bdt` < `flags` in any locale). But the row is **unprotected against future filenames with digit-prefixes or hyphens** (e.g., `1file.py` vs `afile.py` would sort differently under en_US vs C). The brief does not note this.
+
+**(e) 73 = 70 + 3; every grandfathered is promptless.** REASONED consistent.
+- The pure-export-vs-working-tree distinction resolves "got at HEAD = 70" (pure export, no untracked) vs deriver's "73/73" (working tree). The enumerator must count untracked (it is not changed in the diff, and the deriver extracts it by name and runs it).
+- Every grandfathered is promptless is enforced **transitively** by the gate's promptless row (`42 == 42`): if any grandfathered file had endswith, `_promptless` would be < 42 and the row would FAIL. The deriver does NOT enforce this direction (it only catches ungrandfathered promptless, not grandfathered non-promptless), but the gate's equality check does. I cannot enumerate every probe file from the packet, but the gate's check guarantees it.
+
+**Q2 — smallest break-and-pass edit:**
+
+The brief's suspicion (single quotes evade count and name rows) is correct: `endswith('GXemul>')` would not match the double-quoted grep. **But it does NOT stay green** — single quotes are an unrecognized spelling, so the `EXPECT_UNKNOWN` row catches it (got=1, want=0 → FAIL). So a probe-only edit does not break-and-pass.
+
+The smallest break-and-pass is a **deriver edit**: remove the `bare` refusal, then add `endswith(">")` to a probe. The deriver writes the new pin (1); the gate's bare row reads got=1 want=1 → OK. The substantive change (a new bare endswith, frozen as defect) passes silently.
+
+Alternative: hand-edit the bare pin from 0 to 1 (violates the "never by hand" rule, and the deriver's refusal would normally prevent it).
+
+I see no probe-only edit that breaks-and-passes. Defense in depth (count + name + unknown + bare + promptless + deriver refusals) is robust for probe edits.
+
+**Q3 — option-set completeness:**
+
+**NOT CHECKABLE FROM PACKET.** The brief asks me to grep the fork's other gates for an existing idiom (per-file companion pin, exemption with an expiry). I cannot read files. What I CAN see in the diff: the design DOES add a per-file companion pin (`WHOLE_FULL_FILES`) alongside the count, AND files a conversion (`armbdtreadiness`). Both are named options. Whether the fork has another idiom (e.g., a time-bounded exemption) is not visible from this packet.
+
+**Q4 — stale or false comments:**
+
+1. **EXPECT_PTY_PROBES "fresh clone counts 70 and reds"** — TRUE today; becomes wrong the moment the 3 untracked files are committed. Acknowledged in the comment as a forward-looking warning.
+2. **GRANDFATHERED "20 promptless committed between 2026-09-05 and 2026-09-18"** — TRUE today; ages as those probes are converted.
+3. **EXPECT_CONVERTED luna rename / disagreement fix** — TRUE today; ages if luna's `send()` reverts or luna is removed.
+4. **EXPECT_WHOLE_FULL "EXCEPTION, not a precedent" + WHOLE_FULL_FILES** — TRUE today; **STALE the moment `armbdtreadiness` lands** (count returns to 2, `arm_bdt_probe.py` leaves `WHOLE_FULL_FILES`). The comment is a record of an exception that is meant to be temporary.
+5. **luna_absentcpu_probe.py `_mark` hint** — TRUE today.
+6. **crime_width_probe.py "it read got=1 want=0 on this line at the 2026-09-20 battery"** — initially looked like a contradiction with the "got at HEAD = 0" table. **RESOLVED** as a context difference: the table is for the pure export (no untracked, so unknown=0); the 2026-09-20 battery was on the working tree (with `crime_width_probe.py` untracked, contributing 1 to unknown). Both can be true. The comment is accurate.
+7. **dev_sgi_re.c "remove the kill"** — accurate English; cannot verify the "member 4 of the option set" claim without the surrounding code.
+
+**Q5 — one-word fix:**
+
+REASONED LIKELY CORRECT. Without seeing `check_delete_calls.sh`, I cannot verify its trigger pattern. If it flags C++ `delete` expressions specifically, the comment match was a false positive and "remove" is more accurate English ("remove the kill branch" reads better than "delete the kill"). If it flags the WORD "delete" anywhere as a code-review hint, this is a workaround that could miss future legitimate mentions. Keeping it as a SEPARATE commit (UNIT B, gate 8 fix) is appropriate.
+
+---
+
+**Other findings:**
+
+**Arithmetic gap in the 24 additions between b78bb0f and HEAD (pure export).** The brief accounts for 20 promptless + 1 luna (anchor+echo, no fresh) + 1 arm_bdt (whole-buffer) = 22 of the 24 committed additions. **2 additions are unaccounted.** They have non-endswith, non-categorized predicates (not in anchor/echo/fresh/whole_full/bare/unknown). They contribute to EXPECT_PTY_PROBES but to no other readiness row. This is a gap in census coverage, not a defect in this round — but worth a future ticket.
+
+**"Seven rows failed" enumeration incomplete.** The brief claims the 2026-09-20 battery failed 7 rows on the working tree. With unknown=1 (working tree at HEAD), I count 6: pty, promptless, whole_full, anchor, echo, unknown. The 7th cannot be identified without the gate — possibly a truth-table row or one not enumerated in the brief.
+
+**Seat record:**
+- Model: MiniMax-M3
+- Read: the brief in full — premises, settled rulings, deriver report, gate outputs under `real`/`move`/`add`, all inlined diffs (gate_hygiene.sh, luna_absentcpu_probe.py, dev_sgi_re.c, crime_width_probe.py), the full deriver script, and questions Q1–Q5.
+- Ran: nothing. Did not execute any commands. Did not read any files outside the packet.

@@ -1,0 +1,70 @@
+attrabbrev -- RESULT (2026-09-24).  Predictions: PREDICTIONS.txt (sealed before any run) and PREDICTIONS_addendum.txt
+(sealed after the pre-fix run, before the edit).  Driver: controls.sh, run from frozen copies (controls.run-pre.sh,
+controls.run-post.sh in the session scratchpad) with ATTR_A pointing here.  Outputs: pre_P*.out, post_Q*.out.
+
+PRE-FIX (committed check)                         measured                       predicted
+  P0  default abbrev (8), depth 60                 6 HARD, 24 soft                6 HARD, the six named   HELD
+  P1  abbrev 7, depth 60                           1 HARD (4264ee2 fbdeclinefive) 0 HARD                  MISSED
+  P2  default abbrev, depth 130                    11 HARD incl. b78bb0f6         >= 7 incl. b78bb0f6     HELD
+  P3  abbrev 7, depth 130                          REOPENED b78bb0f; 1 HARD       REOPENED; six not HARD  HELD (the 1 is P1's)
+
+  P1's miss is the mirror case (PREDICTIONS_addendum.txt): fbdeclinefive.commits was written at 8 characters when
+  #545 landed, and `"4264ee2" in ["4264ee20"]` is False.  So the exact test failed in both directions.
+
+POST-FIX (%H matched by prefix, %h printed)
+  Q0  default abbrev, depth 60                     0 HARD, 10 soft                0 HARD                  HELD
+  Q1  abbrev 7, depth 60                           = P1 minus the fbdeclinefive   (addendum)              HELD
+                                                   line; attributed 20 -> 21; PASS
+  Q2  default abbrev, depth 130                    REOPENED b78bb0f6; 0 HARD;     (addendum)              HELD
+                                                   SOFT set identical to P3's
+  Q3  fbsmlane.commits = 4264ee2                   HARD cdbe7d75 fbsmlane         HARD                    HELD
+  Q4  fbsmlane.commits = cdbe7d76 (non-prefix)     HARD cdbe7d75 fbsmlane         HARD                    HELD
+  Q5  fbsmlane.commits = the full 40-char hash     0 HARD                         no fbsmlane HARD        HELD
+  Q6  the index (to-be-committed) ledger           0 HARD, 10 soft                0 HARD                  HELD
+
+Two further readings:
+  * post_Q0.out and post_Q1.out are IDENTICAL once hashes are normalised: the verdict no longer depends on git's
+    abbreviation length.
+  * The defect also reported fake drift.  14 SOFT lines at P0 vanish at Q0: open rows whose commits named the commit
+    in 7 characters fell through to "open row, commits=..." because the 8-character %h did not match.  So soft went
+    10 -> 24 when git's abbreviation grew, with no ledger change.
+
+REVIEW (before commit): codex, GPT-6 Astra at max, via tools/cxlaunch.sh on review_brief.md (the diff inlined):
+codex_rider.txt, VERDICT: SHIP WITH NOTES.  It reproduced all eleven saved outputs.  Its notes, and what was done:
+  1. prefix matching presumes the prefix is unique -- true of every current ledger token.  Recorded.
+  2. the extractor is shared with the FREE-TEXT `reopened` field, and constructed inputs defeat it there: a 7+ letter
+     hex-only English word ("effaced") prefixing a scanned commit's hash passes as a name; a hash whose later letters
+     are uppercase fails; `_` and non-ASCII letters count as boundaries.  None occurs in the ledger (two rows carry
+     `reopened`, both opening with their sha), and the pre-growth substring test had the first exposure identically
+     at 7 characters.  RECORDED, NOT CHANGED -- codex's own suggestion (parse `reopened`'s leading token, with an
+     explicit case policy) is a semantic change to the field and belongs to its own round if ever wanted.
+  3. my comment said "%h to PRINT" while records_only() still passes %h to `git show` -- a lookup of the abbreviation
+     git just printed, not a comparison.  The COMMENT is corrected (records only; post_Q0 re-run byte-identical).
+  4. `{7,40}` -> `{6,40}` in the extractor survived Q0-Q6.  ADDED Q7 (PREDICTIONS_q7.txt, sealed first; driver
+     controls_q7.sh, the mutant exec'd in memory from the real path, no tree mutated):
+        Q7  fixed, pcc2widthkills.reopened = "b78bb0 -- ...", depth 130   HARD b78bb0f6 pcc2widthkills    HELD
+        Q8  the {6,40} mutant, same input                                  REOPENED b78bb0f6, PASS        HELD
+        Q9  the {6,40} mutant, Q0's input                                  byte-identical to post_Q0.out  HELD
+     so Q7 kills the mutant that every earlier control let through.
+  5. the drivers only printed, so a wrong verdict could not fail them.  ADDED verify.sh, which asserts every saved
+     output's verdict and HARD set, the three REOPENED lines and Q9 == Q0: VERIFY.out, 18/18 VERIFY_PASS.  Its own
+     negative control (three injected breaks in a copy -- a HARD line removed, a verdict flipped, a line appended):
+     VERIFY_negative.out, 14/18 VERIFY_FAIL rc=1, every break named.
+     Codex also noted Q6 (the staged ledger) is observationally redundant with Q0 in this snapshot: the index and
+     working ledgers differ only in rows no scanned subject names.  True; Q6 shows the committed ledger's present
+     result and adds no matcher coverage.
+
+REVIEW 2 (before commit): grok 4.7 at xhigh, plan mode, same brief: grok_rider.txt, VERDICT: SHIP WITH NOTES.  It
+agrees with codex on every note and found the same surviving mutant ({6,40}), reading post_Q7.out / mut_Q8.out as
+the control that kills it.  What it adds:
+  * `git log --abbrev=7` prints exactly 7 characters for all 794 commits: the growth to 8 is git's automatic
+    minimum, not a collision; every one of the eleven pre-fix HARD rows stores a true prefix of its commit.
+  * a second constructed `reopened` edge, a false HARD: a sha glued to letters (`b78bb0f6reopened`, or followed by
+    an uppercase hex digit) is invisible to the boundary-anchored extractor where the old substring test saw it.
+    Like codex's edges it occurs nowhere in the ledger -- RECORDED, NOT CHANGED.
+  * section L reads the WORKTREE ledger, not the index, so Q6 cannot show what L grades at commit time.
+  * WRONG RECORD, corrected here (PREDICTIONS.txt is sealed and left as written): Q4's gloss "a shared prefix is not
+    a name" is loose.  cdbe7d76 SHARES seven leading characters with cdbe7d75... and is NOT a prefix of it; a token
+    that IS a prefix is exactly what the fix treats as a name.  Q4 shows a seven-character agreement does not
+    make a longer token a name.
+Two seats, not the nine: the nine-seat pass on this rider is OWED and carried as a second question in the next panel.

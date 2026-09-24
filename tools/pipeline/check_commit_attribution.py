@@ -140,6 +140,21 @@ SUBJECT_STOPWORDS = {"carrier", "census"}   #  "census" added 2026-09-07: same m
 #  ordinary round into a hard failure.
 CLOSURE = re.compile(r"\b(closed|closes|closing)\b", re.I)
 
+#  *** A LEDGER SHA NAMES A COMMIT WHEN IT IS A PREFIX OF THE FULL HASH -- AND THE FIRST FORM
+#  COMPARED ABBREVIATIONS, WHICH GIT LENGTHENS AS THE REPOSITORY GROWS. ***  Measured
+#  2026-09-24: the rows carry the 7-character form git printed when each closed; after 4264ee20
+#  git's own %h became 8 characters, `h in commits` stopped matching, and six correctly
+#  attributed rows hard-failed at HEAD -- a red gate on every commit, raised by nothing in the
+#  ledger.  The mirror case failed too: a row written at 8 characters did not match a
+#  7-character %h.  Section F's receipt check met this on its first version and matches by
+#  prefix; so does this, on %H.  (regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/)
+SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
+
+
+def names(field, full):
+    """True when some 7-40 character hex token in `field` is a prefix of the full hash."""
+    return any(full.startswith(t) for t in SHA.findall(field or ""))
+
 
 def git(*args):
     return subprocess.run(["git", "-C", SEC] + list(args),
@@ -224,11 +239,13 @@ def main(argv):
                 else (r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i)))
             for i in matchable}
 
-    log = [l.split("\t", 1) for l in
-           git("log", "--format=%h\t%s", "-%d" % DEPTH).splitlines() if "\t" in l]
+    #  %H to MATCH (see names() above); %h to print, and for records_only()'s own `git show`, where
+    #  git resolves the abbreviation it has just printed -- a lookup, never a comparison.
+    log = [l.split("\t", 2) for l in
+           git("log", "--format=%H\t%h\t%s", "-%d" % DEPTH).splitlines() if l.count("\t") >= 2]
 
     hard, soft, ok = [], [], 0
-    for h, subj in log:
+    for full, h, subj in log:
         for rid, pat in pats.items():
             if not pat.search(subj):
                 continue
@@ -247,12 +264,12 @@ def main(argv):
                 #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
                 #  whose `reopened` field names the commit is a known reopening and is reported,
                 #  not graded.  Any other closure/state contradiction stays HARD.
-                if h in (row.get("reopened") or ""):
+                if names(row.get("reopened"), full):
                     print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
                     ok += 1
                 else:
                     hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
-            elif h in commits:
+            elif names(row.get("commits"), full):
                 ok += 1
             elif records_only(h):
                 #  Writing ABOUT a row is not authoring it.  Silent for a closed row (the
@@ -309,7 +326,7 @@ def main(argv):
     #  ever names is never examined, so its attribution could be wrong indefinitely.  Only
     #  rows with commits are worth listing: an open row nobody has committed against yet is
     #  simply not started.
-    subjects = " \n".join(sub for _h, sub in log)
+    subjects = " \n".join(sub for _full, _h, sub in log)
     unnamed = sorted(rid for rid, row in matchable.items()
                      if (row.get("commits") or "").strip() and not pats[rid].search(subjects))
     print("  NEVER NAMED in any scanned subject, yet carry commits: %d -- %s"

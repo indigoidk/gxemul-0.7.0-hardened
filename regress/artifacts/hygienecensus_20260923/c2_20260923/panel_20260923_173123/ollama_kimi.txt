@@ -1,0 +1,84 @@
+VERDICT: DO NOT SHIP — the `--ruling` format check in `tools/derive_hygiene_pins.sh` (cbb8488d) admits a ruling containing an embedded NEWLINE (the `grep -qE` test matches per-line, and the `case` guard rejects only `"` `\` `$` and backtick), so the one thing G5 was accepted to guarantee — the warrant written as a single `#  RULING <text> -- <what it licensed>` COMMENT line — is not guaranteed: a ruling like `"2026-09-23: <16+ chars>\nexport FOO=bar #"` passes both checks, and `pywrite` then writes a NON-comment line into `gate_hygiene.sh` that executes on every gate run with the warrant text commented out. One-line fix (reject `\n`, and ideally `#`), no pin moves; then the already-owed gate-6 re-run converts this to SHIP. Everything else I could check from the packet UPHOLDS, including the token classifier against its own docstring (hand-tokenized).
+
+Labels: READ = directly from the packet; REASONED = derived from the packet.
+
+## The blocker (REASONED from the inlined deriver)
+
+- `printf '%s' "$RULING" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}: .{16,}$'` — grep splits its input on newlines, so a multi-line ruling passes if ANY line matches. The `case` guard's charter is `"` `\` `$` `` ` `` — no newline, no `#`. REASONED and checked against the inlined code twice.
+- Consequence path: `note = "#  RULING %s -- %s (tools/...)\n" % (ruling, need.strip())` is inserted verbatim by `re.subn` above each moved pin. Trailing NEED text always contains parens, so an *accidental* multiline paste kills the gate loudly (syntax error — fail-safe), but a `#`-terminated second line is valid shell and silent: executes each run AND swallows the warrant. Reachable only by whoever runs `--write --ruling` — i.e., self-inflicted or pasted-from-chat — which is exactly the record-integrity threat this round exists to close.
+- Secondary, same function (REASONED): if `--ruling` is supplied but NEED is empty, the ruling is silently dropped (no note written, `WRITTEN:` line omits it). Header says "--ruling names that decision"; if nothing moved there is no decision — refuse, don't drop quietly.
+
+## Q1 — verify what the repair claims
+
+**(a) `census_tokens.py` vs its docstring — every claimed shape holds (READ + hand-tokenization, REASONED):**
+- Trailing comment: COMMENT ∈ SKIP ✓; string: a STRING token is atomic, never re-tokenized ✓; docstring: same ✓ (measured n1a–n1d red 2 each — READ).
+- Spacing: `zip(toks, toks[1:])` over the filtered stream — spaces, tabs, newlines-in-parens, line continuations all vanish ✓ (e_e2, n3a, n3g, e_e3, n3d red — READ).
+- Either quote: `ast.literal_eval(t.string) == "GXemul>"` ✓ (D1 consistent with e_c1 red 2, not 3 — REASONED).
+- Per-occurrence: loop over `range(len(toks) - len(SHAPE))` — I checked the off-by-one: pattern needs 10 tokens (head + 9), max i = len−10, `range(len−9)` supplies exactly that ✓ (n3j red 2 — READ).
+- Unreadable/untokenizable → printed promptless ✓ (OSError, UnicodeDecodeError, TokenError, SyntaxError caught; IndentationError ⊂ SyntaxError, redundant but harmless). In `whole` mode it is skipped → contributes 0 → count row reds. Loud direction ✓, and the docstring only promises printing for promptless mode ✓.
+- "The method's name never appears here followed directly by `(`": TRUE of the inlined 662ce35a — `ENDS_WITH = "ends" + "with"`, docstring hyphenates ("ends-with method"). I enumerated every occurrence (READ).
+- Boundary it does NOT claim and does NOT close (this is my Q2): `has_ends_with_call` and SHAPE both require the NAME token **immediately adjacent** to `(` in the filtered stream. The docstring defines the shape exactly that way, so the code is complete *against its own claim*.
+- One interlock worth recording (REASONED): `has_ends_with_call` does not require a preceding `.` — a purely local function named endswith would overcount a probe as prompt-detecting, but its call line contains the literal `endswith(` and is unrecognised → the `unknown` row reds. The textual overcount catches the token overcount; loud.
+
+**(b) Deriver refusals vs header (READ, enumerated):**
+Code prints: rc2 no-gate / usage×2 / ruling-format / ruling-chars; rc3 enumerator-not-found (4 fns), assignment-not-found (13 vars — `code_has` and `WHOLE_RE` correctly dropped from both gate and deriver lists ✓), denominator-0; rc4 needs-names / dup / already-grandfathered / not-NEW / not-GONE; rc5 NEWP (line presumed above the hunk — see Cannot-settle), GONE, bare-rises, unknown-rises, NEED-without-ruling.
+Header promises: denominator-0 ✓ (but code refuses even in REPORT mode — header frames it as a `--write` refusal; under-described, stricter is fine); #392 trio-disagree — **not visible in the diff** (CANNOT SETTLE; the e_dL* controls refusing at rc 5 are consistent with its survival); NEWP/GONE ✓; bare/unknown rise ✓; without-ruling converted-fall / whole-change-at-all ✓ (NEED covers rise, fall, move, respell — matches "AT ALL"). In code but nowhere in header: the already-grandfathered rc4 and the ruling-silently-dropped case. The `NEED`/pin matching (`k + "(" in need`) is safe against the `EXPECT_WHOLE_FULL` vs `WHOLE_FULL_FILES` prefix collision (the latter has `_` where the former needs `(`) ✓ REASONED.
+
+**(c) The thirteen (REASONED):** twelve are genuinely different spellings outside every shape the repair claims (receiver name ≠ `*buf`, strip(), slice compare, space-before-paren, extra parens around receiver/expression, `rstrip("\r\n")`, `self.buffer`, re.search, slice form of #37). **But n3k/n3k2/n4a are not spellings at all — they are POPULATION-SCOPE evasions**: the identical, recognised spelling sitting in a file the scans never read. G12's record "each is another SPELLING of the same test" is wrong for those three; the ledger must describe them as placement/population holes or it writes a wrong record about what remains open. None of the thirteen is a shape this repair claims to close — that part of G12 survives.
+
+## Q2 — smallest passing edit not among the thirteen (REASONED; ran nothing, tokenized by hand)
+
+Break the NAME→`(` adjacency that BOTH layers key on. In any probe that keeps one recognised `…endswith(` elsewhere (e.g. arm_flags_probe.py, whose two pinned sites stay):
+
+```python
+_ready = self.buf.rstrip().endswith
+...
+if _ready("GXemul>"):
+```
+
+- Token layer: after NEWLINE is skipped, the successor of NAME `endswith` is NAME `_ready`, not OP `(` → `has_ends_with_call` no-match; SHAPE no-match → whole count stays 3, per-file unchanged.
+- Text layer: no line contains the literal `endswith(` (`"endswith"` alone, or a string in the `getattr(buf.rstrip(), "endswith")("GXemul>")` variant, matches nothing textual) → bare 0, unknown 0.
+- Promptless rows: file still has its other code-level `endswith(` → 43/43, names clean. Trio and denominator untouched.
+**Every readiness row stays green while a third whole-buffer readiness test exists uncounted.** Same family: `getattr`, `functools.partial`, `map(buf.rstrip().endswith, …)` — anything that separates the method name from its call site. This is the post-repair analog of e9, one level up; it belongs in `hygienecensusholes` ranked beside e9. Denominator for what I tried and found closed/loud: trailing/full-line comments, strings, docstrings, both quotes, triple-quote and r-string prefixes, two-per-line, tabs/newline/continuation spacing, inner parens (n3e class — reds via token miss + textual unknown), `rstrip(args)`, non-`*buf` receivers, parenthesized receiver/expression, slice/strip/re.search predicates, local function named endswith (caught by the unknown interlock), unreadable or non-UTF-8 file in whole mode (loud), subdirectory + space-in-name paths. Bent but pre-existing/not-this-round: a filename containing a literal NEWLINE still splits at `grep -l` (its output is newline-separated even with `xargs -0`); non-endswith predicates inside a grandfathered probe (green by the settled lexical proxy, §C.2/G15).
+
+## Q3 — adjudication
+
+- **G1 UPHOLD** — code matches docstring on all seven shapes; n1a–n1d red 2 each (READ).
+- **G2 UPHOLD** — per-occurrence loop verified including the off-by-one; n3j red 2.
+- **G3 UPHOLD** — tokens erase spacing; n3a/n3g/e_e3 red 2, n3d red 3 (the third red is the textual `unknown` row on the same edit — internally consistent, REASONED).
+- **G4 UPHOLD with note** — relative paths + `-print0`/`xargs -0` fix space and subdirectory (e_e7 red 3, n5a refused/red — READ); newline-in-filename still bent (pre-existing class).
+- **G5 REFINE — THIS IS THE WRONG ACCEPTED DISPOSITION.** The ruling writer does not deliver the single-comment-line record it promises (newline hole, silent-drop when NEED empty). The acceptance text "format-checked … written as a `#  RULING` line … the variable is gone" is true only for single-line rulings. Fix is one line.
+- **G6 UPHOLD** — `uniq -d` rc4 plus the already-grandfathered rc4; n5b exercised both (READ).
+- **G7 UPHOLD** — `EXPECT_BARE` now in `pywrite`, capped by the bare-rises refusal; FINAL_DERIVER control confirms the write-down (READ).
+- **G8 UPHOLD arithmetically (ENUMERATED)**: 20 promptless → 20→40 ✓; 46+20=66 ✓; +4 named = 70 ✓; +3 untracked = 73 ✓; promptless 40+3=43 ✓ — all consistent with the 15:40 rows. The membership of the four named prompt-detecting probes is NOT checkable from the packet; the arithmetic is.
+- **G9 UPHOLD** — the inlined regex `pty\.fork|forkpty|pty\.spawn|^[[:space:]]*(import|from) drive_guest` is four alternatives and `forkpty` matches `os.forkpty` as a substring ✓. REASONED addition: the same population split persists one census up (`_ptylist`, pty.fork-only) — that is precisely n4a, already filed; consistent.
+- **G10 REFINE** — substance now true, one mechanism sentence false: "`endswith (">")` passes every count here, **because all of them key on the literal `endswith(`**" — the token promptless classifier does NOT key on the literal (it sees e9's spaced call, which is why the probe stays unlisted-promptless); only the textual spelling rows are literal-keyed. Correct the mechanism, keep the conclusion (every ROW does stay green). The old #37 sentence "the only form that cannot be evaded…" survives IN the file but is now answered by the adjacent dated note — acceptable.
+- **G11 CANNOT SETTLE** — whether the records script writes the rows before commit is owed work, not packet-verifiable. Note the frozen gate already *references* `hygienecensusholes`/`armbdtreadiness`, so if the commit lands without them the gate ships dangling references.
+- **G12 REFINE** — see Q1(c): three of thirteen are population-scope, not spellings; the uniform "different SPELLING" sentence is the record defect.
+- **G13 UPHOLD as FILED, flagged** — coherent under §C.2/§C.3, but note e_e9 IS a measured false pass of the *repaired* gate (READ), so a letter-strict reading of the stopping rule pulls e9 in-round. See Q5.
+- **G14 UPHOLD** — §C.5 names crime_width as a third name explicitly, not assumed authorised (READ).
+- **G15 UPHOLD** — statement-only; gate note names `alpha_tbi_probe.py` (READ).
+- **G16 UPHOLD** — FILED; form-based census boundary, consistent with the whole design.
+- **D1 UPHOLD** — settled by measurement; the post-F2 arithmetic coheres: 47 edits, 13 still passing evasions + `real` + `n9` benign = 15 green, 34 now caught (READ, enumerated).
+
+**Which accepted disposition is wrong: G5** (newline hole in the record-writer — the blocker). Runner-up: G12's uniform-spelling description (wrong for n3k/n3k2/n4a; records-grade).
+
+## Q4 — records (READ + REASONED)
+
+- The 2026-09-23 note's claim "70/73, 40/43, names gone=the three" matches the `clone` control's red 3 ✓.
+- Grandfather-note arithmetic re-derived consistent (Q3/G8).
+- crime_width comment: `op[-1:] == "P"` ≡ `.endswith("P")` for ALL strings including `""` (`""[-1:]` is `""`, both False) ✓ REASONED; "the eight op strings ACCEPTS produces" CANNOT SETTLE from packet.
+- The G10 mechanism sentence flagged above is false as written ("all of them key on the literal").
+- census_tokens docstring's "**THIS FILE IS SCANNED BY THOSE COUNTS TOO**" — CANNOT SETTLE and possibly false: this file contains no `pty.fork` literal, so it is scanned only if the bare/allends/full/unknown counts run over all `regress/*.py` (consistent with the deriver extracting a `py_code` enumerator) and NOT if they run over the pty population. The single settling fact: the population argument of the spelling-count assignments in gate_hygiene.sh, which is not inlined. If pty-only, the sentence — and the stated reason for the name-splitting — is a wrong (but harmless) record.
+- Enumeration gap, not a contradiction: 73 − 43 promptless = 30 detecting files; the packet's named classes cover 24 trio files + the 2 whole-buffer files; the residual recognised spellings (and any overlap) are not enumerated. No gate row pins that total, so nothing contradicts — but the brief's own arithmetic cannot be reconstructed to 30.
+
+## Q5 — e9 (REASONED)
+
+The author did not name this disposition: **close it at the TOKEN layer with an additional pin row** — extend census_tokens with a bare-shape mode (NAME `endswith`, `(`, STRING `">"`, `)`, either quote, any spacing) counted per occurrence over the population, pinned at 0 alongside the existing textual `EXPECT_BARE`. That keeps the textual overcount (the stated "safe direction") AND closes the whole whitespace family — space, tab, line-continuation — in one construction the repair already built, with no pin changes. Broadening the textual key to `endswith[[:space:]]*(` is weaker: still line-bound (a backslash-newline defeats grep), so it buys one family while the honest claim stays "literal spellings." The reason-that-survives for staying FILED: §C.2/§C.3 scope the round, the in-file claims are now true, and e9 exists only in synthetic controls. The counter the panel should weigh: under a letter-strict reading of §C.3, e_e9 is a *measured false pass* of the repaired gate, which puts it in-round — and the cheap closing move is the token row, not a regex.
+
+## Found while looking (not asked)
+
+REASONED: the alias/getattr family (Q2) defeats the *new* layer's defining adjacency, exactly as e9 defeated the old — the ledger should name it next to e9 so the next panel doesn't have to rediscover it.
+
+## Seat record
+Model: API seat, model name not disclosed to this seat. Read: the inlined packet only — no files, no commands, nothing run. Method: manual enumeration and hand-tokenization of the inlined `census_tokens.py`, the gate diff, and the deriver diff; every arithmetic claim (47/13/15, 31=7+24, 66/70/73, 40/43, red-N counts) re-enumerated against the control lines and found consistent except where flagged CANNOT SETTLE above.

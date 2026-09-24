@@ -213,7 +213,7 @@ class Sess:
 
     def send(self, x, timeout=60):
         b = (x + "\n").encode("latin1")
-        mark = len(self.buf)
+        _mark = len(self.buf)   # #hygienecensus: `_mark`, the spelling gate 6's fresh-mark census counts
         n = 0
         try:
             while n < len(b):
@@ -221,7 +221,7 @@ class Sess:
         except OSError:
             self.dead = True
             return False
-        return self.wait(mark=mark, echo=x if x else None, timeout=timeout)
+        return self.wait(mark=_mark, echo=x if x else None, timeout=timeout)
 
     def reg(self, name, cpu=None, cr=False):
         """Read GPR/pc (`reg [cpu]') or a control register (`reg [cpu],c')."""

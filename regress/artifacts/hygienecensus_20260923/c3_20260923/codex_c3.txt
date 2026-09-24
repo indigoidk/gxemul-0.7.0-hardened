@@ -1,0 +1,102 @@
+VERDICT: The targeted fixes work, but the dot requirement loses valid alias calls, non-calls still receive credit, and ruling/name validation retains gaps.
+
+**TASK 1**
+
+Compared both versions on **46 valid Python fixtures**, plus **103 top-level Python files** excluding the live census copy. Both versions classify the existing **73 PTY probes** identically: **43 promptless**, with **three whole-buffer sites across two files**.
+
+The names-row effects below assume an existing, non-grandfathered PTY probe with no other recognized readiness call.
+
+1. **Keeping NEWLINE: no regression among 27 direct-call fixtures.** Explicit continuations, calls split inside parentheses/lists/dictionaries, lambdas, comprehensions, decorators, and `str.endswith(buf, ...)` remain counted. Legal continuations produce `NL` or no newline token between the relevant tokens. See [census_tokens.py:44](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/census_tokens.py:44).
+
+   The original two-statement false positive is correctly removed:
+
+   ```python
+   x = buf.rstrip().endswith
+   ("GXemul>")
+   ```
+
+   Previous result: call present, whole count **1**. Current result: no call, whole count **0**. The probe is **listed promptless; names row red**, correctly.
+
+2. **Requiring the dot introduces a bound-method alias false negative.** This single statement really invokes the buffer’s method:
+
+   ```python
+   ready = (lambda endswith: endswith("GXemul>"))(buf.endswith)
+   ```
+
+   Previous classifier: **counted**. Current classifier: **not counted**. The probe is **listed promptless; names row red despite a real call**. The same regression occurs with the ordinary two-statement alias assignment and invocation. The relevant matcher is [census_tokens.py:53](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/census_tokens.py:53).
+
+   **A non-call still counted by both versions:**
+
+   ```python
+   class K:
+       endswith = str
+
+   match "GXemul>":
+       case K.endswith("GXemul>"):
+           pass
+   ```
+
+   This compiles and executes, but `K.endswith(...)` is a **class pattern**, not a call; the fixture contains zero AST call nodes. Both classifiers credit it. The probe is **silently omitted from the promptless list**, leaving the names row unchanged.
+
+   Additional inherited limits checked: `(buf.endswith)("GXemul>")` is missed by both versions, producing a false-red names row. `str.endswith(buf, ...)` is recognized by both. Whole mode misses parenthesized suffixes, adjacent string literals, trailing commas, and the descriptor form; these do not alter promptless classification, although separate textual rows can flag their spelling.
+
+3. **Catching ValueError: no new wrong classification in five path-input cases.** Checked embedded NUL, nonexistent path, directory, empty input, and an embedded-NUL path followed by an existing file. At [census_tokens.py:95](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/census_tokens.py:95), the new handler correctly turns the NUL exception into **promptless output**, emits no whole count, and continues to the next path. An unreadable selected probe is therefore **listed**, rather than credited. Embedded NUL itself cannot occur in a real filesystem filename.
+
+**TASK 2**
+
+Shell conclusions below come from source inspection and a **C-locale byte model covering 46 ruling inputs and 20 names**. I also evaluated **11 transformations using the actual Python writer code in memory**. Bash itself could not start because MSYS encountered an access-denied error.
+
+**Rulings**
+
+- **No comment escape found through the ruling text.** All **32 representable ASCII control characters**—1–31 and DEL—are rejected by the control check. LF cannot survive into the generated comment. Accepted Unicode line separators do not terminate a Bash comment.
+- Empty rulings cannot authorize a ruling-gated change: the later `NEED` check rejects them. Sixteen ASCII spaces and fifteen nonblank characters padded with spaces also fail.
+- **Malformed reasons still pass**, for example:
+
+  ```text
+  --ruling '2026-99-99: ................'
+  ```
+
+  This supplies an impossible date and sixteen punctuation characters without identifying a decision-maker or reason. Only shape and length are validated.
+- **A blank, short Unicode reason passes under `LC_ALL=C`:**
+
+  ```bash
+  --ruling $'2026-09-23: \302\240\302\240\302\240\302\240\302\240\302\240\302\240\302\240'
+  ```
+
+  That reason contains **eight nonbreaking spaces**, encoded as sixteen UTF-8 bytes. In the C locale, neither character-class check removes those bytes, and both length checks count sixteen. A nonempty accepted ruling then satisfies the ruling requirement, assuming the other write preconditions pass.
+
+These checks are at [derive_hygiene_pins.sh:62](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/derive_hygiene_pins.sh:62).
+
+**Names**
+
+For nonempty examples, assume the exact name is otherwise eligible in `NEWP` or `GONE`.
+
+| Exact input | Result |
+|---|---|
+| `--grandfather ''` | **Accepted with the current empty `NEWP`.** `printf '%s\n' "$NEWP"` creates an empty line that matches the empty argument. The writer appends a blank line and reports success, although no name was grandfathered. |
+| `--grandfather 'probe$HOME.py'` | Accepted and inserted unescaped into the double-quoted assignment. When the gate next reads it, `$HOME` expands; the stored filename changes. |
+| `--release 'probe$HOME.py'` | If the list correctly represents that literal filename as `probe\$HOME.py`, eligibility succeeds, but the writer compares against the escaped source spelling and fails its `k == 1` assertion. |
+| Under `LC_ALL=C`, `--grandfather $'a\302\240b.py'` | Accepted. Releasing that same name fails: Python’s `split()` treats its nonbreaking space as a separator. |
+| `--grandfather 'probe[.py'` or `--release 'probe[.py'` | Refused, although the list can hold this name and its unmatched `[` does not form a glob pattern. This is a deliberate overrestriction of the character filter. |
+
+The ordinary exact-removal repair works: releasing `foo.py` from a four-name fixture preserved `pref-foo.py`, `foo.py2`, and `sub/foo.py`. The remaining problems concern validation and representation at [derive_hygiene_pins.sh:129](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/derive_hygiene_pins.sh:129).
+
+**TASK 3**
+
+- **census_tokens.py:15–17:** “And a call is a METHOD call: the name must follow a "." -- a function DEFINITION under that name calls nothing, and the first version credited one (codex, the same pass).”
+
+  The method-call claim exceeds what the code establishes: the valid class-pattern fixture above also matches.
+
+- **derive_hygiene_pins.sh:19–21:** “Both REFUSE a missing name list, a name given twice, a name holding whitespace or a glob character (the list is space-separated), and a name that is not eligible (already grandfathered / not a NEW promptless probe; not a grandfathered name that is no longer promptless).”
+
+  `--grandfather ''` succeeds without an eligible name. The C-locale nonbreaking-space example also defeats the broad whitespace claim.
+
+- **[gate_hygiene.sh:100](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/gate_hygiene.sh:100):** “This is a FAIL-CLOSED exception, not a hole: the file is named exactly, and its own contents are asserted below, so it cannot quietly stop testing what it claims to test.”
+
+  This existing claim is too strong: lines 135–136 and 588–589 exclude **every recursively encountered basename** `readiness_predicate_test.py`, while line 729 pins only the top-level file. A same-named file in another subdirectory receives the exclusion without its own content assertion.
+
+**TASK 4**
+
+Do classifier/interpreter failures propagate as hard failures through the shell pipelines, or can they become successful empty censuses—particularly when the deriver selects `python` but extracted gate commands invoke `python3`?
+
+Read: all six specified frozen files, with all six MD5 prefixes verified, and 103 top-level `GXEMUL-SEC/regress/*.py` files excluding its live `census_tokens.py`; no other GXemul source copies were read, and nothing was edited, built, or written.

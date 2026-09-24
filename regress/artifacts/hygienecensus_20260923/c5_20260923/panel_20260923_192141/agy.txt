@@ -1,0 +1,162 @@
+root agent idle; waiting up to 30m0s for 2 background task(s)
+I will wait for the background command to finish.
+VERDICT: SHIP (Denominator: 81 measured control cases [75 base + 6 new in `controls_c5b`], 73 pty-forking probes [43 grandfathered promptless, 24 #392-converted, 3 whole-buffer sites in 2 files, 3 untracked probes]).
+
+---
+
+### §E — Responses to Questions
+
+#### Q1 — Do the F5 checks refuse exactly what they say?
+
+**(a) Deriver inputs and byte-exact verification**
+Every input ingested by [`tools/derive_hygiene_pins.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh) and written into [`regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh) is verified byte-exact without relying on whitespace-stripping `$(...)` emptiness tests or unanchored multi-line pattern matches:
+1. **Probe names (`--grandfather` / `--release`)**:
+   - Validated at [`tools/derive_hygiene_pins.sh#L155-L167`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L155-L167).
+   - Byte count check: `[ -n "$f" ] && [ $(( $(printf '%s' "$f" | LC_ALL=C tr -d 'A-Za-z0-9._/-' | wc -c) )) -eq 0 ]`.
+   - `wc -c` counts residual non-allowed bytes (including newline `\n`, carriage return `\r`, whitespace, `$`, quotes, backticks). Unlike F4's `[ -z "$(printf ...)" ]`, command substitution cannot strip trailing newlines.
+   - Eligibility check: [`tools/derive_hygiene_pins.sh#L169-L173`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L169-L173) uses exact string lines `grep -qxF -- "$f"`.
+2. **Ruling text (`--ruling TEXT`)**:
+   - Validated at [`tools/derive_hygiene_pins.sh#L70,L79-L93`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L70,L79-L93).
+   - Empty input rejected: `[ -n "${2:-}" ]` at line 70 prevents `--ruling ""` from skipping validation.
+   - Printable ASCII single-line check: `[ $(( $(printf '%s' "$RULING" | LC_ALL=C tr -d ' -~' | wc -c) )) -eq 0 ]` (line 83). Any byte outside ASCII 0x20–0x7E (including `\n`, `\r`, `\t`, non-ASCII Unicode) yields `wc -c` > 0 and is refused.
+   - Format: `grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}: .{16,}$'` (line 85).
+   - Calendar date: `date -u -d "$_day" +%F` (line 89) evaluated in UTC, eliminating false rejections from DST midnight shifts.
+   - Shell escape characters: `case "$RULING" in *'"'*|*'\'*|*'$'*|*'`'*)` (line 90) strictly refuses `"`, `\`, `$`, and `` ` ``.
+   - Reason length: lines 91–92 require $\ge 16$ alphanumeric characters.
+3. **Whole-buffer file list (`WHOLE_FULL_FILES`)**:
+   - Evaluated from the tree at [`regress/gate_hygiene.sh#L719`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L719) and validated before write at [`tools/derive_hygiene_pins.sh#L205-L206`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L205-L206).
+   - Byte count check: `[ $(( $(printf '%s' "$whole_files" | LC_ALL=C tr -d 'A-Za-z0-9._/: -' | wc -c) )) -eq 0 ]`.
+   - Restricts characters strictly to `A-Za-z0-9._/-`, `:`, and space (for `file:count file:count`).
+4. **Pins (`EXPECT_BARE`, `EXPECT_UNKNOWN`, `EXPECT_PTY_PROBES`, `EXPECT_CONVERTED`, `EXPECT_WHOLE_FULL`)**:
+   - Integer outputs verified via `re.subn(r"(?m)^%s=\d+" % k, ...)` at [`tools/derive_hygiene_pins.sh#L229`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L229) with `assert n == 1`.
+5. **Additional unlisted inputs**:
+   - **Pre-existing content in `gate_hygiene.sh`**:
+     - `WFP=$(spin WHOLE_FULL_FILES)` ([line 135](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L135)) extracts the existing pin from `gate_hygiene.sh` and incorporates it into `$NEED` (`WHOLE_FULL_FILES([$WFP]->[$whole_files])`), which is interpolated directly into `note` ([line 225](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L225)) as a comment. Because `$WFP` originates from `gate_hygiene.sh`, any pre-existing multiline or corrupt string in `WFP` would enter the comment generator.
+     - `eval "$CODE"` ([line 123](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L123)) executes function definitions and assignments scraped from `gate_hygiene.sh`. If `gate_hygiene.sh` were corrupted, `eval "$CODE"` executes that code in the deriver's shell.
+   - **Environment variables**:
+     - `GXROOT` ([line 61](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L61)) controls base repository resolution.
+     - `PATH` determines interpreter discovery ([line 59](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L59)).
+   - **Git index**:
+     - `git ls-files --error-unmatch` ([line 134](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L134)) queries git tracking status to report `UNTR`.
+
+**(b) Interpreter shim and the canary**
+- Can the classifier fail in a way the canary does not see? **YES.**
+- **Rationale**:
+  The canary ([`tools/derive_hygiene_pins.sh#L120-L122`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L120-L122)) invokes:
+  `printf 'zz_derive_canary_absent.py\n' | python3 "$HERE/census_tokens.py" promptless "$HERE"`
+  Because `zz_derive_canary_absent.py` does not exist on disk, [`regress/census_tokens.py#L98-L101`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L98-L101) traps `OSError` (`FileNotFoundError`) and immediately executes `print(rel)`.
+  This canary proves that:
+  1. `python3` executes and is not a 0-byte Windows Store stub.
+  2. `census_tokens.py` parses arguments and writes to stdout.
+  3. Missing files default to being classified as promptless.
+  However, the canary does **NOT** test:
+  1. `mode == "whole"`: The canary only runs `mode == "promptless"`. If `whole_sites()` or `SHAPE` matching crashes or misbehaves, the canary cannot detect it (unreadable files in `whole` mode output nothing; line 40).
+  2. Positive token matching on real files: The canary never reaches [`has_ends_with_call()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L56-L59). If `has_ends_with_call()` were mutated to return `False` unconditionally, the canary still succeeds.
+  3. Edge-case syntax constructs: As disclosed in [`regress/census_tokens.py#L17-L21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L17-L21), class patterns in `match` statements (`case K.endswith("GXemul>"):`) match the token stream and fail open; the canary cannot see this.
+
+**(c) Anchored reader vs. anchored writer**
+- Can the reader and the writer still disagree about which line is the list? **NO, under normal gate structure; bounded by assert.**
+- **Rationale**:
+  - The writer ([`tools/derive_hygiene_pins.sh#L181-L184`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L181-L184)) matches `ms = list(re.finditer(r'(?m)^GRANDFATHERED_PROMPTLESS="', s))` and explicitly enforces `assert len(ms) == 1`.
+  - The reader ([`tools/derive_hygiene_pins.sh#L112`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L112)) matches `index($0,"GRANDFATHERED_PROMPTLESS=")==1`.
+  - Both require `GRANDFATHERED_PROMPTLESS="` at column 1 (line start). The writer's `assert len(ms) == 1` guarantees that no other line in the file begins with `GRANDFATHERED_PROMPTLESS="` (e.g. unindented duplicate or unindented comment without `#` at column 1).
+  - Both terminate on the closing double-quote `"`: the writer scans to `s.index('"', i)`, and the reader scans until `/"[[:space:]]*$/`. Because probe names cannot contain `"` (validated by line 166), there are no intervening double quotes between the opening and closing delimiters.
+
+---
+
+#### Q2 — Smallest input or tree state that gets past F5 checks and does harm
+
+- **Findings**: **None found.**
+  - **Ruling escaping comment**: Impossible. `$RULING` is strictly filtered for printable ASCII (`tr -d ' -~' | wc -c == 0`), preventing raw newlines (`\n`) or carriage returns (`\r`), and shell metacharacters (`"`, `\`, `$`, `` ` ``) are rejected. It cannot break out of `#  RULING ...`.
+  - **Pin moved without warrant**: Impossible. Lines 213–220 construct `$NEED` for any drop in `EXPECT_CONVERTED`, or any change in `EXPECT_WHOLE_FULL` or `WHOLE_FULL_FILES`. If `$NEED` is non-empty and `$RULING` is absent, execution terminates with exit code 5.
+  - **Name changing meaning in the gate**: Impossible. Probe names are restricted to `[A-Za-z0-9._/-]` (line 166) and whole-buffer file entries to `[A-Za-z0-9._/: -]` (line 205). Neither contains shell glob characters, quotes, variable expansions, or subshells.
+  - **Census empty while reporting success**: Impossible. Line 127 halts on `${_ptyn:-0} -le 0`, line 121 halts on canary failure, and line 152 (`pywrite`) halts on writer error.
+- **Verification Denominator**:
+  - **81 measured control cases**:
+    - 75 baseline cases in `controls_c5b_base` ([`_scratchpad/census0923/controls_c5b_base_191332.stdout`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/controls_c5b_base_191332.stdout)): `real`, 10 `e_*` mutants, 19 `n1`/`n3`/`n4`/`n10` mutants, 17 `clone`/`e_dL*`/`n*` mutants, 7 closing cases (`t_nljoin`, `t_comma`, `t_slice`, `t_plus`, `t_defend`, `t_defendsp`, `t_tilde`), 9 ruling syntax cases (`t_rnl`, `t_rblank`, `t_rtab`, `t_rdate`, `t_rfeb30`, `t_rpunct`, `t_rnbsp`, `t_rnel`, `t_r2028`), 1 ruling apostrophe case (`t_rapos`), 6 name character cases (`t_spacegf`, `t_nempty`, `t_ndollar`, `t_nbsp`, `t_nbrack`, `t_nlegit`), 1 line-feed case (`t_nlf`), 2 ruling empty/timezone cases (`t_rempty`, `t_rtz`), 1 backslash continuation case (`t_bsl`), 1 release prefix case (`t_relpref`).
+    - 6 new control runs in `controls_c5b_new` ([`GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c5b/SUMMARY_new.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c5b/SUMMARY_new.txt)): `t_canary`, `t_anchor`, `t_wholefile` across both F5b and F5a.
+  - **Tree Population Denominators** ([`regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh)):
+    - `EXPECT_PTY_PROBES = 73` (70 committed + 3 untracked: [`arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py), [`crime_width_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py), [`lca_isaphys_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lca_isaphys_probe.py)).
+    - `GRANDFATHERED_PROMPTLESS = 43` names.
+    - `EXPECT_CONVERTED = 24` (#392 anchor/echo/mark agreement).
+    - `EXPECT_WHOLE_FULL = 3` across 2 files (`arm_bdt_probe.py:1 arm_flags_probe.py:2`).
+    - `EXPECT_BARE = 0`, `EXPECT_UNKNOWN = 0`.
+
+---
+
+#### Q3 — Adjudication of M1–M16 and D3
+
+- **M1 (Line feed in probe name)**: **UPHOLD**. In F4, `$(printf ... tr -d ...)` stripped trailing `\n`. In F5 ([`tools/derive_hygiene_pins.sh:166`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L166)), `wc -c` counts literal `\n`, returning 1 and triggering `REFUSED` (exit 4).
+- **M2 (`--ruling ""` skipped check)**: **UPHOLD**. In F4, `if [ -n "$RULING" ]` bypassed empty rulings. In F5 ([`tools/derive_hygiene_pins.sh:70`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L70)), `[ -n "${2:-}" ]` immediately refuses `--ruling ""` (exit 2).
+- **M3 (Date refused across DST midnight skip)**: **UPHOLD**. Evaluated in UTC via `date -u -d "$_day" +%F` ([`tools/derive_hygiene_pins.sh:89`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L89)), eliminating false failures under timezones like `America/Sao_Paulo`.
+- **M4 (Git-bash Store stub causing silent empty census)**: **UPHOLD**. Windows Store `python3.exe` stub exits 49/0 without execution; the interpreter shim ([`tools/derive_hygiene_pins.sh:119`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L119)) aliases `python3` to verified `$PY`, and the canary ([line 120](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L120)) catches non-responsive interpreters.
+- **M5 (Unanchored `GRANDFATHERED_PROMPTLESS` writer regex)**: **UPHOLD**. Anchored to `(?m)^GRANDFATHERED_PROMPTLESS="` with `assert len(ms) == 1` ([`tools/derive_hygiene_pins.sh:181-182`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L181-L182)), preventing matches against comment lines.
+- **M6 (`WHOLE_FULL_FILES` missing allow-list)**: **UPHOLD**. Allowed bytes restricted to `A-Za-z0-9._/: -` via `wc -c == 0` ([`tools/derive_hygiene_pins.sh:205`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L205)).
+- **M7 (Header false claim on glob characters in double quotes)**: **UPHOLD**. Globs are inert inside `""`, but expand when `$NEWP`, `$GONE`, and `$_new` are expanded unquoted in print statements ([`gate_hygiene.sh:489`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L489), [`tools/derive_hygiene_pins.sh:147-148`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L147-L148)); the comment was accurately amended ([`tools/derive_hygiene_pins.sh:20-22`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L20-L22)).
+- **M8 ("a quote" vs "a double quote")**: **UPHOLD**. Single quotes/apostrophes are inert inside double-quoted strings; corrected to "a double quote" ([`tools/derive_hygiene_pins.sh:21,162`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L21)).
+- **M9 (Comment filter dropping physical `#` lines and CR-only files)**: **UPHOLD**. Accurately documented in [`regress/gate_hygiene.sh#L94-100`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L94-L100); filing as `e10` conforms to stopping rule §C.3 for pre-existing gate implementation code.
+- **M10 (Imprecise "counts as known")**: **UPHOLD**. Clarified at [`regress/gate_hygiene.sh#L75-77`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L75-L77) that bare prompt literals are recognised (not "unknown") but fail the bare count.
+- **M11 (`case K.endswith` failing open)**: **UPHOLD**. Accurately disclosed in [`regress/census_tokens.py#L17-L21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L17-L21); filing under §C.3 is valid as token classifier code is frozen from F3.
+- **M12 (`readiness_predicate_test.py` in subdirectories escaping)**: **UPHOLD**. Pre-existing exemption rule in [`regress/gate_hygiene.sh:150`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L150); filing conforms to §C.3.
+- **M13 (Spaced-dot `n3g` caught by tokenizer)**: **UPHOLD**. Tokenizer strips layout tokens, so `buf .rstrip()` is correctly caught by [`census_tokens.py#L79-L82`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L79-L82).
+- **M14 (`${RULING%%:*}` cuts at last colon claim)**: **UPHOLD AUTHOR'S REJECTION**. Minimax was objectively incorrect. In POSIX shell, `${VAR%%pattern}` strips the *longest* matching suffix from the right. For `pattern = :*`, the longest suffix begins at the *first* colon, leaving only the prefix before the first colon (the date).
+- **M15 (Acceptance of arbitrary 4-digit years)**: **UPHOLD**. Deriver header at [`tools/derive_hygiene_pins.sh#L38`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L38) accurately discloses that date validity checks calendar structure in UTC, not calendar age.
+- **M16 (Rejection of filesystem-valid characters like `+`, `'`, `café.py`)**: **UPHOLD**. Intentional security allow-list policy stated at [`tools/derive_hygiene_pins.sh#L22,L167`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L22).
+- **D3 (DO NOT SHIP on F4)**: **UPHOLD**. Validated by measurements: F4 had real bypasses (M1 line-feed, M3 DST date failure, M4 Store stub silent bypass, M5 unanchored comment writer corruption, M6 unvalidated `WHOLE_FULL_FILES`).
+
+**Which of my accepted dispositions is wrong?**
+**None of the author's accepted dispositions is wrong.**
+- M14's rejection is provably correct by POSIX parameter expansion rules.
+- Filing M9 and M11 strictly adheres to stopping rule §C.3 (pre-existing gate code and frozen F3 token classifier code).
+
+---
+
+#### Q4 — Truth value of changed comments and header
+
+**Every sentence in the changed comments and deriver header is TRUE as of today.**
+- [`regress/census_tokens.py#L17-L21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L17-L21): Accurately describes token pattern matching, alias failure mode, and match pattern fail-open behavior.
+- [`regress/gate_hygiene.sh#L75-85`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L75-L85): Accurately details helper scanning and attribution limits.
+- [`regress/gate_hygiene.sh#L86-100`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L86-L100): Accurately documents evasion via space/backslash (`e9`), comment filter physical line `#` dropping, and CR-only file bypass (`e10`).
+- [`tools/derive_hygiene_pins.sh#L20-22,L28-30,L37-42,L49-55`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L20-L22): Accurately reflects live shell characters in double quotes, glob behavior in unquoted printed lists, UTC calendar checks, and historical bugs found in F4.
+
+---
+
+#### Q5 — Option-set completeness for M9 and M11
+
+Dispositions not named in the brief:
+- **For M9 (Comment filter dropping physical `#` lines and CR-only files)**:
+  1. *Token-based comment stripping*: Replace `grep -v '^[[:space:]]*#'` in `py_code()` with an invocation of Python's `tokenize` module to discard comments syntactically, eliminating physical-line `#` false-drops.
+  2. *Pre-flight formatting lint*: Add a gate assertion enforcing LF/CRLF line endings and banning code sharing lines with multiline string `#` prefixes across `regress/*.py`.
+  3. *Retire shell greps*: Eliminate `py_code()` regex scanning in `gate_hygiene.sh` entirely and transfer `bare` and `unknown` counting into `census_tokens.py`.
+  4. *Explicit WONTFIX*: Mark textual gate counts as permanent best-effort heuristics superseded by token and offline gate checks.
+- **For M11 (`case K.endswith` class pattern fails open)**:
+  1. *Token-context filtering in `census_tokens.py`*: Check if `.` `endswith` `(` is preceded by a `case` keyword token in the current statement, disqualifying match patterns without full AST parsing.
+  2. *Static lint ban*: Add a check in `gate_hygiene.sh` forbidding `case .*endswith` across `regress/*.py`.
+  3. *AST-based rewrite*: Replace `tokenize.generate_tokens` with `ast.NodeVisitor` inspecting `ast.Call` where `func` is `ast.Attribute(attr="endswith")`.
+  4. *Out of scope dismissal*: Dismiss as purely theoretical since no probe in GXemul uses Python 3.10+ pattern matching for prompt readiness.
+
+---
+
+### Verification and Seat Record
+
+- **Model**: Gemini 3.8 Flash (High)
+- **Files Read & Compared**:
+  - [`_scratchpad/panel_20260923_192141/brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260923_192141/brief_sent.md)
+  - [`GXEMUL-SEC/regress/census_tokens.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py) (MD5: `98788b1b`)
+  - [`GXEMUL-SEC/regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh) (MD5: `9d88b3f6`)
+  - [`GXEMUL-SEC/tools/derive_hygiene_pins.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh) (MD5: `e1ce9c59`)
+  - `_scratchpad/census0923/c4_frozen/*` vs. `_scratchpad/census0923/c5_frozen/*`
+  - [`GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c5b/SUMMARY_new.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c5b/SUMMARY_new.txt)
+  - [`GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c5b/t_gitbash.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c5b/t_gitbash.txt)
+  - [`_scratchpad/census0923/controls_c5b_base_191332.stdout`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/controls_c5b_base_191332.stdout)
+- **Commands Executed**:
+  - Hash comparisons (git object SHA-1 and MD5 matching frozen snapshots).
+  - Target execution of `bash tools/derive_hygiene_pins.sh` reporting clean output (`DERIVE_DONE`, 73 pty probes, 43 grandfathered, 3 untracked).
+  - Unit tests of `tr -d 'A-Za-z0-9._/: -' | wc -c` and awk extraction logic for `GRANDFATHERED_PROMPTLESS`.
+  - Untracked file audit in working tree.
+
+---
+
+### Final Verdict
+
+**GO**

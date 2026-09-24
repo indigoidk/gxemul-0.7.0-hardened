@@ -22173,3 +22173,64 @@ Above #545's floor: the tail and the fetch are not predicates dominating the edi
 in the contract (repair 3f) and filed them (the flagship seat's final adjudication upheld the filing).  FIX SHAPE:
 `pad_kept` after every read in X3, X7 and the timer rows and after each narrow write in X12/X13 (no new row, but the
 channel is new on rows that exist, so it owes a table), and a length-recording memory helper for the fetch.
+
+## 2026-09-23 — GXEMUL [087a90]: `#546` hygienecensus CLOSES (gate 6 re-derived by `tools/derive_hygiene_pins.sh`); what its seven passes filed
+
+### `hygienecensusholes` (MED, harness) — gate 6's readiness census is a SPELLING census: what still walks past it after #546
+gate_hygiene.sh's readiness census is a SPELLING census.  The census round (#546, pass 2 -> F6e) rebuilt its POSITIVE
+classifications on Python tokens (regress/census_tokens.py: a comment, a string or a docstring is not code; statement
+boundaries kept; per-occurrence counts), which closed the comment / string / docstring and most spacing evasions pass 2
+and F2 measured.  STILL OPEN, each measured passing all 12 readiness rows on the shipped F6e
+(regress/artifacts/hygienecensus_20260923/controls_c6e/TABLE.txt, the F2 suite): e9, RANKED FIRST -- the TEXTUAL counts
+are LINE-based and key on `endswith(`, so a space before the paren (`buf.endswith (">")`, the #37 bare defect behind one
+space) or a backslash continuation (t_bsl) removes a call from all of them; another receiver name (e_e1, n3h); `strip()`
+or `rstrip("\r\n")` for `rstrip()` (e_e5, n3f); a slice compare (e_e4; n10, `buf.rstrip()[-1:] == ">"`, the bare defect
+again); a parenthesised receiver (n3b, n3c); a regex readiness test (n3i); readiness moved into a helper module (n3k,
+n3k2 -- no count sees WHICH probe a helper serves); a probe forking with `forkpty` (n4a -- outside the pty census
+entirely); `~` on the call (t_tilde, the lexical limit); e10 -- the comment filter drops every PHYSICAL line beginning
+with `#`, so code after a closing triple quote or in an f-string field, or a whole file saved with CR-only line endings,
+escapes (the census F4 pass, the Opus seat).  And the deriver's writers are not ATOMIC: a write that fails part-way (a
+full disk) leaves the gate truncated -- reported since F6e as DERIVE_FAIL rc 6 (controls_c6e t_dfwrite, t_dfgrand); a
+temporary beside the gate and a rename would keep the old one.  Ranked below live defects: the census guards spellings,
+not readiness.
+
+### `armbdtreadiness` (LOW) — arm_bdt_probe.py reads readiness with the whole-buffer form; allowlisted by name, no expiry
+arm_bdt_probe.py:76 (committed 4dfc716, #524) reads readiness with the WHOLE-BUFFER form
+`self.buf.rstrip().endswith("GXemul>")`, which #392 measured at 0/80 in one configuration.  The owner ruled (2026-09-23)
+to allowlist it BY NAME in gate_hygiene.sh (WHOLE_FULL_FILES arm_bdt_probe.py:1, pin 3) rather than convert it inside
+the census round, and ruled the same day that the allowlist entry carries NO EXPIRY.  FIX: convert it to #392's anchored
+form (resp = buf[mark:]; echo guard; fresh mark), then `tools/derive_hygiene_pins.sh --write --ruling ...` shrinks
+EXPECT_WHOLE_FULL to 2 and the per-file pin to arm_flags_probe.py:2.
+
+### `hygienecensusexotic` (LOW, harness) — derive_hygiene_pins.sh inputs only a crafted name, a broken interpreter or a hand-edited gate produce
+Filed, not fixed, by owner ruling (2026-09-23: "one more pass, then file" -- fix only what a real probe name or real
+git-bash/WSL use could trigger).  Each is measured or read on the F6d deriver (58feb3d3) unless marked:
+* **A crafted whole-buffer file name whose space-split pieces each read as an existing file with a count** --
+  `arm_bdt_probe.py:9 x.py` beside a real `x.py` -- is written, EXPECT_WHOLE_FULL=14 for 5 real sites, every gate row
+  green (grok, the F5 pass; controls_c6b t_wfcolon3).  The per-entry checks see the census's already-serialised string.
+  THE FIX that closes the class: validate the TREE's file names before the census serialises them.
+* **PYTHONOPTIMIZE drops the writers' four assert checks** (the list's multiplicity, the release count, both pin
+  replacements; codex, the F5 pass): with a duplicate GRANDFATHERED_PROMPTLESS line, `--grandfather` writes the first
+  while the gate reads the last (controls_c6b t_pyopt1; without -O it is DERIVE_FAIL rc 6 on F6d, controls_c6d).  Fix:
+  explicit checks, or `-E` on the writers' interpreter.
+* **A classifier that dies part-way or misclassifies still passes the canary** -- a LIVENESS check -- and the report can
+  be wrong (a crash after ten inputs lists 38 names GONE; controls_c6b t_partial).  --release is parser-checked and
+  --write refuses while any name is GONE, so only the REPORT is unproven.
+* **The reader and the writers key on different layouts of a hand-edited gate** (codex, glm, kimi-k3:cloud, grok):
+  the reader anchors `GRANDFATHERED_PROMPTLESS=`, the writer `...="`; the numeric writers replace the FIRST `^NAME=`
+  line while the running gate uses the LAST.  Read, not measured; needs a hand edit.
+* **The gate's own GRANDFATHERED_PROMPTLESS body is `eval`'d before any check** (glm): measured clean today -- 43
+  names, 0 bytes outside the allow-list, and WHOLE_FULL_FILES 0 (controls_c6d t_gpbytes) -- so a live byte there needs
+  a hand edit of the gate.
+* **ANY `.endswith(...)` call is credited as readiness -- by the census AND by the parser check** (glm, the F6d
+  pass): a probe that calls `line.endswith("=")` for another purpose reads as prompt-detecting.  Symmetric between the
+  gate and the deriver and pre-existing: it is the census's DEFINITION of promptless (a spelling census -- see
+  `hygienecensusholes`), not a regression.
+* **A census/parser disagreement has no tool exit, by design** (kimi-k3:cloud, the F6d pass, "permanent wedges"): a
+  grandfathered probe whose only `.endswith(` is a `match` class pattern reads GONE to the census and promptless to the
+  parser, so `--release` refuses (truly: it is still promptless) and `--write` refuses while it is GONE; the way out is to
+  edit the probe (a real call, or none).  Measured: t_k14release (controls_c6d, controls_c6e).  Needs the pattern, which
+  no probe in the tree uses.
+* **The gate's `whole_full=$(printf '%s\n' $whole_files | awk ...)` expands `$whole_files` UNQUOTED** (grok, the F6d
+  pass), so a whole-buffer probe file named with a glob character would expand there; 0 of today's tokens carries one,
+  NTFS forbids `*` and `?`, and the deriver refuses any token outside `name:count` before a write.

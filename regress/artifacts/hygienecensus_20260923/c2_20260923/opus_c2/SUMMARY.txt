@@ -1,0 +1,92 @@
+OPUS MEASURING SEAT -- hygienecensus F2-repair CLOSING PASS (c2), 2026-09-23
+VERDICT: SHIP -- with ONE recommended one-line hardening (reject a newline in --ruling; the round's OWN new code).
+The gate's readiness verdicts are correct; every shape the repair CLAIMS to close is genuinely closed (5/5 boundary
+probes caught); census_tokens.py matches every docstring claim; all deriver refusals fire.  The two caveats live in
+the deriver's operator-only --ruling path and do not affect any gate readiness row.
+
+Tree measured: the FINAL FROZEN files in c2_frozen (gate 6a9cb517, census_tokens 662ce35a, deriver cbb8488d,
+crime_width a0af7c92), placed over a fresh /tmp copy of SEC/regress top-level + tools.  Nothing written under
+GXEMUL-SEC/, est/, build/, build-asan/.  All work under /tmp and _scratchpad/census0923/opus_c2/.
+
+================ SECTION 1 -- 47 cases vs the FINAL frozen files (s1/) ================
+All 47 case verdicts are BYTE-IDENTICAL to the main loop's controls_f2/TABLE.txt (diff empty).  The three
+comment-only edits after controls_f2 (G10; gate 3991fd8e->6a9cb517, census cf238c58->662ce35a) moved NOTHING.
+34 red, 13 pass -- exactly as predicted.  real: PASS; --write rc=0; gate byte-identical.
+
+================ SECTION 2 -- census_tokens.py vs its docstring (s2/, s2gate/) ================
+UNIT (25 crafted files, s2_tokunit.out + s2_cont.out): 0 real mismatches.  One apparent mismatch (cont.py) was MY
+test artifact -- the Bash->heredoc->Python path ate a backslash so my "line continuation" was backslash+`n`, a real
+syntax error correctly fail-closed.  Rebuilt with chr(92): a REAL backslash continuation is handled (whole=1, not
+promptless).  Confirmed per claim:
+  comment / string / docstring not code ....... promptless=True, whole=0   (comment.py, string.py, docstring.py)
+  spacing between tokens ignored .............. whole=1 (space1 spaces, space2 space-before-.rstrip, cont real \)
+  either quote ................................ single.py whole=1
+  per-occurrence .............................. twoline.py=2, threefile.py=3
+  unreadable/untokenizable -> promptless ...... unbal.py, mixtab.py (TabError), latin1.py (non-UTF8), ABSENT -> all promptless, whole=0
+  usage error -> exit 2 ....................... bad mode rc=2, no args rc=2
+  receiver must end "buf" ..................... self.buffer whole=0 (documented limit); rxbuf whole=1
+  site on final line (no NL) .................. whole=1 (no off-by-one)
+GATE-INTEGRATION (s2gate/): untokenizable arm_endian -> promptless names row RED (new=arm_endian) ; CRLF probe (683
+CRs) -> all green ; tab-indented probe -> all green ; comment-hidden predicate -> names row RED.  Rows move as claimed.
+Two NON-DEFECT observations (version/behaviour, noted not filed):
+  * f-string interpolation `f"{buf.rstrip().endswith('GXemul>')}"` is COUNTED on py3.12+ (interpolations are real
+    code tokens) -- correct today (py3.13.12 on the battery host); on py<3.12 the whole f-string was one STRING and
+    would be missed.  Latent version-sensitivity, no live probe uses it.
+  * bytes arg `endswith(b"GXemul>")` -> NOT promptless (it is an ends-with call) but whole=0 (is_prompt_string
+    rejects bytes) -- consistent (a str.endswith(bytes) would TypeError, so it is not a real whole site).
+
+================ SECTION 3 -- the deriver's refusals (s3/, s3b/) ================
+Every refusal the code can print was FIRED (rc in parens): no gate(2) unknown-arg(2) extra-after-write(2)
+ruling-bad-format(2) ruling-forbidden-char(2) enumerator-not-found(3) assignment-not-found(3) denominator-0(3)
+grandfather-no-names(4) dup-name(4) already-grandfathered(4) not-a-NEW-promptless(4) not-a-gone-name(4)
+#392-counts-disagree(5, 24/23/24) new-promptless-not-grandfathered(5) grandfathered-no-longer-promptless(5)
+bare-grew(5) unknown-grew(5, e_dL1) pins-change-without-ruling(5).  [Exit 6 "writer failed" not reachable without
+breaking python; noted.]
+HEADER vs CODE: every header-promised refusal has a code refusal (none promised-but-missing).  Code has MORE than the
+header enumerates: the whole --grandfather/--release refusal family and "assignment not found" are not in the
+header's "--write REFUSES" list -- but that list is explicitly scoped to --write, so this is a doc gap, not a defect.
+RULING EDGE CASES:
+  two --ruling flags ......................... usage exit 2  (correct)
+  ruling on a no-op write (NEED empty) ....... rc0, 0 RULING lines -- the ruling is silently ignored (harmless)
+  whitespace-only reason "2026-09-23:"+spaces  PASSES the format regex (`.{16,}` matches spaces) and is WRITTEN as a
+                                               RULING comment with a BLANK warrant -- defeats "carries its warrant in
+                                               the diff".  Minor (operator self-inflicted; date + pin delta still recorded).
+  *** newline in --ruling .................... rc0, prints WRITTEN (success), but CORRUPTS THE GATE: the format grep is
+     per-line (`-qE '^..$'` matches ANY line) and the forbidden-char case blocks quote/backslash/$/backtick but NOT a
+     newline, so the writer injects the post-newline text as NON-comment lines.  Measured: `EXPECT_WHOLE_FULL=999`
+     injected, `bash -n gate_hygiene.sh` FAILS.  This is the deriver header's own "reported success after its writer
+     failed" class, reached by a different door.  Fail-LOUD (next gate run won't source), operator-supplied, not
+     guest/battery-reachable.  RECOMMEND one-line in-round fix: reject a newline in $RULING (e.g. case "$RULING" in
+     *NEWLINE*) exit 2).  It is the round's own new code and the fix is trivially testable.
+
+================ SECTION 4 -- 40 new edits (s4/) ================
+32 PASS, all genuinely DIFFERENT SPELLINGS outside a spelling census by construction (removesuffix, find/rfind/index,
+in/count, slice compares, re.search/re.match/re.fullmatch, rpartition, splitlines, getattr/methodcaller/dunder
+indirection, spaced endswith on strip()/non-buf receivers, walrus, bytes.encode, etc.).  NONE is a token-level variant
+of a claimed-closed shape.
+5 CLAIMED-CLOSED boundary probes ALL CAUGHT (denominator of the defect hunt):
+  whole_tab (TAB between endswith and paren) red2 via the WHOLE token census -> "any spacing" incl. tab is counted
+  whole_rxbuf (receiver rxbuf ends "buf")     red2 via the WHOLE token census -> receiver-ends-buf is counted (n3j class)
+  whole_trailcomma / whole_concatstr / whole_paren_arg  red1 each via the closed-world UNKNOWN backstop
+3 real CONTROLS red as expected (ctl_bare, ctl_unknown, ctl_whole4) -> the census still bites.
+0 defects: no shape the repair claims to close passed.
+
+================ Q-ANSWERS ================
+Q1(a): census_tokens.py does everything its docstring claims; no claimed shape unhandled (0/25 real mismatches).
+Q1(b): refusal lists reconciled; header is a subset of code (--write-scoped), no promised-but-missing refusal.
+Q1(c): all 13 filed shapes are genuine different spellings; NONE is a token-level variant of a counted shape
+       (confirmed by the 5 boundary probes, all caught).
+Q2: 32 passing edits enumerated; smallest is `buf.removesuffix("GXemul>") != buf` (or any non-endswith spelling).
+    Denominator: 40 edits x all 12 readiness rows; 5 claimed-closed variants tried, all red.
+Q3: G1..G16 all UPHELD (measured); D1 upheld (DO NOT SHIP findings were real).  No accepted disposition is wrong.
+Q4: G10's four corrections are all TRUE now; no live "closed-world"/"cannot be evaded"/"reads code not comments"
+    sibling survives (the two remaining hits are the correction text itself).  clone reds exactly THREE rows as the
+    gate note now claims (70/73, 40/43, names gone=the three).
+Q5: FILING e9 is correct and survives the stopping rule (pre-existing evasion, now disclosed).  Broadening the textual
+    counts to `endswith\s*(` is NOT free -- it re-imports comment/string counting into the closed-world census and
+    owes its own measured pass.  No unnamed disposition changes the call.
+
+SEC files under review UNCHANGED end-to-end: gate 6a9cb517 / census 662ce35a / deriver cbb8488d / crime_width
+a0af7c92 / luna d4a465c9 (md5s identical before and after).
+S4/S3/S2/S1 logs each end with their completion line.
+OPUS_C2_SUMMARY_DONE

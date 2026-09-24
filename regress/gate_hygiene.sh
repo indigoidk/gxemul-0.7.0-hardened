@@ -70,11 +70,35 @@ gate_begin "log-hygiene"
 #    - find RECURSIVELY, not "$HERE"/*.py;
 #    - accept either quote style;
 #    - and make the check CLOSED-WORLD: every .endswith() in the tree must use
-#      one of the two KNOWN literals.  A third spelling -- including
-#      endswith(PROMPT) or any indirection through a helper -- is unknown, and
-#      unknown fails.  That converts "I grepped for the bad thing" into "I
-#      enumerated everything and recognised all of it", which is the only form
-#      that cannot be evaded by inventing a new way to write it.
+#      one of the two KNOWN literals.  A third spelling -- endswith(PROMPT),
+#      say -- is unknown, and unknown fails.  A helper module under regress/
+#      is scanned like a probe: an endswith( line there with a known literal
+#      is not "unknown" (the bare one still fails the bare row), and one with
+#      an unrecognised argument fails "unknown".  What no count here
+#      sees is WHICH probe a helper's test serves: a probe whose ONLY test
+#      moved into a helper is listed promptless and the names row reds
+#      (fail-closed), while a probe that keeps one call of its own can move
+#      the rest into a helper with every row green (hygienecensusholes n3k,
+#      n3k2; this said a helper's line was unknown until the census F3 pass,
+#      codex and grok).  That converts "I grepped for the bad thing" into "I
+#      enumerated everything and recognised all of it" -- for the spellings
+#      these counts can SEE.
+#      (*** 2026-09-23: this said it was "the only form that cannot be evaded
+#      by inventing a new way to write it".  FALSE: every TEXTUAL count here
+#      (bare, allends, full, unknown -- the token classifier is not one of
+#      them) is LINE-based and keys on `endswith(`, so a space before the paren
+#      (`endswith (">")`) or a backslash continuation between the name and
+#      the paren removes a call from all of them (both measured on copies,
+#      controls_f2 e_e9 and controls_c5 t_bsl).  Filed as hygienecensusholes
+#      e9, ranked first; the census F3 pass widened it from one spelling to
+#      this LINE-based class (glm, agy, the kimi substitute).  And the
+#      comment filter drops every PHYSICAL line that begins with `#`: code on
+#      such a line (after a closing triple quote, or in an f-string field) and
+#      a whole file saved with CR-only line endings (grep then sees one line,
+#      beginning `#!`) escape too -- measured, the census F4 pass (the Opus
+#      seat: hash_line, cr_only), filed with e10.  The census is closed-world
+#      over the literal spellings on the physical lines it keeps, not over
+#      the method. ***)
 EXPECT_BARE=0
 EXPECT_UNKNOWN=0
 #  CODE ONLY.  The first version of this check counted a line of PROSE -- a
@@ -134,7 +158,7 @@ py_code() { find "$HERE" -name '*.py' -type f ! -path "$HERE/artifacts/*" \
 bare=$(py_code | grep -o "endswith([\"']>[\"'])" | wc -l)
 #  Every endswith( in code, minus the two we recognise: the bare prompt above
 #  and the correct full prompt.  Anything left is a spelling nobody reviewed --
-#  including endswith(PROMPT) or any indirection through a helper.
+#  including endswith(PROMPT), wherever it sits under regress/ (a helper module included).
 allends=$(py_code | grep -o "endswith(" | wc -l)
 full=$(py_code | grep -o "endswith([\"']GXemul>[\"'])" | wc -l)
 unknown=$((allends - bare - full))
@@ -346,7 +370,19 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  timeouts, no endswith( predicate).  Written into the checkpoint at the moment the
 #  witness was created, because #500 added a probe and moved NEITHER census, and it took
 #  two passes and three seats to find. ***
-EXPECT_PTY_PROBES=46
+#  *** 46 -> 73 ON 2026-09-23 BY ONE BULK RE-DERIVATION, BY OWNER RULING (hygienecensus; ledger row
+#  stateaudit0923).  The pin had sat at 46 since b78bb0f (2026-09-03) while committed pty probes grew to
+#  70, so this gate was RED AT HEAD -- measured on a pure export of HEAD's regress/, not inferred.  73 =
+#  those 70 plus THREE UNTRACKED probes that lie in the tree and are counted as they sit, because the
+#  census counts files, not commits: crime_width_probe.py (#529), arm_msrmode_probe.py (armmsrmodekill)
+#  and lca_isaphys_probe.py (#540).  The owner chose to count all three in this denominator (2026-09-23,
+#  "count all"); grandfathering crime_width_probe.py as PROMPTLESS is the part the ruling did not name -- it was
+#  reported to the owner as a third name, not assumed authorised.  Consequence, stated so nobody
+#  meets it cold: until all three are committed, a FRESH CLONE counts FEWER than 73 (70 with none of them)
+#  and reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are
+#  grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43,
+#  names gone=the three).  Written by `tools/derive_hygiene_pins.sh --write`, never by hand. ***
+EXPECT_PTY_PROBES=73
 #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
 #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
 #
@@ -377,7 +413,27 @@ sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
 gdrom_toclen_probe.py wdc_addtoinbuf_probe.py wdc_altoffset_probe.py
 gdrom_cond_probe.py sgi_re_width_probe.py
-sgi_de_width_probe.py sgi_re_unmapped_probe.py"
+sgi_de_width_probe.py sgi_re_unmapped_probe.py
+alpha_harness_probe.py alpha_pfnoffset_probe.py alpha_swpctx_v0_probe.py alpha_tbi_probe.py arm_bfx_width_probe.py landisk_aux_probe.py lca_badval_probe.py lca_confbus_probe.py lca_confwidth_probe.py lca_irqstub_probe.py lca_irqstub_uart_probe.py lca_isalane_probe.py lca_widewrite_probe.py maple_dmaaddr_probe.py pcc2_c040_probe.py sgi_mte_fill_probe.py sgi_re_colourdefault_probe.py sgi_re_randompixel_probe.py sgi_re_rgb_probe.py wdc_altdigin_probe.py
+arm_msrmode_probe.py lca_isaphys_probe.py
+crime_width_probe.py"
+#  hygienecensus: tools/derive_hygiene_pins.sh --grandfather appended THREE blocks to the list above; they are
+#  named here by their FIRST NAME, never by position, because the next --grandfather appends another.
+#  The block beginning `alpha_harness_probe.py` (derived 2026-09-19): 20 PROMPTLESS pty probes committed
+#  between 2026-09-05 and 2026-09-18 that moved NO PIN -- they moved the promptless census (20 -> 40) and the
+#  denominator (46 -> 66); four prompt-detecting probes committed in the same weeks (luna_absentcpu, m88k_exc,
+#  arm_bdt, xscale_inten) took it to 70, while EXPECT_PTY_PROBES sat at b78bb0f's 46.  None makes a CODE-level
+#  call of the ends-with method, which is this census's key: most use fixed waits or drain-to-EOF, and
+#  alpha_tbi_probe.py has a real readiness wait the census cannot see (`"gxemul>" in buf[...].lower()`).
+#  GRANDFATHERED, not converted:
+#  converting a probe's readiness is its own round.  The block beginning `arm_msrmode_probe.py`
+#  (2026-09-23, OWNER RULING): arm_msrmode_probe.py (armmsrmodekill) and lca_isaphys_probe.py (#540).  The
+#  block beginning `crime_width_probe.py` (2026-09-23, pass 2 of this round, under the same ruling's
+#  principle): crime_width_probe.py (#529), hidden from this census by a comment until pass 2 stopped the
+#  classifier reading full-line comments (it reads tokens since the F2 repair).  All three are UNTRACKED and lying
+#  in the tree, named so the census passes on
+#  the tree the weekly battery runs.  Re-derive, never hand-edit: `bash tools/derive_hygiene_pins.sh` (report),
+#  `--grandfather NAME...` / `--release NAME...`, then `--write`.
 
 #  *** THIS WAS THE THIRD POPULATION AND THE F2 EDIT MISSED IT.  Found by the agy seat
 #  on pass 2. ***  py_code and probe_code were converted to recursive-minus-artifacts
@@ -389,11 +445,28 @@ sgi_de_width_probe.py sgi_re_unmapped_probe.py"
 #  be scanned by two censuses and missed by this one.  Equal counts are not an aligned
 #  population, and reading the equality as safety is how the flat glob survived the
 #  first repair.
-_ptylist=$(find "$HERE" -name "*.py" -type f ! -path "$HERE/artifacts/*" 2>/dev/null \
-           | xargs grep -l "pty.fork" 2>/dev/null | sed "s|.*/||" | sort)
+#  hygienecensus F2: paths RELATIVE TO regress/, not basenames -- a probe in a subdirectory was classified by a
+#  same-named top-level file (measured: a promptless copy at newsub/ read as prompt-detecting), and a bare xargs
+#  split a filename holding a space.  NUL-safe as far as grep: `grep -l` prints one name per LINE, so a file name
+#  holding a newline is not supported (and a name holding a space cannot be grandfathered -- the list is
+#  space-separated; the deriver refuses it by name).  For every file in regress/ itself the relative path IS the basename, so the
+#  grandfathered names are unchanged.
+_ptylist=$(find "$HERE" -name "*.py" -type f ! -path "$HERE/artifacts/*" -print0 2>/dev/null \
+           | xargs -0 grep -l "pty.fork" 2>/dev/null | sed "s|^$HERE/||" | LC_ALL=C sort)
 _ptyn=$(printf '%s' "$_ptylist" | grep -c . )
-_promptless=$(cd "$HERE" && printf '%s' "$_ptylist" | tr ' ' '
-' | xargs grep -L "endswith(" 2>/dev/null | sort)
+#  hygienecensus (2026-09-23): THE CLASSIFIER READS PYTHON TOKENS -- regress/census_tokens.py, where a COMMENT, a
+#  STRING or a DOCSTRING is not code.  It was a raw `grep -L "endswith("`, so text naming the method hid a
+#  promptless probe: crime_width_probe.py's only such text was a comment this very round added (pass 2).  The
+#  first repair stripped only FULL-LINE comments and said it "reads code" -- the F2 pass measured seven edits, on
+#  five probe files, where a TRAILING comment, a string or a docstring changed the answer (the Opus seat's n1a-n1d,
+#  n2a, n2b, n9).  A comment, a string or a docstring is never a "." NAME "(" sequence of tokens, so none of
+#  those can hide a probe now; and the classifier keeps STATEMENT boundaries, so a method reference on one line
+#  and a parenthesised string on the next is not a call (the closing pass, codex -- controls_c2/t_nljoin).  A file that cannot be read or tokenized is listed promptless (it cannot
+#  be read, so it is not trusted).  The spelling counts above deliberately stay textual, so a comment or a string
+#  that spells the method is counted -- the safe direction.  They see only the LITERAL `endswith(`: a space before
+#  the paren passes every one of them (hygienecensusholes e9).  `printf '%s\n'`, not `'%s'`: $(...) strips the list's last
+#  newline, and a line-reader then drops the last file -- measured by this round's own controls.
+_promptless=$(printf '%s\n' "$_ptylist" | python3 "$HERE/census_tokens.py" promptless "$HERE" | LC_ALL=C sort)
 _want=$(printf '%s' "$GRANDFATHERED_PROMPTLESS" | tr ' ' '
 ' | grep -c . )
 _got=$(printf '%s' "$_promptless" | grep -c . )
@@ -403,13 +476,18 @@ check "readiness: promptless probes, grandfathered set only" "$_got" "$_want"
 
 #  Name the offender rather than only the count -- a bare number tells nobody
 #  WHICH file, and the whole point of the denominator is attribution.
-_new=$(comm -13 <(printf '%s' "$GRANDFATHERED_PROMPTLESS" | tr ' ' '
-' | grep . | sort)                 <(printf '%s' "$_promptless" | grep . | sort) 2>/dev/null)
+#  hygienecensus pass 2: AND GRADE THE NAMES, not only the count.  The count row alone read 42 == 42 after one
+#  grandfathered probe was swapped for a new promptless one (measured); the owner's ruling is "grandfather BY NAME",
+#  so the set is what is graded.  LC_ALL=C on both sides: comm needs one collation.
+_gfs=$(printf '%s' "$GRANDFATHERED_PROMPTLESS" | tr ' ' '\n' | grep . | LC_ALL=C sort)
+_new=$(LC_ALL=C comm -13 <(printf '%s\n' "$_gfs") <(printf '%s\n' "$_promptless" | grep .) 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+_gone=$(LC_ALL=C comm -23 <(printf '%s\n' "$_gfs") <(printf '%s\n' "$_promptless" | grep .) 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+check "readiness: promptless names == grandfathered names" "new=${_new:-none} gone=${_gone:-none}" "new=none gone=none"
 if [ -n "$_new" ]; then
-        echo "  NEW PROMPTLESS PTY PROBE(S) -- add prompt detection, or grandfather"
-        echo "  deliberately by editing GRANDFATHERED_PROMPTLESS above:"
-        printf '    %s
-' $_new
+        echo "  NEW PROMPTLESS PTY PROBE(S) -- add prompt detection, or grandfather it"
+        echo "  deliberately: tools/derive_hygiene_pins.sh --grandfather <name> (never by hand):"
+        ( set -f; printf '    %s
+' $_new )   # set -f: a tree file named with a glob character prints as itself (census F5 pass)
 fi
 
 #  THE POSITIVE HALF OF THE #392 CHECK, and it is the half that binds the offline
@@ -510,7 +588,12 @@ fi
 #  Committing it is the mrwstore2 lesson: that round's rung-3 probe left NO ARTEFACT, so its
 #  witness became a remembered grep and a later row had to re-cost the work.  #442's witness had
 #  the same problem and was committed one commit ago for the same reason.
-EXPECT_CONVERTED=23
+#  *** 23 -> 24 ON 2026-09-23, the same owner-ruled re-derivation.  luna_absentcpu_probe.py (committed
+#  79cd12e, 2026-09-06) is anchored and echo-guarded, so those two censuses counted it (24) -- but its
+#  send() spelled the fresh mark `mark=mark`, which the fresh-mark census does not read, so that one said
+#  23 and the three #392 counts DISAGREED at HEAD.  The probe's rename to `_mark` (same change) makes the
+#  three agree; the deriver refuses to write while they disagree, which is why the rename precedes the pin. ***
+EXPECT_CONVERTED=24
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not
@@ -566,7 +649,21 @@ conv_mark=$(probe_code 'return \(self\.\)\?wait(mark=_mark, echo=[a-z][a-z]* if 
 #  at 2 turns that scope decision into a FAIL-CLOSED ALLOWLIST: those two are
 #  tolerated, a third is not, and when they are finally converted this number
 #  goes to 0 in the same commit.
-EXPECT_WHOLE_FULL=2
+#  *** 2 -> 3 ON 2026-09-23 BY OWNER RULING, AGAINST THIS BLOCK'S OWN DEFAULT -- recorded as an EXCEPTION,
+#  not a precedent.  The third site is arm_bdt_probe.py:76 (committed 4dfc716, #524, 2026-09-12): its
+#  `self.buf.rstrip().endswith("GXemul>")' raised the count to 3 in a commit that did not move this pin,
+#  so this row was red at HEAD.  The block below says a new hit is never answered by raising the pin; the
+#  owner chose to allowlist it BY NAME rather than convert it inside the census round.  Converting its
+#  readiness to #392's anchored form is FILED (`armbdtreadiness`).  A count alone would let a site MOVE
+#  between files unseen, so a second row pins each FILE WITH ITS OWN COUNT (WHOLE_FULL_FILES, `name:count`,
+#  sorted under LC_ALL=C).  Pass 2 of this round MEASURED two holes in the first form of these rows (a set of
+#  names let a site move between the two files; the pattern matched only the double-quoted spelling), and the
+#  F2 pass two more in the repair (the rows counted LINES, so two sites on one line read as one, and a site kept
+#  as a trailing comment after its conversion still counted).  Both rows now come from census_tokens.py: code
+#  tokens only, either quote, any spacing, every OCCURRENCE.  Other spellings of the same test -- another
+#  receiver name, `strip()`, a slice compare -- are the filed `hygienecensusholes`, not closed here. ***
+WHOLE_FULL_FILES="arm_bdt_probe.py:1 arm_flags_probe.py:2"
+EXPECT_WHOLE_FULL=3
 #  *** ROW 3: SCOPED TO FILES THAT CAN DRIVE A REAL GUEST, rather than exempting a
 #  filename.  Adjudicated 2026-08-29; the name-exclusion form was WITHDRAWN. ***
 #
@@ -583,7 +680,8 @@ EXPECT_WHOLE_FULL=2
 #  the POPULATION needs neither an exemption nor a companion pin, and it subsumes the
 #  readiness_predicate_test.py case automatically.
 #
-#  THE POPULATION TERM IS TWO ALTERNATIVES, and the second is not hypothetical:
+#  THE POPULATION TERM IS FOUR ALTERNATIVES -- pty.fork, forkpty, pty.spawn, importing drive_guest (it said
+#  "TWO" until 2026-09-23) -- and the drive_guest one is not hypothetical:
 #  `selftest_absorb.py`, `selftest_budget.py` and `selftest_logdir.py` import
 #  drive_guest and contain NO pty.fork literal -- measured -- so a pty.fork-only term
 #  would let a guest-driving file out of the census.  None holds a whole-full site
@@ -599,9 +697,9 @@ EXPECT_WHOLE_FULL=2
 #  the defect would make this pin answer a question it is not asking.
 #
 #  DISCLOSED RESIDUALS, all real, none live today: `from pty import fork` with a bare
-#  fork(); `import pty as p`; a statement-local import; `os.forkpty` directly (which is
-#  what pty.fork wraps); `import regress.drive_guest`.  Censused at 0 apiece.  THE
-#  PRESENT VALUE OF 2 IS CORRECT; THAT DOES NOT ESTABLISH POPULATION COMPLETENESS.
+#  fork(); `import pty as p`; a statement-local import; `import regress.drive_guest`.  Censused at 0
+#  apiece.  (`os.forkpty` was listed here too until 2026-09-23 -- the pattern MATCHES it.)  THE
+#  PRESENT VALUE (3, pinned above) IS CORRECT; THAT DOES NOT ESTABLISH POPULATION COMPLETENESS.
 #
 #  `-print0 | xargs -0` matches both neighbours: a bare xargs finds ZERO files when a
 #  path contains a space (measured).  No space in $HERE today; the neighbours' own
@@ -616,8 +714,13 @@ pty_driving() { find "$HERE" -name '*.py' -type f ! -path "$HERE/artifacts/*" \
                 | xargs -0 grep -lE 'pty\.fork|forkpty|pty\.spawn|^[[:space:]]*(import|from) drive_guest' 2>/dev/null; }
 pty_code() { pty_driving | tr '\n' '\0' \
              | xargs -0 grep -h "$1" 2>/dev/null | grep -v '^[[:space:]]*#'; }
-whole_full=$(pty_code 'buf.rstrip().endswith("GXemul>")' | grep -c .)
+#  hygienecensus 2026-09-23: the allowlist BY NAME, WITH EACH FILE'S OWN COUNT -- `path:count` for every file
+#  holding a CODE-token whole-buffer site (census_tokens.py; per occurrence), over the same pty-driving
+#  population, paths relative to regress/, sorted under LC_ALL=C and space-joined.  The count is their sum.
+whole_files=$(pty_driving | sed "s|^$HERE/||" | python3 "$HERE/census_tokens.py" whole "$HERE" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+whole_full=$(printf '%s\n' $whole_files | awk -F: 'NF > 1 {s += $NF} END {print s + 0}')
 check "readiness: whole-buffer full-prompt sites (allowlist)" "$whole_full" "$EXPECT_WHOLE_FULL"
+check "readiness: whole-buffer sites, per allowlisted file" "$whole_files" "$WHOLE_FULL_FILES"
 check "readiness: anchored full-prompt sites (#392)" "$conv_anchor" "$EXPECT_CONVERTED"
 check "readiness: echo guard present (#392)"         "$conv_echo"   "$EXPECT_CONVERTED"
 check "readiness: send takes a fresh mark (#392)"    "$conv_mark"   "$EXPECT_CONVERTED"

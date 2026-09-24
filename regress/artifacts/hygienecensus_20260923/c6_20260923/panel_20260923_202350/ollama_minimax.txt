@@ -1,0 +1,90 @@
+VERDICT: SHIP -- with two imprecisions in the brief that do not change the closure, and one owed item.
+
+---
+
+## Q1 -- do F6-F6d do what they claim?
+
+I read the diff hunks and the dispositions in §F2 against the owner's ruling. Each closure check below is labeled [READ] (from the packet) or [REASONED] (derived from the diff text alone).
+
+- **N1** [READ] Per-token `name:count` with file-existence check is in the F6/F6b hunks. The residue (grok's `arm_bdt_probe.py:9 x.py` beside a real `x.py`) is a crafted name that splits into two pieces each naming a real file. **Classification correct**: FILED LOW.
+- **N2** [READ] The unconditional `tr -d '\r'` shim is in the F6 hunk; the git-bash control shows 0 CR bytes after F6d vs 2 in F6. **Classification correct**: REAL use (git-bash is the installed shell).
+- **N3** [READ] `astcall` is in the F6b hunk, called from both `--grandfather` (needs rc 1) and `--release` (needs rc 0 for in-tree probes). **Classification correct**: REAL use.
+- **N4** [READ] `set -f` is in subshells around all four printed lists (three in F6b/F6c, one in the gate hunk). **Classification correct**: REAL use (the gate's own list is the real-use one; the deriver's three are the residue).
+- **N5** [READ] The canary lives in `mktemp -d` and is removed; a tree file of the canary's name no longer collides. **Classification correct**: REAL use.
+- **N6** [READ] Both modes (promptless + whole) and both paths (readable + absent) are exercised in the temp dir. **Classification correct**: REAL use.
+- **N7** [READ] Comment now says liveness, not proof; `--release` is parser-checked and `--write` refuses while any GONE name reads as no longer promptless. The report alone stays unproven. **Classification correct**: FILED LOW (a broken classifier is not a real-use probe).
+- **N8** [READ] The `for _v in bare allends full unknown _ptyn conv_anchor conv_echo conv_mark whole_full` loop in F6 checks every value against `''|*[!0-9]*`. **Classification correct**: REAL use.
+- **N9** [READ] Measured t_rlf/t_rctl; the `tr -d ' -~'` check refuses both. **Classification correct**: REAL use.
+- **N10** [READ] t_gpbytes shows 0 bytes outside the allow-list for the current 43 names. A live byte needs a hand edit. **Classification correct**: FILED LOW.
+- **N11** [READ] t_pyopt1 shows the assert is dropped under PYTHONOPTIMIZE=1. **Classification correct**: FILED LOW (unusual env var).
+- **N12** [READ] A hand-edited gate layout is not a real probe or real ruling. **Classification correct**: FILED LOW.
+- **N13** [READ] The LINE FEED sentence now names the class measured (a name whose ONLY disallowed byte was a LF). **Classification correct**: REAL use (reword).
+- **N14** [READ] The canary comment now says liveness. **Classification correct**: REAL use (reword).
+- **N15** [READ] M11 absorbed into astcall (N3); M9 is pre-existing. **Classification correct**.
+- **N16** [READ] F6b's `pywrite() { "$PY" - "$@"; ... }` did not bypass the unconditional `python3()` shim. Under WSL `PY=python3` and the shim pipes through `tr`; the pipe status is `tr`'s (0), so writer rc 5 or 1 read as 0 and the tool printed DERIVE_DONE. F6d's `command "$PY"` bypasses the function. Measured by t_pyopt0 (F6c printed DERIVE_DONE with the writer's assertion failing; F6d prints DERIVE_FAIL rc 6). **Classification correct**: REAL use (WSL is the installed shell).
+
+**One imprecision in the brief**: N16 attributes the unconditional shim to "F6b" but the shim change is in the same hunk as the other F6 changes (the `python3() { command "$PY" "$@" | tr -d '\r'; }` line). Minor; does not change the closure.
+
+---
+
+## Q2 -- the smallest REAL-use input that gets past F6d and does harm
+
+I swept: probe names, ruling bytes, change-note bytes, WHOLE_FULL_FILES entries, `--grandfather`/`--release` paths, git-bash, WSL, and the writer's grammar sink.
+
+The smallest REAL-use gap I can name from the packet alone is **a probe file whose WHOLE_FULL_FILES entry is `arm_bdt_probe.py:<n> x.py:<m>` where both `arm_bdt_probe.py` and `x.py` are real files in regress/** (t_wfcolon3). The per-token file check passes for both pieces. A real probe would not have such an entry, but the brief itself flags this as "the crafted-name residue" and the owner ruling files it LOW. This is not a defect introduced or left unaddressed by F6d; it is the residue the ruling names.
+
+**Brief imprecision that affects Q2**: t_wfcolon3's description ("a probe named `arm_bdt_probe.py:9 x.py`") reads as a literal filename with a space and colon. If that were the actual filename, the per-token check would refuse it (the file `arm_bdt_probe.py` does not exist; only `arm_bdt_probe.py:9 x.py` does). The result "WRITTEN on F6d too" only makes sense if the WHOLE_FULL_FILES entry is `arm_bdt_probe.py:9 x.py:<m>` with `arm_bdt_probe.py` and `x.py` as two separate real files. The brief is describing the WHOLE_FULL_FILES entry, not the filename. **This is a description defect in the brief, not a code defect.**
+
+I cannot name a smaller REAL-use input that does harm.
+
+---
+
+## Q3 -- F6b/F6d's shim and `astcall` under REAL use
+
+**Shim** (`python3() { command "$PY" "$@" | tr -d '\r'; }`):
+- Under WSL: PY=python3; `command python3` bypasses the function and calls the external binary. The pipe's status is `tr`'s, which is the defect N16 names -- fixed by adding `command "$PY"` in F6d's pywrite.
+- Under git-bash: PY=python (the fallback after the Store stub fails); there is no function named `python`, so `command python` is a no-op bypass. The `tr -d '\r'` strips the CRLF the fallback writes.
+- Heredoc + MSYS: the canary heredoc is `<<'PY'` (quoted), so no expansion. Under MSYS argument conversion, `"$_cd/zz_canary_call.py"` is a single quoted argument; `$_cd` is a `mktemp -d` path that MSYS leaves alone (it does not start with `/c/` after `mktemp -d`).
+- CRLF in the heredoc body: impossible (the heredoc is literal).
+- A probe that does not parse: `ast.parse` raises, `sys.exit(2)`. The grandfather check refuses (rc != 1); the release check refuses (rc != 0) with message "the parser finds no readiness call in it (rc 2): it is still promptless" -- **the message is misleading** (it says "no readiness call" when the real reason is "cannot parse"), but the refusal is correct.
+- A probe deleted from the tree: `--release`'s `if [ -e "$HERE/$f" ]` guard skips astcall and proceeds. Correct.
+
+**`astcall`**: `command "$PY" - "$1" <<'PY' ... PY`. Reads `sys.argv[1]` with `encoding="utf-8"`. Under git-bash, if the probe file is CRLF, Python's text mode (default `newline=None`) translates to LF before `ast.parse` sees it. Correct under both shells.
+
+---
+
+## Q4 -- records
+
+I found **one sentence that is misleading, not false**:
+
+- The `--release` refusal message "the parser finds no readiness call in it (rc 2): it is still promptless" is printed for rc 2 (parse error) as well as rc 1 (no Call). For rc 2 the reason is "cannot parse", not "no readiness call". The refusal is correct; the wording is imprecise.
+
+Everything else in the comments and header I checked is consistent with the diff.
+
+**Brief imprecision that affects Q4**: t_k14release's description "a `match` class pattern `case K.endswith("GXemul>"):`" cannot be what astcall returns 1 for -- that pattern IS a real `ast.Call` in the AST, so astcall would return 0, not 1, and F6d would NOT refuse. The control result (REFUSED rc 4, astcall rc 1) implies the actual test case is a match pattern WITHOUT a real `.endswith(...)` Call -- e.g., `match cmd: case "GXemul>":` (a value pattern the classifier credits). The brief gives a misleading example.
+
+---
+
+## Q5 -- closing
+
+The diff is delivered (inlined). The roster is inlined (N1-N16 with dispositions). My denominator: I swept the seven hunks for self-consistency, the N1-N16 closures against the diff and the owner's ruling, the astcall/pywrite logic under both shells, the per-token WHOLE_FULL_FILES check, the canary in both modes and both paths, and the writer's grammar sink.
+
+**The pass is VALID to close the chain.** The one measurement that would strengthen it is the owed gate-6 run on the final files (the brief says "in the next quiet slot"), but that is a run, not a review -- the review can close without it.
+
+---
+
+## Things I found that are not in the questions
+
+1. **Brief imprecision**: N16 says "F6b's now-unconditional shim". The unconditional shim is in the F6 hunk, not F6b. F6b's contribution is `astcall` and the per-token file check.
+2. **Brief imprecision**: t_wfcolon3's "a probe named `arm_bdt_probe.py:9 x.py`" reads as a literal filename. The WROTE result only makes sense if the WHOLE_FULL_FILES entry is `arm_bdt_probe.py:9 x.py:<m>` and the two pieces name two separate real files.
+3. **Brief imprecision**: t_k14release's example `case K.endswith("GXemul>"):` is a real `ast.Call`, so astcall would return 0, not 1. The control's rc-1 result implies the actual test case is a match pattern without a real Call.
+4. **Comment imprecision in the code**: the `--release` refusal message says "no readiness call" for rc 2 as well as rc 1; the rc-2 reason is "cannot parse". Refusal is correct; wording is not.
+
+---
+
+## Seat record
+
+- **Model**: MiniMax-M3 (per the header; this is the seat speaking)
+- **What I read**: the brief in full, including the inlined diff, §C settled premises, §F2 dispositions, §E questions, the "Measured" section, and the operational rule
+- **What I ran**: nothing. I am packet-fed and did not attempt file reads, grep, or any command. I did not run `run.sh`, any gate, or the battery
+- **What I would need to settle the imprecisions**: the actual content of `controls_c6b/t_k14release/` and `controls_c6b/t_wfcolon3/` (the test probe files and the WHOLE_FULL_FILES entry the census wrote). Without those, items 2 and 3 above remain ambiguous; neither ambiguity changes the verdict.

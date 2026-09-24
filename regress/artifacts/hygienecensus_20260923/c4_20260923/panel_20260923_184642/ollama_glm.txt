@@ -1,0 +1,74 @@
+VERDICT: DO NOT SHIP -- the new name allow-list does NOT "refuse exactly what it says": `$( )` strips trailing newlines before the `-z` test, so a name whose only forbidden bytes are trailing 0x0A bytes is ACCEPTED (`--grandfather $'zz\n'`; a bare `$'\n'` re-opens K1's blank-line hole exactly), while the header claims every byte outside `[A-Za-z0-9._/-]` is refused. One-line fix (count bytes with `wc -c`, as the ruling check already does). Secondary, non-blocking: K14 must be FILED, not merely disclosed, and the new refusal message misstates the tool's own allow-list (it omits `-`).
+
+## Q1 — do the new checks do what they claim?
+
+**(a) The ruling.** READ: the code is `printf '%s' "$RULING" | LC_ALL=C tr -d ' -~' | wc -c`, compared arithmetically to 0. REASONED: this path is byte-exact and immune to the `$()`-stripping bug because `wc -c` counts real bytes and `$(( ))` does not strip. I walked all 256 byte classes through the four stages (REASONED, not run):
+
+- 0x00–0x1F, 0x7F, and every byte ≥0x80 (hence all of UTF-8 NBSP, U+0085, U+2028, U+2029) leave residue after `tr` → refused. Under `LC_ALL=C`, `tr` is byte-wise; UTF-8 continuation bytes are all ≥0x80, so no multi-byte character can smuggle an allowed byte through; in any single-byte encoding a stray ASCII-range byte (e.g. Shift-JIS 0x5C) is refused as itself. Closed.
+- Surviving printable bytes: the shape regex, `date -d` round trip, the quote/`\`/`$`/backtick case, and the 16-alnum count then apply. The residue that passes everything — 91 printable byte values, no line break possible — is inert in a `#` comment, which can only be escaped by a newline. No accept-against-claim found.
+- Refused-but-legitimate: a reason containing `$` (a price, a prompt string), a backslash (a Windows path), non-ASCII names — all disclosed, deliberate, and pre-F4. Dates: every real calendar date round-trips under GNU date; no legitimate date refused. **Caveat (READ + REASONED):** the check is GNU/BusyBox-specific. On BSD/macOS `date`, `-d` is the DST flag and the round trip fails for every date — fail-closed but unusable. The pinned environments (git-bash, WSL) are GNU, so acceptable; it deserves a line in the records. One nit: the shape-check message still says "(16+ characters of reason)" while the operative floor is 16 letters/digits — the message describes its own stage, so not false, only stale-sounding.
+
+**(b) The names.** READ: the check is `[ -n "$f" ] && [ -z "$(printf '%s' "$f" | LC_ALL=C tr -d 'A-Za-z0-9._/-')" ]`. The `tr` set is correct (trailing `-` is literal). REASONED byte-class enumeration of all 256 values, with position sensitivity:
+
+- Empty → refused (READ, measured `''`).
+- Any byte outside the 68 allowed, in leading or interior position → residue survives `$()` → refused. READ-consistent with the measurements: space (`zz opus.py`), `$`, NBSP, `[`, tab/newline in the ruling-class cases.
+- **THE HOLE (REASONED): a name whose only forbidden bytes are trailing 0x0A bytes.** `tr` passes the newline through; command substitution — POSIX-mandated — strips trailing newlines; the `-z` test then sees an empty string and PASSES. So `--grandfather $'zz\n'` is accepted by the allow-list, and a bare `$'\n'` passes `[ -n ]` and the allow-list both. The old `*[[:space:]]*` case refused exactly these; F4 regressed the class. This is not reachable only in a fantasy parse: the packet's own measurements require verbatim argument preservation (the apostrophe ruling contains spaces and was written; F3's empty name reached eligibility and matched NEWP's blank line), so args reach the checks intact, and the header's own exhaustive list of what "Both REFUSE" names the allow-list as the only byte guard. Downstream, GNU `grep -F` splits a pattern on newlines, so `grep -qxF -- $'zz\n'` behaves as the two patterns `zz` and `''` — the trailing-newline name matches the real probe's NEWP line, and the bare newline matches the blank line an empty NEWP prints: **K1's blank-line hole, resurrected through the newline form.** Harm on write is bounded (a newline inside the double-quoted list is legal shell and IFS-inert on re-split), but the acceptance alone falsifies the header sentence, and this round's whole stated pass criterion is that the checks refuse exactly what they say.
+- Real names refused by design: anything outside the 68 bytes — notably `+`, `~`, `@`, spaces — which the old deny-list *allowed*. Disclosed ("rename the probe") and fail-closed, but it is a real narrowing of accepted filenames new in F4; a records line, not a blocker.
+
+**Measurement wanted (named):** on a `/tmp` copy, `--grandfather $'zz\n'` with a real promptless `zz`, and `--grandfather $'\n'` with an empty NEWP. Prediction: ACCEPTED (or, if some unshown guard fires, a refusal whose message is not the allow-list's). That single run settles or kills my headline finding.
+
+## Q3 — adjudication (one line each)
+
+- **K1 UPHOLD the disposition; REFINE the closure claim** — the fix is right in kind, but trailing-newline names bypass it (above).
+- **K2 UPHOLD the refusal, REFINE the rationale** — K2's own premise ("the quoted list can hold them") is false at the *read* side: the closing pass measured an unquoted expansion globbing (READ, quoted in the old comment), so refusing `*?[` is load-bearing, not a taste restriction. Note also F4 *deleted* that rationale from the code comment — a future pass may "fix" the over-refusal and reopen the glob.
+- **K3 UPHOLD** (measured 99-99, 02-30 refused; GNU caveat above).
+- **K4 UPHOLD** (16 alnum; measured).
+- **K5 UPHOLD** (measured for NBSP/85/2028; 2029 untested but is the same byte class — same mechanism, no separate risk).
+- **K6 UPHOLD** (measured; apostrophe written, `bash -n` clean).
+- **K7 UPHOLD** — the rewrite matches what the F3 pass measured against `n3k.g.rows`; the "keeps one call → every row green" half rests on n3k2, which is not in the packet — plausible, unverified.
+- **K8 CANNOT SETTLE** — the new pointer's target (the "CLOSED-WORLD paragraph") is not inlined; the docstring fragment shown does not visibly explain the two-halves spelling. What would settle it: the full `census_tokens.py` docstring.
+- **K9 UPHOLD** (artifacts cited; corrected to 14; packet-consistent).
+- **K10 UPHOLD** (wording; nothing in packet contradicts).
+- **K11 UPHOLD** (consistent with settled premise 5).
+- **K12 UPHOLD the filings, REFINE the set** — one F3 shape is missing from the filed classes: K14's match-pattern (below).
+- **K13 UPHOLD as disclosed** — fails closed (alias probe listed promptless); for symmetry with n3k it could also be filed, but it is over-strict, not a false pass.
+- **K14 OVERTURN the disposition** — `case K.endswith("GXemul>")` is *credited* (READ, the F4 docstring says "is still counted"), and a class pattern never calls anything: a probe whose only readiness-looking line is that pattern is counted as having a spelling it does not have. That is an **open-side** shape, the same direction as the filed false passes, pre-existing per the author's own rule, and it belongs in `hygienecensusholes` alongside e9/e10/n3b — "disclosed in a docstring" is not "filed". (Scope note, REASONED: only the bare-call row is exposed; a whole-buffer shape cannot appear in a `match` pattern because `buf.rstrip()` is not a valid pattern primary.)
+- **K15 UPHOLD** (filed; consistent with the stopping rule).
+- **K16 UPHOLD as reasoned-fail-closed, but under-anchored** — two premises are not in the packet: (i) the gate compares derived lists/counts against the *pins* rather than recomputing only; (ii) `--write` refuses a wholesale grandfathered wipeout. Add (iii): a stale/cached census artifact replayed as if live would pass pins silently — whether the gate runs the classifier live is not shown. What would settle all three: the gate's row code and the `--write` refusal list.
+- **K17 UPHOLD** (filed with H13, split records/detector — consistent).
+- **K18 UPHOLD the rejection** — and F4 makes it stronger: with names restricted to `[A-Za-z0-9._/-]`, the double-quoted body cannot contain `#`, newline, or space, so no comment-like line can exist in it regardless of extraction. Caveat: the extraction code itself is not in the packet.
+- **D2 UPHOLD the settlement** — the F3 DO-NOT-SHIPs rested on K7/K9 as false records; the artifacts settled both and the corrections are visible in this packet. Moot.
+
+**Which accepted disposition is wrong: K14** (disclosed where the rule requires filed — it is an open-side false-credit shape). **K1** is right in disposition but its implementation claim is false (trailing newline). **K2** is right in outcome but the stated reason ("deliberate restriction") omits the load-bearing one (the unquoted read), and the comment dropped it. **K16 and K18** stand as reasoned/rejected, with the premises named above.
+
+## Q2 — smallest input past the F4 checks
+
+**Deriver half:** `--grandfather $'zz\n'` (with a real promptless `zz`) — accepted against the header's claim, writes a newline into the double-quoted list; `--grandfather $'\n'` with an empty NEWP — the K1 blank-line phantom again. No pin moves, no live shell, `bash -n` clean; the harm is the false header record and the reopened K1 class, which is precisely what this round exists to close. Denominator: all 256 byte classes × {leading, interior, trailing} against both checks (REASONED; the ruling check survived all of them, the name check leaked the trailing-0x0A class). One premise I could not settle: the physical `--write` insertion code (if the writer ever uses the ruling as a `printf` *format*, `%` matters; in a comment it is inert). Not in the packet; the md5'd file settles it.
+
+**Census half:** the smallest edit passing the readiness rows while outside the filed shapes is the **K14 match-pattern**: a probe whose only readiness line is `case K.endswith("GXemul>"):` is credited a call and escapes the promptless list — and it is not in e9 (line-based), e10 (f-string), or n3b (whole-shape), nor filed anywhere. Beyond that I cannot enumerate: the gate's rows are not inlined, so my denominator is the filed-class list itself, and I am naming that as a limit, not papering over it.
+
+## Q4 — records: false sentences as of today
+
+1. READ: the derive header sentence — "a name that is empty or holds any byte but ASCII letters, digits, '.', '_', '-' and '/'" is **false** for trailing-newline names (the finding above).
+2. READ: the in-code comment "So an allow-list, byte by byte" is misleading for the same reason — the `-z` test never sees the stripped bytes.
+3. READ: the new runtime refusal message — "a probe name here is ASCII letters, digits, '.', '_' and '/' only" — **omits `-`**, contradicting both the header and the behavior (`zz-legit_probe.py` was grandfathered). A small false record in a changed line.
+4. READ: the F4 comment dropped the closing-pass rationale for refusing glob characters (the unquoted expansion that globbed) — a records regression, not a falsehood.
+5. CANNOT SETTLE: the "CLOSED-WORLD paragraph" pointer (K8's fix) — target not inlined.
+6. Everything else cross-checks: I verified the internal line arithmetic of the diff hunks (all consistent except one — see below), the old-code claims about the deny-list against the shown old lines, the nine-refused and five-refused counts against their listed members, and "14 of the 45" against "13 filed + n9". The K7 rewrite matches the F3 measurement it cites.
+
+## Q5 — option-set completeness
+
+- **K2:** an unnamed disposition exists — fix the *reader* (quote the expansion at the consumption site) and then allow `*?[`. F4 chose input-side refusal (defensible, and load-bearing given the unquoted read), but "repair the consumption site" was never on the stated menu.
+- **K12:** an unnamed disposition exists — **file the K14 match-pattern class**. The author's menu had only e10, n3b, and e9; K14 is a fourth, open-side shape found by the same pass, and it received neither a filing nor a place in any class.
+
+## Found elsewhere
+
+- READ: the ruling hunk `@@ -61,12 +67,16 @@` does not match its own body — the inlined lines count 11 old / 15 new, one context line short on each side. Every other hunk's counts are exact, so this is almost certainly one dropped (blank?) context line in transcription, but "INLINED IN FULL" is then slightly false. A file seat should confirm the ruling block against md5 23410fe1, specifically between the shape grep and the quote case.
+- READ: the shape-check `grep` runs without `LC_ALL=C` (only the `tr`s set it). Harmless here — the printable-ASCII stage has already run, so `.` and `[0-9]` are byte-safe — but worth knowing the next editor may not preserve that ordering.
+- REASONED: K16's "classifier yields nothing" case is sound *if* the gate reads live classifier output and compares to pins; add the stale-artifact replay case to the measurement request.
+
+**Measurements wanted:** (1) the two newline-name runs above; (2) gate 6 on the final files (owed); (3) a K16 break-the-classifier run (stub `census_tokens.py` to emit nothing, and to emit a stale-but-matching artifact) — all in `/tmp` copies, per the operational rule. I ran none of them.
+
+## Seat record
+
+**Model:** packet-fed review seat (claude); blind to the repository by design. **Read:** the brief in full; the three inlined unified diffs (checked line-by-line, including `@@` arithmetic); the Measured section; §C; §F2 (K1–K18, D2); §E. **Ran:** nothing — no files, no commands, no gates, no detectors. Every claim above is labeled READ (from the packet) or REASONED (shell semantics applied to the inlined code); nothing is MEASURED by me. The one verdict-bearing finding (trailing-newline names) is REASONED from POSIX-mandated `$()` behavior applied to code inlined in the packet, and the single measurement that would confirm or kill it is named in Q1(b).

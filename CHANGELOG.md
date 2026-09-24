@@ -1,3 +1,120 @@
+# `#546` (hygienecensus): gate 6's readiness census was 24 probes stale and RED at HEAD -- re-derived by a tool, never by hand, and the tool itself went through seven review passes before it could be trusted to write the gate
+
+**The defect.**  `regress/gate_hygiene.sh` (gate 6) carries a census of the regression probes that drive the emulator
+through a pseudo-terminal: how many there are, which have NO prompt-readiness check (each must be grandfathered BY
+NAME), and how many use each known spelling of a prompt test.  Its pins were set by `#500` (b78bb0f, 2026-09-05) at 46
+pty probes; 24 more were committed since and none moved the census, so **5 of gate 6's 12 readiness checks were RED at
+committed HEAD and the weekly battery of 2026-09-20 failed gate 6 on seven rows** -- and no targeted gate runs gate 6,
+so nothing said so for five days (measured by the codex battery pre-flight of 2026-09-19 and re-derived on a pure export
+of HEAD: `regress/artifacts/hygienecensus_20260923/derive_report_HEAD_export.txt`).
+
+**The fix, by owner ruling (2026-09-23, "re-pin, count all").**  Count every probe lying in the tree; grandfather the
+promptless ones BY NAME; allowlist `arm_bdt_probe.py:76`'s whole-buffer readiness site BY NAME at pin 3 (converting it
+is filed, `armbdtreadiness`, with NO expiry by owner ruling); re-spell `crime_width_probe.py`'s operation test; and ONE
+bulk re-derivation of the pins by a new tool, `tools/derive_hygiene_pins.sh`, which runs the gate's OWN census lines,
+reports got-versus-pinned, and writes the pins -- so the next committer re-runs a tool instead of hand-editing numbers.
+A pin that moves in the direction a defect moves (a bare `endswith(">")` growing, an unrecognised spelling appearing, a
+guarded probe losing its guard) is REFUSED, never re-pinned; a whole-buffer change needs a written ruling
+(`--ruling "YYYY-MM-DD: <who ruled and why>"`), recorded in the gate above the pin it moved.
+
+**The census itself was the second defect.**  Pass 2's measuring seat found **fourteen edits that walk past gate 6
+with every row green** (another buffer name, a split line, `strip()`, `endswith (` with a space -- the `#37` bare defect
+itself behind one space --, a slice compare, a comment-only `endswith`, a spaced filename, a subdirectory probe...), and
+`crime_width_probe.py` was promptless and hidden only by a COMMENT this round had added.  The F2 pass then measured
+**31 edits still passing** the pass-2 repair.  So the round rebuilt the census's positive classifications on Python
+TOKENS -- `regress/census_tokens.py`: a comment, a string or a docstring is not code, sites are counted per
+occurrence, statement boundaries are kept, a file that cannot be read is listed promptless -- and made the deriver
+refuse, by name and byte, every input the passes found it would mis-write.  What the census still cannot see is FILED
+and named in the gate's own text: it is a SPELLING census (`hygienecensusholes`).
+
+**THE CHAIN -- seven review passes, each on the previous repair's diff, every one measured on `/tmp` copies with
+predictions written first** (`regress/artifacts/hygienecensus_20260923/`):
+* **pass 2** (`panel_20260923_140627`, `p2_20260923/`) -> the pass-2 repair (C1-C7); **F2**, the findings-sharing pass
+  (`panel_20260923_145405`, `f2_20260923/`) -> **F2**: the token classifier, NUL-safe relative paths, `--ruling` on the
+  command line and written into the gate, duplicate names refused (controls_f2: 47 of 47 as predicted).
+* **the closing pass** (`panel_20260923_173123`, `c2_20260923/`) -> **F3**: statement boundaries and a required `.`
+  (a method REFERENCE on one statement and a string on the next was one "call"), control characters refused in a
+  ruling (a newline carried two live `echo INJECTED` lines into the gate -- `t_rnl`), names quoted, `--release` exact.
+* **F3's pass** (`panel_20260923_180958`, `c3_20260923/`) -> **F4**: the ruling printable ASCII, a real calendar date,
+  16 letters or digits of reason; names by an ALLOW-list (`$`, a backtick, a quote, a backslash and an EMPTY name had
+  passed the deny-list).
+* **F4's pass** (`panel_20260923_184642`, `c4_20260923/`) -> **F5**: the allow-list COUNTED (`$(...)` strips a trailing
+  newline, so a LINE FEED name grandfathered two names at once, one of them no file); dates in UTC; the census run with
+  the interpreter found, and a canary proving the classifier ANSWERS (under git-bash `python3` is the Windows Store stub:
+  the classifier printed nothing, all 43 names read GONE, and `--release` took a promptless probe off the list); the list
+  writer anchored at line start.
+* **F5's pass** (`panel_20260923_192141`, `c5_20260923/`) -> **F6, F6b, F6c, F6d**: every field grammar-checked at the
+  SINK before either writer writes; every census value checked as a count; per-token `name:count` entries each naming a
+  FILE (a file named `zz:9 x.py` had written EXPECT_WHOLE_FULL=13 for 4 real sites, every row green); CRs stripped under
+  git-bash; Python's own PARSER re-checking `--grandfather`/`--release`; the printed lists under `set -f`.  **F6d fixed a
+  defect F6b introduced**: from F6b on, under WSL every writer failure read as success (a pipe's status was `tr`'s) --
+  found by F6c's own controls (`t_pyopt0`).
+* **F6's pass -- the LAST, by owner ruling (2026-09-23: "one more pass, then file"; fix only what a real probe name or
+  real git-bash/WSL use can trigger)** (`panel_20260923_202350`, `c6_20260923/`) -> **F6e**: both writers close their
+  file with `with` (codex: a flush failing at close -- a full disk -- was swallowed and the tool printed success over a
+  truncated gate); the parser check reads `utf-8-sig` (the Opus seat: agy's committed witness carries a byte-order mark
+  and could be neither grandfathered nor released); it applies only to names still in the pty census, and a name that
+  left it is released unless its file still makes a pty another way (the Opus seat: a probe moved onto `drive_guest`
+  was otherwise stuck, `--write` refused, only a hand edit could clear it); messages by the parser's return code; records.
+
+**F6e's controls, predictions first -- every one held** (`controls_c6e/`: `PREDICTIONS.txt` 21:48, `RESULT.txt`): the
+Opus seat's own 122-line matrix re-run on the SHIPPED files differs from its measured fix only in the three reworded
+messages, W and git-bash; agy's real BOM witness grandfathers; the full-disk case reproduces on F6d (success printed over
+a gate truncated to 64512 bytes) and fails loudly on F6e (DERIVE_FAIL rc 6); the base suite's 66 verdicts and 23 deriver
+outputs are byte-identical to F6d's.  **Both still leave a truncated gate behind a failed write** -- F6e makes it loud,
+not atomic; filed.
+
+**FILED, by owner ruling** -- `hygienecensusexotic` (LOW): inputs only a crafted name, a deliberately broken interpreter
+or a hand-edited gate produce (a whole-buffer file name whose space-split pieces each read as a real entry;
+PYTHONOPTIMIZE dropping the writers' asserts; a classifier that dies part-way passing the canary; reader and writers
+keying on different layouts of a hand-edited gate; the gate's own list `eval`'d; any `.endswith(...)` credited as
+readiness; a census/parser disagreement with no tool exit; the gate's unquoted `$whole_files`).  `hygienecensusholes`
+(MED) is rewritten to the census as it now stands, plus the non-atomic write.  `armbdtreadiness` (LOW): no expiry.
+
+**Seats.**  Seven passes, each: the eight scriptable transports (the kimi CLI on its weekly limit, covered every time by
+kimi-k3:cloud), a dedicated codex job, and the Opus measuring seat, identity checked from its transcript per pass.
+**Three seat failures, recorded as failures and never as agreement**: agy on F2 (503, a transport failure); codex on
+F4's pass (its final answer refused by the provider's content filter -- the only SHIP in its stream is the Opus seat's
+summary it had read, and both harness tools reported it as "answered": `codexsubjectrefusal`); and **the Opus seat on
+the closing pass, whose answer was written by claude-opus-4-8 after claude-opus-5-5 refused** (F3's pass: the same
+fallback for the measurements, but its verdict was re-asked and answered by claude-opus-5-5; F4-F6: claude-opus-5-5).
+**F6e had NO panel pass, by owner ruling; the flagship seat reviewed it, by name, and fired LAST on the round**
+(Fable 5.1, claude-fable-5-1 throughout, verified from its transcript; `fable_final_20260923/FABLE_ANSWER.md`):
+**SHIP** -- every REAL/FILED classification right under the ruling, the non-atomic write correctly filed as a
+post-pass finding.  Its conditions were met before this commit: an F6e header sentence was FALSE (the change note
+is checked as printable ASCII, not by the ruling's grammar) and one imprecise (which printed lists run under
+`set -f`) -- both corrected, comment-only (deriver 77e190e9); `census_tokens.py` and `derive_hygiene_pins.sh` were
+UNTRACKED and are added by this commit (the gate would otherwise have shipped calling a classifier not in the
+repository); and the owed gate-6 run on the final files, below.
+
+**Gates.**  Gate 6 PASS on the final files in the same quiet-slot run (gates 1, 2 and 4 PASS beside it, REGRESS_PASS): the census reads 73 pty probes, 43 promptless all grandfathered (new none, gone none), whole-buffer 3 (`arm_bdt_probe.py:1 arm_flags_probe.py:2`), the #392 anchor / echo / fresh-mark counts 24 / 24 / 24, bare 0, unknown 0 (`regress/artifacts/hygienecensus_20260923/gate6_f6e/run_1246.log`).
+
+**The rider that lets this commit land (bundled, as bbfc942e bundled its stopword): section L compared hash
+ABBREVIATIONS, and git lengthened them.**  The first attempt at this commit was refused by section L with six HARD
+rows the ledger attributes correctly.  `tools/pipeline/check_commit_attribution.py` tested `h in commits` (exact)
+and `h in reopened` (substring) against git's `%h`; the rows carry the 7-character form git printed when each closed,
+and after #545 (4264ee20) git's automatic abbreviation became 8 characters -- so the gate was red at HEAD for EVERY
+commit, from nothing in the ledger.  The mirror case failed too: `fbdeclinefive.commits` was written at 8 characters
+and hard-failed at `core.abbrev=7` (my prediction missed it; `PREDICTIONS_addendum.txt` records the miss, sealed
+before the edit).  Fixed the way section F's receipt check already was: a 7-40 character hex token names a commit
+when it is a PREFIX of `%H`; `%h` is only printed.  Controls, predictions first: pre-fix 6 HARD at 8 characters and 1
+at 7; post-fix 0 at both, the two outputs identical modulo hash width; `pcc2widthkills`' REOPENED path intact at
+depth 130; and three negative controls -- a different real sha, a sha sharing seven characters that is not a prefix,
+and the full 40-character hash -- as predicted (`regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/RESULT.txt`).
+The same defect had reported 14 lines of fake SOFT drift.
+Reviewed on the diff before commit by two seats, codex (GPT-6 Astra, max) and grok 4.7 (xhigh) -- both SHIP WITH NOTES, agreeing on every note: the one mutant that survived the first controls
+(`{7,40}` -> `{6,40}`) is now killed by a six-character `reopened` control (Q7, predictions sealed first); the
+free-text `reopened` edges they constructed (a hex-only English word; a sha glued to letters) occur nowhere in the
+ledger and are recorded, not changed; a comment was corrected; and a verifier now asserts every control's verdict
+(18/18, `VERIFY.out`; 14/18 rc=1 on its own negative control, `VERIFY_negative.out`).  **Two seats, not nine: the nine-seat pass on this rider is
+OWED and rides as a second question in the next panel.**
+
+**Two codex answers are preserved without their NUL bytes** (`c4_20260923/panel_20260923_184642/codex.txt`, 77 of
+them; `c6_20260923/panel_20260923_202350/codex.txt`, 75): each run was a UTF-16LE "Access is denied." from a command
+codex's read-only sandbox refused, and section Y refuses a NUL in a tracked text file -- the fbsmlane r537 precedent.
+`NUL_REMOVED.txt` sits beside each, the originals stay in `_scratchpad/`, and the two ledger entries that quote the
+files' sizes now give both.
+
 # `#545` (fbdeclinefive, round 2 of the footbridge campaign): five register accesses in the direction the DC21285 does not define ended the emulator process -- they are declined now, announced once each, and the detector took four passes to become honest
 
 **The defect.**  `dev_footbridge.c`, `DEVICE_ACCESS(footbridge)`: a guest WRITE to `IRQ_STATUS` (`+0x180`),

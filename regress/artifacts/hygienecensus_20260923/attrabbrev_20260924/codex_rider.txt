@@ -1,0 +1,21 @@
+VERDICT: SHIP WITH NOTES
+
+1. **The measured defect and repair are real.** I reproduced all 11 saved outputs exactly using read-only Git calls and in-memory ledger fixtures. Both abbreviation directions are fixed, the deeper reopening is recognized, and the negative controls remain HARD. For a validated lowercase SHA list, testing each complete token against `%H` is correct **provided the prefix identifies the intended commit uniquely**. Prefix comparison alone does not establish uniqueness; no current ledger token was ambiguous in this repository.
+
+2. **The shared extractor has limitations for free text.** At [the SHA matcher](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py:151):
+
+   - **New false pass:** with a synthetic scanned hash `effaced0` followed by 32 `1`s, subject `testrow CLOSED`, an open row, and `reopened="1234567 -- old traces were effaced during retest"`, the fixed checker prints REOPENED and passes. The old checker at eight characters reports HARD. I verified this through `main()`. At seven characters, the old substring matcher also falsely passed.
+   - **New false HARD:** a reopening hash whose first eight characters remain lowercase but whose later letters are uppercase passed the old substring test and fails the new extractor. For example, Git successfully resolves `cdbe7d75735AE3836635D91D70819A09F564FD1A`, but `names()` rejects it. Entirely uppercase hashes were already rejected by the old test.
+   - Punctuation such as backticks, parentheses, colons and hyphens permits matching. Adjacent ASCII letters or digits prevent it; the old reopening substring test accepted such embeddings. Underscores and non-ASCII letters still permit matching because these boundaries are explicitly ASCII.
+   
+   Ordinary `commits` values containing uppercase or punctuation still fail `bad_commits()`, even if `names()` recognizes something inside them. Thus helper acceptance is not necessarily a gate pass.
+
+   These are unobserved edge cases in the current ledger. Since `reopened` conventionally starts with its SHA, parsing that leading token separately—and explicitly defining its case policy—would make its meaning considerably tighter.
+
+3. **No remaining ledger comparison uses `%h`.** Both attribution comparisons and both consumers of the log tuples were updated. [Section L](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh:802) checks the process status and filters diagnostic labels; it performs no hash comparison. However, [line 273](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_commit_attribution.py:273) still calls `records_only(h)`, which passes that abbreviation to `git show`. That is a freshly generated Git revision lookup, so it does not reproduce the historical abbreviation mismatch. Passing `full` would nevertheless make “`%h` to PRINT” accurate.
+
+4. **A one-character mutation survives every post-fix control:** change the extractor’s `{7,40}` to `{6,40}`. I tested it in memory: Q0–Q6 produced exactly unchanged outputs. Then I replaced `pcc2widthkills.reopened` with `b78bb0 -- closure superseded` at depth 130. The fixed code reports HARD; the mutant incorrectly reports REOPENED and passes. Add this six-character negative control. It must exercise `reopened`: an invalid six-character `commits` token would be caught independently by `bad_commits()`.
+
+5. **The controls are meaningful, but their driver cannot enforce success.** Q3–Q5 exercise a scanned, matching row whose commit touches non-exempt code; their outcomes are not hidden by a records-only exemption. However, [controls.sh line 20](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/attrabbrev_20260924/controls.sh:20) merely prints the checker status and returns `echo`’s success. Unexpected verdicts do not fail the driver. Add explicit expected-status and diagnostic assertions.
+
+   Q6 is also observationally redundant with Q0 for this snapshot: all attribution-field differences between the index and working ledger concern rows absent from the 60 scanned subjects. It checks the staged ledger’s present result, but adds no independent matcher coverage and does not establish that section L reads the index.

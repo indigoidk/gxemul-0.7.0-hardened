@@ -1,0 +1,110 @@
+VERDICT: DO NOT SHIP -- the date extraction in the F4 deriver is buggy for any ruling whose *reason* contains a colon (e.g., "at 14:00", "Ticket ABC:123"), because `${RULING%%:*}` removes from the LAST colon, not the first. The new check refuses legitimate rulings that the header permits.
+
+---
+
+## Q1 -- do the new checks do what they claim?
+
+**Ruling (a).** I cannot run anything; everything below is from reading the diff and reasoning.
+
+Steps a ruling must pass, in order: printable ASCII (`tr -d ' -~'` → wc-c == 0), regex `^[0-9]{4}-[0-9]{2}-[0-9]{2}: .{16,}$`, `date -d` round-trip, no `"`/`\`/`$`/`` ` ``, ≥16 ASCII alphanumerics in the reason.
+
+- Printable-ASCII via `tr -d ' -~'` is correct: `' -~'` is the POSIX range 0x20..0x7e, and `LC_ALL=C` makes `tr` byte-wise; multi-byte UTF-8 (NBSP, U+0085, U+2028) has every byte ≥ 0x80, so all are deleted → wc-c ≠ 0 → refused. Matches the inlined measurements.
+- Regex anchors the colon at byte 10 of the date. The 9 refused cases in the measurements (newline, tab, 21 spaces+x, 2026-99-99, 2026-02-30, 16 dots, 8 NBSP, U+0085, U+2028) all fail at one of: the printable-ASCII step (tabs/NL/U+0085/U+2028 are not printable), the regex (no `:` after the date, or no 16 chars of reason), or the date round-trip (2026-99-99, 2026-02-30). All nine refused (rc 2) matches.
+- Alphanumeric-reason check via `tr -cd 'A-Za-z0-9'` correctly throws out punctuation-only reasons and multi-byte content. Matches the inlined t_rpunct/t_rnbsp.
+- **One defect** (see VERDICT): `_day=${RULING%%:*}`. For a ruling whose reason contains a colon, this yields the part before the LAST colon; `date -d` fails on the resulting string and the legitimate ruling is REFUSED. The header does not document this restriction.
+
+**Names (b).** Allow-list `A-Za-z0-9._/-` plus non-empty. Bytes I worked through against the allow-list:
+
+| byte / form | result |
+| --- | --- |
+| `''` | `-n ""` → FALSE → REFUSED |
+| `* ? [ ]` | not in allow-list → REFUSED |
+| `$HOME` (single-quoted) | `$` not in allow-list → REFUSED |
+| NBSP | `0xC2 0xA0`, neither byte in allow-list → REFUSED |
+| whitespace | not in allow-list → REFUSED |
+| `\` `` ` `` `"` | not in allow-list → REFUSED |
+| `..`, `..foo..py`, `/_/-/.` | all in allow-list → would pass the byte check |
+
+Inside a double-quoted shell list, **none** of `A-Za-z0-9._/-` are special -- `--release`'s `grep -qxF` exact-line match is unambiguous on these bytes. No false accept in the allow-list itself. The 5 inlined refused name cases (whitespace, empty, `$HOME`, NBSP, brackets) all match.
+
+`/` is allowed; a name like `/etc/passwd` would pass the allow-list. The gate's later validation (it must match a real promptless probe) makes it inert. Not a safety issue.
+
+## Q2 -- smallest input past F4 that does harm
+
+For the *deriver's input checks*: I found no false accept. Denominator: the 9 inlined ruling cases + 5 name cases + the structural reasoning above (allow-list class closure for names; printable-ASCII class closure for the ruling prefix; explicit denials for `"` `\` `$` `` ` ``; non-empty for names).
+
+For the *census itself*: the F4 diff makes no code change to the recognizer (the K13/K14 disclosures are docstring wording; K12 shapes are FILED, not detected). The diff is not a vehicle for new readiness-detection holes.
+
+If a seat can measure, the priorities for measured checks are: (i) confirm the colon-extraction bug; (ii) confirm K16 (broken-classifier → gate state); (iii) sanity-check the printed count of `census_tokens.py` against a known evader from K12.
+
+## Q3 -- K1..K18, D2
+
+| id | my call | reason |
+| --- | --- | --- |
+| K1 | UPHOLD | allow-list refuses `$`, `` ` ``, `"`, `\`, empty. |
+| K2 | UPHOLD | the disposition KEPT AS A DELIBERATE RESTRICTION is defensible (real probes have none of `*?[`); seats disagreed. |
+| K3 | UPHOLD | `date -d` round-trip rejects 2026-99-99 / 2026-02-30. |
+| K4 | UPHOLD | `tr -cd 'A-Za-z0-9'` rejects punctuation-only and NBSP-only. |
+| K5 | UPHOLD | `tr -d ' -~'` rejects U+0085/U+2028 (multi-byte, no byte in 0x20..0x7e). |
+| K6 | UPHOLD | header now says "double quote"; apostrophe is inert in a `#` comment. |
+| K7 | UPHOLD | the rewrite is what the script actually does for helpers. |
+| K8 | UPHOLD | "CLOSED-WORLD paragraph" is durable to future edits. |
+| K9 | UPHOLD | the diff also removes the 13/14 ambiguity via corrections in records. |
+| K10 | UPHOLD | wording for H8 records. |
+| K11 | UPHOLD | e9 re-filed as LINE-BASED class. |
+| K12 | UPHOLD | filed under e10 / n3b / e9; F4 isn't the vehicle for fix. |
+| K13 | UPHOLD | docstring text reads "an alias call with no '.' before the name is not" -- accurate. |
+| K14 | UPHOLD | docstring text reads "a class PATTERN of the same shape in a `match` statement ... is still counted" -- accurate. |
+| K15 | UPHOLD (out of F4) | pre-existing text and code. |
+| K16 | **REFINE** | reasoning about classifier failure → gate reds is structurally plausible, but the phrase "the promptless list is empty" depends on architecture -- it could equally be "grows, as whole-buffer sites get reclassified as promptless". Either way the gate reds, but measurement is feasible (write a broken classifier that outputs zeros, observe gate state) and worth doing. The disposition is honest; it just isn't strong. |
+| K17 | UPHOLD (out of F4) | detector weakness + H13 split. |
+| K18 | UPHOLD | structural: the body of `GRANDFATHERED_PROMPTLESS="…"` is space-separated names; `#` is not in the allow-list for names, so no comment line lives inside the double-quoted body. glm's finding requires the writer to look for `#` outside the quotes. |
+
+**D2** UPHOLD (settled against artifacts the brief cited).
+
+**Which of my accepted dispositions is wrong.** None of K1..K18 is wrong in disposition. The defect is in the IMPLEMENTATION of F4's date extraction, which is not the same as a disposition error. If forced to pick one, K16 is the weakest -- it is the only disposition here that author explicitly admits was not measured, and measurement is cheap.
+
+## Q4 -- records
+
+I checked each rewritten sentence against the implementation:
+
+- `census_tokens.py` docstring: "a class PATTERN of the same shape in a `match` statement (`case K.<name>(...)`) is still counted" -- accurate (the recognizer looks for `.NAME(` tokens, and `K.<name>(` provides exactly that). "an alias call with no '.' before the name is not" -- accurate and the rationale is correct.
+- `gate_hygiene.sh` helper comment: accurately describes that a helper module is scanned, that no count sees which probe a helper serves, and that fail-closed semantics produce promptless + red names row.
+- `derive_hygiene_pins.sh` header: each documented check ("printable ASCII only", "real calendar date", "16 letters or digits", "no double quote, backslash, `$` or backtick") matches a check in the new code (modulo the colon bug, which is a check-too-strict defect, not a check-too-loose one).
+
+No false sentence found.
+
+## Q5 -- option-set completeness
+
+K2: {ALLOW (seats' preference), REFUSE WITH MESSAGE (author's)} -- complete; nothing else of substance in between.
+
+K12: {FILE (author's), ADD DETECTION (not in F4)} -- complete; a partial detection (e.g., f-string only) is not a meaningful third option.
+
+## Other finding (the VERDICT defect)
+
+Diff context:
+
+```
++    _day=${RULING%%:*}
++    [ "$(date -d "$_day" +%F 2>/dev/null)" = "$_day" ] || { echo "REFUSED: [$_day] is not a calendar date"; exit 2; }
+```
+
+`%%:*` removes the longest suffix matching `:*`. For pattern `:*` the `:` anchors at the rightmost position. Concrete trace:
+
+```
+RULING="2026-09-23: at 14:00 meeting"
+RULING%%:*  =>  "2026-09-23: at 14"
+date -d "2026-09-23: at 14" +%F     # invalid; outputs nothing (or anything != _day)
+```
+
+So `[ "" = "2026-09-23: at 14" ]` → FALSE → REFUSED. The other answer for `[[ "$_day" == "2026-09-23" ]]` can't help; `_day` literally has the extra chars in it. The header says "a real calendar date" and places no restriction on the reason's content beyond printable-ASCII + alphanumerics + 16-char minimum + the four punctuation exclusions. The header permits `"at 14:00 meeting"`; the implementation refuses it. Conflicting.
+
+The 9 inlined refused cases and the t_rapos WRITTEN case all use reasons with no internal `:` -- they would never expose this. The F4 testing missed it because no test exercised it.
+
+**Fix is one line.** Either `IFS=: read -r _day _ <<<"$RULING"` (gets the part before the FIRST colon), or `${RULING%%:*}` replaced by `${RULING%"${RULING#*:}"}-style acrobatics, or an explicit `case "$RULING" in $YYYY:$YYYY:$YYYY)` parse.
+
+## Seat record
+
+- model: MiniMax-M3
+- read: the packet only (file reading prohibited by role).
+- ran: nothing (no measurement seat; per operational rule I did not run any `gate_*.sh` or the battery).

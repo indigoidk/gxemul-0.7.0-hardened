@@ -1,0 +1,74 @@
+I'll audit the premises against `GXEMUL-SEC/`, not just re-derive the counts the brief already states. First I'm locating the gate, the deriver, and the probes those pins claim to describe.The pins and the new name-set row are in `GXEMUL-SEC`. Next I’ll enumerate what the gate’s own scanners can see, and check the deriver’s refusals against that population.VERDICT: DO NOT SHIP -- the numeric pins match the scanners, but `crime_width_probe.py` is a promptless pty probe kept out of that set only by a comment that contains `endswith(`, and the new grandfather note's "no prompt predicate" sentence is false for `alpha_tbi_probe.py`. The `dev_sgi_re.c` wording change is a separate commit and is the right gate-8 fix.
+
+Read `GXEMUL-SEC` (line numbers agree: `arm_bdt_probe.py:76`, `dev_sgi_re.c:510`). Did not run `gate_hygiene.sh`, the deriver, or the battery.
+
+## Q1
+
+**(a) True for the census rows.** They run before any log read. `HERE` is the script's own directory; `py_code`, `_ptylist`, `probe_code`, and `pty_driving` scan that tree and skip `artifacts/`. `LOGDIR` is first used at the `pmax.ptylog` / `arc.ptylog` test (`gate_hygiene.sh:774`), which `gate_skip`s when those files are absent (`lib.sh:137`). A copy of `regress/` with an empty log directory prints the same census got/want lines. The gate-level result is then SKIP (exit 77) when those rows are green. The copy has to be the working tree: a clone without the three untracked probes grades 70.
+
+**(b) True on the domain `accept()` actually sees.** Both call sites iterate `ACCEPTS` (`KINDS = ACCEPTS`). The eight distinct `op` values are the strings `ld`, `ldP`, `lw`, `lwP`, `sd`, `sdP`, `sw`, `swP`. On each one `op[-1:] == "P"` and `op.endswith("P")` agree, and the following `op[0]` / `op[:2]` branch is the same (`lwP`→`lw`, `swP`→`sw`, `sdP`→`sd`, `ldP`→`ld`). `""` is not produced. The str-wide identity in the comment is real; a non-str is outside this producer (`bytes` would TypeError on `endswith("P")` and return false for `[-1:] == "P"`).
+
+**(c) Those two refusals are in the script.** `--write` exits 5 when `conv_anchor`, `conv_echo`, and `conv_mark` are not all equal (`derive_hygiene_pins.sh:91-92`), and exits 5 when `NEWP` is non-empty (`:93`). `NEWP` is the gate's own proxy: a pty probe whose file does not contain the text `endswith(`. It also refuses to raise `EXPECT_BARE` (`:94`). It does not refuse a rise in `EXPECT_WHOLE_FULL`, and it does not see `crime_width_probe.py` as promptless.
+
+**(d) What the name row prints.**
+
+| situation | result |
+|---|---|
+| `pty_driving` prints nothing | `whole_files` is empty. `check` prints `FAIL` with `got=` empty and `want=arm_bdt_probe.py arm_flags_probe.py`. `set -e` is off (`set -u` only). |
+| space in a directory component | `IFS= read -r` and `basename` keep the basename. These two names still compare equal. |
+| space in the basename | `tr '\n' ' '` splices that space into the pin string, so the row FAILs. One contrived fail-open: a single hitting file whose basename is exactly `arm_bdt_probe.py arm_flags_probe.py` prints `ok` on the name row. The count row still sees the number of matching lines. |
+| site only on a `#` comment line | `grep -v '^[[:space:]]*#'` drops it, `n=0`, the basename is omitted. Commenting out the only site in an allowlisted file FAILs the row. A docstring is not a `#` line, so it is counted. |
+| `sort` and underscores | For these two names the first differing byte is `b` versus `f`, so the row prints `arm_bdt_probe.py arm_flags_probe.py` under C and under a UTF-8 locale. A later pair that differs by an underscore can reorder between `LC_ALL=C` and a UTF-8 locale; the pin is a fixed literal, so that mismatch FAILs. |
+
+**(e) 73 = 70 + 3, and the grandfathered names contain no `endswith(`.** `git grep -l -F "pty.fork"` on tracked `regress/*.py` outside `artifacts/` is 70 files, all directly in `regress/`. The same list comes back without `-F`. The only untracked non-artifact `regress/*.py` files are `arm_msrmode_probe.py`, `crime_width_probe.py`, and `lca_isaphys_probe.py`, and each contains `pty.fork`. 70+3=73.
+
+The grandfather string is 42 names: 20 already on the older lines, 20 on the `alpha_harness_probe.py … wdc_altdigin_probe.py` line, and `arm_msrmode_probe.py lca_isaphys_probe.py`. None of those 42 files contain `endswith(`. The other 30 tracked pty probes are exactly the 30 tracked pty probes that do contain it. Under the census proxy, the sets match.
+
+`crime_width_probe.py` is the file that proxy mis-labels. `session()` (`crime_width_probe.py:469`) is settle/spin and read-to-EOF. The only `endswith(` left in it is the new comment at lines 956-957. `py_code` strips `#` lines, so the unknown row stays 0. The promptless scan is `grep -L "endswith("` with comments left in, so the file never enters the promptless set and is not on the grandfather list. Deleting those two comment lines makes the promptless row `got=43 want=42`.
+
+## Q2
+
+Smallest edit that leaves every census row green: add one code line to any pty-driving file,
+
+```python
+if buf.rstrip().endswith('GXemul>'):
+    pass
+```
+
+`full`'s pattern is `endswith(["']GXemul>["'])` (`gate_hygiene.sh:139`), so this is a recognised full spelling and the unknown row stays 0. Both whole-buffer rows search for the double-quoted spelling only (`:650` and `:655`), so the count stays 3 and the name set stays `arm_bdt_probe.py arm_flags_probe.py`. The `#392` patterns require `resp.rstrip()` and `mark=_mark`, so they stay 24. No such single-quoted site exists in the tree today. Changing an existing double-quoted site to single quotes drops the count from 3 to 2 and reds the count row; the bypass is an addition.
+
+A larger one, same outcome: delete one grandfathered pty probe and add a different promptless `pty.fork` file. The denominator stays 73 and the promptless row compares counts only (`:420`); `comm -13` prints the new name and does not increment `_fails`.
+
+`--write` will also raise `EXPECT_WHOLE_FULL` to whatever `whole_full` is (`derive_hygiene_pins.sh:99-100`). A new double-quoted site inside `arm_flags_probe.py` reds the count until that run; after `--write` the count pin matches and the name row never moves.
+
+## Q3
+
+The diff does what ruling 3 says: pin 3, and `WHOLE_FULL_FILES="arm_bdt_probe.py arm_flags_probe.py"`. The live sites are `arm_bdt_probe.py:76` (one) and `arm_flags_probe.py:144` and `:645` (two). `selftest_inactivity.py` has the same spelling and matches none of `pty.fork` / `forkpty` / `pty.spawn` / `drive_guest`, so it stays outside the population.
+
+The option set in the other gates has a member this round does not use. `gate_offline.sh` `exempt_expired()` (`:1190`) and the copy `ab_expired()` in `gate_asan_sweep.sh` (`:195`) are dated exemptions: `stem:YYYY-MM-DD`, and a past or malformed date reds the gate. `armbdtreadiness` is a ledger name. Nothing in gate 6 goes red on a date while the three sites sit still.
+
+This file's own companion-pin rule (`:612-614`, and the truth-table rows at `:681`) is partly here: one global occurrence count plus the filename set. There is no per-file count (arm_bdt = 1, arm_flags = 2).
+
+## Q4
+
+False today:
+
+- The new grandfather note says each of those 20 probes uses a fixed-wait or drain-to-EOF session and has no prompt predicate. `alpha_tbi_probe.py` is on that line. Its `wait_prompt` (`:182-196`) returns when `"gxemul>" in buf[last_pos:].lower()`. That is the readiness wait. It has no `endswith(`, so the list membership is what the proxy requires; the reason sentence is false. The other 19 on that line were added between 2026-09-07 and 2026-09-18, which sits inside the stated window, and the ones I opened use `rd(settle)` / `rd(spin)`. The "20" and "last two lines" counts are right today: 20 names, then the two untracked names.
+- `derive_hygiene_pins.sh:12` says `--write` rewrites `EXPECT_BARE`. The writer (`:99-100`) rewrites only `EXPECT_UNKNOWN`, `EXPECT_PTY_PROBES`, `EXPECT_CONVERTED`, and `EXPECT_WHOLE_FULL`.
+
+True today, and easy to over-read:
+
+- `EXPECT_PTY_PROBES=73`, the fresh-clone sentence, `79cd12e`'s `mark=mark`, and `4dfc716`'s site at `arm_bdt_probe.py:76` all check out. `b78bb0f` really has `EXPECT_PTY_PROBES=46`. After the `_mark` rename the three `#392` patterns are 24 code lines each (same 18 files; comments that mention `mark=_mark` are stripped).
+- A fresh clone of this commit reds the denominator at 70 versus 73, and also reds the promptless row at 40 versus 42, because `arm_msrmode_probe.py` and `lca_isaphys_probe.py` are names in the committed list and files only in the working tree. The comment mentions the first red. "Counts 70" stays true only while none of the three untracked probes is committed.
+
+## Q5
+
+Yes. `test/check_delete_calls.sh` fails any `src/` file whose text matches `delete ` (word plus space) and whose path is absent from the exceptions list. The hit was the English gloss in a comment. The read arm returns `odata`; member 4 of the option set is ACCEPT (`RESEARCH_scoping_20260907.md`), and member 1 is the one named DELETE. `src/devices/dev_sgi_re.c` now has no `delete `. The remaining `src/` hits are `debugger_cmds.c`, `debugger.c`, and `refcount_ptr.h`, which are the upstream exception files. Putting `dev_sgi_re.c` on that list would hide a later `delete ` in a device file that has no delete-expression. `dev_sh4.c` is already clean. I did not run the checker.
+
+## Also
+
+The promptless row and `--write` both treat "contains the letters `endswith(`" as "has a prompt predicate", and only `py_code` strips comments. This round's `crime_width` comment is what keeps that proxy from naming the file. `drive_guest.py` is the known case in the other direction (listed because `re.search` is invisible). Many good anchored waits in the ARM probes use `buf[mark:].rstrip().endswith("GXemul>")` and are invisible to `conv_anchor`, which counts the name `resp` only; the pin 24 matches that narrower pattern.
+
+Ruling check: the three untracked probes are in the 73; the two promptless ones are named; `arm_bdt` is on the name pin at 3; the opcode check is `op[-1:] == "P"`. `--write` can produce the four numeric pins. It cannot produce `WHOLE_FULL_FILES`.
+
+Seat: Grok 4.7. Read `GXEMUL-SEC/regress/gate_hygiene.sh` (census through the log skip), `lib.sh` `check`/`gate_skip`, `tools/derive_hygiene_pins.sh`, `crime_width_probe.py` `session`/`ACCEPTS`/`accept`, `alpha_tbi_probe.py` `wait_prompt`, `arm_bdt_probe.py:70-97`, `luna_absentcpu_probe.py` send/wait, `dev_sgi_re.c:506-514`, `test/check_delete_calls.sh` and its exceptions, `gate_offline.sh` `exempt_expired`, `gate_asan_sweep.sh` `ab_expired`. Ran `git status`, `git log`, `git grep` (`pty.fork`, `endswith(`, the three `#392` patterns), `git ls-files --error-unmatch ./drive_guest.py` (the `./` form matches). Did not execute the deriver or a quote-style mutant.

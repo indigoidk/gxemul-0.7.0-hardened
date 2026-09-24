@@ -1,0 +1,63 @@
+VERDICT: FAIL — the name check admits newline-containing arguments; ruling validation also has a timezone-dependent false rejection.
+
+**TASK 1. Rulings**
+
+At [derive_hygiene_pins.sh:68](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/census0923/c4_frozen/derive_hygiene_pins.sh:68):
+
+- **Explicit empty ruling:** `--ruling ""` skips validation and is treated as no ruling. Changes that require a ruling still fail; otherwise permitted assignments can be rewritten **without a ruling comment**. This is an exception to the stated format requirement, not a way to authorize restricted changes.
+- **No nonempty character-check violation found**, assuming working GNU utilities. `LC_ALL=C tr` filters bytes, and `wc -c` counts the rejected bytes before command substitution. Newlines, CR, tabs, UTF-8 letters, nonbreaking spaces, U+0085, U+2028, and malformed multibyte input are refused regardless of the caller’s UTF-8 locale. **Nothing is written.**
+- **Leading zeros are not a bypass or an octal problem.** Ordinary dates such as `2026-09-08` remain valid. GNU `%F` supports four-digit years, including `0001` and the ISO/proleptic year `0000`, where the runtime can represent them. The header specifies no minimum year or freshness requirement, so year zero is a policy ambiguity rather than a demonstrated contradiction. Accepted text is preserved in the comment. [GNU date formatting](https://www.gnu.org/s/coreutils/manual/html_node/Date-conversion-specifiers.html)
+- **Extra date text is refused:** an extra year digit, an unpadded month, whitespace before the colon, a time, `UTC`, or a parenthesized annotation fails the anchored format check. GNU `date`’s permissive parser therefore does not admit these forms. Impossible dates such as `2026-02-29` fail the date check. **Nothing is written.**
+- **Genuine calendar-date false rejection:** `2018-11-04: Alice approved retiring this probe` is refused under `TZ=America/Sao_Paulo` with the corresponding timezone data. GNU interprets the date at local midnight, which was skipped that day. This conclusion follows from GNU’s documented parser behavior and IANA’s transition data; I could not execute it locally. **Nothing is written.** Dates outside the installed runtime’s timestamp range can likewise fail. [GNU explanation](https://lists.gnu.org/archive/html/bug-findutils/2015-03/msg00007.html), [IANA data](https://data.iana.org/time-zones/tzdb/southamerica)
+- **Legitimate prose intentionally excluded:** reasons containing `Zoë`, smart punctuation, quoted text, dollar amounts, or backslashes are refused. `2026-09-23: Alice: retire #392` also fails: its reason has 18 characters but only 14 ASCII letters/digits. These are documented restrictions, not implementation discrepancies. **Nothing is written.**
+
+For accepted, nonempty rulings, the writer emits:
+
+```text
+#  RULING <original text> -- <needed changes> (tools/derive_hygiene_pins.sh --write)
+```
+
+It appears above each assignment requiring the ruling, provided the other write checks pass. If no change requires it, **no ruling comment is emitted**.
+
+These conclusions concern GNU coreutils, including Git Bash’s GNU tools. There is no identified locale-based acceptance gap; timezone and runtime date range are separate dependencies.
+
+**TASK 2. Names**
+
+The defect is at [derive_hygiene_pins.sh:143](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/census0923/c4_frozen/derive_hygiene_pins.sh:143):
+
+- **Actual LF characters pass the alphabet check.** After `tr` deletes the permitted characters, an argument containing only permitted characters plus LFs leaves only LFs. Bash command substitution removes those trailing LFs, making the rejected-byte output appear empty. This applies to LFs anywhere in the original argument. Some cases subsequently fail duplicate checking, but that does not close the gap. [Bash command substitution](https://www.gnu.org/s/bash/manual/html_node/Command-Substitution.html)
+- **Eligibility does not reliably reject them.** GNU `grep` treats embedded newlines in its pattern argument as separate patterns, even with `-F -x`. Thus the eligibility check can match a component rather than the complete argument. [GNU grep](https://www.gnu.org/s/grep/manual/grep.html)
+- **Effect in the gate:** the writer preserves those LFs inside the double-quoted assignment. They become list separators for subsequent processing. They remain inside the quotes; this finding does **not** establish shell-command execution.
+- **Exact release fails:** the Python release writer splits the stored body into whitespace-delimited tokens. The original multiline argument cannot equal one such token, so its occurrence-count assertion fails if execution reaches that stage.
+
+For names genuinely restricted to the advertised alphabet, I found no quoting or exact-removal problem. Dots and hyphens are matched literally; leading hyphens are protected by `grep --`.
+
+Filesystem-valid names excluded by policy include `probe+v2.py`, `probe (old).py`, `O'Brien.py`, and `café.py`. All **43 names actually present** in the frozen grandfathered list satisfy the advertised alphabet and are unique.
+
+**TASK 3. False or overbroad comments**
+
+The [tool header:19](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/census0923/c4_frozen/derive_hygiene_pins.sh:19) says:
+
+> Both REFUSE a missing name list, a name given twice, a name that is empty or holds any byte but ASCII letters, digits, '.', '_', '-' and '/' (the list is space-separated and written into a double-quoted shell string, so blanks, glob characters, `$`, backticks, quotes and backslashes are all refused -- rename the probe), and a name that is not eligible (already grandfathered / not a NEW promptless probe; not a grandfathered name that is no longer promptless).
+
+The newline finding contradicts both the byte restriction and the whole-name eligibility claim.
+
+The changed [census_tokens.py comment:17](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/census0923/c4_frozen/census_tokens.py:17) includes:
+
+> Tokens are not a parse: a class PATTERN of the same shape in a `match` statement (`case K.<name>(...)`) is still counted, and a call through an alias with no "." before the name is not (the F3 pass, codex; the second fails closed -- the probe is listed promptless).
+
+The final claim needs qualification: the probe is listed promptless only if **no other qualifying token sequence remains**. The implementation uses `any()`. The class-pattern caveat itself is accurate.
+
+The revised [gate comment:82](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/census0923/c4_frozen/gate_hygiene.sh:82) retains:
+
+> That converts "I grepped for the bad thing" into "I enumerated everything and recognised all of it", which is the only form that cannot be evaded by inventing a new way to write it.
+
+That remains false—and the immediately following comment explicitly retracts it. The correction about recognizing a helper’s known literal agrees with the code.
+
+**TASK 4. One question**
+
+Must a valid calendar-date ruling be accepted independently of the machine’s timezone?
+
+**Files read:** All three specified files in both `c4_frozen` and `c3_frozen`. All supplied c4 MD5 prefixes matched.
+
+**Ran:** Read-only PowerShell/`rg` inspection, MD5 checks, `git diff --no-index`, and Python `-B` checks of the frozen name list and classifier AST. Consulted GNU documentation/source and IANA data. Bash diagnostics and WSL listing failed with access denied, so no shell/date runtime tests completed. Neither script nor writer was executed; nothing was edited.

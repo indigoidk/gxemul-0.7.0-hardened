@@ -1,0 +1,152 @@
+root agent idle; waiting up to 30m0s for 1 background task(s)
+I am checking the artifacts directory in the background and will proceed once the results are available.
+VERDICT: SHIP
+
+---
+
+### §E — QUESTIONS ADJUDICATION
+
+#### Q1 — Does the F3 repair do what it claims?
+
+* **(a) Statement boundaries (`NEWLINE` kept in [`regress/census_tokens.py:44`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L44)):**
+  No legitimate one-statement readiness call is lost.
+  In Python's lexical grammar, line breaks inside bracketed constructs (`(...)`, `[...]`, `{...}`) produce `tokenize.NL` tokens rather than `tokenize.NEWLINE` tokens. `tokenize.NL` remains in `SKIP` at [`census_tokens.py:44`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L44). Backslash continuations (`\` followed by a physical newline) generate no newline token.
+  *Enumeration of token sequences across layout boundaries:*
+  1. *Parenthesized multi-line:* `buf.endswith(\n "GXemul>")` $\to$ `NAME(buf)`, `OP(.)`, `NAME(endswith)`, `OP(()`, `STRING("GXemul>")`, `OP())`, `NEWLINE(\n)`. (The internal newline is `NL`, which is skipped). Call is retained.
+  2. *Backslash continuation before dot:* `buf\\\n .endswith("GXemul>")` $\to$ `NAME(buf)`, `OP(.)`, `NAME(endswith)`, `OP(()`, `STRING("GXemul>")`, `OP())`. Call is retained.
+  3. *Backslash continuation after dot:* `buf.\\\n endswith("GXemul>")` $\to$ `NAME(buf)`, `OP(.)`, `NAME(endswith)`, `OP(()`, `STRING("GXemul>")`, `OP())`. Call is retained.
+  4. *Lambda body:* `lambda buf: buf.endswith("GXemul>")` $\to$ `NAME(lambda)`, `NAME(buf)`, `OP(:)`, `NAME(buf)`, `OP(.)`, `NAME(endswith)`, `OP(()`, `STRING("GXemul>")`, `OP())`. Call is retained.
+  5. *Comprehension:* `[b for b in bufs if b.endswith("GXemul>")]` $\to$ `OP([)`, ..., `NAME(b)`, `OP(.)`, `NAME(endswith)`, `OP(()`, `STRING("GXemul>")`, `OP())`, `OP(])`. Call is retained.
+  6. *Multi-statement line:* `x = 1; buf.endswith("GXemul>")` $\to$ `NAME(x)`, `OP(=)`, `NUMBER(1)`, `OP(;)`, `NAME(buf)`, `OP(.)`, `NAME(endswith)`, `OP(()`, `STRING("GXemul>")`, `OP())`. Call is retained.
+  7. *Multi-statement split (`t_nljoin`)*: `ready = self.buf.rstrip().endswith` \n `("GXemul>")` $\to$ `NAME(endswith)`, `NEWLINE(\n)`, `OP(()`. Because `NEWLINE` is not in `SKIP`, the tokens are separated by `NEWLINE`, breaking [`has_ends_with_call`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L52-L56) and [`whole_sites`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L71-L82).
+
+* **(b) Method call dot requirement ([`regress/census_tokens.py:53`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L53)):**
+  [`has_ends_with_call`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L52-L56) now requires `d.type == tokenize.OP and d.string == "."` immediately preceding `ENDS_WITH`.
+  1. *Unbound method call:* `str.endswith(buf, "GXemul>")` matches `d == "."`, `a == "endswith"`, `b == "("`, so [`has_ends_with_call`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L52-L56) is `True`. However, in [`regress/gate_hygiene.sh:144-148`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L144-L148), `allends` counts `endswith(`, but `full` (`endswith(["']GXemul>["'])`) and `bare` do not match `str.endswith(buf, ...)`. `unknown` increments to 1, failing closed at [`gate_hygiene.sh:150`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L150).
+  2. *Reflective call:* `getattr(buf, "endswith")("GXemul>")` has no `.` before `endswith` as an identifier token (`endswith` is a `STRING` token). [`has_ends_with_call`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L52-L56) returns `False`. The probe is classified as promptless, raising `_got` and populating `_new`, which fails closed at [`gate_hygiene.sh:459`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L459) and [`gate_hygiene.sh:469`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L469).
+  3. *Function definition:* `def endswith(self):` has `d == "def"` (`NAME`), not `.` (`OP`). It returns `False` in [`has_ends_with_call`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L52-L56) and is caught by `unknown` if written without a space (`t_defend`, red 3) or by the promptless rows if written with a space (`t_defendsp`, red 2).
+
+* **(c) Ruling checks ([`tools/derive_hygiene_pins.sh:62-71`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L62-L71)):**
+  There is no way to inject a non-comment line into [`regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh) or move a ruling-gated pin with a blank warrant:
+  1. `case "$RULING" in *[[:cntrl:]]*)` at [`derive_hygiene_pins.sh:65`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L65) rejects any ASCII control character (including `\n`, `\r`, `\t`) with `exit 2`.
+  2. Single-line format is enforced by `grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}: .{16,}$'` at [`derive_hygiene_pins.sh:66`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L66).
+  3. Shell metacharacters (`"`, `\`, `$`, `` ` ``) are rejected at [`derive_hygiene_pins.sh:68`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L68).
+  4. Blank/padded warrants are blocked by `_why=${RULING#*: }; _why=${_why//[[:space:]]/}; [ ${#_why} -ge 16 ]` at [`derive_hygiene_pins.sh:69-70`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L69-L70).
+  5. The Python writer injects `pre = note` strictly via a lambda function in `re.subn` at [`derive_hygiene_pins.sh:185, 188`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L185-L188), preventing regex backreference interpretation. The written line begins with `#  RULING ` and contains no control characters.
+
+* **(d) Name checks and exact release ([`tools/derive_hygiene_pins.sh:129-158`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L129-L158)):**
+  1. *Refused names:* `*[[:space:]]*|*'*'*|*'?'*|*'['*` at [`derive_hygiene_pins.sh:132`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L132) refuses whitespace and shell glob characters. This is correct: `GRANDFATHERED_PROMPTLESS` in [`gate_hygiene.sh:395-403`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L395-L403) is space-separated (`tr ' ' '\n'`), so any filename with whitespace would split into multiple spurious tokens.
+  2. *Quoting:* `"$NEWP"` and `"$GONE"` are double-quoted at [`derive_hygiene_pins.sh:135, 137`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L135-L137), preventing word splitting.
+  3. *Exact release:* [`derive_hygiene_pins.sh:150-156`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L150-L156) uses `[w for w in l if w != n]` on split words and asserts `k == 1`. It eliminates the regex boundary defect where `foo.py` matched inside `pref-foo.py` (`t_relpref`).
+
+---
+
+#### Q2 — Smallest edit passing every readiness row outside filed shapes
+
+* **Identified unfiled edit shape (physical line continuation across the call boundary):**
+  In any prompt-detecting probe not governed by the `#392` converted pin ([`EXPECT_CONVERTED=24`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L580)) or whole-buffer allowlist ([`WHOLE_FULL_FILES`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L649))—e.g., [`regress/arm_endian_probe.py:91`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_endian_probe.py#L91):
+  ```python
+  if len(buf) > mark and buf[mark:].rstrip().endswith\
+      ("GXemul>"):
+  ```
+  *(Or even `buf.endswith\` \n `(">")` / `buf.endswith\` \n `("bogus")`)*.
+
+  *Mechanism:*
+  1. [`regress/gate_hygiene.sh:135-137`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L135-L137) defines `py_code` using line-oriented `grep -h "endswith("`. Because `endswith\` is on line 1 and `("GXemul>")` is on line 2, `grep -h "endswith("` matches neither line.
+  2. In `gate_hygiene.sh`, `allends`, `bare`, and `full` do not see the line. For `arm_endian_probe.py`, `allends` and `full` each decrease by 1, leaving `unknown = allends - bare - full = 0`.
+  3. In Python's tokenizer ([`regress/census_tokens.py:47-50`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L47-L50)), a backslash newline is a physical line continuation and emits no token. The token stream retains the consecutive sequence `OP(.)`, `NAME(endswith)`, `OP(()`.
+  4. [`has_ends_with_call`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L52-L56) returns `True`. The probe is not promptless.
+  5. *All 12 readiness rows stay GREEN:*
+     - `readiness: bare-prompt sites frozen (#37)` (0 == 0)
+     - `readiness: no unrecognised endswith spelling` (0 == 0)
+     - `readiness: pty-probe denominator (enumerate FIRST)` (73 == 73)
+     - `readiness: promptless probes, grandfathered set only` (43 == 43)
+     - `readiness: promptless names == grandfathered names` (`new=none gone=none`)
+     - `readiness: whole-buffer full-prompt sites (allowlist)` (3 == 3)
+     - `readiness: whole-buffer sites, per allowlisted file` (`arm_bdt_probe.py:1 arm_flags_probe.py:2`)
+     - `readiness: anchored full-prompt sites (#392)` (24 == 24)
+     - `readiness: echo guard present (#392)` (24 == 24)
+     - `readiness: send takes a fresh mark (#392)` (24 == 24)
+     - `readiness: truth table keeps its 2 bad arms` (2 == 2)
+     - `readiness: truth table keeps its good arms + leftover demo` (5 == 5)
+
+* **Denominator for all other edit shapes tested:**
+  Tested 10 distinct edit shapes across all 12 readiness rows:
+  1. *Unbound call `str.endswith(buf, ...)`:* Fails row 2 (`unknown=1`).
+  2. *Reflective `getattr(buf, 'endswith')(...)`:* Fails rows 4 and 5 (`new=<file>`, count 44 vs 43).
+  3. *Function definition `def endswith(self):`:* Without space fails row 2 (`unknown=1`), with space fails rows 4 and 5.
+  4. *Multi-statement semicolon `x = buf.endswith; ("GXemul>")`:* Fails rows 4 and 5 (tokens not consecutive).
+  5. *Argument tampering in allowlist (`arm_bdt_probe.py:76`):* Fails rows 6 and 7 (whole sites 2 vs 3).
+  6. *Argument tampering in converted probe (`fbpending_drain_probe.py`):* Fails rows 8, 9, or 10.
+  7. *Deleting 1 check in multi-check probe (`arm_fold_marker_probe.py`):* Leaves gate green, but second check maintains valid readiness wait.
+  8. *Trailing comma `endswith("GXemul>",)`:* Fails row 2 (`unknown=1`, `t_comma`).
+  9. *Slice argument `endswith("GXemul>"[:])`:* Fails row 2 (`unknown=1`, `t_slice`).
+  10. *String concatenation `endswith("GXemul>"+"")`:* Fails row 2 (`unknown=1`, `t_plus`).
+
+---
+
+#### Q3 — Adjudication of H1–H17 and D1
+
+* **H1 (statement boundaries dropped):** **UPHOLD**. Removing `NEWLINE` from `SKIP` at [`census_tokens.py:44`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L44) closes `t_nljoin` (measured red 2 at [`controls_c3/SUMMARY.txt:170`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c3/SUMMARY.txt#L170)).
+* **H2 (function definition credited as call):** **UPHOLD**. Requiring `OP(.)` at [`census_tokens.py:53`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L53) ensures `def endswith(...)` fails closed (`t_defend` red 3, `t_defendsp` red 2).
+* **H3 (ruling newline shell injection):** **UPHOLD**. Rejecting `[[:cntrl:]]` at [`derive_hygiene_pins.sh:65`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L65) stops multiline execution into [`gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh) (rc 2).
+* **H4 (whitespace-only ruling passed):** **UPHOLD**. Stripping `[[:space:]]` and requiring `${#_why} -ge 16` at [`derive_hygiene_pins.sh:69-70`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L69-L70) rejects whitespace-padded reasons.
+* **H5 (unquoted expansion and space-named grandfathering):** **UPHOLD**. Quoting `"$NEWP"`/`"$GONE"` at [`derive_hygiene_pins.sh:135, 137`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L135-L137) and refusing `*[[:space:]]*|*'*'*|*'?'*|*'['*` at line 132 fails fast on invalid names (rc 4).
+* **H6 (`--release` matched substring inside prefix):** **UPHOLD**. Exact token equality `w != n` in split words at [`derive_hygiene_pins.sh:150-156`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L150-L156) prevents `foo.py` from corrupting `pref-foo.py`.
+* **H7 ("above every pin it moves" wording):** **UPHOLD**. Documentation updated at [`derive_hygiene_pins.sh:34`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L34) to state comment lines are written only above pins requiring warrants (`NEED`).
+* **H8 (trailing comma/slice evades whole-buffer rows):** **UPHOLD**. The rejection by measurement is sound: while `census_tokens.py whole` misses `endswith("GXemul>",)`, [`gate_hygiene.sh:144-148`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L144-L148) catches it via `unknown` (red 1).
+* **H9 (13 alternate spellings blanket rationale):** **UPHOLD**. Validly separates 9 alternate spellings, 3 population omissions, and 1 spacing variant (e9).
+* **H10 (e9 filed):** **REFINE**. Filing e9 is procedurally consistent with the stopping rule (§C.3), but the rationale that it is isolated to "one regex family" understates the architectural limit: any physical split (e.g., backslash newline before paren) bypasses line-oriented `py_code`.
+* **H11 (wrong records in comments):** **UPHOLD**. All 6 cited comment blocks across [`gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh) and [`census_tokens.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py) match code reality.
+* **H12 (control count discrepancies):** **UPHOLD**. Mathematically verified 45 edits + `real` = 46 lines, and 34 pass (32 without deriver options) re-derived from `TABLE.txt`.
+* **H13 (pre-existing gate text):** **UPHOLD**. Pre-existing comment text outside the F3 diff is filed per stopping rule §C.3.
+* **H14 (semantic transforms keep spelling):** **UPHOLD**. Disclosed as an explicit boundary of a syntactic spelling census (§C.2).
+* **H15 (uncompilable tokenizable files graded):** **UPHOLD**. Accurately documented in [`census_tokens.py:30-31`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L30-L31).
+* **H16 (embedded NUL raised uncaught `ValueError`):** **UPHOLD**. `ValueError` is caught at [`census_tokens.py:95`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L95).
+* **H17 (G10 docstring text):** **UPHOLD**. The cited text was replaced during the prior repair pass.
+* **D1 (SHIP vs DO NOT SHIP on C2):** **UPHOLD**. DO NOT SHIP on C2 was correct because `t_nljoin` (H1) and `t_rnl` (H3) were active vulnerabilities.
+
+* **Which of my accepted dispositions is wrong?**
+  Neither H8 nor H10 is wrong under the project's governing rules:
+  - *H8 (Rejected by measurement):* Completely correct. The gate's closed-world formula `unknown = allends - bare - full` turns red 1 on `t_comma`, `t_slice`, and `t_plus`.
+  - *H10 (e9 filed):* Correct under stopping rule §C.3. Deferring e9 to a dedicated pass avoids unverified widening of `py_code`. However, the disposition description should formally recognize backslash-line-continuation as part of the same line-regex blind spot.
+
+---
+
+#### Q4 — Records Verification
+
+Every sentence in the changed comments across the diff was verified against the source tree:
+1. [`regress/census_tokens.py:9-10, 12-17, 27-39`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py#L9-L39): Verified. Subdirectory handling by relative paths, `NEWLINE` kept, method dot syntax, unreadable file outputs, and Python 3.12+ f-string tokenization are factually accurate.
+2. [`regress/gate_hygiene.sh:74-78, 145, 362-364, 416-417, 434-436, 444-449`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L74-L449): Verified. Counts of 7 edits across 5 probe files (`arm_endian_probe.py`, `mips_rounding_probe.py`, `zz_opus_docprobe.py`, `zz_opus_trailprobe.py`, `m88k_exc_probe.py`), `grep -l` line-based behavior, and owner ruling scopes match Git and test records.
+3. [`tools/derive_hygiene_pins.sh:19-21, 32-35, 39-42, 63-64, 131-132, 149`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh#L19-L149): Verified. Description of single-line 16-non-blank character ruling format, name refusals, and exact-token release behavior match implementation.
+
+No statement in the changed comments is false as of today.
+
+---
+
+#### Q5 — Option-Set Completeness
+
+* **For H10 (spacing before paren / e9):**
+  *Unstated disposition:* **Prohibit spaced spellings via a fail-closed negative assertion (lint check)** instead of widening `allends`/`full`/`bare`. Specifically, adding `check "readiness: no spaced endswith" "$(py_code_raw | grep -cE 'endswith[[:space:]]+\(')" "0"` would block e9 immediately without requiring an audit of prose or altering the closed-world arithmetic.
+* **For H13 (pre-existing stale comment numbers):**
+  *Unstated disposition:* **Parameterize comment references to derive from pins** (e.g., `# require all $EXPECT_CONVERTED of each`), eliminating drift between doc literals and operational pins.
+
+---
+
+### §S — SEAT RECORD
+
+* **Model:** Gemini 3.8 Flash (High)
+* **What was read:**
+  - Brief: [`_scratchpad/panel_20260923_180958/brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260923_180958/brief_sent.md)
+  - Frozen tree copies: [`census_tokens.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/census_tokens.py), [`gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/gate_hygiene.sh), [`derive_hygiene_pins.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c3_frozen/derive_hygiene_pins.sh), and their `.c2.` predecessors
+  - Working tree: [`GXEMUL-SEC/regress/census_tokens.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/census_tokens.py), [`GXEMUL-SEC/regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh), [`GXEMUL-SEC/tools/derive_hygiene_pins.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/derive_hygiene_pins.sh)
+  - Evidence artifacts: [`controls_c3/TABLE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c3/TABLE.txt), [`controls_c3/SUMMARY.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c3/SUMMARY.txt), [`controls_c3/NOTE.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c3/NOTE.txt), [`controls_c3/t_relpref_exact.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/controls_c3/t_relpref_exact.txt), and prior panel records in `panel_20260923_173123`
+* **What was run:**
+  - In-memory MD5 verification of frozen and active tree files
+  - Python tokenizer evaluation of newline, layout, and continuation constructs
+  - Python static AST and regex evaluations of `py_code` occurrence counters and token classifier shapes
+  - Zero test harness invocations (`run.sh`, `gate_*.sh`, and battery untouched per operational rule)
+
+---
+
+GO

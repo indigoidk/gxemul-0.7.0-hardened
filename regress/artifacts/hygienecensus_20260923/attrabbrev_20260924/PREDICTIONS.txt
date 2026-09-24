@@ -1,0 +1,39 @@
+attrabbrev -- PREDICTIONS, written 2026-09-24 BEFORE any control below was run (this file's mtime is the proof;
+nothing is appended to it afterwards -- results go to RESULT.txt).
+
+THE DEFECT.  tools/pipeline/check_commit_attribution.py (precommit section L) reads `git log --format=%h` and tests
+`h in commits` (exact list membership) and `h in reopened` (substring).  The ledger's commits/reopened fields hold
+the 7-character abbreviation git printed when each row closed.  After #545 (4264ee20) git's automatic abbreviation
+grew to 8 characters (`git log -1 --format=%h` -> 4264ee20; with core.abbrev=7 -> 4264ee2), so neither test can
+match any 7-character ledger sha and the #546 commit attempt hard-failed section L on six rows the ledger attributes
+correctly.  Section F's receipt check already matches by PREFIX for the same reason (precommit_check.sh, its
+"PREFIX match, not equality" comment).
+
+THE FIX.  Read %H beside %h and test whether a 7-40 character hex token in the field is a PREFIX of the full hash;
+display keeps %h.
+
+Abbreviation forced with GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.abbrev GIT_CONFIG_VALUE_0=7 (verified: HEAD prints
+4264ee2 under it, 4264ee20 without it).  Ledger = the working ledger unless stated.
+
+PRE-FIX (the committed check, run before the edit):
+  P0  default abbrev, depth 60      -> ATTRIBUTION_FAIL, exactly 6 HARD: cdbe7d75 fbsmlane, 8bd97e4d lcaisalane,
+                                       bb8efbf0 pcc2c040mienannounce, 09ded75c stagetokens, e16a8b7c landiskaux,
+                                       686d179c stagetokens -- all "closed row does not name this code commit"
+  P1  abbrev 7, depth 60            -> 0 HARD (the verdict before the repository grew)
+  P2  default abbrev, depth 130     -> the six above PLUS b78bb0f6 pcc2widthkills "commit says CLOSED; row is 'open'"
+                                       (its `reopened` field names b78bb0f, which the 8-character form cannot be a
+                                       substring of); possibly other older rows too -- count not predicted
+  P3  abbrev 7, depth 130           -> a REOPENED line for b78bb0f pcc2widthkills; neither it nor the six is HARD
+
+POST-FIX:
+  Q0  default abbrev, depth 60      -> 0 HARD
+  Q1  abbrev 7, depth 60            -> BYTE-IDENTICAL to P1 (at 7 characters the fix changes nothing)
+  Q2  default abbrev, depth 130     -> a REOPENED line for b78bb0f6 pcc2widthkills; HARD set equal to P3's
+                                       (same rows and commits; only the printed hash width differs)
+  Q3  fbsmlane.commits emptied of cdbe7d7 (row stays closed; commits = a different real sha, 4264ee2)
+                                    -> HARD cdbe7d75 fbsmlane "closed row does not name this code commit"
+  Q4  fbsmlane.commits = cdbe7d76 (shares seven characters with cdbe7d75..., is NOT a prefix of it)
+                                    -> HARD cdbe7d75 fbsmlane (a shared prefix is not a name)
+  Q5  fbsmlane.commits = the full 40-character hash cdbe7d75735ae3836635d91d70819a09f564fd1a
+                                    -> no HARD for fbsmlane (the full form is a prefix of itself)
+  Q6  the ledger being COMMITTED (the index blob), default abbrev, depth 60 -> 0 HARD

@@ -1,0 +1,115 @@
+The F5 claim is that the deriver now refuses exactly the inputs it names. I will re-read the frozen scripts and check each input path against the code, including the premises the brief states.VERDICT: DO NOT SHIP -- the new `WHOLE_FULL_FILES` check admits a space and a colon inside a file name, and the census sum then treats those bytes as site counts. A pty probe named `zz:9 x.py` with one whole-buffer site makes the deriver report 13 sites against 4 real ones; a well-formed `--ruling` writes that pin, and the gate stays green.
+
+The bytes under review are the frozen F5 copies (`c5_frozen`: `derive_hygiene_pins.sh`, `gate_hygiene.sh`, `census_tokens.py`). I read all three. The worktree `GXEMUL-SEC/tools/derive_hygiene_pins.sh` has later edits and is not that file. `regress/gate_hygiene.sh` and `regress/census_tokens.py` in the worktree still carry the F5 comment text. This verdict is about the freeze.
+
+The grandfather list on that gate is 43 names, all inside `A-Za-z0-9._/-`. Shell execution was blocked here, so I did not re-run `date`, `wc`, or the deriver. The arithmetic below is from the frozen gate and deriver.
+
+## Q1
+
+**(a)** No. Three things are written into the gate, and one check is not the check the header names.
+
+| Input written into the gate | Where it is checked | Byte-exact? |
+|---|---|---|
+| `--ruling` text | Non-empty test, then `wc -c` after `tr -d ' -~'`, then the date regex, `date -u -d`, the `" \ $ \`` case, then 16 alphanumerics | Yes for the byte rules |
+| `--grandfather` / `--release` names | `wc -c` after `tr -d 'A-Za-z0-9._/-'`, then exact membership in NEW or GONE | Yes. A newline survives `tr` and is counted. The F4 `$(...)` emptiness test is gone |
+| `whole_files` → `WHOLE_FULL_FILES` | On `--write` only: `wc -c` after `tr -d 'A-Za-z0-9._/: -'` | The count is byte-exact. The allowed set is not the names' allow-list |
+
+Header lines 29–30 say `--write` refuses a whole-buffer file name that holds a byte outside the names' allow-list (`A-Za-z0-9._/-`). The check at line 205 also deletes space and colon, and it runs on the joined `name:count name:count` string. A space or a colon inside one file name is deleted along with the separators, the count is 0, and the check passes. `$`, backtick, `"`, `\`, `*`, `?`, and newline are still refused. `$(...)` cannot land in the double-quoted pin.
+
+Counts (`bare`, `unknown`, `_ptyn`, `conv_*`, `whole_full`) are written too. Nothing applies a byte allow-list to them. `whole_full` is computed before the allow-list, by the extracted gate line
+
+```bash
+whole_full=$(printf '%s\n' $whole_files | awk -F: 'NF > 1 {s += $NF} END {print s + 0}')
+```
+
+`$whole_files` is unquoted, so spaces split fields and `$NF` is the count.
+
+Inputs the brief did not list: `$GXROOT` (which tree), the gate text `eval`'d as `$GP` and `$CODE`, and `PATH` / the interpreter chosen at lines 59 and 119. Stdin is not an input; the script feeds the classifier itself.
+
+**(b)** Yes. The canary is one missing path, in `promptless` mode only:
+
+```bash
+python3 -c "import sys" >/dev/null 2>&1 || python3() { "$PY" "$@"; }
+_canary=$(printf 'zz_derive_canary_absent.py\n' | python3 "$HERE/census_tokens.py" promptless "$HERE" 2>/dev/null)
+[ "$_canary" = "zz_derive_canary_absent.py" ]
+```
+
+That catches the measured Store-stub failure (stdout empty, canary mismatches, exit 3). Three failures still match the canary:
+
+1. A readable file is misclassified. `has_ends_with_call` counts any adjacent `.` / `endswith` / `(` tokens. `case K.endswith("GXemul>"):` is that triple. The packet's K14 run then `--release`s a grandfathered probe and all 12 readiness rows go green.
+2. `whole` mode is never canaried. `whole_sites` can be wrong while the absent-path canary matches.
+3. The real census line is `python3 ... | sort` with no `pipefail`. The classifier's exit status is discarded. A mid-list crash keeps a partial stdout and the deriver continues. The canary has already passed.
+
+A file in `regress/` actually named `zz_derive_canary_absent.py` would make this canary classify that file instead of a missing path. No such file is in the tree.
+
+**(c)** On this gate, they select the same span. There is one line matching `^GRANDFATHERED_PROMPTLESS="` (line 410). The 43 names contain no `"`. The closing `"` is the last byte of line 418. The reader's awk stops on a line that ends in `"`. The writer's `s.index('"', i)` stops at that same quote.
+
+They still diverge on a gate the writer does not reject: a `"` that is not at end of line (the reader continues, the writer stops), or a `GRANDFATHERED_PROMPTLESS=` line with no quote immediately after `=` (the reader evals it, the writer asserts zero matches and fails closed). Neither shape is in this file, and the name allow-list cannot insert a `"`.
+
+The numeric writers are a different pair. `re.subn(..., count=1)` plus `assert n == 1` means "the first match was replaced", so a second `^EXPECT_BARE=` line would be left in place. `pin()` uses `head -1`. The running gate uses the last assignment. This file has one of each.
+
+## Q2
+
+Smallest tree state that gets past the new check and writes a lie: one pty-driving probe whose path relative to `regress/` is `zz:9 x.py`, containing one `buf.rstrip().endswith("GXemul>")` site, plus the two sites already pinned.
+
+The classifier prints `zz:9 x.py:1`. Space-joined with the current pin and split on spaces, `awk -F:` sums `$NF`:
+
+- `arm_bdt_probe.py:1` → 1
+- `arm_flags_probe.py:2` → 2
+- `zz:9` → 9
+- `x.py:1` → 1
+
+Reported sum 13. Real sites 4 (the existing 3, plus 1). Every byte of that string is in `A-Za-z0-9._/: -`, so the line 205 check passes. `--write` without a ruling refuses, because the pin changed. `--write --ruling` with a well-formed warrant writes `EXPECT_WHOLE_FULL=13` and that string. The gate runs the same unquoted sum, gets 13, and the row is green.
+
+Report mode never runs the allow-list. It prints got 13, pinned 3, then `DERIVE_DONE`, and the shell status is 0.
+
+Denominator for the write-path inputs I traced: 3 of 3 are checked (ruling, names, `whole_files`). 1 of those 3 checks admits a value that changes the pin's meaning. Of the 95 printable ASCII bytes, the ruling path still refuses newline and CR (outside space–tilde) and `"`, `\`, `$`, and backtick. I found no ruling in that set that leaves the `#` comment it is written into.
+
+K14 still gets past the canary and needs no ruling. Under premises 2 and 4 that is a disclosed spelling-census limit, so I am not using it as this repair's false pass. The false pass is the new allow-list feeding a sum the gate defines as the site count.
+
+## Q3
+
+- **M1 UPHOLD.** The F4 test was `[ -z "$(tr -d allow-list)" ]`. Command substitution deletes the newline `tr` left between `zz-a.py` and `zz-ghost.py`, so the test saw empty. `wc -c` counts that newline.
+- **M2 UPHOLD.** `[ -n "${2:-}" ]` runs before the format regex. `--ruling ""` exits 2.
+- **M3 UPHOLD.** The code calls `date -u -d`. The packet's `t_rtz` wrote `2018-11-04` under `TZ=America/Sao_Paulo`. I did not re-execute `date`.
+- **M4 UPHOLD.** The shim plus the absent-path canary closes the measured stub that printed nothing. Misclassification is M11, not this fix.
+- **M5 UPHOLD.** The writer now requires one `(?m)^GRANDFATHERED_PROMPTLESS="` match. A comment starts with `#`, so it cannot be that match.
+- **M6 REFINE.** The finding was real: `$()` in a file name would have been shell inside `WHOLE_FULL_FILES="..."`. The disposition says the repair is the same byte allow-list. The repair adds space and colon and applies them to the joined string, so a file name may contain both. This is the accepted disposition that is wrong.
+- **M7 UPHOLD.** Globs are inert inside the double quotes. The deriver prints `$NEWP`, `$GONE`, and `$UNTR` unquoted, and the gate prints `$_new` unquoted. A glob there expands.
+- **M8 UPHOLD.** The ruling case and the header name `"`, a backtick, `\`, and `$`. An apostrophe is outside that list.
+- **M9 UPHOLD.** `py_code` drops lines matching `^[[:space:]]*#`. The measured `hash_line` payload is the physical line `#"""; _c = lambda buf: buf.endswith(">")`, which begins with `#`. A CR-only probe whose first bytes are `#!` is one such line. That filter predates this repair; the stopping rule files it. The sentence now describes that class.
+- **M10 UPHOLD.** `unknown=$((allends - bare - full))`. A known bare `">"` is in `bare`, so it is not "unknown", and it still moves the bare row.
+- **M11 UPHOLD.** The docstring matches the code and the packet's K14 measurement. Premises 2 and 4 define a spelling census that is not a parser. Filing matches that. The frozen `--release` path still has no second check.
+- **M12 UPHOLD.** `find ! -name 'readiness_predicate_test.py'` matches that basename in any directory. Pre-existing exclusion; filing matches the stopping rule.
+- **M13 UPHOLD.** `whole_sites` matches tokens, and the tokenizer drops the spaces in `buf .rstrip()`, so that shape is counted. A space before `(` is the line-grep class (`endswith(`), which is e9.
+- **M14 UPHOLD the rejection.** `${RULING%%:*}` removes the longest suffix matching `:*`. That suffix starts at the first colon. For `2026-09-23: reason 14:00` the value is `2026-09-23`. The shortest-suffix form, a single `%`, is the one that starts at the last colon.
+- **M15 UPHOLD.** The script compares `date -u -d "$_day" +%F` to `$_day` and never compares the year to today. The header says the age is not checked.
+- **M16 UPHOLD.** `+`, `'`, and non-ASCII fail the name `tr` set. The header says to rename. All 43 current names match the set.
+- **D3 UPHOLD.** M1's mechanism is in the F4 side of the diff, and M3–M6 match code that F5 had to change. F4 was a real do-not-ship.
+
+The accepted disposition that is wrong is **M6**. M9 and M11 stay filed under the stopping rule and premises 2 and 4. M14's rejection matches bash.
+
+## Q4
+
+Yes. One sentence in the deriver header is false on this freeze: `--write` refuses a whole-buffer file name that holds a byte outside the names' allow-list. Space and colon are outside that list and are accepted, including inside a name. The code comment at lines 202–204 ("the same bytes, plus `:` and space") describes the check that is actually there, and it contradicts the bullet above it.
+
+The changed gate paragraph matches the filter and the two measured shapes (`hash_line`, CR-only `#!`). The classifier docstring matches `has_ends_with_call`: a `match` pattern is counted (fail open), and an alias call with no `.` is counted only when some other call is. The "a double quote" wording matches the case statement. The glob sentence matches the unquoted `printf`s.
+
+The canary comment says it proves the classifier before trusting a word of its output. The code proves one absent path in `promptless` mode. That is a narrower proof than the clause claims.
+
+## Q5
+
+M9, options the disposition does not name:
+
+1. A hard error when a scanned `.py` file contains no `\n` (the CR-only shape), leaving the textual counts as they are.
+2. Moving the bare/unknown counts onto the tokenizer. That stops the line class, and it also stops counting an `endswith(` that appears only in a string or a comment, which the gate's own comment keeps on purpose as the safe direction.
+
+M11, option not named: on `--release`, require Python's `ast` to see a real `Call` of attribute `endswith` in that file, and refuse otherwise. That closes the measured release path without turning the census into a parser. Changing the classifier, which the disposition does name, is a separate round.
+
+## Something else
+
+The worktree deriver is already a later draft. Its per-token check still accepts a joined string whose space-separated pieces each match `existing-name:digits`. A probe named `arm_bdt_probe.py:9 x.py`, with `x.py` present as a file, splits into `arm_bdt_probe.py:9` and `x.py:1`. Both match `[A-Za-z0-9._/-]+:[0-9]+`, and both `${e%:*}` paths exist, so that draft's `-f` test passes and the sum still counts the `9`.
+
+The numeric pin writers still replace only the first `^NAME=` line and do not assert that exactly one exists. The grandfather writer does assert that.
+
+Seat record: Grok. Read the three `c5_frozen` files (deriver 240 lines, `census_tokens.py` 115 lines, the gate's census sections and the 43-name list) and the F4→F5 diff. Compared the worktree deriver far enough to see it is not the freeze. Did not run a gate, the battery, `date`, or `wc` (shell was denied). The 13-versus-4 sum is re-derived from frozen `gate_hygiene.sh` line 720 and the current `WHOLE_FULL_FILES` pin.

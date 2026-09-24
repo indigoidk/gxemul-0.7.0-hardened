@@ -1,0 +1,64 @@
+OPUS MEASURING SEAT -- hygienecensus F5 pass (c5), 2026-09-23 19:22-19:38
+VERDICT: DO NOT SHIP -- F5's WHOLE_FULL_FILES byte check allows ':' and space anywhere (they are the joined string's
+separators), so it cannot refuse them INSIDE a file name: a pty probe named "zz:9 x.py" with ONE whole-buffer site makes
+`--write --ruling` write EXPECT_WHOLE_FULL=13 for 4 real sites, and all 12 gate rows go GREEN (the gate's own count sums
+an unquoted $whole_files, so the name splits and adds 9).  The header F5 adds says such a name is refused.  And under
+git-bash every --write is now refused, telling the operator to rename arm_bdt/arm_flags: the shim's Windows python
+writes CRLF, the new byte check counts the CRs.  One line each (a name:count grammar per entry; strip CR in the shim).
+M1, M2, M3, M5 are verified fixed; the gate never reds wrongly.
+
+Measured on the FROZEN F5 copies (c5_frozen: gate 9d88b3f6, census_tokens 98788b1b, deriver e1ce9c59), /tmp copies,
+WSL (Python 3.13.12, GNU date 9.10, grep 3.12) and git-bash (bash 5.2, date 8.32, grep 3.0, python3 = the Store stub).
+
+1. RE-RUN OF THE c4 SUITES
+   105 reused cases (40 edits, 25 token, continuation, 15 call-loss, 24 F3-aimed): 0 changes.
+   44 rulings: WSL -- 2 changed, both intended: `--ruling ""` rc5 -> rc2 (M2); 2018-11-04 under TZ=America/Sao_Paulo
+     rc2 -> rc0 (M3).  git-bash -- `empty` rc5 -> rc2; the 19 rulings the checks accept still end rc5 -- no longer on
+     GONE (F4) but on the NEW whole-files check (the CRs, below).  Refused-at-the-checks set identical in both shells.
+   42 names: 1 changed, intended: `zz<LF>x.py` now refused by the byte check (M1).  Identical in both shells.
+   nlname: A, B, C, E all REFUSED by the byte check, list unchanged (F4: A/B/C written); D, F as before.
+   k16 (WSL): missing classifier -> DERIVE_FAIL rc3 on report/write/release (fixed); python3 exits 49 -> the shim runs
+     `python`, census correct, --write WRITTEN correctly, --release refused (fixed); python3 exits 0 silently ->
+     DERIVE_FAIL rc3 (fixed); classifier crashes after 10 inputs -> canary PASSES, report GONE=38, --release of a
+     still-promptless probe ACCEPTED 43 -> 42 (NOT fixed).
+   k16 git-bash (real stub): report correct (43/43, 3/3, GONE 0), --release refused (fixed); --write REFUSED (new, CRs).
+   q2 census: identical verdicts; k18 now writes the REAL list, comment untouched, bash -n ok, 12/12 rows (M5 fixed);
+     k14 still fails open; cr_only, hash_line, k11, k15 still pass all rows (filed).
+
+2. Q1/Q2 NEW PROBES (f5probes/, p6_crash.out, gb_report/)
+   P1 pty probe "zz x.py", 1 whole site, --write --ruling -> WRITTEN, WHOLE_FULL_FILES="... zz x.py:1", 12/12 green.
+      Count right, but a name the header says is refused (space) was written -- and the grandfather list refuses it.
+   P2 pty probe "zz:9 x.py", 1 whole site -> WRITTEN EXPECT_WHOLE_FULL=13 (true count 4), 12/12 GREEN.  A file name
+      changes the meaning of a pin.  Needs the ruling that change requires anyway (its note would read 3->13).
+   P3 CONTROL "zz$HOME.py" -> REFUSED rc5 (M6's $ case works).
+   P4 classifier that RUNS and misclassifies (call test -> True): canary passes, report 0/43, --release of a
+      still-promptless probe RELEASED.  The canary is a liveness check; so is k_partial above.
+   P5 a real prompt-detecting probe named zz_derive_canary_absent.py -> every mode DERIVE_FAIL "the token classifier did
+      not run" -- false diagnosis (it ran).
+   P6 19 pathological contents (NUL, Ctrl-Z, BOM mid-file, 2 MB line, 300-deep nesting, unterminated triple quote,
+      latin-1, CR-only, tab/space mix, ...) x 2 modes = 38 runs: 0 crashes, the run always continues.  So no tree
+      CONTENT I tried reaches the canary's blind spot; a classifier defect or a killed process does.
+   P7 promptless pty probe named "zz*.py" + a plain file zz_other.py -> the deriver's AND the gate's printed NEW lists
+      show both names (unquoted expansion of TREE names; the argv glob refusal cannot cover them).  Graded row correct.
+   P8 M14: ${RULING%%:*} on "2026-09-23: met at 14:00, ref ABC:123, ..." -> [2026-09-23].  M14's rejection holds.
+   git-bash CR: Windows python writes CRLF (od: `.py \r \n`); git-bash grep 3.0 STRIPS CR (so the promptless path via
+      `grep .` comes out clean), sort does not; whole_files = "arm_bdt_probe.py:1\r arm_flags_probe.py:2\r"; --write ->
+      REFUSED "rename the probe" naming files that are fine; the one-line canary cannot see interior-line CRs.
+   Input list (Q1a): ruling, name arguments, tree file names (via whole_files into WHOLE_FULL_FILES and the ruling note;
+      via NEWP/GONE/UNTR/_new into UNQUOTED printed lists), and the ENVIRONMENT (PATH -> which python3/date/grep; TZ;
+      locale) -- the fourth input, and the one both git-bash findings come through.
+
+3. Q3/Q4
+   UPHOLD M1 M2 M3 M5 M8 M10 M13 M14 M15 M16 D3; M7 M9 M11 M12 as dispositioned.  REFINE M4 (liveness-only canary:
+   P4, k_partial; git-bash CRLF).  M6 WRONG as implemented (P1, P2).
+   False today: the header bullet "a whole-buffer FILE NAME holds a byte outside the names' allow-list ... [refused]"
+   (P1, P2); "PROVE the classifier runs before trusting a word of its output" (P4, k_partial, CRs); the code comment
+   "the same bytes as a grandfathered name" (a name may hold ':' and space); two printed diagnostics (P5's DERIVE_FAIL,
+   git-bash's "rename the probe").  Checked TRUE: the gate's new closed-world and helper sentences; the docstring's
+   fail-open/fail-closed sentence; the ruling header (44 inputs x 2 shells); the M4 history sentence.
+   Q5: M9 -- a token-aware comment filter (drop a line only when its first TOKEN is a COMMENT), or stop stripping and keep
+   prose off the literal; M11 -- an ast check at --release time only (require a real Call to .endswith), census unchanged.
+
+WORKING TREE: gate and deriver changed at 19:34:12 by the main loop's patch_f6.py (19:34:01) -- not by this seat.
+c5_frozen intact (98788b1b, e1ce9c59, 9d88b3f6).  All temp dirs removed; no stray output under git's /mnt/c.
+OPUS_C5_SUMMARY_DONE

@@ -1,0 +1,121 @@
+VERDICT: The tokenizer fixes the ordinary text-counting defects, but a one-character readiness change escapes all 12 rows, and the deriver overstates how it validates and records rulings.
+
+**TASK 1 — census_tokens.py**
+
+Checked all five requested behavior groups against the [frozen helper](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/census_tokens.py:31), including 25 core source snippets and read-error cases.
+
+| Claimed behavior | What the code does |
+|---|---|
+| Comments, strings and docstrings are not code | Correct for ordinary literal text. Comments are removed; string contents remain opaque tokens. Full-line comments, trailing comments, assigned strings and docstrings did not produce matches. |
+| Spacing between tokens is ignored | Correct, including tabs, continued lines, legal multiline expressions and intervening comments. However, it also discards **statement boundaries**, producing false calls below. |
+| Either quote works | Correct. Single and double quotes work; raw, Unicode and triple-quoted literals also work when `ast.literal_eval()` returns exactly `"GXemul>"`. |
+| Counted per occurrence | Correct for matching token sequences. Two sites on one line count twice, as do two sites on separate lines. |
+| Unreadable or untokenizable files are listed promptless | Correct in `promptless` mode for the caught exceptions: `OSError`, `UnicodeDecodeError`, `TokenError`, `SyntaxError` and `IndentationError`. In `whole` mode these files produce **no output**. |
+
+The broader “code-level call” description is inaccurate. This valid Python contains a method reference followed by a separate string expression:
+
+```python
+buf.rstrip().endswith
+("GXemul>")
+```
+
+The helper reports readiness present and **one whole-buffer site**, although the only actual call is `rstrip()`. Removing `NEWLINE` at line 31 joins the two statements for matching. Likewise, `def endswith(): pass` satisfies `has_ends_with_call()` without calling anything. Both satisfy the docstring’s explicit `NAME`/`OP` recipe; that recipe does not establish the semantic claim accompanying it.
+
+The blanket error guarantee also has an input counterexample: a stdin path containing an embedded NUL raises uncaught `ValueError: embedded null character` in both modes. I verified this against the actual file-opening code. Such a path cannot originate from an ordinary filesystem enumeration, but it contradicts the unrestricted input/error promise.
+
+Tokenization success also does not establish syntactic validity: a syntax-invalid but tokenizable file can still receive readiness credit.
+
+**TASK 2 — derive_hygiene_pins.sh**
+
+The [current deriver](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/derive_hygiene_pins.sh:37) contains **21 explicit failure/usage-message sites: 13 `REFUSED`, six `DERIVE_FAIL`, and two usage errors**. Conditions below assume earlier guards passed.
+
+| Line | Printed refusal/failure | Exact condition |
+|---:|---|---|
+| 39 | `DERIVE_FAIL: no working python` | Neither `python3` nor `python` successfully runs `-c "import sys"`. |
+| 44 | `DERIVE_FAIL: no gate_hygiene.sh…` | `$G` fails `-f`. |
+| 49 | Write-mode usage | Arguments remain after consuming `--write` and its optional `--ruling TEXT`. A missing ruling argument reaches this path too. |
+| 53 | General usage | The first argument is nonempty and is not one of the three recognized modes. |
+| 57 | `REFUSED: a ruling reads…` | Nonempty ruling text has **no line** matching `^[0-9]{4}-[0-9]{2}-[0-9]{2}: .{16,}$`. |
+| 58 | `REFUSED: the ruling text may not contain…` | A format-accepted ruling contains `"`, backslash, `$`, or backtick. Apostrophes are accepted. |
+| 71 | `DERIVE_FAIL: enumerator … not found` | Extraction returns empty for any of `py_code`, `probe_code`, `pty_driving`, `pty_code`. |
+| 75 | `DERIVE_FAIL: assignment … not found` | Extraction returns empty for any of the 12 named assignments: `bare`, `allends`, `full`, `unknown`, `_ptylist`, `_ptyn`, `_promptless`, the three `conv_*`, `whole_files`, `whole_full`. |
+| 84 | `DERIVE_FAIL: the pty denominator…` | `${_ptyn:-0}` fails the integer test `-gt 0`, including zero, negative, missing or invalid values. Applies to **all modes**. |
+| 109 | `DERIVE_FAIL: the writer failed…` | Either Python writer exits nonzero, including replacement/assertion failures and read/write errors. |
+| 112 | `REFUSED: --$MODE needs the file names…` | Grandfather/release mode receives no names. |
+| 116 | `REFUSED: a name given more than once…` | Sorting the supplied names and applying `uniq -d` produces output. |
+| 119 | `REFUSED: … is already grandfathered` | In grandfather mode, the supplied name matches a complete literal line of `GFS`. |
+| 120 | `REFUSED: … is not a NEW promptless probe` | In grandfather mode, the name fails membership in the lines produced from **unquoted** `$NEWP`. |
+| 122 | `REFUSED: … is not a grandfathered name that is no longer promptless` | In release mode, the name fails membership in the lines produced from **unquoted** `$GONE`. |
+| 147 | `REFUSED: the three #392 counts disagree…` | The three count strings are not all equal. Write mode only. |
+| 148 | `REFUSED: new promptless probes…` | `NEWP` is nonempty. Write mode only. |
+| 149 | `REFUSED: grandfathered names are no longer promptless…` | `GONE` is nonempty. Write mode only. |
+| 150 | `REFUSED: bare … grew…` | `bare <= pin(EXPECT_BARE)` fails, including an invalid numeric operand. |
+| 151 | `REFUSED: an unrecognised … spelling appeared…` | `unknown <= pin(EXPECT_UNKNOWN)` fails, including an invalid numeric operand. |
+| 157 | `REFUSED: these pins change only by a named decision…` | `RULING` is empty and at least one holds: converted count fails `>=` its pin; whole total differs from its pin; whole-file string differs from its pin. |
+
+The unquoted expansions at lines 120 and 122 split names containing spaces and permit pathname expansion. Consequently, these membership checks can reject a genuinely eligible relative path.
+
+The header promises:
+
+- A hard error for a missing enumerator, lines 6–10.
+- Nine atomic write-refusal conditions across five bullets, lines 20–28: zero denominator; disagreeing #392 counts; new promptless names; obsolete grandfathered names; rising bare count; rising unknown count; and, without a ruling, falling converted count, any changed whole total, or any changed whole-file list.
+- A ruling that looks like the prescribed dated form, line 29.
+- Named, new grandfathering candidates and named, eligible releases through the usage descriptions, lines 17–18.
+
+**Comparison:** all nine expressly listed write-refusal conditions have guards. The header does not enumerate the startup/usage/writer failures, duplicate-name refusal, 16-character minimum, forbidden characters, or the denominator refusal’s extension to reporting and name-management modes. The eligibility checks are implied by the usage descriptions.
+
+**Protected pins without a ruling:** I found no absent-or-empty-ruling route through the three protected comparisons in this frozen version. I checked all six writer targets and 48 boundary combinations of the protected conditions. Converted-count increases and denominator changes are allowed without rulings; the header permits those. Falling `EXPECT_BARE` is now included in the writer.
+
+Two separate ruling defects remain:
+
+1. **Recording is narrower than promised.** Lines 164–170 annotate only pins named in `NEED`. A supplied ruling is discarded when only the denominator changes or the converted count rises. In a mixed update, those changes remain unannotated even when a protected change receives a note.
+2. **Validation accepts multiline text.** One valid dated line satisfies `grep -qE`; later lines are inserted verbatim without `#`. For example, a valid dated reason followed by a newline and `continued explanation` produces an uncommented continuation in the gate. This requires supplying ruling text; it is not an absent-ruling bypass.
+
+**TASK 3 — smallest probe edit**
+
+Insert one ASCII character, `~`, at [arm_bdt_probe.py:76](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:76):
+
+```diff
+-            if self.buf.rstrip().endswith("GXemul>"):
++            if ~self.buf.rstrip().endswith("GXemul>"):
+```
+
+This probe actually calls `pty.fork()` at line 47. On the evaluated Python 3.12.10, `~False` is `-1` and `~True` is `-2`; both are truthy. The wait therefore accepts readiness after its first read attempt even when the buffer contains no prompt, provided it reaches that condition.
+
+One inserted character is minimal. It uses none of the excluded cases.
+
+I parsed the edited source and recomputed the census **in memory**, using the frozen helper and the gate’s matching rules. All **12 readiness rows** retained their values:
+
+| Readiness row(s) | Before and after |
+|---|---|
+| Bare | 0 |
+| Unknown | 0 |
+| PTY denominator | 73 |
+| Promptless count | 43 |
+| Promptless names | `new=none gone=none` |
+| Whole-buffer total | 3 |
+| Whole-buffer per-file list | `arm_bdt_probe.py:1 arm_flags_probe.py:2` |
+| Three #392 rows | 24 / 24 / 24 |
+| Two truth-table rows | 2 / 5 |
+
+The whole-buffer population contained 76 files. The extra unary operator changes neither its matched token sequence nor any textual spelling count.
+
+**TASK 4 — contradicted comments**
+
+I checked all four occurrences of “closed-world” and both occurrences of “cannot be evaded” across the three current files.
+
+- [gate_hygiene.sh:72](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/gate_hygiene.sh:72): **“every .endswith() in the tree must use one of the two KNOWN literals.”** Lines 75–77 additionally claim the form **“cannot be evaded by inventing a new way to write it.”** These universal claims are false; the file itself retracts them at lines 78–82 for the already-filed spacing case. The narrower statement at lines 81–82 accurately describes literal-text coverage. Task 3 additionally demonstrates that preserving a recognized spelling does not preserve readiness behavior.
+
+- [gate_hygiene.sh:150](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/gate_hygiene.sh:150): **“THE THREE COUNTS ABOVE ARE CLOSED-WORLD AND STRUCTURALLY CANNOT SEE A PROBE WITH NO PROMPT DETECTION AT ALL.”** The following explanation establishes only that a file containing zero literal `endswith(` text contributes nothing. Absence of actual readiness is different: strings, trailing comments and unrelated calls can contribute. The helper’s “CLOSED-WORLD” reference at line 11 explicitly describes textual counting and discloses its spacing limitation; that qualified description agrees with the code.
+
+- [gate_hygiene.sh:97](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/gate_hygiene.sh:97): **“This is a FAIL-CLOSED exception, not a hole: the file is named exactly, and its own contents are asserted below, so it cannot quietly stop testing what it claims to test.”** Also line 714: **“CODE ONLY here too.”** The truth-table checks remove only full-line comments. In memory, replacing the `bare-whole` predicate with `True` while retaining `endswith(">")` in a trailing comment preserved both content counts, 2 and 5.
+
+- [census_tokens.py:19](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/census_tokens.py:19): **“print each path with NO code-level call of the ends-with method”** overstates the token recipe. The separate-statement and function-definition inputs in Task 1 receive call credit.
+
+- [census_tokens.py:26](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/census_tokens.py:26): **“otherwise 0 (an unreadable file is an OUTPUT, never an exception).”** `whole` suppresses unreadable files, and an embedded-NUL input path raises uncaught `ValueError`.
+
+- [derive_hygiene_pins.sh:29](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/census0923/c2_frozen/derive_hygiene_pins.sh:29): **“--write writes it into the gate as a comment line above every pin it moves, so the change carries its warrant in the diff.”** Only `NEED` pins receive annotations, and accepted multiline rulings do not remain comment lines.
+
+There are also stale present-tense numerical claims: gate lines 162–164 say **“EVERY current probe is promptless”** against 43/73; lines 471–472 require **“all fifteen of each”** against 24; and lines 708–711 describe **“2 bad arms, but 3 good occurrences”** against 2/5, corrected later at line 723.
+
+Read: all five specified frozen files and their before/after differences; all five MD5 prefixes matched. Also read the 103 other non-artifact `regress/*.py` files, using the frozen helper as the census’s 104th Python source. No files changed; no build, emulator, gate, or deriver was run.

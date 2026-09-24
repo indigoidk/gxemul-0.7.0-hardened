@@ -1,0 +1,75 @@
+VERDICT: DO NOT SHIP -- one measurement short, not one defect found: every F5 check visible in the diff is correct (I re-derived each from shell semantics, and the packet's measured exit codes 4/2/3/5 each match the code's own `exit` statements), but the ship case rests on an in-round premise the packet neither shows nor has ever measured -- that the ruling's inherited "printable ASCII only (so ONE line)" check actually refuses a LINE FEED. If that check is a `$(printf … | tr -d …)`-emptiness test, a ruling whose only non-printable byte is a LF passes it (command substitution strips every leftover newline, and a passing ruling's leftovers are newlines only), and `--write` then lands the post-LF text as UNCOMMENTED shell source in the gate -- the exact M1 class, in the input the author lists first. One run settles it: `--write --ruling $'2026-09-23: sixteen letters of reason\nrm -rf x'` must come back REFUSED. A second, equally cheap premise to evidence: the gate's existing 43 names, `eval`'d unguarded before any check, are asserted inside the allow-list (M16) but never shown.
+
+## Q1
+
+**(a) Inputs, enumerated.** READ (from the diff) + REASONED (semantics):
+
+1. **Name arguments** → written into `GRANDFATHERED_PROMPTLESS`. CHECKED, byte-exact: `tr -d 'A-Za-z0-9._/-'` (trailing `-` is literal in tr) piped to `wc -c` inside `$(( ))` -- no `$(...)`-emptiness anywhere; any byte outside the set survives `tr` and is counted; LF survives and is counted. t_nlf REFUSED rc 4 matches `exit 4` (READ).
+2. **Whole-buffer file names** → `WHOLE_FULL_FILES`. CHECKED, byte-exact, same construction plus `:` and space; empty string passes (0 bytes), which is correct since #392 measured 0/80. t_wholefile REFUSED rc 5 matches `exit 5` (READ).
+3. **Ruling text** → written as comment lines. The NEW checks are byte-exact: `[ -n "${2:-}" ]` refuses missing and empty; `date -u -d "$_day" +%F` equality is a round-trip form check; `${RULING%%:*}` cuts at the FIRST colon (longest `:*` suffix), so colons in the reason are harmless; the quote/backslash/`$`/backtick case is exact. The INHERITED claim "printable ASCII only (so ONE line)" is implemented in the unseen form check above the shown hunk -- **CANNOT SETTLE from the packet**; settling fact: that one line, or the LF-ruling run named in the verdict. No control in any round has ever fed a ruling a line feed (the named ruling controls are: impossible date, punctuation-only, non-ASCII blanks/separators, empty).
+4. **The input you did not list: the gate file itself.** The deriver reads `$G`, `eval`s the extracted `GP` body (visible, unchanged context at ~line 101), `eval`s the gate's census lines (`$CODE`), and rewrites the file. F5 checks everything the deriver **writes**; it checks nothing it **reads**: `eval "$GP"` runs in every mode *before* the name loop and *before* the canary. Safety rests entirely on the premise that the 43 existing names (and `WHOLE_FULL_FILES`'s existing content) hold no live byte -- asserted in your M16 disposition, not shown. One line -- the same `tr | wc -c` over the extracted body before `eval` -- closes it.
+
+Also written into the gate: counts and the denominator, digits by construction; the residual there is Q2 item 4.
+
+**(b) Yes -- the canary is a liveness proof for one invocation shape, not a correctness proof.** READ: the canary tests `census_tokens.py promptless "$HERE"` via a direct `python3` call; `eval "$CODE"` uses the same name-resolution path (the shell function persists into `eval`), so the shim covers the census lines *given* the comment's premise that they call `python3` **by name** -- a census line using `xargs python3`, `-exec`, or an absolute path bypasses the function while the canary still passes (premise not checkable from the packet; settling fact: the census lines' text). And "runs, prints the canary, still misclassifies" is not hypothetical: **M11 is a measured instance** (READ, disclosed), as are e9/e10's shapes and M12. A census that is consistently *wrong* (all three #392 counts equal but wrong) passes every guard: the disagreement check tests consistency, not truth.
+
+**(c) Reader/writer agreement.** REASONED: both now anchor at line start (`index($0,"GRANDFATHERED_PROMPTLESS=")==1`; `(?m)^GRANDFATHERED_PROMPTLESS="`), and the writer's `assert len(ms)==1` fails closed on duplicates -- the reader's pattern is a superset (it matches the unquoted prefix), so any gate giving them *different* quoted candidates makes the writer refuse. One residual desync survives: a hand-crafted line starting `GRANDFATHERED_PROMPTLESS=` (no quote) whose value *ends* in `"` placed before the real assignment -- the reader stops there, the writer still sees exactly one quoted match and writes the real list, so eligibility ran on garbage. Reachable only by hand edit, which §C.1 excludes; the symmetric fix (anchor the awk on the quoted literal) is in-charter. Second residual: whether the shell propagates a writer death (the new `assert`, or `s.index` ValueError) to a nonzero deriver exit is **not shown** -- settling fact: the tail of the deriver after the python heredoc (`set -e`? exit check?).
+
+## Q3 -- adjudications
+
+- **M1 UPHOLD.** REASONED-certain: command substitution strips trailing newlines, and a passing name's only `tr` leftover is the LF, so F4's emptiness test could not see it; the `wc -c` fix is byte-exact; READ: t_nlf REFUSED rc 4, list unchanged.
+- **M2 UPHOLD.** READ: `[ -n "${2:-}" ]` refuses missing and empty; t_rempty rc 2. The "ONE line" half of the claim is the open premise (Q1a).
+- **M3 UPHOLD.** READ: `date -u -d` round-trip, t_rtz WRITTEN; REASONED: UTC has no DST, so no midnight is ever skipped under `-u`; harmless where TZ is ignored (git-bash).
+- **M4 UPHOLD.** READ: shim + canary; git-bash F5b equals every pin; t_canary DERIVE_FAIL rc 3. REFINE per Q1(b): liveness of one shape only.
+- **M5 UPHOLD.** READ: anchor + single-match assert; t_anchor: real list 43→44, comment untouched, `bash -n` clean (F5a: written into the comment, `bash -n` FAILED).
+- **M6 UPHOLD the fix, REFINE the disposition -- this is the nearest-wrong one.** The write side is now byte-exact (READ: t_wholefile rc 5, gate unchanged), but the comment's own harm model is the *next read* ("would have become shell source there"), and F5 guards only the write. The read side (`eval "$GP"`, and WHOLE_FULL_FILES's read) is unguarded on an unevidenced premise.
+- **M7 UPHOLD.** REASONED-certain: glob characters are inert inside double quotes, so the old reason was false. The new reason's factual clauses (the gate's and this tool's printed lists expand names unquoted) are READ-as-claimed but not checkable -- the print lines are not inlined; if either print quotes, the sentence is false while the policy stands.
+- **M8 UPHOLD.** READ: the case refuses exactly `"`; records now say "a double quote"; an apostrophe is inert in both places (REASONED).
+- **M9 UPHOLD for this round.** The census rows are unchanged since F3 (READ), so a code fix is outside F5's charter ("only the deriver's input checks and comments"); the rewritten record matches the mechanics it describes (READ: t_bsl passes every row, confirming the line-based class; hash_line/cr_only measured per packet). See Q5 for the in-charter option you did not name.
+- **M10 UPHOLD.** The new sentence separates "not unknown" from "still fails the bare row"; consistent with both pins visible (`EXPECT_BARE=0`, `EXPECT_UNKNOWN=0`); the counting code itself is unseen (READ-as-claimed).
+- **M11 UPHOLD the filing.** Classifier unchanged since F3 = pre-existing; §C.3 files it; the new docstring sentence has the correct antecedent (the *match-class pattern counted* is the fail-open item). See Q5: a deriver-side guard is available today.
+- **M12 UPHOLD.** Filed with the measurement; spelling-only census per §C.2; the move is visible as a pin change ("a pin that moves … gets no note", READ), so the record is not silent.
+- **M13 UPHOLD** (record text only; n3g not inlined, nothing contradicts it).
+- **M14 OVERTURN the finding -- your rejection is correct.** REASONED from parameter-expansion semantics: `%%` deletes the *longest* suffix matching `:*`, which begins at the *first* colon; the seat described `%` (shortest suffix, cuts at the last colon). No visible check refuses a colon in the reason.
+- **M15 UPHOLD.** READ: the only date logic shown is the round-trip; no age comparison exists, so "its age is not checked" is true; `-u` does not change calendar parsing (REASONED).
+- **M16 UPHOLD the policy; FLAG the premise.** "All 43 grandfathered names are inside the allow-list" is asserted, not shown, and it is load-bearing for the unguarded `eval` (Q1a-4). Settling fact: the GP body's bytes.
+- **D3 UPHOLD.** READ: M1 was measured end-to-end and M3-M6 measured, which under your own stop rule forced DO NOT SHIP on F4. Note the symmetry: the 7/9 ratification the panel is warned about was a reasoned-not-measured premise (K16), and my verdict names the one such premise still standing.
+
+**Which accepted disposition is wrong?** None is provably wrong. **M6 is half a fix** (write-side only, its own rationale being the read side); **M9/M11 are under-disposed** (a third, in-charter disposition exists -- Q5); **M14's rejection is right** (verified independently).
+
+## Q2 -- smallest inputs that get past and do harm
+
+Ranked, with preconditions:
+
+1. **A line feed inside an otherwise-valid ruling** (if the inherited form check is `$(tr …)`-emptiness). Smallest: ~30 bytes in one argv; no corruption needed. Harm: post-LF text written into the gate uncommented = shell source, executed when the gate runs. This is the verdict's named settlement.
+2. **One live byte in the gate's existing GP (or WHOLE_FULL_FILES) body.** READ: `eval "$GP"` precedes every refusal and the canary; harm executes in any mode. Precondition: written before allow-lists existed, or a hand edit -- premise-guarded but unevidenced (M16 flag).
+3. **Hand-crafted gate states** (two quoted line-start matches -- writer asserts, propagation unshown; the unquoted-prefix desync of Q1c). Excluded by §C.1; noted for completeness.
+4. **A live but consistently wrong census** (equal-but-wrong #392 counts; NEWP empty on a nonzero denominator → all 43 GONE → `--release` of promptless probes with the report saying "equals every pin"). The canary is blind to this by design; M11/M12/e9/e10 are the filed instances. The all-43-GONE-at-once signature is itself cheaply detectable (Q5 iii).
+
+Denominators: write-side inputs shown byte-exact: **3 of 3** (names, whole-file names, ruling's *new* checks); read-side bodies guarded: **0 of 3** (GP eval, WHOLE_FULL_FILES read, CODE eval); liveness canaries: **1 of 1** classifier invocation shape.
+
+## Q4 -- records
+
+Verified true from the diff + semantics (READ/REASONED): the `wc -c` rationale (trailing-newline strip, and the subtlety that a passing name's leftovers are newlines *only*); the UTC rationale; the canary's history (matches the F5a/F5b measurements, and F5b's healthy runs completing proves the canary passes on a real tree); "anchored ... as the reader above is" (`index(...)==1` is line-start); the WHOLE_FULL_FILES comment (matches the new check); the M8/M10/M11 rewrites (match the visible code and pins); the e9 widening (matches t_bsl); "a double quote" (matches the refusal message).
+
+**CANNOT SETTLE from the packet** (premise → settling fact): (i) "printable ASCII only (so ONE line)" → the form-check line, or the LF-ruling run; (ii) "all 43 grandfathered names are inside the allow-list" → the GP body; (iii) "the gate's and this tool's printed name lists expand it UNQUOTED" → the print lines; (iv) "every count here is LINE-based" → the census count lines (supported by §C.4 and t_bsl, but not inlined).
+
+Provenance nit (READ): the measured runs were on 45cc3934; the frozen file is e1ce9c59, changed *after* both control sets ("a double quote" twice). Asserted comment-only; a comment-only change in `tools/` has no behavioral surface, and the owed gate-6 run on the final files is disclosed -- consistent, but the final bytes are technically unexercised.
+
+## Q5 -- dispositions you did not name (all in-charter: they are deriver *input checks*)
+
+(i) **A tree-state canary for M9**: refuse to derive pins while the tree holds a shape *known* to blind the census -- CR-only endings in scanned files, `endswith (` / a backslash continuation before the paren, a `case K.endswith(`-shaped line, a scanned file that is one physical line beginning `#!`. Cheap for the enumerated shapes; not exhaustive (the guard is itself closed-world), but it converts measured census blindness into a refusal -- the same move as F5's interpreter canary.
+(ii) **A `--release` guard for M11**: refuse to release a name whose own file's prompt-detection evidence is a match-class pattern (one grep over the named probe). Available today, no classifier change.
+(iii) **A plausibility guard on the all-GONE census**: when every grandfathered name reads GONE on a nonzero denominator, refuse and require a ruling -- that signature is the measured F4 git-bash failure, and 43 simultaneous real fixes is a decision, not a recount.
+
+None is required by the stop rule; they are the middle path between "file" and "fix the classifier in its own round".
+
+## Something else
+
+Three items, folded above but flagged here: the `python3`-by-name premise (canary blind to `xargs`/`-exec`/absolute-path census lines, Q1b); writer-death propagation unshown (Q1c); and the reader's pattern being a strict superset of the writer's (Q1c) -- the assert closes it fail-closed everywhere except the hand-crafted unquoted-prefix line.
+
+## Seat record
+
+- **Model**: GLM (Z.ai), packet-fed seat.
+- **What I read**: the brief; the three inlined unified diffs (census_tokens.py 8b4e8468→98788b1b, gate_hygiene.sh c1399897→9d88b3f6, derive_hygiene_pins.sh 23410fe1→e1ce9c59); §C, §F2, the measurements section.
+- **What I ran**: nothing -- no file access and no execution environment (and no gate, per the operational rule). The measurements I name instead: (1) `--write --ruling $'2026-09-23: sixteen letters of reason\nrm -rf x'` on F5 -- REFUSED ships the round; (2) the deriver's own allow-list run over the gate's current GP body (and WHOLE_FULL_FILES) -- zero leftover bytes evidences the M16 premise; (3) optionally, inline the ruling form-check line, which settles (1) without a run.

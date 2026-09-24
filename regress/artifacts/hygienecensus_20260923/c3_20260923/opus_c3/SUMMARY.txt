@@ -1,0 +1,96 @@
+OPUS MEASURING SEAT -- hygienecensus F3-repair pass (c3), 2026-09-23
+VERDICT: SHIP -- the F3 repair closes every closing-pass finding I can measure (H1/H2 statement+dot, H3 newline
+injection, H4 blank warrant, H5/H6 names+exact-release, H16 NUL), loses no legitimate one-statement readiness call,
+and every lost form fails CLOSED.  ONE residual worth a one-line hardening (the ruling's control-char reject misses
+Unicode separators U+0085/U+2028/U+2029 -- measured NON-injecting today); one minor (the 16-non-blank warrant is
+quantity-only).  Neither reaches a gate readiness row.
+
+Tree: the FINAL FROZEN F3 files in c3_frozen (census_tokens.py 029fba36, gate_hygiene.sh 4220b6ee,
+derive_hygiene_pins.sh f9533e22), placed over fresh /tmp copies of SEC/regress top-level + tools.  Nothing written
+under GXEMUL-SEC/est/build/build-asan.  All work in /tmp and _scratchpad/census0923/opus_c3/.
+
+================ SECTION 1 -- re-run my 40 section-4 edits + 25 token unit cases vs F3 ================
+40 section-4 edits: verdicts BYTE-IDENTICAL to c2 (diff empty) -- 32 pass, 5 CLAIMED boundary probes red, 3 controls
+red, 0 defects.  25 token unit cases: identical to c2 (the one "cont.py mismatch" is the SAME known artifact in my own
+test file -- a heredoc ate the backslash; the real chr(92) continuation test s2_cont still shows whole=1, not
+promptless, on F3).  **0 of 65 reused verdicts changed.**  Reason: the F3 changes only bite a match that SPANS two
+statements or a method name with NO preceding dot; none of my c2 cases has either shape.
+
+================ SECTION 2 -- Q1(a)/(b): does F3 LOSE a legitimate one-statement call? ================
+15 crafted single-statement calls (s2b_q1.out), 0 real mismatches (the one flagged is my own wrong prediction:
+cond.py's receiver is `buf`, so whole=1 is correct):
+  chain split inside () ......... counted (whole=1)      arg split inside endswith() ... counted
+  backslash continuation ........ counted                lambda / comprehension / conditional ... counted
+  call after ';' ................ counted                unbound str.endswith(buf,...) (has a dot) ... counted
+  reference-then-paren (2 stmts)  LOST -> promptless (the intended t_nljoin fix)
+  getattr / no-dot / stored-ref   LOST -> promptless (indirections; no "." NAME "(")
+FAIL DIRECTION (s2c, gate-integration): a probe whose SOLE predicate is the nljoin 2-statement form, or a getattr
+indirection, is listed promptless -> the names row REDS (new=arm_endian).  Every lost form fails CLOSED; none can
+silently pass.  Structural note, confirmed: requiring MORE (a dot) can only make a call HARDER to credit, so it can
+only push a probe toward promptless (fail-closed), never the reverse; keeping NEWLINE can only REDUCE matches (a span
+with a NEWLINE in it never matches the shape), so it cannot create a false positive.
+
+================ SECTION 3 -- Q1(c)/(d): the deriver's ruling + name checks ================
+RULING (s3, s3b, s3c):
+  newline / tab / carriage-return / vertical-tab .... REFUSED rc2 (control char) -- the c2 injection is CLOSED
+  whitespace-only reason ............................ REFUSED rc2 (16 non-blank) -- the c2 blank warrant is CLOSED
+  U+0085 NEL / U+2028 LS / U+2029 PS ................ NOT refused by the control-char check; WRITTEN into the # RULING
+     comment.  *** DEFINITIVE: they do NOT inject.  Clean write path (4th whole site in arm_bdt), separator embedded
+     before `EXPECT_WHOLE_FULL=999`: bash -n OK, and the ONLY new non-comment lines are the 2 legitimate pins -- the
+     `EXPECT_WHOLE_FULL=999` stays inside the RULING comment (bash terminates lines on \n only).  Every consumer here
+     (bash, sed -n, grep, python re.M) splits on \n only; python str.splitlines() WOULD split on them but nothing
+     reads the gate that way.  RECOMMEND one line: extend the reject to these three (defence-in-depth).
+  16 punctuation ("2026-09-23: " + 16 dots) ......... WRITTEN -- the non-blank check is QUANTITY-only; a
+     meaningless-but-non-blank warrant passes.  Minor (operator self-inflicted; date + pin delta still recorded).
+  very long single-line ruling (5000 chars) ......... WRITTEN, gate parses -- harmless (one long comment line).
+NAMES (s3, s3b):
+  "zz new probe.py" / "zz?.py" / "zz*.py" / "zz[a].py" .. REFUSED rc4 (whitespace or glob) -- by name
+  "zz-legit_probe.py" (a real new promptless probe) ..... GRANDFATHERED rc0 -- a legit hyphen name is NOT wrongly refused
+  EXACT --release: gdrom_cond_probe.py AND x-gdrom_cond_probe.py both listed, --release gdrom_cond_probe.py removes
+     EXACTLY gdrom_cond_probe.py and keeps x-gdrom_cond_probe.py (inspected on the LIST BODY) -- the c2 pref-foo bug CLOSED.
+H16: a stdin path with an embedded NUL -> F3 lists it promptless (rc0, no crash); the c2 census CRASHES with
+     ValueError on the same input -- H16 was real and is fixed.
+
+================ SECTION 4 -- Q2: >=20 NEW edits aimed at the F3 changes (s4b) ================
+24 NEW cases (distinct from the filed shapes and from my 40 c2 edits): 18 PASS, all genuine SPELLINGS aimed at F3
+dimensions (spaced dots, statement-splitting on non-buf receivers, subscript/attr receivers, semantic transforms,
+non-endswith methods).  4 CLAIMED shapes -- a REAL whole site (receiver ends buf, rstrip().endswith("GXemul>")) split
+by an arg-newline, a chain-newline, a backslash-continuation, or spaced dots -- ALL CAUGHT (red): keeping NEWLINE did
+NOT break the whole census for a legitimately split single-statement site.  2 controls (unbound-with-buffer-arg,
+star-args) red via the closed-world `unknown`.  **0 DEFECTS.**
+
+================ Q-ANSWERS ================
+Q1(a): no legitimate one-statement call is lost (bracket-split, backslash-cont, lambda, comprehension, conditional,
+       after-';', two-real-statements all still counted; 4 split whole sites still counted).  The only losses are the
+       artificial reference-then-paren 2-statement split (the intended fix) and no-dot indirections.
+Q1(b): the "." requirement loses no bound call (str.endswith(buf,...) has a dot -> counted); getattr/no-dot/stored-ref
+       are lost and fail CLOSED (names row reds).  Fail-direction proven at the gate (s2c).
+Q1(c): no non-comment line reaches the gate.  Newline/tab/CR/VT refused; whitespace-only refused; U+0085/U+2028/U+2029
+       written but non-injecting (measured).  A 16-punctuation warrant passes (quantity-only) -- minor.
+Q1(d): names with whitespace/glob refused by name; a legit hyphen name accepted; exact --release confirmed.
+Q2: 18 new passing spellings; smallest is `resp . endswith ("GXemul>")` (spaced dot) or any non-endswith method.
+    Denominator: 24 new edits x all readiness rows; 4 split-whole-site variants + 2 unbound/star all caught.
+Q3: H1,H2,H3,H4,H5,H6,H8,H9,H16 UPHELD by measurement; H7,H11,H12 records (H11 spot-checked TRUE, old phrases gone;
+    H12 counts depend on whether `real`/`clone` count as edits -- a records nuance, not re-fought); H13 FILED (agree);
+    H14,H15 DISCLOSED (agree; I did not build a dedicated tokenizes-but-won't-compile case -- H15 taken as disclosed);
+    H17 REJECTED (agree).  D1: SHIP -- upheld; the DO-NOT-SHIP findings were real and are addressed.
+    WHICH ACCEPTED DISPOSITION IS WRONG: none is measurably wrong.  I would REFINE H3 (its control-char reject is
+    incomplete for Unicode separators -- measured non-injecting, so the SHIP call stands) and note H4's warrant check
+    is quantity-only.
+Q4: the changed comments spot-checked TRUE ("seven edits, on ... five probe files", "NUL-safe as far as grep", "count
+    all three in this denominator", "reported to the owner as a third name"); the old wrong phrases ("any indirection
+    through a helper", "reads code, not comments") are GONE.  No false sentence found in the sample checked.
+Q5: H10 (e9 filed) -- a disposition NOT named: e9 could be closed at ZERO closed-world cost by moving it to the TOKEN
+    side (has_ends_with_call already sees `endswith (` spaced -- my c2/c3 data show spaced endswith is token-counted),
+    i.e. add a bare-`>` token shape to census_tokens.py rather than widening the textual `bare` grep; that avoids the
+    prose-recount the textual widening owes.  Still defensible to FILE under the stopping rule (pre-existing, disclosed).
+    H13 -- the three stale legacy literals could be re-pinned by the deriver's own idiom (a derived count), not swept
+    by hand; filing is fine.
+
+WHAT I DID NOT GET TO: a dedicated H15 case (a file that tokenizes but would not compile, e.g. `return` at module
+scope) -- taken as disclosed, not measured.  A full gate-6 run on the real tree (owed by the round; the gate rows are
+unchanged by F3, only the classifier).
+
+SEC files under review UNCHANGED end-to-end: gate 4220b6ee / census 029fba36 / deriver f9533e22 / crime_width
+a0af7c92 / luna d4a465c9 (md5s identical before and after).
+OPUS_C3_SUMMARY_DONE

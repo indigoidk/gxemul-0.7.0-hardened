@@ -253,6 +253,116 @@ MANIFEST = {
         (CLASS_WITNESS, "#545 p2_20260919/p2r/p2base_frozen/regress: the frozen footbridge_sites_probe.py a kill table or seat ran -- the exact text it scored"),
     "artifacts/fbd5/q2_20260923/apply545_manifest.py":
         (CLASS_TOOL, "#545: adds these MANIFEST lines -- the round's own artifacts, classified by the round"),
+    #  #546 hygienecensus: gate 6's token classifier and the census passes' measurement and control scripts,
+    #  classified by the round (artifacts/hygienecensus_20260923/apply546_manifest.py).  None is a gated detector.
+    "artifacts/hygienecensus_20260923/apply546_manifest.py":
+        (CLASS_TOOL, "#546: adds these MANIFEST lines -- the round's own files, classified by the round"),
+    "artifacts/hygienecensus_20260923/c2_20260923/opus_c2/dbg_cont.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script dbg_cont.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c2_20260923/opus_c2/s2_cont.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c2_20260923/opus_c2/s2_tokunit.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c2_20260923/opus_c2/s2_tokunit.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c2_20260923/opus_c2/s4_new.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_new.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c2_20260923/opus_c2/s4_new.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_new.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s2_cont_c3.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont_c3.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s2_cont_c3.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont_c3.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s2_tokunit_c3.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit_c3.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s2_tokunit_c3.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit_c3.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s2b_q1.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2b_q1.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s2b_q1.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2b_q1.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s3b_unicode.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s3b_unicode.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s3b_unicode.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s3b_unicode.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s3c_inject.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s3c_inject.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s3c_inject.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s3c_inject.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s4_c3.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_c3.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s4_c3.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_c3.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s4b_q2.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4b_q2.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c3_20260923/opus_c3/s4b_q2.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4b_q2.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/q2_census.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script q2_census.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/q2_census.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script q2_census.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/q2_census.run2.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script q2_census.run2.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s2_cont_c4.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont_c4.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s2_cont_c4.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont_c4.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s2_tokunit_c4.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit_c4.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s2_tokunit_c4.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit_c4.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s2b_q1_c4.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2b_q1_c4.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s4_c4.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_c4.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s4_c4.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_c4.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c4_20260923/opus_c4/s4b_q2_c4.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4b_q2_c4.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/f5_probes.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script f5_probes.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/f5_probes.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script f5_probes.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/p6_crash.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script p6_crash.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/p6_crash.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script p6_crash.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/q2_c5.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script q2_c5.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/q2_c5.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script q2_c5.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s2_cont_c5.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont_c5.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s2_cont_c5.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_cont_c5.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s2_tokunit_c5.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit_c5.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s2_tokunit_c5.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2_tokunit_c5.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s2b_q1_c5.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2b_q1_c5.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s2b_q1_c5.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s2b_q1_c5.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s4_c5.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_c5.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s4_c5.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4_c5.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s4b_q2_c5.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4b_q2_c5.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c5_20260923/opus_c5/s4b_q2_c5.run.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script s4b_q2_c5.run.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c6_20260923/opus_c6/mkfixap.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script mkfixap.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/c6_20260923/opus_c6/x1_corpus.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script x1_corpus.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/controls_f2/edits.py":
+        (CLASS_TOOL, "#546 controls_f2: edits.py -- the controls' edit generator, preserved as run"),
+    "artifacts/hygienecensus_20260923/f2_20260923/opus_f2/edits.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script edits.py, preserved as run"),
+    "artifacts/hygienecensus_20260923/f2_20260923/opus_f2/tokcheck.py":
+        (CLASS_RESEARCH, "#546 hygienecensus: the Opus measuring seat's measurement script tokcheck.py, preserved as run"),
+    "census_tokens.py":
+        (CLASS_TOOL, "#546: gate 6's TOKEN classifier -- gate_hygiene.sh and tools/derive_hygiene_pins.sh call it for the promptless list and the whole-buffer sites; comments, strings and docstrings are not code"),
     "artifacts/fbd5/q2_20260923/closing_20260923/mkmut_closing.py":
         (CLASS_TOOL, "#545 q2_20260923/closing_20260923: mkmut_closing.py, preserved as run (a mutator, driver, analyzer or predictor of a kill table or seat measurement)"),
     "artifacts/fbd5/q2_20260923/codexV_20260923/mkmut_codexv.py":

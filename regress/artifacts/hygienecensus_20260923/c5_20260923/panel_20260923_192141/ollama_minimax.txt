@@ -1,0 +1,82 @@
+**VERDICT: DO NOT SHIP -- M6's WHOLE_FULL_FILES allow-list (`A-Za-z0-9._/: -`) includes `:`, the `name:count` format separator. A pty probe file whose name contains `:` passes the F5 check but, under the standard `%%:*` / `##*:` split the gate almost certainly uses, yields a wrong name and a wrong count. The packet does not show the gate's parsing code, so the impact cannot be fully settled from here, but the allow-list is self-defeating on its face: it refuses bytes that are inert inside the double-quoted string (`$`, backtick, `"`, `\`) but permits the one byte that is structurally meaningful in the format.**
+
+---
+
+## Q1 -- do the F5 checks refuse exactly what they say?
+
+**(a) Every input, byte-exact?**
+
+Three inputs are listed: the ruling text, the name arguments, the tree's file names (via the census). I see no fourth.
+
+- **Names** (the `wc -c` allow-list, M1 fix): correct. LF, tab, null, DEL, `$`, `` ` ``, `"`, `\`, glob chars, space -- all refused, because none of them is in `A-Za-z0-9._/-` and `wc -c` counts what `tr -d` leaves. A name holding a line feed is refused: `tr` strips `A-Za-z0-9._/-` leaving the LF, `wc -c` = 1, `[ 1 -eq 0 ]` is false. Verified.
+- **Ruling text**: the shown checks are non-empty (`[ -n "${2:-}" ]`), printable-ASCII-claimed, date-in-UTC, 16+ alnum in the reason, no `"`/`\`/`$`/`` ` ``. The "printable ASCII only" line in the header is NOT enforced by an explicit byte-range check -- a ruling with non-printable bytes mixed with enough alnum would pass the 16-char check and land in the gate as a comment. Refinement, not a defect in the pins themselves.
+- **WHOLE_FULL_FILES** (M6): the allow-list adds `:` and space "for `name:count name:count`". The `:` is the format separator; permitting it in file names is self-defeating (see verdict).
+
+**(b) The interpreter shim and the canary:**
+
+The canary proves the classifier RUNS, not that it CLASSIFIES correctly. Specifically, it does not catch:
+- A classifier that runs, prints the canary, then crashes before emitting the real tree's classification (eval gets partial CODE).
+- A classifier that runs but mishandles certain file patterns only present in the real tree (the canary is one non-existent file).
+- A `$PY` that is a working python but a different version whose `census_tokens.py` behaves differently (the canary only tests the path-through-stdin).
+
+The brief's own wording limits the canary's claim ("PROVE the token classifier runs"), so this is not a false statement -- but it is a known gap. The git-bash Store-stub case (M4) is caught.
+
+**(c) The anchored writer and the reader:**
+
+The reader is `awk 'index($0,"GRANDFATHERED_PROMPTLESS=")==1'` (column 1). The writer is `re.finditer(r'(?m)^GRANDFATHERED_PROMPTLESS="', s)` with `assert len(ms) == 1`. Both are line-start anchored; with normal line endings they agree. With CR-only endings both see one line (and both miss multi-line splits -- the same class of hole as M9, FILED). I cannot construct a case from the packet where they disagree about WHICH line is the list. The `assert len(ms) == 1` will crash the writer if the assignment appears more than once at line start; whether that crash is caught depends on `set -e`, which is not shown.
+
+## Q2 -- smallest input/tree state that gets past F5 and does harm
+
+1. **A whole-full file named with `:`** (e.g., `foo:bar.py`): passes M6's allow-list, lands as `foo:bar.py:N` in `WHOLE_FULL_FILES`. Under `%%:*` / `##*:` split, name = `foo`, count = `N`; the `bar.py` half is lost. Latent until such a file exists; the F5 check does not prevent it.
+2. **A tree where the classifier runs but misclassifies** (e.g., a `$PY` whose `census_tokens.py` import fails only for real files): passes the canary, produces wrong pins.
+3. **A ruling with non-printable bytes** (e.g., `2026-09-23:abcdefghijklmnop\x00qrstuvwxyz`): passes the 16-alnum check (24 alnum), passes the date check, passes the no-quote-chars check. Writes a comment with a NUL into the gate.
+4. **A gate file with `GRANDFATHERED_PROMPTLESS=` at line start more than once**: writer asserts and crashes; downstream depends on `set -e` (not shown).
+
+Denominator for (1): zero current whole-full files with `:` (presumed; not enumerated in the packet). Denominator for (3): ruling validation is form, not content -- the header's "printable ASCII only" is the only place that line is written.
+
+## Q3 -- adjudicate M1-M16 and D3
+
+| # | Adjudication | Reason |
+|---|---|---|
+| M1 | UPHOLD ACCEPTED | `wc -c` correctly catches LF; verified arithmetically. |
+| M2 | UPHOLD ACCEPTED | `[ -n "${2:-}" ]` refuses empty ruling. |
+| M3 | UPHOLD ACCEPTED | `date -u -d` is UTC; local-DST-skipped midnight no longer refuses. |
+| M4 | UPHOLD ACCEPTED (refinement: canary scope is "runs", not "correct") | Shim + canary fix the Store-stub case; classifier-logic bugs in the real tree are out of scope. |
+| M5 | UPHOLD ACCEPTED | `(?m)^` matches the reader's `index==1`. |
+| M6 | **REFINE** | Allow-list includes `:`, the format separator. See verdict. |
+| M7 | UPHOLD ACCEPTED | Comment now names UNQUOTED expansion in the printed lists. |
+| M8 | UPHOLD ACCEPTED | "a double quote" is precise. |
+| M9 | UPHOLD ACCEPTED | Closed-world is now over the kept physical lines; holes filed with e10. |
+| M10 | UPHOLD ACCEPTED | K7 sentence clarified; "known literal" no longer overclaims. |
+| M11 | UPHOLD ACCEPTED | K14 fails OPEN disclosed in docstring; AST fix is its own round. |
+| M12 | UPHOLD ACCEPTED | Filed with measurement. |
+| M13 | UPHOLD ACCEPTED | Filing text widens e9 to the line-based class. |
+| M14 | UPHOLD REJECTED | The seat was wrong. `${VAR%%pattern}` removes the LONGEST suffix matching `pattern`; for `:*` the longest suffix starting with `:` extends to end-of-string, so the match starts at the FIRST `:`. Verified: `2026-09-23:14:00` -> `2026-09-23`; `2026-09-23:ABC:123` -> `2026-09-23`. The brief's measurement is correct. |
+| M15 | UPHOLD ACCEPTED | Header now states the policy; not a defect. |
+| M16 | UPHOLD ACCEPTED | Stated as policy. |
+| D3 | UPHOLD | F4 had M1, M3, M4, M5, M6 as measured defects; DO NOT SHIP was right. |
+
+**Which disposition is wrong**: **M6's ACCEPTED is incomplete** -- the allow-list includes the format separator. The disposition should be REFINE: either remove `:` from the allow-list (and use a different in-file separator), or add a separate "no `:` in file names" rule, or confirm the gate's parser uses LAST-`:`-split (not shown in the packet).
+
+## Q4 -- records: any false sentence in the changed comments or header?
+
+- **gate_hygiene.sh**: "every count here is LINE-based and keys on the literal `endswith(`" -- accurate; `t_bsl` confirms.
+- **gate_hygiene.sh**: "the comment filter drops every PHYSICAL line that begins with `#`" -- accurate; `hash_line` and `cr_only` confirm.
+- **derive_hygiene_pins.sh header**: "non-empty, printable ASCII only (so ONE line)" -- **not enforced by an explicit byte-range check**; the only check that touches byte classes is the 16-alnum-on-the-reason rule and the four forbidden chars. A non-printable ruling with enough alnum passes. The other clauses (real calendar day in UTC, 16+ alnum, no `"`/`\`/`$`/`` ` ``) are enforced.
+- **census_tokens.py docstring**: "The second fails closed -- the probe is listed promptless, if no other call of it is counted" -- accurate.
+- **derive_hygiene_pins.sh**: "the F4 version tested `$(...)` for emptiness, and command substitution strips trailing newlines" -- accurate (this is what `$(printf ... | tr ... )` does).
+- **derive_hygiene_pins.sh**: "anchored at line start, as the reader above is" -- accurate.
+
+## Q5 -- option-set completeness for M9 and M11
+
+**M9** (closed-world over kept lines): options I see are (i) accept-and-file [brief's choice], (ii) rewrite the comment filter as an AST/tokenizer pass, (iii) inline-document the holes and require probes to avoid them, (iv) tighten the kept-line rule (e.g., handle CR-only). The brief named (i). (ii)-(iv) are larger changes; none is missing.
+
+**M11** (K14 fails OPEN): options are (i) disclose-and-file [brief's choice], (ii) AST-based re-classifier, (iii) dual-pass (token + AST), (iv) require grandfathered probes to opt out of pattern matching. (i) is the right scope call. No missing option.
+
+## Something else I found while verifying
+
+- The `assert len(ms) == 1` in the anchored writer crashes Python on a duplicate assignment at line start. Whether the shell catches the crash depends on `set -e`, which is not in the inlined diff. If `set -e` is absent, `eval "$CODE"` exits non-zero and the script continues with stale `CODE` content -- pins would be written from a half-formed body. **The packet does not settle this.** Worth checking.
+
+---
+
+**Seat record**: model = MiniMax-M3 (per system). Read = the inlined packet only (F5 diff, F4 dispositions, the F2-F5 lineage, the measured predictions, §C settled premises). Ran = nothing (operational rule prohibits the harness). Cannot settle from packet = the gate's `WHOLE_FULL_FILES` parser (FIRST-`:` vs LAST-`:` split); whether `set -e` is in effect in `derive_hygiene_pins.sh`; the current contents of `WHOLE_FULL_FILES` for `:` in any name.

@@ -1,0 +1,283 @@
+```
+VERDICT: SHIP -- with three notes (one pre-existing defect the F2 pass didn't
+name; one sentence in G10 the inlined diff doesn't show; one shape outside the
+13 that the closing pass should add to hygienecensusholes before the commit).
+```
+
+I am a packet-only seat (MiniMax-M3). I read the inlined text and the three
+inlined diffs. I did not open files, run gates, or execute the deriver.
+Everything below is REASONED from the packet unless I label it READ.
+
+---
+
+## Q1(a) -- `census_tokens.py` against its docstring
+
+READ from packet. Each shape the docstring claims:
+
+| Claim in docstring | Code that does it | OK? |
+|---|---|---|
+| A COMMENT is not code | `SKIP` includes `tokenize.COMMENT`; `code_tokens` filters it | ✓ |
+| A STRING is not code | `has_ends_with_call` requires `t.type == tokenize.NAME`; a STRING token's type is STRING, not NAME, so it cannot match the `NAME endswith OP "("` pair | ✓ |
+| A DOCSTRING is not code | a docstring is a single STRING token (same reasoning) | ✓ |
+| Whitespace between tokens does not matter | Tokenization already drops inter-token whitespace; the SHAPE comparison is `(kind, string-or-None)` on contiguous tokens | ✓ |
+| Sites counted per OCCURRENCE | `whole_sites` slides `i` over `range(len(toks) - len(SHAPE))` and increments for every match | ✓ |
+| Either quote | `is_prompt_string` evaluates the literal via `ast.literal_eval` and compares to `"GXemul>"`; `'"GXemul>"'` and `"'GXemul>'"` both yield the same string | ✓ |
+| Unreadable / untokenizable file listed promptless | `except (OSError, UnicodeDecodeError, tokenize.TokenError, SyntaxError, IndentationError): if mode == "promptless": print(rel); continue` | ✓ |
+
+One subtle bit: `ENDS_WITH = "ends" + "with"` -- a deliberate two-piece spelling
+so the docstring itself does not contain the literal `endswith(` (and so the
+closed-world greps in the gate do not flag THIS file). I checked: the docstring
+has `ENDS_WITH` followed by `, \"(\"` (never the method-call shape on one
+token); the code has `ENDS_WITH` followed by ` = ...` or ` and b.type == ...`.
+Neither is the literal the gate greps for. The docstring's claim that "the
+method's name never appears here followed directly by an opening parenthesis"
+holds.
+
+No shape the docstring claims is unhandled. No shape the docstring doesn't
+mention but the code silently fixes.
+
+**REASONED verdict on Q1(a): the classifier does what its docstring says.**
+
+---
+
+## Q1(b) -- the deriver's refusals vs its header
+
+READ from packet. Enumerating every refusal the code can print:
+
+1. `usage: $0 [--write [--ruling TEXT] | --grandfather FILE... | --release FILE...]`  (top-level usage)
+2. `usage: $0 --write [--ruling "YYYY-MM-DD: text"]`  (sub-usage after `--write`)
+3. `REFUSED: a ruling reads "YYYY-MM-DD: <who ruled and why>" (16+ characters of reason) -- got [$RULING]`  (regex fail)
+4. `REFUSED: the ruling text may not contain quotes, backslashes, $ or backticks`  (case-statement)
+5. `DERIVE_FAIL: no gate_hygiene.sh at $G`  (gate missing)
+6. `DERIVE_FAIL: enumerator $f() not found in gate_hygiene.sh`  (function not extracted)
+7. `DERIVE_FAIL: assignment $v= not found in gate_hygiene.sh`  (variable not extracted)
+8. `DERIVE_FAIL: the pty denominator is ${_ptyn:-empty} -- refusing to report or write`  (zero denominator)
+9. `REFUSED: --$MODE needs the file names, one by one`  (empty GF)
+10. `REFUSED: a name given more than once: $dup`  (duplicate)
+11. `REFUSED: $f is already grandfathered`  (grandfather of a grandfathered name)
+12. `REFUSED: $f is not a NEW promptless probe`  (grandfather of a non-new promptless)
+13. `REFUSED: $f is not a grandfathered name that is no longer promptless`  (release of a still-promptless name)
+14. `REFUSED: the new promptless set is non-empty (--grandfather first): $NEWP`  (NEWP not empty)
+15. `REFUSED: grandfathered names are no longer promptless -- --release them first`  (GONE not empty)
+16. `REFUSED: bare endswith(">") grew -- a defect, never re-pinned`  (bare > pin)
+17. `REFUSED: an unrecognised endswith( spelling appeared -- a defect, never re-pinned`  (unknown > pin)
+18. `REFUSED: these pins change only by a named decision --$NEED -- ...`  (NEED non-empty without RULING)
+19. Internal `assert n == 1, k` / `assert k == 1, (n, k)` failures -- never expected to fire.
+
+The header promises five categories of refusal. Mapping them to the list above:
+
+| Header category | Code refusal(s) |
+|---|---|
+| Pty denominator is 0 | #8 |
+| Three #392 counts (anchor, echo, fresh mark) disagree -- a defect | **NONE.** I checked carefully: `conv_anchor`, `conv_echo`, `conv_mark` are extracted into `CODE` (so the variables exist) but only `conv_anchor` is consulted. The new code has `[ "$conv_anchor" -ge "$(pin EXPECT_CONVERTED)" ] || NEED=...` and nothing comparing the three to each other. The original `3feb2a43` had the same gap (its only anchor-related check was the same single-line one). **The header has always promised this refusal; the code has never implemented it.** I cannot see it being added in the F2 diff either. |
+| Promptless not handled | #14, #15 |
+| EXPECT_BARE / EXPECT_UNKNOWN would RISE | #16, #17 |
+| WITHOUT A RULING: EXPECT_CONVERTED FALL, EXPECT_WHOLE_FULL change, WHOLE_FULL_FILES change | #18 (covers all three via NEED) |
+
+**The disagreement check is a real defect.** The gate has three
+`check "readiness: ... (#392)"` rows -- anchored, echo, fresh mark -- all
+against one pin. If `conv_anchor == conv_echo == conv_mark == EXPECT_CONVERTED`
+the gate is green; if they disagree, one of the three rows fails and the gate
+reds. But the deriver will not refuse `--write` on that disagreement -- it
+only checks `conv_anchor >= pin`. So you can `--write` past a known #392
+disagreement, and the next gate run will RED.
+
+This is a pre-existing defect (the same gap was in `3feb2a43`), not introduced
+by the F2 pass. The F2 pass's measurement didn't trip over it. But the header
+now promises a refusal that the code does not deliver, so the header is
+**false as written**. Either the header must be corrected to drop the bullet,
+or a check like
+
+```
+[ "$conv_anchor" = "$conv_echo" ] && [ "$conv_echo" = "$conv_mark" ] || { echo "REFUSED: ... disagree ..."; exit 5; }
+```
+
+must be added before `--write`. The closing pass should not ship past this.
+
+---
+
+## Q1(c) -- G12's thirteen still-passing edits
+
+READ from packet (the control list). I worked through each of the 13 against
+`has_ends_with_call` and `whole_sites`'s SHAPE -- which are the two positive
+classifiers the new code owns. Tokenizing each shape in my head:
+
+| # | Shape | Why it passes promptless | Why it doesn't count whole-buffer |
+|---|---|---|---|
+| e_e1 | receiver not ending in "buf" | name != "endswith" anywhere -- wrong; the probe HAS an endswith call on a non-buf receiver, so `has_ends_with_call` SEES it | SHAPE head requires `NAME[-3:]=="buf"`, so a non-buf receiver fails the head check |
+| e_e4 | slice compare, no method call | no `NAME endswith OP "("` pair | not a method call at all |
+| e_e5 | `strip()` instead of `rstrip()` | endswith call present | SHAPE expects NAME "rstrip" |
+| e_e9 | `buf.endswith (">")` (with space) | token-level promptless check matches (NAME, OP) -- tokenization ignores the space | SHAPE head matches, but the rest requires NAME "rstrip" between "." and "." -- not present |
+| n3b | `(buf).rstrip()` (extra parens around buf) | depends on whether `.endswith` follows -- if yes, promptless sees it | SHAPE head is NAME "buf" at position 0; with the wrapping, NAME "buf" is at position 1, so `rest[0]` is OP ")" which fails SHAPE[0] = OP "." |
+| n3c | `(buf.rstrip()).endswith` | promptless sees it | SHAPE[4] = OP "." but the real token at that offset is OP ")" -- fails |
+| n3f | `buf.rstrip("\r\n").endswith("GXemul>")` | promptless sees it | SHAPE[3] = OP ")" but rstrip now has an arg, so the actual token is STRING -- fails |
+| n3h | `self.buffer` | promptless sees `endswith` call if any | NAME "buffer" last three letters are "fer", not "buf" |
+| n3i | `re.search(...)` | no endswith call at all -- probe must be in GRANDFATHERED_PROMPTLESS (this is the lexical proxy, §C.2 / G15) | n/a |
+| n3k / n3k2 | helper module outside the population | classifier reads each probe file; helper is a separate file | not counted |
+| n4a | os.forkpty population split | this is a *population* shape, not a readiness shape -- not a readiness evasion per se | n/a |
+| n10 | `buf[-1:] == ">"` slice form of the bare defect | no method call | not a method call |
+
+Every one of the 13 is genuinely a shape the F2 repair does not close. None
+is a token-level variant of a spelling the classifier counts. The 13 filing
+is internally consistent.
+
+**REASONED verdict on Q1(c): the 13 are correctly classified as outside the
+spelling census's reach.**
+
+---
+
+## Q2 -- the smallest edit that passes every readiness row and is not one of the thirteen filed shapes
+
+REASONED. Walking the readiness rows an edit can perturb:
+
+- promptless NAME row: the token-level check sees `NAME "endswith" OP "("`. Any call of the method passes it.
+- EXPECT_BARE row: textual pattern `endswith(">")` with no space. Fires only on the literal bare spelling.
+- EXPECT_UNKNOWN row: textual pattern for unrecognised args. Fires on any literal arg other than `"GXemul>"`.
+- EXPECT_WHOLE_FULL row: token SHAPE requires `...buf.rstrip().endswith("GXemul>")` (token-level; either quote). Fires only with the canonical form.
+- WHOLE_FULL_FILES row: same SHAPE, expressed as per-file allowlist.
+- EXPECT_CONVERTED row: independent #392 work; untouched by an endswith-spelling edit unless the probe also touches its anchor/echo/mark.
+
+A probe that calls
+
+```
+buf.endswith("GXemul>")
+```
+
+(no `.rstrip()`, no space) has:
+
+- a token-level endswith call -- promptless row is happy
+- the literal `endswith(">")` is NOT matched (arg is "GXemul>", not ">") -- EXPECT_BARE stays at 0
+- an arg the closed-world knows ("GXemul>") -- EXPECT_UNKNOWN stays at 0
+- no `.rstrip()` -- WHOLE_FULL stays at 3; WHOLE_FULL_FILES stays at `arm_bdt_probe.py:1 arm_flags_probe.py:2`
+
+Every readiness row passes. This shape is **not** in the 13 (the closest is
+e_e9 which has the space; my candidate does not). Replacing an existing
+`endswith("foo")` (unknown, RED) with `buf.endswith("GXemul>")` (no rstrip,
+GREEN) is the smallest such edit; adding the same line to a probe that already
+has a different prompt check is equivalent.
+
+Functionally this is "the whole-buffer form minus the rstrip". The census
+deliberately distinguishes (the WHOLE_FULL SHAPE requires rstrip; G10's
+corrections are about the literal-spelling limitation, not the rstrip
+limitation). So this is a real hole, outside the 13, and should be filed
+under `hygienecensusholes` before the commit.
+
+(Variants the same logic produces: `self.buf.endswith("GXemul>")` -- promptless
+passes, SHAPE head still matches "buf", so this DOES count as whole-buffer;
+that's a *different* hole. The clean unfiled hole is the no-rstrip variant.)
+
+**Denominator tried, for the record:** I checked each of the four readiness
+rows the F2 pass owns (promptless NAME; bare; unknown; whole-buffer SHAPE)
+against three orthogonal axes -- the receiver name, the method call, and the
+intermediate chain. The above is the only shape I found that satisfies "passes
+all four rows AND is not in the 13".
+
+---
+
+## Q3 -- adjudicate §F2
+
+One line each, UPHOLD / OVERTURN / REFINE / CANNOT SETTLE.
+
+- **G1** UPHOLD. `census_tokens.py` filters COMMENT and excludes STRING from the NAME-match path; n1a-n1d red 2 each.
+- **G2** UPHOLD. `whole_sites` is a sliding window over tokens; n3j red 2.
+- **G3** UPHOLD. Tokenization collapses inter-token whitespace; n3a, n3g, e_e3, n3d all red.
+- **G4** UPHOLD. Diff shows `-print0 | xargs -0` and `sed "s|^$HERE/||"`; e_e7 red 3.
+- **G5** UPHOLD. `--ruling "YYYY-MM-DD: <text>"` is format-checked (regex + case), written above each pin it moved; n7 control writes two RULING lines.
+- **G6** UPHOLD. `dup=$(... | LC_ALL=C sort | uniq -d)` and refusal rc=4; n5b refuses.
+- **G7** UPHOLD. `EXPECT_BARE` is now in the rewrite tuple, written unconditionally; falls silently.
+- **G8** UPHOLD. 20 promptless + 4 prompt-detecting = 24 new probes; 46 + 20 = 66, 66 + 4 = 70.
+- **G9** UPHOLD. Population term is `pty\.fork|forkpty|pty\.spawn|^[[:space:]]*(import|from) drive_guest` -- four alternatives; `os.forkpty` matches `forkpty`, correctly removed from residuals.
+- **G10** **REFINE**. Three of the four claimed corrections are verifiable in the inlined diff (the crime_width comment, the #37 block dated note, and the `census_tokens.py` docstring). The fourth -- "the gate's new sentence 'they must see anything that COULD be a predicate'" -- is not in the inlined gate hunks. I cannot verify it exists without the full gate. The closing pass should either confirm the sentence is in the gate (in which case it should be added to the diff sent to file-reading seats) or correct the claim.
+- **G11** UPHOLD as a forward commitment. The records script is owed before the commit; not checkable from the packet now.
+- **G12** **REFINE**. The 13 are correctly filed. But the disposition is incomplete: `buf.endswith("GXemul>")` (no rstrip) is a fourteenth hole (Q2 above) that the 47 controls did not exercise. Filing should be extended.
+- **G13** UPHOLD. Per the stopping rule (§C.3), filing a measured false pass is acceptable; G10's corrections removed the contradictory claims.
+- **G14** UPHOLD. The third name is reported to the owner; conservative.
+- **G15** UPHOLD. The census is lexical; alpha_tbi_probe.py and drive_guest.py are grandfathered with their waits named in the gate.
+- **G16** UPHOLD. Fresh-mark counts the literal `_mark = -len(self.buf)`; an alternative spelling is filed.
+
+**D1** UPHOLD. The DO-NOT-SHIP findings (the 31 edits still passing pass-2; the duplicate-name run) were real and are addressed by this repair.
+
+**WHICH ACCEPTED DISPOSITION IS WRONG:** strictly, none. But **G12 is
+incomplete** (Q2 above finds a 14th shape), and **G10's fourth sibling is
+unverifiable** from the inlined diff. Both should be addressed in the
+closing pass before commit.
+
+**One defect the closing pass should note in passing** (not in the F2 list,
+but found while verifying Q1(b)): the deriver header's bullet "the three #392
+counts (anchor, echo, fresh mark) disagree -- a defect" is a refusal the code
+does not implement. The header is false as written. Either the bullet goes or
+a check goes in.
+
+---
+
+## Q4 -- are the changed comments true as of today?
+
+READ from packet. Walking the changed comments:
+
+1. Gate around EXPECT_BARE -- `*** 2026-09-23: 'cannot be evaded' is FALSE for one spelling -- a space before the paren, endswith (">"), passes every count here ... ***`. TRUE (consistent with hygienecensusholes e9 and the inlined e_e9 control).
+2. Gate around EXPECT_PTY_PROBES -- "reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43, names gone=the three)". TRUE: 73 - 3 = 70 denominator, 43 - 3 = 40 promptless, the three names are absent. The `clone` control red 3, consistent.
+3. Gate grandfather note -- "20 PROMPTLESS ... (20 -> 40) and the denominator (46 -> 66); four prompt-detecting ... took it to 70". TRUE; 46 + 20 + 4 = 70.
+4. Gate classifier paragraph -- "THE CLASSIFIER READS PYTHON TOKENS ... A file that cannot be read or tokenized is listed promptless ... The spelling counts above deliberately stay textual ... They see only the LITERAL `endswith(`: a space before the paren passes every one of them". TRUE.
+5. Gate WHOLE_FULL paragraph -- "Both rows now come from census_tokens.py: code tokens only, either quote, any spacing, every OCCURRENCE. Other spellings of the same test -- another receiver name, `strip()`, a slice compare -- are the filed `hygienecensusholes`, not closed here." TRUE for the three examples. But the parenthetical is **incomplete** -- the same logic applies to `buf.endswith("GXemul>")` (no rstrip), which is not listed and is not filed (Q2).
+6. Gate population term -- "THE POPULATION TERM IS FOUR ALTERNATIVES -- pty.fork, forkpty, pty.spawn, importing drive_guest". TRUE; the regex is `pty\.fork|forkpty|pty\.spawn|^[[:space:]]*(import|from) drive_guest`.
+7. Gate disclosed residuals -- "Censused at 0 apiece. (`os.forkpty` was listed here too until 2026-09-23 -- the pattern MATCHES it.)" TRUE.
+8. Deriver header -- "An enumerator it cannot find is a hard error, never a zero." TRUE. "the three #392 counts (anchor, echo, fresh mark) disagree -- a defect" **FALSE** (no code check, Q1(b) above).
+9. `census_tokens.py` docstring -- "Why tokens ... text on a code line that is not code counted as code: a trailing comment, a string, a docstring ... Python's own tokenizer separates COMMENT and STRING tokens from code, so those three cannot happen here ... They see only the literal spelling with no space before the parenthesis (a space passes them: hygienecensusholes e9)." TRUE.
+10. crime_width_probe.py comment -- "it sees only literal spellings: a space before the paren passes it -- filed as hygienecensusholes". TRUE.
+
+**One false sentence in the changed comments: the deriver header's
+"three #392 counts disagree" bullet.**
+
+**One incomplete sentence: the WHOLE_FULL paragraph's parenthetical examples
+of "other spellings" -- missing the no-rstrip variant from Q2.**
+
+The brief's G10 claim of a fourth sibling ("the gate's new sentence 'they
+must see anything that COULD be a predicate'") is not verifiable from the
+diff. If it exists in the full gate, fine. If not, G10 is one correction
+short.
+
+---
+
+## Q5 -- option-set completeness for e9
+
+REASONED. The stopping rule (§C.3) says: in-round, only a MEASURED FALSE PASS
+or a WRONG RECORD is actionable; pre-existing evasions are FILED, not fixed.
+e9 is a measured false pass (Opus control `e_e9`). So per the rule, it CAN
+be closed in this round.
+
+The closing cost is small: change the bare/unknown patterns in the gate from
+`endswith(` to `endswith[ \t]*\(`, and verify the controls still match
+prediction (the bare/unknown counts should stay at 0; the SHAPE count for
+whole-buffer stays at 3 because no current site has a space; e_e9 turns red).
+
+The brief's reason for filing instead of closing: "the claims it contradicts
+are corrected (G10)". This is a sufficient reason -- the comment is now
+accurate -- but it is not the only reason available, and the closing cost is
+one regex change. The brief chose documentation over code; both are defensible
+under the stopping rule.
+
+The brief did not name a reason that survives scrutiny that the closing cost
+is too high, or that closing would perturb other controls. There is no such
+reason in the packet. So if a future reviewer prefers closure, nothing in the
+brief blocks it. The disposition is defensible but not the only defensible
+one.
+
+---
+
+## Seat record
+
+- **Model:** MiniMax-M3.
+- **Read:** the entire inlined packet (the brief, the three inlined diffs at
+  `4cfc4a65 -> 6a9cb517`, `3feb2a43 -> cbb8488d`, and the crime_width comment;
+  the full new `census_tokens.py` at 662ce35a).
+- **Ran:** nothing. Did not open files, did not execute the deriver, did not
+  run any gate, did not invoke Python.
+- **Measurements cited as MEASURED:** none -- everything above is REASONED
+  from the inlined text, except where I cite the inlined control list as
+  READ.
+
+The packet did not let me verify G10's fourth sibling (the gate sentence
+"they must see anything that COULD be a predicate") and did not let me
+verify the disagreement check is actually absent in the full gate_hygiene.sh
+(the diff shows the surrounding lines but I cannot prove a check elsewhere
+in the file does not exist). Both are flagged in Q3 / Q4 above.
