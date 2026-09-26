@@ -1,0 +1,60 @@
+VERDICT: PROCEED WITH CHANGES
+
+**Wrong dispositions: 1 (F9).** F3 follows from F9 and is defensible only if F9 stands; F9 does not stand.
+
+---
+
+## F9 is wrong — and the cost is that #551 ships without an owner question it owes
+
+F9's disposition is: *"the ruling's intent (fix, not re-date) is met honestly and its stale premise is recorded."* That is not a disposition; it is an assertion that the author is the judge of whether the intent was met. The owner wrote, verbatim, **"moves diff_wdc_identify.c's nine row functions onto one comparator."** The census the owner read said nine; the file has 128 rows, with 32 reachable through `chk()`+`row()` and 96 comparing inline. The author's design does not move anything onto one comparator — it uses two comparators that already exist and covers 32 rows. That is a *different* design from the one the owner chose.
+
+The owner chose option A in the exemption text **because the exemption described nine row functions and one comparator as the consolidation target**. The author has now discovered the exemption's premise was stale (F1, MEASURED — accepted). Discovering that a ruling was based on a stale premise is exactly the case for going back to the owner, not for substituting your own judgment of "intent." The owner's instruction is voidable on the premise; it is not voidable by the implementer.
+
+The minimum the owner is owed is a one-line question: *"Census said nine row functions / one comparator; file has 128 rows and the comparators that exist cover 32. Ship 32/128 with the sentinel as F1+F2+F4, or pursue option A (verdict helper) or option B (96-site refactor) for the rest?"* Recording "the stale premise" in a COVERED comment is not a substitute for that question — comments do not reach the owner.
+
+**Count: 1.** (F9 only. F3 is the *consequence* of F9; if the owner answers "ship A with the measured conditions," F3 flips to ADOPT. F3-as-filed is internally consistent with the world where F9 is right, and that world is the one I'm saying doesn't exist.)
+
+---
+
+## The other dispositions, audited as instructed
+
+**F1 (ACCEPT).** Read of the inlined counts: 24 rows through `chk()`, 8 through `row()`, 95 `failures++` in 61 functions, 96th hit is a comment. The sentinel-on-what-exists framing is the only honest reading of those numbers. No defect in the disposition. **HARDER:** the fix the author proposes for F1 — sentinel on `chk()`+`row()` only — is right *only if* those two functions are where the high-byte defect class actually lives. The brief asserts the defect class is high byte (F4, REASONED) and that widening `long` → `long long` exposes it. If `chk()` already takes `long` and the high-byte truncation is in the *callers* (the 24 rows that pass `got`/`want` as `int` and get promoted), then probing `chk()` with `0x100000000` is testing a code path the production rows never hit. The byte-identity run (F7) verifies output equivalence; it does **not** verify that the sentinel exercises the same truncation the production rows suffer. This is a vacuity-control gap. Not enough to flip F1, but worth a sentence in the COVERED comment.
+
+**F2 (ADOPT).** `row(why, sectors, want)` with `want == sectors` at all 8 call sites is consistent with "want is derived from its input" only if the derivation is the identity for these 8 sites. The brief does not state the derivation, and the author has not stated it. **This is a premise that cannot be settled from the packet.** If the derivation is not identity (e.g., `want = sectors * 2` in some branch), then `want == sectors` at the call sites silently changes behavior. **What would settle it:** the body of `row()` and the eight call-site expressions for the want argument, both inlined or named. Until then, F2 is conditional on an unstated premise. Not wrong, but not closed.
+
+**F3 (FILE, do not ship A).** Internally consistent. Defensible on the "A is not a comparator, G text would be misleading" ground. But it inherits F9's flaw: it is the author's call, not the owner's. If F9 is corrected (ask the owner), F3's right answer is whichever of {ship A, ship B, ship F1+F2 only} the owner picks. **As a standalone disposition, F3 is not wrong; as a derived one, it is downstream of the F9 error.**
+
+**F4 (ADOPT).** The narrow/wide probe design is the right shape. The widening to `long long` is necessary iff `long` is 32 bits on the target — the brief does not state the target's `long` width. **Cannot be settled from the packet.** If `long` is 64-bit on the target, the widening is a no-op and the wide probe is not actually probing a 32-bit-truncation class. The author should either name the target or add a vacuity control that proves the wide probe is meaningful on this build (`sizeof(long) == 4` → wide probe truncates; the stub of `chk()` that truncates back must red the SELFCHECK). The first/last placement and the success-arm-only G-text printing match the `rtc_range` precedent; sound.
+
+**F5 (DISCLOSE).** Disclosure under clause (e) is the right disposition for a known property of the sentinel class. No defect.
+
+**F6 (ADOPT).** The COVERED-comment bullet is accurate as a statement of the F1+F2 outcome. **HARDER:** the bullet says "the other 96 compare inline and are NOT covered." That sentence is the F9 error restated as documentation. If the owner has not been asked, "NOT covered" is not a fact about the design — it is a fact about the unresolved decision. The bullet should say "NOT covered in #551; owner query pending" until F9 is corrected.
+
+**F7 (ADOPT).** The build-pair + `quiet_mode` stub + byte-identity design is the standard equivalence proof for a no-behavior-change edit. The vacuity controls (stub `chk()` to always pass → red; stub `row()`'s compare → red; delete SELFCHECK → H and G red) are necessary and sufficient to prove the sentinel is not vacuous *for the comparators it directly probes*. **HARDER:** the vacuity controls do not prove that the *production rows* exercise the comparator in a way the sentinel exercises it. If the 24 `chk()` rows pass `int` arguments that get sign-extended or zero-extended before reaching `chk()`'s `long` parameter, the high-byte class is unreachable from the sentinel's probe but reachable from the rows. This is the same gap as in F1. A vacuity control that runs a production row with a known-bad argument and verifies the row reds would close it; the brief does not propose one.
+
+**F8 (FILE).** Filing the `fbpending_bound` issue separately is correct — it is pre-existing, not introduced by #551, and the fix (G-text-only-on-success-arm) is already what F4 specifies for wdc_identify. The glm companion (sentinel-placement-on-stateful-windows) is a real issue and the one-filing framing is right. No defect.
+
+---
+
+## Answers to the questions, as asked
+
+**1. Which disposition is wrong — name the count.**
+**One: F9.** F3 is defensible as filed but is downstream of F9; correct F9 and F3 becomes the owner's call, not the author's. F2 is conditional on an unstated premise (the derivation in `row()`'s body) that the packet does not supply — call it "not checkable from the packet," not wrong.
+
+**2. Is "32 of 128, stated" an honest discharge of the owner's "fix it", or does it owe the owner a question?**
+**It owes the owner a question.** The owner chose option A on a premise (nine functions) that was wrong by a factor of ~14. Discovering the premise was wrong is the case for re-asking, not for re-interpreting "intent." An honest discharge of "fix it" on a 128-row file is either (a) cover all 128, or (b) cover what you can and ask the owner how to cover the rest. The author did (b) without the ask.
+
+**3. Smallest edit to F1+F2+F4 that keeps gate 2 green while a covered row can still fail.**
+**F1 + F2 + F4 as stated.** The only trims I can identify without weakening the sentinel are: drop the LAST sentinel run (F4's "after every row, before the identity row") — it is defensive against comparator corruption mid-run, which the rows don't do — and drop the `long`→`long long` widening if the target's `long` is already 64-bit. Both trims are conditional on facts the packet does not supply (whether rows can corrupt the comparator state; the target's `long` width). With those facts, the smaller edit is F1 + F2 + F4-first-run-only + (widening or not, per target). Without them, F1+F2+F4 is the smallest *stated* design.
+
+---
+
+## Things I found while verifying, that the brief did not ask me to look for
+
+1. **The 24 `chk()` rows and the sentinel probe different argument widths.** The sentinel probes `chk(0x100000000, 0)` after widening to `long long`. If the production rows call `chk()` with `int` arguments that are promoted to `long` *before* the call, the high byte the sentinel tests is not the high byte the rows can carry. This is the F1/F7 vacuity gap, restated. **One measurement that would close it:** run a vacuity control where one production row is called with `got = (int)0x80000000` (negative-int-promoted-to-long, high bit set in the upper 32 of 64-bit `long`) and verify it reds. If the production rows can't carry that class, the sentinel isn't testing the production defect class.
+
+2. **F2's "want == sectors at all 8 call sites" presupposes an identity derivation.** The brief says row()'s want is "derived from its input." If derivation ≠ identity, the F2 patch changes behavior at the 8 sites. **Cannot be settled from the packet.** The single fact that would settle it: the body of `row()` and the eight want-arguments at the call sites.
+
+3. **F6's bullet restates the F9 error as documentation.** Until the owner is asked, the bullet should read "NOT covered in #551; owner query pending," not "NOT covered."
+
+4. **codex is recorded as a seat failure (usage limit), not a vote.** The brief is correct to separate this. No defect in the recording; flagging only because the question "which disposition is wrong" tempts a reader to weight codex as abstaining — it did not abstain, it was unavailable.

@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""#551e: NEW shapes on MINE_e.c (read as <dir>/E.c; the 33 re-run shapes come from xform6.py, renamed D_* -> E_*).
+usage: xform7.py <dir>        Every anchor is count-checked; a non-unique one aborts."""
+import io
+import re
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+H = sys.argv[1]
+E = io.open(H + "/E.c", encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+AFTER_COVERED = "\trow_ring_occupancy_sound();\n"
+FIRST = "\tselfcheck(\"first\");\n"
+LAST = "\tselfcheck(\"last\");\n"
+PRINTF = "\tprintf(\"" + NL + "%d rows, %d failures" + NL + "\", rows, failures);\n"
+TOKEN_END = "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n"
+VERDICT = "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n"
+RET = "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n"
+PIN = "\tif (rows != 128) {\n"
+COND = "\tif (failures == cmp_fails) failures = cmp_fails = 0;\n"
+CHK_ARM = ("\t\tcmp_fails ++;\n\t\tprintf(\"  FAIL %-40s got %lld want %lld" + NL + "\", name, got, want);\n")
+ROW_ARM = "\t\tfailures ++;\n\t\tcmp_fails ++;\n\t} else {\n\t\tprintf(\"  ok   %-38s %llu"
+G_ARM = "\tif (!sc_bad && sc_first_bad == 0) {\n\t\tsc_g = 1;"
+SC_DEF = "static void selfcheck(const char *where)\n{"
+EMIT = "printf(\"  FAIL  covered comparator failure, %d failures so far" + NL + "\", failures);"
+
+V = {}
+#  --- Q2: the call-count pin attacked ---------------------------------------------------------------
+moved = sub1(sub1(E, AFTER_COVERED, ""), TOKEN_END, TOKEN_END + AFTER_COVERED)
+V["E_movefake"] = sub1(moved, LAST, "\t{ int k; for (k = 0; k < 24; k++) chk(\"x\", 0, 0); }\n" + LAST)
+m = re.search(r"\t/\*  Controls: below the divergence point.*?\trow\(\"every byte 255\",[^\n]*\n", E, re.S)
+rowblock = m.group(0)
+if rowblock.count("\trow(\"") != 8:
+    raise SystemExit("row block has %d calls" % rowblock.count("\trow(\""))
+mr = sub1(sub1(E, rowblock, ""), TOKEN_END, TOKEN_END + rowblock)
+V["E_movefake_row"] = sub1(mr, LAST, "\t{ int k; for (k = 0; k < 8; k++) row_cmp(\"y\", 1, 1, 1); }\n" + LAST)
+V["E_countforge"] = sub1(sub1(moved, LAST, "\tchk_calls = 24;\n" + LAST), PIN, "\tif (rows != 104) {\n")
+#  --- Q4: the conditional both-tally reset, "anywhere" ----------------------------------------------
+V["E_cond_start"] = sub1(E, FIRST, FIRST + COND)
+V["E_cond_mid"] = sub1(E, AFTER_COVERED, AFTER_COVERED + COND)
+V["E_cond_trailer"] = sub1(E, RECON, COND + RECON)
+V["E_cond_afterprintf"] = sub1(E, PRINTF, PRINTF + COND)
+#  --- Q3 (a): the obvious in-file pin ON the trailer -- a verdict function the last self-check probes ------
+vpin = sub1(E, SC_DEF, "static int verdict_ok(int f, int c, int g)\n{\n\treturn f == 0 && c == 0 && g;\n}\n\n" + SC_DEF)
+vpin = sub1(vpin, G_ARM,
+            "\tif (verdict_ok(0, 0, 1) != 1 || verdict_ok(1, 0, 1) || verdict_ok(0, 1, 1) || verdict_ok(0, 0, 0)) {\n"
+            "\t\tprintf(\"  FAIL  SELFCHECK(last): the verdict function answered wrongly" + NL + "\");\n"
+            "\t\tif (!sc_bad)\n\t\t\tfailures = sc_f + 1;\n\t\tsc_bad++;\n\t}\n" + G_ARM)
+vpin = sub1(vpin, VERDICT, "\tif (verdict_ok(failures, cmp_fails, sc_g))\n")
+vpin = sub1(vpin, RET, "\treturn verdict_ok(failures, cmp_fails, sc_g) ? 0 : 1;\n")
+V["E_vpin"] = vpin
+V["E_vpin_cond"] = sub1(vpin, RECON, COND + RECON)                                     # ONE inserted reset
+V["E_vpin_inline_subafter"] = sub1(sub1(vpin, "\tif (verdict_ok(failures, cmp_fails, sc_g))\n",
+                                        "\tif (failures == 0 && sc_g)\n"),             # ONE inlining edit ...
+                                   RECON, RECON + "\tfailures -= cmp_fails;\n")         # ... and its partner
+#  --- Q3 (b): an in-file close that does not go THROUGH the trailer -- a covered failure prints, when it happens,
+#  a line gate 2's failure-count check already reads ("[0-9]+ failures", whole log).  Probe calls ('@') excluded.
+emit = sub1(E, CHK_ARM, CHK_ARM + "\t\tif (name[0] != '@')\n\t\t\t" + EMIT + "\n")
+emit = sub1(emit, ROW_ARM, "\t\tfailures ++;\n\t\tcmp_fails ++;\n\t\tif (why[0] != '@')\n\t\t\t" + EMIT +
+            "\n\t} else {\n\t\tprintf(\"  ok   %-38s %llu")
+V["E_emit"] = emit
+V["E_emit_cond_trailer"] = sub1(emit, RECON, COND + RECON)
+V["E_emit_cond_mid"] = sub1(emit, AFTER_COVERED, AFTER_COVERED + COND)
+V["E_emit_reset2"] = sub1(emit, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0; cmp_fails = 0;\n")
+V["E_emit_v_nocmp_sub_after"] = sub1(sub1(emit, VERDICT, "\tif (failures == 0 && sc_g)\n"),
+                                     RECON, RECON + "\tfailures -= cmp_fails;\n")
+V["E_emit_v_eq_printf_sub"] = sub1(sub1(emit, VERDICT, "\tif (failures == cmp_fails && sc_g)\n"),
+                                   PRINTF, PRINTF.replace("rows, failures);", "rows, failures - cmp_fails);"))
+em = sub1(sub1(emit, AFTER_COVERED, ""), TOKEN_END, TOKEN_END + AFTER_COVERED)
+V["E_emit_movefake"] = sub1(em, LAST, "\t{ int k; for (k = 0; k < 24; k++) chk(\"x\", 0, 0); }\n" + LAST)
+#  the residual moves INTO class (1): the emission switched off inside chk() (one edit) plus a conditional reset
+V["E_emit_off_cond_trailer"] = sub1(sub1(V["E_emit_cond_trailer"], "\t\tif (name[0] != '@')\n", "\t\tif (0)\n"),
+                                    "\t\tif (why[0] != '@')\n", "\t\tif (0)\n")
+for k, v in V.items():
+    io.open("%s/%s.c" % (H, k), "w", encoding="utf-8", newline="").write(v)
+print("new variants (%d):" % len(V), " ".join(sorted(V)))

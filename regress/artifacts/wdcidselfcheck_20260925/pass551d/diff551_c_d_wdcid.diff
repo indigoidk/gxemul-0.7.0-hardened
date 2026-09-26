@@ -1,0 +1,75 @@
+--- regress/diff_wdc_identify.c.551c
++++ regress/diff_wdc_identify.c.551d
+@@ -505,7 +505,7 @@
+     disjunct alone, and a zero, without building a device.  row() and its eight callers are unchanged in
+     what they print.  */
+ static int rowcmp_calls;
+-static int cmp_fails;	/*  failures the two comparators counted; only they touch it  */
++static int cmp_fails;	/*  failures the two comparators counted; only they increment it  */
+ 
+ static void row_cmp(const char *why, uint64_t sectors, uint64_t got57, uint64_t got60)
+ {
+@@ -5646,10 +5646,10 @@
+ 
+ /*
+  *  @@SELFCHECK@@ -- #551.  CAN THIS FILE'S COMPARATORS STILL FAIL?  Feeds chk() and row_cmp() known answers --
+- *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone and on either side of its
+- *  want, and one pair that must NOT
+- *  fail -- and requires the EXACT change in `failures' for each, restoring `rows' and `failures' after every
+- *  probe.  Run FIRST (before any row) and LAST (after every row, before the identity row), so a comparator
++ *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone with got both below and
++ *  above its want, and one pair that must NOT fail -- and requires the EXACT change in `failures' and in
++ *  cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.  Run FIRST (before
++ *  any row) and LAST (after every row, before the identity row), so a comparator
+  *  that goes inert partway through is caught at one end or the other.  Only the success arm prints gate 2's G
+  *  text; the failure arm does not, and forces one failure.
+  *
+@@ -5659,12 +5659,13 @@
+  *  other row in this file compares inline: neither is covered by this block.  "Covered" means the
+  *  COMPARATOR is live, not that a row is.  NOT CAUGHT, DISCLOSED: the self-check proves only that the
+  *  comparators answer right on ITS OWN calls, so an edit that keeps those answers and changes the rest
+- *  keeps every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's own
+- *  phase that the probes do not share; an edit of the code that FEEDS the comparators (row() handing
+- *  row_cmp() its own want); an edit of this block itself.  Measured on #551's passes; reviewed in the
+- *  differential, not chased.  A reset of `failures' ALONE after the comparators is not among them: they
+- *  also count cmp_fails, which only they touch, and the trailer reports the larger.  A reset of BOTH
+- *  tallies is, and is disclosed.  No line this block prints carries the self-mutant row's
++ *  CAN keep every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's
++ *  own phase that the probes do not share, or an edit of the code that FEEDS the comparators (row()
++ *  handing row_cmp() its own want), each measured on #551's passes; or an edit of this block itself
++ *  (reasoned: the block edits measured so far are caught).  Reviewed in the differential, not chased.
++ *  A reset of `failures' alone is not among them, wherever it sits: the comparators also count
++ *  cmp_fails, which only they increment, and the verdict and the exit status read it directly.  A reset
++ *  of BOTH tallies is, and is disclosed.  No line this block prints carries the self-mutant row's
+  *  text or "high byte" (gate 2 counts both).  Gate 2's G text is printed ONCE, by the last run, only
+  *  when both runs passed -- and the run's own PASS needs that line (sc_g), so a self-check that failed
+  *  fails the run even if its forced failure is gone.  The rest of the file is filed as
+@@ -5685,13 +5686,14 @@
+ 
+ 	for (i = 0; i < 5; i++, n++) {
+ 		chk("@@SELFCHECK@@/chk", cg[i], cw[i]);
+-		if (failures != sc_f + (cg[i] != cw[i]))
++		if (failures != sc_f + (cg[i] != cw[i]) || cmp_fails != sc_cf + (cg[i] != cw[i]))
+ 			sc_bad++;
+ 		failures = sc_f; rows = sc_r; cmp_fails = sc_cf;
+ 	}
+ 	for (i = 0; i < 8; i++, n++) {
+ 		row_cmp("@@SELFCHECK@@/row", rw[i], r57[i], r60[i]);
+-		if (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i]))
++		if (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i])
++		    || cmp_fails != sc_cf + (r57[i] != rw[i] || r60[i] != rw[i]))
+ 			sc_bad++;
+ 		failures = sc_f; rows = sc_r; cmp_fails = sc_cf;
+ 	}
+@@ -5826,9 +5828,9 @@
+ 	if (!sc_g && failures == 0)
+ 		failures = 1;
+ 	printf("\n%d rows, %d failures\n", rows, failures);
+-	if (failures == 0 && sc_g)
++	if (failures == 0 && cmp_fails == 0 && sc_g)
+ 		printf("WDC_IDENTIFY_PASS\n");
+ 	else
+ 		printf("WDC_IDENTIFY_FAIL\n");
+-	return (failures || !sc_g) ? 1 : 0;
++	return (failures || cmp_fails || !sc_g) ? 1 : 0;
+ }

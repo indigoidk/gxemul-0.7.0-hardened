@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""#551 F2 on pass 2: edits of the FINAL file MINE_b.c (md5 d0339493), one file per variant.
+usage: xform4.py <MINE_b.c> <outdir>        Every anchor is count-checked; a non-unique one aborts."""
+import io
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+src, outdir = sys.argv[1], sys.argv[2]
+B = io.open(src, encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+CHK_IF = "\tif (got != want) {\n\t\tfailures ++;"
+ROWCMP_IF = "\tif (got57 != sectors || got60 != sectors) {"
+ROWCMP_SIG = "static void row_cmp(const char *why, uint64_t sectors, uint64_t got57, uint64_t got60)"
+FORCE = "\t\tfailures = sc_f + 1; rows = sc_r;\n\t}\n\tif (where[0] == 'f') {"
+NEW_VERDICT = ("\tif (failures == 0 && sc_g)\n\t\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n"
+               "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n\treturn (failures || !sc_g) ? 1 : 0;\n")
+OLD_VERDICT = ("\tif (failures == 0)\n\t\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n"
+               "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n\treturn failures ? 1 : 0;\n")
+CALLS = ('\tselfcheck("first");\n', '\tselfcheck("last");\n')
+BLOCK_START = "/*\n *  @@SELFCHECK@@"
+MAIN = "int main(void)\n{\n"
+DECLS = ("static int sc_first_bad = -1;\t/*  -1 until the FIRST run has happened  */\n"
+         "static int sc_g;\t/*  set ONLY where gate 2's G line prints: the run's PASS needs it  */\n")
+
+V = {"B": B}
+#  (1) the six pass-2 escapes, re-applied to the FINAL file
+V["B_want165"] = sub1(B, CHK_IF, "\tif (got != want && want-165) {\n\t\tfailures ++;")
+V["B_sect4"] = sub1(B, ROWCMP_IF, "\tif ((got57 != sectors || got60 != sectors) && sectors<4) {")
+V["B_wrap"] = sub1(B, "\trow_cmp(why, sectors, got57, got60);", "\trow_cmp(why, sectors, sectors, sectors);")
+V["B_u16"] = sub1(B, ROWCMP_SIG, ROWCMP_SIG.replace("uint64_t", "uint16_t"))
+V["B_postinc"] = sub1(B, CHK_IF, "\tif (got != want && (rows & 127) < 2) {\n\t\tfailures ++;")
+V["B_name"] = sub1(B, CHK_IF, "\tif (got != want && *name == '@') {\n\t\tfailures ++;")
+#  the pass-2 double edit
+V["B_scnoforce_chkstub"] = sub1(sub1(B, FORCE, "\t\trows = sc_r;\n\t}\n\tif (where[0] == 'f') {"),
+                                CHK_IF, "\tif (0) {\n\t\tfailures ++;")
+#  (2) outside the disclosed classes: the TALLY between the comparators and the verdict.  One
+#  statement after the last covered row (row_ring_occupancy_sound is rows 82-105; row() is 1-8)
+#  and before the self-mutant's row (row_wide_geometry, 125).
+V["B_tally"] = sub1(B, "\trow_ring_occupancy_sound();\n", "\trow_ring_occupancy_sound();\n\tfailures = 0;\n")
+#  the comment says "each operand zero": row_cmp's `sectors' is never 0 in the probes
+V["B_andsect"] = sub1(B, ROWCMP_IF, "\tif ((got57 != sectors || got60 != sectors) && sectors) {")
+#  (3) three ways to delete the block
+full = B
+for c in CALLS:
+    full = sub1(full, c, "")
+i = full.index(BLOCK_START)
+j = full.index(MAIN, i)
+full = full[:i] + full[j:]
+V["B_nosc_full"] = sub1(full, NEW_VERDICT, OLD_VERDICT)          # the coordinator's control, as built
+V["B_nosc_nodecl"] = full                                           # the same, verdict left alone
+keep = B
+for c in CALLS:
+    keep = sub1(keep, c, "")
+i = keep.index(BLOCK_START)
+j = keep.index(MAIN, i)
+V["B_nosc_keepdecl"] = keep[:i] + DECLS + keep[j:]                 # block + calls gone, globals kept
+for k, v in V.items():
+    io.open("%s/%s.c" % (outdir, k), "w", encoding="utf-8", newline="").write(v)
+print("variants:", " ".join(sorted(V)))

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""#551 revision f -- the Fable 5.1 adjudication of #551e's pass (pass551e/fable5_pass551e.md), on top of xform551e.py:
+
+  * contract (B), the Opus 5.5 seat's measured in-file close: on a covered (non-probe) mismatch each comparator prints
+    `  FAIL  covered comparator failure -- N failures so far', a line gate 2's failure-count check reads over the WHOLE
+    log -- so a printed failure cannot be taken back by any later edit of the trailer, the tallies or the row order;
+  * the call-count pin kept, its comment rewritten as a second identity constant (forgeable, contract (C));
+  * the contract rewritten as the adjudication's partition (A) comparators pinned, (B) a covered failure reports
+    itself, (C) a row that does not run cannot report, (D) this block -- in the block comment and in gate 2's bullet;
+  * the opening paragraph's two imprecise sentences (the call counts; which arm forces a failure).
+
+usage: xform551f.py <orig diff_wdc_identify.c> <out.c>"""
+import io
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xform551e as E   # noqa: E402
+
+BS = chr(92)
+NL = BS + "n"
+ART = "regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out"
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("REFUSED: %d matches for %r" % (n, old[:70]))
+    return s.replace(old, new)
+
+
+def emit(var):
+    return ("\t\tif (%s[0] != '@')\t/*  #551f: contract (B) -- a covered failure reports itself  */\n"
+            "\t\t\tprintf(\"  FAIL  covered comparator failure -- %%d failures so far" + NL + "\", cmp_fails);\n") % var
+
+
+CHK_ARM = "\t\tcmp_fails ++;\n\t\tprintf(\"  FAIL %-40s got %lld want %lld" + NL + "\", name, got, want);\n"
+ROW_ARM = "\t\tfailures ++;\n\t\tcmp_fails ++;\n\t} else {\n"
+
+BLOCK_OLD_HEAD = " *  NOT CAUGHT, DISCLOSED.  This block pins the two COMPARATORS and nothing else: it proves they answer\n"
+BLOCK_OLD_TAIL = " *  `wdcidcomparators' (#551; owner ruling 2026-09-25).\n */\n"
+BLOCK_NEW = (
+    " *  WHAT THIS FILE'S CHECKS CAN AND CANNOT SEE.  Every check here reads state this file writes (the\n"
+    " *  tallies, the call counts, `rows', sc_g) or output this file prints, so an edit that reproduces a healthy\n"
+    " *  run's observables is invisible to all of them.  That boundary is a fact about in-file checks, not a gap\n"
+    " *  in this block, and only a gate-side run on a device that fails a COVERED row sees across it (filed:\n"
+    " *  `wdcidlane', on the FIRST covered row).  Inside the boundary:\n"
+    " *\n"
+    " *  (A) THE COMPARATORS ARE PINNED -- the probes require the exact change in `failures' and cmp_fails on\n"
+    " *  their own calls, so an inert or narrowed comparator is caught at one end of the run or the other.  Not\n"
+    " *  caught, measured: a test inside a comparator keyed on a value, a name, a position or this block's phase\n"
+    " *  that the probes do not share; a predicate rewritten to agree with the original on every probe and differ\n"
+    " *  elsewhere (the sum of the two gots against twice the want, say); and the code that FEEDS a comparator\n"
+    " *  (row() handing row_cmp() its own want).\n"
+    " *\n"
+    " *  (B) A COVERED FAILURE REPORTS ITSELF -- on a non-probe mismatch each comparator prints a line gate 2's\n"
+    " *  failure-count check reads (`N failures so far'), at the moment it fails; that check compares every such\n"
+    " *  line in the log against \"0\", so a printed line cannot be taken back and no line can be added.  Hence no\n"
+    " *  edit that leaves the covered rows running and the comparators intact hides a covered failure: not the\n"
+    " *  trailer's count, token or exit rewritten singly or together, not a reset of either tally or both at any\n"
+    " *  placement, not rows moved or deferred past the verdict with their counts forged (measured: #551f's\n"
+    " *  pass, " + ART + ").  Not caught: that report switched off for\n"
+    " *  non-probe calls -- its guard is itself a probe/real key -- together with an edit that hides the tallies.\n"
+    " *\n"
+    " *  (C) A ROW THAT DOES NOT RUN CANNOT REPORT -- the identity row's 128 and the LAST run's call counts\n"
+    " *  (chk() 24, row_cmp() 8) raise the cost of skipping covered rows, and both are values this file can\n"
+    " *  forge: skipping the ring rows while printing their gate-pinned labels and adding 24 to `rows' and\n"
+    " *  chk_calls is one insertion and green here.  That is the boundary's own class; its close is `wdcidlane'.\n"
+    " *\n"
+    " *  (D) This block itself.  Nothing this block prints carries the self-mutant row's text, \"high byte\" or a\n"
+    " *  pinned label.  Gate 2's G text is printed ONCE, by the last run, only when both runs passed; the run's\n"
+    " *  PASS needs that line (sc_g) and both tallies at zero; a probe failure forces one failure, and a missing\n"
+    " *  first run is counted by the trailer's `!sc_g' line.  Reviewed in the differential, not chased.  The rest\n"
+    " *  of the file is filed as `wdcidcomparators' (#551; owner ruling 2026-09-25).\n"
+    " */\n")
+
+EDITS = [
+    #  the opening paragraph: the call counts, and which arm forces a failure (H8, H9)
+    (" *  goes inert partway through is caught at one end or the other; the LAST run also requires every\n"
+     " *  covered call to have run before it (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G\n"
+     " *  text; the failure arm does not, and forces one failure.\n",
+     " *  goes inert partway through is caught at one end or the other; the LAST run also requires the\n"
+     " *  comparator call counts (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G text; see (D)\n"
+     " *  for what the failure arms do.\n"),
+    #  the coverage paragraph: 24 covered, 32 reported (H6)
+    (" *  other row in this file compares inline: neither is covered by this block.  \"Covered\" means the\n"
+     " *  COMPARATOR is live, not that a row is.\n",
+     " *  other row in this file compares inline: neither is covered by this block.  \"Covered\" means the\n"
+     " *  COMPARATOR is live, not that a row is.  The 8 verdict-handed calls still REPORT through (B): the file\n"
+     " *  covers 24 comparisons and reports all 32 comparator failures.\n"),
+    #  the pin's comment
+    ("\t/*  #551e: the LAST run also requires every covered call to have run BEFORE it -- chk() 24 and row_cmp() 8,\n"
+     "\t    the counts the note line below prints.  Covered rows moved past the verdict, with the identity row\n"
+     "\t    re-pinned, would otherwise print their FAILs after the PASS token.  Change these with the rows, as the\n"
+     "\t    identity row's 128.  */\n",
+     "\t/*  #551e: a second identity constant -- the LAST run requires the comparator call counts the note line\n"
+     "\t    below prints, chk() 24 and row_cmp() 8.  It catches covered rows skipped or moved without their counts\n"
+     "\t    forged; like the identity row's 128 it is forgeable by an edit that writes the counter (contract (C)).\n"
+     "\t    Change these with the rows.  */\n"),
+    #  contract (B): the emission, in both failure arms
+    (CHK_ARM, CHK_ARM + emit("name")),
+    (ROW_ARM, "\t\tfailures ++;\n\t\tcmp_fails ++;\n" + emit("why") + "\t} else {\n"),
+]
+
+
+def make(orig):
+    s = E.make(orig)
+    for old, new in EDITS:
+        s = sub1(s, old, new)
+    i = s.index(BLOCK_OLD_HEAD)
+    j = s.index(BLOCK_OLD_TAIL, i) + len(BLOCK_OLD_TAIL)
+    if s.count(BLOCK_OLD_HEAD) != 1 or s.count(BLOCK_OLD_TAIL) != 1:
+        raise SystemExit("REFUSED: the contract's anchors are not unique")
+    return s[:i] + BLOCK_NEW + s[j:]
+
+
+def main():
+    orig = io.open(sys.argv[1], encoding="utf-8", newline="").read()
+    assert "\r" not in orig
+    s = make(orig)
+    io.open(sys.argv[2], "w", encoding="utf-8", newline="").write(s)
+    print("xform551f ->", sys.argv[2])
+
+
+if __name__ == "__main__":
+    main()

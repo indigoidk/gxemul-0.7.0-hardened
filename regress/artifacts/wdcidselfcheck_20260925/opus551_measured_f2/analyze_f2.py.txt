@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""#551f2: score M19 (heal) and M18 (four resets) with gate 2's REAL lib.sh, on the FILE redirect the gate
+uses and on the PIPE the adjudication proposes as the close.  Main-check verdict = real lib.sh fails==0 AND
+H (@@SELFCHECK@@ in source) AND G (G text in log).  A shape ESCAPES the MAIN checks on a device when it is
+green on pristine and green on a defect device that the unedited F reds."""
+import io, os, re, subprocess
+W = "/tmp/opus551f2"
+G_TEXT = "SELFCHECK the comparator can still fail"
+EMIT = "covered comparator failure"
+io.open(W + "/gate_real.sh", "w").write(
+    'export LOGDIR=' + W + '/logdir\nWDCLOG="$1"\n. ' + W + '/lib.sh > /dev/null 2>&1\n'
+    'gate_begin "wdc-only" > /dev/null 2>&1\n. ' + W + '/gatewdc.inc > /dev/null 2>&1\necho "REALFAILS=$_fails"\n')
+DEVS = ("pristine", "dropold", "drqring", "w57hi")
+HARN = ["F", "M19_heal", "M18_f_before_recon", "M18_f_after_printf", "M18_cf_before_recon", "M18_cf_after_printf"]
+
+
+def rd(dev, h, ext):
+    p = "%s/dev/%s/regress/%s.%s" % (W, dev, h, ext)
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else None
+
+
+def summ(t):
+    if t is None:
+        return "NOLOG"
+    m = re.search(r"^(\d+) rows, (\d+) failures", t, re.M)
+    e = len([l for l in t.split("\n") if EMIT in l])
+    tok = "PASS" if "WDC_IDENTIFY_PASS" in t else ("FAIL" if "WDC_IDENTIFY_FAIL" in t else "NOTOK")
+    return "%s/%s %s%s" % (m.group(1) if m else "?", m.group(2) if m else "?", tok, " r%d" % e if e else "")
+
+
+def main_reds(dev, h, chan):
+    if (rd(dev, h, chan + ".rc") or "").startswith("BUILD_FAIL"):
+        return ["compile"]
+    logp = "%s/dev/%s/regress/%s.%s.log" % (W, dev, h, chan)
+    out = subprocess.run(["bash", W + "/gate_real.sh", logp], capture_output=True, text=True).stdout
+    m = re.search(r"REALFAILS=(\d+)", out)
+    reds = ["lib=%s" % (m.group(1) if m else "?")] if (not m or m.group(1) != "0") else []
+    src = "%s/h/%s.c" % (W, h)
+    if subprocess.run(["grep", "-q", "@@SELFCHECK@@", src]).returncode != 0:
+        reds.append("H")
+    if subprocess.run(["grep", "-q", G_TEXT, logp]).returncode != 0:
+        reds.append("G")
+    return reds
+
+
+def verd(dev, h, chan):
+    return "GREEN" if not main_reds(dev, h, chan) else "red" + str(main_reds(dev, h, chan))
+
+
+print("=== MAIN checks (real lib.sh + H + G), per device, FILE redirect vs PIPE ===")
+print("  %-22s %-8s | %-38s | %-38s" % ("harness", "chan", "pristine / defect verdicts", "escape?"))
+for h in HARN:
+    for chan in ("file", "pipe"):
+        cells = {d: verd(d, h, chan) for d in DEVS}
+        # escape: green pristine AND green on a defect device F reds (F is red there on this channel)
+        esc = [d for d in DEVS[1:]
+               if cells["pristine"] == "GREEN" and cells[d] == "GREEN"
+               and verd(d, "F", chan) != "GREEN"]
+        s = " ".join("%s=%s" % (d[:4], cells[d].split("[")[0] + ("" if cells[d] == "GREEN" else "*")) for d in DEVS)
+        sm = " ".join("%s:%s" % (d[:4], summ(rd(d, h, chan + ".log"))) for d in DEVS)
+        print("  %-22s %-8s | %s" % (h, chan, s))
+        print("  %-22s %-8s |   %s  ESCAPES=%s" % ("", "", sm, ",".join(esc) or "-"))
+print("ANALYZE_F2_DONE")

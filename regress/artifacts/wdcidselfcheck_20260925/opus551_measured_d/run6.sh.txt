@@ -1,0 +1,37 @@
+#!/bin/bash
+#  #551d, opus seat.  WSL /tmp only; SERIAL builds (a kill table is running).
+#  Device variants are the ones built from HEAD's dev_wdc.c in /tmp/opus551p2 (pass 2).
+set -u
+D6=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/opus551p1/d
+MINE=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/wdc551/MINE_d.c
+REPO=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+W=/tmp/opus551d
+rm -rf "$W"; mkdir -p "$W/h"
+cp -a /tmp/opus551p2/sec /tmp/opus551p2/dev "$W/"
+cp "$MINE" "$W/final.c"
+echo "MINE_d md5 (want e0c3399b): $(md5sum < "$W/final.c" | cut -c1-8); device dev_wdc.c: $(md5sum < "$W/dev/pristine/src/devices/dev_wdc.c" | cut -c1-8) (repo $(md5sum < "$REPO/src/devices/dev_wdc.c" | cut -c1-8))"
+awk '/check     "wdc IDENTIFY: row failures"/{s=1} s && /^fi$/ {exit} s' "$REPO/regress/gate_offline.sh" > "$W/gatewdc.inc"
+echo "gate-2 wdc checks extracted: $(grep -c '^ *check' "$W/gatewdc.inc")"
+python3 "$D6/xform6.py" "$W/final.c" "$W/h" || exit 1
+for d in "$W"/dev/*/; do rm -f "$d"/regress/*; cp "$W"/h/*.c "$d/regress/"; done
+FLAGS="-std=c99 -I$W/sec/src/include -I$W/sec/src/include/thirdparty -ffunction-sections -fdata-sections -Wl,--gc-sections"
+one() {
+    local h=$1 dev=$2 d=$W/dev/$2/regress
+    if cc -O2 $FLAGS -o "$d/$h.bin" "$d/$h.c" > "$d/$h.cc" 2>&1 && [ "$d/$h.bin" -nt "$d/$h.c" ]; then
+        timeout 300 "$d/$h.bin" > "$d/$h.log" 2>&1; echo $? > "$d/$h.rc"
+    else
+        echo BUILD_FAIL > "$d/$h.rc"
+    fi
+}
+ALL="pristine selfmut drqring drqring_sm dropold dropold_sm w57hi w57hi_sm"
+{
+    for dev in pristine selfmut rev255 cyl13 srstbit drqring w57hi w58lo dropold drqring_sm w57hi_sm dropold_sm; do echo "D $dev"; done
+    for h in $(ls "$W/h" | sed 's/\.c$//' | grep -v '^D$'); do
+        for dev in $ALL; do echo "$h $dev"; done
+    done
+} > "$W/jobs.txt"
+echo "jobs: $(wc -l < "$W/jobs.txt") (serial)"
+t0=$(date +%s)
+while read -r h dev; do one "$h" "$dev"; done < "$W/jobs.txt"
+echo "built+ran serially in $(( $(date +%s) - t0 )) s; build failures: $(grep -l BUILD_FAIL "$W"/dev/*/regress/*.rc | wc -l)"
+echo RUN6_DONE

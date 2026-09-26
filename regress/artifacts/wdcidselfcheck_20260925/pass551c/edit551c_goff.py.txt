@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""#551 wdcidselfcheck, revision b (on #550 v3's goff_550v3.sh): gate 2 (regress/gate_offline.sh) -- wdc_identify moves from SC_EXEMPT to SC_COVERED, with its
+coverage stated as the Fable adjudication ruled (fable5_f2_550_551.md, #551 rulings 4 and 7) and the owner ruled
+("24/128 now, file the rest", 2026-09-25).  Applies on top of #550's gate_offline.sh.  Exactly-one-match edits.
+usage: edit551_goff.py <in gate_offline.sh> <out>"""
+import io
+import sys
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        sys.exit("REFUSED: %d matches for %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+def goff(s):
+    s = sub1(s, 'diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound"\n#  *** COVERED IS NOT UNIFORM',
+             'diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound wdc_identify"\n#  *** COVERED IS NOT UNIFORM')
+    s = sub1(s, "TREATING A GREEN ROW AS \"the file is vouched for\". ***  All but three of the COVERED stems\n"
+                "#  route every row through one or two shared helpers, so the sentinel covers the file.  The\n"
+                "#  count used to be spelled out here as \"seven of the ten\" and went stale the first time a\n"
+                "#  stem was added; a proportion that has to be re-derived on every addition is a comment that\n"
+                "#  will be wrong more often than right, so it is stated as an exception list instead.  The\n"
+                "#  three that do NOT route through shared helpers:\n",
+             "TREATING A GREEN ROW AS \"the file is vouched for\". ***  Most COVERED stems route every row\n"
+             "#  through one shared helper, so the sentinel covers the file.  No count is kept here: it used to say\n"
+             "#  \"seven of the ten\", then \"all but three\" -- stale the first time a stem was added, and wrong for\n"
+             "#  geom and sync, which each have two helpers.  The stems whose sentinel does NOT cover every row, or\n"
+             "#  needs more than one probe:\n")
+    s = sub1(s, "#    * sync      -- both checks() and checkn(), for the same reason.\n",
+             "#    * sync      -- both checks() and checkn(), for the same reason.\n"
+             "#    * wdc_identify -- 24 of 128 rows compare inside a comparator the sentinel feeds: 16 of\n"
+             "#                   chk()'s 24 calls and all 8 of row_cmp()'s.  chk()'s other 8 are handed a 0/1\n"
+             "#                   verdict computed at the call (derive: grep -cE '\\? [01] : [01], 1\\);'\n"
+             "#                   regress/diff_wdc_identify.c), and the other\n"
+             "#                   96 compare inline -- NOT covered.  \"Covered\" means the COMPARATOR is live,\n"
+             "#                   not that a row is: the self-check proves only its own calls, so an edit that\n"
+             "#                   keeps those right keeps gate 2 green -- a test keyed on a value, a name, a\n"
+             "#                   position or the self-check's phase that the probes do not share, feeding a\n"
+             "#                   comparator its own want, or an edit of the self-check itself (measured on\n"
+             "#                   #551's passes; disclosed, not chased).  A reset of `failures' alone is not:\n"
+             "#                   the comparators keep their own count and the trailer reports the larger; a\n"
+             "#                   reset of both tallies is, and is disclosed.  The\n"
+             "#                   file prints its comparator call counts on every run, and its PASS needs the\n"
+             "#                   G line.  #551, by owner ruling 2026-09-25 (\"24/128 now, file the rest\"); the\n"
+             "#                   rest is `wdcidcomparators'.\n")
+    s = sub1(s, "#  Named here rather than left to be re-derived, because the three-file exception list above\n",
+             "#  Named here rather than left to be re-derived, because the exception list above\n")
+    s = sub1(s, "#  over the Q4 one I proposed for the selfmutant list: 2 uncovered differentials, 1311 and 766\n"
+                "#  lines, whose every row could be inert with this gate green.\n",
+             "#  over the Q4 one I proposed for the selfmutant list: 2 uncovered differentials, 1311 and 766\n"
+             "#  lines, whose every row could be inert with this gate green.  (True when written; #551 moved\n"
+             "#  wdc_identify to COVERED, so ieee_store is the one left.)\n")
+    #  the stale exemption paragraph, and #550's supersession of it, are REPLACED by the discharge record
+    old_para_head = "#    wdc_identify  NOTHING TO FEED A MISMATCH TO.  Read every row function: row_anchor,\n"
+    old_para_tail = ("#                  #551 replaces this paragraph.\n")
+    i = s.index(old_para_head)
+    j = s.index(old_para_tail, i) + len(old_para_tail)
+    if s.count(old_para_head) != 1 or s.count(old_para_tail) != 1:
+        sys.exit("REFUSED: the wdc_identify paragraph anchors are not unique")
+    s = s[:i] + ("#    wdc_identify  DISCHARGED by #551 -- moved to SC_COVERED with a self-check on its comparators (see\n"
+                 "#                  the COVERED list above).  This entry used to say \"NOTHING TO FEED A MISMATCH TO\"\n"
+                 "#                  and \"This one needs the nine row functions refactored onto a shared helper\n"
+                 "#                  first\".  The nine were 16 executions -- row() x 8 and eight zero-argument\n"
+                 "#                  functions -- and that census (2026-08-19) went stale when #484 added\n"
+                 "#                  chk(name, got, want) on 2026-08-27: its 24 calls are none of the nine.\n") + s[j:]
+    s = sub1(s, "#    wdc_identify  NOT re-dated: the owner ruled it FIXED -- #551 gives it a comparator self-check and\n"
+                "#                  moves it to SC_COVERED.  Until #551 lands, valid ON 2026-09-27, RED from 2026-09-28.\n",
+             "")
+    s = sub1(s, 'SC_EXEMPT="ieee_store:2026-12-10 wdc_identify:2026-09-27"\n', 'SC_EXEMPT="ieee_store:2026-12-10"\n')
+    return s
+
+
+def main():
+    src, dst = sys.argv[1], sys.argv[2]
+    raw = io.open(src, encoding="utf-8", newline="").read()
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    s = goff(raw.replace("\r\n", "\n"))
+    io.open(dst, "w", encoding="utf-8", newline="").write(s.replace("\n", eol))
+    print("edit551_goff ->", dst)
+
+
+if __name__ == "__main__":
+    main()

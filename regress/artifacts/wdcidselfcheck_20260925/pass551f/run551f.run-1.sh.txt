@@ -1,0 +1,46 @@
+#!/bin/bash
+#  #551f: measure the file and every shape the adjudication's stop condition names (meas551f.py), on Opus's device
+#  variants (/tmp/opus551p2), WSL /tmp only.  Scored by analyze8.py: gate 2's wdc block extracted verbatim, H, G, the
+#  PASS token, and the self-mutant lane on the matching _sm device.  The exit status is recorded, never scored.
+set -u
+SPW=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad
+REPO=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+OUT=$REPO/regress/artifacts/wdcidselfcheck_20260925/measured
+W=/tmp/wdc551f
+rm -rf "$W"; mkdir -p "$W/h"
+cp -a /tmp/opus551p2/sec /tmp/opus551p2/dev "$W/" || exit 1
+cp "$SPW/wdc551/MINE_f.c" "$W/h/F.c"
+cp "$SPW/wdc551/MINE_e.c" "$W/h/E.c"
+cp "$SPW/wdc551/wdcid_HEAD.c" "$W/h/ORIG.c"
+echo "F md5 $(md5sum < "$W/h/F.c" | cut -c1-8) (want 7fd15d1d); E md5 $(md5sum < "$W/h/E.c" | cut -c1-8) (want 1b467a08); ORIG md5 $(md5sum < "$W/h/ORIG.c" | cut -c1-8) (want 1fd7ff1d)"
+echo "device dev_wdc.c: $(md5sum < "$W/dev/pristine/src/devices/dev_wdc.c" | cut -c1-8) (repo $(md5sum < "$REPO/src/devices/dev_wdc.c" | cut -c1-8))"
+awk '/check     "wdc IDENTIFY: row failures"/{s=1} s && /^fi$/ {exit} s' "$REPO/regress/gate_offline.sh" > "$W/gatewdc.inc"
+echo "gate-2 wdc checks extracted: $(grep -c '^ *check' "$W/gatewdc.inc")"
+python3 "$SPW/wdc551/meas551f.py" "$W/h" || exit 1
+for d in "$W"/dev/*/; do rm -f "$d"/regress/*; cp "$W"/h/*.c "$d/regress/"; done
+export W FLAGS="-std=c99 -I$W/sec/src/include -I$W/sec/src/include/thirdparty -ffunction-sections -fdata-sections -Wl,--gc-sections"
+one() {
+    local h=$1 dev=$2 d=$W/dev/$2/regress
+    if cc -O2 $FLAGS -o "$d/$h.bin" "$d/$h.c" > "$d/$h.cc" 2>&1 && [ "$d/$h.bin" -nt "$d/$h.c" ]; then
+        timeout 300 "$d/$h.bin" > "$d/$h.log" 2>&1; echo $? > "$d/$h.rc"
+    else
+        echo BUILD_FAIL > "$d/$h.rc"
+    fi
+}
+export -f one
+ALL="pristine selfmut drqring drqring_sm dropold dropold_sm w57hi w57hi_sm"
+{
+    for dev in $(ls "$W/dev"); do echo "F $dev"; echo "E $dev"; echo "ORIG $dev"; done
+    for h in $(ls "$W/h" | sed 's/\.c$//' | grep -v -x -e F -e E -e ORIG); do
+        for dev in $ALL; do echo "$h $dev"; done
+    done
+} > "$W/jobs.txt"
+echo "jobs: $(wc -l < "$W/jobs.txt")"
+t0=$(date +%s)
+xargs -P 2 -L 1 bash -c 'one "$@"' _ < "$W/jobs.txt"
+echo "built+ran in $(( $(date +%s) - t0 )) s; build failures: $(grep -l BUILD_FAIL "$W"/dev/*/regress/*.rc 2>/dev/null | sed "s|$W/dev/||" | tr '\n' ' ')"
+python3 "$SPW/wdc551/analyze8.py" | tee "$OUT/run551f.out"
+mkdir -p "$OUT/run551f_logs"
+for h in F E; do for dev in pristine selfmut drqring dropold w57hi; do cp "$W/dev/$dev/regress/$h.log" "$OUT/run551f_logs/${h}_$dev.log"; done; done
+for h in F_skipforge F_atexit_defer F_emitoff_cond_trailer F_hardcode F_movefake F_scweak_nocmpinc_reset; do cp "$W/dev/drqring/regress/$h.log" "$OUT/run551f_logs/${h}_drqring.log"; done
+echo RUN551F_DONE

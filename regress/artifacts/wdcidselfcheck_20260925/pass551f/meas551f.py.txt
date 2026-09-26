@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""#551f: the shapes the Fable 5.1 adjudication's stop condition names (pass551e/fable5_pass551e.md, Q3), built on the
+#551f file (read as <dir>/F.c), each one text transformation per edit with every anchor count-checked.
+
+  CAUGHT by (B) -- must be red on the defect(s) they target:
+    trailer, single:  F_v_eq F_v_nocmp F_printf_sub F_ret_nocmp F_hardcode F_recon_ge_sub F_sub_after
+    trailer, paired:  F_v_eq_printf_sub F_v_nocmp_sub_after
+    resets:           F_reset_mid F_resetcmp_mid F_reset2_mid F_cond_start F_cond_mid F_cond_trailer
+                      F_cond_afterprintf F_both_trailer F_both_afterprintf
+    moves/deferrals:  F_movefake F_movefake_row F_countforge F_forge_move F_atexit_defer
+    the pin's own:    F_move_repin; F_nopin_move_repin (the move is now caught by (B) even without the pin)
+  DISCLOSED -- may be green:
+    (A) F_want165 F_postinc F_wrap F_name F_phase F_sum
+    (B) residual: F_emitoff (alone), F_emitoff_cond_trailer (with a reset)
+    (C) F_skipforge (the ring rows skipped, their labels printed, 24 added to rows and chk_calls: ONE insertion);
+        the pin's delta: F_delring_repin (red, the pin) and F_nopin_delring_repin (green without it)
+    (D) F_scweak_nocmpinc_reset (a probe's cmp_fails check weakened + chk()'s increment deleted + a reset)
+usage: meas551f.py <dir>"""
+import io
+import os
+import re
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+H = sys.argv[1]
+F = io.open(H + "/F.c", encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+AFTER_COVERED = "\trow_ring_occupancy_sound();\n"
+FIRST = "\tselfcheck(\"first\");\n"
+LAST = "\tselfcheck(\"last\");\n"
+PRINTF = "\tprintf(\"" + NL + "%d rows, %d failures" + NL + "\", rows, failures);\n"
+TOKEN_BLOCK = ("\tif (failures == 0 && cmp_fails == 0 && sc_g)\n\t\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n"
+               "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n")
+TOKEN_END = "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n"
+VERDICT = "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n"
+RET = "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n"
+ID_PIN = "\tif (rows != 128) {\n"
+COND = "\tif (failures == cmp_fails) failures = cmp_fails = 0;\n"
+RING_HEAD = "static void row_ring_occupancy_sound(void)\n{\n\tstruct wdc_data d;\n\tunsigned char buf[8];\n\tint i;\n"
+EMIT_CHK = "\t\tif (name[0] != '@')\t/*  #551f: contract (B) -- a covered failure reports itself  */\n"
+EMIT_ROW = "\t\tif (why[0] != '@')\t/*  #551f: contract (B) -- a covered failure reports itself  */\n"
+PIN = ("\tif (chk_calls != 24 || rowcmp_calls != 8) {\n")
+CHK_IF = "\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n"
+ROWCMP_IF = "\tif (got57 != sectors || got60 != sectors) {\n"
+
+m = re.search(r"\t/\*  Controls: below the divergence point.*?\trow\(\"every byte 255\",[^\n]*\n", F, re.S)
+ROWBLOCK = m.group(0)
+if ROWBLOCK.count("\trow(\"") != 8:
+    raise SystemExit("row block has %d calls" % ROWBLOCK.count("\trow(\""))
+i = F.index(RING_HEAD)
+j = F.index("\n}\n", i)
+RING_NAMES = re.findall(r"\bchk\(\"([^\"]+)\"", F[i:j])
+if len(RING_NAMES) != 24:
+    raise SystemExit("ring has %d chk() names" % len(RING_NAMES))
+
+
+def move(s, what):
+    return sub1(sub1(s, what, ""), TOKEN_END, TOKEN_END + what)
+
+
+V = {}
+V["F_v_eq"] = sub1(F, VERDICT, "\tif (failures == cmp_fails && sc_g)\n")
+V["F_v_nocmp"] = sub1(F, VERDICT, "\tif (failures == 0 && sc_g)\n")
+V["F_printf_sub"] = sub1(F, PRINTF, PRINTF.replace("rows, failures);", "rows, failures - cmp_fails);"))
+V["F_ret_nocmp"] = sub1(F, RET, "\treturn (failures || !sc_g) ? 1 : 0;\n")
+V["F_hardcode"] = sub1(F, PRINTF + TOKEN_BLOCK,
+                       "\tprintf(\"" + NL + "%d rows, 0 failures" + NL + "\", rows);\n"
+                       "\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n")
+V["F_recon_ge_sub"] = sub1(F, RECON, "\tif (cmp_fails >= failures)\n\t\tfailures -= cmp_fails;\n")
+V["F_sub_after"] = sub1(F, RECON, RECON + "\tfailures -= cmp_fails;\n")
+V["F_v_eq_printf_sub"] = sub1(V["F_v_eq"], PRINTF, PRINTF.replace("rows, failures);", "rows, failures - cmp_fails);"))
+V["F_v_nocmp_sub_after"] = sub1(V["F_v_nocmp"], RECON, RECON + "\tfailures -= cmp_fails;\n")
+V["F_reset_mid"] = sub1(F, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")
+V["F_resetcmp_mid"] = sub1(F, AFTER_COVERED, AFTER_COVERED + "\tcmp_fails = 0;\n")
+V["F_reset2_mid"] = sub1(F, AFTER_COVERED, AFTER_COVERED + "\tfailures = cmp_fails = 0;\n")
+V["F_cond_start"] = sub1(F, FIRST, FIRST + COND)
+V["F_cond_mid"] = sub1(F, AFTER_COVERED, AFTER_COVERED + COND)
+V["F_cond_trailer"] = sub1(F, RECON, COND + RECON)
+V["F_cond_afterprintf"] = sub1(F, PRINTF, PRINTF + COND)
+V["F_both_trailer"] = sub1(F, RECON, "\tfailures = cmp_fails = 0;\n" + RECON)
+V["F_both_afterprintf"] = sub1(F, PRINTF, PRINTF + "\tfailures = cmp_fails = 0;\n")
+moved = move(F, AFTER_COVERED)
+V["F_movefake"] = sub1(moved, LAST, "\t{ int k; for (k = 0; k < 24; k++) chk(\"x\", 0, 0); }\n" + LAST)
+V["F_movefake_row"] = sub1(move(F, ROWBLOCK), LAST, "\t{ int k; for (k = 0; k < 8; k++) row_cmp(\"y\", 1, 1, 1); }\n" + LAST)
+V["F_countforge"] = sub1(sub1(moved, LAST, "\tchk_calls = 24;\n" + LAST), ID_PIN, "\tif (rows != 104) {\n")
+V["F_forge_move"] = sub1(moved, LAST, "\tchk_calls = 24; rows += 24;\n" + LAST)
+V["F_atexit_defer"] = sub1(F, RING_HEAD, RING_HEAD +
+    "\tif (chk_calls == 0 && (chk_calls += 24) && (rows += 24) && !atexit(row_ring_occupancy_sound))\n\t\treturn;\n")
+V["F_move_repin"] = sub1(moved, ID_PIN, "\tif (rows != 104) {\n")
+i = F.index("\t/*  #551e: a second identity constant")
+j = F.index("\t\tsc_bad++;\n\t}\n", i) + len("\t\tsc_bad++;\n\t}\n")
+NOPIN = F[:i] + F[j:]
+assert NOPIN.count(PIN) == 0
+V["F_nopin_move_repin"] = sub1(move(NOPIN, AFTER_COVERED), ID_PIN, "\tif (rows != 104) {\n")
+#  (A)
+V["F_want165"] = sub1(F, CHK_IF, "\tif (got != want && want-165) {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n")
+V["F_postinc"] = sub1(F, CHK_IF, "\tif (got != want && (rows & 127) < 2) {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n")
+V["F_name"] = sub1(F, CHK_IF, "\tif (got != want && *name == '@') {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n")
+V["F_phase"] = sub1(F, CHK_IF, "\tif (got != want && name[0] == '@') {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n")
+V["F_wrap"] = sub1(F, "\trow_cmp(why, sectors, got57, got60);\n", "\trow_cmp(why, sectors, sectors, sectors);\n")
+V["F_sum"] = sub1(F, ROWCMP_IF, "\tif (got57 + got60 != 2 * sectors) {\n")
+#  (B) residual
+off = sub1(sub1(F, EMIT_CHK, "\t\tif (0)\n"), EMIT_ROW, "\t\tif (0)\n")
+V["F_emitoff"] = off
+V["F_emitoff_cond_trailer"] = sub1(off, RECON, COND + RECON)
+#  (C) one insertion: the ring rows skipped, their labels printed, the counts forged
+labels = ", ".join("\"%s\"" % n for n in RING_NAMES)
+V["F_skipforge"] = sub1(F, RING_HEAD, RING_HEAD +
+    "\t{ static const char *const L[] = { " + labels + " }; int k;\n"
+    "\t  for (k = 0; k < 24; k++) printf(\"  ok   %-40s 1" + NL + "\", L[k]);\n"
+    "\t  rows += 24; chk_calls += 24; return; }\n")
+V["F_delring_repin"] = sub1(sub1(F, AFTER_COVERED, ""), ID_PIN, "\tif (rows != 104) {\n")
+V["F_nopin_delring_repin"] = sub1(sub1(NOPIN, AFTER_COVERED, ""), ID_PIN, "\tif (rows != 104) {\n")
+#  the pin's delta on ONE covered row gate 2 does not pin by name (deleting the whole ring also deletes 12 pinned labels)
+DRQ_ROW = "\tchk(\"R6 liveness: DRQ asserted\",\n\t    (status_byte(&d, fake_cpu()) & WDCS_DRQ) ? 1 : 0, 1);\n"
+V["F_delrow_repin"] = sub1(sub1(F, DRQ_ROW, ""), ID_PIN, "\tif (rows != 127) {\n")
+V["F_nopin_delrow_repin"] = sub1(sub1(NOPIN, DRQ_ROW, ""), ID_PIN, "\tif (rows != 127) {\n")
+#  (D) the block itself: the chk probes' cmp_fails check weakened, chk()'s increment deleted, a reset after the rows
+D1 = "\t\tif (failures != sc_f + (cg[i] != cw[i]) || cmp_fails != sc_cf + (cg[i] != cw[i]))\n"
+d = sub1(F, D1, "\t\tif (failures != sc_f + (cg[i] != cw[i]) || cmp_fails > sc_cf + (cg[i] != cw[i]))\n")
+d = sub1(d, CHK_IF, "\tif (got != want) {\n\t\tfailures ++;\n")
+V["F_scweak_nocmpinc_reset"] = sub1(d, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")
+for k, v in V.items():
+    io.open("%s/%s.c" % (H, k), "w", encoding="utf-8", newline="").write(v)
+io.open("%s/F_nopin.c" % H, "w", encoding="utf-8", newline="").write(NOPIN)
+print("variants (%d):" % (len(V) + 1), " ".join(sorted(list(V) + ["F_nopin"])))

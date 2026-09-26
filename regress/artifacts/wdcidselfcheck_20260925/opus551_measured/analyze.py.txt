@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+import io, os, re, subprocess, sys
+W = "/tmp/opus551p1"
+DEVS = ["pristine", "selfmut", "rev255", "cyl13", "srstbit"]
+NAMED = "geometry words carry their high byte"
+
+
+def rd(dev, h, o):
+    p = "%s/dev/%s/regress/%s.%s" % (W, dev, h, o)
+    rc = io.open(p + ".rc").read().strip() if os.path.exists(p + ".rc") else "MISSING"
+    log = io.open(p + ".log", encoding="utf-8", errors="replace").read() if os.path.exists(p + ".log") else None
+    return rc, log
+
+
+def strip_sc(log):
+    return "\n".join(l for l in log.split("\n") if "SELFCHECK" not in l)
+
+
+def summ(log):
+    if log is None:
+        return "NO LOG"
+    s = re.search(r"^(\d+) rows, (\d+) failures", log, re.M)
+    tok = re.search(r"WDC_IDENTIFY_(PASS|FAIL)", log)
+    sc = [l.strip()[:60] for l in log.split("\n") if "SELFCHECK" in l]
+    nf = len(re.findall(r"^  FAIL", log, re.M))
+    return "%s/%s %s FAILlines=%d | %s" % (s.group(1) if s else "?", s.group(2) if s else "?",
+                                          tok.group(1) if tok else "NOTOKEN", nf, " / ".join(sc))
+
+
+print("=== 1. the brief's literal helper name `bad` ===")
+cc = io.open(W + "/dev/pristine/regress/Abad.O2.cc", encoding="utf-8", errors="replace").read()
+errs = re.findall(r"In function '(\w+)'", cc)
+print("  compile errors:", len(re.findall(r"error:", cc)), "in functions:", sorted(set(errs)))
+for l in cc.split("\n"):
+    if "error:" in l:
+        print("   ", l.split("/")[-1][:110]); break
+
+print("\n=== 2. equivalence: ORIG vs A (brief sentinel) / Ahard (first+last), SELFCHECK lines removed ===")
+for dev in DEVS:
+    for o in ("O0", "O1", "O2"):
+        rco, lo = rd(dev, "ORIG", o)
+        out = []
+        for h in ("A", "Ahard"):
+            rch, lh = rd(dev, h, o)
+            same = (lo is not None and lh is not None and strip_sc(lo) == strip_sc(lh))
+            extra = len(lh.split("\n")) - len(lo.split("\n")) if (lo and lh) else None
+            out.append("%s:%s rc %s/%s +%s lines" % (h, "IDENTICAL" if same else "DIFFER", rco, rch, extra))
+        print("  %-8s %s  %s   [%s]" % (dev, o, "  ".join(out), summ(lo)))
+
+print("\n=== 3. FAIL arms reached by each dev_wdc.c mutant (ORIG, -O2) ===")
+allf = set()
+for dev in DEVS:
+    rc, log = rd(dev, "ORIG", "O2")
+    fl = [l.strip() for l in log.split("\n") if l.startswith("  FAIL")]
+    allf |= set(re.sub(r"\s+", " ", l)[:50] for l in fl)
+    print("  %-8s %2d FAIL lines: %s" % (dev, len(fl), "; ".join(sorted(set(l[5:45].strip() for l in fl)))[:400]))
+print("  union of distinct FAIL lines over the five devs:", len(allf))
+
+print("\n=== 4. helper escapes: brief sentinel (FIRST, failures-only, {1,0}) vs hardened (first+last, return+tally, {1,0,2,0x10000,-1}) ===")
+for e in ["A", "E_ret0", "E_noret", "E_nocnt", "E_eq1", "E_uchar", "E_after3", "E_rows"]:
+    for form, h in (("brief", e), ("hard ", e + "_h" if e != "A" else "Ahard")):
+        row = []
+        for dev in DEVS:
+            rc, log = rd(dev, h, "O2")
+            row.append("%s[%s]" % (dev, summ(log)))
+        # emulate selfmutant.py on (pristine, selfmut)
+        _, lp = rd("pristine", h, "O2"); _, lm = rd("selfmut", h, "O2")
+        named_p = [l for l in lp.split("\n") if l.strip().startswith(("ok", "FAIL")) and NAMED in l and "@@SELFCHECK@@" not in l]
+        sm = "SETUP"
+        if re.search(r"\b[A-Z0-9_]+_PASS\b", lp) and len(named_p) == 1 and not named_p[0].strip().startswith("FAIL"):
+            killed = [l for l in lm.split("\n") if l.strip().startswith("FAIL") and NAMED in l and "@@SELFCHECK@@" not in l]
+            ft = re.search(r"\b[A-Z0-9_]+_FAIL\b", lm)
+            sm = "SELFMUTANT_OK" if (ft and killed) else "SELFMUTANT_FAIL"
+        print("  %-9s %s  selfmutant-lane=%s" % (e, form, sm))
+        for r in row:
+            print("        " + r)
+
+print("\n=== 5. transform DEFECTS at one site (row_null_atapi_st, if@1576) vs ORIG, -O2 ===")
+for t in ("Tdrop", "Tdouble"):
+    for dev in DEVS:
+        rco, lo = rd(dev, "ORIG", "O2"); rct, lt = rd(dev, t, "O2")
+        print("  %-8s %-8s %s  rc %s/%s" % (t, dev, "IDENTICAL(ex. SELFCHECK)" if strip_sc(lo) == strip_sc(lt) else "DIFFER", rco, rct))

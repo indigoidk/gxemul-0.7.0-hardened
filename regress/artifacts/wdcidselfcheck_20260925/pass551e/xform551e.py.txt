@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""#551 revision e -- the Fable 5.1 adjudication of #551d's own pass (pass551d/fable5_pass551d.md), on top of
+xform551d.py:
+
+  * the LAST self-check requires every covered call to have run before it -- chk() 24, row_cmp() 8 (the Opus 5.5 seat's
+    call-count pin, measured in opus551_measured_d/callpin.out): covered rows moved past the verdict, with the identity
+    row re-pinned, now fail the run instead of printing their FAILs after the PASS token (G2, overturned to ADOPT);
+  * the contract rewritten as FOUR disclosed classes, the trailer named as its own class, in the adjudication's words
+    (G1, G5, G6, G7) -- in the block comment and in gate 2's bullet;
+  * "one pair that must NOT fail" -> "one probe per comparator" (G9); the reconciliation's comment says it keeps the
+    PRINTED count honest (G8).
+
+usage: xform551e.py <orig diff_wdc_identify.c> <out.c> [variant]
+  variants: xform551d.py's, plus move_repin nopin nopin_move_repin condreset"""
+import io
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xform551d as D   # noqa: E402
+
+BS = chr(92)
+NL = BS + "n"
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("REFUSED: %d matches for %r" % (n, old[:70]))
+    return s.replace(old, new)
+
+
+PIN_OLD = ("\tif (!sc_bad && sc_first_bad == 0) {\n")
+PIN = ("\t/*  #551e: the LAST run also requires every covered call to have run BEFORE it -- chk() 24 and row_cmp() 8,\n"
+       "\t    the counts the note line below prints.  Covered rows moved past the verdict, with the identity row\n"
+       "\t    re-pinned, would otherwise print their FAILs after the PASS token.  Change these with the rows, as the\n"
+       "\t    identity row's 128.  */\n"
+       "\tif (chk_calls != 24 || rowcmp_calls != 8) {\n"
+       "\t\tprintf(\"  FAIL  SELFCHECK(last): chk() ran %d times and row_cmp() %d before this run; want 24 and 8" + NL
+       + "\",\n"
+       "\t\t    chk_calls, rowcmp_calls);\n"
+       "\t\tif (!sc_bad)\n"
+       "\t\t\tfailures = sc_f + 1;\n"
+       "\t\tsc_bad++;\n"
+       "\t}\n")
+
+EDITS = [
+    #  the opening paragraph: one probe per comparator (G9), and the call-count pin
+    (" *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone with got both below and\n"
+     " *  above its want, and one pair that must NOT fail -- and requires the EXACT change in `failures' and in\n"
+     " *  cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.  Run FIRST (before\n"
+     " *  any row) and LAST (after every row, before the identity row), so a comparator\n"
+     " *  that goes inert partway through is caught at one end or the other.  Only the success arm prints gate 2's G\n"
+     " *  text; the failure arm does not, and forces one failure.\n",
+     " *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone with got both below and\n"
+     " *  above its want, and one probe per comparator that must NOT fail -- and requires the EXACT change in\n"
+     " *  `failures' and in cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.\n"
+     " *  Run FIRST (before any row) and LAST (after every row, before the identity row), so a comparator that\n"
+     " *  goes inert partway through is caught at one end or the other; the LAST run also requires every\n"
+     " *  covered call to have run before it (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G\n"
+     " *  text; the failure arm does not, and forces one failure.\n"),
+    #  the contract: four classes (the adjudication's text, reflowed)
+    (" *  COMPARATOR is live, not that a row is.  NOT CAUGHT, DISCLOSED: the self-check proves only that the\n"
+     " *  comparators answer right on ITS OWN calls, so an edit that keeps those answers and changes the rest\n"
+     " *  CAN keep every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's\n"
+     " *  own phase that the probes do not share, or an edit of the code that FEEDS the comparators (row()\n"
+     " *  handing row_cmp() its own want), each measured on #551's passes; or an edit of this block itself\n"
+     " *  (reasoned: the block edits measured so far are caught).  Reviewed in the differential, not chased.\n"
+     " *  A reset of `failures' alone is not among them, wherever it sits: the comparators also count\n"
+     " *  cmp_fails, which only they increment, and the verdict and the exit status read it directly.  A reset\n"
+     " *  of BOTH tallies is, and is disclosed.  No line this block prints carries the self-mutant row's\n",
+     " *  COMPARATOR is live, not that a row is.\n"
+     " *\n"
+     " *  NOT CAUGHT, DISCLOSED.  This block pins the two COMPARATORS and nothing else: it proves they answer\n"
+     " *  right on ITS OWN calls, so an edit that keeps those answers and changes the rest CAN keep every gate-2\n"
+     " *  row green.  Four classes, each measured on #551's passes: (1) inside a comparator, a test keyed on a\n"
+     " *  value, a name, a position or this block's own phase that the probes do not share, or a predicate\n"
+     " *  rewritten to agree with the original on every probe and differ elsewhere (the sum of the two gots\n"
+     " *  against twice the want, say -- one member of a class no finite probe set closes); (2) the code that\n"
+     " *  FEEDS a comparator (row() handing row_cmp() its own want); (3) THE TRAILER, one call site: the printed\n"
+     " *  count, the PASS token and the exit status are produced there, and any rewrite that keeps them\n"
+     " *  consistent with each other is green -- today two coordinated edits, each red alone (the verdict's\n"
+     " *  cmp_fails term dropped with `failures -= cmp_fails' after the reconciliation; the verdict and the\n"
+     " *  printed count both scoring `failures - cmp_fails'); a reset of BOTH tallies is in this class --\n"
+     " *  unconditional, only after the covered rows and before the self-mutant's row; conditional on their\n"
+     " *  equality, anywhere.  No in-file probe can pin a single call site; the close is gate-side, a lane\n"
+     " *  whose device mutant fails the FIRST covered row (filed: `wdcidlane'); (4) this block itself (a probe's\n"
+     " *  cmp_fails check weakened together with the increment it guards and a reset).  A reset of `failures'\n"
+     " *  alone is not among them, wherever it sits: the comparators also count cmp_fails, which only they\n"
+     " *  increment, and the verdict and the exit status read it directly.  Nor is moving the covered rows past\n"
+     " *  the verdict: the LAST run requires chk() 24 and row_cmp() 8 calls.  On #551d's pass no single edit\n"
+     " *  outside these four classes kept gate 2 green (24 measured:\n"
+     " *  regress/artifacts/wdcidselfcheck_20260925/opus551_measured_d/analyze6.out).  Reviewed in the\n"
+     " *  differential, not chased.\n"
+     " *\n"
+     " *  No line this block prints carries the self-mutant row's\n"),
+    #  the call-count pin
+    (PIN_OLD, PIN + PIN_OLD),
+    #  the reconciliation's comment (G8)
+    ("\t/*  #551: the comparators' own count survives a reset of `failures' (which always counts at least as\n"
+     "\t    many, untouched), and a self-check that did not pass is a failure the count shows.  */\n",
+     "\t/*  #551: the PRINTED count shows the comparators' failures even after a reset of `failures' placed\n"
+     "\t    before this line (untouched, `failures' always counts at least as many); the verdict and the exit\n"
+     "\t    status read cmp_fails directly.  A self-check that did not pass is a failure the count shows.  */\n"),
+]
+
+MAIN_RING = "\trow_ring_occupancy_sound();\n"
+VERDICT_TAIL = "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n"
+ID_PIN = "\tif (rows != 128) {\n"
+ID_MSG = "rows = %i, want 128" + NL
+
+
+def move_repin(s):
+    """the Opus seat's D_move_repin: covered chk() rows moved past the verdict, the identity row re-pinned to 104"""
+    s = sub1(s, MAIN_RING, "")
+    s = sub1(s, VERDICT_TAIL, VERDICT_TAIL + MAIN_RING)
+    s = sub1(s, ID_PIN, "\tif (rows != 104) {\n")
+    s = sub1(s, ID_MSG, "rows = %i, want 104" + NL)
+    return s
+
+
+def nopin(s):
+    i = s.index(PIN)
+    return s[:i] + s[i + len(PIN):]
+
+
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+VARIANTS = dict(D.VARIANTS)
+
+
+def make(orig):
+    s = D.make(orig)
+    for old, new in EDITS:
+        s = sub1(s, old, new)
+    return s
+
+
+def main():
+    orig = io.open(sys.argv[1], encoding="utf-8", newline="").read()
+    assert "\r" not in orig
+    s = make(orig)
+    v = sys.argv[3] if len(sys.argv) > 3 else None
+    if v == "nosc":
+        s = s.replace('\tselfcheck("first");\n', "").replace('\tselfcheck("last");\n', "")
+        i = s.index("/*\n *  @@SELFCHECK@@")
+        j = s.index("int main(void)\n{\n", i)
+        s = s[:i] + s[j:]
+        s = sub1(s, "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n", "\tif (failures == 0 && cmp_fails == 0)\n")
+        s = sub1(s, "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n", "\treturn (failures || cmp_fails) ? 1 : 0;\n")
+        s = sub1(s, "\tif (!sc_g && failures == 0)\n\t\tfailures = 1;\n", "")
+    elif v == "incdel_reset":
+        s = sub1(s, *D.INCDEL)
+        s = sub1(s, *VARIANTS["reset"])
+    elif v == "move_repin":
+        s = move_repin(s)
+    elif v == "nopin":
+        s = nopin(s)
+    elif v == "nopin_move_repin":
+        s = move_repin(nopin(s))
+    elif v == "condreset":
+        #  the disclosed class (3), conditional form: both tallies reset when they are equal, at the trailer
+        s = sub1(s, RECON, "\tif (failures == cmp_fails)\n\t\tfailures = cmp_fails = 0;\n" + RECON)
+    elif v in D.COMBOS:
+        for part in D.COMBOS[v]:
+            s = sub1(s, *VARIANTS[part])
+    elif v:
+        s = sub1(s, *VARIANTS[v])
+    io.open(sys.argv[2], "w", encoding="utf-8", newline="").write(s)
+    print("xform551e ->", sys.argv[2], v or "")
+
+
+if __name__ == "__main__":
+    main()

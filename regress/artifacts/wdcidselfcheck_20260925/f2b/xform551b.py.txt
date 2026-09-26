@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""#551 revision b -- the pass-2 repairs the Opus 5.5 seat MEASURED (regress/artifacts/wdcidselfcheck_20260925/
+opus5_p2.md and opus551_measured_p2/), applied on top of xform551.py's design:
+
+  * two WIDE row_cmp() probes, each disjunct wrong only above bit 32 -- (2^32, 0, 2^32) and (2^32, 2^32, 0) -- so a
+    narrowed row_cmp() (uint16_t operands) or a value-keyed one (`&& sectors<4') reds, and "each operand zero and
+    past 32 bits" becomes true of row_cmp() too (its probe operands never exceeded 3);
+  * the run's VERDICT depends on the self-check: PASS needs the flag only the G arm sets, so "forced failure removed
+    AND a comparator stubbed" makes the RUN fail, not only gate 2's G row (measured: whole log byte-identical on
+    seven device variants);
+  * the disclosure rewritten: "before its rows ++" and "except the self-mutant's" were measured false.
+
+usage: xform551b.py <orig diff_wdc_identify.c> <out.c> [variant]
+  variants: xform551.py's, plus u16 sect4 wrap want165 postinc name scnoforce_chkstub"""
+import io
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xform551 as X   # noqa: E402
+
+BS = chr(92)
+NL = BS + "n"
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("REFUSED: %d matches for %r" % (n, old[:70]))
+    return s.replace(old, new)
+
+
+OLD_COMMENT = (" *  WHAT IT COVERS: the rows that go through chk() and row_cmp() -- the last run prints how many calls\n"
+               " *  each comparator took.  Of chk()'s calls, the ones in row_ring_occupancy_sound() that pass a\n"
+               " *  `cond ? 1 : 0' (or `? 0 : 1') hand it a VERDICT computed at the call, not a comparison, and every\n"
+               " *  other row in this file compares inline: neither is covered by this block.  NOT CAUGHT, DISCLOSED: a\n"
+               " *  rows-keyed or name-keyed test inside either comparator, placed before its `rows ++', keeps every gate-2\n"
+               " *  row green while silencing any covered row except the self-mutant's -- the first-and-last placement\n"
+               " *  does not close it (after the increment, the same test reds through `failures').  Reviewed in the\n"
+               " *  differential, not chased.  No line this block prints carries the self-mutant row's text or \"high\n"
+               " *  byte\" (gate 2 counts both), and gate 2's G text is printed ONCE, by the last run, only when both runs\n"
+               " *  passed.  The rest of the file is filed as `wdcidcomparators' (#551; owner ruling 2026-09-25).\n")
+NEW_COMMENT = (" *  WHAT IT COVERS: the rows that go through chk() and row_cmp() -- the last run prints how many calls\n"
+               " *  each comparator took.  Of chk()'s calls, the ones in row_ring_occupancy_sound() that pass a\n"
+               " *  `cond ? 1 : 0' (or `? 0 : 1') hand it a VERDICT computed at the call, not a comparison, and every\n"
+               " *  other row in this file compares inline: neither is covered by this block.  \"Covered\" means the\n"
+               " *  COMPARATOR is live, not that a row is.  NOT CAUGHT, DISCLOSED: a test keyed on a value, a name or a\n"
+               " *  position the probes do not present, in either comparator, and an edit of the code that FEEDS them\n"
+               " *  (row() handing row_cmp() its own want), keep every gate-2 row green -- measured, pass 2 of #551;\n"
+               " *  reviewed in the differential, not chased.  No line this block prints carries the self-mutant row's\n"
+               " *  text or \"high byte\" (gate 2 counts both).  Gate 2's G text is printed ONCE, by the last run, only\n"
+               " *  when both runs passed -- and the run's own PASS needs that line (sc_g), so a self-check that failed\n"
+               " *  fails the run even if its forced failure is gone.  The rest of the file is filed as\n"
+               " *  `wdcidcomparators' (#551; owner ruling 2026-09-25).\n")
+OLD_PROBES = ("\tstatic const uint64_t rw[] = { 2, 2, 1, 3 };\n"
+              "\tstatic const uint64_t r57[] = { 1, 2, 0, 3 };\n"
+              "\tstatic const uint64_t r60[] = { 2, 1, 0, 3 };\n")
+NEW_PROBES = ("\tstatic const uint64_t rw[] = { 2, 2, 1, 3, 0x100000000ULL, 0x100000000ULL };\n"
+              "\tstatic const uint64_t r57[] = { 1, 2, 0, 3, 0, 0x100000000ULL };\n"
+              "\tstatic const uint64_t r60[] = { 2, 1, 0, 3, 0x100000000ULL, 0 };\n")
+OLD_LOOP = "\tfor (i = 0; i < 4; i++, n++) {\n\t\trow_cmp("
+NEW_LOOP = "\tfor (i = 0; i < 6; i++, n++) {\n\t\trow_cmp("
+DECL = "static int sc_first_bad = -1;\t/*  -1 until the FIRST run has happened  */\n"
+NEW_DECL = DECL + "static int sc_g;\t/*  set ONLY where gate 2's G line prints: the run's PASS needs it  */\n"
+G_ARM = ("\tif (!sc_bad && sc_first_bad == 0)\n"
+         "\t\tprintf(\"  ok    SELFCHECK the comparator can still fail (first and last)" + NL + "\");\n"
+         "\telse if (!sc_bad)\n")
+NEW_G_ARM = ("\tif (!sc_bad && sc_first_bad == 0) {\n"
+             "\t\tsc_g = 1;\n"
+             "\t\tprintf(\"  ok    SELFCHECK the comparator can still fail (first and last)" + NL + "\");\n"
+             "\t} else if (!sc_bad)\n")
+VERDICT = ("\tif (failures == 0)\n\t\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n"
+           "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n\treturn failures ? 1 : 0;\n")
+NEW_VERDICT = ("\tif (failures == 0 && sc_g)\n\t\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n"
+               "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n\treturn (failures || !sc_g) ? 1 : 0;\n")
+
+
+LAST_NOFIRST = "\t\tprintf(\"  FAIL  SELFCHECK(last): the first run did not pass" + NL + "\");\n"
+NEW_LAST_NOFIRST = "\t\tprintf(\"  FAIL  SELFCHECK(last): the first run did not run, or did not pass" + NL + "\");\n"
+
+
+def make(orig):
+    s = X.make(orig)
+    s = sub1(s, LAST_NOFIRST, NEW_LAST_NOFIRST)
+    s = sub1(s, OLD_COMMENT, NEW_COMMENT)
+    s = sub1(s, OLD_PROBES, NEW_PROBES)
+    s = sub1(s, OLD_LOOP, NEW_LOOP)
+    s = sub1(s, DECL, NEW_DECL)
+    s = sub1(s, G_ARM, NEW_G_ARM)
+    s = sub1(s, VERDICT, NEW_VERDICT)
+    return s
+
+
+CHK_IF = "\tif (got != want) {\n\t\tfailures ++;"
+ROWCMP_SIG = "static void row_cmp(const char *why, uint64_t sectors, uint64_t got57, uint64_t got60)"
+ROWCMP_IF = "\tif (got57 != sectors || got60 != sectors) {\n"
+ROW_CALL = "\trow_cmp(why, sectors, got57, got60);\n"
+FORCE = "\t\tfailures = sc_f + 1; rows = sc_r;\n\t}\n\tif (where[0] == 'f') {\n"
+VARIANTS = dict(X.VARIANTS)
+VARIANTS.update({
+    "u16": (ROWCMP_SIG, "static void row_cmp(const char *why, uint16_t sectors, uint16_t got57, uint16_t got60)"),
+    "sect4": (ROWCMP_IF, "\tif ((got57 != sectors || got60 != sectors) && sectors<4) {\n"),
+    "wrap": (ROW_CALL, "\trow_cmp(why, sectors, sectors, sectors);\n"),
+    "want165": (CHK_IF, "\tif (got != want && want-165) {\n\t\tfailures ++;"),
+    "postinc": (CHK_IF, "\tif (got != want && (rows & 127) < 2) {\n\t\tfailures ++;"),
+    "name": (CHK_IF, "\tif (got != want && *name == '@') {\n\t\tfailures ++;"),
+})
+COMBOS = dict(X.COMBOS)
+
+
+def main():
+    orig = io.open(sys.argv[1], encoding="utf-8", newline="").read()
+    assert "\r" not in orig
+    s = make(orig)
+    v = sys.argv[3] if len(sys.argv) > 3 else None
+    if v == "nosc":
+        #  the block deleted AS A DELETION WOULD BE WRITTEN: the block, its two calls, and the verdict's use of
+        #  its flag (without the last, the file does not compile -- which gate 2 would also catch, but a build
+        #  failure is not the control's question)
+        s = s.replace('\tselfcheck("first");\n', "").replace('\tselfcheck("last");\n', "")
+        i = s.index("/*\n *  @@SELFCHECK@@")
+        j = s.index("int main(void)\n{\n", i)
+        s = s[:i] + s[j:]
+        s = sub1(s, NEW_VERDICT, VERDICT)
+    elif v in COMBOS:
+        for part in COMBOS[v]:
+            s = sub1(s, *VARIANTS[part])
+    elif v:
+        s = sub1(s, *VARIANTS[v])
+    io.open(sys.argv[2], "w", encoding="utf-8", newline="").write(s)
+    print("xform551b ->", sys.argv[2], v or "")
+
+
+if __name__ == "__main__":
+    main()

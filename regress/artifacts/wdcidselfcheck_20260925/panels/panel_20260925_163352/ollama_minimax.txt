@@ -1,0 +1,87 @@
+VERDICT #550: SHIP WITH CHANGES
+VERDICT #551: SHIP WITH CHANGES
+
+**Count of wrong dispositions: 0.** Every disposition in section 2 is either correctly applied, correctly left unapplied for a stated owner-ruling reason, or correctly noted as uncheckable from the packet. I list the uncheckables and one new finding below.
+
+---
+
+### 1. Disposition audit (READ = from packet; REASONED = from the inlined text)
+
+All 29 dispositions (P1–P19, Q1–Q10) survive scrutiny against the inlined evidence. Specific call-outs the author flagged:
+
+- **P14 (no change):** REASONED. The "cheapest" axis is discharge cost (adapting gate_arm.sh's existing seven-probe pattern for ip30 vs. a new harness round for alphabook1), not run-time. The ordering ppc 10-08 → ip30 10-15 → alpha 10-22 is consistent with that axis. Acceptable.
+- **P15 (recorded, no edit):** REASONED. An owner ruling against wiring this week is exactly the kind of constraint a disposition should record without overriding. Correct.
+- **P19 (not applicable):** REASONED. WSL is LP64; the `long`→`long long` is a no-op there. The F2 ruling kept it for that reason. Correct.
+- **Q2/Q3 (disclosed, not closed):** REASONED. The disclosure rewrite in 4c/4d accurately names both escape classes without false claims. Choosing to disclose rather than close is consistent with the owner ruling and with the "file the rest" instruction.
+- **Q9 (no change):** The deriver `grep -cE '\? [01] : [01], 1\);'` is well-formed regex (escaped parens and semicolon, character classes for the ternary arms). I cannot run it, but its shape is correct.
+
+### 2. Premises I cannot settle from the packet (name them, don't guess)
+
+- **P9's `gxemul -V` semantics.** The brief says the sweep "execs `-V -E "$t" -e "$s"`" and the fix turns on "gate 9 only constructs one". Whether `-V` means "construct but do not boot" is a gxemul-flag fact, not derivable from the diffs or the brief. The author states it as checked; I record it as not independently verifiable here. **Single fact that would settle it:** gxemul's `-V` flag documented behaviour, or a measured run showing alphabook1 constructed but not execed under gate 9.
+- **P5's claim that `(a)` in `wdcaltoffleg` is an EXIT STATUS** and that the rows' fix-side wants already exist. These are queue-row content claims. Not in the packet.
+- **P6's claim that "the probe takes any image as argv[2] and applies the ciR: prefix itself"** is a probe-code claim. Not in the packet.
+- **P7's claim that "Its scored rows call none of want_rldimi, want_rlwimi, want_rlwinm or mask32"** is a probe-code claim. Not in the packet.
+- **P8's "568 s" and "24/24"** are cited to preserved runs in `exemptredate_20260925/opus550_measured_p2/p1_runs/` and to inline greps. The greps are stated; the runs are cited but not inlined. I cannot re-derive the wall-clock number, only confirm the grep commands are well-formed.
+- **P10's verbatim-quote corrections** are stated as checked against HEAD. Not in the packet.
+- **Q9's "prints 8"** is stated as checked. Not in the packet.
+
+### 3. The Q5 disagreement (section 3)
+
+**The flag is correct; ADOPT.** The code path:
+
+```c
+static int sc_g;   /* initialised 0, set ONLY in the G-line arm */
+...
+if (!sc_bad && sc_first_bad == 0) { sc_g = 1; printf("ok SELFCHECK ...\n"); }
+...
+if (failures == 0 && sc_g) printf("WDC_IDENTIFY_PASS\n");
+return (failures || !sc_g) ? 1 : 0;
+```
+
+- `sc_g` is set in exactly one place, exactly where the G line prints — which is exactly when the self-check passed AND the first run passed.
+- For a healthy run, `sc_g == 1` at verdict time; PASS prints, exit 0. The 14-of-14 byte-identity (modulo the SELFCHECK stanza) at -O2 and -O0 across seven device variants is consistent with that: `sc_g` does not appear in any output line, only in the control flow.
+- grok's "failures++ on the success path" objection does not apply: `sc_g` is not a failure increment, it is a separate gate. Healthy runs are unchanged because `sc_g` is 1 for them.
+- agy's "that is precisely why the G check was created" answers the wrong question. The G check ensures gate 2 sees the line; the run's own verdict needs a separate mechanism because nothing reads gate 2's log from inside the run.
+
+**To grok and agy specifically:** there is no case where `sc_g` changes a healthy run — the only assignment is in the `!sc_bad && sc_first_bad == 0` arm, which is exactly the healthy-second-run arm. The run's verdict SHOULD go red when its self-check failed; a consumer (human, trailer-grep, CI) reading `WDC_IDENTIFY_PASS` with exit 0 is being lied to otherwise. The byte-identity measurement is the proof that the cost is zero on the green path.
+
+### 4. New false sentences introduced by the repair?
+
+I diffed each hunk against what it replaced, checking the correction's claims:
+
+- **4a** "matches only gate 9's construction sweep" — VERIFIED TRUE against the inlined evidence. `gate_arm.sh`'s seven probe lines are `python3 sgi_*` (per the inline deriver); they contain neither the literal string `E sgi` (with capital E) nor `-e ip30` (with hyphen-e). `gate_asan_sweep.sh`'s `-E sgi -e "$s"` contains both. The grep matches only gate 9.
+- **4a** "gate_arm.sh already runs seven `-E sgi -e ip32' cold-debugger probes" — TRUE: the probes themselves exec gxemul with those flags; the strings appear in the probe exec, not the gate script, which is why the original grep didn't match gate_arm.sh.
+- **4b** "24 chk() calls, 16 got/want and 8 handing it a 0/1 verdict" — consistent with Q6's rewrite ("16 of chk()'s 24 calls") and Q9's deriver (the 8 ternary verdict calls). Internally consistent.
+- **4c** "Gate 2's G text is printed ONCE, by the last run, only when both runs passed" — TRUE from the code: `sc_g` is set only in the second-call branch, only when `!sc_bad && sc_first_bad == 0`.
+- **4d** "16 of chk()'s 24 calls and all 8 of row_cmp()'s ... chk()'s other 8 are handed a 0/1 verdict" — arithmetically consistent (16+8=24, 16+8+8+96=128).
+
+**No new false sentence found.** Every correction quotes or replaces text; none I checked introduces a claim that contradicts the inlined evidence.
+
+### 5. Q4 — the smallest edit to #551b that keeps gate 2 green while a covered row can no longer fail, outside the disclosed classes
+
+**Answer: change `!=` to `<` in `row_cmp()`.** One character.
+
+Reasoning, REASONED from the probe arrays in 4c:
+
+All six `row_cmp()` probes have every operand ≤ the reference (`rw`):
+
+| i | rw | r57 | r60 | r57 > rw? | r60 > rw? |
+|---|----|-----|-----|-----------|-----------|
+| 0 | 2 | 1 | 2 | no | no |
+| 1 | 2 | 2 | 1 | no | no |
+| 2 | 1 | 0 | 0 | no | no |
+| 3 | 3 | 3 | 3 | no | no |
+| 4 | 2³² | 0 | 2³² | no | no |
+| 5 | 2³² | 2³² | 0 | no | no |
+
+For every probe, `r57 < rw || r60 < rw` evaluates to the **same boolean** as `r57 != rw || r60 != rw`, because no operand exceeds its reference. The self-check's `sc_bad` accounting is therefore undisturbed, the G line prints, `sc_g` is set, `WDC_IDENTIFY_PASS` and exit 0 are emitted. Gate 2's G row grep finds its line; H row grep finds `@@SELFCHECK@@`; `grep -c 'high byte'` is unchanged (the self-mutant row is untouched); the self-mutant lane's pristine-line count is unchanged (in-place edit).
+
+But the comparator's semantic is broken: `got > want` no longer registers as a mismatch. A covered row whose `got` exceeds its `want` now passes silently. That is exactly "a covered row can no longer fail", and it is outside the disclosed classes (no value/name/position-keyed test is added; no feed edit; the comparator itself is edited).
+
+The wide probes added in Q4 do **not** catch this — they were sized to catch `uint16_t` narrowing and `sectors<4` gating, not the `!=`-vs-`<` distinction, and as the table shows they cannot, because no probe has `got > want`.
+
+A one-probe fix would close it: add a seventh `row_cmp` probe with `r57 > rw` (e.g., rw=1, r57=2, r60=1 → disjunct true under `!=`, false under `<`). That is a separate change, not part of the current repair; the repair as it stands ships with this hole.
+
+### 6. One thing found while verifying
+
+The Q4 hole above is the one finding the brief does not name. The author asked: "If, while verifying a claim, you found something ELSE — say so." This is it. It does not block ship (it is outside the disclosed classes, and disclosing it would be consistent with the "file the rest" pattern), but it should be filed under `wdcidcomparators` alongside the other Q4-adjacent items, and a one-probe patch is the natural follow-up.

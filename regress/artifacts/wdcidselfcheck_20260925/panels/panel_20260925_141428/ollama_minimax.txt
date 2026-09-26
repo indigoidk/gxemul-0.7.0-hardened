@@ -1,0 +1,103 @@
+VERDICT: PROCEED WITH CHANGES
+
+The design is engineering-defensible but misaligned with the exemption's stated reason at one load-bearing point, and several gaps in the proposal must be closed before the edit begins. None of the gaps are unfixable; all are fixable in this design pass.
+
+---
+
+**1.  LEAD: option A is a verdict helper, not a comparator, and the exemption's structural complaint is not what gets discharged.**  [REASONED from READ exemption wording]
+
+The exemption (verbatim, READ): "NOTHING TO FEED A MISMATCH TO. Read every row function ... ZERO-ARGUMENT with the expected value hardcoded in the body, and row(why, sectors) derives its expectation FROM ITS INPUT (`got57 != sectors`), so changing the input changes the answer too and no mismatch can be produced."  The structural complaint is that row functions cannot accept an external `(got, want)` pair; they have their expected value baked in or computed from the same input being tested.  The fix the exemption describes is "the nine row functions refactored onto a shared helper" -- and "a round, not a line."
+
+`bad(int c)` takes a single boolean verdict, not a `(got, want)` pair.  The sentinel feeds `bad(1)` and `bad(0)`, which proves only that `bad()` is wired to `failures`.  It does NOT prove that any row's `<COND>` correctly expresses the test, because `<COND>` stays inside each row's body.  The brief acknowledges this ("DOES NOT COVER: any one row's condition expression"), but the framing -- "the thing fed is the verdict helper, not a comparison" -- is itself the gap: the exemption's reason was about comparisons, and option A tests the verdict path.
+
+Two coherent ways to close this before edit:
+
+* (a) Drop to **option B (typed comparators)** for the simple `x != k` sites where a `chk_u64(why, got, want)` can subsume both the comparison AND the verdict; keep `bad()` only for the compound sites.  This actually creates a comparator (closer to what the exemption asked for), at the cost of printf-string changes that the equivalence proof must cover site by site.
+* (b) Stay on A, but rewrite the COVERED exception comment to say "verdict-path coverage only; row conditions are author-verified, per the `sh4_tmu` 12-of-18 precedent."  This is honest but it is a *different* exception from the one currently in `SC_EXEMPT`, and the gate-2 panel will see the change of reason.
+
+The brief should pick (a) or (b) explicitly.  As written, it picks (b) implicitly without updating the comment.
+
+---
+
+**2.  Sentinel placement is unspecified, and it matters against a stateful `bad()`.**  [REASONED]
+
+The template runs the sentinel FIRST and restores `failures`/`rows`.  The brief says the option-A sentinel feeds `bad(1)` and `bad(0)` and "rows ++ is left where it is," but does not say FIRST, LAST, or BOTH, nor what gets restored.  The rows-count is naturally invariant (the sentinel never touches it), so only `failures` needs restoration.
+
+Placement matters for vacuity.  A `bad()` body that, e.g., only fires when a global flag is set will pass a FIRST run (flag set during the sentinel, fires correctly) but be silently inert for every row call.  LAST placement catches this: rows run first, then the sentinel exercises the post-row state.  Recommendation: **run the sentinel LAST** (or BOTH), and restore `failures` to its pre-sentinel value.
+
+---
+
+**3.  The proposed vacuity controls do not catch a stateful-body attack on `bad()`.**  [REASONED]
+
+The proposed controls are: stub `bad()` to `return 0` (must red the SELFCHECK); stub it to ignore `c` (must red it); delete the SELFCHECK from source (must red H and G).  All three replace `bad()`'s body with a simpler version, so any flag, counter, or state inside the body is gone in the stub.  A `bad()` that includes `static int in_sentinel; if (!in_sentinel) return 0;` passes the stubs (the stub replaces the whole function) and passes the sentinel (sentinel sets the flag, fires correctly), while silently making every row print "ok" regardless of condition.  Defense is code review of `bad()`'s actual body, not a runtime check.  State this in the design -- "the SELFCHECK tests `bad()`'s contract under naive implementations; the body itself is reviewed" -- so the panel records the security model honestly.
+
+---
+
+**4.  The "9 row functions" figure is stale.**  [REASONED from READ section 1 vs section 2]
+
+Section 1 quotes the exemption referring to "the nine row functions."  Section 2 says today: 128 rows, 95 `failures ++` sites in 59 functions.  The exemption's reason (zero-argument with hardcoded expected, or input-derived expectation) still applies at the 95-site level, but the figure in the SC_EXEMPT entry is an order of magnitude off.  The new exception (whether COVERED-with-A or a refreshed EXEMPT-while-A-lands) should be filed at the current scale, or gate 2's panel will see the 9-vs-95 mismatch.
+
+---
+
+**5.  Mutant set is underspecified.**  [REASONED from READ brief]
+
+The brief proposes "at least one mutant per group of rows" without defining groups, and names only two mutants (the self-mutant "geometry words carry their high byte" and the `% 255` revert reddening seven rows).  Two mutants against 95 sites in 59 functions with heterogeneous conditions is thin.  The brief's standard -- byte-identical stdout except the SELFCHECK line, at -O0 and -O2, against each mutant -- is the right standard, but it only constrains the mutant it is run against.  A `<COND>` whose truth value no reachable mutant perturbs is uncovered by the equivalence proof.  Either enumerate mutants so that every `failures ++` site is reachable by at least one (and list them in the design), or write down explicitly which sites are author-verified-only and accept that those sites' `<COND>` expressions carry no self-check.
+
+---
+
+**6.  The 14 multi-line / braceless condition sites warrant row-by-row review even under the equivalence proof.**  [REASONED from READ brief]
+
+14 of 95 sites have multi-line or braceless conditions.  A mechanical wrap into `bad(<COND>)` over a multi-line condition is where precedence bugs and brace-mismatch bugs hide.  The equivalence proof catches output divergence against the mutants in the matrix, not against all reachable inputs -- a condition whose truth value is invariant across the named mutants could still be mis-wrapped without any of them noticing.  Row-by-row review of these 14 is a reasonable insurance cost; the other 81 sites are mechanical enough that the proof carries them.
+
+---
+
+**7.  `@@SELFCHECK@@` placement in source and in the SELFCHECK printf text must be specified.**  [REASONED from READ gate-2 checks]
+
+Gate 2's H check greps the SOURCE for the literal token `@@SELFCHECK@@`; gate 2's G check greps the LOG for the literal string `SELFCHECK the comparator can still fail`; `selfmutant.py` filters LOG lines carrying `@@SELFCHECK@@`.  Under option A, the sentinel calls are `bad(1)` and `bad(0)` -- these calls do not naturally carry either token.  Specify explicitly:
+
+* Where `@@SELFCHECK@@` appears in source (e.g., a comment line `/* @@SELFCHECK@@ verdict-path */`, or inside the sentinel's printf string).
+* What the SELFCHECK printf text is on success vs failure (template: `ok    SELFCHECK the comparator can still fail` or a `FAIL ...` line).
+* That the SELFCHECK printf itself carries the token `@@SELFCHECK@@` so `selfmutant.py`'s filter catches it.
+
+None of this is hard, but the brief does not pin it down.
+
+---
+
+**8.  Deadline realism (Q5) and pre-committed fallback.**  [REASONED from READ owner ruling]
+
+Owner ruling dated 2026-09-25; deadline 2026-09-28.  A 95-site mechanical edit + equivalence proof across -O0/-O2 and a (currently unspecified) mutant set + review + merge in three days is tight.  The brief asks which fallback is honest.  Pre-commit **before the edit begins** rather than at the deadline:
+
+* If A's proof is not runnable by 2026-09-27 EOD, ship **option C** as a fallback *only if* C covers a stated fraction (e.g., "the 4 sites in `row(why, sectors)` plus the 14 compound sites, totalling 18 of 95") AND the new exception comment says what fraction and what kind.
+* If neither A nor C ships, **let the gate-2 row go red and say so in the panel note**.  That is more honest than slipping a partial in under "COVERAGE LANDED" and having it not actually exercise a comparator.
+
+---
+
+**9.  Tree-wide precedent for the choice between A and B is not checkable from the packet.**  [NOT CHECKABLE]
+
+The brief asks "is there a member not named here ... that the tree already has an idiom for? Grep the other `diff_*.c`."  I cannot grep.  If other `diff_*.c` files use a `chk_u64`/`chk_str` typed-comparator family, that supports B over A; if they use a `bad(c)` verdict helper, that supports A.  **Naming this as a premise the panel should check before committing to A.**  The single fact that would settle it: the existence and prevalence of a typed-comparator idiom across `regress/diff_*.c`.
+
+---
+
+**10.  The "rows != 128" identity check works under option A; no issue.**  [READ]
+
+96 `rows ++` sites for 128 rows means 32 rows are counted by other means (loops, indirect accumulation).  Under option A the sentinel never touches `rows` (the brief says `rows ++` is left in place), so the row-count identity holds regardless of sentinel placement.  The 32 indirectly-counted rows are unaffected.  Good as-is.
+
+---
+
+**11.  The `sh4_tmu` 12-of-18 precedent supports partial coverage if option A lands that way.**  [REASONED from READ brief]
+
+Gate 2 already accepts a SELFCHECK that does not cover every row (the `sh4_tmu` comment records 12 of 18).  Option A's 95-of-128 (74%) is in the same spirit.  This is a useful precedent to cite when the COVERED exception comment is rewritten per finding 1(b).
+
+---
+
+**Summary of what must change before edit begins:**
+
+* Pick (a) drop to B for simple sites, or (b) rewrite the COVERED comment for verdict-path-only.  As written, the brief does (b) implicitly without the comment update.
+* Specify sentinel placement (recommend LAST) and the failure-restore behaviour.
+* State explicitly that the SELFCHECK tests `bad()`'s contract under naive stubs, and that the body itself is code-reviewed (do not pretend the vacuity controls cover a stateful-body attack).
+* Reconcile the 9-vs-95 figure in any new SC_EXEMPT or COVERED entry.
+* Enumerate the mutant set concretely, or list the sites that are author-verified-only.
+* Row-by-row review of the 14 multi-line sites regardless of the equivalence proof.
+* Pin down where `@@SELFCHECK@@` lives in source and in the SELFCHECK printf.
+* Pre-commit the fallback (option C with stated fraction, or let the row go red) before 2026-09-27.
+* Name "tree-wide `diff_*.c` precedent" as a premise to be checked; do not let it decide A vs B silently.

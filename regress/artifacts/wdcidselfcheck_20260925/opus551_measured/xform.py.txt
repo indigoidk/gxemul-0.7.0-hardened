@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""#551 pass-1 prototype: option A's mechanical wrap of diff_wdc_identify.c.
+
+usage: xform.py census <orig.c>
+       xform.py make <orig.c> <out.c> <variant> [<site-line> ...]
+
+Everything is done on a comment/string-MASKED copy for structure, and the edits are
+applied to the original text at the same offsets, so comments and strings never
+confuse the parse.
+"""
+import io
+import re
+import sys
+
+BS = chr(92)
+
+
+def mask(src):
+    out = list(src)
+    i, n = 0, len(src)
+    while i < n:
+        if src.startswith('/*', i):
+            j = src.find('*/', i + 2)
+            j = n if j < 0 else j + 2
+            for k in range(i, j):
+                if out[k] != '\n':
+                    out[k] = ' '
+            i = j
+        elif src.startswith('//', i):
+            j = src.find('\n', i)
+            j = n if j < 0 else j
+            for k in range(i, j):
+                out[k] = ' '
+            i = j
+        elif src[i] in '"\'':
+            q = src[i]
+            j = i + 1
+            while j < n and src[j] != q:
+                j += 2 if src[j] == BS else 1
+            for k in range(i + 1, j):
+                if out[k] != '\n':
+                    out[k] = ' '
+            i = j + 1
+        else:
+            i += 1
+    return ''.join(out)
+
+
+def match(m, i, o, c):
+    d = 0
+    for j in range(i, len(m)):
+        if m[j] == o:
+            d += 1
+        elif m[j] == c:
+            d -= 1
+            if d == 0:
+                return j
+    raise ValueError("unbalanced at %d" % i)
+
+
+def lineno(src, p):
+    return src.count('\n', 0, p) + 1
+
+
+FUNC = re.compile(r'^[A-Za-z_][^\n;]*?\b([A-Za-z_]\w*)\s*\(', re.M)
+
+
+def func_of(m, p):
+    best = None
+    for f in FUNC.finditer(m, 0, p):
+        # a definition: the next '{' after the ')' at column 0
+        best = f.group(1)
+    return best
+
+
+def sites(src):
+    m = mask(src)
+    res = []
+    for s in re.finditer(r'\bfailures\s*\+\+\s*;', m):
+        p = s.start()
+        gov = None
+        for c in reversed(list(re.finditer(r'\bif\s*\(', m[:p]))):
+            lp = m.index('(', c.start())
+            rp = match(m, lp, '(', ')')
+            q = rp + 1
+            while m[q] in ' \t\n':
+                q += 1
+            if m[q] == '{':
+                rb = match(m, q, '{', '}')
+                if rb < p:
+                    # is p in this if's ELSE branch?  (inverted polarity)
+                    r = rb + 1
+                    while m[r] in ' \t\n':
+                        r += 1
+                    if m.startswith('else', r):
+                        r2 = r + 4
+                        while m[r2] in ' \t\n':
+                            r2 += 1
+                        end = match(m, r2, '{', '}') if m[r2] == '{' else m.index(';', r2)
+                        if r2 <= p <= end:
+                            gov = ('INVERTED', c.start(), lp, rp, q, end)
+                            break
+                    continue
+                depth = 0
+                for k in range(q, p):
+                    if m[k] == '{':
+                        depth += 1
+                    elif m[k] == '}':
+                        depth -= 1
+                if depth != 1:
+                    gov = ('NESTED', c.start(), lp, rp, q, rb)
+                    break
+                gov = ('BRACED', c.start(), lp, rp, q, rb)
+                break
+            else:
+                if q == p:
+                    gov = ('BRACELESS', c.start(), lp, rp, q, s.end())
+                    break
+                continue
+        if gov is None:
+            raise SystemExit("no governing if for site at line %d" % lineno(src, p))
+        kind, ifpos, lp, rp, q, end = gov
+        before = m[q:p]
+        hazards = []
+        if re.search(r'\bfailures\b', before):
+            hazards.append('reads-failures-before-site')
+        if re.search(r'\b(return|break|continue|goto|_exit|exit|abort|longjmp)\b', before):
+            hazards.append('control-transfer-before-site')
+        res.append(dict(kind=kind, site=p, site_end=s.end(), ifpos=ifpos, lp=lp, rp=rp,
+                        ifline=lineno(src, ifpos), siteline=lineno(src, p),
+                        multiline=(lineno(src, lp) != lineno(src, rp)),
+                        func=func_of(m, ifpos), cond=' '.join(src[lp + 1:rp].split()),
+                        hazards=hazards))
+    return res
+
+
+def census(path):
+    src = io.open(path, encoding='utf-8', newline='').read()
+    m = mask(src)
+    ss = sites(src)
+    funcs = []
+    for s in ss:
+        if s['func'] not in funcs:
+            funcs.append(s['func'])
+    print("failures++ statements (code, not comments):", len(ss))
+    print("rows++ statements (code):", len(re.findall(r'\brows\s*\+\+', m)),
+          " (raw text incl. comments:", len(re.findall(r'rows *\+\+', src)), ")")
+    print("functions holding a site:", len(funcs))
+    kinds = {}
+    for s in ss:
+        kinds[s['kind']] = kinds.get(s['kind'], 0) + 1
+    print("site kinds:", kinds)
+    ml = [s for s in ss if s['multiline']]
+    bl = [s for s in ss if s['kind'] == 'BRACELESS']
+    print("multi-line conditions:", len(ml), [s['ifline'] for s in ml])
+    print("braceless THEN (bare `failures ++;`):", len(bl), [s['ifline'] for s in bl])
+    print("multi-line OR braceless:", len(set(s['ifline'] for s in ml + bl)))
+    print("hazards:", [(s['ifline'], s['hazards']) for s in ss if s['hazards']])
+    # locals named `bad` in site functions
+    badf = []
+    for f in re.finditer(r'^(?:static\s+)?\w[^\n;]*?\b(\w+)\s*\([^)]*\)\s*\n\{', m, re.M):
+        body_start = f.end() - 1
+        body_end = match(m, body_start, '{', '}')
+        if re.search(r'\bint\b[^;]*\bbad\b', m[body_start:body_end]):
+            badf.append(f.group(1))
+    print("functions declaring a local `bad`:", len(badf), badf)
+    nonbool = [(s['ifline'], s['cond']) for s in ss
+               if not re.search(r'[!=<>]=|[<>]|&&|\|\||^!|WIFSIGNALED', s['cond'])]
+    print("site conditions with NO relational/logical operator (value may be non-0/1):",
+          nonbool)
+    for s in ss:
+        print("  site if@%-5d fail@%-5d %-9s %-32s %s" % (
+            s['ifline'], s['siteline'], s['kind'], s['func'], s['cond'][:60]))
+
+
+HELPERS = {
+    # the brief's option A, renamed (see the `bad` collision below)
+    'A':       "static int row_failed(int c)\n{\n\tif (c)\n\t\tfailures ++;\n\treturn c;\n}\n",
+    # the brief's literal spelling
+    'Abad':    "static int bad(int c) { if (c) failures ++; return c; }\n",
+    # escapes of the helper
+    'E_ret0':  "static int row_failed(int c)\n{\n\t(void) c;\n\treturn 0;\n}\n",
+    'E_noret': "static int row_failed(int c)\n{\n\tif (c)\n\t\tfailures ++;\n\treturn 0;\n}\n",
+    'E_nocnt': "static int row_failed(int c)\n{\n\treturn c;\n}\n",
+    'E_eq1':   "static int row_failed(int c)\n{\n\tif (c == 1)\n\t\tfailures ++;\n\treturn c == 1;\n}\n",
+    'E_eq1c':  "static int row_failed(int c)\n{\n\tif (c == 1)\n\t\tfailures ++;\n\treturn c;\n}\n",
+    'E_uchar':"static int row_failed(unsigned char c)\n{\n\tif (c)\n\t\tfailures ++;\n\treturn c;\n}\n",
+    'E_after3': "static int row_failed(int c)\n{\n\tstatic int n;\n\tif (++n > 3)\n\t\treturn 0;\n\tif (c)\n\t\tfailures ++;\n\treturn c;\n}\n",
+    'E_rows':  "static int row_failed(int c)\n{\n\tif (rows && rows < 125)\n\t\treturn 0;\n\tif (c)\n\t\tfailures ++;\n\treturn c;\n}\n",
+}
+
+#  The brief's sentinel: bad(1) must raise failures, bad(0) must not.  FIRST, as the template.
+SC_BRIEF = (
+    "\t/*  @@SELFCHECK@@ (brief form): row_failed(1) must raise failures, row_failed(0) must not.  */\n"
+    "\t{\n"
+    "\t\tint sc_f = failures, sc_bad = 0;\n"
+    "\t\t(void) row_failed(1);\n"
+    "\t\tif (failures <= sc_f)\n\t\t\tsc_bad++;\n"
+    "\t\tfailures = sc_f;\n"
+    "\t\t(void) row_failed(0);\n"
+    "\t\tif (failures != sc_f)\n\t\t\tsc_bad++;\n"
+    "\t\tfailures = sc_f;\n"
+    "\t\tif (sc_bad) {\n"
+    "\t\t\tprintf(\"  FAIL  SELFCHECK the verdict path no longer counts (%d of 2)\" \"" + BS + "n\", sc_bad);\n"
+    "\t\t\tfailures = sc_f + 1;\n"
+    "\t\t} else\n"
+    "\t\t\tprintf(\"  ok    SELFCHECK the comparator can still fail" + BS + "n\");\n"
+    "\t}\n")
+
+#  Hardened: RETURN VALUE and TALLY, both directions, plus a truthy non-1 (the `wide` probe).
+SC_HARD_BODY = (
+    "\t{\n"
+    "\t\tstatic const int sc_in[] = { 1, 0, 2, 0x10000, -1 };\n"
+    "\t\tint sc_f = failures, sc_bad = 0, sc_i;\n"
+    "\t\tfor (sc_i = 0; sc_i < 5; sc_i++) {\n"
+    "\t\t\tint want = sc_in[sc_i] != 0;\n"
+    "\t\t\tint got = row_failed(sc_in[sc_i]) != 0;\n"
+    "\t\t\tif (got != want || failures != sc_f + want)\n\t\t\t\tsc_bad++;\n"
+    "\t\t\tfailures = sc_f;\n"
+    "\t\t}\n"
+    "\t\tif (sc_bad) {\n"
+    "\t\t\tprintf(\"  FAIL  SELFCHECK(%s) the verdict path is broken (%d of 5)\" \"" + BS + "n\", SC_WHERE, sc_bad);\n"
+    "\t\t\tfailures = sc_f + 1;\n"
+    "\t\t} else\n"
+    "\t\t\tprintf(\"  ok    SELFCHECK the comparator can still fail (%s)" + BS + "n\", SC_WHERE);\n"
+    "\t}\n")
+
+
+def sc_hard(where):
+    return ("\t/*  @@SELFCHECK@@ (hardened, " + where + ")  */\n"
+            "#define SC_WHERE \"" + where + "\"\n" + SC_HARD_BODY + "#undef SC_WHERE\n")
+
+
+FORCE_DEF = ("static int force_site = -1;\n"
+             "static int force_(int k, int c) { return (force_site == k && !c) ? 1 : c; }\n")
+
+
+def make(orig, out, variant, extra):
+    src = io.open(orig, encoding='utf-8', newline='').read()
+    ss = sites(src)
+    helper_key = variant.split('+')[0]
+    opts = set(variant.split('+')[1:])
+    wrap = helper_key != 'ORIG'
+    name = 'bad' if helper_key == 'Abad' else 'row_failed'
+    edits = []
+    for idx, s in enumerate(ss, 1):
+        cond_open, cond_close = '', ''
+        if 'force' in opts:
+            cond_open, cond_close = 'force_(%d, ' % idx, ')'
+        skip_wrap = 'drop' in opts and str(s['ifline']) in extra
+        keep_cnt = 'double' in opts and str(s['ifline']) in extra
+        if wrap and not skip_wrap:
+            cond_open = name + '(' + cond_open
+            cond_close = cond_close + ')'
+        if cond_open:
+            edits.append((s['lp'] + 1, 0, cond_open))
+            edits.append((s['rp'], 0, cond_close))
+        if wrap and not keep_cnt:
+            if s['kind'] == 'BRACELESS':
+                edits.append((s['site'], s['site_end'] - s['site'], ';'))
+            else:
+                ls = src.rfind('\n', 0, s['site']) + 1
+                le = src.find('\n', s['site_end'])
+                if src[ls:s['site']].strip() == '' and src[s['site_end']:le].strip() == '':
+                    edits.append((ls, le + 1 - ls, ''))
+                else:
+                    edits.append((s['site'], s['site_end'] - s['site'], ''))
+    anchor = 'static int rows = 0, failures = 0;\n'
+    a = src.index(anchor) + len(anchor)
+    add = ''
+    if 'force' in opts:
+        add += FORCE_DEF
+    if wrap:
+        add += HELPERS[helper_key]
+    edits.append((a, 0, add))
+    hdr = 'printf("ATA IDENTIFY capacity packing (#405), against the REAL dev_wdc.c' + BS + 'n");\n'
+    h = src.index(hdr) + len(hdr)
+    first = ''
+    if 'force' in opts:
+        first += ('\t{ const char *fs = getenv("FORCE_SITE");\n'
+                  '\t  if (fs != NULL) force_site = atoi(fs); }\n')
+    if wrap and 'nosc' not in opts:
+        if 'hard' in opts:
+            first += sc_hard('first')
+        else:
+            first += SC_BRIEF
+    edits.append((h, 0, first))
+    if wrap and 'hard' in opts and 'nosc' not in opts:
+        summ = '\tprintf("' + BS + 'n%d rows, %d failures' + BS + 'n", rows, failures);\n'
+        z = src.index(summ)
+        edits.append((z, 0, sc_hard('last')))
+    edits.sort(key=lambda e: e[0], reverse=True)
+    for pos, ln, txt in edits:
+        src = src[:pos] + txt + src[pos + ln:]
+    io.open(out, 'w', encoding='utf-8', newline='').write(src)
+    print("%s: %d sites, %s" % (out, len(ss), variant))
+
+
+if __name__ == '__main__':
+    if sys.argv[1] == 'census':
+        census(sys.argv[2])
+    else:
+        make(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:])

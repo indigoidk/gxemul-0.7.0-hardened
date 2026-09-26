@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""A candidate closure for the TALLY class: the comparators keep their OWN failure count, the
+self-check restores it with `failures', and PASS needs it at zero.  Plus the tally edit on top."""
+import io, sys
+W = sys.argv[1]
+B = io.open(W + "/final.c", encoding="utf-8", newline="").read()
+def sub1(s, a, b):
+    if s.count(a) != 1:
+        raise SystemExit("anchor count %d: %r" % (s.count(a), a[:70]))
+    return s.replace(a, b)
+s = sub1(B, "static int chk_calls;", "static int cmp_fails;\t/*  the comparators' OWN failure count: PASS needs it at 0  */\nstatic int chk_calls;")
+s = sub1(s, "static int rowcmp_calls;", "static int cmp_fails;\nstatic int rowcmp_calls;") if False else s
+# row_cmp is defined BEFORE chk: declare the counter above row_cmp instead
+s = s.replace("static int cmp_fails;\t/*  the comparators' OWN failure count: PASS needs it at 0  */\nstatic int chk_calls;", "static int chk_calls;")
+s = sub1(s, "static int rowcmp_calls;", "static int rowcmp_calls;\nstatic int cmp_fails;\t/*  the comparators' OWN failure count: PASS needs it at 0  */")
+s = sub1(s, "\tif (got != want) {\n\t\tfailures ++;", "\tif (got != want) {\n\t\tfailures ++; cmp_fails ++;")
+i = s.index("static void row_cmp(")
+j = s.index("\t\tfailures ++;", i)
+s = s[:j] + "\t\tfailures ++; cmp_fails ++;" + s[j + len("\t\tfailures ++;"):]
+s = sub1(s, "int sc_f = failures, sc_r = rows,", "int sc_cf = cmp_fails, sc_f = failures, sc_r = rows,")
+n = s.count("\t\tfailures = sc_f; rows = sc_r;\n")
+if n != 2:
+    raise SystemExit("restore count %d" % n)
+s = s.replace("\t\tfailures = sc_f; rows = sc_r;\n", "\t\tfailures = sc_f; rows = sc_r; cmp_fails = sc_cf;\n")
+s = sub1(s, "\tif (failures == 0 && sc_g)\n", "\tif (failures == 0 && sc_g && !cmp_fails)\n")
+s = sub1(s, "\treturn (failures || !sc_g) ? 1 : 0;\n", "\treturn (failures || !sc_g || cmp_fails) ? 1 : 0;\n")
+io.open(W + "/h/B_cnt.c", "w", encoding="utf-8", newline="").write(s)
+io.open(W + "/h/B_cnt_tally.c", "w", encoding="utf-8", newline="").write(
+    sub1(s, "\trow_ring_occupancy_sound();\n", "\trow_ring_occupancy_sound();\n\tfailures = 0;\n"))
+print("wrote B_cnt B_cnt_tally")

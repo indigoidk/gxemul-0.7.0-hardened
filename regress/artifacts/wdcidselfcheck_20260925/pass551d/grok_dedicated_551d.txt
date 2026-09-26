@@ -1,0 +1,79 @@
+I'll read the #551d brief in full and review only the inlined version of the self-check, since the tree's working copy is earlier.The brief’s premises need checking against the generated #551d file and the gate, not just the write-up. I’ll locate those and walk the checks.The trailer now reads `cmp_fails` directly, so I’m checking whether a predicate that still mentions it can pass when the two counters merely match. I’ll confirm that against the row bodies and the self-mutant helper.VERDICT: SHIP WITH CHANGES
+
+The two-character trailer edit is dead. The closure that replaced it is not. A covered failure increments `failures` and `cmp_fails` together, and the self-mutant row increments only `failures`, so any trailer that scores the difference passes a covered row and still fails geometry.
+
+1. The trailer can score the inline excess, and every listed gate-2 check stays green. The shipped lines are the summary `printf("\n%d rows, %d failures\n", rows, failures);`, `if (failures == 0 && cmp_fails == 0 && sc_g)`, and `return (failures || cmp_fails || !sc_g) ? 1 : 0;` (brief 4b). Replace the three reads of the raw counters with the difference:
+
+```c
+printf("\n%d rows, %d failures\n", rows, failures - cmp_fails);
+if (failures - cmp_fails == 0 && sc_g)
+    printf("WDC_IDENTIFY_PASS\n");
+else
+    printf("WDC_IDENTIFY_FAIL\n");
+return (failures - cmp_fails || !sc_g) ? 1 : 0;
+```
+
+Nothing is assigned. `selfcheck()` is untouched, so its new `cmp_fails` delta checks still pass and it still prints the G line. On a run whose failures all came from the two comparators the difference is 0, `sc_g` is already 1, and the `!sc_g` bump does not fire. The log is `128 rows, 0 failures` and `WDC_IDENTIFY_PASS`, and the process exits 0. The per-row `FAIL` lines still print; the run does not fail. Same observable as the two-character edit.
+
+Walked, not recompiled. This pass was read-only, so there is no new log. The arithmetic below is from the inlined #551d trailer plus the call sites and `word()` in the tree (the #551d diff does not touch those).
+
+The row it silences, as a `row_cmp()` row: `threshold: >>8 byte reaches 255` (`diff_wdc_identify.c:5723`, `row()` into `row_cmp()`). `w57hi` stores 0 at `identify_struct[2 * 57 + 0]`, and `word()` builds that word as `(b0 << 8) | b1`, so bits 8–15 of the sector count drop. Of the eight capacity values, those bits are set in `65280`, `0x12345678`, `0xFF010203`, and `0xFFFFFFFF` (four failures, matching `run551d_r2.out`) and clear in `1`, `255`, `65536`, and `0xFF0000`. Both counters move by 4. The difference is 0.
+
+The same edit silences the `chk()` rows `R6 liveness: DRQ asserted` and `R3 full ring: DRQ still set` (`diff_wdc_identify.c:4884` and `:4892`). `drqring` deletes the DRQ status arm; the packet’s count is 2, both through `chk()`.
+
+Checks this edit survives:
+
+- G. `gate_offline.sh:2347` greps the log for `SELFCHECK the comparator can still fail`. That printf is in `selfcheck()`, before the trailer. The probes still see a delta of 1 on a mismatch and 0 on the two matches (chk probe 4, `7 == 7`; row_cmp probe 3, `3,3,3`).
+- H. `gate_offline.sh:2325` greps the source for `@@SELFCHECK@@`. The token is not in the edited lines.
+- `high byte` count 1. `gate_offline.sh:1877`. The only log line is `row_wide_geometry` (`diff_wdc_identify.c:5556` and `:5560`, one line either way). The edit adds no text. On a pristine run the difference is `0 - 0`, so the summary, the token, and the exit match the shipped file.
+- One `WDC_IDENTIFY_PASS`. `gate_offline.sh:1459`, on the pristine log the gate actually runs. Also `gate_offline.sh:1455` (`[0-9]+ failures` must be 0): pristine stays 0, and a covered-only defect log becomes 0 as well. `set -u` is on and `set -e` is not (`gate_offline.sh:17`); `"$WDCBIN"`’s status is discarded. The edited `return` is what makes the measurement’s `rc` column 0.
+- Self-mutant lane. `selfmutant.py:280` requires a PASS token on the pristine arm. `selfmutant.py:296` requires exactly one `ok`/`FAIL` line containing `geometry words carry their high byte` and not `@@SELFCHECK@@`. `selfmutant.py:366` and `:376` require `WDC_IDENTIFY_FAIL` and a `FAIL` line with that row id; `:353` scores FAIL present, and a non-zero harness exit is still stdout (`:181`). `row_wide_geometry` (`diff_wdc_identify.c:5554`) increments `failures` only. The packet’s self-mutant run is 1 failure. The difference is 1, so the token stays FAIL and the lane stays green.
+
+This is outside the four disclosed classes. The comparators are untouched, so nothing keys on a value, a name, a position, or the self-check phase. `row()` still passes the bytes it read. `selfcheck()` is untouched. Neither tally is written, so it is not a reset of both.
+
+The smaller twin that does the same thing by assignment, `if (failures == cmp_fails) failures = cmp_fails = 0;`, is the disclosed both-tally reset. It keeps the lane only because it fires when the counters are equal and leaves a geometry-only run (`failures == 1`, `cmp_fails == 0`) alone. The measured `reset2` is that class too, placed after `row_ring_occupancy_sound()` and before `row_wide_geometry()` (`xform551c.py`), which is why `MINE_reset2` can be green on drqring and w57hi without swallowing the lane. An unconditional `failures = cmp_fails = 0` at the trailer does swallow it: the mutant arm prints PASS and `selfmutant.py:366` goes red.
+
+Last pass I asked for this closure. Reading `cmp_fails` in the expression does not pin it. `cmp_fails == 0` and `failures - cmp_fails == 0` both read it. Only the first fails a covered row. The probes cannot see the trailer: `selfcheck("last")` restores both tallies and returns before those three lines run.
+
+Other candidates, and the check each one loses:
+
+- `if (cmp_fails >= failures) failures -= cmp_fails;` and a `failures -= cmp_fails;` after the reconciliation. G, H, `high byte`, and the lane survive (geometry makes `cmp_fails > failures` false, so the body does not clear that 1). The PASS check does not: `cmp_fails` stays at the covered count, the shipped `== 0` prints `WDC_IDENTIFY_FAIL`, and the return is 1. Packet: `MINE_recon2` and `MINE_subafter`, `rc=1`, `0 failures`, `0 PASS`, on drqring and w57hi. No row stays silenced.
+- `failures = 0` before the reconciliation. The `>` copy writes `cmp_fails` back into `failures`. Packet: `MINE_reset` on drqring is `rc=1`, `2 failures`, `0 PASS`. No silence.
+- `failures = 0` after the reconciliation, or `cmp_fails = 0` alone. The other counter is still non-zero, so `failures == 0 && cmp_fails == 0` is false. No silence.
+- Delete `cmp_fails ++` in `chk()` (alone or with a `failures` reset). The chk probes require `cmp_fails == sc_cf + (cg[i] != cw[i])`. Four of the five chk probes mismatch, `sc_bad` sticks, `sc_g` stays 0, and `gate_offline.sh:2347` loses the G line. Packet: `MINE_incdel_reset` is red. The same for a `row_cmp()` deletion and the eight row probes.
+- Operator weakenings (`<`, `&& sectors`, a dropped disjunct, `uint16_t`, `&& got`, `sectors < 4`). A probe delta is wrong, `sc_g` stays 0, the G line is absent. Packet rows `MINE_lt`, `MINE_andsect`, `MINE_drop57`, `MINE_drop60`, `MINE_u16`, `MINE_andgot`, `MINE_sect4`.
+- Verdict ignores `failures` and requires only `cmp_fails == 0`. A covered row still fails the run. Geometry (`cmp_fails == 0`, `failures == 1`) prints PASS, so the lane loses `:366`.
+- `#define cmp_fails failures`. Each failure arm increments the one variable twice. The probes expect `+1`. `sc_bad` sticks. The G line is absent.
+- PASS printed whenever `failures == cmp_fails`, with the summary still printing raw `failures`. G, H, `high byte`, the lane, the pristine PASS count, and `rc=0` survive, and drqring would print `WDC_IDENTIFY_PASS`. The defect log still says `2 failures`, so `gate_offline.sh:1455` still sees the row. That is the same family as the edit above, one site shorter, and it leaves the count check alive. The three-site form is the one that also makes `:1455` read 0.
+
+2. F1–F16 and D1–D3.
+
+- F1. REFINE. `recon2` and `subafter` are red under the shipped `== 0` predicate. I re-walked both. The closure is not finished: finding 1 is that same trailer, scoring the difference instead of clearing `failures`.
+- F2. UPHOLD. The inlined `cmp_fails ++` sites are the two failure arms. `cmp_fails = sc_cf` is an assignment, three times.
+- F3. UPHOLD for a reset of `failures` alone. The shipped predicate does reject it wherever it sits. Finding 1 is not that reset.
+- F4. UPHOLD. A missing `cmp_fails ++` fails the new delta check. `MINE_incdel_reset` matches that walk.
+- F5. UPHOLD. `MINE_reset` keeps the probe answers and is red on drqring. "CAN keep" is the true quantifier.
+- F6. UPHOLD. Deleting the block (`MINE_nosc`) and removing the forced failure (`MINE_scnoforce`, and the stub combos) are the measured block edits. The first loses G and H. The combos stay red. No measured green block edit is in the packet.
+- F7. UPHOLD. Both loops and the `sc_bad` arm assign `cmp_fails = sc_cf`.
+- F8. UPHOLD. The gate comment diff matches the C comment. The greps it describes are the ones at `:1459`, `:1877`, `:2325`, `:2347`, and `selfmutant_one` at `:1021`.
+- F9. UPHOLD the rejection. The inlined `cmp_fails ++` next to `if (got != want)` is in `static void chk`. `row()` calls `row_cmp()`.
+- F10. UPHOLD. Stubbed `chk()` plus no forced failure leaves `sc_g == 0` and `failures == 0`; `if (!sc_g && failures == 0) failures = 1;` supplies the 1. Packet: `MINE_scnoforce_chkstub`, `1 failures`, `0 PASS`.
+- F11. UPHOLD the rejection. The replacement lines in the 4d diff still start with "each operand zero and past 32 bits".
+- F12. UPHOLD. `MINE_rows` edits only `chk()`. Pristine is `rc=0`, `1 PASS`. srstbit stays `11 failures`, the same count as `ORIG`, so none of those eleven go through the edited `chk()`.
+- F13. UPHOLD as wording. `run551d_r2.out` line 1 labels `19018ccb` as the MINE file md5. I did not rehash the generated file.
+- F14. UPHOLD the placement, REFINE the wording. `got57 + got60 != 2 * sectors` agrees on all eight probes (including probe 4: `2^32 != 2^33`, and probes 6–7 against want 0) and accepts `sectors 2, got57 3, got60 1`. That is the general finite-probe sentence. Name that one pair in the sentence. Do not add a ninth probe.
+- F15. UPHOLD filing it. A second lane changes `gate_offline.sh`, not this file, and today’s lane is one mutant whose row is inline (`:1021`, `row_wide_geometry`). Finding 1 is not that gap. It has an in-file close: the pass/fail decision has to be a function the probes call. One probe is `(failures, cmp_fails, sc_g) = (1, 1, 1)` must be a failed run. The difference predicate returns success there. `(1, 0, 1)` must stay a failed run, so the geometry arm still fails. `(0, 0, 1)` must stay success, so a healthy run is unchanged.
+- F16. UPHOLD. A SHIP on #551c does not survive `recon2`.
+- D1. UPHOLD. The rewording is right, and it is not still wrong. Alone and below: got57 on probes 0 (`1` vs `2`) and 4 (`0` vs `2^32`); got60 on probes 1 (`1` vs `2`) and 5 (`0` vs `2^32`). Alone and above: got57 on probe 6 (`1` vs `0`); got60 on probe 7 (`1` vs `0`). Probe 2 is both, below. Probe 3 matches.
+- D2. UPHOLD "disclose, do not probe." Name the sum pair. An unnamed predicate was filed again as F14.
+- D3. UPHOLD FILE. The in-file hole left after F1 is finding 1, and a lane is the close for the keyed edits and for the both-tally reset, which the probes never observe.
+
+3. None of the twelve acceptances reverses the finding it accepted. F1’s "FIXED" is the one that does not hold as a finished closure. The two measured edits are red. The trailer class they belong to is not closed. F14 and F15, counted in the twelve, are right as dispositions.
+
+4. No new sentence is false as a claim about the shipped predicate. "A reset of `failures` alone is not among them, wherever it sits" is true of `cmp_fails == 0`: I could not construct a `failures`-only edit that prints PASS. "Only they increment it" matches the two `++` sites. The probe-table sentence matches the eight row_cmp probes and the five chk probes. "CAN keep" matches `MINE_rows` / `MINE_name` / `MINE_phase` / `MINE_want165` / `MINE_wrap` on pristine and `MINE_reset` on drqring. The sentence does not say that every expression which mentions `cmp_fails` rejects a covered failure. That stronger reading is what finding 1 breaks.
+
+5. No. On an untampered harness every `cmp_fails ++` sits beside a `failures ++`, and inline rows, including the identity row, add only to `failures`. After the rows, `cmp_fails > failures` is false, so the reconciliation does not fire. The `!sc_g` bump does not fire when both self-check runs passed. `failures == 0 && cmp_fails == 0` is the same branch as `failures == 0` on every variant in the table: pristine is `(0, 0)`; selfmut is `(1, 0)`; drqring is `(2, 2)`; w57hi is `(4, 4)`. The packet’s IDENTICAL lines, apart from SELFCHECK text, at `-O2` and `-O0`, match that walk. I did not re-execute them.
+
+6. The two counters are the same event. They differ only when an inline row fails, and the one inline row gate 2’s lane uses is `row_wide_geometry`. Pinning "the verdict mentions `cmp_fails`" left every predicate that is true exactly when the counters are equal. The reconciliation is not load-bearing for that verdict: on the runs in the table it never fires. Keeping it is a liability only as a line that can still zero the summary beside a FAIL token (`MINE_recon2`). Deleting it does not close finding 1. Probing the decision does.
+
+The 24/128 census matches the tree this diff does not retouch: 24 `chk()` calls in `row_ring_occupancy_sound()`, 8 of them the `? 0 : 1` / `? 1 : 0` form, and 8 `row()` callers.

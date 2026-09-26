@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""#551 revision c -- the F2-on-pass-2 repairs, on top of xform551b.py (for the Fable 5.1 adjudication to rule on):
+
+  * two more row_cmp() probes, (sectors 0, got57 1, got60 0) and (0, 0, 1): each disjunct wrong ALONE with got ABOVE
+    its want, and sectors 0 -- `<' for `!=' (minimax) and `&& sectors' (the Opus seat; grok, kimi-k3) both answered
+    every earlier probe right; this also makes "each operand zero" true of every row_cmp() operand;
+  * cmp_fails: the comparators count their own failures, which nothing but they touch (the self-check restores it with
+    `failures'), and the trailer reports the larger of the two -- so `failures = 0;' after the covered rows (the Opus
+    seat, grok, agy) cannot hide a comparator's failure; an untampered run is unchanged, since `failures' always
+    counts at least what the comparators counted;
+  * a self-check that did not pass counts as a failure in the trailer (grok: the double edit printed "0 failures" and
+    WDC_IDENTIFY_FAIL);
+  * the disclosure in its general form (glm): the self-check proves only its own calls.
+
+usage: xform551c.py <orig diff_wdc_identify.c> <out.c> [variant]
+  variants: xform551b.py's, plus lt andsect reset phase"""
+import io
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xform551b as B   # noqa: E402
+
+BS = chr(92)
+NL = BS + "n"
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("REFUSED: %d matches for %r" % (n, old[:70]))
+    return s.replace(old, new)
+
+
+EDITS = [
+    #  the probes
+    (" *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone, and one pair that must NOT\n",
+     " *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone and on either side of its\n"
+     " *  want, and one pair that must NOT\n"),
+    ("\tstatic const uint64_t rw[] = { 2, 2, 1, 3, 0x100000000ULL, 0x100000000ULL };\n"
+     "\tstatic const uint64_t r57[] = { 1, 2, 0, 3, 0, 0x100000000ULL };\n"
+     "\tstatic const uint64_t r60[] = { 2, 1, 0, 3, 0x100000000ULL, 0 };\n",
+     "\tstatic const uint64_t rw[] = { 2, 2, 1, 3, 0x100000000ULL, 0x100000000ULL, 0, 0 };\n"
+     "\tstatic const uint64_t r57[] = { 1, 2, 0, 3, 0, 0x100000000ULL, 1, 0 };\n"
+     "\tstatic const uint64_t r60[] = { 2, 1, 0, 3, 0x100000000ULL, 0, 0, 1 };\n"),
+    ("\tfor (i = 0; i < 6; i++, n++) {\n\t\trow_cmp(", "\tfor (i = 0; i < 8; i++, n++) {\n\t\trow_cmp("),
+    #  cmp_fails: counted by the comparators alone
+    ("static int rowcmp_calls;\n",
+     "static int rowcmp_calls;\n"
+     "static int cmp_fails;\t/*  failures the two comparators counted; only they touch it  */\n"),
+    ("\tif (got != want) {\n\t\tfailures ++;\n", "\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n"),
+    ("\t\t    (unsigned long long)got57, (unsigned long long)got60);\n\t\tfailures ++;\n",
+     "\t\t    (unsigned long long)got57, (unsigned long long)got60);\n\t\tfailures ++;\n\t\tcmp_fails ++;\n"),
+    ("\tint sc_f = failures, sc_r = rows, sc_c = chk_calls, sc_rc = rowcmp_calls, sc_bad = 0, i, n = 0;\n",
+     "\tint sc_f = failures, sc_r = rows, sc_c = chk_calls, sc_rc = rowcmp_calls, sc_cf = cmp_fails, sc_bad = 0;\n"
+     "\tint i, n = 0;\n"),
+    ("\t\tif (failures != sc_f + (cg[i] != cw[i]))\n\t\t\tsc_bad++;\n\t\tfailures = sc_f; rows = sc_r;\n",
+     "\t\tif (failures != sc_f + (cg[i] != cw[i]))\n\t\t\tsc_bad++;\n\t\tfailures = sc_f; rows = sc_r; cmp_fails = sc_cf;\n"),
+    ("\t\tif (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i]))\n\t\t\tsc_bad++;\n"
+     "\t\tfailures = sc_f; rows = sc_r;\n",
+     "\t\tif (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i]))\n\t\t\tsc_bad++;\n"
+     "\t\tfailures = sc_f; rows = sc_r; cmp_fails = sc_cf;\n"),
+    ("\t\tfailures = sc_f + 1; rows = sc_r;\n", "\t\tfailures = sc_f + 1; rows = sc_r; cmp_fails = sc_cf;\n"),
+    #  the trailer: a comparator's failure survives a reset, and a failed self-check is counted
+    ("\tprintf(\"" + NL + "%d rows, %d failures" + NL + "\", rows, failures);\n",
+     "\t/*  #551: the comparators' own count survives a reset of `failures' (which always counts at least as\n"
+     "\t    many, untouched), and a self-check that did not pass is a failure the count shows.  */\n"
+     "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+     "\tif (!sc_g && failures == 0)\n\t\tfailures = 1;\n"
+     "\tprintf(\"" + NL + "%d rows, %d failures" + NL + "\", rows, failures);\n"),
+    #  the disclosure, general form
+    (" *  COMPARATOR is live, not that a row is.  NOT CAUGHT, DISCLOSED: a test keyed on a value, a name or a\n"
+     " *  position the probes do not present, in either comparator, and an edit of the code that FEEDS them\n"
+     " *  (row() handing row_cmp() its own want), keep every gate-2 row green -- measured, pass 2 of #551;\n"
+     " *  reviewed in the differential, not chased.  No line this block prints carries the self-mutant row's\n",
+     " *  COMPARATOR is live, not that a row is.  NOT CAUGHT, DISCLOSED: the self-check proves only that the\n"
+     " *  comparators answer right on ITS OWN calls, so an edit that keeps those answers and changes the rest\n"
+     " *  keeps every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's own\n"
+     " *  phase that the probes do not share; an edit of the code that FEEDS the comparators (row() handing\n"
+     " *  row_cmp() its own want); an edit of this block itself.  Measured on #551's passes; reviewed in the\n"
+     " *  differential, not chased.  A reset of `failures' ALONE after the comparators is not among them: they\n"
+     " *  also count cmp_fails, which only they touch, and the trailer reports the larger.  A reset of BOTH\n"
+     " *  tallies is, and is disclosed.  No line this block prints carries the self-mutant row's\n"),
+]
+
+ROWCMP_IF = "\tif (got57 != sectors || got60 != sectors) {\n"
+VARIANTS = dict(B.VARIANTS)
+VARIANTS.update({
+    "lt": (ROWCMP_IF, "\tif (got57 < sectors || got60 < sectors) {\n"),
+    "andsect": (ROWCMP_IF, "\tif ((got57 != sectors || got60 != sectors) && sectors) {\n"),
+    "reset": ("\trow_ring_occupancy_sound();\n", "\trow_ring_occupancy_sound();\n\tfailures = 0;\n"),
+    #  the disclosed two-statement form (Fable ruling 6): both tallies reset
+    "reset2": ("\trow_ring_occupancy_sound();\n", "\trow_ring_occupancy_sound();\n\tfailures = cmp_fails = 0;\n"),
+    #  the disclosed phase class: comparators silent outside the self-check (one edit per comparator is two; the
+    #  chk() half alone, keyed on the probe-name prefix, is the one-statement form)
+    "phase": ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n",
+              "\tif (got != want && name[0] == '@') {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n"),
+})
+#  the pass-2 variants whose find-text these edits changed
+VARIANTS["chkstub"] = ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;",
+                       "\tif (0) {\n\t\tfailures ++;\n\t\tcmp_fails ++;")
+VARIANTS["andgot"] = ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;",
+                      "\tif (got != want && got) {\n\t\tfailures ++;\n\t\tcmp_fails ++;")
+VARIANTS["rows"] = ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;",
+                    "\tif (got != want && (rows & 127) < 2) {\n\t\tfailures ++;\n\t\tcmp_fails ++;")
+VARIANTS["want165"] = ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;",
+                       "\tif (got != want && want-165) {\n\t\tfailures ++;\n\t\tcmp_fails ++;")
+VARIANTS["postinc"] = VARIANTS["rows"]
+VARIANTS["name"] = ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;",
+                    "\tif (got != want && *name == '@') {\n\t\tfailures ++;\n\t\tcmp_fails ++;")
+VARIANTS["scnoforce"] = ("\t\tfailures = sc_f + 1; rows = sc_r; cmp_fails = sc_cf;\n\t}\n\tif (where[0] == 'f') {\n",
+                         "\t\trows = sc_r; cmp_fails = sc_cf;\n\t}\n\tif (where[0] == 'f') {\n")
+COMBOS = dict(B.COMBOS)
+
+
+def make(orig):
+    s = B.make(orig)
+    for old, new in EDITS:
+        s = sub1(s, old, new)
+    return s
+
+
+def main():
+    orig = io.open(sys.argv[1], encoding="utf-8", newline="").read()
+    assert "\r" not in orig
+    s = make(orig)
+    v = sys.argv[3] if len(sys.argv) > 3 else None
+    if v == "nosc":
+        s = s.replace('\tselfcheck("first");\n', "").replace('\tselfcheck("last");\n', "")
+        i = s.index("/*\n *  @@SELFCHECK@@")
+        j = s.index("int main(void)\n{\n", i)
+        s = s[:i] + s[j:]
+        s = sub1(s, B.NEW_VERDICT, B.VERDICT)
+        s = sub1(s, "\tif (!sc_g && failures == 0)\n\t\tfailures = 1;\n", "")
+    elif v in COMBOS:
+        for part in COMBOS[v]:
+            s = sub1(s, *VARIANTS[part])
+    elif v:
+        s = sub1(s, *VARIANTS[v])
+    io.open(sys.argv[2], "w", encoding="utf-8", newline="").write(s)
+    print("xform551c ->", sys.argv[2], v or "")
+
+
+if __name__ == "__main__":
+    main()

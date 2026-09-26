@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""#551 pass 2: edits of the FINAL diff_wdc_identify.c (md5 ef662cb5...), one file per variant.
+
+usage: xform3.py <final.c> <outdir>
+Every edit is an exact, count-checked substitution; an anchor that is not unique aborts.
+"""
+import io
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+final, outdir = sys.argv[1], sys.argv[2]
+F = io.open(final, encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+CHK_IF = "\tif (got != want) {\n\t\tfailures ++;"
+ROWCMP_IF = "\tif (got57 != sectors || got60 != sectors) {"
+ROW_CALL = "\trow_cmp(why, sectors, got57, got60);"
+FORCE = "\t\tfailures = sc_f + 1; rows = sc_r;\n\t}\n\tif (where[0] == 'f') {"
+G_ARM = ("\tif (!sc_bad && sc_first_bad == 0)\n"
+         "\t\tprintf(\"  ok    SELFCHECK the comparator can still fail (first and last)" + NL + "\");\n")
+VERDICT = ("\tif (failures == 0)\n\t\tprintf(\"WDC_IDENTIFY_PASS" + NL + "\");\n"
+           "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n\treturn failures ? 1 : 0;\n")
+DECL = "static int sc_first_bad = -1;"
+
+V = {}
+V["F"] = F
+#  question 3 -- stateless edits the nine probes cannot see
+V["F_want165"] = sub1(F, CHK_IF, "\tif (got != want && want-165) {\n\t\tfailures ++;")
+V["F_sect4"] = sub1(F, ROWCMP_IF, "\tif ((got57 != sectors || got60 != sectors) && sectors<4) {")
+V["F_wrap"] = sub1(F, ROW_CALL, "\trow_cmp(why, sectors, sectors, sectors);")
+V["F_u16"] = sub1(F, "static void row_cmp(const char *why, uint64_t sectors, uint64_t got57, uint64_t got60)",
+                  "static void row_cmp(const char *why, uint16_t sectors, uint16_t got57, uint16_t got60)")
+#  the disclosure's own claims, tested AFTER the increment (chk's `rows ++' precedes its test)
+V["F_postinc"] = sub1(F, CHK_IF, "\tif (got != want && (rows & 127) < 2) {\n\t\tfailures ++;")
+V["F_name"] = sub1(F, CHK_IF, "\tif (got != want && *name == '@') {\n\t\tfailures ++;")
+#  question 4
+nof = sub1(F, FORCE, "\t\trows = sc_r;\n\t}\n\tif (where[0] == 'f') {")
+V["F_scnoforce_chkstub"] = sub1(nof, CHK_IF, "\tif (0) {\n\t\tfailures ++;")
+#  the fail-closed verdict: PASS needs the flag only the G arm sets
+fc = sub1(F, DECL, DECL + "\nstatic int sc_g;\t/*  set ONLY where gate 2's G line prints: PASS needs it  */")
+fc = sub1(fc, G_ARM, G_ARM.replace("\t\tprintf(", "\t\tsc_g = 1, printf(", 1))
+fc = sub1(fc, VERDICT, VERDICT.replace("if (failures == 0)", "if (failures == 0 && sc_g)")
+          .replace("return failures ? 1 : 0;", "return (failures || !sc_g) ? 1 : 0;"))
+V["F_fc"] = fc
+fnof = sub1(fc, FORCE, "\t\trows = sc_r;\n\t}\n\tif (where[0] == 'f') {")
+V["F_fc_scnoforce_chkstub"] = sub1(fnof, CHK_IF, "\tif (0) {\n\t\tfailures ++;")
+for k, v in V.items():
+    io.open("%s/%s.c" % (outdir, k), "w", encoding="utf-8", newline="").write(v)
+print("variants:", " ".join(sorted(V)))

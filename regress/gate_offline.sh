@@ -2243,29 +2243,60 @@ fi
 #  @@SELFCHECK@@ block, so moving a stem from EXEMPT to COVERED and writing no sentinel is
 #  RED.  Without it this would be another G -- a check that a name appears in a list -- which
 #  is precisely the defect being corrected here.
-SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound"
+SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound wdc_identify"
 #  *** COVERED IS NOT UNIFORM, AND THE MANIFEST CANNOT SEE THE DIFFERENCE -- READ THIS BEFORE
-#  TREATING A GREEN ROW AS "the file is vouched for". ***  All but three of the COVERED stems
-#  route every row through one or two shared helpers, so the sentinel covers the file.  The
-#  count used to be spelled out here as "seven of the ten" and went stale the first time a
-#  stem was added; a proportion that has to be re-derived on every addition is a comment that
-#  will be wrong more often than right, so it is stated as an exception list instead.  The
-#  three that do NOT route through shared helpers:
-#    * sh4_tmu   -- 12 of 18 rows.  row1() is the only comparator in the file that takes an
-#                   expected value; row_three_timers/row_interrupt/row_interrupt_unie_clear/
-#                   row_stopped/row_no_freeze each hardcode their own, and cannot be probed.
+#  TREATING A GREEN ROW AS "the file is vouched for". ***  Most COVERED stems route every row
+#  through one shared helper, so the sentinel covers the file.  No count is kept here: it used to say
+#  "seven of the ten", then "all but three" -- stale the first time a stem was added, and wrong for
+#  geom and sync, which each have two helpers.  The stems whose sentinel does NOT cover every row, or
+#  has multiple comparators:
+#    * sh4_tmu   -- 12 of 19 rows.  row1() is the only comparator in the file that takes an
+#                   expected value; row_three_timers/row_rtcsr_falls_through/row_interrupt/
+#                   row_interrupt_unie_clear/row_stopped/row_no_freeze each hardcode their own,
+#                   and cannot be probed; the 19th is the identity row.  (This said "12 of 18" and
+#                   "needs more than one probe" -- GPT-6 Astra, confirming #551.)
 #    * geom      -- every row but the identity row, via BOTH geom() and parse(), which are
 #                   two separate comparators and are probed separately for that reason.
 #    * sync      -- both checks() and checkn(), for the same reason.
+#    * wdc_identify -- 24 of 128 rows compare inside a comparator the sentinel feeds: 16 of
+#                   chk()'s 24 calls and all 8 of row_cmp()'s.  chk()'s other 8 are handed a 0/1
+#                   verdict computed at the call (derive: grep -cE '\? [01] : [01], 1\);'
+#                   regress/diff_wdc_identify.c), and the other
+#                   96 compare inline -- NOT covered.  "Covered" means the COMPARATOR is live,
+#                   not that a row is.  What this file's checks can see stops at what the file
+#                   itself writes.  CAN keep this gate green -- measured on #551's passes,
+#                   disclosed, not chased: any difference between a comparator's behaviour on the
+#                   self-check's calls and on real calls (a keyed test, feeding it its own want,
+#                   or its failure report kept from this gate's count check while the tallies are
+#                   hidden -- one edit or two, in the comparator's text or through a file-scope
+#                   macro); and covered rows skipped with their labels and counts printed.  (This
+#                   list also named a probe-agreeing test and an edit of the self-check itself:
+#                   both were measured RED on all three defect devices -- F_sum and
+#                   F_scweak_nocmpinc_reset in run551f.out -- so neither is a measured escape, and
+#                   the first one's blindness to a device whose differences compensate is a
+#                   reading -- GPT-6 Astra, confirming #551.)  (A log REWRITTEN by the process after
+#                   the rows ran passes the file-redirected MAIN checks, but the existing piped
+#                   self-mutant lane rejects it on all three tested defects, so it does NOT keep
+#                   this gate green -- GPT-6 Astra, confirming #551.)  Anything else -- a trailer
+#                   rewrite, a reset of either or both tallies anywhere, rows moved or deferred
+#                   with their counts forged -- is caught: a covered failure prints a line this
+#                   gate's `[0-9]+ failures' check reads at the moment it fails (check() compares
+#                   the newline-joined list of every captured number with the one string "0", so
+#                   no extra match passes, not even `0 failures').  The file covers 24
+#                   comparisons and reports all 32 comparator failures.  The gate-side close is a
+#                   lane whose device mutants fail one capacity row and one ring row, and the log
+#                   read through a pipe (filed: `wdcidlane').  #551, by owner ruling 2026-09-25
+#                   ("24/128 now, file the rest"); the rest is `wdcidcomparators'.
 #  rtc_range is in the UNIFORM group: every row goes through chk(), its single comparator.
-#  Named here rather than left to be re-derived, because the three-file exception list above
+#  Named here rather than left to be re-derived, because the exception list above
 #  is only trustworthy if additions are classified as they arrive.
 #  The per-file comments carry the scope; this is a LIVENESS control, never a census, and
 #  "going from 0 to 1 is not false comfort; calling 1 `the detector works` is".
 #
 #  THE EXEMPTIONS, DATED AND REASONED.  A FORTNIGHT, matching the deadline the owner chose
 #  over the Q4 one I proposed for the selfmutant list: 2 uncovered differentials, 1311 and 766
-#  lines, whose every row could be inert with this gate green.
+#  lines, whose every row could be inert with this gate green.  (True when written; #551 moved
+#  wdc_identify to COVERED, so ieee_store is the one left.)
 #
 #    ieee_store    HAS NO COMPARATOR TO SENTINEL.  No check(), no `rows`, no `failures`: each
 #                  section carries its own counter -- nine of them are the `== 0' terms of its
@@ -2279,19 +2310,12 @@ SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage
 #                  against TOTAL comparator death, which is this control's own failure mode,
 #                  but by the vacuity-prone `grep -c PASS == 0` form its SM_EXEMPT comment
 #                  already flags, so it is a weaker cover than it looks.
-#    wdc_identify  NOTHING TO FEED A MISMATCH TO.  Read every row function: row_anchor,
-#                  row_slave, row_base_drive, row_identity, row_atapi_flags, row_wide_geometry,
-#                  row_no_lba_claim and row_selfconsistent are ZERO-ARGUMENT with the expected
-#                  value hardcoded in the body, and row(why, sectors) derives its expectation
-#                  FROM ITS INPUT (`got57 != sectors`), so changing the input changes the
-#                  answer too and no mismatch can be produced.  Injecting one means mutating
-#                  dev_wdc.c -- which is the OTHER control, already present.  This one needs
-#                  the nine row functions refactored onto a shared helper first: a round, not
-#                  a line.
-#                  *** #550, 2026-09-25: THIS CENSUS IS INCOMPLETE. ***  It counts the nine row
-#                  functions (2026-08-19) and leaves out `chk(name, got, want)', which #484 added
-#                  on 2026-08-27: 24 chk() calls, 16 got/want and 8 handing it a 0/1 verdict.
-#                  #551 replaces this paragraph.
+#    wdc_identify  DISCHARGED by #551 -- moved to SC_COVERED with a self-check on its comparators (see
+#                  the COVERED list above).  This entry used to say "NOTHING TO FEED A MISMATCH TO"
+#                  and "This one needs the nine row functions refactored onto a shared helper
+#                  first".  The nine were 16 executions -- row() x 8 and eight zero-argument
+#                  functions -- and that census (2026-08-19) went stale when #484 added
+#                  chk(name, got, want) on 2026-08-27: its 24 calls are none of the nine.
 #  RE-DATED 2026-09-18 BY OWNER RULING, from 2026-09-02 -- a date that passed with no owner row: the
 #  "no exemption is past its dated deadline" row below went RED on every run from 2026-09-03, and the
 #  first run to OBSERVE it was 2026-09-18, the weekly battery having been disabled.  A re-date is not a
@@ -2301,9 +2325,7 @@ SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage
 #    ieee_store    RE-DATED to 2026-12-10, its reason above standing (nine counters, no comparator:
 #                  the larger refactor, dated after the wdc work).  RED from 2026-12-11.  Owner
 #                  row `scexempt': discharge, re-decide or delete before then.
-#    wdc_identify  NOT re-dated: the owner ruled it FIXED -- #551 gives it a comparator self-check and
-#                  moves it to SC_COVERED.  Until #551 lands, valid ON 2026-09-27, RED from 2026-09-28.
-SC_EXEMPT="ieee_store:2026-12-10 wdc_identify:2026-09-27"
+SC_EXEMPT="ieee_store:2026-12-10"
 
 sc_missing=""
 for f in "$HERE"/diff_*.c; do

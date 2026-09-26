@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""#551d: gate 2 emulated per (shape, device) -- the 73 wdc checks verbatim from gate_offline.sh, H (token in
+SOURCE), G (text in LOG), the one PASS token, and the self-mutant lane (selfmutant.py's logic; arms = device
+and device+self-mutant).  A shape ESCAPES on a device when that device's defect reds the unedited composite
+but gate 2 is GREEN with the shape applied, and the pristine device is GREEN too."""
+import io, os, re, subprocess
+W = "/tmp/opus551d"
+NAMED = "geometry words carry their high byte"
+G_TEXT = "SELFCHECK the comparator can still fail"
+io.open(W + "/gate_eval.sh", "w").write(r'''
+WDCLOG="$1"; _f=0
+check() { [ "$2" = "$3" ] || { echo "RED $1 got=$2 want=$3"; _f=$((_f+1)); }; }
+check_min() { [ "$2" -ge "$3" ] 2>/dev/null || { echo "RED $1 got=$2 min=$3"; _f=$((_f+1)); }; }
+note() { :; }
+. ''' + W + '''/gatewdc.inc
+''')
+
+
+def rd(dev, h, ext, root=W):
+    p = "%s/dev/%s/regress/%s.%s" % (root, dev, h, ext)
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else None
+
+
+def summ(dev, h):
+    if (rd(dev, h, "rc") or "").strip() == "BUILD_FAIL":
+        return "BUILD_FAIL"
+    t = rd(dev, h, "log") or ""
+    m = re.search(r"^(\d+) rows, (\d+) failures", t, re.M)
+    return "%s/%s %s" % (m.group(1) if m else "?", m.group(2) if m else "?",
+                         "PASS" if "WDC_IDENTIFY_PASS" in t else ("FAIL" if "WDC_IDENTIFY_FAIL" in t else "NOTOKEN"))
+
+
+def gate(h, dev):
+    if (rd(dev, h, "rc") or "").strip() == "BUILD_FAIL":
+        return ["compile"]
+    lane_dev = "selfmut" if dev == "pristine" else dev + "_sm"
+    t = rd(dev, h, "log")
+    out = subprocess.run(["bash", W + "/gate_eval.sh", "%s/dev/%s/regress/%s.log" % (W, dev, h)],
+                         capture_output=True, text=True).stdout
+    reds = [l[4:44] for l in out.split("\n") if l.startswith("RED ")]
+    if "@@SELFCHECK@@" not in io.open("%s/h/%s.c" % (W, h), encoding="utf-8").read():
+        reds.append("H")
+    if G_TEXT not in t:
+        reds.append("G")
+    tm = rd(lane_dev, h, "log")
+    named = [l for l in t.split("\n") if l.strip().startswith(("ok", "FAIL")) and NAMED in l and "@@SELFCHECK@@" not in l]
+    lane = "SETUP"
+    if tm is not None and re.search(r"\b[A-Z0-9_]+_PASS\b", t) and len(named) == 1 and not named[0].strip().startswith("FAIL"):
+        killed = [l for l in tm.split("\n") if l.strip().startswith("FAIL") and NAMED in l and "@@SELFCHECK@@" not in l]
+        lane = "OK" if (re.search(r"\b[A-Z0-9_]+_FAIL\b", tm) and killed) else "FAIL"
+    if lane != "OK":
+        reds.append("lane:" + lane)
+    return reds
+
+
+def cell(h, dev):
+    return ("GREEN" if not gate(h, dev) else "red") + "(" + summ(dev, h) + ")"
+
+
+shapes = sorted(f[:-2] for f in os.listdir(W + "/h") if f.endswith(".c"))
+shapes.remove("D")
+shapes = ["D"] + shapes
+DEFECTS = ("dropold", "drqring", "w57hi")
+print("=== (1) sweep on the shipped composite: %d shapes (the unedited file first) x pristine + %d covered-only defects ===" % (
+    len(shapes) - 1, len(DEFECTS)))
+print("    %-28s %-19s %-19s %-19s %-19s  %s" % ("shape", "pristine", "dropold (chk cmp)", "drqring (chk 0/1)", "w57hi (row_cmp)", "escapes on"))
+esc_total = []
+for h in shapes:
+    cells = [cell(h, "pristine")] + [cell(h, d) for d in DEFECTS]
+    esc = [d for d in DEFECTS if not gate(h, "pristine") and not gate(h, d) and gate("D", d)] if h != "D" else []
+    if esc:
+        esc_total.append(h)
+    print("    %-28s %-19s %-19s %-19s %-19s  %s" % (h, cells[0], cells[1], cells[2], cells[3], ",".join(esc) or "-"))
+print("  shapes that keep gate 2 GREEN on at least one covered-only defect:", " ".join(esc_total))
+
+print("\n=== (5) the composite's output against HEAD's harness and against #551c, SELFCHECK lines removed ===")
+for dev in ("pristine", "selfmut", "rev255", "cyl13", "srstbit", "drqring", "w57hi", "w58lo", "dropold"):
+    d = rd(dev, "D", "log")
+    strip = lambda t: [l for l in t.split("\n") if "SELFCHECK" not in l]
+    cells = []
+    o = rd(dev, "ORIG.O2", "log", "/tmp/opus551f2")
+    if o is not None:
+        cells.append("vs HEAD %s" % ("IDENTICAL" if strip(o) == strip(d) else "DIFFER"))
+    c = rd(dev, "C", "log", "/tmp/opus551c")
+    if c is not None:
+        cells.append("vs #551c %s" % ("IDENTICAL" if strip(c) == strip(d) else "DIFFER"))
+    print("    %-8s rc=%s %s" % (dev, rd(dev, "D", "rc").strip(), " | ".join(cells)))
+print("  self-check lines:", " | ".join(re.sub(r"\s+", " ", l.strip()) for l in rd("pristine", "D", "log").split("\n")
+                                    if "SELFCHECK" in l and "@@" not in l))
+print("ANALYZE6_DONE")

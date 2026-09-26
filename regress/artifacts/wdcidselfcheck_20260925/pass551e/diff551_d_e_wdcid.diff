@@ -1,0 +1,88 @@
+--- regress/diff_wdc_identify.c.551d
++++ regress/diff_wdc_identify.c.551e
+@@ -5647,25 +5647,42 @@
+ /*
+  *  @@SELFCHECK@@ -- #551.  CAN THIS FILE'S COMPARATORS STILL FAIL?  Feeds chk() and row_cmp() known answers --
+  *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone with got both below and
+- *  above its want, and one pair that must NOT fail -- and requires the EXACT change in `failures' and in
+- *  cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.  Run FIRST (before
+- *  any row) and LAST (after every row, before the identity row), so a comparator
+- *  that goes inert partway through is caught at one end or the other.  Only the success arm prints gate 2's G
++ *  above its want, and one probe per comparator that must NOT fail -- and requires the EXACT change in
++ *  `failures' and in cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.
++ *  Run FIRST (before any row) and LAST (after every row, before the identity row), so a comparator that
++ *  goes inert partway through is caught at one end or the other; the LAST run also requires every
++ *  covered call to have run before it (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G
+  *  text; the failure arm does not, and forces one failure.
+  *
+  *  WHAT IT COVERS: the rows that go through chk() and row_cmp() -- the last run prints how many calls
+  *  each comparator took.  Of chk()'s calls, the ones in row_ring_occupancy_sound() that pass a
+  *  `cond ? 1 : 0' (or `? 0 : 1') hand it a VERDICT computed at the call, not a comparison, and every
+  *  other row in this file compares inline: neither is covered by this block.  "Covered" means the
+- *  COMPARATOR is live, not that a row is.  NOT CAUGHT, DISCLOSED: the self-check proves only that the
+- *  comparators answer right on ITS OWN calls, so an edit that keeps those answers and changes the rest
+- *  CAN keep every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's
+- *  own phase that the probes do not share, or an edit of the code that FEEDS the comparators (row()
+- *  handing row_cmp() its own want), each measured on #551's passes; or an edit of this block itself
+- *  (reasoned: the block edits measured so far are caught).  Reviewed in the differential, not chased.
+- *  A reset of `failures' alone is not among them, wherever it sits: the comparators also count
+- *  cmp_fails, which only they increment, and the verdict and the exit status read it directly.  A reset
+- *  of BOTH tallies is, and is disclosed.  No line this block prints carries the self-mutant row's
++ *  COMPARATOR is live, not that a row is.
++ *
++ *  NOT CAUGHT, DISCLOSED.  This block pins the two COMPARATORS and nothing else: it proves they answer
++ *  right on ITS OWN calls, so an edit that keeps those answers and changes the rest CAN keep every gate-2
++ *  row green.  Four classes, each measured on #551's passes: (1) inside a comparator, a test keyed on a
++ *  value, a name, a position or this block's own phase that the probes do not share, or a predicate
++ *  rewritten to agree with the original on every probe and differ elsewhere (the sum of the two gots
++ *  against twice the want, say -- one member of a class no finite probe set closes); (2) the code that
++ *  FEEDS a comparator (row() handing row_cmp() its own want); (3) THE TRAILER, one call site: the printed
++ *  count, the PASS token and the exit status are produced there, and any rewrite that keeps them
++ *  consistent with each other is green -- today two coordinated edits, each red alone (the verdict's
++ *  cmp_fails term dropped with `failures -= cmp_fails' after the reconciliation; the verdict and the
++ *  printed count both scoring `failures - cmp_fails'); a reset of BOTH tallies is in this class --
++ *  unconditional, only after the covered rows and before the self-mutant's row; conditional on their
++ *  equality, anywhere.  No in-file probe can pin a single call site; the close is gate-side, a lane
++ *  whose device mutant fails the FIRST covered row (filed: `wdcidlane'); (4) this block itself (a probe's
++ *  cmp_fails check weakened together with the increment it guards and a reset).  A reset of `failures'
++ *  alone is not among them, wherever it sits: the comparators also count cmp_fails, which only they
++ *  increment, and the verdict and the exit status read it directly.  Nor is moving the covered rows past
++ *  the verdict: the LAST run requires chk() 24 and row_cmp() 8 calls.  On #551d's pass no single edit
++ *  outside these four classes kept gate 2 green (24 measured:
++ *  regress/artifacts/wdcidselfcheck_20260925/opus551_measured_d/analyze6.out).  Reviewed in the
++ *  differential, not chased.
++ *
++ *  No line this block prints carries the self-mutant row's
+  *  text or "high byte" (gate 2 counts both).  Gate 2's G text is printed ONCE, by the last run, only
+  *  when both runs passed -- and the run's own PASS needs that line (sc_g), so a self-check that failed
+  *  fails the run even if its forced failure is gone.  The rest of the file is filed as
+@@ -5708,6 +5725,17 @@
+ 			printf("  ok    SELFCHECK(first): all %d probes answered right\n", n);
+ 		return;
+ 	}
++	/*  #551e: the LAST run also requires every covered call to have run BEFORE it -- chk() 24 and row_cmp() 8,
++	    the counts the note line below prints.  Covered rows moved past the verdict, with the identity row
++	    re-pinned, would otherwise print their FAILs after the PASS token.  Change these with the rows, as the
++	    identity row's 128.  */
++	if (chk_calls != 24 || rowcmp_calls != 8) {
++		printf("  FAIL  SELFCHECK(last): chk() ran %d times and row_cmp() %d before this run; want 24 and 8\n",
++		    chk_calls, rowcmp_calls);
++		if (!sc_bad)
++			failures = sc_f + 1;
++		sc_bad++;
++	}
+ 	if (!sc_bad && sc_first_bad == 0) {
+ 		sc_g = 1;
+ 		printf("  ok    SELFCHECK the comparator can still fail (first and last)\n");
+@@ -5821,8 +5849,9 @@
+ 		printf("  ok   %-38s %i\n", "[IDENTITY] row count", rows);
+ 	}
+ 
+-	/*  #551: the comparators' own count survives a reset of `failures' (which always counts at least as
+-	    many, untouched), and a self-check that did not pass is a failure the count shows.  */
++	/*  #551: the PRINTED count shows the comparators' failures even after a reset of `failures' placed
++	    before this line (untouched, `failures' always counts at least as many); the verdict and the exit
++	    status read cmp_fails directly.  A self-check that did not pass is a failure the count shows.  */
+ 	if (cmp_fails > failures)
+ 		failures = cmp_fails;
+ 	if (!sc_g && failures == 0)

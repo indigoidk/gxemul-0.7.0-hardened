@@ -1,3 +1,115 @@
+# `#551` (wdcidselfcheck): gate 2's `wdc_identify` self-check exemption DISCHARGED rather than re-dated -- `diff_wdc_identify.c` gains a self-check on its two comparators (24 of 128 comparisons, by owner ruling) and a contract that says what an in-file check can and cannot see, reached in six revisions and six review passes
+
+**The obligation.**  Gate 2's `SC_EXEMPT` carried `wdc_identify` to 2026-09-27; from 09-28 its "no exemption is past its
+dated deadline" row reds on every run.  **Owner ruling 2026-09-25 (row `scexempt`): FIX it -- and on scope, "24/128
+now, file the rest".**  `#550` decided the list's other entry.  **No emulator code changes.**
+
+**What ships.**
+* `regress/diff_wdc_identify.c` (the offline IDENTIFY differential, 128 rows, built against the real `dev_wdc.c`):
+  * `row_cmp()`, a device-independent comparator for `row()`'s capacity check (it counts and prints, so it is not
+    pure) -- `row()` built the device and compared the extracted `got57`/`got60` against `sectors`, so no observed
+    value could be fed to it independently; `row()`'s eight call sites in `main()` keep their original output and
+    add a report line for each COVERED failure (four on the `w57hi` device variant, five on `w58lo`);
+  * `selfcheck()`, run FIRST and LAST: known answers and known MISmatches fed to `chk()` and `row_cmp()`, each required
+    to change the tallies by exactly the right amount -- including each `row_cmp()` disjunct wrong alone with got ABOVE
+    its want and `sectors` 0, so `<` for `!=` and an added `&& sectors` are red; the G text printed ONCE, by the last
+    run, only when both passed; a self-check that did not pass counts one failure in the trailer; and the LAST one pins
+    the runtime call counts, `chk()` 24 and `row_cmp()` 8;
+  * `cmp_fails`: the comparators count their own failures and the trailer reports the larger count, so a `failures =
+    0;` after the covered rows no longer turns the run green;
+  * **the covered-failure report (`#551f`)**: on a non-probe mismatch each comparator prints
+    `  FAIL  covered comparator failure -- N failures so far`, a line gate 2's `[0-9]+ failures` check reads at the
+    moment it fails -- so once it is in the log no later edit of the tallies, the trailer or the rows' order takes it
+    back (`lib.sh`'s `check()` compares the newline-joined list of EVERY captured number with the one string `0`,
+    so any extra match reds it, even one reading `0 failures`);
+  * **the contract**, a partition of where an in-file edit can act: (A) the comparators are pinned; (B) a covered
+    failure reports itself; (C) observables forged; (D) the block itself -- under a boundary paragraph saying what
+    every in-file check can and cannot see, and what crosses it (filed: `wdcidlane`).
+* `regress/gate_offline.sh` (on `#550`'s line) -- `wdc_identify` moves to `SC_COVERED`, `SC_EXEMPT` keeps only
+  `ieee_store`, and the census paragraph `#550` marked incomplete is replaced by the bullet: 24 comparisons covered,
+  all 32 comparator failures report, the 96 inline rows NOT covered, what can keep the gate green and what is caught,
+  and where the rest is filed (`wdcidcomparators`, `wdcidlane`).
+
+**THE CHAIN, AND WHY IT STOPPED.**  Pass 1 on the design (`panels/panel_20260925_141428`) and its F2 (`..._144647`;
+the flagship seat: PROCEED WITH CHANGES, 6 of 9 dispositions changed -- a separate `row_cmp()`, runtime call counts, the
+G text printed once); pass 2 (`..._160838`) and its F2 (`..._163352`; SHIP WITH CHANGES, and **the repair owes its own
+pass**); then one pass per repair -- `#551c` (`..._171441`), `#551d` (`..._174800`), `#551e` (`..._182627`), `#551f`
+(`..._192331`).  `#551b` and `#551c` each had a pass that found a single edit keeping gate 2 green while a covered row
+stopped failing, and each was repaired (two more probes, `cmp_fails`, the failed self-check counted).  `#551d`'s pass
+measured every single edit outside the disclosed classes RED (24) and found COMPOSITES green; `#551e` added the
+call-count pin; `#551e`'s pass found that pin checks writable counters and MEASURED FALSE the premise that everything
+gate 2 reads is produced at one call site -- the count check reads the whole log -- which is what made the `#551f`
+report possible.  **`#551f`'s pass closed the chain** (`pass551f/fable5_pass551f.md`): five passes found exactly two
+residual classes, and both are properties of in-file checks, not gaps -- (i) a comparator whose compiled behaviour on
+real calls differs from its behaviour on the self-check's calls, which no finite probe set closes; (ii) a healthy run's
+observables reproduced -- rows skipped with their output forged, counters written, the log rewritten.  A green shape
+in (i) or (ii) is a contract fact by construction, so **the next escape is classified against the contract, not a
+reopening.**  `#551g` is `#551f` with the closing ruling's contract text, and **`#551i`, what this commit ships, is
+`#551g` with GPT-6 Astra's comment corrections** (below): all COMMENT-ONLY -- the comment-stripped preprocessor
+output of `#551f`, `g` and `i` is byte-identical (md5 c10d453c), and `gate_offline.sh`'s non-comment lines are
+identical, 964 of them (`final551i/strip551i.out`).  Considered and NOT adopted: `(printf)(...)` in the
+report line would defeat M1's exact lever for one token, but the class has other levers -- a cost-raiser, not a close.
+
+**MEASURED** (`regress/artifacts/wdcidselfcheck_20260925/`).  `measured/run551f.out`: 359 jobs, 0 build failures --
+every shape the contract says is caught is red on every covered-only defect device (`dropold`, `drqring`, `w57hi`);
+greens only inside (A)-(D); the call-count pin red with its delta and green without; logs unchanged from `#551e` on
+pristine and on the three inline-failure variants (`selfmut`, `cyl13`, `srstbit`, which exit 1 in both versions), the
+covered-failure variants gaining only the report lines.  **Its scorer is `analyze8.py`, which re-implements gate 2's
+checks and EMULATES the self-mutant lane**; the real apparatus ran separately -- the Opus seat reproduced all 41
+table rows cell for cell with gate 2's real `lib.sh` sourced (`opus551_measured_f/analyze9.out`, 415 builds), and ran
+the real `selfmutant.py` on five selected cells (`opus551_measured_f/reallane.out`), not the whole matrix.  M1 -- one
+file-scope macro that swallows the report and undoes the tallies -- green on all four devices
+(`measured/run551f_b.out`): inside (A)/(B)'s residual as compiled, per the ruling.  M19 -- an exit handler that seeks
+a file-redirected stdout to 0 and writes a healthy log over the real one -- **passes gate 2's file-redirected MAIN
+checks** on the three defects and fails them through a pipe, pristine logs identical either way
+(`opus551_measured_f2/analyze_f2.out`, the main checks with the real `lib.sh`); **the existing self-mutant lane,
+which captures its log through a pipe, rejects it on all three** (`opus551_measured_f2/reallane_f2.out`:
+`SELFMUTANT_SETUP` on `dropold`, `drqring` and `w57hi`), so M19 does NOT keep the complete gate green.  M18's four
+unconditional reset cells are red in both channels (`analyze_f2.out`).  `opus551_measured_f2/` is a fallback-model run
+whose logs are artifacts; the main loop re-scored `drqring` and two of the M18 cells against `#551g`'s own gate block
+(`measured/rescore_m19.out`).  **Gate 2 on the committed text (`#551i` on a HEAD 04500deb export with the working
+tree's `config.h`): PASS, 359 checks, 154 s** (`gates_final_i/gate2_final_i.out`, the tested files' md5s in
+`gate2_final_i.md5.txt`).  `#551g`'s own run, on a HEAD f4f601c4 export with `#550` v3: PASS, 359 checks, 161 s
+(`gates_final/gate2_final.out`); its first attempt failed all thirteen self-mutant lanes alike -- the export carried
+no `config.h`, so every lane arm failed to compile -- an apparatus error, kept as `gate2_final_run1_NOCONFIG.out` with
+`NOTE_run1_apparatus.txt`.  `gates_final_h/` holds `#551h`, the first half of the Astra corrections, superseded by
+`#551i` (its `NOTE_superseded.txt`).
+
+**The panel.**  Eight panels, each with a dedicated grok job (`panels/grok_dedicated_p1.txt`, `_f2`, `_p2`,
+`f2b/grok_dedicated_f2b.txt`, `pass551c`..`f/grok_dedicated_551*.txt`) and the Opus measuring seat on every pass
+(claude-opus-5-5 by its transcript; its one post-ruling measurement, M19, was written by claude-opus-4-8 after a refusal
+event and is NOT counted as the seat -- `pass551f/opus5_pass551f_m19_FALLBACK_opus48.md`; its logs are artifacts,
+re-scored).  **Codex (GPT-6 Astra) walled on every panel (usage limit to 2026-09-26 07:01) -- a SEAT FAILURE, not
+agreement.**  The kimi CLI was on its weekly limit through `#551e`'s pass and returned a NEW 403 on `#551f`'s
+("subscription does not have access") -- recorded as access, not quota; `kimi-k3:cloud` covered the seat every time.
+**The flagship seat fired LAST on every adjudication** -- both F2 passes and the `#551d`, `#551e` and `#551f` passes
+(claude-fable-5-1 throughout).  **Astra (GPT-6 Astra, cxlaunch pointer form) confirmed before this commit: "VERDICT: CONFIRM WITH CHANGES"**
+(`wdcidselfcheck_20260925/final551g/codex_astra551.txt`, 2026-09-26 after the 07:01 reset; a read-only audit of the
+saved measurements) -- the chain closes without another implementation pass; the principal counts (24 comparisons
+covered, 32 calls reporting, 96 inline rows with the identity row, 13 probes per self-check) and the tested hashes
+confirmed; M1's L4 grade, M16's two-group lane requirement and M18's red cells upheld; **the proposed promotion of
+M19 to a measured gate-green escape OVERTURNED** -- its class, observable forgery, stands, and its measured scope is
+the main checks.  Its corrections are all applied in this commit, as `#551i` (comment-only) and in these records:
+M19's scope and the rescore's (the contract's (C), the gate bullet, `wdcidlane`, the paragraph above); "unchanged in
+what they print" (the covered-failure report lines: the C comment, `wdcidcomparators`' bar); "pure", and the
+description of the original `row()`; the 359 jobs' provenance (the contract's (B), the paragraph above); the three
+inline-failure runs called healthy; the gate's "sh4_tmu -- 12 of 18" (19) and "needs more than one probe" ("has
+multiple comparators"); `fbpendingselfcheckG`'s heading, false for RTC; `wdcrowpin`'s stale present tense; (B)'s
+mechanism -- `lib.sh` compares the newline-joined list of every captured number with `0` -- written into the
+contract; and, from its A and D, two shapes the gate bullet listed as measured gate-green that `run551f.out` records
+RED on all three defects: `F_sum` (a probe-agreeing test; its blindness to compensating differences is a reading)
+and `F_scweak_nocmpinc_reset` (an edit of the self-check).
+**Records carried from `#550` (L4):** the ledger row `asanfifteen`, filed by `#550`, kept the attribution Astra
+corrected in OUTSTANDING_BUGS ("discharged by `#444`"); its title now names `#450`'s 4142c580.
+**Dissents, recorded rather than absorbed:** deepseek's DO NOT SHIP on `#551d`'s pass (deleting the identity row plus
+an unnamed covered row is green: a floor breach) -- ruled a real composite that PRE-DATES `#551`, filed as `wdcrowpin`;
+and the panel grok's "L2 either way" on M1 (`#551f`'s pass) -- rejected on the third reading the dichotomy omitted:
+inside the comparators by EFFECT, bounded by class (i).
+
+**FILED** (OUTSTANDING_BUGS 2026-09-25): `wdcidcomparators` (MED -- the other 104), `wdcidlane` (MED -- the lane and
+the pipe), `panelwallquote` (MED), `wdcrowpin`, `wdcverdictone`, `fbpendingselfcheckG`, `seatverdictsubs` (LOW),
+`asanfifteen` (LOW, records).
+
 # `#550` (exemptredate): the ten probe-wiring exemptions that all fell due on 2026-09-27 re-dated one by one, each to its own owed-work date and reason, by owner ruling -- and gate 2's two self-check exemptions decided separately
 
 **The obligation.**  `tools/pipeline/check_probe_wiring.py`'s `EXEMPT` table held ten ungated detectors on ONE date,

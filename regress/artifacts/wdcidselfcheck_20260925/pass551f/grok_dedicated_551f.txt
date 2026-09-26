@@ -1,0 +1,83 @@
+I'll read the #551f brief in full and treat the partition claim as the thing to break: one edit that keeps every gate-2 check green while a `chk()` or `row_cmp()` row can no longer fail, and that sits outside parts (A)–(D).The brief’s claim is that one in-file edit cannot hide a `chk()` or `row_cmp()` failure and still leave gate 2 green unless it sits in (A)–(D). I’ll check that against the real gate-2 grep and the report line, not against the comment.VERDICT: DO NOT SHIP
+
+One insertion after the `cmp_fails` declaration keeps every gate-2 check green while a real `chk()` row can no longer fail. It is outside (A) keys and feed, outside (B) report-off plus a tally edit, outside (C) rows that never run, and outside (D) the self-check. It falsifies (B)'s sentence that a printed line cannot be taken back. I could not compile it in this seat (no shell); the gate facts it uses are already measured.
+
+## 1. The edit
+
+Gate 2 runs `"$WDCBIN" > "$WDCLOG" 2>&1`. That stdout is a regular file the process still holds at `atexit` time. ISO C runs `atexit` handlers before it flushes and closes streams. A constructor registered before `main` (so `--gc-sections` keeps it via `.init_array`) installs the handler:
+
+```c
+static void heal(void) {
+    char pad[4096];
+    int i;
+    if (!(cmp_fails > 0 && failures == cmp_fails))
+        return;
+    fflush(stdout);
+    fflush(stderr);
+    if (fseek(stdout, 0, SEEK_SET) != 0)
+        return;
+    fputs("128 rows, 0 failures\n", stdout);
+    fputs("WDC_IDENTIFY_PASS\n", stdout);
+    fputs("  ok    SELFCHECK the comparator can still fail (first and last)\n", stdout);
+    fputs("  ok   geometry words carry their high byte   c/h/s high bytes 10/01/03\n", stdout);
+    /* one line each for the other gate patterns; the longer slave line
+       "the SLAVE reports its own capacity" also satisfies
+       "the SLAVE reports its own". No second copy of either. */
+    fputs("threshold: >>8 byte reaches 255\n", stdout);
+    /* ...the rest of the grep -c / grep -cF patterns, one line each... */
+    memset(pad, '\n', sizeof pad);
+    for (i = 0; i < 256; i++)
+        fwrite(pad, 1, sizeof pad, stdout);   /* newlines, not NULs */
+    fflush(stdout);
+}
+static void arm(void) __attribute__((constructor));
+static void arm(void) { atexit(heal); }
+```
+
+The comparators, their reports, the tallies, the row calls, and the self-check are untouched. The report still prints. `heal` then replaces the file.
+
+The row it silences is `R2 anchor: inbuf[tail] survives` (`chk`, drop-oldest: got 17, want 165). The same predicate also covers the other drop-oldest `chk` rows (`R2 anchor: cell 0 untouched`, `R4 fifo: first pop is first push`), both DRQ-ring `chk` rows (`R6 liveness: DRQ asserted`, `R3 full ring: DRQ still set`), and the four word-57 `row_cmp` rows (`threshold: >>8 byte reaches 255`, `all four bytes distinct`, `threshold: >>24 byte reaches 255`, `every byte 255`). On those devices the measured cell is N failures and rN report lines, so `failures == cmp_fails` and `heal` runs.
+
+## 2. Which gate-2 check it survives
+
+The failure-count capture stays the string `0`. After the seek, the only `[0-9]+ failures` match is `128 rows, 0 failures`. `grep -oE '[0-9]+ failures' | grep -oE '^[0-9]+'` yields one line, `0`, and `lib.sh`'s `check` is whole-string equality. The real trailer (`3 failures`, `4 failures`, …) and every `N failures so far` line are in the overwritten prefix. Padding is newlines, so it adds no second match and no NUL for grep to treat as binary.
+
+The PASS token stays one. The healed file contains `WDC_IDENTIFY_PASS` once. `WDC_IDENTIFY_FAIL` was in the prefix.
+
+The named rows stay once each. Each `grep -c` / `grep -cF` pattern is written once. Two greps share the slave line (`the SLAVE reports its own capacity` contains `the SLAVE reports its own`); one line satisfies both, which is why the brief's 69 and the extracted block's 71 `grep -c` patterns (70 row greps plus `WDC_IDENTIFY_PASS`) are the same census. `high byte` occurs only in the geometry line. No pattern is a substring of a second line, of the G line, or of `128 rows, 0 failures`.
+
+The row floor stays `128` from that same line (`^[0-9]+ rows`). The G line is written out, so `grep -q 'SELFCHECK the comparator can still fail'` hits. `@@SELFCHECK@@` is still in the source.
+
+The self-mutant lane stays red on its own device. `row_wide_geometry` is inline: it increments `failures` only. On `selfmut`, `cmp_fails` is 0, so `heal` returns and the real `FAIL` line plus `WDC_IDENTIFY_FAIL` remain. On `dropold_sm` / `drqring_sm` / `w57hi_sm`, `failures == cmp_fails + 1`, same return. The lane reads that separate log; it does not read the healed non-mutant log. The non-mutant log has exactly one geometry line, and it starts with `ok`, which is what the lane's pristine-arm check requires. The host-kill child calls `_exit`, so it does not run `heal` in the middle of the parent.
+
+Pristine never heals (`cmp_fails == 0`), so that log stays the healthy one.
+
+## 3. Why this is outside (A)–(D)
+
+(A) is a probe-keyed or probe-agreeing comparator, or a feed that hands the comparator its own want. This edit does not change either comparator or any call.
+
+(B)'s residual is the report switched off for non-probe calls together with a tally edit. Here the report still prints and neither tally is written. What fails is the caught half of (B): the line is taken back, by rewriting the file grep will read, after the rows have run and the comparators have reported.
+
+(C) is a row that does not run, with its label and counts forged. These rows run. The fork-child `_exit` is why a mid-run destructor would be a different shape; this one runs at the parent's normal exit.
+
+(D) is the self-check block. This insertion sits by the `cmp_fails` declaration.
+
+## 4. Shapes that do not qualify
+
+Each of these either dies to a named check or sits inside a part.
+
+| Shape | What happens | Row |
+|---|---|---|
+| Report text `failure(s)` only (`F_text`, measured) | Trailer still matches `[0-9]+ failures` with a nonzero count. Red. | none |
+| Report number hardcoded to 0 | Capture is `0\n0\n…\nN`, and `check` wants the string `0`. Same reason `F_scweak_nocmpinc_reset` is red. | none |
+| An extra `0 failures` line | Adds a match. The all-matches capture cannot be repaired by addition. | none |
+| `fprintf(stderr, …)` | The gate's `2>&1` puts it in the same log. | none |
+| `atexit` deferral of the ring (`F_atexit_defer`, measured) | The report is printed after the trailer and is still in the log. Capture `0\n1\n2`. The report does close that family. | none |
+| NUL, or `fclose(stdout)`, at the first failure | Later named rows, `high byte`, and the G line are invisible to grep. Forging them at that moment also forges the geometry line before `row_wide_geometry` runs, so the `_sm` lane loses its `FAIL` line. | would have been `R2 anchor…` |
+| Guard `name[0] != '@' && (failures--, cmp_fails--, 0)` (`F_guard1_chk`, measured green) | One expression, but it is (B): the report does not print and both tallies are undone. | `R2 anchor: inbuf[tail] survives` |
+| `#define printf` that drops any call whose arguments contain `so far` and decrements both tallies (`F_macro`, measured green) | Same residual, placed above the comparators. The comparator text is untouched; the effect is still report-off plus a tally edit. | all three devices |
+| `failure(s)` plus the conditional reset (`F_text_cond`, measured green, report lines still present) | Grep no longer sees the report, and the trailer is forced to 0. (B) again. | all three devices |
+| `F_name`, `F_phase`, `F_postinc`, `F_want165`, `F_wrap` | (A). | as in the table |
+| `F_skipforge` | (C). | the ring rows |
+
+The `@` guard itself is sound. The only probe names that start with `@` are `@@SELFCHECK@@/chk` and `@@SELFCHECK@@/row`. A healthy log's only `[0-9]+ failures` match is the trailer `0`. The report text matches none of the 71 extracted patterns (that collision check was already run). Every non-probe mismatch, including the eight verdict-handed `chk` calls, reaches the report. None of that stops a later rewrite of the file those lines were written into.

@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""#551c: edits of the FINAL file MINE_c.c (md5 765f71d8), one file per shape.
+usage: xform5.py <MINE_c.c> <outdir>        Every anchor is count-checked; a non-unique one aborts."""
+import io
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+src, outdir = sys.argv[1], sys.argv[2]
+C = io.open(src, encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+SCG = "\tif (!sc_g && failures == 0)\n\t\tfailures = 1;\n"
+AFTER_COVERED = "\trow_ring_occupancy_sound();\n"          # rows 82-105; row() is 1-8; the lane's row is 125
+CHK_CMP = "\t\tfailures ++;\n\t\tcmp_fails ++;\n\t\tprintf(\"  FAIL %-40s got %lld"
+VERDICT = "\tif (failures == 0 && sc_g)\n"
+RET = "\treturn (failures || !sc_g) ? 1 : 0;\n"
+
+V = {"C": C}
+#  the shapes swept -- the DENOMINATOR (each on three covered-only defects, with the lane)
+V["C_reset1"] = sub1(C, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")                   # the brief: caught
+V["C_resetcmp"] = sub1(C, AFTER_COVERED, AFTER_COVERED + "\tcmp_fails = 0;\n")
+V["C_reset2"] = sub1(C, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0; cmp_fails = 0;\n")   # disclosed
+V["C_nocmpinc"] = sub1(C, CHK_CMP, CHK_CMP.replace("\t\tcmp_fails ++;\n", ""))
+V["C_nocmpinc_reset1"] = sub1(V["C_nocmpinc"], AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")
+V["C_recon_ge_sub"] = sub1(C, RECON, "\tif (cmp_fails >= failures)\n\t\tfailures -= cmp_fails;\n")   # 2 chars
+V["C_recon_sub"] = sub1(C, RECON, "\tif (cmp_fails > failures)\n\t\tfailures -= cmp_fails;\n")      # 1 char
+V["C_recon_lt"] = sub1(C, RECON, "\tif (cmp_fails < failures)\n\t\tfailures = cmp_fails;\n")
+V["C_recon_del"] = sub1(C, RECON, "")
+V["C_recon_uncond"] = sub1(C, RECON, "\tfailures = cmp_fails;\n")
+V["C_sub_before"] = sub1(C, RECON, "\tfailures -= cmp_fails;\n" + RECON)
+V["C_sub_after"] = sub1(C, RECON, RECON + "\tfailures -= cmp_fails;\n")                             # 1 statement
+V["C_reset1_after"] = sub1(C, RECON, RECON + "\tfailures = 0;\n")
+V["C_scg_del"] = sub1(C, SCG, "")
+#  a closure: the verdict and the exit status read cmp_fails THEMSELVES, not through `failures'
+FIX = sub1(sub1(C, VERDICT, "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n"),
+           RET, "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n")
+V["Cfix"] = FIX
+V["Cfix_recon_ge_sub"] = sub1(FIX, RECON, "\tif (cmp_fails >= failures)\n\t\tfailures -= cmp_fails;\n")
+V["Cfix_sub_after"] = sub1(FIX, RECON, RECON + "\tfailures -= cmp_fails;\n")
+V["Cfix_reset2"] = sub1(FIX, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0; cmp_fails = 0;\n")
+for k, v in V.items():
+    io.open("%s/%s.c" % (outdir, k), "w", encoding="utf-8", newline="").write(v)
+print("variants:", " ".join(sorted(V)))

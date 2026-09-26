@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""#551f2: three measurements the adjudication asked to be MEASURED, not reasoned.
+  M19  -- grok's walked shape: a constructor-registered atexit handler that, when
+          failures==cmp_fails>0, rewinds a file-redirected stdout and writes a
+          healthy log over the real one.  Built exactly as grok describes
+          (constructor -> atexit -> fflush -> fseek(0) -> overwrite with a healthy
+          log -> trim the tail).  I embed the REAL pristine healthy log (one adjacent
+          string literal per line) and ftruncate the tail, which is the strongest,
+          most faithful form of "writes a healthy-looking log over the real one".
+  M18  -- four reset cells not in the roster: unconditional `failures = 0` before the
+          reconciliation and after the count printf; likewise `cmp_fails = 0`.
+usage: xf2.py <dir> <pristine_healthy_log>    (<dir>/F.c is MINE_f.c)"""
+import io, sys
+
+H = sys.argv[1]
+HEALTHY = sys.argv[2]
+F = io.open(H + "/F.c", encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+DECL = "static int cmp_fails;\t/*  failures the two comparators counted; only they increment it  */\n"
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+PRINTF = "\tprintf(\"\\n%d rows, %d failures\\n\", rows, failures);\n"
+
+#  --- the healthy log embedded as adjacent string literals, one per line (portable; no huge single literal) ---
+raw = io.open(HEALTHY, encoding="utf-8", newline="").read()
+lit = []
+for ln in raw.split("\n"):
+    e = ln.replace("\\", "\\\\").replace("\"", "\\\"")
+    lit.append("\t\"%s\\n\"" % e)
+HEAL_LOG = "static const char heal_log[] =\n" + "\n".join(lit) + ";\n"
+
+#  grok's own tail handling: pad with NEWLINES (not NULs) so the old, longer failing log is fully
+#  overwritten and grep sees no extra match.  Avoids ftruncate, which -std=c99 hides without a
+#  feature-test macro -- so this is buildable under the gate's exact flags, as grok's form must be.
+HEAL = (HEAL_LOG +
+        "static void heal(void)\n"
+        "{\n"
+        "\tlong i;\n"
+        "\tif (!(cmp_fails > 0 && failures == cmp_fails))\n"
+        "\t\treturn;\n"
+        "\tfflush(stdout);\n"
+        "\tif (fseek(stdout, 0L, SEEK_SET) != 0)\n"
+        "\t\treturn;\t/*  stdout is a pipe (unseekable): cannot rewrite  */\n"
+        "\tfwrite(heal_log, 1, sizeof heal_log - 1, stdout);\n"
+        "\tfor (i = 0; i < 65536L; i++)\n"
+        "\t\tputc('\\n', stdout);\t/*  bury any tail of the old, longer log  */\n"
+        "\tfflush(stdout);\n"
+        "}\n"
+        "static void arm(void) __attribute__((constructor));\n"
+        "static void arm(void) { atexit(heal); }\n")
+
+V = {}
+#  M19: the heal handler, inserted after the cmp_fails declaration (comparators/rows/self-check untouched).
+V["M19_heal"] = sub1(F, DECL, DECL + HEAL)
+
+#  M18: the four single-tally resets at the two trailer placements.
+V["M18_f_before_recon"]   = sub1(F, RECON, "\tfailures = 0;\n" + RECON)
+V["M18_f_after_printf"]   = sub1(F, PRINTF, PRINTF + "\tfailures = 0;\n")
+V["M18_cf_before_recon"]  = sub1(F, RECON, "\tcmp_fails = 0;\n" + RECON)
+V["M18_cf_after_printf"]  = sub1(F, PRINTF, PRINTF + "\tcmp_fails = 0;\n")
+
+for k, v in V.items():
+    io.open("%s/%s.c" % (H, k), "w", encoding="utf-8", newline="").write(v)
+print("f2 variants (%d):" % len(V), " ".join(sorted(V)))

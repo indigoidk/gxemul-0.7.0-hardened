@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""#551f: gate 2 emulated per (shape, device), after the Opus seat's analyze7.py: the wdc checks extracted verbatim from
+gate_offline.sh, H (token in SOURCE), G (text in LOG), the one PASS token, and the self-mutant lane on the matching _sm
+device.  A shape ESCAPES on a device when the unedited #551f file reds that device, gate 2 is GREEN with the shape
+applied, and the pristine device is GREEN too.  Each shape carries its expected class from meas551f.py."""
+import io
+import os
+import re
+import subprocess
+
+W = "/tmp/wdc551f"
+NAMED = "geometry words carry their high byte"
+G_TEXT = "SELFCHECK the comparator can still fail"
+EMIT = "covered comparator failure"
+io.open(W + "/gate_eval.sh", "w").write(
+    'WDCLOG="$1"; _f=0\n'
+    'check() { [ "$2" = "$3" ] || { echo "RED $1 got=$2 want=$3"; _f=$((_f+1)); }; }\n'
+    'check_min() { [ "$2" -ge "$3" ] 2>/dev/null || { echo "RED $1 got=$2 min=$3"; _f=$((_f+1)); }; }\n'
+    'note() { :; }\n'
+    '. ' + W + '/gatewdc.inc\n')
+CAUGHT = set("""F_v_eq F_v_nocmp F_printf_sub F_ret_nocmp F_hardcode F_recon_ge_sub F_sub_after F_v_eq_printf_sub
+F_v_nocmp_sub_after F_reset_mid F_resetcmp_mid F_reset2_mid F_cond_start F_cond_mid F_cond_trailer F_cond_afterprintf
+F_both_trailer F_both_afterprintf F_movefake F_movefake_row F_countforge F_forge_move F_atexit_defer F_move_repin
+F_nopin_move_repin F_delring_repin F_delrow_repin F_emitoff F_nopin""".split())
+DISCLOSED = {"F_want165": "A", "F_postinc": "A", "F_name": "A", "F_phase": "A", "F_wrap": "A", "F_sum": "A",
+             "F_emitoff_cond_trailer": "B", "F_skipforge": "C", "F_nopin_delring_repin": "C", "F_nopin_delrow_repin": "C",
+             "F_scweak_nocmpinc_reset": "D"}
+
+
+def rd(dev, h, ext):
+    p = "%s/dev/%s/regress/%s.%s" % (W, dev, h, ext)
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else None
+
+
+def summ(dev, h):
+    if (rd(dev, h, "rc") or "").strip() == "BUILD_FAIL":
+        return "BUILD_FAIL"
+    t = rd(dev, h, "log") or ""
+    m = re.search(r"^(\d+) rows, (\d+) failures", t, re.M)
+    e = len([l for l in t.split("\n") if EMIT in l])
+    return "%s/%s %s%s" % (m.group(1) if m else "?", m.group(2) if m else "?",
+                           "PASS" if "WDC_IDENTIFY_PASS" in t else ("FAIL" if "WDC_IDENTIFY_FAIL" in t else "NOTOKEN"),
+                           " r%d" % e if e else "")
+
+
+def gate(h, dev):
+    if (rd(dev, h, "rc") or "").strip() == "BUILD_FAIL":
+        return ["compile"]
+    lane_dev = "selfmut" if dev == "pristine" else dev + "_sm"
+    t = rd(dev, h, "log")
+    out = subprocess.run(["bash", W + "/gate_eval.sh", "%s/dev/%s/regress/%s.log" % (W, dev, h)],
+                         capture_output=True, text=True).stdout
+    reds = [l[4:44] for l in out.split("\n") if l.startswith("RED ")]
+    if "@@SELFCHECK@@" not in io.open("%s/h/%s.c" % (W, h), encoding="utf-8").read():
+        reds.append("H")
+    if G_TEXT not in t:
+        reds.append("G")
+    tm = rd(lane_dev, h, "log")
+    named = [l for l in t.split("\n") if l.strip().startswith(("ok", "FAIL")) and NAMED in l and "@@SELFCHECK@@" not in l]
+    lane = "SETUP"
+    if tm is not None and re.search(r"\b[A-Z0-9_]+_PASS\b", t) and len(named) == 1 and not named[0].strip().startswith("FAIL"):
+        killed = [l for l in tm.split("\n") if l.strip().startswith("FAIL") and NAMED in l and "@@SELFCHECK@@" not in l]
+        lane = "OK" if (re.search(r"\b[A-Z0-9_]+_FAIL\b", tm) and killed) else "FAIL"
+    if lane != "OK":
+        reds.append("lane:" + lane)
+    return reds
+
+
+def cell(h, dev):
+    return ("GREEN" if not gate(h, dev) else "red") + "(" + summ(dev, h) + ")"
+
+
+shapes = sorted(f[:-2] for f in os.listdir(W + "/h") if f.endswith(".c") and f[:-2] not in ("F", "E", "ORIG"))
+DEFECTS = ("dropold", "drqring", "w57hi")
+print("=== (1) #551f and %d shapes x the real device + %d covered-only defects, with the lane ===" % (len(shapes), len(DEFECTS)))
+print("    cell = gate-2 GREEN/red (rows/printed-failures token, rN = N covered-failure report lines)")
+print("    %-24s %-26s %-26s %-26s %-26s %-7s %s" % ("shape", "pristine", "dropold (chk cmp)", "drqring (chk 0/1)",
+                                                     "w57hi (row_cmp)", "class", "escapes on"))
+bad = []
+for h in ["F"] + shapes:
+    esc = [d for d in DEFECTS if not gate(h, "pristine") and not gate(h, d) and gate("F", d)] if h != "F" else []
+    cls = "caught" if h in CAUGHT else ("(%s)" % DISCLOSED[h] if h in DISCLOSED else "-")
+    if h in CAUGHT and esc:
+        bad.append("%s escapes on %s but the contract says it is CAUGHT" % (h, ",".join(esc)))
+    print("    %-24s %-26s %-26s %-26s %-26s %-7s %s" % (h, cell(h, "pristine"), cell(h, "dropold"), cell(h, "drqring"),
+                                                        cell(h, "w57hi"), cls, ",".join(esc) or "-"))
+print("  CONTRACT CHECK: %s" % ("every CAUGHT shape is red on every covered-only defect" if not bad else "; ".join(bad)))
+green = [h for h in shapes if any(not gate(h, "pristine") and not gate(h, d) and gate("F", d) for d in DEFECTS)]
+print("  shapes GREEN on at least one covered-only defect: %s" % " ".join(green))
+print("  ...of which the manifest does NOT class inside A-D: %s" % (" ".join(h for h in green if h not in DISCLOSED) or "NONE"))
+print("  the pin's delta (one unpinned covered row deleted, identity re-pinned 127): with the pin %s; without it %s" % (
+    cell("F_delrow_repin", "pristine"), cell("F_nopin_delrow_repin", "pristine")))
+print("\n=== (2) #551f against #551e and against HEAD, WHOLE log ===")
+for dev in sorted(os.listdir(W + "/dev")):
+    f, e, o = rd(dev, "F", "log"), rd(dev, "E", "log"), rd(dev, "ORIG", "log")
+    fl = f.split("\n")
+    extra = [l for l in fl if l not in e.split("\n")]
+    em = len([l for l in fl if EMIT in l])
+
+    def strip(t):
+        return [l for l in t.split("\n") if "SELFCHECK" not in l and EMIT not in l]
+
+    print("    %-11s F vs E: %-44s | F vs HEAD without SELFCHECK and report lines: %-9s | rc F=%s E=%s HEAD=%s" % (
+        dev, "WHOLE-LOG IDENTICAL" if f == e else "+%d lines, all report lines: %s" % (len(extra), all(EMIT in l for l in extra)),
+        "IDENTICAL" if strip(f) == strip(o) else "DIFFERS",
+        rd(dev, "F", "rc").strip(), rd(dev, "E", "rc").strip(), rd(dev, "ORIG", "rc").strip()))
+print("ANALYZE8_DONE")

@@ -1,0 +1,116 @@
+--- regress/diff_wdc_identify.c.551e
++++ regress/diff_wdc_identify.c.551f
+@@ -518,6 +518,8 @@
+ 		    (unsigned long long)got57, (unsigned long long)got60);
+ 		failures ++;
+ 		cmp_fails ++;
++		if (why[0] != '@')	/*  #551f: contract (B) -- a covered failure reports itself  */
++			printf("  FAIL  covered comparator failure -- %d failures so far\n", cmp_fails);
+ 	} else {
+ 		printf("  ok   %-38s %llu\n", why, (unsigned long long)sectors);
+ 	}
+@@ -4869,6 +4871,8 @@
+ 		failures ++;
+ 		cmp_fails ++;
+ 		printf("  FAIL %-40s got %lld want %lld\n", name, got, want);
++		if (name[0] != '@')	/*  #551f: contract (B) -- a covered failure reports itself  */
++			printf("  FAIL  covered comparator failure -- %d failures so far\n", cmp_fails);
+ 	} else
+ 		printf("  ok   %-40s %lld\n", name, got);
+ }
+@@ -5650,43 +5654,49 @@
+  *  above its want, and one probe per comparator that must NOT fail -- and requires the EXACT change in
+  *  `failures' and in cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.
+  *  Run FIRST (before any row) and LAST (after every row, before the identity row), so a comparator that
+- *  goes inert partway through is caught at one end or the other; the LAST run also requires every
+- *  covered call to have run before it (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G
+- *  text; the failure arm does not, and forces one failure.
++ *  goes inert partway through is caught at one end or the other; the LAST run also requires the
++ *  comparator call counts (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G text; see (D)
++ *  for what the failure arms do.
+  *
+  *  WHAT IT COVERS: the rows that go through chk() and row_cmp() -- the last run prints how many calls
+  *  each comparator took.  Of chk()'s calls, the ones in row_ring_occupancy_sound() that pass a
+  *  `cond ? 1 : 0' (or `? 0 : 1') hand it a VERDICT computed at the call, not a comparison, and every
+  *  other row in this file compares inline: neither is covered by this block.  "Covered" means the
+- *  COMPARATOR is live, not that a row is.
++ *  COMPARATOR is live, not that a row is.  The 8 verdict-handed calls still REPORT through (B): the file
++ *  covers 24 comparisons and reports all 32 comparator failures.
+  *
+- *  NOT CAUGHT, DISCLOSED.  This block pins the two COMPARATORS and nothing else: it proves they answer
+- *  right on ITS OWN calls, so an edit that keeps those answers and changes the rest CAN keep every gate-2
+- *  row green.  Four classes, each measured on #551's passes: (1) inside a comparator, a test keyed on a
+- *  value, a name, a position or this block's own phase that the probes do not share, or a predicate
+- *  rewritten to agree with the original on every probe and differ elsewhere (the sum of the two gots
+- *  against twice the want, say -- one member of a class no finite probe set closes); (2) the code that
+- *  FEEDS a comparator (row() handing row_cmp() its own want); (3) THE TRAILER, one call site: the printed
+- *  count, the PASS token and the exit status are produced there, and any rewrite that keeps them
+- *  consistent with each other is green -- today two coordinated edits, each red alone (the verdict's
+- *  cmp_fails term dropped with `failures -= cmp_fails' after the reconciliation; the verdict and the
+- *  printed count both scoring `failures - cmp_fails'); a reset of BOTH tallies is in this class --
+- *  unconditional, only after the covered rows and before the self-mutant's row; conditional on their
+- *  equality, anywhere.  No in-file probe can pin a single call site; the close is gate-side, a lane
+- *  whose device mutant fails the FIRST covered row (filed: `wdcidlane'); (4) this block itself (a probe's
+- *  cmp_fails check weakened together with the increment it guards and a reset).  A reset of `failures'
+- *  alone is not among them, wherever it sits: the comparators also count cmp_fails, which only they
+- *  increment, and the verdict and the exit status read it directly.  Nor is moving the covered rows past
+- *  the verdict: the LAST run requires chk() 24 and row_cmp() 8 calls.  On #551d's pass no single edit
+- *  outside these four classes kept gate 2 green (24 measured:
+- *  regress/artifacts/wdcidselfcheck_20260925/opus551_measured_d/analyze6.out).  Reviewed in the
+- *  differential, not chased.
+- *
+- *  No line this block prints carries the self-mutant row's
+- *  text or "high byte" (gate 2 counts both).  Gate 2's G text is printed ONCE, by the last run, only
+- *  when both runs passed -- and the run's own PASS needs that line (sc_g), so a self-check that failed
+- *  fails the run even if its forced failure is gone.  The rest of the file is filed as
+- *  `wdcidcomparators' (#551; owner ruling 2026-09-25).
++ *  WHAT THIS FILE'S CHECKS CAN AND CANNOT SEE.  Every check here reads state this file writes (the
++ *  tallies, the call counts, `rows', sc_g) or output this file prints, so an edit that reproduces a healthy
++ *  run's observables is invisible to all of them.  That boundary is a fact about in-file checks, not a gap
++ *  in this block, and only a gate-side run on a device that fails a COVERED row sees across it (filed:
++ *  `wdcidlane', on the FIRST covered row).  Inside the boundary:
++ *
++ *  (A) THE COMPARATORS ARE PINNED -- the probes require the exact change in `failures' and cmp_fails on
++ *  their own calls, so an inert or narrowed comparator is caught at one end of the run or the other.  Not
++ *  caught, measured: a test inside a comparator keyed on a value, a name, a position or this block's phase
++ *  that the probes do not share; a predicate rewritten to agree with the original on every probe and differ
++ *  elsewhere (the sum of the two gots against twice the want, say); and the code that FEEDS a comparator
++ *  (row() handing row_cmp() its own want).
++ *
++ *  (B) A COVERED FAILURE REPORTS ITSELF -- on a non-probe mismatch each comparator prints a line gate 2's
++ *  failure-count check reads (`N failures so far'), at the moment it fails; that check compares every such
++ *  line in the log against "0", so a printed line cannot be taken back and no line can be added.  Hence no
++ *  edit that leaves the covered rows running and the comparators intact hides a covered failure: not the
++ *  trailer's count, token or exit rewritten singly or together, not a reset of either tally or both at any
++ *  placement, not rows moved or deferred past the verdict with their counts forged (measured: #551f's
++ *  pass, regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out).  Not caught: that report switched off for
++ *  non-probe calls -- its guard is itself a probe/real key -- together with an edit that hides the tallies.
++ *
++ *  (C) A ROW THAT DOES NOT RUN CANNOT REPORT -- the identity row's 128 and the LAST run's call counts
++ *  (chk() 24, row_cmp() 8) raise the cost of skipping covered rows, and both are values this file can
++ *  forge: skipping the ring rows while printing their gate-pinned labels and adding 24 to `rows' and
++ *  chk_calls is one insertion and green here.  That is the boundary's own class; its close is `wdcidlane'.
++ *
++ *  (D) This block itself.  Nothing this block prints carries the self-mutant row's text, "high byte" or a
++ *  pinned label.  Gate 2's G text is printed ONCE, by the last run, only when both runs passed; the run's
++ *  PASS needs that line (sc_g) and both tallies at zero; a probe failure forces one failure, and a missing
++ *  first run is counted by the trailer's `!sc_g' line.  Reviewed in the differential, not chased.  The rest
++ *  of the file is filed as `wdcidcomparators' (#551; owner ruling 2026-09-25).
+  */
+ static int sc_first_bad = -1;	/*  -1 until the FIRST run has happened  */
+ static int sc_g;	/*  set ONLY where gate 2's G line prints: the run's PASS needs it  */
+@@ -5725,10 +5735,10 @@
+ 			printf("  ok    SELFCHECK(first): all %d probes answered right\n", n);
+ 		return;
+ 	}
+-	/*  #551e: the LAST run also requires every covered call to have run BEFORE it -- chk() 24 and row_cmp() 8,
+-	    the counts the note line below prints.  Covered rows moved past the verdict, with the identity row
+-	    re-pinned, would otherwise print their FAILs after the PASS token.  Change these with the rows, as the
+-	    identity row's 128.  */
++	/*  #551e: a second identity constant -- the LAST run requires the comparator call counts the note line
++	    below prints, chk() 24 and row_cmp() 8.  It catches covered rows skipped or moved without their counts
++	    forged; like the identity row's 128 it is forgeable by an edit that writes the counter (contract (C)).
++	    Change these with the rows.  */
+ 	if (chk_calls != 24 || rowcmp_calls != 8) {
+ 		printf("  FAIL  SELFCHECK(last): chk() ran %d times and row_cmp() %d before this run; want 24 and 8\n",
+ 		    chk_calls, rowcmp_calls);

@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""#551d: edits of the SHIPPED COMPOSITE MINE_d.c (md5 e0c3399b), one file per shape.
+usage: xform6.py <MINE_d.c> <outdir>        Every anchor is count-checked; a non-unique one aborts."""
+import io
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+src, outdir = sys.argv[1], sys.argv[2]
+D = io.open(src, encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+SCG = "\tif (!sc_g && failures == 0)\n\t\tfailures = 1;\n"
+AFTER_COVERED = "\trow_ring_occupancy_sound();\n"
+CHK_IF = "\tif (got != want) {\n\t\tfailures ++;"
+CHK_CMP = "\t\tfailures ++;\n\t\tcmp_fails ++;\n\t\tprintf(\"  FAIL %-40s got %lld"
+ROWCMP_IF = "\tif (got57 != sectors || got60 != sectors) {"
+VERDICT = "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n"
+RET = "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n"
+PRINTF = "\tprintf(\"" + NL + "%d rows, %d failures" + NL + "\", rows, failures);\n"
+TOKEN_END = "\telse\n\t\tprintf(\"WDC_IDENTIFY_FAIL" + NL + "\");\n"
+PIN = "\tif (rows != 128) {\n"
+SC_CHK_CHECK = "|| cmp_fails != sc_cf + (cg[i] != cw[i]))"
+
+V = {"D": D}
+#  --- #551c's shapes, re-run on the composite (single edits unless named) ---
+V["D_reset1"] = sub1(D, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")
+V["D_resetcmp"] = sub1(D, AFTER_COVERED, AFTER_COVERED + "\tcmp_fails = 0;\n")
+V["D_reset2"] = sub1(D, AFTER_COVERED, AFTER_COVERED + "\tfailures = 0; cmp_fails = 0;\n")          # disclosed
+V["D_nocmpinc"] = sub1(D, CHK_CMP, CHK_CMP.replace("\t\tcmp_fails ++;\n", ""))
+V["D_nocmpinc_reset1"] = sub1(V["D_nocmpinc"], AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")
+V["D_recon_ge_sub"] = sub1(D, RECON, "\tif (cmp_fails >= failures)\n\t\tfailures -= cmp_fails;\n")
+V["D_recon_sub"] = sub1(D, RECON, "\tif (cmp_fails > failures)\n\t\tfailures -= cmp_fails;\n")
+V["D_recon_lt"] = sub1(D, RECON, "\tif (cmp_fails < failures)\n\t\tfailures = cmp_fails;\n")
+V["D_recon_del"] = sub1(D, RECON, "")
+V["D_recon_uncond"] = sub1(D, RECON, "\tfailures = cmp_fails;\n")
+V["D_sub_before"] = sub1(D, RECON, "\tfailures -= cmp_fails;\n" + RECON)
+V["D_sub_after"] = sub1(D, RECON, RECON + "\tfailures -= cmp_fails;\n")
+V["D_reset1_after"] = sub1(D, RECON, RECON + "\tfailures = 0;\n")
+V["D_scg_del"] = sub1(D, SCG, "")
+#  --- pass-2 shapes: disclosed classes (expect green) and the probe-closed ones (expect red) ---
+V["D_want165"] = sub1(D, CHK_IF, "\tif (got != want && want-165) {\n\t\tfailures ++;")
+V["D_postinc"] = sub1(D, CHK_IF, "\tif (got != want && (rows & 127) < 2) {\n\t\tfailures ++;")
+V["D_wrap"] = sub1(D, "\trow_cmp(why, sectors, got57, got60);", "\trow_cmp(why, sectors, sectors, sectors);")
+V["D_u16"] = sub1(D, "static void row_cmp(const char *why, uint64_t sectors, uint64_t got57, uint64_t got60)",
+                  "static void row_cmp(const char *why, uint16_t sectors, uint16_t got57, uint16_t got60)")
+V["D_sum"] = sub1(D, ROWCMP_IF, "\tif (got57 + got60 != 2 * sectors) {")                          # F14
+#  --- NEW: single edits of the verdict, the exit status and the trailer ---
+V["D_v_nocmp"] = sub1(D, VERDICT, "\tif (failures == 0 && sc_g)\n")
+V["D_v_ge"] = sub1(D, VERDICT, "\tif (failures == 0 && cmp_fails >= 0 && sc_g)\n")
+V["D_v_eq"] = sub1(D, VERDICT, "\tif (failures == cmp_fails && sc_g)\n")
+V["D_ret_nocmp"] = sub1(D, RET, "\treturn (failures || !sc_g) ? 1 : 0;\n")
+V["D_printf_sub"] = sub1(D, PRINTF, PRINTF.replace("rows, failures);", "rows, failures - cmp_fails);"))
+#  --- NEW: two edits, one per tally path, neither a reset of cmp_fails ---
+V["D_v_nocmp_sub_after"] = sub1(V["D_v_nocmp"], RECON, RECON + "\tfailures -= cmp_fails;\n")
+V["D_v_nocmp_recon_ge_sub"] = sub1(V["D_v_nocmp"], RECON, "\tif (cmp_fails >= failures)\n\t\tfailures -= cmp_fails;\n")
+V["D_v_eq_printf_sub"] = sub1(V["D_v_eq"], PRINTF, PRINTF.replace("rows, failures);", "rows, failures - cmp_fails);"))
+V["D_v_nocmp_reset1"] = sub1(V["D_v_nocmp"], AFTER_COVERED, AFTER_COVERED + "\tfailures = 0;\n")   # recon restores
+V["D_v_nocmp_reset1_recondel"] = sub1(V["D_v_nocmp_reset1"], RECON, "")                              # 3 edits
+#  --- NEW: positional -- the covered calls moved past the verdict, and the identity pin re-counted ---
+moved = sub1(D, AFTER_COVERED, "")
+moved = sub1(moved, TOKEN_END, TOKEN_END + AFTER_COVERED)
+V["D_move"] = moved
+V["D_move_repin"] = sub1(moved, PIN, "\tif (rows != 104) {\n")
+#  --- NEW: the self-check's new cmp_fails check weakened (a block edit), alone and with the #551c pair ---
+V["D_sc_weak"] = sub1(D, SC_CHK_CHECK, "|| cmp_fails > sc_cf + (cg[i] != cw[i]))")
+V["D_sc_weak_nocmpinc_reset1"] = sub1(V["D_nocmpinc_reset1"], SC_CHK_CHECK, "|| cmp_fails > sc_cf + (cg[i] != cw[i]))")
+for k, v in V.items():
+    io.open("%s/%s.c" % (outdir, k), "w", encoding="utf-8", newline="").write(v)
+print("variants (%d):" % len(V), " ".join(sorted(V)))

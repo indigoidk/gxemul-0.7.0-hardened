@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""#551 revision d -- #551c's own pass (the Opus 5.5 seat, measured in opus551_measured_c/), on top of xform551c.py:
+
+  * the verdict and the exit status read cmp_fails DIRECTLY -- a subtraction or a reset of `failures' placed anywhere
+    (the reconciliation line mutated to `>=' / `-=', or `failures -= cmp_fails;' after it) no longer turns the run green;
+  * the self-check requires the EXACT change in cmp_fails for every probe, as it does for `failures' -- so deleting a
+    comparator's `cmp_fails ++' is seen;
+  * four sentences corrected: cmp_fails is INCREMENTED only by the comparators (the self-check also writes it, to
+    restore it); an edit that keeps the self-check's answers CAN keep gate 2 green (a reset after the covered rows
+    does not); a reset of `failures' alone is caught wherever it sits; "an edit of this block itself" is reasoned, not
+    measured.
+
+usage: xform551d.py <orig diff_wdc_identify.c> <out.c> [variant]
+  variants: xform551c.py's, plus recon2 subafter incdel_reset"""
+import io
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import xform551c as C   # noqa: E402
+
+BS = chr(92)
+NL = BS + "n"
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("REFUSED: %d matches for %r" % (n, old[:70]))
+    return s.replace(old, new)
+
+
+EDITS = [
+    #  the block's opening sentence: what the probes cover, and what is required and restored per probe
+    (" *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone and on either side of its\n"
+     " *  want, and one pair that must NOT\n"
+     " *  fail -- and requires the EXACT change in `failures' for each, restoring `rows' and `failures' after every\n"
+     " *  probe.  Run FIRST (before any row) and LAST (after every row, before the identity row), so a comparator\n",
+     " *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone with got both below and\n"
+     " *  above its want, and one pair that must NOT fail -- and requires the EXACT change in `failures' and in\n"
+     " *  cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.  Run FIRST (before\n"
+     " *  any row) and LAST (after every row, before the identity row), so a comparator\n"),
+    ("static int cmp_fails;\t/*  failures the two comparators counted; only they touch it  */\n",
+     "static int cmp_fails;\t/*  failures the two comparators counted; only they increment it  */\n"),
+    #  the self-check pins cmp_fails's change too
+    ("\t\tif (failures != sc_f + (cg[i] != cw[i]))\n\t\t\tsc_bad++;\n",
+     "\t\tif (failures != sc_f + (cg[i] != cw[i]) || cmp_fails != sc_cf + (cg[i] != cw[i]))\n\t\t\tsc_bad++;\n"),
+    ("\t\tif (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i]))\n\t\t\tsc_bad++;\n",
+     "\t\tif (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i])\n"
+     "\t\t    || cmp_fails != sc_cf + (r57[i] != rw[i] || r60[i] != rw[i]))\n\t\t\tsc_bad++;\n"),
+    #  the verdict and the exit status read cmp_fails directly
+    ("\tif (failures == 0 && sc_g)\n", "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n"),
+    ("\treturn (failures || !sc_g) ? 1 : 0;\n", "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n"),
+    #  the disclosure, corrected
+    (" *  comparators answer right on ITS OWN calls, so an edit that keeps those answers and changes the rest\n"
+     " *  keeps every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's own\n"
+     " *  phase that the probes do not share; an edit of the code that FEEDS the comparators (row() handing\n"
+     " *  row_cmp() its own want); an edit of this block itself.  Measured on #551's passes; reviewed in the\n"
+     " *  differential, not chased.  A reset of `failures' ALONE after the comparators is not among them: they\n"
+     " *  also count cmp_fails, which only they touch, and the trailer reports the larger.  A reset of BOTH\n"
+     " *  tallies is, and is disclosed.",
+     " *  comparators answer right on ITS OWN calls, so an edit that keeps those answers and changes the rest\n"
+     " *  CAN keep every gate-2 row green -- a test keyed on a value, a name, a position or the self-check's\n"
+     " *  own phase that the probes do not share, or an edit of the code that FEEDS the comparators (row()\n"
+     " *  handing row_cmp() its own want), each measured on #551's passes; or an edit of this block itself\n"
+     " *  (reasoned: the block edits measured so far are caught).  Reviewed in the differential, not chased.\n"
+     " *  A reset of `failures' alone is not among them, wherever it sits: the comparators also count\n"
+     " *  cmp_fails, which only they increment, and the verdict and the exit status read it directly.  A reset\n"
+     " *  of BOTH tallies is, and is disclosed."),
+]
+
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+VARIANTS = dict(C.VARIANTS)
+VARIANTS.update({
+    #  #551c's pass: the reconciliation line mutated, and a subtraction after it (the Opus seat's two green edits)
+    "recon2": (RECON, "\tif (cmp_fails >= failures)\n\t\tfailures -= cmp_fails;\n"),
+    "subafter": (RECON, RECON + "\tfailures -= cmp_fails;\n"),
+})
+#  chk()'s cmp_fails increment deleted AND `failures' reset after the covered rows (green on the chk() defects in #551c)
+INCDEL = ("\tif (got != want) {\n\t\tfailures ++;\n\t\tcmp_fails ++;\n", "\tif (got != want) {\n\t\tfailures ++;\n")
+COMBOS = dict(C.COMBOS)
+
+
+def make(orig):
+    s = C.make(orig)
+    for old, new in EDITS:
+        s = sub1(s, old, new)
+    return s
+
+
+def main():
+    orig = io.open(sys.argv[1], encoding="utf-8", newline="").read()
+    assert "\r" not in orig
+    s = make(orig)
+    v = sys.argv[3] if len(sys.argv) > 3 else None
+    if v == "nosc":
+        s = s.replace('\tselfcheck("first");\n', "").replace('\tselfcheck("last");\n', "")
+        i = s.index("/*\n *  @@SELFCHECK@@")
+        j = s.index("int main(void)\n{\n", i)
+        s = s[:i] + s[j:]
+        s = sub1(s, "\tif (failures == 0 && cmp_fails == 0 && sc_g)\n", "\tif (failures == 0 && cmp_fails == 0)\n")
+        s = sub1(s, "\treturn (failures || cmp_fails || !sc_g) ? 1 : 0;\n", "\treturn (failures || cmp_fails) ? 1 : 0;\n")
+        s = sub1(s, "\tif (!sc_g && failures == 0)\n\t\tfailures = 1;\n", "")
+    elif v == "incdel_reset":
+        s = sub1(s, *INCDEL)
+        s = sub1(s, *VARIANTS["reset"])
+    elif v in COMBOS:
+        for part in COMBOS[v]:
+            s = sub1(s, *VARIANTS[part])
+    elif v:
+        s = sub1(s, *VARIANTS[v])
+    io.open(sys.argv[2], "w", encoding="utf-8", newline="").write(s)
+    print("xform551d ->", sys.argv[2], v or "")
+
+
+if __name__ == "__main__":
+    main()

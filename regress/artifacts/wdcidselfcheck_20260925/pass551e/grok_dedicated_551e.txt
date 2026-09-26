@@ -1,0 +1,104 @@
+I'll read the #551e brief in full and treat the inlined harness as the code under review, then look for a green edit outside the four named classes.The brief is in. Next I’ll check the comparators, the gate’s exact checks, and the earlier measurements so a green edit is judged against the real harness, not the comment.The earlier pass’s trailer-difference edit is now class (3). I’m checking the row bodies and the gate’s exact scoring so a candidate has to survive those, not the comment.VERDICT: DO NOT SHIP
+
+The call-count pin counts two integers. One statement in `row_ring_occupancy_sound` can set those integers and run the real `chk()` calls only after `main` has already printed the score. That is one edit, it is outside the four named classes, and every gate-2 check still passes. The same pass shows the trailer is closable in-file against the two mutations the adjudication named.
+
+This was walked against the inlined #551e trailer, `gate_offline.sh`'s `check` (string equality on the grep), and `selfmutant.py`'s token rules. The shell was not available, so nothing was recompiled.
+
+## 1. The edit
+
+First statement of `row_ring_occupancy_sound`:
+
+```c
+if (chk_calls == 0 && (chk_calls += 24) && (rows += 24) && !atexit(row_ring_occupancy_sound))
+	return;
+```
+
+`selfcheck("first")` restores `chk_calls` to 0, and every real `chk()` call in the file is inside this function, so the first entry takes the branch: the counter becomes 24, `rows` gains the 24 the body would have added, and the function is registered with `atexit`. The last self-check then sees `chk_calls == 24` and `rowcmp_calls == 8` (the eight `row()` calls already ran), so `sc_g` is set and the G line prints. The trailer still sees `failures == 0` and `cmp_fails == 0`. `atexit` runs on the way out, `chk_calls` is 24, the branch is false, and the real body runs after the summary and the token.
+
+The row it silences is `R3 full ring: DRQ still set` (`drqring`'s `chk()` row; `R6 liveness: DRQ asserted` goes with it). All 24 `chk()` rows in this function miss the scored trailer the same way. The eight `row_cmp()` rows are untouched, so `w57hi` still fails the run.
+
+Gate-2 checks this survives:
+
+- **Failure count.** The summary is printed in `main`, while the counters are still 0, so the log contains one `0 failures`. A later `FAIL` line from `chk()` is `got %lld want %lld` and does not match `[0-9]+ failures`. `check()` compares that grep to the string `0`.
+- **Row floor.** The summary is `128 rows`. The mint is the same 24 `rows++` the skipped body would have done, so the identity row still sees 128. `check_min` only requires at least 42.
+- **`WDC_IDENTIFY_PASS` once.** `failures == 0 && cmp_fails == 0 && sc_g` is true at the trailer. The deferred body does not print that token.
+- **Named-row greps, including `high byte`.** They are presence counts. The deferred body prints each ring label once. `row_wide_geometry` still runs in `main`, so `high byte` stays one line. Grep does not care that the ring lines follow the token.
+- **G line.** The last self-check's pin is satisfied and `sc_bad` stays 0, so it prints `SELFCHECK the comparator can still fail`.
+- **`@@SELFCHECK@@`.** The edit is not in that text.
+- **Self-mutant lane.** The geometry row is inline, runs before the trailer, and adds only to `failures`. The mutant arm still prints `WDC_IDENTIFY_FAIL` and a `FAIL` line containing `geometry words carry their high byte`. `selfmutant.py` requires that token to be present; it does not require the `PASS` token to be absent. `atexit` output cannot unprint either line (`stdout` is unbuffered).
+
+The one assumption I could not execute: the deferred body has to finish and print its labels on a pristine run. It rebuilds its device through `altctl_fresh` and does not use process state the later rows destroy. A crash before `R6 liveness: SIZE-1 all land` would drop a named label and go red. A wrong result that still prints the label would stay green, because those greps do not read `ok` versus `FAIL`.
+
+This is not class (1) or (2): `chk` and `row_cmp` are unchanged, and the real arguments are unchanged. It is not class (3): the trailer text is unchanged. It is not class (4): the self-check is unchanged. The contract's sentence that moving covered rows past the verdict is caught is the sentence this edit falsifies. The pin compares the integers the note line prints. It does not observe the calls.
+
+Same class, larger and synchronous, if the deferred body is not trusted: the same early return, with the twelve gate labels printed in the early branch and no `atexit`. One insertion, same green checks, no post-return work.
+
+## 2. The pin that survives one inlining and the conditional reset
+
+Yes. A witness the reset does not write, read in two places, so one inlining leaves the other.
+
+```c
+static int cmp_latch;   /* incremented beside cmp_fails++ in BOTH comparators, inline */
+
+static void pin_count(void) {
+	if (cmp_latch)
+		printf("\n1 failures\n");
+}
+
+static void wdc_emit(void) {
+	if (cmp_latch && failures == 0)
+		failures = 1;
+	if (cmp_fails > failures)
+		failures = cmp_fails;
+	if (!sc_g && failures == 0)
+		failures = 1;
+	printf("\n%d rows, %d failures\n", rows, failures);
+	if (failures == 0 && cmp_fails == 0 && sc_g && cmp_latch == 0)
+		printf("WDC_IDENTIFY_PASS\n");
+	else
+		printf("WDC_IDENTIFY_FAIL\n");
+}
+```
+
+`selfcheck` saves `cmp_latch` with the other counters and restores it after the probes, so the probe mismatches do not stick. `main` registers `atexit(pin_count)` and then `atexit(wdc_emit)` before any row, and the in-main summary and token printfs come out. Handlers run in reverse order of registration.
+
+`if (failures == cmp_fails) failures = cmp_fails = 0;` does not store to `cmp_latch`.
+
+Inlining one handler away:
+
+- Replace `wdc_emit` with a body that prints `0 failures` and `WDC_IDENTIFY_PASS`. `pin_count` still runs and, when `cmp_latch` is set, prints `1 failures`. The failure grep becomes two numbers. `check()` wants the string `0`. Red. The geometry arm never sets `cmp_latch` (`failures == 1`, `cmp_fails == 0`), so the reset does not fire there, `wdc_emit`'s honest twin is the one that was replaced, and `pin_count` stays silent. The mutant still prints `WDC_IDENTIFY_FAIL` from the remaining honest path only if that path is `wdc_emit`. If `wdc_emit` was the one replaced, the weak body must still print `FAIL` when `cmp_latch` is clear and `failures != cmp_fails`, or the lane goes red and the attack does not keep gate 2 green. A weak body that prints `PASS` whenever the counters are equal, and `FAIL` otherwise, still loses: after the reset the covered run is `(0, 0)` with `cmp_latch` set, and `pin_count` contributes `1 failures`.
+- Replace `pin_count` with an empty function. `wdc_emit` still sees `cmp_latch` and will not print `PASS`. Red.
+
+A probed `verdict(failures, cmp_fails, sc_g)` with one call site does not survive. Inlining that call to `failures - cmp_fails == 0 && sc_g` is the whole defeat; the reset is optional. A check of only those two integers, inline or not, dies to the reset placed immediately above it. A latch set inside a one-call `note_fail()` dies if that call is the one that gets inlined. The duplication has to be textual, in both failure arms, and the two readers have to be two registrations.
+
+The same pair of handlers also catches the edit in finding 1. The deferred `chk()` calls are the last `atexit` registration, so they run before either handler and set `cmp_latch`. The score is then printed with the latch already set.
+
+## 3. Contract sentences this falsifies
+
+- "Nor is moving the covered rows past the verdict: the LAST run requires chk() 24 and row_cmp() 8 calls." The last run requires the two counters. Finding 1 keeps the counters and moves the calls.
+- The gate-2 bullet's twin of that sentence.
+- "No in-file probe can pin a single call site." Finding 2 pins the trailer's result without a probe of the printing function. The single-call-site argument covers a helper whose only reader is that one call. It does not cover a witness read twice.
+- "Four classes" as the exhaustive list. Deferral-plus-counter-mint is a fifth.
+
+"Each measured on #551's passes" can stand for the four classes that were measured. The historical "24 measured, none green" sentence is about that set. It is not a claim about `atexit`.
+
+The brief's "sixteen named rows" is a stale premise. The wdc block in `gate_offline.sh` has 68 presence checks plus the failure, verdict, and row-floor checks. Finding 1 was scored against that list. The contract text does not say sixteen.
+
+The call-count pin adds no line on a healthy run. Measurement (a) in the brief matches that: the new branch prints only when the counts miss.
+
+## 4. Shapes that stay inside a named class or go red
+
+These are the denominator, not findings.
+
+- Trailer prints and tests `failures - cmp_fails`, including the return. Class (3), the composite the contract already names. Each half alone is red: the printf half leaves `WDC_IDENTIFY_FAIL`, the verdict half leaves a nonzero count (`D_v_eq`, `D_printf_sub`).
+- `if (failures == cmp_fails) failures = cmp_fails = 0;`. Class (3), measured `condreset`.
+- `if (cmp_fails) failures = cmp_fails = 0;`. Same results on every device in the packet, because a comparator failure keeps the counters equal and the geometry arm is `(1, 0)`. The gate bullet already says a conditional both-tally reset.
+- `failures = 0` alone, `cmp_fails = 0` alone, deleting `cmp_fails++`, and the operator weakenings (`<`, `&& sectors`, a dropped disjunct, `uint16_t`, `&& got`). Red at the trailer or at the probes. Measured `reset`, `incdel_reset`, `lt`, `andsect`, `drop57`, `drop60`, `u16`, `andgot`.
+- A name, phase, `rows`, or `want - 165` test inside `chk`. Class (1).
+- `row_cmp(why, sectors, sectors, sectors)`. Class (2), the contract's own example.
+- `sectors_from_block` returns `stub_size / 512` when `stub_size` is nonzero, and the real decode when `row_slave` and `row_base_drive` have set `stub_size` to 0. On `w57hi` the eight capacity rows then pass, the probes never call this function, and `row_wide_geometry` still uses `word()` on words 1, 3, and 6. That is class (2) under the general sentence "the code that feeds a comparator": `row()` passes `got57` and `got60`, and those values have been turned into the want. It is the smaller edit if class (2) is read as only the call expression. On the reading this contract actually uses, general sentence plus one example, it is not a new class.
+- A local `failures` or `cmp_fails` shadowing the trailer. Shadowing both prints `PASS` on the geometry arm and the lane goes red. Shadowing `failures` alone is undone by `if (cmp_fails > failures) failures = cmp_fails`.
+- `#define cmp_fails failures`. Both `++` hit one integer, the probe delta is 2, the G line disappears.
+- Move the call past the token and re-pin identity to 104. The pin fires. Measured `move_repin`.
+- Delete or disable the pin and do nothing else. The rows still run before the trailer and still increment both counters. Measured `nopin` on `drqring`.
+- Inside `chk`, `if (chk_calls == 24) failures = cmp_fails = 0` after the real 24th call. That is a position key. Class (1). The last self-check's probes start from a restored 24 and increment before they compare, so they never see 24.

@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""#551 PASS 2 analysis: gate 2 emulated per (harness, dev_wdc.c) -- its 73 wdc checks run
+verbatim from gate_offline.sh, plus the manifest's H (token in SOURCE) and G (text in LOG),
+plus the self-mutant lane (selfmutant.py's pristine/mutant logic, arms = dev and dev+selfmut)."""
+import io, os, re, subprocess
+W = "/tmp/opus551p2"
+NAMED = "geometry words carry their high byte"
+G_TEXT = "SELFCHECK the comparator can still fail"
+io.open(W + "/gate_eval.sh", "w").write(r'''
+WDCLOG="$1"; _f=0
+check() { [ "$2" = "$3" ] || { echo "RED $1 got=$2 want=$3"; _f=$((_f+1)); }; }
+check_min() { [ "$2" -ge "$3" ] 2>/dev/null || { echo "RED $1 got=$2 min=$3"; _f=$((_f+1)); }; }
+note() { :; }
+. ''' + W + '''/gatewdc.inc
+echo "REDCOUNT=$_f"
+''')
+
+
+def rd(dev, h, ext):
+    p = "%s/dev/%s/regress/%s.%s" % (W, dev, h, ext)
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else None
+
+
+def summ(t):
+    m = re.search(r"^(\d+) rows, (\d+) failures", t or "", re.M)
+    tok = re.search(r"WDC_IDENTIFY_(PASS|FAIL)", t or "")
+    return "%s rows %s failures %s" % (m.group(1) if m else "?", m.group(2) if m else "?",
+                                       tok.group(1) if tok else "NOTOKEN")
+
+
+def gate(h, dev):
+    lane_dev = "selfmut" if dev == "pristine" else dev + "_sm"
+    t = rd(dev, h, "log")
+    out = subprocess.run(["bash", W + "/gate_eval.sh", "%s/dev/%s/regress/%s.log" % (W, dev, h)],
+                         capture_output=True, text=True).stdout
+    reds = [l for l in out.split("\n") if l.startswith("RED ")]
+    H = "@@SELFCHECK@@" in io.open("%s/h/%s.c" % (W, h), encoding="utf-8").read()
+    G = G_TEXT in t
+    tm = rd(lane_dev, h, "log")
+    named = [l for l in t.split("\n") if l.strip().startswith(("ok", "FAIL")) and NAMED in l
+             and "@@SELFCHECK@@" not in l]
+    lane = "SETUP"
+    if tm is not None and re.search(r"\b[A-Z0-9_]+_PASS\b", t) and len(named) == 1 \
+            and not named[0].strip().startswith("FAIL"):
+        killed = [l for l in tm.split("\n") if l.strip().startswith("FAIL") and NAMED in l
+                  and "@@SELFCHECK@@" not in l]
+        lane = "OK" if (re.search(r"\b[A-Z0-9_]+_FAIL\b", tm) and killed) else "FAIL"
+    if not H: reds.append("RED H: no @@SELFCHECK@@ in the source")
+    if not G: reds.append("RED G: no '%s' in the log" % G_TEXT)
+    if lane != "OK": reds.append("RED self-mutant lane: %s" % lane)
+    return reds
+
+
+def fails(t):
+    return [re.sub(r"\s+", " ", l.strip())[:62] for l in (t or "").split("\n")
+            if l.startswith("  FAIL") and "@@SELFCHECK@@" not in l]
+
+
+print("=== 0. the final file on the real dev_wdc.c, and what each defect variant reds ===")
+for dev in ("pristine", "rev255", "cyl13", "srstbit", "drqring", "w57hi", "w58lo", "dropold"):
+    t = rd(dev, "F", "log"); r = gate("F", dev) if dev == "pristine" or os.path.exists(
+        "%s/dev/%s_sm/regress/F.log" % (W, dev)) else None
+    print("  F  %-8s %-30s rc=%s gate2=%s | FAIL rows: %s" % (
+        dev, summ(t), rd(dev, "F", "rc").strip(), ("GREEN" if r == [] else "red(%d)" % len(r)) if r is not None else "-",
+        "; ".join(fails(t))[:220]))
+t = rd("pristine", "F", "log")
+print("  SELFCHECK lines:", " | ".join(l.strip() for l in t.split("\n") if "SELFCHECK" in l and "@@" not in l))
+print("  grep -c 'high byte' (LINES, as gate 2 counts) = %d; untagged lines carrying the self-mutant row = %d" % (
+    sum(1 for l in t.split("\n") if "high byte" in l),
+    len([l for l in t.split("\n") if NAMED in l and "@@SELFCHECK@@" not in l])))
+
+print("\n=== Q3. stateless edits: gate 2 on a device carrying a defect only the silenced rows see ===")
+for h, dev in (("F_want165", "dropold"), ("F_sect4", "w57hi"), ("F_wrap", "w57hi"), ("F_u16", "w58lo"),
+               ("F_postinc", "drqring"), ("F_name", "drqring")):
+    base = fails(rd(dev, "F", "log")); esc = fails(rd(dev, h, "log"))
+    r = gate(h, dev); rp = gate(h, "pristine")
+    gone = [x for x in base if x not in esc]
+    print("  %-10s on %-8s gate2=%-6s (pristine gate2=%s) | %s | F reds %d row(s), this reds %d | silenced: %s" % (
+        h, dev, "GREEN" if not r else "red", "GREEN" if not rp else "red", summ(rd(dev, h, "log")),
+        len(base), len(esc), "; ".join(gone)[:200]))
+    if r:
+        print("      reds:", r[:3])
+
+print("\n=== Q4. the double edit (forced failure removed AND chk() stubbed), pristine device ===")
+for h in ("F_scnoforce_chkstub", "F_fc_scnoforce_chkstub"):
+    t = rd("pristine", h, "log")
+    sc = [l.strip() for l in t.split("\n") if "SELFCHECK" in l and "@@" not in l]
+    print("  %-24s %s rc=%s | %s" % (h, summ(t), rd("pristine", h, "rc").strip(), " | ".join(sc)))
+    print("      gate-2 reds:", gate(h, "pristine"))
+
+print("\n=== Q4 cost. the fail-closed verdict (F_fc) vs the final file (F): WHOLE log, byte for byte ===")
+for dev in ("pristine", "selfmut", "rev255", "cyl13", "srstbit", "drqring", "w57hi"):
+    a, b = rd(dev, "F", "log"), rd(dev, "F_fc", "log")
+    ra, rb = rd(dev, "F", "rc").strip(), rd(dev, "F_fc", "rc").strip()
+    print("  %-8s %s  rc %s/%s  (%d bytes)" % (dev, "IDENTICAL" if a == b and ra == rb else "DIFFER", ra, rb, len(a)))
+print("ANALYZE3_DONE")

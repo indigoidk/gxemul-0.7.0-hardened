@@ -1,0 +1,45 @@
+I'll read the pass-2 brief in full and then check both rounds against the tree, read-only.The brief is in. Next I’ll open gate 2’s greps and each exempt reason’s probe, and check those claims against the tree rather than the write-up.The exempt reasons name specific probes and gate homes. I’ll open each of those and check the new wording against the code.#551 VERDICT: SHIP WITH CHANGES
+#550 VERDICT: SHIP WITH CHANGES
+
+## #551 — `regress/diff_wdc_identify.c`
+
+The smallest edit that is not the disclosed pre-increment rows/name test is nine characters in `chk`, on the `if` that already sits after `rows ++` (`diff_wdc_identify.c:4866`):
+
+```c
+if (got != want&want-165) {
+```
+
+Precedence makes that `(got != want) & (want - 165)`. `0xA5` is 165. Every self-check `want` is 0, 1, 2, 7, or `2^32`, so those probes still move `failures` by exactly the amount `selfcheck` requires. A real call whose `want` is `0xA5` takes the `else` and prints `ok` for every `got`.
+
+Row silenced: `R2 anchor: inbuf[tail] survives` (`diff_wdc_identify.c:4900`), and the other eight `chk` calls that pass `0xA5` (cell 0, R4 fifo, R5a first byte, both R7 anchors, R8, R9, R10).
+
+Greps it survives:
+
+- **G** — `gate_offline.sh:2347`, `grep -q 'SELFCHECK the comparator can still fail'`. Both runs still get the exact deltas, so the last run still prints that line once.
+- **H** — `gate_offline.sh:2325`, `grep -q '@@SELFCHECK@@'` on the source. The token stays in the comment and the probe names.
+- **high byte** — `gate_offline.sh:1877`, `grep -c 'high byte'` pinned at 1. The only hit is still `row_wide_geometry` (`diff_wdc_identify.c:5556`). The edit adds none.
+- **Self-mutant lane** — `selfmutant.py:296` (one pristine `ok`/`FAIL` line containing `geometry words carry their high byte` and not `@@SELFCHECK@@`) and `:376` (the mutant `FAIL` line). That row is the inline compare at `diff_wdc_identify.c:5554`, not `chk`.
+- **The anchor's own presence row** — `gate_offline.sh:1515`, `grep -cF 'R2 anchor: inbuf[tail] survives'`. The `else` arm still prints that label. `rows ++` is above the `if`, so the identity pin stays 128 and `gate_offline.sh:1456` still sees `0 failures`.
+
+Two larger edits also survive those same greps. Neither is the excluded pre-increment test.
+
+- `&& (rows & 127) < 2` on that same `if` (20 characters). Last self-check enters with `rows == 127` (`selfcheck("last")` is before the identity `rows ++` that expects 128). After `rows ++` the probes see 128, and `128 & 127` is 0, so they still fail. The 24 real `chk` calls run after the eight `row()` calls, so they see a post-increment count of at least 9 and the conjunct is false. Silences `R6 liveness: DRQ asserted` (`diff_wdc_identify.c:4884`). The comment at `diff_wdc_identify.c:5656` says this placement reds through `failures`. It does not. The pre-increment form, which that comment says survives, sees 127, does not bump `failures`, suppresses the G line, and forces `failures` to 1. `measured/run551v2.out` `MINE_rows` is the post-increment form: both sentinel passes still print `FAIL @@SELFCHECK@@/chk` and the run is `rc=0`.
+- On `row_cmp`, `if (sectors<4&&(got57 != sectors || got60 != sectors))` (13 characters plus a parenthesis). Probe sectors are 1, 2, and 3, so G still prints. Silences `threshold: >>8 byte reaches 255` (`main`, sectors 65280), which `gate_offline.sh:1464` greps by label.
+
+Checked and rejected: `&& got` (dies on the `(0,1)` and `(0,2^32)` probes; `MINE_andgot` is `rc=1` and has no G line), either `row_cmp` disjunct dropped alone (`MINE_drop57` / `MINE_drop60`), and `&want-1` (same `(0,1)` probe). Name-keyed `name[0]=='@'` also stays green after `rows ++`, because the name does not depend on `rows`. That is the excluded class, and it is another case the "after the increment, the same test reds" sentence does not cover.
+
+## #550 — the new reasons
+
+The false one is the Alpha sentence, first on `alpha_tbi_probe.py` and copied onto `lca_badval_probe.py`, `lca_widewrite_probe.py`, and `lca_isalane_probe.py`.
+
+Anchor: `tools/pipeline/check_probe_wiring.py:2742`, `no gate runs an Alpha machine`, repeated at `:2737` as "at all". The named home `regress/gate_crossfamily.sh` does exist; it boots `luna88k` and `landisk` (`gate_crossfamily.sh:200` and `:227`) and never an Alpha. What the sentence gets wrong is the absence. `regress/gate_asan_sweep.sh:349` walks every type and subtype from `-H`, and `:266` execs `-E "$t" -e "$s"`. `src/machines/machine_alpha.c:242` registers subtype `alphabook1`. `alpha/3000/300` is already an `AB_EXEMPT` key at `gate_asan_sweep.sh:176`, so that sweep's machine set includes Alpha. The IP30 tuple was narrowed to "guest session" and "constructs only" (`check_probe_wiring.py:2778`). The Alpha tuple was not.
+
+The other ten claims match the files:
+
+- `wdc_altoffset_probe.py:682` — `ok` is `nfail == 0 and b_hit and f_hit`. There is no one-leg path; argv is base binary, fix binary (`:133`). Gate 10 is `gate_sh_rounding.sh:28`.
+- `wdc_altoffset_4bit_probe.py:183` — the P5 cells are `want` `None`, and `:216` says the point is that they differ by leg. `LEGS` is a variable argv list (`:53`).
+- `wdc_altoffset_sig_probe.py:248` — `sig` is only `a1==0x14 and a2==0xeb`; every other value, including unreadable, prints "declined" (`:254`). The `ciR:` prefix is applied in the probe (`:75`), and gate 10 already has `wdc-scratch-64m.img` (`gate_sh_rounding.sh:1393`).
+- `wdc_addtoinbuf_probe.py:189` — two fixed binaries, and `:586` wants image byte `0xC0`. The battery image on gate 10 is `wdc-scratch-64m.img`. `artifacts/wdcaddtoinbufbound/rung3_20260830/mkcd.py` builds the poisoned image as research; the battery does not.
+- `ppc_rldicl_probe.py:625` — `SCORE` and `PPC_RLDICL_PROBE_DONE` only. No `RESULT=` or `CONTROL=`. `gate_ppc.sh:109` parses `^PPC_RLWIMI_RESULT=` / `CONTROL=`, and `ppc_rlwimi_probe.py:214` passes `-M 64`.
+- `artifacts/ip30abortkill/ip30_abort_probe.py:190` — the session is `-E sgi -e ip30`. `:230` is `deadline = time.time() + 12.0`, and an alive child runs that loop out (`:241`). `gate_asan_sweep.sh:593` runs `-e ip30 /dev/null` and scores the `model: SGI-` line (`:597`), which is construction. `gate_arm.sh` invokes seven SGI cold-debugger probes (`sgi_de_width` at `:1309`, `sgi_re_width` at `:1393`, `sgi_re_unmapped` at `:1483`, `sgi_re_randompixel` at `:1520`, `sgi_re_colourdefault` at `:1564`, `sgi_re_rgb` at `:1602`, `sgi_de_primop` at `:1648`).
+- `ieee_store` — `diff_ieee_store.c:1302` has nine `== 0` terms: `abs_bad`, `unexplained`, `missed`, `inrange_diff`, `rm_rn_bad`, `rm_rz_bad`, `rm_d_bad`, `rm_vec_bad`, `interp_bad`. No `check(`, no `rows`, no `failures` counter. `gate_crossfamily.sh` is not the claim here; the re-date text is `gate_offline.sh:2302`.

@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""#551e: gate 2 emulated per (shape, device) -- the 73 wdc checks verbatim from gate_offline.sh, H (token in
+SOURCE), G (text in LOG), the one PASS token, and the self-mutant lane (selfmutant.py's logic; arms = device and
+device+self-mutant).  A shape ESCAPES on a device when the unedited #551e file reds that device but gate 2 is GREEN
+with the shape applied, and the pristine device is GREEN too."""
+import io, os, re, subprocess
+W = "/tmp/opus551e"
+NAMED = "geometry words carry their high byte"
+G_TEXT = "SELFCHECK the comparator can still fail"
+io.open(W + "/gate_eval.sh", "w").write(r'''
+WDCLOG="$1"; _f=0
+check() { [ "$2" = "$3" ] || { echo "RED $1 got=$2 want=$3"; _f=$((_f+1)); }; }
+check_min() { [ "$2" -ge "$3" ] 2>/dev/null || { echo "RED $1 got=$2 min=$3"; _f=$((_f+1)); }; }
+note() { :; }
+. ''' + W + '''/gatewdc.inc
+''')
+
+
+def rd(dev, h, ext, root=W):
+    p = "%s/dev/%s/regress/%s.%s" % (root, dev, h, ext)
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else None
+
+
+def summ(dev, h):
+    if (rd(dev, h, "rc") or "").strip() == "BUILD_FAIL":
+        return "BUILD_FAIL"
+    t = rd(dev, h, "log") or ""
+    m = re.search(r"^(\d+) rows, (\d+) failures", t, re.M)
+    return "%s/%s %s" % (m.group(1) if m else "?", m.group(2) if m else "?",
+                         "PASS" if "WDC_IDENTIFY_PASS" in t else ("FAIL" if "WDC_IDENTIFY_FAIL" in t else "NOTOKEN"))
+
+
+def gate(h, dev):
+    if (rd(dev, h, "rc") or "").strip() == "BUILD_FAIL":
+        return ["compile"]
+    lane_dev = "selfmut" if dev == "pristine" else dev + "_sm"
+    t = rd(dev, h, "log")
+    out = subprocess.run(["bash", W + "/gate_eval.sh", "%s/dev/%s/regress/%s.log" % (W, dev, h)],
+                         capture_output=True, text=True).stdout
+    reds = [l[4:44] for l in out.split("\n") if l.startswith("RED ")]
+    if "@@SELFCHECK@@" not in io.open("%s/h/%s.c" % (W, h), encoding="utf-8").read():
+        reds.append("H")
+    if G_TEXT not in t:
+        reds.append("G")
+    tm = rd(lane_dev, h, "log")
+    named = [l for l in t.split("\n") if l.strip().startswith(("ok", "FAIL")) and NAMED in l and "@@SELFCHECK@@" not in l]
+    lane = "SETUP"
+    if tm is not None and re.search(r"\b[A-Z0-9_]+_PASS\b", t) and len(named) == 1 and not named[0].strip().startswith("FAIL"):
+        killed = [l for l in tm.split("\n") if l.strip().startswith("FAIL") and NAMED in l and "@@SELFCHECK@@" not in l]
+        lane = "OK" if (re.search(r"\b[A-Z0-9_]+_FAIL\b", tm) and killed) else "FAIL"
+    if lane != "OK":
+        reds.append("lane:" + lane)
+    return reds
+
+
+def cell(h, dev):
+    return ("GREEN" if not gate(h, dev) else "red") + "(" + summ(dev, h) + ")"
+
+
+shapes = sorted(f[:-2] for f in os.listdir(W + "/h") if f.endswith(".c"))
+shapes.remove("E")
+shapes = ["E"] + shapes
+DEFECTS = ("dropold", "drqring", "w57hi")
+print("=== (1) %d shapes on #551e (the unedited file first) x the real device + %d covered-only defects, with the lane ===" % (
+    len(shapes) - 1, len(DEFECTS)))
+print("    %-26s %-19s %-19s %-19s %-19s  %s" % ("shape", "pristine", "dropold (chk cmp)", "drqring (chk 0/1)", "w57hi (row_cmp)", "escapes on"))
+green = []
+for h in shapes:
+    esc = [d for d in DEFECTS if not gate(h, "pristine") and not gate(h, d) and gate("E", d)] if h != "E" else []
+    if esc:
+        green.append(h)
+    print("    %-26s %-19s %-19s %-19s %-19s  %s" % (h, cell(h, "pristine"), cell(h, "dropold"), cell(h, "drqring"),
+                                                   cell(h, "w57hi"), ",".join(esc) or "-"))
+print("  shapes GREEN on at least one covered-only defect:", " ".join(green))
+for h in ("E_movefake", "E_countforge", "E_move_repin"):
+    t = rd("drqring", h, "log") or ""
+    print("  %s drqring self-check lines: %s" % (h, " | ".join(re.sub(r"\s+", " ", l.strip())[:90] for l in t.split("\n")
+                                                              if "SELFCHECK(" in l or "SELFCHECK the" in l)))
+for h in ("E_vpin", "E_emit"):
+    t = rd("pristine", h, "log") or ""
+    print("  %s pristine self-check lines: %s" % (h, " | ".join(re.sub(r"\s+", " ", l.strip())[:90] for l in t.split("\n")
+                                                               if "SELFCHECK" in l and "@@" not in l)))
+t = rd("drqring", "E_emit_cond_trailer", "log") or ""
+print("  E_emit_cond_trailer drqring: emitted lines %d; trailer '%s'; token %s; gate-2 reds %s" % (
+    len([l for l in t.split("\n") if "covered comparator failure" in l]),
+    (re.search(r"^\d+ rows, \d+ failures", t, re.M) or re.search("x^", "")) and re.search(r"^\d+ rows, \d+ failures", t, re.M).group(0),
+    "PASS" if "WDC_IDENTIFY_PASS" in t else "FAIL", gate("E_emit_cond_trailer", "drqring")))
+
+print("\n=== (1b) #551e against #551d: WHOLE log, byte for byte; and the emit option against #551e ===")
+for dev in ("pristine", "selfmut", "rev255", "cyl13", "srstbit", "drqring", "w57hi", "w58lo", "dropold"):
+    e = rd(dev, "E", "log")
+    d = rd(dev, "D", "log", "/tmp/opus551d")
+    em = rd(dev, "E_emit", "log")
+    extra = [l for l in em.split("\n") if l not in e.split("\n")] if em else []
+    only_emit = all("covered comparator failure" in l for l in extra)
+    print("    %-8s E vs D: %s rc %s/%s | E_emit vs E: %s" % (
+        dev, ("WHOLE-LOG IDENTICAL" if d is not None and d == e else ("DIFFER" if d is not None else "no D log")),
+        (rd(dev, "D", "rc", "/tmp/opus551d") or "?").strip(), rd(dev, "E", "rc").strip(),
+        "WHOLE-LOG IDENTICAL" if em == e else "+%d lines, all emitted failure lines: %s" % (len(extra), only_emit)))
+print("ANALYZE7_DONE")

@@ -1,0 +1,84 @@
+VERDICT: SHIP
+
+### Numbered Findings & Adversarial Audit
+
+#### 1. Verification of Settled Premises & File State
+* **Working Tree State (`brief_sent.md:11-13`):** Confirmed. In [`GXEMUL-SEC/regress/diff_wdc_identify.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L509-L522), the working tree is modified only with #551's initial version:
+  * [`row_cmp`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L509-L522) (lines 509–522) increments `rowcmp_calls` and `failures`, but has no `cmp_fails` and no report line.
+  * [`chk`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4862-L4871) (lines 4862–4871) has `chk_calls` and `failures`, but no `cmp_fails` and no report line.
+  * [`selfcheck`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5665-L5703) (lines 5665–5703) runs 5 `chk` and 4 `row_cmp` probes, lacking the call-count pin (`chk_calls == 24 && rowcmp_calls == 8`), `cmp_fails` tracking, and `sc_g`.
+  * The git base commit at `HEAD:regress/diff_wdc_identify.c` has md5 `1fd7ff1d` (matching [`pass551f/run551f.run-1.sh.txt:15`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/pass551f/run551f.run-1.sh.txt#L15)).
+* **Tally Mutators (`brief_sent.md:56-58`):** Confirmed. In [`diff_wdc_identify.c:419`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L419), `rows` and `failures` are declared file-scope `static int`. In #551f ([`pass551f/diff551_e_f_wdcid.diff`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/pass551f/diff551_e_f_wdcid.diff#L7-L17)), `cmp_fails` is incremented exclusively in the failure branches of `row_cmp` and `chk`. In [`selfcheck`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/_scratchpad/panel_20260925_192331/brief_sent.md#L188-L200), `cmp_fails` is restored to `sc_cf` after every probe and upon forced failure, leaving `failures` alone.
+* **`main()` Sequence (`brief_sent.md:59-61`):** Confirmed. In [`diff_wdc_identify.c:5714-5815`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5714-L5815):
+  * Line 5714: `selfcheck("first");`
+  * Lines 5718–5728: exactly 8 `row(...)` calls (all entering `row_cmp`).
+  * Lines 5730–5785: exactly 59 zero-argument `row_*()` calls; `row_ring_occupancy_sound()` is at call index 45 (line 5770) containing all 24 `chk()` calls, and `row_wide_geometry()` is at call index 56 (line 5783).
+  * Line 5786: `selfcheck("last");`
+  * Lines 5800–5807: Identity row (`rows != 128`).
+  * Lines 5809–5815: Trailer.
+* **Row Count & Coverage Arithmetic (`brief_sent.md:62-64`):** Confirmed:
+  * Total rows = 128 (8 `row_cmp` calls + 24 `chk` calls in `row_ring_occupancy_sound` + 96 inline row comparisons).
+  * `grep -cE '\? [01] : [01], 1\);' regress/diff_wdc_identify.c` evaluates to exactly 8 (verdict-handed `chk` calls at lines 4884, 4892, 4908, 4946, 4970, 4988, 5044, 5086).
+  * 24 covered comparisons = 16 direct comparisons in `chk` + 8 in `row_cmp`.
+  * All 32 comparator calls report when mismatched under mechanism (B).
+* **Gate 2 Checks (`brief_sent.md:65-69`):** Confirmed against [`GXEMUL-SEC/regress/gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh):
+  * Line 1456: failure-count check compares `$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')` to `"0"`.
+  * Line 1458: `check_min "wdc IDENTIFY: rows actually run" ... 42`.
+  * Line 1460: `check "wdc IDENTIFY: offline verdict"` (`grep -c 'WDC_IDENTIFY_PASS'` == 1).
+  * Lines 1463–1876: Exactly 70 row presence checks. 69 check explicit literal strings (e.g. `threshold: >>8 byte reaches 255`), and check 70 (line 1876) checks `high byte` for `row_wide_geometry`. (The brief's phrasing at line 66—`69 named rows ...; high byte once`—correctly accounts for 69 + 1 = 70).
+  * Lines 2325–2328: H check greps source for `@@SELFCHECK@@`.
+  * Lines 2347–2350: G check greps log for `SELFCHECK the comparator can still fail`.
+  * Line 1021: Self-mutant lane runs `selfmutant_one diff_wdc_identify.c src/devices/dev_wdc.c wdc_identify "geometry words carry their high byte"`.
+  * Line 1453: Exit status is discarded (`"$WDCBIN" > "$WDCLOG" 2>&1` without testing `$?`).
+
+---
+
+#### 2. Review Questions (Adjudication Stop Conditions)
+
+##### Question 1: Is everything the contract says is CAUGHT measured red?
+**YES.**
+* All 29 shapes designated as `caught` in [`pass551f/meas551f.py.txt:5-11`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/pass551f/meas551f.py.txt#L5-L11) are measured `red` across all three covered-only defect variants (`dropold`, `drqring`, `w57hi`) in [`pass551f/measured/run551f.out:5-24, 26, 29-34, 37, 39-42`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out#L5-L24):
+  * **Trailer single:** `F_v_eq`, `F_v_nocmp`, `F_printf_sub`, `F_ret_nocmp`, `F_hardcode`, `F_recon_ge_sub`, `F_sub_after` are all red.
+  * **Trailer paired:** `F_v_eq_printf_sub`, `F_v_nocmp_sub_after` are all red.
+  * **Resets:** `F_reset_mid`, `F_resetcmp_mid`, `F_reset2_mid`, `F_cond_start`, `F_cond_mid`, `F_cond_trailer`, `F_cond_afterprintf`, `F_both_trailer`, `F_both_afterprintf` are all red.
+  * **Moves/deferrals:** `F_movefake`, `F_movefake_row`, `F_countforge`, `F_forge_move`, and `F_atexit_defer` are all red.
+  * **Pin moves & deletions:** `F_move_repin`, `F_nopin_move_repin`, `F_delring_repin`, `F_delrow_repin`, `F_emitoff`, `F_nopin` are all red.
+* Crucially, the #551e escape (`F_atexit_defer`) was measured red on all defects: in [`measured/run551f_logs/F_atexit_defer_drqring.log:414-418`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/measured/run551f_logs/F_atexit_defer_drqring.log#L414-L418), even though `128 rows, 0 failures` and `WDC_IDENTIFY_PASS` printed before termination, the `atexit` execution subsequently printed `FAIL covered comparator failure -- 1 failures so far`, causing gate 2's failure-count capture to extract `"0\n1\n2" != "0"`.
+* No caught shape is missing from the test matrix or misclassified.
+
+##### Question 2: Is every green shape inside A-D as worded?
+**YES.**
+* The 7 shapes that escape (remain GREEN) on at least one covered-only defect are:
+  1. `F_emitoff_cond_trailer`: Class (B) residual (explicitly named in contract (B): report switched off via `if (0)` combined with trailer reset).
+  2. `F_want165`: Class (A) (comparator keying on `want != 165`).
+  3. `F_postinc`: Class (A) (comparator keying on position `(rows & 127) < 2`).
+  4. `F_name`: Class (A) (comparator keying on `*name == '@'`).
+  5. `F_phase`: Class (A) (comparator keying on `name[0] == '@'`).
+  6. `F_wrap`: Class (A) (feeder `row()` rewritten to supply `row_cmp` its own want).
+  7. `F_skipforge`: Class (C) (ring rows skipped, their 24 labels printed, `rows` and `chk_calls` incremented by 24 via a single insertion).
+* Adversarial test of single-edit perimeter: Any single in-file edit targeting a covered failure must alter either:
+  * The comparison/feeder logic (Partition A),
+  * The emission line/guard (Partition B),
+  * The call site/execution of the row (Partition C), or
+  * The self-check harness itself (Partition D).
+  Any edit that leaves the comparator intact and the rows executing cannot suppress the immediate stdout emission of `covered comparator failure`. Because gate 2 captures `[0-9]+ failures` over the entire log, downstream single edits (tallies, trailer, formatting, exit status, buffered streams) cannot undo the emitted failure line.
+
+##### Question 3: Is the report itself sound?
+**YES.**
+* **Probe isolation:** Probes invoke `chk("@@SELFCHECK@@/chk", ...)` and `row_cmp("@@SELFCHECK@@/row", ...)`. Both strings start with `'@'`. The guards `name[0] != '@'` and `why[0] != '@'` evaluate to false, completely preventing probe mismatches from emitting report lines.
+* **Production row isolation:** An audit of all 24 `chk()` calls and 8 `row_cmp()` calls confirms zero production row names begin with `'@'`.
+* **Universal coverage of covered failures:** In #551f, the report statement is placed directly in the mismatch branches of both `chk()` and `row_cmp()`. Every covered failure necessarily triggers this branch and prints.
+* **Grep pattern collision check:** The emitted string `  FAIL  covered comparator failure -- %d failures so far\n` was verified against all 73 grep patterns and tokens in [`gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1455-L1876). There are zero collisions with any named row label, `"high byte"`, the self-consistency oracle, `WDC_IDENTIFY_PASS`, `@@SELFCHECK@@`, or G text.
+
+##### Question 4: Is any sentence of the new contract or gate-2 bullet false?
+**NO.**
+* **"a printed line cannot be taken back and no line can be added":** True. Line 5711 of [`diff_wdc_identify.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5711) enforces `setvbuf(stdout, NULL, _IONBF, 0);`. Printed output is pushed immediately to the log. Gate 2 evaluates `$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')` against string `"0"`. Any added line matching `[0-9]+ failures` injects an additional line into the output of `grep -oE '^[0-9]+'`, resulting in a multiline string (e.g. `"1\n0"` or even `"0\n0"`), which fails `[ "$got" = "0" ]`.
+* **"the file covers 24 comparisons and reports all 32 comparator failures":** Exact. 16 `chk` calls + 8 `row_cmp` calls = 24 comparisons inside the comparators. The remaining 8 `chk` calls receive precomputed boolean verdicts (`? 1 : 0`), giving 32 total comparator invocations, all of which emit the report line upon mismatch.
+
+##### Question 5: What did all of us miss?
+* **Exact Named Row Tally in Gate 2 (`brief_sent.md:8-9, 66`):** While line 8 colloquially mentions "it pins 69", [`gate_offline.sh:1463-1877`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1463-L1877) contains 70 checks asserting row presence: 69 checking exact row names/labels, plus 1 check (line 1876) checking `high byte` for the wide-geometry row. Line 66's explicit syntax (`69 named rows ...; high byte once`) correctly reflects 69 + 1 = 70.
+* **Failure Count Formatting Resilience:** As measured in `F_scweak_nocmpinc_reset` ([`run551f.out:35`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out#L35)), even when an adversary suppresses `cmp_fails ++` so the comparator prints `0 failures so far`, the gate still goes RED because two lines matching `0 failures` yield `"0\n0" != "0"`. The gate-2 check is sensitive to the count of matching lines across the entire execution log, not just the numeric value.
+
+---
+
+GO

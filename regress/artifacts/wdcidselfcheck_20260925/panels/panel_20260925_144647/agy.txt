@@ -1,0 +1,117 @@
+VERDICT: PROCEED WITH CHANGES
+
+## LOAD-BEARING QUESTION: DISPOSITION COUNT
+
+**Count of wrong dispositions: 0.** None of the author's dispositions to ACCEPT (F1), ADOPT (F2, F4, F5, F6, F7), or FILE/REJECT (F3, F8, F9) are wrong.
+
+Specifically:
+- **F3 (FILE Option A `row_failed` rather than ship it) is CORRECT.** Option A introduces a verdict sink / counter wrapper (`failures++`) rather than a comparator. Calling `row_failed(1)` in a sentinel tests only that a counter increments, not that any comparison occurred. Emitting Gate 2's G text (`"SELFCHECK the comparator can still fail"`) over something that does not compare got vs want is dishonest manifest conformance. Furthermore, touching 95 sites across 61 functions right before the 09-28 deadline risks substantial churn for zero gain in comparison coverage. The honest end state remains Option B (comparators per site), properly filed as `wdcidverdict`.
+- **F2 (give [`row`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L504-L522) an explicit `want`) is CORRECT.** Converting `row(why, sectors)` to `row(why, sectors, want)` with `want == sectors` at the 8 call sites allows the sentinel to feed a deliberate mismatch (`want != sectors`) to a real got/want check, legitimately covering the 8 capacity rows ([#405](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1431)).
+
+However, the verdict is **PROCEED WITH CHANGES** because **F4 contains two critical implementation escapes** (detailed in Finding 4 and Question 3 below) that must be changed before shipping.
+
+---
+
+## CLAIM-BY-CLAIM VERIFICATION AGAINST GXEMUL-SEC SOURCE
+
+### Settled Premises
+1. **Owner ruling verbatim & stale 2026-08-19 census:**
+   - **CLAIM:** Owner option text was based on exemption's 2026-08-19 census stating nine row functions.
+   - **SOURCE EVIDENCE:** Verified in [regress/gate_offline.sh#L2280-L2288](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2280-L2288), which explicitly listed the 9 row functions (`row_anchor`, `row_slave`, `row_base_drive`, `row_identity`, `row_atapi_flags`, `row_wide_geometry`, `row_no_lba_claim`, `row_selfconsistent`, and `row`). That census was written before [#484](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1482) expanded the file on 2026-08-27.
+2. **Gate 2 checks:**
+   - **CLAIM:** `@@SELFCHECK@@` in SOURCE (H); bare `grep -q 'SELFCHECK the comparator can still fail'` in LOG (G); `selfmutant_one` on `dev_wdc.c` named row `"geometry words carry their high byte"`; `SC_EXEMPT` expires 2026-09-27.
+   - **SOURCE EVIDENCE:**
+     - H check: [regress/gate_offline.sh#L2316](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2316) (`grep -q '@@SELFCHECK@@' "$HERE/diff_$_stem.c"`).
+     - G check: [regress/gate_offline.sh#L2338](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2338) (`grep -q 'SELFCHECK the comparator can still fail' "$LOGDIR/diff_$_stem.log"`). Note: bare `grep -q`, no anchor to `ok` or line start.
+     - Self-mutant: [regress/gate_offline.sh#L1021](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L1021) (`selfmutant_one diff_wdc_identify.c src/devices/dev_wdc.c wdc_identify "geometry words carry their high byte"`).
+     - Exemption expiry: [regress/gate_offline.sh#L2293-L2295](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2293-L2295) (`SC_EXEMPT="ieee_store:2026-09-27 wdc_identify:2026-09-27"`), tested with strict `<` against current date in [regress/gate_offline.sh#L2326](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2326).
+3. **Partial coverage precedent in Gate 2:**
+   - **CLAIM:** `gate_offline.sh` already accepts partial coverage when stated: `sh4_tmu` (12 of 18 rows), `geom`, and `sync`.
+   - **SOURCE EVIDENCE:** Verified verbatim in [regress/gate_offline.sh#L2253-L2259](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2253-L2259). Line 2263 establishes policy: *"The per-file comments carry the scope; this is a LIVENESS control, never a census, and 'going from 0 to 1 is not false comfort; calling 1 `the detector works` is'"*.
+
+### Findings F1–F9
+- **F1 (Stale exemption & exact metrics):**
+  - **CLAIM:** Comparator [`chk`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4849-L4857) added by #484 on 2026-08-27; carries 24 rows; [`row`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L504-L522) carries 8 rows; 95 `failures ++` sites across 61 functions; 95 executable `rows ++` sites (96th is a comment); 128 total rows.
+  - **SOURCE EVIDENCE:**
+    - [`chk`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4849) added in commit `cf300c07` (`#484 wdc: a full ring reported itself empty...`) committed `2026-08-27 17:59:02 -0500`.
+    - Exactly 24 calls to `chk(` exist in [diff_wdc_identify.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4869-L5074), all located in [`row_ring_occupancy_sound`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4859).
+    - Exactly 8 calls to `row(` exist in [diff_wdc_identify.c#L5642-L5652](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5642-L5652).
+    - Exactly 95 occurrences of `failures ++` across exactly 61 distinct functions.
+    - Exactly 96 occurrences of `rows ++`: 95 are executable statements, and the 96th is inside a comment at [diff_wdc_identify.c#L4785](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4785).
+    - Runtime row check at [diff_wdc_identify.c#L5724](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L5724) confirms identity guard expects exactly 128 rows.
+    - **VERIFIED TRUE.**
+- **F2 (Explicit `want` in `row`):**
+  - **CLAIM:** Adding explicit `want` brings 8 rows under comparator coverage (`24 + 8 = 32` of 128 rows).
+  - **SOURCE EVIDENCE:** Verified against [diff_wdc_identify.c#L504-L522](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L504-L522). `build(&d, sectors, 1, 1, 1)` populates words 57-58 and 60-61 from `stub_size = sectors * 512`. Passing `want != sectors` allows sentinel to fail without altering [src/devices/dev_wdc.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c). **VERIFIED TRUE.**
+- **F3 (Option A disposition):**
+  - **CLAIM:** Refusal of `row_failed(int c)` wrapper. Verified methodologically sound as detailed above.
+- **F4 (Sentinel design):**
+  - **CLAIM:** Probe `chk()` narrow (1 vs 2) and wide (0x100000000 vs 0); widen `chk()`'s `long` parameters to `long long` (`%ld` -> `%lld`); run first and last; print G text only on success; failure forces `failures = sc_f + 1` like `diff_rtc_range.c`.
+  - **SOURCE EVIDENCE:** Verified in [regress/diff_rtc_range.c#L152-L177](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_rtc_range.c#L152-L177) where `chk("@@SELFCHECK@@/wide", 0x100000000LL, 0)` and `chk("@@SELFCHECK@@/narrow", 1, 2)` are used, and failure forces `failures = sc_f + 1; rows = sc_r;`. **VERIFIED TRUE, BUT REQUIRES REFINEMENT (see below).**
+- **F5 (Stateful-helper disclosure under clause (e)):**
+  - **CLAIM:** Stateful mutants (`if (rows && rows < 125) return 0;`) survive placement; disclosed under clause (e).
+  - **SOURCE EVIDENCE:** Verified in [regress/diff_rtc_range.c#L140-L151](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_rtc_range.c#L140-L151) and repository-wide vacuity contract clause (e) practice (e.g. [regress/wdc_flood_probe.py#L27](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_flood_probe.py#L27), [regress/wdc_latch_census.py#L72](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_latch_census.py#L72)). **VERIFIED TRUE.**
+- **F6 (Gate 2 text and exception list update):**
+  - **CLAIM:** Move `wdc_identify` from `SC_EXEMPT` to `SC_COVERED`, update comments to reflect 32 of 128 rows.
+  - **SOURCE EVIDENCE:** Verified against [regress/gate_offline.sh#L2246-L2295](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2246-L2295). **VERIFIED TRUE.**
+- **F7 (Equivalence proof & -O0 quiet_mode link dependency):**
+  - **CLAIM:** Build at -O2 and -O0; -O0 fails to link without `quiet_mode` stub; byte-identical stdout except SELFCHECK lines.
+  - **SOURCE EVIDENCE:** Verified in [diff_wdc_identify.c#L70-L74](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L70-L74), which explicitly documents: `-ffunction-sections -fdata-sections -Wl,--gc-sections` is required to link because unused static code pulls in `debug, quiet_mode, diskimage_access, diskimage_exist, machine_add_tickfunction`. At -O0 without `--gc-sections` removing dead code, `quiet_mode` is unresolved. **VERIFIED TRUE.**
+- **F8 (diff_fbpending_bound.c G text defect):**
+  - **CLAIM:** `diff_fbpending_bound.c` prints SELFCHECK through `row()`, so its FAIL line still contains the G text, causing Gate 2 G to be vacuous.
+  - **SOURCE EVIDENCE:** Verified in [regress/diff_fbpending_bound.c#L424](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L424) (`row("SELFCHECK the comparator can still fail", sc_bad == 0, ...)`) and [regress/diff_fbpending_bound.c#L67](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c#L67) (`printf(" %-4s %-44s ", good ? "ok" : "FAIL", name)`). Even when `sc_bad != 0`, `FAIL SELFCHECK the comparator can still fail` is printed, satisfying [regress/gate_offline.sh#L2338](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2338) (`grep -q 'SELFCHECK the comparator can still fail'`). **VERIFIED TRUE.**
+- **F9 (Answering literal nine functions):**
+  - **CLAIM:** Stale premise addressed by F1–F3. Verified true.
+
+---
+
+## ANSWERS TO REVIEW-ASKS
+
+### Question 1: Which of my dispositions is wrong — name the count. Especially F3 and F2: is either wrong?
+**Answer: The count is 0.** Neither F3 nor F2 is wrong.
+- F3 correctly refuses Option A (`row_failed`) because wrapping an inline comparison with a counter function does not create a comparator. It merely manufactures a fake token for Gate 2's G check while providing zero coverage over the actual comparisons.
+- F2 correctly adopts an explicit `want` parameter for `row()`, legitimately bringing the 8 ATA capacity rows under comparator sentinel coverage.
+
+### Question 2: Is "32 of 128, stated" an honest discharge of the owner's "fix it", or does it owe the owner a question?
+**Answer: It is an honest discharge; it does NOT owe the owner a question prior to shipping.**
+1. **Precedent:** [regress/gate_offline.sh#L2253-L2264](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2253-L2264) establishes that `SC_COVERED` stems with partial coverage (such as `sh4_tmu`, covering only 12 of 18 rows) are valid as long as the exact proportion and unprobed rows are stated in the COVERED comment.
+2. **Owner Intent:** The owner's explicit mandate was "Fix wdc_identify now... done before 09-28. Only ieee_store gets re-dated." Halting the release to query the owner would result in Gate 2 turning RED on 2026-09-28 due to the expiration of `wdc_identify:2026-09-27` in [regress/gate_offline.sh#L2295](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2295).
+3. **Honesty:** All 32 rows that route through genuine comparators ([`chk`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L4849) and [`row`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L504)) are covered by the sentinel; the 96 inline rows are explicitly disclosed and filed as `wdcidverdict`.
+
+### Question 3: The smallest edit to the F1+F2+F4 design that keeps gate 2 green while a covered row can no longer fail?
+**Answer:** There are two distinct minimal edits:
+
+1. **The 1-character conjunction edit in [`row()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L514): replace `||` with `&&` (`|` -> `&`):**
+   ```c
+   - if (got57 != want || got60 != want) {
+   + if (got57 != want && got60 != want) {
+   ```
+   - **Sentinel behaviour:** In the probe `row("@@SELFCHECK@@/row", 1, 2)`, both words are built as 1 (`got57 = 1, got60 = 1`). Since `1 != 2 && 1 != 2` is `TRUE && TRUE`, `row()` fails as expected. The sentinel registers failure, restores counters, and prints the success G text.
+   - **Real rows:** In pristine code, `want == sectors`, so `FALSE && FALSE` passes all 8 rows.
+   - **The escape:** Word 57 and word 60 are now decoupled. If a defect in `dev_wdc.c` corrupts only word 60 (or only word 57), `got57 != want` is FALSE while `got60 != want` is TRUE. `FALSE && TRUE` evaluates to FALSE! The corruption is completely silenced and the row passes. Gate 2 remains 100% green because Gate 2 has no self-mutant targeting `row()` capacity words.
+
+2. **The 1-token decoupler in [`row()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_wdc_identify.c#L514): check `sectors != want` instead of inspecting `got`:**
+   ```c
+   - if (got57 != want || got60 != want) {
+   + if (sectors != want) {
+   ```
+   - **Sentinel behaviour:** Probe passes `sectors = 1, want = 2`. `1 != 2` is TRUE; sentinel observes failure, passes, and prints the G text.
+   - **Real rows:** All 8 rows pass `sectors == want`. `sectors != want` is always FALSE.
+   - **The escape:** `row()` never inspects the emulated device buffer at all. All 8 covered rows become completely inert against any device bug, while Gate 2 remains 100% green.
+
+---
+
+## SOMETHING ELSE FOUND (REQUIRED CHANGES TO F4)
+
+1. **First-Run G-Text Emission Leak in F4:**
+   - F4 specifies running the sentinel FIRST (before any row) and LAST (after all rows), with each success arm printing the G text via raw `printf`.
+   - **The defect:** If the sentinel runs first and succeeds, it prints `ok SELFCHECK the comparator can still fail` into `$LOGDIR/diff_wdc_identify.log`. If a stateful bug or late corruption causes the LAST sentinel run to FAIL, Gate 2's G check ([regress/gate_offline.sh#L2338](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2338)) uses a bare `grep -q`. It matches the line printed during the *first* run and passes! Gate 2's G check is completely blind to a failure of the last sentinel.
+   - **Required Fix:** The G text must be emitted **ONLY** upon completion of the **LAST** sentinel run, conditioned on both runs having succeeded (e.g. `if (sc_first_ok && sc_last_ok)`).
+2. **Unidirectional Sentinel Probe in `row()`:**
+   - F4 specifies probing `chk()` narrow (1 vs 2) and wide (0x100000000 vs 0), but probes `row()` only narrow in one direction: `row("@@SELFCHECK@@/row", 1, 2)` (`got < want`).
+   - An asymmetric comparator such as `if (got57 < want)` or `if (got60 < want)` will satisfy the sentinel, yet be completely blind to high-byte/wrap defects (`got > want`, the exact #405 defect class).
+   - **Required Fix:** Probe `row()` bidirectionally: `row("@@SELFCHECK@@/row_lo", 1, 2)` and `row("@@SELFCHECK@@/row_hi", 2, 1)`.
+
+---
+
+GO-WITH-CHANGES

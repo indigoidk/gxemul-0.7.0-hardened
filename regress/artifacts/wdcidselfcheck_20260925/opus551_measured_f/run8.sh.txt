@@ -1,0 +1,46 @@
+#!/bin/bash
+#  #551f, opus seat: re-derive the coordinator's caught set on MY tree and builds (serial), plus my own shapes.
+#  The coordinator's shape DEFINITIONS are reused verbatim (meas551f.py, read from the artifacts dir); the
+#  scoring is done twice by analyze9.py -- my mock of gate 2's check(), and gate 2's REAL lib.sh check().
+set -u
+F8=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/opus551p1/f
+SPW=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad
+REPO=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+ART=$REPO/regress/artifacts/wdcidselfcheck_20260925
+W=/tmp/opus551f
+rm -rf "$W"; mkdir -p "$W/h"
+cp -a /tmp/opus551p2/sec /tmp/opus551p2/dev "$W/" || exit 1
+cp "$SPW/wdc551/MINE_f.c" "$W/h/F.c"
+cp "$SPW/wdc551/MINE_e.c" "$W/h/E.c"
+cp "$SPW/wdc551/wdcid_HEAD.c" "$W/h/ORIG.c"
+cp "$ART/pass551f/meas551f.py.txt" "$W/meas551f.py"
+echo "F md5 $(md5sum < "$W/h/F.c" | cut -c1-8) (want 7fd15d1d); E $(md5sum < "$W/h/E.c" | cut -c1-8) (want 1b467a08); ORIG $(md5sum < "$W/h/ORIG.c" | cut -c1-8) (want 1fd7ff1d)"
+echo "device dev_wdc.c: $(md5sum < "$W/dev/pristine/src/devices/dev_wdc.c" | cut -c1-8) (repo $(md5sum < "$REPO/src/devices/dev_wdc.c" | cut -c1-8))"
+awk '/check     "wdc IDENTIFY: row failures"/{s=1} s && /^fi$/ {exit} s' "$REPO/regress/gate_offline.sh" > "$W/gatewdc.inc"
+cp "$REPO/regress/lib.sh" "$W/lib.sh"
+echo "gate-2 wdc checks extracted: $(grep -c '^ *check' "$W/gatewdc.inc")"
+python3 "$W/meas551f.py" "$W/h" || exit 1
+python3 "$F8/xform8.py" "$W/h" || exit 1
+echo "variants: $(ls "$W/h" | wc -l)"
+for d in "$W"/dev/*/; do rm -f "$d"/regress/*; cp "$W"/h/*.c "$d/regress/"; done
+FLAGS="-std=c99 -I$W/sec/src/include -I$W/sec/src/include/thirdparty -ffunction-sections -fdata-sections -Wl,--gc-sections"
+one() {
+    local h=$1 dev=$2 d=$W/dev/$2/regress
+    if cc -O2 $FLAGS -o "$d/$h.bin" "$d/$h.c" > "$d/$h.cc" 2>&1 && [ "$d/$h.bin" -nt "$d/$h.c" ]; then
+        timeout 300 "$d/$h.bin" > "$d/$h.log" 2>&1; echo $? > "$d/$h.rc"
+    else
+        echo BUILD_FAIL > "$d/$h.rc"
+    fi
+}
+ALL="pristine selfmut drqring drqring_sm dropold dropold_sm w57hi w57hi_sm"
+{
+    for dev in $(ls "$W/dev"); do echo "F $dev"; echo "E $dev"; echo "ORIG $dev"; done
+    for h in $(ls "$W/h" | sed 's/\.c$//' | grep -v -x -e F -e E -e ORIG); do
+        for dev in $ALL; do echo "$h $dev"; done
+    done
+} > "$W/jobs.txt"
+echo "jobs: $(wc -l < "$W/jobs.txt") (serial)"
+t0=$(date +%s)
+while read -r h dev; do one "$h" "$dev"; done < "$W/jobs.txt"
+echo "built+ran serially in $(( $(date +%s) - t0 )) s; build failures: $(grep -l BUILD_FAIL "$W"/dev/*/regress/*.rc | sed "s|$W/dev/||" | tr '\n' ' ')"
+echo RUN8_DONE

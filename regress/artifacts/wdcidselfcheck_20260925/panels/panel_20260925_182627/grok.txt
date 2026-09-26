@@ -1,0 +1,75 @@
+The brief's premises need to be re-derived from the tree and the inlined #551e diff, not taken as given. I'll locate the generated file, the comparators, and the gate checks before judging the enumeration.VERDICT: DO NOT SHIP
+
+The call-count pin closes the measured move-and-repin and is silent on a healthy run. It does not close the class the new contract says it closes. One local edit, outside the four named classes, keeps every gate-2 check green while every `chk()` row stops affecting the verdict. The trailer sentence that says no in-file probe can pin that call site is also false, for a different construction.
+
+Shell execution was blocked here, so the deferral below was not compiled. The control flow is the inlined `#551e` self-check plus `gate_offline.sh` and `selfmutant.py` as they stand. The measurement to run is named at the end.
+
+## Premises checked
+
+These hold. `gate_offline.sh` runs the binary and never reads its status. `cmp_fails++` is added only in `chk()` and `row_cmp()`; `selfcheck()` assigns it back. All 24 production `chk()` calls sit in `row_ring_occupancy_sound()` (`stdlib.h` is included). `move_repin` dropping the log from 128 rows to 104 matches those 24 increments. Before the identity row's own `rows++`, the count is 127, so the "96 inline" figure already contains that identity row. Counted the other way the total is 129 and every healthy run would fail the identity check. The working tree's `diff_wdc_identify.c` is the early self-check (four `row_cmp` probes, no `cmp_fails`); the review target is the inlined `#551e` text, and `xform551e.py` touches nothing else.
+
+These do not hold.
+
+The gate does not pin sixteen named rows. In the wdc block there are 70 presence checks, plus the failure-count check, the `WDC_IDENTIFY_PASS` count, and the `check_min` of 42. `drqring` is the two `cond ? 1 : 0` DRQ rows (the deleted `odata |= WDCS_DRQ`), not the 16 data comparisons. `dropold` is not in `run551e.out`. The table's rule that `rc=1` is red fights the exit-status premise: `nopin_move_repin` on `drqring` is `rc=1`, `104 rows, 0 failures`, one `PASS`, and that log shape is gate-2 green. `D_move_repin` was already scored green by the full gate emulator in `analyze6.out`.
+
+## 1. One edit outside the four classes
+
+Insert this after the declarations in `row_ring_occupancy_sound()`:
+
+```c
+static int defer = 1;
+if (defer) {
+    defer = 0;
+    atexit(row_ring_occupancy_sound);
+    chk_calls += 24;
+    rows += 24;
+    return;
+}
+```
+
+That is one substitution. It is not inside either comparator, it does not change an operand, it does not rewrite the trailer, and it does not touch the self-check.
+
+First call, from its normal site: bump both counters, register the real body, return. `selfcheck("last")` snapshots `chk_calls == 24` and `rowcmp_calls == 8`, the probes restore those snapshots, and the new pin passes. The `rows += 24` stands in for the skipped `chk()` increments, so the identity row still sees 128. The trailer prints `0` failures and `WDC_IDENTIFY_PASS`. `atexit` runs on the way out, after `return`'s value is fixed and before stdio is closed (`setvbuf` is already unbuffered). The real `chk()` calls, including both DRQ rows, print after the summary. Gate 2 greps the whole log and does not care about order; `D_move_repin` already showed late row lines still satisfy the presence checks. `grep -c 'WDC_IDENTIFY_PASS'` is 1. `grep -oE '[0-9]+ failures'` sees a single `0`. The G line was printed. `high byte` still comes from `row_wide_geometry()`, which this edit does not defer, so the self-mutant lane still gets `WDC_IDENTIFY_FAIL` and that row's FAIL line. Process status stays 0, because the real failures happen inside `atexit`, after the `return` expression.
+
+`w57hi` stays red. The question only requires one covered row. Every `chk()` row is covered by this edit.
+
+Denominator, static, against the inlined file and those greps. The 24 single substitutions in `opus551_measured_d/xform6.py` are the contract's "24 measured": four of them are green and sit in classes 1–3 (`reset2`, `want165`, `postinc`, `wrap`); `D_sum` agrees with the probes and still reds `w57hi`. Also re-checked from `run551e.out`: move alone, `nopin` alone, `condreset`, `reset`, `reset2`, `incdel_reset`, `scnoforce`+stub. New shapes on top of that set: the deferral above (green); `chk_calls = 24` alone before the last self-check (no-op, calls have already run); `rows = 127` alone (no-op or it breaks the identity row); hardcoded trailer `0 failures` plus both tokens (green, and it is class 3 — see finding 4); conditional reset before any row (not green).
+
+## 2. The pin does not mean what the contract says
+
+`Nor is moving the covered rows past the verdict` is false. The pin compares two writable integers. The same prologue that skips the body can add 24 to each. A second form, two edits in `main` and no `atexit`, is the same hole: move `row_ring_occupancy_sound()` to after the PASS/FAIL `printf`, and before `selfcheck("last")` assign `chk_calls = 24; rows = 127`. The self-check snapshots those assignments and restores them after its probes, so the pin sees 24 and 8. Identity then increments 127 to 128 without a re-pin. `nopin_move_repin` is the measured log of that outcome (0 failures, one PASS). Forging the counters makes the pin agree with it instead of deleting the pin.
+
+The pin does catch the unforged move. `move_repin` is red for that reason, and a healthy run does not take the new branch, so it adds no line. Part (a) of `run551e.out` strips every `SELFCHECK` line, so it would not show a new success-path line; the success path simply does not print one. `callpin.out` is the stronger evidence: `Dpin` was whole-log identical to `D` on five devices.
+
+It does not catch every way of running a covered row after the verdict. Anything that makes those two integers right before the snapshot, then runs the real calls after the `printf`, gets through.
+
+## 3. The trailer claim is overturned
+
+The caution asked for an in-file pin that survives one inlining edit and one inserted `if (failures == cmp_fails) failures = cmp_fails = 0;`. That pin exists, and it is not a one-call helper.
+
+Add `cmp_sticky++` beside each `cmp_fails++`. The self-check already snapshots and restores `cmp_fails`; do the same for `cmp_sticky`. On the last run only, if the restored sticky count is nonzero, print one line that matches `[0-9]+ failures` (the row-failures grep) and do not set `sc_g`. In the trailer, fold `cmp_sticky` into the printed count and into the PASS condition. Healthy runs have sticky 0, so the summary text is unchanged. Geometry-only failures never increment sticky, so the self-mutant lane still fails on its own row.
+
+The exact reset assigns `failures` and `cmp_fails` only. Sticky stays. One local rewrite can delete only one of the two reads:
+
+- Rewrite the trailer to print `0 failures`, forge the G line, and print `WDC_IDENTIFY_PASS`. The self-check line with a nonzero `failures` is already in the log. `check()` in `lib.sh` compares the whole command substitution to `0`, so `2\n0` fails the row-failures check.
+- Rewrite `selfcheck("last")` so it ignores sticky and prints G. The trailer's count is still `failures + cmp_sticky`, which the reset did not clear.
+
+G alone is not enough: the trailer rewrite can forge the G string, and `selfmutant.py` scores FAIL-present, not PASS-absent, so a second token does not save the lane. The `[0-9]+ failures` line is the read the trailer cannot erase. A one-call decision helper still dies to inlining; this pin is two reads of a third counter. `No in-file probe can pin a single call site` does not survive that pair, and the both-tally reset is closable in the file. Leaving it as a filed lane is the same move the adjudication overturned for the call-count pin.
+
+The sticky pin does not catch finding 1. The deferred `chk()` calls have not failed yet when both reads run. The two holes are different.
+
+## 4. Contract sentences that are false
+
+`conditional on their equality, anywhere` is false. Before the covered rows the tallies are equal and already zero, the reset fires, and later increments stand. It is green after those rows have been absorbed and while no unpaired inline failure has split the tallies, which is why it is green at the trailer on `drqring` and `w57hi` and still red on `selfmut`. That is not every position.
+
+The gate bullet is a different contract from the block comment. The comment's class 4 is one triple: weaken the `cmp_fails` probe, drop the increment it guards, and reset. The bullet says any edit of the self-check is uncovered. `nopin` alone is red on `drqring`, and `scnoforce` plus a stub is red. The bullet's reset phrase, `conditional, or placed before the self-mutant's row`, drops the comment's "after the covered rows" bound and the equality condition.
+
+`any rewrite that keeps them consistent with each other is green` describes the wrong gate. Exit status is discarded. `grep -c 'WDC_IDENTIFY_PASS'` does not reject a log that also contains `WDC_IDENTIFY_FAIL`, and the lane only requires FAIL to be present on the mutant arm. One trailer substitution that prints `0 failures`, one PASS, and one FAIL is green on a covered-only defect and still satisfies the lane. That edit is inside class 3, so it does not reopen the enumeration. It does make the "two coordinated edits" parenthetical, and the appeal to consistency, the wrong description of the class.
+
+## 5. What was missed
+
+The new pin is another identity constant: a number checked at one site, forgeable by the same edit that moves the work past that site. `move_repin` only rewrites the constant in the source. Bumping the variable, or deferring the body with `atexit`, never touches the constant. The 24-shape sweep cannot vouch for a pin that was added after it.
+
+The unclosable-trailer argument assumed the only in-file tool was a helper called once from `main`. A second gate-visible read of a counter the reset does not name is a different tool.
+
+`run551e.out` should be extended with two variants, scored by the gate greps and the lane, not by `rc`: the `atexit` prologue on pristine, `drqring`, and `selfmut`; and `chk_calls = 24; rows = 127` before `selfcheck("last")` together with the call moved after the PASS `printf`, on those same three devices.

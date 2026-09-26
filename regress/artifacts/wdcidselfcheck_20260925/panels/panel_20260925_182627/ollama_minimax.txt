@@ -1,0 +1,26 @@
+VERDICT: SHIP WITH CHANGES
+
+**Premise audit, numbered findings (READ = from packet, REASONED = derived):**
+
+1. **"24 measured single edits" — UNVERIFIABLE from this packet.** REASONED. The contract cites `regress/artifacts/wdcidselfcheck_20260925/opus551_measured_d/analyze6.out` for the 24-edit measurement; that file is NOT inlined. Section 4(b) shows ~17 distinct single-edit *names* on pristine, plus device-variant runs of some (e.g., MINE_drop60 ×3 devices). If "24 measured" counts each (edit, device) pair, the count is plausible; if it counts distinct edits, the inlined table is short. This is the central empirical claim of the enumeration and should be confirmed against the actual `analyze6.out`. **Not checkable from the packet.**
+
+2. **The call-count pin catches the positional composite.** READ. `MINE_move_repin` (all four device variants) prints `FAIL SELFCHECK(last): chk() ran 0 times and row_cmp() 8 before this run` and is red. `MINE_nopin_move_repin` (pin deleted) is green on drqring with `rc=1 | 104 rows, 0 failures | 1 PASS` — confirming the pin is doing real work, and confirming gate 2 discards the exit status as stated.
+
+3. **Compensating-calls gap in the pin, closed by the lane (not named in the contract).** REASONED. The pin checks `chk_calls != 24 || rowcmp_calls != 8` at the last self-check. One could add 24+8 no-op `chk()`/`row_cmp()` calls in an inline row before the last self-check, then move the original covered rows past the verdict; the pin would see 24 and 8 and pass. The self-mutant lane still catches this: the geometry row's FAIL prints after `WDC_IDENTIFY_PASS`, so the lane sees a FAIL line without `WDC_IDENTIFY_FAIL` and fails. The contract does not name this two-layer closure — it presents the pin as the catch and the lane as the trailer close. Both layers are needed for the composite, and the lane is in place (`wdcidlane`, filed). **Worth one sentence in the contract; not a defect.**
+
+4. **MINE_reset on pristine being green is CONSISTENT with the contract.** READ. Contract: "A reset of `failures' alone is not among them, wherever it sits." `MINE_reset pristine` is green (nothing to lose); `MINE_reset drqring` and `MINE_reset w57hi` are red (caught by the reconciliation `if (cmp_fails > failures) failures = cmp_fails`). The wording could be read as "reset of failures alone is never green"; the data shows it is green on pristine (trivially) and red on real failures. A careful reader will not be fooled, but the sentence is slightly imprecise.
+
+5. **The adjudication's caution — "not closable in-file" — holds.** REASONED. The trailer is one call site producing printed count, PASS token, and exit status. Any in-file check is either (a) inside the trailer (no helper to inline, but a conditional reset `if (failures == cmp_fails) failures = cmp_fails = 0;` placed before the reconciliation defeats it — this is `MINE_condreset`, green on drqring/w57hi, red only on selfmut via the lane), or (b) outside the trailer (doesn't pin it). `MINE_condreset` is exactly the adjudication's test case and is caught gate-side. The seat that overturns this must show a pin that survives both edits AND the lane; I see no candidate.
+
+6. **`MINE_nosc` (self-check deleted) and `MINE_scnoforce` (forced failure removed) are correctly class-4.** REASONED from the data (both green on pristine, both are edits to the self-check block itself). They are the cleanest disclosures of class (4).
+
+7. **No sentence of the block comment is demonstrably false from the packet.** READ. The four-class taxonomy, the placement sentence for the both-tally reset ("unconditional, only after the covered rows and before the self-mutant's row; conditional on their equality, anywhere"), and the gate-2 bullet all match the inlined code and the measurement data. The "each measured on #551's passes" claim rides on finding (1) — cannot be confirmed without `analyze6.out`.
+
+8. **What we may have missed — a class the contract does not name.** REASONED. The contract's class (1) is "inside a comparator: a test keyed on a value, a name, a position or this block's own phase that the probes do not share, or a predicate rewritten to agree with the original on every probe and differ elsewhere." The `MINE_phase` entry (phase-keyed, green on pristine, green on drqring/w57hi) fits here. But `MINE_phase selfmut` is not shown — if it were green on selfmut, that would be a class-(1) edit that defeats the lane, and would reopen the chain. **Not checkable from the packet; the measurement is incomplete as inlined.**
+
+**Recommended changes (not code changes — brief/measurement changes):**
+- (a) Inline or cite the `analyze6.out` row count to verify "24 measured."
+- (b) Add `MINE_phase selfmut` and `MINE_condreset selfmut` to the selfmut column explicitly (one is inlined, one is not) to close the "class-1 defeats lane?" question.
+- (c) One sentence in the contract noting that the pin and the lane are layered for the move-past-verdict composite, not redundant.
+
+The code under review is internally consistent and the #551e diff matches its stated purpose. Ship once (a)–(c) are addressed in the measurement record; the file itself does not need to change.

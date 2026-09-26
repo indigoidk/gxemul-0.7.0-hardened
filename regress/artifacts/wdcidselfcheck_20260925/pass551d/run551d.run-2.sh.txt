@@ -1,0 +1,92 @@
+#!/bin/bash
+#  #551: measure the self-check (xform551d.py's MINE) in WSL /tmp only, on a git-archive of HEAD.
+#  (a) MINE vs ORIG byte-identical except SELFCHECK lines, same exit code, on the real dev_wdc.c and six variants, -O2
+#      and -O0 (a one-line quiet_mode stub linked into BOTH arms -- without it -O0 does not link, and two failed builds
+#      would compare "identical");
+#  (b) the vacuity controls and the two stateless escapes the Opus F2 seat found, on the pristine device.
+set -u
+SP=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad
+REPO=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+OUT=$REPO/regress/artifacts/wdcidselfcheck_20260925/measured
+W=/tmp/wdc551d2
+rm -rf "$W"; mkdir -p "$W/sec" "$W/h" "$OUT"
+tar -x -C "$W/sec" -f "$SP/opus551p1/sec_head.tar"
+cp "$REPO/config.h" "$W/sec/config.h"
+echo 'int quiet_mode = 0;' > "$W/stub_qm.c"
+cmp "$W/sec/regress/diff_wdc_identify.c" "$REPO/regress/diff_wdc_identify.c" && echo "HEAD copy of diff_wdc_identify.c == working tree"
+cmp "$W/sec/src/devices/dev_wdc.c" "$REPO/src/devices/dev_wdc.c" && echo "HEAD copy of dev_wdc.c == working tree"
+python3 "$SP/wdc551/xform551d.py" "$W/sec/regress/diff_wdc_identify.c" "$W/h/MINE.c" > /dev/null || exit 1
+cp "$W/sec/regress/diff_wdc_identify.c" "$W/h/ORIG.c"
+for v in chkstub rowstub nosc andgot drop57 drop60 rows scnoforce scnoforce_chkstub scnoforce_rowstub u16 sect4 wrap want165 postinc name lt andsect reset reset2 phase recon2 subafter incdel_reset; do
+  python3 "$SP/wdc551/xform551d.py" "$W/sec/regress/diff_wdc_identify.c" "$W/h/MINE_$v.c" $v > /dev/null || exit 1
+done
+python3 - "$W" <<'PYEOF'
+import io, os, sys
+W = sys.argv[1]
+src = io.open(W + "/sec/src/devices/dev_wdc.c", encoding="utf-8", newline="").read()
+def need1(s, frag):
+    if s.count(frag) != 1:
+        raise SystemExit("anchor count %d for %r" % (s.count(frag), frag[:60]))
+sm_old = io.open(W + "/sec/regress/selfmutants/wdc_identify.old", encoding="utf-8", newline="").read()
+sm_new = io.open(W + "/sec/regress/selfmutants/wdc_identify.new", encoding="utf-8", newline="").read()
+need1(src, sm_old)
+muts = {"pristine": src, "selfmut": src.replace(sm_old, sm_new, 1)}
+s = src
+for w_, sh, b in (("58", "24", "0"), ("58", "16", "1"), ("61", "24", "0"), ("61", "16", "1"), ("57", "8", "0"), ("60", "8", "0")):
+    a = "d->identify_struct[2 * %s + %s] = ((total_size / 512) >> %s) & 255;" % (w_, b, sh)
+    need1(s, a); s = s.replace(a, a.replace("& 255", "% 255"))
+muts["rev255"] = s
+a = "d->identify_struct[2 * 1 + 0] = d->cyls[d->drive] >> 8;"
+need1(src, a); muts["cyl13"] = src.replace(a, "d->identify_struct[2 * 1 + 0] = (d->cyls[d->drive] >> 8) & 0x1f;")
+a = "if (idata & WDCTL_RST) {"
+need1(src, a); muts["srstbit"] = src.replace(a, "if (idata & WDCTL_4BIT) {")
+a = "\tif (d->inbuf_head != d->inbuf_tail)\n\t\todata |= WDCS_DRQ;\n"
+need1(src, a); muts["drqring"] = src.replace(a, "")
+a = "d->identify_struct[2 * 57 + 0] = ((total_size / 512) >> 8) & 255;"
+need1(src, a); muts["w57hi"] = src.replace(a, "d->identify_struct[2 * 57 + 0] = 0;")
+for k, v in muts.items():
+    d = "%s/dev/%s" % (W, k)
+    os.makedirs(d + "/src/devices", exist_ok=True); os.makedirs(d + "/regress", exist_ok=True)
+    io.open(d + "/src/devices/dev_wdc.c", "w", encoding="utf-8", newline="").write(v)
+print("dev variants:", " ".join(sorted(muts)))
+PYEOF
+for d in "$W"/dev/*/; do cp "$W"/h/*.c "$d/regress/"; done
+export W FLAGS="-std=c99 -I$W/sec/src/include -I$W/sec/src/include/thirdparty -ffunction-sections -fdata-sections -Wl,--gc-sections"
+one() {
+    local h=$1 dev=$2 opt=$3 d=$W/dev/$2/regress
+    local out=$d/$h.$opt stub=""
+    [ "$opt" = O0 ] && stub="$W/stub_qm.c"
+    if cc -$opt $FLAGS -o "$out" "$d/$h.c" $stub > "$out.cc" 2>&1 && [ "$out" -nt "$d/$h.c" ]; then
+        timeout 300 "$out" > "$out.log" 2>&1; echo $? > "$out.rc"
+    else echo BUILD_FAIL > "$out.rc"; fi
+}
+export -f one
+{ for dev in pristine selfmut rev255 cyl13 srstbit drqring w57hi; do for h in ORIG MINE; do echo "$h $dev O2"; echo "$h $dev O0"; done; done
+  for v in chkstub rowstub nosc scnoforce scnoforce_chkstub scnoforce_rowstub; do echo "MINE_$v pristine O2"; echo "MINE_$v drqring O2"; done
+  for v in andgot drop57 drop60 rows; do for dev in pristine drqring w57hi srstbit; do echo "MINE_$v $dev O2"; done; done
+  for v in u16 sect4 wrap want165 postinc name lt andsect reset reset2 phase recon2 subafter incdel_reset; do for dev in pristine drqring w57hi; do echo "MINE_$v $dev O2"; done; done
+} > "$W/jobs.txt"
+xargs -P 2 -L 1 bash -c 'one "$@"' _ < "$W/jobs.txt"
+R=$OUT/run551d_r2.out
+{
+echo "# #551 measurement $(date +%F' '%T) -- MINE md5 $(md5sum < "$W/h/MINE.c" | cut -c1-8), ORIG md5 $(md5sum < "$W/h/ORIG.c" | cut -c1-8)"
+echo "## (a) MINE vs ORIG: byte-identical except SELFCHECK lines? same exit code?"
+for dev in pristine selfmut rev255 cyl13 srstbit drqring w57hi; do for opt in O2 O0; do
+  d=$W/dev/$dev/regress
+  if grep -q BUILD_FAIL "$d/ORIG.$opt.rc" "$d/MINE.$opt.rc"; then echo "$dev $opt BUILD_FAIL"; continue; fi
+  same=$(diff <(cat "$d/ORIG.$opt.log") <(grep -v 'SELFCHECK' "$d/MINE.$opt.log") > /dev/null && echo IDENTICAL || echo DIFFERS)
+  printf '%-9s %-3s %-9s rc ORIG=%s MINE=%s  | %s | %s\n' "$dev" "$opt" "$same" "$(cat $d/ORIG.$opt.rc)" "$(cat $d/MINE.$opt.rc)" \
+      "$(grep -E '^[0-9]+ rows' $d/MINE.$opt.log)" "$(grep -E 'SELFCHECK' $d/MINE.$opt.log | sed 's/^ *//' | tr '\n' '/')"
+done; done
+echo "## (b) vacuity controls and escapes"
+for j in "MINE_chkstub pristine" "MINE_rowstub pristine" "MINE_nosc pristine" "MINE_scnoforce pristine" \
+         "MINE_scnoforce_chkstub pristine" "MINE_scnoforce_chkstub drqring" "MINE_scnoforce_rowstub pristine" \
+         "MINE_drop60 pristine" "MINE_drop60 w57hi" \
+         "MINE_andgot pristine" "MINE_andgot drqring" "MINE_drop57 pristine" "MINE_drop57 w57hi" "MINE_rows pristine" "MINE_rows srstbit" \
+         "MINE_u16 pristine" "MINE_sect4 pristine" "MINE_wrap pristine" "MINE_wrap w57hi" "MINE_want165 pristine" "MINE_postinc pristine" "MINE_postinc drqring" "MINE_name pristine" "MINE_name drqring" "MINE_lt pristine" "MINE_lt w57hi" "MINE_andsect pristine" "MINE_reset pristine" "MINE_reset drqring" "MINE_reset w57hi" "MINE_reset2 drqring" "MINE_reset2 w57hi" "MINE_recon2 drqring" "MINE_recon2 w57hi" "MINE_subafter drqring" "MINE_subafter w57hi" "MINE_incdel_reset drqring" "MINE_phase pristine" "MINE_phase drqring" "ORIG drqring" "ORIG w57hi" "ORIG srstbit"; do
+  set -- $j; d=$W/dev/$2/regress
+  printf '%-15s %-9s rc=%s | %s | %s | %s\n' "$1" "$2" "$(cat $d/$1.O2.rc)" "$(grep -E '^[0-9]+ rows' $d/$1.O2.log)" \
+      "$(grep -cE 'WDC_IDENTIFY_PASS' $d/$1.O2.log) PASS" "$(grep -E 'SELFCHECK' $d/$1.O2.log | sed 's/^ *//' | tr '\n' '/')"
+done
+echo RUN551D2_DONE
+} | tee "$R"

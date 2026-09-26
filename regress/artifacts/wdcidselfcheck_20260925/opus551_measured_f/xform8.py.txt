@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""#551f: the Opus seat's OWN shapes against the (B) report, on MINE_f.c (read as <dir>/F.c).
+usage: xform8.py <dir>        Every anchor is count-checked; a non-unique one aborts."""
+import io
+import sys
+
+BS = chr(92)
+NL = BS + "n"
+H = sys.argv[1]
+F = io.open(H + "/F.c", encoding="utf-8", newline="").read()
+
+
+def sub1(s, old, new):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit("anchor count %d: %r" % (n, old[:80]))
+    return s.replace(old, new)
+
+
+DECL = "static int cmp_fails;\t/*  failures the two comparators counted; only they increment it  */\n"
+RECON = "\tif (cmp_fails > failures)\n\t\tfailures = cmp_fails;\n"
+COND = "\tif (failures == cmp_fails) failures = cmp_fails = 0;\n"
+GUARD_CHK = "\t\tif (name[0] != '@')\t/*  #551f: contract (B) -- a covered failure reports itself  */\n"
+GUARD_ROW = "\t\tif (why[0] != '@')\t/*  #551f: contract (B) -- a covered failure reports itself  */\n"
+REPORT = "\"  FAIL  covered comparator failure -- %d failures so far" + NL + "\""
+
+V = {}
+#  ONE line at file scope, after the tallies are declared and before either comparator: every later printf whose
+#  arguments mention "so far" -- only the two (B) reports -- prints nothing and undoes the increments beside it.
+#  The comparators' source text is untouched.
+V["F_macro"] = sub1(F, DECL, DECL +
+    "#define printf(...) (strstr(#__VA_ARGS__, \"so far\") ? (failures--, cmp_fails--) : (printf)(__VA_ARGS__))\n")
+#  the same macro, report suppressed only (the tallies still count) -- and that plus a conditional reset
+V["F_macro_quiet"] = sub1(F, DECL, DECL +
+    "#define printf(...) (strstr(#__VA_ARGS__, \"so far\") ? 0 : (printf)(__VA_ARGS__))\n")
+V["F_macro_quiet_cond"] = sub1(V["F_macro_quiet"], RECON, COND + RECON)
+#  ONE edit INSIDE a comparator: the report guard also undoes the increments and never prints
+V["F_guard1_chk"] = sub1(F, GUARD_CHK, "\t\tif (name[0] != '@' && (failures--, cmp_fails--, 0))\n")
+V["F_guard1_row"] = sub1(F, GUARD_ROW, "\t\tif (why[0] != '@' && (failures--, cmp_fails--, 0))\n")
+#  the report's TEXT moved off gate 2's regex ("failure(s)" is not "[0-9]+ failures"): alone, and with a reset
+txt = F.replace(REPORT, "\"  FAIL  covered comparator failure -- %d failure(s) so far" + NL + "\"")
+if txt.count("failure(s) so far") != 2:
+    raise SystemExit("report text count")
+V["F_text"] = txt
+V["F_text_cond"] = sub1(txt, RECON, COND + RECON)
+for k, v in V.items():
+    io.open("%s/%s.c" % (H, k), "w", encoding="utf-8", newline="").write(v)
+print("opus variants (%d):" % len(V), " ".join(sorted(V)))

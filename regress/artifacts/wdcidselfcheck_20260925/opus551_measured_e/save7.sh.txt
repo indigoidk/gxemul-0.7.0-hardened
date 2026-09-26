@@ -1,0 +1,27 @@
+#!/bin/bash
+#  Copy scripts + tables + sentinel-checked logs to the ONE directory the coordinator allowed.
+set -u
+E7=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/opus551p1/e
+D6=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/opus551p1/d
+W=/tmp/opus551e
+A=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/opus551_measured_e
+mkdir -p "$A/logs" "$A/harness_variants"
+for f in xform7.py analyze7.py; do cp "$E7/$f" "$A/$f.txt"; done
+cp "$D6/xform6.py" "$A/xform6_reused.py.txt"
+for f in run7.sh save7.sh gentest.sh; do cp "$E7/$f" "$A/$f.txt"; done
+for f in run7.out analyze7.out; do cp "$E7/$f" "$A/$f"; done
+cp "$W/gatewdc.inc" "$A/gate2_wdc_block_extracted.inc.txt"
+for h in "$W"/h/*.c; do cp "$h" "$A/harness_variants/$(basename "$h").txt"; done
+for pair in "E pristine" "E_move_repin drqring" "E_movefake drqring" "E_movefake dropold" "E_movefake_row w57hi" \
+            "E_countforge drqring" "E_cond_start drqring" "E_cond_mid drqring" "E_cond_trailer w57hi" \
+            "E_cond_afterprintf drqring" "E_vpin pristine" "E_vpin_cond drqring" "E_vpin_inline_subafter w57hi" \
+            "E_emit pristine" "E_emit drqring" "E_emit_cond_trailer drqring" "E_emit_cond_trailer w57hi" \
+            "E_emit_movefake drqring" "E_emit_v_nocmp_sub_after dropold" "E_emit_off_cond_trailer drqring"; do
+    set -- $pair; [ -f "$W/dev/$2/regress/$1.log" ] && cp "$W/dev/$2/regress/$1.log" "$A/logs/$1.$2.log"; done
+bad=0
+for l in "$A"/logs/*.log; do
+  if [ "$(grep -cE '^WDC_IDENTIFY_(PASS|FAIL)$' "$l")" != 1 ]; then echo "TOKEN COUNT != 1: $l"; bad=1; continue; fi
+  case "$l" in *move*) tail -1 "$l" | grep -q 'R11 second refusal: the completion irq' || { echo "MOVED LOG INCOMPLETE: $l"; bad=1; } ;;
+               *) tail -1 "$l" | grep -qE '^WDC_IDENTIFY_(PASS|FAIL)$' || { echo "NO SENTINEL: $l"; bad=1; } ;; esac
+done
+echo "logs: $(ls "$A"/logs | wc -l), problems: $bad (moved-row logs end, by construction, with the R11 row after the token)"; ls "$A"

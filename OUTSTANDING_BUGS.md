@@ -21906,7 +21906,8 @@ debts are unchanged: `ieee_store` has no comparator by design, and `wdc_identify
 one.  Decide before 2026-09-28.
 **SUPERSEDED 2026-09-26 by `#550` (GPT-6 Astra's confirmation):** the two entries now have SEPARATE dispositions --
 `ieee_store` re-dated to 2026-12-10 by `#550`, its debt unchanged (no comparator by design); `wdc_identify` left at
-2026-09-27 by `#550`, to be DISCHARGED by `#551`, which gives it a self-check rather than a new date.
+2026-09-27 by `#550` and DISCHARGED by `#551`: `diff_wdc_identify.c`'s two comparators gained a self-check
+(24 of 128 comparisons, by owner ruling; the rest filed).
 
 ### `fbnobuild` (LOW) — no build/ objects: the #442 lane `note`s to PASS, #537's lane reds under the wrong row name
 Fix shape: `degrade()` in both lanes, and truncate `diff_fbpending_bound.log` before the #442 lane, with two negative
@@ -22436,3 +22437,101 @@ matched `quota` inside the word "quotation".  The file's header already records 
 tool that reads it).  Fix shape: key the stderr test on codex's own error block at the END of the stream, and give the
 stdout patterns word boundaries; negative-control both directions (a real wall still reds; these two runs do not).
 Found while confirming `#550`.
+
+## 2026-09-25 — GXEMUL [087a90]: `#551` wdcidselfcheck; what its review files
+
+Evidence: `regress/artifacts/wdcidselfcheck_20260925/` -- eight panels (codex walled on every one: a seat failure,
+re-fired after 2026-09-26 07:01), the Opus records and measurements, the dedicated grok jobs, and the Fable 5.1
+adjudications of both F2 passes and of the `#551d`, `#551e` and `#551f` passes (the chain closed on `#551f`'s).
+
+### `panelwallquote` (MED, harness) — panel.sh's seat check reads an answer that QUOTES "usage limit" as a wall
+
+On `#551`'s F2 panel (`panel_20260925_144647`), `panel.sh`'s seat check printed minimax's COMPLETE answer -- four
+numbered items and a verdict line -- as `*** WALLED MID-ANSWER ***`, because the answer quoted the brief's own sentence
+about codex's "usage limit".  `tools/pipeline/seat_verdicts.py`, which keys on WHERE a notice sits, reads the same file
+as answered (PROCEED WITH CHANGES).  This is the carrier's quoted-marker class re-arming a tool, in the check that tells
+the operator to re-fire a seat: the cost is a wasted re-fire, or -- worse -- a real wall discounted as "probably the
+quote again".  `panel.sh` carries unreviewed working-tree deltas and is not committed as-is, so its round starts from
+them.  The fix is the one `seat_verdicts.py` already has: key on the notice's position, never on the phrase alone,
+with two negative controls -- an answer that quotes the phrase stays answered; a real mid-answer wall still reds.
+**A second instance, the opposite direction:** on every panel from `panel_20260925_160838`, codex's 831-byte file -- the
+CLI banner, the prompt, and two `ERROR: You've hit your usage limit` lines -- is flagged `WALLED MID-ANSWER` in its
+detail line and then counted among the seats that "produced output" in the SEATS summary, which names only kimi as
+unanswered.  A reader of the summary line sees codex as answered.  Same fix: the summary counts what the detail line
+classified, never the byte count.
+
+### `wdcidcomparators` (MED, detector) — 104 of diff_wdc_identify.c's 128 rows compare where the self-check does not reach
+
+`#551` gave `regress/diff_wdc_identify.c` a self-check on its two comparators, `chk()` and a new device-independent `row_cmp()`, and
+the file's LAST self-check pins its comparator call counts (`chk()` 24, `row_cmp()` 8, `#551f`).  Only 24 rows compare
+INSIDE a comparator the self-check feeds (16 `chk()` got/want calls and 8 `row_cmp()` calls); 8 more hand `chk()` a 0/1
+verdict computed at the call (derive: `grep -cE '\? [01] : [01], 1\);' regress/diff_wdc_identify.c`), so a verdict
+computation that goes inert is invisible to the self-check; the other 96 compare INLINE.  Owner ruling 2026-09-25: "24/128
+now, file the rest".  The route (the Fable 5.1 ruling on `#551`, item 5): move the inline and verdict rows onto
+comparators the self-check feeds, with the measured requirements `#551` met as the bar -- the original row output kept,
+adding only the SELFCHECK lines and the covered-failure report lines (four on `w57hi`, five on `w58lo`), at -O2 and
+-O0, across the seven `dev_wdc.c` variants; every vacuity control red.  (This said "byte-identical stdout except the
+SELFCHECK lines", which `#551` did not meet: its report lines are measured additions, `measured/run551f.out` section
+2 -- GPT-6 Astra, confirming `#551`.)  Also owed here,
+disclosed by `#551` and measured (`wdcidselfcheck_20260925/measured/run551v2.out`, variant `rows`): a rows- or name-keyed
+test inside either comparator, placed before its `rows ++`, keeps every gate-2 row green while silencing any covered row
+except the self-mutant's.
+
+### `fbpendingselfcheckG` (LOW, harness) — two COVERED stems' self-checks are built weaker than `#551`'s: one cannot red gate 2's G row, the other runs first only
+
+(1) `regress/diff_fbpending_bound.c` prints its SELFCHECK verdict through `row()`, the helper under test (`row("SELFCHECK
+the comparator can still fail", sc_bad == 0, ...)`), so its FAIL line still carries gate 2's G text and the G row cannot
+red there -- the Opus seat's reading on `#551`'s pass 1.  (2) `regress/diff_rtc_range.c`'s sentinel runs only FIRST,
+before any row -- the stateful window `#551` closed for `wdc_identify` by running first AND last -- glm's companion on the
+same pass; its failure branch omits G's text, so RTC's G row CAN red, and its problem is placement only (this heading
+said both stems' self-checks "cannot red gate 2's G row" -- false for RTC: GPT-6 Astra, confirming `#551`).  One filing, "sentinel placement and the G text across the COVERED stems".  `#551`'s block is the shape to
+copy: the G text printed ONCE, by the last run, only when both runs passed.  Each fix owes the control that an inert
+comparator reds G.
+
+### `wdcidlane` (MED, harness) — the gate-side close of `#551`'s contract boundary: a lane that fails a covered row, and the log read through a pipe
+
+`#551`'s contract says what the file's own checks can see: every one reads state the file writes or output it prints,
+so an edit that reproduces a healthy run's observables is invisible to all of them -- its (C), measured twice on
+`#551f`'s pass: covered ring rows skipped with their labels and counts printed (green), and M19, an exit handler that
+seeks a file-redirected stdout to 0 and writes a healthy log over the real one -- which passes gate 2's file-redirected
+MAIN checks on dropold, drqring and w57hi (`wdcidselfcheck_20260925/opus551_measured_f2/analyze_f2.out`) but is
+rejected on all three by the existing self-mutant lane, which captures its log through a pipe (`reallane_f2.out`), so
+it does NOT keep the complete gate green (this said "green", reading the main checks as the gate, and cited the
+rescore, which covered `drqring` only -- GPT-6 Astra, confirming `#551`).  Two gate-side changes cross that
+boundary, and each is a gate change owing its own negative controls:
+1. **a lane on device mutants that fail a covered row -- ONE capacity row through `row_cmp()` AND ONE ring row through
+   `chk()`, each on its own mutant**, because a skip of one group leaves the other group's lane green (the panel grok
+   on `#551f`'s pass, M16); a lane closes only the rows its mutants fail;
+2. **gate 2 reads the log through a pipe** (`"$WDCBIN" 2>&1 | cat > "$WDCLOG"`), which no exit handler can seek: M19
+   red on the main checks on all three defects, pristine logs byte-identical file-vs-pipe, the self-mutant lane
+   unchanged -- it closes M19's route to the MAIN checks, which the lane already closes for itself
+   (`opus551_measured_f2/analyze_f2.out`, a fallback-model run whose logs are artifacts; the main loop re-scored
+   `drqring` and two M18 cells: `measured/rescore_m19.out`).
+The Fable 5.1 ruling on `#551f`'s pass closed the chain on wording and named these as the boundary's close.
+
+### `wdcrowpin` (LOW, harness) — gate 2 pins `diff_wdc_identify.c`'s row count only as `>= 42`
+
+The file's own identity row (128) is the only exact ROW pin.  **As found on `#551d`'s pass**, deleting it AND an unnamed
+covered row was green: a composite -- the identity row's deletion alone is harmless, a covered row's alone is red.
+Raised by deepseek (DO NOT SHIP) and ruled a real pre-existing composite, filed rather than a floor breach of `#551`
+(`pass551d/fable5_pass551d.md`, G3).  **`#551e`'s call-count pin has since closed it for the COVERED rows**: deleting
+the identity row and one comparator call leaves the LAST self-check's count (`chk()` 24, `row_cmp()` 8) unsatisfied --
+a reading, corroborated by the measured pin/no-pin deletion pair (`measured/run551f.out`: red 127/1 with the pin,
+GREEN 127/0 without).  **What remains is the 96 INLINE rows**, which no counter sees: deleting the identity row and
+one inline row is still green, by reading.  (This entry said the covered-row composite IS green -- stale since
+`#551e`: GPT-6 Astra, confirming `#551`.)  Fix: a gate-side exact row pin, with its controls.
+
+### `wdcverdictone` (LOW, harness) — gate 2 accepts a wdc log that carries BOTH verdict tokens
+
+`grep -c WDC_IDENTIFY_PASS` is pinned to 1, the self-mutant lane needs FAIL present, and nothing requires FAIL ABSENT on
+the main run (grok and kimi-k3 on `#551e`'s pass, H4).  Since `#551f` a covered failure's own report line reds the
+failure-count check whatever the trailer prints, so this is defence in depth for the inline rows, which `#551` does not
+cover.  Fix: the log carries exactly one of the two tokens -- cheap, a gate change with its own controls.
+
+### `seatverdictsubs` (LOW, harness) — `seat_verdicts.py` files the kimi CLI's new 403 as a format miss
+
+From `panel_20260925_192331` the kimi CLI fails with `403 Your current subscription does not have access to Kimi Code
+right now`, not the weekly-limit text, and `tools/pipeline/seat_verdicts.py` files it as "answered, NO VERDICT LINE
+(format miss)" -- a down seat recorded as a live one with bad formatting, the carrier's refused-connection shape.
+`panel.sh`'s own check reports it as walled, and `kimi-k3:cloud` covered the seat each time.  Fix: the phrase joins
+the wall patterns, with a negative control (a real answer quoting it stays answered -- see `panelwallquote`).

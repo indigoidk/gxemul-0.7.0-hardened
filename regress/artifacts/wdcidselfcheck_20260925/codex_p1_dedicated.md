@@ -1,0 +1,12 @@
+You are reviewing a DESIGN, before any edit, for giving a 128-row offline test harness in a C emulator a shared verdict
+helper and a self-check (GXemul change #551).  Read-only review.  Read
+`C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\wdcidselfcheck_20260925\p1_brief.md`: it inlines every fact and
+the three options.  The tree is `C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\`; ignore any other `src/`.  Scope your reading to
+that brief and `GXEMUL-SEC/regress/diff_wdc_identify.c`, `diff_rtc_range.c`, `gate_offline.sh` and `selfmutant.py`; do not
+read `tools/pipeline/ledger.json` or other `regress/artifacts/` directories.
+
+FIRST LINE: `VERDICT: <PROCEED | PROCEED WITH CHANGES | DO NOT PROCEED>`, then numbered findings.
+1. Is the proposed shared verdict helper an honest discharge of the stated exemption reason, or a check that cannot fail?
+2. What stateful or partial edit of such a helper passes a self-check that runs first, last, or both?
+3. What equivalence proof licenses a 95-site mechanical edit of the harness without a row-by-row review?
+Say plainly what is a reading and what is a measurement.  No files may be changed.

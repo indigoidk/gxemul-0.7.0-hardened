@@ -501,6 +501,33 @@ static void build(struct wdc_data *d, uint64_t sectors, int c, int h, int s)
  *  byte this row puts at or past the divergence point -- a row that cannot say
  *  that is a row that would pass unfixed.
  */
+/*  #551: the comparison is split out of row() as a DEVICE-INDEPENDENT comparator (it counts and prints, so it
+    is not pure), so the self-check can feed it each disjunct alone, and a zero, without building a device.
+    row() built the device and compared the extracted got57/got60 against `sectors'; nothing could inject an
+    observed value independently.  row()'s eight call sites keep their original output and add a report line
+    for each COVERED failure (four on the w57hi device variant, five on w58lo -- GPT-6 Astra, confirming
+    #551).  */
+static int rowcmp_calls;
+static int cmp_fails;	/*  failures the two comparators counted; only they increment it  */
+
+static void row_cmp(const char *why, uint64_t sectors, uint64_t got57, uint64_t got60)
+{
+	rowcmp_calls ++;
+	rows ++;
+
+	if (got57 != sectors || got60 != sectors) {
+		printf("  FAIL %-38s sectors=%llu -> 57/58=%llu 60/61=%llu\n",
+		    why, (unsigned long long)sectors,
+		    (unsigned long long)got57, (unsigned long long)got60);
+		failures ++;
+		cmp_fails ++;
+		if (why[0] != '@')	/*  #551f: contract (B) -- a covered failure reports itself  */
+			printf("  FAIL  covered comparator failure -- %d failures so far\n", cmp_fails);
+	} else {
+		printf("  ok   %-38s %llu\n", why, (unsigned long long)sectors);
+	}
+}
+
 static void row(const char *why, uint64_t sectors)
 {
 	struct wdc_data d;
@@ -509,16 +536,7 @@ static void row(const char *why, uint64_t sectors)
 	build(&d, sectors, 1, 1, 1);
 	got57 = sectors_from_block(&d, 57, 58);
 	got60 = sectors_from_block(&d, 60, 61);
-	rows ++;
-
-	if (got57 != sectors || got60 != sectors) {
-		printf("  FAIL %-38s sectors=%llu -> 57/58=%llu 60/61=%llu\n",
-		    why, (unsigned long long)sectors,
-		    (unsigned long long)got57, (unsigned long long)got60);
-		failures ++;
-	} else {
-		printf("  ok   %-38s %llu\n", why, (unsigned long long)sectors);
-	}
+	row_cmp(why, sectors, got57, got60);
 }
 
 /*
@@ -4846,14 +4864,20 @@ static void gx_push(struct wdc_data *d, int n, int w, unsigned char v)
     mismatch bumps `failures`.  The seat's private counters are deliberately
     NOT carried over -- a row this file does not count is a row the identity
     pin cannot protect.  */
-static void chk(const char *name, long got, long want)
+static int chk_calls;	/*  #551: counted, so the LAST self-check can print the coverage  */
+
+static void chk(const char *name, long long got, long long want)
 {
+	chk_calls ++;
 	rows ++;
 	if (got != want) {
 		failures ++;
-		printf("  FAIL %-40s got %ld want %ld\n", name, got, want);
+		cmp_fails ++;
+		printf("  FAIL %-40s got %lld want %lld\n", name, got, want);
+		if (name[0] != '@')	/*  #551f: contract (B) -- a covered failure reports itself  */
+			printf("  FAIL  covered comparator failure -- %d failures so far\n", cmp_fails);
 	} else
-		printf("  ok   %-40s %ld\n", name, got);
+		printf("  ok   %-40s %lld\n", name, got);
 }
 
 static void row_ring_occupancy_sound(void)
@@ -5627,6 +5651,137 @@ static void row_selfconsistent(void)
 	}
 }
 
+/*
+ *  @@SELFCHECK@@ -- #551.  CAN THIS FILE'S COMPARATORS STILL FAIL?  Feeds chk() and row_cmp() known answers --
+ *  each operand zero and past 32 bits, each of row_cmp()'s two disjuncts alone with got both below and
+ *  above its want, and one probe per comparator that must NOT fail -- and requires the EXACT change in
+ *  `failures' and in cmp_fails for each, restoring `rows', `failures' and cmp_fails after every probe.
+ *  Run FIRST (before any row) and LAST (after every row, before the identity row), so a comparator that
+ *  goes inert partway through is caught at one end or the other; the LAST run also requires the
+ *  comparator call counts (chk() 24, row_cmp() 8).  Only the success arm prints gate 2's G text; see (D)
+ *  for what the failure arms do.
+ *
+ *  WHAT IT COVERS: the rows that go through chk() and row_cmp() -- the last run prints how many calls
+ *  each comparator took.  Of chk()'s calls, the ones in row_ring_occupancy_sound() that pass a
+ *  `cond ? 1 : 0' (or `? 0 : 1') hand it a VERDICT computed at the call, not a comparison, and every
+ *  other row in this file compares inline: neither is covered by this block.  "Covered" means the
+ *  COMPARATOR is live, not that a row is.  The 8 verdict-handed calls still REPORT through (B): the file
+ *  covers 24 comparisons and reports all 32 comparator failures.
+ *
+ *  WHAT THIS FILE'S CHECKS CAN AND CANNOT SEE.  Every check here reads state this file writes (the
+ *  tallies, the call counts, `rows', sc_g) or output this file prints, so an edit that reproduces a healthy
+ *  run's observables -- by skipping rows and printing what they would have printed, by writing what a check
+ *  reads, or by rewriting the log after the rows have run -- is invisible to all of them.  That boundary is a
+ *  fact about in-file checks, not a gap in this block.  Two things cross it: a gate-side run on a device that
+ *  fails a covered row -- one capacity row through row_cmp() AND one ring row through chk(), each on its own
+ *  device mutant, because a skip of one group leaves the other group's lane green, and a lane closes only
+ *  the rows its mutants fail (filed: `wdcidlane') -- and the log reaching the gate through a pipe rather
+ *  than a seekable file, which no exit handler can rewrite (filed with it).  Inside the boundary:
+ *
+ *  (A) THE COMPARATORS ARE PINNED -- the probes require the exact change in `failures' and cmp_fails on
+ *  their own calls, so an inert comparator, or one narrowed on values the probes present, is caught at one
+ *  end of the run or the other.  Not caught, measured: any difference between what a comparator does on a
+ *  probe call and on a real call -- a test keyed on a value, a name, a position or this block's phase that
+ *  the probes do not share; a predicate rewritten to agree with the original on every probe and differ
+ *  elsewhere (the sum of the two gots against twice the want, say: it survives the probes, measured, and was
+ *  red on all three defect devices, so its blindness to a device whose differences compensate is a reading,
+ *  not a measurement -- GPT-6 Astra, confirming #551); and the code that FEEDS a comparator
+ *  (row() handing row_cmp() its own want).  "Comparator" means its compiled behaviour: a file-scope macro
+ *  that rewrites a printf or a name inside it is an edit of the comparator, wherever the line sits.
+ *
+ *  (B) A COVERED FAILURE REPORTS ITSELF -- on a non-probe mismatch each comparator prints a line gate 2's
+ *  failure-count check reads (`N failures so far'), at the moment it fails; that check compares the
+ *  newline-joined list of EVERY number it captures in the log with the one string "0" (lib.sh's check();
+ *  it never accepts a zero line on its own -- this said it compared every such line against "0": GPT-6
+ *  Astra, confirming #551), so once the line is in the log no edit of the tallies, the trailer or the rows'
+ *  order takes it back, and no line matching the check can be added without reddening it, not even one
+ *  reading `0 failures'.  Hence no
+ *  edit that leaves the covered rows running and the comparators' compiled behaviour intact hides a covered
+ *  failure: not the trailer's count, token or exit rewritten singly or together, not a reset of either
+ *  tally or both at any placement, not rows moved or deferred past the verdict with their counts forged
+ *  (measured on #551f's pass: regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out, scored by an
+ *  EMULATION of gate 2's checks and lane; opus551_measured_f/analyze9.out, its 41 rows re-run with gate 2's
+ *  own lib.sh; gate 2's own selfmutant.py on five of those cells -- this said "gate 2's own lib.sh and
+ *  selfmutant.py" of all of it: GPT-6 Astra, confirming #551).  Not caught -- the (A) residual
+ *  reaching the report: the report kept from the check on real calls (its guard switched off, its text
+ *  moved off the pattern, or its printf swallowed by a file-scope macro) together with the tallies hidden
+ *  (a reset, or the rows deferred past the trailer) -- and both halves can be ONE edit (a guard that also
+ *  undoes the increments; the macro).  No other line in this file may print `<digits> failures': one that
+ *  does reds every healthy run, loudly.
+ *
+ *  (C) OBSERVABLES FORGED -- a row that does not run cannot report, and a log rewritten after the rows have
+ *  run reports nothing.  Skipping the ring rows while printing their gate-pinned labels and adding 24 to
+ *  `rows' and chk_calls is one insertion and green (measured); an exit handler that seeks a file-redirected
+ *  stdout to 0 and writes a healthy log over the real one is one insertion and passes the file-redirected
+ *  MAIN checks (M19, #551f's pass) -- the existing piped self-mutant lane rejects it on all three tested
+ *  defects (dropold, drqring, w57hi), so it does not keep the complete gate green (GPT-6 Astra, confirming
+ *  #551).  The identity row's 128 and the LAST run's call counts raise the cost of a skip;
+ *  nothing in this file raises the cost of a rewrite.  That is the boundary's own class; its close is
+ *  `wdcidlane' and the pipe.
+ *
+ *  (D) This block itself.  Nothing this block prints carries the self-mutant row's text, "high byte" or a
+ *  pinned label.  Gate 2's G text is printed ONCE, by the last run, only when both runs passed; the run's
+ *  PASS needs that line (sc_g) and both tallies at zero; a probe failure forces one failure, and a missing
+ *  first run is counted by the trailer's `!sc_g' line.  Reviewed in the differential, not chased.  The rest
+ *  of the file is filed as `wdcidcomparators' (#551; owner ruling 2026-09-25).
+ */
+static int sc_first_bad = -1;	/*  -1 until the FIRST run has happened  */
+static int sc_g;	/*  set ONLY where gate 2's G line prints: the run's PASS needs it  */
+
+static void selfcheck(const char *where)
+{
+	static const long long cg[] = { 1, 0x100000000LL, 0, 0, 7 };
+	static const long long cw[] = { 2, 0, 1, 0x100000000LL, 7 };
+	static const uint64_t rw[] = { 2, 2, 1, 3, 0x100000000ULL, 0x100000000ULL, 0, 0 };
+	static const uint64_t r57[] = { 1, 2, 0, 3, 0, 0x100000000ULL, 1, 0 };
+	static const uint64_t r60[] = { 2, 1, 0, 3, 0x100000000ULL, 0, 0, 1 };
+	int sc_f = failures, sc_r = rows, sc_c = chk_calls, sc_rc = rowcmp_calls, sc_cf = cmp_fails, sc_bad = 0;
+	int i, n = 0;
+
+	for (i = 0; i < 5; i++, n++) {
+		chk("@@SELFCHECK@@/chk", cg[i], cw[i]);
+		if (failures != sc_f + (cg[i] != cw[i]) || cmp_fails != sc_cf + (cg[i] != cw[i]))
+			sc_bad++;
+		failures = sc_f; rows = sc_r; cmp_fails = sc_cf;
+	}
+	for (i = 0; i < 8; i++, n++) {
+		row_cmp("@@SELFCHECK@@/row", rw[i], r57[i], r60[i]);
+		if (failures != sc_f + (r57[i] != rw[i] || r60[i] != rw[i])
+		    || cmp_fails != sc_cf + (r57[i] != rw[i] || r60[i] != rw[i]))
+			sc_bad++;
+		failures = sc_f; rows = sc_r; cmp_fails = sc_cf;
+	}
+	chk_calls = sc_c; rowcmp_calls = sc_rc;
+	if (sc_bad) {
+		printf("  FAIL  SELFCHECK(%s): %d of %d probes answered wrongly\n", where, sc_bad, n);
+		failures = sc_f + 1; rows = sc_r; cmp_fails = sc_cf;
+	}
+	if (where[0] == 'f') {
+		sc_first_bad = sc_bad;
+		if (!sc_bad)
+			printf("  ok    SELFCHECK(first): all %d probes answered right\n", n);
+		return;
+	}
+	/*  #551e: a second identity constant -- the LAST run requires the comparator call counts the note line
+	    below prints, chk() 24 and row_cmp() 8.  It catches covered rows skipped or moved without their counts
+	    forged; like the identity row's 128 it is forgeable by an edit that writes the counter (contract (C)).
+	    Change these with the rows.  */
+	if (chk_calls != 24 || rowcmp_calls != 8) {
+		printf("  FAIL  SELFCHECK(last): chk() ran %d times and row_cmp() %d before this run; want 24 and 8\n",
+		    chk_calls, rowcmp_calls);
+		if (!sc_bad)
+			failures = sc_f + 1;
+		sc_bad++;
+	}
+	if (!sc_bad && sc_first_bad == 0) {
+		sc_g = 1;
+		printf("  ok    SELFCHECK the comparator can still fail (first and last)\n");
+	} else if (!sc_bad)
+		printf("  FAIL  SELFCHECK(last): the first run did not run, or did not pass\n");
+	printf("  note  SELFCHECK comparator calls this run: chk() %d, row_cmp() %d\n",
+	    chk_calls, rowcmp_calls);
+}
+
 int main(void)
 {
 	/*  Unbuffered, so a crash mid-run still shows how far it got -- with stdout
@@ -5636,6 +5791,7 @@ int main(void)
 	setvbuf(stdout, NULL, _IONBF, 0);
 
 	printf("ATA IDENTIFY capacity packing (#405), against the REAL dev_wdc.c\n");
+	selfcheck("first");
 
 	/*  Controls: below the divergence point these pass either way, and they
 	    are here to prove the rig reports correct values, not to detect.  */
@@ -5710,6 +5866,7 @@ int main(void)
 	row_wide_geometry();
 	row_no_lba_claim();
 	row_selfconsistent();
+	selfcheck("last");
 
 	/*
 	 *  IDENTITY GUARD.  Two files with this name once differed only by the case of a
@@ -5729,10 +5886,17 @@ int main(void)
 		printf("  ok   %-38s %i\n", "[IDENTITY] row count", rows);
 	}
 
+	/*  #551: the PRINTED count shows the comparators' failures even after a reset of `failures' placed
+	    before this line (untouched, `failures' always counts at least as many); the verdict and the exit
+	    status read cmp_fails directly.  A self-check that did not pass is a failure the count shows.  */
+	if (cmp_fails > failures)
+		failures = cmp_fails;
+	if (!sc_g && failures == 0)
+		failures = 1;
 	printf("\n%d rows, %d failures\n", rows, failures);
-	if (failures == 0)
+	if (failures == 0 && cmp_fails == 0 && sc_g)
 		printf("WDC_IDENTIFY_PASS\n");
 	else
 		printf("WDC_IDENTIFY_FAIL\n");
-	return failures ? 1 : 0;
+	return (failures || cmp_fails || !sc_g) ? 1 : 0;
 }

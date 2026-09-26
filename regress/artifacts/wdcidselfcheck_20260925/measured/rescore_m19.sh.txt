@@ -1,0 +1,23 @@
+#!/bin/bash
+#  Re-score the Opus seat's saved M19 logs (a fallback-model answer: its logs are artifacts, its verdict is not counted)
+#  against #551g's OWN gate-2 wdc block, extracted verbatim, with the tree's lib.sh.  Reads logs only; writes /tmp only.
+set -u
+SPW=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad
+REPO=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+ART=$REPO/regress/artifacts/wdcidselfcheck_20260925/opus551_measured_f2/logs
+W=/tmp/rescore551m19
+rm -rf "$W"; mkdir -p "$W/logdir"
+cp "$REPO/regress/lib.sh" "$W/lib.sh"
+awk '/check     "wdc IDENTIFY: row failures"/{s=1} s && /^fi$/ {exit} s' "$SPW/wdc551/goff_551g.sh" > "$W/gatewdc_g.inc"
+awk '/check     "wdc IDENTIFY: row failures"/{s=1} s && /^fi$/ {exit} s' "$REPO/regress/gate_offline.sh" > "$W/gatewdc_tree.inc"
+echo "551g gate wdc checks: $(grep -cE '^ *check' "$W/gatewdc_g.inc")   tree gate: $(grep -cE '^ *check' "$W/gatewdc_tree.inc")"
+echo "executable lines differ (551g vs tree): $(diff <(grep -v '^ *#' "$W/gatewdc_g.inc") <(grep -v '^ *#' "$W/gatewdc_tree.inc") | grep -c '^[<>]')"
+for L in M19_pristine_FILE M19_drqring_FILE_healed M19_drqring_PIPE_unhealed M18_f_before_recon_drqring_FILE M18_cf_after_printf_drqring_FILE; do
+    f="$ART/$L.log"
+    [ -f "$f" ] || { echo "$L MISSING"; continue; }
+    r=$( export LOGDIR="$W/logdir"; WDCLOG="$f"; . "$W/lib.sh" > /dev/null 2>&1; gate_begin "wdc-only" > /dev/null 2>&1
+         . "$W/gatewdc_g.inc" > "$W/$L.checks" 2>&1; echo "$_fails" )
+    printf '%-36s lines %6s  "[0-9]+ failures" captures: %-12s  gate-2 wdc block (551g) failures: %s\n' \
+        "$L" "$(wc -l < "$f")" "$(grep -oE '[0-9]+ failures' "$f" | grep -oE '^[0-9]+' | tr '\n' ',' | cut -c1-12)" "$r"
+done
+echo RESCORE_M19_DONE

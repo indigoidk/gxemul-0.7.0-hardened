@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""#551 F2 on pass 2: gate 2 emulated on MINE_b.c variants -- the 73 wdc checks verbatim from
+gate_offline.sh, H (token in SOURCE), G (text in LOG), and the self-mutant lane (selfmutant.py's
+pristine/mutant logic; arms = device and device+self-mutant)."""
+import io, os, re, subprocess
+W = "/tmp/opus551f2b"
+NAMED = "geometry words carry their high byte"
+G_TEXT = "SELFCHECK the comparator can still fail"
+io.open(W + "/gate_eval.sh", "w").write(r'''
+WDCLOG="$1"; _f=0
+check() { [ "$2" = "$3" ] || { echo "RED $1 got=$2 want=$3"; _f=$((_f+1)); }; }
+check_min() { [ "$2" -ge "$3" ] 2>/dev/null || { echo "RED $1 got=$2 min=$3"; _f=$((_f+1)); }; }
+note() { :; }
+. ''' + W + '''/gatewdc.inc
+''')
+
+
+def rd(dev, h, ext):
+    p = "%s/dev/%s/regress/%s.%s" % (W, dev, h, ext)
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else None
+
+
+def summ(dev, h):
+    t = rd(dev, h, "log")
+    if rd(dev, h, "rc").strip() == "BUILD_FAIL":
+        return "BUILD_FAIL (%s)" % [l.split("error: ")[1][:50] for l in rd(dev, h, "cc").split("\n") if "error: " in l][:1]
+    m = re.search(r"^(\d+) rows, (\d+) failures", t, re.M)
+    tok = re.search(r"WDC_IDENTIFY_(PASS|FAIL)", t)
+    return "%s/%s %s rc=%s" % (m.group(1) if m else "?", m.group(2) if m else "?", tok.group(1) if tok else "NOTOKEN",
+                               rd(dev, h, "rc").strip())
+
+
+def gate(h, dev):
+    """[] means gate 2 GREEN for this stem on this device."""
+    if rd(dev, h, "rc").strip() == "BUILD_FAIL":
+        return ["RED compile"]
+    lane_dev = "selfmut" if dev == "pristine" else dev + "_sm"
+    t = rd(dev, h, "log")
+    out = subprocess.run(["bash", W + "/gate_eval.sh", "%s/dev/%s/regress/%s.log" % (W, dev, h)],
+                         capture_output=True, text=True).stdout
+    reds = [l[4:64] for l in out.split("\n") if l.startswith("RED ")]
+    if "@@SELFCHECK@@" not in io.open("%s/h/%s.c" % (W, h), encoding="utf-8").read():
+        reds.append("H")
+    if G_TEXT not in t:
+        reds.append("G")
+    tm = rd(lane_dev, h, "log")
+    named = [l for l in t.split("\n") if l.strip().startswith(("ok", "FAIL")) and NAMED in l and "@@SELFCHECK@@" not in l]
+    lane = "SETUP"
+    if tm is not None and re.search(r"\b[A-Z0-9_]+_PASS\b", t) and len(named) == 1 and not named[0].strip().startswith("FAIL"):
+        killed = [l for l in tm.split("\n") if l.strip().startswith("FAIL") and NAMED in l and "@@SELFCHECK@@" not in l]
+        lane = "OK" if (re.search(r"\b[A-Z0-9_]+_FAIL\b", tm) and killed) else "FAIL"
+    if lane != "OK":
+        reds.append("lane:" + lane)
+    return reds
+
+
+def sc(dev, h):
+    t = rd(dev, h, "log") or ""
+    return " | ".join(re.sub(r"\s+", " ", l.strip()) for l in t.split("\n") if "SELFCHECK" in l and "@@" not in l and "note" not in l)
+
+
+def covfails(dev, h):
+    t = rd(dev, h, "log") or ""
+    return [re.sub(r"\s+", " ", l.strip())[:48] for l in t.split("\n") if l.startswith("  FAIL") and "SELFCHECK" not in l]
+
+
+print("=== 0. MINE_b itself ===")
+for dev in ("pristine", "dropold", "drqring", "w57hi", "w58lo"):
+    r = gate("B", dev)
+    print("  B %-8s %-22s gate2=%s %s" % (dev, summ(dev, "B"), "GREEN" if not r else "red", r[:3] if r else ""))
+print("  self-check lines:", sc("pristine", "B"))
+print("  byte-identity vs HEAD's harness (pass-F2 ORIG.O2 logs, same device sources), SELFCHECK lines removed:")
+for dev in ("pristine", "selfmut", "rev255", "cyl13", "srstbit", "drqring", "w57hi"):
+    o = "/tmp/opus551f2/dev/%s/regress/ORIG.O2.log" % dev
+    if os.path.exists(o):
+        a = [l for l in io.open(o, encoding="utf-8", errors="replace").read().split("\n") if "SELFCHECK" not in l]
+        b = [l for l in rd(dev, "B", "log").split("\n") if "SELFCHECK" not in l]
+        print("     %-8s %s" % (dev, "IDENTICAL" if a == b else "DIFFER"))
+
+print("\n=== 1. the six pass-2 escapes on the FINAL file ===")
+for h, dev in (("B_want165", "dropold"), ("B_sect4", "w57hi"), ("B_wrap", "w57hi"), ("B_u16", "w58lo"),
+               ("B_postinc", "drqring"), ("B_name", "drqring")):
+    r = gate(h, dev)
+    print("  %-10s on %-8s gate2=%-5s %-22s | %s" % (h, dev, "GREEN" if not r else "red", summ(dev, h),
+                                                    sc(dev, h) if r else "self-check: " + sc(dev, h)))
+    if r:
+        print("      reds:", r[:4])
+r = gate("B_scnoforce_chkstub", "pristine")
+print("  double edit (forced failure removed + chk() stubbed): %s | %s | reds %s" % (
+    summ("pristine", "B_scnoforce_chkstub"), sc("pristine", "B_scnoforce_chkstub"), r))
+
+print("\n=== 2. outside the disclosed classes: `failures = 0;' after row_ring_occupancy_sound() ===")
+for dev in ("pristine", "dropold", "drqring", "w57hi"):
+    r = gate("B_tally", dev)
+    print("  B_tally on %-8s gate2=%-5s %-22s | covered rows printing FAIL: %s" % (
+        dev, "GREEN" if not r else "red", summ(dev, "B_tally"), "; ".join(covfails(dev, "B_tally"))[:150]))
+    if r:
+        print("      reds:", r[:4])
+print("  B_andsect (`&& sectors' in row_cmp): %s | %s" % (summ("pristine", "B_andsect"), sc("pristine", "B_andsect")))
+
+print("\n=== 3. three ways to delete the block ===")
+for h in ("B_nosc_full", "B_nosc_keepdecl", "B_nosc_nodecl"):
+    print("  %-16s %-40s gate2 reds: %s" % (h, summ("pristine", h), gate(h, "pristine")))
+print("ANALYZE4_DONE")

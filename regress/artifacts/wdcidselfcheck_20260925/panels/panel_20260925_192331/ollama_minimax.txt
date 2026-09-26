@@ -1,0 +1,48 @@
+**VERDICT: SHIP WITH CHANGES** (minor — see finding 4)
+
+I cannot read the tree. The following is from the packet alone.
+
+---
+
+**Settled from the packet:**
+
+- **(B) is mechanically sound given the stated failure-count check.** The report line `  FAIL  covered comparator failure -- N failures so far` is the only `printf` in the comparator failure arms that matches `[0-9]+ failures` (the trailer matches it too; the self-check `ok`/`FAIL`/`note` lines and the comparator `FAIL` lines do not — REASONED from the inlined strings). On a covered failure, `cmp_fails` is incremented only in the two comparators beside `failures ++`; the self-check restores it; the 96 inline rows and the identity row write `failures` alone. So `cmp_fails` counts comparator failures only, and the report prints at the moment of failure, before any later edit can intervene. Gate 2's check `grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+'` produces a multi-line capture; compared as one string to `0`, any extra line breaks equality. This is the mechanism the measurements exploit, and it is consistent with every `rN` cell in the table (READ from section 4).
+
+- **The `@` guard is safe for the probes as written.** The only names beginning with `@` in the inlined code are `"@@SELFCHECK@@/chk"` and `"@@SELFCHECK@@/row"` (READ from section 3a/3c). Real row names are not inlined; I cannot verify that none begins with `@`. **Premise not checkable from the packet: no covered row name begins with `@`.** Settled by grepping the row-name strings.
+
+- **All 32 comparator calls report on a covered failure.** 16 `chk()` + 8 `row_cmp()` = 24 covered comparisons; 8 verdict-handed `chk()` calls still pass through `chk()` and enter the failure arm with `got != want` on a bad verdict. All 32 hit the `if (name[0] != '@')` report. (REASONED from section 3a and the call-count breakdown.)
+
+- **The stop condition is met.**
+  - (1) Diff delivered (section 5), roster of 40 shapes delivered (section 4). ✓
+  - (2) Every `caught` shape in the manifest is red on `dropold`, `drqring`, `w57hi` — `atexit_defer`, `both_afterprintf`, `both_trailer`, `cond_*` (5), `countforge`, `delring_repin`, `delrow_repin`, `emitoff`, `forge_move`, `hardcode`, `move_repin`, `movefake`, `movefake_row`, `nopin`, `nopin_move_repin`, `printf_sub`, `recon_ge_sub`, `reset2_mid`, `reset_mid`, `resetcmp_mid`, `ret_nocmp`, `v_eq`, `v_eq_printf_sub`, `v_nocmp`, `v_nocmp_sub_after`. The `CONTRACT CHECK` line confirms it. Whole-log identity holds on `cyl13`, `pristine`, `selfmut`, `srstbit` (F vs E); the only F-vs-E deltas on the failing devices are the report lines (section 4, block 2). ✓
+  - (3) Every green shape lies inside A–D: `emitoff_cond_trailer` (B), `name`/`phase`/`postinc`/`want165`/`wrap` (A), `skipforge` (C). `sum` is (A) but red here — no compensating pair among the device variants. `scweak_nocmpinc_reset` is (D) but red — the report prints `"0 failures so far"` on every failure because `cmp_fails` is never incremented, so the multi-line capture is `0\n0\n0\n…\n0` ≠ `"0"`. ✓
+
+**Findings (numbered, labeled READ or REASONED):**
+
+1. **The (B) residual is correctly characterized.** `emitoff_cond_trailer` is the only measured green shape that exploits the residual the contract (B) explicitly names ("that report switched off for non-probe calls … together with an edit that hides the tallies"). (READ from section 4 + contract text.) No defect.
+
+2. **`skipforge` and `nopin_delring_repin` differ in exactly the way (C) predicts.** `skipforge` prints the deleted rows' labels and adds to `rows`/`chk_calls` — green on `dropold`/`drqring` because the named-row check passes and the report mechanism sees no comparator failures (the rows never ran). `nopin_delring_repin` deletes the rows outright — red on all devices because the 24 named rows are absent from the log and the named-row check fails (`grep -c` / `grep -cF` for each named row, section 2). The table is consistent with this distinction. (REASONED.)
+
+3. **`F_wrap` is classified (A) but the (A) wording says "inside a comparator".** `F_wrap` escapes on `w57hi` only — a `row_cmp()` defect. The partition's meta-claim is that every edit is "inside a comparator, at its inputs, around it, or in the block"; a wrapper around the comparator body is "around it". (A)'s *Not caught* list names "a test inside a comparator keyed on …" — "inside" literally. A wrapper is *around*, not *inside*. This is a wording ambiguity, not a mechanism defect: the shape is correctly green on `w57hi`, and the partition's umbrella covers it. **L4 candidate** unless the author means (A) to subsume "around". Noted for in-round fix.
+
+4. **`F_sum` is (A) but red.** The brief attributes this to "no device variant is a compensating pair". I cannot independently verify that no future variant would make it green — but the measurement script's device set is the one in use, and the shape is in the (A) *Not caught* list as worded. No defect from the packet.
+
+5. **Premise not checkable from the packet: the gate-2 failure-count check is compared "as ONE STRING to `0`".** The brief states this and says "derive with the awk block the measurement script uses". The measurements are consistent with this (every `rN ≥ 1` cell is red; every `r0` cell with non-zero `printed failures` is also red). But the exact comparison form — shell string equality vs. `awk` block numeric reduction — is not inlined. If the check were, say, `awk '$1==0' | wc -l` style (count of zero lines), the mechanism would behave differently. Settled by reading the awk block in `gate_offline.sh` around the wdc log section.
+
+6. **Premise not checkable from the packet: the report line text does not collide with any gate-2 grep.** `"  FAIL  covered comparator failure -- N failures so far"` — does "covered comparator failure" match any of the 69 named rows? Does it match the self-mutant lane's "FAIL line naming the geometry row"? Does it match `@@SELFCHECK@@` or `"high byte"`? The lane is checked on the `_sm` device and requires a FAIL line *naming* the geometry row, which this line does not; the other greps are for tokens the report line does not contain. Plausible no-collision, but unverified. Settled by grepping the report string against the 69 names and the lane regex.
+
+7. **The pin's delta is a useful secondary signal.** "one unpinned covered row deleted, identity re-pinned 127: with the pin red(127/1 FAIL); without it GREEN(127/0 PASS)" — the pin catches the deletion via the call-count check, independent of (B). With (B) present, the pin is a second line of defence for shapes that try to forge both counters. Consistent. (READ.)
+
+8. **`F_scweak_nocmpinc_reset` is (D) and red.** This is the cleanest demonstration that (B) closes (D) as well as the trailer class: deleting `cmp_fails ++` in `chk()` makes every report line print `"0 failures so far"`, and the multi-line capture is `0\n0\n…\n0` ≠ `"0"`. The shape would be green on a single-line `0` check. (REASONED from the shape name + (B) mechanism + section 4 row.)
+
+9. **The two imprecise opening sentences in the prior contract were rewritten.** The diff (section 5) replaces the old `NOT CAUGHT, DISCLOSED` paragraph with the four-part partition. The new wording matches the adjudication's stop-condition language. (READ.)
+
+**What I cannot settle from the packet:**
+
+- The exact form of gate 2's failure-count comparison (finding 5).
+- The full list of 69 named rows and whether `"covered comparator failure"` collides (finding 6).
+- The full row-name strings to confirm no real name begins with `@` (finding above the numbered list).
+
+None of these, if they failed, would invalidate the mechanism — they would only narrow which green shapes the contract needs to name explicitly. The (B) mechanism, the (A)/(C)/(D) residuals, and the stop condition are all consistent with the inlined measurements.
+
+**Recommendation:** Ship, with an in-round note tightening (A)'s wording to include "around the comparator body" so `F_wrap` is obviously inside (A). The three unverifiable premises should be checked against `gate_offline.sh` and the row-name strings before merge, but they do not block.

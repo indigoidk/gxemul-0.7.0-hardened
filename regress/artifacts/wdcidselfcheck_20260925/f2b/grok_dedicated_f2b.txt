@@ -1,0 +1,46 @@
+I'll read the pass-2 brief in full first, then check each disposition and the repair diffs against the tree without writing anything.The brief is in. Next I’ll check the repaired sentences and the final `diff_wdc_identify.c` against the tree, starting with the comparators and the claims each hunk names.The repair’s comparators and the new #550 sentences are the load-bearing parts. I’ll check those claims against the files they name, and the row order that would let a tally edit slip past gate 2.VERDICT #550: SHIP WITH CHANGES
+VERDICT #551: SHIP WITH CHANGES
+
+Four dispositions are wrong: P2, P5, P9, and Q4. Q2 and Q5 stand. The dates do not move, and `sc_g` does not change a healthy run.
+
+## #551 — the edit that keeps gate 2 green
+
+One statement, placed in `main` immediately after `row_ring_occupancy_sound();`:
+
+```c
+failures = 0;
+```
+
+Anchor: `GXEMUL-SEC/regress/diff_wdc_identify.c`, `row_ring_occupancy_sound();` (the call in `main`, just before `row_completion_irq`).
+
+That is after every covered call and before the self-mutant row. The eight `row()` calls are earlier in `main` (`row("control: 1 sector` through `row("every byte 255`). All twenty-four `chk(` calls sit inside `row_ring_occupancy_sound`. `row_wide_geometry` — the row whose name is `geometry words carry their high byte` — is later, and it compares inline.
+
+What stays green:
+
+- The G line still prints. `selfcheck` saves `failures`, checks its own deltas, and restores the saved tally. `sc_g` is set only in that success arm.
+- `@@SELFCHECK@@` is untouched, so the H grep of the source still hits.
+- `grep -c 'high byte'` stays 1. The wide-geometry line is the only one that carries those words, and this edit does not add another.
+- The self-mutant lane still has one untagged pristine line. `selfmutant.py` pins `geometry words carry their high byte`, and that row runs after the reset, so a real mutant still increments `failures` and still prints `WDC_IDENTIFY_FAIL`.
+- The row-name pins grep the label, which `chk` and `row_cmp` print on both the ok line and the FAIL line.
+
+What can no longer fail the run: any covered row, and every inline row before this statement. They can still print `FAIL`. The trailer is `128 rows, 0 failures` and `WDC_IDENTIFY_PASS`, because gate 2's failure check is `grep -oE '[0-9]+ failures'` on that summary, and the row printers do not contain the word `failures`. The same shape is already measured on the repaired file in `regress/artifacts/wdcidselfcheck_20260925/opus551_measured_f2b/analyze4.out` (`B_tally` on drop-oldest, DRQ-dropped, and word-57: `gate2=GREEN`, trailer PASS, covered rows printing FAIL).
+
+This is not a value-, name-, or position-keyed test inside either comparator, and it is not an edit of the code that feeds them. The disclosure does not name the tally between the comparators and the verdict. `sc_g` does not close it: the flag records that the G line printed, not that a covered row's `failures++` survived.
+
+`sc_g` does not change a healthy run's output. It is set only where the G line already prints, and it prints nothing itself. With both self-checks clean, `failures == 0 && sc_g` and `return (failures || !sc_g) ? 1 : 0` match the old `failures == 0` test. The lines that do change on a healthy run are the SELFCHECK lines from the two new wide probes (the first-run count goes from 9 to 11), not the flag. Q5's "adopt the flag" is right. The objection that a `failures++` on the success path would turn a good run red does not apply to this flag, and the run should not stay `WDC_IDENTIFY_PASS` when the self-check failed.
+
+Q2 stays disclosed, not closed. `&& want-165` in `chk` is still green after the wide probes: the five `chk` probe wants are 2, 0, 1, `0x100000000`, and 7, and 165 is `0xA5`. That is the want at `chk("R2 anchor: inbuf[tail] survives"`, `chk("R2 anchor: cell 0 untouched"`, and `chk("R4 fifo: first pop is first push"`. The rewritten sentence covers a value the probes do not present. The wide probes did not close it, and the disposition does not claim they did.
+
+## #550 — the v3 sentences that are still false
+
+**1. P2, the ip30 correction.** New sentence: "as an extended regex it matches only gate 9's construction sweep (`gate_asan_sweep.sh` runs `-E sgi -e "$s"`)".
+
+The extended pattern in that same comment is `E sgi|-e ip30`. In `regress/gate_*.sh` it matches one line, `regress/gate_asan_sweep.sh` around the loop `for s in ip12 ip28 ip30 ip32 ip35`, the command `timeout 60 "$ASAN_HEAD" -E sgi -e "$s" /dev/null`. That is the #450 arcbios row. The construction sweep is `run_machine()`, which runs `-E "$t" -e "$s"` and does not contain `E sgi` or `-e ip30`. The correction names the wrong block. The seven-probe deriver beside it is right: `^python3 sgi_[a-z_]+_probe[.]py` in `regress/gate_arm.sh` is seven lines, and each of those probes `execv`s `-e ip32`.
+
+**2. P5, the parent altoffset correction.** New sentence: every `ROWS` entry carries a want for the committed leg (`wb`) "that the gate's one binary cannot supply."
+
+Anchor: `regress/wdc_altoffset_probe.py`, `ROWS = [` and `for label, rn, wb, wf, kind in ROWS`. Eighteen entries. Fourteen have `wb == wf` (the controls and the accept rows). Four differ (`s4`, `s5`, `t5`, `t6`). One binary meets `wb` on those fourteen. The comment a few lines above the new sentence, "a single-leg mode asserting only the fix-side wants", names `wf`, not `wb`. Item (a) in `OUTSTANDING_BUGS.md` at `wdcaltoffleg` is only the exit status, and that half of the new sentence is right: `main` never exits nonzero on `ok`.
+
+**3. P9, the Alpha correction (my finding; the fix is the part that fails).** "no gate runs an Alpha guest session" is true. No `regress/gate_*.sh` names `alpha` or `alphabook1`. Gate 9's sweep reaches `file_load` on the dummy ELF and `exit(1)`s on the phentsize check inside `emul_machine_setup`, before `emul_run`, so it constructs and does not execute a guest. The new parenthetical is false: "gate 9 only constructs one." `src/machines/machine_alpha.c` at `machine_entry_add_subtype` registers four subtypes — `alphabook1`, `alphaserver4100`, `3000/300`, `eb164` — and the sweep also builds the bare type. The longer comment in the same hunk ("constructs alphabook1 and runs nothing on it") does not say "one" and matches the file. The four tuples do not.
+
+**Q4, not a v3 hunk, same defect.** The disposition says the two wide probes make "each operand zero and past 32 bits" true of `row_cmp`. They do not. In the #551b arrays, `rw[]` — the `sectors` operand — is `2, 2, 1, 3, 2^32, 2^32`. It is never 0. `got57` and `got60` are 0 in one probe each; `sectors` is not. `&& sectors` in `row_cmp` still answers all 11 probes, which `analyze4.out` records as `B_andsect` PASS. The `uint16_t` and `sectors<4` closures are real. The sentence those probes were said to repair is still false.

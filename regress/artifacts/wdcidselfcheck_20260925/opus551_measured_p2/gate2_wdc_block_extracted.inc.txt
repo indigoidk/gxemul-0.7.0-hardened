@@ -1,0 +1,423 @@
+    check     "wdc IDENTIFY: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "wdc IDENTIFY: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 42
+    check     "wdc IDENTIFY: offline verdict" \
+              "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
+    #  The four divergence rows. Deleting any one of them returns the table to the
+    #  vacuous state described above, so each is named rather than merely counted.
+    check     "wdc IDENTIFY: the >>8 threshold row is present" \
+              "$(grep -c 'threshold: >>8 byte reaches 255' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the carry row is present" \
+              "$(grep -c 'carry: >>8 wraps into >>16' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the >>16 row is present" \
+              "$(grep -c '>>8 accidentally right, >>16 wrong' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the >>24 threshold row is present" \
+              "$(grep -c 'threshold: >>24 byte reaches 255' "$WDCLOG")" "1"
+    #  The spec-free oracle. There is no ATA document in this tree, so the absolute
+    #  encoding cannot be cited -- but diskimage_recalc_size() rounds every image up to
+    #  a whole cylinder, so the block must agree with its OWN geometry words. That
+    #  needs no specification at all, and it is what makes the fix defensible here.
+    check     "wdc IDENTIFY: the self-consistency oracle is present" \
+              "$(grep -c 'IDENTIFY agrees with itself' "$WDCLOG")" "1"
+    #  Word 53 is 0x0002 -- asymmetric, so a +0/+1 packing swap is visible. Word 47 is
+    #  0x8080, a byte-swap palindrome, and would have been useless here.
+    check     "wdc IDENTIFY: the packing anchor is present" \
+              "$(grep -c 'packing anchor' "$WDCLOG")" "1"
+
+    #  #484: THE RING-OCCUPANCY ROWS.  Each is NAMED rather than counted, because
+    #  deleting any one returns the table to a state a measured mutant survives --
+    #  the same reason the four divergence rows above are named.
+    #
+    #  *** THE TWO ANCHORED ROWS ARE NOT INTERCHANGEABLE WITH THE REST. ***  Two
+    #  mutants that keep occupancy SOUND while destroying DATA -- the `return` moved
+    #  inside the warning latch, and drop-oldest -- are GREEN under every
+    #  occupancy-shaped and DRQ-shaped row here.  Only the marker byte at the tail
+    #  cell and the real consumer's FIFO order kill them.  An oracle computed the
+    #  same way as the code under test cannot see an edit that preserves the
+    #  computation -- clause (f) one level down.
+    #
+    #  MEASURED: 9 of these red on the pre-fix device and 0 after, with the two R6
+    #  liveness rows GREEN ON BOTH -- which is what makes the nine reds evidence
+    #  rather than a ring that never worked at all.  Kill table and logs in
+    #  regress/artifacts/wdcringambig/killtable_20260827/.
+    #
+    #  *** -cF, NOT -c, AND THE GATE CAUGHT ME OMITTING IT. ***  The label
+    #  `R2 anchor: inbuf[tail] survives` contains a BRACKET PAIR, which basic grep
+    #  reads as a CHARACTER CLASS -- `inbuf[tail]` matches inbuft / inbufa / inbufi /
+    #  inbufl and never the literal text.  It returned 0 and the gate went red, which
+    #  is the LOUD direction and the safe one.  Had the class happened to match
+    #  something, the row would have read as pinned while pinning nothing.
+    #
+    #  Fixed-string matching for every label in this block: a row NAME is literal
+    #  text, never a pattern.  Same class as this tree's existing `grep -nF` rule.
+    check     "wdc IDENTIFY: the ring liveness control" \
+              "$(grep -cF 'R6 liveness: SIZE-1 all land' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the wrap, in the file's own idiom" \
+              "$(grep -cF 'R1 full ring: pointer occupancy' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the guest-visible DRQ bit" \
+              "$(grep -cF 'R3 full ring: DRQ still set' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: ANCHORED -- the tail marker byte" \
+              "$(grep -cF 'R2 anchor: inbuf[tail] survives' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: ANCHORED -- the consumer's own order" \
+              "$(grep -cF 'R4 fifo: first pop is first push' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the disk-image sink" \
+              "$(grep -cF 'R5b sink: no MIS-SEQUENCED sector reaches the image' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the BULK arm (defensive; see the fix comment)" \
+              "$(grep -cF 'R7 memcpy arm: the anchor survives' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: pins the -1 in the bulk bound" \
+              "$(grep -cF 'R8 bulk edge: head never reaches tail' "$WDCLOG")" "1"
+
+    #  *** R9 IS THE ACCEPT SIDE, AND IT IS A SOLE CARRIER.  THREE SEATS NAMED THE
+    #  SAME ONE-CHARACTER ESCAPE INDEPENDENTLY ON PASS 2. ***  Tightening the bulk
+    #  bound `>` to `>=` refuses a refill that exactly fits, silently shortening the
+    #  transfer -- and it escaped ALL 119 rows, because R8 pins only the REFUSAL side.
+    #  MEASURED with R9 present: 122 rows, exactly 1 failure, and it is this row.
+    #
+    #  A guard is half-tested by showing it refuses what it should; the other half is
+    #  showing it ACCEPTS WHAT IT MUST, which is the half a bound-tightening edit
+    #  escapes.  Same reasoning as the de-escalation clause's accept rows, reached
+    #  from the opposite direction.
+    check     "wdc IDENTIFY: ACCEPT side -- an exactly-fitting refill lands" \
+              "$(grep -cF 'R9 exact fit: the refill is ACCEPTED' "$WDCLOG")" "1"
+
+    #  *** R10 AND R11 CLOSE AN L2 FLOOR BREACH FOUND ON PASS 2, and all three
+    #  escapes had ONE cause: no row had free >= 512 with to_read >= 2, so the
+    #  MULTIPLIER `* to_read` was unpinned; and no row called wdc__read() TWICE, so
+    #  the bulk arm's latch interaction and its common tail were unpinned. ***
+    #
+    #    M3  `512 * to_read >` -> `512 >`   two tokens, 0 reds of 122, 275 integrity
+    #                                       violations -- clause (d), a bound RELAXED
+    #    M2  break moved inside the latch   0 reds; the SECOND read falls through and
+    #                                       head lands ON tail -- the ambiguity back
+    #    M1  break -> return                0 reds; the completion irq is dropped
+    #
+    #  Each now dies to exactly ONE row, and to a DIFFERENT one.  R11's first cut
+    #  filled the ring to free == 0 and the mutant SURVIVED -- the fall-through then
+    #  takes the byte-wise arm, whose per-byte guard saves it.  A mutant that will not
+    #  die is a RESULT: that one was the row mis-cut, not the target dead.
+    check     "wdc IDENTIFY: the multiplier is pinned (two sectors, one sector of room)" \
+              "$(grep -cF 'R10 multiplier: two sectors into one sector of room is REFUSED' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: a SECOND refused read keeps the ring unambiguous" \
+              "$(grep -cF 'R11 second refusal: head has NOT landed on tail' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: a SECOND refused read still reaches the common tail" \
+              "$(grep -cF 'R11 second refusal: the completion irq still reaches the tail' "$WDCLOG")" "1"
+
+    #  *** #485: ONE ROW, FOUR LEGS, AND FOUR OF SEVEN MUTANTS PASS LEG 1 ENTIRELY. ***
+    #  The round first shipped a two-observable sweep (ABRT, assert-count) over 256
+    #  opcodes.  A seat built five edits that escaped it, and each surviving leg below
+    #  exists because of one of them:
+    #
+    #    M9  delete dev_wdc_access's TAIL TICK      the repro called wdc_command() and
+    #                                               ran the tick BY HAND, so it was blind;
+    #                                               leg 1 drives the real register path
+    #    M4  hoist ONE assert after the switch      reads ABRT+NO-irq 0 and passes a
+    #                                               count oracle, while asserting at
+    #                                               DISPATCH for the three DEFERRED
+    #                                               opcodes -- a spurious completion irq
+    #                                               on every disk write a guest issues.
+    #                                               The silent set is pinned as an
+    #                                               IDENTITY {0x30,0xa0,0xc5}, not a count
+    #    M5  assert moved INSIDE the unimpl latch   only the FIRST unknown command per
+    #                                               device interrupts.  A sweep with one
+    #                                               fresh device per opcode CANNOT see it
+    #    M7  STATUS read stops clearing the field   int_assert is a LEVEL; the tick
+    #                                               re-raises it forever
+    #    M8  SET_FEATURES asserts only on abort     the sweep varies the command byte and
+    #                                               never `precomp`, so its SUCCESS path
+    #                                               never ran.  Input coverage in ONE
+    #                                               dimension is not input coverage
+    #
+    #  Measured: all seven mutants die, and M4/M5/M7/M8 read ABRT+NO-irq 0 -- they pass
+    #  leg 1 and die only to the legs those escapes forced.  Pre-fix the row reads
+    #  ABRT+NO-irq 242, silent 245, 2nd 0.
+    check     "wdc IDENTIFY: a terminated command raises its irq" \
+              "$(grep -cF 'a terminated command raises its irq' "$WDCLOG")" "1"
+
+    #  #480: THE THREE CALL-SITE ROWS ARE NAMED, BECAUSE THE COUNT PIN IS NOT ENOUGH.
+    #
+    #  This round first DECLINED to name them, reasoning that the detector's own identity
+    #  row (`if (rows != 85)`) already reds the gate on any deletion, so naming would guard
+    #  a shut door -- which the ADDITION LICENCE refuses.  TWO SEATS REFUTED THAT BY
+    #  DIFFERENT ROUTES, and both refutations were then MEASURED:
+    #
+    #    D1_renumber      delete the call AND renumber the pin in the same edit
+    #                     -> 82 rows, 0 failures, WDC_IDENTIFY_PASS
+    #    D2_rowsplusplus  replace `row_rejected_cmd_resets();` with `rows ++;`
+    #                     -> 83 rows, 0 failures, WDC_IDENTIFY_PASS  <- no renumber at all
+    #
+    #  So the count pin binds the row COUNT and not row IDENTITY, and the SOLE CARRIER for
+    #  M4_afterguard could have been removed with this gate staying green.  These three
+    #  checks close exactly that mode.
+    #
+    #  WHAT THEY DO NOT CLOSE, stated because a guard whose scope is overclaimed is worse
+    #  than none: an oracle WEAKENED while keeping its label.  `rows` stays right, the
+    #  label still prints, and these greps still pass.  That remains kill-table territory.
+    check     "wdc IDENTIFY: the same-opcode reissue row is present" \
+              "$(grep -c 'a same-opcode reissue resets the ring' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the rejected-command row is present" \
+              "$(grep -c 'a rejected command still resets' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the refill-command row is present" \
+              "$(grep -c 'a refill command starts from empty' "$WDCLOG")" "1"
+
+    #  #481: the ALT-CTRL rows, named for the reason #480 MEASURED rather than assumed.
+    #
+    #  The detector's identity row binds the row COUNT, never row IDENTITY: replacing a
+    #  row's call with `rows ++` keeps the count right, the verdict green and this gate
+    #  passing while a sole carrier vanishes.  Two seats found that independently on #480
+    #  and it was negative-controlled.
+    #
+    #  THIS ROUND HAS TWO SOLE CARRIERS and they are the ones that matter most:
+    #    Md_nohelper (guard kept, abort removed)  -> only `an SRST aborts what was in
+    #                                                flight` reds
+    #    Md_widemask (mask widened to include IDS) -> only `an nIEN write is not a
+    #                                                reset` reds
+    #
+    #  Same honest scope as #480's block: naming closes DELETION and REPLACEMENT.  It
+    #  does NOT close an oracle weakened while keeping its label -- that stays kill-table
+    #  territory, and saying so is what keeps this guard from being overclaimed.
+    check     "wdc IDENTIFY: the SRST-is-a-reset row is present" \
+              "$(grep -c 'a real SRST (0x06) is a reset' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the routine-ctl row is present" \
+              "$(grep -c 'a routine 0x08 preserves the command' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the nIEN row is present" \
+              "$(grep -c 'an nIEN write is not a reset' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the SRST-abort row is present" \
+              "$(grep -c 'an SRST aborts what was in flight' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the SRST-signature accept row is present" \
+              "$(grep -c 'a real SRST still signs the CD-ROM' "$WDCLOG")" "1"
+
+    #  *** THE BLOCK ABOVE NAMED FIVE OF SEVEN ROWS, AND THE TWO IT MISSED WERE BOTH
+    #      CONTROLS.  Found by the opus seat: deleting either kept this gate fully
+    #      green -- which is the precise failure the comment above says naming exists
+    #      to close.  A guard that covers most of its population is not a partial
+    #      guard; it is a guard with an unadvertised hole. ***
+    #
+    #  The two controls are load-bearing, not decoration:
+    #    non-CD-ROM        stops the signature assertion being satisfied by a device
+    #                      that signs unconditionally -- a different defect wearing
+    #                      this one's clothes
+    #    reset-signature   separates "the power-on half is missing" from "the
+    #                      signature is broken" -- two different repairs
+    #
+    #  The last two rows were added after the panel and are sole carriers:
+    #    unreset CD-ROM    SOLE carrier for Mo_sigalways (the reset conjunct dropped
+    #                      at the read site).  The non-CD-ROM control tests the OTHER
+    #                      conjunct, which is why that mutant escaped three checks
+    #    libata SRST form  0x0c differs from OpenBSD's 0x06 in BIT 3, the exact bit
+    #                      this round moved away from
+    check     "wdc IDENTIFY: the non-CD-ROM control is present" \
+              "$(grep -c 'control: a non-CD-ROM does not sign' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the reset-signature control is present" \
+              "$(grep -c 'control: the reset signature works' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the unreset-CD-ROM row is present" \
+              "$(grep -c 'an unreset CD-ROM does not sign' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the libata-SRST-form row is present" \
+              "$(grep -c 'the libata SRST form signs too' "$WDCLOG")" "1"
+
+    #  #482: THE TENANT-ISOLATION ROWS.  #481's abort row armed the writer, the ATAPI
+    #  flag, the phase AND the ring together, so it could not say WHICH of them the
+    #  guard reads -- and any single-conjunct qualification of the helper call passed
+    #  it.  Each row below arms exactly ONE tenant, and each is a sole or near-sole
+    #  carrier:
+    #    ATA-write-alone   kills the atapi_cmd_in_progress qualification -- SRST
+    #                      otherwise stops aborting a plain ATA write, THE MAJORITY PATH
+    #    packet-alone      kills the write_in_progress qualification            SOLE
+    #    empty-ring        kills the occupancy qualification                    SOLE
+    #    0x88              kills the mask widened with bit 7   (was SOLE; the #483
+    #                      sweep now kills it too, so that SOLE is stale -- corrected
+    #                      here rather than left, since #483 edited nearby lines and
+    #                      did not re-check it)
+    #
+    #  The empty-ring row was MISSED BY THE FIRST DRAFT and found by running the table:
+    #  both other rows stage bytes, so an occupancy-gated guard walked past them.  That
+    #  is this round's own defect one level down, and it is why the row exists.
+    check     "wdc IDENTIFY: the ATA-write-alone row is present" \
+              "$(grep -c 'an SRST aborts an ATA write alone' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the packet-alone row is present" \
+              "$(grep -c 'an SRST aborts a packet alone' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the empty-ring row is present" \
+              "$(grep -c 'an SRST clears a writer with no bytes' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the 0x88-control row is present" \
+              "$(grep -c 'a 0x88 control write is not a reset' "$WDCLOG")" "1"
+
+    #  #483: the three rows that close what #482 could not see.
+    #    orphan-ring   SOLE carrier for the disjunctive guard BOTH flagship seats built
+    #                  independently -- the repair a maintainer writes after reading
+    #                  #482's rows, which defeats all four of them
+    #    packet-empty  SOLE carrier for the wip-or-occupancy guard.  A PARITY row:
+    #                  #482 built the empty-ring case for the ATA writer and not for
+    #                  the packet, so an occupancy-gated guard walked past everything
+    #    bit-2 ACTS     all 256 control values, asserting BOTH effects -- the latch AND
+    #                   the purge.  SOLE for bit 6, for the too-NARROW direction a point
+    #                   pin cannot see, and for the whole abort-nulling family.
+    #
+    #  *** AN EARLIER VERSION SWEPT ONLY THE LATCH, AND THIS COMMENT CLAIMED IT
+    #      'SUBSUMES the 0x88 point pin'.  THAT WAS MEASURED FALSE. ***  A guard
+    #      qualifying the ABORT alone -- `if (idata & WDCTL_4BIT)` in front of the
+    #      helper -- escaped all 103 rows, and BOTH flagship seats built it
+    #      independently.  It is reachable by REAL DRIVER BEHAVIOUR: 0x04 is the
+    #      canonical soft-reset bit and 0x06 is what this tree's own row documents as
+    #      OpenBSD's, and neither carries bit 3.  A mutant aborting on a high bit
+    #      WITHOUT latching died to the 0x88 row and ESCAPED the sweep -- so the point
+    #      pin was a SOLE CARRIER for something the sweep could not see.
+    #
+    #      THE CLAIM CONFLATED INPUT COVERAGE (the sweep wins, 256 values vs 1) WITH
+    #      ORACLE BREADTH (the point pin won, three observables vs one).  Strengthening
+    #      the sweep to assert both effects MADE THE CLAIM TRUE rather than softening
+    #      it: that mutant now dies to seven rows including this one, diagnosing `h 4`
+    #      -- at value 0x04 it latches without purging, a HALF reset.
+    #
+    #                   The sweep also makes the 0x88 row's appeal to ATA knowledge
+    #                   NON-LOAD-BEARING -- not retired, since that row is kept and its
+    #                   own comment still carries the disclosure.
+    check     "wdc IDENTIFY: the orphan-ring row is present" \
+              "$(grep -c 'an SRST purges an orphan ring' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the packet-empty-ring row is present" \
+              "$(grep -c 'an SRST clears a packet with no bytes' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the bit-2 ACTS sweep is present" \
+              "$(grep -c 'reset ACTS IFF bit 2 is set' "$WDCLOG")" "1"
+    #  #473: the six DATAIN chunking rows.  ALL EIGHT mutants in that round were killed
+    #  (kill473_table.txt): three clause-(b) reinstatements, four clause-(d) null-repair
+    #  forms and one clause-(c) null medium.  TWO of the (d) mutants escaped the first
+    #  table and are the reason the last two rows exist -- Md_norefill (keep the 32768
+    #  clamp, delete the refill: the guest is told a chunk is ready and the ring is
+    #  EMPTY) and Md_wrongoff (refill from data_in[j], so every chunk returns chunk 0).
+    #  The length row alone passes both, which is why an occupancy oracle and a source-
+    #  offset oracle ship beside it.
+    check     "wdc IDENTIFY: the arm bounds the push is present" \
+              "$(grep -c 'arm: pushes one chunk, not the whole' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the arm corruption oracle is present" \
+              "$(grep -c 'arm: block 0 survives the push' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm length row is present" \
+              "$(grep -c 're-arm: >32768 left is not zeroed' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm liveness control is present" \
+              "$(grep -c 're-arm: the branch was actually taken' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm refill row is present" \
+              "$(grep -c 're-arm: the chunk is REFILLED' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm offset row is present" \
+              "$(grep -c 're-arm: refill starts at received' "$WDCLOG")" "1"
+    #  #475: the six wdcoddstep rows.  Kill table 7 killed + 1 measured equivalence.
+    #  TWO of these groups exist ONLY because panel seats named escapes the table did not
+    #  have, and each escape is killed ONLY by its own group:
+    #    `consumed = atapi_len`      sweeps the two end-state rows -> the MID-WALK rows
+    #    `len == 4 && consumed > ..` swept all six then present -> the WIDTH rows, because
+    #                                every other row here issues a four-byte read
+    #  Deleting any one returns the table to a shape a one-token edit escapes.
+    check     "wdc IDENTIFY: the odd-step completion row is present" \
+              "$(grep -c 'odd chunk: the count stops at zero' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the odd-step truthfulness row is present" \
+              "$(grep -c 'odd chunk: received never exceeds len' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the mid-walk length row is present" \
+              "$(grep -c 'mid-walk: one 4-byte read leaves 33' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the mid-walk cursor row is present" \
+              "$(grep -c 'mid-walk: cursor advances by 4' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the width length row is present" \
+              "$(grep -c 'width: a 2-byte read of 1 remaining' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the width cursor row is present" \
+              "$(grep -c 'width: received stops at data_in_len' "$WDCLOG")" "1"
+    #  #475, second wave: four rows added after a MEASURING seat showed the detector
+    #  was below the vacuity floor.  Each closes something the others cannot see:
+    #    chunk edge  -- `Md5_xferbound` clamps to the TRANSFER remainder instead of the
+    #                  CHUNK remainder.  It is identical on every single-chunk transfer,
+    #                  so it swept all six earlier rows; it diverges only at a boundary.
+    #                  It also showed "odd chunk" was the wrong FRAME -- an EVEN 32768
+    #                  chunk overshoots too, under mixed access widths.
+    #    guest byte  -- the ONLY guest-visible channel here.  CYL_LO/CYL_HI are served
+    #                  from atapi_len, so a negative count reaches the guest as 0xffff.
+    #                  Without it, a fix that repairs completion but leaves the counter
+    #                  negative looks correct.
+    #    zero-length -- READ TOC with allocation length 0 arms DATAIN with a ZERO chunk.
+    #                  A clamp guarded `> 0` rather than `>=` hangs here.
+    check     "wdc IDENTIFY: the chunk-edge re-arm row is present" \
+              "$(grep -c 'chunk edge: the re-arm still fires' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the chunk-edge anchor row is present" \
+              "$(grep -c 'chunk edge: chunk 2 starts at 32768' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the GUEST-VISIBLE byte-count row is present" \
+              "$(grep -c 'guest byte count is not 0xffff' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the zero-length DATAIN row is present" \
+              "$(grep -c 'zero-length DATAIN stays at zero' "$WDCLOG")" "1"
+    #  #476: the host-kill row.  It FORKS, because the defect is a SIGNAL -- an
+    #  in-process oracle would take the differential down with it and report nothing.
+    #  #475 clamped a counter that used to go NEGATIVE; that woke a branch whose
+    #  `d->atapi_st->data_in_len` deref had only ever been protected by the broken
+    #  value.  Two guest register accesses from a fresh device reached it.
+    check     "wdc IDENTIFY: the host-kill row is present" \
+              "$(grep -c 'a DATA read with no transfer survives' "$WDCLOG")" "1"
+    #  #477: the phase rows.  Kill table 6/6; FOUR of the six die on a single
+    #  sole-carrier row.  Two exist only because a measuring seat named the escape:
+    #    `!= PHASE_DATAIN`  passes every DATAIN row -> the DATAOUT and COMPLETED rows
+    #    `& WDCI_CMD`       CMDOUT and COMPLETED both carry that bit, and the seat could
+    #                       NOT kill it -> the COMPLETED row is its sole carrier
+    #  The NO-PUSH row is the one that settles the mechanism: a len-3 write pushes ZERO
+    #  bytes and the dispatch frees the transfer anyway, so the defect was never "writes
+    #  push foreign bytes" -- which is why guarding the pushes measured WORSE than no fix.
+    check     "wdc IDENTIFY: the CDB re-dispatch row is present" \
+              "$(grep -c 'a mid-DATAIN write frees nothing' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the NO-PUSH row is present" \
+              "$(grep -c 'no-push write does not dispatch' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the DATAOUT phase row is present" \
+              "$(grep -c 'a DATAOUT write does not dispatch' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the COMPLETED phase row is present" \
+              "$(grep -c 'a COMPLETED write does not dispatch' "$WDCLOG")" "1"
+    #  #473 pass 2: three rows added AFTER the round shipped, because two more
+    #  clause-(d) mutants escaped a table that had already closed four.  Both hid for
+    #  one structural reason -- every re-arm row sat where the remainder EXCEEDS 32768,
+    #  so `atapi_len` and the constant 32768 were the same number.  Md_emptyguard is
+    #  the round own safety sentence as a predicate; Md5_chunkconst relaxes the refill
+    #  bound to that constant and is a heap-buffer-overflow READ under ASan.
+    check     "wdc IDENTIFY: the dirty-ring row is present" \
+              "$(grep -c 're-arm: refills a NON-EMPTY ring too' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the short-last-chunk length row is present" \
+              "$(grep -c 'last chunk: length is the REMAINDER' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the refill-bound row is present" \
+              "$(grep -c 'last chunk: refill is BOUNDED by it' "$WDCLOG")" "1"
+    #  #407: two rows added (slave drive, word 49) and row_selfconsistent() widened, after a
+    #  measure seat found three mutants that passed (this comment said "three rows added"
+    #  until the 2026-09-05 retrospective review; the commit message carries the same error)
+    #  the original ten. Each is named because each is the ONLY row that kills its
+    #  mutant -- verified by asserting the row NAME in the kill, not just that
+    #  something failed.
+    #    slave      <- 10 chars: drop `d->drive + ` at dev_wdc.c:179
+    #    word 49    <- 1 char:   advertise LBA that is #if 0'd out
+    #    65535 loop <- 11-bit cylinder truncation, first contradiction at c=2048,
+    #                  which the old c<=2000 bound missed by FORTY-EIGHT
+    check     "wdc IDENTIFY: the slave-drive row is present" \
+              "$(grep -c 'the SLAVE reports its own capacity' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the word-49 capability row is present" \
+              "$(grep -c 'no unimplemented capability claimed' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the oracle sweeps the full 16-bit range" \
+              "$(grep -c 'of 65535 contradict their geometry' "$WDCLOG")" "1"
+    #  #408: two more named rows, each closing a mutant class that survived the
+    #  twelve. The slave row previously asserted only CAPACITY, so four mutants
+    #  reading drive 0's cylinders/heads/spt went unnoticed; and base_drive -- which
+    #  dev_wdc_init sets to 2 for the SECONDARY controller, so it is live, not
+    #  hypothetical -- was ungated at all three call sites.
+    check     "wdc IDENTIFY: the slave row covers geometry, not just capacity" \
+              "$(grep -c 'the SLAVE reports its own' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the base_drive row is present" \
+              "$(grep -c 'base_drive reaches the diskimage id' "$WDCLOG")" "1"
+    #  #409: two further rows, each closing mutants that survived the thirteen.
+    #    identity  <- is_a_cdrom and getname still IGNORED `id`, so four mutants
+    #                 lived. The stub now poisons BY INVERSION: every id except
+    #                 this drive's is a CD-ROM. Pinning ONE specific id does not
+    #                 work -- a wrong id simply misses it and still reads "not a
+    #                 CD-ROM", which is how the first attempt at this row failed.
+    #    wide      <- no fixture pushed heads or spt past 255, so the `>> 8` half
+    #                 of words 3 and 6 was never non-zero and could be replaced by
+    #                 a literal 0 undetected.
+    #  #410: grep a string the row prints WHETHER IT PASSES OR FAILS. The #409
+    #  version matched 'the right id', which appears only in the ok line -- so a
+    #  genuinely FAILING row also reported "not present", turning one red row into
+    #  two and making a failure indistinguishable from a deletion. That is the
+    #  phantom-regression shape this harness's own vacuity taxonomy warns about.
+    check     "wdc IDENTIFY: the identity row is present" \
+              "$(grep -c 'the right id\|not the CD-ROM next to it' "$WDCLOG")" "1"
+    #  #410: the ATAPI branch was DELETABLE with every row green -- #409's
+    #  inverted poison made the drive under test the only non-CD-ROM, so the row
+    #  could observe nothing but the negative answer. This row takes the other
+    #  branch and asserts word 0 == 0x8580.
+    check     "wdc IDENTIFY: the ATAPI-flags row is present" \
+              "$(grep -c 'announces itself as one' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the wide-geometry row is present" \
+              "$(grep -c 'high byte' "$WDCLOG")" "1"
