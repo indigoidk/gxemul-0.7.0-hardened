@@ -1,0 +1,24 @@
+VERDICT: DO NOT SHIP
+
+1. **READ + REASONED — fatal() inconsistency in the PORT arm.**  
+   The diff’s new PORT arm calls `fatal("[ fbctrl: ... (once) ]")` and then sets `d->warned_port = 1`. The brief simultaneously says the DATA arm’s range check and `exit(1)` are kept, and that the command/offset defaults still end the process. If `fatal()` terminates the process, the first refused selector would end the emulator, making sessions P and F (multiple refusals, free-run to breakpoint) impossible and contradicting the claimed 41/41. If `fatal()` does not terminate, then the brief’s statement that the DATA arm’s `fatal()` is an `exit(1)` is false.  
+   **Single fact that would settle it:** Does `fatal()` in this GXemul build return or call `exit()`? This is not checkable from the packet, and the two premises cannot both be true.
+
+2. **READ — Smallest device edit outside table 2 that still scores 41/41.**  
+   Add an untested exception to the guard, e.g. `else if (idata >= DEV_FBCTRL_NPORTS && idata != 0x123456789)`. Every refusal row in the probe still passes, because the probe never writes `0x123456789` to PORT. The row expected to stay green is any refusal row for a tested out-of-range value, e.g. `refuse 9 (sw), PORT keeps 5`.
+
+3. **READ — Smallest probe/gate edit that keeps pins green while device is wrong.**  
+   In `fbctrl_port_probe.py`, change `row()` to always append `True` or set `ok = True`. Then `FBCTRLP_RESULT=41/41`, `FBCTRLP_CONTROL=OK`, and no `FAIL` lines appear, so every gate-16 check passes even if the device stores an out-of-range selector.
+
+4. **REASONED — Gate-16 parse guard.**  
+   The guard is mostly complete: it requires exactly one `FBCTRLP_DONE`, exactly one well-formed `FBCTRLP_RESULT`, exactly one well-formed `FBCTRLP_CONTROL`, and later checks the result values and exit status.  
+   **Hole:** it does not require `FBCTRLP_DONE` to be the final line; a probe that prints the required lines and then extra non-`FAIL` output would still parse. However, a crash after printing `DONE` would be caught by the exit-status check in the success branch.
+
+5. **REASONED — Moving the pmax-kernel check.**  
+   The only state whose gate-16 result changes is **kernel missing + fbctrl rows fail**: previously that state would `gate_skip` before running fold rows; now the fbctrl block runs first and reports FAIL, not SKIP. Binary missing still skips before the block; fold rows red are unaffected.
+
+6. **READ / NOT CHECKABLE — Contract and NOT CLAIMED list.**  
+   The process-global latch and deleted DATA check are disclosed and table 2 shows them scoring 41/41. The struct-layout sentence about `warned_port` following `port[8]` is true from the diff. The command/offset default process-ending claims are **not checkable from this packet** because those parts of `dev_fbctrl.c` are not inlined; the brief asserts them but the diff does not show them. No CLAIMED catch appears to lack an observing row.
+
+7. **REASONED — Records owed.**  
+   The listed records (CHANGELOG, OUTSTANDING_BUGS, ledger) appear complete. The gate pins and probe wiring manifest are already included. No additional record is identifiable from the packet.

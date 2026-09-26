@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""D2's proposed remedy, as the panel grok gave it: "one anchor other than 5 -- e.g. B's sd group selecting 7 before its
+stores".  Writes a COPY of the v6 probe in which session B's sd group selects PORT=7 (not 5) and its row expects 7.
+Nothing else changes.  usage: mkprobe_sd7.py <v6 probe> <out>"""
+import io
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+s = io.open(src, encoding="utf-8", newline="").read()
+
+
+def rep(old, new):
+    global s
+    n = s.count(old)
+    assert n == 1, (n, old)
+    s = s.replace(old, new)
+
+
+rep('PROG_B, REGS_B = [], [("t0", FBCTRL), ("a0", 5)]',
+    'PROG_B, REGS_B = [], [("t0", FBCTRL), ("a0", 5), ("a1", 7)]')
+rep('    PROG_B.append(("sw", "a0", 0, None))                               # PORT=5',
+    '    PROG_B.append(("sw", "a1" if _w == "sd" else "a0", 0, None))      # PORT=5 (sd: PORT=7)')
+rep('_last = max(i for i, s in enumerate(PROG_B) if s[0] in ("sb", "sh", "sw", "sd") and s[1] != "a0")',
+    '_last = max(i for i, s in enumerate(PROG_B) if s[0] in ("sb", "sh", "sw", "sd") and s[1] not in ("a0", "a1"))')
+rep('        row("B refuse every single bit 2^3..2^%d (%s), PORT keeps 5" % (bits - 1, _w), hx(B["vals"].get(rb)),\n'
+    '            "0x5")',
+    '        row("B refuse every single bit 2^3..2^%d (%s), PORT keeps %d" % (bits - 1, _w, 7 if _w == "sd" else 5),\n'
+    '            hx(B["vals"].get(rb)), "0x7" if _w == "sd" else "0x5")')
+io.open(dst, "w", encoding="utf-8", newline="").write(s)
+print("SD7_PROBE_WRITTEN")

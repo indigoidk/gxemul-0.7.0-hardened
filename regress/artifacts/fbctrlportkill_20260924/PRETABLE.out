@@ -1,0 +1,62 @@
+#549 fbctrlportkill -- PRE-TABLE CHECK, written BEFORE kill table 1 runs (this file's mtime is the order proof).
+Detector: fbctrl_port_probe.py (scratch draft; 41 rows).  Baseline for every mutant: the FIX build (HEAD f4f601c4 +
+edit549.py's dev_fbctrl.c), rebuilt in WSL /tmp/gx549 from a cp -a of build/; base binary md5 9fa0c1f9 (== build/gxemul),
+fix binary md5 4cc158f6; detector on HEAD 25/41 (every refusal/witness/announce row red), on the fix 41/41.
+
+1. SIBLING PARITY
+   The fix edits ONE arm (PORT write) and comments another (DATA).  Siblings in DEVICE_ACCESS(fbctrl): PORT read
+   (odata = current_port -- channel: PORT readback, used by every refusal row), DATA read/write (channel: DATA readback,
+   survival, command side effects), and the access default (any other offset -- a process-ending call, OUT OF SCOPE,
+   filed).  fbctrl_command()'s default (commands other than 0-2) is also out of scope and filed; NOTE the Opus seat
+   MEASURED that keep-previous FROM RESET routes "refused selector, then DATA write of an unknown command" into it --
+   disclosed in the contract.  No channel asymmetry owed inside the fixed arm: every refusal row reads BOTH PORT and,
+   in session K, DATA.
+
+2. CLAIM -> ROW (every added comment sentence)
+   "an out-of-range selector is REFUSED, and current_port keeps its previous, always-valid value"
+        -> P rows: refuse 9/8/16/0x200000000/0x100000003/all-ones(sd)/all-ones(sw)/0xff(sb)/0x100(sh), PORT keeps 5;
+           refuse 9 after PORT=7, PORT keeps 7; K: DATA after refusal reads port 5's 0x2a, DATA write lands in port 5.
+   "It used to be stored with only a warning, and the next DATA access then ended the emulator in the range check
+    below"  -> history; witnessed at rung 3 on HEAD (witness_HEAD/), and K reds on HEAD with HOST-DIED.
+   "Announced once per device"
+        -> announce rows (exactly 1 right after the FIRST refusal; still 1 after ten) and F (free-run: fatal, not
+           debug).  "PER DEVICE" is NOT observable -- one fbctrl per machine -- owed as a NO-ROW SENTENCE (contract).
+   DATA-arm comment "unreachable while the PORT arm refuses; kept as a tripwire"
+        -> NO ROW can see the check on a correct build (M_noguard predicted green: disclosed).  Its firing under a
+           broken PORT arm was MEASURED by the Opus seat (M_gt + PORT=8 + DATA -> exit 1 with its diagnostic).
+
+3. GUARD FIELD vs BODY FIELD
+   Refusal guard reads: idata (uint64_t, from memory_readmax64 over len bytes), writeflag.
+   Refusal body reads/writes: d->warned_port.  Accept body writes: d->current_port (from idata).
+   DATA guard reads: d->current_port.  DATA body reads: d->port[d->current_port], d->current_port (== COMMAND test).
+   Who else writes d->warned_port?  grep: only the refusal body (and DEVINIT's memset).  Who else writes
+   d->current_port?  only the accept branch (and memset).  No shared bitfield; no third state of either field is
+   reachable, so no disagreeing-state row is owed.  The operand the guard tests (idata) is the value the accept branch
+   stores, so guard and store cannot disagree except through a mutant (enumerated below).
+
+4. CHANNEL -- per row, the mutant(s) it is predicted to kill and the observable that differs (PREDICTIONS):
+   refuse 9 (sw), PORT keeps 5        M_revert M_store M_clamp M_reset0 M_and5*  PORT reads 9 / 1 / 0 / 5&5=5*
+       (* &=5 from 5 is invisible here -- that is why "refuse 9 after PORT=7" exists: 7&5 = 5)
+   refuse 8 (sw)                       M_gt M_bit(8 has bit 3 -> refused: NOT killed here)    PORT reads 8
+   refuse 16 (sw)                      M_bit (16 has neither bit 3 nor 32)                     PORT reads 16->current 16
+   refuse 0x200000000 (sd)             M_mod33 (0x200000000 % 2^33 = 0 -> accepted as 0)       PORT reads 0
+   refuse 0x100000003 (sd)             M_u32 M_i32 (truncate to 3)                             PORT reads 3
+   refuse all-ones (sd)                M_i64 M_decl (negative -> accepted, stored -1)          PORT reads -1
+   refuse all-ones (sw)                M_i32 ((int)0xffffffff = -1)                            PORT reads -1
+   refuse 0xff (sb)                    M_wide (1-byte write skips the refusal)                 PORT reads 0xff
+   refuse 0x100 (sh)                   M_wide                                                  PORT reads 0x100
+   refuse 9 after PORT=7, keeps 7      M_and5                                                  PORT reads 5
+   accept selector p (x8, widths 1/2/4/8)  M_rej2 (p=2) M_acc4 (p written by sb/sh/sd)         PORT reads previous
+   port p round-trips DATA (x7)        M_rej2 M_acc4 (DATA lands in the previous port)         DATA reads other cell
+   announce: exactly 1 after FIRST     M_latchinv (0) M_latchcnt (0) M_revert (0: WARNING text) (once) count
+   announce: still 1 after ten         M_latch0 (10) M_perval (10: every value differs)        (once) count
+   F refusal announced free-running    M_debug (debug() is silent while free-running)          (once) count 0
+   C nothing refused, no (once) line   M_ann_any (announces on the accepted PORT=5)            (once) count 1
+   K survives / DATA 0x2a / write 0x77 M_revert (HOST-DIED at the DATA read), M_store (same)  survival, DATA cells
+   C/A/P/K disassembly, liveness, signature   controls: a harness or encoding fault, not a mutant.
+   PREDICTED ESCAPES, DISCLOSED (clause e): M_static (process-global latch -- one device per machine), M_noguard (the
+   DATA check deleted -- unreachable on a correct PORT arm).
+   FLOOR: (a) HEAD fails (25/41, measured); (b) M_revert is HEAD's PORT arm verbatim at the one fixed site;
+   (c) the gate pins FBCTRLP_RESULT=41/41, FBCTRLP_CONTROL=OK and FBCTRLP_DONE, so a null or truncated probe reds.
+
+Rows are owed PER ENUMERATED MUTANT, never per state.  Mutant source: mutants549.py (23 mutants, find-text-must-match).

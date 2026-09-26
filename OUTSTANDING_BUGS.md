@@ -22535,3 +22535,79 @@ right now`, not the weekly-limit text, and `tools/pipeline/seat_verdicts.py` fil
 (format miss)" -- a down seat recorded as a live one with bad formatting, the carrier's refused-connection shape.
 `panel.sh`'s own check reports it as walled, and `kimi-k3:cloud` covered the seat each time.  Fix: the phrase joins
 the wall patterns, with a negative control (a real answer quoting it stays answered -- see `panelwallquote`).
+
+## 2026-09-25 — GXEMUL [087a90]: `#549` fbctrlportkill; what its review files
+
+Evidence: `regress/artifacts/fbctrlportkill_20260924/` -- the panels, `opus5_*.md` / `opus549_measured/` (the width x
+offset walk; F2's prototype and two-machine run), `fable5_*.md`, kill tables `table1/`, `table2/` and `table3/`.
+
+### `fbctrlcmdkill` (HIGH, device) — dev_fbctrl.c: any command other than 0-2 ends the process, including the documented FILL and COPY
+
+`fbctrl_command()`'s `default:` calls `exit(1)` for every command value other than NOP (0), SET_RESOLUTION (1) and
+GET_RESOLUTION (2) -- reached by a guest DATA write while the COMMAND port (0) is selected.  `dev_fb.h` DOCUMENTS
+`DEV_FBCTRL_COMMAND_FILL` (3) and `COPY` (4); the source marks them `TODO`.  Reachable on every test machine
+(testmips, testarm, testm88k, testppc, testriscv, testsh).  **#549 made one path to it more direct:** the power-on
+selector is 0, and #549 keeps the previous selector on a refused write, so "refused selector, then a DATA write of an
+unknown command" now lands here (the Opus seat's walk, 4 cells).  Design question for its round: decline + latched
+announce for unknown commands, and decline or implement FILL/COPY (implementing is a feature; the owner's scope is fixes).
+The detector's session C already drives COMMAND (GET_RESOLUTION); "survives command N" is a new oracle.  The DATA path's
+width handling (a narrowed read or write of a port cell) belongs to this round too: #549's contract discloses it.
+
+### `fbctrloffkill` (MED, device) — dev_fbctrl.c: any access at an offset other than 0x00/0x10 ends the process
+
+`DEVICE_ACCESS(fbctrl)`'s `default:` calls `exit(1)` for every offset in the 0x20-byte window other than PORT (0x00)
+and DATA (0x10) -- e.g. a 1-byte access to +0x03.  The Opus seat's walk measured 52 such cells on the fix build.  An
+unmapped-offset policy (decline + announce, or a bus error where the CPU delivers one) is the shape every device in the
+tree faces, so its round should grep the tree's precedent first.
+
+### `fbctrltwoinst` (LOW, detector) — #549's per-device latch is untested across two fbctrl instances; the route exists and was measured
+
+#549's detector runs one `-E testmips` machine, so one fbctrl: a process-global latch (`M_static`) and an announce
+conditioned on `serial_nr == 1` (`T_D9c_serial1`) both score 73/73 there (kill table 3, disclosed in the contract).
+**A second instance IS reachable without adding a device**: `gxemul -V @cfg` with two `machine(type("testmips") ...)`
+blocks builds two machines in one process (serials 1 and 2), and `focus 0,<m>` steps each.  Measured by the Opus F2 seat
+(`opus549_measured/f2/TABLE_twoinst.out`, `twoinst_probe.py`, `explore_twomachine.out`): on the fix, staggered programs
+give one announce per machine; `M_static` and the serial edit both RED; and the shipped session-P program run on BOTH
+machines reds the shipped `== 1` count rows on a CORRECT build (they read 2), so a two-machine row has to count per
+instance, with programs staggered so each announce is tied to its machine.  **Filed rather than built, by the Fable 5.1
+adjudication:** it is a new launcher, and at `n_machines > 1` `emul_add_machine` calls `console_allow_slaves(1)`,
+marking every non-main console `USING_XTERM_BUT_NOT_YET_OPEN` -- an interaction nobody has measured for a pty probe.
+Owed: a config-file launcher, that console interaction measured, per-instance counts.
+
+### `scoreclaimsrawdoc` (MED, harness) — check_score_claims.py reads NO docstring written with a string prefix, while reporting it checked
+
+`check_score_claims.py`'s `docstring()` matches only a bare `"""` (its regex, `def docstring` in the file), so a probe
+whose docstring opens `r"""` yields ZERO characters -- measured by the Fable 5.1 seat on 2026-09-25 for
+`fbctrl_port_probe.py` (then) and `mips_fold_probe.py` (still: `docstring()` returns 0 chars today) -- while the
+checker's summary line counts both among the stems "also [with] a probe docstring checked".  **A check that reports
+checking and checks nothing.**  #549 dropped the `r` from its own probe (its docstring has no backslash, so the text is
+unchanged) and the checker then read 7,277 characters of it, of an earlier version -- it reads 19,449 of the committed
+probe (this said "now reads 7,277": GPT-6 Astra, confirming `#549`); `mips_fold_probe.py` is the only tracked probe left with a
+prefix.  The extractor fix (admit `[rRuUbB]{0,2}"""`, or use `ast.get_docstring`) owes two negative controls: a
+prefixed docstring carrying a stale score claim must RED, and the same file with the prefix dropped must behave
+identically.
+
+### `fbctrlportdebt` (MED, detector) — the two classes #549's probe discloses, and the measured one-diff close for both
+
+The v6 probe (117 rows) discloses two classes it cannot see, each MEASURED at the full score by the Opus seat
+(`regress/artifacts/fbctrlportkill_20260924/opus549_measured/f2v6/`): **the latch crossed with one bit** (NOT CLAIMED
+(0): while `warned_port` is clear the compare ignores bit k -- 58 bits open, 4-7, 9-31 and 33-63; from bit 32 up the
+escape is a SILENT truncation onto a legal port, `sd 2^40` selecting port 0, #549's own pre-fix defect -- and an accepted value does not set the latch,
+so the escape remains possible while the latch is clear, not once: GPT-6 Astra, confirming `#549`)
+and **a refusal that writes the constant equal to a value's only anchor** (NOT CLAIMED (3): 60 refused values are
+observed at exactly one previous selector).  The flagship ruling (`pass_v6/fable5_f2_v6.md`) graded both clause (e),
+not floor -- a relational compare's generating set is its three regions -- and filed the close with its measured delta:
+* **the prototype** (`opus549_measured/f2v6/scripts/u_sessions.py.txt`): one fresh device per single-bit value,
+  `PORT=7`, the store, one PORT read -- keep, announce once, name.  **61/61 on the fix in 9.7 s** (`TABLE_U.out`; gate
+  16 would go from ~17 s to ~27 s).  It kills N1_mask4, N1_mask40 and MKB_40, and the `-> 5` forms of D2; **B at 5 plus
+  U at 7 gives every single bit two anchors.**
+* **its width rule (P1, three seats independently):** `sw` below bit 32 and `sd` from bit 32 up -- a 32-bit store of 2^k
+  for k >= 32 delivers 0, which the fix ACCEPTS, so a `sw`-only row would be red on the correct build.
+* **its anchor rule:** neither 5 (that is D2) nor 0 (a leaked 2^k >= 2^32 is stored as int 0 and would read as "kept 0");
+  a SECOND anchor closes a value's constant form, a REPLACED anchor moves it (measured: B's sd group at 7 opens `-> 7`
+  on bits 32 and 34-62), and per-width anchors do not close it.  **Include bit 32** -- the 58-bit list leaves it out, and
+  `2^32 -> 5` then survives.
+* **adoption re-predicts** `DSC_ann_hibits`, `CF2_KM_not16` and `CF2_DM_ge16` (U's announce and name rows red the
+  first), and leaves the residue `0xffffffff` at 5 and `0x100000005` at 3 -- which a non-exhaustive selection of values cannot rule
+  out in general (`idata == k`; the domain is finite, so exhaustive rows are impractical, not impossible).
+The owner may pull it into `#549` as v7; if so it owes one pass.

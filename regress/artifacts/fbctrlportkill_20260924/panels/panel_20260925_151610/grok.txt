@@ -1,0 +1,39 @@
+I'll review the closing-pass dispositions against the SEC tree and the inlined table, starting with the device arm and the 94-row probe rather than the author's conclusions.The SEC tree is the one under review. Next I’ll read the device arm, the probe header, and the gate block, then check the enumeration against the sessions.VERDICT: SHIP WITH CHANGES
+
+Two dispositions are wrong: **C1** and **C16**. C19 and C20 are not among them. The PORT arm in `dev_fbctrl.c` matches the settled premises (full-width `idata >= 8`, previous selector kept, one `warned_port` announce, DATA `exit(1)` left in place). The holes are in the witness that is supposed to close the class.
+
+1. **C1 is wrong for selector 3.** The keep row does not observe a skipped or rewritten refusal. X3 refuses `0x100000003` after selector 3, and that is the value the device comment and the probe header both say truncates to port 3 when stored in an `int`. Table 4 leaves `X3 refuse 0x100000003 (sd) after PORT=3, PORT keeps 3` green under the edits that store:
+   - `E_ref_p3` (`idata >= 8 && d->current_port != 3`): that row is `got=0x3`. The two reds are only `X3 that FIRST refusal announces exactly once` (`got=0`) and the wide-name row. Selectors 1, 2, and 4 do go red on the keep row (`E_ref_p1`, `E_ref_p2`, `E_ref_p4`); selector 3 does not.
+   - `M_store` (announce, then `d->current_port = idata` on every refusal): X2/X4/X6/X7 keep rows are red, and all three X3 rows are green, including the wide name `got=0x100000003`. `M_clamp` and `M_revert` leave the same keep row green.
+
+   So the announce rows catch "skip the whole arm after selector 3". They do not catch "stay in the arm, announce, and store". That second edit, restricted to the one previous selector, scores 94/94 by deduction from `M_store.raw`: every red row in that log is a refusal whose previous selector is not 3, and the only refusal with previous selector 3 is X3, whose three rows stay green while the value is stored. The mutant was not built. Tokens, inserted at the same place as `M_store`:
+
+```c
+else if (idata >= DEV_FBCTRL_NPORTS) {
+    if (d->current_port == 3)
+        d->current_port = idata;
+    if (!d->warned_port) {
+```
+
+   This is the repair of C8 placed on the one selector the value truncates to. C8's own claim stands: `G6_trunc32` is red only on `X3 the announce names the wide value 0x100000003`. The wide value has to stay, on a previous selector it does not truncate to (low 32 bits other than the selector, for example `0x100000000` after 3, or `0x100000003` after any selector but 3). As written, the C8 witness vacates the C1 witness.
+
+2. **C16 is not repaired. The enumeration both mis-cites a cell and omits a COMMAND value.**
+   - Announce effect, "COMMAND 0 and 2 (V)": V's first refusal is `sw a0` only after `sw s2` has stored 2 and run `GET_RESOLUTION`. No refusal in V happens while the command cell is 0. Command 0 is held, by P's first refusal (also F, W, and the X devices). The parenthetical names the wrong session. Effect 1's "COMMAND 0 (P) and holding 2 (V)" is the citation this line should match.
+   - Command cell value 1 is held by no row, for any effect. The only stores to the command cell are 0 (A's NOP, R's NOP) and 2 (C, R, V). `(3)` discloses "a re-arm by SET_RESOLUTION traffic" and says no row sends command 1. It does not disclose a refusal, a PORT read, or an announce qualified by that value. The intro still says every value of every axis is held. Same shape as `E_ref_cmd`, which is red because V holds command 2; the other implemented non-exit command is open. Tokens:
+
+```c
+else if (idata >= DEV_FBCTRL_NPORTS &&
+         d->port[DEV_FBCTRL_PORT_COMMAND] != DEV_FBCTRL_COMMAND_SET_RESOLUTION)
+```
+
+   No session has that cell equal to 1, so every row is identical to the fixed arm. Predicted 94/94. Not built. The same qualifier on `writeflag == MEM_READ` and on `!d->warned_port` is the same hole. A guest that issues command 1 and then writes 9 gets the pre-#549 store, and the next DATA access takes the tripwire `exit(1)`. I did not read `dev_fb_resize`; whether a row at the existing 640×480 is safe is the measurement to name. If it is not safe, `(3)` has to list the refusal, the read, and the announce, and the "EVERY value" sentence has to drop command 1.
+
+3. **C10, C11, and C12 should stay disclosed.** `A1_not10` and `B_mod12` are 94/94, and `B_mod11` is 93/94 on the twelfth refusal, so the period boundary is where they drew it. `A2_sb3` and `G7_ldbit32` are the joint cells `(0)` names, both 94/94. `G5a_noexit`, `G5b_checkop`, and `M_noguard` are unobservable while no out-of-range selector is stored. The fourteen greens match the gate comment's categories (global latch, serial, three DATA-check edits, two joints, one absent value, period 12, three equivalent edits, two DATA widths). One false universal inside C10, which does not flip the decision: "any edit of the kept check" is not unreachable. `d->current_port >= 0` in that check is true for every legal port and would kill DATA sessions. Edits that stay false for selectors 0..7 are the ones that are unobservable.
+
+4. **The selector-3 keep line is the enumeration's false "held" cell; command 1 is the omitted one.** The other keep citations check out against the sessions: widths sb/sh/sw/sd in P and W, previous 0 (F), 1 (V), 2 and 4 (X2, X4), 5 (P), 6 (W), 7 (P and X7), command 0 (P) and 2 (V). First-refusal widths and previous selectors for the announce effect are held, including previous 3, because X3's announce rows do go red when the arm is skipped. "0 and 7 at every width (W, A)" is held, including 7 by `sd` in A (`T_W_sd7` reds `accept selector 7 written by sd`, `got=0x6`). C14's LIMITS note is right: `T_W_sw0` reds `accept 0 written by sw after PORT=5` (`got=0x5`) and does not red A's `accept selector 0 written by sw`.
+
+5. **C19 is right, and the earlier "drop R" is wrong.** `G3a_cmdrearm` has a single failure: `R announce still 1 after DATA, NOP and GET_RESOLUTION` `got=2`. V runs its command before any refusal, so a command that clears the latch never shows up there. `R_partAB` reds `R refuse 9 after that traffic, PORT keeps 5` (`got=0x9`) while `V refuse 9 while COMMAND holds 2, PORT keeps 1` stays `got=0x1`. The two-part store needs a refusal, then a command (`warned_port |= 2`), then another refusal. R is that session.
+
+6. **C20's rejection is right.** The header says an edit that accepts 8 cannot blank P's rows. `M_gt` leaves every session `SURVIVED`, P at 37/37, and P's three reds are `got=0x8`, `got=0`, and `got=0x9`, not `-`. `M_revert` also leaves P `SURVIVED` 37/37; the process exits are R `HOST-DIED` 3/13 and K `HOST-DIED` 3/7, which matches the gate comment's "51/94" and "K and R ended the process". The D4-inside-P measurement is from an older layout and is not re-measured here.
+
+7. **Yes. A log can pass all nine checks with a wrong row.** The checks pin the trailer to 94/94, the `ok`/`FAIL` counts, and uniqueness of the stripped names. They never compare `got` with `want`, and they never pin the name set. Two logs the §5c fixtures do not include: an `ok` line whose `got` differs from `want` (trailer left at 94/94, exit 0), and a row replaced by a new unique name rather than by a copy of another row. `row_substituted` fails only `fbctrl_port row names are unique`, which is what C13 claimed, and that claim is true for a duplicated name. It is the copy attack. A novel name keeps the unique check green.

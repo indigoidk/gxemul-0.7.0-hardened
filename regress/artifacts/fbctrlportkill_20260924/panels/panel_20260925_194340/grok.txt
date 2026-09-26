@@ -1,0 +1,43 @@
+The brief's arithmetic and the session-B aggregate are the premises I will re-derive from the tree and the inlined v6, not from the dispositions. I am going to read the fixed port arm, the v5 probe, and the table-6 artifacts first.The fixed port arm is in `GXEMUL-SEC`. Next I will read that function and the v6 artifacts, and enumerate session B from the probe rather than from the summary.VERDICT: SHIP WITH CHANGES
+
+The fixed `PORT` arm in `GXEMUL-SEC/src/devices/dev_fbctrl.c` matches the packet. Session B does close the measured bit-ignore hole. It does not make "keeps 5" mean "kept the previous selector" for the values only B writes.
+
+1. Floor breach, outside NOT CLAIMED (0)–(8). Inside the refuse arm, `if (idata == 32) d->current_port = 5;` (same for `64`, `128`, `0x200`, or any `idata` with `(uint32_t)idata == 0`, including `0x200000000` and `0x8000000000000000`) still scores 117/117. Every row that observes those values expects `0x5`, and on the fix they are only ever refused after `PORT=5`: P's `0x200000000`, W's `2^63`, and every B store. `MKB_05` is 113/117 with exactly the four B rows (`got=0x20`); `MKB_09` is 114/117 with exactly sh/sw/sd; `MKB_31` is 115/117 with exactly sw/sd. No other session writes 32, 64, 128, or `2^9`..`2^31`. The fall-through the SESSIONS text describes (`current_port = idata` → `2^k`, `INT_MIN`, or `0`) cannot yield 5, and table 6 shows that. A refuse-path store of the constant 5 is a different edit, and it matches the oracle. Reset-to-0 (`M_reset0`) and `idata & 7` (`M_clamp`) are red because they do not write 5. This edit was not executed; the 117 follows from those oracles. One sd anchor of 7, instead of 5, makes both fall-through and constant-5 fail that read, because sd carries every bit from `2^3` up and neither `2^k` nor 5 is 7. A `len==1 && idata==32` joint stays invisible and is NOT CLAIMED (0).
+
+2. NOT CLAIMED (4) names seven equivalents. The gate comment's "thirteen" is those seven plus `EQ_gt7`, `EQ_maskhi`, `EQ_ge8lit`, `EQ_dir_new`, `EQ_latch_ne1`, and `EQ_ann_idata`, all green at 117/117 and none written into (4). `idata > 7`, `idata >= 8`, and `idata & ~7ULL` match `idata >= 8` on every `uint64_t`. The other three match the fix on the write flags and latch values this arm actually uses (`MEM_READ` 0, `MEM_WRITE` 1, latch only 0 or 1). The comment says the contract discloses all thirteen. The header discloses seven.
+
+3. The pre-table channel is wrong in four places. `!(d->warned_port++ % N)` then `warned_port = 1` announces on refusal `1+N`. `B_mod12.raw` got 9 (`1, 13, …, 97`); `B_mod11.raw` got 10, and P's twelve-refusal row got 2. N=107 announces on refusal 108, which is the tagged last store, so the count row catches periods through 107, not "up to 106". N=108 needs a 109th refusal, so header (3) is the right bound. `MK_b5_7` is named only under the sb line and is red on all four widths (`got=0x80` each). `MK_b9_31` is not named under sd and sd is red (`got=0xffffffff80000000`, bit 31 kept through the later refused bits). `B_mod11` is also red on P's twelve-row, which the B-count line does not name. One-bit and one-width rows do match the width lists: `MKB_03` got `0x8` on all four, `MKB_05` got `0x20`, `MKB_15` got `0x8000` on sh/sw/sd only, `MK_b8_ctl` got `0x100` on sh/sw/sd, `MKW_sb05` got `0x20` on sb only, `MKW_sh12` `0x1000`, `MKW_sw09` `0x200`, `MKW_sd40` and `MK_b34_62` `0x0` on sd only.
+
+4. The addendum's latch witness is the wrong edit. `CELL_keep_l0` is `idata >= 8 && d->warned_port`. The latch is set only inside that branch, so it never sets, every value is stored, and the sb read is `0x80` (the last store), not `0x8` (the first). Preservation of an early bad store is real, and `MKB_03` shows it: all four widths stay `0x8`.
+
+Denominator for question 1. Red on the shipped composite, from table 6 raw got-values: each single bit 3..63; the sets {5..7}, {9..31}, {34..62}; one-width ignores of bits 5, 12, 9, and 40; `>= 9`, `>= 7`, and the `[8, 2^32)` window; reset-to-0, `idata & 7`, and store-`idata`. Green, and not a behavior change: the six equivalents in finding 2, plus the thirty disclosed greens. Green, and a behavior change: finding 1.
+
+Question 2. For `current_port = idata`, one read per width is enough. A leaked `2^k` is `2^k` (k<31), sign-extended `INT_MIN` (k=31, measured `0xffffffff80000000`), or `0` (k>=32, measured `0x0`). None is 5. Later real refusals keep it (`MKB_05` stays `0x20`; `MK_b9_31` sd stays `INT_MIN` across bits 32..63). A per-width ignore is visible on that width only (`MKW_*`). The aggregate does not see finding 1, and it does not see a width-and-bit joint that writes 5 only for `len==1` at bit 5. That joint is (0). Bits ≥32 all print `0`, so the sd row cannot name which of them leaked.
+
+Question 3.
+V1 UPHOLD. The three masks and bit 8 are red on v6 at the widths that can carry them; sb stays `0x5` for bits 9..31.
+V2 UPHOLD the eight equivalents behave like the fix. REFINE: six of them never made it into (4).
+V3 UPHOLD. `odata` is initialized to 0; a skipped load at selector 0 still returns 0.
+V4 UPHOLD. Y reads `COMMAND` only after the second refusal; `SET_RESOLUTION` sits between the two.
+V5 UPHOLD. v6 names the cells-alone effect and does not call it effect 4.
+V6 UPHOLD. K's reads are both `DATA` (`offset 16`); the header excludes K.
+V7 UPHOLD. R's program does `lw s0` after the first refusal, and the session prints only `s1`. Z's only port read is after selector 4.
+V8 UPHOLD. V's fourth later refusal is `sb` of `0xff`, and the header says sb (P, V, B).
+V9 REFINE. The store casts and latch=2 are in (4). The six algebraic equivalents from the same measuring pass are not.
+V10 UPHOLD. `ONCE_RE` does not require the newline; `DSC_nonl` is 117/117.
+V11 UPHOLD the v6 disposition. `B_mod12` is 116/117, got=9, only the B count row. The record's "106" is finding 3; the header's "more than 108" matches N≥108.
+V12 UPHOLD. `DSC_ann_hibits` requires a bit in `0..8` before announcing; B's first refusal is 8, so the count stays 1.
+V13 UPHOLD. `CELLMAP_t6.out` maps `MKB_08` to `MK_b8_ctl` and does not rebuild it.
+V14 UPHOLD the rejection. W's cells are 8 by sb/sh/sd and 7 by sb/sh/sw; `T_W_sd7` and `T_W_sw8` are other edits.
+V15 UPHOLD the rejection. The announce-once list includes W's first `sb` of 8; the naming list is P's `0x8` only.
+V16 CANNOT SETTLE from this packet. The collateral is a record note; I did not reopen that log.
+V17 UPHOLD. Magnitude and width did not pin the ignored ranges; the v6 reds are the measurement.
+V18 REFINE. The thirteen now has a table source, and it still over-claims what the header discloses.
+V19 UPHOLD. Those were brief-wording errors, not probe text.
+V20 UPHOLD that the lists are not exhaustive. The hole in finding 1 is a listed holder whose read cannot show the effect.
+
+Question 4. None of the asked sentences is false on the facts it states. SESSIONS B: 5+13+29+61=108 stores, 108 `dsll`, 4 `sw` of `PORT`, 4 `lw`, 224 steps; `base_fix.raw` is 224/224, once=1, disassembly 0. `dsll t1,t1,1` is `0x00094878` and `dsll t4,t4,1` is `0x000c6078` (rd=rt, sa=1, funct `0x38`). "Never 5" is true for the int truncation of `2^k` and is not a warrant against finding 1. (3) matches N≥108. (4) is true of the seven it names and incomplete. (5) and (8) match the probe: K is the port-5 `DATA` read under command 0; Y's command read is the second refusal only; B, F, W, X, and Z never write a data cell (`memset` 0). LIMITS is true for the last value that actually stuck: `MKB_05` prints `0x20`, not the last programmed store.
+
+Question 5. One-bit and one-width edits went red on exactly the B widths the addendum's ranges name. The range edits and `B_mod11` did not, and the period bound is 107. Finding 3.
+
+Question 6. The "never 5" sentence was treated as proof that any bad store of a B value is visible. It only covers the store of the truncated selector. The new bits are anchored exclusively at 5, so writing the constant 5 is the same observation as keeping 5.

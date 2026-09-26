@@ -1,0 +1,109 @@
+VERDICT: SHIP WITH CHANGES
+
+### 1. Verification of Settled Premises & R-Dispositions
+
+* **Settled Premise on [`fatal()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391):** **VERIFIED.**
+  In [`src/core/debugmsg.c:384-391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391), [`fatal()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) formats via `va_debug()` and returns; it contains neither an early exit nor an `exit()` call. In [`src/devices/dev_fbctrl.c:136-143`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L136-L143), the `DEV_FBCTRL_DATA` arm explicitly invokes `fatal(...)` followed by `exit(1);`. Overruling DeepSeek's DO NOT SHIP (finding D1) is sound.
+* **R1 (Stored-int defect description):** **VERIFIED.**
+  In [`src/devices/dev_fbctrl.c:50`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L50), `current_port` is declared as `int`. Before `#549`, the assignment was `d->current_port = idata;` (truncating `uint64_t` to 32-bit `int`). As demonstrated in [`regress/artifacts/fbctrlportkill_20260924/table2/M_revert.raw`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table2/M_revert.raw#L38-L41), wide writes such as `0x200000000` (stored as 0) and `0x100000003` (stored as 3) did not exit because the truncated integer was within `[0, 7]`. Only selectors whose `int` conversion was $\ge 8$ or $< 0$ (e.g. `sw 9`) died on the subsequent `DATA` access.
+  *Note on Scope:* The rewrite must be applied not only to [`src/devices/dev_fbctrl.c:123-125`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L123-L125) and [`regress/gate_mips_folds.sh:37-39`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L37-L39), but also to [`regress/fbctrl_port_probe.py:9-10`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L9-L10).
+* **R2 (Two-machine route):** **VERIFIED.**
+  See Question 2 below. The disposition to disclose the single-machine probe boundary and file `fbctrltwoinst` is acceptable.
+* **R3 (Table citation):** **VERIFIED.**
+  In [`regress/gate_mips_folds.sh:40-41`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L40-L41) and [`regress/fbctrl_port_probe.py:32-33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L32-L33), both cite "kill table 1: 20 of 20". Updating this to Kill Table 2 (25 variants, 22 red, 2 disclosed escapes: `M_static` and `M_noguard`) aligns the text with the measured evidence.
+* **R4 & R5 (Probe header precision):** **VERIFIED.**
+  In [`regress/fbctrl_port_probe.py:21`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L21), host register sampling occurs after the entire session survives; later aborts prevent reading earlier registers. In [`regress/fbctrl_port_probe.py:26-27`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L26-L27), `continue` executes the planted `sw 9` at `CODE` before stopping at `CODE + 4`. Rewording both is correct.
+* **R6 (Simultaneous filings):** **VERIFIED.**
+  Landing `fbctrlcmdkill` and `fbctrloffkill` in the same commit preserves documentation integrity.
+
+---
+
+### 2. Probe / Gate Dispositions (P1 - P3)
+
+* **P1 (Probe exit status):** **CORRECT.**
+  In [`regress/fbctrl_port_probe.py:358-363`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L358-L363), [`main()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L313-L363) prints the summary lines and terminates with exit code 0 regardless of row outcomes. In [`regress/gate_mips_folds.sh:69`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L69), `check "fbctrl_port probe exit status" "$fbrc" "0"` was therefore a no-op against red test rows. Having `main()` exit 1 when `not control or n_ok != n` restores this check as a genuine barrier.
+* **P2 (Numerator pin form):** **ACCEPTABLE (Author disposition is right; Grok's premise was mistaken).**
+  In [`tools/pipeline/check_score_claims.py:91`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py#L91):
+  ```python
+  PIN = re.compile(r'check\s+"(\S+)\s+rows\s+run"\s+"[^"]*"\s+(\d+)')
+  ```
+  [`check_score_claims.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py) only parses lines containing `"rows run"` (the denominator); it never inspects `"rows correct"` anywhere in the repository. Quoting or unquoting `"41"` on `check "fbctrl_port rows correct"` has zero impact on [`check_score_claims.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py). Furthermore, in POSIX shell `[ "$2" = "$3" ]`, `"41"` and `41` compare identically. Leaving it quoted is fine.
+* **P3 (Instrument self-edits):** **CORRECT.**
+  Reviewing rather than meta-rowing harness modifications adheres to tree conventions (`fbharnessedits`).
+
+---
+
+### 3. Review of Device Edits (D-Dispositions) & Owed Rows
+
+* **D2 Disposition is WRONG (Arithmetic / Fixture Flaw):**
+  *Brief text:* `* D2 (grok ded.): mask bit 63 before the compare -> add refuse 0x8000000000000005 (sd), PORT keeps 5.`
+  *Flaw:* Session P anchors previous selector state to `5` ([`regress/fbctrl_port_probe.py:295,299`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L295-L299)). Grok's mutant masks bit 63:
+  ```c
+  else if ((idata & ~(1ULL << 63)) >= DEV_FBCTRL_NPORTS)
+  ```
+  When `0x8000000000000005ULL` is written, `(idata & ~(1ULL << 63))` evaluates to `5`. Because `5 >= 8` is false, the mutant takes the accept branch and executes `d->current_port = idata;` ([`src/devices/dev_fbctrl.c:133`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L133)).
+  Because `current_port` is an `int`, `(int)0x8000000000000005ULL == 5`. The erroneous accept stores `5`!
+  When the probe then reads `PORT` back, it reads `5`. The row checking `PORT keeps 5` tests `got == 5` and **STAYS GREEN**. Grok's mutant completely escapes!
+  *Correction:* The value written must have low 32 bits that differ from the previous selector. Either anchor to `5` and write `0x8000000000000000ULL` (expecting `PORT keeps 5`; mutant stores `0` $\rightarrow$ fails), or anchor to `7` and write `0x8000000000000005ULL` (expecting `PORT keeps 7`; mutant stores `5` $\rightarrow$ fails).
+* **D3 (Power-on selector check):** **OWED.**
+  Kills Grok's mutant 2 (`if (!d->current_port) d->current_port = (int) idata;`) and Codex's mutant 7.
+* **D4 (Latch clearing on DATA/Command):** **OWED.**
+  In [`regress/fbctrl_port_probe.py:294-302`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L294-L302), Session P performs no DATA writes between its refusals. Adding a DATA write and NOP command between refusals kills Opus's measured `N_datarearm` ([`TABLE_new.out:8`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/p2/TABLE_new.out#L8)) and Grok's mutant 3 (`fbctrl_command()` clearing `warned_port`).
+* **D5 (Cell clobber and command execution):** **OWED.**
+  Reading back DATA cells of ports 0–7 and verifying X1 retention kills Opus's measured `N_clobcell`, `N_clobcmd`, and `N_runcmd` ([`TABLE_new.out:3,4,15`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/p2/TABLE_new.out#L3-L15)).
+* **D6 (64-bit PORT read):** **OWED.**
+  Kills Grok's mutant 5 (`odata = d->current_port | (1ULL << 32)`).
+* **D7 (Selector 0 width coverage):** **OWED.**
+  In [`regress/fbctrl_port_probe.py:268`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L268), `ACC` tests selector 0 only with `sw`. Adding `sb` and `sd` kills Grok's mutant 6 and Codex's mutant 2.
+* **D8 (Even selector retention):** **OWED.**
+  Session P currently tests only odd previous selectors (5 and 7). Testing previous selector 6 kills Codex's mutant 1 (`d->current_port |= 1`).
+* **D9 (Re-announcement cycle & first value):** **OWED.**
+  First refusal as 8 kills Codex's mutant 3 (`idata == 9`); 12 refusals kill Codex's mutant 4 (`!(d->warned_port++ % 10)`).
+* **D10 (Refusal value diagnostic):** **OWED.**
+  Kills Codex's mutant 6 (`(unsigned long long) 0`).
+* **D11 (GET_RESOLUTION Y1 signature):** **OWED.**
+  In [`src/devices/dev_fbctrl.c:94-95`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L94-L95), `GET_RESOLUTION` zeroes both X1 and Y1. [`fbctrl_port_probe.py:333`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L333) only checked X1. Checking Y1 kills Codex's mutant 8.
+* **DISCLOSED & OUT OF SCOPE:** **SOUND.**
+  Disclosing DATA check weakening (`>=` to `>`) is correct because on a working PORT arm, invalid selectors never reach DATA; it is an unreachable tripwire identical to `M_noguard`. `printf` vs `fatal` is indistinguishable to stdout/pty stream parsers. DATA-path width narrowing (`N_datard16`, `N_datawr8`) belongs to the command/DATA overhaul.
+* **Missing Disclosures from Opus's 14 Variants:**
+  The brief accounts for `N_clobcell`, `N_clobcmd`, `N_cmdport`, `N_cmdread`, `N_datard16`, `N_datarearm`, `N_datawr8`, `N_rdlatch`, `N_rdmask3`, `N_rearm`, and `N_runcmd`, but omitted naming:
+  1. `N_acc32` (`d->current_port = (uint32_t)idata;`, [`opus549_measured/p2/variants.diff:5`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/p2/variants.diff#L5)): scores 41/41 because `idata < 8` on accept, so `(uint32_t)idata == idata`. It is an equivalent mutation on valid selectors.
+  2. `N_order` (reordering `warned_port` struct member, [`opus549_measured/p2/variants.diff:35`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/p2/variants.diff#L35)): scores 41/41 as a pure internal layout change.
+  3. `N_rdmask7` (`odata = d->current_port & 7;`, [`opus549_measured/p2/variants.diff:52`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/p2/variants.diff#L52)): scores 41/41 because `current_port` is always $\in [0, 7]$ on a correct device.
+  These three should be explicitly recorded under DISCLOSED as equivalent mutations.
+
+---
+
+### 4. Specific Answers to Brief Questions
+
+#### Q1: Which disposition is wrong?
+* **D2 is wrong.** Writing `0x8000000000000005 (sd)` when previous is `5` truncates to `5` upon erroneous acceptance, leaving the readback `5` and passing the check. The fixture must write a value whose low 32 bits differ from the anchor (e.g. write `0x8000000000000000` with anchor `5`, or write `0x8000000000000005` with anchor `7`).
+* **P2 is acceptable.** [`check_score_claims.py:91`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py#L91) keys exclusively on `"rows run"`; it does not monitor `"rows correct"`, quoted or unquoted.
+
+#### Q2: Is R2's two-machine route real, and should its row be built NOW rather than filed?
+* **It is 100% REAL:**
+  1. [`src/core/emul_parse.c:461`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul_parse.c#L461): The configuration parser invokes [`emul_add_machine()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul.c#L274) for each `machine` block.
+  2. [`src/machines/machine_test.c:154-156`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L154-L156): Every `testmips` machine setup naturally adds `fbctrl addr=0x12f00000`.
+  3. [`src/devices/dev_fbctrl.c:172-181`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L172-L181): [`dev_fbctrl_init()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L168-L184) allocates a distinct `struct fbctrl_data` instance per machine.
+  4. [`src/debugger/debugger_cmds.c:1115-1116`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L1115-L1116): The debugger supports switching machine focus via `machine <id>`.
+* **Disposition:** **FILE NOW, DO NOT BUILD IN THIS ROUND.**
+  The single-machine probe uses `gxemul -E testmips` ([`fbctrl_port_probe.py:99`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L99)), which routes through [`emul_simple_init()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul.c#L861) (strictly requiring `n_machines == 1`). Driving a multi-machine config file through the pty interface requires a separate harness architecture. Filing `fbctrltwoinst` alongside `fbctrlcmdkill` and `fbctrloffkill` while disclosing `M_static` in the contract is the appropriate engineering choice.
+
+#### Q3: Anything in these fixes that would itself be wrong once written?
+1. **D2 Fixture Flaw:** Addressed above; writing `0x8000000000000005` while anchored to `5` fails to detect the mutant.
+2. **D3 Implementation in Session F:**
+   Session F runs free-run (`continue` to breakpoint). The probe cannot read arbitrary guest memory over the pty; it only executes GXemul `print <reg>` commands ([`fbctrl_port_probe.py:191`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L191)). To read PORT back after the free-run, `PROG_F` **must** include an instruction to load PORT into a register (`("lw", "s0", 0, None)`) before the breakpoint anchor, and then inspect `s0`.
+3. **D6 Opcode Definition:**
+   [`fbctrl_port_probe.py:66`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L66) defines `OPS = dict(sb=0x28, sh=0x29, sw=0x2b, sd=0x3f, lw=0x23)`. It lacks `ld`. Attempting to emit `ld` without adding `ld=0x37` to `OPS` (and asserting its encoding) will trigger an unhandled `KeyError`.
+4. **D10 vs D9 Regex Clash in Session F:**
+   If D9 changes Session P's first refusal from 9 to 8, while Session F still refuses 9, tightening [`ONCE_RE`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L62) to require literal `0x8` will cause Session F's announcement check ([`fbctrl_port_probe.py:357`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L357)) to fail. The regex must allow `0x[89]` (or be parameterized per session) while specifically excluding `0x0`.
+5. **D9 Refusal Tagging:**
+   In [`fbctrl_port_probe.py:349`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L349), the check is hardcoded to `P["once_after"].get("r9")`. If P is expanded to 12 refusals, the check must inspect `r11` (the 12th refusal); inspecting `r9` would sample after 10 refusals and miss the 11th refusal where `!(warned_port++ % 10)` re-announces.
+6. **P1 Ordering:**
+   In [`fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py), `sys.exit(1)` on red rows must be called **after** printing `FBCTRLP_DONE` and the result lines. If called prior, [`regress/gate_mips_folds.sh:55-66`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L55-L66) fails on the parse guard instead of cleanly reporting row failures.
+7. **Score Claims Re-derivation:**
+   Adding the D-rows will raise the row count from 41 to $\sim$59. When doing so, the pins in [`regress/gate_mips_folds.sh:71-72`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L71-L72), the probe docstring, and the comment in [`tools/precommit_check.sh:345`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L345) must be updated simultaneously so [`tools/pipeline/check_score_claims.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py) passes.
+
+---
+
+GO-WITH-CHANGES

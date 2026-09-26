@@ -1,0 +1,88 @@
+diff --git a/regress/gate_mips_folds.sh b/regress/gate_mips_folds.sh
+index 409a5209..036c57f5 100644
+--- a/regress/gate_mips_folds.sh
++++ b/regress/gate_mips_folds.sh
+@@ -32,6 +32,83 @@ PMAX=${PMAX:-$ROOT/build/gxemul}
+ PMAX_KERNEL=$ROOT/gxemul_pmax_rig/bsd
+ 
+ if [ ! -x "$PMAX" ]; then gate_skip "no gxemul binary at $PMAX"; fi
++
++#  ---------------------------------------------------------------------------------------
++#  #549 fbctrlportkill: dev_fbctrl.c's PORT selector, on -E testmips.  Before #549 the PORT
++#  arm STORED the selector as an int with only a warning: 9 made the next DATA access end the
++#  emulator in the DATA arm's range check, and a wide value was truncated onto a legal port.
++#  #549 refuses any selector >= 8 (the previous one is kept) and announces the refusal once.
++#  regress/fbctrl_port_probe.py drives real guest sb/sh/sw/sd/lw/ld on an unmodified
++#  testmips -- no kernel, no rig image -- so it runs BEFORE
++#  this gate's pmax-kernel check: a missing kernel still skips the fold rows below, and
++#  gate_skip reports FAIL, not SKIP, if an fbctrl row failed first.
++#
++#  THE CONTRACT is the probe's header (its ENUMERATION and NOT CLAIMED).  Variant table 6
++#  (regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out) built 297 edits -- table 5's
++#  212 (one one-axis edit GENERATED for every cell the header lists, table5/CELLMAP.out), the
++#  verifying pass's equivalents and behaviour changers, its three bit-range narrowings of the
++#  compare and their control, a one-bit narrowing for EVERY bit 3-63 (60 edits, bit 8's being the
++#  control MK_b8_ctl), four one-width
++#  narrowings, and three measured disclosures -- each with its prediction written first
++#  (table6/MANIFEST.out): the 267 the contract does not disclose are ALL red, HEAD's own arm
++#  among them (M_revert, 54/117 here, and sessions K and R ended the process); the 30 it
++#  discloses score 117/117 -- a process-global latch, a serial-number condition, three edits of
++#  the DATA arm's kept check, two joint cells, one value no row writes, thirteen equivalent
++#  edits, two DATA-width edits, three refusal-time cell writes no row reads back, three announce
++#  forms keyed to one value, a value range or a value class no first refusal belongs to, and the
++#  announce without its trailing newline.  Every RED/GREEN prediction held, and every one-bit and
++#  one-width narrowing reddened session B's rows at exactly the widths that carry its bit, as the
++#  pre-table addendum named (PRETABLE_ADDENDUM_t6.out) -- other sessions' rows red too where their
++#  refused value is decisive on that bit alone.  Two more classes are disclosed after table 6,
++#  each measured at the full score: the latch crossed with one bit (NOT CLAIMED (0)) and a refusal
++#  that writes a value's only anchor (NOT CLAIMED (3)) -- opus549_measured/f2v6/TABLE_f2v6.out.  Session B -- every single-bit value at each width -- is v6's
++#  repair of a floor breach the verifying pass MEASURED: the compare narrowed to ignore bits 9-31
++#  scored the full 111 rows of v5 and brought back the DATA arm's exit
++#  (opus549_measured/c3/TABLE_mask.out).  The device still ends the process through its command
++#  and offset defaults, which are filed, not claimed.
++#
++#  `gatedevicesplit` is OWED (#498): one more device probe in a CPU gate, as #548 added to
++#  gate 14.  Recorded, not compounded silently.
++FBCLOG=$LOGDIR/fbctrl_port_probe.log
++fbrc=0
++python3 -u fbctrl_port_probe.py "$PMAX" > "$FBCLOG" 2>&1 || fbrc=$?
++if [ "$(grep -cx 'FBCTRLP_DONE' "$FBCLOG")" != "1" ] ||
++   [ "$(grep -c '^FBCTRLP_RESULT=' "$FBCLOG")" != "1" ] ||
++   ! grep -Eq '^FBCTRLP_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$FBCLOG" ||
++   [ "$(grep -c '^FBCTRLP_CONTROL=' "$FBCLOG")" != "1" ] ||
++   ! grep -Eq '^FBCTRLP_CONTROL=(OK|FAILED)$' "$FBCLOG"; then
++    note "fbctrl probe produced no unique, complete record; last lines follow"
++    tail -5 "$FBCLOG" | sed 's/^/       /'
++    check "fbctrl probe output parses" "no" "yes"
++else
++    check "fbctrl probe output parses" "yes" "yes"
++    grep -E '^  FAIL ' "$FBCLOG" | sed 's/^/       /'
++    check "fbctrl probe controls" "$(sed -n 's/^FBCTRLP_CONTROL=//p' "$FBCLOG")" "OK"
++    #  The probe exits nonzero on a crash OR a red row (#549 F2), so this is a second catcher
++    #  of a red score, not only of a Python failure.
++    check "fbctrl probe exit 0 (nonzero: a crash or a red row)" "$fbrc" "0"
++    fbres=$(sed -n 's/^FBCTRLP_RESULT=//p' "$FBCLOG")
++    #  Pinned UNQUOTED under a one-token stem, so check_score_claims.py sees the pin.  The
++    #  quoted numerator is inert to that tool BY DESIGN -- it reads only the denominator's
++    #  line -- and the exit row above and the two reconciliation rows below are what catch a
++    #  red or an edited score.
++    check "fbctrl_port rows run" "${fbres#*/}" 117
++    check "fbctrl_port rows correct" "${fbres%/*}" "117"
++    check "fbctrl_port rows failed" "$(grep -c '^  FAIL ' "$FBCLOG")" "0"
++    #  RECONCILE the rows the probe PRINTED with the trailer it printed (#549 F2, measured by
++    #  the Opus seat): checking the trailer alone, a log with one row deleted and its
++    #  RESULT line intact passed every check above.
++    check "fbctrl_port rows emitted match the trailer total" \
++          "$(grep -cE '^  (ok|FAIL) ' "$FBCLOG")" "${fbres#*/}"
++    check "fbctrl_port ok rows match the trailer count" \
++          "$(grep -c '^  ok ' "$FBCLOG")" "${fbres%/*}"
++    #  And each row name prints ONCE: a row replaced by a copy of another keeps every count
++    #  above intact (the closing pass's grok seat), and only the names can tell.
++    check "fbctrl_port row names are unique" \
++          "$(grep -E '^  (ok|FAIL) ' "$FBCLOG" | sed -E 's/^  (ok|FAIL) +//; s/ +got=.*//' |
++             sort | uniq -d | wc -l)" "0"
++fi
++
+ if [ ! -f "$PMAX_KERNEL" ]; then gate_skip "no pmax kernel at $PMAX_KERNEL"; fi
+ 
+ FLOG=$LOGDIR/gate_mips_folds.log

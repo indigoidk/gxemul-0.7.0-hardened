@@ -1,0 +1,89 @@
+#!/bin/bash
+# Opus measuring seat, #549 v6 adjudication pass.  Runs ONLY in a WSL scratch clone (/tmp/opusf2v6), from FROZEN copies
+# of its scripts (/tmp/opusf2v6_scripts), and writes nothing under /mnt/c/DocumentNoSnc.
+#   stage 0: clone build/, cmp the fix and the probe against GXEMUL-SEC, rebuild the baseline IN THE CLONE (fresh, md5)
+#   stage 1: build every edit of gen_f2v6.py (clone-local .MUTANT sentinel; restore verified by cmp + freshness + md5)
+#   stage 2: score every binary with the UNMODIFIED v6 probe and with the sd7 copy (D2's remedy)
+#   stage 3: score a subset with the U prototype (D1's repair: one fresh device per single-bit value, anchor 7)
+set -u
+ROOT=/mnt/c/DocumentNoSnc/cc/GXEMUL
+SEC=$ROOT/GXEMUL-SEC
+S=/tmp/opusf2v6_scripts
+CL=/tmp/opusf2v6
+W=$CL/seat
+echo "STAGE0 START $(date +%T)"
+if [ -e "$CL" ]; then echo "REFUSED: $CL exists"; exit 2; fi
+cp -a "$ROOT/build" "$CL" || { echo CPFAIL; exit 2; }
+[ -e "$CL/.MUTANT" ] && { echo "the clone carries a .MUTANT sentinel -- refusing"; exit 3; }
+mkdir -p "$W/bins" "$W/var" "$W/logs" "$W/probe"
+cmp "$CL/src/devices/dev_fbctrl.c" "$SEC/src/devices/dev_fbctrl.c" && echo "CMP clone dev_fbctrl.c vs SEC: CLEAN" \
+    || { echo "dev_fbctrl.c DIFFERS"; exit 3; }
+cp "$SEC/regress/fbctrl_port_probe.py" "$W/probe/frozen_v6.py"
+cmp "$W/probe/frozen_v6.py" "$SEC/regress/fbctrl_port_probe.py" && echo "CMP frozen probe vs SEC: CLEAN" || exit 3
+md5sum "$SEC/src/devices/dev_fbctrl.c" "$W/probe/frozen_v6.py" | sed 's/^/  /'
+cp "$CL/src/devices/dev_fbctrl.c" "$W/var/fix.c"
+python3 "$S/mkprobe_sd7.py" "$W/probe/frozen_v6.py" "$W/probe/v6_sd7.py" || exit 4
+diff "$W/probe/frozen_v6.py" "$W/probe/v6_sd7.py" > "$W/logs/v6_sd7.diff"
+echo "sd7 probe: $(grep -c '^[<>]' "$W/logs/v6_sd7.diff") changed lines (diff at $W/logs/v6_sd7.diff)"
+cd "$CL" || exit 2
+rm -f src/cpus/*.o
+touch "$W/var/stamp_base"
+make -j8 > "$W/logs/make_base.log" 2>&1; echo "MAKE_RC=$?"
+if [ gxemul -nt "$W/var/stamp_base" ] && [ gxemul -nt src/devices/dev_fbctrl.c ]; then echo "FRESH=yes"; else echo "FRESH=NO"; exit 5; fi
+FIXMD5=$(md5sum < gxemul | cut -d' ' -f1)
+echo "base md5 $FIXMD5  build/gxemul md5 $(md5sum < "$ROOT/build/gxemul" | cut -d' ' -f1)  (table 6 base: b5b99e6d)"
+cp gxemul "$W/bins/gx_fix"
+echo "STAGE0 END $(date +%T)"
+
+echo "STAGE1 START $(date +%T)"
+cmp -s "$W/var/fix.c" "$SEC/src/devices/dev_fbctrl.c" || { echo "fix.c DIFFERS from SEC"; exit 3; }
+python3 "$S/gen_f2v6.py" "$W/var/fix.c" "$W/var/v" || exit 4
+cp "$W/var/v/MANIFEST.out" "$W/logs/MANIFEST.out"
+echo "src/devices/dev_fbctrl.c: opus f2v6 seat edits, started $(date +%T)" > .MUTANT
+B="$W/logs/BUILD.out"; echo "# build $(date +%T), fix md5 $FIXMD5" > "$B"
+for f in "$W"/var/v/*.c; do
+    n=$(basename "$f" .c)
+    cp "$f" src/devices/dev_fbctrl.c; rm -f src/devices/dev_fbctrl.o; touch "$W/var/stamp_$n"
+    make -j8 > "$W/logs/make_$n.log" 2>&1; rc=$?
+    if [ "$rc" != 0 ] || [ ! gxemul -nt "$W/var/stamp_$n" ] || [ ! src/devices/dev_fbctrl.o -nt "$W/var/stamp_$n" ]; then
+        echo "$n BUILD-FAILED rc=$rc" | tee -a "$B"; tail -5 "$W/logs/make_$n.log"; continue; fi
+    cp gxemul "$W/bins/gx_$n"
+    echo "$n built md5=$(md5sum < gxemul | cut -c1-8)" | tee -a "$B"
+done
+cp "$SEC/src/devices/dev_fbctrl.c" src/devices/dev_fbctrl.c; rm -f src/devices/dev_fbctrl.o; touch "$W/var/stamp_restore"
+make -j8 > "$W/logs/make_restore.log" 2>&1
+m=$(md5sum < gxemul | cut -d' ' -f1)
+if cmp -s src/devices/dev_fbctrl.c "$SEC/src/devices/dev_fbctrl.c" && [ gxemul -nt "$W/var/stamp_restore" ] && [ "$m" = "$FIXMD5" ]; then
+    rm -f .MUTANT; echo "RESTORED: cmp SEC clean, binary fresh, md5 $m == base; sentinel cleared" | tee -a "$B"
+else
+    echo "RESTORE NOT VERIFIED (md5 $m) -- sentinel LEFT" | tee -a "$B"
+fi
+echo "STAGE1 END $(date +%T)"
+
+echo "STAGE2 START $(date +%T)"
+cd "$W/probe" || exit 2
+cmp -s frozen_v6.py "$SEC/regress/fbctrl_port_probe.py" || { echo "FROZEN PROBE DIFFERS FROM SEC"; exit 3; }
+T="$W/logs/TABLE_f2v6.out"
+echo "# $(date +%T)  v6 md5 $(md5sum < frozen_v6.py | cut -c1-8)  v6_sd7 md5 $(md5sum < v6_sd7.py | cut -c1-8)" > "$T"
+score() {
+    local p=$1 lab=$2 n=$3 out="$W/logs/$2_$3.out" rc red
+    python3 -u "$p" "$W/bins/gx_$n" > "$out" 2>&1; rc=$?
+    red=$(grep -E '^  FAIL ' "$out" | sed -E 's/^  FAIL +//; s/ +got=([^ ]*) .*/ [got=\1]/' | tr '\n' ';')
+    printf '%-6s %-15s rc=%s %s %s | %s\n' "$lab" "$n" "$rc" "$(grep -E '^FBCTRLP_RESULT=' "$out")" \
+        "$(grep -E '^FBCTRLP_CONTROL=' "$out")" "$red" >> "$T"
+}
+for b in "$W"/bins/gx_*; do score frozen_v6.py v6 "${b##*/gx_}"; done
+for b in "$W"/bins/gx_*; do score v6_sd7.py sd7 "${b##*/gx_}"; done
+cmp -s frozen_v6.py "$SEC/regress/fbctrl_port_probe.py" && echo "# frozen v6 probe unchanged during the run" >> "$T"
+echo "STAGE2 END $(date +%T)"
+
+echo "STAGE3 START $(date +%T)"
+U="$W/logs/TABLE_U.out"; echo "# $(date +%T) U prototype, anchor 7, all 61 single-bit values" > "$U"
+for n in fix N1_mask4 N1_mask40 D2_eq32_w5 D2_eq2p40_w5 D2_eq2p40_w7 D2_eq2p32_w5 D2_eq2p32_w7 D2_lo32z_w5 \
+         D2_eqffff_w5 D2_eqX3_w3 DSC_ann_hibits MKB_40; do
+    [ -e "$W/bins/gx_$n" ] || { echo "$n: no binary" >> "$U"; continue; }
+    python3 -u "$S/u_sessions.py" "$W/bins/gx_$n" "$W/probe/frozen_v6.py" 7 all > "$W/logs/U_$n.out" 2>&1
+    echo "$n $(grep -E '^U_' "$W/logs/U_$n.out" | grep -v U_DONE | tr '\n' ' ') $(tail -1 "$W/logs/U_$n.out")" >> "$U"
+done
+echo "STAGE3 END $(date +%T)"
+echo "ALL_DONE $(date +%T)"

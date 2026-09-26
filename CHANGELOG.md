@@ -1,3 +1,97 @@
+# `#549` (fbctrlportkill): the test machines' framebuffer controller STORED an out-of-range port selector, and the next DATA access ended the emulator process -- the selector is refused now, the previous one kept, one announce per device; and the detector took eight panels and six variant tables to become honest
+
+**The defect, witnessed at rung 3.**  `src/devices/dev_fbctrl.c`'s PORT arm stored any written selector as an `int`
+with only a warning.  A stored `int` selector outside 0-7 made the next DATA access end the process in the DATA arm's
+range check, while a wide value was truncated first, onto a LEGAL port (0x100000003 selected port 3).  On HEAD f4f601c4's unmodified
+`-E testmips` a guest `sw 9` to PORT then a DATA read ends the process (`regress/artifacts/fbctrlportkill_20260924/
+witness_HEAD/witness_HEAD.out`: arm K `HOST-DIED exit=1`, arm L's LIVENESS and DEVICE-SIGNATURE controls green).
+
+**What ships.**
+* `src/devices/dev_fbctrl.c` -- the PORT arm REFUSES `idata >= DEV_FBCTRL_NPORTS`, compared on the full 64-bit value;
+  `current_port` keeps its previous, always-valid value; the refusal is announced ONCE per device through a new struct
+  member `warned_port` (`[ fbctrl: port number 0x... is out of range; the selector is unchanged (once) ]`).  The DATA
+  arm's range check and its `exit(1)` are KEPT as a tripwire, with a comment saying so.  `est/` byte-identical; the
+  three build trees rebuilt, part 1 CLEAN and part 2 FRESH.
+* `regress/fbctrl_port_probe.py` (NEW, 117 rows, 16 sessions) -- real guest sb/sh/sw/sd/lw/ld on an unmodified
+  `-E testmips`, every stepped word checked against the emulator's own disassembly; LIVENESS and DEVICE-SIGNATURE
+  controls; refusal at every width, at every previous selector 0-7, under COMMAND 0/1/2, at latch clear and set;
+  every single-bit value refused at each width (session B, the verifying pass's repair); a free-running session for the
+  announce.  Its header is the CONTRACT: an ENUMERATION of every effect and the values holding it, NOT CLAIMED (0)-(8),
+  and LIMITS OF A ROW.
+* `regress/gate_mips_folds.sh` -- gate 16 runs the probe first: a unique parseable record, controls OK, exit 0, the
+  row count pinned at 117 and all correct, the printed rows reconciled with the trailer, every row name printed once.
+* `tools/pipeline/check_probe_wiring.py` -- the probe is a gated DETECTOR (gate 16), and the measuring seat's twenty
+  scripts under `opus549_measured/` are listed as RESEARCH, preserved evidence (#501's precedent for a seat's
+  witnesses and generators; the first commit attempt failed section R on them, `final549/precommit549_fail1.out`); `tools/precommit_check.sh` -- `SCORE_CLAIMS_MANIFEST` 30 -> 31 for its pinned count.
+
+**THE CHAIN.**  Pass 1 on the design (`panels/panel_20260924_102737`), pass 2 on the diff (`..._113037`: the detector on
+HEAD 25/41, on the fix 41/41), the F2 pass (`..._115517`) -- the fix unchanged, the detector repaired (a record
+reconciliation in the gate, a nonzero exit on a red row, and rows the pass-2 seats built escapes against).  Then one
+pass per repair, as the repair-chain rule requires: the CLOSING pass (`..._20260925_141420`: the Opus seat MEASURED ten
+73/73 escapes inside the DEPENDS-ON enumeration, one restoring the process exit), the CLOSING F2 pass (`..._151610`: the
+class closure -- every cell of the enumeration held, measured), and the VERIFYING pass (`..._163907`), which found a
+FLOOR BREACH: the compare narrowed to ignore a RANGE of bits scored the full 111 rows and brought back the DATA arm's
+exit.  **v6 repaired it in-round (L2) with session B -- every single-bit value refused at each width** -- and owed its
+own pass (`..._194340`) and that pass's adjudication pass (`..._201529`).  The flagship ruling on the last
+(`pass_v6/fable5_f2_v6.md`): **SHIP WITH WORDING -- the latch crossed with one bit is the two-axis joint NOT CLAIMED (0)
+discloses, and a refusal that writes a value's only anchor is a clause-(e) disclosure**: a relational compare's
+generating set is its three regions, below/at/past the bound, held at both latch states.  **v6c carries the ruling's
+texts, COMMENT-ONLY** (the probe's AST minus its docstring is identical to v6; the probe's own log,
+`fbctrl_port_probe.log`, byte-identical to v6's -- gate 16's output differs only in its wall time and completion
+marker).  v6b had meant to: TEN of its quoted code spans reached the file as control-A bytes -- the generator's `\1`
+replacement was eaten by the heredoc that wrote it, the carrier's backslash trap -- and GPT-6 Astra found them;
+v6c refills them mechanically from the ruling's own quotations (`final549v6c/mk_549v6c.py.txt`).  The carrier
+now pins the rule word the dispute turned on: "TESTS" means masks or compares as a case.
+
+**MEASURED.**  Six variant tables, each edit built in a WSL scratch clone of `build/` and scored by a frozen copy of the
+probe, predictions written first (`PRETABLE.out` and its addenda): table 3 62 edits at 73 rows, table 4 100 at 94,
+table 5 212 at 111, **table 6 297 at 117 -- 267 red, the 30 the contract discloses at 117/117, ZERO prediction
+mismatches** (`table6/TABLE.out`, `table6/MANIFEST.out`); HEAD's own arm is among the red (M_revert 54/117).  The Opus
+seat's last pass MEASURED both disclosed classes at 117/117 and prototyped their close (`opus549_measured/f2v6/`).
+**Gate 16 on the committed text (v6c): PASS, 26 checks, 18 s** (`gates_v6c/gate16.out`); v6b's run: PASS, 26 checks, 18 s
+(`gates_v6b/`).
+
+**WRONG RECORDS corrected** (`CORRECTIONS.md`, because the dated artifacts' mtimes are the order proof): the pre-table
+addendum's channel lines (four places) and its latch witness; "six behaviour changers" (five new plus a re-run of
+table 5's `M_gt`, one binary); a proposed LIMITS sentence about session R; minimax's refuted `fatal()` premise; and my
+adjudication brief's quotation of the joint-cell rule without its bounds, which the packet-fed FLOOR votes largely rested
+on -- glm's conditionally, deepseek's and minimax's outright; kimi-k3's partition-asymmetry argument was separate, as
+the packet itself records (`pass_v6/f2b_v6_findings.md`), and the bounded rule answers it rather than dismissing it.
+
+**The panel.**  Eight panels, each with a dedicated grok job from pass 2 on and a dedicated codex job on pass 1, pass 2,
+the F2 pass (its GPT-6 Astra adjudication) and the closing pass (walled); the Opus measuring seat on every pass.  **Codex
+answered the three 2026-09-24 panels and WALLED on all five of 2026-09-25** (usage limit to 2026-09-26 07:01) -- a
+seat failure, re-fired after the reset.  The kimi CLI was on its weekly limit and, from v6's own pass, returned a
+subscription-access 403; `kimi-k3:cloud` covered the seat every time.  **Five Agent answers were written by a FALLBACK
+model after refusal events and are NOT counted** -- the first Opus and flagship answers on pass 1, the first Opus
+answer on the verifying pass, and both Opus answers on v6's own pass (so the Opus seat is a SEAT FAILURE there); each
+seat's re-issue is counted where one exists, and one clean Opus answer (pass 2) was read when it landed but never saved,
+and is recovered from the transcript (`opus5_p2.md`).  **The flagship seat fired LAST** on pass 1, the F2 pass, the
+closing F2 pass and v6's adjudication pass (claude-fable-5-1 on every counted answer).  **Astra (GPT-6 Astra, cxlaunch pointer
+form) confirmed before this commit: "VERDICT: CONFIRM WITH CHANGES"** (`final549/codex_astra549.txt`, 2026-09-26
+after the 07:01 reset; a read-only audit) -- the C fix correct by reading; the D1/D2 dispositions and no mandatory
+v7 upheld; every principal count reconciled (table 6's 297 = 267 red + 30 green, all predictions matching; 61
+single-bit variants; 16 sessions and 117 rows; the last measuring pass's 22 predicted edits and 46 logs).  **It
+OVERTURNED the ruling's consequence bound**: the escape is not "once per device ... for one write" -- an accepted value
+does not set the latch, so it remains possible while the latch is clear (a source reading; the witness tests one
+occurrence).  Its corrections are all applied in this commit, in v6c (comment-only) and these records: the ten
+control-A bytes; that bound; "each" of the sixty constant-write escapes "measured" (SIM_ANCHORS is a STATIC walk;
+six representative forms were measured; the replaced-anchor range is inferred, bits 32 and 40 measured); "no finite
+row set" (`idata`'s domain is finite; exhaustive rows are impractical, not impossible); session B's LIMITS sentence;
+the gate's width-conditioned narrowings (MKW_sb05 reds the byte row alone); "a selector of 8 or more" (the STORED
+int); gate 16's LOG named byte-identical where the probe's log is; five fallback answers, not four; the brief-defect
+claim, and the Opus seat's reasons (below); the docstring count in `scoreclaimsrawdoc`; B's marginal coverage
+separated from THE FLOOR; `lb`/`lh` in the access lists; and `f2v6/logs/` in two paths.  The launcher printed
+WALLED for this run on "quota" inside the answer's word "quotation" -- `cxlaunchwallfp`; the answer is complete.
+**Dissents, recorded rather than absorbed:** on D1, glm, deepseek, minimax and kimi-k3 graded the latch x bit joint
+FLOOR (glm conditionally on the rule's verbatim text); the Opus seat graded it FLOOR on the joint-cell and generating-set rules, on
+DEPENDS-ON's operand swap and on class closure, as well as on its measured consequence (silent truncation above bit 32).  Ruled (0) on the generating set, not the consequence -- the `#548` P_win precedent.
+Both groks, who raised D1 and D2, reversed themselves when asked to be harder on their own findings.
+
+**FILED** (OUTSTANDING_BUGS 2026-09-25): `fbctrlcmdkill` (HIGH -- the command default still ends the process),
+`fbctrloffkill` (MED -- the offset default), `fbctrlportdebt` (MED -- the two disclosed classes and their measured
+one-diff close: 61 fresh devices at a second anchor, 9.7 s), `scoreclaimsrawdoc` (MED), `fbctrltwoinst` (LOW).
+
 # `#551` (wdcidselfcheck): gate 2's `wdc_identify` self-check exemption DISCHARGED rather than re-dated -- `diff_wdc_identify.c` gains a self-check on its two comparators (24 of 128 comparisons, by owner ruling) and a contract that says what an in-file check can and cannot see, reached in six revisions and six review passes
 
 **The obligation.**  Gate 2's `SC_EXEMPT` carried `wdc_identify` to 2026-09-27; from 09-28 its "no exemption is past its

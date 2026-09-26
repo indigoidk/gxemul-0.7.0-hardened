@@ -1,0 +1,75 @@
+VERDICT: SHIP
+
+**Note on method:** I cannot read files or run commands. All findings below are derived from the inlined text alone. Where a claim is arithmetic, I enumerate it. Where it cannot be settled from the packet, I say so.
+
+---
+
+**1. The dsll encoding (section 4).** READ. The encoding `dsll rt,rt,sa` (SPECIAL, funct 0x38) with rd=rt:
+- Format: `000000 | 00000 | rt(5) | rd(5) | sa(5) | 111000`
+- Code: `(REG[rt] << 16) | (REG[rt] << 11) | ((off & 31) << 6) | 0x38`
+- Pins: `ins("dsll","t1",1) = 0x00094878` → bits 16-20 = 01001 (t1=9), bits 11-15 = 01001 (t1=9), bits 6-10 = 00001 (sa=1), bits 0-5 = 111000 (0x38). ✓
+- `ins("dsll","t4",1) = 0x000c6078` → t4=12 at rt and rd, sa=1, funct=0x38. ✓
+- Only t1 and t4 are pinned with literals; t2 and t3 are checked at runtime via the per-stepped-word disassembly comparison the brief describes. Acceptable, but worth noting the pinning is asymmetric.
+
+**2. The B-session arithmetic (section 4).** REASONED/READ.
+- `B_GROUPS = [("sb","t1",8,"s0"), ("sh","t2",16,"s1"), ("sw","t3",32,"s2"), ("sd","t4",64,"s3")]`
+- `range(3, _bits)` for each width: sb→3..7 (5 values), sh→3..15 (13), sw→3..31 (29), sd→3..63 (61).
+- `NB = sum(8-3, 16-3, 32-3, 64-3) = 5+13+29+61 = 108`. ✓
+- The "blast" tag finder: `max(i for i,s in enumerate(PROG_B) if s[0] in ("sb","sh","sw","sd") and s[1]!="a0")`. The last qualifying instruction is the `sd t4,0` for 2^63 (the final refusal). ✓
+- Register trace for sd: t4 starts at 8; each iteration does `sd t4,0` then `dsll t4,1`. After k iterations (k=0..60), t4 holds 2^(3+k). The last store is 2^63 = 0x8000000000000000. ✓
+
+**3. The "blast" sampling position.** READ. The tag is on the 2^63 store; sampling happens after that instruction executes, before the subsequent `lw s3`. The count at that point equals the total number of `(once)` lines emitted so far. With the fix's latch, only the first refusal (8 by sb) announces → count = 1. ✓
+
+**4. The floor-breach claim (V1).** REASONED. The three narrowings and their v5 behaviour:
+- `~0xfffffe00ULL` = `0xffffffff000001ff` (keeps bits 0-8 and 32-63; ignores 9-31). For v5 values: 8, 9, 16, 0x100, 0xff, 0x100000003, 0x200000000, 0x8000000000000000, all-ones — every one either has a bit in 0-8 or in 32-63 that survives the mask and makes the result ≥ 8. No v5 refusal has *only* bits in 9-31. ✓ → 111/111.
+- `~0xe0ULL` = `0xffffffffffffff1f` (keeps bits 0-4 and 8-63; ignores 5-7). 0xff → 0x1f (still ≥ 8). 0x100 → 0x100 (bit 8 survives). No v5 value slips through. ✓ → 111/111.
+- `~0x7ffffffc00000000ULL` (keeps bits 0-33 and 63; ignores 34-62). 0x100000003 has bit 32 (kept), 0x200000000 has bit 33 (kept), 0x8000000000000000 has bit 63 (kept), all-ones remains huge. ✓ → 111/111.
+- The claim "no v5 refusal had all of its bits from 3 up inside one of those ranges" is correct for all three masks. ✓
+
+**5. MKB_ predictions (section 6 table).** REASONED. The `B rows red` predictions match the actual outputs for every listed bit-range edit. The "other rows red" counts are plausible order-of-magnitude: MKB_03 (34) because bits 3 is set in 8 and 9, which appear in P/W/F/V/X2/X6/Y rows and their announce/count rows; MKB_04 (4) because only the three "refuse 16" rows plus likely one announce/count break; MKB_05-07 (0) because no v5 refusal has *only* bit 5, 6, or 7 as its distinguishing bit (0xff retains bits 0-4, 0x1f ≥ 8). ✓
+
+**6. NOT CLAIMED checks (section 4 of brief, question 4).**
+- (3): First refusals are 8, 9, 0x100, 0x100000005, all-ones — none has all bits in 9-31, so a class suppression there is equivalent. Re-arm period >108 is equivalent. ✓
+- (4): `(uint32_t)idata`, `(int)idata`, `idata & 7` all yield the same int store as `idata` when idata < 8, and the brief says each compiles to the fix's own binary on gcc x86-64 (the `(int)` cast on a value already < 8 is a no-op; the `& 7` is folded away). I cannot independently verify the compile equivalence claim — **CANNOT SETTLE from packet**, but the measured `EQ_*` rows at 117/117 corroborate it.
+- (5): `printf` in place of `fatal()` — the brief calls this equivalent. This is *not* obviously equivalent: `fatal()` exits; `printf` returns. The DSC_nonl edit (newline only) scoring 117/117 is measured, but a printf-vs-fatal edit is not listed in the GREEN list with an explicit name. **Worth flagging**: if `printf` keeps the emulator running and the session then executes more instructions that produce detectable output, the edit should NOT be equivalent. The brief says it is; I have no measurement to confirm or deny — **CANNOT SETTLE**.
+- (8): The held states (every cell 0; port 5 at 0x2a; X1 at 123 with COMMAND 2; ports 1-7 at 0x11*p with COMMAND 2; COMMAND 1) and the "no cell is read back" claims (after sh refusal; after previous 0,2,3,4,6; after previous 5 only port 5 under COMMAND 0 and COMMAND under COMMAND 1) are consistent with the session descriptions. ✓
+
+**7. V1–V20 adjudication (question 3).**
+- V1: UPHOLD — floor breach is real, B fixes it.
+- V2: UPHOLD — denominator corrected, table 6 carries it.
+- V3: UPHOLD — CELL_rd_s0 is equivalent, header excepts it.
+- V4: UPHOLD — NOT CLAIMED (8) now lists Y's COMMAND read with the SET_RESOLUTION caveat.
+- V5: UPHOLD — "Effect 4" renamed to "cells-alone".
+- V6: UPHOLD — "lw (every session but K)".
+- V7: UPHOLD — holders listed; Z's and R's first refusals named as never read back.
+- V8: UPHOLD — "sb (P, V, B)".
+- V9: UPHOLD — EQ_acc_and7, EQ_acc_castint, EQL_latch2 measured.
+- V10: UPHOLD — DSC_nonl measured.
+- V11: UPHOLD — overtaken by B=108; B_mod12 now scores 116/117.
+- V12: UPHOLD — DSC_ann_hibits measured.
+- V13: UPHOLD — CELLMAP referenced, section 6 inlines manifest.
+- V14: REJECT (correctly) — T_W_sd7/T_W_sw8 are cell edits held by A/P.
+- V15: REJECT (correctly) — list is the announce-once effect, not the naming effect.
+- V16: ACCEPTED — collateral description corrected in round record.
+- V17: ACCEPTED — V1 is the measurement that proves class not held.
+- V18: ACCEPTED — gate comment re-derived from table 6.
+- V19: ACCEPTED — wording only, not in probe.
+- V20: NO CHANGE — holder lists are not claimed exhaustive.
+
+**8. Question 1 — floor on the shipped composite.** REASONED. Outside NOT CLAIMED (0)–(8), the edits that survive are: behaviour changers (BR_*), which score <117; single-bit narrowings (MKB_*, MKW_*), which score <117; and the B_mod12 re-arm edit, which scores 116. The disclosed class (0)–(8) accounts for the full-score edits. I see no edit of the fixed arm that is both outside (0)–(8) and scores 117/117. The denominator of shapes tried is the 297 edits in table 6 plus the three narrowings and their control plus the 61 one-bit + 4 one-width narrowings.
+
+**9. Question 2 — is B's aggregate enough?** REASONED. B reads PORT once per width, after all refusals of that width. A narrowing that lets through *only* later values (e.g., bit 5 ignored: 8 refused, 16 becomes 0 accepted, but for sb 8 is the first refusal and 16 is the second; with bit 5 ignored 8→0 accepted, so the first refusal leaks and the row fails). For a narrowing that lets through *only* early values (e.g., bit 63 ignored: 2^63 becomes 0 accepted, but for sd the last refusal is 2^63; the first refusal 8 is unaffected, so the latch announces once and the count row passes, but PORT reads 0 at the sd width — the sd row fails). B catches any narrowing that lets *any* single-bit value through at *any* width, because each width's row reads after all of that width's refusals and a leaked value persists. A joint width-and-bit edit (e.g., refuse bit 5 only by sw) would not be caught by B alone — but the one-width narrowings (MKW_*) measure exactly that. The two together cover the joint space. ✓
+
+**10. Question 5 — pre-table addendum vs section 6.** REASONED. Every `B rows red` prediction in section 6 matches the actual output for all 61 MKB_* + 4 MKW_* + 3 MK_* entries listed. The channel line "every one-bit edit red on exactly the predicted session-B width rows" is consistent with the table. ✓
+
+**11. What I might be missing.**
+- **The printf-vs-fatal claim in NOT CLAIMED (5) is unverified by measurement.** DSC_nonl covers the newline; nothing in the GREEN list names a printf-for-fatal edit. If the emulator, after a refused PORT, continues executing guest instructions that produce output the probe parses, `printf` would not be equivalent. The brief asserts it is — I cannot confirm.
+- **The dsll pin covers t1 and t4 but not t2 and t3.** Runtime disassembly comparison catches them, but a silent register-number swap that happens to match for t1/t4 but not t2/t3 would only be caught at step time. This is the design, but it means the assertion block is not a full cross-check of the encoder.
+- **The "blast" tag is on the last refusal, so the count is sampled before the final lw.** If the announce for the first refusal somehow appeared in output *after* the lw (e.g., buffered I/O), the count could be 0 at sample time. Unlikely on a real guest under -V, but a timing assumption.
+
+**12. Arithmetic summary.**
+- NB = 5+13+29+61 = 108. ✓
+- M_revert: 54/117 (63 fail under HEAD; plausible).
+- Table 6: 297 edits, 267 red, 30 at 117/117. 30 = 20 disclosed (table 5 carry-overs) + 10 v6 additions (3 behaviour changers' equivalents already counted, plus DSC_ann_hibits, DSC_nonl, EQL_latch2, EQ_acc_and7, EQ_acc_castint, plus the 6 EQ_* from before). The brief's table lists 30 GREEN entries: 20 from table 5 + DSC_ann_hibits + DSC_nonl + EQL_latch2 + EQ_acc_and7 + EQ_acc_castint + EQ_ann_idata + EQ_dir_new + EQ_ge8lit + EQ_gt7 + EQ_latch_ne1 + EQ_maskhi. That is 20+10 = 30. ✓
+
+**Verdict: SHIP.** The repair addresses the measured floor breach with a correctly-arithmetic'd session that exercises every single-bit value at every width. The table-6 predictions all hold. The V1–V20 dispositions are consistent with the inlined record. The two items I cannot settle from the packet (printf-vs-fatal equivalence; the t2/t3 pin asymmetry) are not load-bearing for the verdict — the first is disclosed behaviour the brief asserts; the second is covered by the runtime disassembly check.

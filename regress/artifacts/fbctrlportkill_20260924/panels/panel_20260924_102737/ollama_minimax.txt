@@ -1,0 +1,39 @@
+VERDICT: PROCEED WITH CHANGES
+
+Findings:
+
+1. **Defect analysis is correct (READ).** The verbatim access function shows the PORT arm stores `idata` to `current_port` *before* the range check, and the range check only `fatal()`s (which in this tree prints-and-returns, per the witness's `warn=True`). The DATA arm's guard then fires `fatal(); exit(1)` because `current_port` is out of [0, 7]. The two guards test different quantities (64-bit `idata` vs. the `int` it was stored into) — that asymmetry is real and the brief's enumeration table is arithmetically correct given the stated assumptions.
+
+2. **The `sd 0x100000003` truncation cell depends on a premise I cannot settle from the packet.** The brief states idata=0x100000003, the PORT check fires (>=8), and `current_port` is assigned the low-32 truncation = 3. The C99 conversion `uint64_t → int` for an out-of-range value is *implementation-defined*. The brief asserts "3 is what gcc on x86-64 gives" (REASONED). The same row in the *detector* depends on the same behavior holding on whatever host builds `build/gxemul`. **Single fact that would settle it:** read `memory_readmax64()` in `src/memory.c` (or wherever it lives in `GXEMUL-SEC/src/`) and confirm it delivers all 8 bytes when `len==8` for a guest `sd` on `-E testmips`. The brief flags this itself; I'm recording it as the round's load-bearing premise.
+
+3. **Premise: PORT arm is the only writer of `current_port`.** Stated as fact from `grep -rn current_port src/`. Not checkable from the packet. **Single fact that would settle it:** the same grep against `GXEMUL-SEC/src/`. If any other writer exists, the fix's invariant ("current_port is always in [0,7] after the fix") may not hold.
+
+4. **Premise: nothing in the tree greps for the WARNING text being replaced.** Stated, not checkable from the packet. **Single fact that would settle it:** `grep -rn "fbctrl port number is out of range" GXEMUL-SEC/`. The brief asks this in Q1(d).
+
+5. **Witness output is summarized, not verbatim, for the diagnostics.** The witness shows `warn=True killdiag=True` on arm K. The narrative says both the PORT warning and the DATA arm's diagnostic were printed, and "The row requires the diagnostic as well as the death, so a death for another reason would not count." But the actual `fatal()` strings are not inlined in the packet. I REASON that `killdiag=True` is the bit for the DATA arm's string and `warn=True` is the PORT arm's, because those are the only two `fatal()` calls on the path. This is consistent, but the packet would be stronger with the two diagnostic lines themselves pasted in. (Minor — the narrative is plausible and the code shown supports it.)
+
+6. **Fix proposal is sound (READ against the verbatim code).** Adding `warned_port` per-instance (struct field, not function-static — correct, since `dev_disk.c`'s `#119` idiom is global and would misfire if two devices coexisted in one process; the brief's choice is the better one). The `else if (idata >= DEV_FBCTRL_NPORTS)` branch refuses without storing, so `current_port` retains its prior value. The `idata < 0` case is implicitly handled because `idata` is `uint64_t` — never negative — so `>= NPORTS` is the correct single bound. The DATA arm is left untouched; once PORT refuses, its guard is unreachable in normal operation, and a future edit that breaks PORT refusal will hit `exit(1)` loudly rather than indexing `port[]` out of bounds. That's a defensible failure mode.
+
+7. **Smallest edits that would break the fix (Q2).** Each paired with the detector row it would fail:
+   - Predicate `>` instead of `>=`: "sw 8" row fails (8 accepted, stored, DATA arm `exit(1)`).
+   - Latch never set (or set after the print on a path that returns early): "announce: exactly ONE" row fails (prints on every refused write).
+   - Store moved inside the refusal branch: all "refusal" rows fail (current_port becomes the bad value, DATA arm fires).
+   - Clamping (`current_port = idata % NPORTS`) instead of keeping prior: "wide" row fails (PORT reads 3, not the previous 5).
+   - Function-static latch shared across devices: "announce" row may pass on a single-device run but would misfire in any future multi-device scenario; detector wouldn't catch it on its own.
+
+8. **DATA arm disposition (Q3).** Keep `exit(1)` as belt-and-braces. Reasoning: it converts a silent corruption ("PORT refusal broken, DATA returns garbage") into a loud death that's easy to bisect. The alternative — converting it to a decline too — would mean two refusal sites to keep in sync, and a future PORT-regression would surface as "guest reads stale data" rather than "process dies." The author's choice matches the tree's existing pattern (the PORT warning is `fatal()`-but-don't-terminate; the DATA guard is `fatal()`+`exit(1)`), so leaving it preserves the asymmetry between "bad selector" and "bad selector that somehow got through."
+
+9. **Option-set (Q4).** Member 3 is right for a minimal fix. Member 5 (bus error) is worth naming as the architecturally clean option for MMIO devices, but it requires per-architecture plumbing and the brief correctly notes ARM/PPC/SH/RISC-V all carry this device — so 5 is more invasive than this round's scope. The "keep prior" vs. "reset to 0" vs. "clamp" question: keep prior is most conservative (no surprise state change), and matches the brief's reasoning that the selector is "unchanged." I see no defect in the choice.
+
+10. **Scope (Q6).** The two other `exit(1)` sites are genuinely different classes — unimplemented command value vs. unmapped offset. They don't meet the reopening rule (different semantic class). Filing them separately is correct. The note that `DEV_FBCTRL_COMMAND_FILL` (3) and `COPY` (4) are documented in `dev_fb.h` but `TODO` in the source is worth recording so the next round doesn't have to re-derive it.
+
+11. **Detector design.** The refusal/boundary/wide/negative/announce/pre-fix-red structure covers the fix and the bug. The "pre-fix red" row is the one that makes the detector a *detector* and not just a regression test for the fix — without it, a fix that silently no-ops the refusal would still pass the other rows. Keep it. The "ZERO in the controls-only arm" row is the one that catches a shared/static latch regression.
+
+12. **Probe wiring (Q5).** `check_probe_wiring.py`'s requirements are not in the packet. The brief names gate 16 as the home and notes the `gatedevicesplit` owed-split comment from #548. I cannot audit the wiring without the script's contract; **single fact that would settle it:** read `tools/pipeline/check_probe_wiring.py` in `GXEMUL-SEC/`.
+
+**Changes I'd want before PROCEED:**
+- Settle the `memory_readmax64()` premise (finding 2). If `sd` on `-E testmips` does not deliver all 8 bytes, the `sd` row in both the defect table and the detector needs to be restated against actual idata, and the truncation cell may not exist.
+- Settle the `current_port`-writers premise (finding 3).
+- Optionally inline the two `fatal()` strings into the witness output (finding 5) so the death-on-DATA claim is not narrative-dependent.
+
+None of these block the design. The fix as proposed is correct against the code shown.

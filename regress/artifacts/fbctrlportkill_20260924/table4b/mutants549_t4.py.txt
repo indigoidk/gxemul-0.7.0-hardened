@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""#549 kill table 4: table 3's 62 edits (mutants549_t3.py, imported -- its own lists, not a copy) plus the closing
+pass's edits, each a text transformation of the FINAL fixed dev_fbctrl.c with exactly one match per find-text (a
+find-text that matches nothing is REFUSED).
+
+  E_* S_* C_* B_* R_*  the Opus closing seat's (opus549_measured/close/close_variants.diff, transcribed)
+  G*   the dedicated grok closing job's      L1  glm's      A*  agy's
+  T_W_sd7 T_W_sw8 T_W_sb0   one-edit targets for the three width cells table 3 had none for
+usage: python mutants549_t4.py <final dev_fbctrl.c> <dev_fbctrl_HEAD.c> <mutants549.py> <mutants549_t3.py> <outdir>"""
+import io
+import os
+import sys
+
+NL = chr(92) + "n"
+
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+REFUSE_OPEN = PRED + "\n"
+LATCH_TEST = "if (!d->warned_port) {"
+LATCH_BLOCK_END = "\t\t\t\td->warned_port = 1;\n\t\t\t}\n"
+ANNOUNCE_ARG = "(unsigned long long) idata);"
+PORT_READ_IF = "\t\tif (writeflag == MEM_READ)\n\t\t\todata = d->current_port;\n"
+READ_PORT = "\t\t\todata = d->current_port;\n"
+DATA_READ = "\t\t\todata = d->port[d->current_port];\n"
+DATA_EXIT = ("\t\t\tfatal(\"[ fbctrl port number is out of range! ]" + NL + "\");\n"
+             "\t\t\texit(1);\n")
+DATA_CHECK = "\t\tif (d->current_port < 0 || d->current_port\n\t\t    >= DEV_FBCTRL_NPORTS) {\n"
+CMD_ENTRY = "\tint x1, y1, i;\n"
+GETRES_CASE = "\tcase DEV_FBCTRL_COMMAND_GET_RESOLUTION:\n"
+
+
+def pred(expr):
+    return [(PRED, "else if (%s) {" % expr)]
+
+
+def latch(expr):
+    return [(LATCH_TEST, "if (%s) {" % expr)]
+
+
+def portread(cond):
+    return [(PORT_READ_IF, "\t\tif (%s)\n\t\t\todata = d->current_port;\n" % cond)]
+
+
+CLOSING = [
+    #  -- the Opus closing seat's, transcribed from close_variants.diff
+    ("E_rd_w4", "read qualified by width (lb/lh fall into the write path)", portread("writeflag == MEM_READ && len >= 4")),
+    ("E_rd_cmd", "read qualified by COMMAND == 0", portread("writeflag == MEM_READ && !d->port[DEV_FBCTRL_PORT_COMMAND]")),
+    ("E_ref_p1", "refusal skipped after selector 1", pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != 1")),
+    ("E_ref_p2", "refusal skipped after selector 2", pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != 2")),
+    ("E_ref_p3", "refusal skipped after selector 3", pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != 3")),
+    ("E_ref_p4", "refusal skipped after selector 4", pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != 4")),
+    ("E_ref_cmd", "refusal skipped while COMMAND != 0 (restores the process exit)",
+     pred("idata >= DEV_FBCTRL_NPORTS && !d->port[DEV_FBCTRL_PORT_COMMAND]")),
+    ("E_ann_w4", "announce only for 4-byte refusals", latch("!d->warned_port && len == 4")),
+    ("E_ann_p1", "announce suppressed after selector 1", latch("!d->warned_port && d->current_port != 1")),
+    ("E_ann_cmd", "announce suppressed while COMMAND != 0", latch("!d->warned_port && !d->port[DEV_FBCTRL_PORT_COMMAND]")),
+    ("E_cmdset", "the latch SET on entry to fbctrl_command()", [(CMD_ENTRY, CMD_ENTRY + "\n\td->warned_port = 1;\n")]),
+    ("B_mod11", "re-announce every 11 refusals", latch("!(d->warned_port++ % 11)")),
+    ("B_mod12", "e (disclosed): re-announce every 12 refusals", latch("!(d->warned_port++ % 12)")),
+    ("C_ann_nw4", "announce suppressed for 4-byte refusals", latch("!d->warned_port && len != 4")),
+    ("C_ann_p5", "announce suppressed after selector 5", latch("!d->warned_port && d->current_port != 5")),
+    ("C_rd_w4only", "read only for len == 4", portread("writeflag == MEM_READ && len == 4")),
+    ("C_ref_p0", "refusal skipped after selector 0", pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != 0")),
+    ("C_ref_p7", "refusal skipped after selector 7", pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != 7")),
+    ("S_ann_cp", "announce suppressed at selector 0", latch("!d->warned_port && d->current_port")),
+    ("S_rd_idata", "a write of 0 also takes the read arm", portread("writeflag == MEM_READ || idata == 0")),
+    ("S_ref_wp", "the bound moved by the latch", pred("idata >= DEV_FBCTRL_NPORTS + d->warned_port")),
+    ("R_state1", "a latched refusal of 9 stores when COLOR_R holds 0x2a",
+     [(LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\tif (d->warned_port && d->port[DEV_FBCTRL_PORT_COLOR_R] == 0x2a"
+       " && idata == 9)\n\t\t\t\td->current_port = (int) idata;\n")]),
+    ("R_partAB", "two-part: a command sets latch bit 1, and a refusal with both bits stores",
+     [(CMD_ENTRY, CMD_ENTRY + "\n\td->warned_port |= 2;\n"),
+      (LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\tif (d->warned_port == 3)\n\t\t\t\td->current_port = (int) idata;\n")]),
+    #  -- the dedicated grok closing job's
+    ("G1_rewrite1", "a refusal after selector 1 rewrites it to 0",
+     [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\tif (d->current_port == 1)\n\t\t\t\td->current_port = 0;\n")]),
+    #  The DATA read branch is BRACELESS, so the clear rides on a comma: a second statement there orphans the `else`
+    #  (this mutant's first build failed to compile for exactly that reason -- table 4, BUILD-FAILED; rerun as 4b).
+    ("G2_rdrearm", "a DATA read clears the latch",
+     [(DATA_READ, "\t\t\todata = d->port[d->current_port], d->warned_port = 0;\n")]),
+    ("G3a_cmdrearm", "any non-NOP command clears the latch",
+     [(CMD_ENTRY, CMD_ENTRY + "\n\tif (cmd != DEV_FBCTRL_COMMAND_NOP)\n\t\td->warned_port = 0;\n")]),
+    ("G3b_getresrearm", "GET_RESOLUTION clears the latch", [(GETRES_CASE, GETRES_CASE + "\t\td->warned_port = 0;\n")]),
+    ("G4_pad16", "16 accepted by sb/sh (the padding stores)",
+     pred("idata >= DEV_FBCTRL_NPORTS && (len >= 4 || idata != 16)")),
+    ("G5a_noexit", "e (disclosed): the DATA check keeps its fatal() and loses exit(1)",
+     [(DATA_EXIT, "\t\t\tfatal(\"[ fbctrl port number is out of range! ]" + NL + "\");\n")]),
+    ("G5b_checkop", "e (disclosed): the DATA check tests warned_port",
+     [(DATA_CHECK, "\t\tif (d->current_port < 0 || d->warned_port\n\t\t    >= DEV_FBCTRL_NPORTS) {\n")]),
+    ("G6_trunc32", "the announce names the value truncated to 32 bits",
+     [(ANNOUNCE_ARG, "(unsigned long long) (uint32_t) idata);")]),
+    ("G7_ldbit32", "e (disclosed, a joint cell): ld sets bit 32 except at selector 5",
+     [(READ_PORT, "\t\t\todata = (uint64_t) d->current_port | (d->current_port == 5 ? 0 : (1ULL << 32));\n")]),
+    ("G8_clob8", "a refusal of 8 clears COMMAND's cell",
+     [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\tif (idata == 8)\n\t\t\t\td->port[DEV_FBCTRL_PORT_COMMAND] = 0;\n")]),
+    #  -- glm's and agy's
+    ("L1_rebit63", "re-announce on the bit-63 value", latch("!d->warned_port || idata == 0x8000000000000000ULL")),
+    ("A1_not10", "e (disclosed): 10 accepted", pred("idata >= DEV_FBCTRL_NPORTS && idata != 10")),
+    ("A2_sb3", "e (disclosed, a joint cell): 3 refused by sb", pred("idata >= DEV_FBCTRL_NPORTS || (idata == 3 && len == 1)")),
+    #  -- one-edit targets for the width cells table 3 had none for
+    ("T_W_sd7", "closure: selector 7 refused for sd", pred("idata >= DEV_FBCTRL_NPORTS || (idata == 7 && len == 8)")),
+    ("T_W_sw8", "closure: the boundary 8 accepted for sw",
+     pred("idata > DEV_FBCTRL_NPORTS || (idata == DEV_FBCTRL_NPORTS && len != 4)")),
+    ("T_W_sb0", "closure: selector 0 refused for sb", pred("idata >= DEV_FBCTRL_NPORTS || (!idata && len == 1)")),
+]
+
+
+def apply(base, edits, name):
+    s = base
+    for old, new in edits:
+        n = s.count(old)
+        if n != 1:
+            sys.exit("REFUSED %s: %d matches for %r" % (name, n, old[:60]))
+        s = s.replace(old, new)
+    return s
+
+
+def main():
+    fixp, headp, mutp, t3p, out = sys.argv[1:6]
+    os.makedirs(out, exist_ok=True)
+    base = io.open(fixp, encoding="utf-8", newline="").read()
+    head = io.open(headp, encoding="utf-8", newline="").read()
+    assert "\r" not in base and "\r" not in head
+    ns2 = {"__name__": "mutants549"}
+    exec(io.open(mutp, encoding="utf-8").read(), ns2)
+    ns3 = {"__name__": "mutants549_t3"}
+    exec(io.open(t3p, encoding="utf-8").read(), ns3)
+    rows = list(ns2["MUTANTS"]) + list(ns3["TARGETS"]) + list(ns3["PASS2"]) + CLOSING
+    names = [r[0] for r in rows]
+    assert len(names) == len(set(names)), "duplicate mutant name"
+    for name, cls, edits in rows:
+        s = head if edits is None else apply(base, edits, name)
+        if s == base:
+            sys.exit("REFUSED %s: the edit changed nothing" % name)
+        io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+    print("MUTANTS_WRITTEN=%d (table 2: %d, table 3 targets: %d, pass 2: %d, closing: %d)"
+          % (len(rows), len(ns2["MUTANTS"]), len(ns3["TARGETS"]), len(ns3["PASS2"]), len(CLOSING)))
+
+
+if __name__ == "__main__":
+    main()

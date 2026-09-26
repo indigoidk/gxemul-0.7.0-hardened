@@ -1,0 +1,53 @@
+I'll read the closing brief in full, then check the probe and the framebuffer-controller device against the floor and the contract enumeration.The brief is in. Next I’ll read the PORT arm and the probe’s contract against each session program, looking for a floor edit the 111 rows cannot see.The arm and the session programs are in. I’ll enumerate the floor cells against the generated kill map so a surviving edit has to be one the rows never observe.**VERDICT: SHIP WITH CHANGES**
+
+The PORT arm in `src/devices/dev_fbctrl.c` is the right refusal. One floor edit scores 111/111, and it is equivalent. Two sentences in the probe contract are false. No non-equivalent edit of the floor sites sweeps the 111 rows.
+
+## 1. Floor edit that scores 111/111
+
+One line, the access-direction test at `src/devices/dev_fbctrl.c` (`if (writeflag == MEM_READ)`):
+
+```c
+if (writeflag == MEM_READ && d->current_port != 0)
+    odata = d->current_port;
+```
+
+Rows that stay green, and why they cannot see it:
+
+- `accept selector 0 written by sw` (`regress/fbctrl_port_probe.py`, `ACC` starts `(0, "sw")`)
+- `accept 0 written by sb`, `sh`, `sw`, and `sd` after `PORT=5` (the four `W_CELLS` accept-0 rows)
+- `F lw of PORT after the power-on refusal reads 0`
+
+`idata` is set to 0 and loaded only when `writeflag == MEM_WRITE` (`dev_fbctrl.c`, `uint64_t idata = 0`). A read of selector 0 fails the new test, `idata >= 8` is false, and the accept arm stores 0. `odata` was already 0, so the guest still reads 0. Every non-zero selector still takes the true branch, so those reads stay green. The diverging path writes back the 0 already in `current_port`. Guest-visible state matches the fix on every selector.
+
+Table 5 already measured this: `CELL_rd_s0` is `111/111`, `GREEN(eq)`. The header still says the opposite. `fbctrl_port_probe.py` line 61 says the one-axis edit of every listed cell is red, and line 76 lists `every selector 0-7 (A)` under "a PORT read returns the selector". Selector 0 is that cell. `(4)` names three equivalents (the `(uint32_t)` store, the field reorder, the `& 7` read mask). `regress/gate_mips_folds.sh` line 53 counts four. The unnamed fourth is this read.
+
+The LIMITS note already says A's `accept selector 0 written by sw` cannot see an ignored store, and that W holds that accept. It does not say the same read cannot see a skipped load. Nothing else holds it: every read of selector 0 wants 0.
+
+## 2. Disclosure (8) says a readback has no row. Y's row is that readback
+
+`fbctrl_port_probe.py` lines 115–117: no cell is read back under `COMMAND 1`, and port 5 is the only cell read back after a refusal at previous selector 5.
+
+`PROG_Y` (line 469) is previous selector 5 with command 1 for both refusals. The last two operations are `sw zr` (select port 0) and `lw s2` of DATA. The row is `Y COMMAND reads back 1 (SET_RESOLUTION held)`.
+
+That read is after the second refusal. The second `SET_RESOLUTION` (`sw a1` to DATA) sits before that refusal, so it rewrites command to 1 and hides a clobber performed only by the first refusal. A write of port 0 during the second refusal is visible. The absolute sentence in (8) is false, and so is "port 5's is the only cell read back after a refusal at previous 5."
+
+## 3. Holder credits the programs do not earn
+
+The cells are held by other sessions. These credits are still false.
+
+- Line 76, `lw (every session)`. `PROG_K` (line 413) loads only offset 16. K never reads PORT.
+- Line 65, keep effect, `latch unset (each session's first refusal)`. `PROG_Z` (line 480) tags `z1st` on the refusal after `PORT=2`, then the next operation is an accepted `PORT=0`. The only PORT read is after selector 4. `Z the first refusal announces` sees the count. It does not see whether that refusal stored 9.
+
+## Floor shapes that do not sweep
+
+Non-equivalent edits of the four floor sites go red on a row that reads the selector back. The alias pairs share floor coordinates with a visible twin, so a condition on width, value, class, or the latch cannot pick out the alias.
+
+- Boundary: `>` accepts 8, which W reads back as 5 at `sb`, `sh`, and `sd`, and P reads back as 5 at `sw`. `>= 7` refuses a 7 that W or A stored over a predecessor of 5 or 6.
+- Width: skipping the refusal at `len` 1, 2, 4, or 8 stores `8`, `0x100`, `9`, or `0x100000005`. The readbacks are 5, 5, 5, and 3 (`X3`).
+- Class, including the same compare restricted to one width: `(int64_t)`, `(int)`, `(uint32_t)`, bit 63 cleared, low 8, low 16, and `idata % 2^k` for `k < 64`. For `len <= 4` the signed and 32-bit forms match the fix, because `memory_readmax64` has already narrowed `idata`. For `sd`, W's `2^63` stores 0 against 5, P/Y's `0x100000003` stores 3 against 5, V's stores 3 against 7, and X3's `0x100000005` stores 5 against 3.
+- Latch: never set, inverted, or re-armed on one probed width. P samples the count at the 12th refusal (`r11`); each first-refusal row samples the other side. Period 12 or more, and an announce dropped only for a value no session refuses first, are disclosure (3).
+- Store on the refuse path: `= idata`, `= idata & 7`, `= 0`, `= 7`. No probed refusal's stored `int` equals the selector a row reads back. V's `sw 9` does alias `& 7` (previous 1), and F and Y use the same floor point (`len == 4`, value 9, latch unset) and read 0 and 5. Z's early `sw 9`s are overwritten before a read; P, R, W, V, and Z's final `sw 9` are not.
+- Accept-path `(uint32_t)` or `& 7`: only 0..7 reach that arm. Disclosure (4).
+- `writeflag != MEM_WRITE` in place of `== MEM_READ`: `memory_rw` passes `MEM_READ` or `MEM_WRITE` into the device. Same branch.
+
+The nearest other 111/111 one-liner is the fatal argument `(len == 1 && idata == 8 ? 0 : idata)`. W's first refusal is that pair, and W never calls `first_val`; `0x0` still matches `ONCE_RE`. P names 8 at `sw`, X6 names 9 at `sb`. That edit does not change the compare, the latch test, or the store. Disclosure (0) is the clause for that pair. The compare form of the same pair, accepting `sb` of 8, stores 8 and W's keep row reads 5.

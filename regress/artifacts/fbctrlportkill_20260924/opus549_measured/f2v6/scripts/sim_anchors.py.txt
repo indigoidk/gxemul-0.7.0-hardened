@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""A static walk of the v6 probe's own programs (imported, not transcribed) under the FIX's semantics, to enumerate,
+for every refused value, the previous selectors at which a refusal of it is OBSERVED -- i.e. followed, before the next
+accepted PORT store, by a PORT or DATA load whose register survives to be printed.  A value observed at only ONE
+selector admits a refusal-time constant write equal to that selector (D2 / N21).  Also lists the latch-clear refusals
+(D1 / N1).  usage: sim_anchors.py <v6 probe>"""
+import importlib.util
+import sys
+
+PROBE = sys.argv[1]
+sys.argv = [PROBE, "/bin/true"]
+spec = importlib.util.spec_from_file_location("fbp", PROBE)
+fbp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fbp)
+M64 = (1 << 64) - 1
+WIDTH = dict(sb=1, sh=2, sw=4, sd=8)
+READS = dict(C=["t4", "t5", "s2", "s3"], A=fbp.READS_A, P=fbp.READS_P, R=["s1"], K=["s0", "s1"], F=["t2"],
+             V=fbp.READS_V, W=fbp.READS_W, Y=["s0", "s1", "s2"], Z=["s0"], B=fbp.READS_B)
+SESS = dict(C=(fbp.PROG_C, fbp.REGS_C), A=(fbp.PROG_A, fbp.REGS_A), P=(fbp.PROG_P, fbp.REGS_P),
+            R=(fbp.PROG_R, fbp.REGS_R), K=(fbp.PROG_K, fbp.REGS_K), F=(fbp.PROG_F, fbp.REGS_F),
+            V=(fbp.PROG_V, fbp.REGS_V), W=(fbp.PROG_W, fbp.REGS_W), Y=(fbp.PROG_Y, fbp.REGS_Y),
+            Z=(fbp.PROG_Z, fbp.REGS_Z), B=(fbp.PROG_B, fbp.REGS_B))
+for lab, k, w, v in fbp.X_CELLS:
+    prog, regs = fbp.prog_x(k, w, v)
+    SESS[lab] = (prog, regs)
+    READS[lab] = ["s0"]
+
+observed = {}      # value -> set of anchors
+unobserved = []    # refusals no printed load observes
+latch_clear = []   # (session, value, width, anchor, observed?)
+for lab, (prog, regs) in SESS.items():
+    R = {r: 0 for r in fbp.REG}
+    for r, v in regs:
+        R[r] = v & M64
+    cur, latched = 0, False
+    # pass 1: which load steps survive to be printed (last writer of each printed register)
+    last = {}
+    for i, (op, rt, off, _t) in enumerate(prog):
+        if op in fbp.LOADS or op == "dsll":
+            last[rt] = i
+    printed_loads = {last[r] for r in READS[lab] if r in last}
+    pending = []   # refusals awaiting an observation: (value, width, anchor, latch_was_clear)
+    for i, (op, rt, off, _t) in enumerate(prog):
+        if op == "dsll":
+            R[rt] = (R[rt] << off) & M64
+            continue
+        if op in WIDTH and off == 0:                      # a PORT store
+            val = R[rt] & ((1 << (8 * WIDTH[op])) - 1)
+            if val >= 8:
+                pending.append((val, op, cur, not latched))
+                latched = True
+            else:
+                for p in pending:
+                    unobserved.append((lab,) + p)
+                    if p[3]:
+                        latch_clear.append((lab, p[0], p[1], p[2], False))
+                pending = []
+                cur = val
+        elif op in fbp.LOADS:                              # a PORT or DATA load
+            if i in printed_loads and pending:
+                for p in pending:
+                    observed.setdefault(p[0], set()).add(p[2])
+                    if p[3]:
+                        latch_clear.append((lab, p[0], p[1], p[2], True))
+                pending = []
+            if op in fbp.LOADS:
+                R[rt] = 0                                   # value irrelevant here
+    for p in pending:
+        unobserved.append((lab,) + p)
+        if p[3]:
+            latch_clear.append((lab, p[0], p[1], p[2], False))
+
+print("REFUSED VALUES AND THE ANCHORS THAT OBSERVE THEM")
+single = []
+for v in sorted(observed):
+    a = sorted(observed[v])
+    print("  0x%-18x anchors %s" % (v, a))
+    if len(a) == 1:
+        single.append((v, a[0]))
+print("SINGLE-ANCHOR VALUES (a refusal-time write of that anchor escapes): %d" % len(single))
+print("  " + " ".join("0x%x@%d" % s for s in single))
+sb = [v for v, a in single if v & (v - 1) == 0]
+print("  of which single-bit: %d  bits %s" % (len(sb), sorted(v.bit_length() - 1 for v in sb)))
+print("UNOBSERVED REFUSALS (no printed load before the next accepted PORT store): %d" % len(unobserved))
+for u in unobserved:
+    print("  %s 0x%x by %s at %d latch-clear=%s" % u)
+print("LATCH-CLEAR REFUSALS: %d" % len(latch_clear))
+for lc in latch_clear:
+    print("  %-3s 0x%-18x by %s at %d observed=%s" % lc)
+bits_alone = sorted({(v & ~7).bit_length() - 1 for _l, v, _w, _a, ob in latch_clear
+                     if ob and (v & ~7) and ((v & ~7) & ((v & ~7) - 1)) == 0})
+print("TESTED BITS HELD ALONE AT LATCH-CLEAR (observed): %s -> %d of 61" % (bits_alone, len(bits_alone)))
+print("SIM_DONE")

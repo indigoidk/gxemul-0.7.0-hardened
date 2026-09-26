@@ -1,0 +1,43 @@
+VERDICT: SHIP WITH CHANGES
+
+No new floor breach found: session B closes the single-axis bit-mask class provably, and every arithmetic claim I could enumerate from the packet checks out. The changes required are one disclosure boundary in NOT CLAIMED (3) that is off by one (a specific full-117 edit it fails to name), one robustness pin for session B's dsll dependency (recommended), and two wording refinements.
+
+**Findings**
+
+1. **(REASONED) NOT CLAIMED (3)'s new latch sentence is off by one — this is the one full-117 edit I found outside the contract as worded.** The text discloses "a latch that re-arms only after *more* refusals than any session makes (B makes 108)". Consider the edit: latch behaves exactly as the fix, but silently clears after the **108th** refusal (announce on refusal 1, silent through 108, re-arm at 108). B has no 109th refusal, so its `blast` sample after refusal 108 still reads count 1; every other session makes ≤13 refusals and is unaffected; all selector/naming rows are untouched. It scores 117/117 and is *not* covered by "more than any session makes" — 108 is not more than 108. Same exposure under the announce-on-re-arm reading (the 2nd announce would land on the absent 109th refusal). B_mod12 (measured red) validates the mechanism only for periods where a re-announce lands ≤ 108. One-word fix: "at least as many refusals as the busiest session makes (B makes 108)". Detector gap is fundamental (no session reaches 109), so the fix belongs in the record, and the numeral is what is wrong.
+
+2. **(REASONED) Session B depends on the emulated dsll's *execution*, which neither pinned literal nor disassembly control verifies.** The two asserts pin the *encoding*; the badis control pins the *disassembly of the planted word*. If dsll mis-executed (e.g., sa ignored), every store would repeat 2^3, B would stay green on the fix, and coverage would be silently void. Mitigating evidence is present in the packet: the table-6 channel pattern (MKB_09 red on sh,sw,sd but never sb; MKB_16+ never sh; MKB_32+ never sw) is positive evidence each 2^k genuinely reached the compare at each width in the measured runs — a stuck register would have voided that pattern. But a re-run under a different CPU would fail silently. Recommend one pinning row (e.g., read t4 after the final shift; it must be 0) or a sentence in LIMITS OF A ROW naming the dependency. Not a breach; a named limit.
+
+3. **(READ/REASONED) X5 cannot be settled from the packet, and the announce-once enumeration looks one session short.** Width holders list 11 sessions (P,V,F,Y,Z,W,X6,X2,X7,X3,X4); previous-selector holders list "3 4 6 7 (X)" and 5 = (P,W,Y) — X5 appears nowhere, yet the control row spans "X2-X7". X_CELLS is elided in the visible diff, so I cannot tell whether X5 exists with an unpinned first refusal (holder-list gap in an ENUMERATION contract) or was retired earlier (label artifact). Settling fact: the full X_CELLS literal and X5's row names. If retired, say so; if present at previous 5, the holder list contradicts itself.
+
+4. **(READ) Arithmetic enumeration — all clean.** NB = 5+13+29+61 = 108 ✓; steps 12+28+60+124 = 224 ✓ = reported steps; 117 = 111 + 4 width rows + 1 count row + 1 control row ✓; 297 = 212 + 13 + (3 narrowings + 1 control) + 61 + 4 + 3 ✓; 267 + 30 = 297 ✓; the full-score manifest enumerates exactly 30 names ✓; gate category counts sum to 30 ✓; M_revert 54/117 = 53 + 1 (only the B-disassembly row stays green; red = 58 + 5 = 63; 54 + 63 = 117) ✓; every red list I counted sums with its score to 117 (acc_map0 8, ann_gt8 3, ge9 12, no_hi32 13, rd_drop0 38, refuse_lt 11, B_mod12 1, MKB_03 38, MKB_32 7, MK_b8_ctl 7, etc.) ✓; the two pinned dsll literals derive from the REG map ((9<<16)|(9<<11)|0x40|0x38 = 0x00094878; reg 12 → 0x000c6078) ✓; MKW/MK_b*/MKB red-row strings match the `row()` format strings verbatim ✓; the width-exclusion pattern matches each width's bit capacity (sb ≤ 2^7, sh ≤ 2^15, sw ≤ 2^31) ✓.
+
+5. **(READ/REASONED) Q4 — header sentences.** None false outright; three refinements: (a) finding 1; (b) "every bit the compare tests set alone *at every width* (B)" overclaims for sb (carries bits 3–7 only) — table 6's own predictions (bit 9 → sh,sw,sd) encode the correct scope, so add "that can carry it"; (c) LIMITS's B sentence is accurate as far as it goes but should also name the dsll-execution dependency (finding 2). SESSIONS B's text checks out against the inlined program: PORT=5 before each width ✓, read once per width before the next re-select ✓, stored-leak values {2^k, INT_MIN, 0} never 5 ✓ (INT_MIN reads back 0xffffffff80000000 ≠ 0x5 via lw; 0xdead prefill makes a skipped read red, not green ✓), count sampled after the 108th refusal — the `max(...)` tag lands on the final sd store, since the trailing dsll and lw are excluded by the filter ✓.
+
+6. **(REASONED) Q1/Q2 — floor and aggregate, with denominators.** Shapes tried: (i) unconditional bit-mask narrowings — *complete by proof*: any mask touching bits 3–63 lets through some 2^k, which B writes at every carrying width, and the leak sticks until that width's read (the next width's PORT=5 overwrites only *after* the witness); masks over bits 0–2 are provably equivalent (v ≥ 8 ⟺ (v & ~7) ≥ 8), matching EQ_maskhi; (ii) boundary slips both directions — measured (BR_ge9 105/117, BR_refuse_lt 106/117); (iii) 32-bit truncation — measured (BR_no_hi32); (iv) per-width signedness — pinned by B's top-bit-per-width values 2^7/2^15/2^31/2^63 (sign-negative under a signed compare → accepted → stored non-5) plus X3/X4; (v) direction, latch-inversion, always/never announce, per-selector re-announce (Z's six 9s), print-format truncation (%d → X3/X4 naming rows red — reasoning, not measured); (vi) accept-store transforms and refusal-time cell writes — measured/eq as tabulated. Residual full-117 classes: the finding-1 boundary edit (fix the words); semantic twins ((idata>>3)!=0, idata>NPORTS-1 — untestable by *any* row set in principle; (4) enumerates the measured ones); two-axis joints and value-keyed exceptions — disclosed in (0)/(3). The aggregate read is sufficient given (i) and the read-before-re-select ordering; it is blind only to conditions that add a second axis (latch/previous/COMMAND/state) — disclosed.
+
+7. **(READ) Q5 — channel.** Every MKB/MKW/MK_b line shows actual = predicted B-width rows, and the CHANNEL CHECK trailer is present; the red-row counts sum to the scores (finding 4). Consistent from the packet. **Not checkable:** the addendum's mtime precedence over TABLE.out — settling fact is the file listing; stated, not verifiable here. Same for md5s and "probe unchanged during the run".
+
+**V1–V20 adjudication (Q3):**
+- V1 UPHOLD — B plus MKB/MKW disposes it; MK_b9_31 now 114/117 red (READ from table).
+- V2 UPHOLD — 13 carried, measured.
+- V3 UPHOLD — rd_s0 now excepted in header, (4), and manifest GREEN(eq).
+- V4 UPHOLD — (8) now admits Z (cell-0 states) and Y's COMMAND read (second-refusal-only caveat present).
+- V5 UPHOLD — "The cells-alone effect is claimed only as listed" (named, not numbered).
+- V6 UPHOLD — "every session but K" present.
+- V7 UPHOLD — holder list matches (P, F, V, W, X2–X7, Y, B); Z/R named as never read back.
+- V8 UPHOLD — "sb (P, V, B)" present.
+- V9 UPHOLD — (4) now lists (int)/(uint32_t)/&7 stores and nonzero latch; all measured.
+- V10 UPHOLD — (5) + DSC_nonl at 117.
+- V11 REFINE — finding 1: boundary numeral wrong by one; B_mod12 mechanism confirmed (9 announces = 1+12k ≤ 97, k=0..8 ✓).
+- V12 UPHOLD — (3) class clause + DSC_ann_hibits at 117; the first-refusal value set {8, 9, 0x100, 0x100000005, all-ones} is consistent with every holder list I could check (subject to finding 3's X5 caveat).
+- V13 UPHOLD — CELLMAP pointer plus 30 inlined manifest lines.
+- V14 CANNOT SETTLE — needs table5 MANIFEST (not inlined); the stated story (T_W_sd7/T_W_sw8 are edits of A's and P's cells) is internally coherent.
+- V15 UPHOLD the rejection — red lists confirm W has an announce-count row but no naming row for 8; no contradiction.
+- V16 CANNOT SETTLE (out of scope collateral; recorded, nothing in packet contradicts).
+- V17 UPHOLD — V1 is its measurement.
+- V18 UPHOLD — gate comment now derivable; counts enumerate clean (finding 4).
+- V19 UPHOLD — wording only; not in the probe.
+- V20 UPHOLD — holders-not-exhaustive is a defensible standing rule, but see finding 3 (X5) for where it now has to do real work.
+
+**Q6:** findings 1, 2, 3 — in that order of weight. The one I am most confident no prior pass stated is finding 2's positive side: the width-differentiated MKB channel is itself the proof that dsll executed correctly, and that proof deserves to be written into LIMITS rather than left implicit.

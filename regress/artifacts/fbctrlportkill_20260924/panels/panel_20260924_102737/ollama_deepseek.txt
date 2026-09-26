@@ -1,0 +1,13 @@
+VERDICT: PROCEED WITH CHANGES
+
+1. READ — The inlined `DEVICE_ACCESS(fbctrl)` shows the core defect: PORT stores `idata` into `current_port` before the range check, and the check only warns; DATA later exits if `current_port` is out of range.
+
+2. REASONED — The brief’s first-line claim that any out-of-range PORT selector makes the next DATA access end the process is too strong. Its own table shows `sd 0x0000000100000003` truncates to 3 and is serviced, not killed. The proposed fix’s predicate `idata >= DEV_FBCTRL_NPORTS` catches all out-of-range `idata`, so the code fix is correct despite the overstatement.
+
+3. REASONED — After the proposed PORT refusal, `current_port` is assigned only when `idata < 8`; since `idata` is `uint64_t`, `current_port` remains in `[0,7]`. No guest access to this device can reach the DATA arm’s `exit(1)`. Keeping the DATA arm exit as belt-and-braces is acceptable.
+
+4. READ — The per-device `warned_port` latch and the `(once)` text match the proposed announce detector row.
+
+5. NOT CHECKABLE FROM PACKET — The wide detector row `sd 0x0000000100000003` depends on `memory_readmax64()` delivering all 8 bytes for an 8-byte store on `-E testmips`. That function is not inlined, and the brief says “I believe it does.” If that belief is false, the fixed binary will accept the write as port 3 and the row will fail. Single fact that settles it: the source of `memory_readmax64` or a direct `sd` witness showing the full `idata`.
+
+6. NOT CHECKABLE FROM PACKET — The brief states nothing in the tree depends on the old WARNING text, but no whole-tree grep output is inlined. The inlined `regress` grep shows no fbctrl references. Single fact that settles it: a whole-tree search for the exact old warning string outside `dev_fbctrl.c`.

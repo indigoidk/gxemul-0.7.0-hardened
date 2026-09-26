@@ -1,0 +1,56 @@
+I'll audit the premises in `GXEMUL-SEC/src/` against the packet, starting with who writes `current_port` and what a guest store can actually deliver to the PORT arm.VERDICT: PROCEED WITH CHANGES
+
+The defect is real, and refusing the selector at the PORT arm while leaving the previous value in place is the right fix. The detector, as specified, still goes green on a one-cast edit that brings the host death back, and one of its pre-fix oracles contradicts the code path it claims to cover.
+
+1. Premise audit. The PORT arm is the only writer of `current_port` besides `DEVINIT`'s `memset`. In `GXEMUL-SEC/src/` the field is assigned only at `dev_fbctrl.c:120`. `machine_test.c` installs the device twice, both unconditional: `default_test()` at line 154 (testarm, testm88k, testppc, testriscv, testsh) and testmips's own setup at line 337. No other machine file instantiates it. `autodev.c` only registers the name. Nothing in `regress/*.py` or `regress/*.sh` mentions `fbctrl` or the old warning string.
+
+The `sd` row is real on `-E testmips`, and `-M 64` is not why. The default CPU is `5KE` (`MACHINE_DEFAULT_CPU(testmips)`), which `mips_cpu_types.h` lists as `EXC64` / `MMU64` / 64-bit and `mips_cpuregs.h` calls ISA 64. `sd` is one `memory_rw` of length 8: `0x12f00000` is 8-byte aligned, the 1024-byte split in `memory_rw` (`MRW_SPLIT_MASK` 0x3ff) does not fire (offset 0, length 8), and the device length `0x20` does not clamp it. `memory_writemax64` then `memory_readmax64` rebuild the register value in `cpu->byte_order`. testmips sets `EMUL_BIG_ENDIAN`, so `sd` of `0x0000000100000003` yields `idata == 0x100000003`. The same integer comes back on a little-endian guest for a natural aligned store. The witness did not measure this row. It measured `sw` of 9.
+
+What reaches `case DEV_FBCTRL_PORT` is only an access whose start offset is 0. Aligned MIPS stores there produce:
+
+| op | len | `idata` |
+|---|---|---|
+| `sb` | 1 | 0 .. 255 |
+| `sh` | 2 | 0 .. 65535 |
+| `sw` | 4 | 0 .. 2^32−1 |
+| `sd` | 8 | 0 .. 2^64−1 |
+
+`swl`/`swr`/`sdl`/`sdr` also arrive as one `memory_rw`. A store that starts at offset 1, 2, or 3 does not reach this case. It hits the `default` arm and `exit(1)` there, which is the other site in section 4.
+
+With the sketch's predicate kept on the full `uint64_t`, the only values stored are 0..7, and those convert to `int` exactly. `current_port` then stays in 0..7 for every later access, so the DATA arm's `exit(1)` does not run. That stops being true if the compare is narrowed or signed, which is finding 2.
+
+Two claims in the packet disagree, and the table is the one that matches the code. On gcc x86-64, `sd` of `0x100000003` warns, stores `3`, and the following DATA access is served as port 3. It does not exit. "The refusal rows end the process" is true for `sw` of 8, 9, and (on this compiler) `sw` of −1. It is false for the wide row. A pre-fix oracle that only checks survival is green on HEAD for that row. The readback "PORT still reads 5" is the oracle that separates HEAD (reads 3) from the fix (reads 5). The conversion of an out-of-range `uint64_t` to `int` is implementation-defined. `sw` of 9 does not depend on it. The table's "−1" and "port 3" cells do. The fix refuses before that conversion, so the post-fix readback does not depend on it.
+
+The abbreviated argv does not construct the machine. `main.c` calls `usage()` and `exit(1)` when no filename is given, before any device attaches. Gate 9 recorded that for `-E testmips`. The witness output (GET_RESOLUTION zeroed X1, then the DATA diagnostic) means the measured run had a file and `-V`. `mips_fold_probe.py` already has the working shape: `-V -E testmips -M 64 0x<addr>:<4-byte stub>`. GET_RESOLUTION returns 0,0 only while `x11_md.in_use` is clear, which is the default and is set by `-X`. The signature row is that no-X11 path.
+
+2. Smallest edit that breaks the fix and still passes every proposed row. Cast the compare:
+
+```c
+else if ((int64_t)idata >= DEV_FBCTRL_NPORTS)
+```
+
+`idata` is `uint64_t`, so the sketch's compare is unsigned and every value ≥ 8 is refused. After the cast, values ≥ 2^63 are negative and fall into the store. `d->current_port = idata` then keeps the low 32 bits (gcc). `sd` of `0xffffffffffffffff` stores −1, and the next DATA access takes the existing `current_port < 0` exit.
+
+Every proposed row stays green. The one that should have caught this and does not is the wide row: `0x100000003` is still a positive `int64_t` above 8, so it is refused and PORT still reads 5. The negative row stays green for the same reason: `sw` of −1 is `idata == 0xffffffff`, which is positive as `int64_t`.
+
+A second one-token survivor is `len >= 4 &&` in front of the same compare. `sb` of `0xff` and `sh` of 8 store and the next DATA access exits. The anchored `sw` of 9, the boundary word tests, the wide `sd`, and `sw` of −1 all stay green. `sb 0xff` is in the packet's table and in no row.
+
+These are caught, so they are not the answer: `>` instead of `>=` (the PORT=8 readback goes red); comparing `(uint32_t)idata` or `(int)idata` (the wide row reads 3, or the negative row dies); clamping or resetting to 0 (DATA no longer reads `0x2a`); setting the latch at init, or never setting it (the announce count moves). A function-static latch, the `dev_disk.c` `#119` shape, also passes every row. It does not bring the exit back. testmips constructs one `fbctrl`, so per-instance versus process-global is invisible here. Per-instance is still the right field: `memset` zeroes it, and it matches `dev_footbridge.c` / `dev_wdc.c` / `dev_pcc2.c`.
+
+Add two anchored rows, same shape as PORT=9 (establish 5 and DATA `0x2a`, refuse, PORT still reads 5, DATA still reads `0x2a`): `sd` of −1, and `sb` of `0xff`. Make the three announce writes three different refused values (8, 9, and `0xffffffff`), or a per-value latch prints once and the announce row stays green.
+
+3. Keep the DATA arm's `exit(1)`. After the `uint64_t` predicate it is not reachable from guest MMIO, and the line it protects is `d->port[d->current_port]`. Removing the guard without a replacement turns a bad selector into a host out-of-bounds index. A decline that skips the index is also safe. It is a second behavior change, and this detector cannot see it on a correct PORT arm, because both versions survive. Leave the tripwire so a later narrowing of the predicate kills the process instead of corrupting the host. The fork's decline-instead-of-exit precedent (`dev_sh4.c` on BCR2/BCR3) is for an access the guest can still perform after the fix. This guard is the opposite once the PORT predicate stays on the full `idata`.
+
+4. Member 3 at the PORT arm is the right member, and the refused write should keep the previous selector. Reset-to-0 writes a different selector, and 0 is `DEV_FBCTRL_PORT_COMMAND`, so the next DATA write runs `fbctrl_command`. That couples a rejected selector to the command `exit(1)` this round is leaving alone, and to `SET_RESOLUTION`. Clamp-to-7 silently selects color B. Keeping the previous value makes the rejected write a no-op, which is what the anchored `0x2a` readback checks. The initial selector is already 0, so a refusal before any accepted write leaves COMMAND selected. That is the initial state, not a reset.
+
+Member 5 is a weaker substitute on this device. `memory_rw` raises a guest exception only under `MEM_MIPS` (DBE/IBE) and `MEM_M88K`. On ARM, PPC, SH, and RISC-V the handler returns `MEMORY_ACCESS_FAILED` and the store instruction returns early with `cpu->running` still set, so the guest gets a completed instruction and no fault. The public header describes a port index, not a bus error. Members 1, 4, 6, and 7 do not fit: the register map has eight ports, FILL/COPY are the other round, and storing an out-of-range index is the current bug. No unnamed member beats "decline, announce once, keep the previous selector."
+
+5. Gate 16 can own the probe. `gate_mips.sh` should not: it boots pmax and arc to a root shell and never builds testmips. Do not append the probe after gate 16's kernel check. `gate_mips_folds.sh` `gate_skip`s the whole script when `gxemul_pmax_rig/bsd` is absent, and `gate_skip` with a clean failure count exits the script. A probe placed after that line does not run in that configuration, while `check_probe_wiring.py` still counts it as wired, because it scores a command-position `python3` invocation in a `GATES=` script and does not care whether a preflight can reach it. Run the device probe after the binary check and before the kernel check. On a missing kernel, `degrade` the fold half. A red device probe then stays a FAIL (`gate_end` looks at failures before the degrade flag). A missing kernel with a green device probe stays a SKIP, which is the gate's current result when the kernel is absent.
+
+`check_probe_wiring.py` also requires, in the same commit: the file `git add`ed (`domain()` is `git ls-files`, so an untracked probe is invisible and a staged one with no manifest line is `UNCLASSIFIED`); a `MANIFEST` entry of class `detector` (a `witness` that asserts the pre-fix death becomes `GATED WITNESS` the day it is invoked, which is a hard failure); no `EXEMPT` line once it is invoked (`STALE EXEMPTION`). The invocation has to be real command position. A comment, a `note` that merely names the file, or a heredoc body does not count.
+
+Two pins move with a `pty.fork` probe, and the packet does not mention them. `gate_hygiene.sh` has `EXPECT_PTY_PROBES=73`, an exact check. Copying `mips_fold_probe.py`'s wait (`buf[mark:].rstrip().endswith("GXemul>")`) bumps that count and does not bump `EXPECT_CONVERTED` (24), which matches the literal `resp.rstrip().endswith("GXemul>")` plus `return wait(mark=_mark, echo=... if ... else None)`. Shipping the canonical form bumps all three converted counts together. Either way the pins are re-derived with `tools/derive_hygiene_pins.sh`, not hand-edited. `gate_offline.sh`'s `SM_COVERED` is the self-mutant list and does not gain a line for this probe. Pin the probe's own `N/N` in the gate check the way `MFOLDPROBE_RESULT=14/14` is pinned.
+
+6. Leave the other two `exit(1)` calls for their own rounds. The command `default` fires on a legal port with DATA equal to 3 or 4 (`DEV_FBCTRL_COMMAND_FILL` / `COPY`, both marked TODO) or any other value outside 0..2. The access `default` fires on every offset in the `0x20` window other than `0x00` and `0x10`, including a byte store at `+0x03`. Each needs its own oracle. The port-selector rows never touch those arms. `dev_sh4.c` records the same split: one round, one site, and the sibling (`sh4bsclane`, and a different device at the DMA comment) stays filed. I did not find a single written rule by the name "reopening rule" under `src/` or `regress/*.py` / `*.sh`. Those comments are the practice, and these two sites match the "file, don't take" side of it.
+
+The rectangles demo writes the controller with 32-bit stores of in-range indices. Those still take the accept arm.

@@ -1,0 +1,119 @@
+`VERDICT: SHIP WITH CHANGES`
+
+---
+
+### Numbered Findings & Answers to Brief §6 Questions
+
+#### 1. The Floor & DEPENDS-ON Enumeration (73-Row Composite vs. Disclosed Escapes)
+* **Question:** Is there an edit inside the `DEPENDS-ON` enumeration—predicates dominating the fixed arm ([`writeflag == MEM_READ`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L118), [`idata >= DEV_FBCTRL_NPORTS`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L120), [`!d->warned_port`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L128)), weakened or qualified, or operands swapped with fields the body reads ([`idata`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L110), [`current_port`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L50), [`warned_port`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L52), [`port[]`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L51))—that scores 73/73 and is NOT one of the eight disclosed in the contract?
+* **Finding:** **No.** Every non-disclosed modification within the strict dominating predicate/body-read field enumeration is caught by the 73-row suite or is an equivalent no-op:
+  - Swapping operands in `writeflag == MEM_READ` with `idata`, `current_port`, or `warned_port` turns read accesses into writes or vice-versa, failing [`C LIVENESS`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L418) or Session A round-trip readbacks.
+  - Swapping operands in `idata >= DEV_FBCTRL_NPORTS` with `current_port` (initially 0), `warned_port` (0 or 1), or `port[]` causes either universal storage (killed by [`M_store`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table3/TABLE.out#L27): 52/73) or universal refusal of legal selectors at power-on (killing Session A's `accept selector 0 written by sw`).
+  - Swapping operands in `!d->warned_port` with `!d->current_port` (evaluates to false when `current_port == 5` in Session P) silences announces in Session P, failing `announce: exactly 1 right after the FIRST refusal`.
+  - Qualifying `!d->warned_port` with `&& idata >= DEV_FBCTRL_NPORTS` or `&& d->current_port >= 0` is an identical binary/no-op, because `current_port` is constrained to `0..7` and the refusal block is already guarded by `idata >= 8`.
+  - Qualifying with `!d->warned_port && d->current_port != 0` suppresses the announce at power-on (`current_port == 0`), killing `F refusal announced while free-running (fatal)`.
+  - Narrowing/weakening `idata >= DEV_FBCTRL_NPORTS` by width or bit-range is fully covered by the closed width table (`T_W_*`, `T_X_w8`, `T_D2_mask63`, `M_gt`, `M_wide`, `M_u32`, `M_i32`, `M_i64`).
+
+#### 2. Smallest Edit Breaking the Fix While Passing All 73 Rows
+* **Finding:** The smallest edits that break the fix without being caught by any of the 73 rows (none of which are in Table 3) are:
+  1. **Value-space puncture outside tested values:**
+     ```c
+     else if (idata >= DEV_FBCTRL_NPORTS && idata != 10)
+     ```
+     - **Delta:** 14 characters (` && idata != 10`).
+     - **Impact:** Selector 10 is stored rather than refused, crashing the guest on any subsequent DATA access.
+     - **Green rows:** All 73 rows stay green. No session in [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) ever writes selector 10 (Session P tests 8, 9, 16, 0x200000000, 0x100000003, all-ones 64-bit, all-ones 32-bit, 0xff, 0x100; Session W tests 0, 7, 8, 0x8000000000000000, 9).
+  2. **Width-restricted access on non-boundary legal ports:**
+     ```c
+     else if (idata >= DEV_FBCTRL_NPORTS || (idata == 3 && len == 1))
+     ```
+     - **Delta:** 31 characters.
+     - **Impact:** Port 3 is refused when written with `sb` (byte store).
+     - **Green rows:** All 73 rows stay green. The width closure in Session W only closed `{0, 7 accepted; 8 refused} x {sb, sh, sw, sd}`. Port 3 is only ever written with `sw` in Session A ([`regress/fbctrl_port_probe.py:315`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L315)).
+  3. **Announce period counter modulo $\ge 12$:**
+     ```c
+     if (!(d->warned_port++ % 12))
+     ```
+     - **Delta:** 11 characters over `T_D9b_mod10` (`% 10` $\to$ `% 12`).
+     - **Impact:** Breaches the single-announce contract on the 13th refusal.
+     - **Green rows:** All 73 rows stay green, as Session P tests exactly 12 refusals (tags `r0` through `r11`), and no other session exceeds 5 refusals.
+
+#### 3. Vacuity of Rows by Construction & Session R Readback
+* **Question:** Is any row vacuous by construction? In particular, Session R's `refuse 9 after the NOP, PORT keeps 5` killed nothing on its own in Table 3: keep it, or drop it?
+* **Finding:**
+  - **No row is vacuous by construction.** A row is vacuous by construction if its test expression cannot fail under the targeted defect (such as checking an unread GPR that [`cpu_new()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/cpu.c) zero-fills, or using `0x8000000000000005` where 32-bit truncation yields 5).
+  - In Session R ([`regress/fbctrl_port_probe.py:280-284, 442`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L280-L284)), register `s1` is pre-poisoned to `0xdead`, and the hardware readback is performed via guest `lw s1, 0(t0)`. In [`TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table3/TABLE.out), seven mutants turned this row red (`M_clamp`, `M_reflatch`, `M_reset0`, `M_revert`, `M_store`, `N_rdlatch`, `N_rdmask3`).
+  - **Recommendation: KEEP IT.** While it provides no *sole kill* (redundant with Session P's refusal rows), it guards against state corruption across command execution and DATA access within Session R at negligible execution cost.
+
+#### 4. Audit of the Contract (§4b), Gate Comment (§4c), and Source Comment (§4a)
+* **Contract clause (§4b):**
+  - Claim: *"cleared by DATA or command traffic"* ([`regress/fbctrl_port_probe.py:46`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L46)).
+    - **Finding: True only of the case measured.** Session R sends only [`DEV_FBCTRL_COMMAND_NOP`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h#L43). If an edit clears `warned_port` inside `case DEV_FBCTRL_COMMAND_SET_RESOLUTION:` or `GET_RESOLUTION:` in [`fbctrl_command()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L60), it is not caught because no session runs resolution commands after a refusal.
+  - Claim: *"the cells {0, 7} accepted and 8 refused are rowed at EVERY width, 1, 2, 4 and 8"* ([`regress/fbctrl_port_probe.py:43`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L43)).
+    - **Finding: True only with qualification.** While each width is tested somewhere, in Session W's dedicated predecessor-anchored block ([`regress/fbctrl_port_probe.py:313-324`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L313-L324)), selector 7 is only written by `sb`, `sh`, and `sw` after `PORT=5`; selector 7 written by `sd` remains only in Session A after selector 6.
+* **Gate comment (§4c):**
+  - Lines 425–448 of [`regress/gate_mips_folds.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L425-L448) are accurate and fully match the observed 62 mutants in [`TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table3/TABLE.out) (54 red, 8 at 73/73).
+* **Source comment (§4a):**
+  - Lines 123–126 of [`src/devices/dev_fbctrl.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L123-L126): Accurate. HEAD stored `idata` directly into `int current_port` ([`dev_fbctrl.c:50`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L50)), truncating `0x100000003` to `3`, which bypassed the DATA guard check (`current_port >= 8`).
+
+#### 5. Gate Reconciliation Rows & Stealth Log Tampering
+* **Question:** Can a probe log pass all eight gate checks while a row is wrong?
+* **Finding:**
+  - **In an unmanipulated execution: NO.** If any test row fails during execution:
+    1. [`row()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L268-L272) emits `  FAIL ...`.
+    2. `n_ok = sum(RESULTS)` is at most 72.
+    3. `FBCTRLP_RESULT` emits `72/73`.
+    4. [`fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L467) returns exit status 1.
+    This triggers 4 distinct gate failures in [`regress/gate_mips_folds.sh:456-473`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L456-L473):
+    - Check 3 fails (`$fbrc` is 1, expected 0).
+    - Check 5 fails (`${fbres%/*}` is 72, expected 73).
+    - Check 6 fails (`grep -c '^  FAIL '` is $\ge 1$, expected 0).
+    - Check 8 fails (`grep -c '^  ok '` is $\le 72$, expected 73).
+  - **Adversarial / tampered log condition: YES.** The gate reconciliation rows ([`gate_mips_folds.sh:470-473`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L470-L473)) count line occurrences:
+    ```bash
+    check "fbctrl_port rows emitted match the trailer total" "$(grep -cE '^  (ok|FAIL) ' "$FBCLOG")" "${fbres#*/}"
+    check "fbctrl_port ok rows match the trailer count" "$(grep -c '^  ok ' "$FBCLOG")" "${fbres%/*}"
+    ```
+    The gate checks line counts, not distinct test names. If an attacker/script substitutes a `FAIL` line with an `ok` line (or duplicates another `ok` row while deleting the `FAIL` row) and overrides the exit status to 0, all 8 checks pass.
+
+#### 6. Dispositions in §2 Audit
+* **Question:** Which disposition in §2 is wrong? Name the count.
+* **Finding:**
+  - **The count of actual disagreements between Opus and Fable is TWO, not four:**
+    1. `sh 0`: Fable ruled "disclose" ([`fable5_f2.md:25`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/fable5_f2.md#L25)), whereas Opus measured that an `sh`-only edit escapes and recommended adding a row ([`opus5_f2.md:20`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus5_f2.md#L20)). *(Actual disagreement)*
+    2. D4 session placement: Fable kept D4 in Session P ([`fable5_f2.md:37`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/fable5_f2.md#L37)), whereas Opus measured that `M_gt` blanks 14 P rows, requiring a separate Session R ([`opus5_f2.md:44-45`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus5_f2.md#L44-L45)). *(Actual disagreement)*
+    3. Y1 (D11): Fable ruled it was optional/control-only ([`fable5_f2.md:9`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/fable5_f2.md#L9)). Opus measured that prefilling Y1 enabled detection of deletion and modification ([`opus5_f2.md:28`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus5_f2.md#L28)); Opus did not demand it as an obligatory kill row.
+    4. Two-machine: Fable ruled "FILE" ([`fable5_f2.md:13`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/fable5_f2.md#L13)). Opus proved the mechanism worked but explicitly deferred policy to the adjudicator ([`opus5_f2.md:54`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus5_f2.md#L54)). Both concluded it should be filed as `fbctrltwoinst`.
+  - **Disposition 2 is nominally contradictory in implementation:**
+    The brief states: *"Y1 (D11): added as a CONTROL ... not as a kill row."*
+    In [`regress/fbctrl_port_probe.py:421`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L421), while Y1 is appended to `ctl`, it is wrapped in [`row()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L268-L272), which unconditionally appends to `RESULTS`. When mutants `T_D11a_y1one` and `T_D11b_y1keep` are tested, `FBCTRLP_RESULT` drops from 73/73 to 72/73 ([`TABLE.out:45-46`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table3/TABLE.out#L45-L46)), causing Gate Check 5 to fail. Thus, in practice it functions as an active kill row included in the 73-row score pin.
+
+---
+
+### Verification of Cited Claims Against Source Tree
+
+| Claim in Brief | File & Line Reference | Verification Status & Notes |
+| :--- | :--- | :--- |
+| `fatal()` prints and returns without `exit()` | [`src/core/debugmsg.c:384-391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) | **VERIFIED.** Calls `va_debug()` and returns cleanly. |
+| PORT arm refuses `idata >= 8` on 64-bit, keeps selector, announces `(once)` | [`src/devices/dev_fbctrl.c:118-136`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L118-L136) | **VERIFIED.** Evaluates `idata >= DEV_FBCTRL_NPORTS`, warns via `d->warned_port`, keeps previous `d->current_port`. |
+| DATA arm check and `exit(1)` kept as tripwire | [`src/devices/dev_fbctrl.c:141-145`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L141-L145) | **VERIFIED.** Retains bounds check on `d->current_port` with explicit `exit(1)`. |
+| Command and offset default exits kept | [`src/devices/dev_fbctrl.c:101-102, 158-160`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L101-L102) | **VERIFIED.** Both call `exit(1)`. |
+| Diff numstat on `dev_fbctrl.c` (18 / 5) | `git diff --numstat HEAD -- src/devices/dev_fbctrl.c` | **VERIFIED.** Exactly 18 insertions, 5 deletions. |
+| Probe line count (471 lines) | [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) | **VERIFIED.** Exactly 471 lines of code. |
+| Diff numstat on `gate_mips_folds.sh` (55 / 0) | `git diff --numstat HEAD -- regress/gate_mips_folds.sh` | **VERIFIED.** Exactly 55 insertions, 0 deletions. |
+| Hygiene gate census pins (74 / 25) | [`regress/gate_hygiene.sh:385, 596`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L385) | **VERIFIED.** `EXPECT_PTY_PROBES=74`, `EXPECT_CONVERTED=25`. |
+| Score claims manifest summary in Brief §3 | [`tools/precommit_check.sh:347`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L347) | **DISCREPANCY.** Brief §3 claims `"SCORE_CLAIMS_MANIFEST 30 -> 31"`, but the working tree file contains `SCORE_CLAIMS_MANIFEST=32` (accounting for uncommitted #529). |
+| Kill table 3 counts (54 red, 8 at 73/73, M_revert 47/73) | [`regress/artifacts/fbctrlportkill_20260924/table3/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table3/TABLE.out) | **VERIFIED.** Exactly 54 red, 8 at 73/73, `M_revert` scored 47/73. |
+| Gate 16 PASS (25 checks, 27s, 73/73) | [`regress/artifacts/fbctrlportkill_20260924/gates_f2/gate16.out:44-45`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/gates_f2/gate16.out#L44-L45) | **VERIFIED.** 25 checks passed, 27s runtime. |
+
+---
+
+### Required Corrections Before Commit
+
+1. **Reconcile `SCORE_CLAIMS_MANIFEST` Description:** Brief §3 line 55 claims `SCORE_CLAIMS_MANIFEST 30 -> 31`. The working tree file [`tools/precommit_check.sh:347`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L347) sets `SCORE_CLAIMS_MANIFEST=32` due to local uncommitted changes from `#529`. Clarify in the brief text that `31` is the isolated patch value, whereas `32` is the tree state.
+2. **Accurately Classify Y1 (D11):** Acknowledge in the packet prose that because [`row()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L268-L272) appends to `RESULTS`, Y1 is part of the 73 scored rows and directly causes the failure of `T_D11a` and `T_D11b`, functioning as an integrated kill row rather than an isolated control.
+3. **Qualify the Scope of "Command Traffic":** In the probe contract (§4b), scope "cleared by command traffic" to `COMMAND_NOP` and entry to [`fbctrl_command()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L60), noting that command-specific clears on `SET_RESOLUTION` or `GET_RESOLUTION` remain unrowed.
+
+---
+
+`GO-WITH-CHANGES`

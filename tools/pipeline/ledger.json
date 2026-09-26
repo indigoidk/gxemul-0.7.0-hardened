@@ -45106,11 +45106,775 @@
   },
   {
    "id": "fbctrlportkill",
-   "state": "open",
+   "state": "closed",
    "sev": "high",
    "opened": "2026-09-10",
    "title": "dev_fbctrl.c: the PORT arm ACCEPTS an out-of-range port number with a warning and STORES it, and the DATA arm then calls exit(1) on that same stored value -- a two-step, guest-driven host kill where the first step looks handled",
-   "note": "FILED 2026-09-10 from the GPT-6 Astra exit audit, listed among the six E1 predicates. VERIFIED LOCALLY, and the local reading found a SHARPER SHAPE than the audit described.\n\n*** THE TWO STEPS, and the first is what makes this nasty. ***\n  case DEV_FBCTRL_PORT (write):  d->current_port = idata;\n                                 if (idata >= DEV_FBCTRL_NPORTS)\n                                         fatal(\"[ WARNING: fbctrl port number is out of range! ]\");\n  case DEV_FBCTRL_DATA:          if (d->current_port < 0 || d->current_port >= DEV_FBCTRL_NPORTS) {\n                                         fatal(...); exit(1); }\n**The PORT arm stores the bad value FIRST and warns SECOND -- it does not reject it.**  So the model accepts an out-of-range selector, says WARNING, carries on, and then kills the host the moment the guest uses the selector it just accepted.  A reader auditing the PORT arm sees a range check and a diagnostic and concludes the case is handled; the check does nothing but print.\n\n*** AND THE ORDER IS THE FIX'S FIRST QUESTION: refusing the store in the PORT arm closes the DATA kill without touching the DATA arm at all. ***  That is one line moved, and it makes the DATA guard the belt-and-braces it reads as.  The alternative -- declining at DATA -- leaves the model holding a selector it has agreed to and cannot use.\n\n*** AND THE TWO GUARDS TEST DIFFERENT QUANTITIES, which is the guard-field/body-field discriminator the pre-table check mandates. ***  The PORT arm tests **`idata`**, a `uint64_t`; the DATA arm tests **`d->current_port`**, an `int` (verified in the struct).  The store between them TRUNCATES.  Both halves of the DATA guard are therefore live and neither is dead code: a guest writing 0xffffffff warns at PORT and lands `current_port == -1', killing via the `< 0' half; a guest writing 0x100000000 warns at PORT and truncates to a PERFECTLY VALID 0, so the warning fires about a value that turns out fine.  **The warning and the kill are keyed to different numbers**, so neither predicts the other, and a detector must not assume the warning marks the killing set.\n\nREACHABILITY: machine_test.c attaches fbctrl at TWO sites, so it is on the `testmips' and `testarm' machines -- **the machines this project's own gates drive**, including the 358 decode checks in gate_arm.sh.  The device is a GXemul-specific test framebuffer controller, so a guest writing a port number is its ordinary use.\n\nTHIRD KILL IN THE SAME FILE, recorded so a round does not close on one: `fbctrl_command()' has `default: fatal(\"fbctrl_command: Unimplemented command %i.\"); exit(1);', reached by writing a command byte to the COMMAND port -- a THIRD guest-driven exit, and the audit ranked that one I2/separate because a command needs a defined outcome rather than a decline.  The DEVICE_ACCESS default arm is a fourth.\n\nNOT MEASURED, no witness; the rung-3 attempt is owed and is cheaper here than anywhere else in this batch, because the test machines are already driven by existing probes.\n\n*** DESIGN REVIEW 2026-09-10 (fbctrlportkill/codex_design_20260910.txt, GPT-6 Astra at max, ZERO cyber flags): REVISE -- decline + latched announce -- AND IT CORRECTED TWO OF MY PREMISES. ***\n\n**MY 'THE FIX'S FIRST QUESTION IS ORDER' IS IMPRECISE, AND A SIMPLE REORDER IS INSUFFICIENT.**  In the seat's words: *'Their textual order does not cause the defect; storing before validation does.'*  The two case arms' order is irrelevant -- what is wrong is that the PORT arm assigns and THEN checks.  So the repair is not to swap two lines but to **move the assignment into the valid-value `else' of the range check**, add a per-instance `warned_bad_port' latch for the announce, and leave the DATA arm untouched.  My framing would have produced a smaller edit that does not close it.\n\n**AND THE TRUNCATION PREMISE NEEDED A WARRANT I DID NOT GIVE.**  I argued the `< 0' half is live because the field is a signed `int'.  The seat: *'signed int alone does not prove the conversion result'* -- C99 permits an implementation-defined result or a signal when converting an unrepresentable value to a signed type.  **The conclusion survives on the compiler's documented contract**: GCC documents reduction modulo the destination width, and under that contract both worked examples hold and the negative half IS live.  The unsigned input declaration does not make it dead.  *A true claim resting on an unstated assumption is exactly what the premise-audit clause exists to surface.*\n\n**THE DEVICE IS ON MORE MACHINES THAN I WROTE.**  I said `testmips' and `testarm'.  The shared setup site also serves **testm88k, testppc, testriscv and testsh** -- so the blast radius is every test machine in the tree, not two of them.\n\nCONFIRMED AS FILED: the PORT arm assigns before it checks; the selector is a plain `int'; a guest can read the stored selector back through the PORT arm, which gives a detector a channel that is NOT survive-only; and `fatal()' by itself does not terminate -- only the explicit `exit(1)' does.\n\n*** A FLOOR NOTE THE ROUND MUST CARRY: 'a verbatim reinstatement of the removed kill' is INCOMPATIBLE with a repair that RETAINS that kill. ***  This disposition leaves the DATA arm's `exit(1)' in place as belt-and-braces, so there is nothing removed to reinstate.  The same shape as #521, where the fix made a kill unreachable rather than deleting it -- and the same answer: name the distinguishable mutant (restoring the store-before-validate order) rather than pretending the literal clause is met."
+   "note": "FILED 2026-09-10 from the GPT-6 Astra exit audit, listed among the six E1 predicates. VERIFIED LOCALLY, and the local reading found a SHARPER SHAPE than the audit described.\n\n*** THE TWO STEPS, and the first is what makes this nasty. ***\n  case DEV_FBCTRL_PORT (write):  d->current_port = idata;\n                                 if (idata >= DEV_FBCTRL_NPORTS)\n                                         fatal(\"[ WARNING: fbctrl port number is out of range! ]\");\n  case DEV_FBCTRL_DATA:          if (d->current_port < 0 || d->current_port >= DEV_FBCTRL_NPORTS) {\n                                         fatal(...); exit(1); }\n**The PORT arm stores the bad value FIRST and warns SECOND -- it does not reject it.**  So the model accepts an out-of-range selector, says WARNING, carries on, and then kills the host the moment the guest uses the selector it just accepted.  A reader auditing the PORT arm sees a range check and a diagnostic and concludes the case is handled; the check does nothing but print.\n\n*** AND THE ORDER IS THE FIX'S FIRST QUESTION: refusing the store in the PORT arm closes the DATA kill without touching the DATA arm at all. ***  That is one line moved, and it makes the DATA guard the belt-and-braces it reads as.  The alternative -- declining at DATA -- leaves the model holding a selector it has agreed to and cannot use.\n\n*** AND THE TWO GUARDS TEST DIFFERENT QUANTITIES, which is the guard-field/body-field discriminator the pre-table check mandates. ***  The PORT arm tests **`idata`**, a `uint64_t`; the DATA arm tests **`d->current_port`**, an `int` (verified in the struct).  The store between them TRUNCATES.  Both halves of the DATA guard are therefore live and neither is dead code: a guest writing 0xffffffff warns at PORT and lands `current_port == -1', killing via the `< 0' half; a guest writing 0x100000000 warns at PORT and truncates to a PERFECTLY VALID 0, so the warning fires about a value that turns out fine.  **The warning and the kill are keyed to different numbers**, so neither predicts the other, and a detector must not assume the warning marks the killing set.\n\nREACHABILITY: machine_test.c attaches fbctrl at TWO sites, so it is on the `testmips' and `testarm' machines -- **the machines this project's own gates drive**, including the 358 decode checks in gate_arm.sh.  The device is a GXemul-specific test framebuffer controller, so a guest writing a port number is its ordinary use.\n\nTHIRD KILL IN THE SAME FILE, recorded so a round does not close on one: `fbctrl_command()' has `default: fatal(\"fbctrl_command: Unimplemented command %i.\"); exit(1);', reached by writing a command byte to the COMMAND port -- a THIRD guest-driven exit, and the audit ranked that one I2/separate because a command needs a defined outcome rather than a decline.  The DEVICE_ACCESS default arm is a fourth.\n\nNOT MEASURED, no witness; the rung-3 attempt is owed and is cheaper here than anywhere else in this batch, because the test machines are already driven by existing probes.\n\n*** DESIGN REVIEW 2026-09-10 (fbctrlportkill/codex_design_20260910.txt, GPT-6 Astra at max, ZERO cyber flags): REVISE -- decline + latched announce -- AND IT CORRECTED TWO OF MY PREMISES. ***\n\n**MY 'THE FIX'S FIRST QUESTION IS ORDER' IS IMPRECISE, AND A SIMPLE REORDER IS INSUFFICIENT.**  In the seat's words: *'Their textual order does not cause the defect; storing before validation does.'*  The two case arms' order is irrelevant -- what is wrong is that the PORT arm assigns and THEN checks.  So the repair is not to swap two lines but to **move the assignment into the valid-value `else' of the range check**, add a per-instance `warned_bad_port' latch for the announce, and leave the DATA arm untouched.  My framing would have produced a smaller edit that does not close it.\n\n**AND THE TRUNCATION PREMISE NEEDED A WARRANT I DID NOT GIVE.**  I argued the `< 0' half is live because the field is a signed `int'.  The seat: *'signed int alone does not prove the conversion result'* -- C99 permits an implementation-defined result or a signal when converting an unrepresentable value to a signed type.  **The conclusion survives on the compiler's documented contract**: GCC documents reduction modulo the destination width, and under that contract both worked examples hold and the negative half IS live.  The unsigned input declaration does not make it dead.  *A true claim resting on an unstated assumption is exactly what the premise-audit clause exists to surface.*\n\n**THE DEVICE IS ON MORE MACHINES THAN I WROTE.**  I said `testmips' and `testarm'.  The shared setup site also serves **testm88k, testppc, testriscv and testsh** -- so the blast radius is every test machine in the tree, not two of them.\n\nCONFIRMED AS FILED: the PORT arm assigns before it checks; the selector is a plain `int'; a guest can read the stored selector back through the PORT arm, which gives a detector a channel that is NOT survive-only; and `fatal()' by itself does not terminate -- only the explicit `exit(1)' does.\n\n*** A FLOOR NOTE THE ROUND MUST CARRY: 'a verbatim reinstatement of the removed kill' is INCOMPATIBLE with a repair that RETAINS that kill. ***  This disposition leaves the DATA arm's `exit(1)' in place as belt-and-braces, so there is nothing removed to reinstate.  The same shape as #521, where the fix made a kill unreachable rather than deleting it -- and the same answer: name the distinguishable mutant (restoring the store-before-validate order) rather than pretending the literal clause is met.",
+   "entries": [
+    {
+     "phase": "research",
+     "seat": "codex",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/codex.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  codex (FILE-READING, GPT-6 Astra max, 9350 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "agy",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/agy.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  agy (FILE-READING, gemini-3.8-flash-high, 16081 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES  (a SPLIT, read: line 1 is the verdict; its `Verdict: KEEP exit(1)` is the ruling on the DATA arm's check, and its closing GO-WITH-CHANGES agrees).  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "grok",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/grok.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 10990 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "kimi",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/ollama_kimi.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 8670 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "glm",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/ollama_glm.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  glm (PACKET-FED, glm-5.3:cloud, 8847 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "deepseek",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/ollama_deepseek.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 1802 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "minimax",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/ollama_minimax.txt",
+     "note": "#549 PASS 1 (the design) (panel_20260924_102737, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_102737/).  minimax (PACKET-FED, minimax-m3:cloud, 7230 bytes).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/codex.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  codex (FILE-READING, GPT-6 Astra max, 293020 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/agy.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  agy (FILE-READING, gemini-3.8-flash-high, 12910 bytes).  Its verdict, verbatim: SHIP WITH CHANGES  (a SPLIT, read: line 1 is the verdict; its closing `VERDICT: GO-WITH-CHANGES` agrees).  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/grok.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 8894 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/ollama_kimi.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 7338 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/ollama_glm.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  glm (PACKET-FED, glm-5.3:cloud, 6631 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-24",
+     "grade": "DO NOT SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/ollama_deepseek.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 3221 bytes).  Its verdict, verbatim: DO NOT SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-24",
+     "grade": "SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/ollama_minimax.txt",
+     "note": "#549 PASS 2 (the diff) (panel_20260924_113037, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_113037/).  minimax (PACKET-FED, minimax-m3:cloud, 7297 bytes).  Its verdict, verbatim: SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/codex.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  codex (FILE-READING, GPT-6 Astra max, 1373180 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/agy.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  agy (FILE-READING, gemini-3.8-flash-high, 15724 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/grok.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 8402 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/ollama_kimi.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 5424 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/ollama_glm.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  glm (PACKET-FED, glm-5.3:cloud, 5607 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/ollama_deepseek.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 1483 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/ollama_minimax.txt",
+     "note": "#549 the F2 adjudication pass (panel_20260924_115517, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260924_115517/).  minimax (PACKET-FED, minimax-m3:cloud, 6332 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-25",
+     "grade": "WALLED (seat failure)",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/codex.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  codex (FILE-READING, GPT-6 Astra max, 860 bytes): `You've hit your usage limit ... try again at Sep 26th, 2026 7:01 AM` -- a SEAT FAILURE, not agreement; re-fired after the reset.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/agy.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  agy (FILE-READING, gemini-3.8-flash-high, 16459 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/grok.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 6180 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-25",
+     "grade": "SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/ollama_kimi.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 2577 bytes).  Its verdict, verbatim: SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/ollama_glm.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  glm (PACKET-FED, glm-5.3:cloud, 6519 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/ollama_deepseek.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 1276 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/ollama_minimax.txt",
+     "note": "#549 the CLOSING pass (the F2 repair's own pass) (panel_20260925_141420, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_141420/).  minimax (PACKET-FED, minimax-m3:cloud, 5460 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-25",
+     "grade": "WALLED (seat failure)",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/codex.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  codex (FILE-READING, GPT-6 Astra max, 893 bytes): `You've hit your usage limit ... try again at Sep 26th, 2026 7:01 AM` -- a SEAT FAILURE, not agreement; re-fired after the reset.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-25",
+     "grade": "SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/agy.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  agy (FILE-READING, gemini-3.8-flash-high, 20067 bytes).  Its verdict, verbatim: SHIP  (a SPLIT, read: line 1 is the verdict; its closing `VERDICT: GO` agrees).  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/grok.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 7461 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/ollama_kimi.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 5939 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/ollama_glm.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  glm (PACKET-FED, glm-5.3:cloud, 5764 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-25",
+     "grade": "DO NOT SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/ollama_deepseek.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 1196 bytes).  Its verdict, verbatim: DO NOT SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/ollama_minimax.txt",
+     "note": "#549 the CLOSING F2 pass (panel_20260925_151610, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_151610/).  minimax (PACKET-FED, minimax-m3:cloud, 5013 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-25",
+     "grade": "WALLED (seat failure)",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/codex.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  codex (FILE-READING, GPT-6 Astra max, 831 bytes): `You've hit your usage limit ... try again at Sep 26th, 2026 7:01 AM` -- a SEAT FAILURE, not agreement; re-fired after the reset.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/agy.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  agy (FILE-READING, gemini-3.8-flash-high, 15171 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/grok.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 7780 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/ollama_kimi.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 7310 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/ollama_glm.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  glm (PACKET-FED, glm-5.3:cloud, 7875 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/ollama_deepseek.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 1609 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/ollama_minimax.txt",
+     "note": "#549 the VERIFYING pass (it found the floor breach v6 repairs) (panel_20260925_163907, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_163907/).  minimax (PACKET-FED, minimax-m3:cloud, 3583 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-25",
+     "grade": "WALLED (seat failure)",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/codex.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  codex (FILE-READING, GPT-6 Astra max, 831 bytes): `You've hit your usage limit ... try again at Sep 26th, 2026 7:01 AM` -- a SEAT FAILURE, not agreement; re-fired after the reset.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/agy.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  agy (FILE-READING, gemini-3.8-flash-high, 17163 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/grok.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 8011 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/ollama_kimi.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 8923 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/ollama_glm.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  glm (PACKET-FED, glm-5.3:cloud, 11169 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/ollama_deepseek.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 1727 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-25",
+     "grade": "SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/ollama_minimax.txt",
+     "note": "#549 v6's own pass (panel_20260925_194340, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_194340/).  minimax (PACKET-FED, minimax-m3:cloud, 10303 bytes).  Its verdict, verbatim: SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-25",
+     "grade": "WALLED (seat failure)",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/codex.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  codex (FILE-READING, GPT-6 Astra max, 892 bytes): `You've hit your usage limit ... try again at Sep 26th, 2026 7:01 AM` -- a SEAT FAILURE, not agreement; re-fired after the reset.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "agy",
+     "date": "2026-09-25",
+     "grade": "SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/agy.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  agy (FILE-READING, gemini-3.8-flash-high, 14759 bytes).  Its verdict, verbatim: SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/grok.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  grok (FILE-READING, grok-4.7 xhigh, plan mode, 10974 bytes).  Its verdict, verbatim: SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "kimi",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/ollama_kimi.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  kimi (PACKET-FED, kimi-k3:cloud (the kimi CLI returned a subscription-access 403: kimi.txt), 9140 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "glm",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/ollama_glm.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  glm (PACKET-FED, glm-5.3:cloud, 9595 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "deepseek",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/ollama_deepseek.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  deepseek (PACKET-FED, deepseek-v4-pro:cloud, 5608 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "minimax",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/ollama_minimax.txt",
+     "note": "#549 v6's adjudication pass (the chain closes: SHIP WITH WORDING) (panel_20260925_201529, durable regress/artifacts/fbctrlportkill_20260924/panels/panel_20260925_201529/).  minimax (PACKET-FED, minimax-m3:cloud, 4397 bytes).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "codex",
+     "date": "2026-09-24",
+     "grade": "DEDICATED: PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/codex_p1dedicated.txt",
+     "note": "#549 PASS 1: the DEDICATED codex job (tools/cxlaunch.sh).  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-24",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/codex_p2dedicated.txt",
+     "note": "#549 PASS 2: the DEDICATED codex job.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-24",
+     "grade": "ASTRA: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/codex_f2astra.txt",
+     "note": "#549 the F2 pass: the GPT-6 Astra ADJUDICATION (the second adjudicator beside the flagship seat).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-25",
+     "grade": "DEDICATED: WALLED (seat failure)",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/codex_closingded/",
+     "note": "#549 the CLOSING pass: the DEDICATED codex job WALLED (tools/cxlaunch.sh: usage limit to 2026-09-26 07:01) -- a SEAT FAILURE, not agreement.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-24",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/grok_dedicated_p2.txt",
+     "note": "#549 PASS 2: the DEDICATED adversarial grok job.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-24",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/grok_dedicated_f2.txt",
+     "note": "#549 the F2 pass: the DEDICATED adversarial grok job.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/grok_dedicated_closing.txt",
+     "note": "#549 the CLOSING pass: the DEDICATED adversarial grok job.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/grok_dedicated_close2.txt",
+     "note": "#549 the CLOSING F2 pass: the DEDICATED adversarial grok job.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/panels/grok_dedicated_c3.txt",
+     "note": "#549 the VERIFYING pass: the DEDICATED adversarial grok job.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "DEDICATED: SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/pass_v6/grok_dedicated_v6.txt",
+     "note": "#549 v6's own pass: the DEDICATED adversarial grok job (it raised N1, the latch x bit joint).  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "grok",
+     "date": "2026-09-25",
+     "grade": "DEDICATED: SHIP",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/pass_v6/grok_dedicated_f2_v6.txt",
+     "note": "#549 v6's adjudication pass: the DEDICATED grok job, asked to be harder on its own N1 -- it OVERTURNED it, from the carrier's full text.  Its verdict, verbatim: SHIP.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "opus5",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_p1b.md",
+     "note": "#549 PASS 1, the Opus 5 MEASURING seat's RE-ISSUE (agent a86286fc...; claude-opus-5-5, 15:54:39Z by the transcript).  Same model family as the main loop: badge s.  Its verdict, verbatim: PROCEED WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "opus5",
+     "date": "2026-09-24",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_p1.md",
+     "note": "[NOT A SEAT ANSWER] The Opus seat's FIRST pass-1 answer: written by claude-opus-4-8 (15:44:18Z) after refusal events -- a FALLBACK, not the seat; its measurements (opus549_measured/) are evidence (CORRECTIONS.md, provenance)."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_p2.md",
+     "note": "#549 PASS 2, the Opus 5 MEASURING seat (agent a86286fc...; claude-opus-5-5, 16:45:07Z).  READ and used by the F2 packet, never saved when it landed; RECOVERED verbatim from the transcript 2026-09-25 (CORRECTIONS.md).  Same model family as the main loop: badge s.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_f2.md",
+     "note": "#549 the F2 pass, a FRESH Opus 5 MEASURING seat (agent aabc7b9d...; claude-opus-5-5 throughout) -- the previous agent's F2 re-fire was stopped by a safety classifier before it measured anything (a seat failure).  Same model family as the main loop: badge s.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_close.md",
+     "note": "#549 the CLOSING pass, the Opus 5 MEASURING seat (agent aabc7b9d..., resumed; claude-opus-5-5): ten 73/73 escapes MEASURED inside the DEPENDS-ON enumeration.  Same model family as the main loop: badge s.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_close2.md",
+     "note": "#549 the CLOSING F2 pass, the Opus 5 MEASURING seat (agent aabc7b9d..., resumed; claude-opus-5-5).  Same model family as the main loop: badge s.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_close3.md",
+     "note": "#549 the VERIFYING pass, the Opus 5 MEASURING seat's RE-ISSUE (agent aabc7b9d...; claude-opus-5-5): the compare narrowed to ignore a RANGE of bits scored the full 111 rows -- the floor breach v6 repairs.  Same model family as the main loop: badge s.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/opus5_close3_FALLBACK_opus48.md",
+     "note": "[NOT A SEAT ANSWER] The Opus seat's FIRST verifying-pass answer: written by claude-opus-4-8 after a refusal -- a FALLBACK, not the seat."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/pass_v6/opus5_pass_v6_FALLBACK_opus48.md",
+     "note": "[NOT A SEAT ANSWER] The Opus seat on v6's own pass, TWICE a fallback (this and opus5_pass_v6b_FALLBACK_opus48.md, both claude-opus-4-8 after refusal events) -- a SEAT FAILURE for that pass; the measurements are cited as artifacts."
+    },
+    {
+     "phase": "review",
+     "seat": "opus5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/pass_v6/opus5_f2_v6.md",
+     "note": "#549 v6's adjudication pass, the Opus 5.5 MEASURING seat (agent a0e1c60f...; claude-opus-5-5, 143 runs, clean): D1 and D2 MEASURED 117/117; the tripwire argument measured false above bit 32; the one-diff repair prototyped (61/61 on the fix in 9.7 s).  Same model family as the main loop: badge s.  Its verdict, verbatim: SHIP WITH CHANGES.  Dispositions: CHANGELOG #549, regress/artifacts/fbctrlportkill_20260924/ (the F2 packets, CORRECTIONS.md and the flagship rulings)."
+    },
+    {
+     "phase": "research",
+     "seat": "fable5",
+     "date": "2026-09-24",
+     "grade": "PROCEED WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/fable5_p1b.md",
+     "note": "#549 PASS 1, the FLAGSHIP seat's RE-ISSUE, fired LAST (agent a79342bd...; claude-fable-5-1, 16:12:11Z).  Verdict, verbatim: PROCEED WITH CHANGES."
+    },
+    {
+     "phase": "research",
+     "seat": "fable5",
+     "date": "2026-09-24",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/fable5_p1.md",
+     "note": "[NOT A SEAT ANSWER] The flagship seat's FIRST pass-1 answer: written by claude-opus-4-8 (16:07:35Z) after refusal events -- a FALLBACK, not the flagship seat (CORRECTIONS.md, provenance)."
+    },
+    {
+     "phase": "review",
+     "seat": "fable5",
+     "date": "2026-09-24",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/fable5_f2.md",
+     "note": "#549 the F2 adjudication, the FLAGSHIP seat, fired LAST (agent a4db9e2e...; claude-fable-5-1 throughout).  Verdict, verbatim: SHIP WITH CHANGES."
+    },
+    {
+     "phase": "review",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/closing2/fable5_close2.md",
+     "note": "#549 the CLOSING F2 adjudication, the FLAGSHIP seat's RE-ISSUE (agent a3b5b557...; its first answer was an opus-4-8 fallback, not recorded as the seat): no floor breach; the repair owes its own pass.  Verdict, verbatim: SHIP WITH CHANGES."
+    },
+    {
+     "phase": "review",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH WORDING",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/pass_v6/fable5_f2_v6.md",
+     "note": "#549 v6's adjudication, the FLAGSHIP seat, fired LAST (agent a60d8fda...; claude-fable-5-1): D1 (0), D2 DISCLOSED -- a relational compare's generating set is its three regions; the one-diff repair FILED as fbctrlportdebt.  Verdict, verbatim: SHIP WITH WORDING."
+    },
+    {
+     "phase": "regress",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "SHIP WITH WORDING",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/pass_v6/fable5_f2_v6.md",
+     "note": "#549 FINAL, the FLAGSHIP seat (regress is fable5-only): SHIP WITH WORDING on v6; v6c carries the ruling's texts, comment-only (v6b lost ten quoted code spans to control-A bytes, found by GPT-6 Astra; the probe's AST minus its docstring identical; gate 16 PASS, the probe log byte-identical: gates_v6c/).  Verdict, verbatim: SHIP WITH WORDING."
+    },
+    {
+     "phase": "review",
+     "seat": "codex",
+     "date": "2026-09-26",
+     "grade": "CONFIRM WITH CHANGES",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/final549/codex_astra549.txt",
+     "note": "#549 ASTRA -- the second adjudicator (GPT-6 Astra max, tools/cxlaunch.sh, pointer form), after the 2026-09-26 07:01 reset, owner ruling 2026-09-25: \"Fable now, Astra confirms\".  Its verdict, verbatim: CONFIRM WITH CHANGES."
+    }
+   ],
+   "witness": "probe:regress/artifacts/fbctrlportkill_20260924/witness_HEAD/fbctrl_port_witness.py.txt -- on HEAD f4f601c4's unmodified -E testmips, arm K (PORT=9 refused-then-stored, then a DATA read) ends the process exit=1 while arm L's LIVENESS and DEVICE-SIGNATURE controls are green (witness_HEAD.out); the detector regress/fbctrl_port_probe.py is 117/117 on the fix and red on HEAD's arm (M_revert 54/117, table6/TABLE.out)",
+   "closure": {
+    "by": "fable5-mainloop",
+    "badge": "A",
+    "note": "#549 CLOSES.  dev_fbctrl.c's PORT arm refuses any selector >= 8 compared on the full 64-bit value, keeps the previous one and announces once per device; the DATA arm's check stays as a tripwire.  The detector (fbctrl_port_probe.py, 117 rows, 16 sessions) went through eight panels and six variant tables (the last: 297 edits, 267 red, 30 disclosed, zero prediction mismatches); the verifying pass's floor breach was repaired in-round (v6, session B), and v6's adjudication closed the chain with wording (v6b, then v6c with GPT-6 Astra's corrections, comment-only).  codex walled on the five 2026-09-25 panels (re-fired and Astra's confirmation after the 07:01 reset).  Filed: fbctrlcmdkill, fbctrloffkill, fbctrltwoinst, scoreclaimsrawdoc, fbctrlportdebt.  Badge A: the main loop adjudicated its own round's records."
+   }
   },
   {
    "id": "exitunowned76",
@@ -53000,7 +53764,7 @@
    "sev": "MED",
    "state": "closed",
    "opened": "2026-09-25",
-   "commits": "",
+   "commits": "f5e155ac",
    "title": "gate 2's SC_EXEMPT carried wdc_identify to 2026-09-27; DISCHARGED rather than re-dated -- diff_wdc_identify.c gains a self-check on chk() and a device-independent row_cmp() (24 of 128 comparisons, by owner ruling), a covered-failure report gate 2 reads, and a contract saying what an in-file check can and cannot see; six revisions, six review passes",
    "witness": "harness:regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out -- 359 jobs scored by analyze8.py's emulation of gate 2's wdc block and lane: every shape the contract says is caught red on dropold, drqring and w57hi; the 41 table rows re-run with the real lib.sh (opus551_measured_f/analyze9.out) and the real selfmutant.py on five cells (reallane.out); M19: opus551_measured_f2/analyze_f2.out and reallane_f2.out",
    "hold_question": "",
@@ -53885,6 +54649,111 @@
      "grader": "",
      "ev": "regress/artifacts/wdcidselfcheck_20260925/",
      "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #551's review -- the finding, its seats and its evidence are in OUTSTANDING_BUGS.md (2026-09-25 section) and regress/artifacts/wdcidselfcheck_20260925/."
+    }
+   ]
+  },
+  {
+   "id": "fbctrlcmdkill",
+   "title": "dev_fbctrl.c: any command other than 0-2 ends the emulator process, including the documented but unimplemented FILL and COPY -- guest-reachable through one DATA write at selector 0",
+   "sev": "HIGH",
+   "state": "open",
+   "opened": "2026-09-25",
+   "commits": "",
+   "witness": "",
+   "hold_question": "",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/",
+     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #549's review -- the finding, its seats and its evidence are in OUTSTANDING_BUGS.md (2026-09-25 section) and regress/artifacts/fbctrlportkill_20260924/."
+    }
+   ]
+  },
+  {
+   "id": "fbctrloffkill",
+   "title": "dev_fbctrl.c: any access at an offset other than 0x00/0x10 ends the emulator process",
+   "sev": "MED",
+   "state": "open",
+   "opened": "2026-09-25",
+   "commits": "",
+   "witness": "",
+   "hold_question": "",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/",
+     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #549's review -- the finding, its seats and its evidence are in OUTSTANDING_BUGS.md (2026-09-25 section) and regress/artifacts/fbctrlportkill_20260924/."
+    }
+   ]
+  },
+  {
+   "id": "fbctrltwoinst",
+   "title": "#549's per-device latch is untested across two fbctrl instances; the route exists (two testmips machines from one config file) and the process-global mutant was measured red there",
+   "sev": "LOW",
+   "state": "open",
+   "opened": "2026-09-25",
+   "commits": "",
+   "witness": "",
+   "hold_question": "",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/",
+     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #549's review -- the finding, its seats and its evidence are in OUTSTANDING_BUGS.md (2026-09-25 section) and regress/artifacts/fbctrlportkill_20260924/."
+    }
+   ]
+  },
+  {
+   "id": "scoreclaimsrawdoc",
+   "title": "check_score_claims.py reads NO docstring written with a string prefix, while reporting that it checked the file",
+   "sev": "MED",
+   "state": "open",
+   "opened": "2026-09-25",
+   "commits": "",
+   "witness": "",
+   "hold_question": "",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/",
+     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #549's review -- the finding, its seats and its evidence are in OUTSTANDING_BUGS.md (2026-09-25 section) and regress/artifacts/fbctrlportkill_20260924/."
+    }
+   ]
+  },
+  {
+   "id": "fbctrlportdebt",
+   "title": "the two classes #549's probe discloses -- the latch crossed with one bit (58 bits open at latch-clear; from bit 32 up a silent truncation onto a legal port) and a refusal that writes a value's only anchor (60 values) -- and the measured one-diff close: 61 fresh devices at a second anchor (61/61 on the fix, 9.7 s)",
+   "sev": "MED",
+   "state": "open",
+   "opened": "2026-09-25",
+   "commits": "",
+   "witness": "",
+   "hold_question": "",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "fable5",
+     "date": "2026-09-25",
+     "grade": "",
+     "grader": "",
+     "ev": "regress/artifacts/fbctrlportkill_20260924/",
+     "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) from #549's review -- the finding, its seats and its evidence are in OUTSTANDING_BUGS.md (2026-09-25 section) and regress/artifacts/fbctrlportkill_20260924/."
     }
    ]
   }

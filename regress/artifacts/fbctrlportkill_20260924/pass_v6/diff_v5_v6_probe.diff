@@ -1,0 +1,211 @@
+--- regress/fbctrl_port_probe.py.v5
++++ regress/fbctrl_port_probe.py.v6
+@@ -3,7 +3,8 @@
+ 
+ machine_test.c installs `fbctrl addr=0x12f00000` in testmips's own setup (and in default_test() for the other test
+ machines).  Every access below is a real guest sb/sh/sw/sd/lw/ld placed with `put w` and executed through real address
+-decode and memory_rw -- stepped one instruction at a time, except session F, which free-runs to a breakpoint.  No machine
++decode and memory_rw -- stepped one instruction at a time, except session F, which free-runs to a breakpoint (session B
++also steps a `dsll` between its stores, to double its value register).  No machine
+ or device is added to reach the site.  t0 = 0xffffffffb2f00000, kseg1 of DEV_FBCTRL_ADDRESS; PORT is +0x00, DATA +0x10.
+ 
+ THE DEFECT (HEAD before #549): the PORT arm STORED the selector, as an int, with only a warning.  An int out of range --
+@@ -50,39 +51,54 @@
+      refusal, 0x100000003 by sd (3 as an int, never 5) -- PORT keeps 5 and the count is still 1; COMMAND reads back 1.
+   Z  silence across selectors: PORT=2 and its FIRST refusal (9), then PORT=0, 1, 2, 3 and 4, each followed by a refusal
+      of 9 -- the count is still 1 after all six, and PORT keeps 4.
++  B  single bits: PORT=5, then EVERY single-bit value from 2^3 up that the width can carry -- 2^3..2^7 by sb,
++     2^3..2^15 by sh, 2^3..2^31 by sw, 2^3..2^63 by sd, 108 refusals -- with PORT set to 5 again before each width
++     and read back once after it; a register doubles between stores (dsll).  A refusal that let one of them through
++     would store it as an int -- 2^k, INT_MIN or 0, never 5 -- and every later refusal of that width would keep it,
++     so one read per width sees it.  The count must be exactly 1 after all 108.  Added by the verifying pass (the
++     Opus 5.5 seat): the compare narrowed to ignore bits 5-7, 9-31 or 34-62 scored the full 111 rows, because no v5
++     refusal had all of its bits from 3 up inside one of those ranges.
+ 
+ CONTRACT (clause e) -- AN ENUMERATION, NOT A LIST.
+ THE FLOOR.  The fixed PORT arm's body tests three things -- the access direction, the written value (`idata >=
+ DEV_FBCTRL_NPORTS`, on all 64 bits) and the latch (`!warned_port`) -- and it reads and writes `current_port`.  Every
+-cell of those is held: the value's magnitude, width and class, the latch unset and set, a read and a write.  The
++cell of those is held: the value's magnitude, width and class, every bit the compare tests set alone at every width
++(B), the latch unset and set, a read and a write.  The
+ previous selector (current_port's VALUE), the COMMAND cell and the data cells are NOT tested by the body -- the fix
+ makes no partition of them -- so an edit conditioned on one of them is coverage beyond the floor (clause e): the rows
+ hold the values listed below and claim nothing more.  For each EFFECT, each value listed is held by the session(s)
+ named, and the one-axis edit of every listed cell is measured red in
+-regress/artifacts/fbctrlportkill_20260924/table5/TABLE.out.  This is the class closure: pass 2, the F2 pass, the
+-closing pass and the closing F2 pass each found such an edit on a value the rows had left empty.
+-  a refusal keeps the previous selector -- width sb sh sw sd (P, W); previous 0 (F), 1 (V), 2 3 (X), 4 (X4, Z), 5 (P,
+-      W, Y), 6 (W, X6), 7 (P, V, X7); COMMAND 0 (P), 1 (Y), 2 (V); latch unset (each session's first refusal) and set
+-      (the rest)
++regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out (under an earlier edit's name where the generated text
++was identical to it: table5/CELLMAP.out) -- except the read of selector 0, whose edit is EQUIVALENT (NOT CLAIMED
++(4)).  This is the class closure: pass 2, the F2 pass, the closing pass and the closing F2 pass each found such an
++edit on a value the rows had left empty, and the verifying pass found one on a range of bits (B).
++  a refusal keeps the previous selector -- width sb sh sw sd (P, W, B); previous 0 (F), 1 (V), 2 3 (X), 4 (X4, Z), 5
++      (P, W, Y, B), 6 (W, X6), 7 (P, V, X7); COMMAND 0 (P, B), 1 (Y), 2 (V); latch unset (the first refusal of P, F,
++      V, W, X2-X7, Y and B -- Z's and R's first refusals are never read back) and set (the rest)
+   the first refusal announces once -- width sw (P, V, F, Y, Z) sb (W, X6) sh (X2, X7) sd (X3, X4); previous 0 (F), 1
+       (V), 2 (X2, Z), 3 4 6 7 (X), 5 (P, W, Y); COMMAND 0 (P, F, W, X, Z), 1 (Y), 2 (V); the first-refused value from 8
+       (P, W) to all-ones (X4)
+-  the later refusals are silent -- width sb (P) sh (P, W) sw (P, V, W, R, Z) sd (P, V, W, Y); previous 0-4 (Z), 5 (P, W,
+-      R, Y), 6 (W), 7 (P, V); COMMAND 0 (P, W, Z), 1 (Y), 2 (V, R); across PORT reads, a DATA write, a DATA read, a NOP
+-      and a GET_RESOLUTION (R), a SET_RESOLUTION (Y), accepted selectors and twelve refusals (P)
++  the later refusals are silent -- width sb (P, V, B) sh (P, W, B) sw (P, V, W, R, Z, B) sd (P, V, W, Y, B); previous
++      0-4 (Z), 5 (P, W, R, Y, B), 6 (W), 7 (P, V); COMMAND 0 (P, W, Z, B), 1 (Y), 2 (V, R); across PORT reads, a DATA
++      write, a DATA read, a NOP and a GET_RESOLUTION (R), a SET_RESOLUTION (Y), accepted selectors, twelve refusals
++      (P) and 108 (B)
+   the announce names the refused value -- 0x8 (P), 0x9 (F, V, X2, X6, Y), 0x100 (X7), the wide 0x100000005 (X3),
+       all-ones (X4): width sw (P, F, V, Y) sb (X6) sh (X2, X7) sd (X3, X4); previous 0 (F), 1 (V), 2 3 4 6 7 (X), 5 (P,
+       Y); COMMAND 0 (P, F, X), 1 (Y), 2 (V)
+-  a PORT read returns the selector -- lb lh ld (W) and lw (every session); every selector 0-7 (A); COMMAND 0 (A), 1
+-      (Y), 2 (V); latch unset (A) and set (P)
++  a PORT read returns the selector -- lb lh ld (W) and lw (every session but K); every selector 0-7 (A), though a
++      read of selector 0 cannot tell a skipped load from a real one (odata starts at 0: NOT CLAIMED (4)); COMMAND 0
++      (A), 1 (Y), 2 (V); latch unset (A) and set (P)
+   a refusal leaves the cells alone -- all eight cells after refusals of 9, 16, 0x100000003 (sd), 0xff (sb) and 8 at
+       previous selector 7 with COMMAND 2 (V); X1 after a refusal of 9 (sw) at previous 1 with COMMAND 2 (V); port 5's
+-      cell after a refused 9 (sw) at previous 5 with COMMAND 0 (K) -- and no other cell, width, selector or COMMAND
+-      value (NOT CLAIMED (8))
++      cell after a refused 9 (sw) at previous 5 with COMMAND 0 (K); COMMAND itself after a refused 0x100000003 (sd) at
++      previous 5 with COMMAND 1 (Y -- its second refusal only: the SET_RESOLUTION before it rewrites COMMAND, so a
++      write by the first refusal would be overwritten before the read) -- and no other cell, width, selector or
++      COMMAND value (NOT CLAIMED (8))
+   an accepted selector is stored -- 0 and 7 at every width (W, A), every selector at one width (A); latch unset (A, W)
+       and set (V's fills and Z's selections, after their first refusals)
+ Beyond the effects: the store of an out-of-range value, clamped, masked or reset; the compare narrowed or signed (bit
+-63 alone, bits 32-33, 32-bit truncation); a boundary slip at 8; an announce on an accepted selector; an announce
++63 alone, bits 32-33, 32-bit truncation) or made to ignore any set of the bits it tests, at any width (B: every
++single-bit value is refused); a boundary slip at 8; an announce on an accepted selector; an announce
+ demoted to debug() (F); an announce suppressed above or below any threshold, or on the sign bit (the first refusals
+ run from 8 to all-ones); and the pre-#549 process exit on DATA.
+ NOT CLAIMED (disclosed).  (0) An edit conditioned on TWO axes at once -- a joint cell such as "refuse 9 only by sb after
+@@ -99,28 +115,37 @@
+ `exit(1)`, weakening `>=` to `>`, or swapping its operand -- is unreachable while the PORT arm refuses, because no
+ out-of-range selector is ever stored; the check is KEPT as a tripwire.  It exits before it indexes, so an index of 8
+ cannot reach `warned_port` while it stands, and `port[8]` would be undefined behaviour, not a defined alias of the
+-latch.  (3) An exception for one value no row writes (`idata != 10`), a re-announce period of twelve or more, an
+-announce suppressed or mangled only for one value no session refuses first (`idata != 16`), and an announce demoted to
+-debug() for some values but not F's 9 -- only a free-running session tells debug() from fatal() here, and F is the
+-only one: the value space is 2^64, and no finite row set closes "except value k".  (A threshold is not in this class;
+-see "Beyond the effects".)  (4) Equivalent edits: storing `(uint32_t) idata` (it compiles to the fix's own binary),
+-reordering the struct's fields, masking the PORT read with 7 (the selector is always 0..7).  (5) `printf` in place of
+-`fatal()`: indistinguishable in THIS invocation's output.  (6) Narrowing the DATA path's widths, and the device's OTHER
++latch.  (3) An exception for one value no row writes (`idata != 10`), a latch that re-arms only after more refusals than
++any session makes (B makes 108), an announce suppressed or mangled only for one value no session refuses first
++(`idata != 16`) or only for a CLASS of values no first refusal belongs to (values whose bits all lie in 9..31, say:
++the first refusals are 8, 9, 0x100, 0x100000005 and all-ones, and the latch lets only a session's first refusal
++announce), and an announce demoted to debug() for some values but not F's 9 -- only a free-running session tells
++debug() from fatal() here, and F is the only one: the value space is 2^64, and no finite row set closes "except
++value k".  (A threshold is not in this class, nor is a range of bits the COMPARE ignores: see "Beyond the
++effects".)  (4) Equivalent edits: storing `(uint32_t) idata`, `(int) idata` or `idata & 7` (only 0..7 reach that
++store, and each compiles to the fix's own binary), reordering the struct's fields, masking the PORT read with 7
++(the selector is always 0..7), a PORT read that skips its load at selector 0 (odata starts at 0), and a latch set
++to any nonzero value in place of 1.  (5) `printf` in place of `fatal()`, or the announce without its trailing
++newline: indistinguishable in THIS invocation's output.  (6) Narrowing the DATA path's widths, and the device's OTHER
+ two process-ending calls -- fbctrl_command()'s default (any command other than 0-2, including the documented but
+ unimplemented FILL/COPY) and the access function's default (any offset other than 0x00/0x10): filed as `fbctrlcmdkill`
+ and `fbctrloffkill`.  (7) Edits to this instrument's own logic are reviewed, not rowed.  (8) The data cells' VALUES are
+ not an axis the rows enumerate.  An edit conditioned on a cell's value (`port[COLOR_B] == 0`, `port[Y1] != 0`) is
+-caught only where a row's refusal or read holds a triggering state, and the states held are: every cell 0 (F, W, X),
++caught only where a row's refusal or read holds a triggering state, and the states held are: every cell 0 (F, W, X,
++Z, B),
+ port 5 at 0x2a (P, K, R), X1 at 123 with COMMAND 2 (V's first refusal), ports 1-7 at 0x11*p with COMMAND 2 (V's later
+-refusals and the PORT read right after them), and COMMAND 1 (Y).  Effect 4 is claimed only as listed: no cell is read
+-back after an `sh` refusal, after a refusal at previous selector 0, 2, 3, 4 or 6, or under COMMAND 1, and port 5's is
+-the only cell read back after a refusal at previous 5 or under COMMAND 0.
++refusals and the PORT read right after them), and COMMAND 1 (Y).  The cells-alone effect is claimed only as listed:
++no cell is read back after an `sh` refusal or after a refusal at previous selector 0, 2, 3, 4 or 6, and after a
++refusal at previous 5 the only cells read back are port 5's under COMMAND 0 (K) and COMMAND's under COMMAND 1 (Y,
++its second refusal only).
+ LIMITS OF A ROW.  Session P re-selects PORT=5 before each refusal, so a refused selector cannot carry over into the next
+ row WHEN THE LEGAL SELECTION LANDS; an edit that also refuses legal selections defeats the re-select, and later rows
+ then inherit its value (M_acclatch).  Every read-back is taken after its session ends, so a session that dies part-way
+ blanks the rows it had already passed (M_acc4: session A died at step 5 and every accept row read `-`).  And session A's
+ "accept selector 0 written by sw" cannot see an IGNORED store -- the selector is already 0 at power-on -- so the cell
+-"0 by sw is accepted" is held by W's row after PORT=5, not by A's.
++"0 by sw is accepted" is held by W's row after PORT=5, not by A's.  Session B reads PORT once per width, so each of
++its rows says that SOME single-bit value of that width got through, not which: the row prints the last one's stored
++int.
+ 
+ Every stepped word is compared with the emulator's own step line (the hand-assembled-encoding trap).
+ Output: one row per check, then FBCTRLP_CONTROL=OK|FAILED, FBCTRLP_RESULT=n/t, FBCTRLP_DONE.  The exit status is 0
+@@ -152,10 +177,14 @@
+ 
+ 
+ def ins(op, rt, off, base="t0"):
++    if op == "dsll":                                     # SPECIAL dsll rt,rt,off: rd == rt, the shift in sa
++        return (REG[rt] << 16) | (REG[rt] << 11) | ((off & 31) << 6) | 0x38
+     return (OPS[op] << 26) | (REG[base] << 21) | (REG[rt] << 16) | (off & 0xffff)
+ 
+ 
+ def text(op, rt, off, base="t0"):
++    if op == "dsll":
++        return "dsll %s,%s,%d" % (rt, rt, off)
+     return "%s %s,%d(%s)" % (op, rt, off, base)
+ 
+ 
+@@ -171,6 +200,8 @@
+ assert ins("lb", "a1", 0) == 0x81050000
+ assert ins("lh", "a2", 0) == 0x85060000
+ assert ANCHOR == 0x3c0f0000
++assert ins("dsll", "t1", 1) == 0x00094878
++assert ins("dsll", "t4", 1) == 0x000c6078
+ 
+ 
+ def stub_path():
+@@ -490,6 +521,26 @@
+            ("X7", 7, "sh", 0x100)]
+ 
+ 
++#  B: every single-bit value from 2^3 up that each width can carry, refused after PORT=5.  One register per width
++#  starts at 8 and doubles after each store (dsll); PORT is read once per width, after all of that width's refusals
++#  -- a refusal that let a value through would store it as an int (2^k, INT_MIN or 0, never 5), and the later
++#  refusals of that width would keep it.  The count is sampled after the last of the 108 refusals.
++B_GROUPS = [("sb", "t1", 8, "s0"), ("sh", "t2", 16, "s1"), ("sw", "t3", 32, "s2"), ("sd", "t4", 64, "s3")]
++PROG_B, REGS_B = [], [("t0", FBCTRL), ("a0", 5)]
++for _w, _r, _bits, _rb in B_GROUPS:
++    REGS_B += [(_r, 8), (_rb, 0xdead)]
++    PROG_B.append(("sw", "a0", 0, None))                               # PORT=5
++    for _k in range(3, _bits):
++        PROG_B += [(_w, _r, 0, None), ("dsll", _r, 1, None)]
++    PROG_B.append(("lw", _rb, 0, None))
++READS_B = [g[3] for g in B_GROUPS]
++NB = sum(g[2] - 3 for g in B_GROUPS)
++assert NB == 108
++#  the tag goes on the LAST refusal (2^63 by sd), so the count is read after all of them
++_last = max(i for i, s in enumerate(PROG_B) if s[0] in ("sb", "sh", "sw", "sd") and s[1] != "a0")
++PROG_B[_last] = PROG_B[_last][:3] + ("blast",)
++
++
+ def prog_x(k, w, v):
+     return ([("sw", "a0", 0, None), (w, "t1", 0, "x"), ("lw", "s0", 0, None)],
+             [("t0", FBCTRL), ("a0", k), ("t1", v), ("s0", 0xdead)])
+@@ -508,6 +559,7 @@
+         W = session("W", PROG_W, REGS_W, READS_W, stub)
+         Y = session("Y", PROG_Y, REGS_Y, ["s0", "s1", "s2"], stub)
+         Z = session("Z", PROG_Z, REGS_Z, ["s0"], stub)
++        B = session("B", PROG_B, REGS_B, READS_B, stub)
+         X = []
+         for lab, k, w, v in X_CELLS:
+             prog, regs = prog_x(k, w, v)
+@@ -529,7 +581,7 @@
+     ctl.append(row("C SIGNATURE: Y1 zeroed by GET_RESOLUTION", hx(C["vals"].get("s3")), "0x0",
+                    "(prefilled 123)"))
+     row("C nothing refused, no (once) line", len(ONCE_RE.findall(C["buf"])), 0)
+-    for lab, S in (("A", A), ("P", P), ("R", R), ("K", K), ("V", V), ("W", W), ("Y", Y), ("Z", Z)):
++    for lab, S in (("A", A), ("P", P), ("R", R), ("K", K), ("V", V), ("W", W), ("Y", Y), ("Z", Z), ("B", B)):
+         ctl.append(row("%s disassembly of every stepped word" % lab, len(S["badis"]), 0))
+     ctl.append(row("X2-X7 disassembly of every stepped word", sum(len(S["badis"]) for S in X), 0))
+     print("ACCEPT (session A: %s %d/%d)" % (A["status"], A["steps"], A["n"]))
+@@ -590,6 +642,11 @@
+     row("Z the first refusal (after PORT=2) announces", Z["once_after"].get("z1st"), 1)
+     row("Z announce still exactly 1 after refusals at selectors 0-4", Z["once_after"].get("zlast"), 1)
+     row("Z PORT keeps 4 after its refusals", hx(Z["vals"].get("s0")), "0x4")
++    print("SINGLE BITS (session B: %s %d/%d)" % (B["status"], B["steps"], B["n"]))
++    for _w, _r, bits, rb in B_GROUPS:
++        row("B refuse every single bit 2^3..2^%d (%s), PORT keeps 5" % (bits - 1, _w), hx(B["vals"].get(rb)),
++            "0x5")
++    row("B announce exactly 1 across its %d refusals" % NB, B["once_after"].get("blast"), 1)
+     print("FIRST REFUSALS (sessions X2-X7: %s)" % " ".join("%s %d/%d" % (S["status"], S["steps"], S["n"])
+                                                           for S in X))
+     for (lab, k, w, v), S in zip(X_CELLS, X):

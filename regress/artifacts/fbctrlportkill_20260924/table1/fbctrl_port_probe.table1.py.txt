@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+r"""#549 fbctrlportkill -- the DETECTOR for dev_fbctrl.c's port selector, on an UNMODIFIED `-E testmips`.
+
+machine_test.c installs `fbctrl addr=0x12f00000` in testmips's own setup (and in default_test() for the other test
+machines).  Every access below is a real guest sb/sh/sw/sd/lw placed with `put w` and executed through real address decode
+and memory_rw -- stepped one instruction at a time, except session F, which free-runs to a breakpoint.  No machine or
+device is added to reach the site.  t0 = 0xffffffffb2f00000, kseg1 of DEV_FBCTRL_ADDRESS; PORT is +0x00, DATA +0x10.
+
+THE DEFECT (HEAD before #549): the PORT arm STORED any selector with only a warning, and the DATA arm then called exit(1)
+on the stored int -- `sw 9` to PORT followed by any DATA access ended the emulator process.  #549 REFUSES a selector >= 8
+at the PORT arm (the previous, valid selector is kept) and announces the refusal once per device, `(once)`.
+
+SESSIONS (each on a fresh emulator)
+  C  controls: PORT=5, DATA=0x2a, read both back (LIVENESS); X1=123, COMMAND=GET_RESOLUTION, read X1 (DEVICE SIGNATURE:
+     the model zeroes X1/Y1 without X11 -- RAM at +0x10 would read back 2, the last value written there, and a banked
+     register WITHOUT command execution would read 123); no `(once)` line may appear (nothing is refused).
+  A  accept: all EIGHT selectors, written at widths 1, 2, 4 and 8, each read back through PORT; ports 1-7 round-trip
+     a distinct DATA value (port 0 is COMMAND and is written only with NOP).
+  P  refusal, anchored to a previous selector: PORT=5 (DATA 0x2a), then nine out-of-range writes -- 9, 8, 16 (sw),
+     0x200000000, 0x100000003, all-ones (sd), all-ones (sw), 0xff (sb), 0x100 (sh) -- each followed by a PORT read
+     that must still say 5; then PORT=7 and a refused 9 must leave 7.  The `(once)` count must be exactly 1 right
+     after the FIRST refusal and still 1 after the last.
+  K  the witness pair, repaired: PORT=5, DATA=0x2a, PORT=9 refused, then a DATA READ (must survive and read port 5's
+     0x2a) and a DATA WRITE of 0x77 (must land in port 5: read back through PORT=5).
+  F  free-running: one refused PORT write, then `continue` to a breakpoint.  Stepping raises debug()'s verbosity, so a
+     refusal announced with debug() instead of fatal() would pass every stepped row; free-running it does not print.
+
+CONTRACT (clause e).  CATCHES: the store reached for an out-of-range value (or a clamped/masked/reset one), the compare
+narrowed or signed (bit 63, bits 32-33, 32-bit truncation), a boundary slip at 8, a refusal applied to some widths only,
+a legal selector refused, a refusal that rewrites the previous selector, a latch never set / set late / keyed per value,
+an announce demoted to debug(), and the pre-#549 process exit on DATA.  NOT CLAIMED: a process-global latch instead of
+the per-instance field (every machine installs ONE fbctrl; adding a device to reach a second would be laundering); the
+deletion of the DATA arm's range check, which a correct PORT arm makes unreachable; and the device's OTHER two
+process-ending calls -- fbctrl_command()'s default (any command other than 0-2, including the documented but
+unimplemented FILL/COPY; a refused selector at power-on leaves COMMAND selected, so a following DATA write of such a
+value reaches it) and the access function's default (any offset other than 0x00/0x10).  Those are filed.
+
+Every stepped word is compared with the emulator's own step line (the hand-assembled-encoding trap).
+Output: one row per check, then FBCTRLP_CONTROL=OK|FAILED, FBCTRLP_RESULT=n/t, FBCTRLP_DONE.
+usage: fbctrl_port_probe.py <gxemul-binary>
+"""
+import os
+import pty
+import re
+import select
+import signal
+import sys
+import time
+
+BIN = sys.argv[1]
+
+STUBADDR = 0xffffffff80100000
+CODE = 0xffffffff80100020
+FBCTRL = 0xffffffffb2f00000
+
+ONCE_RE = re.compile(r"\[ fbctrl: port number 0x[0-9a-f]+ is out of range; the selector is unchanged \(once\) \]")
+
+REG = dict(zr=0, v0=2, v1=3, a0=4, a1=5, a2=6, a3=7, t0=8, t1=9, t2=10, t3=11, t4=12, t5=13, t6=14, t7=15,
+           s0=16, s1=17, s2=18, s3=19, s4=20, s5=21, s6=22, s7=23, t8=24, t9=25)
+OPS = dict(sb=0x28, sh=0x29, sw=0x2b, sd=0x3f, lw=0x23)
+
+
+def ins(op, rt, off, base="t0"):
+    return (OPS[op] << 26) | (REG[base] << 21) | (REG[rt] << 16) | (off & 0xffff)
+
+
+def text(op, rt, off, base="t0"):
+    return "%s %s,%d(%s)" % (op, rt, off, base)
+
+
+ANCHOR = (0x0f << 26) | (REG["t7"] << 16)                   # lui t7,0 -- the breakpoint anchor, never executed
+#  Pinned independently of the helper: a wrong register field would otherwise pass silently.
+assert ins("sw", "t1", 0) == 0xad090000
+assert ins("lw", "t2", 0x10) == 0x8d0a0010
+assert ins("sd", "t5", 0) == 0xfd0d0000
+assert ins("sb", "t8", 0) == 0xa1180000
+assert ins("sh", "t9", 0) == 0xa5190000
+assert ANCHOR == 0x3c0f0000
+
+
+def stub_path():
+    p = "/tmp/gx_fbctrl549p_%d.bin" % os.getpid()
+    with open(p, "wb") as f:
+        f.write(b"\x00\x00\x00\x00")
+    return p
+
+
+def session(label, prog, regs, reads, stub, free_run=False):
+    """prog: list of (op, rt, off, tag).  Steps each (or free-runs to an anchor after the last), then prints reads.
+    Returns dict: status, exit, badis, vals, once_after (tag -> cumulative (once) count right after that step), buf."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-E", "testmips", "-M", "64", "0x%x:%s" % (STUBADDR, stub)])
+        os._exit(127)
+    buf = ""
+    dead = [False]
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            dead[0] = True
+            return False
+        if not d:
+            dead[0] = True
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(mark=0, echo=None, timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            resp = buf[mark:]
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
+                return True
+        return False
+
+    def send(x, timeout=60):
+        b = (x + "\n").encode("latin1")
+        _mark = len(buf)
+        n = 0
+        try:
+            while n < len(b):
+                n += os.write(fd, b[n:])
+        except OSError:
+            dead[0] = True
+            return False
+        return wait(mark=_mark, echo=x if x else None, timeout=timeout)
+
+    words = [ins(op, rt, off) for op, rt, off, _t in prog] + [ANCHOR]
+    status, badis, vals, once_after, steps = "?", [], {}, {}, 0
+    if not wait(timeout=120):
+        status = "NO-PROMPT"
+    else:
+        for i, w in enumerate(words):
+            send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+        for name, val in regs:
+            send("%s=0x%x" % (name, val & 0xffffffffffffffff))
+        send("pc=0x%x" % CODE)
+        status = "SURVIVED"
+        if free_run:
+            send("breakpoint add 0x%x" % (CODE + 4 * len(prog)))
+            mark = len(buf)
+            b = b"continue\n"
+            try:
+                os.write(fd, b)
+            except OSError:
+                dead[0] = True
+            if not wait(mark=mark, timeout=60) or dead[0]:
+                status = "HOST-DIED" if dead[0] else "NO-BREAK"
+            elif ("%016x" % (CODE + 4 * len(prog))) not in buf[mark:] and \
+                    ("%08x" % ((CODE + 4 * len(prog)) & 0xffffffff)) not in buf[mark:]:
+                status = "NO-BREAK"
+            else:
+                steps = len(prog)
+                once_after["free"] = len(ONCE_RE.findall(buf))
+        else:
+            for i, (op, rt, off, tag) in enumerate(prog):
+                mark = len(buf)
+                if not send("step 1", timeout=30) or dead[0]:
+                    status = "HOST-DIED"
+                    break
+                steps += 1
+                seg = buf[mark:]
+                w = words[i]
+                m = re.search(r"%016x:?\s+%08x\s+([^\r\n<]+)" % (CODE + 4 * i, w), seg)
+                got = re.sub(r"\s+", " ", m.group(1)).strip() if m else "(no step line)"
+                if not got.startswith(text(op, rt, off)):
+                    badis.append("+0x%02x planted 0x%08x -> %r, expected %r" % (4 * i, w, got, text(op, rt, off)))
+                if tag:
+                    once_after[tag] = len(ONCE_RE.findall(buf))
+        if status == "SURVIVED":
+            for name in reads:
+                got = None
+                for _ in range(2):
+                    mark = len(buf)
+                    if not send("print %s" % name, timeout=30) or dead[0]:
+                        break
+                    m = re.search(r"(?m)^0x([0-9a-fA-F]+)\s*$", buf[mark:])
+                    if m:
+                        got = int(m.group(1), 16)
+                        break
+                vals[name] = got
+    try:
+        os.write(fd, b"quit\n")
+    except OSError:
+        pass
+    t1 = time.time()
+    while time.time() - t1 < 20.0:
+        if not rd(0.1):
+            break
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    rpid, st = 0, None
+    t1 = time.time()
+    while rpid == 0 and time.time() - t1 < 10.0:
+        try:
+            rpid, st = os.waitpid(pid, os.WNOHANG)
+        except OSError:
+            break
+        if rpid == 0:
+            time.sleep(0.05)
+    if rpid == 0:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            _, st = os.waitpid(pid, 0)
+        except OSError:
+            st = None
+    code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+    print("  session %-2s %-9s steps=%d/%d exit=%s once=%d" % (label, status, steps, len(prog), code,
+                                                              len(ONCE_RE.findall(buf))))
+    for b in badis:
+        print("      DISASSEMBLY MISMATCH: %s" % b)
+    return {"status": status, "exit": code, "badis": badis, "vals": vals, "once_after": once_after,
+            "steps": steps, "buf": buf, "n": len(prog)}
+
+
+RESULTS = []
+
+
+def row(name, got, want, note=""):
+    ok = got == want
+    RESULTS.append(ok)
+    print("  %-4s %-48s got=%-20s want=%-20s %s" % ("ok" if ok else "FAIL", name, got, want, note))
+    return ok
+
+
+def hx(v):
+    return "-" if v is None else "0x%x" % v
+
+
+M64 = 0xffffffffffffffff
+
+
+def lw32(v):
+    """what `lw` of a 32-bit device answer yields in a 64-bit register (sign-extended)"""
+    v &= 0xffffffff
+    return v | 0xffffffff00000000 if v & 0x80000000 else v
+
+
+# ---------------------------------------------------------------- sessions
+PROG_C = [("sw", "t1", 0, None), ("sw", "t3", 16, None), ("lw", "t4", 16, None), ("lw", "t5", 0, None),
+          ("sw", "t6", 0, None), ("sw", "t7", 16, None), ("sw", "s0", 0, None), ("sw", "s1", 16, None),
+          ("sw", "t6", 0, None), ("lw", "s2", 16, None)]
+REGS_C = [("t0", FBCTRL), ("t1", 5), ("t3", 0x2a), ("t6", 1), ("t7", 123), ("s0", 0), ("s1", 2),
+          ("t4", 0xdead), ("t5", 0xdead), ("s2", 0xdead)]
+
+#  A: selector p written at a rotating width and read back through PORT into s<k> (poisoned 0xdead first, so a
+#  read that never ran cannot pass -- selector 0 would otherwise match a register's reset value); DATA value 0x11*p
+#  for p >= 1, read back through DATA INTO THE SELECTOR REGISTER, which holds p before the read, never 0x11*p.
+#  Port 0 is COMMAND: written with NOP (0, from zr) only.
+ACC = [(0, "sw"), (1, "sb"), (2, "sh"), (3, "sw"), (4, "sd"), (5, "sb"), (6, "sh"), (7, "sd")]
+SEL_REG = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"]           # the selector values
+VAL_REG = ["zr", "a0", "a1", "a2", "a3", "v0", "v1", "t9"]           # the DATA values (port 0 gets zr = NOP)
+PORT_RB = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"]           # PORT read-backs
+PROG_A, REGS_A = [], [("t0", FBCTRL)]
+for k, (p, w) in enumerate(ACC):
+    REGS_A.append((SEL_REG[k], p))
+    REGS_A.append((PORT_RB[k], 0xdead))
+    if k:
+        REGS_A.append((VAL_REG[k], 0x11 * p))
+    PROG_A.append((w, SEL_REG[k], 0, None))                            # PORT = p at width w
+    PROG_A.append(("lw", PORT_RB[k], 0, None))                         # read PORT
+    PROG_A.append(("sw", VAL_REG[k], 16, None))                        # DATA = 0x11*p (NOP for port 0)
+#  the DATA read-backs, one per port 1..7: re-select p, read DATA into the selector register
+for k, (p, w) in enumerate(ACC):
+    if k:
+        PROG_A.append(("sw", SEL_REG[k], 0, None))
+        PROG_A.append(("lw", SEL_REG[k], 16, None))
+READS_A = PORT_RB + SEL_REG[1:]
+
+#  P: previous selector 5, then nine refusals, then previous 7 and one more.
+REFUSE = [("sw", "t1", 9, "9 (sw)"), ("sw", "t2", 8, "8 (sw)"), ("sw", "t3", 16, "16 (sw)"),
+          ("sd", "t4", 0x200000000, "0x200000000 (sd)"), ("sd", "t5", 0x100000003, "0x100000003 (sd)"),
+          ("sd", "t6", M64, "all-ones (sd)"), ("sw", "t7", 0xffffffff, "all-ones (sw)"),
+          ("sb", "t8", 0xff, "0xff (sb)"), ("sh", "t9", 0x100, "0x100 (sh)")]
+READ_P = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "v0"]
+PROG_P = [("sw", "a0", 0, None), ("sw", "a1", 16, None)]
+REGS_P = [("t0", FBCTRL), ("a0", 5), ("a1", 0x2a), ("a2", 7)]
+for k, (w, r, v, _n) in enumerate(REFUSE):
+    REGS_P.append((r, v))
+    PROG_P.append((w, r, 0, "r%d" % k))
+    PROG_P.append(("lw", READ_P[k], 0, None))
+PROG_P += [("sw", "a2", 0, None), ("sw", "t1", 0, "r9"), ("lw", "v1", 0, None)]
+READS_P = READ_P + ["v1"]
+
+PROG_K = [("sw", "t1", 0, None), ("sw", "t3", 16, None), ("sw", "t2", 0, None), ("lw", "s0", 16, None),
+          ("sw", "t4", 16, None), ("sw", "t1", 0, None), ("lw", "s1", 16, None)]
+REGS_K = [("t0", FBCTRL), ("t1", 5), ("t3", 0x2a), ("t2", 9), ("t4", 0x77), ("s0", 0xdead), ("s1", 0xdead)]
+
+PROG_F = [("sw", "t1", 0, None)]
+REGS_F = [("t0", FBCTRL), ("t1", 9)]
+
+
+def main():
+    stub = stub_path()
+    try:
+        C = session("C", PROG_C, REGS_C, ["t4", "t5", "s2"], stub)
+        A = session("A", PROG_A, REGS_A, READS_A, stub)
+        P = session("P", PROG_P, REGS_P, READS_P, stub)
+        K = session("K", PROG_K, REGS_K, ["s0", "s1"], stub)
+        F = session("F", PROG_F, REGS_F, [], stub, free_run=True)
+    finally:
+        try:
+            os.unlink(stub)
+        except OSError:
+            pass
+    ctl = []
+    print("CONTROLS")
+    ctl.append(row("C every step survived", "%s %d/%d" % (C["status"], C["steps"], C["n"]),
+                   "SURVIVED %d/%d" % (len(PROG_C), len(PROG_C))))
+    ctl.append(row("C disassembly of every stepped word", len(C["badis"]), 0))
+    ctl.append(row("C LIVENESS: DATA round-trips 0x2a", hx(C["vals"].get("t4")), "0x2a"))
+    ctl.append(row("C LIVENESS: PORT reads back 5", hx(C["vals"].get("t5")), "0x5"))
+    ctl.append(row("C SIGNATURE: X1 zeroed by GET_RESOLUTION", hx(C["vals"].get("s2")), "0x0",
+                   "(RAM: 2; banked w/o command: 123)"))
+    row("C nothing refused, no (once) line", len(ONCE_RE.findall(C["buf"])), 0)
+    for S in (A, P, K):
+        ctl.append(row("%s disassembly of every stepped word" % "APK"[(A, P, K).index(S)], len(S["badis"]), 0))
+    print("ACCEPT (session A: %s %d/%d)" % (A["status"], A["steps"], A["n"]))
+    for k, (p, w) in enumerate(ACC):
+        row("accept selector %d written by %s" % (p, w), hx(A["vals"].get(PORT_RB[k])), hx(p))
+    for k, (p, w) in enumerate(ACC):
+        if k:
+            row("port %d round-trips its DATA value" % p, hx(A["vals"].get(SEL_REG[k])), hx(0x11 * p))
+    print("REFUSE (session P: %s %d/%d)" % (P["status"], P["steps"], P["n"]))
+    for k, (w, r, v, name) in enumerate(REFUSE):
+        row("refuse %s, PORT keeps 5" % name, hx(P["vals"].get(READ_P[k])), "0x5")
+    row("refuse 9 after PORT=7, PORT keeps 7", hx(P["vals"].get("v1")), "0x7")
+    row("announce: exactly 1 right after the FIRST refusal", P["once_after"].get("r0"), 1)
+    row("announce: still exactly 1 after ten refusals", P["once_after"].get("r9"), 1)
+    print("THE WITNESS PAIR (session K)")
+    row("K survives DATA after a refused PORT write", "%s %d/%d" % (K["status"], K["steps"], K["n"]),
+        "SURVIVED %d/%d" % (len(PROG_K), len(PROG_K)))
+    row("K DATA read after the refusal is port 5's", hx(K["vals"].get("s0")), "0x2a")
+    row("K DATA write after the refusal lands in port 5", hx(K["vals"].get("s1")), "0x77")
+    print("FREE-RUNNING (session F)")
+    row("F free-run reached its breakpoint", F["status"], "SURVIVED")
+    row("F refusal announced while free-running (fatal)", F["once_after"].get("free"), 1)
+    control = all(ctl)
+    n_ok, n = sum(RESULTS), len(RESULTS)
+    print("FBCTRLP_CONTROL=%s" % ("OK" if control else "FAILED"))
+    print("FBCTRLP_RESULT=%d/%d" % (n_ok, n))
+    print("FBCTRLP_DONE")
+
+
+if __name__ == "__main__":
+    main()

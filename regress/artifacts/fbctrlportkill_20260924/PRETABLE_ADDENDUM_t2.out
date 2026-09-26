@@ -1,0 +1,41 @@
+#549 fbctrlportkill -- PRE-TABLE ADDENDUM for kill table 2, written BEFORE table 2 runs (mtime = order proof).
+
+WHY A TABLE 2.  The flagship seat's pass-1 restatement (fable5_p1b.md, claude-fable-5-1) found table 1's per-row
+attribution overstated: session P ran nine refusals in one emulator with no re-select, so one corrupted selector turned
+every later "keeps 5" row red (M_i64's rows 7-9 read the -1 that row 6 left; M_bit's 0x100000003 row read the 0 that
+0x200000000 left).  Per-mutant verdicts stood; per-row credit did not.  It also named two clause-(d) shapes to build.
+
+THE DETECTOR CHANGE (L1, pre-ship).  Session P now writes PORT=5 before every refusal after the first, so each row can
+fail only on its own value.  Row set and row count UNCHANGED: 41 (diffed below).  Pin unchanged: 41.
+
+DIFF OF PRETABLE.out's PRESCRIBED ROWS AGAINST THE PROBE (the pre-table rule: a rewritten list is diffed, not extended):
+  all 41 present -- C x6 (survival, disassembly, liveness x2, signature, no-(once)), A/P/K disassembly x3, accept x8,
+  round-trip x7, refuse x9 + "refuse 9 after PORT=7", announce x2, K x3, F x2.  Nothing prescribed was dropped.
+
+NEW MUTANTS (mutants549.py, now 25):
+  M_reflatch  `else if (idata >= DEV_FBCTRL_NPORTS && !d->warned_port)` -- refuses only until the first announce.
+              PREDICTED red: every P refusal after the first (8, 16, 0x200000000, 0x100000003, both all-ones, 0xff,
+              0x100) and "refuse 9 after PORT=7"; green on K and F (their first refusal is refused).
+  M_acclatch  `} else if (!d->warned_port)` -- accepts only until the first refusal.
+              PREDICTED red ONLY on "refuse 9 after PORT=7" (PORT=7 is not accepted, so it reads 5); the re-selects of
+              5 are no-ops that leave 5 anyway, K re-selects the port it already holds, and session A refuses nothing.
+
+CASCADE-FREE PREDICTIONS, row by row (the refusal rows; other rows as in PRETABLE.out):
+  refuse 9 (sw)            M_revert M_store M_clamp(1) M_reset0(0)                  -- M_and5 reads 5&5=5: green
+  refuse 8 (sw)            M_gt M_revert M_store M_clamp(0) M_reset0 M_reflatch
+  refuse 16 (sw)           M_bit M_revert M_store M_clamp(0) M_reset0 M_reflatch
+  refuse 0x200000000 (sd)  M_mod33 M_u32 M_i32 M_bit M_revert M_store M_clamp M_reset0 M_reflatch   (all read 0)
+  refuse 0x100000003 (sd)  M_u32 M_i32 M_revert M_store M_clamp M_reset0 M_reflatch                 -- M_bit green
+  refuse all-ones (sd)     M_i64 M_decl M_i32 M_revert M_store M_clamp(7) M_reset0 M_reflatch
+  refuse all-ones (sw)     M_i32 M_revert M_store M_clamp M_reset0 M_reflatch         -- M_i64, M_decl green here
+  refuse 0xff (sb)         M_wide M_revert M_store M_clamp M_reset0 M_reflatch
+  refuse 0x100 (sh)        M_wide M_bit M_revert M_store M_clamp(0) M_reset0 M_reflatch
+  refuse 9 after PORT=7    M_and5 M_acclatch M_revert M_store M_clamp M_reset0 M_reflatch
+  So the SOLE catchers become: all-ones (sd) for M_i64/M_decl; 0x200000000 for M_mod33; 16 or 0x100 for M_bit;
+  0xff/0x100 for M_wide; 8 for M_gt; "after PORT=7" for M_and5/M_acclatch.  The all-ones (sw) row is the sole catcher of
+  NOTHING that no other row catches (M_i32 also reds 0x200000000) -- kept as cheap coverage, credited with nothing.
+  NOTE (flagship seat): under M_revert the announce and F rows red on TEXT (HEAD prints the old WARNING string), which is
+  not evidence about the announce channel; M_debug and M_latchinv are the channel's real tests.
+  K under M_reset0 is predicted to END THE PROCESS: the refused 9 resets to port 0 (COMMAND), so the DATA write of 0x77
+  runs fbctrl_command(0x77) and reaches its default -- the relocated path the contract discloses.
+PREDICTED ESCAPES, unchanged: M_static, M_noguard (disclosed).

@@ -1,0 +1,83 @@
+VERDICT: SHIP WITH CHANGES
+
+1. **The PORT correction is sound by source reading; the detector’s contract is broader than its evidence.** The constructor initializes `current_port` to zero, and the new unsigned 64-bit comparison precedes its only subsequent assignment. The refusal preserves the selector and uses an instance field for the warning.
+
+   I changed no files and ran no emulator, build, or probe. **25/41, 41/41, the mutation scores, and gate results are measurements reported in the brief.** All counterexample outcomes below are **source predictions**, not measurements. I’m limiting exact mutation examples to non-crashing correctness failures; I’m not supplying crash-restoring or detector-disabling patches.
+
+2. **These independent counterexamples expose additional unobserved properties.** Each edit below is in [dev_fbctrl.c](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:120), differs from the described table variants, and is predicted to leave **all 41 detector rows green**.
+
+   | Property | Exact source edit | Relevant row that stays green |
+   |---|---|---|
+   | Refusal preserves every previous selector | Insert `d->current_port \|= 1;` inside the refusal branch. This changes even selectors while keeping them in range. | Every “PORT keeps 5” row and “PORT keeps 7”; F never reads its selector |
+   | Legal selectors work across supported widths | Extend the rejection condition with `\|\| (!idata && len == 8)`. | “accept selector 0 written by sw”; there is no acceptance check for selector 0 written by `sd` |
+   | The first refusal is announced regardless of value | Replace `!d->warned_port` with `!d->warned_port && idata == 9`. | Both P announcement rows and F’s announcement row: all three refusing sessions first refuse 9 |
+   | Announcement occurs once over the device’s lifetime | Replace `!d->warned_port` with `!(d->warned_port++ % 10)`, retaining the assignment in the body. | “still exactly 1 after ten refusals”; the eleventh refusal announces again |
+   | Every instance gets its own first announcement | Extend the warning condition with `&& cpu->machine->serial_nr == 1`. | All announcement rows; each probe process creates its first machine |
+   | The diagnostic identifies the refused value | In the diagnostic argument, replace `(unsigned long long) idata` with `(unsigned long long) 0`. | All announcement rows: `ONCE_RE` accepts any hexadecimal digits |
+   | Power-on selects COMMAND | Insert `d->current_port = 1;` immediately after the constructor’s `memset`. | C/A/P/K explicitly select a port; F checks no selector readback |
+   | GET_RESOLUTION zeroes both X1 and Y1 without X11 | In that command’s non-X11 branch, change `d->port[DEV_FBCTRL_PORT_Y1] = 0;` to `... = 1;`. | “C SIGNATURE: X1 zeroed by GET_RESOLUTION” |
+   | F establishes use of `fatal()` specifically | Replace the refusal’s `fatal` token with `printf`. | “F refusal announced while free-running (fatal)” observes matching output, not the called function |
+
+   The full refusal predicate also has unobserved values and value/width combinations. Boundary 8 is exercised only through `sw`; the wide operands do not independently exercise every upper bit. Thus **“CATCHES” should identify the measured mutations and tested cases**, rather than promise detection of every narrowed comparison, width-dependent refusal, legal-selector rejection, or state-dependent rewrite. The two disclosed escapes are not a complete coverage description.
+
+3. **The historical death claim is overstated in both added C and gate comments.** [dev_fbctrl.c:123](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:123) and [gate_mips_folds.sh:38](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh:38) say an out-of-range write was stored and the next DATA access ended the emulator.
+
+   **Reading:** the old assignment converted `uint64_t idata` to `int`; the DATA guard inspected that converted value. On the usual 32-bit-int implementation, the listed wide operands `0x200000000` and `0x100000003` become valid selectors 0 and 3. The universal death statement therefore does not follow.
+
+   **Reported measurement:** selector 9 followed by DATA dies. Rewrite the history around that demonstrated case, or around a converted selector that remains outside the valid range. Also distinguish storing legal selectors from warning about invalid ones.
+
+4. **Three probe-header sentences need narrower wording.** See [fbctrl_port_probe.py:17](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:17).
+
+   - A uses one rotating width per selector, followed by `sw` reselection of ports 1–7. It does not cover the full selector-by-width matrix.
+   - P’s “every row fails only on its own value” remains false. Register results are collected only after the entire session survives. A later failure can prevent collection of earlier successful results and turn those earlier rows red. Reselecting 5 removes one contamination mechanism, not all.
+   - F does not execute a refused write and *then* issue `continue`. `continue` executes the planted write before reaching the breakpoint. The `debug()` suppression explanation is correct for this invocation’s verbosity, not for every free-running invocation.
+
+   The machine installation, register offsets, instruction encoding checks, C’s X1 signature, and K’s specific read/write expectations agree with the source. Y1 zeroing is a **source fact**, not something C measures.
+
+5. **The rationale for excluding an instance-scope test is unsound.** [The contract](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:34) argues that one fbctrl per machine makes a second-instance test require adding a device.
+
+   **Reading:** configuration parsing creates machines through [emul_add_machine](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul_parse.c:461), and the emulator supports multiple machines in one process. Two ordinary test machines can therefore provide two naturally installed instances. One device **per machine** does not imply one device **per process**.
+
+   `M_static` passing is a reported measurement of this probe’s limitation. It does not establish that the limitation is unavoidable.
+
+6. **The array-layout sentence conflates layout, reachability, and defined behavior.** [fbctrl_port_probe.py:36](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:36) should say that `warned_port` follows the eight-element `port` array, whose valid indices are 0–7.
+
+   A bad selector reaching DATA still encounters the retained guard before indexing. Overlapping the latch additionally requires that protection to be defeated. Furthermore, evaluating `port[8]` is undefined behavior; C does not guarantee that it accesses the following member. The packet supplies no layout measurement establishing the claimed overlap.
+
+   The current guard’s unreachability is supported by the constructor and assignment invariant. Its survival as a tripwire is established by **reading**, not by this detector.
+
+7. **The two default-case disclosures need input-domain qualifications.** In [dev_fbctrl.c](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:63), command dispatch uses an `int` stored in the COMMAND port. “Any command other than 0–2” is accurate for that decoded `int`, not necessarily for every original 64-bit DATA operand.
+
+   Likewise, the offset default concerns accesses dispatched into the registered `0x20`-byte device region. It is not a statement about arbitrary addresses outside that mapping. FILL/COPY being declared but unimplemented, and reset selecting COMMAND in the current source, are supported readings.
+
+8. **The gate’s parse guard handles ordinary failures but is not a complete record validator.** [gate_mips_folds.sh:56](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh:56):
+
+   - Missing markers, duplicate exact markers, and malformed sole RESULT/CONTROL records fail.
+   - A probe dying before completion fails parsing. A nonzero Python exit after complete output fails the separate exit-status check.
+   - One valid `FBCTRLP_DONE` plus an additional malformed `FBCTRLP_DONE=extra` passes the DONE test: only exact valid lines are counted.
+   - Malformed RESULT/CONTROL lookalikes lacking `=` can likewise accompany valid records unnoticed.
+   - Marker ordering and DONE being terminal are not checked.
+
+   These are **readings**, not exercised shell measurements. Validate all reserved marker lines, their syntax, multiplicity, and required ordering.
+
+9. **The pins establish reported totals, not preservation of the tested properties.** The denominator and numerator independently require 41, CONTROL requires OK, and printed FAIL rows must number zero. Those checks are useful and correctly distinguish a syntactically valid failure report from success.
+
+   However, the gate neither counts 41 successful row records nor validates their identities. Replacing a fixture with another already-covered fixture can preserve every count while removing coverage. Add independent checks for fixture identity and intentional oracle mismatches; a literal count cannot establish those properties.
+
+   The unquoted `41` and one-token stem are present as described. **Whether the score scanner recognizes them and actually totals 31 remains unverified:** its implementation is outside the permitted reading scope, and the inlined manifest edit alone does not demonstrate its output. Also, `fbrc` is the Python process’s status; the emulator child exit codes are collected but never asserted.
+
+10. **Moving the kernel check changes results deliberately and preserves earlier failures.** This follows from [gate_skip](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lib.sh:137), which exits 1 when `_fails` is nonzero.
+
+   | State | Previous result | New result |
+   |---|---|---|
+   | Binary missing | SKIP, 77 | SKIP, 77 |
+   | Kernel missing; fbctrl passes | SKIP, 77 | SKIP, 77, after fbctrl checks |
+   | Kernel missing; fbctrl fails | SKIP, 77 | FAIL, 1 |
+   | Both present; fold rows fail | FAIL | FAIL |
+   | Both present; folds pass, fbctrl fails | PASS | FAIL |
+
+   The added comment describing failure preservation is correct. The brief’s 23-check PASS measures the successful path; it does not measure the missing-input or malformed-output cases above.
+
+11. **The committed-state evidence and records remain incomplete.** The brief explicitly reports **71 PTY probes in the proposed export against a pin of 74**. The current source confirms that the census counts files present in the working tree. Thus the reported hygiene PASS applies to that working tree, not to the proposed commit alone. This is a disclosed pre-existing dependency, but it must remain explicit in the commit’s validation record.
+
+   The “filed” and “recorded” sentences also precede a packet statement that those records are **not yet written**. Before committing, complete the named records, update the existing `gatedevicesplit` debt for the additional gate-16 device probe, and document the newly identified detector limits. I did not inspect the ledger or other excluded files.

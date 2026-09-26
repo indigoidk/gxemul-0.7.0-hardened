@@ -1,0 +1,52 @@
+VERDICT: SHIP WITH CHANGES
+
+The 62-edit kill table in §5a is not a closed row set on the announced-value axis. I found one edit below that is not in §5a, breaks the fix's intended behaviour, and is invisible to every row of the 73-row probe.
+
+---
+
+**1. The smallest such edit — truncate the announced value to 32 bits.**
+
+The fix uses `0x%llx` and passes `idata` directly. Drop the format's `ll` and cast `idata` to a 32-bit type for the vararg:
+
+```diff
+-        fatal("[ fbctrl: port number 0x%llx is out of range; "
++        fatal("[ fbctrl: port number 0x%x is out of range; "
+             "the selector is unchanged (once) ]\n",
+-            idata);
++            (unsigned)idata);
+```
+
+Or, the even smaller variant — keep `%llx`, cast at the call site only:
+
+```diff
+-            idata);
++            (uint32_t)idata);
+```
+
+This is a **one-token addition** that compiles cleanly and:
+
+* leaves `idata >= DEV_FBCTRL_NPORTS` on the full `uint64_t` (the comparison §1 promises);
+* leaves `d->warned_port` and the once-per-device latch alone;
+* leaves `d->current_port` untouched on refuse (selector still kept);
+* leaves the DATA-arm tripwire untouched.
+
+What it changes is the *informational* content of the announcement: any refused value with bit 32 or higher is now printed as its low 32 bits. `0x100000003` announces as `0x3`; `0x200000000` as `0x0`; `all-ones (sd)` as `0xffffffff`. The announce is still once-per-device, still `fatal()`, still triggered by `>= 8` — so the count is right, the selector is kept, and the printf-bound tests pass — but the line now misreports what the guest actually wrote, which is exactly what the §1 history comment ("a wide value was truncated onto a legal port (0x100000003 selected port 3)") was written to refute.
+
+**Rows that stay green (all 73)** — by session, against the §4b diff:
+
+* **C** — liveness (5), X1=0, Y1=0, no `(once)`, disasm: the refusal path is not entered; format is irrelevant. All five C rows stay green.
+* **A** — eight accepts at sb/sh/sw/sd, seven round-trips for ports 1–7, no `(once)`, disasm: no refuse is exercised; format is irrelevant. All 18 A rows stay green.
+* **P** — twelve `PORT keeps 5` rows, the `PORT=7` keep row, `count == 1` after `r0`, `count == 1` after `r11`, and `first_val(P) == "0x8"`: the first refused is `8`, which truncates to `0x8`; `0x8` is the exact string the test asserts. All 14 P rows stay green.
+* **R** — `count == 1` after `rb`, `PORT keeps 5` after the NOP, disasm: the refused value (`9`) and the latch behaviour are unaffected by a display cast. All three R rows stay green.
+* **K** — survives, DATA lands in port 5, disasm: only one announce (value `9`, fits in 32 bits) and its value is not asserted. All three K rows stay green.
+* **F** — breakpoint reached, `(once)` under `fatal`, `lw` reads `0`, `first_val(F) == "0x9"`: refused value is `9`, truncates to `0x9`. All four F rows stay green.
+* **V** — X1=123 survives, port 0 still `0x2`, ports 1–7 keep `0x11*p`, disasm: refused values include `0x100000003` (sd) and `0xff` (sb); none of V's rows assert the announced string. All ten V rows stay green.
+* **W** — twelve width×boundary cells plus the `ld`-of-PORT row plus disasm: refused values are `8` (sb/sh/sd), `0x8000000000000000` (sd), and `9` after PORT=6 (sw); W's rows assert only PORT keeps the expected predecessor, never the announced string. All 14 W rows stay green.
+
+What I tried first that did *not* survive: `>=` → `>` (M_gt, rowed), `(uint32_t)idata` cast in the *store* (N_acc32, disclosed equivalent — does not change the binary because `current_port` is `int`), `warned_port = 0` instead of `1` (every refuse announces, count grows), removing `warned_port = 1` entirely (same), toggling `warned_port` (count = 6 after twelve), moving the announce outside the `if (!warned_port)` guard (count = 12), printing `d->current_port` instead of `idata` (first announce names `0x5`, not `0x8`), `0x%016llx` (captured group becomes `0x0000000000000008`, not `0x8`), `printf` in place of `fatal` (indistinguishable per the NOT CLAIMED note), uppercase `%llX` (informative, not breaking), weakening the DATA arm's `>=` to `>` (M_noguard covers deletion; weakening is also unreachable while PORT refuses, so it does break the tripwire *intent*, but it is the same shape as the disclosed "DATA arm's kept check deleted"). None of those is a smaller edit than the format/cast truncation, and most are caught by §5a.
+
+---
+
+**2. Sentence in §4 that the §5 evidence contradicts.**
+
+§1's claim — *"every cell {0, 7 accepted; 8 refused} × {sb, sh, sw, sd} is rowed and each new cell has its own one-edit target in the kill table"* — is contradicted by §4b's own `W_CELLS` list and by §5a's mutant set. `W_CELLS` rows for `7` cover `sb`, `sh`, `sw` only (no `sd`), and rows for `8` cover `sb`, `sh`, `sd` only (no `sw`); the two extra W rows are `0x8000000000000000` by `sd` and `9` after `PORT=6` by `sw`. The kill-table rows that target width×value cells are `T_W_sb7`, `T_W_sb8`, `T_W_sh7`, `T_W_sh8`, `T_W_sw0`, `T_W_sw7`; there is no `T_W_sd7`, no `T_W_sw8`, no `T_W_sd0`, no `T_W_sd8`. So the closure on the {0, 7, 8} × {sb, sh, sw, sd} class has two missing cells (`7sd`, `8sw`) and four cells that are rowed in W but have no one-edit target in §5a — exactly the gap a width-conditioned edit on those two cells could walk through.

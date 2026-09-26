@@ -1,0 +1,35 @@
+The closing pass has to re-check the premises the last panel ratified, against the `GXEMUL-SEC` tree only. I will read the device, the probe, the gate block, and this round's `closing` and `table3` artifacts, then test any claim that is still open.VERDICT: SHIP WITH CHANGES
+
+The device fix matches the source and the measured kills. The 73-row detector does not. One conjunct on the fixed predicate restores the old process exit and leaves every row green, and that conjunct is not one of the eight disclosed passes.
+
+1. **Floor (question 1).** Yes. This edit is inside the fixed arm, it is not one of the eight, and all 73 rows stay green:
+
+```c
+else if (idata >= DEV_FBCTRL_NPORTS && d->current_port != 4) {
+```
+
+Every refusal the probe actually performs happens while `current_port` is 0, 5, 6, or 7, or the single session-V refusal while it is 1. None happens while it is 2, 3, or 4. With this conjunct the probe runs the same path as the fix, so the score stays 73/73, controls OK, exit 0. A guest that has selected port 4 and then stores 9 takes the accept arm (`d->current_port = idata`). The next DATA access hits the tripwire and `exit(1)`. That is the pre-repair defect. The same score holds for `!= 2` and `!= 3`. For `!= 1`, session V does `sw` of 9 while `current_port` is 1 and the next instruction selects port 1 again before any PORT or DATA read, so that variant is green too. The later CATCHES phrase "from 0, 5, 6 and 7" does not name this conjunct, and clause (3)'s `idata != 10` does not either.
+
+2. **Smallest edit that still breaks the fix (question 2).** Not in the table. All 73 rows stay green:
+
+```c
+else if (idata >= DEV_FBCTRL_NPORTS && idata != 10) {
+```
+
+No row writes 10, so 10 is stored and the next DATA access is the old `exit(1)`. Clause (3) already names this one. It is smaller than the predecessor conjunct: one incoming value, every predecessor. `M_noguard`, `M_static`, `N_acc32`, `N_order`, `N_rdmask7`, `N_datard16`, `N_datawr8`, and `T_D9c_serial1` are the eight table passes; using any of them here would not answer the question.
+
+3. **Vacuous rows (question 3).** Keep `R refuse 9 after the NOP, PORT keeps 5`. It is a real `lw` into `s1`, poisoned to `0xdead`. Table 3 moves it: `M_clamp` got `0x1`, `M_reflatch` got `0x9`, `N_rdlatch` got `0xd`, `N_rdmask3` got `0x1`, `M_revert` got `-` because session R died. Nothing in the table is red on that row alone, because a stored 9 also reddens session P's `refuse 9 (sw)`.
+
+The vacuous row is `accept selector 0 written by sw` in session A. Power-on `current_port` is already 0, so an ignored `sw` of 0 still reads back 0. The `0xdead` poison is on the GPR, which catches a load that never ran, and leaves an ignored store green. `T_W_sw0` shows it: that row stays `got=0x0`, while `accept 0 written by sw after PORT=5` goes `got=0x5`. The session-W row is the real cell.
+
+4. **Sentences (question 4).** The CATCHES item "the store reached for an out-of-range value" is true of the unconditional measured edits (`M_store`, `M_revert`, `M_clamp`, `M_reset0`, `M_and5`) and false as a closure of the predicate. Finding 1 reaches that store with a green score. The width-matrix sentence is true of rows: 0 at all four widths is in W; 7 by `sb`/`sh`/`sw` is in W and 7 by `sd` is session A's `accept selector 7 written by sd` (predecessor 6); 8 by `sw` is session P and 8 by `sb`/`sh`/`sd` is in W.
+
+These match the tree and the logs. The repaired comment is right: `M_revert` reads `refuse 0x100000003 (sd)` as `got=0x3`, and sessions K and R are `HOST-DIED` at step 3, the DATA access after a stored 9. The gate comment's 47/73 is the log's own trailer; the 26 red lines are the refusal, announce, K, R, and F rows. `M_latch0` prints `once=12` on session P, so the two extra 16-by-`sb`/`sh` stores really are refusals. The DATA-arm sentence is right: `exit(1)` runs before `d->port[d->current_port]`. A later `port[8]` would be an out-of-bounds dereference, which is undefined. `warned_port` sits in the next `int`, which is why an alias story is tempting; it is not a defined alias. The eight greens in `TABLE.out` are exactly the eight the gate comment lists.
+
+5. **Gate (question 5).** Yes. The eight checks reconcile counts, the trailer, `FBCTRLP_CONTROL`, and the process exit. They do not pin row identity. On a good 73/73 log with exit 0, replacing one `  ok ` line with a duplicate of another keeps the emitted count, the ok count, the fail count, the trailer, the control line, and the exit status. All eight pass, and one check is gone. `g16_fixtures_t3.out` covers deletion, duplication, and an honest `FAIL`. It has no substitution case. Pure deletion is caught, as those fixtures show.
+
+6. **Dispositions (question 6).** One is wrong: the width-class closure. Adopting `sh` of 0 is right (`T_D7c_shzero` reddens only `accept 0 written by sh after PORT=5`, `got=0x5`). The matrix is rowed. "Each new cell has its own one-edit target" is false for accept-0-by-`sb`. The only edit that reddens it is `T_D7a_sub4zero` (`len < 4 && idata == 0`), which also reddens `sh`. There is no `len == 1` edit. `T_X_w8` is no longer an `sd`-of-8-only kill: it reddens `sb`, `sh`, and `sd` of 8 (`got=0x8` on each) and leaves `sw` of 8 green. `M_gt` reddens all four 8-rows together. Session A's 7-by-`sd` row has no edit aimed at it; `T_W_sw7` leaves that row green at `got=0x7`.
+
+Y1 as a control is right: `T_D11a_y1one` and `T_D11b_y1keep` fail `C SIGNATURE: Y1 zeroed by GET_RESOLUTION` with `FBCTRLP_CONTROL=FAILED`. The separate R session is right: `M_gt` (`>` instead of `>=`) accepts 8, session P stays `SURVIVED 35/35`, and `N_datarearm` / `T_D4b_cmdrearm` redden only `R announce still 1 after DATA and NOP traffic`. The two-machine filing is a filing decision; `opus549_measured/f2/TABLE_twoinst.out` is outside the tree this pass was allowed to read, so that measurement was not re-checked.
+
+Before this composite is treated as closed: add a PORT readback after a refusal whose predecessor is 1 (before V re-selects), and after refusals from 2, 3, and 4; put the session-A selector-0 readback in LIMITS as vacuous for an ignored store; make the gate require each row name once.

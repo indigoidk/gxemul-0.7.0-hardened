@@ -1,0 +1,113 @@
+VERDICT: SHIP
+
+*(Per Section 0's explicit definition: v6 closes the repair chain with wording, records, and staging fixes only; zero new probe rows are owed).*
+
+---
+
+### 1. The Disagreements: D1 (N1) and D2 (N21)
+
+#### D1 = N1: Latch-Unset $\times$ Bit (`warned_port == 0` with narrowed compare)
+* **Author's Disposition in Brief:** `FLOOR (L2), repair in-round as v7` (58 fresh emulator sessions).
+* **Adjudication:** **OVERTURN author's disposition; UPHOLD NOT CLAIMED (0).**
+* **Adversarial Analysis & Evidence:**
+  1. **Two-Axis Joint Nature:** The mutant in question, `else if ((d->warned_port ? idata : (idata & ~(1ULL << 4))) >= DEV_FBCTRL_NPORTS)`, conditions the refusal guard on the joint evaluation of `warned_port` (latch state) and `idata` (bit 4). The probe contract explicitly establishes in [`regress/fbctrl_port_probe.py:104-107`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L104-L107) that *"the enumeration above is one-axis by design, and closing every pair is the unbounded growth the carrier's floor rules refuse."*
+  2. **Single-Axis Coverage Already Satisfied:** The single-axis floor requirements defined in [`regress/fbctrl_port_probe.py:63-66`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L63-L66) are fully held: latch-unset is tested on first refusals across P, F, V, W, X2–X7, Y, and B; latch-set is tested across all subsequent refusals; and every bit 3..63 is tested set alone in Session B ([`fbctrl_port_probe.py:524-542`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L524-L542)).
+  3. **The Kept Tripwire Catches It:** Under NOT CLAIMED (2) ([`fbctrl_port_probe.py:109-118`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L109-L118)), the kept range check in [`src/devices/dev_fbctrl.c:141-145`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L141-L145) stands as the tripwire. When a mutant accepts 16 on a fresh device, any subsequent DATA access terminates the emulator process via `exit(1)` as witnessed in `opus549_measured/v6/unset_witness.out`.
+  4. **Conclusion:** Admitting D1 as a floor breach was an over-concession by the author to a single seat (dedicated grok). Conceding it would violate the carrier's one-axis floor doctrine and needlessly inflate gate runtime by 58 processes.
+
+#### D2 = N21: Refusal Writing Constant 5 for Values Refused at Previous Selector 5
+* **Author's Disposition in Brief:** `FOR THE ADJUDICATION`.
+* **Adjudication:** **OVERTURN grok's floor breach claim; UPHOLD as DISCLOSED under NOT CLAIMED (3) & Relative Oracle Limits.**
+* **Adversarial Analysis & Evidence:**
+  1. **Unconditioned Constant Write is Red:** An unconditioned write of 5 inside the refusal block (`d->current_port = 5;`) fails massively across sessions P (step 12 leaves 7, [`fbctrl_port_probe.py:599`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L599)), V (leaves 1 and 7, lines 617, 621), W (leaves 6, line 485), Z (leaves 4, line 644), F (leaves 0, line 614), and all X sessions (X2 leaves 2, X3 leaves 3, X4 leaves 4, X6 leaves 6, X7 leaves 7, line 653).
+  2. **Single-Value & Value-Class Conditions:** A mutant that writes 5 *only* for specific values (e.g. `if (idata == 32) d->current_port = 5;`) or for values whose low 32 bits are zero (`(uint32_t)idata == 0`) is an artificial value-class exception disclosed under NOT CLAIMED (3) ([`fbctrl_port_probe.py:118-125`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L118-L125)).
+  3. **The Anchor-Shift Termination Trap:** Grok proposed changing Session B's `sd` anchor from 5 to 7. However, this does not close the class: an attacker simply writes `if ((uint32_t)idata == 0) d->current_port = 7;`. The only way to eliminate constant writes without relying on the relative oracle would be testing multiple distinct previous selectors for all 108 single-bit values ($108 \to 216$ refusals), which is the exact combinatorial explosion forbidden by the floor contract.
+  4. **Conclusion:** N21 is not an undisclosed floor breach; it is an inherent property of finite-anchor relative oracles, covered by NOT CLAIMED (3).
+
+---
+
+### 2. Adjudication of N1..N24 and D1, D2
+
+* **D1 / N1**: **OVERTURN** author's disposition to v7; **UPHOLD** NOT CLAIMED (0) as a two-axis joint guarded by the kept DATA tripwire.
+* **D2 / N21**: **OVERTURN** grok's floor breach claim; **UPHOLD** as disclosed under NOT CLAIMED (3) and relative-oracle limitations.
+* **N2**: **UPHOLD**; `(idata & 7) != 6` is a value-class exception on low bits unpartitioned by `idata >= 8`, correctly disclosed in (3).
+* **N3**: **UPHOLD**; walked denominator confirms all single-axis variations are red in [`table6/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out) or covered by (0)–(8).
+* **N4**: **UPHOLD**; accept-side value classes like `MB_pc4` are correctly added to NOT CLAIMED (3).
+* **N5**: **UPHOLD**; agy correctly classified N1 as a two-axis joint under NOT CLAIMED (0).
+* **N6**: **UPHOLD**; the working tree probe was already v6 (`md5: a9a2be3d66d372454704bac665a7b575`); the premise in the v6 brief was stale.
+* **N7**: **UPHOLD**; wording correction accepted; bits shared with other sessions (e.g. bit 3 in 9, bit 4 in 16) also redden non-B rows.
+* **N8**: **UPHOLD**; wording correction accepted; 60 `MKB_*` mutants + 1 control `MK_b8_ctl` = 61 one-bit narrowings.
+* **N9**: **UPHOLD**; arithmetic confirms period $N=108$ announces on refusal 109, surviving Session B's 108 refusals; wording "108 or more" is exact.
+* **N10**: **UPHOLD**; dependency of Session B on emulated `dsll` execution is evidenced by width channel differentiation; record note in LIMITS is sufficient.
+* **N11**: **UPHOLD**; wording correction accepted; narrow widths carry subsets of bits (sb carries bits 3–7 only).
+* **N12**: **UPHOLD**; label explanation accepted; no X5 exists because previous selector 5 is held by P, W, Y, and B.
+* **N13**: **UPHOLD**; minimax timing assumption is non-actionable; count row is green across all test runs.
+* **N14**: **UPHOLD**; glm correctly confirmed N1 is a two-axis joint under the general text of NOT CLAIMED (0).
+* **N15**: **UPHOLD**; records correction accepted; [`table6/MANIFEST.out:7-12`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/MANIFEST.out#L7-L12) carries six `BR_*` behavior changers, all measured RED.
+* **N16**: **REFINE**; glm's wording fix addresses "not which" for $k \le 30$, but must be combined with agy's fix for "prints the last one's stored int" (it prints the last value that *got through*).
+* **N17**: **UPHOLD**; reading [`regress/fbctrl_port_probe.py:433-443, 555`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L433-L443) proves Session R never returns or inspects `s2` (DATA read); NOT CLAIMED (8)'s exclusivity is verified true.
+* **N18**: **REFINE**; probe v6 is present in the working tree, but is currently UNTRACKED in git (`git status: ?? regress/fbctrl_port_probe.py`); it must be explicitly staged with `git add`.
+* **N19**: **UPHOLD**; path reference to [`PRETABLE_ADDENDUM_t6.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/PRETABLE_ADDENDUM_t6.out) accepted.
+* **N20**: **UPHOLD**; unstated invariant that only K and R read DATA without re-selecting PORT first is load-bearing and belongs in LIMITS.
+* **N22**: **UPHOLD**; gate comment citing 13 equivalents reconciled with header (4) which explicitly enumerated only 7.
+* **N23**: **UPHOLD**; records correction accepted; [`PRETABLE_ADDENDUM_t6.out:40-48`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/PRETABLE_ADDENDUM_t6.out#L40-L48) had 4 channel misannotations while predictions held.
+* **N24**: **UPHOLD**; records correction accepted; `CELL_keep_l0` never sets latch; early store preservation is demonstrated by `MKB_03`.
+
+---
+
+### 3. Which of the Author's Accepted Dispositions is Wrong?
+
+The author accepted ~18 findings in a row without adversarial pushback. Three specific dispositions are wrong or flawed:
+
+1. **N1 Disposition is WRONG (Over-Concession):** The author accepted grok's claim that N1 is a floor breach requiring a v7 repair with 58 fresh sessions. As established in Section 1, this violates the one-axis floor principle of clause (e), ignores the kept tripwire in [`src/devices/dev_fbctrl.c:141-145`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L141-L145), and conflates a two-axis state joint with an L2 floor breach.
+2. **N16 Disposition is INCOMPLETE / MISMATCHED:** The author accepted glm's partial critique of `LIMITS OF A ROW` ("not which") while overlooking agy's identification of the second error in the exact same sentence. The sentence claims the row *"prints the last one's stored int"*. If an intermediate store leaks and later stores are refused, the row prints the intermediate value, NOT the last value of the loop. Accepting N16 without incorporating agy's correction leaves the probe header technically false.
+3. **N18 Disposition is PREMATURE on Git State:** The author marked N18 as *"already so (the tree holds v6, a9a2be3d)"*. However, inspection of git status reveals `regress/fbctrl_port_probe.py` is untracked. Stating that the checkout is ready for commit without noting the required `git add` step creates a release hazard.
+
+---
+
+### 4. Settlement of Open Question N17 (NOT CLAIMED (8) vs Session R)
+
+* **Finding:** GLM asked whether Session R's DATA read compromises the exclusivity claim in NOT CLAIMED (8): *"after a refusal at previous 5 the only cells read back are port 5's under COMMAND 0 (K) and COMMAND's under COMMAND 1 (Y)"*.
+* **Code Verification in [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py):**
+  - Lines 438–440: `PROG_R` executes `("lw", "s2", 16, None)` to perform a DATA read of port 5.
+  - Line 555: `R = session("R", PROG_R, REGS_R, ["s1"], stub)`. Only register `s1` (the final PORT read) is requested from the session reader!
+  - Lines 603–605: Session R asserts only two rows:
+    ```python
+    row("R announce still 1 after DATA, NOP and GET_RESOLUTION", R["once_after"].get("rb"), 1)
+    row("R refuse 9 after that traffic, PORT keeps 5", hx(R["vals"].get("s1")), "0x5")
+    ```
+  - Register `s2` is **never extracted from the session, never checked against expected values, and never printed as a row**.
+* **Ruling:** **UPHOLD NOT CLAIMED (8) as written.** Session R uses the DATA read as unmeasured guest traffic to verify that internal state transitions do not prematurely re-arm the once-latch. No cell read-back is evaluated by the test harness.
+
+---
+
+### 5. What Did All of Us Miss?
+
+1. **The Anchor-Shift Termination Trap:** In evaluating D2 / N21, grok and the author considered shifting Session B's anchor for `sd` from 5 to 7. Neither recognized that shifting the anchor does not eliminate the synthetic constant write attack; it merely moves the mutant constant to 7. A relative oracle cannot close synthetic constant returns without multi-anchor testing per bit.
+2. **Residue Classes Modulo 8:** All 108 refusals in Session B have low 3 bits `000`. Across all other sessions, the only refused residues are $0, 1, 3, 5, 7 \pmod 8$. No session in the entire probe ever presents an out-of-range value with `(idata & 7)` equal to $2, 4,$ or $6$. This explains why `(idata & 7) != 6` (N2) scores 117/117 without being a random point-value exception.
+3. **The Dual Inaccuracy in `LIMITS OF A ROW`:** Neither seat nor the author caught that line 147 contains two distinct errors: claiming the output is anonymous (false for $k \le 30$) AND claiming it prints the last loop store (false when an earlier store leaks and is preserved).
+4. **Git Staging Requirement:** `regress/fbctrl_port_probe.py` is an untracked file in the working tree and must be explicitly staged before committing.
+
+---
+
+### 6. Source Verification Evidence Matrix
+
+| Claim / Subject | File | Lines | Verified Content / Evidence |
+| :--- | :--- | :--- | :--- |
+| Fixed PORT arm | [`src/devices/dev_fbctrl.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c) | 117–136 | Refusal at `idata >= 8`, `!warned_port` announces once, preserves `current_port`. |
+| Kept DATA tripwire | [`src/devices/dev_fbctrl.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c) | 141–145 | Out of range check on `d->current_port` calls `fatal()` and `exit(1)`. |
+| Probe MD5 & Rows | [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) | 1–666 | MD5 is `a9a2be3d66d372454704bac665a7b575`; 117 check rows defined across 16 sessions. |
+| Gate 16 Pinning | [`regress/gate_mips_folds.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh) | 91–100 | Pins rows run at 117, rows correct at 117, exit 0, reconciles trailer. |
+| Session B Refusal Math | [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) | 528–538 | `5 (sb) + 13 (sh) + 29 (sw) + 61 (sd) = 108` refusals; tag `blast` on store 108. |
+| Session R Program Order | [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) | 433–443, 555 | `lw s2, 16` executed, but reads list is `["s1"]`; `s2` never checked by row. |
+| Table 6 Greens | [`table6/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out) | 4–308 | Exactly 30 mutants score `rc=0` 117/117; zero unexpected survivors. |
+| Behavior Changers | [`table6/MANIFEST.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/MANIFEST.out) | 7–12 | Six `BR_*` mutants present (`BR_acc_map0`, `BR_ann_gt8`, `BR_ge9`, `BR_no_hi32`, `BR_rd_drop0`, `BR_refuse_lt`), all RED. |
+| Addendum Discrepancies | [`PRETABLE_ADDENDUM_t6.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/PRETABLE_ADDENDUM_t6.out) | 22–23, 40–48 | `MK_b5_7` listed sb-only; `MK_b9_31` omitted from sd; period bound cited as 106; `CELL_keep_l0` misidentified. |
+
+---
+
+### Final Disposition
+
+The v6 probe (117 rows, 16 sessions) successfully satisfies the floor stop condition. No probe row additions or mutant repairs are required. The repair chain closes upon applying the identified wording adjustments in the probe header, reconciling the gate comment, and staging `regress/fbctrl_port_probe.py`.
+
+GO-WITH-CHANGES

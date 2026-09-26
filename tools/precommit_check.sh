@@ -338,7 +338,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  (#528, pinned UNQUOTED in gate_sh_rounding.sh at 37 rows).
 	#  RAISED 29 -> 30 ON 2026-09-18, DELIBERATELY.  One newly gated probe: landisk_aux_probe.py
 	#  (#533, pinned UNQUOTED in gate_sh_rounding.sh at 6 rows).
-	SCORE_CLAIMS_MANIFEST=30
+	#  RAISED 30 -> 31 ON 2026-09-24, DELIBERATELY.  One newly gated probe: fbctrl_port_probe.py
+	#  (#549, pinned UNQUOTED in gate_mips_folds.sh at 117 rows).
+	SCORE_CLAIMS_MANIFEST=31
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

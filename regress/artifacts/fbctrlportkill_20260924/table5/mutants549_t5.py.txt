@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""#549 kill table 5: table 4's 101 edits (mutants549_t4.py and the three lists it imports, their own text) plus
+
+  CELL_*  ONE ONE-AXIS EDIT FOR EVERY CELL THE v5 HEADER LISTS, generated from the listing rather than chosen:
+          keeps / first-announce / silence / name / read / accept, over width, previous selector, COMMAND and latch,
+          plus the effect-4 cells V and K hold.  A generated edit whose text equals an existing mutant's is NOT
+          written again; the cell is mapped to the existing mutant in CELLMAP.out.  (Table 4 claimed every listed
+          cell measured and built no announce edit for previous 2 3 4 6 7 or for single widths -- this fixes that.)
+  CF2_*   the closing-F2 seats' edits: the Opus 5.5 seat's eleven (opus549_measured/close2/), grok's name mangle,
+          minimax's threshold, kimi-k3's except-16, the SET_RESOLUTION / NOP / PORT-read re-arms, a value-dependent
+          demotion.
+
+Each edit is a text transformation of the FINAL fixed dev_fbctrl.c with exactly one match per find-text (a find-text
+that matches nothing is REFUSED).  Every mutant carries a PREDICTION, written here before table 5 runs:
+  RED        the probe must score below its total
+  GREEN(e)   disclosed by the contract (clause e) -- must score the total
+  GREEN(eq)  equivalent -- must score the total
+usage: python mutants549_t5.py <final dev_fbctrl.c> <dev_fbctrl_HEAD.c> <mutants549.py> <mutants549_t3.py>
+                               <mutants549_t4.py> <outdir>"""
+import io
+import os
+import sys
+
+NL = chr(92) + "n"
+
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+REFUSE_OPEN = PRED + "\n"
+LATCH_TEST = "if (!d->warned_port) {"
+LATCH_BLOCK_END = "\t\t\t\td->warned_port = 1;\n\t\t\t}\n"
+ACCEPT = "\t\t} else\n\t\t\td->current_port = idata;\n"
+ANNOUNCE_ARG = "(unsigned long long) idata);"
+ANNOUNCE_CALL = "\t\t\t\tfatal(\"[ fbctrl: port number 0x%llx is out of range; \"\n"
+PORT_READ_IF = "\t\tif (writeflag == MEM_READ)\n\t\t\todata = d->current_port;\n"
+READ_PORT = "\t\t\todata = d->current_port;\n"
+NOP_CASE = "\tcase DEV_FBCTRL_COMMAND_NOP:\n\t\tbreak;\n"
+SETRES_CASE = "\tcase DEV_FBCTRL_COMMAND_SET_RESOLUTION:\n"
+CMD = "d->port[DEV_FBCTRL_PORT_COMMAND]"
+
+W = {1: "sb", 2: "sh", 4: "sw", 8: "sd"}
+
+
+def pred(expr):
+    return [(PRED, "else if (%s) {" % expr)]
+
+
+def latch(expr):
+    return [(LATCH_TEST, "if (%s) {" % expr)]
+
+
+def portread(cond):
+    return [(PORT_READ_IF, "\t\tif (%s)\n\t\t\todata = d->current_port;\n" % cond)]
+
+
+def after_latch(stmt):
+    return [(LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\t" + stmt + "\n")]
+
+
+def accept_unless(cond):
+    return [(ACCEPT, "\t\t} else if (!(%s))\n\t\t\td->current_port = idata;\n" % cond)]
+
+
+def name_zero(cond):
+    return [(ANNOUNCE_ARG, "(unsigned long long) ((%s) ? 0 : idata));" % cond)]
+
+
+#  (name, cell, prediction, edits).  The cells, in the v5 header's order.
+CELLS = []
+#  a refusal keeps the previous selector: the refusal SKIPPED (the value stored) exactly on the cell
+for n in (1, 2, 4, 8):
+    CELLS.append(("CELL_keep_w%d" % n, "keeps: width %s" % W[n], "RED",
+                  pred("idata >= DEV_FBCTRL_NPORTS && len != %d" % n)))
+for k in range(8):
+    CELLS.append(("CELL_keep_p%d" % k, "keeps: previous %d" % k, "RED",
+                  pred("idata >= DEV_FBCTRL_NPORTS && d->current_port != %d" % k)))
+for c in (0, 1, 2):
+    CELLS.append(("CELL_keep_c%d" % c, "keeps: COMMAND %d" % c, "RED",
+                  pred("idata >= DEV_FBCTRL_NPORTS && %s != %d" % (CMD, c))))
+CELLS.append(("CELL_keep_l0", "keeps: latch unset", "RED", pred("idata >= DEV_FBCTRL_NPORTS && d->warned_port")))
+CELLS.append(("CELL_keep_l1", "keeps: latch set", "RED", pred("idata >= DEV_FBCTRL_NPORTS && !d->warned_port")))
+#  the first refusal announces once: the announce SUPPRESSED exactly on the cell
+for n in (1, 2, 4, 8):
+    CELLS.append(("CELL_ann_w%d" % n, "first announce: width %s" % W[n], "RED", latch("!d->warned_port && len != %d" % n)))
+for k in range(8):
+    CELLS.append(("CELL_ann_p%d" % k, "first announce: previous %d" % k, "RED",
+                  latch("!d->warned_port && d->current_port != %d" % k)))
+for c in (0, 1, 2):
+    CELLS.append(("CELL_ann_c%d" % c, "first announce: COMMAND %d" % c, "RED", latch("!d->warned_port && %s != %d" % (CMD, c))))
+#  the later refusals are silent: a RE-ANNOUNCE exactly on the cell
+for n in (1, 2, 4, 8):
+    CELLS.append(("CELL_sil_w%d" % n, "silence: width %s" % W[n], "RED", latch("!d->warned_port || len == %d" % n)))
+for k in range(8):
+    CELLS.append(("CELL_sil_p%d" % k, "silence: previous %d" % k, "RED",
+                  latch("!d->warned_port || d->current_port == %d" % k)))
+for c in (0, 1, 2):
+    CELLS.append(("CELL_sil_c%d" % c, "silence: COMMAND %d" % c, "RED", latch("!d->warned_port || %s == %d" % (CMD, c))))
+#  the silence traffic not already rowed by a table 2-4 edit (DATA write N_datarearm, DATA read G2_rdrearm,
+#  GET_RESOLUTION G3b_getresrearm, any command G3a_cmdrearm / T_D4b_cmdrearm, an accepted selector N_rearm,
+#  period M_latchcnt / T_D9b_mod10 / B_mod11)
+CELLS.append(("CELL_sil_tr_portread", "silence: across a PORT read", "RED",
+              [(READ_PORT, "\t\t\todata = d->current_port, d->warned_port = 0;\n")]))
+CELLS.append(("CELL_sil_tr_nop", "silence: across a NOP", "RED", [(NOP_CASE, "\tcase DEV_FBCTRL_COMMAND_NOP:\n"
+                                                                   "\t\td->warned_port = 0;\n\t\tbreak;\n")]))
+CELLS.append(("CELL_sil_tr_setres", "silence: across a SET_RESOLUTION", "RED",
+              [(SETRES_CASE, SETRES_CASE + "\t\td->warned_port = 0;\n")]))
+#  the announce names the refused value: the named value ZEROED exactly on the cell
+for n in (1, 2, 4, 8):
+    CELLS.append(("CELL_name_w%d" % n, "name: width %s" % W[n], "RED", name_zero("len == %d" % n)))
+for k in range(8):
+    CELLS.append(("CELL_name_p%d" % k, "name: previous %d" % k, "RED", name_zero("d->current_port == %d" % k)))
+for c in (0, 1, 2):
+    CELLS.append(("CELL_name_c%d" % c, "name: COMMAND %d" % c, "RED", name_zero("%s == %d" % (CMD, c))))
+#  a PORT read returns the selector: the read falls into the write path exactly on the cell (it then stores
+#  idata == 0 and returns 0) -- at selector 0 that is the same answer, so equivalent
+for n in (1, 2, 4, 8):
+    CELLS.append(("CELL_rd_w%d" % n, "read: width %s" % {1: "lb", 2: "lh", 4: "lw", 8: "ld"}[n], "RED",
+                  portread("writeflag == MEM_READ && len != %d" % n)))
+for k in range(8):
+    CELLS.append(("CELL_rd_s%d" % k, "read: selector %d" % k, "GREEN(eq)" if k == 0 else "RED",
+                  portread("writeflag == MEM_READ && d->current_port != %d" % k)))
+for c in (0, 1, 2):
+    CELLS.append(("CELL_rd_c%d" % c, "read: COMMAND %d" % c, "RED", portread("writeflag == MEM_READ && %s != %d" % (CMD, c))))
+CELLS.append(("CELL_rd_l0", "read: latch unset", "RED", portread("writeflag == MEM_READ && d->warned_port")))
+CELLS.append(("CELL_rd_l1", "read: latch set", "RED", portread("writeflag == MEM_READ && !d->warned_port")))
+#  a refusal leaves the cells alone -- the cells V and K read back, one edit per listed width/selector/COMMAND
+CELLS.append(("CELL_cell_w1", "cells: a refusal by sb (V)", "RED", after_latch("if (len == 1) d->port[idata & 7] = idata;")))
+CELLS.append(("CELL_cell_w4", "cells: a refusal by sw (V)", "RED", after_latch("if (len == 4) d->port[idata & 7] = idata;")))
+CELLS.append(("CELL_cell_w8", "cells: a refusal by sd (V)", "RED", after_latch("if (len == 8) d->port[idata & 7] = idata;")))
+CELLS.append(("CELL_cell_p7", "cells: previous 7 (V)", "RED",
+              after_latch("if (d->current_port == 7) d->port[idata & 7] = idata;")))
+CELLS.append(("CELL_cell_p1", "cells: previous 1, X1 (V)", "RED",
+              after_latch("if (d->current_port == 1) d->port[idata & 7] = idata;")))
+CELLS.append(("CELL_cell_p5own", "cells: previous 5, its own cell (K)", "RED",
+              after_latch("if (d->current_port == 5) d->port[d->current_port] = idata;")))
+CELLS.append(("CELL_cell_c2", "cells: COMMAND 2 (V)", "RED", after_latch("if (%s == 2) d->port[idata & 7] = idata;" % CMD)))
+CELLS.append(("CELL_cell_c0own", "cells: COMMAND 0, port 5's own cell (K)", "RED",
+              after_latch("if (!%s) d->port[d->current_port] = idata;" % CMD)))
+#  an accepted selector is stored: the legal selector REFUSED exactly on the cell
+for n in (1, 2, 4, 8):
+    for v in (0, 7):
+        CELLS.append(("CELL_acc_%d_w%d" % (v, n), "accept: %d by %s" % (v, W[n]), "RED",
+                      accept_unless("idata == %d && len == %d" % (v, n))))
+for k in range(8):
+    CELLS.append(("CELL_acc_s%d" % k, "accept: selector %d" % k, "RED", accept_unless("idata == %d" % k)))
+CELLS.append(("CELL_acc_l0", "accept: latch unset", "RED", accept_unless("!d->warned_port")))
+CELLS.append(("CELL_acc_l1", "accept: latch set", "RED", accept_unless("d->warned_port")))
+
+#  the closing-F2 seats' edits
+CF2 = [
+    #  the Opus 5.5 closing-F2 seat's eleven (opus5_close2.md, finding 2)
+    ("CF2_O_ref_colorb", "Opus: refusal skipped while COLOR_B != 0 (restores the process exit)", "RED",
+     pred("idata >= DEV_FBCTRL_NPORTS && !d->port[DEV_FBCTRL_PORT_COLOR_B]")),
+    ("CF2_O_ref_y1", "Opus: refusal skipped while Y1 != 0", "RED", pred("idata >= DEV_FBCTRL_NPORTS && !d->port[DEV_FBCTRL_PORT_Y1]")),
+    ("CF2_O_ref_colorr", "Opus: refusal skipped while COLOR_R == 0x55", "RED",
+     pred("idata >= DEV_FBCTRL_NPORTS && d->port[DEV_FBCTRL_PORT_COLOR_R] != 0x55")),
+    ("CF2_O_ref_cmd1", "Opus/deepseek/grok: refusal skipped while COMMAND == 1", "RED",
+     pred("idata >= DEV_FBCTRL_NPORTS && %s != 1" % CMD)),
+    ("CF2_O_rd_colorb", "Opus: a PORT read falls into the write path while COLOR_B != 0", "RED",
+     portread("writeflag == MEM_READ && !d->port[DEV_FBCTRL_PORT_COLOR_B]")),
+    ("CF2_O_rd_cmd1", "Opus: a PORT read falls into the write path while COMMAND == 1", "RED",
+     portread("writeflag == MEM_READ && %s != 1" % CMD)),
+    ("CF2_O_ann_bit63", "Opus: the announce suppressed for a first value with bit 63 set", "RED",
+     latch("!d->warned_port && (int64_t) idata >= 0")),
+    ("CF2_O_ann_cmd1", "Opus: the announce suppressed while COMMAND == 1", "RED", latch("!d->warned_port && %s != 1" % CMD)),
+    ("CF2_O_cl_len2", "Opus (e, disclosed (8)): a refusal by sh writes port[idata & 7]", "GREEN(e)",
+     after_latch("if (len == 2) d->port[idata & 7] = idata;")),
+    ("CF2_O_cl_p5", "Opus (e, disclosed (8)): a refusal at previous 5 writes port[idata & 7]", "GREEN(e)",
+     after_latch("if (d->current_port == 5) d->port[idata & 7] = idata;")),
+    ("CF2_O_cl_c0", "Opus (e, disclosed (8)): a refusal under COMMAND 0 writes port[idata & 7]", "GREEN(e)",
+     after_latch("if (!%s) d->port[idata & 7] = idata;" % CMD)),
+    #  the others
+    ("CF2_G_mask8", "grok ded./glm: the announce names the value masked to 8 bits", "RED",
+     [(ANNOUNCE_ARG, "(unsigned long long) (idata & 0xff));")]),
+    ("CF2_G_namesel", "glm: the announce names the kept selector, not the refused value", "RED",
+     [(ANNOUNCE_ARG, "(unsigned long long) d->current_port);")]),
+    ("CF2_MX_thresh", "minimax: the announce suppressed at or above 2^33", "RED",
+     latch("!d->warned_port && idata < 0x200000000ULL")),
+    ("CF2_KM_not16", "kimi-k3 (e, disclosed (3)): the announce suppressed for 16 alone", "GREEN(e)",
+     latch("!d->warned_port && idata != 16")),
+    ("CF2_DM_ge16", "e (disclosed (3)): the announce demoted to debug() for values >= 16", "GREEN(e)",
+     [(ANNOUNCE_CALL, ANNOUNCE_CALL.replace("fatal(", "(idata >= 16 ? debug : fatal)("))]),
+]
+
+
+#  table 4's fourteen at the total, MEASURED (table4/TABLE.out): the prediction for each is the same in table 5 -- the
+#  five new sessions and rows add no row that one of them reaches (the reasoning per edit is in PRETABLE_ADDENDUM_t5)
+T4_GREEN = {"A1_not10", "A2_sb3", "B_mod12", "G5a_noexit", "G5b_checkop", "G7_ldbit32", "M_noguard", "M_static",
+            "N_acc32", "N_datard16", "N_datawr8", "N_order", "N_rdmask7", "T_D9c_serial1"}
+
+
+def apply(base, edits, name):
+    s = base
+    for old, new in edits:
+        n = s.count(old)
+        if n != 1:
+            sys.exit("REFUSED %s: %d matches for %r" % (name, n, old[:60]))
+        s = s.replace(old, new)
+    return s
+
+
+def main():
+    fixp, headp, mutp, t3p, t4p, out = sys.argv[1:7]
+    os.makedirs(out, exist_ok=True)
+    base = io.open(fixp, encoding="utf-8", newline="").read()
+    head = io.open(headp, encoding="utf-8", newline="").read()
+    assert "\r" not in base and "\r" not in head
+    ns2 = {"__name__": "mutants549"}
+    exec(io.open(mutp, encoding="utf-8").read(), ns2)
+    ns3 = {"__name__": "mutants549_t3"}
+    exec(io.open(t3p, encoding="utf-8").read(), ns3)
+    ns4 = {"__name__": "mutants549_t4"}
+    exec(io.open(t4p, encoding="utf-8").read(), ns4)
+    old_rows = list(ns2["MUTANTS"]) + list(ns3["TARGETS"]) + list(ns3["PASS2"]) + list(ns4["CLOSING"])
+    assert len(old_rows) == 101, len(old_rows)
+    texts, manifest, cellmap = {}, [], []
+    for name, cls, edits in old_rows:
+        s = head if edits is None else apply(base, edits, name)
+        if s == base:
+            sys.exit("REFUSED %s: the edit changed nothing" % name)
+        texts[s] = texts.get(s, name)
+        pr = "GREEN(e)" if name in T4_GREEN else "RED"
+        manifest.append((name, "t4", pr, cls))
+        io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+    new = 0
+    for name, cell, prd, edits in CELLS + CF2:
+        s = apply(base, edits, name)
+        if s == base:
+            sys.exit("REFUSED %s: the edit changed nothing" % name)
+        if s in texts:
+            cellmap.append("%-24s %-48s = %s (same text)" % (name, cell, texts[s]))
+            continue
+        texts[s] = name
+        manifest.append((name, "t5", prd, cell))
+        cellmap.append("%-24s %-48s   built" % (name, cell))
+        io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+        new += 1
+    with io.open(os.path.join(out, "MANIFEST.out"), "w", encoding="utf-8", newline="\n") as f:
+        for name, src, prd, cls in manifest:
+            f.write("%-24s %-3s %-9s %s\n" % (name, src, prd, cls))
+    with io.open(os.path.join(out, "CELLMAP.out"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(cellmap) + "\n")
+    print("MUTANTS_WRITTEN=%d (table 4: %d, new: %d; %d generated cells mapped to an existing mutant)"
+          % (len(manifest), len(old_rows), new, len(CELLS) + len(CF2) - new))
+
+
+if __name__ == "__main__":
+    main()

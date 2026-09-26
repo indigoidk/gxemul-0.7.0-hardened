@@ -1,0 +1,171 @@
+VERDICT: SHIP WITH CHANGES
+
+### 1. Verification of Settled Premises & Checkout State
+
+Every factual premise cited in [`brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260925_194340/brief_sent.md) was checked against the source tree under `GXEMUL-SEC/`:
+
+1. **The fixed PORT arm verbatim**: Checked against [`src/devices/dev_fbctrl.c:117-136`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L117-L136). The code matches verbatim:
+   ```c
+   	case DEV_FBCTRL_PORT:
+   		if (writeflag == MEM_READ)
+   			odata = d->current_port;
+   		else if (idata >= DEV_FBCTRL_NPORTS) {
+   			if (!d->warned_port) {
+   				fatal("[ fbctrl: port number 0x%llx is out of range; "
+   				    "the selector is unchanged (once) ]\n",
+   				    (unsigned long long) idata);
+   				d->warned_port = 1;
+   			}
+   		} else
+   			d->current_port = idata;
+   		break;
+   ```
+2. **Types and constants**:
+   - [`DEV_FBCTRL_NPORTS`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h#L35) is defined as `8` in [`src/include/testmachine/dev_fb.h:35`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h#L35).
+   - In [`struct fbctrl_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L48-L53) ([`src/devices/dev_fbctrl.c:48-53`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L48-L53)), `current_port` (line 50) and `warned_port` (line 52) are `int`.
+   - In [`dev_fbctrl_access`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L107-L167) ([`src/devices/dev_fbctrl.c:110`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L110)), `uint64_t idata = 0, odata = 0;`.
+   - Initialization via `memset(d, 0, sizeof(struct fbctrl_data));` occurs in [`DEVINIT(fbctrl)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L170-L186) ([`src/devices/dev_fbctrl.c:175`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L175)).
+   - Tail read-write occurs via [`memory_writemax64`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L89-L95) returning 1 in [`src/devices/dev_fbctrl.c:163-166`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L163-L166).
+3. **`idata` loading & store representation**:
+   - [`memory_readmax64`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L55-L78) ([`src/core/memory.c:55-78`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L55-L78)) assembles `len` bytes zero-extended without sign extension. Stores of `len=1,2,4,8` yield `0..0xff`, `0..0xffff`, `0..0xffffffff`, and `0..0xffffffffffffffff`.
+   - On x86-64 gcc, storing `uint64_t idata` into `int current_port` keeps low 32 bits: $(int)2^k = 2^k$ for $k < 31$, $INT\_MIN$ ($-2147483648$, `0x80000000`) for $k = 31$, and $0$ for $k \ge 32$.
+   - Reading `current_port` into `uint64_t odata` sign-extends: positive values remain $2^k$, $INT\_MIN$ becomes `0xffffffff80000000`, and $0$ becomes `0x0`. A guest `lw` reads the 32-bit word.
+4. **MIPS `dsll` opcode encoding**:
+   - In [`src/include/opcodes_mips.h:225`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/opcodes_mips.h#L225), [`SPECIAL_DSLL`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/opcodes_mips.h#L225) is `0x38`.
+   - In [`fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py), `ins("dsll", "t1", 1)` evaluates to `(9 << 16) | (9 << 11) | (1 << 6) | 0x38` = `0x00094878`, matching the assertion exactly.
+5. **Gate 16 status**:
+   - [`regress/gate_mips_folds.sh:91-93`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L91-L93) is already updated to `117` in the working tree.
+6. **PREMISE ERROR in Brief Section 0 & 1**:
+   - The brief states: *"The working tree's `regress/fbctrl_port_probe.py` is still v5 (111 rows); v6 exists as the generated file named below and the diff inlined in section 5. Review the INLINED v6, not the checkout."*
+   - **Verification**: This claim is **FALSE**. Computing the MD5 hash of [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) in the checkout yields:
+     `a9a2be3d66d372454704bac665a7b575`
+     The working tree file already contains Session B, 117 rows, and matches the v6 probe generation.
+
+---
+
+### 2. Adjudication of Section 7 Questions
+
+#### Q1. The Floor Question of the Shipped Composite & Tried Denominator
+**Is there an edit of the fixed PORT arm, outside NOT CLAIMED (0)-(8), that scores the full 117?**
+- **Denominator of shapes tested**:
+  1. *Single-bit narrowings for all bits 3..63* ([`regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out:164-223`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L164-L223), `MKB_03`..`MKB_63`): All 61 bits tested individually; all 61 scored RED ($79/117$ to $116/117$).
+  2. *Bit-range narrowings* (`MK_b5_7`, `MK_b9_31`, `MK_b34_62`): Scored $113/117$, $114/117$, and $116/117$ respectively.
+  3. *Width-specific narrowings* (`MKW_sb05`, `MKW_sh12`, `MKW_sw09`, `MKW_sd40`): All scored $116/117$ RED.
+  4. *Boundary shifts* (`BR_ge9`, `BR_refuse_lt`): Scored $105/117$ and $106/117$ RED.
+  5. *High-half / sign-extension truncations* (`BR_no_hi32`): Scored $104/117$ RED.
+  6. *Latch manipulation / suppression* (`M_latch0`, `M_latchinv`, `M_reflatch`, `B_mod11`, `B_mod12`): All RED ($116/117$ for `B_mod12`).
+  7. *Read load drops* (`BR_rd_drop0`): Scored $79/117$ RED.
+- **Full-score survivors ($117/117$)**:
+  In [`table6/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out), exactly 30 mutants scored $117/117$, matching [`table6/MANIFEST.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/MANIFEST.out):
+  - 13 equivalents (compiled binary identical or functionally equivalent: `EQ_gt7`, `EQ_maskhi`, `EQ_ge8lit`, `EQ_acc_and7`, `EQ_acc_castint`, `EQ_dir_new`, `EQ_latch_ne1`, `EQ_ann_idata`, `EQL_latch2`, `CELL_rd_s0`, `N_acc32`, etc.). Disclosed under NOT CLAIMED (4).
+  - 2 formatting/output indistinguishables: `DSC_nonl` (no newline), `printf`. Disclosed under NOT CLAIMED (5).
+  - 3 announce-form/class carveouts: `DSC_ann_hibits` (disclosed under (3)).
+  - Standing value exceptions: `A1_not10`, `CF2_KM_not16` (disclosed under (3)).
+  - Kept DATA-arm tripwire edits: `G5a_noexit`, `G5b_checkop`, `G7_ldbit32` (disclosed under (2)).
+
+There are **zero** undisclosed single-axis floor breaches of the compare, latch, or read/write paths.
+
+---
+
+#### Q2. Evaluation of Session B's Aggregate Reading
+**Is session B's aggregate reading enough? Is there a narrowing -- by width, by bit, by previous selector, by latch -- that B cannot see and no other row sees?**
+
+1. **Arithmetic enumeration of B's values**:
+   - `sb`: $k \in [3, 7]$: stores $8, 16, 32, 64, 128$ ($5$ refusals).
+   - `sh`: $k \in [3, 15]$: stores $2^3..2^{15}$ ($13$ refusals).
+   - `sw`: $k \in [3, 31]$: stores $2^3..2^{31}$ ($29$ refusals).
+   - `sd`: $k \in [3, 63]$: stores $2^3..2^{63}$ ($61$ refusals).
+   - Total refusals: $5 + 13 + 29 + 61 = 108$.
+   - Any single bit $k$ permitted through stores $(int)2^k \in \{2^k, INT\_MIN, 0\}$. None of these equals $5$. Later refusals preserve this stored value. The subsequent `lw` at the end of each width group reliably reads the non-5 value and triggers FAIL.
+2. **The Latch $\times$ Bit gap identified**:
+   - When does the latch get set? On the **very first refusal** in Session B, which is $2^3 = 8$ (by `sb`).
+   - Consequently, in Session B, values $2^4..2^{63}$ are **never presented while `warned_port == 0`**.
+   - Across the entire probe suite, the only values ever presented while `warned_port == 0` (first refusals) are:
+     - $8$ (Session P, W, B: bit 3)
+     - $9$ (Session F, V, Y, Z, X2, X6: bits 0 and 3)
+     - $0x100$ (Session X7: bit 8)
+     - $0x100000005$ (Session X3: bits 0, 2, 32)
+     - $0xffffffffffffffff$ (Session X4: all bits)
+   - Therefore, a mutant narrowing the compare **only while the latch is unset**, such as:
+     ```c
+     else if ((d->warned_port ? idata : (idata & ~(1ULL << 4))) >= DEV_FBCTRL_NPORTS)
+     ```
+     scores **117/117 GREEN**:
+     - On first refusals ($8, 9, 0x100, 0x100000005$, all-ones), clearing bit 4 leaves the value $\ge 8$. The first refusal is refused and sets `warned_port = 1`.
+     - All subsequent stores (including $16$ in P, V, and B) execute with `warned_port == 1`, where the mask is not applied.
+   - **Classification**: This is formally a two-axis joint condition (`warned_port` $\times$ `idata`), disclaimed by NOT CLAIMED (0). Furthermore, on a live guest, writing $16$ on a fresh device with this mutant triggers the kept DATA-arm tripwire (`exit(1)`). Nonetheless, it directly answers Question 2's specific inquiry regarding narrowings *by the latch*.
+
+---
+
+#### Q3. Adjudication of Findings V1 through V20
+All 20 items are adjudicated below in one line each:
+
+- **V1**: **UPHOLD** -- Floor breach on bits 5-7, 9-31, 34-62 measured in [`opus549_measured/c3/TABLE_mask.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/c3/TABLE_mask.out#L3-L6); closed by Session B and verified in [`table6/TABLE.out:164-231`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L164-L231).
+- **V2**: **UPHOLD** -- Opus denominator verified: 8 equivalents and 6 behavior changers in [`table6/TABLE.out:134-141`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L134-L141).
+- **V3**: **UPHOLD** -- `CELL_rd_s0` confirmed equivalent (`odata` initialized to 0 in [`dev_fbctrl.c:110`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L110)); excepted in header and NOT CLAIMED (4).
+- **V4**: **UPHOLD** -- Session Y reads COMMAND back under COMMAND 1 in [`fbctrl_port_probe.py:506`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L506); held states updated in NOT CLAIMED (8).
+- **V5**: **UPHOLD** -- "Effect 4" renamed to cells-alone in [`fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) header.
+- **V6**: **UPHOLD** -- Session K does not read PORT ([`fbctrl_port_probe.py:444-446`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L444-L446)); header correctly changed to "every session but K".
+- **V7**: **UPHOLD** -- Session Z accepts PORT=0 before reading ([`fbctrl_port_probe.py:512-515`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L512-L515)); Z and R correctly excluded as latch-unset read holders.
+- **V8**: **UPHOLD** -- Session V includes 0xff by sb ([`fbctrl_port_probe.py:465`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L465)); header updated to "sb (P, V, B)".
+- **V9**: **UPHOLD** -- `EQ_acc_and7`, `EQ_acc_castint`, and `EQL_latch2` verified in [`table6/TABLE.out:133-135`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L133-L135); added to NOT CLAIMED (4).
+- **V10**: **UPHOLD** -- Trailing newline is not enforced by `ONCE_RE` regex; `DSC_nonl` passes 117/117 ([`table6/TABLE.out:132`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L132)) and is disclosed in NOT CLAIMED (5).
+- **V11**: **UPHOLD** (with REFINE) -- Re-arming latch disclosure updated to $>107$ refusals; `B_mod12` confirmed RED in [`table6/TABLE.out:14`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L14).
+- **V12**: **UPHOLD** -- Suppression of announces for values with high bits only is disclosed in (3) and verified via `DSC_ann_hibits` ([`table6/TABLE.out:131`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out#L131)).
+- **V13**: **UPHOLD** -- Mapping of identical text mutants verified in [`table5/CELLMAP.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table5/CELLMAP.out#L1-L15) and referenced in header.
+- **V14**: **UPHOLD** -- Rejection upheld: `T_W_sd7` and `T_W_sw8` name cells held in Session A and P respectively, not W.
+- **V15**: **UPHOLD** -- Rejection upheld: W announces once (counted) but does not inspect format string; naming effect lists P only.
+- **V16**: **UPHOLD** -- Misrouted read in `CELL_rd_s5` causes subsequent write to default in [`fbctrl_command`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L61-L104) ([`src/devices/dev_fbctrl.c:101-102`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L101-L102)), exiting process.
+- **V17**: **UPHOLD** -- Closing-F2 warrant false for class prior to Session B; confirmed by V1 measurement.
+- **V18**: **UPHOLD** -- Gate comment revised to 13 equivalents in [`gate_mips_folds.sh:55`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L55).
+- **V19**: **UPHOLD** -- Composite count and manifest path wording corrected in brief prose.
+- **V20**: **UPHOLD** -- Rejection upheld: holder lists are non-exhaustive enumerations, not exhaustive sets.
+
+---
+
+#### Q4. Truth of v6 Header Sentences
+- **SESSIONS text for B**: TRUE. 108 refusals ($5 + 13 + 29 + 61$), single-bit shifts verified.
+- **Enumeration new holders**: TRUE. B holds `sb, sh, sw, sd`, previous 5, COMMAND 0, and silent later refusals.
+- **NOT CLAIMED (3), (4), (5), (8)**: TRUE. All bounds ($>107$ refusals, equivalents, un-newlined announce, cell values) match code behavior and [`table6/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out).
+- **LIMITS OF A ROW is IMPRECISE**:
+  The header diff states:
+  *"Session B reads PORT once per width, so each of its rows says that SOME single-bit value of that width got through, not which: the row prints the last one's stored int."*
+  **Refutation**: If an intermediate value in the loop (e.g. $k=4$, value $16$) is accepted, and all subsequent values in the loop ($k \in [5, 7]$) are refused, `d->current_port` retains $16$. The row prints $16$, NOT the last value of the loop.
+  **Required Correction**: Rephrase to: *"the row prints the stored int of the last value that got through (kept by any later refusals)."*
+
+---
+
+#### Q5. Verification of Channels Against `PRETABLE_ADDENDUM_t6.out`
+Every edit predicted in [`PRETABLE_ADDENDUM_t6.out:39-53`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/PRETABLE_ADDENDUM_t6.out#L39-L53) reddened the exact rows in [`table6/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out):
+- `MKB_03`..`MKB_07`: red on B's `sb, sh, sw, sd` width rows.
+- `MKB_08` (`MK_b8_ctl`): red on B's `sh, sw, sd` width rows.
+- `MKB_09`..`MKB_15`: red on B's `sh, sw, sd` width rows.
+- `MKB_16`..`MKB_31`: red on B's `sw, sd` width rows.
+- `MKB_32`..`MKB_63`: red on B's `sd` width row.
+- `MKW_sb05`, `MKW_sh12`, `MKW_sw09`, `MKW_sd40`: red on B's `sb`, `sh`, `sw`, `sd` row respectively.
+- `MK_b5_7`, `MK_b9_31`, `MK_b34_62`: red on exactly the predicted width rows.
+- `B_mod12`: red on `B announce exactly 1 across its 108 refusals`.
+
+No channel mismatch occurred.
+
+---
+
+#### Q6. What Was Missed
+1. **Premise Inaccuracy Regarding Working Tree**:
+   The brief claimed the working tree's [`regress/fbctrl_port_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py) was still v5. In reality, it was already updated to v6 (`a9a2be3d`).
+2. **Residue Classes Modulo 8**:
+   All 108 refusals in Session B have low 3 bits equal to `000` (powers of 2 $\ge 8$). Other sessions test low 3 bits `001` (9), `011` (0x100000003), `101` (0x100000005), and `111` (all-ones). No refusal in the probe ever has `(idata & 7)` equal to $2, 4,$ or $6$. Consequently, an edit such as:
+   ```c
+   else if (idata >= DEV_FBCTRL_NPORTS && (idata & 7) != 6)
+   ```
+   scores $117/117$ GREEN and restores the pre-#549 DATA-arm exit on guest write of $14$. While this belongs to the family of unwritten residue carveouts (disclosed in clause e / NOT CLAIMED (3)), it reveals that parity and low-bit patterns for out-of-range writes were not covered.
+3. **Imprecise Phrasing in LIMITS OF A ROW**:
+   As identified in Q4, stating that the row prints "the last one's stored int" is inaccurate when later values are refused and preserve an earlier accepted store.
+
+---
+
+### Conclusion & Final Verdict
+
+The repair v6 successfully detects all single-axis narrowings of the compare on bits 3..63, widths, and bounds, closing the v5 floor breach. The residual escaping variants are joint latch $\times$ bit conditions (disclaimed under (0)) or unprobed residue carveouts (disclosed under (3)), both of which remain bounded by the kept DATA-arm tripwire.
+
+GO-WITH-CHANGES

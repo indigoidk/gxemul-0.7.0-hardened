@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""N10: re-run the v6 probe's OWN session B (imported) on a binary and print B's four value registers after it, to see
+whether a zero-step control could pin the dsll execution: expected t1=0x100 (5 doublings of 8), t2=0x10000 (13),
+t3=0x100000000 (29 -- a 32-bit sll would leave 0 here), t4=0 (61).  usage: b_regs.py <gxemul> <frozen v6 probe>"""
+import importlib.util
+import os
+import sys
+
+BIN, PROBE = sys.argv[1], sys.argv[2]
+sys.argv = [PROBE, BIN]
+spec = importlib.util.spec_from_file_location("fbp", PROBE)
+fbp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fbp)
+stub = fbp.stub_path()
+try:
+    S = fbp.session("B", fbp.PROG_B, fbp.REGS_B, fbp.READS_B + ["t1", "t2", "t3", "t4"], stub)
+finally:
+    os.unlink(stub)
+print("B status=%s steps=%d/%d badis=%d blast=%s" % (S["status"], S["steps"], S["n"], len(S["badis"]),
+                                                     S["once_after"].get("blast")))
+for r in fbp.READS_B + ["t1", "t2", "t3", "t4"]:
+    print("  %s = %s" % (r, fbp.hx(S["vals"].get(r))))
+print("BREGS_DONE")

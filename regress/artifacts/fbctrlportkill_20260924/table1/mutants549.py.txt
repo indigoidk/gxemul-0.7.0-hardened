@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""#549 kill table: every enumerated edit of the FIXED dev_fbctrl.c, each a text transformation with exactly one match
+(a find-text that matches nothing is a FAIL, so each mutant also pins the presence of what it edits).
+usage: python mutants549.py <fixed dev_fbctrl.c> <outdir>   -> <outdir>/<name>.c for every mutant"""
+import io
+import os
+import sys
+
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+LATCH_TEST = "if (!d->warned_port) {"
+LATCH_SET = "\t\t\t\td->warned_port = 1;\n"
+ACCEPT = "\t\t} else\n\t\t\td->current_port = idata;\n"
+REFUSE_OPEN = PRED + "\n"
+ANNOUNCE = "\t\t\t\tfatal(\"[ fbctrl: port number 0x%llx is out of range; \"\n"
+HEAD_PORT = ("\t\telse {\n"
+             "\t\t\td->current_port = idata;\n"
+             "\t\t\tif (idata >= DEV_FBCTRL_NPORTS)\n"
+             "\t\t\t\tfatal(\"[ WARNING: fbctrl port number is out\"\n"
+             "\t\t\t\t    \" of range! ]\\n\");\n"
+             "\t\t}\n")
+DATA_GUARD = ("\t\tif (d->current_port < 0 || d->current_port\n"
+              "\t\t    >= DEV_FBCTRL_NPORTS) {\n"
+              "\t\t\tfatal(\"[ fbctrl port number is out of range! ]\\n\");\n"
+              "\t\t\texit(1);\n"
+              "\t\t}\n")
+
+#  (name, class, [(old, new), ...])  -- class: FLOOR-b | d (the fix's own predicate/store/latch) | e (disclosed)
+MUTANTS = [
+    ("M_revert", "FLOOR-b: HEAD's PORT arm verbatim (store, then warn)", None),
+    ("M_gt", "d: >= becomes >", [(PRED, "else if (idata > DEV_FBCTRL_NPORTS) {")]),
+    ("M_u32", "d: compare on (uint32_t)idata", [(PRED, "else if ((uint32_t) idata >= DEV_FBCTRL_NPORTS) {")]),
+    ("M_i32", "d: compare on (int)idata", [(PRED, "else if ((int) idata >= DEV_FBCTRL_NPORTS) {")]),
+    ("M_i64", "d: compare on (int64_t)idata", [(PRED, "else if ((int64_t) idata >= DEV_FBCTRL_NPORTS) {")]),
+    ("M_decl", "d: idata declared int64_t", [("\tuint64_t idata = 0, odata = 0;", "\tint64_t idata = 0, odata = 0;")]),
+    ("M_mod33", "d: compare on idata % 2^33", [(PRED, "else if (idata % 0x200000000ULL >= DEV_FBCTRL_NPORTS) {")]),
+    ("M_bit", "d: a bit test for the bound", [(PRED, "else if (idata & 0x100000008ULL) {")]),
+    ("M_wide", "d: refusal only for writes of 4+ bytes", [(PRED, "else if (len >= 4 && idata >= DEV_FBCTRL_NPORTS) {")]),
+    ("M_acc4", "d: accept only 4-byte writes", [(ACCEPT, "\t\t} else if (len == 4)\n\t\t\td->current_port = idata;\n")]),
+    ("M_rej2", "d: legal selector 2 never accepted", [(ACCEPT, "\t\t} else if (idata != 2)\n\t\t\td->current_port = idata;\n")]),
+    ("M_and5", "d: the refusal rewrites the previous selector (&= 5)",
+     [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\td->current_port &= 5;\n")]),
+    ("M_reset0", "d: the refusal resets the selector to 0", [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\td->current_port = 0;\n")]),
+    ("M_clamp", "d: the refusal stores idata & 7", [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\td->current_port = idata & 7;\n")]),
+    ("M_store", "d: the refusal stores the value anyway", [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\td->current_port = idata;\n")]),
+    ("M_latch0", "d: the latch never set (announce every time)", [(LATCH_SET, "")]),
+    ("M_latchinv", "d: the latch test inverted (never announce)", [(LATCH_TEST, "if (d->warned_port) {")]),
+    ("M_latchcnt", "d: the latch counts (announces on the 3rd, 5th, ...)", [(LATCH_TEST, "if (d->warned_port++ == 2) {")]),
+    ("M_perval", "d: a per-value latch (announce when the value changes)",
+     [(LATCH_TEST, "if (d->warned_port != (int) idata) {"), (LATCH_SET, "\t\t\t\td->warned_port = (int) idata;\n")]),
+    ("M_debug", "d: the announce demoted to debug()", [(ANNOUNCE, ANNOUNCE.replace("fatal(", "debug("))]),
+    ("M_ann_any", "d: the announce fires on ACCEPTED writes too",
+     [(PRED, "else if (!d->warned_port && (d->warned_port = 1)) {\n\t\t\tfatal(\"[ fbctrl: port number 0x%llx is out of range; \"\n\t\t\t    \"the selector is unchanged (once) ]\\n\", (unsigned long long) idata);\n\t\t\tif (idata < DEV_FBCTRL_NPORTS) d->current_port = idata;\n\t\t} else if (idata >= DEV_FBCTRL_NPORTS) {")]),
+    ("M_static", "e (disclosed): a process-global latch",
+     [(LATCH_TEST, "static int warned_port_g;\n\t\t\tif (!warned_port_g) {"), (LATCH_SET, "\t\t\t\twarned_port_g = 1;\n")]),
+    ("M_noguard", "e (disclosed): the DATA arm's range check deleted", [(DATA_GUARD, "")]),
+]
+
+
+def main():
+    src, out = sys.argv[1], sys.argv[2]
+    os.makedirs(out, exist_ok=True)
+    base = io.open(src, encoding="utf-8", newline="").read()
+    assert "\r\n" not in base
+    head = io.open(os.path.join(os.path.dirname(src), "dev_fbctrl_HEAD.c"), encoding="utf-8", newline="").read()
+    for name, cls, edits in MUTANTS:
+        if edits is None:
+            s = head                                  # verbatim HEAD: the removed defect at the fixed site
+        else:
+            s = base
+            for old, new in edits:
+                n = s.count(old)
+                if n != 1:
+                    sys.exit("REFUSED %s: %d matches for %r" % (name, n, old[:50]))
+                s = s.replace(old, new)
+        io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+        print("%-11s %s" % (name, cls))
+    print("MUTANTS_WRITTEN=%d" % len(MUTANTS))
+
+
+if __name__ == "__main__":
+    main()

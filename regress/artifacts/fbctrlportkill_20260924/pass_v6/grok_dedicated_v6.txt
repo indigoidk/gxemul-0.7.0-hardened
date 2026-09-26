@@ -1,0 +1,78 @@
+I'll read the v6 brief in full and then attack the shipped PORT arm against the 117-row probe, looking only for edits outside the header's NOT CLAIMED list.The brief says session B closes every single-bit narrowing. I'll check that claim against the shipped PORT arm and the probe rows, then look for a joint edit B never observes.The compare's bit generating set is the part session B claims to close. I'll check which widths and lengths can actually reach the PORT arm, and which latch states those bits are written in.VERDICT: SHIP WITH CHANGES
+
+The fixed compare still refuses every value v6 writes. It does not pin that refusal while the once-latch is still clear. The smallest edit of `case DEV_FBCTRL_PORT:` that scores 117/117 and changes a reachable guest write is: while `warned_port` is 0, clear bit 4 before the `>= 8` test.
+
+```c
+else if ((d->warned_port ? idata : (idata & ~(1ULL << 4)))
+    >= DEV_FBCTRL_NPORTS) {
+```
+
+The accept arm is untouched, so a value that falls through is stored whole.
+
+## Why every one of the 117 rows stays green
+
+On this compiler the weakened compare accepts a write only when `warned_port` is still 0 and `idata` is in 16..23. Clearing bit 4 then leaves 0..7. Every later out-of-range write sees the latch already set and uses the original compare.
+
+The latch is set only inside the refusal arm. A legal store does not set it. The only probe writes that see it clear are each session's first out-of-range store:
+
+| First refusal | Value | Bits that actually flip `>= 8` |
+|---|---|---|
+| P, W, B | 8 | bit 3 only |
+| F, V, R, K, Y, Z, X2, X6 | 9 | bit 3 only |
+| X7 | 0x100 | bit 8 only |
+| X3 | 0x100000005 | bit 32 only (masking it leaves 5) |
+| X4 | all-ones | none (any one bit still leaves a value `>= 8`) |
+
+None of those is in 16..23, and none has bit 4 as a decisive bit. After that first refusal the latch is set, so the mask is gone.
+
+The rows that look like they should catch 16 all run with the latch already set:
+
+- P's three `refuse 16` rows (sw, sb, sh) follow P's first refusal of 8.
+- V's later 16 follows V's first refusal of 9.
+- Each of B's four width rows includes 2^4, but B's first store is 8, which sets the latch. The later store of 16 is refused, `current_port` stays 5, and the one `lw` per width still reads 5. The count row still sees one announce, on that first 8.
+
+K's witness stays green for the same reason: K's refused value is 9, the selector stays 5, and the DATA read/write never sees port 16. No probe access takes the new branch, so the announce, cell, accept, and read rows are on the same trace as the fixed binary.
+
+This was walked off the probe's store list. It was not rebuilt and run.
+
+## The exit comes back
+
+On a fresh device (`warned_port` is 0 from `memset` in `DEVINIT`), a guest `sw` of 16 to PORT takes the accept arm and sets `current_port` to 16. The next DATA access hits the kept check `current_port >= DEV_FBCTRL_NPORTS` and `exit(1)`. The same is true for 17..23. A store of 24 is still refused: masking bit 4 leaves 8.
+
+A narrower form, `idata >= 8 && !(idata == 16 && !d->warned_port)`, also scores 117 and restores the exit on 16 alone. P, V, and B do write 16, but only after the latch is set.
+
+## What that means for the contract
+
+`(0)` calls every two-axis edit unclaimed. That sentence is aimed at the unbounded product (value × width × previous selector, and so on). It does not reach this cell. The refusal block reads `warned_port`, and `idata >= 8` tests bits 3..63. The floor product is that latch state times those bits. Held at latch-unset, with a channel that goes red if the bit is masked: **bit 3, bit 8, bit 32**. Open: **4, 5, 6, 7, 9..31, 33..63** — 58 bits. Bit 4 is the smallest.
+
+Session B cannot close them. Its first store is bit 3, which sets the latch, and the four `lw`s happen after that. A leak conditioned on the latch still being clear never starts, so there is nothing for the later refusals to preserve.
+
+The repair owes those 58 cells in one diff: a fresh device, a legal `PORT=5` (that does not set the latch), one `sw` of `2^k`, then a PORT read that must still be 5. One width is enough. A third qualifier (`len == 1` as well as the latch) is a real `(0)` joint; an `sw`-only row does not kill it.
+
+## Shapes walked (the denominator)
+
+These do **not** score 117. The width aggregate is enough for them: any accepted `2^k` is stored as `2^k`, `INT_MIN`, or 0, never 5, and a later refusal in that width group keeps it. The group's `lw` runs before the next group's `PORT=5`. Table 6 already measured the same channel (`MKB_03`..`MKB_63`, `MKW_*`).
+
+- Mask any bit 3..63, including at one width only (`len == 1/2/4/8`).
+- Move the bound (`>= 9`, `>= 7`).
+- Compare only the low 32 bits, or compare signed. Both accept a value B or W or P already writes.
+
+These score 117 and are inside the header's list, so they are not the breach:
+
+- `idata != 10`, `!= 14`, or any other single unwritten value, and a finite window such as 10..15. `(3)`. A first store of 14 does restore the DATA exit.
+- Re-arm after more than 108 refusals, and an announce skipped for a class no first refusal belongs to. `(3)`.
+- Accept `idata & 7` or `(int)idata`, read masked with 7, latch stored as any nonzero. `(4)`. No reachable change.
+- `printf`, or the announce without its newline. `(5)`.
+- Ignore bit 4 only when `current_port == 0`. The repair never reads `current_port`. `(0)`, and the header already calls a previous-selector condition clause (e). A power-on store of 16 still restores the exit.
+- Accept when the low 32 bits equal `current_port` (`0x100000005` while the selector is already 5). `(0)`. The stored `int` stays 5, so the DATA exit does not come back; the latch stays clear and a later real refusal announces.
+- Drop one unwritten accept pair, such as `sd` of selector 3. `(0)`. That is the accept path, and the selector it leaves behind is still in 0..7.
+- `lb`/`lh`/`ld` return 0 while the latch is clear. `(0)`. W's `lb`/`lh`/`ld` run only after W has refused. This does not change a guest store.
+- `len == 3` bypasses the compare. Guest `sb`/`sh`/`sw`/`sd` and `swl`/`swr`/`sdl`/`sdr` present length 1, 2, 4, or 8 only.
+
+One one-axis edit does score 117 and sits outside the literal text of `(0)`–`(8)`:
+
+```c
+else if (idata >= DEV_FBCTRL_NPORTS && (idata & 7) != 6) {
+```
+
+Every probe refusal is odd or a power of two from bit 3 up, so none has low 3 bits equal to 6. Selector 6 is less than 8 and still takes the accept arm. A guest store of 14 is accepted, `current_port` becomes 14, and the next DATA access exits. A store whose low 32 bits are 6 (`0x100000006`) is accepted as port 6 and does not exit. Bits 0..2 never change `idata >= 8` (masking them together is the measured equivalent `EQ_maskhi`), so this is a predicate the compare does not distinguish: clause (e), a disclosure sentence in `(3)`, not one of the 58 rows. The verdict rests on the latch × bit cells, not on this one.

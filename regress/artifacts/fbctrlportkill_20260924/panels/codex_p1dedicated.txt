@@ -1,0 +1,201 @@
+VERDICT: PROCEED WITH CHANGES
+
+1. **A one-token signedness change survives the specified runtime tests.** In [dev_fbctrl.c:109](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:109), replace:
+
+   ```c
+   uint64_t idata = 0, odata = 0;
+   ```
+
+   with:
+
+   ```c
+   int64_t idata = 0, odata = 0;
+   ```
+
+   Every explicitly proposed input is below `2^63`, including `sw -1`, which produces **positive `0xffffffff`**, and the wide value `0x100000003`. All their comparisons remain unchanged. On the host conversion model assumed by the brief, inputs with bit 63 set become negative and escape refusal.
+
+   This is a smallest nonempty token edit for **controls, anchored refusal, boundary, wide, negative and announce** alike, when announce repeats the listed inputs. The announce operands are unspecified; stronger claims about that row require specifying them.
+
+   These are **source readings and arithmetic predictions**, not measured mutant results. I changed no files and ran no emulator.
+
+2. **Each proposed row has further surviving mutations.** All edits below target the proposed version of `src/devices/dev_fbctrl.c`. Apply each independently. Each preserves all explicitly specified post-fix assertions, subject to the announce ambiguity above.
+
+   | Proposed row expected to stay green | Concrete local edit | Behaviour the suite misses |
+   |---|---|---|
+   | Controls | Replace the final PORT `else` with `else if (idata != 2)` | Legal selector 2 is never accepted. The controls select ports 0, 1 and 5; GET_RESOLUTION’s **DATA value** 2 does not test **PORT selector** 2. |
+   | Anchored refusal | Insert `d->current_port &= 5;` inside the refusal branch, outside the warning latch | Refusal changes previous selector 7 to 5. All explicitly anchored refusals preserve previous selector 5; fresh selector 0 also survives this mutation. |
+   | Boundary | Replace `idata >= DEV_FBCTRL_NPORTS` with `idata & 0x100000008ULL` | Two token replacements turn the comparison into a selected-bit test. It rejects 8, 9, `0xffffffff` and `0x100000003`, and accepts the tested legal selectors, but incorrectly accepts other invalid selectors such as 16. |
+   | Wide | In `memory_readmax64(cpu, data, len)`, replace its last `len` with `len == 8 ? 7 : len` | On BE, the proposed wide input becomes `0x1000000`; on LE it remains `0x100000003`. Both are refused, so the wide row stays green despite discarding a byte. |
+   | Negative | The one-token `uint64_t` → `int64_t` edit in finding 1 | A 32-bit all-ones write does not exercise signed 64-bit comparison. |
+   | Announce | Replace the refusal diagnostic’s `fatal` token with `debug` | The stepped rows still print once. Normal execution can suppress the message. The distinction is explicit in [debugmsg.c:365](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365). |
+   | Pre-fix red | No mutation of the proposed fix changes the separately tested pre-fix binary | This is baseline discrimination, not a constraint on a mutated fix. Its blanket death expectation is also incorrect; see finding 6. |
+
+   Two additional small edits expose distinct holes:
+
+   - **Comparison width:** replace the comparison’s `idata` operand with `idata % 0x200000000ULL`. Every named input is unchanged, but bits 33–63 cease to participate.
+   - **Accepted store width:** replace the final PORT `else` with `else if (len == 4)`. Every proposed accepted selector is written by `sw`; the sole `sd` is refused before reaching this store. Legal byte, halfword and doubleword selector writes can therefore stop working unnoticed.
+
+3. **The once-only row does not establish timing or per-instance ownership.**
+
+   A concrete shared-latch mutation is to insert:
+
+   ```c
+   static int warned_port;
+   ```
+
+   inside `DEVICE_ACCESS(fbctrl)`, then replace both uses of `d->warned_port` with `warned_port`. The unused structure field may remain. Every fresh, single-device process behaves correctly; another device in the same process loses its first announcement.
+
+   A separate one-expression mutation replaces:
+
+   ```c
+   !d->warned_port
+   ```
+
+   with:
+
+   ```c
+   d->warned_port++ == 2
+   ```
+
+   while retaining `d->warned_port = 1;`. The cumulative message counts after successive refusals are **0, 0, 1, 1, 2**. “Exactly one after three” stays green, although the first refusal is silent and later announcements repeat.
+
+   Conversely, these simple mutations **are caught** by the proposed rows:
+
+   | Mutation | Detecting row |
+   |---|---|
+   | `>=` → `>` | Boundary: 8 becomes accepted |
+   | `>=` → `==` | Anchored refusal: 9 becomes accepted |
+   | Fixed threshold below 8 / above 8 | Acceptance of 7 / refusal of 8 |
+   | Narrow comparison to `uint32_t` | Wide: value becomes 3 |
+   | Narrow comparison to `int32_t` | Negative, and wide |
+   | Delete the final `else`, making the store unconditional | Anchored refusal |
+   | Reset refused selector to 0, or clamp it to 7 | Anchored refusal |
+   | Set the latch before testing it | Announce: zero messages |
+   | Never set the latch | Announce: three messages |
+
+   Necessary coverage additions are accepted writes at every width, all eight legal selectors, refusals from different previous selectors, upper-bit comparison cases, warning counts immediately after the first refusal, valid accesses interleaved with refusals, and two device instances in one process. DATA writes after refusal should also verify that the previous cell is updated.
+
+4. **The access producer supports all four widths; byte lanes are not ordinary register aliases.**
+
+   Reading [cpu_mips_instr_loadstore.c:127](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:127), [memory.c:55](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c:55), and [memory_rw.c:480](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480):
+
+   - The CPU serializes the low `len` register bytes in guest byte order.
+   - Device dispatch subtracts the device base and passes the starting offset unchanged.
+   - `memory_readmax64()` reconstructs an **unsigned** value from all supplied bytes.
+   - Neither canonical register access crosses the device boundary, so neither is length-clamped.
+
+   For ordinary aligned loads/stores, offsets below are hexadecimal and relative to `0x12f00000`:
+
+   | Width | PORT case | DATA case | Other aligned offsets reaching the access function’s `default` | Write `idata` |
+   |---|---|---|---|---|
+   | 1 | `00` | `10` | `01–0f`, `11–1f` | Register value modulo `2^8` |
+   | 2 | `00` | `10` | `02,04,06,08,0a,0c,0e,12,14,16,18,1a,1c,1e` | Modulo `2^16` |
+   | 4 | `00` | `10` | `04,08,0c,14,18,1c` | Modulo `2^32` |
+   | 8 | `00` | `10` | `08,18` | Full 64-bit value |
+
+   Misaligned ordinary halfword, word and doubleword accesses raise an address exception before the callback, as shown at [cpu_mips_instr_loadstore.c:57](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:57).
+
+   For bytes `b[0]…b[n−1]`, the exact reconstruction is:
+
+   - BE: `Σ b[i] × 256^(n−1−i)`
+   - LE: `Σ b[i] × 256^i`
+
+   Thus the same numeric ordinary store produces the same `idata` in either byte order. Every **read** enters the callback with `idata = 0`; signed-load extension occurs after the callback. An `sb` at `+00` supplies its unsigned byte value as the entire selector, even on BE.
+
+   **Unaligned left/right instructions need a separate enumeration.** [cpu_mips_instr_unaligned.c:44](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:44) aligns the address down to 4 or 8 bytes. Consequently:
+
+   - Word left/right accesses at `00–03` reach PORT; `10–13` reach DATA.
+   - Doubleword left/right accesses at `00–07` reach PORT; `10–17` reach DATA.
+   - Loads make one aligned read, with `idata = 0`.
+   - Stores first read the aligned register, merge bytes, then make one aligned write of the full width.
+
+   The merge is exact: with byte offset `k` within an `n`-byte aligned word, left stores consume register bytes from byte `n−1` downward; right stores consume bytes from byte 0 upward.
+
+   | Store | Memory byte positions overwritten |
+   |---|---|
+   | BE left | `k` upward through `n−1` |
+   | BE right | `k` downward through 0 |
+   | LE left | `k` downward through 0 |
+   | LE right | `k` upward through `n−1` |
+
+   Unwritten bytes retain the preceding device-read result. Decoding that merged buffer with the formulas above gives `idata`; the proposed guard still checks the entire result.
+
+   Successful SC/SCD stores use the same 4/8-byte value domains; failed conditional stores make no device write. Coprocessor transfers reuse the load/store machinery.
+
+5. **After the proposed change, no sequence of defined accesses through this device reaches the DATA range-check `exit(1)`.**
+
+   The invariant is sufficient:
+
+   - Initialization sets `current_port = 0`.
+   - PORT reads leave it unchanged.
+   - Refused PORT writes leave it unchanged.
+   - Accepted PORT writes store only unsigned values 0–7, all exactly representable as `int`.
+   - DATA and command handling contain no assignment to `current_port`.
+
+   Searching the permitted `src/` tree confirms the PORT assignment is its only explicit writer. See [dev_fbctrl.c:116](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:116) and [initialization](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:157).
+
+   This conclusion concerns **the DATA range guard**. The command helper’s default and the access function’s default retain their separate terminating calls.
+
+   The brief overstates the future protection: a later refusal bug that stores a **wrong but valid** selector remains invisible to the DATA guard. The mask mutation in finding 2 demonstrates that.
+
+6. **The stored-value table is correct under the brief’s host conversion assumption; the universal death claims are not.**
+
+   Source reading plus arithmetic, assuming 32-bit `int` and the stated low-32-bit conversion:
+
+   | Store | `idata` | Old stored `current_port` | Old DATA range guard |
+   |---|---:|---:|---|
+   | `sw 5` | `0x5` | 5 | Passes |
+   | `sw 7` | `0x7` | 7 | Passes |
+   | `sw 8` | `0x8` | 8 | Terminates |
+   | `sw 9` | `0x9` | 9 | Terminates |
+   | `sw -1` | `0xffffffff` | −1 | Terminates |
+   | Proposed wide `sd` | `0x100000003` | 3 | Passes |
+   | `sb 0xff` | `0xff` | 255 | Terminates |
+
+   `sd` really does supply eight bytes on the default testmips CPU. Its default is [5KE](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:410), defined as ISA 64 in [mips_cpu_types.h:104](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/mips_cpu_types.h:104).
+
+   Therefore:
+
+   - “A store of 8 or more, then any DATA access, ends the process” is too broad. On the stated host, the guard passes whenever the stored low 32 bits are 0–7.
+   - “On HEAD’s binary the refusal rows end the process” is false for the wide row. That row should fail the **selector-retention assertion**, observing 3 instead of 5; a DATA read does not terminate.
+   - The reported measurement establishes the `sw 9` witness, not death for every proposed refusal row.
+   - Out-of-range unsigned-to-`int` conversion remains implementation-defined. I did not independently measure the compiler conversion.
+
+7. **The RAM counterfactual is wrong, although the device-signature control remains useful.**
+
+   In plain RAM, the described control writes `123` to `base+0x10`, then writes command value `2` to that **same address**. Changing the value at `base+0x00` does not bank ordinary RAM. Its final read therefore returns **2**, not 123.
+
+   A banked register implementation that omitted command execution would retain 123. That is a different counterfactual.
+
+   The real device returns zero because the non-X11 GET_RESOLUTION branch explicitly clears X1 and Y1 at [dev_fbctrl.c:87](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:87). The zero expectation is conditional on `x11_md.in_use == 0`; with X11 it returns the framebuffer dimensions.
+
+8. **The machine-installation claim is supported; several other factual descriptions need qualification.**
+
+   | Brief claim | Audit |
+   |---|---|
+   | testarm, testm88k, testppc, testriscv and testsh install fbctrl through `default_test()`; testmips installs it separately | **Confirmed.** Both additions are unconditional: [shared setup](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:154), [MIPS setup](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:337). |
+   | Bare machines do not install it; no other source file instantiates it | **Confirmed for the built-in setups searched.** `autodev.c` registers the device type; that is not an instance. |
+   | Register map, state, initialization, access function and command-helper excerpts | **Match the source.** |
+   | The PORT warning only prints | **Confirmed.** `fatal()` itself does not terminate. |
+   | Per-instance warning latches exist; disk’s cited latches are function-static | **Confirmed.** See [dev_disk.c:73](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_disk.c:73). |
+   | Failed device accesses produce MIPS/M88K access exceptions | **Confirmed for ordinary exception-enabled guest accesses**, at [memory_rw.c:603](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603). |
+   | Commands outside 0–2 terminate | True for the **stored `int cmd`** when executing a command write, not every original 64-bit DATA value. Conversion occurs first. FILL/COPY are indeed documented TODO commands. |
+   | Every offset other than `00`/`10` reaches the access default | True of **callback-relative offsets**. Ordinary misalignment can trap earlier; left/right instructions can align another effective offset onto a valid register. |
+   | `+03` is “the low byte of PORT on a big-endian guest” | Only a conventional **32-bit layout** description. It is not a supported byte-lane alias here; an ordinary byte access dispatches to `default`. An 8-byte BE quantity’s low byte would be at `+07`. |
+   | Nothing depends on the replaced WARNING text | No consumer was found in the permitted source and regression scripts. That does not establish absence outside the permitted scope. |
+
+9. **The gate rationale contains a directly refutable premise and an omitted coverage dependency.**
+
+   “No gate drives a test machine’s devices today” is false. Gate 16 already runs `mlw2_dev_tm64`, whose loads target the testmips console device: [mips_fold_probe.py:163](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/mips_fold_probe.py:163), [row definition](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/mips_fold_probe.py:420). Gate 14 also reads testarm’s MP device in its strlen probe.
+
+   The named three testmips launch paths are present. Gate 9’s testmips exercise is construction; gate 8 runs the upstream **loader corpus under `-V`**, rather than executing guest unit tests: [gate_upstream.sh:73](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_upstream.sh:73).
+
+   Appending this self-contained probe to gate 16 would inherit its unrelated Pmax-kernel preflight unless placement changes: [gate_mips_folds.sh:35](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh:35).
+
+   There are also observable probe census requirements beyond the cited pipeline checker: [gate_hygiene.sh:385](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh:385) pins the PTY population, checks promptless names, and pins readiness constructs. Which counters change depends on the eventual probe implementation.
+
+10. **The remaining provenance claims are unverified, not source findings.**
+
+    The proposed patch is absent from the current device file, and no top-level permitted regression script mentions fbctrl. That supports “not implemented here.”
+
+    The commit identities, unchanged-since-import assertion, CHANGELOG result, binary hash/time/source identity, historical panel account, tracking-row contents, and promised copies/rebuilds cannot be independently established within the requested reading scope. The quoted K/L output is **the brief’s reported measurement**; its execution and disassembly assertions were not independently reproduced. I did not read other artifacts, the ledger, or the pipeline checker.

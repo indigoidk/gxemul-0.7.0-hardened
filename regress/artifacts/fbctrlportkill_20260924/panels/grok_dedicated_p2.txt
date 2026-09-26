@@ -1,0 +1,93 @@
+I'll review GXemul #549 read-only, starting with the brief and the inlined diff, then checking the device, probe, and gate against the measured table.The brief is in. Next I’ll read the device, the probe, and the table-2 variant sources so any finding is outside those 25.VERDICT: SHIP WITH CHANGES
+
+The PORT arm in `GXEMUL-SEC/src/devices/dev_fbctrl.c` does refuse a full `uint64_t` `idata >= 8`, leaves `current_port` unchanged, latches `warned_port` once, and keeps the DATA `exit(1)`. I do not have a defect in those tokens. The diff also adds sentences that are false, and edits outside the 25 variants still score 41/41 while breaking each of those four requirements. Fix the sentences before commit.
+
+## 1. Device edits outside table 2 that stay 41/41
+
+Table 2 already kills a bad compare, a bad store, and a bad latch in the PORT arm (`M_i64`, `M_u32`, `M_store`, `M_reset0`, `M_wide`, `M_acc4`, `M_noguard`, `M_static`). These are different sites. Each leaves every current row green. The row named is the one that looks like it should go red.
+
+**1. Full 64-bit refuse, bit 63 only.** Replace the predicate with
+
+```c
+else if ((idata & ~(1ULL << 63)) >= DEV_FBCTRL_NPORTS) {
+```
+
+Arithmetic: a tested refuse stays a refuse because its low 63 bits are still `>= 8` (`8`, `9`, `16`, `0xff`, `0x100`, `0xffffffff`, `0x100000003`, `0x200000000`, and all-ones, whose low 63 bits are `2^63-1`). Accepts `0..7` have bit 63 clear. The eight values `2^63 + 0..7` take the accept arm. `current_port` is an `int`, so `2^63` stores as `0`. That is in range, so the DATA check does not exit, and a following DATA write with the selector at `0` enters `fbctrl_command()`. Row that stays green: `refuse all-ones (sd), PORT keeps 5`. This is the hole behind the header's "bit 63" claim. `M_i64` goes red on that same row because a signed compare rejects all-ones, which still has every other bit set.
+
+**2. Previous selector, only the memset zero.** At the bottom of the refuse arm, after `d->warned_port = 1;`:
+
+```c
+if (!d->current_port)
+    d->current_port = (int) idata;
+```
+
+`memset` leaves `current_port == 0` (`DEV_FBCTRL_PORT_COMMAND`). Sessions P and K store `5` or `7` before they refuse, so the `if` is false there. Session F is the power-on case: one `sw` of `9`, no PORT read, no DATA access (`PROG_F`, empty read list). The announce still matches and the breakpoint is still reached. Row that stays green: `refuse 9 (sw), PORT keeps 5`. The broken session's own row, `F refusal announced while free-running (fatal)`, also stays green. `M_reset0` is the always-store-`0` edit and is red on the keeps-5 rows. This one stores the bad selector only when the previous value is the reset `0`.
+
+**3. Once per device, cleared from `fbctrl_command()`.** First line of that function:
+
+```c
+d->warned_port = 0;
+```
+
+Session C does call it (`PORT=0`, DATA `2` = `GET_RESOLUTION`) and then never refuses, so the clear is invisible. Session P's only DATA write is `0x2a` to port `5` (`DEV_FBCTRL_PORT_COLOR_R`), so `fbctrl_command()` does not run between the ten refusals. F never touches DATA. Row that stays green: `announce: still exactly 1 after ten refusals`. A command, then another bad selector, announces again.
+
+**4. DATA check, field order.** In the DATA arm only, delete one character:
+
+```c
+if (d->current_port < 0 || d->current_port
+    > DEV_FBCTRL_NPORTS) {
+```
+
+A correct PORT arm never stores `8`, so every DATA access in the probe still has a selector in `0..7` and the body of the check still does not run. Row that stays green: `K survives DATA after a refused PORT write`. Reading of the struct, not a compiled `offsetof`: the fields are pointer, `int current_port`, `int port[8]`, `int warned_port`, with no pack pragma. Those `int`s are adjacent on both LP64 and ILP32, so `&port[8] == &warned_port` and `&port[-1] == &current_port`. With `>` , a selector of `8` misses `exit(1)` and `d->port[8] = idata` writes the latch. Deleting only `d->current_port < 0 ||` is the same class of edit: a selector of `-1` misses the exit and the store hits `current_port`. `M_noguard` deletes the whole check. This leaves the check in the file and opens the one index that aliases the latch.
+
+**5. PORT read / `odata`, widths above 4.** On the read arm:
+
+```c
+odata = (uint64_t) d->current_port | (1ULL << 32);
+```
+
+Reading of `memory_writemax64` (`src/core/memory.c`): it writes `len` low bytes. Reading of `cpu_mips_instr.c`: `lw` is size code 2, four bytes. Every PORT read in the probe is `lw`, so bits 32 and up never reach a register. Row that stays green: `C LIVENESS: PORT reads back 5` (got stays `0x5`). The probe boots `-M 64` and never emits `ld`. An `ld` returns `0x100000005`. `sdl`/`sdr` (`mips_unaligned_loadstore`) read eight bytes, merge, and write eight back, so that write sees a value `>= 8` and is refused.
+
+**6. Widths the accept matrix never pairs.** Same predicate site:
+
+```c
+else if (idata >= DEV_FBCTRL_NPORTS || (len < 4 && idata == 0)) {
+```
+
+`ACC` writes selector `0` only with `sw` (`len == 4`). Session C's command select is also `sw` of `s0`. No `sb`/`sh` of `0` exists, so nothing announces and no accept row moves. Row that stays green: `accept selector 0 written by sw`. An `sb` of `0` is a legal selector and is refused.
+
+## 2. Probe and gate-16 edits
+
+**Wrong device, every fbctrl pin still green.**
+
+- One constant in the probe. `REFUSE` writes `8` in exactly one place: `("sw", "t2", 8, "8 (sw)")`. Change `8` to `9`. Table 2's `M_gt` (`>` instead of `>=`) is red only on `refuse 8 (sw), PORT keeps 5`. After the edit that row writes `9`, which `>` still refuses, and the correct device still refuses it too. `M_gt` scores 41/41. The label still says "8".
+- One assignment in `row()`: `ok = got == want` becomes `ok = True`. `HEAD`'s arm (`M_revert`) then prints 41 ok lines, `FBCTRLP_CONTROL=OK`, `FBCTRLP_RESULT=41/41`, no `^  FAIL ` line, and the process still ends at the bottom of `main()`. The gate's six pins match.
+- Gate only, two arguments. `M_revert.raw` is a complete record: `FBCTRLP_CONTROL=OK`, `FBCTRLP_RESULT=25/41`, `FBCTRLP_DONE`. `main()` never calls `sys.exit`, so `fbrc` is 0. `rows run` is the denominator, still 41. The two pins that actually go red on that file are the numerator and the FAIL count. Point both expected values at the measured value:
+
+```bash
+check "fbctrl_port rows correct" "${fbres%/*}" "${fbres%/*}"
+check "fbctrl_port rows failed" "$(grep -c '^  FAIL ' "$FBCLOG")" "$(grep -c '^  FAIL ' "$FBCLOG")"
+```
+
+The parse guard, the control pin, the exit pin, and `rows run` are already green on that record. `check_score_claims.py` pins `check "<stem> rows run" ... <unquoted N>`, so the pin it watches is this denominator. It stays 41 while the device is the old one. Quoting the numerator (`"41"`) is why that tool does not watch the pin that catches `HEAD`.
+
+The missing, duplicate, and malformed `RESULT` / `CONTROL` / `DONE` checks do what they say. A failure that still prints one well-formed record is outside them.
+
+**Correct device, gate goes red.**
+
+- In `ONCE_RE`, change `0x[0-9a-f]+` to `0x[0-9a-f]{2,}`. The first refusal is `sw` of `9`, and the format is `0x%llx` with no width, which prints `0x9`. `announce: exactly 1 right after the FIRST refusal` becomes 0. Reading of the format string. The current 41/41 run shows the one-or-more pattern matches that text.
+- Or set the gate's correct-count expected word to `42`. The probe's numerator is 41.
+
+Moving the pmax-kernel `gate_skip` below the block: reading of `regress/lib.sh` `gate_skip`. A missing binary still skips on the earlier check. A missing kernel with no fbctrl failure still skips, and the fold rows still do not run. A missing kernel after an fbctrl failure exits 1. Fold rows that are red still fail when the kernel is present, because those checks are unchanged.
+
+## 3. Sentences the diff adds
+
+**False. Gate comment and the new PORT comment in `dev_fbctrl.c`.** Both say a store of an out-of-range selector was stored with a warning and the next DATA access ended the emulator. The old arm did `d->current_port = idata` with `current_port` an `int` and `idata` a `uint64_t`, and the warning tested the full `idata`. The DATA exit tests the stored `int` (`< 0` or `>= 8`). On the LP64 host the WSL builds used, that conversion keeps the low 32 bits. `sd` of `0x200000000` stores `0`. `sd` of `0x100000003` stores `3`. Both are inside `0..7`, so the next DATA access does not exit. Those two values are in the probe's own refuse list. `sw` of `9` does exit. That is the case the probe header states, and that sentence is the true one: exit is on the stored `int`, and the example is `sw 9`.
+
+**False for the code this diff commits. Probe NOT CLAIMED, the latch sentence.** `warned_port` is at `&port[8]` (same layout reading as finding 4). The DATA arm calls `exit(1)` before any `port[current_port]` use. A selector of `8` that a broken PORT arm stored hits that exit and does not write the latch. The write lands on the latch only when the check is also gone or its `>=` has become `>`, which is finding 4. The exit body is what a correct PORT arm makes unreachable. The check's condition still runs on every DATA access.
+
+**True only for the signed all-ones case. Probe CATCHES, "bit 63".** `M_i64` is red on `refuse all-ones (sd)` because a signed compare sees `-1`. Finding 1 clears only bit 63, leaves that row green, and accepts `2^63`. The row observes "all 64 bits set", not bit 63.
+
+**True only when the re-select store lands. Probe session P: "so every row fails only on its own value."** Reading of `table2/M_acclatch.raw`: accepts die after the first refusal, the later `PORT=5` stores do not land, and `refuse 9 (sw), PORT keeps 5` and `refuse 8 (sw), PORT keeps 5` are both `got=0x5`. The only red row is `refuse 9 after PORT=7, PORT keeps 7` (`got=0x5`). Those green keeps-5 rows are a selector that was already `5`.
+
+**False. Probe NOT CLAIMED: "every machine installs ONE fbctrl".** Reading of `machine_test.c`: `default_test()` and `MACHINE_SETUP(testmips)` each call `device_add` of `fbctrl` once. `baremips` / `barearm` add none. `emul_parse.c` can `emul_add_machine` more than once, and `emul.c` runs every machine. The probe's `-E testmips` path has one (`emul_simple_init` requires `n_machines == 1`), so a process-global latch matches a per-device latch for these 41 rows. That is the measured case. A second test machine in one process is a second `fbctrl_data` and shares `M_static`'s latch.

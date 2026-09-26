@@ -1,0 +1,39 @@
+#!/bin/bash
+# After run_all.sh: build MB_pc4 (the Opus fallback's text, md5-checked against its 8fa9af7e) in the same clone under a
+# clone-local sentinel, then run witness.py against the fix and four escapes.  Writes only under /tmp.
+set -u
+SEC=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+S=/tmp/opusf2v6_scripts
+CL=/tmp/opusf2v6
+W=$CL/seat
+cd "$CL" || exit 2
+[ -e .MUTANT ] && { echo "SENTINEL PRESENT -- refusing"; exit 3; }
+cmp -s src/devices/dev_fbctrl.c "$SEC/src/devices/dev_fbctrl.c" || { echo "clone source is not the fix"; exit 3; }
+FIXMD5=$(md5sum < "$W/bins/gx_fix" | cut -d' ' -f1)
+python3 - "$W/var/fix.c" "$W/var/MB_pc4.c" <<'PYEOF'
+import io, sys
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+s = io.open(sys.argv[1], encoding="utf-8", newline="").read()
+assert s.count(PRED) == 1
+s = s.replace(PRED, "else if (idata >= DEV_FBCTRL_NPORTS && __builtin_popcountll(idata) != 4) {")
+io.open(sys.argv[2], "w", encoding="utf-8", newline="").write(s)
+print("MB_pc4 written")
+PYEOF
+echo "src/devices/dev_fbctrl.c: opus f2v6 seat MB_pc4, started $(date +%T)" > .MUTANT
+cp "$W/var/MB_pc4.c" src/devices/dev_fbctrl.c; rm -f src/devices/dev_fbctrl.o; touch "$W/var/stamp_MB_pc4"
+make -j8 > "$W/logs/make_MB_pc4.log" 2>&1; rc=$?
+if [ "$rc" = 0 ] && [ gxemul -nt "$W/var/stamp_MB_pc4" ]; then cp gxemul "$W/bins/gx_MB_pc4"; echo "MB_pc4 built md5=$(md5sum < gxemul | cut -c1-8) (Opus fallback's: 8fa9af7e)"; else echo "MB_pc4 BUILD-FAILED rc=$rc"; fi
+cp "$SEC/src/devices/dev_fbctrl.c" src/devices/dev_fbctrl.c; rm -f src/devices/dev_fbctrl.o; touch "$W/var/stamp_restore2"
+make -j8 > "$W/logs/make_restore2.log" 2>&1
+m=$(md5sum < gxemul | cut -d' ' -f1)
+if cmp -s src/devices/dev_fbctrl.c "$SEC/src/devices/dev_fbctrl.c" && [ gxemul -nt "$W/var/stamp_restore2" ] && [ "$m" = "$FIXMD5" ]; then
+    rm -f .MUTANT; echo "RESTORED: cmp SEC clean, binary fresh, md5 $m == base; sentinel cleared"
+else echo "RESTORE NOT VERIFIED (md5 $m) -- sentinel LEFT"; fi
+O="$W/logs/WITNESS.out"; echo "# $(date +%T) witness sessions, each a fresh device" > "$O"
+for n in fix N2_lo3ne6 N1_mask40 N1_mask4 MB_pc4; do
+    [ -e "$W/bins/gx_$n" ] || { echo "== $n: no binary" >> "$O"; continue; }
+    echo "== $n (md5 $(md5sum < "$W/bins/gx_$n" | cut -c1-8))" >> "$O"
+    python3 -u "$S/witness.py" "$W/bins/gx_$n" "$W/probe/frozen_v6.py" 2>&1 | grep -E '^(W |      emulator|W_DONE)' >> "$O"
+done
+cat "$O"
+echo "WITNESS_RUN_DONE $(date +%T)"

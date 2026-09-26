@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+r"""fbctrlportkill -- the rung-3 WITNESS, test-first, on an UNMODIFIED `-E testmips` (machine_test.c installs
+`fbctrl addr=0x12f00000` unconditionally).  Real guest sw/lw instructions, stepped one at a time through real
+address decode and real memory_rw.  No machine or device is added to reach the site.
+
+ARM K (the defect).  sw of 9 to DEV_FBCTRL_PORT (+0x00), then lw from DEV_FBCTRL_DATA (+0x10).
+  Pre-fix the PORT arm STORES the out-of-range selector with a WARNING, and the DATA arm calls exit(1) on it:
+  the emulator PROCESS ends, exit status 1, after printing "[ fbctrl port number is out of range! ]".
+  The row requires BOTH the death and that diagnostic -- a death for any other reason is not this defect.
+
+ARM L (the controls, per the witness ladder clause ii).
+  LIVENESS   a legal port round-trips through the same decode: PORT=5, DATA=0x2a, then DATA reads 0x2a and
+             PORT reads 5.
+  SIGNATURE  the value can only have come from the device: X1 (port 1) = 123, then COMMAND (port 0) =
+             GET_RESOLUTION (2), then X1 reads 0 -- fbctrl_command() zeroes X1/Y1 when X11 is not in use.
+             A RAM cell would read back 123.
+Every stepped word is compared, as it EXECUTES, with the emulator's own step line (the hand-assembled-encoding
+trap); the landing pad is never stepped.
+
+usage: fbctrl_port_witness.py <gxemul-binary>
+"""
+import os
+import pty
+import re
+import select
+import signal
+import sys
+import time
+
+BIN = sys.argv[1]
+
+STUBADDR = 0xffffffff80100000
+CODE = 0xffffffff80100020
+FBCTRL = 0xffffffffb2f00000          # kseg1 of DEV_FBCTRL_ADDRESS 0x12f00000 (testmachine/dev_fb.h)
+
+REG = dict(zr=0, t0=8, t1=9, t2=10, t3=11, t4=12, t5=13, t6=14, t7=15, s0=16, s1=17, s2=18)
+
+
+def itype(op, rs, rt, imm):
+    return (op << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
+
+
+def sw(rt, off, base):
+    return itype(0x2b, REG[base], REG[rt], off)
+
+
+def lw(rt, off, base):
+    return itype(0x23, REG[base], REG[rt], off)
+
+
+NOP = 0x00000000
+#  Pinned independently of the helper: a wrong register field would otherwise pass silently.
+assert sw("t1", 0, "t0") == 0xad090000
+assert lw("t2", 0x10, "t0") == 0x8d0a0010
+assert sw("s1", 0x10, "t0") == 0xad110010
+assert lw("s2", 0x10, "t0") == 0x8d120010
+
+#  (word, expected step-line text)
+PROG_K = [(sw("t1", 0, "t0"), "sw t1,0(t0)"),
+          (lw("t2", 0x10, "t0"), "lw t2,16(t0)"),
+          (NOP, None)]
+REGS_K = [("t0", FBCTRL), ("t1", 9)]
+
+PROG_L = [(sw("t1", 0, "t0"), "sw t1,0(t0)"),          # PORT = 5
+          (sw("t3", 0x10, "t0"), "sw t3,16(t0)"),      # port[5] = 0x2a
+          (lw("t4", 0x10, "t0"), "lw t4,16(t0)"),      # t4 = 0x2a       LIVENESS
+          (lw("t5", 0, "t0"), "lw t5,0(t0)"),          # t5 = 5          LIVENESS
+          (sw("t6", 0, "t0"), "sw t6,0(t0)"),          # PORT = 1 (X1)
+          (sw("t7", 0x10, "t0"), "sw t7,16(t0)"),      # X1 = 123
+          (sw("s0", 0, "t0"), "sw s0,0(t0)"),          # PORT = 0 (COMMAND)
+          (sw("s1", 0x10, "t0"), "sw s1,16(t0)"),      # COMMAND = GET_RESOLUTION -> X1 = Y1 = 0
+          (sw("t6", 0, "t0"), "sw t6,0(t0)"),          # PORT = 1
+          (lw("s2", 0x10, "t0"), "lw s2,16(t0)"),      # s2 = X1 = 0     SIGNATURE
+          (NOP, None)]
+REGS_L = [("t0", FBCTRL), ("t1", 5), ("t3", 0x2a), ("t6", 1), ("t7", 123), ("s0", 0), ("s1", 2),
+          ("t4", 0xdead), ("t5", 0xdead), ("s2", 0xdead)]
+
+
+def stub_path():
+    p = "/tmp/gx_fbctrl549_%d.bin" % os.getpid()
+    with open(p, "wb") as f:
+        f.write(b"\x00\x00\x00\x00")
+    return p
+
+
+def session(label, prog, regs, reads, stub):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-E", "testmips", "-M", "64", "0x%x:%s" % (STUBADDR, stub)])
+        os._exit(127)
+    buf = ""
+    dead = [False]
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            dead[0] = True
+            return False
+        if not d:
+            dead[0] = True
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(mark=0, echo=None, timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            resp = buf[mark:]
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
+                return True
+        return False
+
+    def send(x, timeout=60):
+        b = (x + "\n").encode("latin1")
+        _mark = len(buf)
+        n = 0
+        try:
+            while n < len(b):
+                n += os.write(fd, b[n:])
+        except OSError:
+            dead[0] = True
+            return False
+        return wait(mark=_mark, echo=x if x else None, timeout=timeout)
+
+    status, badis, vals, steps = "?", [], {}, 0
+    if not wait(timeout=120):
+        status = "NO-PROMPT"
+    else:
+        for i, (w, _t) in enumerate(prog):
+            send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+        for name, val in regs:
+            send("%s=0x%x" % (name, val))
+        send("pc=0x%x" % CODE)
+        status = "SURVIVED"
+        for i, (w, text) in enumerate(prog[:-1]):          # the landing pad is never stepped
+            mark = len(buf)
+            if not send("step 1", timeout=30) or dead[0]:
+                status = "HOST-DIED"
+                break
+            steps += 1
+            seg = buf[mark:]
+            m = re.search(r"%016x:?\s+%08x\s+([^\r\n<]+)" % (CODE + 4 * i, w), seg) or \
+                re.search(r"%08x:?\s+%08x\s+([^\r\n<]+)" % ((CODE + 4 * i) & 0xffffffff, w), seg)
+            got = re.sub(r"\s+", " ", m.group(1)).strip() if m else "(no step line)"
+            if not got.startswith(text):
+                badis.append("+0x%02x planted 0x%08x -> %r, expected %r" % (4 * i, w, got, text))
+        if status == "SURVIVED":
+            for name in reads:
+                got = None
+                for _ in range(2):
+                    mark = len(buf)
+                    if not send("print %s" % name, timeout=30) or dead[0]:
+                        break
+                    m = re.search(r"(?m)^0x([0-9a-fA-F]+)\s*$", buf[mark:])
+                    if m:
+                        got = int(m.group(1), 16)
+                        break
+                vals[name] = got
+    try:
+        os.write(fd, b"quit\n")
+    except OSError:
+        pass
+    t1 = time.time()
+    while time.time() - t1 < 20.0:
+        if not rd(0.1):
+            break
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    rpid, st = 0, None
+    t1 = time.time()
+    while rpid == 0 and time.time() - t1 < 10.0:
+        try:
+            rpid, st = os.waitpid(pid, os.WNOHANG)
+        except OSError:
+            break
+        if rpid == 0:
+            time.sleep(0.05)
+    if rpid == 0:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            _, st = os.waitpid(pid, 0)
+        except OSError:
+            st = None
+    code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+    diag = {"warn": "[ WARNING: fbctrl port number is out of range! ]" in buf,
+            "kill": "[ fbctrl port number is out of range! ]" in buf}
+    print("  arm %-2s %-9s steps=%d exit=%s warn=%s killdiag=%s" % (label, status, steps, code,
+                                                                  diag["warn"], diag["kill"]))
+    for b in badis:
+        print("      DISASSEMBLY MISMATCH: %s" % b)
+    for name in reads:
+        print("      %s = %s" % (name, "-" if vals.get(name) is None else "0x%x" % vals[name]))
+    return {"status": status, "exit": code, "badis": badis, "vals": vals, "diag": diag, "steps": steps}
+
+
+def row(name, ok, detail):
+    print("  %-4s %-58s %s" % ("ok" if ok else "FAIL", name, detail))
+    return ok
+
+
+def main():
+    stub = stub_path()
+    try:
+        K = session("K", PROG_K, REGS_K, ["t2"], stub)
+        L = session("L", PROG_L, REGS_L, ["t4", "t5", "s2"], stub)
+    finally:
+        try:
+            os.unlink(stub)
+        except OSError:
+            pass
+    print("CONTROLS")
+    c = []
+    c.append(row("L survived every step", L["status"] == "SURVIVED" and L["steps"] == len(PROG_L) - 1,
+                 "%s steps=%d" % (L["status"], L["steps"])))
+    c.append(row("L every stepped word disassembled as planted", not L["badis"], "%d mismatches" % len(L["badis"])))
+    c.append(row("L LIVENESS: DATA round-trips 0x2a", L["vals"].get("t4") == 0x2a, "t4=%s" % L["vals"].get("t4")))
+    c.append(row("L LIVENESS: PORT reads back 5", L["vals"].get("t5") == 5, "t5=%s" % L["vals"].get("t5")))
+    c.append(row("L SIGNATURE: X1 zeroed by GET_RESOLUTION (RAM: 123)", L["vals"].get("s2") == 0,
+                 "s2=%s" % L["vals"].get("s2")))
+    control = all(c)
+    print("SYMPTOM (arm K)")
+    k_disas = not K["badis"]
+    row("K every stepped word disassembled as planted", k_disas, "%d mismatches" % len(K["badis"]))
+    died = K["status"] == "HOST-DIED" and K["exit"] == 1 and K["diag"]["kill"] and K["steps"] == 1
+    print("FBCTRLW_CONTROL=%s" % ("OK" if control and k_disas else "FAILED"))
+    print("FBCTRLW_K=%s" % ("HOST-DIED-ON-DATA exit=1" if died else
+                           "%s exit=%s steps=%d killdiag=%s" % (K["status"], K["exit"], K["steps"],
+                                                                 K["diag"]["kill"])))
+    print("FBCTRLW_DONE")
+
+
+if __name__ == "__main__":
+    main()

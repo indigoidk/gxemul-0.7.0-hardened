@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""#549 kill table 3: every enumerated edit of the FINAL fixed dev_fbctrl.c, each a text transformation with exactly
+one match (a find-text that matches nothing is REFUSED, so each mutant also pins the presence of what it edits).
+
+  M_*  table 2's 25, imported from mutants549.py (its own list, not a copy).
+  T_*  the F2 row TARGETS -- the 17 the Opus F2 seat built (opus549_measured/f2/gen_variants_f2.py, transcribed),
+       plus 6 class-closure cells this round adds (width x {accept 0, accept 7, refuse 8} not rowed before).
+  N_*  pass 2's 14 (opus549_measured/p2/variants.diff), rewritten as transformations of the final source.
+usage: python mutants549_t3.py <final dev_fbctrl.c> <dev_fbctrl_HEAD.c> <mutants549.py> <outdir>"""
+import io
+import os
+import sys
+
+NL = chr(92) + "n"      # backslash-n inside a C string literal
+
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+REFUSE_OPEN = PRED + "\n"
+LATCH_TEST = "if (!d->warned_port) {"
+LATCH_BLOCK_END = "\t\t\t\td->warned_port = 1;\n\t\t\t}\n"
+ACCEPT = "\t\t} else\n\t\t\td->current_port = idata;\n"
+ANNOUNCE_ARG = "(unsigned long long) idata);"
+READ_PORT = "\t\t\todata = d->current_port;\n"
+DATA_READ = "\t\t\todata = d->port[d->current_port];\n"
+DATA_WRITE = "\t\t\td->port[d->current_port] = idata;\n"
+CMD_TEST = "\t\t\tif (d->current_port == DEV_FBCTRL_PORT_COMMAND)\n"
+GETRES_Y1 = "\t\t\td->port[DEV_FBCTRL_PORT_Y1] = 0;\n"
+CMD_ENTRY = "\tint x1, y1, i;\n"
+MEMSET = "\tmemset(d, 0, sizeof(struct fbctrl_data));\n"
+STRUCT_TAIL = ("\tint\t\tport[DEV_FBCTRL_NPORTS];\n"
+               "\tint\t\twarned_port;\t/* #549: the refused-selector announce */\n")
+
+ANN6 = ("\t\t} else {\n"
+        "\t\t\tif (idata == 6 && !d->warned_port) {\n"
+        "\t\t\t\tfatal(\"[ fbctrl: port number 0x%llx is out of range; \"\n"
+        "\t\t\t\t    \"the selector is unchanged (once) ]" + NL + "\",\n"
+        "\t\t\t\t    (unsigned long long) idata);\n"
+        "\t\t\t\td->warned_port = 1;\n"
+        "\t\t\t}\n"
+        "\t\t\td->current_port = idata;\n"
+        "\t\t}\n")
+
+
+def pred(expr):
+    return [(PRED, "else if (%s) {" % expr)]
+
+
+TARGETS = [
+    ("T_D2_mask63", "D2: bit 63 masked before the compare", pred("(idata & ~(1ULL << 63)) >= DEV_FBCTRL_NPORTS")),
+    ("T_D3_pwron", "D3: a refusal stores the value when the previous selector is 0 (power-on)",
+     [(LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\tif (!d->current_port)\n\t\t\t\td->current_port = (int) idata;\n")]),
+    ("T_D3_ctor1", "D3 extra (grok): the constructor selects port 1 at power-on",
+     [(MEMSET, MEMSET + "\td->current_port = 1;\n")]),
+    ("T_D4b_cmdrearm", "D4: the latch cleared on entry to fbctrl_command()",
+     [(CMD_ENTRY, CMD_ENTRY + "\n\td->warned_port = 0;\n")]),
+    ("T_D6_rdbit32", "D6: the PORT read ORs bit 32",
+     [(READ_PORT, "\t\t\todata = (uint64_t) d->current_port | (1ULL << 32);\n")]),
+    ("T_D7a_sub4zero", "D7: selector 0 refused for sb/sh (len < 4)",
+     pred("idata >= DEV_FBCTRL_NPORTS || (len < 4 && idata == 0)")),
+    ("T_D7b_sdzero", "D7: selector 0 refused for sd (len == 8)", pred("idata >= DEV_FBCTRL_NPORTS || (!idata && len == 8)")),
+    ("T_D7c_shzero", "D7 extra: selector 0 refused for sh only (len == 2)",
+     pred("idata >= DEV_FBCTRL_NPORTS || (!idata && len == 2)")),
+    ("T_D8_or1", "D8: the refusal ORs 1 into the previous selector",
+     [(REFUSE_OPEN, REFUSE_OPEN + "\t\t\td->current_port |= 1;\n")]),
+    ("T_D9a_only9", "D9: announce only for the value 9", [(LATCH_TEST, "if (!d->warned_port && idata == 9) {")]),
+    ("T_D9b_mod10", "D9: the latch counts modulo 10 (re-announces on the 11th refusal)",
+     [(LATCH_TEST, "if (!(d->warned_port++ % 10)) {")]),
+    ("T_D9c_serial1", "D9 (e, disclosed): announce only on the machine with serial_nr 1",
+     [(LATCH_TEST, "if (!d->warned_port && cpu->machine->serial_nr == 1) {")]),
+    ("T_D10_print0", "D10: the diagnostic prints 0, not the refused value", [(ANNOUNCE_ARG, "(unsigned long long) 0);")]),
+    ("T_D11a_y1one", "D11 (control extension): GET_RESOLUTION (no X11) sets Y1 to 1",
+     [(GETRES_Y1, "\t\t\td->port[DEV_FBCTRL_PORT_Y1] = 1;\n")]),
+    ("T_D11b_y1keep", "D11 (control extension): GET_RESOLUTION (no X11) leaves Y1 untouched", [(GETRES_Y1, "")]),
+    ("T_X_ann6", "A-silence (Astra; kimi-k3 pass 2): an ACCEPTED selector 6 announces (once)", [(ACCEPT, ANN6)]),
+    ("T_X_w8", "grok F2 #7: the boundary 8 refused only for 4-byte writes",
+     pred("idata > DEV_FBCTRL_NPORTS || (idata == DEV_FBCTRL_NPORTS && len == 4)")),
+    #  the class closure: one edit per width cell this round adds a row for
+    ("T_W_sw0", "closure: selector 0 refused for sw (len == 4)", pred("idata >= DEV_FBCTRL_NPORTS || (!idata && len == 4)")),
+    ("T_W_sb7", "closure: selector 7 refused for sb", pred("idata >= DEV_FBCTRL_NPORTS || (idata == 7 && len == 1)")),
+    ("T_W_sh7", "closure: selector 7 refused for sh", pred("idata >= DEV_FBCTRL_NPORTS || (idata == 7 && len == 2)")),
+    ("T_W_sw7", "closure: selector 7 refused for sw", pred("idata >= DEV_FBCTRL_NPORTS || (idata == 7 && len == 4)")),
+    ("T_W_sb8", "closure: the boundary 8 accepted for sb",
+     pred("idata > DEV_FBCTRL_NPORTS || (idata == DEV_FBCTRL_NPORTS && len != 1)")),
+    ("T_W_sh8", "closure: the boundary 8 accepted for sh",
+     pred("idata > DEV_FBCTRL_NPORTS || (idata == DEV_FBCTRL_NPORTS && len != 2)")),
+]
+
+PASS2 = [
+    ("N_acc32", "p2 (equivalent, disclosed): the accept stores (uint32_t) idata",
+     [(ACCEPT, "\t\t} else\n\t\t\td->current_port = (uint32_t) idata;\n")]),
+    ("N_clobcell", "p2: the refusal writes port[idata & 7]",
+     [(LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\td->port[idata & 7] = idata;\n")]),
+    ("N_clobcmd", "p2: the refusal writes COMMAND's cell",
+     [(LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\td->port[DEV_FBCTRL_PORT_COMMAND] = idata;\n")]),
+    ("N_cmdport", "p2: a DATA write runs the command at X1, not at COMMAND",
+     [(CMD_TEST, CMD_TEST.replace("DEV_FBCTRL_PORT_COMMAND", "DEV_FBCTRL_PORT_X1"))]),
+    ("N_cmdread", "p2: a DATA read of COMMAND runs it",
+     [(DATA_READ, DATA_READ + "\t\t\tif (d->current_port == DEV_FBCTRL_PORT_COMMAND) fbctrl_command(cpu, d);\n")]),
+    ("N_datard16", "p2 (out of scope, DATA width): the DATA read truncated to 16 bits",
+     [(DATA_READ, "\t\t\todata = (uint16_t) d->port[d->current_port];\n")]),
+    ("N_datarearm", "p2: a DATA write clears the latch", [(DATA_WRITE, DATA_WRITE + "\t\t\td->warned_port = 0;\n")]),
+    ("N_datawr8", "p2 (out of scope, DATA width): the DATA write truncated to 8 bits",
+     [(DATA_WRITE, "\t\t\td->port[d->current_port] = (uint8_t) idata;\n")]),
+    ("N_order", "p2 (equivalent, disclosed): warned_port declared before port[]",
+     [(STRUCT_TAIL, "\tint\t\twarned_port;\n\tint\t\tport[DEV_FBCTRL_NPORTS];\n")]),
+    ("N_rdlatch", "p2: the PORT read shows the latch in bit 3",
+     [(READ_PORT, "\t\t\todata = d->current_port | (d->warned_port << 3);\n")]),
+    ("N_rdmask3", "p2: the PORT read masked with 3", [(READ_PORT, "\t\t\todata = d->current_port & 3;\n")]),
+    ("N_rdmask7", "p2 (equivalent, disclosed): the PORT read masked with 7", [(READ_PORT, "\t\t\todata = d->current_port & 7;\n")]),
+    ("N_rearm", "p2: an accepted selector clears the latch",
+     [(ACCEPT, "\t\t} else {\n\t\t\td->current_port = idata;\n\t\t\td->warned_port = 0;\n\t\t}\n")]),
+    ("N_runcmd", "p2: the refusal runs the command", [(LATCH_BLOCK_END, LATCH_BLOCK_END + "\t\t\tfbctrl_command(cpu, d);\n")]),
+]
+
+
+def apply(base, edits, name):
+    s = base
+    for old, new in edits:
+        n = s.count(old)
+        if n != 1:
+            sys.exit("REFUSED %s: %d matches for %r" % (name, n, old[:60]))
+        s = s.replace(old, new)
+    return s
+
+
+def main():
+    fixp, headp, mutp, out = sys.argv[1:5]
+    os.makedirs(out, exist_ok=True)
+    base = io.open(fixp, encoding="utf-8", newline="").read()
+    head = io.open(headp, encoding="utf-8", newline="").read()
+    assert "\r" not in base and "\r" not in head
+    ns = {"__name__": "mutants549"}
+    exec(io.open(mutp, encoding="utf-8").read(), ns)
+    rows = [(n, c, e) for n, c, e in ns["MUTANTS"]] + TARGETS + PASS2
+    names = [r[0] for r in rows]
+    assert len(names) == len(set(names)), "duplicate mutant name"
+    for name, cls, edits in rows:
+        s = head if edits is None else apply(base, edits, name)
+        if s == base:
+            sys.exit("REFUSED %s: the edit changed nothing" % name)
+        io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+        print("%-15s %s" % (name, cls))
+    print("MUTANTS_WRITTEN=%d" % len(rows))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,105 @@
+VERDICT: SHIP WITH CHANGES
+
+### Finding 1: Premise Audit of Diff Comments and Docstrings — Stale Kill Table Citation
+* **Citation:** [`regress/fbctrl_port_probe.py:277-278`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L277-L278), [`regress/gate_mips_folds.sh:45-46`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L45-L46)
+* **Claim:** Probe docstring claims: `(kill table 1: 20 of 20 such edits red, regress/artifacts/fbctrlportkill_20260924/table1/TABLE.out)`. Gate 16 comment claims: `# Kill table 1 was red on 20 of 20 edits of the fix's own predicate, store and latch;`.
+* **Evidence:** In `brief_sent.md` Section 1 (lines 37–75), Section 1 inlines **Kill Table 2** ([`regress/artifacts/fbctrlportkill_20260924/table2/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table2/TABLE.out)), which tested **22** predicate/store/latch variants (25 total variants including `M_revert`, `M_static`, `M_noguard`) after adding `M_acclatch` and `M_reflatch`. As documented in [`regress/artifacts/fbctrlportkill_20260924/PRETABLE_ADDENDUM_t2.out:3-10`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/PRETABLE_ADDENDUM_t2.out#L3-L10), Table 1 had a cascade bug in Session P where lack of re-selection caused subsequent readbacks to fail on residual state (`M_i64` and `M_bit`). The committed probe inlines the fix (Session P re-selects `PORT=5` before every refusal at line 544), which is the exact instrument evaluated by Table 2.
+* **Impact:** Both the probe header and gate 16 cite superseded Table 1 and the 20-variant count instead of Table 2 (22 of 22 variants red, [`table2/TABLE.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/table2/TABLE.out)). They must be updated to cite Table 2 (`22 of 22`, `table2/TABLE.out`).
+
+---
+
+### Finding 2: Struct Layout / Off-by-One Phrasing in Probe Contract
+* **Citation:** [`regress/fbctrl_port_probe.py:280-282`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L280-L282)
+* **Claim:** Probe docstring states: `warned_port sits right after port[8], so an index of 8 that got past a broken PORT arm would land on the latch itself`.
+* **Evidence:** Look at [`src/devices/dev_fbctrl.c:48-53`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L48-L53):
+  ```c
+  struct fbctrl_data {
+      struct vfb_data *vfb_data;
+      int     current_port;
+      int     port[DEV_FBCTRL_NPORTS]; /* DEV_FBCTRL_NPORTS is 8 */
+      int     warned_port;
+  };
+  ```
+  In C, `port[8]` defines an array of 8 integers indexed `0` to `7`. With standard struct layout, `warned_port` immediately follows `port[7]`. Therefore, `&d->port[8] == (int *)&d->warned_port`. Index 8 *is* `warned_port`. It does not sit "right after `port[8]`" (which would be offset `sizeof(int) * 9`, or index 9).
+* **Impact:** Section 0 (line 20) correctly says: `port[8] (which, after this diff's struct change, is the warned_port latch)`. The probe header sentence is self-contradictory ("sits right after `port[8]`" vs "an index of 8 ... would land on the latch itself"). Change `sits right after port[8]` to `sits right after port[7] (aliasing port[8])`.
+
+---
+
+### Finding 3: Premise Audit of `dev_fbctrl.c` Comments
+* **Citation:** [`src/devices/dev_fbctrl.c:122-126`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L122-L126), [`src/devices/dev_fbctrl.c:137-138`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L137-L138)
+* **Audit:**
+  1. Comment 1: `"an out-of-range selector is REFUSED, and current_port keeps its previous, always-valid value."`
+     - Verified: In [`src/devices/dev_fbctrl.c:173`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L173), `memset(d, 0, ...)` sets `d->current_port = 0`, which is `DEV_FBCTRL_PORT_COMMAND` (valid). Because `idata` is `uint64_t` ([`dev_fbctrl.c:110`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L110)), any value `>= 8` (including sign-extended negatives) triggers refusal. Valid writes only store values in `[0, 7]`.
+  2. Comment 2: `"It used to be stored with only a warning, and the next DATA access then ended the emulator in the range check below. Announced once per device."`
+     - Verified: On HEAD, lines 118–123 stored `d->current_port = idata` unconditionally and warned; lines 139–143 (`DEV_FBCTRL_DATA`) called `exit(1)`. `d->warned_port` is per `struct fbctrl_data` instance allocated in [`dev_fbctrl.c:172`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L172).
+  3. Comment 3: `"unreachable while the PORT arm refuses; kept as a tripwire for a later edit that lets a bad selector in."`
+     - Verified: `d->current_port` is modified nowhere else in the codebase. As long as `idata >= DEV_FBCTRL_NPORTS` guards the store, `d->current_port` remains in `[0, 7]`.
+
+---
+
+### Finding 4: Adversarial Attack — Smallest Edit Breaking Refusal with 41/41 Green
+* **Target:** Smallest edit to [`src/devices/dev_fbctrl.c:120`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L120):
+  * **Edit:** Change `else if (idata >= DEV_FBCTRL_NPORTS)` to:
+    ```c
+    else if (idata >= DEV_FBCTRL_NPORTS && d->current_port != 0)
+    ```
+    or
+    ```c
+    else if ((idata & ~10ULL) >= DEV_FBCTRL_NPORTS)
+    ```
+  * **Mechanism & Surviving Rows:**
+    * For `d->current_port != 0`: At power-on/reset, `current_port == 0`. An out-of-range selector written at reset will be accepted and stored into `current_port`. All 41 probe rows stay green because:
+      * Session P explicitly writes `PORT=5` first ([`fbctrl_port_probe.py:539`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L539)) and then `PORT=7` ([`fbctrl_port_probe.py:547`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L547)).
+      * Session K explicitly writes `PORT=5` first ([`fbctrl_port_probe.py:550`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L550)).
+      * Session F starts at `current_port == 0` and writes `PORT=9`, but Session F never reads `PORT` back and specifies `reads=[]` ([`fbctrl_port_probe.py:565`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L565)); it only asserts the `(once)` message and free-run breakpoint arrival.
+      * No row in the probe verifies that an out-of-range selector is refused from reset/power-on when `current_port == 0`.
+    * For `(idata & ~10ULL) >= DEV_FBCTRL_NPORTS`: The probe tests `8, 9, 16, 0xff, 0x100, 0x100000003, 0x200000000, all-ones`. It never tests `10` (or `11..15`, or `1ULL << 34`). Value 10 is stored, breaking the refusal, while all 41 test rows stay green.
+
+* **Target:** Smallest edit to Probe or Gate-16 block keeping all pins green while device is broken:
+  * **In Probe ([`regress/fbctrl_port_probe.py:483`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py#L483)):**
+    In `row()`: change `ok = got == want` to `ok = True`. Every check passes, `FBCTRLP_CONTROL=OK`, `FBCTRLP_RESULT=41/41`, exit status is 0.
+  * **In Gate 16 ([`regress/gate_mips_folds.sh:72-73`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L72-L73)):**
+    Change `check "fbctrl_port rows correct" "${fbres%/*}" "41"` to:
+    `check "fbctrl_port rows correct" "41" "41"` (hardcoding `got`), and line 73 to `"0" "0"`. On HEAD (`25/41`), gate 16 checks `41 == 41` and `0 == 0`, staying green.
+  * **In Gate 16 Pin Scanner ([`regress/gate_mips_folds.sh:71`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L71)):**
+    Quoting `41` (`"${fbres#*/}" "41"`) causes [`tools/pipeline/check_score_claims.py:75`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py#L75) regex `r'check\s+"(\S+)\s+rows\s+run"\s+"[^"]*"\s+(\d+)'` to miss the pin, silently dropping score claim governance.
+
+---
+
+### Finding 5: Gate-16 Block Analysis (Parse Guard & Kernel Position)
+* **Parse Guard Completeness ([`regress/gate_mips_folds.sh:56-60`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L56-L60)):**
+  * `grep -cx 'FBCTRLP_DONE'` ensures exactly 1 terminating line.
+  * `grep -c '^FBCTRLP_RESULT='` and regex `^FBCTRLP_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$` catch missing, duplicated, or malformed result fraction lines.
+  * `grep -c '^FBCTRLP_CONTROL='` and regex `^FBCTRLP_CONTROL=(OK|FAILED)$` catch missing, duplicate, or malformed control tokens.
+  * Early exit / crash / killed probe: `FBCTRLP_DONE` is not emitted; enters `then` branch, prints `tail -5`, and records `check "fbctrl probe output parses" "no" "yes"`, failing gate 16 fail-closed.
+  * Late crash after printing: `$fbrc` captured from `python3 ... || fbrc=$?` is checked at line 68 (`check "fbctrl probe exit status" "$fbrc" "0"`).
+  * The parse guard is complete and fail-closed.
+* **Moving `PMAX_KERNEL` Check Below fbctrl Block ([`regress/gate_mips_folds.sh:76`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L76)):**
+  * Binary missing (`! -x "$PMAX"`): Handled at line 34 before `fbctrl` runs -> exits `SKIP` (77). Unchanged.
+  * Binary present, kernel present, fold rows red: `fbctrl` passes, fold rows fail -> exits `FAIL` (1). Unchanged.
+  * Binary present, kernel missing, fbctrl passes: 6 checks pass; line 76 triggers `gate_skip "no pmax kernel at $PMAX_KERNEL"`. Because `_fails == 0` ([`regress/lib.sh:139`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lib.sh#L139)), `gate_skip` exits with `SKIP` ($EXIT_SKIP=77). Final gate verdict is unchanged (`SKIP`).
+  * Binary present, kernel missing, fbctrl fails: On HEAD, missing kernel caused gate 16 to `SKIP` unconditionally. Now, because `_fails > 0`, [`regress/lib.sh:139`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lib.sh#L139) intercepts `gate_skip` and exits with `FAIL` (1). This behavior change is intentional and documented in gate 16 comments (`gate_skip reports FAIL, not SKIP, if an fbctrl row failed first`).
+
+---
+
+### Finding 6: The Contract — Claims and Non-Claims Verification
+* **NOT CLAIMED items are complete and true:**
+  1. Process-global latch (`M_static`): Verified. Only `machine_test.c` instantiates `fbctrl` (lines 154, 337). A second device does not exist in any test machine.
+  2. Deletion of DATA check (`M_noguard`): Verified. A correct PORT arm makes DATA check unreachable (41/41 green on `M_noguard`).
+  3. `fbctrl_command()` default ([`src/devices/dev_fbctrl.c:101-102`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L101-L102)): Verified. Unimplemented commands (including FILL=3, COPY=4 from [`dev_fb.h:52-53`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h#L52-L53)) still call `fatal(); exit(1)`.
+  4. Access function offset default ([`src/devices/dev_fbctrl.c:156-159`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L156-L159)): Verified. Any offset other than `0x00` and `0x10` calls `fatal(); exit(1)`.
+* **Nothing claimed lacks an observer:**
+  - All 9 claimed defect classes in the CATCHES list map to at least one distinct mutant in Table 2 killed by specific rows (e.g. `M_i64` and `M_decl` killed by `all-ones (sd)`; `M_mod33` killed by `0x200000000`; `M_bit` killed by `16` and `0x100`; `M_wide` killed by `0xff` and `0x100`; `M_gt` killed by `8`; `M_debug` killed by Session F).
+
+---
+
+### Finding 7: Records Owed by This Commit
+Beyond the items enumerated in Question 5 (`CHANGELOG.md` block, `OUTSTANDING_BUGS.md` filings for command and offset defaults, and `tools/pipeline/ledger.json` entry), the following are owed:
+1. **[`regress/pass2_ledger.tsv`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pass2_ledger.tsv):** Must append the pass-2 receipt row keyed to the committed SHA with panel `panel_20260924_113037`.
+2. **[`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md):** Must record `gatedevicesplit` (#498) debt — `#549` adds one more device probe into CPU gate 16 (matching `#548` in gate 14).
+3. **[`tools/precommit_check.sh:347`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L347):** The brief inlines raising `SCORE_CLAIMS_MANIFEST` 30 -> 31. Note that the working tree currently has `SCORE_CLAIMS_MANIFEST=32` because `#529`'s `crime_width` pin is present in the working copy of `gate_arm.sh`. When committing `#549` alone, ensure `SCORE_CLAIMS_MANIFEST=31` matches the committed gate pin count (`check_score_claims.py` outputs 31 on clean HEAD + #549).
+4. **Git Staging:** `regress/fbctrl_port_probe.py` and `regress/artifacts/fbctrlportkill_20260924/` are currently untracked and must be added to git.
+
+---
+
+VERDICT: GO-WITH-CHANGES

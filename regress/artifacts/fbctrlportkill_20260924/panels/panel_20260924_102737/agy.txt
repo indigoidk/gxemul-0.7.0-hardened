@@ -1,0 +1,148 @@
+VERDICT: PROCEED WITH CHANGES
+
+### Executive Summary
+
+A rigorous, adversarial audit of [`brief_sent.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20260924_102737/brief_sent.md) against the codebase under `GXEMUL-SEC/` confirms the core defect diagnosis: [`dev_fbctrl_access`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L106-L154) stores an unvalidated selector into `current_port` before checking bounds, leading to an immediate host `exit(1)` upon the subsequent access to `DEV_FBCTRL_DATA`.
+
+However, the brief cannot proceed without changes due to three critical omissions and apparatus traps:
+1. **Gate 16 Skips Without Kernel:** Wiring `fbctrl_port_probe.py` into [`gate_mips_folds.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh#L35) places it behind a preflight check (`PMAX_KERNEL`) that skips the entire gate if the DECstation kernel is absent, even though `fbctrl` runs on `-E testmips` and needs no kernel.
+2. **Hidden Gate 6 Hygiene Pin Failures:** The brief mentions [`check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py), but completely ignores [`regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L385-L726). Introducing a new PTY probe without updating `EXPECT_PTY_PROBES` (73) and `EXPECT_CONVERTED` (24) will cause Gate 6 to break.
+3. **Detector Escapes:** The proposed detector tests `sw -1` (a 32-bit store zero-extended in `uint64_t idata`), which fails to detect a mutant using signed comparison `(int64_t)idata >= DEV_FBCTRL_NPORTS`. A 64-bit store `sd -1` (`0xffffffffffffffffULL`) would bypass that faulty guard, write `-1`, and kill the emulator on DATA. Furthermore, testing on single-instance sessions fails to distinguish a global `static int warned_port;` from a per-instance `d->warned_port`.
+
+---
+
+### Claim-by-Claim Verification of Settled Premises
+
+| Brief Claim | Source Evidence (`GXEMUL-SEC/`) | Audit Result | Notes |
+| :--- | :--- | :--- | :--- |
+| **Section 0: Not shipped** | `git log -1 -- src/devices/dev_fbctrl.c` shows commit `39748e3c` | **VERIFIED** | Clean upstream import. |
+| **Section 0: No regress mentions** | `grep -c fbctrl CHANGELOG.md` = 0; `regress/` clean | **VERIFIED** | No probes, gates, or checks reference `fbctrl`. |
+| **Device Instantiation** | [`src/machines/machine_test.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L154-L156) in [`default_test`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L76-L169); [`machine_test.c:337-339`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L337-L339) in `testmips` | **VERIFIED** | Called by `testarm` (L191), `testm88k` (L265), `testppc` (L444), `testriscv` (L487), `testsh` (L529), and `testmips` (L337). Bare machines do not instantiate it. |
+| **Register Map** | [`src/include/testmachine/dev_fb.h:41-62`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h#L41-L62) | **VERIFIED** | Verbatim match (`DEV_FBCTRL_PORT` 0x00, `DEV_FBCTRL_DATA` 0x10, `DEV_FBCTRL_NPORTS` 8). |
+| **Device Init & State** | [`src/devices/dev_fbctrl.c:48-52`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L48-L52), [`L157-L173`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L157-L173) | **VERIFIED** | [`struct fbctrl_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L48-L52) zeroed by `memset`. Only writer of `current_port` is L120. |
+| **Whole Access Function** | [`src/devices/dev_fbctrl.c:106-154`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L106-L154) | **VERIFIED** | Verbatim match. |
+| **fbctrl_command Helper** | [`src/devices/dev_fbctrl.c:60-103`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L60-L103) | **VERIFIED** | Verbatim match; contains unhandled command `exit(1)` at L101. |
+| **Witness Measurement** | `HEAD=f4f601c4`, rung 3 debugger steps on `build/gxemul` | **VERIFIED** | Measured pre-fix: `arm K` dies with `exit(1)` on DATA write. |
+
+---
+
+### Numbered Findings & Review-Asks (Section 3 Questions)
+
+#### 1. Premise Audit
+
+* **(a) Writers of `current_port`:**
+  **VERIFIED.** An exhaustive search across `src/` (`git grep -n "current_port" src/`) shows that [dev_fbctrl.c:120](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L120) (`d->current_port = idata;`) is the **sole writer** of `current_port` in the entire codebase, besides the zeroing `memset` in [`DEVINIT(fbctrl)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L157-L173) at line 162.
+
+* **(b) Reachability of DATA arm `exit(1)` & Range Enumeration:**
+  **CANNOT BE REACHED.**
+  - `dev_fbctrl` is registered at length `0x20` ([`dev_fbctrl.c:169`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L169)).
+  - In [`dev_fbctrl_access`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L106-L154), accesses are switched on `relative_addr`. Only `relative_addr == 0x00` enters `case DEV_FBCTRL_PORT`. Any access at offsets `0x01..0x0f` or `0x11..0x1f` immediately jumps to `default:`, exiting with `unimplemented relative addr` (see Finding 7 below).
+  - Unaligned MIPS stores ([`mips_unaligned_loadstore`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c#L44-L136)) align addresses to `aligned_addr = addr & ~(wlen-1)` before calling [`memory_rw`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L587).
+  - In `case DEV_FBCTRL_PORT`, `idata` is `uint64_t` (unsigned).
+  - Under the fix (`else if (idata >= DEV_FBCTRL_NPORTS)`), any value $\ge 8$ is rejected. The `else` branch executes **only** when `idata < 8`.
+  - Since `idata` is unsigned, the only values reaching `d->current_port = idata` are strictly $\in \{0, 1, 2, 3, 4, 5, 6, 7\}$.
+  - Storing these into signed `int current_port` guarantees $0 \le \text{current\_port} \le 7$.
+  - Therefore, the DATA guard condition `(d->current_port < 0 || d->current_port >= DEV_FBCTRL_NPORTS)` evaluates to `FALSE` for every possible subsequent guest access. The DATA arm's `exit(1)` is mathematically unreachable once PORT validation refuses out-of-range values.
+
+* **(c) The `sd` Truncation Row on `-E testmips`:**
+  **VERIFIED.**
+  - Machine `testmips` selects CPU `5KE` by default ([`machine_test.c:410-413`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L410-L413)). `5KE` has `isa_level = 64` ([`mips_cpu_types.h:104`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/mips_cpu_types.h#L104)).
+  - Instruction `sd` sets `store = 1, size = 3, x64 = 1` ([`cpu_mips_instr.c:5440`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c#L5440)), invoking an 8-byte transfer (`len = 8`).
+  - In [`memory_readmax64`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L55-L78), for `len = 8` on big-endian MIPS, all 8 bytes are shifted into `uint64_t x` across 8 loop iterations. It delivers the full 64-bit word.
+  - For `sd 0x0000000100000003`, `idata = 0x100000003ULL`. In current HEAD:
+    - PORT checks `0x100000003ULL >= 8` (true $\rightarrow$ prints WARNING).
+    - PORT stores `d->current_port = 0x100000003ULL`. Truncation to 32-bit `int` yields `current_port = 3`.
+    - DATA checks `3 < 0 || 3 >= 8` (false $\rightarrow$ access is serviced on port 3!).
+    - The brief's analysis of the `sd` row is physically and mechanically accurate.
+
+* **(d) Dependency on Old Warning Text:**
+  **VERIFIED.** An exhaustive search (`git grep -i "WARNING: fbctrl"`) confirms no active test, gate script, or core code depends on `[ WARNING: fbctrl port number is out of range! ]`. It only appeared in `dev_fbctrl.c:122` and historical triage logs.
+
+---
+
+#### 2. Adversarial Smallest Edits (Mutant Analysis)
+
+The following mutants break the fix or its intent while staying **completely green** across all proposed probe rows:
+
+1. **The 64-bit Sign-Extension Escape (`(int64_t)` mutant):**
+   * *Mutant:* `else if ((int64_t)idata >= DEV_FBCTRL_NPORTS)`
+   * *Why it breaks:* For any 64-bit value with bit 63 set (e.g. `sd -1`, yielding `0xffffffffffffffffULL`), `(int64_t)idata` is negative ($-1$). It evaluates $-1 \ge 8$ as `FALSE`, falls through to `d->current_port = idata`, sets `current_port = -1`, and the next DATA access exits.
+   * *Why the proposed detector misses it:* The proposed detector only tests `sw -1` (`sw` is 32-bit). In [`memory_readmax64`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L55-L78), a 4-byte read into `uint64_t` zero-extends the word to `0x00000000ffffffffULL`. Interpreted as `int64_t`, this is $+4294967295$, which is $\ge 8$! All proposed rows stay green.
+   * *Required Detector Amendment:* Add a 64-bit negative row: `sd 0xffffffffffffffff` (or `sd -1`) to PORT.
+
+2. **The Shared Static Latch Escape:**
+   * *Mutant:* Using `static int warned_port;` instead of `d->warned_port`.
+   * *Why it breaks:* Global state suppresses warnings across distinct device instances or subsequent machine boots.
+   * *Why the proposed detector misses it:* The probe runs each row on a fresh `-E testmips` instance containing exactly one `fbctrl` device. It never tests multiple device instances or secondary instances.
+   * *Required Detector Amendment:* Explicitly assert that the latch is per-device instance.
+
+---
+
+#### 3. DATA Arm Disposition
+
+* **Verdict: KEEP `exit(1)` in the DATA arm as an unreachable belt-and-braces invariant assertion.**
+* **Rationale:**
+  - Once the PORT arm declines out-of-range writes, `current_port` is constrained to $[0, 7]$. The DATA guard becomes unreachable by guest code.
+  - If a future regression or refactoring breaks PORT validation, keeping `exit(1)` in the DATA arm prevents an out-of-bounds array access (`d->port[d->current_port]`).
+  - Converting the DATA guard to a silent decline would mask regressions and create duplicate decline paths.
+  - **In-tree Precedent:** In `#521` (`mk48nvramkill`, commit [`21e75609`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md)), the project retained the unreachable fatal arm as belt-and-braces rather than deleting it. Furthermore, [`tools/pipeline/ledger.json`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json) explicitly mandates for `fbctrlportkill`:
+    > *"A FLOOR NOTE THE ROUND MUST CARRY: 'a verbatim reinstatement of the removed kill' is INCOMPATIBLE with a repair that RETAINS that kill. This disposition leaves the DATA arm's 'exit(1)' in place as belt-and-braces... and the same answer: name the distinguishable mutant (restoring the store-before-validate order) rather than pretending the literal clause is met."*
+
+---
+
+#### 4. Option-Set Completeness
+
+* **Option 3 (decline + latched announce, retaining previous selector) is correct.**
+* **Why not Option 5 (Bus Error / Fault):** In [`memory_rw.c:608-615`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L608-L615), returning failure (`0`) generates architecture-specific traps for MIPS and M88K, but is ignored or unhandled on ARM, PPC, SH, and RISC-V. A fault would produce divergent behaviour across the test machines that carry `fbctrl`.
+* **State Retention Semantics:**
+  - Clamping to 7 corrupts `DEV_FBCTRL_PORT_COLOR_B`.
+  - Resetting to 0 redirects subsequent DATA writes to `DEV_FBCTRL_PORT_COMMAND`, potentially invoking [`fbctrl_command`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L60-L103) unexpectedly.
+  - Retaining the previous valid selector is the standard MMIO register convention for invalid selector writes.
+
+---
+
+#### 5. Detector Home, Wiring, and Census Pins
+
+* **The Gate 16 Preflight Trap:**
+  The brief proposes adding the probe to [`regress/gate_mips_folds.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh) (Gate 16).
+  At line 35, `gate_mips_folds.sh` contains:
+  ```bash
+  if [ ! -f "$PMAX_KERNEL" ]; then gate_skip "no pmax kernel at $PMAX_KERNEL"; fi
+  ```
+  If `fbctrl_port_probe.py` is placed after line 35, the probe will be skipped in environments where the DECstation kernel is not present. If placed in Gate 16, it must run **before** line 34/35.
+* **The `gatedevicesplit` Debt:**
+  Gate 16 exists specifically to witness MIPS instruction combiner ("fold") counters (`cpu_mips.h`). Accumulating MMIO device probes in CPU gates is an acknowledged anti-pattern (cf. [`gate_arm.sh:1207`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1207)). If placed in Gate 16, it must carry the explicit `gatedevicesplit` OWED marker.
+* **Mandatory Hygiene Pins in [`regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh):**
+  The brief failed to account for Gate 6 census pins:
+  1. [`EXPECT_PTY_PROBES`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L385): Currently pinned at `73`. A new probe utilizing `pty.fork()` will increase `_ptyn` to `74`. This pin must be updated.
+  2. [`EXPECT_CONVERTED`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh#L596): Currently pinned at `24`. If the probe implements the three #392 readiness markers (`endswith("GXemul>")`, echo guard, fresh `_mark`), the converted count increases to `25`. This pin must be bumped to 24 $\rightarrow$ 25.
+  3. [`check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L153): Must register `"fbctrl_port_probe.py"` in `MANIFEST` as `CLASS_DETECTOR`.
+
+---
+
+#### 6. Scope & The Reopening Rule
+
+* **Leaving the two other `exit(1)` sites to separate rounds is CORRECT.**
+* **Reopening Rule Compliance:**
+  The project's reopening rule requires: *same device, same semantic class, same detector, no new oracle* ([`CHANGELOG.md:17478`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L17478), [`CHANGELOG.md:18432`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L18432)).
+  - `fbctrl_command()` `default:` (L101) is an **unimplemented command opcode** defect. It requires deciding semantics for `FILL` and `COPY` and designing an oracle for command dispatch.
+  - `DEVICE_ACCESS` `default:` (L147) is an **unmapped MMIO address offset** defect.
+  Neither shares the semantic class of index selector validation, and both require new test oracles. Merging them violates the reopening rule.
+
+---
+
+#### 7. Something Else Found (Unmapped Byte Offset Trap)
+
+While auditing access paths in [`dev_fbctrl.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L114-L148), an adjacent fragility was surfaced:
+[`dev_fbctrl_access`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c#L114) switches on `relative_addr`. If guest software attempts a byte store to the low byte of `DEV_FBCTRL_PORT` on a big-endian system (`sb val, 3(t0)`), `relative_addr` is `3`. It misses `case DEV_FBCTRL_PORT (0x00)` and hits `default:`, terminating the emulator with `unimplemented relative addr 0x3`. This confirms the author's observation in Section 4 and warrants a separate issue row as planned.
+
+---
+
+### Final Verdict & Action Items
+
+**GO-WITH-CHANGES**
+
+Before landing, the brief and implementation plan must incorporate the following changes:
+1. **Amend Detector Rows:** Add an explicit 64-bit negative store row (`sd -1` to `DEV_FBCTRL_PORT`) to eliminate the `(int64_t)` signed comparison escape.
+2. **Fix Gate 16 Placement:** Ensure `fbctrl_port_probe.py` is invoked before the `PMAX_KERNEL` preflight check in `gate_mips_folds.sh` so tests do not skip when kernels are unbuilt.
+3. **Update Gate 6 Hygiene Pins:** Bump `EXPECT_PTY_PROBES=74` and `EXPECT_CONVERTED=25` in [`regress/gate_hygiene.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh), and add the entry to `MANIFEST` in [`tools/pipeline/check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py).

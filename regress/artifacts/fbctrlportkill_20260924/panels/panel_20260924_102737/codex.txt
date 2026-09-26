@@ -1,0 +1,76 @@
+VERDICT: PROCEED WITH CHANGES
+
+1. **Q1 — The PORT invariant holds, with an important address-decoding qualification.** This is a source reading. The assignment in [dev_fbctrl.c:120](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:120) is the only explicit writer of `current_port` found in `src/`; initialization zeroes it. Checking unsigned `idata` before assigning it establishes the accepted set `{0,1,2,3,4,5,6,7}`. Consequently, these device-state transitions cannot reach the DATA bounds guard after the proposed fix.
+
+   The ordinary store producers and decoded domains are:
+
+   | Transferred bytes | Possible `idata` |
+   |---:|---|
+   | 1 | `0..0xff` |
+   | 2 | `0..0xffff` |
+   | 4 | `0..0xffffffff` |
+   | 8 | `0..0xffffffffffffffff` |
+
+   [memory_readmax64():55](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c:55) assembles unsigned bytes in guest byte order, without sign extension. Every width accepts exactly the same eight selectors. Other delivered lengths still produce a `uint64_t`, so they do not bypass that comparison. Reads leave `idata=0` and do not change the selector.
+
+   At the **device callback**, offset `0x00` selects PORT, `0x10` selects DATA, and offsets `0x01–0x0f` and `0x11–0x1f` take the still-fatal default. The common dispatcher subtracts the device base without translating byte lanes.
+
+   However, guest effective addresses are not always callback addresses: MIPS left/right transfers align their address first. Word transfers within offsets `0–3`, and doubleword transfers within `0–7`, can therefore reach PORT; partial stores perform a read/merge/write of the aligned word. The resulting complete value still passes through the PORT check. See [cpu_mips_instr_unaligned.c:92](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:92).
+
+   The `sd` premise is supported: testmips selects the 64-bit 5KE and big-endian operation; the generated store passes eight bytes through the generic memory path. `memory_readmax64()` retains all eight. The subsequent old-code conversion to `int` remains implementation-defined; I did not measure the stated GCC result.
+
+   No dependency on the old warning text appeared in the permitted files. That is not a whole-repository dependency audit.
+
+2. **Q2 — A one-character signedness change escapes the proposed rows.** Delete the leading `u` from the local `uint64_t` declaration. With `int64_t idata`, every specified selector stimulus still makes the same comparison: even the **negative** row supplies `0x00000000ffffffff`, which is positive as `int64_t`. The **wide** row also stays positive. Thus both named rows, and all other specified rows, are predicted to remain green while selectors with bit 63 set are mishandled on the stated host conversion model.
+
+   This is an arithmetic prediction, not a compiled-mutant measurement. Add full-width sign-bit coverage.
+
+   Other distinctions the detector should make:
+
+   | Change | Proposed coverage |
+   |---|---|
+   | `>=` becomes `>` | Boundary selector 8 catches it |
+   | Comparison narrows to 32 bits | Wide row catches it |
+   | Invalid selector is stored, reset, or clamped | Anchored PORT=5/DATA=`0x2a` checks catch it |
+   | Refusal applies only to four- and eight-byte writes | Narrow writes are untested |
+   | Latch becomes process-global | Fresh one-device processes cannot distinguish it |
+   | Latch never sets, or suppresses every warning | Exactly-one announcement check catches it |
+
+   Strengthen the announcement arm to verify **when** the first warning occurs, and selector/data preservation after **each** refusal. An aggregate count of one permits a delayed announcement. Exercise valid operations after the latch sets, including DATA writes to the retained selector. Test two instances in one process to substantiate “per instance,” and enumerate acceptance of all eight selectors.
+
+3. **Q3 — Keep both checks; make the DATA guard decline safely.** I recommend the PORT refusal plus a nonfatal DATA bounds guard: ignore an invalid-index write; return initialized zero for an invalid-index read through the common tail; skip both indexing and command execution. Give this fallback a distinct bounded diagnostic.
+
+   Retaining `exit(1)` is unreachable under the current invariant, but a future upstream-check regression would restore process termination. A nonfatal fallback preserves the bounds protection. The detector need not lose sensitivity: incorrect PORT readback and loss of the anchored nonzero DATA value still fail. Require no fallback diagnostic during normal refusal tests.
+
+   There is an in-tree nonfatal defensive-check idiom: [sh4_val_first():1828](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:1828) explicitly documents an unreachable bounds check and returns safely. Practice is not uniform: [dev_dreamcast_gdrom.c:1106](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1106) retains its guarded command-count exit. I would not claim a universal fork policy from these examples.
+
+   The normal guest probe cannot exercise the DATA fallback on a correct build. Any coverage claim for that branch needs a separate controlled invalid-state test.
+
+4. **Q4 — Member 3 is appropriate; retain the previous selector.** Resetting to zero redirects subsequent DATA writes into COMMAND. Clamping redirects them into another register. Neither implements the announced refusal. Preserving the previous selector is consistent with the framebuffer resize path’s existing “reject and retain previous state” behavior.
+
+   One additional composition deserves explicit consideration: preserve/read back an invalid selector while making DATA accesses harmless. That can be safe, but changes selector semantics and requires both paths to handle invalid state indefinitely. The proposed valid-state invariant is simpler.
+
+   Announcement policy is also independent of accept/decline policy; the option list is not strictly exhaustive.
+
+   Do not substitute `return 0` assuming a portable bus error. The common [memory dispatch:603](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603) explicitly generates device-access exceptions for MIPS and M88K. Equivalent behavior across the other installed architectures is not established by this path.
+
+5. **Q5 — Gate 16 is an acceptable interim home, with wiring changes beyond a note.** Its existing [kernel preflight:35](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh:35) skips the entire gate when the pmax kernel is absent. The new raw-stub probe must not inherit that unrelated prerequisite. `gate_mips.sh` is a rig-boot gate, so moving the probe there offers no improvement. A device-gate split remains the cleaner eventual organization.
+
+   The premise “no gate drives a test machine’s devices” is false: gate 16 already runs `mlw2_dev_tm64`, which accesses the test-machine console device. See [mips_fold_probe.py:420](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/mips_fold_probe.py:420).
+
+   Known additional obligations, read from permitted scripts:
+
+   - [gate_hygiene.sh:385](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_hygiene.sh:385) pins the PTY population at 73 and checks the promptless population by count and name.
+   - Its anchored-prompt, echo, and fresh-mark checks share `EXPECT_CONVERTED=24`. Recompute affected counts with the completed probe; do not merely update one denominator.
+   - Gate assertions should require successful completion, controls, and every named result; missing output must fail.
+   - Creating a new gate additionally requires updating `GATES`, `GATE_MANIFEST=16`, and positional gate labels in [run.sh:10](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/run.sh:10).
+
+   **The exact requirements of `check_probe_wiring.py` remain unverified:** that file is outside your permitted reading scope, and its implementation was not inlined. I cannot certify its registration schema or any external manifest from this packet.
+
+6. **Q6 — Separate rounds for the other exits are defensible, but narrow the claims.** Unknown commands require decisions about command execution and register state; unsupported offsets require decisions about byte lanes, read values, and write effects. They can reuse the transport harness, but the existing selector-preservation oracle does not establish those semantics. The full reopening criterion is therefore not met merely because all three sites call `exit(1)`.
+
+   Their continued existence means this correction does **not** establish that arbitrary fbctrl accesses survive.
+
+   Also correct “pre-fix refusal rows end the process.” The wide row is specifically a surviving wrong-selector case on the stated host. A boundary row that only reads PORT need not terminate either. Their required pre-fix outcome is a failed preservation assertion, not necessarily process death.
+
+7. **Evidence and scope limits.** I changed no files and ran no emulator, regression probe, or compiled mutant. Findings are source readings and arithmetic predictions; the witness results remain measurements supplied by the brief. I did not independently verify binary provenance or shipping history. An initial search inadvertently returned regression C-file excerpts outside the requested scope; those excerpts were excluded from the review.

@@ -1,0 +1,67 @@
+#549 PRETABLE ADDENDUM for variant table 6 -- written BEFORE table 6 runs (this file's mtime is the order proof).
+2026-09-25, GXEMUL [087a90], after the verifying pass on v5 (panel_20260925_163907 + grok dedicated + the Opus 5.5
+seat, opus5_close3.md).  That pass measured a floor breach (L2): the compare `idata >= DEV_FBCTRL_NPORTS` narrowed to
+ignore bits 9-31, 5-7 or 34-62 scored the full 111 rows (opus549_measured/c3/TABLE_mask.out), because no v5 refusal
+had all of its bits from 3 up inside one of those ranges -- and the first of the three brings back the DATA arm's
+range-check exit (a guest writes 0x200 to PORT, then reads DATA once).  Remedy, as that seat gave it: refuse each
+single-bit value 2^k, k = 3..63.
+
+BASELINE: src/devices/dev_fbctrl.c md5 129694b8 -- the round's fix, unchanged; build/gxemul is newer than it and its
+source cmp's clean against GXEMUL-SEC (run_v6_fix.sh).  The probe: v6, md5 a9a2be3d, 117 rows in 16 sessions,
+generated from v5 (111 rows, md5 8271188d) by <scratchpad>/fbctrl549/v6/make_v6.py (20 exact-match edits).  v6 on
+the fix binary: 117/117, CONTROL=OK, 14 s wall -- <scratchpad>/fbctrl549/v6/v6_fix.out, copied into table6/.  The
+new `dsll` encoding is checked against the emulator's own disassembly on every stepped word: B's disassembly row
+reads 0 mismatches.
+
+1. SIBLING PARITY -- N/A: this repair changes the detector only.
+
+2. CLAIM -> ROW.  The header sentences v6 adds or changes, each with its row or its measurement:
+   "every bit the compare tests set alone at every width (B)"        B's four width rows; MKB_03..MKB_63, MKW_*
+   "the compare ... made to ignore any set of the bits it tests"     the same rows; MK_b9_31, MK_b5_7, MK_b34_62
+   "the later refusals are silent ... 108 (B)"                       B's count row; B_mod12, B_mod11
+   "latch unset (the first refusal of P, F, V, W, X2-X7, Y and B"    B's sb row sees B's first refusal (every later
+                                                                     sb refusal keeps whatever it left); CELL_keep_l0
+   "lw (every session but K)"                                        a records correction (grok, verifying pass)
+   "a read of selector 0 cannot tell a skipped load"                 CELL_rd_s0, GREEN(eq) since table 5
+   "COMMAND itself after a refused 0x100000003 (sd) ... (Y"          Y's COMMAND row, a control since v5
+   "(3) ... a latch that re-arms only after more refusals than any
+    session makes (B makes 108)"                                     B_mod12 now RED; no edit measures a period > 107
+   "(3) ... only for a CLASS of values no first refusal belongs to"  DSC_ann_hibits, GREEN(e)
+   "(4) ... (int) idata or idata & 7 ... a latch set to any nonzero" EQ_acc_castint, EQ_acc_and7, EQL_latch2, GREEN(eq)
+   "(5) ... or the announce without its trailing newline"            DSC_nonl, GREEN(e)
+   "(8) ... every cell 0 (F, W, X, Z, B)"; the cells-alone sentence  a records correction (glm, grok, kimi-k3, agy)
+
+3. GUARD FIELD vs BODY FIELD -- unchanged from table 5 (PRETABLE_ADDENDUM_t5.out, section 3), with the correction the
+   verifying pass forced: the value's CLASS is not held by magnitude, width and sign alone -- the compare tests 61
+   bits, and a row set can hold every magnitude and width it names while leaving a range of bits unobserved.  B is the
+   generating set for that class: at each width, each tested bit set alone (and clear in every other refusal).
+
+4. CHANNEL, per NEW row -- the edit(s) it exists to catch, and the observable that differs under them:
+   B ... (sb)   MKB_03..MKB_07, MK_b5_7, MKW_sb05, and every narrowing that ignores a bit below 8: the PORT read after
+                the sb group reads the stored int of the last value let through (8..128), never 5
+   B ... (sh)   MKB_03..MKB_15, MK_b9_31 (bits 9-15), MKW_sh12: the PORT read after the sh group (8..32768)
+   B ... (sw)   MKB_03..MKB_31, MK_b9_31, MKW_sw09: the PORT read after the sw group (2^k, or INT_MIN sign-extended
+                for bit 31)
+   B ... (sd)   MKB_03..MKB_63, MK_b34_62, MKW_sd40: the PORT read after the sd group (2^k below bit 31, INT_MIN for 31,
+                0 from bit 32 up -- the int keeps the low 32 bits)
+   B count      B_mod12, B_mod11 and any re-arming latch with a period up to 106 (a second announce inside B's 108
+                refusals); a latch never set (108 announces); every refusal silent (0)
+   B disasm     a CONTROL: an encoding the emulator does not decode as written
+   *** CHECK OF THE CHANNEL LINE ITSELF (its first mandated application asked for one): each channel above is stated
+   BEFORE the table, from the arithmetic of `d->current_port = idata;` storing into an int.  Table 6 either shows each
+   named edit red on exactly the named row(s), or it shows the channel line was wrong. ***
+
+5. PREDICTIONS, per edit -- mutants_t6/MANIFEST.out, written by the generator (mutants549_t6.py) before this table:
+   297 edits: table 5's 212 with table 5's own prediction (all 212 held) -- except B_mod12, GREEN(e) in table 5 and
+   now RED -- plus 85 new.
+   RED 267: table 5's 192, B_mod12, the verifying seat's six behaviour changers (BR_acc_w8 is CELL_keep_w8's text), its
+   three narrowings and its control, 60 one-bit narrowings (MKB_08 is MK_b8_ctl's text), four one-width narrowings.
+   GREEN 30: 18 GREEN(e) and 1 GREEN(eq) from table 5; 9 GREEN(eq) new (the seat's eight equivalents, EQL_latch2); 2
+   GREEN(e) new (DSC_ann_hibits, DSC_nonl).
+   Table 5's other nineteen at the total stay there because B writes no 10, refuses no 3, never touches DATA, reads PORT
+   only by lw, runs one fbctrl, reads no cell, and its first refusal is 8 -- announced, by fatal(), with no value above
+   bit 8 needed.
+
+6. HOW IT RUNS: variant_t6 driver = table 5's, with the v6 probe frozen at /tmp; a clone of build/ at /tmp/gx549t6
+   with a clone-local .MUTANT sentinel; baseline rebuilt IN THE CLONE and required to match build/gxemul's md5; restore
+   verified by cmp against GXEMUL-SEC, freshness and md5 before the sentinel goes.

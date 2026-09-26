@@ -1,0 +1,377 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\cc\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0d407-8752-72f3-aae4-e47f568f85d6
+--------
+user
+# PASS 1 -- `#549` (fbctrlportkill): dev_fbctrl.c accepts an out-of-range PORT selector, and the next DATA access ends the emulator process
+
+Project root C:\DocumentNoSnc\cc\GXEMUL; the tree under review is `GXEMUL-SEC/` (ignore any other `src/`).
+2026-09-24.  **FIRST LINE:** `VERDICT: <PROCEED | PROCEED WITH CHANGES | DO NOT PROCEED>`, then numbered findings.
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated wrongly.  **Check the premises, not
+just the derivations.**  Where I state something as fact, ask whether it is true.  A seat that re-derives a premise from
+something this brief did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  There are pristine-2021-upstream copies of GXemul under the project root
+(`./src/` and two under `_archive/`); they are NOT this fork.  If your line numbers disagree with mine by hundreds you are
+reading one of them -- say so rather than reconciling.
+
+**If you cannot read files that is expected** -- every fact you need is inlined.  Name any premise you cannot settle from
+this packet rather than guessing at it.  **ENUMERATE rather than reason** where a claim is arithmetic, and ask what the
+PRODUCER of a value can actually emit before walking a domain.
+
+Seats that read files: stay within `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py` / `regress/*.sh`; please do not read
+`GXEMUL-SEC/regress/artifacts/` or `tools/pipeline/ledger.json`.  **VERDICT LINE FIRST.**
+
+## 0. HAS THIS SHIPPED?
+
+    git log -1 -- src/devices/dev_fbctrl.c     ->  39748e3c Import GXemul 0.7.0 (unmodified upstream baseline)
+    grep -c fbctrlportkill CHANGELOG.md        ->  0
+    ls regress/ | grep -i fbctrl               ->  (nothing)
+    grep -rn fbctrl regress/*.sh regress/*.py  ->  (nothing: no gate, probe or check mentions fbctrl)
+
+Not shipped.  The file carries no fork edit at all.
+
+## 1. SETTLED PREMISES -- none carried from an earlier campaign (first brief).  What follows was READ from HEAD today
+## (f4f601c4) or MEASURED today; each item says which.
+
+* **Who installs the device** (read): `src/machines/machine_test.c` adds `fbctrl addr=0x12f00000` in
+  `default_test()` -- called by testarm, testm88k, testppc, testriscv and testsh -- and again in testmips's own
+  setup; unconditionally in each.  The bare* machines do not.  No other file instantiates it.
+* **The register map** (read, `src/include/testmachine/dev_fb.h`, verbatim):
+
+```
+#define	DEV_FBCTRL_ADDRESS		0x12f00000
+#define	DEV_FBCTRL_LENGTH		      0x20
+
+
+/*
+ *  First choose the port by writing the port index to DEV_FBCTRL_PORT,
+ *  then read or write DEV_FBCTRL_DATA.
+ */
+
+#define	DEV_FBCTRL_PORT			      0x00
+#define	DEV_FBCTRL_DATA			      0x10
+
+#define	DEV_FBCTRL_PORT_COMMAND			0
+#define	DEV_FBCTRL_PORT_X1			1
+#define	DEV_FBCTRL_PORT_Y1			2
+#define	DEV_FBCTRL_PORT_X2			3
+#define	DEV_FBCTRL_PORT_Y2			4
+#define	DEV_FBCTRL_PORT_COLOR_R			5
+#define	DEV_FBCTRL_PORT_COLOR_G			6
+#define	DEV_FBCTRL_PORT_COLOR_B			7
+#define	DEV_FBCTRL_NPORTS		8
+```
+
+* **The device state and init** (read, `src/devices/dev_fbctrl.c`, verbatim).  `DEVINIT` zeroes the struct, so
+  `current_port` starts at 0; the only other store to `current_port` in the tree is the PORT arm below
+  (`grep -rn current_port src/` -- check it).
+
+```
+struct fbctrl_data {
+	struct vfb_data *vfb_data;
+	int		current_port;
+	int		port[DEV_FBCTRL_NPORTS];
+};
+...
+DEVINIT(fbctrl)
+{
+	struct fbctrl_data *d;
+
+	CHECK_ALLOCATION(d = (struct fbctrl_data *) malloc(sizeof(struct fbctrl_data)));
+	memset(d, 0, sizeof(struct fbctrl_data));
+
+	d->vfb_data = dev_fb_init(devinit->machine, devinit->machine->memory,
+	    DEV_FB_ADDRESS, VFB_GENERIC, 640, 480, 640, DEV_FBCTRL_MAXY(640),
+	    24, "generic");
+
+	memory_device_register(devinit->machine->memory, devinit->name,
+	    devinit->addr, DEV_FBCTRL_LENGTH, dev_fbctrl_access, d,
+	    DM_DEFAULT, NULL);
+
+	return 1;
+}
+```
+
+* **THE WHOLE ACCESS FUNCTION, verbatim** (every exit path and the common tail; `idata` is `uint64_t`, `current_port` is
+  `int`):
+
+```
+DEVICE_ACCESS(fbctrl)
+{
+	struct fbctrl_data *d = (struct fbctrl_data *) extra;
+	uint64_t idata = 0, odata = 0;
+
+	if (writeflag == MEM_WRITE)
+	        idata = memory_readmax64(cpu, data, len);
+
+	switch (relative_addr) {
+
+	case DEV_FBCTRL_PORT:
+		if (writeflag == MEM_READ)
+			odata = d->current_port;
+		else {
+			d->current_port = idata;
+			if (idata >= DEV_FBCTRL_NPORTS)
+				fatal("[ WARNING: fbctrl port number is out"
+				    " of range! ]\n");
+		}
+		break;
+
+	case DEV_FBCTRL_DATA:
+		if (d->current_port < 0 || d->current_port
+		    >= DEV_FBCTRL_NPORTS) {
+			fatal("[ fbctrl port number is out of range! ]\n");
+			exit(1);
+		}
+
+		if (writeflag == MEM_READ)
+			odata = d->port[d->current_port];
+		else {
+			d->port[d->current_port] = idata;
+			if (d->current_port == DEV_FBCTRL_PORT_COMMAND)
+				fbctrl_command(cpu, d);
+		}
+
+		break;
+
+	default:
+		fatal("[ dev_fbctrl: unimplemented relative addr 0x%x ]\n",
+		    (int)relative_addr);
+		exit(1);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+```
+
+* **The command helper the DATA arm calls, verbatim** (needed for the device-signature control below, and it holds a
+  second process-ending call that is OUT OF SCOPE here -- see section 4):
+
+```
+static void fbctrl_command(struct cpu *cpu, struct fbctrl_data *d)
+{
+	int cmd = d->port[DEV_FBCTRL_PORT_COMMAND];
+	int x1, y1, i;
+
+	switch (cmd) {
+
+	case DEV_FBCTRL_COMMAND_NOP:
+		break;
+
+	case DEV_FBCTRL_COMMAND_SET_RESOLUTION:
+		/*
+		 *  Change the framebuffer resolution to X1 x Y1 pixels.
+		 */
+		x1 = d->port[DEV_FBCTRL_PORT_X1];
+		y1 = d->port[DEV_FBCTRL_PORT_Y1];
+		debug("[ dev_fbctrl: changing resolution to %i,%i ]\n", x1, y1);
+
+		dev_fb_resize(d->vfb_data, x1, y1);
+
+		/*  Remember to invalidate all translations for anyone
+		    who might have used the old framebuffer:  */
+		for (i = 0; i < cpu->machine->ncpus; i++)
+			cpu->machine->cpus[i]->invalidate_translation_caches(
+			    cpu->machine->cpus[i], 0, INVALIDATE_ALL);
+		break;
+
+	case DEV_FBCTRL_COMMAND_GET_RESOLUTION:
+		if (cpu->machine->x11_md.in_use) {
+			d->port[DEV_FBCTRL_PORT_X1] = d->vfb_data->xsize;
+			d->port[DEV_FBCTRL_PORT_Y1] = d->vfb_data->ysize;
+		} else {
+			// When not using X11 output, return 0x0 size.
+			d->port[DEV_FBCTRL_PORT_X1] = 0;
+			d->port[DEV_FBCTRL_PORT_Y1] = 0;
+		}
+		break;
+
+	/*  TODO: Block copy and fill.  */
+
+	default:fatal("fbctrl_command: Unimplemented command %i.\n", cmd);
+		exit(1);
+	}
+}
+```
+
+* **THE DEFECT, as I read it.**  The PORT arm STORES any value with only a warning -- `d->current_port = idata;` runs
+  first, the range check after it only prints.  The DATA arm then tests the stored `int` and calls `exit(1)` when it is
+  out of range.  So two ordinary guest accesses -- a store of 8 or more to `+0x00`, then any access to `+0x10` -- end
+  the emulator process.  The two guards also test DIFFERENT QUANTITIES: PORT tests the 64-bit `idata`, DATA tests the
+  `int` it was truncated into.  Enumerated for the values a guest store can produce:
+
+      guest store to +0x00          idata                 PORT arm today       current_port   DATA arm today
+      sw 5                          0x5                   stored               5              serviced
+      sw 7                          0x7                   stored               7              serviced
+      sw 8                          0x8                   WARNING, stored      8              exit(1)
+      sw 9                          0x9                   WARNING, stored      9              exit(1)
+      sw -1 (0xffffffff)            0xffffffff            WARNING, stored      -1             exit(1)
+      sd 0x0000000100000003         0x100000003           WARNING, stored      3 (truncated)  serviced as port 3
+      sb 0xff                       0xff                  WARNING, stored      255            exit(1)
+
+  The `sd` row is the interesting one: the PORT arm calls the value out of range and the model then uses port 3.  (The
+  int conversion of an out-of-range `uint64_t` is implementation-defined in C99; 3 is what gcc on x86-64 gives.  Check
+  whether `memory_readmax64()` really delivers all 8 bytes for an `sd` on `-E testmips` -- I believe it does, and the
+  `sd` row depends on it.)
+
+* **THE WITNESS -- rung 3, MEASURED today, test-first, on HEAD's binary** (`build/gxemul`, built 06:38 from sources that
+  `cmp` clean against the repo; `dev_fbctrl.c` unchanged since the upstream import).  Unmodified `-E testmips -M 64`,
+  started at the debugger, real guest `sw`/`lw` instructions placed with `put w` and executed one `step` at a time, so
+  every access goes through real address decode and `memory_rw`.  `t0 = 0xffffffffb2f00000` (kseg1 of 0x12f00000).
+  Arm K: `sw t1(=9),0(t0)` then `lw t2,16(t0)`.  Arm L (the controls): PORT=5, DATA=0x2a, read DATA and PORT back
+  (LIVENESS); then X1 (port 1) = 123, COMMAND (port 0) = 2 (GET_RESOLUTION), read X1 (DEVICE SIGNATURE: the model zeroes
+  X1 without X11; a RAM cell would read back 123).  Every stepped word is compared with the emulator's own step line.
+  The output, verbatim:
+
+```
+HEAD=f4f601c4  binary=build/gxemul md5=9fa0c1f9 mtime=2026-09-24 06:38:35  dev_fbctrl.c: cmp build == SEC, binary -nt source
+  arm K  HOST-DIED steps=1 exit=1 warn=True killdiag=True
+      t2 = -
+  arm L  SURVIVED  steps=10 exit=0 warn=False killdiag=False
+      t4 = 0x2a
+      t5 = 0x5
+      s2 = 0x0
+CONTROLS
+  ok   L survived every step                                      SURVIVED steps=10
+  ok   L every stepped word disassembled as planted               0 mismatches
+  ok   L LIVENESS: DATA round-trips 0x2a                          t4=42
+  ok   L LIVENESS: PORT reads back 5                              t5=5
+  ok   L SIGNATURE: X1 zeroed by GET_RESOLUTION (RAM: 123)        s2=0
+SYMPTOM (arm K)
+  ok   K every stepped word disassembled as planted               0 mismatches
+FBCTRLW_CONTROL=OK
+FBCTRLW_K=HOST-DIED-ON-DATA exit=1
+FBCTRLW_DONE
+```
+
+  `steps=1` on arm K means the `sw` completed and the `lw` did not: the process ended on the DATA access, exit status 1,
+  after printing both the PORT warning and the DATA arm's own diagnostic.  The row requires the diagnostic as well as the
+  death, so a death for another reason would not count.
+
+## 2. THE PROPOSAL -- a sketch, to be argued with
+
+**The fix (option-set member 3, decline + latched announce, at the PORT arm).**  Refuse the out-of-range selector:
+`current_port` keeps its previous, always-valid value, and the refusal is announced ONCE per device instance with the
+house `(once)` marker (the tree's idiom is a per-instance latch field; `dev_disk.c` in the same test-machine family uses
+function-static `#119` loud-once latches, which are global rather than per-device):
+
+```
+ struct fbctrl_data {
+ 	struct vfb_data *vfb_data;
+ 	int		current_port;
+ 	int		port[DEV_FBCTRL_NPORTS];
++	int		warned_port;	/* #549: the out-of-range PORT announce, once */
+ };
+ ...
+ 	case DEV_FBCTRL_PORT:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->current_port;
+-		else {
+-			d->current_port = idata;
+-			if (idata >= DEV_FBCTRL_NPORTS)
+-				fatal("[ WARNING: fbctrl port number is out"
+-				    " of range! ]\n");
+-		}
++		else if (idata >= DEV_FBCTRL_NPORTS) {
++			/*  #549: REFUSED -- current_port keeps its previous, valid value.
++			    Storing the selector let the next DATA access end the process. */
++			if (!d->warned_port) {
++				fatal("[ fbctrl: port number 0x%llx is out of range; the "
++				    "selector is unchanged (once) ]\n",
++				    (unsigned long long) idata);
++				d->warned_port = 1;
++			}
++		} else
++			d->current_port = idata;
+ 		break;
+```
+
+The DATA arm is NOT edited: once PORT refuses, `current_port` is always in [0, 7], so its guard can no longer fire and
+stays as belt-and-braces -- a future edit that breaks the PORT refusal ends the process loudly instead of indexing
+`port[]` out of bounds.  **That choice is the round's main design question (Q3).**  `est/` gets the byte-identical file;
+the three build trees are rebuilt and cleared.
+
+**The detector (ships with the fix): `regress/fbctrl_port_probe.py`, grown from the witness**, same session plumbing,
+every row on a fresh `-E testmips` unless noted:
+
+* the controls of arm L, unchanged (liveness, device signature, disassembly of every stepped word);
+* **refusal, anchored**: PORT=5, DATA=0x2a, then PORT=9 -- the process survives, DATA still reads 0x2a (port 5's cell,
+  not port 0's), PORT reads 5;
+* **boundary**: PORT=8 refused (PORT still reads the previous 5); PORT=7 accepted (reads 7) and DATA=0x77 round-trips
+  (the far bound, written at the LAST legal slot); PORT=0 accepted (the near bound);
+* **wide**: `sd 0x0000000100000003` to PORT is refused (PORT still reads 5) -- the truncation cell in the table above;
+* **negative**: `sw -1` refused;
+* **announce**: exactly ONE `(once)` line after three refused writes on one device; ZERO in the controls-only arm;
+* **pre-fix red**: on HEAD's binary the refusal rows end the process (the witness above).
+
+**Its home.**  No gate drives a test machine's devices today.  Three gates start `-E testmips`: `gate_asan_sweep.sh`
+(gate 9) only CONSTRUCTS it, `gate_upstream.sh` runs upstream unit tests on it, and `regress/gate_mips_folds.sh`
+(gate 16) is the one that DRIVES a testmips guest at the debugger (`mips_fold_probe.py`) -- so the sketch adds the
+probe there, with the same
+`gatedevicesplit` note `#548` wrote into gate 14 (device probes accumulating in CPU gates is an OWED split).  The probe
+must also be registered where `tools/pipeline/check_probe_wiring.py` looks, or it lands as an unwired probe.
+
+## 3. QUESTIONS
+
+1. **Premise audit.**  (a) Is the PORT arm really the only writer of `current_port` besides `DEVINIT`'s `memset`?
+   (b) Once PORT refuses, can ANY sequence of guest accesses still reach the DATA arm's `exit(1)` -- any width, any
+   offset inside the 0x20-byte window, any byte lane of a big- or little-endian guest?  Enumerate what reaches `case
+   DEV_FBCTRL_PORT` and with what `idata`.  (c) Is the `sd` row real on `-E testmips` (a 64-bit CPU by default), and
+   does `memory_readmax64()` deliver the full 8 bytes?  (d) Does anything in the tree depend on the WARNING text I am
+   replacing?
+2. **What is the SMALLEST EDIT to the fix that breaks it and still passes every row proposed above?**  Name the row you
+   expect to stay green.  Consider the predicate (`>=`, the operand, its width or sign), the latch (set too early, never
+   set, shared), and the store (reached anyway, reached with a clamped value, reached on some widths only).
+3. **The DATA arm: keep its `exit(1)`, turn it into a decline, or both?**  Argue it from what each choice does to a
+   future edit that breaks the PORT refusal, and from what the detector could then observe.  Is a process-ending call
+   the guest can no longer reach acceptable in this fork, or is there a precedent for converting such guards anyway?
+4. **Option-set completeness.**  Members: 1 delete, 2 silent decline, 3 decline + latched announce, 4 accept, 5 fault
+   (a bus error -- MIPS and M88K deliver one for a failed device access; ARM, PPC, SH, RISC-V test machines also carry
+   this device), 6 backed accept, 7 implement.  Is 3 at PORT right, and is there a member or an in-tree idiom this brief
+   did not name?  Should the refusal keep the previous selector, or reset it to 0, or clamp?
+5. **The detector's home and wiring** -- gate 16 with a note, `gate_mips.sh`, or elsewhere?  What does
+   `check_probe_wiring.py` require of a new probe, and does anything else count probes (a manifest, a pin)?
+6. **Scope.**  Section 4 lists the two other process-ending calls in this file.  Is it right to leave them to their own
+   rounds, or do they meet the reopening rule (same device, same semantic class, same detector, no new oracle)?
+
+If, while verifying a claim, you found something ELSE -- say so.
+
+## 4. OUT OF SCOPE HERE, AND WHERE IT GOES
+
+`dev_fbctrl.c` has two more calls that end the process, both in the text above: `fbctrl_command()`'s `default:` --
+reached by ANY command other than 0-2, **including the documented `DEV_FBCTRL_COMMAND_FILL` (3) and `COPY` (4), which
+the source marks `TODO`** -- and `DEVICE_ACCESS`'s `default:` for any offset in the 0x20-byte window other than 0x00
+and 0x10 (for example a 1-byte access to +0x03, the low byte of PORT on a big-endian guest).  They are different
+classes (an unimplemented command value; an unmapped offset), so this round names and files them rather than taking
+them.  The tracking row `exitunowned76` lists `fbctrlportkill` among six one-to-five-line fixes; the other two sites
+will get their own rows.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+ERROR: This content was flagged for possible cybersecurity risk - reduced refusals aren't available on Astra for most Daybreak customers. You can continue using Astra with standard safeguards or switch to a model that supports Daybreak Blue.
+ERROR: This content was flagged for possible cybersecurity risk - reduced refusals aren't available on Astra for most Daybreak customers. You can continue using Astra with standard safeguards or switch to a model that supports Daybreak Blue.

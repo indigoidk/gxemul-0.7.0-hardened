@@ -382,7 +382,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  and reds THREE rows -- this one, the promptless count and the promptless-names row -- because all three are
 #  grandfathered names that exist only in the working tree (measured on a copy with them removed: 70/73, 40/43,
 #  names gone=the three).  Written by `tools/derive_hygiene_pins.sh --write`, never by hand. ***
-EXPECT_PTY_PROBES=73
+EXPECT_PTY_PROBES=74
 #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
 #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
 #
@@ -593,7 +593,7 @@ fi
 #  send() spelled the fresh mark `mark=mark`, which the fresh-mark census does not read, so that one said
 #  23 and the three #392 counts DISAGREED at HEAD.  The probe's rename to `_mark` (same change) makes the
 #  three agree; the deriver refuses to write while they disagree, which is why the rename precedes the pin. ***
-EXPECT_CONVERTED=24
+EXPECT_CONVERTED=25
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not

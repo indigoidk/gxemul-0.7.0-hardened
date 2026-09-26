@@ -1,0 +1,115 @@
+--- /c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/fbctrl549/v6/fbctrl_port_probe_v6b.py	2026-09-25 20:57:41.896834100 -0500
++++ /c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/fbctrl549/v6c/fbctrl_port_probe_v6c.py	2026-09-26 08:06:33.287471000 -0500
+@@ -2,10 +2,10 @@
+ """#549 fbctrlportkill -- the DETECTOR for dev_fbctrl.c's port selector, on an UNMODIFIED `-E testmips`.
+ 
+ machine_test.c installs `fbctrl addr=0x12f00000` in testmips's own setup (and in default_test() for the other test
+-machines).  Every access below is a real guest sb/sh/sw/sd/lw/ld placed with `put w` and executed through real address
+-decode and memory_rw -- stepped one instruction at a time, except session F, which free-runs to a breakpoint (session B
+-also steps a `dsll` between its stores, to double its value register).  No machine
+-or device is added to reach the site.  t0 = 0xffffffffb2f00000, kseg1 of DEV_FBCTRL_ADDRESS; PORT is +0x00, DATA +0x10.
++machines).  Every access below is a real guest sb/sh/sw/sd/lb/lh/lw/ld placed with `put w` and executed through real
++address decode and memory_rw -- stepped one instruction at a time, except session F, which free-runs to a breakpoint
++(session B also steps a `dsll` between its stores, to double its value register).  No machine or device is added to
++reach the site.  t0 = 0xffffffffb2f00000, kseg1 of DEV_FBCTRL_ADDRESS; PORT is +0x00, DATA +0x10.
+ 
+ THE DEFECT (HEAD before #549): the PORT arm STORED the selector, as an int, with only a warning.  An int out of range --
+ `sw 9` -- made the next DATA access end the emulator process in the DATA arm's range check; a wide value was truncated
+@@ -62,8 +62,10 @@
+ CONTRACT (clause e) -- AN ENUMERATION, NOT A LIST.
+ THE FLOOR.  The fixed PORT arm's body tests three things -- the access direction, the written value (`idata >=
+ DEV_FBCTRL_NPORTS`, on all 64 bits) and the latch (`!warned_port`) -- and it reads and writes `current_port`.  Every
+-cell of those is held: the value's magnitude, width and class, every bit the compare tests set alone at every width
+-that can carry it (B), the latch unset and set, a read and a write.  The
++cell of those is held -- the value's magnitude below, at and past the bound (the relational compare's generating set),
++its width and class, the latch unset and set, a read and a write: that is the FLOOR.  Session B ALSO holds every bit
++the compare tests set alone at every width that can carry it -- MARGINAL coverage this contract claims above the
++floor, since a single bit of a relationally compared value is not a floor cell (#548's P_win; #549's D1).  The
+ previous selector (current_port's VALUE), the COMMAND cell and the data cells are NOT tested by the body -- the fix
+ makes no partition of them -- so an edit conditioned on one of them is coverage beyond the floor (clause e): the rows
+ hold the values listed below and claim nothing more.  For each EFFECT, each value listed is held by the session(s)
+@@ -102,16 +104,19 @@
+ demoted to debug() (F); an announce suppressed above or below any threshold, or on the sign bit (the first refusals
+ run from 8 to all-ones); and the pre-#549 process exit on DATA.
+ NOT CLAIMED (disclosed).  (0) An edit conditioned on TWO axes at once -- a joint cell such as "refuse 9 only by sb
+-after PORT=3", "`^A` sets bit 32 except at selector 5", or THE LATCH CROSSED WITH ONE BIT (while `^A` is clear the
+-compare ignores bit k) -- is caught only where a row happens to hold that pair; the enumeration above is one-axis by
+-design, and closing every pair is the unbounded growth the carrier's floor rules refuse.  The latch x bit joint is held
+-at bits 3, 8 and 32 only (the first refusals 8, 0x100 and 0x100000005; all-ones decides no bit), so 58 bits are open
+-at latch-clear (4-7, 9-31, 33-63): measured 117/117 at bits 4 and 40 (opus549_measured/f2v6/TABLE_f2v6.out).  What it
+-lets through is a guest's FIRST out-of-range selector, once per device: below bit 32 the value is stored and the next
++after PORT=3", "`ld` sets bit 32 except at selector 5", or THE LATCH CROSSED WITH ONE BIT (while `warned_port` is
++clear the compare ignores bit k) -- is caught only where a row happens to hold that pair; the enumeration above is
++one-axis by design, and closing every pair is the unbounded growth the carrier's floor rules refuse.  The latch x bit
++joint is held at bits 3, 8 and 32 only (the first refusals 8, 0x100 and 0x100000005; all-ones decides no bit), so 58
++bits are open at latch-clear (4-7, 9-31, 33-63): measured 117/117 at bits 4 and 40
++(opus549_measured/f2v6/logs/TABLE_f2v6.out).  What it lets through is an out-of-range selector at such a bit WHILE THE
++LATCH IS CLEAR -- an accepted value does not set the latch, so the escape remains possible while it stays clear, not
++once per device (a source reading; the witness tests one occurrence): below bit 32 the value is stored and the next
+ DATA access ends the process in the kept range check; from bit 32 up it is truncated onto a LEGAL port silently --
+-2^40 selects port 0 and the next DATA write runs as a command (WITNESS.out) -- the pre-#549 defect, for one write.  Not
+-owed by the floor, whose generating set for `^A` is below/at/past the bound, held at both latch states; the close, one
+-fresh device per bit at a second anchor (61 sessions, 9.7 s on the fix: TABLE_U.out), is filed as `^A`.  One pair is
++2^40 selects port 0 and the next DATA write runs as a command (WITNESS.out) -- the pre-#549 defect.  Not owed by the
++floor, whose generating set for `idata >= 8` is below/at/past the bound, held at both latch states; the close, one
++fresh device per bit at a second anchor (61 sessions, 9.7 s on the fix: TABLE_U.out), is filed as `fbctrlportdebt`.
++One pair is
+ held and is recorded as a pair, not as a class: COMMAND non-zero with the latch set, before a PORT read (R's second
+ refusal; V's and Y's later ones) -- in the 94-row probe R was its only holder (the Opus closing-F2 seat,
+ J_ref_cmdlatch).  (1) A process-global latch instead of the per-instance field, and an announce conditioned on the
+@@ -123,20 +128,23 @@
+ its `exit(1)`, weakening `>=` to `>`, or swapping its operand -- is unreachable while the PORT arm refuses, because no
+ out-of-range selector is ever stored; the check is KEPT as a tripwire.  It exits before it indexes, so an index of 8
+ cannot reach `warned_port` while it stands, and `port[8]` would be undefined behaviour, not a defined alias of the
+-latch.  (3) An exception for one value no row writes (`^A`), or for a CLASS the rows never present: the low three bits
+-(every refused value's residue mod 8 is 0, 1, 3, 5 or 7, never 2, 4 or 6 -- `^A` scores the full count, and a wide
+-value with such a residue is accepted and truncated onto a legal port silently, 0x100000006 to port 6); an accept-side
+-class (every value with exactly four bits set: 0x700000001 is accepted silently as port 1 -- not always the exit); a
+-latch that re-arms with a period of 108 refusals or more (107 re-announces on B's 108th refusal and reds the count
+-row; 108 would re-announce on a 109th no session makes -- measured); an announce suppressed or mangled only for one
+-value no session refuses first (`^A`) or only for a class no first refusal belongs to (values whose bits all lie in
+-9..31, say); an announce demoted to debug() for some values but not F's 9 -- only a free-running session tells them
+-apart; and A REFUSAL THAT WRITES THE CONSTANT EQUAL TO A VALUE'S ONLY ANCHOR: the rows read "keeps the previous
+-selector" against the stored-int oracle, so `^A` reads as a keep.  Sixty refused values are observed at exactly one
+-previous selector -- 58 single bits at 5, 0xffffffff at 5, 0x100000005 at 3 (SIM_ANCHORS.out) -- and each admits a
+-refusal-time write of that selector (measured); bits 3, 4 and 8 are dual-anchored (V, X7 at 7) and red.  A second
+-anchor for a value closes its constant form; a replaced anchor moves it (B's sd group at 7 opens `^A` on bits 32 and
+-34-62); no finite row set closes "except value k".  (A threshold is not in this class, nor is a range of bits the
++latch.  (3) An exception for one value no row writes (`idata != 10`), or for a CLASS the rows never present: the low
++three bits (every refused value's residue mod 8 is 0, 1, 3, 5 or 7, never 2, 4 or 6 -- `(idata & 7) != 6` scores the
++full count, and a wide value with such a residue is accepted and truncated onto a legal port silently, 0x100000006 to
++port 6); an accept-side class (every value with exactly four bits set: 0x700000001 is accepted silently as port 1 --
++not always the exit); a latch that re-arms with a period of 108 refusals or more (107 re-announces on B's 108th
++refusal and reds the count row; 108 would re-announce on a 109th no session makes -- measured); an announce suppressed
++or mangled only for one value no session refuses first (`idata != 16`) or only for a class no first refusal belongs to
++(values whose bits all lie in 9..31, say); an announce demoted to debug() for some values but not F's 9 -- only a
++free-running session tells them apart; and A REFUSAL THAT WRITES THE CONSTANT EQUAL TO A VALUE'S ONLY ANCHOR: the rows
++read "keeps the previous selector" against the stored-int oracle, so `if (idata == 32) current_port = 5` reads as a
++keep.  Sixty refused values are observed at exactly one previous selector -- 58 single bits at 5, 0xffffffff at 5,
++0x100000005 at 3 (SIM_ANCHORS.out, a STATIC walk of the session programs) -- and each admits a refusal-time write of
++that selector: derived for all sixty, measured for six representative value and class forms
++(opus549_measured/f2v6/logs/TABLE_f2v6.out); bits 3, 4 and 8 are dual-anchored (V, X7 at 7) and red.  A second anchor
++for a value closes its constant form; a replaced anchor moves it (B's sd group at 7 opens `-> 7` on bits 32 and 34-62:
++inferred from the programs, measured at bits 32 and 40); a non-exhaustive selection of values cannot rule out every
++value-specific exception.  (A threshold is not in this class, nor is a range of bits the
+ COMPARE ignores: see "Beyond the effects".)  (4) Equivalent edits, THIRTEEN, each measured at the full score
+ (table5/TABLE.out, table6/TABLE.out): storing `(uint32_t) idata`, `(int) idata` or `idata & 7` (only 0..7 reach that
+ store, and each compiles to the fix's own binary), reordering the struct's fields, masking the PORT read with 7 (the
+@@ -161,11 +169,12 @@
+ rows then inherit its value (M_acclatch).  Every read-back is taken after its session ends, so a session that dies
+ part-way blanks the rows it had already passed (M_acc4: session A died at step 5 and every accept row read `-`).  And
+ session A's "accept selector 0 written by sw" cannot see an IGNORED store -- the selector is already 0 at power-on --
+-so the cell "0 by sw is accepted" is held by W's row after PORT=5, not by A's.  Session B reads PORT once per width, so
+-each of its rows says that SOME single-bit value of that width got through, not which: it prints the last value that
+-GOT THROUGH, which names the bit for k <= 31 (2^k; INT_MIN prints 0xffffffff80000000) and reads 0 for bits 32-63.  B's
+-"keeps 5" is verified against the stored-int oracle only: a refusal that WRITES 5 reads as a keep (NOT CLAIMED (3)).  B
+-depends on the emulated `^A` executing -- the encoding is pinned and the disassembly control checks the word, not the
++so the cell "0 by sw is accepted" is held by W's row after PORT=5, not by A's.  Session B reads PORT once per width,
++after all of that width's refusals: a passing row says no single-bit value of that width got through; a failing row
++prints the LAST value that got through, which for the compare-narrowing family names the bit for k <= 31 (2^k; INT_MIN
++prints 0xffffffff80000000) and reads 0 for bits 32-63, where it says only that some value got through.  B's "keeps 5"
++is verified against the stored-int oracle only: a refusal that WRITES 5 reads as a keep (NOT CLAIMED (3)).  B depends
++on the emulated `dsll` executing -- the encoding is pinned and the disassembly control checks the word, not the
+ doubling; table 6's width-differentiated reds (bit 9 red at sh/sw/sd and never sb, bit 16 and up never sh, bit 32 and
+ up never sw) are the evidence each 2^k reached the compare.  After a refusal, the DATA accesses made without a fresh
+ selector are K's read, K's write and R's write; R's DATA read re-selects port 5 first.  Every refusal row rests on

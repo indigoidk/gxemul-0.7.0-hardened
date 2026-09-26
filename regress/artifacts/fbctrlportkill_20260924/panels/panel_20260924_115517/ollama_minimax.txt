@@ -1,0 +1,36 @@
+VERDICT: SHIP WITH CHANGES
+
+**Count of wrong dispositions: 3 (P2, D8 coverage, DATA-weakening disclosure). R4's wording is a probable 4th — flagged.**
+
+---
+
+**1. P2 is wrong.** [REASONED]
+Leaving the numerator pin quoted ("41") means `check_score_claims.py` watches only the denominator. The author's defense is that P1 (exit 1 on red) is a "second catcher." It is not. P1 catches rows that are *actually* red at runtime. The attack surface is: edit the probe so a formerly-red row now scores green, AND edit the numerator pin to lie about the count. The probe exits 0, the checker (denominator-only) passes, and neither guard fires. P1 only catches the inverse — red rows that were not edited to look green. The numerator must be checked, or the checker must compare the full "X/Y" claim against reality. "By design" is an assertion, not a justification — and the design has a hole.
+
+**2. D8 is NOT covered by D5.** [REASONED]
+D5 is described as: "read back every port's **DATA cell** against a known fill." D8 is: "`current_port |= 1` in the refusal" — a mutation of the **PORT selector**. The proposed coverage ("make the 'after PORT=7' row a pair, previous 7 AND previous 6") implicitly assumes D5's readback includes PORT, but D5's text names DATA only. These are disjoint state. If the existing "after PORT=7" row already reads PORT as part of its signature, D8 is covered — but that requires the session to read PORT, which is not stated. Disposition should be: add an explicit PORT readback after refusal from previous=6, or correct the coverage claim to name which existing row reads PORT.
+
+**3. The DATA `>=` → `>` weakening should be ROWED, not disclosed.** [REASONED]
+The settled premise states the DATA arm is "kept as a tripwire." The author's disposition says the `>` variant is "unreachable on a correct PORT arm, the same class as M_noguard" and discloses it without a row. This contradicts the tripwire purpose. M_noguard fails because PORT never refuses; the DATA `>` variant fails because *both* arms let value 8 through (PORT broken OR correct-but-bypassed, DATA weakened). The tripwire exists precisely to catch the case where PORT is broken. Removing it from the test surface because "PORT is correct in the build under test" is circular — the test exists for the builds where PORT is *not* correct. At minimum, this needs a row that exercises value 8 with a PORT arm that does *not* refuse it (i.e., the row must be constructed to bypass PORT, or the variant must be evaluated as a compound failure with M_noguard).
+
+**4. R4's proposed wording probably misses the defect.** [REASONED]
+The defect is: "register reads happen only after the whole session survives, so a later death blanks earlier rows." The proposed fix: "no row inherits another row's selector." These are different claims. Selector inheritance is a property of the probe's setup (does row N start with selector=N, or with whatever row N-1 left?). The actual defect is about *verification timing* — a row's pass/fail depends on whether later rows in the same session crash the process before the readback. "No inheritance" does not address this. If the intent is to say "each row's selector is set by its own write, not by a prior row's residue," that is a true-but-narrow claim that doesn't restore the lost property (independent row verification). Recommend reworking to describe the timing dependency, e.g., "rows are verified in session order; a crash in row N may prevent readback for rows < N."
+
+**5. R2's two-machine route is NOT checkable from the packet.** [REASONED, not READ]
+The packet states it as a fact from codex (dedicated): "two unmodified machines in one process via a config file (`emul_add_machine`)." I cannot verify this from inlined text. Single fact that would settle it: the behavior of `emul_add_machine` when a config file specifies two `-E testmips` machines — specifically, whether each gets its own device tree (and thus its own fbctrl instance). Per the "rows owed per enumerated edit" principle applied to D2–D11, if the route is real and the failure mode (latch not cleared across instances, or `warned_port` not resetting, or `serial_nr` collision) is reachable, it should be built now, not filed. The author is applying the principle to D edits but exempting R2's edit without a stated reason. Inconsistent.
+
+**6. R1's rewrite is sound but the scope of "wide" is underspecified.** [REASONED]
+The rewrite to "a selector whose int conversion is out of range (e.g. `sw 9`)" is correct in direction. But `sw 9` stores the value 9, whose int conversion is 9 — that is the *in-range* case being contrasted with `sw 0x100000003` (wide, int-converts to 3, serviced). The example is misleading. Suggest: "a selector whose int conversion is out of range (e.g. `sw 0x100000009`, which int-converts to 9 and is serviced)" — or pick a value whose int conversion is ≥8.
+
+**7. P3 disclosure ("reviewed, not rowed") is acceptable as a procedural matter but should name the review step.** [REASONED]
+The principle is consistent with #548's fbharnessedits. But "reviewed" is vague. The disposition should state *who* reviews and *when* (e.g., "reviewed at PR time by the seat proposing the edit, recorded in the commit message"). Without that, the disclosure is an exemption with no audit trail.
+
+---
+
+**Answers to direct questions:**
+
+- **Q1: Which disposition is wrong — count and specifics.** Count: **3 certain (P2, D8 coverage, DATA-weakening disclosure), 1 probable (R4 wording).** P2 is **not** acceptable as stated. D8 is **not** covered by D5 as written. The DATA `>=` → `>` weakening **should** be rowed, not disclosed. No D-row appears to be NOT owed (all 10 describe distinct reachable failure modes). One row appears **missing**: the DATA-weakening compound with a PORT-bypass (see #3).
+
+- **Q2: R2 two-machine route.** Not checkable from packet; would settle by reading `emul_add_machine` + config-file loader behavior, or by a single test invocation. If real, **build now**, not file — the author's D2–D11 principle demands it.
+
+- **Q3: Fixes that would themselves be wrong once written.** R4 wording (#4) and the DATA-weakening disclosure's contradiction with the "tripwire" premise (#3) are the two. R1's example choice is misleading (#6).

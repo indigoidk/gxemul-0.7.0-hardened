@@ -1,0 +1,45 @@
+diff --git a/src/devices/dev_fbctrl.c b/src/devices/dev_fbctrl.c
+index cc69ab3e..eab10df8 100644
+--- a/src/devices/dev_fbctrl.c
++++ b/src/devices/dev_fbctrl.c
+@@ -49,6 +49,7 @@ struct fbctrl_data {
+ 	struct vfb_data *vfb_data;
+ 	int		current_port;
+ 	int		port[DEV_FBCTRL_NPORTS];
++	int		warned_port;	/* #549: the refused-selector announce */
+ };
+ 
+ 
+@@ -116,15 +117,27 @@ DEVICE_ACCESS(fbctrl)
+ 	case DEV_FBCTRL_PORT:
+ 		if (writeflag == MEM_READ)
+ 			odata = d->current_port;
+-		else {
++		else if (idata >= DEV_FBCTRL_NPORTS) {
++			/*  #549: an out-of-range selector is REFUSED, and
++			    current_port keeps its previous, always-valid value.
++			    It used to be stored as an int with only a warning:
++			    9 made the next DATA access end the emulator in the
++			    range check below, and a wide value was truncated
++			    onto a legal port (0x100000003 selected port 3).
++			    Announced once per device.  */
++			if (!d->warned_port) {
++				fatal("[ fbctrl: port number 0x%llx is out of range; "
++				    "the selector is unchanged (once) ]\n",
++				    (unsigned long long) idata);
++				d->warned_port = 1;
++			}
++		} else
+ 			d->current_port = idata;
+-			if (idata >= DEV_FBCTRL_NPORTS)
+-				fatal("[ WARNING: fbctrl port number is out"
+-				    " of range! ]\n");
+-		}
+ 		break;
+ 
+ 	case DEV_FBCTRL_DATA:
++		/*  #549: unreachable while the PORT arm refuses; kept as a
++		    tripwire for a later edit that lets a bad selector in.  */
+ 		if (d->current_port < 0 || d->current_port
+ 		    >= DEV_FBCTRL_NPORTS) {
+ 			fatal("[ fbctrl port number is out of range! ]\n");

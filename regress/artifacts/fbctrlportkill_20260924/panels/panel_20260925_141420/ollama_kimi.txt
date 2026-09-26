@@ -1,0 +1,29 @@
+VERDICT: SHIP
+
+1. **[REASONED] Smallest clear escape:** weaken the refusal predicate with one excluded value:
+
+   ```diff
+   -               else if (idata >= DEV_FBCTRL_NPORTS) {
+   +               else if (idata >= DEV_FBCTRL_NPORTS && idata != 10) {
+   ```
+
+   A guest write of selector `10` then takes the normal accepting path: the prior selector is not preserved and the required refusal is not announced; once stored, a later DATA access can reach the retained tripwire. All **73 rows should stay green**, with `FBCTRLP_CONTROL=OK`, `FBCTRLP_RESULT=73/73`, and probe status 0, because no session in §4b ever writes selector `10`. The tested invalid values are 8, 9, 16, `0x100`, `0xff`, `0x100000003`, `0x200000000`, all-ones, and `0x8000000000000000`.
+
+   **[READ]** §4b’s NOT-CLAIMED item 3 explicitly names this exact `idata != 10` shape, so this is a disclosed limitation of finite rows, not a contradiction or a source-level blocker.
+
+2. **[READ/REASONED] “Not one of the 62” is supported, but not exhaustively provable from the packet:** §4c accounts for all eight `rc=0` edits without a one-value exception, and §4b separately classifies this shape as unrowed. The mutant bodies themselves are not inlined; the single settling fact would be those eight definitions.
+
+3. **[REASONED] Another one-conjunct state-conditioned escape exists:**  
+
+   ```c
+   idata >= DEV_FBCTRL_NPORTS && d->current_port != 4
+   ```
+
+   Every tested refusal has predecessor selector 0, 1, 5, 6, or 7; A selects 4 only before an ordinary DATA operation, never before an invalid PORT write. Thus an invalid write accepted only when `current_port == 4` also leaves all 73 rows green. This is outside the asserted predecessor coverage, although the contract’s parenthetical already scopes its coverage rather than claiming every prior state.
+
+4. **[REASONED] §4 sentences contradicted by §5:** none found in the inlined evidence.
+
+5. **[READ/REASONED] Unsupported, not contradicted:**
+   - **[READ]** §4b says a two-machine process-global latch reds; **[REASONED]** §5a contains only the one-machine `M_static` escape—the two-instance row/log would settle it.
+   - **[READ]** §4b says `printf` is indistinguishable from `fatal()` here; **[REASONED]** none of the eight green edits is identified as that substitution—the capture behavior or a `printf` mutant score would settle it.
+   - **[READ]** §4c says every `M_revert` refusal row was red and K/R exited; **[REASONED]** the visible row list is trimmed—`M_revert.raw` would settle it.

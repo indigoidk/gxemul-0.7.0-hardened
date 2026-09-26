@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""What does each measured escape DO to a guest?  Each session is a FRESH device (latch clear), driven through the frozen
+v6 probe's own session().  Read-backs are printed after the session, so a session that dies reads '-'.
+usage: witness.py <gxemul> <frozen v6 probe>"""
+import importlib.util
+import os
+import sys
+
+BIN, PROBE = sys.argv[1], sys.argv[2]
+sys.argv = [PROBE, BIN]
+spec = importlib.util.spec_from_file_location("fbp", PROBE)
+fbp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fbp)
+F = fbp.FBCTRL
+CASES = [
+    # label, program, registers, reads
+    ("WA 0x100000006 by sd after PORT=5, read PORT",
+     [("sw", "a0", 0, None), ("sd", "t1", 0, "w"), ("lw", "s0", 0, None)],
+     [("t0", F), ("a0", 5), ("t1", 0x100000006), ("s0", 0xdead)], ["s0"]),
+    ("WB 14 by sw after PORT=5, then a DATA read",
+     [("sw", "a0", 0, None), ("sw", "t1", 0, "w"), ("lw", "s0", 16, None)],
+     [("t0", F), ("a0", 5), ("t1", 14), ("s0", 0xdead)], ["s0"]),
+    ("WC1 2^40 by sd after PORT=5, read PORT",
+     [("sw", "a0", 0, None), ("sd", "t1", 0, "w"), ("lw", "s0", 0, None)],
+     [("t0", F), ("a0", 5), ("t1", 1 << 40), ("s0", 0xdead)], ["s0"]),
+    ("WC2 2^40 by sd after PORT=5, then DATA=0x2a (meant for port 5, COLOR_R)",
+     [("sw", "a0", 0, None), ("sd", "t1", 0, "w"), ("sw", "t3", 16, None), ("sw", "a0", 0, None),
+      ("lw", "s1", 16, None)],
+     [("t0", F), ("a0", 5), ("t1", 1 << 40), ("t3", 0x2a), ("s1", 0xdead)], ["s1"]),
+    ("WD 16 by sw after PORT=5, then a DATA read",
+     [("sw", "a0", 0, None), ("sw", "t1", 0, "w"), ("lw", "s0", 16, None)],
+     [("t0", F), ("a0", 5), ("t1", 16), ("s0", 0xdead)], ["s0"]),
+    ("WE 0x700000001 by sd after PORT=5, read PORT",
+     [("sw", "a0", 0, None), ("sd", "t1", 0, "w"), ("lw", "s0", 0, None)],
+     [("t0", F), ("a0", 5), ("t1", 0x700000001), ("s0", 0xdead)], ["s0"]),
+]
+stub = fbp.stub_path()
+try:
+    for lab, prog, regs, reads in CASES:
+        S = fbp.session(lab[:3].strip(), prog, regs, reads, stub)
+        vals = " ".join("%s=%s" % (r, fbp.hx(S["vals"].get(r))) for r in reads)
+        print("W %-72s status=%s steps=%d/%d exit=%s once_after_store=%s %s" % (
+            lab, S["status"], S["steps"], S["n"], S["exit"], S["once_after"].get("w"), vals))
+        for line in S["buf"].splitlines():
+            if "Unimplemented command" in line or "out of range" in line:
+                print("      emulator: %s" % line.strip())
+finally:
+    os.unlink(stub)
+print("W_DONE")

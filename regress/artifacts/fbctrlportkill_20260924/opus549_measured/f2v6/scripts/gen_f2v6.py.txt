@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Opus measuring seat, #549 v6 adjudication pass: the one-line variants the findings packet names (N21 = D2, N1 = D1,
+N2), their siblings and controls, plus four of table 6's own MKB texts and DSC_ann_hibits (rebuilt so the D2 remedy and
+the D1 prototype can be scored against them).  Each edit is ONE text transformation of the fix with exactly one match
+(REFUSED otherwise).  PREDICTIONS are written here, before anything is built:
+  GREEN     117/117 on the unmodified v6 probe
+  RED:<rows>  below 117, on the rows named
+usage: gen_f2v6.py <fix.c> <outdir>"""
+import io
+import os
+import sys
+
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+LATCH = "if (!d->warned_port) {"
+
+
+def pred(e):
+    return [(PRED, "else if (%s) {" % e)]
+
+
+def latch(e):
+    return [(LATCH, "if (%s) {" % e)]
+
+
+def refwrite(cond, c):
+    """one statement at the top of the refusal arm, before the announce block: on refusing a value that matches
+    cond, write the constant c into the selector"""
+    return [(LATCH, "if (%s) d->current_port = %d;\n\t\t\t%s" % (cond, c, LATCH))]
+
+
+EDITS = [
+    # ---- D2 = N21: a refusal that WRITES a constant, keyed on the value
+    ("D2_eq32_w5", "GREEN", "N21 verbatim: on refusing 32, write 5", refwrite("idata == 32", 5)),
+    ("D2_lo32z_w5", "GREEN", "N21 class: on refusing a value whose low 32 bits are 0, write 5",
+     refwrite("(uint32_t) idata == 0", 5)),
+    ("D2_eq32_w7", "RED:B sb,sh,sw,sd", "control: on refusing 32, write 7", refwrite("idata == 32", 7)),
+    ("D2_eq2p40_w5", "GREEN", "on refusing 2^40, write 5", refwrite("idata == 0x10000000000ULL", 5)),
+    ("D2_eq2p40_w7", "RED:B sd", "on refusing 2^40, write 7", refwrite("idata == 0x10000000000ULL", 7)),
+    ("D2_eq2p32_w5", "GREEN", "on refusing 2^32, write 5", refwrite("idata == 0x100000000ULL", 5)),
+    ("D2_eq2p32_w7", "RED:B sd", "on refusing 2^32, write 7", refwrite("idata == 0x100000000ULL", 7)),
+    ("D2_lo32z_w7", "RED:P 0x200000000,W 2^63,B sd", "on refusing a value whose low 32 bits are 0, write 7",
+     refwrite("(uint32_t) idata == 0", 7)),
+    ("D2_eqffff_w5", "GREEN", "on refusing 0xffffffff (P's all-ones by sw, refused only at 5), write 5",
+     refwrite("idata == 0xffffffffULL", 5)),
+    ("D2_eqX3_w3", "GREEN", "on refusing 0x100000005 (X3's value, refused only at 3), write 3",
+     refwrite("idata == 0x100000005ULL", 3)),
+    # ---- D1 = N1: the compare weakened only while the once-latch is clear
+    ("N1_mask4", "GREEN", "N1 verbatim: while the latch is clear the compare ignores bit 4",
+     pred("(d->warned_port ? idata : (idata & ~(1ULL << 4))) >= DEV_FBCTRL_NPORTS")),
+    ("N1_mask40", "GREEN", "N1 at bit 40: while the latch is clear the compare ignores bit 40",
+     pred("(d->warned_port ? idata : (idata & ~(1ULL << 40))) >= DEV_FBCTRL_NPORTS")),
+    # ---- N2: a refusal exception keyed on bits 0-2, which the compare does not test
+    ("N2_lo3ne6", "GREEN", "N2 verbatim: refuse only when the low three bits are not 6",
+     pred("idata >= DEV_FBCTRL_NPORTS && (idata & 7) != 6")),
+    ("N2_lo3ne2", "GREEN", "N2 at low-3 value 2", pred("idata >= DEV_FBCTRL_NPORTS && (idata & 7) != 2")),
+    ("N2_lo3ne5", "RED:X3 x3", "control: low-3 value 5 (X3's 0x100000005)",
+     pred("idata >= DEV_FBCTRL_NPORTS && (idata & 7) != 5")),
+    # ---- N9 / N23: the re-arm period at B's boundary (table 5/6's B_mod form)
+    ("B_mod107", "RED:B count", "latch re-armed every 107 refusals", latch("!(d->warned_port++ % 107)")),
+    ("B_mod108", "GREEN", "latch re-armed every 108 refusals", latch("!(d->warned_port++ % 108)")),
+]
+#  table 6's own texts, generated with table 6's own format string (so the binaries can be md5-compared with it)
+for k, prd in ((5, "RED:B sb,sh,sw,sd"), (31, "RED:B sw,sd"), (40, "RED:B sd"), (63, "RED:W 2^63,B sd")):
+    EDITS.append(("MKB_%02d" % k, prd, "table 6 text: the compare ignores bit %d alone" % k,
+                  pred("(idata & ~0x%xULL) >= DEV_FBCTRL_NPORTS" % (1 << k))))
+EDITS.append(("DSC_ann_hibits", "GREEN", "table 6 text: no announce for a value whose bits all lie above bit 8",
+              latch("!d->warned_port && (idata & 0x1ffULL)")))
+
+
+def apply(base, edits, name):
+    s = base
+    for old, new in edits:
+        n = s.count(old)
+        if n != 1:
+            sys.exit("REFUSED %s: %d matches for %r" % (name, n, old[:60]))
+        s = s.replace(old, new)
+    if s == base:
+        sys.exit("REFUSED %s: the edit changed nothing" % name)
+    return s
+
+
+def main():
+    fixp, out = sys.argv[1], sys.argv[2]
+    os.makedirs(out, exist_ok=True)
+    base = io.open(fixp, encoding="utf-8", newline="").read()
+    assert "\r" not in base
+    seen = {}
+    with io.open(os.path.join(out, "MANIFEST.out"), "w", encoding="utf-8", newline="\n") as mf:
+        for name, prd, cls, edits in EDITS:
+            s = apply(base, edits, name)
+            assert s not in seen, "%s duplicates %s" % (name, seen.get(s))
+            seen[s] = name
+            io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+            mf.write("%-15s %-30s %s\n" % (name, prd, cls))
+    print("EDITS_WRITTEN=%d" % len(EDITS))
+
+
+if __name__ == "__main__":
+    main()

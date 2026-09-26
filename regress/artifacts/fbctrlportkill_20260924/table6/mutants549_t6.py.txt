@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""#549 variant table 6: table 5's 212 edits (their files, unchanged) plus the verifying pass's edits, scored by the
+v6 probe (117 rows).  Every edit carries a PREDICTION, written here before table 6 runs:
+  RED        the probe must score below its total
+  GREEN(e)   disclosed by the contract (clause e) -- must score the total
+  GREEN(eq)  equivalent -- must score the total
+
+  t5    table 5's 212, each with table 5's own prediction (all 212 held, table5/TABLE.out) -- session B adds rows only,
+        so a red stays red -- except B_mod12 (a latch re-armed every 12 refusals), measured at the total in table 5 and now
+        predicted RED: B makes 108 refusals, so it announces at the 1st, 13th, ... -- nine times.
+  c3    the Opus 5.5 verifying seat's equivalents and behaviour changers (opus549_measured/c3/gen_c3.py.txt; its Q2_*
+        are table 5's CF2_O_* and are not repeated).
+  MK    the verifying seat's three bit-range narrowings of the compare, which scored 111/111 against v5, and its
+        control (bit 8 alone, refused by v5 as 0x100).
+  MKB   ONE NARROWING PER BIT: the compare made to ignore bit k alone, k = 3..63 -- each must be caught by session B,
+        at the widest width that carries bit k (and every narrower one that does).
+  MKW   a narrowing applied at ONE width only: bit 5 by sb, bit 12 by sh, bit 9 by sw, bit 40 by sd -- each caught only
+        by B's row for that width.
+  DSC / EQL   the contract's new disclosures, measured: the announce suppressed for a value class no first refusal
+        belongs to (NOT CLAIMED (3)); the announce without its trailing newline (5); a latch set to 2 (4).
+
+Each edit is one text transformation of the FINAL fixed dev_fbctrl.c with exactly one match (REFUSED otherwise); an edit
+whose text equals an earlier one is not written again and is mapped in CELLMAP_t6.out.
+usage: python mutants549_t6.py <final dev_fbctrl.c> <mutants_t5 dir> <table5/TABLE.out> <outdir>"""
+import io
+import os
+import re
+import shutil
+import sys
+
+NL = chr(92) + "n"
+PRED = "else if (idata >= DEV_FBCTRL_NPORTS) {"
+LATCH = "if (!d->warned_port) {"
+LATCH_SET = "\t\t\t\td->warned_port = 1;\n"
+ACCEPT = "\t\t} else\n\t\t\td->current_port = idata;\n"
+RD = "\t\tif (writeflag == MEM_READ)\n\t\t\todata = d->current_port;\n"
+READ_PORT = "\t\t\todata = d->current_port;\n"
+ANN_TAIL = "\t\t\t\t    \"the selector is unchanged (once) ]" + NL + "\",\n"
+
+
+def pred(e):
+    return [(PRED, "else if (%s) {" % e)]
+
+
+def latch(e):
+    return [(LATCH, "if (%s) {" % e)]
+
+
+def accept(stmt):
+    return [(ACCEPT, "\t\t} else\n\t\t\t%s\n" % stmt)]
+
+
+def rd(cond):
+    return [(RD, "\t\tif (%s)\n\t\t\todata = d->current_port;\n" % cond)]
+
+
+NEW = [
+    #  c3: the verifying seat's equivalents (its TABLE_c3.out measured each at 111/111; six compile to the fix's binary)
+    ("EQ_gt7", "c3 equivalent: bound idata > 7", "GREEN(eq)", pred("idata > 7")),
+    ("EQ_maskhi", "c3 equivalent: bound (idata & ~7ULL) nonzero", "GREEN(eq)", pred("idata & ~7ULL")),
+    ("EQ_ge8lit", "c3 equivalent: bound idata >= 8, the literal", "GREEN(eq)", pred("idata >= 8")),
+    ("EQ_acc_and7", "c3 equivalent: accept stores idata & 7", "GREEN(eq)", accept("d->current_port = idata & 7;")),
+    ("EQ_acc_castint", "c3 equivalent: accept stores (int) idata", "GREEN(eq)", accept("d->current_port = (int) idata;")),
+    ("EQ_dir_new", "c3 equivalent: direction writeflag != MEM_WRITE", "GREEN(eq)", rd("writeflag != MEM_WRITE")),
+    ("EQ_latch_ne1", "c3 equivalent: latch test warned_port != 1", "GREEN(eq)", latch("d->warned_port != 1")),
+    ("EQ_ann_idata", "c3 equivalent: latch test also requires idata (never 0 there)", "GREEN(eq)",
+     latch("!d->warned_port && idata")),
+    #  c3: the verifying seat's behaviour changers
+    ("BR_ge9", "c3: bound idata >= 9 (accepts 8)", "RED", pred("idata >= 9")),
+    ("BR_no_hi32", "c3: refuse only [8, 2^32)", "RED", pred("idata >= DEV_FBCTRL_NPORTS && idata < 0x100000000ULL")),
+    ("BR_acc_map0", "c3: accept stores 0 as 1", "RED", accept("d->current_port = idata ? idata : 1;")),
+    ("BR_rd_drop0", "c3: a PORT read returns current_port & 6", "RED",
+     [(READ_PORT, "\t\t\todata = d->current_port & 6;\n")]),
+    ("BR_acc_w8", "c3: an out-of-range value by sd is stored", "RED", pred("idata >= DEV_FBCTRL_NPORTS && len != 8")),
+    ("BR_ann_gt8", "c3: announce only for idata > 8", "RED", latch("!d->warned_port && idata > 8")),
+    ("BR_refuse_lt", "c3: refuse idata >= 7", "RED", pred("idata >= DEV_FBCTRL_NPORTS - 1")),
+    #  MK: the verifying seat's bit-range narrowings (111/111 against v5) and its control
+    ("MK_b9_31", "MK: the compare ignores bits 9-31", "RED", pred("(idata & ~0xfffffe00ULL) >= DEV_FBCTRL_NPORTS")),
+    ("MK_b5_7", "MK: the compare ignores bits 5-7", "RED", pred("(idata & ~0xe0ULL) >= DEV_FBCTRL_NPORTS")),
+    ("MK_b34_62", "MK: the compare ignores bits 34-62", "RED",
+     pred("(idata & ~0x7ffffffc00000000ULL) >= DEV_FBCTRL_NPORTS")),
+    ("MK_b8_ctl", "MK control: the compare ignores bit 8 (v5 refuses 0x100)", "RED",
+     pred("(idata & ~0x100ULL) >= DEV_FBCTRL_NPORTS")),
+]
+#  MKB: one narrowing per bit, k = 3..63, in the MK form (so k = 8 IS MK_b8_ctl's text and is mapped, not rebuilt)
+for k in range(3, 64):
+    NEW.append(("MKB_%02d" % k, "MKB: the compare ignores bit %d alone" % k, "RED",
+                pred("(idata & ~0x%xULL) >= DEV_FBCTRL_NPORTS" % (1 << k))))
+#  MKW: a narrowing at one width only
+for name, n, k in (("MKW_sb05", 1, 5), ("MKW_sh12", 2, 12), ("MKW_sw09", 4, 9), ("MKW_sd40", 8, 40)):
+    NEW.append((name, "MKW: the compare ignores bit %d for len == %d only" % (k, n), "RED",
+                pred("(len == %d ? (idata & ~0x%xULL) : idata) >= DEV_FBCTRL_NPORTS" % (n, 1 << k))))
+#  DSC / EQL: the contract's new disclosures, measured
+NEW += [
+    ("DSC_ann_hibits", "(e, NOT CLAIMED (3)): no announce for a value whose bits all lie above bit 8", "GREEN(e)",
+     latch("!d->warned_port && (idata & 0x1ffULL)")),
+    ("DSC_nonl", "(e, NOT CLAIMED (5)): the announce without its trailing newline", "GREEN(e)",
+     [(ANN_TAIL, "\t\t\t\t    \"the selector is unchanged (once) ]\",\n")]),
+    ("EQL_latch2", "(eq, NOT CLAIMED (4)): the latch set to 2", "GREEN(eq)",
+     [(LATCH_SET, "\t\t\t\td->warned_port = 2;\n")]),
+]
+
+
+def apply(base, edits, name):
+    s = base
+    for old, new in edits:
+        n = s.count(old)
+        if n != 1:
+            sys.exit("REFUSED %s: %d matches for %r" % (name, n, old[:60]))
+        s = s.replace(old, new)
+    if s == base:
+        sys.exit("REFUSED %s: the edit changed nothing" % name)
+    return s
+
+
+def main():
+    fixp, t5dir, t5table, out = sys.argv[1:5]
+    os.makedirs(out, exist_ok=True)
+    base = io.open(fixp, encoding="utf-8", newline="").read()
+    assert "\r" not in base
+    measured = {}
+    for line in io.open(t5table, encoding="utf-8"):
+        m = re.match(r"^([A-Za-z0-9_]+) md5=\S+ rc=(\d+) ", line)
+        if m:
+            measured[m.group(1)] = int(m.group(2))
+    assert len(measured) == 212, len(measured)
+    t5pred = {}
+    for line in io.open(os.path.join(t5dir, "MANIFEST.out"), encoding="utf-8"):
+        f = line.split()
+        t5pred[f[0]] = f[2]
+    assert len(t5pred) == 212, len(t5pred)
+    texts, manifest, cellmap = {}, [], []
+    for fn in sorted(os.listdir(t5dir)):
+        if not fn.endswith(".c"):
+            continue
+        name = fn[:-2]
+        s = io.open(os.path.join(t5dir, fn), encoding="utf-8", newline="").read()
+        #  table 5's prediction, which held for all 212 -- except B_mod12, which session B's 108 refusals now reach
+        prd = "RED" if name == "B_mod12" else t5pred[name]
+        assert (prd == "RED") == bool(measured[name]) or name == "B_mod12", name
+        texts.setdefault(s, name)
+        manifest.append((name, "t5", prd, "table 5: rc=%d" % measured[name]))
+        shutil.copyfile(os.path.join(t5dir, fn), os.path.join(out, fn))
+    assert len(manifest) == 212, len(manifest)
+    new = 0
+    for name, cls, prd, edits in NEW:
+        s = apply(base, edits, name)
+        if s in texts:
+            cellmap.append("%-16s %-72s = %s (same text)" % (name, cls, texts[s]))
+            continue
+        texts[s] = name
+        manifest.append((name, "t6", prd, cls))
+        cellmap.append("%-16s %-72s   built" % (name, cls))
+        io.open(os.path.join(out, name + ".c"), "w", encoding="utf-8", newline="").write(s)
+        new += 1
+    with io.open(os.path.join(out, "MANIFEST.out"), "w", encoding="utf-8", newline="\n") as f:
+        for name, src, prd, cls in manifest:
+            f.write("%-16s %-3s %-9s %s\n" % (name, src, prd, cls))
+    with io.open(os.path.join(out, "CELLMAP_t6.out"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(cellmap) + "\n")
+    print("MUTANTS_WRITTEN=%d (table 5: 212, new: %d, mapped to an earlier text: %d)" % (len(manifest), new,
+                                                                                       len(NEW) - new))
+
+
+if __name__ == "__main__":
+    main()

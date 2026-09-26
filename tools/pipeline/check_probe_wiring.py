@@ -2379,6 +2379,47 @@ MANIFEST = {
     "pit8253_latch_probe.py":      (CLASS_DETECTOR, "#439/#440 PIT latch + LSB/MSB selector"),
     "sh4_bsc_width_probe.py":      (CLASS_DETECTOR, "#441 BCR2/BCR3 non-16-bit access"),
     "fbpending_drain_probe.py":    (CLASS_DETECTOR, "#442 footbridge pending-tick backlog"),
+    "fbctrl_port_probe.py":        (CLASS_DETECTOR, "#549 fbctrl PORT selector refusal"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_c3.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the verifying pass's floor-edit generator (edits of the final dev_fbctrl.c not in table 5), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/c3/gen_mask.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the verifying pass's compare-narrowing generator (the bit-range masks), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/c3/mask_witness.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the verifying pass's witness that MK_b9_31 restores the DATA-arm exit, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/close/close_rows_proto.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the closing pass's row prototypes for the cells the 73-row probe left open, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/close/gen_close.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the closing pass's edit generator (edits not among table 3's 62), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/close/kill_witness.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the closing pass's witness that E_ref_cmd reinstates the process exit, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/close2/gen_close2.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the closing F2 pass's edit generator (edits not among table 4's 101), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/close2/kill_witness2.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the closing F2 pass's witness that F_ref_c7 reinstates the process exit, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/close2/mk_probe_vkeeps.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the closing F2 pass's row prototype builder (V PORT keeps 7), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/f2/drive_cfg.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the F2 pass's exploratory driver for a gxemul -V @config launch, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/f2/fbctrl_port_probe.f2proto.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the F2 pass's prototype copy of the probe with the corrected D-rows, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/f2/gen_variants_f2.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the F2 pass's variant writer (the D-row target edits), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/f2/mk_proto_d4inP.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the F2 pass's prototype builder (D4 inside session P), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/f2/mk_shipped_cfg2.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the F2 pass's two-machine copy of the shipped probe, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/f2/twoinst_probe.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: the F2 pass's two-fbctrl-instance probe (filed: fbctrltwoinst), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/mkfix.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: pass 2's writer of the fixed dev_fbctrl.c in its clone, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/rows_probe.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: pass 1's proposed detector rows, one fresh emulator per arm, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/v6/gen_v6floor.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: v6's own pass's floor-edit generator (edits not in table 6), preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/v6/unset_witness.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: v6's own pass's witness for LB_unset16 on a fresh device, preserved as evidence"),
+    "artifacts/fbctrlportkill_20260924/opus549_measured/walk_probe.py":
+        (CLASS_RESEARCH, "#549 the Opus measuring seat: pass 2's width x offset walk of the 0x20 window, preserved as evidence"),
     "hpcmips_ctor_probe.py":       (CLASS_DETECTOR, "#444 every hpcmips subtype constructs"),
 
     # -- witnesses.  RED once the fix lands, so gating one manufactures a regression. -----
