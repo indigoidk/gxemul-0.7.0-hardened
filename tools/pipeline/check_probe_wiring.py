@@ -100,7 +100,7 @@ WHAT THIS CANNOT DO, said plainly so a green line is not read as more than it is
 *** --selftest IS PART OF THE CHECK, NOT A CONVENIENCE. ***  A gate that cannot be shown to
 go RED is the vacuity class this project names first, and "I ran the mutants once" is a
 remembered grep -- the mrwstore2 shape, where a round's witness left no artefact and a later
-row had to re-cost the work.  `--selftest` applies 18 mutants to COPIES in a temp directory
+row had to re-cost the work.  `--selftest` applies 22 mutants to COPIES in a temp directory
 (never the repo) and asserts the exit status of each.  It is re-runnable by someone who was
 not there, which is the only kind of measurement that survives.
 
@@ -1228,7 +1228,7 @@ MANIFEST = {
     #  against the exact instrument that produced them.
     #  lcaisalane's is a WITNESS as-run copy, red on HEAD by design and not a green row anyone may wire.
     #  #518 lcabadval, landed with the round: the live detector (DETECTOR + dated EXEMPT below -- no
-    #  gate runs an Alpha machine, the #520 precedent) and its table-5 mutator.
+    #  gate runs an Alpha guest session, the #520 precedent) and its table-5 mutator.
     "lca_isalane_probe.py":
         (CLASS_DETECTOR, "lcaisalane (#530): 37 rows on unmodified -E alphabook1 -- the 16-row rung-3 witness (sentinel re-pinned to 0x0bad1d8a) plus 21 detector rows for disposition B (byte for port P at (P & 3) % len on both arms; the six host-death cells, reads AND writes, rowed alive + value).  HEAD 19/37, fix 37/37 (artifacts/lcaisalane/fix530_20260914/); kill table 1 in that dir"),
     "lca_badval_probe.py":
@@ -2505,6 +2505,16 @@ MANIFEST = {
 #  *** #548, 2026-09-24: THE OTHER HALF IS GONE TOO. ***  fbpending_drain_probe.py is wired
 #  into gate_arm.sh and its entry deleted, so TEN of those eleven remain, still one block.
 #
+#  *** #550, 2026-09-25: THE BLOCK IS DISPERSED, BY OWNER RULING 2026-09-24. ***  Each of the ten
+#  carries its OWN date, 2026-10-08 to 2026-12-03, and a `#550' line above it giving the reason for
+#  THAT date, in owed-work order: the cheapest first; the four Alpha probes on four working days in a
+#  row, 10-22 to 10-27, because one round discharges all four (10-29, the Thursday after, is unused:
+#  the ruling's schedule gives it no entry); the four wdc probes a week or more apart, each owing its
+#  own instrument work, with 11-26 (Thanksgiving) skipped.  NOTHING ENFORCES DISTINCT DATES -- this checker reads each date alone -- and "no date on
+#  another list's date" is a cross-list property no check here sees (gate 9's AB_EXEMPT holds twelve
+#  entries on one date: sed -n '/^AB_EXEMPT="/,/^"/p' regress/gate_asan_sweep.sh | grep -c ':2026-11-30').
+#  Filed as `exemptdistinct'.
+#
 #  These are wiring jobs, not design ones.  NOT every probe here prints a verdict token or exits
 #  nonzero on failure: mk48_nvram_probe.py printed MK48_RESULT=n/m and a DONE sentinel and exited 0
 #  with rows red, so the gate_arm.sh section #536 wired for it scores ROWS, not a token (agy, #536
@@ -2519,11 +2529,11 @@ EXEMPT = {
     #  bump note named for it ("wants an operator who can run that gate").  The entry is
     #  DELETED rather than dated forward, in the SAME edit that added the wiring, because a
     #  wired probe that keeps an exemption is a STALE EXEMPTION and this checker reds on it.
-    #  Seven exemptions remain.
+    #  Seven exemptions remained then.
     #  sh4_bsc_width_probe.py's exemption is DISCHARGED, 2026-08-30 -- wired into
     #  gate_sh_rounding.sh, whose `-E landisk` machine it already used.  Deleted in the
     #  SAME edit as the wiring, because a wired probe that keeps an exemption is a
-    #  STALE EXEMPTION.  Six exemptions remain.
+    #  STALE EXEMPTION.  Six exemptions remained then.
     #  mk48_nvram_probe.py's and hpcmips_ctor_probe.py's exemptions are DISCHARGED, 2026-09-18
     #  (#536) -- both wired into gate_arm.sh, mk48 on the mvme187 machine that file already
     #  drives for the PCC2 probes, hpcmips as a construction check with no rig image.  Deleted
@@ -2535,63 +2545,100 @@ EXEMPT = {
     #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
     #  a change to the instrument -- a single-leg mode asserting only the fix-side
     #  wants against the gate's own binary -- not a line in a gate script.
-    "wdc_altoffset_probe.py":     ("2026-09-27",
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): owes an exit
+    #  status (`wdcaltoffleg' (a): the probe exits 0 whatever its `ok' says) and a single-leg form: four
+    #  of its 18 rows want the committed build's defect, which the gate's one binary cannot supply.
+    "wdc_altoffset_probe.py":     ("2026-11-05",
                                    "two-leg differential; wants a single-leg mode "
                                    "before gate 10 can assert anything"),
-    "wdc_altoffset_sig_probe.py": ("2026-09-27",
-                                   "two-leg differential AND needs a ciR: CD-ROM rig "
-                                   "the battery does not build today"),
-    "wdc_altoffset_4bit_probe.py": ("2026-09-27",
-                                    "two-leg differential; shares the single-leg-mode "
-                                    "debt with its two siblings"),
-    "wdc_addtoinbuf_probe.py":     ("2026-09-27",
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): owes a redesign -- its oracle cannot tell the outcomes apart -- `wdcaltoffleg' (c).
+    #  (Its tuple said it needs "a ciR: CD-ROM rig the battery does not build today" until #550: false -- the
+    #  probe takes any image as argv[2] and applies the ciR: prefix itself.)
+    "wdc_altoffset_sig_probe.py": ("2026-11-19",
+                                   "two-leg differential; its oracle cannot tell the "
+                                   "outcomes apart -- a redesign, wdcaltoffleg (c)"),
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): owes an oracle choice: its want-None cells are recorded, not predicted -- `wdcaltoffleg' (b).
+    "wdc_altoffset_4bit_probe.py": ("2026-11-12",
+                                    "two-leg differential; owes an oracle choice, "
+                                    "wdcaltoffleg (b)"),
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): two-leg AND needs a poisoned CD image the battery does not build -- queue row `wdcsingleleg'.
+    "wdc_addtoinbuf_probe.py":     ("2026-12-03",
                                     "two-leg differential AND needs a poisoned CD "
                                     "image the battery does not build"),
-    #  #520's detector.  NOT a two-leg differential and not awaiting a design -- it is a
-    #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
-    #  HOME: no gate in this tree runs an Alpha machine at all.  Dated to fall due with
-    #  the others so the cliff stays one date rather than becoming a rolling excuse.
     #  #522's detector.  Single-leg, 0.2 s, green on the fix.  It lacks a gate that RUNS a
     #  64-bit PowerPC CPU: gate 9 constructs them but has no result oracle, and both PowerPC
     #  gates drive a 32-bit part.  Closing that is a harness round, filed to wiringcliff.
     #  *** ITS REASON EXPIRES WITH THE rlwimi/rldimi WIRING: gate_ppc.sh now EXECUTES -M 64. ***
-    #  What remains is the instrument: this probe prints no RESULT/CONTROL lines, so a gate
-    #  could only score its exit status, which gates here never trust.
-    "ppc_rldicl_probe.py":         ("2026-09-27",
+    #  What remains is the instrument: this probe prints no RESULT/CONTROL lines.  (This sentence went
+    #  on "so a gate could only score its exit status" until #550: false -- it prints ok/FAIL rows,
+    #  `SCORE n/m' and a DONE line, which a gate can score by rows, as gate_arm.sh scores mk48's.)
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): the cheapest of
+    #  the ten -- 24/24 in under a second on a machine gate_ppc.sh already runs (the run:
+    #  regress/artifacts/exemptredate_20260925/opus550_measured_p2/p1_runs/); owed: a gate_ppc.sh block
+    #  beside rldimi/rlwimi, scoring its rows -- or RESULT/CONTROL lines, then that block.  None of
+    #  want_rldimi, want_rlwimi, want_rlwinm or mask32 is called outside the helpers' own definitions
+    #  (grep -nE '(want_rldimi|want_rlwimi|want_rlwinm|mask32)[(]' on the probe), so an edit of them
+    #  is no prerequisite.
+    "ppc_rldicl_probe.py":         ("2026-10-08",
                                     "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); this "
                                     "probe lacks the RESULT/CONTROL protocol a gate parses "
                                     "-- that instrument change is filed to wiringcliff"),
-    "alpha_tbi_probe.py":          ("2026-09-27",
-                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+    #  #520's detector.  NOT a two-leg differential and not awaiting a design -- it is a
+    #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
+    #  HOME: no gate in this tree runs an Alpha guest session -- gate 9's sweep constructs alphabook1
+    #  and runs nothing on it (this said "an Alpha machine at all" until #550).
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): one harness round gives an `-E alpha -e alphabook1' session a gate home and discharges
+    #  all four Alpha probes at once (each already prints its tokens and sends quit), so the four
+    #  are ONE decision, dated within days of each other rather than a week apart.
+    "alpha_tbi_probe.py":          ("2026-10-22",
+                                    "no gate runs an Alpha guest session (gate 9 only "
+                                    "constructs them); gate_crossfamily.sh "
                                     "is the named home and giving it one is a harness "
                                     "round, filed to wiringcliff"),
-    #  #518's detector.  Same footing as #520's, and deliberately the same date so the
-    #  cliff stays one date: a single-leg 75-row instrument, green on the fix, with no HOME.
-    "lca_badval_probe.py":         ("2026-09-27",
-                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+    #  #518's detector.  Same footing as #520's: a single-leg 75-row instrument, green on the
+    #  fix, with no HOME.
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): same alphabook1
+    #  home as alpha_tbi; one round discharges all four.
+    "lca_badval_probe.py":         ("2026-10-23",
+                                    "no gate runs an Alpha guest session (gate 9 only "
+                                    "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #520"),
-    #  #530's detector.  Same footing and the same date as #518's: single-leg, green on the
-    #  fix, and no gate in this tree runs an Alpha machine.
-    #  #530's width row.  SAME footing and SAME date as lca_isalane_probe.py below: no gate in this
-    #  tree runs an Alpha machine, and a later date would hide the debt behind the cliff instead of
-    #  joining it.  Adding it here is stated in #530's record, not done silently.
-    "lca_widewrite_probe.py":      ("2026-09-27",
-                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+    #  #530's detector.  Same footing as #518's: single-leg, green on the fix, and no gate in
+    #  this tree runs an Alpha guest session.
+    #  #530's width row.  SAME footing as lca_isalane_probe.py below: no gate in this tree runs an
+    #  Alpha guest session.  Adding it here is stated in #530's record, not done silently.
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): same alphabook1
+    #  home as alpha_tbi; one round discharges all four.
+    "lca_widewrite_probe.py":      ("2026-10-26",
+                                    "no gate runs an Alpha guest session (gate 9 only "
+                                    "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520/#530"),
-    "lca_isalane_probe.py":        ("2026-09-27",
-                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): same alphabook1
+    #  home as alpha_tbi; one round discharges all four.
+    "lca_isalane_probe.py":        ("2026-10-27",
+                                    "no gate runs an Alpha guest session (gate 9 only "
+                                    "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520"),
-    #  #531's detector, and it takes the SAME footing and the SAME date as #518/#520/#530
-    #  rather than a longer one -- a later date would hide this debt behind the cliff instead
-    #  of joining it, and the cliff is already a filed row.  Measured before writing this:
-    #  `grep -ln "E sgi|-e ip30" gate_*.sh` matches ONLY gate_asan_sweep.sh, which CONSTRUCTS
-    #  machines and runs no guest session, so there is no gate in this tree that could host it
-    #  today.  *** NOT classified `witness' to escape the requirement: the flagship seat found
+    #  #531's detector, on the SAME footing as #518/#520/#530 (it took their date too, so the
+    #  cliff stayed one date, until #550 dispersed the block).  This comment said: "`grep -ln
+    #  "E sgi|-e ip30" gate_*.sh` matches ONLY gate_asan_sweep.sh ... no gate in this tree that could
+    #  host it today."  CORRECTED by #550: as written that grep matches nothing (`|' is literal in a
+    #  basic regex), and as an extended regex it matches one line, gate 9's #450 row, which constructs
+    #  ip12, ip28, ip30, ip32 and ip35 on /dev/null and runs no guest session; guest-session probes exec
+    #  the machine themselves, and gate_arm.sh already runs seven cold-debugger probes of this shape
+    #  (grep -cE '^python3 sgi_[a-z0-9_]+_probe[.]py' regress/gate_arm.sh), each naming `-e ip32' in its
+    #  own exec line, so a home exists.  *** NOT classified `witness' to escape the requirement: the flagship seat found
     #  that exact dodge elsewhere in this manifest -- an ungated DETECTOR relabelled WITNESS,
     #  after which the checker verifies it is ungated -- and named it a check that cannot
     #  fail.  This entry is the honest form: DETECTOR, ungated, dated, and filed. ***
+    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): gate_arm.sh hosts
+    #  seven sgi cold-debugger probes of this shape; 33/33 on build/gxemul in 568 s (the rows:
+    #  regress/artifacts/exemptredate_20260925/opus550_measured_p2/p1_runs/; the time, from the logs'
+    #  mtimes: keep_p1_logs.out one directory up), because each surviving
+    #  session waits out the 12 s death poll -- a long gate guest until that window shrinks without
+    #  reading a delayed abort as alive.
     "artifacts/ip30abortkill/ip30_abort_probe.py":
-                                   ("2026-09-27",
+                                   ("2026-10-15",
                                     "no gate runs an SGI IP30 guest session (gate_asan_sweep.sh "
                                     "constructs only); filed to wiringcliff with #518/#520/#530"),
 }

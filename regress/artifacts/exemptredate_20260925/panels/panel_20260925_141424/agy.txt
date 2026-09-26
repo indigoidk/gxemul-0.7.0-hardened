@@ -1,0 +1,91 @@
+`VERDICT: SHIP WITH CHANGES`
+
+---
+
+### Finding 1: Premise Audit (Answers Question 1)
+
+Every factual premise cited in the `#550` comment lines was audited directly against the source tree under [`GXEMUL-SEC`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC):
+
+1. **`artifacts/ip30abortkill/ip30_abort_probe.py` is binary-only (TRUE)**:
+   - In [`regress/artifacts/ip30abortkill/ip30_abort_probe.py:145-149`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ip30abortkill/ip30_abort_probe.py#L145-L149), the probe creates a local dummy 8-byte stub `ip30_dummy.bin` if absent.
+   - At [`regress/artifacts/ip30abortkill/ip30_abort_probe.py:188-192`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ip30abortkill/ip30_abort_probe.py#L188-L192), it launches GXemul via `os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip30", "-M", "64", "0x%x:" % CODE + DUMMY])`. It requires neither a disk image nor a rig image, driving the cold debugger over a `pty`.
+   - In the gate suite, `grep -En "E sgi|-e ip30" regress/gate_*.sh` matches only [`regress/gate_asan_sweep.sh:594`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh#L594) (`timeout 60 "$ASAN_HEAD" -E sgi -e "$s" /dev/null`), which only tests construction and executes no guest session.
+
+2. **The `rldimi`-oracle repair of `ppc_rldicl_probe.py` is parked in the working tree (TRUE)**:
+   - `git diff -- regress/ppc_rldicl_probe.py` reveals an uncommitted working tree diff in [`regress/ppc_rldicl_probe.py:135-161`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py#L135-L161) defining `mask_range(b, e)` (inclusive and wrapping mask union).
+   - In [`regress/ppc_rldicl_probe.py:186`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py#L186) (`want_rldimi`) and line 250 (`mask32`), the old intersection `mask_b_63(mb) & mask_0_e(...)` is replaced with `mask_range(mb, (63 - sh) & 63)`.
+   - At [`regress/ppc_rldicl_probe.py:532-536`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py#L532-L536), the probe outputs `SCORE %d/%d` and sentinel `PPC_RLDICL_PROBE_DONE`. It lacks the `RESULT=` and `CONTROL=` protocol lines parsed by [`regress/gate_ppc.sh:109-122, 134-147`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_ppc.sh#L109-L122).
+
+3. **The four LCA/Alpha probes share one missing gate (TRUE)**:
+   - [`regress/alpha_tbi_probe.py:104, 178`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/alpha_tbi_probe.py#L104), [`regress/lca_badval_probe.py:128, 381`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py#L128), [`regress/lca_widewrite_probe.py:94, 139`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lca_widewrite_probe.py#L94), and [`regress/lca_isalane_probe.py:288, 382`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L288) all target `-E alpha -e alphabook1`.
+   - No gate in the tree executes an Alpha guest session: [`regress/gate_crossfamily.sh:198-229`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_crossfamily.sh#L198-L229) runs only `luna88k` (m88k) and `landisk` (SuperH SH4).
+   - Instrument row counts: `alpha_tbi_probe.py` is 15 rows ([line 43](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/alpha_tbi_probe.py#L43)); `lca_badval_probe.py` executes 75 rows ([line 707](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py#L707)); `lca_widewrite_probe.py` is 13 rows ([`check_probe_wiring.py:161`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L161)); `lca_isalane_probe.py` is 37 rows ([`check_probe_wiring.py:1389`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L1389)).
+
+4. **`ieee_store`'s "six inline counters" (TRUE)**:
+   - In [`regress/diff_ieee_store.c:315-317, 1057`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c#L315-L317), the driver maintains exactly six independent failure counters: `abs_bad` (line 317), `rm_rn_bad` (line 315), `rm_rz_bad` (line 315), `rm_d_bad` (line 315), `rm_vec_bad` (line 316), and `interp_bad` (line 1057).
+   - In [`regress/diff_ieee_store.c:1302-1306`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c#L1302-L1306), the pass condition explicitly demands all six be zero (`abs_bad == 0 && ... && rm_rn_bad == 0 && rm_rz_bad == 0 && ... && rm_d_bad == 0 && rm_vec_bad == 0 && interp_bad == 0`), confirming [`regress/gate_offline.sh:2280-2285`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2280-L2285).
+
+5. **WDC probe constraints (TRUE)**:
+   - [`regress/wdc_altoffset_probe.py:88, 133-135, 590, 596`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py#L88): takes `<base-binary> <fix-binary> <disk-image>`, running both legs in one invocation.
+   - [`regress/wdc_altoffset_sig_probe.py:15, 75`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_sig_probe.py#L15): sets `DISK_PREFIX = "ciR:"` and requires an ATAPI CD-ROM signature rig.
+   - [`regress/wdc_altoffset_4bit_probe.py:61, 122`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_4bit_probe.py#L61): imports and shares the two-leg driver with `wdc_altoffset_probe.py`.
+   - [`regress/wdc_addtoinbuf_probe.py:13, 62, 166, 688`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/wdc_addtoinbuf_probe.py#L13): takes `<base_bin> <fix_bin> <cd_image> <outdir>` and requires a poisoned CD image with byte `0xC0` at offset 0.
+
+6. **Comment Anomaly / Structural Misplacement (Defect in existing and left comments)**:
+   - In [`tools/pipeline/check_probe_wiring.py:2707-2724`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2707-L2724), the comment block `#  #520's detector.` (describing `alpha_tbi_probe.py`) was historically placed *above* `#  #522's detector.` and `ppc_rldicl_probe.py`. The proposed diff leaves `#  #520's detector.` disconnected from `alpha_tbi_probe.py`.
+   - In [`tools/pipeline/check_probe_wiring.py:2730-2740`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2730-L2740), `#  #530's detector.` and `#  #530's width row.` both sit above `lca_widewrite_probe.py`, while `#530's detector` actually refers to `lca_isalane_probe.py` further below.
+   - In [`tools/pipeline/check_probe_wiring.py:2740`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L2740), `lca_isalane_probe.py`'s reason string says `"filed to wiringcliff with #518/#520"`, omitting `#530` even though it is itself `#530`'s detector.
+
+---
+
+### Finding 2: Minimal Intent-Breaking Edit (Answers Question 2)
+
+**The Edit**: A single-character modification in [`tools/pipeline/check_probe_wiring.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py):
+Change `"2026-11-03"` to `"2026-11-02"` in `wdc_altoffset_4bit_probe.py` (replacing `'3'` with `'2'`), or change `"2026-10-21"` to `"2026-10-20"` in `lca_badval_probe.py` (replacing `'1'` with `'0'`).
+
+**What stays green**:
+1. `check_probe_wiring.py` runs green (`rc=0`, `PROBEWIRING_PASS`) today (2026-09-25) because both dates are in the future (`d >= today` in [`check_probe_wiring.py:3568`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3568)).
+2. `check_probe_wiring.py --selftest` runs green (`22/22 mutants passed`) because:
+   - [`check_probe_wiring.py:3346-3359`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3346-L3359) derives `_m5[0]` from the *earliest* date in `EXEMPT` (`2026-10-08`, `ip30_abort_probe.py`).
+   - M5a checks `--today 2026-10-08` (passes).
+   - M5b checks `--today 2026-10-09` (sees `ip30_abort_probe.py` expired, passes).
+   - None of the 22 mutants checks subsequent dates or verifies that dates in `EXEMPT` are unique.
+3. Gate 2 ([`regress/gate_offline.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh)) stays green because it validates `SC_EXEMPT` and does not read `EXEMPT`.
+
+**What breaks**:
+On the shared date (e.g., 2026-11-03), two entries expire simultaneously, reconstituting an unowned multi-entry cliff and violating the owner ruling that each entry falls due alone on its own chosen date.
+
+---
+
+### Finding 3: Option-Set Completeness and Queue Collisions (Answers Question 3)
+
+1. **No premature deletion possible**:
+   - None of the 10 probes can be deleted from `EXEMPT`. Deleting any entry without wiring it would trigger an immediate precommit failure in [`tools/precommit_check.sh:547`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh#L547) via `check_probe_wiring.py:3575` (`UNWIRED DETECTOR`).
+2. **Work-queue collision risk (The Alpha cluster)**:
+   - The four Alpha probes are assigned consecutive calendar days:
+     - `alpha_tbi_probe.py`: `2026-10-20` (Tuesday)
+     - `lca_badval_probe.py`: `2026-10-21` (Wednesday)
+     - `lca_widewrite_probe.py`: `2026-10-22` (Thursday)
+     - `lca_isalane_probe.py`: `2026-10-23` (Friday)
+   - While intended to force individual decisions, assigning 24-hour intervals to three complex instruments (75-row, 13-row, 37-row) following the initial machine harness round (`alpha_tbi`) creates a high probability of daily serial red-lining if the prerequisite harness work slips even by 24 hours.
+3. **Dictionary ordering vs Chronological schedule**:
+   - In `EXEMPT`, `artifacts/ip30abortkill/ip30_abort_probe.py` is the earliest expiry (`2026-10-08`), yet it is placed last in the dictionary.
+   - `wdc_altoffset_sig_probe.py` (`2026-11-16`) appears before `wdc_altoffset_4bit_probe.py` (`2026-11-03`).
+   - Maintaining dictionary entries in chronological order prevents human misinterpretation during auditing.
+
+---
+
+### Finding 4: SC_EXEMPT Isolation and Expiry Mechanics (Answers Question 4)
+
+1. **Cannot block commits**:
+   - `SC_EXEMPT` is defined in [`regress/gate_offline.sh:2295`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L2295).
+   - Pre-commit ([`tools/precommit_check.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh)) does not execute `gate_offline.sh` and does not scan `SC_EXEMPT`. An expiry in `SC_EXEMPT` only affects Gate 2 runs.
+2. **Does not hide required reds**:
+   - Re-dating `ieee_store` to `2026-11-30` leaves `wdc_identify:2026-09-27` intact.
+   - In [`regress/gate_offline.sh:826, 2335`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh#L826), `exempt_expired` checks `[ "$d" \< "$today" ]`.
+   - On 2026-09-28, `wdc_identify` evaluates to expired (`2026-09-27 < 2026-09-28`), returning `sc_expired=" wdc_identify"`.
+   - The assertion `check "SELFCHECK manifest: no exemption is past its dated deadline OR malformed" "$sc_expired" "none"` fails, turning Gate 2 RED as required unless round #551 lands and promotes `wdc_identify` to `SC_COVERED`.
+
+---
+
+GO-WITH-CHANGES

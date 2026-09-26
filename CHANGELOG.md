@@ -1,3 +1,79 @@
+# `#550` (exemptredate): the ten probe-wiring exemptions that all fell due on 2026-09-27 re-dated one by one, each to its own owed-work date and reason, by owner ruling -- and gate 2's two self-check exemptions decided separately
+
+**The obligation.**  `tools/pipeline/check_probe_wiring.py`'s `EXEMPT` table held ten ungated detectors on ONE date,
+2026-09-27 (the block `#536` moved there, less `#548`'s wired probe), so from 2026-09-28 every commit's precommit
+section R would red at once -- the cliff `exemptcliff` names, re-created as a single block.  **Owner ruling
+2026-09-24: re-date all ten individually, each its own date and written reason; no wiring work this week.**  Gate 2's
+`SC_EXEMPT` held its two entries on the same date; **owner ruling 2026-09-25 (row `scexempt`): `ieee_store` is
+re-dated, `wdc_identify` is FIXED instead** -- that is `#551`.  **No emulator code changes.**
+
+**What ships.**
+* `tools/pipeline/check_probe_wiring.py` -- ten entries on ten dates, 2026-10-08 to 2026-12-03, each under a `#550`
+  line giving the reason for THAT date, in owed-work order: `ppc_rldicl_probe.py` 10-08 (the cheapest: 24/24 in under
+  a second on a machine `gate_ppc.sh` already runs); `ip30_abort_probe.py` 10-15 (33/33 in 568 s -- a long gate
+  guest); the four Alpha probes on four working days in a row, `alpha_tbi` 10-22, `lca_badval` 10-23, `lca_widewrite`
+  10-26, `lca_isalane` 10-27 (one harness round giving an `-E alpha -e alphabook1` session a gate home discharges all
+  four; ordered AFTER the one IP30 probe on three bounded grounds -- one probe against four, a longer Alpha run, and
+  `#540`'s pending `dev_lca.c` change, which lands on these probes; the Alpha time is a LOWER BOUND only, since the
+  isalane measuring run was stopped at 484 s without its sentinel -- `opus550_measured_p2/p1_runs/INCOMPLETE_isalane.txt`,
+  "Not a result" -- GPT-6 Astra's confirmation); and the four wdc two-leg differentials a week or more apart, `wdc_altoffset` 11-05, `wdc_altoffset_4bit`
+  11-12, `wdc_altoffset_sig` 11-19, `wdc_addtoinbuf` 12-03, each owing its own instrument work (11-26 skipped).  The
+  table's header records the dispersal and that NOTHING enforces distinct dates (filed, `exemptdistinct`).
+* `regress/gate_offline.sh` -- `SC_EXEMPT="ieee_store:2026-12-10 wdc_identify:2026-09-27"`, each entry's decision
+  written beside it: `ieee_store` re-dated with its reason standing (nine counters and no comparator -- the larger
+  refactor, dated after the wdc work); `wdc_identify` NOT re-dated, because `#551` fixes it.
+* `tools/precommit_check.sh` -- one comment: the exemption block's history now names the dispersal.
+
+**WRONG RECORDS corrected in place (L4)**, each found by a seat and checked by opening the file:
+* `wdc_altoffset_sig_probe.py`'s tuple said it needs "a ciR: CD-ROM rig the battery does not build today" -- the
+  probe takes any image as argv[2] and applies the `ciR:` prefix itself.
+* `ppc_rldicl_probe.py`'s entry said a gate "could only score its exit status" -- it prints ok/FAIL rows, `SCORE n/m`
+  and a DONE line, which a gate scores by rows as `gate_arm.sh` scores mk48's.
+* The Alpha entries said no gate runs "an Alpha machine at all" -- gate 9's sweep constructs `alphabook1` and runs no
+  guest session on it.
+* `ip30_abort_probe.py`'s entry cited `grep -ln "E sgi|-e ip30" gate_*.sh` as matching only `gate_asan_sweep.sh`: as
+  written it matches nothing (`|` is literal in a basic regex); as an extended regex it matches ONE line, gate 9's
+  `#450` row, which constructs five SGI subtypes on `/dev/null` and runs no guest session -- and `gate_arm.sh` already
+  runs seven cold-debugger probes of this shape, so a home exists.
+* Gate 2's `ieee_store` paragraph listed six counters; nine are the `== 0` terms of its DIFF_PASS test.  Its
+  `wdc_identify` census counted the nine row functions and left out `#484`'s `chk()` (24 calls) -- marked incomplete
+  here, replaced by `#551`.
+
+**MEASURED** (`regress/artifacts/exemptredate_20260925/measured/`).  `schedule_v3final.out` runs the final checker
+(md5 96efac51) on a HEAD export at each date: PASS on 09-25, 09-28 and 10-08; from 10-09 one problem more per lapsed
+entry -- 1 on 10-09, 2 on 10-16, 3 on 10-23, 4 on 10-24, 5 on 10-27, 6 on 10-28, 7 on 11-06, 8 on 11-13, 9 on 11-20,
+still 9 on 12-03 (valid ON its own date: the comparison is a strict `<`) and 10 on 12-04.  `selftest_550v3final.out`:
+`PROBEWIRING_SELFTEST_PASS 22/22`.  **Gate 2 on this commit's own tree (a HEAD f4f601c4 export with #550 v3 and the working
+tree's `config.h`): PASS, 359 checks, 192 s** (`gates_final/gate2_final.out`, the tested files' md5s beside it).
+
+**The panel.**  Pass 1 (`panels/panel_20260925_141424`) and its F2 (`..._144644`), then pass 2 (`..._160838`) and its
+F2 (`..._163352`), the last two shared with `#551`; a dedicated grok job on each (`panels/grok_dedicated_p1.txt`,
+`_f2.txt`, and `wdcidselfcheck_20260925/f2b/grok_dedicated_f2b.txt`); the Opus measuring seat on all four
+(`opus5_p1.md`, `p2`, `f2`, `f2b`; claude-opus-5-5 by its transcript, `agent_models.py`).  **Codex (GPT-6 Astra)
+walled on every panel from ~14:14 (usage limit to 2026-09-26 07:01) -- a SEAT FAILURE, not agreement -- and the
+dedicated codex job on pass 1 walled too (`panels/codex_p1ded.launch.log`).**  The kimi CLI was on its weekly limit on all
+four panels (`kimi.txt`: "403 You've reached your weekly (7-day) usage limit"); the seat was COVERED by `kimi-k3:cloud`
+each time.
+**The flagship seat fired LAST** on both F2 passes (`fable5_f2_550_551.md`: SHIP WITH CHANGES; `wdcidselfcheck_20260925/
+fable_f2b/fable5_f2b_550_551.md`: **SHIP** -- "closes on this adjudication, subject to Astra and the codex re-fire";
+claude-fable-5-1 throughout by its transcript).  **Astra (GPT-6 Astra, cxlaunch pointer form) confirmed before this
+commit: "VERDICT: CONFIRM WITH CHANGES"** (`exemptredate_20260925/final550/codex_astra550.txt`, 2026-09-26 after the 07:01
+reset) -- the ten-plus-one scope, every date and every technical disposition retained; FOUR record corrections, all
+applied in this commit: the Alpha ordering's bounded justification (the lower-bound timing, above); `exemptdistinct`'s
+"no single day turns every commit red" (false: one expired exemption still does); `asanfifteen`'s attribution (`#450`'s
+4142c580 deleted the three hpcmips entries, not `#444`); and the live `scexempt` entry SUPERSEDED IN PLACE with separate
+dispositions (appending had left its stale deadlines standing).  Its independent execution reproduced the schedule rows
+and the three staged hashes.  The launcher printed WALLED for this run on six `ERROR:` lines that were an older
+session's output file echoed while codex read it; the answer is complete (filed: `cxlaunchwallfp`).
+**Dissent, recorded rather than absorbed:** deepseek's DO NOT SHIP on the first F2 -- reading the 09-25 ruling ("only
+ieee_store is re-dated") as forbidding the ten re-dates.  Overruled by the flagship seat on the rulings' own record:
+the ten belong to the 09-24 ruling, the SC_EXEMPT pair to 09-25's.
+
+**FILED** (OUTSTANDING_BUGS 2026-09-25): `exemptdistinct` (LOW -- nothing enforces distinct dates, and "no date on
+another list's date" is a cross-list property no check sees: gate 9's `AB_EXEMPT` holds twelve entries on
+2026-11-30).  `scexempt` stays OPEN for `ieee_store` (due 2026-12-10).  Each re-dated entry names the row that owes
+its wiring (`wiringcliff`, `wdcaltoffleg`, `wdcsingleleg`).
+
 # `#548` (fbdrainwire): `#442`'s drain probe wired into gate 14 on all four timers before its exemption lapsed -- and the review it took found three floor breaches in `#442`'s shipped detectors, repaired here, and `#442`'s own comments wrong where measured, corrected here
 
 **The obligation.**  `regress/fbpending_drain_probe.py` is `#442`'s rung-3 detector for the footbridge pending-tick bound

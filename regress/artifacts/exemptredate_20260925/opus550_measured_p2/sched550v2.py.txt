@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""opus550 p2: run the REAL #550v2 checker, in-process, on EVERY day 2026-09-25..2026-12-31 against a HEAD export,
+and print one line per day: rc, verdict, the expired set.  Then list the transitions (days whose expired set grew)."""
+import contextlib, datetime, io, os, re, sys
+exp = sys.argv[1]
+sys.path.insert(0, os.path.join(exp, "tools", "pipeline"))
+os.chdir(os.path.join(exp, "tools", "pipeline"))
+import check_probe_wiring as C
+reg = os.path.join(exp, "regress")
+d0, d1 = datetime.date(2026, 9, 25), datetime.date(2026, 12, 31)
+prev, trans, rows = None, [], []
+d = d0
+while d <= d1:
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = C.main(["--regress", reg, "--today", d.isoformat()])
+    out = buf.getvalue()
+    exp_set = sorted(set(re.findall(r"EXPIRED EXEMPTION  (\S+)", out)))
+    other = [l for l in out.splitlines() if l.startswith("  FAIL") and "EXPIRED EXEMPTION" not in l]
+    verdict = (re.findall(r"PROBEWIRING_(PASS|FAIL)", out) or ["?"])[-1]
+    rows.append("%s %s rc=%d %s expired=%d other_fails=%d | %s" % (d, d.strftime("%a"), rc, verdict, len(exp_set),
+                len(other), " ".join(os.path.basename(x) for x in exp_set)))
+    if prev is not None and set(exp_set) != set(prev):
+        new = sorted(set(exp_set) - set(prev))
+        trans.append("%s %s  +%d  %s" % (d, d.strftime("%a"), len(new), " ".join(os.path.basename(x) for x in new)))
+    prev = exp_set
+    d += datetime.timedelta(days=1)
+print("\n".join(rows))
+print("\nTRANSITIONS (day the expired set grew; the entry is dated the day before):")
+print("\n".join(trans))
+mx = max(int(t.split("+")[1].split()[0]) for t in trans) if trans else 0
+print("\nDAYS=%d TRANSITIONS=%d MAX_NEW_EXPIRIES_ON_ONE_DAY=%d" % (len(rows), len(trans), mx))
+print("SCHED550V2_DONE")

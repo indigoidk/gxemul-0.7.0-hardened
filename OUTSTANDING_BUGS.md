@@ -21904,6 +21904,9 @@ gate 2's "no exemption is past its dated deadline" row went red from 2026-09-03.
 2026-09-18, because the weekly battery was disabled.  The owner ruled a re-date to 2026-09-27 in its own commit.  The
 debts are unchanged: `ieee_store` has no comparator by design, and `wdc_identify` needs its nine row functions moved onto
 one.  Decide before 2026-09-28.
+**SUPERSEDED 2026-09-26 by `#550` (GPT-6 Astra's confirmation):** the two entries now have SEPARATE dispositions --
+`ieee_store` re-dated to 2026-12-10 by `#550`, its debt unchanged (no comparator by design); `wdc_identify` left at
+2026-09-27 by `#550`, to be DISCHARGED by `#551`, which gives it a self-check rather than a new date.
 
 ### `fbnobuild` (LOW) — no build/ objects: the #442 lane `note`s to PASS, #537's lane reds under the wrong row name
 Fix shape: `degrade()` in both lanes, and truncate `diff_fbpending_bound.log` before the #442 lane, with two negative
@@ -22392,3 +22395,44 @@ so the build is deterministic and the first change came from objects the forced 
 binary.  Cause NOT established; a source copied with a preserved older mtime is the likely route.  Consequence: an
 ASAN measurement taken before 2026-09-24 04:44 may have run code older than its sources.  Part 2 of the two-part
 clearance (`-nt`) cannot see this class; rebuilding and comparing can.
+
+## 2026-09-25 — GXEMUL [087a90]: `#550` exemptredate; what its review files
+
+Evidence: `regress/artifacts/exemptredate_20260925/` -- the four panels (codex walled on every one: a seat failure,
+re-fired after 2026-09-26 07:01), the Opus records, the dedicated grok jobs, and the Fable 5.1 adjudications
+`exemptredate_20260925/fable5_f2_550_551.md` and `wdcidselfcheck_20260925/fable_f2b/fable5_f2b_550_551.md`.
+
+### `exemptdistinct` (LOW, harness) — nothing enforces that dated exemptions fall due on different days
+
+`#550` re-dated the ten 2026-09-27 probe-wiring exemptions ONE BY ONE (owner ruling 2026-09-24) so that the ten do not
+expire together -- the `wiringcliff` shape.  (Distinct dates spread the deadlines; ONE expired exemption still turns every
+commit red -- GPT-6 Astra, confirming `#550`, which corrected "so that no single day turns every commit red again".)
+**Nothing checks that property.**  `check_probe_wiring.py`
+accepts any number of entries on one date, and gate 2's `SC_EXEMPT` / `SM_EXEMPT` and `gate_asan_sweep.sh`'s
+`AB_EXEMPT` are separate tables that nothing compares, so the spread `#550` wrote is an arrangement the next re-date can
+undo.  **A cross-list form reds at once:** `AB_EXEMPT`'s twelve entries all read 2026-11-30 (derive:
+`grep -A14 '^AB_EXEMPT="' regress/gate_asan_sweep.sh`), and its own comment calls that date a placeholder -- so the
+round owes a decision on that table first (re-date per machine, or exempt the table with a reason: its twelve are
+whole-machine ports).  Filed by the Fable 5.1 adjudication of `#550` (ruling 8, `S2`), which also widened the checker
+header's sentence to say nothing enforces it.
+
+### `asanfifteen` (LOW, records) — gate_asan_sweep.sh calls its known-dead set fifteen; the table holds twelve
+
+`regress/gate_asan_sweep.sh` says "15 machines abort here by design (see AB_EXEMPT)" and, in the `AB_EXEMPT` block,
+"WHY THESE FIFTEEN" and "All fifteen were MEASURED", while the table holds TWELVE entries -- `#444` (a29f87b) fixed three
+hpcmips subtypes' constructor deaths, the `#450` follow-up (4142c580) deleted their three entries, and the same block
+records it.  (This said "discharged by `#444`" until GPT-6 Astra's confirmation of `#550` read 4142c580's diff.)
+Some of the "fifteen" mentions are HISTORY (what one run touched; "fifteen deaths" in a dated measurement) and stay; the ones stated as the table's present size are wrong
+records.  Derive, do not quote: `grep -n 'fifteen\|15 machines' regress/gate_asan_sweep.sh`, against the entry count.
+Found by the Fable 5.1 adjudication of `#550` while verifying; not `#550`'s file.
+
+### `cxlaunchwallfp` (LOW, harness) — cxlaunch.sh reports a complete codex answer as WALLED, two ways
+
+On 2026-09-26 the launcher printed `*** SEAT WALLED.` for the `#550` and `#549` Astra confirmations, and both answers
+were complete (`CONFIRM WITH CHANGES`, 4.3 KB and 11.5 KB).  **Two different false positives:** (1) `#550`'s stderr held
+six `^ERROR: You've hit your usage limit` lines that were an OLDER session's output file, echoed while codex read it --
+they start at column 0, so the file's own `^ERROR:` anchor cannot tell them from codex's diagnostics; (2) `#549`'s stdout
+matched `quota` inside the word "quotation".  The file's header already records this class (a quoted marker re-arms the
+tool that reads it).  Fix shape: key the stderr test on codex's own error block at the END of the stream, and give the
+stdout patterns word boundaries; negative-control both directions (a real wall still reds; these two runs do not).
+Found while confirming `#550`.
