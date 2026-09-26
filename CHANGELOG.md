@@ -1,3 +1,81 @@
+# `#553` (latecodex): the codex seat re-fires that `#550`, `#551` and `#549` promised landed AFTER those three commits -- adjudicated under the late-dissent rule, their corrections applied as comment and record edits, and one defect of the commit machinery itself filed
+
+**Why.**  The codex seat (GPT-6 Astra) was walled on every panel of 2026-09-25 (usage limit to 2026-09-26 07:01).  The
+records of `#550`, `#551` and `#549` said it was re-fired after the reset; the re-fires ran from ~08:20 and answered at
+08:27:30 (`#551f`'s pass: **DO NOT SHIP**), 08:28:21 (`#549` v6's adjudication pass: **SHIP**) and 08:28:59 (the
+`#550`/`#551` F2b pass: **SHIP WITH CHANGES** x2) -- after all three commits (`#550` 04500deb 07:38:16, `#551` f5e155ac
+08:06:29, `#549` 8ea26abb 08:21:31).  Under the carrier's LATE-DISSENT rule a stage fired after a round closes adjudicates
+like any finding: a WRONG RECORD is corrected in place (L4), a measured false pass is L2/L3, everything else is FILED --
+and closure changes the licence, never the truth-value.  **No compiled code changes**: the C file's edit is comment text
+(its preprocessed output is unchanged) and the checker's is comment and exemption-reason wording.
+
+**The adjudication.**  The main loop's packet (`regress/artifacts/latecodex_20260926/latecodex_packet.md`, eleven
+dispositions L1-L11); the flagship seat, LAST (`fable5_latecodex.md`, claude-fable-5-1 by its transcript): **ADOPT WITH
+TWO CHANGES** -- L3 was wrong in GRADE (the shipped contract already names the log rewrite as (C)'s edit, so an L4 there
+would have manufactured a correction), and L10's supporting sentence was false; **no late finding names a measurement
+that would make it L2**.  **GPT-6 Astra confirmed WITH CHANGES** (`codex_astra553.txt`): every disposition grade retained,
+L3's NO ACTION included, and three of the ruling's details overturned -- L1's filing scope (nine reset shapes occur in the
+original matrix and four more in the later M18 artifacts, so eleven, not fifteen, are absent from every table), L10's
+replacement census (`git grep -n '69 named' HEAD` finds 11 matching lines in nine committed artifacts, not nine hits), and
+the claim that citing the late answers' panel directories brings them under section G (it does not -- see
+`commitinflight`) -- plus five wording corrections, all applied here: the reset targets are three, not three tallies;
+`analyze9.out` reproduces all 41 original rows within an expanded table, and the real `selfmutant.py` separately ran on
+five selected cells; L5's list is five CAUGHT shapes and one disclosed (C) shape; the L6 sentence names no partition; and
+`#549`'s line cites the commit, not HEAD.  **The codex twin** (`codex_jobs/codex_latecodexadv.txt`, an independent job on
+the same packet): **1 of 11 dispositions wrong** -- L10's absence claim, the same record error the flagship and Astra
+corrected -- and it derived all 24 reset shapes red BY READING, placement by placement, from `row_cmp()`, `chk()` and
+`lib.sh`'s whole-string compare, reaching Astra's nine-plus-four census independently.
+
+**What ships.**
+* `regress/diff_wdc_identify.c` -- the contract's (B), comment text only (the comment-stripped preprocessor output is
+  still c10d453c, `latecodex_20260926/strip553.out`): its reset claim is scoped -- it holds BY READING at every placement
+  and either conditionality; of its 24 shapes (three reset targets x conditional or not x four placements) nine occur in
+  the original matrix and four in the later M18 artifacts, and the eleven absent from every table are filed -- and its
+  closing sentence gains "their INPUTS" (`F_wrap` keeps the comparators intact and escapes, the disclosed (A) feed case).
+  Gate 2 (`gate_offline.sh`) on a HEAD export carrying
+  this file and the checker: **PASS (359 checks)**, `latecodex_20260926/gates_553b/` (the pre-correction text also passed
+  359, `gates_553/`).
+* `tools/pipeline/check_probe_wiring.py` -- comment and exemption-reason wording corrections in `#550`'s exemption block,
+  with checker decisions unchanged by source inspection (the reason text does not control the checked date): "These are
+  wiring jobs, not design ones" becomes "These exemptions cover wiring and instrument work" (the sig probe owes an oracle
+  redesign and the 4bit probe an oracle choice, each said at its own entry), and the `ppc_rldicl_probe.py` paragraph and
+  its tuple's reason string (RESULT/CONTROL lines are one way to write its gate block, not a prerequisite).  The
+  exemption dates are unchanged.
+* `OUTSTANDING_BUGS.md` -- `wdcrowpin`'s closure sentence (the call-count pin counts every comparator CALL, and the
+  measured pin/no-pin pair deleted `R6 liveness: DRQ asserted`, a verdict-handed call); three filings below.
+* `CHANGELOG.md` -- one paragraph at the end of each of the `#550`, `#551` and `#549` blocks naming the late answer and
+  where it went (so none of them reads as unanimous), and discharging the `#550`/`#551` F2b closure's "subject to Astra
+  and the codex re-fire".
+* `regress/artifacts/fbctrlportkill_20260924/panels/codex_codexseat_f2v6.{txt,err}` and `codexseat_f2v6.launch.log` --
+  **`#549`'s commit staged this job MID-FLIGHT**: in commit `8ea26abb` the `.txt` was 0 bytes (finished: 7,716, VERDICT:
+  SHIP), the `.err` 1,588,311 of 1,649,553 bytes and the launch log 17 of 157 bytes, with no completion line -- the twin
+  confirmed all three are exact prefixes of the finished files.  The finished files land here.  This is the carrier's
+  preserved-mid-run class for the SECOND time (the first, `table2_targeted.txt`, 2026-08-28), so it is filed as a check
+  (`commitinflight`) rather than restated as prose; `#529`'s commit script already refuses a launch log without its
+  completion line.
+* The other two late answers, their briefs and launch logs, the adjudication, Astra's confirmation, the twin, and the
+  ledger entries for all of them -- recorded by exact filename (`codex_codexseat_551f.txt`, `_f2b.txt`, `_f2v6.txt`).
+* `regress/pass2_ledger.tsv` -- `#549`'s pass-2 receipt, which the commit after `#549` owes.
+
+**Recorded, no action:** L3 (the shipped text is right); L5's analyzer defect needs no correction to the `#551` record --
+the result rests on `analyze9`, which rejects a missing `REALFAILS=` result where `analyze8` counted a dead scorer as no
+failures; its reproduced results support the historical table and do not establish general scorer robustness (it
+validates neither the scorer's completion nor the check count), which `analyze8robust` files; the six shapes L5 named are
+five CAUGHT and one disclosed (C), `F_nopin_delring_repin`, all six red on their defect cells.  L8 (the F2b seat's three
+findings, on `#551b`, `exemptredate_20260925/panels/codex_codexseat_f2b.txt`, were closed by `#551c` and `#551f` before
+shipping: `rw[]`'s two `sectors == 0` probes catch both directional-comparison edits, by evaluation); L9 (the findings on
+`#549` require no further code or disclosure correction); L10 (`git grep -n '69 named' HEAD` finds 11 matching lines in
+nine committed artifacts -- preserved briefs, seat answers and a pass findings file -- none in the live contract, gate
+commentary or CHANGELOG; the count is 69 named-label predicates over 67 distinct archived output rows, 68 with
+`high byte`).
+
+**FILED** (OUTSTANDING_BUGS 2026-09-26): `wdcidresetcells` (LOW -- the eleven reset shapes absent from every table: the
+eight conditional single-tally resets and the three unconditional start resets; fold them into `wdcidlane`'s table),
+`analyze8robust` (LOW -- both analyzers: neither requires the expected check count; analyze8 also drops the scorer's
+status), `commitinflight` (LOW -- a commit must not stage an artifacts directory holding an unfinished job's files: key
+on the launch log's completion line, forward-only, with both negative controls; and section G cannot see a dedicated
+codex re-fire at all, which is part of why nothing did).
+
 # `#549` (fbctrlportkill): the test machines' framebuffer controller STORED an out-of-range port selector, and the next DATA access ended the emulator process -- the selector is refused now, the previous one kept, one announce per device; and the detector took eight panels and six variant tables to become honest
 
 **The defect, witnessed at rung 3.**  `src/devices/dev_fbctrl.c`'s PORT arm stored any written selector as an `int`
@@ -91,6 +169,8 @@ Both groks, who raised D1 and D2, reversed themselves when asked to be harder on
 **FILED** (OUTSTANDING_BUGS 2026-09-25): `fbctrlcmdkill` (HIGH -- the command default still ends the process),
 `fbctrloffkill` (MED -- the offset default), `fbctrlportdebt` (MED -- the two disclosed classes and their measured
 one-diff close: 61 fresh devices at a second anchor, 9.7 s), `scoreclaimsrawdoc` (MED), `fbctrltwoinst` (LOW).
+
+**Late answer (2026-09-26, after this commit):** the codex seat's re-fire on v6's adjudication pass (`panels/codex_codexseat_f2v6.txt`, 08:28:21, SHIP; the findings require no further code or disclosure correction) -- and this commit, at 08:21:31, staged that job's files MID-FLIGHT: in commit `8ea26abb` the `.txt` was 0 bytes, the `.err` 1,588,311 of 1,649,553 bytes and the launch log 17 of 157 bytes, with no completion line; `#553` carries the finished files (filed: `commitinflight`).
 
 # `#551` (wdcidselfcheck): gate 2's `wdc_identify` self-check exemption DISCHARGED rather than re-dated -- `diff_wdc_identify.c` gains a self-check on its two comparators (24 of 128 comparisons, by owner ruling) and a contract that says what an in-file check can and cannot see, reached in six revisions and six review passes
 
@@ -204,6 +284,8 @@ inside the comparators by EFFECT, bounded by class (i).
 the pipe), `panelwallquote` (MED), `wdcrowpin`, `wdcverdictone`, `fbpendingselfcheckG`, `seatverdictsubs` (LOW),
 `asanfifteen` (LOW, records).
 
+**Late answers (2026-09-26, after this commit):** two codex seat re-fires, adjudicated under the late-dissent rule in `latecodex_20260926/` (the flagship LAST, GPT-6 Astra confirming, a codex twin) and applied by `#553`.  (1) `#551f`'s pass (`panels/codex_codexseat_551f.txt`, 08:27:30, DO NOT SHIP): contract (B)'s "measured ... any placement" is scoped -- of its 24 reset shapes nine occur in the original matrix and four in the later M18 artifacts, and the eleven absent from every table are filed as `wdcidresetcells` -- "their inputs" is added to its closing sentence, `wdcrowpin`'s pair is named as a verdict-handed call, and `analyze8robust` is filed; its log-rewrite objection was already closed in the shipped text, which names the log rewrite as (C)'s edit.  (2) The F2b pass (`exemptredate_20260925/panels/codex_codexseat_f2b.txt`, 08:28:59, SHIP WITH CHANGES for `#551`): its three findings concern `#551b` and were closed by `#551c` and `#551f` before shipping, so the F2b closure's condition "subject to Astra and the codex re-fire" is DISCHARGED for `#551`.  69 counts named-label predicates over 67 distinct archived output rows, 68 with `high byte` -- never rows.
+
 # `#550` (exemptredate): the ten probe-wiring exemptions that all fell due on 2026-09-27 re-dated one by one, each to its own owed-work date and reason, by owner ruling -- and gate 2's two self-check exemptions decided separately
 
 **The obligation.**  `tools/pipeline/check_probe_wiring.py`'s `EXEMPT` table held ten ungated detectors on ONE date,
@@ -279,6 +361,8 @@ the ten belong to the 09-24 ruling, the SC_EXEMPT pair to 09-25's.
 another list's date" is a cross-list property no check sees: gate 9's `AB_EXEMPT` holds twelve entries on
 2026-11-30).  `scexempt` stays OPEN for `ieee_store` (due 2026-12-10).  Each re-dated entry names the row that owes
 its wiring (`wiringcliff`, `wdcaltoffleg`, `wdcsingleleg`).
+
+**Late answer (2026-09-26, after this commit):** the codex seat's re-fire on the F2b pass (`panels/codex_codexseat_f2b.txt`, 08:28:59, SHIP WITH CHANGES x2) -- comment and exemption-reason wording corrections in `check_probe_wiring.py`'s `#550` block, with checker decisions unchanged by source inspection, applied by `#553`; the flagship F2b closure's "subject to Astra and the codex re-fire" condition is discharged.
 
 # `#548` (fbdrainwire): `#442`'s drain probe wired into gate 14 on all four timers before its exemption lapsed -- and the review it took found three floor breaches in `#442`'s shipped detectors, repaired here, and `#442`'s own comments wrong where measured, corrected here
 

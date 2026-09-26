@@ -5695,14 +5695,25 @@ static void row_selfconsistent(void)
  *  it never accepts a zero line on its own -- this said it compared every such line against "0": GPT-6
  *  Astra, confirming #551), so once the line is in the log no edit of the tallies, the trailer or the rows'
  *  order takes it back, and no line matching the check can be added without reddening it, not even one
- *  reading `0 failures'.  Hence no
- *  edit that leaves the covered rows running and the comparators' compiled behaviour intact hides a covered
- *  failure: not the trailer's count, token or exit rewritten singly or together, not a reset of either
- *  tally or both at any placement, not rows moved or deferred past the verdict with their counts forged
- *  (measured on #551f's pass: regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out, scored by an
- *  EMULATION of gate 2's checks and lane; opus551_measured_f/analyze9.out, its 41 rows re-run with gate 2's
- *  own lib.sh; gate 2's own selfmutant.py on five of those cells -- this said "gate 2's own lib.sh and
- *  selfmutant.py" of all of it: GPT-6 Astra, confirming #551).  Not caught -- the (A) residual
+ *  reading `0 failures'.  Hence no edit that leaves the covered rows running, their INPUTS and the
+ *  comparators' compiled behaviour intact hides a covered failure: not the trailer's count, token or exit
+ *  rewritten singly or together, not a reset of either tally or both at any placement, not rows moved or
+ *  deferred past the verdict with their counts forged.  The reset claim holds BY READING at every placement
+ *  and either conditionality -- the report line is printed inside the comparator, before any statement
+ *  outside it runs, and the check refuses a second captured line.  Of its 24 shapes (three reset targets x
+ *  conditional/unconditional x four placements), nine occur in the original matrix, pass551f/meas551f.py.txt
+ *  (the unconditional single-tally resets at the mid placement, the unconditional both-tally reset at mid,
+ *  trailer and after-printf, the conditional both-tally reset at all four placements); later M18 artifacts
+ *  supply four more, each tally reset unconditionally before the reconciliation and after the count printf
+ *  (opus551_measured_f2/xf2.py.txt, scored by gate 2's MAIN checks in analyze_f2.out, from a run whose seat
+ *  fell back to another model).  Eleven remain absent from these tables: the eight conditional single-tally
+ *  resets and the three unconditional start resets (GPT-6 Astra, late on #551f's pass and confirming #553;
+ *  filed as `wdcidresetcells').  The trailer, move and deferral shapes are measured (on #551f's pass:
+ *  regress/artifacts/wdcidselfcheck_20260925/measured/run551f.out, scored by an EMULATION of gate 2's checks
+ *  and lane; opus551_measured_f/analyze9.out, all 41 original rows reproduced within an expanded table re-run
+ *  with gate 2's own lib.sh; the real selfmutant.py separately ran on five selected cells -- this said "gate
+ *  2's own lib.sh and selfmutant.py" of all of it: GPT-6 Astra, confirming #551).  Not caught -- the (A)
+ *  residual
  *  reaching the report: the report kept from the check on real calls (its guard switched off, its text
  *  moved off the pattern, or its printf swallowed by a file-scope macro) together with the tallies hidden
  *  (a reset, or the rows deferred past the trailer) -- and both halves can be ONE edit (a guard that also

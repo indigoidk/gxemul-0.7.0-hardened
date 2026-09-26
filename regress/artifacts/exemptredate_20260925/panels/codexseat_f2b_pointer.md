@@ -1,0 +1,1 @@
+Read `C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\exemptredate_20260925\f2b\f2b_brief_550_551.md` in full and review it adversarially exactly as its own QUESTIONS section directs -- you are the codex panel seat, re-fired after a usage wall.  The tree is C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC; ignore any other src/.  Read-only.  Open with its VERDICT line.

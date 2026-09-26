@@ -2556,7 +2556,10 @@ MANIFEST = {
 #  entries on one date: sed -n '/^AB_EXEMPT="/,/^"/p' regress/gate_asan_sweep.sh | grep -c ':2026-11-30').
 #  Filed as `exemptdistinct'.
 #
-#  These are wiring jobs, not design ones.  NOT every probe here prints a verdict token or exits
+#  These exemptions cover wiring and instrument work; wdc_altoffset_sig_probe.py specifically owes an
+#  oracle redesign (its oracle cannot tell the outcomes apart) and wdc_altoffset_4bit_probe.py an oracle
+#  choice, each said at its own entry (this line said "These are wiring jobs, not design ones": GPT-6
+#  Astra, late on the F2b pass and confirming #553).  NOT every probe here prints a verdict token or exits
 #  nonzero on failure: mk48_nvram_probe.py printed MK48_RESULT=n/m and a DONE sentinel and exited 0
 #  with rows red, so the gate_arm.sh section #536 wired for it scores ROWS, not a token (agy, #536
 #  F2 pass; this sentence claimed otherwise until then).  What each needs is a gate that owns it,
@@ -2610,9 +2613,11 @@ EXEMPT = {
     #  64-bit PowerPC CPU: gate 9 constructs them but has no result oracle, and both PowerPC
     #  gates drive a 32-bit part.  Closing that is a harness round, filed to wiringcliff.
     #  *** ITS REASON EXPIRES WITH THE rlwimi/rldimi WIRING: gate_ppc.sh now EXECUTES -M 64. ***
-    #  What remains is the instrument: this probe prints no RESULT/CONTROL lines.  (This sentence went
-    #  on "so a gate could only score its exit status" until #550: false -- it prints ok/FAIL rows,
-    #  `SCORE n/m' and a DONE line, which a gate can score by rows, as gate_arm.sh scores mk48's.)
+    #  What remains is a gate block: this probe prints ok/FAIL rows, `SCORE n/m' and a DONE line, which a
+    #  gate can score by rows, as gate_arm.sh scores mk48's; it prints no RESULT/CONTROL lines, and adding
+    #  them is one way to write that block, not a prerequisite for it.  (This said "What remains is the
+    #  instrument: this probe prints no RESULT/CONTROL lines", and before #550 went on "so a gate could only
+    #  score its exit status" -- both false: GPT-6 Astra, late on the F2b pass.)
     #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): the cheapest of
     #  the ten -- 24/24 in under a second on a machine gate_ppc.sh already runs (the run:
     #  regress/artifacts/exemptredate_20260925/opus550_measured_p2/p1_runs/); owed: a gate_ppc.sh block
@@ -2621,9 +2626,10 @@ EXEMPT = {
     #  (grep -nE '(want_rldimi|want_rlwimi|want_rlwinm|mask32)[(]' on the probe), so an edit of them
     #  is no prerequisite.
     "ppc_rldicl_probe.py":         ("2026-10-08",
-                                    "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); this "
-                                    "probe lacks the RESULT/CONTROL protocol a gate parses "
-                                    "-- that instrument change is filed to wiringcliff"),
+                                    "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); owed: a "
+                                    "gate_ppc.sh block scoring its ok/FAIL rows as gate_arm.sh "
+                                    "scores mk48's -- RESULT/CONTROL lines first is a chosen "
+                                    "approach, not a prerequisite; filed to wiringcliff"),
     #  #520's detector.  NOT a two-leg differential and not awaiting a design -- it is a
     #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
     #  HOME: no gate in this tree runs an Alpha guest session -- gate 9's sweep constructs alphabook1

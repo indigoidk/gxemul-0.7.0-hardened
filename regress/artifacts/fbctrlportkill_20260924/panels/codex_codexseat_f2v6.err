@@ -7699,3 +7699,1020 @@ Every probe refusal is odd or a power of two from bit 3 up, so none has low 3 bi
  389: **The defect.**  `regress/gate_hygiene.sh` (gate 6) carries a census of the regression probes that drive the emulator
  390: through a pseudo-terminal: how many there are, which have NO prompt-readiness check (each must be grandfathered BY
 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import ast, collections
+from pathlib import Path
+p=Path('regress/artifacts/fbctrlportkill_20260924/gates_t6/fbctrl_port_probe.TESTED.py.txt')
+t=ast.parse(p.read_text()); start=next(i for i,n in enumerate(t.body) if isinstance(n,ast.Assign) and any(isinstance(q,ast.Name) and q.id=='M64' for q in n.targets)); end=next(i for i,n in enumerate(t.body) if isinstance(n,ast.FunctionDef) and n.name=='main')
+ns={'FBCTRL':0xffffffffb2f00000}
+exec(compile(ast.Module(t.body[start:end],type_ignores=[]),'<program-data-only>','exec'),ns)
+sessions=[(s,ns['PROG_'+s],ns['REGS_'+s]) for s in ['C','A','P','R','K','F','V','W','Y','Z','B']]
+for name,k,w,v in ns['X_CELLS']:
+    prog,regs=ns['prog_x'](k,w,v); sessions.append((name,prog,regs))
+refusals=[]; data_unselected=[]; floor=collections.defaultdict(list)
+for name,prog,regs in sessions:
+    r=dict(regs); r['zr']=0; sel=0; latch=0; cells=[0]*8; last_refusal=None; reselected=True; count=0
+    for i,(op,rt,off,tag) in enumerate(prog):
+        if op=='dsll': r[rt]=(r[rt]<<off)&ns['M64']; continue
+        bits={'sb':8,'sh':16,'sw':32,'sd':64,'lb':8,'lh':16,'lw':32,'ld':64}[op]
+        if op[0]=='s':
+            value=r[rt]&((1<<bits)-1)
+            if off==0:
+                region='below' if value<8 else 'at' if value==8 else 'past'
+                floor[(latch,region)].append((name,i+1,sel,value))
+                if value>=8:
+                    count+=1; refusals.append((name,i+1,value,sel,latch,op)); last_refusal=i+1; reselected=False; latch=1
+                else: sel=value; reselected=True
+            else:
+                if last_refusal and not reselected: data_unselected.append((name,i+1,op,'write',last_refusal))
+                cells[sel]=value&0xffffffff
+                if sel==0 and value==2: cells[1]=cells[2]=0
+        else:
+            if off==0: value=sel
+            else:
+                if last_refusal and not reselected: data_unselected.append((name,i+1,op,'read',last_refusal))
+                value=cells[sel]
+            value &= (1<<bits)-1
+            if bits<64 and value>>(bits-1): value|=ns['M64']"'^((1<<bits)-1)
+            r[rt]=value
+    print('"'session',name,'steps',len(prog),'refusals',count)
+anchors=collections.defaultdict(set)
+for name,i,value,sel,latch,op in refusals: anchors[value].add(sel)
+first=collections.defaultdict(list)
+for name,i,value,sel,latch,op in refusals:
+    if not latch: first[value].append(name)
+decisive=sorted({k for v in first for k in range(3,64) if v&~(1<<k)<8})
+print('latch-clear decisive bits:',decisive)
+print('latch-clear missing bits:',[k for k in range(3,64) if k not in decisive])
+print('first-refusal values:',[(hex(v),s) for v,s in sorted(first.items())])
+print('total refusals:',len(refusals),'unique refused values:',len(anchors))
+print('anchor multiplicities:',dict(collections.Counter(len(a) for a in anchors.values())))
+print('multi-anchor values:',[(hex(v),sorted(a)) for v,a in sorted(anchors.items()) if len(a)>1])
+print('one-anchor single-bit count:',sum(len(a)==1 and v&(v-1)==0 for v,a in anchors.items()))
+print('one-anchor non-bit values:',[(hex(v),sorted(a)) for v,a in sorted(anchors.items()) if len(a)==1 and v&(v-1)])
+print('DATA after a refusal without intervening legal selector:',data_unselected)
+print('latch x comparison-region holder examples:',{str(k):v[:3] for k,v in sorted(floor.items())})
+print('B widths/counts:',[(w,b-3) for w,r,b,rb in ns['B_GROUPS']])
+'@ | python -B -" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -g '*.c' 'memory_readmax64\\(|memory_writemax64\\(' src/core/memory.c; rg -n -g '*.py' 'B_mod11|B_mod12|CELL_keep_l0' regress/artifacts/fbctrlportkill_20260924; rg -n -B 4 -A 6 'P_win|generating set is|generating set' CHANGELOG.md | Select-Object -First 100" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+from pathlib import Path
+import re, collections
+p=Path('regress/artifacts/fbctrlportkill_20260924/table6')
+manifest={}
+for line in (p/'MANIFEST.out').read_text().splitlines():
+    m=re.match(r'"'^('"\\S+)\\s+t[56]\\s+(RED|GREEN\\(e\\)|GREEN\\(eq\\))\\s',line)
+    if m: manifest[m[1]]=m[2]
+rows={}
+for line in (p/'TABLE.out').read_text().splitlines():
+    m=re.match(r'"'^('"\\S+) md5=\\S+ rc=(\\d+) FBCTRLP_RESULT=(\\d+)/(\\d+) FBCTRLP_CONTROL=(\\w+) FBCTRLP_DONE \\|\\s*(.*)',line)
+    if m: rows[m[1]]={'rc':int(m[2]),'n':int(m[3]),'t':int(m[4]),'control':m[5],'fails':m[6]}
+print('manifest counts:',len(manifest),dict(collections.Counter(manifest.values())))
+print('table counts:',len(rows),'red',sum(r['n']<r['t'] for r in rows.values()),'full',sum(r['n']==r['t'] for r in rows.values()))
+print('name-set difference:',sorted(set(manifest)"'^set(rows)))
+print('"'prediction misses:',[n for n,r in rows.items() if (manifest[n]=='RED')"'!=(r['"'n']<r['t'])])
+print('non117 denominators:',[n for n,r in rows.items() if r['t']"'!=117])
+print('"'MKB entries:',sum(n.startswith('MKB_') for n in rows),'MK_b8_ctl present:','MK_b8_ctl' in rows)
+print('BR entries:',[n for n in rows if n.startswith('BR_')])
+channels=[]
+for k in range(3,64):
+    n='MK_b8_ctl' if k==8 else 'MKB_%02d'%k
+    got=set(re.findall(r'B refuse every single bit["'^;]*'"\\((sb|sh|sw|sd)\\)',rows[n]['fails']))
+    expected={w for w,b in [('sb',8),('sh',16),('sw',32),('sd',64)] if k<b}
+    if got"'!=expected: channels.append((n,sorted(got),sorted(expected)))
+print('"'unconditional single-bit B channel mismatches:',channels)
+print('one-width B channels:',{n:re.findall(r'B refuse every single bit["'^;]*'"\\((sb|sh|sw|sd)\\)',r['fails']) for n,r in rows.items() if n.startswith('MKW_')})
+raw_errors=[]
+for name,rec in rows.items():
+    f=p/(name+'.raw')
+    if not f.is_file(): raw_errors.append((name,'missing')); continue
+    text=f.read_text(); parsed=re.findall(r'"'^  (ok|FAIL) +(.*?) +got='"',text,re.M)
+    names=[n for flag,n in parsed]
+    if len(parsed)"'!=117 or sum(flag=='"'ok' for flag,n in parsed)"'!=rec['"'n'] or len(set(names))"'!=len(names): raw_errors.append((name,len(parsed),sum(flag=='"'ok' for flag,n in parsed),len(set(names))))
+print('raw row reconciliation errors:',raw_errors)
+for n in ['MKB_03','MKB_31','CELL_keep_l0']:
+    print(n,'B raw rows:')
+    for l in (p/(n+'.raw')).read_text().splitlines():
+        if 'B refuse every single bit' in l: print(l)
+'@ | python -B -" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 615ms:
+session C steps 14 refusals 0
+session A steps 38 refusals 0
+session P steps 37 refusals 12
+session R steps 13 refusals 2
+session K steps 7 refusals 1
+session F steps 2 refusals 1
+session V steps 44 refusals 6
+session W steps 42 refusals 5
+session Y steps 12 refusals 2
+session Z steps 13 refusals 6
+session B steps 224 refusals 108
+session X2 steps 3 refusals 1
+session X3 steps 3 refusals 1
+session X4 steps 3 refusals 1
+session X6 steps 3 refusals 1
+session X7 steps 3 refusals 1
+latch-clear decisive bits: [3, 8, 32]
+latch-clear missing bits: [4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+first-refusal values: [('0x8', ['P', 'W', 'B']), ('0x9', ['R', 'K', 'F', 'V', 'Y', 'Z', 'X2', 'X6']), ('0x100', ['X7']), ('0x100000005', ['X3']), ('0xffffffffffffffff', ['X4'])]
+total refusals: 148 unique refused values: 67
+anchor multiplicities: {2: 6, 8: 1, 1: 60}
+multi-anchor values: [('0x8', [5, 7]), ('0x9', [0, 1, 2, 3, 4, 5, 6, 7]), ('0x10', [5, 7]), ('0xff', [5, 7]), ('0x100', [5, 7]), ('0x100000003', [5, 7]), ('0xffffffffffffffff', [4, 5])]
+one-anchor single-bit count: 58
+one-anchor non-bit values: [('0xffffffff', [5]), ('0x100000005', [3])]
+DATA after a refusal without intervening legal selector: [('R', 4, 'sw', 'write', 2), ('K', 4, 'lw', 'read', 3), ('K', 5, 'sw', 'write', 3)]
+latch x comparison-region holder examples: {"(0, 'at')": [('P', 3, 5, 8), ('W', 23, 5, 8), ('B', 2, 5, 8)], "(0, 'below')": [('C', 1, 0, 5), ('C', 5, 5, 1), ('C', 7, 1, 2)], "(0, 'past')": [('R', 2, 5, 9), ('K', 3, 5, 9), ('F', 1, 0, 9)], "(1, 'at')": [('V', 27, 7, 8), ('W', 26, 5, 8), ('W', 29, 5, 8)], "(1, 'below')": [('P', 5, 5, 5), ('P', 8, 5, 5), ('P', 11, 5, 5)], "(1, 'past')": [('P', 6, 5, 9), ('P', 9, 5, 16), ('P', 12, 5, 8589934592)]}
+B widths/counts: [('sb', 5), ('sh', 13), ('sw', 29), ('sd', 61)]
+
+ succeeded in 647ms:
+48: *  memory_readmax64():
+55:uint64_t memory_readmax64(struct cpu *cpu, unsigned char *buf, int len)
+82: *  memory_writemax64():
+89:void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len,
+regress/artifacts/fbctrlportkill_20260924\opus549_measured\close\gen_close.py:73:    ("B_mod11", "boundary: the latch counts modulo 11 (re-announces on the 12th refusal) -- claimed caught",
+regress/artifacts/fbctrlportkill_20260924\opus549_measured\close\gen_close.py:75:    ("B_mod12", "boundary: the latch counts modulo 12 (re-announces on the 13th) -- disclosed",
+34-exit.  **v6 repaired it in-round (L2) with session B -- every single-bit value refused at each width** -- and owed its8739-`gpt-6-astra` (a CLI upgrade the CLI could not do itself; carrier row records the path) and ran the review at
+8740-`max`; the Fable 5 seat adjudicated on the same brief.  Detector 242 -> 251 rows; three contract L4s; one
+8741-product-comment L4 (`dev_pcc2.c`, comment only -- no product logic changed); carrier: the floor includes the
+8742:single-axis generating set; `pcc2defaultkill` promoted to HIGH and ranked first.**
+8743-
+8744-## The two seats (`_scratchpad/panel_20260904_192830/`; durable copies in `regress/artifacts/pcc2widthkills/fixreview_20260904/`)
+8745-
+8746-The brief (`brief_fixreview.md`, 102 KB) inlined the committed fix diff (`b78bb0f`), the working-tree change,
+8747-the whole handler, the contract, clause (d), the chain's round titles with the pass-11 block, and the nine filed
+8748-pcc2 items, and asked five questions: is the FIX right, is any repair wrong, the ordered queue disposition, the
+--
+8839-   timer-semantics round; Astra: counts 0, 1, >= 2 at both labels), `pcc2latchwidth48` (the drop candidate).
+8840-
+8841-## The floor, adjudicated
+8842-
+8843:**Adopted: Fable's data-flow-state floor AUGMENTED BY grok's single-axis generating set** -- at each floor cell
+8844-every idata bit the body tests is written both clear and set -- because the bare state floor does not catch
+8845-`M_ICLR` (an idata-bit x state joint) and would grade it debt while the record grades it L2.  Multi-axis idata
+8846-joints stay clause-(e) debt.  **Astra dissents** for the Opus strength-t covering array and is recorded, not
+8847-adopted -- on two grounds the pass-13 Opus seat (the array's author) supplied in place of the one first written
+8848-here ("`t` is a judgment input": FALSE, `t` is the body's longest conjunction and is read off the code):
+8849-(i) COST -- TxICR has seven binary axes and a strength-4 array over them is tens of cells per arm, each a pty
+--
+8926-## The pass-13 panel (`_scratchpad/panel_20260905_021741/`, fired 02:17 alongside the pcc2defaultkill design panel; nine seats, agy deliberately not fired)
+8927-
+8928-| seat | transport | verdict | what it settled |
+8929-|---|---|---|---|
+8930:| **opus5** | Agent, reading (chose not to build: two panels' seats were on the machine) | **DO NOT CLOSE -- one more diff, the CLASS CLOSURE** | re-derived all eight part-13 scores from source, name for name; the repair reproduces its own class twice: **L2-a** the generating set is ONE-SIDED at the two new INT cells (only 0x0013 written -- IEN set only, ICLR clear only, 0xe0 clear only: six single-axis conjuncts escape 251/251 by construction); **L2-b** the INT axis was not crossed with the OTHER count ((T2, p2=0, INT set, p1>0) and mirror: reachable pure-state cells no row builds); **L4** F2 item 6's correction was itself false (`0x10 & ~0xf0 == 0`); the item-15 rejection reason was false (`t` is mechanical); the pre-table's "nothing reads after it" is true of readbacks only |
+8931-| **fable5** | Agent, reading | **GO / CLOSE with two L4s** | fix right, enumeration matches all twelve bodies, nine rows failable, eight measurements reproduce; L4s: the acc-all arithmetic; the contract's "clock.c not in this tree" (it is: clock.c:172/177/241/242 arm COC on both timers); the five HUH-arm cites one line off; credit Astra's COVF half.  Its "no partition held on one side only" checked partitions per ARM, not per CELL -- superseded by the three seats below |
+8932:| **codex / GPT-6 Astra (max)** | file-reading, pointer-fed (448 KB stream) | **NO-GO** | zero runtime defects in the twelve blocks and the helper; coverage: the two missing stable TxICR cells, the generating set completed consistently, the record corrected (stale "first of four wide writes" texts; "not constructible" overstates -- any of the seven reasserting arms sets INT, not only DEVICE_TICK; the working diff is comment + typedef, not comment-only; appended execution can change `alive`, which the rb4 rows also consult) |
+8933-| **grok** | file-reading (--prompt-file) | **not closed -- L1** | found the same two gaps independently ("a zero that does not list those is 'zero looked for'"), graded L1 on uncommitted detector material; the cheap repair named |
+8934-| **kimi (CLI)** | file-reading, 490 KB | **GO-WITH-CHANGES** | verified the tree, logs, guest source, md5s and mtimes; requires before commit: row or disclose the two other-count INT cells (found independently by the joint-reachability argument), refresh the stale row descriptions, fix the cites and the "beyond IEN" wording |
+
+ succeeded in 727ms:
+manifest counts: 297 {'GREEN(e)': 20, 'RED': 267, 'GREEN(eq)': 10}
+table counts: 297 red 267 full 30
+name-set difference: []
+prediction misses: []
+non117 denominators: []
+MKB entries: 60 MK_b8_ctl present: True
+BR entries: ['BR_acc_map0', 'BR_ann_gt8', 'BR_ge9', 'BR_no_hi32', 'BR_rd_drop0', 'BR_refuse_lt']
+unconditional single-bit B channel mismatches: []
+one-width B channels: {'MKW_sb05': ['sb'], 'MKW_sd40': ['sd'], 'MKW_sh12': ['sh'], 'MKW_sw09': ['sw']}
+raw row reconciliation errors: []
+MKB_03 B raw rows:
+  FAIL B refuse every single bit 2^3..2^7 (sb), PORT keeps 5 got=0x8                  want=0x5                  
+  FAIL B refuse every single bit 2^3..2^15 (sh), PORT keeps 5 got=0x8                  want=0x5                  
+  FAIL B refuse every single bit 2^3..2^31 (sw), PORT keeps 5 got=0x8                  want=0x5                  
+  FAIL B refuse every single bit 2^3..2^63 (sd), PORT keeps 5 got=0x8                  want=0x5                  
+MKB_31 B raw rows:
+  ok   B refuse every single bit 2^3..2^7 (sb), PORT keeps 5 got=0x5                  want=0x5                  
+  ok   B refuse every single bit 2^3..2^15 (sh), PORT keeps 5 got=0x5                  want=0x5                  
+  FAIL B refuse every single bit 2^3..2^31 (sw), PORT keeps 5 got=0xffffffff80000000   want=0x5                  
+  FAIL B refuse every single bit 2^3..2^63 (sd), PORT keeps 5 got=0xffffffff80000000   want=0x5                  
+CELL_keep_l0 B raw rows:
+  FAIL B refuse every single bit 2^3..2^7 (sb), PORT keeps 5 got=0x80                 want=0x5                  
+  FAIL B refuse every single bit 2^3..2^15 (sh), PORT keeps 5 got=0x8000               want=0x5                  
+  FAIL B refuse every single bit 2^3..2^31 (sw), PORT keeps 5 got=0xffffffff80000000   want=0x5                  
+  FAIL B refuse every single bit 2^3..2^63 (sd), PORT keeps 5 got=0x0                  want=0x5                  
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git show HEAD:CHANGELOG.md | Select-String -Pattern 'The body.s test is one relational|generating set is the three regions' -Context 3,6; Get-Content -Raw -LiteralPath 'regress\\artifacts\\fbctrlportkill_20260924\\gates_t6\\gate16.out'" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLines=Get-Content -LiteralPath '"'regress\\artifacts\\fbctrlportkill_20260924\\gates_t6\\fbctrl_port_probe.TESTED.py.txt'; foreach("'$taskRange in @(@(60,95),@(425,446),@(548,561),@(599,611))) { for($taskI=$taskRange[0]-1;$taskI -lt $taskRange[1];$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] } }; git ls-files --stage -- regress/fbctrl_port_probe.py regress/gate_mips_folds.sh src/devices/dev_fbctrl.c' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLines=Get-Content -LiteralPath '"'src\\core\\memory.c'; for("'$taskI=45;$taskI -lt 122;$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] }; $taskLines=Get-Content -LiteralPath '"'src\\core\\debugmsg.c'; for("'$taskI=263;$taskI -lt 392;$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] }; $taskLines=Get-Content -LiteralPath '"'regress\\artifacts\\fbctrlportkill_20260924\\opus549_measured\\close\\gen_close.py'; for("'$taskI=65;$taskI -lt 79;$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 293ms:
+  46: 
+  47: /*
+  48:  *  memory_readmax64():
+  49:  *
+  50:  *  Read at most 64 bits of data from a buffer.  Length is given by
+  51:  *  len, and the byte order by cpu->byte_order.
+  52:  *
+  53:  *  This function should not be called with cpu == NULL.
+  54:  */
+  55: uint64_t memory_readmax64(struct cpu *cpu, unsigned char *buf, int len)
+  56: {
+  57: 	int i, byte_order = cpu->byte_order;
+  58: 	uint64_t x = 0;
+  59: 
+  60: 	if (len & MEM_PCI_LITTLE_ENDIAN) {
+  61: 		len &= ~MEM_PCI_LITTLE_ENDIAN;
+  62: 		byte_order = EMUL_LITTLE_ENDIAN;
+  63: 	}
+  64: 
+  65: 	/*  Switch byte order for incoming data, if necessary:  */
+  66: 	if (byte_order == EMUL_BIG_ENDIAN)
+  67: 		for (i=0; i<len; i++) {
+  68: 			x <<= 8;
+  69: 			x |= buf[i];
+  70: 		}
+  71: 	else
+  72: 		for (i=len-1; i>=0; i--) {
+  73: 			x <<= 8;
+  74: 			x |= buf[i];
+  75: 		}
+  76: 
+  77: 	return x;
+  78: }
+  79: 
+  80: 
+  81: /*
+  82:  *  memory_writemax64():
+  83:  *
+  84:  *  Write at most 64 bits of data to a buffer.  Length is given by
+  85:  *  len, and the byte order by cpu->byte_order.
+  86:  *
+  87:  *  This function should not be called with cpu == NULL.
+  88:  */
+  89: void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len,
+  90: 	uint64_t data)
+  91: {
+  92: 	int i, byte_order = cpu->byte_order;
+  93: 
+  94: 	if (len & MEM_PCI_LITTLE_ENDIAN) {
+  95: 		len &= ~MEM_PCI_LITTLE_ENDIAN;
+  96: 		byte_order = EMUL_LITTLE_ENDIAN;
+  97: 	}
+  98: 
+  99: 	if (byte_order == EMUL_LITTLE_ENDIAN)
+ 100: 		for (i=0; i<len; i++) {
+ 101: 			buf[i] = data & 255;
+ 102: 			data >>= 8;
+ 103: 		}
+ 104: 	else
+ 105: 		for (i=0; i<len; i++) {
+ 106: 			buf[len - 1 - i] = data & 255;
+ 107: 			data >>= 8;
+ 108: 		}
+ 109: }
+ 110: 
+ 111: 
+ 112: /*
+ 113:  *  zeroed_alloc():
+ 114:  *
+ 115:  *  Allocates a block of memory using mmap(), and if that fails, try
+ 116:  *  malloc() + memset(). The returned memory block contains only zeroes.
+ 117:  */
+ 118: void *zeroed_alloc(size_t s)
+ 119: {
+ 120: 	void *p = mmap(NULL, s, PROT_READ | PROT_WRITE,
+ 121: 	    MAP_ANON | MAP_PRIVATE, -1, 0);
+ 122: 
+ 264: 			if (verbosity == VERBOSITY_ERROR)
+ 265: 				color_error(true);
+ 266: 			else
+ 267: 				color_normal();
+ 268: 		}
+ 269: 
+ 270: 		debug_currently_at_start_of_line = false;
+ 271: 
+ 272: 		if (!*s)
+ 273: 			break;
+ 274: 
+ 275: 		switch (*s) {
+ 276: 		case '\n':
+ 277: 			color_normal();
+ 278: 			if (show_decorations) {
+ 279: 				printf(" ]");
+ 280: 			}
+ 281: 
+ 282: 			debug_currently_at_start_of_line = true;
+ 283: 			printf("\n");
+ 284: 			break;
+ 285: 
+ 286: 		default:
+ 287: 			printf("%c", *s);
+ 288: 		}
+ 289: 
+ 290: 		s++;
+ 291: 	}
+ 292: 
+ 293: 	color_normal();
+ 294: 
+ 295: 	if (show_decorations)
+ 296: 		printf(" ]");
+ 297: 
+ 298: 	if (!debug_currently_at_start_of_line)
+ 299: 		printf("\n");
+ 300: }
+ 301: 
+ 302: 
+ 303: /*
+ 304:  *  debugmsg():
+ 305:  *
+ 306:  *  The main routine to call, when something should be printed.
+ 307:  */
+ 308: void debugmsg(int subsystem, const char *name,
+ 309: 	int verbosity_required, const char *fmt, ...)
+ 310: {
+ 311: 	va_list argp;
+ 312: 
+ 313: 	va_start(argp, fmt);
+ 314: 	debugmsg_va(NULL, subsystem, name, verbosity_required, argp, fmt);
+ 315: 	va_end(argp);
+ 316: }
+ 317: 
+ 318: 
+ 319: /*
+ 320:  *  debugmsg():
+ 321:  *
+ 322:  *  The main routine to call, when something should be printed and we are
+ 323:  *  in the context of a specific CPU.
+ 324:  */
+ 325: void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name,
+ 326: 	int verbosity_required, const char *fmt, ...)
+ 327: {
+ 328: 	va_list argp;
+ 329: 
+ 330: 	va_start(argp, fmt);
+ 331: 	debugmsg_va(cpu, subsystem, name, verbosity_required, argp, fmt);
+ 332: 	va_end(argp);
+ 333: }
+ 334: 
+ 335: 
+ 336: /*
+ 337:  *  debug_indentation():
+ 338:  *
+ 339:  *  Modify the debug indentation. diff should be +1 to increase, and -1 to
+ 340:  *  decrease after printing something.
+ 341:  *
+ 342:  *  This affects both the older debug() and fatal() functions, and the new
+ 343:  *  debugmsg/debugmsg_cpu() functions.
+ 344:  */
+ 345: void debug_indentation(int diff)
+ 346: {
+ 347: 	debug_indent += diff;
+ 348: 
+ 349: 	if ((ssize_t)debug_indent < 0) {
+ 350: 		fprintf(stderr, "WARNING: debug_indent too low!\n");
+ 351: 		debug_indent = 0;
+ 352: 	}
+ 353: }
+ 354: 
+ 355: 
+ 356: /*
+ 357:  *  debug() and fatal():
+ 358:  *
+ 359:  *  These are here because of all the legacy code that uses them. Basically,
+ 360:  *  debug() is mapped to something that is only displayed with verbosity
+ 361:  *  at the default level, and fatal() is used to always print stuff. With some
+ 362:  *  hacks to make it work reasonable with -q and when executing normally or
+ 363:  *  when executing single-stepping.
+ 364:  */
+ 365: void debug(const char *fmt, ...)
+ 366: {
+ 367: 	va_list argp;
+ 368: 	bool ss = single_step || about_to_enter_single_step;
+ 369: 	int v = verbose;
+ 370: 	if (emul_executing)
+ 371: 		v--;
+ 372: 	if (ss)
+ 373: 		v++;
+ 374: 
+ 375: 	if ((quiet_mode && !ss) || v < 0)
+ 376: 		return;
+ 377: 
+ 378: 	va_start(argp, fmt);
+ 379: 	va_debug(argp, fmt);
+ 380: 	va_end(argp);
+ 381: }
+ 382: 
+ 383: 
+ 384: void fatal(const char *fmt, ...)
+ 385: {
+ 386: 	va_list argp;
+ 387: 
+ 388: 	va_start(argp, fmt);
+ 389: 	va_debug(argp, fmt);
+ 390: 	va_end(argp);
+ 391: }
+ 392: 
+  66:      latch("!d->warned_port && d->current_port != 5")),
+  67:     ("S_ref_wp", "swap: the bound raised by the latch (8 accepted once latched)",
+  68:      pred("idata >= DEV_FBCTRL_NPORTS + d->warned_port")),
+  69:     ("S_rd_idata", "swap: a write of 0 is taken as a read (ignored)", rd("writeflag == MEM_READ || idata == 0")),
+  70:     ("S_ann_cp", "swap: announce only when the previous selector is non-zero",
+  71:      latch("!d->warned_port && d->current_port")),
+  72:     # ---- B: the contract's period boundary
+  73:     ("B_mod11", "boundary: the latch counts modulo 11 (re-announces on the 12th refusal) -- claimed caught",
+  74:      latch("!(d->warned_port++ % 11)")),
+  75:     ("B_mod12", "boundary: the latch counts modulo 12 (re-announces on the 13th) -- disclosed",
+  76:      latch("!(d->warned_port++ % 12)")),
+  77:     # ---- Q2: the R session's keeps-5 row
+  78:     ("R_state1", "R: the refusal stores 9 in R's second-refusal STATE (latched, port 5 = 0x2a) -- also P's 2nd refusal",
+  79:      [(LATCH_END, LATCH_END + "\t\t\tif (d->warned_port && d->port[DEV_FBCTRL_PORT_COLOR_R] == 0x2a && idata == 9)\n"
+
+ succeeded in 302ms:
+  60:      refusal had all of its bits from 3 up inside one of those ranges.
+  61: 
+  62: CONTRACT (clause e) -- AN ENUMERATION, NOT A LIST.
+  63: THE FLOOR.  The fixed PORT arm's body tests three things -- the access direction, the written value (`idata >=
+  64: DEV_FBCTRL_NPORTS`, on all 64 bits) and the latch (`!warned_port`) -- and it reads and writes `current_port`.  Every
+  65: cell of those is held: the value's magnitude, width and class, every bit the compare tests set alone at every width
+  66: (B), the latch unset and set, a read and a write.  The
+  67: previous selector (current_port's VALUE), the COMMAND cell and the data cells are NOT tested by the body -- the fix
+  68: makes no partition of them -- so an edit conditioned on one of them is coverage beyond the floor (clause e): the rows
+  69: hold the values listed below and claim nothing more.  For each EFFECT, each value listed is held by the session(s)
+  70: named, and the one-axis edit of every listed cell is measured red in
+  71: regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out (under an earlier edit's name where the generated text
+  72: was identical to it: table5/CELLMAP.out) -- except the read of selector 0, whose edit is EQUIVALENT (NOT CLAIMED
+  73: (4)).  This is the class closure: pass 2, the F2 pass, the closing pass and the closing F2 pass each found such an
+  74: edit on a value the rows had left empty, and the verifying pass found one on a range of bits (B).
+  75:   a refusal keeps the previous selector -- width sb sh sw sd (P, W, B); previous 0 (F), 1 (V), 2 3 (X), 4 (X4, Z), 5
+  76:       (P, W, Y, B), 6 (W, X6), 7 (P, V, X7); COMMAND 0 (P, B), 1 (Y), 2 (V); latch unset (the first refusal of P, F,
+  77:       V, W, X2-X7, Y and B -- Z's and R's first refusals are never read back) and set (the rest)
+  78:   the first refusal announces once -- width sw (P, V, F, Y, Z) sb (W, X6) sh (X2, X7) sd (X3, X4); previous 0 (F), 1
+  79:       (V), 2 (X2, Z), 3 4 6 7 (X), 5 (P, W, Y); COMMAND 0 (P, F, W, X, Z), 1 (Y), 2 (V); the first-refused value from 8
+  80:       (P, W) to all-ones (X4)
+  81:   the later refusals are silent -- width sb (P, V, B) sh (P, W, B) sw (P, V, W, R, Z, B) sd (P, V, W, Y, B); previous
+  82:       0-4 (Z), 5 (P, W, R, Y, B), 6 (W), 7 (P, V); COMMAND 0 (P, W, Z, B), 1 (Y), 2 (V, R); across PORT reads, a DATA
+  83:       write, a DATA read, a NOP and a GET_RESOLUTION (R), a SET_RESOLUTION (Y), accepted selectors, twelve refusals
+  84:       (P) and 108 (B)
+  85:   the announce names the refused value -- 0x8 (P), 0x9 (F, V, X2, X6, Y), 0x100 (X7), the wide 0x100000005 (X3),
+  86:       all-ones (X4): width sw (P, F, V, Y) sb (X6) sh (X2, X7) sd (X3, X4); previous 0 (F), 1 (V), 2 3 4 6 7 (X), 5 (P,
+  87:       Y); COMMAND 0 (P, F, X), 1 (Y), 2 (V)
+  88:   a PORT read returns the selector -- lb lh ld (W) and lw (every session but K); every selector 0-7 (A), though a
+  89:       read of selector 0 cannot tell a skipped load from a real one (odata starts at 0: NOT CLAIMED (4)); COMMAND 0
+  90:       (A), 1 (Y), 2 (V); latch unset (A) and set (P)
+  91:   a refusal leaves the cells alone -- all eight cells after refusals of 9, 16, 0x100000003 (sd), 0xff (sb) and 8 at
+  92:       previous selector 7 with COMMAND 2 (V); X1 after a refusal of 9 (sw) at previous 1 with COMMAND 2 (V); port 5's
+  93:       cell after a refused 9 (sw) at previous 5 with COMMAND 0 (K); COMMAND itself after a refused 0x100000003 (sd) at
+  94:       previous 5 with COMMAND 1 (Y -- its second refusal only: the SET_RESOLUTION before it rewrites COMMAND, so a
+  95:       write by the first refusal would be overwritten before the read) -- and no other cell, width, selector or
+ 425:         PROG_P.append(("sw", "a0", 0, None))                   # a fresh PORT=5 before every later refusal
+ 426:     PROG_P.append((w, r, 0, "r%d" % k))
+ 427:     PROG_P.append(("lw", READ_P[k], 0, None))
+ 428: for w, r, rb, _n in EXTRA:
+ 429:     PROG_P += [("sw", "a0", 0, None), (w, r, 0, None), ("lw", rb, 0, None)]
+ 430: PROG_P += [("sw", "a2", 0, None), ("sw", "t1", 0, "r11"), ("lw", "v1", 0, None)]
+ 431: READS_P = READ_P + [e[2] for e in EXTRA] + ["v1"]
+ 432: 
+ 433: #  R: between two refusals, a PORT read, a DATA write, a NOP command, a DATA READ and a GET_RESOLUTION -- every kind of
+ 434: #  traffic a guest makes except SET_RESOLUTION -- in its own session.
+ 435: PROG_R = [("sw", "a0", 0, None), ("sw", "t1", 0, "ra"), ("lw", "s0", 0, None),
+ 436:           ("sw", "a1", 16, None),                                        # DATA write: port 5 = 0x2a
+ 437:           ("sw", "zr", 0, None), ("sw", "zr", 16, None),                 # PORT=0, DATA=0: a NOP command
+ 438:           ("sw", "a0", 0, None), ("lw", "s2", 16, None),                 # PORT=5, DATA READ
+ 439:           ("sw", "zr", 0, None), ("sw", "s3", 16, None),                 # PORT=0, DATA=2: GET_RESOLUTION
+ 440:           ("sw", "a0", 0, None), ("sw", "t1", 0, "rb"), ("lw", "s1", 0, None)]
+ 441: REGS_R = [("t0", FBCTRL), ("a0", 5), ("a1", 0x2a), ("t1", 9), ("s3", 2), ("s0", 0xdead), ("s1", 0xdead),
+ 442:           ("s2", 0xdead)]
+ 443: 
+ 444: PROG_K = [("sw", "t1", 0, None), ("sw", "t3", 16, None), ("sw", "t2", 0, None), ("lw", "s0", 16, None),
+ 445:           ("sw", "t4", 16, None), ("sw", "t1", 0, None), ("lw", "s1", 16, None)]
+ 446: REGS_K = [("t0", FBCTRL), ("t1", 5), ("t3", 0x2a), ("t2", 9), ("t4", 0x77), ("s0", 0xdead), ("s1", 0xdead)]
+ 548: 
+ 549: def main():
+ 550:     stub = stub_path()
+ 551:     try:
+ 552:         C = session("C", PROG_C, REGS_C, ["t4", "t5", "s2", "s3"], stub)
+ 553:         A = session("A", PROG_A, REGS_A, READS_A, stub)
+ 554:         P = session("P", PROG_P, REGS_P, READS_P, stub)
+ 555:         R = session("R", PROG_R, REGS_R, ["s1"], stub)
+ 556:         K = session("K", PROG_K, REGS_K, ["s0", "s1"], stub)
+ 557:         F = session("F", PROG_F, REGS_F, ["t2"], stub, free_run=True)
+ 558:         V = session("V", PROG_V, REGS_V, READS_V, stub)
+ 559:         W = session("W", PROG_W, REGS_W, READS_W, stub)
+ 560:         Y = session("Y", PROG_Y, REGS_Y, ["s0", "s1", "s2"], stub)
+ 561:         Z = session("Z", PROG_Z, REGS_Z, ["s0"], stub)
+ 599:     row("refuse 9 after PORT=7, PORT keeps 7", hx(P["vals"].get("v1")), "0x7")
+ 600:     row("announce: exactly 1 right after the FIRST refusal", P["once_after"].get("r0"), 1)
+ 601:     row("announce: still exactly 1 after twelve refusals", P["once_after"].get("r11"), 1)
+ 602:     row("announce names the first refused value, 0x8", first_val(P), "0x8")
+ 603:     print("RE-ARM (session R: %s %d/%d)" % (R["status"], R["steps"], R["n"]))
+ 604:     row("R announce still 1 after DATA, NOP and GET_RESOLUTION", R["once_after"].get("rb"), 1)
+ 605:     row("R refuse 9 after that traffic, PORT keeps 5", hx(R["vals"].get("s1")), "0x5")
+ 606:     print("THE WITNESS PAIR (session K)")
+ 607:     row("K survives DATA after a refused PORT write", "%s %d/%d" % (K["status"], K["steps"], K["n"]),
+ 608:         "SURVIVED %d/%d" % (len(PROG_K), len(PROG_K)))
+ 609:     row("K DATA read after the refusal is port 5's", hx(K["vals"].get("s0")), "0x2a")
+ 610:     row("K DATA write after the refusal lands in port 5", hx(K["vals"].get("s1")), "0x77")
+ 611:     print("FREE-RUNNING (session F)")
+100644 502748502500e40dcf212f15000fa0f6ab152f62 0	regress/fbctrl_port_probe.py
+100644 038c46fabfb06d9ee3393b4ae7e03c8d6be90ad0 0	regress/gate_mips_folds.sh
+100644 eab10df88821943647f3710d33694079ad3113e0 0	src/devices/dev_fbctrl.c
+
+ succeeded in 798ms:
+
+  it for DEPENDS-ON to enumerate, and a guard a mutant ADDS there is clause (e)); minimax's pass-2 view that the timer 
+pin was "documented, not a covert
+  floor" -- overruled, the four-timer run being this round's measured claim; and the Opus seat's own counter-argument
+  that the window mutant `P_win` should be graded like `==` -- answered by the flagship seat on the GENERATING SET, not
+> on the consequence.  The body's test is one relational operator, whose generating set is the three regions its
+  neighbours differ on: below, at and past the bound.  `==` is an operator substitution that exempts the PAST region, a
+  generating-set cell `#442` never rowed -- L2.  `P_win` adds a second boundary at a constant the body never tests, the
+  `&& idata != k` shape the carrier grades clause (e).  Grading by consequence would make `M_zge`, `M_neqB` and 
+`M_upskip`
+  L2 as well -- deepseek's position -- so the two rulings stand or fall together.
+  
+  **FILED** (OUTSTANDING_BUGS 2026-09-24): `fbbounddebt` (MED -- first the window `P_win`, whose closure owes the
+############################################################
+## GATE: gate 16: MIPS fold witness (#388)
+############################################################
+  ok   fbctrl probe output parses                           yes
+  ok   fbctrl probe controls                                OK
+  ok   fbctrl probe exit 0 (nonzero: a crash or a red row)  0
+  ok   fbctrl_port rows run                                 117
+  ok   fbctrl_port rows correct                             117
+  ok   fbctrl_port rows failed                              0
+  ok   fbctrl_port rows emitted match the trailer total     117
+  ok   fbctrl_port ok rows match the trailer count          117
+  ok   fbctrl_port row names are unique                     0
+  ok   fold probe completed (result line present)           yes
+       bne_nop_3max             install=1/1 fire=4/4 ok
+       bne_nop_tm64             install=1/1 fire=4/4 ok
+       lui_ori_3max             install=1/1 fire=4/4 ok
+       mlw2_le_3max             install=1/1 fire=4/4 ok
+       mlw2v0_le_3max           got=0xbadcafe want=0xbadcafe ok
+       mlw2v1_le_3max           got=0xdeadbeef want=0xdeadbeef ok
+       mlw2_be_tm64             install=1/1 fire=4/4 ok
+       mlw2v0_be_tm64           got=0xbadcafe want=0xbadcafe ok
+       mlw2v1_be_tm64           got=0xffffffffdeadbeef want=0xffffffffdeadbeef ok
+       mlw2_be_tm32             install=1/1 fire=4/4 ok
+       mlw2v0_be_tm32           got=0xbadcafe want=0xbadcafe ok
+       mlw2v1_be_tm32           got=0xdeadbeef want=0xdeadbeef ok
+       mlw2_dev_tm64            install=1/1 fire=0/0 ok
+       memset_3max              install=1/1 fire=1/1 ok
+  ok     fold row: bne_nop_3max                             1
+  ok     fold row: bne_nop_tm64                             1
+  ok     fold row: lui_ori_3max                             1
+  ok     fold row: mlw2_le_3max                             1
+  ok     fold row: mlw2v0_le_3max                           1
+  ok     fold row: mlw2v1_le_3max                           1
+  ok     fold row: mlw2_be_tm64                             1
+  ok     fold row: mlw2v0_be_tm64                           1
+  ok     fold row: mlw2v1_be_tm64                           1
+  ok     fold row: mlw2_be_tm32                             1
+  ok     fold row: mlw2v0_be_tm32                           1
+  ok     fold row: mlw2v1_be_tm32                           1
+  ok     fold row: mlw2_dev_tm64                            1
+  ok     fold row: memset_3max                              1
+  ok   fold probe control (parse liveness)                  OK
+  ok   fold rows correct                                    14/14
+
+gate 16: MIPS fold witness (#388): PASS (26 checks)
+GATE16_RC=0 WALL=17s
+GATES549T6_DONE
+
+
+
+
+codex
+The archived table reconciles: 297 edits, 267 red, 30 at full score, with matching row counts in all 297 logs. A static walk also found 60 distinct refused values tested at only one prior selector, which broadens D2’s documentation debt. Replacing B’s last anchor would move part of that gap rather than close it.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -g '*mips*' 'swl|swr|sdl|sdr' src/cpus | Select-Object -First 45; rg -n -A 57 -B 3 '"'^static void va_debug|''^void va_debug'"' src/core/debugmsg.c; rg -n 'setbuf\\(stdout|setvbuf\\(stdout|fflush\\(stdout' src/core/main.c src/core/debugger.c src/core/console.c" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import ast,hashlib
+from pathlib import Path
+r=Path('.')
+for f in ['src/devices/dev_fbctrl.c','regress/fbctrl_port_probe.py','regress/artifacts/fbctrlportkill_20260924/gates_t6/fbctrl_port_probe.TESTED.py.txt']:
+    p=r/f; print(f,hashlib.md5(p.read_bytes()).hexdigest())
+a=ast.parse((r/'regress/fbctrl_port_probe.py').read_text()); b=ast.parse((r/'regress/artifacts/fbctrlportkill_20260924/gates_t6/fbctrl_port_probe.TESTED.py.txt').read_text()); print('implementation matches frozen v6:',ast.dump(ast.Module(a.body[1:],type_ignores=[]))==ast.dump(ast.Module(b.body[1:],type_ignores=[])))
+missing=set(range(3,64))-{3,8,32}
+print('D1 missing count:',len(missing),'carryable by sw:',len([k for k in missing if k<32]),'truncated by sw:',len([k for k in missing if k>=32]))
+# The four B groups before and after replacing only the last anchor.
+original={k:{5} for k in range(3,64)}
+for k in [3,4,8]: original[k].add(7)
+replacement={k:({5,7} if k<32 or k in (33,63) else {7}) for k in range(3,64)}
+print('B last-anchor replacement retains only anchor 7 at bits:',[k for k,a in replacement.items() if a=={7}])
+'@ | python -B -" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ exited 1 in 250ms:
+src/cpus\cpu_mips_instr.c:3226:X(swl) { mips_unaligned_loadstore(cpu, ic, 1, sizeof(uint32_t), 1); }
+src/cpus\cpu_mips_instr.c:3227:X(swr) { mips_unaligned_loadstore(cpu, ic, 0, sizeof(uint32_t), 1); }
+src/cpus\cpu_mips_instr.c:3228:X(sdl) { mips_unaligned_loadstore(cpu, ic, 1, sizeof(uint64_t), 1); }
+src/cpus\cpu_mips_instr.c:3229:X(sdr) { mips_unaligned_loadstore(cpu, ic, 0, sizeof(uint64_t), 1); }
+src/cpus\cpu_mips_instr.c:5508:		case HI6_SWL: ic->f = instr(swl); store = 1; break;
+src/cpus\cpu_mips_instr.c:5509:		case HI6_SWR: ic->f = instr(swr); store = 1; break;
+src/cpus\cpu_mips_instr.c:5510:		case HI6_SDL: ic->f = instr(sdl); store = 1; x64 = 1; break;
+src/cpus\cpu_mips_instr.c:5511:		case HI6_SDR: ic->f = instr(sdr); store = 1; x64 = 1; break;
+115- *
+116- *  Used internally by the old debug() and fatal() functions.
+117- */
+118:static void va_debug(va_list argp, const char *fmt)
+119-{
+120-	char buf[DEBUG_BUFSIZE + 1];
+121-	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+122-	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+123-
+124-	char* s = buf;
+125-	while (*s) {
+126-		if (debug_old_currently_at_start_of_line) {
+127-			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+128-				printf(" ");
+129-		}
+130-
+131-		printf("%c", *s);
+132-
+133-		debug_old_currently_at_start_of_line = false;
+134-		if (*s == '\n' || *s == '\r')
+135-			debug_old_currently_at_start_of_line = true;
+136-		s++;
+137-	}
+138-}
+139-
+140-
+141-/*
+142- *  debugmsg_va():
+143- *
+144- *  Used internally by debugmsg().
+145- */
+146-static void debugmsg_va(struct cpu* cpu, int subsystem,
+147-	const char *name, int verbosity, va_list argp, const char *fmt)
+148-{
+149-	bool subsystem_breakpoint = false;
+150-
+151-	/*
+152-	 *  #261: opt-in global break on any ERROR-level message (covers every
+153-	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+154-	 *  was set). Default off = single false test = no-op.
+155-	 */
+156-	bool do_bp = (debugmsg_n_breakpoints > 0 &&
+157-	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+158-	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+159-	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+160-		do_bp = true;
+161-
+162-	if (do_bp) {
+163-		/*
+164-		 *  This message triggers a breakpoint on subsystem messages:
+165-		 *  make sure the message itself is shown (even if the current
+166-		 *  verbosity setting would have suppressed it), and request
+167-		 *  entry into the interactive debugger. The debugger is
+168-		 *  entered after the current instruction batch, using the
+169-		 *  same mechanism as normal breakpoints.
+170-		 */
+171-		subsystem_breakpoint = true;
+172-
+173-		if (!single_step && !about_to_enter_single_step) {
+174-			fatal("[ subsystem breakpoint: %s ]\n",
+175-			    debugmsg_subsystem_name[subsystem][0] != '\0'
+rg: src/core/debugger.c: The system cannot find the file specified. (os error 2)
+rg: src/core/console.c: The system cannot find the file specified. (os error 2)
+
+ succeeded in 294ms:
+src/devices/dev_fbctrl.c 129694b8e77b369f8f667500999f2bca
+regress/fbctrl_port_probe.py 543b59fa7e37229c71780de4f9b31e9b
+regress/artifacts/fbctrlportkill_20260924/gates_t6/fbctrl_port_probe.TESTED.py.txt a9a2be3d66d372454704bac665a7b575
+implementation matches frozen v6: True
+D1 missing count: 58 carryable by sw: 27 truncated by sw: 31
+B last-anchor replacement retains only anchor 7 at bits: [32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 170 -B 3 '"'^void mips_unaligned_loadstore|''^static void mips_unaligned_loadstore|''^int mips_unaligned_loadstore'"' src/cpus/cpu_mips_instr.c; rg -n 'setbuf\\(|setvbuf\\(|fflush\\(stdout|fflush\\(NULL' src/core src/debugger src/console" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLines=Get-Content -LiteralPath '"'regress\\fbctrl_port_probe.py'; for("'$taskI=61;$taskI -lt 80;$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 145ms:
+src/console\console.c:511:		fflush(stdout);
+src/console\console.c:648:			fflush(stdout);
+src/debugger\debugger.c:153:		fflush(stdout);
+src/debugger\debugger.c:383:	fflush(stdout);
+src/debugger\debugger.c:436:			fflush(stdout);
+src/debugger\debugger.c:556:			fflush(stdout);
+src/debugger\debugger.c:723:		fflush(stdout);
+src/debugger\debugger_cmds.c:2183:			printf("-- more --"); fflush(stdout);
+src/debugger\debugger_cmds.c:2202:		printf("-- more --"); fflush(stdout);
+src/core\timer.c:297:	printf("T"); fflush(stdout);
+src/core\timer.c:380:	printf((char *) extra); fflush(stdout);
+
+ succeeded in 189ms:
+  62: CONTRACT (clause e) -- AN ENUMERATION, NOT A LIST.
+  63: THE FLOOR.  The fixed PORT arm's body tests three things -- the access direction, the written value (`idata >=
+  64: DEV_FBCTRL_NPORTS`, on all 64 bits) and the latch (`!warned_port`) -- and it reads and writes `current_port`.  Every
+  65: cell of those is held -- the value's magnitude below, at and past the bound (the relational compare's generating set),
+  66: its width and class, the latch unset and set, a read and a write: that is the FLOOR.  Session B ALSO holds every bit
+  67: the compare tests set alone at every width that can carry it -- MARGINAL coverage this contract claims above the
+  68: floor, since a single bit of a relationally compared value is not a floor cell (#548's P_win; #549's D1).  The
+  69: previous selector (current_port's VALUE), the COMMAND cell and the data cells are NOT tested by the body -- the fix
+  70: makes no partition of them -- so an edit conditioned on one of them is coverage beyond the floor (clause e): the rows
+  71: hold the values listed below and claim nothing more.  For each EFFECT, each value listed is held by the session(s)
+  72: named, and the one-axis edit of every listed cell is measured red in
+  73: regress/artifacts/fbctrlportkill_20260924/table6/TABLE.out (under an earlier edit's name where the generated text
+  74: was identical to it: table5/CELLMAP.out) -- except the read of selector 0, whose edit is EQUIVALENT (NOT CLAIMED
+  75: (4)).  This is the class closure: pass 2, the F2 pass, the closing pass and the closing F2 pass each found such an
+  76: edit on a value the rows had left empty, and the verifying pass found one on a range of bits (B).
+  77:   a refusal keeps the previous selector -- width sb sh sw sd (P, W, B); previous 0 (F), 1 (V), 2 3 (X), 4 (X4, Z), 5
+  78:       (P, W, Y, B), 6 (W, X6), 7 (P, V, X7); COMMAND 0 (P, B), 1 (Y), 2 (V); latch unset (the first refusal of P, F,
+  79:       V, W, X2, X3, X4, X6, X7, Y and B -- Z's and R's first refusals are never read back) and set (the rest)
+  80:   the first refusal announces once -- width sw (P, V, F, Y, Z) sb (W, X6) sh (X2, X7) sd (X3, X4); previous 0 (F), 1
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 165 -B 6 '"'^mips_unaligned_loadstore|mips_unaligned_loadstore'"\\(struct' src/cpus/cpu_mips_instr.c" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLines=Get-Content -LiteralPath '"'src\\debugger\\debugger.c'; for("'$taskI=358;$taskI -lt 391;$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] }; rg -n -B 6 -A 8 '"'GXemul>' src/debugger/debugger.c" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ exited 1 in 115ms:
+ succeeded in 194ms:
+ 359: 		cmds[i_match].f(debugger_machine, p);
+ 360: 	} else
+ 361: 		printf("FATAL ERROR: internal error in debugger.c:"
+ 362: 		    " no handler for this command?\n");
+ 363: }
+ 364: 
+ 365: 
+ 366: /*
+ 367:  *  debugger_readline():
+ 368:  *
+ 369:  *  Read a line from the terminal.
+ 370:  */
+ 371: static char *debugger_readline(void)
+ 372: {
+ 373: 	int ch, i, j, n, i_match, reallen, cmd_len, cursor_pos;
+ 374: 	int read_from_index = last_cmd_index;
+ 375: 	char *cmd = last_cmd[last_cmd_index];
+ 376: 
+ 377: 	cmd_len = 0; cmd[0] = '\0';
+ 378: 
+ 379: 	color_prompt();
+ 380: 	printf("GXemul> ");
+ 381: 	color_normal();
+ 382: 
+ 383: 	fflush(stdout);
+ 384: 
+ 385: 	ch = '\0';
+ 386: 	cmd_len = 0;
+ 387: 	cursor_pos = 0;
+ 388: 
+ 389: 	while (ch != '\n' && !exit_debugger) {
+ 390: 		ch = debugger_readchar();
+ 391: 
+374-	int read_from_index = last_cmd_index;
+375-	char *cmd = last_cmd[last_cmd_index];
+376-
+377-	cmd_len = 0; cmd[0] = '\0';
+378-
+379-	color_prompt();
+380:	printf("GXemul> ");
+381-	color_normal();
+382-
+383-	fflush(stdout);
+384-
+385-	ch = '\0';
+386-	cmd_len = 0;
+387-	cursor_pos = 0;
+388-
+--
+428-		} else if (ch == 3) {
+429-			/*  CTRL-C: Abort the current line.  */
+430-			cmd_len = 0; cmd[0] = '\0'; cursor_pos = 0;
+431-			color_normal();
+432-			printf("\n");
+433-			color_prompt();
+434:			printf("GXemul> ");
+435-			color_normal();
+436-			fflush(stdout);
+437-		} else if (ch == 5) {
+438-			/*  CTRL-E: End of line.  */
+439-			while (cursor_pos < cmd_len) {
+440-				printf("%c", cmd[cursor_pos]);
+441-				cursor_pos ++;
+442-			}
+--
+541-					    breakpoints.ignore_left[i]);
+542-				debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO,
+543-				    "%s", bpinfo);
+544-			}
+545-
+546-			color_prompt();
+547:			printf("GXemul> ");
+548-			color_normal();
+549-
+550-			// Reprint all chars, then backspace if cursor_pos is less than cmd_len.
+551-			for (i = 0; i < cmd_len; ++i)
+552-				printf("%c", cmd[i]);
+553-			for (i = 0; i < cmd_len - cursor_pos; ++i)
+554-				printf("\b");
+555-
+--
+659-					}
+660-					i++;
+661-				}
+662-				if (j != 0)
+663-					printf("\n");
+664-				color_prompt();
+665:				printf("GXemul> ");
+666-				color_normal();
+667-				for (i=0; i<cmd_len; i++)
+668-					printf("%c", cmd[i]);
+669-			}
+670-		} else if (ch == 27) {
+671-			/*  Escape codes: (cursor keys etc)  */
+672-			while ((ch = console_readchar(MAIN_CONSOLE)) < 0)
+673-				usleep(10000);
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'mips_unaligned_loadstore' src" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 103ms:
+src\include\cpu_mips.h:411:void mips_unaligned_loadstore(struct cpu *cpu, struct mips_instr_call *ic, 
+src\cpus\cpu_mips_instr.c:3222:X(lwl) { mips_unaligned_loadstore(cpu, ic, 1, sizeof(uint32_t), 0); }
+src\cpus\cpu_mips_instr.c:3223:X(lwr) { mips_unaligned_loadstore(cpu, ic, 0, sizeof(uint32_t), 0); }
+src\cpus\cpu_mips_instr.c:3224:X(ldl) { mips_unaligned_loadstore(cpu, ic, 1, sizeof(uint64_t), 0); }
+src\cpus\cpu_mips_instr.c:3225:X(ldr) { mips_unaligned_loadstore(cpu, ic, 0, sizeof(uint64_t), 0); }
+src\cpus\cpu_mips_instr.c:3226:X(swl) { mips_unaligned_loadstore(cpu, ic, 1, sizeof(uint32_t), 1); }
+src\cpus\cpu_mips_instr.c:3227:X(swr) { mips_unaligned_loadstore(cpu, ic, 0, sizeof(uint32_t), 1); }
+src\cpus\cpu_mips_instr.c:3228:X(sdl) { mips_unaligned_loadstore(cpu, ic, 1, sizeof(uint64_t), 1); }
+src\cpus\cpu_mips_instr.c:3229:X(sdr) { mips_unaligned_loadstore(cpu, ic, 0, sizeof(uint64_t), 1); }
+src\cpus\cpu_mips_instr_unaligned.c:44:void mips_unaligned_loadstore(struct cpu *cpu, struct mips_instr_call *ic,
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLines=Get-Content -LiteralPath '"'src\\cpus\\cpu_mips_instr_unaligned.c'; for("'$taskI=42;$taskI -lt $taskLines.Count;$taskI++) { '"'{0,4}: {1}' -f ("'$taskI+1),$taskLines[$taskI] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 169ms:
+  43: 
+  44: void mips_unaligned_loadstore(struct cpu *cpu, struct mips_instr_call *ic,
+  45: 	int is_left, int wlen, int store)
+  46: {
+  47: 	/*  For L (Left):   address is the most significant byte  */
+  48: 	/*  For R (Right):  address is the least significant byte  */
+  49: 	uint64_t addr = *((uint64_t *)ic->arg[1]) + (int32_t)ic->arg[2];
+  50: 	int i, dir, reg_dir, reg_ofs, ok;
+  51: 	uint64_t result_value, tmpaddr;
+  52: 	uint64_t aligned_addr = addr & ~(wlen-1);
+  53: 	unsigned char aligned_word[8], databyte;
+  54: 
+  55: 	int low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+  56: 	    / sizeof(struct mips_instr_call);
+  57: 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)
+  58: 	    << MIPS_INSTR_ALIGNMENT_SHIFT);
+  59: 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
+  60: 
+  61: 	dir = 1;		/*  big endian, Left  */
+  62: 	reg_dir = -1;
+  63: 	reg_ofs = wlen - 1;	/*  byte offset in the register  */
+  64: 	if (!is_left) {
+  65: 		dir = -dir;
+  66: 		reg_ofs = 0;
+  67: 		reg_dir = 1;
+  68: 	}
+  69: 
+  70: 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+  71: 		dir = -dir;
+  72: 
+  73: 	result_value = *((uint64_t *)ic->arg[0]);
+  74: 
+  75: 	if (cpu->is_32bit) {
+  76: 		result_value = (int32_t)result_value;
+  77: 		aligned_addr = (int32_t)aligned_addr;
+  78: 		addr = (int32_t)addr;
+  79: 	}
+  80: 
+  81: 	if (store) {
+  82: 		/*  Store:  */
+  83: 		uint64_t oldpc = cpu->pc;
+  84: 
+  85: 		/*
+  86: 		 *  NOTE (this is ugly): The memory_rw()
+  87: 		 *  call generates a TLBL exception, if there
+  88: 		 *  is a tlb refill exception. However, since
+  89: 		 *  this is a Store, the exception is converted
+  90: 		 *  to a TLBS:
+  91: 		 */
+  92: 		ok = cpu->memory_rw(cpu, cpu->mem, aligned_addr,
+  93: 		    &aligned_word[0], wlen, MEM_READ, CACHE_DATA);
+  94: 		if (!ok) {
+  95: 			if (cpu->pc != oldpc) {
+  96: 				/*  #227: (Codex/Fable/agy) the pre-read is a MEM_READ so it
+  97: 				    raised a LOAD-side exception; this is a store -> map only
+  98: 				    the load codes to their store counterparts (TLBL->TLBS,
+  99: 				    AdEL->AdES) and leave the rest (DBE is shared load/store;
+ 100: 				    Mod can't come from a read).  */
+ 101: 				int exc = (cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
+ 102: 				    & CAUSE_EXCCODE_MASK) >> CAUSE_EXCCODE_SHIFT;
+ 103: 				if (exc == EXCEPTION_TLBL)
+ 104: 					exc = EXCEPTION_TLBS;
+ 105: 				else if (exc == EXCEPTION_ADEL)
+ 106: 					exc = EXCEPTION_ADES;
+ 107: 				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] =
+ 108: 				    (cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
+ 109: 				    & ~CAUSE_EXCCODE_MASK) | (exc << CAUSE_EXCCODE_SHIFT);
+ 110: 			}
+ 111: 			return;
+ 112: 		}
+ 113: 
+ 114: 		for (i=0; i<wlen; i++) {
+ 115: 			tmpaddr = addr + i*dir;
+ 116: 			/*  Have we moved into another word/dword? Then stop: */
+ 117: 			if ( (tmpaddr & ~(wlen-1)) != (addr & ~(wlen-1)) )
+ 118: 				break;
+ 119: 
+ 120: 			/*  debug("unaligned byte at %016"PRIx64",
+ 121: 			    reg_ofs=%i reg=0x%016"PRIx64"\n",
+ 122: 			    tmpaddr, reg_ofs, (long long)result_value);  */
+ 123: 
+ 124: 			/*  Store one byte:  */
+ 125: 			aligned_word[tmpaddr & (wlen-1)] =
+ 126: 			    (result_value >> (reg_ofs * 8)) & 255;
+ 127: 
+ 128: 			reg_ofs += reg_dir;
+ 129: 		}
+ 130: 
+ 131: 		ok = cpu->memory_rw(cpu, cpu->mem,
+ 132: 		    aligned_addr, &aligned_word[0], wlen,
+ 133: 		    MEM_WRITE, CACHE_DATA);
+ 134: 
+ 135: 		return;
+ 136: 	}
+ 137: 
+ 138: 	/*  Load:  */
+ 139: 	ok = cpu->memory_rw(cpu, cpu->mem, aligned_addr, &aligned_word[0], wlen,
+ 140: 	    MEM_READ, CACHE_DATA);
+ 141: 	if (!ok)
+ 142: 		return;
+ 143: 
+ 144: 	for (i=0; i<wlen; i++) {
+ 145: 		tmpaddr = addr + i*dir;
+ 146: 		/*  Have we moved into another word/dword? Then stop: */
+ 147: 		if ( (tmpaddr & ~(wlen-1)) != (addr & ~(wlen-1)) )
+ 148: 			break;
+ 149: 
+ 150: 		/*  debug("unaligned byte at %016"PRIx64", reg_ofs=%i reg="
+ 151: 		    "0x%016"PRIx64"\n", (uint64_t) tmpaddr,
+ 152: 		    reg_ofs, (uint64_t)result_value); */
+ 153: 
+ 154: 		/*  Load one byte:  */
+ 155: 		databyte = aligned_word[tmpaddr & (wlen-1)];
+ 156: 		result_value &= ~((uint64_t)0xff << (reg_ofs * 8));
+ 157: 		result_value |= (uint64_t)databyte << (reg_ofs * 8);
+ 158: 
+ 159: 		reg_ofs += reg_dir;
+ 160: 	}
+ 161: 
+ 162: 	/*  Sign extend for 32-bit load lefts:  */
+ 163: 	if (!store && wlen == sizeof(uint32_t))
+ 164: 		result_value = (int32_t)result_value;
+ 165: 
+ 166: 	(*(uint64_t *)ic->arg[0]) = result_value;
+ 167: }
+ 168: 
+
+codex
+VERDICT: SHIP
+
+1. **N1 / D1 — OVERTURN the FLOOR disposition.** The coverage gap exists, but the floor crosses the latch with the body’s tested partitions. A relational comparison’s generating set is below/at/past its bound; it does not automatically require every bit crossed with the latch.
+2. **N2 — UPHOLD.** Low-bit value classes need explicit disclosure; the body does not partition them.
+3. **N3 — REFINE.** The narrowing results agree with the archived table. `len == 3` is excluded by the cited MIPS access paths, rather than expressly disclosed by (0)–(8); even the partial-store implementation transfers complete words.
+4. **N4 — REFINE.** Broaden the accept-side disclosure, but reject “each reinstates the DATA-arm exit”: truncation can instead select a valid port silently.
+5. **N5 — REFINE.** The (0) classification is sound. The retained DATA check does not bound every consequence: it cannot detect an incorrect selector that remains in range.
+6. **N6 — REFINE.** The historical stale-premise correction is supported. Today’s probe header has further changes, although its executable AST still matches frozen v6.
+7. **N7 — REFINE.** Separate unconditional narrowings from width-conditioned narrowings. Other sessions detect a bit when it is **decisive**, not merely present in the written value.
+8. **N8 — UPHOLD.** There are **60 `MKB_*` entries plus `MK_b8_ctl` = 61** individual-bit cases.
+9. **N9 — UPHOLD.** With announcements at refusals 1 and \(1+m\), period 107 is detected at refusal 108; period 108 is not.
+10. **N10 — UPHOLD.** Disassembly checks encoding, not execution. The mutation channels provide calibration evidence for the doubling sequence; they are not an independent execution check on every future run.
+11. **N11 — UPHOLD.** “Every width that can carry it” is the correct qualification.
+12. **N12 — UPHOLD.** The actual sessions are X2, X3, X4, X6 and X7. Spell them out.
+13. **N13 — REFINE.** Count sampling is supported by synchronous output followed by the debugger’s explicit `fflush(stdout)`. “Unbuffered because it uses a pty” is unnecessary and unsupported.
+14. **N14 — REFINE.** Uphold the classification using the complete floor rule, rather than merely the breadth of (0). The tripwire qualification in N5 applies here too.
+15. **N15 — UPHOLD.** Six distinct `BR_*` entries exist: `acc_map0`, `ann_gt8`, `ge9`, `no_hi32`, `rd_drop0`, `refuse_lt`.
+16. **N16 — REFINE.** The last stored value identifies the bit through **31**, not just 30, for this comparison-narrowing family. Bit 31 prints as `0xffffffff80000000`.
+17. **N17 — REFINE; SETTLED.** The cells-alone exclusivity holds. R overwrites port 5 before its DATA read, and that read’s destination `s2` is never exported or asserted. R checks only `s1`. See [R’s program and observations](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:469).
+18. **N18 — UPHOLD.** The executable v6 probe and gate’s 117 pin agree and must travel together.
+19. **N19 — UPHOLD.** The omitted addendum matters: reading it exposes incorrect channel predictions that the overall RED/GREEN totals conceal.
+20. **N20 — OVERTURN.** Following a refusal, the DATA operations without an intervening selector write are **K’s read, K’s write and R’s write**. R re-selects port 5 before its DATA read.
+21. **N21 / D2 — REFINE.** The observation ambiguity is real and deserves explicit disclosure. Being one-axis does not itself make this value-conditioned effect a floor obligation. Replacing one anchor does not close the general class.
+22. **N22 — UPHOLD.** Thirteen is correct: seven original equivalents—three accepted-store forms, field order, read mask, skipped zero load, nonzero latch—plus six additional forms—three bounds, direction, latch test and nonzero-`idata` requirement.
+23. **N23 — REFINE.** Uphold the four channel corrections. Reject the parenthetical endorsement of “more than 108”; it contradicts the valid N9 correction.
+24. **N24 — UPHOLD.** The raw logs distinguish them: `CELL_keep_l0` ends B’s groups at `0x80`, `0x8000`, `0xffffffff80000000`, and zero; `MKB_03` leaves all four at `0x8`.
+
+25. **D1’s governing rule and proposed repair.** The pre-existing [body-tested-partition bound](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1397), together with the earlier #548 relational-comparison precedent, supports disclosure rather than mandatory rows. The six write cells—two latch states × below/at/past—are held: A supplies below with the latch clear; P supplies at and past; V/Z supply below after latching; W supplies at after latching. Reads occur with both latch states too.
+
+    The missing decisive-bit count is nevertheless correct: **4–7: 4; 9–31: 23; 33–63: 31; total 58**. The proposed repair is wrong as written: its 32-bit stores preserve only **27** of those values. The other **31** truncate to zero and would fail the intended expectation even on the correct implementation. Any optional repair must preserve its inputs’ width. Bounded cost alone does not establish a floor obligation.
+
+26. **D2’s census and termination condition.** My static walk found **148 refusals, 67 distinct values**. Of those values:
+
+    - **Seven have multiple anchors:** 8, 9, 16, `0xff`, `0x100`, `0x100000003`, and all-ones at 64 bits.
+    - **Sixty have one anchor:** 58 single-bit values at selector 5, `0xffffffff` at selector 5, and `0x100000005` at selector 3.
+
+    Thus “every B value is refused only after 5” is false: bits **3, 4 and 8** already have another anchor.
+
+    Replacing B’s `sd` anchor with 7 leaves **30** single-bit values observed only at 7: bit 32 and bits 34–62. The ambiguity moves. A terminating improvement retains existing observations and adds a distinct anchor for each value in a **declared finite family**. That closes the constant-rewrite ambiguity for that family; it does not establish completeness over arbitrary value exceptions.
+
+    Clause (f)’s same-path/decode ambiguity does not automatically require this expansion: these rows already assert a concrete selector value. The missing distinction concerns a separately conditioned effect.
+
+27. **Which accepted dispositions are wrong, and what the packet missed.** N20 is plainly false. N4’s universal exit consequence is false; N7, N13, N16 and N23 need the qualifications above. The most consequential missed premises are the invalid width in N1’s proposed repair, D2’s mirror after replacing an anchor, and the DATA tripwire’s inability to detect a wrong but valid selector. These require accurate records and disclosures, not a change to the fixed PORT arm.
+
+28. **Evidence and limits of this verdict.** I read the brief in full and used only `GXEMUL-SEC`. The frozen probe hashes to `a9a2be3d…`; the current implementation matches it after excluding the docstring. The fix hashes to `129694b8…`. Its invariant is sound: initialization supplies selector zero, and the sole subsequent selector assignment accepts only values below eight.
+
+    I reconciled all **297** archived mutation logs against their manifest: **267 red, 30 full-score, zero RED/GREEN prediction misses**, with matching row counts and unique names. All **61** unconditional individual-bit B channels and **four** width-conditioned channels match their respective expectations. B’s store counts are **5 + 13 + 29 + 61 = 108**. The archived gate reports 26 checks passing.
+
+    This was source review, static arithmetic and artifact verification; I did not rebuild, rerun the emulator, or modify files. Under the brief’s verdict definitions, no surviving floor breach requires changing ROWS.
+tokens used
+157,316

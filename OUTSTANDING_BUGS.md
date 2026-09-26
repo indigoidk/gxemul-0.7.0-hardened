@@ -22514,10 +22514,15 @@ The Fable 5.1 ruling on `#551f`'s pass closed the chain on wording and named the
 The file's own identity row (128) is the only exact ROW pin.  **As found on `#551d`'s pass**, deleting it AND an unnamed
 covered row was green: a composite -- the identity row's deletion alone is harmless, a covered row's alone is red.
 Raised by deepseek (DO NOT SHIP) and ruled a real pre-existing composite, filed rather than a floor breach of `#551`
-(`pass551d/fable5_pass551d.md`, G3).  **`#551e`'s call-count pin has since closed it for the COVERED rows**: deleting
+(`pass551d/fable5_pass551d.md`, G3).  **`#551e`'s call-count pin has since closed it for every row that CALLS a
+comparator -- the 24 `chk()` calls, the 8 verdict-handed ones included, and the 8 `row_cmp()` calls**: deleting
 the identity row and one comparator call leaves the LAST self-check's count (`chk()` 24, `row_cmp()` 8) unsatisfied --
-a reading, corroborated by the measured pin/no-pin deletion pair (`measured/run551f.out`: red 127/1 with the pin,
-GREEN 127/0 without).  **What remains is the 96 INLINE rows**, which no counter sees: deleting the identity row and
+a reading.  The measured pin/no-pin pair (`measured/run551f.out`, `F_delrow_repin` / `F_nopin_delrow_repin`: red
+127/1 with the pin, GREEN 127/0 without) deletes one comparator call and repins the retained identity check to
+127; its deleted call is `R6 liveness: DRQ asserted`, a VERDICT-HANDED `chk()` call, so the pair demonstrates the
+count pin, not the deletion of a covered COMPARISON (GPT-6 Astra, late on `#551f`'s pass and confirming `#553`;
+`run551f.out` line 48 and the pass brief called it "one unpinned covered row", which is wrong by the contract's
+own definition).  **What remains is the 96 INLINE rows**, which no counter sees: deleting the identity row and
 one inline row is still green, by reading.  (This entry said the covered-row composite IS green -- stale since
 `#551e`: GPT-6 Astra, confirming `#551`.)  Fix: a gate-side exact row pin, with its controls.
 
@@ -22611,3 +22616,54 @@ not floor -- a relational compare's generating set is its three regions -- and f
   first), and leaves the residue `0xffffffff` at 5 and `0x100000005` at 3 -- which a non-exhaustive selection of values cannot rule
   out in general (`idata == k`; the domain is finite, so exhaustive rows are impractical, not impossible).
 The owner may pull it into `#549` as v7; if so it owes one pass.
+## 2026-09-26 — GXEMUL [087a90]: `#553` latecodex; what the late codex answers file
+
+Evidence: `regress/artifacts/latecodex_20260926/` -- the packet, the flagship's ruling, GPT-6 Astra's confirmation and
+the codex twin; the three late answers in the `panels/` directories of `#550`, `#551` and `#549`.
+
+### `wdcidresetcells` (LOW, detector) — eleven of the 24 reset shapes `#551`'s contract (B) covers by reading are in no measured table
+
+The contract comment above `selfcheck()` in `regress/diff_wdc_identify.c` says a covered failure is not hidden by "a
+reset of either tally or both at any placement".  Its 24 shapes are three reset targets (`failures`, `cmp_fails`, both)
+x conditional or not x four placements.  `wdcidselfcheck_20260925/pass551f/meas551f.py.txt` built nine: the
+unconditional single-tally resets at `mid`, the unconditional both-tally reset at `mid`, `trailer` and `after-printf`, and
+the conditional both-tally reset at all four.  The later M18 artifacts built four more
+(`opus551_measured_f2/xf2.py.txt`: each tally reset unconditionally before the reconciliation and after the count
+printf; `analyze_f2.out`, gate 2's MAIN checks red on all three defects through both file and pipe -- a run whose seat
+fell back to another model).  **The eleven in no table are the eight conditional single-tally resets and the three
+unconditional start resets.**  All 24 are red BY READING -- the report line prints inside the comparator before any
+statement outside it runs, and gate 2's check compares the whole newline-joined capture with "0" -- which the codex twin
+derived placement by placement (`latecodex_20260926/codex_jobs/codex_latecodexadv.txt`), and `#553` scoped the contract's
+"measured" to the thirteen.  Found by the codex seat's late re-fire on `#551f`'s pass (DO NOT SHIP, item 1:
+`wdcidselfcheck_20260925/panels/codex_codexseat_551f.txt`); graded by the flagship (`latecodex_20260926/fable5_latecodex.md`,
+L1); the census corrected by GPT-6 Astra (`codex_astra553.txt`, item 1).  Cost: eleven `sub1` lines in `meas551f.py.txt`
+and one run of the existing driver -- fold it into `wdcidlane`'s table when that round rebuilds this instrument.  **A
+GREEN cell among the eleven would be a breach of (B) and converts this row to L2.**
+
+### `analyze8robust` (LOW, harness) — `#551`'s two measurement analyzers do not require the expected check count
+
+`wdcidselfcheck_20260925/pass551f/analyze8.py.txt` runs its shell scorer with `subprocess.run(...).stdout` -- no return
+code, no stderr -- so a scorer that dies before printing RED counts as no failures, and its CONTRACT CHECK tests escapes
+only for shapes whose pristine cell is green.  `opus551_measured_f/analyze9.py.txt` rejects a MISSING `REALFAILS=`
+result (it reads red), which is why `#551`'s record stands -- but it validates neither the scorer's successful
+completion nor the `CHECKS=` count it prints beside it, so its reproduced results support the historical table without
+establishing general scorer robustness (GPT-6 Astra, confirming `#553`).  The codex seat, late on `#551f`'s pass (item
+5); the flagship added the analyze9 half.  Fix only if the analyzers are reused: require the scorer's success and the
+expected check count.
+
+### `commitinflight` (LOW, harness) — a commit staged an unfinished job's files, and nothing could see it
+
+`#549`'s commit (8ea26abb, 08:21:31) staged `regress/artifacts/fbctrlportkill_20260924/` while the codex seat's re-fire on
+`#549` was still running: in that commit `panels/codex_codexseat_f2v6.txt` was 0 bytes (finished: 7,716), its `.err`
+1,588,311 of 1,649,553 bytes, `codexseat_f2v6.launch.log` 17 of 157 bytes with no completion line -- each an exact prefix
+of the finished file (the codex twin, by byte comparison).  `#553` carries the finished files.  **Why no gate saw it:** a
+0-byte codex file is indistinguishable from the walled shape every checker already accepts, and **section G cannot see a
+dedicated codex re-fire at all** -- `tools/pipeline/check_seats_read.py` recognises only `panel_YYYYMMDD_HHMMSS`
+directories and a fixed seat-filename list that excludes `codex_codexseat_*.txt`, so citing the job's ordinary
+`panels/` directory in the ledger does not bring its answer under the check (GPT-6 Astra, confirming `#553`, item 6).
+**This is the carrier's preserved-mid-run class for the second time** (the first: `table2_targeted.txt`, 2026-08-28), so
+the landing spot is a check, not more prose: refuse a commit whose staged artifacts include a `*.launch.log` without its
+completion line (`seat answered.`, `SEAT WALLED`, or a refusal line), forward-only from a cutoff, with both negative
+controls (a truncated launch log staged -> refused; a complete one -> passes); and teach section G the dedicated
+re-fire's filename, or record such answers where it looks.  `#529`'s commit script already carries the launch-log guard
+locally, and refuses any file under its artifacts directory changed in the last two minutes.
