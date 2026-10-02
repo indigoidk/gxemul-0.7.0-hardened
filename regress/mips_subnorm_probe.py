@@ -26,6 +26,9 @@ see a #287 revert at all -- +0 is +0 under both stores -- which is why this
 row is negative (a diff-review seat's finding). The guest still observes
 x != 0 but x + x == 0: the interim half-state the queued store-side round
 inherits.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] On pmax the negative tiny
+result is fpu_subst_tiny after the subnormal encoder. The expected word remains 80000000.  (regress21:F12:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Probe facts (mirrors mips_rounding_probe.py): put w + dump work on RAM; both
 rigs are little-endian (dump renders memory order -- bytes reversed on read);

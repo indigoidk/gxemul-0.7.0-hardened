@@ -966,6 +966,10 @@ print("")
 #      DIB=1 (a reply is queued)  ->  pop 0x55  ->  DIB=0 (the queue is now EMPTY).
 #  A doubled store delivers 0xAA twice, so TWO replies queue and DIB is STILL 1 after the single pop.  A phantom read
 #  (x_wfallthru) pops the reply early, so DIB is already 0 BEFORE the pop.  The two escapes move OPPOSITE rows.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A doubled store delivers
+#  0xAA twice, so TWO replies queue and DIB is STILL 1 after the single pop.  A phantom read on 0x64 is inert and
+#  does not pop the reply (see :989); this session detects duplicate stores.  (hlcaisalaneprobe:F3:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  The command goes through lca_isa at SP(0x64): 0x64 & 3 == 0, so ofs = 0 % len = 0 at every width, and a const of
 #  0xAA puts the command byte at position 0 for all four.  One session per width -- the 8042 queue is FIFO and
 #  stateful, which is why `kbcq' is built the same way.  No new device: this is the 8042 the tail rows already use.

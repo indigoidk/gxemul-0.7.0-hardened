@@ -60,12 +60,19 @@ memory_rw() call in cpu_sh_instr.c passes sizeof(data) with `data` declared
 uint8_t, uint16_t or uint32_t -- there are no uint64_t declarations in that file
 -- and SZ=1 register-pair fmov is implemented as two 32-bit accesses at addr and
 addr+4 (cpu_sh_instr.c:797-798, :1459-1470).
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] uint64_t locals do exist in
+cpu_sh_instr.c (line 313); the claim that the file has none is false. Instruction memory_rw() calls still transfer
+1, 2, or 4 bytes, and SZ=1 register-pair fmov uses two 4-byte accesses at addr and addr+4, so len=8 is not reached.
+(hsh4valprobe:F3: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 V24-V28 pin the WHOLE diagnostic line, not one token.  #444 pinned a single
 ARGUMENT and left the format free, and four seats independently found mutants in
 other fields of the same string.  V28 additionally pins the TCR mask itself by
 writing all six bits at once: drop any one of them from TCR_UNIMPLEMENTED and
 the printed value changes.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] V24-V28 pin the diagnostic from
+'[ sh4:' through '-- write ignored.  (once per bit) ]', without anchoring the trailing line end.  (hsh4valprobe:F4:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 V13-V15 are about the LATCH KEY, which is (class, instance, offending bit):
   V11/V12  a key WITHOUT the instance reports timer 0 and silences timers 1
@@ -175,6 +182,9 @@ TCR_TPSC1, TCR_TPSC0 = 0x0002, 0x0001
 #  the two modelled ones SITTING BETWEEN THEM are accepted, which is why a sweep
 #  says more than either half alone: bits 0x0020 and 0x0100 are not at the end of
 #  the range where an off-by-one mask would put them, they are in the middle.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] TCR bit constants (TCR_SWEEP
+#  is an unreferenced draft list; no shll singleton sweep row is implemented).  (hsh4valprobe:F2:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 TCR_SWEEP = [TCR_TPSC2, TCR_CKEG0, TCR_CKEG1, TCR_UNIE,
              TCR_ICPE0, TCR_ICPE1, TCR_UNF, TCR_ICPF]
 
@@ -231,6 +241,9 @@ POISON = P.POISON
 #  Instruction halfwords.  EVERY ONE is checked against the emulator's own
 #  disassembler in a session that executed it -- row V30.  A wrong register
 #  field is silent: it yields 0, which a zero-valued oracle accepts by accident.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Planted halfwords checked
+#  against the emulator's own disassembler (all executed except 0x0009 nop).  (hsh4valprobe:F7:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 OPS = {
     0x0009: "nop",
     0x2100: "mov.b r0,@r1",
@@ -703,6 +716,9 @@ def main():
     #  #444 pinned ONE argument and left the format free; four seats found
     #  mutants in other fields of the same string.  These pin whole lines, and
     #  each pins a field that VARIES, so a hardcoded literal cannot pass.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] V24, V25, and V27 each
+    #  pin fields that vary across calls; V26 pins the single-case ICR line.  (hsh4valprobe:F5:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     row("V24 FORMAT: the whole TCR line, across three timers and two bit-sets",
         got11 == want11 and got14 == want14,
         "instances=%s bits=%s" % (got11 == want11, got14 == want14),
@@ -783,6 +799,10 @@ def main():
     # -------------------------------------------------- V29  the OLD wording
     #  A revert that keeps the survival but restores the old text -- or a
     #  half-revert of one arm -- shows up here and nowhere else.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A revert that keeps
+    #  survival but restores old diagnostic text fails both V29 and the rows requiring new diagnostic format (such
+    #  as V5-V8 and V24-V28).  (hsh4valprobe:F6:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     all_txt = "".join(ALLTXT)
     back = [m for m in PREFIX_MSGS if m in all_txt]
     row("V29 the four pre-fix diagnostics never come back, in ANY session",

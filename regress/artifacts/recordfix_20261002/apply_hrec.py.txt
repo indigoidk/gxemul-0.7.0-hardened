@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""apply_hrec.py [--write <dir>] [--only <path-regex>]  -- place the harness RECORD corrections IN the files they correct.
+
+A RECORD disposition (regress/artifacts/recordfix_20261002/HRECORD.tsv) says a comment or a docstring of the
+regression harness states something the code does not do, and gives the sentence that is true.  A locator seat quoted
+the false text verbatim (hrec_NN/<seat>_hrec_NN.txt; chk_hrec.py verified every quote against the committed file).
+This places ONE note after the paragraph that holds the quoted text, in the file's own comment syntax and at the
+paragraph's own indentation.  Nothing is deleted: the old text stays and the note says what is true (this project
+corrects a record in place and keeps what it corrects).
+
+A quote is found BY ITS TEXT in `git show HEAD:<path>`; it must occur exactly once.  What is NOT placed, and is listed
+instead: a quote that does not occur verbatim (the locator paraphrased); a quote that is not inside a comment or a
+docstring (a string the program prints is program OUTPUT -- a gate may read it -- and is a code change, not a records
+one); a disposition with no replacement sentence.
+
+Without --write it prints the plan and the counts and touches nothing.  With --write <dir> it writes the corrected
+files under <dir> (a staging directory, never the tree) and a PLAN.tsv beside them."""
+import io
+import os
+import re
+import subprocess
+import sys
+import textwrap
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "recordfix_20261002")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+UNIT = os.environ.get("HREC_UNIT", "#NNN")
+# files that MUST NOT be committed while they carry unreviewed working deltas (the session's standing list)
+# files whose notes wait for a code change the pre-commit hook asks for first (measured 2026-10-02 on #556's precheck)
+DEFER = {"regress/diff_ieee_store.c": "the hook's E1 rule wants an identity-guard row in any modified regress/diff_*.c and this "
+                                       "one predates the rule; adding the row is a code change, so its notes wait for it"}
+NEVER = {"tools/panel.sh", "regress/ppc_rldicl_probe.py", "tools/BRIEF_TEMPLATE.md", "tools/CLAUDE.md", "tools/PIPELINE.md",
+         "tools/pipeline/fable_queue.md", "tools/pipeline/check_fix_seats.py"}
+DATE = os.environ.get("HREC_DATE", "2026-10-02")
+WIDTH = 116
+LINE = re.compile(r"^[`*\s-]*([a-z0-9_]+:F\d+)[`*]*\s*\|\s*`?([^|`]+?)`?\s*\|\s*(STILL SAYS IT|ALREADY CORRECTED|NOT FOUND)\b[^|]*\|\s*CURRENT:\s*(.*?)\s*\|\s*((?:DOES NOT FIT|FITS)\b.*)$")
+cache = {}
+
+
+def blob(path):
+    if path not in cache:
+        r = subprocess.run(["git", "-C", SEC, "show", "HEAD:%s" % path], capture_output=True)
+        cache[path] = r.stdout.decode("utf-8") if r.returncode == 0 else None
+    return cache[path]
+
+
+def unq(s):
+    s = s.strip()
+    if len(s) >= 2 and s[0] in "\"\u201c" and s[-1] in "\"\u201d":
+        s = s[1:-1]
+    return s.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "\t").replace("\\\\", "\\")
+
+
+def answers():
+    import glob
+    out = {}
+    for p in sorted(glob.glob(os.path.join(D, "hrec_*", "*_hrec_*.txt"))):
+        seat = os.path.basename(p).split("_")[0]
+        for l in io.open(p, encoding="utf-8", errors="replace").read().split("\n"):
+            m = LINE.match(l)
+            if m:
+                key, loc, status, cur, fits = m.groups()
+                lm = re.match(r"(\S+?):(\d+)(?:\s*-\s*(\d+))?", loc.strip())
+                out[key] = (seat, lm.group(1) if lm else loc.strip().split(" ")[0], status, unq(cur),
+                            (int(lm.group(2)), int(lm.group(3) or lm.group(2))) if lm else (0, 0))
+    return out
+
+
+def _norm(l):
+    return re.sub(r"\s+", " ", re.sub(r"^\s*(?:#+|/?\*+|//+)?\s*", "", l)).strip()
+
+
+def loose_last(lines, a, b, quote):
+    """A locator's quote that is not verbatim -- re-wrapped, its comment leaders respaced, or elided with "[...]" --
+    still names a place.  Inside the line range the locator gave (three lines of slack either side), with comment
+    leaders and runs of whitespace ignored and an elision treated as a gap, every fragment of the quote must occur, in
+    order.  Returns the 0-based index of the line where the last fragment ends, or None.  Nothing is guessed: a
+    fragment that is not found is a failure."""
+    if not a:
+        return None
+    lo, hi = max(0, a - 4), min(len(lines), b + 3)
+    text, owner = "", []
+    for k in range(lo, hi):
+        t = _norm(lines[k])
+        if not t:
+            continue
+        if text:
+            text += " "
+            owner.append(k)
+        text += t
+        owner += [k] * len(t)
+    q = " ".join(_norm(x) for x in quote.split("\n"))
+    frags = [f.strip() for f in re.split(r"\[\.\.\.\]|\.\.\.|…", q) if len(f.strip()) >= 12]
+    pos = 0
+    for f in frags:
+        at = text.find(f, pos)
+        if at < 0:
+            return None
+        pos = at + len(f)
+    return owner[pos - 1] if frags else None
+
+
+def context(path, lines, i):
+    """what line i (0-based) of the file is part of: ('hash', leader) | ('cblock', leader) | ('cline', leader) |
+    ('doc', indent) | ('code', '')"""
+    l = lines[i]
+    ext = os.path.splitext(path)[1]
+    if ext in (".py", ".sh") or path.endswith("Makefile"):
+        m = re.match(r"^(\s*#+ ?)", l)
+        if m:
+            return "hash", re.match(r"^(\s*#+\s*)", l).group(1) if l.strip("# \t") else m.group(1)
+        if ext == ".py":
+            before = "\n".join(lines[:i])
+            if (before.count('"""') % 2 == 1) or (before.count("'''") % 2 == 1):
+                return "doc", re.match(r"^(\s*)", l).group(1)
+        return "code", ""
+    if ext in (".c", ".h"):
+        before = "\n".join(lines[:i + 1])
+        a, b = before.rfind("/*"), before.rfind("*/")
+        m = re.match(r"^(\s*//+\s*)", l)
+        if m:
+            return "cline", m.group(1)
+        if a >= 0 and (b < a or b >= len(before) - len(l) - 1 and "*/" in l and l.index("*/") > 0 and a < b):
+            m = re.match(r"^(\s*\*+\s*)", l) or re.match(r"^(\s*/\*+\s*)", l) or re.match(r"^(\s*)", l)
+            lead = m.group(1)
+            if lead.lstrip().startswith("/*"):
+                lead = re.sub(r"/\*+", lambda x: " " + "*" * (len(x.group(0)) - 1), lead, 1)
+            return "cblock", lead
+        return "code", ""
+    return "code", ""
+
+
+def para_end(kind, lead, lines, i):
+    """the last line of the comment paragraph that holds line i, and whether that line also CLOSES the comment"""
+    def body(l):
+        if kind == "hash":
+            return re.sub(r"^\s*#+", "", l)
+        if kind == "cline":
+            return re.sub(r"^\s*//+", "", l)
+        if kind == "cblock":
+            return re.sub(r"^\s*/?\*+", "", l)
+        return l
+    def member(l):
+        if kind == "hash":
+            return bool(re.match(r"^\s*#", l))
+        if kind == "cline":
+            return bool(re.match(r"^\s*//", l))
+        return True
+    closes = lambda l: (kind == "cblock" and "*/" in l) or (kind == "doc" and ('"""' in l or "'''" in l))
+    j = i
+    while not closes(lines[j]) and j + 1 < len(lines):
+        n = lines[j + 1]
+        if not member(n) or not body(n).strip() or (closes(n) and not body(n).replace("*/", "").replace('"""', "").replace("'''", "").strip()):
+            break
+        j += 1
+    return j, closes(lines[j])
+
+
+def note_lines(kind, lead, text):
+    lead = lead if lead.strip() or kind == "doc" else lead
+    w = max(60, WIDTH - len(lead.expandtabs(8)))
+    return [lead + x for x in textwrap.wrap(text, width=w, break_long_words=False, break_on_hyphens=False)]
+
+
+def main():
+    write = sys.argv[sys.argv.index("--write") + 1] if "--write" in sys.argv else None
+    only = re.compile(sys.argv[sys.argv.index("--only") + 1]) if "--only" in sys.argv else None
+    rec = {}
+    for l in io.open(os.path.join(D, "HRECORD.tsv"), encoding="utf-8").read().split("\n")[1:]:
+        if l.strip():
+            f = l.split("\t")
+            rec[f[0]] = f
+    ans = answers()
+    plan, skipped, loose, moved = {}, [], [], []
+    overlay, texts = {}, {}
+    po = os.path.join(D, "HREC_PLACE_OVERLAY.tsv")
+    if os.path.isfile(po):
+        for l in io.open(po, encoding="utf-8").read().split("\n")[1:]:
+            if l.strip():
+                f = l.split("\t")
+                overlay.setdefault(f[0], []).append((int(f[1]), f[3].strip() if len(f) > 3 else ""))
+    pt = os.path.join(D, "HREC_TEXT_OVERLAY.tsv")
+    if os.path.isfile(pt):
+        for l in io.open(pt, encoding="utf-8").read().split("\n")[1:]:
+            if l.strip():
+                f = l.split("\t")
+                texts[f[0]] = f[1]
+    for key in rec:
+        if key not in ans:
+            skipped.append((key, "", "no locator answer"))
+            continue
+        seat, path, status, text, (la, lb) = ans[key]
+        if only and not only.search(path):
+            continue
+        if path in NEVER:
+            skipped.append((key, path, "the file is on the never-commit list (it carries unreviewed working deltas); its note is owed"))
+            continue
+        if path in DEFER:
+            skipped.append((key, path, "deferred: " + DEFER[path]))
+            continue
+        repl = texts.get(key, rec[key][3]).strip()        # a sentence re-ruled after the placement check wins
+        repl = re.sub(r"^(?:#+|\*+|//+)\s*", "", repl)        # a ruled sentence that arrived with a comment leader of its own
+        repl = repl.replace("…", "...").replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') \
+                   .replace("–", "-").replace("—", "--").replace("−", "-").replace("×", "x").replace("→", "->")
+        if any(ord(ch) > 126 for ch in repl):
+            skipped.append((key, path, "the sentence carries a character this ASCII file cannot take: %r" % [ch for ch in repl if ord(ch) > 126][:3]))
+            continue
+        body = blob(path)
+        if body is None:
+            skipped.append((key, path, "no such file at HEAD"))
+        elif status != "STILL SAYS IT":
+            skipped.append((key, path, "the locator says: %s" % status))
+        elif not repl:
+            skipped.append((key, path, "the disposition has no replacement sentence in HRECORD.tsv"))
+        else:
+            lines = body.split("\n")
+            if body.count(text) == 1:
+                last = body[:body.index(text) + len(text)].count("\n")
+            else:
+                last = loose_last(lines, la, lb, text)
+                if last is None:
+                    skipped.append((key, path, "the quoted text occurs %d times verbatim and its fragments are not all in lines %d-%d" % (body.count(text), la, lb)))
+                    continue
+                loose.append((key, path, last + 1))
+            kind, lead = context(path, lines, last)
+            if kind == "code":
+                skipped.append((key, path, "line %d is not in a comment or a docstring: %s" % (last + 1, lines[last].strip()[:70])))
+                continue
+            end, closes = para_end(kind, lead, lines, last)
+            targets = [(end, closes, kind, lead, repl)]
+            if key in overlay:
+                # a reviewing seat read the placement and named the line the note should follow (HEAD numbering); a
+                # disposition that corrects TWO statements gets two notes, one per line, each with its own part
+                targets, bad = [], False
+                for ln, part in overlay[key]:
+                    e = ln - 1
+                    k2, l2 = context(path, lines, e)
+                    if k2 == "code":
+                        skipped.append((key, path, "the overlay puts the note after line %d, which is not in a comment or a docstring" % (e + 1)))
+                        bad = True
+                        break
+                    c2 = (k2 == "cblock" and "*/" in lines[e]) or (k2 == "doc" and ('"""' in lines[e] or "'''" in lines[e]))
+                    targets.append((e, c2, k2, l2, part or repl))
+                if bad:
+                    continue
+                moved.append((key, path, ", ".join(str(t[0] + 1) for t in targets)))
+            for end, closes, kind, lead, part in targets:
+                note = "[%s, %s -- a records correction; the text above is kept as it was written] %s  (%s: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)" % (
+                    UNIT, DATE, part if part.endswith(".") else part + ".", key)
+                plan.setdefault(path, []).append((end, closes, kind, lead, key, note))
+    counts = {}
+    for path in sorted(plan):
+        for end, closes, kind, lead, key, note in plan[path]:
+            counts[kind] = counts.get(kind, 0) + 1
+    print("dispositions %d; placed %d in %d files (%s); not placed %d" % (
+        len(rec), sum(len(v) for v in plan.values()), len(plan), ", ".join("%s %d" % kv for kv in sorted(counts.items())), len(skipped)))
+    for key, path, ln in loose:
+        print("  PLACED BY A LOOSE MATCH (the quote was not verbatim; its fragments were found in the range given): %s %s, ends at line %d" % (key, path, ln))
+    print("  moved by the placement overlay: %d; sentences from the text overlay: %d" % (len(moved), sum(1 for k in texts if k in rec)))
+    why = {}
+    for key, path, reason in skipped:
+        why.setdefault(re.sub(r"line \d+ is|occurs \d+ times", lambda m: re.sub(r"\d+", "N", m.group(0)), reason).split(":")[0], []).append(key)
+    for r in sorted(why):
+        print("  NOT PLACED (%d): %s -- %s" % (len(why[r]), r, " ".join(why[r][:10]) + (" ..." if len(why[r]) > 10 else "")))
+    if "--show" in sys.argv:
+        for path in sorted(plan):
+            lines = blob(path).split("\n")
+            for end, closes, kind, lead, key, note in sorted(plan[path]):
+                print("\n== %s  %s  after line %d (%s%s)" % (key, path, end + 1, kind, ", closes the comment" if closes else ""))
+                for x in lines[max(0, end - 2):end + 1]:
+                    print("    | " + x[:150])
+                for x in note_lines(kind, lead, note)[:3]:
+                    print("    + " + x[:150])
+        for key, path, reason in skipped:
+            print("SKIP %s %s -- %s" % (key, path, reason))
+    if not write:
+        return
+    rows = []
+    for path in sorted(plan):
+        lines = blob(path).split("\n")
+        for end, closes, kind, lead, key, note in sorted(plan[path], reverse=True):
+            add = note_lines(kind, lead, note)
+            if closes:
+                l = lines[end]
+                tok = "*/" if kind == "cblock" else ('"""' if '"""' in l else "'''")
+                cut = l.rindex(tok)
+                head, tail = l[:cut].rstrip(), l[cut:]
+                closing = (re.match(r"^(\s*)", lead).group(1) + (" " if kind == "cblock" else "") + tail) if head.strip(" */") or kind == "doc" else None
+                if closing is None:
+                    lines[end:end] = add          # the closing line holds no text: the note goes before it
+                else:
+                    lines[end:end + 1] = [head] + add + [closing]
+            else:
+                lines[end + 1:end + 1] = add
+            rows.append("\t".join([key, path, str(end + 1), kind, "closes" if closes else "", note]))
+        p = os.path.join(write, *path.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        io.open(p, "w", encoding="utf-8", newline="").write("\n".join(lines))
+    io.open(os.path.join(write, "PLAN.tsv"), "w", encoding="utf-8", newline="\n").write(
+        "key\tpath\tafter_line_at_HEAD\tkind\tcloses\tnote\n" + "\n".join(sorted(rows)) + "\n" +
+        "".join("NOT PLACED\t%s\t%s\t%s\n" % s for s in skipped))
+    print("wrote %d files and PLAN.tsv under %s" % (len(plan), write))
+
+
+if __name__ == "__main__":
+    main()

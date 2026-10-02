@@ -148,6 +148,9 @@ int main(void)
 	 *  sentinel covers the whole table.  The token in the row name is load-bearing:
 	 *  selfmutant.py filters exactly it, and without it these deliberate FAIL lines would
 	 *  be read as a mutant kill for a mutant nothing caught.
+	 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Every row in this
+	 *  file goes through chk(), so unlike sh4_tmu (12 of 19) this sentinel covers the whole table.
+	 *  (hbundle_regress26:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 	 */
 	{
 		int sc_f = failures, sc_r = rows, sc_bad = 0;

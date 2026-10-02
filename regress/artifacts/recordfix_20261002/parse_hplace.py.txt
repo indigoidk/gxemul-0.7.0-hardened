@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""parse_hplace.py -- GPT-6 Astra's placement-check findings (hplace_NN) as a table.
+For each finding: key, the kinds (PLACE / TRUE / READS / TOOL), what is wrong, the suggestion, and -- parsed from the
+suggestion -- the HEAD line a moved note should follow and the sentence Astra proposes.  Writes HPLACE_FINDINGS.tsv
+beside the answers and prints the counts.  A TRUE or READS finding proposes NEW TEXT, which is Astra's and goes to
+grok to rule; a PLACE finding is the placer's error and names a line."""
+import glob
+import io
+import os
+import re
+
+D = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/recordfix_20261002"
+rows = []
+for p in sorted(glob.glob(os.path.join(D, "hplace_*", "codex_hplace_*.txt"))):
+    part = os.path.basename(os.path.dirname(p))
+    for l in io.open(p, encoding="utf-8").read().split("\n"):
+        m = re.match(r"^([a-z0-9_]+:F\d+) \| ([A-Z /]+?): (.*?) \| (.*)$", l.strip())
+        if not m:
+            continue
+        key, kinds, what, sugg = m.groups()
+        kinds = [k.strip() for k in kinds.split("/")]
+        ln = re.search(r"HEAD(?::| line )(\d+)", sugg) or re.search(r"after (?:HEAD )?line (\d+)", sugg)
+        quoted = re.findall(r"[\u201c\"](.+?)[\u201d\"]", sugg)
+        text = max(quoted, key=len) if quoted else ""
+        rows.append([key, part, "/".join(kinds), what, sugg, ln.group(1) if ln else "", text])
+with io.open(os.path.join(D, "HPLACE_FINDINGS.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("key\tpart\tkinds\twhat_is_wrong\tsuggestion\tmove_after_HEAD_line\tproposed_sentence\n")
+    for r in rows:
+        f.write("\t".join(x.replace("\t", " ") for x in r) + "\n")
+place_only = [r for r in rows if r[2] == "PLACE"]
+text_any = [r for r in rows if "TRUE" in r[2] or "READS" in r[2] or "TOOL" in r[2]]
+print("findings %d: PLACE only %d (with a line: %d); TRUE/READS/TOOL %d (with a proposed sentence: %d; also a move: %d)" % (
+    len(rows), len(place_only), sum(1 for r in place_only if r[5]), len(text_any), sum(1 for r in text_any if r[6]),
+    sum(1 for r in text_any if "PLACE" in r[2])))
+for r in rows:
+    print(("  %-24s %-18s line=%-5s text=%s" % (r[0], r[2], r[5] or "-", (r[6][:70] + "...") if len(r[6]) > 70 else r[6] or "-")).encode("ascii", "replace").decode())

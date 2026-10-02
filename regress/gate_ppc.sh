@@ -31,6 +31,10 @@
 #           record -- worth knowing either way.
 #   DISC -- discriminator: committed byte is the defect, want flips with the fix.
 #   DIV  -- known divergence left to a later round, pinned so it cannot drift.
+#   [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The DISC classification
+#   includes 7 negative controls in CAUSE_ROWS that verify non-raising of exception flags (yielding identical values
+#   before and after #330), contrary to :32 defining DISC as values that flip with the fix.  (hbundle_regress27:F11:
+#   regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # #310's eighteen rows cover the eight float UPDATE forms, every one of which
 # stopped the emulator before this round -- neither the primary opcodes
@@ -51,6 +55,10 @@
 # passes quietly. The mode rows additionally read FPSCR back, because a mode that
 # silently failed to take would turn every directed-mode row into a second copy of
 # the RN row.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Absence of PPC_CONV_RESULT=
+# invokes gate_skip, preserving earlier failures. With a result present, missing control or mode-readback tokens
+# fail; PPC_CONV_CONTROL=DEAD also fails. FPSCR writes are verified in four separate sessions, once per rounding
+# mode.  (hbundle_regress27:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # Those rows set FPSCR by DEBUGGER WRITE rather than through the guest's own `mtfsf`,
 # which used to be necessary: #324 found that instruction building its write mask with

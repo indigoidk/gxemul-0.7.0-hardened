@@ -226,6 +226,9 @@ print("SH_PCLOCK_CONTROL=%s" % ("OK" if all(ok for _, ok in rows) else "DEAD"))
 
 #  ---------------------------------------------------------------- the trigger
 #  One 16-bit store to TCR0.  On the committed build this ends the host process.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] When pclock is 0 the TCR
+#  write is ignored after a one-time fatal print. These rows require survived and quiet.  (regress23:F11:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 KILL = re.compile(r"pclock must be set", re.I)
 

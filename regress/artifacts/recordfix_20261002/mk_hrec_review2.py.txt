@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""mk_hrec_review2.py <reviewed stage> <new stage>  -- the repair pass of the harness record notes, as ONE Astra job.
+
+After Astra's placement checks (hplace_01..09) the notes were moved (HREC_PLACE_OVERLAY.tsv), re-worded from grok's
+rulings (HREC_TEXT_OVERLAY.tsv), four non-verbatim quotes were matched by their fragments, typographic characters were
+transliterated and a stray comment leader stripped.  This diffs the stage Astra read against the stage as it stands
+now, names every note that changed, and writes draft/hrec_repairs.diff and briefs/hplace_10.md."""
+import difflib
+import io
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+OUT = os.path.join(SEC, "regress", "artifacts", "recordfix_20261002")
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+ART = WD + BS + "GXEMUL-SEC" + BS + "regress" + BS + "artifacts" + BS + "recordfix_20261002"
+OLD, NEW = sys.argv[1], sys.argv[2]
+PART = sys.argv[3] if len(sys.argv) > 3 else "10"          # the part number of this repair pass
+PREV = sys.argv[4] if len(sys.argv) > 4 else "01-09"      # the parts it repairs
+rev = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+KEY = re.compile(r"\(([a-z0-9_]+:F\d+): regress/artifacts/astraretro_harness_20260926")
+
+
+def files(st):
+    return set(os.path.relpath(os.path.join(r, f), st).replace(os.sep, "/") for r, _, fs in os.walk(st) for f in fs if f != "PLAN.tsv")
+
+
+def notes(text):
+    """key -> the note's text (joined over its wrapped lines), for every note in a file"""
+    out, cur, key = {}, [], None
+    for l in text.split("\n"):
+        body = re.sub(r"^\s*(?:#+|/?\*+|//+)?\s*", "", l)
+        if "a records correction; the text above is kept as it was written]" in body:
+            cur, key = [body], None
+        elif cur:
+            cur.append(body)
+        if cur:
+            m = KEY.search(" ".join(cur))
+            if m:
+                out[m.group(1)] = " ".join(cur)
+                cur, key = [], None
+    return out
+
+
+changed, diff, newfiles, gone = [], [], [], []
+allf = sorted(files(OLD) | files(NEW))
+for rel in allf:
+    po, pn = os.path.join(OLD, *rel.split("/")), os.path.join(NEW, *rel.split("/"))
+    o = io.open(po, encoding="utf-8", newline="").read() if os.path.isfile(po) else subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True).stdout.decode("utf-8")
+    n = io.open(pn, encoding="utf-8", newline="").read() if os.path.isfile(pn) else subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True).stdout.decode("utf-8")
+    if o == n:
+        continue
+    if not os.path.isfile(po):
+        newfiles.append(rel)
+    if not os.path.isfile(pn):
+        gone.append(rel)
+    no, nn = notes(o), notes(n)
+    for k in sorted(set(no) | set(nn)):
+        if no.get(k) != nn.get(k):
+            changed.append((k, rel, "added" if k not in no else "removed" if k not in nn else "changed"))
+    # the position of a note can change with its text unchanged: a moved note shows as a hunk
+    diff += list(difflib.unified_diff(o.split("\n"), n.split("\n"), "as hplace_01..09 read it: " + rel, "now: " + rel, lineterm="", n=5))
+dp = os.path.join(OUT, "draft", "hrec_repairs_%s.diff" % PART)
+io.open(dp, "w", encoding="utf-8", newline="\n").write("\n".join(diff) + "\n")
+moved = [l.split("\t")[0] for l in io.open(os.path.join(OUT, "HREC_PLACE_OVERLAY.tsv"), encoding="utf-8").read().split("\n")[1:] if l.strip()]
+retext = [l.split("\t")[0] for l in io.open(os.path.join(OUT, "HREC_TEXT_OVERLAY.tsv"), encoding="utf-8").read().split("\n")[1:] if l.strip()] if os.path.isfile(os.path.join(OUT, "HREC_TEXT_OVERLAY.tsv")) else []
+keys = sorted(set(k for k, _, _ in changed) | set(moved) | set(retext))
+hunks = sum(1 for l in diff if l.startswith("@@"))
+text = """RECORD CORRECTIONS IN THE REGRESSION HARNESS, part %(part)s -- the notes that changed since your part(s) %(prev)s
+
+Open with the token `ASTRAHPLACE_%(part)s_ALIVE` on its own line, then ONE verdict line, exactly one of:
+`VERDICT: CLOSES -- every changed note is placed right and reads true, and nothing else changed`
+`VERDICT: <w> of %(n)d notes wrong`
+
+This is a RECORDS check: comments and docstrings of test scripts against the committed code they describe.  Write
+nothing, build nothing, run no emulator.  Please do not simply ratify, and be harder on the sentences grok adopted
+from your own proposals than on the rest: a proposal of yours that grok took is the one you are least likely to test.
+
+**Where things are.**  The tree is `%(wd)s%(bs)sGXEMUL-SEC`; read committed files with
+`git -C %(wd)s%(bs)sGXEMUL-SEC show HEAD:<path>` (HEAD is `%(rev)s`).  Everything else is under `%(art)s%(bs)s`.
+
+**What changed since parts 01-09, and why.**  Your %(nfind)d findings: %(nmoved)d placement errors -- each note now
+follows the line you named (`HREC_PLACE_OVERLAY.tsv`); %(ntext)d objections to the ruled sentence -- grok ruled each
+first-hand (`grok%(bs)sgrok_hrectext.txt`) and the sentence that stands is cut from its line (`HREC_TEXT_OVERLAY.tsv`,
+%(nretext)d sentences changed).  Besides those: four non-verbatim quotes from the agy locator were matched by their
+fragments inside the lines it gave, so four notes you did not see are new (`apply_hrec.py.txt`, `loose_last`); the
+typographic characters in the notes (ellipsis, curly quotes) became ASCII, because every target file is ASCII; and
+one sentence that arrived with a `#` of its own lost it.  Two notes are no longer placed (their files carry
+unreviewed working deltas and are not committed), and those are owed, not lost.
+
+**THE DELTA, whole:** `draft%(bs)shrec_repairs_%(part)s.diff` -- the diff from the stage your parts read to the stage as it
+stands, five lines of context, %(hunks)d hunks.  `draft%(bs)sPLAN.tsv` lists every note with its key and the HEAD line
+it follows.  A hunk that none of the above explains is a finding.
+
+**For each changed note** -- the keys: %(keys)s -- the same four questions as before: PLACE (does it follow the
+paragraph that makes the false statement?), TRUE (is the sentence true of the code at HEAD?), READS (is it clear which
+statement it corrects?), TOOL (would a tool that reads the file as text pick it up?).  Report only the ones with
+something wrong: `<key> | PLACE / TRUE / READS / TOOL: <what, path:line> | <where it should go, or what it should say>`.
+
+End with `DENOMINATOR: <a> of %(n)d notes read in the diff and in the code they describe; <h> of %(hunks)d hunks read`.
+""" % {"n": len(keys), "wd": WD, "bs": BS, "rev": rev, "art": ART, "nfind": 42, "nmoved": len(moved), "ntext": 34, "nretext": len(retext),
+       "hunks": hunks, "keys": ", ".join("`%s`" % k for k in keys), "part": PART, "prev": PREV}
+bp = os.path.join(OUT, "briefs", "hplace_%s.md" % PART)
+io.open(bp, "w", encoding="utf-8", newline="\n").write(text)
+print("notes changed %d (moved %d, re-worded %d, other %d); files with a change %d; hunks %d; new files %d; files no longer staged %d"
+      % (len(keys), len(moved), len(retext), len(set(keys) - set(moved) - set(retext)), len(set(r for _, r, _ in changed)), hunks, len(newfiles), len(gone)))
+print("wrote %s (%d b) and %s (%d b)" % (dp, os.path.getsize(dp), bp, os.path.getsize(bp)))

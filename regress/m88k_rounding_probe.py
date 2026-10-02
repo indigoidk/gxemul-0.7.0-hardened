@@ -23,6 +23,10 @@ decode must swap 2 and 3. A decode that FORGETS the swap passes every sign-symme
 vector (both directed modes just trade places consistently); only rows where the
 expected value differs by the SIGN of the operand catch it. Rows fadd-neg-* and
 flt-neg-* are that tripwire.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A decode without the 2<->3 swap
+inverts the directed rounding modes, failing both positive directed rows (toward+Inf rounds down and toward-Inf
+rounds up) as well as the negative rows.  (hm88kroundingprobe:F5:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Encodings, from cpu_m88k_instr.c's own decode:
     fadd.sss r4,r2,r3   0x84822803      fsub.sss r4,r2,r3   0x84823003
@@ -188,6 +192,9 @@ ROWS = [
     # of the day happened to run. Every missing one reached goto bad, which
     # stops the emulator on a legal instruction; six of the twelve were
     # measured halting on this rig before the fix.
+    # [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] This tree implemented
+    # four to six of each (fdiv 4, fadd 5, fmul 5, fsub 6), with #306 adding the twelve missing forms.
+    # (hm88kroundingprobe:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     #   encoding = 0x84000000 | d<<21 | s1<<16 | op11<<11 | size<<5 | s2,
     #   with d=r4, s1=r2, s2=r6 so the double operands land in aligned pairs.
     #
@@ -217,6 +224,9 @@ ROWS = [
     ("fadd.sds RN",  RN,   {"r2": 0x3e700000, "r3": 0x04000000, "r6": 0x3f800000},
      0x84822a06, "r4", 0x3f800001),
     # fadd.sdd / fsub.ssd / fsub.sdd: both sources double, single destination.
+    # [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fadd.sdd / fsub.sdd: both
+    # sources double; fsub.ssd: single source 1, double source 2; all three single destination.
+    # (hm88kroundingprobe:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     ("fadd.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000,
                             "r6": 0x3e700000, "r7": 0x04000000},
      0x84822a86, "r4", 0x3f800001),
@@ -282,6 +292,10 @@ ROWS = [
     # with a DOUBLE comparand INSIDE the (true, garbled) gap is the only
     # discriminating compare shape, hence the 2^-135 row. The fmul rows have
     # NORMAL results, so the #287/#292 store flush never touches them.
+    # [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Same-format compares
+    # cannot discriminate single subnormals (order preserved), but double subnormals collide under the old rounding
+    # (e.g. m=3 and m=4) so same-format double compares can discriminate.  (hm88kroundingprobe:F8:
+    # regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     #   fmul.dss r6,r2,r3 = 0x84c20023 (s2 NAMED 1.0f: the pinned bytes are the
     # pure widen); fmul.ddd r6,r2,r8 = 0x84c202a8; fcmp.ssd r4,r2,r6 = 0x84823886.
     ("subn fmul +",    RN, {"r2": 0x00000001, "r3": 0x71800000}, FMUL, "r4",

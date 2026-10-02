@@ -173,6 +173,9 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  probes with BAD prompt detection is blind to probes with NONE -- which is
 #  the larger set: SEVEN of the 33 pty-forking probes have no prompt
 #  detection whatever.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Some current PTY probes are
+#  classified as promptless. The ratchet pins their grandfathered set by count and name.  (hgatehygiene:F12:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  The fix is the one this project applies to every phantom-zero: ENUMERATE THE
 #  DENOMINATOR FIRST.  Count the pty-forking probes, then the promptless subset,
@@ -817,6 +820,9 @@ if [ -f "$DIVSWEEP" ] && command -v python3 > /dev/null 2>&1; then
     #  depend on that and are sound.  Filed as `divsweeplines`; the remedy (a
     #  length-preserving strip) is measured to move the citations to their true
     #  call-start lines with the counts unchanged.  Do not paste its line numbers.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The sweep derives
+    #  call-start line numbers from newline-preserving stripped text; divsweeplines is resolved.  (hgatehygiene:F13:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     #
     #  THE DOWN DIRECTION NEEDED ITS OWN INSTRUCTION AND NOW HAS ONE.  The rule above
     #  ("A THIRD site means someone added a new instance") is written for GROWTH.  A
@@ -866,6 +872,9 @@ echo
 # Every pattern below was verified to exist as an emittable string in src/. Three did NOT
 # survive that check and were removed rather than left in place looking like coverage:
 #   'FIFO underrun'        -- 0 sites. The real string is 'FIFO overrun' (4 sites).
+#   [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 'FIFO underrun' -- 0 sites.
+#   The real string is 'FIFO overrun' (2 emitting fatal sites in dev_asc.c).  (hgatehygiene:F14:
+#   regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #   'INSTR: unimplemented' -- 0 sites. The token 'INSTR:' is in no format string at all;
 #                             the real dyntrans marker is 'could not find physical'.
 #   '{ asc: data in'       -- exists, but is NOT distress. See the bounded list below.

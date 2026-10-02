@@ -63,6 +63,10 @@
  *  the loop and returning early all produce the same trace, because there is no next
  *  iteration to observe.  A single-overlay version of this row was built first and
  *  measured: it caught the deletion and let the other two through green.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] With one overlay, break and
+ *  return 0 produce identical traces (F(d0) S(d0)) because there is no next iteration; deleting continue falls
+ *  through to bitmap sync (F(d0) S(d0) F(b0) S(b0)), caught by single-overlay but letting break/return pass.
+ *  (hbundle_regress4:F5: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  */
 
 #include <stdio.h>

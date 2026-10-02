@@ -132,6 +132,9 @@ check     "backstop exceeds the worst boot measured (742 s) with margin" \
 # #419 SELFTEST. The classifier decides whether a row is a regression, a hang, a harness fault
 # or merely a slow host, so it needs its own rows -- and they must NOT need the rig, or they
 # would cost 15 minutes and never be run. Fake "emulators" drive every reason in seconds.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The fakes assert MARKER,
+# BUDGET, STALLED, ABSENT, and EXITED. A timeout with no instruction records becomes ABSENT. No fake asserts
+# BACKSTOP.  (regress24:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # WHY THIS IS NOT OPTIONAL: the BUDGET and STALLED branches are ONLY EVER ENTERED BY A FAILING
 # RUN, because a healthy boot stops at MARKER long before either. So nothing on a green run

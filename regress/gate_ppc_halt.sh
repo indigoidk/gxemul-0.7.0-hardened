@@ -39,6 +39,10 @@
 # no technical blocker at all and were left out for round size alone. That last group is
 # recorded as such deliberately -- a queue entry that invents a blocker costs a future
 # round the time to disprove it.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Ten encodings still halt, on
+# purpose, and the gate asserts that they DO ... fcmpo/fmadds/fmsubs have no technical blocker at all (fnmadd/fnmsub
+# were fixed in #344).  (hbundle_regress33:F14:
+# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 set -u
 cd "$(dirname "$0")"
 . ./lib.sh

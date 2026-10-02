@@ -13,6 +13,9 @@
 # sequence on a NON-ARMING instruction, and grades the counters as EQUALITIES
 # derived from the read-ahead rule (a breakpoint anywhere disables read-ahead
 # machine-wide, so fire == passes-1; the derivations live in the probe's rows).
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fire == passes-1 for loop
+# folds; memset expects fire=1 and device-bail expects fire=0.  (hbundle_regress32:F14:
+# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # Non-vacuity: deleting the bne_samepage_nop replacement sub-arm (incl. its
 # install++) in a scratch build flips exactly that fold to (0,0) and reddens

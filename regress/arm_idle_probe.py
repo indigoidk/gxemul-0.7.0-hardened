@@ -21,6 +21,9 @@ So every row here runs with NO breakpoint (read-ahead ON) and one straight-line
 pass. The architectural reference for the flag/dest rows is the SAME program run
 with `-J` (instruction combining disabled), so nothing folds -- measured, not
 derived.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The idle-path destination and
+flags rows compare with the literals 0 and 0x4. The -J sessions run the exit program and the alias program.
+(regress23:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 The four netbsd_idle defects (all measured live on committed 704036e)
 --------------------------------------------------------------------

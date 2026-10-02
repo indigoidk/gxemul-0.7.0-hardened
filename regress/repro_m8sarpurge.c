@@ -14,6 +14,10 @@
  *      PFSR   memory_m88k.c:382,383, dev_luna88k.c:614   WRITTEN by the fault path; never read
  *      PFAR   memory_m88k.c:399,405                      WRITTEN by the fault path; never read
  *      SCTR   -- appears nowhere in src/ outside its own case label.  Never read at all.
+ *      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] SCTR has register and
+ *      bit definitions; a guest write stores it in the SCTR case, and a guest read returns it through the generic
+ *      register accessor before the switch. No translation consumer reads SCTR.  (hbundle_regress31:F11:
+ *      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  So a guest write to SAPR or UAPR genuinely changes what the translator will do, and owes a
  *  purge.  A guest write to SAR, PFSR, PFAR or SCTR cannot change any translation IN THIS MODEL,

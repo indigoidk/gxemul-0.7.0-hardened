@@ -12,6 +12,9 @@
 #  *** THIS IS A WITNESS (rung 3), NOT A DETECTOR.  It shows the symptom on the COMMITTED build,
 #  which is what licenses a fix, and it must NOT be gated -- a witness stays red until the fix
 #  lands.  Its rows therefore assert the CORRECT behaviour and are expected to FAIL here. ***
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Post-fix detector for
+#  alphapfnoffset: the page-table walk now preserves within-page offset at src/cpus/memory_alpha.c:186; expected
+#  rows pass on HEAD.  (hbundle_regress27:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  ---------------------------------------------------------------------------------------------
 #  SIX THINGS THE DESIGN REVIEW (grok, 2026-09-07) ESTABLISHED.  Four are traps that would have

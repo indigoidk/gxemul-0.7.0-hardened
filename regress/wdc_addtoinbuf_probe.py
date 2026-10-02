@@ -97,6 +97,9 @@ CONTRACT -- vacuity-floor clause (e).
         is why the flag-conjunct deletion reds FOUR rows, B and M redundantly, and
         why **the swap above is these arms' only UNIQUE kill**: at row B `atapi_st`
         is still NULL, so the swapped guard is false there and B stays green.
+        [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The flag-conjunct
+        deletion fails six rows, not four: two B device-signature rows, two M rows after RECAL, and two N rows after
+        SOFT_RESET.  (hwdcaddtoinbufprobe:F3: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
         A SECOND operand replacement -- `cur_command == ATAPI_PKT_CMD` -- was measured
         sweeping all 30 and is NOT caught here: it replaces the flag operand rather
         than exempting an opcode, so BOTH vehicles leave it green.  Filed as
@@ -300,6 +303,10 @@ def sw(rt, off, base):
     #  The BE push arms are likewise unexecuted -- the guest is little-endian -- and
     #  `-e maltabe` is a registered in-tree subtype, so a BE leg is a one-word argv
     #  change rather than a machine edit (`wdcprobeendian`).
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] `-e maltabe` is a
+    #  registered in-tree subtype, but a BE leg requires endian-aware binary serialization in addition to the argv
+    #  change (`wdcprobeendian`).  (hwdcaddtoinbufprobe:F5:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     return I(0x2b, base, rt, off)
 
 
@@ -416,6 +423,9 @@ emit(NOP, "nop")
 #  defect BYTE-FOR-BYTE.  Measured by a seat at 30/30 -- rows G/H/I returned the
 #  injected a5/5a/00, which is what the PRE-FIX build returns, against the fix's real
 #  disk content c2/c3/c4.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Measured after repair: 29/30
+#  (1 red) -- rows G/H/I remain green and row L fails (want 50 got 58) on the K2 4-byte store.
+#  (hwdcaddtoinbufprobe:F4: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  THE CLOSURE CONDITION, and it needs TWO clauses rather than one -- the first draft
 #  of this comment ran them together and a seat took the sentence apart:
@@ -444,6 +454,13 @@ emit(NOP, "nop")
 #  `&& len != 3` as a deliberate NEGATIVE control and scored it **30/30 ESCAPED** --
 #  which is the CORRECT result, not a hole.  An equivalent mutant must escape; if it
 #  had been killed, some row would be reading a channel it has no business reading.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The len != 3 escape
+#  exercises only widths 1, 2 and 4, so it does not measure width-3 behavior. An unsupported-width write pushes no
+#  bytes, but it sets badlen_this, latches warned_badlen, and can print the bad-width diagnostic; badlen_this also
+#  suppresses the CDB dispatch and the sector drain. 'changes no observable' and 'equivalent mutant' do not cover
+#  those effects.  Writes refused by the preceding phase guard (src/devices/dev_wdc.c:1576-1577) reach no width
+#  switch and set neither badlen_this nor warned_badlen.  (hwdcaddtoinbufprobe:F6:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  So the two halves of the closure are now evidenced differently and deliberately:
 #  the HARMFUL family is closed by a measured KILL (E4, 29/30), and the INERT family

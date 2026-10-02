@@ -100,6 +100,11 @@ SPB0IO, SPB0DT = 0x02, 0x01     # :85, :86
 #  dev_sh4.c:664 and :685.  Matching "SCI: read"/"SCI: write" would also match the
 #  DECLINE lines, which contain "SCI: command byte ..." -- anchor on the word that only
 #  a real transfer prints.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Match complete SCI transfer
+#  lines, including address and data ('[ SCI: read addr=... data=... ]' and the write form). Decline lines contain
+#  'SCI: command byte' and match neither 'SCI: read' nor 'SCI: write'. Those prints are at dev_sh4.c:887 and :902;
+#  lines 664 and 685 are DMA.  (hbundle_regress26:F11:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 XFER_RE = re.compile(r"\[ SCI: (read|write) addr=([0-9a-f]+) data=([0-9a-f]+) \]")
 DECLINE_RE = re.compile(r"sh4: SCI: command byte 0x([0-9a-f]{2}) ")
 

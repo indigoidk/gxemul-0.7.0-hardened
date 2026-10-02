@@ -26,6 +26,9 @@ safe); a defect in a statement NOT in the table -- some other decode elsewhere -
 scope.  The companion behavioural row in gate 9 (UBSan sweep over the reaching subtypes)
 covers execution, and inherits gate 9's staleness caveat (`asanstale`), which is exactly
 why THIS row is deliberately binary-independent.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] C1 fails when the extracted,
+whitespace-stripped statement multiset differs from CANON. Compiler miscompilation is invisible to this source-text
+probe.  (hbundle_regress33:F15: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 usage:  arcbios_shift_probe.py <path-to-arcbios.c>
 """

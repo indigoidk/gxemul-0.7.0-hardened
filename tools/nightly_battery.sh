@@ -12,6 +12,9 @@
 #      boot against a ~100 s normal), so interactive work on the host yields a
 #      FAIL indistinguishable from a real capability regression.  Unattended at
 #      03:00 is the mitigation UNTIL queue #35 makes that oracle deterministic.
+#    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] CONTAMINATED. gate_ab uses
+#    an instruction-progress budget (12B instructions, 120s stall, 1800s backstop) via run_emu_progress.
+#    (hbundle_tools2:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  Written to a FILE deliberately: $VARS and $? do NOT survive
 #  `wsl -- bash -c '...'` -- git-bash expands first, which once made a

@@ -51,6 +51,10 @@
 #    W_MASK0 -> 0x100000       Table 6-6 (:9587), encoding `0000 0000 0001' = 2 MB window.
 #    W_BASE1 -> 0              S6.4.14 item 3 (:10791-10792), the SROM-required value.
 #    W_MASK1 -> 0xfff00000     Table 6-6 (:9598), encoding `1111 1111 1111' = 4 GB window.
+#                      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Zero
+#                      cannot be used here: W_BASE0's guard is one of the three arms that accepts it (along with
+#                      CONF and TB_ENA).  (hbundle_regress4:F6:
+#                      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  Table 6-6 lists THIRTEEN legal W_MASK encodings (:9586-9598).  W_MASK0 accepts one of them and
 #  W_MASK1 accepts a different one, so TWELVE OF THIRTEEN are fatal at each register and neither

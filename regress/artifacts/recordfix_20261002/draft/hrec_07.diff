@@ -1,0 +1,342 @@
+--- HEAD:regress/ppc_rounding_probe.py
++++ with the notes: regress/ppc_rounding_probe.py
+@@ -22,12 +22,15 @@
+ scrambled -- it built nibble masks at an 8-bit stride, so FM[0..3] wrote nothing
+ and FM[4..6] wrote the wrong fields -- and had the mode rows driven the mode
+ through it, the defect would have been baked into every measurement instead of
+ exposed by one. #324 fixed the stride; the debugger write stays, because keeping
+ the mode rows independent of a second instruction's correctness is what made the
+ finding reachable. mtfsf now has six rows of its own.
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] FPSCR is set by DEBUGGER WRITE,
++with mode verification handled once in verify_mode_writes(); individual mode rows receive None for readback.
++(hppcroundingprobe:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ The contracts (Power ISA Book I / PEM)
+ --------------------------------------
+ * stfs = SINGLE(): three cases on the operand's biased exponent E.
+     E > 896            splice: sign, exp bits, top-23 fraction -- TRUNCATION,
+                        mode-INDEPENDENT, never rounds.
+@@ -366,12 +369,16 @@
+     ("VXSNAN fcmpu sNaN",   FCMPU_CR0_F1_F2, SNAN_OP, PONE, "a1001000"),
+     ("VXCVI fctiwz sNaN",   FCTIWZ_F0_F1,  SNAN_OP, PONE, "a1000100"),
+     ("VXCVI fctiwz qNaN",   FCTIWZ_F0_F1,  QNAN_OP, PONE, "a0000100"),
+ 
+     #  NOT raised -- the discriminators. A handler that raises on any NaN, or
+     #  on any Inf, or on any zero divisor, fails exactly here.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] All seven clean cause
++    #  rows are control rows (expected values unchanged by #330); classifying them as DISC inflates the
++    #  discriminator count.  (hppcroundingprobe:F5:
++    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     ("clean fadd qNaN",     FADD_F0_F1_F2, QNAN_OP, PONE, "00001000"),
+     ("clean fcmpu qNaN",    FCMPU_CR0_F1_F2, QNAN_OP, PONE, "00001000"),
+     ("clean fadd Inf+Inf",  FADD_F0_F1_F2, PINF,  PINF,  "00004000"),
+     ("clean fsub Inf--Inf", FSUB_F0_F1_F2, PINF,  NINF,  "00004000"),
+     ("clean fmul Inf-by-1", FMUL_F0_F1_F2, PINF,  PONE,  "00004000"),
+     ("clean fdiv Inf/0",    FDIV_F0_F1_F2, PINF,  PZERO, "00004000"),
+@@ -756,12 +763,15 @@
+     #  big-endian: the FPSCR is the low word of the doubleword
+     return w[1]
+ 
+ 
+ #  #324. Every row writes a source of all ones with FPSCR forced to zero first,
+ #  so the byte read back IS the mask the decoder built.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] mtfsf rows test FM decoding
++#  and summary derivation; mtfsf clears preloads 0xffffffff with source 0x0fffffff to test mask clearing.
++#  (hppcroundingprobe:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  FM=0x80 selects field 0 -- FX, FEX, VX, OX. Book I's mtfsf note says FX and OX
+ #  come from (FRB)32 and (FRB)35 while "Bits 1 and 2 (FEX and VX) are set
+ #  according to the usual rule ... and not from (FRB)33:34": they are OR
+ #  summaries and mtfsf must never copy them. This row USED to record that as a
+ #  divergence, answering f0000000; #327 masked mtfsf and made the summaries
+@@ -827,12 +837,15 @@
+ def run_update(r3, r4, words, nread):
+     """Seed the register plan, run the sequence, read DEST back.
+ 
+     The debugger cannot print PowerPC FPRs or GPRs on this machine (the same
+     limitation that sent #304's mode readback through mffs), so publishing to
+     memory IS the readback path -- which is why every row ends in a store.
++    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Publishing to memory is the
++    probe's readback path (though cpu_register_dump in cpu_ppc.c implements GPR and FPR printing).
++    (hppcroundingprobe:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     """
+     cmds = ["msr=0x2000",
+             "r3=0x%x" % r3,
+             "r5=0x%x" % DEST,
+             "f1=0x3ff0000000000000",
+             "put w 0x%x, 0x3f800000" % SRC,           # 1.0f for the S loads
+@@ -872,12 +885,15 @@
+ #  ---------------------------------------------------------------------------
+ #  ROWS.  Every `want` below is the COMMITTED byte, measured on the build that
+ #  precedes #304/#305; the DISC rows' wants flip when the fix lands, and the
+ #  flip is that fix's acceptance test.  Bytes marked (oracle) were derived by
+ #  exact rational arithmetic offline and independently by two panel seats.
+ #  ---------------------------------------------------------------------------
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Table expectations are
++#  post-fix values; COMMITTED_BEFORE records pre-#304/#305 baseline values where NaN payloads and signs were
++#  destroyed.  (hppcroundingprobe:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ FRSP_ROWS = [
+     #  name,                        operand,             mode, want, class
+     ("control frsp 2.0",            0x4000000000000000, RN, "4000000000000000", "PIN"),
+     ("frsp qNaN",                   0x7ff8000000000000, RN, "7ff8000000000000", "DISC"),
+     ("frsp qNaN-",                  0xfff8000000000000, RN, "fff8000000000000", "DISC"),
+     ("frsp qNaN payload",           0x7ffdeadbeef00000, RN, "7ffdeadbe0000000", "DISC"),
+@@ -888,12 +904,16 @@
+     #  mode-blindness discriminator (1 + 3*2^-25 truncates to 1.0 under RZ).
+     ("frsp 1+3ulp/2 RN",            0x3ff0000018000000, RN, "3ff0000020000000", "PIN"),
+     ("frsp 1+3ulp/2 RZ",            0x3ff0000018000000, RZ, "3ff0000000000000", "DISC"),
+     ("frsp 1+3ulp/2 RP",            0x3ff0000018000000, RP, "3ff0000020000000", "PIN"),
+     ("frsp 1+3ulp/2 RM",            0x3ff0000018000000, RM, "3ff0000000000000", "DISC"),
+     #  ties-to-even, both parities: mode-independent, protect the rewrite.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The operand
++    #  0x3ff0000018000000 is 1 + 3*2^-25 (3/4 single ULP, not 3/2 ULP); half-ULP ties are mode-dependent under
++    #  directed modes.  (hppcroundingprobe:F12:
++    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     ("frsp tie even RN",            0x3ff0000010000000, RN, "3ff0000000000000", "PIN"),
+     ("frsp tie odd RN",             0x3ff0000030000000, RN, "3ff0000040000000", "PIN"),
+     #  denormal band (oracle): the host cast is RN-correct, so only the
+     #  directed modes discriminate -- the #298 sign-asymmetry lesson applied.
+     ("frsp band RN",                0x3730020000000000, RN, "3730000000000000", "PIN"),
+     ("frsp band RP",                0x3730020000000000, RP, "3730080000000000", "DISC"),
+@@ -983,12 +1003,15 @@
+     #  measuring something else that happened to agree. Both are fixed here.
+     #
+     #  The 1.0 row is the control that exposes it: with a wrong frB the answer
+     #  is 0 for ANY operand, so a row whose expected value is nonzero cannot
+     #  pass while the encoding is wrong. Every NaN and out-of-range row expects
+     #  0x80000000 or 0, which a broken encoding can satisfy by accident.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fctiwz 1.0 control
++    #  verifies operand register reading; NaN and out-of-range rows expect nonzero sentinels (0x80000000 or
++    #  0x7fffffff).  (hppcroundingprobe:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     #
+     #  The out-of-range answer is SIGN-DEPENDENT and the NaN answer is not.
+     #  Book I gives the instruction's own rule -- "greater than 2^31-1 ->
+     #  0x7FFF_FFFF, less than -2^31 -> 0x8000_0000" -- and Appendix A.2's
+     #  model splits it three ways: Infinity Operand and Large Operand both
+     #  branch on sign, while SNaN Operand and QNaN Operand return
+@@ -1214,12 +1237,15 @@
+         report(name, run_update(r3, r4, words, nread), want, cls)
+ 
+     for name, operand, mode, want, cls in COMPOSED_ROWS:
+         report(name, run_composed(operand, mode), want, cls)
+ 
+     #  #327: VX and FEX are DERIVED, not stored. Six rows, both directions.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] SUMMARY_ROWS defines
++    #  seven rows (#327 derivation, including FX latch); ad0e67da updated four mtfsf expectations and added seven
++    #  summary rows.  (hppcroundingprobe:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     for name, pre, seq, seed, want, cls in SUMMARY_ROWS:
+         report(name, run_fpscr_seq(pre, seq, seed), want, cls)
+ 
+     #  #330: the exception CAUSES. #327 made VX and FEX derive correctly over
+     #  a cause set that nothing wrote -- measured, arithmetic raised NOTHING,
+     #  and every FPSCR read back held only its FPCC nibble. Every want below
+--- HEAD:regress/repro_m8sarpurge.c
++++ with the notes: regress/repro_m8sarpurge.c
+@@ -11,12 +11,15 @@
+  *      UAPR   memory_m88k.c:137   read by m88k_translate_v2p (user area pointer)
+  *      SAR    dev_m8820x.c:110    read ONCE, as the address operand of a flush COMMAND --
+  *                                 and that command's own arm already purges (dev_m8820x.c:187)
+  *      PFSR   memory_m88k.c:382,383, dev_luna88k.c:614   WRITTEN by the fault path; never read
+  *      PFAR   memory_m88k.c:399,405                      WRITTEN by the fault path; never read
+  *      SCTR   -- appears nowhere in src/ outside its own case label.  Never read at all.
++ *      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] No code reads
++ *      reg[CMMU_SCTR].  (hbundle_regress31:F11:
++ *      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  *
+  *  So a guest write to SAPR or UAPR genuinely changes what the translator will do, and owes a
+  *  purge.  A guest write to SAR, PFSR, PFAR or SCTR cannot change any translation IN THIS MODEL,
+  *  and owes nothing -- by exactly #434's argument, pointed at the other half of the same arm.
+  *
+  *  WHAT THIS FILE MEASURES, AND WHAT IT DELIBERATELY DOES NOT.  It measures the current
+--- HEAD:regress/selftest_mutation_295.sh
++++ with the notes: regress/selftest_mutation_295.sh
+@@ -14,12 +14,15 @@
+ # Acceptance is a per-op flip MATRIX, not "the gate went red": for each mutant, its
+ # op's must-flip rows FAIL with the exact predicted directed-mode value, and every
+ # other row -- including the trunc/NaN/cvt/cfc1 controls, which CANNOT flip by
+ # construction -- stays PASS. "Every committed row must flip" was the design's
+ # original acceptance rule; five review seats independently rejected it as
+ # self-contradictory (the controls never flip; that is their purpose).
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the NaN/cvt/cfc1 controls,
++# which CANNOT flip by construction (trunc controls flip only under the trunc mutant).  (hbundle_regress32:F10:
++# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # Hardening (each clause traces to a review finding):
+ #  * the build tree's cpu_mips_coproc.c is cmp'd against the repo BEFORE copying
+ #    (a crashed earlier run once left a tree mutant, and the next run's own backup
+ #    captured the mutant);
+ #  * each anchor must appear EXACTLY once, and after substitution the anchor must
+--- HEAD:regress/sgi_de_primop_probe.py
++++ with the notes: regress/sgi_de_primop_probe.py
+@@ -68,12 +68,15 @@
+       were left behind (here and in the DOES NOT CATCH clause below), naming an
+       artifact that is not in this file.  That is precisely the class pass 11 was
+       sweeping for, found in the file doing the sweeping.  A seat caught it. ***
+     * a repair applied to the WRITE direction only (`rd surv', `rd decl') --
+       `if (startFlag)' is not conditioned on MEM_WRITE, so a START-aliased READ
+       draws too.  Named by a seat; no row covered it before.
++          [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] two once, dec flood,
++          dec ops, xlatch all, dec b*, and dec regs catch it, each performing two draws wanting count 1.
++          (hsgideprimopprobe:F5: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+   DOES NOT CATCH
+     * *** BOTH NO-ROW CLAUSES THAT USED TO SIT HERE ARE GONE, AND ONE OF THEM WAS
+       A WRONG RECORD THE DIFF ITSELF FALSIFIED.  A seat caught it: the [31:26]
+       clause declared "a legal LINE with a high bit set ... DELIBERATELY NO ROW"
+       while `dec hi bit' (a row since superseded by `dec b26'..`dec b31') -- added
+@@ -1209,12 +1212,15 @@
+ #  Bits 26-31 are carried by the six `dec b*' ops (each is LINE|bit_N) and by
+ #  `dec ops' (0x04000000).  There is therefore NO high bit that is absent from every
+ #  decline op, so a green control of this shape may not exist at all here -- which is
+ #  worth stating rather than hunting for one.  M_OPS_ROP remains a MEASURED green
+ #  (47/47): `rop' is read by the enclosing function and not by the latch body, so it
+ #  is outside what any row claims.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] M_OPS_ROP is red at HEAD:
++#  rop=0xffffffff in dec regs (:1128) draws twice and detects rop latch bypass.  (hsgideprimopprobe:F4:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  *** THE GREEN CONTROL HAD TO MOVE.  It was TB, and with the op widened to
+ #  0x02ffffff the row legitimately reds on TB -- so leaving the control there
+ #  would have quietly turned the honest half of it vacuous.  Bit 26 is clear in
+ #  0x02ffffff, so it is the bit that still proves this row keys on what its own
+ #  op carries rather than on any bypass whatever. ***
+--- HEAD:regress/sgi_eaddr_probe.py
++++ with the notes: regress/sgi_eaddr_probe.py
+@@ -78,12 +78,15 @@
+ 
+ #  The negative control, and the two are chosen for DIFFERENT MECHANISMS rather than for
+ #  coverage: ip19 has a literal abort() in its own arm, while ip27 has none and dies inside
+ #  its own device_add() at interrupt_handler_lookup() <- devinit_z8530(), on its `irq=0`.
+ #  A control using two of the same kind would not show that the probe distinguishes
+ #  "did not reach" from "reached and was fine".
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Both ip19 and ip27 abort
++#  during z8530 construction through interrupt_handler_lookup; ip19’s later literal abort is not reached.
++#  (hbundle_regress30:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ ABORTERS = ["ip19", "ip27"]
+ 
+ #  The IDENTITY constant.  A probe copied into a tree where it no longer runs all of its
+ #  rows must not report green over a shorter file.
+ EXPECT_ROWS = 10
+ 
+--- HEAD:regress/sgi_re_colourdefault_probe.py
++++ with the notes: regress/sgi_re_colourdefault_probe.py
+@@ -685,12 +685,15 @@
+ #  note justified 132 by claiming `if (xofs == 0) ok = 0;' would otherwise sweep the table.  That
+ #  is FALSE -- `ycrcb x4y1' already carries xofs 16, so that mutant was caught before this block
+ #  existed, and M39 measures it at 76/77 territory rather than a sweep.  The CHOICE is right and
+ #  the REASON was wrong; corrected rather than left, because a wrong reason gets reused.)
+ #  y IS 129 AND NOT 128 IN C4 because `y &= 127' runs BEFORE the colour switch, so 128 masks to
+ #  zero and would leave the in-scope `y' pinned.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] and M39 measures it at 74/77
++#  territory rather than a sweep.  (hsgirecolourdefaultprobe:F4:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  C4 IS THE JOINT CELL and it is not decoration: a corner-free design is swept by the pairwise
+ #  disjunctions.  `tile_nr == 0 || y == 0' is TRUE at (0,0), C1, C2 and C3 and false only at C4.
+ #
+ #  EACH CELL HAS ITS OWN TILE, SO EACH ACCEPT IS AN ANCHOR (clause (f)): re_tlb_a[0/1/16/17] are
+ #  0x8001/0x8002/0x8004/0x8005, i.e. physical 0x10000/0x20000/0x40000/0x50000.  An accept row
+--- HEAD:regress/sgi_re_randompixel_probe.py
++++ with the notes: regress/sgi_re_randompixel_probe.py
+@@ -27,12 +27,16 @@
+ #              ONLY if the pre-paint is removed -- which is why the destination is PRE-PAINTED with a
+ #              known value and the row rejects it: "left alone" and "wrote random" are then distinct.
+ #    DOES NOT  establish that any real driver selects LIN_B.  It appears only in crmfbreg.h and the
+ #              function's own comment; the PROM's MTE zero-fill path does not call this function; and
+ #              there is no O2/sgimips image in the tree to boot.  **Documented and storable is NOT
+ #              driver-selected**, and this probe claims only the former (grok, the witness panel).
++#              [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] In CONTRACT: the
++#              rows are lin_b not src and lin_b is fg (requiring FG, not an inequality); restoring exit(1)
++#              terminates the LIN_B session only, not controls in earlier independent sessions.
++#              (hbundle_regress28:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  DESIGN CREDIT AND THE FALSE NEGATIVE IT AVOIDS (grok, panel_20260906_224008).  The obvious probe --
+ #  set the source mode to LIN_B, draw, read the destination -- FINDS NOTHING.  At reset the
+ #  destination mode is TLB_A and re_tlb_a[] has bit 31 clear, so the PUT returns WITHOUT WRITING and
+ #  the destination is unchanged: a false negative that looks like a clean run.  Using LIN_A as the
+ #  DESTINATION closes it, because case 4 forces the valid bit:
+--- HEAD:regress/sh4_bsc_width_probe.py
++++ with the notes: regress/sh4_bsc_width_probe.py
+@@ -21,12 +21,15 @@
+     D5  a second non-16-bit access in one process survives
+     D6  a 4-byte READ is diagnosed too, not only a write
+     D8  BCR3's write path still reaches its register
+ 
+ (D7, the big-endian lane, needs a `byte_order(big)` config file and is left to
+ the round record rather than run here -- see the note at the foot of this file.)
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] D7a and D7b run in this file,
++both through a big-endian config.  (regress21:F6:
++regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ *** D4's ORACLE IS NOT THE REGISTER NAME, AND THAT IS THE WHOLE POINT. ***  A
+ two-character mutant sharing one latch flag between the sites (`[site]` ->
+ `[0]`) passed a 13-row detector whose D4 asked "does the string BCR3 appear?",
+ because the DEMOTED `debug()` prints the same name.  Worse, under the cold
+ debugger `single_step` is true, so `debug()`'s `quiet_mode` early-out never
+@@ -243,12 +246,15 @@
+ 
+ # ---------------------------------------------------------------- D3
+ #  A 1-byte write must NOT be promoted to a 16-bit one.  The reset value is
+ #  0x3ffc; a byte store of 0xa5 must leave it standing, not produce 0x00a5.
+ #  This row is also what makes the `len < 2` early-out visible: without it,
+ #  8 * (len - 2) on a size_t len==1 shifts by SIZE_MAX*8, which is UB.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A 1-byte access returns 0
++#  from sh4_bsc16_report and breaks before sh4_bsc16_shift, so this row does not reach that helper's length guard.
++#  (regress21:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ buf, alive = session(
+     ["r0=0xa5", "r1=0x%x" % BCR2, "r3=0x%x" % DEST,
+      "put w 0x%x, 0x11111111" % DEST]
+     + poke(CODE, [MOV_B_R0_AT_R1, MOV_W_AT_R1_R2, MOV_L_R2_AT_R3]), 3)
+ d3 = dumped(buf)
+ row("D3 a 1-byte write is not promoted to 16 bits",
+--- HEAD:regress/sh4_pcic_probe.py
++++ with the notes: regress/sh4_pcic_probe.py
+@@ -18,12 +18,14 @@
+ else does not fix this defect -- it makes it worse.  The store into `pcic_reg[]`
+ at dev_sh4.c:875-879 is UPSTREAM of every guard, so a rejected value has ALREADY
+ landed by the time the guard runs, and `exit(1)` was the only thing that stopped
+ a guest reading it back.  P3 writes an accepted value, then a rejected one, then
+ READS THE REGISTER BACK through the guest; the naive fix turns a host kill into
+ silent state corruption, and P3 is the only row in this file that sees it.
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] silent state corruption, seen
++by P3, P16, and P17.  (hsh4pcicprobe:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ P3b is its sibling and covers the `default:` arm, whose restore is otherwise
+ UNOBSERVABLE: nothing else in the tree reads `pcic_reg[]`, and a `default:` read
+ answers 0 regardless.  It becomes observable through ADDRESS ALIASING -- the
+ switch dispatches on the FULL address, but PCIC_REG() indexes on the WORD, so
+ 0xfe200015 (a byte inside PCICONF5) reaches `default:` while sharing PCICONF5's
+@@ -169,12 +171,15 @@
+ RAMSRC = 0x8c010200
+ 
+ #  Instruction halfwords.  EVERY ONE IS CHECKED against the emulator's own
+ #  disassembler in a session that executed it -- row P11.  A wrong register
+ #  field is silent: it yields 0, which every zero-valued oracle accepts by
+ #  accident, which is why P7c also insists on a small NON-ZERO value.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Planted halfwords checked
++#  against the emulator's own disassembler (all executed except 0x0009 nop).  (hsh4pcicprobe:F7:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ OPS = {
+     0x0009: "nop",
+     0x6210: "mov.b @r1,r2",
+     0x6211: "mov.w @r1,r2",
+     0x6212: "mov.l @r1,r2",
+     0x6252: "mov.l @r5,r2",
+--- HEAD:regress/sh4_sci_probe.py
++++ with the notes: regress/sh4_sci_probe.py
+@@ -97,12 +97,15 @@
+ SPB1IO, SPB1DT = 0x08, 0x04     # :83, :84
+ SPB0IO, SPB0DT = 0x02, 0x01     # :85, :86
+ 
+ #  dev_sh4.c:664 and :685.  Matching "SCI: read"/"SCI: write" would also match the
+ #  DECLINE lines, which contain "SCI: command byte ..." -- anchor on the word that only
+ #  a real transfer prints.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] dev_sh4.c:664 and :685.
++#  Match the full structured transfer format….  (hbundle_regress26:F11:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ XFER_RE = re.compile(r"\[ SCI: (read|write) addr=([0-9a-f]+) data=([0-9a-f]+) \]")
+ DECLINE_RE = re.compile(r"sh4: SCI: command byte 0x([0-9a-f]{2}) ")
+ 
+ EXPECT_ROWS = 14
+ 
+ rows = []

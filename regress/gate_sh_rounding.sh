@@ -17,6 +17,9 @@
 # host-double double-rounding is shared by every CPU core). A pin failing means someone
 # changed a known limitation without updating the record -- which is worth knowing either
 # way, and is the opposite of a check that cannot fail.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Two vectors were formerly
+# mode-independent PINs until #299 (fsub band) and #300 (D-division) fixed both and made them discriminating.
+# (hgateshrounding:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # The gate asserts on the number of discriminating vectors as well as on the results,
 # because a table where every vector wants the same answer in both modes would pass
@@ -269,6 +272,9 @@ fi
 #  one guest store to the mp device's IPI register -- because the test machine wires
 #  its whole interrupt tree to a line the priority loop never assigns.  Being
 #  synchronous is what lets a cheap `step` see it.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The testsh witness uses
+#  IRQ14 (priority 1); synchronous delivery and masking are tested here, while priority-zero coverage uses TMU.
+#  (hgateshrounding:F13: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  The SECONDARY rows (`prio0 tmu`, `prio0 tmuq`) drive the landisk TMU route and
 #  must FREE-RUN, because a TMU underflow is produced by a HOST timer and
@@ -687,6 +693,9 @@ else
         #  while the gate stays green.  Longest name here is `kill store` (10), so
         #  there are three characters of headroom.  Named by a panel seat, which
         #  computed the threshold rather than just warning about the class.
+        #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] at L=14 it is ONE
+        #  and the ^$v  anchor cannot match, so the count is 0 and the gate fails.  (hgateshrounding:F14:
+        #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
         for v in "live" "devsig" "asic ok" "safe 8" "kill word" "kill byte" "kill store" "safe 4" "kill far" "alias" "crossarr" "alias2" "mask9 rt" "sweep 256"; do
             n=$(count "$ASLOG" "^$v  .*ok$")
             check "asic_badaddr $v" "$n" 1
@@ -1525,6 +1534,9 @@ fi
 #  to the boot-log hygiene grep and an ERROR-level one trips #261's break-on-ERROR).
 #  Named by a file-reading seat on the pass-2 panel.  Textual, cheap, and the only guard
 #  that exists for this class.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fatal( -> debug( downgrades
+#  are blind under stepping; overrun x2 free-runs, but stepped rows cannot distinguish debug() from fatal().
+#  (hgateshrounding:F15: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  *** PIN ON THE OPENING STRING LITERAL, AND THE REASON IS A NEAR MISS WORTH RECORDING. ***
 #  A first draft pinned `grep -c 'fatal('` at 12.  That counts COMMENT lines mentioning
 #  fatal() and gives 15 -- an UNSATISFIABLE check, red forever.  Narrowing to
@@ -1626,6 +1638,9 @@ check "wdcflood: all six latches have a READ (comment-stripped)" \
 #  de-escalation clause one level up.  Replacing a decaying equality with a
 #  growth-immune one removes the accidental signal that latch growth used to send.
 #  A twelfth latch, or a brand-new unguarded fatal(), now reds until someone looks.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A twelfth latch now reds
+#  DECL until updated; a brand-new unguarded fatal() does not affect DECL or the fatal call floor.
+#  (hgateshrounding:F16: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  MEASURED, artifacts/batteryreds/row5_20260829/killtable2.out -- ELEVEN mutants,
 #  all killed, BASE 6/6/6/11 clean:

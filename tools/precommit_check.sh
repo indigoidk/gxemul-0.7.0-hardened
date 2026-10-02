@@ -801,6 +801,9 @@ fi
 #  It reports TWO blindnesses every run rather than hiding them: 13 row ids are too short to
 #  match safely, and 13 rows carry commits that no scanned subject ever names.  Both are
 #  printed on GREEN runs too.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] It reports two blindnesses
+#  every run: 13 row ids are too short to match safely, and 117 rows carry commits that no scanned subject names.
+#  (hprecommitcheck:F15: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 say ""; say "L. the ledger names the work that shipped"
 ATTRCHK=$_HERE/pipeline/check_commit_attribution.py
 if [ ! -f "$ATTRCHK" ]; then
@@ -1005,6 +1008,9 @@ say ""; say "A. twin-tree propagation (the #415 class -- FULLY mechanical)"
 #
 #  The tracked file is the declaration; this recomputes reality and compares.  A drift in
 #  either direction is then a red row naming the path, instead of a silent wrong instruction.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] tools/est_divergence.txt is
+#  an exemption allowlist whose members are unconditionally skipped rather than recomputed and verified.
+#  (hprecommitcheck:F14: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 DIVERGENCE_FILE=$SEC/tools/est_divergence.txt
 DIVERGENT_OK=$(grep -vE '^\s*(#|$)' "$DIVERGENCE_FILE" 2>/dev/null | tr '\n' ' ')
 if [ -z "$DIVERGENT_OK" ]; then

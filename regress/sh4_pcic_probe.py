@@ -21,6 +21,8 @@ landed by the time the guard runs, and `exit(1)` was the only thing that stopped
 a guest reading it back.  P3 writes an accepted value, then a rejected one, then
 READS THE REGISTER BACK through the guest; the naive fix turns a host kill into
 silent state corruption, and P3 is the only row in this file that sees it.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] silent state corruption, seen
+by P3, P16, and P17.  (hsh4pcicprobe:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 P3b is its sibling and covers the `default:` arm, whose restore is otherwise
 UNOBSERVABLE: nothing else in the tree reads `pcic_reg[]`, and a `default:` read
@@ -172,6 +174,9 @@ RAMSRC = 0x8c010200
 #  disassembler in a session that executed it -- row P11.  A wrong register
 #  field is silent: it yields 0, which every zero-valued oracle accepts by
 #  accident, which is why P7c also insists on a small NON-ZERO value.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Planted halfwords checked
+#  against the emulator's own disassembler (all executed except 0x0009 nop).  (hsh4pcicprobe:F7:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 OPS = {
     0x0009: "nop",
     0x6210: "mov.b @r1,r2",

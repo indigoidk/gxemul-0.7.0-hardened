@@ -39,6 +39,12 @@ INSTALLED.  Raised independently by deepseek and kimi on the pass-2 panel; filed
 debt rather than fixed here, because it is a different part of the handler from the fix's own
 repair and so is not a clause-(d) breach.  The row that would close it: a THIRD swpctx call,
 which should return N as its old context.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] a0 obs checks that a0 was read,
+so v0=C with a0=C scores 6/6. The line 399 note fires on that permitted pair.  (regress22:F7:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A third swpctx still returns N
+when ctx=a0 is kept and the PCB loads are omitted, which is also what correct code returns.  (regress22:F9:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 *** AND THE HOLE AS FIRST WRITTEN WAS OVERSTATED, which kimi caught on the NEXT pass. ***  It
 said "an edit breaking the subsequent load-new-context block would score full marks".  That is
@@ -76,6 +82,9 @@ the second such response.  It does NOT establish that the line is the debugger's
 second `print v0' rather than a correctly-placed replay.  Both genuine reads in a passing run carry
 the same value, so no row here can distinguish those.  **The claim the row is entitled to is
 positional, and the note says so.**
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The first swpctx returns the
+initial context 0x10100. The second returns 0x1000000.  (regress22:F8:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 THIS PROBE DOES NOT SCORE a0's VALUE AT ALL.  `a0 obs' scores only that the observation was
 MADE; the value is printed as diagnostic.  Two measured findings forced that: scoring `a0 != C'

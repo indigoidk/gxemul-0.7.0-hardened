@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""mk_hrec_textoverlay.py -- HREC_TEXT_OVERLAY.tsv from grok's ruling of the sentence objections (grok_hrectext.txt).
+Each ruling line ends `SENTENCE: "<the sentence that should stand>"`; a HOLD keeps the ruled sentence (and is left
+out of the overlay unless grok's quoted sentence differs from it).  The sentence is cut from grok's line, never
+retyped.  Refuses if any of the 34 objections is unanswered."""
+import io
+import os
+import re
+import sys
+
+D = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/recordfix_20261002"
+rd = lambda p: io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+tsv = lambda p: [l.split("\t") for l in rd(p).split("\n")[1:] if l.strip()]
+find = [r for r in tsv(os.path.join(D, "HPLACE_FINDINGS.tsv")) if r[2] != "PLACE"]
+rec = dict((r[0], r[3]) for r in tsv(os.path.join(D, "HRECORD.tsv")))
+rul = {}
+for l in rd(os.path.join(D, "grok", "grok_hrectext.txt")).split("\n"):
+    # the WHY and the SENTENCE may themselves hold a pipe ("1|08", "|="), so they are not [^|]*: the why is lazy up to
+    # the SENTENCE marker and the sentence is greedy up to the last quote before the cites, which carry no pipe
+    m = re.match(r"^(\d+) \| `?([a-z0-9_]+:F\d+)`? \| (CONCEDE IN PART|CONCEDE|HOLD)\b.*?\| SENTENCE: [\"\u201c](.*)[\"\u201d]\s*\| ([^|]*)$", l.strip())
+    if m:
+        rul[m.group(2)] = (m.group(3), m.group(4).strip(), m.group(5).strip())
+missing = [r[0] for r in find if r[0] not in rul]
+if missing:
+    sys.exit("REFUSED: grok's ruling has no parseable line for %d of %d: %s" % (len(missing), len(find), missing[:8]))
+out, kept, changed = ["key\tsentence\twho_ruled_it"], 0, 0
+for r in find:
+    word, sent, cites = rul[r[0]]
+    if " ".join(sent.split()) == " ".join(rec[r[0]].split()):
+        kept += 1
+        continue
+    changed += 1
+    out.append("%s\t%s\tgrok, grok/grok_hrectext.txt (%s of GPT-6 Astra's %s objection, hplace); cites: %s" % (
+        r[0], " ".join(sent.split()), {"CONCEDE": "conceding", "CONCEDE IN PART": "conceding in part", "HOLD": "holding against"}[word], r[2], cites[:200]))
+io.open(os.path.join(D, "HREC_TEXT_OVERLAY.tsv"), "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
+words = {}
+for k, (w, s, c) in rul.items():
+    words[w] = words.get(w, 0) + 1
+print("objections %d; rulings parsed %d (%s); sentences changed %d, kept %d" % (len(find), len(rul), ", ".join("%s %d" % kv for kv in sorted(words.items())), changed, kept))

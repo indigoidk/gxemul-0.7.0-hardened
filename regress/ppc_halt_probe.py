@@ -61,6 +61,11 @@ Row classes
                                  first: gcc emits it for ordinary float
                                  arithmetic, so it is likely the most
                                  frequently executed instruction still here.
+                                 [#556, 2026-10-02 -- a records correction; the text above is kept as it was
+                                 written] fcmpo, fmadds, fmsubs: no technical blocker -- these are a few dozen lines
+                                 at the fidelity bar this file already ships (fnmadd/fnmsub were fixed in #344).
+                                 (hbundle_regress25:F4:
+                                 regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Encodings are built FROM FIELDS, never typed as hex
 ---------------------------------------------------

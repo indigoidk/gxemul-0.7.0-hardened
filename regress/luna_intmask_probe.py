@@ -15,6 +15,10 @@ candidate shapes produce three DIFFERENT numbers rather than one shared one.
 
 Bits 31..29 of odata are the pending-level field and are not under the probe's control on
 a live machine (a timer tick can set one), so every value assertion is on (r4 & 0xffffff).
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Guarded write rows D1/D2 use
+bits in 25..8 to produce distinct as-is, masked, and no-store readbacks; D3 exercises bits in 7..0 against narrowed
+guards, and device readbacks mask with 0x00ffffff.  (hbundle_regress27:F7:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Encodings (cpu_m88k.c:991-1019, same source as regress/m8820x_sites_probe.py):
     ld rD,rS1,IMM16  op26=0x05 ;  st rD,rS1,IMM16  op26=0x09

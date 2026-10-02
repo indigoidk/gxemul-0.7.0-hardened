@@ -71,6 +71,9 @@ see the round record for the scores):
   * `VRIP_INTR_SIU` replaced by an out-of-range line 26   -> A3 A4 A5 B1 C5 S1 R1
   * `machine->path` replaced by a hardcoded "machine[0]"  -> C5 ONLY
   * `VRIP_INTR_SIU + 1` -- registered, so wired in silence -> S1 ONLY
+  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The machine->path hardcoding
+  entry above is caught by C5 and S4.  (hhpcmipsctorprobe:F5:
+  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 usage:  python3 -u regress/hpcmips_ctor_probe.py [options]
         run under WSL (`wsl -d Gentoo`); the binary is a Linux ELF.

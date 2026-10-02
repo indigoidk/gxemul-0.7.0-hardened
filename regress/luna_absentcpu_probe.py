@@ -18,6 +18,12 @@ ONE cold-debugger session per SESSION below, real m88k guest instructions (st/ld
 real memory_rw), COMMITTED UNMODIFIED machine description (`-e luna-88k' + the committed rig image; `-n 2' for the
 two-cpu accept rows is a command-line configuration of the same description, not a machine edit).  EVERY PLANTED
 WORD IS DISASSEMBLED AND ITS TEXT CHECKED BEFORE IT IS STEPPED.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] EVERY PLANTED PROGRAM SLOT IS
+DISASSEMBLED AND ITS TEXT CHECKED BEFORE IT IS STEPPED (PARK AND VBR+8 BRANCHES UNCHECKED).
+(hlunaabsentcpuprobe:F4: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] ONE cold-debugger session per
+SESSION below (except B3, which boots a second session for noreenter/redeliver).  (hlunaabsentcpuprobe:F6:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
   session A  (1 cpu, stepped)          row          CHANNEL: the mutant it kills / the observable that differs
     C1  RAM word through the same decode            live         identity (floor c): 0x12345678 back
@@ -92,6 +98,9 @@ RESULT words per row: OK / HALT (the host died: signal / exit) / BADREGS (a valu
 before the wait ran out) / NOSTART.  Output: `LUNAABS_ROW=<name> RESULT=<word> ...' per row, `LUNAABS_RESULT=<ok>/<rows>',
 `LUNA_ABSENTCPU_WITNESS=PASS|PRE_FIX_SYMPTOM|FAIL ...', `LUNAABS_DONE'.  Exit status is non-zero on any row that is not OK
 (a gate can rely on it).  On HEAD the witness reads PRE_FIX_SYMPTOM at row soft1 (session A) and at siofirst (session A2).
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] On the pre-fix binary the
+witness reads PRE_FIX_SYMPTOM at row soft1 (session A) and at siofirst (session A2); on HEAD it reads PASS.
+(hlunaabsentcpuprobe:F5: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 CONTRACT (clause e): catches the walk bound reverted or off by one, an ASSERT-only NULL guard, a decline-once latch on
 either arm, a guard moved inside the branch, the reassert CALL bounded in the store arms instead of the walk (sio5), the

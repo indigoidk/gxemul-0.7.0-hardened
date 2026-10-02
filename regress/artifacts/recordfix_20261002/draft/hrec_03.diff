@@ -1,0 +1,325 @@
+--- HEAD:regress/diff_wdc_identify.c
++++ with the notes: regress/diff_wdc_identify.c
+@@ -1574,13 +1574,17 @@
+ 		memset(&d, 0, sizeof(d));
+ 		d.addr_mult  = 1;
+ 		d.io_enabled = 1;
+ 		d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+ 		d.irq.interrupt_assert = arm_sink;
+ 		/*  exactly what the two guest accesses leave behind: a packet command
+-		    announced, no transfer yet allocated.  */
++		    announced, no transfer yet allocated.
++		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] a synthetic
++		 *  packet command state: command in progress, PHASE_DATAIN, no transfer yet allocated.
++		 *  (hdiffwdcidentify:F13: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
++		  */
+ 		d.atapi_cmd_in_progress = 1;
+ 		d.atapi_phase = PHASE_DATAIN;
+ 		d.atapi_st = NULL;
+ 		d.atapi_len = 0;
+ 		d.atapi_received = 0;
+ 		memset(buf, 0, sizeof(buf));
+@@ -2725,12 +2729,15 @@
+  *
+  *  The defensible statement is narrower and still supports the row: no RIG writes
+  *  Device Control, and on the fork's only SH4 wdc machine it CANNOT -- the driver
+  *  writes addr+0x2c while GXemul registers alt-status at addr+0x206, so twelve
+  *  probe writes land on unmapped memory (filed separately as `landiskaux`).  A
+  *  PROBE can write it, and a seat built one at rung 3.
++ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Historically on the fork's
++ *  only SH4 wdc machine, the driver wrote addr+0x2c while GXemul registered alt-status at addr+0x206 (fixed by #533
++ *  to +0x2c).  (hdiffwdcidentify:F15: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  *
+  *  *** THAT MAKES THIS ROW'S WARRANT REST ON A SECOND DEFECT. ***  Fix the
+  *  mapping and the ALT-CTRL arm goes live on that machine too.  A row justified by
+  *  another bug's existence is worth keeping and worth SAYING SO, because the
+  *  justification expires the day that bug is fixed.
+  *
+@@ -3853,12 +3860,15 @@
+  *  `occ % 512 == 0`: a command that legitimately FILLS the ring leaves exactly 512,
+  *  a command that does not leaves 0, and an unflushed 100-byte residue makes both
+  *  impossible whatever the opcode does afterwards.
+  *
+  *  The enumeration is the function's own switch arms, read off the source -- not the
+  *  opcodes some row happens to use.  That is what keeps it closed.
++ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The enumeration covers
++ *  thirteen common switch arms, omitting WDCC_DIAGNOSE and all six WDCC_SEC_* cases.  (hdiffwdcidentify:F8:
++ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  */
+ static void row_every_opcode_resets(void)
+ {
+ 	static const int op[] = {
+ 		WDCC_READ, WDCC_READMULTI, WDCC_WRITE, WDCC_WRITEMULTI,
+ 		WDCC_IDP, SET_FEATURES, WDCC_RECAL, WDCC_IDENTIFY,
+@@ -4356,12 +4366,15 @@
+  *  #481's abort row sets write_in_progress, atapi_cmd_in_progress, the phase and
+  *  the ring together and asserts all four are cleared.  Both flagship seats
+  *  measured the same hole independently: putting ANY ONE of those fields in front
+  *  of the helper call still passes it.  The worst is the first -- a plain ATA
+  *  write is the majority reset path, and `if (d->atapi_cmd_in_progress)` leaves
+  *  its writer and 16 staged bytes alive across the reset.
++ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] #481's abort row sets
++ *  write_in_progress, atapi_cmd_in_progress and the ring together and asserts all three are cleared (phase is not
++ *  asserted).  (hdiffwdcidentify:F16: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  *
+  *  These rows are ACCEPT-SIDE: green on the committed build, which aborts
+  *  correctly, and red under the qualifying mutants.
+  *
+  *  *** THE WITNESS KIND IS `harness:`, NOT A REPRODUCTION.  An earlier version of
+  *  this comment said "the reproduction is the kill table".  There was never a live
+@@ -4651,13 +4664,17 @@
+ 
+ 	/*  FOURTH LEG: A SMALLER RING, so a THRESHOLD guard cannot hide.  The row
+ 	    staged exactly 16 bytes, so `occ > 8` in front of the abort passed it
+ 	    while leaving every smaller orphan ring stale across a reset.  Two
+ 	    bytes is the least a single data-port store can produce, so any
+ 	    threshold at all is caught.  The escape space is multi-dimensional;
+-	    pin a SPACE, not a point -- the same move the bit-2 sweep makes.  */
++	    pin a SPACE, not a point -- the same move the bit-2 sweep makes.
++	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Two bytes is the
++	    smallest two-byte write; single-byte stores are also supported by wd_data.  (hdiffwdcidentify:F9:
++	    regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
++	     */
+ 	altctl_fresh(&d);
+ 	if (d.inbuf == NULL) {
+ 		printf("  SETUP orphan small\n");
+ 		return;
+ 	}
+ 	buf[0] = 0x5a; buf[1] = 0x5a;
+@@ -5039,13 +5056,16 @@
+ 	    two tokens scored 0 reds of 122 and caused 275 integrity violations.
+ 
+ 	    Same free space as R9 (512) but TWO sectors requested: the shipped bound
+ 	    refuses (1024 > 512) and the mutant admits (512 > 512 is false), then
+ 	    memcpys 1024 bytes over a ring with room for 512 and destroys 511 unread
+ 	    ones.  *** THAT IS CLAUSE (d) -- A BOUND RELAXED ON THE PREDICATE THIS
+-	    DIFF ADDED -- so it was fixed in-round rather than filed. ***  */
++	    DIFF ADDED -- so it was fixed in-round rather than filed. ***
++	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] …keeps occupancy at
++	    512.  (hdiffwdcidentify:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
++	     */
+ 	altctl_fresh(&d);
+ 	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
+ 	wdc_addtoinbuf(&d, 0xA5);				/*  ANCHOR at [0]  */
+ 	for (i = 1; i < WDC_INBUF_SIZE - 513; i++) wdc_addtoinbuf(&d, 0x11);
+ 	{
+ 		int occ_before = gx_occ(&d);
+@@ -5249,12 +5269,16 @@
+ 	    sector and seccnt -- they are literally the fatal() arguments -- so
+ 	    the GUARD-FIELD-vs-BODY-FIELD check enumerates them mechanically.
+ 
+ 	    Measured escapes closed here: the `default:` arm guarded on seccnt,
+ 	    head, cyl, sector or drive, and BOTH arms guarded on drive, seccnt,
+ 	    precomp or lba.  Nine variants, one leg.
++	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Measured escapes
++	    closed here: the default: arm guarded on seccnt, head, cyl or sector, and BOTH arms guarded on seccnt,
++	    precomp or lba. Seven variants, one leg (drive qualifier remains open at drive=0).
++	    (hdiffwdcidentify:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ 	    The round had already learned this for `precomp` -- 'input coverage
+ 	    in one dimension is not input coverage' -- and applied it only to
+ 	    SET_FEATURES, not to the two arms the diff edits.  */
+ 	altctl_fresh(&d);
+ 	if (d.inbuf != NULL) {
+@@ -5551,12 +5575,15 @@
+  *  300 = 0x012c, 770 = 0x0302 -- so a mutant that SWAPS two high bytes is caught
+  *  as well. A fixture whose fields share a byte value proves less than it looks:
+  *  a first attempt at the multi-drive fixture used heads 400 and 271, both high
+  *  byte 0x01, and killed nothing. These values are not reachable from the command line
+  *  today only because the geometry override is broken (a separate round), and
+  *  wdc copies whatever geometry the diskimage layer hands it.
++ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] …geometry overrides clamp
++ *  cylinders, heads and sectors to 255.  (hdiffwdcidentify:F14:
++ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  */
+ static void row_wide_geometry(void)
+ {
+ 	struct wdc_data d;
+ 
+ 	build(&d, 4096ULL * 300 * 770, 4096, 300, 770);
+--- HEAD:regress/fbctrl_port_probe.py
++++ with the notes: regress/fbctrl_port_probe.py
+@@ -440,12 +440,15 @@
+         PROG_A.append(("sw", SEL_REG[k], 0, None))
+         PROG_A.append(("lw", SEL_REG[k], 16, None))
+ READS_A = PORT_RB + SEL_REG[1:]
+ 
+ #  P: previous selector 5, then nine refusals with read-backs (the FIRST is 8), two count-only refusals, and the
+ #  twelfth after PORT=7.  The count is sampled after the twelfth, so a latch re-armed every N refusals, N <= 11, reds.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] P: previous selector 5, then
++#  nine refusals with read-backs (the FIRST is 8), two EXTRA refusals (16 by sb/sh with read-backs), and the twelfth
++#  after PORT=7.  (hbundle_regress5:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ REFUSE = [("sw", "t2", 8, "8 (sw)"), ("sw", "t1", 9, "9 (sw)"), ("sw", "t3", 16, "16 (sw)"),
+           ("sd", "t4", 0x200000000, "0x200000000 (sd)"), ("sd", "t5", 0x100000003, "0x100000003 (sd)"),
+           ("sd", "t6", M64, "all-ones (sd)"), ("sw", "t7", 0xffffffff, "all-ones (sw)"),
+           ("sb", "t8", 0xff, "0xff (sb)"), ("sh", "t9", 0x100, "0x100 (sh)")]
+ #  16 by sb and by sh, each read back into a register whose own value (0x200000000, 0x100000003) is spent by then and
+ #  can never read as 5 -- so an ignored read, or a session that died, reds the row too.
+@@ -483,12 +486,15 @@
+ #  print the zero cpu_new() gave it on every device -- the channel has to be a guest load).
+ PROG_F = [("sw", "t1", 0, None), ("lw", "t2", 0, None)]
+ REGS_F = [("t0", FBCTRL), ("t1", 9), ("t2", 0xdead)]
+ 
+ #  V: X1 across a refusal made while COMMAND still holds GET_RESOLUTION, then every cell across four refusals.
+ #  Port 0 is never written after the first GET_RESOLUTION: a DATA write there EXECUTES the command.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] V: X1 across a refusal made
++#  while COMMAND still holds GET_RESOLUTION, then every cell across five refusals (six total).
++#  (hbundle_regress5:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ REGS_V = [("t0", FBCTRL)] + [("s%d" % p, p) for p in range(1, 8)] + [("t%d" % p, 0x11 * p) for p in range(1, 8)] + \
+          [("t8", 123), ("a0", 9), ("a1", 16), ("a2", 0x100000003), ("a3", 0xff), ("t9", 8), ("s0", 0xdead),
+           ("v0", 0xdead), ("v1", 0xdead)]
+ PROG_V = [("sw", "zr", 0, None), ("sw", "s2", 16, None),               # COMMAND = GET_RESOLUTION (X1 = Y1 = 0)
+           ("sw", "s1", 0, None), ("sw", "t8", 16, None),               # X1 = 123
+           ("sw", "a0", 0, "v1st"),                                      # refuse 9: COMMAND holds 2, the selector is 1
+--- HEAD:regress/gate_ab.sh
++++ with the notes: regress/gate_ab.sh
+@@ -129,12 +129,15 @@
+ check     "backstop exceeds the worst boot measured (742 s) with margin" \
+           "$([ "$LUNA_BACKSTOP" -ge 1200 ] && [ "$LUNA_BACKSTOP" -le 3600 ] && echo yes || echo "no: $LUNA_BACKSTOP")" yes
+ 
+ # #419 SELFTEST. The classifier decides whether a row is a regression, a hang, a harness fault
+ # or merely a slow host, so it needs its own rows -- and they must NOT need the rig, or they
+ # would cost 15 minutes and never be run. Fake "emulators" drive every reason in seconds.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The fakes assert MARKER,
++# BUDGET, STALLED, ABSENT, and EXITED. A timeout with no instruction records becomes ABSENT. No fake asserts
++# BACKSTOP.  (regress24:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # WHY THIS IS NOT OPTIONAL: the BUDGET and STALLED branches are ONLY EVER ENTERED BY A FAILING
+ # RUN, because a healthy boot stops at MARKER long before either. So nothing on a green run
+ # exercises them, and a mutation that breaks them is invisible to every capability row here.
+ #
+ # *** AND THE HARDEST CASE IS THE ONE THAT LOOKS HEALTHY. Remove `-N` and the guest still
+--- HEAD:regress/gate_arm.sh
++++ with the notes: regress/gate_arm.sh
+@@ -55,12 +55,15 @@
+ # ----------------------------
+ # #311 rewrites ONE line that five instructions share, and two of them were
+ # already correct. The pins are the point: they assert that SUB, RSB and CMP --
+ # and the ADD/ADC arm of the same #if, which keeps its own `c32 != c64` test --
+ # were not disturbed. A gate for this fix that checked only SBC and RSC would
+ # not detect the regression that matters most.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] #311 rewrites ONE line that
++# five instructions share, and three of them were already correct. The pins are the point: they assert that SUB, RSB
++# and CMP --.  (hgatearm:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # The decode-time row
+ # ------------------
+ # `udf cond-failed nop` is the strongest reachability statement here: a
+ # conditional UDF whose condition is FALSE also stopped the committed
+ # emulator, because `goto bad` fires during DECODE, before any condition is
+@@ -922,12 +925,15 @@
+ # are the DISCriminators; the six `le *` rows use -E testarm (LE) and are
+ # INVARIANCE CONTROLS -- on LE the broken code was accidentally right (host order
+ # == guest order), so they pin nothing about #372 and exist only to catch a fix
+ # that repairs BE by breaking LE. The `ldrb` witnesses are the purest form: a
+ # byte load has no byte order, so it exposes the raw memory layout directly, and
+ # the buggy column is the exact reverse of the arch column.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The five cold be * rows use
++# -E barearm (BE) and are the DISCriminators; be warm word and the six le * rows are INVARIANCE CONTROLS.
++# (hgatearm:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # #372's original sweep (its SIX BE + six LE rows): pre-fix 7 of 12 -- the five
+ # cold BE rows red at the host-order values, the warm control and LE controls
+ # green. Fixed: 12/12. #378 grew the section to 34 rows (22 BE / 12 LE) with the
+ # INVERTED polarity -- its sweep numbers are in the named-row comment below; the
+ # 12-row narrative above this line is #372 history, scoped as such by #379.
+@@ -1038,12 +1044,15 @@
+ #  the LDRD rows are CTRL because the round's original claim about them was
+ #  REFUTED by measurement: LDRD's base was never +12.  They began as DISC with
+ #  a `buggy` column that turned out to be fiction -- the mutant battery left
+ #  them green, and the actual pre-#390 parent reads the same values the fixed
+ #  build does.  They are kept as standing evidence that LDRD with Rn == PC is
+ #  unaffected, and they will redden if a future round drags it into that path.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the LDRD rows are CTRL
++#  because LDRD shared the four-byte base error but the 8-byte alignment mask concealed it on all aligned addresses.
++#  (hgatearm:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ for v in "390 be data +12" "390 le data +12" \
+          "390 be ldrd r0" "390 be ldrd r1" \
+          "390 le ldrd r0" "390 le ldrd r1"; do
+     n=$(count "$ENDLOG" "^$v  *CTRL .*ok$")
+     check "  endian row: $v" "$n" 1
+ done
+@@ -1606,12 +1615,15 @@
+ else
+     check "sgi_re rgb probe completed" "yes" "yes"
+     check "sgi_re rgb witness verdict" "$(count "$RGBLOG" '^SGIRGB_WITNESS=PASS$')" "1"
+     #  TWO SPACES AFTER $v, NOT ONE -- the sibling blocks above were both bitten by the one-space
+     #  form, in both of its directions.  Pre-flighted mechanically for this row set before the gate
+     #  ever ran: no name is a prefix of another, and every pattern matches exactly one rendered row.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] every pattern matches
++    #  exactly one rendered row (the prefix pair rgb tiled and rgb tiled64 is distinguished by two trailing spaces).
++    #  (hgatearm:F13: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     #
+     #  The probe prints names with "%-16s" plus an explicit space, so a name of N chars is followed
+     #  by (16-N)+1 spaces.  The longest here is `rgb not corrupt' at 15, leaving exactly two -- ONE
+     #  CHARACTER of margin.  If a name must grow past 15, widen the probe's "%-16s" in the same diff.
+     #
+     #  *** WHAT A TOO-LONG NAME ACTUALLY DOES: IT REDS, LOUDLY.  The sibling block above says it
+--- HEAD:regress/gate_build.sh
++++ with the notes: regress/gate_build.sh
+@@ -12,12 +12,15 @@
+ #    rather than compiled separately, so make does not see it as a dependency and a stale
+ #    object survives an ordinary rebuild.
+ #  * /tmp/gxsec-build's Makefile is GENERATED from Makefile.skel and is not tracked. A
+ #    tree recreated with `cp -a` has none, and make then exits rc=2 having built nothing
+ #    -- which looks like "0 errors" if you only grep for the word error. The object COUNT
+ #    is the real check, which is why it is asserted rather than reported.
++#    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] cpu_mips.o lists
++#    cpu_mips_instr.c as a prerequisite in src/cpus/Makefile.skel.  (regress24:F10:
++#    regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ set -u
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ . "$HERE/lib.sh"
+ 
+ EST=$ROOT/est
+ SEC=$ROOT/GXEMUL-SEC
+--- HEAD:regress/gate_hygiene.sh
++++ with the notes: regress/gate_hygiene.sh
+@@ -170,12 +170,15 @@
+ #  PROBE WITH NO PROMPT DETECTION AT ALL. ***  py_code() concatenates every
+ #  `endswith(` line across the tree, so a file containing ZERO of them
+ #  contributes to no counter and passes invisibly.  A ratchet built to catch
+ #  probes with BAD prompt detection is blind to probes with NONE -- which is
+ #  the larger set: SEVEN of the 33 pty-forking probes have no prompt
+ #  detection whatever.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] SEVEN of the 33 current
++#  probes are promptless….  (hgatehygiene:F12:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  The fix is the one this project applies to every phantom-zero: ENUMERATE THE
+ #  DENOMINATOR FIRST.  Count the pty-forking probes, then the promptless subset,
+ #  and compare that subset against an explicit list.
+ #
+ #  *** IT IS A RATCHET, NOT A REJECT, AND THAT IS NOT A COMPROMISE. ***  EVERY
+@@ -814,12 +817,15 @@
+     #  sweep computes its printed line numbers from STRIPPED-text offsets indexed
+     #  against the RAW file, so they run systematically small -- it reports the gdrom
+     #  sites 400+ lines early, landing inside a comment block.  Its COUNTS do not
+     #  depend on that and are sound.  Filed as `divsweeplines`; the remedy (a
+     #  length-preserving strip) is measured to move the citations to their true
+     #  call-start lines with the counts unchanged.  Do not paste its line numbers.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] This sweep computes line
++    #  numbers from raw text….  (hgatehygiene:F13:
++    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     #
+     #  THE DOWN DIRECTION NEEDED ITS OWN INSTRUCTION AND NOW HAS ONE.  The rule above
+     #  ("A THIRD site means someone added a new instance") is written for GROWTH.  A
+     #  DECREASE is ambiguous: it can mean the code improved, or that the sweep quietly
+     #  stopped finding things -- the vacuous-green shape this denominator exists to
+     #  catch.  THE DISCRIMINATOR IS THE NUMERATOR: if DIAG_DIV_NONCONST still reads 2
+@@ -866,12 +872,15 @@
+ # Every pattern below was verified to exist as an emittable string in src/. Three did NOT
+ # survive that check and were removed rather than left in place looking like coverage:
+ #   'FIFO underrun'        -- 0 sites. The real string is 'FIFO overrun' (4 sites).
+ #   'INSTR: unimplemented' -- 0 sites. The token 'INSTR:' is in no format string at all;
+ #                             the real dyntrans marker is 'could not find physical'.
+ #   '{ asc: data in'       -- exists, but is NOT distress. See the bounded list below.
++#   [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 'FIFO underrun' -- 0 sites.
++#   The real string is 'FIFO overrun' (2 emitting fatal sites in dev_asc.c).  (hgatehygiene:F14:
++#   regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ PATTERNS='panic
+ FATAL
+ zero-length
+ FIFO overrun
+ short DATA_IN DMA
+ short DATA_OUT DMA

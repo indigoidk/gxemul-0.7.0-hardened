@@ -399,6 +399,9 @@ if __name__ == "__main__":
     #  detects, via its named row" -- so an apparatus failure was reported as a DETECTION
     #  failure at the gate, which is the whole class this round removes.  The timeout closes
     #  one member; this closes the rest.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A wrong argument count
+    #  prints usage and returns 2. SystemExit is re-raised, so SELFMUTANT_SETUP is not printed.  (regress22:F6:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     #
     #  The traceback still goes to stderr, because a token without a diagnosis would trade one
     #  silent failure for another.

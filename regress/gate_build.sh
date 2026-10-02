@@ -11,6 +11,9 @@
 #  * cpus/*.o must be deleted explicitly. cpu_mips_instr.c is #included into cpu_mips.o
 #    rather than compiled separately, so make does not see it as a dependency and a stale
 #    object survives an ordinary rebuild.
+#    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] cpu_mips.o lists
+#    cpu_mips_instr.c as a prerequisite in src/cpus/Makefile.skel.  (regress24:F10:
+#    regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  * /tmp/gxsec-build's Makefile is GENERATED from Makefile.skel and is not tracked. A
 #    tree recreated with `cp -a` has none, and make then exits rc=2 having built nothing
 #    -- which looks like "0 errors" if you only grep for the word error. The object COUNT

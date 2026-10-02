@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""mk_hrec_review.py <stage dir>  -- the placement check of the harness record corrections, as a GPT-6 Astra job set.
+
+apply_hrec.py --write <stage dir> placed one note per RECORD disposition after the comment or docstring paragraph that
+holds the quoted false statement; verify_hrec.py proved every change is inside a comment or a docstring.  What no
+script can say is whether each note sits under the RIGHT statement and reads true there.  This writes, under
+regress/artifacts/recordfix_20261002/:
+    draft/hrec_<kk>.diff    the diff against HEAD for about twenty notes' worth of files, six lines of context
+    draft/PLAN.tsv          key, path, the line the note follows, the kind of comment, the note
+    briefs/hplace_<kk>.md   the check of that part
+and the runner's queue <scratchpad>/astraretro/astra_hplace_queue.tsv."""
+import difflib
+import io
+import os
+import shutil
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+OUT = os.path.join(SEC, "regress", "artifacts", "recordfix_20261002")
+HERE = os.path.dirname(os.path.abspath(__file__))
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+ART = WD + BS + "GXEMUL-SEC" + BS + "regress" + BS + "artifacts" + BS + "recordfix_20261002"
+ST = sys.argv[1]
+PER = 20
+rev = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+plan = [l.split("\t") for l in io.open(os.path.join(ST, "PLAN.tsv"), encoding="utf-8").read().split("\n")[1:] if l.strip() and not l.startswith("NOT PLACED")]
+byfile = {}
+for key, path, line, kind, closes, note in plan:
+    byfile.setdefault(path, []).append(key)
+parts, cur, n = [], [], 0
+for path in sorted(byfile):
+    if cur and n + len(byfile[path]) > PER:
+        parts.append(cur)
+        cur, n = [], 0
+    cur.append(path)
+    n += len(byfile[path])
+if cur:
+    parts.append(cur)
+os.makedirs(os.path.join(OUT, "draft"), exist_ok=True)
+shutil.copy(os.path.join(ST, "PLAN.tsv"), os.path.join(OUT, "draft", "PLAN.tsv"))
+jobs = []
+for k, files in enumerate(parts, 1):
+    kk = "%02d" % k
+    out, keys = [], []
+    for path in files:
+        old = subprocess.run(["git", "-C", SEC, "show", "HEAD:" + path], capture_output=True).stdout.decode("utf-8").split("\n")
+        new = io.open(os.path.join(ST, *path.split("/")), encoding="utf-8", newline="").read().split("\n")
+        out += list(difflib.unified_diff(old, new, "HEAD:" + path, "with the notes: " + path, lineterm="", n=6))
+        keys += byfile[path]
+    dp = os.path.join(OUT, "draft", "hrec_%s.diff" % kk)
+    io.open(dp, "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
+    tok = "ASTRAHPLACE_%s_ALIVE" % kk
+    text = """RECORD CORRECTIONS IN THE REGRESSION HARNESS, part %(kk)s -- is each note under the statement it corrects, and is it true there?
+
+Open with the token `%(tok)s` on its own line, then ONE verdict line, exactly one of:
+`VERDICT: CLOSES -- all %(n)d notes are placed right and read true`
+`VERDICT: <w> of %(n)d notes wrong`
+
+This is a RECORDS check: comments and docstrings of test scripts against the committed code they describe.  Write
+nothing, build nothing, run no emulator.  Please do not simply ratify: the notes were placed by a script, and a script
+cannot tell which paragraph of a comment makes the false statement.
+
+**Where things are.**  The tree is `%(wd)s%(bs)sGXEMUL-SEC`; read committed files with
+`git -C %(wd)s%(bs)sGXEMUL-SEC show HEAD:<path>` (HEAD is `%(rev)s`); ignore any other `src/` under the project root.
+Everything else below is under `%(art)s%(bs)s`.
+
+**Context.**  Your review of the regression harness found comments and docstrings that state something the code does
+not do.  Each such finding was ruled RECORD, with the sentence that is true (`HRECORD.tsv`; the final dispositions are
+`..%(bs)sastraretro_harness_20260926%(bs)sHARNESS_DISPOSITIONS.md`), and a locator seat quoted the false text verbatim
+(`HREC_VERIFIED.tsv`).  The corrections are now PLACED: one note after the paragraph that holds the quoted text, the old
+text kept as it was written.  `draft%(bs)shrec_%(kk)s.diff` is the diff against HEAD for this part's %(nf)d files;
+`draft%(bs)sPLAN.tsv` lists every note with its key.  A script has already shown that every change is inside a comment or
+a docstring, so no program token changes.  Nothing is committed yet.
+
+**For each added note** (a line that begins `[#556, 2026-10-02 -- a records correction; ...]` and ends with its key):
+* PLACE -- does it follow the paragraph that makes the false statement, and not another paragraph of the same comment,
+  the end of an unrelated block, or the middle of a list or table?
+* TRUE -- is its sentence true of the committed code at HEAD?  Read the code the comment describes.
+* READS -- read straight after the old text, is it clear WHICH statement it corrects?
+* TOOL -- would its text be picked up by a tool that reads these files as text: a gate that greps a probe for a row
+  name or a token, a score such as `13/13` that a checker compares with a gate's pin, a marker a script keys on?
+Report only the notes with something wrong, one line each:
+`<key> | PLACE / TRUE / READS / TOOL: <what is wrong, path:line> | <where it should go, or what it should say>`
+
+The keys of this part: %(keys)s.
+
+End with `DENOMINATOR: <a> of %(n)d notes read in the diff and in the code they describe`.
+""" % {"kk": kk, "tok": tok, "n": len(keys), "nf": len(files), "wd": WD, "bs": BS, "rev": rev, "art": ART,
+       "keys": ", ".join("`%s`" % x for x in keys)}
+    bp = os.path.join(OUT, "briefs", "hplace_%s.md" % kk)
+    io.open(bp, "w", encoding="utf-8", newline="\n").write(text)
+    jobs.append(("hplace_" + kk, len(files), len(keys), os.path.getsize(dp), os.path.getsize(bp)))
+q = os.path.join(HERE, "astra_hplace_queue.tsv")
+io.open(q, "w", encoding="utf-8", newline="\n").write("".join("recordfix_20261002\t%s\n" % j[0] for j in jobs))
+for j in jobs:
+    print("%s: %d files, %d notes, diff %d b, brief %d b" % j)
+print("notes %d in %d files, %d parts; queue %s" % (len(plan), len(byfile), len(jobs), q))

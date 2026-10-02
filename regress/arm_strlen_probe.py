@@ -240,6 +240,10 @@ if not ctrl_ok:
 #  is the control itself: if either condition fails, control goes DEAD, the
 #  probe prints 0/0, and the gate fails loudly on both the control check and
 #  `rows run`.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] STRLEN_CONTROL requires only
+#  a positive cycle delta (_j[1] - _j[0] > 0); the subsequent reference band and end-address rows independently test
+#  that the delta is within [30000,60000] and that the walk ended at the NUL byte.  (hbundle_regress26:F6:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 row("A strlen -J ref", "PIN", band(_j[1] - _j[0], 30000, 60000),
     "in[30000,60000]")
 row("A strlen -J end addr", "PIN", "0x%05x" % _j[2],

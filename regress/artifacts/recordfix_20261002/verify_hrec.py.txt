@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""verify_hrec.py <stage dir>  -- prove that the staged record corrections change NOTHING a program does.
+
+apply_hrec.py places notes in comments and docstrings.  "It is in a comment" is a claim about the file's syntax, and
+the placer decides it by looking at one line; this checks it against the language:
+    .py   the token stream without COMMENT / NL / INDENT-noise tokens is identical, except for string tokens that are
+          DOCSTRINGS (first statement of a module, class or function, by the ast); a changed string that is not a
+          docstring is PROGRAM DATA and is reported
+    .sh   the file without its comment lines is identical; and no added line sits inside a here-document whose
+          consumer is not an interpreter (a `cat <<EOF` body is data, a `python - <<'EOF'` body is code)
+    .c/.h the text with comments removed is identical
+Prints one line per file that fails and the totals; exits 1 on any failure."""
+import ast
+import io
+import os
+import re
+import subprocess
+import sys
+import tokenize
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+ST = sys.argv[1]
+
+
+def head(path):
+    return subprocess.run(["git", "-C", SEC, "show", "HEAD:" + path], capture_output=True).stdout.decode("utf-8")
+
+
+def docstring_positions(src):
+    out = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            b = node.body[0]
+            if isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant) and isinstance(b.value.value, str):
+                out.add((b.value.lineno, b.value.col_offset))
+    return out
+
+
+def py_tokens(src):
+    """(type, string) for every token that is code; a docstring token is replaced by a marker"""
+    docs = docstring_positions(src)
+    out = []
+    for t in tokenize.generate_tokens(io.StringIO(src).readline):
+        if t.type in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER):
+            continue
+        if t.type == tokenize.STRING and t.start in docs:
+            out.append(("DOCSTRING", ""))
+        else:
+            out.append((tokenize.tok_name[t.type], t.string))
+    return out
+
+
+def sh_code(src):
+    return [l for l in src.split("\n") if not re.match(r"^\s*#", l)]
+
+
+def sh_heredoc_data_lines(src):
+    """line numbers (0-based) inside a here-document that is NOT fed to an interpreter"""
+    data, lines, i = set(), src.split("\n"), 0
+    while i < len(lines):
+        m = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", lines[i])
+        if m and not re.search(r"<<<", lines[i]):
+            tag, interp = m.group(2), bool(re.search(r"\b(python3?|awk|sed|perl|bash|sh)\b[^|;]*<<", lines[i]))
+            j = i + 1
+            while j < len(lines) and lines[j].strip() != tag:
+                if not interp:
+                    data.add(j)
+                j += 1
+            i = j
+        i += 1
+    return data
+
+
+def c_code(src):
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
+    src = re.sub(r"//[^\n]*", "", src)
+    return re.sub(r"\s+", " ", src).strip()
+
+
+bad, n = [], 0
+for root, _, files in os.walk(ST):
+    for f in sorted(files):
+        if f == "PLAN.tsv" or f.endswith(".pyc"):
+            continue
+        p = os.path.join(root, f)
+        rel = os.path.relpath(p, ST).replace(os.sep, "/")
+        new = io.open(p, encoding="utf-8", newline="").read()
+        old = head(rel)
+        n += 1
+        ext = os.path.splitext(f)[1]
+        try:
+            if ext == ".py":
+                a, b = py_tokens(old), py_tokens(new)
+                if a != b:
+                    k = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+                    bad.append((rel, "a non-docstring token changed: %r -> %r" % (a[k][1][:70] if k < len(a) else "(end)", b[k][1][:70] if k < len(b) else "(end)")))
+            elif ext == ".sh":
+                if sh_code(old) != sh_code(new):
+                    bad.append((rel, "a non-comment line changed"))
+                else:
+                    ol, nl = old.split("\n"), new.split("\n")
+                    added = [i for i, l in enumerate(nl) if "a records correction" in l and l not in ol]
+                    inside = sorted(set(added) & sh_heredoc_data_lines(new))
+                    if inside:
+                        bad.append((rel, "a note sits inside a here-document that is data, line %d" % (inside[0] + 1)))
+            elif ext in (".c", ".h"):
+                if c_code(old) != c_code(new):
+                    bad.append((rel, "the text outside comments changed"))
+            else:
+                bad.append((rel, "no check for this file type"))
+        except Exception as e:
+            bad.append((rel, "the check itself failed: %s" % str(e)[:120]))
+for rel, why in bad:
+    print("FAIL %s -- %s" % (rel, why))
+print("files %d; failing %d" % (n, len(bad)))
+sys.exit(1 if bad else 0)

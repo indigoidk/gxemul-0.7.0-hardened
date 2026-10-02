@@ -87,6 +87,9 @@ fi
 #  All four signals, cross-checked.  No single one has ever been trustworthy here: the exit
 #  status was mis-captured once, and REGRESS_PASS_WITH_GAPS (exit 3) is NOT a pass -- a SKIP
 #  is a coverage gap, not evidence.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Exit status, verdict token,
+#  tally and coverage presence checked. No single one has ever been trustworthy here:.  (hbundle_tools1:F18:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 get () { grep -m1 "^$1=" "$newest" 2>/dev/null | cut -d= -f2-; }
 exitst=$(get RUN_SH_EXIT); token=$(get VERDICT_TOKEN)
 cov=$(get COVERAGE);       tally=$(get TALLY)

@@ -1577,7 +1577,11 @@ static void row_null_atapi_st(void)
 		d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
 		d.irq.interrupt_assert = arm_sink;
 		/*  exactly what the two guest accesses leave behind: a packet command
-		    announced, no transfer yet allocated.  */
+		    announced, no transfer yet allocated.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] a synthetic
+		 *  packet command state: command in progress, PHASE_DATAIN, no transfer yet allocated.
+		 *  (hdiffwdcidentify:F13: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+		  */
 		d.atapi_cmd_in_progress = 1;
 		d.atapi_phase = PHASE_DATAIN;
 		d.atapi_st = NULL;
@@ -2728,6 +2732,9 @@ static void row_drain_announce(void)
  *  writes addr+0x2c while GXemul registers alt-status at addr+0x206, so twelve
  *  probe writes land on unmapped memory (filed separately as `landiskaux`).  A
  *  PROBE can write it, and a seat built one at rung 3.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Historically on the fork's
+ *  only SH4 wdc machine, the driver wrote addr+0x2c while GXemul registered alt-status at addr+0x206 (fixed by #533
+ *  to +0x2c).  (hdiffwdcidentify:F15: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  *** THAT MAKES THIS ROW'S WARRANT REST ON A SECOND DEFECT. ***  Fix the
  *  mapping and the ALT-CTRL arm goes live on that machine too.  A row justified by
@@ -3856,6 +3863,9 @@ static void row_absent_drive_resets(void)
  *
  *  The enumeration is the function's own switch arms, read off the source -- not the
  *  opcodes some row happens to use.  That is what keeps it closed.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The enumeration covers
+ *  thirteen common switch arms, omitting WDCC_DIAGNOSE and all six WDCC_SEC_* cases.  (hdiffwdcidentify:F8:
+ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  */
 static void row_every_opcode_resets(void)
 {
@@ -4359,6 +4369,9 @@ static void row_srst_signature(void)
  *  of the helper call still passes it.  The worst is the first -- a plain ATA
  *  write is the majority reset path, and `if (d->atapi_cmd_in_progress)` leaves
  *  its writer and 16 staged bytes alive across the reset.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 481's abort row sets
+ *  write_in_progress, atapi_cmd_in_progress and the ring together and asserts all three are cleared (phase is not
+ *  asserted).  (hdiffwdcidentify:F16: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  These rows are ACCEPT-SIDE: green on the committed build, which aborts
  *  correctly, and red under the qualifying mutants.
@@ -4654,7 +4667,11 @@ static void row_srst_purges_orphan_ring(void)
 	    while leaving every smaller orphan ring stale across a reset.  Two
 	    bytes is the least a single data-port store can produce, so any
 	    threshold at all is caught.  The escape space is multi-dimensional;
-	    pin a SPACE, not a point -- the same move the bit-2 sweep makes.  */
+	    pin a SPACE, not a point -- the same move the bit-2 sweep makes.
+	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Two bytes is the
+	    smallest two-byte write; single-byte stores are also supported by wd_data.  (hdiffwdcidentify:F9:
+	    regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+	     */
 	altctl_fresh(&d);
 	if (d.inbuf == NULL) {
 		printf("  SETUP orphan small\n");
@@ -5042,7 +5059,13 @@ static void row_ring_occupancy_sound(void)
 	    refuses (1024 > 512) and the mutant admits (512 > 512 is false), then
 	    memcpys 1024 bytes over a ring with room for 512 and destroys 511 unread
 	    ones.  *** THAT IS CLAUSE (d) -- A BOUND RELAXED ON THE PREDICATE THIS
-	    DIFF ADDED -- so it was fixed in-round rather than filed. ***  */
+	    DIFF ADDED -- so it was fixed in-round rather than filed. ***
+	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The fixture has 512
+	    bytes free and occupancy SIZE-513. The shipped bound refuses the refill. With the multiplier omitted,
+	    bytewise admission fills those 512 bytes, refuses the remaining 512, and leaves occupancy SIZE-1 =
+	    262655. The anchor survives; the occupancy assertion detects partial admission.  (hdiffwdcidentify:F12:
+	    regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+	     */
 	altctl_fresh(&d);
 	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
 	wdc_addtoinbuf(&d, 0xA5);				/*  ANCHOR at [0]  */
@@ -5252,6 +5275,10 @@ static void row_completion_irq(void)
 	    Measured escapes closed here: the `default:` arm guarded on seccnt,
 	    head, cyl, sector or drive, and BOTH arms guarded on drive, seccnt,
 	    precomp or lba.  Nine variants, one leg.
+	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Measured escapes
+	    closed here: the default: arm guarded on seccnt, head, cyl or sector, and BOTH arms guarded on seccnt,
+	    precomp or lba. Seven variants, one leg (drive qualifier remains open at drive=0).
+	    (hdiffwdcidentify:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 	    The round had already learned this for `precomp` -- 'input coverage
 	    in one dimension is not input coverage' -- and applied it only to
@@ -5554,6 +5581,10 @@ static void row_atapi_flags(void)
  *  byte 0x01, and killed nothing. These values are not reachable from the command line
  *  today only because the geometry override is broken (a separate round), and
  *  wdc copies whatever geometry the diskimage layer hands it.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Heads=300 and
+ *  sectors-per-track=770 are synthetic fixture values. Command-line overrides reject heads or sectors outside
+ *  1..255. Cylinders derive from image size without a 255 cap.  (hdiffwdcidentify:F14:
+ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  */
 static void row_wide_geometry(void)
 {

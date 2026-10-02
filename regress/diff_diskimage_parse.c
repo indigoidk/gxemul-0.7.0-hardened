@@ -130,6 +130,11 @@ int main(void)
 		 *  offsets -- passes that probe while the small pair still catches it.  A
 		 *  sentinel whose inputs do not resemble the rows it vouches for is a sentinel
 		 *  with a whitelist.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 2^32 and 0
+		 *  are equal in their low 32 bits, so a comparator narrowed to int treats them as equal (failing to
+		 *  increment failures); the wide sentinel detects this narrowing, whereas the small sentinel (1 vs
+		 *  2) cannot.  (hbundle_regress25:F6:
+		 *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 		 *
 		 *  This does NOT prove any row is correct.  It proves the comparator still
 		 *  fails on inputs shaped like the ones the rows use.  A comparator that

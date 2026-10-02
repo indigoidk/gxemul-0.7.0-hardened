@@ -24196,3 +24196,43 @@ the prose: 4139-4145 (line numbers of this file as of commit `db8b1a33`) -- `reg
 * 5296-5300 -- a sample of upstream's hot locations or call stacks during the luna88k spin. Another liveness or instruction-rate measurement repeats 5296-5300.  [grok/grok_irule_b.txt U2]
 * 5650-5654 -- `cpu_ppc_instr.c` `lvx`/`stvx` and a PowerPC manual were not opened; the queue itself says the mask rule is uncitable. Not raised to MED.  READ SINCE (grok, 2026-10-02, the manuals in the project root's `_scratchpad/`): Books I-III and both PEMs do not define lvx or stvx. The 16-byte EA mask stays uncitable until the AltiVec Technology Programming Environments Manual, named at ppc_pem_32and64_2005.txt:358 and :6252, is read. That manual is not here.  [the governing line (grok); idlessread_20261002/grok/grok_grok_iunsettled.txt 2 (an entry the table had as UNSETTLED; grok read the local manuals)]
 * 6798-6803 -- a count write (`dev_8253.c:176-186`) does not clear `latched[]`; clears are on read (`:261`) and on a control word (`:311`). `_scratchpad/i8254.txt:334` says the latch holds "until it is read … or until the Counter is reprogrammed" and does not say a bare count write is a reprogram.  [the governing line (grok)]
+
+## 2026-10-02 -- GXEMUL [087a90]: `#556` makes 154 of the regression harness's 181 RECORD corrections, in place, in 65 files; the 27 it does not make are the class row `hrecordowed`
+
+**No compiled code and no test behaviour changes.**  GPT-6 Astra's review of the regression harness (`#554` filed it)
+found comments and docstrings of gate scripts, probes and checkers that state something the code does not do.  Each
+was ruled RECORD with the sentence that is true (`regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`).
+This unit puts those sentences where the false text stands: ONE NOTE after the paragraph that holds it, beginning
+`[#556, 2026-10-02 -- a records correction; the text above is kept as it was written]`, in the file's own comment
+syntax and at the paragraph's indentation.  Nothing is deleted or rewritten.
+
+**How each note got there, and how that was checked.**  A locator seat quoted the false text verbatim (36 by
+agy, 145 by Astra; `recordfix_20261002/HREC_VERIFIED.tsv` checked every quote against the committed file).
+`apply_hrec.py.txt` finds the quote by its text and places the note; `verify_hrec.py.txt` then proves, in the
+language of each file, that the staged file differs from HEAD only inside comments and docstrings -- Python by token
+stream with docstrings identified by the parser, shell by its non-comment lines and its here-documents, C by the text
+with comments removed -- and `verify_hrec_controls.py.txt` fails it on a bad placement in each language (4 of 4).
+Astra then read every placed note against the code (`hplace_01` .. `hplace_09`: 01: 6 of 20 notes wrong; 02: 1 of 15 notes wrong; 03: 7 of 19 notes wrong; 04: 5 of 19 notes wrong; 05: 5 of 20 notes wrong; 06: 7 of 18 notes wrong; 07: 5 of 20 notes wrong; 08: 6 of 18 notes wrong; 09: CLOSES -- all 5 notes are placed right and read true): 42 findings, of which
+22 were placement errors of the script (fixed by an overlay that names the line, `HREC_PLACE_OVERLAY.tsv`) and
+34 said the ruled sentence was false, incomplete or a fragment.  Those sentences went to grok, which ruled each
+first-hand (19 conceded, 8 held, 7 conceded in part, of 34); the sentence that stands is cut from grok's line (`HREC_TEXT_OVERLAY.tsv`, 27 sentences).
+Astra's check of the changed notes (`hplace_10`): 3 of 48 notes wrong -- one disposition corrects two statements and now has two
+notes, one sentence grok had held was settled in Astra's favour by reading the probe's own row table, one gained a
+qualification; its check of those three (`hplace_11`): CLOSES -- the three repairs are right and nothing else changed.
+
+**What is placed:** 155 notes for 154 dispositions -- 91 in `#` comments, 33 in C block comments,
+31 in Python docstrings -- in 65 files; the key of each note names its disposition (`draft/PLAN.tsv`).
+
+**What is NOT made, so that a blank is not read as done -- 27 corrections, the class row `hrecordowed` (LOW):**
+* 18 -- the false text is in a string the program prints (a code change, not a records one): `regress21:F8`, `hbundle_regress26:F10`, `hbundle_regress26:F12`, `hbundle_regress28:F13`, `hbundle_regress28:F14`, `hbundle_regress32:F13`, `hcheckprobewiring:F10`, `hcheckprobewiring:F12`, `hcheckprobewiring:F13`, `hcheckprobewiring:F14`, `hcheckprobewiring:F15`, `hcheckprobewiring:F17`, `hdiffm8820x:F6`, `hgdromcondprobe:F6`, `hpcc2widthprobe:F7`, `hprecommitcheck:F16`, `hsgideprimopprobe:F3`, `hsgideprimopprobe:F6`
+* 3 -- no replacement sentence was ruled: `hbundle_regress13:F9`, `hbundle_regress29:F6`, `hdiffdiskimageio:F2`
+* 3 -- the file carries unreviewed working deltas and is not committed: `hbundle_regress15:F7`, `hbundle_tools1:F5`, `hbundle_tools1:F6`
+* 2 -- the differential has no identity-guard row, which the pre-commit hook requires of any modified differential; adding one is a code change: `hdiffieeestore:F6`, `hdiffieeestore:F7`
+* 1 -- the false text was not located: `hbundle_tools2:F6`
+A correction that sits in a string the program PRINTS is a code change a gate may read, not a records one, and is
+made in a round that runs the gate.  The three files on the never-commit list carry unreviewed working deltas; their
+notes wait for those files.  `regress/diff_ieee_store.c` predates the hook's identity-guard rule, which fires on any
+modified differential (measured on this unit's first pre-commit check); its two notes wait for the row.  The 27 are listed by key in the ledger row.
+
+**Not in this unit:** the source review's 72 RECORD-L4 corrections (most are comments in `src/`, a code-file edit that
+propagates to every build tree and owes a pass-2 receipt; some are in files another session holds dirty).

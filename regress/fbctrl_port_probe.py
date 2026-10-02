@@ -443,6 +443,9 @@ READS_A = PORT_RB + SEL_REG[1:]
 
 #  P: previous selector 5, then nine refusals with read-backs (the FIRST is 8), two count-only refusals, and the
 #  twelfth after PORT=7.  The count is sampled after the twelfth, so a latch re-armed every N refusals, N <= 11, reds.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] P: previous selector 5, then
+#  nine refusals with read-backs (the FIRST is 8), two EXTRA refusals (16 by sb/sh with read-backs), and the twelfth
+#  after PORT=7.  (hbundle_regress5:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 REFUSE = [("sw", "t2", 8, "8 (sw)"), ("sw", "t1", 9, "9 (sw)"), ("sw", "t3", 16, "16 (sw)"),
           ("sd", "t4", 0x200000000, "0x200000000 (sd)"), ("sd", "t5", 0x100000003, "0x100000003 (sd)"),
           ("sd", "t6", M64, "all-ones (sd)"), ("sw", "t7", 0xffffffff, "all-ones (sw)"),
@@ -486,6 +489,9 @@ REGS_F = [("t0", FBCTRL), ("t1", 9), ("t2", 0xdead)]
 
 #  V: X1 across a refusal made while COMMAND still holds GET_RESOLUTION, then every cell across four refusals.
 #  Port 0 is never written after the first GET_RESOLUTION: a DATA write there EXECUTES the command.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] V: X1 across a refusal made
+#  while COMMAND still holds GET_RESOLUTION, then every cell across five refusals (six total).
+#  (hbundle_regress5:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 REGS_V = [("t0", FBCTRL)] + [("s%d" % p, p) for p in range(1, 8)] + [("t%d" % p, 0x11 * p) for p in range(1, 8)] + \
          [("t8", 123), ("a0", 9), ("a1", 16), ("a2", 0x100000003), ("a3", 0xff), ("t9", 8), ("s0", 0xdead),
           ("v0", 0xdead), ("v1", 0xdead)]

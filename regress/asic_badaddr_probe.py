@@ -126,6 +126,9 @@ block claiming this paragraph disclosed it when it did not: a PER-OFFSET KILL
 planted at any r == 3 offset no row touches -- `if (relative_addr == 0x1c)
 exit(1)`.  `kill far` (+0xfc) defeats a GROUP-NARROWING mutant; it cannot
 defeat a single-offset one.  Filed as `asicoffsetkill`.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The probe sweeps all 256
+offsets and checks a post-sweep marker; the per-offset coverage gap has been addressed.  (hbundle_regress18:F6:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 All three are filed, not fixed -- a detector that names its holes is falsifiable.
 It is NOT designed to observe interrupt assertion; no row here does -- and that

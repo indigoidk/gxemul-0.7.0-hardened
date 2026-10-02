@@ -553,6 +553,10 @@ int main(void)
 	 *  value actually CHANGES.  The BATC arm further down already does exactly that
 	 *  (`if (old != idata)`), so the asymmetry invites it -- and it is the under-
 	 *  invalidation direction.  A redundant same-value write must still purge.
+	 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] F4, added by #435
+	 *  alongside G6-G9 and the E9 split, pins historical call behavior for SAPR and UAPR; skipping the
+	 *  unchanged-value purge is not under-invalidation in this model.  (hdiffm8invread:F4:
+	 *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 	 *
 	 *  *** BOTH AREA POINTERS, NOT JUST SAPR, AND THAT COST A SURVIVING MUTANT. ***  The
 	 *  first version of this row repeated a same-value write to SAPR alone.  A pass-2 seat

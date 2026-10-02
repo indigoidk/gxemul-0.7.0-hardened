@@ -68,6 +68,10 @@ pass-3 repair; every pass-3 row was APPENDED to an existing session):
       offset label    R(0x5,0x6) R(0x6)     D           R(0x2a,0x30) D(silent)  R(0x28)
       every offset label outside those five is D (Opus MO3 `relative_addr < 0x14 ? relative_addr : 0', MEASURED 46/46);
       the low bit of every value cell is D (codex: all exact anchors are even)
+      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] In THE ANNOUNCE GRID,
+      direction text is marked R for READ len2, READ len4, and WRITE len4, but their checks only match
+      width/value/offset substrings without asserting 'read from' or 'write to' (which are rowed only for len1).
+      (hbundle_regress28:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
   the WRITE announce printing a wrong or constant value (Opus M_WRVAL0 `0' and M_WRDATA0 `data[0]', MEASURED 36/36 --
       the mirror of M_O1, unrowed by the pass-2 repair)  -> `wr val text' (0x5a at len 1), `wide wr val' (0x5a5a5a5a at
                                                        len 4, where data[0] says 0x5a)

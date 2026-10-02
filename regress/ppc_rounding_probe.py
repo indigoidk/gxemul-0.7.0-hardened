@@ -25,6 +25,9 @@ through it, the defect would have been baked into every measurement instead of
 exposed by one. #324 fixed the stride; the debugger write stays, because keeping
 the mode rows independent of a second instruction's correctness is what made the
 finding reachable. mtfsf now has six rows of its own.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] FPSCR is set by DEBUGGER WRITE,
+with mode verification handled once in verify_mode_writes(); individual mode rows receive None for readback.
+(hppcroundingprobe:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 The contracts (Power ISA Book I / PEM)
 --------------------------------------
@@ -369,6 +372,10 @@ CAUSE_ROWS = [
 
     #  NOT raised -- the discriminators. A handler that raises on any NaN, or
     #  on any Inf, or on any zero divisor, fails exactly here.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] All seven clean cause
+    #  rows are control rows (expected values unchanged by #330); classifying them as DISC inflates the
+    #  discriminator count.  (hppcroundingprobe:F5:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     ("clean fadd qNaN",     FADD_F0_F1_F2, QNAN_OP, PONE, "00001000"),
     ("clean fcmpu qNaN",    FCMPU_CR0_F1_F2, QNAN_OP, PONE, "00001000"),
     ("clean fadd Inf+Inf",  FADD_F0_F1_F2, PINF,  PINF,  "00004000"),
@@ -759,6 +766,9 @@ def run_mtfsf(fm, fval, preload=0x00000000):
 
 #  #324. Every row writes a source of all ones with FPSCR forced to zero first,
 #  so the byte read back IS the mask the decoder built.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] mtfsf rows test FM decoding
+#  and summary derivation; mtfsf clears preloads 0xffffffff with source 0x0fffffff to test mask clearing.
+#  (hppcroundingprobe:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  FM=0x80 selects field 0 -- FX, FEX, VX, OX. Book I's mtfsf note says FX and OX
 #  come from (FRB)32 and (FRB)35 while "Bits 1 and 2 (FEX and VX) are set
@@ -830,6 +840,9 @@ def run_update(r3, r4, words, nread):
     The debugger cannot print PowerPC FPRs or GPRs on this machine (the same
     limitation that sent #304's mode readback through mffs), so publishing to
     memory IS the readback path -- which is why every row ends in a store.
+    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Publishing to memory is the
+    probe's readback path (though cpu_register_dump in cpu_ppc.c implements GPR and FPR printing).
+    (hppcroundingprobe:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     """
     cmds = ["msr=0x2000",
             "r3=0x%x" % r3,
@@ -875,6 +888,9 @@ def run_composed(fbits, mode=RN):
 #  flip is that fix's acceptance test.  Bytes marked (oracle) were derived by
 #  exact rational arithmetic offline and independently by two panel seats.
 #  ---------------------------------------------------------------------------
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Table expectations are
+#  post-fix values; COMMITTED_BEFORE records pre-#304/#305 baseline values where NaN payloads and signs were
+#  destroyed.  (hppcroundingprobe:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 FRSP_ROWS = [
     #  name,                        operand,             mode, want, class
     ("control frsp 2.0",            0x4000000000000000, RN, "4000000000000000", "PIN"),
@@ -891,6 +907,10 @@ FRSP_ROWS = [
     ("frsp 1+3ulp/2 RP",            0x3ff0000018000000, RP, "3ff0000020000000", "PIN"),
     ("frsp 1+3ulp/2 RM",            0x3ff0000018000000, RM, "3ff0000000000000", "DISC"),
     #  ties-to-even, both parities: mode-independent, protect the rewrite.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The operand
+    #  0x3ff0000018000000 is 1 + 3*2^-25 (3/4 single ULP, not 3/2 ULP); half-ULP ties are mode-dependent under
+    #  directed modes.  (hppcroundingprobe:F12:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     ("frsp tie even RN",            0x3ff0000010000000, RN, "3ff0000000000000", "PIN"),
     ("frsp tie odd RN",             0x3ff0000030000000, RN, "3ff0000040000000", "PIN"),
     #  denormal band (oracle): the host cast is RN-correct, so only the
@@ -986,6 +1006,9 @@ FCTIWZ_ROWS = [
     #  is 0 for ANY operand, so a row whose expected value is nonzero cannot
     #  pass while the encoding is wrong. Every NaN and out-of-range row expects
     #  0x80000000 or 0, which a broken encoding can satisfy by accident.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fctiwz 1.0 control
+    #  verifies operand register reading; NaN and out-of-range rows expect nonzero sentinels (0x80000000 or
+    #  0x7fffffff).  (hppcroundingprobe:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     #
     #  The out-of-range answer is SIGN-DEPENDENT and the NaN answer is not.
     #  Book I gives the instruction's own rule -- "greater than 2^31-1 ->
@@ -1217,6 +1240,9 @@ def main():
         report(name, run_composed(operand, mode), want, cls)
 
     #  #327: VX and FEX are DERIVED, not stored. Six rows, both directions.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] SUMMARY_ROWS defines
+    #  seven rows (#327 derivation, including FX latch); ad0e67da updated four mtfsf expectations and added seven
+    #  summary rows.  (hppcroundingprobe:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     for name, pre, seq, seed, want, cls in SUMMARY_ROWS:
         report(name, run_fpscr_seq(pre, seq, seed), want, cls)
 

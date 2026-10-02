@@ -1623,6 +1623,9 @@ MANIFEST = {
     #  (A gate DOES construct 64-bit PowerPC CPUs -- gate 9 enumerates every machine subtype
     #  -- but that is a CONSTRUCTION check with no result oracle.  Recorded because I had the
     #  stronger, false version of this claim in three rows before a seat checked it.)
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the PowerPC gates
+    #  historically drove 32-bit parts before gate_ppc.sh wired 64-bit ppc_rldimi_probe.py.  (hcheckprobewiring:F11:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     "ppc_rldicl_probe.py":
         (CLASS_DETECTOR, "ppcrldiclzero (#522): 24 rows on unmodified -E bareppc.  A 190-cell (SH,MB) census, value rows at SH 0/8/32/63, a record-form CR0 row, a deliberately-vacuous cell showing where the vacuity boundary is, a negative-apparatus control asserting its own liveness oracle CAN go red, and a disassembler cross-check of every placed word.  BASE 24/24, null medium 16/24, EIGHT mutants 16-23/24, ZERO ESCAPES (killtable_20260910/t2/SCORES.txt)"),
 
@@ -3562,6 +3565,9 @@ def selftest(verbose=False):
         #  the denominator is the whole point: it is what makes a shrinking check
         #  visible.  A skip that reduced 21 to 17 and still said PASS is the defect
         #  this arm now refuses to have.
+        #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] FOUR False results,
+        #  so the DENOMINATOR STAYS 22 and the run FAILS.  (hcheckprobewiring:F16:
+        #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
         results.extend([False, False, False, False])
         print("  FAIL  M1/M2/M2b/M3 -- no exempt DETECTOR could be extracted.")
         print("        NOT the EXEMPT table doing its job.  Either _exline() cannot")
@@ -3755,6 +3761,9 @@ def selftest(verbose=False):
     #  edit, which is the harness correctly rejecting an ambiguous mutant.)
     #  It reddens because the ignored
     #  branch swallows the nested invocation instead.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] It reddens because the
+    #  nested probe is keyed under its bare basename rather than its manifest relative path.
+    #  (hcheckprobewiring:F18: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     rg, chk = fresh()
     _st_apply(chk, _lit('hits.setdefault(', 'rel, []).append'),
                    _lit('hits.setdefault(', 'b, []).append'))

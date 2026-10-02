@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""mk_hrec_textrule.py -- the grok brief that rules GPT-6 Astra's objections to the TEXT of the harness record notes.
+
+Astra's placement check (hplace_01..09) found 42 of 154 notes wrong.  The PLACE-only ones are the placer's errors and
+are moved by an overlay.  The TRUE / READS / TOOL ones say the ruled replacement SENTENCE is false, incomplete or reads
+as a fragment, and propose new wording -- Astra's wording, which is not adopted on its say-so: grok rules each, and
+the sentence that stands is cut from grok's RESULT.  Writes briefs/grok_hrectext.md under recordfix_20261002/."""
+import io
+import os
+import re
+import subprocess
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "recordfix_20261002")
+SP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+rev = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+dirty = [l[3:].strip() for l in subprocess.run(["git", "-C", SEC, "status", "--short", "--", "src", "regress", "tools"],
+                                                capture_output=True, text=True).stdout.split("\n") if l[:2].strip() == "M"]
+
+
+def tsv(p):
+    return [l.split("\t") for l in io.open(p, encoding="utf-8").read().split("\n")[1:] if l.strip()]
+
+
+find = [r for r in tsv(os.path.join(D, "HPLACE_FINDINGS.tsv")) if r[2] != "PLACE"]
+rec = dict((r[0], r) for r in tsv(os.path.join(D, "HRECORD.tsv")))
+ver = dict((r[0], r) for r in tsv(os.path.join(D, "HREC_VERIFIED.tsv")))
+plan = dict((r[0], r) for r in tsv(os.path.join(SP, "hrec_stage", "PLAN.tsv")) if not r[0].startswith("NOT PLACED"))
+
+
+def cut(s, n):
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+
+body = []
+for n, r in enumerate(find, 1):
+    key, part, kinds, what, sugg, ln, text = r
+    p = plan.get(key, ["", "?", "?"])
+    body.append("%d. `%s` | %s | note after HEAD line %s | the ruled sentence: %s | the false text it corrects: %s | Astra (%s): %s | Astra proposes: %s"
+                % (n, key, p[1], p[2], cut(rec[key][3], 420), cut(ver[key][9], 300) if key in ver else "(see the locator answer)",
+                   kinds, cut(what, 300), cut(sugg, 500)))
+text = """RECORD CORRECTIONS IN THE REGRESSION HARNESS -- %(n)d notes whose SENTENCE GPT-6 Astra says is false, incomplete or a fragment: rule each
+
+Open with the token `GROK_HRECTEXT_ALIVE_1002` on its own line and the first line of
+`%(wd)s%(bs)s_scratchpad%(bs)sCHECKPOINT.md` quoted verbatim, then ONE verdict line:
+`VERDICT: <c> conceded, <h> held, <p> conceded in part, of %(n)d`.
+
+READ-ONLY.  Write nothing, build nothing, run no emulator.  This is a RECORDS check: whether a sentence that is to be
+added to a comment or docstring of a test script is true of the committed code.  The tree is
+`%(wd)s%(bs)sGXEMUL-SEC` at commit `%(rev)s`; ignore any other `src/` under the project root.  You cannot run `git`,
+so you read the files on disk; these are DIRTY on disk and their lines may differ from the commit: %(dirty)s.
+Every other file is the committed one.
+
+**Context.**  A review of the regression harness found comments and docstrings that state something the code does
+not do.  Each finding was ruled RECORD with a replacement sentence (the "ruled sentence" below; the record is
+`regress%(bs)sartifacts%(bs)sastraretro_harness_20260926%(bs)sHARNESS_DISPOSITIONS.md`).  A script has placed each
+sentence as a NOTE after the paragraph that holds the false text, old text kept.  The staged result is in
+`regress%(bs)sartifacts%(bs)srecordfix_20261002%(bs)sdraft%(bs)shrec_01.diff` .. `hrec_09.diff` (diffs against HEAD; search
+the key).  GPT-6 Astra, which wrote the review, checked every note (`hplace_01%(bs)scodex_hplace_01.txt` ..
+`hplace_09%(bs)s...`) and says the %(n)d below have a wrong or unclear SENTENCE; it proposes new wording.  Its wording is
+not adopted on its word: you rule each, from the code.  Where Astra is right, the sentence that stands is YOURS -- take
+Astra's words if they are right, amend them if not.  A sentence must be true of the code at `%(rev)s`, say what the
+old text got wrong, and stand on its own after the old text (no fragment that begins mid-sentence).  Keep it plain
+ASCII and under about 400 characters.  Some of these notes are also to be MOVED (Astra's PLACE finding); the move is
+handled separately -- rule the sentence only.
+
+**For each, ONE line:**
+`<n> | <key> | CONCEDE / HOLD / CONCEDE IN PART: <why, with path:line> | SENTENCE: "<the sentence that should stand>" | <the lines you read>`
+(for HOLD, SENTENCE is the ruled sentence unchanged, quoted.)
+
+End with `DENOMINATOR: <a> of %(n)d read in the code the comment describes`.
+
+**The notes** (n | key | file | where the note sits | the ruled sentence | the false text | Astra's objection | Astra's proposal):
+""" % {"n": len(find), "wd": WD, "bs": BS, "rev": rev, "dirty": ", ".join("`%s`" % d for d in dirty)}
+p = os.path.join(D, "briefs", "grok_hrectext.md")
+io.open(p, "w", encoding="utf-8", newline="\n").write(text + "\n".join(body) + "\n")
+print("%d text findings -> %s (%d bytes)" % (len(find), p, os.path.getsize(p)))

@@ -1,0 +1,35 @@
+RECORD CORRECTIONS IN THE REGRESSION HARNESS, part 06 -- is each note under the statement it corrects, and is it true there?
+
+Open with the token `ASTRAHPLACE_06_ALIVE` on its own line, then ONE verdict line, exactly one of:
+`VERDICT: CLOSES -- all 18 notes are placed right and read true`
+`VERDICT: <w> of 18 notes wrong`
+
+This is a RECORDS check: comments and docstrings of test scripts against the committed code they describe.  Write
+nothing, build nothing, run no emulator.  Please do not simply ratify: the notes were placed by a script, and a script
+cannot tell which paragraph of a comment makes the false statement.
+
+**Where things are.**  The tree is `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`; read committed files with
+`git -C C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC show HEAD:<path>` (HEAD is `c29a5fd3`); ignore any other `src/` under the project root.
+Everything else below is under `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\recordfix_20261002\`.
+
+**Context.**  Your review of the regression harness found comments and docstrings that state something the code does
+not do.  Each such finding was ruled RECORD, with the sentence that is true (`HRECORD.tsv`; the final dispositions are
+`..\astraretro_harness_20260926\HARNESS_DISPOSITIONS.md`), and a locator seat quoted the false text verbatim
+(`HREC_VERIFIED.tsv`).  The corrections are now PLACED: one note after the paragraph that holds the quoted text, the old
+text kept as it was written.  `draft\hrec_06.diff` is the diff against HEAD for this part's 8 files;
+`draft\PLAN.tsv` lists every note with its key.  A script has already shown that every change is inside a comment or
+a docstring, so no program token changes.  Nothing is committed yet.
+
+**For each added note** (a line that begins `[#556, 2026-10-02 -- a records correction; ...]` and ends with its key):
+* PLACE -- does it follow the paragraph that makes the false statement, and not another paragraph of the same comment,
+  the end of an unrelated block, or the middle of a list or table?
+* TRUE -- is its sentence true of the committed code at HEAD?  Read the code the comment describes.
+* READS -- read straight after the old text, is it clear WHICH statement it corrects?
+* TOOL -- would its text be picked up by a tool that reads these files as text: a gate that greps a probe for a row
+  name or a token, a score such as `13/13` that a checker compares with a gate's pin, a marker a script keys on?
+Report only the notes with something wrong, one line each:
+`<key> | PLACE / TRUE / READS / TOOL: <what is wrong, path:line> | <where it should go, or what it should say>`
+
+The keys of this part: `hlcaisalaneprobe:F3`, `hlunaabsentcpuprobe:F4`, `hlunaabsentcpuprobe:F5`, `hlunaabsentcpuprobe:F6`, `hbundle_regress27:F7`, `hm88kroundingprobe:F5`, `hm88kroundingprobe:F6`, `hm88kroundingprobe:F7`, `hm88kroundingprobe:F8`, `regress21:F12`, `regress24:F8`, `regress24:F9`, `hbundle_regress28:F10`, `hpcc2widthprobe:F3`, `hpcc2widthprobe:F4`, `hpcc2widthprobe:F5`, `hpcc2widthprobe:F6`, `hpcc2widthprobe:F9`.
+
+End with `DENOMINATOR: <a> of 18 notes read in the diff and in the code they describe`.

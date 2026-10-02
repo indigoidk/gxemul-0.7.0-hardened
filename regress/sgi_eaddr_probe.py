@@ -81,6 +81,9 @@ REACHING = ["ip12", "ip28", "ip30", "ip32", "ip35"]
 #  its own device_add() at interrupt_handler_lookup() <- devinit_z8530(), on its `irq=0`.
 #  A control using two of the same kind would not show that the probe distinguishes
 #  "did not reach" from "reached and was fine".
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Both ip19 and ip27 abort
+#  during z8530 construction through interrupt_handler_lookup; ip19's later literal abort is not reached.
+#  (hbundle_regress30:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 ABORTERS = ["ip19", "ip27"]
 
 #  The IDENTITY constant.  A probe copied into a tree where it no longer runs all of its

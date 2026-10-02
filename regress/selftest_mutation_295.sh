@@ -17,6 +17,9 @@
 # construction -- stays PASS. "Every committed row must flip" was the design's
 # original acceptance rule; five review seats independently rejected it as
 # self-contradictory (the controls never flip; that is their purpose).
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the NaN/cvt/cfc1 controls,
+# which CANNOT flip by construction (trunc controls flip only under the trunc mutant).  (hbundle_regress32:F10:
+# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # Hardening (each clause traces to a review finding):
 #  * the build tree's cpu_mips_coproc.c is cmp'd against the repo BEFORE copying

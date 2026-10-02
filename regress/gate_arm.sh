@@ -58,6 +58,9 @@
 # and the ADD/ADC arm of the same #if, which keeps its own `c32 != c64` test --
 # were not disturbed. A gate for this fix that checked only SBC and RSC would
 # not detect the regression that matters most.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 311 rewrites ONE line that
+# five instructions share, and three of them were already correct.  (hgatearm:F7:
+# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # The decode-time row
 # ------------------
@@ -925,6 +928,9 @@ done
 # that repairs BE by breaking LE. The `ldrb` witnesses are the purest form: a
 # byte load has no byte order, so it exposes the raw memory layout directly, and
 # the buggy column is the exact reverse of the arch column.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The five cold be * rows use
+# -E barearm (BE) and are the DISCriminators; be warm word and the six le * rows are INVARIANCE CONTROLS.
+# (hgatearm:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # #372's original sweep (its SIX BE + six LE rows): pre-fix 7 of 12 -- the five
 # cold BE rows red at the host-order values, the warm control and LE controls
@@ -1041,6 +1047,9 @@ done
 #  them green, and the actual pre-#390 parent reads the same values the fixed
 #  build does.  They are kept as standing evidence that LDRD with Rn == PC is
 #  unaffected, and they will redden if a future round drags it into that path.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the LDRD rows are CTRL
+#  because LDRD shared the four-byte base error but the 8-byte alignment mask concealed it on all aligned addresses.
+#  (hgatearm:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 for v in "390 be data +12" "390 le data +12" \
          "390 be ldrd r0" "390 be ldrd r1" \
          "390 le ldrd r0" "390 le ldrd r1"; do
@@ -1609,6 +1618,9 @@ else
     #  TWO SPACES AFTER $v, NOT ONE -- the sibling blocks above were both bitten by the one-space
     #  form, in both of its directions.  Pre-flighted mechanically for this row set before the gate
     #  ever ran: no name is a prefix of another, and every pattern matches exactly one rendered row.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] every pattern matches
+    #  exactly one rendered row (the prefix pair rgb tiled and rgb tiled64 is distinguished by two trailing spaces).
+    #  (hgatearm:F13: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     #
     #  The probe prints names with "%-16s" plus an explicit space, so a name of N chars is followed
     #  by (16-N)+1 spaces.  The longest here is `rgb not corrupt' at 15, leaving exactly two -- ONE

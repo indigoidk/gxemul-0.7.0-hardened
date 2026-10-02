@@ -43,6 +43,11 @@ catch, and which it is NOT:
           a "at least one message" row PASSES.  Only `two once' catches it,
           because it performs TWO distinct defaulted draws in ONE session and
           wants EXACTLY one message.
+          [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The dropped-|= flood,
+          which announces on every defaulted draw, is caught not only by two once but also by dec flood, dec ops,
+          xlatch all, dec b26 through dec b31, and dec regs. Each of those rows draws twice and wants exactly one
+          message, so an at-least-one row stays green.  (hsgideprimopprobe:F5:
+          regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
       *** THE FLOOD MUTANT IS THE ONE THAT ESCAPES A NAIVE ROW SET, and this
       file's own author had it backwards in a pass-2 brief until the glm seat
       corrected him. ***
@@ -1212,6 +1217,9 @@ row("dec regs stip", t.count("UNIMPLEMENTED stipple_mode bits: 0xffffffff"), 2,
 #  worth stating rather than hunting for one.  M_OPS_ROP remains a MEASURED green
 #  (47/47): `rop' is read by the enclosing function and not by the latch body, so it
 #  is outside what any row claims.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] M_OPS_ROP is red at HEAD:
+#  rop=0xffffffff in dec regs (:1128) draws twice and detects rop latch bypass.  (hsgideprimopprobe:F4:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  *** THE GREEN CONTROL HAD TO MOVE.  It was TB, and with the op widened to
 #  0x02ffffff the row legitimately reds on TB -- so leaving the control there

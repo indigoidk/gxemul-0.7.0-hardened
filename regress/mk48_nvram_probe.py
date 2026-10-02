@@ -8,6 +8,8 @@ preserved unmodified at
 and scored 15/47 on the committed build and 46/47 after the fix; the 46th was
 that one row, which by construction cannot be green on a fixed build.  This
 file therefore scores 47/47 post-fix and 14/47 pre-fix.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] HEAD emits 57 rows.
+(regress24:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 
 DEFECT.  DEVICE_ACCESS(mk48txx) accepts everything outside
@@ -282,6 +284,9 @@ row("csr rise", printed(t, "r4"), "0x%x" % bcd(g.tm_mday),
 #      0x1ff0..0x1ff7    the 16 kill rows       survival only      CLOSED HERE
 #      0x1ff8            `csr rise'             SIDE EFFECT        already closed
 #      0x1ff9..0x1fff    `devsig' x4            DATA verified      already closed
+#      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] devsig reads 0x1ffc,
+#      0x1ffd, 0x1ffe, and 0x1fff. 0x1ff9 is a survival row. 0x1ffa and 0x1ffb are not accessed.  (regress24:F9:
+#      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  Each row writes a DISTINCT byte, so a mutant folding several offsets onto one cell is
 #  caught too; a single shared value would let aliasing pass.  0x5a is avoided because it

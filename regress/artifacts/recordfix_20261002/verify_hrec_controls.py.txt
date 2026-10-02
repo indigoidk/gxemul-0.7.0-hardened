@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""verify_hrec_controls.py <stage dir>  -- negative controls for verify_hrec.py: a check that cannot fail is worse
+than none.  Copies three staged files into a scratch stage and damages each the way a wrong placement would:
+    .py   a note inside a string that is NOT a docstring          -> must FAIL
+    .sh   a note line inside a `cat <<EOF` here-document           -> must FAIL
+    .c    a note outside any comment                              -> must FAIL
+and one positive control: the same three files undamaged          -> must PASS.
+Prints CONTROLS n/4."""
+import io
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ST = sys.argv[1]
+HERE = os.path.dirname(os.path.abspath(__file__))
+NOTE = "[#NNN, 2026-10-02 -- a records correction; the text above is kept as it was written] control."
+
+
+def first(ext):
+    for root, _, files in os.walk(ST):
+        for f in sorted(files):
+            if f.endswith(ext):
+                p = os.path.join(root, f)
+                return os.path.relpath(p, ST).replace(os.sep, "/")
+    raise SystemExit("no %s file staged" % ext)
+
+
+def run(d):
+    r = subprocess.run([sys.executable, os.path.join(HERE, "verify_hrec.py"), d], capture_output=True, text=True)
+    return r.returncode, r.stdout.strip().split("\n")[-1]
+
+
+def stage(edits):
+    d = tempfile.mkdtemp(prefix="hrecctl_")
+    for rel, fn in edits.items():
+        p = os.path.join(d, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        s = io.open(os.path.join(ST, *rel.split("/")), encoding="utf-8", newline="").read()
+        io.open(p, "w", encoding="utf-8", newline="").write(fn(s))
+    return d
+
+
+py, sh, c = first(".py"), first(".sh"), first(".c")
+ok = 0
+rc, last = run(stage({py: lambda s: s, sh: lambda s: s, c: lambda s: s}))
+print("positive control (undamaged): rc=%d %s" % (rc, last))
+ok += rc == 0
+rc, last = run(stage({py: lambda s: s + '\nX_CONTROL = """a string that is data\n%s\n"""\n' % NOTE}))
+print("py, a new non-docstring string: rc=%d %s" % (rc, last))
+ok += rc == 1
+rc, last = run(stage({sh: lambda s: s + "\ncat <<EOF\n# %s\nEOF\n" % NOTE}))
+print("sh, a note inside a cat here-document: rc=%d %s" % (rc, last))
+ok += rc == 1
+rc, last = run(stage({c: lambda s: s + "\nint control_%s;\n" % "x"}))
+print("c, text outside a comment: rc=%d %s" % (rc, last))
+ok += rc == 1
+print("CONTROLS %d/4" % ok)
+sys.exit(0 if ok == 4 else 1)

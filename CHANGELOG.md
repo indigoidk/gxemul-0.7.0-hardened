@@ -1,3 +1,45 @@
+# `#556` (hrecord): 154 record corrections placed as 155 notes in the regression harness's comments and docstrings, in 65 files; 27 not made and filed as `hrecordowed`; no test behaviour changes
+
+**Why.**  GPT-6 Astra's review of the regression harness found comments and docstrings that state something the code
+does not do.  `#554` filed the review; each such finding was ruled RECORD with the sentence that is true.  A false
+comment on a probe is read by the next round that touches the probe, so the corrections are owed in place.
+
+**What ships.**  155 notes for 154 dispositions in 65 files under `regress/` and `tools/` -- 91 in `#` comments, 33 in
+C block comments, 31 in Python docstrings.  Each is one note after the paragraph that holds the false text, in the
+file's own comment syntax, beginning `[#556, 2026-10-02 -- a records correction; the text above is kept as it was
+written]` and ending with the key of its disposition.  Nothing is deleted or rewritten.  **No compiled code and no
+test behaviour changes**: `verify_hrec.py.txt` proves, per language, that every staged file differs from HEAD only
+inside comments and docstrings (Python: token stream, docstrings by the parser; shell: non-comment lines and
+here-documents; C: comment-stripped text), and its negative controls fail it on a bad placement in each language.
+
+**How the placement was checked.**  Astra read every note against the code (`hplace_01` .. `hplace_09`: 01: 6 of 20 notes wrong; 02: 1 of 15 notes wrong; 03: 7 of 19 notes wrong; 04: 5 of 19 notes wrong; 05: 5 of 20 notes wrong; 06: 7 of 18 notes wrong; 07: 5 of 20 notes wrong; 08: 6 of 18 notes wrong; 09: CLOSES -- all 5 notes are placed right and read true).
+42 findings: 22 placement errors of the script -- the paragraph that holds a quote is not always the one that
+makes the false statement -- fixed by an overlay that names the line (`HREC_PLACE_OVERLAY.tsv`); 34 objections to
+the ruled SENTENCE (false, incomplete, or a fragment that begins mid-sentence).  Astra's own wording was not adopted
+on its say-so: grok ruled each sentence first-hand (`grok/grok_hrectext.txt`: 19 conceded, 8 held, 7 conceded in part, of 34) and the sentence that stands
+is cut from its line (`HREC_TEXT_OVERLAY.tsv`, 27).  20 notes were moved.  Astra's check of the changed
+notes (`hplace_10`): 3 of 48 notes wrong.  Two of the three were sentences: one grok had HELD, settled in Astra's favour by reading
+the probe's own row table (the main loop; `regress/mips_fixedmode_probe.py:125-128`), one gaining Astra's
+qualification after the main loop read the device (`src/devices/dev_wdc.c:1576-1611`); the third split one note into
+two, one per statement it corrects.  Astra's check of those three (`hplace_11`): CLOSES -- the three repairs are right and nothing else changed.
+
+**Not made -- 27 of 181, filed as the class row `hrecordowed` (LOW):**
+* 18 -- the false text is in a string the program prints (a code change, not a records one): `regress21:F8`, `hbundle_regress26:F10`, `hbundle_regress26:F12`, `hbundle_regress28:F13`, `hbundle_regress28:F14`, `hbundle_regress32:F13`, `hcheckprobewiring:F10`, `hcheckprobewiring:F12`, `hcheckprobewiring:F13`, `hcheckprobewiring:F14`, `hcheckprobewiring:F15`, `hcheckprobewiring:F17`, `hdiffm8820x:F6`, `hgdromcondprobe:F6`, `hpcc2widthprobe:F7`, `hprecommitcheck:F16`, `hsgideprimopprobe:F3`, `hsgideprimopprobe:F6`
+* 3 -- no replacement sentence was ruled: `hbundle_regress13:F9`, `hbundle_regress29:F6`, `hdiffdiskimageio:F2`
+* 3 -- the file carries unreviewed working deltas and is not committed: `hbundle_regress15:F7`, `hbundle_tools1:F5`, `hbundle_tools1:F6`
+* 2 -- the differential has no identity-guard row, which the pre-commit hook requires of any modified differential; adding one is a code change: `hdiffieeestore:F6`, `hdiffieeestore:F7`
+* 1 -- the false text was not located: `hbundle_tools2:F6`
+
+**Seats, by name.**  GPT-6 Astra (codex, `ultra`): the review, the confirmations, 145 locator answers, the nine
+placement checks and the check of the repairs; no wall, no refusal.  grok (grok-4.7 xhigh): the sentence rulings.
+agy (gemini-3.8-flash-high): 36 locator answers before its quota wall of 13:58; four of its quotes were not
+verbatim and were matched by their fragments inside the lines it named (`apply_hrec.py.txt`, `loose_last`).  The Fable
+and Opus agent seats were deliberately not fired (owner instruction, 2026-10-02); kimi down; Ollama not fired.
+
+**Not done, and where it goes.**  The 27 corrections above.  The source review's 72 RECORD-L4 corrections (comments
+in `src/` for the most part: a code-file edit with propagation to every build tree and a pass-2 receipt).  This commit
+touches no `src/`: the next one owes it no pass-2 receipt.
+
 # `#555` (idless): the queue's id-less entries get ids -- 130 rows, 43 sentences added in place, 104 passages pointed at the id that carries them; none of the rows is fixed here
 
 **Why.**  `OUTSTANDING_BUGS.md` names most rows by a short backticked id, and some entries record an open defect, an

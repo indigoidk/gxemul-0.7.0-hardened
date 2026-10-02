@@ -36,6 +36,9 @@
  *        it leaves every row green.  MEASURED by the agy seat.  Closing that needs the
  *        guest-rate narrowing to move into the timer core where it is reachable, which is
  *        a shipped-code change in its own round -- filed, not silently tolerated.
+ *        [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] diff_rtc_range.c
+ *        directly includes the RTC device with stubs; covering narrowing does not require moving it into the timer
+ *        core.  (hbundle_regress18:F16: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  EVERY CONSTANT IS READ FROM THE HEADER, never transcribed.  A test that carries its own
  *  copy of the number under test cannot notice when the two disagree -- that is precisely
@@ -188,6 +191,9 @@ int main(void)
 		 *  IN THIS FILE COMPARES NUMBERS.  118 rows went inert, this sentinel stayed blind,
 		 *  and four of the five gate-2 self-mutants stayed green too.  A sentinel whose
 		 *  input does not resemble the rows it vouches for is a sentinel with a whitelist.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] This file
+		 *  compares both numeric strings and symbolic results.  (hbundle_regress18:F18:
+		 *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 		 *
 		 *  THE HEALTHY PATH PRINTS AN ok-SHAPED LINE, DELIBERATELY.  The first version
 		 *  printed nothing on success and a FAIL line only on failure, which broke two

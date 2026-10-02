@@ -231,6 +231,9 @@ MOV_L_AT_R1_R3 = 0x6312       # mov.l @r1,r3.  0110nnnnmmmm0010 with n=3 m=1;
 #  instead of trusting the typing, which is the hand-assembled-encoding trap the
 #  carrier records: a wrong field yields a plausible value and no error.  The
 #  sibling MOV_L_AT_R1_R2 = 0x6212 (n=2 m=1) is the cross-check.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 0x6313 is MOV R1,R3 (low
+#  nibble 0011); MOV.L @R1+,R3 is 0x6316 (low nibble 0110).  (hgdromdefaultprobe:F5:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 MOV_L_R2_AT_R1 = 0x2122       # mov.l r2,@r1  (n=1 m=2)
 MOV_L_R6_AT_R5 = 0x2562       # mov.l r6,@r5  (0010nnnnmmmm0010, n=5 m=6)
 MOV_L_R4_AT_R3 = 0x2342       # mov.l r4,@r3  (0010nnnnmmmm0010, n=3 m=4)
@@ -408,6 +411,9 @@ row("devsig", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g,
 #  fresh device -- busy, cond, stat and cnt are all zero.  No value-only row
 #  can tell served from declined here.  So this is now store-then-read-back on
 #  CNTHI, which RAM cannot fake and a deleted case cannot satisfy.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] which a declined default
+#  read (returning 0) cannot satisfy, distinguishing implemented from default.  (hgdromdefaultprobe:F6:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 t, alive, how = session(pair(st(BASE + 0x94, 0x5a) + ld(BASE + 0x94),
                         [MOV_W_R8_AT_R7, MOV_W_AT_R1_R2]) + ["print r2"])
 row("impl ok", printed(t, "r2") if alive else "died", "0x5a",
@@ -421,6 +427,8 @@ row("impl ok", printed(t, "r2") if alive else "died", "0x5a",
 #  reachable the moment any row selection exists, which is why it is closed BEFORE
 #  that lands rather than with it.  Found by the opus seat while attacking a row
 #  filter that was withdrawn -- the filter went, the hazard it exposed stayed.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Latent today (all 60 rows
+#  always run) and.  (hgdromdefaultprobe:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 print("GDROM_DEF_CONTROL=%s"
       % ("OK" if rows and all(ok for _, ok in rows) else "DEAD"))
 
@@ -519,6 +527,9 @@ row("granularity", ("%d" % len(SAYS.findall(t))) if alive else "died", "1",
 #  detector must pin that the IMPLEMENTED offsets still work.  Without these,
 #  a mutant that turns the whole switch into `default:` -- or simply deletes
 #  the implemented arms -- scores full marks on every row above.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] scores full marks on the
+#  default-trigger rows above (though impl ok would catch CNTHI deletion).  (hgdromdefaultprobe:F7:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 t, alive, how = session(pair(st(IMPL_CNTLO, 0x98) + ld(IMPL_CNTLO),
                         [MOV_W_R8_AT_R7, MOV_W_AT_R1_R2]) + ["print r2"])
@@ -613,6 +624,9 @@ row("scan uniq", ("%d" % len(hits)) if alive else "died", "56",
 #  GDROM_DATA", not "read from addr 0x".
 #  Same tuple as the scan uses -- one definition, so the two rows can never
 #  disagree about which offsets are implemented.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The scan hardcodes 64 words
+#  and 56 declines; accept8 iterates IMPLEMENTED_WORDS.  (hgdromdefaultprobe:F8:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 IMPLEMENTED = IMPLEMENTED_WORDS
 #  Eight loads through ONE address register, re-pointed between steps is not
 #  possible in a single run -- so use r1 and step the loads one at a time with
@@ -891,6 +905,9 @@ row("arm once", ("%d" % len(DMA_ARM.findall(t))) if alive else "died", "1",
 #  two-space match becomes UNSATISFIABLE and the row silently stops being
 #  tested.  Caught by a name-length check before anything ran.  `nodata live`
 #  is 11.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] at L=14 it leaves ONE space,
+#  so the gate's ^$v  anchor matches 0 lines and the gate fails.  (hgdromdefaultprobe:F9:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  --- the NO-STAGED-DATA arm (on HEAD :829), armed correctly but
 #  nothing staged.  A COMPLIANT guest reaches
 #  this: Linux programs the four DMA registers BEFORE sending its packet, so
@@ -1377,6 +1394,9 @@ t, alive, how = session(
 #  with staged data still runs"; it proves the ARMING TEST passed and nothing
 #  more, because the `Transfering` fatal printed BEFORE the `d->data == NULL`
 #  check.  `accept data` below is the row that proves the transfer ran.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Transfering formerly printed
+#  before the d->data == NULL check; #462 moved it below the check.  (hgdromdefaultprobe:F10:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 row("accept dma", "yes" if ("Transfering" in t and alive) else "no", "yes",
     "a LEGAL arming is still accepted and enters the transfer path")
 #  NOT an accept row -- see the block above.  Kept because it is live.

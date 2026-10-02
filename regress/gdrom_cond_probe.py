@@ -71,6 +71,9 @@ later escape in those is OUTSIDE this contract, not a breach of it.
 silent hole into a stated one. ***  The cond-readback rows are anchored at a FINITE SET of
 declined inputs -- {0x00, 0x08, 0x09, 0x55, 0xaa, 0xff}.  A VALUE-CONDITIONAL store whose
 predicate is false for every one of them survives every row here.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The COND-readback rows sample
+declined inputs {0x08, 0x09, 0x55, 0xaa, 0xff, 0x108, 0x1ef}; thresholds above 0x1ef remain untested.
+(hgdromcondprobe:F5: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Two members of that family were found, from opposite directions, and BOTH are closed:
 `idata >= 0x80` (closed by 0xaa) and `idata >= 0xef` (closed by 0xff).  A third, `>= 0xb0`,
@@ -394,6 +397,9 @@ print("")
 #  would die and the text never appear) and one that declines SILENTLY.
 #  *** THE EXIT STATUS IS PART OF THIS ROW, AND LEAVING IT OUT WAS A CLAUSE-(b) FLOOR
 #  BREACH -- caught on pass 2 by a PACKET-FED seat reasoning from the diff alone. ***
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Kills a mutant that
+#  reinstates exit(1) (detected via how != exit0) and one that declines SILENTLY.  (hgdromcondprobe:F10:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  The header's ban on the survival channel was written too broadly.  Reinstating `exit(1)`
 #  after the fatal() PRINTS THE DIAGNOSTIC AND THEN DIES: the message count is 1, the byte
@@ -413,6 +419,9 @@ row("R1 a88 says", "%d|%s|%s" % (t.count(A88_TEXT), m.group(1) if m else "absent
 #  R1b -- and the byte TRACKS.  A second, DIFFERENT declined value is what separates a
 #  format that prints idata from one that prints a constant, and it is what reddens under
 #  the 0x%02x -> 0x%02d fidelity mutant (0xaa would report as "70").
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the 0x%02x -> 0x%02d
+#  fidelity mutant (0xaa formats as 170, leaving m absent).  (hgdromcondprobe:F11:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 A = Addr(CODE)
 t, alive, how = session(store16(GDROM_UNK88, 0x00aa, A))
 m = A88_RE.search(t)
@@ -668,6 +677,9 @@ row("R7 no event", bit(t, "r2", GDROM_EVENT_BIT), "clear",
 #  The comment this discharges says the decline "accepted no new command or packet ... any
 #  pre-existing command state is left untouched" -- a counterfactual claim about state, and
 #  CLAIM->ROW owes it a row whatever verbs it happens to use.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] without this row a one-line
+#  busy mutation in the decline arm passes both; stat is recomputed on read.  (hgdromcondprobe:F2:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  BUSY is read-only here on purpose: its write arm is `d->busy &= ~idata` -- WRITE-TO-CLEAR
 #  -- so a probe that "initialises" busy by writing it CLEARS bits instead of setting them.
@@ -888,6 +900,9 @@ row("R12d hi byte", "%s|%s|%s" % (m.group(1) if m else "absent",
 #  *** AND IT IS A CONTRACT BREACH, NOT AN OUT-OF-CONTRACT ESCAPE. ***  Clause (e) claims
 #  "emptying either accepted arm (R6, R8, R9)".  The contract disclaims the GDROM_DATA READ
 #  path; this consequence lands in the WRITE path.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Clause (e) includes 'forging
+#  readiness so a later DATA READ finds data (R12)'; this consequence lands in the WRITE path.  (hgdromcondprobe:F8:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  *** AND `PRETABLE.out` ENUMERATED `d->cmd_count` BY NAME AS A SITE-B BODY FIELD, TWICE,
 #  AND THEN NO ROW WAS WRITTEN. ***  That is #490's lost-prescription failure occurring in
@@ -930,6 +945,10 @@ t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
 #  outcome is not.*  The one refinement is that the positive observable must be one only the
 #  STORE can produce -- R12's no-data diagnostic is positive and is ALSO produced by the fresh
 #  state, which is why R12 remains a member of the class and this row no longer is.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] An earlier version of R12
+#  remained in the fresh-state class until its oracle required the COND decline announcement (the row at line 772);
+#  current R12 is not a member of that class.  (hgdromcondprobe:F9:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  *** AND THE TOKEN CLOSED A SECOND MUTANT NOBODY WAS LOOKING FOR, WHICH IS THE PART WORTH
 #  RECORDING. ***  A different seat, reviewing the version WITHOUT this token, showed that
 #  R13 pinned less than its comment claimed:
@@ -997,6 +1016,9 @@ row("R13b mid pkt", "%d|%s" % (t.count(DISPATCH_TEXT), m.group(1) if m else "abs
 #  converts "the rig was alive when we started" into "the rig was alive throughout".
 #  A run whose trailing control is dead has measured nothing after the point it died,
 #  and the score must not be read as a product result.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] converts 'the rig was alive
+#  when we started' into 'the rig was still alive at the end (though intermediate sessions can still fail)'.
+#  (hgdromcondprobe:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 A = Addr(CODE)
 t, alive, how = session(["put w 0x8c001800, 0x%x" % LIVE] + load32(0x8c001800, A))
 row("Zlive end", printed(t, "r2"), "0x%x" % LIVE,

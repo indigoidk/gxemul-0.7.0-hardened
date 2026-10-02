@@ -11,6 +11,9 @@
  *  *** THE ROWS ASSERT RETURN VALUES AND GUEST-VISIBLE STATUS, NOT BUFFER
  *  CONTENTS. A row that only inspects the buffer passes on zero-fill, which is
  *  the very failure under test. ***
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Early sections assert
+ *  return values; later sections assert buffer contents.  (hdiffdiskimageio:F5:
+ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  THE WRITE FAILURE IS INJECTED WITH RLIMIT_FSIZE, not with a read-only FILE*.
  *  A read-only stream would prove only that fwrite can fail; the file-size
@@ -24,6 +27,8 @@
  *  Rows marked [CONTROL] pass on the shipping code. Rows marked [PROOF] fail on
  *  the shipping code and are the existence proof. A build failure or a signal
  *  is a FAULT, never a detection, and is scored separately.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] [PROOF] rows pass on the
+ *  corrected tree.  (hdiffdiskimageio:F5: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -225,7 +230,12 @@ static void mkdisk(struct diskimage *d, const char *path, const char *mode,
  */
 /*  Release a diskimage opened by this section: the overlay FILE handles are
     what matter, because ROW Z opens a SECOND overlay on the same struct and a
-    leaked handle would make its bitmap read from the first one.  */
+    leaked handle would make its bitmap read from the first one.
+    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The helper closes the base
+    and overlay streams and frees the overlay array between fixtures; it does not free individual overlay names.
+    Each overlay opens its own bitmap stream, so a leaked handle is not reused as the next bitmap.
+    (hdiffdiskimageio:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     */
 /*  IDEMPOTENT BY CONSTRUCTION, and that is the point rather than tidiness: this
     section opens SEVEN disks and a review seat found four of them unfreed.  A
     balancing pass that can double-free is worse than the leak -- I crashed the
@@ -274,6 +284,9 @@ static void altctl_shortread_free(struct diskimage *d)
  *    * narrowing the fill by a THRESHOLD on totallenread (E2, ROW S);
  *    * narrowing the fill by WRITABILITY                 (E1, ROW W);
  *    * narrowing the fill by disk TYPE                   (E4, ROW T).
+ *      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Correcting the
+ *      M1_revert item: P, U and Z are green pre-fix by design; S fails pre-fix.  (hdiffdiskimageio:F6:
+ *      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  *** THE FIRST THREE ARE STATED AT INSTANCE GRANULARITY ON PURPOSE. ***
  *  An earlier draft said 'narrowing by ITERATION' as a CLASS while listing
@@ -383,7 +396,11 @@ static void section_short_read_midtransfer(void)
 
 	/*  The two above are the SAME defect counted at its two ends, and both
 	    are kept on purpose: a fix that only stops the loop early greens the
-	    first and leaves the second at 712.  */
+	    first and leaves the second at 712.
+	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] a fix that only
+	    stops the loop early greens the first and leaves the second at 0 (the continuing defect left 712).
+	    (hdiffdiskimageio:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+	     */
 	for (i = 0, nv = 0; i < 1536; i++)
 		if (buf[i] == 'V') nv++;
 	check("short read: overlay bytes are the 200 that exist", nv, 200);
@@ -478,6 +495,9 @@ static void section_short_read_midtransfer(void)
 	altctl_shortread_free(&d);
 
 	/*  ROW Z -- AN EMPTY OVERLAY, WHICH IS THE ONLY WAY TO REACH lenread == 0.
+	 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] ROW Z -- AN EMPTY
+	 *  OVERLAY, REACHING lenread == 0 AT ITERATION 1 (ROW S ALSO REACHES lenread == 0 AT ITERATION 3).
+	 *  (hdiffdiskimageio:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 	    *** THIS ROW IS GREEN BEFORE THE FIX AND AFTER IT, AND THAT IS
 	    CORRECT. ***  A whole-read shortfall IS a final-iteration shortfall,
@@ -794,7 +814,11 @@ static void section_overlay_unaligned(void)
 	fclose(f);
 
 	/*  Overlay DATA: 4096 bytes of 'V'.  A real overlay file is full-size;
-	    the bitmap, not the file length, says which blocks are live.  */
+	    the bitmap, not the file length, says which blocks are live.
+	 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Overlay DATA: 4096
+	 *  bytes of 'V' for this fixture; real production R: overlays start at 0 bytes and grow on demand.
+	 *  (hdiffdiskimageio:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+	  */
 	f = fopen(ovl, "w+");
 	if (f == NULL) { perror(ovl); exit(1); }
 	for (i = 0; i < 4096; i++)
@@ -1394,7 +1418,13 @@ static void section_roundup_gap(void)
 /*    * a bound that checks only the START offset, so a transfer may      */
 /*      begin legally and run off the end;                                */
 /*    * a write bounded by ADVERTISED capacity rather than the backed     */
-/*      extent, which lets the host file grow into the round-up gap.      */
+/*      extent, which lets the host file grow into the round-up gap.
+ *      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Some earlier
+ *      past-capacity rows use far-out offsets, such as byte offset 1024*1024 (LBA 2048 at 512-byte blocks) and LBA
+ *      1000000. The full-store SCSI write aims at block 20, the first block past a 20-block image, so not every
+ *      earlier row aims well past the boundary.  (hdiffdiskimageio:F11:
+ *      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  */
 /*                                                                        */
 /*  A far-outside row cannot distinguish any of them.  PROBE THE          */
 /*  BOUNDARY, NOT A POINT FAR INSIDE IT.                                  */
@@ -1740,6 +1770,10 @@ int main(int argc, char *argv[])
 		 *  offsets -- passes that probe while the small pair still catches it.  A
 		 *  sentinel whose inputs do not resemble the rows it vouches for is a sentinel
 		 *  with a whitelist.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 2^32 and 0
+		 *  are EQUAL in their low 32 bits, so a comparator narrowed to int treats them as equal; the wide
+		 *  probe catches this narrowing, while the small probe catches unconditional true.
+		 *  (hdiffdiskimageio:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 		 *
 		 *  This does NOT prove any row is correct.  It proves the comparator still
 		 *  fails on inputs shaped like the ones the rows use.  A comparator that

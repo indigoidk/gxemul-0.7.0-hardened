@@ -14,6 +14,10 @@ dev_sh4.c:2535+, `case SH4_SCIF_BASE + SCIF_SSR:` writes scif_ssr and calls
 scif_reassert_interrupts(), which INTERRUPT_ASSERTs scif_tx_irq when
 SCSCR2.TIE && SCSSR2.(TDFE|TEND).  So the assert can be produced under `step`,
 where debugger.c:800 has stopped the host timers.
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] RXI also asserts synchronously
+inside a guest store, but only when the write leaves both SCR.RIE and SSR.DR set and RXI was previously deasserted.
+SCR=0x40 alone or SSR=1 alone does not; set SCR=0x40, then SSR=1, and it does.  (regress22:F10:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Delivery itself must be observed FREE-RUNNING: cpu_dyntrans.c:204-206 refuses to
 deliver interrupts while single-stepping.  Discriminator = a breakpoint at
@@ -374,6 +378,9 @@ row("iprd ctl", prio_of(t_d, 0x340) if alive_d else "died", "0x5",
 #  So the mutant silently deletes console input and the detector stays green.
 #  The ten behavioural rows all drive TXI (0x760) -- scif_assert_code() writes
 #  SCSCR2.TIE + SCSSR2.TDFE|TEND, the TX arm -- so nothing touched the RX side.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Eight of the first ten rows
+#  drive TXI. live stores to RAM and devsig reads IPRD.  (regress22:F11:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  These four rows pin the WHOLE membership of the loop in one session, which
 #  kills every narrowing of it rather than just the measured one.  This is the

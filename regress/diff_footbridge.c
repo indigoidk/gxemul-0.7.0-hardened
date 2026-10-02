@@ -8,6 +8,9 @@
  *  THERE IS NO NETWINDER OR CATS RIG ANYWHERE IN regress/ -- nothing in this tree boots a
  *  machine that has a footbridge.  So this is not the cheapest detector, it is the ONLY
  *  possible one.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Offline differential for
+ *  dev_footbridge; footbridge_sites_probe.py provides complementary CATS probe detector without OS boot.
+ *  (hdifffootbridge:F2: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  IT IS THE REPOSITORY FILE.  This driver #includes the shipped dev_footbridge.c, exactly as
  *  diff_sh4_tmu.c #includes dev_sh4.c -- an identical header set, and the precedent that made
@@ -384,7 +387,11 @@ int main(void)
 	    (TIMER_x_CONTROL does), so an ordinary legal timer accrues a backlog and a later
 	    write of zero divides.  Forked, because a mutant that re-crashes would otherwise
 	    take the whole gate binary down and score as a census FAULT rather than a named-row
-	    KILL.  */
+	    KILL.
+	    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Forked to contain
+	    narrower conditional zero-load mutants; unconditional zero-load divide terminates unforked at D2
+	    earlier.  (hdifffootbridge:F4: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+	     */
 	{
 		pid_t pid = fork();
 		if (pid == 0) {

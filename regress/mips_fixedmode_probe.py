@@ -8,6 +8,10 @@ reset default), so a reverting mutant passes any row that leaves FCSR alone. Eve
 discriminating row here therefore sets a NON-ZERO FCSR.RM via guest ctc1, chosen so
 the directed-mode answer differs from the forced-mode answer (a row where they agree
 is born vacuous -- two such rows were caught at design time and re-moded).
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Only round.w necessarily
+matches inherited RM=0. These ceil.w rows choose RM=3 and floor.w rows RM=2, with operands chosen to distinguish
+inherited from forced rounding.  (hbundle_regress27:F6:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 Prints, per row:   M295_ROW=<rig>:<name> RESULT=PASS|FAIL got=<hex> want=<hex>
 then per rig:      M295_CONTROL=<rig>:OK|DEAD

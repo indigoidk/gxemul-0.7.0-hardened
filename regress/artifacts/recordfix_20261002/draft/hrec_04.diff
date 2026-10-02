@@ -1,0 +1,314 @@
+--- HEAD:regress/gate_m88k_rounding.sh
++++ with the notes: regress/gate_m88k_rounding.sh
+@@ -14,12 +14,15 @@
+ # m88k's directed-mode encoding (10 = toward -Inf, 11 = toward +Inf) is the OPPOSITE of
+ # MIPS/SH and of float_emul.h's IEEE_RM_* values, so #298's decode swaps 2 and 3. A
+ # decode without the swap passes every sign-SYMMETRIC vector -- the two directed modes
+ # just trade places consistently -- so this gate runs sign-ASYMMETRIC rows (fadd-neg-*,
+ # flt-neg-*) whose expected values differ by operand sign. Those rows are the only
+ # defence against the single most likely wrong implementation.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fadd toward
++# +Inf/+Inf-opposite at m88k_rounding_probe.py:68-69 and flt toward +Inf at :96 also fail a missing 2-for-3 swap.
++# (regress21:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # Every row sets the mode the way a real guest does: the guest itself executes
+ # `fstcr r5,fcr63`, proving decode end-to-end rather than only the store arm.
+ set -u
+ cd "$(dirname "$0")"
+ . ./lib.sh
+@@ -52,12 +55,15 @@
+ res=$(grep -o "M88K_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
+ got=${res%/*}; want=${res#*/}
+ 
+ # 73 = 46 as of #303 (25 rounding-mode rows + #302's six trnc and eight int/nint rows,
+ # which the decoder used to HALT on + #303's six subnormal-operand rows) + #306's
+ # eighteen mixed-format rows + #307's seven tcnd trap rows + #308's two round-to-nearest witnesses.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Seven truncation rows (three
++# SS and four SD). 25+7+8+6=46.  (regress21:F10:
++# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # #306 closed a FAMILY, not the two encodings that happened to get reported: the size
+ # field is a format TRIPLE, so each of fadd/fsub/fmul/fdiv has eight legal forms, and
+ # this tree implemented whichever ones its guests happened to execute -- fsub had .sds
+ # while fadd did not. Twelve were missing and every one stopped the emulator on a legal
+ # instruction; six were measured halting on this rig before the fix.
+@@ -327,12 +333,15 @@
+ #
+ #  The pins are NAMED so that deleting a row is visible: `M88KEXC_RESULT=59/59' pins the
+ #  denominator (a row that stops running shrinks it); resid50 and sfu1h are the two rows
+ #  whose CORRECT answer is HALT -- they separate the shipped fix from a form that delivers
+ #  every vector (the rejected D4) or SFU1 (row m88kexcsfu1); vbrtb is the one ANCHORED row
+ #  (VBR relocated to 0x2000: it alone reds if the vector base stops being read).
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Eight expected-HALT rows:
++#  resid50, resid127, resid11, resid50ind, resid50c, resid50ser, sfu1h, usfu1.  (regress21:F11:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ EXCLOG=$LOGDIR/m88k_exc.log
+ python3 m88k_exc_probe.py "$PMAX" > "$EXCLOG" 2>&1 || true
+ grep -E "^M88KEXC_(ROW|RESULT|SELFTEST|CONTROLS)" "$EXCLOG" | cut -c1-110 | sed 's/^/       /'
+ 
+ if ! grep -q "M88KEXC_DONE" "$EXCLOG"; then
+     note "m88k exception-delivery probe produced no completion sentinel; last lines follow"
+--- HEAD:regress/gate_mips_folds.sh
++++ with the notes: regress/gate_mips_folds.sh
+@@ -10,12 +10,15 @@
+ # (cpu_mips.h) printed by tlbdump as a prefix-bound MFOLD block. This gate runs
+ # regress/mips_fold_probe.py, whose rows drive real fold loops free-running
+ # (never step -- combining gates on !single_step) with a breakpoint AFTER each
+ # sequence on a NON-ARMING instruction, and grades the counters as EQUALITIES
+ # derived from the read-ahead rule (a breakpoint anywhere disables read-ahead
+ # machine-wide, so fire == passes-1; the derivations live in the probe's rows).
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fire == passes-1 for loop
++# folds; memset expects fire=1 and device-bail expects fire=0.  (hbundle_regress32:F14:
++# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # Non-vacuity: deleting the bne_samepage_nop replacement sub-arm (incl. its
+ # install++) in a scratch build flips exactly that fold to (0,0) and reddens
+ # its two rows while every other row stays green -- measured 2026-08-12
+ # (M388MUT_PASS), the per-variant attribution -J cannot give.
+ #
+--- HEAD:regress/gate_mips_rounding.sh
++++ with the notes: regress/gate_mips_rounding.sh
+@@ -91,12 +91,15 @@
+ # memory witness -- the guest stores one marker on the fall-through path and another at
+ # the branch target, so taken, not-taken and nothing-ran are three distinguishable
+ # answers. An earlier version asserted only "did not fault", which a nop would have
+ # satisfied, and then a PC readback, which parses on arc but not reliably on pmax; the
+ # dump channel works on both. Both rigs run every row, because a fix reaching only one
+ # dyntrans mode would pass a single-rig gate.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Both rigs run the rt=0x15 and
++# BGEZ rows; pmax also runs rt=0x1e.  (hbundle_regress32:F11:
++# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ python3 mips_subnorm_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" > "$SLOG" 2>&1 || true
+ 
+ if ! grep -q "MIPS_SUBN_RESULT=" "$SLOG"; then
+     note "subnormal probe produced no result line; last lines follow"
+     tail -5 "$SLOG" | sed 's/^/       /'
+     #  a CHECK, not a gate_skip: the cvt section above has already recorded its
+@@ -137,12 +140,16 @@
+ # green under every committed mutant, and the trunc rows flip under exactly the
+ # trunc mutant (their discrimination is measured, not asserted). Wall-clock
+ # note: this section spawns 28 emulators (one per row), each with a 150 s
+ # boot-wait ceiling -- under heavy host load that ceiling is a load-sensitive
+ # oracle of the gate_ab class, so do not run CPU-heavy work (panel seats,
+ # builds) concurrently with this gate.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] for round.w (which forces
++# RN), the likeliest revert (cvt.w's FPU_RM_FROM_FCSR copy-pasted back) EQUALS correct code under the default
++# FCSR.RM=0; for ceil.w/floor.w (which force RP/RM), discriminating rows set a non-zero mode to test directed
++# behavior.  (hbundle_regress32:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ python3 mips_fixedmode_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" both > "$FLOG" 2>&1 || true
+ 
+ if ! grep -q "M295_RESULT=" "$FLOG"; then
+     note "fixedmode probe produced no result line; last lines follow"
+     tail -5 "$FLOG" | sed 's/^/       /'
+     check "fixedmode probe completed" "no" "yes"
+--- HEAD:regress/gate_offline.sh
++++ with the notes: regress/gate_offline.sh
+@@ -919,12 +919,15 @@
+ #      mismatch and requires the failure counter to move.  Covers EVERY row in
+ #      its file against the comparator dying.  Free, no extra compile.
+ #    * the self-mutants below -- break the code the detector watches and require
+ #      the NAMED row to catch it.  Covers ONE site against a fixture that has
+ #      stopped reaching the code.  Measured: the SELFCHECK is blind to a row
+ #      rewritten to compare the subject against itself; a pinned mutant is not.
++#      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Covers rows in its file
++#      using the shared comparator against comparator dying.  (hgateoffline:F7:
++#      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  WHAT THIS DOES NOT PROVE, said plainly because the honest scope is the whole
+ #  point.  A seat stubbed every row EXCEPT the ones each mutant kills and both
+ #  this gate and the self-mutant stayed green -- 23 of 24 rows inert for timer,
+ #  25 of 27 for m8invread.  So this is a LIVENESS CONTROL: it proves the detector
+ #  is not wholly inert and that one named row still fires.  It is not a census
+@@ -1457,12 +1460,15 @@
+     check_min "wdc IDENTIFY: rows actually run" \
+               "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 42
+     check     "wdc IDENTIFY: offline verdict" \
+               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
+     #  The four divergence rows. Deleting any one of them returns the table to the
+     #  vacuous state described above, so each is named rather than merely counted.
++    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The four divergence rows
++    #  test distinct modulo-versus-mask boundaries; each is named rather than merely counted.  (hgateoffline:F8:
++    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     check     "wdc IDENTIFY: the >>8 threshold row is present" \
+               "$(grep -c 'threshold: >>8 byte reaches 255' "$WDCLOG")" "1"
+     check     "wdc IDENTIFY: the carry row is present" \
+               "$(grep -c 'carry: >>8 wraps into >>16' "$WDCLOG")" "1"
+     check     "wdc IDENTIFY: the >>16 row is present" \
+               "$(grep -c '>>8 accidentally right, >>16 wrong' "$WDCLOG")" "1"
+@@ -1931,19 +1937,25 @@
+ # (#413 narrowed this from "every floppy": DISKIMAGE_FLOPPY is a WRITE-ONLY type -- no device
+ # ever passes it, so a floppy-typed disk never reaches this handler at all. That is a separate
+ # filed defect. The row below is unaffected; a 0-byte image IS a reachable zero-block disk.) The "0 KB" on the console is the host-side banner only; the guest is told two
+ # terabytes. This guard keeps an empty disk reporting empty however it got that way, and
+ # stays correct after that defect is fixed -- which is why its row uses a 0-BYTE IMAGE
+ # rather than a floppy. A floppy row would go vacuous the moment the geometry fix lands.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] THIS WAS NOT A CORNER CASE.
++# Fixed in #414: -d gH;S disks now compute cylinders and blocks; 0-byte images remain reachable zero-block disks.
++# (hgateoffline:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # The driver carries four further sections, DISABLED, that assert defects still live
+ # (short/failed writes reported as success, reads past EOF, and a single WRITE(10) that
+ # grew a 10 KB image to 512 MB with status GOOD). Build with -DDISKIMAGE_IO_UNFIXED to
+ # see them fail; the round that fixes them deletes the guard.
+ #  ---------------------------------------------------------------------------
+ #  #437: SYNCHRONIZE CACHE durability.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The driver previously carried
++# four disabled sections behind -DDISKIMAGE_IO_UNFIXED; #416 removed the guard so all run unconditionally.
++# (hgateoffline:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  --wrap=fsync,--wrap=fflush is NOT optional decoration.  The bigger half of #437 is that
+ #  an overlaid disk never fsynced the file holding the guest's data, and NO byte comparison
+ #  can see that: measured this round, a plain fflush with no fsync leaves the bytes fully
+ #  visible to a separate reader after _exit(), because the page cache is the kernel's and
+ #  outlives the process.  Only real power loss distinguishes fsync, so the CALL COUNTS are
+@@ -2229,12 +2241,15 @@
+ #  form is at the head of the selfmutant section.  In one line each: the self-mutant breaks
+ #  the SUBJECT and demands a NAMED row notice, so it catches a fixture that has stopped
+ #  reaching the code; the @@SELFCHECK@@ sentinel breaks nothing and feeds the detector's OWN
+ #  comparator a deliberate mismatch, so it catches a comparator edited into always-passing --
+ #  a state in which every row prints `ok`, and the row count, the identity row and the verdict
+ #  token ALL SURVIVE, so the self-mutant and every other assertion here stay green.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] ...which self-mutant
++#  rejects, but a file without a mutant would leave green.  (hgateoffline:F11:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  WHY IT IS HERE AND NOT BESIDE ITS SIBLING: three of the four assertions read the
+ #  FILESYSTEM and could live anywhere, but the fourth reads each differential's LOG, and six
+ #  of the twelve do not run until after the selfmutant block.  $LOGDIR persists between runs,
+ #  so asserting it there would grade the previous run's logs.
+ #
+--- HEAD:regress/gate_ppc.sh
++++ with the notes: regress/gate_ppc.sh
+@@ -28,12 +28,16 @@
+ #           this fork deliberately keeps #287's +/-Inf instead (the letter turns a
+ #           finite overflow into a NaN pattern: 1.5*2^128 -> 0x7FC00000). A policy pin
+ #           failing means someone changed a known divergence without updating the
+ #           record -- worth knowing either way.
+ #   DISC -- discriminator: committed byte is the defect, want flips with the fix.
+ #   DIV  -- known divergence left to a later round, pinned so it cannot drift.
++#   [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The DISC classification
++#   includes 7 negative controls in CAUSE_ROWS that verify non-raising of exception flags (yielding identical values
++#   before and after #330), contrary to :32 defining DISC as values that flip with the fix.  (hbundle_regress27:F11:
++#   regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # #310's eighteen rows cover the eight float UPDATE forms, every one of which
+ # stopped the emulator before this round -- neither the primary opcodes
+ # 0x31/0x33/0x35/0x37 nor the indexed 567/631/695/759 were defined or decoded.
+ # Each form gets BOTH halves of its contract: a value row and a base-register
+ # row. A diff-review seat caught the first version giving five forms a base row
+@@ -48,12 +52,14 @@
+ #
+ # The control row is load-bearing: `msr=0x2000` must take or every FP instruction
+ # raises FPU-unavailable and the probe measures nothing. A dead probe SKIPs; it never
+ # passes quietly. The mode rows additionally read FPSCR back, because a mode that
+ # silently failed to take would turn every directed-mode row into a second copy of
+ # the RN row.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] …missing completion tokens
++# skip….  (hbundle_regress27:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # Those rows set FPSCR by DEBUGGER WRITE rather than through the guest's own `mtfsf`,
+ # which used to be necessary: #324 found that instruction building its write mask with
+ # an eight-bit stride across four-bit fields, so half the FM bits wrote nothing and the
+ # rest wrote the wrong fields. It is fixed and has six rows of its own now. The
+ # debugger write stays because it keeps the mode rows independent of a second
+--- HEAD:regress/gate_ppc_halt.sh
++++ with the notes: regress/gate_ppc_halt.sh
+@@ -36,12 +36,16 @@
+ # 64-bit-only or outside the G4's instruction groups, so on this machine real silicon
+ # takes a program interrupt and the honest fix is the missing exception model, not an
+ # implementation; fres/frsqrte are estimates; and fcmpo/fnmadd/fnmsub/fmadds/fmsubs have
+ # no technical blocker at all and were left out for round size alone. That last group is
+ # recorded as such deliberately -- a queue entry that invents a blocker costs a future
+ # round the time to disprove it.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Ten encodings still halt, on
++# purpose, and the gate asserts that they DO ... fcmpo/fmadds/fmsubs have no technical blocker at all (fnmadd/fnmsub
++# were fixed in #344).  (hbundle_regress33:F14:
++# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ set -u
+ cd "$(dirname "$0")"
+ . ./lib.sh
+ 
+ gate_begin "gate 15: PowerPC FP encodings must not halt (#326)"
+ 
+--- HEAD:regress/gate_sh_rounding.sh
++++ with the notes: regress/gate_sh_rounding.sh
+@@ -14,12 +14,15 @@
+ # Each one runs under BOTH modes and expects DIFFERENT answers, so reverting #296 turns the
+ # gate red. Two vectors are deliberately mode-INDEPENDENT and named PIN: they record limits
+ # that are real and are NOT fixed (double precision cannot be fixed at the store, and the
+ # host-double double-rounding is shared by every CPU core). A pin failing means someone
+ # changed a known limitation without updating the record -- which is worth knowing either
+ # way, and is the opposite of a check that cannot fail.
++# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Two vectors were formerly
++# mode-independent PINs until #299 (fsub band) and #300 (D-division) fixed both and made them discriminating.
++# (hgateshrounding:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ # The gate asserts on the number of discriminating vectors as well as on the results,
+ # because a table where every vector wants the same answer in both modes would pass
+ # vacuously. That is the failure mode this harness has now been bitten by five times.
+ set -u
+ cd "$(dirname "$0")"
+@@ -266,12 +269,15 @@
+ #  stylistic.
+ #
+ #  The PRIMARY witness is `-E testsh`, where the kill is reached SYNCHRONOUSLY --
+ #  one guest store to the mp device's IPI register -- because the test machine wires
+ #  its whole interrupt tree to a line the priority loop never assigns.  Being
+ #  synchronous is what lets a cheap `step` see it.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The testsh witness uses
++#  IRQ14 (priority 1); synchronous delivery and masking are tested here, while priority-zero coverage uses TMU.
++#  (hgateshrounding:F13: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  The SECONDARY rows (`prio0 tmu`, `prio0 tmuq`) drive the landisk TMU route and
+ #  must FREE-RUN, because a TMU underflow is produced by a HOST timer and
+ #  debugger.c stops those for the duration of a `step`.  They exist because a
+ #  MEASURED mutant that repaired only the testsh route scored full marks without
+ #  them.  See the probe header.
+@@ -684,12 +690,15 @@
+         #  space -- so a name of length L is followed by (15 - L) spaces.  At L=13
+         #  that is two spaces and the anchor still matches; at L=14 it is ONE, the
+         #  `^$v  ` anchor can never match, and THE ROW SILENTLY STOPS BEING TESTED
+         #  while the gate stays green.  Longest name here is `kill store` (10), so
+         #  there are three characters of headroom.  Named by a panel seat, which
+         #  computed the threshold rather than just warning about the class.
++        #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] at L=14 it is ONE
++        #  and the ^$v  anchor cannot match, so the count is 0 and the gate fails.  (hgateshrounding:F14:
++        #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+         for v in "live" "devsig" "asic ok" "safe 8" "kill word" "kill byte" "kill store" "safe 4" "kill far" "alias" "crossarr" "alias2" "mask9 rt" "sweep 256"; do
+             n=$(count "$ASLOG" "^$v  .*ok$")
+             check "asic_badaddr $v" "$n" 1
+         done
+     fi
+ fi
+@@ -1535,12 +1544,15 @@
+ #  the true census: 4 call sites latched by #337, 6 by this round.
+ #  *** THIS WAS AN EQUALITY PINNED AT 10 AND IT WAS RED FROM #476 UNTIL 2026-08-27,
+ #      WHICH IS TWO ROUNDS AND NOBODY SAW IT.  The grep returns 12: #476 added the
+ #      no-ATAPI DATA read, #478 added the refused-drain announce, and neither round
+ #      moved the pin.  It hid because this row lives in the WEEKLY battery -- every
+ #      commit since was green on its own targeted gate while this was failing. ***
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fatal( -> debug( downgrades
++#  are blind under stepping; overrun x2 free-runs, but stepped rows cannot distinguish debug() from fatal().
++#  (hgateshrounding:F15: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  IT IS A FLOOR NOW, AND THAT IS THE PIN THIS CHECK ALWAYS WANTED.  Read the reason
+ #  above: it exists to catch a DOWNGRADE, `fatal(` -> `debug(`, which REDUCES the
+ #  count.  An equality catches that -- and also breaks on every legitimate ADDITION,
+ #  which is what actually happened.  A floor catches the downgrade it was built for and
+ #  is immune to the growth that defeated it twice.
+@@ -1623,12 +1635,15 @@
+ #  It is the tree's own house idiom: every latch is 1:1 and inbuf_overrun is 2:2.
+ #
+ #  DECL restores a tripwire this round would otherwise have DELETED -- the carrier's
+ #  de-escalation clause one level up.  Replacing a decaying equality with a
+ #  growth-immune one removes the accidental signal that latch growth used to send.
+ #  A twelfth latch, or a brand-new unguarded fatal(), now reds until someone looks.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A twelfth latch now reds
++#  DECL until updated; a brand-new unguarded fatal() does not affect DECL or the fatal call floor.
++#  (hgateshrounding:F16: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  MEASURED, artifacts/batteryreds/row5_20260829/killtable2.out -- ELEVEN mutants,
+ #  all killed, BASE 6/6/6/11 clean:
+ #    E1/E2 neutralise one of two sites 6/6/5/11 | E3 redirect guard 6/6/4/11
+ #    E7 twelfth latch 6/6/6/12 | E8 READ redirected to a LONGER name 6/5/5/12
+ #    E6 C99 "//" continuation swallowing a SET 6/6/5/11

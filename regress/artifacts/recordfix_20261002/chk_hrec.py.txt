@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""chk_hrec.py -- verify the locator answers of the record-correction pack MECHANICALLY.  A seat was asked, for each
+RECORD disposition, where the false or stale statement stands in the committed file and to quote it verbatim.  A quote
+is only usable if a script can find it, so for every answer line this checks the quoted CURRENT text against
+`git show <rev>:<path>`:
+    EXACT       the text occurs verbatim
+    WS          it occurs once runs of whitespace are collapsed (line wraps, indentation)
+    NOT IN FILE it does not occur -- the seat paraphrased, or named the wrong file
+and whether the occurrence lies in the line range the seat gave.  Reads every <seat>_hrec_NN.txt under
+regress/artifacts/recordfix_20261002/hrec_NN/ (agy_ and codex_), writes HREC_VERIFIED.tsv there, prints the counts.
+A disposition answered by two seats is listed twice, one line per seat, so the two can be compared."""
+import glob
+import io
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "recordfix_20261002")
+REV = "7440e129"
+LINE = re.compile(r"^[`*\s-]*([a-z0-9_]+:F\d+)[`*]*\s*\|\s*`?([^|`]+?)`?\s*\|\s*(STILL SAYS IT|ALREADY CORRECTED|NOT FOUND)\b[^|]*\|\s*CURRENT:\s*(.*?)\s*\|\s*((?:DOES NOT FIT|FITS)\b.*)$")
+cache = {}
+
+
+def blob(path):
+    if path not in cache:
+        r = subprocess.run(["git", "-C", SEC, "show", "%s:%s" % (REV, path)], capture_output=True)
+        cache[path] = r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
+    return cache[path]
+
+
+def unq(s):
+    s = s.strip()
+    if len(s) >= 2 and s[0] in "\"\u201c" and s[-1] in "\"\u201d":
+        s = s[1:-1]
+    return s.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "\t").replace("\\\\", "\\")
+
+
+def ws(s):
+    return re.sub(r"\s+", " ", s).strip()
+
+
+rows, n = [], {}
+keys = [l.split("\t")[0] for l in io.open(os.path.join(D, "HRECORD.tsv"), encoding="utf-8").read().split("\n")[1:] if l.strip()]
+for p in sorted(glob.glob(os.path.join(D, "hrec_*", "*_hrec_*.txt"))):
+    seat = os.path.basename(p).split("_")[0]
+    for l in io.open(p, encoding="utf-8", errors="replace").read().split("\n"):
+        m = LINE.match(l)
+        if not m:
+            continue
+        key, loc, status, cur, fits = m.groups()
+        lm = re.match(r"(\S+?):(\d+)(?:\s*-\s*(\d+))?", loc.strip())
+        path = lm.group(1) if lm else loc.strip().split(" ")[0]
+        a, b = (int(lm.group(2)), int(lm.group(3) or lm.group(2))) if lm else (0, 0)
+        text, body = unq(cur), blob(path)
+        if body is None:
+            verdict, where = "NO SUCH FILE AT %s" % REV, ""
+        elif status == "NOT FOUND" or not text.strip():
+            verdict, where = "(nothing quoted)", ""
+        elif text in body:
+            line = body[:body.index(text)].count("\n") + 1
+            verdict, where = "EXACT", str(line)
+        elif ws(text) and ws(text) in ws(body):
+            # find the line of the first distinctive fragment
+            frag = ws(text)[:40]
+            line = next((i for i, x in enumerate(body.split("\n"), 1) if ws(x) and ws(x)[:25] in frag or frag[:25] in ws(x)), 0)
+            verdict, where = "WS", str(line)
+        else:
+            verdict, where = "NOT IN FILE", ""
+        inrange = "" if not where or not a else ("in range" if a - 3 <= int(where) <= b + 3 else "outside the range given")
+        rows.append([key, seat, path, "%d-%d" % (a, b), status, verdict, where, inrange,
+                     "FITS" if fits.startswith("FITS") else "DOES NOT FIT", ws(text)[:300], ws(fits)[:300]])
+        n[(seat, verdict)] = n.get((seat, verdict), 0) + 1
+with io.open(os.path.join(D, "HREC_VERIFIED.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("key\tseat\tpath\tlines_given\tstatus\tquote_check\tline_found\trange\tfits\tcurrent_text\tfits_text\n")
+    for r in rows:
+        f.write("\t".join(x.replace("\t", " ") for x in r) + "\n")
+ans = sorted(set(r[0] for r in rows))
+print("dispositions %d; answered %d (lines parsed %d); not yet answered %d" % (len(keys), len(ans), len(rows), len(set(keys) - set(ans))))
+for seat in sorted(set(k[0] for k in n)):
+    print("  %-6s %s" % (seat, ", ".join("%s %d" % (v, c) for (s, v), c in sorted(n.items()) if s == seat)))
+print("  statuses: " + ", ".join("%s %d" % (s, sum(1 for r in rows if r[4] == s)) for s in ("STILL SAYS IT", "ALREADY CORRECTED", "NOT FOUND"))
+      + "; DOES NOT FIT %d; outside the range given %d" % (sum(1 for r in rows if r[8] == "DOES NOT FIT"), sum(1 for r in rows if r[7].startswith("outside"))))
+unk = sorted(set(r[0] for r in rows) - set(keys))
+if unk:
+    print("  *** keys answered that are not dispositions of the pack: %s" % unk[:8])

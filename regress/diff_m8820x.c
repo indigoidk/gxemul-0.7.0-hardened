@@ -130,7 +130,11 @@ void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len, uint64_t da
 }
 
 /*  The callback the register-file arm invokes BEFORE the writeflag check -- i.e. on reads
-    too.  Left NULL it segfaults, which is what corrupted the first reproduction.  */
+    too.  Left NULL it segfaults, which is what corrupted the first reproduction.
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The callback the SAPR/UAPR
+ *  register-file arm invokes inside MEM_WRITE.  (hdiffm8820x:F4:
+ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+  */
 static int invalidate_calls;
 static void noop_invalidate(struct cpu *c, uint64_t a, int flags)
 { (void)c; (void)a; (void)flags; invalidate_calls++; }
@@ -149,6 +153,9 @@ static void noop_invalidate(struct cpu *c, uint64_t a, int flags)
  *  A page-table image in host memory, reached through the one hook memory_m88k.c uses to touch
  *  emulated RAM.  Three physical pages are recognised and everything else is POISON, so the
  *  fixture can produce three distinguishable outcomes (see F0a/F0b/F0c).
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Two physical pages are
+ *  recognised and everything else (including FAKE_UNMAPPED_PA) is POISON,.  (hdiffm8820x:F8:
+ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  */
 #define FAKE_SEGTAB_PA	0x00010000u
 #define FAKE_PAGETAB_PA	0x00020000u
@@ -191,6 +198,9 @@ unsigned char *memory_paddr_to_hostaddr(struct memory *mem, uint64_t paddr, int 
  *  (thirdparty/m8820x.h:179-180 hardwires BATC8/BATC9 at 0xfff00000 and 0xfff80000).  The
  *  tables below OR to 0x1fff in both fields, so every logical- and physical-block bit is set by
  *  at least one port, and F13 adds all six flag bits on top.  ***
+ *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 0x083881c0 (or 0x083881e1
+ *  with flags), so bit 31 was never set in any word this file ever stored.  (hdiffm8820x:F9:
+ *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
  *
  *  *** AND THE SECOND VERSION BROKE SOMETHING THE FIRST HAD BY ACCIDENT, WHICH IS THE PART
  *  WORTH KEEPING. ***  The consecutive table 0x100..0x107 gave eight ADJACENT 512 KB blocks, so
@@ -415,6 +425,9 @@ int main(void)
 		 *  IN THIS FILE COMPARES NUMBERS.  118 rows went inert, this sentinel stayed blind,
 		 *  and four of the five gate-2 self-mutants stayed green too.  A sentinel whose
 		 *  input does not resemble the rows it vouches for is a sentinel with a whitelist.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] because
+		 *  most rows in this file compare numbers (B2, D2, D6 compare strings).  (hdiffm8820x:F5:
+		 *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 		 *
 		 *  THE HEALTHY PATH PRINTS AN ok-SHAPED LINE, DELIBERATELY.  The first version
 		 *  printed nothing on success and a FAIL line only on failure, which broke two
@@ -758,6 +771,9 @@ int main(void)
 	 *  motivating mutant -- deleting `batc[i] = idata;` at dev_m8820x.c:479 while leaving
 	 *  `regs[...] = idata` -- keeps write-then-read-back perfect and left both differentials
 	 *  green at 25/25 and 27/27.  Every row below asks m88k_translate_v2p() instead.
+	 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Rows below exercise
+	 *  translation via m88k_translate_v2p(), with F10-F13 checking register/shadow/callback state.
+	 *  (hdiffm8820x:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 	 */
 	{
 		int n, k, bad, bad2, bad3;
@@ -912,6 +928,9 @@ int main(void)
 		 *  denied write (return 0) and a read-only success (return 1).  This is the row
 		 *  that pins the FLAG BITS of the stored word rather than its address fields --
 		 *  `batc[i] = idata & 0xffffffc0` would pass F1-F4 outright.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Masking low
+		 *  6 bits clears BATC_V, failing translation rows such as F1.  (hdiffm8820x:F3:
+		 *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 		 */
 		batc_fixture();
 		bwp(7, MKBATC(PORT_LBA(7), PORT_PBA(7), BATC_PROT | SUPERVISOR_ENTRY));
@@ -976,6 +995,9 @@ int main(void)
 		 *  corrupting what cpu_m88k.c:362-375 prints for the guest's BATC dump.  White-box
 		 *  on the array is the only thing that sees it, and this row is honest about being
 		 *  that: it is NOT evidence that the array feeds translation -- F1 is.
+		 *  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Translation
+		 *  reads five fields out of the shadow (V, SO, PROT and the two block numbers).  (hdiffm8820x:F10:
+		 *  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 		 */
 		batc_fixture();
 		bad = 0;

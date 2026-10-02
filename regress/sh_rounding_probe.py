@@ -313,6 +313,10 @@ for vec in VECTORS:
 # trusting that the table was written correctly. The ftrc rows are REQUIRED to be
 # mode-independent (truncation by architecture), so this count doubles as the tripwire
 # for anyone accidentally wiring ftrc to FPSCR.RM.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The ftrc rows are
+# mode-independent by architecture; discriminating counts static vector dictionary entries (len(set(v[4].values()))
+# > 1) to ensure the table retains mode discriminators, but does not observe emulator execution or tripwire ftrc
+# source changes.  (hbundle_regress25:F2: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 discriminating = sum(1 for v in VECTORS if len(set(v[4].values())) > 1)
 print("SH_ROUND_DISCRIMINATING=%d" % discriminating)
 print("SH_ROUND_RESULT=%d/%d" % (passed, total))

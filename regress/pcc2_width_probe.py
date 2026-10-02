@@ -145,6 +145,10 @@ CONTRACT (vacuity-floor clause (e)) -- what this detector is designed to catch:
       earlier version of this sentence called it indistinguishable; the instrument was
       stronger than its contract said.  `|=' -> `^=' or `+=' in the SET line is
       EQUIVALENT: the SET runs only under the TEST, i.e. only when the bit is clear.
+      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The TEST line's operand
+      swap ('&' -> '==') is not caught by 'latch all' (which announces 12 either way); 'latch aba' supplies the
+      distinguishing observation.  (hpcc2widthprobe:F5:
+      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
       WIDTHS.  The debugger drives len 2 (`put h'), 4 (`put w') and 8 (`put d'); the
       guest drives 1, 2 and 4.  `latch all', `latch all w' and `latch all d' pin the
       ANNOUNCE at every block for each non-byte width, so a guard true on a subset of
@@ -156,6 +160,10 @@ CONTRACT (vacuity-floor clause (e)) -- what this detector is designed to catch:
       outside pcc2_width_decline() reads d->warned's bits -- and was MEASURED 96/96 by a
       pass-4 seat as the clause-(f) control.  That warrant expires the day anything
       indexes or reports those bits.
+      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A translation of the bit
+      index ('1u << bit' -> '1u << (bit + 1)') maps MASK onto bit 12 (PCC2_W_C040), which reassert_interrupts()
+      reads and writes; bit translation is no longer equivalent.  (hpcc2widthprobe:F3:
+      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
       ANNOUNCE SEVERITY.  Every row counts TEXT on a pty run under -V; `fatal(' ->
       `debug(' in the helper changes no text these rows read.  NOT CAUGHT, disclosed;
       the fork's recorded warrant for fatal() over debug() is dev_asc.c's (-q makes a
@@ -399,6 +407,10 @@ CONTRACT (vacuity-floor clause (e)) -- what this detector is designed to catch:
     * pcc2c040kill -- a LEGAL byte write of 0x04 to GENCTL still ends the host in
       reassert_interrupts().  Every GENCTL lane value here keeps bit 0x04 CLEAR so no
       row dies for that reason;
+      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] pcc2c040kill -- FIXED by
+      #512: a legal byte write of 0x04 to GENCTL announces once and suppresses interrupt assertion; every GENCTL
+      lane here keeps that bit clear.  (hpcc2widthprobe:F4:
+      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     * pcc2defaultkill -- FIXED by #501: an unlisted offset (0x06, 0x14, 0x18, 0x2c ...) no
       longer ends the host in `default:'; regress/pcc2_default_probe.py (46 rows) pins it, and
       nothing HERE measures that arm (this line said "still ends" until #501's pass 4);
@@ -825,6 +837,10 @@ def c040ok(v):
 #  `&& (idata & ~mask)' would decline every existing row and LAND a HUH?-clear wide write.
 #  One halfword within the mask per arm, appended to the rb4 session; each lands to a value
 #  the preset is not (0xf0 vs 0x50; 0x10 vs 0x1f; 0x01 vs 0x1f).
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] HUH?-CLEAR wide writes land
+#  HUH?-clear values; 'latch all zero' writes 0 to every block, so a guard '&& (idata & ~mask)' already fails
+#  existing latch-announcement rows.  (hpcc2widthprobe:F6:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 HUHQ = {VECBASE: "0x00f0", SCCICR: "0x0010", SCCTX: "0x0010", SCCRX: "0x0001", SCSIICR: "0x0001"}
 for nm, off, pre, want in (("genctl", GENCTL, "0x82", "0x82"), ("vecbase", VECBASE, "0x50", "0x50"),
                            ("t2ctl", T2CTL, "0x03", "0x3"), ("t2icr", T2ICR, "0x13", "0x13"),
@@ -1224,6 +1240,9 @@ for nm, off, pre, want in (("t1ctl", T1CTL, "0x03", "0x3"), ("t1icr", T1ICR, "0x
 #  Removing twelve exit(1)s destroys the tripwire that announced guard growth.  So the
 #  legal width must still LAND at each reachable arm, through its own mask, with no
 #  decline message.  Expected values from the arms' own semantics.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Removing ten exit(1)s and
+#  two warn-once latches destroys the tripwire that announced guard growth.  (hpcc2widthprobe:F9:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 for nm, off, wr, rdv in (("genctl", GENCTL, "0x82", "0x82"),     # stores the byte; bit 0x04 clear
                           ("t2ctl", T2CTL, "0x03", "0x3"),       # &= 0xfc; |= (v & 3)
                           ("t2icr", T2ICR, "0x13", "0x13"),      # &= ~0x17; |= (v & 0x17)

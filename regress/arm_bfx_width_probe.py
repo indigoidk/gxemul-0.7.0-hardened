@@ -64,6 +64,10 @@
 #      execution-flags field).  This probe therefore reads a GPR and never the flags.
 #    * The top of RAM is occupied -- a 12-byte halt stub at SP+32 with SP = R-4096, AND a PROM
 #      hook at R-8 written by arm_cpu_new().  CODE is planted low, at 0x10000.
+#      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The top of RAM is
+#      occupied -- a 12-byte halt stub at SP+32 with SP = R-4096, AND a PROM hook at R-8 written by arm_cpu_new().
+#      CODE is planted low, at 0x8000.  (hbundle_regress26:F8:
+#      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #    * Coprocessor encodings still exit(1) in arm_coproc_15 / i80321_6 / xscale_14.  Every word
 #      below is a data-processing media encoding; none touches CP space.
 #
@@ -268,6 +272,10 @@ row("s w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
 #  and `w32 pc' asserted pc, and all three are MOV/UBFX.  NO SBFX ROW CHECKED PC AT ALL -- and the
 #  SBFX rows are the ones whose expected failure value is also EXACTLY ZERO, which is precisely
 #  the case the pc control exists to disambiguate.  Named by the codex seat. ***
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] NO SBFX ROW CHECKED PC AT
+#  ALL -- and s w32 is one whose expected failure value under the undefined shift is EXACTLY ZERO (like ubfx w32),
+#  which is precisely the case the pc control exists to disambiguate.  (hbundle_regress26:F9:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 t, alive, r0, pc = run_word(sbfx(1, 4))
 row("s clear", r0 if alive else "died", "0x7",

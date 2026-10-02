@@ -26,6 +26,12 @@
 #              every row.  Making the arm leave *color untouched turns `copy lin_b' green-by-accident
 #              ONLY if the pre-paint is removed -- which is why the destination is PRE-PAINTED with a
 #              known value and the row rejects it: "left alone" and "wrote random" are then distinct.
+#              [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Under CATCHES,
+#              the defect rows are lin_b not src and lin_b is fg: the first wants the destination unequal to the
+#              source, and the second wants FG exactly, not an inequality against both source and pre-paint.
+#              Restoring exit(1) kills only the LIN_B session; earlier controls are separate sessions and stay
+#              green.  (hbundle_regress28:F11:
+#              regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #    DOES NOT  establish that any real driver selects LIN_B.  It appears only in crmfbreg.h and the
 #              function's own comment; the PROM's MTE zero-fill path does not call this function; and
 #              there is no O2/sgimips image in the tree to boot.  **Documented and storable is NOT

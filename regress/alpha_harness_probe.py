@@ -300,6 +300,9 @@ def pcb(base, ptbr, flags):
 #  A.ptbr = 0 so the CORRECT build leaves apcb_ptbr zero; A.flags = MARKER so the DEFECTIVE build
 #  copies MARKER into apcb_ptbr.  The second swpctx then saves apcb_ptbr into A+16, and that word
 #  is the oracle: 0 if correct, MARKER if the defect is present.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] PTBR_VAL is
+#  0x00000000aaaa1111 and the ptbr row expects it. apcb_flags is loaded from new_flags, and the flags row expects
+#  0x00000000bbbb2222.  (regress23:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 setup = pcb(P_PCB_A, PTBR_VAL, FLAGS_VAL) + pcb(P_PCB_B, 0, 0)
 setup += ["put d 0x%x, 0x%x" % (P_PTRV + 0,  k0(P_PCB_A)),
           "put d 0x%x, 0x%x" % (P_PTRV + 8,  k0(P_PCB_B)),

@@ -19,6 +19,9 @@ WHAT THIS PINS.  `dev_lca.c' registers `lca_interrupt_assert'/`_deassert' as the
 interrupt template, and both are a bare diagnostic plus `exit(1)' with NO GUARD.  `devinit_lca()'
 hands the same interrupt path to `bus_isa_init()', which connects the upstream interrupt and
 UNCONDITIONALLY installs the first ns16550 on ISA IRQ 4.  So the source-derived path is
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] dev_lca.c:119,140 implement
+per-instance warning latches and return without exit(1); the committed build survives the interrupt and passes.
+(hbundle_regress27:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
     dev_ns16550_tick() -> isa_interrupt_assert() -> isa_interrupt_common()
                        -> lca_interrupt_assert() -> exit(1)
@@ -186,6 +189,10 @@ row("stub named", "no" if "lca_interrupt_assert" not in t3 else "yes", "no",
 #  **That makes an UNLATCHED announce print MANY times and a latched one print EXACTLY ONCE**,
 #  which is the only observable difference between the two, and it exists here and not in the
 #  sibling probe.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Historical note: lines
+#  181-189 originally claimed the session repeatedly entered the assert callback; as explained at :195-231,
+#  edge-triggering enters it once regardless of latching.  (hbundle_regress27:F10:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  Counting is the oracle, not presence: a presence row would be satisfied by a latch that never
 #  engages, which is precisely the mutant this row exists to catch.

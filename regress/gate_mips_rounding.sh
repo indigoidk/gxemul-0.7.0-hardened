@@ -94,6 +94,9 @@ done
 # satisfied, and then a PC readback, which parses on arc but not reliably on pmax; the
 # dump channel works on both. Both rigs run every row, because a fix reaching only one
 # dyntrans mode would pass a single-rig gate.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Both rigs run the rt=0x15 and
+# BGEZ rows; pmax also runs rt=0x1e.  (hbundle_regress32:F11:
+# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 python3 mips_subnorm_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" > "$SLOG" 2>&1 || true
 
 if ! grep -q "MIPS_SUBN_RESULT=" "$SLOG"; then
@@ -140,6 +143,10 @@ done
 # boot-wait ceiling -- under heavy host load that ceiling is a load-sensitive
 # oracle of the gate_ab class, so do not run CPU-heavy work (panel seats,
 # builds) concurrently with this gate.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] for round.w (which forces
+# RN), the likeliest revert (cvt.w's FPU_RM_FROM_FCSR copy-pasted back) EQUALS correct code under the default
+# FCSR.RM=0; for ceil.w/floor.w (which force RP/RM), discriminating rows set a non-zero mode to test directed
+# behavior.  (hbundle_regress32:F12: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 python3 mips_fixedmode_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" both > "$FLOG" 2>&1 || true
 
 if ! grep -q "M295_RESULT=" "$FLOG"; then

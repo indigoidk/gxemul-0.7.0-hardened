@@ -96,6 +96,9 @@
 #  Both are clause-(e) coverage debt.  Neither is a floor breach: this handler's own code tests
 #  `writeflag' but never branches on `len', `func', `reg' or the bus VALUE, so none of them induces
 #  a body-tested partition.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] This handler tests
+#  writeflag, reg == 0 and bus == 0; it never branches on len or func.  (hbundle_regress5:F7:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  Usage:  lca_confbus_probe.py <gxemul-binary> [label]
 import os, sys, pty, select, time, re
@@ -528,6 +531,9 @@ row("t1 dev7rd", d7 if alive2d else "died", "0xffffffffffffffff",
 
 #  THE WRITE ROW.  Absence again -- but checkpointed, because [I] follows [H] and `print t2' only
 #  produces a value if [I] executed.  A missing checkpoint renders differently from a clean refusal.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] 'print t2' produces a value
+#  from register t2 regardless of whether [I] executed (and 'no-checkpoint' only catches a missing print response);.
+#  (hbundle_regress5:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 if not alive2d:
     _d7w = "died"
 elif d7 == "absent":

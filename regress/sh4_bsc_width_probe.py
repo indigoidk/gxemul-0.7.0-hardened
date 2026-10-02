@@ -24,6 +24,9 @@ fix.  Grading one by the other's clauses is a category error in either direction
 
 (D7, the big-endian lane, needs a `byte_order(big)` config file and is left to
 the round record rather than run here -- see the note at the foot of this file.)
+[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] D7a and D7b run in this file,
+both through a big-endian config.  (regress21:F6:
+regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 
 *** D4's ORACLE IS NOT THE REGISTER NAME, AND THAT IS THE WHOLE POINT. ***  A
 two-character mutant sharing one latch flag between the sites (`[site]` ->
@@ -246,6 +249,9 @@ row("D6b a 4-byte READ is diagnosed too, not only a write",
 #  0x3ffc; a byte store of 0xa5 must leave it standing, not produce 0x00a5.
 #  This row is also what makes the `len < 2` early-out visible: without it,
 #  8 * (len - 2) on a size_t len==1 shifts by SIZE_MAX*8, which is UB.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A 1-byte access returns 0
+#  from sh4_bsc16_report and breaks before sh4_bsc16_shift, so this row does not reach that helper's length guard.
+#  (regress21:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 buf, alive = session(
     ["r0=0xa5", "r1=0x%x" % BCR2, "r3=0x%x" % DEST,
      "put w 0x%x, 0x11111111" % DEST]

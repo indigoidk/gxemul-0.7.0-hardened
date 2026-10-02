@@ -17,6 +17,9 @@
 # just trade places consistently -- so this gate runs sign-ASYMMETRIC rows (fadd-neg-*,
 # flt-neg-*) whose expected values differ by operand sign. Those rows are the only
 # defence against the single most likely wrong implementation.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] fadd toward
+# +Inf/+Inf-opposite at m88k_rounding_probe.py:68-69 and flt toward +Inf at :96 also fail a missing 2-for-3 swap.
+# (regress21:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # Every row sets the mode the way a real guest does: the guest itself executes
 # `fstcr r5,fcr63`, proving decode end-to-end rather than only the store arm.
@@ -55,6 +58,9 @@ got=${res%/*}; want=${res#*/}
 # 73 = 46 as of #303 (25 rounding-mode rows + #302's six trnc and eight int/nint rows,
 # which the decoder used to HALT on + #303's six subnormal-operand rows) + #306's
 # eighteen mixed-format rows + #307's seven tcnd trap rows + #308's two round-to-nearest witnesses.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Seven truncation rows (three
+# SS and four SD). 25+7+8+6=46.  (regress21:F10:
+# regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # #306 closed a FAMILY, not the two encodings that happened to get reported: the size
 # field is a format TRIPLE, so each of fadd/fsub/fmul/fdiv has eight legal forms, and
@@ -330,6 +336,9 @@ fi
 #  whose CORRECT answer is HALT -- they separate the shipped fix from a form that delivers
 #  every vector (the rejected D4) or SFU1 (row m88kexcsfu1); vbrtb is the one ANCHORED row
 #  (VBR relocated to 0x2000: it alone reds if the vector base stops being read).
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Eight expected-HALT rows:
+#  resid50, resid127, resid11, resid50ind, resid50c, resid50ser, sfu1h, usfu1.  (regress21:F11:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 EXCLOG=$LOGDIR/m88k_exc.log
 python3 m88k_exc_probe.py "$PMAX" > "$EXCLOG" 2>&1 || true
 grep -E "^M88KEXC_(ROW|RESULT|SELFTEST|CONTROLS)" "$EXCLOG" | cut -c1-110 | sed 's/^/       /'

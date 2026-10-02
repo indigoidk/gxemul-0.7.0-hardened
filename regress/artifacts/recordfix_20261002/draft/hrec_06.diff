@@ -1,0 +1,286 @@
+--- HEAD:regress/lca_isalane_probe.py
++++ with the notes: regress/lca_isalane_probe.py
+@@ -966,12 +966,16 @@
+ #      DIB=1 (a reply is queued)  ->  pop 0x55  ->  DIB=0 (the queue is now EMPTY).
+ #  A doubled store delivers 0xAA twice, so TWO replies queue and DIB is STILL 1 after the single pop.  A phantom read
+ #  (x_wfallthru) pops the reply early, so DIB is already 0 BEFORE the pop.  The two escapes move OPPOSITE rows.
+ #  The command goes through lca_isa at SP(0x64): 0x64 & 3 == 0, so ofs = 0 % len = 0 at every width, and a const of
+ #  0xAA puts the command byte at position 0 for all four.  One session per width -- the 8042 queue is FIFO and
+ #  stateful, which is why `kbcq' is built the same way.  No new device: this is the 8042 the tail rows already use.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] #  A doubled store delivers
++#  0xAA twice, so TWO replies queue and DIB is STILL 1 after the single pop.  A phantom read on 0x64 is inert and
++#  does not pop the reply (see :989); this session detects duplicate stores.  (hlcaisalaneprobe:F3:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ for w, stop in (("b", STB), ("w", STW), ("l", STL), ("q", STQ)):
+     lenw = {"b": 1, "w": 2, "l": 4, "q": 8}[w]
+     C = [k0(SP(KBC_CMD)), KBC_SELFTEST, k0(FLAT(KBC_CMD)), k0(FLAT(KBC_DAT))]
+     P = [([LDQ(T1, 0, T0), LDQ(T2, 8, T0), stop(T2, 0, T1), LDQ(T1, 16, T0)]
+           + sent(T3) + [LDBU(T3, 0, T1)], "t3"),                       # command THROUGH lca, then flat status
+          ([LDQ(T1, 24, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4"),     # pop the reply, flat
+--- HEAD:regress/luna_absentcpu_probe.py
++++ with the notes: regress/luna_absentcpu_probe.py
+@@ -15,12 +15,18 @@
+ The absent slots' registers stay guest-writable storage with readback (a MODEL question filed as lunaabsentmaskdecl).
+ 
+ ONE cold-debugger session per SESSION below, real m88k guest instructions (st/ld through real address decode and
+ real memory_rw), COMMITTED UNMODIFIED machine description (`-e luna-88k' + the committed rig image; `-n 2' for the
+ two-cpu accept rows is a command-line configuration of the same description, not a machine edit).  EVERY PLANTED
+ WORD IS DISASSEMBLED AND ITS TEXT CHECKED BEFORE IT IS STEPPED.
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] EVERY PLANTED PROGRAM SLOT IS
++DISASSEMBLED AND ITS TEXT CHECKED BEFORE IT IS STEPPED (PARK AND VBR+8 BRANCHES UNCHECKED).
++(hlunaabsentcpuprobe:F4: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] ONE cold-debugger session per
++SESSION below (except B3, which boots a second session for noreenter/redeliver).  (hlunaabsentcpuprobe:F6:
++regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+   session A  (1 cpu, stepped)          row          CHANNEL: the mutant it kills / the observable that differs
+     C1  RAM word through the same decode            live         identity (floor c): 0x12345678 back
+     C2  MASK0 <- 0xfc000000; ld = 0x00fc0000        devsig       RAM-vs-device: the handler's own >>8
+     A1  SOFT_INT0 <- 1 on the CONNECTED slot 0      slot0        attribution: the same two stores survive; readback 1
+     A2  MASK1 <- 0xfc000000 ALONE; ld = 0x00fc0000  mask1        option-(b)-shaped edits (a declined store reads 0)
+@@ -89,12 +95,15 @@
+     sio5 deliver1                                    (B2 delivers line 5 to slot 0 only -- kimi, pass 3): cpu 1 enters VBR+8
+ 
+ RESULT words per row: OK / HALT (the host died: signal / exit) / BADREGS (a value assert failed) / STOP (no vector entry
+ before the wait ran out) / NOSTART.  Output: `LUNAABS_ROW=<name> RESULT=<word> ...' per row, `LUNAABS_RESULT=<ok>/<rows>',
+ `LUNA_ABSENTCPU_WITNESS=PASS|PRE_FIX_SYMPTOM|FAIL ...', `LUNAABS_DONE'.  Exit status is non-zero on any row that is not OK
+ (a gate can rely on it).  On HEAD the witness reads PRE_FIX_SYMPTOM at row soft1 (session A) and at siofirst (session A2).
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] On the pre-fix binary the
++witness reads PRE_FIX_SYMPTOM at row soft1 (session A) and at siofirst (session A2); on HEAD it reads PASS.
++(hlunaabsentcpuprobe:F5: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ CONTRACT (clause e): catches the walk bound reverted or off by one, an ASSERT-only NULL guard, a decline-once latch on
+ either arm, a guard moved inside the branch, the reassert CALL bounded in the store arms instead of the walk (sio5), the
+ bound never assigned (session B), the bound hardcoded to 1 (session C) or clamped to 2 (session E), slots 2/3 aliased onto 0/1
+ (session E), a device line masked out of the walk or a walk of software-pending slots only (session B2), the per-slot latch
+ collapsed onto slot 0 (session C2), a per-cpu READ aliased by parity or onto slot 0 with the alias target IDLE (session E2:
+--- HEAD:regress/luna_intmask_probe.py
++++ with the notes: regress/luna_intmask_probe.py
+@@ -12,12 +12,16 @@
+ store-masked and not-storing-at-all all read back identically.  Every value row below
+ therefore uses a bit in 25..8 and TWO DIFFERENT architected prefixes, so that the three
+ candidate shapes produce three DIFFERENT numbers rather than one shared one.
+ 
+ Bits 31..29 of odata are the pending-level field and are not under the probe's control on
+ a live machine (a timer tick can set one), so every value assertion is on (r4 & 0xffffff).
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Guarded write rows D1/D2 use
++bits in 25..8 to produce distinct as-is, masked, and no-store readbacks; D3 exercises bits in 7..0 against narrowed
++guards, and device readbacks mask with 0x00ffffff.  (hbundle_regress27:F7:
++regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ Encodings (cpu_m88k.c:991-1019, same source as regress/m8820x_sites_probe.py):
+     ld rD,rS1,IMM16  op26=0x05 ;  st rD,rS1,IMM16  op26=0x09
+ EVERY PLANTED WORD IS DISASSEMBLED AND ITS TEXT CHECKED BEFORE IT IS STEPPED -- this
+ project has a recorded incident where a wrong register field made a gate row measure the
+ wrong thing for months.
+--- HEAD:regress/m88k_rounding_probe.py
++++ with the notes: regress/m88k_rounding_probe.py
+@@ -20,12 +20,16 @@
+ m88k's FPCR.RM directed pair is 10=toward-MINUS-infinity, 11=toward-PLUS-infinity --
+ the OPPOSITE order from MIPS/SH and from float_emul.h's IEEE_RM_* values, so #298's
+ decode must swap 2 and 3. A decode that FORGETS the swap passes every sign-symmetric
+ vector (both directed modes just trade places consistently); only rows where the
+ expected value differs by the SIGN of the operand catch it. Rows fadd-neg-* and
+ flt-neg-* are that tripwire.
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A decode without the 2<->3 swap
++inverts the directed rounding modes, failing both positive directed rows (toward+Inf rounds down and toward-Inf
++rounds up) as well as the negative rows.  (hm88kroundingprobe:F5:
++regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ Encodings, from cpu_m88k_instr.c's own decode:
+     fadd.sss r4,r2,r3   0x84822803      fsub.sss r4,r2,r3   0x84823003
+     fsub.sds r4,r2,r6   0x84823206      fmul.sss r4,r2,r3   0x84820003
+     fdiv.sss r4,r2,r3   0x84827003      flt.ss   r4,r2      0x84802002
+     fstcr    r5,fcr63   0x80058fe5      fldcr    r6,fcr63   0x80c04fe0
+@@ -187,12 +191,15 @@
+     # this tree implemented five or six of each, chosen by whatever the guests
+     # of the day happened to run. Every missing one reached goto bad, which
+     # stops the emulator on a legal instruction; six of the twelve were
+     # measured halting on this rig before the fix.
+     #   encoding = 0x84000000 | d<<21 | s1<<16 | op11<<11 | size<<5 | s2,
+     #   with d=r4, s1=r2, s2=r6 so the double operands land in aligned pairs.
++    # [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] This tree implemented
++    # four to six of each (fdiv 4, fadd 5, fmul 5, fsub 6), with #306 adding the twelve missing forms.
++    # (hm88kroundingprobe:F6: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     #
+     # THE ROW THAT CAUGHT A REAL BUG: fmul.ssd of 3.0f by the nearest double
+     # to 1/3. The exact product is just BELOW 1.0, but the HOST double product
+     # ties to exactly 1.0 -- so the first draft of #306, which copied
+     # fmul_sss's "compute in host double, round at the store", answered
+     # 0x3f800000 under toward-zero where one correct rounding owes 0x3f7fffff.
+@@ -214,12 +221,15 @@
+      0x84822886, "r4", 0x3f800000),
+     # fadd.sds: the same sum with the DOUBLE as s1 -- reading s1 as a single
+     # would give 0.234375, grossly wrong, so this pins the operand widths.
+     ("fadd.sds RN",  RN,   {"r2": 0x3e700000, "r3": 0x04000000, "r6": 0x3f800000},
+      0x84822a06, "r4", 0x3f800001),
+     # fadd.sdd / fsub.ssd / fsub.sdd: both sources double, single destination.
++    # [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] # fadd.sdd / fsub.sdd:
++    # both sources double; fsub.ssd: single source 1, double source 2; all three single destination.
++    # (hm88kroundingprobe:F7: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     ("fadd.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000,
+                             "r6": 0x3e700000, "r7": 0x04000000},
+      0x84822a86, "r4", 0x3f800001),
+     ("fsub.ssd RN",  RN,   {"r2": 0x3f800000, "r6": 0xbe700000, "r7": 0x04000000},
+      0x84823086, "r4", 0x3f800001),
+     ("fsub.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000,
+@@ -281,12 +291,16 @@
+     # subnormals monotonically into (0, FLT_MIN), order preserved) -- fcmp.ssd
+     # with a DOUBLE comparand INSIDE the (true, garbled) gap is the only
+     # discriminating compare shape, hence the 2^-135 row. The fmul rows have
+     # NORMAL results, so the #287/#292 store flush never touches them.
+     #   fmul.dss r6,r2,r3 = 0x84c20023 (s2 NAMED 1.0f: the pinned bytes are the
+     # pure widen); fmul.ddd r6,r2,r8 = 0x84c202a8; fcmp.ssd r4,r2,r6 = 0x84823886.
++    #   [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Same-format compares
++    #   cannot discriminate single subnormals (order preserved), but double subnormals collide under the old
++    #   rounding (e.g. m=3 and m=4) so same-format double compares can discriminate.  (hm88kroundingprobe:F8:
++    #   regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+     ("subn fmul +",    RN, {"r2": 0x00000001, "r3": 0x71800000}, FMUL, "r4",
+      0x27000000),
+     ("subn fmul -",    RN, {"r2": 0x80000001, "r3": 0x71800000}, FMUL, "r4",
+      0xa7000000),
+     ("subn fmul.dss",  RN, {"r2": 0x00000001, "r3": 0x3f800000}, 0x84c20023, "r6",
+      0x36a00000),
+--- HEAD:regress/mips_subnorm_probe.py
++++ with the notes: regress/mips_subnorm_probe.py
+@@ -23,12 +23,15 @@
+ the same path with the sign applied at the end), and a #287 revert trips it
+ too (the old store LOST the sign: +0, not -0). A POSITIVE flip row could not
+ see a #287 revert at all -- +0 is +0 under both stores -- which is why this
+ row is negative (a diff-review seat's finding). The guest still observes
+ x != 0 but x + x == 0: the interim half-state the queued store-side round
+ inherits.
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] On pmax the negative tiny
++result is fpu_subst_tiny after the subnormal encoder. The expected word remains 80000000.  (regress21:F12:
++regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ Probe facts (mirrors mips_rounding_probe.py): put w + dump work on RAM; both
+ rigs are little-endian (dump renders memory order -- bytes reversed on read);
+ status is a debugger SETTING (CU1 = 0x20000000; R3000 has no FR bit);
+ FPRs are not debugger-settable, so operands go through guest lwc1; COP1 fd
+ lives at bits 10:6 (cvt.d.s f4,f0 = 0x46000121; add.s f4,f0,f0 = 0x46000100;
+--- HEAD:regress/mk48_nvram_probe.py
++++ with the notes: regress/mk48_nvram_probe.py
+@@ -5,12 +5,14 @@
+ exactly ONE row inverted (see "msg silent" below).  The witness as run is
+ preserved unmodified at
+     regress/artifacts/mk48nvramkill/opus_mk48_nvram_witness_20260910.py
+ and scored 15/47 on the committed build and 46/47 after the fix; the 46th was
+ that one row, which by construction cannot be green on a fixed build.  This
+ file therefore scores 47/47 post-fix and 14/47 pre-fix.
++[#556, 2026-10-02 -- a records correction; the text above is kept as it was written] HEAD emits 57 rows.
++(regress24:F8: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ 
+ DEFECT.  DEVICE_ACCESS(mk48txx) accepts everything outside
+ [MK48T08_CLKOFF, MK48T08_CLKOFF + MK48TXX_ISEC) = [0x1ff0, 0x1ff9) via an early
+ `goto ret'.  The switch it then reaches holds exactly ONE case,
+ MK48T08_CLKOFF + MK48TXX_ICSR = 0x1ff8.  The other EIGHT offsets 0x1ff0..0x1ff7
+@@ -279,12 +281,15 @@
+ #
+ #      0x0100 / 0x0101   `live' / `nvram0'      DATA verified      already closed
+ #      0x1fef            `ok rd/wr 1fef'        survival only      CLOSED HERE
+ #      0x1ff0..0x1ff7    the 16 kill rows       survival only      CLOSED HERE
+ #      0x1ff8            `csr rise'             SIDE EFFECT        already closed
+ #      0x1ff9..0x1fff    `devsig' x4            DATA verified      already closed
++#      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] devsig reads 0x1ffc,
++#      0x1ffd, 0x1ffe, and 0x1fff. 0x1ff9 is a survival row. 0x1ffa and 0x1ffb are not accessed.  (regress24:F9:
++#      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ #
+ #  Each row writes a DISTINCT byte, so a mutant folding several offsets onto one cell is
+ #  caught too; a single shared value would let aliasing pass.  0x5a is avoided because it
+ #  is the scratch pattern and would alias the kill rows' own observable, and 0x00 is
+ #  avoided because it is what an unwritten cell already reads.
+ for _off in (0x1fef, 0x1ff0, 0x1ff1, 0x1ff2, 0x1ff3, 0x1ff4, 0x1ff5, 0x1ff6, 0x1ff7):
+--- HEAD:regress/pcc2_default_probe.py
++++ with the notes: regress/pcc2_default_probe.py
+@@ -110,12 +110,16 @@
+ touch all eighteen offsets in ONE session each (valid because the fix has no per-offset branch; the count rows are
+ AGGREGATES, so a per-offset failure is located by reading the log, not by a row) -- if a later round branches per
+ offset this compression is invalid; "unnamed" means the FORK HEADER has no label, not that the part is undocumented
+ (0x39 is SPEED's second byte, 0x3b PRTDATA's low byte); per-instance latch scope is not provable by fresh sessions
+ (each is a new process; `pcc2latchinst').
+ The debugger's `put b' never reaches a DM_DEFAULT arm (measured): `put b ctl' is a control, not a witness.
++      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] In THE ANNOUNCE GRID,
++      direction text is marked R for READ len2, READ len4, and WRITE len4, but their checks only match
++      width/value/offset substrings without asserting 'read from' or 'write to' (which are rowed only for len1).
++      (hbundle_regress28:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ Usage: python3 pcc2_default_probe.py <gxemul> <label>      Sentinel: PCC2D_PROBE_DONE
+ The pty session helper is the width probe's own (extracted at run time), never hand-rolled: a first
+ draft of the witness hand-rolled it and read every host kill as "survived".
+ """
+ import io, os, pty, re, select, sys, time
+--- HEAD:regress/pcc2_width_probe.py
++++ with the notes: regress/pcc2_width_probe.py
+@@ -388,12 +388,20 @@
+       INSTRUMENTS.  Parts 3, 3b and 3c ran three frozen copies (md5 3dcf73de, 280d9ab3,
+       72759b4f); the last is the shipped probe.  3 -> 3b changed only `rb t1ctl' /
+       `rb t1icr's expected string, 3b -> 3c only `acc all's session; row-name sets are
+       identical and no killing row was touched, so the part-3 kills TRANSFER.  `acc all'
+       was REWRITTEN, not added: its warrant is that the session is self-contained and
+       part 3c measured the rewrite (95/96, `acc all' alone).
++      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] A translation of the bit
++      index ('1u << bit' -> '1u << (bit + 1)') maps MASK onto bit 12 (PCC2_W_C040), which reassert_interrupts()
++      reads and writes; bit translation is no longer equivalent.  (hpcc2widthprobe:F3:
++      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
++      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The TEST line's operand
++      swap ('&' -> '==') is not caught by 'latch all' (which announces 12 either way); 'latch aba' supplies the
++      distinguishing observation.  (hpcc2widthprobe:F5:
++      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+   DOES NOT CATCH, stated so an escape is outside the contract rather than an argument
+     * per-instance vs process-global latch state: mvme187 instantiates ONE pcc2, so no
+       session can hold two instances.  The bitfield is per-instance by construction;
+       nothing here measures it;
+     * pcc2c040kill -- a LEGAL byte write of 0x04 to GENCTL still ends the host in
+@@ -403,12 +411,16 @@
+       longer ends the host in `default:'; regress/pcc2_default_probe.py (46 rows) pins it, and
+       nothing HERE measures that arm (this line said "still ends" until #501's pass 4);
+     * pcc2counter8 -- the counter arm's raw memcpy of an 8-byte write;
+     * what real hardware does with the LANES of a wide write (not on disk);
+     * the SCCERR word-write's stored value: the arm always stores 0, so a decline and
+       an accept are value-identical there and the row's channel is the message.
++    [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] pcc2c040kill -- FIXED by
++    #512: a legal byte write of 0x04 to GENCTL announces once and suppresses interrupt assertion; every GENCTL lane
++    here keeps that bit clear.  (hpcc2widthprobe:F4:
++    regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ 
+ Sentinel: PCC2W_PROBE_DONE
+ """
+ 
+ import os, pty, re, select, sys, time
+ 
+@@ -822,12 +834,16 @@
+ #  PASS 13 (GPT-6 Astra fix review): five arms test their HUH? bits on the COMPOSED idata --
+ #  VECBASE `& ~0xf0', SCCICR/SCCTX `& ~0x1f', SCCRX/SCSIICR `& ~0xdf' -- and every wide value
+ #  the rows drive at them (0x0303, 0xaab8, the rb4/rb8 lanes) has those bits SET, so a guard
+ #  `&& (idata & ~mask)' would decline every existing row and LAND a HUH?-clear wide write.
+ #  One halfword within the mask per arm, appended to the rb4 session; each lands to a value
+ #  the preset is not (0xf0 vs 0x50; 0x10 vs 0x1f; 0x01 vs 0x1f).
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] HUH?-CLEAR wide writes land
++#  HUH?-clear values; 'latch all zero' writes 0 to every block, so a guard '&& (idata & ~mask)' already fails
++#  existing latch-announcement rows.  (hpcc2widthprobe:F6:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ HUHQ = {VECBASE: "0x00f0", SCCICR: "0x0010", SCCTX: "0x0010", SCCRX: "0x0001", SCSIICR: "0x0001"}
+ for nm, off, pre, want in (("genctl", GENCTL, "0x82", "0x82"), ("vecbase", VECBASE, "0x50", "0x50"),
+                            ("t2ctl", T2CTL, "0x03", "0x3"), ("t2icr", T2ICR, "0x13", "0x13"),
+                            ("sccicr", SCCICR, "0x1f", "0x1f"), ("scctx", SCCTX, "0x1f", "0x1f"),
+                            ("sccrx", SCCRX, "0x1f", "0x1f"), ("scsiicr", SCSIICR, "0x1f", "0x1f"),
+                            ("mask", MASK, "0x12", "0x12")):
+@@ -1221,12 +1237,15 @@
+     row("rb8 " + nm, printed(t, "r4") if alive else "died", want, "%s unchanged after a declined 8-byte write" % nm.upper())
+ 
+ # --------------------------------------------- de-escalation ACCEPT rows (byte writes)
+ #  Removing twelve exit(1)s destroys the tripwire that announced guard growth.  So the
+ #  legal width must still LAND at each reachable arm, through its own mask, with no
+ #  decline message.  Expected values from the arms' own semantics.
++#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Removing ten exit(1)s and
++#  two warn-once latches destroys the tripwire that announced guard growth.  (hpcc2widthprobe:F9:
++#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+ for nm, off, wr, rdv in (("genctl", GENCTL, "0x82", "0x82"),     # stores the byte; bit 0x04 clear
+                           ("t2ctl", T2CTL, "0x03", "0x3"),       # &= 0xfc; |= (v & 3)
+                           ("t2icr", T2ICR, "0x13", "0x13"),      # &= ~0x17; |= (v & 0x17)
+                           ("scctx", SCCTX, "0x1f", "0x1f"),      # = v & 0x1f
+                           ("sccerr", SCCERR, "0x5a", "0x0")):    # any write clears to 0
+     t, alive, how = session(setup(r5=wr) + program([ST_B(5, off), LD_BU(4, off)]) + ["print r4"])

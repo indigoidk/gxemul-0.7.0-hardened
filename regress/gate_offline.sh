@@ -922,6 +922,9 @@ fi
 #      the NAMED row to catch it.  Covers ONE site against a fixture that has
 #      stopped reaching the code.  Measured: the SELFCHECK is blind to a row
 #      rewritten to compare the subject against itself; a pinned mutant is not.
+#      [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The SELFCHECK in the
+#      first bullet covers only rows using the comparator it probes.  (hgateoffline:F7:
+#      regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  WHAT THIS DOES NOT PROVE, said plainly because the honest scope is the whole
 #  point.  A seat stubbed every row EXCEPT the ones each mutant kills and both
@@ -1460,6 +1463,9 @@ else
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
     #  vacuous state described above, so each is named rather than merely counted.
+    #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The four divergence rows
+    #  test distinct modulo-versus-mask boundaries; each is named rather than merely counted.  (hgateoffline:F8:
+    #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     check     "wdc IDENTIFY: the >>8 threshold row is present" \
               "$(grep -c 'threshold: >>8 byte reaches 255' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the carry row is present" \
@@ -1934,11 +1940,17 @@ fi
 # terabytes. This guard keeps an empty disk reporting empty however it got that way, and
 # stays correct after that defect is fixed -- which is why its row uses a 0-BYTE IMAGE
 # rather than a floppy. A floppy row would go vacuous the moment the geometry fix lands.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] THIS WAS NOT A CORNER CASE.
+# Fixed in #414: -d gH;S disks now compute cylinders and blocks; 0-byte images remain reachable zero-block disks.
+# (hgateoffline:F9: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 # The driver carries four further sections, DISABLED, that assert defects still live
 # (short/failed writes reported as success, reads past EOF, and a single WRITE(10) that
 # grew a 10 KB image to 512 MB with status GOOD). Build with -DDISKIMAGE_IO_UNFIXED to
 # see them fail; the round that fixes them deletes the guard.
+# [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The driver previously carried
+# four disabled sections behind -DDISKIMAGE_IO_UNFIXED; #416 removed the guard so all run unconditionally.
+# (hgateoffline:F10: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  ---------------------------------------------------------------------------
 #  #437: SYNCHRONIZE CACHE durability.
 #
@@ -2232,6 +2244,9 @@ fi
 #  comparator a deliberate mismatch, so it catches a comparator edited into always-passing --
 #  a state in which every row prints `ok`, and the row count, the identity row and the verdict
 #  token ALL SURVIVE, so the self-mutant and every other assertion here stay green.
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] The self-check tests
+#  comparator liveness directly; the self-mutant also requires its named row to fail and rejects an always-passing
+#  comparator.  (hgateoffline:F11: regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #
 #  WHY IT IS HERE AND NOT BESIDE ITS SIBLING: three of the four assertions read the
 #  FILESYSTEM and could live anywhere, but the fourth reads each differential's LOG, and six

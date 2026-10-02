@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""mk_agy_records.py -- the agy LOCATOR pack for the harness review's RECORD dispositions (owner 2026-10-02: "Make
+sure to push Agy").  A RECORD disposition says a comment or a record in the regression harness is false or stale and
+gives the sentence that should stand there; the corrections are owed IN PLACE, by file family, in later records
+rounds.  Before a sentence can be replaced somebody has to find the text it replaces in the committed file and say
+whether it is still there -- mechanical reading, which is what this pack asks of agy.
+
+Takes the governing disposition of every finding from mk_hdisp.py itself (executed here with --check, so nothing is
+written by it) and writes, under regress/artifacts/recordfix_20261002/:
+    HRECORD.tsv            key, group, whose line governs, the replacement sentence, the governing line
+    briefs/hrec_NN.md      about 18 dispositions each, grouped by the file family they correct
+and the runner's queue at <scratchpad>/astraretro/agy_records_queue.tsv."""
+import io
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+OUTD = os.path.join(SEC, "regress", "artifacts", "recordfix_20261002")
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+PER = 18
+
+g = {"__name__": "__main__", "__file__": os.path.join(HERE, "mk_hdisp.py")}
+argv = sys.argv
+sys.argv = ["mk_hdisp.py", "--check"]
+real_stdout = sys.stdout
+sys.stdout = io.StringIO()
+try:
+    exec(compile(io.open(os.path.join(HERE, "mk_hdisp.py"), encoding="utf-8").read(), "mk_hdisp.py", "exec"), g)
+except SystemExit as e:
+    if e.code not in (0, None):
+        sys.stdout = real_stdout
+        raise SystemExit("REFUSED: mk_hdisp.py --check failed: %s" % e.code)
+finally:
+    sys.stdout = real_stdout
+    sys.argv = argv
+final, order, draft, astra, tb_rows, returned, ANYKEY = (g[k] for k in ("final", "order", "draft", "astra", "tb_rows", "returned", "ANYKEY"))
+
+recs = []
+for key in order:
+    if final[key] != "RECORD":
+        continue
+    tbr = [r for r in tb_rows.get(draft[key][0], []) if ANYKEY.match(r) and "%s:F%s" % ANYKEY.match(r).groups() == key]
+    if key in returned:
+        who, line = "grok, on the finding's return", "%s -- %s" % (returned[key][2], returned[key][3])
+    elif key in astra and astra[key][0] == "RECORD":
+        who, line = "Astra", astra[key][1]
+    elif tbr and "RECORD" in tbr[0]:
+        who, line = "grok tie-break", tbr[0]
+    else:
+        who, line = "the draft (%s)" % ("grok" if draft[key][0] in g["GROK"] else "agy"), draft[key][2][2:]
+    q = re.search('RECORD[:\\s]*(?:\u201c([^\u201d]{6,})\u201d|"([^"]{6,})")', line)
+    sent = (q.group(1) or q.group(2)).strip() if q else ""
+    recs.append([key, draft[key][0], who, sent, line])
+os.makedirs(os.path.join(OUTD, "briefs"), exist_ok=True)
+with io.open(os.path.join(OUTD, "HRECORD.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("key\tgroup\tgoverns\treplacement_sentence\tgoverning_line\n")
+    for r in recs:
+        f.write("\t".join(x.replace("\t", " ") for x in r) + "\n")
+nosent = [r[0] for r in recs if not r[3]]
+print("RECORD dispositions: %d; without a quoted replacement sentence: %d %s" % (len(recs), len(nosent), nosent[:8]))
+
+HEAD = """HARNESS RECORD CORRECTIONS, part %(n)s -- find the text each correction replaces
+
+FIRST line of your answer: `VERDICT: <s> of %(k)d still say it, <c> already corrected, <m> not found, <w> replacement does not fit`.
+SECOND line: the token `%(tok)s`.  THIRD line: quote verbatim the first line of
+`%(wd)s%(bs)s_scratchpad%(bs)sCHECKPOINT.md`.
+
+READ-ONLY, always: write no file, run nothing that changes a file, build nothing.  The tree under review is
+`%(wd)s%(bs)sGXEMUL-SEC` (git) at commit `7440e129`; read committed files
+(`git -C %(wd)s%(bs)sGXEMUL-SEC show 7440e129:<path>`), and ignore any other `src/` under the project root.
+
+**Context.**  A review of this project's regression harness (its gate scripts, probes and checkers under `regress/`
+and `tools/`) found comments and records that say something false or out of date.  Each such finding was ruled
+RECORD: nothing is wrong with the code, the SENTENCE is wrong, and a replacement sentence was written.  The
+corrections will be made in place, file by file, in later rounds.  Before a sentence can be replaced, somebody has to
+find the text it replaces in the committed file and say whether it is still there.  That is this job.  The line
+numbers in the dispositions are an older commit's (`db8b1a33`); the files have moved since, so find the text by what
+it SAYS.
+
+**For each disposition below, ONE line:**
+`<key> | <path>:<first line>-<last line> at 7440e129 | STILL SAYS IT / ALREADY CORRECTED / NOT FOUND | CURRENT: "<the sentence or comment as it stands now, verbatim, at most 300 characters>" | FITS / DOES NOT FIT: <why>`
+* `STILL SAYS IT`: the false or stale statement the disposition describes is present.  Quote it exactly as it stands
+  (comment markers and all), so that a script can find it.
+* `ALREADY CORRECTED`: the place now says what the replacement says, or the statement is gone.  Quote what stands there.
+* `NOT FOUND`: you could not find the statement in the file the disposition names.  Say where you looked.
+* `DOES NOT FIT`: the replacement sentence would itself be false at `7440e129`, or it describes another place.  Say
+  which, with `path:line`.  Your agreement is not what is wanted: a replacement you cannot check against the source is
+  `FITS: NOT CHECKED`, never a plain `FITS`.
+
+End with `DENOMINATOR: <a> of %(k)d dispositions looked up in the committed file`.
+
+**The dispositions** (key | the governing line, cut at 640 characters; where a replacement sentence is quoted in it,
+that is the sentence that should stand):
+"""
+jobs = []
+for n in range(0, len(recs), PER):
+    part = recs[n:n + PER]
+    name = "hrec_%02d" % (n // PER + 1)
+    body = ["%d. %s | %s" % (i, r[0], r[4] if len(r[4]) <= 640 else r[4][:637] + "...") for i, r in enumerate(part, 1)]
+    text = HEAD % {"n": name[5:], "k": len(part), "tok": "AGY_%s_ALIVE_1002" % name.upper(), "wd": WD, "bs": BS} + "\n".join(body) + "\n"
+    p = os.path.join(OUTD, "briefs", name + ".md")
+    io.open(p, "w", encoding="utf-8", newline="\n").write(text)
+    jobs.append((name, os.path.getsize(p)))
+q = os.path.join(HERE, "agy_records_queue.tsv")
+io.open(q, "w", encoding="utf-8", newline="\n").write(
+    "# artdir<TAB>id -- the agy locator pack for the harness RECORD dispositions, 2026-10-02\n"
+    + "".join("recordfix_20261002\t%s\n" % j[0] for j in jobs))
+print("briefs: %d (%s .. %s), %d-%d bytes; queue %s" % (len(jobs), jobs[0][0], jobs[-1][0], min(j[1] for j in jobs), max(j[1] for j in jobs), q))

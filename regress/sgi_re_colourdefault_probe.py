@@ -686,6 +686,9 @@ row("nib ann", t_nib.count(ANN) if alive_nib else "died", 1,
 #  is FALSE -- `ycrcb x4y1' already carries xofs 16, so that mutant was caught before this block
 #  existed, and M39 measures it at 76/77 territory rather than a sweep.  The CHOICE is right and
 #  the REASON was wrong; corrected rather than left, because a wrong reason gets reused.)
+#  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] and M39 measures it at 74/77
+#  territory rather than a sweep.  (hsgirecolourdefaultprobe:F4:
+#  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
 #  y IS 129 AND NOT 128 IN C4 because `y &= 127' runs BEFORE the colour switch, so 128 masks to
 #  zero and would leave the in-scope `y' pinned.
 #
