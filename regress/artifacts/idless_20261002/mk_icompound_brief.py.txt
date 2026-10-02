@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""mk_icompound_brief.py -- the grok brief for what the id-less table's mechanical derivation could not settle:
+  A. three dispositions whose governing line names MORE THAN ONE outcome (the derivation took the first), each of
+     which creates or may create a NEW row the table dropped;
+  B. the seven CLOSE-RECORD entries whose governing line is an Astra amendment that gives a fragment or an instruction
+     instead of the sentence that should stand in the queue.
+grok is the ruling seat of this scan; GPT-6 Astra confirms afterwards.  Nothing is typed by hand: the lines are taken
+from IDLESS_FILING.tsv / IDLESS_NOTOWED.tsv and from the ruling files."""
+import io
+import os
+import re
+
+D = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/idless_20261002"
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+ART = WD + BS + "GXEMUL-SEC" + BS + "regress" + BS + "artifacts" + BS + "idless_20261002"
+
+
+def tsv(name):
+    return [l.split("\t") for l in io.open(os.path.join(D, name), encoding="utf-8").read().split("\n")[1:] if l.strip()]
+
+
+owed, notowed = tsv("IDLESS_FILING.tsv"), tsv("IDLESS_NOTOWED.tsv")
+allrows = owed + notowed
+COMPOUND = (("01", "1705-1716"), ("02a", "2616"), ("07", "16997-17000"))
+comp = []
+for tag, lead in COMPOUND:
+    hit = [r for r in allrows if r[3] == tag and r[4] == lead and r[6] == "Astra" and len(re.findall(r"NEW|FILED", r[9].split("should")[1] if "should" in r[9] else "")) > 1]
+    if len(hit) != 1:
+        raise SystemExit("REFUSED: %d compound dispositions at %s %s" % (len(hit), tag, lead))
+    comp.append(hit[0])
+closes = [r for r in owed if r[1] == "CLOSE-RECORD" and r[6] == "Astra"]
+if len(closes) != 7:
+    raise SystemExit("REFUSED: %d Astra-governed CLOSE-RECORD entries, expected 7" % len(closes))
+
+
+def ruling_line(tag, key):
+    t = io.open(os.path.join(D, "grok", "grok_ruleidless_%s.txt" % tag), encoding="utf-8", errors="replace").read()
+    lead = re.match(r"(\d+)", key).group(1)
+    for l in t.split("\n"):
+        if re.match(r"^[`*|\s-]*(?:OUTSTANDING_BUGS\.md:)?%s\b" % lead, l) and "ID-LESS" in l:
+            return l.strip()
+    return "(your ruling line was not found by its line number; see IDLESS_DISPOSITIONS.md, slice %s)" % tag
+
+
+head = """THE ID-LESS TABLE -- three dispositions that name more than one outcome, and seven closing sentences to write out
+
+FIRST line of your answer: `VERDICT: <a> of 3 compound dispositions settled, <b> of 7 sentences written, <d> amendments disputed`.
+SECOND line: the token `GROK_ICOMPOUND_ALIVE_1002`.  THIRD line: quote verbatim the first line of
+`%(wd)s%(bs)s_scratchpad%(bs)sCHECKPOINT.md`.
+
+**Context.**  You ruled the id-less entries of this project's bug queue and GPT-6 Astra confirmed or amended each
+ruling (`%(art)s%(bs)sIDLESS_DISPOSITIONS.md`).  A table of what the queue is owed was derived mechanically from those
+lines.  The derivation reads ONE outcome per disposition, and it cannot turn an instruction into a sentence.  The ten
+items below are where that fails.  The main loop must not settle them from a paraphrase; you ruled these entries, so
+you write the result, and Astra checks it afterwards.
+
+**The tree.**  `%(wd)s%(bs)sGXEMUL-SEC` (git) at commit `7440e129`; the queue line numbers are commit `db8b1a33`'s
+(`git -C %(wd)s%(bs)sGXEMUL-SEC show db8b1a33:OUTSTANDING_BUGS.md`; if `git show` is refused to you, say so and read
+the file on disk by its text).  Never read any other `src/` under the project root; never `git status` or `git diff`.
+Write nothing.
+
+**Part A -- three compound dispositions.**  Astra's amendment splits each entry into a part that is ALREADY FILED
+under an id and a part that needs a NEW row.  A filing unit prepared today (`#554`) adds rows of its own; they are
+listed with their titles in
+`%(wd)s%(bs)sGXEMUL-SEC%(bs)sregress%(bs)sartifacts%(bs)sastrafiling_20261002%(bs)sdraft%(bs)ssection554.draft.md`.
+For each, ONE line per resulting row:
+`<queue lines> | FILED <id> -- <where that row is: the queue line, or #554's draft> | covers: <which part of the entry>`
+`<queue lines> | NEW <HIGH/MED/LOW> <id> | TITLE: <one sentence, at most 200 characters, no line numbers> | <the lines you read, path:line>`
+* Read the source: a NEW row's title must be true at `7440e129` and must cover exactly the part the filed row does not.
+* If the "NEW" part is in fact one of `#554`'s rows under another id, say `FILED <that id>` and give the line of the
+  draft.  I believe -- check it -- that the third entry's `armcoprocstop` is `#554`'s `armcp15cp14exits`.
+* If you dispute the split itself, say `DISPUTE: <what the amendment gets wrong, with path:line>`.
+
+%(comp)s
+
+**Part B -- seven closing sentences.**  These entries are ruled CLOSE-RECORD: the queue's prose says something is
+open, the source shows it is not, and ONE sentence will be added at the passage saying so.  For these seven the
+governing line is Astra's amendment, and it gives a fragment, a correction to your sentence, or an instruction.  Write
+the sentence that should stand, AS AMENDED.  ONE line each:
+`<queue lines> | SENTENCE: <one or two sentences, true at 7440e129, naming the file and function or the round that settled it; no "as amended", no reference to this review> | AS AMENDED / DISPUTE: <why, with path:line> | <the lines you read>`
+
+%(closes)s
+
+End with `DENOMINATOR: <s> of 10 items read in the source`.
+"""
+cl = []
+for i, r in enumerate(comp, 1):
+    cl.append("A%d. queue lines %s (slice %s)\n   Astra's amendment: %s\n   your ruling: %s" % (i, r[5], r[3], r[9][:900], ruling_line(r[3], r[5])[:700]))
+bl = []
+for i, r in enumerate(closes, 1):
+    bl.append("B%d. queue lines %s (slice %s)\n   Astra's amendment: %s\n   your ruling: %s" % (i, r[5], r[3], r[9][:900], ruling_line(r[3], r[5])[:600]))
+text = head % {"wd": WD, "bs": BS, "art": ART, "comp": "\n".join(cl), "closes": "\n".join(bl)}
+p = os.path.join(D, "briefs", "grok_icompound.md")
+io.open(p, "w", encoding="utf-8", newline="\n").write(text)
+print("wrote %s: %d bytes; compound %d, closing sentences %d" % (p, os.path.getsize(p), len(comp), len(closes)))

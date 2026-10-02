@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""mk_itable.py -- assemble the id-less unit's FINAL table, IDLESS_TABLE.tsv, from
+    IDLESS_FILING.tsv        the mechanical derivation (mk_ifiling.py)
+    IDLESS_OVERLAY.tsv       the grok seat's 37 titles and the two merges (mk_agy_idless.py)
+    grok/grok_icompound.txt  the grok seat on the three compound dispositions and the seven closing sentences
+One row per thing the queue is owed:
+    NEW           id, grade, queue passages, title
+    CLOSE-RECORD  queue passage, the sentence to add at it
+    UNSETTLED     queue passage, the governing line (it names the measurement owed)
+Checks every NEW id against the ledger #554 stages (which holds HEAD's rows and #554's), against #554's LOW members and
+against the backticked ids of the queue file, and refuses on a collision.  Nothing is typed by hand."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "idless_20261002")
+HERE = os.path.dirname(os.path.abspath(__file__))
+STAGE = os.path.join(HERE, "..", "records", "stage554")
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def tsv(name):
+    return [l.split("\t") for l in rd(os.path.join(D, name)).split("\n")[1:] if l.strip()]
+
+
+owed = tsv("IDLESS_FILING.tsv")
+titles, merges = {}, {}
+for l in rd(os.path.join(D, "IDLESS_OVERLAY.tsv")).split("\n"):
+    f = l.split("\t")
+    if len(f) == 4 and f[1] == "title":
+        titles[f[0]] = f[2]
+    elif len(f) == 4 and f[1] == "merge":
+        merges[f[0]] = f[2]
+ic = rd(os.path.join(D, "grok", "grok_icompound.txt")).split("\n")
+c_new, c_filed, c_sent, c_dispute = [], [], {}, []
+for l in ic:
+    m = re.match(r"^(\S+) \| NEW (HIGH|MED|LOW) ([a-z][a-z0-9_]+) \| TITLE: (.*?) \| (.*)$", l)
+    if m:
+        c_new.append(m.groups())
+        continue
+    m = re.match(r"^(\S+) \| FILED ([a-z][a-z0-9_]+) -- (.*?) \| covers: (.*)$", l)
+    if m:
+        c_filed.append(m.groups())
+        continue
+    m = re.match(r"^(\S+) \| SENTENCE: (.*?) \| (AS AMENDED|DISPUTE)[^|]*\| (.*)$", l)
+    if m:
+        c_sent[m.group(1)] = (m.group(2).strip(), m.group(3))
+        continue
+    m = re.match(r"^(\S+) \| DISPUTE: (.*)$", l)
+    if m:
+        c_dispute.append(m.groups())
+if len(c_new) != 2 or len(c_sent) != 7:
+    sys.exit("REFUSED: grok_icompound.txt gave %d NEW rows and %d sentences (want 2 and 7)" % (len(c_new), len(c_sent)))
+
+rows = []
+new = {}
+for r in owed:
+    if r[1] == "NEW":
+        new.setdefault(r[0], []).append(r)
+for rid, rs in new.items():
+    grades = sorted(set(r[2] for r in rs))
+    if len(grades) != 1:
+        sys.exit("REFUSED: %s is graded %s on its %d dispositions" % (rid, grades, len(rs)))
+    if len(rs) > 1 and rid not in merges:
+        sys.exit("REFUSED: %s appears %d times and the overlay has no merge line" % (rid, len(rs)))
+    title = titles.get(rid) or rs[0][8]
+    src = "grok/grok_ititles.txt" if rid in titles else ("the governing line's quoted title (%s)" % rs[0][6])
+    rows.append(["NEW", rid, grades[0], "+".join(r[3] for r in rs), "; ".join(r[5] for r in rs), title, src])
+for lines, grade, rid, title, cites in c_new:
+    if rid in new:
+        sys.exit("REFUSED: the compound row %s is already in the table" % rid)
+    tag = [r[3] for r in tsv("IDLESS_NOTOWED.tsv") + owed if r[4] == lines]
+    rows.append(["NEW", rid, grade, tag[0] if tag else "?", lines, title.rstrip("."), "grok/grok_icompound.txt (a compound disposition: the table's derivation had dropped this row)"])
+for r in owed:
+    if r[1] != "CLOSE-RECORD":
+        continue
+    if r[6] == "grok":
+        q = re.search(r'CLOSE-RECORD\s*"([^"]{8,})"', r[9])
+        sent, src = (q.group(1) if q else ""), "the grok ruling's own sentence"
+    else:
+        key = r[4]
+        if key not in c_sent:
+            sys.exit("REFUSED: no sentence from grok_icompound.txt for the Astra-governed closure at %s" % key)
+        sent, src = c_sent[key][0], "grok/grok_icompound.txt, written as Astra amended it (%s)" % c_sent[key][1]
+    if not sent:
+        sys.exit("REFUSED: no sentence for the closure at %s %s" % (r[3], r[4]))
+    rows.append(["CLOSE-RECORD", "", "", r[3], r[5], sent, src])
+for r in owed:
+    if r[1] == "UNSETTLED":
+        rows.append(["UNSETTLED", "", "", r[3], r[5], r[9][:700], "the governing line (%s)" % r[6]])
+
+# ---- collisions
+st = json.loads(io.open(os.path.join(STAGE, "tools", "pipeline", "ledger.json"), encoding="utf-8", newline="").read())
+ledger_ids = set(x["id"] for x in st["rows"])
+st_ob = io.open(os.path.join(STAGE, "OUTSTANDING_BUGS.md"), encoding="utf-8", newline="").read()
+spans = set(re.findall(r"`([a-z][a-zA-Z0-9_]{3,})`", st_ob))
+ids = [r[1] for r in rows if r[0] == "NEW"]
+dup = sorted(set(i for i in ids if ids.count(i) > 1))
+clash_l = sorted(i for i in ids if i in ledger_ids)
+clash_q = sorted(i for i in ids if i in spans and i not in ledger_ids)
+notitle = [r[1] for r in rows if r[0] == "NEW" and not r[5]]
+n = dict((k, sum(1 for r in rows if r[0] == k)) for k in ("NEW", "CLOSE-RECORD", "UNSETTLED"))
+print("rows: NEW %d (HIGH %d, MED %d, LOW %d), CLOSE-RECORD %d, UNSETTLED %d" % (
+    n["NEW"], sum(1 for r in rows if r[0] == "NEW" and r[2] == "HIGH"), sum(1 for r in rows if r[0] == "NEW" and r[2] == "MED"),
+    sum(1 for r in rows if r[0] == "NEW" and r[2] == "LOW"), n["CLOSE-RECORD"], n["UNSETTLED"]))
+print("NEW ids: duplicate %s; already a ledger row (HEAD or #554) %s; already a backticked id in the queue file as #554 leaves it %s; "
+      "without a title %s" % (dup, clash_l, clash_q, notitle))
+print("compound: %d NEW rows added, %d parts already filed (%s), %d amendment disputed (%s)"
+      % (len(c_new), len(c_filed), ", ".join(x[1] for x in c_filed), len(c_dispute), "; ".join(x[0] for x in c_dispute)))
+if dup or clash_l or notitle:
+    sys.exit("REFUSED: see above")
+p = os.path.join(D, "IDLESS_TABLE.tsv")
+with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+    f.write("kind\tid\tgrade\tslice\tqueue_lines_db8b1a33\ttitle_or_sentence\twhere_the_text_comes_from\n")
+    for r in rows:
+        f.write("\t".join(x.replace("\t", " ") for x in r) + "\n")
+print("wrote %s: %d rows" % (p, len(rows)))

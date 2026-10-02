@@ -1,0 +1,469 @@
+#!/usr/bin/env python3
+"""mk_itable2.py [--show]  -- the id-less unit's table AFTER adjudication.
+
+IDLESS_TABLE.tsv (mk_itable.py) was checked by GPT-6 Astra (ifile_01, ifile_02: 68 findings), every finding was ruled
+first-hand by the grok seat (grok/grok_irule_a.txt, grok_irule_b.txt; grok_irule_c.txt for eight flags of the agy
+seat's audits), and what grok HELD went back to Astra (ifile_03).  Each grok line ends in a RESULT field that says, in
+grok's words, what the table should hold.  This script applies those RESULT fields and nothing else:
+    `retire `x``, "`x` is retired"                    the row x is removed; the row named beside it keeps the work
+    `NEW <grade> `id`, queue <q>. Title: <t>`           the row is set (added, renamed, re-titled, re-scoped)
+    `NEW <grade> `id` "<t>"`                            a row for a remainder; its queue passage is the item's own
+    `FILED ... `id``, `CROSS-REFERENCE `id``            the passage is carried by an existing id: listed, no new row
+    a closing sentence (S items), `SETTLED: ...`        the sentence that stands at the passage
+A title is cut out of grok's line; it is never retyped.  Retired ids are replaced by their keepers wherever they are
+named.  Every id a passage is pointed at must exist -- as a row of this table, in the ledger at HEAD, or in the queue
+file -- or the script says so.  Writes IDLESS_TABLE2.tsv (the NEW rows), IDLESS_SENTENCES.tsv (the sentences to add in
+place), IDLESS_CARRIED.tsv (passages carried by an id that already exists) beside the dispositions."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.environ.get("IDLESS_DIR") or os.path.join(SEC, "regress", "artifacts", "idless_20261002")
+ID = r"`([a-z][a-zA-Z0-9_]{3,})`"
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def tsv(name):
+    return [l.split("\t") for l in rd(os.path.join(D, name)).split("\n")[1:] if l.strip()]
+
+
+def ruling(name, keys):
+    """item -> (key text, word, why, RESULT, cites) for one grok ruling file"""
+    out = {}
+    for l in rd(os.path.join(D, "grok", name)).split("\n"):
+        m = re.match(r"^(" + keys + r"\d+) \| (.*?) \| (CONCEDE IN PART|CONCEDE|HOLD)\b(.*?) \| RESULT: (.*?) \| ([^|]*)$", l)
+        if m:
+            out[m.group(1)] = (m.group(2).strip(), m.group(3), m.group(4).strip(": "), m.group(5).strip(), m.group(6).strip())
+    return out
+
+
+table = tsv("IDLESS_TABLE.tsv")
+new = {}        # id -> [grade, slice, queue text, title, source]
+order = []
+for r in table:
+    if r[0] == "NEW":
+        new[r[1]] = [r[2], r[3], r[4], r[5], r[6]]
+        order.append(r[1])
+sent = {}       # queue lines -> [slice, sentence, source]
+for r in table:
+    if r[0] == "CLOSE-RECORD":
+        sent[r[4]] = [r[3], r[5], r[6]]
+unsettled = {r[4]: [r[3], r[5], r[6]] for r in table if r[0] == "UNSETTLED"}
+retired, carried, log, held = {}, [], [], []
+
+
+def setrow(rid, grade, queue, title, src, item):
+    title = title.strip().rstrip(".").strip()
+    if rid in new:
+        old = new[rid]
+        if old[0] != grade:
+            log.append("%s: %s grade %s -> %s" % (item, rid, old[0], grade))
+        new[rid] = [grade, old[1], queue or old[2], title or old[3],
+                    src if title else (old[4] + "; its queue lines from " + src) if queue and queue != old[2] else old[4]]
+    else:
+        new[rid] = [grade, "", queue, title, src]
+        order.append(rid)
+        log.append("%s: ADDED %s %s" % (item, grade, rid))
+
+
+# backticked words in the seats' RESULT fields and sentences that are NOT ids (each with why); any other unknown word
+# is reported, so a mistyped id cannot hide behind this list
+NOT_IDS = {"wait_from": "K14: a function of the probe harness", "baremips": "a machine name, in the sentence at 1875-1885",
+           "calibrated": "a budget class, in the sentence at 5411-5414", "zeroed": "a budget class, in the same sentence"}
+
+A = ruling("grok_irule_a.txt", "[A-C]")
+B = ruling("grok_irule_b.txt", "[SFKU]")
+if len(A) != 25 or len(B) != 43:
+    sys.exit("REFUSED: parsed %d of 25 lines of grok_irule_a.txt and %d of 43 of grok_irule_b.txt" % (len(A), len(B)))
+
+# ---- list A/B/C of ifile_01
+for item in sorted(A, key=lambda k: (k[0], int(k[1:]))):
+    key, word, why, res, cites = A[item]
+    src = "grok/grok_irule_a.txt %s (%s Astra's ifile_01 finding)" % (item, {"CONCEDE": "conceding", "CONCEDE IN PART": "conceding in part", "HOLD": "holding against"}[word])
+    for x in re.findall(r"retire " + ID, res) + re.findall(ID + r" is retired", res):
+        keep = [i for i in re.findall(r"(?:NEW (?:HIGH|MED|LOW)|FILED(?: (?:HIGH|MED|LOW))?(?: under)?) " + ID, res) if i != x]
+        retired[x] = keep[0] if keep else retired.get(x, "")
+    f = re.search(r"FILED (?:(HIGH|MED|LOW) )?(?:under )?" + ID + r"([^.]*)", res)
+    n = re.search(r"NEW (HIGH|MED|LOW) " + ID + r", queue (.*?)(?:\. Title: (.*?))?(?:\. `|\.$|$)", res)
+    if n:
+        t = n.group(4) or ""
+        t = re.split(r"\. (?=`[a-z])", t)[0]
+        ids = key.split(" | ")
+        if ids[0] in new and ids[0] != n.group(2) and ids[0] not in retired and item.startswith("A"):
+            retired[ids[0]] = n.group(2)                    # a rename: the old id goes, the row is the new one
+            new[n.group(2)] = list(new[ids[0]])
+            del new[ids[0]]
+            order[order.index(ids[0])] = n.group(2)
+            log.append("%s: RENAMED %s -> %s" % (item, ids[0], n.group(2)))
+        # "queue 4839-4848 and 4953-4954, with the A4 title": the words after the lines are not lines (Astra's
+        # ifile_04, C8: they had reached the queue-range field)
+        setrow(n.group(2), n.group(1), re.split(r",? with the ", n.group(3))[0].strip(), t, src, item)
+    if f and not (n and res.index("FILED") > res.index("NEW ")):
+        # The passage a FILED id carries is the one its OWN clause names ("for the 5262-5266 transport sweep only");
+        # only where the clause names none is it the item's queue range, and then the bare lines of it.  (Astra's
+        # ifile_04, C11 and C12: the range of the NEW row beside it had been given to the FILED id.)
+        tail = f.group(3).strip(" ,")
+        rng = re.search(r"(?<![\w.:`-])(\d{3,5}(?:-\d{3,5})?)(?![\w.:`-])", tail)
+        qall = re.search(r"queue ([0-9][^.]*?)(?:,|\.| with)", res)
+        passage = rng.group(1) if rng else re.match(r"\d+(?:-\d+)?(?: and \d+(?:-\d+)?)*", qall.group(1)).group(0) if qall else key
+        what = re.sub(r"^in whole,?\s*", "", tail)
+        what = re.sub(r"^queue [0-9]+(?:-[0-9]+)?,?\s*", "", what)
+        what = re.sub(r"^with the A\d+ title$", "", what)
+        what = re.sub(r"^for ", "", what).strip()
+        scope = ("in whole" if ("in whole" in tail or not n) else "in part") + (": " + what if what else "")
+        carried.append([passage, f.group(2), scope, src])
+for x, k in retired.items():
+    if x in new:
+        del new[x]
+        order.remove(x)
+        log.append("retired %s (the work stays on %s)" % (x, k or "?"))
+
+# ---- ifile_02: sentences, FILED entries, KEEP-AS-IS entries, UNSETTLED
+for item in sorted(B, key=lambda k: ("SFKU".index(k[0]), int(k[1:]))):
+    q, word, why, res, cites = B[item]
+    src = "grok/grok_irule_b.txt %s" % item
+    if word == "HOLD":
+        held.append([item, q, why, res])
+    for g, rid, t in re.findall(r"NEW (HIGH|MED|LOW) " + ID + r" \"([^\"]+)\"", res):
+        if rid in new:
+            if new[rid][0] != g:
+                sys.exit("REFUSED: %s gives %s the grade %s, the table has %s" % (item, rid, g, new[rid][0]))
+            if q not in new[rid][2]:
+                new[rid][2] += "; " + q
+        else:
+            setrow(rid, g, q, t, src + " (a remainder Astra's ifile_02 found unfiled)", item)
+    plain = re.sub(r"NEW (?:HIGH|MED|LOW) (" + ID + r") \"[^\"]+\"", r"filed as \1", res)
+    if item[0] == "S" and word != "HOLD":
+        if q not in sent:
+            sys.exit("REFUSED: %s rules the closing sentence at %s, which the table does not have" % (item, q))
+        sent[q] = [sent[q][0], plain, src + " (replacing the sentence Astra's ifile_02 faulted)"]
+    elif item[0] == "U":
+        if q not in unsettled:
+            sys.exit("REFUSED: %s rules the unsettled entry at %s, which the table does not have" % (item, q))
+        if res.startswith("SETTLED:"):
+            sent[q] = [unsettled[q][0], res[len("SETTLED:"):].strip(), src + " (an entry the table had as UNSETTLED)"]
+            del unsettled[q]
+        else:
+            unsettled[q] = [unsettled[q][0], res[len("STILL UNSETTLED:"):].strip() if res.startswith("STILL UNSETTLED:") else res, src]
+    elif item[0] in "FK" and res.strip(". ").lower() not in ("nothing owed", "yes"):
+        for rid in re.findall(ID, plain):
+            if rid not in NOT_IDS:
+                carried.append([q, rid, "", src])
+
+# ---- ifile_03: what GPT-6 Astra said of the six items grok HELD.  Where Astra concedes, grok's hold stands and the
+#      passage is listed under the id or ids Astra's line names (before its first ";": what follows names the ADJOINING
+#      text's row, which is another passage).  Where Astra still holds, the item is DISPUTED and is settled below.
+A3 = {}
+for l in rd(os.path.join(D, "ifile_03", "codex_ifile_03.txt")).split("\n"):
+    m = re.match(r"^([FK]\d+) \| (CONCEDE|HOLD): (.*) \| ([^|]*)$", l)
+    if m:
+        A3[m.group(1)] = (m.group(2), m.group(3).strip(), m.group(4).strip())
+if sorted(A3) != sorted(h[0] for h in held):
+    sys.exit("REFUSED: ifile_03 answers %s; grok held %s" % (sorted(A3), sorted(h[0] for h in held)))
+disputed = []
+for item, q, why, res in held:
+    word3, why3, tbl = A3[item]
+    src = "grok/grok_irule_b.txt %s (grok HELD against Astra's ifile_02 finding; Astra %s: ifile_03/codex_ifile_03.txt %s)" % (
+        item, "conceded" if word3 == "CONCEDE" else "STILL HOLDS", item)
+    if word3 == "CONCEDE":
+        for rid in re.findall(r"`([A-Za-z][A-Za-z0-9_-]{3,})`", tbl.split(";")[0]):
+            carried.append([q, rid, "", src])
+        log.append("ifile_03 %s: Astra concedes -> %s" % (item, tbl[:120]))
+    else:
+        disputed.append([item, q, tbl, src])
+        for c in carried:
+            if c[0] == q:
+                c[3] = src
+if [d[0] for d in disputed] != ["F12"]:
+    sys.exit("REFUSED: the items Astra still holds are %s; this script settles F12 only" % [d[0] for d in disputed])
+
+# ---- F12, the one item still disputed, and how it is settled (the MAIN LOOP's resolution, put to Astra's closing
+#      check; it is neither seat's).  Astra: #554's row `m88kidleslotsem` does not cover the passage's accumulating,
+#      MMIO and order-sensitive slots, because its TITLE states the polled-word half only; it asks for a second row.
+#      grok: the id is the passage's, no second item.  Both are right about what they read -- the retro ruling proposed
+#      the id for the whole entry (lines 4675-4682) and the title stated half of it -- so the TITLE is corrected and no
+#      second row is opened.  The corrected title is the queue passage's own sentence; each clause is checked against
+#      the passage below, and the code lines are the ones Astra's F12 line cites.
+M88_ID = "m88kidleslotsem"
+M88_OLD = ("the m88k idle fold decides to idle from the polled word's PRE-slot value, so a slot that writes it can still request a "
+           "premature idle (cpu_m88k_instr.c:2726-2765)")
+M88_CLAUSES = ["for a matcher-accepted slot that is accumulating, MMIO, order-sensitive, or one that WRITES THE POLLED WORD",
+               "the collapsed spin diverges from per-iteration execution",
+               "a polled-word-writing slot still arms one idle sleep decided from the PRE-slot value",
+               "Exact for the live guests' loop-invariant `or`"]
+M88_NEW = ("the m88k idle fold's once-per-BREAK approximation is a recorded semantic limitation: for a matcher-accepted slot that is "
+           "accumulating, MMIO, order-sensitive, or one that writes the polled word, the collapsed spin diverges from per-iteration "
+           "execution; a polled-word-writing slot still arms one idle sleep decided from the PRE-slot value "
+           "(cpu_m88k_instr.c:2692-2697, 2744, 2763-2765); exact for the live guests' loop-invariant `or`")
+old_queue = subprocess.run(["git", "-C", SEC, "show", "db8b1a33:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8").split("\n")
+passage = " ".join(re.sub(r"^\s*(?:>\s*)*", "", l).strip() for l in old_queue[4675:4682])
+for cl in M88_CLAUSES:
+    if cl not in passage:
+        sys.exit("REFUSED: the clause %r is not in the queue passage 4676-4682 at db8b1a33" % cl)
+    if cl.lower() not in M88_NEW.lower():
+        sys.exit("REFUSED: the corrected title does not carry the passage's clause %r" % cl)
+if "2692-2697" not in A3["F12"][1] or "2744" not in A3["F12"][1] or "2763-2765" not in A3["F12"][1]:
+    sys.exit("REFUSED: Astra's F12 line does not cite the code lines the corrected title names")
+
+# ---- the agy seat's flags grok ruled (grok_irule_c.txt): eight claims in agy's four finished audits that no other
+#      seat had made.  grok read the WORKING tree (its `git show` was refused in plan mode): the queue file there is
+#      HEAD's, and src/devices/dev_sh4.c carries another session's uncommitted 126 lines, so grok's dev_sh4.c line
+#      numbers in flag 1 are the working copy's -- 687, 2788, 2799-2802, 2815-2824 there are 581, 2662, 2673-2676,
+#      2689-2698 in the committed file (checked by the main loop against `git show HEAD:`; the substance holds).
+C = {}
+for l in rd(os.path.join(D, "grok", "grok_irule_c.txt")).split("\n"):
+    m = re.match(r"^(\d+) \| (CONCEDE IN PART|CONCEDE|HOLD): (.*) \| RESULT: (.*?) \| ([^|]*)$", l)
+    if m:
+        C[int(m.group(1))] = (m.group(2), m.group(3).strip(), m.group(4).strip(), m.group(5).strip())
+FLAGS = {1: ("qhscifssr", "qhx11fifo"), 2: ("qhshdecode", "sh4a4gate"), 3: ("qhembargotext", "wdcringambig"),
+         4: ("qhcpytailcov", "qhcpysamplecov"), 5: ("qhshsqat", "sh4sqwrite", "sh4sqexpevt"),
+         6: ("qharmcolorenv", "probecolorprompt"), 7: ("landrateq", "landwallq"), 8: ("qhwdcempty", "wdcflood", "floodclass")}
+if sorted(C) != sorted(FLAGS):
+    sys.exit("REFUSED: parsed %d of 8 lines of grok_irule_c.txt" % len(C))
+for n in sorted(C):
+    word, why, res, cites = C[n]
+    row = FLAGS[n][0]
+    src = "grok/grok_irule_c.txt %d (%s the agy seat's flag)" % (n, {"CONCEDE": "conceding", "CONCEDE IN PART": "conceding in part", "HOLD": "holding against"}[word])
+    if word == "HOLD":
+        if "`%s` stays" % row not in res:
+            sys.exit("REFUSED: irule_c %d holds, and its RESULT does not say `%s` stays" % (n, row))
+        log.append("irule_c %d: HOLD -- %s stays as it is" % (n, row))
+        continue
+    # "<a part> is FILED under `id`": that part of the row's passage is listed under the existing id
+    for part, rid in re.findall(r"(?:^|; )(the [^;`]+?) is FILED under `([a-z0-9]+)`", res):
+        carried.append([new[row][2], rid, "in part: " + part, src])
+        log.append("irule_c %d: %s -> %s (%s)" % (n, new[row][2], rid, part))
+    if n == 1:
+        # RESULT: "`qhx11fifo` stays for the two FIFO sites; `qhscifssr` stays for RDF, the SSR store, and FDR."
+        clause = ", and the console-overrun sites named beside this are X11-only"
+        if "`qhx11fifo` stays for the two FIFO sites" not in res or not new[row][3].endswith(clause):
+            sys.exit("REFUSED: irule_c 1 or the title of qhscifssr is not what this step was written for")
+        new[row][3] = new[row][3][:-len(clause)]         # a deletion; nothing is retyped
+        new[row][4] += "; less its console-overrun clause, which %s rules is `qhx11fifo`'s" % src
+        carried.append([new[row][2], "qhx11fifo", "in part: the console-overrun clause", src])
+        log.append("irule_c 1: qhscifssr loses its console-overrun clause (qhx11fifo's)")
+    elif n == 3:
+        # RESULT: "`qhembargotext` is a records correction on `wdcringambig`, FILED under that id."  `wdcringambig` is
+        # CLOSED (commit cf300c0), so an id would file the correction under a closed row; #555 already adds sentences in
+        # place, so the correction is MADE, at the stale sentence itself (line 1160 at db8b1a33).  The sentence is the
+        # main loop's, from grok's line with its line numbers made positional (the notes above it move them).
+        if "`qhembargotext` is a records correction on `wdcringambig`" not in res or "`wdcringambig` is closed, commits `cf300c0`" not in why:
+            sys.exit("REFUSED: irule_c 3 is not what this step was written for")
+        del new[row]
+        order.remove(row)
+        retired[row] = ""
+        sent["1160"] = ["01", "The sentence above -- \"Needs a build\", queued behind the machine embargo -- is the kept escalation tail of `wdcringambig`, "
+                        "which is closed in the ledger (commit `cf300c0`, shipped as `#484`). The 2026-09-11 note under this entry's state line "
+                        "already says the sentence sits on shipped, witnessed, closed work and was left because a tick pass does not delete "
+                        "text; it blocks nothing", src + "; `qhembargotext`, the row the table had for this, is retired: the correction is made here"]
+        log.append("irule_c 3: qhembargotext retired; the correction is made in place at 1160")
+    elif n == 5:
+        if "`qhshsqat` stays for the store-fill SQMD omission and the AT-nesting claim" not in res:
+            sys.exit("REFUSED: irule_c 5 is not what this step was written for")
+    else:
+        sys.exit("REFUSED: irule_c %d concedes and this script has no step for it" % n)
+
+# ---- the three UNSETTLED entries that call a manual unopened or absent.  The manuals are on this machine, in the
+#      project root's _scratchpad/ -- outside the git tree the seats read -- and grok read them
+#      (regress/artifacts/idlessread_20261002/; the main loop re-read every cited manual line and the two absences by
+#      grep).  A SETTLED entry gets grok's closing sentence in place, with the manual lines it rests on; a STILL
+#      UNSETTLED one keeps the ruling's words and gains what grok read since.
+READ = os.path.join(SEC, "regress", "artifacts", "idlessread_20261002", "grok", "grok_grok_iunsettled.txt")
+RQ = {1: "2947-2948", 2: "5650-5654", 3: "5655-5661"}
+PROV = {3: ["ppc_pem_32and64_2005.txt:9321", ":25024", ":32823", ":9338", ":10683", "ppc_vea_book2_v201.txt:1288-1290",
+            "ppc_oea_book3_v201.txt:3371-3372"]}
+if os.path.isfile(READ):
+    R3 = {}
+    for l in rd(READ).split("\n"):
+        m = re.match(r"^([123]) \| (SETTLED|STILL UNSETTLED): (.*?) \| THEN: (.*?) \| read: (.*)$", l)
+        if m:
+            R3[int(m.group(1))] = m.groups()[1:]
+    if sorted(R3) != [1, 2, 3]:
+        sys.exit("REFUSED: parsed %d of 3 lines of grok_grok_iunsettled.txt" % len(R3))
+    for n in (1, 2, 3):
+        word, what, then, read = R3[n]
+        q = RQ[n]
+        quoted = re.findall(r'"([^"]+)"', then)
+        if q not in unsettled or not quoted:
+            sys.exit("REFUSED: the reading's item %d does not fit the table (%s)" % (n, q))
+        src = "idlessread_20261002/grok/grok_grok_iunsettled.txt %d (an entry the table had as UNSETTLED; grok read the local manuals)" % n
+        if word == "SETTLED":
+            for p in PROV[n]:
+                if p.split(":")[-1] not in what:
+                    sys.exit("REFUSED: the reading's item %d does not cite %s" % (n, p))
+            body = quoted[-1].rstrip(". ") + "."
+            # GPT-6 Astra's ifile_05, B2: the manuals PERMIT leaving the reservation set, they do not require it -- Book
+            # III 5.6 lets a partly executed stwcx. have cleared it (the main loop read ppc_oea_book3_v201.txt:4044-4049
+            # and :4067-4070: "CR0 may have been set to an undefined value and the reservation may have been cleared").
+            p5 = os.path.join(D, "ifile_05", "codex_ifile_05.txt")
+            if os.path.isfile(p5) and re.search(r"^B2 \| WRONG", rd(p5), re.M):
+                if body.count("which is what those sentences require") != 1:
+                    sys.exit("REFUSED: the sentence Astra's B2 amends is not the one this step was written for")
+                body = body.replace("which is what those sentences require", "which those sentences permit; they do not require it, "
+                                    "because Book III also lets a partly executed `stwcx.` have cleared the reservation "
+                                    "(`ppc_oea_book3_v201.txt:4067-4070`)")
+                src += "; \"require\" amended to \"permit\" by GPT-6 Astra (ifile_05, B2)"
+            sent[q] = [unsettled[q][0], body + "  The manual lines, in the project root's `_scratchpad/`: " + ", ".join("`%s`" % p for p in PROV[n]), src]
+            del unsettled[q]
+            log.append("iunsettled %d: %s SETTLED -> a sentence in place" % (n, q))
+        else:
+            t = unsettled[q][1]
+            mm = re.search(r"OPEN: UNSETTLED: (.*?) \| DISPOSITION", t)
+            unsettled[q] = [unsettled[q][0], (mm.group(1) if mm else t).rstrip(". ") + ".  READ SINCE (grok, 2026-10-02, the manuals in "
+                            "the project root's `_scratchpad/`): " + quoted[-1], unsettled[q][2] + "; " + src]
+            log.append("iunsettled %d: %s STILL UNSETTLED, with what was read since" % (n, q))
+
+# ---- ruling D (grok/grok_grok_irule_d.txt), on GPT-6 Astra's closing check (ifile_04, parts A and D).  Astra read
+#      the twelve passages that were pointed only at CLOSED or DROPPED ledger rows and found open work in four; grok
+#      conceded all four.  Three of the four rows were closed by ONE sweep (2026-08-27) that executed the adjudicator's
+#      note `CLOSE (assess)` as a row closure; the note signs off the assess STAGE (item 5: the main loop's reading,
+#      conceded in part by grok, which cut the member list from eleven to the eight it found undone).  Applied here:
+#        items 1-3  the passage stays pointed at the closed row it names AND is pointed at the live class row
+#        item 4     a NEW row for the passage (coverage rows measured in a kill table and not shipped)
+#        item 5     the class row, its members and grok's evidence (IDLESS_CLASSROW.tsv)
+#        item 6     grok's ruling C item 5, amended by Astra: 3042-3063 is not pointed at `sh4sqwrite`
+#        item 7     the sentence at 5607-5615 names `rtcnarrow`, a member: it gains grok's clause
+RD = os.path.join(D, "grok", "grok_grok_irule_d.txt")
+DQ = {1: ("6082-6086", "m8latch"), 2: ("6097-6099", "gcsections"), 3: ("6101-6140", "ns16550"), 4: ("10412-10418", "gdrompionull")}
+classrow = None
+if os.path.isfile(RD):
+    R4 = {}
+    for l in rd(RD).split("\n"):
+        m = re.match(r"^([1-7]) \| (CONCEDE IN PART|CONCEDE|HOLD): (.*) \| RESULT: (.*?) \| ([^|]*)$", l)
+        if m:
+            R4[int(m.group(1))] = m.groups()[1:]
+    if sorted(R4) != [1, 2, 3, 4, 5, 6, 7]:
+        sys.exit("REFUSED: parsed %d of 7 lines of grok_grok_irule_d.txt" % len(R4))
+    for n in sorted(R4):
+        word, why, res, cites = R4[n]
+        src = "grok/grok_grok_irule_d.txt %d (%s; Astra's ifile_04 raised it)" % (n, {"CONCEDE": "conceding", "CONCEDE IN PART": "conceding in part", "HOLD": "holding"}[word])
+        if n in DQ:
+            q, closed = DQ[n]
+            m = re.match(r"CARRIED BY " + ID + r"\.$", res)
+            nw = re.match(r"NEW (HIGH|MED|LOW) " + ID + r" \"([^\"]+)\"\.$", res)
+            if word == "HOLD" or not (m or nw):
+                sys.exit("REFUSED: irule_d %d is not a concession in one of the two forms this step applies: %s" % (n, res[:80]))
+            carried.append([q, closed, "the row the passage names; it does not carry the open work", src])
+            if m:
+                carried.append([q, m.group(1), "the open work", src])
+            else:
+                setrow(nw.group(2), nw.group(1), q, nw.group(3), src, "irule_d %d" % n)
+                carried.append([q, nw.group(2), "the open work", src])
+        elif n == 5:
+            m = re.match(r"NEW (HIGH|MED|LOW) " + ID + r" \"([^\"]+)\"\. MEMBERS: (.*?)\.?$", res)
+            if not m:
+                sys.exit("REFUSED: irule_d 5 does not name the class row and its members")
+            members = re.findall(ID, m.group(4))
+            passages = [DQ[k][0] for k in (1, 2, 3)] + ["5607-5615"]
+            setrow(m.group(2), m.group(1), "; ".join(passages), m.group(3), src, "irule_d 5")
+            classrow = [m.group(2), " ".join(members), why, src]
+            for k in (1, 2, 3):
+                if DQ[k][1] not in members:
+                    sys.exit("REFUSED: %s is pointed at the class row and is not one of its members" % DQ[k][1])
+        elif n == 6:
+            if res != "`3042-3063 is pointed at `sh4sqexpevt` only.`" and res != "3042-3063 is pointed at `sh4sqexpevt` only.":
+                sys.exit("REFUSED: irule_d 6 is not the concession this step applies: %s" % res[:80])
+            before = len(carried)
+            carried[:] = [c for c in carried if not (c[0] == "3042-3063" and c[1] == "sh4sqwrite")]
+            if before - len(carried) != 1:
+                sys.exit("REFUSED: the sh4sqwrite pointer of 3042-3063 was found %d times" % (before - len(carried)))
+            log.append("irule_d 6: 3042-3063 is no longer pointed at sh4sqwrite")
+        elif n == 7:
+            m = re.match(r"THE SENTENCE GAINS: \"(.+)\"\.?$", res)
+            if not m or "5607-5615" not in sent:
+                sys.exit("REFUSED: irule_d 7 is not the form this step applies")
+            sent["5607-5615"][1] = sent["5607-5615"][1].rstrip() + "  " + m.group(1)
+            sent["5607-5615"][2] += "; its last sentence from " + src
+            log.append("irule_d 7: the sentence at 5607-5615 gains grok's clause on rtcnarrow")
+    if classrow is None or "rtcnarrow" not in classrow[1].split():
+        sys.exit("REFUSED: the class row is missing, or rtcnarrow (named by the sentence at 5607-5615) is not a member")
+
+# ---- retired ids are replaced by their keepers wherever they are named
+def fix(s):
+    for x, k in retired.items():
+        if k:
+            s = s.replace("`%s`" % x, "`%s`" % k)
+    return s
+
+
+for q in sent:
+    sent[q][1] = fix(sent[q][1])
+for c in carried:
+    c[1] = retired.get(c[1]) or c[1]
+seen, uniq = set(), []
+for c in carried:
+    if (c[0], c[1]) not in seen:
+        seen.add((c[0], c[1]))
+        uniq.append(c)
+carried = uniq
+
+# ---- every id named must exist
+head = json.loads(subprocess.run(["git", "-C", SEC, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))
+ledger = set(x["id"] for x in head["rows"])
+queue = subprocess.run(["git", "-C", SEC, "show", "HEAD:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8")
+spans = set(re.findall(ID, queue))
+named = set(c[1] for c in carried) | set(i for q in sent for i in re.findall(ID, sent[q][1]) if re.match(r"^[a-z0-9]+$", i))
+plain_id = lambda i: bool(re.match(r"OB-\d+$", i)) and bool(re.search(r"\| %s \|" % re.escape(i), queue))    # the old table's ids
+unknown = sorted(i for i in named if i not in new and i not in ledger and i not in spans and i not in NOT_IDS and not plain_id(i))
+clash = sorted(i for i in new if i in ledger)
+notitle = sorted(i for i in new if not new[i][3])
+m88 = [x for x in head["rows"] if x["id"] == M88_ID]
+if len(m88) != 1 or M88_OLD not in m88[0]["title"] or queue.count(M88_OLD) != 1:
+    sys.exit("REFUSED: `%s` at HEAD does not carry the title #554 filed (ledger rows %d; queue occurrences %d)" % (M88_ID, len(m88), queue.count(M88_OLD)))
+g = dict((k, sum(1 for i in new if new[i][0] == k)) for k in ("HIGH", "MED", "LOW"))
+print("NEW rows %d (HIGH %d, MED %d, LOW %d); sentences to add in place %d; passages carried by an existing id %d (%d pairs); "
+      "still unsettled %d; held by grok %d, of which Astra still holds %d" % (len(new), g["HIGH"], g["MED"], g["LOW"], len(sent),
+      len(set(c[0] for c in carried)), len(carried), len(unsettled), len(held), len(disputed)))
+print("retired: " + ", ".join("%s -> %s" % (k, v or "(corrected in place)") for k, v in sorted(retired.items())))
+print("ids named that exist nowhere (table, ledger at HEAD, queue file): %s" % (unknown or "none"))
+print("NEW ids that are already ledger rows at HEAD: %s; without a title: %s" % (clash or "none", notitle or "none"))
+for h in held:
+    print("HELD %s (%s): %s -> %s  ||  Astra: %s" % (h[0], h[1], h[2][:90], h[3][:60], A3[h[0]][0]))
+if unknown or clash or notitle:
+    sys.exit("REFUSED: see the two lines above")
+if "--show" in sys.argv:
+    for l in log:
+        print("  " + l.encode("ascii", "replace").decode("ascii"))
+    sys.exit(0)
+with io.open(os.path.join(D, "IDLESS_TABLE2.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("id\tgrade\tqueue_lines_db8b1a33\ttitle\twhere_the_text_comes_from\n")
+    for i in order:
+        f.write("\t".join([i, new[i][0], new[i][2], new[i][3], new[i][4]]).replace("\n", " ") + "\n")
+with io.open(os.path.join(D, "IDLESS_SENTENCES.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("queue_lines_db8b1a33\tslice\tsentence\twhere_the_text_comes_from\n")
+    for q in sorted(sent, key=lambda k: int(re.match(r"\d+", k).group(0))):
+        f.write("\t".join([q, sent[q][0], sent[q][1], sent[q][2]]).replace("\n", " ") + "\n")
+with io.open(os.path.join(D, "IDLESS_CARRIED.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("queue_lines_db8b1a33\tcarried_by\tscope\twhere_it_is_ruled\n")
+    for c in carried:
+        f.write("\t".join(c) + "\n")
+    for q in sorted(unsettled, key=lambda k: int(re.match(r"\d+", k).group(0))):
+        t = unsettled[q][1]
+        m = re.search(r"OPEN: UNSETTLED: (.*?) \| DISPOSITION", t)       # a governing line: its own statement of what is unsettled
+        f.write("\t".join([q, "(UNSETTLED)", m.group(1) if m else t, unsettled[q][2]]).replace("\n", " ") + "\n")
+with io.open(os.path.join(D, "IDLESS_TITLEFIX.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("id\tthe_title_554_filed\tthe_corrected_title\twhy\n")
+    p4 = os.path.join(D, "ifile_04", "codex_ifile_04.txt")
+    resolved = os.path.isfile(p4) and re.search(r"^C \| RESOLVED", rd(p4), re.M) and "I withdraw the demand for `m88kidleslotfreq`" in rd(p4)
+    f.write("\t".join([M88_ID, M88_OLD, M88_NEW, "F12: GPT-6 Astra held that the filed title covers half of queue lines 4675-4682 at db8b1a33 "
+                       "(ifile_03/codex_ifile_03.txt) and asked for a second row, NEW MED `m88kidleslotfreq`; the grok seat held that the id is "
+                       "the whole passage's (grok/grok_irule_b.txt F12).  The main loop's resolution: the title is corrected to the passage's own "
+                       "sentence and no second row is opened" + (".  GPT-6 Astra then withdrew its demand (ifile_04/codex_ifile_04.txt, part C: "
+                       "RESOLVED), on the condition that this row's closure covers BOTH halves: correcting only the premature-idle case "
+                       "would not close it" if resolved else "")]) + "\n")
+with io.open(os.path.join(D, "IDLESS_CLASSROW.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("id\tmembers\tthe_ruling_seats_evidence\twhere_it_is_ruled\n")
+    if classrow:
+        f.write("\t".join(classrow).replace("\n", " ") + "\n")
+with io.open(os.path.join(D, "IDLESS_RETIRED.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("id_of_the_first_table\tthe_row_that_keeps_the_work\n")
+    for x, k in sorted(retired.items()):
+        f.write("%s\t%s\n" % (x, k or "(none: the correction is made in place by #555)"))
+print("wrote IDLESS_TABLE2.tsv, IDLESS_SENTENCES.tsv, IDLESS_CARRIED.tsv, IDLESS_TITLEFIX.tsv, IDLESS_RETIRED.tsv")

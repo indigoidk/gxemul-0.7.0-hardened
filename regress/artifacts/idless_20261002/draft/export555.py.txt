@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""export555.py <GPT-6 Astra's closing verdict, or a placeholder>  -- run prep555.py --dry and put what it staged where
+a reviewing seat can read it: regress/artifacts/idless_20261002/draft/
+    changelog555.draft.md   the CHANGELOG block
+    section555.draft.md     the section appended to OUTSTANDING_BUGS.md
+    inplace555.draft.diff   every OTHER change to OUTSTANDING_BUGS.md (the sentences added in place, the corrected
+                            heading), as a unified diff against HEAD with two lines of context
+    msg555.draft.txt        the commit message
+    ledger555.draft.txt     the ledger rows added and the corrected title, one line each
+    MANIFEST.txt            prep555's manifest
+and copies of the scripts (prep555, records555, apply555, post555) as .txt."""
+import difflib
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+REC = os.path.dirname(os.path.abspath(__file__))
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+OUT = os.path.join(SEC, "regress", "artifacts", "idless_20261002", "draft")
+ST = os.path.join(REC, "stage555")
+if len(sys.argv) != 2:
+    sys.exit(__doc__)
+r = subprocess.run([sys.executable, os.path.join(REC, "prep555.py"), sys.argv[1], "--dry"], capture_output=True, text=True)
+if r.returncode:
+    sys.exit("prep555 --dry failed: %s%s" % (r.stdout[-600:], r.stderr[-600:]))
+os.makedirs(OUT, exist_ok=True)
+show = lambda rel: subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True).stdout.decode("utf-8")
+w = lambda name, text: io.open(os.path.join(OUT, name), "w", encoding="utf-8", newline="\n").write(text)
+
+new = io.open(os.path.join(ST, "CHANGELOG.md"), encoding="utf-8", newline="").read()
+old = show("CHANGELOG.md")
+if not new.endswith(old):
+    sys.exit("REFUSED: the staged CHANGELOG is not a block prepended to HEAD's")
+w("changelog555.draft.md", new[:len(new) - len(old)])
+
+new = io.open(os.path.join(ST, "OUTSTANDING_BUGS.md"), encoding="utf-8", newline="").read()
+old = show("OUTSTANDING_BUGS.md")
+cut = new.index("\n## 2026-10-02 -- GXEMUL [087a90]: `#555`")
+w("section555.draft.md", new[cut + 1:])
+d = list(difflib.unified_diff(old.rstrip("\n").split("\n"), new[:cut].rstrip("\n").split("\n"), "OUTSTANDING_BUGS.md at HEAD",
+                              "OUTSTANDING_BUGS.md as #555 stages it (above its own section)", lineterm="", n=2))
+adds = sum(1 for l in d if l.startswith("+") and not l.startswith("+++"))
+dels = sum(1 for l in d if l.startswith("-") and not l.startswith("---"))
+w("inplace555.draft.diff", "\n".join(d) + "\n")
+shutil.copy(os.path.join(REC, "msg555.txt"), os.path.join(OUT, "msg555.draft.txt"))
+shutil.copy(os.path.join(ST, "MANIFEST.txt"), os.path.join(OUT, "MANIFEST.txt"))
+
+L0 = json.loads(show("tools/pipeline/ledger.json"))["rows"]
+L1 = json.loads(open(os.path.join(ST, "tools", "pipeline", "ledger.json"), "rb").read().decode("utf-8"))["rows"]
+o = dict((x["id"], x) for x in L0)
+lines = []
+for x in L1:
+    if x["id"] not in o:
+        lines.append("ADDED    %s | %s | %s | %s" % (x["id"], x["sev"], x["state"], x["title"]))
+    elif x != o[x["id"]]:
+        ch = [k for k in x if x.get(k) != o[x["id"]].get(k)]
+        lines.append("CHANGED  %s | fields: %s | title now: %s | note now begins: %s" % (x["id"], ", ".join(ch), x["title"], (x.get("state_note") or "")[:700]))
+w("ledger555.draft.txt", "\n".join(lines) + "\n")
+for s in ("prep555.py", "records555.py", "apply555.py", "post555.py", "export555.py"):
+    shutil.copy(os.path.join(REC, s), os.path.join(OUT, s + ".txt"))
+print(r.stdout.strip().split("\n")[-1])
+print("in place: +%d -%d lines of OUTSTANDING_BUGS.md above the section; ledger: %d rows added, %d changed" % (
+    adds, dels, sum(1 for l in lines if l.startswith("ADDED")), sum(1 for l in lines if l.startswith("CHANGED"))))
+print("wrote", OUT)

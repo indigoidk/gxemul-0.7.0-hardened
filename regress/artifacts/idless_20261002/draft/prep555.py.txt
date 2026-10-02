@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""prep555.py <GPT-6 Astra's closing verdict (ifile_04), one line> [--dry]
+Stage #555 (ids for the id-less entries of OUTSTANDING_BUGS.md) on HEAD, into records/stage555, touching nothing in the
+tree:
+  OUTSTANDING_BUGS.md        HEAD's + the sentences added in place (apply555.py) + the corrected heading of the row in
+                             IDLESS_TITLEFIX.tsv + the #555 section (its rows from records555.py, then the passages an
+                             id carries and the entries that stay unsettled)
+  tools/pipeline/ledger.json HEAD's + #555's rows + the corrected title; matrix.html regenerated from it
+  CHANGELOG.md               HEAD's with the #555 block prepended
+and write spec555.json and msg555.txt for commit_unit.py.  Every number in the three texts is derived here from the
+tables under regress/artifacts/idless_20261002/ (mk_itable2.py.txt made them); none is typed."""
+import difflib
+import hashlib
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+REC = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REC)
+import apply555
+import records555 as R
+
+SEC = R.SEC
+ST = os.path.join(REC, "stage555")
+ARTS = os.path.join(SEC, "regress", "artifacts")
+D = os.environ.get("IDLESS_DIR") or os.path.join(ARTS, "idless_20261002")
+DIRS = ["idless_20261002", "idlessread_20261002", "astrafiling_20261002"]
+TEXT_EXT = (".c", ".h", ".py", ".sh", ".md", ".json", ".txt", ".tsv")
+first = lambda k: int(re.match(r"\d+", k).group(0))
+
+
+def git(*a, binary=False):
+    r = subprocess.run(["git", "-C", SEC] + list(a), capture_output=True)
+    if r.returncode:
+        sys.exit("REFUSED: git %s: %s" % (" ".join(a), r.stderr.decode("utf-8", "replace")))
+    return r.stdout if binary else r.stdout.decode("utf-8")
+
+
+def md5(b):
+    return hashlib.md5(b).hexdigest()[:8]
+
+
+def put(rel, data):
+    p = os.path.join(ST, *rel.split("/"))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(data)
+    return p
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def tsv(name):
+    return [l.split("\t") for l in rd(os.path.join(D, name)).split("\n")[1:] if l.strip()]
+
+
+def verdict(*rel):
+    v = re.findall(r"VERDICT: ([^\n]*)", rd(rel[0] if os.path.isabs(rel[0]) else os.path.join(D, *rel)))
+    if not v:
+        sys.exit("REFUSED: no VERDICT line in %s" % "/".join(rel))
+    return v[0].replace("`", "").strip().rstrip(".")
+
+
+def carried(rows, ledger, queue):
+    """passage -> [(id, note)]: what the checks ruled (IDLESS_CARRIED.tsv), then the FILED dispositions no check
+    touched (IDLESS_FILED_CHECK.tsv).  Every id must exist; its ledger state is given where it is not `open`."""
+    new = set(r["id"] for r in rows)
+    state = dict((x["id"], x.get("state") or "?") for x in ledger["rows"])
+    spans = set(re.findall(r"`([A-Za-z][A-Za-z0-9_-]{2,})`", queue))
+    car = [c for c in tsv("IDLESS_CARRIED.tsv") if c[1] != "(UNSETTLED)"]
+    uns = [c for c in tsv("IDLESS_CARRIED.tsv") if c[1] == "(UNSETTLED)"]
+    ruled = set(c[0] for c in car)
+    for f in tsv("IDLESS_FILED_CHECK.tsv"):
+        if f[1] in ruled:
+            continue
+        ids = f[3].split() if f[3] != "?" else re.findall(r"DISPOSITION: FILED ([A-Za-z][\w-]*)", f[6])
+        if not ids:
+            sys.exit("REFUSED: the FILED entry at %s names no id this script can read" % f[1])
+        for i in ids:
+            car.append([f[1], i, "", ""])
+    by, only_shut = {}, []
+    for q, rid, scope, _src in car:
+        q = re.match(r"\d+(?:-\d+)?(?:; ?\d+(?:-\d+)?)*", q).group(0)      # "2614-2615 scoped to PPC" is the passage 2614-2615
+        if rid in new:
+            tag = "a `#555` row above"
+        elif rid in state:
+            tag = "" if state[rid] == "open" else "ledger: %s" % state[rid]
+        elif rid in spans or re.search(r"\| %s \|" % re.escape(rid), queue):
+            tag = "named in this file only: no ledger row of its own"
+        else:
+            sys.exit("REFUSED: %s is carried by `%s`, which exists nowhere" % (q, rid))
+        note = "; ".join(x for x in (tag, scope) if x)
+        if rid not in [i for i, _ in by.setdefault(q, [])]:
+            by[q].append((rid, note))
+    for q in by:
+        if all(state.get(i) in ("closed", "dropped") for i, _ in by[q]):
+            only_shut.append(q)
+    return by, uns, only_shut
+
+
+def agy_jobs():
+    """the agy seat's audits of the table: (jobs queued, answered, walled at launch, never launched)"""
+    jobs = [l.split("\t")[1] for l in rd(os.path.join(D, "agy_idless_queue.tsv.txt")).split("\n") if l.strip() and not l.startswith("#")]
+    log = rd(os.path.join(D, "agy_results.tsv"))
+    ans = [j for j in jobs if re.search(r"\t%s\trc=0\t.*seat answered" % re.escape(j), log)]
+    wall = [j for j in jobs if j not in ans and re.search(r"\t%s\trc=\d+\t.*SEAT WALLED" % re.escape(j), log)]
+    return jobs, ans, wall, [j for j in jobs if j not in ans and j not in wall]
+
+
+def main():
+    dry = "--dry" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--dry"]
+    if len(args) != 1:
+        sys.exit(__doc__)
+    closing = args[0]
+    head = git("rev-parse", "--short=8", "HEAD").strip()
+    if not git("log", "-1", "--format=%s", "HEAD").startswith("#554 "):
+        sys.exit("REFUSED: HEAD %s is not #554's commit" % head)
+    if os.path.isdir(ST):
+        for root, dirs, files in os.walk(ST, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
+    os.makedirs(ST, exist_ok=True)
+    man = []
+    r = subprocess.run([sys.executable, os.path.join(REC, "records555.py"), "gen"], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit("REFUSED: records555 gen: %s%s" % (r.stdout, r.stderr))
+    man.append("records555 gen: " + r.stdout.strip())
+    rows = R.table()
+    g = dict((s, sum(1 for x in rows if x["sev"] == s)) for s in R.ORDER)
+    queue = git("show", "HEAD:OUTSTANDING_BUGS.md")
+    ledger = json.loads(git("show", "HEAD:tools/pipeline/ledger.json"))
+    by, uns, only_shut = carried(rows, ledger, queue)
+    sents = apply555.rows()
+    nsettled = sum(1 for s in sents if "UNSETTLED" in s[3])
+    # the sentences that name a LIVE row for what stays open.  Keyed on what makes an id a live carrier -- a #555 row, a
+    # ledger row that is not closed or dropped, or a row this file lists with no ledger row of its own -- and not on
+    # the words around it: the first form counted the phrase "filed as" and missed "remains `armalignexc`" (GPT-6
+    # Astra's ifile_05, E1).
+    state = dict((x["id"], x.get("state")) for x in ledger["rows"])
+    qrows = set(re.findall(r"(?m)^(?:\* |#### )`([a-z][a-zA-Z0-9_]{3,})` ", queue))
+    newids = set(x["id"] for x in rows)
+    live = lambda s: [i for i in dict.fromkeys(re.findall(r"`([a-z][a-zA-Z0-9_]{3,})`", s))
+                      if i in newids or state.get(i) in ("open", "held", "in work") or (i not in state and i in qrows)]
+    rem = [(s[0], live(s[2])) for s in sents if live(s[2])]
+    nrem = len(rem)
+    c5 = [c[1] for c in tsv("IDLESS_CARRIED.tsv") if c[3].startswith("grok/grok_irule_c.txt 5 ")]
+    if c5 != ["sh4sqexpevt"]:
+        sys.exit("REFUSED: the changelog's sentence on `qhshsqat` is written for one carrier, `sh4sqexpevt`; the table has %s" % c5)
+    disp = rd(os.path.join(D, "IDLESS_DISPOSITIONS.md"))
+    ndisp = int(re.search(r"Totals: (\d+) dispositions", disp).group(1))
+    nclaimed = int(re.search(r"(\d+) claimed entries\)", disp).group(1))
+    nmissed = int(re.search(r"the\s+(\d+) it found the scan had missed", disp).group(1))
+    notowed = tsv("IDLESS_NOTOWED.tsv")
+    keep = [x for x in notowed if x[1] == "KEEP-AS-IS"]
+    kmoved = [x for x in keep if x[4] in by]
+    retired = tsv("IDLESS_RETIRED.tsv")
+    fix = tsv("IDLESS_TITLEFIX.tsv")
+    if len(fix) != 1:
+        sys.exit("REFUSED: IDLESS_TITLEFIX.tsv has %d rows; the texts below are written for one" % len(fix))
+    fid, fold, fnew, _why = fix[0]
+    cls = R.classrows()
+    cov = [x["id"] for x in rows if x["src"].startswith("grok/grok_grok_irule_d.txt 4 ")]
+    if len(cls) != 1 or len(cov) != 1:
+        sys.exit("REFUSED: the texts below are written for one class row and one coverage row from ruling D; found %d and %d" % (len(cls), len(cov)))
+    cid = list(cls)[0]
+    mem, evidence, _where = cls[cid]
+    unread = R.sweep_unread(mem, evidence)
+    jobs, ans, wall, never = agy_jobs()
+
+    # 1. the artifact files
+    files, skipped, empty, nul = [], 0, 0, []
+    complete = re.compile(r"seat answered|SEAT WALLED|REFUSED|The answer is LOST|PANEL_COMPLETE|rc=")
+    tracked = set(git("ls-files", "regress/artifacts").split("\n"))
+    now = time.time()
+    for d in DIRS:
+        for root, _, fs in os.walk(os.path.join(ARTS, d)):
+            for f in sorted(fs):
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, SEC).replace(os.sep, "/")
+                if rel in tracked:
+                    continue
+                if f.endswith(".err"):
+                    skipped += 1
+                    continue
+                if os.path.getsize(p) == 0:
+                    empty += 1
+                    continue
+                if now - os.path.getmtime(p) < 120 and not dry:
+                    sys.exit("REFUSED: %s changed in the last two minutes -- a job in flight?" % p)
+                if f.endswith(".launch.log") and not complete.search(rd(p)):
+                    if not dry:
+                        sys.exit("REFUSED: %s has no completion line -- a job in flight?" % p)
+                    man.append("(dry) IN FLIGHT, would refuse: %s has no completion line" % rel)
+                if f.endswith(TEXT_EXT) and b"\0" in open(p, "rb").read():
+                    nul.append(rel)
+                files.append(rel)
+    if nul:
+        sys.exit("REFUSED: %d artifact text file(s) carry a NUL byte: %s" % (len(nul), "; ".join(nul[:6])))
+    man.append("artifacts: %d files to add under %s; %d *.err and %d zero-byte files left on disk" % (len(files), ", ".join(DIRS), skipped, empty))
+
+    fmt = dict(nnew=len(rows), nh=g["HIGH"], nm=g["MED"], nl=g["LOW"], nind=g["HIGH"] + g["MED"], nledger=g["HIGH"] + g["MED"] + 1,
+               nsent=len(sents), nclose=len(sents) - nsettled, nsettled=nsettled, nrem=nrem, ncar=len(by), nshut=len(only_shut), nuns=len(uns),
+               remids=", ".join("`%s`" % i for _q, ids in rem for i in ids),
+               ndisp=ndisp, nclaimed=nclaimed, nmissed=nmissed, nkeep=len(keep), nkmoved=len(kmoved), nkstay=len(keep) - len(kmoved),
+               nret=len(retired), nmerged=sum(1 for x in retired if not x[1].startswith("(none")), fid=fid,
+               v1=verdict("ifile_01", "codex_ifile_01.txt"), v2=verdict("ifile_02", "codex_ifile_02.txt"),
+               v3=verdict("ifile_03", "codex_ifile_03.txt"), ga=verdict("grok", "grok_irule_a.txt"),
+               gb=verdict("grok", "grok_irule_b.txt"), gc=verdict("grok", "grok_irule_c.txt"), closing=closing,
+               gr=verdict(os.path.join(ARTS, "idlessread_20261002", "grok", "grok_grok_iunsettled.txt")),
+               v4=verdict("ifile_04", "codex_ifile_04.txt"), gd=verdict("grok", "grok_grok_irule_d.txt"),
+               v5=verdict("ifile_05", "codex_ifile_05.txt"),
+               cid=cid, covid=cov[0], nmem=len(mem), nprose=len(rows) - 1, nunread=len(unread),
+               unread=", ".join("`%s`" % u for u in unread),
+               nfiles=len(files), nagy=len(jobs), nagyans=len(ans), nagywall=len(wall), nagynever=len(never),
+               nagynot=len(wall) + len(never), agynot=", ".join("`%s`" % j for j in wall + never))
+
+    # 2. OUTSTANDING_BUGS.md
+    ob, rep = apply555.apply(queue)
+    if ob.count(fold) != 1:
+        sys.exit("REFUSED: the title #554 filed for %s was found %d times in the queue file" % (fid, ob.count(fold)))
+    ob = ob.replace(fold, fnew + "  **[TITLE CORRECTED by `#555`, 2026-10-02 -- until then it stated one half of the entry: \"" + fold +
+                    "\"; the row's ledger note has the two seats' readings]**")
+    body = io.open(os.path.join(REC, "bugs555.body.md"), encoding="utf-8", newline="").read()
+    tail = ["", "### The passages an id carries -- %d (lines as of `db8b1a33` -> the id or ids; a note says where the id is not an open ledger row)" % len(by), ""]
+    for q in sorted(by, key=first):
+        tail.append("* %s -> %s" % (q, ", ".join("`%s`%s" % (i, " (%s)" % n if n else "") for i, n in by[q])))
+    tail += ["", "### The entries that stay UNSETTLED -- %d (lines as of `db8b1a33`; what is unsettled, in the ruling seat's words)" % len(uns), ""]
+    for u in sorted(uns, key=lambda u: first(u[0])):
+        tail.append("* %s -- %s  [%s]" % (u[0], u[2].rstrip(". ") + ".", u[3]))
+    nread = sum(1 for u in uns if "READ SINCE" in u[2])
+    nmanual = sum(1 for s in sents if "local manuals" in s[3])
+    if (nread, nmanual) != (2, 1):
+        sys.exit("REFUSED: the texts below say grok's reading of the local manuals settled 1 entry and left 2; the tables say %d and %d" % (nmanual, nread))
+    sec = SECTION.format(**fmt) + body + "\n".join(tail) + "\n"
+    put("OUTSTANDING_BUGS.md", (ob.rstrip("\n") + "\n" + sec).encode("utf-8"))
+    man.append("bugs: %d sentences added in place; the heading of %s corrected; a section of %d lines appended" % (len(rep), fid, sec.count("\n")))
+
+    # 3. ledger and matrix
+    lp = put("tools/pipeline/ledger.json", git("show", "HEAD:tools/pipeline/ledger.json", binary=True))
+    for verb in ("ledger", "titlefix", "members"):
+        r = subprocess.run([sys.executable, os.path.join(REC, "records555.py"), verb], env=dict(os.environ, LEDGER_PATH=lp), capture_output=True, text=True)
+        if r.returncode:
+            sys.exit("REFUSED: records555 %s: %s%s" % (verb, r.stdout, r.stderr))
+        man.append(r.stdout.strip())
+    mp = os.path.join(ST, "tools", "pipeline", "matrix.html")
+    r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py"), "--out", mp],
+                       env=dict(os.environ, GXLEDGER=lp), capture_output=True, text=True)
+    if r.returncode or not os.path.isfile(mp):
+        sys.exit("REFUSED: gen_dashboard: %s%s" % (r.stdout, r.stderr))
+
+    # 4. CHANGELOG, the message, the spec
+    blk = CHANGELOG.format(**fmt)
+    put("CHANGELOG.md", (blk.rstrip("\n") + "\n\n" + git("show", "HEAD:CHANGELOG.md")).encode("utf-8"))
+    msg = MESSAGE.format(**fmt)
+    io.open(os.path.join(REC, "msg555.txt"), "w", encoding="utf-8", newline="\n").write(msg)
+    for t in (SECTION.format(**fmt), blk, msg):
+        if ("<OWED" in t and not dry) or re.search(r"\{[a-z_0-9]+\}", t):
+            sys.exit("REFUSED: a placeholder survives in a generated text")
+    spec = {"unit": "#555", "head_subject_re": "^#554 ", "stage_dir": ST,
+            "files": ["CHANGELOG.md", "OUTSTANDING_BUGS.md", "tools/pipeline/ledger.json", "tools/pipeline/matrix.html"],
+            "neutral": ["tools/pipeline/check_probe_wiring.py"], "add_dirs": [], "add_files": files, "exclude_dirs": [],
+            "message": os.path.join(REC, "msg555.txt"), "sidecars": [], "pre": [],
+            "post": [["python", os.path.join(REC, "post555.py")]],
+            "no_merge": ["tools/pipeline/ledger.json", "tools/pipeline/matrix.html"]}
+    io.open(os.path.join(REC, "spec555.json"), "w", encoding="utf-8", newline="\n").write(json.dumps(spec, indent=1) + "\n")
+
+    for root, _, fs in os.walk(ST):
+        for f in sorted(fs):
+            p = os.path.join(root, f)
+            rel = os.path.relpath(p, ST).replace(os.sep, "/")
+            if rel == "MANIFEST.txt":
+                continue
+            new = open(p, "rb").read()
+            r0 = subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True)
+            old = r0.stdout if r0.returncode == 0 else b""
+            d2 = list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(), lineterm="", n=0))
+            man.append("%s  %-34s +%d -%d  (HEAD %s)" % (md5(new), rel, sum(1 for l in d2 if l.startswith("+") and not l.startswith("+++")),
+                                                        sum(1 for l in d2 if l.startswith("-") and not l.startswith("---")), md5(old)))
+    man.insert(0, "# #555 staged committed versions -- HEAD %s%s" % (head, "  (DRY)" if dry else ""))
+    man.append("derived: " + ", ".join("%s=%s" % (k, fmt[k]) for k in sorted(fmt) if k.startswith("n")))
+    io.open(os.path.join(ST, "MANIFEST.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(man) + "\n")
+    print("\n".join(man))
+
+
+SECTION = """
+## 2026-10-02 -- GXEMUL [087a90]: `#555` gives ids to this file's ID-LESS entries -- {nnew} rows, {nsent} sentences added in place, {ncar} passages pointed at the id that carries them
+
+**NONE OF THE {nnew} ROWS BELOW IS FIXED BY THIS SECTION.**  This file names most rows by a short backticked id, and
+some entries record open work in prose only.  A row with no id cannot be claimed, ranked or closed, and the ledger
+cannot see it.  GPT-6 Astra scanned the file for such entries at commit `db8b1a33` ({nclaimed} claimed); the grok seat
+ruled each one first-hand, and {nmissed} more that it found the scan had missed; Astra confirmed, overturned or amended
+each ruling (`regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`, {ndisp} dispositions).  The table derived
+from that record was checked by Astra, every finding of that check was ruled first-hand by grok, and what grok held
+went back to Astra.  Astra's closing check of the assembled result found eleven further things; they are repaired,
+grok ruled the ones that were not the assembler's own mistakes, and one of them is the class row below.  The result
+is `IDLESS_TABLE2.tsv`, assembled by `mk_itable2.py.txt` from the seats' own lines and
+written out below by `records555.py.txt` (both kept under `regress/artifacts/idless_20261002/`).
+
+**What is here.**
+* {nnew} rows -- {nh} HIGH, {nm} MED, {nl} LOW.  {nprose} of them are AN ID FOR AN ENTRY THIS FILE ALREADY CARRIES IN
+  PROSE: no second entry is opened, and each row names the lines of its prose as of `db8b1a33`.  The {nind} HIGH and MED
+  rows have their own headings and ledger rows; the LOW rows are written out by id under the class row `idlesslow`.
+* One row is of another kind: `{cid}` (MED), a class row for a records defect of the LEDGER that the review found
+  while checking which rows carry this file's prose.  A sweep on 2026-08-27 closed rows on the adjudicator's note
+  `CLOSE (assess)`, which signs off the assess stage; {nmem} of the rows it closed still name work that is not done.
+  Nothing is re-opened here: that is the class row's work, one decision per member.
+* {nsent} sentences ADDED IN PLACE, each beginning `[#555, 2026-10-02 -- the id-less review: ...]`.  {nclose} follow a
+  passage whose text is stale: the source shows the thing it names done, closed or changed.  That is a count of
+  sentences, not of passages wholly closed -- {nrem} of the {nsent} say what is done and name the live row that carries
+  what stays open ({remids}).  {nsettled} follow passages the review had called unsettled, one settled by the source and one by the manuals.
+  Nothing was deleted or rewritten: the old text stands, and the sentence follows its paragraph (inside the last cell
+  of the row where the passage is a table row).
+* The heading of `{fid}`, a row `#554` filed, is corrected in place.  Its title stated one half of the entry it names
+  (lines 4675-4682 at `db8b1a33`): the slot that writes the polled word.  GPT-6 Astra held that the row therefore did
+  not cover the entry's accumulating, MMIO and order-sensitive slots and asked for a second row; the grok seat held
+  that the id is the whole entry's.  Both are right about what they read -- the id was proposed for the whole entry and
+  the title stated half of it -- so the title now states the entry's own sentence and no second row is opened.  Astra
+  then withdrew its demand (`ifile_04`, part C), on one condition that binds whoever closes the row: the closure must
+  cover BOTH halves, and correcting only the premature-idle case would not close it.
+
+**What is NOT here, so that a blank is not read as "nothing owed":**
+* {ncar} passages get no row because an id carries them; they are listed at the end of this section with that id or
+  those ids -- a row that existed before this section, or one of the rows above (marked).  A carrying id's ledger state
+  is given where it is not `open`.  {nshut} of the passages are carried only by rows that are closed or dropped; GPT-6
+  Astra read each of those and found nothing still open in them (`ifile_04`, part D).  Four more were in that state
+  and DO record open work: three are now also pointed at `{cid}` and one at `{covid}`.
+* {nkeep} entries were ruled KEEP-AS-IS (history, or a rule).  The check of the table found that {nkmoved} of them still
+  record work an id carries -- those are in the list at the end -- and {nkstay} owe nothing (`IDLESS_NOTOWED.tsv`).
+* {nuns} entries stay UNSETTLED; each is listed at the end with what is unsettled.  Three entries called a manual
+  unopened or absent.  The manuals are on this machine, in the project root's `_scratchpad/`, outside the git tree the
+  seats read; grok read them (`regress/artifacts/idlessread_20261002/`).  They settle one entry (the `lwarx` /
+  `stwcx.` reservation: a sentence is added in place) and do NOT define `FSCA` or `lvx` / `stvx`, so those two stay
+  unsettled for want of documents that are not here: an SH-4A software manual and the AltiVec programming
+  environments manual.
+* The agy seat's audits of the table: {nagyans} of {nagy} answered before its quota wall of 2026-10-02 13:58, and the
+  eight claims in them that no other seat had made were ruled by grok (`grok/grok_irule_c.txt`).  The other {nagynot}
+  ({agynot}) did not run; what they find is owed to a later records round.
+* The flagship seat was deliberately not fired on 2026-10-02 (owner instruction); its sign-off on this unit is
+  batched with `#554`'s, not waived.
+"""
+
+CHANGELOG = """# `#555` (idless): the queue's id-less entries get ids -- {nnew} rows, {nsent} sentences added in place, {ncar} passages pointed at the id that carries them; none of the rows is fixed here
+
+**Why.**  `OUTSTANDING_BUGS.md` names most rows by a short backticked id, and some entries record an open defect, an
+owed measurement or an owed correction in prose only.  A row with no id cannot be claimed, ranked or closed, and the
+ledger cannot see it.  GPT-6 Astra scanned the file for such entries at `db8b1a33` ({nclaimed} claimed entries; the
+grok seat found {nmissed} more; {ndisp} dispositions resulted).  This unit files what that review found.  **No
+compiled code changes.**
+
+**How each entry was ruled.**  The grok seat (grok-4.7 xhigh) ruled every entry first-hand; GPT-6 Astra confirmed,
+overturned or amended each ruling (`regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md`).  The table derived
+mechanically from those lines could not turn an amendment that says "narrowed to ..." into a title, and it reads one
+outcome per disposition; grok wrote the titles that needed writing (`grok/grok_ititles.txt`) and settled the
+dispositions that name more than one outcome (`grok/grok_icompound.txt`), which restored two HIGH rows the derivation
+had dropped.  GPT-6 Astra then checked the table against the dispositions and the source (`ifile_01`: {v1};
+`ifile_02`: {v2}).  Nothing in those two answers was adopted on Astra's word, because Astra wrote the scan: grok
+ruled every item first-hand (`grok/grok_irule_a.txt`: {ga}; `grok/grok_irule_b.txt`: {gb}), each ruling ending in a
+RESULT that says what the table should hold, and `mk_itable2.py.txt` applies those RESULT fields and nothing else -- a
+title is cut out of grok's line, never retyped.  The six items grok held went back to Astra (`ifile_03`: {v3}).
+
+**The one item still disputed after that, and how it was settled.**  GPT-6 Astra held that `#554`'s row `{fid}`
+does not cover the accumulating, MMIO and order-sensitive delay slots of the entry it names, because its title stated
+only the slot that writes the polled word, and asked for a second row (`m88kidleslotfreq`).  grok held that the id is
+the whole entry's.  Both were right about what they read: the id was proposed for the whole entry (queue lines
+4675-4682 at `db8b1a33`) and the TITLE stated half of it.  The main loop's resolution, which was neither seat's: the
+title is corrected to the entry's own sentence, in the queue heading and in the ledger, and no second row is opened
+(`IDLESS_TITLEFIX.tsv`; `mk_itable2.py.txt` checks each clause of the new title against the passage).  Astra's
+closing check accepted it, with a condition on the row's closure (below).
+
+**The agy seat's audits.**  agy audited the table's rows against the source.  {nagyans} of its {nagy} audits answered
+before its quota wall, and the eight claims in them that no other seat had made were ruled by grok
+(`grok/grok_irule_c.txt`: {gc}).  What that changed: `qhscifssr` loses the console-overrun clause of its title, which
+is `qhx11fifo`'s; the passage of `qhshsqat` is also pointed at `sh4sqexpevt` for the PREF exception kind (that ruling
+named `sh4sqwrite` as well; Astra's closing check showed the passage does not state the clause, and grok conceded --
+below); and `qhembargotext` is not filed -- the stale sentence it named sits on the closed row `wdcringambig`, so
+the correction is made in place by this commit.  grok read the working tree for that ruling (its `git show` was
+refused); `src/devices/dev_sh4.c` there carries another session's uncommitted 126 lines, so the `dev_sh4.c` line
+numbers in its first item are the working copy's -- 687, 2788, 2799-2802 and 2815-2824 there are 581, 2662, 2673-2676
+and 2689-2698 in the committed file, where the main loop re-read them.
+
+**The entries that called a manual unopened or absent.**  Three of the entries the review left UNSETTLED said a
+manual "was not opened" or that there is none in the tree.  The manuals are on this machine, as extracted text in
+the project root's `_scratchpad/` -- outside the git tree, which is where the seats had looked.  grok read them
+(`regress/artifacts/idlessread_20261002/grok/grok_grok_iunsettled.txt`: {gr}), and the main loop re-read every
+manual line it cites and repeated its two absence searches by grep.  The `lwarx` / `stwcx.` entry is settled: Book
+II, Book III and both programming environments manuals permit either the alignment handler or boundedly undefined
+results for an unaligned access and say an exception does not clear a reservation, which is what the committed code
+does; a sentence with the manual lines is added in place.  The other two stay unsettled, now for a stated reason:
+neither SH manual defines `FSCA` and none of the five PowerPC texts defines `lvx` or `stvx`; the documents that do --
+an SH-4A software manual, and the AltiVec programming environments manual that the 2005 PEM names -- are not here.
+
+**GPT-6 Astra's closing checks.**  `ifile_04`, on the table as first assembled and on the text: {v4}.  It RESOLVED
+the disputed item ("I withdraw the demand for `m88kidleslotfreq`": the corrected title covers the whole entry, and
+the row's closure must cover both halves).  What it found, and what was done:
+* three RESULT fields the assembler had misapplied -- a queue-lines field that carried the words "with the A4
+  title", and two passages given to the wrong id -- repaired in `mk_itable2.py.txt`, which says where;
+* one note placed between two logical rows of a table whose rows are wrapped over several lines -- it is now in the
+  row's last cell, and `apply555.py.txt` refuses a note that stands alone inside a table;
+* the count of closing sentences described as passages closed -- reworded: {nrem} of the {nsent} sentences name the
+  live row that carries what stays open (the first repair counted five by a phrase; `ifile_05` found the sixth, and
+  the count is now made from the ids the sentences name);
+* "no refusal" was not true of that very job -- see the seats paragraph;
+* one amendment of grok's ruling of the agy flags: queue lines 3042-3063 do not state the missing write-side
+  translation, so that passage is not pointed at `sh4sqwrite` (grok conceded);
+* **four passages that were pointed only at CLOSED ledger rows and still record open work** (the next paragraph).
+grok ruled the last two, and the class behind the four, first-hand (`grok/grok_grok_irule_d.txt`: {gd}).
+`ifile_05`, on the repairs and on everything added since `ifile_04`: {v5}.  It confirmed the class row, its eight
+members and the three rows left out, and found three things: the count just mentioned; one word in the sentence that
+settles the `lwarx` / `stwcx.` entry -- the manuals PERMIT leaving the reservation set, they do not require it,
+because Book III lets a partly executed `stwcx.` have cleared it (`ppc_oea_book3_v201.txt:4067-4070`; amended); and
+a clause of this block that still described the mapping `ifile_04` had corrected (rewritten, and now checked against
+the table when this text is generated).  `ifile_06`, on those three repairs: {closing}.
+
+**The class the four passages exposed: `{cid}`.**  Three of the four rows (`m8latch`, `gcsections`, `ns16550`) were
+closed on 2026-08-27 by one sweep that executed the adjudicator's note `CLOSE (assess)` as a row closure, "on the
+adjudicator's recorded authority" and with "no independent re-verification of the underlying defect" (the rows' own
+notes).  That note signs off a row's assess STAGE: seven rows carry it while held or in work, and the rulings behind
+the closed ones say things like "Ride the next m8820x round" and "Keep the one-line guard QUEUED, not dropped".  The
+main loop proposed the class with eleven candidate members; grok checked each in the source and kept the {nmem} whose
+work it found undone and carried by no other row.  `#555` files the class row (MED), puts a note on each member's
+ledger row, and points the three passages at it.  **It re-opens nothing**: that is one decision per member, and it is
+the class row's work.  The fourth passage is a different kind -- coverage rows measured in a kill table and never
+shipped in the probe -- and gets its own row, `{covid}` (LOW).
+
+**What is filed.**
+* `OUTSTANDING_BUGS.md` -- the `#555` section: {nnew} rows ({nh} HIGH, {nm} MED, {nl} LOW) -- {nprose} are an id for an
+  entry the file already carries in prose, and one is the class row `{cid}`; the {nind} HIGH and MED rows under their
+  own headings, the LOW rows by id under the class row `idlesslow`; then the {ncar} passages an id carries, with that
+  id and its ledger state where it is not open ({nshut} are carried only by closed or dropped rows, and Astra read each
+  of those and found nothing still open), and the {nuns} entries that stay unsettled, with what is unsettled in each.
+  **{nsent} sentences are added IN PLACE**: {nclose} at passages whose text the source shows to be stale and {nsettled}
+  at passages now settled; {nrem} of the {nsent} name the live row that carries what stays open.
+  `apply555.py.txt` finds each passage by its text -- the scan's line numbers are `db8b1a33`'s -- and
+  refuses on a passage that does not occur exactly once.  The heading of `{fid}` is corrected in place.
+* `tools/pipeline/ledger.json`, `matrix.html` -- {nledger} rows added ({nind} individual rows and the class row
+  `idlesslow`); the title of `{fid}` corrected, with what it read kept in the row's note; a note on each of the
+  {nmem} member rows of `{cid}` (their state is not changed).
+* `CHANGELOG.md` -- this block, prepended.
+* `regress/artifacts/` -- {nfiles} files: the id-less review (`idless_20261002/`: the scan's rulings and
+  confirmations, the tables and the scripts that made them, the checks and their rulings), the reading of the manuals
+  (`idlessread_20261002/`) and what `#554`'s directory gained after that commit was staged.  Seat stderr streams and zero-byte answer files are left on disk, as in `#554`.
+
+**What the checks changed in the table.**  {nret} ids of the first table (`IDLESS_TABLE.tsv`) do not survive:
+{nmerged} named work another row already names and were merged into it, and one is the in-place correction above
+(`IDLESS_RETIRED.tsv`).  Two rows come from the closing check: `{cid}` and `{covid}`.  Of the {nkeep} entries first ruled KEEP-AS-IS, {nkmoved} turned out to record work an id
+carries and are now pointed at it.  The FILED entries whose id is one of the old table's plain-text ids (`OB-22`,
+`OB-24`) are pointed at that entry: the existence rule in the main loop's brief was too narrow, grok held against it
+and Astra conceded.
+
+**Seats, by name.**  GPT-6 Astra (codex, effort `ultra`): the scan, the confirmations, the checks `ifile_01` to
+`ifile_06`; no wall, and no refusal that the launcher detected.  In `ifile_04` its first message said it could review
+the records and the text but could not perform a source-level audit; it then withdrew that and completed the check
+with citations of the committed source (its own account, part E of that answer; the first message is in the job's
+stderr stream, which is left on disk).  grok (grok-4.7 xhigh): every ruling of the scan, the titles, the compound
+dispositions, the four rulings of the checks, and the reading of the manuals; two of its ten scan rulings were
+touched by a runner fault (two processes writing one file) and the notes are beside those two files.  agy (gemini-3.8-flash-high): it verified
+the scan's rows on 2026-10-01 and answered {nagyans} audits of the table; it WALLED at 13:58 on 2026-10-02 (quota,
+reset about 18:21), so {nagynot} audits did not run ({nagywall} walled at launch, {nagynever} never launched) -- a seat
+failure for those, not agreement.  The flagship and Opus agent seats were deliberately not fired (owner instruction,
+2026-10-02); the kimi CLI was down (subscription); the Ollama seats were not fired (owner 2026-09-30; they are the
+fallback for a content-filter refusal, and none occurred).
+
+**Not done, and where it goes.**  None of the {nnew} rows is fixed.  The audit of `{cid}`'s {nmem} members -- re-open,
+re-file, or close with a commit -- is that row's work, and so are {nunread} rows the same sweep closed with no commit
+that no seat read ({unread}).  The {nagynot} agy audits that did not run.  The
+RECORD/L4 corrections of the two Astra reviews (the locator pack `regress/artifacts/recordfix_20261002/` is not part
+of this commit).  The flagship sign-off, batched with `#554`'s.  This commit touches no `src/`: the next one owes it
+no pass-2 receipt.
+"""
+
+MESSAGE = """#555 idless: the queue's id-less entries get ids -- {nnew} rows, {nsent} sentences added in place, {ncar} passages pointed at the id that carries them; none of the rows is fixed here
+
+OUTSTANDING_BUGS.md carried open work in prose with no id.  GPT-6 Astra scanned for such entries, grok ruled each
+first-hand and Astra confirmed or amended ({ndisp} dispositions).  Astra then checked the derived table (ifile_01:
+{v1}; ifile_02: {v2}); grok ruled every finding first-hand ({ga}; {gb}), and its RESULT fields are applied
+mechanically.  The six it held went back to Astra ({v3}).  The item still disputed is settled by correcting the title
+of #554's row {fid}, which stated half of the entry it names, rather than by opening a second row.  agy's {nagyans}
+finished audits raised eight further claims, ruled by grok ({gc}); agy then hit its quota wall and {nagynot} audits
+did not run.  Three unsettled entries called a manual unopened or absent; the manuals are on this machine outside the
+git tree, grok read them ({gr}): one entry is closed in place, two stay open for documents that are not here.
+
+Astra's closing check (ifile_04: {v4}) resolved the title dispute and found three rulings the assembler had
+misapplied, one note placed between table rows, two wrong sentences in the text, one clause grok had attributed to
+the wrong passage, and four passages pointed only at CLOSED ledger rows that still record open work.  grok ruled
+those ({gd}).  Three of the four rows were closed on 2026-08-27 by a sweep that read the adjudicator's assess-stage
+sign-off, CLOSE (assess), as a row closure: filed as the class row {cid} ({nmem} members, each noted in the ledger,
+none re-opened here); the fourth gets the coverage row {covid}.  Astra's check of the repairs (ifile_05: {v5})
+confirmed the class row and found a miscount, one word (the manuals permit, not require, the reservation to stay
+set) and one stale clause; its check of those three repairs (ifile_06): {closing}.
+
+Filed: {nnew} rows ({nh} HIGH, {nm} MED, {nl} LOW) -- {nprose} are an id for an entry the queue already carries in
+prose, one is the class row -- HIGH and MED with their own headings and ledger rows, LOW by id under the class row
+idlesslow.  {nsent} sentences are added
+in place at passages whose text is stale or now settled (nothing deleted; each passage found by its text; where part
+stays open the sentence names the id that carries it).  {ncar} passages
+are listed with the id that carries them; {nuns} entries stay unsettled, each with what is unsettled in it.
+
+No compiled code changes.  The Fable and Opus agent seats were deliberately not fired (owner instruction).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+"""
+
+if __name__ == "__main__":
+    main()

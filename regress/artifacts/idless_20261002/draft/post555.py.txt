@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""post555.py -- commit_unit.py's post step for #555 (runs AFTER the commit).  ledger.json and matrix.html are
+`no_merge` in the spec, so until this runs the working tree holds their COMMITTED bytes and the rows other sessions had
+parked in the working ledger are only in commit_unit's backup.  This rebuilds:
+    the working ledger = the pre-commit working ledger (the newest bk_555_* backup of a --go run; it carries the
+                         parked rows) + #555's rows + #555's title correction + the notes on the class row's members
+    the working matrix.html = regenerated from it.  The dashboard is NOT published.
+(The form post554.py has: applying the rows onto the post-commit working ledger refuses, because it already holds them.)
+Refuses if HEAD is not #555's commit, or if the result is not the backup's rows plus exactly rows #555 committed."""
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+REC = os.path.dirname(os.path.abspath(__file__))
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+L = os.path.join(SEC, "tools", "pipeline", "ledger.json")
+subj = subprocess.run(["git", "-C", SEC, "log", "-1", "--format=%h %s"], capture_output=True, text=True).stdout.strip()
+if not subj.split(" ", 1)[1].startswith("#555 "):
+    sys.exit("REFUSED: HEAD is %s, not #555's commit" % subj[:60])
+bks = [b for b in sorted(glob.glob(os.path.join(REC, "bk_555_*"))) if os.path.isfile(os.path.join(b, "commit.out"))]
+if not bks:
+    sys.exit("REFUSED: no bk_555_* backup of a --go run (one holding commit.out) beside spec555.json")
+src = os.path.join(bks[-1], "tools", "pipeline", "ledger.json")
+print("backup:", bks[-1])
+t = tempfile.mkdtemp(prefix="post555_")
+lp = os.path.join(t, "ledger.json")
+shutil.copy(src, lp)
+before = json.loads(open(src, "rb").read().decode("utf-8"))["rows"]
+env = dict(os.environ, LEDGER_PATH=lp)
+for verb in ("ledger", "titlefix", "members"):
+    r = subprocess.run([sys.executable, os.path.join(REC, "records555.py"), verb], env=env, capture_output=True, text=True)
+    print(r.stdout.strip() or r.stderr.strip())
+    if r.returncode:
+        sys.exit("POST FAILED at records555 %s" % verb)
+after = json.loads(open(lp, "rb").read().decode("utf-8"))["rows"]
+committed = json.loads(subprocess.run(["git", "-C", SEC, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))["rows"]
+bid, aid, cid = [x["id"] for x in before], [x["id"] for x in after], set(x["id"] for x in committed)
+ctitle = dict((x["id"], x["title"]) for x in committed)
+added = [i for i in aid if i not in set(bid)]
+parked = [i for i in bid if i not in cid]
+wrong = [x["id"] for x in after if x["id"] in ctitle and x["title"] != ctitle[x["id"]] and x["id"] not in parked]
+if aid[:len(bid)] != bid or len(set(aid)) != len(aid) or any(i not in cid for i in added):
+    sys.exit("REFUSED: the rebuilt ledger is not the backup's rows plus rows #555 committed (added %d)" % len(added))
+shutil.copy(lp, L)
+print("working ledger: %d rows = %d from the pre-commit working copy (%d of them not in the commit: %s) + %d filed by #555"
+      % (len(aid), len(bid), len(parked), " ".join(parked[:12]) + (" ..." if len(parked) > 12 else ""), len(added)))
+if wrong:
+    print("NOTE: %d rows carry a title in the working ledger that differs from the committed one (work parked there before "
+          "this commit): %s" % (len(wrong), " ".join(wrong[:12])))
+r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py")], cwd=SEC, capture_output=True, text=True)
+print((r.stdout.strip() or r.stderr.strip())[-200:])
+sys.exit(r.returncode)

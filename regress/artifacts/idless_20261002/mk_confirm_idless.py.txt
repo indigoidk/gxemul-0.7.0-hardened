@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""mk_confirm_idless.py <tag>...  -- the GPT-6 Astra confirmation brief for one grok RULING of the id-less queue scan
+(idless_20261002/grok/grok_ruleidless_<tag>.txt).  Owner 2026-10-02: grok rules what Astra's family scanned, Astra
+confirms the DISPOSITIONS.  Writes idless_20261002/briefs/aconf_<tag>.md and APPENDS `idless_20261002<TAB>aconf_<tag>`
+to <scratchpad>/astraretro/aconf_queue.tsv.  Refuses when the ruling lacks its VERDICT line or token, or the brief exists."""
+import io
+import os
+import re
+import sys
+
+SEC = r"C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC"
+ARTS = os.path.join(SEC, "regress", "artifacts")
+D = os.path.join(ARTS, "idless_20261002")
+HERE = os.path.dirname(os.path.abspath(__file__))
+REV = "db8b1a33"
+BRIEF = """ASTRA CONFIRMATION of the grok seat's RULING on id-less queue entries -- slice {tag} ({n} dispositions)
+
+Open with the token `ASTRACONF_IDLESS_{TAG}_ALIVE` on its own line, then ONE verdict line:
+`VERDICT: <w> of {n} dispositions wrong (<m> more need a change of wording, id or severity)`
+
+**Context.**  `OUTSTANDING_BUGS.md` names most queue rows by a short backticked id; some entries record an OPEN defect,
+an owed measurement or an owed correction in prose only.  GPT-6 Astra scanned the file for those (slice {tag}:
+`{scan}`), the agy seat verified each row (`{agy}`), and the grok seat -- a third model family -- then RULED every entry
+first-hand from the committed files:
+`{ruling}`
+(its verdict: "{verdict}").  The project owner ruled on 2026-10-02 that the working seats are GPT-6 Astra, agy and grok:
+the grok seat's ruling is the proposed disposition and YOU confirm or overturn it before any id is assigned or any
+entry is closed.  Nothing is fixed here; this decides what the queue will say.
+
+**Please do not simply ratify -- and mind which half is yours.**  Your family wrote the scan, so the ruling agreeing
+with the scan is not evidence of anything: be hardest exactly where grok AGREES with the scan, and say so where grok
+changed the scan and was wrong to.  Check each disposition against the committed tree
+(`git -C {sec} show {rev}:<path>`, the revision whose line numbers the ruling uses; never `git status` or `git diff`;
+ignore every other `src/` under the project root).  The errors that matter:
+- a `NEW` whose defect ALREADY HAS AN ID -- in `OUTSTANDING_BUGS.md` at `{rev}` (search by the file's basename and the
+  entry's own words, not only by the proposed id), in the retro campaign's rulings `{disp}`, in the harness rulings
+  `{hdisp}`, or in the table of 495 rows about to be filed from those two, `{tsv}` (read these three from disk; they
+  are untracked artifacts).  That is `FILED <id>`, and it is the commonest error: several of these prose entries are
+  the same defects the retro review found from the source side;
+- two rows of the ruling that are ONE defect under two ids (see the ruling's own section (b));
+- a `CLOSE-RECORD` where the source at `{rev}` does NOT show the fix, or whose replacement sentence is itself false of
+  the code -- a wrong closure hides an open defect, so this is the costly direction;
+- a `KEEP-AS-IS` on text that records owed work;
+- an `UNSETTLED` that a reading of the committed files settles; a severity that does not follow the rule (HIGH --
+  guest-controlled input ends the emulator process, makes a memory access leave a buffer's bounds, or stops it making
+  progress; MED -- guest-visible behaviour differs from the hardware documentation; LOW -- diagnostics, latent code,
+  records, test coverage);
+- a proposed id that already exists anywhere: the three files above, or the ledger (`git show HEAD:tools/pipeline/ledger.json`, the `"id"` fields).
+
+**For each disposition you overturn or amend, one block:**
+`<line range> | grok said <X> | should be <Y> | the evidence (path:line at {rev}, or the artifact line) | confidence`
+Then list the line ranges you checked and found right, and end with
+`DENOMINATOR: checked <c> of {n} dispositions against the source`.
+
+Read-only: write nothing, build nothing, run nothing that changes a file.
+"""
+for tag in sys.argv[1:]:
+    ruling = os.path.join(D, "grok", "grok_ruleidless_%s.txt" % tag)
+    t = io.open(ruling, encoding="utf-8", errors="replace").read()
+    v = re.findall(r"VERDICT: [^\n`]*", t)
+    if not v or ("GROK_IDLESS_%s_ALIVE_1002" % tag.upper()) not in t:
+        sys.exit("REFUSED: %s lacks its VERDICT line or token" % ruling)
+    m = re.search(r"of (\d+) claimed entries \(\+(\d+) missed", v[0])
+    if not m:
+        sys.exit("REFUSED: %s: VERDICT shape %r" % (ruling, v[0]))
+    n = int(m.group(1)) + int(m.group(2))
+    nn = tag[:2]
+    out = os.path.join(D, "briefs", "aconf_%s.md" % tag)
+    if os.path.exists(out):
+        sys.exit("REFUSED: %s exists" % out)
+    io.open(out, "w", encoding="utf-8", newline="\n").write(BRIEF.format(
+        tag=tag, TAG=tag.upper(), n=n, verdict=v[0][len("VERDICT: "):].strip(), ruling=ruling, sec=SEC, rev=REV,
+        scan=os.path.join(ARTS, "codexpack_20260928", "idless_" + nn, "codex_idless_%s.txt" % nn),
+        agy=os.path.join(ARTS, "agypack_20261001", "idlessverify_" + nn, "agy_idlessverify_%s.txt" % nn),
+        disp=os.path.join(ARTS, "astraretro_20260926", "DISPOSITIONS.md"),
+        hdisp=os.path.join(ARTS, "astraretro_harness_20260926", "HARNESS_DISPOSITIONS.md"),
+        tsv=os.path.join(ARTS, "astrafiling_20261002", "FILING.tsv")))
+    io.open(os.path.join(HERE, "aconf_queue.tsv"), "a", encoding="utf-8", newline="\n").write("idless_20261002\taconf_%s\n" % tag)
+    print("aconf_%s: %d dispositions (%s)" % (tag, n, v[0][len("VERDICT: "):].strip()[:90]))

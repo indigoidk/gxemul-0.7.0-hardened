@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""mk_ifiling.py [--show N]  -- derive the FILING TABLE for the id-less entries of OUTSTANDING_BUGS.md MECHANICALLY from
+the ten rulings (idless_20261002/grok/grok_ruleidless_<slice>.txt) and GPT-6 Astra's confirmations (aconf_<slice>/),
+with the same attachment rule mk_idisp.py uses.  One row per governing disposition that owes the queue something:
+  NEW           a new queue row: id, grade, title
+  CLOSE-RECORD  a replacement sentence owed in place
+  UNSETTLED     a named measurement owed
+FILED and KEEP-AS-IS owe nothing here and are counted only.
+The TITLE of a NEW row is taken, in this order, from the governing line: (1) a quoted title of 8+ characters that does
+not span a field separator; (2) where Astra's amendment governs, the words after the id in its `should be` field;
+(3) the ruling's own `OPEN: YES:` sentence.  The column `tsrc` says which, so that a check knows what it is reading.
+Writes IDLESS_FILING.tsv beside the dispositions; never edited by hand -- corrections go in an overlay."""
+import io
+import os
+import re
+import sys
+
+ARTS = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts"
+D = os.path.join(ARTS, "idless_20261002")
+TAGS = ["01", "02a", "02b", "03", "04", "05", "06", "07", "08", "09"]
+DASH = "[\u2013\u2014-]"
+KEYTXT = r"((?:OUTSTANDING_BUGS\.md:)?\d{1,5}[^|]{0,70}?)"
+RULE = re.compile(r"^[`*|\s-]*" + KEYTXT + r"[`*]*\s*\|\s*ID-LESS")
+AMEND = re.compile(r"^[`*|\s-]*" + KEYTXT + r"[`*]*\s*\|\s*grok said")
+GK = r"(NEW (?:HIGH|MED|LOW)|FILED|CLOSE-RECORD|KEEP-AS-IS|UNSETTLED)"
+QUOTED = re.compile('"([^"|]{8,})"|\u201c([^\u201d|]{8,})\u201d')
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def norm(k):
+    return re.sub(r"\s*" + DASH + r"\s*", "-", k).strip()
+
+
+def lead(k):
+    m = re.match(r"(?:OUTSTANDING_BUGS\.md:)?(\d{1,5}(?:-\d{1,5})?)", k)
+    return m.group(1) if m else k
+
+
+def clean(t):
+    t = re.sub(r"\s+", " ", t).strip().strip("*`").strip()
+    t = re.sub(r"^(?:" + DASH + r"|:|,|with the title|titled|for|with)\s+", "", t)
+    return t.strip().strip('"\u201c\u201d').rstrip(".").strip()
+
+
+rows, counts, tsrc_n, other_rows = [], {}, {}, []
+for tag in TAGS:
+    t = rd(os.path.join(D, "grok", "grok_ruleidless_%s.txt" % tag))
+    c = rd(os.path.join(D, "aconf_" + tag, "codex_aconf_%s.txt" % tag))
+    rules = [(norm(RULE.match(l).group(1)), l.strip()) for l in t.splitlines() if RULE.match(l)]
+    amends = [(norm(AMEND.match(l).group(1)), l.strip()) for l in c.splitlines() if AMEND.match(l)]
+    amend_of = {}
+    for k, l in amends:
+        cand = [i for i, (rk, rl) in enumerate(rules) if rk == k and i not in amend_of]
+        if not cand:
+            cand = [i for i, (rk, rl) in enumerate(rules) if lead(rk) == lead(k) and i not in amend_of]
+        if len(cand) > 1:
+            words = [w.lower() for w in re.findall(r"[A-Za-z0-9#]{3,}", k[len(lead(k)):])]
+            pick = [i for i in cand if any(w in rules[i][1].lower() for w in words)]
+            cand = pick[:1] or cand[:1]
+        if not cand:
+            sys.exit("REFUSED: slice %s: amendment %s has no ruling line" % (tag, k))
+        amend_of[cand[0]] = l
+    for i, (k, l) in enumerate(rules):
+        g = re.search(r"DISPOSITION:\s*" + GK, l)
+        kind, src, who, seg = (g.group(1) if g else "(unparsed)"), l, "grok", ""
+        if i in amend_of:
+            a = amend_of[i]
+            s = re.search(r"\|\s*should (?:be|remain|retain)\b\s*(.*)$", a)
+            seg = s.group(1).split(" | ")[0] if s else ""
+            ak = re.search(GK, seg)
+            if ak:
+                kind, src, who = ak.group(1), a, "Astra"
+        counts[kind] = counts.get(kind, 0) + 1
+        if kind in ("FILED", "KEEP-AS-IS", "(unparsed)"):
+            # owes the queue nothing; kept in a second table so that a check can read what was decided and why
+            fid = ""
+            if kind == "FILED":
+                fm = re.search(r"FILED[*`\s:]*(?:under\s+|as\s+)?`?([a-z][a-z0-9_]{3,})`?", seg if who == "Astra" else src[src.find("DISPOSITION:"):])
+                fid = fm.group(1) if fm else "?"
+            other_rows.append([fid, kind, "", tag, lead(k), k, who, "", "", src])
+            continue
+        rid, grade, title, tsrc = "", "", "", ""
+        if kind.startswith("NEW"):
+            grade = kind.split()[1]
+            idm = re.search(r"NEW (?:HIGH|MED|LOW)[*`\s]*`?([a-z][a-z0-9_]{3,})`?", src)
+            rid = idm.group(1) if idm else "?"
+            field = seg if who == "Astra" else (re.search(r"DISPOSITION:\s*([^|]*)", src).group(1))
+            q = QUOTED.search(field)
+            if q:
+                title, tsrc = clean(q.group(1) or q.group(2)), "quoted"
+            elif who == "Astra" and idm and clean(seg[seg.find(rid) + len(rid):]):
+                title, tsrc = clean(seg[seg.find(rid) + len(rid):]), "astra-field"
+            else:
+                o = re.search(r"OPEN:\s*YES:?\s*([^|]*)", l)
+                title, tsrc = (clean(o.group(1)) if o else ""), "ruling-open-sentence"
+                if who == "Astra":
+                    tsrc = "ruling-open-sentence(Astra governs)"
+            kind = "NEW"
+        tsrc_n[tsrc] = tsrc_n.get(tsrc, 0) + 1
+        rows.append([rid, kind, grade, tag, lead(k), k, who, tsrc, title, src])
+
+ids = {}
+for r in rows:
+    if r[1] == "NEW":
+        ids.setdefault(r[0], []).append(r)
+dup = {k: v for k, v in ids.items() if len(v) > 1}
+print("governing kinds: " + ", ".join("%s %d" % kv for kv in sorted(counts.items())))
+print("rows owed: %d (NEW %d, CLOSE-RECORD %d, UNSETTLED %d); title sources: %s"
+      % (len(rows), sum(1 for r in rows if r[1] == "NEW"), sum(1 for r in rows if r[1] == "CLOSE-RECORD"),
+         sum(1 for r in rows if r[1] == "UNSETTLED"), ", ".join("%s %d" % kv for kv in sorted(tsrc_n.items()) if kv[0])))
+print("NEW ids: %d distinct of %d; twice: %s; without an id: %d; without a title: %d"
+      % (len(ids), sum(len(v) for v in ids.values()), " ".join(sorted(dup)), len(ids.get("?", [])),
+         sum(1 for r in rows if r[1] == "NEW" and not r[8])))
+if "--show" in sys.argv:
+    want = sys.argv[sys.argv.index("--show") + 1]
+    for r in rows:
+        if r[1] == "NEW" and (want == "all" or r[7].startswith(want)):
+            print("%-22s %-4s %-3s %-11s %-6s [%s] %s" % (r[0], r[2], r[3], r[4], r[6], r[7][:6], r[8][:210]))
+    sys.exit(0)
+p = os.path.join(D, "IDLESS_FILING.tsv")
+with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+    f.write("id\tkind\tgrade\tslice\tqueue_lines_db8b1a33\tkey\tgoverns\ttitle_source\ttitle\tgoverning_line\n")
+    for r in rows:
+        f.write("\t".join(x.replace("\t", " ") for x in r) + "\n")
+print("wrote %s: %d rows" % (p, len(rows)))
+p2 = os.path.join(D, "IDLESS_NOTOWED.tsv")
+with io.open(p2, "w", encoding="utf-8", newline="\n") as f:
+    f.write("filed_under\tkind\t-\tslice\tqueue_lines_db8b1a33\tkey\tgoverns\t-\t-\tgoverning_line\n")
+    for r in other_rows:
+        f.write("\t".join(x.replace("\t", " ") for x in r) + "\n")
+nf = [r for r in other_rows if r[1] == "FILED"]
+print("wrote %s: %d rows (FILED %d, of which %d name no parseable id; KEEP-AS-IS %d)"
+      % (p2, len(other_rows), len(nf), sum(1 for r in nf if r[0] == "?"), sum(1 for r in other_rows if r[1] == "KEEP-AS-IS")))

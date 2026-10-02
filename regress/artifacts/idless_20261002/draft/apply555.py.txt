@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""apply555.py -- the in-place half of #555: add ONE sentence at each queue passage the id-less review closed.
+
+IDLESS_SENTENCES.tsv names each passage by its line range at commit db8b1a33.  The queue file has moved since, so a
+passage is found BY ITS TEXT: the block of lines must occur exactly once, contiguously, in the text being edited; a
+passage that does not is REFUSED, never guessed.  Nothing is deleted or rewritten: the old text stays and the new line
+says what the source shows today (this project corrects a record in place and keeps what it corrects).  The line goes
+straight after the passage, at the passage's own quoting level; where the passage ends in a table row the note goes
+inside that row's last cell, so the table stays a table.
+
+apply(text) -> (new text, report lines).  Run as a script it prints the report for HEAD's queue file and writes
+nothing."""
+import io
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.environ.get("IDLESS_DIR") or os.path.join(SEC, "regress", "artifacts", "idless_20261002")
+TAG = "**[`#555`, 2026-10-02 -- the id-less review: %s]** %s  (ruled by the grok seat, confirmed by GPT-6 Astra: `regress/artifacts/idless_20261002/`)"
+
+
+def rows():
+    out = []
+    for l in io.open(os.path.join(D, "IDLESS_SENTENCES.tsv"), encoding="utf-8").read().split("\n")[1:]:
+        if l.strip():
+            out.append(l.split("\t"))
+    return out
+
+
+body = lambda l: re.sub(r"^\s*(?:>\s*)*", "", l)
+
+
+def in_table(cur, i):
+    """is line i part of a table row?  This file WRAPS table rows over several lines, and only a row's first line
+    starts with a pipe -- so the test is a pipe-led line above, within the same block.  (The first form of this tested
+    the line itself, and put a note between two logical rows of a wrapped table: GPT-6 Astra's ifile_04, part B.)"""
+    while i >= 0 and body(cur[i]).strip():
+        if body(cur[i]).startswith("|"):
+            return True
+        i -= 1
+    return False
+
+
+def para_end(cur, last):
+    """the last line of the paragraph or list item that holds line `last`: a scan's line range can stop in the middle
+    of a sentence (the first test put a note between "are undecoded and" and "halt, ..."), so the note goes after the
+    paragraph, never after the range.  In a table the unit is the LOGICAL row: it ends at the first line, from `last`
+    on, that closes with a pipe."""
+    if in_table(cur, last):
+        i = last
+        while not body(cur[i]).rstrip().endswith("|"):
+            if i + 1 >= len(cur) or not body(cur[i + 1]).strip() or body(cur[i + 1]).startswith("|"):
+                raise SystemExit("REFUSED: the table row holding line %d has no closing pipe" % (last + 1))
+            i += 1
+        return i
+    i = last
+    while i + 1 < len(cur):
+        nxt = body(cur[i + 1])
+        if not nxt.strip() or re.match(r"(?:[-*+]\s|\d+\.\s|#{1,6}\s|\||```)", nxt):
+            break
+        i += 1
+    return i
+
+
+def apply(text):
+    old = subprocess.run(["git", "-C", SEC, "show", "db8b1a33:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8").split("\n")
+    cur = text.split("\n")
+    index = {}
+    for i, l in enumerate(cur):
+        index.setdefault(l, []).append(i)
+    plan, rep = [], []
+    for q, tag, sentence, src in rows():
+        m = re.match(r"(\d+)(?:-(\d+))?", q)
+        a, b = int(m.group(1)), int(m.group(2) or m.group(1))
+        block = old[a - 1:b]
+        hits = [i for i in index.get(block[0], []) if cur[i:i + len(block)] == block]
+        if len(hits) != 1:
+            raise SystemExit("REFUSED: the passage at %s (db8b1a33) occurs %d times in the text being edited" % (q, len(hits)))
+        last = para_end(cur, hits[0] + len(block) - 1)
+        kind = ("SETTLED BY THE MANUALS" if "local manuals" in src else "SETTLED BY THE SOURCE" if "UNSETTLED" in src
+                else "THIS IS NO LONGER OPEN")
+        # a sentence that cites THIS file by line cites it as the seats read it; the notes added above a cited line
+        # move it, so the citation says which numbering it uses
+        sentence = re.sub(r"(OUTSTANDING_BUGS\.md:\d+(?:[-–]\d+)?`?)", r"\1 (numbered as of `db8b1a33`)", sentence)
+        plan.append((last, q, kind, sentence.strip()))
+    plan.sort(key=lambda p: (p[0], p[1]))
+    for last, q, kind, sentence in reversed(plan):
+        line = cur[last]
+        note = TAG % (kind, sentence if sentence.endswith(".") else sentence + ".")
+        if in_table(cur, last):
+            cut = line.rstrip().rfind("|")
+            cur[last] = line[:cut].rstrip() + " " + note + " " + line[cut:]
+            how = "inside the table row's last cell"
+        else:
+            prefix = re.match(r"^(\s*(?:>\s*)*)", line).group(1)
+            if prefix.strip().startswith(">"):
+                prefix = prefix.rstrip() + " "
+            cur.insert(last + 1, prefix + note)
+            how = "after the passage, prefix %r" % prefix
+        rep.append("%s -> line %d: %s" % (q, last + 1, how))
+    rep.reverse()
+    # no note may stand as a line of its own inside a table
+    for k, l in enumerate(cur):
+        if body(l).startswith("**[`#555`") and k and (in_table(cur, k - 1) or (k + 1 < len(cur) and body(cur[k + 1]).startswith("|"))):
+            raise SystemExit("REFUSED: a note stands between the rows of a table at line %d" % (k + 1))
+    return "\n".join(cur), rep
+
+
+if __name__ == "__main__":
+    head = subprocess.run(["git", "-C", SEC, "show", "HEAD:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8")
+    new, rep = apply(head)
+    print("\n".join(rep))
+    print("%d sentences placed; the text grew by %d lines" % (len(rep), new.count("\n") - head.count("\n")))

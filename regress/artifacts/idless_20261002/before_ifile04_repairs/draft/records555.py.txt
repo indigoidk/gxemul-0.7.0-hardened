@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""records555.py gen | ledger | setcommits <row> <sha>  -- the records of #555 (the id-less entries of OUTSTANDING_BUGS.md).
+
+Reads the adjudicated table (regress/artifacts/idless_20261002/IDLESS_TABLE2.tsv, IDLESS_CARRIED.tsv; made by
+mk_itable2.py.txt beside them) and writes:
+  gen      bugs555.body.md (the rows of the queue section), filed555.json (the ledger rows), counts555.txt
+  ledger   appends filed555.json to $LEDGER_PATH (default: the working ledger); refuses on an id that exists
+The form is #554's: every HIGH and MED row has its own heading and ledger row; the LOW rows are written out by id
+under ONE class row, `idlesslow`, and a LOW row gets its own ledger row when a round takes it up."""
+import io
+import json
+import os
+import sys
+
+REC = os.path.dirname(os.path.abspath(__file__))
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "idless_20261002")
+P = os.environ.get("LEDGER_PATH") or os.path.join(SEC, "tools", "pipeline", "ledger.json")
+DATE = "2026-10-02"
+EV = "regress/artifacts/idless_20261002/IDLESS_DISPOSITIONS.md"
+CLASSID = "idlesslow"
+ORDER = ["HIGH", "MED", "LOW"]
+
+
+def tsv(name):
+    return [l.split("\t") for l in io.open(os.path.join(D, name), encoding="utf-8").read().split("\n")[1:] if l.strip()]
+
+
+def table():
+    rows = [dict(id=r[0], sev=r[1], lines=r[2], title=r[3], src=r[4]) for r in tsv("IDLESS_TABLE2.tsv")]
+    rows.sort(key=lambda r: ORDER.index(r["sev"]))
+    return rows
+
+
+def gen():
+    rows = table()
+    out, filed = [], []
+    for sev in ("HIGH", "MED"):
+        sr = [r for r in rows if r["sev"] == sev]
+        out += ["", "### %s -- %d rows" % (sev, len(sr)), ""]
+        for r in sr:
+            out.append("#### `%s` (%s, an id for an entry this file already carries in prose) -- %s" % (r["id"], r["sev"], r["title"]))
+            out.append("the prose: %s (line numbers of this file as of commit `db8b1a33`) -- `%s`  [%s]" % (r["lines"], EV, r["src"]))
+            out.append("")
+            filed.append({"id": r["id"], "title": r["title"], "sev": r["sev"], "state": "open", "opened": DATE, "commits": "",
+                          "witness": "", "hold_question": "",
+                          "state_note": "AN ID FOR AN EXISTING PROSE ENTRY of OUTSTANDING_BUGS.md (lines %s at db8b1a33) -- no second entry "
+                                        "is opened.  Where the text comes from: %s" % (r["lines"], r["src"]),
+                          "entries": [{"phase": "assess", "seat": "fable5", "date": DATE, "grade": "", "grader": "", "ev": EV,
+                                       "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by #555 from the id-less review "
+                                               "of OUTSTANDING_BUGS.md: GPT-6 Astra's scan, the grok seat's first-hand ruling, Astra's "
+                                               "confirmation, Astra's check of the table and grok's ruling of that check (%s and the files "
+                                               "beside it).  NOT FIXED by #555." % EV}]})
+    low = [r for r in rows if r["sev"] == "LOW"]
+    out += ["", "### LOW -- %d rows, under one class row" % len(low), "",
+            "#### `%s` (LOW, a CLASS row) -- the %d LOW rows of the id-less review, one line each; a row is promoted to its own "
+            "ledger row when a round takes it up" % (CLASSID, len(low)),
+            "`%s`; the table with each row's source: `regress/artifacts/idless_20261002/IDLESS_TABLE2.tsv`." % EV, ""]
+    for r in low:
+        out.append("* `%s` -- %s (lines %s at `db8b1a33`)" % (r["id"], r["title"], r["lines"]))
+    out.append("")
+    filed.append({"id": CLASSID, "sev": "LOW", "state": "open", "opened": DATE, "commits": "", "witness": "", "hold_question": "",
+                  "title": "CLASS ROW: the %d LOW rows the id-less review of OUTSTANDING_BUGS.md filed -- prose entries of the queue that "
+                           "now have ids; each is listed with its id in OUTSTANDING_BUGS.md (2026-10-02, #555) and promoted to its own "
+                           "row when a round takes it up" % len(low),
+                  "state_note": "MEMBERS (%d), id -- title: " % len(low) + " || ".join("%s -- %s" % (r["id"], r["title"]) for r in low),
+                  "entries": [{"phase": "assess", "seat": "fable5", "date": DATE, "grade": "", "grader": "", "ev": EV,
+                               "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by #555 from the id-less review of "
+                                       "OUTSTANDING_BUGS.md.  This row closes when every member is promoted, fixed or dropped; the "
+                                       "members' rulings are in %s and regress/artifacts/idless_20261002/IDLESS_TABLE2.tsv.  NOT FIXED "
+                                       "by #555." % EV}]})
+    io.open(os.path.join(REC, "bugs555.body.md"), "w", encoding="utf-8", newline="\n").write("\n".join(out).rstrip("\n") + "\n")
+    io.open(os.path.join(REC, "filed555.json"), "w", encoding="utf-8", newline="\n").write(json.dumps(filed, indent=1, ensure_ascii=False) + "\n")
+    summ = ["rows %d" % len(rows)] + ["%s %d" % (s, sum(1 for r in rows if r["sev"] == s)) for s in ORDER] + ["ledger rows %d" % len(filed)]
+    io.open(os.path.join(REC, "counts555.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(summ) + "\n")
+    print("; ".join(summ))
+
+
+def _load():
+    raw = open(P, "rb").read()
+    L = json.loads(raw.decode("utf-8"))
+    dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+    if dump(L) != raw:
+        sys.exit("REFUSED: the ledger does not round-trip byte-identical; its format changed")
+    return L, dump
+
+
+def ledger():
+    L, dump = _load()
+    filed = json.load(io.open(os.path.join(REC, "filed555.json"), encoding="utf-8"))
+    ids = {x["id"] for x in L["rows"]}
+    clash = [r["id"] for r in filed if r["id"] in ids]
+    if clash:
+        sys.exit("REFUSED: %d ids already exist: %s" % (len(clash), " ".join(clash[:8])))
+    L["rows"].extend(filed)
+    open(P, "wb").write(dump(L))
+    print("ledger: +%d rows filed by #555 (%d rows now)" % (len(filed), len(L["rows"])))
+
+
+def titlefix():
+    """IDLESS_TITLEFIX.tsv: a row #554 filed whose TITLE stated half of the entry it names.  The title is corrected;
+    what it read is kept in the row's note."""
+    L, dump = _load()
+    done = []
+    for rid, old, new, why in tsv("IDLESS_TITLEFIX.tsv"):
+        r = [x for x in L["rows"] if x["id"] == rid]
+        if len(r) != 1 or r[0]["title"].count(old) != 1:
+            sys.exit("REFUSED: the ledger row %s does not carry the title #554 filed" % rid)
+        r[0]["title"] = r[0]["title"].replace(old, new)
+        r[0]["state_note"] = ("[%s] TITLE CORRECTED by #555; it read: \"%s\".  %s (regress/artifacts/idless_20261002/"
+                              "IDLESS_TITLEFIX.tsv).  " % (DATE, old, why)) + (r[0].get("state_note") or "")
+        done.append(rid)
+    open(P, "wb").write(dump(L))
+    print("ledger: %d title corrected by #555 (%s)" % (len(done), " ".join(done)))
+
+
+def setcommits():
+    L, dump = _load()
+    a = sys.argv[2:]
+    for rid, sha in zip(a[0::2], a[1::2]):
+        r = [x for x in L["rows"] if x["id"] == rid]
+        if len(r) != 1:
+            sys.exit("REFUSED: row %s found %d times" % (rid, len(r)))
+        r[0]["commits"] = sha
+    open(P, "wb").write(dump(L))
+    print("ledger: commits recorded -- " + ", ".join("%s %s" % p for p in zip(a[0::2], a[1::2])))
+
+
+if __name__ == "__main__":
+    {"gen": gen, "ledger": ledger, "titlefix": titlefix, "setcommits": setcommits}[sys.argv[1]]()

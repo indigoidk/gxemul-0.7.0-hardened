@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""mk_idisp.py [--check]  -- assemble idless_20261002/IDLESS_DISPOSITIONS.md MECHANICALLY: the id-less entries of
+OUTSTANDING_BUGS.md (lines as of db8b1a33), the third piece of the Astra review campaign.  Per slice (01, 02a, 02b,
+03..09): the grok seat's RULING of every claimed entry, one line each, VERBATIM (cut at 600 characters, the rest is in
+the seat's file), then GPT-6 Astra's overturns and amendments VERBATIM, then a DERIVED index: the governing kind of
+each entry -- Astra's where it amended, else grok's -- and the resulting NEW rows with their ids and grades.
+Refuses when a ruling or a confirmation lacks its token or VERDICT line, or when the number of ruling lines differs
+from the ruling's own VERDICT total, or the number of amendment lines from the confirmation's.  --check prints the
+table and writes nothing."""
+import io
+import os
+import re
+import sys
+
+ARTS = r"C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts"
+D = os.path.join(ARTS, "idless_20261002")
+TAGS = ["01", "02a", "02b", "03", "04", "05", "06", "07", "08", "09"]
+DASH = "[\u2013\u2014-]"
+RANGE = r"(?:OUTSTANDING_BUGS\.md:)?(\d{1,5}(?:\s*" + DASH + r"\s*\d{1,5})?(?:\s*[;,]\s*(?:repeated at\s*)?\d{1,5}(?:\s*" + DASH + r"\s*\d{1,5})?)*)"
+# the key is everything before the first bar: a line range, sometimes with a qualifier -- `2616 (CMMU/MB89352)`,
+# `5142, task #74`, `15038-15040; repeated 15525-15530` -- because one queue line can carry two entries
+KEYTXT = r"((?:OUTSTANDING_BUGS\.md:)?\d{1,5}[^|]{0,70}?)"
+RULE = re.compile(r"^[`*|\s-]*" + KEYTXT + r"[`*]*\s*\|\s*ID-LESS")
+AMEND = re.compile(r"^[`*|\s-]*" + KEYTXT + r"[`*]*\s*\|\s*grok said")
+
+
+def lead(k):
+    """the first line range of a key, dashes normalised: what an amendment and its ruling must share"""
+    m = re.match(r"(?:OUTSTANDING_BUGS\.md:)?(\d{1,5}(?:-\d{1,5})?)", k)
+    return m.group(1) if m else k
+GK = r"(NEW (?:HIGH|MED|LOW)|FILED|CLOSE-RECORD|KEEP-AS-IS|UNSETTLED)"
+check_only = "--check" in sys.argv
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def norm(k):
+    return re.sub(r"\s*" + DASH + r"\s*", "-", k).strip()
+
+
+out, table, new_rows = [], [], []
+other = {}          # kind -> [(slice, queue lines, whose line governs, the governing line)]
+tot = {"n": 0, "aw": 0, "am": 0}
+gov = {}
+for tag in TAGS:
+    rp = os.path.join(D, "grok", "grok_ruleidless_%s.txt" % tag)
+    cp = os.path.join(D, "aconf_" + tag, "codex_aconf_%s.txt" % tag)
+    t, c = rd(rp), rd(cp)
+    if ("GROK_IDLESS_%s_ALIVE_1002" % tag.upper()) not in t or ("ASTRACONF_IDLESS_%s_ALIVE" % tag.upper()) not in c:
+        sys.exit("REFUSED: slice %s: a token is missing" % tag)
+    vr = re.findall(r"VERDICT: [^\n`]*", t)
+    vc = re.findall(r"VERDICT: [^\n`]*", c)
+    if not vr or not vc:
+        sys.exit("REFUSED: slice %s: a VERDICT line is missing" % tag)
+    m = re.search(r"of (\d+) claimed entries \(\+(\d+) missed", vr[0])
+    n = int(m.group(1)) + int(m.group(2))
+    mc = re.search(r"VERDICT: (\d+) of (\d+) dispositions wrong \((\d+) more", vc[0])
+    aw, an, am = [int(x) for x in mc.groups()]
+    rules = [(norm(RULE.match(l).group(1)), l.strip()) for l in t.splitlines() if RULE.match(l)]
+    amends = [(norm(AMEND.match(l).group(1)), l.strip()) for l in c.splitlines() if AMEND.match(l)]
+    note = ""
+    if len(rules) != n:
+        note += "  [ruling lines %d, its VERDICT says %d]" % (len(rules), n)
+    if an != n:
+        note += "  [Astra checked %d]" % an
+    if len(amends) != aw + am:
+        note += "  [amendment lines %d, its VERDICT says %d + %d]" % (len(amends), aw, am)
+    if note and not check_only:
+        sys.exit("REFUSED: slice %s:%s" % (tag, note))
+    # attach each amendment to ONE ruling: same key if it exists, else same leading range -- and where several
+    # rulings share that range, the one whose line carries a word of the amendment's qualifier, else the first free one
+    amend_of, unmatched = {}, []
+    for k, l in amends:
+        cand = [i for i, (rk, rl) in enumerate(rules) if rk == k and i not in amend_of]
+        if not cand:
+            cand = [i for i, (rk, rl) in enumerate(rules) if lead(rk) == lead(k) and i not in amend_of]
+        if len(cand) > 1:
+            words = [w.lower() for w in re.findall(r"[A-Za-z0-9#]{3,}", k[len(lead(k)):])]
+            pick = [i for i in cand if any(w in rules[i][1].lower() for w in words)]
+            cand = pick[:1] or cand[:1]
+        if cand:
+            amend_of[cand[0]] = l
+        else:
+            unmatched.append(k)
+    if unmatched:
+        note += "  [amendments with no ruling line: %s]" % "; ".join(unmatched)
+        if not check_only:
+            sys.exit("REFUSED: slice %s:%s" % (tag, note))
+    counts = {}
+    for i, (k, l) in enumerate(rules):
+        g = re.search(r"DISPOSITION:\s*" + GK, l)
+        kind = g.group(1) if g else "(unparsed)"
+        src = l
+        if i in amend_of:
+            a = amend_of[i]
+            s = re.search(r"\|\s*should (?:be|remain|retain)\b\s*(.*)$", a)
+            seg = s.group(1).split(" | ")[0] if s else ""
+            ak = re.search(GK, seg)
+            if ak:
+                kind, src = ak.group(1), a
+        counts[kind] = counts.get(kind, 0) + 1
+        gov["%s:%s#%d" % (tag, k, i)] = kind
+        if kind in ("CLOSE-RECORD", "UNSETTLED"):
+            other.setdefault(kind, []).append((tag, k, "Astra" if src is not l else "grok", src))
+        if kind.startswith("NEW"):
+            idm = re.search(r"NEW (?:HIGH|MED|LOW)[*`\s]*`?([a-z][a-z0-9_]{3,})`?", src)
+            tm = re.search(r'"([^"]{8,})"', src) or re.search("\u201c([^\u201d]{8,})\u201d", src)
+            new_rows.append((tag, k, kind.split()[1], idm.group(1) if idm else "?", (tm.group(1) if tm else "")[:150]))
+    for k in ("n", "aw", "am"):
+        tot[k] += {"n": n, "aw": aw, "am": am}[k]
+    table.append("%-3s %3d dispositions  Astra: %2d wrong, %2d amended  -> %s%s"
+                 % (tag, n, aw, am, ", ".join("%s %d" % kv for kv in sorted(counts.items())), note))
+    out += ["", "---", "", "## Slice %s -- %d dispositions.  Ruled by the grok seat: %s (grok/grok_ruleidless_%s.txt)."
+            % (tag, n, vr[0][len("VERDICT:"):].strip(), tag),
+            "## Astra: %s (aconf_%s/codex_aconf_%s.txt)." % (vc[0][len("VERDICT:"):].strip(), tag, tag), "", "RULINGS"]
+    out += ["* " + (l if len(l) <= 600 else l[:597] + "...") for k, l in rules]
+    out += ["", "ASTRA'S OVERTURNS AND AMENDMENTS (%d)" % len(amends)] + (["* " + l for k, l in amends] or ["* (none)"])
+
+fk = {}
+for v in gov.values():
+    fk[v] = fk.get(v, 0) + 1
+print("\n".join(table))
+print("TOTAL: %(n)d dispositions; Astra overturned %(aw)d and amended %(am)d" % tot)
+print("governing kinds: " + ", ".join("%s %d" % kv for kv in sorted(fk.items())))
+print("NEW rows after confirmation: %d (HIGH %d, MED %d, LOW %d); without a parsed id: %d"
+      % (len(new_rows), sum(1 for r in new_rows if r[2] == "HIGH"), sum(1 for r in new_rows if r[2] == "MED"),
+         sum(1 for r in new_rows if r[2] == "LOW"), sum(1 for r in new_rows if r[3] == "?")))
+if check_only:
+    sys.exit(0)
+head = """# The id-less entries of OUTSTANDING_BUGS.md -- dispositions, slice by slice
+
+`OUTSTANDING_BUGS.md` names most queue rows by a short backticked id; some entries record an open defect, an owed
+measurement or an owed correction in prose only.  GPT-6 Astra scanned the file for those at commit `db8b1a33`
+(`codexpack_20260928/idless_NN/`: 279 claimed entries), the agy seat verified each row (`agypack_20261001/
+idlessverify_NN/`), the grok seat RULED every entry first-hand (`grok/grok_ruleidless_<slice>.txt`: the 279 and the
+13 it found the scan had missed) and GPT-6 Astra confirmed or overturned grok's dispositions (`aconf_<slice>/`).  Owner
+2026-10-02: the working seats are GPT-6 Astra, agy and grok; the Fable and Opus agent seats were deliberately not fired,
+and a flagship sign-off is batched, not waived.  Line numbers are `db8b1a33`'s.
+
+MECHANICALLY ASSEMBLED (`mk_idisp.py`, kept beside this file as `mk_idisp.py.txt`): a ruling line is the seat's own,
+cut at 600 characters; an amendment line is Astra's own, whole.  PRECEDENCE: an Astra overturn or amendment governs
+the ruling it names.  Kinds: NEW (a new queue row, with its id and grade), FILED (the defect already has an id --
+often one the campaign's own filing, `#554`, created), CLOSE-RECORD (the prose says OPEN and the source shows the
+defect gone: a replacement sentence is owed in place), KEEP-AS-IS (history or a rule; nothing owed), UNSETTLED (a named
+measurement owed).  Nothing is fixed, filed or closed by this record: that is a records round's job.
+
+Totals: %(n)d dispositions; Astra overturned %(aw)d and amended %(am)d more.  Governing kinds: KINDS.
+Two of the ten rulings were touched by a runner fault on 2026-10-02 (two processes writing one file); slice 06 is
+recovered and slice 07's answer is whole -- the notes are beside the two files.
+""" % tot
+head = head.replace("KINDS", ", ".join("%s %d" % kv for kv in sorted(fk.items())))
+res = ["", "---", "", "## RESULT (DERIVED by `mk_idisp.py`; the lines above are the record, this is an index of them)", "",
+       "THE NEW ROWS AFTER CONFIRMATION (%d): slice | queue lines | grade | id | title" % len(new_rows)]
+res += ["* %s | %s | %s | `%s` | %s" % r for r in new_rows]
+for kind, what in (("CLOSE-RECORD", "the queue text says OPEN and the source shows the defect gone -- a replacement sentence is owed IN PLACE"),
+                   ("UNSETTLED", "a named measurement is owed before the entry can be ruled")):
+    res += ["", "THE %s ENTRIES (%d): %s.  slice | queue lines | whose line governs | the governing line"
+            % (kind, len(other.get(kind, [])), what)]
+    res += ["* %s | %s | %s | %s" % (t_, k_, w_, (s_ if len(s_) <= 700 else s_[:697] + "...")) for t_, k_, w_, s_ in other.get(kind, [])]
+p = os.path.join(D, "IDLESS_DISPOSITIONS.md")
+io.open(p, "w", encoding="utf-8", newline="\n").write(head + "\n".join(out + res) + "\n")
+print("wrote %s" % p)

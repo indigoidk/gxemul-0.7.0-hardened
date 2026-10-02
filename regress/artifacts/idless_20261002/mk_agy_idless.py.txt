@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""mk_agy_idless.py -- the agy job set for the id-less unit (owner 2026-10-02: "Make sure to push Agy").
+Reads IDLESS_FILING.tsv / IDLESS_NOTOWED.tsv (mk_ifiling.py) and the grok seat's titles (grok/grok_ititles.txt) and
+writes, under regress/artifacts/idless_20261002/:
+    IDLESS_OVERLAY.tsv        id<TAB>field<TAB>value<TAB>who -- the 37 titles grok wrote, and the two ids that cover two
+                              queue passages each (one row, both passages)
+    IDLESS_FILED_CHECK.tsv    every FILED disposition with the id(s) it names and WHERE each id exists (mechanical)
+    briefs/icite_<slice>.md   agy: do the citations and the title of each NEW row hold at 7440e129?
+    briefs/ifiled_<a|b|c>.md  agy: does the row an entry is FILED under cover the entry?
+    briefs/ikeep.md           agy: the KEEP-AS-IS and UNSETTLED entries -- is anything owed that the table drops?
+and the runner's queue at <scratchpad>/astraretro/agy_idless_queue.tsv.  agy's agreement carries no weight; every
+answer format makes a FLAG a line of its own."""
+import io
+import json
+import os
+import re
+import subprocess
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "idless_20261002")
+HERE = os.path.dirname(os.path.abspath(__file__))
+STAGE = os.path.join(HERE, "..", "records", "stage554")
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+ART = WD + BS + "GXEMUL-SEC" + BS + "regress" + BS + "artifacts" + BS + "idless_20261002"
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def tsv(name):
+    return [l.split("\t") for l in rd(os.path.join(D, name)).split("\n")[1:] if l.strip()]
+
+
+owed, notowed = tsv("IDLESS_FILING.tsv"), tsv("IDLESS_NOTOWED.tsv")
+# ---- grok's titles
+titles = {}
+for l in rd(os.path.join(D, "grok", "grok_ititles.txt")).split("\n"):
+    m = re.match(r"^([a-z][a-z0-9_]+) \| TITLE: (.*?) \| SCOPE: (AS AMENDED|DISPUTE[^|]*) \| (.*)$", l)
+    if m:
+        titles[m.group(1)] = (m.group(2).strip(), m.group(3).strip())
+need = sorted(set(r[0] for r in owed if r[1] == "NEW" and r[7] != "quoted"))
+if sorted(titles) != need:
+    raise SystemExit("REFUSED: grok titled %d ids, the table needs %d; differing: %s"
+                     % (len(titles), len(need), sorted(set(titles) ^ set(need))))
+ov = ["#id\tfield\tvalue\twho said so, where   (written by mk_agy_idless.py.txt beside this file)"]
+for i in need:
+    ov.append("%s\ttitle\t%s\tthe grok seat, grok/grok_ititles.txt (%s)" % (i, titles[i][0], titles[i][1]))
+new = {}
+for r in owed:
+    if r[1] == "NEW":
+        new.setdefault(r[0], []).append(r)
+for i, rs in sorted(new.items()):
+    if len(rs) > 1:
+        ov.append("%s\tmerge\t%s\tone id on %d dispositions: ONE row covering every passage"
+                  % (i, "; ".join("slice %s lines %s" % (r[3], r[4]) for r in rs), len(rs)))
+io.open(os.path.join(D, "IDLESS_OVERLAY.tsv"), "w", encoding="utf-8", newline="\n").write("\n".join(ov) + "\n")
+
+
+def final_title(r):
+    return titles[r[0]][0] if r[0] in titles else r[8]
+
+
+# ---- where does each FILED id exist?
+head_ledger = json.loads(subprocess.run(["git", "-C", SEC, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))
+head_ids = set(x["id"] for x in head_ledger["rows"])
+st_ledger = json.loads(io.open(os.path.join(STAGE, "tools", "pipeline", "ledger.json"), encoding="utf-8", newline="").read())
+st_ids = set(x["id"] for x in st_ledger["rows"]) - head_ids
+st_ob = io.open(os.path.join(STAGE, "OUTSTANDING_BUGS.md"), encoding="utf-8", newline="").read()
+head_ob = subprocess.run(["git", "-C", SEC, "show", "HEAD:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8")
+sec554 = st_ob[len(head_ob) - 2000:] if len(st_ob) > len(head_ob) else ""
+low_members = set(re.findall(r"(?m)^\* `([a-z][a-z0-9_]+)`", sec554))
+STOP = {"under", "with", "this", "that", "from", "into", "class", "prose", "queue", "existing", "half", "site", "sites", "entry",
+        "high", "medium", "debt", "work", "rows", "none", "already", "exact", "their", "which", "where", "stays", "here"}
+
+
+def where(i):
+    if i in head_ids:
+        return "ledger at HEAD"
+    if i in st_ids:
+        return "a row #554 files"
+    if i in low_members:
+        return "a LOW member #554 files under a class row"
+    if ("`%s`" % i) in head_ob:
+        return "the queue file only (no ledger row)"
+    return "NOWHERE"
+
+
+filed = []
+for r in notowed:
+    if r[1] != "FILED":
+        continue
+    src, who = r[9], r[6]
+    if who == "Astra":
+        seg = re.search(r"\|\s*should (?:be|remain|retain)\b\s*(.*)$", src).group(1).split(" | ")[0]
+    else:
+        seg = re.search(r"DISPOSITION:\s*([^|]*)", src).group(1)
+    part = seg[seg.find("FILED"):]
+    cut = re.search(r"\bNEW\b", part)
+    part = part[:cut.start()] if cut else part
+    ids = re.findall(r"`([a-z][a-z0-9_]{3,})`", part)
+    ids += [m for m in re.findall(r"FILED[*\s:]*(?:(?:HIGH|MED|LOW)\s+)?(?:under\s+|as\s+)?([a-z][a-z0-9_]{3,})\b", part) if m not in ids]
+    ids = [i for i in ids if i not in STOP]
+    filed.append((r, ids, [where(i) for i in ids], bool(cut)))
+fc = ["slice\tqueue_lines_db8b1a33\tgoverns\tids\twhere_each_exists\tgoverning_field_also_names_a_NEW_row\tgoverning_line"]
+for r, ids, wh, comp in filed:
+    fc.append("\t".join([r[3], r[4], r[6], " ".join(ids) or "?", " | ".join(wh) or "?", "yes" if comp else "", r[9]]))
+io.open(os.path.join(D, "IDLESS_FILED_CHECK.tsv"), "w", encoding="utf-8", newline="\n").write("\n".join(fc) + "\n")
+noid = [f for f in filed if not f[1]]
+nowhere = [(f[0][3], f[0][4], i) for f in filed for i, w in zip(f[1], f[2]) if w == "NOWHERE"]
+print("FILED dispositions %d; naming no parseable id %d; ids found NOWHERE: %d %s"
+      % (len(filed), len(noid), len(nowhere), nowhere[:12]))
+for f in noid:
+    print("  no id: %s %s | %s" % (f[0][3], f[0][4], f[0][9][:200].encode("ascii", "replace").decode("ascii")))
+
+# ---- the briefs
+COMMON = """READ-ONLY, always: write no file, run nothing that changes a file, build nothing.  The tree under review is
+`%(wd)s%(bs)sGXEMUL-SEC` (git) at commit `7440e129`; read committed files
+(`git -C %(wd)s%(bs)sGXEMUL-SEC show 7440e129:<path>`), and ignore any other `src/` under the project root.  The queue
+file's line numbers below are commit `db8b1a33`'s: read it with
+`git -C %(wd)s%(bs)sGXEMUL-SEC show db8b1a33:OUTSTANDING_BUGS.md`.
+
+**Context.**  This project's bug queue, `OUTSTANDING_BUGS.md`, names most rows by a short backticked id; some entries
+record open work in prose only.  Those entries were scanned, each was ruled by one seat and the ruling confirmed or
+amended by another (`%(art)s%(bs)sIDLESS_DISPOSITIONS.md`), and a table of what the queue is now owed was derived from
+that (`%(art)s%(bs)sIDLESS_FILING.tsv`, with `IDLESS_OVERLAY.tsv` beside it).  Before the table is filed it is checked
+against the source.  YOUR AGREEMENT IS NOT WHAT IS WANTED.  What is wanted is a FLAG: a line of the table that the
+committed source or the queue text does not support.  A row you cannot check is `NOT CHECKED: <why>`, never a pass.
+""" % {"wd": WD, "bs": BS, "art": ART}
+
+
+def put(name, text):
+    p = os.path.join(D, "briefs", name + ".md")
+    io.open(p, "w", encoding="utf-8", newline="\n").write(text)
+    return name, os.path.getsize(p)
+
+
+jobs = []
+SLICES = (("01", ["01"]), ("02a", ["02a"]), ("02b", ["02b"]), ("03", ["03"]), ("04to09", ["04", "05", "06", "07", "08", "09"]))
+seen = set()
+for name, tags in SLICES:
+    rs = []
+    for r in owed:
+        if r[1] == "NEW" and r[3] in tags and r[0] not in seen:
+            seen.add(r[0])
+            rs.append(r)
+    tok = "AGY_ICITE_%s_ALIVE_1002" % name.upper()
+    head = ("NEW QUEUE ROWS, slice %s -- do the title and the citations of each row hold in the committed source?\n\n"
+            "FIRST line of your answer: `VERDICT: <f> of %d rows flagged, <n> not checked`.  SECOND line: the token `%s`.\n"
+            "THIRD line: quote verbatim the first line of `%s%s_scratchpad%sCHECKPOINT.md`.\n\n" % (name, len(rs), tok, WD, BS, BS)
+            ) + COMMON + ("""
+**For each row below, ONE line:**
+`<id> | TITLE: TRUE / WIDER than the source shows: <what> / NARROWER: <what it leaves out> / NOT TRUE: <what the source shows> | CITES: HOLD / WRONG: <path:line says ...> | <the lines you read>`
+* Read the queue passage (the line range) and the source lines the governing line cites.  A title is checked against
+  the SOURCE at `7440e129`, not against the governing line's wording.
+* Where the title or the governing line names a CONDITION (a CPU model, a mode bit, "latent", "owed measurement"),
+  check that the condition is real and is stated.
+* A row that describes work already done at `7440e129` is `NOT TRUE: done -- <path:line>`.
+
+Then: **(a)** two rows of this slice that are one defect (name both ids); **(b)** a row whose defect the queue ALREADY
+files under another backticked id (name the id and the queue line);
+**(c)** `DENOMINATOR: <s> of %d rows read in the source`.
+
+**The rows** (id | grade | queue lines at db8b1a33 | title | the governing line, cut at 420 characters):
+""" % len(rs))
+    body = []
+    for n, r in enumerate(rs, 1):
+        g = r[9] if len(r[9]) <= 420 else r[9][:417] + "..."
+        allr = new[r[0]]
+        lines = r[5] if len(allr) == 1 else "; ".join(x[5] for x in allr)
+        body.append("%d. `%s` | %s | %s | %s | %s" % (n, r[0], r[2], lines, final_title(r), g))
+    jobs.append(put("icite_" + name, head + "\n".join(body) + "\n"))
+
+per = (len(filed) + 2) // 3
+for k, name in enumerate(("a", "b", "c")):
+    part = filed[k * per:(k + 1) * per]
+    tok = "AGY_IFILED_%s_ALIVE_1002" % name.upper()
+    head = ("ENTRIES RULED 'ALREADY FILED', part %s -- does the row each is filed under cover the entry?\n\n"
+            "FIRST line of your answer: `VERDICT: <f> of %d entries flagged, <n> not checked`.  SECOND line: the token `%s`.\n"
+            "THIRD line: quote verbatim the first line of `%s%s_scratchpad%sCHECKPOINT.md`.\n\n" % (name, len(part), tok, WD, BS, BS)
+            ) + COMMON + ("""
+Each entry below is a prose passage of the queue that was ruled ALREADY FILED under an existing id, so the table opens
+no new row for it.  That is only right if the named row really covers what the passage says is open.  Some of the ids
+are rows that a filing unit prepared today will add (`#554`); its rows are listed, with their titles, in
+`%(wd)s%(bs)sGXEMUL-SEC%(bs)sregress%(bs)sartifacts%(bs)sastrafiling_20261002%(bs)sdraft%(bs)ssection554.draft.md`.
+Rows that already exist are in the queue file itself and in `tools/pipeline/ledger.json` at `7440e129`.
+
+**For each entry, ONE line:**
+`<n> | <id> | EXISTS: <where you found the row> / NOT FOUND | COVERS: YES / PARTLY: <what the passage says is open that the row's title leaves out> / NO: <why> | <the lines you read>`
+* "where each id exists" below is a mechanical lookup; check it, do not take it.
+* `PARTLY` matters most: a passage with two open items filed under a row that names one of them loses the other.
+* An entry whose governing line also names a NEW row is marked; say whether the split between the two is right.
+
+Then `DENOMINATOR: <s> of %(n)d entries read in the queue and in the row they are filed under`.
+
+**The entries** (n | queue lines at db8b1a33 | id(s) | where each id exists | the governing line, cut at 420 characters):
+""" % {"wd": WD, "bs": BS, "n": len(part)})
+    body = []
+    for n, (r, ids, wh, comp) in enumerate(part, 1):
+        g = r[9] if len(r[9]) <= 420 else r[9][:417] + "..."
+        body.append("%d. %s | %s | %s | %s%s" % (n, r[5], " ".join("`%s`" % i for i in ids) or "(no id parsed -- read the line)",
+                                                " ; ".join(wh) or "?", "[ALSO NAMES A NEW ROW] " if comp else "", g))
+    jobs.append(put("ifiled_" + name, head + "\n".join(body) + "\n"))
+
+keep = [r for r in notowed if r[1] == "KEEP-AS-IS"]
+uns = [r for r in owed if r[1] == "UNSETTLED"]
+head = ("ENTRIES RULED 'NOTHING OWED' OR 'A MEASUREMENT IS OWED' -- does the table drop anything?\n\n"
+        "FIRST line of your answer: `VERDICT: <f> of %d entries flagged, <n> not checked`.  SECOND line: the token `AGY_IKEEP_ALIVE_1002`.\n"
+        "THIRD line: quote verbatim the first line of `%s%s_scratchpad%sCHECKPOINT.md`.\n\n" % (len(keep) + len(uns), WD, BS, BS)
+        ) + COMMON + ("""
+**Part 1 -- %d entries ruled KEEP-AS-IS** (history, or a rule; the table opens no row and changes no text).  ONE line each:
+`<n> | NOTHING OWED: <the one fact that shows it> / OWED: <the open work the passage records, with path:line> | <the lines you read>`
+A passage that says something is still open, still unmeasured or still to be corrected, and whose work is not done
+at `7440e129`, is `OWED` whatever the ruling says.
+
+**Part 2 -- %d entries ruled UNSETTLED** (a named measurement is owed before the entry can be ruled).  ONE line each:
+`<n> | THE MEASUREMENT NAMED WOULD SETTLE IT / WOULD NOT: <what would> / ALREADY SETTLED BY THE SOURCE: <path:line and which way> | <the lines you read>`
+
+Then `DENOMINATOR: <s> of %d entries read in the queue text`.
+
+**Part 1 entries** (n | queue lines at db8b1a33 | the governing line, cut at 420 characters):
+""" % (len(keep), len(uns), len(keep) + len(uns)))
+body = ["%d. %s | %s" % (n, r[5], r[9] if len(r[9]) <= 420 else r[9][:417] + "...") for n, r in enumerate(keep, 1)]
+body += ["", "**Part 2 entries:**"]
+body += ["%d. %s | %s" % (n, r[5], r[9] if len(r[9]) <= 420 else r[9][:417] + "...") for n, r in enumerate(uns, len(keep) + 1)]
+jobs.append(put("ikeep", head + "\n".join(body) + "\n"))
+
+q = os.path.join(HERE, "agy_idless_queue.tsv")
+io.open(q, "w", encoding="utf-8", newline="\n").write(
+    "# artdir<TAB>id -- the agy job set for the id-less unit, 2026-10-02\n" + "".join("idless_20261002\t%s\n" % j[0] for j in jobs))
+print("overlay: %d lines; briefs: %s" % (len(ov) - 1, ", ".join("%s %d b" % j for j in jobs)))
+print("queue: %s (%d jobs)" % (q, len(jobs)))
