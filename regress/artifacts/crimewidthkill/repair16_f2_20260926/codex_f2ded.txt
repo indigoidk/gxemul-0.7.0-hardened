@@ -1,0 +1,28 @@
+**VERDICT: TRUE as written: every clear has a residue-count check in both latch states. Residue-value and combined reset/print coverage remain incomplete.**
+
+The [CONTROL write arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:353) has five effects. Its three clears modify local `idata`; their observable consequence is the subsequent diagnostic, rather than register readback. “Latch state” below means `d->warned & CRIME_W_LEN` at the relevant write.
+
+| Effect | Latch CLEAR: observing rows | Latch SET: observing rows |
+|---|---|---|
+| Clear `DOG_ENABLE` (`0x0200`) before testing residue | `ctldog sw msg`, `ctldog sd msg`; also `latch ctl msg` | `rearm ctl msg` |
+| Clear `HARD_RESET` (`0x0800`) before testing residue | `ctlrst sw msg`, `ctlrst sd msg` | `rst 4w msg`, `rst 8w msg` |
+| Clear `ENDIANESS` (`0x0100`) before testing residue | `latch ctl msg` | `rearm ctl msg` |
+| When HARD_RESET is set, set every CPU’s `running` flag to zero | `sw08 halts`; `ctlrst sw halt`, `ctlrst sd halt` | `rst 4w`, `rst 8w` |
+| Print the CONTROL diagnostic when the remaining residue is nonzero | `latch ctl msg` checks four messages; the `ctldog` and `ctlrst` message rows also check their positive-print twins | `rearm ctl msg` checks four messages; also `p acc ctl msg` |
+
+This matches the packet’s [E7 contract and added rows](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/repair16_f2_20260926/f2_packet_codex_v2.md:391). Both accepted write widths occur in each clear’s coverage.
+
+One latch distinction matters: `rst 4w msg` and `rst 8w msg` expect one message from the **earlier, latch-CLEAR `0x0001` twin**. They check that the subsequent latch-SET reset write adds no message. Positive residue printing with the latch SET is observed by `rearm ctl msg` and `p acc ctl msg`.
+
+The contract does not cover these aspects:
+
+| Observable aspect | Latch CLEAR | Latch SET |
+|---|---|---|
+| Exact hexadecimal residue printed, when message count stays unchanged | **No row** | **No row** |
+| Printing a nonzero residue after the HARD_RESET branch stops the CPUs | **No row** | **No row** |
+
+The accepted reset writes shown carry only `0x0800`, leaving zero residue. Their separate positive-print twins do not cover printing after a reset. The message rows count a prefix, so they also do not establish message ordering or individual attribution within an aggregate count.
+
+The CPU stop has its own rows; residue-count checks alone do not establish it. Likewise, the sentence does not promise every width/data/latch combination—the packet expressly leaves the latch-SET two-byte CONTROL write with HARD_RESET clear unrowed.
+
+This was a reading check; I did not execute probes or construct changes.

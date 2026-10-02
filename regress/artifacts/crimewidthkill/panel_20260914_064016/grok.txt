@@ -1,0 +1,72 @@
+I'll start from the full offloaded brief, then read the crime handler, the 141-row probe, and the artifacts so the enumeration can be checked against the function rather than the packet.The brief’s `ACCEPTS` list and the handler’s real branch sides need to be checked against the files, not the packet. I’ll open the crime access function, the probe, and table 8 next.`x_rearm_rev8r` already rows 8-byte reads at REV outside the PROM window; the hole is that same kind *inside* the window. I’ll measure that edit in a scratch clone so it is not only a reading.GAP: in `DEVICE_ACCESS(crime)` `case CRIME_REV`, inside the PROM-window `if`, before `cpu->pc = ...`:
+```
+if (len == 8 && writeflag == MEM_READ)
+    d->warned |= CRIME_W_LEN;
+```
+CRIME_CLOSE5_20260914
+
+File access: `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` (`DEVICE_ACCESS(crime)` at line 193; window test at the `0xbfc05100` compare), `regress/crime_width_probe.py` (`ACCEPTS` at line 709, `accept()` at 724), `regress/artifacts/crimewidthkill/killtable8_20260914/{PRETABLE,POSTTABLE,check_pred,mutants529h}.py`. Checkpoint line 1 still says table 8 probes running; POSTTABLE 8 is already on disk. I could not compile or run a mutant (this seat is plan-mode).
+
+---
+
+## 1. Enumeration
+
+`ACCEPTS` is 43 tuples and every one is a path the function can take. It is **not** the full set of accepted kinds the function distinguishes.
+
+Walked from the handler, not from the list:
+
+| Location | 8W | 8R | 4W | 4R |
+|---|---|---|---|---|
+| REV 0x00, pc *outside* the window | sd | ld | sw | lw |
+| REV 0x00, pc *in* `0xbfc051xx` | **sdP** | **missing (`ldP`)** | **swP** | lwP |
+| CONTROL 0x08 | sd × {0x0201,0x0001,0,0x0200} | ld | sw × same four | lw |
+| INTSTAT 0x10, INTMASK 0x18, DOG 0x30, TIME 0x38 | sd | ld | sw | lw |
+| default: 4-byte high 0x40, 4-byte low 0x34 and 0x04, 8-byte 0x40 and 0x278 | yes | yes | yes | yes |
+
+The width arm accepts only `len==8` and `len==4`. Case labels are 8-aligned, so a 4-byte access at a label is the high lane (`relative_addr & 4 == 0`); a 4-byte access at `label+4` does **not** take that case, it takes `default`. Those 4-byte-low-at-label cells are unreachable. Correctly omitted.
+
+CONTROL's `HARD_RESET` true side is disclosed (it stops the CPUs). `is_32bit` is a machine constant on this probe (Opus close-4 named it and did not build it).
+
+The hole is one cell of the same product pass 4 demanded: **kind × location**. The REV window is an `if` both directions and both widths can take (`cpu->pc` only). Repair 10 put three window kinds in the list — `lwP` (4R), `swP` (4W), `sdP` (8W) — and not `ldP` (8R). That is the pass-3 “sides taken somewhere” shape applied to the window: writes got both widths, reads got only `lw`.
+
+`accept()` would already emit an `ld` at `PROBE_PC` for a `ldP` tuple (`op[:2] == "ld"`). The tuple is simply not in the list.
+
+Every `at=PROBE_PC` site in the probe, accepted or refused:
+
+- `rev pc ctl`: **lw** (4R)
+- `lb`/`lh`/`sb`/`sh` **rev pc**: refused, never accepted
+- `ACCEPTS`: `lwP`, `swP`, `sdP` only
+
+No accepted 8-byte read of CRIME_REV is ever issued from the window. Table 8’s `x_rearm_rev8r` (`writeflag == MEM_READ && len == 8` at the REV case, **no** pc test) is the neighbouring cell: it is killed by `("ld", 0x00, 0)` from ordinary `CODE`. `x_pre_rev_wp` is the write-side sibling (window × WRITE, any width) and is killed by `swP`/`sdP`.
+
+CONTROL 0x0200, INTSTAT/INTMASK writes, default 4W-high at 0x40, HARDINT answer, 2W landing at +0x42, and the free-running channel rows are the cells table 8 actually sampled; `check_pred.out` is 44 exact + `lt_wset` extra `sh08b said`, matching POSTTABLE.
+
+`latch x5` / `rearm once` **do** vary under every kind that *is* in `ACCEPTS` (table 8 measured that). They **cannot** vary under window × 8R, because that kind never runs.
+
+---
+
+## 2. Floor gap
+
+The cited edit is the pre-set form (the write-side sibling of `x_pre_rev_wp`, with `MEM_READ && len == 8` instead of `MEM_WRITE`). The re-arm form `d->warned = 0` is the same hole.
+
+Expected rows: `latch x5` (pre-set → 0 notices) or `rearm once` (re-arm → 2). Neither fires, because the prologue/re-arm loop never does an accepted `ld` from `0xbfc05180`.
+
+This is not the disclosed “latch keyed on a JOINT predicate” bullet (that bullet is the *refusal* test, example “only 2-byte refusals at CRIME_TIME”). Pass 4 already treated “kind the arm does not test” as floor: INTSTAT’s body is `crime_interrupt_reassert(); break;` and `if (writeflag == MEM_WRITE) d->warned = 0` there was a 131/131 survivor. The window body likewise tests only pc; 8R in the window is the same cell type.
+
+Not disclosed wrongly, just unlisted. HARD_RESET-true, `goto`→`return 1`, DOG / CONTROL-read fall-through, unnamed-offset decline effects, and TIME-only landing stay as written.
+
+**Not run:** I did not build this mutant. A measuring seat should apply the two lines, run `regress/crime_width_probe.py` on that binary, and confirm 141/141. If that run reds a row I did not walk, the gap is mine.
+
+---
+
+## 3. Wrong statements
+
+The load-bearing one is the repair-10 contract sentence:
+
+> “REV also from the PROM-probe window **in both directions** (the pc test ignores the direction)”
+
+Two failures in one clause. The list is not “both directions”: it is 4R + 4W + 8W. The parenthetical is pass 3’s justification (“the arm does not test X, so we need not cross X”) which pass 4 measured false at INTSTAT/REV/CONTROL. They crossed width with the window on **writes** (`swP` and `sdP`) and not on **reads**. Opus close-4’s closing set said `{8W,8R,4W,4R} at REV (+ sw/sd from the probe window)` and repair 10 implemented that list; this pass’s question is whether that list is the function’s, and it is not.
+
+POSTTABLE’s floor line “(d) … pre-set and re-arm at every ACCEPTS kind” is circular: it certifies the list against itself, not against `DEVICE_ACCESS(crime)`.
+
+`lt_wset` extra `sh08b said` (count 4 under `CRIME_W_LEN << writeflag`, `MEM_WRITE==1`) is right: `said()` is a count, not a presence test. `c1_deepseek` dead after the DOG clear is right. `memory_rw.c:491-494` does pre-zero immediately above `paddr -= baseaddr`. Row count 141 from 99 `row()` sites matches. I did not re-count TIME “0 in 42 of 800”.

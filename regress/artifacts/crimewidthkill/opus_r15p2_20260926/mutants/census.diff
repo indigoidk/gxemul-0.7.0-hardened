@@ -1,0 +1,73 @@
+--- /mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c	2026-09-13 03:57:34.309862100 -0500
++++ src/devices/dev_sgi_ip32.c	2026-09-26 02:28:51.569339634 -0500
+@@ -46,6 +46,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/time.h>
++#include <unistd.h>
+ 
+ #include "bus_pci.h"
+ #include "console.h"
+@@ -143,8 +144,22 @@
+ }
+ 
+ 
++static int census_in_tick = 0;
++static FILE *census_fp(void)
++{
++	static FILE *f = NULL;
++	if (f == NULL) {
++		f = fopen("/tmp/gxopus_r15p2_census.log", "a");
++		if (f != NULL)
++			setvbuf(f, NULL, _IOLBF, 0);
++	}
++	return f;
++}
++
+ void crime_update_crime_time(struct crime_data* d)
+ {
++	uint64_t census_t0 = d->reg[CRIME_TIME / sizeof(uint64_t)];
++	uint64_t census_l0 = d->last_microseconds;
+ 	struct timeval tv;
+ 	
+ 	gettimeofday(&tv, NULL);
+@@ -173,6 +188,11 @@
+ 
+ 		d->last_microseconds = microseconds;
+ 	}
++	if (census_fp() != NULL)
++		fprintf(census_fp(), "T %d %s last0=%llu now=%llu t0=%llu t1=%llu\n", (int) getpid(),
++		    census_in_tick ? "tick" : "acc", (unsigned long long) census_l0,
++		    (unsigned long long) microseconds, (unsigned long long) census_t0,
++		    (unsigned long long) d->reg[CRIME_TIME / sizeof(uint64_t)]);
+ }
+ 
+ 
+@@ -185,7 +205,9 @@
+ {
+ 	struct crime_data *d = (struct crime_data *) extra;
+ 
++	census_in_tick = 1;
+ 	crime_update_crime_time(d);
++	census_in_tick = 0;
+ 	crime_interrupt_reassert(d);
+ }
+ 
+@@ -216,6 +238,17 @@
+ 	if (writeflag == MEM_WRITE)
+ 		idata = memory_readmax64(cpu, data, len);
+ 
++	if (census_fp() != NULL)
++		fprintf(census_fp(), "A %d %c len=%d rel=0x%x idata=0x%llx latch=%d prev=%d soft=0x%llx "
++		    "mask=0x%llx hard=0x%llx time=0x%llx pc=0x%llx\n", (int) getpid(),
++		    writeflag == MEM_WRITE ? 'W' : 'R', (int) len, (int) relative_addr,
++		    (unsigned long long) idata, !!(d->warned & CRIME_W_LEN), d->prev_asserted,
++		    (unsigned long long) d->reg[CRIME_SOFTINT / sizeof(uint64_t)],
++		    (unsigned long long) d->reg[CRIME_INTMASK / sizeof(uint64_t)],
++		    (unsigned long long) d->reg[CRIME_HARDINT / sizeof(uint64_t)],
++		    (unsigned long long) d->reg[CRIME_TIME / sizeof(uint64_t)],
++		    (unsigned long long) cpu->pc);
++
+ 	/*
+ 	 *  Set crime version/revision:
+ 	 *

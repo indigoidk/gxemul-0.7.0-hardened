@@ -1,0 +1,93 @@
+POSTTABLE -- #529 kill table 12 (repair 14), written 2026-09-17 after KILL529R14_DONE 08:53:26, exit 0.
+Instrument: the repaired 204-row crime_width_probe, frozen by the driver as crime_width_probe.table12.py.
+15 of 15 legs landed; every leg ends CRIMEP_DONE.  PRETABLE.out predates the run (03:16 vs 07:38 launch).
+
+*** THIS IS THE SECOND ATTEMPT.  THE FIRST WAS ABORTED AT 4 OF 15 WHEN THE STAGING CHECK FAILED --
+see aborted_t12_20260917_0711/WHY_ABORTED.md.  base read 202/204 because two rows I added in repair 14
+read `a3', the register st() uses for its ADDRESS.  Fixed by loading into s4 (register 20, free
+tree-wide), with its hand-assembled encoding pinned by assertion. ***
+
+## THE STAGING CHECK: base = 204/204, CONTROL=OK.  PASSED.
+
+That also CONFIRMS THE ROW COUNT, which no static check could: the row-name expander proved every name
+DISTINCT but, ignoring `if` guards, could only bound the count from ABOVE at 214.
+
+## ALL FIFTEEN LEGS
+
+    leg                  predicted   measured   named rows it was predicted to red
+    base                  204/204     204/204   --                                        EXACT
+    G_glm_tim4clear       202/204     202/204   c t4w gap, c t4r gap        BOTH red      EXACT
+    G_clr_ist4r           203/204     203/204   acc istat lw                red           EXACT
+    G_lane_ctl            200/204     203/204   4 named; ONE red            see below     MISS
+    K_ctl4w_reset_post    203/204     203/204   rst 4w                      red           EXACT
+    K_ctl8w_reset_post    203/204     203/204   rst 8w                      red           EXACT
+    M2_ld278clr           203/204     203/204   top8 clear                  red           EXACT
+    W_ctl8w               202/204     202/204   p acc ctl msg AND rst 8w    BOTH red      EXACT
+    G_clr_imk4r           killed      203/204   gate line                   red           EXACT
+    G_clr_ctl4r           204/204     204/204   (equivalent cell)                         EXACT
+    M3_timelatch          204/204     204/204   (disclosed escape)                        EXACT
+    M5_revlatch           204/204     204/204   (disclosed escape)                        EXACT
+    M4_timeplain          moves       200/204   4 time rows                               moves
+    M6_istlatch           moves       201/204                                             moves
+    M1_gotolatch          *** NO PREDICTION ***  194/204, 10 reds           see PRETABLE_GAP.md
+
+**FOURTEEN of fifteen match.  The single miss is G_lane_ctl, and it is an OVER-prediction, not an
+escape.**
+
+## REPAIR 14'S FOUR ADDITIONS ALL EARN THEIR PLACE, EACH BY A MEASURED KILL
+
+    rst 4w / rst 8w    (rst_session, the halt oracle)  kill K_ctl4w_reset_post and K_ctl8w_reset_post
+    top8 clear         (ACCEPTS entry 46)              kills M2_ld278clr
+    p acc ctl msg      (entry 14, want 3 -> 4)         kills W_ctl8w, WITH rst 8w
+    p acc ctl4r        (the CONTROL pair)              kills G_lane_ctl -- SOLE CARRIER
+
+**W_ctl8w is the clause-(d) DEPENDS-ON mutant and it landed EXACTLY as pre-flighted** -- score 202/204
+and the red set {p acc ctl msg, rst 8w}, both predicted before the mutant was built:
+
+    p acc ctl msg   got 2 want 4          the two 8-byte CONTROL writes declined, so the count halves
+    rst 8w          got 0x12345678        the CPUs were NOT stopped, so the round trip after it RAN and
+                    want 0xdeadbeef       v1 holds LIVE_VAL instead of the sentinel
+
+## THE THREE CONTROLS THAT MUST NOT MOVE -- ALL THREE HELD
+
+    base           204/204, CONTROL=OK
+    G_clr_imk4r    still KILLED on `gate line' (CONTROL: the CRIME line is asserted).  This is grok's
+                   constraint: the CLEAR-half positive control that is NOT TIME, and repair 14 must not
+                   disturb what `gate line' observes.  It did not.
+    G_clr_ctl4r    still 204/204, CONTROL=OK -- the equivalent cell
+
+## THE TWO DISCLOSED ESCAPES HELD EXACTLY, AND THEIR OWN CONTROLS MOVE
+
+`M3_timelatch` and `M5_revlatch` both landed at 204/204, which is what PRETABLE predicted for them under
+the heading *"PREDICTED TO STILL ESCAPE, DISCLOSED IN ADVANCE RATHER THAN DISCOVERED"*.  They are the
+decline-suppression face at TIME and at REV; their carriers are deliberately absent because Fable ruled
+the carriers must observe the SUPPRESSED arm, and a carrier written blind is how a vacuous row ships.
+
+**What makes that disclosure honest rather than a blanket excuse: M4_timeplain (200/204, four `time`
+rows red) and M6_istlatch (201/204) MOVE.**  The detector is not blind to that shape in general -- it is
+specifically the suppressed-arm carriers that are missing, by decision, and named.
+
+## TWO THINGS THIS PASS DOES NOT SETTLE, PUT TO THE CLOSING PASS RATHER THAN DECIDED HERE
+
+**(1) `G_lane_ctl`: FOUR named rows predicted, ONE red.**  The row that fired (`p acc ctl4r`) IS one of
+the four named, so this is not the "red row outside its prediction" case that PRETABLE:142 says must be
+re-run alone.  The mechanism is measured and coherent -- the mutant's effect is confined to the POST
+session's HIGH-lane read, and `ctl0c` exists to catch a DECLINE at +0x0c rather than a lane swap, so it
+correctly does not move.  **But the closing condition reads "killed on their named rows", which admits
+both "at least one" and "all".**  I am not choosing the reading that lets my own repair close.  Full
+working in LANE_CTL_NOTE.md.
+
+**AND `p acc ctl4r` IS THE SOLE CARRIER for that mutant** -- the only row of 204 that reds under it.
+203/204 reads comfortably and is one row from a total escape.
+
+**(2) `M1_gotolatch` RAN WITH NO PREDICTION.**  `grep -ci gotolatch PRETABLE.out` is 0, yet the driver
+runs it.  It scored 194/204 with ten reds -- well killed, no escape, no floor question -- but the number
+has nothing to check it against, so whatever it scored would have "matched".  Not a floor breach; a
+PRETABLE completeness defect.  Full working in PRETABLE_GAP.md.
+
+## WHAT THIS PASS CLAIMS, WITH ITS DENOMINATOR
+
+The ACCEPT-side class only, over **fifteen legs across four frozen mutators**.  The decline-suppression
+face stays OPEN and named, exactly as PRETABLE stated before the run.  Zero UNDISCLOSED escapes: the
+only two legs at 204/204 besides `base` are `G_clr_ctl4r` (a measured equivalent cell) and the two
+disclosed faces `M3`/`M5`.

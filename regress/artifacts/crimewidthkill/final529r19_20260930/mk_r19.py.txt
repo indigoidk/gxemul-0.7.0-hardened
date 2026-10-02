@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""mk_r19.py -- #529's probe r19 = r18 (81f8894e) + ONE docstring sentence: line 60's "while NetBSD's +0x0c write does
+nothing" was false (GPT-6 Astra's second records audit, 2026-09-28, codexpack_20260928/rec529audit2/: the +0x0c write
+STORES the low word and reaches the default arm's diagnostic, bypassing CONTROL -- measured by the pass-1 Opus seat,
+opus_pass1_20260913/out/rows_base.out: `sw CTL+0c 0x800` did not halt, dflt=1).  DOCSTRING ONLY: refuses unless the
+module AST minus its docstring is identical to r18's, and the diff is exactly the one pair below."""
+import ast, hashlib, io, os, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+R18 = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\crimewidthkill\final529r18_20260926\crime_width_probe.r18.py"
+OUT = os.path.join(HERE, "crime_width_probe.r19.py")
+
+
+def md5(s):
+    return hashlib.md5(s.encode("utf-8")).hexdigest()[:8]
+
+
+def strip_doc(t):
+    if t.body and isinstance(t.body[0], ast.Expr) and isinstance(getattr(t.body[0], "value", None), ast.Constant) \
+            and isinstance(t.body[0].value.value, str):
+        t.body = t.body[1:]
+    return t
+
+
+s = io.open(R18, encoding="utf-8", newline="").read()
+if md5(s) != "81f8894e":
+    sys.exit("r18 is not 81f8894e")
+OLD = ("     +0x08, carries bit 11 into HARD_RESET, while NetBSD's +0x0c write does nothing.  A round that fixes that lane\n")
+NEW = ("     +0x08, carries bit 11 into HARD_RESET, while NetBSD's +0x0c write stores the LOW word and reaches the default\n"
+       "     arm's diagnostic, bypassing CONTROL (this said \"does nothing\" until 2026-09-28).  A round that fixes that lane\n")
+if s.count(OLD) != 1:
+    sys.exit("REFUSED: the r18 sentence is not unique")
+r19 = s.replace(OLD, NEW)
+if ast.dump(strip_doc(ast.parse(s))) != ast.dump(strip_doc(ast.parse(r19))):
+    sys.exit("REFUSED: r19's AST minus its docstring differs from r18's")
+io.open(OUT, "w", encoding="utf-8", newline="").write(r19)
+print("r19 %s  (r18 %s)  %s" % (md5(r19), md5(s), OUT))

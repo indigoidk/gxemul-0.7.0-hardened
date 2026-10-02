@@ -1,0 +1,110 @@
+I'll start from the full offloaded brief, then check the repo, checkpoint, and the CRIME fix plus detector against the questions rather than ratifying the packet.The brief is loaded. Next I’ll read the CRIME handler, the probe, and the kill-table artifacts so the review is against the tree, not the packet.The pre-zero `memset` didn’t match as stated, so I’ll open `memory_rw.c` and the rest of the CRIME handler next.I have the handler, probe, and kill-table logs. One more check on the PROM-hack write path, then I’ll write the verdict.**SHIP**
+
+`CRIME_P2_20260913`
+
+I read `GXEMUL-SEC/src/devices/dev_sgi_ip32.c`, `dev_sgi_re.c` (`sgi_de`), `src/cpus/memory_rw.c`, `src/core/debugmsg.c`, `regress/crime_width_probe.py`, `crimereg.h`, and the kill-table artifacts (PRETABLE, POSTTABLE, `table1.out`, per-mutant `probe_*.raw`). I did not build a new mutant (this seat is read-only; the named escape below is derived from those logs, not re-run).
+
+---
+
+### 1. The fix
+
+The declined path does what the comment says.
+
+Inside the `else` (`len` is neither 8 nor 4): latch bit 0, print once, `goto crime_declined`. That skips the `switch`. `odata` is still 0 from the function entry, so the tail’s `memory_writemax64` answers a read 0. A write was assembled into `idata` at the top and is never stored. The function `return 1`s, so `memory_rw.c:595-612` does not coerce that to `-1` and does not raise `EXCEPTION_DBE`. `fatal()` in `debugmsg.c:384-390` has no early-out and no `exit`.
+
+`#498` `DEVICE_ACCESS(sgi_de)` is the same shape: latched `(once)` + `goto de_declined` to a tail that writes `odata` and returns 1 (`dev_sgi_re.c:1214-1219`, label at `:1438`). Crime’s tail also restores HARDINT and recomputes INTSTAT; that is this function’s pre-existing common exit, not an invention.
+
+**Prelude.** It still runs for a declined access. Two live `exit(1)`s remain (`physical_ram_in_mb > 1024` and the `% mb_per_bank` check). Those are the filed `-M 48` item, above the width arm, and the probe uses `-M 64`. The REV / CONTROL / INTSTAT / bank-control rebuilds are pre-existing on every access, including accepted ones; decline does not make them worse. A declined write to DOG is dropped (prelude does not touch DOG). A declined write to CONTROL still leaves CONTROL at `CRIME_CONTROL_ENDIANESS` because the prelude wrote it — the same smash an accepted read of any other register already performs.
+
+**Latch.** `int warned` + `CRIME_W_LEN` `(1 << 0)` + `(once)` + `memset(d, 0, sizeof *d)` at `dev_crime_init` is the house N=1 per-instance form. `#498` uses `uint32_t warned`; `int` is enough for bit 0. Writers of `d->warned` in this file are only the test, the `|=`, and that `memset`. MACE has no `warned`.
+
+`goto` vs `return 1` is equivalent on this detector (`probe_return1.raw` 40/40). `memory_rw.c:491-492` does `#95`’s `memset(data, 0, len)` immediately above `paddr -= mem->devices[i].baseaddr`. I did not find a declined-path channel where skipping the HARDINT restore would show; prelude never writes HARDINT, and the decline never takes the width-arm store.
+
+---
+
+### 2. Smallest edit that still passes all 40 rows
+
+The brief’s example is **caught**, not an escape.
+
+```c
+if (relative_addr != CRIME_CONTROL)
+    goto crime_declined;
+```
+
+Cells reached: refused accesses whose `relative_addr == 0x08` (CONTROL). `sb08 msg`, `sh08 pc`, `sh08 run` red (`readonly.raw` is the measured cousin: writes fall through, those three fail, `lb`/`lh rev pc` stay green). REV-read cells still decline.
+
+The uncovered class is a goto keyed on `relative_addr` that **still declines at the two labels the detector uses as switch channels**. Exact edit, replacing the unconditional goto:
+
+```c
+		if (relative_addr == CRIME_CONTROL || relative_addr == CRIME_REV)
+			goto crime_declined;
+```
+
+What it reaches: every refused access **not** at `0x00` or `0x08`. The probe’s survival/said sessions are at `+7`, `+6`, `+0x1f`, `+0x1e`, latch at `+7/+6/+0x3f/+0x37/+0x36` — all `default:` (`debug()` only). INTSTAT / INTMASK / TIME / DOG are the disclosed no-observable set.
+
+Which row I expected to catch it: none of the 40. Contract 3 pins each width×direction cell through **one** switch side effect at **one** address. Default has no row. I did not re-run this mutant; `fallsw.raw` failing **exactly** `sh08 pc/run`, `sb08 msg`, `lb/lh rev pc` is the measurement that those five are the only switch-entry oracles.
+
+A more interesting member of the same class, because it admits a **guest-visible** side effect the rows never issue:
+
+```c
+		if (!(relative_addr == CRIME_REV && writeflag == MEM_WRITE))
+			goto crime_declined;
+```
+
+The PROM hack at `case CRIME_REV` does **not** test `writeflag` (lines 342-348). A `sh`/`sb` at `+0` from `0xbfc05180` would set `pc = ra`. The detector’s REV sessions are loads; its stores are at `+0x08` / `+0x1e` / `+0x1f` from `0x80001000`. `wronly` still declines those CONTROL stores, so it cannot stand in for this edit. Coverage debt (PRETABLE §5 already puts non-rowed labels in clause (e)), not a floor cell of `{1,2}×{R,W}`.
+
+`return 1` is smaller and 40/40; it is the predicted equivalent, not a break.
+
+---
+
+### 3. Floor and contract
+
+Accept cells are pinned by their own single-cell mutants. I opened the logs:
+
+| cell | mutant | own row reds? |
+|---|---|---|
+| 8W | `acc8w` 36/40 | `acc8 st+ld` got `0x0` |
+| 8R | `acc8r` 37/40 | `acc8 st+ld` got `0x0` |
+| 4R hi | `acc4rhi` 38/40 CONTROL=FAIL | `acc4 rhi` |
+| 4R lo | `acc4rlo` 38/40 CONTROL=FAIL | `acc4 rlo` |
+| 4W lo | `acc4wlo` 38/40 | `acc4 wlo` |
+| 4W hi | `acc4whi` 37/40 CONTROL=FAIL | `acc4 whi` got `0x112233440badcafe` |
+
+POSTTABLE (a) is right: `acc8w` reds `{acc8, rhi, rlo, wlo}` not the predicted `{acc8, rhi, wlo, whi}` because the accept session is sequential. The kill still holds. `acc8r` also reds `acc4 wlo/whi` because those rows’ readback is an `ld` (8R); that is extra sensitivity, not the 4W pin.
+
+Refusal `{1,2}×{R,W}` is pinned by confined fall-through: `len2only.raw` fails exactly `sb08 msg`, `lb rev pc`; `len1only` / `readonly` / `wronly` match POSTTABLE. `revert` 11/40, `fault` 25/40 (`probe_fault.raw`: v0 stays `0xdeadbeef`, pc `0xffffffff80000180`, ExcCode 7).
+
+**Contract vs floor.** Nothing in the contract is an unmeasured kill of a floor cell. DISCLOSED `return 1`, refused-store readback, INTSTAT/TIME/HARDINT, widths 3/5/6/7, and the RAM-size exits are not floor-owed. Address-conditioned fall-through is the hole POSTTABLE already named; PRETABLE §5 correctly filed the unrowed labels as clause (e). Do not promote it to L2.
+
+`devsig hi` wanting `0x0` is a real weak control (a refused 4R high also returns 0). `acc4 rhi` and `rev pc ctl` carry that cell, as disclosed.
+
+---
+
+### 4. Records
+
+- Fix comment “6/6” is the six opcodes on `crime_width_witness_20260913.py`. That is true. The same artifact scores **3/15** because the three controls stay green (`witness_committed.out`).
+- “a narrow **read** of CRIME_REV … redirect the PC” is true of what was measured. The hack also fires on a write from that PC window. Understated, not false.
+- `int warned` vs `#498`’s `uint32_t` is a type nit, not a wrong claim.
+- POSTTABLE “18 of 18 non-equivalent mutants KILLED” is false (see Q5).
+- Contract 6 says “each width’s own session” / `<op> said`; only `lb`/`lh`/`sb`/`sh` have `said` rows. `lbu`/`lhu` share len 1/2 with those. `fmtswap` 36/40 is four reds, not six.
+
+---
+
+### 5. Which statement in this brief is wrong?
+
+Two, both count/qualifier defects:
+
+1. **Settled premise: “committed build 3/15, every row red.”** `witness_committed.out` is 3/15 **because three rows are green** (`live`, `devsig`, `devsig hi`). The twelve `<op> surv` / `<op> says` rows are red. 3/15 and “every row red” cannot both be true. The dropped qualifier is “every *refusal* row.”
+
+2. **POSTTABLE: “18 of 18 non-equivalent mutants KILLED.”** `mutants529.py` has 19 keys = 1 `base` + 18 mutants. `return1` is 40/40, the predicted equivalent. Non-equivalent = **17**, all killed. The sentence counts the 18 mutants as 18 non-equivalent and then, in the next clause, excludes `return1`. Internally contradictory.
+
+The load-bearing engineering claims (member 3 at the width arm, `#95` pre-zero, `fatal()` does not exit, FAULT is DBE, the four switch channels, HEAD 11/40 = 6 controls + 5 accept) checked out against the tree and the logs.
+
+---
+
+### Premises I could not fully check from this text alone
+
+- Pass-1 adjudication as a *process* fact: I opened `fable_pass1_20260913.md`; it does rule member 3. I did not re-read all eight other pass-1 seats.
+- “No local CRIME document”: `_scratchpad/` has no CRIME ASIC PDF. `crimereg.h:39` (“all registers 64-bit access”) is a NetBSD driver comment; pass 1 already treated it as zero warrant for DBE, and the model already accepts `len == 4`.
+- Free-running announce: I did not re-run a `continue` session; `fatal()` is not verbosity-gated, so the claim is structurally true.
+- The address-conditioned mutant in Q2: derived, not executed. Naming it is the measurement this pass owes if anyone wants it on disk.

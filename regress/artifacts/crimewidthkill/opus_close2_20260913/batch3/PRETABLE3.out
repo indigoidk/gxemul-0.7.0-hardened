@@ -1,0 +1,20 @@
+PRETABLE3 -- #529 second closing pass (Opus seat), batch 3, against the REPAIRED probe.  Written BEFORE batch 3 is built.
+Instrument: regress/crime_width_probe.py as it stands in the working tree at 18:1x, md5 7f286f51 (121 rows; mtime 17:21,
+written by the main loop DURING my batch 1).  It sets BIT = 0x10000001 in the istat/imask sessions (the kimi CLI seat's
+finding, the same class as my batch-2 istat_leak / dog_leak) and seeds CRIME_DOG 0x0123456789abcdef before the dog reads.
+
+WHY: kill table 5 (running now, killtable5_20260913/mutants529e.py) carries c2_reg_istat / c2_reg_imask / c2_reg_dog -- the
+NAIVE register leak, `odata = d->reg[relative_addr / 8]', whose lb/lh answer is the register's LOW byte/halfword (0x01 /
+0x0001 now).  It does not carry the BYTE-LANE form, which is the form the model's own 4-byte read path uses: an access at
+the slot BASE (relative_addr & 7 == 0) reads the MOST significant lanes (the accept path answers +0x10 as the HIGH half,
+`odata >> 32').  reg[INTSTAT] = SOFTINT | HARDINT = 0x0000000010000001: bytes 0..1 of the slot are 0x00 0x00.  The only
+refused reads at +0x10 in the 121-row probe are the istat session's lb and lh (grep `CRIME + off' / `CRIME + 0x10').
+
+PREDICTIONS (121-row instrument):
+  base         121/121, CONTROL=OK   (the main loop's probe_first8_fix.out also reads 121/121)
+  istat_lane   `if (writeflag == MEM_READ && relative_addr == CRIME_INTSTAT) odata = d->reg[relative_addr / 8]
+               >> (8 * (8 - len - (relative_addr & 7)));'  -> 121/121, NO red row: lb +0x10 answers byte 0 = 0x00, lh
+               answers bytes 0..1 = 0x0000.  (Already shown NOT equivalent: batch 2 disc_c2.out, SOFTINT = 0xff00.. ->
+               0x0 vs 0xffffffffffffffff.)
+  istat_leak   (positive control: the naive form the repair targets)  -> 119/121, red EXACTLY istat lb v0 (0x1) and
+               istat lh v0 (0x1)

@@ -1,0 +1,1047 @@
+kimi version 0.36.0
+• The user wants me to read a specific file and review it adversarially as its own Questions/Review-asks section directs. Let me read the file first.The file is 806 lines and the read was truncated by output size. I need to read the whole file. Let me page through it using the output_path, or read the file in chunks. Actually the Read tool said "806 lines read from file starting from line 1. Total lines in file: 806. End of file reached." — but the output exceeded 50000 characters so only a preview was shown. The full output is at the output_path. Let me read the full file via the output_path in pages, or read the original file in chunks with line_offset and n_lines.
+
+  Let me read the file in chunks. 806 lines total. I'll read in chunks of ~250 lines to stay under the char limit. Actually the limit is 1000 lines or 100KB per call, but the tool result exceeded 50000 chars display. Let me read in 4 chunks of ~200 lines each.
+
+• The file is 806 lines; I'll page through it in chunks.
+
+• I've now read the entire brief. It's asking me to review adversarially per the QUESTIONS section:
+
+  1. **Verify the enumeration.** Is `ACCEPTS` exactly the set of accepted-access kinds `DEVICE_ACCESS(crime)` distinguishes (every width it accepts, at every case label and every side of every `if` an accepted access takes)? Name any kind it omits, any it lists that the function cannot take, and any row it feeds whose channel cannot vary under the mutant the row claims.
+  2. **Is there a floor gap in the 141-row test?** The smallest source edit to `dev_sgi_ip32.c` that undoes part of the fix's behaviour and still scores 141/141, as an exact edit, with the row you expected to catch it and why it cannot. Items on the header's DISCLOSED list are outside the question; say if one is disclosed wrongly.
+  3. **Which statement in this brief, in POSTTABLE 8, or in the probe header, is wrong?**
+
+  To answer these adversarially, I need to read the actual sources:
+  - `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` (DEVICE_ACCESS(crime))
+  - `GXEMUL-SEC/regress/crime_width_probe.py`
+  - `GXEMUL-SEC/regress/artifacts/crimewidthkill/`
+
+  The verdict format required: VERDICT LINE FIRST: `CLOSES` or `GAP: <exact source edit>`, then the token `CRIME_CLOSE5_20260914`.
+
+  Wait — actually, the user asked me to review it adversarially exactly as its Questions/Review-asks section directs, and end with GO / NO-GO / GO-WITH-CHANGES. The brief itself asks for a verdict line CLOSES or GAP plus the token. The user says end with GO/NO-GO/GO-WITH-CHANGES. So I should follow the brief's questions (answer Q1, Q2, Q3) and end with my own GO / NO-GO / GO-WITH-CHANGES verdict as the user directs. The user instruction takes precedence on the ending format. I should probably also give the CLOSES/GAP verdict line per the brief since the user said "review it adversarially exactly as its own Questions/Review-asks section directs" — the Questions section is what directs the review. The ending must be GO / NO-GO / GO-WITH-CHANGES.
+
+  I must not summarize the brief back. I need to do the actual verification work: read dev_sgi_ip32.c, the probe, and artifacts.
+
+  This is a substantial verification task. Let me plan:
+
+  1. Read `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` — the whole DEVICE_ACCESS(crime) function, plus definitions of CRIME_* register offsets, struct crime_data, etc.
+  2. Read `GXEMUL-SEC/regress/crime_width_probe.py` — the whole 141-row test to verify ACCEPTS, the rows, and claims.
+  3. Possibly read artifacts (POSTTABLE.out, PRETABLE.out, check_pred.out) in `regress/artifacts/crimewidthkill/killtable8_20260914/`.
+
+  Key things to verify adversarially:
+
+  **Q1: Verify ACCEPTS enumeration.**
+
+  From the diff, ACCEPTS is:
+  ```
+  ACCEPTS = (("sd", 0x00, 0), ("ld", 0x00, 0), ("sw", 0x00, 0), ("lw", 0x00, 0),
+             ("lwP", 0x00, 0), ("swP", 0x00, 0), ("sdP", 0x00, 0),
+             ("lw", 0x08, 0), ("ld", 0x08, 0),
+             ("sw", 0x08, 0x0201), ("sw", 0x08, 0x0001), ("sw", 0x08, 0), ("sw", 0x08, 0x0200),
+             ("sd", 0x08, 0x0201), ("sd", 0x08, 0x0001), ("sd", 0x08, 0), ("sd", 0x08, 0x0200),
+             ("sd", 0x10, 0), ("ld", 0x10, 0), ("sw", 0x10, 0), ("lw", 0x10, 0),
+             ("sd", 0x18, 0), ("ld", 0x18, 0), ("sw", 0x18, 0), ("lw", 0x18, 0),
+             ("sd", 0x30, 0), ("ld", 0x30, 0), ("sw", 0x30, 0), ("lw", 0x30, 0),
+             ("sd", 0x38, 0), ("ld", 0x38, 0), ("sw", 0x38, 0), ("lw", 0x38, 0),
+             ("sd", 0x40, 0), ("ld", 0x40, 0), ("sw", 0x40, 0), ("lw", 0x40, 0),
+             ("sw", 0x34, 0x0badcafe), ("lw", 0x34, 0), ("sw", 0x04, 0), ("lw", 0x04, 0),
+             ("sd", 0x278, 0), ("ld", 0x278, 0))
+  ```
+
+  Count: 4 + 3 + 2 + 8 + 4*5 + 4 + 2 = let me count:
+  - 0x00: sd, ld, sw, lw = 4
+  - lwP, swP, sdP at 0x00 = 3 (total 7)
+  - 0x08: lw, ld = 2 (total 9)
+  - 0x08 writes: sw x4, sd x4 = 8 (total 17)
+  - 0x10: sd, ld, sw, lw = 4 (total 21)
+  - 0x18: 4 (total 25)
+  - 0x30: 4 (total 29)
+  - 0x38: 4 (total 33)
+  - 0x40: 4 (total 37)
+  - 0x34: sw, lw; 0x04: sw, lw = 4 (total 41)
+  - 0x278: sd, ld = 2 (total 43)
+
+  43 kinds — matches the claim of 43.
+
+  Now what does the function distinguish?
+
+  Case labels in the switch: CRIME_REV (0x00), CRIME_CONTROL (0x08), CRIME_INTSTAT (0x10), CRIME_INTMASK (0x18), CRIME_DOG (0x30), CRIME_TIME (0x38), default.
+
+  For each label: {8W, 8R, 4W-high? or both lanes?, 4R}. Wait, the claim says "{8W,8R,4W,4R} at every label (a label is 8-aligned, so its 4-byte access is the high lane)". Hmm — actually for a label at 0x08, a 4-byte access at 0x08 is the LOW lane (relative_addr & 4 == 0). Wait no. Let me think. The 4-byte path: `if (relative_addr & 4)` → high half (low 32 bits of the register... wait):
+
+  ```c
+  } else if (len == 4) {
+      if (writeflag == MEM_WRITE) {
+          if (relative_addr & 4) {
+              d->reg[relative_addr / 8] &= ~0xffffffffULL;
+              d->reg[relative_addr / 8] |= (uint32_t)idata;
+          } else {
+              d->reg[relative_addr / 8] &= 0xffffffffULL;
+              d->reg[relative_addr / 8] |= (uint64_t)(idata << 32ULL);
+          }
+      } else {
+          odata = d->reg[relative_addr / 8];
+          if (relative_addr & 4)
+              odata = (int32_t)odata;
+          else
+              odata = (int32_t)(odata >> 32);
+      }
+  }
+  ```
+
+  So relative_addr & 4 set → accesses low 32 bits of the register (the register is 64-bit); clear → high 32 bits. So for a label at 0x08 (bit 2 clear... 0x08 = 0b1000, bit 2 is 0x4 — 0x08 & 4 = 0), a 4-byte access AT the label address 0x08 takes the "& 4 clear" side → high half of the register. So "a label is 8-aligned, so its 4-byte access is the high lane" — correct: at +0x00, +0x08, +0x10, +0x18, +0x30, +0x38, the 4-byte access at the label itself has relative_addr & 4 == 0 → high lane.
+
+  But wait — is the enumeration "{8W,8R,4W,4R} at every label" complete? What about 4W/4R at label+4 (the LOW lane)? Those are different kinds in the sense of `relative_addr & 4` branch. For labels, the low lane (label+4) hits the same case label (since switch is on relative_addr... wait, NO!
+
+  **CRITICAL**: The switch is on `relative_addr`, not `relative_addr / 8`. So an access at 0x0c (CONTROL+4) — the switch has `case CRIME_CONTROL: /* 0x008 */` — a 4-byte access at 0x0c does NOT match case 0x08; it falls to default! Hmm wait, but the comment in the code says "TODO: 64-bit write to CRIME_CONTROL, but some things (such as NetBSD 1.6.2) write to 0x00c!" So a 4-byte write at 0x0c goes through the len==4 arm (writing the low half of reg[1]) but then the switch on relative_addr=0x0c hits DEFAULT, not CRIME_CONTROL. Interesting.
+
+  So for the KIND x LABEL cross: the kinds that actually reach a case label via the switch are accesses whose relative_addr exactly equals the label value. A 4-byte access at label+4 falls to default. So the enumeration "{8W,8R,4W,4R} at every label" with the 4-byte access AT the label address covers the high lane only. The low-lane 4-byte accesses at label+4 are default-arm kinds, and the default arm's "six kinds in both 4-byte lanes" are covered by 0x34/0x04 (and 0x278/0x27c? no — 0x278 sd/ld only).
+
+  Wait, the default arm's six kinds: 8W, 8R, 4W-high, 4R-high, 4W-low, 4R-low. In ACCEPTS: ("sd", 0x278, 0), ("ld", 0x278, 0) — 8W, 8R at 0x278 (default arm, far block). ("sw", 0x34, ...), ("lw", 0x34) — 4-byte at 0x34: 0x34 & 4 = 4 → low lane. ("sw", 0x04), ("lw", 0x04) — 0x04 & 4 = 4 → low lane too! Hmm, 0x04 has bit 2 set, so it's the low lane of the 0x00 slot.
+
+  Wait: 0x04 = 0b100, bit 2 (value 4) is set. So & 4 ≠ 0 → low lane (writes low 32 bits: `|= (uint32_t)idata` after masking high). And 0x34 = 0b110100, & 4 = 4 → low lane as well.
+
+  Hmm, so where are the default arm's 4-byte HIGH-lane kinds (relative_addr & 4 == 0, e.g. at 0x20, 0x24 no wait 0x20 & 4 = 0 → high lane)? Let me recheck: for default-arm 4-byte high lane you'd need an address like +0x20 or +0x28 (bit 2 clear, not a label). ACCEPTS has 0x04 (low), 0x34 (low), 0x278 (8-byte). The claim says "the default arm's six kinds in both 4-byte lanes" — six kinds = {8W, 8R, 4W, 4R} plus... hmm "six kinds in both 4-byte lanes" — maybe {8W, 8R, 4W, 4R} × ... that's not six. Perhaps "six kinds" = 8W, 8R, 4W-hi, 4R-hi, 4W-lo, 4R-lo. In ACCEPTS for default arm: sd 0x278 (8W), ld 0x278 (8R), sw 0x34 (4W-lo), lw 0x34 (4R-lo), sw 0x04 (4W-lo), lw 0x04 (4R-lo). That's 8W, 8R, and FOUR low-lane 4-byte kinds — but NO high-lane 4-byte default kind! Wait, is 0x04 high or low? relative_addr & 4: 0x04 & 0x04 = 0x04 ≠ 0 → takes the `relative_addr & 4` TRUE branch → low half write. So yes, low lane.
+
+  Hmm wait, but which is "high lane" and which is "low lane" in the brief's terms? The brief says "the default arm's six kinds in both 4-byte lanes" and earlier at line 629: `("sw", 0x34, 0x0badcafe), ("lw", 0x34, 0), ("sw", 0x04, 0), ("lw", 0x04, 0)`. Also in item 4 of the header (line 333): "the default arm's six kinds in both 4-byte lanes".
+
+  Hmm, but 0x34 and 0x04 are BOTH bit-2-set → both low lane (the (uint32_t)idata side). Unless... wait, maybe I have the lanes backwards. Let me re-read:
+
+  ```c
+  if (relative_addr & 4) {
+      d->reg[relative_addr / 8] &= ~0xffffffffULL;   /* clear low 32 bits */
+      d->reg[relative_addr / 8] |= (uint32_t)idata;  /* write low 32 bits */
+  } else {
+      d->reg[relative_addr / 8] &= 0xffffffffULL;    /* clear high 32 bits */
+      d->reg[relative_addr / 8] |= (uint64_t)(idata << 32ULL);  /* write high 32 bits */
+  }
+  ```
+
+  So addr&4 set → writes LOW half; addr&4 clear → writes HIGH half. For reads: addr&4 set → `odata = (int32_t)odata` (low half, sign-extended); clear → `odata = (int32_t)(odata >> 32)` (high half).
+
+  This is big-endian style: the register is 64-bit, address+0 is the high word, address+4 is the low word. So "4R-high cell at +0x00" in the brief (item 6, line 349-350: "with devsig the 4R-low cell there and `rev pc ctl' the 4R-high one") — devsig is at +0x04? Let me check: "devsig the 4R-low cell there" — devsig reads at... I need to check the probe. And item 6 says "The 4R of its HIGH half answers 0 either way" for top4 anchor at +0x210... `top4 anchor` reads bank-1 control low half at +0x214 with a 4R, and "The 4R of its HIGH half" would be at +0x210.
+
+  OK so terminology: at +0x00 (label), 4-byte access = HIGH half of reg[0]. At +0x04, 4-byte = LOW half.
+
+  So for the default arm: high-lane 4-byte kinds would be at e.g. +0x20, +0x28, +0x278... wait 0x278 & 4 = 0? 0x278 = 0b1001111000, bit 2 = 0 → high lane. But ACCEPTS only has sd/ld at 0x278, not sw/lw. Hmm, so the default arm 4W-high and 4R-high kinds are... 0x34? 0x34 & 4 = 4 → low. 0x04 & 4 = 4 → low.
+
+  Hold on, that gives NO default-arm 4-byte high-lane kind in ACCEPTS! But the brief says "the default arm's six kinds in both 4-byte lanes". Let me recount. Maybe "six kinds" means {8W, 8R, 4W, 4R} = 4 plus... Hmm, actually maybe the "six kinds" are the OLD KINDS list's default-arm entries: ("sd", 0x30...) no, 0x30 is DOG label.
+
+  Old KINDS (131-row): default arm was covered by ("sw", 0x34), ("lw", 0x34), ("sd", 0x278), ("ld", 0x278). Hmm, that was 4 kinds, both at low lane (0x34) and 8-byte.
+
+  Hmm wait, maybe I should reconsider: 0x34 & 4 → 0x34 = 52 decimal = 0b110100. Bit 2 (0b100) = 1. So yes bit 2 set.
+
+  0x04 → bit 2 set.
+
+  So both are low-lane. And 0x278 = 632 = 0b1001111000 → bit 2 clear → high lane but only 8-byte.
+
+  Hmm, so where's the default-arm 4-byte HIGH-lane kind? Maybe at +0x40? No — 0x40 & 4 = 0 → high lane, but ACCEPTS at 0x40 has sd, ld, sw, lw — yes! ("sd", 0x40, 0), ("ld", 0x40, 0), ("sw", 0x40, 0), ("lw", 0x40, 0). 0x40 & 4 = 0 → 4-byte high lane! And 0x40 is not a switch label (labels: 0x00, 0x08, 0x10, 0x18, 0x30, 0x38) → default arm. So the default arm has:
+  - 8W sd 0x278, 8R ld 0x278
+  - 4W-hi sw 0x40, 4R-hi lw 0x40
+  - 4W-lo sw 0x34 (or 0x04), 4R-lo lw 0x34 (or 0x04)
+
+  That's "six kinds in both 4-byte lanes" — 8W, 8R, 4W-hi, 4R-hi, 4W-lo, 4R-lo = SIX kinds (4W-lo/4R-lo doubled at 0x04 and 0x34). OK so the count works: sd 0x278, ld 0x278, sw 0x40, lw 0x40, sw 0x34, lw 0x34, sw 0x04, lw 0x04 = 8 entries, six distinct kinds. Good.
+
+  But wait — is 0x40 in the default arm? relative_addr 0x40 — switch labels are CRIME_REV 0x00, CONTROL 0x08, INTSTAT 0x10, INTMASK 0x18, DOG 0x30, TIME 0x38. 0x40 isn't among them → default. Yes.
+
+  Hmm, but hold on — what about CRIME_SOFTINT (0x20)? Not a label (disclosed). CRIME_HARDINT (0x28)? Not a label. OK.
+
+  Now, the cross per label: {8W, 8R, 4W, 4R} at every label:
+  - REV 0x00: sd, ld, sw, lw ✓ (plus lwP, swP, sdP from probe window)
+  - CONTROL 0x08: ld 0x08 (8R), lw 0x08 (4R), sw 0x08 ×4 values (4W), sd 0x08 ×4 values (8W) ✓
+  - INTSTAT 0x10: sd, ld, sw, lw ✓
+  - INTMASK 0x18: sd, ld, sw, lw ✓
+  - DOG 0x30: sd, ld, sw, lw ✓
+  - TIME 0x38: sd, ld, sw, lw ✓
+
+  That's the cross. 4W at a label = high-lane write. But the 4-byte LOW-lane access at label+4 (e.g. 0x0c for CONTROL) falls into the DEFAULT arm, as discussed — that's the famous NetBSD 0x00c write. Those are default-arm kinds, covered at 0x34/0x04. So the enumeration is consistent with the function's actual branching: the switch sees exact relative_addr.
+
+  Now the `if`s an accepted access takes:
+  1. `if (writeflag == MEM_WRITE) idata = memory_readmax64(...)` — W/R crossed everywhere. ✓
+  2. `if (cpu->machine->physical_ram_in_mb > 1024)` — fatal exit; not an accepted-access kind that returns (it exits). Can a probe row it? -M > 1024... the probe runs fixed -M. Disclosed? The RAM-size checks are disclosed ("filed, not here" line 457). ✓
+  3. `if (physical_ram_in_mb <= 256) mb_per_bank = 32 else 128` — depends on -M. The probe presumably uses -M 64 or similar; the other side needs > 256. Not crossed. Is this an "if an accepted access takes"? Both sides return to the same flow; the branch doesn't change accepted-access semantics, only bank register values. Hmm — "every side of every `if` an accepted access takes" — this `if` is taken by every access. Its sides depend on machine config, not on the access. A pre-set/re-arm can't be keyed on it meaningfully (it's constant per session). Fine to note.
+  4. `if (physical_ram_in_mb % mb_per_bank)` — fatal exit. Same class.
+  5. The bank for loop `if (total_mb >= physical_ram_in_mb)` — config-dependent.
+  6. `if (len == 8)` / `else if (len == 4)` / else — the width arm. len 8 and 4 crossed; else is the refusal.
+  7. Within len==8: `if (writeflag == MEM_WRITE)` — 8W/8R ✓.
+  8. Within len==4: `if (writeflag)` × `if (relative_addr & 4)` — 4W-hi, 4W-lo, 4R-hi, 4R-lo. At labels: 4W/4R at the label address is high lane only. Low-lane 4-byte at label+4 → default arm. Covered as default-arm kinds. ✓ — but wait, is that RIGHT for the cross? The brief says "{8W,8R,4W,4R} at every label (a label is 8-aligned, so its 4-byte access is the high lane)". But a 4-byte LOW-lane access at label+4 doesn't reach the label's case arm — it reaches default. So the cross as stated IS the full set of kinds that reach each case arm. Good. But hmm — CRIME_CONTROL's comment says NetBSD writes 0x00c — that hits default arm, and the default arm only debug()s. Fine.
+  9. REV arm: `if ((pc & 0xffffff00) == 0xbfc05100)` — in/out, crossed with direction? The pc test doesn't test direction (brief says so). ACCEPTS has lwP, swP, sdP (in-window: lw, sw, sd from pc 0xbfc05180) and lw/sw/sd at 0x00 from normal pc (out-of-window). ✓ — wait, does the probe's normal execution pc fall outside 0xbfc051XX? CODE is presumably some other address. Need to check probe.
+  10. CONTROL arm: `if (writeflag == MEM_WRITE)` — R (lw/ld 0x08) and W. Within W: `if (idata & DOG_ENABLE)` set/clear × `if (idata & HARD_RESET)` set/clear × `if (idata != 0)` leftover nonzero/zero. Values used: 0x0201 (DOG + leftover 1... wait 0x0201 = DOG_ENABLE(0x200) | 0x1), 0x0001 (leftover only), 0 (nothing), 0x0200 (DOG only, leftover zero after clearing DOG). What about HARD_RESET 0x800? True side stops all CPUs — disclosed as unrowable. 0x0800 & ~0x800 = 0 → after clearing RESET, idata becomes 0 → no fatal. But CPUs stopped — session ends. Disclosed ✓. What about DOG set + RESET set + leftover? e.g. 0x0a01, 0x0a00 — those stop CPUs too. Unrowable, same class.
+      What about ENDIANESS bit 0x100 alone? sw 0x0100: `idata &= ~CRIME_CONTROL_ENDIANESS` → 0 → no fatal, no DOG clear, no RESET. Is that cell rowed? The four values are 0x0201, 0x0001, 0, 0x0200. 0x0100 is NOT among them! Hmm. Is a pre-set/re-arm keyed on `idata == 0x100` or on the ENDIANESS bit possible? Consider mutant: in the CONTROL arm, `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` (re-arm keyed on the ENDIANESS bit). Under this mutant, an accepted write of 0x100 re-arms the latch. The re-arm rows do: for each kind in ACCEPTS, do the accepted access between two refusals and count announces. If a re-arm kind is sw 0x08 with value... the re-arm loop does ALL 43 kinds between two refusals? Let me re-read the probe structure.
+
+  Actually from the diff: the re-arm session:
+  ```python
+  for op, off, val in KINDS:
+      c += accept(A, op, off, val)
+      x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x
+  ```
+  Wait, looking at the diff hunk at line 650-652:
+  ```
+  +for op, off, val in KINDS:
+  +    c += accept(A, op, off, val)
+       x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x
+  ```
+  Hmm, the indentation is ambiguous in the diff. The `x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x` line has no `+` prefix... wait, in a diff, context lines have a space prefix. Line 652 in the file: `     x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x` — hard to tell from the Read output since it shows the file content. Let me look at the raw diff again:
+
+  ```
+  +for op, off, val in KINDS:
+  +    c += accept(A, op, off, val)
+       x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x
+  ```
+
+  The last line starts with a space (context line) — meaning it existed before at that indent level... but wait, in the old code:
+  ```
+  -for op, off, val in KINDS:
+  -    if op == "lwP":
+  ...
+  -    else:
+  -        x, _ = ld(A, op, CRIME + off, "a0")
+  -    c += x
+       x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x
+  ```
+  Hmm, the context line `     x, _ = ld(A, "lb", CRIME + 0x06, "v0"); c += x` appears right after the removed `for` loop body. Its indentation in the diff display has extra leading spaces from the brief's formatting maybe. I can't tell from the brief alone whether the lb +0x06 is inside or outside the loop. I need to read the actual probe file.
+
+  This matters a lot: the re-arm check needs, for EACH accepted kind: refusal, accepted kind, refusal → count announces. If all 43 kinds are done sequentially between refusals (kind, lb, kind, lb, ...), then a re-arm keyed on ANY of the kinds shows as increased announce count... Actually the row "rearm once" counts announces == 1 expected? If each accepted kind is followed by a refusal, then any kind that re-arms causes the NEXT refusal to announce → count > 1. That catches a re-arm on any kind in the list. Similarly the pre-set (latch x5 prologue): all 43 kinds run before the first refusal; a pre-set keyed on any of them sets the latch early → the first refusal doesn't announce → count 0 (or fewer).
+
+  OK. I need to read the actual probe to verify all this. Also need to check `accept()`'s `reg` parameter and the `at=PROBE_PC` mechanism, `enc()`, `ld`, `st`, `session`, `row`, etc.
+
+  11. INTSTAT/INTMASK arm: no `if` (just calls crime_interrupt_reassert). ✓ 4 kinds each.
+  12. DOG arm: no `if`. ✓
+  13. TIME arm: no `if`. ✓
+  14. default: `if (writeflag==MEM_READ)` — R/W crossed (sw/lw at 0x34, 0x04, 0x40, sd/ld 0x278). ✓
+
+  Now — the question: is ACCEPTS exactly the set? Possible omissions:
+
+  (a) 4-byte LOW-lane accesses AT A LABEL+4 that hit... default arm — covered.
+  (b) The REV pc-window with a 4-byte low-lane access (lw/sw at 0x04 from probe pc)? The pc test is in the REV case arm; a 4-byte access at 0x04 hits default, not REV. N/A.
+  (c) lwP/swP/sdP: the window in both directions — brief says "REV also from the PROM-probe window in both directions (the pc test ignores the direction)". ACCEPTS has lwP (4R), swP (4W), sdP (8W) — but NOT ldP (8R)! Hmm: ("lwP", 0x00, 0), ("swP", 0x00, 0), ("sdP", 0x00, 0). Reads from window: lwP only. Writes: swP, sdP. So 8R from the window (ld from pc 0xbfc05180) is NOT in ACCEPTS. Is that a distinct kind? The pc-window branch doesn't care about width or direction — any access at 0x00 from pc 0xbfc051XX triggers the redirect. A pre-set/re-arm keyed on `len == 8 && writeflag == MEM_READ && pc in window`... hmm, but the branch body itself (pc = ra) doesn't touch d->warned. The question is whether a mutant could key a pre-set/re-arm on a kind not in ACCEPTS and survive. E.g., re-arm: `if (len == 8 && writeflag == MEM_READ && (pc & 0xffffff00) == 0xbfc05100) d->warned = 0;` inserted in the REV case. Under the re-arm loop, ld at 0x00 from the window never happens (only lwP), so the latch is never re-armed → 1 announce → passes. And every other kind... the mutant only re-arms on that specific kind, which ACCEPTS omits. So this would be a 141/141 survivor! Wait — but is it? The re-arm loop does each kind between refusals. The mutant re-arms only on 8R-from-window. ACCEPTS lacks it → no re-arm → "rearm once" sees 1 announce → pass. Pre-set: latch x5 prologue runs ACCEPTS then refusals — mutant doesn't pre-set on any ACCEPTS kind → latch set by first refusal normally → pass.
+
+  Hmm wait, but actually — is "8R from window" really distinguishable from "8R not from window" as a KIND? The function's pc test is `if ((pc & 0xffffff00) == 0xbfc05100)` — it doesn't test width. A mutant keyed on `len==8 && writeflag==READ && pc-window` is a JOINT predicate (width × direction × window). The contract's DISCLOSED list includes "a latch keyed on a JOINT predicate (e.g. only 2-byte refusals at CRIME_TIME)... clause (e), the single-axis generating set being the floor." Hmm, that disclosure is about latch keyed on joint predicate over REFUSAL axes. For pre-set/re-arm over ACCEPTED kinds, the cross is KIND x LABEL — and the "kind" axes are width(4) × direction(2) × window(in/out for REV). A re-arm keyed jointly on {8R, REV, in-window}... the enumeration covers lwP (4R in-window), sdP (8W in-window), swP (4W in-window), and ld/sd/lw/sw at 0x00 out-window. The cell (8R, in-window) is missing. A single-axis mutation `pc in window → re-arm` would fire on lwP/swP/sdP → caught. `len==8 → re-arm` fires on sdP/sd → caught. `direction==R` fires on lwP/ld → caught. But the joint {8R ∧ in-window} escapes — that specific joint cell has no row. Under the "single-axis generating set is the floor" clause (e) doctrine, joint predicates are disclosed debt. But wait — the disclosure says joint predicates are clause-(e) debt for the LATCH keyed on refusal axes. For the accepted-kind cross, the brief claims the cross is complete: "is `ACCEPTS` exactly the function's accepted-access kinds". If kinds are width × direction × window-side, then 8R-in-window IS a kind the function can take (an ld at 0x00 from pc 0xbfc05180 is a real accepted access that takes the redirect branch), and ACCEPTS omits it. Actually hmm, does it even make sense: lwP, swP, sdP are included because... the redirect branch is width-agnostic. If you include lwP, swP, sdP, why not ldP? The set {lwP, swP, sdP} covers window-in × {4R, 4W, 8W} — missing 8R. Since the window branch ignores direction AND width, one might argue any one kind suffices for the branch side; they included 3 for direction × width coverage. The full cross would be 2 widths(4/8... and 4-hi only since 0x00 & 4 == 0... actually ld, sd, lw, sw = 4 kinds) × in-window = 4 more: ldP missing.
+
+  Hmm wait, also: 4-byte from window at 0x00 is high-lane; low-lane at 0x04 from window hits default arm — fine.
+
+  Is this a real floor gap? Mutant: in `case CRIME_REV:`, add at the top:
+  ```c
+  if (len == 8 && writeflag == MEM_READ && ((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100)
+      d->warned = 0;
+  ```
+  Hmm wait, but len and writeflag — are they in scope? Yes, DEVICE_ACCESS args. But hold on — the REV case is only reached after the width arm; an accepted ld at 0x00 passes len==8. Then in the REV case, the mutant re-arms. Under the probe: does ANY row do an accepted ld at 0x00 from the probe window? ACCEPTS has no ldP. Other rows: "rev pc ctl (lw redirects)" — lw. devsig — probably lw or ld at 0x00... need to check probe. acc8 near (8R anchored to REV's 0x11) — that's an accepted 8R at 0x00! But from normal pc, not the window. So the mutant survives unless some row does ld from PROBE_PC at 0x00.
+
+  Hmm, wait. Actually let me reconsider: is the mutant required to "undo part of the fix's behaviour"? Q2 says "The smallest source edit to dev_sgi_ip32.c that undoes part of the fix's behaviour and still scores 141/141". A re-arm `d->warned = 0` keyed on a joint accepted-kind predicate undoes the announce-once behaviour (a session could see two announces). Yes, that's undoing the once-per-instance announce.
+
+  But — is a joint-predicate re-arm within the contract clause (e)? The contract item 8 says "an accepted access between two refusals does not re-arm the announce... closed over every place an accepted access can go". If the place is "8R from the PROM window at REV" and no row goes there, the closure claim fails. However, the DISCLOSED joint-predicate bullet might cover it: "a latch keyed on a JOINT predicate (e.g. only 2-byte refusals at CRIME_TIME), or on one unnamed offset other than the default-arm cells the latch rows refuse at: clause (e), the single-axis generating set being the floor." This is about THE LATCH (item 4), keyed on refusal axes. The re-arm/pre-set closure claims the KIND x LABEL cross. The mutant I propose keys on a joint predicate {width=8, dir=R, window=in} — the generating-set doctrine says single axes generate the floor; joints are debt. A review seat could argue it's disclosed by that bullet. But the bullet's example and framing are about the latch on refusals, not about re-arm on accepted kinds. Adversarially, I should NAME it and let the verdict reflect it. Actually wait — is it even necessary to be joint? Consider `if (writeflag == MEM_READ && len == 8)` — that's joint too. Any single-axis key is caught by the cross. Hmm, what about a re-arm keyed on the redirect branch being TAKEN (pc changed)? Same as window-in single axis — caught by lwP/swP/sdP.
+
+  OK here's the thing: I should check the actual probe to see if there's an ld from PROBE_PC anywhere (maybe "rev pc" rows use lb/lh/sb/sh from PROBE_PC — item 3 says "CRIME_REV (+0x00), reads AND writes, from pc 0xbfc05180: ... lb/lh/sb/sh rev pc" — those are REFUSED widths from the window. Accepted from window: "rev pc ctl (lw redirects)". So lw only).
+
+  Hmm, wait — actually, let me reconsider whether the missing ldP matters given the latch is what re-arms... The mutant re-arms the latch on an accepted 8R-from-window. For the test to catch it, some session must do: refusal(s), then accepted 8R-from-window, then refusal, while counting announces. latch x5: five refusals in one session with the ACCEPTS prologue BEFORE the first refusal — no interleaving between refusals except... need to read. The rearm session: interleaves each ACCEPTS kind between refusals. If ldP isn't there, no coverage. warm once: "sd first" — sd at +0x30? "warm once (sd first)". Let me just read the probe.
+
+  Also (d): 4-byte writes at CONTROL with value 0x0100 (ENDIANESS bit only) — is that cell covered? A re-arm keyed on `idata == 0x100`... hmm, single-cell keying on a VALUE — is value an axis? The contract says CONTROL's writes at {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four). The value axes: DOG (set/clear) × leftover (zero/nonzero). ENDIANESS bit: idata & 0x100 — values 0x0201, 0x0001, 0, 0x0200 all have ENDIANESS CLEAR. A mutant `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` in the CONTROL arm — under the re-arm loop, no accepted CONTROL write carries 0x100 (all four values have bit 8 clear)... wait 0x0201 = 0b1000000001, bit 8 (0x100) clear. 0x0001 clear. 0 clear. 0x0200 = 0b1000000000, bit 8 clear. So the ENDIANESS-bit-set side of an accepted CONTROL write is NEVER rowed! A re-arm or pre-set keyed on `idata & 0x100` survives the re-arm loop and latch prologue.
+
+  But wait — is there any OTHER row doing an accepted CONTROL write with 0x100? sw08 rows: sw 0x800 (halts), sw 0x01 (msg), sh08b rows are refused sh. sw08 msg ctl: sw 0x01 prints text. Hmm, "CONTROL's writeflag x DOG x leftover sides" per line 19. The ENDIANESS bit is cleared by the arm unconditionally (`idata &= ~CRIME_CONTROL_ENDIANESS`); the branch `if (idata != 0) fatal` sees idata AFTER clearing DOG/RESET/ENDIANESS. The "leftover" axis is post-clear nonzero-ness. A value of 0x0100: after ENDIANESS clear → 0 → no fatal. So accepted. A mutant keyed on 0x100 bit: e.g. pre-set `d->warned |= CRIME_W_LEN` when `idata & 0x100`. Rows touching accepted CONTROL writes: 0x0201, 0x0001, 0, 0x0200 (rearm/prologue), sw 0x01 (sw08 msg ctl), sw 0x800 (sw08 halts — stops CPUs). None with 0x100. So a pre-set keyed on ENDIANESS bit survives 141/141! Hmm, but is that a JOINT predicate? No — it's a single bit of the write value. The value axes named are DOG and leftover. ENDIANESS is a third bit the arm masks. The arm's `if`s: DOG_ENABLE test, HARD_RESET test, then `idata != 0` test. The ENDIANESS clear is unconditional (no `if`). So "every side of every if an accepted access takes": the DOG if (set/clear) ✓ (0x0201/0x0200 vs 0x0001/0), RESET if — true side unrowable (stops CPUs), false side ✓, leftover `idata != 0` if ✓ (0x0201/0x0001 vs 0/0x0200... wait after clearing: 0x0201 → 0x1 ≠ 0 (nonzero leftover); 0x0001 → 1 nonzero; 0 → 0 zero; 0x0200 → 0 zero). So the three ifs' sides are crossed except RESET-true. A key on `idata & 0x100` is a predicate on a bit that no `if` tests — it's masked unconditionally. Under the enumeration doctrine ("every side of every `if`"), the ENDIANESS bit isn't an `if` side. But a mutant can still KEY on it: `if (idata & 0x100) d->warned = 0;` is an edit that undoes the once-semantics and no row can fire it... unless some row writes 0x100 or 0x101 etc. Let me check: sh08b rows: sh 0x0201, 0x0900, 0x0a00, 0x0800 — REFUSED (len 2). sb 0x01, 0xff — refused. sw08: sw 0x800, sw 0x01 — accepted 4W at 0x08! sw 0x01: bit 8 clear. Any sw 0x1xx? "sw08 msg ctl (sw 0x01 prints the text)". Hmm what about the OLD sw08 rows... I need the probe. If no accepted write anywhere carries bit 8 (0x100) at CONTROL, the mutant survives. Also 4-byte write at 0x08 is HIGH lane — idata as read by memory_readmax64 from the data buffer... wait for a 4-byte write, len=4, idata = memory_readmax64(cpu, data, 4) — the 4 bytes. Then the len==4 arm shifts it into the high half. And the CONTROL case reads raw `idata`. OK.
+
+  Hmm wait, actually there's a subtlety — what about `sw 0x0100` at 0x08 — would rows "sw08 msg" catch it? The mutant doesn't print; it re-arms. The row that counts announces is rearm once. If no accepted CONTROL write in the rearm loop has 0x100 set, and no other session does an accepted 0x100 write between refusals, it's a survivor. THIS IS A CANDIDATE GAP. But hold on — is keying on `idata & 0x100` "narrowing by ADDRESS/width/direction"? No, it's keyed on the VALUE. The contract's enumeration for CONTROL writes is explicitly DOG × leftover (four cells) — it treats the value space as generated by {DOG, leftover}. The ENDIANESS bit (0x100) set-side is a value cell not in the generating set. Given "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four)" — the brief asserts these four suffice. Adversarially: a pre-set/re-arm keyed on `idata & CRIME_CONTROL_ENDIANESS` (or on `idata == 0x100`, or on any bit outside {0x200, low-byte leftover}) — hmm wait, leftover nonzero covers bits other than 0x200/0x800/0x100... no! leftover is idata AFTER masking DOG, RESET, ENDIANESS. The four cells: 0x0201 (DOG set, leftover nonzero), 0x0001 (DOG clear, leftover nonzero), 0 (DOG clear, leftover zero), 0x0200 (DOG set, leftover zero). The RESET bit: 0x0800 — its set side stops CPUs (disclosed). The ENDIANESS bit: 0x0100 — its set side is NOT in any cell! 0x0100 → after mask: 0 → (DOG clear, leftover zero) cell = same cell as 0. So the enumeration treats 0x0100 as equivalent to 0. For the ARM's actual behavior it is equivalent (masked, no fatal). But for a MUTANT keyed on the 0x100 bit, 0x0100 differs from 0 — and no row writes 0x0100. So: mutant `case CRIME_CONTROL: if (writeflag == MEM_WRITE) { if (idata & 0x100) d->warned |= CRIME_W_LEN; ...` — pre-set on the 0x100 cell. Under latch x5 prologue: CONTROL writes are 0x0201, 0x0001, 0, 0x0200 (sw and sd) — none sets 0x100. So the latch is NOT pre-set → announce counts normal → 141/141. This is exactly analogous to the c1_deepseek mutant (keyed on idata == 0x0200 after the DOG block — which was EQUIVALENT because the DOG block already cleared 0x200, making it dead code). But `idata & 0x100` is NOT dead — real accepted writes can carry 0x100 (e.g., a guest writing 0x0100 or 0x0101, 0x0300, etc.). The probe just never does it.
+
+  Wait, hmm, but does ANY row do an accepted write at CONTROL with 0x100 set? Let me think about all accepted CONTROL writes in the probe: rearm/latch prologue (8 values: sw/sd × 4), sw08 msg ctl (sw 0x01), sw08 halts (sw 0x800), maybe "sh08b msg/run" are refused. What about `sd 0x08, 0` etc. Also possibly a `sw 0x08, 0x100` in the prelude? Need to read the probe. I'm fairly confident none carries 0x100. Also — accepted writes at CONTROL from other sessions like the "sw08" session: sw 0x0800 stops CPUs; the session ends there.
+
+  So candidate gap #1: pre-set/re-arm keyed on `idata & CRIME_CONTROL_ENDIANESS` (0x100) at CONTROL. Expected-catching row: "rearm once" / "latch x5" (the pre-set/announce count rows), which cannot fire because no accepted CONTROL write in the probe carries bit 8.
+
+  Hmm wait, wait. Let me double-check the claimed equivalence: "bits above 15 never reach a refused access, so a conjunct on them is equivalent" — that's about REFUSED accesses (sb/sh carry ≤ 0xffff). But ACCEPTED writes (sw/sd) carry all 32/64 bits. The value cells for accepted CONTROL writes only span {0x0201, 0x0001, 0, 0x0200}. Bits outside {0x0201} ∪ ... any bit other than 0x200, 0x1 — e.g. 0x100, 0x400, 0x1000, 0x10000... — a key on any of them survives. 0x100 is the most natural (it's a named mask in the arm). Also 0x400, 0x8000, etc. — but those are "any other bit" — same class. The contract item 3 rows refused stores with all-ones (sb 0xff, sh 0xffff) to catch fall-through keyed on any bit a narrow store can carry; but ACCEPTED CONTROL writes don't carry all-ones anywhere. So the class "latch keyed on an accepted CONTROL write carrying bit X" for X ∉ {0x200, 0x1} is unrowed. Unless disclosed: DISCLOSED has "a re-arm or pre-set inside the HARD_RESET branch... Unrowable". The 0x100 cell is rowable but unrowed. Is it covered by "a latch keyed on a JOINT predicate... clause (e), the single-axis generating set being the floor"? The generating set for CONTROL values is {DOG × leftover} — bit 0x100 is an axis outside the named generating set. Hmm. The brief's item 4 says "CONTROL's writeflag x DOG x leftover sides" — explicitly three axes: writeflag, DOG, leftover. ENDIANESS-bit-set is not a side of any named axis. So I can name this as a gap: the accepted-write value enumeration at CONTROL omits the ENDIANESS-bit-set cell (sw/sd 0x0100 or 0x0101), and a pre-set/re-arm keyed on that bit scores 141/141.
+
+  Hmm, hold on. Wait. Let me reconsider. Is `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` — placed in the CONTROL arm — actually unobservable in ALL sessions, or would some OTHER row trip on it? E.g., "sw08 msg ctl" expects the fatal text for sw 0x01 — unaffected. Would any row do an accepted write with 0x100 at CONTROL... Let me think about "sh08b msg": refused sh 0x0201 etc. — refused, never reaches the arm. So no. What about sd 0x08 values: 0x0201, 0x0001, 0, 0x0200. Same. OK.
+
+  But also consider: does the probe's roundtrip or setup write CONTROL with 0x100? The prelude sets d->reg[CONTROL] = ENDIANESS on every access (host side), not a guest write. OK.
+
+  So candidate gap #1 stands, pending probe read.
+
+  (e) What about 8W vs 8R at REV from window — covered above as missing ldP (candidate gap #2, though joint).
+
+  (f) The `odata` sign-extension: 4R at a label reads `(int32_t)(odata >> 32)` — high lane. Fine.
+
+  Now let me also check Q1's second part: "any it lists that the function cannot take". ACCEPTS entries the function cannot take: ("sw", 0x34, 0x0badcafe) — default arm 4W at 0x34 — fine. ("sw", 0x04) — default. Hmm what about ("sd", 0x278) — 0x278 within window (window is 0x280 bytes? CRIME is 0x80 bytes mirrored... actually the device is mapped how large? The comment says CRIME is 0x80 bytes at 0x14000000, with mirrors at 0x80-0x1ff, and memory control at 0x200. So the device window is ≥ 0x280. 0x278 ok.).
+
+  What about ("lwP"/"swP"/"sdP", 0x00) — the redirect changes pc to ra — after the access, execution returns to ra. The probe must set ra appropriately. The accept() function with at=PROBE_PC — need to see how ld/st with at= works and whether the redirect breaks the probe flow (pc=ra jumps away!). Hmm — if pc is set to ra after the access, the guest continues at ra. The probe sets RA (`c = ["ra=0x%x" % RA]` in latch x5). For the rearm loop, does it set ra? The accept() calls in the rearm loop with P kinds would redirect to ra mid-stream — the probe must set ra to the next instruction. Need to read the probe to verify the P kinds actually work as accepted accesses that "come back". Actually the lwP in old KINDS existed already ("lwP" handling in old code), and latch x5 prologue had `lw +0x00 from PROBE_PC`. So mechanism exists. But in the rearm loop, OLD code — the rearm loop in 131-row version had KINDS including lwP. OK, need to read the file.
+
+  Also — "swP": a refused... no, accepted sw at 0x00 from window: the REV arm executes the redirect for WRITES too (the pc test doesn't test direction — brief notes this). Then the write lands (len==4 arm already wrote the register — the store happens BEFORE the switch). Fine.
+
+  Now, another enumeration question: the default arm's 8-byte accesses at 0x278 — what about 8W/8R at other default offsets — single-axis address equivalence; disclosed (unnamed offsets).
+
+  What about the 4-byte LOW lane AT A LABEL via label+4 hitting default — covered by 0x34/0x04. But note: 0x04 is REV+4 — an accepted 4W at 0x04 writes the LOW half of reg[0] (REV's slot) — but the switch hits default (0x04 is not a label). Right.
+
+  What about CRIME_SOFTINT 0x20 and HARDINT 0x28 — not labels; accepted accesses there are default-arm kinds at unnamed offsets — disclosed ("landing at CRIME_SOFTINT... in this class"; accept cells at unrowed slots disclosed). Hmm — wait, ACCEPTS includes 0x40 (default arm) but not 0x20/0x28. A pre-set keyed on `relative_addr == 0x20` (accepted access at SOFTINT)? That's "keyed on one unnamed offset" — disclosed for the latch... the disclosed bullet says "a latch keyed on a JOINT predicate, or on one unnamed offset other than the default-arm cells the latch rows refuse at: clause (e)". So unnamed-offset keying is disclosed. But 0x40 IS an unnamed offset too — it's rowed as a default-arm cell. The default arm cells rowed: 0x34, 0x04, 0x40, 0x278 (+ refusals at 0x06, 0x07, 0x1e, 0x1f, 0x27f, 0x1ff, 0x1fe, 0x1fc, 0x42, 0x47, 0x44...). OK.
+
+  Now — what about ACCEPTED accesses at 0x20/0x28 in the re-arm list? Not in ACCEPTS. A re-arm keyed on `relative_addr == 0x28 && len == 8` (accepted ld at HARDINT)? Unnamed-offset keyed — same disclosed class? The disclosure says "on one unnamed offset other than the default-arm cells the latch rows refuse at". Hmm, that's for the LATCH (refusal-side). For pre-set/re-arm (accepted side), the cross is {kinds at labels} + default-arm kinds. An accepted access at 0x28 IS a default-arm kind (8R). Is it the SAME kind as ld 0x278 for mutation purposes? A mutant keyed on `relative_addr == 0x28` distinguishes them. That's keying on a single unnamed offset — disclosed class? The disclosed bullet is under item about "an effect ADDED to the decline arm and keyed on ONE UNNAMED offset" and the latch bullet "on one unnamed offset other than the default-arm cells the latch rows refuse at". For the ACCEPTED side: item 6's disclosure "ACCEPT cells at unrowed slots... an accept arm narrowed by an address strictly INSIDE the window at an unrowed slot... is not seen". That's about accept-shrink. For pre-set keyed on accepted access at unrowed unnamed offset — I'd argue it's the same clause-(e) class ("one unnamed offset"). Since ACCEPTS rows the default arm at 0x04, 0x34, 0x40, 0x278, a key on 0x20/0x28/0x100... is an unnamed-offset key → disclosed. Fine.
+
+  Now the more systematic check — Q1 asks "is ACCEPTS exactly the set of accepted-access kinds the function distinguishes". Kinds the function distinguishes = cells of the branch structure: width(8/4) × dir × lane(4 only) × label/window/value-cell. Let me enumerate exhaustively:
+
+  Width 8 (len==8):
+  - 8W at label L ∈ {0x00, 0x08, 0x10, 0x18, 0x30, 0x38}: 6 kinds. ACCEPTS: sd at all 6 ✓ (0x00, 0x08 ×4 values, 0x10, 0x18, 0x30, 0x38).
+  - 8R at each label: 6 kinds ✓ (ld).
+  - 8W/8R default arm: sd/ld 0x278 ✓ (also sd/ld 0x40 ✓ bonus).
+  - REV window: 8W-in (sdP ✓), 8R-in (ldP ✗ MISSING), 8W-out (sd 0x00 ✓), 8R-out (ld 0x00 ✓).
+  - CONTROL values 8W: {0x0201, 0x0001, 0, 0x0200} ✓ four cells; missing: 0x100-bit cells, RESET-bit cells (0x0800 — stops CPUs, unrowable), other bits.
+
+  Width 4:
+  - 4W/4R at each label (high lane): 12 kinds ✓ (sw/lw at 0x00, 0x08, 0x10, 0x18, 0x30, 0x38).
+  - 4W/4R low lane → always default arm (label+4 is never a label): sw/lw 0x04, 0x34 ✓.
+  - 4W/4R default high lane: sw/lw 0x40 ✓.
+  - REV window 4W-in (swP ✓), 4R-in (lwP ✓).
+  - CONTROL values 4W: four cells ✓ (sw ×4); same missing bit cells.
+
+  So the kind-level omissions: 8R-from-window (ldP), and accepted CONTROL writes with bits outside {0x200, 0x1} (notably the ENDIANESS 0x100 cell, RESET 0x800 unrowable-disclosed).
+
+  Wait, one more: 4R low lane at label+4 reaches default — but what about 4R at 0x0c (CONTROL+4) specifically? NetBSD writes 0x00c — the default arm debug line prints. Same kind as sw/lw 0x04/0x34 modulo address — unnamed-offset equivalence. OK.
+
+  Also: what about len==8 at 0x34 or 0x04? An 8-byte access at 0x04 is... len==8 with relative_addr=0x04 → reg[0x04/8] = reg[0] — misaligned 8-byte; MIPS sd/ld are 8-aligned, so a guest can't issue it (unaligned ld/sd trap in the guest — actually MIPS ld at unaligned address → AdEL/AdES exception, never reaches the device). So not a kind the function can take from a real guest. ACCEPTS doesn't list it ✓. Similarly 4-byte at odd/even-non-multiple-of-4 can't be issued. And 8-byte at 0x278 ✓ aligned.
+
+  Now the third part of Q1: "any row it feeds whose channel cannot vary under the mutant the row claims". Need to look at rows: e.g., "gate lb v0" / "gate lh v0" — the gate session rows refused lb/lh at +0x08 while HARDINT is latched. Claim: kills a decline answering `d->reg[CRIME_HARDINT/8]`. In the gate session HARDINT is nonzero (latched via MACE). The c2_kimik3 mutant measured 139 — killed by these rows. OK.
+
+  "free 2w said": sh +0x08 (CONTROL) free-running — a 2-byte write refused at CONTROL — announces via fatal once. Under `(len == 2 ? debug : fatal)` mutant, no output → row fails ✓ (measured d6_chan_len2 red).
+
+  But here's a question about `free_one` for the sh +0x08 with val 0: the refused store value 0 at CONTROL... the refusal happens in the width arm (len==2 → else arm) — never reaches CONTROL arm. Fine.
+
+  Now let me think about "every row it feeds have a channel that varies" — the pass's framing question. The free-running rows: 8 new rows (free 2r, 1w, 2w, rev, istat, imask, dog, time said). Each runs ONE refusal in a fresh session and counts the exact announce text in the post-"continue" output. Under debug()-instead-of-fatal(): with verbose==0 debug doesn't print... wait — does debug() print when free-running? In gxemul, debug() prints only if verbose... Actually debug() typically prints always? Let me recall: gxemul's debug() prints if `cpu->machine->verbose`? Hmm. In GXemul, `debug(...)` maps to `debugmsg`-ish... Actually in gxemul, debug() is a macro that calls debug_function or prints only when `machine->verbosity`... The SETTLED section says "a free-running one can (verbose == 0)" — i.e., with verbose 0, debug() prints nothing, fatal() prints. OK, trust the measured mutants (c3_codex_dbg 136, d6 red — they measured the channel mutants killed by these rows).
+
+  Now — adversarial check on `free_one`: `ran = t.split("continue", 1)[1] if "continue" in t else ""` — counts announce text AFTER the "continue" command output. For load rows, the setup uses `enc(op, "at", "v0")` with `v0=0x%x % SENT` — hmm, for loads it sets `at=addr` and `v0=SENT` — wait, a load doesn't need a value... `enc(op, "at", "v0")` encodes e.g. `lb v0, 0(at)`? Probably. The load's target register v0 — pre-set to SENTinel? Then after run, they only count the announce text, not v0. OK.
+
+  For stores: `enc(op, "a3", "t0")` with a3=addr, t0=val.
+
+  The `ln` computation: `ln = 1 if op in ("lb", "lbu", "sb") else 2` ✓.
+
+  Expected count 1 ✓. But — potential issue: the free-running session for `free 1w said` uses sb at +0x27f — bit 9 set (0x27f = 0b1001111111 — bit 9 = 0x200 set ✓). `free 2r said` lh at +0x1f8 = 0b11111000 — bits 3-8 set ✓ (0x1f8: bits 3,4,5,6,7,8 all set ✓).
+
+  Now the LABEL free rows: free rev/istat/imask/dog/time said — lb at 0x00, 0x10, 0x18, 0x30, 0x38. Under a channel mutant keyed on a LABEL (e.g. `(relative_addr == CRIME_TIME ? debug : fatal)`), the corresponding row fails ✓.
+
+  Now — is there a session-confound: each free_one call starts a fresh session (`session(c)`), so the latch is fresh ✓.
+
+  Now, "gate" session: the diff shows the gate session additions — refused lb/lh at +0x08 BEFORE the refused sh 0x0800. Wait — order: `x, _ = ld(A, "lb", CRIME + 0x08, "t1"); x, _ = ld(A, "lh", CRIME + 0x08, "s3"); x, _ = st(A, "sh", CRIME + 0x08, 0x0800)`. Three refusals in the gate session now; the latch means only the FIRST announces. The new rows check t1/s3 == 0 ✓ (answers 0 while HARDINT latched). But — does adding two refusals before the sh break "gate run"? The sh is still refused (latch already set by the lb, but refusal behavior same: goto). Under the fix, fine. Under `if (!d->reg[CRIME_HARDINT/8]) goto`-guard mutant... those were measured in earlier tables; not re-measured? POSTTABLE says (a)/(b) unchanged, and the 25 targeted re-runs re-run. gate run is in a changed session — the gate session's command list CHANGED (two new refusals added), so mutants whose red rows sit in the gate session must be re-run — were they? "the 25 that qualified were re-run above" — hopefully including the gate mutants. Can't verify without check_pred.out. I can read artifacts.
+
+  Also — potential confound on gate lb v0: the refused lb reads via common tail `memory_writemax64(cpu, data, len, odata)` with odata=0 → 0 ✓. Under c2 (odata = HARDINT) → answers 0x20 → row fails ✓ measured.
+
+  But wait — the claim "HARDINT is nonzero ONLY in this session" — is HARDINT nonzero in other sessions? preserved/restored each call; HARDINT gets latched only via MACE interrupt in the gate session. Other sessions: no MACE activity → HARDINT 0. So a decline answering HARDINT elsewhere answers 0 → indistinguishable. ✓ That's why the rows were added to gate.
+
+  Now Q2: smallest edit still scoring 141/141. Candidates:
+  1. Pre-set or re-arm keyed on `idata & 0x100` (ENDIANESS bit) in CONTROL arm — my analysis says survives. Exact edit:
+  ```c
+  case CRIME_CONTROL:
+      if (writeflag == MEM_WRITE) {
+          if (idata & CRIME_CONTROL_ENDIANESS)
+              d->warned = 0;   /* or |= CRIME_W_LEN */
+          ...
+  ```
+  Wait, careful — CRIME_CONTROL_ENDIANESS = 0x100? The code does `d->reg[CRIME_CONTROL / sizeof(uint64_t)] = CRIME_CONTROL_ENDIANESS;` and item 9 says CONTROL is 0x100 — yes, CRIME_CONTROL_ENDIANESS = 0x100.
+
+  Under this mutant: rearm loop — accepted CONTROL writes are 0x0201, 0x0001, 0, 0x0200 (sw and sd) — none has 0x100 → latch never re-armed → rearm once passes (count 1). latch x5 prologue same → latch surv/x5 pass. Any other accepted CONTROL write with 0x100? sw08 msg ctl sw 0x01; sw08 halts sw 0x800. No. So 141/141. — UNLESS a refused sh carries 0x100... refused accesses never reach the arm (goto skips it; the mutant is IN the arm). Refused sh 0x0201 etc. never execute the arm. So yes, survives.
+
+  But WAIT — is this within the contract's clause (e)? The contract item 4/8 claim the cross is {kinds at labels} with CONTROL's writes at the four values. The mutant's key (0x100 bit) is a value cell outside the enumerated four. The enumeration's own rationale: the four values cross DOG × leftover. The `if (idata != 0)` leftover test happens AFTER `idata &= ~CRIME_CONTROL_ENDIANESS` — so for the FUNCTION's behavior, 0x100-carrying writes ≡ non-carrying. But the mutant key isn't about the function's behavior; it's about test observability. The test cannot distinguish a pre-set keyed on 0x100 because no row feeds 0x100. This is a genuine floor gap relative to the claim "closed over every place an accepted access can go" — well, actually, is it? "Every place an accepted access can go" — the place is the CONTROL arm write path; the cross rows it. But the MUTANT only fires for a subset of values the probe never uses. Hmm. The contract claims closure over branch sides; the 0x100 bit is not a branch side in the FIXED function (the clear is unconditional). So under the contract's stated floor (single-axis generating set from the function's own branches), is a key on a masked bit inside the floor or not? The contract item 3 explicitly worried about this for REFUSED stores: "plus ALL-ONES refused writes, sb 0xff and sh 0xffff (kimi CLI, closing pass), so a fall-through keyed on any bit a 1- or 2-byte store can carry shows (bits above 15 never reach a refused access, so a conjunct on them is equivalent)". So the doctrine: a conjunct keyed on a bit that no row carries is EQUIVALENT — but that doctrine was applied to refused accesses where bits are physically limited by width. For ACCEPTED CONTROL writes, bits above 15 CAN reach the arm (sw/sd carry them) — the probe just chooses not to carry them. By the contract's own logic ("keyed on any bit a store can carry"), an accepted sw/sd CAN carry 0x100, so the enumeration should include a CONTROL write with 0x100 set (e.g. 0x0101 or 0x0300... wait 0x0300 has DOG; 0x0101: ENDIANESS + leftover). The natural cell: sw/sd 0x0100 (ENDIANESS only → leftover zero after clear) and/or 0x0101. The omission means: pre-set/re-arm keyed on `idata & 0x100` survives. I'm fairly confident this is a REAL GAP. It mirrors c1_deepseek (keyed on == 0x0200 post-DOG-block → dead code → equivalent) — but 0x100 is NOT dead code; it's a live value cell the probe never feeds.
+
+  Hmm wait, actually — let me double check c1_deepseek: "pre-set/re-arm keyed on an accepted CONTROL write of exactly 0x0200, inserted AFTER the DOG_ENABLE clear block (where the seat believed idata==0x200 is a non-rowed accepted cell)" — measured 141/141 PREDICTED EQUIVALENT because dead code (after `idata &= ~DOG`, idata can't be 0x200). So the seat TRIED a value-keyed latch and it was equivalent only due to placement. If inserted BEFORE the clear block: `if (idata == 0x200) d->warned = 0;` — but 0x0200 IS rowed (sw/sd 0x0200 in ACCEPTS) → caught. And `if (idata & 0x100)` — not rowed → survives. Yes.
+
+  So candidate answer to Q2: 
+  ```c
+  		if (idata & CRIME_CONTROL_ENDIANESS)
+  			d->warned = 0;
+  ```
+  inserted at the top of the `if (writeflag == MEM_WRITE)` block in case CRIME_CONTROL (before or after the DOG block — anywhere, since 0x100 is never masked into 0 before the mutant reads it... wait, the ENDIANESS clear `idata &= ~CRIME_CONTROL_ENDIANESS;` happens after the DOG/RESET blocks; if the mutant is inserted AFTER that clear, it's dead code → equivalent. So insert BEFORE the clear, e.g. right after `if (writeflag == MEM_WRITE) {`). Rows expected to catch: "rearm once" (the announce-count row in the rearm session) and "latch x5"/pre-set rows — they can't because every accepted CONTROL write in the probe carries bit 8 clear (0x0201, 0x0001, 0, 0x0200, plus sw 0x01/0x800 elsewhere).
+
+  Hmm, hold on — also check `sd 0x08, 0x0201` — 64-bit write idata = 0x0201 ✓ bit 8 clear. Yes.
+
+  2. Second candidate: re-arm keyed on 8R-from-window at REV (missing ldP):
+  ```c
+  case CRIME_REV:
+      if (len == 8 && writeflag == MEM_READ &&
+          ((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100)
+          d->warned = 0;
+      ...
+  ```
+  Survives because no row does an accepted ld at 0x00 from the probe window (only lwP). But this is a JOINT predicate (width × dir × window) — disclosed-ish under the joint-predicate bullet? That bullet is about the latch keyed on refusal axes... "a latch keyed on a JOINT predicate (e.g. only 2-byte refusals at CRIME_TIME), or on one unnamed offset other than the default-arm cells the latch rows refuse at: clause (e)". Hmm — "a latch keyed on" — pre-set/re-arm ARE latch manipulations. A re-arm keyed on joint {8R ∧ window} is a latch keyed on a joint predicate. Arguably disclosed. The 0x100 one: single bit of the value — not joint; it's a single-axis key on an axis (ENDIANESS bit) that the enumeration simply doesn't vary. Not disclosed anywhere I can see. The CONTROL value axes are named as DOG × leftover — the 0x100 bit is masked before the leftover test, so it's not part of "leftover" either... Actually hmm, is 0x100 part of "leftover"? leftover = idata after clearing DOG, RESET, ENDIANESS → `if (idata != 0)`. 0x100 is cleared before the test, so no. The enumeration's four cells never exercise ENDIANESS-set. So gap #1 is the stronger find: single-axis, unnamed in disclosures, measured-analog (c1) showing the panel cared about value-keyed latches at exactly this spot.
+
+  Hmm, but wait — would the brief's author argue "a conjunct on a bit the arm masks unconditionally is equivalent"? No — equivalence means the mutant produces identical observable behavior on all inputs. `if (idata & 0x100) d->warned = 0;` differs from base on inputs carrying 0x100 (real guests can write 0x100 to CONTROL — the PROM might!). It's NOT equivalent; it's a survivor the test cannot see. It's a floor gap as Q2 defines: "undoes part of the fix's behaviour and still scores 141/141".
+
+  Actually hold on, one more check on gap #1: the rearm session structure — is the announce count row per-kind or total? If the rearm session does all 43 kinds each followed by a refusal, and counts TOTAL announces == 1, then a re-arm on kind K fires when K is executed → the refusal after K announces → total ≥ 2. With the 0x100-keyed mutant, no kind fires → total 1 ✓ passes. latch x5: prologue (43 kinds) then 5 refusals, count == 1: pre-set on 0x100 never fires → first refusal announces, rest silenced → 1 ✓ passes. warm once: sb... "warm once (sb, write, odd)" — sd first? Line 334: "also warm once (sd first) and time once (ld first)". sd at... warm once does accepted sd (where? +0x30 per old KINDS first entry ("sd", 0x30, 0)) — value 0 → no 0x100. time once: ld first at 0x38. OK.
+
+  Also other announce-count rows: "rev once, sh08b once, istat once, imask once, dog once, time once, latch x5, hi once, mid once" — label-first sessions; none does an accepted CONTROL write with 0x100. The sh08b session does accepted? sh08b rows are refused sh 0x0201, 0x0900, 0x0a00... those are REFUSED (len 2). Its session may include accepted sw 0x01 for msg ctl? "sw08 msg ctl (sw 0x01 prints the text)" — 0x01, no 0x100. OK.
+
+  So gap #1 survives every count row. 141/141. 
+
+  But before finalizing, I MUST read the actual probe to confirm: (a) no accepted write anywhere carries 0x100 (or another unmasked... 0x100 is masked-but-keyable) at CONTROL; (b) the rearm loop structure; (c) row count = 141; (d) the claims in POSTTABLE.
+
+  Also to be thorough for Q1: check the probe's `accept()` handles "swP"/"sdP" — st() with at=PROBE_PC — and whether the redirect (pc=ra) mid-rearm-loop breaks the session flow (ra must point to a safe place). In latch x5 the probe sets `ra=RA` at session start; after a P access, pc=ra → jumps to RA address — probably a loop-back or re-entry point. Need to read how RA is defined and how the session continues after redirect. If ra points to the NEXT instruction... can't be, ra is fixed. Probably RA is a trampoline that re-syncs. Since the 131-row test already had lwP in KINDS and the latch prologue had lw at PROBE_PC, the mechanism worked. But swP/sdP are NEW in repair 10 (old KINDS had only lwP). Do they actually execute as accepted accesses? An accepted sw at 0x00 from window → redirect → pc=ra. If the probe's RA trampoline works for lwP it works for swP/sdP. OK, but I should verify st() supports at= and the encode works. Old accept code: `if op == "lwP": x, _ = ld(A, "lw", CRIME + off, "a0", at=PROBE_PC)`. New: `if op.endswith("P"): if op[0] == "s": st(A, op[:2], ..., at=PROBE_PC) else ld(...)`. Need st() to accept at=. Read the probe.
+
+  Also check: in the rearm loop, `c += accept(A, op, off, val)` then refusal lb +0x06 — for P kinds inside the loop, after the redirect the flow returns via ra... The OLD rearm loop had the same structure with lwP. Fine, but verify RA setup in the rearm session specifically (the old code had `c = ["ra=0x%x" % RA]` only in latch x5? The diff shows that line at 686: `c = ["ra=0x%x" % RA]` in the latch x5 section context. Does the REARM session set ra? If not, lwP/swP/sdP in the rearm loop redirect to ra=0 → crash? But the 131-row rearm loop ALSO had lwP (it was in KINDS) and worked... Let me check: old KINDS included ("lwP", 0x00, 0) and the old rearm loop iterated KINDS. So the rearm session must handle ra. Read the probe.
+
+  Now Q3: which statement is wrong? Candidates so far:
+  - The header item 4/8 claim of closure "over the KIND x LABEL CROSS" — the cross omits the ENDIANESS-bit-set CONTROL write cell (and ldP). The claim "is ACCEPTS exactly the function's accepted-access kinds" — answer: no, see above.
+  - POSTTABLE: "c1_deepseek 141/141 (PREDICTED EQUIVALENT -- dead code: the DOG block already cleared 0x200)" — plausible ✓.
+  - Check the lt_wset explanation: predicted {warm once, hi once, sh08b once} but ALSO killed sh08b said (count went to 4 because every refused write re-announces). Plausible: `d->warned |= CRIME_W_LEN << writeflag` — for writes (writeflag=1... MEM_WRITE value?) — if MEM_WRITE==1, then CRIME_W_LEN<<1 is a different bit; the test checks CRIME_W_LEN (bit presumably 1<<0... need value). For reads (writeflag=0), <<0 → same bit → latch works. For writes, sets bit CRIME_W_LEN<<1 → the check `!(d->warned & CRIME_W_LEN)` → still true → announce again. So every refused WRITE announces. warm once (sb write... "warm once (sb, write, odd)" — expects 1 announce; the write refusal announces... hmm predicted warm once fails. hi once, sh08b once similar. sh08b said: counts its own notice text want 1, got 4 (four refused writes at CONTROL in sh08b session: sh 0x0201, 0x0900, 0x0a00, 0x0800 → each announces). Plausible ✓. But "the fourth is an additional kill on a row whose channel is a count, recorded here, not claimed" — honest. OK.
+
+  - Check claim: "base 141/141" and row count. Count rows in probe — I can grep `row(` in the probe and count. Let me do that.
+
+  - The claim in the header (line 399): "TIME: at the time rows' refused reads TIME is a multiple of 66 and is 0 in 42 of 800 logged cells" — earlier correction noted. Can't verify without logs; it says "the same seat" measured. OK.
+
+  - Line 387: "INTSTAT/INTMASK 0x0101010111010101" — that's decimal-looking? 0x0101010111010101 contains digits only 0/1 so it's valid hex. OK.
+
+  - Diff hunk 4 (line 601-603 context): the comment "every case label, the REV pc-window test..." retained. Fine.
+
+  Also verify POSTTABLE claim "45 legs built" and mutant list: M has base, c1-c5 (6), d1,d2,d3,d4,d6,d7 (6) = 12 legs... "45 legs built" includes the 25 targeted re-runs + ten close-4 mutants + eight cross samples + ... 25+10+8=43 + base + ... hmm 25 targeted + 10 close-4 + 8 cross = 43, plus base = 44... "45 legs" and check_pred "exact=44 differs=1 of 45 measured". 25+10+8+1(base)+... c1..d7? The 12 M entries might BE among the 25 targeted. Can't verify exactly without artifacts. I can read check_pred.out / POSTTABLE artifacts in the tree — the brief says tree seats include regress/artifacts/crimewidthkill/. I should look at killtable8_20260914/.
+
+  Plan of action:
+  1. Read dev_sgi_ip32.c (the crime device function + register defines + struct crime_data).
+  2. Read regress/crime_width_probe.py in full (~900 lines).
+  3. List regress/artifacts/crimewidthkill/killtable8_20260914/ and read check_pred.out, PRETABLE.out, POSTTABLE.out if present.
+  4. Verify row count (grep row() calls → should be 141).
+  5. Verify no accepted CONTROL write with 0x100; verify no ldP.
+  6. Verify the probe matches the diff (repair 10 applied).
+
+  This is a lot of reading — good case for delegating? The task requires my own adversarial judgment and final verdict. I'll do the key reads myself but efficiently: read probe in chunks (it's ~900 lines), read the C file's crime sections. Actually, let me consider spawning an explore agent... No — the questions demand precise verification I should do myself; the files are known paths. Reading ~1500 lines across 2-3 files is manageable directly.
+
+  Let me start. First, find the files and the crime function in the C source.
+
+• I've read the full brief. Now I'll verify its premises against the actual tree: the device source, the probe, and the table-8 artifacts.codex_witness_20260910.err
+codex_witness_20260910.txt
+codex_witness_RETRY_20260910.err
+codex_witness_RETRY_20260910.txt
+crime_width_witness_20260913.py
+fable_pass1_20260913.md
+killtable2_20260913
+killtable3_20260913
+killtable4_20260913
+killtable5_20260913
+killtable6_20260913
+killtable7_20260913
+killtable8_20260914
+killtable_20260913
+opus_close2_20260913
+opus_close3_20260913
+opus_close4_20260914
+opus_close_20260913
+opus_f2_20260913
+opus_pass1_20260913
+opus_pass2_20260913
+panel_20260913_000135
+panel_20260913_022247
+panel_20260913_061857
+panel_20260913_110853
+panel_20260913_164716
+panel_20260913_203439
+panel_20260914_012622
+probe_first10_fix.out
+probe_first11_fix.out
+probe_first12_fix.out
+probe_first2_fix.out
+probe_first3_fix.out
+probe_first4_fix.out
+probe_first5_fix.out
+probe_first6_fix.out
+probe_first7_fix.out
+probe_first8_fix.out
+probe_first9_fix.out
+probe_first_fix.out
+probe_first_head.out
+witness_committed.out
+witness_fix.out
+POSTTABLE.out
+PRETABLE.out
+builds
+check_pred.out
+check_pred.py
+crime_width_probe.table8.py
+kill529h.run-033935.sh
+kill529h.sh
+logs
+mutants529h.py
+mutants_c4_opus.py
+table8.out
+
+
+• Good. Now let me read the actual crime device function in dev_sgi_ip32.c and the probe. Let me first view the relevant portion of dev_sgi_ip32.c (the DEVICE_ACCESS(crime) function), and the probe file.The source matches the brief's quoted function. Now let me read the probe file. It's probably ~900+ lines. Let me check its length first and read it in chunks.
+
+• The device source matches the brief. Now the probe itself.939 C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py
+100
+
+
+• 939 lines, 100 lines containing `row(`. But the test claims 141 rows — so rows must be generated in loops too (e.g., `<op> surv` for six widths, the free-running loop generates 8 rows from one `row()` call inside a loop, etc.). Let me read the probe in full. I'll read it in chunks.I should keep reading the probe. Let me set up a small todo list since this is a multi-step adversarial review, then continue reading the probe file from line 380 onward.Now I have the full probe. Let me count the rows:
+
+  Session 1 (controls): live, devsig, devsig hi, dflt ctl, acc8 near = 5 rows
+  rev pc ctl = 1 (6)
+  sw08 halts = 1 (7)
+  sw08 msg ctl = 1 (8)
+  DOG accept cells: acc8 st+ld, acc4 rhi, acc4 rlo, acc4 wlo, acc4 whi = 5 (13)
+  Refused loads loop: lb (v0, pc, exc, said, nodflt, surv = 6), lh (6), lbu (v0, surv = 2), lhu (2) = 16 (29)
+  Refused stores loop: sb (pc, exc, said, nodflt, surv = 5), sh (5) = 10 (39)
+  sh08: sh08 pc, sh08 run = 2 (41)
+  sb08: sb08 msg, sb08 run = 2 (43)
+  sh08b: sh08b msg, sh08b run, sh08b once, sh08b said = 4 (47)
+  rev pc loop: lb (rev pc, rev v0, rev once, rev said = 4), lh (rev pc, rev v0 = 2) = 6 (53)
+  rev writes: sb rev pc, sh rev pc = 2 (55)
+  imask: pre, lb, sb, lh, sh, ctl, once, said, lb v0, lh v0, imask keeps = 11 (66)
+  istat: pre, lb, sb, lh, sh, ctl, once, said, lb v0, lh v0 = 10 (76)
+  gate: gate hardint, gate line, gate run, gate lb v0, gate lh v0 = 5 (81)
+  time loop: lb (time lb, time lb ctl, time lb v0, time once, time said = 5), sb (time sb, time sb ctl = 2), lh (time lh, time lh ctl, time lh v0 = 3), sh (time sh, time sh ctl = 2) = 12 (93)
+  keeps session: sb keeps, sh keeps, warm v0, warm once, lo keeps = 5 (98)
+  rearm: rearm once, rearm surv = 2 (100)
+  top: top8 anchor, top4 anchor, top rd v0, top rd2 v0, top said, top8 st+ld, top4 rhi, top4 rlo, top4 w = 9 (109)
+  hi: hi said, hi nodflt, hi surv, hi keeps, hi once = 5 (114)
+  mid: mid said, mid nodflt, mid lb v0, mid lh v0, mid keeps, mid once, mid surv = 7 (121)
+  dog: dog once, dog said, dog v0, dog lh v0, ctl v0, ctl lb v0, time sd lb v0, time sd lh v0 = 8 (129)
+  free: free said, free v0 = 2 (131)
+  free channel: free 2r said, free 1w said, free 2w said, free rev said, free istat said, free imask said, free dog said, free time said = 8 (139)
+  latch x5: latch x5, latch surv = 2 (141)
+
+  Total = 141 ✓. Matches the claim.
+
+  Now Q1 — verify ACCEPTS against the function.
+
+  The accepted-access branch structure of DEVICE_ACCESS(crime):
+
+  1. `if (writeflag == MEM_WRITE)` at top — W/R.
+  2. RAM-size ifs — config, constant per session (-M 64): mb_per_bank=32, no exit. Not access-varying.
+  3. `if (len == 8)` / `else if (len == 4)` / else.
+  4. len==8: W/R.
+  5. len==4: W/R × (relative_addr & 4).
+  6. switch (relative_addr): cases 0x00, 0x08, 0x10/0x18, 0x30, 0x38, default.
+  7. REV: pc-window if (in/out).
+  8. CONTROL: writeflag if (W only body) × DOG if × RESET if × leftover `idata != 0` if.
+  9. default: writeflag if (R/W — both print).
+
+  Accepted kinds (width × dir × lane × label × branch cell):
+
+  - 8W/8R at each of 6 labels = 12: sd/ld at 0x00, 0x08, 0x10, 0x18, 0x30, 0x38 ✓ all in ACCEPTS.
+  - 4W/4R (high lane, at the label address) at each of 6 labels = 12: sw/lw at 0x00, 0x08 (4 values), 0x10, 0x18, 0x30, 0x38 ✓.
+  - 4W/4R low lane — address = label+4 or any 4-aligned addr with bit 2 set; the switch sees label+4 → NOT a case (switch is on exact relative_addr; cases are 0x00, 0x08, ...). So low-lane 4-byte accesses always land in the default arm. ACCEPTS covers sw/lw at 0x04 and 0x34 ✓ (two instances of the same kind — fine).
+  - Default arm: 8W/8R: sd/ld at 0x40 and 0x278 ✓; 4W/4R high lane: sw/lw at 0x40 ✓; 4W/4R low lane: sw/lw at 0x34, 0x04 ✓.
+  - REV pc-window: in × {8W (sdP), 8R (MISSING — no ldP), 4W (swP), 4R (lwP)}; out × all four (sd, ld, sw, lw at 0x00) ✓.
+  - CONTROL writes: values {0x0201 (DOG set, leftover≠0), 0x0001 (DOG clear, leftover≠0), 0 (DOG clear, leftover 0), 0x0200 (DOG set, leftover 0)} × {4W, 8W} = 8 ✓.
+    - RESET set side: stops CPUs — disclosed unrowable.
+    - **ENDIANESS bit (0x100) set side: NOT rowed.** All four values have bit 8 clear. No other row does an accepted CONTROL write with 0x100: sw08 msg ctl = sw 0x01; sw08 halts = sw 0x0800; that's all the accepted CONTROL writes in the whole probe. Let me verify by grepping the probe for writes to CRIME + 0x08 with sw/sd: lines 712-713 (the ACCEPTS eight), line 406 (sw 0x0800), line 411 (sw 0x01). Also "sw08 msg ctl" sw 0x01. That's it. All other +0x08 accesses are refused (sb/sh/lb/lh/lw/ld).
+    
+    So a pre-set or re-arm keyed on `idata & CRIME_CONTROL_ENDIANESS` (0x100), or on any other bit outside {0x200, 0x1} that the four values span... wait — which bits do the four values cover? 0x0201 (bits 9, 0), 0x0001 (bit 0), 0 (none), 0x0200 (bit 9). Union = bits 9 and 0. A latch keyed on `idata & 0x100` (bit 8), `idata & 0x400` (bit 10), `idata & 0x800` is RESET (disclosed), bit 11+, or any higher bit — none is ever carried by an accepted CONTROL write in the probe. sw 0x0800 carries bit 11 but stops the CPUs (sw08 halts session — and that session has no refusals, so a latch key there is unobservable anyway).
+
+    So the strongest Q2 candidate stands: `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` (re-arm) or `d->warned |= CRIME_W_LEN;` (pre-set) inside the CONTROL arm's write path, before the `idata &= ~CRIME_CONTROL_ENDIANESS;` line. Wait — for the pre-set variant: latch x5's prologue runs ACCEPTS before any refusal; CONTROL writes there are the four values — none sets 0x100 → latch not pre-set → first refusal announces → latch x5 reads 1 ✓ pass. All other count rows: sessions whose first refusal happens... pre-set only matters before any refusal; in sessions other than latch x5 and rearm, the first refusal comes early without preceding accepted CONTROL writes (except… let me check each session for accepted CONTROL writes before the first refusal):
+    - controls session: no refusals at all (only accepted). OK.
+    - rev pc ctl, sw08 halts, sw08 msg ctl: no refusals.
+    - DOG accept session: no refusals.
+    - refused width sessions: first thing is the refusal.
+    - sh08/sb08/sh08b: refusal first.
+    - rev pc (lb/lh from PROBE_PC): refusal first.
+    - imask/istat sessions: accepted sd/lw? The session does sd 0x18, sd 0x20 (accepted stores), print cause, then lb refusal. Accepted stores at INTMASK/SOFTINT — no CONTROL write. A pre-set keyed on CONTROL-0x100 doesn't fire.
+    - gate session: MACE stores, sd 0x18, sd 0x20, lw 0x18, ld 0x28 — then lb refusal. No CONTROL write.
+    - time sessions: ld 0x38 first (accepted read at TIME), then refusal. No CONTROL write.
+    - keeps session: sd 0x30, sb 0x37 (refusal — first refusal is sb +0x37; before it, accepted sd at DOG). No CONTROL write.
+    - rearm session: lb +0x07 first (refusal), THEN 43 kinds each followed by lb +0x06. CONTROL writes 0x0201/0x0001/0/0x0200 (sw and sd) — none 0x100 → re-arm keyed on 0x100 never fires → "rearm once" reads 1 ✓ pass.
+    - top session: accepted reads then lb +0x27b first refusal. No CONTROL write.
+    - hi/mid/dog/free/latch x5: latch x5 prologue = ACCEPTS (four CONTROL values only).
+    
+    So NEITHER the pre-set nor the re-arm keyed on `idata & 0x100` is observable anywhere. Both score 141/141. This is a genuine floor gap relative to contract items 4 and 8, which claim closure "over the KIND x LABEL CROSS ... every side of every if an accepted access takes". Hmm — but wait: is the ENDIANESS bit a "side of an if"? The arm's ifs: DOG (0x200), RESET (0x800), leftover (idata != 0 after clears). The ENDIANESS clear is unconditional — no if. So under the enumeration doctrine "both sides of every `if'", 0x100 is NOT an if-side. But the contract item 3 explicitly extends refused stores to all-ones "so a fall-through keyed on any bit a 1- or 2-byte store can carry shows" — the doctrine there is "any bit the access can carry", not just if-sides. For accepted CONTROL writes the probe rows only the if-side cells and leaves every other carryable bit (0x100, 0x400, 0x1000, ..., bits 16-63) unrowed. A latch keyed on any of those bits survives. The most natural instance: the bit the arm itself names, CRIME_CONTROL_ENDIANESS.
+
+    Hmm, wait — but is `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` really a "smallest source edit that undoes part of the fix's behaviour"? The fix's behaviour includes "announced once per device instance". A re-arm makes a second announce possible: guest writes 0x100 to CONTROL (a perfectly legal accepted write — the arm clears ENDIANESS, no fatal, nothing), then a second narrow access announces again. Yes, it undoes the once-guarantee. And the test scores 141/141. CONFIRMED GAP (by reading; I cannot run the harness per the operational rule, and building/running a single mutant in my own temp dir is "fine and encouraged" — but on Windows/Git Bash the probe needs pty (Linux). The probe uses pty.fork — Windows Git Bash Python won't have pty... Actually this environment is Windows; the panel presumably ran on Linux/WSL. There's a _wsl_tmp_preserved dir... Running the mutant is possible via WSL maybe, but the operational rule says gates are forbidden but single-mutant builds are encouraged. Building gxemul takes minutes; the probe needs the emulator binary. This might be feasible but heavy. The brief asks to name measurements I want if not inlined. I'll do the analysis by reading, and name the measurement: a kill-table leg with `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` inserted in the CONTROL arm — predicted 141/141.
+
+    Actually wait — before I finalize, let me double-check that there is really NO accepted write anywhere in the probe carrying bit 8 (0x100) at CONTROL. Grep for "CRIME + 0x08" and "0x08, 0x" in the probe... From my reads:
+    - line 406: st sw CRIME+0x08, 0x0800 (bit 11)
+    - line 411: st sw CRIME+0x08, 0x01
+    - line 460: sh 0x0800 (refused)
+    - line 466-467: sb 0x01, 0xff (refused)
+    - lines 478-481: sh 0x0201, 0x0900, 0x0a00, 0xffff (refused)
+    - line 597-599: lb, lh, sh 0x0800 (refused)
+    - lines 712-713: ACCEPTS sw/sd 0x0201, 0x0001, 0, 0x0200
+    - line 830: lh (refused read)
+    - line 837: lb (refused read)
+    - line 888: sh 0 (refused, free 2w)
+    Accepted writes at CONTROL: 0x0800, 0x01, 0x0201, 0x0001, 0, 0x0200 (×2 widths). Bits carried: 11, 0, 9. Bit 8 (0x100) never carried. Also bits 10, 12+ never. Confirmed.
+
+    Also — the sw08 halts session: sw 0x0800 stops CPUs; it happens in a session with NO refusal, so irrelevant to latch keying.
+
+  - One more possible omission: "REV also from the PROM-probe window in both directions" — directions covered: 4R (lwP), 4W (swP), 8W (sdP); 8R missing. Is 8R-from-window a distinct accepted kind? The pc-window if doesn't test width, so branch-wise {in-window × 8R} is not a separate branch side — the same `if` side is taken by lwP/swP/sdP. Under the "sides of every if" doctrine, the window's IN side is covered 3 times; the cross with width is the KIND x LABEL doctrine — the fourth pass's own complaint was marginals-not-crossed: kinds {8W,8R,4W,4R} crossed with window {in,out}: in-side has 8W(sdP), 4W(swP), 4R(lwP) — missing 8R. A re-arm keyed on `len == 8 && writeflag == MEM_READ && pc-window` (a JOINT predicate, three axes) survives. The DISCLOSED list has "a latch keyed on a JOINT predicate ... clause (e), the single-axis generating set being the floor". A re-arm is not exactly "a latch keyed on" — but pre-set/re-arm are the latch's two error directions, and the bullet's intent covers keyed-on-joint-predicate latch manipulations. Hmm, borderline. The 0x100 finding is single-axis (one bit of the write value), so it's the cleaner gap. Note the joint-predicate bullet speaks of the latch "keyed on a JOINT predicate (e.g. only 2-byte refusals at CRIME_TIME)" — the example is refusal-side; for the accepted side, the contract claims the full KIND x LABEL cross, and the brief asks "is ACCEPTS exactly the function's accepted-access kinds". Answer: no — ldP (8R from the window) is an accepted kind the function takes and ACCEPTS omits; and CONTROL-write values carrying 0x100 (or any bit outside {0x200,0x1}) are accepted kinds omitted. Also arguably 4-byte accesses at 0x0c (CONTROL+4) hit default — covered by the default-arm low-lane kinds.
+
+  - Anything in ACCEPTS the function CANNOT take? Check each:
+    - ("sw", 0x34, 0x0badcafe), ("sw", 0x04, 0): accepted 4W low lane, default arm ✓.
+    - ("sd", 0x278), ("ld", 0x278): 8-byte at 0x278 — within DEV_CRIME_LENGTH (0x280) ✓ default arm ✓.
+    - P kinds: lwP/swP/sdP from PROBE_PC=0xbfc05180 ✓ window (pc & 0xffffff00)==0xbfc05100 ✓.
+    - ("sd", 0x40)...: default arm ✓.
+    All takeable. One nuance: the redirect fires on ANY access at +0x00 from the window, including swP/sdP (writes) — pc=ra → the guest continues at ra=RA=0x80004000. What's at RA? Nothing was put there! run_ops puts the instruction at PROBE_PC... wait, for P kinds, ld/st are called with at=PROBE_PC, so `here = PROBE_PC`; run_ops writes the instruction at PROBE_PC, PROBE_PC+4 = B_SELF, +8 NOP, sets pc=PROBE_PC, steps 1. During that step, the access at CRIME+0x00 triggers pc=ra=0x80004000. The step count is len(ops)=1 — after executing 1 instruction (the load/store at PROBE_PC), the emulator stops stepping... Actually the step happens: pc is set to ra DURING the instruction's device access; when the instruction completes, pc was already advanced? In gxemul, the device access happens mid-instruction; the cpu->pc was set to ra by the device; after the instruction, pc_to_pointers was updated. The debugger "step 1" stops after 1 instruction. So the next commands (register sets for the next kind) execute fine regardless of where pc points — each ld/st sets pc=here explicitly via run_ops. So the redirect is harmless mid-session as long as each op sets pc. run_ops always does "pc=0x%x" % at. ✓. And RA itself never needs valid code since stepping never resumes at ra (step 1 stops). Wait — but for the REFUSED rev-pc rows (lb/lh from PROBE_PC), the check is pc == PROBE_PC+4 — the refusal does NOT redirect ✓. For ACCEPTED lwP (rev pc ctl row), pc == RA ✓ measured ok presumably.
+
+    Hmm, but hold on: for the ACCEPTS P kinds inside the rearm loop and latch prologue — after the redirect, pc=ra. run_ops for the NEXT kind sets pc again. But between them there's the refusal lb +0x06 (rearm loop) — which also does run_ops with its own pc=. ✓ fine.
+
+    Wait, one more subtlety for the P kinds: `ld(A, op, addr, rt, at=PROBE_PC)` — with at=PROBE_PC, `here = PROBE_PC`, and A.take is NOT called — so all P kinds reuse the same code address PROBE_PC for the instruction. run_ops does "put w" to overwrite the instruction each time ✓ fine. And non-P kinds use A.take(1) — fresh addresses ✓.
+
+    Also note the acceptance of swP: an accepted 4W at +0x00 writes the HIGH half of reg[0] (REV's slot) — the prelude rewrites REV each access anyway. And the redirect fires. Fine.
+
+  - Now the third part of Q1: "any row it feeds whose channel cannot vary under the mutant the row claims."
+    - "free 2w said": sh +0x08 value 0 — under d6_chan_len2 ((len==2 ? debug : fatal)), the announce goes to debug() → not printed while free-running (verbose 0) → count 0 → row fails ✓ varies. Under c3 (bit 3 keyed debug): 0x08 has bit 3 SET (0x08 = 0b1000) → debug → row fails ✓.
+    - "free rev said": lb +0x00 — bit 3 clear → under c3, fatal → prints → row passes; x_chan_rev (channel keyed on REV label) → fails ✓.
+    - All 8 free rows have distinct axes ✓.
+    - "gate lb v0"/"gate lh v0": under c2 (odata = HARDINT), the answer is 0x20 ≠ 0 → fail ✓ measured (c2 139/141 — killed by these two).
+    - Rows whose channel cannot vary: check "top said" — the row is the announce count for lb +0x27b being the FIRST refusal... under a mutant where the 4R-high at +0x210 is refused (accept-shrink), the lw +0x210 becomes a refusal → announces first (takes the one latch) → the lb +0x27b's announce is silenced → top said reads 0 → fail ✓ varies. OK.
+    - "rearm once" counts "-- declined." == 1 across 44 refusals... wait: 1 initial + 43 after each kind = 44 refusals, 43 accepted kinds between ✓ the note says "%d refusals, %d accepted kinds between" % (len(KINDS)+1, len(KINDS)) = 44, 43 ✓.
+    - Hmm — one thing to check on "rearm once": the count target is exactly 1 under the fix (the first lb +0x07 announces; latch set; nothing re-arms). Under a PRE-SET mutant (not re-arm), the first refusal is silenced → count 0 → also fails ✓ good.
+    - "latch x5": prologue then lh,lb,lbu,sb,sh + lb +0x00, +0x38 → first refusal is lh +0x06 → announces once → count 1 ✓; pre-set → 0 → fail ✓.
+    
+    Rows that cannot vary under their claimed mutant — let me think about "sh08b said" under lt_wset: the POSTTABLE explains the extra kill. Fine.
+    
+    What about "free 1w said" sb +0x27f val 0xff: under a channel mutant keyed on write direction → debug → 0 → fail ✓. Under c3 (bit3): 0x27f bit 3 set → also fails ✓. OK.
+    
+    "mid nodflt": sums dflt counts for 4 refusals; note dflt() counts lines keyed on offset+direction across the WHOLE transcript — the comment acknowledges accepted accesses at default-arm offsets print the same lines; in the mid session the accepted accesses are sd +0x1f8 (8-byte store at 0x1f8 → default arm → prints "[ crime: write to 0x1f8:"...) — that's offset 0x1f8, not counted (counts are for 0x1ff/0x1fe/0x1fc) ✓. ld +0x1f8 prints "[ crime: read from 0x1f8," ✓ not counted. OK.
+    
+    But WAIT — dflt() counts transcript-wide for that offset+direction. In mid session: refusals lb +0x1ff (×2!), lh +0x1fe, sb +0x1ff, sh +0x1fc. Accepted accesses at 0x1ff? None. At 0x1fe? None. At 0x1fc? None. OK ✓.
+    
+    In hi session: dflt(t, clean, 0x27f, True) — counts "[ crime: write to 0x27f:" — accepted accesses at 0x27f? None (0x278 sd/ld, 0x27c sh refused...). ✓.
+    
+    In the width sessions: lb/lbu at +0x07 → dflt(t, clean, 7, False) counts "[ crime: read from 0x7," — any accepted access at +0x07? No (7 is not 4/8-aligned; accepted accesses are always aligned — a 4-byte read at +0x04 prints 0x4). ✓. sb +0x1f → "[ crime: write to 0x1f:" — accepted? No. ✓. sh +0x1e → 0x1e ✓.
+
+    Now — "dflt ctl" row: count(t, "[ crime: read from 0x4,", clean) == 1 in the CONTROLS session: accesses are lw +4 (prints once ✓), lw +0 (REV label — no default line), ld +0 (label) ✓ count 1 ✓.
+
+    Now, one more adversarial look at "rearm once": the kinds include ("sw", 0x34, 0x0badcafe) — writes 0x0badcafe at +0x34 (low half of reg[0x34/8]=reg[6]... 0x34/8 = 6 (integer) → slot at 0x30 = DOG). Wait: 0x34/8 = 6.5 → 6 → reg[6] = the register at 0x30 = CRIME_DOG's slot. So sw +0x34 writes low half of DOG. Fine — accepted, default arm (0x34 not a label). Also sw +0x04 → reg[0] low half (REV's slot) — default arm. And sw +0x08 with values — 0x08/8 = 1 → reg[1] = CONTROL slot; the len==4 arm writes high half THEN the CONTROL arm runs on idata. Wait — order matters: the len==4 STORE happens first (d->reg[...] updated), then the switch's CONTROL arm processes idata (fatal if leftover). For sw 0x0201: store lands high half of reg[1], then arm: DOG set → cleared → idata=1 → fatal "unimplemented control"! WAIT — that would PRINT the CONTROL text during the rearm session and latch prologue!
+
+    Hmm: sw 0x0201 at +0x08: idata = 0x0201. len==4 arm: reg[1] high half = 0x0201. Then case CRIME_CONTROL: idata & 0x200 → clear → idata = 0x0001. Not RESET. `idata &= ~0x100` → 0x0001. `if (idata != 0)` → TRUE → fatal("[ CRIME_CONTROL: unimplemented control 0x0000000000000001 ]"). So EVERY sw/sd 0x0201 and 0x0001 at +0x08 prints "CRIME_CONTROL: unimplemented"!
+
+    Does that break any row in the rearm session? Rows: rearm once counts "-- declined." — the CONTROL text doesn't contain "-- declined." ✓ unaffected. rearm surv — liveness ✓. BUT the latch prologue comment (line 897-898) says: "an accepted CONTROL write whose unmodelled bit prints the CONTROL text, so a future second latch on THAT message reusing bit 0 (`ctl_collide') shows the same way" — yes, they're AWARE the 0x0201/0x0001 writes print the text in the prologue. And the prologue is in latch x5 session — latch x5 counts "-- declined." only ✓.
+
+    Hmm OK. But now — the sw08 msg ctl row: count(t, "CRIME_CONTROL: unimplemented", clean) == 1 in ITS session (only sw 0x01) ✓ unaffected.
+    
+    And "sb08 msg" row: count == 0 — its session has only refused sb at +0x08 ✓ no accepted CONTROL write ✓.
+    
+    And "sh08b msg" == 0: session has only refused sh at +0x08 ✓.
+
+    OK — now an important double-check for my candidate gap: does the rearm loop's sw 0x0201 FATAL stop anything? fatal() in gxemul prints but doesn't exit (fatal without exit — yes, in gxemul `fatal()` just prints; `exit()` is separate). ✓ The session continues.
+
+    Now — think about whether a pre-set keyed on `idata & 0x100`... wait, one more consideration: the mutant could also be keyed on `idata & 0x100` in the form `(idata & CRIME_CONTROL_ENDIANESS)`. But hmm — actually WAIT. There's a subtlety: after `idata &= ~CRIME_CONTROL_ENDIANESS`, idata loses 0x100. My mutant insert must be BEFORE that line (or anywhere before; the DOG/RESET clears don't touch 0x100). Insert right after `if (writeflag == MEM_WRITE) {`. Good.
+
+    Now let me ALSO reconsider: is there any row that would catch the 0x100 pre-set via a DIFFERENT channel — e.g., "sw08 msg ctl" counts the CONTROL text == 1 — unaffected. No row counts CONTROL text in rearm/latch sessions. Right.
+
+    So the exact-edit GAP for Q2:
+    ```c
+    case CRIME_CONTROL:	/*  0x008  */
+        if (writeflag == MEM_WRITE) {
+            if (idata & CRIME_CONTROL_ENDIANESS)
+                d->warned = 0;            /* re-arm: the announce is no longer once-per-instance */
+    ```
+    (or `d->warned |= CRIME_W_LEN;` for the pre-set twin — either alone scores 141/141).
+    Rows expected to catch it: "rearm once" (a re-arm on an accepted access between two refusals) and "latch x5" (a pre-set before the first refusal). They cannot: every accepted CONTROL write the probe ever issues carries bit 8 clear — ACCEPTS's four values {0x0201, 0x0001, 0, 0x0200} at both widths, plus sw 0x01 and sw 0x0800 elsewhere. The ENDIANESS bit is the arm's own third named bit (glm's sh08b row carries it on a REFUSED sh 0x0900 — but refused accesses never reach the arm), so a key on it is live, non-equivalent, and invisible.
+
+    Hmm — wait, one more check: could the probe's sd 0x08 values at 8W somehow carry 0x100 via memory_readmax64 reading 8 bytes where only... no — st() for sd writes t0=0x0201 etc. as 64-bit stores; idata = the 8 bytes = 0x0201. Bit 8 clear. ✓.
+
+    Also the CRIME+0x08 lw/ld (reads) — reads don't carry idata. ✓.
+
+    Now, is this within the question's scope? Q2: "The smallest source edit to dev_sgi_ip32.c that undoes part of the fix's behaviour and still scores 141/141, as an exact edit, with the row you expected to catch it and why it cannot. Items on the header's DISCLOSED list are outside the question." Is my mutant on the DISCLOSED list? Scanning the DISCLOSED bullets:
+    - "a latch keyed on a JOINT predicate (e.g. only 2-byte refusals at CRIME_TIME), or on one unnamed offset other than the default-arm cells the latch rows refuse at: clause (e)". My mutant keys on a single VALUE BIT of an accepted CONTROL write — not a joint predicate, not an unnamed offset. NOT disclosed.
+    - "a re-arm or pre-set inside the HARD_RESET branch of the CONTROL arm" — no, mine is at the top of the write path, not inside the RESET branch. NOT disclosed.
+    - Contract item 4 says the pre-set is closed "over the KIND x LABEL CROSS" with "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four)". The claim "all four" is DOG × leftover — true — but the write VALUE's other bits (0x100 being the arm's own named bit) are an axis the enumeration does not vary. Item 3 applied the all-ones doctrine to refused stores; no all-ones (or 0x100-carrying) ACCEPTED CONTROL write exists. So NOT disclosed; it's a live omission.
+    
+    Actually hold on, let me steelman the defense: the enumeration's purpose is "every side of every if an accepted access takes". The ifs in the CONTROL arm test DOG, RESET, leftover. 0x100 is not an if-side. A latch keyed on 0x100 is a latch keyed on a predicate that is NOT one of the function's branch sides — is it in the contract's clause (e) floor? Clause (e) is "the single-axis generating set being the floor". The generating set here = the if-sides. `idata & 0x100` is a single axis, but not a member of the generating set... The generating-set doctrine says: the floor catches mutants keyed on single axes of the enumerated set; joints of them are debt. A key on 0x100 is a single axis OUTSIDE the enumerated set — the enumeration simply doesn't span the value space it claims ("CONTROL's writes at ... {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four)"). The brief's own Q1 asks "is ACCEPTS exactly the function's accepted-access kinds" — an accepted CONTROL write carrying 0x100 is a kind the function takes (and treats distinctly from 0x0201 in one respect: the ENDIANESS clear is a no-op for the others... well, behaviorally the arm treats 0x100-carrying writes the same as their cleared twins — but the KIND space for mutation keying includes value bits). The fourth closing pass's own standard was: "a pre-set on ... CONTROL's 0x0200 cell each scored 131/131" — i.e., a value-cell keying is exactly the class the cross was built to close, and 0x0200 was ADDED to the list for it. The 0x100 cell is the same class and is missing. Also c1_deepseek targeted exactly "an accepted CONTROL write of exactly 0x0200" — value-keyed latches at this arm are an acknowledged live class (it survived only because dead code). So YES — this is a real, undisclosed, same-class-as-acknowledged gap.
+
+    Wait, actually — hmm, one more angle. Is `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` perhaps caught by "sw08 msg ctl" or other rows because writing 0x100 sets... no rows write 0x100. OK.
+
+    And could it be caught by the probe as a side effect — e.g., the mutant makes sw 0x0800 (sw08 halts) re-arm... irrelevant, no refusal after. OK.
+
+    So Q2 answer: GAP found (by reading; the confirming kill-table leg is the measurement I name — predicted 141/141).
+
+    Hmm, hold on. Let me reconsider the size/minimality and whether there's an even more basic omission I should report instead or additionally. Let me also check the "answer source" enumeration once more (item 9): "every lvalue the function reads is nonzero where a refused answer is read, including HARDINT". Lvalues the function reads where a decline could source odata:
+    - d->reg[relative_addr/8] — covered (seeds).
+    - d->reg[CRIME_HARDINT/8] — covered by gate lb/lh v0.
+    - d->reg[CRIME_SOFTINT/8] — SOFTINT = BIT (0x0101010111010101) in imask/istat/gate sessions; in OTHER sessions (lb v0 etc.) SOFTINT is 0! A decline answering SOFTINT would answer 0 in those sessions → invisible there; in imask/istat sessions the refused reads are AT INTSTAT/INTMASK labels (off 0x10/0x18) — a decline answering `d->reg[CRIME_SOFTINT / 8]` (= reg[4], at +0x20) — hmm, "answer SOURCE other than the addressed register" — imask lb v0 checks the refused lb at +0x18 answers 0; under a mutant answering SOFTINT (nonzero BIT there), the answer is BIT's low byte = 0x01 ≠ 0 → caught ✓ (in imask/istat sessions SOFTINT = BIT nonzero). OK covered.
+    - d->reg[CRIME_INTSTAT/8] — recomputed = SOFTINT|HARDINT; in imask/istat sessions nonzero ✓ same rows catch.
+    - d->reg[CRIME_REV/8] = 0x11 — nonzero EVERYWHERE (prelude writes it every access)! A decline answering REV's slot: `odata = d->reg[CRIME_REV / 8]` → 0x11 → any refused read answers 0x11 ≠ 0 → caught by EVERY v0 row ✓.
+    - d->reg[CRIME_CONTROL/8] = 0x100 — nonzero everywhere (prelude). A decline answering CONTROL's slot → 0x100 → lb v0 rows expect 0 → 0x100 ≠ 0 ✓ caught everywhere. ✓.
+    - d->reg[CRIME_MEM_BANK_CTRL0/8 + bank] — bank regs: nonzero for banks < physical_ram/32 (64MB → banks 0,1 = 0 and 1... bank 0 = flag|0 = 0! bank 0 is ZERO). Bank 1 = 1. A decline answering bank-0's slot answers 0 → invisible; bank-1 nonzero. Is there a session where a refused read happens with bank-1's slot... every session has bank regs = {0,1,1,...}? -M 64: banks 0,1 filled (total 64), banks 2-7 = duplicates of bank 0 = 0. So reg slots: bank0=0, bank1=1, banks2-7=0. A decline answering `d->reg[CRIME_MEM_BANK_CTRL0/8 + 1]` (bank 1) answers 1 ≠ 0 → caught by any v0 row ✓. Bank 0 (0) → equivalent-0 → fine.
+    - What about `d->use_fb`? 0 (no graphics... -e ip32 without framebuffer? use_fb... if use_fb, REV=0xa1; probe wants 0x11 → use_fb=0). A decline answering use_fb (0) → 0 → invisible — but answering a 0-valued source is equivalent to answering 0. Fine.
+    - `d->prev_asserted`? Not an lvalue READ for odata... a decline keyed on it was measured (gate). ✓.
+    - `mb_per_bank`, `total_mb`, `flag_for_128MB` — locals, per-call constants. flag = 0x000 (-M 64 ≤ 256 → mb 32 → flag 0). A decline answering flag → 0 → invisible → equivalent. mb_per_bank=32 → answering 32 ≠ 0 → caught by v0 rows ✓.
+    - preserved_CRIME_HARDINT — same as HARDINT ✓ gate covers.
+    OK — item 9's claim "every lvalue the function reads is nonzero where a refused answer is read" — bank-0's slot is 0 and flag_for_128MB is 0! Hmm: "every lvalue the function reads is nonzero where a refused answer is read, including HARDINT". Counter: flag_for_128MB (0 under -M 64), mb_per_bank is 32 (nonzero ✓), b for bank 0 = 0, bank-0 slot = 0, use_fb = 0, preserved... So the statement "every lvalue the function reads is nonzero where a refused answer is read" is literally WRONG — several readable lvalues are 0 (use_fb, flag_for_128MB, bank0's slot, SOFTINT in most sessions...). But does it MATTER? A decline answering a source that is 0 everywhere answers 0 — equivalent to the fix, no gap. The claim as worded ("every lvalue ... is nonzero") is an overstatement — a Q3 candidate: it's wrong as stated (use_fb, flag_for_128MB, CRIME_MEM_BANK_CTRL0+0 are all 0 under -M 64; SOFTINT is 0 outside the irq sessions) — though the load-bearing ones (HARDINT, SOFTINT-where-seeded, addressed regs) are covered. The statement's purpose is the answer-SOURCE closure; the 0-valued sources are equivalent, so the error is cosmetic but real: the sentence says "every lvalue the function reads is nonzero where a refused answer is read" — false for use_fb/flag/bank0/SOFTINT-in-cold-sessions. Good Q3 material.
+
+    Now Q1's "any row it feeds whose channel cannot vary under the mutant the row claims": let me look for rows whose claimed mutant class isn't actually observable:
+    - "free 2w said" (sh +0x08, val 0): claims channel keyed on "a 2-byte write at a label". Under (len==2?debug:fatal) → 0 ✓ varies. Under a channel keyed on WRITE → 0 ✓. Under keyed-on-CONTROL-label → 0 ✓. OK.
+    - Hmm — "free 1w said" is sb +0x27f: bit 9 AND a write — two axes in one row; under a mutant keyed ONLY on bit 9 → 0 ✓; keyed only on write → 0 ✓. Both single-axis mutants fail this row (also others). Fine — the row can catch either; no confound for catching (it can't attribute, but attribution isn't required).
+    - "free 2r said" lh +0x1f8: bits 3-8 AND len 2 — same shape ✓.
+    - What about "gate run" under the decline-narrowed-by-HARDINT mutants — measured in earlier tables ✓.
+    
+    Now — one more careful adversarial sweep of the re-arm closure: the rearm loop interleaves ONE refusal after EVERY kind. So a re-arm keyed on ANY SINGLE kind in ACCEPTS → second announce → caught. A re-arm keyed on a kind NOT in ACCEPTS:
+    1. CONTROL write carrying 0x100 (or other bits) — GAP (above).
+    2. 8R from window (ldP) — joint-predicate key `len==8 && read && window` survives. Disclosed? The joint bullet... marginal. I'll name it as secondary.
+    3. Accepted accesses at unnamed offsets (e.g. ld +0x28, sd +0x20) — "one unnamed offset" — disclosed bullet ✓.
+    4. lwl/lwr etc. — disclosed ✓.
+    5. Accepted write at +0x08 from the WINDOW (swP at +0x08)? The window if is in the REV case only; a write at +0x08 from pc 0xbfc05180 doesn't take any special branch. A key on (CONTROL ∧ window) — joint — marginal/disclosed.
+    6. 4-byte LOW-lane write at +0x0c specifically (NetBSD's cell) vs +0x04/+0x34 — unnamed-offset key — disclosed.
+    7. sd with 0x0201 vs sw with 0x0201 — both rowed ✓.
+    8. Accepted access with the RAM-config ifs' other sides — needs -M change, out of scope (probe fixed -M 64; a mutant keyed on physical_ram_in_mb — e.g. pre-set if RAM > 32MB — would fire in EVERY session since 64 > 32 → caught immediately. A mutant keyed on RAM == 64 → fires everywhere → caught. Keyed on config is not access-keyed; fine.)
+
+    Pre-set closure: latch x5 prologue = ACCEPTS before first refusal → same list, same gaps.
+
+    Also "warm once" and "mid once" cover re-arm at DOG/default-mid via other sessions ✓ (subsumed by rearm loop anyway).
+
+    Now the channel enumeration (item 5): axes: bits 0-2 (free said +0x07), bits 3-8 & len2 (free 2r +0x1f8), bit 9 & write (free 1w +0x27f), 2W at label (free 2w CONTROL), each remaining label (rev/istat/imask/dog/time). What about a channel keyed on... len==1? Covered by contrast: most rows are len 1; d6 (len==2?debug) caught by 2r/2w. A channel keyed on `relative_addr & 4`? free said (+0x07, bit 2 set... wait 0x07 has bits 0,1,2 set) prints via fatal; free 2r +0x1f8 (bits 3-8) — bit 4 (0x10): +0x07 bit 4 clear, +0x1f8 bit 4 set → both fatal on fix; under (bit4?debug:fatal): free 2r → 0 ✓ caught. Any single address bit 0-9: bit 0: +0x07 has it set; a mutant (bit0?debug:fatal) → free said 0 ✓ caught. Bits 1,2: +0x07 sets them ✓ caught by free said. Bits 3-8: +0x1f8 ✓. Bit 9: +0x27f ✓. Labels: each has a free row ✓. Direction: read rows everywhere + 1w/2w writes ✓. Width: 1 vs 2 ✓. Joint predicates — disclosed class. OK, channel enumeration closes.
+
+    Now — the fall-through (item 3) enumeration: refused kinds at every label: CONTROL: sb 0x01, 0xff; sh 0x0800, 0x0201, 0x0900, 0x0a00, 0xffff ✓ (both widths, values covering each tested bit both ways + all-ones). REV: lb/lh/sb/sh from window ✓. INTSTAT/INTMASK: lb/sb/lh/sh ✓. TIME: lb/sb/lh/sh ✓. DOG: any refused access falls to "No warning" arm — has no body → equivalent (disclosed ✓ measured table 2). Default: lb/lh/sb/sh at 0x07/0x06/0x1f/0x1e/0x27f/0x1ff/0x1fe/0x1fc ✓ nodflt rows. CONTROL READS: fall-through on a refused READ at CONTROL — the arm acts only on MEM_WRITE → equivalent, disclosed ✓. What about a refused read at REV NOT from the window vs from window — rev pc rows are from the window; a fall-through keyed on window-in for reads: lb rev pc checks pc NOT ra ✓ caught. Window-out refused read at REV — lb at +0x00 from normal pc... is there one? latch x5's tail has lb +0x00 (from normal pc!) ✓ its announce is silenced (latch set) — under a fall-through at REV-out-window... the switch's REV arm would run: pc test (out) → nothing. Equivalent anyway (no side effect). ✓.
+
+    Item 6 (accept shrink): acc8 near, acc8 st+ld, acc4 rhi/rlo/wlo/whi, top8 st+ld, top4 rhi/rlo/w, top8 anchor, top4 anchor, devsig, devsig hi, rev pc ctl ✓ as analyzed.
+
+    Item 7 (landing): sb keeps (+0x37→slot 0x30), sh keeps (+0x30), lo keeps (+0x47,+0x44,+0x42→slot 0x40), hi keeps (+0x27f,+0x27c→slot 0x278), mid keeps (+0x1ff,+0x1fc→slot 0x1f8), imask keeps (+0x18). What about a landing at slot 0x00 (REV), 0x08 (CONTROL), 0x10, 0x20, 0x28, 0x38? DISCLOSED: "At INTSTAT (the tail recomputes it), CONTROL and REV (the prelude rewrites them) such a landing is EQUIVALENT." TIME: the open named cell (disclosed). SOFTINT 0x20: disclosed (single-unnamed-offset / deepseek). HARDINT 0x28: a landing there — the tail RESTORES HARDINT from preserved! So a refused store "landing" at HARDINT's slot via the len arm... wait, the decline arm's hypothetical landing `d->reg[relative_addr/8] = idata` at +0x28 would set HARDINT's slot, but then the tail does `d->reg[HARDINT/8] = preserved_CRIME_HARDINT` — restoring it. So a landing at +0x28 is ERASED by the tail → EQUIVALENT. Hmm — is that disclosed? The disclosed bullet lists SOFTINT explicitly, and INTSTAT/CONTROL/REV as equivalent. HARDINT slot: the tail's restore makes any landing there equivalent too. Not stated but true. Minor — could be a Q3 note (the "equivalent" list omitted HARDINT's slot, which the tail restores). Actually wait — careful: the tail restore happens on EVERY access (it's the common tail — including ACCEPTED accesses!). An accepted sd at +0x28 writes HARDINT's slot in the len==8 arm, then the tail restores preserved → accepted writes to HARDINT are also dropped! Is that the fix's doing? The `preserved_CRIME_HARDINT` mechanism predates #529? The gate session does `ld +0x28` reading s2 → expects HARDINT set (latched via MACE). If accepted writes to +0x28 are dropped by the tail, that's the design (HARDINT is read-only-ish). Anyway not part of the question scope (accepted write shrink at +0x28 is an "accept cell at unrowed slot" — disclosed).
+
+    Item 10 (gate): rows gate hardint, gate line, gate run, gate lb v0, gate lh v0 ✓ controls + new rows ✓.
+
+    Now let me also verify the diff claims vs the actual probe (repair 10 applied): the probe has gate lb/lh v0 ✓, +0x42 sh in lo keeps ✓, ACCEPTS 43 ✓, free_one + 8 rows ✓, latch prologue = ACCEPTS ✓. "KINDS = ACCEPTS" ✓. The header diff is faithful ✓.
+
+    Row count: I counted 141 ✓ (matches CRIMEP_RESULT denominator claim).
+
+    Now Q3: statements wrong.
+    (a) Item 9 / brief line: "every lvalue the function reads is nonzero where a refused answer is read" — FALSE as stated (use_fb=0, flag_for_128MB=0, bank-0 slot=0, SOFTINT=0 outside irq sessions, `b`=0 for bank 0, preserved_... in cold sessions). The intended invariant holds only for the sources that matter; the sentence overclaims.
+    (b) The contract item 4/8 claim that the cross is "exactly the function's accepted-access kinds" — the omission of the 0x100-carrying CONTROL write cell (and ldP) makes the closure claim wrong — that's my Q2 gap, also a wrong statement for Q3: specifically "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four)" presented as closing the value axis while the arm's third named bit (ENDIANESS) set-side is unrowed. Note the probe's OWN comment at line 479 says "glm, closing pass: ENDIANESS (0x0100) is the arm's third tested bit" — for the REFUSED sh 0x0900 — the suite knew 0x100 is a tested bit of the arm and rowed it only on the refusal side, never on the accepted side. Hmm wait — "tested"? The arm doesn't TEST 0x100 in an if — it clears it unconditionally. The sh08b comment calls it "the arm's third tested bit" loosely. For refused accesses this matters for fall-through keying; for accepted, for latch keying. The accepted side missed it.
+    (c) POSTTABLE: "check_pred.out: CHECKPRED exact=44 differs=1 of 45 measured (45 predicted)" — I should read check_pred.out to confirm. And confirm base 141/141 and the specific scores (nolatch 126, rearm 132, static_od 138, c2 139, c3 136, x_chan_write 139, x_chan_rev 140). Let me read the artifacts.
+    (d) The brief's claim "43 kinds" ✓ counted 43.
+    (e) Brief line 19: "REV's pc-window sides" in ACCEPTS — "sides" plural both directions ✓ but missing 8R-in — related to gap.
+    (f) The header's item 9 sentence: "INTSTAT/INTMASK 0x0101010111010101 and DOG 0x0123456789abcdef, nonzero in EVERY byte" — BIT = 0x0101010111010101: bytes are 01,01,01,01,11,01,01,01 — all nonzero ✓. DOG seed ✓ every byte nonzero ✓.
+    (g) Brief POSTTABLE: "45 legs built" — verify from check_pred.out.
+    (h) Brief: "base 141/141" — verify.
+    (i) One more possible wrong statement: brief line 16-17 says "the notice CHANNEL pinned at one cell (stepped rows cannot tell debug() from fatal())" — fine.
+    (j) The lt_wset explanation: predicted {warm once, hi once, sh08b once} 138/141, measured 137/141 + sh08b said. Sanity: lt_wset = `d->warned |= CRIME_W_LEN << writeflag`. For a refused READ (writeflag==MEM_READ==0): |= CRIME_W_LEN << 0 = the right bit → latch works. For a refused WRITE (MEM_WRITE==1): |= CRIME_W_LEN << 1 = bit 1 → the if test on CRIME_W_LEN (bit 0) still true → announces EVERY refused write. warm once session: refusals are sb +0x37 (W), sh +0x30 (W), lbu +0x07 (R), sb +0x47 (W), sh +0x44 (W), sh +0x42 (W) — 5 write-refusals announce + ... wait count "-- declined." — each announce prints. warm once expects 1, gets 5 (the 5 writes; the read lbu is silenced? No wait — the READ's latch bit IS set by... hmm, the write sets bit 1, not bit 0; the read refusal tests bit 0 → clear → announces TOO! lbu +0x07 also announces and sets bit 0. Order: sb37 (announces, sets bit1), sh30 (announces), lbu07 (announces, sets bit0), sb47 (announces), sh44 (announces), sh42 (announces) → count 6? warm once predicted kill ✓ (got ≠1). hi once session: sb27f, sh27c, ld(readback, accepted), sb27e, lb07 → writes announce (3), lb07 read: bit 0 clear → announces → 4 ≠ 1 ✓. sh08b once: 4 writes + lb07 read → 5 ≠ 1 ✓. sh08b said: counts "len=2 at 0x8" text — sh +0x08 refused 4 times (0x0201, 0x0900, 0x0a00, 0xffff), each announces → 4 ≠ 1 ✓ extra kill. Predicted 138 = 141-3; measured 137 = 141-4 ✓ consistent with POSTTABLE's story ✓.
+    
+    Also check POSTTABLE claim about static_od 138: "its NEW gate lb/lh v0 kills, the gate's refused reads following an accepted ld of HARDINT" — static_od = `static uint64_t odata` — the gate session's accepted ld +0x28 (HARDINT read) loads odata = HARDINT value (nonzero); the following refused lb/lh +0x08 answer the STALE odata (nonzero) → gate lb/lh v0 fail. 141-138 = 3 fails: gate lb v0, gate lh v0, + warm v0 (the classic static_od kill) ✓ plausible 138.
+
+    nolatch 126 = 141 - 15 once/said-count rows... plausible. rearm 132 = 141-9 (rearm once, warm once, mid once, latch x5, rev/istat/imask/dog/time/sh08b/hi once... that's 10-11; measured is measured — fine).
+
+    I should still read check_pred.out and PRETABLE.out to confirm the "45 predicted", base 141/141, and that c1 was predicted equivalent. Also confirm the instrument byte-identity claim can't be checked by me beyond cmp — I'll note what I could not check.
+
+    Also the operational rule: I must NOT run gates. Building a single mutant in my own temp dir is allowed — but on this Windows host the probe needs pty (Linux-only) and a built gxemul; there are existing build trees (build/, build-asan/) but those are for the main tree, not GXEMUL-SEC... Actually GXEMUL-SEC has its own src. Building gxemul takes minutes and the probe needs a pty — Git Bash Python lacks pty? Python on Windows has no pty module... there's WSL possibly (_wsl-gentoo, _wsl_tmp_preserved exist). Attempting a full mutant build+run could take a long time and might collide with "the operator run in progress" (the rule warns a second concurrent invocation corrupts the operator run — that refers to gates sharing one log directory; a build in my own temp dir is fine). Given time constraints and that my analysis is by-reading (which the brief explicitly accepts: "kimi CLI by reading", "say what you could not check"), I'll deliver the by-reading verdict and NAME the confirming measurement (kill-table leg with the exact edit, predicted 141/141).
+
+    Let me now read the table-8 artifacts: check_pred.out, and skim PRETABLE.out/POSTTABLE.out.
+
+• The probe is now fully read; row count checks out at 141. Now the table-8 artifacts for Q3.EXACT    base               141/141 OK
+EXACT    c1_deepseek        141/141 OK
+EXACT    c2_pre_rev         140/141 OK
+EXACT    c2_rearm_dog       140/141 OK
+EXACT    c2_rearm_rev       140/141 OK
+EXACT    c2_rearm_txt       140/141 OK
+EXACT    c3_pre_ctl0        140/141 OK
+EXACT    c3_pre_dog         140/141 OK
+EXACT    c3_pre_dogclr      140/141 OK
+EXACT    c3_pre_istat       140/141 OK
+EXACT    c3_pre_revbr       140/141 OK
+DIFFERS  lt_wset            137/141 OK done=1  extra=['sh08b said'] missing=[]
+EXACT    nolatch            126/141 OK
+EXACT    o_ctl_collide      140/141 OK
+EXACT    o_hi_gate          140/141 OK
+EXACT    o_pa_gate          140/141 OK
+EXACT    r_byp_rev          140/141 OK
+EXACT    r_land_b4clr       140/141 OK
+EXACT    r_pre_ctlrd        140/141 OK
+EXACT    r_pre_dogbr        140/141 OK
+EXACT    r_pre_istat        140/141 OK
+EXACT    r_pre_revbr        140/141 OK
+EXACT    r_rearm_ctl0       140/141 OK
+EXACT    r_rearm_ctlrd      140/141 OK
+EXACT    r_rearm_dogclr     140/141 OK
+EXACT    rearm              132/141 OK
+EXACT    static_od          138/141 OK
+EXACT    c2_kimik3          139/141 OK
+EXACT    c3_codex_dbg       136/141 OK
+EXACT    c4_kimicli         140/141 OK
+EXACT    c5_codex_b1        140/141 OK
+EXACT    d1_rearm_dog0200   140/141 OK
+EXACT    d2_pre_dog0200     140/141 OK
+EXACT    d3_rearm_wtime     139/141 OK
+EXACT    d4_pre_wistat      140/141 OK
+EXACT    d6_chan_len2       139/141 OK
+EXACT    d7_rearm_wrev      140/141 OK
+EXACT    x_pre_dog4w        140/141 OK
+EXACT    x_rearm_rev8r      140/141 OK
+EXACT    x_pre_time4r       140/141 OK
+EXACT    x_rearm_ctl8w0200  140/141 OK
+EXACT    x_chan_rev         140/141 OK
+EXACT    x_chan_write       139/141 OK
+EXACT    x_rearm_defhi      140/141 OK
+EXACT    x_pre_rev_wp       140/141 OK
+CHECKPRED exact=44 differs=1 of 45 measured (45 predicted)
+===
+1:EXACT    base               141/141 OK
+2:EXACT    c1_deepseek        141/141 OK
+12:DIFFERS  lt_wset            137/141 OK done=1  extra=['sh08b said'] missing=[]
+28:EXACT    c2_kimik3          139/141 OK
+29:EXACT    c3_codex_dbg       136/141 OK
+
+
+• check_pred.out confirms: 45 legs, base 141/141, c1_deepseek 141/141 (predicted equivalent), lt_wset 137 with the extra sh08b said kill — exactly as POSTTABLE describes. 44 exact + 1 differs = 45 ✓.
+
+  Interesting entries:
+  - x_rearm_rev8r 140/141 — a re-arm on REV 8R?? Let me check what that mutant is — if x_rearm_rev8r is a re-arm keyed on an accepted 8-byte READ at REV and it was KILLED (140/141, i.e. detected — one row red), then... wait, EXACT means measured == predicted, and 140/141 means one row failed → the mutant was DETECTED. So a re-arm at REV 8R was killed. How? ACCEPTS has ("ld", 0x00, 0) — 8R at REV (out of window). So the plain 8R-at-REV re-arm IS covered by the cross. My ldP concern is specifically 8R-from-WINDOW (joint). And there's "x_pre_rev_wp" 140/141 — pre-set on REV write from window (swP/sdP cover writes-from-window ✓ detected). So the window × direction coverage: writes from window are rowed (swP, sdP), reads from window only lwP (4R). A re-arm keyed on read-from-window alone would fire on lwP → caught. A re-arm keyed on 8R-from-window (joint len8 ∧ R ∧ window) — NOT rowed. That's the joint-predicate disclosed class, arguably. Fine — my primary gap stands on the 0x100 cell, which is single-axis.
+
+  Let me quickly check the mutants file for what x_rearm_rev8r actually is, and also PRETABLE for the predictions. Also I want to verify that c1_deepseek's placement is indeed after the DOG block (dead code claim).
+
+• check_pred.out confirms POSTTABLE's claims exactly. Let me verify the c1 dead-code claim and the rev8r mutant shape.27:    "x_rearm_rev8r": [(REVCASE, REVCASE + "\t\tif (writeflag == MEM_READ && len == 8)\n\t\t\td->warned = 0;\n")],
+28-    "x_pre_time4r":  [(TIMECASE, TIMECASE + "\t\tif (writeflag == MEM_READ && len == 4)\n\t\t\td->warned |= CRIME_W_LEN;\n")],
+29-    "x_rearm_ctl8w0200": [(ENDI, ENDI + "\t\t\tif (len == 8 && idata == 0 && (memory_readmax64(cpu, data, len) & "
+30-                                        "CRIME_CONTROL_DOG_ENABLE))\n\t\t\t\td->warned = 0;\n")],
+31-    "x_chan_rev":    [(FATAL, "\t\t\t(relative_addr == CRIME_REV ? debug : fatal)(\"[ crime: unimplemented len=%i at 0x%x "
+32-                              "-- declined.\"\n")],
+33-    "x_chan_write":  [(FATAL, "\t\t\t(writeflag == MEM_WRITE ? debug : fatal)(\"[ crime: unimplemented len=%i at 0x%x "
+34-                              "-- declined.\"\n")],
+35-    "x_rearm_defhi": [(DEFAULT, "\tdefault:\n\t\tif (writeflag == MEM_WRITE && len == 4 && !(relative_addr & 4))\n"
+--
+37:    "x_pre_rev_wp":  [(REVCASE, REVCASE + "\t\tif (writeflag == MEM_WRITE && ((uint32_t)cpu->pc & 0xffffff00) == "
+38-                                          "(uint32_t)0xbfc05100)\n\t\t\td->warned |= CRIME_W_LEN;\n")],
+39-})
+40-
+41-if __name__ == "__main__":
+42-    if sys.argv[1:2] == ["list"]:
+43-        print(" ".join(M)); sys.exit(0)
+44-    name, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
+45-    s = io.open(src, newline="").read()
+
+
+• Very informative:
+
+  - `x_rearm_rev8r`: re-arm in the REV case keyed on `writeflag == MEM_READ && len == 8` (NOT window-keyed). Killed at 140/141 — because ACCEPTS has ld +0x00 (8R out of window). So plain 8R-at-REV re-arm is caught ✓. My residual concern is only the JOINT {8R ∧ in-window}, which is the disclosed joint-predicate class. Good.
+
+  - `x_pre_rev_wp`: pre-set keyed on `writeflag == MEM_WRITE && pc-window` — killed 140/141 because swP/sdP are rowed ✓. So write-from-window pre-set is caught.
+
+  - `x_rearm_ctl8w0200`: re-arm keyed on `len == 8 && idata == 0 && (memory_readmax64(...) & DOG)` placed at ENDI (after the ENDIANESS clear) — killed because sd 0x0200 is rowed ✓.
+
+  So the panel DID probe the value-keyed latch class at CONTROL heavily (c1_deepseek, d1/d2 dog0200, x_rearm_ctl8w0200) — all keyed on the DOG bit / 0x0200 cell, all either dead-code-equivalent (c1) or killed. NOBODY keyed on the ENDIANESS bit (0x100) — the one bit the arm clears unconditionally and no probe write carries. My gap stands, and it's precisely in the class the panel was actively mining.
+
+  Let me also double-check the c1_deepseek entry in the mutants file (in the brief it's shown: inserted AFTER the DOG clear block — DOGBLK + `if (idata == CRIME_CONTROL_DOG_ENABLE) d->warned |= CRIME_W_LEN;` — dead because idata's 0x200 was already cleared). ✓ dead code, equivalent. Confirmed by the brief's own text.
+
+  Now let me be extra careful about my candidate gap edit. The mutant:
+
+  ```c
+  case CRIME_CONTROL:	/*  0x008  */
+  	if (writeflag == MEM_WRITE) {
+  		if (idata & CRIME_CONTROL_ENDIANESS)
+  			d->warned = 0;
+  		... rest unchanged
+  ```
+
+  Under this mutant:
+  - Every accepted CONTROL write in the probe carries bit 8 = 0 → the re-arm never fires → all 141 rows pass.
+
+  For the pre-set twin:
+  ```c
+  		if (idata & CRIME_CONTROL_ENDIANESS)
+  			d->warned |= CRIME_W_LEN;
+  ```
+  - Same: never fires → latch x5's prologue doesn't pre-set → first refusal announces → 141/141.
+
+  Both are one-line inserts (plus they reference only existing identifiers). "Smallest source edit that undoes part of the fix's behaviour": the re-arm undoes announce-once. A guest writing 0x100 (or 0x101, 0x300, 0x900...) to CONTROL — a fully accepted, non-fatal write — re-arms the announce; the next narrow access announces a second time. That's exactly the fix behaviour item 4/8 protect ("the latch ... never set, or KEYED ON THE ACCESS" / "an accepted access between two refusals does not re-arm the announce").
+
+  Wait — I should double check one thing: does ANY session do an accepted CONTROL write AFTER a refusal with 0x100? The only accepted CONTROL writes anywhere: the 8 ACCEPTS values (in rearm loop, each between refusals; in latch prologue, before first refusal), sw 0x01, sw 0x0800 (sessions without refusals). So no. ✓.
+
+  Also — what about `sw 0x0900`-style refused stores... refused, never reach the arm. ✓.
+
+  Now, second check — could this mutant be caught INDIRECTLY because the re-arm or pre-set fires during... no. It only fires on an accepted CONTROL write carrying 0x100. There are none. Done. It's a 141/141 survivor by reading; the confirming measurement is one kill-table leg.
+
+  Now — is it "the smallest" edit? One line + braces-free. Yes, about as small as the panel's own d1/d2 mutants. Also alternatives keyed on `idata & 0x400`, `idata & 0x10000`, `idata > 0x0201`, etc. — same class. The most defensible instance uses the arm's own named mask CRIME_CONTROL_ENDIANESS, since the sh08b comment itself calls 0x100 "the arm's third tested bit" — the enumeration rows that bit on the REFUSED side (sh 0x0900) but never on the ACCEPTED side.
+
+  Now Q1 formal answer:
+  - ACCEPTS omits: (a) accepted CONTROL writes carrying ENDIANESS (0x100) — or indeed any bit outside {0x200, 0x1, 0x800} — at either width; the set side of the bit the arm itself masks is a live, rowable, unrowed cell (RESET's set side is unrowable and disclosed; ENDIANESS's is rowable and not disclosed). (b) 8R from the PROM-probe window (ldP): the window's in-side is crossed with 4R/4W/8W but not 8R — a joint-keyed (width×direction×window) latch survives; this one is arguably inside the disclosed joint-predicate bullet, but as an enumeration claim "REV from the window in both directions" the 8R cell is absent. (c) Anything ACCEPTS lists that the function cannot take: nothing — all 43 are takeable. P-kinds reuse PROBE_PC as their code address without consuming A.take — fine since each run_ops rewrites the words and sets pc.
+  - Rows whose channel cannot vary under the claimed mutant: none found beyond the above; each new row's channel does vary (gate lb/lh v0 → c2 measured 139; free rows → c3/d6/x_chan measured; lo keeps' +0x42 → c5 measured 140).
+
+  Hmm — one more check on the "dflt ctl" row name in the control set: `control` requires "dflt ctl" among the OK controls — that's in the control session ✓.
+
+  And one more possible Q3: the brief (line 18) says "ACCEPTS (43 kinds: {8W,8R,4W,4R} at every label, ...)". Count check: 43 ✓. But the parenthetical "(a label is 8-aligned, so its 4-byte access is the high lane)" — TRUE for the labels (0x00, 0x08, ... all have bit 2 clear → & 4 == 0 → high lane). ✓.
+
+  Another Q3 candidate — the header item 9 sentence: "every lvalue the function reads is nonzero where a refused answer is read, including HARDINT". As established: use_fb (0 → REV=0x11... wait, use_fb is READ by the function: `d->reg[CRIME_REV/8] = d->use_fb? 0xa1 : 0x11` — use_fb=0), flag_for_128MB (0 under -M 64), b for bank 0 (0), bank-0's slot (0), SOFTINT (0 in every session except imask/istat/gate), preserved_CRIME_HARDINT (0 except gate). So the sentence is false as written. A decline answering `d->reg[CRIME_SOFTINT/8]` in the lb v0 session answers 0 = the fix's answer → invisible there; in imask/istat sessions SOFTINT=BIT nonzero → caught there. So coverage exists for SOFTINT. But for e.g. flag_for_128MB or use_fb or bank-0 slot: 0 in EVERY session → a decline answering those answers 0 → equivalent → fine. So the sentence is wrong but the load-bearing claim (no KILLABLE answer-source is left at 0 everywhere) — hmm, is that true? A decline answering bank-0's slot (always 0) is equivalent to answering 0 — not a behavior change. A decline answering flag_for_128MB (always 0) — same. use_fb (0) — same. So every source that's 0-everywhere yields an equivalent mutant; every source that's nonzero somewhere has a refused-read row there... check SOFTINT: nonzero only in imask/istat/gate sessions; refused reads there: imask/istat lb/lh at the label, gate lb/lh at +0x08 ✓ rowed (imask lb v0 etc.) ✓ caught. HARDINT: gate ✓. Bank-1 slot (nonzero everywhere): caught by every v0 row ✓. So the coverage conclusion stands, but the sentence "every lvalue the function reads is nonzero where a refused answer is read" is literally false — Q3 material. It's the kind of overstatement the pass explicitly invites ("Which statement is wrong?").
+
+  Another possible wrong statement: POSTTABLE "no mutant binary identical to base" — can't verify without builds; trust.
+
+  Also the brief says "the 25 targeted re-runs, the ten close-4 mutants and the eight cross samples" = 25+10+8 = 43, plus base + ... = 45 legs. check_pred shows 45 lines: base + 24 (c2_*/c3_*/lt_wset/nolatch/o_*/r_*/rearm/static_od = let me count from the output: base, c1, c2_pre_rev, c2_rearm_dog, c2_rearm_rev, c2_rearm_txt, c3_pre_ctl0, c3_pre_dog, c3_pre_dogclr, c3_pre_istat, c3_pre_revbr, lt_wset, nolatch, o_ctl_collide, o_hi_gate, o_pa_gate, r_byp_rev, r_land_b4clr, r_pre_ctlrd, r_pre_dogbr, r_pre_istat, r_pre_revbr, r_rearm_ctl0, r_rearm_ctlrd, r_rearm_dogclr, rearm, static_od = 27 legs, then c2_kimik3, c3_codex_dbg, c4_kimicli, c5_codex_b1 (4), d1,d2,d3,d4,d6,d7 (6), x_pre_dog4w, x_rearm_rev8r, x_pre_time4r, x_rearm_ctl8w0200, x_chan_rev, x_chan_write, x_rearm_defhi, x_pre_rev_wp (8) = 27+4+6+8 = 45 ✓. The "ten close-4 mutants" = c1..c5 + d1..d4,d6,d7 = 11, not 10! Count: c1,c2,c3,c4,c5 (5) + d1,d2,d3,d4,d6,d7 (6) = 11 close-4 mutants. The brief says "the ten close-4 mutants". Hmm: 25 targeted + 10 close-4 + 8 cross = 43 + base = 44 ≠ 45. With 11 close-4: 25+11+8+1 = 45 ✓. So "ten" should be "eleven" — OR the first batch counted differently. Let me recount the non-close-4 legs: the first 27 include base. Non-base first batch = 26. If "25 targeted re-runs" then 26-25 = 1 unexplained. Hmm: 25 targeted + base = 26 ✓ (the first 27 minus... wait first batch has 27 lines including base and c1. Is c1 part of "the ten close-4 mutants"? c1 is batch 1 of the close-4 seat's mutants ("repair-10 samples, then the Opus close-4 seat's nine" — the M dict comment says "claim 1 (deepseek)... claim 5 (codex)" then "batch 2: class siblings (PRETABLE2.out)" d1-d7). So close-4 mutants = c1..c5 (5) + d1,d2,d3,d4,d6,d7 (6) = 11 total. The brief's M-dict header says "repair-10 samples, then the Opus close-4 seat's nine" — 5 + 6 = 11, not "nine" either! Hmm wait — "the measuring seat BUILT nine non-equivalent 131/131 survivors" (line 17) — those nine were the close-4 SURVIVORS; the M dict has 11 close-4 entries, but c1 is EQUIVALENT (dead code) → 10 non-equivalent... and d-something? d5 is missing (d1,d2,d3,d4,d6,d7 — no d5!). Maybe d5 was equivalent or dropped, leaving 11 legs of which c1 equivalent → 10 non-equivalent close-4 mutants. "the ten close-4 mutants" ≈ the 10 non-equivalent ones. Then legs: base + 25 targeted + 10 non-equiv close-4 + c1 (equivalent) + 8 cross = 45 ✓. OK so "ten close-4 mutants" is consistent if it means the non-equivalent ten, with c1 counted separately as the equivalent. Fine — not a clear error. The "nine" in "the Opus close-4 seat's nine" refers to the nine survivors the seat BUILT (line 17: "BUILT nine non-equivalent 131/131 survivors") — the M dict has 10 non-equivalent close-4 legs... hmm, c2_kimik3 is "claim 2 (kimi-k3)" — one of the five repair-10 samples is from kimi-k3, not the Opus seat. The five "repair-10 samples" (c1-c5) = the panel's own reconstruction of claims 1-5 from various seats; the close-4 Opus seat's nine = ... this accounting is getting too deep. Not worth a Q3 hit unless clearly wrong. 25+10+8: with base = 44, but measured = 45. So the arithmetic "25 targeted + 10 close-4 + 8 cross" + base = 44 ≠ 45 — off by one UNLESS c1 is the 11th close-4 (the equivalent one). The sentence says "the 25 targeted re-runs, the ten close-4 mutants and the eight cross samples all on their predicted rows" — c1_deepseek is ALSO on its predicted row (141/141 predicted equivalent) and is neither a targeted re-run, nor (by this count) among the ten, nor a cross sample. So the enumeration omits c1 — 25+11+8+base = 45 ✓. The sentence should say "eleven" or "the ten non-equivalent close-4 mutants and the equivalent c1". Minor arithmetic slip — a genuine Q3 catch, small but concrete: the leg census in POSTTABLE undercounts by one (or mislabels c1).
+
+  Let me verify by checking PRETABLE.out quickly for the predicted census wording.
+
+• The artifacts corroborate the table. Two more checks: PRETABLE's census wording, and the gate-session re-run set.1:PRETABLE -- #529 kill table 8 (TARGETED, repair 10), written BEFORE the table (mtime is the order proof)
+6:opus_close4_20260914/OPUS_REPORT.md -- ten measured 131/131 survivors, nine non-equivalent by discriminator)
+14:  + header: items 4, 5, 7, 8, 9, 10 and the address-bit DISCLOSED bullet rewritten; the docstring's 131/131 quotes
+19:mutant's LATEST measured red set): 25 kills qualify -- listed below.  The eight free-running sessions are NEW (no earlier
+20:kill stands on them).  The Opus seat's ten close-4 mutants were measured by that seat at 131/131 on table 7's
+21:instrument (opus_close4_20260914/table_c4*.out); they are re-run here on the NEW instrument only.  Four of the 25 were
+29:  c1_deepseek       141/141  none   (PREDICTED EQUIVALENT -- dead code: the DOG block already cleared 0x200)
+30:  -- the 25 targeted re-runs --
+72:  -- eight mutants that SAMPLE the new cross (cells no earlier mutant targeted) --
+
+
+• PRETABLE clarifies: "The Opus seat's ten close-4 mutants" (line 20) — so the panel itself counts the close-4 batch as ten (c1-c5 + d1,d2,d3,d4,d6,d7 = 11 entries...). Hmm, let me count again from the M dict in the brief:
+
+  Batch 1 (repair-10 samples): c1_deepseek, c2_kimik3, c3_codex_dbg, c4_kimicli, c5_codex_b1 = 5
+  Batch 2 (class siblings, PRETABLE2): d1_rearm_dog0200, d2_pre_dog0200, d3_rearm_wtime, d4_pre_wistat, d6_chan_len2, d7_rearm_wrev = 6
+
+  5 + 6 = 11. But PRETABLE says "ten close-4 mutants". And "OPUS_REPORT.md -- ten measured 131/131 survivors, nine non-equivalent". So the Opus close-4 seat measured TEN survivors (nine non-equivalent). The M dict has 11 close-4-derived entries. So one of the 11 is NOT one of "the ten close-4 mutants"... or the count is just loose.
+
+  Leg census: base + 25 targeted + close-4 + 8 cross = 45 → close-4 must be 11 for the sum to work: 1+25+11+8 = 45 ✓. If close-4 were ten: 44 ≠ 45. So PRETABLE's "ten close-4 mutants" undercounts its own M dict by one — yet the leg total (45) requires eleven. Unless one of the 25 "targeted re-runs" is actually... The first check_pred block has 27 lines: base + 26. If targeted = 25, then base + 25 = 26, leaving ONE extra in that first block — and indeed c1_deepseek sits in the first block (line 2 of check_pred). So the census that makes 45 work: base + 25 targeted + c1 (the predicted-equivalent sample) + 10 close-4 (c2,c3,c4,c5,d1,d2,d3,d4,d6,d7) + 8 cross = 1+25+1+10+8 = 45 ✓. So "ten close-4 mutants" = c2..c5 + d1..d7(minus d5) = 10, and c1 is counted separately as "repair-10 sample". That reconciles! The brief's POSTTABLE says "the 25 targeted re-runs, the ten close-4 mutants and the eight cross samples all on their predicted rows — every non-equivalent leg DETECTED" — c1 is mentioned in the same paragraph separately ("c1_deepseek 141/141 (PREDICTED EQUIVALENT...)"). So the accounting is consistent. No error there. Good — I checked, it balances.
+
+  Now, "the gate-session mutants re-run" question: o_hi_gate and o_pa_gate are in the 25 targeted re-runs ✓ (they're in check_pred: o_hi_gate 140, o_pa_gate 140 — detected, EXACT). Good — the mutants whose red rows sit in the changed gate session were re-run.
+
+  Now let me nail down remaining Q3 candidates by re-scanning the brief for factual slips I can check:
+
+  1. Brief line 33: "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four)" — the enumeration claim that is short (my Q2 gap). Also the header line 705-707 (probe comment): "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200}, and the default arm's six kinds in both 4-byte lanes" — same short claim.
+
+  2. Header item 9: "every lvalue the function reads is nonzero where a refused answer is read, including HARDINT" — literally false (use_fb, flag_for_128MB, bank-0 slot, SOFTINT in cold sessions, preserved_CRIME_HARDINT in cold sessions all read 0 where refused answers are read). The correct statement: every lvalue that is ever nonzero in a session is nonzero in a session with a refused-read row.
+
+  3. Brief line 21: "a `sh +0x42' landing" — check the probe: st(A, "sh", CRIME + 0x42, 0xffff) ✓ present.
+
+  4. Brief line 20-21: "free-running channel sessions (one refusal each) whose notice text is read without stepping" ✓.
+
+  5. The brief's claim that ACCEPTS is used by both the re-arm loop and latch x5 prologue ✓ (KINDS = ACCEPTS; prologue iterates ACCEPTS).
+
+  6. Check the brief's item-4 claim about warm once/time once: "also warm once (sd first) and time once (ld first)" — probe: warm session's first refusal is sb +0x37?? Let me re-read: keeps session order: sd +0x30 (accepted), sb +0x37 (FIRST refusal), ld +0x30 (accepted), sh +0x30 (refusal), ld +0x30, lbu +0x07 (refusal), sd +0x40, sb +0x47, sh +0x44, sh +0x42, ld +0x40. "warm once" = count == 1 across that: refusals sb37, sh30, lbu07, sb47, sh44, sh42 — six refusals, accepted accesses interleaved ✓ one announce expected ✓. Is "warm once (sd first)" right? The session's first ACCESS is an accepted sd; the first REFUSAL is sb. "sd first" presumably means the accepted-first shape. Fine. And time once: the time lb session: ld +0x38 (accepted) then lb +0x38 (first refusal) ✓ "ld first" ✓.
+
+  7. Brief item 4 says the pre-set cross includes "REV's pc-window sides" — in ACCEPTS: lwP/swP/sdP (in) + sd/ld/sw/lw at 0x00 (out) ✓ except 8R-in (ldP) as discussed.
+
+  8. One more possible enumeration check for Q1: does the function distinguish 4W at 0x00 (high lane of REV slot) from 4W at 0x08 (high lane of CONTROL slot) — both rowed ✓ (sw 0x00, sw 0x08 values).
+
+  9. What about 8W at 0x00 with a nonzero value? ACCEPTS has sd 0x00 with val 0 — the prelude rewrites REV anyway; a latch keyed on the VALUE of an accepted write at REV — value-keyed at non-CONTROL arms: e.g., pre-set keyed on `idata == 0x0123456789abcdef` at DOG? Value-keyed latches outside CONTROL: is that a class the enumeration addresses? Hmm! The cross rows kinds (op × offset), but the VALUE axis is only enumerated at CONTROL (because the CONTROL arm branches on idata). Other arms don't branch on the value. A pre-set keyed on `relative_addr == CRIME_DOG && idata == 0x1122334455667788`... that's keying on a specific value — a single value-cell among 2^64 — the generating-set doctrine can't row every value; the class is "keyed on one value at one label" ≈ joint/unnamed-cell — I'd put it in the same clause-(e) debt family as "one unnamed offset". But CONTROL is different: the brief ITSELF elevated CONTROL's value space into the floor (four named cells), because the arm branches on idata bits. The bits it branches on: DOG (0x200), RESET (0x800), leftover (post-mask != 0). The 0x100 bit is masked-not-branched-on — the defense would say: "a latch keyed on a bit the arm does not branch on is the unnamed-cell class, clause (e) debt." Hmm. That's actually a defensible counter! Let me weigh it carefully.
+
+  The counter-argument: the enumeration's stated generator is "both sides of every `if' an accepted access can take". The ifs: DOG test, RESET test, leftover test. 0x100 is not an if-side. So under the STATED generator, the 0x100-keyed latch is outside the promised floor — a known-boundary mutant, not a breach of the promise. BUT: the contract item 3 (fall-through) applied a STRONGER standard to the SAME arm on the refused side: "the arm's three TESTED idata bits (DOG 0x200, RESET 0x800, ENDIANESS 0x100) each both ways at 2W" — the contract calls ENDIANESS one of "the arm's three TESTED idata bits"! Wait — ENDIANESS isn't tested in an `if` either on the refusal side; it's cleared unconditionally. Yet the contract rows sh 0x0900 (ENDIANESS set) precisely because a fall-through could key on it: "glm, closing pass: ENDIANESS (0x0100) is the arm's third tested bit". So the SUITE'S OWN DOCTRINE treats 0x100 as a tested bit of the arm for mutation-keying purposes — on the refused side. The accepted side's enumeration ({0x0201, 0x0001, 0, 0x0200}) carries 0x100 in NONE of its cells — even though the sh08b comment shows the suite knew a data-keyed narrowing could key on 0x100. The same "keyed on any bit the access can carry" logic that justified sb 0xff/sh 0xffff (all-ones refused writes) applies a fortiori to accepted writes, which can carry all 32/64 bits. And the all-ones doctrine for refused stores exists exactly so "a fall-through keyed on ANY bit a 1- or 2-byte store can carry shows". An accepted sw/sd at CONTROL can carry 0x100 — no row carries it. So under the suite's own any-bit doctrine (which is broader than the if-sides doctrine and is applied to this very arm), the 0x100-keyed latch is INSIDE the promised floor and survives. I'm confident this is a legitimate GAP to report. Whether the author reclassifies it as clause-(e) debt is their call — but note the DISCLOSED list does NOT name "a latch keyed on an unrowed VALUE BIT of an accepted CONTROL write" anywhere; the joint-predicate bullet speaks of joint predicates and unnamed OFFSETS, not value bits; and the HARD_RESET bullet covers only the unrowable RESET branch. So it is undisclosed.
+
+  Hmm, and one more refinement: is it really true that no probe write carries 0x100 at CONTROL? The all-ones REFUSED stores (sb 0xff, sh 0xffff at +0x08) never reach the arm ✓. Accepted: the eight ACCEPTS values + sw 0x01 + sw 0x0800 ✓ none has 0x100. Confirmed.
+
+  10. Also — a 4-byte write at +0x08 stores to the HIGH half of reg[1] BEFORE the arm runs; with sw 0x0201, reg[1] becomes 0x0201_00000000... then the prelude rewrites CONTROL = 0x100 on the NEXT access ✓ consistent.
+
+  11. Now — for Q1 completeness, "any row it feeds whose channel cannot vary under the mutant the row claims": let me scan the NEW rows specifically:
+  - gate lb v0 / gate lh v0: vary under c2 ✓ (measured 139).
+  - lo keeps (+0x42): varies under c5 ✓ (measured 140).
+  - free rows: vary under c3/d6/x_chan_* ✓ measured.
+  - rearm once / latch x5 with ACCEPTS: vary under c4/d1/d2/d3/d4/d7/x_* ✓ measured.
+  - BUT: "free 2w said" — sh +0x08 with val 0. Under a channel mutant keyed on... it varies ✓. However, note: "free 2w said" is claimed to pin "a 2-byte write at a label". d6 (len==2 keyed) measured 139 — which rows killed it? Predicted rows for d6: {free 2r said, free 2w said} presumably (2 fails → 139). ✓ consistent.
+  - x_chan_write 139 → killed by {free 1w said, free 2w said} (2 write rows) ✓ consistent.
+  - x_chan_rev 140 → killed by {free rev said} ✓ consistent.
+  - c3 (bit-3 keyed) 136 → killed by five rows "at bit-3-set offsets": free 2r (0x1f8 bit 3 set), free 1w (0x27f bit 3 set), free 2w (0x08 bit 3 set), free imask (0x18 bit 3 set), free dog (0x30 bit... 0x30 = 0b110000, bit 3 = 0x08 → 0x30 & 8 = 0? 0x30 = 48 = 0b110000 → bit 3 (8) is CLEAR. Hmm! Which five rows at bit-3-set offsets? 0x1f8 ✓, 0x27f ✓, 0x08 ✓, 0x10 (istat: 0x10 & 8 = 0 ✗ clear), 0x18 (imask: 0x18 & 8 = 8 ✓ set), 0x38 (time: 0x38 & 8 = 8 ✓ set), 0x00 (rev: clear ✗), 0x30 (dog: clear ✗). So bit-3-set among the 8 free rows: 2r (0x1f8), 1w (0x27f), 2w (0x08), imask (0x18), time (0x38) = FIVE ✓ — matches "all five free-running rows at bit-3-set offsets" ✓ 141-5 = 136 ✓. POSTTABLE's c3 account is exactly right.
+
+  12. Also confirm "free said" (+0x07) under c3: 0x07 & 8 = 0 → fatal → prints → passes ✓ consistent with 136 (only 5 fails).
+
+  13. Now let me double-check the "one refusal per free-running session" claim vs the free_one for "free 1w said": sb +0x27f then B_SELF loop — the store executes ONCE? The code: at `here`: the store instruction, here+4: NOP, here+8: B_SELF (branch to self), here+12: NOP (delay slot). continue → CPU runs: store executes once, then NOP, then B_SELF loops forever (with NOP delay slot) → the refusal happens once ✓ count 1 ✓. (Under a NON-latching mutant the announce would... the store executes once, so even without a latch the count is 1! Hmm — wait: B_SELF loops at here+8, never re-executing the store. So the announce count is 1 even if the latch is removed! So the free rows CANNOT see a missing latch — fine, they pin the CHANNEL, not the latch. But "the latch silences any second one" is a red herring — there's no second execution anyway. Not an error, just imprecise rationale. Actually wait — is it? "One refusal per free-running session -- the latch silences any second one." The second one would only occur if the instruction re-executed; it doesn't. Minor wording, not a claim the table relies on. Skip.)
+
+  14. Bigger check — the `ran` split: `t.split("continue", 1)[1]` — the transcript after the "continue" command echo. For the load rows, "print v0" comes AFTER <RUN> — in the free said session c includes <RUN> then "print v0". The count is over everything after the first "continue" occurrence — including the announce printed while running ✓. Note: the announce text contains "declined" not "continue" ✓ no confound.
+
+  15. Now the last DISCLOSED bullet check — "say if one is disclosed wrongly": 
+  - The memory_rw pre-zeroing claim (#95): `if (writeflag == MEM_READ) memset(data, 0, len);` — I can verify in src/cpus/memory_rw.c. Let me grep.
+  - The `goto crime_declined` → `return 1` equivalence: with pre-zeroing, a declined read returns 0 either way; the tail's HARDINT restore/INTSTAT recompute are identities since nothing changed them between entry and tail on a declined access... wait — on a declined access, the prelude DID change reg[REV], reg[CONTROL], reg[INTSTAT], bank regs (the prelude runs before the width arm). The tail recomputes INTSTAT and restores HARDINT. `return 1` at the arm would skip the tail: INTSTAT would keep the prelude's recompute (SOFTINT|HARDINT — same expression the tail recomputes; HARDINT unchanged since entry because... the prelude doesn't write HARDINT; preserved == current). So tail effects are identities ✓ equivalence holds. And the buffer pre-zeroing makes the read answer 0 ✓. Measured 40/40 in table 1 anyway.
+  - DISCLOSED: "widths 3,5,6,7 (no MIPS load/store issues them)" ✓ true for MIPS I basic... ldl/ldr etc. disclosed separately ✓.
+  - "the 4R-high cell at +0x00 is carried by rev pc ctl" — rev pc ctl does lw +0x00 from window: an accepted 4R-high; if the 4R-high cell at +0x00 were shrunk (refused), the redirect wouldn't fire (goto skips the switch) → pc ≠ RA → row fails ✓ sound.
+  - DISCLOSED "A landing at CRIME_SOFTINT (0x20...) is in this class (deepseek...)" ✓.
+  - The bullet "an accepted WRITE (4 or 8 bytes) at +0x00 or +0x08 shrunk away... no round trip there can observe whether the store was accepted" ✓ true (prelude rewrites).
+  - Item 6's "*** It pins the model's CURRENT bank layout... ***" ✓ honest.
+
+  16. Verify the memory_rw memset claim quickly by grep. Also check DEV_CRIME_LENGTH 0x280 claim (+0x1f8 inside, +0x278 last 8-byte slot). Let me grep the device registration.
+
+• Two quick source verifications for the DISCLOSED-list claims.215:					memset(data, 0, len);
+267:				memset(data, 0, len);
+492:					memset(data, 0, len);
+75:#define	DEV_CRIME_LENGTH		0x280
+77:	uint64_t		reg[DEV_CRIME_LENGTH / sizeof(uint64_t)];
+427: *  dev_crime_init():
+429:void dev_crime_init(struct machine *machine, struct memory *mem,
+457:	memory_device_register(mem, "crime", baseaddr, DEV_CRIME_LENGTH,
+118:#define	MEM_WRITE			1
+
+
+• All verified:
+  - memory_rw.c does pre-zero read buffers ✓ (line 215 in the device-access path presumably).
+  - DEV_CRIME_LENGTH = 0x280 ✓ so +0x278 is the last 8-byte slot and +0x1f8/+0x27f are inside.
+  - MEM_WRITE = 1 ✓ (consistent with lt_wset analysis: `CRIME_W_LEN << writeflag` — writes shift to bit 1).
+
+  Now finalize the review. Summary of findings:
+
+  **Q1 — the enumeration.** ACCEPTS is NOT exactly the function's accepted-access kinds:
+  1. Accepted CONTROL writes carrying the ENDIANESS bit (0x100) — or any bit outside {0x200, 0x0001, 0x0800} — are absent at both widths. All eight ACCEPTS CONTROL values have bit 8 clear; the only other accepted CONTROL writes in the probe are sw 0x01 and sw 0x0800. The arm's own contract text names ENDIANESS "the arm's third tested bit" for the refused side (sh 0x0900 in sh08b), but the accepted side never carries it. The RESET bit's set side is unrowable and disclosed; the ENDIANESS bit's set side is rowable and undisclosed.
+  2. 8R from the PROM-probe window (ldP) is absent — window-in is crossed with 4R/4W/8W but not 8R. A latch keyed jointly on {len==8, MEM_READ, window} survives. This one is arguably inside the disclosed joint-predicate bullet; I flag it as the weaker find. (x_rearm_rev8r, keyed without the window conjunct, was killed 140/141 via ld +0x00; x_pre_rev_wp, write ∧ window, killed via swP/sdP.)
+  3. Nothing in ACCEPTS is a kind the function cannot take. All 43 are real (P-kinds reuse PROBE_PC as code address — sound, since run_ops rewrites the words and sets pc each time; the redirect to ra=RA is harmless because stepping stops after one instruction and the next command list re-sets pc).
+  4. Every NEW row's channel does vary under its claimed mutant, corroborated by check_pred.out: gate lb/lh v0 kill c2 (139), +0x42 kills c5 (140), the free rows kill c3 (136 = 141 − the five bit-3-set rows: 0x1f8, 0x27f, 0x08, 0x18, 0x38 — I verified the bit-3 arithmetic matches "all five"), d6 (139 = −2 len-2 rows), x_chan_write (139 = −2 write rows), x_chan_rev (140 = −1).
+
+  **Q2 — the floor gap.** Exact edit (one line, re-arm twin of the d1/d2 shape the panel itself built):
+
+  ```c
+  		if (idata & CRIME_CONTROL_ENDIANESS)
+  			d->warned = 0;
+  ```
+  inserted at the top of `case CRIME_CONTROL:`'s `if (writeflag == MEM_WRITE) {` block in dev_sgi_ip32.c (before the DOG_ENABLE clear — anywhere before the `idata &= ~CRIME_CONTROL_ENDIANESS;` line; after that line it's dead code, which is exactly the c1_deepseek lesson). Rows expected to catch it: "rearm once" (an accepted access between two refusals re-arming the announce) and "latch x5" (pre-set twin: `d->warned |= CRIME_W_LEN;`). They cannot: every accepted CONTROL write the probe issues carries bit 8 clear (ACCEPTS: sw/sd × {0x0201, 0x0001, 0, 0x0200}; elsewhere sw 0x01, sw 0x0800), so the key never fires, the announce count stays 1 everywhere, and the leg scores 141/141. It is NOT disclosed: the DISCLOSED list covers joint predicates, unnamed offsets, and the HARD_RESET branch, but no unrowed value bit of an accepted CONTROL write; and contract item 3's own all-ones doctrine ("a fall-through keyed on any bit a store can carry") applied to this arm makes a bit an accepted write can carry part of the floor. Also it is a live, non-equivalent behavior change: a guest `sw 0x100` at +0x08 is accepted without fatal, and under the mutant the next narrow access announces a second time — undoing the fix's once-per-instance latch.
+
+  The confirming measurement I name (per the operational rule, since I cannot run gates): one kill-table leg with that exact one-line insert, run against the 141-row instrument; predicted 141/141, PRETABLE-style prediction {no red rows}.
+
+  Fix that closes it: add a 0x100-carrying accepted CONTROL write to ACCEPTS — e.g. ("sw", 0x08, 0x0100) and ("sd", 0x08, 0x0100) (ENDIANESS set, leftover zero post-clear → accepted silently) and/or 0x0101 — making the value cross {DOG}×{ENDIANESS}×{leftover} minus RESET. That moves the test to 143+ rows.
+
+  Hmm wait — actually let me double-check the exact value semantics: sw 0x0100: idata=0x100; DOG clear (no), RESET clear (no), `idata &= ~0x100` → 0 → no fatal. Accepted silently ✓. Under the pre-set mutant it would fire the latch → latch x5 reads 0 announces → red ✓. Under re-arm mutant, fires between refusals → second announce ✓ red. Good.
+
+  **Q3 — wrong statements.**
+  1. Contract item 4's closure claim ("the latch PRE-SET ... over the KIND x LABEL CROSS" being the function's accepted kinds) and the probe comment's "the CROSS" claim — wrong/short per Q2: the CONTROL value enumeration spans DOG×leftover but never the ENDIANESS set side; and the window cross lacks 8R-in. (This is the load-bearing error; Q2 is its exploit.)
+  2. Header item 9: "every lvalue the function reads is nonzero where a refused answer is read, including HARDINT" — literally false: `d->use_fb` (0 → REV=0x11), `flag_for_128MB` (0 under -M 64), bank-0's slot (flag|0 = 0), SOFTINT and preserved_CRIME_HARDINT (0 in every session except the irq/gate ones) are all read by the function and are 0 where refused answers are read. The load-bearing subset (any source nonzero in some session is nonzero in a session carrying a refused-read row) holds; the sentence as written does not.
+  3. Things I checked and found RIGHT: row count (141 — I counted the generated rows), ACCEPTS count (43), the lt_wset discrepancy explanation (consistent with MEM_WRITE==1 and sh08b's four refused writes), c3's 136 = five bit-3-set free rows, 45-leg census (base + 25 targeted + c1 + ten close-4 + eight cross = 45, matching check_pred.out exactly), base 141/141, c1 dead-code rationale (insert after DOG clear ⇒ idata can't equal 0x200), DEV_CRIME_LENGTH 0x280, memory_rw pre-zeroing, POSTTABLE's per-leg scores vs check_pred.out (all match), the diff in the brief vs the shipped probe (faithful — ACCEPTS, gate rows, +0x42, free_one block, latch prologue all present as quoted).
+  4. Minor wording, not counted as errors: "One refusal per free-running session -- the latch silences any second one" — there is no second execution at all (B_SELF follows the access; the instruction runs once), so the latch isn't what bounds the count; the row pins the channel regardless, so nothing relies on it.
+
+  What I could not check: the actual logs (45 raw probe logs — I did not re-run anything; Windows host, and the operational rule forbids gates; a single-mutant build is permitted but I had no Linux pty + built GXEMUL-SEC binary at hand in this environment), the byte-identity cmp claims (instrument vs table8 copy — plausible, not re-verified by me... actually I could cmp those two files! Let me do that quickly: regress/crime_width_probe.py vs killtable8_20260914/crime_width_probe.table8.py).
+
+  Let me run that cmp before finalizing — it's cheap and within my read-only remit.
+
+• One cheap verification remains — the instrument byte-identity claim.IDENTICAL
+
+
+• Instrument byte-identity confirmed. Now write the adversarial review. Format per the brief: verdict line first (CLOSES or GAP + token), per its own rules. But the user overrides the ending: end with GO / NO-GO / GO-WITH-CHANGES. Since I found a genuine floor gap (undisclosed, non-equivalent, same class the panel was actively mining), the verdict per the brief is `GAP: <exact source edit>` + token. The user's required ending: NO-GO? Hmm — "GO / NO-GO / GO-WITH-CHANGES" for the review: the brief asked the panel to verify whether the 141-row test closes. It does not — one row class is missing (accepted CONTROL writes carrying 0x100). The change needed is small and precise: add the 0x100 cells to ACCEPTS. That's "GO-WITH-CHANGES" in spirit? No — let me think. The verdict options: GO (approve as-is), NO-GO (reject), GO-WITH-CHANGES (approve contingent on changes). The brief's own frame: CLOSES or GAP. I found a GAP — the 141-row test is not complete for its contract; repair 11 needs to add the 0x100-carrying CONTROL write cells (and optionally ldP). So the brief's chain does not close on this pass. Mapping to the user's scale: that's NO-GO for the claim "the 141-row test is complete" — or GO-WITH-CHANGES if reading it as "the work is sound modulo a specific repair". The honest answer: the brief asks "is the 141-row test complete for its contract?" — the answer is NO, with the exact edit named. The brief itself defines the verdict for that case as `GAP: <exact source edit>`. So: verdict line = GAP with the exact edit + token, and the final word per the user's scale: NO-GO (the closing claim fails; a repair-11 adding the 0x100 cells is the path to GO). I'll be explicit that the required change is small and specified, but the pass's claim "no floor gap remains" is falsified, so it cannot be GO, and GO-WITH-CHANGES would mislabel it since the brief's own contract makes this a floor question, not a polish question. Hmm — but one could argue GO-WITH-CHANGES = "proceed after applying these changes". The user asked me to end with one of the three. The brief's verdict line handles the CLOSES/GAP distinction; the final line should reflect whether the brief passes review. Since a live floor gap exists, the brief's central claim ("closes the cross"; "no floor gap remains") does not survive adversarial review → NO-GO.
+
+  Wait — before finalizing, let me stress-test my gap once more for a possible kill I overlooked:
+
+  1. Could `if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` fire on any NON-CONTROL access? It's inside `case CRIME_CONTROL:` — only +0x08 accesses. Accepted accesses at +0x08 in probe: lw, ld (reads — writeflag != MEM_WRITE, skip), sw/sd × 4 values. None carries 0x100. ✓ survives.
+
+  2. Could it fire on refused accesses at +0x08? Refused accesses goto crime_declined BEFORE the switch ✓ never reach the case. ✓.
+
+  3. Does any row count announces in a session where an accepted CONTROL write with 0x100 occurs? None occur. ✓.
+
+  4. Is the edit's behavior change real (non-equivalent)? Guest: sw 0x100 +0x08 (accepted, silent), then lb +0x07 → announces (first) — that's one. Then sw 0x100 +0x08 again → re-arm. Then lh +0x06 → announces AGAIN. Base: second refusal silent. So yes, observable difference on real guest sequences. Non-equivalent ✓.
+
+  5. Pre-set twin `d->warned |= CRIME_W_LEN;` same placement: guest's first narrow access after any 0x100 write is silently declined (no announce ever). Also non-equivalent ✓ and also 141/141 on the probe.
+
+  6. Anything in the probe's prelude/roundtrip writing +0x08 with 0x100? roundtrip uses SCRATCH_RAM ✓. MACE stores are at MACE+0x10/0x18 ✓. sd +0x20 is CRIME SOFTINT, not CONTROL ✓.
+
+  Solid. Also double-check the secondary ldP joint-gap framing: ACCEPTS has sdP (8W-in), lwP (4R-in), swP (4W-in). Missing ldP (8R-in). A mutant `if (len == 8 && writeflag == MEM_READ && (pc & 0xffffff00) == 0xbfc05100) d->warned = 0;` in case CRIME_REV — fires on... any accepted 8R at +0x00 from window in the probe? None (no ldP). Accepted 8R at +0x00 out of window: ld +0x00 (in rearm loop) — pc at CODE (0x80001000 region), not window ✓ doesn't fire. Survives 141/141. Disclosed? "a latch keyed on a JOINT predicate ... clause (e)" — I'll cite it as borderline-disclosed, secondary; the 0x100 one is the clean kill because the contract itself enumerates CONTROL value cells (making single value-bits a floor axis) and the sh08b comment itself calls 0x100 a tested bit of the arm.
+
+  Hmm, one more consideration on whether 0x100-keying is really "single-axis" vs the generating set: the contract's CONTROL enumeration is (writeflag × DOG × leftover). `idata & 0x100` is NOT expressible as a joint of those axes (leftover is post-mask; 0x100 is masked away before leftover is tested) — it's an axis outside the generating set, like an unrowed address bit. The address-bit doctrine says "every bit 0-9 carried both ways by a refused access of each kind that can carry it" — the suite closes address bits by carrying them. For the CONTROL write value, the bits the suite chose to carry: 0, 9, 11 (0x0800 via sw08 — but that session has no refusals), and 0-7 via 0xff/0xffff REFUSED stores (wrong side — refused never reaches the arm). Bits 8, 10, 12-63 of an ACCEPTED CONTROL write: never carried anywhere with a refusal in the session. So the gap is: value bits of accepted CONTROL writes other than {0, 9} are not carried both ways (or at all) in any latch-counting session. The minimal witness: bit 8 (ENDIANESS) — the arm's own named bit.
+
+  Also sanity: could the panel argue "sw08 halts carries bit 11 (0x0800)"? Yes but in a refusal-free session, so a latch key on 0x800 there is unobservable — and anyway the RESET set side is disclosed-unrowable. Bit 8's set side is rowable: sw 0x100 stops nothing.
+
+  Also, I should present the "row you expected to catch it and why it cannot" crisply:
+  - Expected: `rearm once` (probe line 742) — 44 refusals interleaved with the 43 accepted kinds, exactly one announce; a re-arm on any accepted kind yields a second.
+  - Why it cannot: the mutant's key is a value bit that none of the 43 kinds carries; the re-arm never fires; the count stays 1.
+  - And `latch x5` (line 926) for the pre-set twin — same reason.
+
+  Also the repair: add ("sw", 0x08, 0x0100), ("sd", 0x08, 0x0100) to ACCEPTS (and arguably ("lwP"...) no — ldP: add ("ldP", 0x00, 0)). That takes ACCEPTS to 45-46 kinds and the row count to 143+ (rearm once note updates). Wait — actually careful: adding ("sw", 0x08, 0x0100): sw 0x100 → after arm: no fatal ✓ silent. Fine as a probe kind.
+
+  One more possible nit for Q3 completeness — brief line 16: "the notice CHANNEL pinned at one cell (stepped rows cannot tell debug() from fatal())" — fine.
+
+  And brief line 400: "time sd lb v0" seeding: sd +0x38 = 0x11111111 then lb/lh — under fix answers 0 ✓.
+
+  And the "42 of 800 logged cells" claim — I cannot check logs; noted as unverifiable by me.
+
+  Also I could not verify: "no mutant binary identical to base", "restored == base byte-identical" (build-side claims; I take them on the artifacts' say-so; the builds/ dir exists but rebuilding to verify is out of budget).
+
+  What about confirming my enumeration of "accepted CONTROL writes in the whole probe" with a grep to be thorough? Let me grep the probe for all `st(A, ..., CRIME + 0x08` occurrences and the ACCEPTS values — I already read them all (lines 406, 411, 460, 466-467, 478-481, 597-599, 712-713, 830, 837, 888). Accepted ones: 406 (sw 0x0800), 411 (sw 0x01), 712-713 (sw/sd × 0x0201/0x0001/0/0x0200). Confirmed complete — every other +0x08 access is lb/lh/sb/sh (refused) or lw/ld (reads). Good.
+
+  Now write the final review. Structure:
+  - Verdict line first: `GAP: <exact edit>` + token `CRIME_CLOSE5_20260914` (the brief demands this format).
+  - Q1 answer (enumeration findings).
+  - Q2 answer (the exact edit, rows, why they can't catch it, disclosure check, named measurement).
+  - Q3 answer (wrong statements + what I verified right + what I couldn't check).
+  - End with NO-GO (user's required ending).
+
+  Keep it tight but complete. English (user's language).
+
+• All verification is done. Here is the review, verdict line first per the brief's own rules.
+
+  `GAP: in dev_sgi_ip32.c, case CRIME_CONTROL, at the top of the if (writeflag == MEM_WRITE) block (anywhere before the idata &= ~CRIME_CONTROL_ENDIANESS; line), insert:  if (idata & CRIME_CONTROL_ENDIANESS) d->warned = 0;` — token `CRIME_CLOSE5_20260914`.
+
+  **Q1 — the enumeration is not exact.**
+
+  `ACCEPTS` (43 kinds; count confirmed against the probe at `regress/crime_width_probe.py:709`) covers {8W,8R,4W,4R} × all six case labels, the default arm's six kinds in both 4-byte lanes, and CONTROL writes at both widths × {0x0201, 0x0001, 0, 0x0200}. Two omissions:
+
+  1. **Accepted CONTROL writes carrying ENDIANESS (0x100) — the live one.** Every accepted CONTROL write in the entire probe carries bit 8 clear: the eight ACCEPTS values, plus `sw 0x01` (sw08 msg ctl) and `sw 0x0800` (sw08 halts). I enumerated all `+0x08` accesses in the probe; everything else is a refused sb/sh or a read. The probe's own sh08b comment (line 479) calls 0x100 "the arm's third tested bit" and rows it on the *refused* side (sh 0x0900) — but refused accesses never reach the arm. On the accepted side, where the arm actually executes, the bit is never carried. RESET's set side is unrowable and disclosed; ENDIANESS's set side is rowable (sw 0x100 stops nothing, prints nothing) and not disclosed anywhere.
+  2. **8R from the PROM-probe window (ldP)** — the window's in-side is crossed with 4R/4W/8W but not 8R. A latch keyed jointly on {len==8, MEM_READ, in-window} survives. Weaker find: `x_rearm_rev8r` (no window conjunct) was killed 140/141 via the plain `ld +0x00`, and this joint is arguably inside the disclosed joint-predicate bullet. Flagged, not counted as the verdict.
+
+  Nothing in ACCEPTS is a kind the function cannot take (P-kinds reusing PROBE_PC as code address are sound — `run_ops` rewrites the words and re-sets pc each time; the redirect to `ra` is inert under `step 1`). Every new row's channel does vary: check_pred.out corroborates gate lb/lh v0 → c2 139, +0x42 → c5 140, the free rows → c3 136 (exactly the five bit-3-set offsets 0x1f8/0x27f/0x08/0x18/0x38 — bit arithmetic checks), d6 139, x_chan_write 139, x_chan_rev 140.
+
+  **Q2 — the floor gap.** The exact edit above (pre-set twin: `d->warned |= CRIME_W_LEN;` same placement). Rows expected to catch it: `rearm once` (line 742 — 44 refusals interleaved with the 43 accepted kinds, want one announce) and `latch x5` (line 926). They cannot: the key is a value bit none of the 43 kinds carries, the latch is never re-armed/pre-set, every announce count stays 1, and the leg scores 141/141. It is not equivalent (a guest `sw 0x100` at +0x08 is silently accepted, and the next narrow access then announces a second time — the once-per-instance guarantee undone) and it is not on the DISCLOSED list (which covers joint predicates, unnamed offsets, and the HARD_RESET branch — no unrowed value bit of an accepted CONTROL write). It sits in precisely the class the panel was mining (c1_deepseek, d1/d2, x_rearm_ctl8w0200 — all keyed on the 0x200 cell; c1 survived only as dead code). **Measurement I name, per the operational rule:** one kill-table leg with this one-line insert against the 141-row instrument; predicted 141/141, red set ∅. I could not run it here (no Linux pty + GXEMUL-SEC binary on this host; gates forbidden). Repair-11: add `("sw", 0x08, 0x0100)` and `("sd", 0x08, 0x0100)` to ACCEPTS (optionally `("ldP", 0x00, 0)`), taking the value cross to DOG × ENDIANESS × leftover.
+
+  **Q3 — wrong statements.**
+  - The closure claim itself (brief item 4/item 8, probe comment line 704 "the list is now the CROSS"): short by the Q2 omission. Load-bearing, and it is the verdict.
+  - Header item 9: "every lvalue the function reads is nonzero where a refused answer is read, including HARDINT" — false as written. `d->use_fb` (=0, REV=0x11), `flag_for_128MB` (=0 under -M 64), bank-0's slot (`flag|0`=0), and SOFTINT/`preserved_CRIME_HARDINT` in every cold session are all read by the function and are 0 where refused answers are read. The defensible version — every source that is nonzero in some session is nonzero in a session carrying a refused-read row — holds; the sentence says something stronger and is wrong.
+  - Verified right, against the tree: row count 141 (I counted the generated rows), instrument byte-identity (cmp: identical), the brief's diff vs the shipped probe (faithful), the lt_wset discrepancy account (consistent with MEM_WRITE==1 and sh08b's four refused writes), the 45-leg census (base + 25 targeted + c1 + ten close-4 + eight cross = 45, matching `check_pred.out` line-for-line), c1's dead-code rationale, DEV_CRIME_LENGTH=0x280, memory_rw.c's pre-zeroing, and POSTTABLE's per-leg scores.
+  - Could not check: the 45 raw logs (no re-run here), the build-side claims ("no mutant binary identical to base", "restored == base"), and the "42 of 800 logged cells" TIME statistic.
+  - Not counted as errors: "the latch silences any second one" in the free-running rationale — the B_SELF loop never re-executes the access, so the count is 1 latch or not; nothing relies on it.
+
+  The pass was asked to verify the enumeration and close on the first valid pass with zero floor breaches. The enumeration is one cell short, and that cell is a live, undisclosed, non-equivalent survivor in the exact class this table was built to hunt. The repair is small and specified above, but the brief's claim that no floor gap remains in the 141-row test does not survive.
+
+  NO-GO
+
+To resume this session: kimi -r session_0b3ef848-59c6-482f-9e7e-991be5e7c9e9

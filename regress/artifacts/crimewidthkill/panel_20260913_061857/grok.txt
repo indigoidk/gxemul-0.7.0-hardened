@@ -1,0 +1,81 @@
+I'll start from the offloaded brief and the repo's current state, then read the crime width sources and kill-table artifacts before answering the three adjudication questions.The brief is loaded. Next I’ll read the crime access handler, the 71-row probe, and the kill-table artifacts so the dispositions can be checked against the tree rather than the packet.The probe and the width arm are in hand. Next I’ll list every row, the table-2 mutants, and the switch-side helpers so a joint cell the 71-row set doesn’t pin would show up.The 2-byte cells at INTSTAT/INTMASK/TIME look unpinned. I’ll confirm against the header and then measure that joint mutant in a scratch tree, not in `build/`.`only2r` leaves the INTSTAT/TIME 1-byte rows green, which is the hole. I’ll apply the joint mutant in a scratch clone and run the 71-row probe there.**GAP:** `goto crime_declined;` → `if (len != 2 || relative_addr != CRIME_INTSTAT) goto crime_declined;`
+
+`CRIME_F2_20260913`
+
+(Tree is `GXEMUL-SEC/src/devices/dev_sgi_ip32.c`: the goto is still unconditional at the width-arm `else`. Probe `istat`/`imask`/`time` sessions issue only `lb`/`sb`. `killtable2_20260913/logs/probe_only2r.raw` is 69/71, `FAILING: lh nodflt, lh rev pc`, with `istat lb`/`istat sb` still `clear`/`ok`.)
+
+I did not rebuild this mutant (WSL was denied here). The claim is a reading of the 71-row instrument against table 2’s own `only2r` and `a_istat` logs.
+
+---
+
+## 1. F1–F18 and D1–D2
+
+| # | call | reason |
+|---|---|---|
+| F1 | **UPHOLD** | Table 1 is base+18; `return1` is equivalent (`POSTTABLE.out` now quotes the refuted “18 of 18”). |
+| F2 | **UPHOLD** | Witness 3/15: three greens are controls; refusal rows were red. |
+| F3 | **UPHOLD** | Declined path never writes HARDINT/SOFTINT; `t_nohint` 40/40. House shape is the warrant. |
+| F4 | **UPHOLD** | REV arm does not test `writeflag`; `a_revw` 40/40; `sb/sh rev pc` pin it. |
+| F5 | **REFINE** | Observability is real (`a_istat` 69/71 reddens `istat lb/sb`). The rows do **not** close those labels: they pin only `len==1`. |
+| F6 | **UPHOLD** | Default-arm `debug()` is a real channel while stepping; `a_lo10` prints it. Unlabelled offsets other than the five are interior-of-default, same shape as `acc8mid`. |
+| F7 | **UPHOLD** | `fdebug` 70/71, `free said` only — measured, not argued. |
+| F8 | **UPHOLD** as far as DOG | `wstore` 68/71 is the named channel. It does not pin a store that lands off DOG (see Q3’s lesser sibling). |
+| F9 | **UPHOLD** | `sb08 msg` is a text count; `exit(0)` still gives 0. `sb08 run` is the death channel in that session. |
+| F10 | **REFINE** | `only1r`/`only2r`/`only1w`/`only2w` are single-cell in `{1,2}×{R,W}` across **all** addresses. They are not single-cell in `{1,2}×{R,W}×{label}`. `only2r` proves it. |
+| F11 | **UPHOLD** | Near DOG + far `+0x278` is the bound pair; interior is disclosed (`acc8mid` 71/71). |
+| F12 | **UPHOLD** | `l_addrmask` 70/71, `hi said` only. |
+| F13 | **UPHOLD** | `l_noonce` 65/71 on the `(once) ]` pattern. |
+| F14 | **UPHOLD** | Subsumed by F5; `last_microseconds` is not tail-overwritten. |
+| F15 | **UPHOLD** (the refine) | Upstream 0x80-block comment; `DEV_CRIME_LENGTH` is 0x280; far rows sit in memory control on purpose. |
+| F16 | **UPHOLD** | Equivalence measured; static-latch disclosure is “one CRIME per IP32”. |
+| F17 | **UPHOLD** (reject) | Upstream REV prose; not this diff. |
+| F18 | **UPHOLD** | Disclosure, not a row. |
+| D1 | **UPHOLD** | Nothing wrong with the measurement as described. SOFTINT is `0x20`, default arm, no reassert; bit 28 is `CRIME_INT_SOFT0`; IP2 is cause bit 10; TIME’s `ld` returns the **previous** update because `odata` is taken in the `len==8` arm **before** `crime_update_crime_time()`. `a_istat`/`timeft` logs match. deepseek/kimi-k3 were wrong about guest-visibility. TIME rows are load-sensitive (author already said so); INTSTAT/INTMASK are not. |
+| D2 | **UPHOLD** the floor reading; **REFINE** the closure | Address is a floor axis: the edit **is** the skip of a switch that re-tests `relative_addr`. PRETABLE 1 §5 was a wrong disclosure, not a correct (e). Licence is L1 because nothing has shipped. **What does not hold:** one `lb`/`sb` pair closes a floor label. The guard operand is `len`. At each floor label the generating set is `{1,2}×{R,W}`. Disclosing “two-cell refusal × label joints” is PRETABLE 1 §5 one axis down. |
+
+---
+
+## 2. Weakest accepted disposition: **F5**
+
+Sixteen accepts is not evidence; F5 is the one that is **wrong as a closure**.
+
+The finding (INTSTAT/INTMASK/TIME fall-throughs are guest-visible) is true. The change (row `lb`/`sb` there, delete the “idempotent” bullet) treats those labels as done. Table 2 then measures the opposite:
+
+- `a_istat`: 69/71, `istat lb` + `istat sb` red — `len==1` at `+0x10` is pinned.
+- `only2r`: `if (!(len == 2 && writeflag == MEM_READ)) goto crime_declined;` → 69/71, **only** `lh nodflt` (`+0x06`) and `lh rev pc` (`+0x00`). `istat lb/sb`, `imask lb/sb`, `time lb/sb` stay green, because those sessions never issue `lh`/`sh` at `+0x10`/`+0x18`/`+0x38`.
+
+That is `#499` again: close the cell the mutant used, leave the symmetric width open. Pass 1 narrowed by width; pass 2 narrowed by address. Class-closure was owed in **one** diff: `{1,2}×{R,W}×{REV, CONTROL-W, INTSTAT, INTMASK, TIME, default}`. F5 shipped four of the eight INTSTAT/INTMASK/TIME cells.
+
+F10 is the same miss wearing table-1 vocabulary. F8 is weaker, not wrong: it pinned the channel it named (DOG).
+
+---
+
+## 3. What all nine missed
+
+Exact edit, `DEVICE_ACCESS(crime)` width `else`, one token of control flow:
+
+```c
+		/* was: goto crime_declined; */
+		if (len != 2 || relative_addr != CRIME_INTSTAT)
+			goto crime_declined;
+```
+
+Same size, same hole: `CRIME_INTMASK` or `CRIME_TIME` in place of `CRIME_INTSTAT`.
+
+A refused `lh`/`lhu`/`sh` at `+0x10` now enters `case CRIME_INTSTAT:` and calls `crime_interrupt_reassert()`. After the same `sd INTMASK=bit28` / `sd SOFTINT=bit28` setup the F5 rows already use, that sets cause.IP2. The skip is gone at that cell; the announce and the `len==1` rows still pass.
+
+**Row that should have caught it:** `istat lh` (and `istat sh`). **They do not exist.**
+
+Rows that look like they would, and do not:
+
+| row / mutant | why it stays green |
+|---|---|
+| `istat lb` / `istat sb` | `len==1`, still declined |
+| `only2r` | its `lh` is at `+0x06`, not `+0x10` (measured 69/71) |
+| `a_istat` / `timeft` / `imaskft` | all widths at that label; the 1-byte rows redden |
+
+The TIME twin is the same edit and the worse oracle (SMALL/large vs host time). INTSTAT is the one to row first.
+
+Lesser miss, not the smallest: a refused store that lands in memory control (`relative_addr >= 0x200`) while DOG is still dropped — F8’s far-window hole; `hi said` does not read the cell back. Bigger than the goto conjunct, and it is not the skip.
+
+`dogft` / `ctlrdft` / `acc8mid` are the three survivors you already named. This one is not on that list.

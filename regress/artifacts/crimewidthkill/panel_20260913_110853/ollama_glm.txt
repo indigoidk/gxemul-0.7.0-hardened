@@ -1,0 +1,44 @@
+**GAP: in `DEVICE_ACCESS(crime)`'s width arm, replace `d->warned |= CRIME_W_LEN;` with `d->warned |= (relative_addr != CRIME_CONTROL);` — kills the once-only announce at a switch-NAMED label and still scores 85/85. CRIME_CLOSE_20260913**
+
+## 1. The gap (Q1)
+
+READ: the set-line sits inside `if (!(d->warned & CRIME_W_LEN))`, and the repair's own comment pins `CRIME_W_LEN` as bit 0 ("sets bit 0 only for a 1-byte access or an odd address").
+
+REASONED (from the inlined rows only) that the edit scores 85/85:
+
+- The only announce-count oracles over multi-refusal sessions are `latch x5` and `warm once` (READ: no other row counts `-- declined.`). Their sessions refuse only at 0x06/0x07/0x3f/0x37/0x36 and 0x37/0x30/0x07 — never at +0x08, where the mutant arms bit 0 exactly as the fix does. Both read 1.
+- The sessions that refuse at +0x08 are `sb08` and `sh08` (one refusal each; count not rowed) and `sh08b` — the **only same-cell repeated refusal in the entire test** — whose two rows check only the CONTROL text count and v1 completion. Under the mutant it prints two "(once)" lines; nothing looks.
+- `clean` cannot be announce-sensitive: READ, table 3 gives `nolatch` a red set of exactly {latch x5, warm once} (83/85), yet nolatch makes the sh08b session print two announces and `sh08b msg` stayed green — a two-announce session is still clean. (Inference REASONED; `session()`'s clean predicate is not inlined — see §5.)
+- All other sessions are cold/single-refusal and behave identically.
+
+Behaviour undone: every narrow access at CRIME_CONTROL now announces; "one latched (once) notice per device instance" is gone at that label — and the clause-5 rows check the *text* "(once)" but never its truth at +0x08.
+
+**Why it is floor, not disclosed debt:** the header's clause 4 promises to catch the latch "keyed on the access (its bit taken from len, relative_addr or writeflag)". This mutant's bit is taken from relative_addr (zero exactly at CRIME_CONTROL). The disclosed carve-out covers effects keyed on an offset the switch **does not name**; CRIME_CONTROL is named, so no disclosure applies.
+
+**Row that should catch it and cannot:** a count row on the sh08b session, e.g. `said(t, 2, 0x08, clean) == 1` (or `count(t, "-- declined.", clean) == 1`). It does not exist. Sibling, same class, also 85/85 (REASONED): `d->warned |= (relative_addr != CRIME_INTSTAT);` — the istat session refuses four times at +0x10 and has no announce-count row.
+
+## 2. Conditional second gap — a premise the packet cannot settle
+
+READ: the CONTROL arm tests a **third** bit besides DOG and RESET — `idata &= ~CRIME_CONTROL_ENDIANESS` — and clause 3 claims "the arm's TESTED idata bits both ways at 2W", while the POSTTABLE denominator says only "the arm's tested **DOG and RESET** bits both ways at 2W". Those two sentences name different generating sets; one of them is wrong.
+
+READ (internal evidence): bit 0 is not ENDIANESS — `sw08 msg ctl` ("sw 0x01 prints the text") is a base-passing control, and `~ENDIANESS` would have eaten bit 0.
+
+**NOT CHECKABLE from the packet: the numeric value of `CRIME_CONTROL_ENDIANESS`.** One grep settles it. If it is any bit a halfword can carry other than 0x200/0x800, then this also scores 85/85:
+
+`goto crime_declined;` → `if (!(relative_addr == CRIME_CONTROL && len == 2 && writeflag == MEM_WRITE && (idata & CRIME_CONTROL_ENDIANESS))) goto crime_declined;`
+
+— a refused `sh` of E|HARD_RESET then stops every CPU (the exact harm the goto exists to prevent), and no rowed refused store carries E (sh 0x0800/0x0201/0x0a00 write only bits {0,9,11}; READ). That is c_dog's class at a bit the arm explicitly tests. If E is 0 or ≥ 0x10000, no gap (no-op/unreachable at widths 1–2).
+
+Same family, unconditional (REASONED): bits 1–8, 10, 12–15 are never written set by any refused 2W at CONTROL, so a fall-through keyed on `idata & 0x0002` at that cell escapes too (a guest `sh 0x0802` stops every CPU). Whether that is floor or clause-(e) debt turns on "TESTED": the residue test `if (idata != 0)` does distinguish those bits, and the header does not say.
+
+## 3. Q2 — the repair diff
+
+Sound: the `dflt` re-key is necessary (the new accepted ld +0x278 would redden `hi nodflt` on the base build otherwise) and matches the source's format strings ("write to 0x%x:" / "read from 0x%x,"; READ); the imask/istat cause indices 0–5 are renumbered consistently (READ from the hunk); `time lh/sh`, `warm v0`, `warm once`, `top8 anchor`, `hi keeps` are sound as written, with the bank-layout and tick caveats disclosed in place. Every new row's oracle demonstrably varies under its named change (per table 3's red sets; READ). Nit: `sh08b msg`/`sh08b run` are session-level oracles over both stores while their labels describe one store each. The one unsound omission is the gap above: the repair added a *second* refused sh at +0x08 and no announce-count row to see it repeat. The tick assumption is disclosed and internally consistent; its "~1e8" magnitude is not checkable here.
+
+## 4. Q3 — wrong statements
+
+(a) Clause 3's "the arm's TESTED idata bits both ways at 2W" contradicts the denominator's "DOG and RESET bits both ways" — the rows implement only the latter. (b) Clause 4's headline ("keyed on the access") is not supported by the rows, per §1 — unless the parenthetical is read as exhausting the class, in which case the headline is false as written. (c) The unwritten residue-bit set of §2's last paragraph is silently outside the rows; "TESTED" is doing undisclosed work either way.
+
+## 5. Not checkable from the packet
+
+`CRIME_CONTROL_ENDIANESS`'s value (grep the #define — settles §2); `session()`'s `clean` predicate (my announce-insensitivity is inferred from nolatch's exact 2-row red set); the unchanged probe body (sb/sh rev-pc rows, `said`/`count` internals, AFTER/roundtrip contents — taken as READ from header and diff); `CRIME_MEM_BANK_CTRL0 = 0x208` (inferred so "bank-1 at +0x210, value 1 at -M 64" is consistent with the value loop); all MEASURED claims, taken on the packet's word. Named measurement (not run): build the one-line latch mutant and run the 85-row probe once in a temp dir — predicted 85/85.

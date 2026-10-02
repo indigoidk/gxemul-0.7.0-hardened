@@ -1,0 +1,69 @@
+I'll start from the full offloaded brief, then check the repo, the CRIME handler, and the detector artifacts before answering the enumeration questions.The brief is longer than the first chunk. I'll read the rest of the prompt and the handler, probe, and table-11 artifacts in parallel.The checkpoint still has this round at repair 13 / table 11. Next I’ll read the remaining brief, then the handler, probe, and table-11 records.The function, ACCEPTS list, table-11 records, and the static session map are the load-bearing sources. I’ll check those against the 56-cell product rather than the brief’s description.ACCEPTS is 46 and table 11 built every generated C_* cell. Next I’ll check the 23/8/10/5 split and whether any “equivalent” cell is actually observable.The repair-13 block is still labeled “NOT APPLIED” in the probe. I’ll pull the 23/8/10/5 lists from the close-7 report and the `istat ctl` / `imask ctl` sessions next.I’ll derive the post-latch map with the static session mapper (no emulator) so the 23/8/10/5 split is checked against the probe, not the brief.**CLOSES** — 28/28 latch-SET cells of `{len 4,8} × {R,W} × {REV, CONTROL, INTSTAT, INTMASK, DOG, TIME, default}` swept (27 killed at their own cell; `C_ctl4r` 188/188 as the contract’s equivalent negative control). `CRIME_CLOSE8_20260916`
+
+Checked against `DEVICE_ACCESS(crime)` in `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` and against table 11 (`killtable11_20260916/table11.out` plus the `C_ctl4r` / `C_ist4r` / `C_imk4r` / `C_tim8r` raw logs). Did not re-run the mapper or any mutant (shell denied this turn). Did not reopen landing / lane / re-map.
+
+---
+
+### 1. The enumeration is right
+
+The switch distinguishes exactly seven things: `CRIME_REV` (0x00), `CRIME_CONTROL` (0x08), `CRIME_INTSTAT` (0x10), `CRIME_INTMASK` (0x18), `CRIME_DOG` (0x30), `CRIME_TIME` (0x38), and `default`. `CRIME_SOFTINT` (0x20) and `CRIME_HARDINT` (0x28) are not case labels; they fall into `default`, which is how the generator wrote `C_dfl*`. INTSTAT and INTMASK share a body and are still two labels — table 11 killed them separately (`C_ist4r` vs `C_imk4r`).
+
+Axes considered and **not** missing:
+
+- **`relative_addr & 4`**. The 4-byte arm does branch on it. Every named label is 8-aligned, so `& 4` is always 0 there. At `default` both lanes exist and both are rowed (`p rev lw4` / `p dog rlo` / `p dog wlo` vs `p acc 40 *` / `top4 rhi`). A lane-restricted mutant is a subset of `C_dfl4*`, not a new product axis.
+- **PROM-window `pc`**. The REV arm tests it. Out-of-window REV 8W / 4W-hi / 4R-hi are in the 10 EQUIVALENT (prelude rewrites `reg[0]`; high half of 0x11 is 0). The in-window half is ROWED (`p revP * pc`). `C_rev4w` / `C_rev4r` / `C_rev8w` / `C_rev8r` hit both and die on the window rows.
+- **Idata at CONTROL**. That is ACCEPTS-entry granularity, not a 56-cell axis. `C_ctl4w` / `C_ctl8w` decline the whole label and red `p acc ctl msg`.
+
+`{latch} × {4,8} × {R,W} × {7 labels}` = 56 is the right product.
+
+### 2. No unbuilt clean-sweep in that product
+
+Table 11 built all 28 latch-SET `C_*` cells (plus `K1`/`K3` as duplicates of `C_imk4w`/`C_ctl8r`, plus `K2` as the both-directions joint of `C_rev4r`/`C_rev4w`, plus latch-CLEAR `E2`).
+
+| shape | result |
+|---|---|
+| 27 of 28 `C_*` | killed, each on its own `(len, dir, label)` |
+| `C_ctl4r` | **188/188 CONTROL=OK**, empty `FAILING:` — CONTROL 4R at +0x08 is the high half of `CRIME_CONTROL_ENDIANESS` (0x100), which is 0 either way |
+| `K2` | 186/188 on `p revP sw pc`, `p revP lw pc` only (4-byte; the 8-byte window ops cannot reach it) |
+
+The one 188/188 latch-SET product cell is `C_ctl4r`, and they built it. There is no second one sitting off-stage.
+
+A value-restricted CONTROL write (`idata == 0` / `0x0200` / `0x0100`) or an out-of-window-only REV write would also be 188/188. Those are the 10 EQUIVALENT ACCEPTS entries, not cells of the 56-cell product. Not a gap.
+
+### 3. 23 / 8 / 10 are honest; the “5” parenthetical is not
+
+Derived from the handler and the 157-row sessions (the mapper was not executed this pass):
+
+**10 EQUIVALENT** (guest sees nothing): REV 8W / 4W-hi / 4R-hi out of the window; CONTROL 4R-hi; CONTROL 4W and 8W at `0`, `0x0200`, `0x0100`. `C_ctl4r` is the measurement that this bucket is true.
+
+**8 ALREADY PINNED** post-latch, with an oracle, before repair 13: INTMASK 4R (`imask ctl`), INTMASK 8R (`imask keeps`), INTSTAT 4R (`istat ctl`), TIME 8R (`time * ctl`), DOG 8R (`sb keeps`/`sh keeps`), default 8W +0x40 and 8R +0x40 (`lo keeps`), default 8R +0x278 (`hi keeps`). `rearm once` runs the other ACCEPTS post-latch but only counts notices — it does not pin them.
+
+**23 ROWED** by the `p *` sessions = the other 31 − 8 guest-visible cells (four window kinds, REV 8R, `lw +0x04`, CONTROL 8R, INTSTAT 8W/8R/4W, INTMASK 8W/4W, DOG 8W + both 4-byte halves, TIME 8W/4W/4R, +0x40 4W/4R, far 8W). Each of those has a `p *` row whose own mutant moves it (`C_rev4w` → `p revP sw pc`, `C_tim4w` → `p t4w gap`, `C_dog4w` → `p dog whi`, …). Not vacuous.
+
+**5 HOST-DIAGNOSTIC**: the *count* 5 matches close-7 (CONTROL 4W/8W at `0x0201` **and** `0x0001`, plus `sw +0x04`). The header then names only three of them and says “rather than rowed”. `p acc ctl msg` (want 3) now sits on `sd 0x01` + `sw 0x0001` + `sw 0x0201`, so three of those five *are* rowed on a host-log count. Still not guest-visible, still clause (e), **not** a floor breach. Wrong bucket text, not a wrong split of the 31.
+
+### 4. The three `CRIMEP_CONTROL=FAIL` legs are attributable kills
+
+`CRIMEP_CONTROL` is a fixed conjunction that includes `istat ctl`, `imask ctl`, and `time * ctl`. Those three names are accepted 4R/8R **after** the session’s first refusal — i.e. the already-pinned latch-SET cells.
+
+| mutant | FAILING (from the raw log, not POSTTABLE) | what happened |
+|---|---|---|
+| `C_ist4r` 187/188 | **only** `istat ctl` (got `clear`, want `set`) | the control `lw +0x10` is INTSTAT 4R with the latch set; it is the cell |
+| `C_imk4r` 187/188 | **only** `imask ctl` (same shape at +0x18) | same |
+| `C_tim8r` 181/188 | `time lb ctl`, `time sb ctl`, `time lh ctl`, `time sh ctl`, `p acc time sd`, `p t4w gap`, `p t4r gap` | `time lb` itself stayed **ok** (`small`/`small`, raw 0). The ctl `ld` is TIME 8R after the refusal; declining it returns 0, which is `small` not `large`. The `p *` reds are the same 8R used as a readback. Session completed (`time once`/`time said` still 1) |
+
+Base is 188/188 CONTROL=OK. The gate pins that. A mutant that is supposed to move a control row will print `CONTROL=FAIL`. That is not an invalid session.
+
+### 5. Next wrong statement (after the recorded K2 prediction)
+
+**POSTTABLE 11 names the wrong TIME rows for `C_tim8r`.** It says the reds are `` `time lb/sb/lh/sh' ``. Those four rows stayed green. `table11.out` and `probe_C_tim8r.raw` both say `time lb ctl, time sb ctl, time lh ctl, time sh ctl`. `time lb` and `time lb ctl` are different rows; conflating them would have made Q4 look like a broken measurement rather than a control used as a channel.
+
+Also wrong, lesser:
+
+- **Probe header (and PRETABLE): “the latch-CLEAR half is table 10’s twelve `S_*`.”** The latch-clear half of the 56-cell product is **28** cells. The twelve `S_*` are repair 12’s value-row subset. Latch-clear TIME 4 (`E2`) is not among them.
+- **PRETABLE 11: “four negative controls 188/188”.** Table 11 did not run four equivalent-cell legs. `mutants529k.py` has one: `C_ctl4r`. The other three were prototype legs (`E1`/`E3b`/`F1`/`F3`), not this table.
+- **HOST-DIAGNOSTIC parenthetical** names 3 cells while the count is 5, and “rather than rowed” is stale for the leftover CONTROL writes that `p acc ctl msg` now counts.
+- The **WHY** block of this brief still describes pass 7 (ACCEPTS × {announced, silent} and `latch said`). The questions are the 56-cell latch-SET closure. `latch said` is still general by construction: all 46 `ACCEPTS` run before `lh +0x06`, and the width arm declines before the REV `pc` test.
+- Frozen `crime_width_probe.table11.py` still heads the live block `REPAIR 13 DRAFT -- NOT APPLIED`. The live probe was corrected in place later the same day; the artifact table 11 actually ran was not.
+
+None of those is a floor cell. The chain closes on this pass: zero surviving latch-SET clean-sweeps in the 28-cell denominator above.

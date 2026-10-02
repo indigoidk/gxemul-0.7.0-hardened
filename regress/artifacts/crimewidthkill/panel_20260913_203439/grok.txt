@@ -1,0 +1,74 @@
+I'll start from the full offloaded brief, then check the source, probe, and artifacts against the enumeration before giving a verdict.I'll verify the probe header, the device handler, and the artifacts against the claimed enumerations rather than taking the brief at its word.The header matches the brief; next I’ll walk the actual row sites and the device handler so the enumeration can be checked against the code, not the contract prose.I have the row list; next I’ll check register constants, interrupt/time helpers, and POSTTABLE 5/6 against the claimed closed classes.The HARD_RESET disclosure is the tell: they treated pre-set inside a CONTROL branch as in-class, so I’ll confirm that sibling branch against the sessions before writing the verdict.**GAP:** in `case CRIME_CONTROL`, inside `if (idata & CRIME_CONTROL_DOG_ENABLE)`, insert `d->warned |= CRIME_W_LEN;` before the strip.
+
+`CRIME_CLOSE3_20260913`
+
+I did not build this mutant. A measuring seat should score it. The control flow is from the probe’s own sessions, not from a table.
+
+---
+
+## 1. Enumeration
+
+**Answers at named labels — complete** as claimed, given the lane-form disclosure. REV / CONTROL / TIME hold 0 in BE bytes 0–1 at the label (prelude `0x11` / `0x100`; TIME is a `uint32_t`). INTSTAT / INTMASK seed `0x0101000010000001` and DOG `0x0123…ef` are nonzero in those lanes and in the LSB, so both the whole-register dump and the lane form show. CONTROL is `lh` only; that is the stronger whole-register check (`0x100` is invisible to `lb`). Far / mid sit on seeded slots whose addressed bytes are nonzero.
+
+**Latch keyed on one access axis — coverage holds; one sentence is false.** Width, direction, and parity are pinned by complementary first-refusals (`warm once` = 1W / write / odd; `latch x5` = 2R / read / even). Every switch-label-first session does refuse again at `+0x07`. Address bits 0–9: mid (`0x1ff`, bits 0–8 set) + far (bit 9) + low (those bits clear), with answer / landing / notice / fall-through / re-arm / latch rows. **`mid once` does not refuse at another label** — all five refusals stay in `0x1fc–0x1ff`. A latch that *sets* only in that block is still killed by `latch x5` (first refusal is low). The class is covered; the “every label-first session refuses again at ANOTHER label” line is not true of `mid once`.
+
+**Effects keyed on one address bit — complete** for bits 0–9 and the kinds the denominator lists. Bit 10 never appears (`relative_addr < 0x280`).
+
+**Refused stores that land — complete** given the TIME disclosure. DOG, INTMASK, far, mid are rowed. INTSTAT / REV / CONTROL landings are identities (tail / prelude). SOFTINT is the unnamed-offset class.
+
+**Pre-set and re-arm in every arm and branch — not complete.** Re-arm is closed (HARD_RESET disclosed). Pre-set is closed over **arms** (4-byte and 8-byte paths, REV, INTMASK/INTSTAT, DOG, TIME, default read and write). It is **not** closed over the nested branches the second closing pass forced onto re-arm.
+
+The DISCLOSED line already puts pre-set inside a CONTROL **branch** in the class: *“a re-arm or pre-set inside the HARD_RESET branch … Unrowable, not merely unrowed.”* HARD_RESET is unrowable because it stops the CPUs. The sibling `DOG_ENABLE` body does not stop the CPUs and is rowable.
+
+CONTROL write bodies that exist:
+
+| branch | re-arm | pre-set |
+|---|---|---|
+| `idata & DOG_ENABLE` | `rearm once` (`sw 0x0201` after the first refusal) | **omitted** |
+| `idata & HARD_RESET` | disclosed | disclosed |
+| `idata != 0` (unimplemented text) | `rearm once` | `latch x5` prologue `sw 0x01` |
+
+Same hole on the other nested branch the second pass named: pre-set **inside** the REV `pc`-window `if` (re-arm is `lwP` in `rearm`; `latch x5`’s `lw REV` is not from `0xbfc05180`, so that `if` is false).
+
+---
+
+## 2. Floor gap
+
+Exact edit, `dev_sgi_ip32.c`, `DEVICE_ACCESS(crime)`, CONTROL write arm:
+
+```c
+if (idata & CRIME_CONTROL_DOG_ENABLE) {
+    d->warned |= CRIME_W_LEN;   /* add this line */
+    idata &= ~CRIME_CONTROL_DOG_ENABLE;
+}
+```
+
+This is the dual of table 5’s `c2_rearm_dog` (`d->warned = 0` in the same `if`), which was a second-closing finding. `|=` pre-silences the first refusal after an accepted CONTROL write that takes the branch — the same shape as `pre4` / `c2_pre_rev`, which the last two closing passes treated as floor.
+
+**Row that should catch it:** `latch x5` (accepted CONTROL write, then five refusals, want one `-- declined.`).
+
+**Why it cannot:** the only accepted CONTROL write *before* a first refusal is `latch x5`’s `sw +0x08, 0x01`. `0x01` does not have `CRIME_CONTROL_DOG_ENABLE` (`0x200`). `rearm once` does `sw 0x0201` and *does* enter the branch, but only after `lb +0x07` has already set the bit, so `|=` is a no-op. `sh08b`’s `0x0201` is a **refused** `sh` — the `goto` skips the switch, so the body never runs.
+
+The same 121/121 shape, one `if` over, is `d->warned |= CRIME_W_LEN;` as the first statement of the REV `pc`-window `if`. Debugger `pc=` on the next op makes that cell rowable (`lw` from `PROBE_PC`, then a refusal); nothing in the 121 rows does that *first*.
+
+Repair is one accepted `sw +0x08, 0x0201` (or `0x200`) in the `latch x5` prologue, plus the matching REV-redirect accepted access if that cell is closed in the same diff — the class-closure form, not another single cell.
+
+---
+
+## 3. Wrong statements
+
+1. **CONTRACT item 4 / POSTTABLE 5 denominator:** “every label-first session refuses again at ANOTHER label.” False of `mid once` (item 4 lists `mid once` in that list). Complementary rows still cover the single-axis latch class.
+
+2. **CONTRACT item 3** default-arm offsets: `+0x07, +0x06, +0x1f, +0x1e, +0x27f`. DISCLOSED says eight; the mid session adds `+0x1ff / +0x1fe / +0x1fc` (`mid nodflt`). Item 3 was not updated for repair 6.
+
+3. **DISCLOSED accept-cell list** (`other than +0x00, +0x30, +0x210, +0x1f8, +0x278`) reads as exhaustive. It is not: `dflt ctl` pins 4R at `+0x04`; `sw08 *` pin accepted writes at `+0x08`; IRQ setup pins `+0x18`; `time once` pins `+0x38`. The example `len == 8 && relative_addr != 0x100` is still unrowed. Extra coverage, not a hole — the list is wrong as an inventory.
+
+4. **Item 4 parenthetical** “lh sees every value lb sees” is why 2-byte answer rows dominate 1-byte ones for a whole-register dump, but CONTROL’s modelled value is `0x100` (visible to `lh`, not to `lb`). They used `lh` for `ctl v0`; the parenthetical overstates.
+
+The `#95` pre-zero is true: `memory_rw.c` does `if (writeflag == MEM_READ) memset(data, 0, len);` immediately above `paddr -= mem->devices[i].baseaddr`. `goto` → `return 1` staying equivalent is still right. Gate independence still holds after repair 7: `gate hardint` raw is `32` (`0x20`, `CRIME_INT_PERIPH_MISC`); `BIT` does not contain bit 5.
+
+---
+
+## Could not check
+
+No mutant build, no 121-row run of the edit above (this seat is read-only). Table 5/6 red-row sets were not re-derived from the `.raw` logs; POSTTABLE 5’s 59/60 and POSTTABLE 6’s 27/27 were taken as recorded. `est/` and the pmax `build/` tree were not opened.

@@ -1,0 +1,451 @@
+kimi version 0.36.0
+• Let me understand the task. This is a panel review seat. I'm one of several seats reviewing a design brief ("PASS 1 (DESIGN)") about `crimewidthkill`: an unsupported access width to the SGI IP32 CRIME controller ends the process.
+
+  The format required:
+  - VERDICT LINE FIRST (`<option-set member>` + one clause)
+  - Then the liveness token `CRIME_P1_20260913`
+  - Then the review content.
+
+  The brief asks me to:
+  1. Choose an option member and justify, checking warrants against the tree.
+  2. Say whether a refused access runs the switch, and enumerate exact lines for 1- and 2-byte read/write.
+  3. Describe detector rows needed.
+  4. Audit premises.
+
+  The operational rule: don't run gates/battery, but building/reading in my own temp dir is fine. I should scope reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.
+
+  Let me check the premises myself by reading the actual tree. Key things to verify:
+
+  1. `fatal()` prints and returns; `exit(1)` terminates. — Check `src/include/misc.h` or wherever `fatal()` is defined in GXEMUL-SEC.
+  2. `memory_rw.c` res == 0 → -1 → exception path verbatim.
+  3. `dev_sgi_re.c` latched decline precedent.
+  4. `macepci` unlatched fatal in `dev_sgi_ip32.c`.
+  5. `struct crime_data` fields.
+  6. No CRIME docs (can check but that's premise about absence).
+  7. Two other terminating calls keyed on RAM size.
+
+  Also the claims about the switch side effects:
+  - `CRIME_REV` case: PC redirect based on `cpu->pc` — runs on any access (read OR write!) at relative_addr == 0. Note: the case doesn't check writeflag for the PC redirect! Let me check: in the verbatim code, `case CRIME_REV:` — the `if (((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100)` — no writeflag check. So even a write to CRIME_REV from near 0xbfc051XX would redirect PC. Interesting. But PROM only reads.
+  - `CRIME_CONTROL` case: only acts on write, tests idata bits. For a narrow write under member 1/2 (fall-through), idata = memory_readmax64(cpu, data, len) — for len=2, idata is the 16-bit value. CRIME_CONTROL_HARD_RESET value? Need to check. CRIME_CONTROL_DOG_ENABLE = 0x200, HARD_RESET = 0x800 per comment. Those are bits 9 and 11 — within a halfword (16-bit) value. So a 2-byte write to CRIME_CONTROL with bit 0x800 set in idata would stop all CPUs! Under member 1 (delete and fall through), a halfword write of 0x0800 to offset 0x008 (or 0x00c?) — wait, relative_addr for CRIME_CONTROL is 0x008; the switch keys on relative_addr, so a halfword write at 0x008, 0x009(? aligned), 0x00a, 0x00c all have relative_addr values... Actually relative_addr = addr - base. A write to 0x14000008 with len 2 → relative_addr = 0x008 → matches case CRIME_CONTROL. A write to 0x1400000c with len 2 → relative_addr = 0x00c → doesn't match any case → default debug print. So a halfword write to 0x008 containing bit 0x800 stops all CPUs (machine halts — every CPU running=0 → emulator presumably exits gracefully?). That's a side effect triggered by a "refused" access.
+
+  Also `idata &= ~CRIME_CONTROL_ENDIANESS;` then `if (idata != 0) fatal(...)` — a halfword write of any other unimplemented bit triggers fatal print (no exit — just fatal announce, returns). Note fatal returns per premise 1.
+
+  - CRIME_INTSTAT/INTMASK: `crime_interrupt_reassert(d)` — runs on read or write at those offsets. For a narrow access that "falls through", reassert still runs — harmless-ish but a side effect.
+  - CRIME_TIME: `crime_update_crime_time(d)` — runs regardless of writeflag at offset 0x038.
+  - default: debug() prints with `for (i=0; i<len; i++) debug(" %02x", data[i]);` — on a READ, data[] is the buffer to be filled; reading uninitialized buffer for debug — harmless.
+
+  Common tail: `d->reg[CRIME_HARDINT...] = preserved...; INTSTAT recompute; if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata);` — on a read, odata was computed in the width arm. Under member 1 (delete guard), a len=1 or len=2 access does neither store nor load — odata stays 0 — then memory_writemax64 writes 0 into data (len bytes). So a declined-but-fall-through read returns 0 and silently discards writes. That's member 2 effectively (silent decline that writes 0 on reads). Member 1 as literally stated ("delete the two lines and fall through") IS member 2 with the switch side effects — the brief's note says member 1 ≠ member 2 because of the switch. Actually the brief distinguishes: member 1 = delete two lines (the else arm disappears; narrow access skips store/load, falls into switch); member 2 = decline silently presumably meaning return 1 immediately without running switch? The distinction: member 2 "DECLINE silently" — presumably `else { return 1; }` — skips the switch AND the tail (INTSTAT recompute, HARDINT restore, memory_writemax64). So member 2's read leaves data untouched (or writes nothing), whereas member 1 runs switch + tail and writes 0 via memory_writemax64.
+
+  Member 3 = RE precedent: latched announce, then... In dev_sgi_re.c, the pattern was: if len != expected → fatal once → then what? Let me recall from the brief: 
+
+  ```c
+  if (len != 8) {
+          if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+                  d->warned |= SGIRE_W_TLBA_LEN;
+                  fatal("[ sgi_re: unimplemented len=%i for CRIME_RE_TLB_A -- declined.  (once) ]\n", (int) len);
+          }
+  } else if (writeflag == MEM_WRITE) { ...
+  ```
+
+  So in RE, the latched-decline skips the access but the function continues (the `else if` chain means narrow access does nothing for that register, then presumably reaches common tail and returns 1). Need to check dev_sgi_re.c to see whether it returns 1 at end and whether the switch-like side effects run.
+
+  Member 5 = `return 0` → memory_rw.c turns res==0 into -1 → mips_cpu_exception(EXCEPTION_DBE/IBE) → MEMORY_ACCESS_FAILED. Guest takes a bus error.
+
+  Now the key design question: which member?
+
+  Considerations:
+  - Real CRIME behavior on byte/halfword access is undocumented here (premise 6). What do we know from general knowledge? CRIME is a 64-bit register interface; the O2's CRIME registers are accessed as 64-bit or 32-bit by the OS. On real hardware, narrow accesses to CRIME... I recall that many SGI ASICs simply don't support sub-word accesses and the system may bus-error or return garbage. Without docs, can't assert.
+  - Does any in-tree guest path issue narrow accesses? The PROM and NetBSD/OpenBSD drivers use 32/64-bit accesses to CRIME (crime_read_4/crime_read_8 in NetBSD's crime.c use bus_space with 8-byte stride... actually NetBSD sgimips crime.c uses bus_space_read_8? Let me think: CRIME registers are 64-bit, on 64-bit stride). The witness measured 3/15 — meaning lb/lbu/lh/lhu/sb/sh all kill the process; the 4- and 8-byte accesses work. The question is whether any real guest issues narrow accesses. If none do, the termination is only reachable by a malicious/buggy guest — but in an emulator, a guest byte access killing the whole emulator process is still a robustness defect (guest-driven DoS).
+  - The fork is "GXEMUL-SEC" — security-hardening fork, presumably. The whole point of these rounds is to eliminate guest-reachable exit(1)/abort. The house idiom per premise 5 is per-instance N=1 latch with (once) text.
+
+  Precedent tension: RE chose latched decline (member 3) and explicitly rejected FAULT (return 0 → exception). But RE is a graphics engine; CRIME is memory/interrupt controller. However — the same-machine, same-file macepci precedent (member... macepci announces unlatched then PROCEEDS with the access — that's like member 4+announce, accept with warning). Hmm, macepci: `if (len != 4) fatal("[ macepci: unimplemented len %i ]\n", len);` then proceeds. fatal prints and returns, so it announces and then serves the access using len semantics (memory_readmax64 etc. with the odd len). That's "accept with unlatched warning".
+
+  What warrant for member 5 (FAULT)? "The error real hardware would give — IF real hardware refuses narrow accesses." Without documentation, member 5 asserts hardware behavior we don't know. But: is there other evidence? dev_unreadable returns 0 for ABSENT devices — guest probing gets bus error, which is what real hardware gives for nonexistent addresses. For an EXISTENT device with a bad width, real hardware behavior is unknown.
+
+  Member 7 (IMPLEMENT byte lanes): asserts real hardware serves narrow accesses by byte lane. Also undocumented. And "is a byte read of a 64-bit control register meaningful on real CRIME, and does any guest do it?" — NetBSD crime driver: crime registers via bus_space_8; the IP32 PROM — witness shows 4-byte reads of CRIME_REV low half return 0x11 — PROM uses 4-byte. No narrow guest access is known.
+
+  Member 4 (ACCEPT): the model already computes the value — i.e., just let memory_readmax64/writemax64 with len handle it? Actually the width arms only handle 8 and 4; "accept" would mean removing the guard and... doing what? The else arm currently fatals. Member 4 might mean treat narrow like the register access using len semantics — but the store/load arms don't compute anything for other lens, so member 4 as stated "the model already computes the value" seems to assume memory_readmax64/writemax64 handle arbitrary len and the reg[] access could be done byte-wise. Actually memory_writemax64(cpu, data, len, odata) with len=1 writes 1 byte of odata. And memory_readmax64 with len=1 reads 1 byte into idata. But `d->reg[relative_addr / 8]` load/store is 64-bit. So member 4 would need byte-lane logic = member 7. Member 4 as listed might mean: keep computing (like macepci proceeds) — for crime that would mean... the else arm removed and narrow access does nothing but tail writes 0. Hmm, that's member 1/2. The option set is a bit overlapping; the notes acknowledge member 1 has switch side effects.
+
+  The sensible security-fork answer, consistent with the SAME-FILE and SAME-MACHINE precedent: member 3 (DECLINE + LATCHED ANNOUNCE). Reasons:
+  - Warrant in-tree: dev_sgi_re.c rounds #497/#499/#513 established exactly this shape for exactly this guard shape, on the same machine. The panel brief says whether it transfers is a question — but the transfer argument is strong: the defect class (guest-driven width guard → process exit) is identical; the fix idiom (latched decline, reach common tail, return 1) is established house style; premise 5 says house idiom for guest-drivable diagnostic is per-instance N=1 latch with (once).
+  - Member 5 (FAULT) requires asserting undocumented hardware behavior; it also perturbs guests that DO probe with narrow widths — if the PROM or a driver ever does a narrow read (e.g., a buggy probe), a bus error might kill the guest boot whereas a declined read of 0 lets it continue. Also RE's round explicitly recorded return 0 as a different disposition and rejected it — on the SAME MACHINE. Consistency argues 3.
+  - However, one could argue CRIME is the interrupt/memory controller: a guest writing narrow to CRIME_CONTROL and having it silently ignored vs faulting... Both are "wrong hardware" but emulator philosophy in this tree (dev_unreadable for absent regions, macepci proceed-with-announce, sgi_re latched decline) favors keeping the machine running with an announce.
+
+  Also check: does the function have side effects BEFORE the width guard that run on every access regardless? Yes: CRIME_REV/CONTROL/INTSTAT reg updates, the RAM-size checks (fatal+exit on >1024MB or bad multiple — keyed to -M, not guest), the bank loop. Those run for every access including narrow ones. So even "decline" members that `return 1` early after the guard would have already run those. Member 3 in RE style "reaches the common tail" — i.e., does NOT return early; it skips only the store/load, then runs the switch and the tail. Wait — in RE, the latched decline was `if (len != 8) { latch } else if (writeflag...) {...}` — the access is skipped but execution continues to whatever follows (common tail). If we transfer that shape literally to crime, a declined narrow access WOULD run the switch! That has the side-effect problem the brief flags: a narrow write to CRIME_CONTROL with bit 0x800 set in idata stops all CPUs.
+
+  Hmm. So a faithful transfer of the RE shape to crime means: len∉{4,8} → announce once → skip store/load → run switch(relative_addr) → run tail. The switch side effects then need adjudication: should a refused access trigger CRIME_CONTROL reset? The brief's note under member 1 asks exactly this. A careful implementation of member 3 could either (a) let the switch run (faithful RE transfer) or (b) gate the switch/tail on the access being served.
+
+  Let me look at what RE actually does after the latch — I should read dev_sgi_re.c in the tree to see whether after the latched decline the function continues to a common tail with side effects or returns.
+
+  Also for CRIME specifically: which switch cases are dangerous for a narrow access?
+  - CRIME_REV case: PC redirect — triggers only when pc is in PROM cache-probe region; a narrow read from that loop... the witness's devsig read was at some other PC. The redirect only fires when (pc & 0xffffff00) == 0xbfc05100. A refused narrow read from the PROM probe loop redirecting PC to ra — that's exactly what the hack does for 4/8-byte reads; for a refused read it would still fire. Harmless? It's a hack that makes PROM skip cache probe. If the PROM ever did a narrow read there (it doesn't, per witness — PROM uses lw), moot.
+  - CRIME_CONTROL write: idata for a len=2 write is the halfword value; HARD_RESET bit 0x800 is within a halfword; DOG_ENABLE 0x200 too; so a 2-byte write 0x800 → all CPUs stopped → machine halts (guest DoS of a different flavor: emulator keeps running? running=0 for all cpus → main loop ends → gxemul exits gracefully). Also `if (idata != 0) fatal(unimplemented)` — unlatched fatal print per access (log spam) but no exit. A 1-byte write: idata ≤ 0xff; bits 0x200/0x800 can't be set; but other bits → fatal announce spam each time. A byte write can't trigger reset (needs bit 11). A halfword write CAN trigger HARD_RESET (bit 11) and DOG (bit 9). So member 1 (or a switch-running member-3) lets a guest halfword write 0x0800 to 0x...08 halt all CPUs. That's still a guest-driven machine stop — better than exit(1) but still a liveness issue. So if choosing member 3, the seat should specify whether the switch is gated.
+  - INTSTAT/INTMASK: crime_interrupt_reassert — benign, idempotent.
+  - CRIME_TIME: update — benign.
+  - default: debug prints of data[i] for i<len — on READ, data[] is uninitialized stack/heap buffer? data is a pointer into the memory subsystem's buffer; reading len bytes for debug print — benign-ish.
+  - Tail: HARDINT restore + INTSTAT recompute (idempotent, benign); memory_writemax64 on read writes odata=0 (len bytes) → a declined read returns 0 to the guest. The sentinel-seeded distinction the brief mentions in Q3: FAULT leaves destination untouched; decline writes 0.
+
+  So the design choice: member 3 with the switch question resolved. Which way? Minimal, faithful-to-precedent: RE's shape continues to the tail. But crime's switch has a guest-reachable full-machine stop (HARD_RESET via halfword). If we adopt member 3 and let the switch run, we fix the exit(1) but leave a guest-driven "stop all cpus" — arguably still a defect of the same liveness class. If we gate the switch (decline returns 1 immediately after announce, skipping switch AND tail), that's closer to member 2+announce... but then INTSTAT recompute is skipped — fine, it's recomputed on next access; and the read's memory_writemax64 is skipped so the destination keeps its old value — for a declined read, what should the guest see? Returning 1 without touching data means the guest reads whatever garbage was in the memory subsystem buffer (probably stale data from previous access — could confuse). Writing 0 (member 1/2 tail behavior) is cleaner: declined read yields 0, "empty bank reads as 0"-ish.
+
+  Actually let me re-read the brief's member list: "3 DECLINE + LATCHED ANNOUNCE (the RE precedent)". The question 2 asks: "Does a refused access run the switch? For your chosen member, say exactly which lines a 1- and a 2-byte read and write execute, including the common tail." So the seat must specify.
+
+  Now, what did RE actually do? I need to read the tree. Also verify all premises. Let me do that.
+
+  Plan:
+  1. Read `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` — verify the verbatim function, struct crime_data, macepci guard.
+  2. Read `GXEMUL-SEC/src/devices/dev_sgi_re.c` — verify latched decline shape and what follows (tail, return value), and whether return 0 was discussed in comments.
+  3. Check `fatal()` definition — GXEMUL-SEC/src/include/misc.h or src/core/misc.c? In upstream gxemul, fatal() is in src/main or src/include/misc.h: `void fatal(...)` prints and returns (in newer versions fatal does NOT exit; there's fatalx? Let me check). Upstream gxemul 0.7: misc.c `void fatal(const char *fmt, ...)` prints "[ FATAL: ... ]" and... actually I recall fatal() prints and returns, while `exit(1)` is separate in many places. Verify in tree.
+  4. Read `src/cpus/memory_rw.c` around res==0 → -1 → exception; verify verbatim.
+  5. Check `machine_sgi.c` dev_unreadable installs (10 times).
+  6. Check crime register defines: CRIME_CONTROL_DOG_ENABLE 0x200, HARD_RESET 0x800, ENDIANESS value.
+  7. Grep for narrow CRIME accesses in regress tests or any guest path in-tree — e.g., regress/*.py witness file. Also grep PROM/driver — guests aren't in tree (images external), so "if you find a guest or PROM that issues a narrow CRIME access" — the PROM is an external image; can't grep. But regress/*.py may have the witness. Read `regress/artifacts/crimewidthkill/crime_width_witness_20260913.py` if present.
+  8. Check dev_sgi_re.c warned field type and SGIRE_W_* defines — to mirror for crime: add `uint32_t warned` (or similar) to struct crime_data + define CRIME_W_LEN bit.
+
+  Let me start reading. I'll do parallel reads/greps.
+
+  Also the verdict line format: `<option-set member>` — like "3" — plus one clause. E.g., "3 — DECLINE + LATCHED ANNOUNCE, because it's the in-tree idiom for a guest-drivable width guard and FAULT asserts hardware behavior this packet can't establish; the switch must be gated so a refused halfword write can't reach CRIME_CONTROL's HARD_RESET." Wait, but the verdict line should be short: member + one clause.
+
+  Let me now verify against the tree. Key checks:
+
+  A. `fatal()` semantics. In upstream gxemul, `fatal()` (src/misc.c) prints and returns; there's also `fatal_x`? Let me check GXEMUL-SEC. Grep "void fatal" in src.
+
+  B. memory_rw.c verbatim block.
+
+  C. dev_sgi_re.c latched decline and tail: does the RE function after a latched decline run side-effect code and return 1? Rounds #497/#499/#513 — the tree should show current state.
+
+  D. macepci in dev_sgi_ip32.c.
+
+  E. struct crime_data fields.
+
+  F. CRIME_CONTROL_* bit values — src/include/thirdparty/sgireg.h? grep CRIME_CONTROL_DOG_ENABLE.
+
+  G. dev_unreadable in machine_sgi.c — count installs.
+
+  H. regress witness file existence.
+
+  I. Any guest narrow crime access — grep regress/*.py for lb/sb to 0xb4000000 region.
+
+  Let me also verify premise 2's claim "machine_sgi.c installs dev_unreadable ten times" and that dev_unreadable's access function is `return 0`.
+
+  And check: in memory_rw.c, after res==0 → res=-1, `if (res <= 0 && !no_exceptions)` → mips_cpu_exception(...EXCEPTION_DBE...) and return MEMORY_ACCESS_FAILED. So option 5 delivers a guest bus error. Also note: for an instruction fetch (cache == CACHE_INSTRUCTION) → EXCEPTION_IBE. Fine.
+
+  One more check: the brief says CRIME registered DM_DEFAULT at 0x14000000 length 0x280, backing store uint64_t reg[0x280/8]. Verify devinit in machine_sgi.c or dev_sgi_ip32.c devinit function. Also `use_fb` field — premise 5 lists struct fields: reg[], last_microseconds, irq, prev_asserted, use_fb. Verify no latch field.
+
+  Now the deeper question analysis for my verdict:
+
+  Q1: Which member? My answer: 3, with the refinement that the declined access must NOT run the CRIME_CONTROL write arm (or the whole switch) — i.e., the latch announces once and the access is skipped entirely, reaching only the benign tail (HARDINT restore, INTSTAT recompute, memory_writemax64 of odata=0 on reads). Hmm — but does "reach the common tail" including the switch match RE? Let me look at RE's actual code first, then decide.
+
+  Actually, thinking about it more: the RE precedent's guard is per-register inside the access chain — RE's guards are inside individual register arms (`else if (writeflag == MEM_WRITE)` chain keyed on relative_addr), so after a declined access there's no further side-effecting switch for that register; the function's tail just returns 1. CRIME's structure differs: the width guard is BEFORE a side-effecting switch. A blind transfer (skip store/load, run switch) imports a NEW guest-reachable stop (halfword HARD_RESET write) — the same liveness class we are fixing. So the correct transfer of the *spirit* (guest can never terminate/stop the machine via width; one announce) is: on len∉{4,8}: latch-announce once, skip store/load AND skip the switch, reach only the common tail, return 1. On a read the tail writes odata (0) for len bytes — a declined read returns 0, matching "reads as zero" decline semantics, distinct from FAULT (destination untouched) — good for the detector sentinel.
+
+  Alternatively, one might gate only the CRIME_CONTROL case... but minimal and uniform: skip the switch for unserved widths. But wait — there's a subtlety: the `default:` arm of the switch prints debug() with data bytes; skipping the switch loses that diagnostic, but the latched announce already reports len (and could report relative_addr — RE's text includes the register name; crime's single guard could include relative_addr in the announce). Good: announce text `fatal("[ crime: unimplemented len=%i at offset 0x%x -- declined.  (once) ]\n", len, (int)relative_addr)` — one latch bit total (N=1 across all offsets, per premise 5's "per-instance N = 1 latch").
+
+  Struct change: add `uint32_t warned;` (or int) to struct crime_data — premise 5 says no latch field today; adding one is the house idiom.
+
+  Now Q2: exact lines for chosen member. For len=1 or 2:
+  - Lines that run for EVERY access (before guard): preserved_CRIME_HARDINT snapshot; if write, idata = memory_readmax64 (for len 1/2 reads 1/2 bytes — harmless); CRIME_REV/CONTROL/INTSTAT reg recomputes; the two RAM-size fatal+exit paths (keyed to -M, not guest — run but don't trigger for valid RAM); bank loop. These all run regardless — they're idempotent register recomputes.
+  - Width arms: len==8 and len==4 tests fail; else arm: latch check → first time: set d->warned bit, fatal announce; store/load skipped.
+  - Switch: skipped (my refinement) — so CRIME_CONTROL HARD_RESET unreachable for narrow widths.
+  - Common tail: HARDINT restore, INTSTAT recompute, if read: memory_writemax64(cpu, data, len, odata=0) → guest's destination gets 0 (len bytes). return 1.
+
+  For a read: guest's destination register ← zero-extended 0 → 0. For a write: discarded. Process survives; announce printed once.
+
+  If instead the panel/operator prefers faithful-RE (switch runs): a 1-byte write to 0x008: idata≤0xff → DOG(0x200)/RESET(0x800) can't be set → idata&=~ENDIANESS (ENDIANESS value? need to check — probably 0x02 or similar; if ENDIANESS is a low bit like 0x02, a 1-byte write of 0x02 gets masked; any other nonzero → unlatched fatal announce per access — log spam but no exit); 2-byte write 0x0800 → all cpus running=0 → graceful machine stop; 2-byte write 0x0200 → dog cleared silently. A 1-byte read at 0x000 from PC≈0xbfc051XX → PC redirect hack fires. INTSTAT/INTMASK/TIME offsets → reassert/update (benign). default → debug prints. I should present this enumeration either way since the brief asks to enumerate what the switch could reach.
+
+  Q3: smallest edit that breaks the fix and still passes a weak detector — i.e., what must the detector check so that a lazy/wrong fix can't pass:
+  Rows needed:
+  1. Process survival (exit status 0 / still alive after each narrow op) for lb, lbu, lh, lhu, sb, sh at a CRIME offset — six cells × maybe two offsets (a switch-case offset like 0x008 and a default offset) = catches member-1-with-switch (halfword write to 0x008 with 0x0800 stops CPUs → post-access RAM round trip fails or machine stopped).
+  2. Text row: announce text contains "crime" + "len" + "(once)" — and latch count: issue the narrow op twice (different lens and/or offsets), assert exactly ONE announce — catches unlatched (macepci-style) fixes.
+  3. Accept cells: 4- and 8-byte reads/writes still work (devsig 0x11 at 0xb4000004, hi 0 at 0xb4000000; an 8-byte RW round trip on a scratch reg e.g. CRIME_SOFTINT? or a bank reg) — catches a "fix" that declines everything.
+  4. Refused-read value cell: seed destination register with sentinel (e.g. 0xdeadbeef...), do lbu from CRIME, assert destination == 0 (decline semantics) — distinguishes member 2/3 from member 5 (FAULT leaves destination untouched = sentinel preserved) and catches a fix that forgets memory_writemax64. If the chosen disposition were FAULT, assert sentinel preserved + DBE trap taken; but for member 3, assert 0.
+  5. Switch side-effect cells for refused access: halfword write 0x0800 to CRIME_CONTROL+? then verify machine still runs (RAM round trip) — catches member 1. Also PC-redirect cell? Reading CRIME_REV narrow from the magic PC window — hard to drive from the witness harness; maybe skip, but name it. Also verify INTSTAT recompute still correct after a declined access (e.g., raise a softint then declined read then normal read of INTSTAT). Simplest: post-decline, do a normal 4-byte read of CRIME_REV low → still 0x11 (shows tail didn't corrupt regs).
+  6. The "smallest edit that breaks your fix and still passes": if detector only checks survival for lb at 0xb4000000, a fix that deletes the guard but lets a halfword write of 0x800 to 0x008 stop all CPUs passes. So the detector needs the CONTROL-write row. Also if detector only checks survival, a fix that removes exit(1) but leaves `fatal` unlatched spamming passes a survival-only detector but spams — hence latch-count row. Also a fix that returns 1 without writing odata on reads leaves guest reading stale buffer — sentinel row catches it. And a fix that declines len 1,2 but also accidentally declines len 4 (e.g., wrong condition) — accept cells catch it.
+
+  Q4: premise audit. Which premise is wrong/incomplete? Check each:
+  - Premise 1: fatal prints and returns — verify in tree. In upstream gxemul, `fatal()` in src/misc.c: prints "FATAL ERROR:" and... Let me actually check; I believe in gxemul 0.7.x, fatal does NOT exit (there's a separate `fatalx`? no). Actually I recall: `void fatal(const char *fmt, ...)` — prints and returns; `exit(1)` is the terminator. The macepci precedent (announce then proceed) CONFIRMS fatal returns — if fatal exited, macepci would terminate. So premise 1 is verifiable from the tree.
+  - Premise 2: memory_rw.c block — verify verbatim; note it says `res == 0 → res = -1`, then `res <= 0 && !no_exceptions` → debug + mips_cpu_exception + return MEMORY_ACCESS_FAILED. Check also what happens with no_exceptions set and what caller does with MEMORY_ACCESS_FAILED — for the seat's purposes, premise stands if code matches. Also verify dev_unreadable returns 0 and machine_sgi.c installs it ~10 times.
+  - Premise 3: RE precedent — verify current code shape and the "detector records return 0 as a different disposition" claim is about that round's detector (not in tree necessarily — it's history). The code shape is checkable.
+  - Premise 4: macepci — check.
+  - Premise 5: struct fields — check.
+  - Premise 6: no local CRIME docs — can't verify absence easily; accept, but note what CAN be settled: does any in-tree consumer (PROM path comments, regress) show narrow accesses? The comment in the function says registers are 64-bit with mirrors; NetBSD complaint comment. Premise 6 says behavior on real hardware "is NOT established here" — true locally; I can note that no in-tree evidence of a narrow guest access exists (the witness had to inject them via debugger).
+  - Premise 7: two other exits keyed on RAM size — verify; agree they're out of scope (they're launch-config, not guest-drivable... well, the guest triggers them on FIRST crime access! Interesting: the fatal+exit for bad RAM size fires when a crime access occurs, i.e., guest-triggered timing but host-configured cause; the brief says keyed on -M, not this round's subject. Fine — but worth noting they DO run on every crime access, so any fix must not disturb them; and note that a -M 4096 config + any guest crime read → exit(1): still a guest-timed exit, but the config is invalid; out of scope stands.)
+
+  Potential premise problems to hunt:
+  (a) Premise 2's "AVAILABLE on this CPU" — check that memory_rw.c in the fork indeed has MEM_MIPS path active (it's compiled for MIPS; fine). But subtle: `if (res == 0) res = -1;` — if device returns 0, res becomes -1, then `res <= 0 && !no_exceptions` → exception + MEMORY_ACCESS_FAILED. But ALSO check: does the bus error actually reach the guest as a guest-visible exception (mips_cpu_exception with EXCEPTION_DBE) — yes per code. OK.
+  (b) Premise 3 says RE's guards were made "latched declines that reach the common tail" and "that round's detector records return 0 as a DIFFERENT disposition ... rejected there" — the second half is history, not tree. Flag as unverifiable from tree but consistent.
+  (c) The brief's claim "registered DM_DEFAULT at physical 0x14000000, length 0x280, backing store uint64_t reg[0x280/8]" — verify in devinit.
+  (d) The claim in "DEFECT, MEASURED" that a 4-byte read of CRIME_REV's low half at KSEG1 0xb4000004 returns 0x11 and high half at 0xb4000000 reads 0 — this tells us the endian convention: reg[0] = 0x11; read at offset 4 (relative_addr & 4 → odata = (int32_t)odata → low 32 bits = 0x11. So little-endian guest view? The 4-byte arm: if relative_addr&4 → low half; else odata>>32 high half. With reg=0x11, offset 4 → 0x11, offset 0 → 0. So the LOW half is at offset 4: that's big-endian byte order for the halves? Wait — "treats reg[] as big-endian halves (relative_addr & 4 picks the LOW half)" per the brief. On a big-endian machine, a 64-bit value's most significant 4 bytes are at the lower address; offset 0 → high half, offset 4 → low half. Yes: big-endian layout. O2 is big-endian (MIPS R5000 BE). CRIME_CONTROL_ENDIANESS bit — the reg is forced to CRIME_CONTROL_ENDIANESS every access; value? grep. On real O2, CRIME_CONTROL bit for endianness indicates big-endian. Fine.
+  (e) The witness: 3/15 means 15 rows, 3 controls pass. Consistent.
+  (f) "exit status 1 and the text crime access len = N!" — consistent with exit(1).
+
+  So the premise audit may find: premise 2's quotation needs verification (check verbatim); premise 3's historical detector claim unverifiable from tree; premise 6 is an absence claim (fine). Possibly also: premise "fatal() prints and RETURNS" — check whether there's some build config where fatal exits (e.g., #ifdef EXIT_ON_FATAL?). Let me grep the definition.
+
+  Another possible incompleteness: premise 5 says struct crime_data has no latch field — verify; also check whether the struct is zero-initialized at devinit (malloc + memset?) so a new warned field starts 0 — important for the latch idiom. Check devinit_sgi_ip32 or wherever crime_data is allocated: in dev_sgi_ip32.c devinit function. If it uses malloc without memset, a latch field needs explicit init — the seat should say where. Let me check.
+
+  Also the macepci guard: `if (len != 4) fatal(...)` then proceeds — that's member "announce + accept" — verify it's in the same file (premise 4 says "a second precedent in THIS file").
+
+  Also grep for other crime accesses in tree: regress/*.py — the witness file. Also check `src/include/thirdparty/crime.h` or similar for register/bit definitions (CRIME_CONTROL_DOG_ENABLE etc.) to enumerate the halfword-reachable bits: DOG_ENABLE=0x200 (bit 9), HARD_RESET=0x800 (bit 11) — both ≤ 0xffff so within a halfword; byte (≤0xff) cannot set them. ENDIANESS value — check (maybe 0x02?). Also "unimplemented control" fatal for other bits — unlatched spam.
+
+  Let me also think: is there an eighth member? Options: 7 = guest trap via TLB? Not applicable — device callbacks can't do that; FAULT is the trap. Another: SILENT ACCEPT-as-zero (member 1 without switch side effects = member 2). Or "REDIRECT mirrors"? no. Eighth could be: return 1 WITHOUT touching data on reads (decline, destination untouched) — a sub-variant of 2 that the sentinel row distinguishes. Or: treat narrow as the mirrored wider access (align down to 4) — a variant of 7. I'll mention 8th candidate: "decline with destination untouched (return 1, skip memory_writemax64)" — distinct from 2 for the sentinel test, and arguably the safest decline; but the RE/house tail writes odata... whatever. Keep it brief.
+
+  Also Q1 asks: "grep the fork for the idiom, and for how the IP32 PROM path and guest drivers in this tree reach CRIME. If you find a guest or PROM that issues a narrow CRIME access, that settles a great deal — say where." Guests aren't source-in-tree (except _guest-src-openbsd22 which is OUT of scope — scope is GXEMUL-SEC/src and regress/*.py). The PROM path in-tree: machine_sgi.c loads the PROM from disk image; the only in-tree PROM interaction knowledge is the comments in dev_sgi_ip32.c (cache probe hack at 0xbfc051XX) — those show PROM reads CRIME_REV with 4-byte reads (lw) — actually the comment doesn't say width; the witness's devsig row (0xb4000004 → 0x11) mirrors PROM behavior. The NetBSD complaint comment shows NetBSD reads CRIME_REV. No narrow access in-tree. The witness had to drive narrow accesses through the debugger — meaning normal boot never does. I'll say that.
+
+  Now — is member 3 right, or should it be 5? Let me weigh once more.
+
+  For member 5 (FAULT): The warrant would be "real hardware bus-errors on unsupported widths" — plausible for many ASICs but NOT established (premise 6). Risk: if real CRIME actually serves byte lanes (member 7 territory), FAULT breaks real-guest software that works on hardware. If real CRIME ignores/returns garbage, FAULT is too harsh. FAULT's advantage: guest-visible error, no silent data corruption. On MIPS, DBE typically panics the OS unless it has a handler. The IP32 PROM — if it ever did a narrow access (it doesn't per evidence), DBE would kill boot. Given no guest does narrow accesses, the practical difference is only for malicious/fuzzing guests — the SEC fork's threat model. For a fuzzing guest, FAULT gives a clean signal; decline gives silent 0. House precedent on the SAME MACHINE for the SAME guard shape chose 3 and rejected 5. Consistency + lack of hardware documentation → 3. Also dev_unreadable uses return 0 for ABSENT devices — an in-tree semantic: return 0 means "nothing here", which is FALSE for CRIME (it exists). Using return 0 for "wrong width" overloads it. That's a decent warrant against 5.
+
+  For member 7: no documentation, no guest need, and byte-lane semantics for control registers like INTMASK/SOFTINT are dubious (a byte write to the interrupt mask would be strange). Reject: inventing hardware behavior.
+
+  Member 6 (invent storage): nonsense for CRIME (storage exists; the width is the issue). Reject.
+
+  Member 4 (accept): for widths 1/2 "the model already computes the value" — actually it doesn't; the arms don't handle len 1/2. To accept you'd have to implement lanes = member 7. Or accept-as-noop = member 2. Reject as stated.
+
+  Member 1: switch side effects make it unsafe (HARD_RESET reachable by halfword) — the brief's own note enumerates this. Reject.
+
+  Member 2 (silent decline): safe but loses the diagnostic; house idiom says guest-drivable diagnostics get a once-latch. Member 3 = 2 + latched announce. Choose 3, with the explicit specification that the declined access skips the switch (reaching only the common tail) — and name that as the one place where a blind RE-transfer would go wrong. Also state where the latch lives (new `warned`/`flags` field in struct crime_data, zeroed at devinit — check allocation) and the announce text convention `(once)`.
+
+  Now let me verify everything in the tree. Let me fire off reads/greps in parallel.
+
+  Files to read:
+  - GXEMUL-SEC/src/devices/dev_sgi_ip32.c (the crime access function + macepci + struct crime_data + devinit)
+  - GXEMUL-SEC/src/devices/dev_sgi_re.c (latched decline + tail + return)
+  - GXEMUL-SEC/src/cpus/memory_rw.c (res==0 block)
+  - fatal definition: grep "void fatal" GXEMUL-SEC/src
+  - dev_unreadable: grep in GXEMUL-SEC/src/devices/dev_unreadable.c and machine_sgi.c installs
+  - CRIME_CONTROL defines: grep CRIME_CONTROL_DOG_ENABLE
+  - regress/artifacts/crimewidthkill/crime_width_witness_20260913.py
+
+  Let me batch these.
+
+  First batch:
+  1. Grep "crime access len" in GXEMUL-SEC/src to locate line numbers.
+  2. Grep "void fatal" in GXEMUL-SEC/src.
+  3. Read dev_sgi_ip32.c (it's probably ~1500 lines; read the crime region).
+  4. Grep "SGIRE_W_" in dev_sgi_re.c.
+  5. Grep "res == 0" in memory_rw.c.
+  6. Grep dev_unreadable in machine_sgi.c.
+  7. Grep CRIME_CONTROL_DOG_ENABLE in src.
+  8. Glob regress/artifacts/crimewidthkill/*.
+
+  Let me go.
+
+• I'll verify the premises against the tree before picking a member.
+
+• Premise 5 confirmed (no latch field), premise 4 confirmed (macepci unlatched, proceeds). Now check fatal() body, the crime access function, RE precedent, memory_rw.c, dev_unreadable, CRIME_CONTROL defines, devinit registration/allocation.
+
+• Premises 4 and 5 confirmed. Now checking `fatal()`, the RE precedent, and the bus-error path.
+
+• Very informative. The RE file has extensive comments explaining the design rationale:
+  - Line 445-454: `return 0` would skip the common tail and turn a declined access into a guest bus error — so they chose `return 1` reaching the tail.
+  - Line 1196-1214 (sgi_de): "scores 24/25: the declined access still reaches the switch ... common exit, so a declined READ is answered with odata (0) via memory_writemax64 and the function still returns 1. `return 0` ..." — and interestingly, `goto de_declined` — a declined access jumps to `de_declined:` SKIPPING the register switch, then falls to the common tail. So in sgi_de (same file, later round #498), the declined access SKIPS the switch but reaches the common tail (memory_writemax64 + return 1).
+
+  Let me read those two comment blocks fully — lines 440-500 and 1190-1230 and 1430-1445 — they're directly on point for the "does the switch run" question. Also need to check memory_rw.c full block (lines 590-640) for the MIPS exception part, dev_unreadable, CRIME defines, and the devinit for crime (registration + allocation/zeroing).Excellent. Key findings so far:
+
+  1. Premise 1 confirmed: `fatal()` in `GXEMUL-SEC/src/core/debugmsg.c:384` prints and returns. Note: no exit path visible in the body.
+
+  2. Premise 2 confirmed with one extra wrinkle the brief did NOT quote: `memory_rw.c:586-592` — `bool running_before_device_access = cpu->running; res = ...; if (running_before_device_access && !cpu->running) return MEMORY_ACCESS_FAILED;` — there's a liveness check around the device call. This is directly relevant to the CRIME_CONTROL HARD_RESET side effect: if a halfword write reaching the switch stops the CPU... wait, actually the HARD_RESET loop sets `cpu->machine->cpus[j]->running = 0` for all cpus. The check only compares `cpu->running` for the CURRENT cpu — which WOULD be set to 0 by the loop → `return MEMORY_ACCESS_FAILED`. Interesting: so under member 1 (delete guard, switch runs), a halfword write of 0x0800 to 0x008 would stop all CPUs and memory_rw returns MEMORY_ACCESS_FAILED — the machine halts "gracefully" (all cpus not running → emulation ends). So member 1 converts a process exit(1) into a guest-driven full-machine stop. Still a liveness defect of the same class.
+
+  3. RE precedent confirmed, and the sgi_de `#498` block is DIRECTLY on point for crime: a declined access uses `goto de_declined` which SKIPS the register switch AND draw_primitive, then runs the common tail (`memory_writemax64` + `return 1`). The comment explains why falling through the switch after a decline scored 24/25: "the declined access still reaches the switch below, which announces ... about a write THAT NEVER HAPPENED, from an idata this arm discarded." That is exactly the crime situation: a declined narrow write would reach `case CRIME_CONTROL` with a stale/partial idata and could trigger HARD_RESET. So the same-file (well, same RE file but sgi_de device) precedent says: decline → skip the switch via goto → tail answers read with odata(0) → return 1.
+
+  So the house has already answered the brief's member-1-vs-member-3 switch question in sgi_de (#498): skip the switch, reach the tail. My member-3 verdict with "switch must be gated" is directly supported by the closest measured precedent. 
+
+  4. Premise 2's verbatim quote matches (modulo comment wrapping). Confirmed EXCEPTION_DBE path. Member 5 is available. But both RE (#497) and sgi_de (#498) explicitly REJECTED `return 0` with the same sentence: "would be coerced to -1 ... raising EXCEPTION_DBE -- turning a refusal into a guest bus error." So the house disposition on this machine, twice, is decline-not-fault. The brief said "whether that choice transfers here is a question" — the transfer warrant is now strong: not just RE (graphics) but the same rejection rationale applies — an access width chosen by the guest "is not an emulator error", and faulting the guest asserts hardware behavior not established (premise 6).
+
+  Remaining checks:
+  - CRIME register/bit defines (CRIME_CONTROL_DOG_ENABLE = 0x200, HARD_RESET = 0x800, ENDIANESS value) — to enumerate halfword reachability.
+  - devinit for crime: registration DM_DEFAULT 0x14000000 len 0x280, and whether crime_data is zeroed (malloc + memset?) — matters for adding a `warned` field.
+  - machine_sgi.c dev_unreadable installs count (~10) and dev_unreadable returns 0.
+  - The witness file in regress/artifacts to confirm the 3/15 claim shape.
+  - Also grep for any guest narrow crime access in regress/*.py.
+
+  Let me also check where in dev_sgi_ip32.c the crime access function's verbatim text matches the brief (line 291 is the fatal). Read the full function quickly around lines 130-330 to confirm structure matches and check the pre-guard side effects (RAM-size exits at what lines).Confirmed:
+  - CRIME_CONTROL_HARD_RESET = 0x0800 (bit 11), DOG_ENABLE = 0x0200 (bit 9), ENDIANESS = 0x0100 (bit 8, "assert for BE"). All three are bits 8-11 — reachable by a HALFWORD write (len=2, idata up to 0xffff), NOT by a byte write (idata ≤ 0xff). So the brief's note "is that bit within a halfword's idata?" — YES, all three. Even ENDIANESS: a halfword write of 0x0100 gets masked out silently. A byte write of any value ≤ 0xff survives `idata &= ~ENDIANESS` unchanged and hits `if (idata != 0) fatal("[ CRIME_CONTROL: unimplemented control ... ]")` — unlatched announce spam per write, no exit.
+  - crime_data is malloc + memset(0) at line 406-407 → a new `warned` field starts zeroed for free. Good.
+  - dev_unreadable's access function is exactly `return 0;` — premise 2's parenthetical confirmed.
+  - machine_sgi.c has NO dev_unreadable matches! Premise 2 says "machine_sgi.c installs dev_unreadable ten times". No matches in GXEMUL-SEC/src/machines/machine_sgi.c. Maybe it's spelled differently (devinit("unreadable")? or in another file, or via a helper). Let me grep the whole src for "unreadable".
+
+  Also need to check the crime registration in devinit (0x14000000, DEV_CRIME_LENGTH 0x280, DM_DEFAULT) — line ~430ish. And the witness file in regress/artifacts. And grep for any narrow crime access by guests in regress/*.py.Findings:
+
+  - Premise 2's "machine_sgi.c installs dev_unreadable ten times": CONFIRMED in count — 5 installs in one machine block (lines 241-247, that's 5) + 5 more (lines 345-351) = 10 `device_add("unreadable ...")` calls. They use `device_add(machine, "unreadable addr=...")` not the identifier `dev_unreadable`, which is why my first grep missed. So the premise is true in substance (10 installs), though spelled "unreadable" via device_add. Count: lines 241,242,245,246,247 = 5; lines 345,346,349,350,351 = 5. Total 10. Confirmed.
+
+  - Crime registration: `memory_device_register(mem, "crime", baseaddr, DEV_CRIME_LENGTH, dev_crime_access, d, DM_DEFAULT, NULL)` — need DEV_CRIME_LENGTH value. Struct says reg[DEV_CRIME_LENGTH/8] with 0x280 claimed. Let me check the define. It's probably at top of dev_sgi_ip32.c.
+
+  - crime_data memset(0) → new warned field zero-init free.
+
+  Now the witness file — read the .py and .out to confirm the 3/15 claim and what rows it has. Also grep regress/*.py for any guest narrow crime access (the witness is debugger-driven; check its mechanism). Let me read the witness out file (short) and skim the py.
+
+• Registration and the 10 `unreadable` installs confirmed (spelled via `device_add`, which is why a literal grep misses them). Now the witness artifacts.
+
+• Everything is confirmed. Some important observations from the witness:
+
+  1. The witness's narrow accesses target offsets +7, +6, +0x1e, +0x1f — i.e., relative_addr 0x006, 0x007, 0x01e, 0x01f. NONE of these are CRIME_CONTROL (0x008) or CRIME_REV (0x000)! So the existing witness, if the fix were member 1 (delete guard, switch runs), would... let me check: offsets 6,7 → switch default arm (debug print); offsets 0x1e/0x1f → default arm. So the CURRENT witness would PASS member 1 (survival yes, kill text absent) — member 1 fixes all 12 red rows! This is exactly the "smallest edit that breaks your fix and still passes" answer in reverse: the shipped witness has NO row at CRIME_CONTROL with 0x0800 in a halfword, so member 1 (which leaves a guest-driven all-CPU stop via `sh 0x0800 → 0x...08`) passes it. That's the detector gap to name in Q3.
+
+  2. `sb`/`sh` target 0x1f/0x1e — also default arm. And the loads at +7/+6 read CRIME_REV's register (relative_addr 0x000-0x007 covers CRIME_REV at 0x000... wait, offsets 6,7 fall within register at 0x000? CRIME_REV is 0x000, CRIME_CONTROL is 0x008. So byte/halfword at 6,7 are within the CRIME_REV 64-bit register's byte range, but the switch keys on relative_addr == 0x000 exactly, so 6,7 → default. Note the PC-redirect hack only fires for relative_addr == CRIME_REV exactly (0x000). A narrow read at exactly 0x000 (lb from 0xb4000000) WOULD hit case CRIME_REV → PC redirect if pc near 0xbfc05100. The witness doesn't test offset 0.
+
+  3. The witness is debugger-driven (`-V` = debugger? Actually -V might be... in gxemul -V enters the debugger? The session sends commands like "put w", "pc=", "step", "print v1" — yes, debugger commands). The "guest" is 16 dummy zero bytes loaded at 0x80001000; all code is injected via `put w`. So the narrow accesses are synthesized by the harness — NO real guest/PROM/driver in this tree issues them (the boot path uses the device with lw — devsig rows prove 4-byte reads; the PROM's CRIME_REV reads in the cache-probe hack comment are lw at 0xbfc0517c etc.). The `-M 64` flag sets RAM 64MB — valid (64 ≤ 256, divisible by 32) so the RAM-size exits don't fire.
+
+  4. Also note: the witness runs `-E sgi -e ip32 -M 64` — fine.
+
+  Now, one more check: the brief's verbatim function — let me quickly verify the actual function body matches (lines 187-390ish). The fatal at line 291. I've seen lines 187-193 (comment), 225 (CRIME_CONTROL endianess), 291 (fatal), 334-348 (CONTROL case). The pre-guard exits — let me quickly read lines 195-300 to confirm the structure matches the brief's verbatim copy, particularly the two RAM-size exits and that nothing else differs. Actually the grep results already show the key lines align (225, 291, 334+). The brief's verbatim looks accurate. Let me do one more targeted read of lines 255-300 to be thorough about the guard's exact position relative to the switch.
+
+  Also, is there any OTHER guest path in-tree (regress/*.py) that issues narrow crime accesses? Grep regress for "b400000" or crime. And check whether anything else in src references a "crime" narrow access (e.g., the mace driver accesses crime registers? mace is a separate device at 0x1f310000). Let me grep regress quickly.
+
+  Also for Q1's "grep the fork for the idiom": the RE file's enum comments mention rounds #497/#498/#499/#513/#519 — including the measured results ("23/25", "24/25", "25/25"). The de_declined goto precedent (#498) is the load-bearing one for the switch question: "a declined access jumps here, skipping BOTH the register switch and draw_primitive(), and is still answered."
+
+  Wait — but there's a nuance: in sgi_de, #498's goto skips the switch because the switch announces "about a write THAT NEVER HAPPENED" AND because the tail calls draw_primitive (a rendering side effect). In crime, the tail (INTSTAT recompute, HARDINT restore) is benign/idempotent, and the switch has the CRIME_CONTROL HARD_RESET + unimplemented-control announce + CRIME_REV PC-hack + reassert/update side effects. So for crime the same goto form is warranted: on len∉{4,8}: latch-announce once → goto crime_declined → tail (HARDINT restore + INTSTAT recompute + memory_writemax64 on read with odata=0) → return 1.
+
+  Where to place the label: right after the switch's closing brace, before the tail's `d->reg[CRIME_HARDINT...] = preserved...`. The tail is idempotent so running it for a declined access is harmless (HARDINT was snapshotted at entry and INTSTAT recomputed at entry already; restoring/recomputing again is a no-op in value terms).
+
+  One design detail: single latch bit for all widths/offsets (N=1 per premise 5's "per-instance N = 1 latch") vs per-width. RE used per-register bits. For crime there's ONE guard site, so one bit (e.g. `int warned_len;` or a flags word with CRIME_W_LEN = 1<<0) suffices. House idiom: RE used an enum of bits + d->warned. Simplest faithful: add `uint32_t warned;` and `#define CRIME_W_LEN 1` or an enum. Keep announce text parallel: `fatal("[ crime: unimplemented len=%i at 0x%x -- declined.  (once) ]\n", len, (int)relative_addr)`. Including relative_addr is useful; but note with ONE bit, the second distinct offset won't announce — that's the (once) semantics; fine per house idiom ("per-instance N = 1 latch"). Hmm — but RE's comments warn about sharing bits ACROSS guard sites (23/25). Here there's only one site, so one bit is exactly N=1 at one site. OK.
+
+  Also the pre-guard side effects that STILL run for a declined access (they run before the guard for every access): CRIME_REV/CONTROL/INTSTAT register recompute, the RAM-size fatal+exit checks (host-config; not guest-keyed), bank loop. Those are idempotent recomputes — fine, and Q2 should enumerate them as "lines that execute".
+
+  Q2 asks: for chosen member, exact lines a 1- and 2-byte read/write execute. Answer for member 3 (goto form):
+
+  Both 1- and 2-byte, read and write:
+  - entry: preserved_CRIME_HARDINT snapshot (line ~207)
+  - write only: idata = memory_readmax64 (len bytes; for len=1/2 reads low 1/2 bytes of the buffer)
+  - CRIME_REV recompute (225), CRIME_CONTROL recompute (227), INTSTAT recompute (229-231)
+  - RAM-size checks (~245-262): run; don't fire for valid -M
+  - bank loop (~266-278)
+  - len==8 arm: no; len==4 arm: no; else arm: latch test → first declined access: set bit + fatal announce; then goto crime_declined (NEW)
+  - switch: SKIPPED ENTIRELY — so for a 2-byte WRITE of 0x0800 to offset 0x008: no CPU stop; for a 1-byte WRITE of 0xff: no "unimplemented control" spam; for a read at 0x000 near 0xbfc051XX: no PC redirect; INTSTAT/INTMASK/TIME: no reassert/update (all idempotent anyway)
+  - crime_declined: HARDINT restore; INTSTAT recompute (idempotent)
+  - read only: memory_writemax64(cpu, data, len, 0) → destination gets 0 (len bytes, zero-extended into the guest register by the CPU's load path — for lbu/lhu; lb/lh sign-extend the loaded value — of 0 → 0)
+  - return 1 → memory_rw sees res=1 → normal completion.
+
+  Enumerate the switch reach IF member 1 instead (for the "not the same" note): 1-byte read at 0x000: case CRIME_REV → PC-hack (fires only near 0xbfc051XX); 1/2-byte write at 0x008: case CRIME_CONTROL → idata from memory_readmax64 of 1/2 bytes: byte: ≤0xff → ENDIANESS (0x100) can't be masked from it; nonzero → unlatched "unimplemented control" fatal each time (spam, no exit); halfword: 0x0100 masked silently, 0x0200 cleared silently, 0x0800 → all cpus running=0 → machine stops (memory_rw's running_before check returns MEMORY_ACCESS_FAILED), any other surviving bit → unlatched fatal. 1/2-byte at 0x010/0x018: reassert (idempotent). at 0x038: time update (idempotent). Other offsets: default debug print (data[i] read-back; on a READ prints uninitialized buffer contents to the debug log).
+
+  Q3 — detector rows to add beyond the shipped witness:
+  The shipped witness has a hole: all six width rows hit the switch's DEFAULT arm (offsets 6,7,0x1e,0x1f — never 0x000, 0x008, 0x010, 0x018, 0x038). So member 1 (delete 2 lines) passes 15/15 while leaving a guest `sh 0x0800 → 0xb4000008` that stops every CPU. Smallest edit that breaks the fix and still passes: exactly member 1. Rows needed:
+  1. `sh reset surv`: seed t0=0x0800, sh to 0xb4000008, then a RAM round trip must print — catches member 1 AND any "decline but still run the switch" variant. (Note: with -M64 the RAM-size exits don't fire; the machine stop via cpus[j]->running=0 → memory_rw returns MEMORY_ACCESS_FAILED, main loop ends → the round trip never prints and the pty session ends with exit... probably exit 0 after "quit"? Actually when all cpus stop, gxemul exits the emulation loop; the debugger `quit`... the witness sends quit and reads status. The round trip print would be absent → row red.)
+  2. `sb spam`/latch row: issue the same narrow op twice (or lb then lbu at different offsets), count occurrences of the announce text — must be exactly 1, text must match "crime" + "len" + "(once)". Catches unlatched member-2-with-fatal and macepci-style announces. Also asserts attribution (the kill's own text is GONE, the new announce appears once).
+  3. `rd sent`: sentinel-seed v0=0xdeadbeef, lbu at CRIME+7, print v0 — member 3 demands 0x0 (declined read answered with 0 via the tail); a fix that returns 1 without the tail leaves 0xdeadbeef; FAULT leaves 0xdeadbeef (destination untouched — and ALSO vectors the PC to 0x80000180ish DBE handler, which the witness's round trip would mask by resetting PC — so the sentinel row is the one that distinguishes 5 from 3). Wait, careful: for FAULT the instruction faults → v0 unchanged (sentinel) and PC → exception vector. The witness harness resets PC for the round trip, so survival looks the same; the sentinel value distinguishes. Good — this is the row the brief's Q3 mentions ("a sentinel-seeded destination tells them apart").
+  4. Accept cells: keep devsig/devsig hi (4-byte reads) + add an 8-byte round trip on a writable CRIME register that has no side effects — e.g., CRIME_SOFTINT (0x020)? Writing SOFTINT asserts an interrupt bit; reassert runs... hmm, safer: CRIME_MEM_BANK_CTRL0 (0x200)? The bank loop REWRITES bank regs on EVERY access, so a stored value won't persist. CRIME_INTMASK (0x018): write then read — but the switch calls crime_interrupt_reassert on both; INTMASK read returns reg value... the read arm for len==4/8 reads d->reg[0x18/8] — but does anything rewrite INTMASK? The entry recompute touches REV/CONTROL/INTSTAT only. So an 8-byte INTMASK write/read round trip works (modulo reassert side effects being idempotent). Simplest accept cell: the existing devsig rows + one 8-byte write/read on INTMASK. Or just keep the shipped controls and name "accept cells = devsig, devsig hi, plus an 8-byte store/load pair on INTMASK". Also a 4-byte WRITE accept cell (e.g., write INTMASK low half, read back).
+  5. Survival rows for all six widths (shipped) — keep.
+  6. Optionally `lb pc hack`: an lb at exactly 0xb4000000 with pc in 0xbfc051XX window — hard to drive because the harness sets pc to its own injected code; skip — name it as deliberately omitted (the hack only fires from the PROM window, unreachable from the harness's code page; the declined path never reaches it).
+
+  Q4 — premise audit:
+  - P1 TRUE: fatal() at debugmsg.c:384 prints and returns; no exit inside.
+  - P2 MOSTLY TRUE with two refinements: (a) the verbatim block matches memory_rw.c:595-624, but the brief omitted lines 586-592: `running_before_device_access` / `if (running_before_device_access && !cpu->running) return MEMORY_ACCESS_FAILED;` — a device that stops the current CPU mid-access (exactly what CRIME_CONTROL_HARD_RESET does) short-circuits to MEMORY_ACCESS_FAILED WITHOUT a guest exception. This matters: it means under member 1 a halfword HARD_RESET write doesn't even fault the guest; the machine just silently stops mid-instruction. (b) "installs dev_unreadable ten times": TRUE in count (5+5 device_add("unreadable ...") calls at machine_sgi.c:241-247 and 345-351) but the literal string "dev_unreadable" does not appear in machine_sgi.c — it's installed by device_add("unreadable ..."). Trivial spelling, count confirmed. Also dev_unreadable access is exactly `return 0;` — confirmed (dev_unreadable.c:41-44).
+  - P3 TRUE for the code shape (verified at dev_sgi_re.c:491-497 etc.), and STRENGTHENED by what the brief didn't cite: the same file's DEVICE_ACCESS(sgi_de) (#498, lines 1189-1219, 1438-1444) already answered THIS brief's central question — a declined width SKIPS the register switch via `goto de_declined` and is still answered by the common tail with odata=0 and return 1; the comment records that falling through the switch after a decline "scores 24/25" because the switch would announce/act on "a write THAT NEVER HAPPENED". So "whether the RE choice transfers" — the house has already transferred it, to a width guard with a side-effecting switch, accept set {4,8} (sgidewidth) — exactly crime's accept set. Also both #497 and #498 explicitly rejected return 0 with the coerced-to-DBE sentence. The historical detector claims ("that round's detector records return 0 as a different disposition") are consistent with the in-code comments (24/25 vs 25/25), though the detectors themselves aren't in my scope to verify.
+  - P4 TRUE (line 698-699; unlatched, proceeds).
+  - P5 TRUE (struct at lines 76-85; no latch field; and malloc+memset(0) at 406-407 means a new field zero-inits for free).
+  - P6 PLAUSIBLE / not disproven: no CRIME hardware doc in scope; I can't check _scratchpad PDFs (out of scope) but the tree itself carries the author's "On my real O2" notes only about mirrors, nothing about narrow widths. Name what WOULD settle it (the O2 CRIME datasheet / Linux crime driver behavior).
+  - P7 TRUE: two exits above the guard keyed on physical_ram_in_mb (verified at ~245-262); agree out of scope — but note they DO run on every crime access, and the witness uses -M 64 which passes both, so they don't confound the measurement.
+
+  Extra findings (the "something else" invitation):
+  1. The witness's six width rows all land in the switch's DEFAULT arm — offsets 6,7 (within CRIME_REV's 8-byte register but ≠ 0x000), 0x1e,0x1f (within CRIME_INTMASK's register? 0x18-0x1f — INTMASK is 0x018; offsets 0x1e/0x1f are within its byte range but ≠ 0x018 → default). So the shipped witness cannot distinguish member 1 from member 3; the `sh 0x0800 → 0xb4000008` hole is the smallest passing-but-broken edit.
+  2. memory_rw.c:591's running-check (unquoted in the brief) converts an in-access CPU stop into MEMORY_ACCESS_FAILED — no guest exception. Relevant to member 1's enumeration.
+  3. In the 4-byte arm the read path casts `(int32_t)` — sign extension — then the tail's memory_writemax64 writes len=4 bytes; for lw that's fine. Not part of this round.
+  4. The devsig rows + cache-probe hack comment show the PROM and NetBSD reach CRIME with 4-byte (and presumably 8-byte) accesses only; the witness's narrow rows are synthesized by the debugger harness — no in-tree guest issues a narrow CRIME access. So no guest NEEDS member 7; and no guest would trip member 5 either — the members differ only for fuzzing/buggy guests, which is precisely the SEC fork's threat model. Given that, the deciding warrants are consistency (RE/sgi_de, twice, same machine) and not asserting undocumented hardware behavior (against 5 and 7).
+
+  Eighth member? Candidates not in the seven: (8) DECLINE with destination UNTOUCHED (return 1, skip the tail's memory_writemax64 — guest reads stale buffer/sentinel). It's distinguishable from 2/3 only by the sentinel row. It's arguably worse than 3 (stale data leaks across accesses) — mention and reject. Another: (9) mirror/redirect narrow accesses to the aligned 4-byte arm (a variant of 7). The brief asks "is there an eighth?" — I'll name the stale-decline variant as the eighth and reject it.
+
+  One more consideration for Q1 warrant: does the guest ever reach CRIME through any OTHER path in this tree — e.g., the debugger's own `put`/`print`? The debugger commands operate on memory via memory_rw too (put w is 4-byte). Not narrow crime access by default. Fine.
+
+  Also should I double check that there's no OTHER crime width guard elsewhere (e.g., in the mace device's crime access)? mace is separate. The crime function is the only one. OK.
+
+  Also — the brief's claim "registered DM_DEFAULT at physical 0x14000000": dev_crime_init takes baseaddr; machine_sgi.c presumably calls dev_crime_init(machine, mem, 0x14000000, ...). Let me verify quickly... I didn't grep that. Let me do one grep for dev_crime_init in machine_sgi.c. Actually the witness proves the mapping empirically (0xb4000000 KSEG1 = phys 0x14000000 works). But a quick grep is cheap and settles the premise. Let me also confirm the function body between lines 187-395 matches the brief's verbatim (particularly that the two exit(1)s are above the guard). I'll do a fast read of lines 230-300.
+
+  Let me also double-check the claim about which lines the `default:` arm debug loop reads on a READ: `for (i=0; i<len; i++) debug(" %02x", data[i]);` — data is the destination buffer on reads; at that point it's whatever memory_rw's buffer held. Benign but worth one line in the enumeration.
+
+  Let me do these two final checks, then write the verdict.
+
+• Two final checks: the caller's base address and the exact guard/switch lines as shipped.
+
+• All premises verified against the tree. I have everything I need. Let me also quickly note the exact enumeration for the switch reach of a declined access (if it ran):
+
+  Switch cases and what a 1-/2-byte access would reach if it fell through (member 1):
+  - relative_addr == 0x000 (CRIME_REV): the PC-redirect hack — no writeflag check; fires on read OR write when (pc & 0xffffff00) == 0xbfc05100.
+  - relative_addr == 0x008 (CRIME_CONTROL): write only. idata = memory_readmax64(cpu, data, len): for len=1, idata ∈ [0,0xff]; len=2, idata ∈ [0,0xffff]. Bits: DOG_ENABLE=0x0200 (bit 9), HARD_RESET=0x0800 (bit 11), ENDIANESS=0x0100 (bit 8). A byte write can never carry any of the three (all ≥ 0x100), so a nonzero byte always reaches `if (idata != 0) fatal("[ CRIME_CONTROL: unimplemented control ... ]")` — unlatched spam per access (no exit). A halfword write CAN carry all three: 0x0200 silently cleared (dog ignored), 0x0800 → for loop sets cpus[j]->running = 0 for all → machine stops; memory_rw.c:591 catches `running_before && !cpu->running` → MEMORY_ACCESS_FAILED (no guest exception, no debug line). Any other surviving bit → unlatched fatal announce.
+  - 0x010/0x018: crime_interrupt_reassert(d) — runs for read and write; idempotent (recomputes assert state from SOFTINT|HARDINT & INTMASK presumably).
+  - 0x030 (CRIME_DOG): no-op by design.
+  - 0x038 (CRIME_TIME): crime_update_crime_time(d) — idempotent recompute.
+  - default: debug() prints data[i] for i in [0,len) — on a READ this prints whatever the memory subsystem's data buffer held (stale bytes), on a write the written bytes. Harmless log noise.
+
+  Common tail (would run under member 1): HARDINT restore + INTSTAT recompute (idempotent) + on read memory_writemax64(cpu, data, len, odata) with odata=0 (neither arm assigned it) → declined read lands a defined 0, and writes are discarded. return 1.
+
+  So member 1's only genuinely dangerous reach is the halfword HARD_RESET write at 0x008 (full machine stop, no exception — a liveness kill of the same class this round exists to remove), plus unlatched log spam from byte writes at 0x008. That matches the sgi_de #498 rationale for the goto: don't let a refused access reach a side-effecting switch.
+
+  Now the verdict and answers. Format: verdict line first (`3` + one clause), then `CRIME_P1_20260913`, then the review. The brief is in English, so I respond in English. Keep it thorough but not bloated — this is a design review; substance matters. Cite tree locations.
+
+  Verdict: member 3 — DECLINE + LATCHED ANNOUNCE, shaped as sgi_de #498's `goto <label>` to the common tail so the refused access skips the switch; reject 5 and 7 for asserting hardware behavior premise 6 says is unestablished; reject 1 for the HARD_RESET reach.
+
+  Q1 answer with warrant:
+  - Idiom grep: dev_sgi_re.c — SGIRE_W_* enum + d->warned + "(once)" text; #497 comment block (lines 437-489) states the three load-bearing properties; #498 (sgi_de, lines 1189-1219, 1438-1444) is the SAME width-guard question with accept set {4,8} — crime's exact accept set — and its answer is goto-to-common-exit skipping the switch. Both explicitly reject return 0 with the coerced-to-DBE sentence. So the "RE is graphics, CRIME is the memory controller" objection is already adjudicated in-tree: sgi_de is the drawing engine but the guard shape (width guard in front of a side-effecting switch, accept {4,8}) is crime's shape, and the disposition chosen was decline-not-fault.
+  - Guest/PROM narrow access: none found. In-tree evidence of how CRIME is reached: devsig rows (4-byte reads of CRIME_REV), the cache-probe hack comment (PROM reads CRIME_REV with what must be lw from 0xbfc0517c/0xbfc051ac), NetBSD complaint comment (reads CRIME_REV). The witness synthesizes narrow accesses via the debugger; no guest binary or script under GXEMUL-SEC/regress issues one (the only crime references in regress are this witness). So members 5 and 7 would neither serve nor break any known guest — the choice is about fuzz/robustness semantics, and the house semantics for "guest chose a width we don't model" is decline-once.
+  - Member 5 rejected: return 0 is in-tree shorthand for "nothing is here" (dev_unreadable, 10 installs for ABSENT regions). CRIME is present; borrowing the absent-device signal for a present-device width refusal is a false statement about the machine, and it asserts (premise 6 unestablished) that real CRIME bus-errors narrow accesses.
+  - Member 7 rejected: byte-lane semantics on CRIME_INTMASK/CRIME_SOFTINT/CRIME_CONTROL would be invented hardware; no guest needs it; the 4-byte arm's big-endian-half convention doesn't determine a byte rule for registers that are semantically 64-bit bitfields.
+  - Members 4/6 rejected: 4 collapses into either 1 or 7 (the arms compute nothing for len∉{4,8}); 6 invents storage for a device that has storage — the width, not the storage, is the gap.
+  - Member 1 rejected: enumerated switch reach — the halfword 0x0800 write at 0x008 stops all CPUs (liveness defect of the same class), byte write at 0x008 spams unlatched fatal.
+
+  Eighth member: "decline with destination untouched" (return 1, skip the tail's memory_writemax64). Distinguishable from 2/3 only by a sentinel row; leaks stale buffer contents to the guest; RE/#499 explicitly made the odata=0 answer the pinned behavior ("rd sent"). Reject.
+
+  Q2: exact lines for member 3 (goto form). Enumerate for 1-byte read, 2-byte read, 1-byte write, 2-byte write. Common: entry snapshot (207), [write: memory_readmax64], REV/CONTROL/INTSTAT recompute (223-231), RAM-size checks (238-254) — run, don't fire under the witness's -M 64 (64 ≤ 256, 64 % 32 == 0), bank loop (256-267), len tests fail, else arm: latch → once: set bit + fatal announce; goto crime_declined (new label placed between the switch's closing brace and the HARDINT restore). Switch skipped. Tail: HARDINT restore, INTSTAT recompute (both idempotent no-ops in value), read: memory_writemax64(..., len, 0) → destination 0 (lb/lh sign-extend 0 → 0; lbu/lhu zero-extend 0 → 0). return 1 → res=1, normal completion, no exception.
+
+  Note: on a 1- or 2-byte READ under the goto form, `idata` is never read (memory_readmax64 only runs for writes) — actually for writes idata is read then discarded; harmless. On reads, the default-arm debug print of uninitialized data[] never runs (switch skipped).
+
+  Q3: detector rows.
+  Smallest edit that breaks the fix and still passes the SHIPPED witness: member 1 — delete the two lines. All 12 red rows go green (every width row hits the switch's default arm: offsets +6,+7,+0x1e,+0x1f — none is 0x008), yet `sh 0x0800 → 0xb4000008` still stops every CPU mid-access (memory_rw.c:591 → MEMORY_ACCESS_FAILED, no exception). Rows to add:
+  1. `sh reset surv`: t0=0x0800, OP_SH_T0_A3 at CRIME+8, then RAM round trip — must print 0x12345678. Kills member 1 and any decline-that-runs-the-switch. Also `sb ctl nosays`: sb of 0xff at CRIME+8 → no "unimplemented control" text (switch skipped) — pins the goto, since a fall-through decline would print it.
+  2. `once` rows: fire lb and lbu (two widths, two offsets) at CRIME, then count the new announce text in the transcript — exactly 1 occurrence, matching /\[ crime: unimplemented len=.*declined\.  \(once\) \]/. Kills unlatched-announce (macepci-shaped) fixes and per-width latches (which would print twice). Plus the shipped `says` rows stay: the kill's own text "crime access len" must be absent.
+  3. `rd sent`: v0=SENTINEL, lbu at CRIME+7, print v0 → 0x0. Distinguishes 3 (answered 0) from 5 (destination untouched, sentinel survives — and PC vectors away, which the harness masks) and from the eighth member (stale buffer).
+  4. Accept cells: keep live/devsig/devsig hi; add `rw8` (8-byte store+load round trip on CRIME_INTMASK 0xb4000018 — a writable register no entry-recompute clobbers) and `rw4 lo/hi` (4-byte round trips on both halves of INTMASK) — kills a fix that accidentally declines len 4 or 8 (e.g., guard inverted), and pins the big-endian-half convention.
+  5. Keep the six `<op> surv` + `<op> says` rows.
+  Latch count row folds into #2.
+
+  Q4: premise audit — everything checked; the two incompletenesses: premise 2 omits memory_rw.c:586-592 (running-check → MEMORY_ACCESS_FAILED without exception) — material because it's what an in-access HARD_RESET stop converts to; and "machine_sgi.c installs dev_unreadable ten times" is literally spelled device_add("unreadable ...") (10 calls: 241-247, 345-351) — true in count, and the access body `return 0;` confirmed. Premise 3 is strengthened by sgi_de #498 which the brief didn't cite — it already answers "whether the RE choice transfers" for a width guard with accept set {4,8} in front of a side-effecting switch. Premises 1,4,5,7 verified exact. Premise 6: no contradiction found; the only local hardware evidence is the author's O2 mirror note, silent on narrow widths.
+
+  Something else found:
+  - The shipped witness's width rows all land in the switch's default arm — so it cannot see ANY switch side effect; the `sh 0x0800→+8` hole is real and member 1 passes 15/15.
+  - Under member 1, a declined byte/halfword read at exactly offset 0x000 from a PC in 0xbfc051XX would fire the cache-probe PC hack (case CRIME_REV has no writeflag/len qualification); the goto form moots this.
+  - The witness's `says` rows key on "crime access len" — a member-3 announce containing the substring "len" is fine, but if anyone kept the old text for the announce the `says` row would false-positive; the announce must not contain "crime access len =".
+
+  Now write the reply. Verdict line first, then token. Keep it structured with the four questions. Use path:line citations. Reasonably concise but complete — this is a review deliverable.
+
+• **3** — DECLINE + LATCHED ANNOUNCE, because the house has already adjudicated this exact guard shape (width guard, accept set {4,8}, in front of a side-effecting switch) at `GXEMUL-SEC/src/devices/dev_sgi_re.c:1214-1219` with `goto de_declined`, and both FAULT (5) and IMPLEMENT (7) assert real-CRIME behavior that premise 6 says is not established.
+
+  CRIME_P1_20260913
+
+  ## Q1 — Member and warrant
+
+  Member 3, with one mandatory refinement taken from the tree, not from taste: the declined access must **skip the switch and reach only the common tail**. The brief asks whether the RE choice "transfers" to the memory/interrupt controller. The transfer question is already answered in-tree, in the same file the brief cites but at a site it did not: `DEVICE_ACCESS(sgi_de)` (#498, `dev_sgi_re.c:1189-1219`, tail at `1438-1444`). That guard is a width guard with accept set {4,8} — CRIME's exact accept set — sitting in front of a register switch with side effects (`draw_primitive()`). The shipped form is a latched decline followed by `goto de_declined`, and the comment records that the fall-through variant "scores 24/25" precisely because "the declined access still reaches the switch below, which announces … about a write THAT NEVER HAPPENED, from an idata this arm discarded." CRIME's switch has the same class of problem, only worse (see Q2). Both #497 (`dev_sgi_re.c:444-447`) and #498 (`dev_sgi_re.c:1210-1212`) also explicitly record the rejection of `return 0`: "coerced to -1 by cpus/memory_rw.c and raise EXCEPTION_DBE — turning a refusal into a guest bus error."
+
+  - **5 (FAULT) rejected.** Available, confirmed — `memory_rw.c:595-624` matches the brief verbatim. But in this tree `return 0` is the established signal for "nothing is here": `dev_unreadable.c:41-44` is exactly `return 0;`, installed ten times for *absent* regions (`machine_sgi.c:241-247` and `345-351`, spelled `device_add(machine, "unreadable addr=…")`). CRIME is present and responding; borrowing the absent-device signal for a present-device width refusal misdescribes the machine, and its only hardware warrant ("real CRIME bus-errors narrow accesses") is the one premise 6 leaves unestablished.
+  - **7 (IMPLEMENT) rejected.** Byte lanes into 64-bit bitfield registers (CRIME_INTMASK, CRIME_SOFTINT, CRIME_CONTROL) would be invented hardware. The 4-byte arm's big-endian-half convention (`dev_sgi_ip32.c:276-288`) does not determine a byte rule for those, and no guest needs one (below).
+  - **1 rejected** — enumerated in Q2; it leaves a guest `sh` of 0x0800 to 0x…08 that stops every CPU.
+  - **4/6 rejected.** 4 collapses: the arms compute nothing for len ∉ {4,8}, so "accept" is either 1 or 7. 6 invents storage for a device whose storage exists; the width, not the backing, is the gap.
+  - **Guest/PROM narrow access: none found.** Every in-tree reach of CRIME is 4- or 8-byte: the `devsig`/`devsig hi` controls, the cache-probe hack comment (PROM reads CRIME_REV from 0xbfc0517c/0xbfc051ac), the NetBSD-revision comment. The narrow rows in `regress/artifacts/crimewidthkill/crime_width_witness_20260913.py` are synthesized through the debugger (`put w` + `step`); nothing under `GXEMUL-SEC/regress/` or referenced by the machine description issues one. So 5 and 7 would serve no known guest, and the decision is purely about robustness semantics — where the house rule (twice, same machine) is decline-once.
+
+  **Eighth member exists and should be named:** decline with destination *untouched* (return 1, skip the tail's `memory_writemax64`). A sentinel row distinguishes it from 2/3; it leaks stale buffer contents to the guest, and #499 explicitly made the answered-0 behavior the pinned one. Reject.
+
+  ## Q2 — What a refused access executes (member 3, goto form)
+
+  New shape: `struct crime_data` gains a latch word (the struct at `dev_sgi_ip32.c:76-85` has none; `malloc`+`memset(0)` at `406-407` zeroes it for free), the else arm becomes latch-test → `fatal("[ crime: unimplemented len=%i at 0x%x -- declined.  (once) ]\n", …)` once → `goto crime_declined;` with the label placed between the switch's closing brace and the `preserved_CRIME_HARDINT` restore.
+
+  For **all four cells** (1- and 2-byte, read and write): entry snapshot `preserved_CRIME_HARDINT` (l.207); writes only: `idata = memory_readmax64(...)` (then discarded); the three register recomputes (l.223-231); the two RAM-size checks (l.238-254) — they execute but do not fire under the witness's `-M 64` (64 ≤ 256, 64 % 32 == 0); the bank loop (l.256-267); both width arms fail; the else arm announces at most once; **the switch is skipped entirely**; the tail runs: HARDINT restore and INTSTAT recompute (both idempotent value-no-ops), and on a read `memory_writemax64(cpu, data, len, 0)` answers a defined 0 (lb/lh sign-extend 0 → 0, lbu/lhu zero-extend 0 → 0); `return 1` → `res = 1`, no exception.
+
+  Had the switch run (member 1's enumeration, all reachable today once the guard is deleted): a 2-byte **write** at 0x008 reaches `case CRIME_CONTROL` with `idata` up to 0xffff — 0x0100 masked silently, 0x0200 silently dropped, **0x0800 stops every CPU** (`for` loop, l.339-341), and `memory_rw.c:591` then returns `MEMORY_ACCESS_FAILED` with *no guest exception*; any other surviving bit hits the unlatched `fatal` at l.349-351 (log spam). A 1-byte write at 0x008 can never carry bits 8-11, so every nonzero byte write spams that unlatched `fatal`. A 1- or 2-byte **read** at exactly 0x000 fires the cache-probe PC hack (no `writeflag` or len qualification at l.297+). 0x010/0x018 → `crime_interrupt_reassert` (idempotent); 0x038 → time update (idempotent); everything else → the default `debug()` hexdump, which on a *read* prints uninitialized buffer bytes.
+
+  ## Q3 — Smallest passing-but-broken edit, and the rows that close it
+
+  The smallest edit that "fixes" the shipped witness while breaking the intent is **member 1: delete the two lines**. All six width rows target offsets +6, +7, +0x1e, +0x1f — every one lands in the switch's *default* arm, so the witness scores 15/15 while `sh 0x0800 → 0xb4000008` still stops the machine. Rows a detector needs beyond the shipped set:
+
+  1. `sh reset surv` — t0=0x0800, `sh` to 0xb4000008, then the RAM round trip must print 0x12345678. Kills member 1 and any decline-that-runs-the-switch. Companion `sb ctl nosays`: `sb` of 0xff to 0xb4000008 must produce **no** "unimplemented control" text (pins the goto).
+  2. Latch rows — fire two different narrow ops (e.g. `lb` at +7 then `lbu` at +6); the new announce must appear **exactly once** and match `-- declined.  (once) ]`. Kills macepci-shaped unlatched announces and per-width latches. Keep the shipped `says` rows (old text absent) — and note the announce must not contain the substring "crime access len" or those rows false-positive.
+  3. `rd sent` — v0 seeded 0xdeadbeef, `lbu` at +7, `print v0` → **0x0**. This is the cell that separates 3 from 5 (FAULT leaves the sentinel and vectors the PC, which this harness masks by resetting PC) and from the eighth member (stale buffer).
+  4. Accept cells — keep `live`/`devsig`/`devsig hi`; add an 8-byte store→load round trip on CRIME_INTMASK (0xb4000018; writable, and no entry-recompute clobbers it, unlike the bank regs which the loop rewrites every access) and 4-byte round trips on both halves — pins the big-endian-half convention and kills a fix that accidentally declines 4 or 8.
+  5. The six shipped `<op> surv` / `<op> says` pairs stay as the survival/attribution base.
+
+  ## Q4 — Premise audit
+
+  - **P2 incomplete in a way that matters.** The quoted block is verbatim-accurate (`memory_rw.c:595-624`), but the brief omitted the lines directly above it (`586-592`): `running_before_device_access` → `if (running_before_device_access && !cpu->running) return MEMORY_ACCESS_FAILED;`. An in-access CPU stop — exactly what CRIME_CONTROL_HARD_RESET does — short-circuits to failure with **no guest exception and no debug line**. This is what member 1's halfword-reset reach actually converts to, and it belongs in every seat's model of the switch risk. Minor: the ten `unreadable` installs are spelled `device_add("unreadable …")`, so a literal grep for `dev_unreadable` in `machine_sgi.c` finds nothing; the count (5+5) and the `return 0;` body both check out.
+  - **P3 understated, in the fix's favor.** The brief presents transferability as open; the tree also contains `sgi_de` #498 — same guard shape, accept set {4,8}, side-effecting switch — where the house already chose latched-decline-with-goto and measured the fall-through variant at 24/25. The historical detector claims are consistent with the in-code comments; the detectors themselves I did not run (per the operational rule).
+  - **P1, P4, P5, P7 verified exact.** `fatal()` (`debugmsg.c:384-391`) prints and returns; macepci's unlatched announce at `dev_sgi_ip32.c:698-699` proceeds; the struct (`76-85`) has no latch field; the two RAM-size exits (`238-254`) are `-M`-keyed and out of scope — agreed, with the note that they run on *every* CRIME access, so the fix must not disturb them, and the witness's `-M 64` keeps them silent.
+  - **P6 stands.** No local CRIME documentation contradicts it; the only first-party hardware note in the tree (the author's O2 mirror comment, l.193-198) is silent on narrow widths. What would settle it: the CRIME ASIC datasheet or the Linux `arch/mips/sgi-ip32` crime driver's access widths — not present here.
+
+  ## Something else
+
+  The shipped witness is blind to the entire switch: all six width offsets land in the default arm, so it cannot see the reset hole, the PC-hack reach, or the spam reach. The `sh 0x0800` cell in Q3 is not paranoia — it is the one row that separates this fix from a two-line deletion that scores 15/15. Also worth recording: under member 1, a narrow read at exactly offset 0x000 from a PC in the 0xbfc051XX window fires the cache-probe PC redirect (the `case CRIME_REV` arm has no writeflag or width qualification); the goto form moots that too.
+
+To resume this session: kimi -r session_47ba03ae-dbea-466b-acba-87109f7d17d0

@@ -1,0 +1,20 @@
+VERDICT: 1 of 8 pass every row; 0 of those the contract claims to catch
+
+I read the complete contract and session/row code in [crime_width_probe.r17.py](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:2) (**P**), and the handler in [dev_sgi_ip32.c](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:193) (**D**). These are static inferences; I changed nothing, built nothing, and did not run the probe.
+
+| Variant | FIRST differing row | Observable: fixed → variant |
+|---|---|---|
+| **V1** | `lb said` — P:731 | Announcement count **1 → 0**. The first refused read cannot enter the write-only announcement guard. |
+| **V2** | `lb nodflt` — P:732 | Default-arm read-message count **0 → 1**. The `lb +0x07` reaches D:397; its returned value remains zero. |
+| **V3** | `time lb` — P:932 | Next TIME sample’s classification **`small` → `large`**. The refused `lb +0x38` reaches the clock update at D:393; the following accepted `ld` observes that update. |
+| **V4** | `lh v0` — P:727, `lh` iteration | **`0x0` → `0x11`**. At offset `0x06`, the widened arm selects REV’s low word: D:229 supplies `0x11`, and D:290–292 select it. This precedes `lh said`. |
+| **V5** | `free said` — P:1265 | Announcement count **1 → 0** during free-running execution. Earlier stepped announcement rows still pass. |
+| **V6** | `lb said` — P:731 | Exact announcement count **1 → 0**. `said()` explicitly includes the two spaces and `(once)` marker (P:655). |
+| **V7** | `sh08b once` — P:777 | Decline-announcement count **1 → 5**: four halfword refusals at CONTROL, then one byte read at `+0x07`. Earlier rows do not count repeated announcements within a session. |
+| **V8** | **every row passes** | Skipping the tail produces the same observed results. **Disclosed**, as explained below. |
+
+For **V5**, [debugmsg.c:365](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365) adds verbosity while stepping, allowing `debug()` to print. During ordinary execution at default verbosity, it suppresses that output. P:564 implements `<RUN>` using `continue`, so `free said` distinguishes the channels.
+
+For **V8**, [memory_rw.c:491](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:491) zeroes the read buffer before calling the device. Declined accesses leave HARDINT and SOFTINT unchanged, making the skipped restoration/recomputation identities; accepted accesses still execute the tail. Thus V8 has the same observable behavior as the early return disclosed in **P:400**:
+
+> \`goto crime_declined' -> \`return 1' is EQUIVALENT on every channel: memory_rw pre-zeroes a device read buffer (#95, src/cpus/memory_rw.c -- \`if (writeflag == MEM_READ)' then \`memset(data, 0, len);', immediately above \`paddr -= mem->devices[i].baseaddr;'), and on a declined access nothing between the entry and the tail writes HARDINT or SOFTINT, so the tail's restore and recompute are identities.

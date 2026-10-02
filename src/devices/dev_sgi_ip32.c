@@ -82,7 +82,13 @@ struct crime_data {
 	int			prev_asserted;
 
 	int			use_fb;
+
+	/*  #529: warn-once latches for guest-drivable diagnostics, one bit
+	    per site and never shared.  memset(0) at init clears them.  */
+	int			warned;
 };
+
+#define	CRIME_W_LEN		(1 << 0)	/*  #529: the width decline  */
 
 
 void mips_pc_to_pointers(struct cpu *);
@@ -288,8 +294,29 @@ DEVICE_ACCESS(crime)
 				odata = (int32_t)(odata >> 32);
 		}
 	} else {
-		fatal("crime access len = %i!\n", len);
-		exit(1);
+		/*
+		 *  #529: THIS USED TO END THE PROCESS.  One guest lb, lbu, lh,
+		 *  lhu, sb or sh anywhere in CRIME did it (witnessed at rung 3
+		 *  on an unmodified -E sgi -e ip32, 6/6).  The width is now
+		 *  DECLINED and announced once, the #498 sgi_de shape: a read
+		 *  is answered 0 through the common tail, a write is dropped.
+		 *
+		 *  The goto skips the register switch below, and that is the
+		 *  point of it: falling through would let a halfword 0x0800
+		 *  written at CRIME_CONTROL stop every CPU, a narrow access to
+		 *  CRIME_REV from the PROM probe loop redirect the PC, one at
+		 *  INTSTAT or INTMASK reassert the interrupt line, and one at
+		 *  CRIME_TIME advance the clock -- all measured.  It is not
+		 *  `return 0' either: that raises a guest bus error
+		 *  (EXCEPTION_DBE, cpus/memory_rw.c), and what real CRIME does
+		 *  on a narrow cycle is not documented here.
+		 */
+		if (!(d->warned & CRIME_W_LEN)) {
+			d->warned |= CRIME_W_LEN;
+			fatal("[ crime: unimplemented len=%i at 0x%x -- declined."
+			    "  (once) ]\n", (int) len, (int) relative_addr);
+		}
+		goto crime_declined;
 	}
 
 	switch (relative_addr) {
@@ -381,6 +408,9 @@ DEVICE_ACCESS(crime)
 		}
 	}
 
+ crime_declined:
+	/*  #529: a declined access jumps here, skipping the register switch,
+	    and is still answered.  */
 	d->reg[CRIME_HARDINT / sizeof(uint64_t)] = preserved_CRIME_HARDINT;
 	d->reg[CRIME_INTSTAT / sizeof(uint64_t)] =
 		(d->reg[CRIME_SOFTINT / sizeof(uint64_t)] |

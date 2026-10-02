@@ -1,0 +1,62 @@
+I'll start from the offloaded brief and the repo's current state, then check the 111-row test against the repair and the floor enumeration.Checkpoint is behind the brief (table 4 already finished). Next I’ll read the live handler, the 111-row probe, and the table-4 artifacts.Next I’ll verify the register constants, MACE→HARDINT path, and the rest of the 111-row probe against the floor list.Checking one more tail-read operand (SOFTINT) and whether the CONTROL 4-byte write in the re-arm session can hide an accept-cell shrink.CLOSES
+CRIME_CLOSE2_20260913
+
+## Q1 — floor gap?
+
+No. I walked the floor enumeration against the 111-row probe and against table 4’s measured red sets. Every single-label / single-cell edit I could name either reds a row or is already in DISCLOSED.
+
+The first closing pass’s holes are closed by the rows that claimed them. Spot-checked against `table4.out` / `check_pred.out` (57/57 exact):
+
+| mutant | score | catches it |
+|---|---|---|
+| `near8` (`len == 8 && relative_addr != 0`) | 110/111 | `acc8 near` |
+| `c_endian` / `c_bit1` | 110, 108 | `sh08b run` / `sb08 msg`+`sh08b msg/run` |
+| `o_hi_gate` / `o_pa_gate` | 110 each | `gate run` |
+| `o_rearm4` / `o_pre4` / `o_rearm_time` / `o_ctl_collide` | 110, 109, 109, 110 | `rearm once` / `top said`+`latch x5` / `time once`+`rearm once` / `latch x5` |
+| `rev_od1` / `istat_od1` / `time_od1` / `o_rd_hi` | 109, 109, 109, 110 | the v0 rows |
+| `lt_ctl` / `lt_rng` / `o_lt_blk` / `o_lt_wl` | 110, 110, 110, 105 | `sh08b once` / `hi once` / `hi once` / six once-rows |
+| `o_acc4_210` | 110 | `top said` |
+| `o_wst_mc2` | 110 | `hi keeps` |
+| `time_land` | **111/111** | disclosed, and the log matches: s1 stays `small` |
+
+Candidates that look like leftovers and are not gaps:
+
+- **`if (!d->reg[CRIME_SOFTINT / 8]) goto crime_declined;`** — SOFTINT is a tail-read, same shape as HARDINT. The imask/istat sessions store `BIT` at +0x20 before any refusal, so this falls into the switch and reds `imask lb` (IP2 sticky). Polar opposite (`if (SOFTINT) goto`) reds `sh08 run` on a cold session.
+- **Latch set only when `relative_addr >= 0x40`** — `latch x5`’s five refusals are all `< 0x40` (+0x06/+0x07/+0x3f/+0x37/+0x36), so the latch never sets and that row goes 5. (The table-4 `lt_rng` mutant was the test-side `|| relative_addr >= 0x40`, which is the one `hi once` reds.)
+- **Silent `goto crime_declined` inside the 4-byte arm at +0x210** — that is not guard-growth of `len == 4`. Guard-growth is `len == 4 && relative_addr != 0x210`, which announces, and `top said` reds it (`o_acc4_210`). A new per-address silent goto is an added predicate, i.e. the joint/unnamed class already disclosed.
+- **`odata = 1` only on the unrowed width at DOG (2R) or CONTROL (1R)** — label × width joint. The single-label form reds `dog v0` / `ctl v0`.
+
+`time_land` remains the one named-cell miss, and the header says so.
+
+I did not compile a new mutant. Nothing I could write as an exact `dev_sgi_ip32.c` edit both undoes a floor cell and stays off the disclosed list.
+
+## Q2 — is the repair sound?
+
+Yes, as an instrument. Table 4 is the variance proof for the new rows; I did not re-run them.
+
+- **Oracles vary** under the change they name. Every new row that PRETABLE 4 assigned a mutant reddened exactly that set (`check_pred.out`: `exact=57 differs=0`).
+- **Controls are live** on the fixed build (`probe_first6_fix.out`: `CRIMEP_CONTROL=OK`, 111/111). `rev pc ctl` redirects, `sw08 halts` returns the sentinel, `sw08 msg ctl` prints, imask/istat pre/ctl flip IP2, time `* ctl` goes large (~2.8e8), `dflt ctl` prints, `gate hardint` is raw **32** (`CRIME_INT_PERIPH_MISC`), `gate line` is IP2 set.
+- **TIME wording is now right.** `machine.c` sets `ticks_till_next[n] = 0` at registration; the 8-byte arm samples `d->reg[TIME]` *then* the switch updates. So s1 is the first tick’s 66–132 (this log: 132/132/66/132), s2 is the sampling `ld`’s wall-clock update. A second tick is `1<<14` steps later. The old “nothing else updates TIME” sentence is gone. Load can false-red, not false-green, as stated.
+- **`top said` is the right channel for the 4R-high cell.** Value is 0 either way; `said(..., 1, 0x27b)` fails when the `lw +0x210` takes the session’s one notice. PRETABLE found that at writing time; table 4 measured it.
+
+Not a vacuity, but the **gate comment welds two independent setups into one causal chain.** MACE `sd 0x01` at +0x10 then +0x18 does latch HARDINT to 0x20 (measured). The line is asserted because INTMASK and SOFTINT are `0x10000000` and an accepted `lw` reasserts — HARDINT bit 5 is **not** in that mask. `gate hardint` and `gate line` are both live; they are not cause and effect. `o_hi_gate` / `o_pa_gate` still red `gate run` for the reasons claimed.
+
+## Q3 — wrong statements
+
+**CONTRACT item 6 vs DISCLOSED, on the 4R cells at +0x00.** Item 6 says `devsig` / `devsig hi` *are* those cells. `devsig` is a 4R at **+0x04** (low half, 0x11 — real). `devsig hi` is a 4R at +0x00 of a value that is **0 accepted or refused**, so it cannot pin the cell. DISCLOSED two bullets later is the true sentence: the 4R-high cell is carried by `rev pc ctl` (the PROM hack needs the access accepted). Those two contract sentences cannot both stand.
+
+Lesser, not load-bearing:
+
+- CONTRACT 4’s `hi once` clause, “followed by refusals both >= 0x40 and < 0x200”. The follow-ups are +0x27c/+0x27e (`>= 0x200`) and +0x07 (`< 0x40`). Nothing in that session sits in `[0x40, 0x200)`. The row still works for the mutants it was built for (`o_lt_blk`, `lt_rng` as implemented).
+- DISCLOSED still lists rowed accept offsets as +0x30, +0x210, +0x278. +0x00 is now rowed (`acc8 near`). The “strictly INSIDE the window” qualifier keeps the interior claim true; the offset list is stale.
+- CONTRACT 3’s “fall-through keyed on ANY data bit” is true only of bits a 1- or 2-byte store can carry (0–7 / 0–15). Bits above 15 cannot be set on a refused `sb`/`sh`, so a conjunct on them is equivalent, not a miss.
+
+Bank-1 at +0x210 for `-M 64` is right: `CRIME_MEM_BANK_CTRL0` is **0x208**, bank 1 is +0x210, prelude writes `1`. `top8 anchor` / `top4 anchor` both read `0x1` on the fixed build. (The header’s `CTRL2` name for 0x210 is the filed `crimebankorder` dispute, not a detector error.)
+
+`#95` pre-zero is where DISCLOSED says it is (`memory_rw.c`, `memset` immediately above `paddr -= mem->devices[i].baseaddr`).
+
+## Premises checked / not checked
+
+Checked from the tree, not from the brief: `DEVICE_ACCESS(crime)` as inlined; probe rows and contract; `CRIME_*` and MACE offsets; HARDINT `|= 0x20` path; `ticks_till_next` init; `#95`; `probe_first6_fix.out` 111/111; `table4.out` + `check_pred.out`.
+
+Not checked: I did not rebuild, did not run the probe, did not `tail -1` the 57 logs myself, did not re-hash the frozen-vs-shipped AST (`5da8e15ff1`). Those I take from POSTTABLE 4 / `check_pred.out`. I did not fire a new mutant, because I did not have a floor-cell edit that the 111-row test would miss.

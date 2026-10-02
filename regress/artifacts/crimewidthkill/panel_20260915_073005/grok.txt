@@ -1,0 +1,93 @@
+I'll start from the full offloaded brief, then the repo HEAD, checkpoint, and outstanding-bugs queue so the review is against the live tree rather than the packet.The checkpoint says table 10 and repair 12 are the live material. Next I’ll read the rest of the brief and the actual probe, function, and table-10 artifacts.Table 10 is on disk. I’ll read the rest of the brief plus ACCEPTS, latch x5, POSTTABLE 10, and the live width arm so the enumeration is checked against the function, not the packet.I’ll check the function, `said()`, the IP2/TIME helpers, and the per-cell silent-form rows next — that’s where a missing ACCEPTS disposition would actually show.**CLOSES** `CRIME_CLOSE7_20260915`
+
+Checked against `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` (`DEVICE_ACCESS(crime)`), `regress/crime_width_probe.py` (`ACCEPTS`, `latch x5`, new rows), and table 10 (`killtable10_20260915/`: POSTTABLE, PRETABLE, `check_pred.out` 40/40, lane summaries, `probe_S_istsd.raw` / `probe_S_istsw.raw` / `probe_S_timesd.raw`). Did not rebuild or drive the harness.
+
+---
+
+### 1. Accept-side enumeration (46 × {announced, silent})
+
+**Announced (guard growth) — all 46 caught by `latch said`.**  
+`latch x5` appends every `ACCEPTS` entry onto `c` before `lh +0x06` (`crime_width_probe.py`, the `for op, off, val in ACCEPTS` loop then `(("lh", 6), ...)`). `session()` plays that list in order; a later PROM-window redirect cannot drop commands. A conjunct on `len == 8` / `len == 4` drops the cell into the else arm, which **always** announces while `d->warned` is still 0:
+
+```c
+if (!(d->warned & CRIME_W_LEN)) {
+    d->warned |= CRIME_W_LEN;
+    fatal("[ crime: unimplemented len=%i at 0x%x -- declined.  (once) ]\n", ...);
+}
+goto crime_declined;
+```
+
+`said(t, 2, 0x6, ...)` wants **that exact** `len=2 at 0x6` string. No ACCEPTS cell is width 2, so a stolen notice cannot match. Width arm declines **before** the REV pc test, so `lwP/swP/sdP/ldP` announce like any other (G4: `latch said` + `revP sw pc`, 155/157).
+
+A grown guard **cannot** decline an ACCEPTS cell with the latch still clear **and** no announce: that path is the silent bypass (insert `goto crime_declined` before the width test), not guard growth. Measured: C1/G1–G5 red `latch said`; G6 (silent) leaves it green.
+
+**Silent — each of 46 has a disposition** (kind = label × width × direction; CONTROL value variants share a kind):
+
+| Kind | Silent disposition |
+|---|---|
+| REV window 4W / 8W / 8R | `revP sw/sd/ld pc` (S_* 156/155) |
+| REV window 4R (`lwP`) | existing `rev pc ctl` |
+| REV 8R out of window | `acc8 near` (S_revPld also reds it) |
+| REV 8W / 4W / 4R high, out of window | **equivalent** (prelude rewrites REV; high half 0) |
+| CONTROL 8R / 8W | `acc ctl ld` / `acc ctl sd` |
+| CONTROL 4R | **equivalent** (0x100 lives in the low 32; high half 0) |
+| CONTROL 4W leftover | existing `sw08 msg ctl` |
+| CONTROL 4W/8W with leftover 0 (0 / DOG / ENDIANESS) | **equivalent** (prelude; arm has no leftover print and does not halt) |
+| INTSTAT 8R / 8W / 4W | `acc istat ld`, `istw sd`, `istw sw` |
+| INTSTAT 4R | existing `istat ctl` (reassert) |
+| INTMASK 4W | `acc imask sw` |
+| INTMASK 8W / 8R / 4R | existing `imask ctl` / `imask keeps` |
+| TIME 8W | `acc time sd` (S_timesd: even, **raw 0**) |
+| TIME 8R | existing `time * ctl` |
+| TIME 4W / 4R | **equivalent** (high half 0; update wiped / unsampled) |
+| DOG 8 / 4 hi / 4 lo | existing `acc8 st+ld`, `acc4 rhi/rlo/wlo/whi` |
+| default +0x40 4W / 4R | `acc 40 sw` / `acc 40 lw` |
+| default +0x40 8 | existing `lo keeps` |
+| +0x34 4 | existing `acc4 wlo/rlo` |
+| +0x04 4R | existing `devsig` (+ `dflt ctl`) |
+| +0x04 4W | **equivalent** (prelude rewrites REV) |
+| +0x278 8 | existing `top8 st+ld` |
+
+No cell is missing a disposition. Item 6 names the 12 **new** value-row kinds and three equivalent groups; the rest sit on rows that already existed. CONTROL leftover-free writes are equivalent and are **not** in that named equivalent list (records, below).
+
+---
+
+### 2. New-row channels vary under the mutants they name
+
+| Row | Mutant | Observable |
+|---|---|---|
+| `latch said` | C1/G1–G5 | `said(..., 2, 0x6)` 1→0 |
+| `free revP said` | C2 | free-running window `debug` vs `fatal` |
+| `revP * pc` | S_revP* / G4 | pc = RA only if the switch runs |
+| `acc ctl ld/sd` | G1/G6/S_ctl* | 0x100 vs 0; leftover `fatal` vs none |
+| `acc istat ld` | G2/S_istld | BIT vs 0 |
+| `acc imask sw` | G5/S_imsw | high-half 0x10000000 lands or not |
+| `acc 40 *` | S_40* | round-trip of 0x0a0b0c0d |
+| **`acc time sd`** | S_timesd | odd seed → **even, raw 0** (`probe_S_timesd.raw`). 66×µs is even; `uint32_t` wrap preserves parity. Tick cannot flip it. |
+| **`istw sd` / `istw sw`** | S_istsd / S_istsw / G2 | `probe_S_istsd.raw`: IP2 **clear** vs want set; `probe_S_istsw.raw`: `istw sd` still **set**, `istw sw` **clear**. Tail restores HARDINT and recomputes INTSTAT; it does **not** call `crime_interrupt_reassert`. |
+
+`istw pre`/`mid` stay clear on those kills, so the set is from the INTSTAT store’s reassert, not leftover line state. Stepping still shows cause.IP2: `istat ctl` / `imask ctl` already do, on the same `step` apparatus.
+
+Caveat (not a miss): a `dev_crime_tick` reassert between SOFTINT and the INTSTAT store could **false-green** `istw sd`/`istw sw` (opposite polarity from the older “false red, never false green” note on the refusal IRQ rows). Table 10 did not do that.
+
+---
+
+### 3. Floor gap in the 157-row test?
+
+No single edit to `dev_sgi_ip32.c` that undoes announced accept-guard growth at an ACCEPTS cell and still scores 157/157. Silent bypass is **disclosed by class** (item 6) and killed at the 12 guest-visible kinds. W_8r / W_8w (latch-keyed shrink) are clause (e) by DEPENDS-ON (`d->warned` is not a body-read of the accept arms) and were killed (145/157 and 156/157) as PRETABLE predicted.
+
+Disclosed items I am not treating as gaps: `goto` → `return 1`; fall-through at DOG / CONTROL reads / REV off-window; leftover-free CONTROL writes; TIME 4; unrowed interior slots.
+
+---
+
+### 4. Wrong / loose statements
+
+None load-bearing for the floor.
+
+- **Item 8 still says “46 kinds”** while the repair-12 DISCLOSED bullet says “46 ENTRIES, not 46 kinds” (40 floor + 2 ENDIANESS + 4 positional repeats). Same header, two wordings.
+- **Item 6’s named equivalent set omits CONTROL writes with leftover 0** (ACCEPTS `sw/sd` of 0 / 0x0200 / 0x0100). Those are equivalent, not “pinned by the rows below.” Kind-level CONTROL 8W is still caught by `acc ctl sd`.
+- POSTTABLE’s “TIME stayed EVEN” under S_timesd is true and weaker than the log (**raw 0**).
+
+---
+
+**Could not check:** I did not compile a mutant of my own; scores are from table 10’s logs (`CHECKPRED exact=40`). Did not reopen landing / lane / re-map.

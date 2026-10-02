@@ -1,0 +1,153 @@
+**VERDICT: GO**
+
+### Summary per Question
+* **Q1(a):** Confirmed true; each session runs via `pty.fork()` and `os.execv()` with fresh calloc/memset of [`struct crime_data`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L73-L86), read-only dummy binary, and relative microsecond deltas starting at zero.
+* **Q1(b):** Confirmed that `s1` remains `small` (< 6.6M), but with an important adversarial nuance: `s1` reflects the update from the `s0` load's switch execution (which took < 100 µs), not solely the initial tick.
+* **Q1(c):** Confirmed true; `case CRIME_REV:` does not check `writeflag` or `len`, so skipping `goto crime_declined` redirects PC to RA for all four narrow ops (`lb`, `lh`, `sb`, `sh`) when `pc` is in the PROM window.
+* **Q1(d):** Confirmed true; cpu-stop (`rearm surv`), re-arm (`rearm once`), and residue-suppression (`p acc ctl msg`) were already observed, leaving `D_nodogclear` as the sole unobserved mutant in the DOG partition.
+* **Q1(e):** Confirmed true; the five labels {REV, CONTROL, INTSTAT, INTMASK, TIME} completely exhaust all guest-observable switch side-effects; DOG is an empty `break`, and all other offsets fall into `default:` (host debug log only).
+* **Q2:** Zero breaches in {observable label} x {latch SET}; the 20-cell space (5 observable labels × 4 narrow ops) is fully covered and killed by measured rows across Tables 12, 13a, and 14.
+* **Q3:** The L2 pair (`ctldog sw msg`, `ctldog sd msg`) is the correct disposition under the ruling; the channel is sound (distinguishing 1 vs 2 fatal messages); `0x0300` (`DOG_ENABLE | ENDIANESS`) is an unnamed joint member but subsumed by `D_nodogclear`.
+* **Q4:** Table 14 matched its pre-registered predictions exactly across all 18 legs; 0 deviations, 0 mis-cuts, and no extraneous red rows.
+
+---
+
+### Detailed Adversarial Audit & Evidence
+
+#### 1. Status & Environmental Premises Audit
+
+* **#529 Working Set & Git HEAD:**
+  - HEAD is confirmed at commit `f4f601c4` ([`git log -1`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC)): *"#548 fbdrainwire: #442's drain probe wired into gate 14..."*.
+  - #529 working changes are unstaged in [src/devices/dev_sgi_ip32.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L294-L316).
+  - MD5 of [src/devices/dev_sgi_ip32.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c) is `8c1d1545eeddd12fd49f52ccede60262`, matching the brief's cited prefix `8c1d1545`.
+
+* **Probe Hashes & Gate Pins:**
+  - Working probe [regress/crime_width_probe.py](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py) hash is `a0af7c92` (204 rows).
+  - Table 14 frozen probe [crime_width_probe.table14.py](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/crime_width_probe.table14.py) hash is `f5e915f6` (218 rows).
+  - [regress/artifacts/crimewidthkill/table14_20260926/mk_r15.py](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/mk_r15.py#L20-L24) enforces these exact hashes.
+  - [regress/gate_arm.sh:1916-1923](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1916-L1923) currently pins 204 rows (`check "crime_width rows run" "${cres#*/}" 204`). Updating to 218 is pending post-pass.
+
+* **Function Bodies & Tick Physics:**
+  - [`fatal()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391): Defined in [src/core/debugmsg.c:384-391](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391). Body consists solely of `va_list argp; va_start(argp, fmt); va_debug(argp, fmt); va_end(argp);`. It prints and returns; it never terminates the process.
+  - Tick interval: In [src/machines/machine.c:354-355](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L354-L355), `ticks_till_next[n] = 0` and `ticks_reset_value[n] = 1 << tickshift`. In [src/devices/dev_sgi_ip32.c:68](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L68) and [464-465](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L464-L465), `CRIME_TICKSHIFT` is 14 (`1 << 14 = 16384` steps).
+  - In [src/machines/machine.c:727-736](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L727-L736), the first single step decrements `ticks_till_next` to `-1 <= 0`, executing [`dev_crime_tick`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L184-L190) once and reloading `ticks_till_next += 16384` (16383 steps remaining). Probe sessions execute fewer than 30 instructions; exactly one tick fires per session at instruction 1.
+
+---
+
+#### 2. Detailed Review of Questions
+
+#### Q1. Premise Audit
+
+##### (a) Session Isolation
+* **Source:** [regress/crime_width_probe.py:471-474](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L471-L474) (`session()`).
+* **Evidence:** Every session issues `pty.fork()` followed by `os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip32", "-M", "64", "0x80001000:" + DUMMY])`.
+* **State Crossing Check:**
+  - Device heap: [`dev_crime_init`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L436-L437) does `malloc` followed by `memset(d, 0, sizeof(struct crime_data))`. Latch `d->warned`, registers, and timestamps all start at 0.
+  - Dummy image: `/tmp/dummy_crimep.bin` is opened read-only; never written.
+  - Host clock: In [`crime_update_crime_time`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L153-L156), if `d->last_microseconds == 0`, it initializes `d->last_microseconds = microseconds`, resulting in `delta = 0`. Absolute epoch time never leaks into register state. Adding sessions cannot influence other sessions.
+
+##### (b) Walk of `d->reg[CRIME_TIME]` in `tl` Session
+* **Source:** [crime_width_probe.table14.py:626-641](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/crime_width_probe.table14.py#L626-L641), [dev_sgi_ip32.c:146-175, 265-272, 392-394](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L146-L175).
+* **Trace:**
+  1. *Step 1 (First Single Step, `ld s0` command dispatch):*
+     - Engine tick triggers [`dev_crime_tick`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L188).
+     - Calls [`crime_update_crime_time`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L146). Because `d->last_microseconds == 0`, sets `d->last_microseconds = tv_now`, `delta = 0`, `to_add = 0`. `d->reg[CRIME_TIME]` remains `0`.
+     - CPU executes `ld s0, 0x38(CRIME)`. `len == 8` reads `odata = d->reg[0x38/8] = 0`.
+     - Code falls into `switch (relative_addr)` -> `case CRIME_TIME:` -> calls [`crime_update_crime_time(d)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L393).
+     - *Adversarial Nuance:* Host time elapsed between tick entry and switch access is tiny (< 10 µs), adding `~0` to `d->reg[CRIME_TIME]`, but `d->last_microseconds` is updated here.
+  2. *Refusal 1 (`lb v1, 0x07(CRIME)`):*
+     - `len == 1`, enters narrow decline block ([dev_sgi_ip32.c:294-315](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L294-L315)).
+     - `!(d->warned & CRIME_W_LEN)` is true; sets `d->warned |= CRIME_W_LEN` and prints notice.
+     - Jumps to `crime_declined`, skipping the switch. `d->reg[CRIME_TIME]` and timestamps are untouched.
+  3. *Refusal 2 (`op, 0x38(CRIME)` for `lb`, `sb`, `lh`, `sh`):*
+     - `len` is 1 or 2. Latch `CRIME_W_LEN` is now set. No print.
+     - On fixed build: executes `goto crime_declined;`. The switch is skipped.
+     - `crime_update_crime_time` is **not** called. `d->reg[CRIME_TIME]` is untouched.
+  4. *Observation (`ld s1, 0x38(CRIME)`):*
+     - `len == 8`. Before switch, reads `odata = d->reg[0x38/8]`.
+     - Because steps 2 and 3 skipped the switch and no tick fired, `odata` holds the value established in Step 1 (`s0` access).
+     - Elapsed CPU time during step 1 was negligible; `s1` is raw `~0`, which evaluates to `small` (`< 6,600,000`).
+     - Next, `ld s1` executes `case CRIME_TIME: crime_update_crime_time(d)`. Over 0.5s of pty wait elapsed during steps 2 & 3; `delta * 66` adds `> 33,000,000`. `d->reg[CRIME_TIME]` jumps to a large value.
+  5. *Observation (`ld s2, 0x38(CRIME)`):*
+     - `len == 8` reads `odata = d->reg[0x38/8]`, receiving the updated large value. `s2` evaluates to `large`.
+  - Under mutant `M3_timelatch`, step 3 falls into the switch, advancing `d->reg[CRIME_TIME]` during step 3. When step 4 executes, `s1` reads `large` instead of `small`, triggering `FAIL` on `tl <op>` ([probe_M3_timelatch.raw:96-102](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/logs/probe_M3_timelatch.raw#L96-L102)).
+
+##### (c) CRIME_REV Arm Redirect
+* **Source:** [src/devices/dev_sgi_ip32.c:324-351](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L324-L351).
+* **Evidence:**
+  ```c
+  case CRIME_REV:		/*  0x000  */
+      if (((uint32_t)cpu->pc & 0xffffff00) == (uint32_t)0xbfc05100) {
+          cpu->pc = cpu->cd.mips.gpr[MIPS_GPR_RA];
+          ...
+      }
+      break;
+  ```
+  The code has no guard on `writeflag == MEM_READ` nor any guard on `len`. If `goto crime_declined` is skipped, narrow writes (`sb`, `sh`) and narrow reads (`lb`, `lh`) at `0x00` all trigger PC redirect. Confirmed by `M5_revlatch` reddening `rl lb pc`, `rl lh pc`, `rl sb pc`, and `rl sh pc` ([probe_M5_revlatch.raw:104-107](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/logs/probe_M5_revlatch.raw#L104-L107)).
+
+##### (d) CONTROL Arm DOG Partition Mutants
+* **Source:** [src/devices/dev_sgi_ip32.c:353-380](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L353-L380), [src/include/thirdparty/crimereg.h:57](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crimereg.h#L57).
+* **Evidence:**
+  - `CRIME_CONTROL_DOG_ENABLE` is `0x0200`.
+  - Mutants that cause DOG to halt CPUs (`cpu->running = 0`) fail `rearm surv` (which executes `0x0200` in `ACCEPTS`).
+  - Mutants that clear `d->warned` fail `rearm once` (counts `-- declined.` > 1).
+  - Mutants that suppress residue output (`break;` before residue check) fail `p acc ctl msg` (`0x0201` must print).
+  - `D_nodogclear` (omitting `idata &= ~CRIME_CONTROL_DOG_ENABLE;`) leaves residue `0x0200` on a 0x0200 write. Because no prior row checked the unimplemented fatal output for 0x0200 writes, `D_nodogclear` was the sole unobserved mutant.
+
+##### (e) Five-Label Exhaustiveness
+* **Source:** [src/devices/dev_sgi_ip32.c:322-409](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L322-L409), [src/include/thirdparty/crimereg.h:42-154](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crimereg.h#L42-L154).
+* **Evidence:**
+  - Case labels with stateful/guest-visible logic: `CRIME_REV` (0x00), `CRIME_CONTROL` (0x08), `CRIME_INTSTAT` (0x10), `CRIME_INTMASK` (0x18), `CRIME_TIME` (0x38).
+  - `CRIME_DOG` (0x30) contains only `break;`.
+  - `default:` only calls `debug()`, with no CPU or register modifications.
+  - Unswitched offsets (e.g. `0x20 SOFTINT`, `0x28 HARDINT`, `0x200..0x270 MEM_*`) fall into `default:`.
+  - Skipping the switch for `CRIME_DOG` or `default:` produces zero guest-observable side effects. The 5-label set is strictly complete.
+
+---
+
+#### Q2. The Floor Question on the Composite
+
+* **Swept Space & Denominator:**
+  - Domain: `{CRIME_REV, CRIME_CONTROL, CRIME_INTSTAT, CRIME_INTMASK, CRIME_TIME} × {latch SET} × {lb, sb, lh, sh}`.
+* **Coverage Matrix:**
+  1. `TIME` × {SET}: Covered by `tl lb`, `tl sb`, `tl lh`, `tl sh`. Mutant `M3_timelatch` reds all 4 (214/218).
+  2. `REV` × {SET}: Covered by `rl lb pc`, `rl lh pc`, `rl sb pc`, `rl sh pc`. Mutant `M5_revlatch` reds all 4 (214/218).
+  3. `INTSTAT` × {SET}: Covered by `istat sb`, `istat lh`, `istat sh`. Mutant `M6_istlatch` reds all 3 (215/218).
+  4. `INTMASK` × {SET}: Covered by `imask sb`, `imask lh`, `imask sh`. Mutant `M7_intmasklatch` reds all 3 (215/218).
+  5. `CONTROL` × {SET}: Narrow reads have no arm logic (`writeflag == MEM_WRITE`). Narrow stores are covered by `sb08 msg` (`sb 0xff` triggers fatal message), `sh08b run` (`sh 0x0a00` halts CPUs), and `gate run` (`sh 0x0800` halts CPUs). Mutant `M8_ctllatch` reds all 3 (215/218).
+  6. Universal post-latch leak: `M1_gotolatch` reds 18 rows (200/218), covering both legacy targets and all 8 new `tl`/`rl` rows.
+* **Conclusion:** Zero breaches exist in `{observable label} × {latch SET}`.
+
+---
+
+#### Q3. The 13/17 Disposition
+
+* **Ruling Conditional Fulfillment:**
+  - `D_nodogclear` escaped all 216 non-pair rows in Table 14. Because a body-tested-partition mutant escaped, the ruling mandated the L2 pair (`ctldog sw msg`, `ctldog sd msg`).
+* **Channel Soundness:**
+  - The session writes `0x0200` then `0x0201` to `CRIME_CONTROL` and asserts `count("CRIME_CONTROL: unimplemented") == 1`.
+  - On fixed build: `0x0200` clears DOG leaving residue 0 (0 prints); `0x0201` clears DOG leaving residue 1 (1 print). Total = 1.
+  - Under `D_nodogclear`: `0x0200` leaves residue `0x0200` (1 print); `0x0201` leaves residue `0x0201` (1 print). Total = 2 (`FAIL`).
+  - Under dropped writes: Total = 0 (`FAIL`).
+  - Silent decline of `0x0200`: Total = 1 (`PASS`, correctly disclosed as equivalent since `0x0200` has no persistent register representation).
+* **Unnamed Member:**
+  - Store writing `0x0300` (`DOG_ENABLE | ENDIANESS`), which clears both bits to residue 0 without printing. However, it does not represent an independent code partition; `D_nodogclear` already provides the necessary partition kill.
+
+---
+
+#### Q4. Table 14 Against Predictions
+
+* **Pre-Registered Predictions ([PRETABLE14.out:70-92](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/PRETABLE14.out#L70-L92)):**
+  - Mtime: `2026-09-26 00:33:06` (strictly prior to run start `00:33:17`).
+* **Actual Results ([check14.out:1-21](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/check14.out#L1-L21), [POSTTABLE14.out:8-26](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/POSTTABLE14.out#L8-L26)):**
+  - All 18 legs matched their pre-registered red sets and score predictions exactly.
+  - `CHECK14_PASS` verified.
+  - No leg diverged, no row failed spuriously, and every mutant reached its intended detector rows.
+
+---
+
+### Final Disposition
+
+The repair 15 packet satisfies all requirements, rigorously closes the decline-suppression floor class, and contains verified file:line evidence across all cited claims.
+
+**VERDICT: GO**

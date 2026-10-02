@@ -1,0 +1,49 @@
+VERDICT: CLOSES the K-class enumeration as adjudicated — no floor gap inside {latch} × {len 4,8} × {R,W} × {7 labels}; denominator and two survivor zones (one disclosed-class, one never-built class) below. `CRIME_CLOSE8_20260916`
+
+---
+
+## 1. The enumeration, checked against the inlined function (Q1)
+
+READ: the switch in the inlined `DEVICE_ACCESS(crime)` has exactly the case labels CRIME_REV (0x00), CRIME_CONTROL (0x08), CRIME_INTSTAT (0x10), CRIME_INTMASK (0x18), CRIME_DOG (0x30), CRIME_TIME (0x38), plus `default`. Seven switch outcomes; INTSTAT/INTMASK share one body but are two addresses, counted as two — correct. Accepted widths are exactly {8, 4} (the `else` declines 1,2,3,5–7); `writeflag` is binary; the latch bit is binary. 2×2×2×7 = 56. **No eighth label and no missing axis at the stated granularity.** READ: CRIME_SOFTINT (0x20) and the bank slots (0x200+) fall in `default`, and the generated `dfl` predicate is the complement, so they are inside the product.
+
+REASONED: the REV pc-window is not a product axis but is row-swept post-latch (P1 covers sw/sd/ld/lw from the window; P6 covers non-window 8R and 4R-low; non-window REV 8W/4W/4R-high are equivalent — the prelude rewrites reg[0] and the high half is 0; READ from the prelude plus the `(int32_t)(odata >> 32)` lane in the len-4 read path).
+
+## 2. A clean-sweep latch-set mutant table 11 did not build (Q2) — yes, but inside a disclosed class
+
+REASONED, exact edit:
+```c
+	} else if (len == 4 && !(writeflag == MEM_READ &&
+	    relative_addr == 0x0c && (d->warned & CRIME_W_LEN))) {
+```
+Predicted 188/188. READ from the inlined code: accepted 4R at +0x0c takes `odata = (int32_t)d->reg[1]` = the low half of CONTROL = 0x100; declined it answers 0, so it is guest-visible and latch-silent. No session inlined anywhere touches +0x0c (the disclosed touch-list — +0x00, +0x04, +0x08, +0x10, +0x18, +0x30, +0x34, +0x38, +0x40, +0x210, +0x214, +0x1f8, +0x278 — lacks it; the p-* sessions touch 0x00–0x40, +0x278). The row that should catch it does not exist (a post-latch `lw +0x0c` wanting 0x100). **Classification:** this is the header's own DISCLOSED class ("accept arm narrowed … at an unrowed slot … is not seen"; "an effect … keyed on ONE UNNAMED offset"), so it is recorded debt, not a floor gap — but that disclosure was written pre-K and never restated for latch-conditioned forms. The record should say the unrowed-slot class extends to K-forms. Same shape at INTSTAT/INTMASK/TIME +4 lanes (each reads a seeded-nonzero or updated low half) is the same story.
+
+REASONED (the stronger find, but outside this pass's class): the floor rule this brief itself recites for overturning RA3 — "a device-state lvalue the fix's own repair path reads" — is satisfied by `d->reg[CRIME_HARDINT/8]` and `d->reg[CRIME_SOFTINT/8]`, both read in the tail this diff adds. A conjunct on them, e.g. `if (len == 8 && !(writeflag == MEM_READ && relative_addr == CRIME_TIME && d->reg[CRIME_HARDINT / sizeof(uint64_t)])) {`, is label-granular, not latch-keyed, not one of the 56, and RA3 warned exactly this: "a `d->warned`-keyed shrink must be BUILT before it is disclosed" now applies to HARDINT-keyed shrinks, which nobody has built. NOT CHECKABLE from the packet whether it escapes; one fact settles it: does any session latch HARDINT and then issue an *accepted* read of the targeted label with an oracle (`gate hardint` looks like an accepted read while HARDINT is latched — if so, a HARDINT-conjunct at that label is incidentally killed there; TIME shows no such session in the packet).
+
+## 3. The bucket split honesty (Q3)
+
+READ: 23+8+10+5 = 46 ✓. But:
+
+- **The "5 HOST-DIAGNOSTIC" bucket names three cells** (CONTROL 0x0201 at 4W, at 8W, `sw +0x04` via F1/F1b/F3). The other two are not named anywhere in the packet and not derivable from it. READ.
+- **One named member looks stale post-repair-13:** REASONED — P2 now drives a `sw 0x0201` into `p acc ctl msg` (want 3) with the latch set, so an idata-jointed decline of the 4W-0x0201 cell drops the count to 2 and reds. That cell is no longer merely "disclosed rather than rowed"; F1 was not re-run (targeting rule), so the record can't claim a measured kill, but the bucket text misstates the cell's status.
+- The 8 "ALREADY PINNED" and 10 "EQUIVALENT" entries are NOT CHECKABLE from the packet: only 4 of the 10 equivalents are derivable from inlined text (REV 8W/4W/4R outside the window, CONTROL 4R-high). Settling fact: the per-entry list with, for each of the 8, its session + oracle from `session_map2.py`, and the full untruncated ACCEPTS tuple (the diff truncates it).
+
+## 4. The three CONTROL=FAIL legs (Q4)
+
+REASONED and arithmetic-checked: the reading is sound. C_tim8r's 181/188 = 188−7, and all seven red rows (time lb/sb/lh/sh, p acc time sd, p t4w gap, p t4r gap) are mediated by a declined 8R at +0x38 — its own cell. C_ist4r / C_imk4r each red exactly the old `istat ctl` / `imask ctl`; the new sessions carry no post-latch 4R at those labels (P2/P6 use sw/sd/ld there), consistent with zero new reds. And the measurement itself settles the one thing I couldn't read: for those mutants to red, the old ctl `lw`s must run after their session's first refusal. Gate-unaffected claim is pinned on BASE, which is 188/188 OK. No invalid session among the three.
+
+## 5. The next wrong statements (Q5)
+
+1. READ — The repair-13 draft comment says the DOG 4W-high readback "is parked in `t2' above"; the inlined code parks it in **`ra`** (`ld(A, "ld", CRIME + 0x30, "ra")`, row reads `pr(t, "ra")`). The comment and the check it prescribes ("check t2 is not otherwise live") name a register the code doesn't use.
+2. READ — Generator comment "K1/K2/K3 are members of this product; do not shadow them" with guard `if name not in M`: generated names are `C_*` and never equal `K1/K2/K3`, so the guard can never fire. Harmless (33 = 1+28+4 legs checks out), but the comment misdescribes the code — and per this chain's own rule a comment that can't be true is a record defect.
+3. READ — POSTTABLE's "The latch-CLEAR half is table 10's twelve S_* silent bypasses": the latch-clear half of the product is 28 cells; twelve is the rowed subset. Elided, not false, but it renders "28 vs 12" unreconcilable without the repair-12 text.
+4. REASONED — the stale 0x0201-4W bucket and the unnamed-two-of-five, per section 3.
+5. NOT CHECKABLE (trivial but unreconciled in-packet): "40 + 2 + 4 = 46" and "43 before ldP and the two ENDIANESS writes" jointly imply one of the four positional repeats was already inside the 40; the packet never says which.
+
+## What I could not check, with the single settling fact each
+
+- Killing of the 28 except as reported (mtimes, transcripts) — settle with the per-leg transcripts in `table11.out`.
+- Composition of the 46 ACCEPTS entries (tuple truncated mid-line in the diff) — settle with the full tuple; it decides sections 3's exact bucket membership.
+- The HARDINT/SOFTINT-conjunct survivor (section 2) — settle with the gate and istat/session command lists: any accepted read of the targeted label while the state lvalue is nonzero, with an oracle.
+- POSTTABLE's claim that K1/K3/E2 "matched their per-row predictions EXACTLY" vs K2's two-row misprediction — settle with PRETABLE 11's per-mutant row lists.
+
+**Bottom line for the chain:** for the class three passes actually found (latch-keyed, label-granular, len {4,8}, both directions, seven switch outcomes), the sweep is complete and self-checking — including one measured negative control (C_ctl4r, equivalent by construction: high half of 0x100 is 0). My zero carries its denominator: 28 generated latch-set cells + K1/K2/K3 + E2. Survivors exist only in the disclosed single-unnamed-offset class (exact edit above, predicted 188/188) and in a never-built adjacent class (HARDINT/SOFTINT-state conjuncts) that the brief's own overturn logic makes a candidate floor axis and repair 14's business, not this pass's.

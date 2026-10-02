@@ -1,3 +1,149 @@
+# `#529` (crimewidthkill): a guest byte or halfword access to the SGI IP32's CRIME ended the emulator -- declined now and announced once, defended by a 226-row detector whose review chain ran sixteen repairs and closed on repair 16's F2 pass
+
+**The defect, witnessed at rung 3.**  `DEVICE_ACCESS(crime)` in `src/devices/dev_sgi_ip32.c` served lengths 4 and 8 and
+called `fatal(); exit(1);` on any other, so one guest lb/lbu/lh/lhu/sb/sh anywhere in CRIME (physical 0x14000000) ended
+the emulator process.  `regress/artifacts/crimewidthkill/crime_width_witness_20260913.py` on the unmodified `-E sgi -e
+ip32`: the committed build 3/15 -- every refusal row red, the three controls green (`witness_committed.out`) -- and the
+fix 15/15 (`witness_fix.out`).
+
+**What ships.**
+* `src/devices/dev_sgi_ip32.c` -- unchanged since 2026-09-13 (md5 8c1d1545; `est/` byte-identical; the build trees
+  cleared -- run 2026-10-02 09:44, not asserted: `cmp` clean against SEC in `build/`, `build-asan/`, `est/` and WSL
+  `/tmp/gxsec-build`, and the binary newer than the source in all three build trees (`build/` 09-27 18:02:51 over
+  18:01:54; `build-asan/` 09-25 13:53:09 over 09-13 03:58:19; `/tmp/gxsec-build` 09-27 18:03:34 over 18:02:52);
+  `est/` is a source tree, part 2 N/A; no `.MUTANT` sentinel anywhere).  The width arm DECLINES: one latched announce, `[ crime: unimplemented len=%i at 0x%x --
+  declined.  (once) ]`, through a new per-instance `warned` field, then `goto crime_declined` -- the function's common
+  tail (the HARDINT restore, the INTSTAT recompute, the read-back, `return 1`) -- past the register switch.  Option-set
+  member 3, the `#498` sgi_de shape.
+* `regress/crime_width_probe.py` (NEW, 226 rows) -- real guest loads and stores through real address decode and
+  `memory_rw` on the unmodified machine, in stepped and free-running sessions (the `<RUN>' sessions `continue`, and the
+  `free ... said' rows need that difference); LIVENESS and DEVICE-SIGNATURE controls.  Its module docstring is the
+  CONTRACT (clause (e)): every edit it is designed to catch, each measured in a named table, and what it discloses.
+* `regress/gate_arm.sh` -- gate 14 runs it: parse before score, controls OK, exit 0, rows run / correct / emitted
+  pinned at 226, none failed.
+* `tools/pipeline/check_probe_wiring.py` -- the probe as a gated DETECTOR (its description said 141 rows and pin 141),
+  and 93 MANIFEST lines -- derived by `manifest529.py` from the `.py` files under `regress/artifacts/crimewidthkill/` at
+  staging time, one per file no line named yet (`stage529/MANIFEST.txt` carries the count; it was 92 when staged for r21,
+  and r22's archived probe adds one) -- for the round's preserved
+  instruments and scripts (RESEARCH or TOOL, using extracted docstring text where available and `(no docstring)`
+  otherwise); `tools/precommit_check.sh` -- `SCORE_CLAIMS_MANIFEST` 31 -> 32; `tools/pipeline/
+  check_score_claims.py` -- the hyphen fix (`scorehyphenfp`, whose ledger row said closed with no commit): HEAD's checker
+  read the probe's ordinal `entries-4/8` as a stale score claim.
+* `regress/artifacts/crimewidthkill/table16_20260926/POSTTABLE16.out` -- the F2 ruling's Q3 item 13, the records outside
+  the probe, appended as a dated CORRECTIONS section (the table's own text is kept): the `ctlrst sw halt' kill it did not
+  list (the Opus seat's `S_rst4clr`, 224/226 with exactly `sw08 halts` and `ctlrst sw halt` red and CONTROL=FAIL because
+  `sw08 halts` is a CONTROL row), the PRETABLE's `+0x06 -> +0x07` slip, and the packet's stale E7/E10 labels (the frozen
+  probe is 5f770991, 226 rows); F14's "single-axis" is "label-only" and F24's six TIME sessions are repair 15's (two
+  before it).  PRETABLE16 is not edited.
+* `regress/artifacts/crimewidthkill/flagship_20260918/` -- the flagship's 2026-09-18 answer, which lived only in its
+  transcript (87 claude-fable-5-1 turns, 0 refusals), preserved with its brief; ledger entry [154]'s evidence pointed at
+  the brief in `_scratchpad/` and now points here (the 09-25 re-ruling's confirmation asked for both).
+* The carrier (the project-root `CLAUDE.md`; its tracked copy stays uncommitted by standing constraint): the Q3
+  disjunct in JOINT CELLS -- replaced in place by the codex seat's 2026-09-26 rewrite
+  (`codexfarm_20260926/codex_carrierq3.txt`), adopted with the flagship's three corrections of 2026-09-30
+  (`fable5_final.md` item E: M7/M8 recorded as measured DETECTED, M3/M5 as holes CLOSED by repair 15, and the sentence
+  that an OFFSET within one label is not an axis unless the body distinguishes it), graded RIGHT by GPT-6 Astra's
+  confirmation; the clause opens `AND A GUARD THAT SUPPRESSES A DISPATCH ADDS A THIRD DISJUNCT TO THE 2026-09-09 LABEL
+  CLAUSE`, and the tracked copy carries the identical bytes (`cmp` clean 2026-10-02).
+
+**THE CHAIN.**  2026-09-13 to 2026-09-26 (the review of its text and records ran to 2026-10-02).  Pass 1 on the design (`panel_20260913_000135`), then review panels through
+closing pass 8 (`panel_20260913_022247` .. `panel_20260916_194735`), repair 14's pass 1 (`_scratchpad/
+panel_20260916_234606`) and its adjudication (`panel_20260917_004011`) -- each finding escapes that the next repair
+closed in-round.  The detector grew 40 -> 71 -> 85 -> 111 -> 121 -> 131 -> 141 -> 157 -> 188 -> 204 rows across
+eleven kill tables (`killtable_20260913/` .. `killtable11_20260916/`) and table 12 (`repair14_20260916/`); the ctl0c
+pair was discharged by a measured kill (`ctl0c_discharge_20260917/`: `M_ctl0c_decline` reds exactly `acc ctl0c` and
+`p acc ctl0c`, as predicted -- an earlier CHANGELOG block still listed it OWED).  **Two roster gaps are part of that
+history and are named here:** repair 14's only pass 2 was grok alone (`grok_pass2_20260917.txt`, ledger [151]) -- the
+09-25 re-ruling made roster validity an explicit part of the stop condition because of it; and minimax stayed DOWN on
+closing pass 3 (a timeout, then HTTP 500), while closing passes 4 and 5 timed out first and answered on retry (their
+first `SEATS.txt` files are stale, not final status).  **Three rulings credited to the flagship seat were written by
+claude-opus-4-8 after refusals** (the C3 and C5 adjudications and repair 14's ruling -- `agent_models.py`); the ledger
+now tags them `[NOT A SEAT ANSWER]` and each file carries a dated provenance note.  **The flagship re-ruled first-hand
+on 2026-09-25** (`rerule_20260925/fable5_rerule_529_20260925.md`): C3 STANDS, D7 FLOOR (the latch is a floor axis), Q3
+ADOPT (into the carrier), STOP RATIFY with roster validity as a fourth part; GPT-6 Astra confirmed it with changes
+(`codex_astra529rerule.txt`).  Then: **table 13a** measured the INTMASK and CONTROL-write label swaps (CHECK13A_PASS:
+base 204/204, both 201/204 -- no carrier owed); **repair 15** rowed the TIME and REV decline carriers and the entries
+13-and-17 DOG pair (table 14, CHECK14_PASS, 18 legs exact: base 218/218, `M3_timelatch` and `M5_revlatch` 214/218 -- the
+two escapes the whole chain had carried); its **full-roster pass 2** (`panel_20260926_021621`) found the HARD_RESET
+clear's residue unrowed -- the dedicated grok job's BREAK, measured an escape in table 15a (218/218), graded L2 by the
+flagship; **repair 16** pinned the CONTROL arm's residue-text count for each of its three clears in both latch states
+(table 16, CHECK16_PASS, 25/25 legs exact on 226 rows); and its **F2 pass** (`panel_20260926_053828`, every seat's
+findings consolidated with dispositions) closed the enumeration: the flagship (`repair16_f2_20260926/
+fable5_f2_adjudication.md`), **"THE CHAIN CLOSES ON THIS PASS -- zero floor breaches survive adjudication on a valid,
+full-roster pass; ... NO row is owed"**, CONDITIONAL on its Q3 text corrections, a base leg on the final bytes, the
+`S_rst4clr` attribution kept durable, GPT-6 Astra's confirmation and `#549`-first ordering; X1 and X3 graded clause (e).
+
+**The final text.**  **r17** (`final529r17_20260926/`) applies the F2 ruling's Q3 items 1-12, four corrections the
+resumption dossier listed (the table range, the HARD_RESET rows missing from NOW ROWED, the ctl0c discharge, a heading
+that still called the decline-suppression face open), the separate `13/17` wording correction (section U would have read
+it as a stale score), and Astra's two qualifications (the split widths unreachable only CONDITIONALLY on
+`DEV_CRIME_LENGTH == 0x280`; decode translations disclosed, none measured).  **r18** (`final529r18_20260926/`) adds GPT-6 Astra's audit of r17 (`final529r17_20260926/codex_jobs/codex_r17audit.txt`: eight false or
+unsupported docstring sentences -- "one `step' at a time" of every access; TIME "66-990" twice, where TIME is a small
+multiple of 66 and zero in 42 of 800 logged cells; TIME's upper word equivalent only while it is zero; "any selection
+shows" only for selections that reach the returned bytes; CONTROL bit 0 IS written by accepted rows; the host bucket's
+"missing two" and repair 13's three-write count, both inside the ACCEPTS block) and **the ACCEPTS-46 enumeration**: the
+Opus seat MEASURED every one of the 92 entry x latch-state cells with a silent-decline mutant against predictions
+written before any run, 92 of 92 exact (`final529r17_20260926/opus_accepts46.md`, logs in `opus_acc46/`), and an
+independent codex reading reached the same partition (`codex_jobs/codex_accepts46twin.txt`).  It names every member of
+repair 13's buckets (the two unnamed host-diagnostic members are entries 11 and 15, the six unnamed equivalent members
+12, 13, 16, 17, 43 and 44), retires repair 13's counts -- 31 guest-visible, 4 rowed on the CONTROL text in both latch
+states, 1 host-diagnostic only (entry 40), 10 equivalent -- and finds **entry 34 (`sd +0x40`) unrowed with the latch
+CLEAR** (both of its latch-CLEAR drivers store 0 into a slot that holds 0): clause (e), not floor, by the flagship's final
+ruling (item C: the {default label, 8-byte store, latch CLEAR} cell is HELD at +0x278; the unobserved +0x40 slot is
+disclosed coverage debt), GPT-6 Astra confirming -- the k34C decline escapes 226/226 on S55 as a measured
+non-observation, so the cheap row (seed a nonzero `sd +0x40` in the two value sessions, re-want `acc 40 sw` /
+`p acc 40 sw`) is FILED as `crimecontroldebt` item 8 with its replay cost, not owed.  **CODE-IDENTICAL to repair
+16** but for three row notes: the r16-to-r17 diff changes three row-note strings, comments and the module docstring
+(`mk_r17.py` compares the ASTs after normalising every eligible row-note argument, not only the three edited ones --
+GPT-6 Astra's second records audit), and `mk_r18.py` refuses unless r18's AST less the module docstring equals
+r17's.  **r19** (`final529r19_20260930/`) is r18 with ONE docstring sentence corrected -- "NetBSD's +0x0c write does nothing", where the write stores the low word and reaches the default arm's diagnostic (GPT-6 Astra's second records audit, `codexpack_20260928/rec529audit2/`); `mk_r19.py` refuses unless r19's AST less the docstring equals r18's.  **r20** (`final529r20_20260930/`) is r19 plus the flagship's final
+ruling (`final529r18_20260926/fable5_final.md`, SHIP WITH CHANGES, 2026-09-30): the comment at ACCEPTS entry 21 said
+the cell was "BLIND IN BOTH LATCH STATES ... all three [sessions] oracle-less" -- a wrong record, since session 19's
+accepted `lw +0x10` reasserts and `istat ctl` reads IP2 (k21S 224/226 in `opus_acc46/SUM46.out`; the probe's own
+ACCEPTS block listed entry 21 as pinned post-latch); only the 4-byte VALUE was unobserved.  Corrected and dated in
+place, and the ACCEPTS block's "every one of the 92 cells MEASURED" now says which two sessions (`rearm *`, `latch *`)
+were served by derivation from the inertness capture -- for the 31 guest-visible entries; they were rerun for the
+other 15 (`opus_accepts46.md`, RAN 4).  `mk_r20.py` refuses unless r20's AST less the docstring equals
+r19's.  The ruling named r20 the CLOSING text revision; **GPT-6 Astra's confirmation OVERTURNED that exemption** under the
+late-dissent rule ("WRONG RECORD -> L4, correct in place") and found item 6's "no row seeds TIME's upper word" FALSE --
+the grok seat's reading of the packet: the gapped sessions plant an `sw` of `t0=0x0a0b0c0d` at TIME, which the 4-byte
+arm stores in the UPPER word -- so **r21** (`final529r21_20260930/`; `mk_r21.py`, AST-checked
+against r20) corrects that clause, item 8's wording ("bits the CONTROL arm does not individually test or clear"; its
+clause-(e) classification stands), the "66-990" comment at r20:955 and the derivation qualifier's scope.  **r22** (`final529r22_20261002/`, the committed
+bytes) -- r22 is r21 plus ONE docstring qualifier: this commit's first precheck (2026-10-01) was refused by the hook's score-claim check -- the ACCEPTS note for entry 40 quoted closing pass 7's 157/157 without the `157-row` marker it requires of a historical score (mk_r22.py, AST-identical to r21) -- and by its NUL check (eight NUL bytes in a 2026-09-13 seat answer, replaced by `<NUL>` with a note beside it).  Base leg on r22 against table 16's base binary (2026-10-02, WALL 1235 s): 226/226, CONTROL OK; 21 differing row pairs against table 16's base log -- 15 timing-dependent TIME values and the 6 rows of the three rewritten notes -- and 0 row pair(s) differing only in column padding after normalising those; no want, got or verdict column differs (`final529r22_20261002/probe_base_r22.raw`).  The r20-to-r22 text delta was put to GPT-6 Astra
+(`final529r22_20261002/codex_astra_r22.txt`): "CONFIRM WITH CHANGES (8) -- the five probe edits stand, but eight records claims need correction."  All eight are applied with its replacement texts -- item 8's
+filing provenance and its unrowed-slot classification, the ledger's slot/cell wording, a stale mode line, "timing-dependent"
+for "free-running" TIME values in eleven places, the MANIFEST count for r22, and the `(no docstring)` entries -- and no
+probe text changed, so r22 stands (`fix529_astra_r22.py`).
+Base leg on r21 against table 16's base binary (2026-10-01, WALL 1233 s): 226/226, CONTROL OK; 23 differing row pairs against table 16's base log -- 17 timing-dependent TIME values and the 6 rows of the three rewritten notes -- and 0 row pair(s) differing only in column padding after normalising those; no want, got or verdict column differs (`final529r21_20260930/probe_base_r21.raw`).
+Base leg on r20 against table 16's base binary (2026-09-30, WALL 1229 s): 226/226, CONTROL OK; 27 differing row pairs against table 16's base log -- 21 timing-dependent TIME values and the 6 rows of the three rewritten notes -- and 4 row pair(s) differing only in column padding after normalising those; no want, got or verdict column differs (`final529r20_20260930/probe_base_r20.raw`).  **Provenance of r21's corrections:** the grok seat's reading of the final packet (`final529r18_20260926/seats_20260930/grok_529final.txt`) found item 6's closing clause false and the residual "66-990" comment; the flagship's ruling had filed both as known wrong records under a closing-revision exemption, which the confirmation rejected, so they are corrected in r21 rather than recorded as known.  The generator note `final529r20_20260930/mk_r20.py.txt:5` says the cached rearm/latch sessions do not hold the accesses -- false (they do; the derivation rests on their unchanged scored outputs), recorded beside it in `mk_r20.py.CORRECTION.txt`.  Base leg on r19 against table 16's base binary (2026-09-30): 226/226, CONTROL OK, 24 differing row pairs against table 16's base log -- 18 timing-dependent TIME values and the six rows of the three rewritten notes -- and no want, got or verdict column differs (`final529r19_20260930/probe_base_r19.raw`, WALL 1235 s; r18's leg, `final529r18_20260926/`, gave the same 226/226).
+
+**The panel.**  Every stage full-roster from the 09-25 re-ruling on: pass 2 and its F2 each fired all eight scriptable
+transports, a dedicated grok job, the Opus measuring seat (claude-opus-5-5 by its transcript) and the flagship LAST
+(claude-fable-5-1; its first pass-2 answer was an opus-4-8 fallback, relabelled, and the resumed agent answered
+first-hand).  **Two further failures in the review chain, named so "full-roster" reads as it was:** the
+09-25 re-ruling's first answer fell back to opus-4-8 after two refusals before the resumed agent answered first-hand
+(`rerule_20260925/fable5_rerule_529_20260925.md`), and the final packet's first firing on 2026-09-26 hit the seat's
+session limit before answering; the ruling that stands is the fresh agent's of 2026-09-30 (claude-fable-5-1 by its
+transcript).  **Codex was walled on both panels** (usage limit to 07:01) -- a seat failure -- and answered the F2 pass
+after the reset (`codex_f2.txt`, plus a dedicated job, `codex_f2ded.txt`).  **The kimi CLI returned "403 ... subscription
+does not have access to Kimi Code"** on both; the seat was COVERED by `kimi-k3:cloud`.  **Dissents recorded, not
+absorbed:** deepseek's REJECT on pass 2 (Q1(b)'s timing); on the F2 pass deepseek's and minimax's OVERTURN of F2 (the
+ENDIANESS rows as unlicensed scope growth -- minimax would overturn it FIRST), ruled a licensed strengthening by the
+flagship; glm's and kimi-k3's F20 overturn (take the value anchor) -- ruled clause (e), the value anchor FILED.  After
+the F2 pass, GPT-6 Astra (codex at `ultra`) audited r17 (above), the records drafts (`codex_rec529audit.txt`: eleven
+false or unsupported sentences; their substantive corrections are incorporated in this block and the ledger, and a
+second audit on 2026-09-28, `codexpack_20260928/rec529audit2/`, found eight more, corrected the same day) and the commit tooling
+(`codexfarm_20260926/codex_scripts529.txt`: seventeen defects; the commit ran through a rewritten, controlled tool).
+**Astra (GPT-6 Astra, pointer form) on the ruling and the final text: GPT-6 Astra's confirmation of the final ruling (2026-09-30, `final529r18_20260926/codex_astraconfirm_final.txt`): 2 of its dispositions overturned -- item 6's "no row seeds TIME's upper word" is FALSE (the gapped sessions' `sw` of `t0=0x0a0b0c0d` at TIME lands in the upper word; grok was right) and the closing-revision exemption for later wrong records contradicts the late-dissent rule ("WRONG RECORD -> L4, correct in place"), so an r21, comment/docstring-only with its own base leg, is required and r20 stays as history; 4 wording changes (TIME "after any update is a multiple of 66" does not survive an arbitrary stored value; item 8 says "bits not individually tested or cleared", its clause-(e) classification standing; the codex twin's reading was also measured independently; "all four drafts" -> the revision-bearing records); HIGH for `crimectllane` and the carrier's Q3 clause RIGHT; C's clause (e), F's diff and the r20 receipt (27 pairs: 21 TIME, 6 notes) verified independently..**
+
+**FILED** (OUTSTANDING_BUGS 2026-10-02): `crimectllane` (HIGH -- the CONTROL lane: a 32-bit store to the high word stops
+every CPU; graded HIGH by GPT-6 Astra over the Fable seat's MED; one probe comment and `gate_arm.sh` had called it
+filed since 09-13 and it was filed nowhere), `crimebankorder` (LOW -- a second probe comment called IT filed; the
+resumption dossier found neither filing), `crimecontroldebt` (LOW -- the eight strengthenings filed rather than owed: seven by the F2 adjudication and entry 34's row by the final ruling, each with its kill and re-run cost).  Existing and still open:
+`crimesplitwidth`, `crimeramexit`, `crimectlflood`.  The next commit owes `#529`'s pass-2 receipt (`dev_sgi_ip32.c` is
+`src/`).
+
 # `#553` (latecodex): the codex seat re-fires that `#550`, `#551` and `#549` promised landed AFTER those three commits -- adjudicated under the late-dissent rule, their corrections applied as comment and record edits, and one defect of the commit machinery itself filed
 
 **Why.**  The codex seat (GPT-6 Astra) was walled on every panel of 2026-09-25 (usage limit to 2026-09-26 07:01).  The

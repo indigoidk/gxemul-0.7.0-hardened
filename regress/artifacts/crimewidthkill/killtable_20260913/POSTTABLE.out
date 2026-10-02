@@ -1,0 +1,84 @@
+POSTTABLE -- #529 crimewidthkill kill table 1, written AFTER the table (PRETABLE.out predates it by mtime)
+Driver kill529.run-*.sh (frozen copy of kill529.sh); summary table1.out; per-mutant logs/probe_<m>.raw (each ends
+CRIMEP_DONE -- checked) and logs/<m>.diff; build logs builds/.  Instrument: crime_width_probe.table1.py, md5
+a338b7ae..., byte-identical to regress/crime_width_probe.py as shipped (logs/INSTRUMENT.md5).  Scratch clone
+/tmp/gxopuscrime, baseline = the #529 working set (BASELINE_CMP CLEAN, dev_sgi_ip32.c md5 5919a5a7...), rebuilt in
+the clone before mutant 1; restored afterwards: cmp clean, binary -nt source, restored == base byte-identical,
+sentinel removed.  Every mutant built with rc 0 and a fresh object; none byte-identical to base.
+
+SCORES (40 rows)
+    base      40/40  CONTROL=OK
+    revert    11/40  CONTROL=OK   the removed kill, verbatim (floor b)
+    fault     25/40  CONTROL=OK   return 0 -> EXCEPTION_DBE
+    exit0     17/40  CONTROL=OK   exit(0) after the announce
+    fallsw    35/40  CONTROL=OK   goto removed: every refused width falls into the switch
+    len1only  37/40  CONTROL=OK   goto only for len 1 (2-byte cells fall in)
+    len2only  38/40  CONTROL=OK   goto only for len 2 (1-byte cells fall in)
+    readonly  37/40  CONTROL=OK   goto only for reads (write cells fall in)
+    wronly    38/40  CONTROL=OK   goto only for writes (read cells fall in)
+    return1   40/40  CONTROL=OK   PREDICTED EQUIVALENT, measured equivalent (memory_rw pre-zero, #95) -- disclosed
+    nolatch   39/40  CONTROL=OK   latch never set
+    latchinv  35/40  CONTROL=OK   latch test inverted
+    fmtswap   36/40  CONTROL=OK   announce's len/addr swapped
+    acc8w     36/40  CONTROL=OK   8W refused
+    acc8r     37/40  CONTROL=OK   8R refused
+    acc4wlo   38/40  CONTROL=OK   4W low half refused
+    acc4whi   37/40  CONTROL=FAIL 4W high half refused
+    acc4rlo   38/40  CONTROL=FAIL 4R low half refused
+    acc4rhi   38/40  CONTROL=FAIL 4R high half refused
+  17 of 17 non-equivalent mutants KILLED; the one equivalent (return1) is the one predicted.
+  *** CORRECTED 2026-09-13 (pass 2: codex, grok, glm, kimi CLI and kimi-k3:cloud, independently): this line read
+  "18 of 18 non-equivalent mutants KILLED".  The table is base + 18 mutants; return1 is one of the 18 and is
+  equivalent, so 17 are non-equivalent.  It counted return1 as both equivalent and killed. ***
+
+ROWS EACH MUTANT REDDENED vs PRETABLE section 4
+    revert    all 29 refusal rows                                                        = predicted
+    fault     <op> v0/pc/exc x (lb lh lbu lhu sb sh) + sh08 pc + lb/lh rev pc (pc at the vector)   = predicted (+ the
+              pc-only rows of the side-effect sessions, which see the vector too)
+    exit0     every surv/v0/pc/exc row + sh08 pc/run + rev pc + latch surv; <op> said and latch x5 GREEN
+              (announce printed, EOF, status 0)                                          = predicted
+    fallsw    sh08 pc, sh08 run, sb08 msg, lb rev pc, lh rev pc                          = predicted, exactly
+    len1only  sh08 pc, sh08 run, lh rev pc                                               = predicted, exactly
+    len2only  sb08 msg, lb rev pc                                                        = predicted, exactly
+    readonly  sh08 pc, sh08 run, sb08 msg                                                = predicted, exactly
+    wronly    lb rev pc, lh rev pc                                                       = predicted, exactly
+    nolatch   latch x5                                                                   = predicted
+    latchinv  <op> said x4, latch x5                                                     = predicted
+    fmtswap   <op> said x4                                                               = predicted
+    acc8r     acc8 st+ld, acc4 wlo, acc4 whi                                             = predicted
+    acc4wlo   acc4 wlo, acc4 whi                                                         = predicted
+    acc4whi   acc4 whi  + controls sw08 halts, sw08 msg ctl                              see (b)
+    acc4rlo   acc4 rlo  + control devsig                                                 see (b)
+    acc4rhi   acc4 rhi  + control rev pc ctl                                             see (b)
+    acc8w     acc8 st+ld, acc4 rhi, acc4 rlo, acc4 wlo                                   *** PREDICTION WRONG, see (a)
+
+(a) THE CHANNEL LINE'S OWN CLAIM, checked as PRETABLE promised.  "A row's channel under its mutant is knowable at
+    writing time" held for 16 of 17 non-equivalent mutants, ROW SET EXACT (this said "17 of 18", the same miscount).  For acc8w I predicted {acc8, rhi, wlo,
+    whi} and measured {acc8, rhi, RLO, wlo}: the accept session is SEQUENTIAL, so with the sd refused the register
+    stays 0, the lw of the low half reads 0 (rlo red -- I had missed it), and the later sw of the high half on top of
+    the earlier sw of the low half REBUILDS the full word the whi row wants (whi green -- I had predicted it red).
+    The kill is unaffected (four rows), and every accept cell still reds under its OWN single-cell mutant.  The
+    lesson is narrow and real: in a session where later accesses write the same register, a row's value depends on
+    every earlier access, so its channel under a mutant must be traced through the whole sequence, not read off the
+    one access it names.
+
+(b) THE CONTROLS THAT REDDENED ARE ACCEPT-CELL COVERAGE BY CONSTRUCTION, NOT CONTROL DEFECTS.  sw08 halts / sw08 msg
+    ctl are 4-byte writes to the HIGH half (+0x08), devsig is a 4-byte read of the LOW half (+0x04), rev pc ctl is a
+    4-byte read of the HIGH half (+0x00); refusing that cell refuses the control's own access.  So CONTROL=FAIL under
+    those three mutants is the controls doing a second job.  No mutant reddened a control through any other route.
+    Weak spot disclosed: `devsig hi' wants 0x0, which a refused read also returns, so it cannot vary under acc4rhi --
+    it is a device-reads-0 row, not a discriminating control; acc4 rhi and rev pc ctl carry that cell.
+
+EQUIVALENCE, per the rule that a mutant that will not die is a result: return1 is the only survivor and it is the
+predicted one, with its warrant named (memory_rw.c's #95 pre-zero); an edit to that warrant re-runs this measurement.
+
+DENOMINATOR for the pass-2 closing question: cells swept -- refusal {1,2} x {R,W} each by a confined fall-through
+(len1only, len2only, readonly, wronly) plus the whole fall-through (fallsw); accept {8W, 8R, 4W lo, 4W hi, 4R lo,
+4R hi} each by its single-cell growth mutant; the latch (nolatch, latchinv); the text (fmtswap); the dispositions
+(revert, fault, exit0, return1).  NOT swept: address-conditioned fall-throughs (a goto keyed on relative_addr), which
+reach the switch only at the labels a refused access happens to name -- owed as a pass-2 question, not yet measured.
+*** CORRECTED 2026-09-13 (pass 2, codex): "each by a confined fall-through" overclaims -- len1only, len2only, readonly
+and wronly each admit TWO refusal cells into the switch (a width's R and W, or a direction's 1 and 2), so no table-1
+mutant is confined to ONE cell.  The single-cell forms (only1r, only2r, only1w, only2w) are measured in kill table 2.
+And the NOT-SWEPT class above was then MEASURED LIVE by the pass-2 Opus seat: a decline narrowed to skip INTSTAT,
+INTMASK or TIME passed this 40-row instrument 40/40 (opus_pass2_20260913/OPUS_REPORT.md) -- repaired in table 2. ***

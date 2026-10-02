@@ -1,0 +1,44 @@
+VERDICT: **CLOSES** — no floor gap remains in the 141-row test from what this packet shows; the floor cells plus the two named clause-(e) strengthenings account for ACCEPTS' 46 kinds. Liveness token `CRIME_CLOSE6_20260914`.
+
+---
+
+**Q1 — Enumeration (READ from packet; REASONED for branch-side derivation)**
+
+ACCEPTS (46 kinds) decomposes as:
+
+*Floor cells (44):*
+- 24 = 6 labels (REV +0x00, CONTROL +0x08, INTSTAT +0x10, INTMASK +0x18, DOG +0x30, TIME +0x38) × {8R, 8W, 4R-high, 4W-high}. The 4-byte arm's "high lane" is `relative_addr & 4 == 0`, which is the label itself (8-aligned); "low lane" is label+1, which falls to default arm.
+- 4 = PROM-probe window at REV: `ldP`, `sdP`, `lwP`, `swP` — dominating predicate `((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100` crossed with kind. Repair 11 closes the 8R gap the flagship ruling named.
+- 6 = CONTROL writes with non-zero DOG×leftover values: `sw`/`sd` × {0x0201, 0x0001, 0x0200}. The value-0 base is already in the 24 above; HARD_RESET=1 stops every CPU and is disclosed (unrowable).
+- 10 = default arm: +0x40 (sd, ld, sw, lw — 8R, 8W, 4R-high, 4W-high), +0x04 (sw, lw — 4R-low, 4W-low at REV's low half, register 0), +0x34 (sw, lw — same low lane at DOG, register 6), +0x278 (sd, ld — 8R, 8W at the far block). These are the "six kinds in both 4-byte lanes" with extra low-lane and top-block representatives.
+
+*Clause-(e) strengthenings (2):*
+- `sw 0x0100`, `sd 0x0100` — CONTROL writes carrying ENDIANESS; the arm clears it via `idata &= ~CRIME_CONTROL_ENDIANESS` unconditionally and never branches on it. Recorded as clause-(e) per the closing-pass-5 ruling and P2/P2b.
+
+No floor cell is missing. 4R-low/4W-low at other default-arm offsets (+0x0c, +0x14, +0x1c, +0x3c) are equivalent to +0x04/+0x34 (same default-arm body, same `relative_addr & 4` lane). 8R/8W and 4R-high/4W-high at other default-arm offsets are equivalent to +0x40/+0x278. CONTROL reads (ld, lw) and DOG (all four kinds) have no switch body and are disclosed; they sit in ACCEPTS only to feed the re-arm/pre-set cross.
+
+All 46 kinds are valid MIPS load/store instructions the function can take. The P-suffix kinds additionally require PC∈0xbfc051XX, which the test sets.
+
+All rows fed by ACCEPTS have channels that can vary: `rearm once` and `latch x5` vary on `d->warned & CRIME_W_LEN`; `warm once` and `time once` vary on the announce/TIME; `gate` varies on HARDINT; the accept-set round trips vary on the register reads.
+
+**Q2 — Floor gap**
+
+Not checkable from the packet alone — I cannot run the 141-row test against a candidate mutant, and the question demands an exact edit plus the row expected to catch it.
+
+Reasoning from the inlined code and test header: the fix's four behaviors (decline via `goto crime_declined`, announce once via the `warned` guard + `fatal`, answer 0 via `odata = 0` + `memory_writemax64`, return 1) are each rowed. ACCEPTS covers re-arm/pre-set on every (branch side × kind) at the named labels, the PROM window, and the default-arm offsets in the cross.
+
+The closest candidate I can construct: change `odata = 0` at the top of `DEVICE_ACCESS(crime)` to `odata = (relative_addr & 7)` (or any expression zero at all 8-aligned offsets). Item 9 rows the answer at named labels only, and every named label is 8-aligned, so `relative_addr & 7 == 0` and the answer is still 0 — `rev v0`, `ctl v0`, `istat/imask lb/lh v0`, `dog v0`, `dog lh v0`, `time lb/lh v0`, `gate lb/lh v0` all pass. The `keeps` rows test landings, not declined-read answers at default-arm offsets; the `nodflt` rows test the default-arm `debug()` line, not the answer. So this edit would score 141/141.
+
+But this is a general limitation (item 9 only checks named labels; default-arm answer changes are disclosed as clause-(e)), not specific to repair 11, and it does not undo the fix at any tested cell. I cannot name a smaller or more targeted edit from the packet. The single fact that would settle it is: build the mutant, run the 141-row probe, and read the score.
+
+No item on the DISCLOSED list is disclosed wrongly from what this packet shows: `goto → return 1` equivalence (memory_rw pre-zeroes the read buffer at `#95`); CONTROL-read and DOG fall-throughs (arms with no body); accept cells at unrowed slots; effects keyed on one unnamed offset; effects keyed on a single address bit (every bit 0–9 is carried both ways by some refused access); ENDIANESS-keyed latch; multi-axis channel joints; machine-configuration lvalues; HARD_RESET re-arm (unrowable); SOFTINT fall-through; function-static latch (only matters with multiple machines per process); widths 3/5/6/7 (no MIPS issue); independence between CRIME instances (IP32 has one).
+
+**Q3 — Wrong statement**
+
+None I can call wrong from the packet.
+
+The brief's phrase "the arm's three TESTED idata bits (DOG 0x200, RESET 0x800, ENDIANESS 0x100) each both ways at 2W: sh 0x0201, 0x0900, 0x0a00 with sh 0x0800" (item 3) is mildly misleading — ENDIANESS is cleared unconditionally and never branched on, so a fall-through keyed on ENDIANESS alone produces no observable effect (no fatal, no CPU stop) and cannot be caught by `sh08b msg`/`sh08b run`. But the brief acknowledges this in the same paragraph ("bits above 15 never reach a refused access, so a conjunct on them is equivalent"), in the ACCEPTS description ("the arm never branches on it"), in the kill-table-9 ruling ("the two CONTROL 0x0100 writes are a CLAUSE-(e) STRENGTHENING"), and in the DISCLOSED list ("a latch re-armed or pre-set by a CONTROL write's ENDIANESS bit (0x100) -- the arm clears it unconditionally and never branches on it"). The all-ones refused writes (`sb 0xff`, `sh 0xffff`) cover any bit a 1- or 2-byte store can carry, so the practical coverage is intact.
+
+POSTTABLE 9 numbers are consistent: 1 base (141) + 29 unchanged kills (17 pre-set → latch x5, 12 re-arm → rearm once) + 3 (`d3_rearm_wtime` 139, `nolatch` 126, `rearm` 132) + 4 new kills (P1 140, P1b 140, P2 140, P2b 140) = 37, matching "37 logs/probe_*.raw" and "CHECKPRED exact=37 differs=0 of 37 measured". The four 141/141→140 transitions match "exactly the one row each that its augmentation run measured."
+
+The probe header's ACCEPTS arithmetic is consistent: 43 before repair 11, +3 (ldP, sw 0x0100, sd 0x0100) = 46 after, matching the diff's single added line containing three tuples.

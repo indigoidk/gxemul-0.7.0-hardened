@@ -1,0 +1,104 @@
+CLOSES `CRIME_CLOSE8_20260916`
+
+*(Note: Closure holds on the **188-row** test produced by Repair 13; the brief's banner line at [brief_sent.md:3](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260916_194735/brief_sent.md#L3) erroneously refers to the "157-row test", which was the pre-repair test that contained the K1–K3/E2 gaps).*
+
+---
+
+### Adversarial Review & Verification Against `GXEMUL-SEC`
+
+#### 1. Is the enumeration itself right?
+**Yes.** The 56-cell space `{latch clear, set} x {len 4, 8} x {read, write} x {7 labels}` is structurally complete for the dispatch guard in [`DEVICE_ACCESS(crime)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L193):
+* **7 Switch Labels**: In [`dev_sgi_ip32.c:322-409`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L322-L409), the switch contains exactly six explicit cases and `default:`:
+  * [`case CRIME_REV:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L324) (0x000)
+  * [`case CRIME_CONTROL:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L353) (0x008)
+  * [`case CRIME_INTSTAT:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L383) (0x010)
+  * [`case CRIME_INTMASK:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L384) (0x018)
+  * [`case CRIME_DOG:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L388) (0x030)
+  * [`case CRIME_TIME:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L392) (0x038)
+  * [`default:`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L396) (covers `CRIME_SOFTINT` 0x020, 0x040, memory control +0x200..0x278, and unaligned offsets)
+* **Width & Direction Axes**:
+  * Width: [`if (len == 8)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L275) and [`else if (len == 4)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L280). All other widths fall through to decline at [:296](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L296).
+  * Direction: [`writeflag == MEM_WRITE`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L276) / `MEM_READ`.
+* **Latch Axis**: [`if (!(d->warned & CRIME_W_LEN))`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L314) splits execution into latch-clear vs latch-set.
+* **Subword Lane Alignment (`relative_addr & 4`)**:
+  In [`dev_sgi_ip32.c:282, 291`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L282-L291), `relative_addr & 4` selects the upper vs lower 32-bit word. All 6 named switch cases are 64-bit aligned (`relative_addr & 4 == 0`). At `default:` and `CRIME_DOG`, both high and low lanes are present in `ACCEPTS` and rowed (e.g. low lane `p dog wlo`/`p dog rlo` at +0x34, high lane `p dog whi`/`p dog rhi` at +0x30; `p acc 40 lw`/`p acc 40 sw` at +0x40; `p rev lw4` at +0x04). Thus `relative_addr & 4` is fully exercised without requiring a fifth independent outer axis.
+
+---
+
+#### 2. Does a clean-sweep latch-set mutant exist that Table 11 did not build?
+**No.**
+* [`killtable11_20260916/mutants529k.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable11_20260916/mutants529k.py#L62-L88) built all 28 generated latch-set mutants (`C_*`), plus `K1`, `K2`, `K3`, and `E2`.
+* As measured in [`table11.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable11_20260916/table11.out#L91-L123), 27 generated mutants and all 4 specific mutants were killed.
+* Exactly one generated mutant scored 188/188: `C_ctl4r` (`len == 4 && writeflag == MEM_READ && relative_addr == CRIME_CONTROL && (d->warned & CRIME_W_LEN)`).
+  * **Why `C_ctl4r` scores 188/188**: At `CRIME_CONTROL` (0x08), `relative_addr & 4 == 0`. Reading 4 bytes takes the high 32 bits ([`dev_sgi_ip32.c:294`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L294)). Since [`d->reg[CRIME_CONTROL / 8] = CRIME_CONTROL_ENDIANESS`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L231) (0x100), the upper 32 bits are 0. A declined read also returns 0 ([`dev_sgi_ip32.c:212, 266`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L212)). Furthermore, the switch arm at [`dev_sgi_ip32.c:356`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L356) acts only on writes. Thus `C_ctl4r` is genuinely guest-equivalent and acts as an inherent negative control.
+* Any other mutant scoring 188/188 must reside in the 10 EQUIVALENT entries (such as REV 8W/4W/4R outside the PROM window, where [`dev_sgi_ip32.c:229`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L229) immediately overwrites the register on the subsequent access). No guest-observable latch-set mutant escapes.
+
+---
+
+#### 3. Is the per-cell disposition honest?
+**Yes.** Verified against [`ACCEPTS`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L831-L843) (46 entries total):
+* **10 EQUIVALENT (unobservable by guest)**:
+  1. REV 8W (+0x00, outside window; overwritten by prelude at [`dev_sgi_ip32.c:229`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L229))
+  2. REV 4W (+0x00, outside window; overwritten by prelude)
+  3. REV 4R (+0x00, outside window; high word of 0x11 is 0; declined returns 0)
+  4. CONTROL 4R (+0x08; high word of 0x100 is 0; declined returns 0)
+  5–10. CONTROL writes with values `0`, `0x0200` (`CRIME_CONTROL_DOG_ENABLE`), and `0x0100` (`CRIME_CONTROL_ENDIANESS`) at both 4W and 8W (lines [361–376](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L361-L376) clear these bits with no side effect and print no fatal message; prelude line [231](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L231) overwrites the register).
+* **5 HOST-DIAGNOSTIC (Clause-(e) debt)**:
+  1–4. CONTROL writes at values `0x0201` and `0x0001` at 4W and 8W (emit fatal message `[ CRIME_CONTROL: unimplemented control ... ]` at [`dev_sgi_ip32.c:378`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L378)).
+  5. Default 4W at +0x04 (`sw +0x04`, debug log output only; written value in low word of `reg[0]` overwritten by prelude line [229](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L229)).
+* **8 ALREADY PINNED post-latch**:
+  1. INTSTAT 4R (`lw +0x10`, pinned by `istat ctl` at [`crime_width_probe.py:682`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L682))
+  2. INTMASK 4R (`lw +0x18`, pinned by `imask ctl` at [`crime_width_probe.py:682`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L682))
+  3. INTMASK 8R (`ld +0x18`, pinned by `imask keeps` at [`crime_width_probe.py:688`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L688))
+  4. TIME 8R (`ld +0x38`, pinned by `time * ctl` at [`crime_width_probe.py:758`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L758))
+  5. DOG 8R (`ld +0x30`, pinned by `sb keeps` / `sh keeps` at [`crime_width_probe.py:770`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L770))
+  6. Default 8W at +0x40 (`sd +0x40`, pinned by `lo keeps` at [`crime_width_probe.py:782`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L782))
+  7. Default 8R at +0x40 (`ld +0x40`, pinned by `lo keeps` at [`crime_width_probe.py:784`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L784))
+  8. Default 8R at +0x278 (`ld +0x278`, pinned by `hi keeps` at [`crime_width_probe.py:810`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L810))
+* **23 ROWED post-latch** in [`crime_width_probe.py:1161-1310`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1161-L1310):
+  * Session P1 (4): `p revP sw pc`, `p revP sd pc`, `p revP ld pc`, `p revP lw pc`
+  * Session P2 (6): `p acc ctl ld`, `p acc istat ld`, `p acc imask sw`, `p acc time sd`, `p acc 40 lw`, `p acc 40 sw`
+  * Session P3 (2): `p istw sd`, `p istw sw`
+  * Sessions P4 & P5 (2): `p t4w gap`, `p t4r gap`
+  * Session P6 (9): `p rev ld`, `p rev lw4`, `p dog st+ld`, `p dog rhi`, `p dog rlo`, `p dog wlo`, `p dog whi`, `p imask st+ld`, `p top st+ld`
+  * *(Total: 4 + 6 + 2 + 2 + 9 = 23)*
+* Total: `23 + 8 + 10 + 5 = 46`. Every cell is mapped correctly.
+
+---
+
+#### 4. Three legs report `CRIMEP_CONTROL=FAIL` (`C_ist4r`, `C_imk4r`, `C_tim8r`)
+**The brief's reading is correct; these are valid kills, not invalid sessions.**
+* In [`crime_width_probe.py:1323-1326`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1323-L1326), `control` is defined as:
+  ```python
+  control = all(st_.get(n, False) for n in (..., "imask ctl", ..., "istat ctl",
+                                            "time lb ctl", "time sb ctl", "time lh ctl", "time sh ctl"))
+  ```
+* In `C_ist4r` and `C_imk4r`, an accepted `lw` runs after an initial refusal in the `istat` / `imask` sessions. The mutant declines this `lw`, preventing `crime_interrupt_reassert()` from setting `cause.IP2`. Consequently, the rows `istat ctl` and `imask ctl` fail.
+* In `C_tim8r`, accepted `ld` instructions run post-latch in the `time` session. The mutant declines them, skipping `crime_update_crime_time()`. Consequently, `time lb ctl`, `time sb ctl`, `time lh ctl`, `time sh ctl` fail.
+* Because these rows are member keys in the `control` tuple, `control` evaluates to `False` under these mutants. The session execution completed cleanly (`CRIMEP_DONE` with returncode 0), and BASE evaluates to `188/188 CONTROL=OK`.
+
+---
+
+#### 5. False & inaccurate statements in the brief, POSTTABLE 11, and probe header
+Beyond the noted prediction error on K2, adversarial verification identified the following distinct errors:
+
+1. **Typo in Brief Verdict Directive ([brief_sent.md:3](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260916_194735/brief_sent.md#L3))**:
+   * *Claim*: `VERDICT LINE FIRST: CLOSES (no floor gap remains in the 157-row test) ...`
+   * *Reality*: The 157-row test had known floor gaps (K1–K3, E2); closure was achieved only upon expanding the probe to **188 rows** in Repair 13.
+2. **False failing rows in `POSTTABLE 11` ([brief_sent.md:1111](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260916_194735/brief_sent.md#L1111) and [`POSTTABLE.out:36`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable11_20260916/POSTTABLE.out#L36))**:
+   * *Claim*: `C_tim8r 181/188 reds 'time lb/sb/lh/sh' and the new 'p acc', 'p t4w', 'p t4r'`
+   * *Reality*: As recorded in [`table11.out:117`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable11_20260916/table11.out#L117), the failing rows were `time lb ctl, time sb ctl, time lh ctl, time sh ctl, p acc time sd, p t4w gap, p t4r gap`. The refusal rows `time lb/sb/lh/sh` remained green. `POSTTABLE 11` omitted `ctl` on all four rows and truncated `p acc time sd` to `p acc`.
+3. **Register collision comment discrepancy in probe ([crime_width_probe.py:1316](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1316) and [brief_sent.md:873](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260916_194735/brief_sent.md#L873))**:
+   * *Claim*: `It is parked in 't2' above. BEFORE APPLYING: check t2 is not otherwise live in this session...`
+   * *Reality*: In session P6, the DOG 4W-high readback was actually parked in `ra` ([`crime_width_probe.py:1293, 1299, 1306`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1293-L1306)), not in `t2`.
+4. **Stale header comment in probe ([crime_width_probe.py:1150](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1150) and [brief_sent.md:708](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260916_194735/brief_sent.md#L708))**:
+   * *Claim*: `# REPAIR 13 DRAFT -- NOT APPLIED. Splice this block into crime_width_probe.py ...`
+   * *Reality*: The block is already spliced and applied directly inside `crime_width_probe.py`.
+
+---
+
+### Final Verdict
+
+**GO-WITH-CHANGES**
+
+*(The underlying mathematical enumeration, test generator, and 188-row detector in Repair 13 fully close the accept-side class. However, before committing, the documentation errors in [`POSTTABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable11_20260916/POSTTABLE.out#L36), the `t2` vs `ra` comment in [`crime_width_probe.py:1316`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1316), and the stale "NOT APPLIED" banner in [`crime_width_probe.py:1150`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1150) should be corrected).*

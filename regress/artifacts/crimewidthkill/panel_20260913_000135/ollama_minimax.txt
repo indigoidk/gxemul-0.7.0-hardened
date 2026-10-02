@@ -1,0 +1,34 @@
+VERDICT: Member 5 (`return 0`) — the switch below the width guard has side effects (CPU stop on CRIME_CONTROL write, spurious interrupt on CRIME_INTSTAT/INTMASK) that must not run on a refused access, so the fix has to bypass it.  Liveness token: `CRIME_P1_20260913`.
+
+Labels: READ = from inlined packet; REASONED = derived; never MEASURED.
+
+**The one real defect the brief doesn't name.**  The `else` arm's `fatal(...); exit(1);` is the wrong shape, but so is the *fix* shape for members 1, 2, 3, 4, 6, 7: removing or weakening the guard still lets the `switch (relative_addr)` run, and that switch is not side-effect-free.  Enumerated from the inlined switch for `len ∈ {1,2}`:
+
+- `CRIME_REV` (0x000), read: redirects PC if `(pc & 0xffffff00) == 0xbfc05100`.  Unlikely on a narrow access, but not impossible.
+- `CRIME_CONTROL` (0x008), write: tests `idata & CRIME_CONTROL_HARD_RESET` (=0x800, per the inlined comment) and `CRIME_CONTROL_DOG_ENABLE` (=0x200).  A 1-byte write cannot set bit 9 or 11 (the value is 8 bits).  A 2-byte write can: whether `memory_readmax64` places the first byte high or low is **not stated in the packet**, but in either layout bit 3 of one byte lands on bit 11 of `idata`, and bit 1 of one byte lands on bit 9.  So a 2-byte write of e.g. `0x08,0x00` or `0x00,0x08` to CRIME_CONTROL stops every CPU on an access the model could not service.
+- `CRIME_INTSTAT`/`INTMASK` (0x010/0x018): calls `crime_interrupt_reassert(d)`.  Declined-but-still-reasserted reads can deliver spurious interrupts.
+- `CRIME_DOG` (0x030): no-op.
+- `CRIME_TIME` (0x038): `crime_update_crime_time(d)` — harmless.
+- `default`: `debug(...)` only.
+
+Member 5 exits before the switch.  Members 1–4, 6, 7 do not.
+
+**Member 5 vs 3 (the design question the brief flags).**  Member 3 (latched fatal, fall through) is the RE precedent.  The brief itself notes the transfer is questionable: RE is a graphics engine, CRIME is the memory/interrupt controller — the cost of a wrong side effect differs.  The RE round rejected member 5 because it "turns into a guest EXCEPTION_DBE"; for a graphics engine that may be wrong.  For the memory/interrupt controller, EXCEPTION_DBE on an unsupported width is a more natural behavior, and the alternative (running the switch on a declined access) is demonstrably unsafe from the inlined code.  Both members lack documentation (premise 6); member 5's warrant ("real hardware bus-errors") and member 3's ("unimplemented, like RE") are both assumptions.  The switch-side-effect risk tips it.
+
+**Answers to the questions.**
+
+1. **Member 5.**  The switch side-effect risk is decisive; member 5 is the only option that exits before the switch.
+2. **Switch runs?**  Members 1, 2, 3, 4, 6, 7: yes.  Member 5: no — `return 0` exits before the switch and before the common tail (`preserved_CRIME_HARDINT` restore, the `INTSTAT` recompute, the `memory_writemax64` write).  For narrow accesses the common tail is a no-op for register state (`HARDINT` was read, not written; `INTSTAT` is a recompute from unchanged inputs), and the read-path `memory_writemax64` is correctly skipped — the guest buffer must stay untouched for the exception to be clean.
+3. **Smallest edit that breaks a member-5 fix.**  Change `return 0;` back to `fatal("crime access len = %i!\n", len); exit(1);` — exact revert.  A detector needs rows: process survives (no exit 1); `crime access len` text absent; the witness's 1/2-byte reads/writes do not produce the text; for a refused *read*, the guest buffer is **untouched** (seed it with a sentinel like 0xAA — member 5 leaves it, members 1–4 write 0 via the common tail, and that single row separates member 5 from the "silent accept/decline" family); for CRIME_REV narrow reads, `cpu->pc` is **not** overwritten with `gpr[RA]`; for CRIME_CONTROL 2-byte writes, no `cpu->running = 0` fires; for CRIME_INTSTAT/INTMASK narrow reads, no new interrupt line asserts that wasn't asserted before; latch count is irrelevant for member 5 (no latch needed in the device), which is itself a distinguishing row against member 3.
+4. **Premise audit.**
+   - Premise 1 (`fatal()` prints and returns): **not checkable from the packet.**  `fatal()`'s definition is not inlined.  The RE precedent's latched-announce shape is consistent with `fatal()` returning, but that's circular.  Settled by reading `fatal()` in the tree.
+   - Premise 2 (return 0 → guest exception on MIPS): **READ** — verbatim `memory_rw.c` path inlined.
+   - Premise 3 (RE precedent): **READ** for the inlined if/else-if snippet.  "Reaches the common tail" is plausible from the control flow but the RE function's tail is not inlined.
+   - Premise 4 (MACEPCI): **READ**.
+   - Premise 5 (no latch field): **READ** — fields listed.
+   - Premise 6 (no CRIME docs locally): **READ** — stated as local fact; implication "real behavior unknown" follows but is not itself a measurement.
+   - Premise 7 (two other terminating calls): **READ** — visible above the width guard.
+
+**Possible eighth member.**  Member 5 as stated will spam `memory_rw.c`'s `debug("[ %s device '%s' ... ]\n", ...)` on every narrow access (premise 2).  A latch around the `return 0` using the same `warned` idiom as RE (premise 5 says `struct crime_data` has no such field today — one would be added) is the practical variant and is a clean hybrid of 3 and 5.  The brief's option set does not list it explicitly.
+
+**Not checkable from the packet.**  `fatal()`'s body (premise 1); the byte ordering `memory_readmax64` uses for `len < 8` (gates whether a 2-byte write to CRIME_CONTROL can hit HARD_RESET/DOG_ENABLE); whether any in-tree guest or PROM issues narrow CRIME accesses (the witness does, but it's a test).

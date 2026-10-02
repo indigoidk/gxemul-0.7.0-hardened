@@ -1,0 +1,55 @@
+I'll read the pass-2 brief in full first, then try to find the smallest `DEVICE_ACCESS(crime)` edit the 218-row probe would miss.The brief is in. Next I’ll check the device function and the 218-row probe against the source, and look for a decline or CONTROL edit those rows would still pass.The DOG and HARD_RESET arms are the likely gap. I’ll trace which accepted CONTROL writes the 218 rows actually observe, and whether `running = 0` can hide inside a `step`.**BREAK FOUND.** Delete one line in the `HARD_RESET` arm, `idata &= ~CRIME_CONTROL_HARD_RESET;`. An accepted `0x800` write still stops every CPU and now also prints the unimplemented-control line. All 218 rows stay green.
+
+## The edit
+
+In `DEVICE_ACCESS(crime)`, inside `case CRIME_CONTROL` (`GXEMUL-SEC/src/devices/dev_sgi_ip32.c`, the `CRIME_CONTROL_HARD_RESET` block):
+
+```c
+if (idata & CRIME_CONTROL_HARD_RESET) {
+    int j;
+    for (j=0; j<cpu->machine->ncpus; j++)
+        cpu->machine->cpus[j]->running = 0;
+    /* delete this line: */
+    idata &= ~CRIME_CONTROL_HARD_RESET;
+}
+idata &= ~CRIME_CONTROL_ENDIANESS;
+if (idata != 0)
+    fatal("[ CRIME_CONTROL: unimplemented control 0x%016llx ]\n", ...);
+```
+
+It compiles: that statement is the only use of the cleared bit. `0x800` still takes the stop loop. After the deleted clear, `idata` is still `0x800`, the endian mask does not touch it, and `idata != 0` prints.
+
+Rows that change: none.
+
+## Why the halt rows stay green
+
+Those are the only sessions that perform an accepted `0x800` write. None of them counts `CRIME_CONTROL: unimplemented`.
+
+`sw08 halts` (latch clear, `sw`). The store runs, sets `running = 0`, and now prints. `fatal()` returns, so the process stays up. The later `print v1` is a debugger command. `roundtrip()` does `v1=0xdeadbeef` and then a `lw` that `machine_run` never issues, because `running` is already 0. `v1` stays `0xdeadbeef`. The row wants that sentinel. Green.
+
+`rst 4w` / `rst 8w` (latch set). The opening `lb +0x07` still declines once and does not stop the CPU. The following `sw`/`sd` of `0x800` still stops it and now prints. `rst 4w` and `rst 8w` want `v1 == 0xdeadbeef`. Green. `rst 4w once` and `rst 8w once` count `-- declined.`; the new line is `unimplemented control`, which does not contain that string. Count stays 1. Green.
+
+`rst alive` never writes `0x800`, so it never reaches the deleted statement.
+
+## Why every text-count row stays green
+
+Each of these sessions writes some other value, so the deleted clear does not run:
+
+- `ctldog sw msg` and `ctldog sd msg` write `0x0200` then `0x0201`. No reset bit. The dog clear still silences `0x0200`; `0x0201` still prints once. Count stays 1.
+- `p acc ctl msg` writes `0x01`, `0x0001`, `0x0201`, `0x0201`. Count stays 4.
+- `sw08 msg ctl` and `acc ctl sd` write `0x01`. Count stays 1.
+- `sb08 msg` and `sh08b msg` are narrow stores. They take the `goto` and never enter the arm. Count stays 0.
+- `sh08 run`, `sh08b run`, and `gate run` are the same narrow path, so the CPUs still run and the RAM trip still returns `0x12345678`.
+
+`rearm once` and `latch x5` never write `0x800` (a reset write cannot be followed by another access). Their `-- declined.` counts do not move.
+
+## What else was swept
+
+These stay caught, so they are not the break:
+
+- Whole-label latch-set fall-through at `TIME`, `REV`, `INTSTAT`, `INTMASK`, and `CONTROL` (`tl *`, `rl * pc`, `istat sb/lh/sh`, `imask sb/lh/sh`, `sb08 msg`, `sh08b run`, `gate run`).
+- `D_nodogclear`, dog-as-stop, and "dog suppresses the leftover print": `ctldog` goes to 0 or 2, or `rearm surv` / `latch said` dies because `0x0200` stops the CPU.
+- A width-latch re-arm inside the dog branch: `rearm once` sees a second `-- declined.`
+- Latch-clear `sd 0x800` that does not stop: real, and unrowed, but it is a new `len`/`warned` conjunct the arm does not test. The one-line delete needs no new conjunct.
+
+The open cell is the residue half of a bit the arm does test. Dog's clear was given `ctldog` because silence is its only effect. Reset's clear does two things, and the rows that write `0x800` read only the stop.

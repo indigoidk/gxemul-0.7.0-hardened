@@ -1,0 +1,146 @@
+I'll verify the defect and option-set warrants against `GXEMUL-SEC/src/` rather than ratify the brief, then answer the four design questions.HEAD is `9c91999`; next I’ll open the CRIME handler, `fatal()`, the FAULT path, and the IP32/RE precedents in `GXEMUL-SEC`.**3 DECLINE + LATCHED ANNOUNCE, `goto` the existing tail (do not run the `switch`)** — this is `#498`'s measured shape on this same IP32 machine, not `#497`'s splice.
+
+`CRIME_P1_20260913`
+
+---
+
+## 1. Which member, and why
+
+**Ship member 3**, with a per-instance latch and `(once)`, and with the refused access **jumping to the existing tail** (HARDINT restore, INTSTAT recompute, `memory_writemax64` on a read, `return 1`). Do not fall through into `switch (relative_addr)`.
+
+The brief named `#497`'s RE `else if` splice as the nearest same-machine precedent. That is the wrong sibling. The matching control-flow is **`DEVICE_ACCESS(sgi_de)` in the same graphics file**, round `#498` (`sgidewidth`):
+
+- same IP32 machine, same “width arm, then a `switch` with side effects, then a common tail”
+- they **measured** that a latched decline which still runs the switch scores **24/25** (`dec_switch` reds): the switch announces a write that never landed
+- `goto de_declined` scores **25/25** and still answers a read with `odata` (0) and `return 1`
+- they **rejected** `return 0` in that comment, in so many words: it becomes `EXCEPTION_DBE`
+
+CRIME’s `switch` is worse than DE’s. DE mostly prints TODOs. CRIME can **stop every CPU** (`CRIME_CONTROL_HARD_RESET`) and **rewrite `cpu->pc`** (the PROM cache-probe hack on `CRIME_REV`). Falling through is not a quiet wrong diagnostic; it is a guest-triggerable reboot/PC hijack on a width we just refused.
+
+**Why not the others**
+
+| member | why not |
+|---|---|
+| **1 DELETE / fall through** | Not the same as a decline. Enumerated below: a `sh` of `0x0800` at offset `0x008` takes the HARD_RESET arm; a 1- or 2-byte access at `0x000` can take the PROM hack. |
+| **2 silent decline** | Same skip-switch obligation as 3, minus the house diagnostic. A guest-drivable path wants N=1 `(once)`. |
+| **4 ACCEPT** | The model does **not** already compute a narrow value. `odata` stays 0; there is nothing to keep. |
+| **5 FAULT** | Available on MIPS (premise 2 is right about `memory_rw.c`). Wrong warrant here. `unreadable` is “this **range** has no hardware”, and the ten `device_add("unreadable …")` calls in `machine_sgi.c` are on **IP20 / IP22**, each **behind an unconditional `abort()`**, not on IP32. IP32 (`case 32`) never installs it. `#498` on this machine already refused `return 0` for this shape. `crimereg.h`’s “all registers 64-bit access” cannot carry a bus-error claim: this handler **already serves `len == 4`**, and the in-function comment documents NetBSD 1.6.2 **writing 4 bytes at `0x00c`**. |
+| **6 BACKED ACCEPT** | `reg[]` already exists. Inventing a mapping onto it is member 7. |
+| **7 IMPLEMENT byte lanes** | Mechanically obvious (the 4-byte arm is already BE halves: `relative_addr & 4` selects the low 32 bits). No guest in this tree is shown issuing `lb`/`lh`/`sb`/`sh` to CRIME. Addition licence: no measured delta, no transferred hardware warrant. Serving a byte of `CRIME_REV` would return `0x11` at offset `+7`; declining returns `0`, which is `CRIME_REV_PETTY`. That collision is why the detector must pin the destination, not why we invent lanes. |
+
+**No eighth member.** The `+0x80`/`+0x100`/`+0x180` mirrors in the function comment are an unimplemented **address** alias, not a width disposition. `macepci`’s unlatched announce-then-proceed is member 1 wearing a diagnostic; MACE’s `memcpy(…, len)` is member 7 on a **byte** array. Neither is a new option.
+
+**Guests / PROM.** I grepped `GXEMUL-SEC/src/` and did not find a PROM or driver that issues a 1- or 2-byte CRIME access.
+
+- `crimereg.h`: `/* all registers 64-bit access */`.
+- The PROM cache-probe hack only runs **after** the width arm, so those `CRIME_REV` reads from `0xbfc051xx` **must already be `len` 4 or 8** or IP32 would die on the committed binary. The machine boots; therefore the PROM is not the witness’s `lb`.
+- NetBSD 1.6.2 is documented as a **4-byte write at `0x00c`** — inside the accepted set.
+- The witness is a synthetic guest instruction on unmodified `-E sgi -e ip32`, 3/15, CONTROL=OK (`witness_committed.out`). That proves the path is reachable, not that firmware uses it.
+
+MIPS GPR load/store sizes in `cpu_mips_instr.c` are `size = 0,1,2,3` → **len ∈ {1,2,4,8}**. LWL/LWR/LDL/LDR do **not** present 1/2/3 to the device: they `memory_rw` the **aligned** 4- or 8-byte word. So a MIPS guest hits the `else` arm with **`len == 1` or `len == 2`**. “Anything wider than 8” is not a GPR instruction; a remainder after `memory_rw.c`’s end-of-device clamp could theoretically be 3/5/6/7, but an aligned `lw`/`ld` at the last legal slot of a `0x280` map does not truncate into the kill.
+
+---
+
+## 2. Does a refused access run the `switch`?
+
+**No.** Same reason `#498` shipped `goto de_declined` rather than the splice.
+
+For a 1-byte or 2-byte read or write, **these lines still run:**
+
+1. `idata = memory_readmax64(...)` on a write (so a `sh` of `0x0800` really does put `0x0800` in `idata`).
+2. The preamble: `CRIME_REV` rewritten to `0x11`/`0xa1`, `CRIME_CONTROL` forced to `CRIME_CONTROL_ENDIANESS`, `CRIME_INTSTAT` recomputed, all eight bank-control words rewritten.
+3. The two RAM-size `exit(1)`s (host `-M`, not the guest; witness uses `-M 64`).
+4. The new `else`: set the latch, `fatal(… (once) )` once.
+5. **`goto` the existing tail.**
+6. Tail: restore `preserved_CRIME_HARDINT`, recompute `INTSTAT` from SOFTINT|HARDINT, `memory_writemax64` of `odata` (still 0) on a read, `return 1`.
+
+**These do not run:** the `len == 8` / `len == 4` store/load, the entire `switch`, including:
+
+| `relative_addr` | 1-byte | 2-byte | if the switch **did** run |
+|---|---|---|---|
+| `0x000` `CRIME_REV` | yes (exact) | yes (exact) | PROM hack: if `cpu->pc` is on the `0xbfc05100` page, **`pc ← RA`**. Does **not** test `writeflag`. Offsets `0x001`–`0x007` miss the case. |
+| `0x008` `CRIME_CONTROL` | yes (exact) | yes (exact) | **Write only.** `CRIME_CONTROL_HARD_RESET` is `0x0800`: a **byte** `idata` cannot hold it (`max 0xff`); a **halfword can**. `sh 0x0800` at `0x008` sets every `cpus[j]->running = 0`. `sb 0x01` at `0x008` misses RESET/DOG/ENDIANESS and then hits `fatal("[ CRIME_CONTROL: unimplemented control …")`. Offsets `0x00a`/`0x00c`/`0x00e` miss the case (NetBSD’s 4-byte write at `0x00c` already does). |
+| `0x010` / `0x018` | exact only | exact only | `crime_interrupt_reassert()` — nearly idempotent if the 4/8 store was skipped. Weak oracle. |
+| `0x030` DOG | exact | exact | empty. |
+| `0x038` TIME | exact | exact | `crime_update_crime_time()` (host `gettimeofday`). Unstable oracle. |
+| anything else (witness: `+7`, `+6`, `+0x1f`, `+0x1e`) | default | default | `debug()` only, verbosity-gated. **This is why a survival-only detector cannot see member 1.** |
+
+HARDINT restore on a declined access is a no-op (the 4/8 store never ran). Keep it so the goto lands on the **existing** tail, not a slimmer private one — `#498` recorded that `return 1` before the tail “diverges the day the tail grows”.
+
+---
+
+## 3. Smallest edit that breaks the fix and still passes a weak detector
+
+If the detector is only the current witness (survival + `"crime access len"` absent, at offsets that **miss every named `switch` case**):
+
+**Delete the `else` body** (the two lines `fatal` + `exit(1)`). Fall through. Host lives, old text gone, RAM trip runs. **15/15 green.** That is member 1, and it is a one-hunk revert of the repair.
+
+`return 0` in the `else` also greens that witness: process lives, old text gone, debugger can still plant the RAM trip. Destination stays at the sentinel; the witness never looks.
+
+So the detector is not the witness. Rows owed:
+
+**Already measured (keep as the (a) pre-fix red):** the 15-row witness. Contract: host survives `lb`/`lbu`/`lh`/`lhu`/`sb`/`sh`, and `crime access len` is absent.
+
+**Accept (de-escalation — we are deleting a host-fatal width guard):**
+
+- 4-byte **read** of `CRIME_REV` at `+4` still returns `0x11` (`devsig`; mask bit 31, `#498` taught `lw` sign-extends).
+- 4-byte **read** at `+0` still returns 0 (`devsig hi`).
+- 8-byte read/write of a scratch slot inside the map (not HARDINT — the tail restores that).
+- 4-byte **write** at `0x00c` (the NetBSD 1.6.2 cell the function comment already names).
+
+Pin 4 **and** 8, read **and** write. A mutant `else if (len == 4)` → `else if (len == 4 && writeflag == MEM_WRITE)` zeros `devsig`. A mutant that drops `len == 4` from the accept set reds the `+4` read.
+
+**Refused-read destination (kills 5 and 7):** seed `v0 = 0xdeadbeef`, `lbu` at `CRIME+7` (witness address; default arm).
+
+- member 3: `v0 == 0` (tail writes `odata = 0`; `cpu_mips_instr_loadstore.c` commits it).
+- member 5: `v0` stays `0xdeadbeef` (`memory_rw` returns `MEMORY_ACCESS_FAILED` **before** `reg(rt) = x`). Optional: Cause ExcCode = DBE.
+- member 7: `v0 == 0x11` (BE LSB of the revision word).
+
+That one row is the 3-vs-5-vs-7 discriminator. Survival cannot tell them apart.
+
+**Switch side-effects on a refused access (kills member 1 / a decline that forgets the `goto`):**
+
+- `sb 0x01` at `0x008`: **no** `CRIME_CONTROL: unimplemented control` text; CPUs still running; then a RAM trip. (Byte `idata` cannot carry `0x0800`; it **can** take the leftover-`idata != 0` arm.)
+- `sh 0x0800` at `0x008`: CPUs still `running`; RAM trip still prints. Under fall-through this is HARD_RESET: `memory_rw.c` then sees `running_before && !cpu->running` and returns `MEMORY_ACCESS_FAILED` without a DBE.
+- Optional, heavier: `lb` of `CRIME_REV` at `0x000` with the instruction itself executing on the `0xbfc05100` page and `RA` a sentinel — PC must **not** become `RA`. Needs a writable byte in that page; do not rely on it as the sole channel.
+
+INTSTAT reassert and TIME are **not** rows: first is nearly a no-op without a store; second is host-clock.
+
+**Latch:** two sessions (or two sessions’ worth of process). First declined access prints once; second (`lh` after `lb`, **fresh latch**) prints nothing. `#498` pass 2: a `two_widths_*` row whose oracle is “len=2 is never announced” stays green if `len==2` is accepted, still-killed, or declined. **Pin `len==1` and `len==2` as first-in-session declines in separate sessions.**
+
+**(d) mutants the accept / goto / destination rows must kill** (DEPENDS-ON, enclosing function only):
+
+- drop the `goto` / run the switch anyway → CONTROL text or HARD_RESET
+- `return 0` instead of `goto` → sentinel destination
+- `else if (len == 4 \|\| len == 2)` (the `#498` escape) → `lh`/`sh` first-in-session rows
+- restore `exit(1)` verbatim → witness `(b)`
+- comment-only file → identity `(c)`
+
+**Smallest edit against the detector I would write:** `goto crime_declined` → fall through (one token). That is the member-1 revert. The CONTROL/HARD_RESET rows exist so it does not ship. Second-smallest: `goto` → `return 0`. The sentinel row exists so it does not ship.
+
+---
+
+## 4. Premise audit
+
+| # | verdict |
+|---|---|
+| **1** | **Holds.** `fatal()` in `debugmsg.c` is `va_debug` and returns; no early-out. `exit(1)` is the kill. |
+| **2** | **Holds on the `memory_rw.c` path; the SGI warrant is wrong in two ways.** `return 0` → `res = -1` → MIPS `EXCEPTION_DBE`. `DEVICE_ACCESS(unreadable)` is `return 0`. But the ten `unreadable` installs in `machine_sgi.c` are **IP20 (5) and IP22/IP24 (5)**, comments “so that hpc1 and hpc2 are not detected” / empty GIO slots — **absent ranges on other SGI machines**. Each block sits **after** `fatal("TODO…"); abort();`, so in this fork they never even register. IP32 does not install `unreadable`. FAULT is available; “same machine, PROM/NetBSD rely on it for CRIME” is not. |
+| **3** | **Incomplete, and the named transfer is the wrong one.** `#497` splice is for a width check **inside** an address-window `if`. CRIME is width-then-switch-then-tail. That is `#498` `sgi_de`, which **measured** splice/fall-through as a wrong record and shipped `goto`. Transfer `#498`, not `#497`. |
+| **4** | **Holds**, and is a caution not a template: `macepci` announces **unlatched** and **performs** the access. Same file, different member. |
+| **5** | **Holds.** `struct crime_data` is `reg[]`, `last_microseconds`, `irq`, `prev_asserted`, `use_fb`. Add a **new field at the end** (own bit; `#498` `mC` shared a bit across handlers in one `malloc` and scored 23/25). This struct is not shared with RE, but do not reuse `prev_asserted`. |
+| **6** | **Holds** as a local-docs claim. `_scratchpad/` has no CRIME/O2 memory-controller PDF. `crimereg.h` is a NetBSD header, not a datasheet, and its 64-bit sentence is already in conflict with the 4-byte arm. |
+| **7** | **Holds** as this round’s subject. Those two `exit(1)`s are keyed on `physical_ram_in_mb` (`-M`). They still sit **above** the width guard, so a byte access on a bad `-M` still dies; that is not this fix. `machine_sgi.c` has a third copy of the >1024 MB kill at construction. |
+
+**Also incomplete, not in the list:**
+
+- The preamble **rewrites `CRIME_REV`, `CRIME_CONTROL`, INTSTAT, and all bank-control registers on every access**, including one we then refuse. A declined write still clobbers CONTROL to ENDIANESS-only before we `goto`. Assessed, not this round.
+- `switch` is on **exact** `relative_addr`, not the 64-bit slot. A 4-byte write at `0x00c` never takes the CONTROL case; a 2-byte write at `0x008` does. The HARD_RESET path is therefore **label-exact**, not “any access to that register”.
+- Brief “1, 2, and anything wider” overstates the MIPS guest set. Live guest lengths to this handler are **1, 2, 4, 8**.
+- A declined `lbu` of `CRIME_REV` at `+7` returning 0 is **`CRIME_REV_PETTY`**. Pin it; do not silently “fix” it with member 7.
+
+**Something else:** `DEVICE_ACCESS(sgi_mte)` in the same RE file has a dead third arm (`if (len == 4) … else if (len != 4) … else { fatal; exit(1); }`). The `exit(1)` is unreachable; 1- and 2-byte MTE accesses are already served by the `len != 4` arm. Not this round; do not cite it as a live width kill.
+
+---
+
+**Sketch of the edit** (not a patch; run it against the enclosing function, which I did): `else { latch; fatal once; goto crime_declined; }` with the label immediately above the HARDINT restore. No early `return`, and not `return 0`.

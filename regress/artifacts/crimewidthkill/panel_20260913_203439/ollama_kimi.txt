@@ -1,0 +1,39 @@
+VERDICT: GAP: in `case CRIME_CONTROL:` of `src/devices/dev_sgi_ip32.c`, inside `if (idata & CRIME_CONTROL_DOG_ENABLE) {`, insert `d->warned |= CRIME_W_LEN;` before `idata &= ~CRIME_CONTROL_DOG_ENABLE;` — this pre-set of the announce latch is invisible to all 121 rows and scores 121/121. Token: CRIME_CLOSE3_20260913
+
+## The gap (Q2) — the expected catcher, and why it cannot catch
+
+REASONED (from the inlined probe source): The mutant's effect: an *accepted* CONTROL write carrying bit 0x200 silently arms `d->warned`, so the first genuinely declined access later announces **zero** times. That undoes the fix's "announced once" behaviour.
+
+The row that should catch it: **`latch x5`** (count of `-- declined.` == 1 in the session whose prologue reaches the CONTROL arm before its first refusal). It cannot, because:
+
+* READ: the latch session's prologue CONTROL write is `("sw", 0x08, 0x01)`. idata = 0x01 does **not** enter the DOG_ENABLE branch. The mutant's line never executes there.
+* READ: the only accepted CONTROL write in the whole instrument that *does* carry 0x200 is the rearm session's `sw 0x08, 0x0201` — and it sits at position 12 of KINDS, *after* that session's first refusal (lb +0x07) has already announced and set the latch. `|=` on an already-set bit is a no-op. `rearm once` stays 1.
+* READ: the other accepted CONTROL writes are sw 0x01 (`sw08 msg ctl`) and sw 0x800 (`sw08 halts`, and it stops the CPUs anyway). The sh08/sh08b 0x0201-carrying accesses are *refused*, never reaching the arm.
+
+So no counted session executes an accepted DOG_ENABLE-carrying CONTROL write while `warned == 0`. Every row reads exactly as on the fixed build. 121/121.
+
+DISCLOSED does not cover this: the only branch-level pre-set disclosed is the HARD_RESET branch, disclosed precisely *because* it is unrowable ("nothing can follow it") — which by the brief's own logic implies the other follow-able branches' pre-set cells are intended to be rowed. This one is rowable but unrowed. One added prologue line (`sw +0x08, 0x0201` instead of 0x01 in the latch session; the 0x01 residue still exercises the text branch) closes it.
+
+## Q1 — the enumeration, audited
+
+Mostly verified TRUE from the packet; I checked and the following tie: seeds 0x10000000 (t4) → 0x10000001 (repair 6) → 0x0101000010000001 (repair 7) are consistent with every reported 111/121 score (READ; e.g. c2_reg_imask passing 111/111 on t4 requires the *old* seed 0x10000000, since 0x10000001's low byte 0x01 would already have gone red — and the diff shows the old BIT was 0x10000000). Row arithmetic ties: 111 + {imask keeps, top rd2 v0, dog lh v0, 7 mid rows} = 121. Table 5: 48 = base + 47, +12 T4INSTR = 60 logs; table 6: 24 = base + 23, +3 T5INSTR = 27. The dog session's refusal order (+0x30, +0x07, +0x08) exactly explains c2_lbl_ctl 110/111 on the 111-row instrument. Re-arm is branch-complete in the rearm session (KINDS list covers every arm plus DOG/text/REV-redirect branches) except HARD_RESET, which is disclosed. "Bits above 15 never reach a refused access" is TRUE (memory_readmax64 over len 1–2).
+
+Cells the enumeration claims but no row can see, or omits:
+1. **The DOG_ENABLE-branch pre-set cell** (the gap above): item 4's comment "CONTROL here" claims the CONTROL arm's pre-set coverage via a 0x01 write that never enters that branch. This is the class-closure rule breached: the latch class was hit in consecutive passes, the re-arm subclass was closed at branch granularity, the pre-set subclass was closed only at arm granularity, and only HARD_RESET was disclosed.
+2. REASONED, NOT CHECKABLE from the packet: the latch keyed on **`1 << (relative_addr == CRIME_REV)` or `== CRIME_TIME`**. Detection needs the rev-once / time-once sessions to refuse again at a second label. The packet asserts this only by implication (codex named "the imask, istat and sh08b sessions" as the only single-label ones), but those two session bodies are not inlined. Settling fact: does the rev session (resp. time session) contain a refused access at an address ≠ +0x00 (resp. ≠ +0x38) before its once-row count ends?
+3. REASONED, NOT CHECKABLE: a **pre-set inside the REV redirect branch** (after the `pc & 0xffffff00` test). Reachable pre-refusal only by an accepted REV read from the PROM window; the lwP in the rearm session runs after the latch is set. Detection depends on whether `rev pc ctl`'s lw precedes the refused ops in the rev session — not inlined. Settling fact: that session's access order.
+
+## Q3 — statements that are wrong or overclaim
+
+* READ/REASONED (headline): item 4's pre-set enumeration plus "The other arms are reached first elsewhere: CONTROL here" is untrue at branch granularity — see the gap.
+* REASONED: "every address bit 0-9 is carried both ways by a refused access of each kind" is false as written for bit 0 with the 2-byte kinds (aligned lh/sh can never set address bit 0; an unaligned one traps before reaching the device) and for bits 0-2 in the re-arm kind's accepted sd. Those cells are vacuous, so nothing is actually uncovered — but the sentence overclaims.
+* REASONED: DENOMINATOR's "the answer at every named label … at both widths" is not true of the rows for CONTROL: only `ctl v0` (lh +0x08) exists. The lb cell is inherently invisible (the register's low byte a whole-register answer hands over is 0x100 & 0xff = 0), so the omission is sound, but the claim overstates.
+* REASONED: "TIME 66-990 (low bytes)" as evidence low bytes are nonzero fails when TIME ∈ {256, 512, 768} (~0.3% of runs): the `time lb v0` row then cannot see a whole-register answer. `time lh v0` still can (any value in 66-990 is nonzero in bytes 0-1). A flake, not a gap.
+
+## Not checkable from the packet (named, with settling fact)
+
+* Whether `said()` matches the full announce text or a substring: if it keys only on `-- declined.`, a mutant mangling the rest of the text passes. Settling fact: the `said()` helper's match string in the probe.
+* The rev/time session bodies (items 2 and 3 above).
+* The `memset(data, 0, len)` pre-zeroing in memory_rw.c backing the `return 1` equivalence — READ as asserted with citation, not verifiable here.
+
+Everything else I could cross-check from the packet tied out; the floor has the one hole above.

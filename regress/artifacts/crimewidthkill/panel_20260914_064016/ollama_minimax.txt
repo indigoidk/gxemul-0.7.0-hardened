@@ -1,0 +1,105 @@
+```
+VERDICT: GAP: insert `if (writeflag == MEM_READ) d->warned |= CRIME_W_LEN;` in the
+accepted path (after the `else { goto crime_declined; }' and before the
+`switch (relative_addr)').  Token: CRIME_CLOSE5_20260914.
+```
+
+## Q1. Enumeration audit
+
+**Count of ACCEPTS.** 43 kinds, matches the brief. ✓
+
+**Kind the function can take that ACCEPTS omits.** `ldP` — an 8-byte read from the
+PROM-probe window at CRIME_REV (PC 0xbfc05180). ACCEPTS has `lwP` (4R from window)
+and `swP`/`sdP` (writes from window); the brief explicitly says the pc test ignores
+direction, so `lwP` covers read and `swP` covers write. But `ldP` is a distinct
+accepted kind: a mutant that distinguishes 8-byte from 4-byte reads at REV in the
+window would not be caught by `lwP` alone. In practice no mutant in the table does
+so, and `ldP` is functionally equivalent to `lwP` for the pc-window test. Minor
+omission, not a floor breach.
+
+**Kinds ACCEPTS lists the function cannot take.** None. Every entry is a real
+4- or 8-byte access the function accepts (len 1 and 2 go to the decline arm and are
+correctly absent).
+
+**Row whose channel cannot vary under its mutant.** None I can find. Every
+ACCEPTS-fed row has a live control from the same session (e.g. `rearm once` vs.
+`rearm surv`, `latch x5` vs. its `said` controls, the warm session's `warm v0`
+read-back, the gate session's `gate hardint`/`gate line` controls).
+
+**Cross coverage at default arm.** "the default arm's six kinds in both 4-byte
+lanes" — counted from ACCEPTS: 4W-high at +0x04, 4R-high at +0x04, 4W-low at +0x34
+and +0x40, 4R-low at +0x34 and +0x40, 8W at +0x40 and +0x278, 8R at +0x40 and
++0x278. The six kinds are covered, with redundancy. ✓
+
+**Address bits carried by ACCEPTS prologue.** Bits 2,3,4,5,6,9 are carried both
+ways (e.g. bit 2 set at +0x04/+0x34, clear at +0x00/+0x08/+0x10/+0x18/+0x30/
++0x38/+0x40; bit 9 set at +0x278, clear at all others). Bits 0, 1, 7 are clear at
+every ACCEPTS offset (all even, +0x278 has bit 7 clear). Bit 8 is set only at
++0x278.
+
+## Q2. Floor gap
+
+The edit `if (writeflag == MEM_READ) d->warned |= CRIME_W_LEN;` inserted in the
+accepted path (after the width branch, before the switch) scores **141/141**.
+Reasoning:
+
+- **Rearm session** iterates ACCEPTS in order. First kind is `("sd", 0x00, 0)` —
+  a write. The pre-set doesn't fire. First `lb +0x06` refusal: latch clear, fires,
+  count = 1, sets bit. Second kind `("ld", 0x00, 0)` — read, pre-set fires, but
+  latch is already set; refusal silent. All subsequent refusals silent. Total
+  count = 1. `rearm once` expects 1 — passes.
+- **Latch x5** has the same ACCEPTS prologue. First kind write; pre-set silent;
+  first refusal `lh +0x06` fires, count = 1. Pre-set fires for later reads but
+  latch is set. Count = 1 — same as base.
+- **Warm once** is `refuse, accept reads, refuse`. First refusal fires before any
+  pre-set can fire (the accepted reads come after). Count = 1. Same as base.
+- **Free-running sessions** have no prologue of accepted accesses — pre-set
+  never fires. Each fires once, count = 1. Same as base.
+- **Gate session** accepted accesses are reads (ld at +0x18, +0x28, etc.), so the
+  pre-set fires and sets the latch before the refused `sh 0x0800`. But the gate
+  rows check `gate hardint`, `gate line`, `gate run`, `gate lb v0`, `gate lh v0` —
+  none check the announce count for the gate session, and the answer is unchanged.
+  Gate session passes.
+- **Answer, channel, landing rows** are unaffected (the edit only sets the bit).
+
+The row I expected to catch it: **`rearm once`** (count == 1). Why it cannot:
+ACCEPTS's first kind is `sd 0x00` (write). A pre-set keyed on `writeflag == MEM_READ`
+does not fire for the first accepted access. The first `lb +0x06` refusal fires
+before any read pre-set can fire, setting the latch. Subsequent read pre-sets fire
+into an already-set latch.
+
+The asymmetry: **re-arms on reads are caught** (a re-arm clears the latch, so the
+refusal after the first read ACCEPTS kind announces, count = 2). **Pre-sets on
+reads are not caught** (a pre-set sets a latch that's already set).
+
+## Q3. Wrong statement
+
+The header's claim — "the class closed on its single axes after two passes found
+members … closing pass: keyed on … address parity" — is wrong for the **direction
+axis on pre-sets**. The brief presents the cross as covering every single axis
+including `writeflag`, but a pre-set keyed on `writeflag == MEM_READ` in the
+accepted path is not detected: the prologue's first kind is a write, so the
+pre-set doesn't fire before the first refused access announces.
+
+A symmetric gap exists for latch mutants in the decline arm keyed on address
+parity (`d->warned |= CRIME_W_LEN << (relative_addr & 1)`): for even refused
+accesses bit CRIME_W_LEN is set and the check passes once; for odd refused
+accesses bit CRIME_W_LEN is never set, so they always announce. The latch x5
+session's first refusal is `lh +0x06` (even) — sets CRIME_W_LEN, fires, count = 1,
+same as base. The free-running rows are split: `free said` at +0x07 (odd) fires
+once (base behavior), `free 2r said` at +0x1f8 (even) fires once (base behavior).
+No row distinguishes the mutant from base.
+
+## What I could not check
+
+- Whether the probe header's first-refusal ordering matches the code (the header
+  says "latch x5 (lh, read, even)" while the inlined diff comment says "the first
+  refusal MUST be at +0x07 (1-byte, odd)" — these describe different things or
+  one is stale; I can't read the file to see which session the `latch x5` row
+  actually uses).
+- Whether any row in the 141 I didn't trace (e.g. `rearm surv` semantics) catches
+  the direction pre-set; the diff shows the row name but I don't see its expected
+  value in the inlined text.
+- Whether the free-running sessions have any prologue of accepted accesses (the
+  inlined `free_one` function suggests none, but I cannot verify against the
+  shipped file).

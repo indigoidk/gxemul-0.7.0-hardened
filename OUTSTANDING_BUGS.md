@@ -18734,7 +18734,9 @@ checks are the nearest existing machinery.
 ranked them I1/E1 out of 76 unowned runtime error-exit sites across 24 files. Every element above was
 re-derived locally by opening the files.*
 
-### `crimewidthkill` (HIGH) -- filed 2026-09-10
+### `crimewidthkill` (HIGH) -- filed 2026-09-10 -- CLOSED by `#529` (its chain closed 2026-09-26; committed 2026-10-02)
+
+**CLOSED by `#529`**: the width is DECLINED -- member 3, one latched `(once)` announce and a goto to the common tail -- after FAULT (member 5) was weighed and rejected on pass 1 (`crimewidthkill/fable_pass1_20260913.md`: FAULT's only host trace is a `debug()` silent when free-running; a decline keeps the guest running; no CRIME document establishes a bus error).  Rung-3 witness committed 3/15, fix 15/15; detector `regress/crime_width_probe.py`, 226 rows, gate 14.  The text below is the 2026-09-10 filing.
 
 `dev_sgi_ip32.c`, `DEVICE_ACCESS(crime)`, grep anchor `fatal("crime access len = %i!\n", len);`: the
 handler is a bare `if (len == 8) {...} else if (len == 4) {...} else { fatal(...); exit(1); }`. There is
@@ -21278,7 +21280,7 @@ wrong answer — the safe direction. The cost is audit expense, and 27 rows that
 from their own fields.
 
 
-### `scorehyphenfp` (LOW) -- CLOSED 2026-09-17. **A CHECKER WHOSE PRESCRIBED REPAIR WOULD HAVE
+### `scorehyphenfp` (LOW) -- CLOSED 2026-09-17 (its fix COMMITTED 2026-10-02 with `#529`: it sat in the working tree until then, and the ledger row said closed with no commit). **A CHECKER WHOSE PRESCRIBED REPAIR WOULD HAVE
 ### SHIPPED A FALSE STATEMENT.**
 
 `check_score_claims.py` read the ordinal pair `entries-4/8` as a stale score claim of 4/8: its
@@ -22667,3 +22669,67 @@ completion line (`seat answered.`, `SEAT WALLED`, or a refusal line), forward-on
 controls (a truncated launch log staged -> refused; a complete one -> passes); and teach section G the dedicated
 re-fire's filename, or record such answers where it looks.  `#529`'s commit script already carries the launch-log guard
 locally, and refuses any file under its artifacts directory changed in the last two minutes.
+
+## 2026-10-02 — GXEMUL [087a90]: `#529` crimewidthkill CLOSES (its chain closed 2026-09-26; the review of its text and records ran to 2026-10-02); what that review files
+
+Evidence: `regress/artifacts/crimewidthkill/` -- the panels (durable copies beside each pass), the Opus records, the
+dedicated jobs, the flagship rulings (the first-hand 09-25 re-ruling in `rerule_20260925/`; repair 15's pass 2 and
+repair 16's F2 adjudication), GPT-6 Astra's confirmations, and every kill table with its PRETABLE.
+
+### `crimectllane` (HIGH, device) — CRIME_CONTROL acts on the raw value of whatever width reaches the exact label 0x08
+
+`dev_sgi_ip32.c`, `DEVICE_ACCESS(crime)`, `case CRIME_CONTROL:` (0x008) matches the EXACT label and acts on the RAW
+`idata` of the access that reached it.  So a 32-bit `sw 0x800` to `+0x08` -- the HIGH half of the 64-bit register on this
+big-endian machine -- carries bit 11 into `CRIME_CONTROL_HARD_RESET` and stops every CPU, while a 32-bit write to
+`+0x0c`, the lane that holds bit 11 and the offset NetBSD 1.6.2 writes (the arm's own TODO says so), performs the
+register store and reaches the default arm's log, bypassing CONTROL's reset and watchdog handling.  MEASURED by `#529`'s
+pass-1 Opus seat (`crimewidthkill/opus_pass1_20260913/out/rows_base.out`: `sw CTL+08 0x800` halted; `sw CTL+0c 0x800`
+did not halt, `dflt=1`).  (A draft of this entry said the `+0x0c` write "does nothing" -- GPT-6 Astra's records audit.)  `#529`'s detector USES this defect as a channel
+(`sw08 halts`, `sw08 msg ctl`, the `sh08` rows) and says so; a round that fixes the lane owes those rows' re-derivation.
+Needs a guest witness of what a real driver writes (the PROM's reboot path; NetBSD's watchdog) before choosing a lane
+model.  **A probe comment and `gate_arm.sh` have called this row "filed" since 2026-09-13 (a second probe comment called
+`crimebankorder` filed); the resumption dossier found neither filing, and the flagship's 09-25 re-ruling listed both.**  **Graded HIGH, not MED:** stopping
+every CPU ends the emulation in ordinary single-machine execution without `debugger_enter_at_end_of_run` (`emul.c`
+enters the debugger instead when it is set) and the process returns, so a guest store that on the header's
+model reaches only reserved high-word bits ends the emulator -- the severity rule's HIGH.  GPT-6 Astra's confirmation of
+the codex farm's adjudication (`codexfarm_20260926/adjudication/codex_astraconfirm_farm_f1c.txt`) overturned the Fable
+seat's MED; that seat's argument -- the guest gains no capability it lacks through the legitimate 64-bit HARD_RESET --
+bears on reachability ranking, not on severity.
+
+### `crimebankorder` (LOW, device) — the CRIME prelude writes the bank-control registers contiguously; the header interleaves them
+
+The prelude's bank loop writes `d->reg[CRIME_MEM_BANK_CTRL0 / sizeof(uint64_t) + bank]` -- CONTIGUOUS offsets
+0x208..0x240 -- while `src/include/thirdparty/crimereg.h:141-148` defines the bank control registers INTERLEAVED (CTRL0
+0x208, CTRL1 0x218, CTRL2 0x210, CTRL3 0x228, CTRL4 0x220, CTRL5 0x238, CTRL6 0x230, CTRL7 0x248; raised by the codex
+pass-1 seat on 2026-09-13, re-read 2026-09-26).  If the header is right, banks 1..7 are reported at the wrong offsets
+and a guest sizing memory from them reads the wrong layout.  **But the header is itself suspect:** CTRL7 (0x248) is the
+same offset as `CRIME_MEM_REFRESH_CNTR` (`:149`), and no bank register sits at 0x240.  Needs a boot witness (the IP32
+PROM's memory report, or NetBSD's or OpenBSD's own sizing) before any edit -- the header, not the code, could be wrong.
+`#529`'s `top8 anchor` row pins the model's CURRENT layout and says a round re-ordering the banks owes its
+re-derivation.  **Called "filed" in the probe since 2026-09-13; filed nowhere until now.**
+
+### `crimecontroldebt` (LOW, detector) — the eight strengthenings `#529`'s review filed rather than owed
+
+The flagship's F2 ruling (`crimewidthkill/repair16_f2_20260926/fable5_f2_adjudication.md`, Q4) closed the chain with NO
+row owed and FILED items 1-7; its final ruling (`crimewidthkill/final529r18_20260926/fable5_final.md`, C) added item 8.
+Each is filed with its measured or derived kill and its re-run cost:
+1. a value anchor BESIDE the prefix count in `ctldog`/`ctlrst` -- kills `D_dogbit0` (226/226 today); re-runs
+   `D_nodogclear`'s red set.  (An anchor IN PLACE of the count loses `H_noresetclear`: `opus_f2/replay_ctl.out`.)
+2. a latch-SET `sh 0x0201` in `sh08b` -- kills `P_ctl2wrc_set`; re-runs M8 and M1.
+3. one free-running accepted `sw 0x0001` session -- kills `M_ctldebug` (the arm's `fatal()` demoted to `debug()`, which
+   every stepped session prints either way: `opus_f2/disc_f2.out`).
+4. an `lb` appended after the first refusal in the `istat`/`imask` sessions -- kills `W_istlb`/`W_imklb` (226/226,
+   table 16, as predicted); re-runs M6 and M7.
+5. six latch-CLEAR first-refusal sessions at INTSTAT/INTMASK -- kill the `C_` variants.
+6. a refused `lb +0x10` while the interrupt line is asserted -- kills `P_istprev_set`.
+7. an `sw 0x0801` last-store session -- the HARD_RESET x bit-0 member of the bit-conditioned family, only if (1) is taken.
+8. entry 34 of the ACCEPTS-46 enumeration (`sd +0x40`, latch CLEAR): both of its latch-CLEAR drivers store 0 into a
+   slot that holds 0, so a silent decline of that one access moves no row (k34C 226/226) -- clause (e), the
+   unrowed-slot class, by the flagship's final ruling (2026-09-30), GPT-6 Astra confirming.  The cheap row: seed a
+   nonzero value in the two value sessions' `sd +0x40` and re-want `acc 40 sw` / `p acc 40 sw`; its cost: S55 and S58
+   carry entries 8-11, 14, 15, 19, 21, 23, 24, 30, 31 and 34-37, so every recorded kill touching them re-runs.
+All are above-floor strengthenings: items 1, 2 and 4-7 cover state/value joints (the CONTROL arm reads no latch and
+does not individually test or clear bit 0; the remaining joints are not distinguished by the decline); item 8 belongs
+to the unrowed-slot class, with the {default label, 8-byte store, latch CLEAR} cell held at +0x278; item 3,
+`M_ctldebug`, is separately a DIAGNOSTIC-TRANSPORT change in upstream code the fix does not touch (the ruling's X8).  (A draft called all
+seven of the F2 items "joints" -- GPT-6 Astra's records audit; item 8 was ordered by the final ruling.)  Rank below any live defect in `dev_sgi_ip32.c`.

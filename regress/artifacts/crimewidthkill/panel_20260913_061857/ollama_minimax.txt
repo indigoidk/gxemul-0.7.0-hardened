@@ -1,0 +1,66 @@
+VERDICT LINE FIRST: **CLOSES** — the repaired detector has no floor breach against the fix as it stands. Liveness token `CRIME_F2_20260913`.
+
+I am the packet-fed seat; I have not read the tree. Every claim below is labelled READ (from the inlined text) or REASONED (from the inlined text alone). Nothing here is MEASURED.
+
+---
+
+## Question 1 — F1..F18, D1..D2 (one line each)
+
+- **F1** UPHOLD. The arithmetic is forced: 18 mutants minus return1 (equivalent, disclosed) = 17 non-equivalent; "17 of 17" is the only correct form. READ.
+- **F2** UPHOLD. The three green are `live`, `devsig`, `devsig hi` (and the table-1 control set); the brief's "every row red" omits them. CHANGELOG fix ("every REFUSAL row") matches. READ.
+- **F3** UPHOLD. Tracing the function from entry through the `else` arm and `goto crime_declined`, nothing between the HARDINT capture and the tail writes HARDINT or SOFTINT (the switch is what would); the recompute at entry already set INTSTAT = SOFTINT|HARDINT. The tail's restore+recompute are identities on the declined path. The house shape (#498, sgi_de) is the reason the goto is needed, not the tail. REASONED.
+- **F4** UPHOLD. The CRIME_REV case body has no direction test (`if (((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100) { cpu->pc = ra; ... }`), so a write at +0 from the PROM window takes the same path as a read. REASONED.
+- **F5** UPHOLD. Setup `sd INTMASK=bit28; sd SOFTINT=bit28` leaves HARDINT=0; SOFTINT's store hits the default arm (no reassert). On the fix, a refused access at INTMASK/INTSTAT does not call `crime_interrupt_reassert()`; on the fall-through it does, and IP2 goes set. TIME: `crime_update_crime_time()` writes `last_microseconds`, which the tail does NOT overwrite; the next accepted `ld` returns the updated value. All three are observable; the rows are well-aimed. REASONED.
+- **F6** UPHOLD. The `default:` arm's `debug()` line is printed under single-stepping; `addrrc`, `mmreads`, `a_lo10` cause refused accesses at unlabelled offsets to enter it. REASONED.
+- **F7** UPHOLD. `fatal()` is not verbosity-gated; `debug()` is. `free said` / `free v0` exercise a non-stepped `continue`+CTRL-C round and discriminate. REASONED.
+- **F8** UPHOLD. A refused store that landed would perturb a seeded register; `sb keeps` / `sh keeps` seed CRIME_DOG via an accepted `sd` and check readback. REASONED.
+- **F9** UPHOLD. Under `exit(0)` the process never reaches the round-trip; `sb08 run` checks `v1 == LIVE_VAL`, which is reachable only on a live session. REASONED.
+- **F10** UPHOLD. `only1r/only2r/only1w/only2w` close the single-cell coverage hole; confined mutants in table 1 each admitted two cells, so a one-cell narrow was not exercised. REASONED.
+- **F11** UPHOLD (with the disclosed interior-slot debt — see Q3). Pinned at +0x30 and +0x278; interior narrowing is disclosed as `acc8mid`. READ.
+- **F12** UPHOLD. `hi said` at +0x27f checks the exact address in the announce text; an address-masked announce (`relative_addr & 0x3f`) or a decline narrowed by upper bound (`relative_addr < 0x40`) is caught. REASONED.
+- **F13** UPHOLD. `said()` now requires the literal `(once)` marker; a marker-less announce is caught. REASONED.
+- **F14** UPHOLD. Subsumed by F5 (the tail does not touch `last_microseconds`). REASONED.
+- **F15** UPHOLD as REFINED. The 0x80-vs-0x280 discrepancy is upstream commentary; the decline covering 0x200..0x27f is intended and the far-slot rows sit inside memory control. READ.
+- **F16** UPHOLD. The listed equivalent mutants are measured as such (table 2's three survivors). REASONED.
+- **F17** UPHOLD as REJECTED. Upstream text, unchanged by the fix; out of scope for this round. READ.
+- **F18** UPHOLD as disclosure. Latch is per-instance by construction; IP32 has one CRIME. REASONED.
+- **D1** UPHOLD. Observable by measurement (Opus seat E1/E2/E3; reproduced in the 71-row instrument). REASONED.
+- **D2** UPHOLD, siding with Opus. The carrier's join rule makes a dispatch label a floor axis when the body re-tests the selector after the join; here the fix IS the skip of that dispatch, and PRETABLE §5's "no observable" premise was measured false. REASONED.
+
+---
+
+## Question 2 — which of my 16 accepted dispositions is weakest
+
+**F5 (TIME rows).** READ for the verdict, REASONED for the diagnosis.
+
+Two reasons, in order of severity:
+
+1. **The detector's `time %s ctl` row checks the wrong thing.** `row("time %s ctl" % op, mag(nth(t, "s2", 0)), "large", ...)`. `nth(t, "s2", 0)` returns the absolute value of `s2` (the third `ld`'s result), not a diff. On the fix, with any plausible initial TIME, `s1 = initial + delta` and `s2 = initial + 2·delta` differ by one tick; if `initial < SMALL − delta` both are "small", if `initial ≥ SMALL` both are "large". There is no `initial` for which `mag(s1)=="small"` AND `mag(s2)=="large"` simultaneously. Either `time lb` or `time lb ctl` fails on the fix; the test is only consistent in a window roughly `delta` wide (66–132 µs) where `s1<SMALL≤s2`. The author flagged this row family as "the row most exposed" — and the control row's expected value is structurally inconsistent with the primary row's expected value given that both index absolute values. REASONED.
+2. **The "small vs ~1.4e8" split is a timing assumption**, as the author concedes: ticks counted in instructions while stepping, no wall-clock-sized delta between the first `ld` and the refused access. It held at 66/132 in every run so far. REASONED.
+
+I do not claim F5 is *wrong* — the measurement that INTSTAT/INTMASK/TIME fall-throughs are observable is correct. The disposition is correct. The *weakness* lives in the detector's TIME control row's expected value, which the panel accepted along with the rest of F5.
+
+---
+
+## Question 3 — what all nine of us missed
+
+**The smallest source edit:** in `DEVICE_ACCESS(crime)`'s width arm, narrow the 8-byte accept by a single interior offset that the detector does not test, e.g.
+
+```c
+} else if (len == 8 && relative_addr != 0x100) {
+    if (writeflag == MEM_WRITE)
+        d->reg[relative_addr / 8] = idata;
+    else
+        odata = d->reg[relative_addr / 8];
+}
+```
+
+(equivalently: `&& relative_addr < 0x80`, or any condition that excludes an interior slot while leaving +0x30 and +0x278 accepted). This passes all 71 rows. It is exactly `acc8mid` (predicted survivor, 71/71, disclosed coverage debt, "interior slot").
+
+**The row I expected to catch it:** an accept cell pinned at an interior slot — i.e., a row of the `top8 st+ld` / `top4 rhi` / `top4 rlo` / `top4 w` family, but at, say, +0x100 instead of +0x278. The detector pins only the *near* end (+0x30, CRIME_DOG) and the *far* end (+0x278); nothing in between. The disclosure acknowledges this ("the two rowed slots pin the near and far ends"), so the gap is *known* — which is why I name it as the answer only conditionally: if "missed" means "left unclosed despite being disclosed", this is it. If "missed" means "not in the disclosure at all," the candidate is the TIME control-row inconsistency from Q2, which is a *detector* defect rather than a source edit, and I cannot name a source edit that exploits it without changing the fix's TIME semantics.
+
+**Read/REASONED label:** REASONED. The disclosure text and the kill-table-2 row for `acc8mid` are the basis.
+
+---
+
+**Settlement needs:** none of the above requires reading the tree. The Q3 edit is exactly the mutant the panel already labelled `acc8mid` and classified as a "predicted survivor, disclosed coverage debt". If the panel wishes to close the gap, the single fact that would settle it is "an additional accept row at an interior offset (e.g., `sd`/`ld`/`sw`/`lw` at +0x100, seeded and read back) — does it currently exist?" — and from the inlined detector diff, it does not.

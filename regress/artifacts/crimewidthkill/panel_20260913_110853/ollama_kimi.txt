@@ -1,0 +1,42 @@
+**VERDICT: GAP — in the `len ∉ {8,4}` arm of `DEVICE_ACCESS(crime)`, add one line before `goto crime_declined;`:**
+```c
+	if (writeflag == MEM_WRITE && relative_addr == CRIME_TIME)
+		d->reg[CRIME_TIME / sizeof(uint64_t)] = idata;
+```
+**This scores 85/85. Twin for the read cells: `if (writeflag == MEM_READ && relative_addr == CRIME_TIME) odata = 1;` — also 85/85. Neither is in the DISCLOSED list. CRIME_CLOSE_20260913**
+
+---
+
+## 1. Why this edit survives the 85-row test (Q1)
+
+**What the edit does** [REASONED from packet C]: a refused sb/sh at +0x38 now LANDS `idata` into `d->reg[7]` instead of being dropped. The probe's time-store rows store `0` (`st(A, op, CRIME + 0x38, 0)` — visible in the diff) [READ], so idata = 0.
+
+**Why nothing detects it** [REASONED, all from packet facts]:
+
+- The rows *expected* to catch a landing are `sb keeps` (+0x37), `sh keeps` (+0x30), `hi keeps` (+0x27f) — no keeps row touches +0x38, and the POSTTABLE red-set inventory names no others [READ].
+- The TIME write cells are rowed as `time sb`, `time sh`, but their oracle is `mag(s1)=="small"` with `SMALL = 66*100000 = 6,600,000` [READ]. The landed value is what the next accepted `ld` returns as s1 (the tail recomputes only HARDINT and INTSTAT — reg[7] is untouched by preamble and tail [READ from the C]). A landed 0 reads "small" → green.
+- The aliasing is **structural**: a 1- or 2-byte store can carry at most 0xffff = 65,535 < 6,600,000 = SMALL [REASONED]. So *no* landing a {1,2}-byte store can produce can ever redden `time sb/sh`. The row pins the switch-entry effect (fall-through calling `crime_update_crime_time` → s1 ≈ 1e8), not a landing.
+- The read twin: refused lb/lh at +0x38 occur in the time sessions, which print only `s1`,`s2` [READ from diff]. The "answered 0" pinning (`lb/lh/lbu/lhu v0`, `warm v0`) lives at other offsets (~0x1f / 0x07). `odata=1` keyed on 0x38 → green.
+
+**Why this is not an equivalent** [REASONED, checking each named label]:
+- Same edit keyed on CRIME_INTSTAT: erased by the tail's recompute *in the same call* → genuinely equivalent, undetectable by any test.
+- Keyed on CRIME_CONTROL or CRIME_REV: overwritten by the next call's preamble, and the register's value is never read as a value (CONTROL arm reads idata; rev rows check pc) → equivalent.
+- Keyed on CRIME_INTMASK: persists and is read by `crime_interrupt_reassert` → caught by `imask ctl` (proven by wstore's red set [READ]: `imask ctl` reds precisely because the landing sb +0x18 zeroes INTMASK before the ctl lw).
+- Keyed on DOG / +0x27f: caught by keeps rows.
+- Keyed on CRIME_TIME: persists (preamble and tail never write reg[7]; ticks don't fire in-session), and is returned by the very next accepted ld. Guest-distinguishable in principle (0 vs the ~66/132 the apparatus saw) — but the threshold oracle cannot express the distinction. **This is the unique named offset where a decline-arm keying is neither detected, nor equivalent, nor disclosed.**
+
+**Why it is not in the DISCLOSED list** [READ]: the single-offset debt bullet is explicitly scoped — "an effect ADDED to the decline arm and keyed on ONE offset *the switch does not name*" — and the SOFTINT bullet repeats the qualifier ("(0x20), which the switch does not name … the single-unnamed-offset class"). CRIME_TIME (0x38) is named, observable, and carries a claimed full {1,2}×{R,W} floor. The author's partition assumed named offsets are safe because their labels are rowed; the label rows pin only the *switch-arm* effect, not a decline-arm effect keyed on the same offset.
+
+**Secondary, same shape** [REASONED]: make the announce condition `if (!(d->warned & CRIME_W_LEN) || relative_addr >= 0x40)`. Every multi-refusal session refuses only at offsets ≤ 0x3f (`latch x5`: max 0x3f; `warm once`: max 0x37; imask/istat/time: 0x10–0x38); the only ≥ 0x40 refusal (hi's sb +0x27f) is alone in its session and announces once. 85/85. Contract clause 4 claims the latch "keyed on the access (… relative_addr …)" is detected — the reorder only catches *bit-taken-from* shapes that manifest at offsets ≤ 0x3f, not a condition keyed on the address. Arguably sweepable under the unnamed-offset debt clause only by stretching "ONE offset" to a range; flagging it, TIME is the headline.
+
+**What I could not check, and the single fact that would settle it** [honest limits]: the exact offsets of the `lb/lh/lbu/lhu v0` rows are not shown [READ: contract clause 2 names them without offsets]. If one value-checks a refused read at +0x38, my read twin dies — the write variant stands regardless, since no {1,2}-byte landing can exceed SMALL. The settling fact: "does any row's oracle value-check a refused access at relative_addr 0x38?" The full row inventory visible in the packet (red sets, control tuple, keeps list) contains none. To close: extend the disclosure bullet to named offsets and correct the denominator (below), or add an exact-oracle row — noting that base s1 is 66/132 of *environment timing*, so an exact oracle is fragile; disclosure is the honest fix.
+
+## 2. The repair diff (Q2) — sound on the points checkable from the packet
+
+[REASONED] `sh08b msg/run` oracles vary under the class they name (0x0201 → unimplemented-control text; 0x0a00 → CPUs stopped), and c_hrclr's predicted red set (sb08 msg, sh08b msg) is exactly consistent with `HARD_RESET`-clear narrowing applied to the four packet-visible values (0x01, 0x0800, 0x0201, 0x0a00) — internal consistency confirmed [READ/REASONED]. The `dflt()` keying fix is correct: hi's accepted `ld +0x278` legitimately prints `[ crime: read from 0x278,` [READ from C: default arm on accepted widths] and the keyed count for (write, 0x27f) is 0 on base [REASONED]. The reordered latch-x5 rationale (lh first at an even address defeats `|= len` / `|= relative_addr` bit-0 shapes) is coherent [REASONED]. The tick-boundary assumption is now disclosed in-line [READ]. One nit [READ + REASONED]: clause 6's "a value the PRELUDE writes" misattributes agency — the preamble's bank loop rewrites `d->reg[CTRL0+bank]` on *every* access, re-establishing 1 at +0x210 through indexing the mutant does not touch. The value (and the anchor's soundness) is unaffected; the sentence is wrong about who writes it.
+
+## 3. Statements that are wrong (Q3)
+
+1. [READ, refuted by reasoning above] POSTTABLE DENOMINATOR: **"a refused store that lands (all cells, and >= 0x200)"** — false for the TIME store cells (undetected, non-equivalent) and only vacuously true for INTSTAT/CONTROL/REV (erased → equivalent). "All cells" holds only where a value-checked row or the `imask ctl` chain exists.
+2. [READ] The SETTLED standard ("single-label or single-cell change at every OBSERVABLE switch label for each refused {1,2}×{R,W} cell") is met only for switch-*entry* effects; decline-arm effects keyed on *named* offsets are covered by neither the rows nor the DISCLOSED list's "the switch does not name" scoping. The disclosure bullet and the denominator cannot both be right — at least one must be edited, which is itself the GAP verdict's paperwork form.
+3. [READ from packet C] Minor: header clause 6, "a value the PRELUDE writes by bank index" — see Q2 nit; the preamble rewrites it every call.

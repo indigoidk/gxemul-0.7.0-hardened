@@ -1,0 +1,5 @@
+Read the review packet at C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\crimewidthkill\repair16_f2_20260926\f2_packet_codex_v2.md in full, then answer its section 6 questions (Q1-Q5) exactly as that section directs. It is an ordinary bounds-and-error-handling review of an emulator device model (the SGI O2 CRIME register window in GXEMUL-SEC/src/devices/dev_sgi_ip32.c) and of the test rows that cover it. This seat did not answer the previous pass, so the packet's sections 2-3 are also your first look at the other reviewers' findings; say where you agree and where you do not.
+
+Everything you need is inlined in the packet. If you verify anything, read ONLY GXEMUL-SEC/src/ and GXEMUL-SEC/regress/*.py; do not read GXEMUL-SEC/regress/artifacts/ (other than the packet itself), _scratchpad/, GXEMUL-SEC/CHANGELOG.md or GXEMUL-SEC/tools/pipeline/. Please CHECK the constructions shown; you are not asked to construct new ones.
+
+VERDICT LINE FIRST, then one line per question, then reasons.

@@ -1,0 +1,144 @@
+```
+VERDICT: SHIP (with one unmeasured gap)
+Token: CRIME_P2_20260913
+```
+
+I cannot measure. Below is what I can read from the packet and what I can only reason about.
+
+---
+
+## What the packet settles (READ from code/diff/header)
+
+- **The fix's shape is what the comment says.** The new `else` arm announces once under a per-instance bit (`CRIME_W_LEN`, bit 0 of `d->warned`) and `goto crime_declined;`. The label is after the `switch`, so the switch is skipped. The tail restores HARDINT from `preserved_CRIME_HARDINT`, recomputes INTSTAT, and on MEM_READ does `memory_writemax64(cpu, data, len, odata)` with `odata = 0`. For writes the tail does not touch `d->reg`. This is READ.
+- **Accept path is unchanged.** `len == 8` and `len == 4` branches are byte-identical to HEAD (the kill table does not include any accept-path mutant that fails to kill). READ.
+- **`goto crime_declined` and `return 1` are equivalent on every channel the detector covers.** The packet quotes `src/cpus/memory_rw.c`: `if (writeflag == MEM_READ) memset(data, 0, len);` immediately above the device dispatch. With that pre-zero, `odata = 0` written by the tail and no write at all leave identical bytes. `return1` scores 40/40. READ + REASONED.
+- **`fatal()` does not exit.** The original code had `fatal("…"); exit(1);` — the `exit(1)` would be unreachable if `fatal()` exited. The packet states `src/core/debugmsg.c` has no early-out. REASONED (strong).
+- **The four switch side effects the detector relies on are present in the code.** `CRIME_CONTROL` write checks `CRIME_CONTROL_HARD_RESET` (stops every CPU) and `idata &= ~CRIME_CONTROL_ENDIANESS` then `if (idata != 0) fatal(...)`. `CRIME_REV` read at pc `0xbfc051XX` sets `pc = ra`. `CRIME_INTSTAT`/`CRIME_INTMASK` call `crime_interrupt_reassert`. `CRIME_TIME` calls `crime_update_crime_time`. `CRIME_DOG` is a no-op. READ.
+
+---
+
+## What the packet does not let me check (NAME the premise, NAME the fact)
+
+- **Whether `memset(0)` at init clears `d->warned`.** The diff adds `int warned;` to `struct crime_data` and a comment that says `memset(0) at init clears them`. The init site is not shown. The detector passes (`latch x5 = 1`), so in practice it is zero, but I cannot confirm the init line from this packet. Settled by: reading the `crime_data` allocation/initialization in `dev_sgi_ip32.c`.
+- **Whether any other writer of `d->warned` exists.** The diff shows one writer. The rest of the file is not inlined. Settled by: `grep -n warned src/devices/dev_sgi_ip32.c`.
+- **Whether the 32-bit `int warned` and `CRIME_W_LEN = (1 << 0)` interact correctly with signed shifts elsewhere.** Not relevant at this site (only `|=` and `&`), but I cannot rule out a future site. Noted, not blocking.
+- **Whether `EXCEPTION_DBE` is the right exception number for a `return 0` from a device.** The packet asserts it (cause.ExcCode 7). The detector rows `lb exc`, `lh exc`, `sb exc`, `sh exc` expect 0 under the fix and (per the `fault` mutant) would see 7. I cannot independently verify the MIPS exception number from this text. Settled by: reading `src/cpus/memory_rw.c` around the `return 0` device-dispatch path.
+- **The values of `CRIME_CONTROL_DOG_ENABLE`, `CRIME_CONTROL_HARD_RESET`, `CRIME_CONTROL_ENDIANESS`.** The packet tells me 0x200 (DOG) and 0x800 (HARD_RESET) by comment, but does not define ENDianess. The `fallsw` mutant kills `sb08 msg` (4 rows red), which implies that under full fall-through `sb 0x01 +0x08` does print the unimplemented-control text. From that I REASON ENDianess is not bit 0, but I cannot read the macro definition from the packet.
+
+---
+
+## Question 1 — the fix
+
+The declined access does exactly what the comment claims: skip the switch, return 0 on read (because `odata` is never populated for narrow lengths and the tail writes it), drop the write, advance the PC, raise no exception, announce once per device instance. READ.
+
+**The prelude is not a problem for a declined access.**
+- `d->reg[CRIME_REV] = use_fb ? 0xa1 : 0x11;` runs before the width arm. Under decline, `odata` is not populated from `d->reg`, so the refresh is invisible to the declined read. Under a hypothetical fall-through, the refresh would matter (a narrow read of CRIME_REV would see 0x11, not 0), but that is precisely what the goto prevents.
+- The `>1024 MB` and `% mb_per_bank` fatals above the width arm are pre-existing and unchanged. With `-M 48` (not divisible by 32), the emulator exits at the first CRIME access regardless of width. This is filed as `crimebankorder`/`-M 48` and is not introduced by the fix.
+- The `CRIME_HARDINT` save at function entry and the tail's restore are correct under decline: the save happens before any side effect, the restore happens at the tail, the goto does not skip the restore.
+
+`int warned` + `CRIME_W_LEN` matches the house idiom (N=1 per device instance, `(once)` in the message, memset(0) at init claimed). I cannot verify the init line or absence of other writers from this packet (see "What the packet does not let me check").
+
+---
+
+## Question 2 — the smallest uncaught edit
+
+The kill table covers 19 mutants. The packet itself flags the gap: **"address-conditioned fall-throughs (a goto keyed on relative_addr), which reach the switch only at the labels a refused access happens to name — owed as a pass-2 question, not yet measured."**
+
+The detector's refusal rows are pinned to two addresses only: **+0x00 for reads** (lb rev pc, lh rev pc via the CRIME_REV PROM-probe hack) and **+0x08 for writes** (sh08 pc/run, sb08 msg via CRIME_CONTROL). No row tests a narrow access at +0x10 (INTSTAT), +0x18 (INTMASK), +0x30 (DOG narrow), +0x38 (TIME), or a narrow read at +0x08.
+
+**Concrete uncaught edit** (smaller than the packet's own example, which *is* caught):
+
+```c
+		if (!(d->warned & CRIME_W_LEN)) {
+			d->warned |= CRIME_W_LEN;
+			fatal("[ crime: unimplemented len=%i at 0x%x -- declined."
+			    "  (once) ]\n", (int) len, (int) relative_addr);
+		}
+		if (writeflag == MEM_WRITE || relative_addr == CRIME_REV)
+			goto crime_declined;
+```
+
+**Why each tested row passes:**
+- `lb rev pc` / `lh rev pc`: reads at +0x00 → `relative_addr == CRIME_REV` → declined. OK.
+- `sh08 pc` / `sh08 run` / `sb08 msg`: writes at +0x08 → `writeflag == MEM_WRITE` → declined. OK.
+- `lb`/`lh`/`lbu`/`lhu` at +0x6/+0x7: reads, not CRIME_REV → fall through. Hits `default` arm. `odata` is never populated for narrow lengths, so the tail writes 0. v0 = 0. No register side effect. OK.
+- `sb`/`sh` at +0x1e/+0x1f: writes → declined. OK.
+- Accept tests: 8/4-byte accesses never enter the `else` arm. OK.
+- `latch x5`: latch is set on the first announce, regardless of whether the goto is taken. OK.
+- All "said" rows: announce is printed exactly once per fresh session. OK.
+- `live`, `devsig`, `devsig hi`, `rev pc ctl`, `sw08 halts`, `sw08 msg ctl`, `acc8 st+ld`, `acc4 rhi/rlo/wlo/whi`: unaffected (accept path or 4-byte at +0x00/+0x08 which is still accepted). OK.
+
+**Why this breaks the fix:** a narrow **read** at +0x10, +0x18, +0x30, +0x38, or +0x08 falls into the switch. For +0x08 (CRIME_CONTROL) and +0x30 (CRIME_DOG) the read path has no guest-visible side effect, so behavior coincides with the decline by accident. For +0x10/+0x18 (INTSTAT/INTMASK) the read calls `crime_interrupt_reassert(d)`; for +0x38 (TIME) it calls `crime_update_crime_time(d)`. Both are guest-observable. The fix's promise was "uniform decline", and this edit breaks that for three labeled registers with side effects, with zero rows reddening.
+
+**Which row I expected to catch it and why it cannot:** `sh08 pc`/`sh08 run`/`sb08 msg` catch writes at +0x08, but this edit declines all writes. `lb rev pc`/`lh rev pc` catch reads at +0x00, but this edit declines reads at CRIME_REV. The detector simply has no row for a narrow read at +0x10/+0x18/+0x30/+0x38 or at +0x08. The packet's `DISCLOSED` block acknowledges the INTSTAT/INTMASK/TIME cells ("effects are idempotent or overwritten by the tail, and no observable here separates them") — this edit is the unmeasured counterpart of that disclosure.
+
+**Smaller variants I considered and rejected:**
+- `if (relative_addr != CRIME_CONTROL) goto crime_declined;` — the packet's own example. **Caught** by `sb08 msg` and `sh08 pc/run` (writes at +0x08 fall through into CRIME_CONTROL).
+- `if (relative_addr == CRIME_CONTROL) goto crime_declined;` — **caught** by `lb rev pc`/`lh rev pc` (reads at +0x00 fall through into CRIME_REV).
+- `if (relative_addr < 0x10) goto crime_declined;` — equivalent to my candidate for the fall-through set; passes all 40 rows; same gap (INTSTAT/INTMASK/TIME narrow reads).
+- Removing the announce entirely — would fail every `<op> said` row.
+- Moving the `crime_declined:` label — that is `fallsw`, score 35/40, caught.
+
+The candidate I named is the smallest one-character-condition addition that passes all 40 rows and breaks the fix at a labeled register with a guest-visible side effect.
+
+---
+
+## Question 3 — vacuity floor and contract
+
+**Accept cells — each pinned by its own single-cell growth mutant:**
+- 8W: `acc8w` reds `acc8 st+ld` (and three others). Pinned. READ.
+- 8R: `acc8r` reds `acc8 st+ld` (and two others). Pinned. READ.
+- 4R high: `acc4rhi` reds `acc4 rhi` (+ control `rev pc ctl`). Pinned. READ.
+- 4R low: `acc4rlo` reds `acc4 rlo` (+ control `devsig`). Pinned. READ.
+- 4W high: `acc4whi` reds `acc4 whi` (+ controls `sw08 halts`, `sw08 msg ctl`). Pinned. READ.
+- 4W low: `acc4wlo` reds `acc4 wlo` (and `acc4 whi`). Pinned. READ.
+
+**Refusal cells — pinned, but only at one address each:**
+- 1R: pinned by `len2only`/`fallsw` via `lb rev pc` (read at +0x00). A fall-through confined to 1R **at any other address** is not caught. The `len1only` mutant declines 1R; `len2only` declines 2R. Neither confines to 1R alone. The `readonly` mutant declines all reads, including 1R — but it also declines 2R, so it doesn't isolate 1R either. No measured mutant reddens under a fall-through that affects 1R exclusively.
+- 2R: symmetric (lh rev pc).
+- 1W: symmetric (sb08 msg).
+- 2W: symmetric (sh08 pc/run).
+
+**CONTRACT claims without a measured kill:** none that I can find. Each contract clause maps to at least one killing mutant.
+
+**DISCLOSED items that the floor actually owes a row for:**
+- The `INTSTAT`/`INTMASK` (reassert) and `TIME` (update) cells "a fall-through could reach". This is exactly the gap Question 2 names. The disclosure is honest about the gap, but the floor does not pin it.
+- The `HARDINT` restore cell is similarly disclosed as non-observable. Same gap.
+
+So the disclosure is correct; the floor is honest about not pinning these. The unmeasured edit in Question 2 is the predicted consequence.
+
+---
+
+## Question 4 — records
+
+- **Comment "THIS USED TO END THE PROCESS… witnessed at rung 3 on an unmodified -E sgi -e ip32, 6/6"** — consistent with the defect description and the HEAD=11/40 measurement. OK.
+- **Comment "the #498 sgi_de shape"** — describes the decline-and-announce-once pattern. Consistent with `goto crime_declined` + latched announce. OK.
+- **Comment "falling through would let a halfword 0x0800 written at CRIME_CONTROL stop every CPU"** — consistent with `CRIME_CONTROL_HARD_RESET` = 0x800 (per the comment in the case body) and the `for (j=0; j<cpu->machine->ncpus; j++) cpu->machine->cpus[j]->running = 0;` loop. OK.
+- **Comment "a narrow read of CRIME_REV from the PROM probe loop redirect the PC"** — consistent with the `((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100` check and `cpu->pc = cpu->cd.mips.gpr[MIPS_GPR_RA]`. OK.
+- **Comment "It is not `return 0' either: that raises a guest bus error (EXCEPTION_DBE)"** — I cannot verify the exception number from this text (see "What the packet does not let me check"). Stated as premise; the `fault` mutant at 25/40 is consistent with an exception being raised.
+- **Probe header `DISCLOSED` block** — accurate as far as it goes. The `return1` equivalence is measured (40/40). The readback non-varying is measured. The INTSTAT/INTMASK/TIME/HARDINT non-observability is a disclosure, not a measurement.
+- **One mild overstatement:** "the four refusal cells … are each rowed through ONE switch side effect". Read literally, this suggests one cell per side effect. Actually two cells share each side effect (1R and 2R both ride CRIME_REV; 1W and 2W both ride CRIME_CONTROL). The meaning is recoverable ("one side effect per direction"), but the phrasing is slightly misleading and is the linguistic counterpart of the Question 2 gap.
+
+---
+
+## Question 5 — which statements are wrong
+
+I did not find a statement that is outright false. The packet is honest about its prediction error on `acc8w` (note (a)), honest about the control rows that double as accept-cell coverage (note (b)), and honest about the unmeasured address-conditioned gap (the "owed as a pass-2 question" sentence).
+
+The closest things to errors are:
+
+1. **The "one switch side effect" phrasing** (above) — ambiguous, not false.
+2. **The implication that `return 0` raises EXCEPTION_DBE specifically** — stated as premise, not measured in this packet, but consistent with the `fault` mutant's score and the `lb exc`/`lh exc`/`sb exc`/`sh exc` row expectations.
+3. **The `devsig hi` "cannot vary" claim in note (b)** — correct, but note that this is precisely *why* `acc4 rhi` is carried by `acc4 rhi` and `rev pc ctl` rather than by `devsig hi`; the phrasing "acc4 rhi and rev pc ctl carry that cell" is slightly inverted (they *redden*, they don't "carry" the cell in the sense of being the only reddens — `acc4 rhi` is the accept row, `rev pc ctl` is a control that happens to share the high-half read).
+
+None of these are defects in the fix or the detector's contract. The fix is correct; the detector is well-formed; the gap is named.
+
+---
+
+## Single fact that would close Question 2
+
+One measurement, not in the packet, would settle it: re-run the detector with one extra refusal cell per direction at an address *not* currently tested — e.g., a narrow read at +0x10 (INTSTAT) checking that `crime_interrupt_reassert` is *not* called, and a narrow write at +0x30 (DOG) checking that the register is *not* modified. Under my candidate edit, the INTSTAT read would show the reassert side effect (or some observable of it) and the DOG write would show no modification (the DOG case is a no-op, so this one might still pass — but the INTSTAT read would fail). That would convert the gap into a measured kill.
+
+```
+SHIP — token CRIME_P2_20260913.
+```

@@ -1,0 +1,88 @@
+PRETABLE 16 -- #529 crimewidthkill, REPAIR 16.  Written 2026-09-26 BEFORE any build or probe run of this table (a first
+draft of this file, for a 222-row probe, was replaced in place before anything ran, when the repair took the Opus
+seat's pass-2 options; this file's mtime is the order proof).  Never edited after the table starts -- corrections go to
+POSTTABLE16.out.
+
+WHY.  Repair 15's pass 2 (repair15_pass2_20260926/) found the CONTROL arm's residue-text channel covered for one clear
+in one latch state only.  The dedicated grok seat found H_noresetclear (the HARD_RESET branch's clear skipped: an
+accepted 0x800 write also prints, and no row counted it); the Fable seat graded it L2, like the DOG pair; table 15a
+measured it at 218/218.  The Opus measuring seat measured the same channel's other open cells (the DOG clear skipped
+with the latch SET; the ENDIANESS clear) and proposed CONTROL-text counts on the two existing ACCEPTS sessions.  Two
+consecutive passes in one class, so repair 16 closes the class in one diff: every clear the arm makes before its
+residue test, in both latch states.
+
+INSTRUMENT: crime_width_probe.table16.py = mk_r16.py (beside this file) applied to repair 15's probe f5e915f6; md5
+5f770991.  226 rows = 218 + 8:
+    ctlrst sw msg / sd msg         NEW session per width: 0x0001 then 0x0800 at +0x08, latch CLEAR; CONTROL-text count 1
+    ctlrst sw halt / sd halt       the same sessions' RAM trip: v1 at the sentinel (the 0x0800 write reached the arm)
+    rst 4w msg / rst 8w msg        the EXISTING reset sessions, now with a 0x0001 twin first: CONTROL-text count 1
+    rearm ctl msg                  the EXISTING re-arm session's CONTROL-text count, 4 (ten ACCEPTS writes, latch SET)
+    latch ctl msg                  the EXISTING latch session's CONTROL-text count, 4 (the same ten, latch CLEAR)
+plus text: the header's {1,2} x {R,W} claim scoped to "at least one latch state", the contract's class closure and its
+list of cells NOT rowed, the tl/rl rationale.  Every other session is repair 15's, unchanged; the reset sessions gain
+one accepted store before their refusal.
+BASELINE: dev_sgi_ip32.c 8c1d1545 (unchanged since table 12); clone /tmp/gxopus_r14, restored cmp-clean with a fresh
+binary after table 15a, no .MUTANT.  The driver rebuilds base IN THE CLONE and checks [ binary -nt source ].
+
+MUTATORS: table 14's six (md5 as in table14_20260926/logs/INSTRUMENT.md5) + mutants_16.py 8fb8c068 (H_noresetclear,
+S_rst8clr, E_noendianclear, W_istlb, W_imklb, L_dogclr, L_rstclr; dry-run before this file, each a one- or two-line
+edit, `base' byte-identical).  The two H/E hunks are table 15a's, and the driver cross-checks them.
+
+PREDICTIONS -- exact red sets, score over 226, CRIMEP_CONTROL:
+  base                none                                                        226/226  OK
+  G_clr_ctl4r         none                                                        226/226  OK
+  G_clr_imk4r         gate line                                                   225/226  FAIL
+  G_clr_ist4r         acc istat lw                                                225/226  OK
+  G_glm_tim4clear     c t4w gap, c t4r gap                                        224/226  OK
+  G_lane_ctl          p acc ctl4r                                                 225/226  OK
+  K_ctl4w_reset_post  rst 4w                                                      225/226  OK
+  K_ctl8w_reset_post  rst 8w                                                      225/226  OK
+  M1_gotolatch        table 12's ten + tl lb/sb/lh/sh + rl lb/lh/sb/sh pc         208/226  OK
+  M2_ld278clr         top8 clear                                                  225/226  OK
+  M3_timelatch        tl lb, tl sb, tl lh, tl sh                                  222/226  OK
+  M4_timeplain        time lb/sb/lh/sh + tl lb/sb/lh/sh                           218/226  OK
+  M5_revlatch         rl lb pc, rl lh pc, rl sb pc, rl sh pc                      222/226  OK
+  M6_istlatch         istat sb, istat lh, istat sh                                223/226  OK
+  W_ctl8w             p acc ctl msg, rst 8w, rearm ctl msg                        223/226  OK
+  M7_intmasklatch     imask sb, imask lh, imask sh                                223/226  OK
+  M8_ctllatch         sb08 msg, sh08b run, gate run                               223/226  OK
+  D_nodogclear        ctldog sw msg, ctldog sd msg, rearm ctl msg, latch ctl msg  222/226  OK
+  H_noresetclear      ctlrst sw msg, ctlrst sd msg, rst 4w msg, rst 8w msg        222/226  OK
+  S_rst8clr           ctlrst sd halt                                              225/226  OK
+  E_noendianclear     rearm ctl msg, latch ctl msg                                224/226  OK
+  L_dogclr            rearm ctl msg                                               225/226  OK
+  L_rstclr            rst 4w msg, rst 8w msg                                      224/226  OK
+  W_istlb             none -- NOT ROWED (disclosed; measured for the adjudicators) 226/226  OK
+  W_imklb             none -- NOT ROWED (disclosed; measured for the adjudicators) 226/226  OK
+
+Derivations for the new rows (the first eighteen legs' other reds are carried from table 14):
+  rearm ctl msg   the fixed build prints for 0x0201 and 0x0001 at both widths (4).  D_nodogclear and E_noendianclear add
+                  the 0x0200 and 0x0100 texts (6); L_dogclr adds the 0x0200 texts only here, where the latch is SET (6);
+                  W_ctl8w DECLINES the two latch-SET 8-byte writes that print (2).  Every refusal in this session is at
+                  +0x06 (the default arm), so no decline-suppression leg reaches the CONTROL arm (M1 included).
+  latch ctl msg   the same ten writes, latch CLEAR: D_nodogclear and E_noendianclear -> 6; L_dogclr, W_ctl8w keyed on
+                  the latch SET -> 4.
+  rst 4w/8w msg   twin 0x0001 (latch CLEAR, one text), refusal, then 0x800 (latch SET, residue 0 on the fixed build):
+                  H_noresetclear and L_rstclr add the 0x800 text (2).  K_ctl4w/8w_reset_post and W_ctl8w DECLINE the
+                  0x800 (their rst 4w/8w reds, as in table 14) and the count stays at the twin's 1.
+  ctlrst msg      latch CLEAR throughout: H_noresetclear -> 2; nothing else reaches it (no refusal; no DOG or
+                  ENDIANESS bit; the latch-keyed legs key on SET).
+  ctlrst halt     S_rst8clr skips the 8-byte stop with the latch CLEAR: `ctlrst sd halt' reads 0x12345678; `rst 8w'
+                  (latch SET) and `sw08 halts' (4-byte) stay green.
+  W_istlb/W_imklb the only 1-byte READS at +0x10/+0x18 are each session's first refusal (latch CLEAR, the mutant still
+                  declines): no row reads the cell.  Measured here so the adjudicators rule on a measurement.
+
+CHECKS THE PRE-TABLE BLOCK OWES:
+  SIBLING PARITY  After repair 16 the arm's three clears each have a residue-count row in both latch states (listed in
+                  the contract block); the two TESTED bits keep their side-effect rows.  The remaining asymmetry is at
+                  INTSTAT/INTMASK (width x direction x latch) and is disclosed, not rowed.
+  CLAIM -> ROW    Every added sentence naming an observable maps to the rows above or to a cited measurement (table
+                  15a; the Opus seat's opus_r15p2_20260926/ for the NOT-ROWED list).
+  GUARD vs BODY   The new mutants' guards read len and d->warned, which the CONTROL arm's body never reads;
+                  d->warned has ONE writer (the decline block).
+  CHANNEL         Per new row, above; check16.py scores each named channel under each named mutant.
+  ROW-LIST DIFF   The Fable seat prescribed `ctlrst sw/sd msg' with the halt as liveness: present.  The Opus seat's two
+                  options: the ACCEPTS-session counts are present; the residue-VALUE text is not rowed (disclosed).
+
+SCORING: check16.py (written before the table).  A predicted red that does not red is a FAILURE; a predicted escape that
+reds is a MISS naming the rows.

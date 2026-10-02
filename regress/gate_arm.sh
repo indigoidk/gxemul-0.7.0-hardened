@@ -1864,4 +1864,71 @@ else
     check "xscale rows blocked" "$(grep -c ' BLOCKED$' "$XSCALELOG")" "0"
 fi
 
+#  #529 crimewidthkill.  A guest lb/lbu/lh/lhu/sb/sh to the IP32 CRIME ended the emulator; the width is now declined
+#  with one `(once)' announce and a goto to the common tail, past the register switch.  The probe's CONTRACT and its
+#  disclosures are in its header; its kill tables -- eleven, then table 12 (repair14_20260916/), the ctl0c
+#  discharge and tables 13a, 14, 15a and 16 -- and their PRETABLEs are in regress/artifacts/crimewidthkill/.
+#  The sw08 CONTROL rows pin a SEPARATE filed defect (`crimectllane') on purpose: they prove the switch channels can
+#  vary, and a round that fixes the CRIME_CONTROL lane will turn them red and owes their re-derivation.
+CRIMELOG=$LOGDIR/gate_crime_width.log
+crc=0
+python3 -u crime_width_probe.py "$PMAX" gate > "$CRIMELOG" 2>&1 || crc=$?
+
+#  PARSE BEFORE SCORE: exactly one valid record of each kind.
+if [ "$(grep -c '^CRIMEP_RESULT=' "$CRIMELOG")" != "1" ] ||
+   ! grep -Eq '^CRIMEP_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$CRIMELOG" ||
+   [ "$(grep -c '^CRIMEP_CONTROL=' "$CRIMELOG")" != "1" ] ||
+   ! grep -Eq '^CRIMEP_CONTROL=(OK|FAIL)$' "$CRIMELOG" ||
+   [ "$(grep -cx 'CRIMEP_DONE' "$CRIMELOG")" != "1" ]; then
+    note "crime width probe produced no unique, valid completion record; last lines follow"
+    tail -5 "$CRIMELOG" | sed 's/^/       /'
+    check "crime width probe output parses" "no" "yes"
+else
+    check "crime width probe output parses" "yes" "yes"
+    grep -E ' FAIL$' "$CRIMELOG" | sed 's/^/       /'
+    check "crime width controls" "$(sed -n 's/^CRIMEP_CONTROL=//p' "$CRIMELOG")" "OK"
+    check "crime width probe exit status" "$crc" "0"
+    cres=$(sed -n 's/^CRIMEP_RESULT=//p' "$CRIMELOG")
+    #  Pinned by hand to a LITERAL, UNQUOTED, and under a ONE-TOKEN stem: the score-claims PIN regex takes exactly one
+    #  whitespace-free token before its `rows run` words, so it sees neither a quoted count (the #527 lesson) nor a
+    #  two-word label.  This comment read "UNQUOTED so [the] PIN regex sees it" over a two-word label, which the regex
+    #  did not see (SCORE_CLAIMS_PINNED stayed 29 against a manifest of 30; found by the codex seat's gateflr answer,
+    #  2026-09-13).  The stem `crime_width' also puts crime_width_probe.py's docstring under the same scan.
+    #  *** 188 -> 204, 2026-09-18.  THE PIN WAS STALE AGAINST ITS OWN PROBE AND WOULD HAVE
+    #  REDDED THREE CHECKS ON ANY gate_arm RUN.  Found by the fable5 flagship seat; verified
+    #  here before the edit rather than taken from the seat. ***
+    #
+    #  MEASURED, and the log is named because a score claim that does not name its artifact
+    #  cannot be told from one carried forward: SEVENTEEN preserved legs across
+    #  artifacts/crimewidthkill/repair14_20260916/ (15) and ctl0c_discharge_20260917/ (2) all
+    #  carry denominator 204, and the base leg of the newest,
+    #  ctl0c_discharge_20260917/logs/probe_base.raw, reads CRIMEP_RESULT=204/204.
+    #
+    #  ORDER, per the #462 rule that a pin moves only AFTER the base leg: that probe was dated
+    #  09-17 10:38:08 and that base leg 09-17 12:34:27, so the leg was run against it.  (VOID
+    #  from 2026-09-23, when #546 re-spelled one line of the probe -- corrected below.)
+    #
+    #  NOT taken from a static count: `grep -c "^\s*row("` gives 153, because rows are emitted
+    #  in loops.  The static figure is a LOWER BOUND and pinning it would have been a second,
+    #  quieter wrong pin.
+    #
+    #  ("#529 IS NOT CLOSED BY THIS EDIT" stood here: true on 2026-09-18.)
+    #
+    #  *** 204 -> 226, 2026-10-02, WITH #529's COMMIT.  Repair 15 (the TIME and REV decline carriers,
+    #  the entries 13-and-17 pair) and repair 16 (the CONTROL arm's residue-text count) took the
+    #  probe to 226 rows; the chain closed on repair 16's F2 pass. ***  MEASURED, and the logs are
+    #  named: table16_20260926/ ran 25 legs on the 226-row instrument, its base 226/226; and the
+    #  base leg of the COMMITTED bytes -- repair 16's code with the F2 ruling's text, code-identical
+    #  by AST, with the r17 audit's and the ACCEPTS enumeration's docstring corrections -- is
+    #  final529r22_20261002/probe_base_r22.raw, 226/226, run BEFORE this pin moved.
+    check "crime_width rows run"     "${cres#*/}" 226
+    #  *** AND TWO SIBLING PINS CARRIED THE SAME STALE 188.  I fixed the denominator first and
+    #  only saw these by reading the next two lines -- which is this project's own rule:
+    #  when correcting a claim, GREP FOR ITS SIBLINGS before calling it fixed.  The flagship
+    #  seat had said "reds three checks"; one pin would have left two of the three red. ***
+    check "crime_width rows correct" "${cres%/*}" "226"
+    check "crime_width rows emitted" "$(grep -cE ' (ok|FAIL)$' "$CRIMELOG")" "226"
+    check "crime_width rows failed"  "$(grep -c ' FAIL$' "$CRIMELOG")" "0"
+fi
+
 gate_end

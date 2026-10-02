@@ -1,0 +1,83 @@
+PRETABLE -- #529 crimewidthkill, regress/crime_width_probe.py (40 rows), written BEFORE table 1 (mtime is the order proof)
+Baseline: the #529 WORKING SET (GXEMUL-SEC/src/devices/dev_sgi_ip32.c with the fix), never HEAD.  Scratch clone
+/tmp/gxopuscrime (a relocatable copy of build/ from the pass-1 Opus seat), baseline rebuilt IN THE CLONE before mutant 1.
+First measurements (L1 construction, instrument = this file's frozen copy): build/ (fix) 40/40 CONTROL=OK
+(../probe_first_fix.out); HEAD binary /tmp/gxopuscrime_bins/base 11/40 CONTROL=OK (../probe_first_head.out) -- the 11
+green are the six controls and the five accept rows; all 29 refusal rows red.
+
+1. SIBLING PARITY
+   The width arm's siblings are the two ACCEPT arms (len 8, len 4) in the same function; they fall into the register
+   switch and then the common tail.  The decline now reaches ONLY the tail.  Channels the tail carries: the read answer
+   (memory_writemax64 of odata = 0) and the HARDINT restore / INTSTAT recompute.  Rows: <op> v0 for the read answer
+   (lb, lh, lbu, lhu).  HARDINT/INTSTAT: no observable separates a declined access's tail from the accept arms' (both
+   restore and recompute identically) -- disclosed in the probe header.
+   Cross-file siblings with the same guard shape: DEVICE_ACCESS(sgi_de) (#498, dev_sgi_re.c; latched decline + goto
+   de_declined) -- same disposition, so no asymmetry owed.  MACE in this file serves any width by byte lane (a
+   member-7 precedent, not a guard) -- N/A.
+
+2. CLAIM -> ROW  (every ADDED comment sentence asserting an observable)
+   "One guest lb, lbu, lh, lhu, sb or sh anywhere in CRIME did it"          -> <op> surv x6 (red at HEAD)
+   "a read is answered 0 through the common tail"                             -> lb/lh/lbu/lhu v0
+   "a write is dropped"                                                        -> NO ROW: non-varying across every candidate
+                                                                                  (measured, opus rows_*.out readback
+                                                                                  0xbadcafe in all); disclosed
+   "The goto skips the register switch below"                                  -> sh08 pc/run, sb08 msg, lb/lh rev pc
+   "a halfword 0x0800 written at CRIME_CONTROL [would] stop every CPU"        -> sh08 run (+ control sw08 halts)
+   "a narrow read of CRIME_REV from the PROM probe loop [would] redirect the PC" -> lb rev pc, lh rev pc (+ rev pc ctl)
+   "It is not `return 0' either: that raises a guest bus error"               -> <op> pc, <op> exc
+   "what real CRIME does on a narrow cycle is not documented here"            -> NO ROW: an absence-of-source statement
+   tail: "a declined access jumps here, skipping the register switch, and is still answered" -> <op> v0
+   struct: "one bit per site and never shared.  memset(0) at init clears them" -> latch x5 (set once, first access
+                                                                                  announces); "never shared": NO ROW --
+                                                                                  one bit exists, no second site to
+                                                                                  collide (grep below)
+   announce text "unimplemented len=%i at 0x%x -- declined.  (once)"         -> <op> said x4 (exact len and address)
+
+3. GUARD FIELD vs BODY FIELD
+   Guards: `len == 8', `len == 4' (the else arm), and the latch `!(d->warned & CRIME_W_LEN)'.
+   Body reads: len, relative_addr (message only), d->warned.
+   Writers of d->warned, measured: `grep -n warned src/devices/dev_sgi_ip32.c' ->
+       88  int warned;   312  if (!(d->warned & CRIME_W_LEN)) {   313  d->warned |= CRIME_W_LEN;
+   plus memset(d, 0, sizeof(struct crime_data)) at :435.  ONE set site, one test site, one clear -- no disagreeing
+   state exists to row, and no other code can set CRIME_W_LEN.  (MACE's struct has no `warned'.)
+
+4. CHANNEL -- per row, the mutant it kills and the observable that differs under it
+   (mutants: killtable_20260913/mutants529.py; every find-text is a presence pin)
+   revert   verbatim kill at the width arm     -> every refusal row: <op> surv/v0/pc/exc absent, said/msg/latch unclean
+   exit0    exit(0) after the announce         -> <op> surv (v1 absent), <op> pc/exc/v0 (absent); <op> said STAYS
+                                                   GREEN (the announce printed, EOF reached, status 0 -- the clean
+                                                   test cannot see it); the exit-status channel is NOT used (exit0oracle)
+   fault    return 0 (EXCEPTION_DBE)           -> <op> pc (vector 0xffffffff80000180), <op> exc (7), <op> v0 (sentinel)
+   fallsw   goto commented out                 -> sh08 run (v1 = sentinel, CPUs stopped), sh08 pc, sb08 msg (1),
+                                                   lb rev pc / lh rev pc (pc = ra 0x80004000)
+   len1only goto only for len 1               -> 2-byte cells: sh08 run/pc, lh rev pc
+   len2only goto only for len 2               -> 1-byte cells: sb08 msg, lb rev pc
+   readonly goto only for reads               -> write cells: sh08 run/pc, sb08 msg
+   wronly   goto only for writes              -> read cells: lb rev pc, lh rev pc
+   return1  goto -> return 1                   -> PREDICTED EQUIVALENT (all 40 green): memory_rw pre-zeroes the read
+                                                   buffer (#95); DISCLOSED, measured here to confirm
+   nolatch  the latch bit never set            -> latch x5 (5)
+   latchinv latch test inverted                -> <op> said (0), latch x5 (0)
+   fmtswap  the announce's len/addr swapped    -> <op> said (text `len=7 at 0x1' etc. not found)
+   acc8w    8W refused                         -> acc8 st+ld (0), acc4 rhi (0), acc4 wlo, acc4 whi
+   acc8r    8R refused                         -> acc8 st+ld (0), acc4 wlo, acc4 whi
+   acc4wlo  4W low half refused                -> acc4 wlo (0x1122334455667788), acc4 whi
+   acc4whi  4W high half refused               -> acc4 whi (0x112233440badcafe)
+   acc4rlo  4R low half refused                -> acc4 rlo (0), devsig (0)
+   acc4rhi  4R high half refused               -> acc4 rhi (0)
+   Controls (rev pc ctl, sw08 halts, sw08 msg ctl) must stay green under EVERY mutant: they prove the switch channels
+   can vary; a mutant reddening a control is a finding about the control.
+   Check of this line's own claim (CHANNEL is knowable at writing time): recorded after the table, beside the scores.
+
+5. (d) DEPENDS-ON and JOINT CELLS
+   Predicates dominating the edited lines within DEVICE_ACCESS(crime): `len == 8', `len == 4', the latch test.  (The
+   RAM-size exits above are sequential, not guards of the width arm; they are filed, `-M 48'.)  Body-tested partitions:
+   len {8, 4, other}, writeflag {R, W} (arms and tail), `relative_addr & 4' {hi, lo} (4-byte arm only).  Floor cells:
+   refusal {1, 2} x {R, W} (len1only/len2only/readonly/wronly each exempt one axis; the width x direction cells are
+   rowed by sh08, sb08, lb rev, lh rev) and accept {8, 4hi, 4lo} x {R, W} (six single-cell growth mutants, six rows).
+   The switch LABEL is a dispatch axis the edit now skips entirely: the rowed labels are CRIME_CONTROL (writes) and
+   CRIME_REV (reads), the two with guest-visible side effects; INTSTAT/INTMASK/DOG/TIME/default are clause (e)
+   (idempotent or no effect; disclosed in the header).
+
+6. ROW LIST vs THIS BLOCK: the probe's 40 rows are the list this block maps; any later row-list rewrite is diffed
+   against sections 2 and 4 above.

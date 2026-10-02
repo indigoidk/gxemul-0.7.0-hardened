@@ -1,0 +1,74 @@
+**VERDICT: ENUMERATION WRONG.** The stated equivalence for REV 4W/4R and TIME 4W/4R is wrong on the low lane; the `latch said` generality argument has an unaddressed text-matching hole at +0x06; and "the remaining ACCEPTS cells are pinned by the rows below" overstates coverage. Token `CRIME_CLOSE7_20260915`.
+
+---
+
+## Audit of the premises
+
+### 1. The `latch said` generality argument
+
+The argument is: every ACCEPTS access runs before the lh +0x06 in latch x5's transcript, so any guard-growth form at any ACCEPTS cell sends that cell into the announcing decline arm and the lh +0x06 is silenced. `said(t, 2, 0x06, clean)` counts the *specific* text `"unimplemented len=2 at 0x6 -- declined.  (once) ]"`, so a bypassed cell with a *different* len/addr produces a count of 0 against a want of 1 — the row goes red. Correct by construction **except for one case the brief does not address**:
+
+- If any of the 46 ACCEPTS accesses is a **2-byte access at offset +0x06** (e.g. `lh`/`sh` +0x06 as one of "the default arm's six kinds in both 4-byte lanes"), a guard growth there announces `"unimplemented len=2 at 0x6 ..."` — byte-for-byte the same string `said` is counting. The bypass then produces count 1, want 1, and `latch said` goes **green**. The lh +0x06's own announce is not "stolen"; it is indistinguishable from the bypassed cell's. The brief asserts the ACCEPTS set covers the default arm in "both 4-byte lanes" (bit 2 clear and set), and the disclosed offsets touched by rows include **both** +0x06 and +0x07 (item 3, "hi nodflt … at +0x07, +0x06, +0x1f, +0x1e, +0x27f"). Whether the pre-set's high lane is +0x06 or +0x07 is a **probe-level fact I cannot check from the packet**. If it is +0x06, `latch said` has a silent hole at exactly the cell whose text it counts. (REASONED — single fact that settles it: the offset of the 2-byte ACCEPTS access in the high default-arm lane of `latch x5`'s command list.)
+
+A second generality worry, smaller: a guard-growth decline that hits the announcing arm but where the announce is suppressed for some reason (e.g. a sibling edit that also clears `d->warned` on that path) would still pass `latch said`. This is clause-(e) territory and is not the brief's concern; noting it only because "any grown guard announces" is the load-bearing step.
+
+### 2. The silent-form enumeration
+
+The brief lists **12 caught** + **6 equivalent** = 18 cells with explicit disposition. The remainder are said to be "pinned by the rows below" and then discussed as the window ends (+0x00, +0x30, +0x278). This is overstated in two places:
+
+**(a) The "equivalent" justifications are wrong on the low lane.** The brief says:
+
+> EQUIVALENT at REV 8W/4W/4R outside the window (the prelude rewrites REV; its high half is 0), CONTROL 4R (reads 0 either way) and TIME 4W/4R (the high half is 0; updates accumulate).
+
+The parenthetical "its high half is 0" applies to 8W (writes high half = 0) and 8R (reads high half = 0). For 4R/4W, the low half matters:
+
+- **REV 4R-low at +0x00**: accepted reads low half of `0x11` → `0x11`. Declined (goto crime_declined, tail answers 0) → `0`. **Not equivalent.** This cell is in fact caught by `devsig` (the 4R-low row at +0x00 listed in the window-end paragraph: *"with devsig the 4R-low cell there"*). The silent bypass at REV 4R-low is **caught, not equivalent**.
+- **REV 4W-low at +0x00**: accepted writes idata to the low half; declined leaves `0x11` from the prelude. **Not equivalent in general** (equivalent only if idata_low == 0x11). Caught by `devsig` reading back after the store, **if** the pre-set orders the 4W before the 4R-low at the same slot — a probe-level ordering fact I cannot check.
+- **TIME 4W-low / 4R-low at +0x38**: the low 32 bits are the live time counter (updates add multiples of 66). Accepted 4W-low changes the counter; declined does not. Accepted 4R-low reads the current count; declined reads 0. **Not equivalent.** Only the high lane is equivalent (high half held at 0 by the model; a 4W-high writes idata to it and a 4R-high reads 0 either way — and even 4W-high is equivalent only if the store idata is 0, which the brief does not assert).
+
+So the correct equivalent list is: REV 8W, REV 8R, REV 4W-high, REV 4R-high (outside window); CONTROL 4R; TIME 4W-high (conditional on idata=0), TIME 4R-high. The low-lane cells of REV 4W/4R and TIME 4W/4R are misclassified.
+
+**(b) "Remaining ACCEPTS cells … pinned by the rows below"** — the rows immediately below are the window-end rows (acc8 near, devsig, rev pc ctl, acc8 st+ld, acc4 rhi/rlo/wlo/whi, top8 st+ld, top4 rhi/rlo/w, top8 anchor, top4 anchor, top said). These cover +0x00, +0x30, +0x278, +0x210. They do **not** cover:
+
+- INTSTAT 4R
+- INTMASK 8R, 8W, 4R
+- TIME 8R
+- Default-arm offsets other than +0x40: +0x04, +0x34, +0x214, +0x1f8 (and the ENDIANESS values at CONTROL 4W/8W, and the positional repeats sw/lw +0x04, sd/ld +0x278 — though sd/ld +0x278 are caught by `top8 st+ld`)
+
+For each of these, the disposition is *implicit*: the pre-set does not check the read value or the written value at that cell between the access and the lh +0x06 (the lh is refused, so it touches no register), and the prelude masks REV/CONTROL/INTSTAT (the tail recomputes INTSTAT on every access; the prelude resets REV and CONTROL). That makes them equivalent **in the probe context** — but the brief never says so, and it depends on the pre-set's command list (a fact I cannot check). A strict reading is that the enumeration has implicit gaps at these cells. (REASONED — single fact that settles each: whether the pre-set reads or write-checks the cell after the ACCEPTS access. If it does, the cell is caught by a value row; if it does not, the cell is equivalent in this probe only.)
+
+For **INTSTAT 4R** specifically: writes to INTSTAT are masked by the tail recompute, but **reads are not** — an accepted 4R reads the recomputed value (SOFTINT|HARDINT), a declined 4R reads 0. So if the pre-set ever reads INTSTAT (it does, as part of the ACCEPTS 8R/4R), the order matters. The brief catches INTSTAT 8R (`acc istat ld`) but not 4R.
+
+For **INTMASK 8W**: INTMASK is not touched by the prelude or the tail. An accepted sd +0x18 writes; a declined sd does not. If the pre-set reads INTMASK after (`acc imask sw` reads with ld +0x18 after a sw +0x18), then **whether `acc imask sw` also catches an 8W bypass depends on whether the sd precedes the sw in the command list** — another ordering fact I cannot check.
+
+### 3. New-row channels under their mutants
+
+- **`istw sd` / `istw sw` (INTSTAT 8W/4W silent bypass)**: channel is `cause.IP2`. The accepted path calls `crime_interrupt_reassert(d)`; the bypassed path falls to the tail, which recomputes INTSTAT but does not assert the line. Channel reliably distinguishes. (READ from item 5/RA1 and the source's tail.)
+- **`acc time sd` (TIME 8W silent bypass)**: channel is parity. Seed `0x11111111` is odd; updates add multiples of 66 (always even); so accepted sd preserves odd parity, bypassed sd leaves TIME at its prior (even) value. Channel reliably distinguishes, but only if the seed in the pre-set is odd and the prior TIME is even — both stated by the brief. (READ.)
+- **`free revP said` (PROM-window pc channel)**: channel is `fatal()` vs `debug()`. The mutant `(pc in window ? debug : fatal)` makes the window-issued refusal print to debug instead of fatal; the row counts the fatal text. Channel varies. (READ.)
+- **`latch said`**: channel is the specific announce string. Varies under every guard-growth form at every ACCEPTS cell **except** the text-matching hole at +0x06 noted above. (REASONED.)
+
+### 4. Is there a floor gap in the 157-row test?
+
+No **measured** gap: POSTTABLE 10 reports base 157/157, and every measured mutant scored below 157 with red on a predicted row. The RA3 prediction (a `d->warned`-keyed accept shrink in the 8R form, `W_8r`) was measured at 145/157 with CONTROL=FAIL on exactly the twelve predicted rows; the 8W form `W_8w` was measured at 156/157, escaping on `lo keeps` as the flagship ruling predicted. (READ.)
+
+An **unmeasured** candidate for a gap: the `latch said` hole at +0x06 (item 1 above). If the pre-set's high default-arm lane is +0x06, a guard growth `len == 2 && relative_addr != 0x06` (or any conjunct that catches the +0x06 2-byte cell) would decline that cell, announce `"len=2 at 0x6"`, pass `latch said`, and the test would score 157/157. This is the smallest edit I can name that exploits a defect in the stated enumeration; whether it actually escapes depends on the probe's command list, which is not in the packet.
+
+A second candidate: a silent bypass at one of the cells I list in 2(b) (INTSTAT 4R, INTMASK 8W, TIME 8R, default-arm +0x04/+0x34/+0x214/+0x1f8), if the pre-set does not check the cell. Same caveat.
+
+### 5. Wrong statements
+
+- **Item 6 silent-form list**: *"EQUIVALENT at REV 8W/4W/4R outside the window … and TIME 4W/4R"* — wrong on the low lane. The correct equivalent set is the high lane only (and TIME 4W-high only if idata is 0). The low-lane cells of REV 4W/4R are caught by `devsig` (and by any read-back the pre-set does); the low-lane cells of TIME 4W/4R are the live counter and are not equivalent.
+- **The paragraph following the equivalent list**: *"The remaining ACCEPTS cells' accept side is pinned by the rows below"* — overstated. The rows below (window-end rows + value rows) cover ~30 of the 46 cells explicitly; the remainder are implicitly equivalent in the probe context only, not pinned by any row.
+- **`latch said` generality**: the brief argues any guard growth "steals" the lh's announce. Stealing requires the texts to differ. A 2-byte ACCEPTS at +0x06 produces an indistinguishable text. The argument is incomplete; whether the hole exists is a one-line probe fact.
+
+### What I could not check from the packet
+
+- The exact command list of `latch x5` / `latch said`'s session: which 46 ACCEPTS accesses it runs, in what order, at what offsets, with what store values, and whether it read-checks any of them after the access. (Single most important fact; settles items 1, 2(b), 4, and 5.)
+- Whether `acc imask sw` also catches an INTMASK 8W bypass (depends on whether `sd +0x18` precedes or follows `sw +0x18` in the pre-set).
+- Whether `devsig` runs inside or outside the pre-set (it is named as a row; whether its command list is the same as the ACCEPTS 4R at REV is not stated).
+- The exact offsets of "the default arm's six kinds in both 4-byte lanes" — specifically whether the high-lane offset is +0x06 or +0x07. If +0x06, the `latch said` hole is real. If +0x07, it is not. (This is the single fact that decides whether `latch said` closes.)
+
+### Disposition
+
+The 157-row test as measured has no floor gap. The **enumeration as stated** has three defects: wrong equivalence justifications on the low lanes of REV and TIME 4W/4R; an unaddressed text-matching hole in `latch said` at +0x06; and an overstatement that the rows below pin the remaining ACCEPTS cells. None of these is a measured survivor — the test catches everything the seat built — but two of them are real defects in the record (the wrong equivalence claims and the overstated pinning), and one is a probe-dependent hole (the +0x06 text match) that I cannot confirm or refute from the packet. The recommended repair is to specify the high-lane offset of the default-arm ACCEPTS kinds and to rewrite the equivalence list to the high lane only; if the offset is +0x06, either move it or change `latch said`'s `said` call to anchor on a cell no ACCEPTS access can produce (e.g. a 1-byte accept at an offset no ACCEPTS cell occupies).

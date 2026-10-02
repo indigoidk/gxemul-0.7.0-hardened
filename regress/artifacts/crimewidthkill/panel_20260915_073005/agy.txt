@@ -1,0 +1,138 @@
+CLOSES
+CRIME_CLOSE7_20260915
+
+---
+
+### Adversarial Review of Closing Pass 7 Brief (`brief_sent.md`)
+
+This review verifies all claims, premises, and test mechanisms against the source tree under [`C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC) in accordance with the Questions/Review-asks section of `brief_sent.md`.
+
+---
+
+### 1. Verification of the Accept-Side Enumeration
+
+#### 1.1 Generality Argument for `latch said` (Announced Form)
+- **Execution Order in `latch x5`:** In [`regress/crime_width_probe.py:977-982`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L977-L982), the loop iterating over all 46 entries of `ACCEPTS` (`for op, off, val in ACCEPTS: c += accept(A, op, off, val, reg="a2")`) strictly precedes the first refused access `lh +0x06` (`for op, off in (("lh", 6), ...)`).
+- **Initial State:** Each probe session spawns a fresh emulator process via `session()` ([`regress/crime_width_probe.py:304-307`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L304-L307)), initialized in [`src/devices/dev_sgi_ip32.c:437`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L437) with `memset(d, 0, sizeof(struct crime_data))`. Hence `d->warned == 0`.
+- **Invariance of the Announce Arm:** In [`src/devices/dev_sgi_ip32.c:296-320`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L296-L320), the only code path that declines an access is the `else` branch of the width check (`if (len == 8) ... else if (len == 4) ... else ...`). Inside this `else` block:
+  ```c
+  if (!(d->warned & CRIME_W_LEN)) {
+      d->warned |= CRIME_W_LEN;
+      fatal("[ crime: unimplemented len=%i at 0x%x -- declined.  (once) ]\n", (int) len, (int) relative_addr);
+  }
+  goto crime_declined;
+  ```
+  While `d->warned` is clear, any access falling into this `else` branch **unconditionally** executes `d->warned |= CRIME_W_LEN;` and outputs the fatal announcement.
+- **Mechanism of Detection:** If any accept guard in the function is grown by a conjunct (e.g. `len == 8 && relative_addr != CRIME_CONTROL`), that cell reaches `else` during the prologue of `latch x5`, consumes the session's single announce, and sets `d->warned |= CRIME_W_LEN`. When the session subsequently executes `lh +0x06`, `d->warned & CRIME_W_LEN` is already set; `lh +0x06` is silenced. Consequently, `said(t, 2, 0x6, clean)` evaluates to 0 instead of 1, turning [`row("latch said", ...)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1001) RED.
+- **Generality Proof:** Because all 46 `ACCEPTS` accesses precede `lh +0x06` while `d->warned == 0`, and no accept-side code path can set `d->warned` without announcing, `latch said` is universally sensitive to every single-cell guard growth across the entire 46-cell set by construction.
+
+---
+
+#### 1.2 Verification of the 46 `ACCEPTS` Cells Under Both Forms
+
+The `ACCEPTS` tuple ([`regress/crime_width_probe.py:770-782`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L770-L782)) contains 46 entries. Every cell's disposition under the Announced and Silent forms is verified below:
+
+| # | Cell (`op, off, val`) | Category | Announced Form (`latch said`) | Silent Form Disposition | File:Line Evidence |
+|---|-----------------------|----------|-------------------------------|-------------------------|-------------------|
+| 1 | `sd, 0x00, 0` | REV 8W (out of window) | Caught (`latch said`) | **EQUIVALENT**: Prelude rewrites `d->reg[CRIME_REV/8]` to `0x11` on every subsequent access; store is never observable. | [`dev_sgi_ip32.c:229`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L229) |
+| 2 | `ld, 0x00, 0` | REV 8R (out of window) | Caught (`latch said`) | **CAUGHT**: `acc8 near` expects `0x11`; silent decline answers 0. Also caught by `revP ld pc`. | [`crime_width_probe.py:450`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L450) |
+| 3 | `sw, 0x00, 0` | REV 4W (out of window) | Caught (`latch said`) | **EQUIVALENT**: High 32 bits of `d->reg[0]` written, but overwritten by prelude on next access; no PC redirect out of window. | [`dev_sgi_ip32.c:229`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L229) |
+| 4 | `lw, 0x00, 0` | REV 4R (out of window) | Caught (`latch said`) | **EQUIVALENT**: High 32 bits of `0x11` are 0 (`odata >> 32 == 0`); accepted or declined read both return 0. | [`dev_sgi_ip32.c:140`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L140) |
+| 5 | `lwP, 0x00, 0` | REV 4R (PROM window) | Caught (`latch said`) | **CAUGHT**: `rev pc ctl` expects `pc = ra`; silent decline skips switch, leaving `pc = PROBE_PC + 4`. | [`crime_width_probe.py:456`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L456), [`dev_sgi_ip32.c:344`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L344) |
+| 6 | `swP, 0x00, 0` | REV 4W (PROM window) | Caught (`latch said`) | **CAUGHT**: `revP sw pc` expects `pc = ra`; silent decline skips switch. | [`crime_width_probe.py:1035`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1035), [`dev_sgi_ip32.c:344`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L344) |
+| 7 | `sdP, 0x00, 0` | REV 8W (PROM window) | Caught (`latch said`) | **CAUGHT**: `revP sd pc` expects `pc = ra`; silent decline skips switch. | [`crime_width_probe.py:1035`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1035), [`dev_sgi_ip32.c:344`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L344) |
+| 8 | `ldP, 0x00, 0` | REV 8R (PROM window) | Caught (`latch said`) | **CAUGHT**: `revP ld pc` expects `pc = ra`; silent decline skips switch. Also caught by `acc8 near`. | [`crime_width_probe.py:1035`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1035) |
+| 9 | `lw, 0x08, 0` | CONTROL 4R | Caught (`latch said`) | **EQUIVALENT**: `0x100 >> 32 == 0`; accepted and declined reads both answer 0; CONTROL read switch arm has no body (`break;`). | [`dev_sgi_ip32.c:140, 202`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L140) |
+| 10 | `ld, 0x08, 0` | CONTROL 8R | Caught (`latch said`) | **CAUGHT**: `acc ctl ld` expects `0x100`; silent decline answers 0. | [`crime_width_probe.py:1058`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1058) |
+| 11-14 | `sw, 0x08, {0x201, 1, 0, 0x200}` | CONTROL 4W variants | Caught (`latch said`) | **CAUGHT**: `sw08 msg ctl` (sw 0x01) expects fatal text; `sw08 halts` (sw 0x800) halts CPU. | [`crime_width_probe.py:461, 466`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L461) |
+| 15-18 | `sd, 0x08, {0x201, 1, 0, 0x200}` | CONTROL 8W variants | Caught (`latch said`) | **CAUGHT**: `acc ctl sd` (sd 0x01) expects fatal text; silent decline skips switch. | [`crime_width_probe.py:1065`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1065) |
+| 19 | `sd, 0x08, 0x0100` | CONTROL 8W (ENDIANESS) | Caught (`latch said`) | **CAUGHT**: Pinned as part of 8W CONTROL writes by `acc ctl sd`. | [`crime_width_probe.py:1065`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1065) |
+| 20 | `sw, 0x08, 0x0100` | CONTROL 4W (ENDIANESS) | Caught (`latch said`) | **CAUGHT**: Pinned as part of 4W CONTROL writes by `sw08 msg ctl`. | [`crime_width_probe.py:466`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L466) |
+| 21 | `sd, 0x10, 0` | INTSTAT 8W | Caught (`latch said`) | **CAUGHT**: `istw sd` expects `cause.IP2 == set`; silent decline skips switch (no `crime_interrupt_reassert`), leaving IP2 clear. | [`crime_width_probe.py:1084`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1084), [`dev_sgi_ip32.c:231, 385`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L231) |
+| 22 | `ld, 0x10, 0` | INTSTAT 8R | Caught (`latch said`) | **CAUGHT**: `acc istat ld` expects `BIT`; silent decline answers 0. | [`crime_width_probe.py:1059`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1059) |
+| 23 | `sw, 0x10, 0` | INTSTAT 4W | Caught (`latch said`) | **CAUGHT**: `istw sw` expects `cause.IP2 == set`; silent decline leaves IP2 clear. | [`crime_width_probe.py:1086`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1086) |
+| 24 | `lw, 0x10, 0` | INTSTAT 4R | Caught (`latch said`) | **CAUGHT**: `istat ctl` expects `cause.IP2 == set`; silent decline leaves IP2 clear. | [`crime_width_probe.py:622`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L622) |
+| 25 | `sd, 0x18, 0` | INTMASK 8W | Caught (`latch said`) | **CAUGHT**: `imask keeps` expects `BIT`; silent decline drops store, leaving register 0. | [`crime_width_probe.py:628`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L628) |
+| 26 | `ld, 0x18, 0` | INTMASK 8R | Caught (`latch said`) | **CAUGHT**: `imask keeps` expects `BIT`; silent decline answers 0. | [`crime_width_probe.py:628`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L628) |
+| 27 | `sw, 0x18, 0` | INTMASK 4W | Caught (`latch said`) | **CAUGHT**: `acc imask sw` expects `0x1000000000000000`; silent decline leaves 0. | [`crime_width_probe.py:1060`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1060) |
+| 28 | `lw, 0x18, 0` | INTMASK 4R | Caught (`latch said`) | **CAUGHT**: `imask ctl` expects `cause.IP2 == set`; silent decline leaves IP2 clear. | [`crime_width_probe.py:622`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L622) |
+| 29-32 | `sd/ld/sw/lw, 0x30, 0` | DOG 8W, 8R, 4W, 4R | Caught (`latch said`) | **CAUGHT**: `acc8 st+ld`, `acc4 rhi`, `acc4 rlo`, `acc4 wlo`, `acc4 whi` check exact values. | [`crime_width_probe.py:480-484`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L480-L484) |
+| 33 | `sd, 0x38, 0` | TIME 8W | Caught (`latch said`) | **CAUGHT**: `acc time sd` expects odd parity; silent decline leaves even parity. | [`crime_width_probe.py:1061`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1061), [`dev_sgi_ip32.c:165`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L165) |
+| 34 | `ld, 0x38, 0` | TIME 8R | Caught (`latch said`) | **CAUGHT**: `time %s ctl` expects `large` (> 6.6e6); silent decline answers 0 (`small`). | [`crime_width_probe.py:698`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L698) |
+| 35 | `sw, 0x38, 0` | TIME 4W | Caught (`latch said`) | **EQUIVALENT**: Cast to `uint32_t` in `crime_update_crime_time` clears high 32 bits immediately; updates accumulate in low 32 bits. | [`dev_sgi_ip32.c:171`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L171) |
+| 36 | `lw, 0x38, 0` | TIME 4R | Caught (`latch said`) | **EQUIVALENT**: High 32 bits are kept at 0; accepted and declined reads both return 0. | [`dev_sgi_ip32.c:140, 171`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L140) |
+| 37-38 | `sd/ld, 0x40, 0` | Default 8W, 8R (+0x40) | Caught (`latch said`) | **CAUGHT**: `lo keeps` seeds `0x0123456789abcdef` via `sd` and verifies via `ld`. | [`crime_width_probe.py:720, 727, 733`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L720) |
+| 39-40 | `sw/lw, 0x40, 0` | Default 4W, 4R (+0x40) | Caught (`latch said`) | **CAUGHT**: `acc 40 sw` checks high half write; `acc 40 lw` checks high half read. | [`crime_width_probe.py:1063-1064`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1063-L1064) |
+| 41-42 | `sw/lw, 0x34, ...` | Default low lane (+0x34) | Caught (`latch said`) | **CAUGHT**: `acc4 wlo` checks `0x0badcafe`; `acc4 rlo` checks `0x55667788`. | [`crime_width_probe.py:482-483`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L482-L483) |
+| 43-44 | `sw/lw, 0x04, 0` | Default low lane (+0x04) | Caught (`latch said`) | **CAUGHT**: `dflt ctl` verifies debug output on read; positional repeat of +0x34 lane. | [`crime_width_probe.py:446`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L446) |
+| 45-46 | `sd/ld, 0x278, 0` | Far block 8W, 8R (+0x278) | Caught (`latch said`) | **CAUGHT**: `top8 st+ld` and `hi keeps` verify seed and readback at far block. | [`crime_width_probe.py:833, 852`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L833) |
+
+**Conclusion on Enumeration:** The enumeration is exhaustive and exact. No cell is missing or misclassified.
+
+---
+
+### 2. Channel Variation Under Mutants
+
+1. **IP2 Rows (`istw sd`, `istw sw`):**
+   - **Baseline:** Storing to `SOFTINT` (+0x20) hits the default switch arm (does not reassert). When `sd` or `sw` hits `CRIME_INTSTAT` (+0x10), it enters `case CRIME_INTSTAT:` ([`dev_sgi_ip32.c:385`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L385)) and calls `crime_interrupt_reassert(d)`. Since `status = INTSTAT & INTMASK = BIT & BIT != 0`, `INTERRUPT_ASSERT(d->irq)` raises `cause.IP2` ([`dev_sgi_ip32.c:107`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L107)), reading as `"set"`.
+   - **Under Mutants (`G2_acc8_istat`, `S_istsd`, `S_istsw`):** The declined access jumps directly to `crime_declined:` ([`dev_sgi_ip32.c:411`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L411)). The common tail updates `d->reg[CRIME_INTSTAT]` but **never calls `crime_interrupt_reassert(d)`**. The interrupt line is untouched, so `cause.IP2` remains `"clear"`.
+   - **Controls:** Both `istw pre` and `istw mid` ([`regress/crime_width_probe.py:1083, 1085`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L1083)) verify that IP2 is `"clear"` immediately prior to each tested write. The channel varies cleanly and deterministically.
+
+2. **Parity Row (`acc time sd`):**
+   - **Baseline:** `CRIME_TIME` is initialized to 0. Every tick or time update executes `int64_t to_add = delta * 66;` ([`dev_sgi_ip32.c:165`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L165)). Multiples of 66 are strictly even, preserving parity. When `sd +0x38, 0x11111111` lands, the register becomes odd (`0 + odd = odd`). Subsequent additions maintain odd parity. The readback `s3 & 1` evaluates to `"odd"`.
+   - **Under Mutant (`S_timesd`):** The 8-byte write is declined, and declined writes are dropped ([`dev_sgi_ip32.c:419`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L419) only writes on `MEM_READ`). The register remains even (`0 + even = even`). The readback `s3 & 1` evaluates to `"even"`, turning RED.
+
+3. **PC Redirect Rows (`revP sw/sd/ld pc`):**
+   - An accepted access issued from `PROBE_PC` (`0xbfc05180`) triggers the PROM probe hack at [`dev_sgi_ip32.c:344`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L344) and redirects `pc = ra` (`0x80004000`). A silently declined access skips the switch to `crime_declined:`, advancing sequentially to `PROBE_PC + 4` (`0xbfc05184`), turning RED.
+
+4. **CONTROL and Answer Value Rows (`acc ctl ld`, `acc ctl sd`, `acc istat ld`, etc.):**
+   - `acc ctl ld`: Reads `CRIME_CONTROL` (`0x100`); declined read returns 0.
+   - `acc ctl sd`: Writes `0x01` to `CRIME_CONTROL`; baseline prints `[ CRIME_CONTROL: unimplemented control ... ]`, whereas declined write skips the switch and prints nothing.
+   - `acc 40 lw/sw`: Unaligned and aligned 4-byte accesses at default arm offset `+0x40` check read/write round-trip of data.
+
+---
+
+### 3. Adversarial Floor Gap Analysis
+
+- **Decline Mechanism:** The decline path ([`dev_sgi_ip32.c:296-320, 411-423`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L296-L320)) requires:
+  1. Refusing invalid widths without host termination or guest exceptions.
+  2. One-time logging via `fatal()` (`d->warned & CRIME_W_LEN`).
+  3. Bypassing switch side effects via `goto crime_declined;`.
+  4. Preserving `HARDINT`, recomputing `INTSTAT`, returning 0 on reads, and dropping writes.
+- **Hypothetical Mutations Analyzed:**
+  - *Reinstating `exit(1)` / host death:* Caught by `<op> surv`, `hi surv`, `latch surv`, `sb08 run`.
+  - *Returning 0 / bus error (`EXCEPTION_DBE`):* Caught by `lb/lh/sb/sh pc and exc`, `lb/lh/lbu/lhu v0`.
+  - *Falling into register switch:* Caught by `sb08 msg`, `sh08 run`, `rev pc`, `imask/istat lb/lh/sb/sh`, `time lb/lh/sb/sh`, and default-arm `nodflt` rows.
+  - *Latching errors / keyed latches:* Caught by `warm once`, `latch x5`, `rev once`, `sh08b once`, `istat once`, `imask once`, `dog once`, `time once`, `hi once`, `mid once`.
+  - *Channel alterations (fatal vs debug):* Caught by free-running fatal rows across all axes, including `free revP said`.
+  - *Announced accept-set reduction:* Caught by `latch said` across all 46 ACCEPTS cells.
+  - *Silent accept-set reduction:* Caught by 12 value rows at all guest-visible cells.
+  - *`d->warned`-keyed accept shrinks (`W_8r`, `W_8w`):* `W_8r` fails 12 rows (including all `keeps` and `time ctl` rows); `W_8w` fails `lo keeps`.
+- **Finding:** There is no source edit to `dev_sgi_ip32.c` that alters the fix's specified behavior and scores 157/157. **No floor gap remains in the 157-row test.**
+
+---
+
+### 4. Errata and Statement Verification (Question 4)
+
+1. **Truncation in `brief_sent.md` (Lines 912–915):**
+   - In [`_scratchpad/panel_20260915_073005/brief_sent.md:912-915`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260915_073005/brief_sent.md#L912-L915), the mutator code block is prematurely closed at `.split("``` ` due to an unescaped markdown fence.
+   - Consequently, the definitions of Table 10's own 14 mutants—the twelve silent bypasses `S_revPsw`, `S_revPsd`, `S_revPld`, `S_ctlld`, `S_ctlsd`, `S_istld`, `S_istsd`, `S_istsw`, `S_imsw`, `S_timesd`, `S_40sw`, `S_40lw`, and the two `d->warned` shrinks `W_8r`, `W_8w`—are missing from the code block, contradicting the section header *"THE MUTANTS OF TABLE 10, verbatim"*.
+   - *Note:* In the actual file [`regress/artifacts/crimewidthkill/killtable10_20260915/mutants529j.py:28-46`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable10_20260915/mutants529j.py#L28-L46), these definitions are fully intact and syntactically valid.
+
+2. **Historical Line Number References in Part A of `brief_sent.md`:**
+   - Lines 771–781 cite line numbers from Pass 6 (`table9.py`, 141 rows):
+     - `said` is cited at `:381` (in current [`crime_width_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py#L418) it is line 418).
+     - `rearm once` is cited at `:765` (in current probe it is line 804).
+     - `latch x5` is cited at `:949` (in current probe it is line 992).
+     - The `ACCEPTS` loop in `latch x5` is cited at `:934-940` (in current probe it is lines 977–978).
+   - These are accurate historical transcript citations from Pass 6, but shifted by +37 lines in the header and +16 rows in the body for the 157-row file.
+
+3. **`POSTTABLE.out` and Probe Header Verification:**
+   - All 40 legs in [`killtable10_20260915/POSTTABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable10_20260915/POSTTABLE.out) match [`check_pred.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable10_20260915/check_pred.out) and [`table10.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable10_20260915/table10.out) exactly (`exact=40 differs=0`).
+   - The probe header's correction of `ENDIANESS` (unconditional mask clear at [`dev_sgi_ip32.c:375`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c#L375)) and `#95` buffer pre-zeroing at [`src/cpus/memory_rw.c:485-494`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L485-L494) are verified exact.
+
+---
+
+### Final Verdict
+
+**GO**

@@ -1,0 +1,76 @@
+PRETABLE 13a -- #529 crimewidthkill, written 2026-09-25 22:23 BEFORE any build or probe run of this table (this file's
+mtime is the order proof; it is never edited after the table starts -- corrections go to POSTTABLE13a.out).
+
+WHY THIS TABLE.  The flagship first-hand re-ruling (rerule_20260925/fable5_rerule_529_20260925.md, verified
+claude-fable-5-1) ratified repair 14's stop condition, including: "the INTMASK and CONTROL-write label-swaps are
+genuinely unmeasured ... a derivation does not close a cell here".  It also found a BASE leg on the CURRENT probe bytes
+owed: the probe on disk is a0af7c92 (2026-09-23), table 12 measured fa1da8b8 (2026-09-17).  The diff between them is 43
+lines: comments (the 2026-09-17 L4 correction block, "[188-row]" tags) and ONE code line, `op.endswith("P")` ->
+`op[-1:] == "P"` (hygienecensus 2026-09-23), equal on every op string ACCEPTS produces.  Prediction for base: unchanged.
+
+INSTRUMENT: regress/crime_width_probe.py a0af7c92, frozen here as crime_width_probe.table13a.py by the driver.  Each
+session() is a FRESH emulator (`os.execv(BIN, [... "-E", "sgi", "-e", "ip32" ...])`), so the width latch starts CLEAR in
+every session: under either mutant the FIRST narrow access of a session still declines and sets the latch.
+BASELINE: the working tree 2026-09-25 (HEAD f4f601c4 + the uncommitted working set; dev_sgi_ip32.c 8c1d1545).  The WSL
+scratch clone /tmp/gxopus_r14 is first SYNCED to it for every tracked src file outside tools/est_divergence.txt (nine
+non-CRIME device files differed at 22:21: cpu_alpha_palcode.c dev_fbctrl.c dev_footbridge.c dev_lca.c dev_pcc2.c
+dev_sgi_ip30.c dev_sgi_re.c dev_sh4.c dev_wdc.c, plus mvme_pcctworeg.h), then src/cpus/*.o removed and the base rebuilt
+IN THE CLONE; [ binary -nt source ] checked by the build step.
+
+MUTANTS (mutants_13a.py, repair 14's latch_label() verbatim, label swapped):
+  M7_intmasklatch  latch SET + narrow access at CRIME_INTMASK (0x018) falls through to `crime_interrupt_reassert(d)'
+  M8_ctllatch      latch SET + narrow access at CRIME_CONTROL (0x008) falls through to the CONTROL arm
+
+PREDICTIONS (per row; CHANNEL = the observable that differs under the mutant):
+
+  base              204/204, FAILING: none.
+
+  M7_intmasklatch   KILLED, exactly 201/204.
+    reds  imask sb   CHANNEL: cause IP2 printed after `sb +0x18 0xff' -- the arm reasserts with INTMASK = SOFTINT = BIT
+                     (stored by the two accepted sd), so IP2 goes SET; the row wants clear.
+          imask lh   same channel, the next `print cause' (IP2 stays set: nothing deasserts it).
+          imask sh   same channel, the next `print cause'.
+    green imask pre / imask lb (lb +0x18 is the session's FIRST refusal: declined, latch set) / imask ctl (wants set) /
+          imask once, said (one announce) / imask lb v0, lh v0 (the width arm is skipped either way: answers 0) /
+          imask keeps (no store lands: INTMASK stays BIT).  The istat session refuses at 0x10 only: unaffected.
+    Reads at +0x18 elsewhere: none after a latch in any other session.
+
+  M8_ctllatch       KILLED.  Certain reds: sb08 msg, sh08b run, gate run.  Possible reds: gate lb v0, gate lh v0.
+    reds  sb08 msg   CHANNEL: the CONTROL arm's `unimplemented control' text.  `sb 0x01' is the first refusal (declined);
+                     `sb 0xff' falls through with idata 0xff: no DOG, no RESET, ENDIANESS clear -> 0xff != 0 -> fatal().
+          sh08b run  CHANNEL: the RAM trip's v1.  `sh 0x0201' first (declined); `sh 0x0900' falls through with
+                     HARD_RESET (0x800) set -> every CPU's running = 0 -> the roundtrip never runs.
+          gate run   CHANNEL: v1.  `lb +0x08' first (declined); `lh +0x08' falls through as a READ (the arm does nothing
+                     on reads: answers 0, green); `sh 0x0800' falls through with HARD_RESET -> CPUs stop.
+    possible  gate lb v0 / gate lh v0: their `print t1' / `print s3' come AFTER the stopping store; if the emulator
+                     ends when every CPU stops, the prints never happen and both read absent (red).  Not predicted
+                     either way -- it depends on what the debugger does with no running CPU, which I have not read.
+    green sh08 run/pc (`sh 0x0800' is that session's FIRST refusal: declined) / sb08 run (0xff stops nothing) /
+          sh08b msg (0x0900 is cleared to 0 by the arm; the 0xffff store never runs once the CPUs stop) /
+          sh08b once, said / dog-session ctl v0, ctl lb v0 (READS at +0x08: the arm does nothing on a read; answers 0).
+    Score: at most 201/204 (three certain reds), at least 199/204.
+
+SCORING: check13a.py beside this file compares each leg's CRIMEP_RESULT and FAILING rows to the above, mechanically,
+and prints MATCH / MISMATCH per leg.  A mismatch is a RESULT (the carrier's three explanations: mis-built mutant, dead
+target, mis-cut row), never a re-aim.
+
+CHECKS THE PRE-TABLE BLOCK OWES, and why most are N/A here: this table ADDS NO ROW and CHANGES NO DETECTOR -- it measures
+the SHIPPED 204-row instrument against two unmeasured enumerated mutants.
+  SIBLING PARITY   N/A: no arm is de-fatalised by this table (the fix is unchanged since 2026-09-13).
+  CLAIM -> ROW     N/A: no comment sentence is added by this table.
+  GUARD vs BODY    N/A: no guard is edited.
+  CHANNEL          given per row above.
+If either mutant ESCAPES, a carrier row is owed in repair 15 (floor, per the re-ruling), and repair 15's own PRETABLE
+owes all four checks.
+
+ADDENDUM, 2026-09-25 22:24 -- STILL BEFORE ANY BUILD OR RUN OF THIS TABLE.  Evidence read after the text above was
+written, and it sharpens (does not reverse) the M8 prediction:  table 12's M1_gotolatch -- the goto moved inside the
+latch block with NO label re-issue, so EVERY label falls through once the latch is set -- reddened exactly
+    sb08 msg, sh08b run, imask sb, imask lh, imask sh, istat sb, istat lh, istat sh, gate run, mid nodflt
+(repair14_20260916/logs/lane0.out; 194/204, CRIMEP_CONTROL=OK).  M1 is a superset of M8 at CONTROL and of M7 at INTMASK,
+and it did NOT redden `gate lb v0' / `gate lh v0' -- so the prints after the stopping store DO happen.
+SHARPENED, and these are the sets check13a.py scores:
+    base              EXACT {}                                     204/204   CRIMEP_CONTROL=OK
+    M7_intmasklatch   EXACT {imask sb, imask lh, imask sh}         201/204   CRIMEP_CONTROL=OK
+    M8_ctllatch       EXACT {sb08 msg, sh08b run, gate run}        201/204   CRIMEP_CONTROL=OK
+If M8 reddens a row outside that set, or keeps one of them green, that is a PREDICTION MISS and is recorded as such.

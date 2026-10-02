@@ -1,0 +1,47 @@
+**VERDICT: GAP — accept-arm index remap.** In `DEVICE_ACCESS(crime)`, replace every `d->reg[relative_addr / 8]` in the `len == 8` and `len == 4` arms with `d->reg[(relative_addr & 0x3f) / 8]`: guest-observably wrong (an `sd` at +0x278, memory control, scribbles CRIME_TIME's slot reg[7]; reads at +0x278 alias TIME) but passes all 71 rows, because every rowed accepted access lives below 0x40 (unmasked, unchanged) and the far-end rows at +0x278/+0x27c are pure round-trips through a *single* masked slot — self-consistent under aliasing. The probe header's claim that the two rowed slots "pin the near and far ends" [READ] overclaims: they pin reachability of *some* slot, not its **identity**. Token: `CRIME_F2_20260913`.
+
+**Q1 — adjudications (one line each):**
+
+- F1 — UPHOLD. Arithmetic [REASONED]: 18 = 17 non-equiv + return1(equiv); table 2's 24 = 21 + 3 is internally consistent in the packet.
+- F2 — UPHOLD. Records-only wording; consistent with `base 71/71 CONTROL=OK` [READ].
+- F3 — UPHOLD. [READ] from the inlined function: on the declined path nothing between entry and label writes HARDINT/SOFTINT, so the tail's restore/recompute are identities; the goto's load-bearing effect is the switch skip.
+- F4 — UPHOLD. [READ]: `case CRIME_REV:` contains no `writeflag` test — the pc-window hack fires on a store too. Rows `sb/sh rev pc` follow.
+- F5 — UPHOLD. [READ]: INTSTAT/INTMASK and TIME arms act with no direction test; the session protocol (softint-via-default-arm, lw control) coheres, including the cross-row IP2 contamination that explains `only1r` reddening `imask sb` [REASONED]. One CANNOT-SETTLE ingredient: `crime_interrupt_reassert`'s body is not inlined; settling fact = its source.
+- F6 — UPHOLD. [READ]: default arm `debug()`s any access; stepping prints it.
+- F7 — UPHOLD, with the author's own caveat: the `<RUN>`/`\x03` pty break-in is an unverifiable-from-packet dependency; `free said` is immune to break-in failure, `free v0` is not [READ].
+- F8 — UPHOLD. DOG (`sb/sh keeps`) plus `imask ctl` cover single-cell landings; landing at any other offset is the disclosed two-cell-joint debt [READ].
+- F9 — UPHOLD. [REASONED]: under `exit(0)` the text-count row evaluated a dead transcript; `sb08 run` requires the round trip.
+- F10 — UPHOLD. Only1/only2 red sets count out exactly (7/2/7/4 → 64/69/64/67) [REASONED].
+- F11 — UPHeld for the raised class: `x_mc4/x_mc8` (narrowings) do go red on the top rows [READ]. For what the rows do *not* pin, see Q3.
+- F12 — UPHOLD. `hi said` carries the exact-offset text; `l_addrmask` reds only there [READ].
+- F13 — UPHOLD. `l_noonce` reds exactly the six said rows (65/71) [READ].
+- F14 — UPHOLD as subsumed by F5.
+- F15 — UPHOLD the REFINED disposition: the top comment describes upstream decode/mirroring text; the decline over 0x200–0x27f is the intended width-arm span [READ]. Cosmetic.
+- F16 — **REVOKE the static-latch leg** (see Q2); label-move, `=` vs `|=`, and the casts stand [READ/REASONED].
+- F17 — UPHOLD the rejection: inherited upstream text, untouched by the fix [READ].
+- F18 — UPHOLD as disclosure — and it is precisely the premise F16's static-latch "equivalent" needed [READ: the packet records both].
+
+- D1 — UPHOLD. The experiment as described separates fix from fall-through (pre/lb/sb/ctl ordering, default-arm SOFTINT store, TIME's previous-update read) [REASONED]; nothing in it contradicts any packet fact. Residual not checkable here: `crime_update_crime_time`'s tick accounting — but the margin (≤132 vs ~1.4e8, threshold 6.6e6) is wide enough that the verdict doesn't rest on it [REASONED].
+- D2 — substance UPHOLD, formal label CANNOT SETTLE. [READ]: the switch re-tests `relative_addr` after the decline join, so the address axis is a floor axis of *this* fix, and PRETABLE §5's clause-(e) filing rested on a premise measured false. Whether the carrier's join rule assigns L2 cannot be checked — the rule text is not inlined. Settling fact: the rule text. Licence is L1 either way [READ].
+
+**Q2 — weakest accepted disposition: F16's "function-static latch = EQUIVALENT."** It contradicts F18 inside this same packet: if "multi-instance latch independence [is] unmeasured" and the product comment's invariant is latches "never shared" [both READ], then the static latch — shared across instances — cannot have been *measured equivalent*; it was measured detector-indistinguishable on a one-instance fixture. The disclosed rider "IP32 has one CRIME" covers only multiple instances per machine [READ], not (a) two machines in one process or (b) a reset path that re-clears/`memset`s `crime_data` — under either, struct-latch and static-latch diverge in observable announce behavior [REASONED]. Equivalence is a claim about all configurations; what was measured is one. Settling facts: whether gxemul can run two IP32 machines per process, and whether any reset re-inits device state. (Runner-up weak spot: F11's rows — they kill the raised narrowing mutants but, per Q3, don't pin what they claim to pin.)
+
+**Q3 — what all nine missed: the accept arms' data plumbing above 0x3f.**
+
+Exact edit (four expressions, or equivalently rebind once at the top of each accept arm):
+```c
+	/* both arms, every occurrence: */
+	d->reg[relative_addr / 8]   -->   d->reg[(relative_addr & 0x3f) / 8]
+```
+(`& 0x7f` works identically.)
+
+Why all 71 rows survive [REASONED, walked against the row list]:
+- All rowed accepted accesses below 0x40 — devsig (+0), acc4/acc8 at +0x30/0x34, sw08 controls, the `sd`s at +0x18/+0x20, TIME at +0x38 — are unchanged by the mask.
+- The top session is the only one above 0x40: +0x278 & 0x3f = 0x38, +0x27c & 0x3f = 0x3c, both → reg[7], four apart with the same half-selects. `top8 st+ld`, `top4 rhi`, `top4 rlo`, `top4 w` each write and read back through the *same* masked slot, so they round-trip 0x0102030405060708 / 0x111122220a0b0c0d exactly as on the correct build.
+- Decline-path rows are untouched: `hi said` at +0x27f is a refused 1-byte access; it never enters the accept arms, and the announce prints the un-masked `relative_addr` ("at 0x27f") [READ: format string in the diff].
+- Switch rows (`nodflt`, `dflt ctl`, imask/istat/time controls) test true `relative_addr` — unaffected.
+- Latch, channel (`free said`), text, survival rows: not on this path.
+
+The row I expected to catch it: `top8 st+ld` — and header clause 6's "the two rowed slots pin the near and far ends." It can't, because no row anywhere writes storage through one accepted offset and reads it through a *different* offset that aliases only under the defect. The one-probe-line that would close it: in the top session, after `sd +0x278 = X`, insert `sd +0x78 = Y` (0x78 has no case label; harmless default-arm line) and re-read `ld +0x278` — under the remap the +0x78 store lands in reg[7] and the read returns Y; on the fix it returns X. (Avoid +0x38 for this: its arm's `crime_update_crime_time` clobbers reg[7] on the correct build too [READ from the inlined switch], which muddies the expectation.)
+
+Strict-reading fallback [REASONED]: if "breaks the fix" is read as the else-arm hunk alone, I find no small surviving edit there — goto, latch, channel, text, and the zero-answer are each rowed; the only else-arm survivors are the already-disclosed address-keyed narrowings. The genuinely missed class is the one the header asserts is covered: accept-arm **index identity** at the far end, as above.

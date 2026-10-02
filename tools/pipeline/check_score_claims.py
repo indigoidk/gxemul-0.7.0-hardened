@@ -91,7 +91,27 @@ PIN = re.compile(r'check\s+"(\S+)\s+rows\s+run"\s+"[^"]*"\s+(\d+)')
 #  Negative-controlled in BOTH directions before landing: five real score claims
 #  (13/13, 26/26, 8/32, "52 / 52", 16/16) all still match; two hex lists
 #  (0x00/0x10/0x20/0x30, 0x18/0x1c) no longer do. Zero regressions.
-SCORE = re.compile(r"(?<![\dx/])(\d+)\s*/\s*(\d+)(?![\d/%])")
+#
+#  *** AND A HYPHEN IS THE SAME GAP, FOUND 2026-09-17 BY A FALSE FAIL IT PRODUCED. ***
+#  The lookbehind excluded a digit, `x` and `/` -- but not `-`, so an ORDINAL PAIR
+#  written `entries-4/8` was reported as a stale score claim of 4/8.  That is this
+#  tree's correlate-keying class: the matcher tests a SHAPE (N/M) and the class is a
+#  SCORE, so its error is invisible because the output is still a plausible number.
+#
+#  *** WORSE THAN A FALSE FAIL: THE PRESCRIBED REMEDY WAS TO SHIP A FALSE STATEMENT.
+#  The message says "if that is a deliberate historical quote, write '8-row' on the
+#  same line" -- which, on a line about array entries, silences the check by writing
+#  something untrue into a probe.  A check whose repair corrupts the thing it guards
+#  is the shape the carrier already records for the build-tree clearance. ***
+#
+#  AUDITED FOR SIBLINGS with a denominator rather than fixed on the one instance:
+#  710 N/M matches across 121 regress files; the hyphen-aware form drops exactly FOUR
+#  and keeps 706.  All four are ordinal pairs, none is a score -- `entries-4/8`
+#  (crime_width_probe), `len-3/5` (lca_isalane_probe:96), `opcode-59/63`
+#  (ppc_halt_probe:238), `pass 2-3 / 6-7` (sgi_de_primop_probe:985).  THREE OF THE
+#  FOUR ARE LATENT: they fire only once their probe gains a gate pin, so the class
+#  was four members with one visible.
+SCORE = re.compile(r"(?<![\dx/-])(\d+)\s*/\s*(\d+)(?![\d/%])")
 
 
 def comment_lines(path):

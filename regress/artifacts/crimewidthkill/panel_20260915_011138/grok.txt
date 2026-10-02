@@ -1,0 +1,61 @@
+I'll start from the offloaded brief and the tree's current HEAD, then check the crime access function, probe contract, and artifacts against the claimed enumeration.The brief is loaded. Next I’ll derive the floor cells from the live crime handler and the repair-11 `ACCEPTS` list, rather than taking the packet’s census as given.I’ll confirm the shipped probe matches table 9’s frozen instrument, then count `ACCEPTS` and the row list from the file rather than from the brief.CLOSES
+CRIME_CLOSE6_20260914
+
+The repair-11 list now holds every (branch side × accepted kind) floor cell the function’s own `if`s define. `ldP` is present; the two CONTROL `0x0100` writes are recorded as clause-(e) strengthenings; table 9 kills P1/P1b/P2/P2b on the one row each that is supposed to move.
+
+## 1. Enumeration
+
+Accepted path: `len == 8` / `len == 4`, each split by `writeflag`, and `len == 4` further split by `relative_addr & 4`. Then `switch (relative_addr)`.
+
+**Labels × {8W, 8R, 4W-high, 4R-high}** (every case label is 8-aligned, so a 4-byte access at the label is the high lane):
+
+| arm | body-tested split | floor kinds in `ACCEPTS` |
+|---|---|---|
+| REV `0x00` | `pc`-window in/out (does not test len or direction) | out: `sd/ld/sw/lw`; in: `sdP/swP/lwP` **and `ldP`** — 8 cells |
+| CONTROL `0x08` | reads vs writes; writes: DOG `0x200` × leftover `!= 0` after the DOG/RESET/ENDIANESS clears. HARD_RESET true stops the CPUs (disclosed, unrowable). ENDIANESS is `idata &= ~…` with **no `if`** | `ld/lw`; `sw/sd` × `{0x0201, 0x0001, 0, 0x0200}` — 10 cells |
+| INTSTAT `0x10`, INTMASK `0x18`, DOG `0x30`, TIME `0x38` | no further kind/`idata` test | 4 kinds each — 16 cells |
+| default | R vs W, and both 4-byte lanes (`& 4`) | `sd/ld/sw/lw` at `+0x40` (8-byte and 4-high); `sw/lw` at `+0x34` (4-low) — 6 cells |
+
+That is **40 floor cells**. All 40 are in `ACCEPTS`.
+
+**Plus the two named clause-(e) writes:** `sw/sd` at `+0x08` with `0x0100`. After the unconditional ENDIANESS clear they take the same sides as write-0 (`DOG` clear, leftover 0). Outside CONTROL’s generating set `{DOG, HARD_RESET, leftover}`.
+
+**Four extra list entries, not floor:** `sw/lw` at `+0x04` (same 4-low default kinds as `+0x34`) and `sd/ld` at `+0x278` (same 8-byte default kinds as `+0x40`). Default is one arm; a further split by unnamed offset is the disclosed single-offset class. Surplus, not a hole.
+
+No listed kind is unreachable: all are aligned `ld/sd/lw/sw`; `*P` runs from `PROBE_PC = 0xbfc05180`; `+0x278` is the last 8-byte slot of `DEV_CRIME_LENGTH` `0x280`. The two sessions `ACCEPTS` feeds are not vacuous: `P1_win8r_rearm` is `rearm once` 2 vs 1 (“47 refusals, 46 accepted kinds”); `P1b_win8r_preset` is `latch x5` 0 vs 1.
+
+So `ACCEPTS` (46) is the 40-cell floor, plus the two named ENDIANESS strengthenings, plus four extra default-arm addresses of kinds already in the floor.
+
+## 2. Floor gap
+
+No. The smallest edits that used to sweep the 141-row test on this axis are the ones table 9 now reds:
+
+- P1 / P1b: `if (len == 8 && writeflag == MEM_READ) d->warned = 0;` / `|= CRIME_W_LEN;` inside the REV window `if` — `rearm once` / `latch x5`
+- P2 / P2b: the same on `idata & CRIME_CONTROL_ENDIANESS` — same two rows; header correctly calls that clause (e), not floor
+
+Disclosures that stay 141/141 (ENDIANESS as a *floor* claim, multi-axis notice-channel joints, `odata = d->use_fb` / `flag_for_128MB` on this `-M 64` non-graphics ip32, HARD_RESET-true re-arm, function-static latch, unnamed-offset accept shrink) are graded correctly. None of those is a body-tested cell the list omitted.
+
+I did not find a `dev_sgi_ip32.c` edit that undoes part of the decline and still scores 141/141 inside the floor.
+
+## 3. Wrong statement
+
+**Item 3 of the probe header (and the `sh08b` comment that feeds it):** “the arm’s three TESTED idata bits (DOG `0x200`, RESET `0x800`, **ENDIANESS `0x100`**)”.
+
+The CONTROL write body is:
+
+```c
+if (idata & CRIME_CONTROL_DOG_ENABLE) { … }
+if (idata & CRIME_CONTROL_HARD_RESET) { … }
+idata &= ~CRIME_CONTROL_ENDIANESS;   /* no if */
+if (idata != 0) fatal(…);
+```
+
+ENDIANESS is cleared unconditionally. It never takes a branch and never reaches leftover. Item 4 and the pass-5 disclosure already say that; item 3 still calls it a tested generating-set bit. The `0x0900` fall-through row can stay as a strengthening; the word TESTED is false.
+
+(The 4 extra default-arm addresses mean “46 = floor + two (e)” is not exact either; that is surplus in the list, not a false claim about the function.)
+
+## What I could not check
+
+- I did not rebuild or re-run table 9 (harness/gates forbidden; measurements were inlined). I read `DEVICE_ACCESS(crime)`, `ACCEPTS`, PRETABLE/POSTTABLE 9, `check_pred.out` (37/37 exact), and the P1/P1b/base logs (`CRIMEP_DONE`, base 141/141).
+- I did not byte-compare `crime_width_probe.py` to `crime_width_probe.table9.py` (a Python one-liner was denied here). Identity is POSTTABLE 9’s claim; the `ACCEPTS` tuples I read in both files match.
+- I did not re-measure tables 1–8; those kills sit on rows this repair did not change, except the 29+3 legs table 9 did re-run.

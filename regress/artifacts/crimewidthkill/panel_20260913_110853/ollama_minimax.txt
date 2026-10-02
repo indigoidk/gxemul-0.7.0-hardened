@@ -1,0 +1,83 @@
+**VERDICT: GAP** — the 85-row test misses 4-byte accept cells at the near window bound (+0x30 / CRIME_DOG). Liveness token `CRIME_CLOSE_20260913`.
+
+---
+
+## The gap, named
+
+The contract (clause 6) explicitly enumerates five accept cells at CRIME_DOG +0x30:
+
+```
+acc8 st+ld (8W, 8R), acc4 rhi, acc4 rlo, acc4 wlo, acc4 whi
+```
+
+The diff delivers **one** of those five: the 8-byte round trip is implicit in the `sb keeps` / `sh keeps` session (sd +0x30, ld +0x30, sh +0x30 refused, ld +0x30 — all 8-byte accepts). The four 4-byte cells are not rowed. The far bound +0x278 *is* fully rowed (top8 st+ld, top4 rhi, top4 rlo, top4 w), so the asymmetry is in the test, not in the disclosure.
+
+## The smallest source edit that scores 85/85
+
+In `DEVICE_ACCESS(crime)`, change:
+
+```c
+} else if (len == 4) {
+```
+
+to:
+
+```c
+} else if (len == 4 && relative_addr != 0x30) {
+```
+
+Walk the 85 rows with that mutant:
+
+| row group | why it stays green |
+|---|---|
+| `sb keeps`, `sh keeps` | the session's accepted accesses at +0x30 are all 8-byte (sd, ld); the refused sh is 2-byte, already declined |
+| `warm v0`, `warm once` | refused lbu at +0x07 is 1-byte; unaffected |
+| `top8 anchor`, `top8 st+ld`, `top4 rhi/rlo/w` | at +0x210/+0x278; `relative_addr != 0x30` is true |
+| `imask/istat lb/sb/lh/sh` and ctl | at +0x10/+0x18; not narrowed |
+| `time lb/sb/lh/sh` and ctl | at +0x38; not narrowed |
+| REV `lb/lh/sb/sh rev pc`, CONTROL `sb08 msg`/`sh08 run`/`sh08b msg`/`sh08b run` | at +0x00/+0x08; not narrowed |
+| `hi said`/`hi nodflt`/`hi surv`/`hi keeps` | sb at +0x27f is 1-byte; the accepted ld at +0x278 is 8-byte |
+| `latch x5`, `warm once`, `free said`, `<op> surv`/`pc`/`exc`/`said`/`nodflt` | the decline arm still fires for every refused access; latch, text, channel, pc-advance, exception-absence all unchanged |
+
+Result: **85/85**. The mutant narrows one cell the contract names (4R/4W at +0x30, both halves) and the test does not see it.
+
+The same gap catches any narrower 4-byte cell at +0x30 — e.g., `relative_addr != 0x30 || writeflag == MEM_READ` (4W only) or `(relative_addr & ~4) != 0x30` (4R high only) — because none of the four 4-byte directions at +0x30 is rowed.
+
+---
+
+## What I could not check from the packet
+
+- **`roundtrip(A)` body.** The `hi keeps` row depends on it not writing to +0x278; the table 3 result (wst_mc 84/85, `hi keeps` red) says it doesn't, but the function isn't inlined. If a future edit moves the roundtrip to touch +0x278, `hi keeps` would go silently green for a store that lands there.
+- **`AFTER` body.** Same concern for `dflt` offset-keying: I trust the table 3 results, but the session list is partially reconstructed from the diff hunk.
+- **`CRIME_W_LEN` bit value.** I cannot tell from the packet whether it is bit 0 or some other bit. The F2 claim that `|= len` and `|= relative_addr` are detected by `latch x5` with lh-first depends on this. With CRIME_W_LEN at bit 0, my own walk says `|= len` with lh-first produces exactly one announce (lh sets bit 1; lb then sets bit 0; thereafter all checks pass), which would **not** be detected by `latch x5`. The table 3 row `lt_len 84/85 latch x5` says it *is* detected, so CRIME_W_LEN is almost certainly not bit 0 — but the proof is the table, not the packet.
+- **The TIME threshold `SMALL = 66 * 100000` = 6,600,000 TIME units ≈ 0.1 s wall-clock.** The comment says "0.1 s of TIME", the code says 66×100000. Both are consistent if TIME is stored in units of 1/66 µs. The fall-through value "~1e8" gives ~1.5 s, well above the threshold on the measured machine. A faster debugger could compress that interval below SMALL; nothing in the packet rules that out as a future regression.
+
+## What is correct in the repair diff (READ from packet)
+
+- The lh-first reordering of `latch x5` is the right shape for catching `|= relative_addr` (REASONED, given CRIME_W_LEN is not bit 0 as the table implies).
+- The `dflt(t, clean, off, write)` keying on the refused access's own offset+direction is necessary and sufficient given that `hi keeps` adds an accepted ld at +0x278 in the same session (REASONED).
+- The `warm v0` / `warm once` additions catch the codex F2 pair (static odata + accept-arm re-arm) because every other refused read in the file runs in a cold session where static-odata is masked by the cold zero (READ from the comment, matches the table).
+- The `sh08b msg` / `sh08b run` rows cover the DOG_ENABLE bit at 2W (bit 9 set/clear both ways), which the original `sh08` (HARD_RESET only) did not (READ).
+- The `top8 anchor` row is the right anchor for the remap mutant because the prelude writes bank-1 control by bank index, not by the decode under test (READ).
+- All 19 predicted red-row sets in table 3 are exactly the sets PRETABLE 3 named (READ from POSTTABLE.out).
+
+## Other things I checked and found sound
+
+- The CONTROL-write coverage (sb08 msg, sh08 run, sh08 pc, sh08b msg, sh08b run) exercises both tested bits of `idata` at 2W and the only printable bit (0) at 1W. CONTROL reads and DOG are correctly disclosed as equivalent fall-throughs.
+- The INTSTAT/INTMASK 4-cell coverage (lb, sb, lh, sh per label) with `ip2` checks after each is the right oracle for the reassert arm; the setup must leave IP2 low and INTMASK permissive before the control lw, which the table 3 result confirms.
+- The TIME oracle (`mag()` classifying s1 vs s2 as small/large with the tick-spacing assumption disclosed) is correct as long as no tick boundary lands between the first `ld` and the refused access; that assumption is disclosed.
+
+## Wrong statements in the brief or header
+
+None. The brief and header are internally consistent, the disclosure list correctly enumerates the untested classes (interior accept slots, single-unnamed-offset effects, function-static latch, widths 3/5/6/7, unaligned pairs), and every red-row set in table 3 is exactly the predicted set. The defect is that the brief's contract clause 6 enumerates five accept cells at +0x30 and the diff delivers only one — a gap between contract and rows, not a wrong statement.
+
+---
+
+**Recommended fix to the test:** add four rows to the `sb keeps` / `sh keeps` session (or a parallel session) at +0x30:
+
+- `dog4 rhi`: lw +0x30 → expected value seeded by the prior sd
+- `dog4 rlo`: lw +0x34 → expected low half
+- `dog4 whi`: sw +0x30, then ld +0x30 → expected high half updated, low half preserved
+- `dog4 wlo`: sw +0x34, then ld +0x30 → expected low half updated, high half preserved
+
+Then the edit `relative_addr != 0x30` in the 4-byte arm reddens at least one of these four, closing the gap.

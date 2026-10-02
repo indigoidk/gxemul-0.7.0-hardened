@@ -1,0 +1,75 @@
+PRETABLE -- #529 crimewidthkill, CLOSING PASS 3, Opus compile-and-measure seat (2026-09-13)
+Written BEFORE any build or probe run (its mtime is the order proof; the driver copies it beside the logs).
+Instrument: the shipped 121-row regress/crime_width_probe.py (md5 c083168c, == killtable6's crime_width_probe.table6.py),
+frozen once to /tmp/cwp_close3.py.  Fix under test: GXEMUL-SEC/src/devices/dev_sgi_ip32.c md5 8c1d1545.
+
+Method: for each class the CONTRACT / POSTTABLE-5 DENOMINATOR claims closed, list the cells the fix's body distinguishes
+(the body-tested partitions), then find the cell no counted/valued row reaches.  Every mutant below is predicted to
+SURVIVE (121/121, red set EMPTY); for each, the reason no row can vary, and the guest-only discriminator that shows it is
+NOT equivalent (base vs mutant, same script, disc_c3.py).
+
+ id  mutant (exact edit to dev_sgi_ip32.c)                         class / claim it tests          predicted  why no row sees it
+---  -------------------------------------------------------------  ------------------------------  ---------  ------------------------------------
+ M1  rearm_ctlrd: in `case CRIME_CONTROL:` add first               C re-arm, "each switch arm AND  121/121    no ACCEPTED read at +0x08 anywhere
+     `if (writeflag == MEM_READ) d->warned = 0;`                   EACH BRANCH" (item 8); the arm             (KINDS enters CONTROL with sw only;
+                                                                   body tests writeflag                       the only +0x08 read is dog's REFUSED lh)
+                                                                                                             DISC: lb+7, lw+8, lb+6 -> 1 vs 2 notices
+ M2  rearm_dogclr: `if (idata & DOG_ENABLE) {...}` gains           C re-arm, the DOG-clear half    121/121    the only accepted CONTROL write between
+     `else d->warned = 0;`                                         of a body-tested idata bit                refusals is 0x0201 (DOG SET); 0x01 and
+                                                                                                             0x800 writes precede every refusal / stop
+                                                                                                             DISC: lb+7, sw+8 0x01, lb+6 -> 1 vs 2
+ M3  rearm_ctl0: `if (idata != 0) fatal(...)` gains                C re-arm, the idata==0 half of  121/121    0x0201 leaves 0x01 (nonzero); no accepted
+     `else d->warned = 0;`                                         the text branch's test                    zero-control write between refusals
+                                                                                                             DISC: lb+7, sw+8 0x0, lb+6 -> 1 vs 2
+ M4  pre_istat: between `case CRIME_INTSTAT:` and                  C pre-set, INTSTAT's own label  121/121    no counted session reaches +0x10 with an
+     `case CRIME_INTMASK:` insert `d->warned |= CRIME_W_LEN;`      (the shared arm's sibling)                ACCEPTED access before its first refusal
+                                                                                                             (IRQ setup touches +0x18/+0x20 only)
+                                                                                                             DISC: lw+0x10, lb+7 -> 1 vs 0 notices
+ M5  pre_revbr: in the REV redirect branch, after                  C pre-set in a BRANCH (Q1 says  121/121    no counted session runs an accepted REV
+     `cpu->pc = ...gpr[MIPS_GPR_RA];` add                          "every arm and branch"; DISCL.            read from 0xbfc051xx before a refusal
+     `d->warned |= CRIME_W_LEN;`                                   excepts HARD_RESET only)                  (rev pc ctl has no refusal; rearm's lwP
+                                                                                                             follows one)  DISC: lwP, lb+7 -> 1 vs 0
+ M6  pre_dogbr: in the DOG_ENABLE branch add                       C pre-set in a BRANCH           121/121    no accepted DOG-set CONTROL write precedes
+     `d->warned |= CRIME_W_LEN;`                                                                             a first refusal (latch x5 writes 0x01)
+                                                                                                             DISC: sw+8 0x200, lb+7 -> 1 vs 0
+ M7  byp_rev: latch test `if (!(d->warned & CRIME_W_LEN))` ->      B latch keyed on the LABEL,     121/121    the enumeration models only the SET side
+     `if (!(d->warned & CRIME_W_LEN) || relative_addr == CRIME_REV)` TEST side (never suppresses              ("first refusal where it does not set");
+                                                                   at REV)                                   no counted session has a refusal at +0x00
+                                                                                                             AFTER the latch is set
+                                                                                                             DISC: lb+7, lb+0, lh+0 -> 1 vs 3
+ M8  byp_time: the same with `relative_addr == CRIME_TIME`         B, test side at TIME            121/121    every +0x38 refusal is its session's only
+                                                                                                             one, or (time once) its first
+                                                                                                             DISC: lb+7, lb+0x38, lh+0x38 -> 1 vs 3
+ M9  ans_hi32_b5: before the goto,                                 A answer at INTSTAT/INTMASK and 121/121    the IRQ seed 0x0101000010000001 is ZERO
+     `if (!(relative_addr & 0x20)) odata = d->reg[relative_addr / 8] >> 32;`  D single address bit             in bytes 2-3 (the low half of its HIGH
+     (the 4-byte read path's own answer at a base offset)                                                    word): lb/lh of 0x01010000 read 0/0; REV,
+                                                                                                             CONTROL, TIME are 0 above bit 31; every
+                                                                                                             valued read with bit 5 SET (DOG, TIME,
+                                                                                                             far, mid, lbu +0x3f unprinted) excluded
+                                                                                                             DISC: SOFTINT=0x0000ffff00000000, lb/lh
+                                                                                                             +0x10 -> 0/0 vs -1/-1; with BIT 0/0 both
+ M10 land_b4clr: before the goto,                                  E landing keyed on ONE address  121/121    every keeps-rowed refused store has bit 4
+     `if (writeflag == MEM_WRITE && !(relative_addr & 0x10)) d->reg[relative_addr / 8] = idata;`  bit (bit 4 CLEAR)              SET (0x37,0x30,0x18,0x27f,0x27c,0x1ff,
+                                                                                                             0x1fc); the bit-4-clear refused stores
+                                                                                                             are at REV/CONTROL (prelude rewrites)
+                                                                                                             DISC: sb 0xff +0x47, ld +0x40 -> 0 vs 0xff
+ M11 ans_ctl_lb: before the goto,                                  A answer at CONTROL, 1-byte     121/121    CONTROL's answer is rowed by lh ONLY
+     `if (len == 1 && relative_addr == CRIME_CONTROL) odata = 1;`  ("at both widths", POSTTABLE 5)           (ctl v0); no refused lb at +0x08 anywhere
+                                                                                                             DISC: lb+8 -> 0 vs 1; lh+8 -> 0 vs 0
+ M12 pre_ctlrd: in `case CRIME_CONTROL:` add first                 C pre-set, CONTROL read path    121/121    as M1: no accepted +0x08 read anywhere
+     `if (writeflag == MEM_READ) d->warned |= CRIME_W_LEN;`                                                  DISC: lw+8, lb+7 -> 1 vs 0
+
+Base: predicted 121/121, CRIMEP_CONTROL=OK.
+
+JOINT / DISCLOSED cells considered and NOT built (judged clause (e) or covered):
+  * re-arm at TIME / INTSTAT / INTMASK / REV keyed on a WRITE: those arms' bodies do not test writeflag -> joint, (e).
+  * 2W landing keyed on bit 1 SET: no keeps-rowed 2W store has bit 1 set, but a single-axis bit-1 landing is caught by
+    sb +0x37 (1W) -> only the width x bit joint escapes, (e).  Recorded as a falsity in the "carried both ways by each
+    kind" sentence, not as a gap.
+  * pre-set in the 8R branch keyed on bit 4 clear (both 8R pre-refusal accesses, +0x38 and +0x210, have bit 4 set):
+    branch x bit joint, (e).
+  * an accepted READ at +0x08 shrunk away: +0x08 is not in the rowed accept-offset list -> DISCLOSED (interior slot).
+
+Expected CHANNEL: every survivor above varies ONLY the announce COUNT (M1-M8, M12), the ANSWER value (M9, M11) or a
+landing read back by an accepted ld (M10) -- the channels the contract names; the survival is a missing CELL, never a
+missing channel.

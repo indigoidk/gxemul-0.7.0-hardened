@@ -1,0 +1,49 @@
+VERDICT: `GAP: in DEVICE_ACCESS(crime), change the decline arm's "goto crime_declined;" to "odata = d->reg[CRIME_HARDINT / sizeof(uint64_t)]; goto crime_declined;"` — declined reads then answer the low `len` bytes of CRIME_HARDINT instead of 0, and no row can see it (analysis below). Token: CRIME_CLOSE4_20260913.
+
+----
+
+**Q2 first (it drives the verdict), then Q1, then Q3.**
+
+## Q2 — the surviving edit (REASONED, premises READ)
+
+The edit: in the `else` (decline) arm, just before `goto crime_declined;`, insert `odata = d->reg[CRIME_HARDINT / sizeof(uint64_t)];`. This is a one-line source edit that undoes the fix's core behaviour — "a read is answered 0" — because a declined read is answered from a *different* register than the addressed one.
+
+Why 131/131:
+
+* READ: the answer enumeration (item 9) closes **same-register** leaks (INTSTAT/INTMASK/DOG seeded nonzero in every byte; CONTROL/REV answered at both widths; TIME seeded odd) and **constants** at labels.
+* READ: item 10 / `gate hardint` control — HARDINT is guest-settable to nonzero, and `gate` is the one session that sets it (via MACE).
+* READ: the gate session rows exactly one refused access — the *store* `sh 0x0800` (`gate run`), with `gate hardint`/`gate line` as controls. **There is no refused-read answer row in the gate session.**
+* REASONED: every session that *does* row a refused-read answer (`warm v0`, `free v0`, `lb/lh rev/ctl/istat/imask/dog/time v0`, `top rd v0`, `mid lb/lh v0`, the `*_sd` rows) runs with HARDINT == 0 — SOFTINT is the seeded field in those sessions. So the mutant answers 0 at every checked cell.
+* REASONED: every other cross-register source is caught somewhere (`reg[SOFTINT]`/`reg[INTMASK]`/`reg[INTSTAT]` are seeded nonzero and checked at their labels; `reg[CONTROL]`=0x100 shows at `ctl v0`; bank regs are nonzero and checked). HARDINT is uniquely **(i) guest-controllable, (ii) zero in every answer-checked session, (iii) nonzero only in the one session with no answer row**.
+* It is not in any DISCLOSED bullet: the "byte selection the model holds at 0" equivalence is about the **addressed** register held at 0 *by construction* (prelude rewrites CONTROL/REV on every access; TIME kept 32-bit). HARDINT is not held at 0 by construction — the probe itself proves the field varies (`gate hardint`). So it is neither measured-equivalent nor disclosed debt.
+
+The row that should catch it: any `* lb v0` — concretely, a `gate v0` row (refused `lb` after `gate hardint`) is what the floor lacks.
+
+One premise I cannot settle from the packet: that HARDINT stays 0 in all non-gate sessions. READ support: item 10 names MACE as the path and gate as the session; the inlined CRIME function never writes `reg[HARDINT]` except preserve/restore. Settling fact: `d->reg[CRIME_HARDINT/8]` at each rowed refused read (one probe log line), or confirming mace devices signal nothing in the other sessions.
+
+## Q1 — the derivation against the function's branches
+
+Verified as matching (READ the function vs READ the diff): len 8 (W,R) ✓; len 4 (W,R) × `relative_addr & 4` ✓ (`sw/lw +0x34` vs `sw +0x08`/`lw +0x00`); every case label individually, incl. both labels of the shared INTSTAT/INTMASK arm ✓; REV window in/out ✓; CONTROL R/W, DOG set/clear, leftover nonzero/zero ✓; default arm R/W ✓; HARD_RESET true side disclosed-unrowable ✓; latch SET single-axis family (width, direction, parity via warm=sb/odd and latch x5=lh/even; every label first; far/mid blocks with the +0x07 follow-up) ✓; latch TEST per-label bypass — checked each label IS refused again post-set (DOG via `lh +0x30` after `lb +0x30`; REV/TIME via the latch x5 tail; CONTROL/INTSTAT/INTMASK via 4× own-label) ✓; landing bits 0–9 both ways among read-back refused stores ✓ (+0x30/37, +0x44/47, +0x27c/7f, +0x1fc/1ff give bits 4, 7, 8, 9 each both ways).
+
+Omissions / overstatements:
+
+1. **`if (cpu->is_32bit)` inside the REV redirect branch** (READ: it is in the inlined function; READ: it appears in no enumeration). It is an `if` an accepted access can take and come back from, nested inside the pc-window branch the enumeration *does* claim. One of its sides is unrowable in any fixed machine configuration — the probe's `lwP` always executes the same side. A pre-set on the dead side (`if (cpu->is_32bit) { d->warned |= CRIME_W_LEN; mips32_pc_to_pointers(cpu); }` — or the `else`, whichever is dead) scores 131/131; `latch x5`/`rearm once` cannot catch it because no session flips the guest's address mode. This is exactly the disclosed-HARD_RESET shape (unrowable, behaviour real on another configuration), but it is **not disclosed**. Settling fact for which side is dead: `cpu->is_32bit` at the PROBE_PC access. (Same family, weaker: the `mb_per_bank = 128` else side is config-dead at `-M 64`; the bank-loop sides both fire every call there, so a pre-set inside the loop is every-access and trips every `once` row despite being unenumerated.)
+2. **The claimed cross product is not rowed** (READ the KINDS tuple): CONTROL write side carries (DOG set, leftover nonzero) = `0x0201`, (clear, nonzero) = `0x0001`, (clear, zero) = `0` — the **(set, zero)** cell (`sw 0x0200`) has no row, though the text asserts DOG (set, clear) × leftover (nonzero, zero). Distinguishing mutants there are joint-keyed, i.e. inside the disclosed joint-predicate debt — so this is a claim-vs-rows mismatch, not a new floor cell.
+3. The cross-register answer surface (Q2 above) is the one the enumeration structurally misses: it closes *same-register* and *constant* answers; "answer sourced from another guest-settable field" is nobody's row.
+
+## Q3 — which statement is wrong
+
+1. **POSTTABLE 7's counts are internally inconsistent (READ, arithmetic only).** `grep -c '^NEW' = 71` = base + 70 mutants; logs 78 and `CHECKPRED exact=78` reconcile as 71 NEW + 7 T6INSTR ✓. But the categories read 1 (base) + 4 (equivalent) + 1 (survivor) + "the remaining 64" = **70**, not 71 — so "64" should be 65 even by the leg count. Worse, the itemized detected list sums to 45 + 10 (`lat_b7/b8, quiet_b1/imask, pre_dog/revbr/istat, far_and, half_istat/imask`) + 2 + 12 = **69**, which with the 4+1 would be 75 NEW legs, contradicting 71 and 78. At least one of {`grep = 71`, "the remaining 64", the 45/10/2/12 breakdown, the equiv/survivor counts} is wrong. Settling fact: the actual NEW-leg manifest (the 70 mutant names in PRETABLE 7).
+2. **The header's derivation claim "both sides of every `if` an accepted access can take and come back from" is false as stated** (READ + REASONED, Q1 items 1–2): `if (cpu->is_32bit)` is such an `if` and is in no enumeration, and the asserted CONTROL DOG×leftover cross product ships 3 of 4 cells. The disclosure asymmetry is the brief's own defect: exactly one unrowable side (HARD_RESET true) is disclosed; the is_32bit side is not.
+
+Arithmetic that does check out (READ): the diff has exactly 23 @@ hunks as claimed; new `row()` calls = sh08b/rev/imask/istat/time/dog said (6), lo keeps, ctl lb v0, time sd lb/lh v0 = 10, and 121 + 10 = 131 ✓; `0x0101010111010101` and `0x0123456789abcdef` are nonzero in every byte ✓; TIME-seeded-odd reasoning is sound parity arithmetic (odd + even increments stay odd) though the increment parity itself rests on the uninlined `crime_update_crime_time`.
+
+## Not checkable from the packet (named, with the settling fact)
+
+* `cpu->is_32bit` during probe sessions → settle: guest mode bit at the `lwP` access (one log line). Determines which variant of the Q1.1 edit is the dead one.
+* HARDINT == 0 in non-gate sessions → settle: `d->reg[CRIME_HARDINT/8]` at rowed refused reads (one log line). Determines whether the GAP edit truly scores 131/131.
+* Mutant anchor strings (`CTLCASE, DOGIF, TXT/TXTEND, ISTAT, REVBR, LTEST, g(...)`) matching the shipped source exactly → settle: the table-7 build script text. Indirectly evidenced (READ) by 70 BUILD_OK + exactly-predicted red rows + checkpred 0 differs.
+* The four ops inside each per-label "4 refusals" `once` session (relevant to width/direction-keyed latch TEST bypasses) → settle: probe body lines absent from the diff context; contract text ("all four cells") suggests lb/sb/lh/sh.
+* `crime_update_crime_time` preserving oddness → settle: its source (uninlined); consistent with the measured multiples-of-66 history.
+
+One measurement I'd name rather than run: the Q2 mutant (`odata = d->reg[CRIME_HARDINT/8]` in the decline arm) on the 131-row instrument, prediction 131/131 — it would confirm or kill my verdict in one leg.

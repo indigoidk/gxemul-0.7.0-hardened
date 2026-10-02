@@ -1,0 +1,53 @@
+**VERDICT: SHIP** — the fix is correct, and every one of the 18 kill-table scores re-derives exactly from the packet's own row semantics; the defects I found are in the *record*, not the C, and are one-line amendments: an off-by-one in the kill count ("18 of 18 non-equivalent" — it is 17 of 17), a contract clause the rows don't deliver (header clause 3, "a narrower decline at each cell"), and a vacuous rationale for the goto. The one owed row (narrow **write** at CRIME_REV from the probe pc) is the gap the POSTTABLE's own DENOMINATOR already concedes.
+
+Token: `CRIME_P2_20260913`
+
+## Q1 — the fix
+
+READ: the else-arm ends in an unconditional `goto` to a label placed after the switch and before the HARDINT/INTSTAT tail; the tail writes `odata` (initialized 0, never assigned on the declined path) only on `MEM_READ`, then returns 1. Declined read → 0, write → payload dropped, no DBE, latch set once. The only writer of `warned` in the inlined function is the latch `|=`; the field is introduced by this diff. Nothing in the packet references it elsewhere.
+
+REASONED: on the declined path the tail's HARDINT restore and INTSTAT recompute are no-ops — nothing between entry and tail writes HARDINT or SOFTINT, and the prelude already set INTSTAT to the same SOFTINT|HARDINT. The declined access does what the comment says.
+
+Prelude: (i) READ/REASONED — the prelude unconditionally refreshes CRIME_REV, CRIME_CONTROL (→ENDIANESS), INTSTAT and the bank loop on every access, declined included. So "a write is dropped" is payload-true only; a declined access is not device-state-neutral. But it is identical to what every accepted access does — pre-existing, uniform, no new behavior, no row owed. (ii) The RAM-size `exit(1)`s sit above the arm, so a narrow access on a mis-sized machine still kills the host — filed and disclosed in the header; correctly out of this round.
+
+Not checkable from the packet: (a) "`fatal()` has no early-out" — debugmsg.c not inlined; settling fact: that file. REASONED-supported anyway: the fixed build's surv rows are green and `sw08 msg ctl` continues after a fatal. (b) "memset(0) at init clears them" — DEVINIT not inlined; settling fact: the crime DEVINIT allocation. The observable is pinned regardless by the green `said` rows on a fresh session. (c) That the latch matches #498's literal idiom — sgi_de's code is not inlined; settling fact: the decline/latch lines of `DEVICE_ACCESS(sgi_de)`. The implementation matches the brief's own description of the idiom (N=1 per instance, `(once)` in text).
+
+## Q2 — the uncaught edit
+
+Edit, in the else-arm: `goto crime_declined;` → `if (!(relative_addr == CRIME_REV && writeflag == MEM_WRITE)) goto crime_declined;`
+
+Why it breaks the fix: READ — `case CRIME_REV` has **no writeflag guard**; it sets pc = ra whenever pc ∈ 0xbfc05100..0xbfc051ff. Under this edit a guest `sb`/`sh` to CRIME_REV from the PROM-probe loop derails the PC — the exact harm class the fix's comment names, in the write direction.
+
+Why all 40 rows stay green: every rowed read declines (the condition requires MEM_WRITE); every rowed write is at +0x08, +0x1e or +0x1f — none at +0x00; a narrow write at +0x00 from a non-probe pc falls into `case CRIME_REV`, fails the pc test, breaks harmlessly; the latch/announce still runs before the goto, so all `said`/`latch` rows hold. The lbu/lhu addresses are not stated in the packet (READ gap), but they are reads and cannot fall through under this edit — green regardless.
+
+The row that should have caught it: a `sb rev pc` / `sh rev pc` row (narrow WRITE at +0x00 from pc 0xbfc05180 asserting pc ≠ ra). `lb/lh rev pc` cannot — they row the read direction; `sb08 msg`/`sh08 pc`/`sh08 run` cannot — they row a different address.
+
+The asked example (`relative_addr != CRIME_CONTROL`): reaches all four width×direction cells but only at +0x08; seen by `sb08 msg` (1W) and `sh08 pc`/`sh08 run` (2W) — caught through the write direction only. Narrow reads at +0x08 fall into `case CRIME_CONTROL` with MEM_READ → break, no side effect, no row, and harmless.
+
+Secondary, weaker: swapping the announce's `fatal` for `debug` defeats the ruling's free-running-visibility property and passes 40/40 *if* the stepped apparatus renders debug text — not settleable from the packet.
+
+## Q3 — floor and contract
+
+READ: every accept cell reds under its own single-cell growth mutant (acc8w→acc8 st+ld; acc8r→acc8 st+ld; acc4wlo→acc4 wlo; acc4whi→acc4 whi; acc4rlo→acc4 rlo; acc4rhi→acc4 rhi). Every refusal cell reds under a confined fall-through (1R via `lb rev pc` under len2only/wronly; 2R via `lh rev pc`; 1W via `sb08 msg`; 2W via `sh08 pc/run`) — but confinement is width×direction only, and each direction's pin lives at exactly ONE address. REASONED from the inlined arms, those two addresses are the only ones whose fall-through is observable (CONTROL writes; REV pc-gated redirect; INTSTAT/INTMASK ≈ tail; DOG nothing; TIME masked; default debug-only) — so the floor is exactly one row short, at the REV×write cross (Q2).
+
+Claimed without a measured kill: YES — header clause 3, "or a narrower decline, at each width x direction cell." Address-conditioned narrower declines were never measured; the DENOMINATOR concedes the class, the header does not.
+
+DISCLOSED owing a row: return1 — no (equivalence holds: the quoted #95 pre-zero plus the no-op tail). Readback — no (no switch arm stores idata; register stores live only in the len-8/4 arms). INTSTAT/TIME/HARDINT cells — probably no, but this rests on the bodies of `crime_interrupt_reassert` and `crime_update_crime_time`, which are not in the packet; settling facts: those two bodies (does reassert write HARDINT/SOFTINT; is the time update absolute or delta). The free-running announce is disclosed as beyond this detector; if the free-running print is contracted behavior — it was the ruling's reason to reject FAULT — a row or assert is arguably owed.
+
+## Q4 — records
+
+WRONG (READ): "18 of 18 non-equivalent mutants KILLED" — the SCORES list has 18 non-base mutants and one of them (return1) is the disclosed equivalent: 17 non-equivalent, 17 killed. Same off-by-one in (a): "held for 17 of 18" should be 16 of 17. ("The 19 edits already measured" is base-inclusive at best.)
+
+Overstated (READ+REASONED): header clause 3's cell claim for "a narrower decline" — refuted by the Q2 edit.
+
+Vacuous (REASONED): "The goto is kept … because the tail also restores HARDINT and recomputes INTSTAT" — both are no-ops on the declined path; only the house shape is a real reason.
+
+Minor (REASONED): "a write is dropped" is payload-true but the prelude's refreshes still run; DISCLOSED's "idempotent or overwritten" is wrong as to TIME (it is masked by the next wide read's own update — different mechanism, probably same conclusion).
+
+Verified clean (REASONED — I re-derived every score from the row semantics, all 18 match): revert 29 red, fault 15, exit0 23, fallsw 5, len1only 3, len2only 2, readonly 3, wronly 2, nolatch 1, latchinv 5, fmtswap 4, acc8w 4, acc8r 3, acc4wlo 2, acc4whi 3, acc4rlo 2, acc4rhi 2; and HEAD's 11/40 is exactly live + devsig + devsig hi + the 3 controls + the 5 accept rows. The table is internally consistent except the one count sentence.
+
+## Q5 — which statement is wrong
+
+1. **"18 of 18 non-equivalent mutants KILLED"** (and its sibling "17 of 18" in (a)) — refuted by the packet's own SCORES list: 17 non-equivalent, 17 killed.
+2. Header clause 3's claim to catch "a narrower decline" at each cell — refuted by the Q2 edit, which passes 40/40.
+3. "The goto is kept … because the tail also restores HARDINT and recomputes INTSTAT" — those are no-ops on the declined path; the stated reason is empty, though harmless.

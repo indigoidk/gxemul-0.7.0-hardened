@@ -1,0 +1,86 @@
+VERDICT: REPAIR 15 IS SOUND. THE 218-ROW COMPOSITE CLOSES THE FLOOR FOR THE DECLINE-SUPPRESSION CLASS AT THE FIVE GUEST-OBSERVABLE LABELS.
+
+---
+
+**Q1(a) — TRUE (READ).** `pty.fork()` + `os.execv()` gives a fresh address space and fresh `crime_data` per session, so `d->warned` starts 0 and `d->last_microseconds` starts 0 in every session. The shared host clock advances during the battery run, but each session's `crime_update_crime_time` only consumes deltas from its own `last_microseconds`, so wall-clock drift cannot move one session's row from another session's row. The DUMMY file is read-only initial state, not mutable cross-session state.
+
+**Q1(b) — TRUE ON THE INLINED EVIDENCE; THE TIMING MECHANICS ARE NOT FULLY SETTLEABLE FROM THE PACKET (REASONED).** The `tl` rows pass on the fixed build (218/218) and fail on M3_timelatch (214/218), which is consistent with the same channel the pre-existing `time` rows use. I cannot fully verify the "s1 stays SMALL" claim from first principles alone: the `rd(0.25)` helper, as written, blocks until `time.time() >= end`, and the sequence between `s0` and `s1` runs ~14 setup commands plus two steps. A naive read of `crime_update_crime_time` (delta = wall-clock since the last accepted access, 66 ticks/µs, SMALL threshold = 6.6 M ticks ≈ 100 ms) would predict s1 LARGE on the fixed build, contradicting the row. The single fact that would settle this is the raw `s1` value from one `tl` session on the fixed build — not in the packet. The fact that the row is registered with the same shape as the `time` row (which empirically passes 204/204) and the predictions match results exactly makes the outcome trustworthy, but the timing path is the one place I would want to see a number before signing the row definition itself, not just the mutant matrix.
+
+**Q1(c) — TRUE (READ).** The CRIME_REV arm inlines as:
+```c
+case CRIME_REV:
+    if (((uint32_t)cpu->pc & 0xffffff00) == (uint32_t)0xbfc05100) {
+        cpu->pc = cpu->cd.mips.gpr[MIPS_GPR_RA]; ...
+    }
+    break;
+```
+It tests neither `writeflag` nor `len`. Once the `goto crime_declined` is skipped (M5_revlatch), every accepted-width fall-through reaches this arm, and every refused width (lb/lh/sb/sh) at relative_addr 0 reaches it too — because the refused branch drops into the same switch with no width filter. `PROBE_PC = 0xbfc05180` clears bits 0–6 of 0xbfc05100, so the window matches. The brief's note that the existing `sb rev pc` / `sh rev pc` cells were measured as side-effect cells of this same arm (write cells, not read cells) is consistent with the inlined code.
+
+**Q1(d) — TRUE (REASONED).** The CONTROL arm's DOG partition is the single statement `idata &= ~CRIME_CONTROL_DOG_ENABLE;`. D_nodogclear deletes that statement. The other shapes the brief names do not produce a distinct observable:
+- "DOG as stop bit" would change session `clean` from `exit0` to a signal/exit-nonzero, and `count(t, "...", clean)` returns the literal string `"unclean"` for an unclean session — that is a different observable than the text count, and no row in the 218 is shaped to read it (the `clean` rows read liveness, not text). It is also not a one-token edit of the DOG partition.
+- "DOG suppressing the residue print" is what the current code already does (DOG is cleared, residue is 0, no print). A mutant that suppresses the print for a 0x0200 write without removing the clear is observably equivalent to the fixed build on every cell the 218 can see.
+- "Re-arm inside the DOG branch" is not a well-formed mutant of the partition as inlined.
+
+So D_nodogclear is the only one-token DOG-partition mutant the text-count channel distinguishes from the fixed build. The `ctldog sw msg` / `ctldog sd msg` pair is the right carrier: the 0x0200 write is the cell, the 0x0201 write is the in-session liveness half (the twin's count is what stays non-zero on a dead channel).
+
+**Q1(e) — TRUE (READ + REASONED).** The switch handles six named labels plus `default:`. Of these:
+- CRIME_REV: redirects PC from the PROM window. Guest-observable.
+- CRIME_CONTROL: clears DOG, halts all CPUs on HARD_RESET, prints on non-zero residue. Guest-observable.
+- CRIME_INTSTAT / CRIME_INTMASK: call `crime_interrupt_reassert(d)`. Guest-observable on the interrupt line.
+- CRIME_TIME: calls `crime_update_crime_time(d)`. Guest-observable on the clock.
+- CRIME_DOG: bare `break;`. No guest effect. (Host log only — and `mid nodflt` already reads the default-arm path after a latch-setting refusal, per the M1_gotolatch row in table 12.)
+- `default:`: host `debug()` only. Not guest-observable.
+
+No offset outside the switch reaches this access function (the CRIME window is 0x80 bytes; memory control at 0x14000200 is a separate device). The five-label enumeration is complete.
+
+---
+
+**Q2 — FLOOR CLOSES. NO MUTANT IN {OBSERVABLE LABEL} × {LATCH SET} ESCAPES THE 218 ROWS.** The swept cells are:
+
+| Label | Latch | Rows swept (shape: narrow op × refused offset) | Source table |
+|---|---|---|---|
+| CRIME_TIME (0x38) | SET | `tl lb`, `tl sb`, `tl lh`, `tl sh` | table 14 (repair 15) |
+| CRIME_REV (0x00) | SET | `rl lb pc`, `rl lh pc`, `rl sb pc`, `rl sh pc` | table 14 (repair 15) |
+| CRIME_INTSTAT (0x10) | SET | `istat sb`, `istat lh`, `istat sh` | table 12 |
+| CRIME_INTMASK (0x18) | SET | `imask sb`, `imask lh`, `imask sh` | table 13a |
+| CRIME_CONTROL (0x08) | SET | `sb08 msg`, `sh08b run`, `gate run` | table 13a |
+| CRIME_CONTROL DOG partition (accepted, not decline) | n/a | `ctldog sw msg`, `ctldog sd msg` | table 14 (repair 15) |
+
+The first five are the decline-suppression class proper — four narrow ops each at TIME and REV (the eight cells the floor ruling specified), three each at INTSTAT, INTMASK, and CONTROL (the established count from tables 12 and 13a). The ctldog pair is a clause-(e)-disclosure-adjacent row that repairs the entries-13/17 gap; it is not a decline-suppression cell.
+
+Every decline-suppression mutant in the test set is killed at the predicted red set, with exact counts: M3_timelatch 214, M5_revlatch 214, M6_istlatch 215, M7_intmasklatch 215, M8_ctllatch 215, D_nodogclear 216. No leg in table 14 shows a red outside its predicted set, and no prediction misses a red.
+
+---
+
+**Q3 — THE PAIR IS THE RIGHT L2 MEMBER. THE CHANNEL IS SOUND.** D_nodogclear is the only one-token DOG-partition mutant that produces a different observable on the cell the entries-13/17 pair exercises (the CONTROL text count for a 0x0200 write). The twin writes (0x0200 then 0x0201) are the right shape: the in-session liveness half is the 0x0201 write (its residue is 0x01, prints on every build), so a count of 0 would be green only on a dead channel or a declined write, both of which the twin rules out. On a build where the 0x0200 write DID print (D_nodogclear), the count is 2; on the fixed build it is 1. The ruling's other branch — clause (e) disclosure — would apply if no body-tested-partition mutant could move the cell; D_nodogclear moves it, so L2 is the correct disposition. No member is missing: a "DOG as stop bit" shape would move `clean`, not the text count, and no row in the 218 is shaped to read `clean` against this cell, so it is not in the channel the pair was built for.
+
+---
+
+**Q4 — EVERY LEG MATCHES ITS PREDICTION.** I compared each of the 18 legs in `PRETABLE14.out` to the verbatim results in section 8:
+
+- `base`: predicted none/218, got none/218. ✓
+- `G_clr_ctl4r`: predicted none/218, got none/218. ✓
+- `G_clr_imk4r`: predicted gate line/217, got gate line/217. ✓
+- `G_clr_ist4r`: predicted acc istat lw/217, got acc istat lw/217. ✓
+- `G_glm_tim4clear`: predicted c t4w gap, c t4r gap/216, got same/216. ✓
+- `G_lane_ctl`: predicted p acc ctl4r/217, got same/217. ✓
+- `K_ctl4w_reset_post`: predicted rst 4w/217, got same/217. ✓
+- `K_ctl8w_reset_post`: predicted rst 8w/217, got same/217. ✓
+- `M1_gotolatch`: predicted the union of table 12's ten plus the eight new tl/rl cells/200, got exactly that set/200. ✓
+- `M2_ld278clr`: predicted top8 clear/217, got same/217. ✓
+- `M3_timelatch`: predicted tl lb/sb/lh/sh/214, got same/214. ✓
+- `M4_timeplain`: predicted time lb/sb/lh/sh + tl lb/sb/lh/sh/210, got same/210. ✓
+- `M5_revlatch`: predicted rl lb/lh/sb/sh pc/214, got same/214. ✓
+- `M6_istlatch`: predicted istat sb/lh/sh/215, got same/215. ✓
+- `W_ctl8w`: predicted p acc ctl msg, rst 8w/216, got same/216. ✓
+- `M7_intmasklatch`: predicted imask sb/lh/sh/215, got same/215. ✓
+- `M8_ctllatch`: predicted sb08 msg, sh08b run, gate run/215, got same/215. ✓
+- `D_nodogclear`: predicted ctldog sw msg, ctldog sd msg/216, got same/216. ✓
+
+No row red on a leg where no hunk reaches it. No row stayed green on a leg where its hunk reaches it.
+
+---
+
+**ONE CONCERN NOT RAISED BY THE BRIEF.** The timing path for `s1 SMALL` (Q1b) is the one place I cannot close from the packet alone. The 0.25 s `rd()` is a blocking loop, and the command count between `s0` and `s1` is large enough that a naive `crime_update_crime_time` walk predicts `s1` LARGE. The empirical fact that the row passes on the fixed build and fails on M3_timelatch is consistent and inlined, and the symmetry with the pre-existing `time` row (which has been validated across many tables) makes the outcome trustworthy — but a single raw `s1` from one `tl` session would settle it. I name it because it is the one premise I would not want to ship without.
+
+**NOTHING ELSE FOUND.** The diff under review is well-formed: the eight `tl`/`rl` rows are added with the right shape, the `control` aggregate at the bottom is extended with the four `tl <op> ctl` names, and the entries-13/17 pair is added with the twin-write shape. The owed follow-ups (gate pin 204 → 218, records) are correctly flagged as not in this pass.

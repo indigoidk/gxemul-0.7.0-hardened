@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""mk_r18.py -- #529's probe r18 = r17 (2fe7123b) + GPT-6 Astra's r17 audit (final529r17_20260926/codex_jobs/
+codex_r17audit.txt: eight false or unsupported docstring sentences) + the ACCEPTS-46 enumeration (the Opus seat and the
+independent codex twin, codex_accepts46twin.txt), whose replacement block is read from accepts_block.txt beside this
+script.  DOCSTRING ONLY: refuses unless the module AST minus its docstring is identical to r17's.
+
+Audit items 3 and 4 (the host bucket's "missing two" and repair 13's three-write count) sit inside the ACCEPTS block and
+are corrected by its replacement; items 1, 2, 5, 6, 7 and 8 are the pairs below."""
+import ast, hashlib, io, os, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+R17 = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\crimewidthkill\final529r17_20260926\crime_width_probe.r17.py"
+OUT = os.path.join(HERE, "crime_width_probe.r18.py")
+
+
+def md5(s):
+    return hashlib.md5(s.encode("utf-8")).hexdigest()[:8]
+
+
+s = io.open(R17, encoding="utf-8", newline="").read()
+if md5(s) != "2fe7123b":
+    sys.exit("r17 is not 2fe7123b")
+PAIRS = [
+    # 1. P:15 -- not every access is stepped
+    ("Every access here is a real MIPS guest instruction through real address decode and memory_rw, one `step' at a time.\n",
+     "Every access here is a real MIPS guest instruction through real address decode and memory_rw.  Most sessions step\n"
+     "one `step' at a time; the `<RUN>' sessions FREE-RUN with `continue', and the `free ... said' rows depend on that\n"
+     "difference (this said \"one `step' at a time\" of every access until GPT-6 Astra's r17 audit, 2026-09-26).\n"),
+    # 2. P:172 -- TIME's low bytes are not a 66-990 range
+    ("     -- REV 0x11, CONTROL 0x100, TIME 66-990 (low bytes); INTSTAT/INTMASK 0x0101010111010101 and DOG\n",
+     "     -- REV 0x11, CONTROL 0x100, TIME a small multiple of 66 in its low bytes and ZERO in some cells (see TIME below;\n"
+     "     this said \"TIME 66-990\" until GPT-6 Astra's r17 audit); INTSTAT/INTMASK 0x0101010111010101 and DOG\n"),
+    # 5. P:430-431 -- the same range, repeated
+    ("which the time rows' 0.1 s threshold cannot tell from the 66-990 the first tick adds -- clause (e) debt.",
+     "which the time rows' 0.1 s threshold cannot tell from the small multiple of 66 (possibly 0) the first tick adds\n"
+     "    -- clause (e) debt (this said \"the 66-990\" until GPT-6 Astra's r17 audit)."),
+    # 6. P:449-451 -- TIME's upper word is equivalent only while it is zero
+    ("    half above the low word -- is EQUIVALENT (the prelude rewrites REV and CONTROL on every access; TIME is kept to 32\n"
+     "    bits).",
+     "    half above the low word -- is EQUIVALENT (the prelude rewrites REV and CONTROL on every access) -- at TIME only\n"
+     "    WHILE ITS UPPER WORD IS ZERO: the clock update truncates TIME to 32 bits only inside `if (to_add >= 1)', and an\n"
+     "    accepted 8-byte or upper-half write can fill the upper word, so a nonzero upper word survives a zero-delta update\n"
+     "    (a source reading, GPT-6 Astra's r17 audit; this said \"TIME is kept to 32 bits\" unconditionally, and no row\n"
+     "    seeds TIME's upper word)."),
+    # 7. P:453-454 -- a selection shows only if it reaches the returned bytes
+    ("    INTSTAT, INTMASK and DOG every byte is seeded nonzero, so any selection shows (Opus, second closing pass; glm, third).\n",
+     "    INTSTAT, INTMASK and DOG every byte is seeded nonzero, so any selection that reaches the bytes a refused lb/lh\n"
+     "    returns shows (Opus, second closing pass; glm, third) -- one confined above them, `& 0xffff0000', is item 9's\n"
+     "    disclosed equivalent (the qualifier: GPT-6 Astra's r17 audit; this said \"any selection shows\").\n"),
+    # 8. P:482-483 -- bit 0 is written by accepted rows; the contract boundary is the arm's own tests
+    ("  * bits the CONTROL arm neither tests nor clears (SOFT_RESET 0x0400, the SYSADC bits, the low nibbles) are written\n"
+     "    by no accepted row; an edit keyed on one is outside this contract (repair 16's F2 adjudication, X7).\n",
+     "  * bits the CONTROL arm neither tests nor clears (SOFT_RESET 0x0400, the SYSADC bits, the low nibbles): an edit keyed\n"
+     "    on one is outside this contract because the arm does not distinguish them (clause (e); repair 16's F2\n"
+     "    adjudication, X7).  Accepted rows write only bit 0 of them -- ACCEPTS' 0x0001 and 0x0201, both widths, both latch\n"
+     "    states (opus_r15p2_20260926/accepts_ctl_writes.out); this said \"written by no accepted row\" until GPT-6 Astra's\n"
+     "    r17 audit.\n"),
+]
+for old, new in PAIRS:
+    if s.count(old) != 1:
+        sys.exit("find-text found %d times: %r" % (s.count(old), old[:80]))
+    s = s.replace(old, new)
+
+# the ACCEPTS block: "is the INTERSECTION.  Over the 46 ACCEPTS entries:" ... "(46 ENTRIES, six KINDS).\n"
+blk = os.path.join(HERE, "accepts_block.txt")
+if os.path.isfile(blk):
+    a = s.index("is the INTERSECTION.  Over the 46 ACCEPTS entries:\n")
+    b = s.index("    46  = the ACCEPTS entry count (46 ENTRIES, six KINDS).\n", a)
+    b += len("    46  = the ACCEPTS entry count (46 ENTRIES, six KINDS).\n")
+    s = s[:a] + io.open(blk, encoding="utf-8", newline="").read() + s[b:]
+    print("ACCEPTS block replaced from accepts_block.txt")
+else:
+    print("*** accepts_block.txt absent -- r18 WITHOUT the ACCEPTS enumeration (items 3 and 4 not yet corrected)")
+
+
+def strip_doc(src):
+    t = ast.parse(src)
+    if t.body and isinstance(t.body[0], ast.Expr) and isinstance(getattr(t.body[0], "value", None), ast.Constant):
+        t.body = t.body[1:]
+    return ast.dump(t)
+
+
+old = io.open(R17, encoding="utf-8", newline="").read()
+if strip_doc(old) != strip_doc(s):
+    sys.exit("REFUSED: r18 changes code outside the module docstring")
+io.open(OUT, "w", encoding="utf-8", newline="").write(s)
+print("wrote", OUT, md5(s), "(docstring only; AST minus docstring == r17's)")

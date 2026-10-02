@@ -1,0 +1,63 @@
+I'll start by reading the full offloaded brief, then walk `DEVICE_ACCESS(crime)` against the 131-row probe so the verdict can rest on the function's cases, not the earlier pass's leftover list.The brief is inlined; next I’ll walk the live `DEVICE_ACCESS(crime)` and the 131-row probe so the enumerations can be checked against the function, not the packet.The header matches the brief. Next I’ll walk the rest of the probe sessions and the live C handler so each claimed case can be checked against an actual branch.The branch list is in hand. Next I’ll read the table-7 mutants and a few register-layout facts so I can tell a real floor hole from a joint cell the header already discloses.**CLOSES**  
+`CRIME_CLOSE4_20260913`
+
+The 131-row test’s enumerations now follow `DEVICE_ACCESS(crime)`’s own if-sides. I could not name a single-axis source edit that undoes part of the decline and still scores 131/131. Three statements in the packet are wrong; none of them is a floor hole.
+
+---
+
+## 1. The derivation
+
+Walked `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` `DEVICE_ACCESS(crime)` against `regress/crime_width_probe.py` (latch-x5 prologue, `KINDS`, keeps, said, answer rows). Guest-takeable if-sides an accepted access can return from:
+
+| If | Both sides issued before the first refusal (prologue) and between refusals (`KINDS`) |
+|---|---|
+| `len == 8` × writeflag | `sd`/`ld` (prologue `sd +0x278`, `ld +0x30`; `KINDS` both at DOG; 8W also `warm once`) |
+| `len == 4` × writeflag × `(relative_addr & 4)` | `&4` set: `sw`/`lw +0x34`. `&4` clear: `sw +0x08` / `lw +0x00` (and the other labelled `lw`s) |
+| every `switch` label | REV `lw +0x00`; CONTROL `sw`/`lw +0x08`; INTSTAT `lw +0x10`; INTMASK `lw +0x18`; DOG `ld +0x30`; TIME `ld +0x38`; default `sw`/`lw +0x34` and `sd +0x278` |
+| REV pc-window | in: `lw` at `PROBE_PC`; out: ordinary `lw +0x00` |
+| CONTROL writeflag | `lw +0x08` / the three `sw +0x08` |
+| CONTROL DOG | set: `sw 0x0201`; clear: `sw 0x0001` and `sw 0` |
+| CONTROL leftover | nonzero: `0x0201` / `0x0001`; zero: `sw 0` |
+| default writeflag | R: `lw +0x34`; W: `sw +0x34` / `sd +0x278` |
+
+HARD_RESET true is disclosed (it stops the CPUs). HARD_RESET false is the path every issued CONTROL write already takes.
+
+**Not a missing if-side:** CONTROL is sequential ifs, not a nested product. The header writes “writeflag × DOG × leftover”. The reachable write product has four cells; the probe issues three (`DOG set × leftover 0`, i.e. `sw 0x0200` / `sw 0x0300`, is absent). That cell is the conjunction of two already-rowed sides. Inserting into the DOG-true body still fires on `0x0201`; inserting into the leftover-else still fires on `sw 0`. A mutant that fires only on the pair has to add a conjunct — the disclosed joint class, not a floor hole.
+
+Other machine-constant ifs (RAM > 1024, `ram <= 256`, `is_32bit` on this R5000 / ISA IV, 64-bit else only) are not guest-takeable both ways. The reachable `is_32bit` else is taken by the PROM-window `lw`.
+
+**Latch.** SET on each single axis: width 1 vs 2 and R vs W (`warm once` / `latch x5`); every label first, then another label (`+0x07`, and mid’s bit-7/8-clear follow-up); TEST `|| relative_addr == L` for every label after the latch is set (REV/TIME in the latch-x5 tail; CONTROL/DOG in the dog session; INTSTAT/INTMASK by repeating the label). NOTICE: `said()` on every label-first first refusal, including `rev said` at `+0x00` (every address bit clear). Those `said` rows are load-bearing: `c3_quiet_b1` / `c3_quiet_imask` still leave `-- declined.` == 1 via the follow-up.
+
+**Answer.** Named labels, both widths, over registers whose bytes are actually nonzero: INTSTAT/INTMASK `0x0101010111010101`, DOG `0x0123456789abcdef`, TIME seeded `0x11111111` (odd + 66·n stays odd, so the low byte/halfword are never 0). REV `0x11` / CONTROL `0x100` / TIME high bytes the model holds at 0 stay disclosed.
+
+**Landing.** Read-back refused stores carry address bits 0–9 both ways: DOG, INTMASK, `+0x40` (bit 4 clear), mid (0–8 set), far (bit 9). TIME-only landing remains disclosed.
+
+---
+
+## 2. Floor gap
+
+None that I can write as an exact `dev_sgi_ip32.c` edit and still call 131/131 except the header’s own DISCLOSED list (SOFTINT / one unnamed offset, TIME-only store ≤ 0xffff, HARD_RESET true, joint multi-axis, function-static latch, widths 3/5/6/7, REV/CONTROL/TIME bytes held at 0, interior accept slots).
+
+A `goto crime_declined` → `return 1` remains equivalent: `memory_rw.c` still pre-zeroes a device read buffer immediately above `paddr -= mem->devices[i].baseaddr`.
+
+---
+
+## 3. Wrong statements
+
+1. **Probe header, contract item 7 (shipped `crime_width_probe.py`):** it still says the far-block refused stores “leave `+0x278` reading **0**”. Repair 9 seeds that slot; the live `hi keeps` row wants `0x123456789abcdef`. The row is right; the contract sentence was not updated.
+
+2. **Same header, items 4 and 8:** “CONTROL’s writeflag (R, W) × DOG (set, clear) × leftover (nonzero, zero)” claims a product cell (`DOG set` × leftover 0) that no prologue/`KINDS` access issues. The per-if sides are rowed; the “×” is not.
+
+3. **POSTTABLE 7:** “the remaining **64**” detected NEW legs is **65** (`check_pred.out` NEW lines 7–71). The “**45** targeted re-runs” is **41** (wstore … `l_dog`); 41 + 10 panel `c3_*` + 2 named + 12 `r_*` = 65.
+
+Lesser: “only a CONSTANT answer can show” at CONTROL `lb` — a non-constant of `len` / `relative_addr` / `reg >> 8` would also show; what cannot show is answering the stored low byte (0).
+
+---
+
+## Could not check
+
+- Did not rebuild or re-run any mutant (table 7’s 78/78 `check_pred` and `probe_first11_fix.out` `131/131` taken as the measurements).
+- Did not re-derive TIME’s “42 of 800” zeros; the seeded-odd pin does not need that figure.
+- Did not re-score standing kills from tables 1–6 whose sessions repairs 8/9 did not touch.
+
+agy was not fired (reserved). This is a reading of `GXEMUL-SEC/` only.

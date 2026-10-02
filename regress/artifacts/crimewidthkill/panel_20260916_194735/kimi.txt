@@ -1,0 +1,954 @@
+kimi version 0.36.0
+• Let me read the file first.The file is 1180 lines. I need to read it in full. Let me page through it.Let me continue reading the file.I've read the full brief. Now I need to review it adversarially exactly as its own Questions/Review-asks section directs. The Questions section has 5 questions:
+
+  1. **IS THE ENUMERATION ITSELF RIGHT?** `{latch clear, set} x {len 4, 8} x {read, write} x {7 labels}` = 56 cells. Is there an AXIS missing, or a label the switch distinguishes that the seven do not cover? Check against the function.
+
+  2. **DOES A CLEAN-SWEEP LATCH-SET MUTANT EXIST THAT TABLE 11 DID NOT BUILD?** Give an exact edit to `src/devices/dev_sgi_ip32.c` that scores 188/188, and name the row expected to catch it.
+
+  3. **IS THE PER-CELL DISPOSITION HONEST?** 46 ACCEPTS entries split 23 ROWED / 8 ALREADY PINNED / 10 EQUIVALENT / 5 HOST-DIAGNOSTIC. Is any cell in the wrong bucket?
+
+  4. **THREE LEGS REPORT CRIMEP_CONTROL=FAIL** — is the "attributable" reading wrong?
+
+  5. **WHICH STATEMENT IN THIS BRIEF, IN POSTTABLE 11, OR IN THE PROBE HEADER IS WRONG?** Find the next one beyond the known K2 prediction error.
+
+  To do this review properly, I need to verify against the actual source: `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` (DEVICE_ACCESS(crime)) and `GXEMUL-SEC/regress/crime_width_probe.py`. The brief gives me the whole enclosing function in the file, but the review ask says "Check it against the function, not against my description of the function." So I should read the actual source.
+
+  Also there's the operational rule: do not run run.sh, gate scripts, or the battery. Building/running a single detector or mutant in my own temp dir is fine but time-budget-wise, this is mostly a read/verify task.
+
+  Let me plan an adversarial review:
+
+  **Question 1: Is the enumeration right?**
+
+  Check the switch labels in the real dev_sgi_ip32.c: CRIME_REV (0x00), CRIME_CONTROL (0x08), CRIME_INTSTAT (0x10), CRIME_INTMASK (0x18), CRIME_DOG (0x30), CRIME_TIME (0x38), default. Seven labels — matches the code shown. But I need to verify against the real file. Also possible missing: CRIME_SOFTINT (0x20) — the switch does NOT name it (it goes to default). The brief mentions "a fall-through only at CRIME_SOFTINT (0x20), which the switch does not name — measured 71/71". So SOFTINT falls in default. Are there other case labels? Need to check the real file for any case labels the brief's copy might have omitted (e.g., CRIME_VICE or others in the real source? The real gxemul dev_sgi_ip32.c might have more cases). The brief says "Check it against the function, not against my description of the function."
+
+  Missing axes candidates:
+  - **writeflag axis beyond read/write?** MEM_WRITE/MEM_READ only two. OK.
+  - **The width axis**: len 4 and len 8 only for accepted; the enumeration is over the ACCEPT guard cells, so {4,8} is right for accept cells.
+  - **The latch axis**: {clear, set}. But `d->warned` may have more bits than CRIME_W_LEN? If the fix uses only one bit, fine. But a mutant could key on `d->warned` nonzero vs the specific bit. Actually `d->warned` — is it used elsewhere? If other code sets other bits of d->warned... Need to check.
+  - **The idata axis**: For CONTROL writes, the guard growth could be keyed on idata (e.g., only decline writes with bit X). But that's a value axis, and the enumeration is {latch} x {len} x {dir} x {label}. A latch-set mutant keyed additionally on idata would be a JOINT of the latch axis and idata — the brief handles joints as clause-(e) debt (multi-axis). Actually wait — question 2 asks for a clean-sweep latch-set mutant table 11 did not build. Table 11 built only single-axis latch-keyed cells: `!(dir && label && latch)`. A mutant like `!(dir && label && idata-bit && latch)` is a joint — the brief's own contract puts multi-axis joints in clause-(e) debt. But question 2 asks "DOES A CLEAN-SWEEP LATCH-SET MUTANT EXIST THAT TABLE 11 DID NOT BUILD?" — I should consider forms outside the generated product:
+    - Keyed on the latch being CLEAR rather than set? `!(<cell> && !(d->warned & CRIME_W_LEN))` — declines an accepted cell while latch clear... but wait, that would announce (latch clear → fatal fires → count changes). Actually a decline with latch clear announces, so it's the announced form, caught by `latch said`. Hmm, but does `latch said` cover every cell? latch x5 runs all 46 ACCEPTS accesses before the lh +0x06. If a cell is declined with latch clear, the announce fires (once), and the lh +0x06's announce is suppressed — count stays 1. Yes.
+    - A mutant on the **writeflag dispatch itself**, e.g. a mutant that makes the latch-set decline apply at a cell but ONLY for a specific VALUE of idata where no row varies idata post-latch. E.g., `!(relative_addr == CRIME_TIME && idata == <something> && latch)`. That's a joint — clause (e).
+    - **The most interesting: a latch-set mutant at a cell whose rows exist but run with latch CLEAR in the P sessions?** Wait — the P sessions all start with POST() = refused lb at +0x07, so latch set. OK.
+    - **A mutant keyed on the latch at a cell where the post-latch row's oracle is a WRITE-only effect that nothing reads back post-latch.** E.g., CONTROL writes post-latch: `p acc ctl msg` counts "CRIME_CONTROL: unimplemented" messages = 3. A latch-keyed shrink at CONTROL 4W would decline the sw 0x0001 and sw 0x0201 post-latch → count drops to 1 → caught. CONTROL 8W decline → sd 0x01 declined → count 2 → caught. OK.
+    - **The REV window 8W/8R/4W: P1 covers sw/sd/ld/lw from the window.** All four kinds. OK.
+    - What about **REV 8W/4W/4R OUTSIDE the window** — EQUIVALENT claims: "the prelude rewrites REV; its high half is 0". For 8W outside window: write to REV — d->reg[0] = idata, but the prelude on EVERY access sets d->reg[CRIME_REV/8] = 0x11 (since use_fb=0). Wait — the prelude runs at the START of the access, BEFORE the width dispatch. So an accepted 8W to REV: prelude sets reg[0]=0x11, then the switch... wait no — actually looking at the code: the len==8 branch does `d->reg[relative_addr/8] = idata` BEFORE the switch. So reg[0] = idata. Then the switch case CRIME_REV: only pc check. So after an accepted sd to REV, reg[0] = idata until the NEXT access rewrites it to 0x11. A following accepted read of REV would... the prelude rewrites it to 0x11 again before the read. So yes, the write is invisible — any read rewrites first. BUT: what about `revP sd pc` — an accepted 8W from the window redirects pc (the switch case acts on pc regardless of direction). That IS guest-visible and IS rowed post-latch (P1 includes sd at PROBE_PC). OK.
+    - Hmm wait — P1's sw/sd/ld/lw from the window: the latch-keyed mutants C_rev8w, C_rev8r, C_rev4w, C_rev4r — do they decline only OUTSIDE the window? No — they decline at the label regardless of pc. So P1 catches them via pc redirect. But a mutant keyed on JOINT(label=REV, latch, pc IN window)? Multi-axis, clause (e).
+
+    - **The default arm**: C_dfl8w etc. use the complement expression. The default arm covers many addresses; the latch-set default mutant declines ALL default-arm accesses post-latch. Rows: `p acc 40 sw`, `p acc 40 lw` (+0x40), and P6 has... the far block +0x278 sd/ld (`p top st+ld`), and +0x04 sw write line (extra, uncounted?), +0x20 SOFTINT stores in P3 (default arm! 0x20 is not a label). Wait — P3 stores sd +0x20 (SOFTINT). Under C_dfl8w, those would be declined post-latch → SOFTINT never set → `p istw pre` expects "clear" — hmm, that control expects IP2 clear after SOFTINT store... wait no. Let me re-read P3: st sd +0x18 BIT (INTMASK), st sd +0x20 BIT (SOFTINT), print cause → `p istw pre` expects "clear"?? That seems odd — setting SOFTINT&INTMASK should raise IP2. Hmm, "CONTROL: IP2 low after SOFTINT default-arm store" — wait maybe BIT is a value with bit set such that... Actually in the pre-P session (istw pre) the same pattern appears: "row("istw pre", ip2(nth(t, "cause", 2)), "clear", "CONTROL: lowered again (SOFTI..." Hmm the pre-existing istw rows: pre/mid are "clear" controls and sd/sw are "set". I can't fully resolve without the probe source. Not critical for the review.
+
+    Actually wait — under C_dfl8w, the sd +0x20 stores in P3 are declined silently. Then `p istw sd` (accepted sd +0x10 reasserts → IP2 set) — if SOFTINT was never set, the reassert via INTSTAT store would not set IP2 → row reds. So C_dfl8w is caught. Fine.
+
+  **Now the key adversarial hunt: what latch-set mutant scores 188/188?**
+
+  Candidates:
+  1. **A latch-keyed shrink at CONTROL 4R** — C_ctl4r built, 188/188, called EQUIVALENT negative control. OK.
+  2. **A latch-keyed shrink at the REV window... hmm.
+  3. **A mutant keyed on the latch at INTSTAT 4R?** C_ist4r 187/188 reds `istat ctl` — killed. At INTMASK 4R: C_imk4r reds `imask ctl`. At TIME 8R: C_tim8r reds time rows. At DOG cells: DOG is a plain store/read register (arm is `break;` — no body beyond the generic reg read/write). C_dog8w etc. would decline DOG accesses post-latch → P6 `p dog st+ld` etc. catch 8W/8R/4R/4W. But wait — DOG cells with latch CLEAR: caught by table 10's S_* bypasses? The 12 S_* cells: REV window 4W/8W/8R, CONTROL 8R/8W, INTSTAT 8R/8W/4W, INTMASK 4W, TIME 8W, default 4W/4R at +0x40. That's 12. DOG latch-clear bypass — EQUIVALENT? A silent bypass at DOG declines a store... DOG seeded value rows: `sb keeps`, `sh keeps` — those are REFUSED stores over a seeded slot. A latch-clear silent bypass at DOG 8W: accepted sd to DOG declined silently, no announce... then `dog st+ld` (the pre-P session has acc8 st+ld at +0x30) would read back 0 or wrong → caught by value row. OK.
+
+  4. **THE INTERESTING ONE: a mutant that is keyed on the latch but at the *readback* side is caught... what about a latch-set shrink at a cell whose post-latch accesses exist only as WRITES whose readback happens with latch CLEAR?** Hmm, all P sessions set latch first.
+
+  5. **What about `C_tim8w`?** TIME 8W post-latch: P2 has `p acc time sd` — accepted sd +0x38 with odd seed stays odd. Under C_tim8w (latch set, decline sd +0x38), the seed never lands; TIME continues free-running. The row checks `tv & 1` — TIME updates add 66 x elapsed μs (always even), so TIME stays... initial TIME value — is it 0 at start? Even + even = even → tv even → row reds. OK caught.
+
+  6. **C_tim4w / C_tim4r**: the gapped rows catch. Measured: E2 reds both. C_tim4w is K-form on 4W; E2 is unconditional 4-byte bypass (both directions? `len == 4 && relative_addr == CRIME_TIME` — both). C_tim4w declines only the sw; p t4w gap reds. OK.
+
+  7. **What about a latch-set mutant at the default arm keyed on a SPECIFIC ADDRESS the enumeration's dfl covers but...** the dfl mutant declines ALL default addresses. A per-address latch mutant (e.g., only +0x278) is the "single unnamed offset" class — disclosed clause (e). And +0x04's write line is host-diagnostic only (F3). Hmm — **wait: C_dfl4w declines sw +0x04 post-latch too. Is that caught?** P6 does `st sw +0x04, 0x0c0ffee0` — the EXTRA write line. What row observes it? The comment says "the +0x04 WRITE line" as an EXTRA access. F3 measured sw +0x04 bypass 157/157 — guest-equivalent, host WRITE line nothing counts. Under C_dfl4w, the sw +0x04 is declined → the debug() write line absent... but nothing counts it post-latch. BUT C_dfl4w also declines sw +0x40 (`p acc 40 sw` reads back via ld) and sw +0x34 (`p dog wlo`), sw +0x30 (`p dog whi`). So C_dfl4w is caught by those. OK.
+
+  8. **A latch-keyed mutant at INTSTAT 4W?** P3 has sw +0x10 post-latch → `p istw sw` expects IP2 set. Under C_ist4w, the sw +0x10 declined → no reassert → IP2 stays clear → reds. OK.
+
+  9. **INTMASK 8W post-latch**: P6 `p imask st+ld`. OK. INTMASK 8R post-latch: P6 reads back ld +0x18 → under C_imk8r the read answers 0 → row expects BIT → reds. OK.
+
+  10. **CONTROL 8R**: `p acc ctl ld` (K3's kill). OK. CONTROL 8W: `p acc ctl msg` count. OK.
+
+  11. **REV 8R from CODE (outside window)**: `p rev ld` expects 0x11. C_rev8r declines it → answers 0 → reds. Also caught by P1's ld from window. OK. REV 4R low lane: `p rev lw4` 0x11. REV 4R high lane (+0x04): hmm — the 4R high lane at +0x00 (i.e., +0x04) reads 0 either way (devsig hi reads 0 either way — EQUIVALENT). The enumeration: rev4r is ONE cell (both lanes?) — C_rev4r keys on `relative_addr == CRIME_REV` — note: a 4-byte access at +0x04 has relative_addr 0x04, NOT CRIME_REV (0x00)! **THE LANE ISSUE: the mutants key on `relative_addr == CRIME_REV`, but a 4-byte access to the HIGH half of REV uses relative_addr = 0x04, which is a DIFFERENT cell — and 0x04 is in the DEFAULT arm!** So C_rev4r only covers +0x00 low lane; the +0x04 read falls under default. The devsig hi cell reads 0 either way → EQUIVALENT. OK consistent.
+
+      But hold on — what about 4-byte accesses at +0x0c (CONTROL high half)? The enumeration's "label" axis uses the SWITCH's labels, and the switch sees relative_addr = 0x0c → default arm, not CONTROL. So a latch-set mutant keyed on `relative_addr == CRIME_CONTROL` declines +0x08 accesses (both lanes at 8 bytes; 4-byte low lane only). The +0x0c 4-byte cell is a default-arm cell. Is there an accepted 4W/4R at +0x0c post-latch? The ACCEPTS list — need to check the probe. The "crimectllane" defect is about +0x0c writes carrying bits into the raw idata... The enumeration's dfl covers +0x0c. C_dfl4r declines lw +0x0c post-latch — is there such an access in P sessions? Not obviously. But single-address mutants (+0x0c only) are the unnamed-offset class, clause (e). And C_dfl4r declining ALL default 4R post-latch: caught by `p acc 40 lw` (lw +0x40) and `p rev lw4` (+0x04)... yes both declined → red. OK.
+
+  12. **THE AXIS QUESTION — is there an axis missing?** Candidates:
+      a. **`len` values other than 4/8 on the accept side** — no, accepted means len 4 or 8.
+      b. **The PC axis (in-window vs out)** — the switch distinguishes it for REV (the arm acts only in window). A latch-keyed shrink keyed jointly on REV and pc-window is multi-axis. But is the enumeration's treatment of the window as part of "label" honest? The brief treats the window kinds as part of the 46 ACCEPTS entries (ldP etc.). A latch-set mutant at REV that only declines in-window accesses: `!(relative_addr == CRIME_REV && (pc in window) && latch)` — multi-axis joint → clause (e) debt by the pass-11 amendment. Hmm, but is it guest-visible? Yes (redirect lost). Is it caught? The rows that observe the redirect post-latch are P1's four pc rows. Under that joint mutant, ALL in-window REV accesses post-latch are declined → `p revP sw/sd/ld/lw pc` all red. So actually caught by construction — good, not a clean sweep.
+      c. **The idata axis for CONTROL writes** — joints, clause (e). But wait: is there a single-axis latch mutant keyed on idata alone (not label)? `!(idata & 0x01 && latch)` at CONTROL writes — that's {latch} x {idata bit} — idata is not in the enumeration's axis set! The enumeration axes are latch x len x dir x label. A mutant `if (len == 8 && !(writeflag == MEM_WRITE && (idata & 1) && (d->warned & CRIME_W_LEN)))` declines 8W with odd idata post-latch at ANY label. Hmm — is that in scope? The enumeration says "the four-axis product" — idata is NOT an axis. Is idata a "floor axis"? For CONTROL writes, idata is tested by the arm (DOG_ENABLE, HARD_RESET bits). The floor definition: axes the guarded body reads/branches on. idata IS branched on in the CONTROL arm. So a latch-keyed shrink keyed on idata... but per the contract, idata-keyed things at CONTROL: DOG 0x200 and RESET 0x800 each both ways at 2W — those are REFUSAL-side tests. On the accept side, CONTROL writes in ACCEPTS carry {0x0201, 0x0001, 0, 0x0200} and 0x0100. Post-latch P2 carries sd 0x01, sw 0x0001, sw 0x0201. A mutant `!(relative_addr == CRIME_CONTROL && idata == 0x0001 && latch)` — declines only the sw 0x0001 post-latch → `p acc ctl msg` count drops 3→2 → RED. Caught! Because the row counts three writes. A mutant keyed on idata bit 0 at CONTROL: declines sd 0x01 and sw 0x0001 and sw 0x0201 (all odd!) → count 0 → red. Keyed on bit 9 (0x200): declines only sw 0x0201 → count 2 → red. Keyed on `idata == 0` — no such write post-latch... in the PRE-latch sessions, ACCEPTS has CONTROL writes of 0 — but those run latch-clear, so the latch-keyed mutant doesn't fire there. Hmm — so a mutant `!(<CONTROL write with idata==0> && latch)` never fires in any session → EQUIVALENT (vacuous mutant, unfalsifiable — "a row at a cell no mutant reaches is unfalsifiable" conversely a mutant no row reaches... it would score 188/188 but it's equivalent because it never fires). Fine.
+      
+      Actually, more carefully for question 2: the ask is "a clean-sweep latch-set mutant... Give an exact edit that scores 188/188, and name the row you expected to catch it." So I need to either produce one or argue none exists within the class. Let me think harder about gaps in the P sessions:
+
+      **P2's `p acc time sd`**: the seed 0x11111111 is odd. Under C_tim8w, declined → TIME keeps free-running from ~0. 66*elapsed even → even → red. But wait — what sets TIME before? TIME starts at 0? crime_update_crime_time adds 66*microseconds. The row relies on "odd seed stays odd". Under the mutant, tv = even value. OK red.
+
+      **What about C_tim8r?** Measured 181/188 — reds time lb/sb/lh/sh and p acc, p t4w, p t4r. Killed.
+
+      **C_ist8w**: INTSTAT 8W post-latch: P3's sd +0x10 → `p istw sd` reds. Also table: measured? "27 cells KILLED". OK.
+
+      **C_ist8r**: post-latch ld +0x10 → `p acc istat ld` expects BIT → reds.
+
+      **C_ist4w**: P3 sw +0x10 → `p istw sw`. OK.
+
+      **C_ist4r**: reds `istat ctl` (pre-latch? no — `istat ctl` is a CONTROL row in the OLD istat session: "imask/istat pre + ctl (IP2 low after the setup; an accepted lw sets it)". The ctl is an accepted lw +0x10 AFTER... in the old session, is the lw before or after the session's refusal? If after the first refusal, latch set → C_ist4r declines it → reds. Measured: C_ist4r's ONLY red is `istat ctl`. Good — that's the 8 ALREADY PINNED cells at work.
+
+      **C_imk8w**: P6 `p imask st+ld`. **C_imk8r**: P6 read back ld +0x18 — same row catches both directions? st+ld: under C_imk8r, the ld answers 0 → red. OK. **C_imk4w**: P2 `p acc imask sw` (K1's kill). **C_imk4r**: `imask ctl`.
+
+      **C_dog8w/8r/4w/4r**: P6 dog rows. But note: C_dog4w keys on `relative_addr == CRIME_DOG` = 0x30 — the sw +0x34 (4W low... wait +0x34 is the low half in big-endian? The DOG rows: rhi at +0x30, rlo at +0x34, wlo at +0x34, whi at +0x30. MIPS is big-endian here: high half at +0x30, low at +0x34. C_dog4w only catches sw at +0x30 (whi); sw +0x34 is `relative_addr == 0x34` → default arm! So the +0x34 4W cell is a DEFAULT cell, covered by C_dfl4w which is caught via +0x40 etc. Fine. And C_dog4w: declines sw +0x30 post-latch → `p dog whi` expects 0xfeedbac0badcafe; declined → reads back 0x112233440badcafe → red. OK.
+
+      **C_dog4r**: declines lw +0x30 post-latch → `p dog rhi` red. **C_dog8r**: `p dog st+ld` red. **C_dog8w**: `p dog st+ld` red.
+
+      **C_rev8w**: P1 `p revP sd pc`... also any non-window 8W? REV 8W outside window is EQUIVALENT (prelude rewrites). In-window covered by P1 sd. But C_rev8w declines BOTH in-window and out — the in-window decline reds `p revP sd pc`. OK.
+
+      **C_rev4w** (K2's other half): declines sw +0x00 (in and out of window) post-latch → `p revP sw pc` red. Also K2 measured reds sw+lw. OK.
+
+      **C_rev4r**: `p rev lw4` (+0x04 low lane? wait). Hmm: lw +0x00 is the LOW-address half = HIGH 32 bits in big-endian. REV = 0x11: reg value 0x0000000000000011. Big-endian 4-byte read at +0x00 → odata = (int32_t)(odata >> 32) = 0. At +0x04 → (int32_t)odata = 0x11. So `devsig` 4R-low cell... the brief says "devsig the 4R-low cell there" — hmm "4R-low" reading 0x11 means the low LANE (+0x04) holds 0x11. And `p rev lw4` reads lw +0x04 expects 0x11. OK. Under C_rev4r (`relative_addr == CRIME_REV` = +0x00 only): lw +0x00 declined... is there a post-latch lw +0x00? P6 has lw +0x04 (s1), ld +0x00 (s0). Hmm — lw +0x00 (4R at relative_addr 0) post-latch: NOT in P6? P1 has lw from window at +0x00 (`p revP lw pc`)! Under C_rev4r, declined → no redirect → red. And lw +0x04 is default-arm (relative_addr 0x04). So C_rev4r caught via P1. OK.
+
+      So all 28 generated cells have at least one row. The one "clean" cell C_ctl4r is the equivalence negative control.
+
+      **Now — mutants table 11 did NOT build (question 2).** The klatch generator produces exactly `head && !(dir && label && latch)`. What latch-set forms are NOT in that set?
+      
+      (i) **Latch-set shrink keyed on directionless label** — e.g. both directions at once (K2 is that for rev4; C_rev4w/C_rev4r are the halves). For other labels, a both-directions mutant is killed iff each half is killed (it's a union — declines more). Union mutants are killed whenever either half is killed. Fine.
+      
+      (ii) **A mutant keyed on latch-set at the DEFAULT arm but written with a single unnamed offset** (e.g. `relative_addr == 0x20` SOFTINT): the enumeration's dfl covers default as a whole. A single-offset latch mutant at +0x20: declines sd +0x20 post-latch → P3's SOFTINT stores declined → `p istw pre` expects "clear"... wait — pre expects CLEAR after SOFTINT store?? Let me re-read: P3: sd +0x18 BIT (INTMASK), sd +0x20 BIT (SOFTINT), print cause → `p istw pre` = "clear" — "CONTROL: IP2 low after SOFTINT default-arm store". Hmm, that says after storing SOFTINT=BIT and INTMASK=BIT, IP2 is... clear? That must be because INTSTAT is recomputed = SOFTINT | HARDINT, but cause.IP2 assertion depends on crime_interrupt_reassert being CALLED (which happens only on INTSTAT/INTMASK switch hits). Stores to SOFTINT (default arm) just set the register; the line isn't reasserted until an INTSTAT/INTMASK access. So pre = clear (no reassert yet). Then sd +0x10 (INTSTAT write) → reassert → IP2 set (`p istw sd`). OK. So under a latch-keyed mutant at +0x20 8W only: SOFTINT stores declined → IP2 never sets → `p istw sd`/`p istw sw` red. Caught. At +0x20 8R: any post-latch ld +0x20? No. Pre-latch? Doesn't matter (mutant needs latch set). So a latch-set mutant `!(writeflag == MEM_READ && relative_addr == 0x20 && latch)`... never fires post-latch (no ld +0x20 anywhere post-latch? not that I see). Would never fire → 188/188 but EQUIVALENT (a read of SOFTINT answers the register; declining it answers 0 — but SOFTINT is set in sessions... hold on, is SOFTINT ever READ by the probe? The `dflt ctl` reads +0x04. SOFTINT reads: not rowed. If no read of +0x20 exists in the whole probe, declining reads there is unobservable... except the answer 0 vs register — no row reads it. And the single-unnamed-offset class is disclosed clause-(e) anyway.) Hmm, but is it truly unobservable? A guest reading SOFTINT after setting it would see 0 vs BIT. Guest-visible in principle! But the enumeration's axes are label-based; SOFTINT is inside default. The DISCLOSED bullet says: "an effect ADDED to the decline arm and keyed on ONE UNNAMED offset ... a silent decline only at +0x100 ... The rows pin the refusal floor at every observable LABEL and at eight default-arm offsets" — this is clause-(e) debt territory. The question 2 asks specifically: does a clean-sweep latch-set mutant exist that table 11 did not build? A latch-keyed silent decline at a SINGLE unnamed default offset (e.g. +0x20 8R, or +0x100, or +0x4x...) — is it caught? Post-latch default-arm accesses in P sessions: +0x20 (sd, P3), +0x40 (sd/sw/lw/ld, P2), +0x04 (sw, P6), +0x278 (sd/ld, P6), +0x07? no that's refused. +0x34, +0x30 are labels... +0x34 is default! sw +0x34 (P6 dog wlo — relative_addr 0x34 → default arm). A latch-set mutant keyed only on +0x34: declines sw +0x34 post-latch → `p dog wlo` red. Caught. +0x278: `p top st+ld`. +0x04: the write line — NOTHING counts it post-latch! **A latch-keyed silent decline of `sw +0x04` post-latch scores 188/188?** — F3 measured exactly the unconditional bypass at sw +0x04 as 157/157 (guest-equivalent, host WRITE line nothing counts). The latch-keyed version is strictly weaker → also 188/188. And it's the SAME cell, disclosed as HOST-DIAGNOSTIC clause-(e) debt (5 cells bucket). So it exists but is disclosed — the question asks about cells/mutants table 11 didn't build that beat the rows; F3's cell is disclosed debt, and its latch-keyed form is a strict weakening of a disclosed mutant. Is the DISCLOSURE honest about the latch-keyed form? The contract's 5 HOST-DIAGNOSTIC cells: "CONTROL 0x0201 at both widths ... and the `sw +0x04' write line (F3, 157/157 ...)". F3 is the unconditional bypass; the latch-set form `!(writeflag == MEM_WRITE && relative_addr == 4 && (d->warned & CRIME_W_LEN))` is not explicitly named but is the same cell. Hmm — for the verdict I can note it as covered-by-disclosure.
+
+      (iii) **A mutant keyed on the latch in the OTHER DIRECTION of the latch test** — e.g. `&& (d->warned & CRIME_W_LEN)` REPLACING the guard so the cell is accepted only after latch... i.e. `len == 8 && (d->warned & CRIME_W_LEN)` — declines all 8-byte accesses while latch CLEAR (announced! caught by latch said over all ACCEPTS cells... wait latch said's 46 ACCEPTS accesses run BEFORE any refusal in latch x5's session — latch clear → the mutant declines them with announce → steals... hmm the announce fires on the FIRST declined accept, sets latch, subsequent declines silent. The lh +0x06's announce never fires → `latch said` reds. Caught.)
+
+      (iv) **A latch-set mutant at INTSTAT/INTMASK 8W keyed... already covered. What about a mutant that keys on the latch AND keeps the access accepted but corrupts?** That's not an accept-shrink — it's the mishandled class (landing/lane/re-map), explicitly out of scope.
+
+      (v) **THE WIDTH-ARM STRUCTURE: a mutant that moves the latch test itself** — e.g. announce suppressed differently... not accept-side.
+
+      (vi) **What about `len == 4` accesses at the HIGH half of INTMASK (+0x1c), INTSTAT (+0x14), TIME (+0x3c)?** Those have relative_addr ∉ labels → default cells. Post-latch accepted accesses there? I don't see any in P sessions. Pre-latch: does the probe have accepted 4-byte accesses at +0x14/+0x1c/+0x3c? The ACCEPTS 46: 8W,8R,4W,4R at every case label — at the LABEL address (+0x10, +0x18, +0x38), not the high halves. So high-half 4-byte label cells are default-arm cells, rowed only at +0x04, +0x34, +0x40, +0x278 area. A latch-keyed mutant at +0x1c 4R — never fires (no such access) → vacuous/equivalent-in-probe but guest-visible in principle? A read of INTMASK high half: seeded BIT... `p acc imask sw` reads via ld. Guest could lw +0x1c. The probe doesn't. This is the unrowed-slot class — DISCLOSED ("ACCEPT cells at unrowed slots ... an accept arm narrowed by an address strictly INSIDE the window at an unrowed slot is not seen"). So disclosed by class.
+
+      (vii) **A subtle one: latch-set mutants on the 4-byte arm keyed on label match BOTH lanes?** No — relative_addr exact match, lanes split as above.
+
+      (viii) **What about the `default` label expression itself being wrong?** The dfl expression excludes the six labels. Correct per the switch. If the real switch has MORE cases than the six (e.g. CRIME_SOFTINT case in the actual source?) — the brief's function copy shows default covers SOFTINT. Must verify against the real file.
+
+      (ix) **Missing axis: `cpu->pc` window as an 8th "label"?** Discussed — joint, caught anyway.
+
+      (x) **Missing axis: the FIRST-refusal vs later distinction beyond the latch bit?** The latch is one bit; once set, all declines are silent. The enumeration {clear, set} matches.
+
+      (xi) **`d->warned` OTHER BITS**: if `d->warned` has other bits set elsewhere (e.g. CRIME_W_LEN is one bit; are there other CRIME_W_* bits?), a mutant keyed on `d->warned` nonzero (rather than the specific bit) behaves identically if only one bit exists. Check the header/source.
+
+      (xii) — **BIG ONE to check: does the enumeration cover the latch-clear x silent-bypass product correctly?** "The latch-CLEAR half is table 10's twelve S_* silent bypasses." Twelve cells for latch-clear: REV window 4W/8W/8R, CONTROL 8R/8W, INTSTAT 8R/8W/4W, INTMASK 4W, TIME 8W, default 4W/4R at +0x40. But the full latch-clear x {4,8} x {R,W} x 7 labels = 28 cells. The brief says rows owed are the INTERSECTION (equivalent cells owe nothing). latch-clear bypasses at EQUIVALENT cells (REV out-of-window writes/reads, CONTROL 4R, DOG reads?, etc.) owe nothing. DOG latch-clear bypass at 8W: caught by acc8 st+ld (latch-clear value row, existing `dog st+ld`?). The existing rows (non-P) `acc8 st+ld` etc. run in sessions... do they run with latch clear? `acc8 st+ld` is in the "top/end" session — if that session has no prior refusal, latch clear → a latch-clear silent bypass at DOG 8W declines the sd → ld reads 0/wrong → caught. OK.
+
+      Now — **the enumeration's real soft spot for Q1**: the axes. Let me look for an axis the guard genuinely has that the product omits. The accept guard in the fixed code is `len == 8` / `len == 4` then per-access `writeflag` and `relative_addr & 4` (lane!) and the switch on relative_addr. **THE LANE BIT (`relative_addr & 4`)**: the 4-byte path branches on `relative_addr & 4` for BOTH reads and writes. Is the lane an axis of the enumeration? The enumeration: {latch} x {len 4,8} x {R,W} x {7 labels} — the lane is NOT an axis; it's folded into "label" via exact relative_addr matching in the mutants... but the mutants key on `relative_addr == CRIME_X` which only matches the LOW lane (label address). High-lane 4-byte accesses (+0x04, +0x0c, +0x14, +0x1c, +0x34, +0x3c) are all default-arm cells. So the enumeration's "default" label lumps all high lanes plus all unlabelled offsets. Is that honest? For the accept-shrink class, a mutant keyed on `relative_addr & 4` (all high lanes at once) — e.g. C-form `!(writeflag == MEM_READ && (relative_addr & 4) && latch)` on the 4-byte arm: declines ALL high-lane 4R post-latch. Post-latch high-lane 4R accesses: lw +0x04 (`p rev lw4`), lw +0x34 (`p dog rlo`), lw +0x40?? — +0x40 & 4 = 0 → low lane. +0x44 would be high. So that mutant reds `p rev lw4` and `p dog rlo` → caught. Keyed on low lanes: declines lw +0x00? (none post-latch... P1 lw +0x00 from window — red), lw +0x30 (`p dog rhi` — red), lw +0x40 (`p acc 40 lw` — red). Caught. So lane-axis mutants are caught even though the lane is not an enumeration axis. The enumeration is a generating set whose closure covers — the brief's stance: "the single-axis generating set being the floor", joints in debt.
+
+      For a VERDICT, Q1's honest finding: the seven labels match the switch (VERIFY against real source); the lane/pc/idata are not axes but every single-axis mutant I can construct on them is either caught by an existing row or falls in a disclosed class. Is there any label the switch distinguishes that the seven miss? Need to check the real source for additional case labels (e.g., maybe there are more cases like CRIME_VICE? or CRIME_SOFTINT in the real file).
+
+  **Also for Q5 (which statement is wrong)** — things to check against the real probe:
+  - The brief says repair 13 grew the probe 157 → 188 rows (31 new rows). Count the P-session rows in the diff: P1: 4 pc rows + once = 5. P2: 8 rows (ctl ld, istat ld, imask sw, time sd, 40 lw, 40 sw, ctl msg, once) = 8. P3: 4 rows. P4/P5: t4w gap, t4r gap, t gap once = 3. P6: rev ld, rev lw4, dog st+ld, dog rhi, dog rlo, dog wlo, dog whi, imask st+ld, top st+ld, resid once, resid surv = 11. Total = 5+8+4+3+11 = 31. 157+31 = 188. ✓.
+  - "23 ROWED HERE" — count the post-latch cells: P1 covers REV window 4 cells (4W/8W/8R/4R? — sw,sd,ld,lw = 4W,8W,8R,4R — all four window kinds). P2: CONTROL 8R, INTSTAT 8R, INTMASK 4W, TIME 8W, default 4R +0x40, default 4W +0x40, CONTROL 8W (sd 0x01 via msg count), CONTROL 4W 0x0001, CONTROL 4W 0x0201... wait those last two are "EXTRA" driving the clause-(e) cells into the count row. P3: INTMASK 8W (sd +0x18)? — actually P3 stores sd +0x18 BIT (INTMASK 8W post-latch), SOFTINT sd +0x20 x3 (default 8W), INTSTAT sd +0x10 (8W), sw +0x10 (4W). P4/P5: TIME 4W, TIME 4R. P6: REV 8R (+0x00 ld), REV 4R high?? (+0x04 lw — that's default actually! +0x04 is not CRIME_REV label for the switch... the enumeration label for +0x04 IS default. But the 46 ACCEPTS entries include `("lw", 0x00, 0)` and... hmm, ACCEPTS entries at +0x00: sd, ld, sw, lw, lwP, swP, sdP — the 4R at +0x00 is `lw +0x00`, and +0x04 is... `sw/lw 0x04` repeats. So P6's lw +0x04 post-latch corresponds to ACCEPTS' `lw 0x04` entry. OK.), DOG 8W/8R/4R-hi/4R-lo(+0x34→default)/4W-lo(+0x34→default)/4W-hi, INTMASK 8W/8R, far +0x278 8W/8R (default). 
+    Count "23 ROWED": REV window 4 (revP sw/sd/ld pc... wait that's only 4 rows but the window has 4W/8W/8R + lwP = 4R — 4 cells) + P2's 6 value cells (ctl ld=CONTROL 8R, istat ld=INTSTAT 8R, imask sw=INTMASK 4W, time sd=TIME 8W, 40 lw=default 4R, 40 sw=default 4W) + CONTROL 8W (ctl msg covers sd 0x01) + CONTROL 4W 0x0001 + CONTROL 4W 0x0201?? — hmm but those last two are HOST-DIAGNOSTIC bucket cells (0x0201 at both widths is in the 5 host-diagnostic). Wait the bucket says 5 HOST-DIAGNOSTIC: CONTROL 0x0201 at both widths + sw +0x04 + ...that's 3; plus what? "CONTROL 0x0201 at both widths (F1/F1b) and the `sw +0x04' write line (F3)" = 3. The other 2? Not named in the enumeration block! Let me re-read: "5 HOST-DIAGNOSTIC ONLY: clause-(e) debt, DISCLOSED with its measurements rather than rowed -- CONTROL 0x0201 at both widths (F1/F1b...) and the `sw +0x04' write line (F3...)". That's 2+1 = 3 named, but the bucket says 5. **INCONSISTENCY: the arithmetic 23+8+10+5 = 46, but only 3 host-diagnostic cells are named.** Hmm — maybe the other 2 are the CONTROL 0x0201 at 4W and 8W = 2, sw +0x04 = 1... still 3. What's the 4th and 5th? Maybe sw +0x04 counts as one, 0x0201 at both widths is two, and...? Possibly the CONTROL 4W 0x0201 and 8W 0x0201, plus sw +0x04, plus... the "+0x04 write line" — maybe also the DOG 4W high ("EXTRA: DOG 4W HIGH")? The P6 comment says "the remaining post-latch ACCEPT cells that carry a value, plus the two EXTRA accesses (DOG 4W high, the +0x04 write line)". So DOG 4W high is an EXTRA — meaning it was NOT previously rowed... is DOG 4W high one of the 46 ACCEPTS? ACCEPTS at DOG: acc8 st+ld (8W,8R), acc4 rhi, acc4 rlo, acc4 wlo, acc4 whi — wait, the brief's header says "CRIME_DOG +0x30 -- acc8 st+ld (8W, 8R), acc4 rhi, acc4 rlo, acc4 wlo, acc4 whi" — 6 entries. acc4 whi IS DOG 4W high (+0x30 sw). So it's in ACCEPTS. Hmm, so why "EXTRA"? Because the pre-repair-13 probe didn't have a post-... whatever.
+    So the 5 host-diagnostic: 0x0201 4W, 0x0201 8W, sw +0x04, and 2 unnamed?? Let me count differently. 46 ACCEPTS entries — let me enumerate from the tuple shown partially: ACCEPTS = (sd 0x00, ld 0x00, sw 0x00, lw 0x00, lwP, swP, sdP 0x00, ...) — 7 at +0x00 (with 4 window kinds: ldP? wait "REV also from the PROM-probe window at all four kinds (`ldP' since repair 11)": lwP, swP, sdP, ldP = 4; plus sd,ld,sw,lw = 4; that's 8 at REV. The tuple shown starts with 7 entries: sd,ld,sw,lw,lwP,swP,sdP — ldP missing from the visible portion? The tuple is cut off. I should read the real probe file to enumerate the 46.
+    
+    This is exactly the kind of thing the review must check. The bucket count 23+8+10+5=46 must be verifiable. Let me plan to read `regress/crime_width_probe.py` (the repair-13 version, 188 rows) in GXEMUL-SEC, and `src/devices/dev_sgi_ip32.c`.
+
+  - **The POSTTABLE claim "27 cells KILLED"** and K1/K2/K3/E2 scores: K1 187/188 reds `p acc imask sw` (1 row), K2 186/188 reds 2 rows, K3 187/188, E2 186/188 reds 2. 27 generated killed + C_ctl4r clean = 28. ✓ arithmetic.
+
+  - **"23 ROWED HERE" claim vs the 46-entry split**: verify each of the 23 has a post-latch row, each of the 8 pinned is actually post-latch pinned (from session_map2.py — static; the brief discloses it's derived not measured). The review ask Q3: "Is any cell in the wrong bucket?" — I should at least spot-check with the real probe.
+
+  - **The brief's claim in POSTTABLE: "Repair 13 added NEW SESSIONS ONLY -- no existing session's command list changed"** — verify from the repair diff: the diff shown (repair 11→12) is different from repair 13's. The repair-13 DRAFT block is shown as NOT APPLIED in the diff (it's the draft). POSTTABLE 11 claims repair 13 applied (188 rows). The brief shows the DRAFT with a note about register collision: "the DOG 4W-high readback added here therefore CANNOT use v1 ... It is parked in `t2' above. BEFORE APPLYING: check t2 is not otherwise live..." — wait, looking at P6, the DOG 4W-high readback uses `ra` register (`ld(A, "ld", CRIME + 0x30, "ra")`), not t2! The comment says "It is parked in `t2' above" but the code uses "ra". **THE COMMENT SAYS t2 BUT THE CODE USES ra — and `ra` is the return-address register which the probe harness likely uses for `return` (OP_B_SELF? or the session's end). Also P1 sets `ra=0x%x % RA` at the start — the probe's return address! Using `ra` as a readback destination in P6 clobbers the guest's return address register. Does the probe care? The session ends with a branch to self (OP_B_SELF) per gapped_post's trailer; the regular sessions use roundtrip(A) — need to check what that does. If the session machinery uses ra to return from CODE... In the gxemul probe harness (gxprobe), typically the code ends with `b .` (branch to self) so ra isn't needed. But P1 explicitly sets ra=RA because the REV-window hack sets pc=ra. In P6, clobbering ra with the DOG readback: if nothing later branches to ra, harmless. But `roundtrip(A)` — unknown. ALSO: the comment says "parked in `t2'" while the code says "ra" — a documentation/code mismatch: either the draft was changed after the note was written, or it's an error. AND POSTTABLE claims 188/188 base with `p dog whi` = 0xfeedbac0badcafe reading from `ra` print — so the applied version reads ra. Is printing ra fine? The row prints "ra" — the debugger's `print ra`. OK. But the brief's own note says t2 — **a wrong statement in the brief (Q5 candidate)**. Also "check t2 is not otherwise live in this session (st() uses a3/t0, ld() uses at; t1 is the far-block readback)" — and indeed P6 uses t1 for the far-block readback (`ld +0x278 → t1`). If the applied probe uses ra instead of t2, the note is stale. Need to check the applied probe.
+
+  - **P4/P5 gapped rows**: `step 2, step 1, step 1` — 4 ops total (lb, ld, sw/lw, ld) = 4 instructions. step 2 covers lb+ld, step 1 the cell op, step 1 the final ld. Then print v0, print v1. v1 is the FIRST ld (TIME ~0 check?) — row prints raw v1 in the note but the row value is mag(v0) "large". v1 unused as an oracle? It's printed and included in the row description text ("first ld %s"). Hmm — v1 is read but only used in the description, not the oracle. Minor. Also `p t gap once` checks _gapnote == [1,1] — each session's decline count 1. OK.
+    **Adversarial point on the gapped shape**: `step` in a debugger — the emulator runs 1 instruction per step; host time passes during the pause between debugger commands. Between the first `step 2` (lb refused + ld TIME → v1 ≈ small) and the second `step 1` (the cell op) and third `step 1` (final ld → v0). The claim: an update performed at the cell op lands before the final read; one skipped arrives after. For 4W (sw to TIME): accepted sw writes reg = ... the write itself sets reg[0x38/8] low half = 0x0a0b0c0d (high half kept)... then final ld takes odata BEFORE crime_update_crime_time()?? Wait — the TIME arm: case CRIME_TIME: crime_update_crime_time(d); — but odata was already loaded in the len==8 branch BEFORE the switch. So a read returns the value as of BEFORE its own update. Sequence base: step2: lb +0x07 refused (announce, latch set); ld +0x38 → odata = TIME (~small since start) → v1; arm updates TIME (adds 66*μs). step1: sw +0x38 accepted → reg low half = 0x0a0b0c0d... wait sw at +0x38: relative_addr & 4 == 0 → high half? Big-endian: `if (relative_addr & 4)` → low 32 bits; else high half (idata << 32). sw +0x38 → &4==0 → HIGH half = 0x0a0b0c0d00000000?? Hmm wait — but TIME is kept to 32 bits per the brief ("TIME is kept to 32 bits"). Let me not go down this hole; the measured result: base v0 = 0x13414f8 (large), bypass v0 = 0x5ee (small). Under the bypass (E2: decline len 4 at TIME), the sw never lands AND its update skipped... base: sw lands (TIME = something) then final ld reads it before update → large-ish. Bypass: sw declined (announced? latch already set by the lb → silent) → TIME only updated by the two reads' arms → small (0x5ee = 1518 = 66*23). So the discrimination: the sw's LANDING, not just its update. OK. The row oracle mag(v0) == "large" — what's mag()? presumably a magnitude classifier with threshold. Fine.
+
+    Now for the mutant C_tim4w vs E2: E2 declines BOTH 4W and 4R at TIME. p t4w gap session: sw is the cell op — declined under E2 → v0 small → red. p t4r gap session: lw is the cell op — under E2 declined → lw answers 0 → v0 = 0 → "large" fails → red. ✓ matches "E2 reds p t4w gap, p t4r gap".
+    
+    **Adversarial: C_tim4r (latch-keyed, read-only) vs the t4r session**: lw +0x38 declined post-latch → answers 0 → v0=0 → red. But ALSO — under C_tim4r, does the lw's own crime_update_crime_time() get skipped? Yes (falls to decline, skips switch). v0 = 0 either way. Fine.
+
+  - **Q4 (CONTROL=FAIL on C_ist4r, C_imk4r, C_tim8r)**: is the "attributable" reading right? C_tim8r reds `time lb/sb/lh/sh` — those are REFUSAL-side rows (refused reads of TIME answer 0). Wait — how does a latch-set ACCEPT-side mutant at TIME 8R red the REFUSAL rows `time lb/sb/lh/sh`? Those rows refuse lb/sb/lh/sh at TIME and check the answer is 0 and... the row definition: "CRIME_TIME (+0x38), all four cells: the arm advances TIME, which the NEXT read shows — time lb, sb, lh, sh". So `time lb` etc. check that a REFUSED access at TIME does NOT advance TIME (the goto skips the switch). Under C_tim8r (`len == 8 && !(MEM_READ && addr == TIME && latch)`), accepted 8-byte READS of TIME post-latch are declined → the read answers 0 and SKIPS crime_update_crime_time. How does that red `time lb`? The time session must do accepted ld's of TIME between refusals to observe advancement. If those ld's are post-first-refusal (latch set), they're declined → TIME never advances → the "next read shows" oracle fails → red. Is that "the cell's own channel"? Yes — the channel IS "accepted ld moves TIME" (time lb/sb/lh/sh ctl — "an accepted ld moves TIME"). Hmm — the brief says "reds `time lb/sb/lh/sh' and the new `p acc', `p t4w', `p t4r'" — wait, C_tim8r also reds `p t4w gap` and `p t4r gap`?? Under C_tim8r, the gapped sessions' ld's (v1 and v0 reads) post-latch are declined → v0 = 0 → red. Yes consistent. And `p acc` — `p acc time sd` (TIME 8W row): under C_tim8r the sd lands (it's a write), but... the row checks tv odd. The sd lands → odd. Why red? Hmm! **C_tim8r should NOT red `p acc time sd`** — the write path is unaffected. Unless... P2's session: `p acc time sd` reads back via ld +0x38 → s3? No wait — P2: st sd +0x38 0x11111111; ld +0x38 → s3; row checks s3 odd. Under C_tim8r the ld is declined → s3 = 0 → even → red. Right — the READBACK is declined. OK consistent.
+    So is any of the three kills an invalid session rather than a caught mutant? C_ist4r reds ONLY `istat ctl`; C_imk4r ONLY `imask ctl` — ctl rows whose accepted lw is post-refusal. That's exactly the "8 ALREADY PINNED post-latch by an incidental access" claim being exercised. The reading seems sound. One more check: C_tim8r 181/188 = 7 rows red: time lb, sb, lh, sh (4) + p acc time sd + p t4w gap + p t4r gap (3) = 7 ✓. K1: 1 row ✓ (187). K2: 2 ✓ (186). E2: 2 ✓ (186). K3: 1 ✓ (187).
+
+  - **Q1 deeper**: "Is there an AXIS missing?" Let me think about what the fix's guard reads: `len`, `writeflag`, `relative_addr`, and (in the decline arm) `d->warned`. The latch conjunct adds `d->warned`. The enumeration {latch} x {len} x {dir} x {label} covers len/dir/addr-ish/latch. The `relative_addr & 4` lane — folded. The pc window — not a guard axis (the GUARD doesn't read pc; the REV arm does). idata — the guard doesn't read it; the CONTROL arm does. So as an enumeration of THE GUARD's axes, it's complete. But hold on — **`cpu->machine->physical_ram_in_mb`** — the function fatal()s above the guard for bad RAM sizes; not guard-relevant. **The one axis candidate: TIME dependence?** No.
+    
+    Another: **the enumeration says {len 4, 8} — what about len values that are accepted due to... no.
+    
+    What about the **direction axis for the WINDOW kinds**: REV from window at all four kinds — covered in the 46 ACCEPTS as lwP/swP/sdP/ldP. The latch-set product x label REV covers them because the mutant keys on label only (pc not in guard). A pc-joint mutant is caught as shown. OK.
+
+    **A genuinely missing label?** Check the real dev_sgi_ip32.c for case labels beyond the six. From my memory of gxemul's dev_sgi_ip32.c, the switch has: CRIME_REV, CRIME_CONTROL, CRIME_INTSTAT, CRIME_INTMASK, CRIME_DOG, CRIME_TIME, default. There might also be CRIME_SOFTINT handling? In the version shown, no. Verify.
+
+    **Also check `d->warned` bits**: search for CRIME_W_ in the source. If there are other warned bits (e.g. CRIME_W_CONTROL?), a mutant keyed on `d->warned` (any bit) vs `CRIME_W_LEN` specifically could differ. If only one bit exists, no difference.
+
+  - **Q5 candidates (wrong statements)**:
+    a. The t2/ra mismatch in the repair-13 draft note (if the applied probe uses ra, the note in the brief says t2 — stale/wrong).
+    b. The 23/8/10/5 split naming only 3 host-diagnostic cells while claiming 5 (need to verify with the real probe's 46 entries).
+    c. POSTTABLE says "33 legs" — count: base + K1,K2,K3,E2 + 28 generated = 33 ✓.
+    d. "27 cells KILLED, each reddening rows at its own (len, direction, label) cell" — but C_tim8r reds `time lb/sb/lh/sh` which are refusal-side rows at the TIME label — "its own cell" loosely. OK.
+    e. The P2 comment: "The two CONTROL writes at the end drive the clause-(e) 0x0001 and 0x0201 cells into the `unimplemented' count row, so one count row covers three accesses" — but there are THREE CONTROL writes at the end (sd 0x01, sw 0x0001, sw 0x0201); "the two CONTROL writes" refers to the two EXTRA ones. Minor.
+    f. **`p acc ctl msg` expects 3**: base — sd 0x01: idata=1, after clearing DOG(0x200)? no; HARD_RESET? no; ENDIANESS cleared unconditionally — 0x01 & ~0x100 = 0x01 ≠ 0 → fatal prints. sw 0x0001 → prints. sw 0x0201 → 0x0201 & ~0x100 = 0x0201... wait 0x0201 = DOG_ENABLE(0x200) | 0x01. The arm: if idata & DOG_ENABLE → idata &= ~DOG_ENABLE → 0x001; HARD_RESET no; ENDIANESS: 0x0201 & ~0x100 → 0x0201 has bit 0x100? 0x0201 = 0b10_0000_0001 → bit 8 (0x100) is 0. So idata = 0x001 ≠ 0 → prints. So base count = 3 ✓. Under C_ctl8w: sd declined → 2 → red ✓. Under C_ctl4w: both sw declined → 1 → red ✓. Under C_ctl4r: no effect on writes → 3 ✓ (consistent with C_ctl4r clean sweep — the READ cells only).
+    g. **F1/F1b description**: "CONTROL 0x0201 at both widths ... the `unimplemented' count drops to one" — for the latch-keyed version the count post-latch... whatever, disclosed.
+    h. Check the claim "23 ROWED HERE, post-latch" list: "the REV window, the value session, the INTSTAT reassert channel, the TIME pair, and the residual ACCEPT cells". Count cells: REV window 4; value session P2: CONTROL 8R, INTSTAT 8R, INTMASK 4W, TIME 8W, default-0x40 4W/4R = 6 → 10; CONTROL 8W + the two EXTRA CONTROL writes (4W 0x0001, 4W 0x0201)... hmm wait — are the two EXTRA CONTROL writes separate ACCEPTS entries? ACCEPTS includes "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200}" = 2 widths x 4 values = 8 entries, plus 0x0100 at both widths = 2 → 10 CONTROL write entries?? That's a lot. Hmm — "CONTROL's writes at both widths x {0x0201, 0x0001, 0, 0x0200} (DOG x leftover, all four; plus 0x0100 ENDIANESS at both widths...)". So CONTROL cells: 8W/8R/4W/4R where writes split by VALUE: {0x0201, 0x0001, 0, 0x0200} each at 4W and 8W = 8 write entries + 2 ENDIANESS writes = 10 write entries + 2 read entries (8R, 4R) = 12 CONTROL entries?? But the enumeration says 46 ENTRIES = 40-cell floor + 2 ENDIANESS + 4 positional repeats. So the "40-cell pre-set/re-arm floor" counts CONTROL's write value variants as separate cells: 40 = ... let me count: 7 labels x {8W,8R,4W,4R} = 28, but CONTROL writes split into 4 values: +3 extra per width = +6 → 34; REV window +4 kinds... wait REV window kinds are the 4 at REV already counted? No — "REV also from the PROM-probe window at all four kinds" — so REV has {8W,8R,4W,4R} + {8WP,8RP,4WP,4RP} = 8 → +4 → 38... hmm 34+4 = 38, not 40. Default arm's six kinds in both 4-byte lanes: default = {8W,8R,4W,4R} where 4W/4R in both lanes → 8W,8R,4Wlo,4Whi,4Rlo,4Rhi = 6 → +2 → 36. Hmm. Let me recount: labels with plain 4 = REV, INTSTAT, INTMASK, DOG, TIME = 5 x 4 = 20; CONTROL = 4 base (8W,8R,4W,4R) + 3 extra write values per width (6) = 10; default = 6; REV window extra 4 → 20+10+6+4 = 40 ✓. Then +2 ENDIANESS + 4 positional repeats (sw/lw 0x04, sd/ld 0x278) = 46 ✓.
+    
+    So the 46 entries include CONTROL write-value variants. Now the bucket split:
+    - ROWED post-latch (23): REV window 4 (P1); P2 value cells: CONTROL 8R, INTSTAT 8R, INTMASK 4W, TIME 8W, +0x40 4W, +0x40 4R (6); CONTROL 8W via msg (which value? sd 0x01 = "leftover 0x0001" 8W cell), CONTROL 4W 0x0001, CONTROL 4W 0x0201 — wait, but 0x0201 cells are in the HOST-DIAGNOSTIC bucket (5 cells)... contradiction? The P2 comment says the EXTRA sw 0x0201 drives "the clause-(e) 0x0201 cell into the count row" — so post-latch, the 0x0201 4W cell IS now rowed (the count row catches its decline post-latch: C_ctl4w reds via count). But F1/F1b measured the UNCONDITIONAL bypass at 0x0201 as 157/157 because pre-latch rows couldn't see it and... hmm, actually F1/F1b was on the 157-row test (before P2 existed). With repair 13, is 0x0201-4W now ROWED? The msg count row would red if it's declined post-latch. But a bypass keyed on idata==0x0201 only fires when such a write occurs; post-latch there IS one in P2. So the cell moved from HOST-DIAGNOSTIC to ROWED? But the brief's split still lists it among the 5 host-diagnostic... **POTENTIAL MISBUCKET — but wait: F1/F1b is "the guard is a MULTI-AXIS idata joint" — the cell being counted in ACCEPTS is the 0x0201 write; a decline of exactly that write post-latch reds the count row. So it IS rowed post-latch now. Unless the count row can't distinguish: count expects 3; declining sw 0x0201 → 2 → red. Yes rowed. Hmm, but then the split "5 HOST-DIAGNOSTIC" listing "CONTROL 0x0201 at both widths" is stale — those cells are rowed by `p acc ctl msg` now (at least 4W; 8W 0x0201 — is there a post-latch sd 0x0201? P2 has sd 0x01, not sd 0x0201. So 8W-0x0201 is NOT rowed post-latch). Ugh — the cells: "CONTROL 0x0201 at BOTH widths". 4W-0x0201 rowed post-latch (P2 extra), 8W-0x0201 not. So one of the two may have moved buckets without the record saying so? OR the bucket assignment counts the JOINT nature: the mutant F1 keys on idata==0x0201 (multi-axis) — the enumeration's single-axis product doesn't include idata, so as a CELL of the 46-entry ACCEPTS list, the entry is "CONTROL 4W with value 0x0201". As an accept-side cell, the latch-set single-axis mutant C_ctl4w declines ALL CONTROL 4W post-latch → count 1 → red. So the cell is caught for single-axis mutants. The HOST-DIAGNOSTIC label is about the idata-JOINT mutant form. This is getting deep; the honest-review answer can flag: the 5-cell host-diagnostic bucket names only 3 cells in the enumeration block (0x0201 x2 widths + sw 0x04); the other 2 are...? Let me figure out: maybe "CONTROL 0x0201 at both widths" + "sw +0x04" + the two ENDIANESS writes?? No — ENDIANESS writes are "clause-(e) strengthening" entries in ACCEPTS (2 of the 46). Hmm — the 46 includes the 2 ENDIANESS writes. Are they in the ROWED bucket? Post-latch, is there an ENDIANESS write? P2 doesn't have one. Pre-latch they kill an ENDIANESS-keyed latch (pre-set class, item 4). Post-latch accept-side: a latch-set mutant declining the ENDIANESS write post-latch — never fires (no post-latch ENDIANESS write) → vacuous. Which bucket? Not named! So maybe the 5 = 0x0201x2 + sw0x04 + ENDIANESS x2? But the text explicitly describes the 5 as "CONTROL 0x0201 at both widths ... and the sw +0x04 write line". **The enumeration block's bucket text accounts for only 3 of its claimed 5.** That's a concrete Q3/Q5 finding IF the real probe/contract matches the brief. The full contract in the real probe may name all 5 — I must check the real file.
+    
+    i. Another Q5 candidate: the brief's PART A quote says R2 "Base 149/149" — but the test at repair 12 was 157 rows; 149/149?? "Base 149/149, red on C1 and G1-G5" — hmm, 149? At repair-12 the row count was 157. Where does 149 come from? Maybe the base of the augmented probe during pass 6 was 149 (141 + 8 new rows before the full 12?). PART A is about closing pass 6 / repair 11 → 141 rows; R2 says "Base 149/149" — possibly the seat's augmented copy had 149 rows (141 + latch said + 7?). Not necessarily wrong but odd. The A1-A9 table says A9 "40 floor + 2 ... = 46 (I recounted the tuple at `:731-743`)". Fine.
+    
+    j. "THE ENUMERATION is the four-axis product ... = 56 cells" — 2x2x2x7 = 56 ✓. "The latch-CLEAR half is table 10's twelve S_* silent bypasses" — 28 latch-clear cells, 12 rowed as S_*, rest equivalent/pinned. OK.
+    
+    k. **K2 and the C_rev4w/C_rev4r note**: "K2 is the (rev, 4, both-directions) cell ... The generated C_rev4w / C_rev4r are its two halves and are kept". K2's guard: `len == 4 && !(relative_addr == CRIME_REV && latch)` — no direction conjunct → both directions. C_rev4w = `len == 4 && !(W && rev && latch)`, C_rev4r = `len == 4 && !(R && rev && latch)`. Killed: K2 reds p revP sw pc + p revP lw pc (2 rows: 4W and 4R from window). C_rev4w should red `p revP sw pc` only; C_rev4r `p revP lw pc`... plus maybe `p rev lw4`? C_rev4r declines lw +0x00 post-latch — P1's lw is at +0x00 from window → `p revP lw pc` red. `p rev lw4` is lw +0x04 → default cell, unaffected. OK.
+    
+    l. **The `p revP once` row**: counts declines = 1 — under C_rev4w, the sw +0x00 from window is declined SILENTLY (latch set by POST's lb) → count stays 1 ✓ so only the pc row reds. Consistent with "K2 reds TWO".
+    
+    m. **Wait — a subtle one on K2's kill rows**: K2 reds `p revP sw pc` and `p revP lw pc` — but the brief's POSTTABLE says "reds `p revP sw pc', `p revP lw pc'". K2 is both-directions at rev-4. It should red the 4W AND 4R window rows = sw and lw ✓.
+    
+    n. **`mag()` and "large"**: can't verify without the probe.
+    
+    o. **The claimed base scores**: "BASE 188/188 CONTROL=OK". Can I verify? Running the probe is a measurement — the operational rule says building/running a single detector in my own temp dir is fine and encouraged. But time budget... The probe is a Python script driving gxemul with -E sgi -e ip32. A base run might take minutes. The rule says a gate takes minutes and is forbidden; a single detector run is allowed. Maybe feasible: check for the existence of table11.out artifact with the results — `regress/artifacts/crimewidthkill/` should have killtable11 dir with POSTTABLE.out, table11.out, mutants file. Verifying artifact existence + mtimes (the PRETABLE/mutator/table order claim) is cheap and directly addresses honesty.
+
+    p. **"session_map2.py maps all 45 sessions and finds 72 accepted accesses after their session's first refusal, in 11 sessions, 10 carrying an oracle"** — repair 13 added 6 new sessions (P1,P2,P3,t4w,t4r,P6) → 51 sessions now; the map was made at 45 (pre-repair-13, 157 rows). The 8 PINNED claim relies on the pre-13 map. That's disclosed as static. Q3 asks if any cell is in the wrong bucket — the 8 pinned cells: which are they? Not named in the brief! "Derived, not asserted: session_map2.py". For the review I could run session_map2.py (static, no emulator — cheap and allowed) to reproduce the 8 and check.
+    
+    q. **Q2's sharpest candidate**: Let me think about whether a latch-set mutant at a ROWED cell could still sweep clean because the row's oracle can't vary... e.g. `p acc time sd` — oracle "odd". Under C_tim8w the sd is declined → TIME even → red. But WAIT: is TIME guaranteed even otherwise? "TIME updates add 66 x elapsed microseconds -- always EVEN -- so an odd seed stays odd." And initial TIME = 0? Presumably. Under C_tim8w, TIME = sum of 66*μs updates = even ✓ red.
+    
+    `p dog whi` — reads via `ra`... the print of ra — if the probe harness's session end does `jr ra` or the print reads a clobbered ra... measured base 188/188 so fine on base.
+    
+    r. **What about a latch-keyed mutant at INTSTAT 8W that ALSO... single cells only. 
+    
+    s. **The strongest Q2 candidate I can construct**: a latch-keyed shrink at **the REV-window ldP (8R)** — covered by C_rev8r → `p revP ld pc` ✓ caught. At **sdP** → C_rev8w → `p revP sd pc` ✓.
+    
+    What about a latch-keyed shrink keyed on **`relative_addr == CRIME_REV` at len 8 write direction with latch — plus only in the window**? Joint → caught anyway by pc row? If keyed jointly on pc-in-window: declines only in-window → `p revP sd pc` red ✓ still caught.
+    
+    A latch-keyed shrink at **+0x278 8W only** (single unnamed offset): declines sd +0x278 post-latch → `p top st+ld` reds (reads back 0/wrong — seeded? the sd was supposed to seed it; declined → ld reads... the slot's prior value = prelude bank-ctrl? +0x278 is within CRIME_MEM_BANK_CTRL range? 0x200-0x23f? CRIME_MEM_BANK_CTRL0 = 0x200, 8 banks → 0x200..0x23c. +0x278 is beyond → generic reg slot, initial 0. So ld reads 0 ≠ 0x0102030405060708 → red ✓ caught. At +0x278 8R → red ✓.
+    
+    A latch-keyed decline at **+0x20 8R (SOFTINT read)**: no post-latch ld +0x20 in any session → never fires → 188/188, but it never fires AT ALL (no ld +0x20 anywhere post-latch; pre-latch the latch is clear so it can't fire either). **A mutant that never fires in any session is a clean sweep but vacuous-equivalent** — it changes nothing the probe or any guest... no wait, a GUEST reading SOFTINT post-first-refusal would see 0. It's guest-visible in principle! The single-unnamed-offset class is DISCLOSED clause-(e) ("a silent decline only at +0x100" example). +0x20 SOFTINT latch-keyed read-decline: guest-visible (SOFTINT readable), not caught, and it's a latch-set mutant table 11 didn't build. **THIS IS A REAL ANSWER TO Q2** — but is it within the class the enumeration claims to close? The enumeration's default label covers +0x20 as default; C_dfl8r declines ALL default 8R post-latch — caught via `p acc 40... no wait, is there a post-latch ld at a default address? P6: ld +0x278 ✓ declined under C_dfl8r → red. So the dfl cell is rowed, but the per-offset refinement is disclosed debt. The contract's closure claim is over the 56-cell product, not per-offset. A +0x20-only mutant is OUTSIDE the 56-cell product (it's a sub-cell of default) → it's the disclosed single-unnamed-offset class. So the honest answer to Q2: within the 56-cell product, no clean sweep exists except the disclosed/negative-control ones; outside the product, sub-label offsets are disclosed clause-(e) debt. That's consistent — the chain closes on the product with debt disclosed. I should still NAME the +0x20-read example (or +0x100) as the boundary case and check whether the contract's DISCLOSED list actually covers the LATCH-KEYED version of single-offset declines — the disclosed bullet says "a silent decline only at +0x100" without a latch qualifier; the latch-keyed version is strictly weaker → same class → covered by the class disclosure. OK.
+    
+    t. **One more Q2 candidate within the product: the DIRECTION-less cells at other labels** (like K2 but e.g. ist4 both dirs): union of C_ist4w+C_ist4r → killed by either → fine.
+    
+    u. **And the latch-CLEAR half**: table 10's twelve S_* — plus K-class needs latch set. A latch-clear silent bypass at a cell NOT among the 12 and not equivalent: e.g. DOG 8W latch-clear bypass → `acc8 st+ld`? That row is at +0x30 in a session... does that session have a prior refusal? `acc8 st+ld` is in the acc8 session (accept rows, probably no refusals → latch clear) → declined sd → ld reads 0 → red. INTMASK 8W latch-clear → `imask keeps`? or the imask session's accepted accesses... The brief's item-6 "CAUGHT where..." list names the 12 cells for latch-clear; DOG cells latch-clear: DOG 8W/8R/4W/4R caught by acc8 st+ld/acc4 rows (latch-clear sessions) — but the item-6 list doesn't name DOG! It says "REV window 4W/8W/8R, CONTROL 8R/8W, INTSTAT 8R/8W/4W, INTMASK 4W, TIME 8W, default 4W/4R" = 12. DOG latch-clear bypass — caught by the pre-existing acc rows (acc8 st+ld etc.) presumably — those rows exist for the ENDS-of-window class, not item 6. Hmm, DOG cells in the 46: which bucket? If ROWED post-latch (P6 dog rows) → but post-latch only covers latch-SET; latch-CLEAR bypass at DOG needs a latch-clear row — acc8 st+ld is latch-clear (if its session has no prior refusal). Is the acc8 session refusal-free? "acc8 st+ld (8W, 8R), acc4 rhi..." these are the DOG end-window rows. If that session also refuses at some point BEFORE the dog accesses... The bucket claim "23 ROWED HERE, post-latch" counts DOG cells? P6 rows dog 8W/8R/4Rhi/4Rlo(+0x34 default!)/4Wlo(+0x34 default)/4Whi → at the LABEL 0x30: 8W, 8R, 4R, 4W (whi is sw +0x30 → the label cell 4W) → 4 DOG label cells rowed post-latch. Their latch-clear side: pre-existing acc rows. Fine.
+
+    Now, **the count 23**: REV window 4 + P2 6 + CONTROL 8W + CONTROL 4W-0x0001 + CONTROL 4W-0x0201?? — no wait, if 0x0201 cells are host-diagnostic, they can't also be rowed. Let me try to reach 23 exactly: REV window: 4W,8W,8R (3 rowed via revP sw/sd/ld pc) + 4R (revP lw pc) = 4. Value session P2: CONTROL 8R, INTSTAT 8R, INTMASK 4W, TIME 8W, default+0x40 4W, default+0x40 4R = 6 → 10. CONTROL 8W (sd 0x01 → msg) = 11. INTSTAT reassert channel P3: INTSTAT 8W, INTSTAT 4W = 13 (INTMASK 8W sd +0x18 in P3 too — but P6 also has imask st+ld; count once). INTMASK 8W = 14. SOFTINT/default +0x20 8W? — +0x20 is not an ACCEPTS entry (SOFTINT not in ACCEPTS — ACCEPTS covers labels + ends; +0x20 default-arm middle... the "default arm's six kinds in both 4-byte lanes" = default entries: 8W,8R,4Wlo,4Whi,4Rlo,4Rhi — at WHICH offsets? Probably +0x40 (8) and +0x40/+0x44 (4) — "the default arm's six kinds in both 4-byte lanes" — both lanes of ONE slot (+0x40 and +0x44?). Hmm "six kinds in both 4-byte lanes" — the six kinds ARE 8W,8R,4W,4R + the 4-byte kinds in both lanes. I'll read the real ACCEPTS tuple.
+    TIME pair P4/P5: TIME 4W, TIME 4R = 15,16. Residual P6: REV 8R, REV 4R(+0x00? no — `p rev lw4` is +0x04... hmm which ACCEPTS entry? ACCEPTS has lw 0x00 (REV 4R) and sw/lw 0x04 (positional repeats, default). P6's lw +0x04 covers the ACCEPTS `lw 0x04` entry. And REV 4R (+0x00 lw)? P1's lw from window IS lw +0x00 → covers REV 4R post-latch too (via pc, but the cell = REV 4R). Hmm the window 4R and non-window 4R are the SAME guard cell (the guard doesn't see pc) but DIFFERENT ACCEPTS entries (lw +0x00 and lwP +0x00). P1 lw covers both entries' cell. OK.
+    P6 cells: REV 8R (ld +0x00), lw +0x04 (positional repeat entry), sw +0x04 (positional repeat — but HOST-DIAGNOSTIC bucket?? the sw +0x04 entry is one of the 5 HD cells — yet P6 does the sw... but nothing counts it → stays HD), DOG 8W, DOG 8R, DOG 4R (+0x30 rhi), DOG 4W (+0x30 whi), +0x34 4R and 4W — wait, are +0x34 cells ACCEPTS entries? "acc4 rlo (+0x34), acc4 wlo (+0x34)" — the DOG ACCEPTS entries include acc4 rlo/wlo which are at +0x34 = default-arm cells per the switch. But the enumeration counts them as... the 46-entry list is by ACCESS not by guard-cell. Ugh — the labels axis is by the SWITCH's view; the ACCEPTS entries are by the pre-set cross which uses "label" loosely (the pre-set mutants key on `relative_addr == CRIME_DOG` etc., and +0x34 accesses don't match). The ACCEPTS tuple will settle this — must read the probe.
+    Continuing P6: DOG 8W/8R/4Rhi/4Whi (4), +0x34 4R/4W (2 — if they're separate entries), INTMASK 8W/8R (2), +0x278 8W/8R (2 — positional repeats sd/ld 0x278)...
+    Tally attempt: 4 (window) + 6 (P2) + 1 (ctl 8W) + 2 (P3 istat 8W/4W) + 1 (imask 8W P3) + 2 (TIME 4W/4R) + P6: REV 8R, lw+0x04, DOG 8W, DOG 8R, DOG 4R, DOG 4W, +0x34 4R, +0x34 4W, imask 8R (8W counted in P3? or count in P6 — once), +0x278 8W, +0x278 8R = 11 minus imask 8W double-count → P6 adds 10 new + imask 8W already counted → total 4+6+1+2+1+2+10 = 26?? Over 23. Some of these must not be in the 46 or must be in other buckets. E.g. +0x34 cells and +0x278 cells are "positional repeats" entries (4 of them: sw/lw 0x04, sd/ld 0x278) — +0x34 dog rlo/wlo ARE in the 40-cell floor (DOG's 4Rlo/4Wlo entries? no — DOG's floor entries are acc4 rhi, rlo, wlo, whi = 4 entries + 8W/8R = 6). OK this is unresolvable without the real ACCEPTS tuple and the real bucket mapping. THE REVIEW NEEDS THE REAL FILES.
+
+  So: plan of action.
+  1. Read the real `GXEMUL-SEC/src/devices/dev_sgi_ip32.c` DEVICE_ACCESS(crime) — verify switch labels, the fix, d->warned bits, CRIME_W_* definitions.
+  2. Read the real `GXEMUL-SEC/regress/crime_width_probe.py` — the 46-entry ACCEPTS tuple, the row count (188), the P sessions as APPLIED (ra vs t2), the contract header (5 HD cells named?), mag(), count(), said(), the session helpers.
+  3. Check artifacts: `regress/artifacts/crimewidthkill/` — killtable11_* with POSTTABLE.out, table11.out, PRETABLE mtimes; opus_close7_20260915/scripts2/session_map2.py — maybe run it (static) to reproduce the 8 pinned cells.
+  4. Possibly build & run the probe base in my own temp dir — that's a measurement; the rule allows it but it takes time. Given the effort budget, prefer static verification; if quick (binary already built in GXEMUL-SEC?), maybe run base once. Actually — running the 188-row probe base would take... the probe drives dozens of gxemul sessions; likely minutes. The rule explicitly permits building/running a single detector in my own temp directory. But each session boots gxemul with the O2 PROM? No — the probe uses raw CPU debug sessions (put w, pc=, step) per the gapped_post code — no PROM boot. Sessions might be fast (~1s each). ~50 sessions → a couple of minutes. Tempting, but Windows/Git Bash environment... The artifacts are inlined and the brief says every measurement needed is inlined. I'll decide after static checks; the marginal value of one base run is confirming 188/188 base, but POSTTABLE already claims it and my re-run wouldn't validate the 33 legs (those took a table harness). I might skip the run; the operational rule says naming a measurement I want is fine. Better: verify what's statically verifiable and say what I could not check.
+
+  Given the scale, delegate? The instructions: this is a substantial adversarial review. I could do the file reading myself — two files (dev_sgi_ip32.c crime function ~270 lines, probe ~1200+ lines) plus artifacts. That's a lot of context but manageable if I target reads. Let me do it directly with targeted greps/reads.
+
+  Let me start:
+  - Grep for case labels in dev_sgi_ip32.c; read the crime function + CRIME_W_ defines + crime_data struct + crime_interrupt_reassert + crime_update_crime_time.
+  - Read the probe's ACCEPTS tuple, rows section, P sessions as applied, contract header.
+
+  Then artifacts: killtable11 dir listing, POSTTABLE.out, table11.out existence + mtimes; session_map2.py run (python static script — safe).
+
+  Let me begin. Note the tree restriction: "Tree: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\ only." So read only within GXEMUL-SEC (plus the brief itself, already read).
+
+  First round of parallel calls:
+  - Grep "case CRIME_" in GXEMUL-SEC/src/devices/dev_sgi_ip32.c
+  - Grep "CRIME_W_" in GXEMUL-SEC/src/devices/dev_sgi_ip32.c (and headers)
+  - Grep "ACCEPTS = " in GXEMUL-SEC/regress/crime_width_probe.py
+  - Bash ls of regress/artifacts/crimewidthkill/
+
+• I've read the brief in full. Now I'll verify its claims against the actual source and probe, starting with the switch labels, the latch bits, and the probe's ACCEPTS tuple.drwxr-xr-x 1 User00 197121      0 Sep 13 08:16 opus_f2_20260913
+drwxr-xr-x 1 User00 197121      0 Sep 13 01:04 opus_pass1_20260913
+drwxr-xr-x 1 User00 197121      0 Sep 13 03:54 opus_pass2_20260913
+drwxr-xr-x 1 User00 197121      0 Sep 13 01:05 panel_20260913_000135
+drwxr-xr-x 1 User00 197121      0 Sep 13 03:58 panel_20260913_022247
+drwxr-xr-x 1 User00 197121      0 Sep 13 06:52 panel_20260913_061857
+drwxr-xr-x 1 User00 197121      0 Sep 13 11:25 panel_20260913_110853
+drwxr-xr-x 1 User00 197121      0 Sep 13 17:06 panel_20260913_164716
+drwxr-xr-x 1 User00 197121      0 Sep 13 21:15 panel_20260913_203439
+drwxr-xr-x 1 User00 197121      0 Sep 14 02:10 panel_20260914_012622
+drwxr-xr-x 1 User00 197121      0 Sep 14 07:09 panel_20260914_064016
+drwxr-xr-x 1 User00 197121      0 Sep 15 01:23 panel_20260915_011138
+drwxr-xr-x 1 User00 197121      0 Sep 15 07:49 panel_20260915_073005
+-rw-r--r-- 1 User00 197121  13841 Sep 13 21:14 probe_first10_fix.out
+-rw-r--r-- 1 User00 197121  14297 Sep 13 22:03 probe_first11_fix.out
+-rw-r--r-- 1 User00 197121  15429 Sep 14 03:32 probe_first12_fix.out
+-rw-r--r-- 1 User00 197121    259 Sep 15 04:53 probe_first13_fix.meta
+-rw-r--r-- 1 User00 197121  17190 Sep 15 04:53 probe_first13_fix.out
+-rw-r--r-- 1 User00 197121   7680 Sep 13 04:03 probe_first2_fix.out
+-rw-r--r-- 1 User00 197121   9194 Sep 13 08:24 probe_first3_fix.out
+-rw-r--r-- 1 User00 197121   9183 Sep 13 08:30 probe_first4_fix.out
+-rw-r--r-- 1 User00 197121  11883 Sep 13 12:57 probe_first5_fix.out
+-rw-r--r-- 1 User00 197121  12009 Sep 13 13:07 probe_first6_fix.out
+-rw-r--r-- 1 User00 197121  13175 Sep 13 17:21 probe_first7_fix.out
+-rw-r--r-- 1 User00 197121  13163 Sep 13 17:30 probe_first8_fix.out
+-rw-r--r-- 1 User00 197121  13167 Sep 13 18:47 probe_first9_fix.out
+-rw-r--r-- 1 User00 197121   4456 Sep 13 01:25 probe_first_fix.out
+-rw-r--r-- 1 User00 197121   4751 Sep 13 01:26 probe_first_head.out
+-rw-r--r-- 1 User00 197121   1807 Sep 12 23:58 witness_committed.out
+-rw-r--r-- 1 User00 197121   1668 Sep 13 01:15 witness_fix.out
+
+
+• Good. Key facts confirmed:
+  - The real switch has exactly 6 case labels + default: CRIME_REV, CRIME_CONTROL, CRIME_INTSTAT, CRIME_INTMASK, CRIME_DOG, CRIME_TIME. Seven-way distinction confirmed. CRIME_SOFTINT (0x20) has NO case → default. ✓ matches the brief.
+  - CRIME_W_LEN is (1 << 0), the ONLY CRIME_W_* bit. So `d->warned` has exactly one defined bit in this device → a mutant keyed on `d->warned` nonzero vs the specific bit is equivalent (no other bit ever set). Good — no missing latch-bits axis.
+
+  Now let me look for the killtable11 artifacts directory and the probe details. The ls output got truncated at the top (tail -30 showed only part). Let me list directories matching killtable11 and check the applied probe: ACCEPTS tuple, P sessions as applied (ra vs t2), and the contract header's bucket text.C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/CORRECTIONS.md
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/codex_witness_20260910.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/codex_witness_20260910.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/codex_witness_RETRY_20260910.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/codex_witness_RETRY_20260910.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/crime_width_probe.first13.py
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/crime_width_witness_20260913.py
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/fable_pass1_20260913.md
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable10_20260915
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable11_20260916
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable2_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable3_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable4_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable5_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable6_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable7_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable8_20260914
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable9_20260914
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/killtable_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close2_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close3_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close4_20260914
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close5_20260914
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close6_20260915
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close7_20260915
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_close_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_f2_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_pass1_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_pass2_20260913
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260913_000135
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260913_022247
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260913_061857
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260913_110853
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260913_164716
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260913_203439
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260914_012622
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260914_064016
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260915_011138
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/panel_20260915_073005
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/probe_first10_fix.out
+---
+drwxr-xr-x 1 User00 197121      0 Sep 16 18:28 killtable11_20260916
+drwxr-xr-x 1 User00 197121      0 Sep 16 11:39 opus_close7_20260915
+Now I have the real ACCEPTS tuple. Let me count the 46 entries:
+
+  Line 831: sd 0x00, ld 0x00, sw 0x00, lw 0x00 = 4
+  Line 832: lwP, swP, sdP 0x00 = 3 (total 7)
+  Line 833: lw 0x08, ld 0x08 = 2 (total 9)
+  Line 834: sw 0x08 x4 (0x0201, 0x0001, 0, 0x0200) = 4 (total 13)
+  Line 835: sd 0x08 x4 = 4 (total 17)
+  Line 836: sd 0x10, ld 0x10, sw 0x10, lw 0x10 = 4 (total 21)
+  Line 837: sd 0x18, ld 0x18, sw 0x18, lw 0x18 = 4 (total 25)
+  Line 838: sd 0x30, ld 0x30, sw 0x30, lw 0x30 = 4 (total 29)
+  Line 839: sd 0x38, ld 0x38, sw 0x38, lw 0x38 = 4 (total 33)
+  Line 840: sd 0x40, ld 0x40, sw 0x40, lw 0x40 = 4 (total 37)
+  Line 841: sw 0x34, lw 0x34, sw 0x04, lw 0x04 = 4 (total 41)
+  Line 842: ldP 0x00, sw 0x08 0x0100, sd 0x08 0x0100 = 3 (total 44)
+  Line 843: sd 0x278, ld 0x278 = 2 (total 46) ✓
+
+  46 entries confirmed. Now interesting: note the ACCEPTS list does NOT include sw 0x34?? Wait line 841: ("sw", 0x34, 0x0badcafe), ("lw", 0x34, 0) — yes it does. And sw 0x04 (val 0), lw 0x04. Hmm — wait, earlier the header said "sw/lw 0x04 repeat 0x34's low lane" — hmm 0x04... OK.
+
+  IMPORTANT: note what's NOT in ACCEPTS:
+  - DOG has only 4 entries: sd 0x30, ld 0x30, sw 0x30, lw 0x30 (8W, 8R, 4W, 4R at the LABEL). The header's claim "CRIME_DOG +0x30 -- acc8 st+ld (8W, 8R), acc4 rhi, acc4 rlo, acc4 wlo, acc4 whi" — that's 6 entries but those are the accept-side ROWS (acc4 rlo at +0x34 is the ("lw", 0x34) entry, acc4 wlo is ("sw", 0x34)). OK so the +0x34 entries are DOG's low-lane 4-byte cells. And ("sw", 0x04) is... the positional repeat. OK.
+
+  - TIME has exactly 4: sd, ld, sw, lw 0x38. ✓ (4W and 4R at +0x38 — the high-lane; +0x3c not present.)
+
+  So the 46 entries by label (switch view):
+  - REV label (+0x00): sd, ld, sw, lw, lwP, swP, sdP, ldP = 8
+  - CONTROL label (+0x08): lw, ld, sw x4, sd x4, sw 0x0100, sd 0x0100 = 12
+  - INTSTAT (+0x10): 4
+  - INTMASK (+0x18): 4
+  - DOG (+0x30): 4
+  - TIME (+0x38): 4
+  - default: +0x40 x4, +0x34 x2, +0x04 x2, +0x278 x2 = 10
+  Total: 8+12+4+4+4+4+10 = 46 ✓
+
+  Now the bucket split 23/8/10/5:
+  - 5 HOST-DIAGNOSTIC: the brief names CONTROL 0x0201 at both widths (2 entries: ("sw",0x08,0x0201) and ("sd",0x08,0x0201)) and sw +0x04 (1 entry) = 3. What are the other 2? Candidates: the two ENDIANESS writes ("sw",0x08,0x0100) and ("sd",0x08,0x0100)! Those are "clause-(e) strengthenings" — disclosed as strengthening, not floor. Are they in the HD bucket? The HD bucket description says "CONTROL 0x0201 at both widths (F1/F1b...) and the `sw +0x04' write line (F3...)" — only 3 named. The ENDIANESS pair would make 5. But the ENDIANESS cells are NOT "host-diagnostic only" in the same sense — they're stated as clause-(e) strengthening elsewhere. Hmm. But wait — are the ENDIANESS cells rowed post-latch? No post-latch ENDIANESS write exists in P sessions (P2 has sd 0x01, sw 0x0001, sw 0x0201 — no 0x0100). Are they EQUIVALENT? A latch-set decline of an ENDIANESS write never fires post-latch (no such access post-latch) → the mutant would be vacuous in-session but a guest could do it: guest-visible? An accepted ENDIANESS write to CONTROL: the arm clears ENDIANESS unconditionally and prints "unimplemented control 0x100"? WAIT — the arm: idata &= ~ENDIANESS → idata becomes 0 → no fatal. So an accepted 0x0100 write prints NOTHING and has no effect. A declined one (latch-set): also silent, also no effect → EQUIVALENT at the guest! Hmm — but pre-latch it's also equivalent-ish (the announce is the only difference — host-diagnostic). So the ENDIANESS cells are host-diagnostic-only for the accept-shrink class: a decline there shows only in the announce count (host log), never at the guest. That fits the HD bucket! So the 5 HD = 0x0201 x2 + sw+0x04 + ENDIANESS x2?? But wait — 0x0201 cells: post-latch they're rowed by `p acc ctl msg` (count 3 includes sw 0x0201). Hmm, so are they HD or ROWED? The F1/F1b mutants key on idata==0x0201 — the JOINT form — and post-latch P2's count row WOULD catch a decline of the sw 0x0201. So post-latch the 0x0201-4W cell IS caught by a row. Unless... hold on, let me re-read F1/F1b's description: "CONTROL 0x0201 at both widths (F1/F1b, 157/157 on the 157-row test: the `unimplemented' count drops to one, `CTL after ld' is 0x100 either way, and the guard is a MULTI-AXIS idata joint...)". "the unimplemented count drops to one" — so under F1/F1b the count DID drop (to one) but no row caught it on the 157-row test because... the count row `p acc ctl msg` didn't exist yet (it's repair 13). On the 188-row test, F1b (the 4W 0x0201 joint) would red `p acc ctl msg` (count 2≠3). So the 0x0201 cells' HOST-DIAGNOSTIC status is STALE at repair 13 — unless the HD bucket refers specifically to the joint-mutant form's catchability, and the enumeration only claims the SINGLE-AXIS product. Ugh. The bucket text says "HOST-DIAGNOSTIC ONLY: clause-(e) debt, DISCLOSED with its measurements rather than rowed -- CONTROL 0x0201 at both widths (F1/F1b...) and the sw +0x04 write line (F3...)". 
+
+  Hmm wait, actually — maybe I'm wrong about which 5. Let me think about the 10 EQUIVALENT cells: "REV 8W/4W/4R outside the window (the prelude rewrites REV; its high half is 0) and CONTROL 4R (reads 0 either way)". REV out-of-window: entries ("sd",0x00),("sw",0x00),("lw",0x00) = 3. REV ld out of window (8R): NOT equivalent — `p rev ld` reads 0x11 post-latch (P6). CONTROL 4R: ("lw",0x08) = 1. That's 4. Need 10. What else? Let me think: 
+  - sw 0x08 with val 0 (writes 0 to CONTROL: accepted → arm: idata=0 → after clears still 0 → no fatal, no effect; declined silently → same → EQUIVALENT at guest? The write has no guest-visible effect either way — CONTROL's reg value: does the 4-byte arm write the reg? YES — len==4 write updates d->reg[1] high half (relative_addr 0x08 & 4 == 0 → high half = idata<<32 = 0). So reg[1] high half becomes 0. Prelude sets reg[1] = 0x100 (CONTROL_ENDIANESS) on every access — BEFORE the dispatch. So after an accepted sw 0x08 val 0: reg = 0x00000000_00000100? no wait: prelude sets reg[1] = CRIME_CONTROL_ENDIANESS = 0x100. Then the 4W at +0x08: relative_addr & 4 == 0 → high half: reg[1] &= 0xffffffff (keep low 0x100), reg[1] |= idata<<32 = 0. So reg[1] = 0x100 still. Then a following read shows 0x100. Under a silent decline: reg stays 0x100 (prelude set it). Same → EQUIVALENT. Similarly sd 0x08 val 0: reg[1] = 0 (full write!) — prelude set 0x100, then sd writes 0 → reg = 0. Next access prelude rewrites to 0x100. A following accepted ld +0x08: prelude sets 0x100 first → reads 0x100. So even the sd-0 effect is erased by the next prelude. But WITHIN the same... no guest-visible difference. Hmm — but the decline also skips the arm's fatal check — idata 0 → no fatal anyway → EQUIVALENT. So ("sw",0x08,0) and ("sd",0x08,0) = 2 more equivalent cells → 6.
+  - sw/sd 0x08 val 0x0200 (DOG only): accepted → arm clears DOG → idata=0 → no fatal. Declined → silent. reg write: sw 0x0200 at +0x08 → high half = 0x0200<<32; read-back of high half (lw +0x08 → (int32_t)(reg>>32)) — would show 0x200 vs 0x100... wait under decline reg = 0x100 (prelude), under accept reg = (0x0200<<32)|0x100. A following lw +0x08 reads high half: accept → 0x200, decline → 0. DIFFERENT — guest-visible IF anyone reads the high half afterward. Does any row? "CTL after ld is 0x100 either way" (F1 discussion) — hmm that's about 0x0201? For 0x0200: high half read would show 0x0200|... wait no — lw +0x08 reads reg>>32 = 0x0200 under accept vs 0 under decline. Guest-visible! Is it rowed post-latch? P2 doesn't write 0x0200 post-latch. Pre-latch: latch-clear bypass form — table 10's S_* twelve cells don't include CONTROL-write-value variants. Hmm — the F1/F1b are 0x0201; is there an F for 0x0200? Not mentioned. So ("sw",0x08,0x0200) and ("sd",0x08,0x0200) — which bucket? If guest-visible and unrowed → should be ROWED-owed or HD. Since the reg difference only shows via a high-half read that nothing does post-latch... and the arm's effect (DOG clear) is invisible... Actually hold on — is the high-half write even persistent? Next access's prelude rewrites reg[1]=0x100. So the 0x0200 high half survives only until the NEXT CRIME access. A guest doing sw 0x0200 then lw +0x08 immediately: accept → 0x0200; decline → 0x0000. Guest-visible in that window. But is that a ROWED cell? No. Bucket: probably EQUIVALENT is WRONG for it, HD more apt (only the announce count differs in-probe). Hmm hmm. But actually — for the enumeration the relevant question is the K-CLASS (latch-set) closure: C_ctl4w/C_ctl8w decline ALL CONTROL writes of that width post-latch → caught by msg count row regardless of value. The per-value variants matter only for JOINT (idata-keyed) mutants, which are clause-(e) debt. So the bucket for the 0x0200/0x0201/0x0100 entries is about joint mutants = HD/clause-(e). That's consistent with "5 HD = 0x0201x2 + sw+0x04 + ???" — no wait, then 0x0200 x2 and 0x0100 x2 would also be HD → 7+. 
+
+  I'm going too deep with speculation. The bucket assignment isn't fully derivable from the brief; Q3 asks "is any cell in the wrong bucket?" — the honest check: 23+8+10+5 = 46 ✓ arithmetic; I verified the EQUIVALENT claims I could: CONTROL 4R (reads 0 either way — CHECK: lw +0x08 reads reg>>32 = 0 since reg[1]=0x100 has high half 0; declined → 0 ✓ equivalent), REV out-of-window writes (prelude rewrites — verified from the code: prelude sets reg[0] = 0x11/0xa1 before dispatch; and high half read = 0 either way ✓). 
+
+  Now let me check the 23 ROWED claim more carefully by mapping P sessions to entries, and find the 8 PINNED. Also verify the P sessions as APPLIED (the ra vs t2 question), and read the contract header in the real probe (the 5 HD named?). Let me read the applied probe's P-session block and contract header.Very significant findings now:
+
+  1. **The applied probe parks the DOG 4W-high readback in `ra`, NOT `t2`** (line 1293: `ld(A, "ld", CRIME + 0x30, "ra")`). The comment at lines 1312-1318 still says "It is parked in `t2' above. BEFORE APPLYING: check t2 is not otherwise live in this session". So the note is STALE/WRONG relative to the applied code: the register used is `ra`, and the pre-apply checklist ("check t2 is not otherwise live") refers to a register that isn't used. Worse: `ra` — is it live in this session? P6 doesn't set ra (P1 sets ra=RA, but P6 doesn't). roundtrip(A) — need to check what registers it uses (it writes v1 per the note). The note's concern was v1 collision; the applied code uses ra. Is `ra` used anywhere else in P6? st() uses a3/t0; ld() uses at; roundtrip writes v1 (allegedly). If nothing else writes ra, the readback is safe. But `print ra` — the debugger prints the ra register. The row expects 0xfeedbac0badcafe. If base passed 188/188, ra held the DOG value at print time → OK. But the COMMENT is wrong (says t2), and the pre-apply check it demands was about t2 — the switch to ra happened without updating the note. That's a wrong statement in the shipped probe header comments — a Q5 finding (small, but exactly the class Q5 asks for). Also — subtle: does anything between the `ld ... "ra"` and the print clobber ra? Lines after: st sd +0x18, ld +0x18→a2, st sd +0x278, ld +0x278→t1. st/ld use fixed scratch regs (a3/t0/at per the note). So ra survives. And roundtrip(A) is appended AFTER the prints (session(c + [prints] + roundtrip(A))) — so roundtrip runs after the prints anyway; and the note says roundtrip writes v1 — that's the collision the note records (resid surv reads v1 — and roundtrip writes v1 — wait, `p resid surv` reads v1 which roundtrip writes! The note says "the prototype's residual-survival row reads `v1', which roundtrip() writes." — Hmm, that reads as if it's a KNOWN/accepted arrangement (the RAM trip writes v1 with LIVE_VAL). Let me check roundtrip.
+
+  2. **`p rev lw4` row name vs cell**: row("p rev lw4", ...) expects 0x11 — reads lw +0x04. Fine.
+
+  3. **The contract header of the real probe** — I need to check the actual bucket text in the probe (the enumeration block with 23/8/10/5). The brief quoted it; the probe header should match. Let me also check the mag() function, roundtrip(), and the `p acc imask sw` row: expects s2 = 0x1000000000000000 — sw +0x18 with val 0x10000000 → high half (relative_addr 0x18 & 4 == 0 → high half): reg[3] = 0x10000000<<32 = 0x1000000000000000 ✓.
+
+  4. **P3 row `p istw pre` expects "clear"** — confirmed as I reconstructed: SOFTINT store via default arm doesn't call crime_interrupt_reassert, so IP2 stays low ✓.
+
+  5. **Count rows in repair-13 block**: P1: 5 rows; P2: 8; P3: 4; gapped: 3; P6: 11 → 31. 157+31 = 188 ✓.
+
+  Now — **Q2, the clean-sweep hunt with the REAL probe in hand**. Let me enumerate post-latch accepted accesses per cell and check each of the 28 generated mutants has a red row, then look for latch-set mutants OUTSIDE the product:
+
+  Post-latch accesses by session:
+  - P1: lb +0x07 (refused), then sw/sd/ld/lw +0x00 @PROBE_PC (REV 4W/8W/8R/4R from window).
+  - P2: lb +0x07 (refused); ld +0x08 (CONTROL 8R); sd +0x20 (SOFTINT/default 8W); ld +0x10 (INTSTAT 8R); sw +0x18 (INTMASK 4W); ld +0x18 (INTMASK 8R); sd +0x38 (TIME 8W); ld +0x38 (TIME 8R); sd +0x40 (default 8W); sw +0x40 (default 4W); lw +0x40 (default 4R); ld +0x40 (default 8R); sd +0x08 (CONTROL 8W); sw +0x08 0x0001 (CONTROL 4W); sw +0x08 0x0201 (CONTROL 4W).
+  - P3: lb +0x07; sd +0x18 (INTMASK 8W); sd +0x20 x3 (default 8W); sd +0x10 (INTSTAT 8W); sw +0x10 (INTSTAT 4W).
+  - P4: lb +0x07; ld +0x38 (TIME 8R); sw +0x38 (TIME 4W); ld +0x38 (TIME 8R).
+  - P5: lb +0x07; ld +0x38 (TIME 8R); lw +0x38 (TIME 4R); ld +0x38 (TIME 8R).
+  - P6: lb +0x07; ld +0x00 (REV 8R); lw +0x04 (default 4R); sw +0x04 (default 4W); sd +0x30 (DOG 8W); ld +0x30 (DOG 8R); lw +0x30 (DOG 4R); lw +0x34 (default 4R); sw +0x34 (default 4W); ld +0x30; sw +0x30 (DOG 4W); ld +0x30; sd +0x18 (INTMASK 8W); ld +0x18 (INTMASK 8R); sd +0x278 (default 8W); ld +0x278 (default 8R).
+
+  Now per generated cell:
+  - C_rev8w: declines sd+0x00 post-latch (P1) → `p revP sd pc` red ✓. Also any non-window sd+0x00 post-latch? No (P6 has ld+0x00). Either way red.
+  - C_rev8r: declines ld+0x00 → `p revP ld pc` (P1) and `p rev ld` (P6) ✓.
+  - C_rev4w: `p revP sw pc` ✓.
+  - C_rev4r: `p revP lw pc` ✓.
+  - C_ctl8w: declines sd+0x08 → msg count 2 ✓.
+  - C_ctl8r: declines ld+0x08 → `p acc ctl ld` ✓ (K3's kill ✓ consistent).
+  - C_ctl4w: declines sw+0x08 x2 → count 1 ✓.
+  - C_ctl4r: NO post-latch (or any) 4R +0x08 access exists in P sessions — actually is there any lw +0x08 in the whole probe post-latch? Old sessions: `acc4 rhi/rlo` are DOG. CONTROL 4R — the ACCEPTS entry ("lw", 0x08, 0) runs in rearm/latch-x5 sessions BEFORE any refusal (latch clear). So C_ctl4r never fires in any session → 188/188. The contract calls CONTROL 4R EQUIVALENT ("reads 0 either way"). Verified from source: 4R at +0x08 reads (int32_t)(reg[1]>>32); reg[1] = 0x100 (prelude) → high half 0 → accept answers 0; decline answers 0 ✓ genuinely equivalent. GOOD negative control.
+  - C_ist8w: declines sd+0x10 → `p istw sd` ✓.
+  - C_ist8r: declines ld+0x10 → `p acc istat ld` ✓.
+  - C_ist4w: declines sw+0x10 → `p istw sw` ✓.
+  - C_ist4r: no post-latch lw+0x10 in P sessions... but measured red on `istat ctl` — an OLD session row. So in the old istat session, an accepted lw +0x10 occurs AFTER that session's first refusal. ✓ (the "8 pinned" mechanism).
+  - C_imk8w: declines sd+0x18 → P6 `p imask st+ld` (readback shows old 0... wait INTMASK reg — seeded? In P6, sd+0x18 BIT then ld+0x18 → expects BIT; under C_imk8w the sd declined → ld reads... reg[3] = ? initial 0 + SOFTINT? no. INTMASK = 0 → reads 0 ≠ BIT ✓ red). Also P3's sd+0x18 declined → `p istw sd` would also red (IP2 never sets). ✓
+  - C_imk8r: declines ld+0x18 → `p acc imask sw`?? no wait — P2's `p acc imask sw` checks s2 = ld+0x18 readback AFTER sw+0x18. Under C_imk8r the ld is declined → s2 = 0 ≠ 0x1000000000000000 → red ✓. And P6's ld+0x18 → red too. ✓
+  - C_imk4w: declines sw+0x18 → `p acc imask sw`: sw declined → reg stays 0 → ld reads 0 → red ✓ (K1's kill ✓ consistent).
+  - C_imk4r: no post-latch lw+0x18 in P; red on `imask ctl` (old session, post-refusal lw) ✓.
+  - C_dog8w: declines sd+0x30 → `p dog st+ld` red ✓.
+  - C_dog8r: declines ld+0x30 → `p dog st+ld` red ✓ (reads 0).
+  - C_dog4w: declines sw+0x30 → `p dog whi` red ✓.
+  - C_dog4r: declines lw+0x30 → `p dog rhi` red ✓.
+  - C_tim8w: declines sd+0x38 → `p acc time sd` red (even) ✓.
+  - C_tim8r: declines ld+0x38 → reds p acc time sd (readback 0→even), p t4w gap (v0=0), p t4r gap (v0=0), and old time lb/sb/lh/sh rows (their ld-moves-TIME controls) — 7 rows ✓ matches 181/188.
+  - C_tim4w: declines sw+0x38 → `p t4w gap` ✓.
+  - C_tim4r: declines lw+0x38 → `p t4r gap` ✓.
+  - C_dfl8w: declines sd+0x20 (P2/P3), sd+0x40 (P2), sd+0x278 (P6) → `p istw sd` red (SOFTINT never set) / `p acc 40 sw` / `p top st+ld` ✓.
+  - C_dfl8r: declines ld+0x40 (P2 a2 readback — wait `p acc 40 sw` reads via ld+0x40 → declined → 0 ≠ 0xa0b0c0d00000000 → red) and ld+0x278 (`p top st+ld`) ✓.
+  - C_dfl4w: declines sw+0x04 (P6 — uncounted), sw+0x34 (`p dog wlo` red), sw+0x40 (`p acc 40 sw` red) ✓.
+  - C_dfl4r: declines lw+0x04 (`p rev lw4` red), lw+0x34 (`p dog rlo` red), lw+0x40 (`p acc 40 lw` red) ✓.
+
+  So ALL 28 generated cells have at least one red row except C_ctl4r, which is genuinely equivalent. Matches POSTTABLE's 27 killed + 1 clean. The enumeration's latch-set half VERIFIES by reading.
+
+  **Now mutants OUTSIDE the product (Q2's real hunt):**
+
+  (a) Latch-set decline at a SINGLE UNNAMED OFFSET within default — disclosed class (clause-e debt): e.g. only +0x20 8R (no such access anywhere → vacuous), only +0x04 4W (F3's cell, HD-disclosed; its latch-keyed form: sw+0x04 post-latch declined — nothing counts the write line post-latch → 188/188! But same cell as F3, disclosed HD). Only +0x44 (no access anywhere in probe — lw+0x44? not in ACCEPTS... wait ACCEPTS has sw+0x04/lw+0x04 and the default arm's "six kinds in both 4-byte lanes" = +0x40 and +0x44?? Line 840: sd 0x40, ld 0x40, sw 0x40, lw 0x40 — that's 4 kinds at +0x40. "both 4-byte lanes" would need +0x44 entries — NOT PRESENT! The header comment says "the default arm's six kinds in both 4-byte lanes" — but the tuple has only FOUR entries at +0x40 (sd,ld,sw,lw). Where are the +0x44 lane entries? Hmm — "six kinds": 8W, 8R, 4W, 4R at +0x40 plus... 4W and 4R at +0x44 = 6 kinds. But the tuple shows only 4 at +0x40. UNLESS sw+0x34/lw+0x34 count as the high-lane 4-byte kinds? +0x34 IS the high lane of the +0x30 slot. And +0x04 is the high lane of +0x00. Hmm — "positional repeats of default-arm kinds (`sw/lw 0x04' repeat 0x34's low lane...)" — wait this says 0x04 repeats 0x34's low lane?? +0x04 and +0x34 are both &4==4 → high lanes. "repeat 0x34's low lane" — confusing wording. Whatever — the point for Q1/Q5: does the probe have any 4-byte access at +0x44? Let me grep to be sure. If not, the "both 4-byte lanes" claim for the default arm is... sw+0x34 IS a 4-byte access in the &4 lane at a default address (+0x34). And sw+0x40 is &4==0 lane. So "both 4-byte lanes" = {+0x40 (lo), +0x34/+0x04 (hi)}. OK covered.
+
+  So a latch-set mutant at +0x44 4W specifically: never fires (no such access) → 188/188 but vacuous-never-fires — and guest-visible? A guest sw+0x44 post-first-refusal declined silently: the store dropped. Guest-visible in principle. It's the single-unnamed-offset class → disclosed clause-(e). Covered by class disclosure ("a silent decline only at +0x100" — same class, different offset; the class is "keyed on ONE UNNAMED offset"). OK.
+
+  (b) **A latch-keyed mutant on a NAMED cell but in the latch-CLEAR direction with suppression**... no — latch-clear declines announce, caught by `latch said` (all 46 ACCEPTS precede the lh). Verified: the rearm session (line 861-866) runs all 46 KINDS then lb +0x06 — wait, rearm does ONE lb +0x06 at the END after 46 accepts; and latch x5's prologue runs ACCEPTS then refusals. A latch-clear guard-growth at any ACCEPTS cell: the FIRST declined accept announces (count 1) and the lb+0x06's announce never comes → `latch said` and `rearm once` expect count 1... hmm wait — if an accepted cell announces, count = 1 (from that accept), and lb+0x06 announces?? NO — the latch is now SET by the accept's announce, so lb+0x06 is silent → count stays 1 → `rearm once` (expects 1) STAYS GREEN. But `latch said` — need to see latch x5's structure: prologue = all 46 ACCEPTS (latch clear at start), then lh +0x06 as first refusal... if an accept declined, the announce happened during the prologue (count 1), then lh +0x06 silent → `latch said` (expects exactly 1 announce at the lh?) — `said(t, 2, 0x06, clean)` counts the exact announce text with len=2 at offset 0x06! The accept's announce has different len/offset text → said() returns 0 ≠ 1 → RED ✓. That's the mechanism. OK — and `rearm once` counts "-- declined." total = 1 either way → stays green (that's the C1 blindness the whole chain is about). Consistent.
+
+  (c) **A latch-set mutant keyed on `d->warned` NONZERO vs the bit**: only one bit exists (CRIME_W_LEN = 1<<0, no other CRIME_W_* defines — verified: grep found only CRIME_W_LEN in dev_sgi_ip32.c). So `d->warned != 0` ≡ `d->warned & CRIME_W_LEN` → same behavior. Not a new mutant.
+
+  (d) **A latch-set mutant that declines at a named cell but only for SPECIFIC idata (joint)**: clause-(e) debt — and several are caught anyway post-latch (count rows). The contract's HD bucket covers the measured ones (F1/F1b/F3). But NOTE: F1b (4W 0x0201 joint, latch-CLEAR? or unconditional?) — F1/F1b were measured on the 157-row test; on 188 rows, F1b (if unconditional bypass at sw+0x08-with-0x0201) declines P2's sw 0x0201 post-latch → msg count 2 → RED now. So F1b is CAUGHT on the 188-row test even though the bucket says "HOST-DIAGNOSTIC ONLY... rather than rowed". Hmm — but the bucket is about the CELL (CONTROL 4W 0x0201 entry): the cell IS now rowed post-latch via the count row. Is the bucket text stale? Let me re-read: "5 HOST-DIAGNOSTIC ONLY: clause-(e) debt, DISCLOSED with its measurements rather than rowed -- CONTROL 0x0201 at both widths (F1/F1b, 157/157 on the 157-row test: the `unimplemented' count drops to one...)". 
+
+  Hmm, wait. Under F1b (joint idata==0x0201 at 4W), P2's msg count: sd 0x01 prints, sw 0x0001 prints, sw 0x0201 DECLINED (silent, latch set) → count = 2 ≠ 3 → RED on the 188-row test. So the claim "HOST-DIAGNOSTIC ONLY" for the 0x0201-4W cell is FALSE on the 188-row test — the cell's decline now moves a GUEST... no wait, the msg count is a HOST-LOG count! `CRIME_CONTROL: unimplemented` is a host fatal() message. The count row observes the host log. Is that "guest-visible"? The guest sees: the write was accepted (no bus error), reg updated, and the emulator prints a message but continues. Guest-visible state: none (the message is host-side). So the cell's decline is guest-invisible but HOST-visible via the count row. So "HOST-DIAGNOSTIC ONLY" is STILL ACCURATE as a bucket (the observable is host-side), but "rather than rowed" is now false — it IS rowed (p acc ctl msg). Hmm — actually being rowed is stronger than disclosed. The contract text might have been updated in repair 13. I MUST check the probe's actual contract header text for this bucket. Let me grep the probe header.
+
+  Actually — hold on. Is declining sw 0x0201 post-latch really caught by `p acc ctl msg`? The mutant F1b keys on idata==0x0201. P2's sw 0x0201 is declined → doesn't print → count 2 ≠ 3 → red ✓. Yes. So F1b scores 187/188 on the 188-row test, not 188/188. The bucket's measurement citations (157/157) are era-tagged correctly ("on the 157-row test"). Fine.
+
+  (e) **The genuinely interesting Q2 candidate — a latch-set mutant at a cell whose post-latch rows all have oracles that CANNOT vary**: I checked all 28; each has a varying oracle except C_ctl4r (equivalent). What about a latch-set mutant that declines the REV 8R at +0x00 ONLY when pc is NOT in the window? Joint (label ∧ ¬window ∧ latch): declines P6's ld+0x00 (from CODE, not window) → `p rev ld` reads 0 ≠ 0x11 → RED ✓ caught. Only when IN the window: declines P1's ld → `p revP ld pc` red ✓. 
+
+  (f) **What about the SOFTINT 8W post-latch (P2/P3 sd+0x20)?** +0x20 is default. C_dfl8w caught ✓. A mutant keyed ONLY on +0x20: single-unnamed-offset → disclosed.
+
+  (g) **A latch-set decline at +0x278 8W/8R only**: caught by `p top st+ld` ✓ (both directions decline → readback wrong).
+
+  (h) **INTMASK 4W at +0x1c (high half)?** +0x1c is default-arm. No such access in probe → vacuous/HD single-offset. Disclosed class.
+
+  So within the single-axis 56-cell product, the enumeration verifies by reading: 27 cells have red rows, 1 is genuinely equivalent. Q2's answer: no clean-sweep latch-set mutant exists WITHIN the product; outside it, the boundary cases (single unnamed offset, idata joints) are disclosed debt, and F1b's cell is actually now caught post-latch (bonus, not a gap). 
+
+  **Q3 — the buckets.** Now the 23/8/10/5 split with the real tuple. Let me map all 46:
+
+  P-session post-latch coverage per ACCEPTS entry:
+  1. ("sd",0x00) — sd+0x00 post-latch: P1 sd@window ✓ ROWED (p revP sd pc).
+  2. ("ld",0x00) — ld+0x00: P1 ✓ + P6 ✓ ROWED.
+  3. ("sw",0x00) — P1 sw ✓ ROWED.
+  4. ("lw",0x00) — P1 lw ✓ ROWED.
+  5. ("lwP",0x00) — same cell as 4 (window is not a guard axis) — the ENTRY is rowed by P1's lw ✓ ROWED.
+  6. ("swP",0x00) — P1 ✓ ROWED.
+  7. ("sdP",0x00) — P1 ✓ ROWED.
+  8. ("ldP",0x00) — P1 ld... P1's ld IS from the window (at=PROBE_PC) ✓ ROWED. → that's 8 REV entries rowed.
+  9. ("lw",0x08) — CONTROL 4R — EQUIVALENT ✓ (verified: high half 0).
+  10. ("ld",0x08) — CONTROL 8R — ROWED (p acc ctl ld).
+  11. ("sw",0x08,0x0201) — post-latch sw 0x0201 in P2 ✓ ROWED (msg count)... or HD? The bucket says HD for 0x0201 both widths. But it IS rowed post-latch now. Hmm — count.
+  12. ("sw",0x08,0x0001) — P2 ✓ ROWED (msg count).
+  13. ("sw",0x08,0) — no post-latch sw+0x08-with-0... C_ctl4w declines ALL sw+0x08 (the two in P2) → caught. For the 0-valued ENTRY: a joint mutant keyed on idata==0 → never fires post-latch (no 0-valued CONTROL write post-latch) → HD or EQUIVALENT. As a cell under the single-axis product: covered by C_ctl4w's red. 
+  14. ("sw",0x08,0x0200) — same: no post-latch 0x0200 write.
+  15. ("sd",0x08,0x0201) — no post-latch sd 0x0201 (P2 has sd 0x01). Covered by C_ctl8w (sd 0x01 declined → count red).
+  16. ("sd",0x08,0x0001) — P2 sd 0x01 ✓ ROWED.
+  17. ("sd",0x08,0) — no post-latch.
+  18. ("sd",0x08,0x0200) — no post-latch.
+  19. ("sw",0x08,0x0100) — ENDIANESS — no post-latch.
+  20. ("sd",0x08,0x0100) — ENDIANESS — no post-latch.
+  21-24. INTSTAT: sd (P3 ✓), ld (P2 ✓), sw (P3 ✓), lw (istat ctl — PINNED bucket).
+  25-28. INTMASK: sd (P6/P3 ✓), ld (P2/P6 ✓), sw (P2 ✓), lw (imask ctl — PINNED).
+  29-32. DOG: sd (P6 ✓), ld (P6 ✓), sw (P6 ✓ whi), lw (P6 ✓ rhi).
+  33-36. TIME: sd (P2 ✓), ld (P2 readback + gapped ✓), sw (P4 ✓), lw (P5 ✓).
+  37-40. +0x40: sd (P2 ✓), ld (P2 ✓ a2 readback), sw (P2 ✓), lw (P2 ✓).
+  41. ("sw",0x34) — P6 ✓ (p dog wlo).
+  42. ("lw",0x34) — P6 ✓ (p dog rlo).
+  43. ("sw",0x04) — P6 does it but NOTHING counts → HD (F3) ✓ matches bucket.
+  44. ("lw",0x04) — P6 ✓ (p rev lw4).
+  45. ("sd",0x278) — P6 ✓ (p top st+ld).
+  46. ("ld",0x278) — P6 ✓.
+
+  ROWED count: entries 1-8 (8), 10, 11?, 12, 16 (4), INTSTAT 3 + INTMASK 3 (6), DOG 4, TIME 4, +0x40 4, +0x34 2, +0x04 1 (lw), +0x278 2 = 8+4+6+4+4+4+2+1+2 = 35?? That's way over 23. Hmm — that can't be right; the brief says 23 ROWED. So the buckets must be counting something finer — "ROWED HERE, post-latch, by the `p *' sessions" — maybe they count only entries whose post-latch row can see a decline OF THAT ENTRY specifically... but C-mutants decline whole width×dir×label cells. Under the closure's own logic, a cell is closed if SOME post-latch access of that (len,dir,label) is rowed. The value variants (0x0001/0/0x0200/0x0201/0x0100 at the same width) are the SAME cell under the product. So the 46 ENTRIES collapse to guard cells:
+
+  REV: 8W,8R,4W,4R (4 cells; window variants same cells)
+  CONTROL: 8W,8R,4W,4R (4)
+  INTSTAT: 4; INTMASK: 4; DOG: 4; TIME: 4
+  default: 8W,8R,4W,4R (4)
+  = 28 guard cells = the latch-set product ✓. All 28 closed (27 killed + ctl4r equivalent).
+
+  But the 23/8/10/5 split is over the 46 ENTRIES. So: which 23 entries are "ROWED HERE"? Probably: entries whose OWN post-latch access exists AND whose decline is observable at the guest:
+  - REV 8 entries → but REV out-of-window sd/sw/lw: the window redirect is the only observable; P1 covers all from the window. The non-window ENTRIES (sd,ld,sw,lw 0x00): ld rowed by P6 (p rev ld 0x11); sd/sw/lw non-window: guest-invisible (prelude rewrites; lw high-half reads 0 either way) → EQUIVALENT bucket (3 of the 10). lwP/swP/sdP/ldP: rowed via P1 (4). Plus ld+sd non-window... ld rowed (P6). So REV: ROWED = ld(1) + 4 window(4) = 5; EQUIVALENT = sd,sw,lw non-window (3).
+  - CONTROL: lw (EQUIV, 1), ld (ROWED), sw 0x0001 (ROWED via count), sw 0x0201 (ROWED via count — or HD?), sw 0 (EQUIV — no effect either way? accept: reg high half=0, arm no fatal; decline: same guest state → EQUIV), sw 0x0200 (accept: high half = 0x0200_00000000|0x100 — a following lw+0x08 reads 0x200 vs 0 → guest-visible! But no row does a post-latch 0x0200 write → for the ENTRY's own joint form: HD. Under C_ctl4w single-axis: caught. Bucket? ambiguous), sd variants likewise: sd 0x0001 ROWED (count), sd 0x0201 (no post-latch sd 0x0201 — joint form HD), sd 0 (EQUIV — full write of 0: reg=0; next access prelude rewrites; a following ld+0x08 in the SAME... no wait — P2's FIRST access is ld+0x08 reading 0x100; if an sd 0 preceded it in-session, the prelude of the ld rewrites to 0x100 first → invisible ✓ EQUIV), sd 0x0200 (accept: reg = 0x0200<<32|0x100; following ld+0x08 reads full reg — prelude rewrites first → invisible?? WAIT — the prelude runs at the start of EVERY access and sets reg[1]=0x100. So ANY following CRIME access rewrites CONTROL before reading. So the 0x0200 write is NEVER observable via a later read! The only observables of a CONTROL write are the arm's effects (fatal msg / DOG clear / HARD_RESET) — all host-side or CPU-stop. So sd/sw 0x0200: accepted → arm clears DOG → no msg; declined → silent → guest-invisible → EQUIVALENT?? Hmm but then why did F1 (0x0201) get HD rather than EQUIVALENT? Because 0x0201 has leftover bits → accepted PRINTS "unimplemented control 0x1" (host-visible!) → count row observable → host-diagnostic. 0x0200: accepted prints NOTHING (DOG cleared, leftover 0) → no host line either → fully EQUIVALENT? The announce (declined form) prints "-- declined" once... but latch-set decline is silent. Latch-CLEAR decline announces → count row (host). For the K-class (latch-set), 0x0200 cells are EQUIVALENT; for latch-clear guard-growth, `latch said` catches all 46 anyway.
+    So CONTROL entries: EQUIV = lw (4R), sw 0, sd 0, sw 0x0200, sd 0x0200 (5); ROWED = ld, sw 0x0001, sd 0x0001 (3); HD = sw 0x0201, sd 0x0201 (2, F1/F1b); ENDIANESS sw/sd 0x0100: accepted prints "unimplemented control 0x100"?? — WAIT: the arm clears ENDIANESS BEFORE the fatal check: `idata &= ~CRIME_CONTROL_ENDIANESS; if (idata != 0) fatal(...)`. So 0x0100 → cleared → 0 → NO print. Accepted 0x0100 write: no msg, no effect → EQUIVALENT? But the probe calls them "clause-(e) STRENGTHENING, not floor... here only because the Opus seat measured them killing an ENDIANESS-keyed latch" — that's the PRE-SET class (item 4), not the accept-shrink class. For the accept-side K-class, ENDIANESS cells: latch-set decline silent & effect-free ≡ accept → EQUIVALENT. Hmm — but are they in the 10 EQUIVALENT? Tally so far: REV 3 + CONTROL 5 + ENDIANESS 2 = 10 ✓✓ — THE 10 EQUIVALENT = {REV sd/sw/lw non-window, CONTROL lw, CONTROL sw/sd val 0, CONTROL sw/sd 0x0200, CONTROL sw/sd 0x0100} = 3+1+2+2+2 = 10 ✓.
+    Then HD 5 = {sw 0x0201, sd 0x0201, sw 0x04, + 2 more}. Remaining unassigned entries: let me tally ROWED: REV 5 (ld + 4 window) + CONTROL 3 (ld, sw 0x0001, sd 0x0001) + INTSTAT 3 (sd,ld,sw) + INTMASK 3 (sd,ld,sw) + DOG 4 + TIME 4 + default: sd+0x40, ld+0x40, sw+0x40, lw+0x40, sw+0x34, lw+0x34, lw+0x04, sd+0x278, ld+0x278 (9) = 5+3+3+3+4+4+9 = 31. PINNED 8 = INTSTAT lw, INTMASK lw + 6 more?? Hmm 31+10+5(HD if 0x0201x2 + sw04 + 2?)... 31+10 = 41; 46-41 = 5 → the 5 = {istat lw, imask lw, sw 0x0201, sd 0x0201, sw 0x04}?? But then PINNED=8 has only 2 members — contradiction with "8 ALREADY PINNED". 
+
+    Let me recount EQUIVALENT. The brief's own text (contract item 6): "it is EQUIVALENT at REV 8W/4W/4R outside the window (the prelude rewrites REV; its high half is 0) and CONTROL 4R (reads 0 either way)". That's 4 cells only. But ENTRIES vs CELLS again... The 10-bucket is over entries. REV out-of-window entries: sd, sw, lw = 3 (8W/4W/4R). CONTROL 4R entry: lw 0x08 = 1. = 4 entries. Need 6 more for 10: sw/sd 0x08 val 0 (2), sw/sd 0x0200 (2), sw/sd 0x0100 (2) = 6 → total 10 ✓. That's the only decomposition that reaches 10 with the entries available. So EQUIVALENT bucket includes the zero and 0x0200 and ENDIANESS writes. Plausible per the prelude analysis (all invisible at the guest; and the 0x0200/0x0100 writes produce no host line when accepted, zero writes none either... wait — accepted sw 0x0200: arm clears DOG → idata 0 → no print ✓; accepted 0x0100 → cleared → no print ✓; accepted 0 → no print ✓. And their latch-set declines are silent → no difference anywhere ✓ EQUIVALENT is HONEST for these.)
+    
+    Then ROWED 23: REV: ld, lwP, swP, sdP, ldP = 5. CONTROL: ld, sw 0x0001, sd 0x0001 = 3 → 8. INTSTAT sd, ld, sw = 3 → 11. INTMASK sd, ld, sw = 3 → 14. DOG 4 → 18. TIME 4 → 22. default... need only 1 more?? That gives 23 with just ONE default entry rowed — but P2/P6 row +0x40 x4, +0x34 x2, +0x04(lw), +0x278 x2 = 9 default entries. 22+9 = 31 ≠ 23. CONTRADICTION.
+
+    So my mapping is off somewhere. Alternative: maybe TIME 4W/4R entries are counted... they're rowed by gapped rows ✓ rowed. Hmm. Let me recount what the brief itself says the 23 are: "23 ROWED HERE, post-latch, by the `p *' sessions below (the REV window, the value session, the INTSTAT reassert channel, the TIME pair, and the residual ACCEPT cells)". 
+
+    Maybe the count is: REV window 4 (only the P-kind entries: lwP, swP, sdP, ldP — NOT counting plain ld+0x00?) + value session 12?? — "P2: the twelve-cell value session" — the P2 comment says "the twelve-cell value session"! P2 accesses post-latch: ld+0x08, sd+0x20, ld+0x10, sw+0x18, ld+0x18, sd+0x38, ld+0x38, sd+0x40, sw+0x40, lw+0x40, ld+0x40, sd+0x08, sw+0x08, sw+0x08 = 14 accesses; "twelve-cell" — the 12 cells from RA1's enumeration: "REV window 4W/8W/8R, CONTROL 8R/8W, INTSTAT 8W/8R/4W, INTMASK 4W, TIME 8W, default sw/lw 0x40" = 3+2+3+1+1+2 = 12 ✓ those are the latch-CLEAR S_* cells. P2 covers CONTROL 8R, INTSTAT 8R, INTMASK 4W, TIME 8W, default 4W/4R at +0x40 = 6 of them post-latch (+CONTROL 8W via count, INTSTAT 8W via P3...). 
+    
+    4 (window) + [value cells] + [reassert] + [TIME pair] + [residual] = 23. Try: 4 + 6 (P2's six rows: ctl ld, istat ld, imask sw, time sd, 40 lw, 40 sw) + 2 (P3: istat 8W, istat 4W) + 2 (TIME 4W/4R) + 9 (P6: rev ld, rev lw4, dog st+ld... count P6's ENTRY coverage: ld+0x00 (REV 8R), lw+0x04, sw+0x34, lw+0x34, sd+0x30, ld+0x30, sw+0x30, lw+0x30, sd+0x18 (imask 8W), ld+0x18 (imask 8R), sd+0x278, ld+0x278 = 12 accesses covering entries: ld00, lw04, sw34, lw34, sd30, ld30, sw30, lw30, sd18, ld18, sd278, ld278 = 12). 4+6+2+2+12 = 26. Still not 23. With msg-count cells: sw/sd 0x0001 → those add... this is hopeless to reverse-engineer exactly; the exact membership of the 23/8 isn't fully stated in the brief ("Derived, not asserted: session_map2.py"). 
+
+    For the review, the right move: RUN session_map2.py (static, no emulator — explicitly allowed: "Building and running a single detector or mutant in your own temp directory is fine"; a static script is even safer) and see if it reproduces the 8 and check the arithmetic. Also grep the probe header for the enumeration text to see if it names the buckets precisely.
+
+  **Also check**: the probe header contract text (the 23/8/10/5 text and whether it names the 5 HD cells), mag(), and the old `istat ctl`/`imask ctl` rows' position relative to their session's first refusal (to validate the PINNED mechanism for C_ist4r/C_imk4r — Q4).
+
+  Let me also verify POSTTABLE's other factual claims:
+  - killtable11_20260916 exists ✓ (Sep 16 18:28). Check its contents: POSTTABLE.out, table11.out, PRETABLE.out, mutator script + mtimes.
+
+  And the brief's claim "probe grew from 157 rows to 188" — probe_first13_fix.out exists; the applied probe has how many row() calls? Count rows: grep -c 'row("' — but row( is also defined; count calls. Actually CRIMEP_RESULT=188/188 in table11.out would confirm. Let me read table11.out / POSTTABLE.out in killtable11_20260916.
+
+  Also — the K2 mutant form: `} else if (len == 4 && !(relative_addr == CRIME_REV && (d->warned & CRIME_W_LEN))) {` — this declines BOTH directions at REV-4 post-latch. And C_rev4w/C_rev4r generated too. K2 measured reds p revP sw pc + p revP lw pc = 2 rows → 186/188 ✓ consistent.
+
+  Next batch:
+  1. ls -la killtable11_20260916 + read POSTTABLE.out and table11.out (grep key lines).
+  2. Grep the probe header for "23" / "ALREADY PINNED" / "HOST-DIAGNOSTIC" / "ROWED HERE" text.
+  3. Read probe lines around mag() (739) and the istat/imask ctl session (find "istat ctl" row and the session's first refusal position).
+  4. Check roundtrip() (line 471-477) for v1.total 236
+drwxr-xr-x 1 User00 197121     0 Sep 16 18:28 .
+drwxr-xr-x 1 User00 197121     0 Sep 16 19:52 ..
+-rw-r--r-- 1 User00 197121  5041 Sep 16 18:28 POSTTABLE.out
+-rw-r--r-- 1 User00 197121  8137 Sep 16 15:48 PRETABLE.out
+drwxr-xr-x 1 User00 197121     0 Sep 16 15:50 builds
+-rwxr-xr-x 1 User00 197121 97235 Sep 16 15:49 crime_width_probe.table11.py
+-rwxr-xr-x 1 User00 197121  6681 Sep 16 15:49 kill529k.run-154951.sh
+-rwxr-xr-x 1 User00 197121  6681 Sep 16 15:49 kill529k.sh
+drwxr-xr-x 1 User00 197121     0 Sep 16 18:09 logs
+-rwxr-xr-x 1 User00 197121  6819 Sep 16 15:48 mutants529k.py
+-rw-r--r-- 1 User00 197121 20654 Sep 16 15:46 probe_repair13_fix.out
+-rw-r--r-- 1 User00 197121  6109 Sep 16 18:26 table11.out
+Good. Key facts:
+  - roundtrip() uses st (a3/t0) and ld to v1 → writes v1. P6's `p resid surv` reads v1 AFTER roundtrip appends... wait — session(c + [prints] + roundtrip(A)): the roundtrip runs AFTER the prints of s0..t1. The print of v1 happens INSIDE roundtrip. And `p resid surv` reads pr(t, "v1") — the transcript's v1 print, which comes from roundtrip ✓ that's the RAM trip. And P6's own accesses don't use v1 ✓. The note about register collision: the DOG whi readback must not be v1 (roundtrip writes it) — applied code uses `ra` ✓ safe because nothing in P6 writes ra (st/ld use a3/t0/at; enc ops use named regs). BUT — hold on: does `enc("ld", "at", "ra")` clobber anything? No, it writes ra only. And `print ra` prints it ✓. And nothing later in P6 (sd+0x18, ld+0x18→a2, sd+0x278, ld+0x278→t1) writes ra ✓. And roundtrip runs after the prints... wait NO — the print ra is in the prints list which comes BEFORE roundtrip in the command sequence. print ra happens before roundtrip's commands. So even if roundtrip used ra it wouldn't matter for the print ✓. Good — the applied code is CORRECT; only the trailing COMMENT says "t2" while the code uses "ra". A doc/code mismatch: the checklist item "check t2 is not otherwise live in this session" is unactionable/wrong as shipped. Minor wrong statement (Q5 material, L4-class nit).
+
+  - The probe header (lines 215-227) matches the brief's bucket text, including "5 HOST-DIAGNOSTIC ONLY ... CONTROL 0x0201 at both widths (F1/F1b...) and the sw +0x04 write line (F3...)". So the header names 3 cells for a bucket of 5. The other 2 are NOT named in the header. Which 2? From my entry analysis, to make the arithmetic work: 46 = 23 + 8 + 10 + 5. Let me try to pin the 8 PINNED from session_map2.py — run it. It's static (no emulator). Let me check it exists and run.
+
+  - mtimes: PRETABLE.out 15:48, mutants529k.py 15:48, crime_width_probe.table11.py 15:49, kill529k.sh 15:49, builds 15:50, logs 18:09, table11.out 18:26, POSTTABLE.out 18:28. The brief's POSTTABLE claims "PRETABLE 15:48:34, mutator 15:48:43, table launched 15:49:51" ✓ order holds (PRETABLE before mutator before table). POSTTABLE written after table11.out ✓ (18:28 > 18:26). Good — the written-after claim holds.
+
+  Now read POSTTABLE.out and table11.out to verify the scores claimed in the brief.laneP.sh
+laneQ.sh
+mkfreeze.sh
+post7.py
+post7b.py
+post7c.py
+session_map.py
+session_map2.py
+#!/usr/bin/env python3
+"""session_map2.py -- #529 closing pass 7 (Opus, finishing seat).  As session_map.py, plus the ROW NAMES each
+session feeds, so `which rows can observe a post-latch accepted access' is DERIVED from the shipped probe rather
+than asserted.  Does not run the emulator.  Sentinel: SESSIONMAP_DONE."""
+import io, re, sys, contextlib
+
+SRC = sys.argv[1] if len(sys.argv) > 1 else "/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py"
+src = open(SRC).read()
+src = src.replace("t, clean = session(", "t, clean = _rec(")
+assert "t, clean = session(" not in src
+src = re.sub(r"(?m)^(\s*)row\(", lambda m: m.group(1) + "_row(", src)
+assert re.search(r"(?m)^\s*row\(", src) is None
+
+OPC = {0x20: ("lb", 1, "R"), 0x21: ("lh", 2, "R"), 0x23: ("lw", 4, "R"), 0x24: ("lbu", 1, "R"),
+       0x25: ("lhu", 2, "R"), 0x37: ("ld", 8, "R"), 0x28: ("sb", 1, "W"), 0x29: ("sh", 2, "W"),
+       0x2b: ("sw", 4, "W"), 0x3f: ("sd", 8, "W")}
+CRIME = 0xb4000000
+SESSIONS = []
+PEND = []
+
+
+def _row(name, got, want, note=""):
+    PEND.append(name)
+
+
+def _rec(cmds, settle=1.5, spin=1.2):
+    regs, acc, pc = {}, [], None
+    for c in cmds:
+        m = re.match(r"^([a-z0-9]+)=0x([0-9a-f]+)$", c)
+        if m:
+            if m.group(1) == "pc":
+                pc = int(m.group(2), 16)
+            else:
+                regs[m.group(1)] = int(m.group(2), 16)
+            continue
+        m = re.match(r"^put w 0x([0-9a-f]+), 0x([0-9a-f]{8})$", c)
+        if m:
+            w = int(m.group(2), 16)
+            op, rs = w >> 26, (w >> 21) & 0x1f
+            if op in OPC and rs in (1, 7):
+                base = regs.get("at" if rs == 1 else "a3")
+                if base is not None:
+                    acc.append((OPC[op], base, int(m.group(1), 16)))
+    SESSIONS.append([acc, list(PEND)])          # rows of the PREVIOUS session, flushed here
+    del PEND[:]
+    return "", True
+
+
+sys.argv = ["crime_width_probe.py", "/nonexistent-binary", "map"]
+buf = io.StringIO()
+table11.out confirms the POSTTABLE claims:
+  - base 188/188 CONTROL=OK ✓
+  - K1 187 (p acc imask sw) ✓, K2 186 (p revP sw pc, p revP lw pc) ✓, K3 187 (p acc ctl ld) ✓, E2 186 (p t4w gap, p t4r gap) ✓
+  - C_ctl4r 188/188 clean ✓ (negative control)
+  - C_ist4r CONTROL=FAIL, only red `istat ctl` ✓
+  - C_imk4r CONTROL=FAIL, only red `imask ctl` ✓
+  - C_tim8r 181, CONTROL=FAIL, reds: time lb/sb/lh/sh CTL rows + p acc time sd + p t4w gap + p t4r gap = 7 ✓ (181+7=188 ✓)
+
+  IMPORTANT NOTE vs the brief: the brief's POSTTABLE says C_tim8r "reds `time lb/sb/lh/sh' and the new `p acc', `p t4w', `p t4r'" — the actual reds are `time lb ctl, time sb ctl, time lh ctl, time sh ctl` — the CTL rows (the accepted-ld-moves-TIME controls), NOT the refusal rows `time lb/sb/lh/sh` themselves! The brief's rendering "time lb/sb/lh/sh" is sloppy shorthand — the actual failing rows are the *ctl* variants. Hmm — is that a meaningful discrepancy? The brief says "reds `time lb/sb/lh/sh'" — actual: "time lb ctl, time sb ctl, time lh ctl, time sh ctl". Those are DIFFERENT row names (the refusal rows vs the control rows). Under C_tim8r (accepted 8R declined post-latch), the CTL rows (which do accepted ld's of TIME post-first-refusal) red — exactly the expected mechanism. The refusal rows `time lb` etc. (refused accesses must not advance TIME) stay GREEN — as they must, since the mutant doesn't touch the refusal path. So the brief's claim "the red rows ARE the cell's own channel" holds, but the row names it quotes are WRONG — it dropped the " ctl" suffix, and the distinction matters: `time lb` red would mean the refusal floor moved (bad); `time lb ctl` red means the accept-side channel moved (expected). Q5 finding: POSTTABLE 11 misquotes the C_tim8r red set (missing ` ctl' suffix on four row names). Small but exactly the kind of record error Q5 hunts, and it matters because the two row families mean opposite things.
+
+  Also the arithmetic on other legs:
+  - C_imk8w reds p istw sd, p istw sw, p imask st+ld = 3 → 185 ✓
+  - C_imk8r reds imask keeps, p acc imask sw, p imask st+ld = 3 → 185 ✓ (imask keeps is an OLD row — pinned post-latch ✓)
+  - C_dog8w reds 4 (p dog st+ld, rhi, rlo, wlo) → 184 ✓ (rlo/wlo are +0x34 default cells... wait — C_dog8w is len==8 at label DOG; how do the +0x34 rows red? p dog rlo reads lw+0x34 of the DOG slot — the SEED sd+0x30 was declined under C_dog8w → slot stays... what was it before? P6's first DOG access is the sd seed; declined → reg[6] holds its prior value 0 → rhi reads 0 ≠ 0x11223344, rlo 0 ≠ 0x55667788, wlo reads back 0x000000000badcafe ≠ expected ✓ all consistent.)
+  - C_dog8r reds sb keeps, sh keeps (OLD refusal-side rows! — the keeps rows read back seeded DOG slots via ACCEPTED ld after refusals → post-latch 8R of DOG declined → read 0 ≠ seed → red ✓ pinned mechanism) + p dog st+ld, wlo, whi = 5 → 183 ✓
+  - C_dfl8w reds lo keeps, p acc istat ld (?? — p acc istat ld reads ld+0x10 — INTSTAT label — how does C_dfl8w red that? OH — P2's sd+0x20 (SOFTINT) is declined under C_dfl8w → SOFTINT never set → INTSTAT = SOFTINT|HARDINT stays 0 → `p acc istat ld` expects BIT → red ✓ attributable), p istw sd/sw (SOFTINT missing), p top st+ld (sd+0x278 declined) = 5 → 183 ✓
+  - C_dfl8r reds lo keeps, top8 st+ld, top4 w (?? top4 w — old far-block row: writes at +0x278... top4 w does sw+0x278 then reads back? ld+0x278 declined post-latch → red ✓), hi keeps, mid keeps, p acc 40 sw (ld+0x40 readback declined), p top st+ld = 7 → 181 ✓
+  - C_dfl4w reds top4 w, p acc 40 lw (the sw+0x40 seed declined → lw reads 0), p acc 40 sw, p dog wlo (sw+0x34 declined), p dog whi?? — wait p dog whi is sw+0x30 which is the DOG LABEL cell, not default! How does C_dfl4w red p dog whi?? Hmm! C_dfl4w declines 4W at DEFAULT addresses. sw+0x30 is relative_addr 0x30 = CRIME_DOG label. The dfl expression excludes CRIME_DOG. So sw+0x30 is NOT declined by C_dfl4w. Why did p dog whi red?? Let me think... p dog whi: sw+0x30 0x0feedbac then ld+0x30 → ra expects 0xfeedbac0badcafe. Under C_dfl4w: the earlier sw+0x34 (0x0badcafe, DOG wlo — DEFAULT cell, declined!) → low half never landed → ld reads 0xfeedbac00000000?? wait order: sd seed 0x1122334455667788 (accepted, C_dfl4w doesn't touch 8W label), lw reads, sw+0x34 DECLINED (reg stays 0x1122334455667788), ld→s3 (p dog wlo expects 0x112233440badcafe → gets 0x1122334455667788 → red ✓), sw+0x30 0x0feedbac (accepted — label cell), ld→ra expects 0xfeedbac0badcafe → gets 0xfeedbac55667788 → RED ✓. So p dog whi reds under C_dfl4w NOT because its own cell is declined but because the wlo seed it depends on is declined. Attributable but COLLATERAL — the row's oracle depends on an earlier default-cell store. Fine — kill is still attributable to the mutant's own cells. ✓
+  - C_dfl4r reds top4 rhi, top4 rlo (old far-block 4R rows — post-latch? those sessions' first refusal... the top session does lb +0x27b refusal then lw+0x210... hmm whatever, measured) , p acc 40 lw, p rev lw4, p dog rlo = 5 → 183 ✓
+
+  All scores in table11.out match POSTTABLE's summary. And the "33 legs" = base + K1/K2/K3/E2 + 28 C_* = 33 ✓ (lines 91-123 = 33 NEW lines).
+
+  Now — the POSTTABLE claim "27 cells KILLED, each reddening rows at its own (len, direction, label) cell" — verified above with the caveat about collateral (p dog whi under C_dfl4w, p acc istat ld under C_dfl8w) — collateral via session dependencies, still attributable.
+
+  Q4 answer: C_ist4r's only red is `istat ctl` — an accepted lw+0x10 post-first-refusal in the old istat session. C_imk4r's only red `imask ctl` likewise. C_tim8r's reds are the four time * ctl rows + the three new p rows — every one an accepted-8R-of-TIME channel. No invalid session; CONTROL=FAIL is the expected conjunction artifact (the control set includes those ctl rows). The gate pins CONTROL=OK on base = OK ✓. The brief's reading is CORRECT — with the caveat that POSTTABLE's row-name shorthand is wrong (dropped ctl).
+
+  Now Q3 — the buckets. Let me run session_map2.py to derive the 8 PINNED. Also — the map script was written for the 157-row probe (45 sessions). Running it on the CURRENT 188-row probe maps 51 sessions. That's fine; it will still derive post-latch accepted accesses. But wait — its purpose: the 8 ALREADY PINNED claim. Let me just run it and see output.
+
+  Also check post7c.py (the gapped shape measurement) — probably skip; table11 measured E2 red on both gapped rows ✓ which is the real evidence.
+
+  One more check for Q1 completeness: are there any OTHER writes to d->warned or other latch bits? Confirmed: only CRIME_W_LEN bit 0, set only in the decline arm. And the decline arm reads d->warned (line 314) ✓ — the FLOOR-grade rationale ("the fix's own repair path reads it") holds.
+
+  Also for Q1: the enumeration's axes vs the guard's actual reads: len, writeflag, relative_addr (+ &4 lane inside the 4-byte arm), d->warned (in the decline arm). The product {latch}×{len}×{dir}×{label} covers len/dir/latch exactly and relative_addr at label granularity. The &4 lane: for 4-byte accesses the label match uses exact relative_addr, so high-lane accesses (+0x04, +0x0c, +0x14, +0x1c, +0x34, +0x3c) fall in default. Is any high-lane 4-byte cell at a NAMED register slot rowed post-latch? +0x34 (DOG low half... wait +0x34 is in slot +0x30's high... MIPS BE: +0x30 high half, +0x34 low half — whatever, +0x34 rowed via p dog rlo/wlo ✓). +0x04 rowed (p rev lw4 + the sw line). +0x0c (CONTROL low half — the crimectllane cell!): any 4-byte access at +0x0c in the probe? Grep: ACCEPTS has none at +0x0c. The sw08 channels are at +0x08. The lane defect row `sb08/sh08` are at +0x08 too. So +0x0c is an unrowed slot — disclosed ("ACCEPT cells at unrowed slots ... not an exhaustive list"). ✓ disclosed class.
+
+  Now, is the window-pc a missing axis? The guard doesn't read pc; the enumeration is of the GUARD's axes. A latch-set mutant conjoined with pc-window is a joint → clause-(e), and anyway caught by the pc rows. Fine.
+
+  idata axis: the guard doesn't read idata either. Joints → debt; measured ones disclosed (F1/F1b/F3). Fine.
+
+  So Q1's answer: the enumeration is RIGHT as the guard's single-axis generating set — verified against dev_sgi_ip32.c: the switch distinguishes exactly 7 labels (6 cases + default; SOFTINT 0x20 has no case ✓, verified no other case labels exist in the function), len∈{4,8} are the only accepted widths, direction is binary, and the latch is a single bit (CRIME_W_LEN is the only CRIME_W_* define, d->warned written nowhere else — so "latch set" has exactly one meaning). No missing axis within the guard itself; sub-label axes (lane, offset-within-default, idata, pc-window) are not guard axes; each is either caught by existing rows or in a disclosed class.
+
+  Wait — one more possible missing axis: **`writeflag` values other than MEM_READ/MEM_WRITE?** memory_rw passes 0/1 only. Fine.
+
+  And — hmm, let me double-check the K2-form's one asymmetry: the generator makes C_rev4w and C_rev4r as separate cells, K2 as the joint both-directions cell. For OTHER labels, no both-directions joint was built. Is a both-directions latch-set mutant at, say, DOG-8 killed? It declines sd+0x30 AND ld+0x30 post-latch → p dog st+ld red ✓. Union mutants are killed whenever either half is. So not building them is fine — they can't sweep clean if both halves are rowed. Both halves of every label×len are rowed post-latch? Check: for each of the 7 labels × len ∈ {4,8}: is there a post-latch read AND a post-latch write?
+  - REV: 8W (P1 sd), 8R (P1 ld, P6 ld), 4W (P1 sw), 4R (P1 lw) ✓
+  - CONTROL: 8W (P2 sd), 8R (P2 ld), 4W (P2 sw x2), 4R — NO post-latch 4R anywhere (C_ctl4r clean). But it's genuinely EQUIVALENT → a both-directions ctl4 union mutant declines sw's → red via msg count ✓.
+  - INTSTAT: 8W (P3 sd), 8R (P2 ld), 4W (P3 sw), 4R (old istat ctl lw — post-first-refusal ✓ measured).
+  - INTMASK: 8W (P6/P3 sd), 8R (P2/P6 ld), 4W (P2 sw), 4R (old imask ctl lw ✓ measured).
+  - DOG: 8W (P6 sd), 8R (P6 ld + old keeps), 4W (P6 sw+0x30), 4R (P6 lw+0x30) ✓
+  - TIME: 8W (P2 sd), 8R (P2/P4/P5 ld), 4W (P4 sw), 4R (P5 lw) ✓
+  - default: 8W (P2 sd+0x40/+0x20, P3 sd+0x20, P6 sd+0x278), 8R (P2 ld+0x40, P6 ld+0x278), 4W (P2 sw+0x40, P6 sw+0x34/+0x04), 4R (P2 lw+0x40, P6 lw+0x04/+0x34) ✓
+  All covered. ✓
+
+  Now the remaining item: run session_map2.py to check the 8 PINNED derivation, and verify the 23/8/10/5 arithmetic maps to real entries. Let me run it (static, no emulator — allowed).Traceback (most recent call last):
+  File "C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close7_20260915\scripts2\session_map2.py", line 8, in <module>
+    src = open(SRC).read()
+          ^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py'
+The script needs the probe path as an argument (Windows path). Let me run it with the explicit argument.Traceback (most recent call last):
+  File "C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close7_20260915\scripts2\session_map2.py", line 53, in <module>
+    exec(compile(src, SRC, "exec"), {"__name__": "__main__", "_rec": _rec, "_row": _row})
+  File "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/crime_width_probe.py", line 317, in <module>
+    import os, pty, re, select, signal, sys, time
+  File "C:\Users\User00\AppData\Local\Programs\Python\Python312\Lib\pty.py", line 12, in <module>
+    import tty
+  File "C:\Users\User00\AppData\Local\Programs\Python\Python312\Lib\tty.py", line 5, in <module>
+    from termios import *
+ModuleNotFoundError: No module named 'termios'
+The probe imports `pty` (Unix-only), which fails on Windows Python. The map script execs the probe source. I can stub the imports: create a small wrapper that pre-injects fake modules (pty, tty, termios, fcntl if needed) into sys.modules before exec. Let me do that in a temp file inside the scratch area... Actually the tree restriction says "Tree: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\ only" — that was the brief's instruction to its review seats for file reading. I'm reviewing the brief; the brief says file-reading seats are those paths. I should stay within that tree for reads. Writing a tiny shim — where? The operational rule allows building/running things in "your own temp directory". I'll write the shim to the system's temp via bash $TEMP or just use a one-liner python -c that stubs sys.modules then runs the script via runpy with sys.argv set.
+
+  python -c approach:
+  ```
+  import sys, types
+  for m in ("pty","tty","termios"):
+      sys.modules[m] = types.ModuleType(m)
+  import runpy
+  sys.argv = ["session_map2.py", "C:/.../crime_width_probe.py"]
+  runpy.run_path("session_map2.py", run_name="__main__")
+  ```
+  The probe may use pty functions at import time? No — imports only; session() would use them but session is replaced by _rec via the script's source rewrite (it replaces "t, clean = session(" before exec, so session() is defined but never called). The import of pty happens at module level (line 317) — stubbed. Also `signal` imports fine on Windows. `select` fine.
+
+  Let me try.SESSIONS=51
+#18  acc=9   firstRefusal=2    POST=2  lw+0x18 ld+0x18
+      rows: imask pre, imask lb, imask sb, imask lh, imask sh, imask ctl, imask once, imask said, imask lb v0, imask lh v0, imask keeps
+#19  acc=9   firstRefusal=2    POST=2  lw+0x10 ld+0x18
+      rows: istat pre, istat lb, istat sb, istat lh, istat sh, istat ctl, istat once, istat said, istat lb v0, istat lh v0
+#21  acc=5   firstRefusal=1    POST=2  ld+0x38 ld+0x38
+      rows: time lb, time lb ctl, time lb v0, time once, time said
+#22  acc=4   firstRefusal=1    POST=2  ld+0x38 ld+0x38
+      rows: time sb, time sb ctl
+#23  acc=4   firstRefusal=1    POST=2  ld+0x38 ld+0x38
+      rows: time lh, time lh ctl, time lh v0
+#24  acc=4   firstRefusal=1    POST=2  ld+0x38 ld+0x38
+      rows: time sh, time sh ctl
+#25  acc=11  firstRefusal=1    POST=4  ld+0x30 ld+0x30 sd+0x40 ld+0x40
+      rows: sb keeps, sh keeps, warm v0, warm once, lo keeps
+#26  acc=95  firstRefusal=0    POST=46  sd+0x0 ld+0x0 sw+0x0 lw+0x0 lwP+0x0 swP+0x0 sdP+0x0 lw+0x8 ld+0x8 sw+0x8 sw+0x8 sw+0x8 sw+0x8 sd+0x8 sd+0x8 sd+0x8 sd+0x8 sd+0x10 ld+0x10 sw+0x10 lw+0x10 sd+0x18 ld+0x18 sw+0x18 lw+0x18 sd+0x30 ld+0x30 sw+0x30 lw+0x30 sd+0x38 ld+0x38 sw+0x38 lw+0x38 sd+0x40 ld+0x40 sw+0x40 lw+0x40 sw+0x34 lw+0x34 sw+0x4 lw+0x4 ldP+0x0 sw+0x8 sd+0x8 sd+0x278 ld+0x278
+      rows: rearm once, rearm surv
+#27  acc=12  firstRefusal=4    POST=6  ld+0x278 lw+0x278 lw+0x27c sw+0x27c sw+0x278 ld+0x278
+      rows: top8 anchor, top4 anchor, top rd v0, top rd2 v0, top said, top8 st+ld, top4 rhi, top4 rlo, top4 w
+#28  acc=8   firstRefusal=1    POST=1  ld+0x278
+      rows: hi said, hi nodflt, hi surv, hi keeps, hi once
+#29  acc=11  firstRefusal=1    POST=2  ld+0x1f8 sd+0x1f8
+      rows: mid said, mid nodflt, mid lb v0, mid lh v0, mid keeps, mid once, mid surv
+#30  acc=9   firstRefusal=1    POST=1  sd+0x38
+      rows: dog once, dog said, dog v0, dog lh v0, ctl v0, ctl lb v0, time sd lb v0, time sd lh v0
+#45  acc=5   firstRefusal=0    POST=4  swP+0x0 sdP+0x0 ldP+0x0 lwP+0x0
+      rows: p revP sw pc, p revP sd pc, p revP ld pc, p revP lw pc, p revP once
+#46  acc=15  firstRefusal=0    POST=14  ld+0x8 sd+0x20 ld+0x10 sw+0x18 ld+0x18 sd+0x38 ld+0x38 sd+0x40 sw+0x40 lw+0x40 ld+0x40 sd+0x8 sw+0x8 sw+0x8
+      rows: p acc ctl ld, p acc istat ld, p acc imask sw, p acc time sd, p acc 40 lw, p acc 40 sw, p acc ctl msg, p acc once
+#47  acc=8   firstRefusal=0    POST=7  sd+0x18 sd+0x20 sd+0x10 sd+0x20 sd+0x18 sd+0x20 sw+0x10
+      rows: p istw pre, p istw sd, p istw mid, p istw sw
+#48  acc=4   firstRefusal=0    POST=3  ld+0x38 sw+0x38 ld+0x38
+      rows: p t4w gap
+#49  acc=4   firstRefusal=0    POST=3  ld+0x38 lw+0x38 ld+0x38
+      rows: p t4r gap, p t gap once
+#50  acc=18  firstRefusal=0    POST=15  ld+0x0 lw+0x4 sw+0x4 sd+0x30 ld+0x30 lw+0x30 lw+0x34 sw+0x34 ld+0x30 sw+0x30 ld+0x30 sd+0x18 ld+0x18 sd+0x278 ld+0x278
+      rows: p rev ld, p rev lw4, p dog st+ld, p dog rhi, p dog rlo, p dog wlo, p dog whi, p imask st+ld, p top st+ld, p resid once, p resid surv
+TOTAL post-latch accepted CRIME accesses: 118
+SESSIONMAP_DONE
+The map ran on the CURRENT (188-row, 51-session) probe. Interesting details:
+
+  - #18 (imask session): firstRefusal=2 → post-latch accepted: lw+0x18, ld+0x18 → feeds `imask ctl` (and others). So imask ctl's accepted lw+0x18 IS post-latch ✓ (C_imk4r red explained, Q4 confirmed).
+  - #19 (istat session): post-latch lw+0x10 → `istat ctl` ✓ (C_ist4r).
+  - #21-24 (time sessions): post-latch ld+0x38 x2 each → the `time * ctl` rows ✓ (C_tim8r).
+  - #25 (keeps session): post-latch ld+0x30 x2 (sb keeps, sh keeps read back DOG via accepted ld ✓ → C_dog8r red), sd+0x40/ld+0x40 (lo keeps ✓ → C_dfl8r/8w).
+  - #27 (top session): post-latch sw+0x27c, sw+0x278, ld+0x278 etc. → top4 w, top8 st+ld, hi keeps (#28 ld+0x278), mid keeps (#29).
+  - #45-50: the new P sessions (firstRefusal=0 because the map counts the lb+0x07 as... hmm — POST=2 means post-latch accesses; the "firstRefusal" counter seems to treat the P sessions' lb differently — note #45 shows firstRefusal=0 but POST=4; the map's refusal detection must be keyed on certain widths (lb at +0x07 — the OPC decode includes lb R... maybe the +0x07 lb IS counted as access but refusal detection uses address patterns. Not important.)
+
+  Note the TOTAL: "118 post-latch accepted CRIME accesses" — on the CURRENT probe. The brief says the map "maps all 45 sessions and finds 72 accepted accesses after their session's first refusal, in 11 sessions, 10 carrying an oracle". On the 157-row probe (45 sessions) it found 72; on the 188-row probe (51 sessions) it finds 118. The claim is era-correct (the 8-pinned derivation was done pre-repair-13). ✓ honest.
+
+  Now — the 8 PINNED cells. From the map output, sessions with post-latch accepted accesses feeding oracles (pre-repair-13 sessions #1-44):
+  - #18: lw+0x18 (imask ctl), ld+0x18 (imask keeps? — imask keeps reads back via ld post-refusal ✓)
+  - #19: lw+0x10 (istat ctl), ld+0x18?? — istat session has ld+0x18 post-latch too (imask access in istat session).
+  - #21-24: ld+0x38 x8 (time ctl rows).
+  - #25: ld+0x30 x2 (sb/sh keeps readbacks), sd+0x40, ld+0x40 (lo keeps).
+  - #27: sw+0x27c, sw+0x278, ld+0x278 (top4 w, top8 st+ld).
+  - #28: ld+0x278 (hi keeps).
+  - #29: ld+0x1f8, sd+0x1f8 (mid keeps).
+  - #30: sd+0x38 (time sd lb/lh v0 — seeded odd TIME).
+
+  The "8 ALREADY PINNED" cells (as ACCEPTS entries): which entries do these cover that are NOT rowed by P sessions and NOT equivalent/HD? ACCEPTS entries without post-latch P access:
+  - ("lw",0x10) INTSTAT 4R — pinned by #19 istat ctl ✓
+  - ("lw",0x18) INTMASK 4R — pinned by #18 imask ctl ✓
+  - ("sd",0x38) TIME 8W — rowed by P2 ✓ (not in the 8)
+  - ...what else isn't P-rowed? Let me enumerate all 46 entries against P-session coverage (from map #45-50):
+    P covers: REV: swP,sdP,ldP,lwP (#45 = window 4) + ld+0x0 (#50) — so entries sd00,ld00,sw00,lw00: ld00 covered (#50 ld+0x0 and #45 ldP — same cell); sw00/sd00 covered via window (#45 swP/sdP — but those are at PROBE_PC — same guard cell as sw00/sd00); lw00 covered (lwP). As ENTRIES though: the plain sd00/sw00/lw00 entries vs their P-variants are DISTINCT entries in ACCEPTS (7 REV entries + ldP = 8). The guard cell is the same; the enumeration bucket is over ENTRIES. Is ("sd",0x00) "ROWED" because sdP is rowed? The entry's access (sd+0x00 from CODE, non-window) is guest-invisible (prelude rewrites REV) → EQUIVALENT bucket for that entry! While ("sdP",0x00) is ROWED. So REV entries: sd00 EQUIV, sw00 EQUIV, lw00 EQUIV (high-half read 0 either way — wait lw+0x00 reads the HIGH half of REV = 0 always... prelude sets reg[0]=0x11; lw+0x00 → (int32_t)(0x11>>32) = 0; declined → 0 ✓ EQUIV), ld00 ROWED (#50 p rev ld), lwP/swP/sdP/ldP ROWED (#45). → REV: 4 ROWED + 3 EQUIV + 1 (ld00) ROWED = 5 ROWED, 3 EQUIV.
+    CONTROL: lw08 EQUIV (4R reads 0); ld08 ROWED (#46); sw08 x4 values: 0x0001 ROWED (#46 msg), 0x0201 ROWED?? (#46 msg — the cell IS rowed now) or HD?, 0 EQUIV, 0x0200 EQUIV (no observable — accepted: DOG cleared, no print, reg high-half 0x0200... wait sw+0x08 &4==0 → HIGH half = idata<<32 = 0x0200_00000000; following access's prelude rewrites → invisible ✓ EQUIV); sd08 x4: 0x0001 ROWED (#46 sd+0x08 0x01 → msg), 0x0201 HD (no post-latch sd 0x0201; F1 157/157 era), 0 EQUIV, 0x0200 EQUIV; ENDIANESS sw/sd 0x0100 x2 EQUIV (accepted → cleared → no print no effect ✓). → CONTROL: ROWED 3-4, EQUIV 5, HD 1-2.
+    INTSTAT: sd10 ROWED (#47), ld10 ROWED (#46), sw10 ROWED (#47), lw10 PINNED (#19) → 3 ROWED + 1 PINNED.
+    INTMASK: sd18 ROWED (#47/#50), ld18 ROWED (#46/#50), sw18 ROWED (#46), lw18 PINNED (#18) → 3 ROWED + 1 PINNED.
+    DOG: sd30 ROWED (#50), ld30 ROWED (#50), sw30 ROWED (#50), lw30 ROWED (#50) → 4 ROWED.
+    TIME: sd38 ROWED (#46), ld38 ROWED (#46 readback + #48/49), sw38 ROWED (#48), lw38 ROWED (#49) → 4 ROWED.
+    default: sd40 ROWED (#46), ld40 ROWED (#46), sw40 ROWED (#46), lw40 ROWED (#46), sw34 ROWED (#50), lw34 ROWED (#50), sw04 HD (uncounted write line), lw04 ROWED (#50), sd278 ROWED (#50), ld278 ROWED (#50) → 9 ROWED + 1 HD.
+    
+    Tally: ROWED = 5 + 3or4 + 3 + 3 + 4 + 4 + 9 = 31-32; EQUIV = 3 + 5 = 8 (+?); PINNED = 2; HD = 1-3.
+    
+    That gives 31+8+2+3 = 44 or variants — I cannot reproduce 23/8/10/5 from first principles without the seat's exact bucket criteria. Hmm. Wait — maybe the buckets count GUARD CELLS × latch-state, not ACCEPTS entries? "Over the 46 ACCEPTS entries" — no, it says entries.
+
+    Alternative decomposition — maybe "ROWED HERE" counts only the cells the repair-13 sessions newly row (i.e., the ones that were OPEN before repair 13): the close-7 seat found the K-class escape at cells measured K1/K2/K3 + the enumeration owed rows at cells not otherwise pinned. The 23 = cells where a P-session row is the PRIMARY pin. The 8 = cells where an old session's incidental post-latch access pins (from the map: lw10, lw18 via ctl rows; ld38 time ctl... but ld38 is also P-rowed...). The seat's exact criterion is in OPUS_REPORT.md / post7.py. The brief says "Derived, not asserted: session_map2.py" — I ran the map; it does NOT itself print the bucket assignment (it prints accesses and rows). The 23/8/10/5 numbers come from the seat's analysis, presumably in OPUS_REPORT.md. 
+
+    For the review, what can I honestly say about Q3?
+    - The arithmetic 23+8+10+5=46 ✓.
+    - I could not reproduce the exact membership of the four buckets from the artifacts inlined in the brief; the map (which I ran on the 188-row probe: 51 sessions, 118 post-latch accesses) confirms the MECHANISM (old sessions do carry post-latch accepted accesses feeding oracles: imask ctl, istat ctl, time ctls, keeps rows, top4 w) — consistent with "8 PINNED", but the map does not name which 8, and the header names only 3 of the 5 HOST-DIAGNOSTIC cells. **The 5-vs-3 gap is a documentation hole**: from the ACCEPTS tuple, the only entries consistent with "host-diagnostic only" (guest-invisible decline, host-log observable, joint form in debt) are: sw08-0x0201, sd08-0x0201, sw04... and arguably sw/sd08-0x0200 or the ENDIANESS pair — but those are claimed EQUIVALENT-ish. Actually wait — 0x0200: accepted prints NOTHING; but the decline... latch-clear decline ANNOUNCES (host) — but that's `latch said`'s job over all 46. For the K-class the 0x0200 decline is fully invisible → EQUIVALENT. Hmm, so what's the 4th and 5th HD cell? Let me check OPUS_REPORT.md for the bucket definition.
+
+  Also there's one more subtlety I should verify — **the brief says "23 ROWED HERE ... Every one runs AFTER a refused lb at +0x07"** — from map: P sessions #45-50 all begin with POST (lb+0x07) ✓ (POST counts shown). ✓
+
+  Let me look at OPUS_REPORT.md (opus_close7_20260915) for the bucket definitions — grep for "23" or "PINNED" or "bucket".MAINLOOP_HARVEST.md
+OPUS_REPORT.md
+PREDICT.md
+PREDICT2.md
+logs
+logs2
+mutants
+scripts
+scripts2
+Excellent — the OPUS_REPORT.md resolves the bucket membership:
+
+  **EQUIVALENT (10 entries):** REV 8W / 4W-hi / 4R-hi out of the window (3: sd+0x00, sw+0x00, lw+0x00) + CONTROL 4R-hi (1: lw+0x08) + CONTROL 4W and 8W at 0, 0x0200, 0x0100 (6: sw0, sd0, sw0200, sd0200, sw0100, sd0100) = 10 ✓. My derivation matched.
+
+  **HOST-DIAGNOSTIC ONLY (5 entries):** CONTROL 4W and 8W at 0x0201 **and 0x0001** (4!) + default-arm 4W at +0x04 (1) = 5 ✓. AH — so the 5 includes the 0x0001 cells at both widths! But the probe header / brief text says: "5 HOST-DIAGNOSTIC ONLY: clause-(e) debt, DISCLOSED with its measurements rather than rowed -- CONTROL 0x0201 at both widths (F1/F1b...) and the `sw +0x04' write line (F3...)". The header's parenthetical names ONLY 0x0201 x2 + sw+0x04 = 3 — it OMITS the 0x0001 pair that the source report counts as members 4 and 5. **That's a real discrepancy: the bucket definition in the probe header under-names its membership (3 of 5).**
+
+  Wait — but is the 0x0001 pair's HD status stale? At repair 13, P2 writes sd 0x01 and sw 0x0001 post-latch and `p acc ctl msg` counts 3. So the 0x0001 cells ARE NOW ROWED post-latch (the report's own "cells the closure leaves" table says "CONTROL 4W 0x0001: one sw +0x08, 0x01 + a text count in P2" — repair 13 TOOK it: the P2 code has the EXTRA sw 0x0001 and the count row). So at 188 rows, the 0x0001-4W cell moved from HD to ROWED, and 0x0001-8W (sd 0x01 — was already there as acc ctl sd? P2 has sd+0x08 0x01 → msg count covers it). Hmm — so at repair 13:
+  - 0x0001 4W: ROWED (msg count)
+  - 0x0001 8W: ROWED (msg count, sd 0x01)
+  - 0x0201 4W: ROWED (msg count, the EXTRA sw 0x0201)
+  - 0x0201 8W: NOT rowed (no post-latch sd 0x0201) — still HD
+  - sw+0x04: NOT rowed (uncounted write line) — still HD
+
+  So at repair 13 the honest bucket split is more like: HD = {0x0201 8W, sw+0x04} = 2, and ROWED gained 0x0001x2 + 0x0201-4W = 3 more. The header's "5 HOST-DIAGNOSTIC ... rather than rowed" text is the close-7 (157-row) framing and is partially stale at 188 rows — BUT the header text says "DISCLOSED with its measurements rather than rowed -- CONTROL 0x0201 at both widths (F1/F1b, 157/157 on the 157-row test...)". Since P2's msg count row NOW reds under a decline of the 0x0201-4W and both 0x0001 cells, "rather than rowed" is FALSE for 3 of the 5 on the current test. Hmm — but wait. Is it? The count row `p acc ctl msg` counts prints = 3. Under C_ctl4w (single-axis), count drops → red ✓. Under a JOINT mutant keyed only on 0x0201 (F1b), count 3→2 → red ✓ on the 188-row test. So F1b no longer scores clean on the current test — the "157/157 on the 157-row test" era tag is accurate, and the bucket label "HOST-DIAGNOSTIC ONLY" refers to the OBSERVABLE being host-side (a guest can't tell; only the host log shows it). The "rather than rowed" clause is the stale part — three of the five are in fact rowed now (via a host-log count row). The distinction "host-diagnostic" is about WHAT the observable is, not whether a row exists. So the bucket is defensible, but the header sentence "DISCLOSED with its measurements rather than rowed" is stale for 0x0001 x2 and 0x0201-4W at repair 13, AND the parenthetical under-counts the bucket it defines (names 3, says 5). Both are record nits — L4-class, Q5 material.
+
+  Hmm wait — actually, let me re-read the header sentence once more: "5 HOST-DIAGNOSTIC ONLY: clause-(e) debt, DISCLOSED with its measurements rather than rowed -- CONTROL 0x0201 at both widths (F1/F1b, 157/157 on the 157-row test: the `unimplemented' count drops to one, `CTL after ld' is 0x100 either way, and the guard is a MULTI-AXIS idata joint, which the 2026-09-04 pass-11 amendment puts in debt) and the `sw +0x04' write line (F3, 157/157 on the 157-row test: guest-equivalent; `dflt ctl' counts READS at +0x04, none counts writes)."
+
+  The dash clause names the F1/F1b cells (2) + F3 cell (1) = 3. The bucket says 5. The OPUS_REPORT's definition (0x0201 x2, 0x0001 x2, +0x04) = 5. So the header's parenthetical omits 0x0001. CONFIRMED mismatch between the header's bucket description and the bucket's own source definition. And the count "23 ROWED" — from the report: "the prototype (4 value sessions + 2 TIME sessions, 30 rows) plus the 8 already covered would pin 32 post-latch. The 14 left are the 10 EQUIVALENTs and four others" — 32 + 14 = 46; 4 others = DOG 4W-high, CONTROL 4W 0x0001, 0x0201 x2, +0x04 — wait the table lists 4 rows but 5 cells (0x0201 counts 2). 32 = 46 - 14; 14 = 10 EQUIV + DOG4Whi + ctl4w-0x0001 + 0x0201x2?? that's 14 = 10+1+1+2... and +0x04 makes 15? Hmm: "The 14 left are the 10 EQUIVALENTs (no row owed) and four others" — the four others in the table: DOG 4W-high, CONTROL 4W 0x0001, CONTROL 4W/8W 0x0201 (2 cells), default 4W +0x04 = 5 cells in 4 table rows. 10 + 5 = 15 ≠ 14. Sloppy in the report (10+4=14 only if "four others" = 4 cells: DOG4Whi, ctl 0x0001, 0x0201 (counted as one?), +0x04). Meh — the report's own arithmetic wobbles but the shipped header says 23+8+10+5=46 which DOES add up. 
+
+  At repair 13 (shipped): the closure TOOK all four "left open" cells per the report's recommendation: DOG 4W-high (P6 EXTRA sw+0x30 ✓), CONTROL 4W 0x0001 (P2 EXTRA ✓), 0x0201 4W (P2 EXTRA sw ✓ — but 8W 0x0201 NOT taken!), +0x04 write line (P6 EXTRA sw+0x04 — but NO count row added for it! The report said "one dflt(t,clean,0x4,True) count beside the existing read count, or DISCLOSE with F3's measurement" — repair 13 added the ACCESS but not the count row, choosing the DISCLOSE half). So at 188 rows:
+  - pinned post-latch by new sessions: the prototype's 32 + DOG4Whi + ctl4w-0x0001 + 0x0201-4W = 35?
+  - still open: 10 EQUIV + 0x0201-8W (HD) + sw+0x04 (HD) = 12.
+  - 35 + 12 = 47 ≠ 46. Hmm — 32 included the "8 already covered" and the prototype's 24 (30 rows / sessions). Let me not force this; the prototype differed from what shipped (30 rows prototype vs 31 shipped; prototype had 4 value sessions + 2 TIME; shipped has P1,P2,P3,P6 + 2 gapped = 6 sessions).
+
+  The shipped header says 23 ROWED / 8 PINNED / 10 EQUIV / 5 HD. With 0x0001 x2 rowed at repair 13, if the 5 HD = {0x0201 x2, 0x0001 x2, sw04}, then 2 of those 5 are rowed → contradiction with "rather than rowed". If instead the 5 HD at repair 13 = {0x0201-8W, sw04, +3 others} — what others? Nothing fits. So the header's HD bucket is INTERNALLY INCONSISTENT at repair 13: it kept the close-7 membership (which included 0x0001 x2) while repair 13 rowed those cells, and its own parenthetical names only 3. Either way the text doesn't add up. **This is my strongest Q3/Q5 finding: the 23/8/10/5 arithmetic sums to 46, but the 5-cell HOST-DIAGNOSTIC bucket as described in the shipped header (a) names only 3 cells, and (b) its source definition (OPUS_REPORT §2a) includes the CONTROL 0x0001 pair, which repair 13 itself rowed via `p acc ctl msg' — so "rather than rowed" is false of at least those two on the 188-row test.**
+
+  Hmm, hold on — let me steelman. Maybe "rather than rowed" modifies the JOINT-mutant form: the cells' catchability by a SINGLE-AXIS mutant is via the width-level C_ctl4w/C_ctl8w (which red the count row) — the cells are "rowed" in that sense. The HD bucket's point: a decline there is only host-visible. That's TRUE regardless of rows. The "rather than rowed" is the inaccurate clause. And the F1/F1b era-tagged measurements remain accurate. So: bucket LABEL defensible, bucket DESCRIPTION stale/under-specified. It's a record nit, not a floor breach. Good — that's the honest grading.
+
+  Now — the "8 ALREADY PINNED": report says "plus the 8 already covered" — 8 entries pinned by old sessions' incidental post-latch accesses. From the map, the candidate cells (entries not in the new P sessions but with post-latch oracles in old sessions):
+  - lw+0x10 (istat ctl) ✓
+  - lw+0x18 (imask ctl) ✓
+  - ld+0x38 post-latch in time sessions (time ctl) — but ld38 is ALSO P-rowed (#46, #48, #49). Hmm, so it wouldn't be in the "8 already covered" (it's rowed by P).
+  What are the 8? The prototype pinned 24 + 8 = 32. The 8 must be entries the PROTOTYPE's sessions didn't touch: prototype = 4 value sessions + 2 TIME (30 rows) — P1 didn't exist in the prototype? "the prototype (4 value sessions + 2 TIME sessions, 30 rows)" — P1 (REV window) existed? post7.py had p revP rows (K2 red p revP sw pc/lw pc in the prototype) — yes P1 existed. So the prototype = P1 + P2 + P3? + gapped... The 8 "already covered" = entries whose pin is an old session: from the map, old sessions' post-latch accepted accesses feeding oracles: #18 lw18, ld18; #19 lw10, ld18; #21-24 ld38 x2 each; #25 ld30 x2, sd40, ld40; #27 sw27c?? (not an ACCEPTS entry — +0x27c not in ACCEPTS), sw278, ld278; #28 ld278; #29 ld1f8/sd1f8 (not ACCEPTS entries); #30 sd38.
+  Entries covered ONLY by old sessions (not by prototype P sessions): lw10, lw18 (ctl rows), ld18 (#18/#19 — but ld18 IS in P2/P6 → rowed), ld38 (P-rowed), ld30 (P6-rowed), sd40/ld40 (P2-rowed), sw278/ld278 (P6-rowed), sd38 (P2-rowed). So only lw10 and lw18 are old-only?? That gives 2, not 8. Unless the prototype's P2/P6 DIDN'T have ld18/ld38/ld30/sd40/ld40/sd278/ld278... the prototype P6 lacked DOG 4W-high (report says so) — maybe the prototype P6 also lacked others. The exact 8 is derivable only from post7.py (the prototype). Let me check post7.py quickly? That's the close-7 prototype. Hmm — this level of reconstruction may be beyond what the review needs. 
+
+  The review's honest position on Q3: the bucket ARITHMETIC sums; the bucket DEFINITIONS in the source report are coherent (10 EQUIV ✓ verified against the prelude/arm behavior; 5 HD = 0x0201x2 + 0x0001x2 + sw04); but the shipped header's rendering of the 5-bucket names only 3 and its "rather than rowed" is stale for the 0x0001 pair (repair 13 rows them) — and the exact membership of "23 ROWED / 8 PINNED" is not reconstructible from the shipped artifacts alone (derived, as disclosed). The EQUIVALENT bucket's claims I could verify all held against the source. No cell I checked is in the WRONG bucket in a way that hides a floor gap: the critical property — every non-equivalent guard cell has a post-latch oracle — I verified independently for all 28 latch-set cells via table11.out's own per-leg red rows (each leg red exactly its cell's channel rows + explained collateral).
+
+  Wait — actually, I realize I should double-check the one genuinely load-bearing bucket claim: the 10 EQUIVALENT. I verified:
+  - REV sd/sw/lw out-of-window: prelude rewrites reg[0] on every access (line ~75: d->reg[CRIME_REV/8] = use_fb ? 0xa1 : 0x11 — runs BEFORE the width dispatch) ✓; lw+0x00 high half = 0 ✓; sw/sd writes: reg update invisible (next access rewrites), no arm effect outside window ✓. EQUIVALENT holds.
+  - CONTROL lw (4R-hi): high half of 0x100 = 0 ✓.
+  - CONTROL writes at 0/0x0200/0x0100 (4W/8W): arm clears DOG (local idata), clears ENDIANESS unconditionally, leftover 0 → no fatal print; reg effect: 4W-hi writes idata<<32 — for 0x0200: high half becomes 0x00000200_00000000... wait — 4W at +0x08 (hi lane): reg[1] = (idata<<32) | low; low kept = 0x100 (prelude). So reg = 0x0200_00000100. Next access prelude rewrites reg[1]=0x100. A guest read BETWEEN the write and the next access: there's no "between" — every access runs the prelude first. A guest lw+0x08 immediately after: prelude sets 0x100, then 4R reads high = 0 ✓ invisible. 8W with 0x0200: reg[1] = 0x200 entirely (low becomes 0x200, losing 0x100!): sd+0x08 0x0200 → reg[1] = 0x0000000000000200. Next access prelude rewrites to 0x100 ✓ invisible. But WITHIN the same access: the arm reads idata (0x0200), clears DOG → 0 → no print ✓. So EQUIVALENT ✓. For 0: sd writes reg=0; invisible after next prelude ✓. ✓ all 10 hold.
+
+  One more check on the HD claims: sw+0x04 accepted: reg[0] hi... +0x04 is &4==4 → LOW lane: reg[0] = (reg[0] & 0xffffffff00000000) | idata. Prelude set reg[0]=0x11 → after sw+0x04: reg = 0x...0c0ffee0? wait val 0 in ACCEPTS (sw 0x04, 0). P6's EXTRA sw+0x04 = 0x0c0ffee0. Accepted: reg[0] low half = 0x0c0ffee0 → next access prelude rewrites → invisible at guest ✓; default arm prints a debug() WRITE line while stepping (host) — which nothing counts ✓ HD honest.
+
+  And 0x0001: accepted sw+0x08 0x0001 → arm: no DOG, no RESET, clear ENDIANESS (bit already 0) → idata=1 ≠ 0 → fatal "[ CRIME_CONTROL: unimplemented control 0x1 ]" (host line, guest continues) ✓ HD honest — and NOW rowed by msg count.
+
+  OK. Now Q1's remaining candidate gaps and Q2's final answer:
+
+  **Q2 — could I construct a 188/188 latch-set mutant table 11 didn't build?** Candidates and dispositions:
+  1. C_ctl4r variant (e.g. keyed differently on the same equivalent cell) — clean but equivalent-by-contract; not a counterexample.
+  2. Latch-set shrink at CONTROL 8W keyed jointly on idata==0x0201 (`!(W && addr==CTL && idata==0x0201 && latch)`): post-latch P2 has NO sd 0x0201 → never fires post-latch; pre-latch latch is clear → NEVER fires in any session → 188/188. Is it "a clean-sweep latch-set mutant that table 11 did not build"? YES — it scores 188/188. But it is exactly the F1 cell (0x0201 8W), which is DISCLOSED as clause-(e) debt (multi-axis idata joint). The question says "Give an exact edit ... that scores 188/188, and name the row you expected to catch it." The honest answer: within the single-axis 56-cell product, NONE — I verified all 28 have red rows except the genuinely-equivalent C_ctl4r. Outside the product, the surviving mutants are the disclosed debt: the latch-conditioned form of F1 (0x0201-8W) is one exact edit:
+     `if (len == 8 && !(writeflag == MEM_WRITE && relative_addr == CRIME_CONTROL && idata == 0x0201 && (d->warned & CRIME_W_LEN))) {`
+     — scores 188/188 because no session writes sd 0x0201 post-latch (the row I expected to catch it: `p acc ctl msg`, which DOES catch its 4W sibling because P2 writes sw 0x0201 — the 8W value variant was not added). This is disclosed debt (F1's cell), so it does not break the closure claim — the contract explicitly puts multi-axis idata joints in clause-(e) debt. But note: it's a JOINT of the latch axis and the idata axis — the brief's enumeration is single-axis; the debt is disclosed. I should NAME it per the question's instruction ("name the row you expected to catch it") — done.
+     Similarly the latch-conditioned F3 (sw+0x04 write line): `} else if (len == 4 && !(writeflag == MEM_WRITE && relative_addr == 4 && (d->warned & CRIME_W_LEN))) {` — 188/188 (P6 writes sw+0x04 post-latch but nothing counts the write line) — expected row: none exists (that's F3's disclosed debt).
+     And a latch-set single-offset default decline at +0x0c/+0x44/+0x1c etc.: never fires (no such accesses) → vacuous; guest-visible in principle (store dropped / read 0), single-unnamed-offset disclosed class.
+  3. A latch-set mutant at a NAMED cell but with the latch test NEGATED plus announce suppression... no — that's not a single edit of the guard.
+  4. K2-style both-directions at other labels — killed by either half's rows.
+
+  So Q2's answer: no clean sweep WITHIN the enumerated product; the out-of-product survivors are exactly the disclosed debt cells (F1-8W latch-form, F3 latch-form, single-unnamed-offset forms) — disclosed, graded clause-(e), not floor. The closure claim ("the FLOOR is the INTERSECTION") survives.
+
+  **Q1 — is the enumeration itself right?** Verified against the function:
+  - 7 labels ✓ (6 cases + default; grep confirms no other case labels; SOFTINT 0x20 uncased → default).
+  - len {4,8} ✓ (the guard's two arms).
+  - direction ✓.
+  - latch {clear,set} ✓ — CRIME_W_LEN is the ONLY warned bit (grep: no other CRIME_W_*; d->warned written only at :315) so "latch" has exactly one meaning; a mutant keyed on `d->warned` nonzero ≡ keyed on the bit.
+  - Missing axis candidates rejected: lane bit &4 (guard reads it, but label-granularity covers it: high-lane 4-byte addresses fall in default and are rowed at +0x04/+0x34/+0x40... wait +0x40 is lo lane. High-lane default: +0x04, +0x34 rowed post-latch ✓); pc-window (not a guard axis; joints caught by pc rows anyway); idata (not a guard axis; joints in debt, F1/F3 disclosed); TIME-dependent guards (none).
+  - One more: **the enumeration covers len∈{4,8} only — what about a latch-keyed mutant on the DECLINE arm itself (e.g. suppress the announce when len==1)?** That's refusal-side, item 5's channel rows — out of this pass's scope by design ("hunts nothing else").
+
+  So Q1: enumeration right as stated, WITH the caveat that it is the guard's single-axis generating set and the joints are debt — which the brief itself says. No missing axis found.
+
+  **Q4** — verified: C_ist4r/C_imk4r/C_tim8r reds are exactly their cells' own accept-side channels (istat ctl, imask ctl, time * ctl + the three new p rows). Map confirms those ctl rows' accesses are post-first-refusal in their sessions (#18/#19 firstRefusal=2, #21-24 firstRefusal=1 with POST accesses). The CONTROL=FAIL is the conjunction artifact the brief says it is; gate pins base CONTROL=OK = OK (table11.out line 91 ✓). The brief's reading is CORRECT. One nit: POSTTABLE's prose says C_tim8r "reds `time lb/sb/lh/sh'" — the actual red rows are `time lb ctl, time sb ctl, time lh ctl, time sh ctl` (the CONTROL rows), NOT the refusal-floor rows `time lb/sb/lh/sh`. The distinction is load-bearing (a red `time lb` would mean the REFUSAL floor moved — a different and worse finding). Recorded as a wrong statement (Q5).
+
+  **Q5 — wrong statements found:**
+  1. POSTTABLE 11's C_tim8r red-set misquote: "`time lb/sb/lh/sh'" should be "`time lb/sb/lh/sh ctl'" — the refusal rows stayed green; the ctl rows red. (Verified against table11.out line 117.)
+  2. The probe header's 5-cell HOST-DIAGNOSTIC bucket names only 3 cells (0x0201 x2 + sw+0x04); the source definition (OPUS_REPORT §2a) includes the CONTROL 0x0001 pair — and repair 13 ROWED those two (and 0x0201-4W) via `p acc ctl msg`, so "DISCLOSED ... rather than rowed" is stale for at least the 0x0001 pair at 188 rows. The bucket label (host-diagnostic observable) remains true; the description is stale.
+  3. The repair-13 tail comment in the shipped probe (lines 1312-1318) says the DOG 4W-high readback "is parked in `t2' above" and its pre-apply checklist says "check t2 is not otherwise live" — the applied code parks it in `ra` (line 1293), and `t2` appears nowhere in the session. The applied code is SAFE (nothing in P6 writes ra before the print; verified st/ld scratch regs) — but the comment records the wrong register and an unexecuted check against a register that isn't used. (This is the same class as the K2 prediction error: a record that drifted from the instrument.)
+  4. The known K2 prediction error — already recorded in the brief (not counted against it).
+
+  Also cross-checks that PASSED (worth stating as the denominator of what I swept):
+  - 46 ACCEPTS entries counted in the shipped tuple ✓ (46, six kinds).
+  - 157+31=188 ✓ (31 new rows counted in the applied block).
+  - 33 legs = base + 4 + 28 ✓; every score in POSTTABLE's summary matches table11.out ✓ (K1/K2/K3/E2 reds match exactly; C_ctl4r 188/188 ✓).
+  - mtimes: PRETABLE 15:48 < mutants 15:48 < probe copy/table launch 15:49 < logs 18:09 < table11.out 18:26 < POSTTABLE 18:28 ✓ order claims hold.
+  - The fix in dev_sgi_ip32.c matches the brief's quotation (warned bit, goto crime_declined, tail) — the brief's function dump matches the real file's structure (I verified labels, the latch, the tail; not every comment line).
+  - session_map2.py reproduces on the current probe (51 sessions, 118 post-latch accesses; the claim "45 sessions / 72" is era-tagged to the 157-row probe).
+  - The gapped-shape discrimination: E2 reds exactly p t4w gap + p t4r gap (table11.out line 95) ✓; the "~13,000x separation" raw values (base 0x13414f8 vs 0x5ee) are in the P4/P5 row notes of the probe output — spot-check probe_repair13_fix.out? That's the base run output. Quick check would be nice for the "large" oracle. Let me check mag() and the base run's raw values.
+
+  Actually — one more verification worth doing for Q3's "vacuous row" clause: the base run probe_repair13_fix.out — check `p t4w gap` raw value on base (should be ~0x13414f8, large) and the p rows all green. And mag()'s threshold. Let me read mag() (line 739) and grep the base out.The base run confirms:
+  - All 31 p rows green on base, 188/188 CONTROL=OK ✓.
+  - `p t4w gap` raw 0x13a20e0, `p t4r gap` raw 0x13a3268 on base (the brief/POSTTABLE says base 0x13414f8 vs bypass 0x5ee — different run, same magnitude; SMALL threshold = 66*100000 = 6,600,000 = 0x64a600; base ~0x13a0000 ≈ 20.6M > threshold ✓ "large"; the bypass's 0x5ee ≪ threshold ✓ discriminates. The "~13,000x separation" claim: 0x13414f8/0x5ee ≈ 13,300 ✓ era/run-dependent but the discrimination is real).
+  - `p t4w gap`'s "first ld 0x0" — v1 = 0 on base. Interesting: the first ld+0x38 reads TIME ≈ 0 (machine just started, TIME still 0 — crime_update_crime_time adds elapsed; at the very first accesses, elapsed μs may be 0). Fine.
+  - Note `p t4r gap` also large (0x13a3268) — under C_tim4r the lw is declined → 0 → small → red ✓.
+
+  One thing to note: mag() threshold SMALL = 66*100000 μs = 6.6M. The gapped row relies on host-time passing between debugger steps (~0.1s total across the pauses → 66 * ~200k+ ≈ 13M). If a host were fast enough that elapsed < 100000 μs across the gaps... base measured 0x13a20e0 = 20.6M → 312k μs ≈ 0.3 s of host time across the steps. Margin ~3x. Recorded elsewhere ("measured stable so far" per the comment at line 735). Fine — not this pass's hunt.
+
+  Also interesting: `p acc istat ld` = 0x101010111010101 — that's SOFTINT|HARDINT after sd+0x20 BIT — BIT = 0x0101010111010101 presumably. And `p imask st+ld` same value. OK.
+
+  Now — the v1=0x0 "first ld" note and `p t gap once` [1,1] — verified green.
+
+  I also want to double-check the one remaining Q5 candidate from the brief: the brief's PART A quote "Base 149/149" (R2) — that's the pass-6 seat's augmented probe (141 + 8 rows?) — not verifiable from here, and it's a quoted historical artifact; skip.
+
+  And the brief's claim in the header (contract item 4, line ~330): "every said row sat at an offset with bit 1 set -- rev said is at +0x00, every address bit clear" — refusal-side, out of scope for this pass.
+
+  One more premise check for Q1 — "the 7 labels the switch distinguishes": I verified 6 case labels + default. But wait — does the switch REALLY distinguish INTSTAT and INTMASK as separate cells for the enumeration? They share one case body (crime_interrupt_reassert). The enumeration treats them as separate labels — a mutant keyed on one but not the other is buildable (K1 vs ...). Fine — the enumeration DISTINGUISHES them, which is the conservative direction.
+
+  Also — the enumeration's default-arm expression in the mutants excludes exactly the six labels ✓ (verified in the LABELS tuple in the brief; the applied mutants529k.py should match — spot-check? The table11.out shows all 28 built and applied with 1 edit each. The brief quotes the generator verbatim. I'll trust the mtimes + build log; a diff of mutants529k.py against the brief's quote is cheap though. Let me do a quick check that the applied mutants file matches the brief's quoted generator — particularly that C_ctl4r exists and the dfl expression excludes all six labels.
+
+  Also verify the applied probe = the table's probe copy (md5 in table11.out line 1: 2818bd4... /tmp/crime_width_probe.table11.py). Compare regress/crime_width_probe.py vs killtable11's crime_width_probe.table11.py — diff -q. Quick.
+
+  Then I'm done verifying and can write the verdict. Let me also decide on the GO/NO-GO/GO-WITH-CHANGES. Findings:
+  - The enumeration verifies (Q1): no missing axis; 7 labels confirmed; single latch bit confirmed.
+  - No clean-sweep latch-set mutant within the product (Q2): all 28 built cells behaved as the contract requires (27 killed on their own channels + explained collateral; C_ctl4r genuinely equivalent — I verified the equivalence from source, and its cleanliness is the negative control passing). Out-of-product survivors are the disclosed debt (F1-8W latch-form, F3 latch-form, single-offset default forms) — already disclosed clause-(e), so they don't break the closure. Per the question's instruction I NAME the F1-latch-form edit and the row I'd expect (`p acc ctl msg` — which catches only its 4W sibling; the 8W value variant was never added post-latch).
+  - Buckets (Q3): arithmetic sums; EQUIVALENT claims verified from source (all 10); HD bucket description under-names membership (3 of 5) and "rather than rowed" is stale for the 0x0001 pair at 188 rows; the 23/8 membership not independently reconstructible but consistent with the map I ran.
+  - CONTROL=FAIL reading (Q4): correct — with the row-name misquote nit (time * ctl, not time lb/sb/lh/sh).
+  - Q5: three wrong statements found (POSTTABLE C_tim8r red-set misquote; HD bucket description stale/under-counted; the t2/ra stale comment in the shipped probe).
+
+  None of these is a floor gap: the enumeration closure itself verified. The wrong statements are record defects (L4-class) that the project convention fixes in the next repair's precommit. So: GO-WITH-CHANGES — the changes being the three record corrections, none touching the detector logic. The verdict line format the brief demands: `CLOSES` / `GAP:` / `ENUMERATION WRONG:` then the token. The user's instruction: end with GO / NO-GO / GO-WITH-CHANGES. I'll give the brief's verdict vocabulary AND the user's GO-vocabulary.
+
+  Quick final checks: diff the probe vs table copy; check mutants529k.py generator matches. Then write up.PROBE_IDENTICAL
+71:          ("dfl", "relative_addr != CRIME_REV && relative_addr != CRIME_CONTROL &&\n\t    "
+72:                  "relative_addr != CRIME_INTSTAT && relative_addr != CRIME_INTMASK &&\n\t    "
+73:                  "relative_addr != CRIME_DOG && relative_addr != CRIME_TIME"))
+1
+The shipped probe is byte-identical to the table's tested copy ✓. The mutants file has the dfl complement excluding all six labels ✓. C_ctl4r isn't named literally because the generator emits it via the loop (name = "C_%s%d%s" — ctl, 4, r) ✓ consistent with the brief.
+
+  I now have everything I need. Let me also do one last adversarial sweep of Q1 — "is there an axis the enumeration is missing" — one more candidate I haven't fully killed: **the direction axis vs the window kinds on WRITES at REV — the guard doesn't read pc, fine. What about `len == 4` accesses at +0x08 vs +0x0c — +0x0c is the crimectllane cell; a latch-set decline at +0x0c is a single-unnamed-offset default cell — disclosed. ✓.
+
+  And Q2's requested form — "Give an exact edit ... and name the row you expected to catch it": I'll present the F1-latch-form edit explicitly with `p acc ctl msg` as the expected row and explain why it doesn't fire (no post-latch sd 0x0201), i.e. disclosed debt, not a new gap.
+
+  Verdict structure (per the brief's demanded format + the user's GO vocabulary):
+
+  VERDICT: CLOSES with three L4 record corrections → GO-WITH-CHANGES.
+
+  Denominator (what I swept, per "a bare zero does not close the chain"):
+  - Cells: all 28 latch-set cells of the 56-cell product, checked per-cell against table11.out's red rows and the applied probe's sessions; the 46 ACCEPTS entries counted and bucket-mapped; the 10 EQUIVALENT claims re-derived from dev_sgi_ip32.c (prelude rewrite, arm behavior); the 7 labels grepped from the real switch; the latch confirmed single-bit (CRIME_W_LEN only CRIME_W_* define; d->warned written only at :315).
+  - Shapes: K-form (label∧latch, both dir-split and K2's joint), E2 unconditional 4-byte bypass, dfl complement expression, plus out-of-product forms I constructed (latch∧idata joint = F1-latch; latch∧single-offset = F3-latch and unnamed-offset forms; both-direction unions; pc-window joints; lane-keyed forms) — each either reds a named row or lands in an already-disclosed class.
+  - Static re-derivation: session_map2.py run on the 188-row probe (51 sessions, 118 post-latch accesses) — mechanism confirmed.
+  - Provenance: probe == tested copy (byte-identical); mtimes PRETABLE→mutator→table→POSTTABLE in order; 33 legs all present in table11.out; base 188/188 CONTROL=OK.
+
+  What I could NOT check (the brief asks to say so):
+  - I did not re-run any emulator leg (per the operational rule and time); I verified the table's outputs, not its execution. The 33 legs' transcripts in logs/ I did not audit individually — I checked the summary table11.out against POSTTABLE's claims only.
+  - The exact membership of the "23 ROWED / 8 PINNED" buckets is not derivable from shipped artifacts (the map prints accesses, not bucket assignments); I verified the arithmetic sums to 46, the EQUIVALENT 10 from source, the HD definition from the source report, and — load-bearing — that every one of the 28 product cells has at least one red row in table11.out.
+  - The 12 S_* latch-clear bypass scores (table 10) were not re-audited; this pass's scope is the latch-set half.
+
+  Findings per question:
+
+  Q1: enumeration right. 7 labels confirmed against the real switch (SOFTINT 0x20 has no case → default; no other cases). latch is one bit. No missing guard axis; lane/pc/idata are not guard axes and every single-axis form I built on them either reds a row or is disclosed debt.
+
+  Q2: no clean-sweep latch-set mutant within the product. 27/28 red on their own channels (+ explained collateral: p dog whi under C_dfl4w via the declined wlo seed; p acc istat ld under C_dfl8w via the declined SOFTINT seed); C_ctl4r clean and genuinely equivalent (4R of +0x08 reads the high half of 0x100 = 0 accepted or declined — verified in source). The only 188/188 latch-set edits I can construct are the disclosed debt: e.g. `if (len == 8 && !(writeflag == MEM_WRITE && relative_addr == CRIME_CONTROL && idata == 0x0201 && (d->warned & CRIME_W_LEN))) {` — scores 188/188 because no session writes sd 0x0201 post-latch; the row I expected to catch it, `p acc ctl msg', catches only its 4W sibling (P2 carries sw 0x0201 but no sd 0x0201). That is F1's own cell, multi-axis idata joint, clause-(e) debt by the pass-11 amendment — disclosed, not a floor breach. Same for the latch-form of F3 (sw+0x04 write line) and single-unnamed-offset default forms.
+
+  Q3: buckets honest in sum and in the EQUIVALENT 10 (re-derived); the 5-HD description in the shipped header names only 3 cells and its source definition (OPUS_REPORT §2a: 0x0201×2 + 0x0001×2 + sw+0x04) is stale in its "rather than rowed" clause — repair 13 rows the 0x0001 pair and 0x0201-4W via `p acc ctl msg'. No bucket mis-assignment that hides a floor gap.
+
+  Q4: reading correct. The three CONTROL=FAIL legs red exactly their cells' own accept-side channels (istat ctl, imask ctl, time×4 ctl + the three new p rows); the session map confirms those ctl accesses are post-first-refusal; the gate's base CONTROL=OK holds (table11.out:91). Not invalid sessions.
+
+  Q5: three wrong statements (all record-class, none detector-class):
+    1. POSTTABLE 11: C_tim8r "reds `time lb/sb/lh/sh'" — wrong row names; the reds are `time lb/sb/lh/sh CTL` (table11.out:117). The refusal-floor rows stayed green; the misquote names the rows that would have meant the opposite finding.
+    2. Probe header (and brief) 5-HD bucket: names 3 cells of 5; "rather than rowed" false of the 0x0001 pair (and 0x0201-4W) at 188 rows.
+    3. Shipped probe tail comment (crime_width_probe.py:1312-1318): says the DOG 4W-high readback "is parked in `t2' above" and its checklist says to check `t2' — the applied code parks it in `ra` (:1293); `t2` appears nowhere in the session. The applied code is safe (nothing writes ra before the print; verified), the comment records the wrong register and an unexecuted check.
+    (The K2 four-vs-two prediction error was already recorded; not double-counted.)
+
+  Verdict: CLOSES, GO-WITH-CHANGES — the three record corrections; no detector change, no re-run owed (they alter no command list, no row, no score claim that a checker keys on — except #2's bucket text, which touches the contract header and should go through the score-claims checker when edited).
+
+  The brief's format demands: VERDICT LINE FIRST: `CLOSES` ... then the token `CRIME_CLOSE8_20260916`. The user demands ending with GO / NO-GO / GO-WITH-CHANGES. I'll structure: verdict line first with token, then the review, ending with GO-WITH-CHANGES.
+
+  Keep it tight but complete. The user said "Do not summarise it back to me" — meaning don't just restate the brief; deliver the adversarial review findings. End with the GO vocabulary.
+
+• VERDICT: `CLOSES` — with three record (L4-class) corrections, none touching the detector. `CRIME_CLOSE8_20260916`.
+
+  Reviewed per the brief's five questions, against `dev_sgi_ip32.c`, the shipped `crime_width_probe.py` (byte-identical to the table-11 tested copy — verified), `table11.out`, the close-7 artifacts, and a re-run of `session_map2.py` on the 188-row probe. No emulator legs re-run (operational rule); everything below is static verification plus the artifacts' own measurements.
+
+  **Denominator of the sweep** (cells, shapes): all 28 latch-set cells of the 56-cell product, per-cell against `table11.out`'s red rows; the 46 ACCEPTS entries re-counted in the shipped tuple (46 ✓, six kinds); the 10 EQUIVALENT claims re-derived from the source; out-of-product mutant shapes I constructed (latch∧idata joints, latch∧single-offset, direction unions, pc-window joints, lane-keyed forms). What I could not check: the 33 legs' execution itself (outputs only, not transcripts), the exact membership of the 23/8 buckets (not derivable from shipped artifacts — the map prints accesses, not assignments), and table 10's latch-clear S_* leg scores.
+
+  **Q1 — the enumeration is right.** Verified against the function, not the description: the switch distinguishes exactly 7 labels (grep confirms `case CRIME_REV/CONTROL/INTSTAT/INTMASK/DOG/TIME` + default; `CRIME_SOFTINT` 0x20 has no case and correctly falls in default; no other case labels exist). `CRIME_W_LEN` is the *only* `CRIME_W_*` define and `d->warned` is written only at `dev_sgi_ip32.c:315`, so "latch" has exactly one meaning — a mutant keyed on `d->warned != 0` is identical to one keyed on the bit. No missing guard axis: the guard reads only `len`, `writeflag`, `relative_addr` (+the `&4` lane, which label-granularity covers — high-lane 4-byte addresses fall in default and are rowed at +0x04/+0x34), and `d->warned`. pc-window and idata are not guard axes; every single-axis form I built on them either reds a row or is disclosed debt.
+
+  **Q2 — no clean-sweep latch-set mutant exists within the product.** 27 of 28 red on their own cell's channel; the collateral reds are all attributable (e.g. `p dog whi` under `C_dfl4w` fails via the declined +0x34 seed, `p acc istat ld` under `C_dfl8w` via the declined SOFTINT seed). `C_ctl4r` at 188/188 is genuinely equivalent — a 4R at +0x08 reads the high half of 0x100 = 0 accepted or declined, confirmed in source. The only 188/188 latch-set edit I can construct is the disclosed debt itself: `if (len == 8 && !(writeflag == MEM_WRITE && relative_addr == CRIME_CONTROL && idata == 0x0201 && (d->warned & CRIME_W_LEN))) {` — never fires because no session writes `sd 0x0201` post-latch; the row I expected to catch it, `p acc ctl msg`, catches only its 4W sibling (P2 carries `sw 0x0201`, no `sd 0x0201`). That is F1's own cell — a multi-axis idata joint, clause-(e) debt by the pass-11 amendment, already disclosed. Same disposition for the latch-conditioned F3 (`sw +0x04` write line) and single-unnamed-offset default forms.
+
+  **Q3 — buckets honest in sum; one description stale.** 23+8+10+5 = 46 ✓. All 10 EQUIVALENT claims re-derived and hold (prelude rewrites REV/CONTROL every access before the dispatch; 0/0x0200/0x0100 writes produce no print and no guest-visible state). But the 5-cell HOST-DIAGNOSTIC bucket as written in the shipped header names only 3 cells (0x0201 ×2 + `sw +0x04`); its source definition (close-7 OPUS_REPORT §2a) includes the CONTROL 0x0001 pair — and repair 13 *rowed* that pair (and 0x0201-4W) via `p acc ctl msg`, so "DISCLOSED … rather than rowed" is false of those cells at 188 rows. The bucket label (host-side observable) remains true; no mis-assignment hides a floor gap — the load-bearing property, that every non-equivalent product cell has a post-latch oracle, I verified independently from `table11.out`.
+
+  **Q4 — the reading is correct.** The three `CRIMEP_CONTROL=FAIL` legs red exactly their own accept-side channels: `istat ctl`, `imask ctl`, and the four `time * ctl` rows plus the three new `p` rows. The session map confirms those ctl accesses occur after their sessions' first refusals (#18/#19 firstRefusal=2, #21–24 firstRefusal=1). These are caught mutants, not invalid sessions; the gate's base pin holds (`table11.out:91` — base 188/188 CONTROL=OK).
+
+  **Q5 — three wrong statements, record-class only:**
+  1. POSTTABLE 11 says `C_tim8r` "reds `time lb/sb/lh/sh'" — `table11.out:117` shows the reds are `time lb/sb/lh/sh `**`ctl`**. The refusal-floor rows stayed green; the misquote names the family that would have meant the opposite (and worse) finding.
+  2. The 5-HD bucket text above — names 3 of 5 cells, and "rather than rowed" is stale at 188 rows.
+  3. The shipped probe's tail comment (`crime_width_probe.py:1312-1318`) says the DOG 4W-high readback "is parked in `t2' above" and demands a pre-apply check that `t2` is not live — the applied code parks it in `ra` (`:1293`); `t2` appears nowhere in the session. The code is safe (nothing writes `ra` before its print; st/ld scratch regs verified), but the comment records the wrong register and an unexecuted check.
+
+  The already-recorded K2 prediction error (four vs two) I confirmed against `table11.out:93` and do not double-count. The three corrections alter no command list, row, or score; #2 touches contract-header text and should pass through the score-claims checker when edited. No re-run owed.
+
+  **GO-WITH-CHANGES**
+
+To resume this session: kimi -r session_099a586c-bd11-48f3-a34b-1d945feadbc5

@@ -1,0 +1,140 @@
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table14_20260926/crime_width_probe.table14.py	2026-09-26 00:27:18.403660000 -0500
++++ /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/table16_20260926/crime_width_probe.table16.py	2026-09-26 03:53:15.817624200 -0500
+@@ -49,7 +49,9 @@
+      The INTSTAT/INTMASK/TIME rows came from the pass-2 Opus seat, which MEASURED a decline narrowed to skip those
+      labels passing the 40-row version of this detector 40/40 (opus_pass2_20260913/OPUS_REPORT.md); their 2-byte cells
+      from the F2 pass (grok, glm): `len != 2 || relative_addr != CRIME_INTSTAT' passed the 71-row version.  So every
+-     observable label carries the whole {1,2} x {R,W} refusal floor (CONTROL's reads and DOG have no body: below).
++     observable label carries the whole {1,2} x {R,W} refusal floor, each cell in at least ONE latch state (CONTROL's
++     reads and DOG have no body: below).  [Crossed with the latch state, INTSTAT and INTMASK exercise 4 of their 8
++     cells each -- see the contract block (#529 repair 16; the Opus seat, repair 15's pass 2).]
+      *** THE sh08 AND sw08 CHANNELS EXIST BECAUSE OF A SEPARATE DEFECT, `crimectllane' (filed): the switch matches
+      CRIME_CONTROL by its exact label 0x08 and reads the RAW idata, so a 32-bit write to the high half, or a halfword at
+      +0x08, carries bit 11 into HARD_RESET, while NetBSD's +0x0c write does nothing.  A round that fixes that lane
+@@ -349,8 +351,20 @@
+   prints, and the prelude re-forces the register at every access, so the CONTROL text COUNT is the cell's one
+   observable -- and no row read it in a session holding that write.  `ctldog sw msg'/`ctldog sd msg' are the pair
+   (D_nodogclear, the DOG branch's clear deleted; table14_20260926/).  A SILENT decline of the DOG-only write
+-  changes nothing any access can see: EQUIVALENT, disclosed.  The latch x DOG joint is clause (e): the CONTROL
+-  arm reads no latch. ***
++  changes nothing any access can see: EQUIVALENT, disclosed.
++  REPAIR 16 (2026-09-26) CLOSES THE CONTROL ARM'S RESIDUE-TEXT CHANNEL AS A CLASS: every clear the arm makes before
++  its residue test (DOG 0x200, HARD_RESET 0x800, ENDIANESS 0x100) has a residue-count row in BOTH latch states --
++  DOG: `ctldog sw/sd msg' and `latch ctl msg' (CLEAR), `rearm ctl msg' (SET); HARD_RESET: `ctlrst sw/sd msg'
++  (CLEAR), `rst 4w/8w msg' (SET); ENDIANESS: `latch ctl msg' (CLEAR), `rearm ctl msg' (SET) -- and each TESTED bit
++  keeps its side-effect rows (DOG's stop and re-arm shapes: `rearm surv', `latch surv', `rearm once'; HARD_RESET's
++  stop: `sw08 halts', `rst 4w', `rst 8w', `ctlrst sw/sd halt').  Measured in table15a_20260926/ and
++  table16_20260926/.  NOT ROWED, disclosed as clause (e), each measured by the Opus seat on repair 15's pass 2
++  (opus_r15p2_20260926/): the residue VALUE when the count does not move (a DOG clear skipped when bit 0 is set);
++  a latch-SET 2-byte CONTROL write with HARD_RESET clear (host text only; every latch-SET 2-byte write here carries
++  0x0800); at INTSTAT and INTMASK, the width x direction x latch-state joints no session reaches (1R with the latch
++  SET; 1W, 2R, 2W with it CLEAR -- the decline tests neither width within the narrow class nor direction); and a
++  refusal at INTSTAT/INTMASK while the interrupt line is ALREADY asserted (every row here watches the line rise).
++  Whether those are floor is a question put to the adjudicators with these measurements. ***
+ 
+ DISCLOSED, not rowed:
+   * `goto crime_declined' -> `return 1' is EQUIVALENT on every channel: memory_rw pre-zeroes a device read buffer
+@@ -893,9 +907,11 @@
+ #  CHANNELS: TIME -- crime_update_crime_time() at the refused access moves the next sample by the wall-clock since
+ #  the last update (large vs SMALL: the `time' rows' channel, and their disclosed tick assumption; the extra +0x07
+ #  access adds debugger steps, never a TIME update, on a fix build); REV -- the arm's PROM-window hack redirects the
+-#  pc to ra (the `rev pc' rows' channel).  All four narrow ops at each label, as repair 14's ruling said: the
+-#  decline block tests neither width nor direction, and the four are the width x direction cells a leak keyed on
+-#  either could use.
++#  pc to ra (the `rev pc' rows' channel).  All four narrow ops at each label because repair 14's ruling C asked for
++#  them -- a STRENGTHENING over the floor, which is {label} x {latch SET}: the decline block tests neither width
++#  within the narrow class nor direction.  (INTSTAT and INTMASK do not have all four in both latch states: see the
++#  contract block.  This said "the four are the width x direction cells a leak keyed on either could use" --
++#  repair 15's pass 2, four seats.)
+ for op in ("lb", "sb", "lh", "sh"):
+     A = Addr(CODE)
+     c = []
+@@ -940,6 +956,22 @@
+     row("ctldog %s msg" % op, count(t, "CRIME_CONTROL: unimplemented", clean), 1,
+         "%s 0x0200 then 0x0201 +0x08: ONE CONTROL text, the twin's" % op)
+ 
++# ---- #529 REPAIR 16: HARD_RESET's residue with the latch CLEAR (repair 15's pass 2) ----
++#  An accepted `sw'/`sd +0x08 = 0x0800' stops every CPU, and because the branch clears HARD_RESET before the residue
++#  test it prints nothing.  No row counted the CONTROL text in a session holding an accepted 0x0800 write, so a build
++#  that skipped that clear passed every row while the CPUs still stopped (table15a_20260926/).  The halt ends the
++#  guest's work, so the twin comes FIRST: 0x0001 (residue 0x1, one text), then 0x0800 as the session's last store.
++#  CHANNELS: the text count -- ONE on the fixed build, TWO if the clear is skipped -- and the halt: v1 left at the
++#  sentinel by the RAM trip that cannot run, which shows the 0x0800 write reached the arm.
++for op in ("sw", "sd"):
++    A = Addr(CODE)
++    x, _ = st(A, op, CRIME + 0x08, 0x0001)
++    y, _ = st(A, op, CRIME + 0x08, 0x0800)
++    t, clean = session(x + y + AFTER + roundtrip(A))
++    row("ctlrst %s msg" % op, count(t, "CRIME_CONTROL: unimplemented", clean), 1,
++        "%s 0x0001 then 0x0800 +0x08: ONE CONTROL text, the twin's" % op)
++    row("ctlrst %s halt" % op, pr(t, "v1"), "0x%x" % SENT, "%s 0x0800 +0x08 after the twin: CPUs stopped" % op)
++
+ # ---- a refused store leaves the register it names untouched (CRIME_DOG seeded by an accepted sd) ----
+ A = Addr(CODE)
+ c = []
+@@ -1050,6 +1082,12 @@
+ row("rearm once", count(t, "-- declined.", clean), 1, "%d refusals, %d accepted kinds between: one notice"
+     % (len(KINDS) + 1, len(KINDS)))
+ row("rearm surv", pr(t, "v1"), "0x%x" % LIVE_VAL, "the whole interleave completes (a RAM trip)")
++#  #529 repair 16: ACCEPTS holds ten accepted CONTROL writes -- 0x0201, 0x0001, 0, 0x0200, 0x0100 at both widths -- and
++#  here every one after the first entry runs with the latch SET.  The fixed build prints for the four with a nonzero
++#  residue (0x0201 and 0x0001, both widths).  A clear skipped for DOG or ENDIANESS adds texts; a latch-SET accepted
++#  write wrongly declined removes them.  (The Opus seat's option on repair 15's pass 2, replay-measured 4 on base.)
++row("rearm ctl msg", count(t, "CRIME_CONTROL: unimplemented", clean), 4,
++    "ten accepted CONTROL writes, latch SET: four print (0x0201, 0x0001 at both widths)")
+ 
+ # ---- ACCEPT cells at the window's LAST 8-byte slot (+0x278; no case label, no prelude write) -- the far bound ----
+ A = Addr(CODE)
+@@ -1248,6 +1286,9 @@
+ t, clean = session(c + roundtrip(A))
+ row("latch x5", count(t, "-- declined.", clean), 1, "5 refused accesses, then +0x00, +0x38 -> one (once)")
+ row("latch surv", pr(t, "v1"), "0x%x" % LIVE_VAL, "host survives all five")
++#  #529 repair 16: the same ten accepted CONTROL writes, here all BEFORE the first refusal -- latch CLEAR.
++row("latch ctl msg", count(t, "CRIME_CONTROL: unimplemented", clean), 4,
++    "ten accepted CONTROL writes, latch CLEAR: four print (0x0201, 0x0001 at both widths)")
+ #  REPAIR 12 (closing pass 6; flagship ruling regress/artifacts/lcaisalane/FABLE_C4_RULING_20260915.md, part A): the two
+ #  rows ACCEPTS feeds COUNT notices, so an ACCEPTED cell wrongly declined -- an accept guard GROWN by one conjunct, the
+ #  de-escalation clause's own shape -- takes the session's one notice itself and the count stays 1: codex's C1 (CONTROL
+@@ -1585,28 +1626,37 @@
+ #  MEASURED BEFORE TRANSPLANTING (opus_close8_20260916/scripts/ctlreset.py): base 6/6; K_ctl4w_reset_post
+ #  5/6 on its 4-byte row; K_ctl8w_reset_post 5/6 on its 8-byte row; G_glm_tim4clear 6/6 OFF-CELL.
+ def rst_session(op):
+-    """a refused lb sets the latch; then an accepted `op' of 0x800 at CONTROL stops every CPU (or does not)"""
++    """a refused lb sets the latch; then an accepted `op' of 0x800 at CONTROL stops every CPU (or does not).  #529
++    repair 16: an accepted `op' of 0x0001 runs FIRST, with the latch CLEAR -- one CONTROL text, the text channel's
++    in-session liveness half -- and the CONTROL-text count is returned: the 0x800 write's residue, latch SET."""
+     A = Addr(CODE)
+-    c, _ = ld(A, "lb", CRIME + 0x07, "v0")
++    c = []
++    if op is not None:
++        x, _ = st(A, op, CRIME + 0x08, 0x0001)
++        c += x
++    x, _ = ld(A, "lb", CRIME + 0x07, "v0")
++    c += x
+     if op is not None:
+         x, _ = st(A, op, CRIME + 0x08, 0x800)
+         c += x
+     c += roundtrip(A)
+     t, clean = session(c)
+-    return pr(t, "v1"), (t.count("-- declined.") if clean else "unclean")
++    return (pr(t, "v1"), (t.count("-- declined.") if clean else "unclean"),
++            count(t, "CRIME_CONTROL: unimplemented", clean))
+ 
+ 
+-_rv, _rn = rst_session(None)
++_rv, _rn, _rm = rst_session(None)
+ row("rst alive", _rv, "0x%x" % LIVE_VAL,
+     "CONTROL: with NO 0x800 write the RAM round trip completes -- the halt oracle is live, not stuck")
+ row("rst alive once", _rn, 1, "CONTROL: the control session refused exactly once")
+ for _op, _w in (("sw", 4), ("sd", 8)):
+-    _rv, _rn = rst_session(_op)
++    _rv, _rn, _rm = rst_session(_op)
+     row("rst %dw" % _w, _rv, "0x%x" % SENT,
+         "*** accepted %s 0x800 at CONTROL with the latch SET stops every CPU: the round trip after it does "
+         "not run, so v1 keeps the SENTINEL (absent would mean the HOST died -- a different outcome) ***"
+         % _op)
+     row("rst %dw once" % _w, _rn, 1, "CONTROL: exactly one refusal announced in this session")
++    row("rst %dw msg" % _w, _rm, 1, "twin 0x0001 then, latch SET, 0x800: ONE CONTROL text, the twin's")
+ 
+ # ---- P6: the remaining post-latch ACCEPT cells that carry a value, plus the two EXTRA accesses
+ #      (DOG 4W high, the +0x04 write line). ----

@@ -1,0 +1,22 @@
+PRETABLE2 -- #529 second closing pass (Opus seat), batch 2.  Written BEFORE batch 2 is built (mtime is the order proof).
+Instrument: /tmp/cwp_close2.py (md5 1b1bb8fb = shipped regress/crime_width_probe.py), 111 rows.
+
+WHY: batch 1's rd_lh_all (a declined 2-byte read answers d->reg[relative_addr/8], every offset) reddened lh v0, lhu v0,
+lh rev v0, time lh v0, ctl v0 -- but NOT istat lh v0 / imask lh v0.  The istat/imask sessions seed SOFTINT = INTMASK =
+0x10000000, so reg[INTSTAT] = reg[INTMASK] = 0x0000000010000000: its low byte AND low halfword are 0, and a 1- or 2-byte
+read of it answers 0 whether it is declined or leaks the register.  The dog session never seeds DOG (reg 0).  So item 9's
+"answer at each named label" is pinned against a NONZERO CONSTANT (codex's istat_od1 `odata = 1', which is caught) but
+NOT against the register-leak form -- the accept path's own expression -- at INTSTAT, INTMASK and DOG.
+
+PREDICTIONS (111-row instrument):
+  istat_leak   `if (writeflag == MEM_READ && relative_addr == CRIME_INTSTAT) odata = d->reg[relative_addr / 8];'
+               before `goto crime_declined;'           -> 111/111, NO red row (istat lb v0 / lh v0 read the 0 low bytes)
+  dog_leak     same, relative_addr == CRIME_DOG        -> 111/111, NO red row (dog v0's session never seeds DOG)
+  istat_lane   byte-lane-aware leak at INTSTAT: odata = reg >> (8 * (8 - len - (relative_addr & 7)))  (big-endian lane
+               extraction, the form a careful author would write)          -> 111/111 (lb/lh at +0x10 take bytes 0..1 of
+               0x0000000010000000 = 0)
+DISCRIMINATORS (guest-only, base vs mutant, same script):
+  istat_leak: sd +0x20 SOFTINT = 0xff, lb +0x10       -> base v0 0x0, mutant nonzero (0xffffffffffffffff)
+              and with the probe's own value BIT = 0x10000000: base 0, mutant 0 (the oracle's blindness, shown)
+  dog_leak:   sd +0x30 = 0x0123456789abcdef, lb +0x30 -> base 0x0, mutant nonzero
+  istat_lane: sd +0x20 SOFTINT = 0xff00000000000000, lb +0x10 -> base 0x0, mutant nonzero

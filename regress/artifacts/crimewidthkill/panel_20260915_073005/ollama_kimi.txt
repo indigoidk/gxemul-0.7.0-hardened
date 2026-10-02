@@ -1,0 +1,35 @@
+VERDICT: ENUMERATION WRONG: CONTROL 4W (accept cell +0x08, 4-byte write) — a silent bypass there is guest-visible (sw 0x0800 no longer stops the CPUs, sw 0x01 no longer prints), yet item 6 names no row for it: it is not in the twelve caught cells, correctly not in the six EQUIVALENT ones, and the residual sentence "the remaining ACCEPTS cells' accept side is pinned by the rows below" points at the +0x00 / DOG +0x30 / +0x278 rows, none of which touches +0x08. The actual pins are item 3's own controls `sw08 msg ctl` and `sw08 halts` — above item 6, unnamed by the enumeration. Same missing-disposition defect at INTSTAT 4R, INTMASK 8W/8R/4R, TIME 8R, and the default-arm's 8W/8R at +0x40 (each is in fact pinned by an incidental row, but the mapping never says so). No floor gap in the 157 rows found from the packet. — CRIME_CLOSE7_20260915
+
+---
+
+**Q1 — the enumeration**
+
+*Announced form (guard growth) — argument SOUND, with one uncheckable premise.*
+
+- READ: the else-arm announces unconditionally when the latch is clear (`if (!(d->warned & CRIME_W_LEN)) { ... fatal }`), and sits before `switch`, so a pc-keyed redirect cannot precede it.
+- REASONED: no single conjunct grown onto `len == 8`/`len == 4` can decline *without announcing* while the latch is clear; the only silent decline shape is a bypass *before* the width test (G6) — which is exactly why the silent form needs value rows. The `latch said` exact-text string (len=2 at 0x6) cannot be reproduced by any prologue theft, since ACCEPTS contains only 4/8-byte kinds.
+- REASONED corroboration: POSTTABLE's arithmetic is internally consistent with the ordering claim — G3 red *only* on `latch said` (156) matches TIME 4W/4R being equivalent when silently bypassed; C1 red only on `latch said` matches CONTROL 4R equivalence; G1/G2's 154s match their three predicted rows. Six measured mutants cover REV/CONTROL/INTSTAT/INTMASK/TIME × widths × directions.
+- NOT CHECKABLE FROM PACKET: that **all 46** ACCEPTS accesses precede the lh +0x06. If any one cell's prologue access ran after the lh, a growth there would decline with the latch already set and score green. Settle with: latch x5's full command list (claimed at probe :934-940).
+
+*Silent form — dispositions missing for a family of cells.* Each is pinned, but not where item 6 says, and the pins rest on arguments the enumeration never states:
+
+- CONTROL 4W → pinned by `sw08 msg ctl` / `sw08 halts` (bypass declines the sw → no print / no halt).
+- INTMASK 8W → pinned incidentally by `istw sd` (declined sd +0x18: INTMASK=0, the later INTSTAT reassert finds no masked bit, IP2 stays low).
+- INTMASK 8R → pinned incidentally by `acc imask sw` (the bypass declines that session's own ld +0x18 → s2 = 0).
+- TIME 8R → pinned incidentally by `acc time sd`'s own ld +0x38 (declined → 0 → "even").
+- +0x40 8W → `lo keeps` (the session's seed sd +0x40 declines); +0x40 8R → `acc 40 sw`'s ld and `lo keeps`' read-back.
+- INTSTAT 4R / INTMASK 4R → the only candidate pins are `istat ctl`/`imask ctl` ("an accepted lw sets it" — the reassert on read). NOT CHECKABLE FROM PACKET: which *lane* those lws sit at. If the ctl lw is at +0x14 / +0x1c rather than the label offset, a lane-exact silent bypass at (4R,+0x10) / (4R,+0x18) escapes: the value is 0 either way (high half) and the skipped reassert is unobserved in the probe. These two cells would then need an equivalence/disclosure line, not silence. Settle with: the offset argument of the lw in the two ctl row command lists.
+
+**Q2 — channels vary** (REASONED, cross-checked against POSTTABLE counts)
+
+- `istw sd`/`istw sw`: READ — the common tail restores HARDINT and recomputes INTSTAT but does not call `crime_interrupt_reassert`; a declined store therefore cannot raise IP2, an accepted one does. Sequence logic checks out (SOFTINT's +0x20 store hits the default arm → `istw pre` low; the INTMASK store's own reassert with SOFTINT=0 lowers the line → `istw mid` low). POSTTABLE consistent: S_istsd reds only `istw sd`, S_istsw only `istw sw`.
+- `acc time sd`: REASONED — increments are multiples of 66 (even, SETTLED), TIME starts even, so parity distinguishes "seed landed" from "seed declined" regardless of host clock; a declined store also cannot turn TIME odd later. POSTTABLE: S_timesd red, "TIME stayed EVEN" ✓.
+- `revP {sw,sd,ld} pc`, `acc ctl sd` (print count), `acc imask sw` / `acc 40 *` (read-backs): the per-mutant red sets in POSTTABLE (155 vs 156) all match which session's access the bypass actually touches — e.g. S_40lw reds only `acc 40 lw`, S_revPld reds two rows because `acc8 near`'s ld +0x00 also declines.
+
+**Q3 — floor gap** (REASONED): none found. Every 157/157 candidate I could construct (latch always-announce, re-arm-after-first-refusal, value-keyed growths on CONTROL/prologue writes, tail-added reassert, accept of single refusal cells) hits at least one row; the rest (TIME sb/sh landing ≤0xffff, unrowed-slot accept narrows, function-static latch, widths 3/5/6/7) are DISCLOSED, and those disclosures read correctly against the function. The only live threat is the lane question above.
+
+**Q4 — wrong statements**
+
+- READ + REASONED (the verdict): item 6's residual sentence is false as written for CONTROL 4W and the six-cell family; no row "below" pins them.
+- REASONED: the ACCEPTS count does reconcile (24-cell kind×label cross + 3 window + 8 CONTROL-value writes + 4 default = 39; +4 repeats = 43; +ldP +2 ENDIANESS = 46), consistent with A9 and the repair-11 note — but the exact lanes inside the cross are not in the packet, so the 40-tuple itself is asserted, not verifiable here.
+- READ, not checkable: POSTTABLE's "AST identical without docstring", "PRETABLE predates launch", and the 40/40 check_pred claims — all single-source from the packet; settle only by the frozen artifacts.

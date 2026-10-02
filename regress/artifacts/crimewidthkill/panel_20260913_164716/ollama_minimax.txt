@@ -1,0 +1,49 @@
+```
+CLOSES  CRIME_CLOSE2_20260913
+```
+
+**Audit summary (READ from packet; REASONED where noted):**
+
+The 111-row test is complete. Every behavioral change the fix introduces is caught by at least one row whose oracle varies under the change, every disclosure in the probe header holds, and the new rows have working controls.
+
+**Checked and sound:**
+
+1. **The fix code (READ).** The `goto crime_declined;` skips the register switch; the tail writes `odata` (initialized to 0) on read and returns 1. A refused store is dropped because nothing between the entry and the tail writes `d->reg[...]` on the decline path. The fatal() runs only once per device instance via `d->warned |= CRIME_W_LEN`.
+
+2. **All-ones refused writes at CONTROL (READ).** For `sb 0xff` and `sh 0xffff` to be silent at CONTROL if they fell through, the CONTROL arm would have to clear all set bits. It only clears DOG (0x200), RESET (0x800), ENDIANESS (0x100). `0xff & ~0xf00 = 0xff` and `0xffff & ~0xf00 = 0xf2ff` — both nonzero — so `if (idata != 0) fatal(...)` fires. `sb08 msg` and `sh08b msg` detect any data-keyed fall-through.
+
+3. **ENDIANESS (0x100) coverage (REASONED).** The 85-row test had sh 0x0201 (DOG set) and sh 0x0a00 (DOG+RESET). The 111-row test adds sh 0x0900 (ENDIANESS+RESET) — `sh08b run` checks CPUs run, so a fall-through that ignores bit 8 (ENDIANESS) while honoring bit 11 (RESET) would stop CPUs and turn the row red. The comment's claim that the three tested bits are each written "both ways at 2W" is supported: 0x0201 has DOG set without ENDIANESS/RESET; 0x0900 has ENDIANESS+RESET without DOG; 0x0a00 has DOG+RESET without ENDIANESS.
+
+4. **Latch single-axis coverage (READ).** The latch tests cover all the axes named in the first closing pass:
+   - width: `warm once` (sb, 1B write), `latch x5` (lh, 2B read)
+   - direction: `imask/istat once` (lb→sb→lh→sh; first is read), `sh08b once` (4 writes; first is write)
+   - label: `rev once`, `sh08b once` (CONTROL), `imask once`, `istat once`, `dog once`, `time once`, `latch x5` (default-arm low), `hi once` (high block)
+   - block/range/parity: `hi once` (first +0x27f, then low +0x07) catches a `>= 0x40` keying; `warm once` (sb odd) and `latch x5` (lh even) catch parity keying.
+
+5. **Re-arm coverage (READ).** `rearm once` exercises 14 accepted kinds interleaved with refusals: 8W/8R at +0x30 (DOG low), 4W/4R at +0x30 and +0x34 (DOG low and high), 8R at +0x38 (TIME), 4R at +0x18/+0x10/+0x00 (INTMASK, INTSTAT, REV), 4W at +0x08 (CONTROL), 4R at +0x04 (default arm low), 8W/8R at +0x278 (far block default arm). Both 4-byte lanes (`(relative_addr & 4) = 0` and `= 1`) are covered. Any unconditional `d->warned = 0;` in an accept arm or switch arm fires and is caught.
+
+6. **IRQ gate (READ).** `gate hardint` and `gate line` verify HARDINT is set and IP2 is asserted *before* the refused sh 0x0800. With HARDINT set, a buggy `if (!d->reg[CRIME_HARDINT / 8]) goto crime_declined;` would fail the condition, fall into the switch, trigger HARD_RESET, stop CPUs, and turn `gate run` red. The two controls are added to the global `control` list, so the whole test fails if the precondition isn't met.
+
+7. **TIME test (READ).** On the fixed build the only update between the first `ld` and `s1` is the device tick's first firing (ticks_till_next starts at 0), adding 66–990 µs. A fall-through to `crime_update_crime_time` would update TIME to include the wall-clock interval of the debugger commands between the first ld and the refused access, producing ~1e8 — well above SMALL = 6.6e6. `mag(s1)` distinguishes small from large.
+
+8. **Top anchor (READ).** `top8 anchor` reads bank-1 control at +0x210 (prelude writes 1 for -M 64). `top4 anchor` reads +0x214 (low 32 bits of the same 8-byte slot; `(relative_addr & 4) = 1` selects the low half). The comment "low half" refers to the 32-bit lane selected by the 4-byte arm, not the byte offset within the slot — the value (1) is correct. `top said` ensures no accepted access before the first refusal (`lb +0x27b`) prints a notice, catching narrowing of the accept arm at +0x210, +0x214, or +0x278.
+
+9. **Answer at named labels (READ).** `rev v0`, `ctl v0`, `dog v0`, `imask/istat lb v0`, `imask/istat lh v0`, `time lb/lh v0`, `top rd v0` — all expect 0 on a refused read. The tail writes `odata` (initialized to 0) for any declined access. A non-zero answer (e.g., a static `odata = 1` or a fall-through that reads the register) turns the relevant row red.
+
+**Minor notes (not gaps):**
+
+- The "false red, never a false green" disclosure for the IRQ rows (dev_crime_tick calling crime_interrupt_reassert) is stated but the mechanism described would set IP2, not clear it — the test checks IP2 is set, so no false red path is visible from the packet. Not checkable without the source, but the test scored 111/111 on the fixed build.
+- The `top4 anchor` comment says "low half" when the code reads the low 32 bits (because `relative_addr & 4 = 1`); the value (1) is correct, and the comment is mildly misleading but not wrong about the test's intent.
+
+**Not checkable from the packet:**
+
+- That `MACE + 0x10` and `MACE + 0x18` are the ISA interrupt status and mask offsets that route through `crime_interrupt_assert` to HARDINT. The `gate hardint` row reads HARDINT back and would fail if the offsets were wrong.
+- That `CRIME_MEM_BANK_CTRL0 = 0x208` (so +0x210 is bank 1, not bank 0). The `top8 anchor` row reads +0x210 and expects 1; if the base were 0x210 the row would read bank 0 = 0.
+- That `BIT` is a value with a bit set in both the INTMASK and SOFTINT positions used in the IRQ rows.
+- That `CRIME_W_LEN` is a bit in `d->warned` not clobbered by any other code path on the fixed build.
+
+None of these affect the 111-row test's verdict on the fixed build (it scored 111/111 per the brief), and the rows that depend on them have working controls that would fail if the assumption were wrong.
+
+**Floor-gap search (REASONED):**
+
+Walking the mutation space named in the brief (kill reinstated, return 0, fall-through narrowed by width/direction/address, latch removed/keyed on each axis, announce text/channel, accept-set shrunk at each window end, refused store lands, re-arm anywhere, answer at each label, gate on HARDINT/prev_asserted), every change has at least one row whose oracle turns red. The remaining candidates are either equivalent (`goto -> return 1`, CRIME_W_LEN bit value, fall-through at CRIME_DOG reads or CONTROL reads — both disclosed) or inside the disclosed debt (interior accept slots, effects keyed on one unnamed offset, joint predicates, function-static latch, widths 3/5/6/7, store landing only at CRIME_TIME). No undisclosed single-cell edit to `dev_sgi_ip32.c` scores 111/111.

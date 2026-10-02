@@ -1,0 +1,90 @@
+I'll start by reading the full offloaded brief, then the repo's live state so the three questions are answered from artifacts rather than from the packet's own framing.HEAD is still `#528`; `#529` is uncommitted. Next I’ll read the checkpoint and the repair-14 artifacts so the three questions are answered from the tree, not the packet.Table 12 is on disk. I’ll read PRETABLE, the prediction checker, and the `G_lane_ctl` / `M1_gotolatch` logs next so the three questions rest on measured rows.The logs are in. Next I’ll open PRETABLE, the lane-swap mutant, and the CONTROL arm so Q1 is answered from the code, not the score.The mutant is a one-line lane conjunct. I’ll read the CRIME access function and the four CONTROL rows next, because sole-carrier is only a floor problem if the body’s own tests distinguish that cell.`G_clr_ctl4r` scored 204/204 while `ctl0c` is supposed to catch a decline at `+0x0c`. I’ll open that mutant and the latch-CLEAR twin before calling sole-carrier acceptable.`ctl0c` never reds in any of the 15 legs, and `check_pred.py` already treats `M1` as must-stay-killed. I’ll confirm both from the logs before grading Q1–Q3.Verified the scores against `logs/probe_*.raw` (each ends `CRIMEP_DONE`), the mutant text, `PRETABLE.out`, and `check_pred.py`. The three questions are answered from those, not from the packet’s framing.
+
+---
+
+**VERDICT:** Repair 14’s accept-side floor-zero holds on the measured set. `G_lane_ctl` 203/204 is not a floor breach. Do not close on “at least one named row reddened.” `M1_gotolatch` is a PRETABLE completeness defect, not a floor breach, and it does not void the zero for the denominator you stated. This pass does not close `#529`: the decline-suppression face stays open, as PRETABLE said before the run.
+
+You asked me not to pick the reading that lets the repair close. On Q1 you *should* have called it acceptable. On Q2 you were right not to.
+
+---
+
+## Q1 — Floor question. Sole-carrier of `G_lane_ctl` is acceptable, not a floor problem.
+
+No undisclosed clean-sweep sits in the clause-(d) accept-side set this table actually ran. The 204/204 legs are `base`, `G_clr_ctl4r` (disclosed equivalent), and `M3`/`M5` (disclosed decline-face). That is the zero, with that denominator.
+
+`G_lane_ctl` is not a (d) mutant of the `#529` decline. The shipped edit is the `else` of `len==8` / `len==4`. DEPENDS-ON walks predicates that dominate those lines, and operand-swaps from fields the skipped switch reads. `G_lane_ctl` rewrites the *sibling* 4-byte READ lane test:
+
+```c
+if ((relative_addr & 4) || (relative_addr == CRIME_CONTROL && (d->warned & CRIME_W_LEN)))
+    odata = (int32_t)odata;
+```
+
+`CRIME_CONTROL` is `0x08`. So only POST `lw +0x08` flips (HIGH 0 → LOW `0x100`). `+0x0c` already has bit 2 set, so the extra conjunct is dead there. Latch-CLEAR sessions do not have `CRIME_W_LEN`. The log matches that, not a four-row story:
+
+| row | base | `G_lane_ctl` |
+|---|---|---|
+| `acc ctl4r` | `0x0` | `0x0` |
+| `acc ctl0c` | `0x100` | `0x100` |
+| `p acc ctl4r` | `0x0` | `0x100` **FAIL** |
+| `p acc ctl0c` | `0x100` | `0x100` |
+
+203/204 with one red is the normal shape of a one-cell mutant. The same table has five other sole-carrier kills: `G_clr_ist4r` / `acc istat lw`, `K_ctl4w_reset_post` / `rst 4w`, `K_ctl8w_reset_post` / `rst 8w`, `M2_ld278clr` / `top8 clear`, `G_clr_imk4r` / `gate line`. A rule that treats `G_lane_ctl` as “one row from a total escape” therefore a floor problem would also condemn those five. Name the carrier (`p acc ctl4r`), as table 7 named `stub3 w2`. Do not demand a second row: a filter may not.
+
+`G_lane_ctl` is the clause-(c) liveness control that makes `G_clr_ctl4r`’s 204/204 mean equivalence rather than “nothing looked.” It still does that job. It is killed.
+
+**You should have settled Q1 as acceptable.** Holding it open because a ruling in your favour is hard to test was the wrong caution. The hardness that is real is Q2.
+
+---
+
+## Q2 — Neither “at least one” nor “all.” Split kill from channel.
+
+“Killed on their named rows” conflates two obligations:
+
+1. **Kill.** Score `< 204` (or disclosed equivalent/escape). `G_lane_ctl` meets this. 203/204 is a miss, not an escape.
+2. **Channel.** Each named `(row, mutant)` pair is a claim that *that* row’s observable differs under *that* mutant. Three of the four names are false.
+
+“At least one” lets an over-broad prediction pass the channel check. Naming all 204 rows would then “pass.” That is the check-that-cannot-fail, and it is the reading that lets you close. Do not take it.
+
+“All” as a *floor* gate turns every extra name into a blocking defect and punishes precision. The mutant *is* killed.
+
+`check_pred.py` already implements the third thing: exact set equality, verdict `CHECK_PRED12_PASS_WITH_PREDICTION_MISSES`. A miss is L4 of PRETABLE (wrong record), not L2. L4 is fixed in-round, in the record, not by adding rows.
+
+The CHANNEL line is not a near-miss. It assigned `G_lane_ctl` to `ctl0c` (“the LOW lane, 0x100”) and called `ctl4r` “VACUOUS ALONE.” Measurement is the opposite: `p acc ctl4r` is the only red; both `ctl0c` rows stay `0x100`. That was knowable at writing time from the mutant text. PRE-TABLE check 4 exists to catch a named channel that cannot vary. Here it named the half that cannot.
+
+Correct the CHANNEL line and the four-row prediction to `{p acc ctl4r}` before saying the closing condition is met. That is a records edit. It is not a licence to read “at least one” and move on.
+
+---
+
+## Q3 — Completeness, not floor. Your grade is right; “whatever it scored would have matched” is not.
+
+`grep -ci gotolatch PRETABLE.out` is 0. The driver still runs it. Confirmed.
+
+It does **not** invalidate the zero. PRETABLE’s closing condition names six accept-side mutants. `M1` is not among them. It is the unrestricted decline-latch move; the decline face is disclosed open. An extra control that stays killed is outside that denominator.
+
+It is **not** a floor breach. 194/204, ten reds, no escape.
+
+The overstatement: `check_pred.py` puts `M1_gotolatch` in `MUST_STAY_KILLED`. A 204/204 would have printed `REGRESSION` and `CHECK_PRED12_FAIL`. So it is not true that whatever it scored would have matched. The cannot-fail part is the *set*: 194/204 with any ten names, or 203/204 with one, both “still killed.”
+
+Empirically the set held. Pass 1 was 178/188 on `sb08 msg`, `sh08b run`, `imask sb/lh/sh`, `istat sb/lh/sh`, `gate run`, `mid nodflt`. Table 12’s `FAILING:` line is those same ten. PRETABLE did not claim that, so the match is a post-hoc reading, not a pre-run check.
+
+Two artifacts that should agree do not: the checker knew `M1` would run; the human-readable block did not. That is completeness of PRETABLE, not a hole in the floor-zero.
+
+Do not elevate this to a breach to be hard on yourself. Put `M1` in the next PRETABLE with an exact set, the way `MUST_STAY_KILLED` already almost does.
+
+---
+
+## Does this pass close the chain?
+
+No. Review effort is on this probe diff. The floor question is asked of the composite every pass. `M3_timelatch` and `M5_revlatch` are still 204/204, disclosed, with `M4`/`M6` moving so the disclosure is not a blanket. Fable still owes measured INTMASK and CONTROL-write label-swaps. Repair 14 may close its accept-side obligation after the CHANNEL L4 is corrected. `#529` does not close on this pass.
+
+---
+
+## Found while checking, not asked
+
+**`ctl0c` never reds under any of the 15 legs.** Including `G_clr_ctl4r`, the equivalent-cell decline the pair was added to make observable. That mutant is `relative_addr == CRIME_CONTROL` (`0x08`). `+0x0c` is a different `switch` label (`default:`). Storage is the same `uint64` (`relative_addr / 8`); the switch is not. So the discriminating half of the pair has no measured kill in this table. Accept-row failability: a row is not discharged by existing. Do not add a row (the rows exist). Either run a decline that actually hits `0x0c`, or stop claiming `ctl0c` as `G_lane_ctl`’s channel.
+
+**The contract’s “default is host-log only” is false for this access.** A 4-byte read at `+0x0c` takes the LOW half of CONTROL (`0x100`) in the width arm, *then* hits `default:` for a debug print. A decline skips the width arm and answers 0. Guest-visible, not host-log. `acc ctl0c` is that access.
+
+**`G_clr_imk4r`’s `CRIMEP_CONTROL=FAIL` is not apparatus.** `gate line` is in the probe’s control tuple (`live`, `devsig`, … `gate line`, …). The kill *is* `gate line`, so the control bit goes FAIL. POSTTABLE is right that the leg is still killed on that row.
+
+**`check_pred.py` still slices `ln[:15]`.** This probe’s names look ≤14 (`p acc istat lw`, `rst alive once`). The `#530` padded-column bug is the same family; it did not fire here. Do not treat that as proof the slice is safe.

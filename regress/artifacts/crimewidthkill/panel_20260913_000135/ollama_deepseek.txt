@@ -1,0 +1,39 @@
+5 FAULT — replace the fatal/exit with `return 0;` so narrow CRIME accesses become a guest DBE and do not run the switch. CRIME_P1_20260913
+
+Claims labelled READ (from packet) or REASONED.
+
+**Q1 — Which member, and why?**  
+REASONED: **Member 5 (FAULT)**.  
+No evidence in the packet shows real CRIME supports byte/halfword accesses (premise 6, READ: no local hardware doc). FAULT is the smallest non-terminating change that avoids executing the switch side effects — CRIME_REV PC redirect, CRIME_CONTROL HARD_RESET stopping CPUs, interrupt reassert, time update. It uses the existing MIPS DBE path (premise 2, READ with caveat below) and is consistent with the `dev_unreadable` pattern for absent/unimplemented regions. If a real guest is later found to issue narrow CRIME accesses, option 7 or 4 should be revisited.
+
+**Q2 — Does a refused access run the switch?**  
+For member 5, **no**.  
+For a 1- or 2-byte read or write, execution proceeds through the prelude:
+- declarations, `idata`/`odata` = 0
+- if write: `idata = memory_readmax64(cpu, data, len)`
+- `d->reg[CRIME_REV]` set to `0xa1`/`0x11`
+- `d->reg[CRIME_CONTROL]` set to `CRIME_CONTROL_ENDIANESS`
+- `d->reg[CRIME_INTSTAT]` set to `SOFTINT | HARDINT`
+- RAM-size checks and bank-control loop
+
+Then at `if (len == 8) … else if (len == 4) … else { return 0; }` it returns 0.  
+It does **not** execute the `switch`, the common tail (`preserved_CRIME_HARDINT` restore, `INTSTAT` recompute, `memory_writemax64` on read), or `return 1`.  
+Returning 0 makes `memory_rw.c` set `res = -1` and, if `!no_exceptions`, raise a MIPS DBE exception. For reads the destination is untouched; for writes `idata` is read but unused.
+
+**Q3 — Detector rows for the smallest mutant that breaks the fix but passes**  
+- Survival / text: process does not exit with status 1; stderr does not contain `crime access len =`.
+- Supported widths still work: 4-byte read at `0xb4000004` returns `0x11`; 8-byte read/write works.
+- Narrow read destination sentinel: seed destination with `0xdeadbeef`; after `lb/lbu/lh/lhu`, destination remains unchanged (FAULT) — a decline-through-tail would write 0.
+- Exception taken: after narrow read/write, CPU takes DBE / following instruction is not executed — distinguishes FAULT from a silent `return 1` accept.
+- Switch side effects:  
+  - narrow read at CRIME_REV with PC in `0xbfc051xx` must not redirect PC  
+  - narrow write to CRIME_CONTROL with `HARD_RESET` bit set must not stop CPUs  
+  - narrow access to CRIME_INTSTAT/INTMASK must not call `crime_interrupt_reassert()`  
+  - narrow access to CRIME_TIME must not update time  
+- Latch count: not applicable for member 5.
+
+**Q4 — Premise audit**  
+- **Premise 2 is incomplete**: the memory_rw snippet shows the exception is only raised when `!no_exceptions`. If `no_exceptions` is true, returning 0 may not fault; the premise omits that condition.  
+- **Premise 3 (“six width guards”)** cannot be verified from the packet; only one RE example is inlined. The count of six requires reading the file.  
+- **Premise 6** cannot be settled from the packet; it is a negative about local docs.  
+- Premises 1, 4, 5, 7 appear consistent with the inlined code/statements, though premise 4’s exact `macepci` text is not inlined and would need file access to confirm.

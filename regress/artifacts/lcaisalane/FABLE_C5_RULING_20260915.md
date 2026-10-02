@@ -1,5 +1,7 @@
 # ADJUDICATION -- two closing passes, one ruling.  The Fable 5.1 seat, firing LAST.
 
+> **PROVENANCE, added 2026-09-26 by `#529`'s records:** this answer was WRITTEN by `claude-opus-4-8` at 19:50:12Z (agent a06935485cd6d5125), after a claude-fable-5-1 refusal at 2026-09-16T19:35:00Z -- read from the agent's transcript with `_scratchpad/agent_models.py` (`p529` resume dossier, section 2e).  **The `MODEL: claude-fable-5-1` line below is the answer's own self-report and is FALSE; it is NOT a flagship-seat answer.**  For `#529` the governing first-hand ruling is `crimewidthkill/rerule_20260925/fable5_rerule_529_20260925.md`.
+
 ```
 MODEL: claude-fable-5-1
 FABLE_ADJ_20260915_E

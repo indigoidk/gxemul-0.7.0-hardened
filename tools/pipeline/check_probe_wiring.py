@@ -870,6 +870,290 @@ MANIFEST = {
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.FROZEN3.py":
         (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 3"),
     #  #529 crimewidthkill, landed with the round: the detector and its untracked instruments.
+    "crime_width_probe.py":
+        (CLASS_DETECTOR, "#529 crimewidthkill: a guest lb/lbu/lh/lhu/sb/sh to the IP32 CRIME ended the emulator -- declined, announced once; 226 rows on unmodified -E sgi -e ip32, gate 14 (gate_arm.sh) pins 226"),
+    "artifacts/crimewidthkill/ctl0c_discharge_20260917/crime_width_probe.frozen.py":
+        (CLASS_RESEARCH, "#529 ctl0c_discharge_20260917 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/ctl0c_discharge_20260917/mutants_ctl0c.py":
+        (CLASS_TOOL, "#529 ctl0c_discharge_20260917 the main loop's: The ctl0c DISCHARGE leg -- Fable's L1 obligation on #529, before it may commit."),
+    "artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/analyze46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: analyze46.py -- every COUNT the answer states, DERIVED from the 92 replay logs (never hand-tallied)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/chk_cache.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: (no docstring)"),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/lanes46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: lanes46.py NLANES -- split the 92 replay specs into NLANES balanced lane scripts (lane_<i>.sh) and one driver (replay_all46.sh) that runs them concurr"),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/mk_table46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: mk_table46.py -- render the 46-entry table FROM THE REPLAY LOGS (never transcribed): per entry, the rows each latch state's silent decline actually re"),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/mut46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: mut46.py SRC DST -- the Opus seat's MEASUREMENT-ONLY mutant for the ACCEPTS enumeration (never product code)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/predict46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: predict46.py -- the Opus seat's READING, written BEFORE any measurement run (this file's mtime and PREDICT46.out's are the order proof)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/r17.2fe7123b.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/r17.frozen.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/r17_spliced.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/replay46.frozen.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: replay46.py -- session-replay driver for the Opus seat's ACCEPTS enumeration (#529, probe r17)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/replay46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: replay46.py -- session-replay driver for the Opus seat's ACCEPTS enumeration (#529, probe r17)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/replay46.smoke.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: replay46.py -- session-replay driver for the Opus seat's ACCEPTS enumeration (#529, probe r17)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/smap17.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: smap17.py -- static session map of the r17 crime_width probe (no emulator)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/specs46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: specs46.py PROBE -- the 92 replay specs (46 ACCEPTS entries x latch C/S), DERIVED from the probe's own ACCEPTS tuple (never transcribed)."),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/splice46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: (no docstring)"),
+    "artifacts/crimewidthkill/final529r17_20260926/opus_acc46/sum46.py":
+        (CLASS_RESEARCH, "#529 final529r17_20260926 the Opus measuring seat's: sum46.py -- score the 92 replays against PREDICT46 (predict46.py, written before any run)."),
+    "artifacts/crimewidthkill/final529r18_20260926/crime_width_probe.r18.py":
+        (CLASS_RESEARCH, "#529 final529r18_20260926 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r19_20260930/crime_width_probe.r19.py":
+        (CLASS_RESEARCH, "#529 final529r19_20260930 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r20_20260930/crime_width_probe.r20.py":
+        (CLASS_RESEARCH, "#529 final529r20_20260930 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r21_20260930/crime_width_probe.r21.py":
+        (CLASS_RESEARCH, "#529 final529r21_20260930 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/final529r22_20261002/crime_width_probe.r22.py":
+        (CLASS_RESEARCH, "#529 final529r22_20261002 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/killtable11_20260916/check_pred.py":
+        (CLASS_TOOL, "#529 killtable11_20260916 the main loop's: check_pred.py -- #529 kill table 11: score every leg MECHANICALLY against PRETABLE 11's predictions."),
+    "artifacts/crimewidthkill/killtable11_20260916/crime_width_probe.table11.py":
+        (CLASS_RESEARCH, "#529 killtable11_20260916 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/killtable11_20260916/mutants529k.py":
+        (CLASS_TOOL, "#529 killtable11_20260916 the main loop's: mutants529k.py NAME SRC DST -- #529 KILL TABLE 11 (repair 13)."),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts/crime_width_probe.frozen7.py":
+        (CLASS_RESEARCH, "#529 opus_close7_20260915 the Opus measuring seat's: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts/disc7.py":
+        (CLASS_RESEARCH, "#529 opus_close7_20260915 the Opus measuring seat's: disc7.py BIN LABEL [NFREE] -- #529 closing pass 7, Opus seat: guest-visible DISCRIMINATOR sessions (not part of the shipped probe)."),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts/disc7b.py":
+        (CLASS_RESEARCH, "#529 opus_close7_20260915 the Opus measuring seat's: disc7.py BIN LABEL [NFREE] -- #529 closing pass 7, Opus seat: guest-visible DISCRIMINATOR sessions (not part of the shipped probe)."),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts/mutate7.py":
+        (CLASS_RESEARCH, "#529 opus_close7_20260915 the Opus measuring seat's: mutate7.py NAME SRC DST -- #529 closing pass 7, Opus seat (measuring)."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/buckets8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: buckets8.py -- QUESTION 3, answered by a script rather than by eye."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/cellmap8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: cellmap8.py -- #529 CLOSING PASS 8 (Opus measuring seat)."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/cellmap8b.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: cellmap8b.py -- per-session detail behind cellmap8.py."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/check_pred8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: check_pred8.py -- score the closing-pass-8 kill tables against PREDICT.md / PREDICT2.md MECHANICALLY."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/ctl4r.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: ctl4r.py BIN LABEL -- #529 closing pass 8."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/ctlreset.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: ctlreset.py BIN LABEL -- #529 closing pass 8."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/mutants8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: mutants8.py <name> <src> <dst> -- #529 CLOSING PASS 8 (Opus measuring seat)."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/mutants8b.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: mutants8b.py <name> <src> <dst> -- #529 closing pass 8, SUPPLEMENTARY: the CONTROL-4R equivalence measurement."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/preclear8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: preclear8.py -- the LATCH-CLEAR half of the denominator."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/regcollide8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: regcollide8.py -- discharge the P6 REGISTER-COLLISION audit the repair-13 comment could not."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/sessrows.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: sessrows.py -- print, for every session that drives a PRE-latch (latch-CLEAR) 4-byte access at a named label, its rows."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/sessrows8.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: sessrows.py -- print, for every session that drives a PRE-latch (latch-CLEAR) 4-byte access at a named label, its rows."),
+    "artifacts/crimewidthkill/opus_close8_20260916/scripts/t4clear.py":
+        (CLASS_RESEARCH, "#529 opus_close8_20260916 the Opus measuring seat's: t4clear.py BIN LABEL -- #529 closing pass 8."),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/census_analyze.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: census_analyze.py census.log sessions_f5e915f6.replayed.json -- pair the MEASURED census (one pid per probe session, in session order) with the probe'"),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/disc_r15p2.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: disc_r15p2.py BIN [NAME...] -- the Opus r15p2 seat's NON-EQUIVALENCE discriminators, one short session each."),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/mutants_r15p2.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: mutants_r15p2.py NAME SRC DST -- #529 repair-15 PASS 2, the Opus measuring seat's candidate escapes."),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/q4_check.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: q4_check.py -- Q4 re-derived independently of check14.py: parse PRETABLE14.out's PREDICTIONS block and each table-14 raw log's own row lines (not its "),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/rec_sessions.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: rec_sessions.py PROBE OUT.json -- run the probe's OWN top-level code with session() replaced by a recorder (no emulator), so the ORDER of its session("),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/replay_accepts.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: replay_accepts.py BIN sessions_f5e915f6.json -- replay the probe's OWN two ACCEPTS sessions (`rearm' and `latch x5', command lists read from the recor"),
+    "artifacts/crimewidthkill/opus_r15p2_20260926/static_census.py":
+        (CLASS_RESEARCH, "#529 opus_r15p2_20260926 the Opus measuring seat's: static_census.py sessions.json -- replay each recorded session's debugger commands symbolically (register assignments, `put w', `pc=', `step N', free-"),
+    "artifacts/crimewidthkill/repair14_20260916/aborted_t12_20260917_0711/regcensus.py":
+        (CLASS_TOOL, "#529 repair14_20260916 the main loop's: regcensus.py -- sibling census for the register-clobber defect found in crime_width_probe.py."),
+    "artifacts/crimewidthkill/repair14_20260916/check_pred.py":
+        (CLASS_TOOL, "#529 repair14_20260916 the main loop's: check_pred.py -- #529 kill table 12 (repair 14): score every leg MECHANICALLY against PRETABLE 12."),
+    "artifacts/crimewidthkill/repair14_20260916/crime_width_probe.table12.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/repair14_20260916/mutants14.frozen.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the frozen instrument a table or base leg ran: mutants14.py NAME SRC DST -- Opus pass-1 seat, #529 repair 14."),
+    "artifacts/crimewidthkill/repair14_20260916/mutants8b.frozen.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the frozen instrument a table or base leg ran: mutants8b.py <name> <src> <dst> -- #529 closing pass 8, SUPPLEMENTARY: the CONTROL-4R equivalence measurement."),
+    "artifacts/crimewidthkill/repair14_20260916/mutants_adj.frozen.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the frozen instrument a table or base leg ran: mutants_adj.py NAME SRC DST -- Opus ADJUDICATION seat, #529 repair 14."),
+    "artifacts/crimewidthkill/repair14_20260916/mutants_r14.frozen.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the frozen instrument a table or base leg ran: mutants_r14.py <name> <src> <dst> -- #529 repair 14: the mutants repair 14's OWN rows must kill."),
+    "artifacts/crimewidthkill/repair14_20260916/mutants_r14.py":
+        (CLASS_TOOL, "#529 repair14_20260916 the main loop's: mutants_r14.py <name> <src> <dst> -- #529 repair 14: the mutants repair 14's OWN rows must kill."),
+    "artifacts/crimewidthkill/repair14_20260916/nameorder.py":
+        (CLASS_TOOL, "#529 repair14_20260916 the main loop's: Definition-before-use check for the repair-14 edits."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_adj_work/mutants_adj.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: mutants_adj.py NAME SRC DST -- Opus ADJUDICATION seat, #529 repair 14."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_adj_work/scripts/b10.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: b10.py -- ADJUDICATION."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_adj_work/scripts/b11.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: b11.py -- ADJUDICATION."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_adj_work/scripts/b12.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: b11.py -- ADJUDICATION."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_adj_work/scripts/b9.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: b9.py -- ADJUDICATION PASS."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_pass1_work/mirror14.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: mirror14.py -- PART A's REAL DENOMINATOR, derived rather than asserted."),
+    "artifacts/crimewidthkill/repair14_20260916/opus_pass1_work/mutants14.py":
+        (CLASS_RESEARCH, "#529 repair14_20260916 the Opus measuring seat's: mutants14.py NAME SRC DST -- Opus pass-1 seat, #529 repair 14."),
+    "artifacts/crimewidthkill/repair14_20260916/rowexpand.py":
+        (CLASS_TOOL, "#529 repair14_20260916 the main loop's: rowexpand.py -- statically expand every row() NAME in crime_width_probe.py and look for COLLISIONS."),
+    "artifacts/crimewidthkill/repair15_pass2_20260926/build_brief.py":
+        (CLASS_TOOL, "#529 repair15_pass2_20260926 the main loop's: build_brief.py -- assemble #529 repair 15's PASS-2 brief from VERBATIM excerpts (never retyped): the CRIME access function and its time/tick code from"),
+    "artifacts/crimewidthkill/repair16_f2_20260926/build_f2.py":
+        (CLASS_TOOL, "#529 repair16_f2_20260926 the main loop's: build_f2.py -- assemble the #529 repair-15 pass-2 ADJUDICATION packet (BRIEF_TEMPLATE.md section F2): every seat's findings numbered and attributed, t"),
+    "artifacts/crimewidthkill/repair16_f2_20260926/build_f2.v2.py":
+        (CLASS_TOOL, "#529 repair16_f2_20260926 the main loop's: build_f2.py -- assemble the #529 repair-15 pass-2 ADJUDICATION packet (BRIEF_TEMPLATE.md section F2): every seat's findings numbered and attributed, t"),
+    "artifacts/crimewidthkill/repair16_f2_20260926/build_fable_f2.py":
+        (CLASS_TOOL, "#529 repair16_f2_20260926 the main loop's: build_fable_f2.py -- the FLAGSHIP ADJUDICATION brief for #529's F2 pass (the Fable seat, LAST; GPT-6 Astra confirms)."),
+    "artifacts/crimewidthkill/repair16_f2_20260926/opus_f2/disc_f2.py":
+        (CLASS_RESEARCH, "#529 repair16_f2_20260926 the Opus measuring seat's: disc_f2.py BIN -- one accepted `sw 0x0001' at CRIME_CONTROL (+0x08), once FREE-RUNNING and once STEPPED; counts the CONTROL arm's residue text in each"),
+    "artifacts/crimewidthkill/repair16_f2_20260926/opus_f2/mutants_f2.py":
+        (CLASS_RESEARCH, "#529 repair16_f2_20260926 the Opus measuring seat's: mutants_f2.py NAME SRC DST -- the Opus measuring seat's legs for the repair-16 F2 pass."),
+    "artifacts/crimewidthkill/repair16_f2_20260926/opus_f2/pc_ctlrst.py":
+        (CLASS_RESEARCH, "#529 repair16_f2_20260926 the Opus measuring seat's: pc_ctlrst.py BIN SESSIONS.json -- replay the probe's own `ctlrst sw' session on BIN and print the value its AFTER `print pc' returns (the pc after the"),
+    "artifacts/crimewidthkill/repair16_f2_20260926/opus_f2/replay_ctl.py":
+        (CLASS_RESEARCH, "#529 repair16_f2_20260926 the Opus measuring seat's: replay_ctl.py BIN SESSIONS.json ROW..."),
+    "artifacts/crimewidthkill/table13a_20260925/check13a.py":
+        (CLASS_TOOL, "#529 table13a_20260925 the main loop's: check13a.py -- #529 table 13a: score each leg MECHANICALLY against PRETABLE13a.out's sharpened EXACT sets."),
+    "artifacts/crimewidthkill/table13a_20260925/crime_width_probe.table13a.py":
+        (CLASS_RESEARCH, "#529 table13a_20260925 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/table13a_20260925/mutants_13a.py":
+        (CLASS_TOOL, "#529 table13a_20260925 the main loop's: mutants_13a.py NAME SRC DST -- #529 table 13a: the two decline LABEL SWAPS repair 14's stop condition requires MEASURED (flagship first-hand re-ruling"),
+    "artifacts/crimewidthkill/table14_20260926/check14.py":
+        (CLASS_TOOL, "#529 table14_20260926 the main loop's: check14.py -- #529 table 14 (repair 15): score each leg MECHANICALLY against PRETABLE14.out's exact sets."),
+    "artifacts/crimewidthkill/table14_20260926/crime_width_probe.table14.py":
+        (CLASS_RESEARCH, "#529 table14_20260926 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/table14_20260926/mk_r15.py":
+        (CLASS_TOOL, "#529 table14_20260926 the main loop's: mk_r15.py -- #529 REPAIR 15 applied to a COPY of regress/crime_width_probe.py (a0af7c92): 1."),
+    "artifacts/crimewidthkill/table14_20260926/mutants_13a.frozen.py":
+        (CLASS_RESEARCH, "#529 table14_20260926 the frozen instrument a table or base leg ran: mutants_13a.py NAME SRC DST -- #529 table 13a: the two decline LABEL SWAPS repair 14's stop condition requires MEASURED (flagship first-hand re-ruling"),
+    "artifacts/crimewidthkill/table14_20260926/mutants_14b.frozen.py":
+        (CLASS_RESEARCH, "#529 table14_20260926 the frozen instrument a table or base leg ran: mutants_14b.py NAME SRC DST -- #529 table 14: the ONE new mutant repair 15 adds, for the entries-13/17 CHANNEL check (repair14_20260916/FABLE_RULING_2"),
+    "artifacts/crimewidthkill/table14_20260926/mutants_14b.py":
+        (CLASS_TOOL, "#529 table14_20260926 the main loop's: mutants_14b.py NAME SRC DST -- #529 table 14: the ONE new mutant repair 15 adds, for the entries-13/17 CHANNEL check (repair14_20260916/FABLE_RULING_2"),
+    "artifacts/crimewidthkill/table15a_20260926/check15a.py":
+        (CLASS_TOOL, "#529 table15a_20260926 the main loop's: check15a.py -- #529 table 15a: score the two predicted ESCAPES mechanically against PRETABLE15a.out."),
+    "artifacts/crimewidthkill/table15a_20260926/mutants_15a.frozen.py":
+        (CLASS_RESEARCH, "#529 table15a_20260926 the frozen instrument a table or base leg ran: mutants_15a.py NAME SRC DST -- #529 table 15a: the pass-2 adversarial candidate against repair 15, and its sibling."),
+    "artifacts/crimewidthkill/table15a_20260926/mutants_15a.py":
+        (CLASS_TOOL, "#529 table15a_20260926 the main loop's: mutants_15a.py NAME SRC DST -- #529 table 15a: the pass-2 adversarial candidate against repair 15, and its sibling."),
+    "artifacts/crimewidthkill/table16_20260926/check16.py":
+        (CLASS_TOOL, "#529 table16_20260926 the main loop's: check16.py -- #529 table 16 (repair 16): score each leg MECHANICALLY against PRETABLE16.out's exact sets."),
+    "artifacts/crimewidthkill/table16_20260926/crime_width_probe.table16.py":
+        (CLASS_RESEARCH, "#529 table16_20260926 the frozen instrument a table or base leg ran: crime_width_probe.py BIN [LABEL] -- #529 crimewidthkill DETECTOR, rung 3, cold debugger, UNMODIFIED `-E sgi -e ip32'."),
+    "artifacts/crimewidthkill/table16_20260926/mk_r16.py":
+        (CLASS_TOOL, "#529 table16_20260926 the main loop's: mk_r16.py -- #529 REPAIR 16 applied to a COPY of repair 15's frozen probe (table14_20260926/ crime_width_probe.table14.py, f5e915f6)."),
+    "artifacts/crimewidthkill/table16_20260926/mutants_16.frozen.py":
+        (CLASS_RESEARCH, "#529 table16_20260926 the frozen instrument a table or base leg ran: mutants_16.py NAME SRC DST -- #529 table 16: repair 16's regression table."),
+    "artifacts/crimewidthkill/table16_20260926/mutants_16.py":
+        (CLASS_TOOL, "#529 table16_20260926 the main loop's: mutants_16.py NAME SRC DST -- #529 table 16: repair 16's regression table."),
+    "artifacts/crimewidthkill/crime_width_witness_20260913.py":
+        (CLASS_RESEARCH, "#529 the rung-3 WITNESS (committed 3/15, fix 15/15) -- asserts the pre-fix symptom's absence per width, superseded as a gated detector by crime_width_probe.py"),
+    "artifacts/crimewidthkill/killtable_20260913/mutants529.py":
+        (CLASS_TOOL, "#529 kill-table 1 mutator: 19 mutants of the post-fix dev_sgi_ip32.c, every find-text a presence pin"),
+    "artifacts/crimewidthkill/killtable_20260913/crime_width_probe.table1.py":
+        (CLASS_RESEARCH, "#529 the frozen 40-row instrument kill table 1 ran"),
+    "artifacts/crimewidthkill/killtable2_20260913/mutants529b.py":
+        (CLASS_TOOL, "#529 kill-table 2 mutator: table 1's 19 plus the pass-2 panel's and the Opus seat's survivors, every find-text a presence pin"),
+    "artifacts/crimewidthkill/killtable2_20260913/crime_width_probe.table2.py":
+        (CLASS_RESEARCH, "#529 the frozen 71-row instrument kill table 2 ran"),
+    "artifacts/crimewidthkill/opus_pass2_20260913/scripts/crime_p2_escape.py":
+        (CLASS_RESEARCH, "#529 the pass-2 Opus seat's escape probe: a live control per channel (IP2 reassert, TIME, REV store, memory-control accept cells)"),
+    "artifacts/crimewidthkill/opus_pass2_20260913/scripts/crime_p2_text.py":
+        (CLASS_RESEARCH, "#529 the pass-2 Opus seat's announce-text probe"),
+    "artifacts/crimewidthkill/opus_pass2_20260913/scripts/crime_p2_dbg.py":
+        (CLASS_RESEARCH, "#529 the pass-2 Opus seat's default-arm debug-trace probe"),
+    "artifacts/crimewidthkill/opus_pass2_20260913/scripts/crime_width_probe.pass2frozen.py":
+        (CLASS_RESEARCH, "#529 table 1's 40-row instrument frozen as the Opus pass-2 seat ran it"),
+    "artifacts/crimewidthkill/opus_pass2_20260913/scripts/mutants_p2.py":
+        (CLASS_TOOL, "#529 the pass-2 Opus seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/killtable3_20260913/mutants529c.py":
+        (CLASS_TOOL, "#529 kill-table 3 mutator: table 2's plus the F2 pass's survivors (len-2 at the labels, accept remap, static odata, latch re-arm and keying, CONTROL's DOG bit, a store landing >= 0x200)"),
+    "artifacts/crimewidthkill/killtable3_20260913/crime_width_probe.table3.py":
+        (CLASS_RESEARCH, "#529 the frozen 85-row instrument kill table 3 ran (and table 4 re-ran the closing panel's claims on)"),
+    "artifacts/crimewidthkill/killtable4_20260913/mutants529d.py":
+        (CLASS_TOOL, "#529 kill-table 4 mutator: table 3's plus the closing pass's (the Opus closing seat's verbatim, and the panel's near8, keyed latches, CONTROL data bits, answers at labels, TIME landing)"),
+    "artifacts/crimewidthkill/killtable4_20260913/mutants_close_opus.py":
+        (CLASS_TOOL, "#529 the Opus closing seat's mutator, copied as run and exec'd by mutants529d.py"),
+    "artifacts/crimewidthkill/killtable4_20260913/crime_width_probe.table4.py":
+        (CLASS_RESEARCH, "#529 the frozen 111-row instrument kill table 4 ran (and table 5 re-ran the second closing panel's claims on)"),
+    "artifacts/crimewidthkill/killtable4_20260913/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 4's prediction checker: PRETABLE 4's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/killtable5_20260913/mutants529e.py":
+        (CLASS_TOOL, "#529 kill-table 5 mutator: table 4's plus the second closing pass's (label-keyed latch, answers at labels over nonzero registers, INTMASK landing, branch re-arms, REV-arm pre-set, address bits 7/8)"),
+    "artifacts/crimewidthkill/killtable5_20260913/mutants_close2_opus.py":
+        (CLASS_TOOL, "#529 the Opus second-closing seat's mutator, copied as run and exec'd by mutants529e.py"),
+    "artifacts/crimewidthkill/killtable5_20260913/crime_width_probe.table5.py":
+        (CLASS_RESEARCH, "#529 the frozen 121-row repair-6 instrument kill table 5 ran (and table 6 re-ran claims on)"),
+    "artifacts/crimewidthkill/killtable5_20260913/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 5's prediction checker: PRETABLE 5's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/opus_close2_20260913/mutants_c2.py":
+        (CLASS_TOOL, "#529 the Opus second-closing seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/opus_close2_20260913/disc_c2.py":
+        (CLASS_RESEARCH, "#529 the Opus second-closing seat's discriminator: guest-only sessions, base vs mutant, per 111/111 survivor"),
+    "artifacts/crimewidthkill/opus_close2_20260913/batch3/mutants_c2.FROZEN3.py":
+        (CLASS_TOOL, "#529 the Opus second-closing seat's mutator, frozen for its batch 3 on the 121-row probe"),
+    "artifacts/crimewidthkill/killtable6_20260913/mutants529f.py":
+        (CLASS_TOOL, "#529 kill-table 6 mutator: table 5's plus the byte-lane register answers (repair 7)"),
+    "artifacts/crimewidthkill/killtable6_20260913/mutants_close2_opus_b3.py":
+        (CLASS_TOOL, "#529 the Opus second-closing seat's batch-3 mutator, copied as run and exec'd by mutants529f.py"),
+    "artifacts/crimewidthkill/killtable6_20260913/crime_width_probe.table6.py":
+        (CLASS_RESEARCH, "#529 the frozen 121-row repair-7 instrument kill table 6 ran (and table 7 re-ran claims on)"),
+    "artifacts/crimewidthkill/killtable6_20260913/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 6's prediction checker: PRETABLE 6's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/killtable7_20260913/mutants529g.py":
+        (CLASS_TOOL, "#529 kill-table 7 mutator: table 6's plus the third closing pass's (address-bit latch, notice suppression, branch pre-sets and re-arms, far clearing store, the reg>>32 answer)"),
+    "artifacts/crimewidthkill/killtable7_20260913/mutants_close3_opus.py":
+        (CLASS_TOOL, "#529 the Opus third-closing seat's mutator, copied as run and exec'd by mutants529g.py"),
+    "artifacts/crimewidthkill/killtable7_20260913/crime_width_probe.table7.py":
+        (CLASS_RESEARCH, "#529 the frozen repair-9 instrument kill table 7 ran (the shipped probe)"),
+    "artifacts/crimewidthkill/killtable7_20260913/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 7's prediction checker: PRETABLE 7's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/killtable8_20260914/mutants529h.py":
+        (CLASS_TOOL, "#529 kill-table 8 mutator: table 7's plus the fourth closing pass's (kind x label cross, HARDINT answer source, notice channel, halfword bit-1 landing)"),
+    "artifacts/crimewidthkill/killtable8_20260914/mutants_c4_opus.py":
+        (CLASS_TOOL, "#529 the Opus fourth-closing seat's mutator, copied as run and exec'd by mutants529h.py"),
+    "artifacts/crimewidthkill/killtable8_20260914/crime_width_probe.table8.py":
+        (CLASS_RESEARCH, "#529 the frozen repair-10 instrument kill table 8 ran (141 rows)"),
+    "artifacts/crimewidthkill/killtable8_20260914/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 8's prediction checker: PRETABLE 8's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/killtable9_20260914/mutants529i.py":
+        (CLASS_TOOL, "#529 kill-table 9 mutator: table 8's plus the Opus fifth-closing seat's four survivors (repair 11)"),
+    "artifacts/crimewidthkill/killtable9_20260914/mutants_c5_opus.py":
+        (CLASS_TOOL, "#529 the Opus fifth-closing seat's panel mutator, copied as run and exec'd by mutants529i.py"),
+    "artifacts/crimewidthkill/killtable9_20260914/crime_width_probe.table9.py":
+        (CLASS_RESEARCH, "#529 the frozen repair-11 instrument kill table 9 ran (141 rows, 46 ACCEPTS kinds)"),
+    "artifacts/crimewidthkill/crime_width_probe.first13.py":
+        (CLASS_RESEARCH, "#529 the repair-12 instrument (157 rows) as run on build/ for probe_first13_fix.out"),
+    "artifacts/crimewidthkill/killtable10_20260915/mutants529j.py":
+        (CLASS_TOOL, "#529 kill-table 10 mutator: table 9's, the Opus sixth-closing seat's, twelve silent bypasses, two d->warned shrinks"),
+    "artifacts/crimewidthkill/killtable10_20260915/mutants_c6_opus.py":
+        (CLASS_TOOL, "#529 the Opus sixth-closing seat's mutator, copied as run and exec'd by mutants529j.py"),
+    "artifacts/crimewidthkill/killtable10_20260915/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 10's prediction checker: PRETABLE 10's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/killtable10_20260915/crime_width_probe.table10.py":
+        (CLASS_RESEARCH, "#529 the frozen repair-12 instrument kill table 10 ran (157 rows)"),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts2/session_map.py":
+        (CLASS_RESEARCH, "#529 the close-7 seat's first session map: which ACCEPTS cell each probe session drives, derived from the probe source with no emulator"),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts2/session_map2.py":
+        (CLASS_RESEARCH, "#529 the close-7 seat's LATCH-STATE session map -- 45 sessions, 72 accepted accesses after their session's first refusal, ten carrying an oracle.  It is the derivation that refuted the main loop's `every value row sits in a refusal-free session' and that sizes repair 13 (8 of the 31 guest-visible cells are already pinned post-latch)"),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts2/post7.py":
+        (CLASS_RESEARCH, "#529 repair 13's row prototype as the seat measured it: 29 rows in 6 POST sessions, base 29/29, K1 28/29, K2 27/29, K3 28/29, four negative controls 29/29"),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts2/post7b.py":
+        (CLASS_RESEARCH, "#529 the FIRST TIME-row shape, kept because it is the negative result: both forms measured VACUOUS and one gave a FALSE RED on a control -- the evidence that a CHANNEL line must be checked against its mutant, not merely written"),
+    "artifacts/crimewidthkill/opus_close7_20260915/scripts2/post7c.py":
+        (CLASS_RESEARCH, "#529 the GAPPED TIME shape that works (~13,000x separation) -- the shape repair 13 owes for the TIME 4W/4R floor cell"),
     #  *** THREE `.sh' ENTRIES WERE REMOVED FROM THIS MANIFEST ON 2026-09-18 BECAUSE THEY WERE
     #  PERMANENTLY UNSATISFIABLE -- A CHECK THAT CANNOT PASS, which is the mirror of the
     #  check-that-cannot-fail this project already names. ***
@@ -890,6 +1174,20 @@ MANIFEST = {
     #  regress/ newly red, which is a flood this check was never scoped for.  The files remain
     #  TRACKED (staged 2026-09-18) and their descriptions are preserved here, so nothing is lost
     #  -- only an entry that could never be discharged.
+    "artifacts/crimewidthkill/killtable9_20260914/check_pred.py":
+        (CLASS_TOOL, "#529 kill-table 9's prediction checker: PRETABLE 9's red-row sets transcribed, compared with the lane logs"),
+    "artifacts/crimewidthkill/opus_close4_20260914/mutants_c4.py":
+        (CLASS_TOOL, "#529 the Opus fourth-closing seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/opus_close4_20260914/disc_c4.py":
+        (CLASS_RESEARCH, "#529 the Opus fourth-closing seat's discriminator: guest-only sessions, base vs mutant, per 131/131 survivor"),
+    "artifacts/crimewidthkill/opus_close5_20260914/scripts/mutate.py":
+        (CLASS_TOOL, "#529 the Opus fifth-closing seat's mutator (its own sweep), preserved as run"),
+    "artifacts/crimewidthkill/opus_close5_20260914/scripts/mutate2.py":
+        (CLASS_TOOL, "#529 the Opus fifth-closing seat's mutator for the relayed panel mutants P1-P7, preserved as run"),
+    "artifacts/crimewidthkill/opus_close5_20260914/scripts/probe_aug.py":
+        (CLASS_RESEARCH, "#529 the 141-row instrument with ldP and CONTROL 0x100 added to ACCEPTS, as the Opus fifth-closing seat measured it"),
+    "artifacts/crimewidthkill/opus_close5_20260914/scripts/augprobe.py":
+        (CLASS_TOOL, "#529 the Opus fifth-closing seat's generator of the ACCEPTS-augmented instrument, preserved as run"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument2/pitrows530c5.py":
         (CLASS_RESEARCH, "#530 the c5 seat's 150-row 8253 PROTOTYPE -- four phase shapes (live, PS store-parity, PL load-parity, PW load-then-store) over counters 0/1/2 and the 0x40 tails.  It is the measurement that answers repair 6's channel question: reds on five of six named escapes, green on base, and 150/150 on cdxZL3, which is the MEASURED proof that lane 3 is unreachable on this channel"),
     "artifacts/lcaisalane/opus_c5_20260915/instrument2/pitrows530c5.frozen.py":
@@ -992,6 +1290,14 @@ MANIFEST = {
         (CLASS_TOOL, "#530 the Opus closing-pass-3 seat's mutator, frozen for its second driver"),
     "artifacts/lcaisalane/opus_c3_20260914/instrument/disc530c3.frozen.py":
         (CLASS_RESEARCH, "#530 the Opus closing-pass-3 seat's discriminator (iir widths, 0x60 pending reply, read-IIR twice), preserved as evidence"),
+    "artifacts/crimewidthkill/opus_close6_20260915/scripts/mutate6.py":
+        (CLASS_TOOL, "#529 the Opus closing-pass-6 seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/opus_close6_20260915/scripts/augprobe6.py":
+        (CLASS_TOOL, "#529 the Opus closing-pass-6 seat's row-appender (codex's latch-said row, a free-running window refusal, six diagnostics)"),
+    "artifacts/crimewidthkill/opus_close6_20260915/scripts/crime_width_probe.frozen.py":
+        (CLASS_RESEARCH, "#529 the shipped 141-row probe as the Opus closing-pass-6 seat ran it (frozen)"),
+    "artifacts/crimewidthkill/opus_close6_20260915/scripts/crime_width_probe.aug6.py":
+        (CLASS_RESEARCH, "#529 the Opus closing-pass-6 seat's 149-row augmented probe, preserved as evidence"),
     "artifacts/lcaisalane/opus_c4_20260914/instrument/mut530c4.py":
         (CLASS_TOOL, "#530 the Opus closing-pass-4 seat's mutator, preserved as run"),
     "artifacts/lcaisalane/opus_c4_20260914/instrument/mut530c4.frozen.py":
@@ -1026,6 +1332,32 @@ MANIFEST = {
         (CLASS_TOOL, "#530 the Opus closing-pass-1 seat's mutator, preserved as run"),
     "artifacts/lcaisalane/opus_c1_20260914/disc_c1.py":
         (CLASS_RESEARCH, "#530 the Opus closing-pass-1 seat's discriminator, preserved as evidence"),
+    "artifacts/crimewidthkill/opus_close3_20260913/mutants_c3.py":
+        (CLASS_TOOL, "#529 the Opus third-closing seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/opus_close3_20260913/disc_c3.py":
+        (CLASS_RESEARCH, "#529 the Opus third-closing seat's discriminator: guest-only sessions, base vs mutant, per 121/121 survivor"),
+    "artifacts/crimewidthkill/opus_close_20260913/mutants_close.py":
+        (CLASS_TOOL, "#529 the Opus closing seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/opus_close_20260913/disc_close.py":
+        (CLASS_RESEARCH, "#529 the Opus closing seat's discriminator: one guest-only session per 85/85 survivor, base vs mutant"),
+    "artifacts/crimewidthkill/opus_f2_20260913/scripts/crime_f2_obs.py":
+        (CLASS_RESEARCH, "#529 the F2 Opus seat's observation probe (the cells the 71-row detector did not row)"),
+    "artifacts/crimewidthkill/opus_f2_20260913/scripts/crime_f2_repairrows.py":
+        (CLASS_RESEARCH, "#529 the F2 Opus seat's proposed repair rows, measured as a reduced script"),
+    "artifacts/crimewidthkill/opus_f2_20260913/scripts/mutants_f2.py":
+        (CLASS_TOOL, "#529 the F2 Opus seat's mutator, preserved as run"),
+    "artifacts/crimewidthkill/opus_pass1_20260913/scripts/crime_opus_rows.py":
+        (CLASS_RESEARCH, "#529 the pass-1 Opus seat's observational row probe (FAULT vs DECLINE vs DELETE, column by column)"),
+    "artifacts/crimewidthkill/opus_pass1_20260913/scripts/apply_variant.py":
+        (CLASS_TOOL, "#529 the pass-1 Opus seat's candidate/mutant patcher, preserved as run"),
+    "artifacts/crimewidthkill/opus_pass1_20260913/out/crime_opus_rows.FROZEN.py":
+        (CLASS_RESEARCH, "#529 the Opus row probe frozen as its variant runs used it"),
+    "artifacts/crimewidthkill/opus_pass1_20260913/out/witness.FROZEN.py":
+        (CLASS_RESEARCH, "#529 the witness frozen as the Opus seat ran it across the candidates"),
+    "artifacts/crimewidthkill/opus_pass1_20260913/run1_base/crime_opus_rows.FROZEN.py":
+        (CLASS_RESEARCH, "#529 the Opus row probe frozen for its first (base) run"),
+    "artifacts/crimewidthkill/opus_pass1_20260913/run1_base/witness.FROZEN.py":
+        (CLASS_RESEARCH, "#529 the witness frozen for the Opus seat's first (base) run"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.py":
         (CLASS_RESEARCH, "#528 the Opus seat's candidate per-session exit-status repair (adopted in table 7 as unclean())"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.FROZEN3.py":

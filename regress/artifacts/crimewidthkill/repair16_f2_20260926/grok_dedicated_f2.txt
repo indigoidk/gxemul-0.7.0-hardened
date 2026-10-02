@@ -1,0 +1,28 @@
+I'll read the adjudication packet in full first, then check the main-loop rulings against the device code and the new rows.The packet is in. Next I’ll check the CONTROL arm and the new residue rows against the device and the probe, looking for a ruling the 226 rows do not actually support.**OVERTURN the closure half of F1.** The unconditional `HARD_RESET` clear-skip is still L2, and the four new message rows kill that one edit. A one-conjunct variant of that same clear leaves all 226 rows green, and the disclosure never names it.
+
+```c
+if (idata & CRIME_CONTROL_HARD_RESET) {
+    int j;
+    for (j = 0; j < cpu->machine->ncpus; j++)
+        cpu->machine->cpus[j]->running = 0;
+    if (!(idata & 1))
+        idata &= ~CRIME_CONTROL_HARD_RESET;
+}
+```
+
+The row that stays green is `ctlrst sw msg`.
+
+That session is latch-clear the whole way: no refusal precedes the stores. `sw +0x08 = 0x0001` has no reset bit, so the new `if` does not run; the endian clear leaves `0x1` and one `CRIME_CONTROL: unimplemented` line is printed. `sw +0x08 = 0x0800` does take the branch and stops the CPUs, but bit 0 is clear, so the clear still runs, the residue is 0, and nothing else is printed. The count stays 1 and `v1` stays `0xdeadbeef`. `ctlrst sw halt` stays green for the same reason. `ctlrst sd msg`, `rst 4w msg`, and `rst 8w msg` write the same pure `0x0800` / `0x800`, so the guarded clear still runs in both latch states and those counts stay 1 too. I grepped the 226-row probe: every accepted reset store is exactly that value. `0x0801` is never stored, and the narrow `sh` values that do combine bits (`0x0900`, `0x0a00`, `0xffff`) are declined before the arm. This is a walk, not a new build; the read-only seat did not compile it.
+
+The same hole sits on the other two clears, same conjunct, same result:
+
+* DOG, measured by the Opus seat as `D_dogbit0` (218/218 on the prefix count). In `rearm`, the latch is set by the opening `lb +0x07` before any `ACCEPTS` write. `sw`/`sd 0x0201` skip the clear and print `0x201` instead of `0x1`, which is still one line. `sw`/`sd 0x0200` have bit 0 clear, so the clear still runs and stays silent. `rearm ctl msg` stays 4. `latch ctl msg` and both `ctldog` rows stay at their wants too. Repair 16 counts the same prefix and never anchors `0x0000000000000001`.
+* ENDIANESS: `if (!(idata & 1)) idata &= ~CRIME_CONTROL_ENDIANESS`. Both `0x0100` writes in `ACCEPTS` have bit 0 clear, so the clear still runs. `rearm ctl msg` and `latch ctl msg` stay 4.
+
+F20 names only the DOG case. F1's "both latch states" claim is about `HARD_RESET`, and that claim does not survive the variant above.
+
+The named table-16 mutants do move the rows they name. From the logs: `H_noresetclear` sends all four message rows 1→2 and leaves the halt rows at the sentinel; `L_rstclr` moves only `rst 4w msg` and `rst 8w msg`; `S_rst8clr` moves only `ctlrst sd halt` (`v1` becomes `0x12345678`); `E_noendianclear` sends both aggregate counts 4→6; `L_dogclr` sends only `rearm ctl msg` 4→6; `D_nodogclear` moves `ctldog` 1→2 and both aggregates 4→6. A latch-clear-only reset-clear skip would redden `ctlrst` and leave `rst * msg` green; that split is real coverage. A width-only skip reddens the matching width's message row. Replacing the DOG clear with a stop can hold `ctldog` at 1, because the `0x0200` print is the one line and the `0x0201` twin never executes, but `rearm` stops on its first `0x0201` and `rearm ctl msg` falls below 4. The new aggregates close that old pair hole.
+
+**D2: none of the eight are floor.** The decline's `else` tests "not 4 and not 8" and the latch. It does not test 1 against 2, and it does not test `writeflag`. A width or direction conjunct is outside `{label} × {latch SET}`. The F2 2-byte rows are `lh`/`sh` after `lb` in the istat/imask sessions, so they are the latch-set half, which is already red under `M6`/`M7`. Scope the header. If a later ruling owes them anyway, the cheapest set is the six sessions the Opus seat named: one first refusal each for the latch-clear 1W, 2R, and 2W cells at `INTSTAT` and `INTMASK`, with the two latch-set 1-byte reads placed after that refusal in two of those sessions.
+
+**D5: none of the three are floor.** F18 is a 2-byte × `HARD_RESET`-clear joint and only host text; the 2-byte cell already drives that bit both ways while the latch is clear (`sh08` / the first `sh` of `sh08b`). F19 is callee state on top of a label swap the rise rows already kill. F20 is an untested bit of the relational `idata != 0` test. The cheap carriers, if you row them as strengthening, are: one extra latch-set `sh 0x0201` in `sh08b` (`sh08b msg` 0→1); one refused `lb +0x10` in the `p istw` session after `sd` of `SOFTINT = 0` and before the `INTMASK` write that drops the line (the gate session cannot host this, because `SOFTINT` is still `BIT` there and a fall-through would not drop IP2); and a value anchor of `unimplemented control 0x0000000000000001` on the existing DOG texts. The `HARD_RESET` × bit-0 cell needs its own last store of `sw 0x0801`, because an `0x0800` store stops the CPU. `p istw mid` already wants the line clear after `p istw sd` wanted it set, so F19's "nothing watches the fall" is too broad; that fall is an accepted `INTMASK` write, and the refused-while-asserted cell is still empty.

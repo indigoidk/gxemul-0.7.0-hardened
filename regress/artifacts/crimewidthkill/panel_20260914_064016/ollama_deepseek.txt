@@ -1,0 +1,15 @@
+VERDICT LINE: `GAP: insert 'if (writeflag == MEM_READ && len == 8) d->warned |= CRIME_W_LEN;' in case CRIME_REV pc-window branch before pc=ra; token CRIME_CLOSE5_20260914.`
+
+1. **Enumeration is not exact.**  
+   - READ: `ACCEPTS` contains `("lwP",0x00,0)`, `("swP",0x00,0)`, `("sdP",0x00,0)` but no `("ldP",0x00,0)`.  
+   - REASONED: `DEVICE_ACCESS(crime)` accepts len 8 and 4; the `CRIME_REV` pc-window branch does not test `writeflag` or len, so an accepted 8-byte read from `0xbfc05180` is a distinct kind. The helper `accept()` can encode `ld` at `PROBE_PC`, so it is rowable.  
+   - REASONED: `ACCEPTS` also overcounts: `0x34` and `0x04` duplicate the default-arm low 4-byte lane, and `0x278` duplicates default-arm 8W/8R already at `0x40`. The claimed “43 kinds” is not the distinct count; distinct count is 40. No listed kind is impossible, but the set is not exact.
+
+2. **Floor gap.**  
+   Source edit: in `case CRIME_REV`, inside the `if (((uint32_t)cpu->pc & 0xffffff00) == 0xbfc05100)` block, before `cpu->pc = ...`, insert  
+   `if (writeflag == MEM_READ && len == 8) d->warned |= CRIME_W_LEN;`  
+   Expected row: `latch x5` (or `rearm once` if `=0`).  
+   Why it cannot catch: `ACCEPTS` omits `ldP`, so no prologue/re-arm session performs an accepted 8-byte read at `CRIME_REV` from the PROM-probe window before a refusal. The mutant is never triggered, announce count remains unchanged, and the test scores 141/141.
+
+3. **Wrong statement.**  
+   The header/POSTTABLE claim that `ACCEPTS` is the full kind × label cross and that the floor is closed. That is false: the cross omits `ldP` at `CRIME_REV`, and the phrase “REV also from the PROM-probe window in both directions” is not reflected in the tuple for 8-byte reads.

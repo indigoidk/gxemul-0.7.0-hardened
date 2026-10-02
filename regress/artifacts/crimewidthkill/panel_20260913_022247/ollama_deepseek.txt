@@ -1,0 +1,57 @@
+SHIP  
+CRIME_P2_20260913
+
+## 1. The fix
+
+READ from the inlined whole function: the declined width arm prints at most once per device instance, then `goto crime_declined`, skips the register switch, and returns through the common tail. A read returns `odata = 0`; a write drops `idata`; `return 1` advances the PC with no bus error.
+
+The prelude’s RAM-size checks still run before the width arm, but that is pre-existing and not introduced by this fix. For a valid `-E sgi -e ip32` configuration they do not affect a declined access. I cannot verify from the packet that device init actually `memset(0)`s the `crime_data`; the single fact that would settle it is the device allocation/init path for `extra` in `dev_sgi_ip32.c`.
+
+`warned` has only the one writer in the inlined code: the `d->warned |= CRIME_W_LEN` site. No other writer appears in the supplied function text.
+
+## 2. Smallest uncovered edit?
+
+REASONED: the hinted address-conditioned fall-through is not a pass-all defect.
+
+The example edit  
+`if (relative_addr != CRIME_CONTROL) goto crime_declined;`  
+would be killed by existing rows. It allows narrow writes at `CRIME_CONTROL` to fall through, and the rows `sb08 msg` and `sh08 pc`/`sh08 run` exercise exactly that cell, so they would red.
+
+The only address-conditioned fall-through edits that pass all 40 rows are those that confine fall-through to cells where the switch has no side effect for that direction, e.g. narrow reads at `CRIME_CONTROL`:
+
+```c
+if (!(writeflag == MEM_READ && relative_addr == CRIME_CONTROL))
+    goto crime_declined;
+```
+
+That would pass all 40 rows, but it does not change guest-visible behavior: the `CRIME_CONTROL` switch arm does nothing on reads. So it is not a behavior-changing break under the detector’s own contract.
+
+Therefore I do not find an exact source edit in the address-conditioned fall-through class that both breaks the fix and passes all 40 rows. The gap named in the brief is covered by the existing side-effect rows for the dangerous directions.
+
+## 3. Vacuity floor
+
+READ from the kill table: each accept cell is pinned by its own single-cell growth mutant:
+
+- `8W`: `acc8 st+ld`
+- `8R`: `acc8 st+ld`
+- `4R high`: `acc4 rhi`
+- `4R low`: `acc4 rlo`
+- `4W high`: `acc4 whi`
+- `4W low`: `acc4 wlo`
+
+Each refusal cell is pinned by a confined fall-through:
+
+- 1-byte write: `sb08 msg` under `len2only`
+- 2-byte write: `sh08 pc`/`sh08 run` under `len1only`
+- 1-byte read: `lb rev pc` under `len2only`
+- 2-byte read: `lh rev pc` under `len1only`
+
+I do not see a CONTRACT clause claimed without a measured kill. The DISCLOSED `return1` equivalence is explicitly measured and disclosed.
+
+## 4. Records
+
+READ from the inlined comment text and probe header: I do not find a false statement. “Both measured” in the fix comment is a pass-1 measurement claim and is consistent with the rest of the packet, though I cannot re-measure it from here.
+
+## 5. Which statement in the brief is wrong?
+
+REASONED: the implication in question 2 that an address-conditioned fall-through is an unmeasured pass-all defect is wrong for the concrete example given. `if (relative_addr != CRIME_CONTROL) goto crime_declined;` is already killed by `sb08 msg` and `sh08 pc`/`sh08 run`. The only pass-all variants are behavior-equivalent and do not break the fix.

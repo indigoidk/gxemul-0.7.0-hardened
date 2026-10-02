@@ -1,0 +1,65 @@
+I'll start from the full offloaded brief, then check the repo, checkpoint, and the CRIME width probe against the 85-row contract.The checkpoint is mid-table-3; I’ll verify the live CRIME handler, the 85-row probe, and the kill-table artifacts against the brief’s premises.Bank-control constants and the CONTROL bit masks look load-bearing; I’ll read the rest of the probe and the CRIME handler next.`-V`/`-x` and the TIME tick path look like they could make oracles vacuous — I’ll check both against the real emulator flags and the table logs.**GAP:** `if (len == 8) {` → `if (len == 8 && relative_addr != 0) {`  
+**CRIME_CLOSE_20260913**
+
+The 85-row test still has a hole at the **near end of the 8-byte accept window**. I did not compile that mutant; the 85/85 is from the probe never issuing an 8-byte CRIME access at offset 0.
+
+---
+
+### 1. Floor gap
+
+The mapping is `[0, 0x280)` (`DEV_CRIME_LENGTH`, `memory_device_register`). The near end is `CRIME_REV` at `+0x00`, not `CRIME_DOG` at `+0x30`.
+
+`DEVICE_ACCESS(crime)` takes `uint64_t relative_addr`. The smallest edit that undoes part of the fix (an 8-byte cycle at the first slot is accepted today) is the `len == 8` arm:
+
+```c
+if (len == 8 && relative_addr != 0) {
+```
+
+That refuses only 8-byte access at `+0x00`. Every 8-byte CRIME access in the probe is at `+0x18`, `+0x20`, `+0x30`, `+0x38`, `+0x210`, or `+0x278`. There is no `ld`/`sd` at `CRIME+0` (those accesses are `lw` / `lb` / `lh` / `sb` / `sh`).
+
+Rows that look like they should catch it, and why they cannot:
+
+| row | why it stays green |
+|---|---|
+| `acc8 st+ld` | 8-byte at **`+0x30`**, still accepted |
+| `top8 st+ld` / `top4 *` | far slot **`+0x278`**, still accepted |
+| `top8 anchor` | 8R at **`+0x210`**, still accepted (prelude still writes `1` there) |
+| `rev pc ctl`, `devsig`, `devsig hi` | **4-byte** at `+0` / `+4` — they pin the 4-byte near end, not the 8-byte one |
+
+A round-trip at REV cannot work (every access’s prelude does `d->reg[CRIME_REV] = …`). The cheap pin is the one this detector already used at `+0x210`: an **8R of `+0x00` expecting `0x11`**. Under the mutant that read is declined and answered 0.
+
+This is not acc8mid. acc8mid was `len == 8 && relative_addr != 0x100` (interior, measured 71/71, disclosed). `relative_addr != 0` is the near-bound move the accept-row rule was written for: all accept rows sit away from the near end, so moving that end is invisible.
+
+---
+
+### 2. The 71→85 repair is sound for what F2 asked
+
+I re-derived the 85 `row()` sites; `probe_first4_fix.out` is `85/85 CONTROL=OK`. New rows match the F2 mutants they name:
+
+- `imask`/`istat` `lh`/`sh` and `time lh`/`sh` — `istat2`/`imask2`/`time2`/`istatsh`/`h_imask`/`h_lbl` in table 3
+- `top8 anchor` — `remap` (0x210 → INTSTAT 0, not bank-1’s 1); round-trips at `+0x278` stayed green with no tick, as predicted
+- `warm v0` / `warm once` — `static_od` / `rearm` / `lt_wset`
+- `latch x5` with `lh` first — `lt_len` / `lt_addr`
+- `sh08b msg`/`run` — `c_dog` / `c_hrclr` (`ENDIANESS` is **`0x0100`**, not `0x01`, so `sb 0x01` and `sh 0x0201` still print)
+- `hi keeps` — `wst_mc`; `nodflt` keyed on this access’s offset/direction (the construction bug is real: `ld +0x278` is a default-arm line)
+- `free said` — table 2 `fdebug` was 70/71 on that row; `-V` is `single_step`, not verbose, and `continue` clears it
+
+No new row in that diff has an oracle that cannot move under the mutant it names. `devsig hi` wanting `0x0` is an old, already-disclosed weakness (a refused 4R also returns 0); it is not from this repair.
+
+TIME: `crime_update_crime_time()` adds **wall-clock** (`gettimeofday`, ×66). The tick is still every `2^14` cycles, and it calls that same function. The “nothing else updates TIME before the next `ld`” sentence is a bit strong; the disclosed “no tick in that window” is the real guard. The oracle is live: `time sh ctl` in `probe_first4_fix.out` is raw `287479764` (large), and `time2` reddened `time lh`/`sh`.
+
+---
+
+### 3. Wrong statement
+
+**CONTRACT 6** (and the matching DISCLOSED bullet): *“at BOTH ends of the window: CRIME_DOG `+0x30` … the last slot `+0x278`”* and *“ACCEPT cells at offsets other than `+0x30`, `+0x210` and `+0x278`: … strictly INSIDE the window (e.g. `relative_addr != 0x100`)”*.
+
+`+0x30` is not a window end. The far end is `+0x278`. The near end is `+0x00`. Treating every offset other than those three as interior is how this 8-byte near-bound cell was filed as debt.
+
+Other premises I checked and they hold: inlined `DEVICE_ACCESS(crime)` matches `GXEMUL-SEC/src/devices/dev_sgi_ip32.c`; `CRIME_W_LEN` is `(1<<0)`; `memory_rw.c` does pre-zero a device read buffer immediately above `paddr -= …baseaddr`; `return1` as equivalent is that path; `sft` / `wstore31` have no refused access at `0x20` / `0x31`; table 3’s 19 red sets match PRETABLE 3.
+
+---
+
+### What I did not check
+
+I did not build the `relative_addr != 0` mutant or run the 85-row probe on it (proof is the access list, not a score). I did not re-read every `probe_*.raw` in table 3; I used PRETABLE/POSTTABLE plus `probe_first4_fix.out`. I did not re-run TIME sessions under load. I did not fire gates.

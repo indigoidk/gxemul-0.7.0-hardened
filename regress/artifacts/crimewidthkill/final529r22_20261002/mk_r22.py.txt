@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""mk_r22.py -- #529's probe r22 = r21 (8da85812) + ONE docstring line: the precommit hook's section U
+(check_score_claims.py) refused r21 on 2026-10-01 -- `STALE  crime_width_probe.py docstring  claims 157/157, pin is 226
+(if that is a deliberate historical quote, write '157-row' on the same line)` -- because the ACCEPTS note for entry 40
+quotes closing pass 7's score without the `157-row' qualifier every other such line in the docstring already carries
+(bk_529_20261001_101606/precheck.out).  The quote IS historical (the 157-row instrument of closing pass 7), so the
+qualifier is added and nothing else moves.  DOCSTRING ONLY: refuses unless the module AST minus its docstring is
+identical to r21's and the find-text is unique."""
+import ast, hashlib, io, os, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+R21 = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\crimewidthkill\final529r21_20260930\crime_width_probe.r21.py"
+OUT = os.path.join(HERE, "crime_width_probe.r22.py")
+
+
+def md5(s):
+    return hashlib.md5(s.encode("utf-8")).hexdigest()[:8]
+
+
+def strip_doc(t):
+    if t.body and isinstance(t.body[0], ast.Expr) and isinstance(getattr(t.body[0], "value", None), ast.Constant) \
+            and isinstance(t.body[0].value.value, str):
+        t.body = t.body[1:]
+    return t
+
+
+s = io.open(R21, encoding="utf-8", newline="").read()
+if md5(s) != "8da85812":
+    sys.exit("r21 is not 8da85812")
+PAIRS = [
+    ("`sw +0x04': F3, 157/157 -- guest-equivalent;",
+     "`sw +0x04': F3, 157/157 on the 157-row test -- guest-equivalent;"),
+]
+r22 = s
+for old, new in PAIRS:
+    if r22.count(old) != 1:
+        sys.exit("REFUSED: find-text not unique (%d): %r" % (r22.count(old), old[:60]))
+    r22 = r22.replace(old, new)
+if ast.dump(strip_doc(ast.parse(s))) != ast.dump(strip_doc(ast.parse(r22))):
+    sys.exit("REFUSED: r22's AST minus its docstring differs from r21's")
+# the edited line must sit inside the module docstring (the checker reads the DOCSTRING), not in a comment or a string
+doc21, doc22 = ast.get_docstring(ast.parse(s), clean=False), ast.get_docstring(ast.parse(r22), clean=False)
+if doc21 == doc22 or "157/157 on the 157-row test -- guest-equivalent" not in doc22:
+    sys.exit("REFUSED: the edit did not land in the module docstring")
+io.open(OUT, "w", encoding="utf-8", newline="").write(r22)
+print("r22 %s  (r21 %s)  %s" % (md5(r22), md5(s), OUT))
