@@ -1,0 +1,57 @@
+ASTRARETRO_BUNDLE_INCLUDE1_ALIVE
+VERDICT: 11 findings (6 CODE live at HEAD, 5 RECORD, 0 TEST-GAP); 24 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Findings are source-derived; no files written, builds performed, or guest probes run.
+
+F1 | [src/cpus/memory_ppc.c:275](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c:275) | upstream, relied on by #116/#117/#174 | CODE | live at HEAD: yes | The added MPC7455 extended-BAT support inherits a host-exit path: a denied data access makes `ppc_bat_block()` return zero, which the translator converts into `exit(1)`. The required result is a guest DSI; see [PowerPC manual:13509](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:13509), Figure 7-9. | Smallest check: inspect the return-zero path from `ppc_bat_block()` into the translator’s `res == 0` branch. | confidence high
+
+F2 | [src/cpus/cpu_ppc_instr.c:2809](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2809) | upstream, relied on by #116/#117/#174 | CODE | live at HEAD: yes | After an extended DBAT mapping has populated the translation cache, changing that mapping and performing context synchronization can leave subsequent accesses using the old physical page. BAT writes use generic `mtspr` without invalidation; `isync` is a nop. The load/store fast path consumes cached mappings without rechecking BATs. Synchronization requirements: [PowerPC manual:3947](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:3947). | Smallest check: trace BAT writes through the decoder and inspect whether either `mtspr` or `isync` invalidates `host_load`/`host_store`. | confidence high
+
+F3 | [src/include/float_emul.h:90](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/float_emul.h:90) | #300; sibling #308 | CODE | live at HEAD: yes | Finite division by infinity violates the promised nonfinite pass-through. `ieee_div_round_rm(-1.0, +Inf, RZ)` starts with correct `-0`, but its residual becomes NaN and the adjustment changes the result into NaN. The guard at `float_emul.c:887` checks the quotient, not the divisor; the round-to-odd sibling repeats this at `:992`. PowerPC `fdiv` reaches the helper. Expected signed-zero behavior follows [Book I:5110](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:5110) and [sign rules:5157](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:5157). | Smallest check: unit assertions for finite/infinite division through both helpers. `diff_ieee_store.c:830` tests the opposite operand position, `Inf/2`. | confidence high
+
+F4 | [src/include/float_emul.h:74](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/float_emul.h:74) | #306/#308, violating #299’s precondition | CODE | live at HEAD: yes | The “overflow-free” intermediate premise became false when m88k gained double-source, single-destination arithmetic. Adding two maximum finite doubles with `fadd.sdd` under toward-zero produces host infinity, which the helper and single store preserve. The required result is the largest finite single. Mixed-format multiply/divide have the same lost-overflow-information problem. See [MC88100 Table 2-6:2491](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:2491). | Smallest check: arithmetic unit assertions for finite intermediate overflow followed by single conversion under RZ, including multiplication/division siblings. `m88k_rounding_probe.py` lacks these overflow cases. | confidence high
+
+F5 | [src/disk/diskimage_scsicmd.c:776](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:776) | #416, missed #163 sibling | CODE | live at HEAD: yes | A guest READ or WRITE rejected by the transfer-size cap receives CHECK CONDITION, followed by REQUEST SENSE reporting no error. Both rejection branches call the success helper, which clears sense, then overwrite only status with `0x02`. Neither uses #416’s error-latching helper, contradicting `diskimage.h:166`. | Smallest check: compare READ `:776` and WRITE `:883` with `diskimage__return_check_condition()`. `diff_diskimage_io.c` H4 tests only the out-of-capacity READ path. | confidence high
+
+F6 | [src/devices/dev_wdc.c:1782](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1782) | upstream, relied on by #416 | CODE | live at HEAD: yes | An ATAPI READ refused by #416 can deliver zero-filled data and complete with ERR clear. WDC checks the SCSI function’s return value, which remains 1 for CHECK CONDITION, but never consumes `atapi_st->status`. The new error reporting therefore fails through this controller. Already filed as **`wdcpktstatus`**, [OUTSTANDING_BUGS.md:15582](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:15582). | Smallest check: trace the failed READ return into this branch; grep WDC for consumers of `atapi_st->status`. | confidence high
+
+F7 | [CHANGELOG.md:27318](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:27318) | #414, including its later retrospective refinement | RECORD | live at HEAD: yes | The claim that cylinder multiplication cannot overflow for any `stat()` size is false. Bounding bytes per cylinder does not bound the rounded-up final capacity below `INT64_MAX`. `diskimage.h:61` explicitly acknowledges this residual, contradicting the changelog. | Smallest check: inspect the quotient increment and closing multiplication in `diskimage.c:291`; no giant file is necessary. | confidence high
+
+F8 | [src/include/float_emul.h:66](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/float_emul.h:66) | #326 | RECORD | live at HEAD: yes | The exported contract says `ieee_round_to_integral()` returns an integral value under an IEEE rounding mode. Under RZ, an input such as `-3.5` is returned unchanged at `float_emul.c:314`. Existing callers perform the eventual truncation, so this is a false contract rather than another guest-result defect. | Smallest check: compare the header with the RZ/LEGACY early return. | confidence high
+
+F9 | [src/include/float_emul.h:51](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/float_emul.h:51) | #292 claim, made stale by #331 | RECORD | live at HEAD: yes | LEGACY no longer reproduces historical behavior “bit for bit.” For example, storing the minimum positive double subnormal in D format now preserves it; the historical implementation flushed it to zero. #331 intentionally changed both subnormal paths, including LEGACY. | Smallest check: compare HEAD’s `float_emul.c:663,677` with the pre-#331 paths. | confidence high
+
+F10 | [src/include/thirdparty/dreamcast_sysasicvar.h:111](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dreamcast_sysasicvar.h:111) | #468 / `29b450ce` | RECORD | live at HEAD: yes | The comment claims 352 mask-clobbering values across nine mask words. Its own table and the device switch yield **288**: the two intervening 32-value ranges are dropped. This misstates the behavioral domain; HEAD’s compile-time guard prevents those invalid events from reaching it. | Smallest check: count the three 96-value ranges against `dev_dreamcast_asic.c`’s nine mask cases. | confidence high
+
+F11 | [CHANGELOG.md:32666](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:32666) | #330 / `130ff1b5` | RECORD | live at HEAD: yes | “Ten distinct exception causes” counts test cases as distinct causes. The ten positive cases cover seven bits: VXISI, VXIDI, VXZDZ, VXIMZ, ZX, VXSNAN and VXCVI. This overstates exception coverage. | Smallest check: deduplicate the following table’s cause column or `ppc_rounding_probe.py:349`’s positive `CAUSE_ROWS`. | confidence high
+
+No corresponding outstanding filing was found for the other findings. Missing regression cases supporting CODE findings above were not counted again as TEST-GAP findings.
+
+Checked clean:
+
+- `src/include/diskimage.h:74` — Geometry maxima fit all four named MODE SENSE fields; parser and computed floppy geometry apply them.
+- `src/include/diskimage.h:85` — `do_fsync` declaration, definition, option assignment and write consumers agree.
+- `src/include/diskimage.h:101` — CUE file indices correspond to installed file-table entries.
+- `src/include/diskimage.h:105` — Supported sector sizes/data offsets agree with sector-bounded reads.
+- `src/include/diskimage.h:150` — Logical origin and capacity use the first data track consistently.
+- `src/include/diskimage.h:233` — CACHE(10) synchronization checks the correct files, ordering and failures; `diff_diskimage_sync.c` observes them.
+- `src/include/cpu_ppc.h:69` — Extended-BAT selection requires both the CPU capability and HID0 enable.
+- `src/include/cpu_ppc.h:179` — FX uses an unsigned shift; other added shifts remain below the signed-width boundary.
+- `src/include/cpu_ppc.h:193` — Added FPSCR field positions match Book I.
+- `src/include/cpu_ppc.h:220` — VX contains exactly nine causes, excludes reserved bit 20, and feeds correct VX/FEX derivation.
+- `src/include/cpu_ppc.h:232` — Sticky-exception mask excludes summaries and controls; FX transition handling consumes it correctly.
+- `src/include/cpu_ppc.h:249` — RN encoding and `frsp` wiring agree; rounding and summary regression rows exist.
+- `src/include/cpu_mips.h:101` — FCSR rounding mask matches the helper encoding and execution-time consumer.
+- `src/include/cpu_mips.h:214` — The 34 fold IDs and nine site IDs match their name tables and instrumentation indices.
+- `src/include/cpu_mips.h:335` — Fire, installation and idle-dispatch counters follow the documented distinct meanings.
+- `src/include/cpu_mips.h:347` — Counter arrays are zero-initialized, unsigned and accessed within their declared dimensions.
+- `src/include/thirdparty/dreamcast_sysasicvar.h:135` — Address guard rejects both out-of-range endpoints and nonconstant expressions.
+- `src/include/thirdparty/dreamcast_sysasicvar.h:139` — Current event constants preserve valid addresses; none reaches the separately filed latent BITMASK issue `asiceventaddr`.
+- `src/include/float_emul.h:56` — Rounding constants match MIPS/PPC and SH’s defined RN/RZ encodings.
+- `src/include/float_emul.h:63` — Single-store ties, carry and finite-overflow rounding agree with named offline rows.
+- `src/include/float_emul.h:69` — RN integral rounding handles midpoint parity and negative midpoint neighbors correctly.
+- `src/include/float_emul.h:77` — Exact cancellation and positive-zero addition preserve the required zero signs.
+- `src/include/float_emul.h:109` — Integer-to-double conversion handles `INT64_MIN`, bounded shifts and significand carry.
+- `src/include/float_emul.h:114` — Integer round-to-odd preserves discarded information for L→S conversion; offline and MIPS rows observe it.
+
+DENOMINATOR: read 11 of 11 hunks of the net diff

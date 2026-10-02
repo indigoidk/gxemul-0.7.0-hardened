@@ -1,0 +1,34 @@
+ASTRARETRO_DEVLE_ALIVE
+VERDICT: 6 findings (4 CODE live at HEAD, 1 RECORD, 1 TEST-GAP); 11 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Static review; no files changed, builds performed, or tests executed. Hardware references below use [AMD’s Am7990 Technical Manual](https://www.bitsavers.org/components/amd/Am7990/1986_Am7990_Local_Area_Network_Controller_LANCE_Technical_Manual.pdf), with local text line citations.
+
+F1 | src/devices/dev_le.c:482 | #274/#275, relying on upstream bounds | CODE | live at HEAD: yes | **Legal buffer sizes cause false errors.** A 2048-byte RX buffer is rejected with MISS despite having sufficient capacity. The sibling TX check at :384 aborts a valid chained frame whose final fragment is shorter than 12 bytes, disabling TX. BCNT describes individual buffer capacity; the documented minimum applies to the first buffer, not every continuation. See `_scratchpad/lance/TM1986.txt:2030–2035` and `:2108–2117`. | Smallest check: compare reception into 1536- versus 2048-byte buffers, and equivalent single-buffer versus short-tail chained transmission. | confidence high
+
+F2 | src/devices/dev_le.c:302 | #275, relying on upstream STRT handling | CODE | live at HEAD: yes | **STOP → START cannot recover the new TX abort.** After `le_tx_abort()` clears TXON, the STRT handler at :862 only sets STRT and clears STOP. TXON remains clear, so queued traffic never resumes without INIT. The manual explicitly permits STOP → START recovery after BUFF/UFLO and says INIT is unnecessary without parameter changes (`TM1986.txt:3601–3625`). | Smallest check: observe TXON and pending descriptor ownership through STOP → START after an abort. | confidence high
+
+F3 | src/devices/dev_le.c:346 | upstream, relied on by #199/#275 | CODE | live at HEAD: yes | **TX chain exhaustion still holds a partial frame indefinitely.** A non-ENP fragment followed by a host-owned descriptor leaves `tx_packet` retained, TXON set, and no completion/error interrupt. The previous descriptor has already been released. This sibling of the corrected aggregate-cap path needs the documented BUFF/UFLO termination of the current descriptor (`TM1986.txt:1219–1226`, `:2140–2151`). | Smallest check: inspect descriptor status, TINT, TXON, and retained packet state when a TX chain encounters an unavailable continuation. | confidence high
+
+F4 | src/devices/dev_le.c:637 | #262 | CODE | live at HEAD: yes | **RX exhaustion preserves stale ENP.** Reusing a completed descriptor by setting OWN, while retaining its previous ENP, makes chained-buffer exhaustion return `ERR|BUFF|ENP`: this path ORs error bits and clears OWN but never clears ENP. That contradicts its “no ENP” promise at :622 and the manual’s distinction between incomplete-buffer errors and completed-frame errors (`TM1986.txt:3480–3487`). | Smallest check: inspect returned flags when a recycled descriptor encounters an unavailable continuation. | confidence high
+
+F5 | src/devices/dev_le.c:548 | #274 | RECORD | live at HEAD: yes | **The “only FIRST buffer” invariant is false for overlapping DMA storage.** RX data can overwrite an earlier descriptor and restore OWN with a usable count. Lookahead then passes, but the full-ring exit at :663 returns with a partial `rx_packet` retained. A subsequent descriptor edit can reach this supposedly first-buffer-only branch mid-frame. `CHANGELOG.md:20479` also incorrectly claims no exit retains an in-progress frame across calls. | Smallest check: trace a ring traversal with receive storage overlapping an earlier descriptor; inspect retained RX state at :667. | confidence high
+
+F6 | CHANGELOG.md:20484 | #274/#275 | TEST-GAP | live at HEAD: yes | The claimed malformed-RX, TX-abort/cap, and idle-non-STP probes have no committed regression row observing their descriptor/CSR outcomes. Checked `regress/gate_mips.sh`, `regress/gate_offline.sh`, and committed regression artifacts; matching artifacts quote records/source rather than implement these probes. | Smallest check: search HEAD’s `regress/` for `la_extra_reject`, `le_rx_descr_ok`, `le_tx_abort`, `CSR0.MISS`, and `TBUFF`, then inspect matches. | confidence high
+
+No matching existing filing was found for these findings. `OUTSTANDING_BUGS.md:2298`, rounds 41–46 backlog **item 4**, files the separate terminal-RX-descriptor STP bug; it is distinct from F4.
+
+Checked clean at HEAD:
+
+- `src/devices/dev_le.c:416` — aggregate guard bounds the same length used by allocation and copying, before addition.
+- `src/devices/dev_le.c:292` — TX abort clears OWN; ERR and TBUFF/UFLO occupy the correct descriptor words.
+- `src/devices/dev_le.c:305` — TX abort advances and wraps the ring pointer.
+- `src/devices/dev_le.c:361` — idle non-STP descriptors skip before count validation, release OWN, and raise TINT.
+- `src/devices/dev_le.c:460` — TX traversal, including the new skip path, terminates within one ring traversal.
+- `src/devices/dev_le.c:538` — first-buffer ownership shortage drops the frame, sets MISS, and leaves the descriptor unchanged.
+- `src/devices/dev_le.c:558` — current and lookahead validation both inspect RMD2 through the same predicate; no field mismatch.
+- `src/devices/dev_le.c:632` — a one-entry RX ring cannot treat its current descriptor as another available buffer.
+- `src/devices/dev_le.c:751` — exhaustion drains resident packets without calling the ingress-polling availability function again.
+- `src/devices/dev_le.c:793` — MISS/RINT/TINT feed INTR, and IRQ assertion respects INEA at :823.
+- `src/devices/dev_le.c:428` — TX/RX SRAM accesses wrap within SRAM; RX packet reads at :574 stop at packet length.
+
+DENOMINATOR: read 10 of 10 hunks of the net diff

@@ -1,0 +1,40 @@
+ASTRARETRO_DEVM8820X_ALIVE
+VERDICT: 9 findings (6 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 13 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No writes, builds, or test executions. Hardware citations use indexed text of Motorola’s MC88200 manual; no local MC88200 manual was present.
+
+F1 | `src/devices/dev_m8820x.c:215` | #433 | CODE | live at HEAD: yes | **Valid PATC flush aliases are dropped.** Hardware ignores command bit 3, but the switch recognizes only its clear-bit forms. Alternate PAGE/SEGMENT/ALL encodings therefore leave cached translations valid. The assertion at line 222 that only probes and undefined commands reach default is also false. [Manual, p.2-10 and §6.2.1.2, p.6-5](https://www.bitsavers.org/components/motorola/88000/MC88200_Cache_Memory_Management_Unit_Users_Manual_2ed_1990.pdf). No matching outstanding filing found. | Smallest check: compare invalidation results for canonical commands and their documented aliases. | confidence high
+
+F2 | `src/devices/dev_m8820x.c:492` | #433 | CODE | live at HEAD: yes | **BATC register aliases enter the ignore arm.** BATC write ports do not decode address bit A5; offsets `0x420–0x43c` alias BWP0–7. HEAD drops these writes, leaving `batc[]` and existing translations unchanged. This contradicts the premise that default cannot receive translation-changing accesses. [Manual, p.6-4](https://archive.decromancer.ca/bitsavers.org/components/motorola/88000/MC88200_Cache_Memory_Management_Unit_Users_Manual_2ed_1990.pdf). Existing `m8batc` concerns canonical-port test coverage, not this alias defect. | Smallest check: compare canonical and alias writes’ BATC and invalidation effects. | confidence high
+
+F3 | `src/devices/dev_m8820x.c:430` | upstream, relied on by #434/#435 | CODE | live at HEAD: yes | **Removing incidental purges exposes missing dirty-bit updates.** Reading a writable page with `PG_M=0` installs `host_store[]`. An intervening PFSR read or SAR write now preserves that entry, so the subsequent ordinary store bypasses `m8820x_mark_page_as_modified()` and leaves the guest descriptor clean. The chain runs through `memory_m88k.c:370`, `memory_rw.c:746`, and `cpu_m88k_instr_loadstore.c:268`. Hardware requires the descriptor’s modified bit to reflect the write. [Manual, p.2-16](https://www.bitsavers.org/components/motorola/88000/MC88200_Cache_Memory_Management_Unit_Users_Manual_2ed_1990.pdf). No matching outstanding filing found. | Smallest check: a CPU integration assertion that the first store sets descriptor `PG_M` across the affected register access. | confidence high
+
+F4 | `src/devices/dev_m8820x.c:179` | #433 | CODE | live at HEAD: yes | **SEGMENT flush still invalidates other segments.** Both privilege variants select `all=1`. A subsequent read in an unrelated segment can consequently rewrite its guest-memory U bit through a new table walk. The manual specifies one segment, with 4 MB segmentation. [Manual, p.2-10](https://archive.decromancer.ca/bitsavers.org/components/motorola/88000/MC88200_Cache_Memory_Management_Unit_Users_Manual_2ed_1990.pdf). Already filed as **`m8seg`**, `OUTSTANDING_BUGS.md:6166`. | Smallest check: assert that a same-privilege PATC entry outside SAR’s segment survives. | confidence high
+
+F5 | `src/devices/dev_m8820x.c:270` | #433 | CODE | live at HEAD: yes | **The entire IDR write is discarded, including its programmable ID field.** A guest reconfiguring IDR.ID gets neither the new identification nor corresponding control-window selection. The detailed manual permits software updates to bits 31–24; TYPE/VERSION remain read-only. [Manual, §6.2.1.1, pp.6-4–6-5](https://www.bitsavers.org/components/motorola/88000/MC88200_Cache_Memory_Management_Unit_Users_Manual_2ed_1990.pdf). A [Motorola summary, p.13](https://datasheet.octopart.com/MC88200RC20-Motorola-datasheet-180799514.pdf) instead labels IDR read-only, warranting revision-specific reconciliation. No matching filing found. | Smallest check: verify ID-field write/readback and addressing against the intended chip revision. | confidence med
+
+F6 | `src/devices/dev_m8820x.c:215` | #433 | CODE | live at HEAD: yes | **PROBE reports a miss for valid mappings.** PROBE_USER and PROBE_SUPER leave SSR zero and SAR unchanged, even when translation succeeds. Hardware supplies translation status and the translated address. [Manual, §2.5.1, pp.2-29–2-32](https://www.bitsavers.org/components/motorola/88000/MC88200_Cache_Memory_Management_Unit_Users_Manual_2ed_1990.pdf). Already filed as **`m8probe`**, `OUTSTANDING_BUGS.md:1354`; its missing-oracle premise can now be revisited. | Smallest check: a valid-mapping probe must produce SSR.V and the corresponding physical address in SAR. | confidence high
+
+F7 | `src/devices/dev_m8820x.c:165` | `cedc80d5` | RECORD | live at HEAD: yes | **PATC hits do not update only the PATC copy.** An unmodified write hit calls `m8820x_mark_page_as_modified()` at `memory_m88k.c:221`, which writes U/M into guest memory at line 93. The comment’s cited lines 348–350 belong to miss/refill processing. `CHANGELOG.md:25854` and the **`m8seg`** filing repeat this error rather than identify it. | Smallest check: inspect the PATC-hit branch at `memory_m88k.c:217`. | confidence high
+
+F8 | `src/devices/dev_m8820x.c:340` | #435 | RECORD | live at HEAD: yes | **“NO CODE … EVER READS reg[CMMU_SCTR]” excludes implemented guest readback.** A guest write followed by a read returns the stored value through line 258. Likewise, SAR’s “only reader” claim at line 336 omits that path. “No translation consumer” would accurately describe SCTR. No matching filing found. | Smallest check: trace the generic indexed read at line 258 for SCTR and SAR. | confidence high
+
+F9 | `regress/diff_m8820x.c:674` | `12ea008c`, claim repeated by `cedc80d5` | TEST-GAP | live at HEAD: yes | **D6 permits supervisor SEGMENT to behave exactly like PAGE.** Its subset predicate accepts equal survivor sets. D1 seeds only the matching page; D6b protects USER SEGMENT. Thus `CHANGELOG.md:25844` falsely says the supervisor property was already pinned. No matching coverage-gap filing found. | Smallest check: require D6 to observe invalidation of another supervisor page within the same segment. | confidence high
+
+Checked clean, with source line numbers at HEAD:
+
+- `src/devices/dev_m8820x.c:90` — the access-warning latch is per instance and initialized.
+- `src/devices/dev_m8820x.c:229` — command warnings use their own initialized latch.
+- `src/devices/dev_m8820x.c:258` — registered-window bounds keep the register index inside its 1,024-word array.
+- `src/devices/dev_m8820x.c:283` — SCR writes store before command execution; reads do not execute commands.
+- `src/devices/dev_m8820x.c:513` — unhandled writes do not fabricate stored readback; untouched read values are initialized.
+- `src/devices/dev_m8820x.c:180` — all four implemented supervisor flush variants select the supervisor tag.
+- `src/devices/dev_m8820x.c:189` — the finite PATC loop matches both arrays; validity and privilege use the correct fields.
+- `src/devices/dev_m8820x.c:205` — implemented LINE/PAGE matching uses the translator’s 4 KB page mask.
+- `src/devices/dev_m8820x.c:187` — implemented PATC flushes also invalidate dyntrans mappings.
+- `src/devices/dev_m8820x.c:250` — accesses select the owning CPU and addressed CMMU.
+- `src/devices/dev_m8820x.c:430` — both APR write arms retain stores and unconditional invalidation, including equal-value writes.
+- `src/devices/dev_m8820x.c:459` — all four split-arm stores remain; reads preserve register contents.
+- `regress/gate_m88k_rounding.sh:260` — the wrapper checks actual IDR results and disassembly, beyond the probe’s survival verdict.
+
+DENOMINATOR: read 7 of 7 hunks of the net diff

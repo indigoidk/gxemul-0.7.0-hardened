@@ -1,0 +1,261 @@
+CODEXPACK_DOSSIER_PPCBAT_ALIVE
+VERDICT: finding TRUE -- disposition member 5 -- a matched BAT protection denial must deliver an architectural storage exception.
+
+All repository citations below refer to **`db8b1a33`**, not the working tree. Manual citations refer to `_scratchpad/ppc_pem32_rev2_2001.txt`. This is a static reading result; no build, test, emulator execution, or change was made.
+
+The debugger qualification matters: a dump can reach the exit for **PP=00**. A read-only BAT permits the dump’s read; its store-denial case does not make a dump fail. The dump supplies `MEM_READ, CACHE_NONE | NO_EXCEPTIONS`, and the BAT read-only cases deny only `FLAG_WRITEFLAG`. (`src/debugger/debugger_cmds.c:716–717`; `src/cpus/memory_ppc.c:71–73`.)
+
+**The source path confirms the finding.**
+
+1. **Guest instruction bytes and register operands enter the implementation.** Instruction decoding reads bytes from a cached host page, or calls `cpu->memory_rw(..., MEM_READ, CACHE_INSTRUCTION)`, then performs `iword = BE32_TO_HOST(iword);` and `main_opcode = iword >> 26;`. (`src/cpus/cpu_ppc_instr.c:4092–4139`.)
+
+   The `PPC_31_MTSPR` decoder selects the source GPR and destination SPR from that word:
+
+   > `rs = (iword >> 21) & 31;`  
+   > `spr = ((iword >> 6) & 0x3e0) + ((iword >> 16) & 31);`
+
+   It supplies pointers to `gpr[rs]` and `spr[spr]`; BAT registers take `default:ic->f = instr(mtspr);`. The operative handler is:
+
+   > `/*  TODO: Check permission  */`  
+   > `reg(ic->arg[1]) = reg(ic->arg[0]);`
+
+   Thus guest register contents become the BAT words subsequently read by translation. (`src/cpus/cpu_ppc_instr.c:4672–4689`, `2807–2809`; BAT SPR definitions: `src/include/thirdparty/ppc_spr.h:119–134`, `146–183`.)
+
+2. **Guest MSR writes supply relocation and privilege state.** The `MTMSR`/`MTMSRD` decoder selects a source GPR; a set `l_bit` goes to `bad`, while the other branch selects `instr(mtmsr)`. The handler reads that GPR, contains `/* TODO: check permission! */`, and calls `reg_access_msr(cpu, &x, 1, 1);`. The register accessor assigns `cpu->cd.ppc.msr = *valuep;`. (`src/cpus/cpu_ppc_instr.c:4704–4717`, `2888–2905`; `src/cpus/cpu_ppc.c:275–276`.)
+
+   This does not mean every MSR write proceeds to another access: setting `MSR.IP` takes the separate CPU-stop branch, and enabled pending interrupts can invoke an exception. (`src/cpus/cpu_ppc.c:288–310`.)
+
+3. **The access must reach translation.** Ordinary load/store decoding supplies register operands and displacement; the generic handler computes the effective address from the base and index/displacement, synchronizes the faulting PC, then calls `memory_rw` with `MEM_READ` or `MEM_WRITE`. (`src/cpus/cpu_ppc_instr.c:4293–4296`, `4338–4351`; `src/cpus/cpu_ppc_instr_loadstore.c:49–61`, `88–94`, `174–184`.)
+
+   The memory wrapper bypasses translation under:
+
+   > `if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL)`
+
+   Otherwise it calls the translator with the write, exception-suppression, and instruction-access flags. (`src/cpus/memory_rw.c:241–252`.)
+
+   Cached accesses are a qualification: load/store fast paths can use `host_load`/`host_store` directly; the generic path is selected for an unaligned nonbyte access or a missing cached page. Instruction-pointer translation likewise calls the translator after its cache lookup fails. This dossier establishes the translator path, not that every access re-enters it. (`src/cpus/cpu_ppc_instr_loadstore.c:217–240`; `src/cpus/cpu_dyntrans.c:656–680`.)
+
+4. **The translator applies relocation and model gates.** It reads MSR, derives `user` from `PPC_MSR_PR`, and truncates the address for a 32-bit model. This condition bypasses BATs and returns success:
+
+   > `if ((instr && !(msr & PPC_MSR_IR)) || (!instr && !(msr & PPC_MSR_DR)))`
+
+   With the relevant relocation enabled, PPC601 exits earlier. For another 32-bit model, it calls `ppc_bat(...)`. (`src/cpus/memory_ppc.c:248–270`.)
+
+5. **A BAT must participate and match.** Instruction accesses scan `i = 0, 1, 2, 3`; data accesses scan `i = 4, 5, 6, 7`. The register selection is `regnr = base_spr + i * 2`. The resulting pairs are enumerated here rather than inferred from a range:
+
+   | Scan | Upper/lower SPR pairs |
+   |---|---|
+   | Base instruction | `0x210/0x211`, `0x212/0x213`, `0x214/0x215`, `0x216/0x217` |
+   | Base data | `0x218/0x219`, `0x21a/0x21b`, `0x21c/0x21d`, `0x21e/0x21f` |
+   | Extended instruction | `0x230/0x231`, `0x232/0x233`, `0x234/0x235`, `0x236/0x237` |
+   | Extended data | `0x238/0x239`, `0x23a/0x23b`, `0x23c/0x23d`, `0x23e/0x23f` |
+
+   (`src/cpus/memory_ppc.c:48–53`, `85–90`, `101–117`; `src/include/thirdparty/ppc_spr.h:119–134`, `146–183`.)
+
+   An entry is skipped under each applicable condition:
+
+   > `if (user && !(upper & BAT_Vu))`  
+   > `if (!user && !(upper & BAT_Vs))`  
+   > `if ((vaddr & ~mask) != (ebs & ~mask))`
+
+   The mask and address calculation are:
+
+   > `uint32_t mask = ((upper & BAT_BL) << 15) | 0x1ffff;`  
+   > `*return_paddr = (vaddr & mask) | (phys & ~mask);`
+
+   (`src/cpus/memory_ppc.c:53–65`.)
+
+   A base-BAT result other than `-1` returns immediately. Extended entries are considered only after no base hit, and only when **both** `PPC_HIGH_BAT` and `HID0_HIGH_BAT_EN` are set. (`src/cpus/memory_ppc.c:101–119`.)
+
+6. **The matching entry denies; its caller terminates.** The exact decisive code is:
+
+   > `pp = lower & BAT_PP;`  
+   > `case BAT_PP_NONE:`  
+   > `    return 0;`  
+   > `case BAT_PP_RO_S:`  
+   > `case BAT_PP_RO:`  
+   > `    return (flags & FLAG_WRITEFLAG)? 0 : 1;`
+
+   The enumerated encodings are `00` no access, `01` read-only, `10` read/write, and `11` read-only. (`src/cpus/memory_ppc.c:67–75`; `src/include/thirdparty/ppc_bat.h:97–101`.)
+
+   The caller then executes:
+
+   > `if (res == 0) {`  
+   > `    fatal("[ TODO: BAT exception ]\n");`  
+   > `    exit(1);`
+
+   (`src/cpus/memory_ppc.c:273–275`.)
+
+   There is no exception delivery, failure return, later-BAT search, or page-table fallback on that branch. The suppression check appears later:
+
+   > `if (flags & FLAG_NOEXCEPTIONS)`  
+   > `    return 0;`
+
+   (`src/cpus/memory_ppc.c:279–300`.)
+
+   `fatal()` itself is a diagnostic function; the explicit `exit(1)` is the process-ending operation. (`src/core/debugmsg.c:384–391`.)
+
+**Reachability includes both emulated privilege levels.**
+
+Architecturally, supervisor software controls BAT configuration. In this implementation, however, the BAT and MSR write handlers have TODO permission checks, with no implemented PR rejection in those paths. Consequently, source-level reachability is not confined to supervisor execution. Independently, supervisor-established BAT mappings can deny user accesses when `BAT_Vu` participates, or supervisor accesses when `BAT_Vs` participates. (`src/cpus/cpu_ppc_instr.c:2807–2809`, `2888–2905`, `4672–4689`; `src/cpus/memory_ppc.c:252–253`, `55–73`.)
+
+Every registered PPC model receives `ppc_translate_v2p`; the model table and translator gates distinguish exposure as follows. (`src/cpus/cpu_ppc.c:72–99`, `122–138`; `src/include/cpu_ppc.h:75–88`.)
+
+| Models, explicitly enumerated | This BAT-denial exit |
+|---|---|
+| `PPC405GP`, `PPC603`, `PPC603e`, `PPC604`, `MPC7400`, `MPC7455`, `PPC750`, `G4e` | Reachable through the shared 32-bit translator when its access conditions hold. |
+| `PPC601` | Preempted by the earlier 601 translation exit. |
+| `PPC620`, `PPC970` | Skip the BAT arm and encounter the separate non-32-bit translation exit. |
+
+The model-specific architectural appropriateness of BATs for `PPC405GP` and `G4e` was **not checked**. Only `MPC7455` carries `PPC_HIGH_BAT` in the inspected model table. (`src/include/cpu_ppc.h:75–88`; `src/cpus/memory_ppc.c:114–117`, `263–288`.)
+
+The machine-source search found these instantiations and defaults:
+
+| Machine/subtype | Default CPU | Committed source |
+|---|---|---|
+| `macppc` / `g3` | `PPC750` | `src/machines/machine_macppc.c:173–174,199–202` |
+| `macppc` / `g4` | `MPC7400` | `src/machines/machine_macppc.c:176–177,204–205` |
+| `macppc` / `g4plus` | `MPC7455` | `src/machines/machine_macppc.c:179–180,207–208` |
+| `macppc` / `g5` | `PPC970` | `src/machines/machine_macppc.c:182–183,210–211` |
+| `mvmeppc` / `mvme1600`, `mvme2100` | `PPC603e` | `src/machines/machine_mvmeppc.c:165–171,195–201` |
+| `mvmeppc` / `mvme5500` | `PPC750` | `src/machines/machine_mvmeppc.c:174–175,203–204` |
+| `pmppc` | `PPC750` | `src/machines/machine_pmppc.c:76–86` |
+| `prep` / `ibm6050`, `ibm6070` | `PPC604` | `src/machines/machine_prep.c:156–157,179–185` |
+| `prep` / `mvme2400` | `PPC750` | `src/machines/machine_prep.c:160–161,187–188` |
+| `bareppc`, `testppc` | `PPC970` | `src/machines/machine_test.c:448–473` |
+
+Thus the `g5`, `bareppc`, and `testppc` defaults instantiate the translator but do not reach this particular BAT exit. CPU-override configuration mechanics were **not checked**. Relevant relocation disabled, physical accesses, a nonparticipating or nonmatching BAT, and an allowed protection result also avoid this exit. Disabled or unsupported extended BATs do not prevent exposure through base BATs. (`src/cpus/memory_ppc.c:55–79`, `101–119`, `258–288`; `src/cpus/memory_rw.c:245–252`.)
+
+**The on-disk manual specifies a storage exception.**
+
+The manual describes a prohibited access after a BAT match as a “block protection violation exception condition (DSI or ISI exception).” (`_scratchpad/ppc_pem32_rev2_2001.txt:13312`.)
+
+Its protection rule says:
+
+> “any access attempted (read or write) when PP = 00 results in a protection violation exception condition.”
+
+It also identifies writes through `PP=x1`—enumerated as `01`, `11`—as violations, while `PP=10` allows accesses. (`_scratchpad/ppc_pem32_rev2_2001.txt:13334`.)
+
+The required classifications are explicit:
+
+> “For data accesses, a DSI exception is generated and bit 4 of DSISR is set.”
+
+> “For instruction accesses, an ISI exception is generated and SRR1 bit 4 is set.”
+
+(`_scratchpad/ppc_pem32_rev2_2001.txt:13335–13336`; Figure 7-9: `13503–13519`.)
+
+Other architectural requirements relevant to the correction are:
+
+- DSI saves the causing instruction’s address in SRR0; DSISR identifies protection and load/store direction; DAR identifies the offending effective address according to the access class. (`_scratchpad/ppc_pem32_rev2_2001.txt:11726,11760–11764`.)
+- ISI saves the address of the instruction whose fetch was attempted, including a branch target where applicable, and records the protection cause in SRR1. (`_scratchpad/ppc_pem32_rev2_2001.txt:11792–11801`.)
+- The enumerated vector addresses are DSI `0x00000300` or `0xfff00300`, and ISI `0x00000400` or `0xfff00400`, according to IP. (`_scratchpad/ppc_pem32_rev2_2001.txt:11487,11767,11811`.)
+- On exception entry, “MSR[IR] and MSR[DR] are cleared for all exception types.” (`_scratchpad/ppc_pem32_rev2_2001.txt:11486`.)
+- A BAT invalid for the current privilege level is ignored; it does not itself generate a protection violation. BAT modification is privileged. (`_scratchpad/ppc_pem32_rev2_2001.txt:13107,13170–13171,13494`.)
+- `dcbt` and `dcbtst` are exceptions to ordinary faulting accesses: protected translation is aborted and the instruction acts as a no-op. (`_scratchpad/ppc_pem32_rev2_2001.txt:13495,13512–13513`.)
+
+**The sibling inventory is complete for `memory_ppc.c`.**
+
+The terminating statements are enumerated below. There is no CPU-stop assignment in that file. (`src/cpus/memory_ppc.c:1–328`.)
+
+| Terminating line | Condition and diagnostic | Reachability and record |
+|---|---|---|
+| `94` | `bits != 32`; `"TODO: ppc_bat() for non-32-bit\n"` at `92–93` | Unreachable through the only located source caller, which requires `bits == 32` at `269–270`. No dedicated outstanding entry found in targeted searches. |
+| `98` | `PPC_601`; `"TODO: ppc_bat() for PPC 601\n"` at `96–97` | Preempted by `263–265` through that caller. No dedicated outstanding entry found. |
+| `265` | Relevant relocation enabled, then `PPC_601`; `"ppc_translate_v2p(): TODO: 601\n"` at `263–264` | Guest-controlled relocation/access under that configured model. No dedicated outstanding entry found. |
+| `275` | `res == 0`; `"[ TODO: BAT exception ]\n"` at `273–274` | Finding under study. No dedicated outstanding entry found. |
+| `288` | Relevant relocation enabled and non-32-bit translation; `"TODO: ppc 64-bit translation\n"` at `285–287` | Guest-controlled relocation/access under that configured model. No dedicated outstanding entry found. |
+
+The including file has another guest-controlled stop: an MSR write with IP set prints the “Reboot hack for NetBSD/prep” diagnostic and executes `cpu->running = 0;`. It is recorded as **#11**, with additional prose coverage. (`src/cpus/cpu_ppc.c:275–291,1955`; `OUTSTANDING_BUGS.md:2616,2670–2671`.)
+
+A directly relevant downstream sibling lies in the instruction-fetch caller: failed `memory_rw` produces `"PPC to_be_translated(): read failed: TODO\n"` and `exit(1)`. It is recorded as **#10**. This matters because replacing the BAT exit with a failure return can expose that caller’s exit. (`src/cpus/cpu_ppc_instr.c:4115–4119`; `OUTSTANDING_BUGS.md:2614–2615`.) Other termination sites throughout `cpu_ppc_instr.c` and generic dyntrans were not exhaustively audited.
+
+**Disposition 5 fits, but the existing exception machinery is incomplete.**
+
+The nearest precedent is in the same translator: page protection failures already select `DSISR_PROTECT`, populate DAR, add `DSISR_STORE` for a write, and call DSI/ISI rather than ending the process. Its earlier `FLAG_NOEXCEPTIONS` branch returns failure without delivering an exception. (`src/cpus/memory_ppc.c:299–323`.)
+
+The caller precedent is #216: failed `lwarx`/`stwcx.` memory accesses return, with comments explicitly saying to let the DSI proceed “instead of exit()ing the host.” (`src/cpus/cpu_ppc_instr.c:2309–2314,2357–2362`; `CHANGELOG.md:20119`.)
+
+| Member | Assessment for this finding |
+|---|---|
+| **1 — Delete the terminating call** | Insufficient alone. Falling through would allow page-table processing after a decisive BAT denial. (`src/cpus/memory_ppc.c:273–284`.) |
+| **2 — Decline silently** | Appropriate for `FLAG_NOEXCEPTIONS` probes; insufficient for ordinary guest execution. (`src/cpus/memory_ppc.c:299–300`; manual `13335–13336`.) |
+| **3 — Decline and announce once** | A latch or `(once)` diagnostic cannot replace the specified architectural exception. Manual `13335–13336` requires fault delivery. |
+| **4 — Accept an already-computed value** | Wrong here. The physical-address calculation precedes the separate permission decision; computing it does not authorize access. (`src/cpus/memory_ppc.c:65–75`.) |
+| **5 — Architectural fault** | Correct primary disposition: DSI for data, ISI for instruction fetch, with protection state. Manual `13335–13336`. |
+| **6 — Invent backing store** | Does not implement the protection rule; the problem is permission, not missing storage. (`src/cpus/memory_ppc.c:65–75`; manual `13334`.) |
+| **7 — Implement missing behavior** | Needed to complete the exception delivery supporting member 5, rather than to invent different BAT semantics. (`src/cpus/cpu_ppc.c:318–345`; manual `11486,13336`.) |
+
+The correction must account for these concrete integration issues:
+
+- **Preserve a protection hit as a protection hit.** Do not retry another BAT or the page tables. Do not route it into the PPC603 software-reload branch, which writes `IMISS`/`DMISS`, sets TGPR, and selects exceptions `0x10`, `0x11`, or `0x12`. The BAT result is distinct from the PTE `match` variable, which is assigned later. (`src/cpus/memory_ppc.c:248,270–284,307–323`; manual `13312–13336`.)
+- **Supply complete fault state.** `ppc_exception()` saves SRR0 and assigns SRR1 from masked MSR, then clears only `EE | RI | PR`. It neither supplies the ISI protection-cause bit nor clears IR/DR. Setting an ISI cause before that SRR1 assignment would lose it. (`src/cpus/cpu_ppc.c:321–335`; manual `11486,13336`.)
+- **Make exception entry survive its callers.** The helper immediately rebuilds execution pointers; the instruction-fetch caller can still exit after a failed read. Generic dyntrans also has a separate exit when exception-handler translation fails. (`src/cpus/cpu_ppc.c:337–344`; `src/cpus/cpu_ppc_instr.c:4115–4119`; `src/cpus/cpu_dyntrans.c:685–732`.) Related recursive-vector debt is already recorded as **`excvecrecurse`**. (`OUTSTANDING_BUGS.md:21950–21951`.)
+
+The option list also omits **stopping only the virtual CPU while preserving the host process**. That mechanism exists in the IP reboot hack, but it is not the specified response to BAT protection denial. (`src/cpus/cpu_ppc.c:288–291`; manual `13335–13336`.)
+
+**A regression would distinguish architectural recovery from merely removing the exit.**
+
+These are proposed observations, not measured results:
+
+| Channel | Before correction | Required after correction |
+|---|---|---|
+| Process and diagnostic | Calls `fatal("[ TODO: BAT exception ]\n")`, then `exit(1)`. | Host remains alive; that TODO termination disappears. (`src/cpus/memory_ppc.c:273–275`.) |
+| Denied data access | Never reaches the existing fault-return machinery. | DSI, protection DSISR, correct store indication, appropriate DAR and SRR0; exception-handler execution continues. (`src/cpus/memory_ppc.c:315–323`; manual `11726,11760–11767`.) |
+| Denied instruction fetch | Ends the process in BAT translation. | ISI with SRR1 protection cause and correct attempted-fetch SRR0; handler executes with relocation disabled. Manual `11486,11792–11811`. |
+| Debugger PP=00 read | Exits before suppression is checked. | Returns `MEMORY_ACCESS_FAILED`, prints `(memory access failed)`, and continues the dump without delivering a guest exception. (`src/cpus/memory_ppc.c:273–300`; `src/cpus/memory_rw.c:259–268`; `src/debugger/debugger_cmds.c:724–750`.) |
+| Denied access effects | Termination occurs before the memory wrapper can dispatch the access. | Failure still prevents the denied access; generic load destination and update-form base assignment are skipped. (`src/cpus/memory_rw.c:248–268`; `src/cpus/cpu_ppc_instr_loadstore.c:88–100,174–184`.) |
+| Permitted accesses and BAT contents | Existing BAT selection, address calculation, and permitted result. | Preserve those results and guest-programmed BAT words. (`src/cpus/memory_ppc.c:48–75`.) |
+
+Exception diagnostics are distinct from the terminating TODO line: existing fault diagnostics are guarded by `!quiet_mode`. A regression should judge architectural state and continued execution, not require a new warning or a `(once)` message. (`src/cpus/memory_ppc.c:302–305`; `src/cpus/cpu_ppc.c:329–331`.)
+
+Legal neighbors to preserve are explicitly:
+
+- Reads and ordinary instruction fetches through PP `01`, `10`, `11`; stores through PP `10`. (`src/cpus/memory_ppc.c:67–75`; manual `13334`.)
+- A read-only BAT used by debugger `dump`. (`src/debugger/debugger_cmds.c:716–717`; `src/cpus/memory_ppc.c:71–73`.)
+- Real-address accesses with the relevant relocation disabled, and explicitly physical accesses. (`src/cpus/memory_ppc.c:258–260`; `src/cpus/memory_rw.c:245–246`.)
+- Entries invalid for the current privilege level and address mismatches: these must remain nonmatches, allowing subsequent translation processing. (`src/cpus/memory_ppc.c:55–63,79,101–119,279–284`; manual `13107,13171`.)
+- Extended BAT behavior with its existing capability and HID0 gates. (`src/cpus/memory_ppc.c:114–117`.)
+- `dcbt` and `dcbtst` no-op behavior: the decoder currently selects `instr(nop)`. (`src/cpus/cpu_ppc_instr.c:4786–4790`; manual `13495`.)
+
+Cache-state coverage should establish whether translation was actually exercised; correctness of invalidation across BAT/MSR changes was **not checked**. The bypasses exist in the inspected fast paths. (`src/cpus/cpu_ppc_instr_loadstore.c:217–240`; `src/cpus/cpu_dyntrans.c:656–680`.)
+
+**The records need a narrower claim about PPC data-side hardening.**
+
+`OUTSTANDING_BUGS.md:2615` says:
+
+> “the PPC data side is already fixed (#216).”
+
+As a general data-access claim, that is false at this commit: BAT denial still exits inside the translator. A corrected sentence is:
+
+> “#216 removed the `lwarx`/`stwcx.` callers’ exits after failed `memory_rw()` calls; a BAT-protection denial inside `ppc_translate_v2p()` still exits before those returns.”
+
+The narrower changelog statement—
+
+> “`lwarx`/`stwcx.` to a faulting address let the raised DSI proceed instead of `exit(1)`”
+
+—accurately describes those caller edits; it does not establish that BAT translation raises a DSI. (`CHANGELOG.md:20119`; `src/cpus/cpu_ppc_instr.c:2309–2314,2357–2362`; `src/cpus/memory_ppc.c:273–275`.)
+
+The comment “No match? Then cause an exception” is incomplete because a matching denied PTE also reaches that block. A clearer sentence would be:
+
+> “A missing page translation or denied page access reaches exception handling, unless `FLAG_NOEXCEPTIONS` requests a failure return.”
+
+(`src/cpus/memory_ppc.c:281–300`.)
+
+The BAT return-contract comment is accurate: `-1` means no hit; `0` means denied; `1` and `2` mean permitted read-only and read/write results. (`src/cpus/memory_ppc.c:35–36,67–79`.) Historical extended-BAT progress claims were not runtime-checked, and the brief’s HIGH adjudication was not independently checked.
+
+**DENOMINATOR:** Numbered context read at `db8b1a33`:
+
+- `src/cpus/memory_ppc.c:1–328`.
+- `src/cpus/cpu_ppc.c:70–190,225–411,1640–1830,1935–1960`.
+- `src/cpus/cpu_ppc_instr.c:2259–2390,2740–2935,3710–3780,4030–4190,4275–4430,4595–4730,4770–4805`.
+- `src/cpus/cpu_ppc_instr_loadstore.c:1–300`; `src/cpus/cpu_dyntrans.c:615–755`; `src/cpus/memory_rw.c:66–340`.
+- `src/include/cpu_ppc.h:40–175,210–285`; `src/include/memory.h:80–155`; `src/include/thirdparty/ppc_bat.h:70–117`; `src/include/thirdparty/ppc_spr.h:35–60`, plus matching BAT-definition lines within `119–183`.
+- `src/debugger/debugger_cmds.c:415–485,641–755,1390–1430`; `src/core/debugmsg.c:360–435`.
+- `src/machines/machine_macppc.c:170–213`; `machine_mvmeppc.c:161–207`; `machine_pmppc.c:76–87`; `machine_prep.c:151–190`; `machine_test.c:434–475`, all under `src/machines/`.
+- `OUTSTANDING_BUGS.md:2589–2633,2660–2675,2721–2755,21940–21966`; `CHANGELOG.md:7883–7914,19851–19905,20109–20133`.
+- Additional keyword-only searches covered callers, termination statements, model/machine registration, constants, relevant records, and permitted top-level regression extensions; these included `src/cpus/tmp_ppc_tail.c:38–42`. No named BAT regression matched the searched terms; indirect regression coverage was **not checked**.
+- On disk, `_scratchpad/ppc_pem32_rev2_2001.txt:11477–11488,11689–11811,12635–12648,12750–12756,13100–13111,13159–13171,13290–13348,13455–13530`, plus keyword matches in that manual. Other manual contents and a CPU-specific 603 manual were **not checked**.
+
+There was a scope deviation: a delegated Git wildcard search inadvertently returned excluded artifact snippets. They were not used. Known hits were within `regress/artifacts/ppcrldiclzero/killtable_20260910/mutate.py:25,41`, its `t0_apparatus_failure/orig_cpu_ppc_instr.c:48–5306`, `t1/orig_cpu_ppc_instr.c:48–5306`, `t2/orig_cpu_ppc_instr.c:48–5319`; `regress/artifacts/ppcrldiclzero/pass2_20260910/opus_threemach.sh:39`; and `regress/artifacts/ppcrlwimiwidth/killtable2_20260912/cpu_ppc_instr.HEAD.c:48–5319` and `mut_rlwimi_t2.py:7`—matching lines only, not full intervals. An earlier result was truncated, so the complete accidental-hit list is not established. Subsequent regression searches were anchored to permitted paths.
+
+No working-tree source, alternate source copies, or `tools/pipeline/ledger.json` was read. Nothing was written, built, or executed as a test; runtime reproduction, complete cache correctness, and an exhaustive audit of all PPC instruction/dyntrans termination sites were not checked.

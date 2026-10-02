@@ -1,0 +1,71 @@
+I'll verify the three findings against `GXEMUL-SEC/src/` at `db8b1a33` and check each stated premise before grading it. The verdict will come from the code paths, not from the brief's derivations.The working tree is `GXEMUL-SEC`. I'll read the cited PowerPC paths there and check the premises the brief treats as settled.VERDICT: 2 of 3 findings hold as stated -- H1 and H3 are real host exits; H2 is the recorded opcode-59 halt, filed at the wrong severity.
+
+Read at `db8b1a33` in `GXEMUL-SEC` (`db8b1a3385130c457626283d9a718bd7c5181f0d`). The cited line numbers match that tree. S1–S3 match the sources: `fatal()` prints and returns; `bad:` sets `cpu->running = 0` and does not call `exit()`; when nothing is still running and the end-of-run debugger was not requested, `emul_run` breaks and `main` returns 0.
+
+## Q1
+
+**H1 holds.** The premise that would kill it is “a mode-valid BAT match whose PP bits deny this access returns 0, and `ppc_translate_v2p` answers that 0 with `exit(1)`.” Both halves are in the file.
+
+`ppc_bat_block` returns on the first entry that is valid for the current mode (`BAT_Vu` if `MSR[PR]=1`, else `BAT_Vs`) and whose effective address matches. PP is `lower & 3`. Enumerating that pair:
+
+| PP | read / fetch | store |
+|----|--------------|-------|
+| 00 `BAT_PP_NONE` | 0 | 0 |
+| 01 `BAT_PP_RO_S` | 1 | 0 |
+| 10 `BAT_PP_RW` | 2 | 2 |
+| 11 `BAT_PP_RO` | 1 | 0 |
+
+No such entry in the scanned range returns -1. Instruction accesses scan IBAT0–3 only (`i = 0..3` from `SPR_IBAT0U`); data accesses scan DBAT0–3 only (`i = 4..7` → `0x218..0x21e`). High BATs use the same return rules, and only when `PPC_HIGH_BAT` and `HID0[HIGH_BAT_EN]` are both set.
+
+That is the two cases in the question: PP=00 for either access, and a store through a matching read-only entry (PP is `x1`, both 01 and 11). PEM table 7-11 is the same three-way split (00 none, `x1` read-only, 10 read/write). Table 7-12 and the prose at §7.5.4, not only Figure 7-9, say a hit that fails that check is a DSI (data, DSISR bit 4) or an ISI (fetch, SRR1 bit 4). A valid bit that is off is not a hit: the other mode is “not used,” and the code `continue`s. Figure versus prose does not matter here; they agree.
+
+`res == 0` is lines 273–275, `exit(1)`, with no test of `FLAG_NOEXCEPTIONS`. Line 299 is only reached when the BAT scan misses (`res == -1`) or this is not 32-bit. Every caller goes through that function: guest loads/stores (`memory_rw.c`), instruction fetch (`cpu_dyntrans.c`, `FLAG_INSTR` only), and the debugger. A dump is a read (`NO_EXCEPTIONS` still sets `FLAG_NOEXCEPTIONS` only), so it dies on PP=00 and survives a read-only BAT. A store to a read-only BAT dies even if the caller passed `NO_EXCEPTIONS`.
+
+User versus kernel: the PEM allows only supervisor code to write BATs. An ordinary OEA map (Vs=1, Vu=0, PP=10) does not take this path; a user access misses those BATs and uses the page walker, which already raises DSI/ISI. User code reaches the exit if a Vu=1 entry denies the access. This fork also lets user code write the BATs itself: `X(mtspr)` is `/* TODO: Check permission */` and stores the SPR unconditionally. So the “supervisor state” premise is the manual, not this CPU.
+
+**H2’s mechanism holds; the HIGH/new ruling does not.** The premise that would kill the mechanism is “XO 28–31 are decoded.” They are not. `xo = (iword >> 1) & 1023`, then `switch (xo & 31)`. The 5-bit domain is 0..31 (32 values). The arms are 18 `fdivs`, 20 `fsubs`, 21 `fadds`, 25 `fmuls`. The other 28 values, each for all 32 values of the upper 5 bits and both Rc values, hit an inner `switch (xo)` whose only arm is `goto bad`. PEM pages: `fmsubs` XO 28, `fmadds` XO 29; the `fnmsubs` / `fnmadds` diagrams put 30 and 31 in that same XO slot. `goto bad` runs before the Rc substitution, so the record forms stop too. With `translation_readahead == 0`, `bad:` clears `cpu->running`.
+
+The premise that would kill the ruling is “this halt is an unrecorded accident.” `regress/ppc_halt_probe.py` classes `fmadds` and `fmsubs` as `PEND` with `want = HALTED`, on purpose, and says to implement `fmadds` first. `fnmadd`/`fnmsub` (opcode 63) are already `FIXED` by #344. `fnmadds`/`fnmsubs` are the two defined opcode-59 forms missing from that probe; they fall into the same default arm.
+
+**H3 holds.** The premise that would kill it is “Rc is part of the opcode key, so the illegal forms never reach `X(llsc)`.” `xo = (iword >> 1) & 1023` drops the least-significant bit. That bit is PowerPC bit 31 (Rc), not PowerPC bit 0. `rc = iw & 1`.
+
+| word | key after the shift | handler | Rc check |
+|------|---------------------|---------|----------|
+| `lwarx` XO 20, Rc=1 | 20 | load | `exit(1)` |
+| `ldarx` XO 84, Rc=1 | 84 | load, len 8 | `exit(1)` |
+| `stwcx.` XO 150, Rc=0 | 150 | store | `exit(1)` |
+| `stdcx.` XO 214, Rc=0 | 214 | store, len 8 | `exit(1)` |
+
+The legal forms (load Rc=0, store Rc=1) pass those tests. The check runs before `memory_rw`, so a DSI cannot get there first. `lwarx` is UISA; the handler never tests `MSR[PR]`. One user-mode word of an invalid form ends the process. PEM §4.1.3.2.2: an invalid form (a reserved bit shown as 0 and coded as 1; the `lwarx` diagram marks Rc reserved) either takes the illegal-instruction program exception or has boundedly-undefined results.
+
+`ppc_exception()` exists and is what DSI, ISI, FPU-unavailable, decrementer, and `sc` use. Nothing calls it with vector 7. There is no program-exception constant. The comment above `FDOT` says `goto bad` does not raise a program exception.
+
+## Q2
+
+One disposition is wrong: **H2**.
+
+H1 is a guest-triggered `exit(1)` where §7.5.4 requires DSI/ISI, and the page-walker arm of the same function already does that. H3 is the same class of leftover `exit(1)` that #216 removed for the memory-fault paths in `X(llsc)`; the two Rc checks are still there, and they are not a `PEND` row.
+
+H2 is wrong on severity and, for `fmadds`/`fmsubs`, as a duplicate. The queue already records that halt and a gate asserts it. `fnmadds`/`fnmsubs` are new names on that same arm, not a new kind of defect. “Stops progress” is true of every `PEND` row in that probe; the queue does not grade those HIGH.
+
+## Q3
+
+H1: **(5) fault.** The DSI path is already in this function: `SPR_DAR`, `DSISR_PROTECT` (`0x08000000`, PEM bit 4), `DSISR_STORE`, `ppc_exception(PPC_EXCEPTION_DSI)`. ISI is delivered as vector 4; this helper does not set SRR1 bit 4, which is also true of the page path. `FLAG_NOEXCEPTIONS` has to be honored before the exception, as line 299 does for a page miss. Deleting only `exit(1)` is the wrong edit: `res == 0` then falls into `ppc_vtp32`, and a BAT hit must not become a page walk.
+
+H2: **(7) implement.** `fmadd`, `fmsub`, `fnmadd`, and `fnmsub` are already handlers, and `fadds`/`fmuls` are one-line aliases of the double forms. A single-precision arm of that shape, with `CHECK_FOR_FPU_EXCEPTION` first, is the correction. A program interrupt would be the wrong member: these are defined UISA instructions. The `PEND` rows have to move to `FIXED` in the same round, or the halt gate fails because the halt stopped.
+
+H3: **(5) is the member I would want, and it is not available on this CPU.** Program exceptions are not modeled. What is available is **(1)**: delete the two `exit(1)` checks and the function performs the load-and-reserve or the store-conditional. PEM §4.1.3.2.2 allows that as boundedly undefined.
+
+The list is missing that choice by name. “Boundedly undefined” is neither “the model already computes the one right value” nor “decline.” It is also missing this tree’s actual placeholder for an unserviced instruction: `bad:` stops the virtual CPU. That is what H2 does today. It is not `exit(1)`, and it is not a guest exception. H1 and H3 call `exit(1)`, which does not consult `debugger_enter_at_end_of_run`.
+
+## Q4
+
+Most likely first: **H2, then H1, then H3.**
+
+H2 is a defined instruction. The halt probe’s own note, and GCC’s long-standing PowerPC default of contracting `a*b+c` into `fmadds`, put it on ordinary hard-float code. I did not disassemble `netbsd401-macppc-GENERIC`. What this tree does record is that NetBSD/macppc keeps `MSR[FP]` clear until a process’s first floating-point instruction. Implemented opcode-59 forms take FPU-unavailable there (`CHECK_FOR_FPU_EXCEPTION` → vector `0x800`). `fmadds` is rejected at decode, so that ordinary entry stops the CPU instead. The probe steps with `msr=0x2000` and therefore never measures that path.
+
+H1 is off the success path of the usual supervisor identity BAT (Vs=1, Vu=0, PP=10). It is met when a valid entry denies the reference. A kernel can build that with two `mtspr`s and one access; ordinary macppc maps do not.
+
+H3 is off every well-formed `lwarx`/`stwcx.` sequence. Compilers emit Rc=0 and Rc=1 respectively, and those forms do not exit.
+
+While checking H1: the same function still `exit(1)`s for a 601 and for 64-bit translation, earlier than the BAT arm and also before `FLAG_NOEXCEPTIONS`. Those are separate from the BAT finding. `dcbt`/`dcbtst` are decoded as `nop`, so Figure 7-9’s “those two do not fault” branch never reaches `ppc_bat`.

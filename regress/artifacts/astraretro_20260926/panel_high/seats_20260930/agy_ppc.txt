@@ -1,0 +1,82 @@
+VERDICT: 2 of 3 findings hold as stated -- H2's disposition is wrong because it duplicates an intentional, recorded coverage deferral asserted by gate 15 and is misgraded as HIGH.
+
+---
+
+### Q1. The Premise Audit
+
+#### **H1 -- BAT Protection Violation Exits Emulator**
+* **Reachable from guest code:** **Partially as described (supervisor-reachable, but not user-reachable under standard OS conventions).**
+  * `ppc_bat_block()` in [`src/cpus/memory_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L43-L80) checks `if (user && !(upper & BAT_Vu)) continue;`. In all standard PowerPC operating systems (NetBSD/macppc, Linux), BATs are programmed strictly with `Vs = 1, Vu = 0` (kernel text/data/IO mappings; user processes use segment registers and page tables). An unprivileged user store to a kernel BAT address skips the BAT entirely (`Vu == 0`), falling through to [`ppc_vtp32()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L201-L244) which cleanly delivers a guest DSI exception.
+  * However, the path **is** reachable if the guest supervisor/kernel writes a read-only BAT mapping (`Vs = 1, BAT_PP_RO`) and then performs a store to it (e.g., text patching, bad pointer, software breakpoint), or configures `BAT_PP_NONE`. In [`ppc_translate_v2p()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L245-L300), `res == 0` triggers `fatal("[ TODO: BAT exception ]\n"); exit(1);` at lines 274–275.
+  * It is also reachable via debugger inspection (`FLAG_NOEXCEPTIONS`), because lines 274–275 sit before the line 299 `flags & FLAG_NOEXCEPTIONS` guard.
+* **The ONE premise that would make the finding false if it failed:**
+  * *Premise:* That `ppc_bat()` returns 0 on a protection-denied hit instead of falling through or generating an architectural DSI/ISI exception, and that `ppc_translate_v2p()` aborts the host process before checking `FLAG_NOEXCEPTIONS`.
+* **Could it be checked:**
+  * **Yes.** Confirmed in [`src/cpus/memory_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L67-L76) (`ppc_bat_block()` returns 0 on `BAT_PP_NONE` or `(flags & FLAG_WRITEFLAG)` with `BAT_PP_RO`) and lines 270–276 (`res == 0` explicitly invokes `exit(1)`).
+
+---
+
+#### **H2 -- Opcode 59 Missing Fused Multiply-Add Family**
+* **Reachable from guest code:** **Yes**, any guest instruction with primary opcode 59 and `(xo & 31)` in `{28, 29, 30, 31}` (`fmsubs`, `fmadds`, `fnmsubs`, `fnmadds`) falls through the 5-bit switch to `default: goto bad;` in [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L5195-L5220), invoking `bad:` in [`src/cpus/cpu_dyntrans.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1983-L2024), setting `cpu->running = 0`, and halting the CPU.
+* **The ONE premise that would make the finding false if it failed:**
+  * *Premise:* That the halt on opcode 59 fused multiply-adds represents an unrecorded defect of HIGH severity rather than a documented, deliberate coverage deferral asserted by the test harness.
+* **Could it be checked:**
+  * **Yes.** Checked in [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L1705-L1716), [`regress/gate_ppc_halt.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_ppc_halt.sh#L1-L40), and [`regress/ppc_halt_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_halt_probe.py#L140-L160). `OUTSTANDING_BUGS.md` documents `fmadds` and `fmsubs` as intentionally deferred out of round #326 for round size, and Gate 15 explicitly asserts that these encodings halt with `want = "HALTED"`.
+
+---
+
+#### **H3 -- `lwarx`/`stwcx.` Wrong Record Bit Exits Emulator**
+* **Reachable from guest code:** **Yes, completely reachable from unprivileged user code.**
+  * In [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4614), the decoder extracts `xo = (iword >> 1) & 1023`, ignoring bit 0 (`Rc`). Both `PPC_31_LWARX` (xo=20) and `PPC_31_STWCX_DOT` (xo=150) map directly to [`X(llsc)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2276-L2335) regardless of `Rc`.
+  * In [`X(llsc)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2305-L2334), if `lwarx` has `rc == 1` or `stwcx` has `rc == 0` (both are invalid instruction forms per PowerPC Book I), the emulator executes `fatal()` followed immediately by `exit(1)`. An unprivileged guest user process executing a single crafted instruction word terminates the entire host emulator.
+* **The ONE premise that would make the finding false if it failed:**
+  * *Premise:* That the decoder or execution handler routes invalid instruction forms (`lwarx` with Rc=1 or `stwcx` with Rc=0) to an architectural program exception, a decode-time `goto bad;`, or bounded execution, rather than calling host `exit(1)`.
+* **Could it be checked:**
+  * **Yes.** Confirmed in [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2305-L2334): lines 2307 and 2333 explicitly call `exit(1)`.
+
+---
+
+### Q2. Which of These Three Dispositions Is Wrong?
+
+**Count: 1 disposition is wrong (H2); 2 findings hold as stated (H1 and H3).**
+
+**H2's disposition is wrong on two grounds: duplication/classification and severity:**
+1. **Duplicate of recorded work:** Carving out `fnmadds` and `fnmsubs` as "new" while conceding `fmadds` and `fmsubs` are already recorded creates a false distinction. The entire family of opcode 59 fused multiply-adds was left out of round #326 for round size alone ([`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L1712)). The omission of `fnmadds`/`fnmsubs` from the probe list in [`regress/ppc_halt_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_halt_probe.py) was simply an enumeration gap in the probe, not an unrecorded defect.
+2. **Misgraded severity:** Unimplemented instruction words hitting `goto bad;` and setting `cpu->running = 0` is the emulator's intended, documented architecture for instruction coverage gaps, asserted by regression gate 15 (`want = "HALTED"`). Treating deliberate instruction coverage gaps as **HIGH** under "stops it making progress" conflates intentional halts with unhandled host aborts (`exit(1)`). By project policy, instruction coverage gaps are **MED** (or tracked debt).
+
+---
+
+### Q3. What Should a Correction Round Do -- and Is That Option Available Here?
+
+Using the project's standard disposition taxonomy:
+
+* **H1 (BAT Protection Violation):**
+  * **Chosen disposition:** **(5) fault -- deliver the architecture's exception** (and for debugger/probe accesses with `FLAG_NOEXCEPTIONS`, return 0).
+  * **Machinery availability:** **YES.** The exception dispatch machinery is already fully implemented at lines 304–325 of [`src/cpus/memory_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L304-L325). For non-603 CPUs, it sets `DAR = vaddr`, `DSISR = DSISR_PROTECT` (plus `DSISR_STORE` on write), and calls [`ppc_exception(cpu, instr ? PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L318). Lines 274–275 can be replaced by branching directly to that existing logic.
+* **H2 (Single-Precision Fused Multiply-Add):**
+  * **Chosen disposition:** **(7) implement the missing behaviour.**
+  * **Machinery availability:** **YES.** The double-precision forms (`fmadd`, `fmsub`, `fnmadd`, `fnmsub`) are already implemented under opcode 63 in [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L5250-L5260). Single-precision arithmetic in this CPU model aliases double-precision operations or uses `frsp`. Decoding them under `PPC_HI6_59` requires only mirroring the opcode 63 cases and setting up `fpr[rt]`, `fpr[ra]`, `fpr[rb]`, and `fpr[frc]`.
+* **H3 (`lwarx`/`stwcx.` Invalid Rc Form):**
+  * **Chosen disposition:** **(5) fault -- deliver the architecture's exception** (Program Interrupt: Illegal/Invalid instruction, vector 0x0700), or alternatively **(1) delete the terminating call** (letting invalid forms execute as boundedly undefined).
+  * **Machinery availability:** **PARTIALLY.** [`ppc_exception()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L318) can vector to `0x700`, but [`src/include/cpu_ppc.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h#L252-L257) does not define `PPC_EXCEPTION_PROGRAM`, and SRR1 program-interrupt syndrome bits are unmodelled. If (5) cannot be cleanly used without building out the program interrupt model, **(1) delete the terminating call** (or moving the check to decode time to route to `goto bad;`) is immediately available.
+* **Disposition not named in the 7-member list:**
+  * **Halt / stop the emulated CPU (decode-time rejection / `goto bad;`)**, and **document / gate-assert as a deliberate deferral (PEND)**.
+
+---
+
+### Q4. Ranking by What an Operating System in Ordinary Operation Would Actually Meet
+
+1. **H2 (Missing Fused Multiply-Add -- `fmadds`/`fmsubs`):**
+   * *Basis:* In ordinary system operation, userland applications compiled for PowerPC (with GCC or Clang) routinely emit `fmadds` for floating-point expressions matching `(a * b) + c` (the compiler default on PowerPC). While the kernel itself runs with `MSR[FP] = 0`, guest userland processes performing floating-point math encounter this opcode rapidly.
+2. **H1 (BAT Protection Denial Exits Host):**
+   * *Basis:* Operating systems ordinarily configure BATs as read/write (`BAT_PP_RW`) for kernel space and do not write to read-only BAT blocks in steady state. However, kernel write-faults (e.g., text patching, bad pointer dereferences into kernel text) or debugger inspection/dumps (`FLAG_NOEXCEPTIONS`) on write-protected BAT blocks will trigger this exit.
+3. **H3 (`lwarx`/`stwcx.` with Wrong Rc Bit):**
+   * *Basis:* Compilers, assemblers, and runtime libraries *never* emit `lwarx` with Rc=1 or `stwcx` with Rc=0 in ordinary operation. They are invalid instruction forms per the PowerPC ISA specification. An OS will only encounter this under deliberate invalid-instruction fuzzing, synthetic torture tests, or wild execution following code corruption.
+
+---
+
+### Standing License Observations
+
+1. **User Mode Isolation on BATs:** In [`src/cpus/memory_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L56), `ppc_bat_block()` checks `if (user && !(upper & BAT_Vu)) continue;`. Because BSD and Linux kernels never set `Vu = 1`, unprivileged user code cannot trigger H1 by accessing kernel BAT addresses; it automatically falls through to page table translation.
+2. **Asymmetry Left by Round #216:** Round #216 specifically touched [`X(llsc)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2311-L2314) to eliminate host exits when `memory_rw()` faulted on a DSI, but left the adjacent `fatal() + exit(1)` calls on lines 2307 and 2333 intact.
+3. **Missing `PPC_EXCEPTION_PROGRAM`:** [`src/include/cpu_ppc.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h#L252-L257) defines vectors for DSI, ISI, EI, FPU, DEC, and SC, but omits vector 0x0700 (`PPC_EXCEPTION_PROGRAM`), which is the architectural destination for both invalid instruction forms (H3) and unsupported G4 instructions.

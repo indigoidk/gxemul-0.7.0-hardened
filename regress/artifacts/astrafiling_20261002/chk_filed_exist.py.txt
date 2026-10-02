@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""chk_filed_exist.py -- a completeness check of #554's filing that the table's own derivation did not make:
+every id a disposition names as ALREADY FILED (`FILED <id>`, `CONFIRMED-FILED <id>`, `FILED-BY-PROSE ... <id>`) must
+EXIST somewhere -- a ledger row at HEAD, a backticked id in the queue file at HEAD, or a row #554 itself files.  An id
+that exists nowhere means the disposition assigned a NEW id to an entry and the table treated it as filed: a row is
+missing.  Reads both dispositions files; prints every such id with its line."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+ARTS = os.path.join(SEC, "regress", "artifacts")
+HERE = os.path.dirname(os.path.abspath(__file__))
+STAGE = os.path.join(HERE, "..", "records", "stage554")
+git = lambda *a: subprocess.run(["git", "-C", SEC] + list(a), capture_output=True).stdout.decode("utf-8")
+head_ids = set(x["id"] for x in json.loads(git("show", "HEAD:tools/pipeline/ledger.json"))["rows"])
+head_ob = git("show", "HEAD:OUTSTANDING_BUGS.md")
+ob_ids = set(re.findall(r"`([a-z][a-zA-Z0-9_]{3,})`", head_ob))
+st_ob = io.open(os.path.join(STAGE, "OUTSTANDING_BUGS.md"), encoding="utf-8", newline="").read()
+sec = st_ob[len(head_ob) - 4000:]
+f554 = set(re.findall(r"(?m)^#### `([a-z][a-z0-9_]+)`", sec)) | set(re.findall(r"(?m)^\* `([a-z][a-z0-9_]+)`", sec))
+STOP = {"under", "with", "this", "that", "from", "into", "class", "prose", "queue", "existing", "half", "site", "sites", "entry",
+        "high", "medium", "debt", "work", "rows", "none", "already", "exact", "their", "which", "where", "stays", "here", "level",
+        "file", "the", "and", "for", "row", "its", "both", "also", "each", "when", "takes", "round", "assign", "filed"}
+miss = {}
+tot = 0
+for name in ("astraretro_20260926/DISPOSITIONS.md", "astraretro_harness_20260926/HARNESS_DISPOSITIONS.md"):
+    for n, l in enumerate(io.open(os.path.join(ARTS, name), encoding="utf-8").read().split("\n"), 1):
+        for m in re.finditer(r"(?:CONFIRMED-)?FILED(?:-BY-PROSE)?[*:\s]*(?:(?:HIGH|MED|LOW)\s+)?(?:under\s+|as\s+)?`?([a-z][a-zA-Z0-9_]{3,})`?", l):
+            i = m.group(1)
+            # an English word after FILED is not an id; "the draft's FILED-BY-PROSE `x`" reports a disposition that was
+            # CHANGED AWAY from filing (the id was never assigned)
+            if i in STOP or i in ("against", "routing", "section") or "draft's " in l[max(0, m.start() - 12):m.start()]:
+                continue
+            tot += 1
+            if i in head_ids or i in ob_ids or i in f554:
+                continue
+            miss.setdefault(i, []).append("%s:%d" % (name.split("/")[1], n))
+print("FILED-id mentions checked: %d; ids that exist NOWHERE (ledger at HEAD, queue file at HEAD, #554's section): %d" % (tot, len(miss)))
+for i, w in sorted(miss.items()):
+    print("  %-26s %s" % (i, ", ".join(w[:4])))

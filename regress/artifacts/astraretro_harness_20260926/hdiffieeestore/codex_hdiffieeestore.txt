@@ -1,0 +1,40 @@
+ASTRARETRO_HDIFFIEEESTORE_ALIVE
+VERDICT: 7 findings (3 CANNOT-FAIL, 0 SELECTS-NOTHING, 0 STATUS-LAUNDERED, 0 ENCODING, 2 RECORD, 2 OTHER); 17 items checked clean
+
+Reviewed HEAD `db8b1a33` and all eight listed changes using Git blobs. Findings below are established by source tracing and exact arithmetic; no files were written or C binaries built or run. No matching harness filings were found in HEAD `OUTSTANDING_BUGS.md`.
+
+F1 | [regress/diff_ieee_store.c:550](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:550) | #292 | CANNOT-FAIL | The row “sliver below 2^128 -> Inf” actually receives `(2^128 − 2^103) + 2^103 = 2^128`. Both pre-#292 truncation and corrected nearest rounding produce its expected `0x7f800000`; even pre-#287 upstream agrees. The intended below-boundary input never runs. | Smallest check: assert the input is below `0x1p128`. Changing the addend to `0x1p102` gives a discriminating input: old `0x7f7fffff`, corrected `0x7f800000`. | confidence high
+
+F2 | [regress/diff_ieee_store.c:686](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:686) | #299 | CANNOT-FAIL | “inf +Inf+1.0 RN” passes with the `isfinite(s)` guard removed, contrary to the preceding claim that these rows fail on the unguarded helper. The corrected helper returns +Inf; the unguarded helper returns DBL_MAX. Subsequent S-format nearest rounding maps **both** to expected `0x7f800000`. The adjacent RZ row does distinguish them. | Smallest check: require the helper’s intermediate result itself to be positive infinity before narrowing. | confidence high
+
+F3 | [regress/diff_ieee_store.c:890](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:890) | #300 | CANNOT-FAIL | All three “quantum band” rows pass after restoring the inadequate `2^-1018` guard, despite being described as the “only defence” against that hole. Their exact residuals are respectively `2^-1104`, `2^-1076`, and `2^-1104`; each rounds to zero. Both guard versions therefore return the expected `0x07b0000000000001`, `0x2190000000000001`, and `0x0170000000000002`. | Smallest check: multiply two operands with bits `0x20b0000000400000` under RP. The current accepted-nearest band returns `0x0170000000800000`; the old guard observes residual `2^-1060` and returns `0x0170000000800001`. `OUTSTANDING_BUGS.md:1971` acknowledges #300’s accepted-nearest arithmetic limitation, but does not file this ineffective guard coverage. | confidence high
+
+F4 | [regress/diff_ieee_store.c:303](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:303) | #331 | OTHER | The new lower bound incorrectly removes negative normal doubles below one S quantum from completeness checking. For `-0x1p-151`, upstream produces `0x00000000`, while HEAD’s legacy store produces `0x80000000`; nevertheless, `must_differ()` returns false. A legacy-only regression that loses the sign throughout this band leaves `MISSED == 0`. The RN/RZ oracles do not test legacy mode. | Smallest check: require `must_differ(-0x1p-151) == 1` and pin its legacy result to `0x80000000`. | confidence high
+
+F5 | [regress/diff_ieee_store.c:479](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:479) | #331 | OTHER | The D sweep rewards any difference from upstream without checking its value or permitted class. A D-subnormal encoder that forces fraction bit zero to one incorrectly encodes input bits `2` as `3`, yet preserves every sampled difference and both absolute endpoints, whose mantissas are already odd. The independent D identity check excludes subnormals at line 467. The gate’s 9,000-difference floor therefore also passes. Likewise, changing D NaN stores to infinity merely increases `dD`. | Smallest check: require D input bits `2` to encode as exactly `2`; extend finite-D identity checking to subnormals and reject differences outside the allowed D class. | confidence high
+
+F6 | [regress/diff_ieee_store.c:25](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:25) | #331 | RECORD | The header still describes a change-set limited to negative S underflow and an empty D change-set. At HEAD, positive `2^-149` changes S encoding from `0` to `1`, and positive `2^-1074` changes D encoding from `0` to `1`. The “change-set must be EMPTY” comment at line 476 and “negative underflow” output label at line 490 retain the same obsolete description. | Smallest check: compare those two inputs against the stated predicates and HEAD’s `dD > 0` requirement. | confidence high
+
+F7 | [regress/diff_ieee_store.c:838](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_ieee_store.c:838) | #300 | RECORD | The comment identifies the current operand guard as `2^-1018`. HEAD defines `IEEE_DIR_OPTINY` as `2^-969` in `src/core/float_emul.c:824`; that is the threshold used by these helpers. The comment understates the accepted-nearest band. | Smallest check: compare the stated threshold with `IEEE_DIR_OPTINY`. | confidence high
+
+Checked clean, with locations in `regress/diff_ieee_store.c`:
+
+- **:99** — `store_old()` matches the import’s S/D implementation, including its sign-erasing underflow behavior.
+- **:177** — The threshold scan uses fraction-bearing `1.5 × 2^e`; its upstream threshold probes measure the stated boundaries.
+- **:230** — RN/RZ host oracles are independent and retain subnormal results.
+- **:268** — Overflow completeness correctly examines the leading 23 fraction bits.
+- **:324** — Absolute overflow, S gradual-underflow, and D subnormal endpoint expectations distinguish their original defects.
+- **:380** — The structured overflow sweep checks both signs and both unexpected and missing differences.
+- **:508** — S even/odd midpoint and fraction-carry expectations are correct.
+- **:533** — S subnormal boundary, half-quantum, directed-rounding, and signed-zero vectors are correct.
+- **:585** — W nearest, directed, legacy, and lower-bound invalid-result vectors have independent fixed expectations.
+- **:719** — The fmac witness checks corrected `0x3f800001` and separately requires the historical wrong result `0x3f800002`.
+- **:790** — Ordinary D division, negative-denominator, multiplication, cancellation, and square-root vectors have correct expectations.
+- **:943** — L→D directions, midpoint parities, carry, and extrema are correctly pinned.
+- **:1019** — L→S above- and below-midpoint double-rounding witnesses have correct expectations.
+- **:1093** — The runtime FTZ/DAZ and rounding-mode canary contributes to failure.
+- **:1103** — Exhaustive S and sampled D decoding compare both signs against independent exact oracles.
+- **:1172** — The D collision witness distinguishes pre-#303 behavior; subsequent masking, extrema, zero, infinity, and NaN controls are substantive.
+- **:1282** — Failure aggregates reach the final verdict. `gate_offline.sh:313` requires `DIFF_PASS`, so unconditional process exit zero does not hide failures in that gate.
+
+DENOMINATOR: read 1 of 1 files in full

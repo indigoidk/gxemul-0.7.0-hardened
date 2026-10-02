@@ -1,0 +1,43 @@
+ASTRARETRO_HSH4PCICPROBE_ALIVE
+VERDICT: 7 findings (0 CANNOT-FAIL, 1 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 2 RECORD, 3 OTHER); 18 items checked clean
+
+Reviewed committed HEAD `db8b1a33`. Findings are based on source tracing and in-memory predicate checks; no builds, emulator runs, or file writes.
+
+F1 | regress/sh4_pcic_probe.py:637 | 3536d869 | OTHER | **P17 discards its diagnostic-count check.** Correct readbacks with two warnings per arm produce `bad17 == []` and eight entries in `noisy`, yet P17 passes. Removing a guarded BADVAL diagnostic’s latch therefore remains undetected: other rows do not repeat that fault. Successful rows also hide the calculated `noisy` output. | Require `bad17 == [] and noisy == []`; synthetic results with correct values and diagnostic count 2 must fail. The current predicate was checked in memory and returned True. | confidence high
+
+F2 | regress/sh4_pcic_probe.py:753 | 3536d869 | OTHER | **P19 misses the BADVAL/NOCPU latch merge.** If the unsupported-CPU complaint shares BADVAL’s latch, its preceding PCICONF0 write suppresses the read complaint. P19 still reads zero and passes; P10 starts fresh, while P20 tests UNIMPL/BADVAL. Already filed as `pcicmergeA` in `OUTSTANDING_BUGS.md:6989`. | Require both named complaints and exactly two latched suffixes in P19’s existing transcript. | confidence high
+
+F3 | regress/sh4_pcic_probe.py:324 | 3f9ff561 | STATUS-LAUNDERED | **An abnormal child exit after the final dump passes.** `alive=True` is retained while shutdown output is drained; `waitpid` status is discarded. A subsequent nonzero exit, signal, or shutdown timeout followed by the helper’s SIGKILL does not change the result. Already filed as `ptywaitstatus` in `OUTSTANDING_BUGS.md:21935`. | A session returning its expected final dump and then exiting nonzero must fail; retain and score the wait status. | confidence high
+
+F4 | regress/sh4_pcic_probe.py:837 | 3f9ff561 | SELECTS-NOTHING | **P1d reports successful suppression without a completed census.** A startup-only transcript selects no unimplemented-write diagnostics, so `p1_writes == []` passes. The pre-fix process dying on the first PCICONF0 write also produces this empty selection. Other rows reject the run, but P1d itself reports false coverage. | Require successful census completion and the expected preceding read reports alongside the empty write list. The startup-only predicate was checked in memory and returned True. | confidence high
+
+F5 | regress/sh4_pcic_probe.py:329 | 3f9ff561 | OTHER | **Every session leaks its PTY master descriptor.** Neither return path closes the descriptor allocated at line 225. A full run opens 310 sessions; with a 256-descriptor soft limit, a healthy run exhausts descriptors during P12. | Verify descriptor count returns to baseline after each session; close the master descriptor on both return paths. | confidence high
+
+F6 | regress/sh4_pcic_probe.py:23 | 3536d869 | RECORD | **P3 is no longer the sole rejected-write corruption detector.** The claim is repeated at lines 530–531. P16 and P17 also exercise PCICONF5: without its restore, all three observe `0x12345678` instead of `0xac000000`. | Trace `offence(0x014, 1)` and `offence(0x014, 2)` through their existing readback predicates. | confidence high
+
+F7 | regress/sh4_pcic_probe.py:171 | 3f9ff561 | RECORD | **The claim that every listed halfword was executed is false for NOP.** Repeated at lines 965–966. `0x0009` is planted only as `write_arm()`’s second instruction, but that session steps exactly once. P11 disassembles NOP without executing it. | Compare the two planted instructions at line 374 with the step count at line 375; qualify the execution claim. | confidence high
+
+Clean checks in `regress/sh4_pcic_probe.py`, with HEAD line numbers:
+
+- **105:** The 21 labelled offsets, 116-offset complement, and nine guarded offsets match the device switch.
+- **142:** All eight accepted restore values match the guards; `REJECT` differs from each.
+- **339:** Dump parsing matches the debugger’s byte layout, excludes `put` echoes, and returns missing data when unmatched.
+- **406:** Missing binary/image paths fail explicitly; P0 additionally checks session startup.
+- **426:** P7a–P7c provide nonzero RAM, device-ID, and device-class controls.
+- **518:** P2b distinguishes default zeroing from returning the primed alias’s low byte, `0x78`.
+- **539:** P3/P3b expose missing guarded/default restores through guest readback.
+- **624:** P16–P18 detect first- and second-offence restoration failures; missing sweep entries fail.
+- **672:** P6 checks accepted-value persistence; P6b rejects unwanted device diagnostics.
+- **693:** P4/P5 exercise repeated and distinct UNIMPL offsets within one process.
+- **724:** P10 requires survival, zero data, and the named unsupported-CPU diagnostic.
+- **751:** P19’s value assertion detects removal of both PCICONF0 protections.
+- **780:** P20 distinguishes UNIMPL and BADVAL complaints sharing one word slot.
+- **794:** Census branching and 688-step accounting agree with the committed decoder; the checked r1 marker follows all accesses.
+- **824:** Exact diagnostic-list comparisons reject missing and duplicate offset reports.
+- **942:** P12 requires all 274 measurements; missing data and `--fast` fail its affected rows.
+- **969:** Missing disassembly observations fail P11; listed instruction fields agree with the committed decoder.
+- **989:** The expanded count is 38; failed rows control both the final FAIL token and nonzero exit.
+
+Manual-based encoding verification remains unperformed: HEAD contains no tracked `_scratchpad` manual blobs, and working-tree content was excluded.
+
+DENOMINATOR: read 1 of 1 files in full

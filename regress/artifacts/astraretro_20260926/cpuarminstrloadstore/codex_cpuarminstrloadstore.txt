@@ -1,0 +1,37 @@
+ASTRARETRO_CPUARMINSTRLOADSTORE_ALIVE
+VERDICT: 7 findings (6 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 12 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Findings are from static inspection; no builds or regression runs were performed.
+
+F1 | [src/cpus/cpu_arm_instr_loadstore.c:124](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:124) | #244, relied on by #372 | CODE | live at HEAD: yes | **A faulting word load corrupts registers after exception entry.** On little-endian hosts, `data` aliases Rd. An MMU translation failure raises Data Abort, then `memory_rw.c:267` zeroes that buffer. Ordinary Rd loses its preserved value; Rd=LR loses the abort return address; Rd=PC loses the abort vector, and the wrapper at :588–590 redirects execution to zero. The manual requires destination preservation and protects exception PC/LR ([ddi0100i.txt:2298](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:2298), :2316). No matching outstanding filing found. | Smallest check: trace the alias through `memory_arm.c:273`, `memory_rw.c:267`, and the PC wrapper; no execution needed. | confidence high
+
+F2 | [src/cpus/cpu_arm_instr_loadstore.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:259) | upstream, relied on by #362; sibling left by #389 | CODE | live at HEAD: yes | **Ordinary word loads retain the signed-shift defect fixed for LDRD.** A loaded word whose most-significant byte is ≥128 evaluates a promoted signed `int << 24`, invoking C undefined behavior. Both byte orders and both paths remain affected: :259–260, :497, :502. #389’s adjacent doubleword assembly casts before shifting. Already filed as **OB-24**, `OUTSTANDING_BUGS.md:2916`. | Smallest check: inspect operand types at those four expressions against the unsigned casts at :280–289. | confidence high
+
+F3 | [src/cpus/cpu_arm_instr.c:4760](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4760) | upstream, sibling relied on by #362 | CODE | live at HEAD: yes | **The same-page PC-relative LDR shortcut bypasses the rotation fix.** With A=U=0, a little-endian word load at aligned-base+1 from bytes `11 22 33 44 55` returns `0x55443322` through this shortcut; the required rotated value is `0x11443322`. The decoder replaces the template handler with a constant assembled from consecutive unaligned bytes. The manual requires rotation ([ddi0100i.txt:8248](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:8248)). No matching outstanding filing found. | Smallest check: compare decoder :4739–4773 with the template’s aligned assembly and rotation at :490–505. | confidence high
+
+F4 | [src/cpus/cpu_arm_instr_loadstore.c:229](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:229) | upstream, relied on by #357/#362 | CODE | live at HEAD: yes | **Alignment checking is ignored before truncating the address.** With CP15 A=1, an unaligned word access still transfers data—and can perform writeback—instead of taking Data Abort. Both template paths omit the check; `cpu_arm.c:129` even enables A initially. Rotation is therefore not unconditionally correct for the advertised state. The manual requires the fault ([ddi0100i.txt:3042](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:3042)). Already recorded at `OUTSTANDING_BUGS.md:4139`, without an identifier. | Smallest check: trace `ARM_CONTROL_ALIGN` reads and verify neither access path tests it before masking. | confidence high
+
+F5 | [src/cpus/cpu_arm_instr_loadstore.c:229](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:229) | upstream, relied on by #389 | CODE | live at HEAD: yes | **The doubleword mask discards a valid ARMv6 address bit.** With U=1, A=0, LDRD/STRD at an address ending in `...004` must access words at `...004/...008`; `datalen=8` forces accesses to `...000/...004`. The absence of an `ARM_CONTROL_U` macro does not prevent this state: the CP15 setter copies the entire guest control value. The manual permits this alignment ([ddi0100i.txt:8507](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:8507), :14533). Already filed as **task #74**, `OUTSTANDING_BUGS.md:5142`. | Smallest check: compare the unconditional `~7` mask with the manual’s U-dependent predicate. | confidence high
+
+F6 | [src/cpus/cpu_arm_instr_loadstore.c:278](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:278) | upstream, relied on by #389/#390 | CODE | live at HEAD: yes | **Odd-Rd doubleword instructions execute instead of raising Undefined Instruction.** A condition-passing LDRD/STRD with odd Rd reaches the register-pair transfer; the mode-3 decoder has no parity rejection. #390 bounds the Rd=15 scratch pair but still permits the transfer. Odd Rd is explicitly UNDEFINED ([ddi0100i.txt:8478](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:8478), :14503). Already filed as **task #76**, `OUTSTANDING_BUGS.md:5142`. | Smallest check: inspect the complete mode-3 dispatch at `cpu_arm_instr.c:4345–4380` for an odd-register exception route. | confidence high
+
+F7 | [src/cpus/cpu_arm_instr_loadstore.c:209](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:209) | #362 | RECORD | live at HEAD: yes | **The unconditional-rotation “dominance” claim overstates what was established.** For ARMv6 U=1, A=0, little-endian bytes `11 22 33 11 22 33 11` loaded at base+3 require `0x11332211`. The old mask-only result happens to be correct; HEAD’s rotation produces `0x33221111`. Thus “never worse … in any combination,” also at `CHANGELOG.md:30920`, is false per input. The manual distinguishes U=0 rotation from U=1 unaligned access ([ddi0100i.txt:8248](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:8248)). The outstanding record repeats the argument rather than correcting it. | Smallest check: compare the aligned word, four bytes beginning at +3, and ROR24 arithmetically. | confidence med
+
+Checked clean below; all line numbers refer to committed `src/cpus/cpu_arm_instr_loadstore.c`:
+
+- :85 — General-entry counting precedes failure returns; its initialized `uint64_t` counter has defined wraparound.
+- :193 — General-path writeback captures the unmasked address; both pre/post assignments use it correctly.
+- :438 — Fast-path writeback independently preserves the unmasked address, including unsigned negative-offset arithmetic.
+- :446 — Page selection and retained access masks keep the complete transfer inside the selected page.
+- :264, :503 — Rotation itself uses unsigned registers and guards zero, avoiding a shift by 32.
+- :123 — Stores receive independent buffers, preventing source-register corruption during serialization.
+- :312 — Byte, halfword, and word store branches initialize every transferred byte in guest order.
+- :278, :284 — Valid aligned LDRD pairs assemble two independent words with unsigned shifts and correct register order.
+- :344 — Valid aligned STRD pairs emit all eight bytes with correct word order in both endian modes.
+- :391 — Both doubleword variants select general handling even when the page is warm.
+- :620 — PC-relative stores and LDRD use instruction+8 for the base.
+- :621 — Stored PC uses separate instruction+12 data, agrees with STM, and the redirected pair fits `tmp_pc_data[2]`.
+
+The committed `arm_writeback_probe.py`, `arm_endian_probe.py`, and gate assertions support their stated writeback, rotation, byte-order, and PC-role coverage. Their acknowledged doubleword limitations were not counted as new TEST-GAP findings.
+
+DENOMINATOR: read 12 of 12 hunks of the net diff

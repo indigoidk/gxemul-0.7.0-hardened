@@ -1,0 +1,116 @@
+VERDICT: Require transcript-bound provenance for every Agent-seat credit.
+
+I read `agent_models.py`, the precommit section list, surveyed `tools/pipeline/*.py` and read the credit-related consumers, examined the matching ledger records and preserved artifacts, and inspected their underlying subagent JSONL transcripts. I also ran the scratch checker against an explicit session. **No files changed.** The gate and receipt below are recommendations, not existing functionality.
+
+1. **Where the check belongs**
+
+Add a tracked `tools/pipeline/check_agent_credit.py`, wired as an always-run precommit section alongside G/H, **before the “nothing staged or modified” exit**. Run the same validation when harvesting an Agent answer into the ledger.
+
+The existing checks leave this gap:
+
+- G’s `check_seats_read.py` checks citations against filenames and an 800-byte threshold. Its filename map contains neither Agent-seat family. [Source](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_seats_read.py:47)
+- H’s `check_stage_panels.py` counts entries accepted by `stage_tokens.is_answer()`. That predicate examines tokens in `note`; it does not establish who produced the answer. [Sources](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_stage_panels.py:165), [classification](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/stage_tokens.py:65)
+- O detects repeated summaries; V exercises verdict extraction; X checks cited-path existence. None authenticates Agent authorship.
+
+The hook must hard-fail on invalid credit, missing required evidence, checker absence, or checker failure. **Simply wiring `agent_models.py` into `if python …` would fail:** I observed it return exit code **0** while reporting fallbacks. It also classifies whole agents rather than individual credited answers. [Scratch checker](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/agent_models.py:65), [precommit exit boundary](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh:971)
+
+2. **What it reads, compares, and reports**
+
+Use existing ledger fields as follows:
+
+| Fields | Purpose |
+|---|---|
+| `rows[].id`, entry index, `phase`, `seat`, `date` | Identify every affected credit; date alone is not a unique key. |
+| `entries[].ev` | Locate the claimed answer artifact. |
+| `entries[].note`, through `stage_tokens` | Distinguish an answer from an annotation, hold, or `[NOT A SEAT ANSWER]` record. |
+| `grade`, `outcome`, `grader`, `d`, `b` | Audit what credit/display was awarded; these are not identity evidence. |
+| `seats[].id` and declared `model` | Identify the claimed seat, while preserving historical model-version changes. |
+
+**The missing piece is a deterministic entry-to-transcript join.** Current entries have no structured session, agent, or answer-message identifiers. Free-text `ev`, timestamps, and descriptions can support reconstruction, but cannot reliably establish that join.
+
+I recommend a new provenance receipt referenced by the entry: session ID, agent ID, dispatch/resume request identifier, selected answer-message UUIDs, artifact path and digest, and the requested/resolved model when available. Preserve the relevant transcript evidence durably. These are proposed fields, not fields I found.
+
+Read the explicitly referenced session’s:
+
+`C:\Users\User00\.claude\projects\C--DocumentNoSnc-CC-GXEMUL\<session>\subagents\agent-<id>.jsonl`
+
+and matching `.meta.json`. Inspect:
+
+- Metadata `model` and `toolUseId`.
+- Assistant `message.model`, `message.stop_reason`, outer UUID and timestamp.
+- `thinking_drop` attachments as corroboration.
+- The messages producing the credited text or artifact, including successful writes and subsequent edits.
+
+Compare the first real model with the requested family, and compare **exact model IDs throughout the relevant invocation**. Report wrong-family starts as `MISROUTED`; any model transition as `MODEL_CHANGE`; and a refusal followed by a transition as `REFUSAL_FALLBACK`. Exclude `<synthetic>` from model comparisons while reporting its operational failure separately.
+
+**Neither refusal nor `thinking_drop` should be required to detect a model change.** Conversely, refusal alone does not prove fallback.
+
+Then establish who produced the **particular answer being credited**. A later clean response cannot authenticate an earlier fallback file. A separately identified response from the requested model may earn verdict credit while retaining disclosure that its supporting measurements came from another model. Editing a fallback-produced document does not make its entire contents attributable to the last editor.
+
+An illustrative diagnostic would identify:
+
+```text
+AGENT_CREDIT_FAIL lcaisalane entries[125] review/fable5
+agent=a7602760fa4870c85
+requested=fable first=claude-fable-5-1 answer=claude-opus-4-8
+refusal=2026-09-19T00:24:32.270Z
+artifact=.../panel_20260918_190129/fable5_f2.md
+```
+
+Report checked, excluded, failed, and unverifiable counts. Missing or malformed evidence must not become `clean`. Enforce receipts for new/changed credits; report historical unmapped credits explicitly.
+
+Two existing consequences need the same eligibility rule:
+
+- `hygienecensus.entries[24]` says `SEAT FAILURE` in `grade`, but I measured `stage_tokens.is_answer(entry) == True`. Failure prose alone does not remove its answer credit.
+- `seat_scorecard.py` counts every entry’s `outcome` without consulting `stage_tokens`. The corrected `lcaisalane[125,126]` and `lcalenzerodrop[31]` still contain `outcome: UPHELD`, so the code still attributes those outcomes to Fable. [Scorecard](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/seat_scorecard.py:67)
+
+Use the shared eligibility result across counting, rendering, hold discharge, and scoring. Preserve rejected answers as records using the existing entry-scoped token; do not exempt their whole stage.
+
+3. **How it would catch the recorded cases**
+
+Indices below are zero-based `entries[]` indices. These are prospective gate results supported by the records and transcript inspection, not results from an implemented gate.
+
+| Recorded case | Evidence and required result |
+|---|---|
+| `lcaisalane[125]` review, `[126]` research; `lcalenzerodrop[20]` assess | All cite the same #530 answer. Agent `a7602760fa4870c85` refused at **00:24:32Z**, switched from Fable 5.1 to Opus 4.8, and finished on Opus. One artifact-to-message mapping invalidates all three Fable credits. |
+| `lcalenzerodrop[31]` review | Agent `aaf391c25dfc2034e` refused at **03:37:23Z**; Opus 4.8 wrote `panel_20260918_221636/fable5_p2.md` at **03:44:39Z**. |
+| `alphavmkill[11]` research | The same agent refused again at **03:57:35Z**; Opus 4.8 wrote `panel_20260918_223507/fable5_p1.md` at **04:04:59Z**. Its eventual return to Fable must not clear either earlier file. |
+
+Those are the **five originally miscredited entries**. Their current `[NOT A SEAT ANSWER]` corrections should remain excluded rather than repeatedly fail as live credits. [Ledger correction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:39720), [preserved transcript report](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/refable_20260919/agent_models_20260919.out:28)
+
+The additional records exercise distinct cases:
+
+| Record | Required result |
+|---|---|
+| #541 pass 2, preserved report | Reject Opus agent `a1758adccc13d56df`’s fallback answer; **its transcript has no `thinking_drop` attachment**. Fable `a1cea6817b348de9a` both switched and ended synthetically; report both facts. Re-fire `a7bc2aa081f3d79ca` wrote its answer on Opus 4.8. These were not yet ledger credits in the original filing. |
+| #530/#538 re-rulings | Agent `a9cbc9bcfd8257911` wrote `fable5_rulings.md` on Opus 4.8, then `fable5_rulings_own.md` on Fable 5.1. Reject the former; validate the latter separately. |
+| `pcc2widthkills[74]`, September 3 | Raw transcript: Fable → Opus 4.8 → Fable → synthetic limit error. **No recorded refusal or drop attachment.** Opus wrote `FINDINGS.md` through **Bash**, demonstrating why refusal-only and Write/Edit-only checks are insufficient. |
+| `fbdeclinefive[72]`, #545 | Opus 4.8 produced the measurements and initial summary; resumed Opus 5.5 produced corrections and a verdict. Preserve those distinct attributions rather than certify the whole artifact as Opus 5.5’s. [Manifest](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbd5/q2_20260923/q2h_opus/MANIFEST_NOTE.txt:4) |
+| `hygienecensus[24]` and `[33]` | C2’s answer is Opus 4.8’s and cannot earn Opus-seat answer credit. C3’s measurements are also fallback work, but the separately extracted **23:29:23Z** verdict is Opus 5.5’s. [C2 provenance](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/c2_20260923/OPUS_C2_ANSWER.md:1), [C3 provenance](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/hygienecensus_20260923/c3_20260923/OPUS_C3_FOLLOWUP_5_5.md:1) |
+| `fbctrlportkill[68,74,75,78]`, #549 | Reject both original pass-1 answers, the original Opus verifying answer, and **both** v6 Opus answers represented by `[75]`: five archived fallback answers. Entry `[80]` separately documents a flagship closing response that fell back before a valid Fable reissue. Validate each reissue independently. [Provenance inventory](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/CORRECTIONS.md:39) |
+| `wdcidselfcheck[73]`, #551 | Agent `a088149d37f1fac24` switched after refusals; the **01:04:52Z** answer is Opus 4.8’s. Keep the measurements as evidence without Opus-seat answer credit. [Artifact](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcidselfcheck_20260925/pass551f/opus5_pass551f_m19_FALLBACK_opus48.md:26) |
+
+One record-level correction matters to the design: the preserved September 19 report contains **six affected agents, seven refusal events, and six `thinking_drop` events**. The ledger witness’s “six refusals, each followed by a drop” is not an exact description of that report.
+
+4. **Negative controls**
+
+The suite should include both cases that must be rejected and cases that must retain credit:
+
+- **Historical clean models:** uninterrupted `claude-fable-5`, Fable 5.1, Opus 5, and Opus 5.5 invocations. I inspected clean August Fable-5 transcripts and the `n6` Fable transcript with 12/12 Fable-5.1 assistant records. Comparing all history against today’s fixed ID would falsely reject them.
+- **Operational failure without fallback:** `n6`’s Opus agent has 57 Opus-5 records followed by a synthetic limit error. Report seat failure, not model substitution.
+- **Metadata versus prose:** quoted “refusal,” copied identity lines, and `thinking_drop` with `prefix_mismatch` but no assistant-model change must not establish fallback. A refusal followed by a completed same-model response is also distinct from fallback.
+- **Answer boundaries:** the rejected and valid `fable5_rulings*.md` pair; an earlier valid answer followed by a later unrelated failure; and a fallback-written file followed only by a clean-model acknowledgment. Only the specifically established answer earns credit.
+- **Missing linkage:** absent metadata/transcript, malformed JSONL, wrong agent or message UUID, changed artifact digest, and no discovered transcripts despite claimed Agent credits must produce `UNVERIFIABLE` or a hard failure.
+- **Classification and wiring:** an entry-scoped exclusion must not silence sibling entries. Test the actual hook on a clean tree as well as a changed ledger, and require the expected diagnostic and exit status—not merely “some nonzero exit.”
+
+These are recommended controls; I did not create or run a new control suite.
+
+5. **What it cannot see**
+
+This establishes **logged provenance**, not cryptographic proof of the backend model. A substitution that retains the same reported model ID is invisible. With alias-only metadata such as `"model": "opus"`, an initially wrong model within that family also needs independently captured dispatch information to be recognized reliably.
+
+It cannot reconstruct absent transcripts, infer arbitrary shell-file authorship, or authenticate later manual copying without a verifiable artifact link. Those cases must remain unverified.
+
+It cannot establish correctness, independent reasoning, or independent measurement merely because the final verdict came from the requested model. Nor do the transcript fields prove which internal classifier caused a refusal.
+
+Finally, this gate can prevent unsupported **recorded credit**. It cannot prevent the Agent tool itself from switching models.

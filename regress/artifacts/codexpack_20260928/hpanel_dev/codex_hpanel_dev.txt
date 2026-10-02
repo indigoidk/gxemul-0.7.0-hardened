@@ -1,0 +1,105 @@
+CODEXPACK_HPANEL_DEV_ALIVE
+
+VERDICT: 3 of 3 findings hold as stated -- their HIGH dispositions follow the supplied rule, although two supporting premises need qualification.
+
+All repository citations below refer to **`db8b1a33`**. This was a source-only review: no builds, execution, changes, or compiled-layout measurements.
+
+**Q1. The premise audit**
+
+**H7 — reachable, conditional, and unbounded in the reviewed path.**
+
+The important omitted premise is whether guest-accessible commands can actually produce suitable staged data. They can: command bytes reach `handle_command()` through `src/devices/dev_dreamcast_gdrom.c:1111` and `:1115`; allocation and device-generated response contents are present at `:743` and `:753`. This is stronger evidence than assuming arbitrary guest control over `d->data`.
+
+The dispatch mechanism also survives inspection beyond the excerpt:
+
+- Physical requests bypass the translated-page splitting loop: `src/cpus/memory_rw.c:186` tests `"!(misc_flags & PHYSICAL)"`.
+- Device dispatch clamps the local request length at `src/cpus/memory_rw.c:523`, then calls the handler at `:587`.
+- The handler’s completion event, local start-value clearing, and register store occur **after** the nested memory call: `src/devices/dev_dreamcast_gdrom.c:1502`, `:1505`, `:1507`, `:1676`. They cannot terminate an invocation that has not returned.
+
+The helper’s retained byte positions, enumerated in increasing significance, are **`0, 1, 2, 3, 4, 5, 6, 7`**. Their shift positions are respectively **`0, 8, 16, 24, 32, 40, 48, 56`**. This follows from the descending-byte loop and repeated `"x <<= 8;"` at `src/core/memory.c:72–74`; SH initializes little-endian operation at `src/cpus/cpu_sh.c:96`. Thus the nonzero-start condition is data-dependent. I am not assembling the staging and register operations into a crash-trigger sequence.
+
+A transfer beginning at another register is not walked through successive register cases. The implemented relative offsets enumerate as **`0x04, 0x08, 0x0c, 0x14, 0x18`**; only the last enters the DMA-start arm. A request beginning at the destination register updates that register and returns. The dispatcher does not continue through the remaining registers after that callback (`src/devices/dev_dreamcast_gdrom.c:1381–1389`, `:1676`; `src/cpus/memory_rw.c:626`).
+
+**Decisive premise:** re-entry occurs before any state change that disables the next transfer. **Checked and supported.** Unbounded nesting follows from the source; actual stack exhaustion was **not checked**. The printed diagnostic is not itself a terminating call (`src/core/debugmsg.c:384–391`).
+
+**H8 — the modeled lane defect is reachable; the hardware-ignore claim is not established.**
+
+The model’s lane mapping enumerates as:
+
+| Access | Register portion selected by storage logic | CONTROL side-effect arm |
+|---|---|---|
+| Four bytes at `+0x08` | Upper word | Entered |
+| Four bytes at `+0x0c` | Lower word | Not entered |
+| Eight bytes at `+0x08` | Whole register | Entered |
+
+Storage performs the lane merge at `src/devices/dev_sgi_ip32.c:269–281`, but dispatch uses `"switch (relative_addr)"` at `:295`. The reset decision then tests **raw** input: `"if (idata & CRIME_CONTROL_HARD_RESET)"` at `:337`. The resulting action is `"cpu->machine->cpus[j]->running = 0;"` at `:343`.
+
+**Decisive premise:** side effects inspect unshifted input rather than the selected register lane. **Checked and confirmed.**
+
+However, the header says both **“Only lower 14 bits are valid”** and **“all registers 64-bit access”** (`src/include/thirdparty/crimereg.h:51`, `:39`). Those statements do not establish what physical hardware does with a four-byte write. “Hardware would ignore it” is therefore **not checked**, rather than proved by reserved-bit placement.
+
+The stop affects CPUs of this machine. Process termination additionally requires no other machine to remain running and no end-of-run debugger takeover (`src/core/emul.c:1046–1058`; `src/core/main.c:807`, `:821`).
+
+**H9 — the operand-domain premise is confirmed; exact compiled adjacency is not.**
+
+The producer really preserves every register-field value:
+
+> `"r8 = (iword >> 8) & 0xf;"`  
+> `"r4 = (iword >> 4) & 0xf;"`
+
+—`src/cpus/cpu_sh_instr.c:4071–4072`.
+
+Each domain enumerates as **`0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15`**. FADD installs the corresponding addresses without an even-field restriction (`:4955–4956`).
+
+The resulting pairs enumerate as:
+
+`(0,1), (1,2), (2,3), (3,4), (4,5), (5,6), (6,7), (7,8), (8,9), (9,10), (10,11), (11,12), (12,13), (13,14), (14,15), (15,16)`.
+
+The last pair crosses the declared `fr` boundary: `SH_N_FPRS` is `16` (`src/include/cpu_sh.h:86`), and the handler reads and writes the additional word (`src/cpus/cpu_sh_instr.c:3376–3379`, `:3387`).
+
+**Decisive premise:** the arithmetic handler can receive the final, odd register field under double precision. **Checked and confirmed.** Guest FPSCR loading exists at `src/cpus/cpu_sh_instr.c:2874–2877`, `:4616–4619`.
+
+The declarations establish that `xf` follows `fr` (`src/include/cpu_sh.h:104–105`). They do not constitute an `offsetof` measurement. **Exact compiled identity with `xf[0]`: not checked.** The implementation also uses integer-held addresses and pointer dereferences, rather than literally evaluating an array expression named `fr[16]` (`src/cpus/cpu_sh_instr.c:4955–4956`; `src/cpus/tmp_sh_tail.c:57`).
+
+The manual’s documented double-precision fields enumerate as **`0, 2, 4, 6, 8, 10, 12, 14`**, with pairs **`(0,1), (2,3), (4,5), (6,7), (8,9), (10,11), (12,13), (14,15)`**. Its encoding is `"1111nnn0mmm00000"` (`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\sh4_programming.txt:10424`, on disk).
+
+**Q2. Which dispositions are wrong?**
+
+**Zero HIGH dispositions are demonstrated wrong under the brief’s stated rule.** That does not validate every explanatory sentence.
+
+For **H8**, I adopt the consequence-based reading: an unintended lane interpretation that stops emulation qualifies, even though a correctly interpreted reset request can intentionally stop it. An existing legitimate reset operation does not make these register interpretations equivalent (`src/devices/dev_sgi_ip32.c:277–281`, `:337–343`).
+
+For **H9**, I adopt the specified buffer-boundary reading. Staying inside the enclosing structure limits the demonstrated impact; it does not put the additional word inside `fr`. This supports HIGH under this rubric, **not** a claim of demonstrated host escape or arbitrary host-memory corruption.
+
+The earlier intra-struct precedent is real: `CHANGELOG.md:12303–12306` records **“UB plus silent cross-array corruption”** and **“Not a wild write, not a host crash.”** A severity policy requiring additional host-security impact could downgrade H9, but that would narrow the supplied rule.
+
+The duplicate search found a related existing **FTRC** record: **“SH `ftrc` with an odd m under PR=1”** (`OUTSTANDING_BUGS.md:1778–1779`). Reference or consolidate it; it does not establish that FADD’s additional read/write scope was already recorded. No exact H7 or H8 duplicate was found in the bounded searches of the permitted records; exhaustive absence is **not checked**.
+
+**Q3. What should a correction round do?**
+
+| Finding | Choice | Availability and limitation |
+|---|---|---|
+| H7 | **(3) Decline unsafe re-entry and announce once per device.** | Existing per-device warning machinery provides a pattern (`src/devices/dev_dreamcast_gdrom.c:1465–1472`). In-flight protection needs adding before nested dispatch. Define aborted-transfer state and avoid reporting successful completion. Hardware-specific DMA failure semantics remain **not checked**. |
+| H8 | **(7) Complete/correct register-lane behavior.** | Lane-merging machinery already exists (`src/devices/dev_sgi_ip32.c:269–289`); side effects must follow the selected lane and supported-access contract. MIPS bus-exception delivery exists (`src/cpus/memory_rw.c:603–612`), but that alone does not justify faulting this access. |
+| H9 | **(5) Deliver the reserved-instruction exception**, consistently with existing emulator policy. | SH delivery exists (`src/cpus/cpu_sh.c:941–955`, `:1046–1073`). FNEG and FABS already reject odd double-precision operands and distinguish delay-slot exceptions (`src/cpus/cpu_sh_instr.c:3198–3213`, `:3226–3238`). Check execution-time PR, as the arithmetic handler does at `:3371`. |
+
+For H7, returning callback failure is not automatically an SH bus exception: the reviewed failure-dispatch block contains MIPS and M88K exception branches, with no SH branch (`src/cpus/memory_rw.c:603–624`).
+
+For H9, exception delivery is a defensible emulator policy, not a uniquely established silicon requirement. The manual states: **“Operation is not guaranteed if an undefined code other than H'FFFD is decoded.”** (`_scratchpad/sh4_programming.txt:4525–4526`, on disk).
+
+The list lacks an explicit **“repair already implemented but incorrect behavior”** disposition. H8 fits that description better than “implement missing behavior.”
+
+**Q4. Ordinary-operation ranking**
+
+**H8 first; H7 and H9 tied substantially lower.** A defensible strict ordering between the latter two is **not checked**.
+
+H8 has specific in-tree evidence of ordinary low-half traffic: **“some things (such as NetBSD 1.6.2) write to 0x00c!”** (`src/devices/dev_sgi_ip32.c:327–328`). That supports exposure to the lane defect, not ordinary occurrence of unintended reset.
+
+H7 additionally requires an abnormal DMA destination; the source’s ordinary destination example is a RAM address (`src/devices/dev_dreamcast_gdrom.c:1381`, `:1501`). H9 requires a field outside the manual’s documented double-precision encoding (`_scratchpad/sh4_programming.txt:10424`). Actual OS incidence for either was **not checked**.
+
+**Standing license**
+
+Two additional observations deserve follow-up:
+
+- GD-ROM ignores the memory-write result and then announces completion (`src/devices/dev_dreamcast_gdrom.c:1502–1505`). That is a separate completion-correctness concern; its full consequences were **not checked**.
+- FLOAT has the same unchecked pair-extension pattern, with an unmasked destination supplied by its decoder (`src/cpus/cpu_sh_instr.c:2925–2929`, `:5027–5030`). The correction’s sibling audit should include it alongside the already recorded FTRC case.

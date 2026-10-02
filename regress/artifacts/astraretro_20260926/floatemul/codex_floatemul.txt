@@ -1,0 +1,62 @@
+ASTRARETRO_FLOATEMUL_ALIVE
+VERDICT: 11 findings (5 CODE live at HEAD, 5 RECORD, 1 TEST-GAP); 20 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Results below are source-derived, supported by in-memory exact-rational checks. No builds, emulator runs, or file writes.
+
+**F1 | src/core/float_emul.c:887 | #300 / #308 | CODE | live at HEAD: yes**  
+Finite divided by infinity passes the **quotient-only** finiteness guard. PPC `fdiv(-1,+Inf)` under RZ reaches `fma(-0,+Inf,+1)`, obtains NaN, and steps −0 into a NaN encoding instead of returning −0. The sibling odd helper at `:992` has the same defect. This also refutes the nonfinite-pass-through claim at `:802`. Hardware requires exact infinity arithmetic and XOR result signs: `_scratchpad/ppc_uisa_book1_v201.txt:5118,5157`. **Smallest check:** finite/±Inf unit rows for both division helpers, including negative dividends. Not found in OUTSTANDING_BUGS. **Confidence high.**
+
+**F2 | src/core/float_emul.c:975 | #308; #299 relied on by #306 | CODE | live at HEAD: yes**  
+The S-destination helpers lose exponent-range information in their double intermediate. m88k `fmul.sdd(DBL_MAX,2)` under RZ returns `0x7f800000`, owed `0x7f7fffff`; `fdiv.sdd(DBL_MAX,0.5)` and `fadd.sdd(DBL_MAX,DBL_MAX)` share this failure. Conversely, `fmul.sdd(2^-1000,2^-1000)` under RP returns zero rather than `0x00000001`: both product and residual underflow to zero. See `_scratchpad/mc88100.txt:2390,2541` for directed rounding and overflow results. **Smallest check:** helper-plus-S-store rows for these overflow and underflow inputs. Not found in OUTSTANDING_BUGS. **Confidence high.**
+
+**F3 | src/core/float_emul.c:999 | #308 | CODE | live at HEAD: yes**  
+The copied OPTINY shortcut breaks **nearest single-precision rounding**, beyond #300’s disclosed directed-double limitation. m88k `fdiv.sdd`, RN, with D operands `0x0170000020000000` and `0x017000000ffffff0` returns `0x3f800000`, owed `0x3f800001`. Both operands are normal. Their exact ratio lies above the S midpoint, but the host quotient lands on that midpoint and the shortcut suppresses odd correction. These are the existing witness’s operands scaled by `2^-1000`. See `_scratchpad/mc88100.txt:2336,2380,4798`. **Smallest check:** add this scaled case beside `regress/m88k_rounding_probe.py:268`’s existing witnesses. Not found in OUTSTANDING_BUGS. **Confidence high.**
+
+**F4 | src/core/float_emul.c:895 | #300 | CODE | live at HEAD: yes**  
+The deliberately accepted-nearest band still violates directed rounding. PPC `fdiv(2^-1000,3)` under RP returns `0x0155555555555555`, owed `0x0155555555555556`; operands and result are normal. Multiplication and square root have sibling exclusions at `:1027` and `:1045`. The rounding requirement is documented at `_scratchpad/ppc_uisa_book1_v201.txt:5303`. **Smallest check:** one helper row against the exact rational quotient and its upper neighbour. **Already filed:** OUTSTANDING_BUGS.md:1971, “#300’s accepted-nearest bands”; no separate ID. **Confidence high.**
+
+**F5 | src/core/float_emul.c:1068 | #300 | CODE | live at HEAD: yes**  
+PPC addition of `3*2^970` and `-DBL_MAX` under RZ returns `0xffeffffffffffffe`, owed `0xffeffffffffffffd`. The finite sum’s `s-a` intermediate overflows, the residual becomes NaN, and this branch returns nearest rounding. RZ must choose the smaller magnitude: `_scratchpad/ppc_uisa_book1_v201.txt:5300`. **Smallest check:** compare the existing `D add ovf-tie RZ` row in `regress/diff_ieee_store.c` against an exact-rational oracle; it currently pins the incorrect nearest result. Explicitly acknowledged in CHANGELOG.md:22348, but not found in OUTSTANDING_BUGS. **Confidence high.**
+
+**F6 | CHANGELOG.md:20471 | #273 | RECORD | live at HEAD: yes**  
+The record says W’s upper guard rejects `(2147483647,2147483648)`. Under RZ/LEGACY, `2147483647.5` actually passes the `>=2147483648` guard and reaches the ordinary cast. Its result is correct; the claimed rejection and “deliberate slack” are false. **Smallest check:** compare `float_emul.c:314,481,485` with this sentence. Not found in OUTSTANDING_BUGS. **Confidence high.**
+
+**F7 | src/core/float_emul.c:218 | #303, superseded by #334 | RECORD | live at HEAD: yes**  
+The comment says SH’s DN control remains unmodelled and subnormal results still flush. HEAD’s `sh_dn()` explicitly reads DN and preserves subnormal results when clear. For example, DN=0 single multiplication of `2^-126` by `0.5` preserves `0x00400000`. **Smallest check:** compare this comment with committed `cpu_sh_instr.c:175–193`. **Confidence high.**
+
+**F8 | src/core/float_emul.c:653 | #331 | RECORD | live at HEAD: yes**  
+The claim that SH DN=0 raises an FPU error for subnormal **results** is false. The manual specifies signed subnormal/zero results; the cited error applies to subnormal **inputs**. **Smallest check:** `_scratchpad/sh4_programming.txt:5285–5289` against this comment. **Already filed:** `shsweep`, item 4, OUTSTANDING_BUGS.md:8153. **Confidence high.**
+
+**F9 | src/core/float_emul.c:794 | #300 | RECORD | live at HEAD: yes**  
+The leading contract promises correction above the stated `2^-1018` band; the multiplication comment at `:1026` repeats that threshold. Actual `IEEE_DIR_OPTINY` is `2^-969`, leaving the intervening range uncorrected. The later explanatory comment correctly gives the final threshold, but these claims remain contradictory. **Smallest check:** compare `:789,794,1026` with `:824`. **Confidence high.**
+
+**F10 | src/core/float_emul.c:1226 | #299 / #306 | RECORD | live at HEAD: yes**  
+The asserted `2^-298` floor for nonzero sums is false for current callers. m88k `fadd.sdd(min_D_subnormal,0)` passes arbitrary D operands and produces the intermediate `2^-1074`. This invalidates the stated operand-range premise, although it does not independently establish another wrong guest result. **Smallest check:** trace committed `cpu_m88k_instr.c:1592–1597` into this helper. **Confidence high.**
+
+**F11 | src/core/float_emul.c:69 | #279 | TEST-GAP | live at HEAD: yes**  
+The two independent one-shot diagnostics described in CHANGELOG.md:20514 have no committed regression row observing their counts. Checked `regress/diff_ieee_store.c`—whose `fatal()` stub at `:82` discards diagnostics—`mips_rounding_probe.py`, and committed regression matches for the latch/probe names. **Smallest check:** repeated invalid-format interpret/store calls with diagnostic counters, requiring exactly one of each. **Confidence high.**
+
+I checked these items and found them correct; source locations below are in `src/core/float_emul.c` unless otherwise named:
+
+1. `:98` — Unsupported formats retain initialized values; interpret/store latches are independent.
+2. `:226` — S/D subnormal decoding removes the implicit bit and uses the correct exponent.
+3. `:323` — Nearest-even integral rounding handles negative half-neighbours correctly.
+4. `:465` — W/L guards inspect the rounded value subsequently cast.
+5. `:481` — W preserves the valid negative truncation fringe and rejects invalid casts.
+6. `:487` — L accepts −2^63 and rejects +2^63, NaNs, and infinities before casting.
+7. `:377` — Subnormal scaling is exact and bounded; directed rounding uses the signed value.
+8. `:579` — Fraction rounding carries correctly into the exponent.
+9. `:614` — S overflow selects infinity or maximum finite by mode and sign.
+10. `:663` — The normal/subnormal boundary correctly re-encodes the original value.
+11. `:677` — D subnormals retain their exact bits; zero magnitudes retain their signs.
+12. `:1140` — INT64_MIN handling prevents negation overflow; bit-count shifts remain bounded.
+13. `:1152` — Integer-to-odd conversion preserves discarded information without carry overflow.
+14. `:1180` — L→D directed modes, nearest-even ties, and significand carry are correct.
+15. `:827` — Finite D overflow clamping has the correct mode/sign table.
+16. `:891` — Exact divide-by-zero infinity is excluded from overflow clamping.
+17. `:983` — Product and quotient overshoot-sign tests are correct when their residuals are finite and resolvable.
+18. `:1051` — Square-root correction points in the correct direction outside the excluded band.
+19. `:1081` — Exact cancellation has the correct zero sign; the S sibling at `:1247` agrees.
+20. `regress/m88k_rounding_probe.py:268` — The original mixed-format multiplication/division midpoint witnesses are present and discriminating.
+
+DENOMINATOR: read 13 of 13 hunks of the net diff

@@ -1,0 +1,135 @@
+GROKJOBS_DOSSIER_ARMVECTOR_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+---
+
+### Audit of Factual Sentences in `codex_dossier_armvector.txt`
+
+Every factual sentence across Items 1 through 7 and the supporting sections was verified against the committed tree at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC), the hardware manuals on disk in `_scratchpad/`, and [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md). Zero false or unsupported sentences were found.
+
+#### 1. Finding Truth and ARM Control Flow (Lines 6–43)
+- **CPSR, CP15, and descriptor inputs (Line 8):** Accurately cited. Control register, TTB, and DACR assignments are implemented at [`src/cpus/cpu_arm_coproc.c:134-142,186-203`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L134-L142). First-level and coarse page-table descriptor reads from guest memory are at [`src/cpus/memory_arm.c:133-153,169-183`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L133-L153). The stimulus is an instruction-fetch address translation failure, independent of opcode decoding.
+- **Dyntrans dispatch and translation miss path (Table lines 14–22):**
+  - Execution entry calls `DYNTRANS_PC_TO_POINTERS(cpu)` at [`src/cpus/cpu_dyntrans.c:186`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L186).
+  - Wrapper checks `phys_page` cache (`if (ppp != NULL) goto have_it;`) and falls back to `DYNTRANS_PC_TO_POINTERS_GENERIC(cpu)` at [`src/cpus/cpu_dyntrans.c:869-887`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L869-L887).
+  - Generic lookup tests cached host load pointer and invokes `ok = cpu->translate_v2p(cpu, vaddr, &paddr, FLAG_INSTR)` on miss at [`src/cpus/cpu_dyntrans.c:663-680`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L663-L680).
+  - ARM MMU translation faults branch to `exception_return` at [`src/cpus/memory_arm.c:158,164,174,187,238,249`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L158-L249), distinct from the `exit(1)` exits at [`src/cpus/memory_arm.c:79,254`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L79).
+  - `no_exceptions` is false because the caller passes `FLAG_INSTR` rather than `FLAG_NOEXCEPTIONS` ([`src/cpus/memory_arm.c:122,257-259`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L122); [`src/cpus/cpu_dyntrans.c:680`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L680)).
+  - Instruction translation failure raises `arm_exception(cpu, ARM_EXCEPTION_PREF_ABT)` prior to `return 0;` at [`src/cpus/memory_arm.c:268-276`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L268-L276).
+  - Exception entry saves CPSR to `spsr_abt` ([`src/cpus/cpu_arm.c:678`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L678)), clears `ARM_FLAG_T` ([`:693`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L693)), masks interrupts (`ARM_FLAG_I` at [`:714`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L714)), and switches mode to `ARM_MODE_ABT32` without disabling the MMU.
+  - Exception entry assigns `cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 + ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0)` and calls `quick_pc_to_pointers(cpu)` at [`src/cpus/cpu_arm.c:730-733`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L730-L733).
+  - `quick_pc_to_pointers` does not bound call depth; on a cache miss it directly invokes `DYNTRANS_PC_TO_POINTERS(cpu)` ([`src/include/quick_pc_to_pointers.h:6-16`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/quick_pc_to_pointers.h#L6-L16); mapped to `arm_pc_to_pointers` at [`src/cpus/tmp_arm_head.c:30`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/tmp_arm_head.c#L30) and instantiated at [`src/cpus/tmp_arm_tail.c:44-46`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/tmp_arm_tail.c#L44-L46)).
+- **Enumerated vector destinations (Line 24):** With `ARM_EXCEPTION_PREF_ABT == 3` ([`src/include/cpu_arm.h:125`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L125)), `exception_nr * 4 = 12 = 0x0c`. The vector destinations are arithmetically and strictly **`0x0000000c`** (low vector, base `0x00000000`) and **`0xffff000c`** (high vector, base `0xffff0000`, selected when `ARM_CONTROL_V` is set in CP15 control).
+- **Recurrence under Abort mode (Lines 26–32):**
+  - Mode switches to `ARM_MODE_ABT32` ([`src/cpus/cpu_arm.c:697-698`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L697-L698)); memory permissions are derived from `cpu->cd.arm.cpsr` ([`src/cpus/memory_arm.c:123,233-248`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L123)).
+  - The same-mode warning at [`src/cpus/cpu_arm.c:708-712`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L708-L712) prints but does not terminate: line `711` is commented out (`/*  exit(1);  */`), and `fatal()` in [`src/core/debugmsg.c:384-391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) merely formats and prints via `va_debug()` without calling `exit()`.
+- **Generic retry and exit unreachable on ARM (Lines 34–43):**
+  - The generic exit at [`src/cpus/cpu_dyntrans.c:729-732`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L729-L732) requires the initial translation call at `:679` to return `0` so execution can reach the retry block at `:685-723`. Because ARM re-enters `arm_pc_to_pointers` from inside `arm_exception` before `arm_translate_v2p_mmu` returns, persistent vector failure recurses synchronously and never reaches `:729`.
+  - On Alpha, [`src/cpus/memory_alpha.c:192-198`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L192-L198) returns `0` without delivering an exception; installed at [`src/cpus/cpu_alpha.c:89`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c#L89), this lets the retry loop run and hit `:732`, recorded as `alphaifetchkill` ([`OUTSTANDING_BUGS.md:21932-21933`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L21932-L21933)).
+
+#### 2. Reachability, Model Scope, and Machine Defaults (Lines 44–73)
+- **Unrestricted CP15 access (Line 44):** Accurately cited. Decoding for MCR/MRC at [`src/cpus/cpu_arm_instr.c:4977-4980`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4977-L4980) and execution wrapper `X(mcr_mrc)` at [`:948-954`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L948-L954) invokes `arm_mcr_mrc(cpu, ic->arg[0])` ([`src/cpus/cpu_arm.c:2643-2655`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643-L2655)) with no privilege or User-mode check; `coproc[15]` is installed unconditionally at [`src/cpus/cpu_arm.c:174-175`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L174-L175).
+- **ARM CPU models (Lines 46–54):** All 46 models listed in the table match [`src/include/arm_cpu_types.h:51-111`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L51-L111). ARM610 has duplicate table entries at `:52` and `:53`, resolved by first-match scan in `arm_cpu_new()` at [`src/cpus/cpu_arm.c:101-106`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L101-L106).
+- **Machine defaults (Lines 56–69):** All 9 machine configurations and default CPU types match committed source:
+  - `android-arm` / Finow X5 Air: `CORTEX-A5` ([`src/machines/machine_androidarm.c:148-150,191-192`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_androidarm.c#L148-L150))
+  - `android-arm` / Sony Xperia Mini: `SnapdragonS2` ([`src/machines/machine_androidarm.c:153-157,194-195`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_androidarm.c#L153-L157))
+  - `cats`: `SA110` ([`src/machines/machine_cats.c:135-151`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L135-L151))
+  - `hpcarm` / Ipaq, Jornada 720, Jornada 728: `SA1110` ([`src/machines/machine_hpcarm.c:195-228`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_hpcarm.c#L195-L228))
+  - `iq80321`: `80321_600_2` ([`src/machines/machine_iq80321.c:97-107`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c#L97-L107))
+  - `iyonix`: `80321_600_B0` ([`src/machines/machine_iyonix.c:116-132`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iyonix.c#L116-L132))
+  - `netwinder`: `SA110` ([`src/machines/machine_netwinder.c:74-90`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_netwinder.c#L74-L90))
+  - `rpi`: `ARM1136JSR1` ([`src/machines/machine_rpi.c:57-77`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_rpi.c#L57-L77))
+  - `barearm`, `testarm`: `SA1110` ([`src/machines/machine_test.c:206-230`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L206-L230))
+- **MMU disabled and `ARM_NO_MMU` (Lines 70–73):** MMU-disabled translator `arm_translate_v2p` unconditionally sets `*return_paddr = vaddr64 & 0xffffffff;` and returns `2` at [`src/cpus/memory_arm.c:54-60`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L54-L60). `ARM_NO_MMU` is defined at [`src/include/arm_cpu_types.h:40`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L40) and applied to ARM740T4K, ARM740T8K, ARM940T, ARM946ES, ARM966ES, ARM966ESR1 at lines `60-61, 68, 70-72`, but a tree-wide grep confirms zero references to `ARM_NO_MMU` across all `.c` and `.h` files under `src/`; the translator assignment in [`src/cpus/cpu_arm_coproc.c:134-142`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L134-L142) evaluates solely `cpu->cd.arm.control & ARM_CONTROL_MMU`.
+
+#### 3. Hardware Manuals (Lines 74–93)
+- **ARM DDI 0100I:** Quotes and citations match `_scratchpad/ddi0100i.txt:2185-2188, 2194-2208, 2212-2218`:
+  - Definition of Prefetch Abort generation at lines 2185–2188.
+  - Entry pseudocode assigning `R14_abt`, `SPSR_abt`, and `CPSR[4:0] = 0b10111` at lines 2194–2208.
+  - Vector destinations `0xFFFF000C` and `0x0000000C` at lines 2212–2218.
+  - SPSR corruption warning on nested exceptions of the same type at lines 9506–9512.
+- **ARM DDI 0406C.d (ARMv7-A/R):** Quotes and citations match `_scratchpad/ddi0406.txt`:
+  - Vector-fetch abort exclusion from vector catch debug events matches lines 108212–108213 verbatim.
+  - Abort entry vector jump `BranchTo(ExcVectorBase() + vect_offset);` matches lines 59240–59272.
+  - Security/virtualization routing logic matches lines 59195–59238.
+
+#### 4. Architecture Siblings: PowerPC, SH, M88K (Lines 94–98)
+- **PowerPC (Line 94):** Instruction translation failure invokes `ppc_exception()` and returns `0` at [`src/cpus/memory_ppc.c:307-323`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L307-L323). `ppc_exception()` clears `PPC_MSR_EE | PPC_MSR_RI | PPC_MSR_PR` (leaving `PPC_MSR_IR` untouched) and calls `ppc32_pc_to_pointers` or `ppc_pc_to_pointers` at [`src/cpus/cpu_ppc.c:335-344`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L335-L344). Unrelocated fetch returns success (`2`) at [`src/cpus/memory_ppc.c:258-260`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L258-L260); unsupported translation exits at `:265,274,286`.
+- **SH (Line 96):** `sh_exception()` tests `cpu->cd.sh.sr & SH_SR_BL` at [`src/cpus/cpu_sh.c:911`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L911) and redirects to `EXPEVT_RESET_POWER` at line `918`. Entry sets `SH_SR_MD | SH_SR_RB | SH_SR_BL` at line `952`. The reset case sets `cpu->pc = 0xa0000000;` at line `1016`. That address falls in P1/P2 direct-mapped memory (`0x80000000 .. 0xc0000000`), which returns `2` (success) at [`src/cpus/memory_sh.c:373-376`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L373-L376). Thus the nested call chain successfully terminates and unwinds.
+- **M88K (Line 98):** Instruction translation failure calls `m88k_exception` before returning `0` at [`src/cpus/memory_m88k.c:106-112,416-419`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c#L106-L112). A pre-existing `M88K_PSR_SFRZ` redirects non-traps to `M88K_EXCEPTION_ERROR` at [`src/cpus/cpu_m88k.c:811-821`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c#L811-L821). `M88K_EXCEPTION_ERROR` is implemented at lines `748-751` and still calls `m88k_pc_to_pointers(cpu)` at line `980`, leaving unbounded recursion intact if the ERROR vector fails translation. Disabled CMMU/translation identity-maps at [`src/cpus/memory_m88k.c:127-144`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c#L127-L144).
+
+#### 5. Same-File Termination Census and Records (Lines 100–140, 184–198)
+- **Census table (Lines 102–110):** All 6 entries accurately cite source lines and `OUTSTANDING_BUGS.md` records:
+  - [`src/cpus/memory_arm.c:79`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L79): `armdacr2kill` ([`OUTSTANDING_BUGS.md:22074-22079`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L22074-L22079))
+  - [`src/cpus/memory_arm.c:254`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L254): `armdesc3kill` ([`OUTSTANDING_BUGS.md:22065-22072`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L22065-L22072))
+  - [`src/cpus/cpu_arm.c:608`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L608): `armmsrmodekill` ([`OUTSTANDING_BUGS.md:20273-20354`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L20273-L20354))
+  - [`src/cpus/cpu_arm.c:561`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L561): `armmsrmodekill` save path ([`OUTSTANDING_BUGS.md:20332-20336`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L20332-L20336))
+  - [`src/cpus/cpu_dyntrans.c:732`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L732): `alphaifetchkill` ([`OUTSTANDING_BUGS.md:21932-21933`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L21932-L21933))
+  - [`src/cpus/cpu_dyntrans.c:2014`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L2014): `bad:` instruction halt ([`OUTSTANDING_BUGS.md:2690-2693, 21163-21165`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2690-L2693))
+- **Thumb interpreter stops (Lines 113–133):** All 14 live `cpu->running = 0;` statements in [`src/cpus/cpu_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c) match lines `1219, 1227, 1495, 1510, 1535, 1541, 1557, 1600, 1629, 1653, 1690, 1757, 1769, 1810`. Line `1571` is indeed unreachable: selector `op10 = (iw >> 10) & 3;` ([`:1254`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L1254)) takes values in `{0, 1, 2, 3}`, and cases `0, 1, 2, 3` are all explicitly handled at lines `1406, 1498, 1545, 1546`, rendering `default:` at line `1571` unreachable.
+- **Additional guards (Lines 136–139):** Verified exact:
+  - ARM RESET exits at [`src/cpus/cpu_arm.c:659,661`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L659); invalid exception number/mode at [`:623,686`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L623).
+  - Generic dyntrans exits at [`src/cpus/cpu_dyntrans.c:1157, 1180, 1506, 1625, 1630, 1645, 1651`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1157).
+  - BUGHUNT exits at [`src/cpus/cpu_dyntrans.c:1079, 1092, 1101, 1173, 1670, 1679, 1751, 1763`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1079).
+  - Assertions at [`src/cpus/cpu_dyntrans.c:1525-1526`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1525-L1526); allocation checks at [`:945,1614`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L945).
+  - Commented-out exits at [`src/cpus/cpu_arm.c:711, 2661, 2678`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L711) and [`src/cpus/cpu_dyntrans.c:159, 1126, 1151`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L159).
+- **Records corrections (Lines 186–198):** All 7 cited records match committed text verbatim:
+  - [`OUTSTANDING_BUGS.md:21950-21951`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L21950-L21951) and [`CHANGELOG.md:1307-1308`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L1307-L1308).
+  - Comment at [`src/cpus/cpu_dyntrans.c:687`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L687).
+  - Comment at [`src/cpus/memory_alpha.c:194-196`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L194-L196).
+  - Misleading diagnostic string at [`src/cpus/memory_arm.c:78`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L78) (`"arm_check_access(): 1 shouldn't be used\n"` in `case 2`).
+  - Misleading comment at [`src/cpus/cpu_arm.c:719`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L719) (`/*  Load the new register bank, if we switched:  */`).
+  - Historic note at [`CHANGELOG.md:7900-7901`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L7900-L7901).
+  - Entry `#193` at [`CHANGELOG.md:20057`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L20057).
+
+---
+
+### (a) Dossier's Chosen Disposition Member and Delivery Machinery
+
+The dossier selects **Member 7** (*implement missing behavior: bounded exception dispatch and safe return to scheduling*) while maintaining **Member 5** (*fault the guest*) as the architectural memory access disposition.
+
+1. **Correctness of the disposition:**
+   This choice is correct. Member 5 is the architecturally mandated response for unmapped or unauthorized memory accesses (ARM DDI 0100I A2.6.5). Merely dropping the abort (Member 2), latching and continuing (Member 3), or inventing mappings (Member 6) contradicts architectural specifications. However, Member 5 alone is already what `memory_arm.c:268-276` attempts; the defect is that exception dispatch invokes `quick_pc_to_pointers(cpu)` synchronously from within the faulting call stack, causing recursive delivery. Therefore, Member 7 (implementing bounded exception dispatch that returns to the outer execution loop without call stack recursion) is required to deliver Member 5 safely.
+
+2. **Presence of exception delivery machinery on this CPU:**
+   The architectural state delivery machinery for Prefetch Abort is **fully present** in committed source at [`src/cpus/cpu_arm.c:616-734`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L616-L734):
+   - **Range check:** Validates `exception_nr` against `N_ARM_EXCEPTIONS` at [`src/cpus/cpu_arm.c:620-624`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L620-L624).
+   - **Return address:** Computes return address based on Thumb state (`retaddr = cpu->pc + (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4)`) at [`src/cpus/cpu_arm.c:626,664`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L626).
+   - **State saving:** Saves current register bank with `arm_save_register_bank(cpu)` at [`src/cpus/cpu_arm.c:667`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L667).
+   - **SPSR banking:** Banks CPSR into `spsr_abt` (`cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr;`) under `case ARM_MODE_ABT32` at [`src/cpus/cpu_arm.c:677-678`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L677-L678).
+   - **Mode switch:** Clears Thumb mode (`cpu->cd.arm.cpsr &= ~ARM_FLAG_T;` at [`src/cpus/cpu_arm.c:693`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L693)) and sets `ARM_MODE_ABT32` from `arm_exception_to_mode[ARM_EXCEPTION_PREF_ABT]` at [`src/cpus/cpu_arm.c:697-698`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L697-L698).
+   - **Interrupt masking:** Masks IRQ (`cpu->cd.arm.cpsr |= ARM_FLAG_I;`) at [`src/cpus/cpu_arm.c:714`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L714).
+   - **Register bank loading:** Loads the Abort register bank (`r13_abt`, `r14_abt`) with `arm_load_register_bank(cpu)` at [`src/cpus/cpu_arm.c:719`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L719), implemented at [`src/cpus/cpu_arm.c:595-600`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L595-L600).
+   - **Vector resolution:** Assigns LR and PC (`cpu->cd.arm.r[ARM_LR] = retaddr; cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 + ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);`) at [`src/cpus/cpu_arm.c:730-732`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L730-L732).
+
+   What is missing is dispatch decoupling: line `733` immediately executes `quick_pc_to_pointers(cpu);` rather than returning cleanly to let outer execution dispatch resolve the next instruction.
+
+---
+
+### (b) Siblings Missed in the Same Files
+
+The dossier focuses on the instruction fetch path (`cpu_dyntrans.c:680` $\to$ `memory_arm.c:269`). However, in the exact same source files ([`src/cpus/memory_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c), [`src/cpus/cpu_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c), and [`src/cpus/cpu_dyntrans.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c)), four additional sibling entry points call `arm_exception()` and immediately cascade into the identical untranslatable-vector recursive failure:
+
+1. **Data Abort vector translation failure (`src/cpus/memory_arm.c:273`):**
+   When a data load or store translation fails in `arm_translate_v2p_mmu()` (`!instr`), line `273` calls `arm_exception(cpu, ARM_EXCEPTION_DATA_ABT)`. That routine sets `cpu->pc` to vector `0x00000010` or `0xffff0010` ([`src/cpus/cpu_arm.c:731-732`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L731-L732)) and calls `quick_pc_to_pointers(cpu)` at line `733`. If that Data Abort vector address cannot be translated, `quick_pc_to_pointers` calls `arm_translate_v2p_mmu()` with `FLAG_INSTR` at [`src/cpus/cpu_dyntrans.c:680`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L680). That lookup fails and immediately calls `arm_exception(cpu, ARM_EXCEPTION_PREF_ABT)` at [`src/cpus/memory_arm.c:269`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L269), entering the exact same recursive loop.
+2. **Hardware IRQ vector translation failure (`src/cpus/cpu_dyntrans.c:209`):**
+   In `DYNTRANS_RUN_INSTR_DEF()`, an unmasked hardware interrupt invokes `arm_exception(cpu, ARM_EXCEPTION_IRQ)` directly from the dyntrans loop. Line `733` of `cpu_arm.c` calls `quick_pc_to_pointers(cpu)` on vector `0x00000018` or `0xffff0018`. If unmapped, `FLAG_INSTR` translation fails in `arm_translate_v2p_mmu()`, triggering `arm_exception(cpu, ARM_EXCEPTION_PREF_ABT)` and recursing.
+3. **Thumb SWI vector translation failure (`src/cpus/cpu_arm.c:1753`):**
+   In the Thumb interpreter (`arm_cpu_interpret_thumb_SLOW`), executing a supervisor call (`condition_code == 0xf`) invokes `arm_exception(cpu, ARM_EXCEPTION_SWI)`. If vector `0x00000008` / `0xffff0008` is not mapped, `quick_pc_to_pointers(cpu)` at [`src/cpus/cpu_arm.c:733`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L733) triggers the same recursive Prefetch Abort cascade.
+4. **Coprocessor CDP Undefined Instruction vector translation failure (`src/cpus/cpu_arm.c:2677`):**
+   In `arm_cdp()`, an unhandled coprocessor instruction raises `arm_exception(cpu, ARM_EXCEPTION_UND)`. If vector `0x00000004` / `0xffff0004` cannot be translated, `quick_pc_to_pointers(cpu)` recurses through `ARM_EXCEPTION_PREF_ABT`.
+
+---
+
+### (c) Denominator
+
+- **Sentences checked:** 103 factual sentences (all factual claims across Items 1–7, tables, and record entries in `codex_dossier_armvector.txt`) were audited directly against:
+  - Committed source at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC): [`src/cpus/cpu_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c), [`src/cpus/memory_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c), [`src/cpus/cpu_arm_coproc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c), [`src/cpus/cpu_arm_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c), [`src/cpus/cpu_dyntrans.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c), [`src/cpus/tmp_arm_head.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/tmp_arm_head.c), [`src/cpus/tmp_arm_tail.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/tmp_arm_tail.c), [`src/include/quick_pc_to_pointers.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/quick_pc_to_pointers.h), [`src/include/cpu_arm.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h), [`src/include/arm_cpu_types.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h), [`src/machines/machine_*.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/), [`src/core/debugmsg.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c), [`src/devices/dev_footbridge.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c), [`src/cpus/memory_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c), [`src/cpus/cpu_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c), [`src/cpus/cpu_sh.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c), [`src/cpus/memory_sh.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c), [`src/cpus/memory_m88k.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c), [`src/cpus/cpu_m88k.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c), [`src/cpus/memory_alpha.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c), [`src/cpus/cpu_alpha.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c).
+  - Project bug records at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC): [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md) and [`CHANGELOG.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md).
+  - Hardware architecture manuals on disk: `_scratchpad/ddi0100i.txt` and `_scratchpad/ddi0406.txt`.
+- **Sentences taken on trust:** 0.
+- **Not checked:**
+  - Runtime execution under a live host operating system or guest payload.
+  - Host stack frame byte sizes and compiler optimization ABI variations.
+  - Architecture manual sections outside the cited prefetch abort, MRS/MSR, and vector catch passages.
+  - Working tree uncommitted files, alternate source copies under `C:\DocumentNoSnc\CC\GXEMUL\src\`, and unreferenced artifact logs under `regress/artifacts/`.

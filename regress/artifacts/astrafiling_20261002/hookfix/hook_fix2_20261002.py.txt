@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""hook_fix2_20261002.py -- the harness review's finding hbundle_hooks:F7 (`nineseatreminder`): the round reminder names
+the wrong Codex, treats the CONDITIONAL agy seat as unconditional and counts eight seats as nine.  hook_fix_20261002.py
+removed the model names from the SessionStart text; this finishes the finding: agy is stated as conditional on
+PANEL_FIRE_AGY (panel.sh:138, :312), and the TaskCompleted text stops saying `./panel.sh for six` (a relative launch
+the carrier forbids, and a wrong count).  Two exact replacements; then both hook modes must emit valid JSON."""
+import io
+import json
+import subprocess
+import sys
+
+P = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\tools\hooks\round_reminder.sh"
+s = io.open(P, encoding="utf-8", newline="").read()
+EDITS = [
+    ("It fires the scriptable seats -- codex, agy, kimi, grok and the Ollama cloud thinking models (never send those a "
+     "num_predict cap).",
+     "It fires the scriptable seats -- codex, kimi, grok and the Ollama cloud thinking models (never send those a "
+     "num_predict cap) -- and agy ONLY when PANEL_FIRE_AGY is set: the owner's directive of 2026-09-15 is to set it on "
+     "every launch (PANEL_FIRE_AGY=1 bash GXEMUL-SEC/tools/panel.sh <ABSOLUTE brief path>), and with it the scriptable "
+     "seats plus the two Agent seats make the nine; the kimi CLI and its Ollama substitute are two transports for ONE seat."),
+    ("(./panel.sh for six + Opus and Fable via the Agent tool)",
+     "(PANEL_FIRE_AGY=1 bash GXEMUL-SEC/tools/panel.sh <ABSOLUTE brief path> for the scriptable seats -- never ./panel.sh "
+     "-- plus the opus and fable seats via the Agent tool; the owner's newest seat rulings in the memory index override "
+     "this roster)"),
+]
+for a, b in EDITS:
+    if s.count(a) != 1:
+        sys.exit("REFUSED: %d matches for %r" % (s.count(a), a[:60]))
+    if '"' in b or "\\" in b:
+        sys.exit("REFUSED: a replacement would need JSON escaping")
+for a, b in EDITS:
+    s = s.replace(a, b)
+io.open(P, "w", encoding="utf-8", newline="").write(s)
+bash = sys.argv[1]
+for mode, key in (("session", "SessionStart"), ("task", "TaskCompleted")):
+    out = subprocess.run([bash, P.replace("\\", "/"), mode], capture_output=True, text=True, encoding="utf-8")
+    j = json.loads(out.stdout)
+    if j["hookSpecificOutput"]["hookEventName"] != key:
+        sys.exit("FAIL: mode %s emitted the wrong event" % mode)
+    c = j["hookSpecificOutput"]["additionalContext"]
+    print("mode %-7s rc=%d  valid JSON, event %s, %d chars; names PANEL_FIRE_AGY: %s; says ./panel.sh for six: %s"
+          % (mode, out.returncode, key, len(c), "PANEL_FIRE_AGY" in c, "./panel.sh for six" in c))
+print("HOOK_FIX2_DONE")

@@ -1,0 +1,82 @@
+I will adjudicate batch 3g from the source at `8ea26abb`, starting with the checkpoint line, the prior dispositions, and the draft disagreements.The draft and the two checks disagree on five findings. I will read those answers and the earlier dispositions, then re-check the source.The disagreements are `symbol:F1`, three test-gap rows, and the `memoryrw:F5` wording. I am checking those paths at `8ea26abb` before ruling on the rest.Two findings still need a direct read before I rule: the step-call cache path and which CPU drives the pipe flush. I will check those sites at `8ea26abb`, then collision-check the proposed ids.VERDICT: 8 confirmed-new, 1 confirmed-filed, 8 record-L4, 4 test-gap, 0 refuted, 0 unsettled, 2 duplicate, of 23 findings
+GROK_RULE_3g_ALIVE_1002
+# CHECKPOINT -- 2026-10-02 09:50 RUNNING: #529 r22 base leg, Astra confirms (3c, 3d, 18 harness), grok rulings (3f-3h) and tie-break; no cron (087a90 sections rewritten; the peer's sections below are untouched)
+
+CHANGELOG.md and OUTSTANDING_BUGS.md lines below are commit `8ea26abb`. HEAD is `db8b1a33` (#553); no file under `src/` differs, so a CODE defect confirmed here is live at HEAD. #553's three rows are `wdcidresetcells`, `analyze8robust`, and `commitinflight`. Every proposed id below is absent from HEAD `OUTSTANDING_BUGS.md` and from `DISPOSITIONS.md`.
+
+memoryrw:F1 | CONFIRMED-NEW MED subpagecache "A 1 KB guest page is cached as a full host page"
+Checked `8ea26abb:src/cpus/memory_sh.c:134` (`SH4_PTEL_SZ_1K`, mask `0xfffffc00`) and the returns at `:196`, `:200`, `:210`, `:214` (`return 1+d`), `:224`, `:227` (`return 1+d`); `8ea26abb:src/cpus/memory_mips_v2p.c:293` (`pageshift = 10`) and the shared hit return `:398` (`return d_bit? 2 : 1`); `MEMORY_NOT_FULL_PAGE` is 256 (`memory.h:144`); the cache gate is `memory_rw.c:744`. Values 1 and 2 do not carry bit 256, and the non-Alpha host page is 4 KB (`memory_rw.c:79`, mask `0xfff`). SH7750 manual `_scratchpad/sh7750_hardware.txt:9333` says a 1 KB page's PPN bits [28:10] are valid. The 4 KB mapping stays inside a 1 MB memblock, so this is MED. The ARM sentence at `8ea26abb:OUTSTANDING_BUGS.md:5662–5665` is a different defect. Not `shoddprfield`.
+
+memoryrw:F2 | CONFIRMED-NEW MED ramnulltail "A read that starts in an unallocated memblock zeroes the whole request, including a later allocated memblock, and returns success"
+Checked `8ea26abb:src/core/memory.c:558–567` (a read of a missing memblock returns NULL; the allocation unit is `1<<BITS_PER_MEMBLOCK`) and `8ea26abb:src/cpus/memory_rw.c:728–733` (`memset(data, 0, len)` then `goto do_return_ok`) before the fragment split at `:766–775`.
+
+memoryrw:F3 | CONFIRMED-FILED ramspaninval
+Checked `8ea26abb:OUTSTANDING_BUGS.md:2727–2728`, which has the prose and no short id: "Cross-memblock dyntrans invalidation gap in #165 (`cpus/memory_rw.c`, med): a bulk RAM write spanning a memblock boundary invalidates only the endpoint pages". The code invalidates once, at `memory_rw.c:760` (`invalidate_code_translation(..., INVALIDATE_PADDR)`), then copies `len_head` and recurses at `:770–775`. That is the first page of each fragment, including a write that stays inside one memblock. Same defect. Propose `ramspaninval`. Independent grade MED: stale translated guest code.
+
+memoryrw:F4 | RECORD-L4 "Show the store (writer pc, target, width, value) and request debugger entry when the emulation loop next consumes about_to_enter_single_step; further guest instructions may execute before entry. NOP unless a watchpoint is set."
+Checked `8ea26abb:src/cpus/memory_rw.c:278–281` and the store at `:297`. `cpu_dyntrans.c:354–355` keeps dispatching; the only assignment of the flag in that file is `:2002`. `emul.c:1033–1039` consumes the flag and calls `debugger()` between batches.
+
+memoryrw:F5 | RECORD-L4 "A nonfinal worker failure zeroes this chunk and the unprocessed suffix; earlier successful bytes remain. This is not #244's whole-buffer zero."
+Checked `8ea26abb:src/cpus/memory_rw.c:207–215` (`memset(data, 0, len)` after `data` has advanced at `:220`) and `:267`. The changelog sentence at `8ea26abb:CHANGELOG.md:26161` already says the wrapper zeroes the remainder, and `OUTSTANDING_BUGS.md:5681–5682` already says head kept, tail zeroed. The false sentence is the source comment's "the guarantee is the same as it was."
+
+memoryrw:F6 | RECORD-L4 "The memblock split fires at 1 MiB boundaries, one boundary per 1,024 split granules. Without the exemption, an aligned 16 MiB transfer would require 16,384 worker calls at the 1 KiB granule."
+Checked `8ea26abb:src/cpus/memory_rw.c:104` (`MRW_SPLIT_MASK` `0x3ff`) and `:150`, against `8ea26abb:CHANGELOG.md:26086–26088` ("one boundary in 256") and `:26115` ("four thousand"). 1 MiB / 1 KiB = 1024; 16 MiB / 1 KiB = 16384. `regress/diff_memory_rw.c:490` already asserts 16384.
+
+memoryrw:F7 | RECORD-L4 "(The worker's host-page granule is 8 KB under MEM_ALPHA and 4 KB otherwise; the split granule is 1 KB.)"
+Checked `8ea26abb:src/cpus/memory_rw.c:76–80` and `:153`. `CHANGELOG.md:26117–26119` is the narrower true statement that Alpha is 8 KB.
+
+memoryrw:F8 | RECORD-L4 "Post-#430, the memblock split can be reached by PHYSICAL accesses or when translate_v2p is NULL; translated accesses are split at the 1 KB granule first."
+Checked `8ea26abb:src/cpus/memory_rw.c:156` against the wrapper at `:186` and the worker bypass at `:245`.
+
+debuggercmds:F1 | CONFIRMED-NEW LOW dbgexprambig "Breakpoint and watchpoint adds treat PARSE_MULTIPLE as success and then read the output"
+Checked `8ea26abb:src/include/debugger.h:47–48` (`PARSE_NOMATCH` 0, `PARSE_MULTIPLE` 1), `debugger_cmds.c:182` and `:446` (`if (!res)`), and `debugger_expr.c:351–354` plus `return_failure` at `:410–412`, which returns without writing `*valuep`. The bare-name path can assign at `:183` and `:194` before `:200`. Other commands reject `PARSE_MULTIPLE` (`:672`, `:703`, `:860`, `:878`, `:929`, `:1331`, `:1418`, `:1480`, `:1862`, `:1893`). Debugger-operator input. LOW.
+
+debuggercmds:F2 | CONFIRMED-NEW LOW findaddrwrap "Debugger memory search can wrap its scan address into low addresses"
+Checked `8ea26abb:src/debugger/debugger_cmds.c:995` (`while (base < endaddr)`), `:1050` (`base = base + failed_at + 16`), and `:1058–1062` (`advance` forced to at least 16, then `base += advance`). A 16-byte step from `0xfffffffffffffff0` lands on 0; a larger aligned step lands above 0. Ctrl-C remains at `:999`. LOW.
+
+debuggercmds:F3 | CONFIRMED-NEW LOW findcountovf "Debugger search counts matches and unreadable chunks in unbounded signed ints"
+Checked `8ea26abb:src/debugger/debugger_cmds.c:797` (`int n_matches`, `int n_unreadable`) and the increments at `:1027` and `:1049`. No crash is shown. LOW.
+
+debuggercmds:F4 | DUPLICATE-OF-ROW include2:F5
+Checked `DISPOSITIONS.md:52–53` and `8ea26abb:src/cpus/cpu_dyntrans.c:1815–1824`: ordinary hits 1..N are skipped and the stop is at N+1; a delay-slot hit is not ignored. This finding adds the still-false comment at `debugger_cmds.c:166–168`. Replacement: `#248: an optional ", N" tail skips the first N ordinary hits and starts stopping at ordinary hit N+1. Delay-slot hits are not ignored. Address expressions never contain a comma.`
+
+debuggercmds:F5 | TEST-GAP-FILE LOW dbgignorow "No committed row observes breakpoint ignore-count stops"
+Checked `8ea26abb:CHANGELOG.md:20255` and a search of `regress/*.py`, `regress/*.c`, `regress/*.sh`, and `tools/*.py` at `8ea26abb`: no `ignorecount`, `ignore_left`, or `breakpoint subsystem`. `mips_fold_probe.py:339` is a plain `breakpoint add`.
+
+debuggercmds:F6 | TEST-GAP-FILE LOW mipsbpnormrow "No committed row observes MIPS breakpoint sign-extension of an unextended address"
+Checked `8ea26abb:src/debugger/debugger_cmds.c:193–195` and `CHANGELOG.md:20387`. `mips_fold_probe.py:130` and `fbctrl_port_probe.py:200` already use `0xffffffff80100020`.
+
+debugmsg:F1 | RECORD-L4 "The override semantics are deliberately unchanged (panel-unanimous); the listing now states them explicitly. ARC's NE2000 transmit of an unimplemented IPv4 broadcast reaches debugmsg(SUBSYS_NET, ..., VERBOSITY_ERROR) through net_ethernet_tx. The caller gate is ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_ERROR), and the default verbosity is INFO (2), so the call is made. Clearing the net breakpoint does not clear debugmsg_break_on_error, so the global override still requests debugger entry."
+Checked `8ea26abb:CHANGELOG.md:20452` against `machine_arc.c:210–212`, `dev_ne2000.c:303` and `:427`, `net.c:493`, `net_ip.c:1294` and `:1316`, `misc.h:253–255` (ERROR 0, INFO 2), `debugmsg.c:104`, `:159–160`, `:173–177`, and `:579–580`. pmax was not shown to have its own path. ARC alone falsifies "neither".
+
+debugmsg:F2 | TEST-GAP-FILE LOW subsysbprow "No committed row arms a subsystem breakpoint and observes debugger entry"
+Checked `8ea26abb:CHANGELOG.md:19826–19833`: "each regression‑gated" covers subsystem debug breakpoints #128. The same probe search as debuggercmds:F5 found no `breakpoint subsystem` in a probe.
+
+debugmsg:F3 | TEST-GAP-FILE LOW dbglisterow "No committed row observes the global break-on-ERROR listing after one subsystem is cleared"
+Checked `8ea26abb:src/core/debugmsg.c:656` and `:662`, and `CHANGELOG.md:20453`. Same probe search: no retained observer.
+
+bundle_debugger:F1 | CONFIRMED-NEW LOW stepcallfocus "Changing machine focus leaves step-call running cached untraced handlers"
+Checked `8ea26abb:src/debugger/debugger.c:767–776` (return before the cache reset), the reset of only `debugger_machine` at `:790–797`, `debugger_cmds.c:1116` (focus assigns `debugger_machine` with no invalidation), `:1704–1705` (`show_trace_tree = 1` with no invalidation), `cpu_mips_instr.c:4827–4830` (`jal` versus `jal_trace` chosen at translation), and `cpu_dyntrans.c:114` and `:325` (single-step executes the cached handler). Missed debugger stops. LOW.
+
+symbol:F1 | DUPLICATE-OF-ROW symdemanglebound
+Checked `DISPOSITIONS.md:443–446` (same loop, `symbol_demangle.c:79–92`, four binary loaders, already HIGH). This answer adds a fifth caller: `8ea26abb:src/symbol/symbol.c:296` (`b4[80]`), `:315` and `:318` (`%79s`), `:333` (`add_symbol_name`), then `:263`. `symbol.c:224` returns before demangle when `name[0]=='\0'`, so an empty scan does not create a symbol. The copy at `symbol_demangle.c:91` trusts the length prefix and bounds only the destination. The over-read leaves `b4[80]`. Not a new `shoddprfield` question.
+
+bundle_console:F1 | CONFIRMED-NEW HIGH x11alloc32 "X11 resize allocation wraps when size_t is 32 bits, inside the 16384 cap"
+Checked `8ea26abb:src/console/x11.c:429–430` (24-bit displays force `alloc_depth` 32), `:442` and `:446` (`(size_t)new_xsize * new_ysize * alloc_depth / 8`, cast covers only `new_xsize`), and `:450–452` (`XCreateImage` keeps the full width, height, and stride). `dev_fb.c:147` caps each side at 16384 and does not check this product. 12000×12000×32 = 4608000000; on a 32-bit `size_t` that is 313032704, divided by 8 is 39129088, against 576000000 required. Stride 12000×32/8 = 48000 stays in a signed int. I found no committed sentence that an ILP32 host is a supported build. The #183 comment at `:437–440` presents `size_t` as the closure of that overflow. The same product is at `x11.c:632` (`alloclen = xsize * ysize * alloc_depth / 8`); that site belongs to this id.
+
+bundle_console:F2 | RECORD-L4 "On a pipe, every character now marks stdout pending for the next console_flush(); the periodic check uses the first machine's bootstrap CPU instruction counter, so it does not guarantee a per-burst instruction bound when that CPU stops progressing."
+Checked `8ea26abb:CHANGELOG.md:20291–20292` against `emul.c:984–985` and `:1020–1023`, `machine.c:707–710` (`run_instr` only when `running`), `dev_mp.c:130–136` (pause every CPU except one), `cpu_dyntrans.c:462` (`ninstrs` advances only inside that run), and `console.c:482` plus `:510–513`. The all-idle flush at `emul.c:999–1001` does not cover a busy sibling.
+
+emul:F1 | CONFIRMED-NEW HIGH emulgzipfail "A gzip load that fails to decompress terminates the process"
+Checked `8ea26abb:src/core/emul.c:576–585` (gzip magic `0x1f` `0x8b`), `:609–616` (`fatal`, `unlink`, `exit(1)`), and `:545–549` (`load_bootblock` failure returns false). `bootblock.c:476–490` and `bootblock_iso9660.c:400–413` put an extracted name on the same `load_names` list. Operator-named `.gz` files use that loop too. Batch 2e's file threat model (`DISPOSITIONS.md:445–446`) counts a named file and a boot-block extract as in scope. `exit(1)` is process termination.
+
+emul:F2 | RECORD-L4 "**#42** prefer /bin/gunzip and /usr/bin/gunzip, with a PATH lookup fallback and the inherited environment retained, plus the fd != STDOUT_FILENO close guard and the -- option-injection guard"
+Checked `8ea26abb:CHANGELOG.md:19692` against `emul.c:105–107`: any failed `execl` falls through to `execlp("gunzip", ...)`, which uses PATH and the inherited environment. The GNU-wrapper premise was not needed. Comment rider at `emul.c:102–104`: replace "only if the usual locations are absent" with "if both absolute-path exec calls fail".
+
+**(a)** No CODE finding is refuted. `symbol:F1` is a real over-read and is already `symdemanglebound`; the text loader is another caller, so it is not a new row. `debuggercmds:F2` wraps into low addresses; landing on zero is the 16-byte step, and a larger aligned step lands above zero. `emul:F2`'s wrapper story was not checked; the `execl`/`execlp` sequence is enough to make the changelog sentence false.
+
+**(b)** Mine, not one of the 23. `emul.c:600–603` calls `exit(1)` when `mkstemp` fails. That is host temporary-directory failure. Propose LOW `emulmkstempexit`. `x11.c:632` is the second site of `x11alloc32`. `OUTSTANDING_BUGS.md:5697` still says the split "fires 256x more often", and `regress/diff_memory_rw.c:460–462` still says a 16 MB access "reads 4096"; both should say 1024 per memblock and 16384 calls. The pin at `:490` is already 16384. The agy and codex checks' "phantom symbol at address 0" does not survive `symbol.c:224`.
+
+**(c)** DENOMINATOR: 23 findings checked against `8ea26abb` source, queue prose, or `DISPOSITIONS.md`. 0 ruled from Astra's text alone.
+
+Draft dispositions changed. `symbol:F1` from NEW HIGH `symbolsrcbound` to `DUPLICATE-OF-ROW symdemanglebound`. `debuggercmds:F5`, `debuggercmds:F6`, and `debugmsg:F3` from DOUBTFUL to TEST-GAP-FILE LOW: the missing observers are real, DOUBTFUL is not a disposition, and #128's sibling #120 was already filed as a gap under the same "each regression‑gated" sentence. `memoryrw:F5` stays RECORD-L4, aimed at `memory_rw.c:207–213`; the changelog's "zeroes the remainder" is already true. `debugmsg:F1` stays RECORD-L4, with the default INFO gate and the uncleared global flag stated from `net_ip.c:1294` and `debugmsg.c:579–580`. The other draft rows were re-read from source and kept, including `debuggercmds:F4` as `include2:F5` with the comment replacement added.

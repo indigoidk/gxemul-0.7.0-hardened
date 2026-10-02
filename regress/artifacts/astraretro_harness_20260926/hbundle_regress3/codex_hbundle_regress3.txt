@@ -1,0 +1,46 @@
+ASTRARETRO_HBUNDLE_REGRESS3_ALIVE
+VERDICT: 11 findings (2 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 6 RECORD, 2 OTHER); 15 items checked clean
+
+Static review of HEAD `db8b1a33`. No files changed, builds performed, or probes executed. Counterfactual results below are derived from control flow.
+
+F1 | regress/arm_fold_marker_probe.py:507 | #358 / #368 / #383 | CANNOT-FAIL | **Pass 1 conceals missing copyin work in pass 2.** If the fold retains its marker, base advance and instruction dispatch but leaves all six destination registers untouched, pass 1 has already supplied their expected values. The final value comparisons pass, both XOR operands are the retained `sl`, and the BE control passes. The single-pass warm row checks only markers and base advancement, so it does not expose this omission. Healthy and transfer-free folds therefore produce the same accepted observations. This also contradicts the claims at lines 53 and 323 that the values prove the fold’s work happened. | Smallest check: assert all six loaded values in the existing single-pass warm row; its register seeds differ from memory. | confidence high
+
+F2 | regress/arm_fold_marker_probe.py:508 | #368 / #369 | CANNOT-FAIL | **The XOR omits the first pass’s fast-path results.** The first `ldrt`, targeting `sl`, enters the general handler and warms the user mapping; the remaining five use the fast handler. With rotation missing specifically from the fast T-form handler, the `+1` row’s first pass still has correct `sl=0x44112233`, but incorrect `fp=0x11223345`. The healthy fold overwrites `fp` with `0x45112233` during pass 2. Both versions finish with correct final values and `r1=0`, so the row passes. The line-416 assertion that a template defect cannot affect five destinations while sparing `sl` is false. The writeback probe’s T-form row checks only general-path writeback. | Smallest check: retain and compare `fp` across passes as well as `sl`; compare all six for the stated differential contract. | confidence high
+
+F3 | regress/arm_fold_marker_probe.py:167; regress/arm_writeback_probe.py:553 | #358 / #357 / #383 | STATUS-LAUNDERED | Command-completion failures are discarded: fold-marker drops `wait_from()`’s verdict internally, while writeback callers ignore the returned verdict. A timed-out BE seed response containing no `FAILED` leaves `__put_failed=False`, allowing `puts=True`. Separately, a quiet session interrupted before reaching its fold still passes lines 337/365 because zero markers are its entire oracle; the positive control ran in another process. **The discarded-completion mechanism is already filed under task #81, in the #391 pass-2 correction.** | Smallest check: withhold one command’s completion response and require an incomplete-session result; require an execution witness in each quiet session. | confidence high
+
+F4 | regress/arm_fold_marker_probe.py:571 | #361 / 5b225bc3 | OTHER | If the positive xchg session returns `None`, line 558 continues before `_xchg_pos` is assigned. A subsequent healthy negative session raises `NameError` here. Accumulated rows and `FOLDMARK_RESULT` are never printed, and the gate reports SKIP when preceding checks were clean. This is not an overall successful battery exit: HEAD reports gaps separately. | Smallest check: fail only the positive xchg startup and require failed positive/selective rows plus a complete result trailer. | confidence high
+
+F5 | regress/arm_writeback_probe.py:591; regress/arm_fold_marker_probe.py:212 | #357 / #358 | OTHER | Both helpers interrupt after two wall-clock seconds without establishing that execution reached the parking instruction. A healthy writeback loop interrupted after one iteration can report `r0=0x10002` instead of `0x1000B` and be scored as an emulator regression. The independent guest counter bounds the program but does not prove its completion. **The broader wall-clock-oracle debt is already filed in #419’s residuals.** | Smallest check: verify the parking PC or a completion sentinel before scoring architectural results; classify unfinished execution separately. | confidence high
+
+F6 | regress/arm_writeback_probe.py:82 | #364, stale after #365 | RECORD | The table says only the three cold rotation rows enter the general function, “and nothing else.” HEAD also sends `ldrt post4 unal` and `cold pre4 unal` there; `LSGEN` correctly lists five nonzero entries. Lines 93 and 569 repeat related obsolete coverage claims. **The three-versus-five discrepancy is already filed under `sgidefatalstale`.** | Smallest check: compare the prose against the five entries at lines 678–682. | confidence high
+
+F7 | regress/arm_writeback_probe.py:136 | #357 / aed12e44 | RECORD | Not every offset indivisible by the access size creates a fixed point. For a word access with offset `+5`, the old masked calculation gives `0x10001 → 0x10005 → 0x10009`: incorrect progress, but not livelock. The source template already explains this distinction correctly. | Smallest check: evaluate `(base & ~3) + 5` twice. | confidence high
+
+F8 | regress/arm_writeback_probe.py:150 | #357 / aed12e44 | RECORD | “Every row below except G is a word form” excludes only the halfword row, but `A wb byte post1 unal` uses `LDRB_P1`. That is a byte control. | Smallest check: compare line 419’s row with `LDRB_P1` at line 224. | confidence high
+
+F9 | regress/arm_writeback_probe.py:394 | #357 / #364 | RECORD | Filling the name column does not make the described selector unsatisfiable. The actual format appends two literal spaces after `%-32s`, so a 32-character name still matches `<name>  *DISC`. Lines 383–387 correctly explain the opposite of this sentence. | Smallest check: format a 32-character name and apply the stated pattern. | confidence high
+
+F10 | regress/arm_writeback_probe.py:311 | #364 / e89e3db2 | RECORD | The comment says `gate_skip` swallows already-recorded failures. At HEAD, `regress/lib.sh:139` checks `_fails` and exits 1 when it is nonzero. That historical defect was fixed by #371. | Smallest check: compare the claim with `gate_skip()`’s current failure branch. | confidence high
+
+F11 | regress/arm_fold_marker_probe.py:116 | #358 / 221328df | RECORD | The documented return value is `(marker_count, verb_took, regs)`, but line 252 returns `(buf, regs, mem)`. The “two-pass session” description also does not describe its straight-line A/B, xchg and scanc callers. | Smallest check: compare the docstring, return statement and callers. | confidence high
+
+The following items checked clean concern their stated properties, not the separate findings above:
+
+- regress/arm_writeback_probe.py:213 — Instruction fields and immediate values agree with the load/store and setup comments.
+- regress/arm_writeback_probe.py:327 — Branch calculations correctly implement the ten-iteration and two-pass programs.
+- regress/arm_writeback_probe.py:397 — Nine writeback discriminators have distinct masked and corrected expectations.
+- regress/arm_writeback_probe.py:415 — Five PIN rows correctly describe unchanged behavior.
+- regress/arm_writeback_probe.py:439 — Warm and cold rotation expectations correctly compute ROR8, ROR16 and ROR24.
+- regress/arm_writeback_probe.py:503 — T-form post-index and cold pre-index rows distinguish the two general writeback corrections.
+- regress/arm_writeback_probe.py:677 — Path expectations correctly require five general-path entries and seventeen zero-entry rows.
+- regress/arm_writeback_probe.py:627 — Missing telemetry fails; missing register reads cannot hide through a reduced path denominator because the gate requires 22.
+- regress/arm_fold_marker_probe.py:255 — Marker parsers distinguish fold names and separate installed, declined and combined messages.
+- regress/arm_fold_marker_probe.py:295 — Warm/cold pairs correctly require their exact marker triples and base advancement.
+- regress/arm_fold_marker_probe.py:553 — Nonzero xchg seeds and positive/negative marker expectations distinguish the same-register guard and missing arming.
+- regress/arm_fold_marker_probe.py:578 — Scanc checks both decline paths using distinct values, actual readbacks and a completion sentinel.
+- regress/arm_fold_marker_probe.py:638 — BE byte seeds and offsets +1/+3 distinguish missing swapping and swapping after rotation.
+- regress/arm_fold_marker_probe.py:664 — The BE control reconstructs the first general-path value and rejects an LE rig.
+- regress/arm_fold_marker_probe.py:684 — Single-pass BE copyout checks all 24 destination bytes, six preserved registers and exact markers.
+
+DENOMINATOR: read 2 of 2 files in full

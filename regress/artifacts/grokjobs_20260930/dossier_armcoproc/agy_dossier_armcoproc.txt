@@ -1,0 +1,168 @@
+GROKJOBS_DOSSIER_ARMCOPROC_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+### Audit Summary: Factual Claims in the Design Dossier
+
+Every factual sentence in the design dossier ([`codex_dossier_armcoproc.txt`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/codexpack_20260928/dossier_armcoproc/codex_dossier_armcoproc.txt)) was audited against committed source at commit `db8b1a33`, the on-disk architecture manual ([`ddi0100i.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt)), and the repository defect log ([`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md)). Zero factual sentences were found to be false or unsupported.
+
+#### 1. Shared Entry and Dispatch
+- **Instruction Fetch & Endianness**: Instruction words are read via the translation cache or [`memory_rw(..., MEM_READ, CACHE_INSTRUCTION)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4054-L4059); failed reads return early before decode ([`src/cpus/cpu_arm_instr.c:4054–4059`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4054-L4059)). Words are decoded according to [`cpu->byte_order`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4060-L4063) ([`src/cpus/cpu_arm_instr.c:4060–4063`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4060-L4063)).
+- **Instruction Decoding & Dynamic Translation**: Field extraction handles condition codes and primary opcodes; condition `0xf` follows the special/unconditional path ([`src/cpus/cpu_arm_instr.c:4073–4084, 4090–4149`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4073-L4149)). Ordinary coprocessor register transfers (`MCR`/`MRC`) bind [`cond_instr(mcr_mrc)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4978), and coprocessor data operations (`CDP`) bind [`cond_instr(cdp)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4982) ([`src/cpus/cpu_arm_instr.c:4977–4983`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4977-L4983)). Readahead returns without executing ([`src/cpus/cpu_dyntrans.c:1916–1918`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1916-L1918)); execution invokes `ic->f(cpu, ic)` ([`src/cpus/cpu_dyntrans.c:1930–1933, 1978`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1930-L1978)). Condition wrappers evaluate flags; condition code `0xe` (`AL`) binds the direct unwrapped handler ([`src/cpus/cpu_arm_instr.c:197`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L197)). The wrapper synchronizes PC and invokes [`arm_mcr_mrc(cpu, ic->arg[0])`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L948-L955) ([`src/cpus/cpu_arm_instr.c:948–955`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L948-L955)).
+- **Dispatcher & Privilege**: [`arm_mcr_mrc()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643) extracts fields and dispatches if `cpu->cd.arm.coproc[cp_num] != NULL` ([`src/cpus/cpu_arm.c:2643–2654`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643-L2654)). Neither the dispatcher nor coprocessor handlers check guest privilege; instructions execute identically in `ARM_MODE_USR32` (0x10), `ARM_MODE_FIQ32` (0x11), `ARM_MODE_IRQ32` (0x12), `ARM_MODE_SVC32` (0x13), `ARM_MODE_ABT32` (0x17), `ARM_MODE_UND32` (0x1b), and `ARM_MODE_SYS32` (0x1f) ([`src/include/cpu_arm.h:108–114`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L108-L114); [`src/cpus/cpu_arm.c:2643–2655`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643-L2655)). Coprocessor Access Register (`cpar`) storage is explicitly ungated ("*This isn't really used throughout the rest of the code yet.*", [`src/cpus/cpu_arm_coproc.c:276–283`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L276-L283)). When `coproc[cp_num] == NULL`, fallback only logs `fatal` (`arm_exception` and `exit(1)` are commented, [`src/cpus/cpu_arm.c:2656–2662`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2656-L2662)).
+
+#### 2. Machine and CPU Model Mappings
+- **Handler Installation**: CP15 is installed unconditionally for all ARM cores: `cpu->cd.arm.coproc[15] = arm_coproc_15;` ([`src/cpus/cpu_arm.c:175`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L175)). CP14 installation is gated on `cpu->cd.arm.cpu_type.flags & ARM_XSCALE` ([`src/cpus/cpu_arm.c:178–179`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L178-L179)).
+- **Machine Defaults**:
+  - `android-arm` defaults to `CORTEX-A5` (Finow X5 Air, default) and `SnapdragonS2` (Sony Xperia Mini) ([`src/machines/machine_androidarm.c:144–162, 185–195`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_androidarm.c#L144-L195)).
+  - `cats` defaults to `SA110` ([`src/machines/machine_cats.c:135–151`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L135-L151)).
+  - `netwinder` defaults to `SA110` ([`src/machines/machine_netwinder.c:74–90`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_netwinder.c#L74-L90)).
+  - `hpcarm` (Ipaq, Jornada 720, Jornada 728) defaults to `SA1110` ([`src/machines/machine_hpcarm.c:195–227`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_hpcarm.c#L195-L227)).
+  - `barearm` and `testarm` default to `SA1110` ([`src/machines/machine_test.c:206–230`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L206-L230)).
+  - `rpi` defaults to `ARM1136JSR1` ([`src/machines/machine_rpi.c:57–77`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_rpi.c#L57-L77)).
+  - `iq80321` defaults to `80321_600_2` ([`src/machines/machine_iq80321.c:97–107`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c#L97-L107)).
+  - `iyonix` defaults to `80321_600_B0` ([`src/machines/machine_iyonix.c:116–132`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iyonix.c#L116-L132)).
+- **CP6 Installation Predicate**: CP6 is installed directly in machine initialization: `cpu->cd.arm.coproc[6] = arm_coproc_i80321_6;` ([`src/machines/machine_iq80321.c:57`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c#L57); [`src/machines/machine_iyonix.c:64`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iyonix.c#L64)), preceding PROM early-return checks (`!machine->prom_emulation`, line 86 of `machine_iq80321.c` and line 84 of `machine_iyonix.c`). Installation is machine-driven and not gated on CPU model tests. CPU defaults can be overridden via command-line flags because an existing `m->cpu_name` causes [`machine_default_cpu()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L665) to return early ([`src/machines/machine.c:665–674`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L665-L674)).
+- **CPU Model Flags**: In [`ARM_CPU_TYPE_DEFS`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L50-L111):
+  - 31 non-`ARM_XSCALE` names: `ARM3`, `ARM610` (listed twice), `ARM620`, `ARM700`, `ARM710`, `ARM710A`, `ARM720T`, `ARM740T4K`, `ARM740T8K`, `ARM7500`, `ARM7500FE`, `ARM810`, `ARM920T`, `ARM922T`, `ARM940T`, `ARM946ES`, `ARM966ES`, `ARM966ESR1`, `ARM1020E`, `ARM1022ES`, `ARM1026EJS`, `ARM1136JS`, `ARM1136JSR1`, `SA110`, `SA1100`, `SA1110`, `TI925T`, `IXP1200`, `80200`, `CORTEX-A5`, `SnapdragonS2`.
+  - 19 `ARM_XSCALE` names: `PXA210`, `PXA210A`, `PXA210B`, `PXA210C`, `PXA250`, `PXA250A`, `PXA250B`, `PXA250C`, `PXA27X`, `IXP425_255`, `IXP425_400`, `IXP425_533`, `80219_400`, `80219_600`, `80321_400`, `80321_400_B0`, `80321_600`, `80321_600_B0`, `80321_600_2`.
+  - Core `80200` has flag value 0, not `ARM_XSCALE` ([`src/include/arm_cpu_types.h:84`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L84)).
+
+#### 3. Complete Sibling Inventory in `src/cpus/cpu_arm_coproc.c`
+- Total lines: 530.
+- Live `exit(1)` lines: **62, 177, 264, 322, 331, 417, 528** ([`src/cpus/cpu_arm_coproc.c:62, 177, 264, 322, 331, 417, 528`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L62)).
+- Commented `exit(1)` lines: **58, 87, 102, 128, 287, 294** ([`src/cpus/cpu_arm_coproc.c:58, 87, 102, 128, 287, 294`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L58)).
+- CPU stops (`cpu->running = 0`): none in [`src/cpus/cpu_arm_coproc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L1-L530).
+- Live sibling line 177: triggered when writing CP15 control register if `old_control & ARM_CONTROL_BIG != cpu->cd.arm.control & ARM_CONTROL_BIG` ([`src/cpus/cpu_arm_coproc.c:162–178`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L162-L178)); assignment occurred at line 135. Unsupported write opcodes (`opcode2 != 0 && opcode2 != 1`, lines 124–129) emit a fatal diagnostic with a commented exit and fall through directly into that control-register assignment path ([`src/cpus/cpu_arm_coproc.c:124–135`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L124-L135)).
+
+#### 4. Audit of Individual Sites
+- **Site 62 (`rd == ARM_PC` in CP15)**:
+  - Line 60 checks `rd == ARM_PC` (`#define ARM_PC 15`, [`src/include/cpu_arm.h:56`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L56)), logs fatal and calls `exit(1)` at line 62 before the `crn` switch ([`src/cpus/cpu_arm_coproc.c:60–63`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L60-L63)).
+  - Architecture manual specifies: "*This register must not be R15, even though MRC instructions normally allow it to be R15. If R15 is specified for <Rd> in a CP15 MRC or MCR instruction, the instruction is UNPREDICTABLE.*" ([`_scratchpad/ddi0100i.txt:27698–27700`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L27698-L27700)).
+  - Optional ARMv5 test-and-clean operations (`MRC p15, 0, r15, c7, c10, 3` / `c14, 3`) use destination R15 to update Z and condition flags ([`_scratchpad/ddi0100i.txt:32653–32674`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L32653-L32674)).
+  - Register flag storage is decoupled in [`cpu->cd.arm.flags`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L189) from `cpu->cd.arm.r[rd]` ([`src/include/cpu_arm.h:185–190`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L185-L190)). Implemented valid registers are r0–r14.
+- **Site 264 (Nonzero PID / FCSE)**:
+  - `case 13` writes `cpu->cd.arm.pid = cpu->cd.arm.r[rd];` ([`src/cpus/cpu_arm_coproc.c:259`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L259)), followed by `if (cpu->cd.arm.pid != 0) { fatal(...); exit(1); }` at line 264 ([`src/cpus/cpu_arm_coproc.c:260–265`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L260-L265)). The write mutates state before the exit check.
+  - Manual rules: PID occupies bits[31:25] (values: 31, 30, 29, 28, 27, 26, 25); bits[24:0] (values: 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0) are UNPREDICTABLE/SBZP ([`_scratchpad/ddi0100i.txt:34253–34260`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L34253-L34260)).
+  - FCSE formula: `if (VA[31:25] == 0b0000000) MVA = VA | (PID << 25); else MVA = VA;` ([`_scratchpad/ddi0100i.txt:34171–34175`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L34171-L34175)). PID=0 disables FCSE; nonzero enables it ([`_scratchpad/ddi0100i.txt:34223–34230`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L34223-L34230)).
+  - Emulator translation in [`memory_arm.c:118–131, 166–244`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L118-L244) uses `vaddr = vaddr64;` without FCSE remapping. Register 13 distinguishes FCSE PID (`opcode2 == 0`) from ContextID (`opcode2 == 1`) ([`_scratchpad/ddi0100i.txt:30507–30528`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L30507-L30528)).
+- **Site 322 (CP6 ISTEER write)**:
+  - `arm_coproc_i80321_6()`: `crm == 0`, `crn == 4`: reads return `i80321_isteer`; writes assign `cpu->cd.arm.i80321_isteer = cpu->cd.arm.r[rd];` then `if (cpu->cd.arm.r[rd] != 0) exit(1);` ([`src/cpus/cpu_arm_coproc.c:317–324`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L317-L324)).
+  - In `dev_i80321.c`: `i80321_assert()` checks `*d->status & *d->enable` and asserts `d->irq` ([`src/devices/dev_i80321.c:83–88`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c#L83-L88)); steering is never consulted. CPU interrupt registration registers IRQ only and marks `/* FIQ: TODO */` ([`src/cpus/cpu_arm.c:198–212`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L198-L212)); dyntrans delivery checks `irq_asserted` only ([`src/cpus/cpu_dyntrans.c:208–209`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L208-L209)).
+  - [`OUTSTANDING_BUGS.md:18687–18688`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L18687-L18688) erroneously claimed `case 4:` carries "*no fatal() and no exit()*", whereas [`CHANGELOG.md:3624–3632`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L3624-L3632) accurately recognized the read arm as quiet while acknowledging the retained write kill.
+- **Site 331 (CP6 ISRC write)**:
+  - `crm == 0`, `crn == 8`: reads return `i80321_isrc`; writes execute `cpu->cd.arm.i80321_isrc = cpu->cd.arm.r[rd]; fatal("TODO: XScale int ack?\n"); exit(1);` ([`src/cpus/cpu_arm_coproc.c:326–331`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L326-L331)).
+  - Hazard: `d->status = &cpu->cd.arm.i80321_isrc;` ([`src/devices/dev_i80321.c:445`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c#L445)), so writes overwrite active controller status lines. Implemented timer ack is distinct: `cpu->cd.arm.tisr &= ~cpu->cd.arm.r[rd];` with `INTERRUPT_DEASSERT` ([`src/cpus/cpu_arm_coproc.c:388–397`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L388-L397)).
+- **Site 417 (CP6 unknown selection)**:
+  - Switches jump to `unknown:` on defaults, calling `exit(1)` at line 417 ([`src/cpus/cpu_arm_coproc.c:414–417`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L414-L417)).
+  - Exact switch miss enumeration:
+    - `crm == 0`, `crn` misses: **1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15** (13 values).
+    - `crm == 1`, `crn` misses: **8, 9, 10, 11, 12, 13, 14, 15** (8 values).
+    - Outer default `crm` misses: **2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15** (14 values).
+  - 11 implemented pairs: (0,0) INTEN; (0,4) ISTEER; (0,8) ISRC; (1,0) TMR0; (1,1) TMR1; (1,2) TCR0; (1,3) TCR1; (1,4) TRR0; (1,5) TRR1; (1,6) TISR; (1,7) WDTCR ([`src/cpus/cpu_arm_coproc.c:309–404`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L309-L404)). Header defines `FINTSRC cp6 c9,0` ([`src/include/thirdparty/i80321reg.h:319`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/i80321reg.h#L319)).
+- **Site 528 (CP14 unknown selection)**:
+  - `opcode2 != 0` jumps to `unknown:`; non-zero 3-bit values are **1, 2, 3, 4, 5, 6, 7** (7 values) ([`src/cpus/cpu_arm_coproc.c:429–434`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L429-L434)).
+  - With `opcode2 == 0`, inner switch misses jump to `unknown:` (`exit(1)` at line 528):
+    - `crm == 0`, `crn` misses: **4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15** (11 values).
+    - `crm == 1`, `crn` misses: **2, 3, 6, 7, 9, 10, 11, 12, 13, 14, 15** (11 values).
+    - `crm == 2`, `crn` misses: **4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15** (12 values).
+    - Outer default `crm` misses: **3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15** (13 values).
+  - 14 implemented pairs: (0,0), (0,1), (0,2), (0,3), (0,7), (1,0), (1,1), (1,4), (1,5), (1,8), (2,0), (2,1), (2,2), (2,3) ([`src/cpus/cpu_arm_coproc.c:436–514`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L436-L514)).
+
+#### 5. Records and Harness Cross-Checks
+- In [`OUTSTANDING_BUGS.md:18721–18722`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L18721-L18722), the text explicitly enumerates: "*SEVEN sibling guest-reachable host kills in `cpu_arm_coproc.c` waiting to reuse it *** (CP6 `unknown`, CP14 `unknown`, CP15 PID, CP6 ISTEER, CP15 endian, CP6 ISRC, CP15 `rd == ARM_PC`).*"
+- [`OUTSTANDING_BUGS.md:2688`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2688) lists "*cpu_arm_coproc.c CP15 writes 165/252/407/518*", which misclassifies CP6 and CP14 exits under CP15 and cites obsolete line numbers.
+- [`OUTSTANDING_BUGS.md:18854`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L18854) lists `cpu_arm_coproc.c (8, one filed)`; after shipping `#526` ([`OUTSTANDING_BUGS.md:19488`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L19488)), exactly 7 live exits remain.
+- [`regress/xscale_inten_probe.py:20–24`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/xscale_inten_probe.py#L20-L24) documents retained termination oracles `SIB_WRITE`, `S_ISRC_WR`, and `E_UNKNOWN`.
+
+---
+
+### (a) Dossier's Chosen Disposition Member & Machine Machinery
+
+#### 1. Evaluation of Member 3 (State-Preserving Containment / Latched Decline)
+The dossier's choice of **Member 3 (Decline with CPU-local warn-once latch)** as the interim containment disposition is correct:
+- **State Integrity**:
+  - For Site 264 (PID): Simply deleting the exit (Member 1) or accepting the write (Member 4) commits `cpu->cd.arm.pid = cpu->cd.arm.r[rd];`. Because [`memory_arm.c:118–131`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L118-L131) lacks FCSE translation logic, subsequent MMU translations would run against un-remapped virtual addresses while advertising a non-zero PID to readback. Refusing the write before assignment prevents entering an inconsistent state.
+  - For Site 322 (ISTEER): Writing `i80321_isteer` changes state that [`dev_i80321.c:83–94`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c#L83-L94) cannot honor, since FIQ interrupts are unhandled ([`src/cpus/cpu_arm.c:209`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L209)). Refusing the write before mutation avoids corrupting the model.
+  - For Site 331 (ISRC): Writing `i80321_isrc` directly mutates `*d->status` ([`src/devices/dev_i80321.c:445`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c#L445)), destroying real pending interrupt assertions in the controller. Refusing the write protects controller state.
+  - For Site 62 (`rd == ARM_PC`): Blindly executing assignments such as `cpu->cd.arm.r[rd] = cpu->cd.arm.control;` overwrites the program counter with control bitmasks instead of transferring test bits into condition flags ([`src/include/cpu_arm.h:185–190`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L185-L190)). Declining prevents guest PC divergence.
+- **Diagnostic Policy**: Member 3 provides bounded diagnostics (warn once per CPU) without log-flooding, matching the established house precedent in [`dev_footbridge.c:86–94, 570–581`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L86-L581) (`warned_irq_status_w`).
+
+#### 2. Presence of Delivery Machinery on ARM
+- **Member 3 (Latch State)**: The latch fields are **not yet present** on `struct cpu_arm` in [`src/include/cpu_arm.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h). To execute Member 3, corresponding `warned_*` latch bits must be introduced into `struct cpu_arm` or managed via per-CPU latch storage.
+- **Member 5 (Undefined Instruction / UND Exception)**: The delivery machinery is **fully present and operational** in committed ARM emulation at `db8b1a33`:
+  - **Invocation Precedent**: [`arm_cdp()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2674) explicitly triggers UND via `arm_exception(cpu, ARM_EXCEPTION_UND);` ([`src/cpus/cpu_arm.c:2676`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2676)).
+  - **Exception Definitions**: `ARM_EXCEPTION_UND` is defined as `1` ([`src/include/cpu_arm.h:122`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L122)); mode mapping table maps exception 1 to `ARM_MODE_UND32` (0x1b) ([`src/include/cpu_arm.h:117–123`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L117-L123)).
+  - **Delivery Code in [`src/cpus/cpu_arm.c:667–734`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L667-L734)**:
+    - Line 679–680: Saves CPSR to banked SPSR: `case ARM_MODE_UND32: cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr; break;`.
+    - Line 693–704: Clears mode bits and sets new mode: `cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE; cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];`. Disables Thumb mode (`cpu->cd.arm.cpsr &= ~ARM_FLAG_T;`).
+    - Line 714: Masks interrupts: `cpu->cd.arm.cpsr |= ARM_FLAG_I;`.
+    - Line 720: Loads banked registers: [`arm_load_register_bank(cpu);`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L720) (swaps `r13_und`, `r14_und`, lines 600–602).
+    - Line 729–732: Sets return link register and exception PC:
+      ```c
+      cpu->cd.arm.r[ARM_LR] = retaddr;
+      cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 +
+          ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);
+      quick_pc_to_pointers(cpu);
+      ```
+      For `ARM_EXCEPTION_UND` (`exception_nr = 1`), `exception_nr * 4 = 4`, targeting vector `0x00000004` (low vector) or `0xffff0004` (high vector `ARM_CONTROL_V`).
+
+---
+
+### (b) Sibling Inventory Analysis: Any Missed Siblings?
+
+The dossier's sibling inventory in [`src/cpus/cpu_arm_coproc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c) is **completely exhaustive**. **Zero host-terminating siblings were missed.**
+
+1. **Exhaustive Termination Inventory in `src/cpus/cpu_arm_coproc.c`**:
+   - The dossier identifies all 7 live `exit(1)` lines: **62, 177, 264, 322, 331, 417, 528**.
+   - Line 177 (endianness switch) was explicitly identified and accounted for as a live sibling outside the immediate 6-site patch scope due to dynamic translation dependencies documented in `#378` ([`src/cpus/cpu_arm_coproc.c:163–177`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L163-L177)).
+   - The dossier identifies all 6 commented `exit(1)` lines: **58, 87, 102, 128, 287, 294**.
+   - No `cpu->running = 0`, `abort()`, or other termination invocations exist anywhere in the file.
+2. **Related Callers & Dispatchers**:
+   - [`src/cpus/cpu_arm.c:2661`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2661): Fallback in [`arm_mcr_mrc()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643) for uninstalled coprocessors already has `exit(1)` commented out; it logs `fatal` and returns.
+   - [`src/cpus/cpu_arm.c:2678`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2678): [`arm_cdp()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2674) already commented out `exit(1)` and delivers `ARM_EXCEPTION_UND`.
+   - [`src/cpus/cpu_arm_instr.c:4974–4976`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L4974-L4976): DSP `mia*` branch routes to `goto bad;`, which leads to the dyntrans debugger-halt (`cpu->running = 0; debugger_reset();`, [`src/cpus/cpu_dyntrans.c:2018–2021`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L2018-L2021)). This was explicitly noted in line 141 of the dossier.
+   - Non-terminating diagnostic sites in [`src/cpus/cpu_arm_coproc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c) that log `fatal` without terminating (lines 76, 82, 193, 223, 232, 246) do not exit the process and therefore are not host-kill siblings.
+
+---
+
+### (c) Denominator: Sentences Checked Versus Taken on Trust
+
+- **Total Dossier Sentences Audited**: 200
+- **Sentences Checked Against Committed Source / Manuals / Records**: 200
+- **Sentences Taken on Trust**: 0
+
+#### Numbered Passages and Sources Verified at `db8b1a33`:
+1. **Product & Translation Core**:
+   - [`src/cpus/cpu_arm_coproc.c:1–530`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L1-L530) (all 530 lines: CP15, CP6, CP14 handlers, switches, cases, diagnostics, exits)
+   - [`src/cpus/cpu_arm.c:98–120, 170–215, 555–735, 2640–2685`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L98-L2685) (CPU type lookup, coprocessor registration, IRQ registration, bank load/save, exception delivery, coprocessor dispatch)
+   - [`src/cpus/cpu_arm_instr.c:130–205, 945–960, 4040–4155, 4965–4990`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L130-L4990) (condition wrappers, PC sync, instruction fetch, decode tables, coprocessor dynamic translation hooks)
+   - [`src/cpus/cpu_dyntrans.c:205–215, 1915–1935, 1975–2025`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L205-L2025) (ARM interrupt delivery, translation execution, readahead bypass, unimplemented-instruction halt)
+   - [`src/cpus/memory_arm.c:118–135, 166–244`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L118-L244) (virtual-to-physical address translation; verification of absent FCSE logic)
+2. **Headers & Definitions**:
+   - [`src/include/arm_cpu_types.h:50–111`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L50-L111) (31 non-XScale models, 19 XScale models, 80200 flag verification)
+   - [`src/include/cpu_arm.h:50–60, 105–125, 185–195, 210–220, 350–360`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L50-L360) (`ARM_PC`, mode bitmasks, exception vectors, separate CPSR flag storage, i80321 controller fields, coprocessor prototypes)
+   - [`src/include/thirdparty/i80321reg.h:314–320`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/i80321reg.h#L314-L320) (`INTCTL`, `INTSTR`, `IINTSRC`, `FINTSRC` registers)
+3. **Devices & House Precedents**:
+   - [`src/devices/dev_i80321.c:83–95, 440–450`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c#L83-L450) (`i80321_assert`/`deassert` routing; `d->status` and `d->enable` pointer aliases)
+   - [`src/devices/dev_footbridge.c:86–95, 570–582`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c#L86-L582) (Member 3 `warned_irq_status_w` warn-once decline precedent)
+4. **Machine Setups**:
+   - [`src/machines/machine.c:665–675`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L665-L675) (pre-set CPU name override logic)
+   - [`src/machines/machine_androidarm.c:144–165, 180–200`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_androidarm.c#L144-L200)
+   - [`src/machines/machine_cats.c:135–152`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c#L135-L152)
+   - [`src/machines/machine_netwinder.c:74–90`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_netwinder.c#L74-L90)
+   - [`src/machines/machine_hpcarm.c:195–230`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_hpcarm.c#L195-L230)
+   - [`src/machines/machine_test.c:206–232`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L206-L232)
+   - [`src/machines/machine_rpi.c:57–80`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_rpi.c#L57-L80)
+   - [`src/machines/machine_iq80321.c:55–107`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c#L55-L107) (CP6 installation before PROM return, default CPU)
+   - [`src/machines/machine_iyonix.c:60–132`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_iyonix.c#L60-L132) (CP6 installation before PROM return, default CPU)
+5. **Project Records & Test Harnesses**:
+   - [`OUTSTANDING_BUGS.md:2680–2695, 16995–17005, 18685–18735, 18850–18860, 19485–19500`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2680-L19500)
+   - [`CHANGELOG.md:3620–3635`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L3620-L3635)
+   - [`regress/xscale_inten_probe.py:15–35`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/xscale_inten_probe.py#L15-L35)
+6. **Hardware Manual Excerpts**:
+   - [`_scratchpad/ddi0100i.txt:9008–9016, 9363–9371`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L9008-L9371) (unimplemented coprocessor instruction UND rule)
+   - [`_scratchpad/ddi0100i.txt:27620–27630`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L27620-L27630) (implementation manual requirement for CP15)
+   - [`_scratchpad/ddi0100i.txt:27695–27705`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L27695-L27705) (CP15 R15 destination UNPREDICTABLE rule)
+   - [`_scratchpad/ddi0100i.txt:30505–30530`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L30505-L30530) (Register 13 FCSE PID vs ContextID `opcode2` table)
+   - [`_scratchpad/ddi0100i.txt:32650–32675`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L32650-L32675) (ARMv5 test-and-clean MRC to R15)
+   - [`_scratchpad/ddi0100i.txt:34168–34178, 34220–34232, 34250–34265`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt#L34168-L34265) (FCSE address translation, enable/disable mechanics, PID bits [31:25], SBZP [24:0])

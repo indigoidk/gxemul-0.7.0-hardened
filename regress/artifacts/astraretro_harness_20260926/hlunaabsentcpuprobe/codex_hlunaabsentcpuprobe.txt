@@ -1,0 +1,38 @@
+ASTRARETRO_HLUNAABSENTCPUPROBE_ALIVE
+VERDICT: 6 findings (0 CANNOT-FAIL, 1 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 3 RECORD, 1 OTHER); 15 items checked clean
+
+F1 | regress/luna_absentcpu_probe.py:295 | #503 | STATUS-LAUNDERED | After the observation deadline, `cont_until_breakpoint()` ignores whether Ctrl-C regained the prompt and returns False. `noreenter`, `noreenter1`, and `nodeliver ctl` interpret that as successful non-delivery. A live, unresponsive child passes; a breakpoint received during cleanup also passes. Session D even ignores the subsequently read vector PC. | Supply either no cleanup prompt or a breakpoint arriving during cleanup; require timeout/error or hit, respectively. Both false-pass paths reproduced with in-memory stubs. | confidence high
+
+F2 | regress/luna_absentcpu_probe.py:700 | #503 | SELECTS-NOTHING | In `others idle23`, register responses without matching `pc` fields become None. With `pcs=[None,None,0x40008,0x40008]`, both delivery rows and the idle row pass: `None != VBR+8` is accepted as evidence of inactivity. | Evaluate the predicate with that vector; require valid CPU0/1 observations before checking inactivity. Reproduced with the HEAD register parser and predicate. | confidence high
+
+F3 | regress/luna_absentcpu_probe.py:249 | #503 | OTHER | A command timeout can make `step_at()` return False while the child remains alive. Callers invoke `died()`, and `waitpid(WNOHANG)=(0,0)` is incorrectly decoded as “exit 0.” The row becomes HALT and the witness becomes PRE_FIX_SYMPTOM, falsely diagnosing the guarded crash. The gate remains red. | Stub a live child and failed command wait; require a timeout classification and no PRE_FIX_SYMPTOM. | confidence high
+
+F4 | regress/luna_absentcpu_probe.py:19 | #503 | RECORD | “EVERY PLANTED WORD” is disassembled and checked is false. `boot()` plants six words at line 313, including the parking and vector branches; `check_dis()` iterates only the four load/store SLOTS at line 265. | Compare planted addresses with addresses visited by `check_dis()`. | confidence high
+
+F5 | regress/luna_absentcpu_probe.py:94 | #503 | RECORD | The header says HEAD reports PRE_FIX_SYMPTOM at `soft1` and `siofirst`. HEAD already bounds the interrupt walk by the configured CPU count, skipping absent slots; successful execution reports PASS at line 776. | Compare the sentence with `src/devices/dev_luna88k.c:178`, its count assignment at 1072, and the verdict branches. | confidence high
+
+F6 | regress/luna_absentcpu_probe.py:17 | #503 | RECORD | “ONE cold-debugger session per SESSION below” is false for B3: it boots at line 504, closes at 518, and boots another session at 520. | Count B3’s `boot()` calls on its successful path. | confidence high
+
+No exact filing for these six harness defects was found in `OUTSTANDING_BUGS.md`. Related entries are resolved `lunaabsentcpu` at line 428, which confirms the post-fix result, and closed `probedeathoracle` at 21060, whose discussion incorrectly assumes this probe calls `died()` only after EOF.
+
+Checked clean; locations below are in `regress/luna_absentcpu_probe.py` unless stated otherwise:
+
+- :154 — Instruction fields and branch word agree with the HEAD m88k decoder.
+- :216 — #546’s marker rename preserves the fresh-buffer and command-echo checks.
+- :268 — Missing or mismatched disassembly fails validation for the four checked SLOTS.
+- :322 — `value()` rejects missing observations and uses independently supplied expectations.
+- :355 — RAM identity checks use nonzero constants and clear the destination before loading.
+- :362 — MASK readback expectations match the device’s shift; declined stores fail.
+- :378 — `soft1` tests store completion and nonzero readback, providing genuine correction coverage.
+- :394 — SIO assertions check level five; line 402 independently checks clearing.
+- :454 — CPU0 delivery requires vector PC and PSR/EPSR state.
+- :743 — CPU1 delivery, shadow state, and CPU0 parking distinguish a hardcoded one-CPU bound.
+- :613 — Two-CPU and four-CPU arrival tracking requires distinct CPUs, including at line 652.
+- :677 — Pending slots 2/3 differ from idle slots 0/1, exposing the stated parity aliases.
+- :753 — All twelve named session groups run; successful paths produce 37 rows.
+- :779 — Non-OK rows force nonzero exit; the gate additionally requires completion, 37/37, PASS, and controls.
+- :115 — Missing three-CPU coverage is accurately disclosed and already filed as `lunancpus3` at `OUTSTANDING_BUGS.md:15716`.
+
+Review used HEAD Git objects and in-memory harness stubs. No emulator, build, or file-writing operation ran.
+
+DENOMINATOR: read 1 of 1 files in full

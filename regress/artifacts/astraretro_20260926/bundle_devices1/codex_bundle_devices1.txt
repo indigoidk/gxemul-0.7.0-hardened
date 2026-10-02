@@ -1,0 +1,50 @@
+ASTRARETRO_BUNDLE_DEVICES1_ALIVE
+VERDICT: 8 findings (5 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 25 items checked clean
+
+F1 | src/devices/dev_mb89352.c:239 | upstream, relied on by #338 | CODE | live at HEAD: yes | An incomplete WRITE can request more data than the existing DATAOUT allocation holds. The disk layer overwrites `data_out_len` without reallocating (`diskimage_scsicmd.c:891`), and subsequent controller writes use that requested length as their capacity bound, permitting an out-of-bounds write. | Smallest check: trace that assignment through the DATAOUT transition at :280; verify that no allocation or capacity validation precedes :246. | confidence high
+
+F2 | src/devices/dev_mb89352.c:501 | upstream, relied on by #295 | CODE | live at HEAD: yes | A guest can interrupt command collection by changing transfer phase. The command buffer remains uninitialized, and DATAOUT completion dispatches it without checking whether the CDB arrived completely. The disk layer then reads unsupplied command bytes at `diskimage_scsicmd.c:310`. #295 initialized the data buffer but left this sibling exposed. | Smallest check: inspect the uncleared allocation, phase replacement at :427, and unconditional dispatch at :268 for a completed-CDB predicate. | confidence high
+
+F3 | src/devices/dev_vga.c:356 | upstream, relied on by #98 | CODE | live at HEAD: yes | A slow-path character-memory write below the display start while graphics mode is active can produce an oversized dirty rectangle: :743 converts the negative relative position to unsigned arithmetic. The tick clips that rectangle only when dyntrans tracking reports an access. Reachable accesses without that tracking therefore reach signed pixel-address overflow before #98’s bounds check, with excessive redraw traversal. | Smallest check: assert that rectangles from non-dyntrans writes are clipped before redraw arithmetic; inspect :743, :764 and :539–559. | confidence high
+
+F4 | src/devices/dev_fb.c:141 | #184, upstream caller relied on by #184 | CODE | live at HEAD: yes | Rejecting a zero-height GBE resize preserves the framebuffer but leaves the caller’s signed `yres` equal to zero (`dev_sgi_gbe.c:551`). Subsequent `CRMFB_VT_XYMAX` handling evaluates `(yres-1) << 12` at :495, a negative signed left shift. #184’s new return makes that subsequent access reachable. | Smallest check: inspect the caller’s assignment, rejected-resize return, and status expression; assert valid caller dimensions after rejection. | confidence high
+
+F5 | src/devices/dev_vga.c:268 | #82 / 8dd86b5a | CODE | live at HEAD: yes | A headless guest changes only its cursor position after redraw. The tick’s intentional cursor-only call passes an empty character range at :584; the new guard returns before emitting the ANSI cursor update. Cursor register writes do not mark the screen modified, so the terminal cursor remains stale. | Smallest check: a cursor-only tick must emit the new terminal position without drawing character cells. | confidence high
+
+F6 | src/devices/dev_mb89352.c:438 | #295, made stale by #338 | RECORD | live at HEAD: yes | The comment says the following assignment declares the buffer full and that truthful offsets remain deferred. HEAD initializes the offset to zero at :495 and publishes received bytes at :266. | Smallest check: compare the comment at :439–467 with those assignments. | confidence high
+
+F7 | src/devices/makeautodev.sh:72 | #406 | RECORD | live at HEAD: yes | “BOTH HALVES ARE LOAD-BEARING” falsely claims that anchoring and disabling globbing are both necessary for the recorded inputs. With anchored valid identifiers, removing `set -f` leaves the output unchanged—explicitly acknowledged by `regress/diff_autodev_gen.sh:202–209` and `CHANGELOG.md:27938`. | Smallest check: compare those acknowledgments with the source warning. | confidence high
+
+F8 | src/devices/makeautodev.sh:120 | #406 | TEST-GAP | live at HEAD: yes | The round claims to pin registration order, but `regress/diff_autodev_gen.sh:63–105` compares only prototypes. Consistently missing, reordered, or incorrectly paired registration calls can escape these assertions; the planted-input comparison uses the same generator on both sides. | Smallest check: compare emitted registration names and callbacks, in order, against declaration-derived expectations. | confidence high
+
+No matching filing was found in HEAD’s `OUTSTANDING_BUGS.md`. Its `mb89352halt` entry concerns a separate missing-status problem. These findings are based on static inspection; no files were changed and no builds or runtime probes were run.
+
+Checked clean:
+
+- `src/devices/dev_fb.c:159` — #156 checks allocation-size arithmetic; actual resize callers use bounded backing depths.
+- `src/devices/dev_fb.c:212` — #182 updates the registered mapping length after resizing.
+- `src/devices/dev_fb.c:218` — #157 invalidates translations on every CPU after backing replacement.
+- `src/devices/dev_fb.c:313` — destination Y clipping bounds work; source-row adjustment uses wide arithmetic.
+- `src/devices/dev_fb.c:328` — inverted clipped spans return before calculating copy lengths.
+- `src/devices/dev_fb.c:345` — #21 fills complete RGB triples; the 8-bit sibling’s extent is bounded.
+- `src/devices/dev_fb.c:369` — #106 bounds source columns; traced callers bound the preceding arithmetic.
+- `src/devices/dev_fb.c:719` — #70 validates complete spans for both directions and both copy paths.
+- `src/devices/dev_vga.c:123` — #271’s warning latch is initialized per device and survives register reset.
+- `src/devices/dev_vga.c:270` — #82 bounds both character bytes for valid, nonempty helper ranges.
+- `src/devices/dev_vga.c:425` — #82 rejects excessive display bases and bounds the final character pair.
+- `src/devices/dev_vga.c:631` — rejected 8-bit graphics writes neither copy nor add dirty work.
+- `src/devices/dev_vga.c:656` — rejected 8-bit graphics reads initialize the entire output.
+- `src/devices/dev_vga.c:635` — #119 separately limits read and write diagnostics.
+- `src/devices/dev_vga.c:917` — #271 rejects unsupported modes before resize, clearing, or palette reset.
+- `src/devices/dev_vga.c:963` — #272 preserves register storage while routing diagnostics through DEBUG.
+- `src/devices/makeautodev.sh:38` — #61 directs all generated fragments through a per-process file and final rename.
+- `src/devices/makeautodev.sh:1` — #393’s executable mode remains `100755` in HEAD.
+- `src/devices/makeautodev.sh:86` — #406 anchors all four device/PCI extraction loops.
+- `src/devices/makeautodev.sh:93` — globbing is restored before subsequent outer filename expansion.
+- `src/devices/makeautodev.sh:120` — all 77 device and 28 PCI names match committed registration order.
+- `src/devices/dev_mb89352.c:417` — #167 guards both implemented transfer-command case labels against NULL.
+- `src/devices/dev_mb89352.c:514` — #186 removes the exit from the unimplemented-phase default.
+- `src/devices/dev_mb89352.c:477` — #295 initializes every byte actually allocated for DATAOUT.
+- `src/devices/dev_mb89352.c:495` — #338 starts each new DATAOUT allocation’s arrival count at zero.
+
+DENOMINATOR: read 21 of 21 hunks of the net diff

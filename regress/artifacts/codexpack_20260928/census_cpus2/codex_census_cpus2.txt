@@ -1,0 +1,104 @@
+CODEXPACK_CENSUS_CPUS2_ALIVE
+VERDICT: 14 live calls classified -- 9 reachable by guest access at run time, 2 of those not recorded
+
+All source and queue citations below refer to **`db8b1a33`**. Secondary line numbers within a census row refer to that row’s file. “GUEST LEVEL” describes actual emulator reachability; privilege qualifications follow the census.
+
+The counts match exactly:
+
+- ARM: **7** — 62, 177, 264, 322, 331, 417, 528.
+- MIPS: **7** — 303, 446, 454, 1518, 2041, 2169, 2489.
+
+```text
+src/cpus/cpu_arm_coproc.c:62 | arm_coproc_15 | WHEN: guest access | CONDITION: "if (rd == ARM_PC)" (:60) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 7 — implement model-specific PC-transfer behaviour | medium
+
+src/cpus/cpu_arm_coproc.c:177 | arm_coproc_15 | WHEN: guest access | CONDITION: control-write path, "if ((old_control & ARM_CONTROL_BIG) != (cpu->cd.arm.control & ARM_CONTROL_BIG))" (:161-162) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 7 — implement endianness transition | high
+
+src/cpus/cpu_arm_coproc.c:264 | arm_coproc_15 | WHEN: guest access | CONDITION: "case 13:" (:250), then "if (cpu->cd.arm.pid != 0)" (:261), after either read or write | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 7 — implement Fast Context Switch Extension | high
+
+src/cpus/cpu_arm_coproc.c:322 | arm_coproc_i80321_6 | WHEN: guest access | CONDITION: crm "case 0:" (:309), crn "case 4:" (:315), write "else" (:317), "if (cpu->cd.arm.r[rd] != 0)" (:319) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 7 — implement interrupt steering | high reachability; medium remedy
+
+src/cpus/cpu_arm_coproc.c:331 | arm_coproc_i80321_6 | WHEN: guest access | CONDITION: crm "case 0:" (:309), crn "case 8:" (:326), write "else" (:328); diagnostic "TODO: XScale int ack?\n" (:330) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 7 — implement verified ISRC write semantics; hardware policy not checked | high reachability; low remedy
+
+src/cpus/cpu_arm_coproc.c:417 | arm_coproc_i80321_6 | WHEN: guest access | CONDITION: "default:goto unknown;" (:334, :405, :409) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 7 — implement omitted legal registers and distinguish reserved selectors | high reachability; medium remedy
+
+src/cpus/cpu_arm_coproc.c:528 | arm_coproc_xscale_14 | WHEN: guest access | CONDITION: "if (opcode2 != 0)" followed by "goto unknown;" (:429-431), or "default:goto unknown;" (:460, :490, :515, :519) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:18720-18727 | DISPOSITION: 5 — UND, provisional; model-specific selector legality not checked | high reachability; low remedy
+
+src/cpus/cpu_mips_coproc.c:303 | initialize_cop0_config | WHEN: construction | CONDITION: "default:" (:301) of "switch (cpu->cd.mips.cpu_type.rev)" (:112), after the ISA32/64 initialization return (:65-109) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+
+src/cpus/cpu_mips_coproc.c:446 | mips_coproc_tlb_set_entry | WHEN: construction | CONDITION: "if (entrynr < 0 || entrynr >= cpu->cd.mips.coproc[0]->nr_of_tlbs)" (:443) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+
+src/cpus/cpu_mips_coproc.c:454 | mips_coproc_tlb_set_entry | WHEN: construction | CONDITION: "case MMU3K:" (:450), "if (size != 4096)" (:451) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+
+src/cpus/cpu_mips_coproc.c:1518 | fpu_function | WHEN: unreachable | CONDITION: "if ((function & 0x03e00000) == 0x01000000)" (:1491), past "if (unassemble_only)" / "return 1;" (:1512-1513) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete unreachable legacy termination | high
+
+src/cpus/cpu_mips_coproc.c:2041 | coproc_tlbwri | WHEN: guest access, conditional on a setup-seeded old entry | CONDITION: old-entry "if (dpmask == 0x7ff)" and "if (cp->tlbs[index].lo0 & ENTRYLO_V || cp->tlbs[index].lo1 & ENTRYLO_V)" (:2037-2039) | GUEST LEVEL: user with CU0 enabled; otherwise privileged | RECORDED: NONE | DISPOSITION: 7 — implement small-page invalidation | high static; execution not checked
+
+src/cpus/cpu_mips_coproc.c:2169 | coproc_tlbwri | WHEN: guest access | CONDITION: new-entry "if (dpmask == 0x7ff)" and "if (cp->tlbs[index].lo0 & ENTRYLO_V || cp->tlbs[index].lo1 & ENTRYLO_V)" (:2165-2167) | GUEST LEVEL: user with CU0 enabled; otherwise privileged | RECORDED: NONE | DISPOSITION: 7 — implement small-page mappings | high static; execution not checked
+
+src/cpus/cpu_mips_coproc.c:2489 | coproc_function | WHEN: unreachable | CONDITION: "if (cp->coproc_nr == 0)" then "if (!unassemble_only)" (:2485-2486) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete unreachable legacy termination | high
+```
+
+The following evidence qualifies the classifications.
+
+**Privilege and dispatch.** ARM’s decoder selects `cond_instr(mcr_mrc)`; its execution wrapper calls `arm_mcr_mrc`, whose installed-handler dispatch contains no mode check. Thus “user” reflects this implementation, including the system-control accesses. CP6 requires an installed handler; IQ80321 and Iyonix install it. (`src/cpus/cpu_arm_instr.c:4969-4985`, `src/cpus/cpu_arm_instr.c:948-955`, `src/cpus/cpu_arm.c:2643-2663`, `src/machines/machine_iq80321.c:57`, `src/machines/machine_iyonix.c:64`.)
+
+MIPS `X(tlbw)` checks coprocessor availability, but the check rejects user mode only when CU0 is clear; otherwise it returns success. This is why the runtime rows are not unconditionally labelled privileged. (`src/cpus/cpu_mips_instr.c:2676-2683`, `src/cpus/cpu_mips_instr.c:88-110`.)
+
+**The two unreachable MIPS exits.** The executing caller of `coproc_function` supplies CP1; the disassembly caller supplies `unassemble_only=1`. COP1 branches select `instr(cop1_bc)` and leave that decoder case; the separately selected slow-path cases exclude those branches. Consequently the current callers cannot reach either legacy execution termination. (`src/cpus/cpu_mips_instr.c:2585-2589`, `src/cpus/cpu_mips.c:1336-1338`, `src/cpus/cpu_mips_instr.c:5044-5115`.)
+
+**The old-entry MIPS exit is conditionally reachable.** Normal guest installation of a valid small-page entry encounters `:2169` first, but construction can seed the old entry independently:
+
+- A selected CPU name survives defaulting and reaches CPU creation; R4100 is a supported CPU-table entry. PICA normally defaults to R4000. (`src/core/emul.c:487-502`, `src/include/mips_cpu_types.h:78`, `src/machines/machine_arc.c:261-262`.)
+- ARC PROM setup invokes `arcbios_init`, which invokes the component setup containing PICA’s predefined mappings. (`src/machines/machine_arc.c:250-253`, `src/promemul/arcbios.c:3187`, `src/promemul/arcbios.c:2087-2105`.)
+- The relevant predefined mapping explicitly has **index 10, size 4096, valid0 1**. The mask values are **4096 → 8191 (`0x1fff`) → stored mask 0** under `(2*size - 1) & ~0x1fff`; R4100 normalization then produces **`0x7ff`**. Validity is retained. Replacement of that setup-seeded entry reaches the old-entry guard. (`src/promemul/arcbios.c:2129-2131`, `src/cpus/cpu_mips_coproc.c:482-490`, `src/cpus/cpu_mips_coproc.c:2030-2041`.)
+
+This establishes a source-derived route with a nondefault PICA/R4100 configuration; execution was not checked.
+
+**ARM remedies need distinctions.** The blanket PC-register check covers more than malformed transfers: the permitted ARM manual documents optional ARMv5 cache test/clean operations whose destination is PC and whose result updates Z. Its general CP15 rule separately calls R15 transfers “UNPREDICTABLE.” Model-specific handling is therefore required. (`src/cpus/cpu_arm_coproc.c:60-62`; on-disk `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ddi0100i.txt:27697-27700`, `:32653-32674`.)
+
+The CP6 catchall also includes a named register: the committed header says **`FINTSRC cp6 c9,0`**, while the handler’s corresponding switch accepts only **0, 4, 8**. Blanket UND would therefore reject a register explicitly named by the project’s hardware header. (`src/include/thirdparty/i80321reg.h:319`, `src/cpus/cpu_arm_coproc.c:309-335`.)
+
+The endianness exit cannot simply be deleted: its comment calls it **“LOAD-BEARING”** and identifies translation invalidation and instruction retranslation requirements. The control-write path admits opcode2 values **0, 2, 3, 4, 5, 6, 7**; value **1** takes the auxiliary-control return. (`src/cpus/cpu_arm_coproc.c:107-135`, `src/cpus/cpu_arm_coproc.c:163-174`.)
+
+ISRC write semantics and the complete XScale CP14 selector specification were **not checked**. Their proposed remedies remain provisional. Existing interrupt code binds ISRC to interrupt status and changes IRQ assertion from status and enable, so the assignment before `:331` alone does not establish correct behaviour. (`src/devices/dev_i80321.c:83-94`, `src/devices/dev_i80321.c:445-446`, `src/cpus/cpu_arm_coproc.c:329-331`.)
+
+For completeness, the catchall selector values are explicitly enumerated below; field extraction is at `src/cpus/cpu_arm.c:2645-2651`.
+
+| Exit | Values reaching the catchall |
+|---|---|
+| ARM `:417` | crm **0**, crn **1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15**; crm **1**, crn **8, 9, 10, 11, 12, 13, 14, 15**; or crm **2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15**. (`src/cpus/cpu_arm_coproc.c:309-409`.) |
+| ARM `:528` | opcode2 **1, 2, 3, 4, 5, 6, 7**; otherwise opcode2 **0** with: crm **0**, crn **4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15**; crm **1**, crn **2, 3, 6, 7, 9, 10, 11, 12, 13, 14, 15**; crm **2**, crn **4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15**; or crm **3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15**. (`src/cpus/cpu_arm_coproc.c:429-519`.) |
+
+**Recording evidence.** The queue explicitly names every ARM site:
+
+> “SEVEN sibling guest-reachable host kills in `cpu_arm_coproc.c` waiting to reuse it *** (CP6 `unknown`,”  
+> “CP14 `unknown`, CP15 PID, CP6 ISTEER, CP15 endian, CP6 ISRC, CP15 `rd == ARM_PC`).”
+
+— `OUTSTANDING_BUGS.md:18721-18722`.
+
+That is a prose record, not the separate `xscaleinten` defect concerning the former INTEN-read termination. (`OUTSTANDING_BUGS.md:18674-18684`.)
+
+For MIPS, searches of the committed queue by filename, enclosing function names, diagnostic fragments, and small-page defect terms found no record naming these sites or defects. Nearby records concern **“TLBWI/TLBWR under Status.IsC”** and **“R4000 invalid-PageMask host-`exit()`”**, which are different conditions. (`OUTSTANDING_BUGS.md:2669`, `OUTSTANDING_BUGS.md:2700-2701`.)
+
+(a) Ranked guest-access sites, by the most ordinary operation entering each site. **Actual stock-OS incidence was not checked**; this is an operation-based ranking, with configuration and specification qualifications retained.
+
+1. **ARM `:62`** — optional cache test/clean-to-PC is documented cache maintenance. (`src/cpus/cpu_arm_coproc.c:60-62`; on-disk `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ddi0100i.txt:32653-32674`.)
+2. **ARM `:264`** — nonzero PID use invokes the explicitly missing context-switch feature. (`src/cpus/cpu_arm_coproc.c:250-264`.)
+3. **ARM `:322`** — nonzero interrupt steering is a named controller operation. (`src/cpus/cpu_arm_coproc.c:315-322`.)
+4. **ARM `:417`** — the catchall includes the header’s FINTSRC register, alongside unsupported selectors. (`src/include/thirdparty/i80321reg.h:319`, `src/cpus/cpu_arm_coproc.c:334`.)
+5. **MIPS `:2169`** — installing a valid small-page mapping is TLB management, conditional on the R4100 page format. (`src/cpus/cpu_mips_coproc.c:2149-2169`.)
+6. **ARM `:177`** — an explicit endianness transition, rather than a routine unchanged control-register write. (`src/cpus/cpu_arm_coproc.c:157-177`.)
+7. **MIPS `:2041`** — ordinary replacement of an existing TLB entry, but the established route requires the nondefault setup described above. (`src/promemul/arcbios.c:2129-2131`, `src/cpus/cpu_mips_coproc.c:2030-2041`.)
+8. **ARM `:331`** — an ISRC write; its supposed acknowledgment meaning remains unverified, reflected by the source’s **“int ack?”** diagnostic. (`src/cpus/cpu_arm_coproc.c:326-331`.)
+9. **ARM `:528`** — unsupported CP14 selector combinations; exact reserved-versus-unimplemented membership was not checked. (`src/cpus/cpu_arm_coproc.c:429-528`.)
+
+(b) **CPU-stop sites: none in either target file.** Full-file reading and assignment searches found no `cpu->running = 0` assignments. Coverage: `src/cpus/cpu_arm_coproc.c:1-530` and `src/cpus/cpu_mips_coproc.c:1-2591`.
+
+(c) **Denominator: every function in both target files was read.**
+
+- ARM: `arm_coproc_15` (`src/cpus/cpu_arm_coproc.c:50`), `arm_coproc_i80321_6` (`src/cpus/cpu_arm_coproc.c:304`), `arm_coproc_xscale_14` (`src/cpus/cpu_arm_coproc.c:426`).
+- MIPS initialization/helpers: `initialize_cop0_config` (`src/cpus/cpu_mips_coproc.c:59`), `initialize_cop1` (`:313`), `mips_coproc_new` (`:356`), `mips_timer_tick` (`:418`), `mips_coproc_tlb_set_entry` (`:438`), `invalidate_asid` (`:512`), `coproc_register_read` (`:577`), `coproc_register_write` (`:656`).
+- MIPS floating point: `fpu_is_denormal` (`src/cpus/cpu_mips_coproc.c:1081`), `fpu_unimpl_trap` (`:1093`), `fpu_subst_tiny` (`:1137`), `fpu_store_float_value` (`:1163`), `fpu_op` (`:1248`), `fpu_function` (`:1477`).
+- MIPS remaining functions: `coproc_tlbpr` (`src/cpus/cpu_mips_coproc.c:1807`), `coproc_tlbwri` (`:1926`), `coproc_eret` (`:2272`), `coproc_function` (`:2296`).
+
+**Target functions not read: none.** Supporting files were inspected for the cited dispatch, privilege, initialization, and interrupt paths; they were not audited in full. No builds, execution tests, or modifications were performed.

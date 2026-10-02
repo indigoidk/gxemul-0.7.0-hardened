@@ -1,0 +1,52 @@
+ASTRARETRO_BUNDLE_DEVICES3_ALIVE
+VERDICT: 10 findings (8 CODE live at HEAD, 0 RECORD, 2 TEST-GAP); 23 items checked clean
+
+Static review of committed `8ea26abb`. All locations below are at HEAD. No files changed; no builds or tests executed. Existing filings are identified inline.
+
+F1 | [src/devices/dev_px.c:276](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_px.c:276) | #207 | CODE | live at HEAD: yes | An SRAM COPYSPANS command declaring more data than remains in SRAM gets a shortened copy, but decoding still consumes the full advertised span count. `dma_buf` is uninitialized stack storage; the uncopied tail is read by the decoder. The new source bound therefore leaves an uninitialized-read defect. | Smallest check: compare the copied length with the decoder’s `20 + 12*nspans` requirement and inspect buffer initialization. | confidence high
+
+F2 | [src/devices/dev_dec21143.c:788](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dec21143.c:788) | 5ee491e7 | CODE | live at HEAD: yes | An empty continuation of an empty unfinished TX frame requests `realloc(nonNULL, 0)`. Where that returns NULL, `CHECK_ALLOCATION` reaches `exit(1)`. The round repaired zero-size allocation in the first-segment branch but missed its continuation sibling. | Smallest check: compare both allocation branches and follow `CHECK_ALLOCATION` into `FAILURE` in `misc.h`. | confidence high
+
+F3 | [src/devices/dev_ps2_gif.c:271](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_gif.c:271) | upstream, relied on by #108 | CODE | live at HEAD: yes | Large guest-supplied putchar dimensions overflow signed `int` in `(24 + y*xsize)*4` before the new bounds check. Rejecting a pixel only breaks the inner loop; later rows still evaluate the overflowing expression. Already filed as **OB-28**, although `OUTSTANDING_BUGS.md:2748` marks it resolved. | Smallest check: range analysis of the dimension fields, offset expression, and outer-loop continuation. | confidence high
+
+F4 | [src/devices/dev_px.c:396](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_px.c:396) | upstream, relied on by #72 | CODE | live at HEAD: yes | A fill command’s maximum positive signed line-width value overflows `lw + 1`. This happens before the framebuffer-copy guard, whose loop uses the resulting width. The coordinate guards do not make the preceding arithmetic safe. | Smallest check: inspect `lw`’s `int32_t` declaration, guest-word assignment, and addition. | confidence high
+
+F5 | [src/devices/dev_rtc.c:71](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_rtc.c:71) | upstream, relied on by #429 | CODE | live at HEAD: yes | A guest can leave a high-rate timer running without acknowledging interrupts. The callback increments signed `pending_interrupts` indefinitely, eventually overflowing. #429’s high-rate clamp feeds this callback; the timer core’s per-signal budget does not bound accumulated pending interrupts. | Smallest check: enumerate counter writes and confirm that only acknowledgement or disabling reduces it. | confidence high
+
+F6 | [src/devices/dev_fbctrl.c:102](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:102) | upstream, relied on by #549’s retained-selector DATA path | CODE | live at HEAD: yes | When COMMAND remains selected, an unsupported DATA command still reaches `exit(1)`, including the documented FILL and COPY commands. This is the terminating command sibling left behind by the selector correction. Already filed as **fbctrlcmdkill** (`OUTSTANDING_BUGS.md:22544`). | Smallest check: follow DATA dispatch into `fbctrl_command()` and compare its cases with `testmachine/dev_fb.h`. | confidence high
+
+F7 | [src/devices/dev_ps2_gs.c:95](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_gs.c:95) | #99 | CODE | live at HEAD: yes | The legitimate SIGLBLID register is rejected: its index, `0x108`, equals `N_GS_REGS`. Writes disappear and reads return zero. The guard adopts an undersized array as the hardware boundary. Sony documents SIGLBLID as read/write in the [GS User’s Manual, p.156](https://www.scribd.com/document/784545197/GS-Users-Manual). | Smallest check: compare the highest register constant at line 77, array count at line 46, and guard. | confidence high
+
+F8 | [src/devices/dev_kn02ba.c:189](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_kn02ba.c:189) | upstream, relied on by #24 | CODE | live at HEAD: yes | Starting the affected DECstation machine reaches signed `1 << i` with `i == 31` while constructing interrupt names. #24 fixed the adjacent interrupt-mask assignment but missed this sibling expression. This undefined behavior occurs during initialization, before guest instructions execute. | Smallest check: compare the 32-iteration loop and the two shift expressions at lines 189 and 192. | confidence high
+
+F9 | [regress/mk48_nvram_probe.py:292](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/mk48_nvram_probe.py:292) | #521 | TEST-GAP | live at HEAD: yes | The claimed address-independence check does not observe independence: every round-trip starts a fresh emulator and writes/reads one address. Distinct values across those sessions cannot detect folding among the eight repaired bytes, contrary to `CHANGELOG.md:4736`. | Smallest check: inspect session boundaries and confirm no row preserves two affected cells simultaneously. | confidence high
+
+F10 | [regress/diff_rtc_range.c:109](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_rtc_range.c:109) | 17de78a0, #429 detector | TEST-GAP | live at HEAD: yes | The wide-frequency rows inject `stub_in`; their memory-read stub ignores both bytes and access length. They cannot observe whether production actually consumes the high bytes needed to prevent narrowing-to-zero. Already filed as **rtclen** (`OUTSTANDING_BUGS.md:6889`). | Smallest check: inspect the stub and the wide-input rows; no execution needed. | confidence high
+
+Checked clean at HEAD:
+
+1. `src/devices/dev_mk48txx.c:116` — Revised boundaries leave exactly the implemented control-register case in the switch.
+2. `src/devices/dev_mk48txx.c:129` — Control-register READ-bit rising-edge refresh remains reachable.
+3. `src/devices/dev_fbctrl.c:120` — Selector comparison uses the full unsigned value before narrowing.
+4. `src/devices/dev_fbctrl.c:128` — Refusal announcement uses initialized per-device latch storage.
+5. `src/devices/dev_fbctrl.c:141` — Selector-range tripwire is unreachable through the current selector assignments.
+6. `src/devices/dev_rtc.c:129` — Zero retains stop semantics, removing the timer and clearing pending interrupts.
+7. `src/devices/dev_rtc.c:131` — Positive rates are checked before narrowing; accepted and clamped values fit `int`.
+8. `src/devices/dev_dec21143.c:759` — Repeated first segments release the previous allocation.
+9. `src/devices/dev_dec21143.c:773` — Empty first segments receive a nonzero-size allocation.
+10. `src/devices/dev_dec21143.c:786` — Aggregate cap also governs copied bytes and accumulated length.
+11. `src/devices/dev_sgi_mec.c:313` — Full-buffer detection stops the outer fragment loop.
+12. `src/devices/dev_sgi_mec.c:356` — Network handoff uses the bounded copied-byte count.
+13. `src/devices/dev_kn02ba.c:119` — MER fallback handles both directions without exiting; reads return initialized zero.
+14. `src/devices/dev_kn02ba.c:163` — MSR fallback supplies the same safe behavior.
+15. `src/devices/dev_kn02ba.c:192` — Changed unsigned interrupt-mask shift handles all 32 positions.
+16. `src/devices/dev_scc.c:344` — Effective port is bounded before per-port array indexing.
+17. `src/devices/dev_px.c:155` — Initial 224-byte SRAM read fits because caller-produced offsets are 2048-byte aligned.
+18. `src/devices/dev_px.c:323` — COPYSPANS checks both framebuffer rows; width is bounded.
+19. `src/devices/dev_px.c:400` — Reversed fill endpoints and subsequent width handling keep the pixel temporary bounded.
+20. `src/devices/dev_px.c:427` — Fill-copy guard checks row, endpoints, and ordering.
+21. `src/devices/dev_px.c:545` — Glyph-copy guard bounds destination coordinates and the 16-pixel source.
+22. `src/devices/dev_px.c:624` — SRAM writes check each byte against the actual backing array.
+23. `src/devices/dev_ps2_gif.c:222` — All six signature branches check length before inspecting signature/header bytes; siblings at 225, 288, 305, 320, and 352 were checked.
+
+DENOMINATOR: read 25 of 25 hunks of the net diff

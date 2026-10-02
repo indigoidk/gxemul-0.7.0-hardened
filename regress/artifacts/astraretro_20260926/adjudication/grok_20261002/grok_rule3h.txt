@@ -1,0 +1,97 @@
+I'll adjudicate batch 3h from the source at `8ea26abb`, starting with the checkpoint, prior dispositions, and the draft checks that disagree.The draft and both checks disagree on `bundle_core:F3` and `bundle_include3:F4`. I'll verify those against the source and the existing rows before ruling the rest.The ruling is settled in outline. I am re-checking the three places where the draft and the checks disagree, plus the cursor-walk severity, before I write the dispositions.VERDICT: 9 confirmed-new, 5 confirmed-filed, 7 record-L4, 0 test-gap, 0 refuted, 0 unsettled, 5 duplicate, of 26 findings
+GROK_RULE_3h_ALIVE_1002
+# CHECKPOINT -- 2026-10-02 09:50 RUNNING: #529 r22 base leg, Astra confirms (3c, 3d, 18 harness), grok rulings (3f-3h) and tie-break; no cron (087a90 sections rewritten; the peer's sections below are untouched)
+
+CHANGELOG.md and OUTSTANDING_BUGS.md line numbers below are commit `8ea26abb`. HEAD is `db8b1a33`. No file under `src/` changed between those commits, so a CODE finding confirmed at `8ea26abb` is live at HEAD. `#553` added only `wdcidresetcells`, `analyze8robust`, and `commitinflight` (HEAD `OUTSTANDING_BUGS.md:22624`, `:22643`, `:22654`). None of the ids proposed here collide with those, with any short id in `OUTSTANDING_BUGS.md`, or with any row in `DISPOSITIONS.md`. Nine findings are new rows. `bundle_core:F3` is counted in the duplicate bucket and also contributes one further new row, `mipscomparepend` (MED), so the queue gains ten rows from this batch.
+
+arcbios:F1 | CONFIRMED-FILED arcpartlba
+Checked `8ea26abb:src/promemul/arcbios.c:949` (`uint64_t offset = 0, st`), `:1010-1011` and `:1016-1017` (the `<<` and `* 512` are signed `int` arithmetic, then stored), `:1024` (the `#168` guard sees `st` only after that), and the prose at `8ea26abb:OUTSTANDING_BUGS.md:2730-2731` ("ARC partition LBA signed-`int *512` overflow"). LOW. The id is assigned to that prose.
+
+arcbios:F2 | CONFIRMED-NEW LOW arcseekshift "ARC Seek retains a signed byte-decoding shift"
+Checked `8ea26abb:src/promemul/arcbios.c:1918-1921`: `ofs` is `uint64_t`, bytes 4..7 are shifted as `uint64_t`, and `(bufTmp[3] << 24)` is a signed `int` shift. No `bufTmp` or Seek entry in `OUTSTANDING_BUGS.md`.
+
+arcbios:F3 | CONFIRMED-NEW LOW arcstdinlimit "ARC stdin Read overflows its signed loop counter at length 2147483647"
+Checked `8ea26abb:src/promemul/arcbios.c:1672` (`int j2, nread, a2`), `:1686-1687`, `:1719` (`j2` is forced to A2, then the `for` increment runs). The disk cap at `:1754` is the other branch. LOW.
+
+arcbios:F4 | CONFIRMED-NEW HIGH arccursorbound "Unbounded ARC cursor column makes erase-line walk 2^31 cells"
+Checked `8ea26abb:src/include/machine_arc.h:40` (`ARC_MAX_ESC` 16), `arcbios.c:208-219` (column is `atoi`, only `col < 1` is repaired, `console_curx = col - 1`), `:240-250` (`for (i=start; i<=stop; i++) arcbios_putcell` with `stop = console_curx` unless the parameter is 2). `[1;2147483647H` fits the 16-byte buffer and the following erase walks about 2^31 cells. Same progress-stall shape as `vgadirtyarm`. Draft and both checks left this LOW; the walk is the HIGH.
+
+arcbios:F5 | CONFIRMED-NEW HIGH arczeroalloc "Zero-length ARC disk I/O calls malloc(0) and CHECK_ALLOCATION exits if that returns NULL"
+Checked `8ea26abb:src/promemul/arcbios.c:1754-1759` and `:1835-1840`: A2 above 64 MiB returns `ARCBIOS_EIO`; A2 of 0 falls through to `malloc` and `CHECK_ALLOCATION`. C99 `malloc(0)` may return NULL. This tree's libc was not measured. The condition is part of the row.
+
+arcbios:F6 | CONFIRMED-FILED arcsgiprivate
+Checked `8ea26abb:src/promemul/arcbios.c:1226` (`cpu->running = 0` on the SGI private-service path) and the backlog clause at `8ea26abb:OUTSTANDING_BUGS.md:2668-2671`, the halt named at `:2670`. HIGH: the CPU stops. `fatal()` does not itself exit. The id is assigned to that clause.
+
+arcbios:F7 | CONFIRMED-FILED arcbioswalk64
+Checked `8ea26abb:src/promemul/arcbios.c:777-778` (4-byte read at `peeraddr + 0x34`) against the 64-bit writer at `:804` (AffinityMask at `+0x30`) and `:807` (IdentifierLength at `+0x40`). Id exists at HEAD `OUTSTANDING_BUGS.md:8572`. MED. Rider on that id: a 4-byte read of the 8-byte IdentifierLength still selects one half on big-endian after the offset is corrected.
+
+arcbios:F8 | RECORD-L4 "ARC's missing-handler and ordinary unsupported-vector state dumps require SUBSYS_PROMEMUL verbosity VERBOSITY_DEBUG; a promemul subsystem breakpoint alone does not enable them."
+Checked `8ea26abb:CHANGELOG.md:20204` against `arcbios.c:2019` and `:2029` (`ENOUGH_VERBOSITY(SUBSYS_PROMEMUL, VERBOSITY_DEBUG)` around the dumps). `ENOUGH_VERBOSITY` reads the verbosity array.
+
+bundle_core:F1 | CONFIRMED-NEW LOW dyncacheoffset32 "Oversized configured translation caches truncate published page offsets"
+Checked `8ea26abb:src/cpus/cpu_dyntrans.c:630` (`uint32_t physpage_ofs`), `:797` (assigned from the cache cursor), `:804` (used as an index). A truncated offset aliases inside the allocation, or lands on the 0 "empty" slot. LOW.
+
+bundle_core:F2 | CONFIRMED-NEW MED fbresizeoverlap "Framebuffer growth overlaps its controller mapping"
+Checked `8ea26abb:src/devices/dev_fb.c:212` (`memory_device_update_length` after the pixel buffer is reallocated). Guest `SET_RESOLUTION` can grow the mapping across the controller window that `dev_fb.h` places at the end of the initial framebuffer. The pixel buffer itself is resized with the mapping. MED.
+
+bundle_core:F3 | DUPLICATE-OF-ROW rtcpendovf
+Checked `8ea26abb:src/devices/dev_rtc.c:54`, `:71`, `:79`, `:145`, `:158-159` against `DISPOSITIONS.md:385-387` (`rtcpendovf`, already MED). The same finding's MIPS counter is a different variable and is filed with it: CONFIRMED-NEW MED mipscomparepend "MIPS compare-interrupt pending count overflows and then fails the >0 delivery test", at `cpu_mips_coproc.c:422` (increment), `:824-825` (decrement only while `> 0`), and `cpu_dyntrans.c:434` (`> 0` gates `INTERRUPT_ASSERT` when `emulated_hz > 0`). This finding counts once, as the duplicate. The MIPS row is the contribution.
+
+bundle_core:F4 | RECORD-L4 "Diagnostics are suppressed when the clamped frequency equals the stored frequency; there is no per-timer warning latch. Alternating requests with different normalized frequencies can report repeatedly when clamping occurs. dev_rtc pre-clamps, and dev_footbridge's effective-period calculation cannot produce an above-ceiling request."
+Checked `8ea26abb:src/core/timer.c:94-95` (still says Footbridge is not immune), `:199-205` (warn only when `clamped && t->freq != new_freq`, then return on equality), `dev_rtc.c:131-135` (pre-clamp), and `OUTSTANDING_BUGS.md:6702` (none of the three can exceed the ceiling).
+
+bundle_core:F5 | RECORD-L4 "as a whole: dev_sh4.c's sh4_timer_tick() still calls fatal() from SIGALRM when reporting newly seen refresh-interrupt enable bits. #449 removed the exit(1); the callback now continues into TMU processing."
+Checked `8ea26abb:src/core/timer.c:276-277`, which still says `sh4_timer_tick()` calls `fatal()` and `exit(1)` from SIGALRM. The callback reports newly seen enable bits and continues.
+
+bundle_core:F6 | DUPLICATE-OF-ROW timerupdrow
+Checked `8ea26abb:src/core/timer.c:204-207` (equal frequency returns before `t->freq = new_freq`) against `DISPOSITIONS.md:56-57`. `diff_timer.c` resends the rate it already stored. No second id.
+
+bundle_devices6:F1 | CONFIRMED-NEW LOW irqcmaskshift "IRQ mask and unmask writes still use a signed 1 shifted by the guest selector"
+Checked `8ea26abb:src/devices/dev_irqc.c:108` and `:127` (`1 << idata`, `idata` taken from the guest write). `shiftubcensus` (HEAD `:16920`) is a partial census and does not name these two sites. LOW. A later pass may hang this id under that census; it still has its own id.
+
+bundle_devices6:F2 | RECORD-L4 "Unsigned casts for interrupt-controller and setup shifts, including type consistency in the KN02 and KN230 constructors."
+Checked `8ea26abb:CHANGELOG.md:19715`, which lists `dev_kn02.c` and `dev_kn230.c` among `#24`/`#25` shift-UB fixes. Those two constructors shift `1` by 0..15, which a 32-bit `int` can represent. The replacement leaves the real fixes in that cell standing.
+
+bundle_disk:F1 | CONFIRMED-NEW LOW isopathptr "ISO path-table checks form pointers beyond one-past"
+Checked `8ea26abb:src/disk/bootblock_iso9660.c:188` (`dp < dirbuf + dirlen`) and `:193` (`dp + 8 > dirbuf + dirlen` forms the sum before the compare). An odd clamped name length then steps one past that. No dereference of the out-of-range pointer is shown. LOW. Resolved OB-30 describes a different, closed over-read.
+
+bundle_include3:F1 | DUPLICATE bundle_core:F2
+Same resize-then-`memory_device_update_length` defect as `fbresizeoverlap`. One row.
+
+bundle_include3:F2 | CONFIRMED-FILED sh4sqwrite
+Checked `8ea26abb:src/cpus/memory_sh.c:353-356` (store-queue range returns the virtual address and 2, with the SQMD TODO). Id exists at HEAD `OUTSTANDING_BUGS.md:7951`; the write-half sentence is `8ea26abb:OUTSTANDING_BUGS.md:7990`. MED.
+
+bundle_include3:F3 | CONFIRMED-FILED sh4sqexpevt
+Checked `8ea26abb:src/cpus/cpu_sh_instr.c:3706-3713`: the SQMD user-mode check is nested under `SH4_MMUCR_AT` and raises `EXPEVT_RES_INST`. Id exists at HEAD `:7505`. MED. The AT-off half is already the rider at `DISPOSITIONS.md:324-325`. `OUTSTANDING_BUGS.md:8027` ("only its exception code is wrong") still omits that gate; fold the omission into the existing id.
+
+bundle_include3:F4 | DUPLICATE-OF-ROW sh4utlbmultihit
+Checked `8ea26abb:src/cpus/memory_sh.c:151` (first match breaks; multiple-hit check unimplemented) and `cpu_sh_instr.c:3761` (`sh_translate_sq_v2p` on the SQ PREF path). `DISPOSITIONS.md:328-330` already assigns `sh4utlbmultihit` (MED) to `OUTSTANDING_BUGS.md:1946-1947` and already widens it to every translated access. Contribution: the SQ PREF call site, which that ruling already included. No id `sh4sqmultihit`.
+
+bundle_include3:F5 | RECORD-L4 "Do not replace __attribute__ or __noreturn__ with empty macros: the firmware function-pointer declarations below carry __attribute__((__noreturn__)) annotations. This header has no packed structure declarations."
+Checked `8ea26abb:src/include/sgi_arcbios.h:13-20`. The `__attribute__((packed))` words appear in that comment. The `__noreturn__` annotations on the firmware function pointers are real.
+
+bundle_include3:F6 | DUPLICATE-OF-ROW cpushinstr:F11
+Checked `8ea26abb:CHANGELOG.md:23507`, which repeats the false "[9:5]" sentence already ruled at `DISPOSITIONS.md:255` (`cpu_sh_instr.c:3726-3733`). Contribution, and the replacement for both the comment and that changelog sentence: "Translate the unmasked operand so faults retain the guest's exact address in TEA. Translation preserves page-offset bits; masking the result to a 32-byte boundary preserves bits 5, 6, 7, 8 and 9 and clears bits 0, 1, 2, 3 and 4. Aligning the operand to 32 bytes before translation preserves the same destination bits but can change the fault address."
+
+bundle_promemul:F1 | CONFIRMED-NEW HIGH ofopenexit "OpenFirmware open exits the host on any nonempty pathname"
+Checked `8ea26abb:src/promemul/of.c:426-451`: a failed guest read stops the copy (`:432`); `if (s[0])` then `exit(1)` at `:448`. Any nonempty pathname ends the process, including a fully successful read. An empty name returns 0. The skeletal-OF prose at `OUTSTANDING_BUGS.md:2742-2743` calls that residual "NOT a safety bug" and does not name this exit.
+
+bundle_promemul:F2 | RECORD-L4 "Stop copying after a failed guest-memory write. The returned length remains the precomputed minimum of the property length and the requested maximum; it is not adjusted to the number of bytes copied."
+Checked `8ea26abb:src/promemul/of.c:283`, whose comment says the partial length is returned. The length stored is the precomputed minimum, set before the copy.
+
+bundle_promemul:F3 | RECORD-L4 "Eight diagnostic sites were changed. The DEC unsupported-vector handlers replace their register dumps and A0 string scans with verbosity-gated summary messages; the ARC missing-handler and ordinary unsupported-vector handlers retain their dumps behind ENOUGH_VERBOSITY."
+Checked `8ea26abb:CHANGELOG.md:20204-20206` against `dec_prom.c:184-194` and `:646-654` (one-line summaries; the dump and the A0 scan are gone) and `arcbios.c:2019-2032` (dumps remain behind `ENOUGH_VERBOSITY`). This corrects a different clause of the same paragraph as arcbios:F8.
+
+Draft dispositions changed, and why. The draft's 10/6/7/0/0/3 split is the sibling check of the findings. Both later checks agreed with it on 24 of 26 and flagged the same two. Agreement between those three is weak evidence.
+
+1. `bundle_core:F3` is `DUPLICATE-OF-ROW rtcpendovf`, and the MIPS counter is a new MED row `mipscomparepend`. The draft's single LOW id `timerpendingovf` would have filed the RTC counter a second time and graded the MIPS counter below the delivery test at `cpu_dyntrans.c:434`. The codex check split them and left the MIPS half provisional LOW. The agy check folded the MIPS half in as a rider, which would hide the new row. The `> 0` gate is the same consequence that raised `rtcpendovf` to MED.
+2. `bundle_include3:F4` is `DUPLICATE-OF-ROW sh4utlbmultihit`. The draft's prose id `sh4sqmultihit` repeats batch 2c. Both checks are right on this one. The SQ PREF path is a contribution, already inside the 2c scope.
+3. `arcbios:F4` is HIGH. The draft and both checks left the signed cursor arithmetic at LOW. The erase-line loop is a guest-triggered walk of about 2^31 `arcbios_putcell` calls.
+4. `ofopenexit` covers every nonempty pathname. The draft described a failed read after a nonempty prefix. A completed read of a nonempty name also calls `exit(1)`.
+5. `arczeroalloc` stays HIGH with the allocator condition stated in the title. C99 permits `malloc(0)` to return NULL, and `CHECK_ALLOCATION` then exits. This tree's libc was not measured. A successor who measures a non-NULL return can move it; the source shows the call.
+
+(a) No finding is refuted. These parts of Astra's wording do not hold as stated. The signed-shift and signed-overflow sites in arcbios:F1, F2, F3, and devices6:F1 are LOW: no termination, no out-of-bounds access, and no stop-progress consequence is shown. arcbios:F4's HIGH is the erase walk; a host-buffer overrun is not shown. arcbios:F5 ends the process only when `malloc(0)` returns NULL. bundle_core:F1 truncates an offset inside the translation cache. bundle_disk:F1 forms a pointer past one-past and does not show a dereference. bundle_promemul:F1 also exits after a successful nonempty read. bundle_core:F5's "reports once" is once per newly seen enable bit.
+
+(b) Noticed while checking, and not one of the 26. `of.c:394` is `exit(1)` on `peer()` when the handle is not the root and the lookup misses: guest-controlled host termination, absent from `OUTSTANDING_BUGS.md` and from `DISPOSITIONS.md`. Proposed id `ofpeerexit`, HIGH. Five other `exit(1)` sites in that file (`:549`, `:577`, `:1100`, `:1120`, `:1201`) were seen and left untraced; `:1185` says one of them exists to defeat the debugger. `dec_prom.c:188` and `:650` still say a promemul breakpoint restores full state after those dumps were removed. Rider on promemul:F3, replacement of that parenthetical: "The #245 summary is the whole diagnostic: the register dump and A0 string scan were removed, so neither promemul verbosity nor `break promemul` restores them." The ISO second loop allocates 512 bytes at `bootblock_iso9660.c:269` and reads 256; the agy 2048-byte heap over-read does not match that allocation. A duplicate-filename `exit(1)` in that file is disk-image input, under the host-side image charter, and is not given a HIGH row. The AT-off SQ path already masks the address with `0x03ffffe0` before the AT block; there is no missing 32-byte alignment there.
+
+(c) 26 of 26 findings were checked against `8ea26abb` source. 0 were ruled from Astra's text alone. This pass re-opened the two flagged disagreements, the cursor walk, the malloc(0) cap, the Seek and partition shifts, the OF open exit, the SQ identity map and the SQMD nest, the component-walker offsets, the timer sentences, the IRQ shifts, the ISO pointer formation, the changelog sentences, and the id lookups at HEAD. `shoddprfield` does not arise: none of these accesses leave an array and stay inside the containing struct.

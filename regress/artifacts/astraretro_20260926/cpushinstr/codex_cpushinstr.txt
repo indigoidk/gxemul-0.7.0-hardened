@@ -1,0 +1,60 @@
+ASTRARETRO_CPUSHINSTR_ALIVE
+VERDICT: 12 findings (7 CODE live at HEAD, 4 RECORD, 1 TEST-GAP); 27 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No files changed, builds run, or emulator probes executed. Findings are based on code, committed regression rows, manuals, and an exact-rational arithmetic check.
+
+F1 | src/cpus/cpu_sh_instr.c:3387 | upstream sibling left by #316, relied on by #300 | CODE | live at HEAD: yes | Under PR=1, arithmetic, conversion and comparison handlers still accept odd register fields. Field 15 makes the second-word access cross `fr[]` into adjacent `xf[]`; write handlers can corrupt the other bank. FNEG/FABS received parity guards, but these siblings did not. The double encoding requires even fields (`_scratchpad/sh4_programming.txt:10424`). Odd FTRC alone is already filed at OUTSTANDING_BUGS.md:1778, without an ID. | Smallest check: compare decoder/handler parity checks across these siblings. | confidence high
+
+F2 | src/cpus/cpu_sh_instr.c:3504 | #300 | CODE | live at HEAD: yes | Double FDIV of a finite negative numerator by infinity under RZ produces NaN instead of signed zero. The helper checks whether the **quotient** is finite, then evaluates a residual involving zero times infinity. Its NaN comparisons cause a decrement of the zero representation into NaN. The manual explicitly requires signed zero (`_scratchpad/sh4_programming.txt:11069`). No matching outstanding filing found. | Smallest check: a helper assertion for negative finite / positive infinity under RZ, checking negative zero. | confidence high
+
+F3 | src/cpus/cpu_sh_instr.c:2247 | #47 / 8dd86b5a | CODE | live at HEAD: yes | A delayed branch in another branch’s delay slot merely sets `EXCEPTION_IN_DELAY_SLOT` and returns. All 19 added guards omit the architectural exception. The “architecturally unpredictable” premise is false: the manual requires EXPEVT `0x1a0` and the general exception vector (`_scratchpad/sh4_programming.txt:4547–4562`). Deferred in CHANGELOG.md:19869; no named outstanding entry found. | Smallest check: inspect EXPEVT, SPC and vector expectations for a nested-branch test. | confidence high
+
+F4 | src/cpus/cpu_sh_instr.c:245 | #314 / f415b919 | CODE | live at HEAD: yes | The designated undefined instruction in a delay slot reaches `reserved`, which requests general illegal instruction (`0x180`) instead of slot illegal instruction (`0x1a0`). `sh_exception()` adjusts delay bookkeeping but preserves the supplied event. Manual: `_scratchpad/sh4_programming.txt:4544–4562`. No matching outstanding filing found. | Smallest check: compare EXPEVT for the designated undefined instruction inside/outside a delay slot, with SR.BL clear. | confidence high
+
+F5 | src/cpus/cpu_sh_instr.c:3713 | 5ee491e7; upstream exception choice relied on by #318 | CODE | live at HEAD: yes | User-mode SQ PREF with SQMD=1 raises illegal instruction when AT=1 and bypasses the restriction entirely when AT=0. Both cases require an address error (`_scratchpad/sh7750_hardware.txt:11747`, `:11754`). Already filed as `sh4sqexpevt`; the AT=0 omission also appears at OUTSTANDING_BUGS.md:1940. | Smallest check: check EXPEVT and absence of transfer under both AT states. | confidence high
+
+F6 | src/cpus/cpu_sh_instr.c:3761 | upstream, relied on by #318/#454 | CODE | live at HEAD: yes | #454 correctly makes PREF read-type, but guest stores filling the queue still skip the sibling write-side judgment: `memory_sh.c:353` returns the SQ identity mapping unconditionally. Protected or clean pages therefore accept queue stores without the required protection/initial-write exception (`_scratchpad/sh7750_hardware.txt:11744`). Already filed as `sh4sqwrite`. | Smallest check: inspect the SQ translation branch; test EXPEVT after a guest queue store. Existing debugger-filled SQ rows cannot observe this. | confidence high
+
+F7 | src/cpus/cpu_sh_instr.c:3460 | #300 | CODE | live at HEAD: yes | Double multiplication under RZ still returns nearest inside the helper’s exclusion band. For `1.5·2^-509 × (1+2^-52)·2^-510`, it returns `0x0048000000000002`; RZ requires `0x0048000000000001`. Both results are normal, so DN cannot hide the error. Manual: `_scratchpad/sh4_programming.txt:5224`. Already filed as “#300’s accepted-nearest bands” at OUTSTANDING_BUGS.md:1971, without a separate ID. | Smallest check: one exact-arithmetic/helper assertion; the midpoint was independently verified. | confidence high
+
+F8 | src/cpus/cpu_sh_instr.c:122 | #296, stale after #300 | RECORD | live at HEAD: yes | The comment says double arithmetic still inherits host rounding and `1.0/10.0` returns the same value under both modes. HEAD uses the mode-aware helper; `regress/sh_rounding_probe.py:117` explicitly expects different RN/RZ low words. No matching outstanding filing found. | Smallest check: compare this comment with the FDIV call and `Ddiv` regression row. | confidence high
+
+F9 | src/cpus/cpu_sh_instr.c:150 | #334 | RECORD | live at HEAD: yes | The comment says DN=0 cannot deliver subnormal arithmetic results and calls the implemented pass-through a divergence. The manual explicitly permits those results; the FPU-error rule concerns denormalized **inputs** (`_scratchpad/sh4_programming.txt:5238`, `:5286`). The result-handling code is correct; its explanation is false. Already filed under `shsweep`, OUTSTANDING_BUGS.md:8155. | Smallest check: compare these passages and CHANGELOG.md:32605. | confidence high
+
+F10 | src/cpus/cpu_sh_instr.c:239 | #314 / f415b919 | RECORD | live at HEAD: yes | The comment includes SLEEP among undecoded instructions “measured halting.” SLEEP already has a handler and decoder, and `regress/sh_halt_probe.py:36` explicitly retracts that classification. No matching outstanding filing found. | Smallest check: grep the committed SLEEP handler, decoder and probe retraction. | confidence high
+
+F11 | src/cpus/cpu_sh_instr.c:3733 | #318 / 6a2f41c2 | RECORD | live at HEAD: yes | The comment claims translating an already 32-byte-aligned address would lose operand bits [9:5]. Clearing [4:0] preserves [9:5], and the translator preserves page-offset bits. Passing the unmasked address preserves exact TEA, but the second justification is false. No matching outstanding filing found. | Smallest check: compare the masks and `memory_sh.c:165`. | confidence high
+
+F12 | src/cpus/cpu_sh_instr.c:3171 | #296 | TEST-GAP | live at HEAD: yes | CHANGELOG.md:21920 claims a single store site cannot revert unnoticed. The `ftrv midpoint` row in `regress/sh_rounding_probe.py:94` observes only FR0; the other three result stores are unobserved. The committed regression-source search found no other FTRV probe. | Smallest check: inspect the row’s selected output; add observations of all four nonzero, mode-sensitive results. | confidence high
+
+Checked clean below; all line numbers refer to committed [src/cpus/cpu_sh_instr.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c):
+
+- :2199 — SHAD/SHLD left shifts use unsigned operands; shift counts remain bounded.
+- :501 — Integer predecrement stores check the decremented effective address before writeback.
+- :717 — Plain, GBR, indexed and displacement integer loads use appropriate alignment masks.
+- :1073 — Integer postincrement loads reject misalignment before advancing the base.
+- :1132 — Privileged/FPU load variants retain availability checks before alignment handling.
+- :1386 — Integer store guards check the same addresses subsequently written.
+- :774 — All six FMOV memory forms select four/eight-byte alignment from SZ.
+- :795 — Pair loads redirect both words to the selected XD bank.
+- :1463 — Pair-store bank selection reads the FP source field.
+- :1472 — Both pair-store words receive endian conversion.
+- :899 — Pair-load publication and address writeback follow successful accesses.
+- :4176 — Decoder fallbacks preserve non-executing readahead behavior.
+- :4781 — The following samepage rewrite does not overwrite the reserved fallback.
+- :4264 — MOVCA.L selects R0 as source and encoded Rn as address.
+- :3875 — The fused polling loop delegates misalignment to the checked ordinary load.
+- :3764 — Translated SQ destinations replace QACR composition and retain the required offset.
+- :3761 — PREF uses read judgment and returns before transfer on translation failure.
+- :142 — Rounding mode is read at execution time with consistent RN/RZ mapping.
+- :175 — DN result handling preserves signs and leaves normal/special values unchanged.
+- :195 — Both encoder wrappers apply the policy without recursive macro expansion.
+- :2932 — FLOAT applies RM to single narrowing; int32-to-double widening is exact.
+- :2996 — Both FTRC precision branches check NaNs and range bounds before casting.
+- :3075 — FCNVDS narrowing uses current RM.
+- :3131 — FIPR and all four FTRV result stores use current RM.
+- :3208 — FNEG/FABS refusals preserve FPU-disabled priority and select slot exceptions correctly.
+- :3401 — Single ADD/SUB use round-to-odd; single multiplication retains an exact double product.
+- :3550 — FMAC retains its exact product through the corrected sum before final rounding.
+
+DENOMINATOR: read 85 of 85 hunks of the net diff

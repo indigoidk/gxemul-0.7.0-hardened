@@ -1,0 +1,24 @@
+ASTRARETRO_BUNDLE_DISK_ALIVE
+VERDICT: 1 findings (1 CODE live at HEAD, 0 RECORD, 0 TEST-GAP); 9 items checked clean
+
+F1 | `src/disk/bootblock_iso9660.c:193` | #109 (`8dd86b5a`) | CODE | live at HEAD: yes | A disk path table ending with fewer than eight header bytes makes the guard evaluate `dp + 8` beyond the allocation’s one-past pointer. Similarly, when a truncated name consumes an odd remaining tail, the padding increment at line 243 advances beyond one-past. Both are undefined pointer arithmetic; no out-of-bounds dereference is established. | Smallest check: inspect the allocation at line 177 and cursor arithmetic at lines 193 and 239–243. Compare remaining length before adding, and require padding to fit before advancing. | confidence high
+
+`OUTSTANDING_BUGS.md:2781` records related **OB-30**, marked resolved at line 2751; it describes the former header/name over-read, not this remaining pointer-arithmetic defect.
+
+The relevant round records match their changes. They make no parser-specific regression-pinning claim. Checked `regress/diff_diskimage_io.c:873`: its ISO reference accompanies an I/O-helper probe, not a parser regression.
+
+Checked clean, using committed HEAD lines:
+
+- `src/disk/bootblock.c:153` — #160 copies exactly 16 bytes, supplies a terminator, and bounds space trimming.
+- `src/disk/bootblock.c:295` — #111 restricts every accepted extent to 1–128 blocks before multiplication, allocation, and copying.
+- `src/disk/bootblock.c:415` — #136 bounds SGI loader size before rounding; the rounded size remains within 256 MiB.
+- `src/disk/bootblock.c:441` — SGI block multiplication widens before multiplying and accommodates every accepted positive block index.
+- `src/disk/bootblock_apple.c:70` — Aligned partition offsets make the largest admitted entry, including its strings, fit inside the buffer.
+- `src/disk/bootblock_apple.c:79` — Both diagnostic strings are bounded to 32 bytes; the sibling literal comparison also stays within the entry.
+- `src/disk/bootblock_iso9660.c:201` — Name reads respect remaining bytes; the local name copy additionally caps at 64 characters and terminates.
+- `src/disk/bootblock_iso9660.c:316` — #110 removes subtraction underflow and safely permits an exact-end filename match.
+- `src/disk/bootblock_iso9660.c:366` — #136 checks the same length subsequently allocated and rejects oversized values through cleanup.
+
+Read-only static review; nothing built, executed, or written.
+
+DENOMINATOR: read 9 of 9 hunks of the net diff

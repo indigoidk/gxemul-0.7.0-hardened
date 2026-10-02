@@ -1,0 +1,21 @@
+ASTRARETRO_BUNDLE_CONSOLE_ALIVE
+VERDICT: 2 findings (1 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 8 items checked clean
+
+F1 | [src/console/x11.c:442](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/console/x11.c:442) | #183 / de1398e1 | CODE | live at HEAD: yes | On a host with 32-bit `size_t`, a guest framebuffer resize within the permitted cap can still underallocate: multiplication by `alloc_depth` wraps **before** division by eight. With scale 1 and a 24-bit X display, the round’s own 12000×12000 example allocates 39,129,088 bytes instead of 576,000,000. Line 446 clears the same undersized buffer, while `XCreateImage` retains the full dimensions and stride; redraw accesses beyond the allocation. The caller’s checks permit this size, and the project supports 32-bit hosts. No corresponding residual found in `OUTSTANDING_BUGS.md`; line 2714 only records the original fix. | Smallest check: an ILP32 arithmetic unit test comparing allocation length against image stride × height. | confidence high
+
+F2 | [CHANGELOG.md:20292](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:20292) | #251 / af0c73b0 | RECORD | live at HEAD: yes | “Every burst” draining within ≤2¹⁹ instructions is false. `src/core/emul.c:1020` checks strictly `>` between CPU slices and uses only the bootstrap CPU’s counter. A multiprocessor guest can pause that CPU while another remains busy (`src/devices/dev_mp.c:130`); the remaining CPU’s short stdout burst can stay buffered indefinitely because its instructions do not advance the flush counter. No corresponding outstanding ID found. | Smallest check: inspect that predicate alongside the pause branch and `src/machines/machine.c:707`, which continues running active siblings. | confidence high
+
+Checked clean, with all line numbers referring to committed HEAD:
+
+- `src/console/console.c:378` — EOF/read errors break the drain loop for both stdin and slave descriptors, preserving queued bytes.
+- `src/console/console.c:365` — FIFO space reserves room for the complete bounded read; only successfully read bytes are consumed.
+- `src/console/console.c:482` — newline and other characters mark stdout pending; an actual `console_flush()` drains it and resets the flag.
+- `src/core/emul.c:1001` — the all-idle path flushes before sleeping.
+- `src/cpus/cpu.c:421` — normal termination explicitly flushes final output.
+- `src/console/x11.c:442` — on 64-bit `size_t`, the widened product accommodates the caller’s dimension cap and supported depths.
+- `src/console/x11.c:446` — allocation and clearing use identical size expressions.
+- `src/console/x11.c:452` — the remaining signed stride multiplication fits within `int` under the caller’s cap.
+
+Coverage inspection included `regress/drive_guest.py` and `regress/fbctrl_port_probe.py`. Neither pins the affected allocation or piped-output behavior, but these rounds claim historical manual/boot checks rather than dedicated regression rows, so no TEST-GAP is counted. No files changed, builds performed, or tests executed.
+
+DENOMINATOR: read 3 of 3 hunks of the net diff

@@ -1,0 +1,71 @@
+ASTRARETRO_CPUPPCINSTR_ALIVE
+VERDICT: 17 findings (13 CODE live at HEAD, 4 RECORD, 0 TEST-GAP); 26 items checked clean
+
+Reviewed committed `8ea26abb` only. No files changed, builds performed, or guest probes executed. Results below are derived from code inspection. Manual references use [Book I](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt) and [Book III](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_oea_book3_v201.txt), with text-file line numbers.
+
+F1 | src/cpus/cpu_ppc_instr.c:2307 | upstream sibling left by #216 | CODE | live at HEAD: yes | Malformed load-reserve/store-conditional encodings with inconsistent Rc still reach host `exit(1)` here and at :2333. The decoder forwards them without validation. #216 removed the memory-fault exits but left these sibling exits. No matching OUTSTANDING id found. | Smallest check: inspect the decoder-to-handler path and both remaining exits; require guest rejection without host termination. | confidence high
+
+F2 | src/cpus/cpu_ppc_instr.c:2712 | upstream sibling left by #46 / 8dd86b5a | CODE | live at HEAD: yes | CR logical instructions targeting BT=0 evaluate signed `1 << 31`. Fourteen such expressions remain across seven handlers, although the round corrected the same mask problem in compares and `mcrf`. This is undefined behavior in the committed C build. The general queue entry is **shiftubcensus**; no specific outstanding id found. | Smallest check: inspect the operand types of the shifts at :2712–2768. | confidence high
+
+F3 | src/cpus/cpu_ppc_instr.c:3554 | upstream, relied on by #310 | CODE | live at HEAD: yes | Loading an ordinary negative single through `lfsu` or `lfsux` reaches signed byte-assembly shifts. Both template paths perform `unsigned char`-promoted-to-`int` `byte << 24`; the surrounding unsigned cast occurs afterward. Dependencies: `cpu_ppc_instr_loadstore.c:124` and :271. Already filed broadly as **OB-24**. | Smallest check: inspect integer promotions in both template expressions. | confidence high
+
+F4 | src/cpus/cpu_ppc_instr.c:2309 | upstream, relied on by #216 | CODE | live at HEAD: yes | A faulting LL/SC instruction during translated execution can save a stale PC in SRR0. This handler never synchronizes `cpu->pc`; normal dispatch advances `next_ic`, while `ppc_exception` saves `cpu->pc` verbatim. The store arm at :2357 has the same omission. Book III:3568 requires the faulting instruction’s address. No matching outstanding id found. | Smallest check: inspect SRR0 after a fault in an already-translated LL/SC instruction; single-stepping can conceal this. | confidence high
+
+F5 | src/cpus/cpu_ppc_instr.c:2499 | upstream, relied on by #522/#527 | CODE | live at HEAD: yes | On PPC970 with MSR.SF=0, a record-form rotate producing `0x0000000080000000` records GT instead of LT. `update_cr0` selects comparison width from the configured CPU width, not execution mode. The corrected insert handlers share this dependency. Book I:1363–1372 specifies low-word comparison in 32-bit mode. Already filed as **ppccr0modewidth**. | Smallest check: compare result and CR0 on a 64-bit CPU with SF clear. | confidence high
+
+F6 | src/cpus/cpu_ppc_instr.c:1990 | #335; siblings #344 | CODE | live at HEAD: yes | All four FMA handlers ignore FPSCR.RN. With guest RZ and the usual host nearest mode, A=C=1 and B=3×2^-54 produce `3ff0000000000001`, instead of `3ff0000000000000`. Negative forms inherit the magnitude error. Book I:6474–6478 requires guest-controlled rounding; [IBM’s instruction reference](https://www.ibm.com/docs/en/aix/7.1.0?topic=set-fmadd-fma-floating-multiply-add-instruction) agrees. Already filed without an id at `OUTSTANDING_BUGS.md:1620`. | Smallest check: add this tuple under RZ to the FMA result checks in `ppc_rounding_probe.py`. | confidence high
+
+F7 | src/cpus/cpu_ppc_instr.c:1779 | #336 | CODE | live at HEAD: yes | Passing RN to the helper does not cover its fallback bands. Under RZ, multiplying minimum-normal double by `1−2^-53` returns minimum-normal; the required result is maximum-subnormal. `ieee_mul_round_rm` explicitly returns host-nearest for tiny products; division has a related fallback. Book I:6400–6404 requires target rounding. Already filed without an id as **“#300’s accepted-nearest bands”**, `OUTSTANDING_BUGS.md:1971`. | Smallest check: one minimum-normal boundary result under RZ, with an RN control. | confidence high
+
+F8 | src/cpus/cpu_ppc_instr.c:2147 | upstream, relied on by #326/#336 | CODE | live at HEAD: yes | Single-precision arithmetic still aliases double arithmetic. `fadds(1, 2^-24)` under RN retains `1+2^-24`; single precision requires 1.0. `fmuls`, `fsubs`, and `fdivs` likewise never narrow. Both operands are representable singles, so the manual’s undefined-input exception does not apply. Book I:6340–6344. Already filed without an id at `OUTSTANDING_BUGS.md:1672`. | Smallest check: one precision-discriminating result per single opcode. | confidence high
+
+F9 | src/cpus/cpu_ppc_instr.c:1876 | #344, relying on upstream NaN conversion | CODE | live at HEAD: yes | The new negative FMA handlers destroy NaN payloads through interpret/store conversion. With A=`0x7ff8000000001234`, C=1, B=0, `fnmadd` must preserve that quiet NaN; HEAD produces an all-ones fraction. Book I:5161–5187 specifies propagation, and :6537 exempts NaNs from final sign negation. Acknowledged in the source and #344 changelog, but no matching outstanding id found. | Smallest check: inspect results for distinctive positive and negative quiet-NaN payloads. | confidence high
+
+F10 | src/cpus/cpu_ppc_instr.c:1600 | #304/#326/#330 | CODE | live at HEAD: yes | Numerical rounding status is missing. From clear FPSCR, `frsp(1+2^-24)` rounds correctly to 1 but leaves FI/XX/FX clear; `frsp(2^128)` produces infinity without OX; `fctiw(1.5)` produces 2 without FR/FI/XX. Exact conversions also retain stale FR/FI. Arithmetic siblings share the omission. Book I:7951, :8021, :7827 and :8145. Disclosed as deferred in #330; no separate outstanding id found. | Smallest check: read FPSCR after inexact, overflow, and exact-after-inexact conversions. | confidence high
+
+F11 | src/cpus/cpu_ppc_instr.c:1614 | #304; arithmetic siblings | CODE | live at HEAD: yes | Result classification updates only four bits and uses an incomplete four-way classification. `frsp(qNaN)` from clear FPSCR writes FPRF `00001`, instead of `10001`; a previously set class bit survives a positive normal result. Infinity classifications are also wrong. Book I Figure 28:5045–5058. Already filed without an id as **“FPRF class bits are unmodelled”**, `OUTSTANDING_BUGS.md:1685`. | Smallest check: inspect all five FPRF bits after NaN, infinity, and normal results. | confidence high
+
+F12 | src/cpus/cpu_ppc_instr.c:1617 | #304/#325/#326/#330 | CODE | live at HEAD: yes | Enabling invalid-operation exceptions does not suppress destination updates. With VE set, `frsp(sNaN)` still replaces FRT/FPRF, and `fctiw`/`fctiwz(qNaN)` still replace FRT. Raising FEX alone does not implement the required preservation. Book I:7924–7936 and :8199–8208. Already covered by the unnamed exception-enable entry at `OUTSTANDING_BUGS.md:1685`. | Smallest check: preload destination/FPRF, enable VE, and check preservation after invalid conversion. | confidence high
+
+F13 | src/cpus/cpu_ppc_instr.c:3497 | #304/#305 | CODE | live at HEAD: yes | Finite values outside single range fall back to a store that disagrees with the specified extraction. `stfs(2^129)` stores infinity; Book I’s splice produces 2.0f. Book I:6069–6072 defines the splice and :6091 explicitly makes these overflow results well-defined. This also falsifies the “bit for bit for finite values” comment at :3457. Already recorded as a deliberate divergence, without an id, at `OUTSTANDING_BUGS.md:1717`. | Smallest check: compare `ppc_rounding_probe.py` row **“stfs 2^129 policy”** with the manual’s extraction. | confidence high
+
+F14 | src/cpus/cpu_ppc_instr.c:5339 | #326 | RECORD | live at HEAD: yes | The decoder comment says four FPSCR fields clear nothing under `mcrfs`; its actual table has three: 4, 6 and 7. Field 3 clears VXVC. The changelog’s after-pass says this wording was corrected, but this copy survives. | Smallest check: compare the sentence with the immediately following switch. | confidence high
+
+F15 | src/cpus/cpu_ppc_instr.c:1983 | #335 | RECORD | live at HEAD: yes | The comment says no PowerPC arithmetic reads FPSCR.RN. HEAD’s `fmul`, `fadd`, `fsub`, and `fdiv` do so following #336. The #335 changelog repeats the stale present-tense claim. | Smallest check: compare the sentence with calls at :1779, :2119, :2175 and :2239. | confidence high
+
+F16 | src/cpus/cpu_ppc_instr.c:2492 | #522 | RECORD | live at HEAD: yes | The comment says `rldimi` and `rlwimi` still have the named **ppcrldimimask** and **ppcrlwimiwidth** defects. #527 repaired both at HEAD. | Smallest check: compare the comment with the corrected handlers and #527’s changelog block. | confidence high
+
+F17 | src/cpus/cpu_ppc_instr.c:85 | #330 | RECORD | live at HEAD: yes | The explanation still describes a separately rounded host product making `fmadd` NaN, and calls the ISA’s unrounded intermediate infinity. HEAD uses fused `fma`; finite multiplicands have a finite exact intermediate. Book I:6427–6431 specifies no intermediate rounding. The operand-based cause predicate is correct, but its explanation is not. | Smallest check: compare this comment with the fused call at :1990 and the manual. | confidence high
+
+No TEST-GAP finding is counted: the inspected probes and round records explicitly disclose the relevant missing semantic coverage. The disputed **ppcrlwhighhalf** interpretation remains unresolved and is not counted clean.
+
+Checked-clean items, scoped to the property stated; all locations are in `src/cpus/cpu_ppc_instr.c` at HEAD:
+
+- C1 | :781 | All eight general integer compares cast masks and nibbles before shifting.
+- C2 | :883 | Specialized CR0 compares preserve result and XER.SO behavior.
+- C3 | :2697 | `mcrf` uses unsigned masks and captures its source before updating the destination.
+- C4 | :2574 | Word-rotate zero-count guards prevent shifts by 32.
+- C5 | :2494 | `rldicl` builds its mask separately and combines it with the rotated value correctly.
+- C6 | :2541 | `rldimi` preserves SH, handles wrapping endpoints, and bounds its mask loop.
+- C7 | :2610 | `rlwimi` rotates the low word correctly and safely handles source/destination aliasing.
+- C8 | :2314 | Failed load-reserve returns before consuming the buffer or publishing a new result/reservation.
+- C9 | :2362 | Failed conditional-store returns before publishing CR0 success.
+- C10 | :5384 | `mtfsf` uses four-bit field strides and excludes explicit FEX/VX writes.
+- C11 | :1113 | `mtfsb1` applies implicit FX only on a newly set exception bit.
+- C12 | :1136 | FPSCR control writes recompute the derived summaries.
+- C13 | :5346 | `mcrfs`’s actual clearing masks preserve FPCC, enables, and rounding mode.
+- C14 | :206 | FDOT checks FPU availability before calling the base handler and updating CR1.
+- C15 | :1213 | `fnabs` preserves payload bits; `fsel` selects raw operands correctly for NaN and signed zero.
+- C16 | :1333 | `fcmpu` preserves the unordered result bit and sticky VXSNAN.
+- C17 | :69 | Raw signaling-NaN classification excludes infinity.
+- C18 | :103 | Two-operand invalid-cause classification handles signs, operand order, and NaN precedence correctly.
+- C19 | :157 | FMA invalid causes inspect all three operands and combine independent causes correctly.
+- C20 | :1773 | `fmul` classifies its source arguments rather than its differently positioned destination.
+- C21 | :1990 | Finite FMA uses one rounding; negative forms negate after fused evaluation.
+- C22 | :2226 | Divide-by-zero detection excludes zero, infinity, and NaN dividends appropriately.
+- C23 | :1381 | Finite single narrowing bounds shifts and handles ties, directed rounding, carries, and overflow values.
+- C24 | :1484 | Single widening preserves NaN sign/payload; `frsp` truncates and quiets NaNs as specified.
+- C25 | :1686 | Integer conversion uses strict rounded bounds and correct sign-dependent saturation.
+- C26 | :3488 | Store denormalization truncates correctly; all eight update wrappers select the intended width/direction/update tables.
+
+DENOMINATOR: read 53 of 53 hunks of the net diff

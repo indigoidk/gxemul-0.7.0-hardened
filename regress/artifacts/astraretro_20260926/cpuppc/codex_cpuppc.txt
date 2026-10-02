@@ -1,0 +1,24 @@
+ASTRARETRO_CPUPPC_ALIVE
+VERDICT: 2 findings (0 CODE live at HEAD, 1 RECORD, 1 TEST-GAP); 11 items checked clean
+
+F1 | [src/cpus/cpu_ppc.c:1919](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1919) | #330 | RECORD | live at HEAD: yes | The claim “Every site that detects an exception goes through here” is false. A signalling-NaN `frsp` sets FX/VXSNAN directly in `cpu_ppc_instr.c:1569–1572`, then calls `ppc_fpscr_recompute` at 1592, bypassing `ppc_fpscr_raise`. Its flag behavior is correct; the centralization claim is not. | Smallest check: inspect HEAD’s `frsp` arm and grep helper calls. | confidence high
+
+F2 | [src/cpus/cpu_ppc.c:1939](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1939) | #330 | TEST-GAP | live at HEAD: yes | The promised gate row for mixed previously-set/new causes is absent. In `regress/ppc_rounding_probe.py`, both cause runners initialize FPSCR to zero (:385, :511). “FX latches once only” (:334) repeats single-cause `frsp`, bypassing this helper. None observes whether a fresh VXCVI raises FX when VXSNAN is already set and FX cleared. | Smallest check: add that mixed-cause assertion; Book I’s transition rule is at [_scratchpad/ppc_uisa_book1_v201.txt:4877](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4877). | confidence high
+
+Neither finding is already filed in HEAD’s `OUTSTANDING_BUGS.md`. Review was static and read-only; no builds or emulator runs.
+
+Checked clean, with all source lines referring to committed HEAD:
+
+- `src/cpus/cpu_ppc.c:627` — unsigned high-byte shift removes signed-shift UB; remaining byte shifts and additions are safe.
+- `src/cpus/cpu_ppc.c:1756` — SPR masking bounds the dependent bitmap index and shift.
+- `src/cpus/cpu_ppc.c:1785` — extended range covers all sixteen IBAT4–7/DBAT4–7 registers, for both SPR access directions.
+- `src/cpus/cpu_ppc.c:1855` — CR1 receives exactly FPSCR’s top nibble; other CR fields survive.
+- `src/cpus/cpu_ppc.c:1853` — record wrappers call the helper after execution and check FPU availability first.
+- `src/cpus/cpu_ppc.c:1895` — VX includes all nine invalid causes and excludes reserved ISA bit 20.
+- `src/cpus/cpu_ppc.c:1900` — all five FEX cause/enable pairs are correct, including clearing FEX.
+- `src/cpus/cpu_ppc.c:1911` — recomputation preserves FX, FPCC, and unrelated FPSCR fields.
+- `src/cpus/cpu_ppc.c:1890` — all five FPSCR-writing instructions and exceptional `frsp` refresh summaries.
+- `src/cpus/cpu_ppc.c:1946` — repeated causes leave cleared FX alone; a fresh cause within a mixed mask sets it.
+- `src/cpus/cpu_ppc.c:1949` — causes accumulate before summary recomputation, preserving existing sticky causes.
+
+DENOMINATOR: read 3 of 3 hunks of the net diff

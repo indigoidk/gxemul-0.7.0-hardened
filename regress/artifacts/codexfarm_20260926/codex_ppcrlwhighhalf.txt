@@ -1,0 +1,99 @@
+VERDICT: Establish a Book I–based witness, then repair both handlers.
+
+I read committed **HEAD `8ea26abb421a`** using `git show HEAD:<path>`, confined to `GXEMUL-SEC`. I read the sole matching [OUTSTANDING_BUGS.md section](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:19175) and the [complete ledger record](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:46273), including every successive correction in its long `note` at line 46279; this record has no separate `entries` array.
+
+The relevant product code and `OUTSTANDING_BUGS.md` match the working tree. Although `ledger.json` is modified, this row matches HEAD. The probe differences below are explicitly identified. No files were changed, and no build, emulator or probe was run.
+
+1. **Two defect sites remain at HEAD, covering four instruction forms.**
+
+   Guest instruction fetch and big-endian decoding start at [cpu_ppc_instr.c:4110](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4110). The primary opcode is extracted at line 4139. Opcodes 21 and 23 enter the [shared rotate-word decoder at line 4535](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4535), which constructs a correct **low-word** circular mask and supplies destination pointer, mask and original instruction word through `arg[0..2]`.
+
+   | Guest instruction | Dispatch | Defective execution site |
+   |---|---|---|
+   | `rlwnm`, opcode 23 | `cpu_ppc_instr.c:4550` | [X(rlwnm):2567](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2567): shift comes from `GPR[RB] & 31`; the final store at **2576** assigns masked `uint32_t tmp`. |
+   | `rlwinm`, opcode 21 | `cpu_ppc_instr.c:4552` | [X(rlwinm):2588](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2588): shift comes from SH; the final store at **2596** assigns masked `uint32_t tmp`. |
+
+   Translation finishes by invoking the selected function at [cpu_dyntrans.c:1978](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1978); cached execution uses the dispatch at line 114.
+
+   The width conclusion follows from the surrounding code: [cpu_ppc.c:120](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:120) selects the implementation according to CPU-model width, and [generate_tail.c:122](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/generate_tail.c:122) makes `reg()` a `uint64_t` lvalue in the wide implementation. Both stores therefore zero-extend.
+
+   The record forms use [DOT0 at lines 208–209](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:208): call the base handler, then update CR0 from its destination. They are two additional affected forms, **not two additional independent defective stores**. Searching committed `src` found no other execution implementation or fused consumer of these instructions.
+
+2. **The local defining manual resolves the dispute in favor of the wrapping high-half result.**
+
+   Listing `_scratchpad\*.txt` with `ls` found five PPC manuals: `ppc_uisa_book1_v201.txt`, `ppc_pem_32and64_2005.txt`, `ppc_pem32_rev2_2001.txt`, `ppc_oea_book3_v201.txt` and `ppc_vea_book2_v201.txt`.
+
+   In `ppc_uisa_book1_v201.txt`:
+
+   - [Lines 501–504](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:501) define `ROTL32` over the duplicated low word.
+   - [Lines 578–580](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:578) define wrapping `MASK`; [lines 4015–4029](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4015) explicitly specify a 64-bit mask wrapping through bit 63 to bit 0.
+   - [`rlwinm` at 4126–4128](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4126) and [`rlwnm` at 4236–4242](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4236) both apply `MASK(MB+32, ME+32)` to that duplicated rotation.
+
+   Thus, with `r` the **unmasked 32-bit rotation**, the required result is:
+
+   `RA64 = (r & mask32) | (MB > ME ? (uint64(r) << 32) : 0)`
+
+   This is my derivation from those definitions. For wrapping masks, the interval includes **every high-half bit**. Independently counting the endpoint pairs gives **496 wrapping and 528 non-wrapping pairs**. The defect extends across all shift counts; a zero source merely makes it unobservable.
+
+   The conflict is real within the 2005 PEM: [line 30065](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30065) unconditionally says the upper half clears. However, [PEM line 302](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:302) expressly defers to Architecture v2.01. Book I’s clearing statements at [4195](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4195) and [4291](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4291) are qualified by “for all the uses given above”; those programming-note recipes use non-wrapping masks.
+
+   The 2001 PEM explicitly limits its instruction pseudocode to 32-bit implementations at [15668](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:15668). Grepping Books II and III found zero occurrences of `rlwinm`, `rlwnm` or `rlwimi`; neither supplies a contrary ruling.
+
+3. **The same repair options apply to both sites; the evidence favors repairing the existing bases.**
+
+   | Option | Existing tree precedent and assessment |
+   |---|---|
+   | Recover MB/ME from `arg[2]` inside each base; retain the unmasked rotation for the high half | **Recommended.** [X(rlwimi):2610](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2610) narrows the source, extracts endpoints, and installs the rotated high word at line 2639. Both affected bases already have `iword`. Existing `DOT0` wrappers then consume the corrected result. |
+   | Factor that computation into a shared helper, or express it with a selected high word | Same arithmetic; shared, multiply-included-file helpers have precedent in the [guarded helper block at line 45](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:45). This adds organization work without established performance benefit. |
+   | Select specialized wrapping handlers during decoding | Decoder specialization already exists in [ADDI → LI/LI_0 at line 4224](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4224). Capture wrapping before the loop, select before it, re-extract endpoints afterward, or preserve MB using a separate cursor—the latter has precedent in [rldimi’s preserved SH and separate cursors at 2541](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2541). New wrapping bases also need correct record-form dispatch. |
+   | Carry a decoded wrap flag to execution | Passing decoded control information has precedent in [branch arguments at line 4378](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4378). Feasible with a documented argument contract, but unnecessary when the original instruction already survives in `arg[2]`. |
+   | Construct a full 64-bit mask and AND duplicated data | Runtime 64-bit mask construction exists in [rldimi:2548](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2548). Translation-time precomputation resembles the current shared decoder, but **a full mask cannot portably occupy its existing argument slot**: [cpu.h:76](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu.h:76) declares host-width `uintptr_t` arguments. |
+   | Call the old base, then repair its result in a wrapper | [DOT0:208](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:208) demonstrates post-call bookkeeping, but rereading operands afterward fails for `RA=RS`, `RA=RB`, or all three equal. Inputs would need preserving before the call, eliminating the apparent simplicity. |
+
+   Two shortcuts are disproved directly: the mask loop finishes with `mb == me`, so testing those locals afterward cannot identify wrapping; and `(MB,ME)=(1,0)` and `(0,31)` both produce low mask `0xffffffff`, so that mask cannot encode the distinction.
+
+   Keep the rotation itself at 32-bit width. Widening it risks reintroducing the sibling’s source contamination; widening only the masked result still loses the required high word.
+
+   A compile guard should use `MODE32`, following [extsb/extsh:3109](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:3109). Do not substitute a runtime SF test: [Book I:342](/C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:342) requires these register results across both execution modes of a 64-bit processor. Source preservation also does not establish identical compiled machine code.
+
+4. **Existing checks touch the family, but do not establish wrapping coverage for these two handlers.**
+
+   - [ppc_rlwimi_probe.py:263](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_rlwimi_probe.py:263) executes a **non-wrapping** `rlwinm` sibling control; line 284 checks its result. Its oracle already uses the correct full-width mask at line 156. [Gate 13:106](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_ppc.sh:106) invokes this probe and pins 28/28; the adjacent `rldimi` probe is pinned to 29/29. A correct repair should preserve these results.
+   - The committed [original family witness:175](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py:175) already has the corrected mask helper, but its actual `rlwinm` instruction at line 482 is also non-wrapping.
+   - **HEAD** `regress/ppc_rldicl_probe.py:158–176` still contains the incorrect low-only helper. Its **working-tree** [replacement at line 198](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:198) corrects it. These sibling helpers are not exercised by that file’s current `rldicl` rows; their presence is not coverage. Reusing the committed helper would recreate the oracle defect.
+   - [Gate 9:263](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh:263) constructs enumerated machines and checks construction/sanitizer outcomes, not rotate results. Moreover, Gate 13 now executes `bareppc` integer probes before its G4 image prerequisite: a blanket claim that gates never execute 64-bit PPC results is obsolete.
+
+   Relevant ledger neighbors are `ppcwitnessmaskoracle`, `ppcrlwimiwidth`, `ppcrldimimask`, `ppcrldiclzero`, and [ppccr0modewidth](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:46383). The last matters because [update_cr0:1807](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1807) currently chooses comparison width from CPU-model width.
+
+   Expected repair effects are the high word for wrapping cases and, where applicable, CR0. Preserve every low-word result, non-wrapping clearing, plain-form CR preservation, and the narrow implementation. Validation needs both opcodes/Rc forms, nonzero shifts, equal endpoints, non-wrapping companions, differing source halves, register aliases, and register-shift contents such as 1 versus 33. Wrapping-only cases cannot reject unconditional high-word replication.
+
+5. **A one-instruction target witness is available on an unmodified in-tree machine.**
+
+   Use `bareppc`, whose [default CPU is PPC970](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:448). The existing probe demonstrates cold-debugger setup and guest stepping at [ppc_rlwimi_probe.py:203](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/ppc_rlwimi_probe.py:203).
+
+   Describe the witness as follows: initialize `r3=1`, seed `r4` with a distinguishable nonzero sentinel, select `MSR[SF]=1` with relocation disabled, and clear XER.SO. Execute **`rlwinm. r4,r3,1,31,0`**, then inspect `r4` and CR0.
+
+   | Observation | Predicted HEAD | Book I |
+   |---|---:|---:|
+   | `r4` | `0x0000000000000000` | `0x0000000200000000` |
+   | CR0 nibble | `2` — EQ | `4` — GT |
+
+   The rotation produces 2; the low mask `0x80000001` removes it, while the architectural high mask retains its duplicate.
+
+   Add these controls:
+
+   - **Liveness:** execute a subsequent `li` into a separate sentinel register and verify its value and PC advancement.
+   - **Device-signature equivalent:** this is a CPU instruction, with no MMIO device in its path. Read PVR through `mfspr` and require **`0x00390000`**, the [PPC970 identity at cpu_ppc.h:87](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h:87). The constructor installs it at `cpu_ppc.c:100`; [MFSPR dispatch:4657](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4657) reaches the normal SPR read.
+   - **Instruction control:** independently disassemble the placed instruction using the [separate disassembler at cpu_ppc.c:838](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:838). A companion with `MB=0, ME=31` must return 2 with a zero high half.
+
+   For `rlwnm`, replace immediate SH with an initialized shift register containing 1; 33 must produce the same result. These are **source/specification predictions**, not observations from an emulator run.
+
+6. **Several historical claims are superseded; neither target site is already fixed.**
+
+   - “Unresolved dispute” in the title and the MED/dispute wording in `OUTSTANDING_BUGS.md` contradict the ledger’s later Book I adjudication. HIGH/open remains consistent with the code.
+   - “Other manuals unconsulted” and “Book I absent” are historical. Book I is present, and its qualified clearing sentences must not be described as absent.
+   - The zero-shift restriction for `rlwnm` was incorrect; all shifts are affected. The two base functions are `rlwnm` first and `rlwinm` second, not two `rlwnm` sites.
+   - The inert wrapping dispatch was a **rejected design**, not a shipped repair. HEAD contains only plain/record selection at lines 4550 and 4552.
+   - Old decoder references around 4512 have moved to **4535**; its local mask declaration is now **4074**. `rlwimi`’s high-half conditional moved to **2639**. The two target stores remain at **2576 and 2596**.
+   - The sibling `rlwimi` high-half repair is already present at line 2639, and `rldimi` preserves its shift/circular traversal at line 2541. Their ledger workflow states should not be mistaken for absent product changes.
+   - The existing [oracle enumeration:49](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcwitnessmaskoracle/ENUMERATION_20260911.txt:49) expressly identifies itself as a mathematical model, not an emulator measurement. It cannot discharge this row’s still-null witness field.

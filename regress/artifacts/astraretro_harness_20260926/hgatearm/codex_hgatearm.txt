@@ -1,0 +1,62 @@
+ASTRARETRO_HGATEARM_ALIVE
+VERDICT: 13 findings (2 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 8 RECORD, 2 OTHER); 27 items checked clean
+
+Static review of HEAD `db8b1a33`. No files changed, builds performed, or probes executed. Supporting probes and emulator source were inspected selectively.
+
+F1 | regress/gate_arm.sh:360 | #329 / 85bc4673 | CANNOT-FAIL | `T RORS clears Z` and `T RORS clears N` both request `cin=1`. The preset in `arm_flags_probe.py:1329` executes 1−0, leaving **both N and Z clear**. With or without #329’s NZ-clearing statement, the rows produce respectively `r0=0x81234567, N1 Z0 C1 V0` and `r0=1, N0 Z0 C0 V0`; both pass. | Smallest check: trace the two presets through `cpu_arm.c:1454`; seed Z=1 and N=1 respectively to make clearing observable. | confidence high
+
+F2 | regress/gate_arm.sh:197 | #345 / d143bd5b; masked by #346 / be6ea08a | CANNOT-FAIL | `A cacheclean r0 intact` and `r1 intact` use `ldr r4,[r5],#32` with counter r6 (`arm_flags_probe.py:514`). Removing both #345 register guards still leaves #346’s destination-r2 guard rejecting this sequence. Fixed and reverted states therefore both return the expected `r0=0x11, r1=0x22`. Additionally, the r1 seed `0x22` triggers #350’s runtime fallback if matching is enabled. | Smallest check: evaluate the remaining predicate at `cpu_arm_instr.c:3567`; replacement witnesses must vary base and counter independently, retain destination r2, and avoid the fallback. | confidence high
+
+F3 | regress/gate_arm.sh:1657 | #500 / 840f3d0a | STATUS-LAUNDERED | `rd surv` accepts premature emulator termination with status 0 after the expected decline announcement. `sgi_de_primop_probe.py:501–505` checks `how=="exit0"` and announcement count, but never checks the requested register readback or `alive`. Normal completion and premature termination thus both make `rd surv` and `rd decl` green. Already filed as **`sgideprimrdpair`**. | Smallest check: score `alive=False`, `how="exit0"`, one expected announcement, and no register output; both predicates accept it. | confidence high
+
+F4 | regress/gate_arm.sh:1714 | #501 / ecc4d3be | OTHER | `srvd val text` and `srvd half text` accept diagnostics reporting `0x3400` and `0x5600` instead of `0x34` and `0x56`. Their substring needles in `pcc2_default_probe.py:225–226` omit the value terminator. Already filed as **`probeneedleterm`**. | Smallest check: apply the existing substring counts to those longer values; each still returns 1. | confidence high
+
+F5 | regress/gate_arm.sh:1213 | #548 / f4f601c4 | OTHER | The four-second drain oracle can pass an unbounded timer when scheduling permits only 1–762 callback deliveries. For example, 500 deliveries yield backlog 500, satisfying every backlog bound and live-clock check. The pinned prediction 3052 is calculated from requested duration, not measured deliveries. Lines 1203–1205 acknowledge this false pass; the probe’s guest-progress control supplies no callback minimum. | Smallest check: evaluate the verdict with unbounded D/X backlogs of 500 and passing controls; require independent evidence that delivery exceeded 762 before crediting bound coverage. | confidence high for the conditional false pass; starvation threshold not measured here
+
+F6 | regress/gate_arm.sh:24 | a06e92fb | RECORD | “Today’s table would read 41/58” describes a 58-row table, while HEAD requires 190 rows at line 115. Already filed as **`sgidefatalstale`**. | Smallest check: compare the claimed denominator with the literal gate pin. | confidence high
+
+F7 | regress/gate_arm.sh:56 | #311 / a06e92fb | RECORD | Says two of the five subtract-family instructions were already correct. There are three: SUB, CMP and RSB, as the same file correctly states at lines 7–12. | Smallest check: enumerate the three operations without borrow-in. | confidence high
+
+F8 | regress/gate_arm.sh:575 | #364 / e89e3db2; superseded by #365 | RECORD | The table declares both general-path writeback sites uncovered and claims only three rows enter the general path. HEAD additionally runs `A wb word ldrt post4 unal` and `A wb word cold pre4 unal`, exercising those writeback sites; lines 759–770 require all five general-path rows. Already filed as **`sgidefatalstale`**. | Smallest check: compare the table with those two probe definitions and their expected general-entry counts. | confidence high
+
+F9 | regress/gate_arm.sh:921 | #372 / 5ae6c0e9 | RECORD | Calls all six original BE rows discriminators. `be warm word` is a control returning `0x11223344` before and after the correction; only the five cold rows discriminate. | Smallest check: inspect `arm_endian_probe.py:381–389`, which explicitly assigns CTRL versus DISC. | confidence high
+
+F10 | regress/gate_arm.sh:1039 | #390 / 8b1a7fdf | RECORD | Says LDRD’s base was never instruction+12 and the rows establish that it was unaffected. LDRD shared the incorrect base calculation; its eight-byte alignment mask concealed the four-byte error. Both versions return `0xaaaa0001` and `0xbbbb0002` because addresses `0x804c` and `0x8048` align to the same location. | Smallest check: trace the PC-base branch in `cpu_arm_instr_loadstore.c:595–621`; the corrected explanation already exists in `arm_endian_probe.py:590–610`. | confidence high
+
+F11 | regress/gate_arm.sh:1328 | #498; stale after #500 / 840f3d0a | RECORD | Claims `tail_acc_x` expects host death and that the drawing default remains fatal. HEAD’s default announces and returns; `sgi_de_width_probe.py:383` expects a post-draw value of `0x0`, with a separate clean-exit check. Already filed as **`sgidefatalstale`**. | Smallest check: compare the comment with those row definitions and the current drawing default. | confidence high
+
+F12 | regress/gate_arm.sh:1413 | #497 / e363582a; duplicate at :1325 | RECORD | Claims an overlong padded name silently stops being tested. These checks require match count 1: selecting nothing produces 0 and fails. Lines 1536–1542 explain the actual behavior correctly. Already filed as **`sgidefatalstale`**. | Smallest check: render a name filling its column and compare its zero matches against the required 1. | confidence high
+
+F13 | regress/gate_arm.sh:1611 | #505 / 7a41b3fb | RECORD | Claims no RGB row name prefixes another, but the list contains `rgb tiled` and `rgb tiled64`. The actual two-space matching remains sound. | Smallest check: compare those names at line 1625. | confidence high
+
+Checked clean, with each claim limited to the property stated:
+
+- `regress/gate_arm.sh:99` — Missing legacy result records cannot produce battery success: SKIP propagates to exit 3.
+- `regress/gate_arm.sh:141` — TEQ/TST carry checks include standalone references and preservation controls.
+- `regress/gate_arm.sh:159` — XOR-swap operands are reseeded; same-register zero distinguishes the defective result.
+- `regress/gate_arm.sh:239` — Cacheclean2 base and counter witnesses vary their registers independently.
+- `regress/gate_arm.sh:249` — SBC/RSC equal-operand carry discriminators have companion arithmetic-result pins.
+- `regress/gate_arm.sh:295` — UDF checks combine execution, exception state and return-address observations.
+- `regress/gate_arm.sh:396` — Idle probe requires nine rows and checks each named row.
+- `regress/gate_arm.sh:469` — Memcpy destination checks cover second-half words and an overshoot sentinel.
+- `regress/gate_arm.sh:525` — Strlen yield checks use guest instruction accounting; alias progress is separately asserted.
+- `regress/gate_arm.sh:731` — BDT denominator is independently pinned to 43.
+- `regress/gate_arm.sh:756` — Writeback path denominator is 22, with five required general-path observations.
+- `regress/gate_arm.sh:864` — All 21 fold-marker rows are named, including positive/negative evidence and BE control.
+- `regress/gate_arm.sh:1027` — Endian named checks enforce the expected DISC/CTRL classification.
+- `regress/gate_arm.sh:1118` — Footbridge totals and distinct green IDs prevent duplicate IDs replacing missing rows.
+- `regress/gate_arm.sh:1158` — Missing disassembly text generates a mismatch, rather than silently satisfying the zero-error check.
+- `regress/gate_arm.sh:1218` — Drain protocol rejects missing, duplicate and REPORT-ONLY verdicts; status and timer identities are checked.
+- `regress/gate_arm.sh:1378` — SGI width lists contain 30/46 names matching their literal totals; current padding patterns distinguish them.
+- `regress/gate_arm.sh:1492` — Unmapped probe has 50 named checks and runs independently of the preceding probe’s success branch.
+- `regress/gate_arm.sh:1543` — Randompixel requires eight named rows, completion and a passing witness verdict.
+- `regress/gate_arm.sh:1565` — Colourdefault validates unique result/completion records before enforcing 89/89.
+- `regress/gate_arm.sh:1625` — RGB’s ten names match its denominator; two spaces distinguish the prefix pair.
+- `regress/gate_arm.sh:1684` — PCC2 width’s 251 names and aggregate pins agree.
+- `regress/gate_arm.sh:1732` — PCC2 C040 checks all 18 names, including both MIEN additions.
+- `regress/gate_arm.sh:1754` — MK48 checks all 57 names and requires completion.
+- `regress/gate_arm.sh:1778` — Hpcmips requires all 28 IDs, zero failed rows and an exact PASS verdict.
+- `regress/gate_arm.sh:1803` — PIT’s four controls and fourteen remaining checks match the pinned 18.
+- `regress/gate_arm.sh:1843` — XScale validates unique records, retains process status, pins 30 rows and rejects FAIL/BLOCKED results.
+
+DENOMINATOR: read 1 of 1 files in full

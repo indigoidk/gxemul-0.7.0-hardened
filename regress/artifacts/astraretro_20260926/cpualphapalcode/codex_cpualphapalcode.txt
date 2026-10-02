@@ -1,0 +1,35 @@
+ASTRARETRO_CPUALPHAPALCODE_ALIVE
+VERDICT: 7 findings (1 CODE live at HEAD, 5 RECORD, 1 TEST-GAP); 10 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No files written, builds performed, or regression probes executed.
+
+F1 | `src/cpus/cpu_alpha_palcode.c:287` | upstream, relied on by #507/#514 | CODE | live at HEAD: yes | With paging enabled, a valid physical PCB address can map elsewhere when interpreted as a virtual address. The context-switch helpers omit `PHYSICAL`, so the repaired assignment receives flags/PTBR from the wrong page; outgoing saves likewise target the wrong page. The [Alpha Architecture Reference Manual, §18.2, p.18–2, requirement 1](https://docs.alexrp.com/alpha/alpha_4th.pdf) specifies a physical PCBB. Already filed as **`alphapcbbvirt`**, `OUTSTANDING_BUGS.md:21941`. | Smallest check: inspect helper flags at `src/core/memory.c:783,891` and translation dispatch at `src/cpus/memory_rw.c:245`; verify PCB accesses under nonidentity paging. | confidence high
+
+F2 | `src/cpus/cpu_alpha_palcode.c:379` | #520 | TEST-GAP | live at HEAD: yes | The claimed coverage of narrowing **either** comparison is incomplete. `regress/alpha_tbi_probe.py` cannot distinguish narrowing only the lower-bound cast: every shipped selector retains its original result. The recorded `M_G` narrows both casts. A negative-wide selector such as `0xffffffff00000001` distinguishes the missing case. | Smallest check: compare the original and lower-only-narrowed predicates across the probe’s selector set and that additional value. Read-only arithmetic confirmed the gap. | confidence high
+
+F3 | `src/cpus/cpu_alpha_palcode.c:356` | #520 | RECORD | live at HEAD: yes | The comment describes the shipped detector as 13 rows, scoring `10/13 → 13/13`. HEAD ships 15 rows; the committed t3 results are `11/15 → 15/15`. The comment still describes t2. | Smallest check: count the seven initial rows plus eight `BOUND_ROWS` in `regress/alpha_tbi_probe.py:549`, then read `regress/artifacts/alphatbinegsel/killtable_20260910/t3/SCORES.txt`. | confidence high
+
+F4 | `src/cpus/cpu_alpha_palcode.c:407` | #520 | RECORD | live at HEAD: yes | A privileged guest can supply an unrecognised TBI selector. The assertion that every caller must use the five macros is false: `alpha_pal_tbi(unsigned long op, ...)` forwards arbitrary `op` unchanged, and CALL_PAL imposes no selector restriction. | Smallest check: inspect `src/include/thirdparty/alpha_cpu.h:479` and `src/cpus/cpu_alpha_instr.c:63`. The shipped probe also supplies unrecognised selectors. | confidence high
+
+F5 | `src/cpus/cpu_alpha_palcode.c:330` | #520 | RECORD | live at HEAD: yes | The historical claim that `a0` was ignored until #520 is false. Previously, `a0=0` selected full invalidation while `a0=1` selected page invalidation through `if (a0 >= 1)`. The old implementation misclassified negative selectors; it already read the selector. | Smallest check: `git show --format= 65b007bf -- src/cpus/cpu_alpha_palcode.c`. | confidence high
+
+F6 | `CHANGELOG.md:4870` | #520 | RECORD | live at HEAD: yes | The frozen t3 probe is called “byte-identical” to the shipped probe. Their committed contents differ by 21 added and six deleted lines. These changes affect documentation/display text; the same block acknowledges the difference at line 4977 but leaves the earlier claim intact. | Smallest check: diff the HEAD blobs for `regress/artifacts/alphatbinegsel/killtable_20260910/t3/alpha_tbi_probe.frozen.py` and `regress/alpha_tbi_probe.py`. | confidence high
+
+F7 | `CHANGELOG.md:6807` | #507 | RECORD | live at HEAD: yes | “Three red rows now pin three distinct consequences instead of one cell read twice” overstates the observations. `swpctx ptbr` and `swpctx notflags` still consume the same `A+16` readback. The added flags row observes `A+40`, covering flags load/save together. | Smallest check: inspect `regress/alpha_harness_probe.py:322,329,341,355`; there are two distinct readbacks, not three. | confidence high
+
+No matching `OUTSTANDING_BUGS.md` filing was found for F2–F7.
+
+Checked clean, with source anchors at HEAD:
+
+- `src/cpus/cpu_alpha_palcode.c:269` — returns the old context in ABI register `v0`.
+- `src/cpus/cpu_alpha_palcode.c:273` — loads the incoming context from the entry-time `a0` snapshot.
+- `src/cpus/cpu_alpha_palcode.c:309` — assigns flags independently of PTBR.
+- `src/cpus/cpu_alpha_palcode.c:294` — all nine PCB fields have matching offsets, widths, and individual assignments.
+- `src/cpus/cpu_alpha_palcode.c:296` — all incoming reads finish before PTBR changes.
+- `src/cpus/cpu_alpha_palcode.c:265` — the compiled/disabled return-register census is accurate.
+- `src/cpus/cpu_alpha_palcode.c:430` — the interval selects exactly `1`, `2`, and `3`; signed casts are redundant as documented.
+- `src/cpus/cpu_alpha_palcode.c:433` — both negative selectors reach full invalidation, whose helper clears load, store, and instruction-page lookup entries.
+- `src/cpus/cpu_alpha_palcode.c:269` — `alpha_swpctx_v0_probe.py:404` distinguishes old context, new context, and an untouched return register.
+- `src/cpus/cpu_alpha_palcode.c:431` — the TBI probe’s two-page observations distinguish selective invalidation from full invalidation.
+
+DENOMINATOR: read 4 of 4 hunks of the net diff

@@ -1,0 +1,41 @@
+ASTRARETRO_DEVSGIRE_ALIVE
+VERDICT: 8 findings (5 CODE live at HEAD, 3 RECORD, 0 TEST-GAP); 16 items checked clean
+
+Reviewed committed HEAD `8ea26abb`. Static review only; no files written, builds performed, or probes executed.
+
+F1 | `src/devices/dev_sgi_re.c:525` | #513; write siblings upstream, relied on by #497/#513 | CODE | live at HEAD: yes | **Guest ARC calls bypass the assumed CPU alignment protection.** With PROM emulation enabled, an unaligned guest buffer near an internal register-bank boundary reaches the handler as an eight-byte access. TLB_A, TLB_C and LINEAR_A then access beyond their arrays; corresponding writes can clobber adjacent fields. ARC `Seek` supplies the read path; `GetFileInformation` supplies a write path. The central 1-KiB split protects the B-bank boundaries, so this finding does **not** extend to those banks through this route. This also falsifies the comment that the debugger is the only exception. Related IDs `sgilinearoob` and `sgirespanchk` exist, but their reachability premise misses ARC. | Smallest check: trace `arcbios.c:1908` through `memory_rw.c:186,583`, then compare the spans at lines 525, 573 and 733 against their array capacities. | confidence high
+
+F2 | `src/devices/dev_sgi_re.c:321` | #100; siblings retained by #505/#509/#519 | CODE | live at HEAD: yes | **Buffer capacity was repaired, initialization was not.** Guest-selected colour type and transfer depth remain independent: wider CI PUTs copy bytes never assigned, while short RGB/RGBA/ABGR/raw GETs consume bytes beyond those read. The documented 16-bit tiled MTE path still initializes only one of its two transferred bytes; #509 repairs only the 32-bit sibling. Already filed as `sgirebufuninit`. | Smallest check: compare initialized and consumed byte ranges for every colour/depth combination. | confidence high
+
+F3 | `src/devices/dev_sgi_re.c:408` | #505 | CODE | live at HEAD: yes | A source pixel whose most significant reconstructed channel has its high bit set reaches `uint8_t` promotion to signed `int`, followed by `<< 24`; the result is unrepresentable on the supported 32-bit-int hosts. The same undefined shift remains in the RGBA, ABGR and raw siblings at lines 411, 414 and 417. Already filed as `sgirebufshiftub`. | Smallest check: inspect the promoted operand types before each shift. | confidence high
+
+F4 | `src/devices/dev_sgi_re.c:258` | upstream, relied on by #100/#509 | CODE | live at HEAD: yes | Every accepted tiled pointer requires bit 15 of its guest-written `uint16_t` entry. Promotion to signed `int` followed by `<< 16` therefore invokes undefined behavior before the validity check. A/B/C all retain it. Already filed as `sgiretlbshiftub`. | Smallest check: compare the array element type and shifts at lines 258–262 with the validity test at line 312. | confidence high
+
+F5 | `src/devices/dev_sgi_re.c:1097` | #504 | CODE | live at HEAD: yes | A rectangle transfer using an unsupported source mode declines its GET but still performs the dependent PUT. The destination receives foreground instead of retaining its previous contents or receiving source data. Removing `random()` made this deterministic without making the operation a complete decline. Already filed as `sgirandomskipput`. | Smallest check: follow `color = fg` at line 1042 through the void GET at 1051 to the PUT at 1097. | confidence high
+
+F6 | `src/devices/dev_sgi_re.c:294` | #504; made stale by #519 | RECORD | live at HEAD: yes | The comment says the colour-mode default still “carries the same random() shape.” HEAD clears `ok` and skips that PUT instead. No separate outstanding record ID found; `sgirandomcolour` describes the repaired behavior. | Smallest check: compare lines 294–295 with 364–375. | confidence high
+
+F7 | `src/devices/dev_sgi_re.c:465` | #497 | RECORD | live at HEAD: yes | The comment calls the TLB/TEX width guards “modelling fidelity only” and says narrower accesses stay in bounds. Their loop body would read `data[1]` for a one-byte store, outside the caller’s one-byte buffer. The current guards prevent that defect; their stated safety rationale is false. The opposite, correct explanation already appears under `sgilinearoob`. | Smallest check: compare line 501 with the MIPS caller’s `data[LS_SIZE]` allocation. | confidence high
+
+F8 | `src/devices/dev_sgi_re.c:487` | #497; made stale by #498 | RECORD | live at HEAD: yes | The commentary still calls the DE width guard a “width kill.” A narrow access now announces once, skips dispatch and drawing, and returns success with zero for reads. Already filed as `sgidefatalstale`. | Smallest check: compare line 487 with lines 1214–1219 and 1438–1444. | confidence high
+
+Checked clean, with narrowly stated scope; all source locations below are in `src/devices/dev_sgi_re.c` at HEAD:
+
+- C1 | :69 | All 13 warning flags occupy distinct bits; guards set the flags they test.
+- C2 | :848 | Whole-struct initialization clears every warning latch.
+- C3 | :254 | #100 bounds the index before all three tiled-array accesses.
+- C4 | :265 | Unsigned `tile_nr` prevents negative linear coordinates bypassing the bound.
+- C5 | :321 | Eight-byte allocation covers every decoded transfer size; initialization is F2.
+- C6 | :296 | Unsupported addressing-mode handling preserves the caller’s colour and latches its diagnostic.
+- C7 | :373 | Unsupported colour PUTs skip the store even after their warning latch has fired.
+- C8 | :408 | RGB byte selection agrees with the committed GBE scanout consumer; shift safety is F3.
+- C9 | :491 | All six width declines skip register bodies and reach the zero-read/success tail.
+- C10 | :525 | Aligned TLB and LINEAR readbacks reconstruct stored values. These banks are documented R/W in [CRIME specification, table 7-2, p. 7-8](https://ftp.netbsd.org/pub/NetBSD/misc/macallan/sgimips/crime.pdf#page=164).
+- C11 | :616 | TEX’s read-decline latch is independent of its width latch.
+- C12 | :814 | Unmatched reads and writes have separate latches and preserve the common response path.
+- C13 | :1139 | Unsupported primitive dispatch announces once and returns without terminating.
+- C14 | :1219 | DE width declines bypass both register diagnostics and primitive execution.
+- C15 | :1554 | The 32-bit MTE correction updates both modes; `sgi_mte_fill_probe.py` now observes B/C siblings.
+- C16 | :1676 | Linear fill subtracts the actual positive, bounded chunk length, including shortened page/tail chunks.
+
+DENOMINATOR: read 18 of 18 hunks of the net diff

@@ -1,0 +1,85 @@
+GROKJOBS_DOSSIER_GDROMDMA_ALIVE
+VERDICT: 5 false or unsupported sentences
+
+This is a **partial defensive audit**: the count covers the assessed source and design claims below. The operational reproduction sequence, payload arithmetic, and alias enumeration are **not checked**.
+
+`D` denotes the supplied dossier. All repository citations refer to **`db8b1a33`**; manual citations refer to the supplied disk files.
+
+1. **D:203 — CPU-name acceptance does not establish successful machine construction.**
+
+   > “Therefore all four recognized SH names can mechanically be forced with Dreamcast.”
+
+   **Evidence:** `SH7708R` is architecture 3; `SH7750`, `SH7750R`, and `SH7751R` are architecture 4 (`src/include/cpu_sh.h:62-65`). Only architecture 4 registers the required SH4 interrupt names (`src/cpus/cpu_sh.c:207-229`). Dreamcast constructs its ASIC before GD-ROM (`src/machines/machine_dreamcast.c:146-148`); ASIC initialization requests those interrupt names (`src/devices/dev_dreamcast_asic.c:270-279`). The connection macro performs lookup, whose missing-name path calls `abort()` (`src/include/interrupt.h:77-79`; `src/core/interrupt.c:181-198`).
+
+   **Corrected:** “The SH factory accepts four names, but ordinary Dreamcast construction with SH7708R fails during ASIC interrupt lookup before GD-ROM registration. SH7750, SH7750R, and SH7751R register the required SH4 interrupt names.”
+
+2. **D:210 — built-in machine selection is not the only device-instantiation route.**
+
+   > “A non-Dreamcast machine lacks this device.”
+
+   **Evidence:** Configuration parsing accepts additional devices and passes their names into setup (`src/core/emul_parse.c:659-673,587-589`). Setup adds them before calling the machine-specific setup (`src/core/emul.c:532-535`). GD-ROM initialization contains no machine-type restriction (`src/devices/dev_dreamcast_gdrom.c:1685-1699`).
+
+   **Corrected:** “Dreamcast is the only built-in machine setup that instantiates GD-ROM, but configuration-supplied devices can instantiate it on another machine.”
+
+3. **D:270 — the exception vector statement is overbroad.**
+
+   > “`sh_exception()` saves state and vectors to `VBR+0x100` (`src/cpus/cpu_sh.c:886-893,941-955`), with modeled TLB and address-error cases at `:1023-1033,1075-1081`.”
+
+   **Evidence:** State saving and the initial general vector exist (`src/cpus/cpu_sh.c:941-955`), but subsequent cases select these distinct destinations:
+
+   | Case | Destination | Evidence |
+   |---|---|---|
+   | General exceptions, including address errors | `VBR + 0x100` | `src/cpus/cpu_sh.c:955,1075-1081` |
+   | Interrupts | `VBR + 0x600` | `src/cpus/cpu_sh.c:961-963` |
+   | TLB misses | `VBR + 0x400` | `src/cpus/cpu_sh.c:1023-1026` |
+   | Modeled resets | `0xa0000000` | `src/cpus/cpu_sh.c:1015-1021` |
+
+   **Corrected:** “`sh_exception()` saves state and initially selects `VBR+0x100`; its case dispatch substitutes the interrupt, TLB-miss, and reset destinations where applicable.”
+
+4. **D:282 — the regression expectation could erase a valid pending completion.**
+
+   > “Must remain unasserted for a declined transfer, matching `:1432-1435`.”
+
+   **Evidence:** Pending events are sticky: assertion ORs bits into the pending state, while clearing is a separate operation (`src/devices/dev_dreamcast_asic.c:201-206`). `gdromdmaclear` explicitly records that checking “does not set” misses the opposite error, clearing an already-pending completion (`OUTSTANDING_BUGS.md:10822-10846,10854-10856`).
+
+   **Corrected:** “A declined transfer must not newly assert DMA completion and must preserve any already-pending completion.”
+
+5. **D:311 — absence of self-reentry does not guarantee return.**
+
+   Relevant clause:
+
+   > “The four passive implemented cases, and a `+0x18` start that does not self-reenter, reach the common tail…”
+
+   **Evidence:** An accepted start calls generic memory dispatch before reaching its tail (`src/devices/dev_dreamcast_gdrom.c:1502-1507,1538`). That dispatch invokes destination-device code (`src/cpus/memory_rw.c:587-589`). Such callbacks are not universally returning: Maple contains an uncapped processing loop and explicit terminating branches (`src/devices/dev_dreamcast_maple.c:409,426,459,520,529,535-537`).
+
+   **Corrected:** “The four passive cases reach the common tail. An accepted start reaches it only if the nested memory access and completion dispatch return.”
+
+**(a) Disposition and available machinery.** Member 3 is defensible as a model limitation: announce once and decline. Existing implementations provide the warning carrier, named bits, carrier-width assertion, and nearby decline behavior (`src/devices/dev_dreamcast_gdrom.c:161,223-248,327-329,1465-1472,1521-1536`). The general SH4 DMAC also has latched warning-and-return paths (`src/devices/dev_sh4.c:658-665,672-693`). This establishes implementation precedent, not real Holly behavior; the source explicitly records the missing Holly documentation (`src/devices/dev_dreamcast_gdrom.c:1654-1658`).
+
+The design omits **another compile-time assertion**: adding a warning bit also requires extending the explicit sum in `gdrom_w_masks_disjoint` (`src/devices/dev_dreamcast_gdrom.c:498-502`). Existing mask values are:
+
+`1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024`.
+
+Their sum is `2047`. Appending mask `2048` makes the sum `4095`, matching `(1u << 12) - 1u`; leaving the explicit sum unchanged breaks that assertion (`src/devices/dev_dreamcast_gdrom.c:223-248,498-502`).
+
+SH exception delivery genuinely exists: state saving, event-register updates, status changes, vector selection, and execution-pointer reconstruction are implemented (`src/cpus/cpu_sh.c:941-955,1023-1033,1075-1088`). However, failed-device dispatch supplies MIPS and M88K branches, with no SH branch (`src/cpus/memory_rw.c:603-624`). That machinery does not establish an applicable Holly fault.
+
+**(b) Missed siblings and obligations.**
+
+- **Pending-completion preservation:** the existing `gdromdmaclear` record directly supplies the missing regression obligation (`OUTSTANDING_BUGS.md:10822-10856`).
+- **Unchecked transfer result:** GD-ROM ignores `memory_rw`’s return value before asserting completion. Dispatch can truncate or report failure (`src/devices/dev_dreamcast_gdrom.c:1502-1505`; `src/cpus/memory_rw.c:495-523,591-624`). Record status for this exact formulation: **not checked**.
+- **Unlatched diagnostics:** the accepted-transfer message remains unlatched and is already recorded as `gdromdmaflood` (`src/devices/dev_dreamcast_gdrom.c:1497-1499`; `OUTSTANDING_BUGS.md:21349-21376`). Additional unlatched messages remain at `src/devices/dev_dreamcast_gdrom.c:789,834-845,874,1142,1185`; their individual record status is **not checked**.
+- **Maple termination and bounded-work concerns:** its uncapped loop is recorded as `mapledmahang`; four explicit exits also remain (`src/devices/dev_dreamcast_maple.c:409-537`; `OUTSTANDING_BUGS.md:21019-21042`). This is a related defensive-review obligation, not a verified instance of the same reentry mechanism.
+
+**(c) DENOMINATOR.** Using one unit per factual sentence or standalone factual fragment, and one per regression-table row, **82 units in §§2–7 were assessed; 0 were taken on trust**:
+
+| Section | Assessed units |
+|---|---:|
+| 2 — Reachability/configuration | 23 |
+| 3 — Hardware-documentation claims | 6 |
+| 4 — Siblings | 12 |
+| 5 — Options and machinery | 14 |
+| 6 — Regression expectations | 14 |
+| 7 — Records | 13 |
+
+Implementation prescriptions were assessed as proposed requirements, not measured outcomes. Section 1’s operational reproduction analysis is **not checked**. The five historical activity claims in D:340—what the earlier author read, encountered, excluded, or executed—are also **not checked**; the allowed source files cannot independently establish that history. Consequently, this is not a complete all-sentence certification.

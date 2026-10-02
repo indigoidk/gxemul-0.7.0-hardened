@@ -1,0 +1,164 @@
+VERDICT: delete only each `cpu->running = 0`, keep `return 0`, and let the delivered abort vector run
+
+The ledger row is [ledger.json:47312](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:47312): HIGH, open, five sites at 1227/1557/1600/1629/1653. `OUTSTANDING_BUGS.md` only compares its witness cost and `running = 0` failure with `armmsrmodekill` at [OUTSTANDING_BUGS.md:20356](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:20356) and [20379](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:20379).
+
+## 1. The five sites
+
+For an MMU translation failure, `memory_rw()` passes `FLAG_INSTR` only for `CACHE_INSTRUCTION` ([memory_rw.c:245-268](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:245)). `arm_translate_v2p_mmu()` then calls either PREF_ABT or DATA_ABT ([memory_arm.c:268-276](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:268)). `arm_exception()` saves state, clears T, enters ABT mode, and selects vector `exception_nr * 4`—0x0c or 0x10—at [cpu_arm.c:616-734](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:616).
+
+- [cpu_arm.c:1223-1228](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1223):
+
+```c
+if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+        sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+    fatal("arm_cpu_interpret_thumb_SLOW(): could not read "
+        "the instruction\n");
+    cpu->running = 0;
+    return 0;
+}
+```
+
+Intended path: fetch any 16-bit Thumb instruction at the current PC; `CACHE_INSTRUCTION` means Prefetch Abort.
+
+Actual reachability qualification: a clean MMU instruction-fetch fault does not reach this block. `DYNTRANS_PC_TO_POINTERS()` runs before the Thumb test ([cpu_dyntrans.c:177-190](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:177)), translates the PC with `FLAG_INSTR` ([cpu_dyntrans.c:672-722](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:672)), and handles the selected abort vector before Thumb dispatch at lines 255-261. Site 1227 can see other `memory_rw` failures, but those need not have delivered an ARM abort.
+
+- [cpu_arm.c:1554-1559](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1554):
+
+```c
+if (!cpu->memory_rw(cpu, cpu->mem, tmp, &word[0],
+        sizeof(word), MEM_READ, CACHE_INSTRUCTION)) {
+    fatal("arm_cpu_interpret_thumb_SLOW(): could not load pc-relative word\n");
+    cpu->running = 0;
+    return 0;
+}
+```
+
+Path: Thumb `LDR Rd,[PC,#imm8*4]`, encodings `0x4800–0x4fff`; address calculation is at lines 1546-1552. Because this data load incorrectly uses `CACHE_INSTRUCTION`, GXemul delivers a Prefetch Abort on an MMU fault. Architecturally it must be a Data Abort: DDI0100I defines prefetch aborts as instruction-fetch aborts and data aborts as data-access aborts at [ddi0100i.txt:954-960](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:954). Thus this site has a separate `CACHE_INSTRUCTION` → `CACHE_DATA` classification defect.
+
+- [cpu_arm.c:1597-1602](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1597):
+
+```c
+if (!cpu->memory_rw(cpu, cpu->mem, addr, &word[0],
+        len, isLoad ? MEM_READ : MEM_WRITE, CACHE_DATA)) {
+    fatal("arm_cpu_interpret_thumb_SLOW(): could not load with immediate offset\n");
+    cpu->running = 0;
+    return 0;
+}
+```
+
+Path: immediate-offset Thumb `STR/LDR` word (`0x6000/0x6800`), `STRB/LDRB` (`0x7000/0x7800`), or `STRH/LDRH` (`0x8000/0x8800`), decoded at lines 1576-1582. MMU failure delivers Data Abort.
+
+- [cpu_arm.c:1626-1631](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1626):
+
+```c
+if (!cpu->memory_rw(cpu, cpu->mem, addr, &word[0],
+        sizeof(word), MEM_READ, CACHE_DATA)) {
+    fatal("arm_cpu_interpret_thumb_SLOW(): could not load sp-relative word\n");
+    cpu->running = 0;
+    return 0;
+}
+```
+
+Path: Thumb `LDR Rd,[SP,#imm8*4]`, encoding family `0x9800`; MMU failure delivers Data Abort.
+
+- [cpu_arm.c:1650-1655](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1650):
+
+```c
+if (!cpu->memory_rw(cpu, cpu->mem, addr, &word[0],
+        sizeof(word), MEM_WRITE, CACHE_DATA)) {
+    fatal("arm_cpu_interpret_thumb_SLOW(): could not store sp-relative word\n");
+    cpu->running = 0;
+    return 0;
+}
+```
+
+Path: Thumb `STR Rd,[SP,#imm8*4]`, encoding family `0x9000`; MMU failure delivers Data Abort.
+
+`fatal()` itself only formats output ([debugmsg.c:384-391](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384)); `cpu->running = 0` is the actual stop.
+
+## 2. Architectural requirement
+
+Read directly from the manuals:
+
+- A Thumb exception preserves the old T bit in the SPSR and, for classic ARM, switches to ARM state before starting the handler ([ddi0100i.txt:20337-20343](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:20337)).
+- From Thumb, Prefetch Abort sets `LR_abt` to aborted-fetch address +4; Data Abort uses faulting-instruction address +8 ([ddi0100i.txt:20347-20353](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:20347)).
+- Prefetch Abort enters ABT mode, saves CPSR, clears T, and loads 0x0c/high-vector equivalent ([ddi0100i.txt:2194-2218](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:2194)). After fixing the fault, `SUBS PC,R14,#4` restores CPSR and retries ([2223-2228](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:2223)).
+- Data Abort does the equivalent with vector 0x10 and `LR_abt = instruction + 8` ([ddi0100i.txt:2230-2258](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:2230)); the handler can retry or skip using the documented returns at lines 2260-2269.
+- DDI0406 states the decisive final entry step: after loading the exception vector, execution continues from the PC ([ddi0406.txt:56489-56501](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:56489)).
+
+Therefore the architecture requires execution of the guest handler. It does not permit the emulator to stop after completing exception entry.
+
+ARMv7 qualification: handler state is controlled by `SCTLR.TE`; TE=0 selects ARM and TE=1 Thumb ([ddi0406.txt:57197-57219](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:57197)). Unconditional T clearing is correct for the classic machines here and ARMv7 TE=0, but is not a universal ARMv7 rule.
+
+## 3. Options and tree precedent
+
+The project option set is listed at [tools/CLAUDE.md:1924-1929](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1924).
+
+| Option | ARM-tree precedent and result here |
+|---|---|
+| 1 DELETE | Supported. ARM load/store failures say “an exception was generated” and immediately return without clearing `running` ([cpu_arm_instr_loadstore.c:233-238](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:233), [367-372](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:367)). SWP, LDM/STM, LDREX/STREX, and instruction translation do likewise at `cpu_arm_instr.c:1498-1550`, `1716-1720`, `1910-1914`, `2025-2028`, `2085-2088`, and `4052-4056`. |
+| 2 DECLINE silently | Decline exists for optional optimized folds, but they fall back to the real instruction. Suppressing an architecturally required abort is unsupported. |
+| 3 DECLINE + bounded announce | Same architectural problem as 2. These sites already have diagnostics; an announcement cannot replace exception handling. |
+| 4 ACCEPT | Would turn a faulting access into a successful one. No ARM abort-site precedent supports that. |
+| 5 FAULT | The fault has already been raised by `memory_arm.c:268-276`; raising it again would overwrite exception state/double-enter ABT. |
+| 6 BACKED ACCEPT | Inventing storage would erase the guest-visible translation/permission fault. Unsupported. |
+| 7 IMPLEMENT | Exception delivery is already implemented; continuation, not a new access implementation, is missing. Site 1557 separately needs correct data-access classification. |
+
+Only member 1 is supported: delete the five stops while retaining the returns and diagnostics.
+
+Deleting `return 0` is not an option. The common tail increments PC by two at [cpu_arm.c:1808-1814](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1808), changing abort vector 0x0c/0x10 into 0x0e/0x12. The caller already ignores the interpreter’s return value and redispatches ([cpu_dyntrans.c:255-261](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:255)).
+
+## 4. Smallest practical witness
+
+This is source-derived and not executed.
+
+`-E cats` is cheaper than constructing a testarm page table. CATS starts MMU-on with TTB `0x006f8000` ([machine_cats.c:131](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c:131)); setup initially fills all 4096 section descriptors ([cpu_arm.c:231-255](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:231)). The table is nevertheless writable guest RAM.
+
+For hole VA `0x00100000`, its L1 descriptor is `0x006f8000 + 4 = 0x006f8004`. Preload registers and plant an ARM abort handler at vector 0x10, then execute:
+
+```asm
+str r0,[r2]                ; r0=0, r2=0x006f8004: clear section-1 descriptor
+mcr p15,0,r0,c8,c7,0      ; 0xee080f17: invalidate translation caches
+bx  r6                     ; r6 = thumb_code | 1
+.thumb
+ldr r0,[r1,#0]             ; 0x6808, r1=0x00100000
+```
+
+The last instruction reaches site 1600. `memory_arm.c:131-159` reloads the descriptor and type zero selects a section translation fault; `memory_arm.c:257-276` sets FAR/FSR and delivers DATA_ABT. The CP15 c8 path invalidates caches at [cpu_arm_coproc.c:230-243](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:230).
+
+On HEAD, exception entry selects PC=0x10 and clears T, then site 1600 clears `running`; the handler marker remains unchanged. With only the halt deleted, the next dispatch executes the ARM handler and changes the marker.
+
+Necessary controls:
+
+- MRC CP15 c1 and publish a result requiring M=1.
+- Confirm descriptor `0x006f8004` is zero, while the handler/code/marker remain in mapped section 0.
+- In a fresh process, run the same Thumb `0x6808` against mapped data and require the correct loaded value.
+- Require the exact planted halfword/disassembly and the exact line-1599 diagnostic once.
+- In a fresh process, execute an ARM `LDR` against the same hole and require the handler marker; this proves the MMU fault and vector independently of Thumb.
+- Have the handler publish a unique marker, ABT32/T=0, FAR=`0x00100000`, and section-translation FSR=`0x05`. Survival alone is not an oracle.
+- Plant everything before clearing the descriptor; use fresh processes for aborting cases.
+
+Closest existing coverage is composite:
+
+- [arm_flags_probe.py:948](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:948) has the handler-marker pattern and lines 1245-1265 the ARM-to-Thumb BX pattern.
+- [arm_bdt_probe.py:615](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:615) is the closest existing Thumb-memory executor.
+- [footbridge_sites_probe.py:13](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:13) is closest overall: cold CATS, MMU-on controls, CP15 encodings, planting, and stepping.
+- [gate_arm.sh:1052](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1052) gates the CATS real-memory path; its MMU-on assertions are at lines 1137-1140. `arm_bdt` is wired at lines 665-700 and `arm_flags` at lines 84-97.
+
+No existing probe combines those pieces into an `armthumbabortkill` witness.
+
+## 5. Row text contradicted by the tree
+
+- “Five sites … after the abort is already delivered” is too broad. Site 1227 is bypassed by normal MMU fetch-abort dispatch. Additionally, device and out-of-range failures can return `MEMORY_ACCESS_FAILED` without any ARM exception at [memory_rw.c:583-624](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583) and [662-679](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:662).
+
+- “Reachable by any Thumb guest taking a memory fault” at `ledger.json:47318` is false. Besides site 1227’s pre-dispatch behavior, Thumb PUSH/POP use separate `arm_push`/`arm_pop` paths at `cpu_arm.c:1667-1687`.
+
+- The older nested claim that two sites take Prefetch Abort ([ledger.json:47345](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:47345)) describes implementation flags, not correct ARM behavior. Of the actually reachable four, only site 1557 requests `CACHE_INSTRUCTION`, and that request itself misclassifies an LDR data access.
+
+- “CATS has no unmapped VA” is true only immediately after setup, not as a vehicle exclusion. Its RAM-resident descriptor can be cleared and c8 invalidated with two ordinary guest instructions.
+
+- The stated reopen condition—wait for an in-tree MMU-on ARM vehicle—is now met by the cold CATS `footbridge_sites_probe.py` coverage gated at `gate_arm.sh:1052-1140`. The narrower statement that no `arm_*.py` probe enables M on testarm remains true.
+
+- The comparative `OUTSTANDING_BUGS.md` statements are not contradicted: this witness still needs Thumb, CP15, and a page-table hole, and the failure remains `running = 0`, not host-process death.
+
+Everything labeled as source behavior or architecture above was read at the cited lines. The CATS witness, expected HEAD/fixed observations, and reachability conclusions are inferences from those lines; I did not run, build, or modify anything.

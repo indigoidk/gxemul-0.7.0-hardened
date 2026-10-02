@@ -1,0 +1,41 @@
+ASTRARETRO_DEVPVR_ALIVE
+VERDICT: 7 findings (6 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 16 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Findings are from static inspection; no files changed, builds performed, or guest probes executed.
+
+F1 | src/devices/dev_pvr.c:2629 | #67, 8dd86b5a | CODE | live at HEAD: yes | **Batched dirty-region updates can divide by zero.** Guest geometry can calculate `xsize == 0`. An aligned alternate-VRAM word write whose mapped span crosses the unmasked `DIWADDRL` then passes the overlap condition at :2316 and divides by zero at :2325. The previous per-byte calls could not satisfy that condition for an empty frame. No matching outstanding entry found. | Smallest check: trace the zero-width calculation at :572–589 and the crossing interval through :2312–2326. | confidence high
+
+F2 | src/devices/dev_pvr.c:2486 | upstream, relied on by #161 and #107 | CODE | live at HEAD: yes | **Unsigned normalization happens after signed overflow.** A guest can place `DIWADDRL` sufficiently close to `INT_MAX` that advancing one scanline overflows the still-signed `vram_ofs`. The subsequent `size_t` conversion cannot repair that undefined operation. All four pixel-format loops retain this arithmetic (:2486, :2509, :2528, :2549); the initial offset addition at :2458 has the same problem. No matching outstanding entry found. | Smallest check: trace the declaration at :2345 through each addition preceding normalization. | confidence high
+
+F3 | src/devices/dev_pvr.c:1127 | #12, 8dd86b5a | CODE | live at HEAD: yes | **The initialization fix omitted three sibling arrays.** A first textured strip reaching its third vertex without ending the strip reads uninitialized `wf_r/g/b` during the unconditional copies at :1407 and :1411. Textured vertices initialize UV components, while RGB assignments exist only in the untextured branch. No matching outstanding entry found. | Smallest check: compare declarations at :1125–1127, assignments at :1329–1356, and strip sliding at :1405–1411. | confidence high
+
+F4 | src/devices/dev_pvr.c:1675 | upstream sibling left by #187 | CODE | live at HEAD: yes | **STARTRENDER writes retain host-exit paths after reads were corrected.** Rendering with a non-RGB565 output mode, an unsupported texture format, disabled Z writes, or an unsupported TA command reaches `exit(1)` at :1084, :868, :1245, or :1419. Already filed in `OUTSTANDING_BUGS.md:2721` as the deferred **“devices/dev_pvr.c render/texture-loop exit(1)s”** item; no separate ID. | Smallest check: inspect the four exits and their call path from STARTRENDER. | confidence high
+
+F5 | src/devices/dev_pvr.c:800 | #55, 8dd86b5a | CODE | live at HEAD: yes | **The texture bound changes a valid one-byte fetch.** Sampling an 8-bit paletted texture at the last VRAM byte instead reads the preceding byte. Conversely, the two-byte formats always produce even addresses, so their `addr+1` reads cannot cross this boundary. The clamp’s premise is wrong for both cases. Format 6 is documented as 8-bit in [KallistiOS `pvr.h`, line 502](https://cadcdev.sourceforge.net/docs/kos-current/pvr_8h_source.html). No matching outstanding entry found. | Smallest check: compare final-byte palette sampling with distinct adjacent indices; inspect address parity for the two-byte formats. | confidence high
+
+F6 | src/devices/dev_pvr.c:319 | #166 | CODE | live at HEAD: yes | **Completed TA DMA omits the requested CPU interrupt.** With channel-2 `CHCR_IE` enabled, completion sets TE and signals the separate PVR-DMA event, but this branch only logs; it never requests SH-4 DMTE2. The requirement is explicit in [sh7750_hardware.txt:29449](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:29449). Already filed as **`sh4dmacintr`**, `OUTSTANDING_BUGS.md:8405`. | Smallest check: assert DMTE2 pending state after successful interrupt-enabled TA DMA completion. | confidence high
+
+F7 | CHANGELOG.md:21631 | #67 | RECORD | live at HEAD: yes | **The claimed dirty-region equivalence is false.** With ordinary nonzero geometry, a batched alternate-VRAM span crossing the display start can turn its negative relative lower endpoint into a large positive row through unsigned division. The resulting inverted region is discarded at :2451, losing the update. The former per-byte calls mark the visible bytes. This contradicts “a few extra lines, redrawn identically,” also repeated in the source comment at :2622. Related to F1, but disproves the record even without zero geometry. | Smallest check: compare aggregated versus individual helper calls for a crossing span, starting with an empty dirty region. | confidence high
+
+Checked clean; source references below are all `src/devices/dev_pvr.c` at HEAD:
+
+- :191 — Disabled DMA returns before transfer or completion side effects.
+- :206 — Unsupported transfer-size, source-mode, destination-mode, and request-source encodings return safely.
+- :337 — DMA register indices fit the registered window; changed named/default access branches continue without exiting.
+- :484 — DMA-more mode and default branches retain bounded register accesses after exit removal.
+- :599 — Unchanged calculated geometry preserves the existing correctly sized Z buffer.
+- :606 — Changed geometry frees and nulls the old Z buffer before the disabled-display early return.
+- :1142 — Frame-size multiplication is wide; rejection avoids subtraction underflow and bounds the clear.
+- :1148 — The checked frame span covers the subsequent two-byte raster writes for every supported display depth.
+- :1163 — Z allocation and initialization use the same bounded dimensions.
+- :1524 — Command count and allocation growth are finite; the maximum allocation is 16 MiB.
+- :1530 — Both initial TA allocation and reallocation check allocation failure.
+- :1585 — TA address masking bounds both read and write indices across accepted widths.
+- :1693 — All four corrected address-register branches mask the same value they subsequently store.
+- :2098 — Invalid DIWCONF magic logs and continues through the geometry update.
+- :2431 — Destination clipping respects the host framebuffer and rejects empty clipped regions.
+- :2522 — The RGB888 copy bounds its source span within VRAM.
+
+No TEST-GAP finding: the records explicitly disclose missing Dreamcast runtime coverage. The inspected `regress/sh4_val_probe.py` observes the SH processor-version register, not this graphics device.
+
+DENOMINATOR: read 34 of 34 hunks of the net diff

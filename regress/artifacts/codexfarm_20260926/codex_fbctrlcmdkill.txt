@@ -1,0 +1,123 @@
+VERDICT: decline unsupported commands with a separate per-device `(once)` latch; defer FILL/COPY semantics
+
+I use “Read” for direct source/artifact evidence and “Inferred” for the proposed behavior or unexecuted witness.
+
+## 1. Guest store to `exit(1)`
+
+Read, for a fresh `-E testmips`:
+
+1. `testmips` installs fbctrl at physical `0x12f00000`: [machine_test.c:337](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:337). The header defines DATA at `+0x10` and COMMAND as selector 0: [dev_fb.h:14](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:14), [dev_fb.h:24](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:24), [dev_fb.h:27](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:27).
+
+2. `DEVINIT(fbctrl)` zeroes the whole device, so `current_port == 0`, then registers `dev_fbctrl_access`: [dev_fbctrl.c:170](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:170), especially lines 174–175 and 181–183.
+
+3. A MIPS `sw` is decoded onto the generated load/store handler at [cpu_mips_instr.c:5424](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5424); the store bytes are formed and `cpu->memory_rw(..., MEM_WRITE, ...)` called at [cpu_mips_instr_loadstore.c:127](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:127).
+
+4. KSEG1 `0xffffffffb2f00010` is translated to physical `0x12f00010` by masking at [memory_mips_v2p.c:234](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_mips_v2p.c:234).
+
+5. `memory_rw` finds the mapped device, makes the address relative, and calls its callback: [memory_rw.c:436](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:436), lines 480–494 and 583–589.
+
+6. `dev_fbctrl_access` decodes the stored value into `idata` at [dev_fbctrl.c:112](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:112), selects the DATA arm at line 138, passes the current-port range check at lines 141–145, then:
+
+   - stores `idata` into `d->port[0]` at line 150;
+   - sees COMMAND selected at line 151;
+   - calls `fbctrl_command()` at line 152.
+
+7. `fbctrl_command()` reads the stored `int` command at [dev_fbctrl.c:61](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:61). Values 0, 1, and 2 have cases at lines 68, 71, and 88. A small value such as 3 reaches `default:`, prints at line 101, and executes `exit(1)` at line 102.
+
+`fatal()` itself only prints; it does not terminate: [debugmsg.c:384](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384).
+
+Literal process terminators in `dev_fbctrl.c`:
+
+- [Line 102](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:101): unsupported command—the target defect.
+- [Line 144](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:139): invalid `current_port`. #549 now makes this unreachable through normal PORT writes by refusing values ≥8 at lines 120–135; it remains a tripwire.
+- [Line 160](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:157): any controller offset other than `+0x00` or `+0x10`.
+- No `abort()` occurs in the file.
+
+For completeness, line 174 uses `CHECK_ALLOCATION`; on host OOM that macro indirectly expands to `exit(1)` through [misc.h:181–193](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/misc.h:181). It is not a literal terminator or guest-command path in this file.
+
+## 2. Disposition options and precedents
+
+1. **Decline, announce once — recommended.**
+
+   Read: the closest precedent is GD-ROM’s unknown-command default, which replaced a guest-reachable process exit with a per-device “declined. (once)” warning and `break`: [dev_dreamcast_gdrom.c:897–921](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:897). Its comments also document why independent sites need separate latch bits at lines 901–904. WDC explicitly chooses one warning per device—not per opcode—to prevent a guest cycling all opcodes from flooding output: [dev_wdc.c:1122–1129](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1122).
+
+   Inferred behavior and cost: add a separate `warned_command` member, print the first unsupported stored `int`, and always `break`. The guest’s store completes, execution continues, framebuffer state is unchanged, and—because line 150 stores before dispatch—a subsequent COMMAND/DATA read returns the rejected command value. Cost is a tiny local change plus regression rows; no guest ABI change. Do not reuse `warned_port`.
+
+2. **Implement FILL/COPY.**
+
+   Read: the actual rendering helper already exists. `framebuffer_blockcopyfill()` defines fill/copy inputs at [dev_fb.c:270–285](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fb.c:270), implements FILL at lines 335–360, COPY at 365–390, and dirties the affected rectangle at 392–400. Existing callers include [dev_igsfb.c:118–139](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_igsfb.c:118) and [dev_ps2_gif.c:288–319](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_gif.c:288).
+
+   Inferred behavior and cost: FILL could plausibly map X1/Y1/X2/Y2 and R/G/B directly to the helper, giving an inclusive, clipped painted rectangle. COPY cannot be derived from the current ABI: the helper needs a destination rectangle plus source X/Y, while fbctrl exposes only four coordinates and RGB ports. Overlap is expressly undefined at `dev_fb.c:281`. Thus FILL is modest feature work; COPY requires a new specification and semantic tests. Implementing 3/4 alone also leaves command 5 and every other unknown value fatal, so a default policy is still required.
+
+3. **Report a guest-visible error.**
+
+   Read: ASC reports illegal commands through status and interrupt bits at [dev_asc.c:1489–1503](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:1489); WDC similarly sets ABRT and completion interrupt before its latched warning at [dev_wdc.c:1114–1163](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1114). A lower-level precedent is returning device-access failure: Turbochannel returns 0 specifically to cause DBE at [dev_turbochannel.c:131–149](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_turbochannel.c:131), and MIPS turns that into `EXCEPTION_DBE` at [memory_rw.c:598–624](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:598).
+
+   Inferred behavior and cost: fbctrl has neither status nor IRQ state—its entire state is at [dev_fbctrl.c:48–53](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:48)—and all eight selector ports are allocated at [dev_fb.h:27–35](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:27). A protocol error therefore invents an ABI. Making selector 8 a STATUS port would also invalidate #549’s boundary contract and many selector-8 rows. Returning access failure is cheaper but is not a uniform six-architecture policy: `memory_rw.c` explicitly delivers failed-device exceptions only for MIPS and M88K, and the command store currently mutates the COMMAND cell before failure. This is medium/high-cost design work.
+
+4. **Other policies present in `src/devices/*.c`.**
+
+   - Silent no-op: GD-ROM’s known but unimplemented Mount command simply breaks at [dev_dreamcast_gdrom.c:887–895](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:887). Cheapest; guest sees success with no effect and no diagnostic.
+   - Debug-only ignore: LK201’s default logs through `debug()` and continues at [lk201.c:337–340](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/lk201.c:337). Cheap, but ordinarily invisible.
+   - Loud, unlatched ignore: PS2 GIF logs every unknown command and returns success at [dev_ps2_gif.c:384–395](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_gif.c:384). Deleting only fbctrl’s `exit` would produce this behavior and leave a guest-driven stderr flood.
+   - Stop the emulated CPU: 8259 uses `cpu->running = 0` at [dev_8259.c:137–141](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8259.c:137). Tiny change, but the guest loses liveness; [dev_m8820x.c:75–97](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_m8820x.c:75) explicitly rejects that response for emulator model gaps.
+
+## 3. What #549’s committed probe already covers
+
+Read: all executed command writes are `sw`, all are legal commands 0–2, and five sessions execute seven commands:
+
+| Session | Commands actually executed | Existing row footprint |
+|---|---|---|
+| C | GET_RESOLUTION once | 7 rows at [probe:608–617](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:608), including full survival, DATA=`0x2a` liveness, and the decisive X1/Y1 command signature |
+| A | NOP once | 17 rows generated from [probe:423–442](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:423) and checked at 618–627; no dedicated NOP-effect oracle |
+| R | NOP, then GET_RESOLUTION | 3 rows; program at [probe:467–476](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:467), checks at 637–639 |
+| V | GET_RESOLUTION once | 15 rows; program at [probe:487–505](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:487), checks at 650–659. It later proves COMMAND still contains 2, but overwrites X1 after execution |
+| Y | SET_RESOLUTION twice | 7 rows; program at [probe:531–542](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:531), checks at 668–674. Zero-size resize is declined; rows mainly prove survival/cell/latch behavior |
+
+That is seven legal command executions across 49 of the 117 session-owned rows. C is the only session with a strong command-side-effect signature. W merely selects COMMAND at several widths; Z selects it before refused PORT writes; F retains selector 0 but only reads PORT. None executes command 3, 4, or an unknown value. The probe itself discloses that omission at [lines 156–159](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:156).
+
+Inferred test impact:
+
+- A correctly scoped default-only decline changes **zero existing expected rows**; all 117 should remain green.
+- New rows are needed for commands 3, 4, and at least one truly unknown small `int`, such as 5:
+  - post-command survival/liveness;
+  - explicit no-framebuffer-effect or command-readback contract;
+  - exactly one command-specific `(once)` line across multiple different unsupported opcodes;
+  - independence from `warned_port`;
+  - ideally `sb/sh/sw/sd`, since DATA width is part of the filed scope.
+- An implementation of 3/4 needs pixel-effect, clipping, empty-range, and COPY-semantic oracles—not merely survival.
+- The exact gate pins at [gate_mips_folds.sh:99–100](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_mips_folds.sh:99) must be updated when rows are added.
+- Adding selector 8 as an error-status port would disturb P’s first-refusal/count/name rows, W’s three “refuse 8” rows, V’s “PORT keeps 7” path, and B’s single-bit `2^3` rows.
+
+The row’s “Opus walk, 4 cells” is not committed detector coverage. The auxiliary walk first refuses selector 9, then writes command `0x2a` with widths 1/2/4/8: [walk_probe.py:2–5,89–97](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/walk_probe.py:2). All four DATA cells died through `CMD-UNIMPL`: [walk_fix.out:29–32](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/fbctrlportkill_20260924/opus549_measured/runs/walk_fix.out:29).
+
+## 4. Smallest witness and controls
+
+Inferred from the source, not executed here:
+
+- Start a fresh unmodified `-E testmips`.
+- Seed a base register with KSEG1 `0xffffffffb2f00000` and a value register with `3`.
+- Execute one aligned guest `sw` of 3 to `+0x10`, address `0xffffffffb2f00010`.
+
+No PORT write is required: zero-initialization already selects COMMAND. The store prints `fbctrl_command: Unimplemented command 3.` and exits the emulator with status 1. With register setup supplied by the debugger/harness, the device-reaching guest sequence is exactly one instruction.
+
+Admissibility controls, already present in session C:
+
+- **Liveness value:** select port 5, write DATA `0x2a`, and read DATA=`0x2a` and PORT=5: [probe:411–418](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbctrl_port_probe.py:411), asserted at lines 611–612.
+- **Device signature:** prefill X1=Y1=123, execute GET_RESOLUTION, and in the probe’s non-X11 session read both back as zero: lines 613–616. Plain RAM at `+0x10` would retain the last value 2; a banked register file without command execution would retain 123.
+
+Because the negative witness ends its process, those controls should run in a separate fresh emulator, with a post-command breakpoint/sentinel added on the repaired build.
+
+## 5. Where the queue text needs correction
+
+- **“Documented FILL and COPY” is overstated.** The tree defines their names and numbers, but only beneath `/* TODO: */`: [dev_fb.h:38–53](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:38). `HISTORY` says accelerated fill/copy was future work: [HISTORY:2852–2855](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/HISTORY:2852). There are no fbctrl operand, geometry, clipping, overlap, or COPY source/destination semantics.
+
+- **“Any command value other than 0–2” is exact only for the stored `int cmd`, not every raw guest payload.** DATA begins as `uint64_t`, is converted into `int port[]` at `dev_fbctrl.c:150`, and then read as `int cmd` at line 63. For out-of-range wide values that conversion is implementation-defined; the source cannot support a universal claim over all 64-bit guest bit patterns. Small values 3, 4, and 5 are unambiguous witnesses.
+
+- **“Session C already drives COMMAND” is true but incomplete.** A, R, V, and Y also execute legal commands; C is merely the one with the strongest execution signature.
+
+- **“#549 made one path more direct” needs qualification.** #549 did not create or shorten the one-store COMMAND kill: power-on selector 0 predates it. It rerouted the sequence “refused selector, then DATA” from the invalid-selector exit at line 144 to the command exit at line 102 by retaining selector 0.
+
+- The other claims check out: fbctrl is attached to all six test machines—shared attachment at [machine_test.c:154–156](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:154), called by testarm, testm88k, testppc, testriscv, and testsh, plus testmips’s direct attachment at lines 337–339—and the source does mark block copy/fill TODO at `dev_fbctrl.c:99`.
+
+Read-only audit only; no file was changed and nothing was built.

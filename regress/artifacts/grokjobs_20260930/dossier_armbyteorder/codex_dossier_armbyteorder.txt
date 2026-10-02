@@ -1,0 +1,70 @@
+GROKJOBS_DOSSIER_ARMBYTEORDER_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+No factual correction identified in the dossier’s technical assertions, read with its explicit qualifications. Consequently, there are no false-sentence quotation/correction pairs.
+
+All repository citations below refer to **`db8b1a33`**. Manual citations refer to the named on-disk text files.
+
+The central finding is correct: the handler stores the requested control value, substitutes effective byte order into its comparison operand, then exits on disagreement (`src/cpus/cpu_arm_coproc.c:134–177`). At that comparison, the enumerated outcomes are:
+
+| Effective order | Requested B | Outcome |
+|---|---:|---|
+| Little | 0 | Continue |
+| Little | 1 | Exit |
+| Big | 0 | Exit |
+| Big | 1 | Continue |
+
+The dossier’s record corrections also withstand inspection:
+
+- Address invalidation clears mappings without resetting physical instruction handlers; physical translations can subsequently be reused (`src/cpus/cpu_dyntrans.c:1015–1035,1276–1288,765–807,830–833`). Actual handler reset occurs at `src/cpus/cpu_dyntrans.c:1425–1426`.
+- The ISTEER “no exit” record contradicts its nonzero-write branch (`OUTSTANDING_BUGS.md:18686–18688`; `src/cpus/cpu_arm_coproc.c:315–322`).
+- The historical INTEN exit is superseded by the shipped correction (`OUTSTANDING_BUGS.md:19488–19494`; `src/cpus/cpu_arm_coproc.c:310–314`).
+- The cited sibling record lists the current coprocessor exits together; the older CP15-only location summary is stale (`OUTSTANDING_BUGS.md:18721–18722,2688`).
+
+**(a) Disposition and available machinery**
+
+**Member 3 is defensible as the dossier’s documented, simplified fixed-endian emulator policy.** Preserving effective byte order preserves the translation-time LDM/STM selection assumption; truthful readback also requires addressing the initial stored-B inconsistency (`src/cpus/cpu_arm_instr.c:4791–4838`; `src/cpus/cpu_arm.c:128–137`; `src/machines/machine_test.c:176–183`; `src/cpus/cpu_arm_coproc.c:95`).
+
+Its warning machinery is **a proposed addition**, correctly identified as such. Footbridge supplies a per-instance precedent, but ARM’s existing `warned_undef` is function-static, and the ARM CPU structure has no corresponding B-warning latch (`src/devices/dev_footbridge.c:570–581`; `src/cpus/cpu_arm_instr.c:4698–4710`; `src/include/cpu_arm.h:136–288`).
+
+The architectural qualification must survive the correction round. The quoted fixed-endian latitude expressly concerns ARMv4/v5. ARMv6 distinguishes additional endian controls, and ARMv7’s B bit reads zero; therefore “B equals effective byte order” is not universally faithful hardware behavior. The dossier already disclaims that universal fidelity (`_scratchpad/ddi0406.txt:135297–135298,88771–88776`; `_scratchpad/ddi0100i.txt:2871–2886,2929–2930`).
+
+**Undefined Instruction delivery genuinely exists**, supporting the separate privilege correction:
+
+- Saves the register bank and `SPSR_und`: `src/cpus/cpu_arm.c:669–680`.
+- Selects exception mode, masks IRQ and loads its bank: `src/cpus/cpu_arm.c:693–720`.
+- Sets LR, PC and dispatch pointers: `src/cpus/cpu_arm.c:730–733`.
+- Live coprocessor precedent: `src/cpus/cpu_arm.c:2674–2679`.
+
+The vector arithmetic is **UND number 1 × 4 + base 0 = `0x00000004`**, or **1 × 4 + base `0xffff0000` = `0xffff0004`** (`src/include/cpu_arm.h:123`; `src/cpus/cpu_arm.c:731–732`). The missing-handler MCR/MRC exception call is indeed commented out (`src/cpus/cpu_arm.c:2656–2662`).
+
+**(b) Missed siblings**
+
+No direct termination site was missed in the expressly scoped coprocessor-file census. Its live exit lines are **62, 177, 264, 322, 331, 417, 528** (`src/cpus/cpu_arm_coproc.c`, those lines).
+
+The following adjacent issues merit carrying into the round; they are omissions, not contradictions of that census:
+
+- **Additional selector-validation gaps:** CP6 ignores both opcode fields; CP14 checks `opcode2` but ignores `opcode1`. Their architectural consequences require model-specific checking (`src/cpus/cpu_arm_coproc.c:304–418,426–529`).
+- **CPAR storage without dispatch enforcement:** CPAR reads/writes are modeled, while MCR/MRC dispatch checks callback presence without consulting CPAR (`src/cpus/cpu_arm_coproc.c:273–284`; `src/cpus/cpu_arm.c:2643–2663`).
+- **Missing undefined-register faults:** the CP15 default diagnoses and returns. The cited manual specifies c12/c14 accesses as UNDEFINED from ARMv6 (`src/cpus/cpu_arm_coproc.c:268–295`; `_scratchpad/ddi0100i.txt:28331–28332`).
+- **Alignment control is an adjacent modeling limitation:** writes report the setting, and its lack of enforcement is already recorded. Other reported control-bit changes must not automatically be described as implemented hardware behavior (`src/cpus/cpu_arm_coproc.c:144–147`; `OUTSTANDING_BUGS.md:4139–4143`).
+- **DACR has a downstream terminating consumer:** the coprocessor stores DACR, which the MMU access checker consumes through a branch containing `exit(1)`. This is individually recorded as `armdacr2kill` (`src/cpus/cpu_arm_coproc.c:199–204`; `src/cpus/memory_arm.c:151–153,246,78–79`; `OUTSTANDING_BUGS.md:22074–22079`).
+- **Other coprocessor decoder paths stop execution:** MAR/MRA, MCRR/MRRC and MIA-family handling reaches `bad`, whose non-read-ahead path sets `cpu->running = 0` (`src/cpus/cpu_arm_instr.c:4939–4950,4970–4975`; `src/cpus/cpu_dyntrans.c:1983–2014`).
+- **Nearby status-register paths also stop or terminate:** unsupported-mode handling exists in SPSR operations and register-bank helpers; this relationship is already recorded (`src/cpus/cpu_arm_instr.c:881–893,934–936`; `src/cpus/cpu_arm.c:559–561,606–608`; `OUTSTANDING_BUGS.md:20333–20350`).
+
+**(c) DENOMINATOR**
+
+Counting factual sentences and sentence-equivalent table entries, including checkable technical reasoning within recommendations:
+
+| Dossier item | Checked units |
+|---|---:|
+| 1 — finding | 38 |
+| 2 — reachability | 31 |
+| 3 — manuals | 15 |
+| 4 — siblings | 19 |
+| 5 — disposition | 26 |
+| 6 — regression observations | 15 |
+| 7 — records | 27 |
+| **Total** | **171** |
+
+**171 checked; 0 technical units taken on trust.** Pure prescriptions and proposed future behavior were not treated as measured results. The previous reviewer’s claims about its own searches, reads and execution history are **not checked** and were not used as evidence. Runtime behavior and model-specific hardware fidelity remain **not checked**.

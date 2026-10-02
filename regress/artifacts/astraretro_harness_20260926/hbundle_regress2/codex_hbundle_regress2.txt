@@ -1,0 +1,49 @@
+ASTRARETRO_HBUNDLE_REGRESS2_ALIVE
+VERDICT: 12 findings (1 CANNOT-FAIL, 1 SELECTS-NOTHING, 2 STATUS-LAUNDERED, 0 ENCODING, 3 RECORD, 5 OTHER); 16 items checked clean
+
+Static review of HEAD `db8b1a33`. No files written, builds performed, or probes run; counterexamples below are derived from code.
+
+F1 | regress/fbpending_witness.py:606 | #442 | OTHER | `--slices 3 --slice-seconds 50` hides the original 42.95-second freezes. Samples at 50/100/150 seconds contain approximately 42.95/57.05/85.90 seconds’ cumulative tick delivery, so both deltas are positive. `frozen=[]`, coverage passes, and the defective version reports `ABSENT`/`PASS`, as does the corrected version. | Score that sampled pre-fix trace through the existing predicates. | confidence high
+
+F2 | regress/fbpending_witness.py:719 | #442 | OTHER | Wall time does not establish the assumed callback count. At ten serviced SIGALRMs/second, `timer.c:281` caps 115 seconds’ increments at 1,205,862,400—below `INT_MAX`. The original counter can therefore remain positive throughout while guest/device controls pass and coverage reports OK. Catch-up warnings are merely printed. | Compare the callback bound against `INT_MAX` and the elapsed-time-only coverage predicate. | confidence high
+
+F3 | regress/fbpending_witness.py:584 | #442 | STATUS-LAUNDERED | Arm A’s instruction-verification failures are printed but never affect the verdict. If its eighteenth instruction executes but its disassembly line is missing, `badis` records a failure; subsequent registers and samples can still pass, yielding `FBPENDING_VERDICT=PASS`. E’s separate session does not validate A’s transcript. | Give an otherwise passing A result a nonempty `badis`; confirm the verdict remains unchanged. | confidence high
+
+F4 | regress/arm_bdt_probe.py:163 | #524 | STATUS-LAUNDERED | A child that exits 2, crashes, or hangs after its last successful observation leaves its rows green. `close()` sends quit, unconditionally attempts SIGKILL, discards the wait status, and suppresses exceptions. The result can remain 43/43. Already filed as `ptywaitstatus`, `OUTSTANDING_BUGS.md:21935`. | Supply normal observations followed by abnormal shutdown; require the session result to fail. | confidence high
+
+F5 | regress/arm_bdt_probe.py:383 | #524 | CANNOT-FAIL | `ARM_LDM_MULTI_P2_R2` reads `0x55667788` with and without the slow-path correction: the first access warms the page, and the second uses the unchanged fast path. The comment acknowledges this control’s lack of discrimination, but it remains a gate-counted DATA row. Already filed as `multiaccesswarms`, `OUTSTANDING_BUGS.md:24`, explicitly retained at :46. | Trace the second access through `host_load` and compare its value with the slow-path mask removed. | confidence high
+
+F6 | regress/arm_bdt_probe.py:161 | #524 | SELECTS-NOTHING | An empty or error-only `tlbdump 0,r` response returns `(False, False, False)`. The four ARM `PATH_COLD`/`PATH_COLD_P2` rows then report `ok` without observing cache state. A failed cold-only query followed by successful commands need not fail another row. | Feed an empty response to `get_tlb_page()` and evaluate the cold predicates. | confidence high
+
+F7 | regress/arm_bdt_probe.py:441 | #524 | OTHER | `ARM_STM_PATH_WARM` accepts `vaddr 0x00021000 load=y store=n`: it checks entry existence while discarding the access flags. `arm_push()` requires `host_store`, so this state actually takes the slow path, whose corrected data also satisfies the data rows. LDM has the symmetric problem. | Evaluate that telemetry line and require the appropriate load/store flag for each warm row. | confidence high
+
+F8 | regress/arm_bdt_probe.py:76 | #524 | OTHER | With `buf="GXemul>"` and no new bytes, `wait_prompt()` immediately returns true. `run_prog()` creates a fresh mark but does not use it for this readiness check, allowing an old prompt to certify readiness. This does not alone prove a whole-probe false pass. Already filed as `armbdtreadiness`, `OUTSTANDING_BUGS.md:22205`. | Evaluate `wait_prompt()` with the stale buffer and a silent `rd()`. | confidence high
+
+F9 | regress/fbpending_witness.py:736 | #442 | OTHER | No runtime gate invokes this probe. Its verdict has detector polarity—PASS requires the corrected symptom’s absence—but `check_probe_wiring.py:2426` classifies it as an intentionally ungated witness. Its regression checks therefore do not protect commits. Already filed as `witnesssilent`, `OUTSTANDING_BUGS.md:14472`, naming this probe at :14483. | Compare the verdict polarity, wiring classification, and tracked gate invocations. | confidence high
+
+F10 | regress/arm_bdt_probe.py:13 | #524 | RECORD | The header claims “architecturally-correct bytes,” but unmodified `testarm` leaves `ARM_CONTROL_ALIGN` enabled (`cpu_arm.c:129`). The correction’s own source commentary says that state owes an alignment exception; these expectations implement the model’s checking-disabled behavior. The caveat is already recorded under `armbdt`, `OUTSTANDING_BUGS.md:1262`. | Compare fixture control-register initialization with the alignment qualification at `cpu_arm_instr.c:1656`. | confidence high
+
+F11 | regress/arm_bdt_probe.py:305 | #524 | RECORD | The comment says all five following load legs access residue 2. The IB, DA, DB and S-bit legs actually access `0x20007`, residue 3 modulo 4; only the multi-register leg starts at residue 2. This also contradicts :246’s assertion that residue 3 is not rowed. | Calculate each access address from its base and pre/post adjustment. | confidence high
+
+F12 | regress/arm_bdt_probe.py:189 | #524 | RECORD | `CONTROL_LIVENESS` is described as an aligned LDM/STM round-trip, but its guest program contains MOV, LDM and B only. The debugger seeds memory; no guest STM is exercised by this control. | Inspect the three instruction words at :193. | confidence high
+
+Checked clean:
+
+- regress/fbpending_witness.py:252 — Inactivity timeout resets on received bytes, not silent polling.
+- regress/fbpending_witness.py:315 — RAM parsing swaps byte order and rejects missing requested words.
+- regress/fbpending_witness.py:630 — Surviving arms require normal exit 0; R0 checks sample completeness.
+- regress/fbpending_witness.py:658 — E rejects instruction mismatches and missing executed offsets.
+- regress/fbpending_witness.py:662 — H1 requires the named diagnostic, no prompt, and normal exit 1.
+- regress/fbpending_witness.py:667 — H2 verifies the prologue, post-quit failure before close, and exit 0.
+- regress/fbpending_witness.py:674 — MMU-on comparisons require both register values to exist.
+- regress/fbpending_witness.py:683 — Liveness predicates reject empty observations.
+- regress/arm_bdt_probe.py:133 — Aligned dump origin and little-endian word reconstruction are correct.
+- regress/arm_bdt_probe.py:232 — Cold-load expectations distinguish original splicing; residue-2 and bit-2 rows distinguish weakened masks.
+- regress/arm_bdt_probe.py:397 — Writeback expectations preserve raw-base residues and detect mask-at-entry.
+- regress/arm_bdt_probe.py:443 — Cold stores check both intended data and adjacent-word corruption.
+- regress/arm_bdt_probe.py:523 — IB, DA and S-bit store addresses agree with their expectations.
+- regress/arm_bdt_probe.py:592 — PC-first store order, stored PC and raw writeback agree with HEAD’s helper.
+- regress/arm_bdt_probe.py:618 — Thumb POP/PUSH targets, literal offsets, data and stack expectations agree.
+- regress/arm_bdt_probe.py:715 — The 43 recorded assertions match the gate’s literal denominator and score comparison.
+
+DENOMINATOR: read 2 of 2 files in full

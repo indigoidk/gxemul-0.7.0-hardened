@@ -1,0 +1,55 @@
+ASTRARETRO_HBUNDLE_REGRESS33_ALIVE
+VERDICT: 15 findings (2 CANNOT-FAIL, 6 SELECTS-NOTHING, 3 STATUS-LAUNDERED, 0 ENCODING, 2 RECORD, 2 OTHER); 16 items checked clean
+
+Reviewed HEAD `db8b1a33`. No files changed, builds, or emulator runs. Counterexamples below are static deductions or isolated in-memory checks. Unless identified otherwise, no matching filing was found in `OUTSTANDING_BUGS.md`.
+
+F1 | regress/selftest_logdir.py:78 | #422 / 7cfa4667 | CANNOT-FAIL | With `LOGDIR` already exported by the caller, the child shell’s bare assignment preserves its export attribute. Removing `export LOGDIR` from `lib.sh` therefore still produces both log files and PASS, just as the corrected library does. The claim at line 18 fails under this environment. | Check the child environment with and without the library’s export, starting from an inherited `LOGDIR`; explicitly remove that inherited variable before testing the export. | confidence high
+
+F2 | regress/selftest_logdir.py:95 | 521085b0 | STATUS-LAUNDERED | A caught `KeyError` after both files open produces two `yes` location fields, `driver_ran=no`, FAIL, and exit 1. But `gate_offline.sh:355` discards the status, and lines 357–358 grade only those two location fields: both gate rows remain green. The follow-up repaired the self-test without connecting its failure to the gate. | Trace that failure transcript through the two gate assertions; require the self-test’s successful completion as well. | confidence high
+
+F3 | regress/selftest_logdir.py:88 | 521085b0 | STATUS-LAUNDERED | A wrapper killed after both logs open has a nonzero `run.returncode` but no `wrapper_caught=` line. The self-test ignores the return code, reports `driver_ran=yes`, prints PASS, and exits 0. This survives fixing F2’s caller. | Evaluate the result handling with both files present, empty stdout, and a negative child return code; require status and a completion sentinel. | confidence high
+
+F4 | regress/run.sh:76 | 2050c501 | SELECTS-NOTHING | `run.sh 2 04` passes numeric selector validation, but string matching never selects gate 4 for `04`. If gate 2 passes, the runner reports `REGRESS_PASS` after running only gate 2. The empty-run guard catches `04` alone, but misses this mixed case. | Compare validation at line 67 with matching at line 76; normalize selectors or reject noncanonical spellings. | confidence high
+
+F5 | regress/gate_upstream.sh:74 | ff572782 | STATUS-LAUNDERED | Three identical incomplete loader transcripts containing the expected marker pass even when every producer exits 1: `sed` hides the statuses, and no completion sentinel is required. For ELF, the format marker is emitted at `src/file/file_elf.c:331`, before possible program-header failure at line 387. | Score identical marker-containing error transcripts: marker succeeds, unexplained differences are zero, and pre-batch equals HEAD. Require loader completion; normal debugger-waiting runs themselves time out, so rejecting every timeout is insufficient. | confidence high
+
+F6 | regress/gate_upstream.sh:127 | ff572782 | SELECTS-NOTHING | Let pristine’s normalized bytes be `ELF32 MSB\nx\0\n`, and pre-batch and HEAD both be `ELF32 MSB\ny\0\n`. `diff` reports binary files differ; `grep -c '^[<>]'` selects nothing and returns zero. The marker and pre-batch comparison also pass, hiding the unexplained difference. Line 121 has the same defect. | Check those byte strings using comparison status rather than textual diff-line counts. This is a parser counterexample, not a claim that current corpus output contains NUL. | confidence high
+
+F7 | regress/gate_upstream.sh:74 | ff572782 / #419 | OTHER | A healthy loader delayed beyond the fixed 20 seconds is killed before its marker or complete transcript appears, then scored as a regression. Host load changes the verdict without a code change. Already filed under **#419 residual item 2**, `OUTSTANDING_BUGS.md:5262`. | Compare scoring for the same successful loader transcript arriving before versus after the deadline; distinguish incomplete execution from incorrect behavior. | confidence high
+
+F8 | regress/diag_div_sweep.py:89 | f1f6deec | SELECTS-NOTHING | A diagnostic argument `n / -d`, `n / +d`, or `n / *p` matches nothing because the divisor must begin with `[\w\(]`. Adding such a variable division contributes zero to both counters, leaving the gate’s expected `2` nonconstant and `21` total calls unchanged. | Apply the operator pattern to `n / d` and `n / -d`; both must be recognized. | confidence high
+
+F9 | regress/diag_div_sweep.py:107 | f1f6deec | SELECTS-NOTHING | For `n / 4 / d`, the regex consumes one match with captured text `4 / d`. `CONST` accepts its numeric prefix, and iteration skips the second division. Replacing an existing constant-only expression with this expression leaves both gate counters unchanged. | Check `nonconst("n / 4 / d")`: HEAD returns false although the expression divides by `d`. | confidence high
+
+F10 | regress/diag_div_sweep.py:99 | f1f6deec | SELECTS-NOTHING | Classification receives the display fragment truncated to 150 characters. A previously constant-only diagnostic gains a variable division beyond that boundary, but remains classified constant; the full call still contributes one to the total. Neither gate counter changes. | Classify arguments containing `n / 4`, fifty comma-separated `arg` entries, then `n / d`, before and after truncation. Classify full arguments and truncate only their presentation. | confidence high
+
+F11 | regress/census_tokens.py:58 | #546 / 3e33201d | CANNOT-FAIL | An unrelated `line.endswith ("=")` is credited as prompt readiness. The promptless classifier prints nothing both with genuine readiness and with only this unrelated call; the intervening space also escapes the gate’s textual unknown-spelling count. Already filed as **`hygienecensusexotic`**, `OUTSTANDING_BUGS.md:22233`. | Compare classification of the unrelated suffix call with a prompt check; HEAD examines neither its argument nor its role. | confidence high
+
+F12 | regress/census_tokens.py:80 | #546 / 3e33201d | SELECTS-NOTHING | Adding `output.rstrip().endswith("GXemul>")` to an already prompt-detecting probe contributes zero whole-buffer sites because `output` does not end in `buf`. The whole-site allowlist stays unchanged; textual `full` and `allends` increase equally, leaving `unknown=0`. Already filed as **`hygienecensusholes`**, `OUTSTANDING_BUGS.md:22194`. | Compare `whole_sites` for otherwise identical `buf` and `output` receivers: HEAD returns 1 and 0. | confidence high
+
+F13 | regress/gate_mips.sh:78 | 2050c501 | OTHER | After a successful run, a subsequent preflight skip or death before publication leaves the old `$LOGDIR/pmax.ptylog`, `arc.ptylog`, and screen output intact. Only the `/tmp` source logs are deleted. Gate 6 accepts the surviving copies as current evidence, contradicting lines 75–77. Overall skip handling does not fix this stale grading. | Follow a prior-good-log state through the missing-input branch at line 29 and gate_hygiene.sh:840 onward; invalidate publications before preflight or bind them to the current run. | confidence high
+
+F14 | regress/gate_ppc_halt.sh:33 | #344 / 6f916cd5 | RECORD | The header says twelve encodings remain pending and includes `fnmadd`/`fnmsub`. HEAD instead asserts fourteen FIXED and ten PEND at lines 83–84; both instructions are FIXED in `ppc_halt_probe.py:273`. | Compare the header with the class assertions and #344 change. | confidence high
+
+F15 | regress/arcbios_shift_probe.py:24 | #450 / f39b8984 | RECORD | The docstring claims a compiler bug “reddens it.” This probe reads only source text. Identical canonical source under a correct compiler or a miscompiling compiler yields the same C1 result and `ARCSHIFT_RESULT=2/2`. | Trace C1’s inputs: no compiler or executable behavior is observed. | confidence high
+
+Checked clean:
+
+- regress/gate_upstream.sh:58 — Immediately captures and checks the upstream delete-check status.
+- regress/gate_upstream.sh:135 — Empty output and the historical wrong-machine error fail the positive loader-marker assertion.
+- regress/run.sh:21 — Independently pins the gate count; the following header checks reject missing or mismatched labels.
+- regress/run.sh:90 — Distinguishes ordinary failure from explicit skip; final aggregation rejects empty runs and returns nonzero for coverage gaps.
+- regress/diag_div_sweep.py:32 — Preserves stripped newline counts and resolves reported positions against the same stripped text.
+- regress/diag_div_sweep.py:81 — Balances nested parentheses before extracting multiline arguments.
+- regress/arcbios_shift_probe.py:89 — Unreadable source reports FAIL and exits 1.
+- regress/arcbios_shift_probe.py:95 — Exact multiset comparison matches all fourteen HEAD statements and rejects removal, duplication, or cast reversion.
+- regress/census_tokens.py:49 — Preserves statement boundaries and excludes comment contents from call recognition.
+- regress/census_tokens.py:78 — Counts separate matching occurrences, including multiple calls on one physical line.
+- regress/selftest_logdir.py:48 — Explicitly supplies the driver’s required budget and stall keys.
+- regress/selftest_logdir.py:90 — Checks both independently named files in a fresh private directory.
+- regress/gate_ppc_halt.sh:69 — Pins control outcome, total rows, and class counts independently.
+- regress/gate_ppc_halt.sh:93 — All sixteen named patterns fit the padded name column; separators prevent prefix collisions.
+- regress/gate_mips.sh:45 — Requires the fixed pmax completion count; arc likewise requires 13/13 at line 60.
+- regress/gate_mips.sh:47 — Removes pmax’s high bits before checking its positive guest markers.
+
+DENOMINATOR: read 8 of 8 files in full

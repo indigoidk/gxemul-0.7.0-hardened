@@ -1,0 +1,52 @@
+ASTRARETRO_DISKIMAGE_ALIVE
+VERDICT: 9 findings (5 CODE live at HEAD, 3 RECORD, 1 TEST-GAP); 25 items checked clean
+
+Reviewed committed `8ea26abb` against `39748e3c`. Static inspection only; no files changed, builds run, or tests executed.
+
+F1 | src/disk/diskimage.c:1316 | 5ee491e7; sibling left by #416/#437 | CODE | live at HEAD: yes | With `-f`, a guest WRITE can report success after its data `fflush()` or `fsync()` fails. The overlay path still publishes the bitmap; flat writes at :1266 and bitmap flushes at :1210 also discard errors. #437 checks these failures only in the separate sync helper. | Smallest check: mocked-I/O test requiring failed WRITE status and no bitmap publication after data-flush failure. Existing `diff_diskimage_sync.c` leaves `do_fsync=0`. | confidence high
+
+F2 | src/disk/diskimage.c:2066 | #418 | CODE | live at HEAD: yes | A `d:` 1.44-MB image initially has 2,880 blocks, but guest SCSI READ CAPACITY calls `diskimage_recalc_size()` at `diskimage_scsicmd.c:489`. Its type is now SCSI, so :269 replaces floppy geometry with 16/63 and advertises 3,024 blocks. The extra blocks read as zeros and reject writes—the behavior #418 intended to prevent. No matching outstanding filing found. | Smallest check: extend `diff_diskimage_parse.c` to check capacity after READ CAPACITY, rather than only immediately after parsing. | confidence high
+
+F3 | src/disk/diskimage.c:1592 | #416 | CODE | live at HEAD: yes | Guest MODE SELECT changes `logical_block_size` without recalculating `nr_of_logical_blocks` (`diskimage_scsicmd.c:1324`). The new read bound multiplies the stale count by the new size. Changing 512-byte blocks to accepted 256-byte blocks therefore rejects reads within the upper half of the existing disk until READ CAPACITY recalculates it. | Smallest check: an I/O regression comparing an in-range read before and after an accepted block-size change. No matching filing or regression found. | confidence high
+
+F4 | src/disk/diskimage.c:689 | #127 / 5ee491e7 | CODE | live at HEAD: yes | A CUE beginning with a UTF-8 BOM on its first FILE line loses that command. Detection strips the BOM at :623, but parsing does not; the following TRACK fails because no file was recorded. The image falls back to flat-file handling instead of exposing BIN data. | Smallest check: compare track tables for otherwise identical plain and BOM-prefixed CUE inputs. | confidence high
+
+F5 | src/disk/diskimage.c:306 | upstream, relied on by #414/#416 | CODE | live at HEAD: yes | Accepted non-power-of-two logical block sizes invalidate the remainder mask. After selecting 257-byte blocks, a 516,096-byte image calculates 2,008 blocks instead of the fork’s intended rounded-up 2,009; #416 then rejects reads of the remaining bytes. Already filed as **`lbsmask`**, `OUTSTANDING_BUGS.md:15590`. | Smallest check: inspect the disabled `GEOM_ROW_LBS257` row in `regress/diff_diskimage_geom.c:718`. | confidence high
+
+F6 | src/disk/diskimage.c:1643 | #416 | RECORD | live at HEAD: yes | The comment says the short-write failure is reachable “only through a genuine I/O failure.” An in-bounds guest write with overlay-incompatible alignment instead returns zero at :1279 or :1285 before attempting I/O, then reaches this failure check. | Smallest check: trace those two returns to :1653; qualify the comment to include unsupported alignment. | confidence high
+
+F7 | src/disk/diskimage.c:1499 | #488 | RECORD | live at HEAD: yes | The comment calls the caller’s tail memset a no-op on the overlaid path. A seek failure at :1397 or :1407 returns zero, causing :1627 to clear the entire buffer. The statement needs “on successful completion”; the following paragraph itself acknowledges these failure paths. | Smallest check: inspect the zero returns and caller condition. | confidence high
+
+F8 | CHANGELOG.md:25609 | #437 | RECORD | live at HEAD: yes | The recorded mutant deletes overlay-data `fflush` while retaining `fsync`, yet claims this “leaves the counts intact.” It reduces the successful single-overlay flush count from two to one; only the sync count remains unchanged. | Smallest check: compare `regress/selfmutants/diskimage_sync.old`, `.new`, and `.why`; `.why` correctly limits the claim to fsync counts. | confidence high
+
+F9 | CHANGELOG.md:19826 | #127 / 5ee491e7 | TEST-GAP | live at HEAD: yes | The feature round says “each regression-gated,” including CUE mapping/header stripping, but no committed regression row exercises those behaviors. Checked `diff_diskimage_parse.c` and `diff_diskimage_io.c`; the latter explicitly sets `nr_of_tracks=0`. | Smallest check: census committed regression inputs and assertions for a parsed CUE with nonzero tracks. | confidence med
+
+Checked clean below; all locations are HEAD `src/disk/diskimage.c`:
+
+- :49 — `-f` sets the flag used by the write helpers.
+- :149 — both overlay-open failure arms free the duplicated basename.
+- :260 — the four standard floppy sizes produce the intended sectors-per-track values.
+- :291 — ordinary and overridden geometry share cylinder calculation and a guarded divisor.
+- :1809 — both geometry fields use signed, decimal, wide parsing before range checks.
+- :371 — both changed diagnostic format strings correctly use `%s`.
+- :431 — negative flat-CD offsets are rejected before indexing.
+- :519 — token truncation preserves space for the terminating NUL.
+- :739 — FILE/TRACK limits and INDEX-before-TRACK checks protect parser arrays.
+- :949 — backwards indices reject; same-file byte offsets use the preceding sector size.
+- :1043 — CUE failure cleanup handles initialized resources without installing partial state.
+- :1088 — CUE reads reject negative offsets, bound slices, and account correctly for short reads.
+- :2013 — successfully parsed CUE images become read-only CD-ROMs.
+- :1182 — bitmap seek/write failures return failure and propagate through :1325.
+- :1273 — both unsupported overlay-write alignment cases return without aborting.
+- :1364 — newest matching overlay wins; slicing stays within its block with safe casts.
+- :1466 — short overlay/base reads fill their own missing bytes and advance accounting consistently.
+- :1539 — zero-length access succeeds before the null-buffer termination check.
+- :1595 — with current capacity metadata, extent checks avoid `offset+len` and clear rejected reads.
+- :1627 — remaining short-read tails are initialized.
+- :1653 — actual short `fwrite` results fail the access.
+- :2066 — explicit `i`/`f`/`s` prefixes retain precedence over `d`.
+- :2186 — temporary data/map creation is exclusive; shown failures restore the umask.
+- :2368 — sync handles missing disks, read-only flat disks, and writable-flat flush errors.
+- :2401 — sync orders overlay data before bitmap and skips its bitmap after data failure.
+
+DENOMINATOR: read 30 of 30 hunks of the net diff

@@ -1,0 +1,54 @@
+ASTRARETRO_CPUMIPSCOPROC_ALIVE
+VERDICT: 11 findings (7 CODE live at HEAD, 3 RECORD, 1 TEST-GAP); 23 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No files changed, builds performed, or guest probes executed; the checks below are proposed confirmations.
+
+F1 | `src/cpus/cpu_mips_coproc.c:1357` | #300 | CODE | live at HEAD: yes | `div.d(-1.0,+Inf)` with RM=RZ produces canonical NaN instead of `-0`. The helper checks whether the quotient is finite, then computes a NaN residual from `0*Inf`; its correction decrements negative zero’s bit pattern into NaN. This also contradicts `CHANGELOG.md:22350`’s nonfinite-pass-through claim. Infinity arithmetic follows limiting real arithmetic ([MIPS IV manual:1467](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips-iv.txt:1467)). | Smallest check: one helper assertion for negative finite divided by positive infinity under RZ. | confidence high
+
+F2 | `src/cpus/cpu_mips_coproc.c:1293` | #246 | CODE | live at HEAD: yes | On R4000, `c.eq.s` comparing the minimum subnormal with itself raises E and preserves the previous condition instead of setting true. The denormal guard exempts MOV but incorrectly includes comparisons. The manual explicitly exempts Compare ([manual:1627](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:1627), also confirmed by the [MIPS errata](https://manualzilla.com/doc/5656631/errata-for-mips-r4000-r4400-microprocessor-user-s-manual)). | Smallest check: compare equal subnormals with FCC initially false; inspect FCC and Cause.E. | confidence high
+
+F3 | `src/cpus/cpu_mips_coproc.c:1147` | #332 | CODE | live at HEAD: yes | R4000 `cvt.s.d(2^-126 − 2^-150)`, RN, FS=1, U/I disabled returns `FLT_MIN`; it owes `+0`. The input has exactly 24 significant bits and remains tiny when rounded with an **unbounded exponent**. Gradual binary32 encoding instead rounds it to `FLT_MIN`, defeating this guard. The source’s encoded-word premise is false ([manual:1623](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:1623), default substitution at line 1603). Already filed as **`mipstiny`**, `OUTSTANDING_BUGS.md:386`; the manual resolves that recorded disagreement. | Smallest check: one conversion readback at this boundary. | confidence high
+
+F4 | `src/cpus/cpu_mips_coproc.c:1173` | #246 | CODE | live at HEAD: yes | R4000 `cvt.s.d(2^-127)` with FS=1 and either Underflow or Inexact enabled writes zero instead of raising E and preserving `fd`. The guard checks FS alone. Either enable bit independently requires the trap ([manual:1623](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:1623)). | Smallest check: two conversion rows, enabling U and I separately, with a destination sentinel. | confidence high
+
+F5 | `src/cpus/cpu_mips_coproc.c:1175` | #246 | CODE | live at HEAD: yes | R4000 `cvt.s.d(2^-126 − 2^-152)`, RN, FS=0 incorrectly raises E. At single precision with unbounded exponent, this rounds to normal `FLT_MIN`; the guard tests the unrounded host value instead ([manual:1623](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:1623)). Already filed in the **round-72 pre-rounding entry**, `OUTSTANDING_BUGS.md:1650`, without a separate ID. Its stated boundary also needs correction: the RN threshold is `2^-126 − 2^-151`. | Smallest check: this conversion must store `FLT_MIN` without E. | confidence high
+
+F6 | `src/cpus/cpu_mips_coproc.c:1174` | #246, relying on upstream host arithmetic; retained by #300 | CODE | live at HEAD: yes | R4000 `mul.d(2^-1022,2^-1022)`, RN, FS=0 silently stores zero. Both operands are normal; the exact result `2^-2044` remains nonzero and tiny with unbounded exponent. Host arithmetic already rounded it to zero, so checking only `FP_SUBNORMAL` misses the required E trap and destination preservation ([manual:1623](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:1623)). | Smallest check: one multiply with a destination sentinel, inspecting E and destination preservation. | confidence high
+
+F7 | `src/cpus/cpu_mips_coproc.c:1357` | #300 | CODE | live at HEAD: yes | `div.d(2^-1000,3.0)` under RP returns `0x0155555555555555`; upward rounding requires `0x0155555555555556`. Both operands and the result are normal. The helper deliberately returns nearest below its dividend threshold, contrary to the selected mode ([DIV specification:6052](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:6052)). Already filed as **“#300’s accepted-nearest bands”**, `OUTSTANDING_BUGS.md:1971`, without a separate ID. | Smallest check: one directed-division helper assertion. | confidence high
+
+F8 | `src/cpus/cpu_mips_coproc.c:716` | #214 | RECORD | live at HEAD: yes | The comment and `CHANGELOG.md:20029` say R3000 EntryLo1 writes are ignored. The `break` exits the switch, then line 1017 stores the supplied value into register 3. | Smallest check: trace that branch through the common assignment. | confidence high
+
+F9 | `src/cpus/cpu_mips_coproc.c:1185` | #292; stale since #294 | RECORD | live at HEAD: yes | The comment says W/L stores ignore rounding mode and `cvt.w`/`trunc.w` are indistinguishable. HEAD passes distinct effective modes, and the integer encoder honors them. Already acknowledged in the **comment-only docs task**, `OUTSTANDING_BUGS.md:4648`, without a separate ID. | Smallest check: compare decoder lines 1636/1794 with `float_emul.c:465`. | confidence high
+
+F10 | `src/cpus/cpu_mips_coproc.c:1302` | #299; stale since #300 | RECORD | live at HEAD: yes | The comment says double addition remains on the plain path pending a future round. The adjacent branch already calls `ieee_add_round_rm`. | Smallest check: read lines 1307–1310. | confidence high
+
+F11 | `src/cpus/cpu_mips_coproc.c:1192` | #292 | TEST-GAP | live at HEAD: yes | `CHANGELOG.md:21404` claims the live MIPS RN/RZ `cvt.s.d(1/3)` contrast was verified on both rigs. No committed regression observes that wiring. Checked `mips_rounding_probe.py`, `mips_fixedmode_probe.py`, `mips_subnorm_probe.py`, and committed artifacts; `diff_ieee_store.c:506` tests only the helper. | Smallest check: a committed MIPS conversion/readback pair distinguishing RN from RZ. | confidence high
+
+Checked clean below; all line references are to `src/cpus/cpu_mips_coproc.c` at HEAD:
+
+- `:611` — #213 Config2–7 reads initialize the result to zero.
+- `:905` — #213 Config2–7 writes return before the common register assignment.
+- `:711` — #229 BadVAddr’s readonly flag prevents guest writes.
+- `:768` — #188 invalid non-R4100 PageMasks are canonicalized before storage.
+- `:1946` — #190 guards the same WIRED value used by the modulo; fallback stays in bounds.
+- `:2134` — #239 preserves the architectural TLB update before skipping fast-map installation.
+- `:1227` — #226 paired-result sign extension masks the second register index.
+- `:1432` — #226 MOV’s sibling sign-extension path also masks that index.
+- `:1423` — MOV preserves raw payloads and bypasses arithmetic-result conversion.
+- `:1206` — #255 generated S/D NaNs use legacy-MIPS quiet encodings.
+- `:1458` — #254’s Boolean predicates correctly decode less/equal/unordered bits.
+- `:1260` — #294 selects forced mode versus FCSR correctly.
+- `:1192` — #292 normal S encoding receives the effective rounding mode.
+- `:1304` — #299 single addition uses round-to-odd.
+- `:1318` — #299 single subtraction uses the corresponding round-to-odd path.
+- `:1339` — finite normal S multiplication is exact in the intermediate double.
+- `:1399` — #301 L→D uses the original integer bits.
+- `:1408` — #301 L→S preserves narrowing information through round-to-odd.
+- `:1623` — both truncation widths force RZ independently of FCSR.
+- `:1678` — both ROUND widths force RN.
+- `:1692` — both CEIL widths force RP.
+- `:1706` — both FLOOR widths force RM.
+- `:1717` — CVT.L/W use FCSR; integer conversion guards prevent out-of-range host casts.
+
+DENOMINATOR: read 28 of 28 hunks of the net diff

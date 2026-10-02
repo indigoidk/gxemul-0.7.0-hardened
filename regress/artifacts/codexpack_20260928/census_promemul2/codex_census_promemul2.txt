@@ -1,0 +1,143 @@
+CODEXPACK_CENSUS_PROMEMUL2_ALIVE
+VERDICT: 13 live calls classified -- 3 reachable by guest access at run time, 3 of those not recorded
+
+All citations below refer to **`db8b1a33`**. Counts match: `of.c` **7** — {394, 448, 549, 577, 1100, 1120, 1201}; `arcbios.c` **6** — {72, 859, 2485, 2906, 3033, 3039}. Each is `exit(1)`; no live `abort()` or `_exit()` was found in either file.
+
+```text
+src/promemul/of.c:394 | of__peer | WHEN: guest access | CONDITION: "if (od == NULL)" after "OF_FIND(od, od->handle == handle);" (src/promemul/of.c:391-392) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 2 — decline invalid handle with an early failure return | high
+src/promemul/of.c:448 | of__open | WHEN: guest access | CONDITION: "if (s[0])" (src/promemul/of.c:446), announcing "Unimplemented OF_SERVICE(open) with name: '%s'\n" (src/promemul/of.c:447) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement device opening and its success/failure result | high
+src/promemul/of.c:549 | of_add_device | WHEN: construction | CONDITION: "if (od->parent < 0)" (src/promemul/of.c:546), announcing "parent not found!" (src/promemul/of.c:548) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — invalid device-tree construction | high
+src/promemul/of.c:577 | of_add_prop | WHEN: construction | CONDITION: "if (od == NULL)" (src/promemul/of.c:575), announcing "of_add_prop(): device '%s' not registered\n" (src/promemul/of.c:576) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — property added to an unregistered device | high
+src/promemul/of.c:1100 | of_emul | WHEN: guest access | CONDITION: "if (of_data == NULL)" (src/promemul/of.c:1098) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 2 — decline unavailable firmware before accessing its state | high
+src/promemul/of.c:1120 | of_emul | WHEN: unreachable through current callers | CONDITION: "default:" in "switch (cpu->cpu_family->arch)", whose accepted values are ARCH_ARM and ARCH_PPC (src/promemul/of.c:1112-1119) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 2 — retain a defensive failure return for an unsupported architecture | high
+src/promemul/of.c:1201 | of_emul | WHEN: unreachable through current callers | CONDITION: "default:" in the return-register architecture switch, whose accepted values are ARCH_ARM and ARCH_PPC (src/promemul/of.c:1193-1200) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 2 — decline an unsupported architecture | high
+src/promemul/arcbios.c:72 | arcbios_add_string_to_component | WHEN: construction | CONDITION: "if (machine->md.arc->n_string_to_components >= MAX_STRING_TO_COMPONENT)" (src/promemul/arcbios.c:69-70) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — construction capacity exhausted | high
+src/promemul/arcbios.c:859 | arcbios_addchild_manual | WHEN: construction | CONDITION: "if (config_data != NULL)" followed by "if (machine->md.arc->n_configuration_data >= MAX_CONFIG_DATA)" (src/promemul/arcbios.c:852,856) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — construction capacity exhausted | high
+src/promemul/arcbios.c:2485 | arc_environment_setup | WHEN: construction | CONDITION: false branch of "if (machine->bootdev_id < 0 || machine->force_netboot)", then "if (machine->machine_type == MACHINE_SGI)", then subtype "default:"; accepted subtypes are {30,32} (src/promemul/arcbios.c:2470-2483) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — unsupported disk-boot configuration, "TODO: prefix for SGI IP%i\n" (src/promemul/arcbios.c:2484) | high
+src/promemul/arcbios.c:2906 | arcbios_init | WHEN: unreachable through current setup callers | CONDITION: false branch of "if (machine->machine_type == MACHINE_SGI)", then subtype "default:"; accepted values are {MACHINE_ARC_JAZZ_PICA,MACHINE_ARC_JAZZ_MAGNUM} (src/promemul/arcbios.c:2880,2895-2904) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — defensive construction invariant | high
+src/promemul/arcbios.c:3033 | arcbios_init | WHEN: unreachable | CONDITION: "case MACHINE_ARC:" followed by subtype "default:"; accepted values are {MACHINE_ARC_JAZZ_PICA,MACHINE_ARC_JAZZ_MAGNUM} (src/promemul/arcbios.c:3019-3030); an invalid subtype already terminates at src/promemul/arcbios.c:2906 | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — defensive construction invariant | high
+src/promemul/arcbios.c:3039 | arcbios_init | WHEN: unreachable through current setup callers | CONDITION: "default:" of "switch (machine->machine_type)", whose accepted values are {MACHINE_SGI,MACHINE_ARC} (src/promemul/arcbios.c:3004,3006,3019,3037) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — defensive construction invariant | high
+```
+
+The runtime and construction distinctions rest on these caller checks:
+
+- **OF is user reachable.** The ARM and PPC decoders select their firmware handlers without a privilege gate; those handlers call `"of_emul(cpu);"` (`src/cpus/cpu_arm_instr.c:4991-5003`, `src/cpus/cpu_arm_instr.c:972`; `src/cpus/cpu_ppc_instr.c:4397-4405`, `src/cpus/cpu_ppc_instr.c:3958`). The architecture values of those callers are exactly **{ARM, PPC}**, explaining the unreachable architecture defaults.
+- **Missing OF state is a runtime case.** Machine allocation uses `"memset(m, 0, sizeof(struct machine));"` (`src/machines/machine.c:67`). MacPPC setup executes `"if (!machine->prom_emulation)"` and returns before its OF initializer (`src/machines/machine_macppc.c:93-99`). The instruction handlers above do not enforce that setup condition.
+- **OF tree mutation is construction work.** The device/property helpers feed the initializer functions, reached from MacPPC setup (`src/promemul/of.c:704`, `src/promemul/of.c:721`, `src/promemul/of.c:734`, `src/promemul/of.c:762`, `src/promemul/of.c:794`, `src/promemul/of.c:859`, `src/promemul/of.c:969`; `src/machines/machine_macppc.c:99-105`).
+- **ARC capacity guards are construction work.** Component mappings are added by `add_arc_components`, invoked during setup (`src/core/emul.c:388-406`, `src/core/emul.c:761-764`). The manual child helper is explicitly documented as `"Used internally to set up component structures."` (`src/promemul/arcbios.c:836`). Environment setup is invoked from `arcbios_init` (`src/promemul/arcbios.c:3278`).
+- **ARC’s unreachable guards remain setup invariants.** The initializer’s callers are ARC and SGI setup (`src/machines/machine_arc.c:253`; `src/machines/machine_sgi.c:682`). ARC accepts **{PICA, MAGNUM}** and rejects other subtypes before the initializer (`src/machines/machine_arc.c:64-67`, `src/machines/machine_arc.c:240-253`). Deleting a construction guard without rejecting incomplete initialization would be inappropriate.
+
+For disposition 2, “decline” requires leaving the failing path safely. Merely deleting `exit(1)` from `of__peer` would leave the subsequent `"parent = od->parent;"` dereference (`src/promemul/of.c:396`).
+
+**Queue check.** Searches covered both filenames, enclosing function names, and diagnostic text. The relevant or potentially misleading matches were:
+
+- `"macppc OpenFirmware is skeletal"` and `"device-tree getprop gaps"` (`OUTSTANDING_BUGS.md:2742-2745`). These do not name the invalid-`peer`, nonempty-`open`, or absent-state termination defects.
+- `"#218–#223 OF + footbridge/mp/kn02ba/8253 guest-reachable"` followed by ``"`exit(1)`s → graceful"`` (`OUTSTANDING_BUGS.md:2681-2682`). This historical summary does not identify the remaining live OF exits.
+- ``"`arcbios_init` ran, so the allocation size is outside that detector's field of view"`` (`OUTSTANDING_BUGS.md:7486`) concerns allocation-test coverage, not these construction guards.
+- The queue explicitly names ``"`dec_prom`/`arcbios` unsupported-firmware-service halts"`` (`OUTSTANDING_BUGS.md:2670`). That records the ARC CPU-stop defect class below.
+
+**(a) Guest-access process exits, ranked by ordinary use**
+
+1. **`src/promemul/of.c:448` — nonempty `open`.** An ordinary device pathname satisfies `"if (s[0])"`; no malformed handle or missing firmware instance is required (`src/promemul/of.c:417-448`).
+2. **`src/promemul/of.c:394` — unknown `peer` handle.** The normal root request is explicitly accepted by `"if (handle == 0)"`; termination requires lookup failure for another handle (`src/promemul/of.c:385-394`).
+3. **`src/promemul/of.c:1100` — firmware invocation without firmware state.** This requires an invocation inconsistent with machine setup, making it less ordinary than an unsupported service argument (`src/promemul/of.c:1096-1100`; `src/machines/machine_macppc.c:93-99`).
+
+This is a source-based ordinary-use ranking. Actual stock-OS invocation order was **not checked**.
+
+**(b) CPU-stop sites**
+
+The statement locations are **{`of.c:233`, `of.c:1186`, `arcbios.c:1226`, `arcbios.c:1322`}**. The last uses the equivalent all-CPU form, `"machine->cpus[i]->running = 0;"`.
+
+```text
+src/promemul/of.c:233 | of__exit | WHEN: guest access | CONDITION: unconditional in the registered "exit" service; registration is "of_add_service(ofd, \"exit\", of__exit, 0, 0);" (src/promemul/of.c:231-235,1060) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 4 — accept the explicit exit request; retain its intentional CPU stop | high
+src/promemul/of.c:1186 | of_emul | WHEN: guest access | CONDITION: "if (os == NULL)" after matching service name, nargs, and nret (src/promemul/of.c:1170-1178) | GUEST LEVEL: user | RECORDED: NONE for the remaining halt; historical OF exit removal appears in prose OUTSTANDING_BUGS.md:2681-2682 | DISPOSITION: 3 — decline with a failure result and an (once) warning | high
+src/promemul/arcbios.c:1226 | arcbios_sgi_emul | WHEN: guest access | CONDITION: "default:" of "switch (vector)"; implemented values are {0x00,0x14,0x1c,0x20,0x24,0x30} (src/promemul/arcbios.c:1182-1220) | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:2668-2671 | DISPOSITION: 3 — decline with a firmware error result and an (once) warning | high
+src/promemul/arcbios.c:1322 | arcbios_emul | WHEN: guest access | CONDITION: cases {0x0c Halt,0x10 PowerDown,0x14 Restart,0x18 Reboot,0x1c EnterInteractiveMode,0x20 ReturnFromMain} all reach the all-CPU stop (src/promemul/arcbios.c:1293-1322) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement service-specific lifecycle behavior while preserving intentional Halt/PowerDown | high for reachability; medium for lifecycle disposition
+```
+
+For the deliberate OF exit, “accept” means preserving the requested CPU stop. It is not an unsupported-access failure (`src/promemul/of.c:231-235`).
+
+The OF unknown-service comment identifies **#219**, and the changelog explicitly says it “keeps the clean `cpu->running=0` halt” (`src/promemul/of.c:1184-1186`; `CHANGELOG.md:20126`). That is historical documentation outside the queue’s site-specific recording requirement.
+
+The SGI-private stop requires the private firmware PC region (`src/promemul/arcbios.c:1269-1272`; `src/include/arcbios.h:107`). Its high-address translation requires `"if (ksu == KSU_KERNEL)"`; otherwise the path produces an address-error exception (`src/cpus/memory_mips_v2p.c:234-245`, `src/cpus/memory_mips_v2p.c:427-456`). Fastmap/cache bypasses were **not checked**. Public ARC dispatch lacks that privilege restriction (`src/cpus/cpu_mips_instr.c:2625-2667`, `src/cpus/cpu_mips_instr.c:4650-4657`).
+
+By ordinary use, explicit lifecycle requests come first; among error-induced stops, an unmatched OF service precedes an unsupported SGI-private request. OF matching rejects either an absent name or a mismatched argument signature (`src/promemul/of.c:1170-1178`). The SGI-private service names are explicitly described as guesses, so their actual stock-OS frequency is **not checked** (`src/promemul/arcbios.c:1166-1168`).
+
+**(c) Denominator**
+
+Every function body in the two census files was read. Functions not read in those files: **none**. Definition locations enumerate the coverage:
+
+```text
+src/promemul/of.c:76   readstr
+src/promemul/of.c:102  of_store_32bit_in_host
+src/promemul/of.c:114  find_device_handle
+src/promemul/of.c:152  of__call_method_2_2
+src/promemul/of.c:159  of__call_method_3_4
+src/promemul/of.c:166  of__call_method_5_2
+src/promemul/of.c:193  of__call_method_6_1
+src/promemul/of.c:200  of__call_method_6_2
+src/promemul/of.c:207  of__child
+src/promemul/of.c:217  of__claim
+src/promemul/of.c:231  of__exit
+src/promemul/of.c:238  of__finddevice
+src/promemul/of.c:246  of__getprop
+src/promemul/of.c:294  of__getproplen
+src/promemul/of.c:320  of__instance_to_package
+src/promemul/of.c:329  of__interpret_1
+src/promemul/of.c:340  of__interpret_2
+src/promemul/of.c:363  of__package_to_path
+src/promemul/of.c:370  of__parent
+src/promemul/of.c:380  of__peer
+src/promemul/of.c:417  of__open
+src/promemul/of.c:455  of__read
+src/promemul/of.c:480  of__write
+src/promemul/of.c:514  of_get_unused_device_handle
+src/promemul/of.c:534  of_add_device
+src/promemul/of.c:564  of_add_prop
+src/promemul/of.c:595  of_add_service
+src/promemul/of.c:619  of_dump_devices
+src/promemul/of.c:656  of_dump_all
+src/promemul/of.c:696  of_add_prop_int32
+src/promemul/of.c:714  of_add_prop_str
+src/promemul/of.c:729  of_emul_init_isa
+src/promemul/of.c:754  of_emul_init_adb
+src/promemul/of.c:786  of_emul_init_zs
+src/promemul/of.c:850  of_emul_init_uninorth
+src/promemul/of.c:951  of_emul_init
+src/promemul/of.c:1089 of_emul
+
+src/promemul/arcbios.c:66   arcbios_add_string_to_component
+src/promemul/arcbios.c:93   arcbios_get_dsp_stat
+src/promemul/arcbios.c:114  arcbios_putcell
+src/promemul/arcbios.c:134  handle_esc_seq
+src/promemul/arcbios.c:273  scroll_if_necessary
+src/promemul/arcbios.c:313  arcbios_putchar
+src/promemul/arcbios.c:408  arcbios_putstring
+src/promemul/arcbios.c:421  arcbios_register_scsicontroller
+src/promemul/arcbios.c:431  arcbios_get_scsicontroller
+src/promemul/arcbios.c:443  arcbios_add_memory_descriptor
+src/promemul/arcbios.c:525  arcbios_addchild
+src/promemul/arcbios.c:676  arcbios_addchild64
+src/promemul/arcbios.c:841  arcbios_addchild_manual
+src/promemul/arcbios.c:942  arcbios_get_msdos_partition_size
+src/promemul/arcbios.c:1044 arcbios_handle_to_disk_id_and_type
+src/promemul/arcbios.c:1085 arcbios_handle_to_start_and_size
+src/promemul/arcbios.c:1137 arcbios_getfileinformation
+src/promemul/arcbios.c:1178 arcbios_sgi_emul
+src/promemul/arcbios.c:1261 arcbios_emul
+src/promemul/arcbios.c:2048 arcbios_set_default_exception_handler
+src/promemul/arcbios.c:2082 arcbios_add_other_components
+src/promemul/arcbios.c:2335 arcbios_console_init
+src/promemul/arcbios.c:2363 set_env
+src/promemul/arcbios.c:2396 environment_string
+src/promemul/arcbios.c:2452 arc_environment_setup
+src/promemul/arcbios.c:2810 arcbios_init
+```
+
+The `of__` names follow the `OF_SERVICE` macro expansion (`src/include/of.h:74-75`).
+
+Additional full-function reads covered `add_arc_components` (`src/core/emul.c:311`), `machine_new` (`src/machines/machine.c:62`), ARM/PPC firmware handlers (`src/cpus/cpu_arm_instr.c:969`; `src/cpus/cpu_ppc_instr.c:3956`), MIPS `X(promemul)` (`src/cpus/cpu_mips_instr.c:2625`), `add_cpu_family` (`src/cpus/cpu.c:553`), ARC setup/default CPU/default RAM/registration (`src/machines/machine_arc.c:46,257,271,277`), Raspberry Pi equivalents (`src/machines/machine_rpi.c:43,57,67,73`), and MacPPC registration (`src/machines/machine_macppc.c:195`).
+
+Only relevant portions were read of the larger instruction decoders, MIPS address translator, shared dyntrans execution code, `cpu_new`, emulator setup, and MacPPC/SGI setup. Other functions outside the census files were **not checked**. No builds, project-code executions, regressions, or writes were performed.
+
+**Scope deviation:** one delegated caller search accidentally omitted the revision and read working-tree matches. It was repeated with `db8b1a33`; every classification and citation above is grounded in committed reads. The accidental matches were in `src/core/emul.c`, `src/include/arcbios.h`, `src/machines/machine_arc.c`, `src/machines/machine_sgi.c`, and `src/promemul/arcbios.c`.

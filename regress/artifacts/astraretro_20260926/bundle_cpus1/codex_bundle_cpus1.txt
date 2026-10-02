@@ -1,0 +1,63 @@
+ASTRARETRO_BUNDLE_CPUS1_ALIVE
+VERDICT: 11 findings (9 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 30 items checked clean
+
+Reviewed committed `8ea26abb`. Validation was static; no files were written, builds performed, or guest probes executed.
+
+F1 | `src/cpus/memory_ppc.c:275` | upstream, relied on by #116 | CODE | live at HEAD: yes | An access denied by an enabled extended BAT reaches `exit(1)`. The new BAT scanner propagates its protection-denied result into this upstream termination path. Hardware requires DSI/ISI, per `_scratchpad/ppc_pem32_rev2_2001.txt:13312`. Base BATs share the defect. | Smallest check: trace the scanner’s zero return into this branch; a translator unit test should assert guest-exception delivery without process termination. | confidence high
+
+F2 | `src/cpus/cpu_ppc_instr_loadstore.c:124` | upstream, relied on by #431 | CODE | live at HEAD: yes | A page-crossing word load newly admitted by #431 reaches signed byte assembly. A most-significant byte with its high bit set makes `data[0] << 24` undefined; the outer cast comes too late. The byte-reversed sibling at :116 has the same defect. Already filed broadly as **OB-24**, `OUTSTANDING_BUGS.md:2916`. | Smallest check: inspect integer promotion in both expressions, or check the assembly under a shift sanitizer. | confidence high
+
+F3 | `src/cpus/cpu_arm_instr.c:2843` | upstream, relied on by #25 / 5ee491e7 | CODE | live at HEAD: yes | The `netbsd_copyin` and `netbsd_copyout` bitmap readers still evaluate signed `1 << (index & 31)`, although dyntrans’s writers were repaired. Guest page indices selecting bit 31 therefore encounter signed-shift UB in both directions; the second reader is at :2981. Already filed as **armbfxwidth32**, `OUTSTANDING_BUGS.md:16649`, with these readers identified at :16759. | Smallest check: compare both readers with the unsigned setters; verify bitmap position 31 under UBSan. | confidence high
+
+F4 | `src/cpus/memory_ppc.c:116` | upstream, relied on by #116 | CODE | live at HEAD: yes | After an extended DBAT mapping has populated the fast translation tables, changing its mapping or permissions can leave subsequent accesses using the old physical page or permissions. BAT writes use generic `mtspr`, which only assigns the register; `isync` is a NOP. Neither invalidates the cached mapping. Required synchronization must expose the new context: `_scratchpad/ppc_pem32_rev2_2001.txt:3895`, :3947. | Smallest check: warm one DBAT mapping, change it through the SPR handler, synchronize, and assert that the next access observes the replacement mapping. | confidence high
+
+F5 | `src/cpus/cpu_ppc_instr.c:2792` | upstream, relied on by #141 | CODE | live at HEAD: yes | Polling the time base across TBL’s 32-bit rollover loses the carry into TBU. This sibling increments a **64-bit** SPR and tests it against zero. The later repaired batch update truncates that value into `uint32_t old`, permanently discarding the carry. The carry requirement is explicit in `_scratchpad/ppc_pem_32and64_2005.txt:1716`. | Smallest check: a rollover assertion covering the `mftb` update followed by the dyntrans batch update. | confidence high
+
+F6 | `src/cpus/memory_sh.c:353` | upstream, relied on by #318 and #454 | CODE | live at HEAD: yes | An ordinary store into an SQ page with address translation enabled bypasses UTLB permission and dirty-bit checks. Queue SRAM changes even when writing is forbidden or the page is clean. The corrected PREF half leaves this store sibling unchecked. `_scratchpad/sh7750_hardware.txt:11744` requires write-type judgment for SQ stores. Already filed as **sh4sqwrite**, `OUTSTANDING_BUGS.md:7951`. | Smallest check: inspect the unconditional identity return and compare queue-state/EXPEVT assertions for writable-dirty and clean pages. | confidence high
+
+F7 | `src/cpus/memory_sh.c:153` | upstream, relied on by #318 | CODE | live at HEAD: yes | An SQ PREF translation with multiple matching UTLB entries selects the first and transfers data instead of taking the multiple-hit exception. The new wrapper directly depends on this first-match walker. `_scratchpad/sh7750_hardware.txt:9807` requires the exception; :9822 specifies EXPEVT `0x140`. Already recorded at `OUTSTANDING_BUGS.md:1946`, without a separate ID. | Smallest check: inspect the unconditional first-match break. `regress/sh_tlbmulti_probe.py` covers associative array writes, not this translation path. | confidence high
+
+F8 | `src/cpus/cpu_sh_instr.c:3706` | upstream, relied on by #318 | CODE | live at HEAD: yes | With SQMD set, a user-mode SQ PREF proceeds when translation is disabled. With translation enabled, it raises reserved-instruction instead of an address error. The privilege check is incorrectly nested under AT and passes `EXPEVT_RES_INST`. Both modes require an address error: `_scratchpad/sh7750_hardware.txt:11747`, :11750. Already filed as **sh4sqexpevt**, `OUTSTANDING_BUGS.md:7505`; the AT-only omission is also recorded at :1943. | Smallest check: inspect the enclosing AT condition and exception argument. | confidence high
+
+F9 | `src/cpus/cpu_alpha_instr.c:527` | #333 | CODE | live at HEAD: yes | Unqualified T arithmetic producing a negative subnormal is flushed to **negative zero**. The helper explicitly preserves the sign. The Alpha manual requires exact zero without `/UNDERFLOW`, including when IEEE handling would produce negative zero: `_scratchpad/21066_66a_hrm.txt:1889`. Already recorded as an unresolved question at `OUTSTANDING_BUGS.md:1645`, without a separate ID; the manual resolves it. | Smallest check: assert positive-zero result bits for an unqualified operation producing a negative tiny result. | confidence high
+
+F10 | `src/cpus/memory_sh.c:88` | 0f77c7a3 | RECORD | live at HEAD: yes | The added comment claims the URC increment location already conforms. An instruction translation hitting ITLB increments URC at :101 before searching ITLB, despite never consulting UTLB. The manual ties increments to UTLB accesses (`_scratchpad/sh7750_hardware.txt:8916`) and searches UTLB after an ITLB miss (:9638). The narrower LDTLB claim is correct; the general conformance claim is not. | Smallest check: compare the increment’s position with the ITLB-first loop. | confidence high
+
+F11 | `src/cpus/cpu_alpha_instr.c:515` | #333 | RECORD | live at HEAD: yes | “There is no Alpha rig in this project and therefore no way to measure a refinement” is false at HEAD. `regress/alpha_harness_probe.py:123` constructs an Alpha machine, and :188–203 contain guest-execution and RAM controls. The same stale premise remains in `CHANGELOG.md:32603`. | Smallest check: inspect the committed harness’s machine selection and `live`/`exec` rows. | confidence high
+
+No TEST-GAP counted where the round expressly admits missing coverage, including the already-filed **pcchalt** gap.
+
+Checked clean:
+
+- `src/cpus/memory_sh.c:95` — URC extraction and wrap match the documented URB rules.
+- `src/cpus/memory_sh.c:89` — LDTLB directly accesses UTLB arrays without incrementing URC.
+- `src/cpus/memory_sh.c:318` — The dedicated SQ wrapper reaches UTLB, with the caller supplying read-type flags.
+- `src/cpus/memory_sh.c:165` — Translation and final alignment preserve destination bits [9:5].
+- `src/cpus/memory_sh.c:249` — Reported translation failures stop the caller before transfer.
+- `src/cpus/memory_sh.c:268` — #454’s read-type claim matches the `sq pr00 rdok`, `sq d0 rdok`, and `sq miss evt` rows.
+- `src/cpus/memory_ppc.c:48` — Both BAT scans remain within four pairs and within `spr[1024]`.
+- `src/cpus/memory_ppc.c:55` — Supervisor/user validity selects applicable entries correctly.
+- `src/cpus/memory_ppc.c:102` — Only a base-BAT miss proceeds to extended BATs.
+- `src/cpus/memory_ppc.c:114` — Extended BAT lookup requires both CPU capability and HID0 enable.
+- `src/cpus/cpu_ppc_instr_loadstore.c:88` — Read and write fallbacks use the common boundary-splitting memory wrapper.
+- `src/cpus/cpu_ppc_instr_loadstore.c:183` — Failed accesses return before update-form base writeback.
+- `src/cpus/cpu_ppc_instr_loadstore.c:229` — Warm misaligned accesses still enter the generic path.
+- `src/cpus/cpu_arm_instr_dpi.c:164` — Reconstructed PC operands are truncated before widened arithmetic.
+- `src/cpus/cpu_arm_instr_dpi.c:283` — Full-result comparison preserves SUB/CMP/RSB NOT-BORROW behavior.
+- `src/cpus/cpu_arm_instr_dpi.c:188` — SBC/RSC consume incoming carry before clearing flags.
+- `src/cpus/cpu_arm_instr_dpi.c:314` — ADC uses the correct signed-overflow formula, including carry-in.
+- `src/cpus/cpu_alpha_instr.c:526` — The discriminator selects nonzero D subnormals without flushing normal or special encodings.
+- `src/cpus/cpu_alpha_instr.c:545` — All four decoded T arithmetic siblings use the helper.
+- `src/cpus/cpu_alpha_instr.c:1140` — The decoder recognizes the stated unqualified T forms.
+- `src/cpus/cpu_dyntrans.c:456` — The batch-update path itself now truncates TBL and propagates its rollover carry.
+- `src/cpus/cpu_dyntrans.c:1019` — All changed `is_userpage` mutations use unsigned shifts with bounded counts.
+- `src/cpus/cpu_dyntrans.c:1875` — Translation-bitmap shifts are unsigned and restricted to positions 0–31.
+- `src/cpus/cpu_dyntrans.c:1783` — Watchpoint suppression reaches both table layouts and both insertion/update branches.
+- `src/cpus/cpu_dyntrans.c:1815` — Supported non-delay-slot ignored hits decrement the count and retain retranslation.
+- `src/cpus/cpu_dyntrans.c:1888` — Ignored breakpoint handling suppresses instruction combining.
+- `src/cpus/tmp_mips_loadstore_multi.c:19` — All 16 load bodies increment after their bailout and before fused effects.
+- `src/cpus/tmp_mips_loadstore_multi.c:343` — All 16 store bodies have the same correct counter placement.
+- `src/cpus/tmp_mips_loadstore_multi.c:1274` — Mechanical inspection confirms all 32 counter labels match their handlers and bounded unsigned-counter IDs.
+- `.gitignore:5` — The deleted `src/cpus/grep.exe.stackdump` is ignored crash output; it has no HEAD source line or execution dependency.
+
+DENOMINATOR: read 51 of 51 hunks of the net diff

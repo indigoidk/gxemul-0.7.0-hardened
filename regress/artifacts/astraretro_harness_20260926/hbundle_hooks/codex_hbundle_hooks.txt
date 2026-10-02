@@ -1,0 +1,35 @@
+ASTRARETRO_HBUNDLE_HOOKS_ALIVE
+VERDICT: 9 findings (0 CANNOT-FAIL, 4 SELECTS-NOTHING, 0 STATUS-LAUNDERED, 0 ENCODING, 1 RECORD, 4 OTHER); 8 items checked clean
+
+Reviewed HEAD `db8b1a33`. Python results below were measured entirely in memory using committed source and Bash-tool JSON inputs; no WSL commands executed. Reminder findings are source traces. In examples, `\n` denotes a newline. No matching entries were found in `OUTSTANDING_BUGS.md`; the related `hookctlgate` and `hookdurability` entries concern different, resolved issues.
+
+F1 | tools/hooks/wsl_dollar_guard.py:77 | #494 | SELECTS-NOTHING | `wsl -- bash -cl 'X=hello; echo $X'` returns 0 silently: the cluster regex requires `c` last. `bash -e -lc` also escapes detection because the cluster must immediately follow the shell name. Both are valid command-string invocations. | Pair these inputs with `bash -lc`: require exit 2 for each; HEAD rejects only the latter. | confidence high
+
+F2 | tools/hooks/wsl_dollar_guard.py:100 | #490 | SELECTS-NOTHING | `cat <<'EOF'; wsl -- bash -c 'echo $X'\ndata\nEOF` returns 0 silently. Heredoc stripping deletes the genuine invocation after the opener, leaving `cat` and blank lines. Executable heredocs such as `bash <<'EOF'\nwsl -- bash -c 'echo $X'\nEOF` are also discarded as prose. | Submit either input to the hook and require exit 2; retain a data-only heredoc as the silent control. | confidence high
+
+F3 | tools/hooks/wsl_dollar_guard.py:125 | #490 | SELECTS-NOTHING | `wsl -- bash -c 'X=hello; ''echo $X'` returns 0 silently. Adjacent quoted fragments form one shell argument, but `_quoted_arg()` stops after `X=hello; ` and never examines `$X`. | Compare with `wsl -- bash -c 'X=hello; echo $X'`, which correctly returns 2; both command strings need the same decision. | confidence high
+
+F4 | tools/hooks/wsl_dollar_guard.py:127 | #490 | OTHER | `wsl -- bash -c true; echo $X` returns 2 with a dollar-loss warning. The unquoted argument reader consumes the remaining line, wrongly attributing the subsequent local command’s `$X` to WSL. | Compare with `wsl -- bash -c 'true'; echo $X`, which returns 0; both must remain silent. | confidence high
+
+F5 | tools/hooks/wsl_dollar_guard.py:170 | #490 | SELECTS-NOTHING | `wsl --` followed by backslash-newline and `bash -c 'echo $X'` returns 0 silently. Splitting at every newline disconnects `-c` from its WSL invocation, although shell continuation joins them. | Compare the continued command with its single-line equivalent: both should return 2. | confidence high
+
+F6 | tools/hooks/wsl_dollar_guard.py:171 | #490 | OTHER | `printf '%s\n' 'Run wsl -- bash -c "echo $X"'` returns 2, although it only prints literal documentation. Likewise, `true # wsl -- bash -c 'echo $X'` is blocked. Lexical matching mistakes quoted text and inline comments for executable invocations. | Require exit 0 for these inputs and exit 2 for an actual WSL invocation. | confidence high
+
+F7 | tools/hooks/round_reminder.sh:12 | e61ccd89 | RECORD | TaskCompleted describes “NINE-seat” as “six + Opus and Fable,” totaling eight. SessionStart at line 7 also advertises Codex 5.6-SOL/xhigh and automatic agy participation. HEAD `tools/panel.sh` instead selects Astra/max at lines 119/337, makes agy conditional at lines 134/345, and lists seven default transports at lines 674–677. | Compare both emitted reminders with those configuration and launch sites. | confidence high
+
+F8 | tools/hooks/round_reminder.sh:48 | e61ccd89 | OTHER | Two sessions sharing a project share both stamp filenames. If session A schedules a wakeup, session B stopping ten seconds later exits 0 without a reminder, even if B has no wakeup. The `/tmp` fallback additionally shares state across projects. No session identity participates in either path. | Resolve the stamp paths for two sessions and trace B’s stop with A’s recent stamp; it reaches line 53. | confidence high
+
+F9 | tools/hooks/round_reminder.sh:52 | e61ccd89 | OTHER | A wakeup scheduled at time T, consumed at T+60, and not rearmed still suppresses the stop reminder at T+70: the old stamp satisfies `age < 900`. Nothing invalidates it when the wakeup fires. This misses precisely the omitted-rearm stall described at lines 28 and 67; stamp expiry cannot restart an already stopped loop. | Trace identical recent timestamps with a pending versus consumed wakeup: both return silently, although only the former establishes legitimate waiting. | confidence high
+
+Checked clean:
+
+- tools/hooks/wsl_dollar_guard.py:47 — All 18 original controls reproduced their expected decisions: nine FIRE, nine SILENT; the recorded count is accurate.
+- tools/hooks/wsl_dollar_guard.py:77 — All 11 committed cluster controls passed, including supported `-lc`/`-ic` forms and six silent controls.
+- tools/hooks/wsl_dollar_guard.py:137 — Non-Bash tools, empty commands, and empty input return silently.
+- tools/hooks/wsl_dollar_guard.py:203 — The wrapper preserves rejection status 2; malformed JSON follows the explicitly documented fail-open policy.
+- tools/hooks/round_reminder.sh:4 — Default `session` selection and the four explicit case arms are distinct.
+- tools/hooks/round_reminder.sh:6 — All three literal payloads parse as JSON; quoted heredoc delimiters prevent shell expansion.
+- tools/hooks/round_reminder.sh:51 — Empty or nondigit timestamp contents normalize to zero; the stop timestamp has the same handling at line 61.
+- tools/hooks/round_reminder.sh:65 — Blocking requires both the elapsed rate-limit interval and a successful stamp write; failed writes cannot repeatedly block stopping.
+
+DENOMINATOR: read 2 of 2 files in full

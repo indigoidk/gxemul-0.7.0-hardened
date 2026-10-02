@@ -1,0 +1,36 @@
+ASTRARETRO_DEV8253_ALIVE
+VERDICT: 7 findings (4 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 11 items checked clean
+
+Reviewed committed HEAD `8ea26abb`. Static review only; no builds, probes, or file changes.
+
+F1 | `src/devices/dev_8253.c:166` | upstream, relied on by #439/#440 | CODE | live at HEAD: yes | Programming counter 0 for two-byte accesses, then counter 1 for LSB-only accesses, makes counter 0 return its low byte twice. The shared `mode_byte` also makes counter 0’s latch release after one read. Per-counter flip-flops cannot preserve independent formats underneath this global field. `_scratchpad/i8254.txt:234` and `:351–357` require each counter’s format to survive programming another counter. Already filed as `pitclobber` and `pitmodebyteshared` (`OUTSTANDING_BUGS.md:6793`, `:20787`). | Smallest check: inspect counter 0’s decoded format and latch state across a counter-1 control write. | confidence high
+
+F2 | `src/devices/dev_8253.c:177` | upstream, relied on by #440 | CODE | live at HEAD: yes | A complete LSB-only count write updates `counter[]` and immediately breaks; only the MSB arm computes `hz[]` and installs or updates the timer. Consequently, counter 0 either produces no timer interrupts or continues at its previous rate. #440 resolves two-byte accesses into these arms but leaves this complete single-byte sibling unhandled. LSB-only programming is documented at `_scratchpad/i8254.txt:219`; mode-2 operation is specified at `:481–489`. Already filed as `pit8253lsbnotimer` (`OUTSTANDING_BUGS.md:19833`). | Smallest check: inspect `timer0` and `hz[0]` after a complete LSB-only load, both initially and after prior two-byte programming. | confidence high
+
+F3 | `src/devices/dev_8253.c:175` | upstream, relied on by #440 | CODE | live at HEAD: yes | Reprogramming a counter for either single-byte format preserves the other byte. For example, after loading `0x12ff`, an MSB-only write of `0x10` produces `0x10ff`, rather than `0x1000`, and counter 0 runs at 274 rather than 291 Hz. The LSB-only arm similarly retains a stale high byte. Programming must clear both count registers: `_scratchpad/i8254.txt:168–172`, also confirmed in the [Intel datasheet, p. 5](https://www.scs.stanford.edu/23wi-cs212/pintos/specs/8254.pdf). Already included in `pit8253lsbnotimer`. | Smallest check: inspect the composed count after changing a nonzero two-byte count to each single-byte format. | confidence high
+
+F4 | `src/devices/dev_8253.c:339` | #223 | CODE | live at HEAD: yes | A guest can select BCD counting and load valid BCD `0x9999`; the accepted count is subsequently interpreted as binary 39321. Counter 0 therefore runs at 30 Hz instead of approximately 119 Hz. Removing the exit exposed a successful programming path without implementing its selected arithmetic. `_scratchpad/i8254.txt:213–216` specifies decimal counting when BCD is selected. Already filed as `pit8253bcdbinary` (`OUTSTANDING_BUGS.md:19918`). | Smallest check: inspect the divisor and `hz[0]` after completing a BCD count load. | confidence high
+
+F5 | `CHANGELOG.md:20046` | #223 | RECORD | live at HEAD: yes | “Five guest-writable” paths includes the **read** default at `dev_8253.c:270` and the unimplemented-offset default outside the device’s four registered offsets. Five exit sites were removed, but they were not five guest-writable paths. The unreachable-offset qualification is already recorded under `pit8253flood` (`OUTSTANDING_BUGS.md:19630`). | Smallest check: compare the five deleted exits with their enclosing branches and the registration at `dev_8253.c:386`. | confidence high
+
+F6 | `CHANGELOG.md:25265` | #440 | RECORD | live at HEAD: yes | The statement that the designs are indistinguishable and “#439’s measured behaviour is unchanged” remains false for a latched read pair entered at odd read parity: HEAD returns `0x9c00` where #439 returned zero for the documented example. The source at `dev_8253.c:236` and the later CHANGELOG correction at `:25354` acknowledge this, but the original assertion remains unqualified. | Smallest check: compare these two passages; no execution is necessary. | confidence high
+
+F7 | `src/devices/dev_8253.c:259` | #440 | TEST-GAP | live at HEAD: yes | Consumption according to the programmed format includes releasing a one-byte latch after one read, but every latch arm in `regress/pit8253_latch_probe.py` uses the two-byte format. The additional PIT coverage in `regress/lca_isalane_probe.py` does not exercise latching. No matching outstanding id found. | Smallest check: add one latch/read/read row for each single-byte format and observe release after the first read. | confidence high
+
+Items checked clean, with all source line numbers referring to HEAD:
+
+- `src/devices/dev_8253.c:291` — #35 masks before narrowing; the subsequent clamp bounds every control-selected array index.
+- `src/devices/dev_8253.c:145` — counter-port array accesses are restricted to indices 0, 1, and 2.
+- `src/devices/dev_8253.c:372` — initialization zeroes all added latch and phase arrays.
+- `src/devices/dev_8253.c:199` — all five #223 exit removals remain effective; the retained `fatal()` helper returns.
+- `src/devices/dev_8253.c:181` — frequency calculation guards the actual divisor; byte masks bound the arithmetic.
+- `src/devices/dev_8253.c:303` — ordinary latch commands preserve programming and bypass phase resets.
+- `src/devices/dev_8253.c:168` — separate read/write phases implement the documented 8254 interleave; probe R7 observes it.
+- `src/devices/dev_8253.c:280` — two-byte accesses alternate their selected phase without modifying the format.
+- `src/devices/dev_8253.c:259` — with unchanged format and even starting phase, two reads consume the latch; R8 observes release.
+- `src/devices/dev_8253.c:320` — control writes reset both phases of the selected counter; R10/R11 observe write reset on counters 0 and 2.
+- `regress/gate_arm.sh:1788` — the PIT probe is wired at HEAD, with completion-sentinel and named-row checks.
+
+`pitlatch2` remains unresolved by the cited manual; it is not counted as an established defect. The acknowledged upstream running-count and explicit-zero-count limitations are outside the counted findings.
+
+DENOMINATOR: read 9 of 9 hunks of the net diff

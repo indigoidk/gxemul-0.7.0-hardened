@@ -1,0 +1,21 @@
+ASTRARETRO_BUNDLE_DEVICES6_ALIVE
+VERDICT: 2 findings (1 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 6 items checked clean
+
+F1 | src/devices/dev_irqc.c:108,127 | upstream, sibling left by #24 (8dd86b5a) | CODE | live at HEAD: yes | Guest MASK/UNMASK writes supply an unchecked IRQ selector to signed `1 << idata`. Selecting the highest IRQ causes signed-shift overflow; selectors beyond the operand width cause invalid shifts. #24 corrected the constructor’s mask but left both MMIO siblings unchanged. | Smallest check: trace `idata` from line 87 into both expressions; neither an unsigned conversion nor a range guard intervenes. | confidence high
+
+F2 | CHANGELOG.md:19715 | #24 (8dd86b5a) | RECORD | live at HEAD: yes | The record categorizes KN02/KN230’s casts as shift-UB corrections. Their initialization loops actually use `i=0..7` and `i=8..15`, respectively, so the original signed shifts were already defined. Supporting `REVIEW_FINDINGS.md:57` incorrectly generalizes the `i<32`, reaches-31 premise to these controllers. | Smallest check: compare the import and HEAD loop bounds at dev_kn02.c:160 and dev_kn230.c:152. | confidence med
+
+No matching concrete filing found in `OUTSTANDING_BUGS.md`; `shiftubcensus` records related general debt.
+
+Checked clean, with HEAD locations:
+
+- `src/devices/dev_irqc.c:175` — unsigned constructor shift is defined throughout `i=0..31`; unsigned mask storage preserves the high bit.
+- `src/devices/dev_kn02.c:166` — cast preserves all eight interrupt masks and their byte-sized consumers.
+- `src/devices/dev_kn02.c:98` — apparent high-byte shift hazard is unreachable: `csr[3]` remains `1`, and guest writes cannot replace it.
+- `src/devices/dev_kn230.c:158` — constructor masks remain correct throughout `i=8..15`.
+- `src/devices/dev_kn230.c:156` — unchanged signed shift used in interrupt names stays within range and matches the registered mask.
+- `src/devices/.index:60` — NE2000 entry matches its source COMMENT, generator output rule, and existing device registration.
+
+No explicit regression-pinning claim supports a TEST-GAP; checked relevant regression references, `gate_asan_sweep.sh`, and `diff_autodev_gen.sh`. Review was static and read-only; nothing built or executed.
+
+DENOMINATOR: read 4 of 4 hunks of the net diff

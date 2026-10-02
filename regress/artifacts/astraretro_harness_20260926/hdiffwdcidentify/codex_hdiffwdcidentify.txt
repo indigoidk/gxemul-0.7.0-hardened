@@ -1,0 +1,67 @@
+ASTRARETRO_HDIFFWDCIDENTIFY_ALIVE
+VERDICT: 16 findings (4 CANNOT-FAIL, 0 SELECTS-NOTHING, 2 STATUS-LAUNDERED, 0 ENCODING, 8 RECORD, 2 OTHER); 24 items checked clean
+
+Reviewed all 5,913 lines at `db8b1a33`, using Git objects only. Results below are static deductions; the proposed settling checks were not executed. No files were written or built.
+
+F1 | regress/diff_wdc_identify.c:1594 | #476 | STATUS-LAUNDERED | `row_null_atapi_st()` rejects signals only: a child exiting unsuccessfully prints `ok ... exit 1`. It also ignores `waitpid()` failure, which leaves the initialized status looking successful. | Feed the parent a child exit status of 1; require successful reap, normal termination, and status zero. | confidence high
+
+F2 | regress/diff_wdc_identify.c:3880 | #480 | STATUS-LAUNDERED | `row_every_opcode_resets()` skips failed allocations without counting skipped cases. Even thirteen skipped cases produce `ok ... 0 of 13`; its unconditional `rows++` preserves the final identity count. | Fail an allocation inside this sweep and require failure or an executed-case count of 13. | confidence high
+
+F3 | regress/diff_wdc_identify.c:1693 | #477 / #495 | CANNOT-FAIL | The mid-DATAIN row and the DATAOUT/COMPLETED cases at lines 1878/1894 start with ten queued bytes. HEAD’s later push guard refuses their additional two bytes. With or without #477’s dispatch phase conjunct, occupancy stays ten and all three report zero frees. The already-twelve companion rows still detect removal of that conjunct. | Establish twelve queued bytes in each tested phase before comparing dispatch behavior. | confidence high
+
+F4 | regress/diff_wdc_identify.c:2484 | #479 | CANNOT-FAIL | `row_stale_phase_write()` no longer supplies a stale phase: the WRITE command resets it to zero. Removing the dispatch’s packet-flag conjunct therefore still produces zero SCSI dispatches and one 512-byte write, passing both assertions despite lines 2456–2458 promising otherwise. | Explicitly establish `PHASE_CMDOUT` with the packet flag clear when testing that conjunct independently. | confidence high
+
+F5 | regress/diff_wdc_identify.c:3122 | #479 | CANNOT-FAIL | “a soft reset flushes the ring” starts after PACKET has already emptied it. Normal SOFT_RESET and a SOFT_RESET-specific omission of the flush both yield occupancy zero. The separate opcode census provides independent coverage. | Restage nonzero residue immediately before SOFT_RESET. | confidence high
+
+F6 | regress/diff_wdc_identify.c:5426 | #473 / #484 | CANNOT-FAIL | “arm: block 0 survives the push” observes `0x5a` both with the initial clamp and with its old placement restored. HEAD’s producer guard drops excess new bytes before overwriting the marker. The occupancy sibling still detects the regression: 262655 instead of 32768. | Check this named row separately with the original clamp placement restored. | confidence high
+
+F7 | regress/diff_wdc_identify.c:5252 | #485, 77b7c03a | RECORD | The task-file leg claims to close drive-qualified IRQ omissions, but line 5266 explicitly sets `drive=0`; every other completion-IRQ leg also uses drive zero. Restricting those completion interrupts to drive zero preserves the tested `1/1` result. | Issue a slave-drive command with its pending IRQ cleared and require a new assertion. | confidence high
+
+F8 | regress/diff_wdc_identify.c:3857 | #480 | RECORD | The claimed enumeration of all command-switch arms contains thirteen opcodes, omitting `WDCC_DIAGNOSE` and all six `WDCC_SEC_*` cases. The later IRQ sweep starts with empty rings and cannot substitute for their residue-reset checks. | Compare the array against the twenty named switch cases and stage residue for the seven omissions. | confidence high
+
+F9 | regress/diff_wdc_identify.c:4655 | #483 | RECORD | “Two bytes is the least” and “any threshold … is caught” are false: both device write arms support one-byte stores. A purge restricted to occupancy at least two passes the tested sizes, two and sixteen, while leaving a one-byte orphan untouched. | Stage one byte through the data port, assert SRST, and check that it disappears. | confidence high
+
+F10 | regress/diff_wdc_identify.c:2677 | #478 | OTHER | The announcement checks accept `(first, second, other)=(2,0,2)`, although the stated contract is one emission per device. The message-specific counter already excludes the unrelated bad-width notice, so duplicated first emissions escape unnecessarily. | Require `first == 1` and `other == 1`; use `(2,0,2)` as the negative control. | confidence high
+
+F11 | regress/diff_wdc_identify.c:4635 | #483 | OTHER | The orphan-ring row initializes its third fixture without freeing the second. `altctl_fresh()` overwrites the sole allocation pointer, leaking 262,656 bytes on every ordinary run. | Account for allocations/frees across the four legs; free the second fixture before reinitialization. | confidence high
+
+F12 | regress/diff_wdc_identify.c:5043 | #484 | RECORD | R10 claims the weakened multiplier bound performs a 1024-byte bulk copy and destroys 511 unread bytes. Its actual `head=N−513, tail=0` makes `head+1024>N`, selecting the bytewise path. The producer guard preserves unread bytes; the occupancy assertion detects partial admission instead. | Evaluate the linear-copy predicate using R10’s actual pointers and requested length. | confidence high
+
+F13 | regress/diff_wdc_identify.c:1579 | #476 | RECORD | The NULL-transfer fixture claims to reproduce exactly the two-access guest state, but assigns `PHASE_DATAIN`. PACKET actually establishes `PHASE_CMDOUT`. The row remains useful as a synthetic NULL-guard test, but its claimed provenance is false. | Compare the fixture with the PACKET command arm, or construct the state through that arm. | confidence high
+
+F14 | regress/diff_wdc_identify.c:5554 | #410 / #411 | RECORD | The wide-geometry row says its values remain unreachable only because geometry overrides are broken. HEAD already contains #414’s working override calculation and explicit 255 limits; floppy SPT is also clamped. The fixture’s 300/770 values are blocked by those bounds. | Trace valid and oversized overrides through HEAD’s parser and recalculation. | confidence high
+
+F15 | regress/diff_wdc_identify.c:2726 | #479 / #533 | RECORD | The Device Control row’s warrant still says landisk accesses cannot reach the handler because it is mapped at `+0x206`. HEAD maps landisk at `+0x2c`. `OUTSTANDING_BUGS.md` already records the underlying `landiskaux` issue as **FIXED by #533**, including the delivered accesses. | Compare this warrant with HEAD’s `MACHINE_LANDISK` initialization case. | confidence high
+
+F16 | regress/diff_wdc_identify.c:4356 | #482 | RECORD | The comment says the combined SRST row asserts all four armed states, including phase. Its condition at line 4141 checks only writer, packet flag, and occupancy; a surviving phase is accepted by that row. Separate packet rows do check phase. | Include the fourth state in the combined assertion or narrow its stated coverage. | confidence high
+
+I found no existing filing for these specific harness defects. Related entries such as `wdcaltfixture`, `wdcgeomparse`, and `wdcxferleak` describe different gaps.
+
+Checked clean, with each item scoped to the stated property:
+
+- C1 | :208 | Includes the real device implementation.
+- C2 | :241 | Per-drive capacity lookup poisons unexpected IDs.
+- C3 | :474 | Uses an initialized CPU instead of the former NULL fixture.
+- C4 | :518 | Compares both capacity pairs against an independent expected count.
+- C5 | :547 | Word-53 anchor distinguishes byte order.
+- C6 | :570 | Slave capacity and geometry have distinct expected values.
+- C7 | :631 | Secondary-controller ID and geometry checks are independent.
+- C8 | :778 | Re-arm length, occupancy, and refill-source marker discriminate their respective defects.
+- C9 | :1074 | Short final refill distinguishes 4998 bytes from a constant 32768.
+- C10 | :1149 | Odd-length checks separately assert completion and cursor accounting.
+- C11 | :1227 | Mid-transfer check rejects consuming the whole remainder.
+- C12 | :1299 | Two-byte access exercises a one-byte remainder.
+- C13 | :1380 | Mixed-width chunk boundary checks re-arm length and source marker.
+- C14 | :1959 | Legal CDB dispatch control rejects suppressing every dispatch.
+- C15 | :2036 | Oversized CDB occupancy is independently observed.
+- C16 | :2353 | Partial-sector checks pin write timing and final size.
+- C17 | :2791 | Routine Device Control preserves writer state and sector content.
+- C18 | :3349 | WRITEMULTI checks both premature refusal and exact completion.
+- C19 | :3486 | Little-endian coverage includes a distinguishable byte-order control.
+- C20 | :3674 | Rejected-command reset requires an actual ABRT result.
+- C21 | :4813 | Reset sweep requires all 256 cases and checks latch plus purge.
+- C22 | :4910 | Ring overflow checks independently marked data and FIFO order.
+- C23 | :5744 | Comparator self-checks exercise mismatches, equality, zero, wide values, and both capacity disjuncts.
+- C24 | :5892 | Exact row count, comparator tallies, self-check result, verdict token, and final exit agree.
+
+DENOMINATOR: read 1 of 1 files in full

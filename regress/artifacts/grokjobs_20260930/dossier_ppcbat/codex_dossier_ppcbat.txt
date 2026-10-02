@@ -1,0 +1,85 @@
+GROKJOBS_DOSSIER_PPCBAT_ALIVE
+VERDICT: 1 false or unsupported sentences
+
+The finding and chosen disposition survive the audit. One sentence overstates the existing page-fault machinery.
+
+All repository references below are at **`db8b1a33`**. “Dossier” means the named `codex_dossier_ppcbat.txt`; manual references mean the supplied `_scratchpad/ppc_pem32_rev2_2001.txt`.
+
+1. **Overbroad precedent — dossier:174**
+
+   > “The nearest precedent is in the same translator: page protection failures already select `DSISR_PROTECT`, populate DAR, add `DSISR_STORE` for a write, and call DSI/ISI rather than ending the process.”
+
+   This needs two qualifications. The `PPC_603` branch selects software-reload exceptions instead; only the non-603 **data-access** branch populates DAR and DSISR. The instruction branch calls ISI without supplying its protection cause. (`src/cpus/memory_ppc.c:307–323`; `src/cpus/cpu_ppc.c:323–327`.)
+
+   **Corrected sentence:** “For unsuppressed page-protection failures outside the `PPC_603` path, data accesses populate DAR and `DSISR_PROTECT`, add `DSISR_STORE` for writes, and call DSI; instruction accesses call ISI without supplying its protection-cause bit.”
+
+   Dossier:190–191 recognizes these limitations, but that does not make the unqualified sentence accurate.
+
+**(a) Member 5 is right; delivery code exists but is incomplete.**
+
+A matched BAT denial currently reaches the explicit `exit(1)` before the suppression check. The manual requires DSI for prohibited data accesses and ISI for prohibited instruction fetches. Suppressed probes require a failure return. (`src/cpus/memory_ppc.c:273–275,299–300`; manual:13312,13334–13336.)
+
+The actual delivery machinery is `ppc_exception()`:
+
+- SRR0 receives `cpu->pc`: `src/cpus/cpu_ppc.c:321`.
+- SRR1 receives masked MSR: `src/cpus/cpu_ppc.c:323–327`.
+- Only EE, RI and PR are cleared: `src/cpus/cpu_ppc.c:333–335`.
+- The vector PC is selected and execution pointers rebuilt: `src/cpus/cpu_ppc.c:337–344`.
+
+Thus this is an existing delivery implementation, not merely exception constants. However, the dossier correctly identifies missing ISI protection state and uncleared IR/DR. Its warning about downstream termination is also supported: failed instruction reads still exit, and dyntrans has an exception-handler-translation exit. (`src/cpus/cpu_ppc_instr.c:4115–4119`; `src/cpus/cpu_dyntrans.c:720–732`.)
+
+The integration discussion also omits other exception-entry state: the manual requires clearing POW, FP, FE0, FE1, SE and BE, and copying ILE into LE. The helper’s mask does none of those. This is an omission, not another false sentence, because the dossier does not claim its integration list is exhaustive. (`src/cpus/cpu_ppc.c:335`; manual:11751–11757,11803–11809.)
+
+Vector arithmetic checks out: DSI is `3 × 0x100 = 0x300`; ISI is `4 × 0x100 = 0x400`. Adding the IP base `0xfff00000` produces `0xfff00300` and `0xfff00400`. (`src/include/cpu_ppc.h:252–253`; `src/cpus/cpu_ppc.c:337–339`; manual:11767,11811.)
+
+**(b) Missed siblings and qualifications.**
+
+The claimed terminating-site inventory for `memory_ppc.c` is complete: the explicit exits are at **94, 98, 265, 275 and 288**; that file contains no CPU-stop assignment. (`src/cpus/memory_ppc.c:1–328`.)
+
+The surrounding files contain omitted siblings:
+
+- **LL/SC encoding-error exits:** the load-linked branch exits for its rejected Rc encoding; the store-conditional branch exits for its rejected Rc encoding. These remain beside the cited #216 failure-return fixes. (`src/cpus/cpu_ppc_instr.c:2305–2314,2331–2333,2357–2362`.)
+- **Illegal/unimplemented decoding stops the virtual CPU:** the shared `bad` path sets `cpu->running = 0`; PPC includes that implementation. This also matters to the dossier’s mentioned `mtmsr` rejection path. (`src/cpus/cpu_dyntrans.c:1983–2014`; `src/cpus/cpu_ppc_instr.c:4708–4711,5430–5432`.) The general dyntrans `bad` halt is recorded as an intentional unimplemented-instruction signal. (`OUTSTANDING_BUGS.md:2690–2693`.)
+- **Internal-error exit:** `instr(invalid)` terminates the host. Guest reachability is **not checked**. (`src/cpus/cpu_ppc_instr.c:241–244`.)
+- **Dyntrans invariant exits:** negative reference counts, oversized physical addresses in the 32-bit update path, and L2/L3 reference-count or dummy-table checks also terminate. Guest reachability is **not checked**. (`src/cpus/cpu_dyntrans.c:1155–1157,1177–1180,1502–1506,1623–1630,1643–1651`.) Additional checks are conditional on `BUGHUNT`, rather than ordinary unconditional paths. (`src/cpus/cpu_dyntrans.c:1062–1104,1165–1176,1661–1682,1742–1766`.)
+
+Another correction concern is PC capture: LL/SC lacks the generic load/store handler’s explicit faulting-PC synchronization before its memory calls, while exception entry copies `cpu->pc` directly to SRR0. Its runtime consequence is **not checked**. (`src/cpus/cpu_ppc_instr.c:2276–2374`; `src/cpus/cpu_ppc_instr_loadstore.c:57–61`; `src/cpus/cpu_ppc.c:321`.)
+
+Dossier:206 should also say “before dispatch of the **denied chunk**.” Earlier permitted chunks of a straddling request may already have completed. I have not counted this as another false sentence because the dossier does not expressly promise whole-access atomicity. (`src/cpus/memory_rw.c:202–226,248–268`.)
+
+**The remaining substantive checks passed.**
+
+The model classifications, extended-BAT capability gate and named machine defaults agree with the committed source. (`src/include/cpu_ppc.h:75–88`; `src/cpus/cpu_ppc.c:138`; `src/cpus/memory_ppc.c:114–117,255–288`; `src/machines/machine_macppc.c:173–211`; `src/machines/machine_mvmeppc.c:165–204`; `src/machines/machine_pmppc.c:76–86`; `src/machines/machine_prep.c:156–188`; `src/machines/machine_test.c:448–473`.)
+
+The BAT arithmetic is correct:
+
+| Scan | Enumerated upper/lower SPR pairs |
+|---|---|
+| Base instruction | `0x210/0x211`, `0x212/0x213`, `0x214/0x215`, `0x216/0x217` |
+| Base data | `0x218/0x219`, `0x21a/0x21b`, `0x21c/0x21d`, `0x21e/0x21f` |
+| Extended instruction | `0x230/0x231`, `0x232/0x233`, `0x234/0x235`, `0x236/0x237` |
+| Extended data | `0x238/0x239`, `0x23a/0x23b`, `0x23c/0x23d`, `0x23e/0x23f` |
+
+These follow from the scan bounds, `base_spr + i * 2`, and the declared bases. (`src/cpus/memory_ppc.c:48–51,85–90,101–117`; `src/include/thirdparty/ppc_spr.h:119–134,146–183`.)
+
+Protection values are `00 = 0`: denied; `01 = 1`: read-only; `10 = 2`: read/write; `11 = 3`: read-only. (`src/include/thirdparty/ppc_bat.h:97–101`; `src/cpus/memory_ppc.c:67–75`; manual:13322–13336.)
+
+The positive record references are accurate: #10, #11, #216 and `excvecrecurse` are present where cited. (`OUTSTANDING_BUGS.md:2614–2616,2670–2671,21950–21951`; `CHANGELOG.md:20119`.) Searches across the committed outstanding file found no dedicated BAT-denial or 601/64-bit-translation entry, supporting the dossier’s carefully limited “no dedicated entry found” wording. The search scope was `OUTSTANDING_BUGS.md:1–22669`; this is a search result, not proof that no differently worded record exists.
+
+**(c) DENOMINATOR:** **163 substantive sentence-equivalents checked: 162 supported, 1 overbroad; 0 accepted on trust.** This counts standalone factual headings and table assertions, with quoted code attached to its introducing assertion.
+
+| Dossier portion | Checked |
+|---|---:|
+| Opening, lines 2–8 | 5 |
+| Source path, lines 10–96 | 41 |
+| Reachability/models/machines, lines 98–127 | 23 |
+| Hardware, lines 129–154 | 13 |
+| Siblings, lines 156–170 | 22 |
+| Disposition/integration, lines 172–194 | 28 |
+| Regression requirements, lines 196–220 | 22 |
+| Records/contracts, lines 222–244, plus named-regression assertion at 256 | 9 |
+| **Total** | **163** |
+
+The prior reviewer’s execution history, claimed reading/search history, and assurances about what its agents did not use are **not checked**: the permitted source files cannot establish those historical actions. They are excluded from the substantive verdict. Runtime behavior was not tested.
+
+This audit itself had a scope violation: one delegated search unexpectedly returned excluded working-tree artifact snippets. Those results were discarded, but the output was truncated, so the complete accidental scope is unknown. The findings above rely on separately scoped committed reads and the permitted manual. No files were written and no build, test or emulator was executed.

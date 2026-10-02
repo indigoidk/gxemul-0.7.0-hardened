@@ -1,0 +1,239 @@
+GROKJOBS_DOSSIER_GDROMDMA_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+---
+
+### Audit of Items 1–7 in `codex_dossier_gdromdma.txt`
+
+Every factual sentence across all seven sections of the dossier has been audited against the committed source tree at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC), the hardware manuals in [`C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/), and [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md). No false or unsupported sentence was identified. The factual claims, arithmetic derivations, and citations are verified below by section.
+
+---
+
+#### 1. Finding's Truth (`TRUE WITH CHANGES`)
+
+- **Guest-to-handler instruction decoding**:
+  - Instruction `0x2782` is defined as `MOV_L_R8_AT_R7 = 0x2782` in [`regress/gdrom_default_probe.py:220`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L220).
+  - The SH dyntrans decoder fetches two instruction bytes at [`src/cpus/cpu_sh_instr.c:4045-4057`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4045-L4057), swaps endianness if little-endian at [`:4065-4068`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4065-L4068), and computes:
+    - `main_opcode = iword >> 12 = 0x2782 >> 12 = 2` ([`:4070`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4070))
+    - `r8 = (iword >> 8) & 0xf = (0x2782 >> 8) & 0xf = 7` ([`:4071`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4071))
+    - `r4 = (iword >> 4) & 0xf = (0x2782 >> 4) & 0xf = 8` ([`:4072`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4072))
+    - `lo4 = iword & 0xf = 0x2782 & 0xf = 2` ([`:4074`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4074))
+  - The default operand assignments bind `ic->arg[0] = &cpu->cd.sh.r[r4]` (source register `Rm = R8`) and `ic->arg[1] = &cpu->cd.sh.r[r8]` (destination address register `Rn = R7`) at [`src/cpus/cpu_sh_instr.c:4086-4088`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4086-L4088).
+  - Main opcode `0x2` with `lo4 == 0x2` dispatches to `mov_l_store_rm_rn` at [`src/cpus/cpu_sh_instr.c:4298-4300`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L4298-L4300).
+  - The execution handler executes `uint32_t addr = reg(ic->arg[1]); SH_ALIGN_CHECK_ST(addr, 3); uint32_t data = reg(ic->arg[0]);` at [`src/cpus/cpu_sh_instr.c:1410-1413`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L1410-L1413). On a device write miss in host store tables, it invokes `cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data, sizeof(data), MEM_WRITE, CACHE_DATA)` at [`:1424-1425`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L1424-L1425).
+
+- **Device registration and dispatch**:
+  - The Dreamcast machine initializes GDROM DMA via `memory_device_register(..., "gdrom_dma", 0x005f7400, 0x80, dev_dreamcast_gdrom_dma_access, d, DM_DEFAULT, NULL)` in [`src/devices/dev_dreamcast_gdrom.c:1696-1697`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1696-L1697).
+  - Device lookup tests `paddr >= baseaddr && paddr < endaddr` at [`src/cpus/memory_rw.c:480-481`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L480-L481), subtracts `baseaddr` at [`:494`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L494), and calls the device callback at [`:587-589`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L587-L589).
+
+- **Deterministic diskless staging sequence**:
+  - `GDROM_CNTLO` (`0x90`): byte write `0x98` updates `d->cnt = (d->cnt & 0xff00) | 0x98` at [`src/devices/dev_dreamcast_gdrom.c:1194`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1194).
+  - `GDROM_CNTHI` (`0x94`): byte write `0x01` updates `d->cnt = (d->cnt & 0x00ff) | (0x01 << 8)` at [`:1202`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1202). Evaluated value: `(0x01 << 8) | 0x98 = 0x0198 = 408`.
+  - `GDROM_COND` (`0x9c`): write `0xa0` sets `d->busy |= 0x08` and resets `d->cmd_count = 0` at [`:1277-1281`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1277-L1281).
+  - Six 16-bit writes to `GDROM_DATA` (`0x80`) append 12 bytes (`0x14` followed by eleven zeroes) to `d->cmd` at [`:1111-1112`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1111-L1112); reaching `cmd_count == 12` clears `busy & 0x08` and calls `handle_command(cpu, d)` at [`:1113-1115`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1113-L1115).
+  - `d->cmd[0] == 0x14` selects TOC at [`:685`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L685); requires `d->cnt == 408` at [`:734-743`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L734-L743).
+  - `alloc_data(d)` sets `d->data_len = d->cnt = 408` and mallocs `d->data` at [`:643-646`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L643-L646).
+  - Staged buffer initialization fills `d->data` with `0xff` at [`:753`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L753) and populates the first two track entries at [`:755-763`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L755-L763):
+    - `d->data[0] = 0x10`
+    - `d->data[1] = 0x00`
+    - `d->data[2] = 0x00`
+    - `d->data[3] = 0x96`
+    - `d->data[4] = 0x41`
+    - `d->data[5] = 0x00`
+    - `d->data[6] = 0x2e`
+    - `d->data[7] = 0x4c`
+
+- **DMA register configuration and triggering**:
+  - Writes to DMA registers read incoming data via `idata = memory_readmax64(cpu, data, len)` at [`:1372-1373`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1372-L1373).
+  - Registers `+0x04` (dest), `+0x08` (length), `+0x0c` (count), and `+0x14` (enable) break out of the switch at [`:1381-1385`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1381-L1385) and are written into `d->dma_reg[relative_addr / 4]` at [`:1675-1676`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1675-L1676).
+  - Writing `+0x18` triggers DMA when `idata != 0` ([`:1389`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1389)), `dma_reg[0x0c/4] == 1` ([`:1390`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1390)), `dma_reg[0x14/4] == 1` ([`:1391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1391)), and `d->data != NULL` ([`:1395`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1395)).
+  - Transfer initiation masks destination `dst &= 0x0fffffff` at [`:1501`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1501) and issues `cpu->memory_rw(cpu, cpu->mem, dst, d->data, d->data_len, MEM_WRITE, PHYSICAL)` at [`:1502-1503`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1502-L1503).
+  - `PHYSICAL` flag makes `paddr = vaddr = 0x005f7418` at [`src/cpus/memory_rw.c:245-247`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L245-L247).
+  - Clamping calculation: relative address is `paddr - base = 0x005f7418 - 0x005f7400 = 0x18 = 24`. Window length is `0x80 = 128`. Because `24 + 408 = 432 > 128`, length is clamped to `mem->devices[i].length - paddr = 128 - 24 = 104 = 0x68` at [`src/cpus/memory_rw.c:495,523`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L495-L523).
+  - The nested call dispatches back to `dev_dreamcast_gdrom_dma_access` with `relative_addr = 0x18` and `len = 104` at [`:587-589`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L587-L589).
+
+- **Folding arithmetic in `memory_readmax64`**:
+  - Configured little-endian at [`src/cpus/cpu_sh.c:96`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L96).
+  - For `len = 104`, loop in [`src/core/memory.c:72-75`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L72-L75) runs `for (i = 103; i >= 0; i--) { x <<= 8; x |= buf[i]; }`.
+  - The 104 iterations visit indices `103, 102, ..., 1, 0`. Each iteration shifts `x` left by 8 bits. In a 64-bit word, only the last 8 iterations (`i = 7, 6, 5, 4, 3, 2, 1, 0`) retain their bits in `x`. Bytes 8 through 103 are shifted out past bit 63.
+  - Resulting folded value:
+    `idata = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24) | (b4 << 32) | (b5 << 40) | (b6 << 48) | (b7 << 56)`
+    Substituting bytes:
+    `0x10 | (0x00 << 8) | (0x00 << 16) | (0x96 << 24) | (0x41 << 32) | (0x00 << 40) | (0x2e << 48) | (0x4c << 56)`
+    `= 0x4c2e004196000010`.
+  - Nonzero predicate holds: `idata != 0`. The low 32 bits are `0x96000010`.
+  - Non-tail recursion confirmed: work remaining after the recursive call includes `SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_GDROM_DMA)` at [`src/devices/dev_dreamcast_gdrom.c:1505`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1505), `idata = 0` at [`:1507`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1507), `break` at [`:1538`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1538), and the tail store `d->dma_reg[...] = idata` at [`:1676`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1676).
+  - `fatal()` in [`src/core/debugmsg.c:384-391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) merely formats and prints via `va_debug()` and returns without exiting. `cpu->running` is tested only after the handler returns at [`src/cpus/memory_rw.c:591-592`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L591-L592).
+
+- **Other self-aimed destinations**:
+  - Clamping for all 32 word offsets (`0x00` through `0x7c`): `len = 0x80 - offset`.
+  - Offset `0x00`: clamped `len = 0x80 = 128`. In [`src/core/memory.c:60-63`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L60-L63), `if (len & MEM_PCI_LITTLE_ENDIAN)` (defined as 128 in [`src/include/memory.h:98`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/memory.h#L98)) tests true, masking `len &= ~128`, leaving `len = 0`. The read loop does not execute, returning `idata = 0`. Stored into `dma_reg[0] = 0`.
+  - Offsets `0x04` through `0x7c`: All clamped lengths `0x7c` down to `0x04` (124 down to 4) have the lower 4 or 8 bytes populated from `b0..b3` or `b0..b7`. Each 32-bit register store truncates to `V4 = 0x96000010`.
+  - Unaligned destinations: tested at [`src/devices/dev_dreamcast_gdrom.c:1626-1629`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1626-L1629), returning early before tail store.
+  - Aliases: `dst &= 0x0fffffff` at [`:1501`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1501) maps all 16 values of `(N << 28) | 0x005f7418` for `N in 0..15` (`0x005f7418` through `0xf05f7418`) to `0x005f7418`.
+
+---
+
+#### 2. Who Can Reach It
+
+- **Privilege and translation**:
+  - `MOV.L` executes regardless of CPU privilege mode in [`src/cpus/cpu_sh_instr.c:1408-1430`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c#L1408-L1430); `SH_SR_MD` is bit 30 (`0x40000000`) in [`src/include/cpu_sh.h:194`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_sh.h#L194).
+  - Translation off (`!(mmucr & SH4_MMUCR_AT)`): U0/P0 addresses `< 0x80000000` return physical address `vaddr & 0x1fffffff` with return code 2 (writable) at [`src/cpus/memory_sh.c:342-345`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L342-L345).
+  - Translation on: unprivileged stores require `PR=3` and dirty bit `D=1` at [`:218-227`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L218-L227).
+  - P1/P2 addresses (`0x80000000..0xbfffffff`): user access causes `EXPEVT_TLB_MISS_ST` at [`:359-370`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L359-L370); privileged access passes through masked with `0x1fffffff` at [`:373-376`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c#L373-L376).
+  - CPU reset state initializes `sr = SH_SR_MD | SH_SR_IMASK` at [`src/cpus/cpu_sh.c:123`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L123).
+
+- **Machine & CPU instantiations**:
+  - Exactly one call to `device_add(machine, "dreamcast_gdrom")` exists across `src/machines/`, in [`src/machines/machine_dreamcast.c:148`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c#L148).
+  - Dreamcast machine registered as `"Dreamcast", MACHINE_DREAMCAST`, alias `dreamcast` at [`:177-182`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c#L177-L182); default CPU `"SH7750"` at [`:162-166`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c#L162-L166).
+  - HPCsh ([`src/machines/machine_hpcsh.c:89,102`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_hpcsh.c#L89)), Bare SH / Test SH ([`src/machines/machine_test.c:535,541`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L535)), and Landisk ([`src/machines/machine_landisk.c:125`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_landisk.c#L125)) do not add `dreamcast_gdrom`.
+  - Recognized SH names in `SH_CPU_TYPE_DEFS`: `"SH7708R"`, `"SH7750"`, `"SH7750R"`, `"SH7751R"` in [`src/include/cpu_sh.h:61-67`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_sh.h#L61-L67); recognized in [`src/cpus/cpu_sh.c:77-97`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L77-L97), with comment at [`:33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L33) noting SH4-only emulation.
+  - `-C` flag sets `m->cpu_name` in [`src/core/main.c:321`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/main.c#L321), and `machine_default_cputype` preserves non-null `m->cpu_name` in [`src/machines/machine.c:666-667`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L666-L667).
+  - PROM disabled does not bypass `device_add`: line 148 runs before `if (!machine->prom_emulation) return;` at [`src/machines/machine_dreamcast.c:155-156`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c#L155-L156).
+
+---
+
+#### 3. What the Hardware Does
+
+- **Manual review**:
+  - `_scratchpad/ata2_x3t10_948d.txt:4-5,19-21`: generic ATA-2 host/drive interface standard.
+  - `_scratchpad/sh4_programming.txt:135-138`: scopes itself to SH-4 instructions; refers hardware peripheral details to hardware manuals.
+  - `_scratchpad/sh7750_hardware.txt:249-265`: scopes itself to SH7750 CPU on-chip modules.
+  - Source comment at [`src/devices/dev_dreamcast_gdrom.c:1654-1658`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1654-L1658) explicitly documents that `0x005f74xx` is Sega Holly ASIC, outside the SH7750 manual, and the repository holds no documentation for it.
+  - Conclusion that hardware behavior is not checked and must not be guessed is accurate.
+
+---
+
+#### 4. Siblings
+
+- In [`src/devices/dev_dreamcast_gdrom.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c), there are no assignments to `cpu->running = 0`.
+- The sole remaining active literal `exit(1)` is at [`src/devices/dev_dreamcast_gdrom.c:1108`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1108) inside `if (d->busy & 0x08) { if (d->cmd_count >= 12) { ... exit(1); } }`.
+- Modeled transitions enforce `d->cmd_count` at the guard to be in `{0, 2, 4, 6, 8, 10}` because `busy & 0x08` is set only on `COND=0xa0` where `cmd_count = 0` ([`:1277-1281`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1277-L1281)), stores add 2 ([`:1111-1112`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1111-L1112)), and exactly at 12 `busy & 0x08` is cleared ([`:1113-1115`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1113-L1115)).
+- Recorded as `gdromexitsix` in [`OUTSTANDING_BUGS.md:9404-9433`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L9404-L9433) with the identical enumeration and disposition `KEEPS ITS exit(1)`.
+- Inactive commented-out exits exist at [`:1143`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1143) and [`:1186`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1186).
+- `CHECK_ALLOCATION` appears at [`:645`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L645) and [`:1689`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1689), expanding to `FAILURE("Out of memory")` and `exit(1)` in [`src/include/misc.h:181-193`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/misc.h#L181-L193).
+
+---
+
+#### 5. The Option Set
+
+- Member 3 (decline and announce once per device) aligns with existing precedent in the same start arm:
+  - No staged data decline: [`src/devices/dev_dreamcast_gdrom.c:1465-1472`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1465-L1472) (`GDROM_W_DMANODATA`, `idata = 0; break;`).
+  - Unsupported arming decline: [`:1521-1536`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1521-L1536) (`GDROM_W_DMAARM`, `idata = 0;`).
+- Machinery present:
+  - Warning carrier: `uint32_t warned` in `struct dreamcast_gdrom_data` at [`:161`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L161).
+  - Bit positions enum: [`:223-236`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L223-L236) (currently 11 bits: `GDROM_W_LEN_B` through `GDROM_W_CONDVAL_B`).
+  - Disjoint mask definitions: [`:238-248`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L238-L248).
+  - Compile-time carrier-width bound assertion: [`:327-329`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L327-L329).
+  - SH4 DMAC precedent: latched declines for unsupported transfer size and modes in [`src/devices/dev_sh4.c:658-665,672-693`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L658-L665).
+- Rejection of other members:
+  - Member 5 (exception): `sh_exception` vectors to `VBR+0x100` at [`src/cpus/cpu_sh.c:895,955`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L895) with TLB/address-error vectors at [`:1023-1033,1075-1081`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L1023-L1033). However, `memory_rw` device access failure dispatch at [`src/cpus/memory_rw.c:603-624`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L603-L624) contains exception handlers only under `#ifdef MEM_MIPS` and `#ifdef MEM_M88K`, lacking SH delivery code.
+  - Recorded omitted dispositions in [`OUTSTANDING_BUGS.md:17059-17071`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L17059-L17071) (`DIAGNOSE AND STOP EMULATION` and `CHOOSE ANOTHER DEFINED RESULT`) and hybrid in [`CHANGELOG.md:2317-2320`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L2317-L2320).
+
+---
+
+#### 6. What a Regression Check Would Observe
+
+- Channel matrix accurately predicts guest execution resumption, diagnostic latching containing `(once)`, idle zero readback at `+0x18` via `idata = 0` reaching the tail store at [`src/devices/dev_dreamcast_gdrom.c:1675-1679`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1675-L1679), no completion event at [`:1505`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1505) matching [`:1432-1435`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1432-L1435), and unchanged descriptor registers.
+- Preservation of neighbouring behaviors:
+  - Ordinary armed DMA to RAM: [`:1390-1394,1501-1507,1675-1679`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1390-L1394).
+  - Shadow register accesses for `+0x04..+0x14`: [`:1375-1385,1675-1679`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1375-L1385).
+  - No-data and bad-arming declines: [`:1465-1472,1521-1536`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1465-L1472).
+  - Any nonzero start: [`:1387-1389`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1387-L1389).
+  - Byte-width access support for Linux poll/start: documented at [`:1660-1666`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1660-L1666).
+
+---
+
+#### 7. Records
+
+- **Record 1**: Comment at [`src/devices/dev_dreamcast_gdrom.c:1551-1555`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1551-L1555), [`CHANGELOG.md:18401-18407`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L18401-L18407), and [`regress/gdrom_default_probe.py:655-660`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L655-L660) claiming "decline" in this window means store-and-return which the five implemented cases already do is overbroad: armed self-targeting `+0x18` starts re-enter and never reach the return tail.
+- **Record 2**: Comment at [`src/devices/dev_dreamcast_gdrom.c:1493-1496`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1493-L1496), [`CHANGELOG.md:18242-18244`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L18242-L18244), and [`OUTSTANDING_BUGS.md:20398-20408`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L20398-L20408) stating `memory_rw` moves `d->data_len` is false for device addresses subject to truncation/clamping in [`src/cpus/memory_rw.c:523`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L523).
+- **Record 3**: Comment at [`src/devices/dev_dreamcast_gdrom.c:1449-1452`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1449-L1452) and [`OUTSTANDING_BUGS.md:9643-9650`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L9643-L9650) making the no-completion choice dependent on external driver claims is contradicted by [`CHANGELOG.md:17788-17799`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L17788-L17799).
+- Check confirms no entry in [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md) records this exact DMA self-reentry defect.
+
+---
+
+### (a) Dossier's Chosen Disposition Member
+
+**The dossier's choice of Member 3 (decline and announce once per device) is correct.**
+
+1. **Hardware manual justification**:
+   - There is no Holly ASIC documentation in the repository or on disk ([`src/devices/dev_dreamcast_gdrom.c:1654-1658`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1654-L1658)).
+   - Without an authentic hardware oracle, inventing bus fault behavior (Member 4 or Member 6) or synthetic completion violates the project's hardening principles.
+   - Declining the self-targeting launch, setting `idata = 0`, and breaking to the common return tail avoids host exhaustion while preserving existing guest driver semantics.
+
+2. **Presence of machinery on this device and CPU**:
+   - The warning carrier `uint32_t warned` is present in `struct dreamcast_gdrom_data` at [`src/devices/dev_dreamcast_gdrom.c:161`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L161).
+   - The warning bits enum is defined at [`:223-236`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L223-L236) and currently defines 11 bit indices (`GDROM_W_LEN_B` [0] through `GDROM_W_CONDVAL_B` [10], with `GDROM_W_NBITS = 11`).
+   - The compile-time carrier bounds assertion `gdrom_w_fits_its_carriers` at [`:327-329`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L327-L329) verifies that `GDROM_W_NBITS <= 8 * sizeof(warned)` (32 bits). Exactly 21 unallocated bit positions remain in `warned` to host a new `GDROM_W_DMASELF_B` flag.
+
+3. **Absence of CPU exception delivery machinery (Member 5)**:
+   - If an exception were proposed, `sh_exception()` at [`src/cpus/cpu_sh.c:893-956`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L893-L956) handles internal CPU exceptions (TLB misses, CPU address errors).
+   - However, device access failure exception delivery inside `memory_rw` occurs at [`src/cpus/memory_rw.c:603-625`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L603-L625):
+     ```c
+     608: #ifdef MEM_MIPS
+     609: 					mips_cpu_exception(cpu, ...);
+     613: #endif
+     614: #ifdef MEM_M88K
+     620: 					m88k_exception(cpu, ...);
+     623: #endif
+     624: 					return MEMORY_ACCESS_FAILED;
+     ```
+   - Delivery lines exist only for MIPS and M88K. There is no `#ifdef MEM_SH` branch in `memory_rw.c:603-625`. Therefore, hardware bus-error or device-failure exception delivery from `memory_rw` is not implemented for the SH CPU family in this codebase. Member 5 would require inventing non-existent bus dispatch machinery.
+
+---
+
+#### (b) Siblings the Dossier Missed in the Same Files
+
+In Section 4, the dossier defined siblings exclusively in terms of "terminating calls or CPU stops" (`exit(1)`, `cpu->running = 0`). By scoping siblings strictly to termination rather than to the defect's true semantic class—**DMA re-entry and DMA path hygiene**—the dossier missed several direct siblings in the same product file and machine:
+
+1. **Unlatched `fatal()` on the accepted DMA path in `src/devices/dev_dreamcast_gdrom.c`**:
+   - At [`src/devices/dev_dreamcast_gdrom.c:1497-1499`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1497-L1499):
+     `fatal("[ dreamcast_gdrom_dma: Transfering %i bytes to 0x%08" PRIx32 " (guest asked for %i) ]\n", (int) d->data_len, dst, length);`
+   - This diagnostic sits on the accepted transfer path outside any `warned` latch. On every recursive frame of the self-destination bug—as well as on every normal legal guest DMA transfer—it prints unconditionally, flooding the console.
+   - Recorded as an open defect in [`OUTSTANDING_BUGS.md:20069-20090`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L20069-L20090) (`gdromdmaxferflood`) and [`OUTSTANDING_BUGS.md:21349-21381`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L21349-L21381) (`gdromdmaflood`).
+
+2. **Cross-window DMA self-targeting within `src/devices/dev_dreamcast_gdrom.c`**:
+   - `dev_dreamcast_gdrom.c` registers two adjacent windows: the PIO/control window at `0x005f7000` (length `0x100`, [`:1693`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1693)) and the DMA window at `0x005f7400` (length `0x80`, [`:1696`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1696)).
+   - The dossier evaluated DMA targeting the DMA window (`0x005f7400..0x005f747c`), but did not evaluate DMA transfers targeting the GDROM control window (`0x005f7000..0x005f70ff`). Staged DMA data written into `0x005f7000` directly modifies `dev_dreamcast_gdrom_access` registers (`GDROM_DATA`, `GDROM_COND`, `GDROM_CNTLO/HI`), mutating device state during transfer.
+
+3. **Persistent staged data on DMA completion (`gdromdmaclear`)**:
+   - In [`src/devices/dev_dreamcast_gdrom.c:1505-1507`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L1505-L1507), the DMA completion path triggers `SYSASIC_EVENT_GDROM_DMA` and sets `idata = 0`, but does not clear `d->data` or reset `d->data_len`.
+   - `d->data` is only freed when `handle_command` runs a subsequent packet ([`:679`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c#L679)). Because `d->data != NULL` persists across completed DMAs, subsequent guest stores to `+0x18` can re-launch stale buffer transfers without re-staging. Recorded in [`OUTSTANDING_BUGS.md:10822-10850`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L10822-L10850) (`gdromdmaclear`).
+
+4. **Sibling DMA engine in `src/devices/dev_dreamcast_maple.c`**:
+   - The Dreamcast machine's other primary DMA engine is Maple (`dreamcast_maple`, registered in [`src/machines/machine_dreamcast.c:149`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c#L149)).
+   - Maple DMA is initiated via register `0x18` ([`src/devices/dev_dreamcast_maple.c:584-589`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c#L584-L589)), calling `maple_do_dma_xfer(cpu, d)` ([`:380-544`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c#L380-L544)).
+   - Maple DMA performs unconstrained guest-addressed reads and writes through `cpu->memory_rw()` at [`:415, :438, :479, :495, :499, :507`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c#L415). It also contains a guest-reachable terminating call: `fatal("[ dreamcast_maple: TODO: GUN bit. ]\n"); exit(1);` at [`src/devices/dev_dreamcast_maple.c:426`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c#L426).
+
+---
+
+#### (c) DENOMINATOR: Sentences Checked Versus Taken on Trust
+
+- **Sentences checked**: 131
+- **Sentences taken on trust**: 0
+- **Total factual sentences audited**: 131
+
+**Audit scope at commit `db8b1a33`**:
+- [`src/devices/dev_dreamcast_gdrom.c:1-335, 640-785, 1100-1300, 1370-1701`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c)
+- [`src/cpus/cpu_sh_instr.c:1405-1435, 4040-4095, 4290-4305`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c)
+- [`src/cpus/memory_rw.c:240-255, 480-530, 580-625`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c)
+- [`src/cpus/memory_sh.c:214-230, 335-378`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c)
+- [`src/cpus/cpu_sh.c:25-36, 75-130, 885-956, 1020-1035, 1075-1083`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c)
+- [`src/core/memory.c:50-80`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c)
+- [`src/core/debugmsg.c:355-395`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c)
+- [`src/core/main.c:318-326`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/main.c)
+- [`src/machines/machine.c:660-670`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c)
+- [`src/machines/machine_dreamcast.c:140-182`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c)
+- [`src/machines/machine_hpcsh.c:85-106`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_hpcsh.c)
+- [`src/machines/machine_landisk.c:120-130`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_landisk.c)
+- [`src/machines/machine_test.c:530-560`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c)
+- [`src/include/cpu_sh.h:55-70, 190-200`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_sh.h)
+- [`src/include/memory.h:90-105`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/memory.h)
+- [`src/include/misc.h:180-195`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/misc.h)
+- [`src/devices/dev_sh4.c:650-745`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c)
+- [`src/devices/dev_dreamcast_maple.c:380-605`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c)
+- [`regress/gdrom_default_probe.py:215-225, 650-665`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py)
+- [`CHANGELOG.md:2315-2325, 17785-17805, 18240-18247, 18400-18410`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md)
+- [`OUTSTANDING_BUGS.md:9160-9300, 9400-9445, 9590-9655, 10820-10850, 17055-17075, 20065-20100, 20395-20410, 21345-21385`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md)
+- Manuals in disk scratchpad: [`_scratchpad/ata2_x3t10_948d.txt:1-25`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt), [`_scratchpad/sh4_programming.txt:130-142`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh4_programming.txt), and [`_scratchpad/sh7750_hardware.txt:245-270`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt).

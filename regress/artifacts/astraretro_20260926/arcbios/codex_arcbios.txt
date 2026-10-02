@@ -1,0 +1,45 @@
+ASTRARETRO_ARCBIOS_ALIVE
+VERDICT: 8 findings (7 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 20 items checked clean
+
+Reviewed committed `8ea26abb` only. No files written, builds performed, or emulator probes run. Findings below are based on source inspection.
+
+F1 | [src/promemul/arcbios.c:1010](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1010) | upstream, relied on by #168 | CODE | live at HEAD: yes | Partition start and size are assembled and multiplied by 512 using signed `int` arithmetic before conversion to `uint64_t`. Large partition-table values therefore cause signed-shift or multiplication overflow before the new EBR guards inspect them, invalidating their bounds premise. The size calculation at :1016 has the same defect. Already recorded without a dedicated ID in `OUTSTANDING_BUGS.md:2730`. | Smallest check: inspect expression types at :1010–1017; verify decoding and multiplication occur in unsigned 64-bit arithmetic. | confidence high
+
+F2 | [src/promemul/arcbios.c:1919](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1919) | upstream sibling left by #450 | CODE | live at HEAD: yes | Guest Seek offsets with bit 31 set still encounter signed-promoted `bufTmp[3] << 24`. This is undefined behavior and can contaminate the assembled offset’s upper word. #450 corrected the equivalent `buf` expressions but missed `bufTmp`. | Smallest check: compare this expression with the corrected 64-bit decoders at :723/:737/:751. | confidence high
+
+F3 | [src/promemul/arcbios.c:1719](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1719) | upstream sibling left by #192 | CODE | live at HEAD: yes | A STDIN Read at the positive signed-int length boundary, when a character is available, assigns that length to signed counter `j2`; the loop then increments it and overflows. #192’s length guard protects only the disk branch. | Smallest check: trace the declaration at :1672, increment at :1687, and assignment at :1719; a boundary test should verify that the single-character path exits without incrementing the sentinel. | confidence high
+
+F4 | [src/promemul/arcbios.c:360](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:360) | upstream, relied on by 9d18d156 | CODE | live at HEAD: yes | Headless PICA now uses the VGA escape parser. Cursor-position input receives only a lower bound at :214–219, allowing an oversized positive column into tab arithmetic, where signed overflow occurs. The same unrestricted column reaches erase-line address arithmetic at :123. | Smallest check: verify cursor coordinates are bounded by console dimensions before tab and erase operations. | confidence high
+
+F5 | [src/promemul/arcbios.c:1758](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1758) | upstream, relied on by #192 | CODE | live at HEAD: yes | Zero-length disk Read and Write pass the new cap but call `malloc(0)` through `CHECK_ALLOCATION`—also at :1839. On an allocator returning NULL for zero-size allocations, this legal request reaches `exit(1)`. This is a portability defect; manifestation on the current allocator was not established. | Smallest check: an allocator-contract unit test covering NULL for a zero-size allocation; inspect `misc.h:187–192`. | confidence med
+
+F6 | [src/promemul/arcbios.c:1226](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1226) | upstream sibling left by #242/#245 | CODE | live at HEAD: yes | An unsupported SGI private service still dumps state unconditionally and clears `cpu->running`. The changed private-call dispatch explicitly sends SGI calls here, while unsupported non-SGI private and ordinary services return `EINVAL`. This retains the unsupported-service halt that #242 removed from its siblings. | Smallest check: compare the private default at :1220–1226 with dispatch :1271 and ordinary default :2038. | confidence high
+
+F7 | [src/promemul/arcbios.c:777](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:777) | upstream, relied on by #450 | CODE | live at HEAD: yes | The corrected 64-bit decoder still receives the wrong field: the walker reads `+0x34`, inside AffinityMask, whereas IdentifierLength is stored at `+0x40`. Normal big-endian SGI64 construction consequently skips beyond the component list; a guest enumerating CPU children loses FPU/cache links. Already filed as **`arcbioswalk64`**, `OUTSTANDING_BUGS.md:8572`. | Smallest check: compare reader :777 with writers :804/:807 and inspect constructed CPU child links. | confidence high
+
+F8 | [CHANGELOG.md:20204](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:20204) | #245 | RECORD | live at HEAD: yes | The claim that full state remains available through a promemul breakpoint is false for the ordinary-default and missing-handler branches. At normal verbosity, their `ENOUGH_VERBOSITY` gates suppress the dumps; setting a subsystem breakpoint changes breakpoint levels, not verbosity, and these branches never call breakpoint-aware `debugmsg`. | Smallest check: compare `misc.h:257`, `debugmsg.c:567–598`, and `arcbios.c:2019/:2029`. | confidence high
+
+The clean items below refer to `src/promemul/arcbios.c` at HEAD unless another path is named:
+
+- C1 | :570/:580/:590 — all three 32-bit pointer decoders cast before shifting.
+- C2 | :619 — 32-bit length decoding, field offset, stride and alignment agree with the writer.
+- C3 | :723/:737/:751 — corrected 64-bit pointer expressions preserve the upper word.
+- C4 | :784 — the changed shift itself is unsigned; F7 concerns its input field.
+- C5 | :1362/:1413/:1462 — GetPeer/GetChild/GetParent decoding and sign extension use the same width selector.
+- C6 | :1024 — zero/non-advancing links and excessive link counts terminate traversal, subject to F1’s arithmetic defect.
+- C7 | :1649 — Close checks the full unsigned handle before indexing.
+- C8 | :1729 — disk Read validates the actual narrowed index used by its helpers and array access.
+- C9 | :1810 — disk Write validates the actual narrowed index it uses.
+- C10 | :1891 — Seek’s handle guard also rejects negative values represented in unsigned registers.
+- C11 | :1754/:1835 — both disk length caps check the same full-width value used for allocation and transfer.
+- C12 | :1873 — moving the success epilogue preserves disk Write’s `EIO`.
+- C13 | :1279 — unsupported non-SGI private calls return `EINVAL` without exiting.
+- C14 | :2024/:2038 — missing-handler and ordinary-default paths return errors without stopping the CPU.
+- C15 | :2157/:2624/:2852 — headless console preservation and advertisement agree with machine initialization.
+- C16 | :2381 — both environment arrays start as NULL before positive-size `realloc`.
+- C17 | :2414/:2456/:2494/:2500/:2512/:2516/:2529/:2533/:2551/:2654 — added allocation checks precede use in both relevant branches.
+- C18 | :2438 — uppercase conversion excludes value-only and absent-value strings.
+- C19 | :2650/:2667 — ARC receives value-only boot strings; ASCII lowercasing stops at NUL.
+- C20 | `regress/arcbios_shift_probe.py:94` and `regress/gate_asan_sweep.sh:593` — #450’s declared static census and constructor checks exist; their stated limitations do not establish a TEST-GAP.
+
+DENOMINATOR: read 34 of 34 hunks of the net diff

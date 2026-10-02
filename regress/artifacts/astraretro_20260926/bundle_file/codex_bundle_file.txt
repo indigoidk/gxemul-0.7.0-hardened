@@ -1,0 +1,38 @@
+ASTRARETRO_BUNDLE_FILE_ALIVE
+VERDICT: 3 findings (2 CODE live at HEAD, 0 RECORD, 1 TEST-GAP); 23 items checked clean
+
+F1 | `src/file/file_aout.c:265` | upstream, relied on by #14/#15/#16/#66 | CODE | live at HEAD: yes | An in-range, NUL-terminated symbol containing a malformed length-prefixed C++ name still permits a host over-read. `add_symbol_name()` calls the demangler at `src/symbol/symbol.c:263`; its component-copy loop at `src/symbol/symbol_demangle.c:91` checks destination capacity but neither source termination nor remaining source bytes. The same consumer defeats the protection assumed by ELF `:675`, ECOFF `:469`, and Mach-O `:295`. | Smallest check: follow these calls into the demangler and inspect the copy’s two conditions; the added terminator does not stop it. | confidence high
+
+F2 | `src/file/file_ecoff.c:415` | #59 / `8dd86b5a`, relying on #27 | CODE | live at HEAD: yes | A file-controlled table offset can become negative because `unencode` sign-extends into `off_t`. Casting that negative offset to `uint64_t` and adding the table extent can wrap to a small value, passing the new file-size check. The subsequent negative seek is unchecked; reading from the unchanged position can reach `exit(1)` on a short read instead of skipping the invalid table. The external-symbol check at `:417` and MS-COFF check at `:322` have the same arithmetic defect. | Smallest check: trace `file.c:85` into the offset declarations, then compare the guards with the unchecked seeks at `:332`, `:428`, and `:439`. | confidence high
+
+F3 | `src/file/file_macho.c:158` | #57–#64 / `8dd86b5a` | TEST-GAP | live at HEAD: yes | `CHANGELOG.md:21614` records compact-thread acceptance and malformed Mach-O/ECOFF symbol-table regressions, but no committed regression row preserves those checks. | Probe checked: `regress/gate_upstream.sh:104`; its complete case list omits both formats, and `:18` explicitly acknowledges the missing corpus. Searches across committed `regress/` found no corresponding executable probe. | confidence high
+
+No matching `OUTSTANDING_BUGS.md` entry was found for these findings. All evidence is from committed HEAD; no files were written, builds performed, or runtime reproducers executed.
+
+Checked clean below. String-bound checks are assessed locally; F1 identifies their shared downstream failure.
+
+- `src/file/file.c:79` — unsigned accumulation removes signed-shift UB while preserving decoded bit patterns.
+- `src/file/file_srec.c:101` — every parsed record starts with initialized `bytes[]`.
+- `src/file/file_srec.c:137` — clamping to the bounded parse count prevents transfers beyond `bytes[]`.
+- `src/file/file_srec.c:173` — nonpositive payload lengths cannot become huge unsigned transfer lengths.
+- `src/file/file_android.c:104` — page-size validation precedes all three divisions.
+- `src/file/file_android.c:124` — all three page-count calculations and component-end checks use sufficiently wide arithmetic.
+- `src/file/file_aout.c:73` — symbol size is unsigned; the allocation cap also keeps the read count representable.
+- `src/file/file_aout.c:241` — allocation reserves the terminator; the starting-index check uses the same buffer length.
+- `src/file/file_aout.c:252` — symbol enumeration processes only complete records.
+- `src/file/file_elf.c:450` — unsigned cursor progression and subtraction-based tail clamping avoid the former signed overflow.
+- `src/file/file_elf.c:559` — symbol-table offset, remaining length, allocation cap, and entry divisibility are checked.
+- `src/file/file_elf.c:609` — string-table bounds, extra terminator byte, and starting-offset guard agree.
+- `src/file/file_ecoff.c:419` — allocation caps keep accepted table-size arithmetic representable; this does not cure F2.
+- `src/file/file_ecoff.c:333` — MS-COFF decoding follows a complete-read check.
+- `src/file/file_ecoff.c:369` — long-name submission requires a valid file span, successful seek, and complete read.
+- `src/file/file_ecoff.c:465` — negative or excessive string indices cannot produce an out-of-range starting pointer.
+- `src/file/file_macho.c:57` — the initial command buffer is initialized.
+- `src/file/file_macho.c:138` — command headers and accepted command lengths remain within buffered data and guarantee progress.
+- `src/file/file_macho.c:158` — command-specific minimum lengths cover every implemented field read.
+- `src/file/file_macho.c:256` — symbol/string extents and allocation caps use widened arithmetic.
+- `src/file/file_macho.c:268` — allocation/read products use `size_t`; capped symbol counts keep indexing representable.
+- `src/file/file_macho.c:295` — invalid string indices select the allocated trailing sentinel.
+- `src/file/file_macho.c:343` — the endpoint includes the header for command areas fitting the supported buffer.
+
+DENOMINATOR: read 30 of 30 hunks of the net diff

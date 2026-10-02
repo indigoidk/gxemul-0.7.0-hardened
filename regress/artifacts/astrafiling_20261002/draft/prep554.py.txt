@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+"""Assemble #554's COMMITTED versions into <records>/stage554 -- no write to the working tree -- and write
+spec554.json (the per-unit committer's spec, with the artifact file list) and msg554.txt.
+
+usage: prep554.py <afile_06 verdict + adjudication> <afile_11 verdict> <grok's second HIGH re-read, one line> <grok's read of the three added rows, one line> <afile_12 verdict> [--dry]
+
+#554 (astrafile) is a RECORDS unit: it files the rows of the Astra review campaign and commits the campaign's
+artifacts.  Every number in the texts is derived here (records554.table(), the dispositions files, the file walk), never
+typed.  Refuses when HEAD is not #529's commit, when the receipt or the hook edit is not what this unit expects, or
+when an artifact text file carries a NUL byte (the hook's section Y would refuse the commit anyway)."""
+import difflib
+import hashlib
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+REC = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REC)
+import records554 as R
+
+SEC = R.SEC
+ST = os.path.join(REC, "stage554")
+ARTS = os.path.join(SEC, "regress", "artifacts")
+DIRS = ["astraretro_20260926", "astraretro_harness_20260926", "grokjobs_20260930", "agypack_20261001",
+        "codexpack_20260928", "codexfarm_20260926", "astrafiling_20261002"]
+TEXT_EXT = (".c", ".h", ".py", ".sh", ".md", ".json", ".txt", ".tsv")
+SHA529 = "7440e129"
+
+
+def git(*a, binary=False):
+    r = subprocess.run(["git", "-C", SEC] + list(a), capture_output=True)
+    if r.returncode:
+        sys.exit("REFUSED: git %s: %s" % (" ".join(a), r.stderr.decode("utf-8", "replace")))
+    return r.stdout if binary else r.stdout.decode("utf-8")
+
+
+def md5(b):
+    return hashlib.md5(b).hexdigest()[:8]
+
+
+def put(rel, data):
+    p = os.path.join(ST, *rel.split("/"))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(data)
+    return p
+
+
+def counts(rows):
+    c = {}
+    for r in rows:
+        c[(r["wave"], r["sev"])] = c.get((r["wave"], r["sev"]), 0) + 1
+    return c
+
+
+def main():
+    dry = "--dry" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--dry"]
+    if len(args) != 5:
+        sys.exit(__doc__)
+    astra, closing, grokhigh2, grok3, closing2 = args
+    head = git("rev-parse", "--short=8", "HEAD").strip()
+    if not git("log", "-1", "--format=%s", "HEAD").startswith("#529 "):
+        sys.exit("REFUSED: HEAD %s is not #529's commit" % head)
+    if os.path.isdir(ST):
+        for root, dirs, files in os.walk(ST, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
+    os.makedirs(ST, exist_ok=True)
+    man = []
+    allrows, applied = R.table()
+    rows = [r for r in allrows if r["id"] not in R.CLOSED]      # the OPEN rows; the one this commit fixes is filed closed
+    if len(allrows) - len(rows) != len(R.CLOSED):
+        sys.exit("REFUSED: the row this commit closes is not in the table")
+    c = counts(rows)
+    nrow = len(rows)
+    low = dict((w, sum(1 for r in rows if r["wave"] == w and r["sev"] == "LOW")) for w in ("retro", "harness"))
+    nind = nrow - low["retro"] - low["harness"]
+    kinds = dict((k, sum(1 for r in rows if r["kind"] == k)) for k in ("NEW", "GAP", "ID"))
+    high = sum(v for (w, s), v in c.items() if s == "HIGH")
+    disp = [r["id"] for r in rows if r["sev"] == "HIGH" and "HIGH IS DISPUTED" in r["by"]]
+    nregr = sum(1 for x in R.REGRADES if x[2].startswith("retro"))
+    nregh = sum(1 for x in R.REGRADES if x[2].startswith("harness"))
+    held10 = [x for x in disp if x not in ("vgadirtyarm", "gdromcondhow")]
+    if nregr + nregh != len(R.REGRADES) or "vgadirtyarm" not in disp or "gdromcondhow" not in disp or len(held10) != 10 \
+       or tuple(R.DISPUTED_REGRADES) != ("ptywaitstatus",):
+        sys.exit("REFUSED: re-grades %d + %d of %d, or the disputed HIGH rows are not the twelve the texts name: %s"
+                 % (nregr, nregh, len(R.REGRADES), disp))
+
+    # 1. the artifact file list: everything under the campaign's directories except the seats' stderr streams
+    files, skipped, sk_bytes, nul, empty = [], 0, 0, [], []
+    complete = re.compile(r"seat answered|SEAT WALLED|REFUSED|The answer is LOST|PANEL_COMPLETE|rc=")
+    now = time.time()
+    for d in DIRS:
+        for root, _, fs in os.walk(os.path.join(ARTS, d)):
+            for f in sorted(fs):
+                p = os.path.join(root, f)
+                if f.endswith(".err"):
+                    skipped += 1
+                    sk_bytes += os.path.getsize(p)
+                    continue
+                if os.path.getsize(p) == 0:
+                    empty.append(os.path.relpath(p, SEC).replace(os.sep, "/"))     # the committer refuses an empty file
+                    continue
+                if now - os.path.getmtime(p) < 120 and not dry:
+                    sys.exit("REFUSED: %s changed in the last two minutes -- a job in flight?" % p)
+                if f.endswith(".launch.log") and not complete.search(io.open(p, encoding="utf-8", errors="replace").read()):
+                    sys.exit("REFUSED: %s has no completion line -- a job in flight?" % p)
+                if f.endswith(TEXT_EXT) and b"\0" in open(p, "rb").read():
+                    nul.append(os.path.relpath(p, SEC))
+                files.append(os.path.relpath(p, SEC).replace(os.sep, "/"))
+    if nul:
+        sys.exit("REFUSED: %d artifact text file(s) carry a NUL byte (the hook's section Y): %s" % (len(nul), "; ".join(nul[:6])))
+    tracked = set(git("ls-files", "regress/artifacts").split("\n"))
+    files = [f for f in files if f not in tracked]
+    empty = [f for f in empty if f not in tracked]
+    man.append("artifacts: %d files to add under %d directories; %d *.err streams (%.0f MB) and %d zero-byte files left on "
+               "disk, untracked" % (len(files), len(DIRS), skipped, sk_bytes / 1048576.0, len(empty)))
+
+    # 2. the receipt for #529 (the working file must be HEAD's plus exactly that one line) and the hook edit
+    tsv_w = open(os.path.join(SEC, "regress", "pass2_ledger.tsv"), "rb").read().decode("utf-8")
+    tsv_h = git("show", "HEAD:regress/pass2_ledger.tsv")
+    extra = tsv_w[len(tsv_h):] if tsv_w.startswith(tsv_h) else None
+    if extra is None or extra.count("\n") != 1 or not extra.startswith(SHA529 + "\t"):
+        sys.exit("REFUSED: the working pass2_ledger.tsv is not HEAD's plus one line for %s" % SHA529)
+    put("regress/pass2_ledger.tsv", tsv_w.encode("utf-8"))
+    hk_w = open(os.path.join(SEC, "tools", "hooks", "round_reminder.sh"), "rb").read().decode("utf-8")
+    hk_h = git("show", "HEAD:tools/hooks/round_reminder.sh")
+    dd = [l for l in difflib.unified_diff(hk_h.split("\n"), hk_w.split("\n"), lineterm="", n=0) if l[:1] in "+-" and not l.startswith(("+++", "---"))]
+    if len(dd) != 4 or "5.6-SOL" in hk_w or "./panel.sh for six" in hk_w:
+        sys.exit("REFUSED: the working round_reminder.sh is not HEAD's with its two JSON lines edited (%d diff lines)" % len(dd))
+    put("tools/hooks/round_reminder.sh", hk_w.encode("utf-8"))
+
+    # 3. OUTSTANDING_BUGS.md: the re-graded headings in place, then the section
+    ob, rrep = R.regrade_bugs(git("show", "HEAD:OUTSTANDING_BUGS.md"))
+    nhead = sum(int(re.search(r": (\d+) heading", x).group(1)) for x in rrep)
+    body = io.open(os.path.join(REC, "bugs554.body.md"), encoding="utf-8", newline="").read()
+    sec = SECTION.format(nrow=nrow, nind=nind, lr=low["retro"], lh=low["harness"], high=high,
+                         rh=c.get(("retro", "HIGH"), 0), rm=c.get(("retro", "MED"), 0), hh=c.get(("harness", "HIGH"), 0),
+                         hm=c.get(("harness", "MED"), 0), nnew=kinds["NEW"], ngap=kinds["GAP"], nid=kinds["ID"],
+                         nreg=len(R.REGRADES), nhead=nhead, ndisp=len(disp), nregr=nregr, nregh=nregh,
+                         hdisputed=", ".join("`%s`" % x for x in held10),
+                         regr="; ".join("`%s` -> %s (%s)" % x for x in R.REGRADES),
+                         peer="; ".join("`%s` -> %s (%s)" % x for x in R.PEER_REGRADES)) + body
+    put("OUTSTANDING_BUGS.md", (ob.rstrip("\n") + "\n" + sec).encode("utf-8"))
+    man += ["bugs: " + x for x in rrep if not x.endswith(": 0 heading(s) corrected in place")]
+
+    # 4. ledger.json and matrix.html (HEAD's ledger + #529's sha + this unit's rows and re-grades)
+    lp = put("tools/pipeline/ledger.json", git("show", "HEAD:tools/pipeline/ledger.json", binary=True))
+    env = dict(os.environ, LEDGER_PATH=lp)
+    for a in (["setcommits", "crimewidthkill", SHA529], ["ledger"]):
+        r = subprocess.run([sys.executable, os.path.join(REC, "records554.py")] + a, env=env, capture_output=True, text=True)
+        if r.returncode:
+            sys.exit("REFUSED: records554 %s: %s%s" % (a[0], r.stdout, r.stderr))
+        man.append(r.stdout.strip())
+    # every re-grade is APPLIED in what gets committed -- asserted, because the closing check of the repairs (afile_06)
+    # read the committed tree, found `ptywaitstatus` still MED there, and said so
+    staged = dict((x["id"], x) for x in json.loads(open(lp, "rb").read().decode("utf-8"))["rows"])
+    obs = open(os.path.join(ST, "OUTSTANDING_BUGS.md"), "rb").read().decode("utf-8")
+    for rid, new, why in R.REGRADES:
+        if str(staged[rid].get("sev")) != new:
+            sys.exit("REFUSED: the staged ledger does not carry %s -> %s" % (rid, new))
+        # EVERY heading that prints a grade for the id must print the new one: the first form of this check passed as
+        # soon as ONE heading did, so a correct heading could mask a stale sibling (GPT-6 Astra, afile_09)
+        stale = [m.group(0)[-70:] for m in re.finditer(r"(?m)^#{2,4} [^\n]*?`%s` \((LOW|MED|HIGH|low|med|high)\b" % re.escape(rid), obs)
+                 if m.group(1).upper() != new]
+        if stale:
+            sys.exit("REFUSED: %d staged heading(s) of %s still print the old grade: ...%s" % (len(stale), rid, stale[0]))
+    man.append("re-grades: all %d applied in the staged ledger; every heading that prints a grade for one of them prints the new one" % len(R.REGRADES))
+    mp = os.path.join(ST, "tools", "pipeline", "matrix.html")
+    r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py"), "--out", mp],
+                       env=dict(os.environ, GXLEDGER=lp), capture_output=True, text=True)
+    if r.returncode or not os.path.isfile(mp):
+        sys.exit("REFUSED: gen_dashboard: %s%s" % (r.stdout, r.stderr))
+
+    # 5. CHANGELOG, the message
+    retro_n = sum(int(x) for x in re.findall(r"(?m)^## Batch \S+ -- [^\n]*?\((\d+) findings\)", io.open(os.path.join(ARTS, DIRS[0], "DISPOSITIONS.md"), encoding="utf-8").read()))
+    ht = io.open(os.path.join(ARTS, DIRS[1], "HARNESS_DISPOSITIONS.md"), encoding="utf-8").read()
+    harn_n = sum(int(x) for x in re.findall(r"(?m)^## Group \d\d -- (\d+) findings", ht))
+    hk = re.search(r"Governing kinds over \d+ findings: ([^\n]*)\.", ht).group(1)
+    fmt = dict(ndisp=len(disp), nrow=nrow, nind=nind, lr=low["retro"], lh=low["harness"], high=high, retro_n=retro_n, harn_n=harn_n, hk=hk,
+               nfiles=len(files), nerr=skipped, nempty=len(empty), errmb="%.0f" % (sk_bytes / 1048576.0), nreg=len(R.REGRADES), nhead=nhead,
+               nov=len(applied), astra=astra, closing=closing, grokhigh2=grokhigh2, grok3=grok3, closing2=closing2, nregr=nregr, nregh=nregh, nnew=kinds["NEW"], ngap=kinds["GAP"], nid=kinds["ID"],
+               nledger=nind + 2 + len(R.CLOSED))
+    blk = CHANGELOG.format(**fmt)
+    put("CHANGELOG.md", (blk.rstrip("\n") + "\n\n" + git("show", "HEAD:CHANGELOG.md")).encode("utf-8"))
+    io.open(os.path.join(REC, "msg554.txt"), "w", encoding="utf-8", newline="\n").write(MESSAGE.format(**fmt))
+    # absolute paths and a list of argv lists, as commit_unit.py reads them (spec529.json is the working precedent)
+    spec = {"unit": "#554", "head_subject_re": "^#529 ", "stage_dir": ST,
+            "files": ["CHANGELOG.md", "OUTSTANDING_BUGS.md", "regress/pass2_ledger.tsv", "tools/hooks/round_reminder.sh",
+                      "tools/pipeline/ledger.json", "tools/pipeline/matrix.html"],
+            "neutral": ["tools/pipeline/check_probe_wiring.py"], "add_dirs": [], "add_files": files, "exclude_dirs": [],
+            "message": os.path.join(REC, "msg554.txt"), "sidecars": [], "pre": [],
+            "post": [["python", os.path.join(REC, "post554.py")]],
+            "no_merge": ["tools/pipeline/ledger.json", "tools/pipeline/matrix.html"]}
+    io.open(os.path.join(REC, "spec554.json"), "w", encoding="utf-8", newline="\n").write(json.dumps(spec, indent=1) + "\n")
+    for t in (sec, blk, MESSAGE.format(**fmt)):
+        if "<OWED" in t or "{" in t and re.search(r"\{[a-z_]+\}", t):
+            sys.exit("REFUSED: a placeholder survives in a generated text")
+
+    # 6. manifest
+    for root, _, fs in os.walk(ST):
+        for f in sorted(fs):
+            p = os.path.join(root, f)
+            rel = os.path.relpath(p, ST).replace(os.sep, "/")
+            if rel == "MANIFEST.txt":
+                continue
+            new = open(p, "rb").read()
+            r0 = subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True)
+            old = r0.stdout if r0.returncode == 0 else b""
+            d2 = list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(), lineterm="", n=0))
+            man.append("%s  %-44s +%d -%d  (HEAD %s)" % (md5(new), rel, sum(1 for l in d2 if l.startswith("+") and not l.startswith("+++")),
+                                                        sum(1 for l in d2 if l.startswith("-") and not l.startswith("---")), md5(old)))
+    man.insert(0, "# #554 staged committed versions -- HEAD %s%s" % (head, "  (DRY)" if dry else ""))
+    io.open(os.path.join(ST, "MANIFEST.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(man) + "\n")
+    print("\n".join(man))
+
+
+SECTION = """
+## 2026-10-02 -- GXEMUL [087a90]: `#554` FILES the Astra review campaign -- {nrow} open rows from the retro review of the source (wave 1) and the review of the regression harness (wave 2)
+
+**NONE OF THE {nrow} ROWS BELOW IS FIXED BY THIS SECTION.**  (One further finding, `nineseatreminder`, is fixed by the
+commit that carries this section and is filed closed; see the end of this introduction.)  GPT-6 Astra reviewed this
+fork read-only twice (owner 2026-09-26: "If astra hasn't reviewed old patches; please do that as well"): the emulator
+source, and the regression harness.  Every finding was ruled on by a seat of another family and the ruling confirmed
+or amended by Astra; the results are `regress/artifacts/astraretro_20260926/DISPOSITIONS.md` and
+`regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md`.  The rows below are derived from those two
+files by `regress/artifacts/astrafiling_20261002/mk_filing.py.txt` (`FILING.tsv`), corrected by the checks of that
+table (`FILING_OVERLAY.tsv`, every line naming who said so and where) and written out by `draft/records554.py.txt`.
+
+**What is here: {nrow} rows -- {nnew} NEW, {ngap} test-coverage rows, {nid} ids given to entries this file ALREADY CARRIES
+IN PROSE (no second entry is opened for those; each row names the lines).**  {high} are HIGH: {rh} from the source, {hh}
+from the harness (a harness defect is graded by WHAT THE CHECK WOULD MISS), and {ndisp} of those HIGH grades are
+DISPUTED between two seats (below).  Every HIGH and MED row, and the one row filed with both grades
+(`shoddprfield`), has its own heading and its own ledger row ({nind} rows);
+the LOW rows -- {lr} from the source, {lh} from the harness -- are written out by id under two CLASS rows,
+`astraretrolow` and `astraharnesslow`, and a LOW row gets its own ledger row when a round takes it up.  Each row's
+ruling, confirmation and evidence are in the dispositions file its line names.
+
+**What is NOT here, so that a blank is not read as "nothing owed":**
+* the findings that were ALREADY FILED under an existing id (their rulings add riders to those rows; see the two
+  files) -- among them `hbundle_regress28:F1`, which the grok seat conceded is the class row `ptywaitstatus` (rider:
+  `regress/pcc2_default_probe.py` is absent from the 73-probe table that row's census cites);
+* the corrections to false comments and records (L4 / RECORD) -- they are owed IN PLACE, by file family, in later
+  records rounds; none is made here; `hdiffdiskimageio:F2` is one of them (grok conceded it is a wrong sentence, not a
+  row);
+* the retro's UNSETTLED findings (each names the measurement it owes; three wait on the MC88200 User's Manual);
+* the id-less entries of THIS file (a separate scan, ruled by grok and confirmed by Astra) -- a later unit files them.
+No finding is left open between two seats as to its KIND: the three that were went back to the grok seat
+(`regress/artifacts/astraretro_harness_20260926/adjudication/grok_20261002/grok_hopen3.txt`), which conceded the two
+above and HELD the third -- filed below as `gdromcondhow`, after the main loop read the lines it rests on; GPT-6
+Astra then conceded that kind (`afile_09`).
+
+**RULE QUESTIONS the campaign raised and did not settle** (each travels with the rows it grades):
+* whether an out-of-array access that stays inside the containing struct meets the HIGH clause (`shoddprfield`, filed
+  with both grades; `sgirespanchk`);
+* who must control the input for a stall or termination to be HIGH -- `ne2krxbudget`, `taprxquota` and
+  `dyncacheoffset32` are HIGH on the condition each title states (sustained network input; a host `-k` of 4097 or more);
+* whether a harness check that would ACCEPT THE RE-INTRODUCTION of a process-ending or out-of-bounds defect which is
+  fixed today is HIGH.  The grok seat re-read, first-hand, the 57 rows that were graded HIGH at that point and called 22
+  of them not HIGH or not true; GPT-6 Astra conceded 11 (now MED) and HOLDS 11.  Ten of the held rows are harness rows
+  on this rule -- {hdisputed} -- and each is filed HIGH with both positions stated in its row.  The eleventh,
+  `vgadirtyarm`, is a production-code row held on a different ground and UNMEASURED (its row says what was withdrawn).
+  The carrier's vacuity floor already treats a detector that passes on the reinstatement of its own defect as a floor
+  breach; that does not by itself assign a queue grade, and the grade is the question.
+The seven HIGH rows that the check of the table added afterwards were outside that re-read and were read separately
+(`regress/artifacts/astrafiling_20261002/grok/grok_filehigh2.txt`).  Two more HIGH grades had been outside every
+re-read -- the new row `gdromcondhow`, and the MED-to-HIGH re-grade of the existing class row `ptywaitstatus`, which is
+GPT-6 Astra's own raise -- and grok, asked to apply its own test to them (`.../grok/grok_filehigh3.txt`), called both
+HIGH ONLY ON THE RE-INTRODUCTION RULE.  Both are therefore filed HIGH and DISPUTED like the ten (asked again, GPT-6
+Astra HOLDS HIGH on `ptywaitstatus`: `afile_09`).  `gdromcondhow`'s KIND had been a second difference -- Astra: the
+class `ptywaitstatus`; grok: its own row -- until Astra conceded it in that same check.  That
+makes {ndisp} disputed HIGH rows below and one disputed re-grade.  The flagship seat was deliberately not fired on
+2026-10-02 (owner instruction); its sign-off on the three grok-ruled retro batches (3f, 3g, 3h), on the harness wave
+and on these questions is batched, not waived.
+
+**EXISTING ROWS RE-GRADED ({nreg}: {nregr} by the retro, {nregh} by the harness review; the ledger's grade is changed, and
+{nhead} headings above that print a grade are corrected in place):** {regr}.
+**FOR THE PEER SESSION [e8a2bc], whose rows these are -- NOT changed here:** {peer}.
+
+**FIXED IN THIS COMMIT, and so filed closed:** `nineseatreminder` (LOW) -- the round reminder named the wrong Codex,
+treated the conditional agy seat as unconditional and told the reader to launch `./panel.sh`; `tools/hooks/
+round_reminder.sh` now names no model, states the `PANEL_FIRE_AGY` condition and names the launch as
+`bash GXEMUL-SEC/tools/panel.sh <ABSOLUTE brief path>` (the script path is relative to the project root; the brief's
+is absolute).
+"""
+
+CHANGELOG = """# `#554` (astrafile): the Astra review campaign is FILED -- {nrow} open rows from GPT-6 Astra's retro review of the source and its review of the regression harness, each ruled by a seat of another family and confirmed; none of them is fixed here
+
+**Why.**  The owner asked on 2026-09-26 for GPT-6 Astra to review the old patches as well ("If astra hasn't reviewed old
+patches; please do that as well" / "keep pushing astra").  Two read-only reviews followed: the emulator SOURCE (wave 1:
+{retro_n} findings in 15 batches, `regress/artifacts/astraretro_20260926/`) and the REGRESSION HARNESS (wave 2: {harn_n}
+findings in 18 verification groups, `regress/artifacts/astraretro_harness_20260926/`).  A finding is one reviewer's
+reading; this unit is what makes the reviews usable -- every finding ruled, the rulings confirmed, and the open ones
+given queue rows.  **No compiled code changes.  None of the {nrow} filed rows is fixed here; one further harness
+finding, the round reminder's stale roster (`nineseatreminder`), is fixed by this commit and filed closed.**
+
+**How each finding was ruled.**  Wave 1: twelve batches ruled first-hand by the flagship seat (claude-fable-5-1 by its
+transcripts) and three -- 3f, 3g, 3h -- by the grok seat (grok-4.7 xhigh) after the owner's instruction of 2026-10-02
+that the working seats are GPT-6 Astra, agy and grok; every batch then CONFIRMED by GPT-6 Astra, which overturns and
+amends the ruling it names.  Astra RAISED three of its own findings over grok's ruling; a raise by the author family is
+not adopted on its say-so, so those went back to grok with Astra's reasons verbatim and grok conceded all three after
+re-reading the source (`adjudication/grok_20261002/grok_dispute3fh.txt`) -- `ne2krxbudget`, `taprxquota` and
+`dyncacheoffset32` are HIGH, each on a stated condition.  Wave 2: every finding verified against the committed tree by
+an independent seat (grok for eight groups, agy for ten) with a draft disposition, the drafts confirmed by Astra
+(`hconfirm_NN/`: 39 overturned, 104 amended; it lowered 34 grades and raised 27), and the 21 rows where the agy and
+codex verifications differed ruled first-hand by grok.  Three findings on which that tie-break and Astra's confirmation
+gave different KINDS went back to grok (`adjudication/grok_20261002/grok_hopen3.txt`): it conceded two (one is the
+filed class `ptywaitstatus`, one is a RECORD correction) and held the third, filed here as `gdromcondhow` after the
+main loop read the probe lines it rests on; GPT-6 Astra conceded that kind when asked again (`afile_09`).  The two
+results are `DISPOSITIONS.md` (15 batches, the batch headers sum
+to {retro_n}) and `HARNESS_DISPOSITIONS.md` (governing kinds: {hk}).
+
+**What is filed, and how the table was checked.**  `regress/artifacts/astrafiling_20261002/FILING.tsv` is derived
+mechanically from the two dispositions files (`mk_filing.py.txt`).  GPT-6 Astra then checked the table against the
+dispositions in four parts (`afile_01..04`): the harness rows were nearly clean, the rows derived from the seven
+hand-written retro batches were not -- 43 wrong rows, 21 missing, eight duplicate pairs -- and those corrections are
+applied as an explicit overlay (`FILING_OVERLAY.tsv`, {nov} lines by the end, each naming who said so and where; the
+table itself is never edited, and it was derived while four harness findings were still listed as open between two
+seats: what became of them is carried by the overlay lines `hygieneartifactlive` and `gdromcondhow`, not by a second
+derivation).  The overlay's titles were written by the main loop, so Astra checked the overlay, the
+re-grades and the section as filed (`afile_05`): 6 of the 86 lines then in it wrong -- three line citations that had
+moved since the reviewed commit, two titles that had dropped a condition and one that had omitted the opposite half of
+its defect -- and one re-grade missing (`ptywaitstatus`).  All seven were repaired, and its check of the repairs
+(`afile_06`): {astra}.
+
+**The HIGH rows were re-read first-hand, and that changed eleven grades.**  A row graded HIGH gets a correction round,
+so the grok seat re-read the 57 rows graded HIGH at that point against the committed source (`grok/grok_filehigh.txt`):
+29 true as titled, 6 true only under a condition the title omitted, 22 not HIGH or not true -- 21 of those in the
+harness wave, where 16 of the HIGH grades were Astra's own raises.  The 22 went back to Astra with grok's reasons
+verbatim (`afile_07`): it CONCEDED 11 (now MED: the check still fails on a real emulator death, or the severe
+consequence was unproved) and HOLDS 11 -- ten harness rows and `vgadirtyarm`.  The agy seat, asked for the facts alone
+(`agy/agy_highfacts.txt`), found a real emulator death still fails the check in 9 rows and the protected path no longer
+process-ending in 19.  That corroborates the facts its table states -- it does not establish Astra's separate
+bounds-regression premise for `sgilwreadzero` -- and leaves a dispute about the RULE -- is a check that would accept the
+re-introduction of a defect fixed today HIGH? -- beside two points Astra marks UNSETTLED
+until measured (the VGA endpoint conversion and redraw time; whether the MIPS probe accepts an RI followed by a process
+exit).  The ten held harness rows are filed HIGH with both positions stated in each.  `vgadirtyarm` is held on a
+different ground: the ruling's "-1.7e9 dirty-row origin ... for hours" is WITHDRAWN (`dev_vga.c:732` declares `int r`,
+so the start row is a small negative), and the row is re-stated on the unsigned END-row arithmetic at `:743`,
+unmeasured.  Five of the six conditions went into the titles and the sixth was re-worded by Astra; `optpinanyfno` is
+consolidated into `optpinor`.  Astra's check of that outcome as applied, and of this text (`afile_08`), found no wrong
+grade or kind and wording to correct: the note on the ten disputed rows had broadened its rule and credited agy with
+more than it showed, one title was unqualified, and 24 sentences of the drafts were inaccurate -- all corrected.  The
+seven HIGH rows the table check had added were outside grok's 57 and were read separately (`grok/grok_filehigh2.txt`):
+{grokhigh2}.  Two HIGH grades had been outside every re-read -- the new row `gdromcondhow` and the MED-to-HIGH re-grade
+of the existing class row `ptywaitstatus`, GPT-6 Astra's own raise -- and grok, asked to apply its own test to them
+(`grok/grok_filehigh3.txt`), called both HIGH only on the re-introduction rule; both are filed HIGH and disputed like
+the ten.  Astra's check of all of that (`afile_09`) conceded `gdromcondhow`'s kind, held HIGH on `ptywaitstatus`, and
+found wording to correct again: one shared note mis-described what agy's table shows on nine of the ten disputed rows
+(each row now carries its own clause, in Astra's wording, with agy's line), five other sentences of the drafts were
+inaccurate, the staging check of the re-graded headings could be satisfied by one heading while a sibling stayed stale
+(it now tests every heading), and the rebuilt harness index had two errors of assembly.  All corrected, and its check
+of the corrections (`afile_10`) closed that chain: 0 of 10 overlay lines, 0 records sentences and 0 harness-index
+statements wrong.  agy, the AUTHOR of the fact table, was asked the same question about the ten clauses
+(`agy/agy_highfacts2.txt`) and flagged four as one-sided -- each left out the half of its line that points the other
+way -- so every disputed row now also carries agy's own three verdicts, cut verbatim from its line.
+
+**Three rows the table had missed, found by a mechanical check.**  The dispositions of the next unit (the queue's
+id-less entries) name three ids as already filed that existed nowhere: `ramspaninval`, `tcpdebugopts`, `jazzlbmask`.
+The retro rulings had written `CONFIRMED-FILED <id>` for each -- the defect IS in the queue's prose, and the id was the
+ruling's proposal -- and the table read that as nothing to file.  A check that every id a disposition calls filed
+exists somewhere (`chk_filed_exist.py.txt`) found exactly these three.  They are added as ids for prose entries, after
+the grok seat read each first-hand again (`grok/grok_file3ids.txt`): {grok3}.  GPT-6 Astra's closing check of the three
+additions and of agy's verdict lines (`afile_11`): {closing}.  One clause was added after that check -- the
+zero-byte files left out of the commit, under "The files" below -- and Astra checked it together with the list of
+files this commit adds (`afile_12`): {closing2}.
+**Result: {nrow} rows -- {nnew} NEW, {ngap} test-coverage rows and {nid} ids for entries `OUTSTANDING_BUGS.md` already
+carried in prose; {high} HIGH, {ndisp} of them disputed.**  The re-grade of `ptywaitstatus` is disputed as well.
+
+**The files.**
+* `CHANGELOG.md` -- this `#554` block, prepended to the existing changelog.
+* `OUTSTANDING_BUGS.md` -- the 2026-10-02 `#554` section: every HIGH and MED row (and `shoddprfield`, filed with both grades) under its own heading, the LOW rows of
+  each wave written out by id under one class row; and {nhead} existing headings corrected IN PLACE for the {nreg}
+  existing rows the campaign re-graded ({nregr} by the retro, {nregh} by the harness review).  What the section does NOT
+  file is listed in it.
+* `tools/pipeline/ledger.json`, `matrix.html` -- {nledger} rows added ({nind} individual open rows, the two class rows
+  `astraretrolow` with {lr} members and `astraharnesslow` with {lh}, and `nineseatreminder`, filed closed), {nreg} rows
+  re-graded, and `crimewidthkill`'s commit recorded (`#529`, 7440e129).
+* `tools/hooks/round_reminder.sh` -- the harness finding `nineseatreminder`, fixed and filed closed: the SessionStart
+  text named "Codex 5.6-SOL" and "Grok 4.6" (both stale) and the TaskCompleted text said `./panel.sh for six`.  The
+  reminder now names no model -- it points at `panel.sh`'s own variables and at the owner's rulings -- states that agy
+  fires only when `PANEL_FIRE_AGY` is set, and names the launch as `bash GXEMUL-SEC/tools/panel.sh <ABSOLUTE brief
+  path>` (the script path relative to the project root, the brief's absolute).  Both modes emit valid JSON before and
+  after (`astrafiling_20261002/hookfix/`).
+* `regress/pass2_ledger.tsv` -- `#529`'s pass-2 receipt (7440e129), which the commit after it owes.
+* `regress/artifacts/` -- the campaign's {nfiles} files: the reviews, the briefs, the rulings, the confirmations, the
+  agy and grok job sets, the two dispositions files and the filing table with its checks.  **The seats' stderr streams
+  are NOT committed**: {nerr} `*.err` files, {errmb} MB, stay on disk beside the answers they belong to; no record cites one.
+  {nempty} zero-byte files -- answer files of jobs that produced no output -- are left out as well: the committer
+  refuses an empty file.
+
+**Seats, by name.**  GPT-6 Astra (codex, effort `ultra`): the two reviews, every confirmation, the six checks of the
+filing table (`afile_01` to `afile_06`), its answer to the HIGH dispute (`afile_07`) and five closing checks
+(`afile_08` to `afile_12`) -- none walled or refused on 2026-10-02.  grok (grok-4.7 xhigh): three batch rulings, the
+severity dispute, the harness tie-break and its three returned rows, eight harness verification groups, the two HIGH
+re-reads, its ruling on two further grades and its read of the three rows added last.  agy (gemini-3.8-flash-high): ten harness verification groups, the draft checks, the fact table under the
+disputed rows and its own check of the clauses that describe that table; its agreement is given no weight, its flags
+and facts are.  The flagship seat: twelve batch rulings
+before 2026-10-02, then DELIBERATELY NOT FIRED by owner instruction, as was the Opus seat (its two answers of
+2026-10-01 on the HIGH panel were opus-4-8 fallbacks and are labelled so).  The kimi CLI was down (subscription); the
+Ollama seats were not fired (owner 2026-09-30).  No seat is counted as agreeing by its absence.
+
+**Not done, and where it goes.**  The L4 / RECORD corrections (false comments and records) are owed in place, by file
+family; {ndisp} HIGH grades and one re-grade are filed as disputed and the three rule questions are unsettled; the
+flagship sign-off on
+the grok-ruled batches and the harness wave is batched; the id-less entries of `OUTSTANDING_BUGS.md` are a separate
+unit; the two rows of the peer session that the retro re-grades are left to it.  The next commit owes this one no
+pass-2 receipt: it touches no `src/`.
+"""
+
+MESSAGE = """#554 astrafile: the Astra review campaign is filed -- {nrow} open rows from GPT-6 Astra's retro review of the source and its review of the regression harness; none of them is fixed here
+
+Two read-only reviews by GPT-6 Astra (owner 2026-09-26): the emulator source ({retro_n} findings, 15 batches) and the
+regression harness ({harn_n} findings, 18 groups).  Every finding was ruled by a seat of another family -- the flagship
+seat for twelve retro batches, grok for three and for the harness tie-break, grok and agy for the harness
+verification -- and every ruling confirmed or amended by Astra.  This commit files the open ones: {nrow} rows ({nnew} NEW,
+{ngap} test coverage, {nid} ids for entries the queue already carried in prose; {high} HIGH, {ndisp} of them disputed),
+each HIGH and MED row (and shoddprfield, filed with both grades) with its own heading and ledger row, the LOW rows by
+id under two class rows; {nreg} existing rows
+re-graded.
+
+The filing table is derived mechanically (regress/artifacts/astrafiling_20261002/FILING.tsv); Astra checked it in four
+parts and its corrections are an explicit overlay ({nov} lines by the end).  Its check of the overlay found 6 lines
+wrong and one re-grade missing, all repaired (afile_06: {astra}).  grok then re-read the 57 HIGH rows first-hand and
+disputed 22; Astra conceded 11 (now MED) and holds 11, which are filed HIGH and marked disputed; agy supplied the facts
+under them.  grok's re-read of the seven HIGH rows added later: {grokhigh2}.  Its ruling on two HIGH grades no re-read
+had covered -- the new row gdromcondhow and Astra's own MED-to-HIGH re-grade of ptywaitstatus -- is HIGH only on the
+disputed rule, so both are filed as disputed too.  Astra's check of all of that (afile_09) conceded gdromcondhow's
+kind, held HIGH on ptywaitstatus and found more wording to correct; its check of the corrections (afile_10) closed
+that chain.  agy, the author of the fact table, then flagged four clauses about its table as one-sided, so each disputed
+row also quotes agy's own verdicts.
+
+Three ids that retro rulings had assigned to prose entries of the queue -- ramspaninval, tcpdebugopts, jazzlbmask --
+were missing from the table (the rulings said CONFIRMED-FILED; the ids existed nowhere) and are added; a mechanical
+check that every id a disposition calls filed exists somewhere found them.  grok's first-hand read of the three:
+{grok3}.  Astra's closing check of the additions and of agy's verdict lines (afile_11): {closing}.
+
+One harness finding IS fixed here and filed closed: the round-reminder hook named stale models and treated the
+conditional agy seat as unconditional (nineseatreminder); it now names no model and states the condition.  Also:
+#529's pass-2 receipt; the campaign's {nfiles} artifact files, without the {errmb} MB of seat stderr streams, which stay
+on disk.
+
+No compiled code changes.  Not done here: the L4/RECORD corrections, the three unsettled rule questions, the flagship
+sign-off (the Fable and Opus agent seats were deliberately not fired on 2026-10-02, owner instruction), the id-less
+queue entries.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+"""
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""hook_fix_20261002.py -- the SessionStart hook (tools/hooks/round_reminder.sh) injected a FROZEN ROSTER into every
+session: "SEVEN scriptable transports: Codex 5.6-SOL xhigh ... Grok 4.6 xhigh ... Opus 5 ... Fable 5".  Three of those
+names were stale (the codex seat is GPT-6 Astra since 2026-09-04, grok is 4.7 since 2026-09-21, panel.sh fires eight
+transports) -- a status line in an auto-loaded text, which the carrier's own rule says is a wrong record waiting for
+a calendar.  The replacement names NO model: it points at panel.sh's variables and at the owner's rulings in memory.
+One exact replacement; bytes in, bytes out; then both hook modes must still emit valid JSON."""
+import io
+import json
+import subprocess
+import sys
+
+P = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\tools\hooks\round_reminder.sh"
+s = io.open(P, encoding="utf-8", newline="").read()
+a = ("It fires SEVEN scriptable transports: Codex 5.6-SOL xhigh, agy high, Kimi 3 (the CLI is the seat again since "
+     "2026-08-29), Grok 4.6 xhigh, and three Ollama cloud thinking models (glm-5.3:cloud, deepseek-v4-pro:cloud, "
+     "minimax-m3:cloud -- never send a num_predict cap). Launch two more in the SAME turn via the Agent tool: Opus 5 "
+     "(model opus, the compile-and-measure seat) and Fable 5 (model fable).")
+b = ("It fires the scriptable seats -- codex, agy, kimi, grok and the Ollama cloud thinking models (never send those a "
+     "num_predict cap). THIS TEXT NAMES NO MODEL OR EFFORT ON PURPOSE: it once named three that had since changed. Read "
+     "them from the tool: grep -nE '^(CODEX_EFFORT|GROK_MODEL|AGY_MODEL|OLLAMA[0-9])=|exec .* -m ' "
+     "GXEMUL-SEC/tools/panel.sh. Launch two more in the SAME turn via the Agent tool: model opus (the compile-and-measure "
+     "seat) and model fable. THE OWNER'S NEWEST SEAT RULINGS OVERRIDE THIS ROSTER -- read the `Owner rulings` entries "
+     "of the memory index before convening, and record a seat the owner told you not to fire as DELIBERATELY NOT FIRED, "
+     "never as a failure or as agreement.")
+if s.count(a) != 1:
+    sys.exit("REFUSED: %d matches for the roster sentence" % s.count(a))
+if '"' in b or "\\" in b:
+    sys.exit("REFUSED: the replacement would need JSON escaping")
+io.open(P, "w", encoding="utf-8", newline="").write(s.replace(a, b))
+bash = sys.argv[1]
+for mode, key in (("session", "SessionStart"), ("task", "TaskCompleted")):
+    out = subprocess.run([bash, P.replace("\\", "/"), mode], capture_output=True, text=True, encoding="utf-8")
+    j = json.loads(out.stdout)
+    ev = j["hookSpecificOutput"]["hookEventName"]
+    if ev != key:
+        sys.exit("FAIL: mode %s emitted event %r" % (mode, ev))
+    print("mode %-7s rc=%d  valid JSON, event %s, %d chars of context" % (mode, out.returncode, ev, len(j["hookSpecificOutput"]["additionalContext"])))
+print("HOOK_FIX_DONE")

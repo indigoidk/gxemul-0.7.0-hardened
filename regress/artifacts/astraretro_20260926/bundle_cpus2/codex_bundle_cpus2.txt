@@ -1,0 +1,48 @@
+ASTRARETRO_BUNDLE_CPUS2_ALIVE
+VERDICT: 11 findings (9 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 17 items checked clean
+
+Static review of committed `8ea26abb`; no builds, probes, or file changes. Locations below refer to HEAD.
+
+F1 | [src/cpus/cpu_i960_instr.c:165](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_i960_instr.c:165) | upstream, relied on by #45 | CODE | live at HEAD: yes | A long i960 instruction reaches error-path disassembly with only `ib[4]`. The disassembler reads bytes 4–7 at `cpu_i960.c:462/464`, outside that buffer. The skeletal decoder does not prevent this: disassembly precedes stopping the CPU. Trace/single-step supplies another four-byte buffer with the same problem. No matching outstanding ID found. | Smallest check: trace the buffer through `cpu_dyntrans.c:2012` into long-word disassembly. | confidence high
+
+F2 | [src/cpus/cpu_i960.c:462](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_i960.c:462) | #45 | CODE | live at HEAD: yes | Disassembling a long instruction whose displacement has its high bit set still performs signed `int` left-shift UB. #45 converted first-word assembly, but left both second-word endian branches unchanged. This exists independently of F1: debugger disassembly supplies a sufficiently large buffer. No matching outstanding ID found. | Smallest check: inspect integer promotion in the two remaining `byte << 24` expressions. | confidence high
+
+F3 | [src/cpus/memory_alpha.c:198](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:198) | #194; upstream caller relied on by #194 | CODE | live at HEAD: yes | A cold instruction fetch whose Alpha page-table walk fails still terminates the host. Returning zero delivers no exception; dyntrans retries the unchanged PC, then reaches `exit(1)` at `cpu_dyntrans.c:732`. Already filed as **alphaifetchkill**, `OUTSTANDING_BUGS.md:21932`. | Smallest check: trace both translation attempts and confirm that the failed Alpha walk changes neither PC nor exception state. | confidence high
+
+F4 | [src/cpus/cpu_arm_coproc.c:177](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:177) | upstream, relied on by #378 | CODE | live at HEAD: yes | A guest control-register write requesting the opposite byte order terminates the host. #378 explicitly relies on this exit to justify its translation-time LDM/STM decisions. Mentioned in `OUTSTANDING_BUGS.md:2685`’s “broad device-exit tail”; no individual ID found. | Smallest check: inspect the endian comparison and its `exit(1)`. | confidence high
+
+F5 | [src/cpus/cpu_arm_coproc.c:322](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:322) | #526 | CODE | live at HEAD: yes | The repaired INTEN read leaves sibling CP6 host kills: nonzero ISTEER writes, ISRC writes (`:331`), and unsupported register tuples (`:417`). `xscale_inten_probe.py` rows `SIB_WRITE`, `S_ISRC_WR`, and `E_UNKNOWN` actually require these deaths. Retention is explicit in `CHANGELOG.md:3546`; no separate outstanding ID found. | Smallest check: inspect those three exit branches and their probe assertions. | confidence high
+
+F6 | [src/cpus/memory_arm.c:254](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:254) | #193 | CODE | live at HEAD: yes | A guest using an L1 fine-page-table descriptor reaches the sibling default branch and terminates the host; #193 only repairs the coarse-table null-backing path. Fine-table descriptors are documented in [ddi0100i.txt:29818](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:29818). Already filed as **armdesc3kill**, `OUTSTANDING_BUGS.md:22065`. | Smallest check: follow descriptor type 3 through the L1 switch. | confidence high
+
+F7 | [src/cpus/cpu_arm_coproc.c:311](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:311) | upstream, relied on by #526 | CODE | live at HEAD: yes | An INTEN MRC targeting R15 now continues, but writes `r[15]` and leaves NZCV unchanged. ARM requires transferring result bits 31–28 into NZCV: [ddi0100i.txt:9333](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:9333). Neither dispatcher nor execution wrapper supplies that handling. `RD15_SURVIVE` checks survival only and discloses this limitation. No matching outstanding ID found. | Smallest check: trace the assignment and callers; compare their flag updates with the manual. | confidence high
+
+F8 | [src/cpus/memory_mips_v2p.c:234](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_mips_v2p.c:234) | #238 | CODE | live at HEAD: yes | Supervisor access to a valid mapped supervisor segment raises AdEL/AdES. Selecting `Status.SX` does not repair the later gate: only `KSU_KERNEL` may translate addresses above user space. Consequently `sseg`, `xsseg`, and `csseg` are rejected despite their documented availability: [mips_r4000.txt:661](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:661), [line 665](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:665). No residual outstanding ID found. | Smallest check: compare the segment predicate with those definitions. | confidence high
+
+F9 | [src/cpus/cpu_mips_instr_unaligned.c:95](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:95) | upstream, relied on by #227 | CODE | live at HEAD: yes | An unaligned store executed at the general exception vector can incur a nested translation fault whose destination PC equals its current PC. The `pc != oldpc` guard then skips conversion, leaving TLBL for a store. Word and doubleword forms share this defect. The required distinction appears in [mips_r4000.txt:1009](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:1009). No residual outstanding ID found. | Smallest check: compare the guard with same-PC vector selection in `cpu_mips.c:2190`. | confidence high
+
+F10 | [src/cpus/memory_alpha.c:195](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:195) | #194 / #215 | RECORD | live at HEAD: yes | “Caller raises the fault” and “translator already signalled a fault” are false. Failed data translations return failure; the Alpha instruction abandons the access without delivering an exception. The same premise occurs at `cpu_alpha_instr_loadstore.c:70/114` and `CHANGELOG.md:19974/20034`. Already filed as **alphafaultclaim**, `OUTSTANDING_BUGS.md:16060`. | Smallest check: inspect the translator, `memory_rw.c:248`, and both instruction failure returns for exception-state updates. | confidence high
+
+F11 | [src/cpus/cpu_arm_coproc.c:170](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:170) | #378 | RECORD | live at HEAD: yes | The comment says `invalidate_translation_caches(..., INVALIDATE_ALL)` causes cached `ic->f` handlers to be re-picked. It clears address mappings while retaining translated physical pages and their handlers. Handler reset belongs to the separate code invalidator. The additional requirement for instruction retranslation does not make this API claim true. No matching outstanding ID found. | Smallest check: follow `tmp_arm_tail.c:26` through `cpu_dyntrans.c:1276`, then compare the handler reset at `:1425`. | confidence high
+
+Checked clean, with each statement limited to the property named:
+
+- `src/cpus/cpu.c:114` — all three changed failure paths correctly pair `zeroed_alloc()` with `munmap()`; the malloc fallback is disabled.
+- `src/cpus/cpu.c:248` — traced calls set the transition flag consumed and cleared by debugger stepping.
+- `src/cpus/cpu.c:298` — traced returns set the same flag.
+- `src/cpus/cpu_i960.c:409` — first-word assembly is unsigned and correct in both byte orders.
+- `src/cpus/cpu_i960_instr.c:182` — first-word decoding uses the same safe macros within its four-byte buffer.
+- `src/cpus/memory_alpha.c:186` — #508 preserves exactly the 13-bit page offset; `alpha_pfnoffset_probe.py` observes two discriminating cold loads.
+- `src/cpus/cpu_alpha_instr_loadstore.c:73` — failed loads return before buffer assembly or destination assignment.
+- `src/cpus/cpu_alpha_instr_loadstore.c:117` — failed stores return before conditional-store success assignment.
+- `src/cpus/memory_mips_v2p.c:183` — supervisor/reserved-KSU host exits are removed; supervisor width selection uses SX.
+- `src/cpus/memory_mips_v2p.c:308` — malformed PageMask handling reaches the exception path, respecting no-exception queries and access direction.
+- `src/cpus/cpu_mips_instr_unaligned.c:103` — once reached, conversion correctly maps TLBL/AdEL, preserves DBE and other Cause bits, and covers both widths/directions.
+- `src/cpus/generate_mips_loadstore_multi.c:93` — all 32 generated bodies increment bounded unsigned counters after the fallback return; `mips_fold_probe.py` observes fallback non-firing.
+- `src/cpus/memory_arm.c:173` — null L2 backing avoids dereference and follows normal translation-fault handling, including no-exception queries.
+- `src/cpus/cpu_arm_coproc.c:163` — the present byte-order immutability premise holds, subject to the host-exit finding above.
+- `src/cpus/cpu_arm_coproc.c:311` — ordinary GPR reads use the INTEN field shared with writes and the interrupt controller.
+- `regress/arm_endian_probe.py:402` — warm STM/LDM witnesses discriminate byte reversal, with cold controls and little-endian counterparts.
+- `regress/xscale_inten_probe.py:289` — ordinary destination/value rows observe read results; `RD0_ALLONES` additionally checks the all-ones value.
+
+DENOMINATOR: read 17 of 17 hunks of the net diff

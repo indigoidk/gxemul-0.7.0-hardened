@@ -1,0 +1,156 @@
+CODEXPACK_DOSSIER_ARMCOPROC_ALIVE
+VERDICT: finding TRUE WITH CHANGES -- disposition member 3 -- the live exits warrant state-preserving containment with separate decisions for hardware-defined operations.
+
+All repository citations below refer to **`db8b1a33`**, not the working tree. “After” describes a proposed correction, not an executed result. Nothing was built, executed as a guest, or changed.
+
+The changes to the premise are material: the records mention these exits more than once, and the model’s “unsupported” classifications do not establish that the corresponding hardware operations are illegal. `OUTSTANDING_BUGS.md:18721–18722` explicitly enumerates “**SEVEN sibling guest-reachable host kills**,” including all the sites in this brief.
+
+The following shared evidence applies to each site block.
+
+- **Guest entry and dispatch.** Instruction bytes come from the cached guest-memory page or `memory_rw(..., MEM_READ, CACHE_INSTRUCTION)`; a failed read returns before decoding. The word is interpreted according to `cpu->byte_order`. (`src/cpus/cpu_arm_instr.c:4044–4063`.) The decoder extracts the condition and instruction fields; the special condition class takes a separate route. Ordinary coprocessor register transfers select `cond_instr(mcr_mrc)`, whereas coprocessor data operations select `cond_instr(cdp)`. (`src/cpus/cpu_arm_instr.c:4073–4084`, `4090–4149`, `4969–4989`.) Translation read-ahead returns without executing; actual execution calls `ic->f(cpu, ic)`. (`src/cpus/cpu_dyntrans.c:1916–1918`, `1930–1933`, `1978`.) The condition wrappers execute only when their condition passes; AL uses the main handler. (`src/cpus/cpu_arm_instr.c:132–199`.) The handler synchronizes PC, then calls `"arm_mcr_mrc(cpu, ic->arg[0]);"`. (`src/cpus/cpu_arm_instr.c:948–955`.) That dispatcher extracts the guest fields and calls the selected coprocessor only when `"cpu->cd.arm.coproc[cp_num] != NULL"`. (`src/cpus/cpu_arm.c:2643–2655`.) These are instruction/register paths, not DMA paths.
+
+- **Privilege and configuration.** Neither that dispatcher nor these coprocessor handlers checks guest privilege. Thus the traced ARM-state path is available in USR32 as well as FIQ32, IRQ32, SVC32, ABT32, UND32 and SYS32, subject to instruction execution and handler installation. The mode names are defined at `src/include/cpu_arm.h:108–114`; the unchecked dispatch is at `src/cpus/cpu_arm.c:2643–2655`. CPAR storage does not gate it: the source itself says `"This isn't really used throughout the rest of the code yet."` (`src/cpus/cpu_arm_coproc.c:276–283`.) A missing handler takes the diagnostic-only fallback; both exception delivery and exit are commented there. (`src/cpus/cpu_arm.c:2656–2662`.)
+
+- **Machine map.** CP15 is installed unconditionally by `"cpu->cd.arm.coproc[15] = arm_coproc_15;"`; CP14 requires `"cpu->cd.arm.cpu_type.flags & ARM_XSCALE"`. (`src/cpus/cpu_arm.c:174–179`.) The in-tree ARM machine defaults are:
+
+  | Machines | Default CPU | Committed source |
+  |---|---|---|
+  | `android-arm`: Finow X5 Air; Sony Xperia Mini | `CORTEX-A5`; `SnapdragonS2` | `src/machines/machine_androidarm.c:144–162`, `185–195` |
+  | `cats`; `netwinder` | `SA110` | `src/machines/machine_cats.c:135–151`; `src/machines/machine_netwinder.c:74–90` |
+  | `hpcarm`: Ipaq, Jornada 720, Jornada 728 | `SA1110` | `src/machines/machine_hpcarm.c:195–227` |
+  | `barearm`; `testarm` | `SA1110` | `src/machines/machine_test.c:206–230` |
+  | `rpi` | `ARM1136JSR1` | `src/machines/machine_rpi.c:57–77` |
+  | `iq80321` | `80321_600_2` | `src/machines/machine_iq80321.c:97–107` |
+  | `iyonix` | `80321_600_B0` | `src/machines/machine_iyonix.c:116–132` |
+
+  CP6 is explicitly installed by `iq80321` and `iyonix`, which also instantiate `i80321`. Installation precedes their PROM-emulation early returns. (`src/machines/machine_iq80321.c:57–61`, `86–87`; `src/machines/machine_iyonix.c:64–77`, `84–85`.) **CP6 installation is machine-controlled, not guarded by a CPU-model test.** CPU defaults can be overridden because an already-set CPU name returns before default selection. (`src/machines/machine.c:665–674`.) Consequently, “without that core” is accurate for normal configurations but is not the actual CP6 installation predicate.
+
+- **CPU model map.** CP15 applies to every accepted ARM CPU-table entry. The non-`ARM_XSCALE` names are `ARM3`, `ARM610`—listed twice—`ARM620`, `ARM700`, `ARM710`, `ARM710A`, `ARM720T`, `ARM740T4K`, `ARM740T8K`, `ARM7500`, `ARM7500FE`, `ARM810`, `ARM920T`, `ARM922T`, `ARM940T`, `ARM946ES`, `ARM966ES`, `ARM966ESR1`, `ARM1020E`, `ARM1022ES`, `ARM1026EJS`, `ARM1136JS`, `ARM1136JSR1`, `SA110`, `SA1100`, `SA1110`, `TI925T`, `IXP1200`, `80200`, `CORTEX-A5`, `SnapdragonS2`. The `ARM_XSCALE` names are `PXA210`, `PXA210A`, `PXA210B`, `PXA210C`, `PXA250`, `PXA250A`, `PXA250B`, `PXA250C`, `PXA27X`, `IXP425_255`, `IXP425_400`, `IXP425_533`, `80219_400`, `80219_600`, `80321_400`, `80321_400_B0`, `80321_600`, `80321_600_B0`, `80321_600_2`. Notably, the table does **not** flag `80200` as XScale. (`src/include/arm_cpu_types.h:50–111`; selection and installation: `src/cpus/cpu_arm.c:98–120`, `174–179`.)
+
+- **Complete sibling inventory for the finding file.** The live terminating lines are **62, 177, 264, 322, 331, 417, 528**. The commented occurrences are **58, 87, 102, 128, 287, 294**. There is no `cpu->running = 0` in this file. (`src/cpus/cpu_arm_coproc.c:1–530`.) The six studied conditions appear below. The additional live sibling, **177**, follows a normal-control-register write whose requested `ARM_CONTROL_BIG` differs from the effective current byte order; the assignment has already happened at line 135. An unsupported write selector can also fall through to that control write. (`src/cpus/cpu_arm_coproc.c:107–177`.) It remains outside this correction dossier. All live sites are recorded together as prose at `OUTSTANDING_BUGS.md:18721–18724`; the general hazard warning is at `16997–17000`.
+
+- **Available dispositions.** The closest house precedent for member **3** is the per-device `warned_irq_status_w` latch: `"the write is declined -- no register changes"` and the diagnostic contains `"(once)"`. (`src/devices/dev_footbridge.c:86–94`, `570–581`.) These ARM handlers need analogous **per-CPU** latch state; their current diagnostics are not latched. Member **5 is available on ARM**: `arm_cdp()` already calls `"arm_exception(cpu, ARM_EXCEPTION_UND);"`. (`src/cpus/cpu_arm.c:2674–2678`.) UND saves status, changes mode/banks, sets LR and the exception PC, and redirects execution. Its possible vector addresses are **`0x00000004` and `0xffff0004`**. (`src/include/cpu_arm.h:117–123`; `src/cpus/cpu_arm.c:679–680`, `693–733`.) The on-disk ARM manual says, “Any coprocessor instructions that are not implemented instead cause an Undefined Instruction exception.” That means hardware-unimplemented instructions; it does not classify every emulator omission. (`_scratchpad/ddi0100i.txt:9010–9014`, `9365–9369`.)
+
+**Site 62 — CP15 operand names r15**
+
+1. **TRUE; path.** After the shared dispatch selects CP15, `"if (opcode1 != 0)"` merely diagnoses: its exit is commented. Next, `"if (rd == ARM_PC)"` emits `"TODO: arm_coproc_15: rd = PC"` and executes `"exit(1);"`. This precedes the register switch and applies to either transfer direction, irrespective of the CP15 register or source value. (`src/cpus/cpu_arm_coproc.c:56–65`; `ARM_PC` definition: `src/include/cpu_arm.h:56`.)
+
+2. **Who.** The privilege analysis and complete CP15 model/machine map above apply: all the listed ARM machines instantiate CP15. No XScale requirement applies. Failed instruction conditions, an instruction-fetch failure, or failure to execute the instruction prevent entry; CPAR does not protect this path. (`src/cpus/cpu_arm.c:174–175`, `2643–2655`; shared entry citations above.)
+
+3. **Hardware.** The specific CP15 rule is: “This register must not be R15, even though MRC instructions normally allow it to be R15,” followed by “the instruction is UNPREDICTABLE.” (`_scratchpad/ddi0100i.txt:27698–27700`.) Generic MRC flag-transfer semantics therefore do **not** justify blindly accepting every CP15/r15 transfer. Nevertheless, the manual separately defines optional ARMv5 test-and-clean operations using the PC destination and updating condition flags. (`_scratchpad/ddi0100i.txt:32653–32674`.) Whether each advertised CPU implements those optional operations is **not checked**; the manual requires implementation-specific documentation. (`_scratchpad/ddi0100i.txt:27624–27627`.)
+
+4. **Siblings.** Other live exits are **177, 264, 322, 331, 417, 528**, with the conditions and common prose record identified above and below. No additional CPU stop exists in this file. (`src/cpus/cpu_arm_coproc.c:1–530`; `OUTSTANDING_BUGS.md:18721–18724`.)
+
+5. **Option.** **Member 3** fits explicit containment of unsupported r15 operations; **member 7** is necessary for any supported optional cache-test operation. Member 1 would expose ordinary assignments such as `"cpu->cd.arm.r[rd] = cpu->cd.arm.control;"`, which do not implement flag transfer. (`src/cpus/cpu_arm_coproc.c:95–97`; separate flag storage: `src/include/cpu_arm.h:185–190`.) Nearest local decline precedent: unsupported cache/TLB reads diagnose and return. (`src/cpus/cpu_arm_coproc.c:221–233`.) UND machinery exists, but this manual’s `UNPREDICTABLE` classification is not a mandatory-UND rule.
+
+6. **Observations/neighbours.** For member 3, host termination becomes continued execution with a CPU-local once diagnostic; no exception is introduced and refusal must not alter CP15 state or condition flags. Preserve implemented transfers using **r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14**, including ID/control reads and ordinary register accesses. (`src/cpus/cpu_arm_coproc.c:67–218`.) Optional cache-test flag results need their own hardware-supported implementation, not blanket rejection. (`_scratchpad/ddi0100i.txt:32653–32674`.)
+
+7. **Records.** The live-exit warning is true. (`OUTSTANDING_BUGS.md:16997–17000`.) `"Some sanity checks"` does not establish that every CP15/r15 encoding is forbidden. (`src/cpus/cpu_arm_coproc.c:55`.) A precise replacement comment would be: **“Handle unsupported CP15 r15 transfers separately from implementation-supported cache-test operations.”** No false site-specific CHANGELOG sentence was established.
+
+**Site 264 — nonzero PID/FCSE state**
+
+1. **TRUE; path.** After CP15’s preceding operand gate, `"case 13"` diagnoses nonzero `opcode2` and nonzero `crm` but does not reject either. A read copies PID into the ARM register; a write executes `"cpu->cd.arm.pid = cpu->cd.arm.r[rd];"`. Then `"if (cpu->cd.arm.pid != 0)"` diagnoses missing FCSE and executes `"exit(1);"`. Thus the write commits before termination; the same test also follows reads of already-nonzero state. (`src/cpus/cpu_arm_coproc.c:250–264`.) An ordinary surviving guest cannot establish that nonzero state through this write path and then read it back: the write has already terminated the process.
+
+2. **Who.** All CP15 models and machines above; USR32 and privileged modes encounter no handler privilege gate. No CPU-feature test limits this PID case. (`src/cpus/cpu_arm.c:174–175`, `2643–2655`; `src/cpus/cpu_arm_coproc.c:250–264`.)
+
+3. **Hardware.** “Writing register 13 sets the PID to bits[31:25] of the value written.” Those bit positions are **31, 30, 29, 28, 27, 26, 25**. The remaining bit positions—**24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0**—have SBZP/UNPREDICTABLE constraints, not arbitrary supported PID storage. (`_scratchpad/ddi0100i.txt:34253–34260`.) The FCSE address rule is `"MVA = VA | (PID << 25)"` when the upper VA field is zero; otherwise `"MVA = VA"`. (`_scratchpad/ddi0100i.txt:34171–34175`.) Zero disables FCSE; nonzero enables it. (`_scratchpad/ddi0100i.txt:34223–34230`.) The source’s whole-word nonzero test is therefore broader than a nonzero architectural PID.
+
+4. **Siblings.** **62, 177, 322, 331, 417, 528**; same-file inventory and prose record above. (`src/cpus/cpu_arm_coproc.c:1–530`; `OUTSTANDING_BUGS.md:18721–18724`.)
+
+5. **Option.** **Member 3 before assignment** is containment; **member 7** is faithful FCSE support. The translator uses the original `vaddr` and has no FCSE remapping. (`src/cpus/memory_arm.c:118–131`, `166–244`.) Deleting the exit or retaining backing storage would advertise state without implementing its mapping effects. A valid FCSE write is not made architecturally undefined merely by this omission. Local decline and house-latch precedents are the shared ones above.
+
+6. **Observations/neighbours.** Previously, the write mutates PID and terminates, so no later guest readback is available. Under containment, execution continues, the unsupported write leaves the supported PID state unchanged, and subsequent reads can confirm it; FCSE address behaviour remains disabled. Preserve zero-PID writes and reads. (`src/cpus/cpu_arm_coproc.c:257–264`.) Also avoid treating every other register-13 selector as intrinsically illegal: the manual names **FCSE PID with opcode2 0** and **ContextID with opcode2 1**. (`_scratchpad/ddi0100i.txt:30507–30528`.) Those require distinct decoding decisions.
+
+7. **Records.** `"Fast Context Switch Extension not implemented yet"` is accurate for the inspected translator. (`src/cpus/cpu_arm_coproc.c:262–263`; `src/cpus/memory_arm.c:118–244`.) The older prose `"cpu_arm_coproc.c CP15 writes 165/252/407/518"` is misclassified and uses historical line numbers. (`OUTSTANDING_BUGS.md:2688`.) Correct: **“At db8b1a33, the cited exits are CP15 endianness at 177, CP15 PID at 264, CP6 unknown operations at 417, and CP14 unknown operations at 528.”**
+
+**Site 322 — nonzero interrupt-steering write**
+
+1. **TRUE; path.** CP6 selects `crm` case 0, then `crn` case 4. Reads return `i80321_isteer`. The write arm first executes `"cpu->cd.arm.i80321_isteer = cpu->cd.arm.r[rd];"`; `"if (cpu->cd.arm.r[rd] != 0)"` then diagnoses unimplemented steering and executes `"exit(1);"`. Zero writes continue. Neither opcode field is checked in this handler. (`src/cpus/cpu_arm_coproc.c:304–325`.)
+
+2. **Who.** **`iq80321` / `80321_600_2` and `iyonix` / `80321_600_B0`** in default configurations; these machines install CP6 explicitly. Other ARM machines do not acquire CP6 merely by selecting an XScale CPU. The installation/override qualification and unrestricted guest privilege path above apply. (`src/machines/machine_iq80321.c:57–61`, `97–99`; `src/machines/machine_iyonix.c:64–77`, `116–118`.)
+
+3. **Hardware.** No i80321/XScale hardware manual was identified among the permitted on-disk manuals. Steering bit semantics and hardware access permissions are **not checked**. The source header names `INTSTR`, but that is not a manual substitute. (`src/include/thirdparty/i80321reg.h:314–319`.)
+
+4. **Siblings.** **62, 177, 264, 331, 417, 528**; recorded together at `OUTSTANDING_BUGS.md:18721–18724`.
+
+5. **Option.** **Member 3 before mutation** contains the omission; **member 7** must implement steering. Current interrupt routing consults status and enable, then asserts/deasserts `d->irq`; it does not consume steering. (`src/devices/dev_i80321.c:83–94`, `445–446`.) FIQ exception-state machinery exists, but CPU input registration ends with `"/* FIQ: TODO */"`, and the inspected execution check delivers IRQ only. (`src/cpus/cpu_arm.c:198–212`, `683–684`, `715–717`; `src/cpus/cpu_dyntrans.c:208–209`.) Member 4 is therefore not justified by stored readback alone. The footbridge latch is the nearest bounded-decline precedent. (`src/devices/dev_footbridge.c:570–581`.)
+
+6. **Observations/neighbours.** Termination becomes continued execution and one warning; steering readback remains unchanged by refusal, and existing IRQ routing continues. No new exception is part of member 3. Preserve steering reads, zero steering writes, INTEN reads/writes and timer operations. (`src/cpus/cpu_arm_coproc.c:310–325`, `342–404`.) Hardware correctness of all accepted opcode variants is **not checked**.
+
+7. **Records.** The statement that ISTEER “carries **no `fatal()` and no `exit()`**” is false when applied to its whole case. (`OUTSTANDING_BUGS.md:18687–18688`.) Correct: **“The ISTEER read arm is quiet; its write arm stores the value and terminates when it is nonzero.”** Also correct the source comment `"Register the CPU's \"IRQ\" and \"FIQ\" interrupts"` to **“Register the CPU IRQ interrupt; FIQ input registration remains unimplemented.”** (`src/cpus/cpu_arm.c:198–212`.) CHANGELOG correctly limits its quiet-sibling claim to the read. (`CHANGELOG.md:3624–3632`.)
+
+**Site 331 — interrupt-source/status write**
+
+1. **TRUE; path.** CP6 selects `crm` case 0, `crn` case 8. Reads return `i80321_isrc`. Every write executes `"cpu->cd.arm.i80321_isrc = cpu->cd.arm.r[rd];"`, then `"TODO: XScale int ack?"`, then `"exit(1);"`. There is no data-value condition. (`src/cpus/cpu_arm_coproc.c:307–309`, `326–331`.)
+
+2. **Who.** The same **IQ80321 and Iyonix CP6 installations** and default CPU models as site 322; no handler privilege or opcode check. It is unavailable through this handler on machines lacking that installation. (`src/machines/machine_iq80321.c:57`, `99`; `src/machines/machine_iyonix.c:64`, `118`; `src/cpus/cpu_arm_coproc.c:304–418`.)
+
+3. **Hardware.** Model-specific write behaviour is **not checked** because no covering i80321 manual was identified. Neither the name `IINTSRC` nor `"/* current assertions */"` proves that hardware ignores writes or faults them. (`src/include/thirdparty/i80321reg.h:318`; `src/include/cpu_arm.h:214`.)
+
+4. **Siblings.** **62, 177, 264, 322, 417, 528**; common prose record at `OUTSTANDING_BUGS.md:18721–18724`.
+
+5. **Option.** **Member 3 before mutation** is the supported containment choice pending hardware semantics. Delete-only is unsafe: `"d->status = &cpu->cd.arm.i80321_isrc;"` makes the assignment overwrite live controller status, used by assertion/deassertion logic. (`src/devices/dev_i80321.c:445`, `83–94`.) The footbridge status-write refusal is a close project precedent, but does not establish i80321 hardware behaviour. (`src/devices/dev_footbridge.c:570–591`.) Member 5 is mechanically available; its architectural applicability here remains **not checked**.
+
+6. **Observations/neighbours.** Previously, status is overwritten and the process exits. Containment permits subsequent status reads while preserving pending status and avoiding a new exception. Preserve status reads and the distinct implemented timer acknowledgement: `"cpu->cd.arm.tisr &= ~cpu->cd.arm.r[rd];"` followed by timer-interrupt deassertions. (`src/cpus/cpu_arm_coproc.c:326–327`, `384–398`.) Do not conflate that acknowledgement with this unsupported status write.
+
+7. **Records.** `"TODO: XScale int ack?"` is explicitly a question, not a verified hardware description. (`src/cpus/cpu_arm_coproc.c:330`.) A truthful containment diagnostic would be **“i80321 interrupt-source write unsupported; write declined (once).”** CHANGELOG accurately says this exit was retained. (`CHANGELOG.md:3630–3632`.)
+
+**Site 417 — CP6 unknown selection**
+
+1. **TRUE; path.** The switch defaults execute `"goto unknown;"`; that label emits the field diagnostic and `"exit(1);"`. (`src/cpus/cpu_arm_coproc.c:334`, `405`, `409`, `414–417`.) The switch misses are:
+   - `crm = 0`, `crn =` **1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15**.
+   - `crm = 1`, `crn =` **8, 9, 10, 11, 12, 13, 14, 15**.
+   - `crm =` **2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15**, irrespective of `crn`.
+
+   Either transfer direction reaches those defaults; neither opcode field controls selection. (`src/cpus/cpu_arm_coproc.c:304–410`.)
+
+2. **Who.** **IQ80321 and Iyonix**, with the CP6 installation and privilege qualifications above; default CPUs are `80321_600_2` and `80321_600_B0`. (`src/machines/machine_iq80321.c:57`, `99`; `src/machines/machine_iyonix.c:64`, `118`.)
+
+3. **Hardware.** The generic ARM unimplemented-instruction/UND rule is quoted above. Specific i80321 classifications are **not checked**. In particular, the project header names `"FINTSRC cp6 c9,0"`, while this handler has no matching implemented case. Therefore “unknown” cannot be equated wholesale with “reserved.” (`src/include/thirdparty/i80321reg.h:319`; `src/cpus/cpu_arm_coproc.c:309–335`.)
+
+4. **Siblings.** **62, 177, 264, 322, 331, 528**; common prose record at `OUTSTANDING_BUGS.md:18721–18724`.
+
+5. **Option.** **Member 3** is provisional containment; **member 5** fits operations verified unavailable in hardware, and **member 7** fits valid missing operations. Unknown reads under containment leave their destination unchanged; do not invent returned values. The nearest local decline precedent is the missing-coprocessor fallback; the nearest fault precedent is `arm_cdp()`. (`src/cpus/cpu_arm.c:2656–2662`, `2674–2678`.)
+
+6. **Observations/neighbours.** The unknown branch currently assigns no register before terminating. Containment changes termination and diagnostic frequency, leaving architectural transfer state unchanged; a member-5 correction would instead expose UND state/vector changes. (`src/cpus/cpu_arm_coproc.c:414–417`; `src/cpus/cpu_arm.c:679–733`.) Preserve the implemented selections: `(crm,crn)` **(0,0)** INTEN; **(0,4)** steering reads/zero writes; **(0,8)** source reads; **(1,0)** TMR0; **(1,1)** TMR1; **(1,2)** TCR0; **(1,3)** TCR1; **(1,4)** TRR0; **(1,5)** TRR1; **(1,6)** TISR; **(1,7)** WDTCR. (`src/cpus/cpu_arm_coproc.c:309–404`.) These are implemented neighbours; complete hardware legality is **not checked**.
+
+7. **Records.** `"unimplemented"` accurately describes the model branch; replacing it with universally “invalid” would overstate the evidence. (`src/cpus/cpu_arm_coproc.c:415–416`.) The prose “UND is very likely the RIGHT member” is a hypothesis needing per-operation confirmation, not an established hardware conclusion. (`OUTSTANDING_BUGS.md:18723–18724`.) Corrected design sentence: **“Classify CP6 defaults against the selected hardware; use UND for unavailable instructions and implementation for valid omissions.”**
+
+**Site 528 — CP14 unknown selection**
+
+1. **TRUE; path.** `"if (opcode2 != 0)"` diagnoses and jumps to `unknown`; the nonzero values are **1, 2, 3, 4, 5, 6, 7**. Otherwise nested `crm`/`crn` switches select the operation. Their defaults also jump to `unknown`, which diagnoses and executes `"exit(1);"`. (`src/cpus/cpu_arm_coproc.c:429–434`, `460`, `490`, `515`, `519`, `524–528`.) With `opcode2 = 0`, the inner misses are:
+   - `crm = 0`, `crn =` **4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15**.
+   - `crm = 1`, `crn =` **2, 3, 6, 7, 9, 10, 11, 12, 13, 14, 15**.
+   - `crm = 2`, `crn =` **4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15**.
+   - Outer misses: `crm =` **3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15**.
+
+   Either direction can fail; `opcode1` is only printed, not validated. (`src/cpus/cpu_arm_coproc.c:426–528`.)
+
+2. **Who.** Only CPUs marked `ARM_XSCALE` receive this handler—the model names are enumerated above. The default machines instantiating it are **IQ80321 and Iyonix**. Other ARM machines can receive it through selection of a flagged CPU; normal non-XScale defaults do not. There is no privilege/CPAR enforcement in the traced dispatch. (`src/cpus/cpu_arm.c:178–179`, `2643–2655`; `src/include/arm_cpu_types.h:88–111`; machine citations above.)
+
+3. **Hardware.** No covering XScale performance-monitor manual was identified on disk. Exact register allocation, access permissions and reserved-operation behaviour are **not checked**. The generic ARM UND rule does not prove all these model defaults represent hardware-unavailable instructions. (`_scratchpad/ddi0100i.txt:9365–9369`.)
+
+4. **Siblings.** **62, 177, 264, 322, 331, 417**; common prose record at `OUTSTANDING_BUGS.md:18721–18724`.
+
+5. **Option.** **Member 3** provides explicit containment pending classification; **5** and **7** apply respectively to verified unavailable and valid missing operations. Member 4 does not fit the unknown branch—it computes no transfer result—and member 6 would invent registers. (`src/cpus/cpu_arm_coproc.c:429–528`.) Existing decline, fault and latch precedents are the shared ones above.
+
+6. **Observations/neighbours.** Before: diagnostic and process exit, plus the earlier opcode diagnostic when applicable. After member 3: one warning per CPU/refusal class, execution continues, no transfer result or exception is invented. Preserve implemented `(crm,crn)` pairs **(0,0), (0,1), (0,2), (0,3), (0,7), (1,0), (1,1), (1,4), (1,5), (1,8), (2,0), (2,1), (2,2), (2,3)**. These cover stored PM fields and the `(0,7)` no-op. (`src/cpus/cpu_arm_coproc.c:436–514`.) Their complete hardware legality and counter-event fidelity are **not checked**.
+
+7. **Records.** `"Possibly some kind of idle or sleep function"` is explicitly speculative; it is not verified by an available model manual. (`src/cpus/cpu_arm_coproc.c:457–459`.) No false CP14-specific source comment was established. The older “CP15 writes” classification requires the correction given under site 264. (`OUTSTANDING_BUGS.md:2688`.)
+
+Across the option set, **delete-only is not a semantic correction**, silent decline lacks the selected diagnostic policy, and invented backing storage supplies no missing effects. The already-fixed INTEN read is the genuine **member-4** contrast: it returns the modelled field without terminating. (`src/cpus/cpu_arm_coproc.c:310–314`; `CHANGELOG.md:3628–3632`.) A disposition absent from the list is **stop the virtual CPU and enter the debugger while retaining the host process**; the shared decoder’s unsupported-instruction path does this. It remains a CPU stop, not continued execution or an architectural exception. (`src/cpus/cpu_dyntrans.c:1983–2024`.)
+
+Existing regression records also need deliberate updates during correction: the current probe explicitly retains the steering-write, source-write and unknown-selection terminations as controls named `SIB_WRITE`, `S_ISRC_WR`, and `E_UNKNOWN`. Its comment says r15 data/flag semantics are not established by its survival check. (`regress/xscale_inten_probe.py:20–24`.) Those controls cannot remain termination oracles after the corresponding correction.
+
+Finally, `"cpu_arm_coproc.c (8, one filed)"` is stale if read as a current inventory; it may remain only as dated history. (`OUTSTANDING_BUGS.md:18854`.) Correct current wording: **“After #526, the remaining live exits are 62, 177, 264, 322, 331, 417 and 528.”** The record explicitly marks the former INTEN issue shipped as #526. (`OUTSTANDING_BUGS.md:19488–19493`.) The blanket “warn-once-and-continue … would close them” also needs qualification: **“Decline must precede unsupported state mutation; hardware-defined operations may require implementation or an architectural exception.”** (`OUTSTANDING_BUGS.md:2689`.)
+
+**DENOMINATOR:** Numbered committed passages read, including delegated reads:
+
+- `src/cpus/cpu_arm_coproc.c:1–530`; `src/cpus/memory_arm.c:1–277`; `src/include/arm_cpu_types.h:1–115`.
+- `src/cpus/cpu_arm.c:45–220,571–762,788–812,2550–2686`; `src/cpus/cpu_arm_instr.c:112–206,941–1170,1940–2095,4020–4170,4940–5014`; `src/cpus/cpu_dyntrans.c:1795–2036` and cited IRQ search hits.
+- `src/include/cpu_arm.h:38–104,106–150,160–369`; `src/include/thirdparty/i80321reg.h:276–430`; `src/devices/dev_i80321.c:1–180,361–481`; `src/devices/dev_footbridge.c:73–97,529–663`; `src/cpus/cpu_alpha_palcode.c:391–480`; `src/core/debugmsg.c:375–425`.
+- `src/machines/machine.c:650–692`; `machine_androidarm.c:140–199`; `machine_iq80321.c:40–109`; `machine_iyonix.c:56–134`; `machine_test.c:170–232`, plus numbered machine/model/registration search matches in `src/machines/`.
+- `OUTSTANDING_BUGS.md:2669–2694,16975–17008,18588–18614,18661–18735,18840–18865,19235–19288,19488–19510,20333–20384`; `CHANGELOG.md:3598–3650,5270–5297,30078–30102`; `regress/xscale_inten_probe.py:1–30`; targeted source/record search matches.
+- On-disk manual excerpts: `_scratchpad/ddi0100i.txt:8936–9025,9291–9385,27620–27715,30500–30560,32623–32685,34121–34188,34221–34272`, plus targeted search hits. `ddi0100i.txt`, `ddi0406.txt`, and `dc21285.txt` were searched for pertinent hardware terms; unrelated manual sections were not audited.
+
+Not checked: runtime behaviour, builds, historical measurement claims, complete model-specific XScale/i80321 semantics, optional cache-test support per CPU, Thumb/26-bit paths, secondary-CPU CP6 setup, or every termination elsewhere in ARM execution code. Working-tree source, other source copies, and `tools/pipeline/ledger.json` were not read. **Scope exception:** one Git wildcard search unintentionally returned matching lines under `regress/artifacts/`; those matches were excluded from the evidence and received no follow-up reads.

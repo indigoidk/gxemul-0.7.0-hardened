@@ -1,0 +1,35 @@
+ASTRARETRO_CPUARM_ALIVE
+VERDICT: 5 findings (2 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 14 items checked clean
+
+Reviewed committed `8ea26abb` only. Static inspection; no builds, probe execution, or writes.
+
+F1 | src/cpus/cpu_arm.c:2483 | upstream; missed siblings of #45 / 8dd86b5a | CODE | live at HEAD: yes | #45 fixes instruction-word assembly but leaves signed-promoted `byte << 24` in loaded-value annotations here and at :2486, plus Thumb PC-relative loads (:1562/:1564) and SP-relative loads (:1634/:1636). Guest words with bit 31 set therefore still cause undefined signed shifts on these paths; the annotation path requires disassembly/tracing. | Smallest check: inspect the unsigned-byte array declarations and six remaining shifts against `misc.h:203`’s cast-before-shift macros. | confidence high
+
+F2 | src/cpus/cpu_arm.c:167 | #291 | CODE | live at HEAD: yes | On ARM1136JSR1, a guest Cache Type register read returns `0x0b02a0ea`. Its D-cache fields describe **512 bytes, 32 ways, and 32-byte lines**—an impossible geometry. Zero encodes a size, not “unspecified”; `size + 6 − assoc − len` equals −1, explicitly forbidden by `_scratchpad/ddi0100i.txt:32336` ([ARM manual, B6-17](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/1023/ARM-Architecture.pdf)). The source’s “correct” claim at :148 is also false. Already partially filed under **#291’s 2026-07-30 retroactive review**, `OUTSTANDING_BUGS.md:2097`; no separate bug ID. | Smallest check: decode the assembled fields using `cpu_arm.h:319` and the manual’s formulas at :32323. | confidence high
+
+F3 | CHANGELOG.md:21344 | #291 | RECORD | live at HEAD: yes | Claims the register is unused and nothing guest-observable changes. Guest CP15 reads directly return `cachetype` at `cpu_arm_coproc.c:80`; the TODO actually concerns ignored `iway`/`dway` fields. The register change is observable. This is also acknowledged in the #291 outstanding-record entry cited above. | Smallest check: compare that paragraph with `cpu_arm.c:163` and `cpu_arm_coproc.c:79`. | confidence high
+
+F4 | CHANGELOG.md:32804 | #328 | RECORD | live at HEAD: yes | Explains that debugger CPSR writes cannot establish Thumb mode because handlers read separate `flags`. That separation concerns NZCV: `cpu_dyntrans.c:255` reads T directly from CPSR, and `cpu_arm.c:1216` additionally requires an odd PC. The probe already corrects this explanation at `arm_flags_probe.py:1253`, but the changelog retains it. | Smallest check: compare those three HEAD locations. | confidence high
+
+F5 | regress/arm_flags_probe.py:1506 | #329 | TEST-GAP | live at HEAD: yes | Both `T RORS clears Z` and `T RORS clears N` use `cin=1`, which `run_thumb:1329` establishes using `SUBS 1−0`: **N=0, Z=0**. Neither supplies the stale flag it claims to test, so omitting `cpu_arm.c:1454`’s clearing would still satisfy both rows. No independent stale-N/Z ROR row was found under `regress/`. | Smallest check: trace both fixture arguments into the preset at :1329. | confidence high
+
+No matching HEAD `OUTSTANDING_BUGS.md` filing was found for F1, F4, or F5.
+
+Checked clean; all following lines refer to committed [src/cpus/cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c):
+
+- :158 — D/I size arithmetic avoids negative shifts and applies matching masks.
+- :761 — General-path counter is initialized and printed with matching integer types.
+- :767 — Both pointer arrays and the user bitmap are indexed within bounds.
+- :775 — Raw output stops after 64 entries; the scan is finite.
+- :1180 — Arithmetic helper correctly derives NZCV from original operands and truncated results.
+- :1289 — LSR handles encoded zero as 32 and bounds other shifts.
+- :1301 — LSL zero preserves carry; nonzero result and carry extraction agree.
+- :1340 — ASR zero sign-fills; NZ comes from the actual destination.
+- :1370 — Register/imm3 operands are captured before writeback, including aliases.
+- :1386 — Immediate CMP performs subtraction without register writeback.
+- :1399 — Immediate ADD/SUB selects the correct operand, destination, and polarity.
+- :1428 — ROR handles count boundaries, replaces NZ, and preserves V.
+- :1474 — Register CMP preserves operand order and avoids writeback.
+- :1858 — Both endian instruction-fetch macros cast bytes before shifting.
+
+DENOMINATOR: read 8 of 8 hunks of the net diff

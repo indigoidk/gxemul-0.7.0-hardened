@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""mk_filing.py [--check]  -- derive the FILING TABLE of the Astra review campaign from its two dispositions files:
+    astraretro_20260926/DISPOSITIONS.md                    (wave 1, the retro review: 403 findings, 15 batches)
+    astraretro_harness_20260926/HARNESS_DISPOSITIONS.md    (wave 2, the harness review: 722 findings, 18 groups)
+One line per row a records round would FILE: wave, where, key, kind, severity, id, title and the governing text.
+Kinds: NEW (a new queue row), GAP (a test-coverage row), ID (an id assigned to an entry OUTSTANDING_BUGS.md already
+carries in prose -- a row for the ledger, no second entry).  It also counts what is NOT a row (FILED, L4/RECORD, DROP,
+MERGED, DUPLICATE, UNSETTLED, OPEN) and checks every proposed id for collisions: inside the table, against the
+ledger's row ids and against the backticked ids of OUTSTANDING_BUGS.md's headings (both at HEAD).
+
+THE TWO HALVES ARE NOT EQUALLY MECHANICAL, and the report says so: batches 3a-3h and the harness groups are one
+finding per line and every finding is accounted for; batches 1b-2e are hand-written prose, scanned by REGION (NEW /
+GAP / "FILED BY PROSE, NO ID" / "FILED AS ROWS"), and their counts are shown beside each batch header's own for a
+reader to reconcile.  Nothing is filed by this tool.  Writes regress/artifacts/astrafiling_20261002/{FILING.tsv,
+FILING_REPORT.txt}; --check prints the report only."""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+
+SEC = r"C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC"
+ARTS = os.path.join(SEC, "regress", "artifacts")
+RETRO = os.path.join(ARTS, "astraretro_20260926", "DISPOSITIONS.md")
+HARN = os.path.join(ARTS, "astraretro_harness_20260926", "HARNESS_DISPOSITIONS.md")
+OUT = os.path.join(ARTS, "astrafiling_20261002")
+SEV = r"(HIGH|MED|LOW)"
+QUOTED = re.compile(r'"([^"]{8,})"|\u201c([^\u201d]{8,})\u201d')
+rows, notes, cur_lines = [], [], []
+acct = {}
+
+
+def add(wave, bucket, n=1):
+    acct[(wave, bucket)] = acct.get((wave, bucket), 0) + n
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def clean(t, cap=170):
+    t = re.sub(r"\s+", " ", t).strip(" .;,-*")
+    return t if len(t) <= cap else t[:cap - 3].rsplit(" ", 1)[0] + "..."
+
+
+def quoted(t):
+    m = QUOTED.search(t or "")
+    return (m.group(1) or m.group(2)) if m else None
+
+
+import glob
+RULINGS = "\n".join(rd(p) for p in sorted(glob.glob(os.path.join(ARTS, "astraretro_20260926", "adjudication", "fable_batch*.md"))))
+# the dispositions cite the queue file's lines AS OF THE REVIEWED COMMIT, so the entry's own words are read there
+BUGS_HEAD = subprocess.run(["git", "-C", SEC, "show", "db8b1a33:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8", "replace").split("\n")
+# two prose entries receive an id on a dispositions line that states no grade.  Both are guest-visible floating-point
+# divergences (an accepted-nearest result band; a trap that fires before rounding), which the severity rule grades MED;
+# the confirming seat is asked to check exactly these two.
+SEV_OVERRIDE = {"optinyband": "MED", "mipstinyprerm": "MED"}
+
+
+def ruling_title(ident):
+    """the ruler's own one-line title for an id, from its ruling file: `CONFIRMED-NEW LOW id "title"`"""
+    m = re.search(r"(?:CONFIRMED-NEW|TEST-GAP-FILE)[^|\"\n]{0,24}`?" + re.escape(ident) + r"`?\s*\"([^\"\n]{8,})\"", RULINGS)
+    return m.group(1) if m else None
+
+
+def queue_words(lead):
+    """for an id assigned to an existing prose entry: that entry's own first line in OUTSTANDING_BUGS.md at HEAD"""
+    m = re.findall(r":(\d{3,5})(?:-(\d{3,5}))?", lead)
+    if not m:
+        return None
+    n = int(m[-1][0])
+    words = re.sub(r"^[>\s*-]+|\*\*", "", BUGS_HEAD[n - 1]).strip()
+    return "OUTSTANDING_BUGS.md:%s%s at db8b1a33 -- %s" % (m[-1][0], ("-" + m[-1][1]) if m[-1][1] else "", words)
+
+
+def row(wave, where, key, kind, sev, ident, title, src):
+    if ident in SEV_OVERRIDE and sev == "?":
+        sev = SEV_OVERRIDE[ident]
+        notes.append("retro %s: the dispositions line states no grade -- %s by the severity rule (a guest-visible FP divergence); CHECK IT" % (ident, sev))
+    rows.append(dict(wave=wave, where=where, key=key, kind=kind, sev=sev, id=ident or "?", title=clean(title or "(read the governing text)"),
+                     src=clean(src, 400)))
+    add(wave, kind)
+
+
+# ---------------------------------------------------------------- wave 1, the retro
+t = rd(RETRO)
+MKEY = re.compile(r"^\* [`*\s]*([a-z0-9_]+:F\d+)[`*\s]*\|\s*(.*)$")
+RKIND = r"(CONFIRMED-NEW|CONFIRMED-FILED|RECORD-L4|TEST-GAP-FILE|REFUTED|UNSETTLED|DUPLICATE-OF-ROW|DUPLICATE)"
+IDTOK = r"[*`\s,]*(?:" + SEV + r"[*`\s,]*)?(`?)([a-z][a-z0-9_]{3,})`?"
+CUR_ID = re.compile(r"`([a-z0-9_]+)`[\s,]*(?:(?:--|\u2014)\s*)?(?:" + SEV + r"\b|(?:SEVERITY )?RAISED(?: to| [A-Z]+ ->)? " + SEV
+                    + r"|SEVERITY DISPUTED)")
+HEAD = re.compile(r"^(NEW|GAP|FILED BY PROSE|FILED|UNDISCHARGED L2|L4|UNSETTLED|DUPLICATE|CROSS-BATCH|RULE|[A-Z][a-z]+'s own)\b")
+REGKIND = {"NEW": "NEW", "GAP": "GAP", "FILED BY PROSE": "ID", "UNDISCHARGED L2": "NEW"}
+for b in re.split(r"(?m)^(?=## Batch )", t)[1:]:
+    name = re.match(r"## Batch (\S+)", b).group(1)
+    blines = b.splitlines()
+    nh = 0
+    while nh < len(blines) and blines[nh].startswith("##"):
+        nh += 1
+    hdr = " ".join(blines[:nh])
+    nfind = int(re.search(r"\((\d+) findings\)", hdr).group(1))
+    add("retro", "findings", nfind)
+    if "Mechanically assembled" in hdr:
+        rul, amend, order, sec = {}, {}, [], None
+        for l in blines:
+            if l.startswith("RULINGS"):
+                sec = "R"
+            elif l.startswith("ASTRA'S AMENDMENTS"):
+                sec = "A"
+            elif l.startswith("THE RULER'S OWN ADDITIONS") or l.startswith("SEVERITY DISPUTE"):
+                sec = None
+            m = MKEY.match(l)
+            if m and sec == "R":
+                rul[m.group(1)] = m.group(2)
+                order.append(m.group(1))
+            elif m and sec == "A":
+                amend[m.group(1)] = m.group(2)
+        if len(order) != nfind:
+            notes.append("retro %s: %d ruling lines, header says %d findings" % (name, len(order), nfind))
+        for key in order:
+            line = rul[key]
+            rk = re.match(r"[*`\s]*" + RKIND, line)
+            rkind = rk.group(1) if rk else "(unparsed)"
+            rid = re.match(r"[*`\s]*" + RKIND + IDTOK, line)
+            rid = rid.group(4) if rid else None
+            kind, sevtxt, ident, title, gov = rkind, line.split('"')[0], rid, quoted(line), line
+            a = amend.get(key)
+            if a:
+                s = re.search(r"\|\s*should (?:be|remain)\b\s*(.*)$", a)
+                seg = s.group(1).split(" | ")[0] if s else ""
+                evid = s.group(1).split(" | ")[1] if s and " | " in s.group(1) else ""
+                ak = re.search(RKIND, seg)
+                if ak:
+                    kind, gov = ak.group(1), seg
+                    sevtxt = seg.split('"')[0]
+                    ai = re.search(RKIND + IDTOK, seg)
+                    if ai and (ai.group(3) == "`" or ai.group(4) == rid):
+                        ident = ai.group(4)
+                    title = quoted(seg) or title or evid.split(". ")[0]
+                else:
+                    gov = line + "  [Astra, wording or scope: " + seg.strip() + "]"
+            if kind in ("CONFIRMED-NEW", "TEST-GAP-FILE"):
+                sv = re.search(r"\b" + SEV + r"\b", sevtxt)
+                row("retro", "batch " + name, key, "NEW" if kind == "CONFIRMED-NEW" else "GAP",
+                    sv.group(1) if sv else ("LOW" if kind == "TEST-GAP-FILE" else "?"), ident, title, gov)
+            else:
+                add("retro", {"CONFIRMED-FILED": "FILED", "RECORD-L4": "L4", "DUPLICATE-OF-ROW": "DUPLICATE"}.get(kind, kind))
+        continue
+    # ---- a curated batch: scan by region
+    body = []
+    for l in blines[nh:]:
+        if l.startswith("## ") or l.strip() == "---":
+            break
+        body.append(l)
+    got = {"NEW": 0, "GAP": 0, "ID": 0}
+    reg, buf = None, []
+
+    def flush():
+        if reg in REGKIND and buf:
+            text = " ".join(x.strip() for x in buf)
+            if reg == "UNDISCHARGED L2":       # batch 1a: `M2_...` ids, graded L2 by the CHANGELOG, "file with its L2 status"
+                for m in re.finditer(r"\* `([A-Za-z0-9_]+)` -- (.*?)(?=\s\* `|$)", text):
+                    row("retro", "batch " + name, "-", "NEW", "L2 obligation", m.group(1), m.group(2).replace("  File with its L2 status.", ""), m.group(0))
+                    got["NEW"] += 1
+                return
+            if reg == "FILED BY PROSE":        # `-> \`id\` SEV`, `proposed id \`id\`, SEV`, `, and \`id\`, SEV`, `ONE id for it, \`id\``
+                seen_here = set()
+                for m in re.finditer(r"(?:->\s*|proposed id |ONE id for it, |, and |-- )`([a-z][a-z0-9_]{3,})`(?:,?\s*" + SEV + r"\b)?", text):
+                    if m.group(1) in seen_here:
+                        continue
+                    seen_here.add(m.group(1))
+                    lead = text[max(0, m.start() - 110):m.start()]
+                    row("retro", "batch " + name, "-", "ID", m.group(2) or "?", m.group(1),
+                        queue_words(text[:m.start()]) or ("(an id for an existing prose entry) " + lead.split("* ")[-1]),
+                        text[max(0, m.start() - 110):m.end() + 260])
+                    got["ID"] += 1
+                return
+            ms = list(CUR_ID.finditer(text))
+            for i, m in enumerate(ms):
+                sv = m.group(2) or m.group(3) or "LOW/HIGH (disputed)"
+                tail = text[m.end():(ms[i + 1].start() if i + 1 < len(ms) else len(text))]
+                tail = re.split(r"(?<=[.)])\s+\* |\s+\* `", tail)[0]
+                tail = re.sub(r"^[\s,]*both positions kept\.\s*", "", tail)
+                row("retro", "batch " + name, "-", REGKIND[reg], sv, m.group(1), ruling_title(m.group(1)) or tail.split(".  ")[0],
+                    text[max(0, m.start() - 60):m.end() + 300])
+                got[REGKIND[reg]] += 1
+    for l in body:
+        h = HEAD.match(l)
+        if h:
+            flush()
+            reg, buf = h.group(1), [l[h.end():]]
+        elif reg is not None:
+            buf.append(l)
+    flush()
+    hc = dict((k, int(v)) for v, k in re.findall(r"(\d+) (NEW|FILED|L4|GAP|DUPLICATE|UNSETTLED)", hdr))
+    cur_lines.append("  batch %-3s %2d findings | header: %s | regions yield: NEW %d, GAP %d, ID-assigned %d"
+                     % (name, nfind, ", ".join("%d %s" % (v, k) for k, v in hc.items()) or "(counts not in the header)",
+                        got["NEW"], got["GAP"], got["ID"]))
+    for k in ("FILED", "L4", "DUPLICATE", "UNSETTLED"):
+        add("retro", k + " (curated: the header's count)", hc.get(k, 0))
+
+# ---------------------------------------------------------------- wave 2, the harness
+h = rd(HARN)
+HK = r"(NEW (?:HIGH|MED|LOW)|FILED-BY-PROSE|FILED|RECORD|DROP)"
+draft, astra, tie, grp_of, horder = {}, {}, {}, {}, []
+sec, grp = None, None
+for l in h.splitlines():
+    g = re.match(r"## Group (\d\d)", l)
+    if g:
+        grp = g.group(1)
+    if l.startswith("## RESULT"):
+        break
+    if l.startswith("DRAFT DISPOSITIONS"):
+        sec = "D"
+    elif l.startswith("ASTRA'S OVERTURNS"):
+        sec = "A"
+    elif l.startswith("GROK TIE-BREAK"):
+        sec = "T"
+    k = re.match(r"\* [`*]*([a-z0-9_]+):F(\d+)", l)
+    if not k or sec is None:
+        continue
+    key = "%s:F%s" % k.groups()
+    if sec == "D":
+        draft[key], grp_of[key] = l[2:], grp
+        horder.append(key)
+    elif sec == "A":
+        if key not in draft and k.group(1).startswith("hverify_"):
+            only = sorted(set(x.split(":")[0] for x in horder if grp_of[x] == grp))
+            key = "%s:F%s" % (only[0], k.group(2)) if len(only) == 1 else key
+        astra[key] = l[2:]
+    else:
+        tie[key] = l[2:]
+add("harness", "findings", len(horder))
+
+
+def hparse(seg):
+    """(kind, id, backticked?, title) from one disposition segment."""
+    m = re.search(HK, seg or "")
+    if not m:
+        return None, None, False, None
+    rest = seg[m.end():]
+    i = re.match(r"[*`\s:]*(`?)([a-z][a-z0-9_]{3,})`?", rest)
+    return m.group(1), (i.group(2) if i else None), bool(i and i.group(1)), quoted(rest)
+
+
+for key in horder:
+    d = draft[key]
+    parts = d.split(" | ", 3)
+    dk, did, _, dt = hparse(parts[3]) if len(parts) > 3 and parts[2].strip() == "RIGHT" else (None, None, False, None)
+    a, g = astra.get(key), tie.get(key)
+    aseg = ""
+    if a:
+        s = re.search(r"\|\s*should (?:be|remain|retain)\b\s*(.*)$", a)
+        aseg = s.group(1).split(" | ")[0] if s else ""
+    ak, aid, abt, at = hparse(aseg)
+    gs = re.search(r"DISPOSITION:\s*(.*)$", g) if g else None
+    gk, gid, _, gt = hparse(gs.group(1).split(" | ")[0]) if gs else (None, None, False, None)
+    if a and not ak and re.search(r"CONSOLIDATE|MERGE|merged|DUPLICATE", aseg):
+        add("harness", "MERGED")
+        continue
+    if ak and gk and ak != gk:
+        add("harness", "OPEN between two seats")
+        notes.append("harness %s: OPEN (Astra %s / grok %s) -- not filed until ruled" % (key, ak, gk))
+        continue
+    kind = ak or gk or dk
+    if kind is None:
+        add("harness", "not RIGHT, or no kind parsed")
+        notes.append("harness %s: no governing kind parsed -- read it: %s" % (key, clean(a or g or d, 150)))
+        continue
+    if kind.startswith("NEW"):
+        ident = did
+        if ak and aid and (abt or aid == did or did is None or not (dk or "").startswith("NEW")):
+            ident = aid                      # a draft that was FILED/RECORD carries an EXISTING id, never the new row's
+        elif not ak and gk and gid:
+            ident = gid if did is None else did
+        row("harness", "group " + grp_of[key], key, "NEW", kind.split()[1], ident, at or (gt if not ak else None) or dt, a or g or d)
+    else:
+        add("harness", kind)
+
+# ---------------------------------------------------------------- collisions
+L = json.loads(subprocess.run(["git", "-C", SEC, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))
+ledger_ids = set(r["id"] for r in L["rows"])
+bugs = subprocess.run(["git", "-C", SEC, "show", "HEAD:OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8", "replace")
+bug_ids = set(re.findall(r"(?m)^#{2,4} [^\n]*?`([a-z0-9_]+)`", bugs))
+seen, coll = {}, []
+merged = []
+for r in list(rows):                       # one defect seen in two files under ONE id and ONE title is one row, two keys
+    first = next((x for x in rows if x is not r and x["id"] == r["id"] and x["wave"] == r["wave"]
+                  and (x["title"] == r["title"] or (x["kind"] == "ID" and r["kind"] == "ID"))      # two batches naming one prose entry's id
+                  and rows.index(x) < rows.index(r)), None)
+    if first is not None and r["id"] != "?":
+        first["key"] += " + " + (r["key"] if r["key"] != "-" else r["where"])
+        merged.append("%s: %s" % (r["id"], first["key"]))
+        rows.remove(r)
+for r in rows:
+    i = r["id"]
+    tag = "%s %s %s" % (r["wave"], r["where"], r["key"])
+    if i == "?":
+        coll.append("NO ID PARSED: " + tag + " -- " + r["src"][:120])
+        continue
+    if i in seen:
+        coll.append("TWICE IN THE TABLE: `%s` -- %s %s %s  AND  %s" % (i, seen[i]["wave"], seen[i]["where"], seen[i]["key"], tag))
+    else:
+        seen[i] = r
+    if i in ledger_ids:
+        coll.append("ALREADY A LEDGER ROW: `%s` (%s)" % (i, tag))
+    elif i in bug_ids:
+        coll.append("ALREADY A QUEUE HEADING: `%s` (%s)" % (i, tag))
+
+rep = ["FILING REPORT (mk_filing.py) -- derived from DISPOSITIONS.md and HARNESS_DISPOSITIONS.md; nothing is filed by it", ""]
+for wave in ("retro", "harness"):
+    tot = acct.get((wave, "findings"), 0)
+    parts = sorted((k[1], v) for k, v in acct.items() if k[0] == wave and k[1] != "findings")
+    rep.append("%s: %d findings -> %s" % (wave, tot, ", ".join("%s %d" % p for p in parts)))
+    for sv in ("HIGH", "MED", "LOW"):
+        n = [r for r in rows if r["wave"] == wave and r["sev"] == sv]
+        rep.append("    %-4s %3d rows (%d NEW, %d GAP, %d ID-assigned)" % (sv, len(n), sum(1 for r in n if r["kind"] == "NEW"),
+                                                                           sum(1 for r in n if r["kind"] == "GAP"), sum(1 for r in n if r["kind"] == "ID")))
+    odd = [r for r in rows if r["wave"] == wave and r["sev"] not in ("HIGH", "MED", "LOW")]
+    if odd:
+        rep.append("    other grades: " + ", ".join("%s (%s)" % (r["id"], r["sev"]) for r in odd))
+rep += ["", "THE CURATED RETRO BATCHES, header counts beside what the region scan yields (the headers are the ruler's counts",
+        "BEFORE Astra's reclassifications, so a difference is expected where Astra moved NEW to FILED-BY-PROSE):"] + cur_lines
+rep += ["", "rows in the table: %d" % len(rows), "", "NOTES (%d)" % len(notes)] + ["  " + n for n in notes]
+rep += ["", "ONE ROW, TWO FINDINGS (same id and title in two files; merged, %d)" % len(merged)] + ["  " + m for m in merged]
+rep += ["", "ID COLLISIONS AND GAPS (%d)" % len(coll)] + ["  " + c for c in coll]
+# ---- existing rows whose GRADE the campaign changed: not new rows, but a records round owes each its new grade
+regr = []
+for l in t.splitlines():
+    for m in re.finditer(r"`([a-z0-9_]+)`[^`]{0,60}?(?:SEVERITY )?RAISED(?: to| [A-Z]+ ->)? " + SEV, l):
+        if m.group(1) not in seen:
+            regr.append("%s -> %s   | %s" % (m.group(1), m.group(2), clean(l, 150)))
+    m = re.search(r"should be[^|]*CONFIRMED-FILED[^|]*?\b" + SEV + r"\b", l)
+    if m:
+        i = re.search(r"CONFIRMED-FILED[^|]*?`([a-z0-9_]+)`", l)
+        regr.append("%s -> %s   | %s" % (i.group(1) if i else "(id: read the line)", m.group(1), clean(l, 150)))
+rep += ["", "EXISTING ROWS RE-GRADED BY THE RETRO (%d; candidates by pattern -- read each line)" % len(regr)] + ["  " + x for x in regr]
+rep += ["", "THE HIGH ROWS (%d)" % sum(1 for r in rows if r["sev"] == "HIGH")]
+rep += ["  %-7s %-9s %-4s %-24s %s" % (r["wave"], r["where"], r["kind"], r["id"], r["title"][:105]) for r in rows if r["sev"] == "HIGH"]
+print("\n".join(rep))
+if "--check" in sys.argv:
+    sys.exit(0)
+os.makedirs(OUT, exist_ok=True)
+io.open(os.path.join(OUT, "FILING_REPORT.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(rep) + "\n")
+with io.open(os.path.join(OUT, "FILING.tsv"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("#wave\twhere\tkey\tkind\tsev\tid\ttitle\tgoverning text (truncated at 400)\n")
+    for r in rows:
+        f.write("\t".join(r[k].replace("\t", " ") for k in ("wave", "where", "key", "kind", "sev", "id", "title", "src")) + "\n")
+print("wrote %s (%d rows)" % (os.path.join(OUT, "FILING.tsv"), len(rows)))

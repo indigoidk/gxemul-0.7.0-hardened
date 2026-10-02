@@ -1,0 +1,47 @@
+ASTRARETRO_BUNDLE_INCLUDE2_ALIVE
+VERDICT: 8 findings (2 CODE live at HEAD, 4 RECORD, 2 TEST-GAP); 22 items checked clean
+
+Static review of committed `8ea26abb`. All locations below refer to HEAD. No builds or regression probes were run.
+
+F1 | src/cpus/cpu_ppc_instr_loadstore.c:124 | upstream, relied on by #310 | CODE | live at HEAD: yes | The added `lfsu`/`lfsux` instructions load negative single-precision values through word assembly using signed `int` shifts after integer promotion. The outer cast occurs too late to prevent C undefined behavior. The cached sibling at line 271 has the same defect; callers are `cpu_ppc_instr.c:3554` and `:3627`. The configured build uses C. Already filed under **OB-24**, `OUTSTANDING_BUGS.md:2916`. | Smallest check: inspect both expressions and their unsigned-byte operand types; a shift-sanitizer unit check can confirm execution. | confidence high
+
+F2 | src/include/opcodes_ppc.h:255 | #344 | CODE | live at HEAD: yes | Executing legal `fnmadds` or `fnmsubs`, including record forms, still reaches `cpu_ppc_instr.c:5218` → the translation-failure path that stops the CPU. #344 added the double-precision forms but left these single-precision siblings undecoded. They are specified at `_scratchpad/ppc_uisa_book1_v201.txt:6508`, with result semantics at line 6526. No exact filing for these two siblings was found in `OUTSTANDING_BUGS.md`. | Smallest check: compare the manual’s instruction family with the opcode-59 switch. | confidence high
+
+F3 | src/include/timer.h:58 | #427 | RECORD | live at HEAD: yes | “Every legitimate case bit-identical” is false. A positive MIPS Compare delta of one requests the configured clock: 166.56 MHz on Algor or 360 MHz on VoCore. The catch-up budget can deliver only 68,157,440 callbacks per second. Already filed as **item 2, “2026-08-16 — residuals from R4’s review”**, `OUTSTANDING_BUGS.md:5563`; no mnemonic ID. | Smallest check: compare `cpu_mips_coproc.c:798` and those machine clocks with the header’s budget × base frequency. | confidence high
+
+F4 | src/include/timer.h:48 | cdc48499 | RECORD | live at HEAD: yes | The comment still describes a guest Footbridge zero load producing infinity and reaching a separate divide-by-zero path. At HEAD, #432’s `footbridge_effective_cycles()` maps zero to 2²⁴; both rate calculation and modulo calculation use it (`dev_footbridge.c:276`, `:372`). The described defect is fixed, but this comment remains stale. No separate stale-comment filing found. | Smallest check: read the helper at `dev_footbridge.c:234` and its two callers. | confidence high
+
+F5 | src/include/machine.h:63 | #248 | RECORD | live at HEAD: yes | The unconditional promise to skip the first N breakpoint hits excludes an unstated case. When a guest reaches the breakpoint in a delay slot with `ignore_left > 0`, `cpu_dyntrans.c:1816` rejects the ignore path: the hit count increases, the ignore count remains unchanged, and execution stops with the unsupported-delay-slot diagnostic. No matching filing found. | Smallest check: compare the comment with the `NOT_DELAYED` condition and subsequent stop path. | confidence high
+
+F6 | CHANGELOG.md:22086 | #298 | RECORD | live at HEAD: yes | The claim that omitting the rounding-mode swap passes every sign-symmetric test is false. The existing positive-only `fadd-pos toward+Inf` and `fadd-pos toward-Inf` rows expect different answers (`regress/m88k_rounding_probe.py:68`). Omitting the swap exchanges those answers. The same record reports three direction-pinned symmetric failures at line 22123. No matching filing found. | Smallest check: compare those two rows with `m88k_fp_rm()`. | confidence high
+
+F7 | regress/diff_timer.c:318 | #427/#429, 863d2389 | TEST-GAP | live at HEAD: yes | The probe claims stored-rate/running-rate agreement, but both update sites—lines 318 and 353—repeat the timer’s existing normalized rate. Every call returns at `core/timer.c:204`; no row observes the changed-rate stores or deadline calculation. Other differential probes stub this function. No matching filing found. | Smallest check: a unit row changing an existing timer’s rate and checking its frequency, interval, and deadline. | confidence high
+
+F8 | src/include/cpu_m88k.h:287 | #380 | TEST-GAP | live at HEAD: yes | `CHANGELOG.md:29897` claims exactly-once slot execution is pinned. `m88k_idle_probe.py:177` observes an idempotent constant store, while `gate_m88k_rounding.sh:213` compares software counters. A duplicated slot dispatch without a duplicated counter increment remains invisible. Already filed as **m88kidledup**, `OUTSTANDING_BUGS.md:15552`. | Smallest check: independently observe an accumulating slot side effect in the existing probe. | confidence high
+
+Checked clean:
+
+1. `src/include/timer.h:80` — Clamp endpoints yield positive finite intervals; add and update normalize before storing.
+2. `src/include/timer.h:82` — Catch-up stops at the per-timer budget and retains debt; the differential includes observations of retained debt.
+3. `src/include/cpu_arm.h:164` — PC base and store-data values remain separate through both addressing-mode decoder paths.
+4. `src/include/cpu_arm.h:179` — Two scratch elements accommodate the paired accesses; CPU allocation initializes both.
+5. `src/include/cpu_arm.h:287` — Slow-path counter increment, debugger display, and probe field agree.
+6. `src/include/machine.h:68` — Breakpoint accounting arrays are initialized and shifted alongside their corresponding entries.
+7. `src/include/machine.h:80` — Ordinary physical-page watchpoints suppress fast stores and reach the shared slow-path checker.
+8. `src/include/machine.h:345` — G4plus subtype registration selects the MPC7455 model and its extended-BAT capability.
+9. `src/include/misc.h:203` — Both word-assembly macros cast before shifting; their nine consumers supply unsigned-byte buffers.
+10. `src/include/misc.h:217` — ELF, Mach-O, and ECOFF consumers check the table sizes they subsequently allocate.
+11. `src/include/misc.h:259` — Debug-message declarations match implementations; global break-on-error defaults off and is disclosed by the listing.
+12. `src/include/cpu_m88k.h:162` — FPCR number, rounding-field extraction, and directed-mode mapping agree with the manual and regression expectations.
+13. `src/include/cpu_m88k.h:284` — Install indices are bounded, and plain/delayed-path counters remain distinct through display and parsing.
+14. `src/include/opcodes_ppc.h:162` — Eight update-form opcode values and their indexed/D-form dispatch dimensions agree.
+15. `src/include/opcodes_ppc.h:242` — Added #326 selectors reach their intended handlers; decoded FPSCR operands are bounded.
+16. `src/include/opcodes_ppc.h:255` — Double negative-FMA selectors distinguish addition/subtraction and negate the fused result.
+17. `src/include/thirdparty/mvme_pcctworeg.h:134` — The warning accurately identifies the unused wrong alias; operative FAST, MIEN, and C040 bits match the manual.
+18. `src/include/cpu.h:422` — Function-transition state is initialized, set on traced calls/returns, and cleared by step-call lifecycle handling.
+19. `src/include/net.h:131` — Queue-cap eviction removes the oldest packet and repairs both endpoints.
+20. `src/include/net.h:161` — Queue initialization, insertion, eviction, and receive operations maintain the same count.
+21. `src/include/net.h:185` — Declaration, implementation, and six callers agree; formatting remains bounded and NUL-terminated.
+22. `src/include/thirdparty/bootblock.h:132` — Removing attribute neutering preserves the packed declarations below it.
+
+DENOMINATOR: read 23 of 23 hunks of the net diff

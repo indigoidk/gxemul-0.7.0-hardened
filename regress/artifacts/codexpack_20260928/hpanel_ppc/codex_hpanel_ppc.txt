@@ -1,0 +1,82 @@
+CODEXPACK_HPANEL_PPC_ALIVE
+
+VERDICT: 3 of 3 findings hold as stated -- the termination/progress findings survive, with privilege, duplication, and ISA qualifications below.
+
+**Q1. Premise audit.**
+
+All repository citations below refer to **`db8b1a33`**. Manual citations refer to the permitted files on disk under `_scratchpad`.
+
+**H1 — reachable.** The decisive premise is that `ppc_bat()` preserves a denied hit instead of treating it as a miss. Checked: `src/cpus/memory_ppc.c:104-105` says `if (r != -1)` followed by `return r;`. The extended-BAT path also returns the helper’s result directly at `:116-117`.
+
+The producer is `pp = lower & BAT_PP;` (`src/cpus/memory_ppc.c:67`), with mask `0x00000003` and values defined at `src/include/thirdparty/ppc_bat.h:97-101`. For an entry surviving validity and address matching, the complete enumeration is:
+
+| PP | Read/fetch result | Write result |
+|---|---:|---:|
+| 00 | 0 | 0 |
+| 01 | 1 | 0 |
+| 10 | 2 | 2 |
+| 11 | 1 | 0 |
+
+These are the branches at `src/cpus/memory_ppc.c:69-75`; no matching entry returns `-1` at `:79`. Thus “two cases” means two categories: all accesses to PP=00, and writes to PP=01 or PP=11.
+
+The denied-hit branch contains literal `exit(1);` at `src/cpus/memory_ppc.c:275`, before the `FLAG_NOEXCEPTIONS` test at `:299`. This applies to callers reaching that branch; translation-disabled accesses return earlier (`:258-260`). A debugger dump uses `MEM_READ` with `NO_EXCEPTIONS`, so PP=00 can terminate it, whereas read-only mappings permit the dump (`src/debugger/debugger_cmds.c:716-717`; `src/cpus/memory_rw.c:248-252`).
+
+USER-state access can encounter denial when the BAT is user-valid. A supervisor-only entry is **skipped**, not denied (`src/cpus/memory_ppc.c:56-63`). Furthermore, architectural supervisor-only BAT programming is not enforced here: the generic `mtspr` handler contains `/*  TODO: Check permission  */` followed by the register assignment (`src/cpus/cpu_ppc_instr.c:2808-2809`); the decoder supplies the SPR pointer and selects that handler (`:4676-4688`).
+
+The hardware requirement is independently supported by prose, not merely the extracted figure: `_scratchpad/ppc_pem32_rev2_2001.txt:13312` specifies DSI/ISI for prohibited block access; `:13334-13336` specifies the protection conditions and status bits. Whether ordinary guest kernels actually install the relevant mappings: **not checked**.
+
+**H2 — reachable.** The decisive premise is that the fused single instructions really reach the missing-decoder branch. Checked independently against the instruction definitions and source.
+
+The relevant selector/Rc pairs are **(28,0), (28,1), (29,0), (29,1), (30,0), (30,1), (31,0), (31,1)**, corresponding respectively to `fmsubs`, `fmadds`, `fnmsubs`, and `fnmadds`, each without/with recording (`_scratchpad/ppc_uisa_book1_v201.txt:6454-6459`, `:6508-6511`). The decoder separates Rc, switches on `xo & 31`, accepts selectors **18, 20, 21, 25**, and otherwise reaches literal `default:goto bad;` (`src/cpus/cpu_ppc_instr.c:5177-5182`, `:5197-5218`; `src/include/opcodes_ppc.h:232-235`).
+
+Speculative translation returns without stopping; actual execution reaches `cpu->running = 0;` (`src/cpus/cpu_dyntrans.c:1990-1991`, `:2014`). When this leaves no CPU running, the machine reports stopped, the emulation loop ends unless end debugging was requested, and `main()` returns zero (`src/machines/machine.c:741-746`; `src/core/emul.c:1052-1059`; `src/core/main.c:821`).
+
+**H3 — reachable from USER state, provided the instruction can be fetched.** The decisive premise is that dispatch preserves these low-bit variants. Checked: `xo = (iword >> 1) & 1023;` excludes the low bit, and the selected cases assign `instr(llsc)` without a privilege or low-bit check (`src/cpus/cpu_ppc_instr.c:4614`, `:4866-4872`).
+
+The complete low-bit behavior is:
+
+| Handler form | Low bit 0 | Low bit 1 |
+|---|---|---|
+| Load-reserve | Continues | `exit(1)` |
+| Store-conditional | `exit(1)` | Continues |
+
+The exits precede the load’s memory access and the store’s reservation check (`src/cpus/cpu_ppc_instr.c:2304-2310`, `:2330-2342`). The manual identifies both instructions as UISA instructions (`_scratchpad/ppc_pem32_rev2_2001.txt:22758`, `:27701`; user-level definition at `:1512-1520`).
+
+However, **“both invalid forms” needs an ISA qualification**. The 2001 PEM supports that interpretation (`:6856-6857`). Book I v2.01 instead says, “Reserved fields in instructions are ignored by the processor” (`_scratchpad/ppc_uisa_book1_v201.txt:432-433`), and Book II marks the load-reserve low field reserved while retaining a fixed one for store-conditional (`_scratchpad/ppc_vea_book2_v201.txt:1264`, `:1305-1309`). That changes the load remedy, not the host-termination finding.
+
+**Q2. Wrong dispositions: 0.**
+
+H1 and H3 reach explicit process exits; H2 stops the virtual CPU. All meet the supplied HIGH rule through the paths cited in Q1.
+
+H2 should retain the brief’s novelty boundary: `fmadds` and `fmsubs` are already recorded pending defects (`regress/ppc_halt_probe.py:269-270`). Add the negative single forms to that tracked work rather than duplicate the positive forms. The test’s deliberate halt expectation does not establish correct behavior: its explanation explicitly says it keeps the queue honest about **“what is broken”** (`:38-42`), and its expectation is `want = "HALTED" if cls == "PEND" else "alive"` (`:297`).
+
+H3 is separate from #216’s recorded correction for accesses to faulting addresses (`CHANGELOG.md:20119`; `src/cpus/cpu_ppc_instr.c:2311-2314`, `:2359-2362`). No additional matching entries were identified in the permitted searches; comprehensive historical novelty is **not checked**.
+
+**Q3. Correction choices and available machinery.**
+
+- **H1: (5), fault**, with nonthrowing failure for `FLAG_NOEXCEPTIONS`. Existing code provides DSI/ISI dispatch and data-fault metadata (`src/cpus/memory_ppc.c:315-323`), but a denied BAT must remain a protection fault, not fall through into page translation or the PPC603 reload path (`:279-284`, `:307-313`). The required protection status is specified at `_scratchpad/ppc_pem32_rev2_2001.txt:13335-13336`.
+
+  Exception machinery exists, but it is incomplete. `ppc_exception()` saves state and redirects execution (`src/cpus/cpu_ppc.c:318-344`), while its MSR update clears only `PPC_MSR_EE | PPC_MSR_RI | PPC_MSR_PR` (`:335`). Moreover, instruction-fetch failure still independently reaches `exit(1);` (`src/cpus/cpu_ppc_instr.c:4115-4119`). A correction must handle status, exception entry, and caller propagation; merely replacing the BAT exit with an exception call is insufficient.
+
+- **H2: (7), implement the missing behavior**, including recording and single-precision rounding. Existing arithmetic handlers and record wrappers provide implementation structure (`src/cpus/cpu_ppc_instr.c:1836`, `:1878`, `:1920`, `:1938`, `:4047-4048`). Simply aliasing double handlers is explicitly rejected by the committed record because narrowing remains unresolved (`CHANGELOG.md:32301-32305`). An exception alone would not implement these legal arithmetic instructions.
+
+- **H3: (5), fault**, for the 2001 invalid-form policy and the malformed store-conditional form. The manual permits a program exception for invalid forms (`_scratchpad/ppc_pem32_rev2_2001.txt:6856`). For a v2.01 target’s reserved load bit, choose **(4), accept**, ignoring that field as its manual requires.
+
+  PowerPC program exceptions are **not currently delivered by the checked paths**. The existing exception constants omit a program exception (`src/include/cpu_ppc.h:251-257`), and the generic entry has no program-cause handling (`src/cpus/cpu_ppc.c:318-345`). Correct program entry requires the saved instruction address, cause status, and architectural MSR changes described at `_scratchpad/ppc_pem32_rev2_2001.txt:12024-12045`. Thus option (5) requires implementation work first.
+
+The list omits **an explicit, diagnosed stop of the affected emulated CPU/machine**. The shared `bad` path already supplies such behavior (`src/cpus/cpu_dyntrans.c:2004-2024`). That is an interim unsupported-operation policy, not a complete correction under this brief’s progress-based HIGH rule.
+
+**Q4. Ordinary-operation ranking: H2, H1, H3 — provisional.**
+
+H2 concerns defined floating-point arithmetic; H1 requires a translated BAT access that violates its protection; H3 concerns the low-bit variants discussed above. Those distinctions support this ordering for the brief’s 2001 architectural interpretation (`src/cpus/cpu_ppc_instr.c:5197-5218`; `src/cpus/memory_ppc.c:56-75`; `_scratchpad/ppc_pem32_rev2_2001.txt:6856-6857`).
+
+Actual guest compiler versions, compiler flags, emitted instruction frequencies, and kernel BAT policies are **not checked**. The gcc claim is recorded at `OUTSTANDING_BUGS.md:1715-1716`; the hand-assembled regression instructions do not measure it (`regress/ppc_halt_probe.py:65-69`).
+
+**Standing license.**
+
+Besides the missing `mtspr` privilege check, incomplete exception entry, and fetch-failure exit noted above:
+
+- The quoted “twelve” pending count is stale. Current pending rows enumerate **`fctid`, `fctidz`, `fcfid`, `fcmpo`, `fmadds`, `fmsubs`, `fsqrt`, `fsqrts`, `fres`, `frsqrte`**; `fnmadd` and `fnmsub` are marked FIXED (`regress/ppc_halt_probe.py:257-279`). The gate expects ten pending (`regress/gate_ppc_halt.sh:84`).
+- The same low-bit exits also serve `ldarx` and `stdcx.` (`src/cpus/cpu_ppc_instr.c:2284-2293`, `:4866-4871`). Their broader model-specific validity was **not checked**.
+
+No builds, tests, or file modifications were performed. Scope deviation: a delegated search accidentally returned archived regression/probe matches under `artifacts`; those matches were excluded from this assessment.

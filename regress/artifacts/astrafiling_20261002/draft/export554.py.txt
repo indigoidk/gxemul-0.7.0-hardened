@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""export554.py <afile_06 text> <closing check text> <grok's second HIGH re-read, one line> <grok's read of the three added rows, one line>
+Regenerate #554's records from the filing table and its overlay (records554.py gen; prep554.py --dry, which stages
+into records/stage554 and touches nothing in the tree) and export what a reviewing seat reads into
+regress/artifacts/astrafiling_20261002/draft/:
+    changelog554.draft.md   the CHANGELOG block as it would be prepended
+    section554.draft.md     the OUTSTANDING_BUGS.md section as it would be appended (head and every row)
+    msg554.draft.txt        the commit message
+    REGRADES.txt            the re-grades of existing rows, from records554.REGRADES / PEER_REGRADES
+    records554.py.txt prep554.py.txt bugs554.body.md counts554.txt
+Refuses if the staged CHANGELOG does not end with HEAD's CHANGELOG, or the section heading is not found exactly once."""
+import io
+import os
+import shutil
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import records554 as R
+
+if len(sys.argv) != 5:
+    sys.exit(__doc__)
+DRAFT = os.path.join(R.SEC, "regress", "artifacts", "astrafiling_20261002", "draft")
+for cmd in ([sys.executable, "records554.py", "gen"], [sys.executable, "prep554.py"] + sys.argv[1:] + ["--dry"]):
+    r = subprocess.run(cmd, cwd=HERE, capture_output=True)
+    out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    if r.returncode != 0 or "REFUSED" in out or "Traceback" in out:
+        sys.exit("REFUSED: %s failed (rc %d):\n%s" % (" ".join(cmd[1:3]), r.returncode, out[-1500:]))
+    print("\n".join(l for l in out.splitlines() if l.startswith(("artifacts:", "ledger:", "re-grades:", "rows:", "wrote"))))
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", newline="").read()
+
+
+def put(name, text):
+    io.open(os.path.join(DRAFT, name), "w", encoding="utf-8", newline="").write(text)
+    print("  draft/%s: %d lines" % (name, text.count("\n")))
+
+
+head_cl = subprocess.run(["git", "-C", R.SEC, "show", "HEAD:CHANGELOG.md"], capture_output=True).stdout.decode("utf-8")
+st_cl = rd(os.path.join(HERE, "stage554", "CHANGELOG.md"))
+if not st_cl.endswith(head_cl) or len(st_cl) == len(head_cl):
+    sys.exit("REFUSED: the staged CHANGELOG is not HEAD's with a block prepended")
+put("changelog554.draft.md", st_cl[:len(st_cl) - len(head_cl)])
+st_ob = rd(os.path.join(HERE, "stage554", "OUTSTANDING_BUGS.md"))
+MARK = "\n## 2026-10-02 -- GXEMUL [087a90]: `#554` FILES"
+if st_ob.count(MARK) != 1:
+    sys.exit("REFUSED: the #554 section heading occurs %d times in the staged OUTSTANDING_BUGS.md" % st_ob.count(MARK))
+put("section554.draft.md", st_ob[st_ob.index(MARK) + 1:])
+put("msg554.draft.txt", rd(os.path.join(HERE, "msg554.txt")))
+reg = ["# the re-grades of EXISTING queue rows that #554 applies (ledger `sev`, and the row's heading where it prints a grade)",
+       "# id -> new grade | where the campaign's dispositions say so"]
+reg += ["%s -> %s | %s" % x[:3] for x in R.REGRADES]
+reg += ["", "# rows of the peer session [e8a2bc] that the retro re-grades -- NOT applied by #554, listed in its section for that session"]
+reg += ["%s -> %s | %s" % x[:3] for x in R.PEER_REGRADES]
+put("REGRADES.txt", "\n".join(reg) + "\n")
+for src, dst in (("records554.py", "records554.py.txt"), ("prep554.py", "prep554.py.txt"),
+                 ("bugs554.body.md", "bugs554.body.md"), ("counts554.txt", "counts554.txt")):
+    shutil.copyfile(os.path.join(HERE, src), os.path.join(DRAFT, dst))
+print("exported to %s" % DRAFT)

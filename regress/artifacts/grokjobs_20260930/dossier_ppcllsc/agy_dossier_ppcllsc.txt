@@ -1,0 +1,204 @@
+GROKJOBS_DOSSIER_PPCLLSC_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+---
+
+### Audit of Dossier Sections 1–7
+
+Every factual sentence across sections 1 through 7 of `C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_ppcllsc\codex_dossier_ppcllsc.txt` was audited against the committed source at `db8b1a33`, the manuals on disk under `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\`, and `OUTSTANDING_BUGS.md` / `CHANGELOG.md` at `db8b1a33`.
+
+#### 1. Finding
+- **"The reported exits remain."** Supported: `src/cpus/cpu_ppc_instr.c:2307` (`exit(1);` on `rc != 0` for load) and `src/cpus/cpu_ppc_instr.c:2333` (`exit(1);` on `!rc` for store conditional).
+- **"The scope also includes `ldarx` and `stdcx.`, because the decoder and handler group them with the word instructions."** Supported: `src/cpus/cpu_ppc_instr.c:4866–4872` decodes `PPC_31_LWARX`, `PPC_31_LDARX`, `PPC_31_STWCX_DOT`, and `PPC_31_STDCX_DOT` into `ic->f = instr(llsc);`; handler `X(llsc)` handles all 4 at `src/cpus/cpu_ppc_instr.c:2283–2293`.
+- **Table citations:**
+  - `iword = *p;` and `iword = BE32_TO_HOST(iword);`: Supported at `src/cpus/cpu_ppc_instr.c:4124–4128` (lines 4126–4127).
+  - `xo = (iword >> 1) & 1023;`: Supported at `src/cpus/cpu_ppc_instr.c:4613–4615` (line 4614). Arithmetic values: bitfield extraction of bits 1–10 (10 bits, values 0..1023).
+  - Cases `PPC_31_LWARX`, `PPC_31_LDARX`, `PPC_31_STWCX_DOT`, `PPC_31_STDCX_DOT` assigning `ic->arg[0] = iword; ic->f = instr(llsc);`: Supported at `src/cpus/cpu_ppc_instr.c:4866–4872`.
+  - `rc = iw & 1`, `load = 1` for load cases, `len = 8` for doubleword vs initialized `len = 4`: Supported at `src/cpus/cpu_ppc_instr.c:2278–2293`. Arithmetic values: `len` defaults to 4; `len = 8` for doubleword; `load` defaults to 0 and becomes 1 for load cases; `rc` is bit 0 (`iw & 1`).
+  - Load branch `if (rc)`, `fatal("ll: rc-bit set?\n"); exit(1);`: Supported at `src/cpus/cpu_ppc_instr.c:2304–2307`.
+  - Store branch `if (!rc)`, `fatal("sc: rc-bit not set?\n"); exit(1);`: Supported at `src/cpus/cpu_ppc_instr.c:2329–2333` (lines 2330–2333).
+- **"These checks precede the load’s memory access and the store’s reservation test and memory access. Consequently, neither an operand-memory fault nor a failed reservation provides protection once execution reaches the corresponding check. The relevant later operations are at `src/cpus/cpu_ppc_instr.c:2309–2314,2342–2347,2357–2362`."** Supported: load `cpu->memory_rw()` is at lines 2309–2314; store reservation match test is at lines 2342–2347; store `cpu->memory_rw()` is at lines 2357–2362.
+- **"The termination comes from `exit(1)`, not from the name `fatal`: `fatal()` itself calls the diagnostic machinery and returns. Its complete body is at `src/core/debugmsg.c:384–391`."** Supported: `debugmsg.c:384–391` defines `fatal()` using `va_start`, `va_debug`, and `va_end`, returning immediately.
+- **"Round #216’s memory-failure paths now execute `return;` at `src/cpus/cpu_ppc_instr.c:2314,2362`. They do not remove or bypass the record-bit exits."** Supported: lines 2314 and 2362 execute `return;` when `memory_rw` does not equal `MEMORY_ACCESS_OK`.
+
+#### 2. Privilege, models, and machine coverage
+- **"The checked decoder and handler contain no supervisor-mode check around these instructions. The local manual identifies `lwarx` and `stwcx.` as UISA synchronization instructions, and identifies UISA as the user-level instruction set. Thus user and supervisor execution are within the source-level exposure; successful instruction fetch remains a prerequisite. (`src/cpus/cpu_ppc_instr.c:2276–2374,4866–4872`; `_scratchpad/ppc_pem32_rev2_2001.txt:7017,9729,9764–9786`.)"** Supported: no `MSR_PR` check exists in `cpu_ppc_instr.c:2276–2374` or `4866–4872`. Manual line 7017 defines UISA as base user-level instruction set; line 9729 introduces Section 4.2.6 "Memory Synchronization Instructions--UISA"; Table 4-27 (lines 9764–9786) lists `lwarx` and `stwcx.`.
+- **Registered model names enumerated:**
+  - 32-bit (9 models): `PPC405GP`, `PPC601`, `PPC603`, `PPC603e`, `PPC604`, `MPC7400`, `MPC7455`, `PPC750`, `G4e`.
+  - 64-bit (2 models): `PPC620`, `PPC970`.
+  Supported: `src/include/cpu_ppc.h:75–88` (`PPC_CPU_TYPE_DEFS`). Total models: 11.
+- **"The constructor chooses the execution engine by model bitness, and both engines include the same instruction implementation. There is no model-specific LL/SC gate in the checked dispatcher. (`src/cpus/cpu_ppc.c:76–135`; `src/cpus/tmp_ppc_tail.c:63–118`; `src/cpus/cpu_ppc_instr.c:4866–4872`.)"** Supported: `cpu_ppc.c:120–135` sets `cpu->run_instr` to `ppc32_run_instr` if `cpu->is_32bit` else `ppc_run_instr`. `tmp_ppc_tail.c:63–118` includes `cpu_ppc_instr.c` for 64-bit and then for 32-bit (`MODE32`).
+- **Machine defaults table:**
+  - `macppc G3; G4; G4plus; G5` -> `PPC750`; `MPC7400`; `MPC7455`; `PPC970`: Supported at `src/machines/machine_macppc.c:170–184`.
+  - `mvmeppc MVME1600; MVME2100; MVME5500` -> `PPC603e`; `PPC603e`; `PPC750`: Supported at `src/machines/machine_mvmeppc.c:161–176`.
+  - `pmppc` -> `PPC750`: Supported at `src/machines/machine_pmppc.c:76–87`.
+  - `prep IBM6050/6070; MVME2400` -> `PPC604`; `PPC750`: Supported at `src/machines/machine_prep.c:150–188`.
+  - `bareppc; testppc` -> `PPC970`; `PPC970`: Supported at `src/machines/machine_test.c:448–474`.
+- **"These are defaults: `if (m->cpu_name == NULL) machine_default_cputype(m);` precedes CPU construction. They are not an exhaustive list of possible user-selected pairings. (`src/core/emul.c:487–502`.)"** Supported: `src/core/emul.c:487–488`.
+- **Dyntrans behavior:** Supported: translation readahead deferral at `src/cpus/cpu_dyntrans.c:1918–1919`, breakpoint handling at `src/cpus/cpu_dyntrans.c:1799–1848`, and normal handler invocation at `src/cpus/cpu_dyntrans.c:1978`. "not checked" status for runtime/boot reachability acknowledged.
+
+#### 3. Hardware behavior
+- **Manual citations and quotes:**
+  - PEM32 quote: *"Attempting to execute an invalid form of an instruction either invokes the illegal instruction error handler (a program exception) or yields boundedly-undefined results."* Supported: `_scratchpad/ppc_pem32_rev2_2001.txt:6856–6857`. Reserved bit 0 coded as 1: supported at line 6861. Load and store diagrams: supported at lines 22738–22742 (`lwarx` bit 31 is 0) and lines 27667–27671 (`stwcx.` bit 31 is 1).
+  - Book I v2.01 quote: *"Reserved fields in instructions are ignored by the processor."* Supported: `_scratchpad/ppc_uisa_book1_v201.txt:432–433`. Definition of `/` as reserved field: supported at line 436. Diagrams of `lwarx` and `ldarx` low bit as `/`: supported at `_scratchpad/ppc_vea_book2_v201.txt:1259–1266`.
+  - Store conditional invalid form: Supported at `_scratchpad/ppc_uisa_book1_v201.txt:1116–1128` (explicitly naming Store Conditional) and `_scratchpad/ppc_vea_book2_v201.txt:1298–1309` (specifying bit 31 as 1 for `stwcx.` and `stdcx.`).
+  - "Boundedly undefined" definitions: Supported at `_scratchpad/ppc_pem32_rev2_2001.txt:48039` and `_scratchpad/ppc_uisa_book1_v201.txt:451–465`.
+  - Program exception vectors and SRR0/SRR1: Supported at `_scratchpad/ppc_pem32_rev2_2001.txt:12026–12045` (SRR0 = EA of instruction, SRR1 bit 12 = illegal instruction, offset `0x00700`) and `_scratchpad/ppc_oea_book3_v201.txt:3906–3918,3962–3963` (SRR1 bit 44 = illegal instruction, effective address `0x0000000000000700`).
+  - 2005 manual tension: Supported at `_scratchpad/ppc_pem_32and64_2005.txt:6229–6230`.
+
+#### 4. Siblings
+- **Census of exits in `src/cpus/cpu_ppc_instr.c`:**
+  - `:4119`: slow-path ifetch `exit(1);` recorded as #10 at `OUTSTANDING_BUGS.md:2614–2615`. Supported.
+  - `:244`: internal invalid handler sentinel `fatal("PPC: invalid(): INTERNAL ERROR\n"); exit(1);`. Supported.
+- **CPU halt assignment:**
+  - Included at `src/cpus/cpu_ppc_instr.c:5431` (`#include "cpu_dyntrans.c"`). Live assignment `cpu->running = 0;` is at `src/cpus/cpu_dyntrans.c:2014`. The `bad:` block is at `src/cpus/cpu_dyntrans.c:1983–2014`. Supported.
+- **Rejection sites table (15 rows, 21 lines in `src/cpus/cpu_ppc_instr.c`):**
+  1. `:4154`: Altivec unimplemented (`goto bad;`). Supported.
+  2. `:4210`: ADDIC 64-bit TODO (`goto bad;`). Supported.
+  3. `:4341`, `:4998`: `ra == 0 && update` (`goto bad;`). Supported.
+  4. `:4363`: `aa_bit` NOT YET (`goto bad;`). Supported.
+  5. `:4479`: `!(bo & 4)` clear (`goto bad;`). Supported.
+  6. `:4531`, `:4609`, `:5172`, `:5426`: default switches to `bad`. Supported.
+  7. `:4605`: `rld*` in 32-bit mode (`goto bad;`). Supported at `OUTSTANDING_BUGS.md:18894–18896`.
+  8. `:4650`: `CNTLZW` with `rc` (`goto bad;`). Supported.
+  9. `:4711`: `MTMSR` with `l_bit` (`goto bad;`). Supported.
+  10. `:4748`, `:4764`: `mfsr`/`mtsr` in 64-bit mode (`goto bad;`). Supported.
+  11. `:4850`: `mftb` unhandled SPR (`goto bad;`). Supported.
+  12. `:5137`: arithmetic unhandled `rc` (`goto bad;`). Supported.
+  13. `:5146`: arithmetic 64-bit unsupported (`goto bad;`). Supported.
+  14. `:5218`, `:5410`: unsupported FP opcode defaults (`goto bad;`). Supported at `OUTSTANDING_BUGS.md:1705–1716`.
+  15. `:5421`: `rc_f == NULL` guard (`goto bad;`). Supported at `CHANGELOG.md:33117–33121`.
+- **Lexically unreachable guards:**
+  - `:5085`: `oe_bit` guard in arithmetic switch (`src/cpus/cpu_ppc_instr.c:5082–5085`).
+    Arithmetic enumeration: Extended opcode `xo = (iword >> 1) & 1023` (10 bits, values 0..1023). Bit 10 of `iword` corresponds to bit 9 of `xo` (`(iword >> 10) & 1 == (xo >> 9) & 1`). The case labels in the switch are `PPC_31_MULLW` (235), `PPC_31_MULHW` (75), `PPC_31_MULHWU` (11), `PPC_31_DIVW` (491), `PPC_31_DIVWU` (459), `PPC_31_ADD` (266), `PPC_31_ADDC` (10), `PPC_31_ADDE` (138), `PPC_31_ADDME` (234), `PPC_31_ADDZE` (202), `PPC_31_SUBF` (40), `PPC_31_SUBFC` (8), `PPC_31_SUBFE` (136), `PPC_31_SUBFME` (232), `PPC_31_SUBFZE` (200) (`src/include/opcodes_ppc.h:82–155`). All 15 case values are strictly less than 512 (bit 9 is 0, meaning `oe_bit` is 0). Opcodes with `oe_bit == 1` like `PPC_31_ADDCO` (522) and `PPC_31_SUBFCO` (520) have bit 9 set (`xo >= 512`) and are not case labels here; they drop into the outer switch's `default: goto bad;` at line 5172. Thus, `oe_bit` is never 1 at line 5082, and line 5085 cannot be reached. Supported.
+  - `:5224`: `rc_f == NULL` guard (`src/cpus/cpu_ppc_instr.c:5223–5225`).
+    Arithmetic enumeration: Every matched case in `xo & 31` (`PPC_59_FDIVS`, `PPC_59_FSUBS`, `PPC_59_FADDS`, `PPC_59_FMULS`) sets `rc_f` to a non-NULL function pointer (`instr(*_dot)`), while the `default:` branch jumps to `bad;`. Line 5224 is never reached with `rc_f == NULL`. Supported.
+
+#### 5. Disposition
+- **Disposition analysis and citations:**
+  - `ppc_exception()` actions: Supported at `src/cpus/cpu_ppc.c:318–345`.
+  - Declared exception set (`PPC_EXCEPTION_DSI` 0x3, `PPC_EXCEPTION_ISI` 0x4, `PPC_EXCEPTION_EI` 0x5, `PPC_EXCEPTION_FPU` 0x8, `PPC_EXCEPTION_DEC` 0x9, `PPC_EXCEPTION_SC` 0xc; 6 values total; no Program entry 0x7): Supported at `src/include/cpu_ppc.h:251–257`.
+  - Offending PC reconstruction in FPU macro: Supported at `src/cpus/cpu_ppc_instr.c:215–225` (`CHECK_FOR_FPU_EXCEPTION`). Lack of PC reconstruction in `X(llsc)`: Supported at `src/cpus/cpu_ppc_instr.c:2276–2374`. SRR0 assignment from `cpu->pc`: Supported at `src/cpus/cpu_ppc.c:321`.
+  - Precedent citations: #216 returns at `src/cpus/cpu_ppc_instr.c:2309–2314,2357–2362`; `mtdcr` at `src/cpus/cpu_ppc_instr.c:4896–4899`; `dev_fbctrl.c:120–135` (`warned_port`); static process-global SPR bitmap at `src/cpus/cpu_ppc.c:1746–1758,1789–1794`; `bad` CPU halt at `src/cpus/cpu_dyntrans.c:2002–2024`. Supported.
+
+#### 6. Regression observations
+- **Citations:**
+  - Before evidence: `src/cpus/cpu_ppc_instr.c:2304–2333`. Supported.
+  - Normal effects: `src/cpus/cpu_ppc_instr.c:2317–2328,2342–2372`. Supported.
+  - Legal neighbors: `src/cpus/cpu_ppc_instr.c:2283–2372` and `_scratchpad/ppc_vea_book2_v201.txt:1272–1293,1344–1364`. Supported.
+  - Distinction between host survival, exception entry, and stopped CPU: `src/cpus/cpu_dyntrans.c:2002–2024` and `src/cpus/cpu_ppc.c:337–344`. Supported.
+
+#### 7. Records
+- **Overbroad closure:** `OUTSTANDING_BUGS.md:2615` quote *"the PPC data side is already fixed (#216)."* Supported: exact verbatim match at `OUTSTANDING_BUGS.md:2615`.
+- **Over-specific fault description:** handler comments *"memory_rw() raised a DSI"* at `src/cpus/cpu_ppc_instr.c:2311–2313,2359–2361`. Supported: verbatim match in comments. PPC603 reload exceptions at `src/cpus/memory_ppc.c:307–324`; generic failure return with no PPC exception at `src/cpus/memory_rw.c:603–624`. Supported.
+- **Incorrect CR comment:** handler comment *"The SO bit of the XER is copied to to bit 4 of Condition Register Field 0."* at `src/cpus/cpu_ppc_instr.c:2340–2341`. Supported: verbatim match in comment. Arithmetic enumeration: CR0 consists of bits 0..3 (bit 0 = LT, bit 1 = GT, bit 2 = EQ, bit 3 = SO). Bit 4 of CR is bit 0 of CR1. Manual citation `_scratchpad/ppc_uisa_book1_v201.txt:1367–1368` explicitly identifies the fourth bit of CR Field 0 as CR bit 3. Supported.
+- **Stale sibling records:** `OUTSTANDING_BUGS.md:1610–1611,3085–3086` quote *"`fnmadd`/`fnmsub` are not decoded and halt"* and *"are undecoded and halt."* Supported: verbatim matches. Related prose at `OUTSTANDING_BUGS.md:1705–1712`. Decoder selections at `src/cpus/cpu_ppc_instr.c:5263–5269` (`#344`). Supported.
+- **`CHANGELOG.md:20119` record:** quote *"let the raised DSI proceed"*. Supported: exact match at `CHANGELOG.md:20119`.
+
+---
+
+### (a) Dossier's Chosen Disposition Member
+
+**Chosen Member:** Disposition Member 7 ("Implement missing behavior" -- accept the reserved load field where required, and provide a proper guest Program-exception path for invalid forms selected to fault).
+
+#### 1. Is its machinery really present on this CPU?
+**NO.** The machinery to deliver a guest Program exception (`0x00700`, illegal instruction cause in SRR1) is **completely absent** from this CPU implementation at `db8b1a33`:
+- **No exception declaration:** In `src/include/cpu_ppc.h:251–257`, only six exceptions are declared:
+  ```c
+  #define PPC_EXCEPTION_DSI 0x3
+  #define PPC_EXCEPTION_ISI 0x4
+  #define PPC_EXCEPTION_EI  0x5
+  #define PPC_EXCEPTION_FPU 0x8
+  #define PPC_EXCEPTION_DEC 0x9
+  #define PPC_EXCEPTION_SC  0xc
+  ```
+  There is no `#define PPC_EXCEPTION_PROGRAM 0x7`.
+- **No vectoring or cause bit delivery:** In `src/cpus/cpu_ppc.c:318–345` (`ppc_exception()`):
+  - Line 321 sets `cpu->cd.ppc.spr[SPR_SRR0] = cpu->pc;`.
+  - Lines 323–326 construct SRR1:
+    ```c
+    if (exception_nr >= 0x10 && exception_nr <= 0x13)
+        cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0xffff)
+            | (cpu->cd.ppc.cr & 0xf0000000);
+    else
+        cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff);
+    ```
+    The mask `0x87c0ffff` clears bits 11–15 of SRR1 (where the Program interrupt cause flags reside, such as bit 12 / 44 for illegal instruction per `ppc_pem32_rev2_2001.txt:12035–12040` and `ppc_oea_book3_v201.txt:3962–3963`). There is no logic to accept or encode an illegal-instruction cause into SRR1.
+  - Lines 337–339 compute `cpu->pc = exception_nr * 0x100; if (cpu->cd.ppc.msr & PPC_MSR_IP) cpu->pc += 0xfff00000ULL;`. While `0x7 * 0x100 = 0x700` would compute the vector address `0x00700`, no caller invokes it.
+- **No PC synchronization in `X(llsc)`:** In dynamic translation, `cpu->pc` is not updated before each instruction call. Synchronous exceptions must reconstruct the offending instruction PC from `ic` and `cpu->cd.ppc.cur_ic_page`. The only place doing this is `CHECK_FOR_FPU_EXCEPTION` at `src/cpus/cpu_ppc_instr.c:215–225`:
+  ```c
+  uint64_t low_pc = ((size_t)ic - (size_t)cpu->cd.ppc.cur_ic_page)
+      / sizeof(struct ppc_instr_call);
+  cpu->pc = (cpu->pc & ~((PPC_IC_ENTRIES_PER_PAGE-1) << PPC_INSTR_ALIGNMENT_SHIFT))
+      + (low_pc << PPC_INSTR_ALIGNMENT_SHIFT);
+  ```
+  `X(llsc)` at `src/cpus/cpu_ppc_instr.c:2276–2374` has no such PC synchronization code.
+- **No existing Program exception callers:** Searching all PPC source files at `db8b1a33` yields zero calls delivering a Program exception or referencing vector `0x700`.
+
+#### 2. Is it right?
+- **Load instructions (`lwarx`, `ldarx`):** Yes. Book I v2.01 (1.5.2, line 432) and Book II v2.01 (lines 1259–1266) explicitly designate bit 31 as a reserved field `/` and mandate that reserved fields are ignored by the processor. Accepting the load and establishing the reservation without checking `rc` is the required architectural behavior.
+- **Store Conditional instructions (`stwcx.`, `stdcx.`):** Under Book I v2.01 (1.5.1, lines 1116–1128) and PEM32 (4.1.3.2.2, lines 6856–6857), encoding bit 31 as 0 is an invalid form. The architecture specifies that attempting to execute an invalid form *either invokes the illegal instruction error handler (a program exception) or yields boundedly-undefined results.*
+- **Assessment of Member 7:** While Member 7 represents the ideal architectural end-state, choosing it creates a heavy cross-subsystem dependency on unbuilt exception machinery (`cpu_ppc.h`, `cpu_ppc.c`, and PC synchronization macros). If the review panel's mandate is bounded to eliminating host crashes within existing CPU capabilities, Member 4 (accepting the computation under the boundedly-undefined rule) or routing invalid forms to the existing dyntrans stop path (`goto bad;`) would accomplish survival without inventing stub exception machinery. The dossier acknowledged this limitation in Section 5 (lines 123, 133–136).
+
+---
+
+### (b) Siblings the Dossier Missed in the Same Files
+
+The dossier studied `src/cpus/cpu_ppc_instr.c` and its included tail `src/cpus/cpu_dyntrans.c`, and referenced callers / machine files. It missed several sibling issues in those exact files:
+
+1. **`X(extsw)` in 32-bit mode (`src/cpus/cpu_ppc_instr.c:3125–3130`):**
+   `extsw` (Extend Sign Word, `PPC_31_EXTSW`) is a 64-bit-only instruction. The decoder at `src/cpus/cpu_ppc_instr.c:5027–5028` decodes it unconditionally without checking `cpu->is_32bit` or `cpu->cd.ppc.bits == 64`:
+   ```c
+   case PPC_31_EXTSW:ic->f = instr(extsw);
+                     rc_f  = instr(extsw_dot); break;
+   ```
+   In 32-bit mode (`MODE32`), `X(extsw)` executes:
+   ```c
+   X(extsw) {
+   #ifdef MODE32
+       fatal("TODO: extsw: invalid instruction\n");
+   #else
+       reg(ic->arg[2]) = (int64_t)(int32_t)reg(ic->arg[0]);
+   #endif
+   }
+   ```
+   At runtime on any 32-bit PowerPC model, executing `extsw` triggers `fatal("TODO: extsw: invalid instruction\n");` (line 3127) and returns without updating `reg(ic->arg[2])`. Unlike the decode-time `goto bad;` rejection sites cataloged in the dossier's table, this is an unhandled invalid-instruction path inside an executed instruction handler that emits an unlatched `fatal()` warning and falls through with uninitialized state.
+
+2. **Missing 32-bit mode guards for doubleword LL/SC siblings (`src/cpus/cpu_ppc_instr.c:4866–4872` and `2283–2293`):**
+   `PPC_31_LDARX` and `PPC_31_STDCX_DOT` are 64-bit architecture instructions (Book I / Book II). In `src/cpus/cpu_ppc_instr.c:4866–4872`, the decoder groups them with `lwarx` and `stwcx.` without checking `cpu->cd.ppc.bits == 64`. In `X(llsc)` (lines 2283–2293), both instructions set `len = 8` unconditionally. On a 32-bit model (e.g. `PPC750` on `macppc`), `ldarx` and `stdcx.` execute 8-byte memory transactions rather than being rejected as illegal instructions.
+
+3. **Runtime `fatal()` diagnostic sites in `src/cpus/cpu_ppc_instr.c`:**
+   Besides lines 243, 2306, 2332, and 4117, several other runtime instruction handlers emit unlatched `fatal()` diagnostics without halting:
+   - `src/cpus/cpu_ppc_instr.c:3922`: `fatal("[ tlbia ]\n");` in `X(tlbia)`
+   - `src/cpus/cpu_ppc_instr.c:3990`: `fatal("tlbli\n");` in `X(tlbli)`
+   - `src/cpus/cpu_ppc_instr.c:4003`: `fatal("tlbld\n");` in `X(tlbld)`
+
+4. **Host exit calls in machine files referenced by the dossier:**
+   The dossier referenced `src/machines/machine_mvmeppc.c` and `src/machines/machine_prep.c` for default CPU mappings. Both files contain host-terminating `exit(1)` calls on unhandled machine subtypes:
+   - `src/machines/machine_mvmeppc.c:122`: `fatal("Unimplemented MVMEPPC machine subtype %i\n", machine->machine_subtype); exit(1);`
+   - `src/machines/machine_mvmeppc.c:180`: `fatal("Unimplemented MVMEPPC machine subtype %i\n", machine->machine_subtype); exit(1);`
+   - `src/machines/machine_prep.c:98`: `fatal("Unimplemented PReP machine subtype %i\n", machine->machine_subtype); exit(1);`
+   - `src/machines/machine_prep.c:166`: `fatal("Unimplemented PReP machine subtype %i\n", machine->machine_subtype); exit(1);`
+
+5. **Host exit call in `src/cpus/cpu_dyntrans.c:732`:**
+   In `cpu_dyntrans.c` (included at line 5431 of `cpu_ppc_instr.c`), line 732 calls `exit(1)`:
+   ```c
+   if (!ok) {
+       fatal("FATAL: could not find physical address of the exception handler?");
+       exit(1);
+   }
+   ```
+
+---
+
+### (c) DENOMINATOR: Sentences Checked Versus Taken on Trust
+
+- **Total factual sentences checked:** 82 sentences.
+  - Section 1 (Finding): 15 sentences checked against `src/cpus/cpu_ppc_instr.c` and `src/core/debugmsg.c`.
+  - Section 2 (Privilege, models, machine coverage): 15 sentences checked against `cpu_ppc_instr.c`, `cpu_ppc.h`, `cpu_ppc.c`, `tmp_ppc_tail.c`, `emul.c`, `cpu_dyntrans.c`, machine files, and `ppc_pem32_rev2_2001.txt`.
+  - Section 3 (Hardware behavior): 17 sentences checked against `ppc_pem32_rev2_2001.txt`, `ppc_uisa_book1_v201.txt`, `ppc_vea_book2_v201.txt`, `ppc_oea_book3_v201.txt`, and `ppc_pem_32and64_2005.txt`.
+  - Section 4 (Siblings): 9 sentences and 17 table/enumeration entries checked against `cpu_ppc_instr.c`, `cpu_dyntrans.c`, `opcodes_ppc.h`, `OUTSTANDING_BUGS.md`, and `CHANGELOG.md`.
+  - Section 5 (Disposition): 12 sentences and 7 table entries checked against `cpu_ppc.c`, `cpu_ppc.h`, `cpu_ppc_instr.c`, `dev_fbctrl.c`, and `cpu_dyntrans.c`.
+  - Section 6 (Regression observations): 12 sentences checked against `cpu_ppc_instr.c`, `ppc_vea_book2_v201.txt`, `cpu_dyntrans.c`, and `cpu_ppc.c`.
+  - Section 7 (Records): 16 sentences checked against `OUTSTANDING_BUGS.md`, `CHANGELOG.md`, `cpu_ppc_instr.c`, `memory_ppc.c`, `memory_rw.c`, and `ppc_uisa_book1_v201.txt`.
+- **Factual sentences taken on trust:** 0 sentences. Every factual claim and repository citation was verified against git tree `db8b1a33` or local manual files on disk.

@@ -1,0 +1,42 @@
+ASTRARETRO_DEBUGGERCMDS_ALIVE
+VERDICT: 6 findings (3 CODE live at HEAD, 1 RECORD, 2 TEST-GAP); 21 items checked clean
+
+Reviewed committed HEAD `8ea26abb`; no files changed, builds run, or runtime probes executed. The CODE findings require debugger input. I found no corresponding filing IDs in HEAD’s `OUTSTANDING_BUGS.md`.
+
+F1 | src/debugger/debugger_cmds.c:446 | #250; upstream breakpoint sibling relied on by #256 | CODE | live at HEAD: yes | An address expression with an ambiguous operand can return `PARSE_MULTIPLE` without initializing the output address. This guard accepts that nonzero result and subsequently reads uninitialized `addr`. The breakpoint guard at line 182 has the same defect, feeding #256’s normalization at line 194. | Check `debugger.h:48` and `debugger_expr.c:351`; a parser-contract test must reject ambiguity before consuming the output. | confidence high
+
+F2 | src/debugger/debugger_cmds.c:1050 | 5ee491e7 | CODE | live at HEAD: yes | A `find` range ending inside the final partial 16-byte block of the 64-bit address space wraps scan advancement to zero. Both successful-read arithmetic and failed-chunk advancement are affected. The scan leaves its requested range and cannot terminate normally at that endpoint. | Check upper-bound advancement with a stub reader, covering both success and failure; require finite termination without address wrap. | confidence high
+
+F3 | src/debugger/debugger_cmds.c:1027 | 5ee491e7 | CODE | live at HEAD: yes | A large search exceeding `INT_MAX` matches overflows signed `n_matches`; the sibling unreadable-chunk counter at line 1049 can overflow independently. The 64-line display limit does not bound either counter. | Compare the signed declarations at line 797 with the unrestricted 64-bit range and both increments. | confidence high
+
+F4 | src/debugger/debugger_cmds.c:167 | #248 | RECORD | live at HEAD: yes | The numbered comment says “stop on the Nth iteration,” but an ignore count of N stops on hit N+1. The preceding sentence, implementation, and CHANGELOG’s ignore-five → hit-six example agree on N+1. | Compare `cpu_dyntrans.c:1815` with `CHANGELOG.md:20255`. | confidence high
+
+F5 | src/debugger/debugger_cmds.c:172 | #248 | TEST-GAP | live at HEAD: yes | CHANGELOG records first stopping at `hits=6`, then `hits=7`; no committed regression row observes this ignore-count behavior. Checked `regress/mips_fold_probe.py:13` and its plain breakpoint command at line 339, plus committed regression searches. | Add a bounded-loop row asserting both stops and displayed counts. | confidence high
+
+F6 | src/debugger/debugger_cmds.c:193 | #256 | TEST-GAP | live at HEAD: yes | The recorded unextended MIPS breakpoint-input normalization has no regression observer. Checked `mips_fold_probe.py:128` and `fbctrl_port_probe.py:200`, together with the WDC breakpoint consumers: their addresses are already sign-extended. | A 64-bit MIPS row should assert normalization of unextended input and the resulting breakpoint stop. | confidence high
+
+Items checked clean, with locations in `src/debugger/debugger_cmds.c`:
+
+- **83:** Ambiguous subcommand prefixes are rejected; `sh` and `su` distinguish the two commands.
+- **129:** Breakpoint deletion rejects an index equal to the count.
+- **137:** Deletion compacts both accounting arrays alongside addresses and strings.
+- **172:** Negative ignore counts clamp to zero.
+- **198:** Breakpoint arrays grow together; new accounting entries are initialized.
+- **193:** For successfully parsed addresses, MIPS normalization matches configuration breakpoints and preserves non-MIPS addresses.
+- **225:** Successful breakpoint addition and subsystem arming enable sticky end-of-run debugging.
+- **270:** Subsystem level parsing rejects missing levels and extra arguments.
+- **399:** Watchpoint deletion checks bounds and compacts all three arrays.
+- **462:** Failed address translation restores the documented physical-address fallback.
+- **489:** Watchpoint add/delete invalidate every CPU’s data translations; both mapping modes reach fast-store suppression.
+- **614:** Operator-spaced range examples split correctly; both callers preserve the separator before freeing their temporary strings.
+- **801:** Search-input and string-pattern construction stay within their buffers.
+- **855:** Search address/data parsing explicitly rejects ambiguous results.
+- **950:** Numeric search patterns use guest byte order.
+- **1004:** Window fills and comparisons stay within their buffer bounds.
+- **1043:** Away from address wrap, overlap preserves boundary-spanning matches without duplicate counting.
+- **1434:** String writes handle quotes and terminating NUL correctly and stop on reported write failure.
+- **1694:** `step call` accepts its supported abbreviations and rejects unrelated words.
+- **1704:** Transition flags are cleared; stopping or resetting restores the previous trace setting.
+- **2040:** Added command registrations and syntax descriptions match their handlers.
+
+DENOMINATOR: read 19 of 19 hunks of the net diff

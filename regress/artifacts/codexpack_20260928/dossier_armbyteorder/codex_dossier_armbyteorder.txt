@@ -1,0 +1,217 @@
+CODEXPACK_DOSSIER_ARMBYTEORDER_ALIVE
+VERDICT: finding TRUE -- disposition member 3 -- decline unsupported B-bit changes while preserving configured byte order
+
+All repository citations below refer to **`db8b1a33`**. This is a static reading: nothing was built, tested, patched, or executed as a guest. Proposed behavior is distinguished from current behavior.
+
+1. **The finding is true, with an important distinction: the comparison is against effective byte order, not the previously stored B bit.**
+
+   The source path is:
+
+   | Stage | Evidence and conditions |
+   |---|---|
+   | Fetch guest instruction | `src/cpus/cpu_arm_instr.c:4044–4057` obtains instruction bytes from a cached guest page or `cpu->memory_rw(...)`. A failed memory read returns before dispatch. |
+   | Interpret instruction bytes | `src/cpus/cpu_arm_instr.c:4060–4063`: `"if (cpu->byte_order == EMUL_LITTLE_ENDIAN)"`, followed by `READ_WORD_LE(ib)` or `READ_WORD_BE(ib)`. |
+   | Select coprocessor-transfer handler | The MCR/MRC decoder branch stores `"ic->arg[0] = iword;"` and `"ic->f = cond_instr(mcr_mrc);"` at `src/cpus/cpu_arm_instr.c:4977–4980`. Conditional execution uses the wrappers at `:132–199`; a failed instruction condition does not call the operation. |
+   | Execute, rather than merely translate | `src/cpus/cpu_dyntrans.c:1917–1918` returns during translation read-ahead. Actual execution calls `"ic->f(cpu, ic);"` at `:1931` or `:1978`. |
+   | Dispatch coprocessor access | The wrapper synchronizes PC and calls `"arm_mcr_mrc(cpu, ic->arg[0]);"` at `src/cpus/cpu_arm_instr.c:948–954`. `src/cpus/cpu_arm.c:2645–2651` extracts the guest instruction’s fields. Its only callback guard is `"if (cpu->cd.arm.coproc[cp_num] != NULL)"` at `:2653`; it invokes that callback at `:2654–2655`. |
+   | Enter CP15 | Registration is unconditional for recognized ARM models: `"cpu->cd.arm.coproc[15] = arm_coproc_15;"`, `src/cpus/cpu_arm.c:175`. |
+   | Pass preliminary checks | `src/cpus/cpu_arm_coproc.c:56–59` merely diagnoses nonzero `opcode1`; its exit is commented out. `"if (rd == ARM_PC)"` instead terminates at `:60–62`, before the control-register case. |
+   | Select normal control write | `case 1` selects c1 at `src/cpus/cpu_arm_coproc.c:91`. Reads return at `:92–105`. An auxiliary-control write, `opcode2 == 1`, returns at `:107–123`. The ordinary control operation uses `opcode2 == 0`. |
+   | Consume guest register value | `src/cpus/cpu_arm_coproc.c:134–135`: `"old_control = cpu->cd.arm.control;"` and `"cpu->cd.arm.control = cpu->cd.arm.r[rd];"`. |
+   | Perform preceding side effects | A changed MMU bit selects `arm_translate_v2p_mmu` or `arm_translate_v2p` at `:136–143`. Alignment, cache and write-buffer changes produce diagnostics at `:144–155`. These happen before the endian check. |
+   | Compare against effective byte order | `:157–159`: `"old_control &= ~ARM_CONTROL_BIG;"`, followed by setting that bit when `"cpu->byte_order == EMUL_BIG_ENDIAN"`. Thus the local comparison operand has been normalized from effective byte order. |
+   | Terminate | `:161–162` compares that normalized B bit with the newly stored control B bit. The mismatch prints `"ERROR: Trying to switch endianness. Not supported yet.\n"` at `:175–176`, then executes `"exit(1);"` at `:177`. |
+
+   Enumerating the comparison outcomes:
+
+   | Effective byte order | Requested B | Endian branch |
+   |---|---:|---|
+   | Little | 0 | Continues |
+   | Little | 1 | Exits |
+   | Big | 0 | Exits |
+   | Big | 1 | Continues |
+
+   These outcomes follow directly from `src/cpus/cpu_arm_coproc.c:157–177`. `fatal()` itself only prints and returns; the terminating operation is `exit(1)` (`src/core/debugmsg.c:384–391`).
+
+   The accepted selector boundary is broader than the documented operation: c1 write `opcode2` values **2, 3, 4, 5, 6, 7** diagnose at `src/cpus/cpu_arm_coproc.c:124–128` and then fall through into the same control write. Nonzero `opcode1` also only diagnoses, and this c1 branch does not validate `crm` (`:50–184`). These are separate selector-validation defects.
+
+   There is also a startup inconsistency: initial control omits B (`src/cpus/cpu_arm.c:128–137`), while barearm subsequently selects big endian (`src/machines/machine_test.c:176–183`); c1 reads return stored control directly (`src/cpus/cpu_arm_coproc.c:95`). Consequently, retaining an initially clear stored B on a big-endian configuration can terminate, while changing that stored B to match the effective big-endian setting can succeed. “Requested B disagrees with effective byte order” is the precise finding.
+
+2. **User-mode guest code can reach it in this implementation.**
+
+   Neither the complete MCR/MRC wrapper nor the complete dispatcher checks CPSR privilege mode. The dispatcher checks only whether a callback exists; the CP15 handler likewise has no privilege check. Thus ARM-state execution in USR32 can reach the handler when the instruction condition passes. This describes the emulator, not architectural permission (`src/cpus/cpu_arm_instr.c:132–199,948–955`; `src/cpus/cpu_arm.c:2643–2663`; `src/cpus/cpu_arm_coproc.c:50–184`).
+
+   Every recognized ARM model receives this CP15 callback. Model flags do not gate it; `ARM_XSCALE` gates CP14 separately (`src/cpus/cpu_arm.c:102–110,174–179`). The model names are enumerated below rather than summarized as a count:
+
+   | Definition lines in `src/include/arm_cpu_types.h` | Names |
+   |---|---|
+   | `51–54` | ARM3, ARM610, ARM610, ARM620 |
+   | `56–68` | ARM700, ARM710, ARM710A, ARM720T, ARM740T4K, ARM740T8K, ARM7500, ARM7500FE, ARM810, ARM920T, ARM922T, ARM940T |
+   | `70–78` | ARM946ES, ARM966ES, ARM966ESR1, ARM1020E, ARM1022ES, ARM1026EJS, ARM1136JS, ARM1136JSR1 |
+   | `80–86` | SA110, SA1100, SA1110, TI925T, IXP1200, 80200 |
+   | `88–100` | PXA210, PXA210A, PXA210B, PXA210C, PXA250, PXA250A, PXA250B, PXA250C, PXA27X, IXP425_255, IXP425_400, IXP425_533 |
+   | `102–111` | CORTEX-A5, SnapdragonS2, 80219_400, 80219_600, 80321_400, 80321_400_B0, 80321_600, 80321_600_B0, 80321_600_2 |
+
+   ARM610 occurs twice; the first matching name wins (`src/cpus/cpu_arm.c:102–106`). `IXP425_255` is the literal table spelling (`src/include/arm_cpu_types.h:98`).
+
+   The ARM machine types and defaults found in `src/machines/` are:
+
+   | Machine/subtype | Default CPU | Source |
+   |---|---|---|
+   | android-arm / finow-x5-air | CORTEX-A5 | `src/machines/machine_androidarm.c:148–150,185–195` |
+   | android-arm / sony-xperia-mini | SnapdragonS2 | `src/machines/machine_androidarm.c:153–157,185–195` |
+   | cats | SA110 | `src/machines/machine_cats.c:135–151` |
+   | hpcarm / ipaq, jornada720, jornada728 | SA1110 | `src/machines/machine_hpcarm.c:195–228` |
+   | iq80321 | 80321_600_2 | `src/machines/machine_iq80321.c:97–107` |
+   | iyonix | 80321_600_B0 | `src/machines/machine_iyonix.c:116–132` |
+   | netwinder | SA110 | `src/machines/machine_netwinder.c:74–90` |
+   | rpi | ARM1136JSR1 | `src/machines/machine_rpi.c:57–77` |
+   | barearm, testarm | SA1110 | `src/machines/machine_test.c:206–230` |
+
+   The machine enumeration and registration corroborate that list (`src/include/machine.h:252–261`; `src/machines/automachine.c:95–126`). CPU-name overrides precede default selection and instantiation (`src/core/main.c:320–322`; `src/core/emul.c:487–502`).
+
+   **Neither endian setting removes reachability.** ARM initially selects little endian; barearm selects big endian; loading and explicit configuration can set the final byte order (`src/cpus/cpu_arm.c:123`; `src/machines/machine_test.c:176–183`; `src/core/emul.c:638–652,737–744`). Both configurations have a mismatching B value, as enumerated above. Neither PROM-emulation branch removes CP15 (`src/cpus/cpu_arm.c:132–138,174–179`). Tracing can disable the optimized LDM/STM installation, but does not disable this control-register check (`src/cpus/cpu_arm_instr.c:4822–4823`; `src/cpus/cpu_arm_coproc.c:161–177`). Successful boot of every listed model/machine combination was **not checked**.
+
+3. **The on-disk architecture manuals cover B-bit behavior and privilege.**
+
+   Under `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\`:
+
+   > “B (bit[7]) This bit is used to configure the ARM processor to the endianness of the memory system.”  
+   > `ddi0100i.txt:28121`
+
+   > “0 = configured little-endian memory system (LE)”  
+   > “1 = configured big-endian word-invariant memory system (BE-32)”  
+   > `ddi0100i.txt:28130,28132`
+
+   The manual describes byte-address renaming for dual-endian word-invariant implementations (`ddi0100i.txt:28123–28125`). It also expressly permits implementation differences:
+
+   > “For an ARMv4 or ARMv5 implementation, whether the endianness of the memory access is fixed, defined by an  
+   > input pin on reset, or controlled by the SCTLR.B bit is IMPLEMENTATION DEFINED.”  
+   > `ddi0406.txt:135297–135298`
+
+   > “When a control bit in CP15 register 1 is not applicable to a particular implementation, it reads as the value  
+   > that most closely reflects that implementation, and ignores writes.”  
+   > `ddi0100i.txt:28079–28081`
+
+   Those passages support a **documented fixed-endian model with truthful readback**. They do not establish that ignoring B is faithful to every physical CPU name advertised by this emulator. Model-specific StrongARM/XScale/Cortex conformance was **not checked**. On implementations supporting software B control, the manual describes changing it through c1; simply ignoring it would be a modeling limitation (`ddi0100i.txt:2853–2857`).
+
+   For privilege:
+
+   > “Prior to ARMv6, MCR and MRC instructions can only be used when the processor is in a privileged mode. If  
+   > they are executed when the processor is in User mode, an Undefined Instruction exception occurs.”  
+   > `ddi0100i.txt:27724–27725`
+
+   The subsequent ARMv6 user-access exceptions list selected cache/barrier operations, not c1 control (`ddi0100i.txt:27727–27731`). The missing emulator privilege check is therefore a distinct correction issue.
+
+4. **Sibling census: the complete affected file is `src/cpus/cpu_arm_coproc.c`.**
+
+   Its live terminating sites are **62, 177, 264, 322, 331, 417, 528**. Site 177 is the subject. There is no `cpu->running = 0` in this file (`src/cpus/cpu_arm_coproc.c:1–530`).
+
+   | Other site | Guest-controlled condition and preceding behavior | Existing record |
+   |---|---|---|
+   | `:62` | `"if (rd == ARM_PC)"` at `:60`; applies before CP15 register selection, on reads and writes. | `OUTSTANDING_BUGS.md:18720–18727`, “CP15 `rd == ARM_PC`” |
+   | `:264` | PID access selects `case 13`; after read/write, `"if (cpu->cd.arm.pid != 0)"` at `:261` terminates. Writes store the requested PID first (`:250–264`). | Same prose, “CP15 PID” |
+   | `:322` | CP6 interrupt-steering write stores `i80321_isteer`, then tests `"if (cpu->cd.arm.r[rd] != 0)"` (`:315–322`). | Same prose, “CP6 ISTEER” |
+   | `:331` | CP6 interrupt-source write stores `i80321_isrc`, prints `"TODO: XScale int ack?\n"`, and exits, irrespective of written value (`:326–331`). | Same prose, “CP6 ISRC” |
+   | `:417` | An unrecognized CP6 selector reaches `"default:goto unknown;"` at `:334`, `:405`, or `:409`, then diagnostic and exit (`:414–417`). | Same prose, “CP6 `unknown`” |
+   | `:528` | CP14 nonzero `opcode2` reaches `unknown` (`:429–431`); otherwise unrecognized selectors reach it through defaults at `:460`, `:490`, `:515`, or `:519`. | Same prose, “CP14 `unknown`” |
+
+   To make those default conditions precise without an inferred range: CP6 recognizes `crm=0` with `crn` **0, 4, 8**, and `crm=1` with `crn` **0, 1, 2, 3, 4, 5, 6, 7**; other selector pairs reach its default. CP14 requires `opcode2=0`, then recognizes `crm=0` with `crn` **0, 1, 2, 3, 7**; `crm=1` with **0, 1, 4, 5, 8**; and `crm=2` with **0, 1, 2, 3**. Other selector combinations reach its default (`src/cpus/cpu_arm_coproc.c:304–418,426–529`).
+
+   CP6 is installed by iq80321 and iyonix; CP14 is installed for models marked `ARM_XSCALE` (`src/machines/machine_iq80321.c:57`; `src/machines/machine_iyonix.c:64`; `src/cpus/cpu_arm.c:177–179`).
+
+   These siblings have no individual IDs in the cited record. The prose explicitly lists them alongside “CP15 endian” (`OUTSTANDING_BUGS.md:18721–18722`). Commented exits at **58, 87, 102, 128, 287, 294** are not live termination sites (`src/cpus/cpu_arm_coproc.c`, those lines). This census covers the coprocessor implementation file, not every termination elsewhere in the ARM decoder.
+
+5. **Recommended bounded correction: member 3, applied to the unsupported B-bit request, while accepting the other serviced control bits.**
+
+   The proposed contract is: retain effective byte order; make B read back consistently with it; announce a declined change once per CPU with a `(once)` marker; continue processing the other serviced control bits. This combines the manual’s fixed-endian latitude with the existing control handler’s independent MMU and other-bit processing (`_scratchpad/ddi0100i.txt:28079–28081`; `_scratchpad/ddi0406.txt:135297–135298`; `src/cpus/cpu_arm_coproc.c:134–183`).
+
+   | Member | Assessment |
+   |---|---|
+   | **1 — delete termination** | Insufficient alone: the handler has already stored the requested B, while effective byte order remains unchanged. Readback and execution would disagree (`src/cpus/cpu_arm_coproc.c:95,135,157–177`). |
+   | **2 — silently decline** | Could preserve fixed-endian semantics if state/readback are corrected, but provides no notice of the unsupported request. The same architectural qualification as member 3 applies. |
+   | **3 — decline and announce once** | Recommended containment disposition. Decline B’s unsupported change, preserve truthful readback, and retain independently serviced bits. |
+   | **4 — accept an already-correct operation** | Fits a matching B request. It does not fit a mismatching request: no endian switch is implemented in the control block (`src/cpus/cpu_arm_coproc.c:134–184`). |
+   | **5 — architectural fault** | Machinery exists on ARM, but an unsupported emulator feature does not itself make an otherwise legal privileged c1 write architecturally undefined. It is relevant to the separate privilege violation. |
+   | **6 — invented backing store** | Storing a B value disconnected from execution merely exposes fictitious state; that is the inconsistency left by member 1 (`src/cpus/cpu_arm_coproc.c:95,135,157–177`). |
+   | **7 — implement switching** | Required if the intended CPU contract promises software-controlled switching. This is broader work involving instruction decoding, cached handlers and memory behavior (`src/cpus/cpu_arm_instr.c:4060–4063,4765–4773,4791–4838`). |
+
+   **Fault delivery exists.** The nearest coprocessor-family precedent is `"arm_exception(cpu, ARM_EXCEPTION_UND);"` in `arm_cdp()` (`src/cpus/cpu_arm.c:2674–2679`). Delivery saves UND status, selects exception mode and sets the vector (`:669–698,714–733`). The enumerated UND vectors are **`0x00000004`** with V clear and **`0xffff0004`** with V set (`src/include/cpu_arm.h:116–123`; `src/cpus/cpu_arm.c:731–732`). The missing-handler MCR/MRC branch has its exception call commented out; it is not evidence that ARM lacks delivery (`src/cpus/cpu_arm.c:2656–2662`).
+
+   The nearest nonterminating **CP15-write** precedent is ID/cache-type writes: they diagnose and continue without changing those registers (`src/cpus/cpu_arm_coproc.c:67–89`). The per-instance house latch is clear in Footbridge: `"else if (!d->warned_irq_status_w)"`, latch assignment, then a diagnostic containing `"(once)"` (`src/devices/dev_footbridge.c:570–581`). ARM would need CPU-local warning storage; its existing `warned_undef` is function-static, not per CPU (`src/include/cpu_arm.h:136–288`; `src/cpus/cpu_arm_instr.c:4698–4710`).
+
+   **A disposition missing from the list is partial acceptance/normalization.** The existing TTB write stores, masks unsupported low bits, and continues (`src/cpus/cpu_arm_coproc.c:186–197`). The proposed control policy uses this distinction: declining B need not discard a simultaneous, otherwise supported MMU change. That precedent demonstrates the pattern; the manual passages supply the architectural qualification.
+
+   The #378 invariant is real: the optimized LDM/STM installation reads byte order at translation time (`src/cpus/cpu_arm_instr.c:4791–4838`). Preserving effective byte order preserves that assumption. A full-switch design must not assume address-cache invalidation alone rebuilds instruction handlers; item 7 documents that error.
+
+6. **Regression observations should distinguish survival, state consistency and preserved neighboring behavior.**
+
+   These are proposed observations, not measured results:
+
+   | Channel | Current mismatch behavior | Proposed member-3 behavior |
+   |---|---|---|
+   | Process continuation | `exit(1)` terminates; subsequent guest observations cannot execute. | Execution continues. |
+   | Diagnostic | `"ERROR: Trying to switch endianness. Not supported yet.\n"` | A bounded decline diagnostic containing `(once)`. |
+   | Control readback after the access | No subsequent guest readback occurs. | B reports retained effective byte order; other serviced bits reflect their accepted writes. |
+   | Effective byte order | The handler does not change it before exiting. | Remains unchanged. |
+   | Exception vector | The mismatch path delivers none. | None for the proposed privileged fixed-endian policy. |
+   | Repeated declined requests | First request ends the process. | Continuation remains possible; the CPU’s warning does not repeat. |
+
+   Current behavior is established by `src/cpus/cpu_arm_coproc.c:95,134–177`; the proposed warning lifetime follows the per-instance precedent at `src/devices/dev_footbridge.c:570–581`.
+
+   There is an additional readback observation to specify explicitly: big-endian startup can currently report B clear. A truthful fixed-endian contract should report B set even before a control write; normalization only on rejected writes would leave that inconsistency (`src/cpus/cpu_arm.c:128–137`; `src/machines/machine_test.c:176–183`; `src/cpus/cpu_arm_coproc.c:95`).
+
+   Neighboring behavior to preserve includes matching-B control writes, control reads, auxiliary-control reads/writes, and independently serviced MMU changes—including a combined request whose B change is declined (`src/cpus/cpu_arm_coproc.c:91–155,179–184`). Conditional instructions whose condition fails must remain inert (`src/cpus/cpu_arm_instr.c:132–199,4980`).
+
+   Existing little- and big-endian load/store behavior should remain unchanged because effective byte order remains fixed. The existing endian probe describes both configurations and warm/cold multi-transfer controls, but does not establish runtime B-switch support (`regress/arm_endian_probe.py:18–40`). No such checks were run here.
+
+   If privilege enforcement is corrected in the same round, user c1 access has a **separate oracle**: Undefined Instruction delivery before control mutation. That expectation comes from `_scratchpad/ddi0100i.txt:27724–27731`, with delivery supported by `src/cpus/cpu_arm.c:669–733`. It should not be confused with the privileged fixed-endian decline policy.
+
+7. **Some records require correction; the central fixed-byte-order dependency remains valid.**
+
+   **The #378 source comment attributes the wrong effect to address-cache invalidation.** It says:
+
+   > “invalidate_translation_caches(  
+   > cpu, 0, INVALIDATE_ALL) so cached ic->f handlers are  
+   > re-picked”  
+   > `src/cpus/cpu_arm_coproc.c:170–172`
+
+   That call’s `INVALIDATE_ALL` branch invalidates address-translation entries and returns (`src/cpus/cpu_dyntrans.c:1276–1288`). The ARM helper clears mappings, including `"cpu->cd.DYNTRANS_ARCH.phys_page[index] = NULL;"`; it does not reset physical cached instruction handlers (`:1015–1035`). A later lookup can find the existing physical page and reuse `"&ppp->ics[0]"` (`:765–807,830–833`).
+
+   Corrected sentence:
+
+   > “An endian switch requires rebuilding cached instruction translations as well as reviewing address translations; `invalidate_translation_caches(cpu, 0, INVALIDATE_ALL)` clears address mappings and does not itself cause cached `ic->f` handlers to be re-picked.”
+
+   ARM binds address and code invalidation separately (`src/cpus/cpu_arm.c:115–117`). Actual handler reset appears in the physical-address branch of code invalidation as `"ppp->ics[i*m + j].f = TO_BE_TRANSLATED;"` (`src/cpus/cpu_dyntrans.c:1339–1445`). Merely substituting that function with `INVALIDATE_ALL` is not established as sufficient: its inspected ALL handling clears virtual associations (`:1447–1482`).
+
+   **“This exit is LOAD-BEARING” needs a more precise invariant.** The current exit and translation-time dependency are correctly described (`src/cpus/cpu_arm_coproc.c:163–174`; `src/cpus/cpu_arm_instr.c:4802–4823`). Termination itself is not necessary if effective byte order stays fixed. For a member-3 correction, the replacement should say:
+
+   > “Cached translation-time byte-order decisions require effective byte order to remain fixed. Unsupported B changes are declined while preserving that invariant.”
+
+   **The changelog wording is broader than the actual condition.** It says “the CP15 c1 B-bit write calls `fatal()` and **exits**” (`CHANGELOG.md:30090`). In context it means an endian-switch request; read literally, it also includes matching-B writes. Precise replacement:
+
+   > “A CP15 c1 write whose B bit disagrees with `cpu->byte_order` calls `fatal()` and exits.”
+
+   **The ISTEER record is false as written.** It describes both load and store arms, then says the case “carries **no `fatal()` and no `exit()`**” (`OUTSTANDING_BUGS.md:18686–18688`). The nonzero write still exits (`src/cpus/cpu_arm_coproc.c:315–322`). Corrected sentence:
+
+   > “The ISTEER read arm returns the modeled value without diagnostics or exit; a nonzero ISTEER write still terminates.”
+
+   **The older location summary is stale and misclassified.** “`cpu_arm_coproc.c` CP15 writes 165/252/407/518” appears at `OUTSTANDING_BUGS.md:2688`. Replace it with:
+
+   > “Remaining coprocessor exits cover CP15 PC operands, byte-order mismatch and nonzero PID; CP6 nonzero interrupt-steering writes, interrupt-source writes and unknown selectors; and CP14 unknown selectors.”
+
+   The supporting live sites are enumerated in item 4. Conversely, the old INTEN exit excerpt is explicitly superseded by “SHIPPED as `#526`”; it must not be counted as live (`OUTSTANDING_BUGS.md:18674–18684,19488–19494`; `src/cpus/cpu_arm_coproc.c:310–314`).
+
+**DENOMINATOR:** Contextually read committed ranges, including delegated reads:
+
+- `src/cpus/cpu_arm_coproc.c:1–530`; `src/cpus/cpu_arm.c:50–210,217–243,572–741,2570–2686`.
+- `src/cpus/cpu_arm_instr.c:109–208,831–1040,3941–4154,4621–4870,4924–5014`.
+- `src/cpus/cpu_dyntrans.c:613–634,741–869,985–1078,1130–1498,1790–2035`; `src/cpus/generate_head.c:42–114`; `src/cpus/generate_tail.c:42–102`; `src/cpus/Makefile.skel:103–113`.
+- `src/include/arm_cpu_types.h:1–115`; `src/include/cpu_arm.h:88–312`; `src/include/machine.h:245–269`; `src/include/quick_pc_to_pointers.h:1–32`.
+- `src/machines/automachine.c:95–126`; `machine_androidarm.c:59–69,144–199`; `machine_hpcarm.c:46–67,195–232`; `machine_test.c:172–232`; `machine_cats.c:134–155`; `machine_iq80321.c:96–109`; `machine_iyonix.c:115–136`; `machine_netwinder.c:73–94`; `machine_rpi.c:57–81`—all beneath `src/machines/`.
+- `src/core/emul.c:472–508,619–678,724–747`; `src/core/emul_parse.c:487–507`; `src/core/main.c:312–326`; `src/core/debugmsg.c:256–430`.
+- `src/devices/dev_footbridge.c:548–595`; `src/devices/dev_fbctrl.c:26–145`; `src/cpus/cpu_alpha_palcode.c:387–451`.
+- `regress/arm_endian_probe.py:1–71`; `OUTSTANDING_BUGS.md:2670–2702,4560–4601,18661–18742,19485–19509`; `CHANGELOG.md:3571–3765,30061–30115`.
+- On-disk manuals: `_scratchpad/ddi0100i.txt:2849–2879,27636–27747,28041–28340`; `_scratchpad/ddi0406.txt:135271–135304,136691–136830`.
+
+Targeted committed searches additionally inspected matching lines for ARM registration, selectors, byte order, invalidation, warning latches and records; regression searches were limited to `arm_endian_probe.py` and `arm_bdt_probe.py`. Manual keyword searches inspected matching excerpts outside the contiguous ranges above. An initial tree listing exposed artifact **names**, but no artifact contents were read. Working-tree source, other project copies, pipeline ledger, model-specific hardware manuals, complete regression implementations, runtime behavior, and the quoted historical handler counts were **not checked**.

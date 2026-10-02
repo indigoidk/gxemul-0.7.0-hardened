@@ -1,0 +1,31 @@
+ASTRARETRO_HFBPENDINGDRAINPROBE_ALIVE
+VERDICT: 5 findings (1 CANNOT-FAIL, 0 SELECTS-NOTHING, 0 STATUS-LAUNDERED, 0 ENCODING, 0 RECORD, 4 OTHER); 12 items checked clean
+
+F1 | regress/fbpending_drain_probe.py:779 | #442 | CANNOT-FAIL | L2 accepts the accrual loop’s old `O_VEND=0x1011` as evidence of a fresh post-drain read. The guest publishes phase 3 before that final read/store; an interrupt between those instructions makes `run_arm()` stop successfully. With the final read executed or never executed, L2 sees the same `0x1011` and passes. | Smallest check: evaluate L2 with guest PC `0x80d0`, phase 3, and the accrual-era vendor value. Re-poisoning this output before draining and publishing completion last would distinguish the cases. | confidence high
+
+F2 | regress/fbpending_drain_probe.py:375 | #442 / #548 | OTHER | The accrual clock starts when the parent writes `continue`, before the child necessarily resumes. If scheduling permits only 600 timer callbacks in each nominal four-second interval, both corrected and unbounded counters produce 600 and pass `--expect-cap 762`; executing over 1,000 guest iterations still satisfies L1. Gate 14’s comment explicitly acknowledges this silent pass below 763 callbacks. | Smallest check: compare bounded and unbounded callbacks under a controlled 600-callback accrual, with otherwise valid controls. Both currently receive PASS. | confidence high
+
+F3 | regress/fbpending_drain_probe.py:262 | #442 | OTHER | Under `--fast`, control remains `0x80` when the freeze changes LOAD. The timer therefore runs at approximately 2.980232 Hz, not 0.0116 Hz. HEAD also lowers its pending bound to 2: if 1,000 ticks remain at the next callback, it resets that debt to 1 during measurement, losing 999 ticks from the reported backlog. | Smallest check: inspect control after guest offset `0x7c`, then pending debt across the first post-freeze callback. Control remains `0x80`; the callback can collapse undrained debt. | confidence high
+
+F4 | regress/fbpending_drain_probe.py:241 | #442 / #548 | OTHER | Arm X’s disable/re-enable instructions run without readback or control-register verification; E checks D’s program. If X’s disable store is skipped, X becomes another enabled run and can return the same passing residue as a correctly disabled X—for example, 3. The supposed disabled-state coverage remains green. Already filed as `fbdrainxdisable` in `OUTSTANDING_BUGS.md:22375`. | Smallest check: verify TIMER_CONTROL immediately after X’s disable, or step and check its specific instructions. | confidence high
+
+F5 | regress/fbpending_drain_probe.py:341 | #467 | OTHER | Continuous output without a debugger prompt resets the inactivity deadline indefinitely. Neither `wait()` nor gate 14 supplies an overall deadline, so a chattering failed run can hang the pipeline permanently. Already filed under `fbharnessedits` in `OUTSTANDING_BUGS.md:22371`. | Smallest check: a fake-clock reader appending a nonprompt byte more frequently than the timeout; advancing beyond every nominal budget never terminates the wait. | confidence high
+
+Checked clean, with HEAD line numbers:
+
+- `regress/fbpending_drain_probe.py:114` — Register bases match the device’s four timer indices.
+- `regress/fbpending_drain_probe.py:131` — Sentinel survives the VALUE mask and cannot result from the drain modulus.
+- `regress/fbpending_drain_probe.py:276` — Each observed tick triggers one CLEAR write and one count increment.
+- `regress/fbpending_drain_probe.py:357` — Command responses require a fresh buffer mark, echo, and prompt.
+- `regress/fbpending_drain_probe.py:395` — Memory parsing rejects missing requested words; register parsing also uses fresh output.
+- `regress/fbpending_drain_probe.py:466` — Reaping preserves exit versus signal status; harness kills cannot become exit zero.
+- `regress/fbpending_drain_probe.py:502` — Missing step output and instruction mismatches fail.
+- `regress/fbpending_drain_probe.py:751` — E requires coverage of all 30 drain-body addresses.
+- `regress/fbpending_drain_probe.py:758` — H1 requires its specific diagnostic, no prompt, exit 1, and no signal.
+- `regress/fbpending_drain_probe.py:763` — H2 requires the verified prologue, failed post-quit send, observed death before close, and exit zero.
+- `regress/fbpending_drain_probe.py:773` — Missing negative-control registers cannot satisfy inequality checks.
+- `regress/fbpending_drain_probe.py:782` — Missing phase or phase 4 fails; bounded verdict additionally requires both measurements and rejects poisoned dead-clock outputs.
+
+Reviewed HEAD `db8b1a33` only. Findings are source-derived; no builds, emulator runs, or writes performed.
+
+DENOMINATOR: read 1 of 1 files in full

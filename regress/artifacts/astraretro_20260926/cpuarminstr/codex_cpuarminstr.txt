@@ -1,0 +1,70 @@
+ASTRARETRO_CPUARMINSTR_ALIVE
+VERDICT: 13 findings (8 CODE live at HEAD, 5 RECORD, 0 TEST-GAP); 35 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No writes, builds, or tests executed. Manual citations refer to the project-root `_scratchpad`.
+
+F1 | src/cpus/cpu_arm_instr.c:4814 | upstream, relied on by #378 | CODE | live at HEAD: yes | A guest control-register write changing endianness reaches `exit(1)` at `cpu_arm_coproc.c:177`. #378 explicitly relies on this process termination to establish its endian-stability premise. That premise violates the fork’s guest-safety requirement. No dedicated filing found. | Smallest check: inspect the control-write branch at `cpu_arm_coproc.c:161`. | confidence high
+
+F2 | src/cpus/cpu_arm_instr.c:4712 | upstream, relied on by #312 | CODE | live at HEAD: yes | With unavailable exception-vector mappings, the newly routed undefined instruction enters an unbounded C recursion: `arm_exception()` → instruction-address translation → prefetch-abort exception → `arm_exception()`. The result is host stack exhaustion rather than interruptible guest exception handling. Already filed as `excvecrecurse`, `OUTSTANDING_BUGS.md:21950`. | Smallest check: trace `cpu_arm.c:733`, `cpu_dyntrans.c:679`, and `memory_arm.c:269`; there is no recursion bound. | confidence high
+
+F3 | src/cpus/cpu_arm_instr.c:1460 | #510, unrepaired upstream sibling | CODE | live at HEAD: yes | BFI retains `(1 << width) - 1`. Legal widths 31 and 32 retain undefined C arithmetic; decoded negative widths also reach an invalid shift. UBFX/SBFX were repaired, but this sibling was left unchanged. Full-width BFI is legal: `ddi0406.txt:18057`. Already filed as `armbfiwidth`, `OUTSTANDING_BUGS.md:17656`. | Smallest check: inspect the decoded width range and mask operand types. | confidence high
+
+F4 | src/cpus/cpu_arm_instr.c:2843 | upstream, relied on by #360/#362/#382 | CODE | live at HEAD: yes | Copyin and copyout both evaluate signed `1 << (index & 31)` before their decline guards. A guest address whose page index ends in 31 reaches signed-shift UB; the copyout sibling remains at line 2981. Already recorded under `armbfxwidth32`, `OUTSTANDING_BUGS.md:16756`. | Smallest check: inspect both expressions and the unsigned page-index range. | confidence high
+
+F5 | src/cpus/cpu_arm_instr.c:2311 | #354 | CODE | live at HEAD: yes | For a forward-overlapping copy, the real second LDM reads bytes updated by the first STM. The fold publishes those registers before either store, giving original source values instead. Its subsequent overlapping `memcpy` also violates the host function’s contract. Already recorded in the dated #354 residual, `OUTSTANDING_BUGS.md:3409`, without a separate ID. | Smallest check: trace the two architectural 16-byte transfers against the publication order. | confidence high
+
+F6 | src/cpus/cpu_arm_instr.c:2317 | upstream, relied on by #354/#524 | CODE | live at HEAD: yes | With unaligned copy bases, the fold copies through raw byte offsets while its register publications and ordinary LDM/STM use aligned words. Thus copied memory disagrees with the replaced instructions even when alignment checking is disabled. Warrant: `ddi0100i.txt:7954` and `:14115`. Already filed as `armbdtcombined`, `OUTSTANDING_BUGS.md:211`. | Smallest check: compare offsets at lines 2310 and 2317 with the ordinary transfer paths. | confidence high
+
+F7 | src/cpus/cpu_arm_instr.c:2402 | upstream, relied on by #345/#346/#348/#350 | CODE | live at HEAD: yes | A matched cache-clean loop still skips every LDR: r2 remains stale and required memory accesses or faults disappear. Correcting the counter and flags did not correct the load. LDR’s destination assignment is specified at `ddi0100i.txt:8261`. Already recorded at `OUTSTANDING_BUGS.md:3228`; `arm_flags_probe.py:1619` explicitly expects the stale value. | Smallest check: compare that probe row and the folded body with LDR semantics. | confidence high
+
+F8 | src/cpus/cpu_arm_instr.c:1716 | #524 | CODE | live at HEAD: yes | With alignment checking enabled—including the initialized control-register state—an unaligned block transfer performs an aligned access instead of raising the required alignment exception. The store sibling at line 1910 has the same omission. Warrant: `ddi0100i.txt:7954`. Already acknowledged under `armbdt`, `OUTSTANDING_BUGS.md:1262`, and in #524’s comment. | Smallest check: follow `ARM_CONTROL_ALIGN` from initialization through both transfer paths; neither tests it. | confidence high
+
+F9 | src/cpus/cpu_arm_instr.c:3345 | #340 | RECORD | live at HEAD: yes | The comment’s second-pass-only claim, repeated absolutely at `CHANGELOG.md:32364`, is false. Translation read-ahead can install and execute the fold on the first forward traversal. The breakpoint qualification was corrected elsewhere but remains absent here. Related existing filing: task **#12**, `OUTSTANDING_BUGS.md:3372`. | Smallest check: compare combiner invocation, read-ahead, and original-slot dispatch at `cpu_dyntrans.c:1895`, `:1957`, and `:1978`. | confidence high
+
+F10 | CHANGELOG.md:31075 | #360 | RECORD | live at HEAD: yes | The record still says copyout warming must use a store because a load leaves `host_store` empty. With the MMU disabled, a load populates it too—as the corrected source now explains at `cpu_arm_instr.c:2986`. Task **#43 / #385** acknowledges the correction at `OUTSTANDING_BUGS.md:4707` but incorrectly declares #360’s records clean. | Smallest check: compare the surviving sentence with the corrected comment and mapping assignment at `cpu_dyntrans.c:1595`. | confidence high
+
+F11 | src/cpus/cpu_arm_instr.c:2886 | #358 | RECORD | live at HEAD: yes | The comment says observing copyin folding without its marker is impossible. The same round’s committed record documents a reproducible, marker-free guest instruction-counter distinction and explains that it was rejected as brittle, not impossible (`CHANGELOG.md:31235`). | Smallest check: compare those two committed passages. | confidence high
+
+F12 | src/cpus/cpu_arm_instr.c:2730 | #356 | RECORD | live at HEAD: yes | The asserted universal bound `n_loops * 3 <= room + 2` is false on the explicitly supported exhausted-budget entry. With `room == 0`, the mandatory first iteration gives `3 <= 2`. The implementation remains bounded; the proof needs a separate one-iteration case. | Smallest check: substitute zero into the do-while condition and stated inequality. | confidence high
+
+F13 | src/cpus/cpu_arm_instr.c:1496 | #386 | RECORD | live at HEAD: yes | The SWP comment describes the unsupported ARMv6 U=1 case as “true unaligned access, no rotate.” Unaligned SWP with U=1 requires an alignment exception; it does not gain LDR’s true-unaligned behavior. Warrant: `ddi0100i.txt:15105`. | Smallest check: compare the comment with SWP’s alignment note. | confidence high
+
+Checked clean below; all line references are to `src/cpus/cpu_arm_instr.c` at HEAD. These are specific checks, not whole-function endorsements.
+
+1. `:1202` — PC-source reconstruction produces instruction address plus eight.
+2. `:1210` — rotated-immediate logical operations update NZC, preserve V, and suppress TST/TEQ destination writes.
+3. `:1254` — byte and halfword extend-add rotations handle all encoded amounts, including halfword wrap at 24.
+4. `:1351` — repaired UBFX/SBFX masks and sign extension are defined across widths 1–32.
+5. `:1483` — SWP captures rotation before masking and excludes a shift by 32.
+6. `:1508` — SWP assembles and emits both byte orders correctly and publishes Rd only after successful accesses.
+7. `:1716` — under U=0/A=0, cold LDM aligns the access while preserving raw base writeback.
+8. `:1910` — cold STM applies the corresponding access-only alignment.
+9. `:1724` — both endian assembly arms, including LDREX’s siblings, cast before the highest-byte shift.
+10. `:4061` — instruction-fetch macros use unsigned byte assembly in both orders.
+11. `:4367` — both addressing-mode decoders separate PC base and store-data scratch storage.
+12. `:4511` — rotated-small-immediate routing includes zero and preserves destination-PC exception-return handling.
+13. `:4560` — MVN’s complement rewrite is restricted to non-flag-setting instructions.
+14. `:4712` — undefined-instruction dispatch respects the condition and supplies the proper instruction offset.
+15. `:4822` — the guest-endian gate excludes raw generated transfers on BE guests.
+16. `:2310` — nonoverlapping copies publish the final four loaded registers through bounded aligned reads.
+17. `:2237` — memcpy markers distinguish zero-work declines from completed iterations.
+18. `:2374` — cacheclean handles zero counters and declines nonterminating nonmultiples correctly.
+19. `:2412` — cacheclean’s final subtraction produces the correct counter and NZCV.
+20. `:2396` — both cacheclean accounting additions are clamped safely.
+21. `:2487` — cacheclean2 handles zero, partial tails, wrapping arithmetic, and final flags.
+22. `:2542` — scanc checks both dependent pages before reporting completion and produces correct byte-result flags.
+23. `:2635` — idle folding writes the destination before the second TEQ and handles permitted register aliasing.
+24. `:3886` — idle matching requires the branch back to the initial load.
+25. `:2756` — strlen makes progress, bounds each call, and yields with valid intermediate state.
+26. `:3710` — strlen matching excludes base/destination aliasing.
+27. `:3745` — XOR-swap matching rejects identical registers; the accepted handler preserves flags.
+28. `:2866` — copy decline diagnostics derive from the actual guards in both directions.
+29. `:2925` — copyin swaps all six words before guarded rotation and preserves raw writeback.
+30. `:3023` — copyout swaps captured values without modifying source registers.
+31. `:3564` — both cacheclean matchers constrain the registers, strides, and branch shapes their handlers assume.
+32. `:3355` — all four folded TEQ/TST branch handlers implement the required carry behavior.
+33. `:3794` — copyin/copyout installation markers occur only after successful matching.
+34. `:3661` — scanc’s installation marker and pinned register sequence agree.
+35. `:2246` — memcpy’s warm-span execution is bounded by the 384-entry translation cache; replacement clears cached pointers, ruling out the suspected large-span accounting overflow.
+
+DENOMINATOR: read 48 of 48 hunks of the net diff

@@ -1,0 +1,55 @@
+ASTRARETRO_HARMFLAGSPROBE_ALIVE
+VERDICT: 9 findings (3 CANNOT-FAIL, 0 SELECTS-NOTHING, 2 STATUS-LAUNDERED, 0 ENCODING, 2 RECORD, 2 OTHER); 26 items checked clean
+
+Reviewed HEAD `db8b1a33`. Used Git objects and in-memory helper checks; no emulator runs, builds, or writes. Findings concern individual rows; companion rows may still reject the same defective build.
+
+F1 | regress/arm_flags_probe.py:1506 | #329 | CANNOT-FAIL | `T RORS clears Z` and `T RORS clears N` both supply `cin=1`, causing the preset at line 1329 to execute SUBS `1-0`: **N0 Z0 C1 V0**. Neither stale flag exists. With or without the RORS NZ-clearing correction, the rows produce respectively `81234567 / N1 Z0 C1 V0` and `00000001 / N0 Z0 C0 V0`; all four assertions pass. | Check both rows with only the RORS NZ-clear statement removed; establish Z=1 and N=1 before their respective rotates. | confidence high
+
+F2 | regress/arm_flags_probe.py:514 | #345 / be6ea08a | CANNOT-FAIL | `wrongregs` uses `ldr r4,[r5],#32`. Removing both #345 base/counter guards still leaves #346’s `Rd==r2` guard rejecting this sequence. Consequently `A cacheclean r0 intact` and `r1 intact` return the expected `0x11/0x22` with or without #345; `fires ctrl` remains absent. Additionally, its `r1=0x22` activates #350’s fallback if the destination mismatch is repaired. | Evaluate the HEAD matcher without its two #345 predicates; then construct separate operand witnesses that satisfy the remaining destination and counter checks. | confidence high
+
+F3 | regress/arm_flags_probe.py:1067 | #320 / cbbe1ec0 | CANNOT-FAIL | Before #320, `rotc movs C`, `rotc ands C`, and `rotc tst C` hit the decoder’s rotated-small-immediate halt. Their publication store never executes, leaving `DEST=0xdeadbeef`. `run78` extracts that sentinel’s carry bit—**zero**, exactly the corrected instructions’ expected result—so all three DISC rows pass both versions. | Feed raw dump word `efbeadde` through `run78(..., read_flag=True)` and require rejection. The in-memory check returned `0`. | confidence high
+
+F4 | regress/arm_flags_probe.py:293 | #340 / 597a71b5 | STATUS-LAUNDERED | `run_combined` compares the raw dump against `"deadbeef"`, although this little-endian dump spells the sentinel `"efbeadde"`. A halted guest leaving the witnesses untouched therefore returns CPSR `0xdeadbeef`, making both combined TEQ/TST C0 rows pass. The same ineffective rejection appears at lines 359 and 550, although their value assertions reject the sentinel. | Substitute `["efbeadde", "efbeadde"]` for the session result and require a dead result; the helper check instead returned C0. `OUTSTANDING_BUGS.md:3352` records the analogous, previously corrected `run_cc_nonmult` mistake, not these surviving sites. | confidence high
+
+F5 | regress/arm_flags_probe.py:779 | #349/#350 | STATUS-LAUNDERED | `run_cc_zero_n` requests zero dump words. After a marker is printed, a hang before the breakpoint still passes: `session` discards failed waits, accepts `len(flat)>=0`, kills the child, and returns `[]`; the caller accepts `combined 134217728 iterations`. Likewise, verbose `fires ctrl` sessions discard their returned data: `3: DEBUG` followed by failure before guest execution yields the expected `absent`. | Require successful completion in marker sessions; test marker-then-timeout and DEBUG-then-failure transcripts. Both acceptance paths were confirmed with helper fixtures. The discarded-wait root cause is already filed under **#363 residuals**, `OUTSTANDING_BUGS.md:4323`. | confidence high
+
+F6 | regress/arm_flags_probe.py:144 | f50da6b4 / #363 | OTHER | After an earlier command leaves `GXemul>` at the buffer’s end, delay the next command’s output beyond the 0.4-second read poll. `rd()` returns true without receiving bytes, and `wait()` accepts the previous prompt as completion of the new command. The duplicate whole-buffer predicate at line 645 has the same defect. | Retain the old prompt, supply no new bytes for one poll, and require `wait()` to remain pending. Already filed under **#363 residuals**, `OUTSTANDING_BUGS.md:4308`. | confidence high
+
+F7 | regress/arm_flags_probe.py:174 | a06e92fb / #363 residuals | OTHER | A retry window containing the delayed `0x9010` tail of a previous five-word dump followed by a complete new dump is flattened into one list. Taking its first five words shifts every register: the old CPSR becomes the reported r0, and the new CPSR is discarded. | Parse that two-block fixture and require the complete dump beginning at `DEST`; the helper check reproduced the shifted list. Already filed under **#363 residuals**, `OUTSTANDING_BUGS.md:4339`. | confidence high
+
+F8 | regress/arm_flags_probe.py:60 | a06e92fb | RECORD | “Most of this table is pins” is false at HEAD: enumerating row metadata with every guest runner replaced gives **112 DISC and 78 PIN**, totaling 190. The following sentence also says two of five subtract-family instructions were already correct; SUB, RSB and CMP make **three**. | Count emitted class labels and compare the named unaffected instructions at lines 29–35. | confidence high
+
+F9 | regress/arm_flags_probe.py:1239 | #321 / cbbe1ec0 | RECORD | `mvns rot0 C=1` and `mvns value` are labeled DISC, despite the definition requiring the expected result to change with the correction. The original and corrected implementations both produce respectively C=1 and `0xfffffffe`; these are preservation checks. | Compare those two expectations with the original MVN-to-complemented-MOV path and classify them as PIN. | confidence high
+
+No matching existing filing was located for F1–F3 or F8–F9.
+
+Checked clean below; all line numbers refer to `regress/arm_flags_probe.py` at HEAD. These are scoped checks, excluding the failure-handling defects above.
+
+- L1086: Equality scoring, 190-row enumeration, and padding for the longest 24-character names.
+- L200: Real SUBS carry preset and architectural MRS/result publication.
+- L1118: Equal-operand SBC/RSC borrow-in discriminators.
+- L1129: Unequal SBC/RSC and SUB/RSB preservation expectations.
+- L1169: Reachable PC-source result and explicitly disclosed address-wrap coverage limitation.
+- L1175: CMP NZCV expectations and ADD/ADC carry controls.
+- L1197: ADC positive and negative overflow discriminators.
+- L1212: UDF handler marker, UND32 mode, and return-address witnesses.
+- L1231: Conditional UDF jointly requires fallthrough and no handler execution.
+- L1005: UXTAB/UXTAH rotation results, including halfword wrap at ROR24.
+- L1020: MVNS carry-preservation and rotated carry-direction expectations.
+- L1041: PC-source rotation routing and immediate-boundary controls.
+- L282: Combined-driver branch targets and repeatable carry preset.
+- L334: XOR-swap operand shape and reseeding of both registers.
+- L1288: Thumb entry/return, halfword packing, instruction counts, and operand constructors.
+- L1381: Thumb equality/wrapping Z rows and zero-subtrahend carry rows.
+- L1405: Thumb overflow expectations and overwritten-source alias witness.
+- L1495: LSL zero-shift controls establish both incoming carries.
+- L1501: ASR12 distinguishes result flags from the unrelated r3 value.
+- L1513: Shift-by-32 expectations and nonzero-destination publication.
+- L429: Computed outer branch displacement and post-index LDR fields.
+- L521: Separate #346 stride and destination discriminators.
+- L518: Counter64 and flag seed distinguish the missing final-subtraction preload.
+- L722: Nonmultiple-loop invariants and zero-counter two-pass setup at L761.
+- L879: Cacheclean2 operand isolation and genuine/borrow/zero exit expectations.
+- L425: Distinct marker patterns and explicit DEBUG-verbosity prerequisite.
+
+DENOMINATOR: read 1 of 1 files in full

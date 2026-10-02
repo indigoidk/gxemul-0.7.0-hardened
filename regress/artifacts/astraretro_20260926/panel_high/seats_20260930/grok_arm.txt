@@ -1,0 +1,68 @@
+The brief's premises are checkable in `GXEMUL-SEC/src/` at `db8b1a33`. I'll read the three ARM paths there and test each stated fact against the code that actually runs, including who can reach it.The fork tree is `GXEMUL-SEC/src`. I'll confirm that commit and read the three handlers plus their callers, staying inside that tree.VERDICT: 3 of 3 findings hold as stated -- each path is guest-reachable and does what the ruling says; the count of wrong dispositions is 0.
+
+Read at `db8b1a33` in `GXEMUL-SEC/src/`. The line numbers match this tree. S1–S3 match the code: `fatal()` returns, the shared `bad:` label only clears `cpu->running`, and a single stopped CPU makes `emul_run` break and `main` return 0.
+
+## Q1. Premise audit
+
+**H4 holds.** The premise that would falsify it is "no guest instruction reaches `arm_coproc_15` with c1, opcode2 0, and the B bit opposite `cpu->byte_order`." That premise is false. `case 0xe` installs `mcr_mrc` with no mode test (`cpu_arm_instr.c` 4977–4980). `arm_mcr_mrc` calls `coproc[15]` whenever the pointer is set (`cpu_arm.c` 2653–2655), and `arm_cpu_new` always sets it. Line 135 stores `r[rd]` into `cpu->cd.arm.control` before the test. Lines 157–160 then force the compared B bit from `cpu->byte_order`, not from the previous control value. `ARM_CONTROL_BIG` is `0x0080`. On the default little-endian CPU a guest write with that bit set takes `fatal` and `exit(1)` at line 177. User mode reaches it: nothing between the decoder and this handler reads `CPSR`.
+
+"Refuse the bit, keep the old byte order, announce once" is sound only if the stored B bit is put back so it matches `cpu->byte_order`. `MRC` of c1 returns `cpu->cd.arm.control` (line 95), so the guest then reads the old endianness and the other bits of the write. Deleting only `exit(1)` leaves the guest's B bit stored. Nothing in the ARM tree consults `ARM_CONTROL_BIG` except this test and the register dump; the LDM/STM install gate and the decoder read `cpu->byte_order`. Translated code would stay on the old endianness, and the read-back would not.
+
+The seven live `exit(1)` sites are 62, 177, 264, 322, 331, 417, 528. Of the six besides 62:
+
+| Line | Guest can reach it |
+|---|---|
+| 177 | Yes. Every ARM CPU, any mode. MCR p15, c1, opcode2 0, B bit opposite `cpu->byte_order`. |
+| 264 | Yes. Every ARM CPU, any mode. A write of a non-zero PID to CP15 c13. `crm` and `opcode2` are checked only with `fatal()`, which returns. |
+| 322 | Yes on iq80321 and iyonix only (`coproc[6]` is installed there). Write of a non-zero value to cp6, crm 0, crn 4. |
+| 331 | Yes on those two machines. Any write to cp6, crm 0, crn 8, including zero. |
+| 417 | Yes on those two machines. Any other cp6 encoding falls into `unknown:`. |
+| 528 | Yes when the CPU has `ARM_XSCALE`, which installs `coproc[14]`. Both of those machines default to an 80321, which is XScale. Any unimplemented cp14 encoding. |
+
+On a machine where the coprocessor pointer is NULL, `arm_mcr_mrc` prints and returns. The undefined-instruction call there is commented out.
+
+**H5 holds.** The premise that would falsify it is "a second instruction-fetch failure returns to `cpu_dyntrans.c:729` and stops." On the cold path it does not return.
+
+`FLAG_INSTR` is 4 and `FLAG_NOEXCEPTIONS` is 2, so the call at line 679 takes the exception. `arm_translate_v2p_mmu` calls `arm_exception(PREF_ABT)`, which sets
+
+`pc = exception_nr * 4 + (V ? 0xffff0000 : 0)`
+
+and then `quick_pc_to_pointers`. The eight vector addresses are offsets `0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C` from one base. All eight have the same `>> 12`. A prefetch abort is exception 3, so the re-entry target is offset `0x0C` in that same 4KB page.
+
+If `phys_page[vector >> 12]` is NULL, `quick_pc_to_pointers` calls `arm_pc_to_pointers`, which calls `arm_pc_to_pointers_generic`, which calls `translate_v2p` again. One cycle is four frames: `arm_translate_v2p_mmu`, `arm_exception`, `arm_pc_to_pointers`, `arm_pc_to_pointers_generic`. The second failure is again a prefetch abort of the same page. The "no mode change" `exit(1)` in `arm_exception` is commented out. Nothing counts depth. The host stack grows until the process dies. Line 732's `exit(1)` sits after `translate_v2p` returns, and this cycle does not return.
+
+That `exit(1)` would be reached only if `quick_pc_to_pointers` hit a cached `phys_page` while `host_load` for the new PC was NULL. Invalidate clears those two together (`cpu_dyntrans.c` 1028–1031), and `phys_page` is stored only when `host_load` is already set (812–814). The cold unmapped-vector path does not produce that split.
+
+With the MMU off, `arm_translate_v2p` returns success for every address, so this needs the MMU on and a cold cache for the vector page. A correct OS maps that page before it takes exceptions. `arm_setup_initial_translation_table` maps it too. The guest that hits this is one whose page tables omit it.
+
+The same call shape is in PowerPC and M88K. `ppc_exception` clears only `PPC_MSR_EE|PR|RI` (bits 15, 14 and 1). `PPC_MSR_IR` is bit 5 and stays set, then `ppc_pc_to_pointers` re-enters the generic translator. `m88k_exception` sets the shadow-freeze bit and, on a second fault, rewrites the vector to ERROR, then still calls `m88k_pc_to_pointers`. ERROR is `VBR + 8*vector` in the same small window, so an unmapped VBR page loops. SH is bounded: the first exception sets `BL`, the re-entered `sh_exception` forces `PC = 0xa0000000`, and that address is identity-mapped in P1/P2.
+
+**H6 holds.** The premise that would falsify it is "clearing `s_bit` skips the `return_flag` assignment, or USR32/SYS32 match a `switch` case." Neither is true.
+
+`if (s_bit)` is tested once. In USR32 (`0x10`) line 1612 clears `s_bit`, and line 1616 still runs. `iw & 0x8000` is register 15 in the list, so `return_flag` becomes 1. In SYS32 (`0x1f`) line 1612 is false, and the same bit-15 test sets `return_flag`. The `switch` cases are `0x11, 0x17, 0x1b, 0x12, 0x13`. Neither `0x10` nor `0x1f` is among them, so both reach `default`, set `cpu->running = 0`, point `next_ic` at `nothing_call`, and return. The fast-path generator rejects the S bit (`generate_arm_multi.c` 86–88), and `tmp_arm_multi.c` has no `arm_instr_multi_0x0[89][4567cdef]…` handler, so this instruction is always `bdt_load`. The decoder installs that for opcode `0x8`/`0x9` with no mode test. Thumb `POP` calls `arm_pop` with `s_bit` 0, so it is a different path.
+
+`nothing` decrements `next_ic`, so the rest of the burst spins on it until `n_translated_instrs` passes `N_SAFE_DYNTRANS_LIMIT` (8191). `machine_run` then sees `running == 0` and returns false. On one CPU the run loop breaks and `main` returns 0. The loads have already been written; the PC update below the `switch` is not reached.
+
+DDI 0100I's glossary says an UNPREDICTABLE instruction must not halt or hang the processor or any part of the system. Ignoring the S bit and loading the registers is the behavior this function already uses for the user-mode form without r15. Raising undefined is also within UNPREDICTABLE, and `arm_exception(ARM_EXCEPTION_UND)` exists, but it would have to happen before those loads.
+
+## Q2. Wrong dispositions
+
+**0.** H4 is a new host `exit(1)` on a guest register write. H5 is the existing row, and the host stack death is the HIGH clause, not a guest-visible wrong result. H6 is a different instruction from the other `running = 0` sites, and it is unprivileged. None is unreachable, graded above the rule, or a duplicate.
+
+## Q3. Correction
+
+**H4: (3),** and the pieces exist. Mask `ARM_CONTROL_BIG` back to `cpu->byte_order` after the store, and announce once. The one-shot warning pattern is already in this CPU (`warned_undef` in the translator). (1) is not available: the store at line 135 has already happened, and the #378 comment is right that a real switch also needs `invalidate_translation_caches(..., INVALIDATE_ALL)`, a re-decode, and a revisit of the LDM/STM install gate. (7) is that larger round. (5) is the right answer for a *user-mode* CP15 access, because that access is architecturally undefined and `arm_cdp` already delivers `ARM_EXCEPTION_UND`. A privileged write of the B bit is not undefined.
+
+**H5: no member of the list.** (5) is the current recursion. (1) removes an `exit(1)` this path does not reach. The missing member is a re-entry guard that stops the virtual CPU the way the shared `bad:` label already does. `FLAG_NOEXCEPTIONS` already makes `arm_translate_v2p_mmu` return 0 without calling `arm_exception`; the handler lookup at line 721 does not pass it.
+
+**H6: (2)** for the CPSR restore. Leave `return_flag` clear in USR32 and SYS32. The register loads already happened as an ordinary LDM, which is (4) for that half. (5) is available and would also satisfy the manual, at the cost of undoing those loads or moving the check above them.
+
+## Q4. Ordinary operation
+
+Most likely **H6**, then **H4**, then **H5**.
+
+A correct kernel's own hot path meets none of the three failure conditions. Exception return is `LDM` with S and r15 *in SVC, IRQ, abort, undefined, or FIQ*, and those five modes have cases. The control-register write at boot is real, and a same-endian read-modify-write keeps B matching `cpu->byte_order`, so the exit does not fire. IRQ, syscall, and page-fault entry translate a vector page the OS has mapped.
+
+H6 is the one ordinary operation still exposes: the opcode is unprivileged, so it can sit in a user process the OS is supposed to keep running. H4 needs a deliberate endianness bit. H5 needs the vector page unmapped and cold in `phys_page`.
+
+While checking these, two neighbors showed the same host effect. `msr_imm_spsr` / `msr_spsr` have no USR32 or SYS32 case and set `cpu->running = 0` (`cpu_arm_instr.c` 881–893); the decoder installs them with no mode test (4294–4312). `MRS` of SPSR in those modes returns 0 instead (932–933). And line 62 exits the process on any CP15 move whose Rd field is 15, on every ARM CPU, in any mode.

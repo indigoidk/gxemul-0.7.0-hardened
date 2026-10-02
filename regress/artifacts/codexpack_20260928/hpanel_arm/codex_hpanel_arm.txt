@@ -1,0 +1,97 @@
+CODEXPACK_HPANEL_ARM_ALIVE
+
+VERDICT: 2 of 3 findings hold as stated -- H4’s terminating path is real, but its “new” disposition contradicts the existing record.
+
+**Q1. The premise audit.** All repository citations below refer to `db8b1a33`. Manual citations refer to the permitted on-disk `_scratchpad` files. These conclusions come from reading; runtime outcomes were not measured.
+
+**H4 — reachable, including from user mode in this implementation.** The decoder selects `mcr_mrc`; its wrapper synchronizes PC and calls `arm_mcr_mrc`. That dispatcher’s gate is only `"if (cpu->cd.arm.coproc[cp_num] != NULL)"`; it contains no privilege check. CP15 is installed unconditionally. The hinge premise—guest instruction dispatch actually reaches this handler—is checked. (`src/cpus/cpu_arm_instr.c:4977`, `src/cpus/cpu_arm_instr.c:948`, `src/cpus/cpu_arm.c:2643`, `src/cpus/cpu_arm.c:2653`, `src/cpus/cpu_arm.c:175`.)
+
+The handler first executes `"cpu->cd.arm.control = cpu->cd.arm.r[rd];"`. It reconstructs the comparison B bit from `cpu->byte_order`, compares that with the newly stored bit, and reaches `"exit(1);"` on disagreement. Thus the comparison is with the configured byte order, not merely the previous stored control bit. (`src/cpus/cpu_arm_coproc.c:135`, `src/cpus/cpu_arm_coproc.c:157`, `src/cpus/cpu_arm_coproc.c:161`, `src/cpus/cpu_arm_coproc.c:177`.)
+
+The exit-count premise checks out. Enumerated occurrences in `src/cpus/cpu_arm_coproc.c`:
+
+- Active: **62, 177, 264, 322, 331, 417, 528**.
+- Commented out: **58, 87, 102, 128, 287, 294**.
+
+The other active sites have guest paths:
+
+| Site | Reachability condition |
+|---|---|
+| `src/cpus/cpu_arm_coproc.c:62` | CP15 operand names PC: `"if (rd == ARM_PC)"` at line 60. |
+| `src/cpus/cpu_arm_coproc.c:264` | PID access leaves stored PID nonzero; the handler explicitly tests that at line 261. |
+| `src/cpus/cpu_arm_coproc.c:322` | CP6 interrupt-steering write supplies a nonzero value, tested at line 319. |
+| `src/cpus/cpu_arm_coproc.c:331` | CP6 interrupt-source register write, following the write arm at line 328. |
+| `src/cpus/cpu_arm_coproc.c:417` | CP6 unsupported dispatch reaches `unknown`, including defaults at lines 334 and 409. |
+| `src/cpus/cpu_arm_coproc.c:528` | CP14 unsupported dispatch reaches `unknown`, including the opcode check at line 429 and default at line 519. |
+
+CP6 availability depends on machine setup: it is installed for IQ80321 and Iyonix. CP14 is installed for XScale CPUs. (`src/machines/machine_iq80321.c:57`, `src/machines/machine_iyonix.c:64`, `src/cpus/cpu_arm.c:178`.)
+
+The operand producer’s actual domains are opcode fields **{0,1,2,3,4,5,6,7}**, register/coprocessor fields **{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}**, and direction **{0,1}**. The unsupported branches are reachable within those domains. (`src/cpus/cpu_arm.c:2645`.)
+
+**H5 — reachable, with a persistently faulting, uncached vector translation.** The hinge premise is that exception delivery resolves the vector synchronously before the failing translation returns. Checked:
+
+1. The generic routine calls `translate_v2p` with `FLAG_INSTR`. (`src/cpus/cpu_dyntrans.c:679`.)
+2. ARM translation failure calls `"arm_exception(cpu, ARM_EXCEPTION_PREF_ABT);"`. (`src/cpus/memory_arm.c:268`.)
+3. Exception delivery sets the vector PC and immediately calls `"quick_pc_to_pointers(cpu);"`. (`src/cpus/cpu_arm.c:731`, `src/cpus/cpu_arm.c:733`.)
+4. Without a cached instruction page, that macro enters pc-to-pointers; without a usable address mapping, the generic routine calls the translator again. (`src/include/quick_pc_to_pointers.h:9`, `src/include/quick_pc_to_pointers.h:16`, `src/cpus/cpu_dyntrans.c:888`, `src/cpus/cpu_dyntrans.c:659`, `src/cpus/cpu_dyntrans.c:679`.)
+
+Enumerated prefetch-abort vector addresses are **V clear → `0x0000000c`; V set → `0xffff000c`**. The exception number is **3**. (`src/include/cpu_arm.h:125`, `src/cpus/cpu_arm.c:731`.)
+
+There is no second-failure guard in that chain. The same-mode warning’s terminating call is literally commented out: `"/*  exit(1);  */"`. The `no_exceptions` bypass exists, but these calls supply `FLAG_INSTR`, not `FLAG_NOEXCEPTIONS`. (`src/cpus/cpu_arm.c:708`, `src/cpus/cpu_arm.c:711`, `src/cpus/memory_arm.c:122`, `src/cpus/memory_arm.c:258`, `src/cpus/cpu_dyntrans.c:680`.)
+
+Consequently, **the fallback exit at `cpu_dyntrans.c:732` is not reached in this persistent recursive-failure case**: the earlier translator call never returns. This does not establish that the fallback is globally unreachable on ARM. Unbounded recursion is established by reading; host stack exhaustion remains a predicted consequence.
+
+The required state is an active MMU translation path whose effective prefetch-abort vector mapping keeps failing, without cache hits bypassing the failure. Merely saying “turn on the MMU” omits those conditions. The handler selects the MMU translator; invalid descriptors enter exception delivery. (`src/cpus/cpu_arm_coproc.c:136`, `src/cpus/cpu_arm_coproc.c:140`, `src/cpus/memory_arm.c:155`.) This ordinarily indicates broken vector/MMU setup, not successful operation of a correctly configured OS. Calling it possible **only** under a faulty OS is too strong, given the ungated guest CP15 access identified under H4.
+
+The cross-architecture qualification also needed checking:
+
+- **PowerPC:** the same recursion shape exists. Exception entry leaves instruction translation enabled, resolves the vector immediately, and an instruction translation failure calls exception delivery again. (`src/cpus/cpu_ppc.c:335`, `src/cpus/cpu_ppc.c:344`, `src/cpus/memory_ppc.c:258`, `src/cpus/memory_ppc.c:322`.)
+- **M88K:** redirecting a nested exception to ERROR does not bound this recurrence if the ERROR vector also fails translation; that path still resolves PC synchronously. (`src/cpus/cpu_m88k.c:811`, `src/cpus/cpu_m88k.c:929`, `src/cpus/cpu_m88k.c:980`, `src/cpus/memory_m88k.c:417`.)
+- **SH:** this particular unbounded translation-recursion claim does **not** hold. A nested exception with BL set becomes a reset, whose PC is `0xa0000000`; supervisor translation directly maps that address. Subsequent instruction-fetch success is not established by this observation. (`src/cpus/cpu_sh.c:910`, `src/cpus/cpu_sh.c:917`, `src/cpus/cpu_sh.c:952`, `src/cpus/cpu_sh.c:1021`, `src/cpus/memory_sh.c:373`.)
+
+**H6 — reachable in both USR32 and SYS32.** The hinge premise is that the executable generic path retains `return_flag` for these modes. Checked: the decoder installs `bdt_load`, which calls `arm_pop`; the optimized generator rejects S-bit instructions, and optimized installation requires an exact instruction match. (`src/cpus/cpu_arm_instr.c:4787`, `src/cpus/cpu_arm_instr.c:1957`, `src/cpus/generate_arm_multi.c:86`, `src/cpus/cpu_arm_instr.c:4830`.)
+
+Enumerated outcomes:
+
+- **USR32:** line 1614 clears S inside the already-entered outer block; lines 1616–1618 still set `"return_flag = 1;"`.
+- **SYS32:** the user-only test is false; the same PC-list test sets `return_flag`.
+
+The return switch enumerates **FIQ32, ABT32, UND32, IRQ32, SVC32**. Neither **USR32** nor **SYS32** appears, so both reach `"cpu->running = 0;"` and `"cpu->cd.arm.next_ic = &nothing_call;"`. (`src/cpus/cpu_arm_instr.c:1610`, `src/cpus/cpu_arm_instr.c:1784`, `src/cpus/cpu_arm_instr.c:1797`.)
+
+The preceding loads must succeed: a failed memory read returns before this switch. Thus this is an available single-instruction path, not an inevitable outcome for every attempted execution. (`src/cpus/cpu_arm_instr.c:1716`.)
+
+UNPREDICTABLE does not excuse the halt. The manual says `"This instruction is UNPREDICTABLE in User or System mode"` and separately says such instructions `"must not halt or hang the processor, or any parts of the system."` (`_scratchpad/ddi0100i.txt:8168`, `_scratchpad/ddi0100i.txt:45064`.)
+
+The immediate effect is stopping that CPU. Process termination additionally requires all machines to stop and no debugger takeover; those conditions lead out of the run loop to `main()`’s `"return 0;"`. (`src/machines/machine.c:741`, `src/core/emul.c:1052`, `src/core/main.c:821`.)
+
+**Q2. Which dispositions are wrong? One: H4’s novelty.**
+
+- **H4:** retain HIGH, associate it with the existing record. `OUTSTANDING_BUGS.md:18721` already says `"SEVEN sibling guest-reachable host kills"`; `OUTSTANDING_BUGS.md:18722` explicitly includes **“CP15 endian.”**
+- **H5:** the proposed HIGH upgrade is justified by the recursive path above. Update existing **`excvecrecurse`**, whose committed record already labels the predicted stack overflow MED. (`OUTSTANDING_BUGS.md:21950`, `OUTSTANDING_BUGS.md:21951`.)
+- **H6:** retain proposed HIGH. The nearby recorded `bdt_load` stop concerns **reserved CPSR modes**, not the defined USR32/SYS32 no-SPSR case. It does not establish duplication of H6. An exhaustive proof of absence from every record is **not checked**. (`OUTSTANDING_BUGS.md:20277`, `OUTSTANDING_BUGS.md:20346`.)
+
+**Q3. Correction choices and available machinery.**
+
+**H4: member 3 — decline the endian-bit change and announce once per CPU.** Preserve the configured byte order and canonicalize the stored control bit accordingly: **little-endian → B clear; big-endian → B set**. Otherwise readback lies, because the read path directly returns `"cpu->cd.arm.control"`. (`src/cpus/cpu_arm_coproc.c:95`, `src/cpus/cpu_arm_coproc.c:157`.) This is an internally consistent unsupported-feature policy, not an implementation of switching. The current mismatch branch has no once guard; the correction needs one. (`src/cpus/cpu_arm_coproc.c:161`.)
+
+Deleting only the exit is insufficient. Translation-time handler selection and instruction decoding both depend on byte order. (`src/cpus/cpu_arm_instr.c:4822`, `src/cpus/cpu_arm_instr.c:4060`.) Guest privilege validation also needs review; ARM’s Undefined Instruction delivery machinery exists and is already used by `arm_cdp`. (`src/cpus/cpu_arm.c:2677`.)
+
+**H5: member 7 — implement bounded exception/fetch sequencing.** Preserve architectural prefetch-abort state transitions, but defer vector fetching to ordinary bounded dispatch instead of recursively resolving it inside exception entry. Repeated guest aborts must not consume unbounded host stack or trap the scheduler inside one host call. Existing ARM exception-state machinery is available; the present synchronous resolution at `src/cpus/cpu_arm.c:733` is the part requiring redesign. Choosing member 5 alone merely invokes the already-recursive mechanism. (`src/cpus/memory_arm.c:269`.)
+
+**H6: member 5 — deliver Undefined Instruction before loads or writeback.** ARM already has a handler that synchronizes PC and calls `"arm_exception(cpu, ARM_EXCEPTION_UND);"`. (`src/cpus/cpu_arm_instr.c:1020`.) This is my chosen handling of UNPREDICTABLE, not an exception mandated by the LDM description. ARMv7 explicitly permits it: `"An instruction that is UNPREDICTABLE can be implemented as UNDEFINED."` (`_scratchpad/ddi0406.txt:143212`.) The tree lists CORTEX-A5; universal applicability across every older advertised model is **not checked**. (`src/include/arm_cpu_types.h:102`.) H5 must also be corrected so unavailable exception vectors remain contained.
+
+A missing disposition is **controlled suspension of the affected emulation with a host-visible reason**. That can be appropriate for an unsupported configuration, but it is not architectural instruction behavior and is not an acceptable substitute for containing H6 user code. Merely clearing `running` does not ensure the host remains alive under the current run loop. (`src/core/emul.c:1052`.)
+
+**Q4. Ordinary-operation ranking: H4, then H6, then H5.**
+
+This is a qualitative exposure judgment; workload frequencies were **not checked**.
+
+1. **H4:** closest to legitimate feature use—an endian reconfiguration is exactly what the control handler refuses. Same-endian writes do not enter the terminating branch. (`src/cpus/cpu_arm_coproc.c:161`.)
+2. **H6:** conforming applications should avoid this UNPREDICTABLE operation, but a functioning OS can encounter faulty application code. (`_scratchpad/ddi0100i.txt:8168`.)
+3. **H5:** the failure requires an unusable effective abort-vector translation, indicating broken exception infrastructure under ordinary operation. The fork’s ungated CP15 access weakens any assumption that only kernel bugs can create that state. (`src/cpus/memory_arm.c:269`, `src/cpus/cpu_arm.c:733`, `src/cpus/cpu_arm.c:2653`.)
+
+**Standing license.** Additional observations from verification:
+
+- **The #378 invalidation recipe needs precision.** Its claim that `invalidate_translation_caches(..., INVALIDATE_ALL)` causes cached handlers to be re-picked is insufficient by itself. That path clears address mappings; physical translated pages can subsequently be reused. The separate code-invalidation path actually assigns `"TO_BE_TRANSLATED"` to instruction handlers. (`src/cpus/cpu_arm_coproc.c:170`, `src/cpus/cpu_dyntrans.c:1276`, `src/cpus/cpu_dyntrans.c:1028`, `src/cpus/cpu_dyntrans.c:775`, `src/cpus/cpu_dyntrans.c:1425`.)
+- **The SPSR-write sibling deserves the same no-SPSR review.** Its default stops the CPU, while the SPSR-read sibling explicitly returns zero for USR32/SYS32. The write decoder has no corresponding mode guard. (`src/cpus/cpu_arm_instr.c:856`, `src/cpus/cpu_arm_instr.c:892`, `src/cpus/cpu_arm_instr.c:932`, `src/cpus/cpu_arm_instr.c:4294`.)
+- **Other MMU termination sites were encountered:** `arm_check_access()`’s domain-access case 2 and the unsupported descriptor default call `exit(1)`. Their broader reachability and duplicate status were **not checked** in this audit. (`src/cpus/memory_arm.c:78`, `src/cpus/memory_arm.c:79`, `src/cpus/memory_arm.c:252`, `src/cpus/memory_arm.c:254`.)

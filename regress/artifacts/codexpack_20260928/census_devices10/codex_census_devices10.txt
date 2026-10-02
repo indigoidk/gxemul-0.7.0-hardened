@@ -1,0 +1,90 @@
+CODEXPACK_CENSUS_DEVICES10_ALIVE
+VERDICT: 12 live calls classified -- 3 reachable by guest access at run time, 2 of those not recorded
+
+All citations below refer to **`db8b1a33`**. The per-file census matches exactly: each listed file contains its supplied singleton call, all `exit(1)`. “Live” here means outside comments; some calls are unreachable.
+
+The guest count includes **PCC2 with operator-supplied interrupt wiring**. The unrecorded guest sites are **IQ80321 7seg and PCC2**. No builds, guest execution, or writes were performed.
+
+`GUEST LEVEL: privileged` identifies the established board-control route. It does **not** establish exclusion of user access through permitted mappings; stock-OS user mappings were **not checked**. Relevant translation checks are at `src/cpus/memory_arm.c:69–100`, `src/cpus/memory_m88k.c:134–144,270–309`, and `src/cpus/memory_ppc.c:55–75`.
+
+src/devices/dev_iq80321_7seg.c:87 | dev_iq80321_7seg_access | WHEN: guest access | CONDITION: “switch (relative_addr)” / “default:” — neither handled case, `0` nor `0x10000` (src/devices/dev_iq80321_7seg.c:59–87) | GUEST LEVEL: privileged | RECORDED: NONE | DISPOSITION: 3 — decline and announce once | confidence: high
+
+src/devices/dev_luna88k.c:1046 | devinit_luna88k | WHEN: construction | CONDITION: “if (devinit->machine->ncpus > 4)” (src/devices/dev_luna88k.c:1044) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+
+src/devices/dev_mk48txx.c:147 | dev_mk48txx_access | WHEN: unreachable | CONDITION: “default:” in “switch (relative_addr)” after the preceding bypass guard (src/devices/dev_mk48txx.c:116–147) | GUEST LEVEL: n.a. | RECORDED: mk48nvramkill, fixed as #521 (OUTSTANDING_BUGS.md:18572–18582) | DISPOSITION: 1 — delete the terminating call | confidence: high
+
+src/devices/dev_pcc2.c:435 | pcctwo_interrupt_common | WHEN: guest access, conditional on operator-supplied wiring | CONDITION: “switch (interrupt->line)” / “default:” — outside `PCC2V_SCSI`, `PCC2V_SCC_TX`, `PCC2V_SCC_RX` (src/devices/dev_pcc2.c:410–435) | GUEST LEVEL: privileged | RECORDED: NONE | DISPOSITION: 3 — decline unsupported interrupt delivery and announce once | confidence: high on conditional reachability
+
+src/devices/dev_pccmos.c:146 | devinit_pccmos | WHEN: construction | CONDITION: “switch (devinit->machine->machine_type)” / “default:fatal("devinit_pccmos(): unimplemented machine type"” (src/devices/dev_pccmos.c:120–146) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+
+src/devices/dev_pmppc.c:153 | devinit_pmppc | WHEN: construction | CONDITION: final “else” after `physical_max` comparisons against `32*1048576`, `64*1048576`, `128*1048576`, `256*1048576`; diagnostic: “A PM/PPC can have 32, 64, 128, or 256 MB RAM.” (src/devices/dev_pmppc.c:144–153) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+
+src/devices/dev_ps2_gif.c:421 | devinit_ps2_gif | WHEN: unreachable, construction guard | CONDITION: “if (d->vfb_data == NULL)” after `dev_fb_init` (src/devices/dev_ps2_gif.c:416–421) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the terminating call | confidence: high
+
+src/devices/dev_sgi_mardigras.c:314 | devinit_sgi_mardigras | WHEN: unreachable, construction guard | CONDITION: “if (d->fb == NULL)” after `dev_fb_init` (src/devices/dev_sgi_mardigras.c:308–314) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the terminating call | confidence: high
+
+src/devices/dev_turbochannel.c:189 | dev_turbochannel_init | WHEN: construction | CONDITION: “if (strlen(device_name) > 8)” (src/devices/dev_turbochannel.c:187) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+
+src/devices/dev_vme.c:143 | dev_vme_access | WHEN: guest access | CONDITION: “switch (relative_addr)” / “default:if (writeflag == MEM_READ)” — exit follows either diagnostic branch (src/devices/dev_vme.c:68–143) | GUEST LEVEL: privileged | RECORDED: vmedefaultkill (OUTSTANDING_BUGS.md:18757–18776) | DISPOSITION: 5 — deliver the architectural access exception | confidence: high on reachability; medium on disposition
+
+src/devices/dev_vr41xx.c:758 | dev_vr41xx_init | WHEN: construction | CONDITION: “switch (cpumodel)” / “default:” — accepted models are `4101`, `4102`, `4111`, `4121`, `4181`, `4122`, `4131` (src/devices/dev_vr41xx.c:740–758) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+
+src/devices/lk201.c:210 | lk201_send_mouse_update_sequence | WHEN: unreachable | CONDITION: “switch (d->mouse_mode)” / “default:” (src/devices/lk201.c:184–210) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the terminating call | confidence: high for initialized, uncorrupted state
+
+The reachability distinctions behind those rows are:
+
+- **MK48Txx:** values reaching the switch are `{0x1ff8}`; handled values are `{0x1ff8}`; values reaching its default are `{}`. The constants are `CLKOFF=0x1ff0`, `ICSR=8`, `ISEC=9`; the current bypass and case agree. (`src/include/thirdparty/mk48txxreg.h:71–72,116`; `src/devices/dev_mk48txx.c:116–127`.)
+- **GIF and MardiGras:** `dev_fb_init` checks allocation at `src/devices/dev_fb.c:841` and its only return is “return d;” at `:965`. Allocation failure invokes `FAILURE`, which exits before returning. Neither caller can receive NULL through defined execution. (`src/include/misc.h:181–193`.)
+- **LK201:** initialized and assigned mouse modes are `{0, MOUSE_INCREMENTAL}`; the latter is `'R'`. Both have handled cases. Unknown guest commands print “UNKNOWN byte; TODO” without assigning another mode. (`src/devices/lk201.c:186–204,347,365–366,395`; `src/include/thirdparty/lk201.h:176`.)
+- **PCC2:** handled interrupt values are `{0x05,0x0e,0x0f}`. Other published values are `{0x00,0x01,0x02,0x03,0x04,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d}`. (`src/include/thirdparty/mvme_pcctworeg.h:69–83`; `src/devices/dev_pcc2.c:410–435,813–826`.) Stock board wiring does not emit those unsupported values: its serial implementation asserts RX/TX, alongside the configured SCSI connection. (`src/machines/machine_mvme88k.c:91–112`; `src/devices/dev_clmpcc.c:75–92,283–294`.) However, supported device attachment accepts a supplied interrupt path, and a subsequently guest-driven device can assert it. This makes the exit conditionally runtime-reachable, rather than globally unreachable. (`src/debugger/debugger_cmds.c:552–553`; `src/devices/device.c:336–339,384`; `src/devices/dev_ns16550.c:92–96,188–200,282–290,342`.)
+- **VME:** member 5 is available through the failed-device M88K exception path. It is a containment recommendation; faithful implementation of missing valid registers would require member 7. The preloaded backing value alone does not establish correct hardware behavior. (`src/cpus/memory_rw.c:595–624`; `src/devices/dev_vme.c:65–66,157–162`.)
+
+For `RECORDED`, searches covered each filename, enclosing function and diagnostic text in the committed queue. The positive matches are explicit:
+
+- `OUTSTANDING_BUGS.md:18572`: **“FIXED AND SHIPPED AS `#521`”** under `mk48nvramkill`; `:18574` names the MK48 default site.
+- `OUTSTANDING_BUGS.md:18759`: **“`dev_vme.c`, default arm: it announces with `debug()` and then calls `exit(1)`.”**
+- PCC2’s generic prose says **“the `dev_pcc2.c` remainder”**, but specifies guest-writable **“`DEVICE_ACCESS` handlers”**; it does not identify this interrupt callback. (`OUTSTANDING_BUGS.md:2685–2689`.)
+- Other filename matches concern different defects: **“TA-putchar”** for GIF, **“microcode-RAM MMIO”** for MardiGras, a timer-rate expression for VR41xx, and **“X11 keyboard/mouse expansions”** for LK201. Those do not record the classified exits. (`OUTSTANDING_BUGS.md:2775–2777,2891,6700,2124`.)
+
+(a) Guest-access ranking, from ordinary missing behavior toward unsupported access. Actual stock-OS access order was **not checked**.
+
+1. **VME — `src/devices/dev_vme.c:143`:** its default includes named registers omitted from the implementation, so malformed access is unnecessary. The documented OpenBSD probe at case `0` already succeeds; claiming that first probe dies would be wrong. (`src/include/thirdparty/mvme88k_vme.h:47,68–69,72`; `src/devices/dev_vme.c:70–71`.)
+2. **PCC2 — `src/devices/dev_pcc2.c:435`:** an ordinary device operation can produce the interrupt after non-default operator wiring, but this prerequisite makes it less ordinary on shipped configurations. (`src/devices/dev_ns16550.c:188–200,282–290`; `src/devices/dev_pcc2.c:813–826`.)
+3. **IQ80321 7seg — `src/devices/dev_iq80321_7seg.c:87`:** both implemented LED locations work; the terminating branch requires another offset inside the registered window. (`src/devices/dev_iq80321_7seg.c:61–87,105–107`.)
+
+(b) CPU-stop assignments, including the indirect all-CPU assignment:
+
+src/devices/dev_luna88k.c:906 | dev_luna88k_access | WHEN: guest access | CONDITION: “case RESET_CPU_ALL:” followed by “for (int i = 0; i < cpu->machine->ncpus; ++i)” — no read/write test (src/devices/dev_luna88k.c:904–906) | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:450–452, incidental site mention only | DISPOSITION: 7 — implement reset semantics, including the read behavior | confidence: high on path; medium on disposition
+
+src/devices/dev_luna88k.c:923 | dev_luna88k_access | WHEN: guest access | CONDITION: “default:” after the earlier range handlers and address switch; then “cpu->running = 0;” and “return 0;” (src/devices/dev_luna88k.c:567–620,909–924) | GUEST LEVEL: privileged | RECORDED: lunadefaultstop (OUTSTANDING_BUGS.md:20970–20995) | DISPOSITION: 5 — retain access failure and deliver the architectural exception without stopping the CPU | confidence: high
+
+src/devices/dev_pmppc.c:90 | dev_pmppc_board_access | WHEN: guest access | CONDITION: write side of “case PMPPC_RESET:” and “if (d->reset_reg == PMPPC_RESET_SEQ_STEP1 && idata == PMPPC_RESET_SEQ_STEP2)” (src/devices/dev_pmppc.c:84–90) | GUEST LEVEL: privileged | RECORDED: NONE | DISPOSITION: 7 — implement the requested reset | confidence: high on path; medium on disposition
+
+The Luna reset site is mentioned as **“this file’s own RESET_CPU_ALL arm”**, solely as a bounded-loop precedent—not as a filed halt defect. The Luna default record explicitly quotes **“cpu->running = 0;”** and **“return 0;”**. (`OUTSTANDING_BUGS.md:450–451,20987–20991`.)
+
+For ordinary-access ranking, the explicit reset paths form the first group: Luna’s reset selector and PM/PPC’s recognized reset sequence. Luna’s unimplemented-address default follows them. Stock-OS reset behavior and hardware read/reset semantics were **not checked**. These reset paths should not be mistaken for unimplemented-operation error halts. (`src/devices/dev_luna88k.c:904–924`; `src/devices/dev_pmppc.c:84–94`.)
+
+For Luna’s default, the current stop causes `memory_rw` to return before exception delivery. Removing that stop while retaining callback failure permits the existing M88K exception path. (`src/cpus/memory_rw.c:591–592,595–624`.)
+
+The additional textual match at `src/devices/dev_ps2_gif.c:391` is enclosed by `/*` and `*/` at `:390` and `:392`; it is **not live**. No other CPU-stop assignments occur in the requested files.
+
+(c) Denominator. All functions in the requested files were read completely; **functions not read within those files: none**. Function names below carry their definition lines within the named file:
+
+- `src/devices/dev_iq80321_7seg.c`: `dev_iq80321_7seg_access` :51; `devinit_iq80321_7seg` :97.
+- `src/devices/dev_luna88k.c`: `anything_in_sio_queue` :141; `space_available_in_sio_queue` :146; `get_from_sio_queue` :155; `add_to_sio_queue` :164; `reassert_interrupts` :174; `luna88k_interrupt_assert` :206; `luna88k_interrupt_deassert` :213; `reassert_timer_interrupt` :220; `reassert_serial_interrupt` :228; `luna88k_timer_tick` :257; `luna88k_lcd_access` :272; `dev_luna88k_tick` :377; `dev_luna88k_access` :554; `add_cmmu_for_cpu` :934; `devinit_luna88k` :968.
+- `src/devices/dev_mk48txx.c`: `mk48txx_update_regs` :58; `dev_mk48txx_access` :76; `devinit_mk48txx` :158.
+- `src/devices/dev_pcc2.c`: `read32` :185; `write32` :199; `pcc_timer_tick` :210; `reassert_interrupts` :289; `pcctwo_interrupt_common` :406; `pcctwo_interrupt_assert` :442; `pcctwo_interrupt_deassert` :446; `dev_pcc2_tick` :452; `pcc2_width_decline` :462; `dev_pcc2_access` :471; `dev_mvme187_iack_access` :767; `devinit_pcc2` :787.
+- `src/devices/dev_pccmos.c`: `dev_pccmos_access` :57; `devinit_pccmos` :112.
+- `src/devices/dev_pmppc.c`: `dev_pmppc_board_access` :54; `devinit_pmppc` :113.
+- `src/devices/dev_ps2_gif.c`: `test_triangle` :69; `dev_ps2_gif_access` :207; `devinit_ps2_gif` :404.
+- `src/devices/dev_sgi_mardigras.c`: `mardigras_20400` :80; `dev_sgi_mardigras_access` :210; `devinit_sgi_mardigras` :301.
+- `src/devices/dev_turbochannel.c`: `dev_turbochannel_access` :64; `dev_turbochannel_init` :174.
+- `src/devices/dev_vme.c`: `dev_vme_access` :57; `devinit_vme` :153.
+- `src/devices/dev_vr41xx.c`: `vr41xx_vrip_interrupt_assert` :95; `vr41xx_vrip_interrupt_deassert` :106; `vr41xx_giu_interrupt_assert` :123; `vr41xx_giu_interrupt_deassert` :131; `recalc_kiu_int_assert` :141; `vr41xx_keytick` :156; `timer_tick` :393; `dev_vr41xx_tick` :400; `vr41xx_kiu` :418; `dev_vr41xx_access` :480; `dev_vr41xx_init` :672.
+- `src/devices/lk201.c`: `lk201_convert_ascii_to_keybcode` :53; `lk201_send_mouse_update_sequence` :155; `lk201_tick` :224; `lk201_tx_data` :273; `lk201_init` :383.
+
+Additional complete functions read: `dev_fb_init` (`src/devices/dev_fb.c:831`); `dev_dc7085_init` (`src/devices/dev_dc7085.c:299`); CLMPCC’s functions at `src/devices/dev_clmpcc.c:75,95,102,262`; NS16550’s functions at `src/devices/dev_ns16550.c:74,108,320`; `device_add` (`src/devices/device.c:252`); `debugger_cmd_device` (`src/debugger/debugger_cmds.c:519`); `interrupt_handler_lookup` and `interrupt_connect` (`src/core/interrupt.c:166,210`); ARM translation functions (`src/cpus/memory_arm.c:54,69,114`); M88K translation functions (`src/cpus/memory_m88k.c:59,103`); and `ppc_bat_block` (`src/cpus/memory_ppc.c:43`).
+
+The setup/default/register functions in `src/machines/machine_iq80321.c:44,97,103`, `src/machines/machine_mvme88k.c:77,174,194,200`, `src/machines/machine_luna88k.c:49,125,131,142`, and `src/machines/machine_pmppc.c:45,76,82` were also read completely.
+
+Other supporting files were consulted through relevant excerpts or searches only. Their remaining functions, external callees, hardware manuals, and live operating-system behavior were **not checked**.

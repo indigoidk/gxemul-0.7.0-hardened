@@ -1,0 +1,69 @@
+GROKJOBS_DOSSIER_PPCFUSED_ALIVE
+VERDICT: 3 false or unsupported sentences
+
+`D` below denotes the named dossier. All repository citations refer to **`db8b1a33`**; `_scratchpad` citations refer to the permitted on-disk manuals.
+
+1. **D:258, section 6:** “Valid FP-enabled arithmetic completes and subsequent guest execution proceeds.”
+
+   **Unsupported without an exception qualification.** FP availability does not guarantee ordinary completion. Enabled exceptions can invoke exception handling; enabled invalid operation suppresses execution. The relevant conditions include FPSCR enables and MSR[FE0/FE1]. `_scratchpad/ppc_uisa_book1_v201.txt:5377–5395`, `:5457–5472`.
+
+   **Corrected:** “For normal masked-exception completion, valid FP-enabled arithmetic completes and subsequent guest execution proceeds; other cases follow the architecture’s suppression and exception-delivery rules.”
+
+2. **D:260, section 6:** “Contains the architecturally rounded result.”
+
+   **False as an unconditional destination-FPR requirement.** When FPSCR[VE]=1 and invalid operation occurs, arithmetic leaves the target FPR unchanged. `_scratchpad/ppc_uisa_book1_v201.txt:5507–5514`, `:5534–5543`.
+
+   **Corrected:** “When result delivery is required, the destination contains the architecturally specified result; enabled invalid operation preserves the destination FPR.”
+
+   D:268 qualifies its separate state-preservation paragraph, not these preceding table requirements.
+
+3. **D:286, section 6:** “Existing probe controls `fadd`, `fmr`, `fctiwz`, `mtfsf`, `fadd.`, `frsp.`, `fctiwz.`, `fmr.`, `fadds.`”
+
+   **False classification.** The four `CTRL` rows are `fadd`, `fmr`, `fctiwz`, and `mtfsf`. The five listed dotted rows—`fadd.`, `frsp.`, `fctiwz.`, `fmr.`, `fadds.`—are `FIXED`. Only failed `CTRL` rows invalidate `control_ok`. `regress/ppc_halt_probe.py:233–245`, `:299–300`.
+
+   **Corrected:** “The four existing CTRL rows are `fadd`, `fmr`, `fctiwz`, and `mtfsf`; the five listed dotted neighbors are FIXED rows. Both categories expect `alive`.” `regress/ppc_halt_probe.py:297`.
+
+**(a) Disposition member 7 is right.** The missing selectors are **28, 29, 30, 31**, each with **Rc=0 and Rc=1**. The implemented opcode-59 selectors are **18, 20, 21, 25**; the studied selectors reach `goto bad` before record-handler substitution. Actual execution then sets `running=0`; translation read-ahead returns earlier. `src/include/opcodes_ppc.h:232–236`; `src/cpus/cpu_ppc_instr.c:5197–5226`; `src/cpus/cpu_dyntrans.c:1988–2014`.
+
+Implementing the architected arithmetic is therefore appropriate. Aliasing the double handlers would retain double-format storage and omit the required single rounding. `src/cpus/cpu_ppc_instr.c:1990–2013`; `_scratchpad/ppc_pem32_rev2_2001.txt:19613–19615`.
+
+**Unavailable-exception delivery really exists:**
+
+- The availability guard synchronizes PC, calls `ppc_exception(cpu, PPC_EXCEPTION_FPU)`, and returns. `src/cpus/cpu_ppc_instr.c:216–225`.
+- `ppc_exception` saves SRR0/SRR1, clears EE/RI/PR, selects the vector, and updates execution pointers. `src/cpus/cpu_ppc.c:321–344`.
+- The vector arithmetic is **exception number `0x8` × `0x100` = `0x00000800`**; with IP set, **`0xfff00000 + 0x800 = 0xfff00800`**. `src/include/cpu_ppc.h:255`; `src/cpus/cpu_ppc.c:337–339`.
+- `FDOT` checks availability before calling the base handler and copying FPSCR status into CR1. `src/cpus/cpu_ppc_instr.c:205–206`; `src/cpus/cpu_ppc.c:1853–1856`.
+
+The dossier correctly calls this machinery **partly present**. Two limitations matter:
+
+- Enabled-arithmetic result suppression and trap delivery are absent from the cause-raising helper. `src/cpus/cpu_ppc.c:1941–1951`.
+- Even unavailable-exception entry lacks parts of the cited hardware state transition: the source clears only EE/RI/PR, while the manual additionally specifies POW, FP, FE0, SE, BE, FE1, IR, DR and LE handling. `src/cpus/cpu_ppc.c:335`; `_scratchpad/ppc_pem32_rev2_2001.txt:12076–12082`.
+
+The pending-count correction is also sound. Its ten values are **`fctid`, `fctidz`, `fcfid`, `fcmpo`, `fmadds`, `fmsubs`, `fsqrt`, `fsqrts`, `fres`, `frsqrte`**. The negative doubles are `FIXED`. `regress/ppc_halt_probe.py:257–279`; `regress/gate_ppc_halt.sh:84`. The stale record passages identified by the dossier remain at `OUTSTANDING_BUGS.md:1610`, `:1705`, `:1712`, `:3085–3086`.
+
+**(b) Missed siblings: indirect allocation-failure exits.** These fall within the category D:360 explicitly left unchecked:
+
+| Allocation sites in the census files | Termination mechanism |
+|---|---|
+| Translation template at `src/cpus/cpu_dyntrans.c:945–946`; runtime L2 at `:1614–1617` | `CHECK_ALLOCATION` invokes `FAILURE` on NULL, which calls `exit(1)`. `src/include/misc.h:181–193`. |
+| Startup dummy L2 and L3 at `src/cpus/cpu_dyntrans.c:980–981`; runtime L3 at `:1639–1641` | `zeroed_alloc` calls `exit(1)` on `MAP_FAILED`. `src/core/memory.c:118–130`. |
+
+These are **five allocation calls**: two checked `malloc` calls and three `zeroed_alloc` calls. Guest ability to force their failure: **not checked**. They are additional conditional termination paths, not established guest-triggered findings. No additional explicit live termination site was found beyond the dossier’s census.
+
+**(c) DENOMINATOR:** **179 factual sentence/row units checked; 0 technical assertions taken on trust.** The accounting is:
+
+| Dossier portion | Checked units |
+|---|---:|
+| Opening verdict and citation-scope statements | 3 |
+| Item 1 | 31 |
+| Item 2 | 24 |
+| Item 3 | 14 |
+| Item 4 | 46 |
+| Item 5 | 24 |
+| Item 6 | 20 |
+| Item 7 | 17 |
+| **Total** | **179** |
+
+For counting, each table row or list item is one sentence-equivalent; displayed quotations belong to their introducing assertion. Ordinary prose sentences are counted separately. The three corrections above are included in the checked total.
+
+The previous reviewer’s activity claims—D:4’s execution disclaimer and D:324–360’s read-history/scope report—are **not independently checked**, and are excluded from that technical denominator. Runtime outcomes, arbitrary model/machine boots, compiler prevalence, unresolved internal-guard reachability, and the unspecified original HIGH rationale are likewise **not checked**. No builds, tests, emulator execution, or writes were performed.

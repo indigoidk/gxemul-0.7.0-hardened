@@ -1,0 +1,118 @@
+CODEXPACK_CENSUS_CPUS5_ALIVE
+VERDICT: 12 live calls classified -- 4 reachable by guest access at run time, 2 of those not recorded
+
+All repository citations below refer to **`db8b1a33`**. This was source reading only; no builds, execution tests, or writes.
+
+**Count correction:** the supplied census has 13 hits, but `src/cpus/generate_arm_r.c:320` is a string inside `printf`, not a terminating call:
+
+```c
+printf("\texit(1);  /*  TODO  */\n\treturn 0;\n");
+```
+
+Actual calls, enumerated by file:
+
+| File | Actual calls |
+|---|---|
+| `src/cpus/cpu_mips_instr.c` | 3: 123, 2650, 3798 |
+| `src/cpus/cpu_sh.c` | 2: 101, 1085 |
+| `src/cpus/cpu_sh_instr.c` | 2: 3834, 4004 |
+| `src/cpus/generate_arm_r.c` | 1: 333; census hit 320 is string contents |
+| `src/cpus/memory_arm.c` | 2: 79, 254 |
+| `src/cpus/memory_m88k.c` | 2: 394, 413 |
+
+The rows retain **every supplied census position**, including the string hit. Within a row, additional `:line` references mean the same source file. “Unreachable” means through the checked dispatch and state flow; unrelated state corruption was not checked.
+
+```text
+src/cpus/cpu_mips_instr.c:123 | X(invalid) | WHEN: unreachable | CONDITION: unconditional on entry, "exit(1);" (:123); designated "invalid: For catching bugs." (:116), with unreachable table selections explained below | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 | medium-high
+
+src/cpus/cpu_mips_instr.c:2650 | X(promemul) | WHEN: guest access | CONDITION: "switch (cpu->machine->machine_type)" (:2635), reaching "default:fatal("TODO: Unimplemented machine type for PROM magic trap\n");" (:2649) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 5 — deliver the normal SYSCALL exception | high
+
+src/cpus/cpu_mips_instr.c:3798 | X(end_of_page2) | WHEN: unreachable | CONDITION: fall-through after "if (cpu->delay_slot == NOT_DELAYED)" / "return;" (:3794-3795), following quick_pc_to_pointers (:3792) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 | medium
+
+src/cpus/cpu_sh.c:101 | sh_cpu_new | WHEN: construction | CONDITION: "if (!cpu->is_32bit)" (:99), following "cpu->is_32bit = cpu->cd.sh.cpu_type.bits == 32;" (:97) | GUEST LEVEL: n.a. | RECORDED: prose OUTSTANDING_BUGS.md:7831-7834 | DISPOSITION: KEEP | high
+
+src/cpus/cpu_sh.c:1085 | sh_exception | WHEN: unreachable | CONDITION: "default:" (:1083) of "switch (expevt)" (:959); current in-tree producers select handled cases | GUEST LEVEL: n.a. | RECORDED: prose OUTSTANDING_BUGS.md:8850-8861; historical sh4tlbmulti at :7801-7817 | DISPOSITION: 1 | high for checked reachability; medium for disposition
+
+src/cpus/cpu_sh_instr.c:3834 | X(prom_emul) | WHEN: guest access | CONDITION: "default:" (:3832) of "switch (cpu->machine->machine_type)" (:3825), outside "case MACHINE_DREAMCAST:" and "case MACHINE_LANDISK:" (:3826,:3829) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 5 — deliver the appropriate illegal-instruction exception, including its delay-slot variant | high
+
+src/cpus/cpu_sh_instr.c:4004 | X(end_of_page2) | WHEN: unreachable | CONDITION: fall-through after "if (cpu->delay_slot == NOT_DELAYED)" / "return;" (:4000-4001), following quick_pc_to_pointers (:3998) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 | medium-high
+
+src/cpus/generate_arm_r.c:320 | f | WHEN: unreachable | CONDITION: "default:" (:318) of "switch (t)" (:65), where "int t = (func >> 4) & 7;" (:49); this line prints an exit-containing string, not a call | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — remove dead generated text | high
+
+src/cpus/generate_arm_r.c:333 | main | WHEN: construction (generator command line) | CONDITION: "if (argc < 3)" (:331), reporting "usage: %s start end\n" (:332) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+
+src/cpus/memory_arm.c:79 | arm_check_access | WHEN: guest access | CONDITION: "case 2:" of "switch (dav)" (:73,:78); diagnostic literally says "arm_check_access(): 1 shouldn't be used\n" (:78) | GUEST LEVEL: user | RECORDED: armdacr2kill, OUTSTANDING_BUGS.md:22074-22079 | DISPOSITION: 5 | high
+
+src/cpus/memory_arm.c:254 | arm_translate_v2p_mmu | WHEN: guest access | CONDITION: "default:" (:252) of "switch (d & 3)" (:155); cases 0, 1, 2 occur at :157,:161,:239, leaving value 3 | GUEST LEVEL: user | RECORDED: armdesc3kill, OUTSTANDING_BUGS.md:22065-22072 | DISPOSITION: 7 | high
+
+src/cpus/memory_m88k.c:394 | m88k_translate_v2p | WHEN: unreachable | CONDITION: "case CMMU_PFSR_SUCCESS:" (:390) in the exception-only switch (:388), reporting "HUH? CMMU_PFSR_SUCCESS:, but exception? TODO" (:393) | GUEST LEVEL: n.a. | RECORDED: m88kexit, OUTSTANDING_BUGS.md:6868-6869 | DISPOSITION: 1 | high
+
+src/cpus/memory_m88k.c:413 | m88k_translate_v2p | WHEN: unreachable | CONDITION: "default:" (:408) of "switch (pfsr_status)" (:388), reporting "Internal error in memory_m88k? pfsr_status = %i" (:411) | GUEST LEVEL: n.a. | RECORDED: m88kexit via prose OUTSTANDING_BUGS.md:18841-18843 | DISPOSITION: 1 | high
+```
+
+The reachability distinctions rest on these checks:
+
+- **MIPS `invalid` has references, but the decoder does not select them.** Its main-table indexes are **9, 11, 13, 15, 25, 27, 29, 31**; generic-table indexes are **9, 11, 13, 15** (`src/cpus/tmp_mips_loadstore.c:713-824`). The decoder’s load indexes enumerate **0, 1, 2, 3, 4, 5, 6, 16, 17, 18, 19, 20, 21, 22**; store indexes enumerate **8, 10, 12, 14, 24, 26, 28, 30**. Stores leave `signedness` zero (`src/cpus/cpu_mips_instr.c:5428-5450`). Searches across committed `src/` found no generic-table consumers; the load/store fallback directly calls `"LS_GENERIC_N(cpu, ic);"` (`src/cpus/cpu_mips_instr_loadstore.c:180`).
+
+- **Both `end_of_page2` exits require a broken delay-state invariant.** Relevant slots enumerate MIPS **1023: last real instruction; 1024: end_of_page; 1025: end_of_page2**, and SH **2047: last real instruction; 2048: end_of_page; 2049: end_of_page2** (`src/include/cpu_mips.h:191-197`; `src/include/cpu_sh.h:71-75`; `src/cpus/cpu_dyntrans.c:953-969`). Checked branch handlers clear delay state before normal dispatch resumes; cross-page delay instructions run through `end_of_page` and `to_be_translated` (`src/cpus/cpu_mips_instr.c:177-1605`, `:2533-2579`, `:3731-3777`; `src/cpus/cpu_sh_instr.c:2236-2771`, `:3937-3983`). The intervening pointer lookup cannot manufacture delay state from zero: MIPS exception delivery explicitly retains `NOT_DELAYED`, and SH changes delay state only under `"if (cpu->delay_slot)"` (`src/cpus/cpu_mips.c:2147-2150`; `src/cpus/cpu_sh.c:931-934`).
+
+- **SH’s exception default has no checked current producer.** Instruction exceptions, MMU exceptions, the device’s multiple-hit exception, and interrupts all have handled cases (`src/cpus/cpu_sh_instr.c:53-64`, `:2853-2858`, `:3210-3237`; `src/cpus/memory_sh.c:232-249`, `:368-369`; `src/devices/dev_sh4.c:1177-1179`; `src/cpus/cpu_sh.c:945-947`, `:961-1081`). In particular, the historically missing multiple-hit case now appears explicitly at `src/cpus/cpu_sh.c:1017`.
+
+- **Both M88K exits are excluded by the local status assignments.** Exception edges carry **7** at `src/cpus/memory_m88k.c:172-173`, **7** at `:212-213`, **4** at `:266-267`, **6** at `:274-275`, **5** at `:299-300`, **6** at `:308-309`, and **7** at `:340-341`. These values have switch cases; initialized success **0** never reaches that switch through those edges. Successful translation returns before the exception label (`src/cpus/memory_m88k.c:370-374`; constant values at `src/include/thirdparty/m8820x.h:124-129`).
+
+- **The generator’s printing branch is also unreachable.** `t` enumerates **0, 1, 2, 3, 4, 5, 6, 7**, with cases at `src/cpus/generate_arm_r.c:67`, `:94`, `:125`, `:158`, `:186`, `:225`, `:253`, `:292`.
+
+The PROM rows are user-level because their decoder selections lack privilege checks, and neither complete PROM handler adds one (`src/cpus/cpu_mips_instr.c:2625-2667`, `:4650-4657`; `src/cpus/cpu_sh_instr.c:3819-3844`, `:4150-4152`). Unsupported machine contexts actually exist: MIPS test/bare registrations and SH test/bare registrations are outside the handlers’ supported cases (`src/machines/machine_test.c:416-430`, `:545-559`).
+
+The ARM rows likewise permit a **user access after the relevant MMU configuration exists**: user status is calculated, but neither terminating predicate excludes it (`src/cpus/memory_arm.c:73-99`, `:123-129`, `:153-254`). For DACR, disposition 5 means treating the reserved setting as denied access and delivering a guest abort; merely returning zero currently follows callers that select permission-fault status (`src/cpus/memory_arm.c:233-237`, `:246-250`, `:268-273`). For descriptor type 3, disposition 7 preserves the legitimate fine-table behavior identified by the queue (`OUTSTANDING_BUGS.md:22067-22070`).
+
+Queue searches covered each filename, enclosing function, and diagnostic text. Relevant records and near matches were:
+
+- `OUTSTANDING_BUGS.md:22065`: **“`armdesc3kill` … an ARM L1 descriptor of type 3 (fine page table) ends the process.”**
+- `OUTSTANDING_BUGS.md:22074`: **“`armdacr2kill` … DACR field value 2 (reserved) ends the process.”**
+- `OUTSTANDING_BUGS.md:6869`: **“`memory_m88k.c` still calls `exit(1)` on the `CMMU_PFSR_SUCCESS` internal-error branch”**; importantly, `OUTSTANDING_BUGS.md:18843` additionally says **“`m88kexit` two dead ones”**, recording the sibling too.
+- `OUTSTANDING_BUGS.md:7832`: **“`cpu_sh.c:100-101` (SH64, construction-time)”**.
+- `OUTSTANDING_BUGS.md:8861`: **“`cpu_sh.c` | 1 (`sh_exception`)”**. The exact default is also quoted at `OUTSTANDING_BUGS.md:7815-7816`; that historical defect is marked **CLOSED** at `:7801`.
+- The MIPS near match names different defects: **“`cpu_mips_instr` `goto bad`/BREAK-reboot-sentinel/RDHWR/SUSPEND”** (`OUTSTANDING_BUGS.md:2668`). It does not identify these terminating sites.
+- The SH instruction near match is only **“`cpu_sh_instr.c` | 2”** (`OUTSTANDING_BUGS.md:8860`). A filename count does not identify either site or defect, so both rows remain `NONE`.
+- The generator filename occurs in unrelated BFI discussion (`OUTSTANDING_BUGS.md:16898`); no matching termination record was found.
+
+**(a)** Guest-access ranking, by architectural ordinariness. Stock-OS occurrence and boot order were **not checked**.
+
+1. **`src/cpus/memory_arm.c:254`** — translation using a legitimate ARMv4/v5 fine page table; ordinary memory access exposes missing supported behavior (`OUTSTANDING_BUGS.md:22065-22070`).
+2. **`src/cpus/cpu_mips_instr.c:2650`** — a SYSCALL selects emulator-specific PROM handling on an unsupported machine; the normal architectural SYSCALL exception already exists (`src/cpus/cpu_mips_instr.c:2596-2603`, `:4650-4657`).
+3. **Tied last: `src/cpus/cpu_sh_instr.c:3834`** — an invalid instruction encoding is commandeered for PROM emulation on an unsupported machine (`src/include/cpu_sh.h:91-93`; `src/cpus/cpu_sh_instr.c:4150-4152`).
+3. **Tied last: `src/cpus/memory_arm.c:79`** — ordinary translation after a reserved DACR setting; the reserved prerequisite distinguishes it from the fine-table case (`OUTSTANDING_BUGS.md:22074-22079`).
+
+**(b)** There are **no live literal `cpu->running = 0` assignments in these six files**. MIPS matches at `src/cpus/cpu_mips_instr.c:4328`, `:4936`, `:5080`, `:5376`, and SH matches at `src/cpus/cpu_sh_instr.c:235`, `:846` are comments.
+
+The executable spelling-equivalent stop is:
+
+```text
+src/cpus/cpu_mips_instr.c:2617 | X(reboot) | WHEN: guest access | CONDITION: reset-sentinel decoder predicate (:4666-4667), followed by passing "if (!cop0_availability_check(cpu, ic)) return;" (:2614-2615); assignment is "cpu->running = false;" | GUEST LEVEL: privileged reset path; CU0-enabled user access is not excluded by the availability check | RECORDED: #235, OUTSTANDING_BUGS.md:2604-2605 | DISPOSITION: KEEP — intentional reset stop, outside the supplied setup-only KEEP category | high
+```
+
+The queue describes it as **“reboot sentinel gated” / “to the reset stub … else real BP”** (`OUTSTANDING_BUGS.md:2604-2605`). The availability check rejects user mode only when CU0 is clear; an actual user mapping of the reset alias was **not checked** (`src/cpus/cpu_mips_instr.c:96-106`).
+
+SH’s `ABORT_EXECUTION` macro contains `"cpu->running = false;"`, but has no live invocation; its other occurrences are comments (`src/cpus/cpu_sh_instr.c:45-48`, `:845`, `:1515`, `:3283`, `:3722`).
+
+There is also a **shared-source stop outside the six physical files**:
+
+```text
+src/cpus/cpu_dyntrans.c:2014 | shared X(to_be_translated) bad tail | WHEN: guest access through MIPS decoding | CONDITION: "default:goto bad;" in src/cpus/cpu_mips_instr.c:4679, then passage beyond "if (cpu->translation_readahead) return;" at src/cpus/cpu_dyntrans.c:1990-1991 | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:21163-21165 | DISPOSITION: 5 for this invalid-instruction path | high
+```
+
+The queue calls this **“one site with many faces rather than many sites”** (`OUTSTANDING_BUGS.md:21164-21165`). All incoming `goto bad` paths were **not individually classified**. SH also imports this tail, but concrete reachability of its fetch-failure route was **not established** (`src/cpus/cpu_sh_instr.c:4053-4056`, `:5113-5115`).
+
+**(c)** Denominator — complete-body reading is distinguished from searches and excerpts:
+
+| File | Functions fully read | Functions not fully read |
+|---|---|---|
+| `cpu_mips_instr.c` | `cop0_availability_check`; `invalid`, `reserved`, `cpu`, `nop`; every branch body from `beq` through `jal_trace`; `dmtc0`, `cop1_bc`, `cop1_slow`, `syscall`, `break`, `reboot`, `promemul`, `tlbw`; helpers from `addiu_bne_samepage_addiu` through `end_of_page2`; `COMBINE(sll/ori/addu/addiu/b_daddiu)` (`src/cpus/cpu_mips_instr.c:69-1605`, `:2512-2684`, `:3579-3799`, `:4109-4256`) | Every other body. `to_be_translated` and `COMBINE(nop)` were partially read; the complete decoder was not checked (`:4017`, `:4270-5734`). |
+| `cpu_sh.c` | `sh_cpu_new`, `sh_update_sr`, `sh_update_fpscr`, `sh_exception` (`src/cpus/cpu_sh.c:77-255`, `:846-1089`) | Priority/interrupt helpers, listing/dump helpers, `sh_cpu_instruction_has_delayslot`, and the complete disassembler (`:342-844`, `:1108-1743`). |
+| `cpu_sh_instr.c` | `nop`, `reserved`, `shld`; every branch helper from `bra` through `rte`; `ldtlb`, `copy_privileged_register`, `ldc_rm_sr`, `trapa`, `fneg_frn`, `fabs_frn`, `prom_emul`, `bt_samepage_wait_for_variable`, `COMBINE(bt_samepage)`, `end_of_page`, `end_of_page2` (`src/cpus/cpu_sh_instr.c:226`, `:242`, `:2209-2859`, `:3192-3244`, `:3819-4005`) | Every other instruction body. `to_be_translated` was partially read, including dispatch and error edges (`:4019-5116`). |
+| `generate_arm_r.c` | `sync_pc`, `f`, `main` (`src/cpus/generate_arm_r.c:35-373`) | None. |
+| `memory_arm.c` | `arm_translate_v2p`, `arm_check_access`, `arm_translate_v2p_mmu` (`src/cpus/memory_arm.c:54-277`) | None. |
+| `memory_m88k.c` | `m8820x_mark_page_as_modified`, `m88k_translate_v2p` (`src/cpus/memory_m88k.c:59-420`) | None. |
+
+Dependency reading included ARM coprocessor dispatch, SH MMU translation and machine registration, shared translation-table initialization and PC lookup, and generated MIPS load/store tables. Other dependency functions were searched or excerpted, **not fully checked** (`src/cpus/cpu_arm_coproc.c:50-296`; `src/cpus/cpu_arm.c:2643-2663`; `src/cpus/cpu_arm_instr.c:948-954`; `src/cpus/memory_sh.c:54-252`, `:315-390`; `src/cpus/cpu_dyntrans.c:622-992`; `src/cpus/tmp_mips_loadstore.c:713-824`).

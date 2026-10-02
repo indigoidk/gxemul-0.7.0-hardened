@@ -1,0 +1,58 @@
+CODEXPACK_CENSUS_DEVICES2_ALIVE
+VERDICT: 11 live calls classified -- 0 reachable by guest access at run time, 0 of those not recorded
+
+All citations refer to **`db8b1a33`**. The eleven rows match the supplied census exactly.
+
+```text
+src/devices/bus_pci.c:197 | bus_pci_setaddr | WHEN: unreachable (NULL guard under initialized execution) | CONDITION: "if (cpu == NULL || pci_data == NULL)" (src/devices/bus_pci.c:195) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 2 (decline invalid API call by returning immediately) | confidence: high, subject to the initialized-state invariant explained below
+src/devices/bus_pci.c:222 | bus_pci_add | WHEN: construction | CONDITION: "if (pci_data == NULL)" (src/devices/bus_pci.c:220) | GUEST LEVEL: n.a. | RECORDED: prose OUTSTANDING_BUGS.md:5841-5842,20651-20652 | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:235 | bus_pci_add | WHEN: construction | CONDITION: "if (pd->bus == bus && pd->device == device && pd->function == function)" (src/devices/bus_pci.c:231-232) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:266 | bus_pci_add | WHEN: construction | CONDITION: "if (init == NULL)" (src/devices/bus_pci.c:264) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:481 | pciinit_ali_m1543 | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_CATS:" (src/devices/bus_pci.c:474-481) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:502 | pciinit_ali_m5229 | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_CATS:" (src/devices/bus_pci.c:495-502) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:643 | pciinit_pcn | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_EVBMIPS:" (src/devices/bus_pci.c:635-643) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:692 | pciinit_i31244 | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_IQ80321:" (src/devices/bus_pci.c:685-692) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:1064 | pciinit_symphony_83c553 | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_NETWINDER:" (src/devices/bus_pci.c:1058-1064) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:1179 | pciinit_rtl8139c | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_LANDISK:" (src/devices/bus_pci.c:1172-1179) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/devices/bus_pci.c:1317 | pciinit_dec21030 | WHEN: construction | CONDITION: "switch (machine->machine_type)" reaches "default:"; sole accepted case is "case MACHINE_ARC:" (src/devices/bus_pci.c:1311-1317) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+```
+
+The construction classifications follow the initializer dispatch: `PCIINIT(name)` defines `pciinit_…` (`src/include/bus_pci.h:116-117`); `bus_pci_add` performs `"init = pci_lookup_initf(name);"` and `"init(machine, mem, pd);"` (`src/devices/bus_pci.c:226`, `src/devices/bus_pci.c:270`). Guest configuration writes instead call `dev->cfg_reg_write` (`src/devices/bus_pci.c:152-153`). Construction callers include `DEVINIT(footbridge)` and its PCI additions (`src/devices/dev_footbridge.c:784`, `src/devices/dev_footbridge.c:883-893`), and `MACHINE_SETUP(landisk)` (`src/machines/machine_landisk.c:66`, `src/machines/machine_landisk.c:99`).
+
+For line 197, **the function is used during guest access, but its terminating condition is not selected by guest configuration values**. Those values become `cur_bus`, `cur_device`, `cur_func`, and `cur_reg` only after the pointer guard (`src/devices/bus_pci.c:195-203`). The callers and their bus-pointer initialization sites are:
+
+| `bus_pci_setaddr` caller | Stored pointer initialized by `bus_pci_init` |
+|---|---|
+| `src/devices/dev_cpc700.c:89` | `src/devices/dev_cpc700.c:213` |
+| `src/devices/dev_eagle.c:69` | `src/devices/dev_eagle.c:143` |
+| `src/devices/dev_footbridge.c:484` | `src/devices/dev_footbridge.c:868` |
+| `src/devices/dev_gt.c:184` | `src/devices/dev_gt.c:291` |
+| `src/devices/dev_i80321.c:217` | `src/devices/dev_i80321.c:455` |
+| `src/devices/dev_lca.c:263` | `src/devices/dev_lca.c:527` |
+| `src/devices/dev_sgi_ip32.c:746` | `src/devices/dev_sgi_ip32.c:794` |
+| `src/devices/dev_sh4.c:1534` | `src/devices/dev_sh4.c:2971` |
+| `src/devices/dev_uninorth.c:81` | `src/devices/dev_uninorth.c:132` |
+| `src/devices/dev_v3.c:174` | `src/devices/dev_v3.c:311` |
+
+`bus_pci_init` checks its allocation and returns the allocated pointer (`src/devices/bus_pci.c:358`, `src/devices/bus_pci.c:381`); allocation failure invokes `FAILURE` and terminates instead of returning NULL (`src/include/misc.h:181-193`). Memory dispatch reads `"bool running_before_device_access = cpu->running;"` before passing that same CPU to the device callback (`src/cpus/memory_rw.c:586-589`). Thus line 197 is unreachable through these initialized access paths. Unrelated memory-corruption paths and exhaustive callback lifecycle verification: **not checked**.
+
+Disposition 2 means returning immediately from the invalid-argument guard. Merely deleting `exit(1)` would leave the subsequent `pci_data` dereferences reachable with NULL (`src/devices/bus_pci.c:195-203`).
+
+The queue was searched by filename, enclosing-function names, and diagnostic text. Its explicit record for line 222 says:
+
+> “(`bus_pci.c:222` genuinely is host-side and was classified correctly.)” — `OUTSTANDING_BUGS.md:5841-5842`
+
+It also says “`bus_pci.c:222` is init” (`OUTSTANDING_BUGS.md:20651-20652`). No corresponding site or defect was found for the other rows. The `bus_pci_setaddr` occurrence under `pciaddrreadclobber` concerns address-latch changes during reads, not NULL arguments (`OUTSTANDING_BUGS.md:19786-19799`). The `dev_dec21030.c` occurrence under OB-1 concerns framebuffer bounds, not PCI construction (`OUTSTANDING_BUGS.md:2883`).
+
+**(a) Guest-access ranking:** empty. The terminating sites consist of the pointer guard and the construction checks enumerated above; there is no qualifying access to rank (`src/devices/bus_pci.c:195-197`, `src/devices/bus_pci.c:220-266`, and the cited initializer branches).
+
+**(b) CPU-stop sites:** none. The complete file contains no `cpu->running = 0` assignment, nor another occurrence of `running` (`src/devices/bus_pci.c:1-1419`).
+
+**(c) DENOMINATOR:** every function body in the census file was read. Explicit enumeration, using the source’s `PCIINIT(…)` spelling for initializers:
+
+- Core: `bus_pci_decompose_1`, `bus_pci_data_access`, `bus_pci_setaddr`, `bus_pci_add`, `allocate_device_space`, `bus_pci_init` (`src/devices/bus_pci.c:72-382`).
+- Initializers: `igsfb`, `s3_virge`, `ali_m1543`, `ali_m5229`, `ahc`, `gt64011`, `gt64120`, `gt64260`, `pcn`, `i31244` (`src/devices/bus_pci.c:404-709`).
+- `piix_isa_cfg_reg_write`; initializers `piix3_isa`, `piix4_isa`, `i82378zb`; `piix_ide_cfg_reg_write`; initializers `piix3_ide`, `piix4_ide`, `ibm_isa`, `heuricon_pmppc`, `vt82c586_isa` (`src/devices/bus_pci.c:711-969`).
+- `vt82c586_ide_cfg_reg_write`; initializers `vt82c586_ide`, `symphony_83c553`; `symphony_82c105_cfg_reg_write`; initializers `symphony_82c105`, `rtl8139c`, `dec21143`, `dec21030`, `eagle`, `gc_obio`, `uninorth`, `ati_radeon_9200_2` (`src/devices/bus_pci.c:976-1418`).
+
+Functions not read in `bus_pci.c`: **none**. Supporting complete-body reads included `pci_register` and `pci_lookup_initf` (`src/devices/device.c:114-150`), `devinit_footbridge` (`src/devices/dev_footbridge.c:784-919`), and `devinit_i80321` (`src/devices/dev_i80321.c:405-480`). Other supporting caller and dispatch inspections were partial; their complete bodies were **not checked**.

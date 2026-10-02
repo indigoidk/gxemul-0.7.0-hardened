@@ -1,0 +1,107 @@
+CODEXPACK_DRAFT_2E_ALIVE
+VERDICT: DRAFT -- 11 new, 3 filed (1 of them by prose without an id), 8 record, 4 test-gap, 0 doubtful, 3 duplicate, of 29 findings
+
+Source and regression references below are at `8ea26abb`. `OUTSTANDING_BUGS.md` references are at `db8b1a33`; newer CHANGELOG references are explicitly marked. Every finding was searched against existing ids, descriptive prose, prior dispositions, and the other batch answers. “No existing match” covers those searches. All proposed ids are absent from both records. RECORD and TEST-GAP dispositions are LOW.
+
+The original answers’ external hardware-manual citations were **not checked**; corresponding source behavior was checked. No builds, runtime probes, or writes were performed.
+
+bundle_file:F1 | DRAFT NEW HIGH symdemanglebound "Symbol demangling can read beyond a terminated loader string"  
+Checked: `src/file/file_aout.c:241-267` adds the terminator and submits the string; `src/symbol/symbol.c:263` calls `symbol_demangle_cplusplus(name)`. The decisive loop is `src/symbol/symbol_demangle.c:91-92`: “`while (len-- >= 1 && result_len < MAXLEN)`” followed by “`result[result_len ++] = *name++;`”; neither condition bounds the source. The same consumer is called at `src/file/file_elf.c:675-677`, `src/file/file_ecoff.c:469-471`, and `src/file/file_macho.c:295-299`. Disk-derived loader input is established by `src/disk/bootblock.c:447-490` and `src/core/emul.c:542-545,638-639`. No existing match.
+
+bundle_file:F2 | DRAFT NEW HIGH ecoffoffsetspan "ECOFF symbol-table bounds admit negative offsets before unchecked seeks"  
+Checked: `src/file/file.c:85-89` explicitly uses “`Wuns = (uint64_t) -1; /* sign-extend */`”; offsets are `off_t` at `src/file/file_ecoff.c:67,273`. Guards at `:322-326,414-421` convert offsets to unsigned before adding extents, without rejecting negative offsets. Modular-arithmetic values: unsigned maximum `18,446,744,073,709,551,615`; adding `1` gives `0`. Seeks at `:332,428,439` discard their results; subsequent short reads reach “`exit(1);`” at `:337,431,443`. Disk-loading reachability is the same as F1. Qualification: signed conversion behavior is host-dependent; no runtime witness was checked. No existing match.
+
+bundle_file:F3 | DRAFT TEST-GAP fileloaderrows  
+Checked: `src/file/file_macho.c:150-164,250-281` and `src/file/file_ecoff.c:319-337,410-443`; `CHANGELOG.md:21614-21625` records compact-thread acceptance and malformed-table regressions, retained at `db8b1a33:21698-21709`. `regress/gate_upstream.sh:18-19` explicitly says “ECOFF, Mach-O, SREC and Android still have no corpus here”; its cases at `:104-110` omit those formats. Searches of permitted committed regression sources found no corresponding assertion. No existing match; excluded artifacts were not assessed as coverage.
+
+devasc:F1 | DRAFT NEW HIGH ascwidecount "Wide ASC transfer-count writes defeat DATA_OUT span guards"  
+Checked: `src/devices/dev_asc.c:153-154` declares `uint32_t` register arrays; `:1155` stores “`d->reg_wo[regnr] = idata;`” without a byte mask. `:577-578` converts their arithmetic result to `int len2`; addition-based destination/source guards appear at `:610-621`, followed by the continued-transfer `memcpy` at `:662-665`. `src/include/diskimage.h:188-189` makes destination length and offset `size_t`. Negative narrowing is implementation-defined, not guaranteed by C99. The nearby `OUTSTANDING_BUGS.md:2887` entry, “ASC 128 KB DMA window: raw `memcpy(dma+addr,…,len)` with no end check,” concerns separate MMIO copies. No same-defect match.
+
+devasc:F2 | DRAFT NEW MED ascoutresid "Clamped ASC DATA_OUT reports zero residual and terminal count"  
+Checked: `src/devices/dev_asc.c:612-613` clamps to the target remainder; `:707-729` handles callback-short accounting, but the normal tail says “`len = 0;`” at `:755` and sets `NCRSTAT_TC` at `:761`. Enumerated accounting: programmed `1,024`; target remainder `512`; copied `512`; remaining `512`; returned TCL `0`, TCM `0`, TC set. The DMA-window clamp is at `:619-621`. No existing match.
+
+devasc:F3 | DRAFT NEW MED asccmddma "PICA COMMAND DMA reads private memory instead of its external DMA callback"  
+Checked: `src/machines/machine_arc.c:218` supplies “`DEV_ASC_PICA, dev_jazz_dma_controller, jazz_data`”. Nevertheless, `src/devices/dev_asc.c:996` reads “`ch = d->dma[ofs & (ASC_DMA_SIZE-1)];`”. Initialization zeroes that storage at `:1574`; its guest mapping is restricted to DEC at `:1583-1590`. Qualification: an all-zero command becomes TEST_UNIT_READY only if it passes `src/disk/diskimage_scsicmd.c:309-315`’s CDB-length check. No existing match.
+
+devasc:F4 | DRAFT NEW MED ascpiozero "ASC PIO DATA_IN queues zero instead of target data"  
+Checked: `src/devices/dev_asc.c:368` tests `xferp->data_in`, but `:378` selects “`ch = (d->incoming_data == NULL) ? 0 :`”, then queues it at `:383`. Initialization at `:1561` clears the instance; the complete `incoming_data` reference search found no population of that pointer. `OUTSTANDING_BUGS.md:2333-2342` records diagnostic-flood sites, not this wrong-data behavior. No same-defect match; the answer’s `REVIEW_FINDINGS.md` corroboration was not checked.
+
+devasc:F5 | DRAFT RECORD "The diagnostic is latched to retain one report under -q. Execution reaches the common transfer epilogue, which sets NCRSTAT_INT and NCRINTR_BS; this arm therefore supplies an interrupt indication."  
+Checked: replace the explanation at `src/devices/dev_asc.c:835-841` and the corresponding sentence at `CHANGELOG.md:20491`, retained at `db8b1a33:20575`. The false text says “this arm sets no interrupt”; `src/devices/dev_asc.c:870-871` instead executes “`d->reg_ro[NCR_STAT] |= NCRSTAT_INT;`” and “`d->reg_ro[NCR_INTR] |= NCRINTR_BS;`” after the arm. No existing correction found.
+
+devasc:F6 | DRAFT RECORD "#245: route the guest-spammable diagnostic through SUBSYS_DEVICE at VERBOSITY_DEBUG. It is suppressed by default; during normal execution without -q, -v -v enables it. `break device` or single stepping can also expose it."  
+Checked: replace `src/devices/dev_asc.c:1495-1498`, whose false phrase is “shown at -v”; the call at `:1499` requires `VERBOSITY_DEBUG`. `src/core/debugmsg.c:104,156-183`, `src/core/main.c:694-699,802-807`, and `src/include/misc.h:253-257` give these levels: initial `2`; one `-v`: `3` before startup decrement, `2` afterward; two `-v`: `4` before decrement, `3` afterward; DEBUG requires `3`. `OUTSTANDING_BUGS.md:2582-2584` accurately records DEBUG gating, not the incorrect single-`-v` claim.
+
+devasc:F7 | DRAFT TEST-GAP ascaccountrows  
+Checked: `src/devices/dev_asc.c:503-513,560-568,707-729,1018-1021`; `CHANGELOG.md:20536,20548`, retained at `db8b1a33:20620,20632`; `regress/gate_hygiene.sh:865-891` and `regress/gate_mips.sh:45-65`. Hygiene searches for “short DATA_IN DMA” and “short DATA_OUT DMA” at `:876-877`, then expects count “`0`” at `:887-888`; those assertions observe diagnostic absence, not residual bytes, TC, or disk noncommit. Permitted regression-source searches found no behavioral rows. No existing match.
+
+diskimage:F1 | DRAFT NEW MED writeflusherr "Forced-sync writes discard flush and sync failures"  
+Checked: `src/disk/diskimage.c:1316-1317` calls “`fflush(d->overlays[overlay_nr].f_data);`” and “`fsync(fileno(d->overlays[overlay_nr].f_data));`” without testing either result, then publishes the bitmap at `:1325` and returns `len` at `:1329`; matching unchecked calls occur at `:1210-1211,1266-1267`. `OUTSTANDING_BUGS.md:2729` says “overlay write rejected-but-reported-GOOD,” but that older discarded-return mechanism is repaired at `src/disk/diskimage_scsicmd.c:907-912`; here the helper itself reports success. `ovsync` at `OUTSTANDING_BUGS.md:1271-1277` concerns another command. No same-defect match. A host I/O failure is also required.
+
+diskimage:F2 | DRAFT NEW MED drecalccap "READ CAPACITY replaces preserved floppy geometry after d: retyping"  
+Checked: `src/disk/diskimage.c:2028,2066-2067` calculates geometry before retyping; `src/disk/diskimage_scsicmd.c:489` then calls “`diskimage_recalc_size(d);`”. The subsequent non-floppy arm assigns heads `16` and sectors `63` at `src/disk/diskimage.c:270-271`. Enumerated values from `:245-307`: image bytes `1,474,560`; initial `(cylinders,heads,sectors,blocks)=(80,2,18,2,880)`; subsequent `(3,16,63,3,024)`; rounded bytes `1,548,288`. `OUTSTANDING_BUGS.md:7624-7628` records ordinary-image rounding—“976 phantom blocks”—not this loss of preserved geometry. No same-defect match.
+
+diskimage:F3 | DRAFT NEW MED stalelbsbound "MODE SELECT changes block size without refreshing the read-bound block count"  
+Checked: `src/disk/diskimage_scsicmd.c:1324` only assigns “`d->logical_block_size = new_block_size;`”; `src/disk/diskimage.c:1592-1593` derives the read bound from `nr_of_logical_blocks * logical_block_size`. Enumerated cylinder-aligned case, using `:291-307`: physical bytes `516,096`; initial block size `512`, count `1,008`; changed size `256`, stale count `1,008`, read limit `258,048`; refreshed count `2,016`, restored limit `516,096`. The original “upper half” claim needs this alignment qualification. `OUTSTANDING_BUGS.md:471-472`’s “power-of-two block-size assumption” is different; these sizes are powers of two. No same-defect match.
+
+diskimage:F4 | DRAFT NEW LOW cuebomparse "CUE detection strips a BOM that the parser retains in its first keyword"  
+Checked: `src/disk/diskimage.c:623-625` skips the BOM with “`p += 3;`”; parsing instead starts with “`char *p = line;`” at `:685`, tokenizes at `:689`, and compares against `"FILE"` at `:715`. The tokenizer at `:505-536` retains those bytes. Unknown keywords are ignored at `:868`; the following TRACK fails at `:767-772`, leading to “treating the file as a flat image” at `:1055-1056`. Existing CUE prose at `OUTSTANDING_BUGS.md:2724-2726,5225-5232` concerns symlinks and `d:` handling. No same-defect match. LOW reflects a host-side parser defect; hardware requirements were not checked.
+
+diskimage:F5 | DRAFT FILED lbsmask  
+Checked: `src/disk/diskimage.c:306`: “`if (size & (d->logical_block_size - 1))`”; accepted block-size assignment at `src/disk/diskimage_scsicmd.c:1319-1324`; disabled regression at `regress/diff_diskimage_geom.c:718-722`. Enumerated values: bytes `516,096`; block size `257`; quotient `2,008`; remainder `40`; mask `256`; masked result `0`; stored count `2,008`; ceiling `2,009`; stored byte extent `516,056`. `OUTSTANDING_BUGS.md:471-472` explicitly names “`lbsmask` (diskimage.c power-of-two block-size assumption…)”; `:15590-15591` says “held behind `GEOM_ROW_LBS257`”. MED under this brief’s guest-visible-behavior rule, although recorded LOW.
+
+diskimage:F6 | DRAFT RECORD "The bound above refuses past-the-end writes before they start; an in-bounds short result can still reflect an I/O failure or an unsupported overlay length or offset alignment."  
+Checked: replace `src/disk/diskimage.c:1643-1645`, which says “reachable only through a genuine I/O failure”. Alignment refusals return `0` at `:1279,1285`; the caller’s “`if (writeflag && lendone < (ssize_t)len)`” at `:1653` also accepts those results as failures. No existing correction found.
+
+diskimage:F7 | DRAFT RECORD "On the overlaid path this function returns the original requested length after completing all slices, or 0 on a seek failure; the caller's `lendone < len` memset is a no-op only in the completed case and zero-fills the whole request in the seek-failure case."  
+Checked: replace `src/disk/diskimage.c:1499-1500`, which calls the memset “a deliberate no-op HERE”. Seek failures return `0` at `:1397,1407`; `:1627-1628` then executes “`memset(buf + lendone, 0, len - lendone);`”. `OUTSTANDING_BUGS.md:11559-11580` records the earlier short-read accounting defect, not this false sentence. No existing correction found.
+
+diskimage:F8 | DRAFT RECORD "The mutant preserves the fsync count but reduces the successful single-overlay fflush count from two to one; both the fflush count and the ordered trace can detect the omission."  
+Checked: replace the count-preservation explanation in `CHANGELOG.md:25608-25610`, retained at `db8b1a33:25692-25694`: “chosen because it leaves the counts intact and only the trace can see it”. `src/disk/diskimage.c:2401-2412` and `regress/diff_diskimage_sync.c:536-550` enumerate current trace `[F(data),S(data),F(bitmap),S(bitmap)]`, deletion trace `[S(data),F(bitmap),S(bitmap)]`, and respective `(flush,sync)` counts `(2,2)` and `(1,2)`. No existing correction found. Historical mutant execution and the selfmutant files were not checked.
+
+diskimage:F9 | DRAFT TEST-GAP cuemapgap  
+Checked: `CHANGELOG.md:19826,19829-19830`, retained at `db8b1a33:19910,19913-19914`, says “each regression-gated” and includes “real per-track sector mapping” and “per-sector raw-header stripping”. Production mapping is at `src/disk/diskimage.c:1088-1146,1620-1623`. `regress/diff_diskimage_io.c:134` sets “`d->nr_of_tracks = 0;`”; inspected parser fixtures at `regress/diff_diskimage_parse.c:168-215,269-315` use image/ISO inputs. Permitted regression-source searches found no CUE mapping/header assertion. No existing match.
+
+diskimagescsicmd:F1 | DRAFT NEW HIGH modeselectbuflen "MODE SELECT enlarges a retained DATA OUT length without reallocating"  
+Checked: `src/disk/diskimage_scsicmd.c:1287` unconditionally writes “`xferp->data_out_len = 12;`”, preceding the purported capacity check at `:1297`. `src/devices/dev_mb89352.c:224-246` trusts that length before “`p[d->transfer_bufpos ++] = idata;`”; `:476-495` allocates DATA OUT, whereas command-buffer replacement at `:499-502` retains it. Phase handling at `:275-284,426-429` does not restore its allocation capacity. `OUTSTANDING_BUGS.md:2703`’s “#205 MODE SELECT” refers to the earlier fixed over-read, not this length inflation. No same-defect match.
+
+diskimagescsicmd:F2 | DUPLICATE diskimage:F2  
+Checked: `src/disk/diskimage_scsicmd.c:489` again invokes “`diskimage_recalc_size(d);`” after the retyping at `src/disk/diskimage.c:2066-2067`. Rechecked values at `src/disk/diskimage.c:245-307`: initial blocks `2,880`; recalculated blocks `3,024`; initial CHS `(80,2,18)`; recalculated CHS `(3,16,63)`. This is the same geometry-loss defect as diskimage:F2, MED.
+
+diskimagescsicmd:F3 | DUPLICATE-OF-ROW scsicapnosense  
+Checked: `src/disk/diskimage_scsicmd.c:187-188` clears “`d->sense_key = d->sense_asc = d->sense_ascq = 0;`”; refusals at `:773-778,880-885` subsequently assign “`xferp->status[0] = 0x02;`”. REQUEST SENSE returns the cleared fields at `:989-991`. `DISPOSITIONS.md:34-37` already records “the #163 transfer-cap refusals (READ, WRITE) return CHECK CONDITION with the sense latch cleared”. MED; no additional OUTSTANDING_BUGS filing found.
+
+diskimagescsicmd:F4 | DRAFT FILED ovsync  
+Checked: `src/include/diskimage.h:254` defines SYNCHRONIZE CACHE as `0x35`; the implemented case is `src/disk/diskimage_scsicmd.c:915-938`, while its default at `:1380-1388` supplies no status. `src/devices/dev_asc.c:1284-1287` substitutes “`dev_asc_fifo_write(d, 0x00);`”. `OUTSTANDING_BUGS.md:1271-1277` explicitly says “SYNCHRONIZE CACHE(16) `0x91` is undefined” and “a guest gets GOOD with overlay and bitmap still unflushed”. MED.
+
+diskimagescsicmd:F5 | DUPLICATE diskimage:F5  
+Checked: `src/disk/diskimage_scsicmd.c:1319-1324` accepts the non-power-of-two size; `src/disk/diskimage.c:305-307` applies the remainder mask, repeated for TRACKINFO at `src/disk/diskimage_scsicmd.c:1224-1226`. Rechecked values: bytes `516,096`; size `257`; quotient `2,008`; remainder `40`; masked result `0`; ceiling `2,009`. Existing `lbsmask` filing is `OUTSTANDING_BUGS.md:471-472,15590-15591`. MED under the supplied rule; retain the TRACKINFO sibling in that filing.
+
+diskimagescsicmd:F6 | DRAFT RECORD "fixed separately. This guard prevents last-LBA subtraction underflow for an empty disk; GOOD with last-LBA zero remains ambiguous."  
+Checked: replace `src/disk/diskimage_scsicmd.c:508-510`, continuing the preceding “That defect is”. The false wording says the guard makes an empty disk “report itself as empty”. `:551-566` emits last-address bytes `[0,0,0,0]`; with the default block length, length bytes are `[0,0,2,0]`, and GOOD status is `0`. `CHANGELOG.md:27129`, retained at `db8b1a33:27213`, already calls this “a successful, inherently ambiguous zero”. No existing OUTSTANDING_BUGS or prior disposition for the false comment found.
+
+diskimagescsicmd:F7 | DRAFT RECORD "For failures reported by this helper, latch explanatory sense data together with CHECK CONDITION. NO SENSE is not inherently contradictory: the tape-filemark path returns CHECK CONDITION and reports FILEMARK with sense key NO SENSE."  
+Checked: replace `src/disk/diskimage_scsicmd.c:203-206`, whose blanket claim ends “not a state it can act on”. The same file explicitly describes the FILEMARK exception at `:799-803` and implements it at `:805-809,989-995`: sense byte `0x80`, FILEMARK set, sense-key nibble `0x0`. No existing correction found; the source contradiction is established independently of the unchecked external manual citation.
+
+diskimagescsicmd:F8 | DRAFT RECORD "The ordering `continue` is now covered by a two-overlay fault-injection row in `regress/diff_diskimage_sync.c`, with a disarmed recovery control. **Not fixed here, filed:**"  
+Checked: replace the opening clause at `CHANGELOG.md:25618`, retained at `db8b1a33:25702`, through “the ordering `continue` has no gate row (it needs fault injection);”, preserving the subsequent residual list. `regress/diff_diskimage_sync.c:600-603` asserts “overlay: failure skips only ITS OWN bitmap”; `:625-628` supplies recovery coverage, gated at `regress/gate_offline.sh:1991-2010`. `OUTSTANDING_BUGS.md:5797-5801` records `m437ord` as “BUILT AND SHIPPED in `e051fc5`, and it took TWO overlays”. Its coverage debt is resolved; the CHANGELOG sentence remains false.
+
+diskimagescsicmd:F9 | DRAFT TEST-GAP modeselectrow  
+Checked: `src/disk/diskimage_scsicmd.c:1287-1299,1308-1324`; `CHANGELOG.md:20547-20548`, retained at `db8b1a33:20631-20632`, claims incomplete rejection and that “a complete one still does” succeed. Inspected assertions in `regress/diff_diskimage_io.c:1160-1190,1245-1256,1290-1322,1572-1636,1690-1695` and `regress/diff_diskimage_sync.c:359-373`; permitted regression-source searches found no paired MODE SELECT acceptance/partial-receipt assertions. No existing match. The original unrestricted artifact census was not repeated.
+
+diskimagescsicmd:F10 | DRAFT FILED-BY-PROSE OUTSTANDING_BUGS.md:5234-5238 scsicaprow  
+Checked: `regress/diff_diskimage_parse.c:195-215` loops over `i=0,1,2,3` and asserts “`check(cmd, d ? d->nr_of_logical_blocks : -1, sizes[i]/512);`”, without invoking READ CAPACITY’s recalculation at `src/disk/diskimage_scsicmd.c:489`. Existing prose at `OUTSTANDING_BUGS.md:5234-5238` says “Every row in `diff_diskimage_parse.c` asserts the PARSER’s output” and “That needs a call-site row or a booting rig.” Assign the proposed id to that existing broader obligation; the READ CAPACITY omission elaborates it. LOW.
+
+(a) **Wrong or overstated claims:** No core source defect was disproved, but these qualifications matter:
+
+- `bundle_file:F2` and `devasc:F1` depend on signed-conversion behavior; the relevant assignments are `src/file/file.c:89` and `src/devices/dev_asc.c:577-578`. A runtime witness was not checked.
+- `devasc:F3`’s TEST_UNIT_READY outcome requires the CDB-length guard to pass (`src/disk/diskimage_scsicmd.c:309-315`).
+- `diskimage:F3`’s “upper half” description is conditional on the original cylinder rounding (`src/disk/diskimage.c:291-307`).
+- `diskimagescsicmd:F3` is already a prior disposition; F10’s broader coverage gap is already recorded by prose, at the ranges quoted above.
+- All absence-of-tests conclusions are limited to the permitted committed regression sources. Historical executions and excluded artifact coverage were not verified.
+
+(b) **Cross-answer duplicates:** `diskimagescsicmd:F2` → `diskimage:F2`; `diskimagescsicmd:F5` → `diskimage:F5`. The separate prior-batch duplicate is `diskimagescsicmd:F3` → `scsicapnosense`.
+
+(c) **DENOMINATOR:** **29/29 findings checked against committed source or regression code; 0/29 ruled on from finding text alone.** Breakdown: bundle_file `3/3`, devasc `7/7`, diskimage `9/9`, diskimagescsicmd `10/10`.
+
+Process caveat: one initial delegated search returned unrelated artifact snippets through Git’s recursive pathspec behavior. They were excluded from the dispositions, and the census was repeated with top-level-only patterns.

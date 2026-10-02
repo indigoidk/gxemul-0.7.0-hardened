@@ -1,0 +1,62 @@
+I'll verify the three findings against `GXEMUL-SEC/src/` at `db8b1a33`, checking each premise in the source rather than taking the brief's facts as given.The tree is `GXEMUL-SEC`. I'll read the cited handlers and the helpers they call, and enumerate the address and length arithmetic from the code.VERDICT: 1 of 3 findings hold as stated -- H7 is a guest-reachable stack overflow; the HIGH grades on H8 and H9 do not hold.
+
+Read against `GXEMUL-SEC` at `db8b1a33` (`db8b1a3385130c457626283d9a718bd7c5181f0d`). S1, S2, and the H7 and H9 citations match this tree. The H8 quotation does not: `if (len == 8)` is at line 275, `CRIME_CONTROL` is at line 353, and the `exit(1)` the brief prints for a narrow access is gone (#529 already declines it). The word-store path the dispute is about is still there.
+
+## Q1
+
+**H7 holds, and it is reachable.** One guest sequence does it: stage a buffer, write `1` to `+0x0c` and `+0x14`, write a destination whose low 28 bits are `0x005f7418`, write nonzero to `+0x18`. The device is `[0x005f7400, 0x005f7480)`. The call is `PHYSICAL`, so the page splitter does not run. One device call, relative address exactly `0x18`.
+
+The clamp figure is exact for every buffer this arm can actually transfer. `0x18 + data_len > 0x80` exactly when `data_len > 0x68`, and then `len` becomes `0x80 - 0x18 = 0x68` (104). The TOC producer sets `data_len` to 408. A sector read sets it to `2048 * n` for `n` from 1 to 32 (`65536/2048`). All 33 of those lengths are greater than 104, so every one is clamped to 104. `MEM_PCI_LITTLE_ENDIAN` is 128, and `0x68 & 128` is 0, so that flag does not change the fold.
+
+On this CPU (`cpu_sh.c` forces little-endian) `memory_readmax64` walks `i` from 103 down to 0, 104 shifts. What remains is only the first eight payload bytes:
+
+| bits | byte |
+|---|---|
+| 7:0 | b[0] |
+| 15:8 | b[1] |
+| 23:16 | b[2] |
+| 31:24 | b[3] |
+| 39:32 | b[4] |
+| 47:40 | b[5] |
+| 55:48 | b[6] |
+| 63:56 | b[7] |
+
+b[8] through b[103] are shifted out. The next entry runs the start arm only when those eight bytes are not all zero. They are not for the TOC this file itself synthesizes: b[0] is `0x10`, then `00 00 96 41 00 2e 4c`. A zero-filled sector stops after the inner call. Nothing else stops it. The store at line 1676, the clearing of `idata`, and the ASIC event are all after `memory_rw` returns, and this chain does not return. Count, enable, destination, pointer, length, and payload are the same on every entry. `fatal()` returns. There is no in-flight flag. The host stack runs out.
+
+The sixteen destinations that do this are `0x005f7418 | (k << 28)` for `k` from 0 to 15. `0xA05f7418` is one. `0x8c5f7418` is not: the mask turns it into `0x0c5f7418`.
+
+A destination of `0x005f7404` does not recurse "on the way." The handler is entered once, at the start offset only. `case 0x04` does not call `memory_rw`. The tail stores the low 32 bits of that same eight-byte fold into the destination register and returns. Offsets `0x08`, `0x0c`, and `0x14` are the same shape. Any other start, including a span that merely covers `+0x18`, does not take `case 0x18`. Unaligned starts return in the default arm before the tail. The only recursing relative address is `0x18`.
+
+The premise that would kill H7 is: the re-entered `idata` is always 0, or the arming words are cleared before the call. Neither is true. Checked in this tree.
+
+**H8's behavior holds, and a guest can reach it.** CRIME is at `0x14000000`, length `0x280`. IP32 sets big-endian. A 32-bit store of `0x800` to `+0x08` has `relative_addr == 0x08`, so `relative_addr & 4` is 0 and the word is stored at bits 63:32. The switch matches `0x008` and tests raw `idata`, not the merged register. `CRIME_CONTROL_HARD_RESET` is `0x0800`. The defined masks OR to `0x3fff`, bits 0 through 13, which matches the header's "lower 14 bits." Bit 11 of that store is bit 43 of the register, and the handler still stops every CPU. The same store to `+0x0c` updates the low half and does not enter the case, so it stops nobody. A 64-bit store of `0x800` to `+0x08` does stop them; `sd` exists on this machine. I confirmed this from the source. I did not re-run the 2026-09-13 binary.
+
+The premise that would kill it is: the side effect tests the merged register, or the switch folds `+0x0c` into `+0x08`. It does neither.
+
+**H9 is reachable, and the landing spot is the next member.** `SH_N_FPRS` is 16. `r4` and `r8` are `(iword >> 4) & 0xf` and `(iword >> 8) & 0xf`, so 0..15, with no evenness test. SH is built `DYNTRANS_32` only, so `reg(p)` is a `uint32_t` load at `p`. Under `SH_FPSCR_PR`, field 15 reads and writes `&fr[15] + 4`. `fr` and `xf` are adjacent `uint32_t[16]` members with no pack attribute. I did not compile `offsetof`. On the layout GCC uses for this file, that address is `xf[0]`. The standard permits padding; padding would still fall inside `struct sh_cpu`, whose next members are `xf[16]`, then `mach`. The guest sets `PR` and executes the instruction. `FADD` is the specimen. The same unmasked `+ 4` is in the other `PR=1` arithmetic handlers (`FSUB`, `FMUL`, `FDIV`, both compares, `FLOAT`, `FTRC`).
+
+The premise that would kill the reachability claim is an evenness mask in the decoder or the handler. There isn't one. The double `FMOV` path around line 2900 does mask, and sends an odd field to `xf[n & ~1]`, which stays inside `xf`. The arithmetic path does not do that, so field 15 lands on `xf[0]`, not on `xf[14]`.
+
+## Q2
+
+Two dispositions are wrong: the HIGH grades on H8 and H9. H7's HIGH grade is right. It is not a clean `main` return. It is an unbounded recursion, and the guest reaches it with the TOC command alone.
+
+**H8 is MED.** Rule to reuse: a second way to invoke an operation the guest can already invoke, where the host effect is that operation's own effect, is MED. Here both the wrong-lane word store and a 64-bit store of bit `0x800` execute the same loop that clears `running`, and then the same epilogue. With no `-K` and no breakpoint, `debugger_enter_at_end_of_run` stays false and `main` returns 0. With `-K` or any breakpoint, #259 keeps the process in the debugger. Both paths share that. HIGH is the grade for a host effect that operation does not have: a signal death, `exit(1)`, a bounds violation, or a hang. The PROM reboot command is the same three lines. Grading this HIGH would grade that command HIGH.
+
+**H9 is LOW.** Rule to reuse: "leave a buffer's bounds" means the access can reach memory outside the allocation that holds this guest state. Landing in the next member of the same struct, on a guest register, is intra-struct aliasing. That is the reduction this project already made once `offsetof` was measured, and it applies here. On the packet's manual premise an odd field with `PR=1` has no guaranteed behavior, so there is no documented result to diverge from. MED does not apply either.
+
+## Q3
+
+**H7: (3), and the machinery is already in this device.** Decline a start whose masked destination lies in `[0x005f7400, 0x005f7480)`, announce once, set `idata = 0`. The no-data and bad-arm paths already do that. (5) is not available at this site: `memory_rw` raises a bus error only for MIPS and M88K, there is no `MEM_SH` arm, and the DMA call discards the return. (7) is not available either: this file records that there is no Holly document. The list is missing a narrower member, an in-flight flag around the existing `memory_rw` so a RAM transfer still completes and only the re-entered start arm is skipped. A flag on `dreamcast_gdrom_data` is available too. For this destination there is no RAM transfer to preserve, so (3) is the right member.
+
+**H8: (7), and the machinery is the half-merge already in the handler.** After the merge, honor `HARD_RESET` only if it landed in the low 14 bits. A word store to `+0x08` then does not reset; a word store to `+0x0c` does; a 64-bit store of `0x800` still does. That last point matters because the TODO says NetBSD writes `+0x0c` and today that write does not reboot. I could not settle the PROM's width. If the PROM reboots with a word store to `+0x08`, this correction removes the reboot that command uses today. That has to be checked before the change. (5) does not fit: the store is accepted.
+
+**H9: (4).** Undefined is already satisfied, and no CPU machinery is required to leave it. I would not open a HIGH correction. `sh_exception` exists (`EXPEVT_RES_INST`, `EXPEVT_FPU`), so (5) is wired, but the packet's "not guaranteed" is not a required trap, and delivering one invents a guest-visible result. The list has no member for "keep the pair inside `fr` without claiming a new architectural result." Copying the `FMOV` odd-to-`xf` redirect onto `FADD` would be that invention.
+
+## Q4
+
+H8, then H7, then H9.
+
+H8 sits on a register boot software already writes. The in-tree note says the PROM reboot uses `0x800` and NetBSD writes `+0x0c`. The documented NetBSD store misses the buggy lane; it is still the only one of the three on a live control path. H7 is one bad destination away from a DMA Linux and the PROM really perform, but the destination those paths use is RAM (`0x8c008000` masks to `0x0c008000`, not to this device). H9 is a reserved encoding. The compilers that target this CPU emit even fields for a double, so an ordinary kernel does not execute it.
+
+Two further facts. The #529 comment already treats a halfword `0x0800` at `CRIME_CONTROL` as a stop that must not happen, and jumps past the switch to prevent it. The word store to the high half is that same side effect, left in place for `len == 4`. And H7's tail is width-blind: a self-aimed start at `+0x04`, `+0x08`, `+0x0c`, or `+0x14` does not recurse, but it does replace that register with the low 32 bits of the payload fold. That is guest register corruption, MED at most, and it is not the stack overflow.

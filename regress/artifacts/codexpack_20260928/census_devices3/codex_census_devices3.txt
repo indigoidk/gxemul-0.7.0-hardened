@@ -1,0 +1,47 @@
+CODEXPACK_CENSUS_DEVICES3_ALIVE
+VERDICT: 8 live calls classified -- 8 reachable by guest access at run time, 1 of those not recorded
+
+All citations below refer to **`db8b1a33`**. The census matches: **169, 203, 208, 214, 241, 244, 250, 428**, each containing `exit(1);`. Recording attribution is qualified below.
+
+```text
+src/devices/dev_adb.c:169 | adb_process_cmd | WHEN: guest access | CONDITION: "if (d->cur_output_offset < 2)" (:166); caller requires "if (d->cur_output_offset > 0)" (:274), so reachable offending length is exactly {1} | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 3 — decline and announce once | confidence: high on reachability, medium on disposition
+src/devices/dev_adb.c:203 | adb_process_cmd | WHEN: guest access | CONDITION: "case 0:" (:174), LISTEN branch "else if ((d->output_buf[1] & 0x0c) == 0x08)" (:198), then "if ((d->output_buf[1] >> 4) != d->kbd_dev)" (:201) | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 2 — decline silently for an unmatched device address | confidence: high on reachability, medium on disposition
+src/devices/dev_adb.c:208 | adb_process_cmd | WHEN: guest access | CONDITION: same LISTEN branch, after matching the keyboard address; "if (d->output_buf[3] != 0xfe || (d->output_buf[2] & 0xf0) != 0x60)" (:205–206) | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 7 — implement missing LISTEN behaviour | confidence: high on reachability, medium on disposition
+src/devices/dev_adb.c:214 | adb_process_cmd | WHEN: guest access | CONDITION: "else" (:212) within "case 0:" (:174), after tests "d->output_buf[1] == 0x00" (:175), "(d->output_buf[1] & 0x0c) == 0x0c" (:179), and "(d->output_buf[1] & 0x0c) == 0x08" (:198) all fail | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 7 — implement missing ADB command behaviour | confidence: high on reachability, medium on disposition
+src/devices/dev_adb.c:241 | adb_process_cmd | WHEN: guest access | CONDITION: "case 1:" (:218), then "else if (d->cur_output_offset == 2 && d->output_buf[1] == 0x11)" (:237–238), explicitly labelled "/*  Reboot.  */" (:239) | GUEST LEVEL: privileged | RECORDED: NONE | DISPOSITION: 7 — implement guest reboot | confidence: high on reachability and disposition, medium on recording exclusion
+src/devices/dev_adb.c:244 | adb_process_cmd | WHEN: guest access | CONDITION: final "else" (:242) in "case 1:" (:218), after "d->cur_output_offset == 3 && d->output_buf[1] == 0x01 && d->output_buf[2] == 0x01" (:219–221), "d->cur_output_offset == 2 && d->output_buf[1] == 0x03" (:227–228), and "d->cur_output_offset == 2 && d->output_buf[1] == 0x11" (:237–238) all fail | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 7 — implement missing PRAM/RTC behaviour | confidence: high on reachability, medium on disposition
+src/devices/dev_adb.c:250 | adb_process_cmd | WHEN: guest access | CONDITION: "default:" (:248) of "switch (d->output_buf[0])" (:172), outside named cases {0, 1} (:174, :218) | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 3 — decline and announce once | confidence: high on reachability, medium on disposition
+src/devices/dev_adb.c:428 | dev_adb_access / DEVICE_ACCESS(adb) | WHEN: guest access | CONDITION: "default:" (:417) of "switch (relative_addr)" (:356), outside cases {vBufB, vDirB, vSR, vACR, vIFR, vIER} (:358, :385, :388, :393, :403, :407); applies to reads and writes | GUEST LEVEL: privileged | RECORDED: exitunowned76 | DISPOSITION: 7 — implement missing VIA register behaviour | confidence: high on reachability, medium on disposition
+```
+
+The runtime connection is present: MacPPC setup adds `"adb addr=0xf3016000 irq="` (`src/machines/machine_macppc.c:89–91`); ADB initialization registers `dev_adb_access` (`src/devices/dev_adb.c:449–450`). Register accesses invoke `adb_transfer` (`src/devices/dev_adb.c:378–381`), which invokes `adb_process_cmd` (`src/devices/dev_adb.c:270–275`). These are therefore runtime sites even when a guest driver reaches them during boot.
+
+“Privileged” identifies the ordinary guest device-driver context, **not an intrinsic privilege check in this handler**. User-mode access can depend on mappings supplied by the guest kernel: PPC translation checks user-valid BAT mappings and page permissions (`src/cpus/memory_ppc.c:55–75`, `src/cpus/memory_ppc.c:214–230`). Stock-OS mappings and unprivileged exposure: **not checked**.
+
+The queue search covered the filename, enclosing function names, and diagnostic strings. Relevant matches:
+
+- `OUTSTANDING_BUGS.md:2685–2689` records the **“New deferred (broad device-exit tail)”**, expressly naming `dev_adb.c` among guest-writable handlers.
+- `OUTSTANDING_BUGS.md:18816` names **`exitunowned76`**; `OUTSTANDING_BUGS.md:18852–18854` says **“This row therefore tracks the ~70 that remain”** and names **“`dev_adb.c` (7)”**.
+- `OUTSTANDING_BUGS.md:18836–18839` separately categorizes **“2 intentional halt/reboot”** sites. Consequently, mapping **{169, 203, 208, 214, 244, 250, 428}** to `exitunowned76` and excluding **{241}** is an **inference**, not a line-specific queue enumeration. No ADB reboot-specific entry was found.
+- **OB-6** is different: `OUTSTANDING_BUGS.md:2888` records **“unbounded append”**. It does not identify these terminating calls.
+
+Two disposition qualifications matter. LISTEN’s payload test reads buffer elements **{2, 3}**, although the preceding length guard only requires elements **{0, 1}** to have been received; there is no four-byte completeness check there (`src/devices/dev_adb.c:166`, `src/devices/dev_adb.c:199–206`). Member 7 must distinguish supported commands from incomplete or invalid requests; their hardware-defined handling is **not checked**.
+
+Likewise, line 428 follows a backing-byte read/write (`src/devices/dev_adb.c:337–352`), but that alone does not establish member 4’s “right value.” The aligned default offsets enumerate as **{0x0200, 0x0600, 0x0800, 0x0a00, 0x0c00, 0x0e00, 0x1000, 0x1200, 0x1800, 0x1e00}**: named port/direction/timer/control registers plus the unnamed slot (`src/include/thirdparty/adb_viareg.h:158–172`; `src/devices/dev_adb.c:64–74`, `src/devices/dev_adb.c:356–428`). Implementing their behaviour needs more than retaining a stored byte. Member 3 means a latched announcement, exemplified by `pcc2_width_decline`’s guarded warning ending in `"(once)"` (`src/devices/dev_pcc2.c:462–469`).
+
+**(a) Guest-access ranking.** This is a provisional ranking by ordinary-operation plausibility; actual stock-OS access order is **not checked**.
+
+1. **428:** A normal driver’s register access can encounter the default; it includes named VIA registers, without requiring malformed command framing (`src/include/thirdparty/adb_viareg.h:159–170`; `src/devices/dev_adb.c:417–428`).
+2. **241:** Explicitly recognized **“Reboot”** is an ordinary lifecycle operation, although not an early boot access (`src/devices/dev_adb.c:237–241`).
+3. **208:** A keyboard LISTEN differing from the single accepted relocation form reaches this site; valid alternative payload semantics are not checked (`src/devices/dev_adb.c:198–211`).
+4. **244:** The PRAM/RTC branch supports only the quoted autopoll, RTC-read, and reboot forms before terminating on its remainder (`src/devices/dev_adb.c:218–244`).
+5. **203:** LISTEN addressing anything other than the currently modeled keyboard terminates; actual stock-driver peripheral traffic is not checked (`src/devices/dev_adb.c:198–203`).
+6. **214:** Requires an ADB command outside the implemented reset/TALK/LISTEN branches; ordinary use of those remaining commands is not checked (`src/devices/dev_adb.c:174–214`).
+7. **250:** Requires an unrecognized outer command type; whether any such type is valid hardware protocol is not checked (`src/devices/dev_adb.c:172–250`).
+8. **169:** Requires the incomplete command length **{1}**, making it the clearest malformed-transfer case (`src/devices/dev_adb.c:166–169`, `src/devices/dev_adb.c:274–275`).
+
+**(b) CPU-stop sites:** none. No `cpu->running = 0` assignment occurs in the fully read `src/devices/dev_adb.c:1–456`.
+
+**(c) Denominator:** all target functions read: `dev_adb_tick` (`src/devices/dev_adb.c:111–126`), `adb_reset` (`:134–148`), `adb_process_cmd` (`:157–256`), `adb_transfer` (`:266–311`), `dev_adb_access` (`:314–435`), and `devinit_adb` (`:438–455`). **Target functions not read: none.**
+
+Supporting functions read were the MacPPC setup/default/register functions (`src/machines/machine_macppc.c:54–214`), PPC translation helpers (`src/cpus/memory_ppc.c:43–327`), and `pcc2_width_decline` (`src/devices/dev_pcc2.c:462–469`); other PCC2 functions were not fully read. Hardware semantics, regression coverage, and stock-OS traces were not checked. One malformed search returned out-of-scope output; it was discarded and supplies no evidence above.

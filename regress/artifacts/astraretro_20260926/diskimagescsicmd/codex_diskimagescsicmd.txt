@@ -1,0 +1,49 @@
+ASTRARETRO_DISKIMAGESCSICMD_ALIVE
+VERDICT: 10 findings (5 CODE live at HEAD, 3 RECORD, 2 TEST-GAP); 20 items checked clean
+
+Reviewed committed `8ea26abb` only. All findings are static; no files were written, builds performed, or probes executed. Line references below are at HEAD.
+
+F1 | [src/disk/diskimage_scsicmd.c:1287](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:1287) | #285 | CODE | live at HEAD: yes | **MODE SELECT can inflate a buffer’s recorded capacity without reallocating it.** MB89352 permits an existing short DATA OUT buffer to survive a command-phase change. This assignment changes its length to 12; subsequent controller writes trust that inflated length and can write outside the allocation. Previously, a nonzero short transfer preserved its actual length and reached #205’s rejection. No matching filing found. | Smallest check: trace allocation and retained-pointer bounds through `dev_mb89352.c:476`, `:500`, `:226`, and `:246`; the later `<12` check at `:1297` cannot repair the overwritten capacity. | confidence high
+
+F2 | [src/disk/diskimage_scsicmd.c:489](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:489) | upstream, relied on by #418 | CODE | live at HEAD: yes | **READ CAPACITY undoes #418’s geometry preservation.** A `d:` floppy-sized image initially retains exact floppy geometry, then becomes SCSI/IDE. This recalculation consequently selects generic 16-head/63-sector geometry. A 1.44 MB image changes from 2,880 advertised blocks to 3,024; the extra blocks accept zero-filled reads but reject writes. This contradicts #418’s exact-capacity premise. No matching filing found. | Smallest check: follow `diskimage.c:2066` through this call to `diskimage.c:268`; compare capacity before and after recalculation. | confidence high
+
+F3 | [src/disk/diskimage_scsicmd.c:776](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:776) | #163; sibling omitted by #416/#417 | CODE | live at HEAD: yes | Oversized READ and WRITE requests receive CHECK CONDITION after the success helper clears their sense. REQUEST SENSE therefore reports `00/00/00`, losing the rejection reason. Both arms remain affected (`:776` and `:883`). Transfer-limit rejection should supply an illegal-request explanation; see [Seagate reference, p.535, Table 521](https://www.seagate.com/files/staticfiles/support/docs/manual/Interface%20manuals/100293068L.pdf#page=535). No matching filing found. | Smallest check: compare both refusal arms with the failure helper at `:208`; extend `diff_diskimage_io.c`’s sense assertions to these refusals. | confidence high
+
+F4 | [src/disk/diskimage_scsicmd.c:915](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:915) | #437 sibling omission | CODE | live at HEAD: yes | SYNCHRONIZE CACHE(16) bypasses the repaired SYNCHRONIZE CACHE(10) case, performs no synchronization, and leaves status absent. ASC substitutes GOOD at `dev_asc.c:1287`, falsely acknowledging durability. The command’s durability requirement is documented in [Seagate §3.56](https://www.seagate.com/files/staticfiles/support/docs/manual/Interface%20manuals/100293068L.pdf#page=243). Already filed as **`ovsync`**, `OUTSTANDING_BUGS.md:1271`. | Smallest check: inspect dispatch/default and ASC’s absent-status fallback; add the 16-byte sibling to `diff_diskimage_sync.c`. | confidence high
+
+F5 | [src/disk/diskimage_scsicmd.c:1319](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:1319) | upstream rounding, relied on by #133 | CODE | live at HEAD: yes | MODE SELECT accepts non-power-of-two block sizes, but downstream capacity calculations use `size & (block_size−1)` as a remainder test. Selecting 257-byte blocks exposes incorrect rounding: a 516,096-byte extent becomes 2,008 blocks instead of the intended rounded-up 2,009. The same assumption remains in READ TRACKINFO at `:1225`. Already filed as **`lbsmask`**, `OUTSTANDING_BUGS.md:471` and `:15590`. | Smallest check: compare the mask with modulo in `diskimage.c:306`; inspect the disabled `GEOM_ROW_LBS257` regression. | confidence high
+
+F6 | [src/disk/diskimage_scsicmd.c:507](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:507) | #412 | RECORD | live at HEAD: yes | The comment says the guard makes an empty disk “report itself as empty.” It returns GOOD with last-LBA zero and a nonzero block length: that describes one block, not zero. [READ CAPACITY defines this field as the last block address](https://www.seagate.com/staticfiles/support/disc/manuals/scsi/100293068a.pdf#page=147). `CHANGELOG.md:27129` already acknowledges the ambiguity, but this comment remains false. | Smallest check: compare `:551–566` with the field definition. | confidence high
+
+F7 | [src/disk/diskimage_scsicmd.c:203](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:203) | #416 | RECORD | live at HEAD: yes | The blanket assertion that CHECK CONDITION with NO SENSE is unusable is false. A tape filemark legitimately produces that pairing with FILEMARK set, as this file itself describes at `:799` and implements at `:993`. [Seagate Table 28 explicitly permits it](https://www.seagate.com/files/staticfiles/support/docs/manual/Interface%20manuals/100293068L.pdf#page=59). | Smallest check: compare those three blocks; distinguish an explanatory FILEMARK from F3’s entirely empty sense. | confidence high
+
+F8 | [CHANGELOG.md:25618](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:25618) | #437 | RECORD | live at HEAD: yes | The claim that the ordering `continue` has no gate row is stale. `diff_diskimage_sync.c:601` injects failure with two overlays and checks that only the failed overlay’s bitmap is skipped; `:626` checks recovery. Already recorded as resolved under **`m437ord`**, `OUTSTANDING_BUGS.md:5797`, shipped in `e051fc5`. | Smallest check: compare the changelog sentence with those existing assertions. | confidence high
+
+F9 | [CHANGELOG.md:20547](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:20547) | #285 | TEST-GAP | live at HEAD: yes | The round identifies complete MODE SELECT acceptance as its proving gate and records partial rejection plus complete acceptance. No persisted regression row observes those behaviors. Checked `diff_diskimage_io.c`, `diff_diskimage_sync.c`, `gate_offline.sh`, and executable regression sources, including artifacts. | Smallest check: add paired incomplete/complete parameter-list assertions. | confidence high
+
+F10 | [regress/diff_diskimage_parse.c:214](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_diskimage_parse.c:214) | #418 | TEST-GAP | live at HEAD: yes | The four “advertised blocks exact” rows inspect the structure immediately after `diskimage_add()`. None issues READ CAPACITY or performs its second recalculation, so they cannot observe the guest-visible exactness claimed at `CHANGELOG.md:26969` and miss F2. | Smallest check: assert returned capacity after the command handler runs. | confidence high
+
+Checked clean, with each statement limited to the property named:
+
+- `src/disk/diskimage_scsicmd.c:151` — zero-length allocation requests one backing byte while preserving logical length zero.
+- `src/disk/diskimage_scsicmd.c:309` — CDB length checks cover fixed command indexes used by implemented handlers.
+- `src/disk/diskimage_scsicmd.c:766` — disk READ multiplication uses 64-bit arithmetic.
+- `src/disk/diskimage_scsicmd.c:874` — WRITE contains the matching arithmetic correction.
+- `src/disk/diskimage_scsicmd.c:773` — both tape and disk READ sizes encounter the cap before allocation.
+- `src/disk/diskimage_scsicmd.c:880` — WRITE encounters the cap before requesting DATA OUT.
+- `src/disk/diskimage_scsicmd.c:787` — READ allocation is initialized, including the tape-filemark path.
+- `src/disk/diskimage_scsicmd.c:817` — an internal READ failure clears the complete result and reports CHECK CONDITION.
+- `src/disk/diskimage_scsicmd.c:907` — WRITE propagates the backend success/failure result.
+- `src/disk/diskimage_scsicmd.c:211` — the failure helper stores all three sense fields on the affected disk.
+- `src/disk/diskimage_scsicmd.c:989` — REQUEST SENSE copies latched fields before clearing them.
+- `src/disk/diskimage_scsicmd.c:187` — successful commands retire the latch; the successful-READ regression observes this.
+- `src/disk/diskimage_scsicmd.c:1168` — TOC fixed stores have sufficient backing storage while the reported length remains guest-requested.
+- `src/disk/diskimage_scsicmd.c:1288` — with a correctly allocated buffer, incomplete MODE SELECT receipt is rejected.
+- `src/disk/diskimage_scsicmd.c:551` — zero blocks no longer produce the former `0xffffffff` subtraction result.
+- `src/disk/diskimage_scsicmd.c:513` — the floppy-type reachability correction matches committed device selectors.
+- `src/disk/diskimage_scsicmd.c:932` — SYNCHRONIZE CACHE(10) reaches flat-file flush-before-sync and reports failures.
+- `src/disk/diskimage.c:2401` — overlay data precedes bitmap synchronization; the two-overlay failure regression observes the ordering.
+- `src/disk/diskimage.c:2372` — a missing flat backing stream returns failure without dereferencing it.
+- `regress/diff_diskimage_io.c:988` — relocated short-write fixtures reach the backend inside the backed extent, preserving #417’s intended coverage.
+
+DENOMINATOR: read 29 of 29 hunks of the net diff

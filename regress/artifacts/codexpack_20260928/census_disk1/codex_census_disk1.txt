@@ -1,0 +1,75 @@
+CODEXPACK_CENSUS_DISK1_ALIVE
+VERDICT: 14 live calls classified -- 2 reachable by guest access at run time, 1 of those not recorded
+
+All citations below refer to `db8b1a33`. Both guest-access exits require **host allocation failure**; ordinary commands reach their allocation paths, but do not themselves guarantee termination (`src/disk/diskimage_scsicmd.c:77-85`, `src/disk/diskimage_scsicmd.c:151-155`). Actual allocation-failure occurrence: **not checked**.
+
+```text
+src/disk/diskimage.c:373 | diskimage_set_baseoffset | WHEN: unreachable | CONDITION: "while (d != NULL)" exhausts without matching "if (d->type == type && d->id == id)" (src/disk/diskimage.c:362-369); sole caller excludes missing disks | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the terminating call | confidence: high
+src/disk/diskimage.c:398 | diskimage_getchs | WHEN: unreachable | CONDITION: "while (d != NULL)" exhausts without matching "if (d->type == type && d->id == id)" (src/disk/diskimage.c:387-395); sole caller checks disk existence first | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the terminating call | confidence: high
+src/disk/diskimage.c:1543 | diskimage__internal_access | WHEN: unreachable through current caller contracts | CONDITION: "if (buf == NULL)" after "if (len == 0)" has already returned (src/disk/diskimage.c:1539-1543) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 3 — decline the invalid access, return failure, announce once | confidence: medium
+src/disk/diskimage.c:1882 | diskimage_add | WHEN: construction (command line/configuration) | CONDITION: "if (prefix_i + prefix_f + prefix_s > 1)" (src/disk/diskimage.c:1879) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/diskimage.c:2147 | diskimage_add | WHEN: construction (automatic disk-ID assignment) | CONDITION: "if (prefix_id == -1)" then "if (id < 0)" (src/disk/diskimage.c:2111,2145) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/diskimage.c:2161 | diskimage_add | WHEN: construction (explicit disk-ID assignment) | CONDITION: explicit-ID arm, excluding the new object, finds "if (d2->id == id && d2->type == d->type)" (src/disk/diskimage.c:2149-2158) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/bootblock.c:97 | load_bootblock | WHEN: construction (boot-file loading) | CONDITION: "case MACHINE_DREAMCAST:" and "if (!diskimage_is_a_cdrom(cpu->machine, boot_disk_id, boot_disk_type))" (src/disk/bootblock.c:92-94) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/bootblock.c:258 | load_bootblock | WHEN: construction (boot-file loading) | CONDITION: PMAX branch; "if ((bootblock_loadaddr & 0xf0000000ULL) != 0x80000000 && (bootblock_loadaddr & 0xf0000000ULL) != 0xa0000000)" then "if (bootblock_loadaddr == 0)" (src/disk/bootblock.c:222,249-254) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/bootblock.c:462 | load_bootblock | WHEN: construction (SGI OSLoader extraction) | CONDITION: "if (tmpfile_handle < 0)" after mkstemp (src/disk/bootblock.c:459-460) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/bootblock.c:468 | load_bootblock | WHEN: construction (SGI OSLoader extraction) | CONDITION: "if (write(tmpfile_handle, bootblock_buf, found_osloader_bytes) != found_osloader_bytes)" (src/disk/bootblock.c:465) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | confidence: high
+src/disk/diskimage_scsicmd.c:85 | scsi_transfer_alloc | WHEN: guest access (host allocation failure) | CONDITION: else of "if (first_free_scsi_transfer_alloc != NULL)", then "if (p == NULL)" after malloc (src/disk/diskimage_scsicmd.c:77-82) | GUEST LEVEL: privileged | RECORDED: NONE | DISPOSITION: 3 — decline transaction and announce once; propagate allocation failure | confidence: high
+src/disk/diskimage_scsicmd.c:105 | scsi_transfer_free | WHEN: unreachable through current callers | CONDITION: "if (p == NULL)" (src/disk/diskimage_scsicmd.c:103) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 2 — silently decline NULL | confidence: high
+src/disk/diskimage_scsicmd.c:155 | scsi_transfer_allocbuf | WHEN: guest access (host allocation failure) | CONDITION: "if ((p = (unsigned char *) malloc(want_len ? want_len : 1)) == NULL)" (src/disk/diskimage_scsicmd.c:151) | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:12334-12338 | DISPOSITION: 3 — decline transaction and announce once; propagate allocation failure | confidence: high
+src/disk/bootblock_iso9660.c:326 | iso_load_bootblock | WHEN: unreachable | CONDITION: successful filename comparison reaches "if (match_entry != NULL)" (src/disk/bootblock_iso9660.c:317-321), but the first match immediately leaves both loops | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the terminating call | confidence: high
+```
+
+Counts match the supplied census exactly:
+
+| File | Count | Enumerated live lines |
+|---|---:|---|
+| `src/disk/diskimage.c` | 6 | 373, 398, 1543, 1882, 2147, 2161 |
+| `src/disk/bootblock.c` | 4 | 97, 258, 462, 468 |
+| `src/disk/diskimage_scsicmd.c` | 3 | 85, 105, 155 |
+| `src/disk/bootblock_iso9660.c` | 1 | 326 |
+
+The reachability distinctions rest on these checks:
+
+- **Missing disk, setter:** the sole caller requires `"if (currentBaseOffset == 0 && suggestedBaseOffset != currentBaseOffset)"` before calling the setter (`src/disk/bootblock_iso9660.c:152-157`). A missing disk makes the getter execute `"return -1;"` (`src/disk/diskimage.c:348`), excluding that call.
+- **Missing disk, geometry:** the sole caller checks `"if (diskimage_exist(...))"` immediately before `diskimage_getchs`, using the same machine, ID and type (`src/devices/dev_wdc.c:2125-2130`). The existence lookup and geometry lookup use the same matching predicate (`src/disk/diskimage.c:115-120`, `src/disk/diskimage.c:387-395`).
+- **NULL disk buffer:** `"if (len == 0)"` / `"return 1;"` precedes the terminating NULL test (`src/disk/diskimage.c:1539-1543`). SCSI READ allocates before calling the backend (`src/disk/diskimage_scsicmd.c:786-787`, `src/disk/diskimage_scsicmd.c:811-812`); WRITE requires the completed DATA OUT offset to equal the requested size (`src/disk/diskimage_scsicmd.c:888-908`). Its producers allocate before advancing that offset: ASC (`src/devices/dev_asc.c:629-668`), OSIOP (`src/devices/dev_osiop.c:519-529`) and MB89352 (`src/devices/dev_mb89352.c:476-495`, `src/devices/dev_mb89352.c:246-268`). Other examined routes supply local arrays or allocated buffers: test disk (`src/devices/dev_disk.c:151-157`, `src/devices/dev_disk.c:209`), GDROM (`src/devices/dev_dreamcast_gdrom.c:641-646`, `src/devices/dev_dreamcast_gdrom.c:848-872`), WDC (`src/devices/dev_wdc.c:463`, `src/devices/dev_wdc.c:531-539`, `src/devices/dev_wdc.c:1856-1870`, `src/devices/dev_wdc.c:2088`), ARC (`src/promemul/arcbios.c:947`, `src/promemul/arcbios.c:977-978`, `src/promemul/arcbios.c:1758-1764`, `src/promemul/arcbios.c:1839-1851`), DEC PROM (`src/promemul/dec_prom.c:145-150`, `src/promemul/dec_prom.c:464-470`) and Apple loading (`src/disk/bootblock_apple.c:56-59`). `CHECK_ALLOCATION` terminates before returning a NULL allocation (`src/include/misc.h:181-193`).
+- **NULL transfer free:** active callers guard the pointer before freeing: `src/devices/dev_asc.c:208-209`, `src/devices/dev_asc.c:314-326`, `src/devices/dev_asc.c:1323-1324`, `src/devices/dev_asc.c:1403-1404`, `src/devices/dev_asc.c:1440-1441`, `src/devices/dev_mb89352.c:398-399`, `src/devices/dev_osiop.c:104-105`, and `src/devices/dev_wdc.c:1733-1734`.
+- **ISO second match:** `match_entry` starts NULL (`src/disk/bootblock_iso9660.c:106`). Its assignment is followed by `"break;"`; the outer loop then executes `"if (match_entry != NULL)"` / `"break;"` (`src/disk/bootblock_iso9660.c:328-336`). A second match cannot reach the exit.
+- **Construction:** disk addition occurs in command-line initialization and configuration loading (`src/core/main.c:704-709`, `src/core/emul_parse.c:557-561`). `load_bootblock` is called by `emul_machine_setup` under `"Load files (ROM code, boot code, ...) into memory"` (`src/core/emul.c:428`, `src/core/emul.c:542-545`).
+
+Disposition 3 for the allocation failures requires failure propagation and transaction cleanup. Deleting those exits alone would leave the subsequent `"memset(p, 0, sizeof(struct scsi_transfer));"` or buffer consumers operating without a successful allocation (`src/disk/diskimage_scsicmd.c:89`, `src/disk/diskimage_scsicmd.c:147-161`, `src/disk/diskimage_scsicmd.c:190-193`).
+
+Queue searches used function names, filenames and terminating-message text. The qualifying record is explicit:
+
+> “`(*lenp) = want_len` at `:147`, `(*pp) = p` at `:161` — fourteen lines apart, with a `malloc` and a possible `exit(1)` between them.”  
+> — `OUTSTANDING_BUGS.md:12335-12336`
+
+That names the surviving `scsi_transfer_allocbuf` site, so it counts as **recorded prose**, although the surrounding discussion concerns its function-boundary invariant (`OUTSTANDING_BUGS.md:12334-12338`).
+
+Relevant filename hits that do **not** record these terminating branches were:
+
+- `"diskimage_add() links the new disk into the chain"` followed by failures that do not unlink: a different lifetime defect (`OUTSTANDING_BUGS.md:1220-1224`).
+- OB-33: `"char * to %i (UB on the not-found path); use %s"`: a diagnostic-format defect, not the terminating call (`OUTSTANDING_BUGS.md:2788-2789`).
+- OB-32: `"the bootblock/OSLoader size \"WARNING\" checks call fatal()"`, explicitly saying it `"does NOT exit"`: a different size-validation defect (`OUTSTANDING_BUGS.md:2785-2787`).
+- OB-30/OB-31: `"root-directory walk reads the 8-byte record"` past its buffer and `"if (i < len - strlen(filename)) underflows"`: different ISO parser defects (`OUTSTANDING_BUGS.md:2781-2784`).
+
+The historical zero-length disk-buffer exit is documented as #206 in `CHANGELOG.md:20078`; that is not a queue record, and its triggering path now returns before the NULL check (`src/disk/diskimage.c:1539-1543`).
+
+(a) Guest-access ranking, by ordinary processing order; both belong to ordinary SCSI operation:
+
+1. **`src/disk/diskimage_scsicmd.c:85`** — selecting an existing target obtains a transfer object before command processing; an empty freelist requires allocation (`src/devices/dev_asc.c:1380-1389`, `src/devices/dev_asc.c:330`, `src/disk/diskimage_scsicmd.c:77-85`).
+2. **`src/disk/diskimage_scsicmd.c:155`** — normal command reception allocates a CDB buffer, and even TEST UNIT READY allocates status/message buffers (`src/devices/dev_asc.c:972-973`, `src/devices/dev_asc.c:991-992`, `src/disk/diskimage_scsicmd.c:345-356`, `src/disk/diskimage_scsicmd.c:190-193`).
+
+The **privileged** labels describe the checked direct-controller route: PMAX installs ASC MMIO (`src/machines/machine_pmax.c:309-310`), and MIPS direct-segment translation requires `"if (ksu == KSU_KERNEL)"` (`src/cpus/memory_mips_v2p.c:234-239`). Other user-mode mappings and indirect userspace-I/O routes: **not checked**. Exact stock-OS first-command ordering: **not checked**.
+
+(b) CPU-stop sites: **none**. Full-file reading and assignment searches found no `cpu->running = 0` sites in the four target files; therefore there are no lower-grade rows to rank (`src/disk/diskimage.c:1-2502`, `src/disk/bootblock.c:70-559`, `src/disk/diskimage_scsicmd.c:73-1389`, `src/disk/bootblock_iso9660.c:57-434`).
+
+(c) Denominator — target functions read completely, enumerated by definition:
+
+- **`src/disk/diskimage.c`:** `my_fseek` (:74), `diskimage_exist` (:111), `diskimage_add_overlay` (:130), `diskimage_recalc_size` (:197), `diskimage_getsize` (:319), `diskimage_get_baseoffset` (:338), `diskimage_set_baseoffset` (:358), `diskimage_getchs` (:382), `diskimage_access__cdrom` (:417), `diskimage__cue_get_token` (:505), `diskimage__cue_resolve_path` (:551), `diskimage__looks_like_cue` (:606), `diskimage__parse_cue` (:660), `diskimage_access__cue` (:1083), `overlay_set_block_in_use` (:1168), `overlay_has_block` (:1219), `fwrite_helper` (:1249), `fread_helper` (:1340), `diskimage__internal_access` (:1531), `diskimage_access` (:1671), `get_default_disk_type_for_machine` (:1701), `diskimage_add` (:1747), `diskimage_bootdev` (:2232), `diskimage_getname` (:2262), `diskimage_is_a_cdrom` (:2291), `diskimage_is_a_tape` (:2312), `diskimage_sync` (:2364), `diskimage_dump_info` (:2424).
+- **`src/disk/bootblock.c`:** `load_bootblock` (:70).
+- **`src/disk/diskimage_scsicmd.c`:** `scsi_transfer_alloc` (:73), `scsi_transfer_free` (:101), `scsi_transfer_allocbuf` (:135), `diskimage__return_default_status_and_message` (:174), `diskimage__return_check_condition` (:208), `diskimage__switch_tape` (:227), `diskimage_scsicommand` (:268).
+- **`src/disk/bootblock_iso9660.c`:** `debug_print_volume_id_and_filename` (:57), `iso_load_bootblock` (:99).
+
+Functions not read in those four files: **none**. Supporting files were inspected for the cited callers and guards; their remaining functions and paths were **not checked**.

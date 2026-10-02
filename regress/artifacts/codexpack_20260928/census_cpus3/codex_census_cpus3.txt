@@ -1,0 +1,83 @@
+CODEXPACK_CENSUS_CPUS3_ALIVE
+VERDICT: 10 live calls classified -- 1 reachable by guest access at run time, 0 of those not recorded
+
+All repository citations below refer to `db8b1a33`. This was a static reading audit; execution and stock-OS ordering were **not checked**.
+
+The counts match: `cpu_arm.c` has live calls at **561, 608, 623, 661, 686**; `generate_arm_multi.c` at **64, 83, 88, 93, 230**. Each is `exit(1);`. The occurrences at `src/cpus/cpu_arm.c:711`, `src/cpus/cpu_arm.c:2661`, and `src/cpus/cpu_arm.c:2678` are commented out.
+
+```text
+src/cpus/cpu_arm.c:561 | arm_save_register_bank | WHEN: debugger command (invalid CPSR edit, then resumed execution; no independent guest first hit) | CONDITION: "default:" under "switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE)" (src/cpus/cpu_arm.c:525,559) | GUEST LEVEL: n.a. | RECORDED: armmsrmodekill | DISPOSITION: 3 — decline unsupported mode changes and announce once, preserving a valid CPSR/bank pair | high
+src/cpus/cpu_arm.c:608 | arm_load_register_bank | WHEN: guest access | CONDITION: "default:" under "switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE)" (src/cpus/cpu_arm.c:572,606) | GUEST LEVEL: privileged | RECORDED: armmsrmodekill | DISPOSITION: 3 — decline unsupported mode changes and announce once, preserving a valid CPSR/bank pair | high
+src/cpus/cpu_arm.c:623 | arm_exception | WHEN: unreachable | CONDITION: "if (exception_nr < 0 || exception_nr >= N_ARM_EXCEPTIONS)" (src/cpus/cpu_arm.c:621) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — remove process termination, retaining a guarded return before indexing | high
+src/cpus/cpu_arm.c:661 | arm_exception | WHEN: unreachable | CONDITION: "case ARM_EXCEPTION_RESET:" (src/cpus/cpu_arm.c:658) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 7 — implement reset behavior if this exception is connected | high
+src/cpus/cpu_arm.c:686 | arm_exception | WHEN: unreachable | CONDITION: "default:" under "switch (arm_exception_to_mode[exception_nr])" (src/cpus/cpu_arm.c:674,685) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — remove process termination, retaining rejection of the unsupported internal exception | high
+src/cpus/generate_arm_multi.c:64 | generate_opcode | WHEN: construction (generator command line) | CONDITION: "if ((opcode & 0x0e000000) != 0x08000000)" (src/cpus/generate_arm_multi.c:61) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/generate_arm_multi.c:83 | generate_opcode | WHEN: construction (generator command line) | CONDITION: "if (n_regs == 0)" (src/cpus/generate_arm_multi.c:80) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/generate_arm_multi.c:88 | generate_opcode | WHEN: construction (generator command line) | CONDITION: "if (s)" (src/cpus/generate_arm_multi.c:86) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/generate_arm_multi.c:93 | generate_opcode | WHEN: construction (generator command line) | CONDITION: "if (r == 15)" (src/cpus/generate_arm_multi.c:91) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/generate_arm_multi.c:230 | main | WHEN: construction (generator command line) | CONDITION: "if (argc < 2)" (src/cpus/generate_arm_multi.c:228) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+```
+
+The bank switches accept these values: **0x10 USR32, 0x11 FIQ32, 0x12 IRQ32, 0x13 SVC32, 0x17 ABT32, 0x1b UND32, 0x1f SYS32** (`src/include/cpu_arm.h:108–114`; `src/cpus/cpu_arm.c:525–557`; `src/cpus/cpu_arm.c:572–604`). Guest mode-changing paths save the old bank, write CPSR, and load the new bank; therefore the load exit prevents an unsupported mode from surviving to a subsequent save (`src/cpus/cpu_arm_instr.c:838–847`; `src/cpus/cpu_arm_instr.c:1805–1812`; `src/cpus/cpu_arm_instr_dpi.c:218–232`). User-mode MSR applies `"mask &= 0xff000000;"`, excluding the mode field (`src/cpus/cpu_arm_instr.c:826–827`).
+
+The debugger bypass is separate: `"CPU_SETTINGS_ADD_REGISTER32(\"cpsr\", cpu->cd.arm.cpsr);"` exposes CPSR as writable storage (`src/cpus/cpu_arm.c:196`; `src/include/cpu.h:535–537`). Debugger assignment passes writeflag `1`, and the settings writer directly assigns the supplied value (`src/debugger/debugger.c:248`; `src/core/settings.c:230–232`). Thus line 561 is debugger-inducible after resume, although it is not independently guest-reachable.
+
+For the exception exits, the complete table is **0→SVC32, 1→UND32, 2→SVC32, 3→ABT32, 4→ABT32, 5→0, 6→IRQ32, 7→FIQ32**. The header explicitly says `"/*  5 was address exception in 26-bit ARM  */"` (`src/include/cpu_arm.h:116–129`). Active source callers pass **1, 2, 3, 4, 6**; no active caller found supplies an out-of-range value, RESET **0**, or the unsupported mapping **5** (`src/cpus/cpu_arm.c:1753,2677`; `src/cpus/cpu_arm_instr.c:999,1012,1025`; `src/cpus/memory_arm.c:269,273`; `src/cpus/cpu_dyntrans.c:209`). This supports the unreachable classifications at 623, 661, and 686.
+
+The generator obtains opcodes from `"generate_opcode(strtol(argv[i], NULL, 0));"` and is invoked by the build rule to produce `tmp_arm_multi.c`; its exits execute in the generator, before emitted instruction execution (`src/cpus/generate_arm_multi.c:253`; `src/cpus/Makefile.skel:65–66`).
+
+Queue searches covered the filenames, enclosing function names, diagnostic messages, and related defect terms:
+
+- `armmsrmodekill` explicitly names the load-bank `default:` → `fatal(); exit(1)` (`OUTSTANDING_BUGS.md:20273–20278`). It also says **“SAVE (`:559`) IS NOT FIRST-HIT REACHABLE”** and **“The process dies in LOAD”** (`OUTSTANDING_BUGS.md:20332–20336`). Its disposition is **“MEMBER 3 … AT BOTH `default:` ARMS”**, with the requirement to refuse the mode-field write before save or roll CPSR back (`OUTSTANDING_BUGS.md:20330,20346–20350`).
+- The `arm_exception` matches include `"arm_exception(cpu, ARM_EXCEPTION_UND);"` in discussion of coprocessor exception delivery; they do not record its three terminating branches (`OUTSTANDING_BUGS.md:18704–18712`).
+- Generator filename matches describe an **“emitted fast path [that] is order-blind”**, a different defect. No matching entry was found for its command-line exits (`OUTSTANDING_BUGS.md:1522–1525`).
+
+(a) The guest-access ranking contains one process-termination site:
+
+1. **`src/cpus/cpu_arm.c:608`** — an unsupported privileged mode transition, below ordinary legal OS mode changes in priority: supported modes have explicit branches, while this termination requires the default branch. Actual stock-OS occurrence was not checked (`src/cpus/cpu_arm.c:572–608`; `src/cpus/cpu_arm_instr.c:826–847`).
+
+(b) The CPU-stop assignments are **659, 1219, 1227, 1495, 1510, 1535, 1541, 1557, 1571, 1600, 1629, 1653, 1690, 1757, 1769, 1810** in `cpu_arm.c`. Line **659** accompanies the exit at **661**, so it is not an additional CPU-only failure. The generator contains no `cpu->running = 0` assignment (`src/cpus/generate_arm_multi.c:1–364`).
+
+```text
+src/cpus/cpu_arm.c:659 | arm_exception | WHEN: unreachable | CONDITION: "case ARM_EXCEPTION_RESET:" (src/cpus/cpu_arm.c:658) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 7 — implement reset; companion to exit at 661 | high
+src/cpus/cpu_arm.c:1219 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (!(cpu->pc & 1) || !(cpu->cd.arm.cpsr & ARM_FLAG_T))" (src/cpus/cpu_arm.c:1216) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — correct Thumb PC-write/state handling | high
+src/cpus/cpu_arm.c:1227 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0], sizeof(ib), MEM_READ, CACHE_INSTRUCTION))" (src/cpus/cpu_arm.c:1223–1224) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:2614–2615 | DISPOSITION: 5 — let the prefetch abort execute instead of stopping the CPU | high
+src/cpus/cpu_arm.c:1495 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "default:" under "switch ((iw >> 6) & 15)" in main opcode 0x4, op10 0 (src/cpus/cpu_arm.c:1405–1409,1493) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement missing data-processing operations | high
+src/cpus/cpu_arm.c:1510 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (r3 == ARM_PC)" then "if (cpu->pc & 1)" in the MOV branch (src/cpus/cpu_arm.c:1501–1508) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement the correct Thumb PC operand | high
+src/cpus/cpu_arm.c:1535 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "else" after "if ((iw & 0xff87) == 0x4700)" in "case 7:" (src/cpus/cpu_arm.c:1523–1533) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement model-supported branch/exchange forms, with architectural handling of invalid forms | medium
+src/cpus/cpu_arm.c:1541 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "default:" under "switch (op11_8)" in main opcode 0x4, op10 1 (src/cpus/cpu_arm.c:1499–1500,1539) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement missing high-register operations | high
+src/cpus/cpu_arm.c:1557 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (!cpu->memory_rw(cpu, cpu->mem, tmp, &word[0], sizeof(word), MEM_READ, CACHE_INSTRUCTION))" (src/cpus/cpu_arm.c:1554–1555) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:20379–20381 (family cross-reference; exact-site coverage not checked) | DISPOSITION: 5 — deliver a data abort for the literal load; correct its instruction-access classification | high
+src/cpus/cpu_arm.c:1571 | arm_cpu_interpret_thumb_SLOW | WHEN: unreachable | CONDITION: "default:" under "switch (op10)" (src/cpus/cpu_arm.c:1406,1569) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 — delete the unreachable stop | high
+src/cpus/cpu_arm.c:1600 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (!cpu->memory_rw(cpu, cpu->mem, addr, &word[0], len, isLoad ? MEM_READ : MEM_WRITE, CACHE_DATA))" (src/cpus/cpu_arm.c:1597–1598) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:20379–20381 (family cross-reference; exact-site coverage not checked) | DISPOSITION: 5 — let the data abort execute instead of stopping the CPU | high
+src/cpus/cpu_arm.c:1629 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (!cpu->memory_rw(cpu, cpu->mem, addr, &word[0], sizeof(word), MEM_READ, CACHE_DATA))" in the SP-relative load (src/cpus/cpu_arm.c:1624–1627) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:20379–20381 (family cross-reference; exact-site coverage not checked) | DISPOSITION: 5 — let the data abort execute instead of stopping the CPU | high
+src/cpus/cpu_arm.c:1653 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (!cpu->memory_rw(cpu, cpu->mem, addr, &word[0], sizeof(word), MEM_WRITE, CACHE_DATA))" in the SP-relative store (src/cpus/cpu_arm.c:1649–1651) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:20379–20381 (family cross-reference; exact-site coverage not checked) | DISPOSITION: 5 — let the data abort execute instead of stopping the CPU | high
+src/cpus/cpu_arm.c:1690 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "default:" under "switch (op11_8)" in "case 0xb:" (src/cpus/cpu_arm.c:1659–1660,1688) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement model-supported miscellaneous instructions, with architectural handling of invalid forms | medium
+src/cpus/cpu_arm.c:1757 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: final "else" after "if (condition_code < 0xe)" and "else if (condition_code == 0xf)" (src/cpus/cpu_arm.c:1696,1752,1755) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 5 — undefined-instruction exception | high
+src/cpus/cpu_arm.c:1769 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "if (iw & 1)" within "case 0xe:" / "if (iw & 0x0800)" (src/cpus/cpu_arm.c:1762–1767) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 5 — undefined-instruction exception | high
+src/cpus/cpu_arm.c:1810 | arm_cpu_interpret_thumb_SLOW | WHEN: guest access | CONDITION: "default:" under "switch (main_opcode)" (src/cpus/cpu_arm.c:1267,1808) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement missing instruction families | high
+```
+
+The selector enumeration behind those defaults is:
+
+- **1495:** missing selectors **2, 3, 4, 5, 6, 9, 11, 14, 15**, corresponding to register shifts, ADC, SBC, NEG, CMN, BIC, MVN (`src/cpus/cpu_arm.c:1409–1495`; `src/include/cpu_arm.h:72–74`).
+- **1541:** `op11_8` values **4, 5**; **6, 7** have explicit branches (`src/cpus/cpu_arm.c:1254–1255,1499–1541`).
+- **1571:** possible `op10` values are **0, 1, 2, 3**, and each has an explicit branch; the default receives none (`src/cpus/cpu_arm.c:1254,1407,1499,1546–1547`).
+- **1690:** default values **1, 2, 3, 6, 7, 8, 9, 10, 11, 14, 15**; explicit cases are **0, 4, 5, 12, 13** (`src/cpus/cpu_arm.c:1255,1659–1690`).
+- **1757:** the remaining condition is **0xe** (`src/cpus/cpu_arm.c:1253,1696,1752–1757`).
+- **1810:** missing main opcodes are **0x5, 0xa, 0xc** (`src/cpus/cpu_arm.c:1252,1267–1810`).
+
+Line 1219 is not merely an internal assertion: the Thumb MOV-to-PC branch writes `"cpu->pc = addr - sizeof(uint16_t);"` after updating T; the normal tail then adds `sizeof(uint16_t)`, leaving the even `addr` established at entry. The next dispatcher checks T alone (`src/cpus/cpu_arm.c:1214,1515–1520,1814`; `src/cpus/cpu_dyntrans.c:255–260`). Ordinary control flow can therefore reach it.
+
+For MMU faults, the translator already calls `arm_exception` before returning failure. The remedy must preserve that exception, without delivering it twice (`src/cpus/memory_arm.c:268–276`; `src/cpus/memory_rw.c:248–268`). The literal-load branch additionally passes `"CACHE_INSTRUCTION"`, selecting the prefetch-abort path for a data load (`src/cpus/cpu_arm.c:1548–1555`; `src/cpus/memory_arm.c:268–273`).
+
+The manual explicitly calls condition **0b1110** “UNDEFINED” and likewise makes a BLX suffix with bit zero set “UNDEFINED”; those support disposition 5 at 1757 and 1769 (`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ddi0100i.txt:21814`, `:22160–22164`, read on disk).
+
+Queue coverage for the stops is narrower than the census: **“#10 PPC/ARM slow-path ifetch `exit`”** explicitly includes **“`cpu_arm.c` `running=0`”** (`OUTSTANDING_BUGS.md:2614–2615`). The later text names `armthumbabortkill` and contrasts process death with `"running = 0"`, but does not identify its individual data-access branches; the family citations above do not establish exact-site coverage (`OUTSTANDING_BUGS.md:20379–20381`).
+
+(c) The denominator, restricted to the two requested files:
+
+- **Fully read in `cpu_arm.c`:** `arm_cpu_new` (:94), `arm_setup_initial_translation_table` (:226), `arm_translation_table_set_l1` (:262), `arm_translation_table_set_l1_b` (:290), `arm_cpu_dumpinfo` (:318), `arm_cpu_list_available_types` (:334), `arm_cpu_register_dump` (:359), `arm_save_register_bank` (:522), `arm_load_register_bank` (:569), `arm_exception` (:616), `arm_cpu_tlbdump` (:745), `arm_irq_interrupt_assert` (:796), `arm_irq_interrupt_deassert` (:801), `arm_cpu_disassemble_instr_thumb` (:815), `thumb_addsub_flags` (:1177), `arm_cpu_interpret_thumb_SLOW` (:1210), `arm_mcr_mrc` (:2643), and `arm_cdp` (:2674).
+- **Not fully read:** `arm_cpu_disassemble_instr` (`src/cpus/cpu_arm.c:1832`); only fragments and the whole-file termination/stop search were examined.
+- **Fully read in `generate_arm_multi.c`:** `generate_opcode` (`src/cpus/generate_arm_multi.c:57–205`) and `main` (`src/cpus/generate_arm_multi.c:223–363`). Functions not read there: none.
+
+Supporting caller, memory, debugger, settings, header, build-rule, queue, and manual passages were examined as cited; the rest of those files was not comprehensively audited.

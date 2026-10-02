@@ -1,0 +1,39 @@
+ASTRARETRO_DEVJAZZ_ALIVE
+VERDICT: 6 findings (4 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 16 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No files written, builds performed, or probes executed.
+
+F1 | `src/devices/dev_jazz.c:285` | #257, relying on the guard retained by `9d18d156` | CODE | live at HEAD: yes | Programming IT_VALUE=0 schedules 1000 Hz at line 435, but `interval_start > 0` suppresses delivery of every tick. The alternative branch is inactive at its default value. This contradicts #257’s stated N≥0 behavior; [QEMU’s RC4030 implementation](https://raw.githubusercontent.com/qemu/qemu/master/hw/dma/rc4030.c) also accepts zero and schedules it. | Smallest check: trace zero through the write handler, callback, and delivery predicate. | confidence high
+
+F2 | `src/devices/dev_jazz.c:276` | upstream, relied on by #257 | CODE | live at HEAD: yes | A guest that programs the timer and leaves it unacknowledged indefinitely makes signed `int pending_timer_interrupts` overflow. There is no saturation; the timer core’s per-call catch-up bound does not bound this accumulated counter. At the newly supported 1000 Hz, overflow occurs after approximately 24.9 days. | Smallest check: boundary-value unit check of the callback and inspection of every counter assignment. | confidence high
+
+F3 | `src/devices/dev_jazz.c:697` | upstream, relied on by #69 and `9d18d156` | CODE | live at HEAD: yes | With two local interrupts pending, reading the vector clears CPU IRQ3 without clearing either pending bit. Servicing the first source leaves the second pending but IRQ3 low. Rewriting EXT_IMASK with IP3 still enabled also fails to restore it: the old/new predicates both remain true. Already filed as **OB-22**, `OUTSTANDING_BUGS.md:2909`. | Smallest check: trace vector-read, first-source deassert, and unchanged-mask write through lines 151–154 and 453–469. | confidence high
+
+F4 | `src/devices/dev_jazz.c:143` | upstream, relied on by `9d18d156` | CODE | live at HEAD: yes | Disabling a local source through LB_IE does not prevent forwarding when CPU IP3 is enabled. The committed hardware definitions identify jazzio offset +2 as local-bus enables (`src/include/thirdparty/pica.h:117`), but lines 677–683 store it as `jazz_timer_value`; the corrected forwarding predicate never consults a local enable mask. Already recorded at `OUTSTANDING_BUGS.md:2730`, without a separate ID. | Smallest check: compare the LB_IE definition, its handler, and the forwarding predicate. | confidence high
+
+F5 | `CHANGELOG.md:21649` | #69 / `8dd86b5a` | RECORD | live at HEAD: yes | The record identifies `0x8000` as the timer-enable bit and describes direct ANDing of pending-line bits with EXT_IMASK. At HEAD, writing that enable value does not enable the timer: the code uses CPU-IP6 bit `0x10` and separate predicates. | Smallest check: compare lines 21649–21653 with `dev_jazz.c:80,145,463`. | confidence high
+
+F6 | `CHANGELOG.md:20436` | #267 | RECORD | live at HEAD: yes | The claim that PTE-directed DMA “stays within guest RAM” is false. A guest-supplied PTE can name an MMIO or unmapped physical page; TL_LIMIT bounds only the table index. The destination is passed to the physical memory dispatcher without a RAM-range check. This finding concerns the stated confinement guarantee, not an established host overrun. | Smallest check: inspect `dev_jazz.c:238–259` and `memory_rw.c:436,584,663`. | confidence high
+
+Checked clean in `src/devices/dev_jazz.c`:
+
+- Line 65: timer pending-bit constant matches registered Jazz line 15.
+- Line 130: ISA forwarding requires both an enabled pending source and EXT_IP4.
+- Line 143: native forwarding distinguishes source bits from CPU-IP enable bits.
+- Line 153: native deassertion uses the same CPU-IP mapping.
+- Line 453: actual EXT_IMASK transitions correctly update IRQ3/IRQ6.
+- Line 480: every EXT_IMASK write reevaluates pending ISA delivery.
+- Line 285: positive timer reloads continue delivering after the soft countdown expires.
+- Line 308: the alternative timer branch routes through the IP6-gated Jazz interrupt.
+- Line 435: frequency calculation avoids signed denominator overflow and division by zero.
+- Line 786: power-on frequency remains 100 Hz; reload 9 preserves it.
+- Line 326: CONFIG writes are ignored with a bounded diagnostic.
+- Line 485: undefined main-register reads return zero; writes are ignored.
+- Line 402: ISA-vector diagnostics no longer use unconditional `printf`.
+- Line 379: DMA count masking and readback use the same 20-bit field.
+- Line 223: nonzero TL_LIMIT stops an entry whose byte offset reaches the limit; zero bypass is explicitly documented.
+- Line 255: the shared copy clamp bounds both transfer directions by the remaining programmed count for ordinary RAM transfers.
+
+No TEST-GAP counted: `regress/diff_timer.c:73` includes only the timer core, and `regress/gate_mips.sh` checks boots; these rounds explicitly describe boot validation rather than claiming dedicated boundary regression rows.
+
+DENOMINATOR: read 18 of 18 hunks of the net diff

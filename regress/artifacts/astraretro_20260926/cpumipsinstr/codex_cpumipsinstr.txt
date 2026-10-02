@@ -1,0 +1,60 @@
+ASTRARETRO_CPUMIPSINSTR_ALIVE
+VERDICT: 12 findings (10 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 27 items checked clean
+
+Reviewed committed `8ea26abb` only. No files written, builds performed, or tests executed. Checks below are static; proposed checks were not run. Except where noted, no matching open filing was found in `OUTSTANDING_BUGS.md`.
+
+F1 | `src/cpus/cpu_mips_instr.c:4922` | upstream, sibling missed by #236 | CODE | live at HEAD: yes | Executing the R5900-only COP0 EI/DI forms on an R4000 still reaches `goto bad`, stopping the CPU instead of raising RI. Sibling exits remain at 4928, 5011, 5021 and 5027 despite repairing the CO default. | Smallest check: inventory COP0’s remaining `goto bad` paths and follow `cpu_dyntrans.c:2014`. | confidence high
+
+F2 | `src/cpus/cpu_mips_instr.c:4667` | #235 | CODE | live at HEAD: yes | A guest executes the reboot-sentinel BREAK through a TLB-backed RAM address whose low bits match the reset address. The guard masks the **virtual** address and selects `reboot`, although execution did not originate from the injected stub. | Smallest check: follow `addr` from 4281 and compare the predicate with the segment-specific translation in `memory_mips_v2p.c:236`. | confidence high
+
+F3 | `src/cpus/cpu_mips_instr.c:2364` | upstream, sibling missed by #209 | CODE | live at HEAD: yes | Legal ADDIU arithmetic crossing the signed 32-bit boundary still evaluates signed C addition. The same UB remains in fused handlers at 245, 336, 1398, 3591/3595, 3678 and 3701. The required nontrapping arithmetic is documented at `_scratchpad/mips-iv.txt:129`. | Smallest check: inspect the addition operand types against the unsigned implementation of ADDI. | confidence high
+
+F4 | `src/cpus/cpu_mips_instr.c:1542` | #232 | CODE | live at HEAD: yes | In MODE32, a J near the upper boundary of positive 32-bit addresses makes `page_base + arg[1]` overflow signed `int32_t` before the subsequent subtraction restores the intended delay-slot address. JAL and traced JAL repeat this at 1570 and 1598. | Smallest check: expand `MODE_int_t` and substitute the decoder’s `arg[1]` expression from 4834; no committed overflow-wrapping compiler flag protects it. | confidence high
+
+F5 | `src/cpus/cpu_mips_instr.c:2097` | upstream, relied on by #209 | CODE | live at HEAD: yes | SUB and DSUB detect overflow using the sign of the **negated** subtrahend. Negating the minimum signed value preserves its sign: `MIN−MIN` incorrectly traps, while `0−MIN` incorrectly succeeds. DSUB repeats the defect at 2117. Hardware requirements: `_scratchpad/mips_r4000.txt:5562` and `:4883`. | Smallest check: evaluate both predicates for those two arithmetic cases. | confidence high
+
+F6 | `src/cpus/cpu_mips_instr.c:3384` | upstream, relied on by #233 | CODE | live at HEAD: yes | A matched cache-invalidation fold executing in mapped user code with CU0 clear bypasses the first MTC0’s availability check. It changes the loop register and advances to the final MTC0 before CpU occurs. The guard examines proposed IsC, not current COP0 usability. Requirement: `_scratchpad/mips-iv.txt:236`. | Smallest check: compare the successful folded path with scalar MTC0’s check at 2457; translation read-ahead permits installation before privileged execution. | confidence high
+
+F7 | `src/cpus/cpu_mips_instr.c:2449` | upstream, sibling missed by #233 | CODE | live at HEAD: yes | User-mode MFC0/DMFC0 with CU0 clear still reads CP0 instead of raising CpU; destination-zero decoding can suppress the exception entirely. Requirement: `_scratchpad/mips_r4000.txt:1158`. **Already filed:** `#233 remainder`, `OUTSTANDING_BUGS.md:2636`. | Smallest check: inspect all read handlers and the zero-register folds at 4950/4965 for availability checks. | confidence high
+
+F8 | `src/cpus/cpu_mips_instr.c:83` | upstream, relied on by #233 | CODE | live at HEAD: yes | An R3000 kernel executing MTC0 from mapped low memory with CU0 clear is incorrectly classified as user-mode and gets CpU. The new write guard relies on PC instead of Status.KUc. Kernel access to low addresses and unconditional kernel COP0 usability are documented in the [IDT manual, pp. 2–10 and 3–5](https://student.cs.uwaterloo.ca/~cs350/common/r3000-manual.pdf). **Already filed:** `#233 remainder`, `OUTSTANDING_BUGS.md:2637`. | Smallest check: compare this predicate with the Status-based mode selection in `memory_mips_v2p.c:156`. | confidence high
+
+F9 | `src/cpus/cpu_mips_instr.c:5086` | #290 | CODE | live at HEAD: yes | Paired-single format on R4000 now raises RI. Reserved FPU formats require FCSR Cause.E plus FPE; with CU1 clear, CpU takes precedence, but this route bypasses the availability check too. See `_scratchpad/mips_r4000.txt:1627`, `:1162`, `:1158`, corroborated by the [manufacturer’s manual](https://minnie.tuhs.org/CompArch/Resources/R4400_Uman_book_Ed2.pdf#page=226). | Smallest check: compare those requirements with `reserved:139` and `cop1_slow:2587`. | confidence high
+
+F10 | `src/cpus/cpu_mips_instr.c:5410` | #309 | CODE | live at HEAD: yes | Legal SYNCI on a modeled MIPS32 Release 2 CPU reaches the new RI fallback because no SYNCI case exists. `_scratchpad/mips32_volII.txt:1665` defines the instruction; `:1668` specifies RI for Release 1. | Smallest check: compare the REGIMM case inventory with `REGIMM_SYNCI` and the Release 2 CPU definitions. | confidence high
+
+F11 | `CHANGELOG.md:19999` | #209 | RECORD | live at HEAD: yes | The statement that SUB/DSUB overflow trapping was “already correctly implemented” is false for the minimum-subtrahend cases in F5. | Smallest check: evaluate the predicates at 2097/2117 for those cases. | confidence high
+
+F12 | `CHANGELOG.md:23043` | #309 | RECORD | live at HEAD: yes | The claimed three implemented CPU-specific REGIMM operations are absent: MTSAB, MTSAH and SYNCI have header definitions but no decoder cases, and reach RI. | Smallest check: grep their identifiers in committed `cpu_mips_instr.c`. | confidence high
+
+The following 27 clean checks refer to `src/cpus/cpu_mips_instr.c` at HEAD; each is limited to the stated property:
+
+- **182:** Compiled ordinary and likely integer-branch handlers guard nested execution.
+- **904:** All eight conditional branch-and-link handlers guard before link writes.
+- **1328:** Compiled register/direct jumps and trace variants guard before delayed execution.
+- **235:** Fused branch guards precede effects; JR_RA and ADDIU/DADDIU branch siblings included.
+- **2553:** The compiled COP1 branch handler also guards nesting.
+- **1347:** All six #228 variants fault after the delay instruction, preserve target-PC/BD=0 state, and handle tracing/accounting correctly.
+- **2056:** ADD, DADD, ADDI and DADDI use unsigned intermediates with correct overflow predicates.
+- **2457:** Scalar MTC0/DMTC0 apply the availability check correctly for R4000 mode state.
+- **2743:** RFE preserves KUo/IEo while popping the lower stack bits.
+- **2908:** Both LL widths raise AdEL on misalignment before loading.
+- **2993:** Both SC widths raise AdES on misalignment before storing.
+- **3145:** LDC1 and SDC1 reject the FR=0 register-31 array overrun.
+- **3153:** LDC1 initializes its staging value before a potentially faulting load.
+- **3307:** Descending memset bounds take the fallback before unsigned subtraction.
+- **3381:** Reachable MODE32 cache-fold counts are widened and bounded before narrowing.
+- **3986:** Both compilation modes check the actual SB handler.
+- **3472:** Linux idle checks both host-page pointers before dereferencing them.
+- **3417:** Both idle variants distinguish dispatch counters from successful-fold counters.
+- **3551:** strlen’s scan is page-bounded and its fire counter follows fallback checks.
+- **3820:** All nine combiner-entry counters use valid indices before lookback guards.
+- **3833:** Installation counters match replacement variants, widths and byte orders.
+- **3352:** Remaining fire-counter indices and placement match their stated accounting rules.
+- **4330:** Actual TLB/IBE fetch exceptions retain their redirected execution state.
+- **4869:** ERET admission distinguishes R3000 from R4000.
+- **4892:** All three power-management labels share the intended CPU-model gate.
+- **5093:** The separate PS arm preserves R4000 DMFC1/DMTC1/L admission.
+- **5398:** Speculative REGIMM decoding preserves the warning latch; genuinely reserved cases reach RI. The reserved cases and branch controls have rows in `mips_subnorm_probe.py`.
+
+DENOMINATOR: read 115 of 115 hunks of the net diff

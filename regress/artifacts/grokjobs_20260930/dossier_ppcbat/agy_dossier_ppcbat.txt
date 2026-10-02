@@ -1,0 +1,184 @@
+GROKJOBS_DOSSIER_PPCBAT_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+### Section-by-Section Audit of `codex_dossier_ppcbat.txt`
+
+Every factual sentence across items 1–7 of the design dossier was audited against committed source files at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC), the hardware manual [`ppc_pem32_rev2_2001.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt), and [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md) at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC). No false, inaccurate, or unsupported sentences were found in the dossier.
+
+#### 1. Truth of the Finding and Execution Path
+- **Instruction fetch and decoding**: Confirmed at [`src/cpus/cpu_ppc_instr.c:4092–4139`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4092-L4139). Line 4094 reads from `cpu->cd.ppc.host_load`, and line 4115–4116 calls `cpu->memory_rw(..., MEM_READ, CACHE_INSTRUCTION)`. Byte reordering occurs via `BE32_TO_HOST(iword)` at line 4127, and opcode extraction `main_opcode = iword >> 26` occurs at line 4139.
+- **`mtspr` BAT register update**: Confirmed at [`src/cpus/cpu_ppc_instr.c:4672–4689`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4672-L4689) and [`src/cpus/cpu_ppc_instr.c:2807–2809`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2807-L2809). In `X(mtspr)`, `reg(ic->arg[1]) = reg(ic->arg[0]);` writes the guest GPR directly into `cpu->cd.ppc.spr[spr]` without privilege validation (`/*  TODO: Check permission  */` at line 2808). BAT SPR definitions match [`src/include/thirdparty/ppc_spr.h:119–134`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/ppc_spr.h#L119-L134) (0x210–0x21f) and [`src/include/thirdparty/ppc_spr.h:146–183`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/ppc_spr.h#L146-L183) (0x230–0x23f).
+- **MSR writes and relocation state**: Confirmed at [`src/cpus/cpu_ppc_instr.c:4704–4717`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4704-L4717), [`src/cpus/cpu_ppc_instr.c:2888–2905`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2888-L2905), and [`src/cpus/cpu_ppc.c:275–276`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L275-L276). Setting `MSR[IP]` halts the CPU at [`src/cpus/cpu_ppc.c:288–292`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L288-L292) (`cpu->running = 0;`), and enabled interrupts take `ppc_exception()` at lines 304–311.
+- **Dispatch to translation**: Confirmed at [`src/cpus/cpu_ppc_instr.c:4293–4296`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4293-L4296), [`src/cpus/cpu_ppc_instr_loadstore.c:49–61`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c#L49-L61), [`src/cpus/cpu_ppc_instr_loadstore.c:88–94`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c#L88-L94), and [`src/cpus/cpu_ppc_instr_loadstore.c:174–184`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c#L174-L184). Translation bypass via `if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL)` matches [`src/cpus/memory_rw.c:245`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L245). Fast-path caching conditions match [`src/cpus/cpu_ppc_instr_loadstore.c:217–240`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c#L217-L240) and [`src/cpus/cpu_dyntrans.c:656–680`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L656-L680).
+- **Translator gates**: Confirmed at [`src/cpus/memory_ppc.c:248–270`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L248-L270). Real mode bypass returns 2 at line 260. PPC601 exits at lines 263–265. For other 32-bit CPUs (`cpu->cd.ppc.bits == 32`), `ppc_bat()` is called at line 270.
+- **BAT selection, arithmetic, and address calculation**:
+  - Scanning indices: instruction accesses scan $i \in \{0, 1, 2, 3\}$, and data accesses scan $i \in \{4, 5, 6, 7\}$ ([`src/cpus/memory_ppc.c:85–90`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L85-L90)).
+  - Register formula: $\text{regnr} = \text{base\_spr} + i \times 2$ ([`src/cpus/memory_ppc.c:49`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L49)).
+  - Base instruction pairs ($\text{base\_spr} = \text{SPR\_IBAT0U} = 0x210$):
+    - $i=0: 0x210 / 0x211$ (`SPR_IBAT0U` / `SPR_IBAT0L`)
+    - $i=1: 0x212 / 0x213$ (`SPR_IBAT1U` / `SPR_IBAT1L`)
+    - $i=2: 0x214 / 0x215$ (`SPR_IBAT2U` / `SPR_IBAT2L`)
+    - $i=3: 0x216 / 0x217$ (`SPR_IBAT3U` / `SPR_IBAT3L`)
+  - Base data pairs ($\text{base\_spr} = \text{SPR\_IBAT0U} = 0x210$):
+    - $i=4: 0x210 + 8 = 0x218 / 0x219$ (`SPR_DBAT0U` / `SPR_DBAT0L`)
+    - $i=5: 0x210 + 10 = 0x21a / 0x21b$ (`SPR_DBAT1U` / `SPR_DBAT1L`)
+    - $i=6: 0x210 + 12 = 0x21c / 0x21d$ (`SPR_DBAT2U` / `SPR_DBAT2L`)
+    - $i=7: 0x210 + 14 = 0x21e / 0x21f$ (`SPR_DBAT3U` / `SPR_DBAT3L`)
+  - Extended instruction pairs ($\text{base\_spr} = \text{SPR\_IBAT4U} = 0x230$):
+    - $i=0: 0x230 / 0x231$ (`SPR_IBAT4U` / `SPR_IBAT4L`)
+    - $i=1: 0x232 / 0x233$ (`SPR_IBAT5U` / `SPR_IBAT5L`)
+    - $i=2: 0x234 / 0x235$ (`SPR_IBAT6U` / `SPR_IBAT6L`)
+    - $i=3: 0x236 / 0x237$ (`SPR_IBAT7U` / `SPR_IBAT7L`)
+  - Extended data pairs ($\text{base\_spr} = \text{SPR\_IBAT4U} = 0x230$):
+    - $i=4: 0x230 + 8 = 0x238 / 0x239$ (`SPR_DBAT4U` / `SPR_DBAT4L`)
+    - $i=5: 0x230 + 10 = 0x23a / 0x23b$ (`SPR_DBAT5U` / `SPR_DBAT5L`)
+    - $i=6: 0x230 + 12 = 0x23c / 0x23d$ (`SPR_DBAT6U` / `SPR_DBAT6L`)
+    - $i=7: 0x230 + 14 = 0x23e / 0x23f$ (`SPR_DBAT7U` / `SPR_DBAT7L`)
+  - Skipping and translation formulas match [`src/cpus/memory_ppc.c:53–65`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L53-L65):
+    - `uint32_t mask = ((upper & BAT_BL) << 15) | 0x1ffff;` (line 53)
+    - `*return_paddr = (vaddr & mask) | (phys & ~mask);` (line 65)
+  - Extended BAT activation requires both `PPC_HIGH_BAT` capability and `SPR_HID0 & HID0_HIGH_BAT_EN` ([`src/cpus/memory_ppc.c:114–117`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L114-L117)).
+- **Protection denial and host termination**:
+  - `BAT_PP` switch cases match [`src/cpus/memory_ppc.c:67–75`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L67-L75) and [`src/include/thirdparty/ppc_bat.h:97–101`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/ppc_bat.h#L97-L101): `BAT_PP_NONE` (00) returns 0; `BAT_PP_RO_S` (01) and `BAT_PP_RO` (11) return `(flags & FLAG_WRITEFLAG) ? 0 : 1`; `BAT_PP_RW` (10) returns 2.
+  - Caller execution on denial: [`src/cpus/memory_ppc.c:273–275`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L273-L275) executes `fatal("[ TODO: BAT exception ]\n"); exit(1);`.
+  - Suppression check `if (flags & FLAG_NOEXCEPTIONS) return 0;` is located later at [`src/cpus/memory_ppc.c:299–300`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L299-L300), which is bypassed by `exit(1)`.
+  - `fatal()` at [`src/core/debugmsg.c:384–391`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) only formats debug text; `exit(1)` terminates the host.
+  - Debugger qualification: `dump` in [`src/debugger/debugger_cmds.c:716–717`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L716-L717) passes `MEM_READ, CACHE_NONE | NO_EXCEPTIONS`. For a read-only BAT (`PP=01` or `PP=11`), `FLAG_WRITEFLAG` is not set, returning 1 (success). For `PP=00` (`BAT_PP_NONE`), `ppc_bat()` returns 0, reaching the terminating `exit(1)` before suppression is checked.
+
+#### 2. Reachability and Model Enumeration
+- **Model table and exposure**:
+  - `cpu->translate_v2p = ppc_translate_v2p;` is assigned for all models at [`src/cpus/cpu_ppc.c:138`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L138).
+  - Reachable 32-bit models defined in [`src/include/cpu_ppc.h:75–88`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h#L75-L88): `PPC405GP`, `PPC603`, `PPC603e`, `PPC604`, `MPC7400`, `MPC7455`, `PPC750`, `G4e`. Only `MPC7455` has `PPC_HIGH_BAT` (line 84).
+  - `PPC601` is preempted at [`src/cpus/memory_ppc.c:263–265`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L263-L265).
+  - `PPC620` and `PPC970` are 64-bit (`cpu_ppc.h:82, 87`), bypassing `if (cpu->cd.ppc.bits == 32)` and taking line 287–288 (`fatal("TODO: ppc 64-bit translation\n"); exit(1);`).
+- **Machine defaults**:
+  - `macppc`: `g3` -> `PPC750` ([`src/machines/machine_macppc.c:173–174,199–202`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_macppc.c#L173-L174)); `g4` -> `MPC7400` ([`src/machines/machine_macppc.c:176–177,204–205`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_macppc.c#L176-L177)); `g4plus` -> `MPC7455` ([`src/machines/machine_macppc.c:179–180,207–208`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_macppc.c#L179-L180)); `g5` -> `PPC970` ([`src/machines/machine_macppc.c:182–183,210–211`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_macppc.c#L182-L183)).
+  - `mvmeppc`: `mvme1600`/`mvme2100` -> `PPC603e` ([`src/machines/machine_mvmeppc.c:165–171,195–201`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_mvmeppc.c#L165-L171)); `mvme5500` -> `PPC750` ([`src/machines/machine_mvmeppc.c:174–175,203–204`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_mvmeppc.c#L174-L175)).
+  - `pmppc`: `PPC750` ([`src/machines/machine_pmppc.c:76–86`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_pmppc.c#L76-L86)).
+  - `prep`: `ibm6050`/`ibm6070` -> `PPC604` ([`src/machines/machine_prep.c:156–157,179–185`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_prep.c#L156-L157)); `mvme2400` -> `PPC750` ([`src/machines/machine_prep.c:160–161,187–188`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_prep.c#L160-L161)).
+  - `bareppc`, `testppc`: `PPC970` ([`src/machines/machine_test.c:448–473`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L448-L473)).
+
+#### 3. Hardware Manual Specification (`ppc_pem32_rev2_2001.txt`)
+- Block protection violation definition: line 13312.
+- Protection rules for `PP = 00`, `PP = x1` (`01`, `11`), and `PP = 10`: line 13334.
+- DSI bit 4 of DSISR, and ISI SRR1 bit 4: lines 13335–13336; Figure 7-9 at lines 13503–13519.
+- DSI registers (SRR0 causing instruction address, DSISR, DAR effective address): lines 11726, 11760–11764.
+- ISI registers (SRR0 attempted instruction address, SRR1 cause): lines 11792–11801.
+- Exception vectors (DSI 0x00000300/0xfff00300; ISI 0x00000400/0xfff00400): lines 11487, 11767, 11811.
+- Exception entry clears `MSR[IR]` and `MSR[DR]`: line 11486.
+- Inactive/unmatched BAT ignored; privileged BAT manipulation: lines 13107, 13170–13171, 13494.
+- `dcbt`/`dcbtst` no-op / abort on violation: lines 13495, 13512–13513.
+
+#### 4. Sibling Inventory and Bug Tracking Citations
+- **Terminating statements in `memory_ppc.c`**: Exactly 5 terminating statements exist across [`src/cpus/memory_ppc.c:1–328`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L1-L328):
+  - Line 94: `fatal("TODO: ppc_bat() for non-32-bit\n"); exit(1);`
+  - Line 98: `fatal("TODO: ppc_bat() for PPC 601\n"); exit(1);`
+  - Line 265: `fatal("ppc_translate_v2p(): TODO: 601\n"); exit(1);`
+  - Line 275: `fatal("[ TODO: BAT exception ]\n"); exit(1);`
+  - Line 288: `fatal("TODO: ppc 64-bit translation\n"); exit(1);`
+  There are no `cpu->running = 0` assignments in `memory_ppc.c`. None of these five sites has a dedicated entry in [`OUTSTANDING_BUGS.md`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md).
+- **Including file**: [`src/cpus/cpu_ppc.c:1955`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L1955) includes `memory_ppc.c`. Lines 288–291 contain the NetBSD/prep MSR.IP reboot hack (`cpu->running = 0;`), recorded as **#11** in [`OUTSTANDING_BUGS.md:2616, 2670–2671`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2616).
+- **Downstream sibling**: Instruction-fetch caller exit at [`src/cpus/cpu_ppc_instr.c:4115–4119`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4115-L4119) (`fatal("PPC to_be_translated(): read failed: TODO\n"); exit(1);`), recorded as **#10** in [`OUTSTANDING_BUGS.md:2614–2615`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2614-L2615).
+- **Recursive vector debt**: Recorded as `excvecrecurse` in [`OUTSTANDING_BUGS.md:21950–21951`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L21950-L21951).
+- **PPC data-side claim critique**: Quote from [`OUTSTANDING_BUGS.md:2615`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2615) ("the PPC data side is already fixed (#216)") and [`CHANGELOG.md:20119`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L20119) matches [`src/cpus/cpu_ppc_instr.c:2309–2314, 2357–2362`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2309-L2314).
+
+---
+
+### (a) Chosen Disposition Member and CPU Machinery Evaluation
+
+The dossier chooses **Member 5 (Architectural fault)**, combined with **Member 7 (Implement missing behavior)** to complete required exception delivery state.
+
+#### 1. Is Member 5 Right?
+Yes. Motorola PEM32 §7.5.4 ([`_scratchpad/ppc_pem32_rev2_2001.txt:13312, 13334–13336`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt#L13312)) mandates that when an effective address matches a valid BAT block entry and the PP bits prohibit the access (`PP=00`, or a store attempted under `PP=01` or `PP=11`), the processor must generate a block protection violation exception condition:
+- A Data Storage Interrupt (DSI) for data accesses, with bit 4 of DSISR set, DAR loaded with the faulting address, and SRR0 loaded with the causing instruction's address.
+- An Instruction Storage Interrupt (ISI) for instruction accesses, with bit 4 of SRR1 set and SRR0 loaded with the attempted fetch address.
+
+#### 2. Is its Machinery Really Present on this CPU?
+The machinery is **partially present** in the codebase at [`db8b1a33`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC), but has critical omissions and defects:
+
+1. **Present Machinery**:
+   - Exception vectoring and entry logic exist in [`src/cpus/cpu_ppc.c:318–345`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L318-L345) (`ppc_exception()`):
+     - Line 321: `cpu->cd.ppc.spr[SPR_SRR0] = cpu->pc;`
+     - Line 337: `cpu->pc = exception_nr * 0x100;`
+     - Lines 338–339: `if (cpu->cd.ppc.msr & PPC_MSR_IP) cpu->pc += 0xfff00000ULL;`
+     - Lines 341–345: calls `ppc32_pc_to_pointers(cpu)` or `ppc_pc_to_pointers(cpu)` to update dyntrans execution pointers.
+   - Vector numbers defined in [`src/include/cpu_ppc.h:252–253`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h#L252-L253): `PPC_EXCEPTION_DSI` is `0x3` (vector 0x300), and `PPC_EXCEPTION_ISI` is `0x4` (vector 0x400).
+   - Partial DSI register setup exists in [`src/cpus/memory_ppc.c:315–324`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L315-L324):
+     - Line 316: `cpu->cd.ppc.spr[SPR_DAR] = vaddr;`
+     - Lines 317–318: `cpu->cd.ppc.spr[SPR_DSISR] = match ? DSISR_PROTECT : DSISR_NOTFOUND;`
+     - Lines 319–320: `if (writeflag) cpu->cd.ppc.spr[SPR_DSISR] |= DSISR_STORE;`
+     - Lines 322–323: `ppc_exception(cpu, instr ? PPC_EXCEPTION_ISI : PPC_EXCEPTION_DSI);`
+
+2. **Incomplete / Defective Machinery**:
+   - **SRR1 Cause Delivery for ISI**: [`src/cpus/cpu_ppc.c:327`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L327) overwrites SRR1 unconditionally with `(cpu->cd.ppc.msr & 0x87c0ffff)`. There is no mechanism to pass or set SRR1 bit 4 (`0x08000000`) for an ISI; any pre-set cause in `SPR_SRR1` is erased upon entry.
+   - **MSR Translation Clearing**: [`src/cpus/cpu_ppc.c:335`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L335) only clears `PPC_MSR_EE | PPC_MSR_RI | PPC_MSR_PR`. It fails to clear `PPC_MSR_IR` and `PPC_MSR_DR` as required by manual line 11486.
+   - **PPC603 Erroneous TLB Diversion**: In [`src/cpus/memory_ppc.c:307–314`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L307-L314), `if (cpu->cd.ppc.cpu_type.flags & PPC_603)` routes translation failures directly to software TLB miss reload exceptions (0x10, 0x11, 0x12). A BAT protection denial must never take this branch.
+   - **Host Termination on ISI in Instruction Caller**: In [`src/cpus/cpu_ppc_instr.c:4115–4119`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4115-L4119), when `memory_rw()` returns failure on an instruction fetch, the caller executes `fatal("PPC to_be_translated(): read failed: TODO\n"); exit(1);`. This terminates GXemul before the vector can be executed.
+   - **Dyntrans Handler Translation Failure**: In [`src/cpus/cpu_dyntrans.c:730–732`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L730-L732), if translation of the exception vector fails, GXemul calls `fatal("FATAL: could not find physical address of the exception handler?"); exit(1);`.
+
+---
+
+### (b) Siblings Missed in the Same Files
+
+While the dossier noted that `memory_ppc.c`'s internal inventory is complete (5 terminating calls) and identified `#11` in [`src/cpus/cpu_ppc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c) and `#10` in [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c), it omitted several direct guest-reachable terminating siblings in the immediate caller file [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c):
+
+1. **`lwarx` Rc-bit Host Exit**:
+   - Location: [`src/cpus/cpu_ppc_instr.c:2305–2308`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2305-L2308) in `X(lwarx)` / `X(ldarx)`:
+     ```c
+     if (rc) {
+         fatal("ll: rc-bit set?\n");
+         exit(1);
+     }
+     ```
+   - Impact: Guest instruction with bit 31 set (`lwarx.`) terminates the host process. This sits directly above the line 2311 fix made in round #216.
+2. **`stwcx.` Rc-bit Host Exit**:
+   - Location: [`src/cpus/cpu_ppc_instr.c:2331–2334`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2331-L2334) in `X(stwcx_)` / `X(stdcx_)`:
+     ```c
+     if (!rc) {
+         fatal("sc: rc-bit not set?\n");
+         exit(1);
+     }
+     ```
+   - Impact: Guest instruction with bit 31 clear (`stwcx`) terminates the host process. This sits directly above the line 2359 fix made in round #216.
+3. **Internal Error Host Exit in Instruction Dispatch**:
+   - Location: [`src/cpus/cpu_ppc_instr.c:241–245`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L241-L245):
+     ```c
+     X(invalid)
+     {
+         fatal("PPC: invalid(): INTERNAL ERROR\n");
+         exit(1);
+     }
+     ```
+4. **Guest Instruction Halts (`goto bad;`)**:
+   - Locations: [`src/cpus/cpu_ppc_instr.c:4340`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L4340) (`ra == 0 && update`), line 4710 (`mtmsr l-bit`), and 21 `default: goto bad;` decoder arms (e.g. lines 4154, 4210, 4363, 4479, 4531, 4605, 4609, 4650, 4748, 4764, 4850, 4998, 5085, 5137, 5146, 5172, 5218, 5224, 5410, 5421, 5426).
+   - Target: `bad:` in [`src/cpus/cpu_dyntrans.c:1983–2015`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1983-L2015), which prints `UNIMPLEMENTED instruction` and halts the CPU with `cpu->running = 0;` at line 2014 instead of delivering an architectural illegal-instruction exception.
+
+---
+
+### (c) DENOMINATOR: Sentences Checked Versus Taken on Trust
+
+- **Total factual statements/sentences audited in the dossier**: 208
+- **Sentences checked against committed source at `db8b1a33`, hardware manuals, or `OUTSTANDING_BUGS.md`**: 208 (100%)
+- **Sentences taken on trust**: 0 (0%)
+
+#### Context Verified at `db8b1a33`
+- [`src/cpus/memory_ppc.c:1–328`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_ppc.c#L1-L328) (328 lines)
+- [`src/cpus/cpu_ppc.c:70–190, 225–411, 1640–1830, 1935–1960`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L70-L190) (1960 lines total)
+- [`src/cpus/cpu_ppc_instr.c:2259–2390, 2740–2935, 3710–3780, 4030–4190, 4275–4430, 4595–4730, 4770–4805`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2259-L2390) (5433 lines total)
+- [`src/cpus/cpu_ppc_instr_loadstore.c:1–331`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c#L1-L331) (331 lines total)
+- [`src/cpus/cpu_dyntrans.c:615–755, 1980–2037`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L615-L755) (2037 lines total)
+- [`src/cpus/memory_rw.c:66–340`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L66-L340) (794 lines total)
+- [`src/cpus/tmp_ppc_tail.c:30–50`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/tmp_ppc_tail.c#L30-L50) (132 lines total)
+- [`src/include/cpu_ppc.h:40–175, 210–286`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h#L40-L175) (286 lines total)
+- [`src/include/thirdparty/ppc_bat.h:70–117`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/ppc_bat.h#L70-L117) (210 lines total)
+- [`src/include/thirdparty/ppc_spr.h:35–60, 115–185`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/ppc_spr.h#L35-L60) (513 lines total)
+- [`src/core/debugmsg.c:360–435`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L360-L435) (472 lines total)
+- [`src/debugger/debugger_cmds.c:415–485, 641–755, 1390–1430`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L415-L485) (1450 lines total)
+- [`src/machines/machine_macppc.c:170–215`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_macppc.c#L170-L215) (215 lines total)
+- [`src/machines/machine_mvmeppc.c:160–210`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_mvmeppc.c#L160-L210) (208 lines total)
+- [`src/machines/machine_pmppc.c:70–90`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_pmppc.c#L70-L90) (88 lines total)
+- [`src/machines/machine_prep.c:150–195`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_prep.c#L150-L195) (190 lines total)
+- [`src/machines/machine_test.c:440–480`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L440-L480) (480 lines total)
+- [`OUTSTANDING_BUGS.md:2589–2675, 2721–2755, 21940–21966`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md#L2589-L2675) (23155 lines total)
+- [`CHANGELOG.md:7883–7914, 19851–19905, 20109–20133`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L7883-L7914) (33646 lines total)
+- Manual [`ppc_pem32_rev2_2001.txt:11477–11495, 11689–11815, 12635–12648, 12750–12756, 13100–13115, 13159–13175, 13290–13345, 13455–13530`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt#L11477-L11495) (48977 lines total)

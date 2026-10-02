@@ -1,0 +1,90 @@
+CODEXPACK_CENSUS_DEVICES9_ALIVE
+VERDICT: 14 live calls classified -- 2 reachable by guest access at run time, 1 of those not recorded
+
+All citations refer to committed files at `db8b1a33`. The per-file counts match the supplied census exactly; the calls are enumerated below. The guest-reachable count includes the **intentional console halt**, not just defects.
+
+`GUEST LEVEL: user` means possible with accessible MMIO, including ARM with translation disabled: `arm_translate_v2p()` returns read/write access without a mode check (`src/cpus/memory_arm.c:54-60`). It does **not** establish that a stock OS exposes these devices to applications; those OS permissions were not checked.
+
+```text
+src/devices/dev_ram.c:132 | dev_ram_access | WHEN: unreachable | CONDITION: "switch (d->mode)" (src/devices/dev_ram.c:75), "default:" (:130), excluding "case DEV_RAM_MIRROR:" (:77) and "case DEV_RAM_RAM:" (:107) | GUEST LEVEL: n.a. | RECORDED: prose OUTSTANDING_BUGS.md:5750-5752 | DISPOSITION: 1 | high
+src/devices/dev_ram.c:232 | dev_ram_init | WHEN: construction | CONDITION: "switch (d->mode)" (src/devices/dev_ram.c:171), "default:" (:230), excluding "case DEV_RAM_MIRROR:" (:173) and "case DEV_RAM_RAM:" (:202) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_sgi_ip22.c:315 | dev_sgi_ip22_access | WHEN: unreachable | CONDITION: "case 0x04:" (src/devices/dev_sgi_ip22.c:302), "if (writeflag == MEM_WRITE)" (:303) | GUEST LEVEL: n.a. | RECORDED: ip22legacyabort | DISPOSITION: 7 | high
+src/devices/dev_sgi_ip22.c:339 | dev_sgi_ip22_access | WHEN: unreachable | CONDITION: "case 0x0c:" (src/devices/dev_sgi_ip22.c:334), "if (writeflag == MEM_WRITE)" (:335) | GUEST LEVEL: n.a. | RECORDED: ip22legacyabort | DISPOSITION: 7 | high
+src/devices/dev_v3.c:271 | devinit_v3 | WHEN: construction | CONDITION: "switch (devinit->machine->machine_type)" (src/devices/dev_v3.c:256), "default:" (:269), excluding "case MACHINE_ALGOR:" (:257) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_v3.c:332 | devinit_v3 | WHEN: unreachable | CONDITION: "switch (devinit->machine->machine_type)" (src/devices/dev_v3.c:323), "default:" (:330), excluding "case MACHINE_ALGOR:" (:324); same discriminator already rejected at :269-271 | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 | high
+src/devices/dev_algor.c:211 | devinit_algor | WHEN: construction | CONDITION: "if (devinit->addr != 0x1ff00000)" (src/devices/dev_algor.c:209) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_bebox.c:213 | devinit_bebox | WHEN: construction | CONDITION: "if (i >= machine->ncpus)" (src/devices/dev_bebox.c:210), inside "for (i=0; i<2; i++)" (:209), enumerated i values 0, 1 | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_cons.c:80 | dev_cons_access | WHEN: guest access | CONDITION: "if (relative_addr == DEV_CONS_HALT)" (src/devices/dev_cons.c:75), before the write-direction test (:83), thus reads and writes | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:5751-5752 | DISPOSITION: 7 — implement orderly emulator halt, preserving the intentional halt operation | high classification; medium disposition
+src/devices/dev_cpc700.c:234 | devinit_cpc700 | WHEN: construction | CONDITION: "switch (devinit->machine->machine_type)" (src/devices/dev_cpc700.c:225), "default:" (:232), excluding "case MACHINE_PMPPC:" (:227) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_dreamcast_gdrom.c:1108 | dev_dreamcast_gdrom_access | WHEN: unreachable | CONDITION: data-write arm, "if (d->busy & 0x08)" (src/devices/dev_dreamcast_gdrom.c:1105), then "if (d->cmd_count >= 12)" (:1106) | GUEST LEVEL: n.a. | RECORDED: gdromexitsix | DISPOSITION: 3 — conditional defensive replacement, declining before the command-buffer stores | high classification; medium disposition
+src/devices/dev_fb.c:359 | framebuffer_blockcopyfill | WHEN: unreachable | CONDITION: "if (fillflag)" (src/devices/dev_fb.c:335), "if (y>=0 && y<d->ysize)" (:337), final "else" (:356) after "if (d->bit_depth == 24)" (:341) and "else if (d->bit_depth == 8)" (:350) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 3 — conditional defensive replacement, announce once and return from unsupported fill | high classification; medium disposition
+src/devices/dev_gt.c:274 | dev_gt_init | WHEN: construction | CONDITION: "switch (type)" (src/devices/dev_gt.c:239), "default:" (:273), excluding enumerated cases 11 (:240), 120 (:251), 260 (:262) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_i80321.c:384 | dev_i80321_access | WHEN: guest access | CONDITION: "switch (relative_addr)" (src/devices/dev_i80321.c:177), "default:" (:377), after the PCI-header early return (:151-153); both read and write diagnostic arms converge on exit | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 3 | high classification; medium disposition
+```
+
+Within each census row, subsequent `:line` references retain that row’s source path.
+
+The unreachable classifications rest on these checks:
+
+- **RAM:** `d->mode` is assigned during construction; only `DEV_RAM_MIRROR` and `DEV_RAM_RAM` register the callback, and other modes terminate construction (`src/devices/dev_ram.c:167`, `:173`, `:197-199`, `:202`, `:225-232`). Their values are explicitly **1** and **0**, respectively (`src/include/devices.h:368-369`).
+- **IP22:** the constructor-call expressions at `src/machines/machine_sgi.c:270` and `:278` are commented out; their setup branches already abort at `:268` and `:276`. Registration is inside `dev_sgi_ip22_init`, with no `DEVINIT` entry (`src/devices/dev_sgi_ip22.c:409-433`). Member 7 addresses the missing mask behavior: the source says, “if an interrupt is asserted, and someone writes to this mask register, the interrupt should be masked” (`src/devices/dev_sgi_ip22.c:305-307`).
+- **V3:** the first switch admits only `MACHINE_ALGOR`; the second switch tests the same discriminator after interrupt/PIC/PCI construction (`src/devices/dev_v3.c:256-332`). The intervening constructor bodies do not change it: `device_add`, `devinit_8259`, `bus_pci_init`, and interrupt registration were read (`src/devices/device.c:252-399`; `src/devices/dev_8259.c:259-283`; `src/devices/bus_pci.c:351-382`; `src/core/interrupt.c:81-109`).
+- **GD-ROM:** construction zeroes the state; setting the command-collection busy bit also resets `cmd_count` (`src/devices/dev_dreamcast_gdrom.c:1690`, `:1277-1281`). Counts at accepted-store entry enumerate **0, 2, 4, 6, 8, 10**; resulting counts enumerate **2, 4, 6, 8, 10, 12**. At **12**, the busy bit clears before command dispatch (`src/devices/dev_dreamcast_gdrom.c:1111-1115`). BUSY writes only clear bits (`:970`). Merely deleting the exit would remove protection immediately before the buffer stores (`:1111-1112`).
+- **Framebuffer:** the caller search found copy calls at `src/devices/dev_igsfb.c:122` and `src/devices/dev_ps2_gif.c:302`, and fill calls at `src/devices/dev_igsfb.c:135` and `src/devices/dev_ps2_gif.c:318`. Their constructed depths enumerate **8**, **24**—both accepted by the fill helper (`src/devices/dev_igsfb.c:412-415`; `src/devices/dev_ps2_gif.c:416-418`; `src/devices/dev_fb.c:341`, `:350`, `:889-894`). Framebuffer depth assignments found in `src/` are confined to initialization (`src/devices/dev_fb.c:859`, `:863`, `:866`, `:875`, `:881`, `:887`, `:893`).
+
+The unreachable-site dispositions describe possible defensive replacements, not newly established guest defects. In particular, the GD-ROM queue explicitly recommends retaining its invariant tripwire; member 3 above is a conditional alternative under the requested taxonomy, which reserves `KEEP` for setup failures.
+
+Queue searches covered each filename, enclosing function name, and diagnostic text or distinctive fragments. Relevant matches were:
+
+- RAM: “`dev_ram.c:132`'s `default:` is not guest-reachable (`d->mode` is set at init)” (`OUTSTANDING_BUGS.md:5752`).
+- Console: “`dev_cons.c:80` is the testmachine's documented halt port (`exit(0)`, intended)” (`OUTSTANDING_BUGS.md:5751-5752`). Source likewise documents emulator halting and calls the direct exit a temporary implementation (`src/devices/dev_cons.c:30-33`, `:78-80`).
+- IP22: `ip22legacyabort`, “Two `abort()` calls that NO GUEST CAN REACH,” followed by “BOTH ARE COMMENTED OUT” (`OUTSTANDING_BUGS.md:21637-21649`). Its historical locators identify the diagnostic lines; the actual terminating calls are the census’s **315**, **339**.
+- GD-ROM: `gdromexitsix` (`OUTSTANDING_BUGS.md:9404`) names `"Too much GDROM_DATA?"` and says “NOT guest-reachable — keep fatal” (`:9493`); the invariant discussion says “IS NOT REACHABLE AND SHOULD STAY FATAL” (`:9505-9515`). Historical source-line drift does not prevent matching this site.
+- **Excluded as unrelated:** framebuffer OB-27 concerns “in copy mode the source column” and “`from_x` is not clipped” (`OUTSTANDING_BUGS.md:2772-2774`); V3’s mention concerns signed shifting (`:17570-17571`); CPC700’s mention concerns PCI-address reads (`:19798-19806`); `xscaleinten` concerns the CPU coprocessor handler, not `dev_i80321_access` (`:18672-18683`). None records the corresponding census site.
+
+For i80321, member 3 needs care: MCU/I²C backing arrays can already be read or written before the final switch (`src/devices/dev_i80321.c:157-173`). A genuine decline must account for those mutations rather than merely replacing the exit with successful fall-through.
+
+**(a) Guest-access ranking**
+
+This ranks evidenced ordinary use; **stock-OS execution order was not checked**.
+
+1. **`src/devices/dev_cons.c:80`:** a defined, intentional halt operation. Testarm explicitly installs a return stub described as “This stub halts the machine” (`src/machines/machine_test.c:194-202`); the console is installed by common test-machine setup (`:143-146`).
+2. **`src/devices/dev_i80321.c:384`:** unhandled-register access, potentially ordinary or reserved. The header defines `ATU_ATUISR`, while the access switch has no matching case (`src/include/thirdparty/i80321reg.h:126`; `src/devices/dev_i80321.c:177-385`), so the terminating default is not confined to malformed accesses. The device is installed on IQ80321 and Iyonix (`src/machines/machine_iq80321.c:59-61`; `src/machines/machine_iyonix.c:74-77`) and registers this callback (`src/devices/dev_i80321.c:466-468`). Which omitted register a stock driver accesses first was **not checked**.
+
+**(b) CPU-stop sites**
+
+No live literal `cpu->running = 0` remains in these files. The console occurrence is commented out (`src/devices/dev_cons.c:76-77`). The active semantic equivalent is:
+
+```text
+src/devices/dev_i80321.c:201 | dev_i80321_access | WHEN: guest access | CONDITION: "case VERDE_ATU_BASE + ATU_PCSR:" (src/devices/dev_i80321.c:195), "if (writeflag == MEM_WRITE && idata == 0x30)" (:198); loop assigns "cpu->machine->cpus[j]->running = false;" (:201) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 — implement the requested reboot behavior | high classification; medium disposition
+```
+
+This is an ordinary reboot path according to its own comment: “Temporary hack to allow NetBSD/evbarm to reboot itself. Should be rewritten as soon as possible!” (`src/devices/dev_i80321.c:196-197`). It stops emulated execution rather than calling a process terminator (`:198-203`).
+
+**(c) Denominator**
+
+All explicit function bodies in the eleven census files were read. The following lists give definition lines; each line number retains its listed file.
+
+| File | Complete function bodies read |
+|---|---|
+| `src/devices/dev_ram.c` | `dev_ram_access:63`, `dev_ram_init:146` |
+| `src/devices/dev_sgi_ip22.c` | `dev_sgi_ip22_tick:47`, `dev_sgi_ip22_imc_access:62`, `dev_sgi_ip22_unknown_access:166`, `dev_sgi_ip22_unknown2_access:209`, `dev_sgi_ip22_sysid_access:243`, `dev_sgi_ip22_access:277`, `dev_sgi_ip22_init:409` |
+| `src/devices/dev_v3.c` | `v3_isa_interrupt_common:70`, `v3_isa_interrupt_assert:104`, `v3_isa_interrupt_deassert:127`, `dev_v3_pci_access:151`, `dev_v3_access:187`, `devinit_v3:244` |
+| `src/devices/dev_algor.c` | `dev_algor_access:58`, `devinit_algor:200` |
+| `src/devices/dev_bebox.c` | `bebox_interrupt_assert:81`, `bebox_interrupt_deassert:94`, `check_cpu_masks:112`, `dev_bebox_access:122`, `devinit_bebox:198` |
+| `src/devices/dev_cons.c` | `dev_cons_tick:58`, `dev_cons_access:69`, `devinit_cons:112` |
+| `src/devices/dev_cpc700.c` | `cpc700_interrupt_assert:56`, `cpc700_interrupt_deassert:63`, `dev_cpc700_pci_access:77`, `dev_cpc700_int_access:110`, `devinit_cpc700:184` |
+| `src/devices/dev_dreamcast_gdrom.c` | `gdrom_unimpl_first:566`, `alloc_data:641`, `free_data:659`, `handle_command:669`, `dreamcast_gdrom_update_stat:943`, `dev_dreamcast_gdrom_access:954`, `dev_dreamcast_gdrom_dma_access:1367`, `devinit_dreamcast_gdrom:1685` |
+| `src/devices/dev_fb.c` | `set_grayscale_palette:74`, `set_blackwhite_palette:92`, `set_title:105`, `dev_fb_resize:123`, `dev_fb_setcursor:242`, `framebuffer_blockcopyfill:283`, `dev_fb_tick:497`, `dev_fb_access:698`, `dev_fb_init:831` |
+| `src/devices/dev_gt.c` | `timer_tick:80`, `dev_gt_tick:87`, `dev_gt_access:95`, `dev_gt_init:225` |
+| `src/devices/dev_i80321.c` | `i80321_assert:83`, `i80321_deassert:89`, `i80321_interrupt_assert:103`, `i80321_interrupt_deassert:105`, `tmr0_tick:119`, `dev_i80321_tick:126`, `dev_i80321_access:140`, `devinit_i80321:405` |
+
+Supporting complete reads included:
+
+- `device_add`, `device_dumplist`, `device_set_exit_on_error` (`src/devices/device.c:252`, `:408`, `:433`); `bus_pci_init` (`src/devices/bus_pci.c:351`); `dev_8259_access`, `devinit_8259` (`src/devices/dev_8259.c:52`, `:259`).
+- `interrupt_handler_register`, `interrupt_connect` (`src/core/interrupt.c:81`, `:210`); `memory_device_register` (`src/core/memory.c:383`).
+- `arm_cpu_new`, `arm_setup_initial_translation_table`, `arm_translation_table_set_l1` (`src/cpus/cpu_arm.c:94`, `:226`, `:262`); all functions in `src/cpus/memory_arm.c`: `arm_translate_v2p:54`, `arm_check_access:69`, `arm_translate_v2p_mmu:114`.
+- All functions in `src/devices/dev_igsfb.c`: `recalc_sprite_position:96`, `dev_igsfb_op3_written:116`, `dev_igsfb_access:158`, `devinit_igsfb:403`; `devinit_ps2_gif` (`src/devices/dev_ps2_gif.c:404`).
+- Complete `src/machines/machine_test.c`, `src/machines/machine_iq80321.c`, and `src/machines/machine_iyonix.c`.
+
+**Not read completely:** the generated redraw bodies included from `src/devices/fb_include.c` (`src/devices/dev_fb.c:407-479`); `dev_ps2_gif_access` and `test_triangle` (`src/devices/dev_ps2_gif.c:207`, `:69`); supporting setup functions in `machine_sgi.c`, `machine_cobalt.c`, `machine_evbmips.c`, and `machine_mvmeppc.c` beyond relevant contexts; the complete shared memory-access function in `src/cpus/memory_rw.c`; remaining supporting-file functions. Header declarations and queue matches were searched as needed. Hardware manuals, regression bodies, CHANGELOG, and dynamic behavior were **not checked**.

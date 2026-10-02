@@ -1,0 +1,49 @@
+ASTRARETRO_HBUNDLE_REGRESS12_ALIVE
+VERDICT: 9 findings (3 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 4 RECORD, 1 OTHER); 22 items checked clean
+
+Reviewed HEAD `db8b1a33`. All locations below refer to HEAD. Findings are based on source inspection and in-memory predicate checks; no builds, probe runs, writes, or working-tree reads.
+
+F1 | `regress/sh4_chcr_probe.py:261` | #453 | CANNOT-FAIL | **R7 and L0 lost their discriminator after #453.** For R7’s `CHCR0=0x105`, correct code survives with one RS diagnostic. Falling through the RS arm also survives, adding an IE diagnostic that `diags()` ignores. Both versions therefore satisfy R7. At line 368, L0 likewise passes when the return happens only on the first encounter: its second store produces the ignored IE diagnostic. | Smallest check: compare both predicates on the correct transcript and that transcript plus the IE diagnostic; both evaluate true. Counting both diagnostic families distinguishes them. | confidence high
+
+F2 | `regress/sh4_chcr_probe.py:474` | #448 / #453 | CANNOT-FAIL | **Diagnostic-channel downgrades outside RS escape.** R1/R2/R3 and the X rows exercise TS/DM/SM/IE announcements while stepping, where `debug()` and `fatal()` produce identical text. Replacing any one of those announcements with `debug()` preserves their expected counts. F1 exercises only RS, with IE clear, so it cannot expose these changes; normal free-running execution loses the affected announcement. | Smallest check: map F1’s input to the reached diagnostic site and compare the other sessions’ stepping mode against `src/core/debugmsg.c:368`. Add a free-running observation for each uncovered site. | confidence high
+
+F3 | `regress/pcc2_c040_probe.py:235` | #512 | STATUS-LAUNDERED | **A hung control session can pass.** If the benign `GENCTL=0x10` store hangs, `rd()` returns true on its unsentinelled timeout. Cleanup records `how="killed"` or a signal without clearing `alive`. Consequently `genctl ctl` reports `alive`, and `genctl ctlq` also passes because no C040 text appeared. Other sessions can succeed, permitting an entirely green report despite the failed control. | Smallest check: evaluate these rows with an empty transcript, `alive=True`, and `how="killed"`; both pass. Require affirmative post-store completion and reject abnormal termination. | confidence high
+
+F4 | `regress/pcc2_c040_probe.py:305` | #535 | CANNOT-FAIL | **The announcement rows cannot detect loss of the always-visible channel.** All C040 writes execute under `step`, so changing the announcement from `fatal()` to `debug()` preserves presence and count in `c040 says`, `c040 once`, `c040 predirty`, and both MIEN announcement rows. Ordinary free-running execution becomes silent. Already filed as **`pcc2c040debugchan`**, `OUTSTANDING_BUGS.md:21842`. | Smallest check: perform a C040 write while free-running and require both its announcement and affirmative completion. | confidence high
+
+F5 | `regress/pcc2_c040_probe.py:327` | #535 | OTHER | **The MASK latch collision remains uncovered.** Using `PCC2_W_MASK_LEN` for the C040 announcement’s latch passes these sessions: the only pre-dirtied sibling is `PCC2_W_GENCTL_LEN`. A prior debugger halfword write to MASK would then silence the subsequent C040 announcement. Already filed as **`pcc2c040latchswap`**, `OUTSTANDING_BUGS.md:21842`; the probe discloses it at line 397. | Smallest check: pre-dirty the MASK width-warning bit, then require the C040 announcement in that same instance. | confidence high
+
+F6 | `regress/sh4_chcr_probe.py:344` | 0f77c7a3 | RECORD | The explanation says L1/L2/L3’s second stores remain fresh because their words differ, and only identical words reach full suppression. **L1 disproves this:** `0xc221` and `0xc231` both select DM encoding 3 and therefore the same latch bit, `1<<3`. Its second call is fully suppressed. The “L1/L2/L3 report A then B” explanation at line 391 repeats the error. | Smallest check: evaluate the DM latch key for L1’s two values; both are 8. | confidence high
+
+F7 | `regress/sh4_chcr_probe.py:560` | #453 | RECORD | X4’s comment and expectation text say **every other row drives channel 0**. R6 explicitly drives channel 3, and L3 drives channels 0 and 3. The defensible narrower statement concerns other channels reaching the **IE site**, not every row in the file. | Smallest check: compare this claim with R6 at line 235 and L3’s addresses at lines 443–445. | confidence high
+
+F8 | `regress/pcc2_c040_probe.py:52` | 1f2b27ab | RECORD | The header contract still says this is **“NOT a detector of the repair”**, although HEAD includes announcement, suppression, recovery, and collateral-state detectors. The accompanying provenance claim at line 297—four witness rows left “BYTE-FOR-BYTE ALONE”—is also stale: `genctl ctlq` was explicitly re-keyed in `1f2b27ab`. | Smallest check: compare the header with the detector predicates below, and inspect that commit’s change to `ctl_saw_c040`. | confidence high
+
+F9 | `regress/pcc2_c040_probe.py:389` | #535 | RECORD | The correction says `dev_pcc2.c`’s return-mutant comment names a **different site**. It names the same C040 suppression assignment: source lines 372–378 explicitly describe returning there and skipping the following DEASSERT; the assignment is at line 396. The probe’s preassertion addresses precisely that case. `OUTSTANDING_BUGS.md:20136`, **`pcc2c040returnmutant`**, repeats the stale escape premise rather than establishing a different site. | Smallest check: align both comments with the sole C040 suppression assignment and the probe’s preceding MIEN-only write. | confidence high
+
+Checked clean, with each item limited to the stated property:
+
+- `regress/sh4_chcr_probe.py:209` — R1–R3’s invalid RS makes earlier-switch fallthrough produce an additional counted encoding diagnostic.
+- `regress/sh4_chcr_probe.py:225` — R5 exercises RS=15; R6 addresses channel 3 correctly.
+- `regress/sh4_chcr_probe.py:269` — A1–A4 cover the implemented field encodings and count both diagnostic families.
+- `regress/sh4_chcr_probe.py:374` — L1’s narrow-then-wide order distinguishes the documented whole-word latch error.
+- `regress/sh4_chcr_probe.py:421` — L2 and L3 distinguish encoding and channel keys within one process.
+- `regress/sh4_chcr_probe.py:406` — L4’s A,B,A sequence distinguishes accumulation from replacement.
+- `regress/sh4_chcr_probe.py:474` — F1’s RS-specific free-running check requires a nonzero execution sentinel.
+- `regress/sh4_chcr_probe.py:531` — X2 checks four distinct nonreset values through same-session readback.
+- `regress/sh4_chcr_probe.py:550` — X3 checks repetition; X4 requires the actual channel names 1 and 7.
+- `regress/sh4_chcr_probe.py:584` — Startup census and independent 27-row identity are meaningful.
+- `regress/pcc2_c040_probe.py:234` — Control and defect sessions use identical guest store decode, width, and register.
+- `regress/pcc2_c040_probe.py:267` — `genctl ctlq` now matches the current announcement text.
+- `regress/pcc2_c040_probe.py:327` — The aligned GENCTL halfword store reaches the intended width-warning latch.
+- `regress/pcc2_c040_probe.py:430` — STCR’s register/control fields agree with the decoder; the PSR value clears interrupt disable.
+- `regress/pcc2_c040_probe.py:448` — CLMPCC establishes SCCTX pending state, and MIEN asserts the line before suppression.
+- `regress/pcc2_c040_probe.py:470` — Completion address derives from instruction count and lies beyond the stepped setup.
+- `regress/pcc2_c040_probe.py:482` — PC parsing matches the register dump and excludes the shorter command echoes.
+- `regress/pcc2_c040_probe.py:517` — Repeat and recovery sequences exercise subsequent suppression and resumed delivery.
+- `regress/pcc2_c040_probe.py:577` — GENCTL readback detects collateral clearing of MIEN.
+- `regress/pcc2_c040_probe.py:589` — Every interrupt session checks its own pending-source prerequisite.
+- `regress/pcc2_c040_probe.py:94` — Row padding satisfies the gate regex; the gate requires DONE and all 18 named successful rows.
+- `regress/sh4_chcr_probe.py:595` — Gate invocation requires RESULT, PASS, and the row floor; missing output cannot score success.
+
+DENOMINATOR: read 2 of 2 files in full

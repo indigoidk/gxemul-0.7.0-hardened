@@ -1,0 +1,39 @@
+ASTRARETRO_DEVLCA_ALIVE
+VERDICT: 6 findings (4 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 18 items checked clean
+
+Reviewed committed `8ea26abb` only. All findings are from static inspection; nothing was written, built, or executed.
+
+F1 | [src/devices/dev_lca.c:302](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:302) | upstream, relied on by #530 | CODE | live at HEAD: yes | With guest paging enabled, both ISA forwards translate an already-physical address because they omit `PHYSICAL`. Accesses can consequently reach RAM or another device; a mapping back into the sparse handler permits unbounded recursion. Already filed as `lcaisaphys` (`OUTSTANDING_BUGS.md:270`) and `lcaisaphyshit` (`:21944`), without the recursion consequence. | Smallest check: trace both call flags through `memory_rw.c:245` and device dispatch at `:587`. | confidence high
+
+F2 | [src/devices/dev_lca.c:309](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:309) | #530 | CODE | live at HEAD: yes | An unmapped ISA byte read in lane 1, with `halt_on_nonexistant_memaccess` enabled, consumes uninitialized local `byte`. The inner read returns before zero-filling; its result is ignored. Previously `ofs == len` selected zero; the new modulo selects `byte`. Stopping the CPUs does not skip these remaining C statements. Already filed as `lcauninitbyte` (`OUTSTANDING_BUGS.md:22029`); its “dead in effect” qualification concerns guest consumption. | Smallest check: trace `memory_rw.c:676–683` into this packing expression. | confidence high
+
+F3 | [src/devices/dev_lca.c:195](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:195) | #518 | CODE | live at HEAD: yes | Writing IOC_CONF encoding `10` succeeds, but subsequent configuration accesses select primary-bus devices as though it contained `00`; `11` similarly aliases `01`. The two-bit store feeds a one-bit decoder. The [21066 manual, line 9216](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9216), requires both bits to supply PCI AD<1:0>. Already filed as `lcaconfbit1` (`OUTSTANDING_BUGS.md:21838`). | Smallest check: compare the store at `:364` with this decoder. | confidence high
+
+F4 | [src/devices/dev_lca.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:259) | #515 | CODE | live at HEAD: yes | A type-1 configuration read with no responding device returns success without the required master-abort error indication or status log. Both missing-device paths reach `return 1`; STAT0/STAT1 subsequently read zero. The [manual, line 9483](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9483), requires an instruction exception and error logging; `:9494` specifies ERR/CODE/CMD/ADDR. The returned data itself may be arbitrary—the missing error is the defect. Broadly covered by `lcaiocstat0` (`OUTSTANDING_BUGS.md:18534`). | Smallest check: inspect this return path, `bus_pci.c:110`, and the absent STAT register handlers. | confidence high
+
+F5 | [CHANGELOG.md:5529](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:5529) | #515 | RECORD | live at HEAD: yes | The record says `lca_pci_conf` never branches on `reg`, using that premise to dismiss a coverage partition. Type-1/bus-zero reads explicitly select different results for register zero versus other registers through `reg == 0`. | Smallest check: compare the sentence with `dev_lca.c:260` and the existing `t1 reg0`/`t1 reg4` rows in `lca_confbus_probe.py:669`. | confidence high
+
+F6 | [CHANGELOG.md:5336](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:5336) | #518 invalidated #516’s premise | RECORD | live at HEAD: yes | The equivalence warrant for replacing assert’s `|=` with `=` assumes the first assert sees `warned == 0`. An IOC warning before that interrupt now sets the same word’s other bits; assignment would erase those latches. Historical measurements remain historical, but the unconditional equivalence claim is false at HEAD. | Smallest check: compare the IRQ assignment at `dev_lca.c:120` with IOC writers at `:331` and `:495`. | confidence high
+
+Checked clean; source references below are to `src/devices/dev_lca.c` unless otherwise named:
+
+- `:233` — unsigned shift remains defined through iteration 20.
+- `:242` — supported type-1 bus/device extraction uses the correct bounded fields.
+- `:259` — type-1/bus-zero writes bypass the backend and preserve its state.
+- `:119`, `:140` — both IRQ callbacks use matching, separate guard/set bits and return.
+- `:524`, `:563` — warning state is initialized per instance and carried through callback registration.
+- `:96` — Alpha interrupt-delivery absence is supported by the committed CPU and dyntrans code.
+- `:295`, `:297` — zero length is rejected before modulo; positive lengths produce an in-buffer index in both directions.
+- `:364` — IOC_CONF storage retains exactly its two defined bits; consumption is F3.
+- `:384` — TB_ENA retains exactly TEN.
+- `:398`, `:442` — both BASE arms retain W_BASE/SG/WEN and discard reserved bits.
+- `:415`, `:459` — both MASK arms accept the thirteen canonical fields and preserve previous state on rejection.
+- `:329`, `:495` — IOC announcements accumulate bounded reason bits; default directions remain distinct.
+- `:500` — the default-write diagnostic preserves the full operand width.
+- `regress/lca_confbus_probe.py:625` — width, function-bit, and both register-result checks exist.
+- `regress/lca_irqstub_probe.py:350` — separate announcements and repeated assert/deassert bounds are observed.
+- `regress/lca_badval_probe.py:650` — seed/complement checks cover all six filtered register arms.
+- `regress/lca_isalane_probe.py:744` — non-power-of-two fragments distinguish modulo from masking.
+- `regress/lca_widewrite_probe.py:243` — all four wide-write lanes have observable rows.
+
+DENOMINATOR: read 14 of 14 hunks of the net diff

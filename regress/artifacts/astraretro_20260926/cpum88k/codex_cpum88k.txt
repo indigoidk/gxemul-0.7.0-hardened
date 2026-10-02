@@ -1,0 +1,29 @@
+ASTRARETRO_CPUM88K_ALIVE
+VERDICT: 5 findings (4 CODE live at HEAD, 0 RECORD, 1 TEST-GAP); 10 items checked clean
+
+Reviewed committed HEAD `8ea26abb`. Static inspection only; no builds, probe executions, or file writes. Hardware references below use the local transcription of the [Motorola MC88100 User’s Manual](https://www.bitsavers.org/components/motorola/88000/MC88100_RISC_Microprocessor_Users_Manual_2ed_1990.pdf).
+
+F1 | [src/cpus/cpu_m88k.c:799](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:799) | upstream, relied on by #502 | CODE | live at HEAD: yes | **Sibling exception classes still stop every guest CPU.** An FPU-disabled arithmetic instruction, or a supervisor trap naming a residual vector, reaches the global halt instead of architectural exception delivery. #502 repairs seven classes but retains this fallback. Manual: [mc88100.txt:10316](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:10316) and [:9282](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:9282). Already filed as **m88kexcsfu1**; broader delivery is recorded under **m88kexctaildefault**. | Smallest check: inspect `regress/m88k_exc_probe.py` rows `usfu1`, `resid11`, `resid50`, and `resid127`: they explicitly expect HALT. | confidence high
+
+F2 | [src/cpus/cpu_m88k.c:851](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:851) | upstream, relied on by #502 | CODE | live at HEAD: yes | **Returning from a delay-slot fault executes a skipped instruction.** A precise fault in a taken branch’s delay slot saves SNIP=`slot+4`, SFIP=`target`; unchanged shadows make `rte` execute the fall-through instruction before the target. Required shadows are `target` and `target+4`. Manual: [mc88100.txt:2093](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:2093) and [:8983](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:8983). Already filed as **m88kdslotshadow**. | Smallest check: a handler-return test observing the first resumed instruction; existing `m88k_exc_probe.py` row `dslot` deliberately pins the incorrect shadows without returning. | confidence high
+
+F3 | [src/cpus/cpu_m88k.c:871](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:871) | upstream, relied on by #502 | CODE | live at HEAD: yes | **A frozen trap destroys saved memory-transaction state.** Taking a newly supported trap with SFRZ set preserves instruction shadows but unconditionally zeros DMT/DMD/DMA registers, losing the preceding exception’s context. [mc88100.txt:9290](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:9290) requires these frozen registers to remain untouched. Already filed as **m88kexcfrozendmt**. | Smallest check: compare memory-transaction registers across a frozen trap; `m88k_exc_probe.py`’s `trapfrozen*` rows omit them. | confidence high
+
+F4 | [src/cpus/cpu_m88k.c:927](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:927) | upstream, relied on by #502 | CODE | live at HEAD: yes | **Delivered divide errors lack their required recovery context.** A divide error leaves fcr2/fcr4/fcr5 stale and clears SSBR at line 835. The handler should receive the operands, destination register number, and destination scoreboard bit. [mc88100.txt:10302](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:10302) specifies these requirements. The source discloses the omission at line 960; no separate OUTSTANDING_BUGS ID was found. | Smallest check: trace the four divide-error raise sites and FCR assignments; none captures this context. The `div0` regression row omits these registers. | confidence high
+
+F5 | [src/cpus/cpu_m88k.c:351](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:351) | #380/#381 | TEST-GAP | live at HEAD: yes | **Exactly-once slot dispatch is not independently observed.** `regress/m88k_idle_probe.py` observes an idempotent constant store; `gate_m88k_rounding.sh:213` compares software counters. A duplicated dispatch without a duplicated counter increment passes both observations. Already filed as **m88kidledup**. | Smallest check: add an execution-sensitive slot observation that distinguishes one dispatch from two per fold entry. | confidence high
+
+Checked clean, with HEAD line numbers:
+
+- `src/cpus/cpu_m88k.c:343` — Counter formats, array bounds, initialization, and placement before the CMMU loop.
+- `src/cpus/cpu_m88k.c:623` — RM-only warning suppression matches implemented rounding; non-RM writes still warn, and register storage remains intact.
+- `src/cpus/cpu_m88k.c:1022` — Little-endian assembly casts before the potentially overflowing shift.
+- `src/cpus/cpu_m88k.c:1024` — Big-endian sibling applies the same correction.
+- `src/cpus/cpu_m88k.c:1368` — `bcnd` named conditions and complete raw-mask display agree with the execution classification.
+- `src/cpus/cpu_m88k.c:1448` — `tcnd` opcode, condition, source, and vector extraction are correct.
+- `src/cpus/cpu_m88k.c:718` — All seven repaired exception classes have eligibility flags and matching tail cases at line 923.
+- `src/cpus/cpu_m88k.c:827` — Exception entry sets the required PSR bits while preserving carry.
+- `src/cpus/cpu_m88k.c:811` — Frozen trap/non-trap routing correctly distinguishes vector preservation from ERROR rerouting.
+- `src/cpus/cpu_m88k.c:855` — Ordinary unfrozen, non-delay instruction shadows and VBR-plus-eight-times-vector addressing are correct.
+
+DENOMINATOR: read 8 of 8 hunks of the net diff

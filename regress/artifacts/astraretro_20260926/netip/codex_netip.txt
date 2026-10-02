@@ -1,0 +1,41 @@
+ASTRARETRO_NETIP_ALIVE
+VERDICT: 5 findings (4 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 20 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Static inspection; no builds, probes, or file changes.
+
+F1 | src/net/net_ip.c:443 | 5ee491e7 | CODE | live at HEAD: yes | With network debug logging enabled, a guest TCP frame declaring an option area longer than the received packet makes the options dump read beyond `len`. The loop checks `data_offset` and destination-string capacity, but never the source-packet boundary. This happens before checksum validation. Already filed in `OUTSTANDING_BUGS.md:2731`, under the 2026-07-10 deferred candidates; no individual ID assigned. | Smallest check: compare the loop’s bounds with the caller’s fixed-header minimum; require the complete declared TCP header to fit before dumping options. | confidence high
+
+F2 | src/net/net_ip.c:354 | upstream initialization gap, relied on by 5ee491e7 | CODE | live at HEAD: yes | Ordinary guest TCP traffic producing a reply leaves its two urgent-pointer bytes uninitialized. The allocator uses uninitialized `malloc` storage (`src/net/net.c:96`), and `net_ip.c:306` contains only a “no urgent ptr” comment. The checksum reads these bytes, the reply retains them, and the newly configurable reply dump reads them too. No matching outstanding entry found. | Smallest check: audit reply-byte assignments and verify both urgent-pointer bytes are initialized before checksum calculation and logging. | confidence high
+
+F3 | src/net/net_ip.c:715 | upstream arithmetic, relied on by 5ee491e7 | CODE | live at HEAD: yes | A data-bearing segment on an established guest TCP connection can supply a mismatching sequence number that overflows the signed subtraction at lines 708–709. Adding `data_offset` and evaluating the migrated log argument `len - send_ofs` can also overflow. The mismatch rejection occurs afterward, at line 719. Disabled logging does not suppress function-argument evaluation. No matching outstanding entry found. | Smallest check: inspect the arithmetic ranges and ordering; move the equality rejection before arithmetic that assumes equality. | confidence high
+
+F4 | src/net/net_ip.c:1258 | upstream sibling left by #22 / 8dd86b5a | CODE | live at HEAD: yes | On an accepted `/1` NAT network, an ordinary guest broadcast reaches `(1 << xl) - 1` with `xl == 31`. With 32-bit `int`, this signed mask construction invokes undefined behavior. #22 made the adjacent address shifts unsigned but left this sibling signed. `src/net/net.c:824` explicitly accepts prefix length 1. No matching outstanding entry found. | Smallest check: compare the accepted prefix range with the mask expression’s operand types; use unsigned mask arithmetic. | confidence high
+
+F5 | src/net/net_ip.c:1027 | #177 / de1398e1 | RECORD | live at HEAD: yes | The comment attributes short-DHCP-input danger to fixed debug reads through `packet[85]`. The active request dump’s fixed reads stop at byte 33; its remaining reads use `i < len`. The dump through byte 85 reads the allocated 307-byte **reply**, after `packet = lp->data` at line 1152. The old request-field dump was disabled and removed before #177. `CHANGELOG.md:19893` repeats the false premise. The additional guard is harmless. No matching outstanding entry found. | Smallest check: compare request/reply pointer assignments and the earlier deletion of the disabled dump. | confidence high
+
+No TEST-GAP counted: the relevant records claim ordinary boot/NAT-ping verification, not regression rows pinning these malformed-input behaviors. Checked `regress/run.sh`, `regress/README.md`, `regress/gate_mips.sh`, and searched committed regression programs.
+
+Items checked clean; all following locations are in `src/net/net_ip.c` at HEAD:
+
+- `:63` — #131 zero-pads an odd final checksum byte without reading beyond it.
+- `:73` — Production checksum callers provide space for both output bytes.
+- `:402` — #22 casts before the sequence, acknowledgement, and timestamp high-byte shifts.
+- `:679` — #130’s length guard covers every timestamp byte subsequently read.
+- `:351` — Reply-dump destination-string growth is bounded; initialization remains F2.
+- `:452` — TCP data-dump reads stay below `len`, with bounded string growth.
+- `:494` — Unknown connections and redundant SYNs return before inappropriate slot use.
+- `:526` — A full TCP table returns before a negative free-slot index is used.
+- `:570` — TCP and UDP socket-failure branches return before marking their slots active.
+- `:608` — Migrated RST/FIN/ACK diagnostics preserve their existing state transitions.
+- `:813` — UDP payload logging bounds both packet reads and string growth.
+- `:843` — UDP connection-status strings are initialized on both paths and fit their buffer.
+- `:948` — #162 checks physical unicast-frame length before fixed IP debug reads.
+- `:979` — #103 rechecks the IP minimum after guest-controlled length truncation.
+- `:987` — ICMP/UDP minimums prevent the named checksum-write and negative-length hazards; TCP fixed fields fit.
+- `:1061` — DHCP’s existing minimum covers its request copy; the reply fits its allocation.
+- `:1074` — Removing the disabled DHCP dump changes no executable behavior.
+- `:1216` — #162’s broadcast minimum covers fixed input reads through byte 37.
+- `:1245` — Both broadcast-address assembly casts correctly precede the high-byte shifts.
+- `:1351` — Receive-side diagnostic migrations preserve negative-socket skips, disconnect transitions, and copy sizes.
+
+DENOMINATOR: read 41 of 41 hunks of the net diff

@@ -1,0 +1,124 @@
+VERDICT: build the missing MVME187 rung-3 witness, then split unsupported-access FAULT from register-lane handling
+
+I read committed HEAD `8ea26abb421a80231317bebb3f364025945f33f8` using `git show HEAD:<path>`. The worktree [dev_vme.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:57) and [OUTSTANDING_BUGS.md](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18757) match HEAD. `tools/pipeline/ledger.json` is modified elsewhere, but the `vmedefaultkill` object at lines 45100–45106 is identical to HEAD. `regress/gate_arm.sh` is also modified, so all gate citations below are specifically from `git show HEAD:regress/gate_arm.sh`. No file was changed, nothing was built, and no guest was run.
+
+I read all three `OUTSTANDING_BUGS.md` occurrences, latest last: the main row at [18757–18776](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18757), its inclusion in `exitunowned76` at [18850–18861](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18850), and the later “probe-HIGH” comparison at [20684–20687](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:20684). I also read the ledger note chronologically through its final ruling at [ledger.json:45100–45105](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:45100): the row remains `open`, `high`; its initial decline-plus-latched-announce decision was superseded by “FAULT (`return 0`) for unsupported-access fallback; handle register byte lanes separately.”
+
+## 1. Code path and site count
+
+Read path:
+
+1. MVME187 setup attaches `vme` at `VME2_BASE == 0xfff40000` in [machine_mvme88k.c:83–96](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:83). `dev_vme` registers a 4 KiB aperture in [dev_vme.c:153–166](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:153).
+
+2. An MC88100 guest load/store calculates its address in [cpu_m88k_instr_loadstore.c:58–74](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:58), checks non-byte alignment at [167–185](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr_loadstore.c:167), and calls `memory_rw()` for loads at lines 188–195 or stores at 233–240.
+
+3. `memory_rw()` locates the mapped device and converts the physical address to a device-relative offset at [memory_rw.c:475–524](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:475), then invokes `dev_vme_access` at [583–589](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583).
+
+4. The VME handler preloads a backing word on reads and switches on the raw byte offset at [dev_vme.c:62–68](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:62). An uncased offset reaches two direction-specific `debug()` calls but one shared host-kill site, `exit(1)`, at [137–143](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:137). The callback never returns, so `memory_rw()` cannot raise a guest exception.
+
+The invisible diagnostic is confirmed, but specifically for ordinary guest execution. `verbose` starts at zero; while `emul_executing`, `debug()` decrements it and returns when it becomes negative in [debugmsg.c:365–376](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365). `emul_executing` surrounds `machine_run()` at [emul.c:1044–1050](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:1044). Single-stepping raises the effective verbosity and can reveal the message.
+
+Derived census at HEAD:
+
+- There is **one lexical `exit(1)` site**, not separate read and write exits; there are two diagnostic branches feeding it.
+- The switch recognizes exactly ten raw offsets: `0`, `GCSRCTL`, `TCR`, `T1CMP`, `T1COUNT`, `TCTL`, `IRQEN`, `IRQL3`, `IRQL4`, and `VBR`, at [dev_vme.c:68–135](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:68).
+- Therefore byte accesses reach the default at `4096 - 10 = 4086` starting offsets.
+- The vendored header defines 36 consecutive word registers from `0x00` through `0x8c` at [mvme88k_vme.h:46–81](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:46). The 4,086 default offsets decompose exactly as:
+
+  - 3,952 offsets at `0x90..0xfff`, beyond the named block;
+  - 26 named-but-uncased register bases;
+  - `36 × 3 = 108` interior byte offsets.
+
+- There are 1,024 aligned 32-bit starts and ten cases, hence `1024 - 10 = 1014` uncased aligned starts. Their six runs remain exactly `0x004..0x028` (10), `0x030..0x048` (7), `0x058..0x05c` (2), `0x064..0x068` (2), `0x070..0x07c` (4), and `0x08c..0xffc` (989).
+- The ledger’s **12** count is a narrower, correct subset: the three interior byte lanes of each of the four stateful/backed cases `T1CMP`, `T1COUNT`, `TCTL`, and `VBR`, shown at [dev_vme.c:85–105,131–135](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:85). It is not the total interior-lane population.
+
+All these counts still hold at HEAD.
+
+## 2. Architecture and device documentation
+
+I enumerated all 428 top-level `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\*.txt` files and searched all of them, including forced-text searches. Only two primary manuals are relevant.
+
+- The MC88100 manual says that when the memory system cannot supply data it signals `fault`, causing a data-access exception at [mc88100.txt:8018–8025](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:8018). Nonexistent addresses and hardware bus errors are enumerated memory-access-exception causes at [9310–9329](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:9310); the data-access vector is `VBR+$18` at [8524–8533](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:8524). A data fault is recoverable, with its precise cause supplied by the memory subsystem, at [9442–9451](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt:9442).
+
+- `vmesbcp2.txt` says it covers the MVME187 and its ASIC registers at [42–45](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:42), but also says Chapters 1–4 are in Part 1 while this file is Part 2, Chapters 5–9, at [76–78](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:76). VMEchip2 is Chapter 4 at [399–428](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:399), including the missing LCSR map and programming model. The table of contents identifies second-timer, prescaler, interrupt and vector registers at [482–533](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:482), corroborating that several defaulted bases are real registers, but supplies no access-width or reserved-offset response rules.
+
+A sibling ASIC, VSBchip2, explicitly specifies reserved-register reads as zero and writes as no-effect at [vmesbcp2.txt:2262–2277](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:2262), but that is not transferable authority for VMEchip2.
+
+Thus the architecture supports: “if GXemul reports this transaction as failed, the guest should receive a data-access exception.” The supplied device documentation does **not** establish that real VMEchip2 hardware faults every address or width currently reaching this default.
+
+## 3. Options and precedents
+
+The one default arm covers three semantically different populations.
+
+- **Offsets with no named register.** Options are:
+
+  - Keep a fatal host exit, as legacy [dev_clmpcc.c:246–252](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_clmpcc.c:246) does. This is precedent for the defect, not a defensible repair.
+  - Decline with deterministic zero/ignored write and a latched announcement, as [dev_lca.c:479–513](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:479) does.
+  - Back the offset as storage, as [dev_dreamcast_g2.c:250–282](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_g2.c:250) does.
+  - FAULT with `return 0`, as [dev_unreadable.c:41–51](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41) does. MVME187 itself installs that device three times for omitted hardware at [machine_mvme88k.c:105–123](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:105).
+
+  Evidence supports **FAULT**, described narrowly as “the emulator cannot service this access,” not as proven real-hardware behavior. `memory_rw()` converts zero to failure and raises M88K `DATA_ACCESS` at [memory_rw.c:595–624](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595).
+
+- **The 26 named-but-uncased register bases.** Options are full implementation, explicit conservative FAULT, LCA-style decline, or synthetic backed acceptance. Existing VME stateful cases are the implementation precedent; LCA explicitly declines documented-but-unimplemented registers; Dreamcast G2 is the backed-accept precedent. Evidence supports either actual implementation or, until then, an explicitly labelled **FAULT-as-model-limitation**. It does not support silently inventing register values or claiming device-faithful bus-error behavior.
+
+- **Interior lanes, particularly the 12 lanes of the four stateful cases.** Same-architecture [dev_m8820x.c:257–260](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_m8820x.c:257) groups addresses by containing word; same-machine PCC2 instead serves addressed bytes with `memcpy` at [dev_pcc2.c:471–485](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:471). FAULT is also possible if the real device rejects that width.
+
+  The available evidence supports only **separate handling**, not a particular lane policy. Blindly masking `relative_addr` to a word base is unsafe: narrow writes would replace an entire backing word, and `T1COUNT` reads have a side effect. The header itself warns that the chip has “rather insane access rules” at [mvme88k_vme.h:40–42](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:40), while the needed manual chapter is absent.
+
+## 4. Existing probes, gates and likely disturbance
+
+There is no committed direct VME probe or gate. Searching committed `regress/` outside artifacts for `VME2_`, `0xfff40000`, or a VME diagnostic found none.
+
+What does exist:
+
+- The committed fault-pair review’s rows were expressly “proposed detector rows, not measured results” at [codex_faultpair_20260910.txt:51](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/faultpair/codex_faultpair_20260910.txt:51). Its decline verdict is superseded; its useful surviving requirement is that a FAULT oracle positively observe M88K data-access delivery, not merely host survival, at lines 77–81.
+- `regress/artifacts/vmedefaultkill/` is currently untracked. Its reopened review says no runtime testing occurred at [codex_faultreopen_20260911.txt:1–6](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/vmedefaultkill/codex_faultreopen_20260911.txt:1).
+- [pcc2_default_probe.py:130–170](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_default_probe.py:130) already supplies M88K instruction/setup, scratch-RAM liveness, and device-signature patterns.
+- [mk48_nvram_probe.py:33–45](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/mk48_nvram_probe.py:33) already drives real guest instructions on an unmodified `-E mvme88k -e mvme187` and distinguishes exit status, timeout and missing post-access observation.
+- [m88k_exc_probe.py:5–17](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py:5) records that `DATA_ACCESS` is implemented, but has no row that causes one.
+- Committed gate wiring exists for the same-machine PCC2 and MK48 probes at `HEAD:regress/gate_arm.sh:1695–1718` and `:1743–1759`, providing a natural home for a VME detector.
+
+A default `return 0` changes both reads and writes at all 4,086 default byte offsets from process termination to guest exception flow. No current committed VME regression would notice. It should leave the PCC2/MK48 windows untouched, but those probes should remain integration controls.
+
+A repair must also preserve offset zero, the nonzero VBR signature, all ten exact cases, and avoid accidentally merging narrow writes or adding `T1COUNT` side effects. For closure, new rows should separately test:
+
+- unsupported aligned read and write → `DATA_ACCESS`;
+- CPU remains alive at the exception vector;
+- unchanged load destination/no returned fallback data;
+- documented-but-unimplemented base policy;
+- register-interior byte policy;
+- supported VBR and offset-zero controls.
+
+## 5. Smallest witness
+
+On the unmodified in-tree `-E mvme88k -e mvme187 -M 64` machine:
+
+1. **Liveness control, separate session:** use guest instructions to store `0x5a5a5a5a` into scratch RAM and load it back, then reach a breakpoint or self-loop.
+
+2. **Device-signature control, separate session:** guest word-load `0xfff40088`, the VME VBR case. The expected value is `0x67000000`, derived from the reset seed at [dev_vme.c:160–162](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:160) and the shift definitions at [mvme88k_vme.h:257–260](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:257). This distinguishes the VME device from zero-filled RAM or an unmapped fallback.
+
+3. **Killing sequence:** with `0xfff40000` in a base register, the site-reaching core is one aligned guest word load from `base + 0x30`. `0x30` is documented as `VME2_DMACTL` at [mvme88k_vme.h:58](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:58) but has no case. For a robust harness, put it between a scratch-RAM canary store and post-access canary load/marker. HEAD exits with status 1; the post-access marker is absent.
+
+Run that guest with `continue`, not debugger single-step, because single-step makes `debug()` visible. The expected pre-fix observation is therefore: reaped exit status 1, absent post-access marker, and no explanatory VME message at default verbosity. A direct debugger memory peek is not a substitute because no-exception accesses can bypass the ordinary guest callback/fault path.
+
+This is a described witness, not a measured result; I did not run it.
+
+## 6. Stale, contradicted, or superseded text
+
+- **No site has been fixed.** HEAD still contains `debug()` plus `exit(1)` at `dev_vme.c:137–143`; all census counts remain current.
+
+- The ledger’s initial **DECLINE + latched `fatal()`** review and the committed fault-pair artifact are superseded by the later owner ruling and reopened-panel verdict: **FAULT for unsupported fallback, lanes separate**.
+
+- The main row’s statement that `return 0` gives “the bus error real VME hardware would” at `OUTSTANDING_BUGS.md:18773–18774` overstates the evidence. HEAD proves GXemul will deliver an M88K data-access exception; the supplied device manual does not prove every affected VMEchip2 transaction faults on hardware.
+
+- “Installs it unconditionally” is only true inside the MVME187 setup arm. MVME188 and MVME197 contain TODO-only branches and attach no VME device at [machine_mvme88k.c:127–135](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:127).
+
+- The title’s “an unimplemented VME2 register” is incomplete. The default combines unnamed space, 26 named-but-unimplemented register bases, and 108 register-interior byte offsets.
+
+- “Invisible at default verbosity” needs the runtime qualifier. It is invisible during ordinary guest execution, but not necessarily during construction or single-step.
+
+- The ledger’s hypothetical claim that a byte or halfword read at `0x89..0x8b` would return `0x67000000` after a decline edit is contradicted by HEAD. The backing-word alias is real, but M88K is big-endian at [cpu_m88k.c:130](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:130), and [memory_writemax64():89–108](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:89) serializes only the low `len` bytes. Since `0x67000000` has zero low byte and halfword, byte reads would yield zero and the aligned halfword at `0x8a` would yield zero; halfwords at `0x89` and `0x8b` trap for misalignment before reaching VME. Current HEAD exits before returning any value.
+
+- Stock-boot traversal remains unproved. The comment at [dev_vme.c:70](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:70) only says OpenBSD probes offset zero, which is already handled. This is why the rung-3 witness remains the correct next step.
+
+- The ledger’s internal pointer `OUTSTANDING_BUGS.md:18236–18239` has moved; the corresponding current text is at lines 18773–18776. The cited `dev_vme.c` and `memory_rw.c` line locations remain current.

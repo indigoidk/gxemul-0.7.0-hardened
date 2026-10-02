@@ -1,0 +1,57 @@
+ASTRARETRO_HDIFFDISKIMAGEIO_ALIVE
+VERDICT: 12 findings (2 CANNOT-FAIL, 0 SELECTS-NOTHING, 0 STATUS-LAUNDERED, 0 ENCODING, 8 RECORD, 2 OTHER); 24 items checked clean
+
+Static review of HEAD `db8b1a33`; no builds, harness execution, writes, or working-tree reads. No matching existing filings found in `OUTSTANDING_BUGS.md`.
+
+F1 | regress/diff_diskimage_io.c:1256 | #416/#417 | CANNOT-FAIL | “SCSI WRITE onto a full store” writes 512 bytes at offset 10240 into a 10240-byte image. The extent bound rejects it before `fwrite_helper()`. Both HEAD and code lacking the short-write failure check produce the expected CHECK CONDITION `0x02`; this row never exercises the claimed backing-store failure. | Smallest check: place the write inside the image, lower RLIMIT below its end, and compare with/without the short-write check. | confidence high
+
+F2 | regress/diff_diskimage_io.c:1531 | #417 | CANNOT-FAIL | The negative-offset WRITE proof returns `0` both with and without the `offset < 0` guard. Without that guard, seeking to −4096 fails; `fwrite_helper()` returns zero and the short-write check rejects it. The adjacent READ assertion does detect guard removal. | Smallest check: trace the WRITE with only the negative-offset predicate removed; relabel it as a control or assert rejection before seeking. | confidence high
+
+F3 | regress/diff_diskimage_io.c:1510 | #417 | OTHER | The “host file did not grow by even one byte” assertion calls `stat()` before flushing `d.f`. With the documented `total_size + 1` weakening, the 10239→10240 extension can remain buffered, so the size assertion still passes before `fclose()` commits it. Similar checks occur at 1451, 1467 and 1552. The return-value assertions remain effective. | Smallest check: check `fflush()` succeeds before observing file size. | confidence med
+
+F4 | regress/diff_diskimage_io.c:102 | #412 | OTHER | All invocations share `/tmp/r411c1/work`, even with separate gate LOGDIRs and selfmutant build directories. Run B can recreate `w1.img` with `0x11` after run A writes `0xAA` but before A reads it, falsely failing A’s ordinary-write control. Neither the harness nor its callers creates this directory, so a fresh environment also fails at the first fixture open. | Smallest check: give each invocation its own freshly created fixture directory. | confidence high
+
+F5 | regress/diff_diskimage_io.c:11 | #412/#472/#488 | RECORD | The header says rows do not assert buffer contents and `[PROOF]` rows fail shipping code. HEAD contains extensive buffer assertions, including the overlay and short-read sections, and incorporates the corrections those proof rows expect. | Smallest check: compare the header with assertions at 378, 844 and 988 and their HEAD implementations. | confidence high
+
+F6 | regress/diff_diskimage_io.c:264 | #488 | RECORD | The contract says ROW S is green before the fix. Its old-code read total is `200 + 512 + 0 = 712`; the caller then zero-fills from byte 712. That leaves 312 sentinel bytes and only 200 base bytes, failing ROW S’s expectations of zero and 512 respectively. | Smallest check: trace its three iterations and the caller’s tail fill. | confidence high
+
+F7 | regress/diff_diskimage_io.c:384 | #488 | RECORD | The comment says stopping the loop early leaves 712 base bytes. Stopping after the initial 200-byte short read prevents both later base blocks from being read; filling the remaining request leaves **zero** base bytes. The 712 value describes the original continuing loop. | Smallest check: trace an early return of the contiguous 200-byte prefix. | confidence high
+
+F8 | regress/diff_diskimage_io.c:480 | #488 | RECORD | An empty overlay is described as the only way to obtain `lenread == 0`, and every other row allegedly accepts the `lenread > 0` guard variant. ROW S contradicts both claims: its nonempty 200-byte overlay returns zero when read at offset 1024, and skipping that fill fails its assertions. | Smallest check: compare this paragraph with ROW S’s third iteration and assertions at 758 and 767. | confidence high
+
+F9 | regress/diff_diskimage_io.c:226 | #488 | RECORD | The cleanup rationale says leaked handles would make ROW Z read the first overlay’s bitmap. `mkdisk()` clears the structure before ROW Z, and `diskimage_add_overlay()` opens and installs fresh handles. Omitting cleanup leaks resources but does not select the previous bitmap. | Smallest check: trace `d.overlays` through `mkdisk()` at 502 and overlay attachment. | confidence high
+
+F10 | regress/diff_diskimage_io.c:796 | #472 | RECORD | “A real overlay file is full-size” is false. HEAD’s `R:` path creates an empty data file and empty bitmap, then attaches them without preallocation (`src/disk/diskimage.c:2186`). A legitimate overlay need not match the base-image length. | Smallest check: trace creation through `diskimage_add_overlay()` at source line 2211. | confidence high
+
+F11 | regress/diff_diskimage_io.c:1389 | #416 | RECORD | The boundary rationale says every other past-capacity row uses LBA 1,000,000. The existing past-EOF READ at line 1052 uses byte offset 1 MiB, which is LBA 2048. | Smallest check: divide that fixture’s offset by its 512-byte block size. | confidence high
+
+F12 | regress/diff_diskimage_io.c:1737 | 7e3b1204 | RECORD | The explanation attributes detection of an `int`-narrowed comparator to the small probe. Actually, `1 != 2` still increments failures and satisfies that sentinel. The **wide** sentinel detects narrowing because `2^32` becomes zero and its required failure disappears. The implemented self-check is sound; its explanation reverses the roles. | Smallest check: trace both failure-counter checks using 32-bit comparisons. | confidence med
+
+Checked clean, with locations in `regress/diff_diskimage_io.c`:
+
+- :56 — Includes the actual disk implementation and SCSI handlers.
+- :91 — Comparator compares independent values and records mismatches.
+- :1758 — Small/wide self-checks detect comparator failure; their deliberate failures are removed correctly.
+- :1833 — Exactly 98 ordinary checks, including identity; skipped overlay sections fail this assertion.
+- :1835 — Failure/fault summary and verdict are checked by the gate; missing completion cannot pass.
+- :984 — Partial-write fixture reaches host I/O inside the backed extent.
+- :1017 — Zero-write fixture also reaches host I/O; limits are restored before fixture creation.
+- :1057 — Far-out READ refusal and full-buffer initialization have independent assertions.
+- :1198 — Far-out SCSI WRITE checks status, flushed file size and recalculated capacity.
+- :1321 — Empty-image capacity check distinguishes the original `0xffffffff` result.
+- :1428 — Last-backed-block and advertised-gap controls preserve the intended asymmetric bounds.
+- :1508 — Unaligned-extent return assertion detects one-byte excess permission.
+- :1527 — Negative READ detects removal of the negative-offset guard.
+- :1551 — Empty-image READ/WRITE return assertions detect unrestricted access.
+- :1591 — Sense assertions cover failure details, consumption and retirement after success.
+- :844 — Wrong-layer count distinguishes 512 overlay bytes from the correct one.
+- :871 — Hole assertion detects retaining the fixed buffer stride.
+- :896 — Short unaligned row distinguishes both documented clamp variants.
+- :378 — Mid-transfer short-read assertions detect stale middle bytes and lost trailing bytes.
+- :437 — ROW P and ROW U sentinels detect filling beyond the request.
+- :511 — ROW Z detects skipping zero-byte short-read repair.
+- :546 — ROW L and ROW I distinguish base-layer and later-iteration repair omissions.
+- :637 — ROW W and ROW T distinguish writability/type restrictions on repair.
+- :758 — ROW S detects first-short-only and `<1024` restrictions.
+
+DENOMINATOR: read 1 of 1 files in full

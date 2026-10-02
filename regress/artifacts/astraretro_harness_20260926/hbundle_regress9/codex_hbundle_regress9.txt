@@ -1,0 +1,37 @@
+ASTRARETRO_HBUNDLE_REGRESS9_ALIVE
+VERDICT: 6 findings (0 CANNOT-FAIL, 0 SELECTS-NOTHING, 3 STATUS-LAUNDERED, 0 ENCODING, 2 RECORD, 1 OTHER); 16 items checked clean
+
+Reviewed committed objects at `db8b1a33`. Counterexamples below are derived from the code; no probes, builds, mutations, or file writes were performed.
+
+F1 | `regress/sgi_re_unmapped_probe.py:592` | #499 | STATUS-LAUNDERED | `wr lat1` and `rd lat1` (:597) ignore `alive` and `how`. If the first access announces normally and the second same-direction access terminates the emulator, both rows still count one message and pass. These are the only sessions exercising an already-set catch-all direction latch, so this defect would leave all 50 rows green. Related filed class: `ptywaitstatus`, `OUTSTANDING_BUGS.md:21935`; this specific latch case is not named. | Feed either row one announcement with `alive=False, how="exit1"`; require failure and a positive observation after the second access. | confidence high
+
+F2 | `regress/sgi_re_unmapped_probe.py:418` | #499 | STATUS-LAUNDERED | A byte write that announces its decline and prematurely exits with status zero passes both `wr narrow surv` and `wr narrow decl`. The first-component pair at :451 behaves identically. Both post-store continuation checks (:579, :586) use eight-byte writes, so termination confined to narrow writes would leave all 50 rows green. The zero-write pair at :538 has the same weakness. Already filed as the broader `exit0oracle` class, `OUTSTANDING_BUGS.md:592`. | Supply the expected decline followed by premature `exit0`; require a subsequent guest marker in each affected session. | confidence high
+
+F3 | `regress/xscale_inten_probe.py:394` | #526 | STATUS-LAUNDERED | `S_ISRC_WR` claims to verify “exit 1”, but `(code_s == 1) or s_s.dead` accepts the expected diagnostic followed by exit zero or a signal. EOF sets `dead=True`, and `close()` preserves that flag. `E_UNKNOWN` (:379) and `SIB_WRITE` (:424) use the same rule and discard the signal result. No specific filing found. | Evaluate with `code_s=0, dead=True, s_msg=True`: it passes. Require collected exit status 1 without a signal. | confidence high
+
+F4 | `regress/sgi_re_unmapped_probe.py:95` | #499 | RECORD | The contract says this detector does **not** catch collisions among the six #497 window bits. Its `xwin7 pre` row (:624) does: two colliding bits suppress the second partner’s announcement, yielding six messages against seven required. The stated coverage exclusion is false. No specific filing found. | Evaluate :624 with one of the seven partner announcements absent: it fails `6 != 7`. | confidence high
+
+F5 | `regress/sgi_re_unmapped_probe.py:406` | 938b328e | RECORD | Mutant W is described as a verbatim restoration of a pre-#499 `len != 8` kill. The removed catch-all had **no width condition**: it printed an address-specific diagnostic and exited unconditionally. W introduces a width condition and a different diagnostic. Its result therefore does not establish the claimed verbatim-restoration escape. No specific filing found. | Compare the removed catch-all in `git show --format= 9f666a8d -- src/devices/dev_sgi_re.c` with HEAD `regress/artifacts/sgireunmapped/killtable_20260831/l2repair/mkw.py:18`. | confidence high
+
+F6 | `regress/sgi_re_unmapped_probe.py:280` | #499 | OTHER | Sessions advance after fixed elapsed waits without confirming debugger completion. A healthy final `print v0` delayed beyond the default 1.2-second read plus 0.4-second cleanup window loses its response when the PTY closes; the row reports `"absent"` and fails according to host scheduling. Already filed as the broader `probetimebased` class, `OUTSTANDING_BUGS.md:9216`. | Use a PTY fixture delaying a valid final response by two seconds; verify completion before scoring or closing the session. | confidence high
+
+Checked clean, with HEAD line references:
+
+- `regress/sgi_re_unmapped_probe.py:157` — full decline literals include the supplied datum and distinguish decline from old kill text.
+- `regress/sgi_re_unmapped_probe.py:199` — six accept windows have correct base/last-slot addresses and match HEAD’s array-index diagnostics.
+- `regress/sgi_re_unmapped_probe.py:242` — row-name length assertion satisfies the gate’s two-space separator.
+- `regress/sgi_re_unmapped_probe.py:332` — distinct instruction addresses and explicit PC assignments prevent skipped repeated sequences.
+- `regress/sgi_re_unmapped_probe.py:349` — nonzero destination poison distinguishes a completed zero-valued load from an unexecuted load.
+- `regress/sgi_re_unmapped_probe.py:360` — RAM liveness and device-signature controls require independent nonzero results.
+- `regress/sgi_re_unmapped_probe.py:575` — both eight-byte component-base write sessions positively observe subsequent guest execution.
+- `regress/sgi_re_unmapped_probe.py:603` — combined write/read announcements detect a shared direction latch.
+- `regress/gate_arm.sh:1487` — SGI completion, every named row, and literal 50/50/0 totals are required.
+- `regress/xscale_inten_probe.py:116` — register parsing handles debugger aliases and does not substitute zero for missing values.
+- `regress/xscale_inten_probe.py:225` — five read expectations are independent constants; missing snapshots block their rows.
+- `regress/xscale_inten_probe.py:432` — opcode1, isteer preservation, and CRM isolation use independent sessions and poisoned destinations.
+- `regress/xscale_inten_probe.py:486` — all-ones/r0 coverage requires changed poison; :512 independently checks the declared r15 survival contract.
+- `regress/xscale_inten_probe.py:570` — IRQ observations and the zero-enable contrast require concrete register/PC results.
+- `regress/xscale_inten_probe.py:632` — FAIL/BLOCKED rows cannot count as passes; duplicate tags invalidate controls.
+- `regress/gate_arm.sh:1843` — XScale requires unique completion records, preserved probe status, and 30 successful emitted rows.
+
+DENOMINATOR: read 2 of 2 files in full

@@ -1,0 +1,29 @@
+ASTRARETRO_BUNDLE_INCLUDE3_ALIVE
+VERDICT: 6 findings (4 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 8 items checked clean
+
+Static review of committed HEAD `8ea26abb`. Regression probes were inspected, not executed. The CODE findings below concern implementations directly relied upon by the changed declarations.
+
+F1 | [src/core/memory.c:365](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:365) | #182 | CODE | live at HEAD: yes | Guest framebuffer growth beyond its reserved aperture makes `memory_device_update_length()` expand the pixel mapping over the controller. Unlike registration, resizing checks no mapping collisions. Controller accesses can consequently dispatch to pixel storage, depending on `last_accessed_device`. This contradicts the fixed control-port layout documented at `doc/experiments.html:352`. The dependency enters through `src/include/memory.h:157` and `dev_fb_resize():212`. No existing filing found. | Smallest check: a unit assertion that successful mapping resizes preserve disjoint device intervals and controller dispatch. | confidence high
+
+F2 | [src/cpus/memory_sh.c:353](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c:353) | upstream, relied on by #318 | CODE | live at HEAD: yes | Queue-filling guest stores with translation enabled bypass UTLB permission and dirty-bit checks. The new flush helper explicitly relies on this unconditional identity path, leaving the write sibling uncorrected. The SH7750 manual requires write-type exception judgment for queue writes: [sh7750_hardware.txt:11744](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:11744). Already filed as **`sh4sqwrite`**, `OUTSTANDING_BUGS.md:7951`. | Smallest check: inspect the unconditional return against the manual’s write-side requirements. | confidence high
+
+F3 | [src/cpus/cpu_sh_instr.c:3706](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c:3706) | upstream, relied on by #318 | CODE | live at HEAD: yes | User-mode SQ PREF with SQMD set raises illegal-instruction when translation is enabled, but proceeds when translation is disabled. Hardware requires an address error in both cases. The guard is incorrectly nested under AT, and line 3713 selects the wrong exception. See [sh7750_hardware.txt:11747](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:11747) and line 11751. Already filed as **`sh4sqexpevt`**, `OUTSTANDING_BUGS.md:7505`; the AT omission is also recorded at line 1943. | Smallest check: inspect the guard nesting and exception constant against §4.7.4. | confidence high
+
+F4 | [src/cpus/memory_sh.c:153](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_sh.c:153) | upstream, relied on by #318 | CODE | live at HEAD: yes | SQ PREF encountering multiple matching UTLB entries selects the first and can complete a transfer. The exported helper directly uses this walker, whose unconditional `break` prevents multiple-hit detection. Hardware requires the data-TLB-multiple-hit reset: [sh7750_hardware.txt:9807](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:9807). Already acknowledged in the **unnumbered “Adjacent store-queue model gaps”** entry, `OUTSTANDING_BUGS.md:1946`, and #318’s changelog. | Smallest check: inspect whether the walker examines remaining entries after its first match. | confidence high
+
+F5 | [src/include/thirdparty/sgi_arcbios.h:20](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/sgi_arcbios.h:20) | #11 / 8dd86b5a | RECORD | live at HEAD: yes | No guest trigger: the added comment claims the removed macro discarded packing attributes “on the structs below.” This header contains no packed declarations; its declaration attributes are exclusively `__noreturn__` on firmware function pointers. The copied explanation falsely describes the local change. No existing filing found. | Smallest check: grep the committed header for `packed` and `__attribute__`; packing appears only in the comment. | confidence high
+
+F6 | [src/cpus/cpu_sh_instr.c:3733](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c:3733) | #318 | RECORD | live at HEAD: yes | The comment, repeated at `CHANGELOG.md:23507`, says translating an already-aligned operand loses `[9:5]`. In its stated **32-byte alignment** context, that is false: clearing `[4:0]` preserves `[9:5]`, and the walker preserves the page offset. Keeping the raw operand remains justified for fault TEA. Page alignment would explain the warning, but that distinction is absent. No existing filing found. | Smallest check: compare the two alignment orders algebraically using the walker’s offset expression at `memory_sh.c:165`. | confidence med
+
+Checked clean:
+
+- `src/include/thirdparty/dp83932reg.h:15` — attribute-erasing definitions removed; all ten descriptor packing annotations remain effective.
+- `src/include/thirdparty/pcireg.h:15` — same removal is complete; all three VPD packing annotations remain.
+- `src/include/thirdparty/sgi_arcbios.h:17` — actual attribute restoration is sound; the defect is its packing explanation.
+- `src/include/devices.h:203` — machine pointer initialized by the framebuffer constructor; resize invalidates every CPU through its own callback.
+- `src/include/memory.h:157` — declaration matches implementation and caller; shrink updates mapping bounds before cache invalidation.
+- `src/include/cpu_sh.h:247` — exported prototype matches the helper’s return type, pointer widths and flags.
+- `src/cpus/cpu_sh_instr.c:3761` — current flush uses read-type judgment, accepts both success returns and stops before copying on translation failure; inspected `regress/sh_halt_probe.py:573`.
+- `src/cpus/cpu_sh_instr.c:3764` — destination composition preserves `[9:5]`, clears `[4:0]`, excludes QACR with AT enabled, and feeds a bounded eight-word transfer.
+
+DENOMINATOR: read 6 of 6 hunks of the net diff

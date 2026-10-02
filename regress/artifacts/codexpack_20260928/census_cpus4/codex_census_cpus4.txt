@@ -1,0 +1,67 @@
+CODEXPACK_CENSUS_CPUS4_ALIVE
+VERDICT: 13 live calls classified -- 6 reachable by guest access at run time, 5 of those not recorded
+
+All repository citations refer to `db8b1a33`. Within census rows, `:line` refers to that row’s file. GUEST LEVEL gives the least privilege needed for the triggering access, with the relevant machine/MMU state already established. This was a reading-only review.
+
+```text
+src/cpus/memory_ppc.c:94 | ppc_bat | WHEN: unreachable | CONDITION: "if (cpu->cd.ppc.bits != 32)" (:92); caller requires bits == 32 (:269–270) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: (1) delete the terminating call | high
+src/cpus/memory_ppc.c:98 | ppc_bat | WHEN: unreachable | CONDITION: "if (cpu->cd.ppc.cpu_type.flags & PPC_601)" (:96); caller already exits for that condition (:263–265) before calling ppc_bat (:270) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: (1) delete the terminating call | high
+src/cpus/memory_ppc.c:265 | ppc_translate_v2p | WHEN: guest access | CONDITION: "if (cpu->cd.ppc.cpu_type.flags & PPC_601)" (:263), after the relocation-disabled return (:258–260) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: (7) implement 601 address translation | high
+src/cpus/memory_ppc.c:275 | ppc_translate_v2p | WHEN: guest access | CONDITION: "if (res == 0)" (:273), following "res = ppc_bat(cpu, vaddr, return_paddr, flags, user);" (:270) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: (5) fault—deliver the BAT protection exception | high
+src/cpus/memory_ppc.c:288 | ppc_translate_v2p | WHEN: guest access | CONDITION: "} else {" (:285) of "if (cpu->cd.ppc.bits == 32)" (:280), after the relocation-disabled return and 601 check (:258–265) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: (7) implement 64-bit address translation | high
+src/cpus/cpu_ppc_instr.c:244 | X(invalid) | WHEN: unreachable | CONDITION: unconditional "exit(1);" following "fatal(\"PPC: invalid(): INTERNAL ERROR\n\");" (:243–244); current decoder cannot select the invalid table entries, as enumerated below | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: (1) delete the terminating call | high, static
+src/cpus/cpu_ppc_instr.c:2307 | X(llsc) | WHEN: guest access | CONDITION: "if (load)" (:2304), then "if (rc)" (:2305) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: (1) delete the terminating call; allow the existing load/reservation operation | high reachability; medium disposition across processor models
+src/cpus/cpu_ppc_instr.c:2333 | X(llsc) | WHEN: guest access | CONDITION: store "} else {" (:2329) of "if (load)" (:2304), then "if (!rc)" (:2331) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: (5) fault—Program exception for the invalid store-conditional form | high
+src/cpus/cpu_ppc_instr.c:4119 | X(to_be_translated) | WHEN: guest access | CONDITION: NULL-page arm (:4110–4113), then "if (!cpu->memory_rw(cpu, cpu->mem, addr, ib, sizeof(ib), MEM_READ, CACHE_INSTRUCTION))" (:4115–4116) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:2614–2615 | DISPOSITION: (5) deliver/preserve the appropriate fetch exception and unwind | high
+src/cpus/experiment_arm_multi.c:103 | main | WHEN: construction (command line) | CONDITION: "if (argc < 2)" (:100) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/experiment_arm_multi.c:110 | main | WHEN: construction (file loading) | CONDITION: "if (f == NULL)" (:108), following fopen("cpu_arm_multi.txt", "r") (:91) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/experiment_arm_multi.c:121 | main | WHEN: construction (file loading) | CONDITION: "if (s[0] == '0')" (:118), then "if (n_opcodes > max)" (:119) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/experiment_arm_multi.c:132 | main | WHEN: construction (allocation) | CONDITION: "if (max_len == NULL)" (:130), following malloc (:129) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+```
+
+Counts match exactly: `memory_ppc.c` **5**—94, 98, 265, 275, 288; `cpu_ppc_instr.c` **4**—244, 2307, 2333, 4119; `experiment_arm_multi.c` **4**—103, 110, 121, 132. The `exit()` mentions at `src/cpus/cpu_ppc_instr.c:2313,2361` are comments. KEEP classifies the helper’s termination policy, not the correctness of its input guard.
+
+The reachability and disposition qualifications are:
+
+- **BAT/MMU:** the sole committed-source caller of `ppc_bat` is `src/cpus/memory_ppc.c:270`, behind the exclusions cited above. Runtime translation obtains user state with `"user = msr & PPC_MSR_PR? 1 : 0;"` at `:253`; BAT lookup explicitly handles user validity at `:56`. BAT denial returns zero for `BAT_PP_NONE`, and for writes under `BAT_PP_RO_S` or `BAT_PP_RO` (`:69–73`). The manual says a prohibited access generates a “block protection violation exception condition (DSI or ISI exception)” (`_scratchpad/ppc_pem32_rev2_2001.txt:13312`). A repair must also respect `"if (flags & FLAG_NOEXCEPTIONS) return 0;"`, currently below these exits (`src/cpus/memory_ppc.c:299–300`).
+- **`invalid()` is a table sentinel, not the generic illegal-opcode handler.** The generator selects it under `"if (load && !zero && size == 3)"` (`src/cpus/generate_ppc_loadstore.c:216,253`). Invalid nonindexed slots are **11, 27, 43, 59**; indexed slots are **11, 27**, in both variants (`src/cpus/tmp_ppc_loadstore.c:905,921,937,953,974,990,1935,1951,1967,1983,2004,2020`). The decoder’s signed nonindexed loads select **9, 25, 41, 57**; signed indexed loads select **9, 25** (`src/cpus/cpu_ppc_instr.c:4296–4302,4335–4336,4937–4944,4993`). Direct floating-point callers select nonindexed **6, 7, 14, 15, 38, 39, 46, 47**, and indexed **6, 7, 14, 15, 22, 23, 30, 31** (`:3430,3554,3571,3596,3609,3627,3644,3669,3682,3704,3730,3742,3771,3803,3817,3829`). None selects an invalid slot.
+- **Load Rc differs from store Rc.** Dispatch installs `instr(llsc)` without rejecting Rc (`src/cpus/cpu_ppc_instr.c:4866–4872`); the handler reads it at `:2279`. Book II v2.01 depicts the load’s final field as `/` (`_scratchpad/ppc_vea_book2_v201.txt:1264`); Book I defines `/` as reserved and says “Reserved fields in instructions are ignored by the processor” (`_scratchpad/ppc_uisa_book1_v201.txt:432–439`). Thus disposition (1), allowing the existing operation at `src/cpus/cpu_ppc_instr.c:2309–2328`, fits that architecture. The older manual calls `lwarx` Rc=1 invalid but permits either a Program exception or boundedly undefined results (`_scratchpad/ppc_pem32_rev2_2001.txt:44603,6856`). Exact individual-processor behavior: **not checked**. Store-conditional’s final field is explicitly **1**, and a differing field makes that form invalid (`_scratchpad/ppc_vea_book2_v201.txt:1305,1307`; `_scratchpad/ppc_uisa_book1_v201.txt:1116–1128`).
+- **Fetch failure needs exception handling plus an unwind.** Simply deleting its exit falls through into instruction decoding (`src/cpus/cpu_ppc_instr.c:4124–4127`). Earlier address translation can already redirect to an exception handler (`src/cpus/cpu_dyntrans.c:679–698`); a failed slow device read can return failure through a block with no PPC exception arm (`src/cpus/memory_rw.c:603–624`).
+
+Manual citations above refer to the permitted on-disk files under `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad`, not to the commit.
+
+RECORDED was checked by filename, enclosing function and diagnostic text. The matching queue text is:
+
+> “**#10 PPC/ARM slow-path ifetch `exit`** (`cpu_ppc_instr.c` ifetch fail; `cpu_arm.c` `running=0`)”  
+> “the PPC data side is already fixed (#216). Fix = `return`/RI when promoted.”
+
+—`OUTSTANDING_BUGS.md:2614–2615`. The prose citation avoids treating historical candidate “#10” as a unique issue ID.
+
+Nearby records do not cover the other defects: “BATs **engage**” concerns resolved extended-BAT work (`OUTSTANDING_BUGS.md:2734–2741`); “A partial `stwcx.` can leave a reservation held” concerns reservation/alignment behavior, not either Rc guard (`:5655–5661`). NONE means no matching site or defect found in the required searches.
+
+(a) Guest-access ranking, by the conditions read; actual stock-OS triggering order was **not checked**:
+
+1. **`src/cpus/memory_ppc.c:265` — tied first:** any relocated fetch/data access on the 601 reaches the missing translation branch; no malformed access is required (`:258–265`).
+2. **`src/cpus/memory_ppc.c:288` — tied first:** ordinary relocated access on a non-32-bit model reaches missing translation (`:258–265,279–288`).
+3. **`src/cpus/memory_ppc.c:275`:** an ordinary protection failure requires a matching, mode-valid BAT whose permissions reject the access (`:56–73,270–275`).
+4. **`src/cpus/cpu_ppc_instr.c:4119`:** requires an uncached instruction read that returns failure; ordinary demand paging reaching this particular exit is **not checked**, because earlier translation can redirect faults (`:4110–4119`; `src/cpus/cpu_dyntrans.c:679–698`).
+5. **`src/cpus/cpu_ppc_instr.c:2307`:** requires the unusual load form with its low bit set (`:2279,2304–2307`); the newer manual treats that bit as reserved.
+6. **`src/cpus/cpu_ppc_instr.c:2333`:** requires the invalid store-conditional form with its mandatory low bit clear (`:2279,2329–2333`).
+
+(b) There are **no literal live `cpu->running = 0` assignments in these three files**. The PPC occurrence at `src/cpus/cpu_ppc_instr.c:1814` is inside a historical comment; the queue independently reports that file’s code count as zero (`OUTSTANDING_BUGS.md:20206–20210`).
+
+There is, however, an effective CPU stop imported by the PPC translator’s shared tail:
+
+```text
+src/cpus/cpu_dyntrans.c:2014 (included at src/cpus/cpu_ppc_instr.c:5430–5432) | X(to_be_translated), bad label | WHEN: guest access | CONDITION: reaches "bad:" (:1983), without taking "if (cpu->translation_readahead) return;" (:1990–1991); one caller is "default:goto bad;" (cpu_ppc_instr.c:5426) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:21163–21165 | DISPOSITION: (7) implement missing decode/exception behavior—valid instructions need implementation; illegal instructions need architectural faults | high
+```
+
+The queue calls this “The one shared ‘I do not know this instruction’ halt” and identifies `cpu_dyntrans.c`’s `bad` label (`OUTSTANDING_BUGS.md:21163–21165`). It is outside the named files’ literal census and the 13-call denominator.
+
+(c) Denominator:
+
+- **Fully read, `memory_ppc.c`:** `ppc_bat_block` (`:43–80`), `ppc_bat` (`:82–120`), `get_pte_low` (`:131–152`), `ppc_vtp32` (`:165–234`), `ppc_translate_v2p` (`:245–327`). Functions not read: none.
+- **Fully read, `experiment_arm_multi.c`:** `bit_count` (`:45–52`), `cmpfunc` (`:55–63`), `calc_max_list_length` (`:66–86`), `main` (`:89–159`). Functions not read: none.
+- **Fully read, `cpu_ppc_instr.c`:** `X(invalid)` (`:241–245`), `X(llsc)` (`:2276–2374`), and supporting `X(rfi)`, `X(rfid)`, `X(mfcr)`, `X(mfmsr)`, `X(mtmsr)`, `X(wrteei)` (`:2831–2933`).
+- **Partially read, `cpu_ppc_instr.c`:** `X(to_be_translated)`—fetch, load/store selection, LL/SC dispatch and tail (`:4071–4132,4269–4352,4866–4872,4901–5000,5406–5433`); floating load/store wrappers and their table selections (`:3412–3445,3538–3830`). Every other function in this file was **not semantically checked** beyond census/reference searches.
+- **Supporting reading:** complete `ppc_cpu_new`, `reg_access_msr`, `ppc_exception` (`src/cpus/cpu_ppc.c:72–215,265–345`), generator `do_it`/`main`, and the shared translation tail (`src/cpus/cpu_dyntrans.c:1857–2036`); excerpts of generic PC translation and memory access. Other supporting functions, full manuals, and the queue outside search matches/context: **not checked**.

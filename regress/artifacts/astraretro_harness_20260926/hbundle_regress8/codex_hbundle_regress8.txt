@@ -1,0 +1,51 @@
+ASTRARETRO_HBUNDLE_REGRESS8_ALIVE
+VERDICT: 9 findings (1 CANNOT-FAIL, 1 SELECTS-NOTHING, 2 STATUS-LAUNDERED, 0 ENCODING, 2 RECORD, 3 OTHER); 21 items checked clean
+
+All locations refer to HEAD `db8b1a33`. No files were written, builds performed, or emulator processes launched. In-memory tests of the HEAD scoring functions confirmed F2, F3 and F5.
+
+F1 | `regress/sh_halt_probe.py:206` | #315 / `54f72c06` | CANNOT-FAIL | **The alignment subfix is untested.** `fmovd r0idx` uses R0=0 and eight-byte-aligned SRC/DEST. Omitting only #315’s change from alignment mask `3` to `7` leaves its output `[0x77777777, 0x88888888]` identical to HEAD. The “alignment mask must stay 3” control at :213 also uses an eight-byte-aligned address. These rows catch other #315 defects, but cannot detect this correction’s removal. | Check indexed SZ=1 accesses at addresses congruent to four modulo eight for address errors, with SZ=0 success controls at those addresses. | confidence high
+
+F2 | `regress/pit8253_latch_probe.py:589` | #439 / `020a672f` | SELECTS-NOTHING | If arm F’s register reply lacks parseable r6/r7 fields, :404 selects nothing and `gettick()` substitutes zero. R3 consequently accepts divisor 65535. Neither `have` nor another row requires those F registers. Similarly, an empty T register dictionary passes :513 because `None != 0xAA`. Both omissions independently preserved overall PASS, completion sentinel and exit zero in the in-memory check. | Remove F’s r6/r7, then separately T’s registers, from otherwise passing results; require failure. | confidence high
+
+F3 | `regress/sh_halt_probe.py:301` | #315 / `54f72c06`; #392 | STATUS-LAUNDERED | After successful setup and stepping, an open but silent pty makes all three dump requests time out. Their return values are ignored; `run_seq()` kills the child yet returns `("alive", None)`. All five survival-only R80 rows accept that result. Separately, `run()` ignores the step timeout at :133 and freezes `halted` before subsequent output: a delayed halt followed by a dump is classified `alive`. Both paths were confirmed with mocked transcripts. | Supply successful setup prompts followed by silent dumps; separately deliver the halt after the step timeout. Both must produce failure. | confidence high
+
+F4 | `regress/pit8253_latch_probe.py:421` | `020a672f`; SH counterpart `54f72c06` | STATUS-LAUNDERED | A child that supplies valid observations and then exits unsuccessfully or dies before cleanup retains the cached successful verdict: PIT discards `waitpid()` status; SH does likewise at :153/:315. Already filed as **`ptywaitstatus`**, `OUTSTANDING_BUGS.md:21935`. | Return a nonzero child status after an otherwise valid transcript and require the probe to reject it. | confidence high
+
+F5 | `regress/pit8253_latch_probe.py:325` | #440 / `af4884c6` | OTHER | `MMUOFF` excludes W/X although both disable the MMU. Their C1/C2/A1, encoding and recompute checks are therefore omitted. Supplying failed W/X control values, encoding mismatches and empty recompute logs—while retaining their expected count bytes—still produced overall PASS in memory. The assertion at :501 that controls cover “EVERY MMU-off arm” is consequently false too. The header names **`pitcounteraxis`**, but that identifier has no filing in HEAD `OUTSTANDING_BUGS.md`. | Require every MMU-off arm to belong to the checked population; independently invalidate each W/X control and require failure. | confidence high
+
+F6 | `regress/sh_halt_probe.py:107` | `f415b919`; PIT counterpart `020a672f` | OTHER | With inherited `CLICOLOR=1`, both probes launch GXemul without `-A`. The debugger appends an ANSI reset after its prompt, so `rstrip().endswith("GXemul>")` never succeeds; correct builds time out. PIT has the same predicate at :363. Already filed as **`probecolorprompt`**, `OUTSTANDING_BUGS.md:18326`. | Evaluate both predicates against `"\x1b[34;1mGXemul> \x1b[0m"`; require recognition or disable colour explicitly. | confidence high
+
+F7 | `regress/pit8253_latch_probe.py:250` | #440 / `af4884c6` | RECORD | “MSB iff the rewind happened” reverses the actual transition. With the rewind, the following `0x11` writes the **LSB**, yielding final `0x4011`; without it, that byte writes the **MSB**, yielding `0x1140`. | Trace `wr_msb` through control-word / `0x9c` / control-word / `0x11`. | confidence high
+
+F8 | `regress/sh_halt_probe.py:172` | #315 / `54f72c06` | RECORD | The explanation says both XD rows seed FR0/FR1 and XF0/XF1 distinctly. Only `fmovd xd st` does. `fmovd xd ld` seeds neither bank and round-trips through another XD instruction; it can pass when both operations use the same wrong bank. The separately seeded store row catches that combined defect, so this is a false description of the load row, not complete suite blindness. | Enumerate the two rows’ FR/XF assignments and compare their bank observations. | confidence high
+
+F9 | `regress/pit8253_latch_probe.py:377` | `020a672f` | OTHER | `send(x, timeout=60)` never forwards `timeout` to `wait()`. The step and register requests at :390/:402 specify 30 seconds but actually receive the 60-second default. | Use a silent mocked reader and advancing clock; verify that `send(..., timeout=30)` stops at 30 seconds. | confidence high
+
+Checked clean in `regress/pit8253_latch_probe.py`:
+
+- :71 — MMU-disable words and ARM register/address fields agree with their intended operations.
+- :117 — A1 distinguishes device `0xAA` from RAM `0x55` and absent-device zero.
+- :355 — Fresh buffer marks and command echoes prevent reuse of an earlier prompt.
+- :394 — For the seven checked arms, missing or mismatched instruction lines fail encoding verification.
+- :476 — Recompute parsing requires the exact leading A1 record before removing it; an empty stream fails.
+- :584 — R1/R2 distinguish actual pre-#439 programming clobber and erroneous-read complaints.
+- :598 — R4–R6 distinguish wrong readback, extra recomputation and transient zero.
+- :607 — R7’s interleave distinguishes separate read/write selectors from a shared selector.
+- :616 — R9 and R8 (:634) require nonzero post-latch reads, exposing a permanently held latch.
+- :627 — R10/R11’s count expectations distinguish missing rewind and counter-zero-only rewind.
+- :657 — Completion follows all 18 checks; the gate requires the sentinel, every named row and denominator 18.
+
+Checked clean in `regress/sh_halt_probe.py`:
+
+- :62 — All eight decoder cases distinguish their original halt paths from the correction.
+- :177 — MOVCA.L distinguishes R0, decoder-default R12 and an unchanged destination.
+- :193 — The XD store row seeds the two banks differently and detects wrong-bank stores.
+- :218 — All five survival-only sequences reach genuine pre-fix abort/exit paths.
+- :395 — Guest MMIO stores actually install the UTLB entry and enable translated PREF.
+- :448 — EXPEVT has a distinguishable seed; readback handles exception-induced register banking.
+- :549 — Conflicting ITLB/UTLB mappings distinguish instruction translation from data translation.
+- :590 — PR=00/SQMD and D=0 cases distinguish read-type PREF judgment from write-type judgment.
+- :608 — Nonzero QACR tests cover area composition, queue selection and the wrong destination.
+- :622 — The 34-row population matches the gate denominator; named patterns fit the padded columns.
+
+DENOMINATOR: read 2 of 2 files in full

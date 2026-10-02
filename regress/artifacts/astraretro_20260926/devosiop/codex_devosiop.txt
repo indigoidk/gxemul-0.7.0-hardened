@@ -1,0 +1,31 @@
+ASTRARETRO_DEVOSIOP_ALIVE
+VERDICT: 4 findings (3 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 12 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Static review; no files written, builds performed, or probes executed.
+
+F1 | [src/devices/dev_osiop.c:650](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_osiop.c:650) | upstream, relied on by #118 | CODE | live at HEAD: yes | A table-indirect SELECT whose descriptor lookup fails still terminates the emulator. `read_word()` clears `scripts_running` and returns zero, but SELECT consumes that zero without checking the stop flag; the resulting empty selection bitmap reaches `exit(1)` at line 656. MOVE’s corresponding caller checks the flag at line 436. Broadly tracked by **exitunowned76**, `OUTSTANDING_BUGS.md:18816`, which includes osiop’s remaining exits at line 18853. | Smallest check: trace the failure return at lines 228–230 through SELECT’s caller and compare with MOVE’s guard. | confidence high
+
+F2 | [src/devices/dev_osiop.c:254](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_osiop.c:254) | #118 / 8dd86b5a | CODE | live at HEAD: yes | A guest supplying valid, untouched zero-filled RAM as an outgoing SCSI buffer gets its script stopped. The correction assumes a NULL lookup means unmapped RAM, but `src/core/memory.c:537` explicitly defines NULL reads as zero-filled memory; lines 554–564 return NULL for lazily unallocated backing blocks. Thus legitimate DMA reads are rejected, and the comment at osiop line 198 states the wrong premise. No specific OUTSTANDING entry found. | Smallest check: compare the mapper’s documented NULL contract and implementation with `read_byte()` and the stop check preceding command dispatch. | confidence high
+
+F3 | [src/devices/dev_osiop.c:1152](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_osiop.c:1152) | upstream, relied on by #146 / 5ee491e7 | CODE | live at HEAD: yes | Some wide guest register accesses still terminate the emulator before reaching #146’s width recovery. On the wired big-endian MVME187, a wide SCID-group access dispatches to the unhandled SOCL case; the default arm exits before the new width check at line 1155. This is a missed access-width sibling of the repaired path. Already broadly filed as **exitunowned76**, `OUTSTANDING_BUGS.md:18816/18853`. | Smallest check: follow endian address conversion, the longword whitelist, and default dispatch; verify the width guard occurs afterward. | confidence high
+
+F4 | [CHANGELOG.md:19822](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:19822) | #118 / 8dd86b5a | RECORD | live at HEAD: yes | The claimed “pmax deep (osiop/disk/net)” validation attributes controller coverage incorrectly. PMAX disk operations use ASC (`machine_pmax.c:309/654`, `dev_turbochannel.c:235`); osiop is attached by MVME187 (`machine_mvme88k.c:109`). PMAX exercises the shared disk backend, not these controller guards. No specific OUTSTANDING entry found. | Smallest check: grep the committed machine/controller attachment calls. | confidence high
+
+No separate TEST-GAP counted: these rounds do not claim a targeted osiop regression row. Checked `pcc2_width_probe.py`, `pcc2_width_witness.py`, `pcc2_c040_probe.py`, and `mk48_nvram_probe.py`; their MVME187 sessions target other devices.
+
+Checked clean in `src/devices/dev_osiop.c`—each statement is limited to the specified invariant:
+
+- **89, 1181:** The per-controller host-page warning latch is initialized.
+- **228, 254, 270:** All three helpers check NULL before dereferencing; successful accesses remain within the cached page.
+- **296, 358:** Unaligned DSP and instruction-fetch faults stop execution and preserve the original instruction address.
+- **436:** MOVE descriptor faults return before transfer handling.
+- **442:** The NULL-transfer guard covers all six phase cases and bypasses completion updates.
+- **475, 495:** Outgoing message/command faults prevent subsequent phase transition or command dispatch.
+- **500, 540:** Both initial-command and DATA_OUT rerun failures stop and return without exiting.
+- **523:** The DATA_OUT bound checks the exact offset used by the following buffer store.
+- **565, 584, 601:** Incoming-phase fault checks precede offset commitment, phase transition, or transfer freeing.
+- **984, 999:** SCID comparison is write-gated, and rejected byte-store changes are restored.
+- **1065, 1079:** ISTAT’s rejected bits are masked before storage; stopping is outside the warning latch.
+- **1123, 1139:** DCNTL handles all three formerly terminating mode checks; repeated writes still stop execution.
+
+DENOMINATOR: read 20 of 20 hunks of the net diff

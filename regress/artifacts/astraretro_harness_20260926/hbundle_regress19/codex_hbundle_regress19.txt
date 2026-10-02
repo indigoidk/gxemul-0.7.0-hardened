@@ -1,0 +1,45 @@
+ASTRARETRO_HBUNDLE_REGRESS19_ALIVE
+VERDICT: 9 findings (2 CANNOT-FAIL, 1 SELECTS-NOTHING, 3 STATUS-LAUNDERED, 0 ENCODING, 3 RECORD, 0 OTHER); 18 items checked clean
+
+Reviewed code from HEAD `db8b1a33`. No writes, builds, or emulator executions. The SH session checks below were exercised with in-memory protocol mocks; instruction encodings were checked against the designated manuals.
+
+F1 | `regress/diff_fbpending_bound.c:424` | #442 | STATUS-LAUNDERED | SELFCHECK reports through the comparator it tests. If `row()` stops incrementing `failures`, the deliberate mismatch sets `sc_bad=1`, but the summary cannot record that failure: it prints FAIL while the final token remains `FBBOUND_PASS`. Gate G also accepts either summary because its selector checks only the name. The separate self-mutant lane can still reject total comparator failure; this is not a claim that the whole gate passes. Already filed as **`fbpendingselfcheckG`**. | Smallest check: trace a suppressed failure increment through lines 411–425 and 460, then apply `gate_offline.sh:2371`’s selector. | confidence high
+
+F2 | `regress/wdc_altdigin_probe.py:389` | #525 | CANNOT-FAIL | The completion check accepts its own `breakpoint add` echo. In the tracked closure transcript, line 129 contains that command, line 130 says `[hits=0]`, and the actual breakpoint event first appears at line 134. Both the pre-hit prefix and completed transcript produce `hit=True`. Furthermore, even `hit=False` only prints; it cannot affect the score. | Smallest check: apply the predicate to `regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_BASE/transcript_BASE.log` through line 133; it returns true without a breakpoint event. | confidence high
+
+F3 | `regress/wdc_altdigin_probe.py:379` | #525 | SELECTS-NOTHING | Empty or unrecognized disassembly makes the parser select no instructions and leaves `w_ok=0`. “Control 0” merely prints that result. With the expected subsequent register readings, the probe still emits `WDC_ALTDIGIN_CONTROL=OK` and `WDC_ALTDIGIN_RESULT=22/22`, which the gate accepts. | Smallest check: supply empty disassembly and the expected register map to an isolated evaluator; the missing instruction verification must make the control fail. | confidence high
+
+F4 | `regress/sh_intprio_probe.py:185` | #455 | CANNOT-FAIL | Liveness accepts the echoed command `print 0x1234` without its answer. Both a working numeric response and an echo-only response produce `alive=True`; the final read’s failure status is also ignored. The actual HEAD function, given an echo-only mock, returned CONTROL=OK with no numeric response. Already filed as **`sessionechosat`**. | Smallest check: feed only `GXemul> print 0x1234\r\n` into the verification delta. | confidence high
+
+F5 | `regress/sh_intprio_probe.py:308` | 8185920e / #456 | STATUS-LAUNDERED | `irq14 imask` maps every failed session to the expected `"refused"`. A host death during this session therefore scores exactly like a healthy masked interrupt. The other controls run separate processes. Already filed as **`sessionrefused`**. | Smallest check: substitute `session()`’s result `("", True, "")`; the row reports `refused … refused … ok`. | confidence high
+
+F6 | `regress/sh_intprio_probe.py:382` | #455 | STATUS-LAUNDERED | A child that hangs silently after `continue` passes both `prio0 tmu` and `prio0 tmuq`. With `verify=False`, the open pty survives the read deadline, teardown kills the child, and its status cannot change the verdict. An in-memory mock of the actual HEAD functions produced `died=False`, `alive`, and `silent`, followed by SIGKILL teardown. This confirms harness behavior, not an emulator mutant measurement. Related filing **`ptywaitstatus`** covers ignored child status; it does not explicitly describe this progress gap. | Smallest check: require a mock that completes setup then hangs after `continue` to fail the TMU observation. | confidence high
+
+F7 | `regress/diff_fbpending_bound.c:107` | #442 | RECORD | `arm()` claims to perform control/load writes “through the device’s own register handler.” It instead assigns both fields directly and calls `reload_timer_value()`, bypassing register dispatch and its side effects. | Smallest check: compare lines 112–114 with the load/control handlers at `src/devices/dev_footbridge.c:659` and `:679`. | confidence high
+
+F8 | `regress/sh_intprio_probe.py:406` | 8185920e / #456 | RECORD | The comment says `if (prio <= 1) return;` passes all six preceding rows because their interrupt lines have priority zero. HEAD’s `irq14 deliv` now exercises priority one and also loses delivery under that change. The expected score is therefore 5/7, not the historical 6/7 repeated in `gate_sh_rounding.sh:298`. | Smallest check: trace IRQ14’s priority assignment into the delivery session at line 301. | confidence high
+
+F9 | `regress/diff_fbpending_bound.c:36` | #442 | RECORD | The linking comment says “four globals,” but lines 40–44 define five, including `dyntrans_cache_size`; all five also exist in HEAD’s `src/core/main.c`. This is a documentation census error. | Smallest check: count the five definitions and compare `src/core/main.c:61–67`. | confidence high
+
+Checked clean:
+
+- `regress/diff_fbpending_bound.c:149` — R0 requires actual counter movement; an inert callback fails.
+- `regress/diff_fbpending_bound.c:183` — R1/R5 sample all four timers and enforce both the ceiling and each timer’s peak.
+- `regress/diff_fbpending_bound.c:246` — R3’s trough check distinguishes reset-to-zero from reset-to-one.
+- `regress/diff_fbpending_bound.c:347` — R6 covers all eight timer/debt cells; the gate pins their exact printed results.
+- `regress/diff_fbpending_bound.c:380` — R6b arms all timers before driving them and uses four distinct rates.
+- `regress/diff_fbpending_bound.c:452` — identity counts correctly distinguish 27 shallow rows from 28 deep rows.
+- `regress/diff_fbpending_bound.c:460` — verdict token and case-qualified self-mutant pin match their consumers; skipped R2 cannot satisfy the deep-run selector.
+- `regress/wdc_altdigin_probe.py:67` — MIPS fields/opcodes match `_scratchpad/mips32_volII.txt:157,726,839,1183,1270`; branch-to-self matches `mips_r4000.txt:4489`.
+- `regress/wdc_altdigin_probe.py:251` — all 22 result registers are sampled and retained until readback.
+- `regress/wdc_altdigin_probe.py:263` — the five core reads distinguish zero from leaked statuses `0x51`, `0x01`, `0x08`, `0x58`, and `0x50`.
+- `regress/wdc_altdigin_probe.py:272` — reset and write-decline checks observe both DRQ and FIFO contents.
+- `regress/wdc_altdigin_probe.py:425` — missing samples remain `None` and fail even when the expected value is zero.
+- `regress/wdc_altdigin_probe.py:449` — the gate rejects missing/malformed results and pins the denominator to 22.
+- `regress/sh_intprio_probe.py:219` — dump parsing handles little-endian bytes and rejects absent data.
+- `regress/sh_intprio_probe.py:314` — RAM liveness requires an asymmetric value to replace an independent sentinel.
+- `regress/sh_intprio_probe.py:329` — the device-signature row requires the configured 64 MiB value.
+- `regress/sh_intprio_probe.py:429` — SH load/store, branch, and NOP encodings match `_scratchpad/sh4_programming.txt:13666,13668,13674,9280,14520`.
+- `regress/sh_intprio_probe.py:449` — the gate requires seven successful named rows; their padding fits its selectors, and missing results or `0/0` fail.
+
+DENOMINATOR: read 3 of 3 files in full

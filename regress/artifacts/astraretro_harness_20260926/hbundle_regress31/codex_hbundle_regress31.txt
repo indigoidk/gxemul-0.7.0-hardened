@@ -1,0 +1,47 @@
+ASTRARETRO_HBUNDLE_REGRESS31_ALIVE
+VERDICT: 11 findings (0 CANNOT-FAIL, 0 SELECTS-NOTHING, 4 STATUS-LAUNDERED, 1 ENCODING, 5 RECORD, 1 OTHER); 16 items checked clean
+
+Reviewed `db8b1a33`; repository content came from Git objects. No builds or file changes. Outcomes below follow from code tracing unless explicitly described as recorded evidence.
+
+F1 | regress/selftest_mutation.sh:187 | 2050c501 | STATUS-LAUNDERED | A compiled mutant that crashes before reporting produces zero `DIFF_PASS` matches and passes “is DETECTED.” Lines 172–173 discard execution status and never require `DIFF_FAIL`. Already filed as **#376 residual, harness task #55**, `OUTSTANDING_BUGS.md:4621`. | Supply a mutant execution that exits unsuccessfully without a verdict; require an incomplete-run failure rather than detection. | confidence high
+
+F2 | regress/landisk_aux_probe.py:185 | #533 | STATUS-LAUNDERED | If session 3 prints `r2=0x9` and then dies before answering the remaining commands, `session()` returns `alive=False`. The caller ignores it, passes `206 ctl dead`, and can emit `6/6` plus `LANDISK_AUX_DONE`. The gate accepts those records. No matching filing found. | Supply that truncated third-session transcript with `alive=False`; require the probe to reject it. | confidence high
+
+F3 | regress/repro_m8invread.c:180 | #434 | STATUS-LAUNDERED | A lost SCTR store makes the read-back control observe zero instead of `0xabcd`, increments `fails`, and prints FAIL, but unconditional `return 0` reports successful execution. This concerns failed controls, independently of the reproduction’s intentional historical expectations. No gate currently consumes this executable; its sibling explicitly corrected the same exit-status defect. No specific filing found. | Force the read-back control to fail and inspect the returned status. | confidence high
+
+F4 | regress/sh4_rtcsr_witness.py:149 | #449 | STATUS-LAUNDERED | A started session that emits the legacy RTCSR diagnostic and then hangs passes S1/S2 as “KILLS the host.” The imported helper returns `alive=False` on unanswered dump timeouts, kills the child itself, and discards its exit status (`sh4_pcic_probe.py:253,306,324`). Fixed HEAD’s warning differs, so this applies specifically to legacy-diagnostic inputs. No matching filing found. | Compare an open, silent PTY after that diagnostic with actual child exit; only the latter should establish the claimed kill. | confidence high
+
+F5 | regress/sh_tlbmulti_probe.py:117 | #457 | OTHER | Fixed-duration reads return True even when no debugger response arrives. A silent, wedged child can pass the startup control and `tlbm alive`; a delayed correct child can instead fail register rows as “absent.” Already filed as **`probetimebased`**, `OUTSTANDING_BUGS.md:9216`. | Feed an open, silent PTY to the control; require completed debugger interaction before reporting OK. | confidence high
+
+F6 | regress/sh4_rtcsr_witness.py:122 | #449 | ENCODING | D1 writes `0x0040`; S1/S2 similarly omit the RTCSR write key. The hardware manual requires a word transfer with upper byte `0xA5`, so D1’s intended CMIE write requires `0xA540`. HEAD accepts the malformed value because `dev_sh4.c:2376` simply masks off the upper byte; a conforming implementation would invalidate the witness’s read-back expectation. Already recorded under **`shsweep`**, `OUTSTANDING_BUGS.md:8187`. | Compare the constructed values with [SH7750 hardware manual §13.2.15](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:23981), especially line 23985. | confidence high
+
+F7 | regress/sh4_rtcsr_witness.py:47 | #449 | RECORD | C2 is claimed to provide sharper coverage through a different RTCSR bit. Writing `0x80` preserves the existing CMF value (`dev_sh4.c:2377`); fresh state is zero, and no path sets CMF. C1 and C2 therefore both present zero to the timer, before and after #449. The underlying flags are filed as `sh4rtcflags`; the false coverage claim is not. | Read RTCSR after C2’s store: it remains zero, as specified by the [manual’s CMF semantics](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:23827). | confidence high
+
+F8 | regress/selftest_mutation.sh:115 | #331 | RECORD | `flushband` claims to flush every subnormal result and revert the correction outright. Its exact anchor removes only the `FP_SUBNORMAL` call at `float_emul.c:677`; the `FP_NORMAL` underflow call at :665 survives. Consequently S-format `2^-149` still produces `0x00000001`, whereas reverting that correction produces zero. No matching filing found. | Inspect both call sites and the replacement’s indentation and following `break`. | confidence high
+
+F9 | regress/selftest_mutation.sh:60 | #292 | RECORD | `revert287` claims to recreate overflow’s garbage-fraction NaN. Replacing `if (to_inf)` with `if (0)` leaves the `else` at `float_emul.c:630`, which constructs the largest finite value. For S-format LEGACY `+1e300`, the mutant produces `0x7f7fffff`, genuine pre-#287 code produces `0x7fbf21e4`, and corrected code produces `0x7f800000`. The mutant fails, but for a different overflow behavior. No matching filing found. | Trace that input through the retained `else` and `diff_ieee_store.c`’s historical implementation. | confidence high
+
+F10 | regress/selftest_mutation.sh:7 | #436 | RECORD | The present-tense “ELEVEN differentials” and “one-eleventh” scope statement is stale. HEAD `gate_offline.sh` has fourteen distinct differential compile paths, including `fbpending_bound`, `rtc_range`, and `diskimage_parse`; even omitting the conditional `fbpending_bound` build leaves thirteen. No matching filing found. | Enumerate the distinct differential sources in the gate’s compiler invocations. | confidence high
+
+F11 | regress/repro_m8sarpurge.c:16 | 840de826 | RECORD | The purported exhaustive census says SCTR appears nowhere in `src/` outside its case label. `src/include/thirdparty/m8820x.h:64,118–120` contains its register and bit definitions. `dev_m8820x.c:340` expressly corrects this exact assertion, but the reproduction retains it. The narrower claim about absent translation consumers remains sound. No separate harness filing found. | Search HEAD’s `src/` for `CMMU_SCTR` and compare the corrected production comment. | confidence high
+
+Checked clean:
+
+- `regress/sh_tlbmulti_probe.py:165` — Missing register matches become `"absent"` and fail numeric expectations.
+- `regress/sh_tlbmulti_probe.py:185` — The nondefault SR makes omitted FD clearing and IMASK setting observable.
+- `regress/sh_tlbmulti_probe.py:192` — The single-hit control detects an erroneous `n_hits >= 1` trigger.
+- `regress/landisk_aux_probe.py:147` — Missing read-back text cannot become an expected zero.
+- `regress/landisk_aux_probe.py:179` — The reset oracle distinguishes retained DRQ (`0x9`) from cleared DRQ (`0x1`).
+- `regress/readiness_predicate_test.py:113` — Four predicate forms distinguish stale-buffer and prompt-string failures.
+- `regress/readiness_predicate_test.py:171` — The late-prompt pair independently exercises the echo requirement.
+- `regress/readiness_predicate_test.py:192` — Six actual comparisons feed the verdict; the gate requires their results and denominator.
+- `regress/repro_m8sarpurge.c:153` — Present/gone/harness-fault states are explicitly distinguished; accepting historical and corrected states is intentional.
+- `regress/repro_m8sarpurge.c:174` — The separate SCR flush control requires a real invalidation callback.
+- `regress/repro_m8sarpurge.c:190` — Failed controls produce nonzero exit status.
+- `regress/repro_m8invread.c:139` — A counting callback is installed before accesses; register word indices are correctly converted to byte offsets.
+- `regress/repro_m8invread.c:175` — The nonzero SCTR expectation detects missing storage in the printed failure tally.
+- `regress/selftest_mutation.sh:85` — Missing mutation anchors explicitly fail setup.
+- `regress/selftest_mutation.sh:171` — Compiler failure yields `BUILDFAIL`, which cannot satisfy the expected detection count.
+- `regress/sh4_rtcsr_witness.py:160` — Survival controls require the post-loop sentinel, proving loop completion.
+
+DENOMINATOR: read 7 of 7 files in full

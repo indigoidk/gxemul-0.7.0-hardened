@@ -1,0 +1,111 @@
+VERDICT: Reconcile with i8253zero, then witness and implement both one-byte formats.
+
+I audited committed **HEAD `8ea26abb421a80231317bebb3f364025945f33f8`**, using `git show HEAD:<path>`. I read both complete sections naming this row in [OUTSTANDING_BUGS.md:19568](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:19568) and [OUTSTANDING_BUGS.md:19833](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:19833), and all four [ledger entries beginning at :47018](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:47018), including the latest September 18 entry.
+
+The working ledger is dirty, but this row equals HEAD. `dev_8253.c` and the two relevant PIT probe files also match HEAD. The working `gate_arm.sh` adds unrelated CRIME checks; its PIT block matches HEAD. **Nothing was changed, built, or executed as an emulator test.** Predicted behavior below is source-derived.
+
+1. **The two affected write arms, containing three defects, remain at HEAD.**
+
+   An ordinary guest byte store reaches them on stock CATS through this construction path:
+
+   - [machine_cats.c:63](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c:63) installs Footbridge.
+   - [dev_footbridge.c:882](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:882) installs the ALi M1543 bridge.
+   - [bus_pci.c:476](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:476) constructs ISA with port base `0x7c000000`.
+   - [bus_isa.c:241](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:241) installs the PIT at base plus `0x40`, connected to ISA IRQ0.
+   - [dev_8253.c:386](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_8253.c:386) registers four bytes: counter ports `0x7c000040–42`, control port `0x7c000043`.
+
+   The guest execution path is ARM `STRB` → [cpu_arm_instr.c:4731](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4731) instruction dispatch → [cpu_arm_instr_loadstore.c:367](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:367) `memory_rw(..., MEM_WRITE, ...)`. The byte specialization sets length 1 at line 105. With the MMU disabled, [memory_arm.c:54](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:54) supplies the physical address; [memory_rw.c:480](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480) finds the mapping, subtracts its base at line 494, and invokes `dev_8253_access` at line 587.
+
+   Within [dev_8253.c:166](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_8253.c:166):
+
+   | Site | Condition and actual behavior | Defect |
+   |---|---|---|
+   | Lines 174–177, LSB write arm | `RW=01`: `(old & 0xff00) \| byte`, then `break` | Preserves stale MSB. Also performs no rate calculation or timer creation/update. |
+   | Lines 178–196, MSB write arm | `RW=10`: `(old & 0x00ff) \| (byte << 8)`, then computes rate and services timer0 | Preserves stale LSB, making counter0’s requested timer rate wrong. |
+   | Lines 310–321, control-word handling | Resets selected latch and read/write phases, but leaves `counter[]` intact | Shared missing normalization behind both stale-byte cases; this is the proposed repair location. |
+
+   **Census:** the three counter-address cases converge on one write switch. There are **two defective data-write sites**, applicable to three counters each, and **three behavioral failures**. The missing timer action shares the LSB site; it is not a third write arm. Only counter0 has a host-backed timer, at lines 191–196.
+
+   Both arms also implement the respective halves of `RW=11`, selected by `wr_msb[]` at lines 167–170. Preserving the opposite byte is necessary during that assembly. Their read-switch and control-word-printing namesakes are not additional defect sites.
+
+   The timer consequence follows through [timer.c:140](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/timer.c:140) and [timer.c:207](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/timer.c:207), which derive the callback interval from the supplied rate. PIT callbacks increment pending interrupts at `dev_8253.c:109`; device ticks assert IRQ at line 127.
+
+2. **The local Intel manual settles the one-byte behavior.**
+
+   I listed `_scratchpad\*.txt` with `ls`, searched the manuals, and read the relevant passages in **`i8254.txt`**, the Intel 8254 datasheet. Its [line 15](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:15) identifies the 8254 as a superset of the 8253; I am citing the **8254 document**, not claiming to have found a separate 8253 manual. The [online Intel datasheet copy, page 5](https://www.ecsdump.net/wp-content/uploads/2020/12/8254.pdf#page=5), corroborates the local passage.
+
+   - [i8254.txt:161](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:161): CR receives the programmed count and later transfers it to the counting element. Lines 168–172 require clearing CRM/CRL when programming; for either one-byte format, **“the other byte will be zero.”**
+   - [i8254.txt:219](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:219): `RW=01` is LSB-only, `10` MSB-only, `11` LSB then MSB. [Line 243](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:243) requires the initial count to follow that selected format. Thus one byte completes a one-byte load; only the two-byte format awaits its second byte.
+   - [i8254.txt:481](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:481): mode 2 divides the input clock by the programmed count. [Line 528](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:528) explicitly uses LSB-only programming for the timing diagrams.
+   - [i8254.txt:671](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/i8254.txt:671): binary zero represents 65,536. That is the adjoining `i8253zero` defect, not permission to disable the timer.
+
+   The documentation defines hardware state and timing. Choosing how to represent those requirements in this rate-only emulator remains an implementation inference.
+
+3. **IMPLEMENT is supported at both arms; the other dispositions do not supply the missing semantics.**
+
+   I checked the tree’s seven-member menu at [tools/CLAUDE.md:1892](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1892). Applied independently to the LSB stale-byte failure, LSB scheduling omission, and MSB stale-byte failure:
+
+   | Option | Existing tree precedent | Assessment here |
+   |---|---|---|
+   | Delete offending block | [dev_dreamcast_asic.c:120](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_asic.c:120) records removal of the entire rejecting block | These sites need servicing code; deleting their stores or masks does not implement it. |
+   | Silent decline | [dev_sgi_re.c:1855](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1855), ignored `0x4008` access | Would discard documented, legal programming. |
+   | Decline with bounded announcement | [dev_sgi_re.c:491](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:491), unsupported-width warning latch | Would announce incomplete emulation without correcting it. |
+   | Accept existing result | [dev_footbridge.c:600](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:600), documented IRQEnable read | PIT’s existing result is wrong or incomplete. |
+   | Fault | [dev_unreadable.c:41](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41) | Wrong for legal PIT accesses. Also, merely returning failure does not deliver an ARM device-bus exception: the dispatch at `memory_rw.c:608–624` supplies MIPS/M88K exceptions. |
+   | Backed accept | [dev_sgi_re.c:1705](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1705), stored MTE registers | PIT already has count storage; storage alone cannot supply timer behavior. |
+   | Implement | PIT’s existing MSB completion block, plus [dev_mc146818.c:448](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_mc146818.c:448) creating or retuning a timer | Supported for all three failures. |
+
+   The supported design within the current model is:
+
+   - Clear the **selected** count register on a genuine programming control word, after the latch-command early exit at `dev_8253.c:303`. The neighboring selected-counter resets at lines 311 and 320–321 provide the local placement/indexing precedent.
+   - Retain byte-pair assembly and commit the rate once a load is complete: every one-byte write, or the MSB of a two-byte write. Reuse the existing counter0 creation/update behavior.
+   - Coordinate zero-count interpretation with `i8253zero`.
+
+   Clearing the unused byte conditionally inside each one-byte write arm could repair the completed value, but would leave the documented control-word clearing unrepresented. Unconditionally clearing either shared arm would break two-byte assembly. Likewise, unconditionally moving rate calculation after every byte would introduce intermediate rates.
+
+4. **The repair would disturb an existing control and must preserve substantial neighboring coverage.**
+
+   [pit8253_latch_probe.py:116](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:116) programs `0x55aa`, **rewrites the control word**, then expects the old low byte `0xaa`. Its [A1 assertion at line 511](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:511) therefore fails if the proposed control-word handler clears `counter[]`.
+
+   That control must be redesigned before using it to judge this fix. Reading the two differently valued bytes immediately after their completed write pair, without another programming control word, supplies the existing device-versus-RAM distinction without depending on retained CR contents.
+
+   The same probe’s [rows beginning at :598](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:598) protect two-byte readback, one recomputation per pair, absence of transient zero rates, independent read/write phases, latch consumption, and control-word rewind on counters0 and2. [gate_arm.sh:1787](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1787) checks completion, named controls/results, and a literal **18-row** denominator.
+
+   [lca_isalane_probe.py:1256](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py:1256) uses counters0/1/2 and split-tail accesses to test forwarding counts through the PIT’s alternating byte phases. Its four PIT sessions derive **150 rows**: three 37-row counter sessions and one 39-row tail session. They use `RW=11`; they exercise the shared arms without testing this row’s one-byte semantics. Their control words precede complete initialization pairs, so selected-CR clearing should preserve them—an inference requiring validation. The [HEAD wiring exemption at :2659](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:2659) confirms this Alpha probe is not behaviorally gate-wired.
+
+   [diff_timer.c:20](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:20), run by [gate_offline.sh:408](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh:408), checks timer-core policy; it cannot detect a PIT caller that never calls the core.
+
+   Relevant neighboring rows are `pitlsb`/`i8253zero`, shared-format `pitclobber`, `pitlatch2`, `pit8253bcdbinary`, and `pit8253flood`. In particular, reusing the whole MSB completion switch for LSB-only writes would newly reach the counter1/2 TODO announcements at `dev_8253.c:198/200`.
+
+5. **A minimal controlled witness can use stock CATS.**
+
+   This is a proposed sequence, **not an executed result**. Use ordinary privileged ARM byte accesses on the unmodified CATS machine. Disable the MMU with guest instructions and read back its state, following [pit8253_latch_probe.py:70](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:70). This matters: CATS enables its initial MMU mapping through [cpu_arm.c:226](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:226).
+
+   Two stores—LSB-only control word, then count byte—reach the missing-scheduling site. **Four stores give a directly observable stale-MSB-only-load witness:**
+
+   | Order | Guest byte access |
+   |---|---|
+   | 1 | Write `0x14` to `0x7c000043`: counter0, binary mode2, LSB-only. |
+   | 2 | Write `0xff` to `0x7c000040`: seed its low byte. |
+   | 3 | Write `0x24` to `0x7c000043`: counter0, binary mode2, MSB-only. |
+   | 4 | Write `0x40` to `0x7c000040`: complete that count. |
+
+   HEAD predicts a stored count of **`0x40ff = 16639`** and a diagnostic reporting **72 Hz**. The required composed count is **`0x4000 = 16384`**, giving **73 Hz under the model’s existing rounding**. The final write reaches the timer-creation call with the wrong rate. These numbers follow from `dev_8253.c:179–196`, not from a measured transcript.
+
+   Controls:
+
+   - **Liveness:** load a known RAM sentinel before the sequence and verify a guest-written completion marker afterward; check the final PC. The existing RAM control is at [probe line 114](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:114).
+   - **Device signature:** after capturing the defect observation, program a normal two-byte count with different bytes, then read twice from the same counter port without another control-word write. HEAD returns the two bytes in order; RAM repeats its last byte and an absent device cannot supply the signature. This ordering also avoids preinstalling timer0 before the initial LSB observation.
+   - Retain the existing MMU-on negative-control principle at [probe line 513](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:513).
+
+   This witnesses the wrong accepted count/rate. Actual interrupt cadence and the separate cold-start versus already-running LSB cases still need timed positive-control observations; a missing debug message alone would not prove those.
+
+6. **The core finding survives, but several record claims need qualification or reconciliation.**
+
+   - **No named defect has been fixed.** The cited PIT lines 175, 179, 181–196 and 310–312 still identify the relevant code at HEAD.
+   - **The missing LSB timer action was already filed.** [ledger.json:16179](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:16179) describes exactly that omission as `pitlsb`; [line 16304](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:16304) records its merger into `i8253zero`. [Line 9445](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:9445) already specifies completion-based recomputation and warns against recomputing on a two-byte load’s first byte. The September row’s new scope is the stale-byte pair.
+   - **“Silently dead” needs the existing-timer qualification.** A fresh timer is never installed; an existing timer continues at its old rate. The row’s later text correctly distinguishes these.
+   - **The datasheet question is settled.** The earlier request to decide whether LSB-only programming awaits an MSB is superseded by the widened entry and the manual’s format definitions.
+   - **“Keep the count large” cannot produce a low-rate, nonzero LSB-only test.** Its maximum is 255, implying approximately 4,679 Hz at the tree’s input clock. Zero reaches the separate zero-divisor defect. Test planning must acknowledge this format constraint.
+   - **“Host rate” means the PIT’s host-backed callback schedule.** It does not mean each PIT write changes the process’s `setitimer` frequency; that is configured separately at [timer.c:326](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/timer.c:326).
+   - The earlier flood section’s **MED** label is superseded by this row’s **MED-HIGH** entry. The latest [ledger note at :47049](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:47049) explicitly says **no panel was convened on this row**. Its witness remains null; this read-only audit does not change that.

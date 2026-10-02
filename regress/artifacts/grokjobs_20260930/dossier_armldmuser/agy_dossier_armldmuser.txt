@@ -1,0 +1,285 @@
+GROKJOBS_DOSSIER_ARMLDMUSER_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+### Section-by-Section Audit of `codex_dossier_armldmuser.txt`
+
+Every factual sentence of the design dossier was audited against the committed source at `db8b1a33`, the hardware manuals on disk at `_scratchpad/ddi0100i.txt`, and `OUTSTANDING_BUGS.md` at `db8b1a33`. All 122 factual sentences and tabular claims in the dossier are strictly accurate and supported by evidence in the repository and referenced texts.
+
+#### 1. Title, Verdict, and Executive Finding (Lines 1–4)
+- **Claim:** The stopping code is in `arm_pop()`, called by `bdt_load`, and stops the current CPU without directly calling `exit()`; loss of machine execution follows when that CPU is the machine's remaining running CPU. All repository citations refer to `db8b1a33`.
+- **Evidence:** `src/cpus/cpu_arm_instr.c:1602`, `1795-1799` confirms `arm_pop()` contains the stopping assignment `cpu->running = 0` and `return`, with no call to `exit()`. `src/cpus/cpu_arm_instr.c:1956` confirms `bdt_load` invokes `arm_pop()`. `src/machines/machine.c:707-711`, `741-746` and `src/core/emul.c:1046-1059` confirm the scheduler loop only executes CPUs with `cpu->running != 0` and terminates the machine run loop when no CPUs remain running.
+- **Status:** TRUE / SUPPORTED.
+
+#### 2. Instruction-to-Stop Path (Lines 8–56, Items 1–10)
+- **Item 1 (Fetch):** Translates via `memcpy(ib, page + (addr & 0xfff), sizeof(ib));` on page hit or calls `memory_rw` with `MEM_READ, CACHE_INSTRUCTION`; failed read returns before decode; assembles `iword` via `READ_WORD_LE` / `READ_WORD_BE`. Supported by `src/cpus/cpu_arm_instr.c:4044-4063`.
+- **Item 2 (Decode):** Fields extracted by `condition_code = iword >> 28;`, `main_opcode = (iword >> 24) & 15;`, `s_bit = l_bit = iword & 0x00100000;`. The `0xf` condition prefix branches to special encodings (`:4090-4149`). Ordinary block data transfers enter `case 0x8` or `case 0x9` (`:4782-4783`). Supported by `src/cpus/cpu_arm_instr.c:4073-4079`, `4090-4149`, `4782-4783`.
+- **Item 3 (Dispatch & Base PC):** Dispatch stages base register and word via `ic->arg[0] = (size_t)(&cpu->cd.arm.r[rn]);`, `ic->arg[1] = (size_t)iword;`, and if `l_bit` sets `ic->f = cond_instr(bdt_load);`. Base register equal to PC hits `if (rn == ARM_PC)` and `goto bad;`. Supported by `src/cpus/cpu_arm_instr.c:4784-4788`, `4840-4844`.
+- **Item 4 (Execution):** Translation read-ahead returns early at `src/cpus/cpu_dyntrans.c:1916-1918`. Actual execution calls `ic->f(cpu, ic);` at `src/cpus/cpu_dyntrans.c:1978`. Condition tables wrap execution; AL (0xe) calls the handler directly (`src/cpus/cpu_arm_instr.c:132-199`). Supported.
+- **Item 5 (S-bit Extraction):** `bdt_load` reads `uint32_t iw = ic->arg[1];`, extracts `int s_bit = iw & 0x00400000;`, synchronizes PC, and calls `arm_pop(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);`. Supported by `src/cpus/cpu_arm_instr.c:1938-1957`.
+- **Item 6 (Defective Control Flow):** `return_flag` initialized to 0 (`:1607`). Under `if (s_bit)`, User mode test (`cpsr & ARM_FLAG_MODE == ARM_MODE_USR32`) clears `s_bit = 0;` and logs `fatal(...)`. The subsequent test `if (iw & 0x8000)` clears `s_bit = 0; return_flag = 1;` independently. Clearing `s_bit` does not exit the outer block; User mode still sets `return_flag = 1` when PC is selected. System mode skips the User test and sets `return_flag = 1`. Supported by `src/cpus/cpu_arm_instr.c:1607`, `1610-1620`.
+- **Item 7 (Memory Accesses):** Visits registers in incrementing `{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}` or decrementing `{15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0}` order. Unselected registers skipped via `if (!((iw >> i) & 1))`. P and U adjust address before/after. Cached loads read host page; uncached call `memory_rw`, and `return;` on failure prevents reaching the terminal switch. Supported by `src/cpus/cpu_arm_instr.c:1622-1640`, `1716-1740`.
+- **Item 8 (Side Effects Precede Stop):** Values staged in `new_values[i] = value;` (`:1732`). Because `s_bit` was cleared to 0, values are published via `cpu->cd.arm.r[i] = new_values[i];` (`:1748`). Writeback occurs via `if (w_bit) *np = addr;` (`:1777-1778`). Registers (including `r[15]`) and base register are modified prior to the stop. Supported by `src/cpus/cpu_arm_instr.c:1732`, `1742-1749`, `1777-1778`.
+- **Item 9 (Missing SPSR Case Stops CPU):** Under `if (return_flag)` (`:1780`), switch cases exist for FIQ32 (`:1785`), ABT32 (`:1787`), UND32 (`:1789`), IRQ32 (`:1791`), SVC32 (`:1793`). Neither USR32 nor SYS32 has a case. The default arm executes `fatal("bdt_load: unimplemented mode %i\n", cpu->cd.arm.cpsr & ARM_FLAG_MODE); cpu->running = 0; cpu->cd.arm.next_ic = &nothing_call; return;` (`:1795-1799`). Supported by `src/cpus/cpu_arm_instr.c:1780-1799`.
+- **Item 10 (Bypassed Exception Return):** Mode bank switching, CPSR update, flags update, and PC branch (`cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;`) at `:1802-1825` are bypassed by the early `return;` at line 1799. Supported by `src/cpus/cpu_arm_instr.c:1802-1825`.
+- **Scheduler & Host Diagnostics:** `fatal()` invokes `va_debug()` and returns (`src/core/debugmsg.c:384-391`). `cpu->running = 0` stops scheduling of that CPU (`src/machines/machine.c:707-711`, `741-746`). Supported.
+- **Status:** TRUE / SUPPORTED.
+
+#### 3. Privilege Exposure & CPU Model Enumeration (Lines 58–90)
+- **Privilege Exposure:** Direct unprivileged availability defect is in User mode (`ARM_MODE_USR32`). System mode (`ARM_MODE_SYS32`) reaches the same default halt, but System is privileged. ARM manual distinguishes these modes: *"The modes other than User mode are known as privileged modes"* and System mode *"has exactly the same registers available as User mode"*. Supported by `_scratchpad/ddi0100i.txt:1355-1375` and `src/cpus/cpu_arm_instr.c:1612-1618`, `1784-1799`.
+- **Backend Dispatch:** Every accepted ARM CPU type sets `cpu->run_instr = arm_run_instr;` (`src/cpus/cpu_arm.c:109`). No model test exists in `bdt_load` / `arm_pop`. Header warns `/* NOTE: Most of these are bogus! */` (`src/include/arm_cpu_types.h:47`). Supported by `src/cpus/cpu_arm.c:94-120` and `src/include/arm_cpu_types.h:46-48`.
+- **Model Table Line Citations:**
+  - ARM3, ARM610, ARM620: `src/include/arm_cpu_types.h:51-54`.
+  - ARM700, ARM710, ARM710A, ARM720T, ARM740T4K, ARM740T8K, ARM7500, ARM7500FE: `src/include/arm_cpu_types.h:56-63`.
+  - ARM810, ARM920T, ARM922T, ARM940T: `src/include/arm_cpu_types.h:65-68`.
+  - ARM946ES, ARM966ES, ARM966ESR1: `src/include/arm_cpu_types.h:70-72`.
+  - ARM1020E, ARM1022ES, ARM1026EJS, ARM1136JS, ARM1136JSR1: `src/include/arm_cpu_types.h:74-78`.
+  - SA110, SA1100, SA1110, TI925T, IXP1200, 80200: `src/include/arm_cpu_types.h:80-86`.
+  - PXA210, PXA210A, PXA210B, PXA210C, PXA250, PXA250A, PXA250B, PXA250C, PXA27X: `src/include/arm_cpu_types.h:88-96`.
+  - IXP425_255, IXP425_400, IXP425_533, CORTEX-A5, SnapdragonS2: `src/include/arm_cpu_types.h:98-103`.
+  - 80219_400, 80219_600, 80321_400, 80321_400_B0, 80321_600, 80321_600_B0, 80321_600_2: `src/include/arm_cpu_types.h:105-111`.
+  - `ARM610` duplicate: lines 52 and 53; `src/cpus/cpu_arm.c:102-105` stops at first match.
+  - All verified exact against `src/include/arm_cpu_types.h` and `src/cpus/cpu_arm.c`.
+- **Instantiators Table:**
+  - `android-arm / finow-x5-air` -> `CORTEX-A5`: `src/machines/machine_androidarm.c:144-151`, `185-192`.
+  - `android-arm / sony-xperia-mini` -> `SnapdragonS2`: `src/machines/machine_androidarm.c:153-158`, `194-195`.
+  - `cats` -> `SA110`: `src/machines/machine_cats.c:135-151`.
+  - `hpcarm / ipaq, jornada720, jornada728` -> `SA1110`: `src/machines/machine_hpcarm.c:195-198`, `215-228`.
+  - `iq80321` -> `80321_600_2`: `src/machines/machine_iq80321.c:97-107`.
+  - `iyonix` -> `80321_600_B0`: `src/machines/machine_iyonix.c:116-132`.
+  - `netwinder` -> `SA110`: `src/machines/machine_netwinder.c:74-90`.
+  - `rpi` -> `ARM1136JSR1`: `src/machines/machine_rpi.c:57-77`.
+  - `barearm, testarm` -> `SA1110`: `src/machines/machine_test.c:206-230`.
+  - Explicit CPU bypass: `src/machines/machine.c:665-667`.
+  - All verified exact.
+- **Status:** TRUE / SUPPORTED.
+
+#### 4. Configuration Qualifications & Hardware Manual Citations (Lines 92–113)
+- **Thumb State:** Thumb uses `arm_cpu_interpret_thumb_SLOW()` (`src/cpus/cpu_dyntrans.c:254-262`); Thumb POP calls `arm_pop()` passing `s_bit = 0` (`src/cpus/cpu_arm.c:1673-1678`). Supported.
+- **Condition Failure & Read-Ahead:** Condition wrappers skip handlers on condition failure (`src/cpus/cpu_arm_instr.c:132-199`); translation read-ahead returns early (`src/cpus/cpu_dyntrans.c:1916-1918`). Supported.
+- **Optimized BDT Implementation:** Generator rejects S-bit with `exit(1)` (`src/cpus/generate_arm_multi.c:86-89`). Selection checks `multi_opcode` exact match (`src/cpus/cpu_arm_instr.c:4822-4833`). Bypassed if `show_trace_tree` set or `cpu->byte_order != EMUL_LITTLE_ENDIAN` (`:4822-4824`). Supported.
+- **Big-Endian Configuration:** `barearm` sets `cpu->byte_order = EMUL_BIG_ENDIAN;` (`src/machines/machine_test.c:179`). `arm_pop()` handles big-endian in both cached (`src/cpus/cpu_arm_instr.c:1641-1651`) and uncached paths (`:1721-1728`). Supported.
+- **Startup Privilege:** Boot sets SVC32 (`src/cpus/cpu_arm.c:132-138`), but instruction tests current mode at runtime (`src/cpus/cpu_arm_instr.c:1612`, `1784`). Supported.
+- **Hardware Architecture (DDI 0100I):**
+  - *"This instruction is UNPREDICTABLE in User or System mode."* (`_scratchpad/ddi0100i.txt:8167-8168`).
+  - *"User mode and System mode do not have an SPSR, because they are not exception modes."* (`_scratchpad/ddi0100i.txt:1701`).
+  - *"UNPREDICTABLE instructions or results must not represent security holes. UNPREDICTABLE instructions must not halt or hang the processor, or any parts of the system."* (`_scratchpad/ddi0100i.txt:45063-45065`).
+  - LDM(3) pseudocode tests `CurrentModeHasSPSR()`, else `UNPREDICTABLE`; exceptions list Data Abort; does not prescribe Undefined Instruction (`_scratchpad/ddi0100i.txt:8138-8158`).
+  - All verified verbatim from `ddi0100i.txt`.
+- **Status:** TRUE / SUPPORTED.
+
+#### 5. Sibling Census & Exclusions (Lines 115–160)
+- **Explicit Assignment Census (`cpu->running = 0` in `cpu_arm_instr.c`):**
+  - Exactly 11 code sites: lines 367, 398, 451, 462, 499, 892, 935, 985, 1797, 2020, 2065.
+  - Matches `OUTSTANDING_BUGS.md:20205` (`cpu_arm_instr.c: raw 12, code 11`, where the 12th is a comment at `:4660`).
+  - Arithmetic claim on unaligned LDREX/STREX (`:2018`, `:2063`): Predicate `addr & 3`. Rejected 2-bit non-zero low pairs enumerated as `{01, 10, 11}`; aligned value is `{00}`. Supported.
+  - Arithmetic claim on immediate-BLX stops (`:451`, `:462`): Target offset in `ic->arg[0]` constructed at lines 4138-4143 adds 9 (or 11), producing low-bit pairs `{01, 11}`. Because PC is 4-byte aligned (low bits `00`), target `cpu->pc` low-bit pairs are `{01, 11}`. Bit 0 is always 1. Thus line 451 (`!(cpu->pc & 1)`) can never fire, and line 462 (`cpu->pc & 2 && ((cpu->pc & 1) == 0)`) can never fire because bit 0 is never 0. Enumerated values: low bits `{01, 11}`. Supported.
+- **Decoder Rejections (`goto bad` reaching `cpu_dyntrans.c:2014`):**
+  - Live edges enumerated at lines 4146, 4166, 4182, 4223, 4232, 4267, 4271, 4275, 4292, 4307, 4336, 4445, 4456, 4843, 4944, 4950, 4975.
+  - Exclusions audited:
+    - Line 4386: Shadowed by halfword-transfer match at line 4345 (`iword & 0x0e000090 == 0x00000090`). Predicate at line 4382 requires `!(main_opcode & 2)` and `iword & 0x90 == 0x90`. In `case 0x0..0x3`, `!(main_opcode & 2)` restricts `main_opcode` to `{0, 1}` (bits 27..25 are 0), making `iword & 0x0e000000 == 0`. Every instruction matching line 4382 already matches line 4345 and breaks. Enumerated `main_opcode` values: `{0, 1}`. Supported.
+    - Line 4689: Reached only when `cpu->translation_readahead` is true; actual execution installs `ic->f = cond_instr(und);` (`:4688-4713`). Supported.
+    - Line 4965: Inactive `#else` under `#if 1` (`:4959-4966`). Supported.
+    - Line 5005: Exhaustive-nibble switch default; all 16 values `{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf}` have explicit cases (`:4153-4156`, `:4586-4589`, `:4782-4783`, `:4847-4848`, `:4933-4934`, `:4969`, `:4991`). Enumerated values: 16 nibbles. Supported.
+- **Host Exit & Other Dispatches:**
+  - `exit(1)` at line 72 guarded by optional statistics build define `GATHER_BDT_STATISTICS` (`:41-44`, `:67-72`).
+  - `invalid` and `never` install `nothing_call` (`:208-240`). Memory read failures log `fatal()` and `return` (`:4052-4056`).
+- **Status:** TRUE / SUPPORTED.
+
+#### 6. Relationship to `armmsrmodekill`, Proposed Correction, and Option Set (Lines 162–191)
+- **`armmsrmodekill` Distinction:** `armmsrmodekill` (`OUTSTANDING_BUGS.md:20273-20354`) concerns invalid CPSR mode values causing `exit(1)` in `arm_load_register_bank()` (`src/cpus/cpu_arm.c:606-608`). This finding instead occurs in valid USR32 or SYS32 modes because they lack an SPSR. Both validity checks are required. Merely fixing bank loading leaves bank saving (`src/cpus/cpu_arm.c:561`) vulnerable. Supported by `src/cpus/cpu_arm.c:526-561`, `573-608` and `OUTSTANDING_BUGS.md:20332-20350`.
+- **Option Set Evaluation:**
+  - Member 1 (Delete stop) leaves `next_ic = &nothing_call` or unassigned `new_cpsr` (`src/cpus/cpu_arm_instr.c:1781-1808`).
+  - Member 3 (Decline and announce once) recommended before side effects with latch per CPU (`OUTSTANDING_BUGS.md:20349-20350`).
+  - Member 4 (Accept already-correct value) fails because no SPSR exists (`_scratchpad/ddi0100i.txt:1701`).
+  - Member 5 (Deliver exception) lacks mandate from LDM specification (`_scratchpad/ddi0100i.txt:8138-8158`).
+  - Member 6 / 7 fail on architectural addition / missing operation.
+- **Precedent & Warning Mechanism:** Precedent in `mrs_spsr` returning 0 in USR32/SYS32 (`src/cpus/cpu_arm_instr.c:932-933`; `_scratchpad/ddi0100i.txt:9517`). Warning latch pattern exemplified in `src/devices/dev_sgi_re.c:203`, `296-308`. ARM cpu structure (`src/include/cpu_arm.h:136-288`) lacks this latch; file-static `warned_undef` at `src/cpus/cpu_arm_instr.c:4698` is not per-CPU. Supported.
+- **Exception Delivery Mechanics:** Delivery code implemented via `arm_exception(cpu, ARM_EXCEPTION_UND)` (`src/cpus/cpu_arm_instr.c:1020-1027`; `src/include/cpu_arm.h:116-123`; `src/cpus/cpu_arm.c:669-733`). Vector targets enumerated as `{0x00000004, 0xffff0004}` based on `control & ARM_CONTROL_V` (`src/cpus/cpu_arm.c:731-732`). Supported.
+- **Omitted Option Members:** `OUTSTANDING_BUGS.md:17062-17071` explicitly names "DIAGNOSE AND STOP EMULATION" and "CHOOSE ANOTHER DEFINED RESULT". Supported.
+- **Status:** TRUE / SUPPORTED.
+
+#### 7. Regression Observations, Controls, and Records (Lines 193–224)
+- **Regression Table & Dispatcher:** Before/after state verified against `src/cpus/cpu_arm_instr.c:1612-1618`, `1716-1817`. Dispatcher loop increments `next_ic` before `ic->f` call (`src/cpus/cpu_dyntrans.c:113-114`; compare `src/cpus/tmp_arm_head.c:53-66`). Supported.
+- **Legal Acceptance Controls:**
+  - Ordinary S-clear LDM (`_scratchpad/ddi0100i.txt:7855-7869`; `src/cpus/cpu_arm_instr.c:1748-1749`, `1815-1825`).
+  - S-set PC-present exception returns from FIQ, IRQ, SVC, ABT, UND (`_scratchpad/ddi0100i.txt:8080-8088`, `8154-8155`; `src/cpus/cpu_arm_instr.c:1784-1812`).
+  - S-set PC-absent User-bank loads from exception modes with W=0; banked registers enumerated as `{r8,r9,r10,r11,r12,r13,r14}` for FIQ and `{r13,r14}` for other exception modes (`_scratchpad/ddi0100i.txt:7979-7996`, `8014-8016`; `src/cpus/cpu_arm_instr.c:1751-1772`).
+  - Addressing modes enumerated: `(P,U)` in `{(0,0), (0,1), (1,0), (1,1)}` (`src/cpus/cpu_arm_instr.c:1630-1638`, `1734-1740`, `1777-1778`).
+  - `ARM_LDM_S_P2` in `regress/arm_bdt_probe.py:342-347` sets W=1, which is UNPREDICTABLE in hardware (`_scratchpad/ddi0100i.txt:7994-7996`, `8043-8046`). Supported.
+- **Records Distinctions:**
+  - Line 1611 comment `"Load to USR registers:"` is incomplete. Supported.
+  - `armmsrmodekill` description augmented with direct valid User/System mode exposure in MSR-SPSR and LDM(3) (`OUTSTANDING_BUGS.md:20346-20350`; `src/cpus/cpu_arm_instr.c:860-935`, `1610-1799`). Supported.
+  - `OUTSTANDING_BUGS.md:4186` falsely claims *"This tree sits permanently at (A,U) = (0,0)"*; `cpu_arm.c:128-129` initializes `cpu->cd.arm.control` with `| ARM_CONTROL_ALIGN` (`0x0002` in `src/include/cpu_arm.h:293`), so alignment checking is enabled by default. Supported.
+  - `CHANGELOG.md:30031-30037` phrase *"the always-correct `bdt_*`"* was scoped to byte-order discussion; refuted as a general correctness guarantee by `src/cpus/cpu_arm_instr.c:1795-1799`. Supported.
+- **Status:** TRUE / SUPPORTED.
+
+---
+
+### (a) Dossier's Chosen Disposition Member and Machinery Verification
+
+1. **Is Member 3 ("Decline and announce once per CPU") right?**
+   - **Yes.** Architectural specification ARM DDI 0100I, section A4.1.20 (pp. A4-38–A4-39, lines 8167–8168) explicitly designates LDM(3) executed in User or System mode as **UNPREDICTABLE**:
+     > *"User and System mode: This instruction is UNPREDICTABLE in User or System mode."*
+   - ARM DDI 0100I Glossary (p. Glossary-12, lines 45063–45065) restricts emulator latitude for UNPREDICTABLE behavior:
+     > *"UNPREDICTABLE instructions or results must not represent security holes. UNPREDICTABLE instructions must not halt or hang the processor, or any parts of the system."*
+   - The current behavior in `src/cpus/cpu_arm_instr.c:1795-1799` directly halts the CPU (`cpu->running = 0`), creating an unprivileged denial-of-service / availability vulnerability.
+   - Declining the instruction before any memory operations, register publication, or writeback, and logging a single latched diagnostic per CPU (`"(once)"`), satisfies the architectural requirement that the instruction must not halt or hang the processor, adheres to the fork's established UNPREDICTABLE policy (e.g. `OUTSTANDING_BUGS.md:17062-17071`), and avoids inventing unprescribed exception behavior.
+
+2. **Is its machinery really present on this CPU?**
+   - **Instruction Decline Execution Path:** **Present.** Declining at the top of `arm_pop()` (`src/cpus/cpu_arm_instr.c:1602-1620`) prior to the memory loops (`:1622-1740`), register publication (`:1742-1772`), and writeback (`:1777-1778`) allows an immediate `return;`. Because the dyntrans instruction dispatcher at `src/cpus/cpu_dyntrans.c:113-114` (`#define I ic = cpu->cd.DYNTRANS_ARCH.next_ic ++; ic->f(cpu, ic);`) advances `next_ic` before invoking the instruction handler, an ordinary `return;` without setting `cpu->cd.arm.next_ic = &nothing_call` naturally resumes execution at the subsequent instruction word.
+   - **Per-CPU Warning Latch:** **NOT present; must be added.** In `struct arm_cpu` (`src/include/cpu_arm.h:136-288`), there is currently no latch bitfield or warning mask for this instruction rejection. The file-static variable `warned_undef` at `src/cpus/cpu_arm_instr.c:4698` is a single C static variable, not per-CPU instance state. To satisfy Member 3's contract (`"(once), per CPU"`), a latch field (such as `uint32_t warned;`) must be introduced into `struct arm_cpu` in `src/include/cpu_arm.h`.
+   - **Exception Delivery Machinery (Lines and Delivery Code):**
+     If an exception were proposed (Member 5), delivery machinery **IS genuinely present in the emulator code**, located at:
+     - `src/cpus/cpu_arm_instr.c:1020-1027`: `X(und)` synchronizes PC (`cpu->pc &= 0xfffff000; cpu->pc += ic->arg[0];`) and calls `arm_exception(cpu, ARM_EXCEPTION_UND);`.
+     - `src/cpus/cpu_arm.c:669-733`: `arm_exception()` performs complete exception delivery:
+       - `line 671`: `arm_save_register_bank(cpu);` saves current register bank.
+       - `lines 673-674`: Updates CPSR with ALU flags.
+       - `line 681`: `cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr;` saves CPSR to `spsr_und`.
+       - `line 693`: Clears Thumb bit `cpu->cd.arm.cpsr &= ~ARM_FLAG_T;`.
+       - `lines 699-700`: Switches mode to `ARM_MODE_UND32`.
+       - `line 716`: Sets interrupt disable bit `cpu->cd.arm.cpsr |= ARM_FLAG_I;`.
+       - `line 720`: `arm_load_register_bank(cpu);` loads the new banked registers (`r13_und`, `r14_und`).
+       - `line 730`: Sets LR to return address `cpu->cd.arm.r[ARM_LR] = retaddr;`.
+       - `lines 731-732`: Vectors PC to handler address:
+         `cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 + ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);`
+         yielding vector addresses `{0x00000004, 0xffff0004}`.
+       - `line 733`: `quick_pc_to_pointers(cpu);` refreshes dyntrans translation cache pointers.
+     However, as noted by the dossier, Member 5 is rejected because ARM DDI 0100I section A4.1.20 (line 8140) specifies only Data Abort as an exception for LDM(3), not Undefined Instruction.
+
+---
+
+### (b) Siblings the Dossier Missed in the Same Files
+
+The dossier confined its sibling census to `src/cpus/cpu_arm_instr.c` and its shared `cpu_dyntrans.c` decoder rejection label. In doing so, it missed the following siblings in the same product files and directly coupled ARM CPU files:
+
+1. **Unlatched `fatal()` Logging DoS in User-mode LDM(2) (`src/cpus/cpu_arm_instr.c:1612-1615`):**
+   In `arm_pop()`, when an instruction executes with `s_bit == 1` and `iw & 0x8000 == 0` (LDM(2), loading user-bank registers without PC) from User mode:
+   ```c
+   1612:		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+   1613:			fatal("[ bdt_load: s-bit: in usermode? ]\n");
+   1614:			s_bit = 0;
+   1615:		}
+   ```
+   Clearing `s_bit = 0` allows the instruction to complete without halting (`return_flag` remains 0). However, `fatal()` is called unconditionally on **every single execution** without a latch or rate limit. An unprivileged guest user process executing this in a loop can flood host stderr and disk logs. Furthermore, in System mode (`ARM_MODE_SYS32`), this test is completely skipped, silently executing the user register load without any warning, even though STM(2)/LDM(2) in System mode is also UNPREDICTABLE in hardware (`_scratchpad/ddi0100i.txt:8043-8046`).
+
+2. **DPI SPSR Exception-Return Sibling in User/System Mode (`src/cpus/cpu_arm_instr_dpi.c:215-235`):**
+   `src/cpus/cpu_arm_instr_dpi.c` is the sister implementation for data-processing instructions writing PC with S set (`MOVS PC, Rn`, etc.), which is the architectural companion to LDM(3) for SPSR restoration.
+   In `cpu_arm_instr_dpi.c:218-228`:
+   ```c
+   217:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+   218:		case ARM_MODE_FIQ32:
+   219:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+   220:		case ARM_MODE_IRQ32:
+   221:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+   222:		case ARM_MODE_SVC32:
+   223:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+   224:		case ARM_MODE_ABT32:
+   225:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+   226:		case ARM_MODE_UND32:
+   227:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+   228:		}
+   229:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+   230:		arm_load_register_bank(cpu);
+   ```
+   Crucially, this switch has **no cases for `ARM_MODE_USR32` or `ARM_MODE_SYS32` and NO `default:` label**. When executed in User or System mode, `cpu->cd.arm.cpsr` is left completely unchanged, and execution continues to `cpu->pc = (uint32_t)c64` without stopping!
+   This reveals a stark behavioral inconsistency between the two exception-return forms in the emulator: LDM(3) halts the emulator via `default: fatal(...); cpu->running = 0;`, whereas DPI S-bit with Rd=PC silently branches with CPSR unmodified.
+
+3. **User/System Mode STM(2) Asymmetry (`src/cpus/cpu_arm_instr.c:1845-1863`):**
+   In `arm_push()` (called by `bdt_store`):
+   ```c
+   1845:		if (s_bit) {
+   1846:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+   ...
+   1858:			case ARM_MODE_USR32:
+   1859:			case ARM_MODE_SYS32:
+   1860:				break;
+   1861:			}
+   1862:		}
+   ```
+   Under STM(2) (S set on STM), User and System modes hit explicit `break;`, storing the current register values without warning or latch. ARM DDI 0100I section A4.1.98 (p. A4-191, line 14210) specifies STM(2) is UNPREDICTABLE in User or System mode. `arm_push()` silently allows it, creating another behavioral contrast against `arm_pop()`.
+
+4. **Stops and Host Exits in `src/cpus/cpu_arm.c` (Compiled into `cpu_arm.o`):**
+   `src/cpus/cpu_arm.c` is compiled together with `cpu_arm_instr.c` into `cpu_arm.o` (`src/cpus/Makefile.skel:47-48`). It contains:
+   - `line 561`: `arm_save_register_bank()`: `default: fatal(...); exit(1);`.
+   - `line 608`: `arm_load_register_bank()`: `default: fatal(...); exit(1);`.
+   - `line 623`: `arm_exception()`: `default: fatal("arm_exception(): unimplemented exception nr\n"); exit(1);`.
+   - `lines 659-661`: `arm_exception()`: `case ARM_EXCEPTION_RESET: cpu->running = 0; fatal("ARM RESET: TODO"); exit(1);`.
+   - `arm_cpu_interpret_thumb_SLOW()` contains 15 explicit `cpu->running = 0;` stopping assignments:
+     - `line 1219`: mode/pc alignment error.
+     - `line 1227`: instruction fetch failure.
+     - `lines 1495, 1510, 1535, 1541, 1557, 1571, 1600, 1629, 1653, 1690, 1757, 1769, 1810`: 13 unhandled Thumb instruction encodings.
+   None of these were included in the dossier's explicit stop census.
+
+---
+
+### (c) DENOMINATOR: Sentences Checked Versus Taken on Trust
+
+- **Total factual sentences checked across the dossier:** 122 sentences.
+- **Total factual sentences taken on trust:** 0 sentences.
+- **Breakdown of Audited Sources at Commit `db8b1a33` and On-Disk References:**
+  1. `src/cpus/cpu_arm_instr.c`:
+     - Lines 1–255 (macros, statistics setup, conditional wrappers, invalid/never handlers).
+     - Lines 341–516 (BX, BLX imm, BLX reg handlers and misalignment checks).
+     - Lines 722–1330 (MSR/MRS handlers, arithmetic/logical handlers, data-processing core).
+     - Lines 1484–2148 (SWP/SWPB handlers, BDT pop/push helpers, BDT load/store wrappers, LDREX/STREX handlers).
+     - Lines 4000–4465 (dyntrans translate head, fetch, decode fields, 0xf prefix, LDREX/STREX decode, MSR/MRS decode, MOVW/MOVT decode).
+     - Lines 4560–4865 (DPI decode, BDT decode, B/BL decode).
+     - Lines 4920–5014 (DSP decode, SWI/reboot/openfirmware decode, switch default).
+  2. `src/cpus/cpu_arm.c`:
+     - Lines 1–275 (CPU initialization, model lookup, endianness, CPSR boot mode).
+     - Lines 490–742 (register bank save/load, `arm_exception()` dispatch and vectors).
+     - Lines 1215–1235, 1490–1815 (Thumb interpreter and stopping assignments).
+  3. `src/cpus/cpu_dyntrans.c`:
+     - Lines 110–120 (core execution macro `I`).
+     - Lines 250–265 (Thumb entry check).
+     - Lines 1910–1925, 1970–2025 (read-ahead checks, dispatch `ic->f`, `goto bad` handler).
+  4. `src/cpus/cpu_arm_instr_dpi.c`:
+     - Lines 1–280 (DPI template, S-bit with PC handling, CPSR mode switch).
+  5. `src/cpus/generate_arm_multi.c`:
+     - Lines 80–95 (S-bit rejection in BDT optimizer generator).
+  6. `src/cpus/tmp_arm_head.c` & `tmp_arm_tail.c`:
+     - Lines 50–70 (`nothing_call` implementation and dyntrans loop exit).
+  7. `src/cpus/tmp_arm_multi.c`:
+     - Lines 4175–4192, 9433–9453 (`multi_opcode` table verification).
+  8. `src/include/arm_cpu_types.h`:
+     - Lines 45–115 (complete CPU model table enumeration and line mapping).
+  9. `src/include/cpu_arm.h`:
+     - Lines 100–135 (mode defines, exception numbers, exception-to-mode mapping).
+     - Lines 136–288 (`struct arm_cpu` definition, verifying lack of per-CPU warning latch).
+     - Lines 290–305 (CP15 control bit defines, verifying `ARM_CONTROL_ALIGN`).
+  10. `src/core/debugmsg.c` & `src/core/emul.c`:
+      - `debugmsg.c:380-395` (`fatal()` non-terminating implementation).
+      - `emul.c:1046-1065` (machine execution loop and termination criteria).
+  11. `src/machines/machine.c` & Machine Instantiators:
+      - `machine.c:660-675`, `705-750` (CPU default selection, scheduler loop).
+      - `machine_androidarm.c:140-200`.
+      - `machine_cats.c:135-152`.
+      - `machine_hpcarm.c:195-230`.
+      - `machine_iq80321.c:97-110`.
+      - `machine_iyonix.c:116-135`.
+      - `machine_netwinder.c:74-92`.
+      - `machine_rpi.c:57-80`.
+      - `machine_test.c:175-185`, `205-235`.
+  12. `src/devices/dev_sgi_re.c`, `dev_dreamcast_gdrom.c`, `dev_8253.c`:
+      - `dev_sgi_re.c:200-206`, `295-310` (house warning latch `warned` and `(once)` marker).
+      - `dev_dreamcast_gdrom.c` (confirmed `(once)` usage).
+      - `dev_8253.c` (confirmed absence of `(once)`).
+  13. `OUTSTANDING_BUGS.md`:
+      - Lines 4170–4215 (`ldrex`/`strex` entry and alignment record audit).
+      - Lines 17060–17080 (recorded disposition options).
+      - Lines 20175–20270 (`cpusexitsweep` umbrella census and counts).
+      - Lines 20271–20360 (`armmsrmodekill` entry and reachability).
+  14. `CHANGELOG.md`:
+      - Lines 30025–30045 (byte-order discussion regarding `bdt_*`).
+  15. `regress/arm_bdt_probe.py`:
+      - Lines 340–355 (`ARM_LDM_S_P2` test row and writeback encoding).
+  16. Hardware Reference Manual (`_scratchpad/ddi0100i.txt`):
+      - Lines 1355–1375 (A2.2 Processor modes).
+      - Lines 1698–1705 (A2.5 Program status registers).
+      - Lines 7990–8000, 8040–8050 (A4.1.19 LDM (2) syntax, W-bit note, User/System note).
+      - Lines 8138–8175 (A4.1.20 LDM (3) syntax, pseudocode, exceptions, User/System note).
+      - Lines 9510–9525 (A4.1.38 MRS SPSR User/System note).
+      - Lines 14125–14225 (A4.1.98 STM (2) syntax, pseudocode, W-bit note, User/System note).
+      - Lines 45060–45070 (Glossary definition of UNPREDICTABLE).
+
+Every statement, code quotation, line reference, and architectural constraint in the design dossier has been independently verified against the committed tree at `db8b1a33` and referenced texts on disk. None were taken on trust.

@@ -1,0 +1,41 @@
+ASTRARETRO_MEMORYRW_ALIVE
+VERDICT: 8 findings (3 CODE live at HEAD, 5 RECORD, 0 TEST-GAP); 16 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Findings are based on static inspection; no files were written, builds performed, or probes executed.
+
+F1 | [src/cpus/memory_rw.c:744](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:744) | upstream, relied on by #430 | CODE | live at HEAD: yes | **Small mappings still become oversized fast mappings.** SH guests using 1 KB mappings can receive correct slow-path results followed by incorrect cached reads/writes. `memory_sh.c:214` returns permissions without `MEMORY_NOT_FULL_PAGE`; this gate consequently permits a 4 KB mapping. Subsequent accesses use that mapping without their own translation. VR41xx has the same missing flag at `memory_mips_v2p.c:398`. SH’s independent 1 KB physical-page numbering is documented at [_scratchpad/sh7750_hardware.txt:9333](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/sh7750_hardware.txt:9333). | Smallest check: trace those returns through `cpu_dyntrans.c:1593` to `cpu_sh_instr.c:697`. The differential’s stub supplies the missing flag and never consumes cached mappings. No matching outstanding ID found. | confidence high
+
+F2 | [src/cpus/memory_rw.c:730](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:730) | upstream, relied on by #165 | CODE | live at HEAD: yes | **An unallocated read head suppresses the allocated tail.** A physical DMA read crossing from untouched RAM into an allocated following memblock returns zeroes for the entire request. The NULL-host-pointer branch exits before #165’s split. Tulip setup-packet DMA supplies a guest-reachable bulk reader (`dev_dec21143.c:614`). | Smallest check: compare this early return with `core/memory.c:563`, where NULL describes only the current unallocated memblock. `regress/diff_memory_rw.c` F1 preallocates every block it reads, so it misses this sibling. No matching outstanding ID found. | confidence high
+
+F3 | [src/cpus/memory_rw.c:760](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:760) | #165 | CODE | live at HEAD: yes | **Bulk writes invalidate only the first page of each memblock fragment.** Interior pages overwritten by the following copy retain translated instructions. Guest-directed PS2 DMA remains a route to native-RAM bulk writes through accepted out-of-range destination values (`dev_ps2_stuff.c:182`, `:264`, `:282`). Executing through an uncached alias should observe updated memory; the MIPS uncached compatibility region is documented at [_scratchpad/mips_r4000.txt:697](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips_r4000.txt:697). | Smallest check: compare the single-page callback at `cpu_dyntrans.c:1334` with the larger copy at `memory_rw.c:770`. Already filed at `OUTSTANDING_BUGS.md:2727` as **“Cross-memblock dyntrans invalidation gap in #165”**, without a separate ID. Guest instruction-coherence behavior was not dynamically checked. | confidence med
+
+F4 | [src/cpus/memory_rw.c:279](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:279) | #250 | RECORD | live at HEAD: yes | The comment promises debugger entry “after the current instruction.” A watched store merely sets `about_to_enter_single_step`; subsequent guest instructions can execute before entry, changing the state the debugger displays. Further watchpoint reports are suppressed meanwhile. | Smallest check: inspect `cpu_dyntrans.c:354`’s continuing dispatch loop and the flag consumer at `core/emul.c:1033`. No delay-related outstanding ID found. | confidence high
+
+F5 | [CHANGELOG.md:26158](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:26158) | #430 | RECORD | live at HEAD: yes | The claimed guarantee that a failed read leaves the **whole buffer zeroed** is false when an earlier chunk succeeded. HEAD preserves the successful prefix and zeroes the failed remainder. | Smallest check: inspect `regress/diff_memory_rw.c:414`, whose E4 row explicitly expects `aa aa 00 00`, alongside pointer advancement at `memory_rw.c:220`. | confidence high
+
+F6 | [CHANGELOG.md:26087](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:26087) | #430 | RECORD | live at HEAD: yes | The round still says “one boundary in 256” and, at `:26115`, approximately four thousand worker calls for 16 MB without the exemption. HEAD’s 1 KB granule makes those figures **1024** and **16384**. The source correction did not update this sibling record. | Smallest check: compare `MRW_SPLIT_MASK` with `regress/diff_memory_rw.c:490`, which asserts 16384. | confidence high
+
+F7 | [src/cpus/memory_rw.c:153](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:153) | 50fb2ee0 | RECORD | live at HEAD: yes | “The real page here is 8 KB anyway” incorrectly describes every inclusion. The worker uses 8 KB only under `MEM_ALPHA`; non-Alpha inclusions use 4 KB. | Smallest check: compare the sentence with the conditional definitions at `:76`. | confidence high
+
+F8 | [src/cpus/memory_rw.c:156](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:156) | 0447c2ec | RECORD | live at HEAD: yes | “It fires only on PHYSICAL accesses” omits accesses with `translate_v2p == NULL`. Those also bypass the wrapper and can reach the memblock split without `PHYSICAL`. | Smallest check: compare the wrapper condition at `:186` with the worker condition at `:245`. | confidence high
+
+Checked clean, with committed HEAD line numbers:
+
+- `memory_rw.c:76` — Architecture-specific worker masks preserve Alpha’s 8 KB offset.
+- `memory_rw.c:113` — Derived worker names and macro cleanup support Alpha’s double inclusion.
+- `memory_rw.c:186` — Physical/no-translator exemptions agree with the worker.
+- `memory_rw.c:202` — Boundary subtraction avoids overflow; chunk advancement makes positive progress.
+- `memory_rw.c:248` — Translation receives the original access, privilege, instruction and exception flags.
+- `memory_rw.c:215` — Intermediate read failure initializes the failed chunk and unprocessed suffix.
+- `memory_rw.c:267` — Failed translation zeroes reads without modifying write buffers.
+- `memory_rw.c:491` — Device reads are initialized before length truncation or handler dispatch.
+- `memory_rw.c:507` — Truncation diagnostics require debug verbosity and stop after eight messages.
+- `memory_rw.c:561` — Full-page backing predicate correctly rejects partial device pages for both directions.
+- `memory_rw.c:549` — Emulated-RAM alternative relies on alignment checks present in `dev_ram.c:188`.
+- `memory_rw.c:286` — Watchpoint formatting reads at most sixteen bytes and fits its buffer.
+- `memory_rw.c:283` — Watchpoint matching precedes device, R3000-cache and RAM early returns.
+- `memory_rw.c:766` — For allocated RAM, head-copy length ends at the allocation boundary in both directions.
+- `memory_rw.c:626` — Device dispatch exits before the RAM memblock split.
+- `memory_rw.c:174` — Claimed stack-test compiler flag is present in `regress/gate_offline.sh:483`.
+
+DENOMINATOR: read 6 of 6 hunks of the net diff

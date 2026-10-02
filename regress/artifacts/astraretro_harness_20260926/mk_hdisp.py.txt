@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""mk_hdisp.py [--check]  -- assemble astraretro_harness_20260926/HARNESS_DISPOSITIONS.md MECHANICALLY for the wave-2
+harness review (722 findings in 18 verification groups), the harness analogue of astraretro_20260926/DISPOSITIONS.md.
+Per group NN:
+  * the INDEPENDENT seat's draft (grok for 01-06, 08, 10; agy for 07, 09, 11-18), one line per finding: the key, the
+    class, the status word and the draft's disposition fields, each a VERBATIM substring of the seat's own line (the
+    explanation and the empty fields are left out; a WRONG or UNSETTLED line is kept whole);
+  * GPT-6 Astra's confirmation: every overturn/amendment line VERBATIM;
+  * the grok tie-break rows that fall in the group, VERBATIM.
+Then a DERIVED result section: per finding the governing (kind, grade) -- Astra's where it amended, else the tie-break's,
+else the draft's -- with the rows where a tie-break and an Astra amendment differ in KIND listed with the ruling seat's
+answer on their return (grok_hopen3.txt), the rows that differ in grade alone listed, and the resulting HIGH rows.  The derivation parses free text, so it counts what it could not parse instead of guessing.
+No paraphrase.  Refuses when a confirmation lacks its token or VERDICT line, when a draft's keyed lines do not number
+its own VERDICT total, or when an amendment count differs from the confirmation's own VERDICT.  --check prints the
+per-group table and writes nothing."""
+import io
+import os
+import re
+import sys
+
+SEC = r"C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC"
+ARTS = os.path.join(SEC, "regress", "artifacts")
+H = os.path.join(ARTS, "astraretro_harness_20260926")
+G = os.path.join(ARTS, "grokjobs_20260930")
+GROK = ("01", "02", "03", "04", "05", "06", "08", "10")
+KEY = re.compile(r"^[`*|\s-]*([a-z0-9_]+:F\d+)[`*]*\s*\|\s*([A-Z-]+)\s*\|\s*(RIGHT|WRONG|UNSETTLED)")
+ANYKEY = re.compile(r"^[`*|\s-]*([a-z0-9_]+):F(\d+)[`*]*\s*\|")
+# group 06 writes `RECORD: "..."`; an empty field is `-`, an en or em dash, `n/a` or `none`, bare or quoted
+DISPF = re.compile(r" \| ((?:DRAFT: |FILED:? |FILED-BY-PROSE:? |RECORD:? |DROP:? ).*)$")
+EMPTY = re.compile("(?:^| \\| )(?:DRAFT: |FILED:? |FILED-BY-PROSE:? |RECORD:? |DROP:? )\"?(?:-|\u2013|\u2014|n/a|none)\"?(?= \\||$)")
+KIND = r"(NEW (?:HIGH|MED|LOW)|FILED-BY-PROSE|FILED|RECORD|DROP)"
+check_only = "--check" in sys.argv
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def verdict(t, p):
+    v = re.findall(r"VERDICT: [^\n]*", t)
+    if not v:
+        sys.exit("REFUSED: no VERDICT line in %s" % p)
+    return v[0].strip().rstrip("`")
+
+
+jobs_tsv = rd(os.path.join(G, "JOBS.tsv")).splitlines()
+group_of = {}
+for n in range(1, 19):
+    nn = "%02d" % n
+    row = [l for l in jobs_tsv if l.startswith("hverify_%s\t" % nn)][0]
+    for j in row.split("\t")[1].split("verify the harness review: ")[1].split():
+        group_of[j] = nn
+        if j.startswith("hbundle_"):
+            group_of[j[len("hbundle_"):]] = nn          # grok's group 06 drops the prefix
+tb_file = os.path.join(H, "adjudication", "grok_20261002", "grok_htiebreak.txt")
+tb = rd(tb_file)
+tb_rows = {}
+tie = {}
+for l in tb.splitlines():
+    m = ANYKEY.match(l)
+    if m and "SUPPORTED:" in l:
+        tb_rows.setdefault(group_of.get(m.group(1), "??"), []).append(l.strip())
+        k = re.search(r"DISPOSITION: " + KIND, l)
+        tie["%s:F%s" % (m.group(1), m.group(2))] = k.group(1) if k else "(unparsed)"
+if sum(len(v) for v in tb_rows.values()) != 21 or "??" in tb_rows:
+    sys.exit("REFUSED: tie-break rows %s (want 21, all in a known group)" % {k: len(v) for k, v in tb_rows.items()})
+
+out = []
+tot = {"find": 0, "right": 0, "wrong": 0, "unsettled": 0, "aw": 0, "am": 0}
+kinds = {}
+table = []
+draft = {}        # key -> (group, kind, verbatim draft line)
+astra = {}        # key -> (kind or "(unparsed)", verbatim amendment line)
+order = []
+for n in range(1, 19):
+    nn = "%02d" % n
+    seat = "grok" if nn in GROK else "agy"
+    ver = os.path.join(G, "hverify_" + nn, "%s_hverify_%s.txt" % (seat, nn))
+    conf = os.path.join(H, "hconfirm_" + nn, "codex_hconfirm_%s.txt" % nn)
+    t, c = rd(ver), rd(conf)
+    if ("ASTRACONFIRM_H%s_ALIVE" % nn) not in c:
+        sys.exit("REFUSED: %s lacks its token" % conf)
+    vd, vc = verdict(t, ver), verdict(c, conf)
+    md = re.search(r"VERDICT: (\d+) right, (\d+) wrong, (\d+) unsettled of (\d+) findings", vd)
+    mc = re.search(r"VERDICT: (\d+) of (\d+) draft dispositions wrong \((\d+) more", vc)
+    if not md or not mc:
+        sys.exit("REFUSED: group %s verdict shape: %r / %r" % (nn, vd, vc))
+    right, wrong, uns, nfind = [int(x) for x in md.groups()]
+    aw, an, am = [int(x) for x in mc.groups()]
+    if an != nfind:
+        sys.exit("REFUSED: group %s: draft has %d findings, Astra checked %d" % (nn, nfind, an))
+    lines, seen = [], set()
+    for l in t.splitlines():
+        m = KEY.match(l)
+        if not m or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        key, cls, st = m.groups()
+        order.append(key)
+        if st != "RIGHT":
+            lines.append("* " + l.strip())
+            kinds["(not RIGHT)"] = kinds.get("(not RIGHT)", 0) + 1
+            draft[key] = (nn, "(not RIGHT: %s)" % st, lines[-1])
+            continue
+        d = DISPF.search(l, m.end())        # after the status word: a RECORD-class line's CLASS field matches too
+        if not d:
+            lines.append("* %s | %s | %s | (NO DISPOSITION FIELD -- read the seat's line)" % (key, cls, st))
+            kinds["(no field)"] = kinds.get("(no field)", 0) + 1
+            draft[key] = (nn, "(no field)", lines[-1])
+            continue
+        disp = EMPTY.sub("", d.group(1)).strip()
+        disp = re.sub(r"^\| ", "", disp)
+        lines.append("* %s | %s | %s | %s" % (key, cls, st, disp))
+        k = re.match(r"(?:DRAFT: )?" + KIND, disp)
+        kk = k.group(1) if k else "(other)"
+        kinds[kk] = kinds.get(kk, 0) + 1
+        draft[key] = (nn, kk, lines[-1])
+    if len(lines) != nfind:
+        sys.exit("REFUSED: group %s: %d keyed finding lines in %s, its VERDICT says %d" % (nn, len(lines), ver, nfind))
+    amend = [l.strip() for l in c.splitlines() if ANYKEY.match(l) and "draft said" in l]
+    if len(amend) != aw + am:
+        sys.exit("REFUSED: group %s: %d amendment lines in %s, its VERDICT says %d + %d" % (nn, len(amend), conf, aw, am))
+    for a in amend:
+        m = ANYKEY.match(a)
+        key = "%s:F%s" % (m.group(1), m.group(2))
+        gjobs = sorted(set(k.split(":")[0] for k in seen))
+        if key not in draft and m.group(1) == "hverify_" + nn and len(gjobs) == 1:
+            key = "%s:F%s" % (gjobs[0], m.group(2))     # group 18 has ONE job and Astra keyed its lines by the group
+        if key not in draft:
+            sys.exit("REFUSED: group %s: amendment for %s, which the draft does not list" % (nn, key))
+        s = re.search(r"\|\s*should (?:be|remain|retain)\b(.*)$", a)
+        k = re.search(KIND + "|(CONSOLIDATE|MERGE|merged|DUPLICATE)", s.group(1).split(" | ")[0]) if s else None
+        astra[key] = ((k.group(1) or "MERGED into an existing row") if k else "(unparsed)", a)
+    for k, v in (("find", nfind), ("right", right), ("wrong", wrong), ("unsettled", uns), ("aw", aw), ("am", am)):
+        tot[k] += v
+    table.append("%s  %-4s  %3d findings  draft %3d/%d/%d  Astra: %d wrong, %2d amended  tie-break rows %d"
+                 % (nn, seat, nfind, right, wrong, uns, aw, am, len(tb_rows.get(nn, []))))
+    out += ["", "---", "",
+            "## Group %s -- %d findings.  Draft by the %s seat: %s (grokjobs_20260930/hverify_%s/%s)."
+            % (nn, nfind, seat, vd[len("VERDICT:"):].strip(), nn, os.path.basename(ver)),
+            "## Astra: %s (hconfirm_%s/%s)." % (vc[len("VERDICT:"):].strip(), nn, os.path.basename(conf)), "",
+            "DRAFT DISPOSITIONS"] + lines + ["", "ASTRA'S OVERTURNS AND AMENDMENTS (%d)" % len(amend)]
+    out += ["* " + a for a in amend] or ["* (none)"]
+    if tb_rows.get(nn):
+        out += ["", "GROK TIE-BREAK ROWS (%d)" % len(tb_rows[nn])] + ["* " + r for r in tb_rows[nn]]
+for k in tie:
+    if k not in draft:
+        sys.exit("REFUSED: tie-break row %s is not a draft finding" % k)
+
+# ---- the derived result
+final, open_rows, unparsed, graded = {}, [], [], []
+for key in order:
+    a, g = astra.get(key), tie.get(key)
+    if a and a[0] == "(unparsed)":
+        unparsed.append(key)
+    if a and g and a[0] != g and a[0] != "(unparsed)":
+        if a[0].startswith("NEW ") and g.startswith("NEW "):
+            graded.append(key)          # one kind, two grades: not open -- the first-hand tie-break's grade governs
+            final[key] = g
+        else:
+            open_rows.append(key)
+            final[key] = "OPEN (Astra: %s / grok tie-break: %s)" % (a[0], g)
+    elif a and a[0] != "(unparsed)":
+        final[key] = a[0]
+    elif g:
+        final[key] = g
+    else:
+        final[key] = draft[key][1]
+# ---- the findings whose KINDS differed went back to the ruling seat: its answer verbatim, and the kind it leaves
+RET_BRIEF = os.path.join(H, "adjudication", "grok_brief_hopen3.md")
+RET_ANS = os.path.join(H, "adjudication", "grok_20261002", "grok_hopen3.txt")
+returned, was_open = {}, {}
+if open_rows:
+    num = dict(re.findall(r"(?m)^(\d+)\. `([a-z0-9_]+:F\d+)`", rd(RET_BRIEF)))
+    ans = rd(RET_ANS).splitlines()
+    ret_verdict = [l.strip() for l in ans if l.startswith("VERDICT:")]
+    if len(ret_verdict) != 1:
+        sys.exit("REFUSED: %d VERDICT lines in %s" % (len(ret_verdict), RET_ANS))
+    for i, l in enumerate(ans):
+        m = re.match(r"^(\d+) \| CONCEDE: (.*?) \| HOLD: (.*)$", l)
+        if not m:
+            continue
+        key, body = num.get(m.group(1)), (ans[i + 1].strip() if i + 1 < len(ans) else "")
+        word = body.split(".")[0]
+        k = re.search(KIND, m.group(2) if word == "Concede" else m.group(3))
+        if key not in open_rows or word not in ("Concede", "Hold") or not k:
+            sys.exit("REFUSED: returned finding %s (%s): word %r, kind %r" % (m.group(1), key, word, k))
+        returned[key] = (word, k.group(1), l.strip(), body)
+    if sorted(returned) != sorted(open_rows):
+        sys.exit("REFUSED: %s rules %s; the open findings are %s" % (RET_ANS, sorted(returned), sorted(open_rows)))
+    nc = sum(1 for v in returned.values() if v[0] == "Concede")
+    if ret_verdict[0] != "VERDICT: %d conceded, %d held, of %d open findings" % (nc, len(returned) - nc, len(returned)):
+        sys.exit("REFUSED: %r does not match the %d concede / %d hold lines read" % (ret_verdict[0], nc, len(returned) - nc))
+    for key in open_rows:
+        was_open[key] = final[key]
+        final[key] = returned[key][1]
+fk = {}
+for v in final.values():
+    v2 = "OPEN between two seats" if v.startswith("OPEN") else v
+    fk[v2] = fk.get(v2, 0) + 1
+res = ["", "---", "",
+       "## RESULT (DERIVED by `mk_hdisp.py`; the lines above are the record, this is an index of them)", "",
+       "Per finding the governing kind is Astra's where it amended the draft, else the grok tie-break's where one exists, else",
+       "the draft's.  The derivation reads the first kind token after `should be` / `should remain` in an amendment and after",
+       "`DISPOSITION:` in a tie-break row (CONSOLIDATE / MERGE / DUPLICATE count as MERGED: no second filing); an amendment with",
+       "no such token is counted as (unparsed) --",
+       "read those lines, the kind stays the draft's unless the line says otherwise.", "",
+       "Governing kinds over %d findings: %s." % (len(final), ", ".join("%s %d" % kv for kv in sorted(fk.items()))),
+       "", "This index stops at the confirmations and the two steps below.  LATER changes of grade -- the first-hand re-read of",
+       "the HIGH rows on 2026-10-02 and Astra's concessions on it -- are in `astrafiling_20261002/FILING_OVERLAY.tsv`, which",
+       "governs what is filed; they are not folded in here.",
+       "", "ONE KIND, TWO GRADES (%d) -- the tie-break row and Astra's amendment both make the finding NEW; that is not open (GPT-6"
+       % len(graded),
+       "Astra, `astrafiling_20261002/afile_04/codex_afile_04.txt`: \"Both kinds are NEW, so the header's different-kind exception",
+       "does not apply\"), and the first-hand tie-break's grade governs"]
+for key in graded:
+    res += ["* %s -- %s (Astra's amendment: %s)" % (key, final[key], astra[key][0]), "  Astra: " + astra[key][1],
+            "  grok:  " + [r for r in tb_rows[draft[key][0]] if ANYKEY.match(r) and "%s:F%s" % ANYKEY.match(r).groups() == key][0]]
+res += ["", "OPEN BETWEEN TWO SEATS (0 now; %d until 2026-10-02) -- a tie-break row and an Astra amendment gave different KINDS."
+        % len(open_rows),
+        "RETURNED TO THE RULING SEAT with Astra's reasons (`adjudication/grok_brief_hopen3.md`); its answer"]
+if open_rows:
+    res += ["(`adjudication/grok_20261002/grok_hopen3.txt`: %s) is quoted below and the kind it leaves governs.  A HOLD is the"
+            % ret_verdict[0][len("VERDICT: "):],
+            "independent seat keeping its own first-hand ruling over the author family's; it is filed as that seat ruled it,",
+            "with the difference stated in the row, and Astra is asked again in the check of the filing."]
+for key in open_rows:
+    res += ["* %s -- was %s; now %s (%s)" % (key, was_open[key], final[key], returned[key][0].upper()),
+            "  Astra: " + astra[key][1],
+            "  grok:  " + [r for r in tb_rows[draft[key][0]] if ANYKEY.match(r) and "%s:F%s" % ANYKEY.match(r).groups() == key][0],
+            "  grok, returned: " + returned[key][2], "  " + returned[key][3]]
+A9 = os.path.join(ARTS, "astrafiling_20261002", "afile_09", "codex_afile_09.txt")
+if open_rows and os.path.isfile(A9):
+    res += ["GPT-6 Astra, asked again in the check of the filing (`astrafiling_20261002/afile_09/codex_afile_09.txt`), in its own",
+            "verdict line: " + verdict(rd(A9), A9)[len("VERDICT: "):]]
+high = [k for k in order if final[k] == "NEW HIGH"]
+res += ["", "THE RESULTING `NEW HIGH` ROWS (%d) -- the governing line of each" % len(high)]
+for key in high:
+    tbr = [r for r in tb_rows.get(draft[key][0], []) if ANYKEY.match(r) and "%s:F%s" % ANYKEY.match(r).groups() == key]
+    if key in returned:                 # the ruling seat's answer on the finding's return governs, not the amendment it answers
+        src = "%s | grok, returned: %s -- %s" % (key, returned[key][2], returned[key][3])
+    elif key in graded and tbr:         # one kind, two grades: the tie-break row governs
+        src = tbr[0]
+    elif key in astra:
+        src = astra[key][1]
+    else:
+        src = (tbr or [draft[key][2][2:]])[0]
+    res.append("* [group %s] %s" % (draft[key][0], src if len(src) <= 700 else src[:697] + "..."))
+if unparsed:
+    res += ["", "AMENDMENTS WITH NO KIND TOKEN (%d) -- wording or scope only, by the derivation's reading: %s"
+            % (len(unparsed), ", ".join(unparsed))]
+
+print("\n".join(table))
+print("TOTAL: %(find)d findings; drafts %(right)d right / %(wrong)d wrong / %(unsettled)d unsettled; "
+      "Astra %(aw)d overturned, %(am)d amended" % tot)
+print("draft kinds (before amendments): " + ", ".join("%s %d" % kv for kv in sorted(kinds.items())))
+print("governing kinds: " + ", ".join("%s %d" % kv for kv in sorted(fk.items())))
+print("returned to the ruling seat: %d (%s); one kind, two grades: %d (%s); NEW HIGH after amendments: %d; unparsed amendments: %d"
+      % (len(open_rows), " ".join("%s=%s" % (k, final[k]) for k in open_rows), len(graded), " ".join(graded), len(high), len(unparsed)))
+if any(v.startswith("OPEN") for v in final.values()):
+    sys.exit("REFUSED: a finding is still open between two seats")
+if sum(kinds.values()) != tot["find"] or len(final) != tot["find"]:
+    sys.exit("REFUSED: kinds sum %d, final %d, findings %d" % (sum(kinds.values()), len(final), tot["find"]))
+if check_only:
+    sys.exit(0)
+head = """# Astra harness review (wave 2, 2026-09-26) -- dispositions, group by group
+
+The GXemul fork's REGRESSION HARNESS (gate scripts, probes, offline differentials, pipeline checkers at commit `db8b1a33`)
+was reviewed read-only by GPT-6 Astra: %(find)d findings in 18 verification groups (`<job>/codex_<job>.txt`).  Owner
+2026-10-02: the working seats are GPT-6 Astra, agy and grok.  Each group below is: the INDEPENDENT seat's verification
+and draft disposition of every finding (grok for groups 01-06, 08, 10; agy for 07, 09, 11-18) -> GPT-6 Astra's
+confirmation of those DISPOSITIONS (`hconfirm_NN/`; the same model family as the findings, so it rules on the filing,
+not on whether its own finding is right) -> the grok seat's first-hand tie-break of the 21 rows where the agy and codex
+verifications differed (`adjudication/grok_20261002/grok_htiebreak.txt`).  The Fable and Opus agent seats were
+deliberately NOT fired (owner 2026-10-02); a flagship sign-off is batched, not waived.
+
+MECHANICALLY ASSEMBLED (`mk_hdisp.py`, kept beside this file as `mk_hdisp.py.txt`): every line in a group is a verbatim
+line, or a verbatim substring of a line, of the file named in its group header.  A draft line gives the key, the
+finding's class, the seat's status word and its disposition fields; the seat's explanation is in its own file.
+PRECEDENCE: an Astra overturn or amendment governs the draft line it names; a grok tie-break row governs where the two
+verifications differed; where a tie-break row and an Astra amendment give one finding different KINDS, both are kept and
+the finding returns to the ruling seat (see RESULT; one kind with two grades takes the tie-break's).  Nothing is fixed by this record, and
+nothing is filed in `OUTSTANDING_BUGS.md` by it: that is a records round's job.  Proposed ids are the seats' own and are
+not yet checked against each other for collisions; the records round does that.
+
+Totals (each from the seats' own VERDICT lines, summed by `mk_hdisp.py`): drafts %(right)d right, %(wrong)d wrong,
+%(unsettled)d unsettled of %(find)d; Astra overturned %(aw)d draft dispositions and amended %(am)d more.
+Draft kinds before amendments: @DRAFTKINDS@.
+
+Severity for a harness defect is graded by WHAT THE GATE WOULD MISS: HIGH if the defect the check was shipped to catch
+ends the emulator process or makes a memory access leave a buffer's bounds; MED if it is guest-visible; LOW otherwise.
+""" % tot
+head = head.replace("@DRAFTKINDS@", ", ".join("%s %d" % kv for kv in sorted(kinds.items())))
+p = os.path.join(H, "HARNESS_DISPOSITIONS.md")
+io.open(p, "w", encoding="utf-8", newline="\n").write(head + "\n".join(out + res) + "\n")
+print("wrote %s: %d lines" % (p, len(head.splitlines()) + len(out) + len(res)))

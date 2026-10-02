@@ -1,0 +1,61 @@
+ASTRARETRO_HGATESHROUNDING_ALIVE
+VERDICT: 16 findings (5 CANNOT-FAIL, 1 SELECTS-NOTHING, 3 STATUS-LAUNDERED, 0 ENCODING, 5 RECORD, 2 OTHER); 20 items checked clean
+
+Reviewed HEAD `db8b1a3385130c457626283d9a718bd7c5181f0d`. No writes, builds, or emulator runs. Findings are source-derived, with selected parser and census checks evaluated in memory. A falsely passing individual row does not necessarily make its entire gate pass.
+
+F1 | regress/gate_sh_rounding.sh:790 | #448/#453 | CANNOT-FAIL | CHCR rows `R7` and `L0` no longer detect their intended RS fall-through. Their predicates count only `VAL_RE` diagnostics (`sh4_chcr_probe.py:261,368`). At HEAD, falling through the RS return reaches a nonfatal IE diagnostic: correct and regressed paths both produce `alive=True` and one counted diagnostic; the extra IE line is ignored. | Compare RS-only and RS-plus-IE transcripts through `diags()` versus `any_diag()`. | confidence high
+
+F2 | regress/gate_sh_rounding.sh:1551 | #464/91bf4e9e | CANNOT-FAIL | “fatal() call sites intact” accepts 13 calls against a floor of 12. Downgrading the nonbyte-write diagnostic at `dev_wdc.c:1187` leaves 12 and still passes; its stepped probe also continues seeing `debug()` output. Already filed as `wdcfloodprobe`. | Count HEAD’s matches and repeat after one in-memory channel substitution. | confidence high
+
+F3 | regress/gate_sh_rounding.sh:1636 | #492/d9efd339 | CANNOT-FAIL | Removing both the guard and SET at the consumer’s `warned_inbuf_overrun` site leaves the producer’s pair intact. Correct and altered source both produce `SET=6, READ=6, BALANCED=6, DECL=11`, although the consumer diagnostic becomes unconditional. The census therefore misses complete removal of protection at one site. | Compare census outputs after removing that pair in memory; this was checked without writing files. | confidence high
+
+F4 | regress/gate_sh_rounding.sh:470 | #460/#465/#489/#490 | CANNOT-FAIL | The four `gdrom map` controls accept any hexadecimal readback. A registered device’s zero and an unmapped address’s zero both become `mapped`; removing the GD-ROM registration therefore leaves these controls green. The other occurrences are gated at lines 1063, 1125, and 1195. Already filed as `gdrommappedvacuous`. | Evaluate each mapping predicate with the unmapped readback `0x0`. | confidence high
+
+F5 | regress/gate_sh_rounding.sh:306 | #456/#458 | CANNOT-FAIL | Interrupt probes’ session verification accepts `0x1234` anywhere after sending `print 0x1234`. The echoed command alone satisfies it, without a numeric response. Delivery rows using this verification can report success without the claimed positive response. The IPRBCD section at line 369 shares it. Already filed as `sessionechosat`. | Feed the verifier an echoed command with no answer. | confidence high
+
+F6 | regress/gate_sh_rounding.sh:52 | f52c2fe3/#492 | SELECTS-NOTHING | With `SH_ROUND_RESULT=broken`, extraction selects nothing and “vector-mode pairs correct” compares empty strings successfully. Later nonempty guards also admit `WDC_FLOOD_RESULT=/`: both digit groups match zero characters, “result parses” passes, and “rows correct” again compares empty strings. Denominator checks still fail the gate, but these rows falsely pass. | Evaluate the extraction and scoring predicates on those two strings; both false-green comparisons were confirmed in memory. | confidence high
+
+F7 | regress/gate_sh_rounding.sh:306 | #456/#458 | STATUS-LAUNDERED | `irq14 imask`, `iprc_lo`, `raise_lo`, `lower`, and `deassert` translate session failure into the expected `refused` result. Host death during a masked-interrupt test therefore passes the refusal row. Already filed as `sessionrefused`. | Pass a failed-session result through the row predicates in `sh_intprio_probe.py:308` and `sh_iprbcd_probe.py:148,191`. | confidence high
+
+F8 | regress/gate_sh_rounding.sh:1195 | #490 | STATUS-LAUNDERED | `fmt surv` and `unk surv` accept final status `exit0`, without distinguishing normal shutdown after `quit` from premature exit during the tested access. Both outcomes pass. TOC survival rows and GD-ROM default’s `stale how` use the same shape. Already filed as `exit0oracle`; companion rows can still reject the regression. | Score a session that exits successfully before the harness requests shutdown. | confidence high
+
+F9 | regress/gate_sh_rounding.sh:1423 | #464/#486 | STATUS-LAUNDERED | `overrun x2` requests 131400 iterations but never checks its printed `r3` completion control. A run stopping after the first overrun can already contain the expected `1,1,0`; timeout is treated as alive, so incomplete execution passes. Already filed as `wdcfloodprobe`. | Score that partial transcript with nonzero or absent final `r3`; the predicate remains true. | confidence high
+
+F10 | regress/gate_sh_rounding.sh:240 | #457 and subsequent probe wiring | OTHER | Six probes use fixed-duration reads instead of command-completion detection: TLB-multihit, interrupt-priority, IPRBCD, peripheral-clock, GD-ROM data, and GD-ROM default. A required diagnostic arriving after the read window produces a false failure on correct code; a silent stalled process can remain “alive.” Already filed as `probetimebased`, with related `probeslow`. | Delay a required diagnostic beyond its reader’s scoring window and inspect the resulting count. | confidence high
+
+F11 | regress/gate_sh_rounding.sh:757 | #447 | OTHER | `V22 TCR timer_hz` accepts a prefix rather than the complete frequency. Correct `520833.328125` and tenfold-wrong `5208333.281250` both satisfy `startswith("520833")`. Already filed as `probeneedleterm`. | Evaluate the predicate at `sh4_val_probe.py:685` with the latter frequency. | confidence high
+
+F12 | regress/gate_sh_rounding.sh:15 | #299/#300 | RECORD | The header says two vectors remain PINs for unfixed double-rounding and D-format limitations. At HEAD, `fsub band` and `Ddiv` have differing expectations between modes; lines 63–65 correctly describe both fixes. | Compare the header with those expectation dictionaries and the nine-vector discrimination pin. | confidence high
+
+F13 | regress/gate_sh_rounding.sh:268 | #455/#456 | RECORD | The comment still calls testsh the primary synchronous priority-zero witness because its line is outside the assigned priority loop. HEAD wires IRQ14 (`machine_test.c:126`), which receives priority 1 (`cpu_sh.c:390`). Its rows now test delivery and masking; priority-zero coverage moved to TMU. | Trace the current IRQ assignment and priority calculation. | confidence high
+
+F14 | regress/gate_sh_rounding.sh:687 | #463/#464 | RECORD | This comment, repeated at line 1417, says an overlong padded row name stops matching while the gate stays green. Actual code compares the resulting count of zero against one, so the gate fails. | Follow a zero match count into the checks at lines 692 and 1425. | confidence high
+
+F15 | regress/gate_sh_rounding.sh:1519 | #464/#486 | RECORD | “At any of the six sites” and “they all single-step” are stale. `overrun x2` now uses free-running `runloop`, specifically enabling detection of a diagnostic-channel downgrade. The claim that every such downgrade clean-sweeps is false. Related stale wording is recorded under `wdcfloodprobe`. | Trace `wdc_flood_probe.py:673` through `runloop` and its `continue` command. | confidence high
+
+F16 | regress/gate_sh_rounding.sh:1628 | #492/d9efd339 | RECORD | “A brand-new unguarded fatal() now reds” is false of these static checks. An added call need not add a latch identifier, so SET/READ/BALANCED/DECL remain unchanged; the fatal-count floor accepts the increase. | Add an unguarded call to an in-memory source copy and evaluate the census and floor. | confidence high
+
+Checked clean, with each statement limited to the named check:
+
+- regress/gate_sh_rounding.sh:61 — Rounding counts agree: 36 executions and nine discriminating expectation pairs.
+- regress/gate_sh_rounding.sh:75 — All 19 rounding vector names have the required matching multiplicities.
+- regress/gate_sh_rounding.sh:118 — The 34-row halt total agrees with the probe’s row inventory.
+- regress/gate_sh_rounding.sh:205 — SQ witnesses distinguish queue banks, address composition, exception results, and the ITLB decoy.
+- regress/gate_sh_rounding.sh:210 — XD tests seed FR/XF differently; MOVCA uses a distinct source-register decoy.
+- regress/gate_sh_rounding.sh:251 — TLB-multihit checks include reset-state observations and a single-hit countercontrol.
+- regress/gate_sh_rounding.sh:342 — Priority-table rows inspect distinct slots with nonzero expected values.
+- regress/gate_sh_rounding.sh:400 — Clock acceptance checks use different landisk and Dreamcast frequencies.
+- regress/gate_sh_rounding.sh:449 — All 23 GD-ROM data rows are wired, including wrong-width loads and stores.
+- regress/gate_sh_rounding.sh:664 — ASIC’s literal 14-row denominator and current name anchors agree.
+- regress/gate_sh_rounding.sh:724 — PCIC requires its result/PASS records and 38 rows, backed by the probe’s identity check.
+- regress/gate_sh_rounding.sh:813 — CHCR’s 27-row gate floor agrees with its probe identity check.
+- regress/gate_sh_rounding.sh:850 — RTCSR’s completion/PASS checks and ten-row floor agree with the producer.
+- regress/gate_sh_rounding.sh:886 — SCI’s completion/PASS checks and fourteen-row floor agree with the producer.
+- regress/gate_sh_rounding.sh:917 — TLB-DA2’s permissive floor is backed by the probe’s exact fifteen-row identity check.
+- regress/gate_sh_rounding.sh:1282 — GD-ROM condition’s 31-row inventory agrees; opening and trailing controls are separately required.
+- regress/gate_sh_rounding.sh:1333 — BSC requires completion, thirteen rows, and name patterns compatible with its long labels.
+- regress/gate_sh_rounding.sh:1513 — WDC alternate-input coverage includes nonzero status states that distinguish decline from leaked status.
+- regress/gate_sh_rounding.sh:1652 — Maple validates unique protocol records, completion, process status, 37 emitted rows, and zero failures.
+- regress/gate_sh_rounding.sh:1688 — Landisk auxiliary-register checks require completion, literal 6/6, and all six named rows.
+
+DENOMINATOR: read 1 of 1 files in full

@@ -1,0 +1,37 @@
+VERDICT: 17 defects
+
+1. **`p529/r17/mk_gate529.py:42` — Missing argument.** With valid input and a passing base log, this three-argument call to `rep(s, old, new, what)` raises `TypeError`. The gate file is never generated.
+
+2. **`records/commit529.sh:44` — Completed panels are rejected.** Both existing `panel_r15p2.launch.log` and `panel_f2.launch.log` end with `PANEL_COMPLETE`, which the completion regex does not recognize. They block the commit even after all running jobs finish.
+
+3. **`records/commit529.sh:64` — Unrelated working edits are overwritten.** For example, another session’s appended `regress/pass2_ledger.tsv` row is replaced with prep’s HEAD-based version. Only the two Markdown files receive an overwrite check; most backed-up files are never restored after success. Their working edits survive only in the backup.
+
+4. **`records/prep529.py:120` — The checker ownership check accepts unrelated additions.** An added `#554` comment or checker code passes because the filter rejects only deletions and additions containing three particular strings. The working checker is copied wholesale, so those unrelated additions enter #529.
+
+5. **`records/commit529.sh:95` — Parked-entry removal and restoration are not inverses.** Insert one blank line between the five entries: prep still removes exactly ten lines and accepts the checker, but restoration’s contiguous ten-line assumption fails. This happens after committing, leaving the parked entries absent and preventing ledger restoration.
+
+6. **`records/commit529.sh:110` — Backup-ledger rejection occurs after committing.** If the backup already contains `panel_20260926_021621`, `ledger_529.py:139` refuses `records`. The script exits before copying the rebuilt ledger back, leaving unrelated working ledger changes absent from the working tree.
+
+7. **`records/commit529.sh:77` — Precheck failure can bypass undo.** If precheck aborts without a matching summary, `grep` returns 1; `set -e` exits before line 79. Large output can also trigger `pipefail` through `head`. There is no cleanup trap; copy or staging failures likewise leave overwritten files behind.
+
+8. **`records/commit529.sh:56` — Failed index restoration is ignored.** If `git reset` fails, for example because another session holds `index.lock`, `|| true` suppresses it. The content-only MD5 comparison can then announce restoration while #529 remains staged.
+
+9. **`records/commit529.sh:33` — HEAD/index checks do not protect the transaction.** HEAD movement completed before this check is caught. Movement afterward can make the script commit old prepared versions atop a newer HEAD; undo also resets against that newer HEAD. Another session can additionally stage files after the final name check, and ordinary `git commit` includes them.
+
+10. **`records/commit529.sh:69` — Binary exclusion can fail open.** If the binary reset fails transiently, the binaries remain staged. With sufficiently large filename output, `grep -q` exits early and the producer receives SIGPIPE; under `pipefail`, the refusal condition becomes false. The final tracked-binary check occurs after committing.
+
+11. **`records/commit529.sh:70` — The filename allowlist permits suffixes.** If another session stages `CHANGELOG.md.orig` after the initial index check, it matches the unanchored `CHANGELOG.md` alternative and escapes refusal. Unescaped periods also act as regex wildcards.
+
+12. **`records/commit529.sh:64` — Manifest hashes are never enforced.** If a prepared file changes after prep, copying it and comparing destination against that same changed source succeeds. The commit script never compares those bytes with `MANIFEST.txt`, so it can commit content different from the pinned, reviewed assembly.
+
+13. **`records/commit529.sh:112` — Ledger restoration uses different review inputs.** Prep takes verdicts/evidence from arguments; restoration reads four independent sidecar files, currently absent. Failed `cat` substitutions supply empty arguments without making a successful Python invocation fail. The restored ledger can therefore contain empty or different reviews from the committed ledger.
+
+14. **`records/ledger_529.py:293` and `:303` — Ledger placeholders bypass refusal.** Arguments such as `<OWED-OPUS>`, `<ASTRA>`, and `<OWED-EV>` are accepted verbatim. Non-dry assembly can contain them while marking the row closed. Commit’s placeholder checks inspect only the changelog and commit message.
+
+15. **`p529/r17/mk_gate529.py:28` — The base-leg check accepts wrong evidence.** It accepts any log containing `CRIMEP_RESULT=226/226` and ending in `CRIMEP_DONE`, including duplicate/conflicting results or `CRIMEP_CONTROL=FAIL`. It also never binds the log to the shipped probe’s bytes, so a stale successful run qualifies.
+
+16. **`p529/r17/manifest529.py:32` — Manifest discovery includes excluded files.** If `ctl0c_discharge_20260917/bin/` contains a Python helper, this walk adds its MANIFEST entry, although commit deliberately unstages that directory. The checker then rejects the entry as naming an unstaged file. Ignored Python files produce the same mismatch.
+
+17. **`records/commit529.sh:118` — Optional receipt staging still requires a clean receipt file afterward.** When #553 already carried #549’s receipt, line 23 excludes `pass2_ledger.tsv`. An unrelated working edit to that preserved file nevertheless triggers `UNEXPECTED DIFF` after #529 has successfully committed.
+
+No files changed; release scripts and hooks were not executed.

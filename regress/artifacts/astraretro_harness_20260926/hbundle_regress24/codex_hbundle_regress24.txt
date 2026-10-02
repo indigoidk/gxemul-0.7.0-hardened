@@ -1,0 +1,57 @@
+ASTRARETRO_HBUNDLE_REGRESS24_ALIVE
+VERDICT: 14 findings (2 CANNOT-FAIL, 2 SELECTS-NOTHING, 3 STATUS-LAUNDERED, 0 ENCODING, 4 RECORD, 3 OTHER); 20 items checked clean
+
+Reviewed HEAD `db8b1a33` through Git only. No writes, builds, or emulator runs. No matching filing found in HEAD `OUTSTANDING_BUGS.md` for these findings. Proposed checks below were not executed.
+
+F1 | `regress/mk48_nvram_probe.py:292` | #521 | CANNOT-FAIL | The claimed alias guard—`rt 1fef` and `rt 1ff0`…`rt 1ff7`—starts a fresh emulator for each immediate store/read pair. Separate storage and all nine offsets aliased onto one otherwise unused cell both return the expected `0xcf`, `0xc0`…`0xc7`. Distinct values never coexist, so the alias detection claimed at line 286 cannot work. | Smallest check: write different values to two offsets in one session, then read both. | confidence high
+
+F2 | `regress/gate_build.sh:292` | #398 | CANNOT-FAIL | The stale-verdict guard compares `_fails` with its direct copy from line 285; only comments intervene. Its failure branch is unreachable at HEAD. Moreover, a failing check inserted between `verdict=$?` and that snapshot is absorbed into the snapshot: the guard still accepts the earlier PASS and publication proceeds. | Smallest check: place one failing check immediately before the snapshot; require nonzero final status and no publication. | confidence high
+
+F3 | `regress/gate_ab.sh:322` | 2050c501 | SELECTS-NOTHING | The alias regex selects nothing from `"silicon graphics"`, `"origin 200"` or `"origin 2000"`. These are actual advertised aliases (`src/machines/machine_sgi.c:726,740`). Removing them from HEAD leaves both extracted lists unchanged, so the lost-alias check still reports zero. The 40-entry floor does not catch these omissions. | Smallest check: pass those quoted aliases through the extractor and require all three entries. | confidence high
+
+F4 | `regress/gate_build.sh:81` | 8cbc2bb2 | SELECTS-NOTHING | Trees differing only in `cpus/cpu_arm_multi.txt` produce no reported difference: the inventories exclude `.txt`, and the synchronization copy at line 95 excludes it too. “Source tree fully synced” therefore passes with stale generator input. This file actually generates `tmp_arm_multi.c` (`src/cpus/Makefile.skel:65`). | Smallest check: compare inventories with differing `cpu_arm_multi.txt`; require its path in the differences and synchronize it. | confidence high
+
+F5 | `regress/gate_build.sh:317` | #396 | STATUS-LAUNDERED | After successful build checks, a failed publication copy—for example, an unwritable rig destination—only prints a note. `verdict` remains zero, and line 339 exits successfully, so gate 1 reports PASS despite failed publication. | Smallest check: make one publication copy fail and require a nonzero gate result. | confidence high
+
+F6 | `regress/mk48_nvram_probe.py:264` | #521 | STATUS-LAUNDERED | `csr rise`, `live`, `nvram0` and the four `devsig` rows ignore the session’s `how`. A process that prints the expected register values and then hangs before completing returns `TIMEOUT`, but these rows remain green. With other sessions succeeding, the probe can still emit `57/57` and its completion sentinel. | Smallest check: score an expected-value transcript paired with `how="TIMEOUT"`; require failure. | confidence high
+
+F7 | `regress/lib.sh:329` | 2050c501 | STATUS-LAUNDERED | An existing regular log unreadable by the invoking user makes `grep` fail, but `count()` discards its status and returns successful zero. This reaches real green rows: `gate_hygiene.sh:901` checks only existence for luna88k/landisk logs, then line 906 accepts zero for every distress marker. | Smallest check: supply an unreadable regular log and require an input error rather than zero matches. | confidence high
+
+F8 | `regress/mk48_nvram_probe.py:10` | #521 | RECORD | The header claims `47/47` post-fix and `14/47` pre-fix. HEAD emits 57 rows. The committed, byte-identical t3 probe’s `regress/artifacts/mk48nvramkill/killtable_20260910/t3/SCORES.txt` records `57/57` and `16/57`, respectively. | Smallest check: reconcile the header with that score table and the emitted row count. | confidence high
+
+F9 | `regress/mk48_nvram_probe.py:284` | #521 | RECORD | The coverage table claims DATA verification for `0x1ff9..0x1fff` through four `devsig` rows. Those rows read only `0x1ffc..0x1fff`; `0x1ff9` receives survival checks, and `0x1ffa`/`0x1ffb` are never accessed. | Smallest check: enumerate the four load offsets at lines 210–211 against the claimed range. | confidence high
+
+F10 | `regress/gate_build.sh:11` | 2050c501 | RECORD | The header says make cannot see `cpu_mips_instr.c` as a dependency because it is included. HEAD `src/cpus/Makefile.skel:146` explicitly lists it as a prerequisite of `cpu_mips.o`; that rule already existed at import. | Smallest check: compare the header’s explanation with the prerequisite rule. | confidence high
+
+F11 | `regress/gate_ab.sh:134` | #419 | RECORD | “Fake emulators drive every reason” overstates the selftests. They assert MARKER, BUDGET, STALLED, ABSENT and EXITED, but never BACKSTOP. The timeout case has no instruction records and becomes ABSENT. | Smallest check: enumerate asserted reason tokens; add a progressing, marker-free case that must return BACKSTOP. | confidence high
+
+F12 | `regress/gate_ab.sh:291` | #419 | OTHER | With both prebatch and HEAD progressing until BACKSTOP, positive instruction counts and `PRE=HD=1:1:0`, line 286 declares the run inconclusive. Line 291 then unconditionally fails HEAD against `1:1:1`; `gate_end()` prioritizes that failure. The intended load-ambiguous outcome therefore becomes a hard FAIL. | Smallest check: score that tuple with otherwise passing checks; require the intended inconclusive result. | confidence high
+
+F13 | `regress/mk48_nvram_probe.py:209` | #521 | OTHER | One `gmtime()` sample supplies expectations for the signature session and, after seven intervening sessions, `csr rise`. Crossing UTC midnight makes a correct refresh return the new day against the old expected day—for example, `0x29` versus `0x28`—and falsely fail. | Smallest check: place the sample before midnight and refresh after it; bracket each session’s expected time or retry across the transition. | confidence high
+
+F14 | `regress/lib.sh:240` | #419 | OTHER | Relative `LOGDIR`, explicitly illustrated as `LOGDIR=x`, breaks progress runs. Line 231 opens the log relative to the caller; after changing to `$IMAGES`, line 241 resolves the same path elsewhere. Gate 7’s fake executable paths are relative too. Its selftests consequently fail despite valid inputs in the original directory. | Smallest check: exercise the helper with a relative log directory and fake executable; require the same outcome as with absolute paths. | confidence high
+
+Checked clean:
+
+- `regress/gate_ab.sh:66` — Missing executables stop through explicit SKIP.
+- `regress/gate_ab.sh:82` — All three Luna boots use the read-only-overlay image specification.
+- `regress/gate_ab.sh:123` — Bounds checks grade the constants actually passed to the runner.
+- `regress/gate_ab.sh:260` — Positive instruction-count checks catch dropped `-N` despite successful login.
+- `regress/gate_ab.sh:335` — Entirely empty upstream alias extraction fails the minimum count.
+- `regress/gate_build.sh:120` — Make’s captured status is checked independently of diagnostic counts.
+- `regress/gate_build.sh:125` — Exact object counts reject zero or unexpected object totals.
+- `regress/gate_build.sh:188` — Reverse subtraction detects stale allowlist entries.
+- `regress/gate_build.sh:220` — The divergence floor rejects an entirely empty comparison.
+- `regress/gate_build.sh:240` — Both build-function return statuses are captured and checked.
+- `regress/mk48_nvram_probe.py:136` — The session runner distinguishes exits, signals and timeouts.
+- `regress/mk48_nvram_probe.py:152` — Missing register output becomes `absent`, not zero.
+- `regress/mk48_nvram_probe.py:259` — CSR poison `0x5a` differs from every valid BCD day.
+- `regress/mk48_nvram_probe.py:301` — All eight original bad offsets have read/write status and continuation checks.
+- `regress/mk48_nvram_probe.py:333` — Gate integration requires completion and all 57 named passing rows.
+- `regress/lib.sh:46` — Budget classification distinguishes calibrated zero, deliberate absence and missing values.
+- `regress/lib.sh:80` — Equality checks increment the failure counter on mismatch.
+- `regress/lib.sh:109` — Empty gates skip; recorded failures outrank degradation.
+- `regress/lib.sh:137` — A later skip cannot erase previously recorded failures.
+- `regress/lib.sh:293` — Final-window markers are rechecked, and marker-free non-timeout exits classify as EXITED.
+
+DENOMINATOR: read 4 of 4 files in full

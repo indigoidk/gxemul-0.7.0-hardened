@@ -1,0 +1,37 @@
+ASTRARETRO_DEVPCC2_ALIVE
+VERDICT: 6 findings (4 CODE live at HEAD, 2 RECORD, 0 TEST-GAP); 16 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No files changed, builds performed, or tests run. Findings below are static conclusions; existing regression evidence is identified separately.
+
+F1 | src/devices/dev_pcc2.c:721 | #501 | CODE | live at HEAD: yes | Legal writes inside timer registers are discarded. After clearing T1CMP, a halfword store of `0x1234` at offset `0x06` leaves it zero; the expected value is `0x00001234`. Only accesses starting at the four counter/compare base offsets reach the copying arm. The same omission affects both timers. The manual permits subword CSR accesses and declares T1CMP read/write ([manual:4656](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:4656), [manual:5045](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:5045)). No matching filing found. | smallest check: stopped-timer readback comparing equivalent byte, halfword, and word writes | confidence high
+
+F2 | src/devices/dev_pcc2.c:508 | b78bb0f6, pcc2widthkills | CODE | live at HEAD: yes | An aligned halfword write of `0x0250` covering GENCTL/VECBASE is discarded: reset values remain `0x00/0x0f`, instead of becoming `0x02/0x50`. The converted guards deliberately decline hardware-supported writes. This meets the requested hardware-behavior criterion despite being an acknowledged limitation. See [manual:4656](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:4656). Already filed as `pcc2widecompose`, OUTSTANDING_BUGS.md:15400. | smallest check: compare register readback after equivalent byte and halfword writes | confidence high
+
+F3 | src/devices/dev_pcc2.c:537 | upstream, relied on by #77 / OB-11 | CODE | live at HEAD: yes | An eight-byte guest store starting at T2COUNT copies through PSCALECNT, PSCALEADJ, T2CTL, and T1CTL. The bank-wide bounds guard admits it, bypassing neighboring registers’ write semantics—including directly storing read-only overflow bits instead of applying COVF behavior ([manual:5192](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:5192), [manual:5208](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:5208)). The width regression also relies on this route to seed timer-control state. Already filed as `pcc2counter8`, OUTSTANDING_BUGS.md:15358. | smallest check: compare neighboring control-register effects through this copy and their individual write handlers | confidence high
+
+F4 | src/devices/dev_pcc2.c:721 | #501 | CODE | live at HEAD: yes | Byte reads of SCCTXIACK and SCCMOIACK return backing-array bytes without acknowledging the CD2401 or obtaining its vector. With a pending transmit interrupt, SCCTXIACK therefore returns zero instead of performing the documented handshake and returning the programmed vector ([manual:5688](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:5688)). Already filed as `pcc2iackmodel`, OUTSTANDING_BUGS.md:15034. | smallest check: pending-interrupt PIACK test with a nonzero vector and an observed acknowledgement | confidence high
+
+F5 | src/devices/dev_pcc2.c:377 | #512 | RECORD | live at HEAD: yes | The comment says replacing the C040-tail `assert = 0` with `return` passes every shipped row. The committed `ctlq_20260909/mutate.py` targets that exact assignment; its `repaired_M_return.raw` records failures for `c040 noassert` and `c040 noassert2`. The current `pcc2_c040_probe.py` retains those observations. Already filed under `pcc2c040returnmutant`, OUTSTANDING_BUGS.md:20136, but that entry repeats the stale premise. | smallest check: compare the committed mutation anchor, preserved FAIL rows, and source comment | confidence high
+
+F6 | CHANGELOG.md:6048 | #512 | RECORD | live at HEAD: yes | The residual-coverage paragraph says the rows do not cover suppression remaining stuck after C040 clears. `pcc2_c040_probe.py:541` explicitly clears C040 with an interrupt pending and checks delivery; the same changelog block at :5992 records `c040 recover` killing `M_sticky`. | smallest check: compare that paragraph with the recovery row and recorded result | confidence high
+
+Checked clean; source locations below refer to `src/devices/dev_pcc2.c` unless otherwise stated:
+
+- :477 — Register-window folding matches the documented repeated mapping.
+- :483 — Read-span guard bounds the actual copy for reachable access widths.
+- :493 — Rejected read spans fill the entire response with zero.
+- :536 — Counter-copy bounds check uses the same address and length as its copy.
+- :181 — Compile-time check covers both latch-field capacity and shift-operand width.
+- :793 — Initialization clears register storage, vectors, and both warning fields.
+- :464 — Width-warning bits are distinct and accumulated without clearing prior bits.
+- :508 — All twelve width blocks gate writes consistently; shared timer labels retain the same guard.
+- :390 — C040 tests the correct `0x04` bit.
+- :360 — MIEN independently gates interrupt delivery.
+- :301 — C040 suppression retains IPL/vector recalculation; vector indices remain bounded.
+- :402 — Suppression reaches the common interrupt-deassert operation.
+- :691 — Read-only IPL writes and zero-IPL reads no longer terminate the host.
+- :744 — Default-warning shifts remain within 64 bits after address folding.
+- :751 — Read diagnostics use the byte actually served; the asynchronous-timer rationale checks out.
+- regress/gate_arm.sh:1684 — Width/default/C040 probes are wired with named rows, completion markers, and count checks.
+
+DENOMINATOR: read 17 of 17 hunks of the net diff

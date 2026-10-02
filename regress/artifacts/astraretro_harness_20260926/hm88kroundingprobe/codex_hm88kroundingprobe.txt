@@ -1,0 +1,40 @@
+ASTRARETRO_HM88KROUNDINGPROBE_ALIVE
+VERDICT: 8 findings (0 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 4 RECORD, 3 OTHER); 15 items checked clean
+
+Reviewed HEAD `db8b1a33`. Checks used Git objects, the manual, and in-memory calculations/mocks. No files written, builds performed, or emulator sessions run.
+
+F1 | regress/m88k_rounding_probe.py:550 | #392 | STATUS-LAUNDERED | `send("reg")` can return false after EOF without a completion prompt, yet its partial transcript is parsed and scored. A mock supplying `r4 = 0x40000000`, then EOF and child exit 1, made `control 1+1` pass. The child’s wait status is also discarded at line 560. Already broadly filed as **ptywaitstatus**, OUTSTANDING_BUGS.md:21935. | Smallest check: that incomplete-response mock must produce a failed row; HEAD instead returns the expected value. | confidence high
+
+F2 | regress/m88k_rounding_probe.py:563 | #298 | OTHER | None of the four session helpers closes its PTY master, including on startup failure. A complete invocation leaks 81 descriptors: 65 arithmetic sessions, 14 control-flow sessions, retention, and warning control. With an open-file limit of 64, a correct emulator cannot complete the probe; PTY allocation fails before the result sentinel. | Smallest check: track descriptor acquisition and closure across successive helper calls; the count must return to its starting value. | confidence high
+
+F3 | regress/m88k_rounding_probe.py:486 | #298 | OTHER | All four launches inherit colour settings and omit `-A`. With `CLICOLOR=1`, GXemul emits a prompt ending in `GXemul> \x1b[0m`; line 514’s `rstrip().endswith("GXemul>")` rejects it. Correct sessions consequently time out at startup. Already filed as **probecolorprompt**, OUTSTANDING_BUGS.md:18326. | Smallest check: feed that exact coloured prompt into the readiness predicate; it returns false. | confidence high
+
+F4 | regress/m88k_rounding_probe.py:456 | #323 | OTHER | The seven branch rows exercise masks `{0,1,2,4,c,f}`. A regression restoring a NULL handler specifically for legal mask 6 leaves every existing row unchanged, so the probe remains green while that instruction again halts. Already filed as **m88kbcndm6**, OUTSTANDING_BUGS.md:15552. | Smallest check: add a mask-6 row with source zero and assert the taken target; inspect the mask-6 handler entry alongside it. | confidence high
+
+F5 | regress/m88k_rounding_probe.py:22 | #298 | RECORD | The claim that a missing directed-mode swap passes all sign-symmetric vectors is false. Existing `fadd-pos toward+Inf` would produce `0x3f800000` instead of its expected `0x3f800001`; the positive toward-minus-infinity row fails conversely. Negative operands are not required to detect this swap. The claim repeats at line 154. | Smallest check: evaluate those two existing positive rows with identity RM decoding. | confidence high
+
+F6 | regress/m88k_rounding_probe.py:187 | #306 | RECORD | “Implemented five or six of each” misstates the pre-correction decoder. `fdiv` implemented four forms, with size fields `00,01,05,15`; #306 added four more. The other prior counts were fadd 5, fsub 6, and fmul 5. | Smallest check: count existing and added cases in `git show --format= 0fc81c5e -- src/cpus/cpu_m88k_instr.c`. | confidence high
+
+F7 | regress/m88k_rounding_probe.py:219 | #306 | RECORD | The comment groups `fsub.ssd` among instructions with “both sources double.” Its first operand is correctly single: row 223 seeds `r2=0x3f800000`, and `0x84823086` encodes T1=00, T2=01, TD=00. The instruction and expectation are sound; the description is wrong. | Smallest check: decode its type fields against `_scratchpad/mc88100.txt:6703` and `:6733`. | confidence high
+
+F8 | regress/m88k_rounding_probe.py:280 | #303 | RECORD | “Same-format compares can NEVER discriminate” is false for double subnormals. The old decoder maps D bit patterns `3` and `4` to the same host double, `0x0008000000000002`; `fcmp.sdd` therefore returns equality mask `0xa6`. Correct decoding preserves `3 < 4`, returning `0x6a`. The collision is also documented in HEAD’s src/core/float_emul.c:200. | Smallest check: evaluate the old decode formula on those two patterns and compare; an in-memory calculation confirmed the collision. | confidence high
+
+Checked clean, with HEAD line numbers:
+
+- regress/m88k_rounding_probe.py:45 — All 28 distinct FP operation words, FSTCR/FLDCR fields, and rounding constants agree with the manual.
+- regress/m88k_rounding_probe.py:60 — All 65 FP expectations agree with an independent exact-rational calculation, including selected high/low result words.
+- regress/m88k_rounding_probe.py:66 — #298’s arithmetic rows distinguish legacy truncation and reversed directed modes.
+- regress/m88k_rounding_probe.py:105 — #299’s residue, cancellation-sign, and infinity rows discriminate their respective uncorrected results.
+- regress/m88k_rounding_probe.py:134 — #302’s positive-overflow/NaN witnesses discriminate raw casts; int/nint cover modal rounding and both tie parities. Negative saturation rows are explicitly documented controls.
+- regress/m88k_rounding_probe.py:180 — #300 observes `0x99999999` versus nearest’s `0x9999999a`; operand seeds preserve the mode staged in r5.
+- regress/m88k_rounding_probe.py:202 — #306’s rows execute all twelve added format combinations and assert numerical results.
+- regress/m88k_rounding_probe.py:268 — Both #308 witnesses distinguish ordinary host-double intermediate rounding from round-to-odd.
+- regress/m88k_rounding_probe.py:287 — #303’s subnormal arithmetic and mixed-format comparison expectations discriminate the old decoder.
+- regress/m88k_rounding_probe.py:322 — The negative gradual-underflow row detects the old flush, erroneous operand decoding, and lost-sign regression.
+- regress/m88k_rounding_probe.py:418 — All seven tcnd encodings, masks, vector values, and expected PCs are consistent.
+- regress/m88k_rounding_probe.py:456 — The seven present bcnd rows encode and assert the correct branch decisions, including the maximum-negative distinction.
+- regress/m88k_rounding_probe.py:477 — Warning matching uses the actual child diagnostic; the independent non-RM control prevents an empty counter from passing unnoticed.
+- regress/m88k_rounding_probe.py:551 — Register and PC regexes match GXemul’s actual padded output; missing values become `None` and fail numeric comparisons.
+- regress/m88k_rounding_probe.py:753 — Retention expects independently fixed `0x4000`; scoring totals 80 rows, and Gate 11 pins that denominator.
+
+DENOMINATOR: read 1 of 1 files in full

@@ -1,0 +1,46 @@
+ASTRARETRO_DEVASC_ALIVE
+
+VERDICT: 7 findings (4 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 20 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Static review; no files written, builds performed, or runtime probes executed.
+
+F1 | [src/devices/dev_asc.c:620](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:620) | #51 / 8dd86b5a, also relied on by #283 | CODE | live at HEAD: yes | **The bounds check assumes byte-sized transfer registers, but writes retain entire words.** Wide guest count writes during continued DATA_OUT can produce a negative `int len2`; unsigned arithmetic in the destination and source checks can leave that invalid length reaching `memcpy`. The new source guard therefore does not establish memory safety. | Smallest check: static range analysis through register assignment at 1155, count conversion at 577, both span checks, and copy at 662. | confidence high
+
+F2 | [src/devices/dev_asc.c:755](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:755) | upstream, relied on by #283; missed sibling of #281 | CODE | live at HEAD: yes | **Clamped DATA_OUT still reports a complete transfer.** When the guest programs 1,024 bytes but the target needs only 512, the clamp limits the copy to 512; this tail nevertheless writes zero residual and sets TC. The local DMA-window clamp has the same problem. The [LSI manual, p. 4-5, extracted lines 1749–1763](https://datasheet4u.com/pdf-down/5/3/C/53CF92A_LSI.pdf#page=55) ties the counter to transferred bytes and TC to reaching zero. | Smallest check: an accounting test with target length below programmed count, observing both residual bytes and TC. | confidence high
+
+F3 | [src/devices/dev_asc.c:994](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:994) | upstream, relied on by #284 | CODE | live at HEAD: yes | **COMMAND DMA ignores PICA’s external DMA controller.** A PICA guest supplying a command through R4030 DMA instead gets bytes from private `d->dma`, which is zero-initialized and mapped only on DEC. The supplied command becomes an all-zero TEST_UNIT_READY command, while #284 reports zero residual and TC. The boot driver’s avoidance of this path does not prevent another guest using it. [LSI manual, p. 5-1, lines 2967–2977](https://datasheet4u.com/pdf-down/5/3/C/53CF92A_LSI.pdf#page=93). | Smallest check: a PICA command-path test asserting that the configured DMA callback supplies the CDB. | confidence high
+
+F4 | [src/devices/dev_asc.c:378](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:378) | #105 | CODE | live at HEAD: yes | **PIO DATA_IN returns fabricated zeroes.** The branch checks `xferp->data_in`, then reads the unrelated `incoming_data`, which is never populated. A guest receiving a nonzero target byte therefore gets zero in the FIFO. Non-DMA receive should deliver the received byte: [LSI manual, p. 5-14, lines 3379–3383](https://datasheet4u.com/pdf-down/5/3/C/53CF92A_LSI.pdf#page=106). This limitation is acknowledged in `REVIEW_FINDINGS.md:965`, with a reference-guest restriction that does not satisfy this review’s scope. | Smallest check: compare the FIFO result with a nonzero byte already present in `xferp->data_in`. | confidence high
+
+F5 | [src/devices/dev_asc.c:836](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:836) | #277 | RECORD | live at HEAD: yes | The comment—and `CHANGELOG.md:20491`—says an unknown-phase transfer sets no interrupt and leaves the guest uninformed. It falls through to lines 870–873, which set `NCRSTAT_INT` and `NCRINTR_BS`. | Smallest check: follow the uninterrupted control flow from the warning arm to the common epilogue. | confidence high
+
+F6 | [src/devices/dev_asc.c:1497](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:1497) | #245 | RECORD | live at HEAD: yes | The comment promises an illegal-command diagnostic with one `-v`. During normal guest execution, one `-v` leaves verbosity at INFO after startup’s decrement; this call requires DEBUG. Two `-v` options are needed. | Smallest check: compare `debugmsg.c:104`, `main.c:698–699,803`, and this call’s `VERBOSITY_DEBUG`. | confidence high
+
+F7 | [src/devices/dev_asc.c:503](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_asc.c:503) | #281/#283/#284/#286 | TEST-GAP | live at HEAD: yes | The rounds record probes observing residuals, TC and short-transfer disk noncommit, but no committed regression row observes those behaviors. Checked `regress/gate_hygiene.sh`, `gate_mips.sh`, `drive_guest.py`, and committed regression source searches. The hygiene gate checks diagnostic absence during ordinary boots, which cannot pin these fault-path results. | Smallest check: compare the assertions at `gate_hygiene.sh:875–877` with the observations claimed at `CHANGELOG.md:20536,20548`. | confidence high
+
+No matching `OUTSTANDING_BUGS.md` filing was found for these findings. Existing **OB-5** concerns the separate unchecked DMA-window MMIO copies.
+
+Checked clean; all following line numbers refer to `src/devices/dev_asc.c` at HEAD:
+
+1. **:227 — #266:** Chip reset deasserts IRQ and clears its tracking flag.
+2. **:241 — #197/#265:** Empty reads preserve occupancy; full writes are rejected at :283.
+3. **:976 — #265:** A full FIFO drains completely into the CDB allocation.
+4. **:784 — #265:** The message-output sibling also drains by occupancy.
+5. **:258 — #269:** Separate FIFO warning latches survive reset and flush.
+6. **:326 — #277:** Replacing a transfer always frees it, independently of warning suppression.
+7. **:842 — #277:** Unknown-phase warning suppression uses its own persistent latch.
+8. **:356 — #167:** Missing-transfer commands return failure before dereferencing `xferp`.
+9. **:417 — #282:** Diagnostic arguments now match the `%i` conversions.
+10. **:428 — #281:** Removing the redundant clearing does not remove the bounded DATA_IN copy.
+11. **:560 — #281:** Target-short DATA_IN records both residual bytes and sets TC only at zero.
+12. **:503 — #286:** Short controller input returns before advancing the remaining source buffer.
+13. **:591 — #264:** Zero-length DATA_OUT returns failure instead of exiting.
+14. **:634 — #263:** Fresh DATA_OUT storage is explicitly cleared; the allocator honors that flag.
+15. **:649 — #283:** Fresh and continuing DATA_OUT offsets advance by the callback’s returned count.
+16. **:707 — #283:** Zero and positive short callbacks return before disk-command commit.
+17. **:1018 — #284:** DEC COMMAND DMA reports zero residual after copying a valid byte-sized count.
+18. **:1192 — #276:** Both stray-access diagnostics use DEBUG gating.
+19. **:1501 — #240:** Unsupported commands signal the guest without the former host exit.
+20. **:1434 — #264/#283/#286:** Both transfer-failure callers free the transfer and preserve its residual registers.
+
+DENOMINATOR: read 19 of 19 hunks of the net diff

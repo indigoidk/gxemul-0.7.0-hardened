@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""ingest_agy.py -- tabulate the agy pack's 35 answers and set them beside the codex (same-family fallback) answers.
+Every table prints its DENOMINATOR (rows parsed vs the answer's own VERDICT count), so a format miss shows as a
+mismatch instead of a silent zero.  Read-only; prints markdown to stdout."""
+import io
+import os
+import re
+import sys
+
+ARTS = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts"
+G = os.path.join(ARTS, "grokjobs_20260930")
+A = os.path.join(ARTS, "agypack_20261001")
+CP = os.path.join(ARTS, "codexpack_20260928")
+
+ROW = re.compile(r"^[*`\s]*([a-z0-9_]+):F(\d+)[*`\s]*\|\s*(.*)$", re.I)
+STAT = re.compile(r"\b(RIGHT|WRONG|UNSETTLED|WORDING)\b")
+DRAFT = re.compile(r"\|\s*(?:DRAFT:\s*)?(NEW\s+(HIGH|MED|LOW)|FILED-BY-PROSE|FILED|RECORD|DROP)\b")
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read() if os.path.isfile(p) else ""
+
+
+def verdict(t):
+    for l in t.splitlines():
+        if l.startswith("VERDICT"):
+            return l.strip()
+    return "(no VERDICT line)"
+
+
+def rows(t, kind):
+    out = {}
+    for l in t.splitlines():
+        m = ROW.match(l)
+        if not m:
+            continue
+        key = "%s:F%s" % (m.group(1).lower(), m.group(2))
+        rest = m.group(3)
+        if kind == "hverify":
+            parts = rest.split("|")
+            st = STAT.search(parts[1] if len(parts) > 1 else rest)
+        else:   # draftcheck: `draft: ... | RIGHT / WRONG: ... | lines`
+            parts = rest.split("|")
+            st = STAT.search(parts[1]) if len(parts) > 1 else None
+            if not st:
+                st = STAT.search(rest)
+        d = DRAFT.search(l)
+        if key not in out:
+            out[key] = (st.group(1) if st else "?", (d.group(1).split()[0], d.group(2) or "") if d else ("?", ""), l.strip())
+    return out
+
+
+def claimed(v):
+    m = re.search(r"of (\d+)", v)
+    return int(m.group(1)) if m else -1
+
+
+def hverify():
+    print("## hverify -- the harness review's findings, re-verified by agy beside the codex fallback\n")
+    print("| job | agy VERDICT | agy rows parsed | codex rows parsed | status disagreements | draft-kind disagreements |")
+    print("|---|---|---|---|---|---|")
+    dis_all = []
+    tot = [0, 0, 0, 0]
+    for nn in ("07", "09", "11", "12", "13", "14", "15", "16", "17", "18"):
+        j = "hverify_" + nn
+        ta, tc = rd(os.path.join(G, j, "agy_%s.txt" % j)), rd(os.path.join(G, j, "codex_%s.txt" % j))
+        ra, rc = rows(ta, "hverify"), rows(tc, "hverify")
+        sd = [k for k in ra if k in rc and ra[k][0] != rc[k][0]]
+        dd = [k for k in ra if k in rc and ra[k][0] == rc[k][0] == "RIGHT" and ra[k][1][0] != rc[k][1][0] and "?" not in (ra[k][1][0], rc[k][1][0])]
+        only_a = [k for k in ra if k not in rc]
+        only_c = [k for k in rc if k not in ra]
+        print("| %s | %s | %d of %d | %d | %d | %d |%s" % (
+            j, verdict(ta)[9:70], len(ra), claimed(verdict(ta)), len(rc), len(sd), len(dd),
+            (" keys only in agy: %s; only in codex: %s" % (only_a[:4], only_c[:4])) if only_a or only_c else ""))
+        tot[0] += len(ra); tot[1] += len(rc); tot[2] += len(sd); tot[3] += len(dd)
+        for k in sd:
+            dis_all.append((j, k, "STATUS", ra[k], rc[k]))
+        for k in dd:
+            dis_all.append((j, k, "DRAFT", ra[k], rc[k]))
+    print("| **total** | | %d | %d | %d | %d |" % tuple(tot))
+    print("\n### Every disagreement, both lines\n")
+    for j, k, what, a, c in dis_all:
+        print("* **%s %s** (%s): agy %s / draft %s %s; codex %s / draft %s %s" % (j, k, what, a[0], a[1][0], a[1][1], c[0], c[1][0], c[1][1]))
+        print("  * agy: %s" % a[2][:420])
+        print("  * codex: %s" % c[2][:420])
+    # severity raises/lowers among agreed-NEW rows
+    sev = []
+    for nn in ("07", "09", "11", "12", "13", "14", "15", "16", "17", "18"):
+        j = "hverify_" + nn
+        ra = rows(rd(os.path.join(G, j, "agy_%s.txt" % j)), "hverify")
+        rc = rows(rd(os.path.join(G, j, "codex_%s.txt" % j)), "hverify")
+        for k in ra:
+            if k in rc and ra[k][1][0] == rc[k][1][0] == "NEW" and ra[k][1][1] != rc[k][1][1]:
+                sev.append((j, k, ra[k][1][1], rc[k][1][1]))
+    print("\n### Agreed-NEW rows where the two seats grade differently: %d\n" % len(sev))
+    hi = [s for s in sev if "HIGH" in (s[2], s[3])]
+    print("involving a HIGH on either side: %d" % len(hi))
+    for j, k, a, c in hi:
+        print("* %s %s: agy %s, codex %s" % (j, k, a, c))
+    # HIGH drafts by agy
+    print("\n### NEW HIGH drafts (either seat)\n")
+    for nn in ("07", "09", "11", "12", "13", "14", "15", "16", "17", "18"):
+        j = "hverify_" + nn
+        ra = rows(rd(os.path.join(G, j, "agy_%s.txt" % j)), "hverify")
+        rc = rows(rd(os.path.join(G, j, "codex_%s.txt" % j)), "hverify")
+        for k in sorted(set(ra) | set(rc)):
+            a, c = ra.get(k), rc.get(k)
+            if (a and a[1] == ("NEW", "HIGH")) or (c and c[1] == ("NEW", "HIGH")):
+                print("* %s %s: agy %s %s; codex %s %s" % (j, k, a[1][0] if a else "-", a[1][1] if a else "", c[1][0] if c else "-", c[1][1] if c else ""))
+
+
+def draftcheck():
+    print("\n## draftcheck -- the codex DRAFT dispositions for retro batches 3a-3h, checked by agy beside the codex check\n")
+    print("| batch | agy VERDICT | agy rows | codex VERDICT | codex rows | agy flags (WRONG/WORDING) | codex flags | flagged by both |")
+    print("|---|---|---|---|---|---|---|---|")
+    det = []
+    for b in ("3a", "3b", "3c", "3d", "3e", "3f", "3g", "3h"):
+        j = "draftcheck_" + b
+        ta, tc = rd(os.path.join(G, j, "agy_%s.txt" % j)), rd(os.path.join(G, j, "codex_%s.txt" % j))
+        ra, rc = rows(ta, "draftcheck"), rows(tc, "draftcheck")
+        fa = sorted(k for k in ra if ra[k][0] in ("WRONG", "WORDING"))
+        fc = sorted(k for k in rc if rc[k][0] in ("WRONG", "WORDING"))
+        both = sorted(set(fa) & set(fc))
+        print("| %s | %s | %d | %s | %d | %s | %s | %s |" % (b, verdict(ta)[9:60], len(ra), verdict(tc)[9:60], len(rc),
+                                                         ", ".join(fa) or "-", ", ".join(fc) or "-", ", ".join(both) or "-"))
+        for k in fa:
+            det.append((b, "agy", k, ra[k][2]))
+        for k in fc:
+            det.append((b, "codex", k, rc[k][2]))
+    print("\n### Every flagged draft disposition, verbatim (truncated)\n")
+    for b, who, k, l in det:
+        print("* **%s %s** (%s): %s" % (b, k, who, l[:520]))
+
+
+IDROW = re.compile(r"^\s*\|?\s*`?(\d+)(?:\s*[\u2013\u2014-]\s*(\d+))?`?\s*\|\s*ID-LESS:\s*(yes|no)", re.I)
+
+
+def idless():
+    print("\n## idlessverify -- the codex id-less scan of OUTSTANDING_BUGS.md, second-seat verified by agy\n")
+    print("| slice | agy VERDICT | rows parsed | ID-LESS no | RIGHT | WRONG | UNSETTLED | sev agree | raise | lower | HIGH (agy's grade) |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    T = [0] * 9
+    notes = []
+    for n in range(1, 10):
+        nn = "%02d" % n
+        t = rd(os.path.join(A, "idlessverify_" + nn, "agy_idlessverify_%s.txt" % nn))
+        c = [0] * 9
+        for l in t.splitlines():
+            m = IDROW.match(l)
+            if not m:
+                continue
+            c[0] += 1
+            if m.group(3).lower() == "no":
+                c[1] += 1
+                notes.append((nn, "ID-LESS: no", l.strip()[:400]))
+            oc = re.search(r"OPEN-CLAIM:\s*\**\s*(RIGHT|WRONG|UNSETTLED)", l)
+            if oc:
+                c[{"RIGHT": 2, "WRONG": 3, "UNSETTLED": 4}[oc.group(1)]] += 1
+                if oc.group(1) == "WRONG":
+                    notes.append((nn, "OPEN-CLAIM WRONG", l.strip()[:520]))
+            sv = re.search(r"SEVERITY:\s*\**\s*(HIGH|MED|LOW)\**\s*\(\s*(agree|raise|lower)", l, re.I)
+            if sv:
+                c[{"agree": 5, "raise": 6, "lower": 7}[sv.group(2).lower()]] += 1
+                if sv.group(1).upper() == "HIGH":
+                    c[8] += 1
+                if sv.group(2).lower() != "agree":
+                    notes.append((nn, "SEVERITY " + sv.group(2).lower(), l.strip()[:420]))
+        print("| %s | %s | %d of %d | %d | %d | %d | %d | %d | %d | %d | %d |" % ((nn, verdict(t)[9:88], c[0], claimed(verdict(t))) + tuple(c[1:])))
+        for i in range(9):
+            T[i] += c[i]
+    print("| **total** | | %d | %d | %d | %d | %d | %d | %d | %d | %d |" % tuple(T))
+    print("\n### Rows where agy departs from the codex scan (not id-less after all; open-claim wrong; severity moved)\n")
+    for nn, what, l in notes:
+        print("* slice %s, %s: %s" % (nn, what, l))
+
+
+def main():
+    which = sys.argv[1] if len(sys.argv) > 1 else "all"
+    if which in ("all", "hverify"):
+        hverify()
+    if which in ("all", "draftcheck"):
+        draftcheck()
+    if which in ("all", "idless"):
+        idless()
+
+
+if __name__ == "__main__":
+    main()

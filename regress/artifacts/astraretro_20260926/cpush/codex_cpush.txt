@@ -1,0 +1,40 @@
+ASTRARETRO_CPUSH_ALIVE
+VERDICT: 8 findings (5 CODE live at HEAD, 3 RECORD, 0 TEST-GAP); 15 items checked clean
+
+Reviewed committed `8ea26abb` only. Static inspection; nothing written, built, or executed. F5 is a dormant table defect, not a demonstrated interrupt-delivery failure. Manual references below mean `_scratchpad/sh7750_hardware.txt`.
+
+F1 | src/cpus/cpu_sh.c:1088 | upstream, relied on by #217/#315 | CODE | live at HEAD: yes | A guest-selected exception vector in a forbidden instruction region still terminates the host when a newly handled exception dispatches there. The tail calls `sh_pc_to_pointers()`, whose translation reaches `src/cpus/memory_sh.c:379–381` and `exit(1)`. Removing the direct exception-switch exits therefore leaves this dependent exit path. | Smallest check: inspect the dispatch chain through `cpu_dyntrans.c:679` and its `FLAG_INSTR` argument. | confidence high
+
+F2 | src/cpus/cpu_sh.c:1017 | upstream reset arm, relied on by #457 | CODE | live at HEAD: yes | A guest changes FPSCR or MMUCR before a modeled UTLB multiple-hit reset; both retain their previous values. The manual requires CPU/module initialization equivalent to manual reset (`:12504`), including FPSCR `0x00040001` (`:8029`, `:8034`) and MMUCR zero (`:8748`, `:8750`). The comment’s justification at line 979 is false: preserving UTLB entries does not prohibit that initialization; their valid bits explicitly survive manual reset (`:9329`). | Smallest check: reset-handler state assertions for FPSCR and MMUCR, with nondefault starting values. | confidence high
+
+F3 | src/cpus/cpu_sh.c:917 | upstream, relied on by #217/#315/#457 | CODE | live at HEAD: yes | With SR.BL set, a handled general exception records power-on-reset code `0x000`, although the manual requires manual-reset code `0x020` (`:13162–13166`). The same unconditional rewrite destroys multiple-hit code `0x140`, despite that event belonging to the Reset category (`:12006`, `:12010`). This also contradicts #457’s unconditional preservation claim at line 985. **Partly already filed:** `shsweep`, `OUTSTANDING_BUGS.md:8145`, covers the general-exception mismatch. | Smallest check: dispatch-state assertions distinguishing general exceptions from multiple-hit resets with BL set. | confidence high
+
+F4 | src/cpus/cpu_sh.c:592 | upstream, relied on by #458 | CODE | live at HEAD: yes | While interrupt acceptance is masked, let SCIF TX become pending before RX. Equal priority leaves TX selected because the assertion path replaces only on strictly greater priority. Hardware requires RX before TX (`:40144–40151`, arbitration rule `:40509–40511`). #458’s IPR-write rescan selects RX correctly, but the assertion sibling retains arrival-order selection. | Smallest check: an arbitration-state test presenting TX then RX at equal priority and requiring RX selection. | confidence med
+
+F5 | src/cpus/cpu_sh.c:447 | #458 | CODE | live at HEAD: yes | On supported SH7750R, a guest DMAC-priority write updates DMTE0–3 and DMAE but leaves DMTE4–7 at zero. Those four additional sources share IPRC[11:8] (`:40085–40101`). **Currently observable through the exposed table only:** no device asserts these DMA sources. **Already filed:** `sh4irlm`, “Escape list addendum 2,” `OUTSTANDING_BUGS.md:8691`. | Smallest check: inspect all eight DMTE slots after one priority update. | confidence high
+
+F6 | src/cpus/cpu_sh.c:147 | #458 | RECORD | live at HEAD: yes | The comment says removing “IPRB/IPRC blocks” affects only unasserted sources and cannot change guest behavior. IPRC includes live SCIF RX/TX. The actual recorded escaping mutant removes **RTC + IPRB**, as `CHANGELOG.md:19053` states. | Smallest check: compare that mutation description with the comment and the SCIF delivery rows in `regress/sh_iprbcd_probe.py`. | confidence high
+
+F7 | CHANGELOG.md:19058 | #458 | RECORD | live at HEAD: yes | The record says settings expose `int_to_assert` and `int_level`, then explains their registration widths. Neither is exposed at HEAD: `cpu_sh.c:159` explicitly records their omission, and the added registrations expose only `iprio_*`. | Smallest check: inspect the committed `CPU_SETTINGS_ADD_REGISTER*` calls. | confidence high
+
+F8 | CHANGELOG.md:19184 | #458 | RECORD | live at HEAD: yes | The reset-priority discussion claims `machine_test.c` is the only other SH machine besides landisk. HEAD also registers Dreamcast, selecting SH7750 at `src/machines/machine_dreamcast.c:165`. The stated machine census supporting the compatibility conclusion is false. | Smallest check: inspect Dreamcast’s CPU selection and `MACHINE_REGISTER(dreamcast)` at line 177. | confidence high
+
+Checked clean; these are narrower checks, not declarations that the surrounding functions are defect-free:
+
+- src/cpus/cpu_sh.c:118 — Constructor FPSCR value matches the manual.
+- src/cpus/cpu_sh.c:168 — All 128 settings registrations fit the table; names fit their buffer and byte widths match.
+- src/cpus/cpu_sh.c:328 — The nine added event constants match the manual’s source codes.
+- src/cpus/cpu_sh.c:344 — Priority replacement clears the previous nibble while preserving pending state.
+- src/cpus/cpu_sh.c:369 — Rescan is bounded, clears cached selection, and excludes unasserted or zero-priority entries.
+- src/cpus/cpu_sh.c:399 — IPRA maps all three timers, both TMU2 causes, and all three RTC causes correctly.
+- src/cpus/cpu_sh.c:413 — IPRB maps WDT, both refresh causes, and all four SCI causes correctly.
+- src/cpus/cpu_sh.c:445 — GPIO/H-UDI positions and all four SCIF mappings are correct.
+- src/cpus/cpu_sh.c:454 — Ignoring IPRD is consistent with the device’s refusal to enable independent-pin mode.
+- src/cpus/cpu_sh.c:519 — IPR updates recompute standing requests; `sh_iprbcd_probe.py` observes raised-priority delivery.
+- src/cpus/cpu_sh.c:589 — Priority zero returns silently while preserving pending state; landisk rows in `sh_intprio_probe.py` observe survival and silence.
+- src/cpus/cpu_sh.c:615 — Deassert clears the source and invokes the shared rescan; the deassert probe observes it.
+- src/cpus/cpu_sh.c:1018 — With BL clear, multiple-hit sets reset PC/VBR and the required SR bits; `sh_tlbmulti_probe.py` observes these transitions.
+- src/cpus/cpu_sh.c:1046 — With BL clear and an executable vector, reserved and both slot-exception cases retain their event codes and use the general vector.
+- src/cpus/cpu_sh.c:1075 — Both address-error directions set TEA from the supplied fault address.
+
+DENOMINATOR: read 9 of 9 hunks of the net diff

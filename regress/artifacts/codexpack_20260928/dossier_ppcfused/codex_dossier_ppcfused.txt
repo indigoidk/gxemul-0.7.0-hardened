@@ -1,0 +1,360 @@
+CODEXPACK_DOSSIER_PPCFUSED_ALIVE
+VERDICT: finding TRUE -- disposition member 7 -- the single-precision fused forms reach the CPU-stop path.
+
+All repository citations below refer to **`db8b1a33` in `GXEMUL-SEC`**, not the working tree. Manual citations refer to the permitted on-disk `_scratchpad` files. These are static findings; no build, test, emulator execution, patch, or file write was performed.
+
+**1. TRUE: instruction fetch → missing decode → CPU stop**
+
+The affected forms are explicitly:
+
+| Instruction | Primary opcode | Extended selector | Rc |
+|---|---:|---:|---|
+| `fmsubs`, `fmsubs.` | 59 | 28 | 0, 1 |
+| `fmadds`, `fmadds.` | 59 | 29 | 0, 1 |
+| `fnmsubs`, `fnmsubs.` | 59 | 30 | 0, 1 |
+| `fnmadds`, `fnmadds.` | 59 | 31 | 0, 1 |
+
+The architecture lists these selectors in `_scratchpad/ppc_uisa_book1_v201.txt:11755`, `:11757`, `:11759`, `:11761`. The source defines `PPC_59_FMADDS` as `29`, but has no corresponding opcode-59 definitions for selectors `28`, `30`, `31`: `src/include/opcodes_ppc.h:231–236`.
+
+The execution path is:
+
+1. **Guest instruction address.** The translator derives the instruction address from the current translation entry, writes `cpu->pc = addr`, and aligns the fetch address. The exact assignments are at `src/cpus/cpu_ppc_instr.c:4083–4090`.
+
+2. **Guest instruction bytes enter.** With a cached page, the fetch is:
+   > `memcpy(ib, page + (addr & 0xfff), sizeof(ib));`
+
+   Otherwise it calls:
+   > `cpu->memory_rw(cpu, cpu->mem, addr, ib, sizeof(ib), MEM_READ, CACHE_INSTRUCTION)`
+
+   The finding’s path requires that fetch to succeed. A failed uncached fetch instead reaches a separate `exit(1)`. `src/cpus/cpu_ppc_instr.c:4110–4119`.
+
+3. **Instruction word interpretation.**
+   > `iword = *p;`  
+   > `iword = BE32_TO_HOST(iword);`
+
+   These are `src/cpus/cpu_ppc_instr.c:4125–4127`.
+
+4. **Debugger interception, if configured.** Before decoding, the included dyntrans head checks host-configured breakpoints. A matching, non-ignored breakpoint can enter the debugger before instruction execution. This is an execution prerequisite, not acceptance of the instruction. `src/cpus/cpu_ppc_instr.c:4130–4132`; `src/cpus/cpu_dyntrans.c:1799–1848`.
+
+5. **Primary opcode selection.**
+   > `main_opcode = iword >> 26;`  
+   > `switch (main_opcode) {`
+
+   The selected arm is `case PPC_HI6_59:`. `src/cpus/cpu_ppc_instr.c:4139–4141`, `:5176`.
+
+6. **Extended opcode and record bit.**
+   > `xo = (iword >> 1) & 1023;`  
+   > `rc = iword & 1;`  
+   > `rc_f = NULL;`  
+   > `switch (xo & 31) {`
+
+   The source also extracts destination, FRA, FRB, and FRC fields, but the unsupported path never dispatches an arithmetic handler. `src/cpus/cpu_ppc_instr.c:5177–5197`.
+
+7. **No matching arithmetic case.** The accepted selectors are explicitly `18` (`fdivs`), `20` (`fsubs`), `21` (`fadds`), and `25` (`fmuls`), with record twins. `src/include/opcodes_ppc.h:232–235`; `src/cpus/cpu_ppc_instr.c:5198–5215`.
+
+   Each studied selector—`28`, `29`, `30`, `31`—therefore reaches:
+   > `default:/* Use all 10 bits of xo: */`  
+   > `switch (xo) {`  
+   > `default:goto bad;`
+
+   `src/cpus/cpu_ppc_instr.c:5216–5219`. Both Rc values follow this route **before** the record-form substitution at `:5221–5226`.
+
+8. **Common stop, with the read-ahead qualification.** The tail is included at `src/cpus/cpu_ppc_instr.c:5430–5432`. Its `bad:` path first does:
+   > `ic->f = TO_BE_TRANSLATED;`  
+   > `if (cpu->translation_readahead)`  
+   > `return;`
+
+   Thus speculative translation alone does not stop the CPU. On actual execution, it sets `about_to_enter_single_step`, emits `"UNIMPLEMENTED instruction at …"`, optionally disassembles, and executes:
+   > `cpu->running = 0;`
+
+   It then resets the debugger and redirects execution to `nothing_call`. `src/cpus/cpu_dyntrans.c:1983–2024`.
+
+This is a **CPU-progress failure**, supporting the supplied HIGH rationale. The selected path contains a CPU stop, not a host `exit()`, and does not deliver an architectural exception. `src/cpus/cpu_dyntrans.c:1994–2024`. The negative single forms are absent from the specific pending list and regression rows examined; the broader halt class was already recorded. `OUTSTANDING_BUGS.md:1705–1716`; `regress/ppc_halt_probe.py:229–280`.
+
+**2. Who can reach it**
+
+Both **problem state and supervisor state**, subject to successfully fetching the instruction, reach this decoder: the opcode-59 arm contains no privilege or model check. Moreover, `MSR[FP]=0` does **not** protect this path. The normal check—
+
+> `if (!(cpu->cd.ppc.msr & PPC_MSR_FP))`
+
+—lives in the implemented handlers’ macro and calls `ppc_exception(cpu, PPC_EXCEPTION_FPU)`. Missing decoding reaches `bad` before that macro runs. `src/cpus/cpu_ppc_instr.c:216–225`, `:5176–5227`.
+
+The configured CPU names are:
+
+`PPC405GP`, `PPC601`, `PPC603`, `PPC603e`, `PPC604`, `PPC620`, `MPC7400`, `MPC7455`, `PPC750`, `G4e`, `PPC970`.
+
+They are enumerated at `src/include/cpu_ppc.h:75–88`. CPU setup selects `ppc32_run_instr` or `ppc_run_instr` according to the model’s width; both builds include this same decoder. `src/cpus/cpu_ppc.c:76–99`, `:120–135`; `src/cpus/tmp_ppc_tail.c:63–77`, `:118–124`.
+
+`PPC405GP` is marked `PPC_NOFP|PPC_NO_DEC`, but the committed `src/` search found `PPC_NOFP` only in its definition and that table entry. It is therefore **not an enforced software exemption** from this decode path. `src/include/cpu_ppc.h:63`, `:76`.
+
+The machine defaults found in `src/machines/` are:
+
+| Machine / subtype | Default CPU | Assignment and registration citations |
+|---|---|---|
+| macppc / g3 | PPC750 | `src/machines/machine_macppc.c:173–174`, `:195–211` |
+| macppc / g4 | MPC7400 | `src/machines/machine_macppc.c:176–177`, `:195–211` |
+| macppc / g4plus | MPC7455 | `src/machines/machine_macppc.c:179–180`, `:195–211` |
+| macppc / g5 | PPC970 | `src/machines/machine_macppc.c:182–183`, `:195–211` |
+| mvmeppc / mvme1600 | PPC603e | `src/machines/machine_mvmeppc.c:165–167`, `:191–204` |
+| mvmeppc / mvme2100 | PPC603e | `src/machines/machine_mvmeppc.c:170–171`, `:191–204` |
+| mvmeppc / mvme5500 | PPC750 | `src/machines/machine_mvmeppc.c:174–175`, `:191–204` |
+| pmppc | PPC750 | `src/machines/machine_pmppc.c:76–86` |
+| prep / ibm6050, ibm6070 | PPC604 | `src/machines/machine_prep.c:156–157`, `:184–185` |
+| prep / mvme2400 | PPC750 | `src/machines/machine_prep.c:160–161`, `:187–188` |
+| bareppc | PPC970 | `src/machines/machine_test.c:448–450`, `:460–465` |
+| testppc | PPC970 | `src/machines/machine_test.c:454–456`, `:468–473` |
+
+An explicitly supplied CPU name bypasses default selection: `"if (m->cpu_name != NULL) return;"`. `src/machines/machine.c:666–667`. Successful booting of arbitrary machine/model overrides was **not checked**.
+
+No model, width, privilege, or FP-enable setting exempts an instruction that actually reaches this opcode-59 arm. Failed fetching, a prior debugger stop, or read-ahead without eventual execution can prevent reaching the stop under study; these conditions are described above. Runtime configuration coverage was **not checked**.
+
+**3. What the hardware specifies**
+
+These are user-level instructions: each entry says **“Architecture Level UISA”**, and the manual defines UISA as the base user-level/problem-state instruction set. `_scratchpad/ppc_pem32_rev2_2001.txt:1512–1522`, `:19633`, `:19845`, `:20269`, `:20439`.
+
+Fusion is explicit:
+
+> “These instructions combine a multiply and an add operation without an intermediate rounding operation.”
+
+`_scratchpad/ppc_uisa_book1_v201.txt:6427–6431`.
+
+For `fmadds`, the manual specifies FRA×FRC+FRB and states:
+
+> “The result is rounded to single-precision under control of the floating-point rounding control field RN of the FPSCR and placed into frD.”
+
+`_scratchpad/ppc_pem32_rev2_2001.txt:19613–19615`. The corresponding subtraction rule is FRA×FRC−FRB at `:19825–19827`.
+
+For `fnmadds`:
+
+> “The result is rounded to single-precision under control of the floating-point rounding control field RN of the FPSCR, then negated and placed into frD.”
+
+`_scratchpad/ppc_pem32_rev2_2001.txt:20246`; the equivalent `fnmsubs` requirement is at `:20416`.
+
+Therefore the negative forms require **round, then negate**. The manual separately preserves a propagated QNaN’s sign, specifies zero sign for a newly generated invalid-operation QNaN, and preserves a quieted SNaN’s sign. `_scratchpad/ppc_pem32_rev2_2001.txt:20249–20251`, `:20419–20421`.
+
+The rounding modes are explicitly `00` nearest, `01` toward zero, `10` toward positive infinity, and `11` toward negative infinity. `_scratchpad/ppc_uisa_book1_v201.txt:5040–5043`. Single arithmetic produces a single-format result represented in the double-format FPR; status describes that single result. Its operands must be representable in single format for the specified arithmetic result to be defined. `_scratchpad/ppc_uisa_book1_v201.txt:4884–4890`, `:5268–5276`.
+
+For record forms:
+
+> “For all floating-point instructions in which Rc=1, CR Field 1 … is set to the Floating-Point exception status”
+
+copied from FPSCR. The copied fields are **FX, FEX, VX, OX**. `_scratchpad/ppc_uisa_book1_v201.txt:1345–1368`.
+
+The listed affected FPSCR fields include **FPRF, FR, FI, FX, OX, UX, XX, VXSNAN, VXISI, VXIMZ**, with invalid-enable qualifications. `_scratchpad/ppc_pem32_rev2_2001.txt:19617–19629`, `:19829–19841`, `:20253–20265`, `:20423–20435`.
+
+With FP disabled, hardware instead takes the floating-point-unavailable exception:
+
+> “an attempt is made to execute a floating-point instruction … and … MSR[FP] = 0”
+
+with execution resuming at offset `0x00800` from the MSR[IP]-selected base. `_scratchpad/ppc_pem32_rev2_2001.txt:12057`, `:12084`.
+
+**4. Siblings in the affected source files**
+
+The census here covers **`cpu_ppc_instr.c` and `cpu_dyntrans.c`**. `fatal()` by itself is diagnostic: its body calls `va_debug` and returns. `src/core/debugmsg.c:384–391`.
+
+For every reachable `goto bad` below, the final condition is **not translation read-ahead**, after which `src/cpus/cpu_dyntrans.c:2014` stops the CPU. The general record explicitly calls this:
+
+> “one site with many faces rather than many sites.”
+
+`OUTSTANDING_BUGS.md:21163–21165`.
+
+“Not found” means no specific record was found by the documented symbol/diagnostic searches; it is not a claim that every sentence of `OUTSTANDING_BUGS.md` was reviewed.
+
+| Site | Guest-controlled condition and action | Existing record |
+|---|---|---|
+| `src/cpus/cpu_ppc_instr.c:2304–2307` | `lwarx`/`ldarx`, `"if (rc)"`: `"ll: rc-bit set?"`, then `exit(1)`. | Specific invalid-Rc exit not found. |
+| `src/cpus/cpu_ppc_instr.c:2329–2333` | `stwcx`/`stdcx` selection, `"if (!rc)"`: `"sc: rc-bit not set?"`, then `exit(1)`. | Specific invalid-Rc exit not found. |
+| `src/cpus/cpu_ppc_instr.c:4110–4119` | No cached instruction page and instruction `memory_rw` returns false: `"read failed: TODO"`, then `exit(1)`. Exact conditions inside the memory subsystem producing that return here: **not checked**. | PPC-specific exit not found. |
+| `src/cpus/cpu_ppc_instr.c:4143–4154` | Primary `0x04`, instruction differs from the sole hard-coded `vxor v19,v19,v19`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4205–4210` | `addic`/`addic.` and `"cpu->cd.ppc.bits == 64"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4338–4341` | Immediate update load/store, `"ra == 0 && update"`: `goto bad`. | Specific rejection not found. The resolved FP-update omission at `OUTSTANDING_BUGS.md:1676–1684` is different. |
+| `src/cpus/cpu_ppc_instr.c:4354–4363` | Conditional branch, `"if (aa_bit)"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4474–4479` | `bcctr`, `"if (!(bo & 4))"`: `goto bad`. Despite the diagnostic mentioning `bclr`, this branch is the `bcctr` arm. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4531` | Primary-19 extended-opcode `"default:goto bad;"`. | General shared-stop record only. |
+| `src/cpus/cpu_ppc_instr.c:4593–4605` | `rldicl`, `rldicr`, `rldimi`, with CPU `"bits == 32"`: `goto bad`. This checks CPU width, not MSR[SF]. | `OUTSTANDING_BUGS.md:18967–18971`. |
+| `src/cpus/cpu_ppc_instr.c:4609` | Primary-30 selector default. | Missing `rldic`, `rldcl`, `rldcr` explicitly recorded at `OUTSTANDING_BUGS.md:18950–18952`. |
+| `src/cpus/cpu_ppc_instr.c:4643–4650` | `cntlzw`, `"if (rc)"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4704–4711` | `mtmsr`/`mtmsrd`, `"if (l_bit)"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4735–4748` | `mfsrin`/`mtsrin`, CPU `"bits == 64"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4752–4764` | `mfsr`/`mtsr`, CPU `"bits == 64"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4841–4850` | `mftb`, SPR is neither **268** nor **269**: default `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:4995–4998` | Indexed update load/store, `"ra == 0 && update"`: `goto bad`. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:5104–5137` | Record-form arithmetic switch default: the outer-listed operation missing from its record cases is `addc`, so `addc.` reaches this stop. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:5143–5146` | `"cpu->cd.ppc.bits == 64 && n64"`: `goto bad`. The `n64` operations are **divw, divwu, addc, adde, addme, addze, subfe, subfme, subfze**, assigned at `:5091–5102`; `addc.` fails earlier. | Specific entry not found. |
+| `src/cpus/cpu_ppc_instr.c:5172` | Primary-31 full-XO default, including unsupported OE-set forms. | General shared-stop record only. |
+| `src/cpus/cpu_ppc_instr.c:5218` | Opcode-59 fallback under study; also catches the existing pending `fsqrts` and `fres` rows. | `OUTSTANDING_BUGS.md:1705–1716`; `regress/ppc_halt_probe.py:276`, `:278`. |
+| `src/cpus/cpu_ppc_instr.c:5410` | Opcode-63 fallback; pending examples are **fctid, fctidz, fcfid, fcmpo, fsqrt, frsqrte**. | `OUTSTANDING_BUGS.md:1705–1716`; `regress/ppc_halt_probe.py:257–259`, `:264`, `:275`, `:279`. |
+| `src/cpus/cpu_ppc_instr.c:5419–5421` | Rc set with no record handler: currently applies to decoded `fcmpu` and `mcrfs`. The source calls these reserved encodings, not valid record forms. | Specific entry not found; explanation at `src/cpus/cpu_ppc_instr.c:5414–5417`. |
+| `src/cpus/cpu_ppc_instr.c:5426` | Main opcode `"default:goto bad;"`. | General shared-stop record. |
+
+Additional apparent sites need qualification:
+
+- **OE guard:** `src/cpus/cpu_ppc_instr.c:5082–5085` says `"if (oe_bit)"` then `goto bad`, but the preceding full-XO dispatch only admits the non-O cases. OE-set forms fail at `:5172` first. The admitted constants are explicitly **8, 10, 11, 40, 75, 136, 138, 200, 202, 232, 234, 235, 266, 459, 491**, for the arithmetic cases listed at `:5062–5076`. `src/include/opcodes_ppc.h:82–155`.
+- **Opcode-59 NULL record guard:** `src/cpus/cpu_ppc_instr.c:5222–5224` is not a current additional guest edge: every supported case sets its record handler; every unsupported case leaves through `:5218`. `:5202–5204`, `:5211`.
+- **Internal invalid-handler exit:** `src/cpus/cpu_ppc_instr.c:238–244` labels itself `"invalid: To catch bugs."` Its lookup-table sentinel requires `size=3, zero=0, load=1`, whereas decoded signed loads select `size=1`. No decoded guest selection of this sentinel was established. `src/cpus/cpu_ppc_instr.c:4301–4302`, `:4335–4336`, `:4943–4944`, `:4993`; `src/cpus/tmp_ppc_loadstore.c:875–1015`, `:1910–2045`.
+
+The shared dyntrans file also contains:
+
+| Site | Condition and qualification | Record |
+|---|---|---|
+| `src/cpus/cpu_dyntrans.c:656–732` | Cold instruction-address translation fails; no fast mapping for the exception PC; retry also fails; `exit(1)` after `"could not find physical address of the exception handler?"`. PPC realization of all conditions: **not checked**. | `alphaifetchkill`, `OUTSTANDING_BUGS.md:21932–21933`, specifically records the Alpha path. |
+| `src/cpus/cpu_dyntrans.c:1502–1506` | MODE32 and `"paddr_page > 0xffffffffULL"`: `exit(1)`. Guest ability to supply that PPC physical page: **not checked**. | Specific entry not found. |
+| `src/cpus/cpu_dyntrans.c:1525–1526` | Assertions require virtual and physical page alignment. Guest ability to violate the internal API contract and assertion build settings: **not checked**. | Specific entry not found. |
+| `src/cpus/cpu_dyntrans.c:1902–1908` | Translated handler remains `TO_BE_TRANSLATED` or is NULL: diagnostic and `goto bad`. A particular guest instruction violating these post-decode invariants was not established. | General shared-stop record. |
+| `src/cpus/cpu_dyntrans.c:1802–1848` | Host breakpoint matches guest PC after ignore handling: enters single-step through `stop_running_translated`, bypassing the `running=0` assignment. | Intentional debugger behavior; defect record **not checked**. |
+
+The remaining explicit dyntrans exits are internal consistency checks, whose guest reachability and specific bug records were **not checked**:
+
+- Duplicate L2 pointer: `src/cpus/cpu_dyntrans.c:1075–1079`.
+- TLB-index count versus L3 refcount: `:1084–1092`, `:1661–1670`, `:1742–1751`.
+- Host-load count versus L3 refcount: `:1095–1101`, `:1672–1679`, `:1754–1763`.
+- Negative L3 or L2 refcount: `:1154–1157`, `:1177–1180`.
+- Reclaimed L3 still contains a host-load mapping: `:1165–1173`.
+- Reused L2 has nonzero refcount or remains the dummy table: `:1625`, `:1630`.
+- Reused L3 has nonzero refcount or remains the dummy table: `:1645`, `:1651`.
+
+The duplicate-pointer, counted-entry, and reclaimed-L3 checks are under `BUGHUNT` guards. Apparent stops at `src/cpus/cpu_dyntrans.c:150`, `:159`, `:1126`, `:1151` are **commented out**, not executable siblings; their enclosing comments are at `:135–162`, `:1106–1132`, `:1142–1151`.
+
+**5. The option set**
+
+**Member 7—implement the missing behavior—fits.** These are architected arithmetic operations; the current path never calculates their result. The closest same-CPU acceptance precedent is the double fused family, decoded with record twins at `src/cpus/cpu_ppc_instr.c:5261–5274` and implemented at `:1836–1921`, `:1938–2079`.
+
+| Member | Assessment for this finding |
+|---|---|
+| 1 — Delete termination | Removing the stop supplies neither arithmetic nor architectural completion; the current failure path resets translation and diverts execution to `nothing_call`. `src/cpus/cpu_dyntrans.c:1987–2024`. |
+| 2 — Decline silently | Leaves a valid arithmetic instruction without its required result and status. Manual requirements are cited in item 3. |
+| 3 — Decline, announce once | Same semantic failure. The house latch exists, for example `d->warned` plus `"declined. (once)"` at `src/devices/dev_dreamcast_gdrom.c:734–741`; it does not implement arithmetic. |
+| 4 — Accept existing correct result | No result exists on this path. Merely selecting a double handler would also miss required single rounding. `src/cpus/cpu_ppc_instr.c:5216–5219`, `:1990–2013`. |
+| 5 — Architectural fault | Appropriate when the architecture requires one, including FP-unavailable; not a substitute for a supported, FP-enabled arithmetic operation. Existing machinery and limits are below. |
+| 6 — Invent backing store | Not applicable: destination FPR storage already exists, as used by the double handlers. `src/cpus/cpu_ppc_instr.c:5271–5273`, `:2012–2013`. |
+| 7 — Implement | Supplies the absent decode and required arithmetic/status behavior. |
+
+There is an additional disposition absent from the list: **stop emulated execution and enter the debugger**. That is the existing `bad` policy and the separately implemented breakpoint behavior. `src/cpus/cpu_dyntrans.c:1846–1848`, `:2002–2024`.
+
+The implementation requirements, rather than a patch, are:
+
+- **Operand routing and record handling already have precedents.** The double fused handlers receive destination/FRA pointers and the instruction word, from which they read FRB/FRC. `FDOT` checks availability before the base handler, then copies FPSCR exception status into CR1. `src/cpus/cpu_ppc_instr.c:205–206`, `:1838–1850`, `:1940–1952`, `:5271–5273`; `src/cpus/cpu_ppc.c:1853–1856`.
+- **Double FMA handlers are not complete numerical templates for the singles.** They call host `fma()` and store `IEEE_FMT_D`; the negative variants negate its result. They do not read guest RN for fused arithmetic. `src/cpus/cpu_ppc_instr.c:1860–1876`, `:1902–1918`, `:1990–2013`, `:2056–2079`.
+- **Single rounding helpers exist.** `ppc_single_narrow` rounds a finite double pattern according to the supplied mode; `ppc_single_widen` produces the FPR representation. `frsp` demonstrates their RN-controlled composition. `src/cpus/cpu_ppc_instr.c:1353–1471`, `:1476–1503`, `:1600–1602`.
+- **Narrowing an already rounded ordinary double result is insufficient.** The shared helper documentation describes the lost-residue problem and supplies `ieee_sum_round_to_odd`, including signed cancellation-zero handling. `src/core/float_emul.c:722–759`, `:1209–1254`.
+- **An existing fused-single numerical precedent exists on SH.** Its `fmac` comment says the product of single operands is exact in double; its handler uses the round-to-odd sum followed by mode-aware single storage. This supports reuse for finite, single-representable inputs, without establishing PPC-specific status or NaN correctness. `src/cpus/cpu_sh_instr.c:3533–3554`.
+- **PPC-specific obligations remain:** guest RN, single-result representation, post-round negation, signed zero, NaN rules, final-result classification, required sticky flags, and record-form CR1. The manuals cited in item 3 specify these; existing cause classification and summary machinery are at `src/cpus/cpu_ppc_instr.c:151–180` and `src/cpus/cpu_ppc.c:1890–1951`.
+
+Exception delivery is **partly present on this CPU**. `ppc_exception()` saves SRR0/SRR1, clears EE/RI/PR, selects the vector, and updates execution pointers. `src/cpus/cpu_ppc.c:318–345`. For `PPC_EXCEPTION_FPU`, the source’s address choices are explicitly **`0x00000800` with IP clear** and **`0xfff00800` with IP set**, from `src/include/cpu_ppc.h:255` and `src/cpus/cpu_ppc.c:337–339`.
+
+That does not establish complete FP exception semantics. The cause helper explicitly states:
+
+> “This never touches FPCC, never consults the enable bits, and never traps.”  
+> “Enable-driven result suppression and trap delivery are a separate round.”
+
+`src/cpus/cpu_ppc.c:1941–1942`. A correction must distinguish existing unavailable-exception entry from the missing enabled-arithmetic trap/suppression behavior.
+
+**6. What a regression check would observe**
+
+These are expected distinctions, not results measured by this task.
+
+| Channel | Before correction | Required behavior after correction |
+|---|---|---|
+| Guest progress | Actual execution reaches `running=0`. | Valid FP-enabled arithmetic completes and subsequent guest execution proceeds. |
+| Diagnostic | Generic `"UNIMPLEMENTED instruction"` path. | That unsupported-instruction diagnostic disappears for the implemented forms. |
+| Destination FPR | No fused arithmetic handler writes it. | Contains the architecturally rounded result. |
+| FPSCR | No fused arithmetic/status update occurs. | Reflects the operation’s specified status and exceptions. |
+| CR1 | No record handler runs. | Rc=1 copies FX/FEX/VX/OX; Rc=0 preserves CR1. |
+| FP unavailable | Missing decode stops before the FP check. | FP-disabled execution takes unavailable-exception handling before arithmetic or CR1 writeback. |
+| Host process survival | The studied path stops the CPU without `exit()`. | Host survival remains; this alone cannot prove correctness. |
+
+Before-side evidence is `src/cpus/cpu_ppc_instr.c:5176–5227` and `src/cpus/cpu_dyntrans.c:1983–2024`; after-side requirements are the manuals in item 3 and existing availability/record machinery at `src/cpus/cpu_ppc_instr.c:205–225`.
+
+For a normal, masked-exception arithmetic completion, the instruction itself should not alter guest memory, unrelated FPRs, GPRs, or CR fields other than CR1 for Rc=1. The specified destination and affected-register lists are `_scratchpad/ppc_pem32_rev2_2001.txt:19613–19631`, `:19825–19843`, `:20245–20267`, `:20413–20437`.
+
+Existing observation mechanisms are available:
+
+- Result readback: `regress/ppc_rounding_probe.py:410–426`.
+- FPSCR readback through `mffs`: `regress/ppc_rounding_probe.py:503–522`.
+- CR readback through `mfcr`: `regress/ppc_rounding_probe.py:614–637`.
+
+Gate 15 alone is insufficient. It classifies `"UNIMPLEMENTED instruction"` and debugger responsiveness, not the arithmetic result or continued guest execution. `regress/ppc_halt_probe.py:193–217`. The rounding probe itself warns that “alive” means:
+
+> “only proves the emulator survived — a nop would pass that too”
+
+`regress/ppc_rounding_probe.py:455–457`.
+
+The correction must keep accepting these neighboring cases:
+
+- `fdivs`, `fdivs.`, `fsubs`, `fsubs.`, `fadds`, `fadds.`, `fmuls`, `fmuls.`: `src/cpus/cpu_ppc_instr.c:5198–5226`.
+- `fmadd`, `fmadd.`, `fmsub`, `fmsub.`, `fnmadd`, `fnmadd.`, `fnmsub`, `fnmsub.`: `src/cpus/cpu_ppc_instr.c:5261–5274`.
+- Existing probe controls `fadd`, `fmr`, `fctiwz`, `mtfsf`, `fadd.`, `frsp.`, `fctiwz.`, `fmr.`, `fadds.`: `regress/ppc_halt_probe.py:233–245`.
+
+The current single neighbors are still aliases of double handlers, so “keep working” here includes preserving acceptance without pretending their separate precision deficiency is resolved. `src/cpus/cpu_ppc_instr.c:1924–1928`, `:2144–2148`, `:2200–2204`, `:2264–2268`.
+
+**7. Records requiring correction or qualification**
+
+The current pending rows are explicitly:
+
+`fctid` (`regress/ppc_halt_probe.py:257`), `fctidz` (`:258`), `fcfid` (`:259`), `fcmpo` (`:264`), `fmadds` (`:269`), `fmsubs` (`:270`), `fsqrt` (`:275`), `fsqrts` (`:276`), `fres` (`:278`), `frsqrte` (`:279`).
+
+The negative double rows are marked `"FIXED"` at `regress/ppc_halt_probe.py:273–274`. The operative shell assertion is:
+
+> `check "rows still pending" "$pend" 10`
+
+`regress/gate_ppc_halt.sh:84`.
+
+Consequently:
+
+| Existing text | Corrected sentence |
+|---|---|
+| “`fnmadd`/`fnmsub` are not decoded and halt” — `OUTSTANDING_BUGS.md:1610` | “`fnmadd` and `fnmsub`, including record forms, were implemented by #344; the opcode-59 single fused family remains undecoded.” |
+| “Twelve encodings still halt, deliberately, and gate 15 asserts that they do.” — `OUTSTANDING_BUGS.md:1705` | “Gate 15 asserts halting for the pending rows enumerated above; its pending count is ten, and that selected inventory does not cover every undecoded FP form.” |
+| Pending group includes `fnmadd`, `fnmsub` — `OUTSTANDING_BUGS.md:1712` | “The listed deferred arithmetic group is `fcmpo`, `fmadds`, `fmsubs`; `fnmadd` and `fnmsub` are implemented. The separately studied `fnmadds` and `fnmsubs` also remain undecoded.” |
+| “`fmadd`/`fmsub` raise none of their exception causes, `fnmadd`/`fnmsub` are undecoded and halt” — `OUTSTANDING_BUGS.md:3085–3086` | “#343 added fused invalid-operation cause handling, and #344 implemented the double negative fused forms; the separately recorded precision, rounding, and exception-delivery limitations remain.” |
+| “no PowerPC arithmetic in this tree reads it” — `src/cpus/cpu_ppc_instr.c:1983–1984` | “These fused handlers still do not read FPSCR[RN]; `fadd`, `fsub`, `fmul`, and `fdiv` use mode-aware helpers.” Evidence: `:1779`, `:2119`, `:2175`, `:2239`. |
+| “Rc=1 no longer stops the emulator” — `src/cpus/cpu_ppc_instr.c:5185` | “The implemented opcode-59 cases below have record-form handlers; unsupported instructions still reach `bad`.” |
+| “Every floating-point instruction that defines an Rc bit gets a `_dot` twin here” — `src/cpus/cpu_ppc_instr.c:4026–4028` | “The floating-point instructions implemented by this block receive `_dot` twins.” The omitted fused-single family disproves the unrestricted statement. |
+| “Twelve encodings still halt” and deferred double-negative membership — `regress/gate_ppc_halt.sh:33–39`; `regress/ppc_halt_probe.py:55–63` | “The enumerated pending rows remain expected to halt; double `fnmadd` and `fnmsub` are fixed by #344.” |
+| “Rc=1 is rejected for EVERY opcode-59/63 form” — `regress/ppc_halt_probe.py:238–240` | “Before #326, Rc=1 was rejected for every opcode-59/63 form.” |
+| “mcrfs does not exist” and `fnabs` “has no case in the decoder” — `regress/ppc_halt_probe.py:249`, `:261–262` | “Before #326, `mcrfs` was absent and `fnabs` lacked a decoder case.” Current cases: `src/cpus/cpu_ppc_instr.c:5294`, `:5333–5360`. |
+| Without FP available “every one of these takes the FPU-unavailable exception” — `regress/ppc_halt_probe.py:180–182` | “Implemented FP handlers check availability; undecoded forms currently halt before that check.” |
+
+The older CHANGELOG passages are **historical, superseded statements**, rather than evidence that their original round’s observations were false: `CHANGELOG.md:32373–32376`, `:32628–32635`, `:33180–33194`. The newer #344 entry correctly records implementation, movement of the negative-double rows to FIXED, and continued omission of `fmadds`/`fmsubs`. `CHANGELOG.md:32272–32306`.
+
+The claim that gcc emits `fmadds` for ordinary float arithmetic is indeed recorded at `OUTSTANDING_BUGS.md:1715–1716` and `CHANGELOG.md:33192–33194`. Compiler emission and prevalence were **not checked**.
+
+**DENOMINATOR**
+
+Repository context read at `db8b1a33`, consolidating overlapping ranges:
+
+- `src/cpus/cpu_ppc_instr.c`: `1–250`, `1338–1730` in relevant helper/conversion excerpts, `1750–2375`, and `4040–5433`; symbol-search matches elsewhere were also inspected.
+- `src/cpus/cpu_dyntrans.c`: `100–170`, `640–745`, `1020–1190`, `1480–1535`, `1570–1788`, `1789–2036`.
+- `src/cpus/cpu_ppc.c`: `1–230`, `290–447`, `1570–1650`, `1831–1955`.
+- `src/include/opcodes_ppc.h`: integer-definition matches within `82–202`, and `224–264`.
+- `src/include/cpu_ppc.h`: `40–112`, relevant MSR-definition matches, `185–259`.
+- `src/include/float_emul.h`: `30–111`.
+- `src/core/float_emul.c`: `422–444`, `491–783`, `932–987`, `1010–1039`, `1054–1080`, `1120–1138`, `1209–1256`; related helper search matches.
+- `src/cpus/cpu_sh_instr.c`: `3533–3555`, `5086–5095`, and nearby FP-handler search context.
+- `src/cpus/tmp_ppc_tail.c`: `20–130`; `src/cpus/tmp_ppc_loadstore.c`: `875–1015`, `1910–2045`.
+- `src/core/debugmsg.c`: `370–426`; `src/cpus/cpu.c`: `58–131`; `src/core/emul.c`: `469–525`.
+- `src/machines/machine.c`: `650–686`; `machine_macppc.c`: `1–215`; `machine_mvmeppc.c`: `1–208`; `machine_pmppc.c`: `1–88`; `machine_prep.c`: `1–190`; `machine_test.c`: `417–480`, all under `src/machines/`.
+- `src/devices/dev_dreamcast_gdrom.c`: `710–747`.
+- `regress/ppc_halt_probe.py`: `1–314`; `regress/gate_ppc_halt.sh`: `1–97`.
+- `regress/ppc_rounding_probe.py`: initial output through approximately `320` was partially truncated; dependable additional excerpts were `398–574`, `614–638`, `1226–1245`. `regress/gate_ppc.sh:1–264` was requested but partially truncated.
+- `OUTSTANDING_BUGS.md`: `1507–1538`, `1560–1740`, `3070–3100`, `5645–5668`, `18942–18972`, `21118–21182`, `21918–21945`, plus whole-file targeted search matches.
+- `CHANGELOG.md`: `32270–32312`, `32342–32345`, `32365–32380`, `32610–32618`, `32625–32640`, `33122–33126`, `33170–33205`, plus targeted search matches.
+
+On-disk manual context read:
+
+- `_scratchpad/ppc_uisa_book1_v201.txt`: `1337–1373`, `4860–4905`, `5033–5050`, `5215–5332`, `6130–6172`, `6400–6560`, `6570–6595`, `11743–11764`.
+- `_scratchpad/ppc_oea_book3_v201.txt`: `322–358`, `606–634`, `3909–3950`.
+- `_scratchpad/ppc_pem32_rev2_2001.txt`: `1510–1523`, `12055–12095`, `19569–19648`, `19814–19866`, `20230–20287`, `20395–20452`, `45388–45431`.
+
+Searches also covered committed CPU symbols, machine CPU assignments, relevant record text, and termination markers; these were not full contextual reads of every matched file.
+
+**Scope error:** an initial delegated unanchored regression glob accidentally exposed lines **990 and 1815** from each of these excluded files:
+
+- `regress/artifacts/ppcrldiclzero/killtable_20260910/t0_apparatus_failure/orig_cpu_ppc_instr.c`
+- `regress/artifacts/ppcrldiclzero/killtable_20260910/t1/orig_cpu_ppc_instr.c`
+- `regress/artifacts/ppcrldiclzero/killtable_20260910/t2/orig_cpu_ppc_instr.c`
+- `regress/artifacts/ppcrlwimiwidth/killtable2_20260912/cpu_ppc_instr.HEAD.c`
+
+Those snippets were not used as evidence or reread. An initial tree listing also exposed artifact filenames.
+
+Not checked: runtime outcomes, builds, compiler emission, arbitrary machine/model boot combinations, the unresolved guest reachability of internal dyntrans guards, allocation-failure macros, unlisted manual content, or every paragraph of the records. No working-tree source, alternative project source copy, or `tools/pipeline/ledger.json` was read. Nothing was changed.

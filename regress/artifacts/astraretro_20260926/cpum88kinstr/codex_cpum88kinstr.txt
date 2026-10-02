@@ -1,0 +1,63 @@
+ASTRARETRO_CPUM88KINSTR_ALIVE
+VERDICT: 18 findings (15 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 18 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No files changed, builds performed, or emulator probes run. Manual references below mean `_scratchpad/mc88100.txt`. Disclosed fidelity limitations are included under your hardware-correctness requirement.
+
+F1 | `src/cpus/cpu_m88k_instr.c:461` | #46 / 8dd86b5a | CODE | live at HEAD: yes | **Cross-boundary signed extraction lost sign extension.** With source `0x80000000`, width 2, offset 31, `ext` returns `1`; hardware requires `0xffffffff`. The logical shift discards the sign before testing a bit beyond the surviving field. Manual:4480 explicitly specifies bit 31 as the sign in this case. | Smallest check: evaluate that boundary case against both implementations. | confidence high
+
+F2 | `src/cpus/cpu_m88k_instr.c:3540` | 8dd86b5a, sibling omission | CODE | live at HEAD: yes | **Signed mask construction remains in sibling paths.** The batch changed `bb0/bb1` to `1U << d`, but `tb0/tb1` retain `1 << d`; `m88k_rot` at :513 retains `(1 << n)-1`. Top-bit selections invoke signed-shift UB. The rotate instance is already described under `armbfxwidth32`, `OUTSTANDING_BUGS.md:17087`; no separate trap-mask filing found. | Smallest check: compare these expressions with :3454. | confidence high
+
+F3 | `src/cpus/cpu_m88k_instr.c:732` | #195 | CODE | live at HEAD: yes | **The wrapped-division premise is false.** The new guard writes `0x80000000` for `INT_MIN / -1`, but the MC88100 requires an integer-divide exception whenever either operand is negative, preserving the destination. Manual:4389 and :10302 specify this. Ordinary negative operands, including the immediate sibling, also bypass the required exception. | Smallest check: assert exception delivery and unchanged destination for negative-operand division. | confidence high
+
+F4 | `src/cpus/cpu_m88k_instr.c:3326` | #302 | CODE | live at HEAD: yes | **Legal odd-register conversion operands still stop execution.** New `int.sd`/`nint.sd` decoding rejects every odd source register and reaches `cpu_dyntrans.c:2014`, which stops the CPU. Double operands may begin at odd registers, explicitly including r31 (Manual:1633). The existing `trnc.sd` sibling has the same rejection at :3346. | Smallest check: decoder test using an ordinary finite double in an odd register pair. | confidence high
+
+F5 | `src/cpus/cpu_m88k_instr.c:3317` | #302 | CODE | live at HEAD: yes | **Destination r0 takes the generic stop path instead of an architectural exception.** New `int`/`nint` decoding uses `goto bad`; Manual:5189 and :5676 require a floating-point unimplemented exception. This remains independently wrong even after repairing SFU1 delivery. | Smallest check: verify the decoder selects exception handling for destination r0. | confidence high
+
+F6 | `src/cpus/cpu_m88k_instr.c:2063` | #302 | CODE | live at HEAD: yes | **Kernel completion is substituted for hardware exception delivery.** Converting `2^30` writes an integer immediately; hardware must raise conversion overflow and leave the destination unchanged. NaN likewise produces a saturated result instead of reserved-operand delivery. Manual:10319–10322 and :10335–10345 specify the contract. The round discloses this “values only” policy, but it prevents guest handlers and exception state from working. | Smallest check: observe destination and exception state, not merely the eventual integer value. | confidence high
+
+F7 | `src/cpus/cpu_m88k_instr.c:1843` | #306 | CODE | live at HEAD: yes | **Double results targeting r31 corrupt the synthetic zero padding.** `fdiv.dds` writes its low result into `r[32]`; later double-source handlers consume that value instead of architectural r0. For `1.0/3.0`, the stored padding becomes `0x55555555`. Manual:1633–1635 requires wrapping to r0 and ignoring its writes. This is numerical corruption, not an array overrun. No existing filing found. | Smallest check: register-boundary arithmetic followed by a double-source read. | confidence high
+
+F8 | `src/cpus/cpu_m88k_instr.c:1806` | #306/#308; related #300 sibling | CODE | live at HEAD: yes | **The small-dividend guard reintroduces double rounding.** Under nearest, normal double operands `0x0170000020000000 / 0x017000000ffffff0` produce single `0x3f800000`, but correct rounding is `0x3f800001`. `ieee_div_round_to_odd()` returns the uncorrected host midpoint below its operand threshold. Manual:2367 governs nearest rounding. Related directed-double bands are already acknowledged at `OUTSTANDING_BUGS.md:1971`, without an id; this single-result nearest case is not. | Smallest check: helper-plus-store boundary assertion. | confidence high
+
+F9 | `src/cpus/cpu_m88k_instr.c:1745` | #308; #300 double-result sibling | CODE | live at HEAD: yes | **Finite divided by infinity can become NaN.** For negative finite / positive infinity, the odd-rounding helper accepts the finite quotient `−0`, computes a NaN residual, then decrements the zero representation into NaN. The single result becomes `0x7fffffff`, rather than IEEE-completion `−0`; double-result division also fails under toward-zero. Manual:2430 specifies IEEE-compliant default completion. No existing filing found. | Smallest check: finite/infinity helper cases across signs and modes; the existing `Inf/2` check misses this direction. | confidence high
+
+F10 | `src/cpus/cpu_m88k_instr.c:1715` | #306/#308 | CODE | live at HEAD: yes | **Wide-source arithmetic loses range information before single rounding.** Under toward-zero, `fmul.sdd(2^1023,2)` returns infinity instead of single maximum finite. Under toward-positive-infinity, multiplying two `2^-1022` operands returns zero instead of minimum positive single. The host-double product/residual has already overflowed or underflowed before narrowing. Manual:2491 specifies finite overflow completion; :2336 and :2390 require retaining sticky information. No existing filing found. | Smallest check: helper/store range-boundary assertions. | confidence high
+
+F11 | `src/cpus/cpu_m88k_instr.c:2529` | upstream, relied on by #307 and added FP handlers | CODE | live at HEAD: yes | **Supported instruction paths still reach the exception-core stop fallback.** Supervisor software traps naming unsupported vectors below 128 stop all CPUs at `cpu_m88k.c:799`; SFU1 exceptions from the added FP handlers reach the same fallback. Manual:9284 permits supervisor traps to initiate those handlers. Already filed as `m88kexctaildefault` and `m88kexcsfu1`. The older seven-class `m88kexcdeliver` defect is fixed at HEAD. | Smallest check: handler-level delivery/liveness assertion. | confidence high
+
+F12 | `src/cpus/cpu_m88k_instr.c:2529` | upstream, relied on by #307 | CODE | live at HEAD: yes | **Software traps to vectors 0–3 receive hardware-event processing.** The exception tail stops CPUs for vector 0, rewinds return pointers for 1, clears them for 2, and imports memory-transaction state for 3. These should invoke the selected software-trap handler normally (Manual:9282–9288). Already filed as `m88kexchwtraps`. Consequently, `CHANGELOG.md:23019` also falsely calls vector-0 stopping a correctly delivered reset. | Smallest check: compare software-trap entry/return state with the manual. | confidence high
+
+F13 | `src/cpus/cpu_m88k_instr.c:2529` | upstream, relied on by #307 | CODE | live at HEAD: yes | **A trap while shadowing is frozen destroys exception-time state.** `cpu_m88k.c:870` clears DMT/DMD/DMA outside the shadow-update guard. Manual:9290–9294 requires those registers to remain unchanged. Already filed as `m88kexcfrozendmt`. | Smallest check: preservation assertion with nonzero exception-time registers and frozen shadowing. | confidence high
+
+F14 | `src/cpus/cpu_m88k_instr.c:2744` | upstream, relied on by #380 | CODE | live at HEAD: yes | **A faulting taken delay slot records the wrong return sequence.** The shared exception core sets SNIP to the instruction after the slot and SFIP to the loop head. Returning consequently executes skipped fallthrough before the target; the required sequence is target, then target+4. See Manual:2093, :8933 and :9032. Already filed as `m88kdslotshadow`. Matching the generated handler does not establish hardware correctness here. | Smallest check: folded-path fault/return-state assertion. | confidence high
+
+F15 | `src/cpus/cpu_m88k_instr.c:2763` | #380 | CODE | live at HEAD: yes | **The unrestricted slot invalidates the idle assumption.** A matcher-accepted slot can change the polled word, yet the handler still requests idle using the pre-slot zero. Accumulating or externally observable slots also execute once per BREAK while many iterations are credited. Manual:4113 specifies execution before each branch target. Already disclosed at `OUTSTANDING_BUGS.md:4675`, tracked as harness task #61. | Smallest check: inspect idle decisions and independently observed slot effects for a poll-modifying slot. | confidence med
+
+F16 | `CHANGELOG.md:22086` | #298 | RECORD | live at HEAD: yes | The claim that forgetting the directed-mode swap passes every sign-symmetric test is false. Positive-only rows at `regress/m88k_rounding_probe.py:68` and :69 already require different answers for the two directions. The same changelog acknowledges their failures at :22123; the source comment was corrected. | Smallest check: compare those row expectations with the swapped mapping. | confidence high
+
+F17 | `src/cpus/cpu_m88k_instr.c:906` | #298 | RECORD | live at HEAD: yes | The present-tense “KNOWN-DIVERGENT” paragraph says `1+2^-60` toward positive infinity still stores `1`. HEAD’s #299 routing fixes it, and `m88k_rounding_probe.py:105` expects `0x3f800001`. | Smallest check: compare the paragraph with :955 and the named probe row. | confidence high
+
+F18 | `src/cpus/cpu_m88k_instr.c:2744` | #380 | TEST-GAP | live at HEAD: yes | Exactly-once slot dispatch is unobserved independently: `regress/m88k_idle_probe.py:68` uses an idempotent store, while the gate compares implementation counters. Duplicate dispatch without duplicate counter increment passes. Already filed as `m88kidledup`. | Smallest check: use a slot effect that independently counts invocations. | confidence high
+
+Checked clean, with committed line numbers in `src/cpus/cpu_m88k_instr.c`:
+
+- :463 — Encoded extraction widths and offsets keep the rewritten shifts within range.
+- :3454 — `bb0/bb1` top-bit masks now use unsigned shifting.
+- :921 — All four FPCR rounding modes map correctly, including the directed-mode exchange.
+- :955, :1084 — Single-source addition/subtraction retain sticky residues and cancellation-zero handling.
+- :1235 — Single×single multiplication is exact in double before modal narrowing.
+- :1367 — Single/single division has sufficient intermediate precision for single rounding.
+- :1985 — Signed integer-to-single conversion widens exactly before the modal store.
+- :2067, :2097 — NaN and range guards prevent undefined float-to-int casts.
+- :2118, :2161, :2191 — `trnc`, `int`, and `nint` select zero, FPCR, and nearest modes respectively.
+- :1532 — New mixed handlers decode operand widths and capture operands before destination writes.
+- :3209, :3253, :3278, :3364 — Arithmetic switches cover all eight format triples.
+- :1738 — Added division handlers check the actual interpreted divisor before division.
+- :2519 — `tcnd` distinguishes maximum-negative, other negative, zero, and positive classes correctly.
+- :2513, :3552 — `tcnd` checks privilege before its condition and extracts the nine-bit vector correctly.
+- :2589, :2637, :2715 — All three idle handlers retain the entry-in-delay-slot fallback.
+- :2905, :2931 — Both trap-prefixed fold matchers retain the privilege-vector restriction.
+- :2927 — The delayed fold accepts the last real slot and excludes the page-end sentinel.
+- :2767 — Untaken folded execution accounts for the load, branch, and slot and resumes at `ic[4]`.
+
+DENOMINATOR: read 41 of 41 hunks of the net diff

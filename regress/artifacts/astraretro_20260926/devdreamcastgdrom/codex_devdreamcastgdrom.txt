@@ -1,0 +1,47 @@
+ASTRARETRO_DEVDREAMCASTGDROM_ALIVE
+VERDICT: 9 findings (1 CODE live at HEAD, 7 RECORD, 1 TEST-GAP); 20 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Findings are from static inspection; no files were written, builds performed, or runtime probes executed.
+
+F1 | src/devices/dev_dreamcast_gdrom.c:1502 | upstream, relied on by #462 | CODE | live at HEAD: yes | A guest-selected DMA destination can re-enter this device’s DMA trigger through synchronous MMIO dispatch. The handler establishes no in-flight guard before calling `memory_rw`; its arming state and staged buffer remain available to the nested invocation. Repeated re-entry can exhaust the host stack. `PHYSICAL` bypasses translation, not device dispatch. No matching filing found in `OUTSTANDING_BUGS.md`. | Smallest check: trace this call through `src/cpus/memory_rw.c:245`, `:480`, and `:587`, checking when transfer state changes relative to the callback. | confidence high
+
+F2 | src/devices/dev_dreamcast_gdrom.c:1493 | #462 | RECORD | live at HEAD: yes | The comment calls `data_len` “the count actually transferred.” For a DMA destination whose span crosses a mapped device’s end, memory dispatch truncates the request and returns after one callback. The diagnostic still announces the entire staging length. It reports the requested count, not a confirmed transferred count. | Smallest check: compare the diagnostic and unchecked call with `src/cpus/memory_rw.c:495`, `:523`, and `:626`. | confidence high
+
+F3 | src/devices/dev_dreamcast_gdrom.c:418 | #490 | RECORD | live at HEAD: yes | The claimed equivalence between `sum == all-ones` and disjoint, exhaustive masks is false when future edits abandon one-bit masks—the case explicitly claimed at lines 423–424. Replacing the first three values `1,2,4` with `1,1,5` preserves their sum while introducing overlap and missing coverage. The shipped masks themselves are correct. | Smallest check: arithmetic against the assertion at line 498; both sums equal seven, but the replacement OR equals five. | confidence high
+
+F4 | src/devices/dev_dreamcast_gdrom.c:1329 | #461 | RECORD | live at HEAD: yes | The comment says a control-window alignment guard would be dead code that cannot fire. An unaligned byte access within the registered window reaches this default arm: dispatch checks the address range, not word alignment. Such a guard is unnecessary for the stated array-safety purpose, but reachable. | Smallest check: compare the control switch with the range checks at `src/cpus/memory_rw.c:480`. | confidence high
+
+F5 | src/devices/dev_dreamcast_gdrom.c:1032 | #460 | RECORD | live at HEAD: yes | The comment says only three predicates have acceptance rows and exempts the width predicate. HEAD’s `regress/gdrom_data_probe.py:420` contains `accept w8`, which observes six byte stores assembling a command and returning a TOC signature. The probe explicitly identifies this as width-continuation coverage. | Smallest check: compare this comment with probe lines 324–326 and 396–421. | confidence high
+
+F6 | CHANGELOG.md:16753 | #465, 4d05cf0b | RECORD | live at HEAD: yes | The changelog still claims paired release makes pointer/length disagreement “unrepresentable.” The fields remain independent, and allocation assigns the length before the pointer. Source lines 655–658 explicitly retract this overclaim. Existing filing `gdrompionull` acknowledges it but incorrectly says the changelog was corrected; `gdromallocpair` also records that pairing remains conventional. | Smallest check: compare this sentence with `alloc_data()` and the source’s explicit correction. | confidence high
+
+F7 | src/devices/dev_dreamcast_gdrom.c:258 | #490; stale after #496 | RECORD | live at HEAD: yes | The comment claims nine warning writers and says six earlier bits can be set by ordinary register reads. HEAD has eleven writers. Among the original six, only LEN, NODATA, and OVERREAD can latch on reads; NOTWAIT requires a write, and both DMA warnings require nonzero write input. | Smallest check: enumerate actual latch assignments and their enclosing read/write predicates. | confidence high
+
+F8 | src/devices/dev_dreamcast_gdrom.c:714 | #489 | RECORD | live at HEAD: yes | The stated effect of replacing `!= 408` with `< 408` is numerically wrong: it would newly accept **65,127** overlength values, not 65,527. | Smallest check: count the values 409 through 65,535 inclusive. | confidence high
+
+F9 | src/devices/dev_dreamcast_gdrom.c:1471 | #462 | TEST-GAP | live at HEAD: yes | Byte-trigger shadow clearing on the no-data arm is absent from the committed executable regression rows. `gdrom_default_probe.py:54` claims conditioning coverage across the clear sites, but its byte row exercises only unsupported arming. CHANGELOG line 2897 already records the no-data width gap. Later records, including related `gdromcontractresidual`, discuss `nodata byte` and `accept byte`; neither row exists in HEAD’s probe. | Smallest check: inspect `regress/gdrom_default_probe.py` and search committed regression Python files for those rows. | confidence high
+
+Checked clean below; source references are to `src/devices/dev_dreamcast_gdrom.c` at HEAD. Regression checks establish row content, not successful execution.
+
+- **:223** — Eleven warning positions produce distinct one-bit masks.
+- **:327** — The carrier assertion covers both warning storage and shift-operand capacity.
+- **:566, :637** — Bitmap bounds derive from the selected array; shifts remain within 0–31.
+- **:679** — Command replacement clears pointer and length together and resets both cursors.
+- **:734** — TOC allocation requires exactly 408 bytes; the highest fixed write is index 407.
+- **:832** — Sector counts are bounded before multiplication; count consistency is checked before allocation.
+- **:875** — Disk-read failure uses the paired-release helper.
+- **:816, :915, :926** — Both command declines remain unconditional after warning suppression and reach count/availability cleanup and completion.
+- **:1042** — Width handling retains fixed two-byte packet progression; `gdrom_data_probe.py:420` observes byte-store continuation.
+- **:1073** — PIO paired reads remain bounded: both allocation routes produce even lengths and the cursor advances by two.
+- **:1105** — Packet progression clears busy at twelve bytes; ordinary register accesses cannot reach the residual packet-overflow exit.
+- **:1168** — Unsupported writes to the unknown register leave device state unchanged.
+- **:1277** — Rejected COND writes preserve prior command state; accepted stores remain confined to their two arms.
+- **:1341** — Unimplemented control reads return zero; writes introduce no register-state change.
+- **:1377** — Registered DMA offsets yield shadow indices at most 31, within the 64-element array.
+- **:1626** — Unaligned DMA defaults bypass shadow writes and return zero on reads.
+- **:1471, :1535** — Both DMA declines clear the trigger and omit the completion event.
+- **:1503** — DMA source length follows the allocated buffer rather than guest-modifiable `cnt`.
+- **:1662** — The Linux driver premise holds: trigger accesses use bytes, while the four value-register writes use 32 bits. [Linux driver](https://raw.githubusercontent.com/torvalds/linux/master/drivers/cdrom/gdrom.c)
+- **regress/gdrom_toclen_probe.py:275; gdrom_decline_probe.py:423; gdrom_cond_probe.py:982** — Rows observe TOC boundary behavior, declined-command cleanup, and preservation of partially assembled packets.
+
+DENOMINATOR: read 19 of 19 hunks of the net diff

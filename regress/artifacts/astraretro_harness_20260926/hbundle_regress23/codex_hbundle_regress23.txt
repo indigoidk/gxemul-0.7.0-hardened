@@ -1,0 +1,51 @@
+ASTRARETRO_HBUNDLE_REGRESS23_ALIVE
+VERDICT: 11 findings (1 CANNOT-FAIL, 2 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 3 RECORD, 4 OTHER); 20 items checked clean
+
+Static review of HEAD `db8b1a33`. No files written, builds performed, or probes executed; outcomes below are source-derived.
+
+F1 | regress/alpha_harness_probe.py:105 | 7a41b3fb | CANNOT-FAIL | `encoder` reconstructs each expected input using duplicated arithmetic; it never calls `load_const()` or examines emitted instructions. Removing the actual carry correction at :101–102 leaves this row passing all nine vectors. Every constant used by the guest programs also avoids that carry case. | Trace the self-test’s calls: none reaches the encoder. Check decoded `load_const()` output against the vectors instead. | confidence high
+
+F2 | regress/alpha_harness_probe.py:303 | #507 | OTHER | The context-switch checks accept an entirely inert `swpctx` handler: setup already writes the expected PTBR and flags into the exact cells subsequently read. Correct execution and no execution both return `0xaaaa1111`/`0xbbbb2222`; the no-op handler statically predicts **10/10**. The original field-transposition bug is detected, but omitted context saving is invisible. | Trace :303–321 with a no-op handler; require a destination change that only the context save can produce. | confidence high
+
+F3 | regress/alpha_harness_probe.py:216 | 7a41b3fb | SELECTS-NOTHING | An empty transcript, or failed startup lacking `"user mode"`, becomes `"not gated"` and passes `palgate`. Neither `alive` nor the requested `print v0` response is required. Other rows may fail; this mode-control row still reports success without an observation. | Substitute `t=""` into :216–218; require completed execution before interpreting diagnostic absence. | confidence high
+
+F4 | regress/arm_idle_probe.py:332 | #352 / 307b1b82 | SELECTS-NOTHING | If the independent quiet session fails before its initial prompt, `session()` returns `(None, None, buf)`. With an empty/error-only transcript, `A idle quiet` counts zero markers and passes. Earlier successful sessions cannot validate this later failed session. | Apply the row expression to `(None, None, "")`; require session completion before checking marker absence. | confidence high
+
+F5 | regress/sh_pclock_probe.py:146 | #459 | STATUS-LAUNDERED | A stalled baresh/testsh process that keeps its PTY open through the deadlines is scored `survived` and `quiet`, even if its step never executes. Shutdown read results and child status are discarded at :162/:170. These machines have no positive completion observation elsewhere in the probe. The same deadline-as-alive pattern also incorrectly greens individual LCA/Alpha liveness rows, although their other rows reject an early silent stall. Already filed: **`probetimebased`**, OUTSTANDING_BUGS.md:9216; related **`ptywaitstatus`**, :21935. | Trace a silent open PTY through the deadline and shutdown paths; require a post-step observation and propagate abnormal child status. | confidence high
+
+F6 | regress/arm_idle_probe.py:223 | #351–#353 | OTHER | The driver interrupts execution after two seconds without establishing guest progress. A healthy process delayed before the target store can leave `0xdeadbeef`, making `A idle target reached` report the actual branch defect’s failure value. Alias rows can conversely accept their prefill before exercising the fold. The general wall-clock class is already filed under **#419 residuals**, OUTSTANDING_BUGS.md:5262. | Compare the unconditional grace deadline with the unqualified result checks; require evidence that execution reached the relevant guest state. | confidence high
+
+F7 | regress/lca_irqstub_probe.py:383 | #507 / #516 | OTHER | Neither this repair detector nor `regress/alpha_harness_probe.py` is executed by a gate. Both remain `CLASS_WITNESS` in tools/pipeline/check_probe_wiring.py:732/:735, allowing the checker to classify missing execution as `not run (correct)`. Their repair assertions therefore provide no routine gate protection. Already filed: **`witnessclassdoor`**, OUTSTANDING_BUGS.md:18481, related **`wiringcliff`**. | Search HEAD gate invocations and inspect those two manifest classifications. | confidence high
+
+F8 | regress/lca_irqstub_probe.py:347 | #516 | OTHER | If UART IRQ4 stops propagating, `uart live` still reads MCR=`8`, and both announcement counts remain `1`; all **12/12** rows can pass while the required consecutive-assert exercise disappears. The wrong assert-latch guard can then escape too. This is a conditional coverage loss, not a claim that HEAD’s existing edge sequence is ineffective. Already filed: **`lcairqedgepin`**, OUTSTANDING_BUGS.md:18446. | Check PIC1 IRR immediately after the second-line assertion against the independently expected aggregate. | confidence high
+
+F9 | regress/alpha_harness_probe.py:300 | 7a41b3fb | RECORD | The explanation says A.ptbr and the correct readback are zero. HEAD instead initializes and expects `0xaaaa1111` at :285/:303/:329. Its later claim that HEAD never loads flags is also stale: src/cpus/cpu_alpha_palcode.c:309 assigns `apcb_flags = new_flags`. | Compare those comments with the current constants, assertions, and handler assignment. | confidence high
+
+F10 | regress/arm_idle_probe.py:21 | #351 / 307b1b82 | RECORD | The header claims the flag/destination references are the same programs measured under `-J`. The idle-path rows at :309–311 have no such reference run; they compare against derived literals. The only `-J` sessions run the exit and alias programs. | Enumerate the session call sites and compare their program arguments. | confidence high
+
+F11 | regress/sh_pclock_probe.py:228 | #459 | RECORD | The comment says the store ends the host on the committed build; :242–244 likewise says it must die and explain why. At HEAD the source declines the operation, and the actual assertions require `survived`/`quiet`. | Compare these comments with :245–248 and src/devices/dev_sh4.c:2089–2095. | confidence high
+
+Checked clean:
+
+- C1 | regress/lca_irqstub_probe.py:123 | Memory-format opcode and register fields agree with the HEAD decoder.
+- C2 | regress/lca_irqstub_probe.py:241 | Scratch-base register remains intact while all device pointers are loaded.
+- C3 | regress/lca_irqstub_probe.py:206 | Missing register output becomes `absent`; positive device readbacks reject it.
+- C4 | regress/lca_irqstub_probe.py:350 | Assert/deassert announcement checks distinguish the two sites.
+- C5 | regress/lca_irqstub_probe.py:372 | Both latch checks require exactly one announcement; zero and duplicates fail.
+- C6 | regress/alpha_harness_probe.py:188 | RAM liveness loads into the register actually printed and requires a nonzero value.
+- C7 | regress/alpha_harness_probe.py:202 | Execution control requires the guest-produced `0x1234`.
+- C8 | regress/alpha_harness_probe.py:273 | Code, pointer vector, and PCBs fit RAM; K0SEG avoids the changing page-table state.
+- C9 | regress/alpha_harness_probe.py:339 | Observation controls reject `absent`, `died`, and zero.
+- C10 | regress/alpha_harness_probe.py:361 | Aggregate uses row booleans and exits nonzero on failure.
+- C11 | regress/sh_pclock_probe.py:206 | RAM control requires a nonzero value through a guest store/load.
+- C12 | regress/sh_pclock_probe.py:216 | Device signature requires the nonzero IPRD reset value.
+- C13 | regress/sh_pclock_probe.py:278 | Independent Landisk/Dreamcast clock expectations distinguish a hardcoded clock.
+- C14 | regress/sh_pclock_probe.py:285 | Accept-side readbacks initialize the destination differently from the expected result.
+- C15 | regress/sh_pclock_probe.py:381 | Caller requires a result, valid control, denominator 16, and all rows passing.
+- C16 | regress/arm_idle_probe.py:194 | Prompt predicate requires the full suffix after the current buffer mark.
+- C17 | regress/arm_idle_probe.py:289 | Failed architectural control produces `DEAD`/`0/0`, which the gate rejects.
+- C18 | regress/arm_idle_probe.py:302 | Executed destination/flag rows distinguish the original fold defects.
+- C19 | regress/arm_idle_probe.py:324 | Once executed, target and alias programs distinguish the original control-flow defects.
+- C20 | regress/arm_idle_probe.py:343 | Nine-row total matches the gate; every named-row selector fits its printed column.
+
+DENOMINATOR: read 4 of 4 files in full

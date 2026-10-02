@@ -1,0 +1,56 @@
+ASTRARETRO_DEVWDC_ALIVE
+VERDICT: 12 findings (7 CODE live at HEAD, 5 RECORD, 0 TEST-GAP); 23 items checked clean
+
+All source locations refer to committed HEAD `8ea26abb`. Static, read-only review; no builds or probes executed. Manual citations refer to `_scratchpad/ata2_x3t10_948d.txt`.
+
+F1 | src/devices/dev_wdc.c:1782 | #337; upstream status handling relied on by #337 | CODE | live at HEAD: yes | A failed ATAPI read can return zero-filled data with ERR clear. The backend records CHECK CONDITION but returns `1`; WDC treats that return as success without examining `atapi_st->status`. The replacement `res == 0` completion also leaves ERR clear. Already filed **wdcpktstatus**, `OUTSTANDING_BUGS.md:15582`. | Smallest check: a backend-failure unit test observing returned data, completion and guest error status. | confidence high
+
+F2 | src/devices/dev_wdc.c:1209 | upstream, relied on by #341/#475 | CODE | live at HEAD: yes | A big-endian guest reading an odd-length ATAPI reply with a final word access receives a corrupted valid byte: adding the empty-pop `UINT64_MAX` sentinel borrows from the preceding payload. The four-byte sibling also suffers. Already filed **wdcbeoddtail**, `OUTSTANDING_BUGS.md:15573`. | Smallest check: assert preservation of available payload bytes in partially filled final reads, for both endian branches. | confidence high
+
+F3 | src/devices/dev_wdc.c:832 | #481 | CODE | live at HEAD: yes | Software reset aborts the transfer but preserves `int_assert` and the asserted IRQ line. A previous completion therefore survives reset. ATA-2 line **1318** requires SRST to clear pending interrupts. Already filed **wdcresetirq**, `OUTSTANDING_BUGS.md:12820`. | Smallest check: observe pending state and the interrupt-deassert callback across reset with an outstanding completion. | confidence high
+
+F4 | src/devices/dev_wdc.c:832 | #481 | CODE | live at HEAD: yes | SRST is never retained as device state. While the guest holds reset asserted, status never reports BSY and ordinary commands still execute. Repeating the control write merely performs another cleanup. ATA-2 lines **1589**, **3941–3945** require holding reset, reporting BSY and waiting for release. Already described under **wdcsrstnoedge**, `OUTSTANDING_BUGS.md:12556`. | Smallest check: observe status and command acceptance throughout one continuous reset assertion. | confidence high
+
+F5 | src/devices/dev_wdc.c:609 | upstream, relied on by #481 | CODE | live at HEAD: yes | After the guest disables PCI I/O decoding, Device Control remains active because the alternate handler lacks the main handler’s `io_enabled` check. Its reset path can discard a pending write and buffered bytes on a disabled controller. Already filed **wdcaltdecode**, row 3, `OUTSTANDING_BUGS.md:12848`. | Smallest check: compare disabled main-register and alternate-register accesses against preserved transfer state. | confidence high
+
+F6 | src/devices/dev_wdc.c:1111 | #485 | CODE | live at HEAD: yes | The newly added security-command and default-command completion interrupts ignore guest-set nIEN; the sibling is at line 1156. The comment’s premise that missing nIEN state cannot contradict the change is false: ATA-2 lines **1311–1314** require suppressing the output regardless of pending state. The omission is acknowledged under **landiskaux/#533**, `OUTSTANDING_BUGS.md:21797`; no standalone id found. | Smallest check: observe completion IRQ output with nIEN set and cleared. | confidence high
+
+F7 | src/devices/dev_wdc.c:338 | upstream, relied on by #414 | CODE | live at HEAD: yes | IDENTIFY on a configured 32 MiB image with heads=sectors=1 returns zero cylinders: #414 derives 65,536, which word 1 truncates. Capacity remains nonzero. ATA-2 line **2809** defines this field as a cylinder count. Already filed **wdccylwrap**, `OUTSTANDING_BUGS.md:15589,19372`. | Smallest check: compare cached geometry with IDENTIFY word 1 for that image. A repair needs consistent representable geometry, not merely a clamp. | confidence high
+
+F8 | src/devices/dev_wdc.c:405 | #405, made false by #414 | RECORD | live at HEAD: yes | The comment says exactly 65,280 sectors is unreachable and gives 33,546,240 bytes as the first reachable divergence. With heads=sectors=1, HEAD permits exactly 65,280 sectors. `CHANGELOG.md:27979` already corrects this premise, but the source does not. | Smallest check: compare the comment with `diskimage.c:269–297` and the corrected changelog paragraph. | confidence high
+
+F9 | src/devices/dev_wdc.c:1373 | #473/#474, made stale by #484/#495 | RECORD | live at HEAD: yes | The refill explanation still says DATA-IN stores push bytes without a phase guard or capacity check, corrupt subsequent chunks, and constitute a live unbounded route. HEAD rejects those stores at line 1576 and bounds scalar pushes at line 245. The referenced **wdcaddtoinbufbound** behavior was repaired. | Smallest check: compare the paragraph with those two guards. | confidence high
+
+F10 | src/devices/dev_wdc.c:1663 | #477, made stale by #479/#481 | RECORD | live at HEAD: yes | The comment says a following WRITE leaves the packet phase unchanged because “NOTHING RESETS THE PHASE,” and still describes that defect as outstanding. Every command now clears the phase through line 938. Its claim that only the next command clears the packet flag also omits SRST. | Smallest check: inspect the reset helper’s assignments and both callers. | confidence high
+
+F11 | src/devices/dev_wdc.c:1535 | #495 | RECORD | live at HEAD: yes | The guard rationale identifies occupancy 12 as CMDOUT and says guarding solely on the packet flag revives #477’s live-transfer free. Occupancy 12 also occurs during DATAIN—the original hazard. HEAD’s independent CMDOUT dispatch guard prevents that free; a flag-only push guard instead blocks legitimate CDB collection. | Smallest check: read the push and dispatch predicates together with the DATAIN example at line 1684. | confidence high
+
+F12 | CHANGELOG.md:27775 | #408 | RECORD | live at HEAD: yes | The record claims MODE SELECT through WDC can change `logical_block_size`. The backend first requests DATA OUT; WDC only enters its unimplemented DATAOUT phase and never supplies parameters or resumes the command. The retrospective claims this sentence was corrected at `OUTSTANDING_BUGS.md:15598`, but it remains. | Smallest check: inspect WDC’s sole SCSI dispatch call and absence of DATAOUT completion handling. | confidence high
+
+Checked clean:
+
+- C1 — `src/devices/dev_wdc.c:245`: full-ring refusal precedes the store and remains effective after warning suppression.
+- C2 — `src/devices/dev_wdc.c:288`: repeated empty reads preserve the tail; pointer advancement remains bounded.
+- C3 — `src/devices/dev_wdc.c:514`: bulk admission reserves the distinguishing empty slot and checks actual available occupancy.
+- C4 — `src/devices/dev_wdc.c:433`: both capacity-word pairs use correct byte extraction.
+- C5 — `src/devices/dev_wdc.c:1017`: IDENTIFY serialization preserves byte order and low-word-first ordering; ATA-2 line 2609 agrees.
+- C6 — `src/devices/dev_wdc.c:620`: offset-1 reads return the documented zero without acknowledging IRQ.
+- C7 — `src/devices/dev_wdc.c:702`: offset-1 writes bypass both reset effects.
+- C8 — `src/devices/dev_wdc.c:832`: reset-bit decoding uses `WDCTL_RST`; ordinary bit-3 and nIEN-only writes do not reset.
+- C9 — `src/devices/dev_wdc.c:915`: command cleanup clears writer, phase and ring before producing new data, preserving warning latches.
+- C10 — `src/devices/dev_wdc.c:1155`: repeated unsupported commands retain ABRT and completion handling outside the warning latch.
+- C11 — `src/devices/dev_wdc.c:1185`: nonbyte warning latches preserve register handling; the read sibling at 2060 does likewise.
+- C12 — `src/devices/dev_wdc.c:1255`: width accounting matches attempted pops; the residual clamp prevents negative remaining length.
+- C13 — `src/devices/dev_wdc.c:1312`: unarmed ATAPI reads avoid the former NULL-transfer dereference.
+- C14 — `src/devices/dev_wdc.c:1318`: CMDOUT is excluded from refill and completion phase transitions.
+- C15 — `src/devices/dev_wdc.c:1424`: refill uses the remaining transfer and delivered-byte cursor, capped at 32768.
+- C16 — `src/devices/dev_wdc.c:1576`: active non-CMDOUT packet phases reject injected writes while permitting CDB collection.
+- C17 — `src/devices/dev_wdc.c:1601`: both endian branches mark rejected widths per access.
+- C18 — `src/devices/dev_wdc.c:1716`: dispatch requires an accepted width, active packet, CMDOUT and exactly 12 bytes.
+- C19 — `src/devices/dev_wdc.c:1793`: the initial DATAIN length is capped before pushing.
+- C20 — `src/devices/dev_wdc.c:1813`: unimplemented DATAOUT no longer directly exits; its diagnostic is latched.
+- C21 — `src/devices/dev_wdc.c:1846`: sector drains require sufficient nonempty occupancy and an accepted access; armed write counts remain positive.
+- C22 — `src/devices/dev_wdc.c:2120`: landisk uses the literal auxiliary byte offset `+0x2c`.
+- C23 — `regress/diff_wdc_identify.c:5120`: completion assertions cover the opcode sweep and repeated completion after acknowledgement.
+
+DENOMINATOR: read 22 of 22 hunks of the net diff

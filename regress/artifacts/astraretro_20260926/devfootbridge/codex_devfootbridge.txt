@@ -1,0 +1,41 @@
+ASTRARETRO_DEVFOOTBRIDGE_ALIVE
+VERDICT: 8 findings (5 CODE live at HEAD, 3 RECORD, 0 TEST-GAP); 16 items checked clean
+
+Reviewed committed `8ea26abb` only. Static inspection; no files changed, builds performed, or probes executed. Manual references below identify lines in [`_scratchpad/dc21285.txt`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt).
+
+F1 | src/devices/dev_footbridge.c:491 | #220 | CODE | live at HEAD: yes | A PCI vendor-ID read decoding to bus 255 returns **zero**, because this success return bypasses both `bus_pci_data_access()` and read-buffer writeback. `memory_rw.c:492` pre-zeroes the buffer, so this is not an uninitialised-memory exposure. The absent-device answer is all ones (`bus_pci.c:113`; manual:1825). | Smallest check: trace these three committed branches together. No matching outstanding filing found. | confidence high
+
+F2 | src/devices/dev_footbridge.c:248 | #432 | CODE | live at HEAD: yes | Selecting the external clock creates a repeating timer at `emulated_hz / load`, even without external input transitions. The helper leaves the period unprescaled, and lines 276–347 schedule it normally. Hardware advances this timer once per external assertion edge (manual:4124–4127). | Smallest check: follow the external branch into the frequency calculation and `timer_add()`. No matching hardware-semantics filing found; `fbboundmodes` concerns coverage. | confidence high
+
+F3 | src/devices/dev_footbridge.c:649 | upstream, sibling omitted by #539 | CODE | live at HEAD: yes | After writing a supported FIQ-enable bit, reading FIQEnable returns zero: this case implements only writes. #539 repaired the IRQ counterpart while leaving this sibling without readback. Both enable registers are readable (manual:6831, 6911–6924). | Smallest check: compare the IRQ/FIQ enable case bodies. Already filed as `fiqenableread`, facet 1. | confidence high
+
+F4 | src/devices/dev_footbridge.c:721 | upstream, relied on by #474 | CODE | live at HEAD: yes | Writing CLEAR on an already-cleared periodic timer reloads `timer_value` from `timer_load`, including when the timer is disabled. #474 guards this body but retains its incorrect write behavior. Hardware specifies no effect when the interrupt is already clear (manual:7139–7140). | Smallest check: inspect the call here and assignment at line 279 with pending count zero and value below load. Already filed under `fbm2findings` as “periodic CLEAR reload.” | confidence high
+
+F5 | src/devices/dev_footbridge.c:522 | upstream, relied on by #539; omitted access-width sibling | CODE | live at HEAD: yes | With IRQ-enable bit 8 set, a byte read at CSR offset `0x189` returns zero instead of 1. The exact-offset switch misses IRQEnable; #539’s working narrow reads cover only its lowest lane. Hardware selects the CSR using A[10:2] (manual:1651). | Smallest check: trace that byte offset through the switch and default read. Already filed as `fbcsrdecodelanes`; `footbridge_sites_probe.py` E3/E6 exercise only offset `0x188`. | confidence high
+
+F6 | CHANGELOG.md:20043 | #220 | RECORD | live at HEAD: yes | The claim that bus-255 configuration access “reads as no-device” is false: F1’s path returns zero for the vendor-ID read. | Smallest check: compare the sentence with the early return and common read tail. No matching outstanding filing found. | confidence high
+
+F7 | src/devices/dev_footbridge.c:259 | #432 | RECORD | live at HEAD: yes | The external-clock rate is described as “NOT invented,” repeated at line 691 and CHANGELOG.md:26003. Selecting that mode actually substitutes the processor-clock rate divided by load, as F2 shows. | Smallest check: compare that assertion with lines 248–277. No matching record filing found. | confidence high
+
+F8 | CHANGELOG.md:26023 | #432; correction incomplete in dfb12092 | RECORD | live at HEAD: yes | The zero-load rationale still calls `0x1000000` a legitimate register wrap that justifies continuity. Bit 24 lies outside the writable field (manual:7073–7079); HEAD’s source explicitly withdraws this premise at lines 192–200. | Smallest check: compare these passages and `dfb12092`’s source-only correction. OUTSTANDING_BUGS.md:6205 records the withdrawal without a standalone ID, but this affirmative changelog sentence remains. | confidence high
+
+Checked clean below; all locations are in `src/devices/dev_footbridge.c` at HEAD:
+
+- **840:** Unsigned interrupt-mask shift is defined throughout indices 0–31.
+- **460:** Reset request retains the guest CPU halt while removing process termination.
+- **239:** Zero load produces a nonzero derived span; raw LOAD readback remains unchanged, covered by H1/H2.
+- **263:** Prescaler multiplication uses `uint64_t`; the maximum derived period is `2^32`.
+- **276:** The actual rate consumer requests prescaling; differential E4 observes it.
+- **372:** The counter consumer excludes prescaling; D2/D3 observe bounded counter values.
+- **126:** Comparison precedes increment and reads the same timer’s bound; excess debt resets to one.
+- **132:** All four callbacks use their correct indices.
+- **329:** Bound clamping makes the conversion to `int` safe.
+- **339:** All four timer creation/update paths use the calculated rate and bound.
+- **814:** Every timer’s initial pending bound is one.
+- **792:** Device initialization zeroes all five independent warning latches.
+- **573:** All four declined status writes change only their corresponding warning latch.
+- **617:** IRQEnableClear reads return initialized zero without clearing enables.
+- **606:** Aligned IRQEnable reads return stored state without the removed diagnostic/exit; E0–E6 cover the principal paths.
+- **719:** CLEAR reads skip reload, decrement and deassert across all four aliases while retaining read writeback. Reviewed `diff_footbridge.c`, `diff_fbpending_bound.c`, and the four-timer drain-probe wiring.
+
+DENOMINATOR: read 12 of 12 hunks of the net diff

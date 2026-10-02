@@ -1,0 +1,49 @@
+ASTRARETRO_DEVSH4_ALIVE
+VERDICT: 9 findings (1 CODE live at HEAD, 5 RECORD, 3 TEST-GAP); 22 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. Findings below are from static inspection; no builds or probes were run. All line numbers refer to HEAD.
+
+F1 | src/devices/dev_sh4.c:527 | upstream, relied on by #400 | CODE | live at HEAD: yes | Repeated, unacknowledged timer underflows accumulate in signed `int timer_interrupts_pending[]` without saturation. This eventually causes signed overflow—approximately 226 days at 110 increments/second. Earlier, accumulated requests can restore UNF and reassert an interrupt after acknowledgment even when counting has stopped. The manual defines UNF as a status flag cleared by writing zero, not a queued event count (`_scratchpad/sh7750_hardware.txt:20747`, `:20753`, `:21037`). No matching outstanding filing found. | Smallest check: a bounded unit test verifying coalescing and that acknowledgment leaves a stopped timer deasserted; inspect writers at :527 and :2150. | confidence high
+
+F2 | src/devices/dev_sh4.c:455 | #449 | RECORD | live at HEAD: yes | “OVF [is] never set on any path” is false. A guest-written OVF bit passes through the RTCSR store at :2381 and reads back at :2383; only CMF receives special handling. `CHANGELOG.md:24680` repeats the claim. Existing filing **`sh4rtcflags`**, `OUTSTANDING_BUGS.md:8534`, also repeats this false premise. | Smallest check: trace OVF through the RTCSR write/read arms. | confidence high
+
+F3 | src/devices/dev_sh4.c:1603 | #441 | RECORD | live at HEAD: yes | The BCR width-policy rationale says RTCNT already accepts and services accesses. RTCNT has no switch case: guest writes are discarded and reads return zero through the default arm. Its missing implementation is already filed as **`sh4rtcflags`**. | Smallest check: grep HEAD for an RTCNT case and inspect the default arm at :2824. | confidence high
+
+F4 | src/devices/dev_sh4.c:1694 | #447 | RECORD | live at HEAD: yes | The helper comment claims whole-value keys make every distinct write produce a fresh complaint and permit unbounded output. The actual helper monotonically ORs a 32-bit mask: any input sequence permits at most 32 successful reports per class/instance. Different values need not produce another report. No matching outstanding filing found. | Smallest check: inspect `fresh` and the OR assignment at :1711–1712. | confidence high
+
+F5 | CHANGELOG.md:24627 | #449 | RECORD | live at HEAD: yes | The round still states that reusing RCR1’s latch class “would have collided.” Its actual masks have disjoint bit support: `0x18 & 0x42 == 0`. The same round later explicitly establishes equivalence, leaving contradictory claims. Existing filing **`sh4latchcollide`**, `OUTSTANDING_BUGS.md:8548`, records the correct conclusion. | Smallest check: compare the two masks and the helper’s OR-latch semantics. | confidence high
+
+F6 | CHANGELOG.md:18814 | #459 | RECORD | live at HEAD: yes | The record says its detector programs TCR and polls TCNT. `regress/sh_pclock_probe.py` never accesses TCNT; its readback rows read TCR. The nearby claimed readback measurement “0x0 versus 0x20” also disagrees with those rows’ written value, `0x0001`. Existing **`sh4pclockquiet`** records the latter discrepancy but incorrectly labels it already corrected. | Smallest check: inspect the probe’s register addresses, readback rows and `TCR_TPSC_P16` constant. | confidence high
+
+F7 | src/devices/dev_sh4.c:736 | #453 invalidated #448 coverage | TEST-GAP | live at HEAD: yes | `sh4_chcr_probe.py` R7 and L0 count only `VAL_RE`. After #453 removed the downstream exit, erroneous RS fall-through can remain alive and emit an additional `IE_RE` diagnostic that both rows ignore. No matching outstanding filing found. | Smallest check: make these rows assert against both diagnostic families. | confidence high
+
+F8 | src/devices/dev_sh4.c:237 | #453 | TEST-GAP | live at HEAD: yes | The claimed measured per-channel reporting ceiling is unobserved for channels 1 and 7. `sh4_chcr_probe.py` X4a/X4b each issue one request; only X3 repeats a request, on channel 0. Already acknowledged as **`M1_sh4latchleak`** in `CHANGELOG.md:2896`; no corresponding outstanding-bug ID found. | Smallest check: repeat requests in X4a/X4b and assert suppression. | confidence high
+
+F9 | src/devices/dev_sh4.c:1327 | #443 | TEST-GAP | live at HEAD: yes | The third PCIC fault class’s diagnostic independence lacks an assertion. In `sh4_pcic_probe.py`, P19 exercises the write-then-unsupported-CPU-read interaction but checks only readback; P20 checks a different class pair. Already filed as **`pcicmergeA`**, `OUTSTANDING_BUGS.md:6989`. | Smallest check: require both distinct diagnostics in P19. | confidence high
+
+Checked clean:
+
+- `src/devices/dev_sh4.c:1707` — value-latch bounds cover all declared classes and eight channel instances.
+- `src/devices/dev_sh4.c:508` — stopped timers and the exact-zero boundary avoid premature underflow.
+- `src/devices/dev_sh4.c:511` — widened period and modulo handle zero/maximal TCOR without division by zero or reload loops.
+- `src/devices/dev_sh4.c:464` — refresh diagnostics remain bounded and execution continues into TMU updates.
+- `src/devices/dev_sh4.c:659` — unsupported DMA transfer sizes return before fallback values can be used.
+- `src/devices/dev_sh4.c:673` — destination/source mode guards use their respective fields and unconditional returns.
+- `src/devices/dev_sh4.c:730` — RS latch shifts are bounded; repeated rejection still returns.
+- `src/devices/dev_sh4.c:786` — IE handling preserves DMA state and invents no completion event.
+- `src/devices/dev_sh4.c:836` — both SCI validators decline unconditionally; caller framing resets afterward.
+- `src/devices/dev_sh4.c:1059` — ITLB DA2 declines before entry indexing and explicitly zeroes reads.
+- `src/devices/dev_sh4.c:1231` — UTLB DA2 has matching behavior and an independent diagnostic token.
+- `src/devices/dev_sh4.c:1339` — registered PCIC extent bounds array indices and bitmap shifts.
+- `src/devices/dev_sh4.c:1376` — every rejecting PCIC arm restores saved state independently of diagnostic suppression.
+- `src/devices/dev_sh4.c:1407` — unsupported-CPU reads use their own class and return zero.
+- `src/devices/dev_sh4.c:2305` — both BCRs apply matching read/write lane selection and reject partial accesses.
+- `src/devices/dev_sh4.c:2118` — unsupported TCR bits are rejected before frequency or register mutation.
+- `src/devices/dev_sh4.c:2240` — rejected DMATCR writes preserve prior counts across all eight channels.
+- `src/devices/dev_sh4.c:2506` — ICR refusal remains consistent with #458’s decision not to apply IPRD.
+- `src/devices/dev_sh4.c:2794` — RCR1 checks the same feature mask before storage and diagnostic latching.
+- `src/devices/dev_sh4.c:2089` — missing-clock rejection precedes mutation and distinguishes timer instances.
+- `src/devices/dev_sh4.c:2895` — SCIF claims the main console; Dreamcast’s later Maple assignment still overrides it.
+- `src/devices/dev_sh4.c:3000` — all three TCOR/TCNT reset pairs agree with the manual.
+
+DENOMINATOR: read 29 of 29 hunks of the net diff

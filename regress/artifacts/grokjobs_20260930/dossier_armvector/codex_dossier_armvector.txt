@@ -1,0 +1,100 @@
+GROKJOBS_DOSSIER_ARMVECTOR_ALIVE
+VERDICT: 2 false or unsupported sentences
+
+One is a hardware misclassification; the other is unsupported provenance. All repository references below mean **`db8b1a33`**. Dossier locations refer to [codex_dossier_armvector.txt](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/codexpack_20260928/dossier_armvector/codex_dossier_armvector.txt). Manual references identify the permitted disk copies.
+
+1. **Dossier line 126:** “Unsupported conditional-branch condition (`:1695-1758`).”
+
+   This misclassifies the Thumb stop. The selector is masked to four bits at `src/cpus/cpu_arm.c:1253`. Enumerating its values:
+
+   - **0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13:** implemented conditional branches (`src/cpus/cpu_arm.c:1696-1745`).
+   - **14:** reaches the CPU stop (`src/cpus/cpu_arm.c:1755-1758`).
+   - **15:** delivers SWI (`src/cpus/cpu_arm.c:1752-1754`).
+
+   The manual defines **14 as UNDEFINED**, and **15 as SWI** (`_scratchpad/ddi0100i.txt:21814-21819`).
+
+   **Corrected:** “The Thumb undefined-instruction case stops the CPU; all ordinary conditional-branch conditions are implemented, and selector 15 delivers SWI.”
+
+2. **Dossier line 186:** “The later HIGH confirmation supplied in the brief was **not independently checked**.”
+
+   The existence and contents of that earlier confirmation are unsupported by the permitted materials. The committed finding says **MED**, and the historical filing also says **MED** (`OUTSTANDING_BUGS.md:21950-21951`; `CHANGELOG.md:1307-1308`). These records do not disprove a later confirmation; that confirmation is **not checked**.
+
+   **Corrected:** “The committed finding and historical filing say MED; any later HIGH confirmation is not checked.”
+
+**(a) The chosen disposition survives the audit.**
+
+Member **7**, implementing bounded dispatch, is appropriate while retaining member **5**, architectural fault delivery. ARM already calls Prefetch Abort on instruction-translation failure (`src/cpus/memory_arm.c:268-269`). Its delivery machinery is present:
+
+| Delivery operation | Committed implementation |
+|---|---|
+| Save Abort SPSR | `src/cpus/cpu_arm.c:674-678` |
+| Clear Thumb state and select exception mode | `src/cpus/cpu_arm.c:693-698` |
+| Mask IRQ and load the selected register bank | `src/cpus/cpu_arm.c:714-720` |
+| Set LR and both PC representations | `src/cpus/cpu_arm.c:730-732` |
+| Resolve the vector synchronously | `src/cpus/cpu_arm.c:733` |
+
+That final resolution can enter translation again before the preceding translator returns (`src/include/quick_pc_to_pointers.h:5-16,28-29`; `src/cpus/cpu_dyntrans.c:670-680`; `src/cpus/memory_arm.c:268-276`). The generic exit requires a translator to return failure, so it does not bound this persistent ARM recursion (`src/cpus/cpu_dyntrans.c:685-732`).
+
+Thus the machinery exists, but its synchronous dispatch needs correction. Its existing state calculations also have the Thumb issues below; “preserve architectural state” should not mean preserving those calculations unquestioned.
+
+**(b) Missed siblings and related correctness defects.**
+
+- **Thumb abort return addresses.** Let **A** be the actual halfword instruction address. The interpreter uses an odd internal PC, **A + 1**, while fetching from **A** (`src/cpus/cpu_arm.c:1214-1224`). Exception entry starts from that internal PC, adds **2** for Thumb, and stores LR (`src/cpus/cpu_arm.c:626,667,730`).
+
+  The values are therefore:
+  - Prefetch Abort: **A + 1 + 2 = A + 3**, versus the manual’s **A + 4**.
+  - Data Abort from the ordinary Thumb data-access path: **A + 1 + 4 + 2 = A + 7**, versus **A + 8**.
+
+  Evidence: `src/cpus/cpu_arm.c:662-667,1597-1598`; `src/cpus/memory_arm.c:268-273`; `_scratchpad/ddi0100i.txt:2196,2236`. These are source-derived discrepancies; runtime behavior is **not checked**.
+
+- **Thumb PC-relative data loads select the wrong fault class.** The load passes `CACHE_INSTRUCTION` (`src/cpus/cpu_arm.c:1554-1555`), which becomes `FLAG_INSTR` (`src/cpus/memory_rw.c:248-252`). Translation failure consequently selects Prefetch Abort (`src/cpus/memory_arm.c:268-273`). The manual identifies load/store memory aborts as Data Aborts (`_scratchpad/ddi0100i.txt:2232-2236`). The dossier inventories the subsequent stop but misses this classification problem.
+
+- **Seven coprocessor exits are omitted from its sibling inventory**, although it examines that caller file. They are already recorded together at `OUTSTANDING_BUGS.md:18720-18724`.
+
+  | Condition | Committed source |
+  |---|---|
+  | CP15 transfer involving PC | `src/cpus/cpu_arm_coproc.c:60-62` |
+  | Endianness transition | `src/cpus/cpu_arm_coproc.c:175-177` |
+  | Nonzero PID after access | `src/cpus/cpu_arm_coproc.c:250-264` |
+  | Nonzero CP6 interrupt-steering write | `src/cpus/cpu_arm_coproc.c:315-322` |
+  | CP6 interrupt-source write | `src/cpus/cpu_arm_coproc.c:326-331` |
+  | Unsupported CP6 operation | `src/cpus/cpu_arm_coproc.c:414-417` |
+  | Unsupported CP14 operation | `src/cpus/cpu_arm_coproc.c:524-528` |
+
+  Enumerated exit lines: **62, 177, 264, 322, 331, 417, 528**.
+
+- **Missing coprocessor handlers suppress delivery.** The missing-handler branch prints and falls through with its Undefined Instruction call commented out (`src/cpus/cpu_arm.c:2653-2661`). A neighboring path actively delivers that exception (`src/cpus/cpu_arm.c:2674-2677`). This distinction is already recorded at `OUTSTANDING_BUGS.md:18703-18713`.
+
+Additional omissions in the other CPU files it cites are:
+
+| Omission | Source and record |
+|---|---|
+| Alpha bootstrap-translation exit | `src/cpus/memory_alpha.c:73-78`; recorded as `alphavmkill` at `OUTSTANDING_BUGS.md:16022-16027` |
+| SH’s additional unsupported-address exit | `src/cpus/memory_sh.c:395-400`; related reserved-area record at `OUTSTANDING_BUGS.md:8148` |
+| PowerPC MSR/IP check stopping the CPU | `src/cpus/cpu_ppc.c:275-292`; guest reachability and record status **not checked** |
+| M88K unsupported-exception fallback stopping all guest CPUs | `src/cpus/cpu_m88k.c:799-807`; related SFU1 record at `OUTSTANDING_BUGS.md:490-492` |
+| M88K RESET stopping all guest CPUs | `src/cpus/cpu_m88k.c:885-889`; related routing record at `OUTSTANDING_BUGS.md:364-369` |
+| M88K control-register helper stops | `src/cpus/cpu_m88k.c:464-503,522-546,597-601`; MXM recorded at `OUTSTANDING_BUGS.md:374-376`; other reachability and record coverage **not checked** |
+
+These omissions do not overturn the dossier’s bounded SH translation-fault escape or its M88K ERROR-delivery finding. SH establishes supervisor state and selects a directly translated reset address (`src/cpus/cpu_sh.c:910-918,952,1018`; `src/cpus/memory_sh.c:373-376`). M88K ERROR has implemented handling and reaches the common pointer-resolution tail (`src/cpus/cpu_m88k.c:923-980`).
+
+**(c) DENOMINATOR**
+
+I counted prose sentences and standalone table/list assertions as sentence units. Quotations belong to their introducing assertions; pure recommendations are excluded, while their factual premises are checked.
+
+| Dossier lines | Factual sentence units checked |
+|---|---:|
+| 2–44: finding, dispatch, reachability | 43 |
+| 46–72: models, machines, exclusions | 20 |
+| 74–98: manuals and other architectures | 29 |
+| 100–139: termination census | 36 |
+| 141–167: disposition and precedents | 20 |
+| 169–182: regression claims | 10 |
+| 186–198: record/comment corrections | 18 |
+| **Total** | **176** |
+
+Enumeration: **43 + 20 + 29 + 36 + 20 + 10 + 18 = 176**: **174 supported, 1 misclassified, 1 unsupported**.
+
+Separately, **24 author-activity or limitation units** are **not independently checked**: dossier lines **4, 32, 94, 96, 98, 115, 137, 169, 186**, the **11** reading-list entries at **202–212**, the **2** sentences at **214**, and the **2** declarations at **216**. They are taken on trust only as the author’s scope declarations, not as technical evidence.
+
+Runtime behavior, exhaustion depth, generated frames, and processor-specific lockup rules remain **not checked**.

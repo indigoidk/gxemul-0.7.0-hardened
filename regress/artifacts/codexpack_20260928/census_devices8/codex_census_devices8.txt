@@ -1,0 +1,72 @@
+CODEXPACK_CENSUS_DEVICES8_ALIVE
+VERDICT: 13 live calls classified -- 5 reachable by guest access at run time, 0 of those not recorded
+
+All repository citations below refer to `db8b1a33`. The manual citation refers to the permitted on-disk text. Nothing was built, executed, or written.
+
+Counts match exactly: `dev_sgi_ip32.c` **3** `{240,253,292}`; `dev_clmpcc.c` **2** `{164,252}`; `dev_eagle.c` **2** `{182,187}`; `dev_mvme187.c` **2** `{80,90}`; `dev_pmagja.c` **2** `{217,223}`; `dev_px.c` **2** `{804,811}`. All are `exit(...)` calls.
+
+“Privileged” below identifies the kernel/PROM MMIO route; stock-OS user-accessible mappings are **not checked**. Translation precedes device dispatch (`src/cpus/memory_rw.c:248`, `src/cpus/memory_rw.c:587`); relevant privilege handling is in `src/cpus/memory_mips_v2p.c:234` and `src/cpus/memory_m88k.c:111`, `:271`, `:304`.
+
+```text
+src/devices/dev_sgi_ip32.c:240 | dev_crime_access | WHEN: unreachable through ordinary IP32 construction; defensive configuration guard | CONDITION: "if (cpu->machine->physical_ram_in_mb > 1024)" (:238) | GUEST LEVEL: n.a. | RECORDED: crimeramexit (OUTSTANDING_BUGS.md:20774-20785) | DISPOSITION: KEEP | high
+src/devices/dev_sgi_ip32.c:253 | dev_crime_access | WHEN: construction/configuration failure, checked lazily in the access callback | CONDITION: "if (cpu->machine->physical_ram_in_mb % mb_per_bank)" (:249) | GUEST LEVEL: n.a. | RECORDED: crimeramexit (OUTSTANDING_BUGS.md:20774-20785) | DISPOSITION: KEEP | high
+src/devices/dev_sgi_ip32.c:292 | dev_crime_access | WHEN: guest access | CONDITION: final "else" (:290) after "if (len == 8)" (:269) and "else if (len == 4)" (:274) | GUEST LEVEL: privileged | RECORDED: crimewidthkill (OUTSTANDING_BUGS.md:18737-18755) | DISPOSITION: (5) fault | high classification; medium disposition
+src/devices/dev_clmpcc.c:164 | dev_clmpcc_access | WHEN: guest access | CONDITION: "case CLMPCC_REG_STCR:" (:149), "if (writeflag == MEM_WRITE)" (:150), then "else" (:161) of "if (idata == 0x0b)" (:151) | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: (7) implement the missing behaviour | high
+src/devices/dev_clmpcc.c:252 | dev_clmpcc_access | WHEN: guest access | CONDITION: "switch (relative_addr)" (:115) reaches "default:" (:246); exit follows both read/write diagnostic branches | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: (7) implement the missing behaviour | high classification; medium disposition scope
+src/devices/dev_eagle.c:182 | devinit_eagle | WHEN: construction | CONDITION: under "case MACHINE_MVMEPPC:" (:171), "switch (devinit->machine->machine_subtype)" (:175) reaches "default:" (:180); accepted case is "MACHINE_MVMEPPC_1600" (:176) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_eagle.c:187 | devinit_eagle | WHEN: construction | CONDITION: "switch (devinit->machine->machine_type)" (:157) reaches "default:" (:186); accepted cases are "MACHINE_PREP" (:166), "MACHINE_MVMEPPC" (:171) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_mvme187.c:80 | dev_mvme187_memc_access | WHEN: guest access | CONDITION: "case 0x08:" (:76), "if (writeflag == MEM_WRITE)" (:77) | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: (2) decline silently | high
+src/devices/dev_mvme187.c:90 | dev_mvme187_memc_access | WHEN: guest access | CONDITION: "switch (relative_addr)" (:70) reaches "default:" (:84), after optional "relative_addr &= ~0x100;" (:65); handled cases are 0x00, 0x04, 0x08 (:72,:73,:76) | GUEST LEVEL: privileged | RECORDED: exitunowned76 (explicit attribution at OUTSTANDING_BUGS.md:20709-20713); also prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: (7) implement the missing behaviour | high classification; medium disposition scope
+src/devices/dev_pmagja.c:217 | dev_pmagja_init | WHEN: unreachable with current callee; defensive construction guard | CONDITION: "if (d->fb_mem == NULL)" (:215) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_pmagja.c:223 | dev_pmagja_init | WHEN: unreachable with current callee; defensive construction guard | CONDITION: "if (d->vfb_data == NULL)" (:221) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_px.c:804 | dev_px_init | WHEN: unreachable with current callee; defensive construction guard | CONDITION: "if (d->fb_mem == NULL)" (:802) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_px.c:811 | dev_px_init | WHEN: unreachable with current callee; defensive construction guard | CONDITION: "if (d->vfb_data == NULL)" (:809) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+```
+
+The construction qualifications matter:
+
+- The ordinary IP32 setup checks `"if (machine->physical_ram_in_mb > 1024)"` and exits **before** calling `dev_crime_init` (`src/machines/machine_sgi.c:479`, `:481`, `:497`). The divisibility check remains deferred to the callback; its inputs are machine configuration, with `mb_per_bank` explicitly selected as **32** or **128** (`src/devices/dev_sgi_ip32.c:244-249`). Configuration assignments are at `src/core/main.c:412-416` and `src/core/emul_parse.c:536-540`.
+- The framebuffer guards cannot currently receive NULL: `memory_new` checks its allocation and returns `mem` (`src/core/memory.c:156`, `:182`); `dev_fb_init` checks its allocation and returns `d` (`src/devices/dev_fb.c:841`, `:965`). `CHECK_ALLOCATION` invokes `FAILURE("Out of memory")`, whose body contains `"exit(1);"` (`src/include/misc.h:187`, `:190-192`). KEEP preserves their defensive setup-failure role.
+
+Queue searches covered filenames, enclosing function/macro names, and diagnostic text. The relevant findings were:
+
+- **`crimeramexit`:** `"RAM-SIZE PRELUDE -- MACHINE-CONFIG GATED, NOT GUEST-DRIVABLE"` (`OUTSTANDING_BUGS.md:20774-20775`). The entry quotes both predicates at `:20777-20778`; its embedded source line numbers differ from this commit’s actual sites.
+- **`crimewidthkill`:** names `dev_sgi_ip32.c`, `DEVICE_ACCESS(crime)`, and the exact anchor `fatal("crime access len = %i!\n", len);` (`OUTSTANDING_BUGS.md:18737-18740`; actual diagnostic at `src/devices/dev_sgi_ip32.c:291`).
+- **CLMPCC and MVME187:** the `"New deferred (broad device-exit tail)"` explicitly names `dev_clmpcc.c` and `dev_mvme187.c` among persistent guest-writable handler exits (`OUTSTANDING_BUGS.md:2685-2689`). This is qualifying prose coverage, although it is not a dedicated ID for each call.
+- **MVME187 default:** `"the kill itself is already inside exitunowned76"` explicitly attributes that terminating path (`OUTSTANDING_BUGS.md:20709-20713`).
+- **NONE results:** no matching setup-exit defect was found for Eagle or the framebuffer allocation guards. Eagle’s filename match concerns PCI address-read clobbering (`OUTSTANDING_BUGS.md:19786-19807`); PX’s `OB-2`/`OB-3` concern `"window>backing"` and `"unchecked rows"` (`OUTSTANDING_BUGS.md:2884-2885`); PMAGJA’s `OB-12` concerns `"window>backing"` (`OUTSTANDING_BUGS.md:2894`). Those do not record these constructor failures.
+
+For **(a)**, the runtime sites rank as follows. This is a ranking by documented register purpose and access validity; actual stock-OS execution order is **not checked**.
+
+1. **`src/devices/dev_clmpcc.c:252` — identification/status accesses.** Defined registers omitted from the switch include the “Global Firmware Revision Code Register” and “Channel Status Register” (`src/include/thirdparty/clmpccreg.h:63`, `:97`; switch at `src/devices/dev_clmpcc.c:115-253`). These are plausible early probe/status accesses.
+2. **`src/devices/dev_mvme187.c:90` — defined controller registers omitted from decoding.** The manual lists alternate status **0x0c**, alternate control **0x10**, base address **0x14**, RAM control **0x18**, and bus clock **0x1c** (`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\vmesbcp2.txt:6719`, `:6721`, `:6723`, `:6725`, `:6727`); the emulator handles only **0x00, 0x04, 0x08** (`src/devices/dev_mvme187.c:72`, `:73`, `:76`).
+3. **`src/devices/dev_clmpcc.c:164` — documented transmit-command variants.** The header defines special-character selection, initiate-send, append-complete, and abort-transmit, while this implementation accepts only `idata == 0x0b` (`src/include/thirdparty/clmpccreg.h:284-287`; `src/devices/dev_clmpcc.c:149-165`). These are legitimate commands, but less basic than identification/status reads.
+4. **`src/devices/dev_mvme187.c:80` — writing a read-only configuration register.** The manual states: **“Writes to this register are ignored; however, the MEMC040 always terminates the cycles properly with TA*.”** That directly supports disposition **2** (`C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\vmesbcp2.txt:6779-6784`).
+5. **`src/devices/dev_sgi_ip32.c:292` — unsupported transfer width.** The header says `"all registers 64-bit access"`; the emulator accepts lengths **4, 8** (`src/include/thirdparty/crimereg.h:39`; `src/devices/dev_sgi_ip32.c:269`, `:274`). This belongs after normal register accesses despite the queue’s byte-probing rationale (`OUTSTANDING_BUGS.md:18741-18743`).
+
+For CRIME, disposition **5** is an emulator-response recommendation: callback failure can deliver the MIPS architectural bus exception (`src/cpus/memory_rw.c:595-612`). Physical CRIME’s exact response to narrow cycles is **not checked**.
+
+For MVME187’s default, disposition **7** must also address the premature backing read: `"odata = ((uint8_t*)&d->memcreg)[relative_addr];"` occurs before decoding (`src/devices/dev_mvme187.c:68`). The separate `mvme187memcoob` record explicitly requires **“a bound, not a `case`”** when removing termination (`OUTSTANDING_BUGS.md:20709-20713`). Reserved-register behavior is **not checked**.
+
+For **(b)**, the CPU-stop set is `{src/devices/dev_sgi_ip32.c:343}`; no corresponding assignments occur in the other five complete files.
+
+```text
+src/devices/dev_sgi_ip32.c:343 | dev_crime_access | WHEN: guest access | CONDITION: "case CRIME_CONTROL:" (:326), "if (writeflag == MEM_WRITE)" (:329), "if (idata & CRIME_CONTROL_HARD_RESET)" (:337), followed by "cpu->machine->cpus[j]->running = 0;" | GUEST LEVEL: privileged | RECORDED: NONE | DISPOSITION: (7) implement the missing reset behaviour | high
+```
+
+This is an ordinary intentional reboot request: the comment says `"This is used by the IP32 PROM's"` `"\"reboot\" command"` (`src/devices/dev_sgi_ip32.c:340-341`). The code stops CPU execution instead of implementing reset (`src/devices/dev_sgi_ip32.c:342-345`). Reset-specific queue searches found no matching record. This site is separate from the terminating-call verdict.
+
+For **(c)**, the denominator is every function body in the six requested files. Locations below are definition starts; each listed body was read completely.
+
+| File | Functions read |
+|---|---|
+| `src/devices/dev_sgi_ip32.c` | `crime_interrupt_reassert` :92; `crime_interrupt_assert` :124; `crime_interrupt_deassert` :131; `crime_update_crime_time` :140; `dev_crime_tick` :178; `dev_crime_access` :187; `dev_crime_init` :399; `mace_interrupt_reassert` :452; `mace_interrupt_assert` :498; `mace_interrupt_deassert` :510; `dev_mace_access` :524; `devinit_mace` :635; `dev_macepci_access` :692; `dev_macepci_init` :784; `dev_sgi_ust_access` :820; `dev_sgi_ust_init` :859 |
+| `src/devices/dev_clmpcc.c` | `reassert_interrupts` :75; `dev_clmpcc_tick` :95; `dev_clmpcc_access` :102; `devinit_clmpcc` :262 |
+| `src/devices/dev_eagle.c` | `dev_eagle_access` :52; `devinit_eagle` :85 |
+| `src/devices/dev_mvme187.c` | `dev_mvme187_memc_access` :52; `devinit_mvme187` :100 |
+| `src/devices/dev_pmagja.c` | `dev_pmagja_access` :66; `dev_pmagja_init` :204 |
+| `src/devices/dev_px.c` | `dev_px_tick` :99; `px_readword` :118; `dev_px_dma` :138; `dev_px_access` :567; `dev_px_init` :764 |
+
+**Functions not read in those six files: none.**
+
+Additional complete bodies read: `zeroed_alloc` (`src/core/memory.c:118`), `memory_new` (`src/core/memory.c:147`), `dev_fb_init` (`src/devices/dev_fb.c:831`), `m8820x_mark_page_as_modified` (`src/cpus/memory_m88k.c:59`), and `m88k_translate_v2p` (`src/cpus/memory_m88k.c:103`). Other supporting source reads were excerpts/search matches, including the cited machine setup, configuration, MIPS translation, and memory-dispatch paths; their remaining function bodies were **not checked**.

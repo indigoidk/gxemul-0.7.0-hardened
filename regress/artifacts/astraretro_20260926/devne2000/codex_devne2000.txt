@@ -1,0 +1,50 @@
+ASTRARETRO_DEVNE2000_ALIVE
+VERDICT: 10 findings (10 CODE live at HEAD, 0 RECORD, 0 TEST-GAP); 17 items checked clean
+
+Reviewed committed `8ea26abb` only. No files written, builds performed, or probes executed. Datasheet citations identify printed pages and extracted text lines; no DP8390 manual appeared in the supplied scratchpad text files.
+
+F1 | `src/devices/dev_ne2000.c:452` | `9d18d156` | CODE | live at HEAD: yes | Enabled reception with invalid ring pointers can monopolize execution under continuing network input. The rejection at line 341 neither advances the ring nor sets OVW, while each `net_ethernet_rx_avail()` can replenish the queue. #178 bounded only the disabled-receiver sibling; the queue-size cap does not bound this loop. | Smallest check: trace this loop through `net.c:284–337` and the invalid-ring return. | confidence high
+
+F2 | `src/devices/dev_ne2000.c:291` | #180 / `de1398e1` | CODE | live at HEAD: yes | A successful transmission followed by a rejected TX span produces ISR.TXE while TSR still reports the previous PTX success. The new error branch leaves `d->tsr` untouched; readback at line 593 exposes it. TSR should reset for the new transmission. [Datasheet p24, lines 1275–1284](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=25). | Smallest check: compare the rejection branch with the TSR assignment at line 305. | confidence high
+
+F3 | `src/devices/dev_ne2000.c:507` | `9d18d156` | CODE | live at HEAD: yes | Aborting remote DMA does not stop subsequent data-port transfers while RBCR remains nonzero. Similarly, selecting remote-read mode does not prevent writes into card RAM. Transfer helpers inspect only RBCR; CR’s DMA command is never decoded. [Datasheet p19, lines 1096–1107](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=20). | Smallest check: inspect CR handling and both DMA helpers for command-state checks. | confidence high
+
+F4 | `src/devices/dev_ne2000.c:408` | `9d18d156` | CODE | live at HEAD: yes | After completing DMA and clearing RDC, reissuing a DMA command without reloading exhausted RBCR leaves RDC clear when the guest polls ISR. Completion is raised only by another data-port access. The documented reissued zero-count command completes immediately. [Datasheet p19, line 1075](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=20). | Smallest check: inspect every RDC assignment; none occurs in command handling. | confidence high
+
+F5 | `src/devices/dev_ne2000.c:608` | `9d18d156` | CODE | live at HEAD: yes | Changing PAR0–PAR5 changes register readback but leaves `nic.mac_address` unchanged. TAP reception therefore rejects unicast addressed to the newly programmed station address and continues accepting the old address (`net_tap.c:89–90`). PAR must govern address recognition. [Datasheet p28, lines 1491–1494](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=29). | Smallest check: compare PAR assignments with NIC-address assignments and TAP filtering. | confidence high
+
+F6 | `src/devices/dev_ne2000.c:468` | `9d18d156` | CODE | live at HEAD: yes | Receive filtering is missing: disabling broadcast acceptance still admits broadcasts, and an empty multicast filter still admits multicast. Non-TAP delivery also accepts unrelated unicast forwarded by `net.c:443–451`, despite PRO being clear. RCR/MAR programming should filter these frames. [Datasheet p25, lines 1322–1345](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=26). | Smallest check: inspect RCR/PAR/MAR uses before `ne2000_receive()`. | confidence high
+
+F7 | `src/devices/dev_ne2000.c:383` | `9d18d156` | CODE | live at HEAD: yes | Reading a received frame’s trailing FCS returns previous card-RAM contents: the receive loop copies only `pktlen` bytes, then signals completion. Space is reserved for FCS, but nothing writes it. Hardware stores the received CRC. [Datasheet p10, lines 541–542](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=11). | Smallest check: inspect stores between the payload loop and PRX assertion. | confidence high
+
+F8 | `src/devices/dev_ne2000.c:303` | `9d18d156` | CODE | live at HEAD: yes | Selecting internal loopback and transmitting still sends the frame to the external network backend. TCR/DCR loopback selection is ignored, and diagnostic FIFO reads return zero. Internal loopback should connect the controller’s transmit and receive paths. [Datasheet p30, lines 1657–1669](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=31). | Smallest check: inspect all `d->tcr` uses and the unconditional network call. | confidence high
+
+F9 | `src/devices/dev_ne2000.c:374` | `9d18d156` | CODE | live at HEAD: yes | Accepted multicast/broadcast frames receive a ring-status byte containing only PRX; the RSR assignment at line 391 does the same. PHY therefore falsely indicates a physical-address match. [Datasheet p26, lines 1372–1375](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=27). | Smallest check: inspect both receive-status assignments for destination classification. | confidence high
+
+F10 | `src/devices/dev_ne2000.c:602` | `9d18d156` | CODE | live at HEAD: yes | Recognized packets discarded in monitor mode never increment the missed-packet tally; CNTR2 always reads zero. The monitor drain frees packets without accounting for them. Monitor reception should count recognized packets. [Datasheet p25, lines 1335–1340](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D,NS32490D.pdf#page=26). | Smallest check: inspect the monitor drain and CNTR2 read case for counter state. | confidence high
+
+None matched an existing filing. `OUTSTANDING_BUGS.md:2459` records the separate invalid-TX log-flood issue without an individual ID.
+
+No TEST-GAP counted: `CHANGELOG.md:19916–19918` reports historical ping/halt smoke validation, not dedicated edge-case pinning. I checked `regress/gate_mips.sh:58–66` and searched committed regression sources; no dedicated NE2000 probe was present.
+
+Checked clean, with source references at HEAD:
+
+- C1 | `src/devices/dev_ne2000.c:164` — PROM/RAM reads are bounded; unmapped reads return `0xff`.
+- C2 | `src/devices/dev_ne2000.c:173` — Writes affect only the bounded RAM window.
+- C3 | `src/devices/dev_ne2000.c:197` — #181 exhausted reads return `0xff` without accessing memory or advancing RSAR.
+- C4 | `src/devices/dev_ne2000.c:213` — #181 exhausted writes neither store nor advance RSAR.
+- C5 | `src/devices/dev_ne2000.c:286` — #180 validates the entire TX span and local-buffer capacity.
+- C6 | `src/devices/dev_ne2000.c:296` — Every byte handed to the network is initialized.
+- C7 | `src/devices/dev_ne2000.c:333` — Ring validation checks both endpoints, CURR and BNRY before arithmetic.
+- C8 | `src/devices/dev_ne2000.c:351` — Page allocation reserves header, frame and FCS; the numeric count at line 376 is correct.
+- C9 | `src/devices/dev_ne2000.c:355` — Free-page calculation and accepted next-page arithmetic preserve the boundary.
+- C10 | `src/devices/dev_ne2000.c:383` — Payload stores wrap within the validated ring.
+- C11 | `src/devices/dev_ne2000.c:416` — #178 gives STP precedence and rejects TX/RX while stopped.
+- C12 | `src/devices/dev_ne2000.c:479` — Disabled reception drains at most sixteen packets and frees each.
+- C13 | `src/devices/dev_ne2000.c:235` — IRQ masking/reassertion is consistent; DMA/reset early returns also recompute it.
+- C14 | `src/devices/dev_ne2000.c:510` — Ordinary ARC accesses of 1/2/4/8 bytes keep shifts below operand width.
+- C15 | `src/devices/dev_ne2000.c:572` — ISR write-one-to-clear preserves the read-only reset bit.
+- C16 | `src/devices/dev_ne2000.c:607` — PAR/MAR indexing is bounded in both read and write directions.
+- C17 | `src/devices/dev_ne2000.c:663` — Device state is initialized before use; PROM initialization stays within bounds.
+
+DENOMINATOR: read 1 of 1 hunks of the net diff

@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""fix_closing2.py -- one clause (the zero-byte files left out of the commit) was added to the CHANGELOG block after
+GPT-6 Astra's afile_11 closed the chain, and the commit's file list was never shown to a seat.  Both go to one last
+check, afile_12; prep554.py takes its verdict as a fifth string and export554.py exports the file list for it.
+A Write-tool file: no shell layer touches the text."""
+import io
+import os
+import py_compile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def patch(name, edits):
+    p = os.path.join(HERE, name)
+    s = io.open(p, encoding="utf-8", newline="").read()
+    for old, new in edits:
+        if s.count(old) != 1:
+            raise SystemExit("REFUSED: %s: %d matches for %r" % (name, s.count(old), old[:70]))
+        s = s.replace(old, new)
+    io.open(p, "w", encoding="utf-8", newline="").write(s)
+    py_compile.compile(p, doraise=True)
+    print("%s: %d edits; it compiles" % (name, len(edits)))
+
+
+patch("prep554.py", [
+    ("<grok's read of the three added rows, one line> [--dry]",
+     "<grok's read of the three added rows, one line> <afile_12 verdict> [--dry]"),
+    ('''    if len(args) != 4:
+        sys.exit(__doc__)
+    astra, closing, grokhigh2, grok3 = args''',
+     '''    if len(args) != 5:
+        sys.exit(__doc__)
+    astra, closing, grokhigh2, grok3, closing2 = args'''),
+    ("grokhigh2=grokhigh2, grok3=grok3,", "grokhigh2=grokhigh2, grok3=grok3, closing2=closing2,"),
+    ('''additions and of agy's verdict lines (`afile_11`): {closing}.
+''',
+     '''additions and of agy's verdict lines (`afile_11`): {closing}.  One clause was added after that check -- the
+zero-byte files left out of the commit, under "The files" below -- and Astra checked it together with the list of
+files this commit adds (`afile_12`): {closing2}.
+'''),
+    ('''its answer to the HIGH dispute (`afile_07`) and four closing checks
+(`afile_08` to `afile_11`) -- none walled''',
+     '''its answer to the HIGH dispute (`afile_07`) and five closing checks
+(`afile_08` to `afile_12`) -- none walled'''),
+])
+patch("export554.py", [
+    ('''if len(sys.argv) != 5:
+    sys.exit(__doc__)''',
+     '''if len(sys.argv) != 6:
+    sys.exit(__doc__)'''),
+    ("<grok's read of the three added rows, one line>\n",
+     "<grok's read of the three added rows, one line> <afile_12 text>\n"),
+    ('''print("exported to %s" % DRAFT)''',
+     '''import json
+spec = json.load(io.open(os.path.join(HERE, "spec554.json"), encoding="utf-8"))
+put("spec554.files.txt", "# the files #554 adds (spec554.json `add_files`), one per line; the six tracked files it changes: %s\\n"
+    % ", ".join(spec["files"]) + "\\n".join(spec["add_files"]) + "\\n")
+print("exported to %s" % DRAFT)'''),
+])

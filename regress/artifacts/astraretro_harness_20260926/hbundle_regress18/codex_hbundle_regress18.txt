@@ -1,0 +1,71 @@
+ASTRARETRO_HBUNDLE_REGRESS18_ALIVE
+VERDICT: 19 findings (1 CANNOT-FAIL, 0 SELECTS-NOTHING, 2 STATUS-LAUNDERED, 0 ENCODING, 15 RECORD, 1 OTHER); 24 items checked clean
+
+Reviewed HEAD `db8b1a3385130c457626283d9a718bd7c5181f0d`. Counterexamples below are derived from source inspection; no builds, probes, or file modifications were performed.
+
+F1 | [regress/diff_timer.c:438](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:438) | cdc48499 / #427 | CANNOT-FAIL | Changing `TIMER_MIN_FREQUENCY` to `1000.0` leaves all 24 rows green while making the requested 100 Hz timer run at 1 kHz. Correct delivery of 99 callbacks and incorrect delivery of 999 both produce `"delivers ~100"`. The other floor expectations follow the changed constant; the independent check at line 285 constrains only excessively slow floors. | Smallest check: require the 100 Hz count to fall within 99–100, then evaluate the raised-floor case. | confidence high
+
+F2 | [regress/diff_timer.c:313](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:313) | 863d2389 / #427 | OTHER | All 35 `timer_update_frequency()` calls repeat the rate already passed to `fresh()`. Every call therefore takes HEAD’s equal-frequency early return; the rate-change assignments never execute. A completely inert update function still passes all 24 rows, despite ordinary rate changes being broken. | Smallest check: exercise one genuine transition, such as 1000→100 Hz, and verify frequency, interval, and next deadline before testing repetition. | confidence high
+
+F3 | [regress/asic_badaddr_probe.py:330](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/asic_badaddr_probe.py:330) | #463 | STATUS-LAUNDERED | A child stalled inside the reserved-address store can score `kill store` green: `rd()` returns true when its observation window expires, the row never checks the requested `print r8` response, and teardown discards termination status. On the normal POSIX PTY path, closing the master terminates the stalled child, yet the row reports `"survived"`. A store-only stall does not affect the read sweep. | Smallest check: use a PTY fixture that stops completing commands at this store; require the post-step response and inspect termination status. | confidence med
+
+F4 | [regress/sgi_re_rgb_probe.py:350](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:350) | #505 | STATUS-LAUNDERED | `rgb not corrupt` reports `ok` for `"died"` and `"absent"` because both differ from `"0xbbccdd00"`. Other rows reject these outcomes, so this is a false green row, not a whole-gate escape. Already filed as `negrowclass`, `OUTSTANDING_BUGS.md:16524`, explicitly naming this row at line 16548. | Smallest check: substitute either failure string into the inequality at line 179. | confidence high
+
+F5 | [regress/asic_badaddr_probe.py:42](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/asic_badaddr_probe.py:42) | #463 | RECORD | The documented predicate `r == 3 && relative_addr < 0x10` kills group zero, not the other fifteen groups. Consequently the original `+0x0c`/`+0x0d` rows fail and `kill far` survives—the reverse of the claimed result. | Smallest check: substitute offsets `0x0c` and `0xfc` into that predicate. | confidence high
+
+F6 | [regress/asic_badaddr_probe.py:109](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/asic_badaddr_probe.py:109) | d894e35d / #474 | RECORD | The header’s ten-offset census and subsequent “filed, not fixed” per-offset-kill claim are stale. HEAD sweeps all 256 offsets, including `0x1c`, and checks a marker afterward. The historical `asicoffsetkill` filing also remains at `OUTSTANDING_BUGS.md:11359`. | Smallest check: compare the header inventory with `range(0x100)` at line 379. | confidence high
+
+F7 | [regress/asic_badaddr_probe.py:108](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/asic_badaddr_probe.py:108) | #463 | RECORD | The purported invisible misroute, changing `case 0x10` to `case 0x14`, duplicates an existing case and cannot compile. Moreover, `+0x10` is directly exercised by several rows, contrary to the accompanying “no row here exercises” claim. | Smallest check: compare the adjacent case labels in `src/devices/dev_dreamcast_asic.c:212` with the probe’s mask-register accesses. | confidence high
+
+F8 | [regress/asic_badaddr_probe.py:156](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/asic_badaddr_probe.py:156) | #463 | RECORD | The claim that eight-byte accesses and nonzero pending state are unreachable by any future guest-driven row is false. Guest-driven device events call `SYSASIC_TRIGGER_EVENT`, which constructs an eight-byte transaction with bit 32 set; the ASIC consumes it to set pending state. The header itself identifies synchronous guest-triggered event routes at line 148. | Smallest check: follow the event call into `src/include/thirdparty/dreamcast_sysasicvar.h:143` and the ASIC’s pending-bit write branch. | confidence high
+
+F9 | [regress/asic_badaddr_probe.py:459](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/asic_badaddr_probe.py:459) | #463 | RECORD | The claimed adjacent-latch overwrite does not itself “drop a legitimately pending IRQ13.” The tick recomputes pending-and-enabled state before choosing assert versus deassert; an enabled pending IRQ produces assertion. The actual fresh-state `mask9 rt` oracle remains valid. | Smallest check: trace `src/devices/dev_dreamcast_asic.c:75` through line 92 with one enabled pending IRQ13 bit. | confidence high
+
+F10 | [regress/sgi_re_rgb_probe.py:95](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:95) | #505 | RECORD | The comment says `setup()` hardcodes the destination mode and accepts only `src_mode`. HEAD accepts `dst_mode`, uses it at line 279, and explicitly selects RGB for the same-mode row at line 375. | Smallest check: compare the comment with the function signature and that call. | confidence high
+
+F11 | [regress/sgi_re_rgb_probe.py:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:103) | #505 | RECORD | The prediction says a correct RGB GET produces `0xaabbccdd`. It produces `0xaabbcc00`, as both `RGB_FIXED` and the corrected device implementation specify. | Smallest check: evaluate `(0xaa << 24) + (0xbb << 16) + (0xcc << 8)`. | confidence high
+
+F12 | [regress/sgi_re_rgb_probe.py:230](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:230) | #505 | RECORD | The masked `printed()` helper claims the same normalization as `sgi_re_width_probe.py`, whose helper preserves the full integer width. Input `0xffffffffaabbccdd` therefore produces different results. Already filed as `printedvariants`, `OUTSTANDING_BUGS.md:16624`, specifically lines 16630–16633. | Smallest check: compare the two return expressions. | confidence high
+
+F13 | [regress/sgi_re_rgb_probe.py:272](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:272) | #505 | RECORD | The historical-shift explanation says `TLBA_TILE << 32` places the value in `re_tlb_a[2]`. Its big-endian halfwords are `[0000,8002,0000,0000]`, placing it in index **1**. The executable `<<48` setup is correct. | Smallest check: split `0x0000800200000000` into four descending 16-bit fields. | confidence high
+
+F14 | [regress/sgi_re_rgb_probe.py:349](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:349) | #505 | RECORD | “Neither implies the other” is false: passing `rgb chan` establishes equality with `0xaabbcc00`, which necessarily passes inequality with `0xbbccdd00`. The inequality adds diagnostic distinction but no independent passing requirement. | Smallest check: substitute the two constants into the row predicates. | confidence high
+
+F15 | [regress/sgi_re_rgb_probe.py:372](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:372) | #505 | RECORD | `rgb samemode` does not independently prove padding is discarded. RGB GET has already zeroed the low byte before RGB PUT; both `buf[3]=0` and copying that low byte produce the expected result. Conversely, correct RGB PUT hides a GET that carries the source padding. | Smallest check: trace the low byte through both stages; use a nonzero incoming low byte to test PUT’s padding behavior independently. | confidence high
+
+F16 | [regress/diff_timer.c:36](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:36) | cdc48499 / #429 | RECORD | The header still says RTC coverage requires moving narrowing into the timer core. HEAD’s `regress/diff_rtc_range.c:101` directly includes the device with stubs, resolving that obstacle without the refactor. `OUTSTANDING_BUGS.md:6759` records `rtcgate`/`rtcdet` closed. | Smallest check: inspect that differential’s include and stubs. | confidence high
+
+F17 | [regress/diff_timer.c:140](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:140) | cdc48499 | RECORD | The comment attributes `timer_freq` initialization to `timer_start()`. The assignment is in `timer_init()` at `src/core/timer.c:397`; `timer_start()` only reads it. The driver’s disarming behavior remains valid. | Smallest check: locate assignments to `timer_freq`. | confidence high
+
+F18 | [regress/diff_timer.c:187](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:187) | abd7bad9 / #436 | RECORD | “EVERY REAL ROW IN THIS FILE COMPARES NUMBERS” is false. Actual comparator inputs include `"INT_MAX"`, `"reciprocal"`, `"clock moved"`, and `"kept"`. The described numeric-whitelist defeat therefore overstates its scope for this file. | Smallest check: inspect the arguments at lines 280, 335, 379, and 396. | confidence high
+
+F19 | [regress/diff_timer.c:417](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_timer.c:417) | cdc48499 / #428 | RECORD | The comment says the preceding two rows would pass an implementation that reports every time. The second row explicitly rearms `timer_is_running` and expects zero additional reports; an always-report implementation produces one and fails already. | Smallest check: trace the second `timer_stop()` and its zero expectation at line 415. | confidence high
+
+Checked clean:
+
+- `regress/asic_badaddr_probe.py:263` — missing register output becomes `"absent"`, not zero.
+- `regress/asic_badaddr_probe.py:286` — RAM liveness and IPRD signature controls require independent nonzero values.
+- `regress/asic_badaddr_probe.py:303` — ASIC presence requires successful nonzero mask write/readback.
+- `regress/asic_badaddr_probe.py:379` — sweep covers all 256 byte offsets and requires its final marker.
+- `regress/asic_badaddr_probe.py:406` — `alias` distinguishes the documented `& 2` collision.
+- `regress/asic_badaddr_probe.py:418` — `crossarr` distinguishes the documented adjacent-array collision, subject to its disclosed layout dependency.
+- `regress/asic_badaddr_probe.py:437` — `alias2` distinguishes the `& 1` and `/ 2` collisions.
+- `regress/asic_badaddr_probe.py:474` — fresh-state latch readback distinguishes the documented +1 translation.
+- `regress/sgi_re_rgb_probe.py:173` — used SW/SD/LW words have the stated register fields.
+- `regress/sgi_re_rgb_probe.py:262` — LINEAR_A setup selects physical `0x10000`.
+- `regress/sgi_re_rgb_probe.py:276` — tiled setup supplies the correct halfword, valid bit, and painted source rows.
+- `regress/sgi_re_rgb_probe.py:307` — liveness, device signature, and accepted copy use positive value assertions.
+- `regress/sgi_re_rgb_probe.py:343` — channel equality distinguishes corrected `0xaabbcc00` from old `0xbbccdd00`.
+- `regress/sgi_re_rgb_probe.py:378` — same-mode copy genuinely observes RGB PUT channel positions.
+- `regress/sgi_re_rgb_probe.py:407` — source rows cover the full linear/tiled × four/eight-byte matrix.
+- `regress/sgi_re_rgb_probe.py:472` — ten-row aggregation and gate checks require completion, named successes, and matching counts.
+- `regress/diff_timer.c:73` — differential includes shipped timer code and replaces host time explicitly.
+- `regress/diff_timer.c:221` — comparator selfchecks exercise string and numeric mismatches and restore row accounting.
+- `regress/diff_timer.c:259` — NaN input checks the floor-clamp behavior.
+- `regress/diff_timer.c:279` — ceiling has an independent `INT_MAX` check.
+- `regress/diff_timer.c:348` — positive add-report assertion prevents zero-report vacuity.
+- `regress/diff_timer.c:370` — exact catch-up count detects missing or off-by-one bounds.
+- `regress/diff_timer.c:391` — disarming the injected stall makes retained versus dropped backlog distinguishable.
+- `regress/diff_timer.c:468` — identity independently pins 24 rows; failures control verdict and exit status.
+
+DENOMINATOR: read 3 of 3 files in full

@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""fix_spec554.py -- make prep554.py write a spec the committer accepts (the first precheck stopped at once: the spec
+gave paths relative to the scratchpad and `post` as a string; commit_unit.py wants absolute paths and a list of argv
+lists, as spec529.json has), and keep out of the artifact list what the committer would refuse:
+  * zero-byte files (37 today: answer files of jobs that produced no output) -- counted, and said in the CHANGELOG;
+  * a launch log with no completion line, or a file changed in the last two minutes -- REFUSED here, with the path
+    (commit_unit.py makes these checks for add_dirs; this unit lists files, so the same checks are made at staging).
+A Write-tool file: no shell layer touches the text."""
+import io
+import os
+import py_compile
+
+P = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prep554.py")
+s = io.open(P, encoding="utf-8", newline="").read()
+EDITS = [
+    ('''    files, skipped, sk_bytes, nul = [], 0, 0, []
+''',
+     '''    files, skipped, sk_bytes, nul, empty = [], 0, 0, [], []
+    complete = re.compile(r"seat answered|SEAT WALLED|REFUSED|The answer is LOST|PANEL_COMPLETE|rc=")
+    now = time.time()
+'''),
+    ('''                if f.endswith(TEXT_EXT) and b"\\0" in open(p, "rb").read():
+                    nul.append(os.path.relpath(p, SEC))
+                files.append(os.path.relpath(p, SEC).replace(os.sep, "/"))
+''',
+     '''                if os.path.getsize(p) == 0:
+                    empty.append(os.path.relpath(p, SEC).replace(os.sep, "/"))     # the committer refuses an empty file
+                    continue
+                if now - os.path.getmtime(p) < 120 and not dry:
+                    sys.exit("REFUSED: %s changed in the last two minutes -- a job in flight?" % p)
+                if f.endswith(".launch.log") and not complete.search(io.open(p, encoding="utf-8", errors="replace").read()):
+                    sys.exit("REFUSED: %s has no completion line -- a job in flight?" % p)
+                if f.endswith(TEXT_EXT) and b"\\0" in open(p, "rb").read():
+                    nul.append(os.path.relpath(p, SEC))
+                files.append(os.path.relpath(p, SEC).replace(os.sep, "/"))
+'''),
+    ('''    files = [f for f in files if f not in tracked]
+    man.append("artifacts: %d files to add under %d directories; %d *.err streams (%.0f MB) left on disk, untracked"
+               % (len(files), len(DIRS), skipped, sk_bytes / 1048576.0))
+''',
+     '''    files = [f for f in files if f not in tracked]
+    empty = [f for f in empty if f not in tracked]
+    man.append("artifacts: %d files to add under %d directories; %d *.err streams (%.0f MB) and %d zero-byte files left on "
+               "disk, untracked" % (len(files), len(DIRS), skipped, sk_bytes / 1048576.0, len(empty)))
+'''),
+    ('''nfiles=len(files), nerr=skipped,''', '''nfiles=len(files), nerr=skipped, nempty=len(empty),'''),
+    ('''  are NOT committed**: {nerr} `*.err` files, {errmb} MB, stay on disk beside the answers they belong to; no record cites one.
+''',
+     '''  are NOT committed**: {nerr} `*.err` files, {errmb} MB, stay on disk beside the answers they belong to; no record cites one.
+  {nempty} zero-byte files -- answer files of jobs that produced no output -- are left out as well: the committer
+  refuses an empty file.
+'''),
+    ('''    spec = {"unit": "#554", "head_subject_re": "^#529 ", "stage_dir": "records/stage554",
+            "files": ["CHANGELOG.md", "OUTSTANDING_BUGS.md", "regress/pass2_ledger.tsv", "tools/hooks/round_reminder.sh",
+                      "tools/pipeline/ledger.json", "tools/pipeline/matrix.html"],
+            "add_files": files, "message": "records/msg554.txt",
+            "no_merge": ["tools/pipeline/ledger.json", "tools/pipeline/matrix.html"],
+            "post": "python " + os.path.join(REC, "post554.py")}
+''',
+     '''    # absolute paths and a list of argv lists, as commit_unit.py reads them (spec529.json is the working precedent)
+    spec = {"unit": "#554", "head_subject_re": "^#529 ", "stage_dir": ST,
+            "files": ["CHANGELOG.md", "OUTSTANDING_BUGS.md", "regress/pass2_ledger.tsv", "tools/hooks/round_reminder.sh",
+                      "tools/pipeline/ledger.json", "tools/pipeline/matrix.html"],
+            "neutral": [], "add_dirs": [], "add_files": files, "exclude_dirs": [],
+            "message": os.path.join(REC, "msg554.txt"), "sidecars": [], "pre": [],
+            "post": [["python", os.path.join(REC, "post554.py")]],
+            "no_merge": ["tools/pipeline/ledger.json", "tools/pipeline/matrix.html"]}
+'''),
+]
+for old, new in EDITS:
+    if s.count(old) != 1:
+        raise SystemExit("REFUSED: %d matches for %r" % (s.count(old), old[:70]))
+    s = s.replace(old, new)
+if "\nimport time" not in s and "import time" not in s.split("def main")[0]:
+    s = s.replace("\nimport sys\n", "\nimport sys\nimport time\n", 1)
+io.open(P, "w", encoding="utf-8", newline="").write(s)
+py_compile.compile(P, doraise=True)
+print("prep554.py: the spec is in the committer's form; zero-byte files are left out and counted; it compiles")

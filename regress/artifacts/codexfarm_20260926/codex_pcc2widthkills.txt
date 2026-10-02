@@ -1,0 +1,146 @@
+VERDICT: Finish and verify pass 14, then close/retitle the row—do not edit `dev_pcc2.c`.
+
+I audited committed HEAD `8ea26abb421a80231317bebb3f364025945f33f8` using `git show HEAD:<path>`, not the working tree. The working tree has uncommitted modifications to `src/devices/dev_pcc2.c`, `tools/pipeline/ledger.json`, and `regress/gate_arm.sh`; those changes were ignored. I changed nothing and ran no build or emulator.
+
+I read every `pcc2widthkills` hit in `OUTSTANDING_BUGS.md`, in file order: `:14132-14190`, `:15007-15032`, `:15076-15084`, incidental `:15133-15139`, related findings `:15335-15519`, and the artifact reference at `:18062-18075`. I also read the complete 129-entry ledger record at `tools/pipeline/ledger.json:32455-33950`, latest entries last.
+
+The controlling ledger text is `:33949-33950`: `b78bb0f` removed all ten host kills and converted all twelve guards; the row remains open solely because pass 14 of the detector is owed. The older title, witness, and hold question at `:32460-32461,33948` are stale.
+
+## 1. Code paths and re-derived census
+
+The common guest path is:
+
+- MVME187 instantiates PCC2 at `0xfff42000`: `HEAD:src/machines/machine_mvme88k.c:83-92`; offsets are in `HEAD:src/include/thirdparty/mvme_pcctworeg.h:13-55`.
+- The m88k decoder selects the load/store instruction at `HEAD:src/cpus/cpu_m88k_instr.c:3051-3095`.
+- It derives widths 1/2/4/8, checks alignment, and passes the original width to memory: `HEAD:src/cpus/cpu_m88k_instr_loadstore.c:48,65-75,167-196,220-240`.
+- `memory_rw()` finds the PCC2 mapping and invokes its callback once with that width: `HEAD:src/cpus/memory_rw.c:475-495,583-626`.
+- `dev_pcc2_access()` folds aliases, pre-copies reads, switches on the starting offset, and returns success: `HEAD:src/devices/dev_pcc2.c:471-497,763`.
+
+Odd-starting sites cannot be reached by an ordinary aligned guest halfword/word. The regression reaches those through debugger `put h/w/d`: `HEAD:src/debugger/debugger_cmds.c:1512-1562` → `HEAD:src/core/memory.c:763-828` → `memory_rw()`. Debugger `put b` is not a valid device control because its `NO_EXCEPTIONS` path bypasses this default device.
+
+At HEAD, every row below has the same direction split: reads are served at `dev_pcc2.c:482-495`; wide writes call the per-instance latched decline helper at `:459-469` and then `break`.
+
+| Guard block and offset | HEAD guard; byte-arm behavior | Direct access route | Before `b78bb0f` |
+|---|---|---|---|
+| GENCTL `.02` | `:507-516`; store, reassert | Guest `st.h` | Host kill |
+| VECBASE `.03` | `:518-529`; mask to `0xf0`, diagnostic | Operator only | Host kill |
+| PSCALEADJ `.15` | `:540-549`; ignored diagnostic | Operator only | Host kill |
+| T2CTL `.16` / T1CTL `.17` | `:551-570`; RMW, COVF clearing | Guest via T2CTL; T1 start operator-only | Host kill |
+| T2ICR `.1a` / T1ICR `.1b` | `:572-608`; mask, pending-count/ICLR effects, reassert | Guest via T2ICR; T1 start operator-only | Host kill |
+| SCCERR `.1c` | `:610-617`; clear register | Guest halfword or word | Host kill |
+| SCCICR `.1d` | `:619-631`; mask, reassert | Operator only | Host kill |
+| SCCTX `.1e` | `:633-645`; mask, reassert | Guest halfword | Host kill |
+| SCCRX `.1f` | `:647-659`; mask, reassert | Operator only | Host kill |
+| SCSIICR `.2f` | `:667-679`; mask, reassert | Operator only | Host kill |
+| IPL `.3e` | `:681-702`; read-only write handling | Guest halfword | Already a `#119` latch |
+| MASK `.3f` | `:704-719`; store, reassert | Operator only | Already a `#119` latch |
+
+Independent count:
+
+- Twelve `len != 1 && MEM_WRITE` guard blocks at HEAD: `:508,519,541,553,574,611,620,634,648,668,687,711`.
+- Twelve matching helper calls.
+- Fourteen case labels because TxCTL and TxICR each cover T1 and T2.
+- Zero `exit(1)` calls inside any width guard.
+- The sole remaining `exit(1)` in the file is the unrelated unsupported-interrupt-line default at `:435`.
+
+In `b78bb0f^`, the twelve guards began at old lines `359,371,394,407,429,467,477,492,507,528,543,563`: the first ten killed the host; IPL and MASK were nonterminating `#119` latches. Thus “ten kills out of twelve guards” was historically correct, but it does not hold at HEAD: the current count is **zero live kills out of twelve structural guards**.
+
+Reachability depends on units:
+
+- Original ten kill blocks: five guest-reachable even starts and five operator-only blocks.
+- Counted as register labels, that was the ledger’s old 5/7 split because T1CTL and T1ICR add two odd labels.
+- After folding IPL and MASK, all twelve blocks split 6 guest-reachable / 6 operator-only.
+- No guarded starting offset is 8-byte aligned. Only SCCERR is word-aligned; all six guest blocks are halfword-reachable.
+
+## 2. Required architectural/device behavior
+
+Listing `C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\*.txt` found 428 text files. The two relevant manuals are:
+
+- `vmesbcp2.txt`, identified as the Motorola board reference covering MVME187 at `:1-6,42-47`.
+- `mc88100.txt`, identified as the MC88100 manual at `:43-53`.
+
+Directly documented:
+
+- The PCCchip2 CSR block is at `$FFF42000` and “can be accessed” as 8-, 16-, or 32-bit cycles: `vmesbcp2.txt:4651-4656`.
+- The byte-register/data-lane layout is shown at `:4695-4812`.
+- Per-register definitions cover GENCTL `:4857-4870`, VECBASE `:4940-4968`, PSCALEADJ `:5141-5169`, T1/T2CTL `:5182-5253`, T1/T2ICR `:5343-5408`, SCC registers `:5413-5588`, SCSIICR `:5974-6005`, and IPL/MASK `:6419-6487`.
+- MC88100 halfword/word/doubleword alignment is specified at `mc88100.txt:1727-1795`; misalignment is detected before device dispatch at `:9231-9246`.
+- Its load/store descriptions are at `:5302-5349,5887-5929`. A doubleword operation is two word bus transactions, not one documented 64-bit PCC2 transaction.
+
+Therefore:
+
+- A host exit is indefensible.
+- Turning documented 16/32-bit PCC2 cycles into guest bus faults is also wrong.
+- Wide reads should compose adjacent address-order lanes.
+- The lane table plus each byte register’s documented operations supports per-lane write composition as the eventual fidelity target.
+
+The last point is an inference: the excerpts do not explicitly prescribe ordering or atomicity when one wide write spans registers with different side effects. That uncertainty explains the current conservative write decline and the separate `pcc2widecompose` row at `OUTSTANDING_BUGS.md:15400-15424`. The manual provides no warrant for a single 64-bit PCC2 callback.
+
+## 3. Options for every site
+
+The same option set applies to all twelve; the differing byte semantics are listed in the table above.
+
+- **Keep the host kill:** historical precedent is `b78bb0f^:src/devices/dev_pcc2.c` at the ten old guard blocks; the remaining unrelated form is at current `dev_pcc2.c:435`. Rejected because legal guest width cannot be an emulator-fatal condition.
+- **Return failure / guest fault:** precedent is `HEAD:src/devices/dev_unreadable.c:41-44`; `memory_rw()` converts callback failure into the architecture exception path at `HEAD:src/cpus/memory_rw.c:595-626`. Rejected for documented 16/32-bit PCC2 cycles.
+- **Delete the guard and raw-accept:** the counter/compare arm does this through `memcpy` at `HEAD:src/devices/dev_pcc2.c:531-538`. Rejected for these byte-semantic arms. `memory_readmax64()` builds a big-endian value in `HEAD:src/core/memory.c:55-77`, so blindly falling through would commonly feed the neighbouring lane’s low byte to the starting register and would skip the masks, clears, pending-count changes, and interrupt reassertions shown above.
+- **Per-lane COMPOSE:** endian-aware byte decomposition exists in `HEAD:src/devices/dev_wdc.c:1580-1589,1614-1623`. This is the fidelity-supported destination, but there is no complete PCC2 implementation or explicit cross-register side-effect ordering. It is deliberately tracked as `pcc2widecompose`, with reopening conditioned on a measured guest/PROM wide write.
+- **Read ACCEPT; write DECLINE plus per-instance latched announcement:** implemented by `dev_pcc2.c:140-168,459-469`. Independent house precedents are `HEAD:src/devices/dev_sgi_re.c:438-469,490-498` and `HEAD:src/devices/dev_wdc.c:1590-1611,1624-1645`.
+
+For this row, the evidence supports retaining the shipped direction split at all twelve sites. For eventual hardware fidelity, COMPOSE is better, but it belongs to the separate low-priority row rather than another host-kill repair.
+
+## 4. Existing probes, gates, and affected rows
+
+Committed coverage includes:
+
+- `HEAD:regress/pcc2_width_witness.py:86-102,179-225`: guest instruction witness, controls, and post-access liveness.
+- `HEAD:regress/pcc2_width_probe.py:2-47`: current read-accept/write-decline contract.
+- `:49-195`: all twelve blocks and channels.
+- `:590-717`: liveness, device signature, legal-byte controls, survival/value and latch-cardinality rows.
+- `:421-434`: corrected six-block/six-block reachability census.
+- `HEAD:regress/gate_arm.sh:1669-1691`: mandatory detector gate, presently fixed at 251 emitted rows, 251 green, zero red.
+- `HEAD:regress/gate_arm.sh:1695-1737`: adjacent default-offset and C040 probes.
+- Historical pre-fix measurement: `HEAD:regress/artifacts/pcc2widthkills/witness_20260903_PREFIX.out:4-16`.
+
+The latest ledger says pass 14 must add 18 detector rows, moving 251 to 269, cover eight mutants, and retain the pre-repair breach witness: `ledger.json:33949`. Its stated prerequisite has cleared because `pcc2defaultkill` was fixed as `#501`: `OUTSTANDING_BUGS.md:15023-15032`.
+
+A detector-only pass 14 should disturb only the probe, mutant evidence, and the exact gate count. A product COMPOSE change would intentionally invalidate current expectations:
+
+- The width probe treats accidental write composition as a failure: `pcc2_width_probe.py:34-38,654-667`.
+- `pcc2_c040_probe.py:317-330` relies on a halfword GENCTL write setting the width-latch before the byte C040 test.
+- `pcc2_width_probe.py:212-226,1196-1207` relies on the separate `pcc2counter8` behavior to preset TxCTL bits.
+
+Related rows are `pcc2widecompose`, `pcc2counter8`, `pcc2defaultkill`, `pcc2c040kill`, `pcc2latchinst`, `pcc2latchwidth48`, `pcc2pscaleflood`, `pcc2assertflood`, `pcc2iclrdec`, and `pcc2huhflood`; see `OUTSTANDING_BUGS.md:15007-15059,15335-15519`. They cover separate predicates or coverage debts and do not justify reopening the product portion of this row.
+
+## 5. Smallest controlled witness
+
+Use the unmodified in-tree `-E mvme88k -e mvme187` machine, which is the only machine arm that installs PCC2.
+
+With registers preloaded so `r2 = 0xfff42000`, `r3` points to writable RAM, and `r5 = 0x5a5a5a5a`, the smallest instruction that reaches a current guard is one aligned guest halfword store to T2CTL: `st.h` from `r5` to `r2 + 0x16`.
+
+The controlled sequence is:
+
+1. Store the marker from `r5` to RAM at `r3`.
+2. Execute the T2CTL halfword store.
+3. Load the RAM marker after the access and inspect it.
+
+Step 3 is the liveness control: historically the host exited during step 2; at HEAD the access is announced once, declined, and execution reaches the marker load.
+
+In a separate session, issue a guest byte store to PCC2 CHIPID at offset zero and require the device-specific “IGNORING write to read-only PCCTWO_CHIPID/CHIPREV” diagnostic. That is the device-signature control. A guest byte load at GENCTL is the same-site legal-width control. Do not substitute debugger `put b`, which bypasses the device path.
+
+These sequences are described and encoded in `HEAD:regress/pcc2_width_witness.py:58-65,86-102,179-225`; I did not execute them.
+
+## 6. Text now contradicted or superseded
+
+- `OUTSTANDING_BUGS.md:14137,14150-14152` says twelve live kills. Its own correction at `:14154-14160` reduces the historical count to ten; HEAD reduces the live count to zero.
+- The ledger title and “4/10 on the committed build” witness at `ledger.json:32460-32461` describe the historical PREFIX build, not current HEAD.
+- The ledger hold question at `:33948` still requests the ten-arm edit and gives a 5/7 label split. The following controlling `state_note` at `:33949` says all twelve guards were already converted.
+- The old source line list `359...563` has moved to guards `508...711`.
+- The state note’s remaining unrelated exit location `:414` has itself moved again; it is now `dev_pcc2.c:435`.
+- The claim that widths 2, 4, and 8 are all naturally alignable at these guards, including a word access “of GENCTL,” at `OUTSTANDING_BUGS.md:14166-14170` is false. GENCTL `.02` is halfword-aligned, only SCCERR `.1c` is word-aligned, and no guard start is 8-byte aligned. The real architecture also splits a doubleword into two word transactions.
+- “There is no mvme88k rig” at `:14188-14190` is superseded by the committed witness, detector, and gate.
+- “Pass 14 runs after `pcc2defaultkill`” at `:15018-15020` is no longer a blocker because `#501` is recorded fixed immediately below.
+- `regress/gate_arm.sh:1670` still claims all twelve original guards killed the host; historically only ten did.
+- `regress/pcc2_width_witness.py:4-20` uses present-tense “ten kills,” although its actual comparison target is explicitly pre-fix.
+- `tools/pipeline/ledger.json:32459` lists only `b78bb0f`, omitting `7076134`, the commit whose detector obligation is now the sole reason the row remains open.
+
+What is directly read: HEAD code, manuals, row history, tests, gate contracts, and archived outputs at the cited lines. What is inferred: the 6/6 reachability split from offsets plus MC88100 alignment, and per-lane COMPOSE as the eventual hardware-faithful write model. No new runtime result is claimed.

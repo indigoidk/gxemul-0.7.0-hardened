@@ -1,0 +1,39 @@
+ASTRARETRO_HPCC2WIDTHPROBE_ALIVE
+VERDICT: 9 findings (1 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 7 RECORD, 0 OTHER); 12 items checked clean
+
+Static review of HEAD `db8b1a33`. No files changed, builds performed, or probes executed.
+
+F1 | [regress/pcc2_width_probe.py:1342](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:1342) | 70761347 | CANNOT-FAIL | The IPL wide-read session passes without its correction. The original guard warned and broke; it did not exit, and the preceding memcpy had already served the read. Original and corrected code both produce `hrd ipl=exit0`, `hrd ipl lv=0x5a5a5a5a`, and `hrd ipl nod=0`: `DECL` does not match the original warning. The write-announcement rows distinguish the original write behavior, but these read rows do not. | Smallest check: reject the legacy non-byte IPL warning, or require the corrected init-state read-body diagnostic `IPL == 0 on read`. | confidence high
+
+F2 | [regress/pcc2_width_probe.py:774](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:774) | 70761347 | STATUS-LAUNDERED | `pscale noig2` and `ipl noig2` ignore both `alive` and `how`. If the second wide write exits or hangs before printing, the ignored-message count remains zero and the row reports `ok`, even when `session()` reports death or kills the child. These are the only repeated-wide-write sessions for those two arms, so this failure can escape all 251 rows. The ignored-wait-status family is already filed as **`ptywaitstatus`**, `OUTSTANDING_BUGS.md:21935`. | Smallest check: evaluate either row with the first decline in the transcript and `alive=False, how="exit1"`; it must fail. Require same-session completion and successful status. | confidence high
+
+F3 | [regress/pcc2_width_probe.py:155](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:155) | 70761347 | RECORD | Shifting every width-latch index by one is no longer equivalent. HEAD assigns MASK bit 11 and C040 bit 12; the C040 branch independently reads and writes `d->warned`. Translating MASK onto bit 12 makes a wide MASK write suppress the subsequent C040 announcement. The claimed absence of outside readers is false. Related latch-collision debt is filed as **`pcc2c040latchswap`**, `OUTSTANDING_BUGS.md:21842`; that entry does not identify this stale equivalence claim. | Smallest check: trace a wide MASK write followed by legal GENCTL byte `0x04` through `dev_pcc2.c:153`, `:391`, and `:464`: normal mapping announces both; translated mapping suppresses C040. | confidence high
+
+F4 | [regress/pcc2_width_probe.py:399](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:399) | b78bb0f6 | RECORD | The header and emitted `NOROW` at line 1364 claim GENCTL byte `0x04` still ends the host. HEAD’s #512 correction announces once and suppresses interrupt assertion; it continues execution. The historical defect is `pcc2c040kill`, but the current harness statement is stale. | Smallest check: compare this claim with `src/devices/dev_pcc2.c:390`, whose branch sets `assert=0` and contains no exit. | confidence high
+
+F5 | [regress/pcc2_width_probe.py:141](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:141) | 70761347 | RECORD | The header says `latch all` catches replacing the helper’s bitwise test with equality. Twelve distinct-block writes announce twelve times under either implementation, so that row passes both. `latch aba` supplies the distinguishing observation, as the following sentence acknowledges. | Smallest check: trace the twelve distinct bits versus A/B/A; the latter produces two announcements normally and three with equality. | confidence high
+
+F6 | [regress/pcc2_width_probe.py:825](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:825) | 70761347 | RECORD | The comment claims a HUH-bit-qualified guard would decline every existing row before `rbq`. Existing `latch all zero` writes zero to every block, making `idata & ~mask` false. Qualifying one arm therefore reduces its announcement count from twelve to eleven and already fails. The header at lines 299–307 correctly contradicts this comment. | Smallest check: substitute the zero written at line 1123 into the stated qualifier. | confidence high
+
+F7 | [regress/pcc2_width_probe.py:862](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:862) | 70761347 | RECORD | `latch samew` claims to establish that the latch “is not keyed by width,” but both writes have width four. Shared and width-specific latches both announce once. The row establishes same-width deduplication only. | Smallest check: issue two different widths to MASK within one session; expect one announcement rather than two. | confidence high
+
+F8 | [regress/pcc2_width_probe.py:920](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:920) | 70761347 | RECORD | The `pend2 decl`, `pend1 decl`, and `pendboth decl` descriptions say “first of four wide writes.” Their sessions issue nine, nine, and eight wide writes respectively. Already filed as **`pcc2w14`**, `OUTSTANDING_BUGS.md:15020`. | Smallest check: count guest `ST_H` and operator `put h` commands in the three session constructions. | confidence high
+
+F9 | [regress/pcc2_width_probe.py:1224](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:1224) | b78bb0f6 | RECORD | “Removing twelve exit(1)s” overstates the correction. Ten width blocks exited; IPL and MASK already warned once and refused. The header at lines 4–6 gives the correct split. | Smallest check: inspect the device changes in `b78bb0f6`, including the removed IPL and MASK guards. | confidence high
+
+Checked clean, with locations in `regress/pcc2_width_probe.py` unless otherwise stated:
+
+- `:438` — instruction fields and load/store opcodes match the HEAD m88k decoder.
+- `:464` — unique names and the 15-character limit preserve the gate’s row matching.
+- `:501` — breakpoint detection includes the final read; timeout stops dependent commands.
+- `:582` — missing register output becomes `absent`, never a passing zero.
+- `:587` — successive programs use distinct addresses to avoid the same-PC assignment hazard.
+- `:644` — halfword and word composition checks use independent, distinguishing lane values.
+- `:674` — per-arm halfword readbacks distinguish preserved presets from masked landed values.
+- `:708` — `BLOCKS12` enumerates twelve distinct guard blocks without double-counting shared timer labels.
+- `:759` — storing-arm repeated-write readbacks observe refusal after the latch is set.
+- `:798` — second byte reads expose unintended write-body execution on reads.
+- `:829` — four/eight-byte readbacks distinguish landed values after each arm’s mask, including T1 counterparts.
+- `:1372` — the gate requires completion, every named row, and exact 251/251 totals (`regress/gate_arm.sh:1680`); its outer `|| true` does not accept empty or partial output.
+
+DENOMINATOR: read 1 of 1 files in full

@@ -1,0 +1,47 @@
+CODEXPACK_CENSUS_NET1_ALIVE
+VERDICT: 3 live calls classified -- 0 reachable by guest access at run time, 0 of those not recorded
+
+All citations below refer to `db8b1a33`.
+
+```text
+src/net/net_misc.c:84 | net_addr_to_string | WHEN: unreachable | CONDITION: "default:" in "switch (type)" (src/net/net_misc.c:61,81); existing callers supply supported constants | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: (1) delete the terminating call | confidence: high
+src/net/net_misc.c:119 | net_generate_unique_mac | WHEN: unreachable under defined C arithmetic | CONDITION: "if (macbuf[0] & 1 || macbuf[5] & 1)" (src/net/net_misc.c:116) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: (1) delete the terminating call | confidence: high
+src/net/net.c:636 | net_add_nic | WHEN: construction | CONDITION: "if (nic == NULL) {" (src/net/net.c:634), after the NULL-network return at src/net/net.c:631–632 | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP — setup invariant failure | confidence: high
+```
+
+Counts match: `net_misc.c` has **2**, enumerated `{84, 119}`; `net.c` has **1**, enumerated `{636}`. Each contains exactly `"exit(1);"` at those locations.
+
+The reachability evidence:
+
+- **Address formatter:** the supported cases are `NET_ADDR_IPV4`, `NET_ADDR_IPV6`, `NET_ADDR_ETHERNET` (`src/net/net_misc.c:63,69,75`), defined as `{1, 2, 3}` (`src/include/net.h:250–252`). The complete caller search in `src/` finds only `net_dumpinfo`; its arguments enumerate `1` (`src/net/net.c:716`), `1` (`src/net/net.c:723`), `3` (`src/net/net.c:725`), `1` (`src/net/net.c:735`), `1` (`src/net/net.c:748`). None selects `"default:"`.
+- **MAC check:** `"macbuf[0] = machine->machine_type == MACHINE_SGI ? 0x08 : 0x10;"` (`src/net/net_misc.c:108`). Tested values enumerate `0x08 & 1 = 0` and `0x10 & 1 = 0`. The other assignment is `"macbuf[5] = (machine->serial_nr << 4) + (machine->nr_of_nics << 1);"` (`src/net/net_misc.c:114`). Under defined arithmetic, the tested operand pairs enumerate **SGI `(0,0)`**, **otherwise `(0,0)`**; the condition is false (`src/net/net_misc.c:116`). The counters are signed `int` (`src/include/machine.h:145–146`); negative-shift and signed-overflow behavior was **not checked**.
+- **NIC registration:** all callers are setup functions and pass `"&d->nic"` from checked allocations, enumerated below. Thus the null-NIC guard cannot fire through those valid callers. KEEP preserves its role as a setup invariant check (`src/net/net.c:629–651`).
+
+For **RECORDED**, I searched the committed queue by each enclosing function, diagnostic text, and filename. No entry records these termination sites. The function-name hit is **“`S-M3` delete `net_generate_unique_mac` (`machine_sgi.c:97`)”**, concerning an **“uninitialised-stack MAC”** in a detector mutant (`OUTSTANDING_BUGS.md:7439`). The `net.c` filename hit concerns unsolicited inbound NAT traffic and says **“NOT a `dev_le`/`dev_sn`/`net.c` change”** (`OUTSTANDING_BUGS.md:2539–2546`). Neither records the conditions above.
+
+**(a)** Guest-access ranking: **empty**; no classified site has a guest-runtime trigger, for the reasons cited above.
+
+**(b)** CPU-stop census: **none**. Neither completely read file contains a `running` reference or a `cpu->running = 0` assignment (`src/net/net_misc.c:1–159`; `src/net/net.c:1–917`).
+
+**(c)** Denominator: all target-file functions were read; **none was left unread**.
+
+| File | Functions read completely |
+|---|---|
+| `src/net/net_misc.c` | `net_addr_to_string` (`51–86`); `net_generate_unique_mac` (`98–124`); `send_udp` (`133–158`) |
+| `src/net/net.c` | `net_allocate_ethernet_packet_link` (`69–110`); `net_arp` (`134–270`); `net_ethernet_rx_avail` (`284–338`); `net_ethernet_rx` (`357–403`); `net_ethernet_tx` (`413–544`); `parse_resolvconf` (`553–620`); `net_add_nic` (`629–651`); `net_gateway_init` (`661–684`); `net_dumpinfo` (`693–758`); `net_init` (`776–916`) |
+
+Supporting initializer bodies read completely; allocation and registration columns give lines within the cited file:
+
+| Function and complete body | Checked allocation | `net_add_nic(..., &d->nic)` |
+|---|---:|---:|
+| `DEVINIT(dec21143)`, `src/devices/dev_dec21143.c:1355–1456` | 1361 | 1433 |
+| `DEVINIT(ether)`, `src/devices/dev_ether.c:210–250` | 217 | 244 |
+| `dev_le_init`, `src/devices/dev_le.c:1052–1115` | 1059 | 1114 |
+| `DEVINIT(ne2000)`, `src/devices/dev_ne2000.c:655–699` | 662 | 696 |
+| `DEVINIT(rtl8139c)`, `src/devices/dev_rtl8139c.c:198–231` | 204 | 228 |
+| `dev_sgi_mec_init`, `src/devices/dev_sgi_mec.c:681–709` | 688 | 708 |
+| `DEVINIT(sn)`, `src/devices/dev_sn.c:96–122` | 102 | 119 |
+
+Also fully read: `DEVINIT(mb8696x)` (`src/devices/dev_mb8696x.c:262–286`). `CHECK_ALLOCATION` rejects null allocations through `"FAILURE(\"Out of memory\");"` (`src/include/misc.h:190–193`).
+
+Only excerpts were read from `MACHINE_SETUP(sgi)` (`src/machines/machine_sgi.c:59–112`) and `yamon_machine_setup` (`src/promemul/yamon.c:52–120`). Parser counter assignments received reference searches only. Other function bodies, higher-level setup dispatch, and guest privilege enforcement were **not checked**.

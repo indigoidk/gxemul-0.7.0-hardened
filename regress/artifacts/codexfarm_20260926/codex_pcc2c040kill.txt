@@ -1,0 +1,165 @@
+VERDICT: normalize the records, split the GENCTL-mask debt, and close pcc2c040kill as fixed
+
+I read committed `HEAD` `8ea26abb421a80231317bebb3f364025945f33f8` with `git show HEAD:<path>`, not the working tree. I changed nothing and built nothing. The working tree is dirty, including `src/devices/dev_pcc2.c`; its relevant difference is a 20-line comment-only correction. `tools/pipeline/ledger.json` and `regress/gate_arm.sh` are also modified, but not in this row’s committed ledger object or PCC2 gate section.
+
+1. Code path and independently derived site count
+
+The primary guest path is:
+
+`mvme88k/mvme187` construction  
+→ PCC2 at `0xfff42000` (`HEAD:src/machines/machine_mvme88k.c:83-92`; `HEAD:src/include/thirdparty/mvme_pcctworeg.h:13-18`)  
+→ MC88100 `st.b` decode (`HEAD:src/cpus/cpu_m88k_instr.c:3051-3078,3087-3091`)  
+→ byte marshalled and passed to `cpu->memory_rw` (`HEAD:src/cpus/cpu_m88k_instr_loadstore.c:220-235,246-290`)  
+→ mapped-device dispatch (`HEAD:src/cpus/memory_rw.c:430-436,475-494,583-589`)  
+→ `dev_pcc2_access()` (`HEAD:src/devices/dev_pcc2.c:471-480,497`)  
+→ GENCTL byte store and synchronous helper call (`:507-516`)  
+→ C040 decision (`:390-397`)  
+→ CPU interrupt assert/deassert (`:399-402`).
+
+Historically, the helper’s first operation was the terminating branch at `9fa07fe^:src/devices/dev_pcc2.c:271-276`: `fatal()` followed by `exit(1)`. At HEAD that branch is gone; the replacement stores the bit, announces once, suppresses the unavailable output, and continues. `fatal()` itself is only a returning logger (`HEAD:src/core/debugmsg.c:384-391`).
+
+I independently grepped the executable call expressions. There are exactly ten `reassert_interrupts(d)` callers at HEAD:
+
+`HEAD:src/devices/dev_pcc2.c:438,455,514,606,629,643,657,664,677,717`.
+
+That textual count still holds. It was never ten independent kill sites, however:
+
+- There was one shared historical fatal branch.
+- Only the GENCTL store at `:513-514` could be its first hit. GENCTL resets to zero at `:803`; this is the only guest store to offset `0x02`; the bulk-copy cases at `:531-537` begin at offsets `0x04` or later and cannot overwrite GENCTL.
+- Because the GENCTL store calls the helper in the same access, the other nine callers could not become a first entry while C040 remained set—the old code had already exited.
+- At HEAD there are ten callers, one shared C040 decision, and zero C040 host-termination sites.
+
+The row also names one still-live, separate defect at the same store: `HEAD:src/devices/dev_pcc2.c:513` stores all eight GENCTL bits verbatim. A guest `st.b 0x78` therefore changes documented read-only bits 6–3, and the common read path returns them at `:482-484`. That is one live semantic site, not a host kill.
+
+The row’s wrong alias is not guest-reachable: `PCC2_GENCTL_C040` is incorrectly `0x03` at `HEAD:src/include/thirdparty/mvme_pcctworeg.h:134-143`, but has zero consumers and is prominently annotated. It is a latent header trap, not another executable site.
+
+2. Architecture and device documentation
+
+I enumerated all 428 root-level `_scratchpad/*.txt` files. Only `vmesbcp2.txt` covers PCCchip2/C040; `mc88100.txt` supplies the instruction semantics.
+
+Read from the MC88100 manual:
+
+- `C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\mc88100.txt:5887-5893,5913-5917,5927-5933`: `st.b` stores the specified register’s low byte to the base-plus-index address.
+
+Read from the MVME187 manual:
+
+- `vmesbcp2.txt:4653-4657`: PCCchip2 CSRs begin at `$FFF42000`; byte access is supported.
+- `:4857-4864`: GENCTL is the 8-bit register at `$FFF42002`.
+- `:4866-4872`: C040 is explicitly R/W; bits 6–3 are read-only.
+- `:4895-4906`: MIEN gates both EIPL and INT outputs.
+- `:4908-4915`: C040 should be set for an M68000-family MPU and clear for an MC88100; setting it changes EIPL pins to outputs.
+- `:4544-4556`: with C040 set, PCCchip2 drives its highest internal request level on EIPL.
+- `:4558-4581`: with C040 clear, levels are combined, compared with MASK, and delivered through INT.
+- `:6441-6447`: C040 changes pin routing, not whether the internal IPL is calculated.
+
+Inference: writing C040 on an MVME187 is a legal but inappropriate configuration. Hardware changes interrupt routing; it does not terminate the host or fault the write. The evidence supports HEAD’s conservative approximation: retain/read back C040, continue calculating IPL/vector state, announce the missing EIPL implementation once, and suppress delivery to the modeled MC88100 INT pin. Fully modeling EIPL would be more faithful but is a larger feature.
+
+3. Options and in-tree precedents
+
+For the historical C040 kill, the row’s six-option set resolves as follows:
+
+| Option | Existing tree precedent | Evidence |
+|---|---|---|
+| Delete the special kill and use ordinary behavior | Legal but incompletely modeled Footbridge timer modes remain survivable at `HEAD:src/devices/dev_footbridge.c:248-267,679-701` | Survival is right, but blindly using the existing INT output is wrong when C040 selects EIPL. |
+| Silently decline/ignore the write | Legal RTC writes ignored at `HEAD:src/devices/dev_dreamcast_rtc.c:68-76` | Rejected: C040 is documented R/W, so silent non-retention would be wrong. |
+| Decline unsupported behavior with a latched announcement | `pcc2_width_decline()` at `HEAD:src/devices/dev_pcc2.c:459-469`, used for wide GENCTL writes at `:507-511` | Supported for the unavailable EIPL delivery, provided the legal register write itself remains accepted. |
+| Plain ACCEPT | Footbridge IRQ set writes at `HEAD:src/devices/dev_footbridge.c:593-608` | Accepting the bit is necessary; continuing through the normal INT pin without suppression is not. |
+| Fault the guest access | `HEAD:src/devices/dev_unreadable.c:41-43`; generic failure becomes an m88k data-access exception at `HEAD:src/cpus/memory_rw.c:595-624` | Rejected: neither manual marks this R/W field faulting. |
+| Backed/full accept | Ordinary backed PCC2 registers at `HEAD:src/devices/dev_pcc2.c:531-537`; current CPU interrupt connection at `:807-808` | A real EIPL backend would be architecturally best, but no PCC2 EIPL connection exists in this model. |
+
+Thus the evidence supports the committed hybrid: accept/back C040, recalculate state, then decline only the unavailable output with a per-instance latched announcement (`HEAD:src/devices/dev_pcc2.c:301-397`). MIEN’s existing output-gating pattern at `:359-361` is the closest structural precedent.
+
+For the still-live read-only-bit defect at `:513`:
+
+- Verbatim acceptance is contradicted by `vmesbcp2.txt:4866-4872`.
+- Declining or faulting the whole byte is also wrong because bits `0x87`—DR0, C040, MIEN and FAST—are writable.
+- The supported option is to preserve old bits `0x78` and update only writable bits `0x87`. Same-tree precedents are VECBASE masking/announcement at `dev_pcc2.c:523-527` and explicit “read-only bits come from old register” RMW logic at `HEAD:src/devices/dev_sii.c:343-347,380-384`.
+
+That should be a separate row/fix; it is not grounds to keep the C040 host-kill parent open.
+
+4. Existing probes, gates, and rows
+
+The direct detector is `HEAD:regress/pcc2_c040_probe.py`:
+
+- machine and historical one-access derivation: `:3-20,66-69,101-105`;
+- same-decode benign control: `:233-269`;
+- C040 witness and attribution: `:271-286`;
+- warning/latch controls: `:304-330`;
+- output suppression, recovery, readback and MIEN cases: `:444-591`.
+
+Preserved measurements—not rerun by me—show:
+
+- pre-fix: `regress/artifacts/pcc2c040kill/witness_HEAD_20260907.raw:3-11`, C040 store `died(exit1)`, 3/4;
+- fixed: `witness_FIX512_final.raw:3-14`, survival plus once-only announcement, 7/7;
+- current expanded detector: `r535_20260918/opus535/r2_BASE.raw:3-25`, 18/18;
+- later full gate: `regress/artifacts/fbd5/q2_20260923/r3f_20260923/gate_arm/pcc2_c040.log:23-25`, 18/18.
+
+`HEAD:regress/gate_arm.sh:1721-1737` runs the probe and requires all 18 rows. Behavioral changes would disturb:
+
+- termination: `c040 kill`;
+- silent handling: `c040 says`;
+- non-latched warning: `c040 once`;
+- missing suppression/early return: `c040 noassert`, `c040 noassert2`;
+- sticky suppression: `c040 recover`;
+- clobbered GENCTL: `c040 genctl`;
+- MIEN-conditioned warning: `c040 says mien`, `c040 once mien`.
+
+A true EIPL implementation would intentionally invalidate the current suppression oracle at `pcc2_c040_probe.py:503-505`; it would need a newly adjudicated oracle.
+
+Adjacent probes also touch GENCTL:
+
+- `HEAD:regress/pcc2_width_probe.py:399-400,811-815` keeps C040 clear.
+- Its `rb genctl lo` row at `:693-696` expects `0x11`; a correct read-only-bit mask would instead retain only FAST (`0x01`), so that row must be revised when the separate mask defect is fixed.
+- `HEAD:regress/pcc2_default_probe.py:239-240` round-trips `0x82`, containing only writable DR0|MIEN, so it should remain green.
+- `pcc2_c040_probe.py:223-269` calls `0x10` “benign”; masking it would still satisfy the survival/no-C040-warning control, but the prose should stop implying that bit is writable.
+
+Related ledger state:
+
+- parent object, including all 45 entries: `HEAD:tools/pipeline/ledger.json:34633-35106`;
+- `pcc2c040assertrow`: held detector-review debt at `:42378-42383,42497`;
+- `pcc2c040ctlq`: still “in work” despite committed `1f2b27a`, at `:42892-42912`;
+- `pcc2c040mienannounce`: closed at `bb8efbf`, `:50090-50097`;
+- separate open detector debts `pcc2c040debugchan` and `pcc2c040latchswap`: `:50323-50330,50344-50351`.
+
+A records-only parent closure disturbs none of these; their statuses should be reconciled independently.
+
+5. Smallest witness and controls
+
+On an unmodified in-tree `-E mvme88k -e mvme187` machine, after loading the address and value registers, the core witness is one guest instruction: byte-store `0x04` to `0xfff42002`. The store itself reaches the C040 decision synchronously; no driver, interrupt source, tick, or second device access is needed.
+
+Use fresh sessions, or run controls before the candidate because the historical behavior killed the process:
+
+- Liveness control: guest RAM word store/load round-trip and reach the stop point, as used at `HEAD:regress/pcc2_width_witness.py:191-194`. On fixed HEAD, repeat a RAM canary or reach a post-store stop after the candidate.
+- Device-signature control: byte-write CHIPID and require PCC2’s unique ignored-write diagnostic (`HEAD:regress/pcc2_width_witness.py:196-198`; device arm `HEAD:src/devices/dev_pcc2.c:499-505`). Alternatively, read CHIPID and require reset value `0x20` (`:801`).
+- Same-decode control: byte-store `0x10` to the same GENCTL address and require survival (`HEAD:regress/pcc2_c040_probe.py:233-236`).
+- Candidate: byte-store `0x04`; historical `9fa07fe^` exited with the unique C040 diagnostic, whereas HEAD announces once, retains the bit, suppresses INT, and remains live.
+
+The device-signature control matters because a successful RAM or unmapped access would otherwise mimic “survived” without proving the PCC2 callback was reached.
+
+6. Superseded or contradicted row text
+
+I read all 13 exact `pcc2c040kill` matches in `OUTSTANDING_BUGS.md`, in file order, latest last:
+
+- dependencies/ranking: `:15034,15038,15066`;
+- original filing: `:15335-15356`;
+- sibling dependency: `:15485`;
+- content-filter process history: `:17828,17942`;
+- vocabulary/process history: `:18268`;
+- `pcc2c040ctlq`/16-row follow-up: `:18525,18529`;
+- owner decisions and latest disposition: `:21818,21828,21832` within `:21816-21842`.
+
+The committed tree now contradicts or supersedes:
+
+- The title’s present-tense host kill and “witness owed/not yet run” at `OUTSTANDING_BUGS.md:15341-15356`. Commit `9fa07fe` and the preserved pre/post measurements discharge both.
+- The earlier dependencies and ranking at `:15034-15074` and `:15476-15485`.
+- The latest text itself says `assess 9/9: REAL-AND-RIGHTLY-FIXED` at `:21831-21834`, followed by the #535 detector repair and 18-row gate at `:21840-21842`.
+- The old source location. The historical fatal was `9fa07fe^:dev_pcc2.c:271-276`; HEAD’s helper begins at `:289`, and the surviving C040 block is `:390-397`.
+- Any reading of “ten sites” as ten defects. Ten helper calls remain, but there was one shared fatal branch, one reachable first entry, and now zero C040 terminating sites.
+- The 16-row statements at `OUTSTANDING_BUGS.md:18520-18532`; HEAD has 18 rows.
+- `HEAD:src/devices/dev_pcc2.c:374-378` says an `assert=0`→`return` mutant passes every row. The committed artifact `regress/artifacts/pcc2c040kill/ctlq_20260909/repaired_M_return.raw:13-22` records 14/16, with two failures. The dirty working tree’s comment-only addition corrects this, but I did not use it as committed evidence.
+- `HEAD:src/devices/dev_pcc2.c:380-385` attributes SCSI-specific EIPL wording to the GENCTL page; the actual SCSI passage is `vmesbcp2.txt:4391-4407`.
+- The debug line at `dev_pcc2.c:355-357` can print `ASSERT` before MIEN/C040 later suppress it. That is misleading debug output, not a surviving host kill.
+- `HEAD:regress/pcc2_width_probe.py:399-400,1364-1365` still says the legal C040 write “ends the host”; those comments are stale.
+- The only remaining `exit(1)` in committed `dev_pcc2.c`, at `:433-435`, belongs to an unsupported interrupt-line default and is unrelated to GENCTL/C040.
+
+What I read is the cited committed source, complete ledger object, every bug-log section, manuals, probes, gates, and preserved artifacts. What I inferred is the first-hit count from the exhaustive GENCTL-write/call ordering, the hardware-correct fallback from the pin-routing documentation, and the disposition: the high/open parent is now administrative residue, while the read-only-bit mask, debug channel, latch collision, and detector-review work are distinct debts.

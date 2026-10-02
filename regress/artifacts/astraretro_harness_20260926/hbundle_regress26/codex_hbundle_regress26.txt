@@ -1,0 +1,51 @@
+ASTRARETRO_HBUNDLE_REGRESS26_ALIVE
+VERDICT: 12 findings (3 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 7 RECORD, 1 OTHER); 18 items checked clean
+
+Reviewed HEAD `db8b1a33` through Git objects. No builds, probe executions, or writes. Counterfactual results below are derived from source.
+
+F1 | regress/diff_rtc_range.c:108 | #429 | CANNOT-FAIL | The memory-read stub ignores `len`. If the device mistakenly requests four bytes instead of eight, all 18 detector rows remain green. For an eight-byte little-endian `2^32` write, the real helper would read zero and remove the timer; the stub still returns `2^32`, producing the expected clamp. Already filed as `rtclen`. | Assert the forwarded length and decode the supplied buffer accordingly. | confidence high
+
+F2 | regress/diff_rtc_range.c:244 | 27dd47a0 | CANNOT-FAIL | R7, “INT_MAX exactly: passed through, not clamped,” accepts both `>` and `>=`: passing through `2147483647` and clamping it both produce `2147483647`. Only the diagnostic differs, and it is unasserted. The claim at line 239 that `>=` fails this row is false. Already filed as `rtcbranch`. | Require zero clamp diagnostics for this input. | confidence high
+
+F3 | regress/arm_bfx_width_probe.py:210 | #510 | CANNOT-FAIL | `enc ok` constructs instructions with the same `*_BASE` constants used as expectations. A mistaken `UBFX_BASE=0x07c00050` produces `e7df0051` and still reports `yes`, although the actual UBFX decoder requires `0x07e00050`. Thus this row cannot independently validate opcode identity. Other numeric rows catch this example. | Compare generated words with independently fixed decoder constants or manual-derived instruction words. | confidence high
+
+F4 | regress/sh4_tlbda2_probe.py:216 | #452 / #451 | STATUS-LAUNDERED | RPTu accepts an incomplete guest run: stopping the virtual CPU on the second UTLB access leaves the destination poisoned, but startup success, a responding debugger, and the first decline satisfy the row. `got` is ignored; `-V` keeps the debugger alive after the guest stops. SCI RPT/CEIL have the same gap at `sh4_sci_probe.py:203/:261`: one decline and no transfer can pass despite stopping during the repeat. | Require a final guest-written completion sentinel or the expected terminal PC; check that an early guest halt fails. | confidence high
+
+F5 | regress/arm_bfx_width_probe.py:239 | #510 | OTHER | No gate invokes this post-fix detector. `check_probe_wiring.py:1033` classifies it as `CLASS_WITNESS`; the gate-hygiene reference merely inventories its name. Consequently, gates never evaluate its width-32 regression rows. The general classification loophole is already filed as `witnessclassdoor`, although that entry does not name this instance. | Trace executable gate call sites and require this detector’s completion token, 14-row count, and successful result. | confidence high
+
+F6 | regress/arm_strlen_probe.py:237 | #355 / #356 | RECORD | The comment says both reference rows necessarily pass after `STRLEN_CONTROL=OK`. The control requires only a positive cycle delta. For `_j=[0,1,0]`, it reports `OK`, while both the reference-band and end-address rows fail. | Evaluate lines 231 and 243–246 with that tuple. | confidence high
+
+F7 | regress/diff_rtc_range.c:147 | #429 | RECORD | The comparator discussion describes SH4 TMU coverage as “12 of 18.” At HEAD that sibling has 19 rows: twelve `row1` checks, six inline checks, and identity; `diff_sh4_tmu.c:532` explicitly requires 19. | Count those calls and inspect the sibling identity assertion. | confidence high
+
+F8 | regress/arm_bfx_width_probe.py:66 | c0c7f55d | RECORD | The header says instructions are planted at `0x10000`; `CODE` is `0x8000`, and both planting and execution use it. This is an address discrepancy, not line-number drift. | Compare the header with lines 114 and 195–197. | confidence high
+
+F9 | regress/arm_bfx_width_probe.py:269 | 01a0339a | RECORD | The comment assigns an “EXACTLY ZERO” pre-fix failure value to the SBFX rows collectively. `s mid` produces `0xffffffde` before and after the correction; only `s w32` has the described zero symptom. UBFX `w32` also has that symptom. | Evaluate the old width-eight mask and sign-extension expressions for `s mid`. | confidence high
+
+F10 | regress/sh4_sci_probe.py:83 | #451 | RECORD | J’s description says nothing else detects moving the shifter reset below the callee’s early returns. R3 also detects it: after `0x80`, the unreset counter prevents `0xb0` from reaching the command handler, leaving `["80"]` instead of the required `["80","b0"]`. | Trace R3’s two bytes against that reset relocation. | confidence high
+
+F11 | regress/sh4_sci_probe.py:100 | #451 | RECORD | The comment says matching `SCI: read` or `SCI: write` also matches decline lines containing `SCI: command byte ...`. Neither matches that input. The implemented transfer regex is sound; its stated justification is false. | Compare either literal with the emitted decline string. | confidence high
+
+F12 | regress/sh4_sci_probe.py:134 | #451 | RECORD | `drive()` documents a two-value return `(transfers, declines)`, but returns `(started, alive, transfers, declines)`. Its callers correctly unpack four values. | Compare the docstring with lines 144–145 and the first caller. | confidence high
+
+Checked clean, by static inspection:
+
+- regress/arm_strlen_probe.py:143 — Prompt recognition requires fresh output ending in `GXemul>`.
+- regress/arm_strlen_probe.py:231 — A dead control produces `0/0`; the gate independently requires `OK` and seven rows.
+- regress/arm_strlen_probe.py:258 — Cycle-delta bands reject the original unbounded walk’s zero delta.
+- regress/arm_strlen_probe.py:297 — Alias progress comes from the debugger; missing output becomes `unread`, which fails.
+- regress/diff_rtc_range.c:185 — High-bit inputs distinguish the original narrowing defect’s timer removal from retention.
+- regress/diff_rtc_range.c:213 — Zero explicitly requires timer removal.
+- regress/diff_rtc_range.c:260 — Update coverage checks both invocation and the independently reset captured frequency.
+- regress/diff_rtc_range.c:281 — The structural INT_MAX check constrains the shared constant; identity correctly requires 18 rows.
+- regress/arm_bfx_width_probe.py:139 — All eight encodings have correct fields; manual `_scratchpad/ddi0406.txt:30016` and `:36759`.
+- regress/arm_bfx_width_probe.py:190 — Missing register output becomes `absent`, failing numeric expectations.
+- regress/arm_bfx_width_probe.py:239 — Both full-width value rows independently reject the recorded pre-fix zero result.
+- regress/arm_bfx_width_probe.py:273 — Together, `s mid` and `s clear` distinguish required sign extension from unconditional extension.
+- regress/sh4_sci_probe.py:164 — R1 requires its named decline and rejects an unintended transfer.
+- regress/sh4_sci_probe.py:233 — N/N2 observe address preservation through a later write with independently chosen address/data.
+- regress/sh4_sci_probe.py:301 — Identity and aggregate scoring correctly account for 14 rows.
+- regress/sh4_tlbda2_probe.py:103 — All five load/store register fields decode correctly; manual `_scratchpad/sh4_programming.txt:5752` and `:5755`.
+- regress/sh4_tlbda2_probe.py:152 — R3/R3u assert array-1 preservation after rejected stores at both devices.
+- regress/sh4_tlbda2_probe.py:259 — A4i/A4u exercise all aligned low address bits against the separate acceptance predicates.
+
+DENOMINATOR: read 5 of 5 files in full

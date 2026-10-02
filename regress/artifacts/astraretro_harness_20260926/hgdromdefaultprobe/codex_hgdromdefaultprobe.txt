@@ -1,0 +1,60 @@
+ASTRARETRO_HGDROMDEFAULTPROBE_ALIVE
+
+VERDICT: 11 findings (2 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 8 RECORD, 0 OTHER); 28 items checked clean
+
+Static review at `db8b1a33`. Repository content came from git objects; nothing was written, built, or executed as a probe. The counterfactual results below are source traces.
+
+F1 | regress/gdrom_default_probe.py:324 | #461 | STATUS-LAUNDERED | A child killed after the final sampling window can leave `alive=True`. Cleanup discards `rd(0.6)`, and every session except the stale-command session ignores `how`. Thus the final acceptance session can return its expected transcript plus `how="sig9"` and still score all five acceptance rows green. Already filed as `probetimebased` in OUTSTANDING_BUGS.md:9216. | Smallest check: feed that transcript/status combination through the acceptance scoring and require the abnormal status to fail. | confidence high
+
+F2 | regress/gdrom_default_probe.py:1380 | #462 | CANNOT-FAIL | `accept dma` checks only `"Transfering"`. The session stages 408 bytes but leaves the guest length register zero. Correct code prints `Transfering 408 bytes`; restoring the old diagnostic operand prints `Transfering 0 bytes`. Both produce `yes`, and no other row checks that number. Already filed as `gdromacceptdmanum` in OUTSTANDING_BUGS.md:20390. | Smallest check: evaluate the assertion against those two diagnostic strings. | confidence high
+
+F3 | regress/gdrom_default_probe.py:1392 | #462 | CANNOT-FAIL | With a supplied `KERNEL` already containing byte `0x10` at `DMA_DST_P1`, `accept data` returns `0x10` both with and without the DMA copy. Only register `r4` is poisoned; destination memory is never initialized or checked. Keeping the diagnostic, event and idle updates also leaves the other acceptance rows green. | Smallest check: establish a destination byte different from `0x10` before comparing copy and omitted-copy outcomes. | confidence high
+
+F4 | regress/gdrom_default_probe.py:119 | #462 | RECORD | `gdromdmasilent` is listed as escaping, but `arm bytetrig` writes `0x5a`. Correct code clears the trigger and returns zero; narrowing the trigger condition to `idata == 1` leaves `0x5a` in the shadow, failing line 1096. Already filed as `gdromcontractresidual`, OUTSTANDING_BUGS.md:20549; the original `gdromdmasilent` entry at :9614 also marks this escape closed. | Smallest check: trace the byte trigger through the condition and shadow-store tail. | confidence high
+
+F5 | regress/gdrom_default_probe.py:229 | #462 | RECORD | The comment decodes historical `0x6313` as a postincrement memory load. It actually encodes `MOV R1,R3`; `MOV.L @R1+,R3` is `0x6316`. The active `0x6312` constant is correct. | Smallest check: decode against `_scratchpad/sh4_programming.txt:13662` and :13690, which specify low nibbles `0011` and `0110`, respectively. | confidence high
+
+F6 | regress/gdrom_default_probe.py:410 | #461 | RECORD | The CNTHI control is described as something “RAM cannot fake.” Ordinary RAM given this same halfword store/read sequence returns the expected `0x5a`, so this row alone cannot establish that device-specific behavior occurred. | Smallest check: substitute the existing `SCRATCH` address for both CNTHI addresses and trace the round trip. | confidence high
+
+F7 | regress/gdrom_default_probe.py:520 | #461 | RECORD | The comment says deleting the implemented arms would score full marks on every preceding row. The preceding `impl ok` row contradicts this: deleting CNTHI sends its read through default, returning `0x0` instead of expected `0x5a`. | Smallest check: trace line 411’s store/read pair with the CNTHI case absent. | confidence high
+
+F8 | regress/gdrom_default_probe.py:614 | #461 | RECORD | The comment claims `accept8` and `scan` share one implemented-offset tuple. `scan` never uses that tuple: it walks all 64 words and expects literal `56`. Changing `IMPLEMENTED_WORDS` changes `accept8` without changing the scan or its expectation. | Smallest check: enumerate `IMPLEMENTED_WORDS` references—only its definition at :207 and assignment at :616 exist. | confidence high
+
+F9 | regress/gdrom_default_probe.py:890 | #462 | RECORD | The `nodata survive` discussion says a 14-character name leaves zero spaces and silently stops being tested. The formatter’s literal separator leaves one space; the gate then gets zero matches against required one and fails loudly. | Smallest check: compare formatter :284 with gate_sh_rounding.sh:585–586. | confidence high
+
+F10 | regress/gdrom_default_probe.py:1378 | #462 | RECORD | The explanation says `Transfering` precedes the no-data check and therefore proves only arming. At HEAD, the null-data check is at dev_dreamcast_gdrom.c:1395, its decline breaks at :1472, and the diagnostic follows at :1497. Its presence also establishes that the no-data guard was passed. | Smallest check: inspect that source ordering. | confidence high
+
+F11 | regress/gdrom_default_probe.py:420 | c43ce978 | RECORD | The unqualified “today (all 58 rows always run)” count is stale. HEAD contains 52 literal row calls plus eight generated trigger rows: 60, matching the gate’s pin. | Smallest check: count those calls and compare gate_sh_rounding.sh:524. | confidence high
+
+Checked clean by source trace, subject to F1’s shared session-status defect. Probe line references below are all within `regress/gdrom_default_probe.py`.
+
+- :219 — Active load/store, ADD, BRA and NOP constants match the SH manual.
+- :281 — `row()` compares separately supplied actual and expected values.
+- :354 — Missing register output becomes `absent`, never an implicit zero.
+- :388 — RAM control requires a nonzero store/load round trip.
+- :395 — Device-dispatch control checks the IPRD reset signature.
+- :413 — CNTHI control detects deletion of that implemented case.
+- :424 — Empty control results cannot satisfy `all([])`.
+- :430 — Control-window and DMA-window diagnostic regexes match distinct source messages.
+- :436 — Default-arm trigger rows exercise addresses where the original code terminated.
+- :461 — Repetition, distinct offsets, directions and subword granularity have separate checks.
+- :523 — CNTLO readback and COND-to-BUSY behavior have concrete expected values.
+- :574 — The scan executes 64 accesses and requires exactly 56 default diagnostics.
+- :623 — Implemented control offsets and declined DATA’s `0xffff` response are checked.
+- :644 — DMA default accesses, distinct offsets, shadow storage and implemented offsets are exercised.
+- :683 — DMA alias checks distinguish byte writes, halfword writes and aliased reads.
+- :742 — Cross-window checks catch one-way sharing of the tested warning bitmap.
+- :828 — Arming readbacks distinguish missing clears and fresh-state-only clears.
+- :871 — Both decline classes execute together; repeated arming checks warning suppression.
+- :899 — No-data checks observe its diagnostic, idle readback and absence of a transfer announcement.
+- :944 — Both declined-transfer completion checks use bit 14 and poisoned readback registers.
+- :979 — Count and enable widening are tested independently.
+- :1019 — Second-trigger readbacks detect clears incorrectly restricted to first-warning execution.
+- :1064 — Nonzero length and byte/nonunit trigger cases have discriminating values.
+- :1163 — Failed-command setup reaches `(data=NULL, data_len=0)`; the old stale-length warrant is explicitly disclaimed.
+- :1224 — Decline regexes distinguish malformed packets from the accepted packet.
+- :1272 — `stale how` actually checks the captured exit status.
+- :1383 — Success idle, completion event and absence of decline diagnostics use separate observables.
+- :1396 — Score/vector reflect accumulated results; gate_sh_rounding.sh:515, :524 and :584 reject missing completion, wrong totals and missing named rows.
+
+DENOMINATOR: read 1 of 1 files in full

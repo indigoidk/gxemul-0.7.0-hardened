@@ -1,0 +1,53 @@
+ASTRARETRO_HBUNDLE_REGRESS32_ALIVE
+VERDICT: 14 findings (4 CANNOT-FAIL, 0 SELECTS-NOTHING, 2 STATUS-LAUNDERED, 0 ENCODING, 5 RECORD, 3 OTHER); 16 items checked clean
+
+Reviewed HEAD `db8b1a33` only. No writes, builds, or probe executions. No matching existing filings were found in HEAD’s `OUTSTANDING_BUGS.md` for the findings below.
+
+F1 | regress/gate_mips_rounding.sh:116 | #309 / 622a90a7 | CANNOT-FAIL | Both BGEZ controls accept fall-through as branching. `mips_subnorm_probe.py:258` constructs consecutive stores of `11111111` and `22222222` to the same address, then steps ten instructions. A functioning BGEZ skips the first store; a NOP executes both. Both leave `22222222`, reported as `branched`. | Trace the ten instructions with and without the branch: the final store overwrites the fall-through evidence. | confidence high
+
+F2 | regress/gate_mips_rounding.sh:70 | #301 / 4453ff2a | CANNOT-FAIL | Two advertised revert discriminators pass without #301: `2^54+7 RP` and `-(2^54+7) RM`. Double spacing here is four, so host-nearest and the requested directed rounding both produce respectively `2^54+8` and `-(2^54+8)`: bits `4350000000000002` and `c350000000000002`, exactly the expectations. Other rows still detect the revert. | Compare each operand’s distances from its adjacent representable doubles. | confidence high
+
+F3 | regress/selftest_inactivity.py:136 | #467 / 29b450ce | CANNOT-FAIL | Both “keeps the #467 reset” checks accept production code with its clock reset removed. They search only for `seen = len(self.buf)` and `if len(self.buf) != seen:`, never the resetting assignment. Behavioral checks exercise a separate local implementation. Under normal scheduling, both intact and reset-deleted production code therefore yield `SELFTEST_INACTIVITY_PASS`. | Evaluate these regexes after omitting the production reset; neither predicate changes. | confidence high
+
+F4 | regress/sh4_tlbda2_witness.py:119 | #452 / 927553fa | CANNOT-FAIL | S3 cannot distinguish a killing STORE from a surviving STORE followed by a killing LOAD. `write_then_read()` executes both before observing death. The original STORE-kills state and a partially corrected STORE-survives/LOAD-kills state both produce the expected diagnostic and `alive=False`, so both score the STORE witness green. | Trace `write_then_read()` at line 80; observe the outcome after its first instruction to isolate the STORE. | confidence high
+
+F5 | regress/sh4_val_witness.py:118; regress/sh4_tlbda2_witness.py:114 | #447 / #452 | STATUS-LAUNDERED | A session that starts, prints the expected diagnostic, and then hangs passes the “KILLS the host” row. Shared `sh4_pcic_probe.session()` leaves `alive=False` after unanswered dump timeouts, then kills and reaps the process without checking its termination status. These witnesses credit that result as observed guest-caused death; startup checks do not distinguish it. | Trace a started, diagnostic-emitting session with no subsequent replies: require observed termination before cleanup. | confidence high
+
+F6 | regress/selftest_budget.py:102 | #425 / a20ebc5a | STATUS-LAUNDERED | The wrapper’s exit status is discarded. A driver exception after printing `REASON`, `NINSTRS`, and `BUDGET` can still satisfy every selftest row. Those keys precede cleanup and final reporting; for example, failure reopening the log at `drive_guest.py:578` produces a nonzero wrapper exit that this caller ignores. | Check a wrapper result containing the expected keys followed by an exception; require successful wrapper completion. | confidence high
+
+F7 | regress/selftest_inactivity.py:117 | #467 / 29b450ce | OTHER | The expected-success leg has a real 120 ms deadline. Descheduling the selftest for longer than that between the reset at line 101 and the loop condition at line 96 makes the healthy progressing fixture fail before its next read. The test therefore has the host-load dependency its header denies. | Trace those clock calls with a 130 ms scheduling gap and pending chunks. | confidence high
+
+F8 | regress/selftest_budget.py:112 | 48b36b00 | OTHER | An absent image directory produces `SELFTEST_BUDGET_SKIP`, but `gate_offline.sh:106–115` does not handle that outcome. Its five assertions fail on the missing count, PASS token, row floor, and two named legs. The attempted image-free offline accommodation therefore still makes the actual gate fail. | Evaluate those five assertions against the exact two-line SKIP output. | confidence high
+
+F9 | regress/m8820x_sites_probe.py:99 | f1f6deec | OTHER | `send()` accepts a timeout but never forwards it to `wait()`. The explicit 30-second limits for stepping and register readback at lines 119 and 122 therefore use the default 60 seconds. A stalled operation exceeds its requested limit. | Follow `timeout=30` from either caller through `send()` to `wait()`; the argument is dropped. | confidence high
+
+F10 | regress/selftest_mutation_295.sh:16 | #377 / bc42b2ad | RECORD | The header says trunc controls “CANNOT flip by construction.” HEAD includes a trunc mutant and explicitly requires both trunc rows to flip: line 99 expects `t35rp=00000004` and `tn35rm=fffffffc`. | Compare the header with `MUTANTS`, `flip_rows()`, and the required FAIL records at line 149. | confidence high
+
+F11 | regress/gate_mips_rounding.sh:95 | #309 / 622a90a7 | RECORD | “Both rigs run every row” is false for the REGIMM coverage being described. The `rt=0x1e` row runs only on pmax; neither the gate list nor `mips_subnorm_probe.py:352` has an arc counterpart. | Enumerate `REGIMM_ROWS`: pmax `0x15`, arc `0x15`, pmax `0x1e`. | confidence high
+
+F12 | regress/gate_mips_rounding.sh:123 | #376 / a3bb9191 | RECORD | The claim that replacing forced rounding with FCSR rounding equals correct behavior under default RM=0 overgeneralizes from `round` to `ceil` and `floor`. With default nearest-even, `ceil.w.d(2.1)` returns 2 instead of 3, and `floor.w.d(2.9)` returns 3 instead of 2. | Compare RN against the forced RP/RM constants for those operands. | confidence high
+
+F13 | regress/m8820x_sites_probe.py:158 | #433 / 9494c6a3 | RECORD | The printed note labels command `0x34`, `FLUSH_SUPER_LINE`, “unhandled.” HEAD explicitly handles it at `dev_m8820x.c:138`; its gate also requires that command to survive silently. | Compare this note with the command switch and `gate_m88k_rounding.sh:265`. | confidence high
+
+F14 | regress/gate_mips_folds.sh:15 | #388 / 4ee174d5 | RECORD | The unqualified `fire == passes-1` rule does not describe every gated fold row. With `PASSES=5`, the device-bail row expects fire 0 and `memset_3max` expects fire 1. The probe documents both exceptions; the gate’s actual expectations are sound. | Compare this header with the probe’s device-bail and memset expectations. | confidence high
+
+Checked clean:
+
+- `regress/gate_mips_rounding.sh:48` — Missing completion summaries explicitly fail all three sections.
+- `regress/gate_mips_rounding.sh:65` — Totals are independently pinned to 11, 9, and 28.
+- `regress/gate_mips_rounding.sh:158` — Both rigs require mode-write controls and all 28 individually named fixed-mode PASS records.
+- `regress/selftest_mutation_295.sh:51` — Setup rejects a build-tree source differing from the repository source.
+- `regress/selftest_mutation_295.sh:124` — Missing or duplicate mutation anchors and unsuccessful replacement abort setup.
+- `regress/selftest_mutation_295.sh:149` — Acceptance requires predicted changed values and unaffected PASS rows; an arbitrary crash cannot satisfy the matrix.
+- `regress/m8820x_sites_probe.py:77` — Readiness requires a fresh response containing the command echo and ending in the debugger prompt.
+- `regress/m8820x_sites_probe.py:152` — The IDR observation is independently checked for `0x00a90000` by its consuming gate.
+- `regress/sh4_val_witness.py:94` — Device-signature controls require startup, liveness, and distinct nonzero values; missing data fails.
+- `regress/sh4_val_witness.py:124` — Surviving controls match each stimulus’s address and width with accepted values.
+- `regress/sh4_tlbda2_witness.py:130` — Readback controls compare against independent literal mask expectations; zero, poison, and RAM echo fail.
+- `regress/sh4_tlbda2_witness.py:145` — Failed startup is rejected, seven rows are independently required, and failures produce nonzero status.
+- `regress/gate_mips_folds.sh:79` — Framebuffer grading checks unique complete records, process status, fixed totals, emitted-row reconciliation, and duplicate names.
+- `regress/gate_mips_folds.sh:138` — All fourteen fold names fit the padded column and must match once; control and `14/14` are also required.
+- `regress/selftest_budget.py:123` — The shipped driver’s printed budget is pinned independently; over/under legs check meaningful stop outcomes.
+- `regress/selftest_inactivity.py:55` — Failed comparisons and unreadable target files increment failures; the final verdict and exit status follow them.
+
+DENOMINATOR: read 8 of 8 files in full

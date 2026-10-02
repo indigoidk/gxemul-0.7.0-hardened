@@ -1,0 +1,30 @@
+ASTRARETRO_BUNDLE_DEVICES4_ALIVE
+
+VERDICT: 3 findings (2 CODE live at HEAD, 1 RECORD, 0 TEST-GAP); 14 items checked clean
+
+Committed HEAD `8ea26abb` only. Static review; no files written, builds performed, or probes executed.
+
+F1 | src/devices/dev_sgi_gbe.c:281 | upstream, relied on by #80 | CODE | live at HEAD: yes | With graphical scanout active, a partial-only tile fills fewer than 512 bytes of `buf`, but conversion still reads through byte 511. The first such line consumes uninitialized tail bytes. `fb_len` excludes those converted pixels from the output, so this establishes uninitialized consumption, not guest disclosure. Already filed as **`sgigbeconvover`**, [OUTSTANDING_BUGS.md:15941](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:15941). | Smallest check: compare the automatic buffer at :170, DMA length at :259–264, and conversion bound at :281. | confidence high
+
+F2 | src/devices/dev_mp.c:113 | #221 / de1398e1 | CODE | live at HEAD: yes | On an ARM test machine, setting `startupstack` and then requesting `startupcpu` starts the selected CPU with its previous stack pointer. The new continuation reaches `running = true` without applying `d->stack_addr`. This contradicts the device contract in [doc/experiments.html:279](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/experiments.html:279). No matching outstanding filing found. | Smallest check: a device unit test asserting that the selected ARM CPU’s SP equals the configured startup stack after startup. | confidence high
+
+F3 | CHANGELOG.md:21715 | #80 / 8dd86b5a | RECORD | live at HEAD: yes | The recorded premise says partial-tile DMA byte length can exceed `fb_buf[512*3]`. The decoded maximum is **992 bytes**, while that buffer holds **1536 bytes**. The original over-read concerned the converted copy length, which could reach **2976 bytes**. The inline comment at `dev_sgi_gbe.c:260` also incorrectly calls `fb_buf` “512 bytes/line.” | Smallest check: compare field decoding at :569/:592–594, `fb_len` at :267, and the buffer declaration at :279. | confidence high
+
+Checked clean at HEAD:
+
+- `src/devices/dev_sgi_gbe.c:133` — #196 initializes all three channels to black without exiting or logging per pixel.
+- `src/devices/dev_sgi_gbe.c:711` — #79 bounds the selected-palette cache index; full-palette indexes are also bounded.
+- `src/devices/dev_sgi_gbe.c:260` — #80 bounds the framebuffer copy for main and overlay scanout at every decoded depth.
+- `src/devices/dev_dreamcast_g2.c:90` — #87 allocates separate banks and uses the same bounded bank/index selection for reads and writes.
+- `src/devices/dev_dreamcast_maple.c:472` — #53 protects both device-pointer dereferences; the descriptor’s port byte really can exceed three.
+- `src/devices/dev_dreamcast_maple.c:567` — #528 returns the stored DMA address quietly; `regress/maple_dmaaddr_probe.py` observes the claimed behavior.
+- `src/devices/dev_mp.c:96` — #33 checks the same CPU index subsequently dereferenced; the UNPAUSE sibling is also bounded.
+- `src/devices/dev_sii.c:197` — #202 bounds the actual register backing object for reads and writes, with alignment checked first.
+- `src/devices/dev_pmagja.c:107` — #78/#94 check each pixel, discard invalid writes, and zero invalid read bytes across boundary-spanning accesses.
+- `src/devices/dev_pmagja.c:108` — #119 warns once while preserving the skip/zero behavior.
+- `src/devices/dev_mb8696x.c:187` — #54 confines both EEPROM byte indexes to the 32-byte array.
+- `src/devices/dev_ps2_stuff.c:264` — #198 masks the correct QWC field before multiplication; maximum length fits `int`.
+- `src/devices/dev_ram.c:214` — #208 recognizes `MAP_FAILED` and reaches the initialized malloc fallback.
+- `src/devices/dev_gc.c:229` — Both low and high interrupt-mask shifts use unsigned operands with shift counts limited to 0–31.
+
+DENOMINATOR: read 17 of 17 hunks of the net diff

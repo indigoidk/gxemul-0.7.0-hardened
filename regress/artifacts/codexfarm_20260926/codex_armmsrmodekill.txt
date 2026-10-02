@@ -1,0 +1,114 @@
+VERDICT: Add the MP signature, run the unmodified-HEAD witness, then fix both defaults with one atomic member-3 decline
+
+Authority: I read committed HEAD `8ea26abb421a80231317bebb3f364025945f33f8` with `git show HEAD:<path>`. `cpu_arm.c`, `cpu_arm_instr.c`, `cpu_arm_instr_dpi.c`, `cpu_arm.h`, and `OUTSTANDING_BUGS.md` match HEAD. The working `tools/pipeline/ledger.json` is modified elsewhere, but its parsed `armmsrmodekill` object equals HEAD, so I cite HEAD. `regress/gate_arm.sh` is also modified; all gate citations below are HEAD. `regress/arm_msrmode_probe.py` and `regress/artifacts/armmsrmodekill/` are untracked working-tree material and absent from HEAD. I changed and built nothing.
+
+I read all three queue occurrences, latest last: the principal row at `HEAD:OUTSTANDING_BUGS.md:20273-20387`, the `ip30abortkill` comparison at `:20646-20692`, and `highrankunmeasured` at `:20934-20967`; plus the complete ledger object at `HEAD:tools/pipeline/ledger.json:47368-47468`.
+
+## 1. Code paths and independently derived site count
+
+Direct one-instruction path to Load:
+
+1. `testarm` selects SA1110 and initializes the test machine at `HEAD:src/machines/machine_test.c:187-215`. ARM CPU creation installs `arm_run_instr` and sets `CPSR = I|F|SVC32`, hence boot CPSR `0xd3`, at `HEAD:src/cpus/cpu_arm.c:112-137`.
+2. Dyntrans single-step executes one translated call at `HEAD:src/cpus/cpu_dyntrans.c:272-325`; ARM includes its decoder and runner at `HEAD:src/cpus/tmp_arm_tail.c:63-67`.
+3. `0xE321F014` is fetched at `HEAD:src/cpus/cpu_arm_instr.c:4019-4063`, recognized as immediate CPSR MSR at `:4294-4313`, decoded to immediate `0x14` and c-field mask `0xff` at `:4314-4328`.
+4. `X(msr_imm)` at `:822-848` does not apply the USR-only mask because current mode is SVC32 (`:826-828`). Since `0x13 != 0x14`, it:
+   - calls Save before changing CPSR, `:830-839`;
+   - writes the unvalidated new control byte, including mode `0x14`, `:841-844`;
+   - calls Load, `:846-847`.
+5. Save sees old SVC32 and succeeds through `HEAD:src/cpus/cpu_arm.c:541-546`. Load sees `0x14`, matches none of its seven cases, and reaches `fatal()+exit(1)` at `:606-608`. The message prints decimal `20`.
+
+The second path also survives source review: `MSR SPSR_c,#0x14` writes unvalidated `spsr_svc` at `HEAD:src/cpus/cpu_arm_instr.c:856-880`; then either:
+
+- `MOVS pc,...` saves SVC, copies SPSR to CPSR, and loads at `HEAD:src/cpus/cpu_arm_instr_dpi.c:207-232`; or
+- `LDM {...,pc}^` does the equivalent at `HEAD:src/cpus/cpu_arm_instr.c:1780-1812`.
+
+Both reach Load’s same default.
+
+Independent count: a HEAD search finds exactly two named fatal sites:
+
+- Save default: `HEAD:src/cpus/cpu_arm.c:559-561`.
+- Load default: `HEAD:src/cpus/cpu_arm.c:606-608`.
+
+Each switch implements seven M[4:0] values; the constants are at `HEAD:src/include/cpu_arm.h:103-114`. Thus 7 of 32 encodings are handled and 25 enter a default. The row’s static count of two sites still holds exactly at HEAD.
+
+Dynamic nuance: only Load is first-hit guest-reachable on unmodified HEAD. Every transition saves the old mode before installing the new one. Load exits before a reserved current mode can survive. Save’s default becomes reachable only after a Load-only repair lets `0x14` survive: a subsequent `MSR ...,#0x13` calls Save on current `0x14` at `cpu_arm_instr.c:838-839`, or the next exception calls it at `cpu_arm.c:669`. Therefore the repair count is two, but the present first-hit count is one.
+
+## 2. Architectural behavior
+
+`ls C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\*.txt` returned 428 files. Manual-like entries included `21066_66a_hrm.txt`, `ata2_x3t10_948d.txt`, `dc21285.txt`, `ddi0100i.txt`, `ddi0406.txt`, `i8254.txt`, `idt_r30xx.txt`, `mc88100.txt`, the MIPS and PPC books, `sh4_manual.txt`, `sh4_programming.txt`, `sh7750_hardware.txt`, and `vmesbcp2.txt`. Only the two ARM architecture manuals cover this behavior; `dc21285.txt` is a companion-chip document, not a CPSR specification.
+
+Read from the manuals:
+
+- `C:\DocumentNoSnc\cc\GXEMUL\_scratchpad\ddi0100i.txt:1861-1879` lists exactly the seven valid 32-bit modes and declares any other M[4:0] UNPREDICTABLE.
+- Its MSR description identifies the c field at `:9523-9567`, says “Exceptions: None” at `:9577-9578`, and specifically calls writing a reserved mode UNPREDICTABLE at `:9690-9693`.
+- Its glossary says UNPREDICTABLE behavior must not halt or hang the processor or any part of the system at `:45062-45065`. Ending the emulator process is therefore unsupported.
+- ARMv7’s later manual independently says changing CPSR.M to a value that is not a processor mode is UNPREDICTABLE at `ddi0406.txt:102530-102537`, and applies that rule to immediate MSR at `:103921-103930`.
+
+The architecture does not prescribe one deterministic replacement result. A no-op/decline is permitted, but not uniquely required. Moreover, the later glossary explicitly permits implementing an UNPREDICTABLE instruction as UNDEFINED at `ddi0406.txt:143206-143216`. Thus the row’s categorical claim that hardware cannot take an Undefined Instruction exception is too broad; what the documentation establishes firmly is that killing the emulator/system is wrong.
+
+## 3. Options for both sites
+
+The tree’s seven-member menu is recorded at `HEAD:tools/CLAUDE.md:1889-1939`.
+
+| Option | Existing HEAD precedent | Application to Load `:606` and Save `:559` |
+|---|---|---|
+| 1. Delete | A former page-crossing halt was deleted after the common memory layer implemented the operation: `src/cpus/cpu_ppc_instr_loadstore.c:63-85`. | Wrong here. At Load, CPSR is already `0x14` while `r[]` still represents the previous bank. Blind deletion preserves inconsistent state. It also exposes Save later. |
+| 2. Silent decline | An out-of-range MP CPU selector silently `break`s without indexing or mutation: `src/devices/dev_mp.c:92-97`. | Architecturally possible only if the invalid transition is detected before mutation or completely rolled back. Replacing either local `exit` with `return` is not a complete fix and loses diagnosis. |
+| 3. Decline + latched announce | Invalid framebuffer selectors keep the previous valid selector and announce once: `src/devices/dev_fbctrl.c:120-135`. | Best-supported policy. Retain the old valid mode/bank, accept any independently lawful non-mode bits, and emit one per-CPU `(once)` diagnostic shared by the two defaults. |
+| 4. Accept | Footbridge’s documented IRQ-enable read keeps the already-correct computed value after deleting the kill: `src/devices/dev_footbridge.c:593-608`. | Inapplicable: no correct bank exists for reserved mode `0x14`. |
+| 5. Fault | `dev_unreadable` returns failure to request an architectural access fault: `src/devices/dev_unreadable.c:28-44`; ARM also has an UND route. | Possible under the newer UNPREDICTABLE definition, so the row overstates its impossibility. Still weaker for this SA1110/MSR target than decline: DDI0100I lists no MSR exception, and UND adds guest-visible behavior unnecessarily. |
+| 6. Backed accept | Generic SGI DE/MTE registers are given backing storage: `src/devices/dev_sgi_re.c:1164-1180,1698-1717`. | Unsupported: it would invent register banks/semantics for reserved encodings. |
+| 7. Implement | Architected missing behavior is implemented for the SH TLB-multiple-hit path: `src/cpus/cpu_sh.c:966-1021`. | Inapplicable to reserved `0x14`; there is no reserved-mode architecture to implement. Genuine 26-bit, Monitor, or Hyp support would be separate work. |
+
+Evidence therefore supports member 3 for both sites, implemented as an atomic transition check shared by direct MSR and SPSR-return paths. A guard only inside `X(msr_imm)` would miss `MOVS pc` and `LDM ...pc^`. Both helper defaults should also become defensive and nonfatal, but the primary refusal must occur before CPSR and bank state diverge.
+
+## 4. Existing probes, gates, and affected behavior
+
+Committed HEAD has no `regress/arm_msrmode_probe.py`, no `regress/artifacts/armmsrmodekill/`, and no committed reserved-mode literal.
+
+What does touch the helpers:
+
+- `arm_flags_probe.py:948-974,1208-1219` exercises a legal SVC32→UND32 exception transition. `HEAD:regress/gate_arm.sh:97-126` gates its 190 rows.
+- `xscale_inten_probe.py:542-595` contains the only committed planted MSR: `mrs; bic #0x80; msr cpsr_c,r5` at `:549-552`. It preserves M[4:0], then exercises legal SVC32→IRQ32 delivery. Its 30 rows are gated at `gate_arm.sh:1829-1864`.
+- `arm_bdt_probe.py:347` exercises `LDM ...^` without PC; it does not take the SPSR-return branch. Its 43 rows are gated at `gate_arm.sh:686-732`.
+- `gate_hygiene.sh:373-435` explicitly names `arm_msrmode_probe.py` as an untracked, grandfathered probe and warns that a fresh clone lacks it.
+
+The untracked working probe has 17 scored rows and expects exactly `kill 14`, `kill 15`, and `save 2s` red on HEAD (`WORKTREE:regress/arm_msrmode_probe.py:307-342,390-421`). It was reportedly repaired after three parser/slot defects but has never been run. It has liveness and SVC-arming controls at `:277-295`, but no MP/device-signature control.
+
+A fix can disturb every legal bank transition above. It must not:
+
+- reject legal mode writes;
+- turn the valid same-mode xscale I-bit write into a refusal;
+- alter SVC→IRQ/UND exception entry;
+- fix only direct MSR while leaving SPSR returns fatal;
+- commit the currently untracked probe without reconciling hygiene counts and gate wiring.
+
+## 5. Minimal witness and controls
+
+Use a binary built from unmodified HEAD with the existing cold-debugger vehicle:
+
+`-V -A -E testarm -M 64`
+
+Use fresh processes for each control and the killing row.
+
+- Liveness control: seed a RAM destination, execute guest `mov r0,#0x2a; str r0,[r4]`, step exactly two instructions, and require RAM=`0x2a` plus PC advanced by eight. Existing precedent is `HEAD:regress/arm_bfx_width_probe.py:193-222`.
+- Device-signature control: set a base register to `0x11000000`; guest-execute `ldr r0,[base,#0x10]` and publish it to RAM. Require the configured CPU count, normally `1`, not merely survival or zero. `testarm` installs MP at `HEAD:src/machines/machine_test.c:148-152`; its base/NCPUS offset are `src/include/testmachine/dev_mp.h:22-31`; the handler returns `machine->ncpus` at `src/devices/dev_mp.c:84-90`.
+- Privilege control: guest `MRS` and store CPSR and SP. For 64 MB testarm, require CPSR `0xd3` and SP `0x03fff000`, derived from `cpu_arm.c:127-137` and `machine_test.c:198-199`.
+- Defect stimulus: in a fresh session, plant and re-dump `0xE321F014` at an aligned RAM PC, set PC there, and `step 1`. That single guest instruction is the minimum sequence. On unmodified HEAD, EOF/dead process is the red condition; `arm_load_register_bank: unimplemented mode 20` is attribution, not half of the death oracle.
+
+Stay on `step`; never `continue`. `#0x14` clears I/F in this emulator, but ARM IRQ dispatch is suppressed during single-step at `HEAD:src/cpus/cpu_dyntrans.c:204-209`. Free-running after an invalid mode landed could take an interrupt and reach Save asynchronously.
+
+## 6. Superseded or contradicted row text
+
+- The source defect is not fixed: both defaults remain at exactly `cpu_arm.c:559-561` and `:606-608`; neither cited line moved.
+- The initial claim that `MSR CPSR_c,#0` might fake-green is corrected by the row itself at `OUTSTANDING_BUGS.md:20303-20324`: mode zero also kills, but tests the separate unimplemented 26-bit hole.
+- The original 16-row/12-session plan is superseded by 17 rows over 13 sessions, moving from 14/17 to 17/17 after repair. Ledger: `HEAD:tools/pipeline/ledger.json:47431-47447`.
+- “Two reds because two defaults” is false. `kill 14` and `kill 15` both reach Load; Save needs the separate two-write `save 2s` row.
+- EOF-plus-exact-text is superseded: EOF alone must be red; diagnostic text only attributes the death. Ledger: `:47395-47402`.
+- “Already USR32” is not the relevant fake-green. The actual mechanisms are an unplanted/wrong encoding, c-bit off, or the MSR never being stepped. Ledger: `:47422-47438`.
+- `highrankunmeasured` says to run the ARM probe to determine ordering (`OUTSTANDING_BUGS.md:20952-20959`). The later ledger reachability audit supersedes that ranking question: correct kernels do not program reserved modes, so `ip30abortkill` goes first, while this remains a real hostile/buggy privileged-guest process kill (`ledger.json:47449-47456`).
+- “Probe BUILT and UNRUN” is true only of this working directory. It is false as a committed-tree statement: the probe and artifacts are untracked, while the ledger still has `witness:null` and `commits:[]` at `:47368-47375`.
+- The row’s claim that hardware cannot take an undefined exception is too categorical in light of DDI0406’s explicit permission to implement UNPREDICTABLE as UNDEFINED. Its central conclusion—host/process termination is unacceptable—still stands.
+- The substantive gate-blindness claim still holds: committed root probes contain no `0xE321F014` or reserved-mode row. I would not reuse the historical “358 real-decode checks” literal without separately re-deriving today’s whole gate population.
+
+Read facts are the cited HEAD code, queue/ledger history, manual text, git tracking state, and committed regress contents. Inferred conclusions are Save’s dominance behind Load, the need for a shared atomic transition validator, the MP signature’s expected configured count, and the recommendation to run/preserve the witness before fixing.

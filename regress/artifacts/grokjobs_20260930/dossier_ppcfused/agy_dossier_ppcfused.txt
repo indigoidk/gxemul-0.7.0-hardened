@@ -1,0 +1,170 @@
+GROKJOBS_DOSSIER_PPCFUSED_ALIVE
+VERDICT: 0 false or unsupported sentences
+
+---
+
+### Audit of Factual Claims
+
+Every factual sentence across sections 1 through 7 and the denominator of `C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_ppcfused\codex_dossier_ppcfused.txt` was audited against the committed source tree at `db8b1a33`, the hardware manuals in `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\`, and `OUTSTANDING_BUGS.md` at `db8b1a33`.
+
+No false or unsupported sentences were found in the dossier. A systematic summary of evidence verifying each section follows:
+
+1. **Item 1: Instruction fetch $\to$ missing decode $\to$ CPU stop**
+   - **Instruction forms & encodings**: Architectural extended opcode selectors for opcode 59 are listed in `_scratchpad/ppc_uisa_book1_v201.txt:11755` (`fmsubs` = 28), `:11757` (`fmadds` = 29), `:11759` (`fnmsubs` = 30), `:11761` (`fnmadds` = 31). Header `src/include/opcodes_ppc.h:231–236` defines `PPC_HI6_59` as `0x3b`, `PPC_59_FDIVS` as `18`, `PPC_59_FSUBS` as `20`, `PPC_59_FADDS` as `21`, `PPC_59_FMULS` as `25`, and `PPC_59_FMADDS` as `29`, but defines no opcode-59 symbols for selectors `28`, `30`, or `31`.
+   - **Execution path**:
+     - Step 1: Instruction address derivation and alignment at `src/cpus/cpu_ppc_instr.c:4083–4090`.
+     - Step 2: Fetch via cached page (`memcpy` at `src/cpus/cpu_ppc_instr.c:4112`) or `cpu->memory_rw()` at `:4115–4116`; uncached fetch failure terminates the host via `fatal()` and `exit(1)` at `:4117–4119`.
+     - Step 3: Instruction extraction `iword = *p; iword = BE32_TO_HOST(iword);` at `src/cpus/cpu_ppc_instr.c:4125–4127`.
+     - Step 4: Dyntrans head breakpoint evaluation at `src/cpus/cpu_ppc_instr.c:4130–4132` and `src/cpus/cpu_dyntrans.c:1799–1848`.
+     - Step 5: Primary opcode selection `main_opcode = iword >> 26; switch (main_opcode)` at `src/cpus/cpu_ppc_instr.c:4139–4141` enters `case PPC_HI6_59:` at `:5176`.
+     - Step 6: Extended opcode extraction `xo = (iword >> 1) & 1023; rc = iword & 1; rc_f = NULL; switch (xo & 31)` at `src/cpus/cpu_ppc_instr.c:5177–5197`.
+     - Step 7: Five-bit switch cases at `src/cpus/cpu_ppc_instr.c:5198–5215` handle only selectors `18`, `20`, `21`, `25`. Selectors `28`, `29`, `30`, `31` hit `default:` at `:5216`, fall through to the ten-bit `switch (xo)` at `:5217`, and hit `default: goto bad;` at `:5218`. Both Rc values take this path prior to the record check at `:5221–5226`.
+     - Step 8: `bad:` in `src/cpus/cpu_dyntrans.c:1983–2024` sets `ic->f = TO_BE_TRANSLATED` (line 1988), returns if `cpu->translation_readahead` is set (lines 1990–1991), and on execution logs `"UNIMPLEMENTED instruction at..."` (lines 2005–2009), sets `cpu->running = 0` (line 2014), calls `debugger_reset()` (line 2021), and points execution to `&nothing_call` (line 2023).
+   - **Progress failure & records**: Halting without host exit or architectural exception delivery is verified by `src/cpus/cpu_dyntrans.c:1994–2024`. Single negative forms are absent from `regress/ppc_halt_probe.py:229–280` and the pending enumeration in `OUTSTANDING_BUGS.md:1705–1716`.
+
+2. **Item 2: Reachability**
+   - **Privilege & MSR[FP]**: Opcode-59 arm has no privilege or CPU-mode guards (`src/cpus/cpu_ppc_instr.c:5176–5227`). The `MSR[FP]` check resides inside the macro `CHECK_FOR_FPU_EXCEPTION` (`src/cpus/cpu_ppc_instr.c:216–225`), which is evaluated during instruction execution, never reaching decode fallback at `:5218`.
+   - **Configured CPUs**: The 11 CPU models enumerated in `src/include/cpu_ppc.h:75–88` are explicitly `PPC405GP`, `PPC601`, `PPC603`, `PPC603e`, `PPC604`, `PPC620`, `MPC7400`, `MPC7455`, `PPC750`, `G4e`, `PPC970`. Both 32-bit (`ppc32_run_instr`) and 64-bit (`ppc_run_instr`) modes include `cpu_ppc_instr.c` (`src/cpus/cpu_ppc.c:76–99`, `:120–135`; `src/cpus/tmp_ppc_tail.c:63–77`, `:118–124`). `PPC_NOFP` appears only in its define (`src/include/cpu_ppc.h:63`) and `PPC405GP`'s table entry (`:76`), and is never checked by the decoder or runner.
+   - **Machine defaults**: All 12 machine/subtype CPU defaults cited match committed source:
+     - `macppc/g3` $\to$ `PPC750` (`src/machines/machine_macppc.c:173–174`, `:201–202`)
+     - `macppc/g4` $\to$ `MPC7400` (`src/machines/machine_macppc.c:176–177`, `:204–205`)
+     - `macppc/g4plus` $\to$ `MPC7455` (`src/machines/machine_macppc.c:179–180`, `:207–208`)
+     - `macppc/g5` $\to$ `PPC970` (`src/machines/machine_macppc.c:182–183`, `:210–211`)
+     - `mvmeppc/mvme1600` $\to$ `PPC603e` (`src/machines/machine_mvmeppc.c:165–167`, `:197–198`)
+     - `mvmeppc/mvme2100` $\to$ `PPC603e` (`src/machines/machine_mvmeppc.c:170–171`, `:200–201`)
+     - `mvmeppc/mvme5500` $\to$ `PPC750` (`src/machines/machine_mvmeppc.c:174–175`, `:203–204`)
+     - `pmppc` $\to$ `PPC750` (`src/machines/machine_pmppc.c:76–79`, `:82–87`)
+     - `prep/ibm6050, ibm6070` $\to$ `PPC604` (`src/machines/machine_prep.c:156–157`, `:184–185`)
+     - `prep/mvme2400` $\to$ `PPC750` (`src/machines/machine_prep.c:160–161`, `:187–188`)
+     - `bareppc` $\to$ `PPC970` (`src/machines/machine_test.c:448–450`, `:460–465`)
+     - `testppc` $\to$ `PPC970` (`src/machines/machine_test.c:454–456`, `:468–473`)
+     - Explicit CPU override bypasses defaults via `if (m->cpu_name != NULL) return;` at `src/machines/machine.c:666–667`.
+
+3. **Item 3: Hardware specifications**
+   - UISA designation and base user-level problem-state definition confirmed at `_scratchpad/ppc_pem32_rev2_2001.txt:1512–1522`, `:19633`, `:19845`, `:20269`, `:20439`.
+   - Fused arithmetic without intermediate rounding confirmed at `_scratchpad/ppc_uisa_book1_v201.txt:6427–6431`.
+   - `fmadds` formula $frA \times frC + frB$ and single-precision rounding under FPSCR[RN] confirmed at `_scratchpad/ppc_pem32_rev2_2001.txt:19613–19615`; `fmsubs` ($frA \times frC - frB$) at `:19825–19827`.
+   - `fnmadds` and `fnmsubs` round-then-negate requirement, QNaN propagation rules, zero sign for generated QNaN, and SNaN quieted sign preservation confirmed at `_scratchpad/ppc_pem32_rev2_2001.txt:20246`, `:20249–20251`, `:20416`, `:20419–20421`.
+   - FPSCR rounding modes 00, 01, 10, 11 confirmed at `_scratchpad/ppc_uisa_book1_v201.txt:5040–5043`. Single-format in double FPR and input representability requirement confirmed at `:4884–4890`, `:5268–5276`.
+   - CR Field 1 bits 4:7 copied from FPSCR bits 0:3 (**FX, FEX, VX, OX**) for Rc=1 confirmed at `_scratchpad/ppc_uisa_book1_v201.txt:1345–1368`.
+   - Listed affected FPSCR fields (**FPRF, FR, FI, FX, OX, UX, XX, VXSNAN, VXISI, VXIMZ**) confirmed at `_scratchpad/ppc_pem32_rev2_2001.txt:19617–19629`, `:19829–19841`, `:20253–20265`, `:20423–20435`.
+   - Floating-point unavailable exception at offset `0x00800` when `MSR[FP]=0` confirmed at `_scratchpad/ppc_pem32_rev2_2001.txt:12057`, `:12084`.
+
+4. **Item 4: Siblings in affected source files**
+   - Diagnostic nature of `fatal()` confirmed at `src/core/debugmsg.c:384–391`.
+   - Single shared stop `cpu_dyntrans.c:2014` confirmed at `OUTSTANDING_BUGS.md:21163–21165`.
+   - All 24 decoder sibling sites in `src/cpus/cpu_ppc_instr.c` verified:
+     `:2304–2307`, `:2329–2333`, `:4110–4119`, `:4143–4154`, `:4205–4210`, `:4338–4341`, `:4354–4363`, `:4474–4479`, `:4531`, `:4593–4605`, `:4609`, `:4643–4650`, `:4704–4711`, `:4735–4748`, `:4752–4764`, `:4841–4850`, `:4995–4998`, `:5104–5137`, `:5143–5146`, `:5172`, `:5218`, `:5410`, `:5419–5421`, `:5426`.
+   - Arithmetic constants for the 15 admitted non-OE integer cases confirmed: **8, 10, 11, 40, 75, 136, 138, 200, 202, 232, 234, 235, 266, 459, 491** (`src/include/opcodes_ppc.h:82–155`; `src/cpus/cpu_ppc_instr.c:5062–5076`, `:5082–5085`).
+   - The 9 `n64` operations (**divw, divwu, addc, adde, addme, addze, subfe, subfme, subfze**) confirmed at `src/cpus/cpu_ppc_instr.c:5091–5102`.
+   - Guard qualifications at `:5222–5224` and `:238–244` verified against lookup tables and caller sites (`src/cpus/tmp_ppc_loadstore.c:905`, `:1935`, etc.).
+   - All dyntrans consistency and termination checks verified at `src/cpus/cpu_dyntrans.c:656–732`, `:1075–1079`, `:1084–1101`, `:1154–1180`, `:1502–1506`, `:1525–1526`, `:1625–1651`, `:1661–1763`, `:1802–1848`, `:1902–1908`. Commented-out lines confirmed at `:150`, `:159`, `:1126`, `:1151`.
+
+5. **Item 5: Option set & implementation**
+   - Precedent double fused operations decoded at `src/cpus/cpu_ppc_instr.c:5261–5274` and implemented at `:1836–1921`, `:1938–2079`.
+   - `FDOT` availability check and CR1 update verified at `src/cpus/cpu_ppc_instr.c:205–206` and `src/cpus/cpu_ppc.c:1853–1856`.
+   - Single rounding helpers `ppc_single_narrow` (`src/cpus/cpu_ppc_instr.c:1353–1471`), `ppc_single_widen` (`:1476–1503`), `frsp` (`:1600–1602`).
+   - Round-to-odd sum `ieee_sum_round_to_odd` verified at `src/core/float_emul.c:722–759`, `:1209–1254`.
+   - Precedent SH `fmac` handler verified at `src/cpus/cpu_sh_instr.c:3533–3554`.
+   - Status machinery `ppc_invalid_cause_fma` (`src/cpus/cpu_ppc_instr.c:151–180`), `ppc_fpscr_recompute` and `ppc_fpscr_raise` (`src/cpus/cpu_ppc.c:1890–1951`).
+   - Exception delivery behavior and limitation verified at `src/cpus/cpu_ppc.c:318–345` and lines `:1941–1942`.
+
+6. **Item 6: Regression observation**
+   - Probe readback channels verified: `run_fma3` at `regress/ppc_rounding_probe.py:410–426`, `run_fma_cause` at `:503–522`, `run_fcmpu_cr` at `:614–637`, gate 15 classification at `regress/ppc_halt_probe.py:193–217`, "alive" disclaimer at `regress/ppc_rounding_probe.py:455–457`.
+   - Single neighbor aliases `fmuls` (`src/cpus/cpu_ppc_instr.c:1924–1928`), `fadds` (`:2144–2148`), `fsubs` (`:2200–2204`), `fdivs` (`:2264–2268`).
+
+7. **Item 7: Records**
+   - The 10 pending rows (`fctid`, `fctidz`, `fcfid`, `fcmpo`, `fmadds`, `fmsubs`, `fsqrt`, `fsqrts`, `fres`, `frsqrte`) and line citations verified at `regress/ppc_halt_probe.py:257–279`.
+   - Gate 15 pending assertion `check "rows still pending" "$pend" 10` verified at `regress/gate_ppc_halt.sh:84`.
+   - All 11 record texts and line citations verified: `OUTSTANDING_BUGS.md:1610`, `:1705`, `:1712`, `:3085–3086`, `src/cpus/cpu_ppc_instr.c:1983–1984`, `:4026–4028`, `:5185`, `regress/gate_ppc_halt.sh:33–39`, `regress/ppc_halt_probe.py:55–63`, `:180–182`, `:238–240`, `:249`, `:261–262`.
+   - CHANGELOG entries verified at lines `32272–32306`, `32373–32376`, `32628–32635`, `33180–33194`.
+
+---
+
+### (a) Chosen Disposition Member & Machinery Presence
+
+**Is Member 7 (Implement) right?**
+Yes. Instructions `fmsubs`, `fmsubs.`, `fmadds`, `fmadds.`, `fnmsubs`, `fnmsubs.`, `fnmadds`, `fnmadds.` are architecturally valid PowerPC User Instruction Set Architecture (UISA) problem-state instructions (`_scratchpad/ppc_pem32_rev2_2001.txt:19633`, `:19845`, `:20269`, `:20439`). When `MSR[FP]=1`, hardware executes them to compute single-precision floating-point results in `frD` with status updates to `FPSCR` (and `CR1` if `Rc=1`). The current path abruptly stops guest execution by branching to `bad:` (`src/cpus/cpu_ppc_instr.c:5218`) and executing `cpu->running = 0` (`src/cpus/cpu_dyntrans.c:2014`). Deleting the stop (Member 1) would leave the instruction unhandled at `&nothing_call` (`src/cpus/cpu_dyntrans.c:2023`); declining silently (Member 2) or announcing once (Member 3) fails arithmetic; accepting an existing result (Member 4) is impossible as no result is computed and double aliasing fails single-precision rounding; inventing backing store (Member 6) is unneeded as FPR registers exist (`src/include/cpu_ppc.h:92`); and raising an architectural exception (Member 5) is invalid when `MSR[FP]=1`. Member 7 is the only correct disposition.
+
+**Is its exception machinery really present on this CPU?**
+The exception machinery is **partly present**:
+
+1. **Floating-Point Unavailable Exception (`PPC_EXCEPTION_FPU`) — FULLY PRESENT:**
+   When an emulated floating-point instruction is executed while `MSR[FP] == 0`, hardware generates an FPU unavailable interrupt (vector `0x00800` / `0xfff00800`). The machinery to deliver this interrupt is completely implemented and wired:
+   - Check & trigger: `src/cpus/cpu_ppc_instr.c:216–225` (`CHECK_FOR_FPU_EXCEPTION`) verifies `!(cpu->cd.ppc.msr & PPC_MSR_FP)`, recalculates `cpu->pc` from the instruction call entry, calls `ppc_exception(cpu, PPC_EXCEPTION_FPU)`, and returns.
+   - Record-form twin trigger: `src/cpus/cpu_ppc_instr.c:205–206` (`FDOT`) invokes `CHECK_FOR_FPU_EXCEPTION` prior to running the base instruction handler or updating CR1.
+   - Vector define: `src/include/cpu_ppc.h:255` defines `PPC_EXCEPTION_FPU 0x8`.
+   - Interrupt delivery: `src/cpus/cpu_ppc.c:318–345` (`ppc_exception`):
+     - Line 321: `cpu->cd.ppc.spr[SPR_SRR0] = cpu->pc;`
+     - Line 327: `cpu->cd.ppc.spr[SPR_SRR1] = (cpu->cd.ppc.msr & 0x87c0ffff);`
+     - Line 335: `cpu->cd.ppc.msr &= ~(PPC_MSR_EE | PPC_MSR_RI | PPC_MSR_PR);`
+     - Line 337: `cpu->pc = exception_nr * 0x100;` (`0x8 * 0x100 = 0x800`)
+     - Lines 338–339: `if (cpu->cd.ppc.msr & PPC_MSR_IP) cpu->pc += 0xfff00000ULL;` (`0xfff00800`)
+     - Lines 341–344: Synchronizes translation pointers via `ppc32_pc_to_pointers(cpu)` or `ppc_pc_to_pointers(cpu)`.
+
+2. **Floating-Point Enabled Arithmetic Exception Traps — NOT PRESENT:**
+   For enabled floating-point exception traps (e.g. invalid operation when `FPSCR[VE]=1`, overflow when `FPSCR[OE]=1`), real hardware delivers a Program Interrupt (vector `0x00700`). On this emulated CPU:
+   - `src/cpus/cpu_ppc.c:1941–1942` explicitly states:
+     > `"This never touches FPCC, never consults the enable bits, and never traps. Enable-driven result suppression and trap delivery are a separate round."`
+   - `ppc_fpscr_raise()` (`src/cpus/cpu_ppc.c:1944–1951`) and `ppc_fpscr_recompute()` (`:1890–1912`) derive and latch sticky status flags (`FX`, `FEX`, `VX`, etc.), but never call `ppc_exception()` to trap or deliver a program interrupt.
+
+---
+
+### (b) Siblings Missed by the Dossier in the Same Files
+
+The dossier's census in section 4 covered all 24 direct decoder `goto bad` and `exit(1)` sites in `src/cpus/cpu_ppc_instr.c`, its 3 qualified sites, and the dyntrans table and consistency checks in `src/cpus/cpu_dyntrans.c`. However, it missed the following sibling failure and termination points in those same two files:
+
+1. **Unchecked 32-bit execution of `extsw` in `src/cpus/cpu_ppc_instr.c`**:
+   - `src/cpus/cpu_ppc_instr.c:3125–3131`:
+     ```c
+     X(extsw) {
+     #ifdef MODE32
+         fatal("TODO: extsw: invalid instruction\n");
+     #else
+         reg(ic->arg[2]) = (int64_t)(int32_t)reg(ic->arg[0]);
+     #endif
+     }
+     ```
+   - Decoder dispatch: at `src/cpus/cpu_ppc_instr.c:5027–5028`, `PPC_31_EXTSW` is decoded unconditionally without verifying `cpu->cd.ppc.bits == 64` (unlike `rld*` at `:4602–4606` or `addic` at `:4207–4210`). On a 32-bit guest (`MODE32`), decoding succeeds, but executing the instruction reaches `fatal()` with an unimplemented diagnostic instead of rejecting at decode or delivering an illegal-instruction exception.
+
+2. **Host termination via `CHECK_ALLOCATION` in `src/cpus/cpu_dyntrans.c`**:
+   - `src/cpus/cpu_dyntrans.c:945–946`:
+     ```c
+     CHECK_ALLOCATION(ppp =
+         (struct DYNTRANS_TC_PHYSPAGE *) malloc(sizeof(struct DYNTRANS_TC_PHYSPAGE)));
+     ```
+   - `src/cpus/cpu_dyntrans.c:1614–1617`:
+     ```c
+     CHECK_ALLOCATION(l2 =
+         cpu->cd.DYNTRANS_ARCH.l1_64[x1] =
+         (struct DYNTRANS_L2_64_TABLE *) malloc(
+         sizeof(struct DYNTRANS_L2_64_TABLE)));
+     ```
+   - Both macros expand via `src/include/misc.h:190–193` and `:181–188` to `FAILURE("Out of memory")`, which prints to `stderr` and executes `exit(1)`.
+
+3. **Host termination via `zeroed_alloc` in `src/cpus/cpu_dyntrans.c`**:
+   - `src/cpus/cpu_dyntrans.c:980`: `dummy_l2 = (struct DYNTRANS_L2_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L2_64_TABLE));`
+   - `src/cpus/cpu_dyntrans.c:981`: `dummy_l3 = (struct DYNTRANS_L3_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L3_64_TABLE));`
+   - `src/cpus/cpu_dyntrans.c:1640`: `l3 = l2->l3[x2] = (struct DYNTRANS_L3_64_TABLE *) zeroed_alloc(sizeof(struct DYNTRANS_L3_64_TABLE));`
+   - `zeroed_alloc()` at `src/core/memory.c:118–135` calls `mmap()`; if `p == MAP_FAILED` (lines 124–130), it prints to `stderr` and terminates the process via `exit(1)`.
+
+*(Note: In the CPU driver file `src/cpus/cpu_ppc.c:288–292`, an additional guest-drivable CPU halt exists: writing `PPC_MSR_IP` executes `fatal("\n[ Reboot hack for NetBSD/prep. TODO: fix this. ]\n"); cpu->running = 0;`.)*
+
+---
+
+### (c) DENOMINATOR: Sentences Checked versus Taken on Trust
+
+- **Sentences / factual claims checked against repository commit `db8b1a33` and manuals on disk**: **144**
+  - Section 1 (Finding truth, opcode-59 selector table, 8 execution path steps, progress failure): **18**
+  - Section 2 (Privilege/MSR[FP] reachability, 11 configured CPUs, 12 machine defaults, override logic): **16**
+  - Section 3 (Architecture level UISA, PEM/Book I citations, FMA equations, rounding modes, CR1, FPSCR fields, FPU-unavailable offset): **18**
+  - Section 4 (Diagnostic nature of `fatal()`, 24 decoder sibling rows, 15 OE arithmetic constants, 9 `n64` ops, 3 guard qualifications, 5 dyntrans table rows, 7 consistency checks): **37**
+  - Section 5 (Option set table members 1–7, double FMA precedent, helpers `ppc_single_narrow`/`ppc_single_widen`/`frsp`, `ieee_sum_round_to_odd`, SH precedent, exception delivery status): **23**
+  - Section 6 (7 regression observation channels, probe function citations `run_fma3`/`run_fma_cause`/`run_fcmpu_cr`, gate 15 classification, 4 single aliases): **15**
+  - Section 7 (10 pending probe rows, gate 15 assertion line 84, 11 table records needing correction/qualification, CHANGELOG citations): **17**
+
+- **Sentences / claims taken on trust / not checked (as documented in dossier and brief)**:
+  - Runtime execution of arbitrary compiler emission patterns (e.g. exact compiler flags prompting gcc emission of `fmadds`).
+  - Full OS bootability of arbitrary machine-type and CPU-model override permutations.
+  - Guest reachability of internal dyntrans L2/L3 refcount corruption under arbitrary valid guest binaries.
+  - Pristine upstream files under `src/` and excluded artifact trees under `regress/artifacts/`.

@@ -1,0 +1,216 @@
+CODEXPACK_DOSSIER_ARMVECTOR_ALIVE
+VERDICT: finding TRUE WITH CHANGES -- disposition member 7 -- implement bounded exception dispatch while preserving architectural faults.
+
+All repository citations below refer to **`db8b1a33`**. This is a defensive source review; guest payloads and step-by-step crash construction are omitted. Nothing was built, tested, or changed.
+
+The ARM finding is true. The qualifications are that “one stack frame deeper” is not a source-level frame count, actual stack exhaustion was **not checked**, and SH does not share the unbounded translation-fault chain described in the queue.
+
+**The ARM control flow proves recursive delivery.** Guest-controlled translation state enters through the control, translation-table-base, and domain-access-register assignments in `src/cpus/cpu_arm_coproc.c:134-142,186-203`; guest memory supplies the descriptors read in `src/cpus/memory_arm.c:133-153,169-183`. The relevant failure is an instruction-address translation failure, not a particular instruction encoding.
+
+The decisive path is:
+
+| Stage | Source and exact decisive text |
+|---|---|
+| Execution dispatch resolves the current PC. | `src/cpus/cpu_dyntrans.c:177-190`: `DYNTRANS_PC_TO_POINTERS(cpu);` |
+| A cached physical translation page can satisfy the request. Otherwise the wrapper calls the generic routine. | `src/cpus/cpu_dyntrans.c:864-888`: `if (ppp != NULL) goto have_it;`, otherwise `DYNTRANS_PC_TO_POINTERS_GENERIC(cpu);` |
+| The generic routine also checks the cached host mapping. Only a miss invokes translation. | `src/cpus/cpu_dyntrans.c:656-680`: `if (!ok)` followed by `ok = cpu->translate_v2p(cpu, vaddr, &paddr, FLAG_INSTR);` |
+| ARM’s ordinary translation, domain, and permission failures converge on `exception_return`. | `src/cpus/memory_arm.c:155-175,185-187,233-250`. These are distinct from the direct exits at `:79` and `:254`. |
+| Exception suppression would return immediately, but the generic instruction lookup supplied `FLAG_INSTR`, not `FLAG_NOEXCEPTIONS`. | `src/cpus/memory_arm.c:119-123,257-259`: `if (no_exceptions) return 0;`; caller at `src/cpus/cpu_dyntrans.c:679-680`. |
+| Instruction failure calls the exception routine **before** returning failure. | `src/cpus/memory_arm.c:268-276`: `arm_exception(cpu, ARM_EXCEPTION_PREF_ABT);` precedes `return 0;`. |
+| Exception entry saves state, selects Abort mode, clears Thumb state, and masks IRQ. It does not disable the MMU or suppress a subsequent Prefetch Abort. | `src/cpus/cpu_arm.c:669-720`; particularly `cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr;` at `:678`, `cpu->cd.arm.cpsr &= ~ARM_FLAG_T;` at `:693`, and `cpu->cd.arm.cpsr |= ARM_FLAG_I;` at `:714`. |
+| Exception entry assigns both PC representations and immediately resolves the vector. | `src/cpus/cpu_arm.c:730-733`: `cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 + ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);` followed by `quick_pc_to_pointers(cpu);`. |
+| The quick helper does not bound nesting. | `src/include/quick_pc_to_pointers.h:5-16,28-29`: cached-page success or `DYNTRANS_PC_TO_POINTERS(cpu)`. ARM’s macro bindings are at `src/cpus/tmp_arm_head.c:30-31`; the generic implementation is instantiated at `src/cpus/tmp_arm_tail.c:44-46`. |
+
+The Prefetch Abort destinations, enumerated, are **`0x0000000c`** and **`0xffff000c`**: `ARM_EXCEPTION_PREF_ABT` is `3`, and the selected bases are `0` and `0xffff0000` (`src/include/cpu_arm.h:125`; `src/cpus/cpu_arm.c:731-732`).
+
+When the resulting **Abort-mode** vector lookup continues to fail and no cache satisfies it, the same calls recur before the previous translation returns. A mapping denied only to User mode does not establish that condition: exception entry changes the mode, and the walker derives its permission context from the current CPSR (`src/cpus/cpu_arm.c:697-698`; `src/cpus/memory_arm.c:123,233-248`).
+
+The same-mode warning does not stop it. Its exact terminating statement is commented out:
+
+> `/*  exit(1);  */`
+
+That is `src/cpus/cpu_arm.c:711`, inside the warning at `:708-712`. Also, `fatal()` itself only prints; its implementation contains no termination (`src/core/debugmsg.c:384-391`). Consequently, this is unbounded synchronous call nesting in the source. Compiler-dependent frame layout, failure signal, and exhaustion depth are **not checked**.
+
+**The generic `exit(1)` is real, but it is not an ARM recursion guard.** It requires the first translation to **return** failure, the refreshed-PC cache lookup to miss, and the second translation to **return** failure. Only then does execution reach:
+
+> `fatal("FATAL: could not find physical"`  
+> `    " address of the exception handler?");`  
+> `exit(1);`
+
+These are `src/cpus/cpu_dyntrans.c:729-732`; the preceding retry is at `:685-723`. Persistent ARM vector failure prevents the pending translator calls from returning to that test.
+
+There is a current-tree example where the exit can be reached: Alpha’s failed walker prints and executes `return 0;` without delivering an exception (`src/cpus/memory_alpha.c:192-198`). The constructor installs that translator (`src/cpus/cpu_alpha.c:89`). Repeating an unresolved lookup therefore permits the generic failure test to run. This is separately recorded as `alphaifetchkill` (`OUTSTANDING_BUGS.md:21932-21933`).
+
+**Reachability is not restricted to privileged guests by this implementation.** The examined coprocessor decode, execution, and dispatch path contains no User-mode rejection before the installed CP15 handler; CP15 is installed unconditionally (`src/cpus/cpu_arm_instr.c:4977-4980,948-954`; `src/cpus/cpu_arm.c:174-175,2643-2655`). Thus “privileged guest only” would overstate a protection the examined source does not enforce. Architectural legality of that User-mode coprocessor access is a separate issue.
+
+Every accepted ARM model uses this shared implementation (`src/cpus/cpu_arm.c:98-118`). The accepted names are:
+
+| Definition lines in `src/include/arm_cpu_types.h` | Names |
+|---|---|
+| `51-54` | ARM3, ARM610, ARM620; ARM610 has duplicate table entries, with first-match selection at `src/cpus/cpu_arm.c:103-105`. |
+| `56-68` | ARM700, ARM710, ARM710A, ARM720T, ARM740T4K, ARM740T8K, ARM7500, ARM7500FE, ARM810, ARM920T, ARM922T, ARM940T |
+| `70-78` | ARM946ES, ARM966ES, ARM966ESR1, ARM1020E, ARM1022ES, ARM1026EJS, ARM1136JS, ARM1136JSR1 |
+| `80-96` | SA110, SA1100, SA1110, TI925T, IXP1200, 80200, PXA210, PXA210A, PXA210B, PXA210C, PXA250, PXA250A, PXA250B, PXA250C, PXA27X |
+| `98-111` | IXP425_255, IXP425_400, IXP425_533, CORTEX-A5, SnapdragonS2, 80219_400, 80219_600, 80321_400, 80321_400_B0, 80321_600, 80321_600_B0, 80321_600_2 |
+
+The machine defaults found under committed `src/machines/` are:
+
+| Machine or subtype | Default CPU | Citation |
+|---|---|---|
+| android-arm / Finow X5 Air | CORTEX-A5 | `src/machines/machine_androidarm.c:148-150,191-192` |
+| android-arm / Sony Xperia Mini | SnapdragonS2 | `src/machines/machine_androidarm.c:153-157,194-195` |
+| cats | SA110 | `src/machines/machine_cats.c:135-151` |
+| hpcarm / Ipaq, Jornada 720, Jornada 728 | SA1110 | `src/machines/machine_hpcarm.c:195-228` |
+| iq80321 | 80321_600_2 | `src/machines/machine_iq80321.c:97-107` |
+| iyonix | 80321_600_B0 | `src/machines/machine_iyonix.c:116-132` |
+| netwinder | SA110 | `src/machines/machine_netwinder.c:74-90` |
+| rpi | ARM1136JSR1 | `src/machines/machine_rpi.c:57-77` |
+| barearm, testarm | SA1110 | `src/machines/machine_test.c:206-230` |
+
+The MMU-disabled translator makes **this translation-failure chain** unreachable while selected: it assigns the physical address and unconditionally executes `return 2;` (`src/cpus/memory_arm.c:54-60`). Valid vector translations and cache hits also avoid the failing branch (`src/cpus/cpu_dyntrans.c:659-680,864-888`). These are state-dependent exclusions, not permanent machine exemptions: CP15 can switch the translator (`src/cpus/cpu_arm_coproc.c:134-142`).
+
+The `ARM_NO_MMU` labels do not establish immunity in this fork. The marked names are ARM740T4K, ARM740T8K, ARM940T, ARM946ES, ARM966ES, and ARM966ESR1 (`src/include/arm_cpu_types.h:40,60-61,68,70-72`); the committed `src/` search found no consumer of that flag, and the translator switch does not consult it (`src/cpus/cpu_arm_coproc.c:134-142`).
+
+**The disk manuals support architectural exception delivery, not host recursion.** DDI 0100I states:
+
+> “A Prefetch Abort exception is generated if the processor tries to execute the invalid instruction.”
+
+That is `_scratchpad/ddi0100i.txt:2185-2188`. Its entry pseudocode includes:
+
+> `R14_abt = address of the aborted instruction + 4`  
+> `SPSR_abt = CPSR`  
+> `CPSR[4:0] = 0b10111 /* Enter Abort mode */`
+
+See `_scratchpad/ddi0100i.txt:2194-2208`. It lists the destinations **`0xFFFF000C`** and **`0x0000000C`** at `:2212-2218`.
+
+The ARMv7 manual explicitly recognizes vector-fetch faults:
+
+> “An instruction fetch from an exception vector address that generates an MMU fault, MPU fault, or synchronous external abort cannot generate an address matching Vector catch debug event.”
+
+That is `_scratchpad/ddi0406.txt:108212-108213`. Its ordinary Abort entry ends with `BranchTo(ExcVectorBase() + vect_offset);` (`:59240-59272`). DDI 0100I also warns that nesting the same exception type puts the exception mode’s SPSR “in danger of being corrupted” (`_scratchpad/ddi0100i.txt:9506-9512`).
+
+The defensible inference is that another attempted instruction fetch can produce another architectural abort and overwrite banked state. The checked passages do **not** specify “already in Abort mode → stop the CPU,” and they do not say “loop forever” verbatim. A separate processor-specific lockup rule was **not checked**; none was located in these passages. The ARMv7 security and virtualization branches are broader than this emulator’s implementation (`_scratchpad/ddi0406.txt:59195-59238`).
+
+**PowerPC:** The recursive shape is present. Instruction translation failures call `ppc_exception` (`src/cpus/memory_ppc.c:307-323`). Exception entry clears precisely `PPC_MSR_EE | PPC_MSR_RI | PPC_MSR_PR`, leaving instruction relocation unchanged, then assigns the vector and calls `ppc32_pc_to_pointers` or `ppc_pc_to_pointers` (`src/cpus/cpu_ppc.c:335-344`). A persistently failing supervisor-vector translation can therefore recur through the generic routine. Disabled instruction relocation returns success instead (`src/cpus/memory_ppc.c:258-260`); unsupported translation paths have separate exits (`:263-288`). PowerPC hardware requirements were **not checked against a manual**.
+
+**SH:** The recursive call shape exists, but this repeated translation-fault chain has a bounded escape. `sh_exception` tests `SH_SR_BL` and substitutes `EXPEVT_RESET_POWER` when it is already set (`src/cpus/cpu_sh.c:910-918`). Exception entry sets `SH_SR_MD | SH_SR_RB | SH_SR_BL` (`:952`); the reset case assigns `cpu->pc = 0xa0000000;` (`:1015-1021`). That address follows the supervisor direct-map arm, which returns success (`src/cpus/memory_sh.c:373-376`), allowing the nested calls to unwind. Thus the queue’s unbounded ARM behavior is **not confirmed for this SH chain**. Separate unsupported-address and exception exits remain (`src/cpus/memory_sh.c:379-381`; `src/cpus/cpu_sh.c:1083-1085`). Hardware fidelity of the reset transition was **not checked**.
+
+**M88K:** The recursive shape remains. Instruction translation failure calls `m88k_exception` before returning zero (`src/cpus/memory_m88k.c:106-112,416-419`). An already-frozen shadow state redirects a non-trap exception to `M88K_EXCEPTION_ERROR` (`src/cpus/cpu_m88k.c:811-821`), but ERROR is implemented and still reaches the common `m88k_pc_to_pointers(cpu);` tail (`:748-751,923-980`). If the resulting supervisor ERROR-vector translation also fails, the reroute does not bound recursion. Missing CMMU or disabled translation returns an identity mapping instead (`src/cpus/memory_m88k.c:127-144`). Hardware ERROR-vector behavior was **not checked against a manual**.
+
+**The same-file termination census distinguishes guest conditions from internal guards.** The principal files are `cpu_arm.c`, `memory_arm.c`, and `cpu_dyntrans.c`. Conditions below are summarized without instruction encodings.
+
+| Site | Condition | Existing record |
+|---|---|---|
+| `src/cpus/memory_arm.c:79` | Reserved domain-access case reaches `exit(1)`. | `armdacr2kill`, `OUTSTANDING_BUGS.md:22074-22079` |
+| `src/cpus/memory_arm.c:254` | Unsupported fine-page-table descriptor reaches `exit(1)`. | `armdesc3kill`, `OUTSTANDING_BUGS.md:22065-22072` |
+| `src/cpus/cpu_arm.c:608` | Loading an unmodelled CPSR register-bank mode reaches `exit(1)`. | `armmsrmodekill`, `OUTSTANDING_BUGS.md:20273-20354` |
+| `src/cpus/cpu_arm.c:561` | Saving an unmodelled register-bank mode reaches `exit(1)`. It is not the first hit on the ordinary mode-change path: loading exits first. | Same entry, explicitly `OUTSTANDING_BUGS.md:20332-20336` |
+| `src/cpus/cpu_dyntrans.c:732` | Initial translation and handler retry both return failure, without an intervening usable cache mapping. | `alphaifetchkill`, `OUTSTANDING_BUGS.md:21932-21933`; recursion separately at `:21950-21951` |
+| `src/cpus/cpu_dyntrans.c:2014` | Decoder reaches `bad:` outside translation read-ahead. | General unimplemented-instruction disposition at `OUTSTANDING_BUGS.md:2690-2693,21163-21165` |
+
+The Thumb interpreter’s stop statements are all literally `cpu->running = 0;`:
+
+| Lines in `src/cpus/cpu_arm.c` | Condition |
+|---|---|
+| `1219` | Entry fails the PC/Thumb-state consistency test at `:1216`. Guest reachability of the inconsistent entry state: **not checked**. |
+| `1227` | Instruction memory read fails (`:1223-1224`). |
+| `1495` | Unimplemented Thumb data-processing selector (`:1405-1496`). |
+| `1510` | High-register MOV encounters its unsupported PC-source case (`:1499-1511`). |
+| `1535` | Branch/exchange encoding fails the supported-form check (`:1523-1536`). |
+| `1541` | Unimplemented high-register operation (`:1499-1542`). |
+| `1557` | PC-relative load fails (`:1546-1558`). |
+| `1600` | Immediate-offset load/store fails (`:1576-1601`). |
+| `1629` | SP-relative read fails (`:1622-1630`). |
+| `1653` | SP-relative write fails (`:1639-1654`). |
+| `1690` | Unimplemented miscellaneous Thumb operation (`:1659-1691`). |
+| `1757` | Unsupported conditional-branch condition (`:1695-1758`). |
+| `1769` | Long-branch/exchange form fails its supported-form check (`:1762-1770`). |
+| `1810` | Unimplemented main Thumb opcode (`:1267-1811`). |
+
+The failed instruction-fetch stop is recorded in prose at `OUTSTANDING_BUGS.md:2614-2615`; `armthumbabortkill` is mentioned at `:20379-20381`. No separate matching per-site records were found for the other Thumb stops. That is a search result, not proof that no differently worded record exists.
+
+The remaining Thumb stop at `src/cpus/cpu_arm.c:1571` is unreachable through its selector: the masked values are **`0, 1, 2, 3`**, and the switch handles **`0, 1, 2, 3`** (`:1254,1406-1572`).
+
+Additional guards were found but are not established guest-controlled siblings:
+
+- ARM RESET stops and exits at `src/cpus/cpu_arm.c:659,661`; no source caller passing RESET was found. Invalid exception-number and exception-mode guards exit at `:623,686`; guest reachability was **not established**.
+- Generic cache/refcount guards exit at `src/cpus/cpu_dyntrans.c:1157,1180,1506,1625,1630,1645,1651`. BUGHUNT guards occur at `:1079,1092,1101,1173,1670,1679,1751,1763`. Guest-triggered failure of these invariants was **not checked**.
+- Alignment assertions occur at `src/cpus/cpu_dyntrans.c:1525-1526`; allocation checks at `:945,1614`. They are not established instances of the reported guest-controlled condition.
+- Commented-out exits are not live terminating sites: `src/cpus/cpu_arm.c:711,2661,2678`; `src/cpus/cpu_dyntrans.c:159,1126,1151`.
+
+**Member 7 fits the correction; member 5 remains the access disposition.** ARM already attempts the architectural fault at `src/cpus/memory_arm.c:268-273`, and its state-delivery machinery exists at `src/cpus/cpu_arm.c:616-734`. The missing behavior is safe, nonrecursive delivery and resumption.
+
+The nearest same-access precedent is `#193`:
+
+> “an L2 page-table page outside mapped RAM must fault the guest, not exit() the host.”
+
+It selects `FAULT_TRANS_P` and branches to `exception_return` (`src/cpus/memory_arm.c:169-174`). This proves the intended disposition, but it shares the defective tail and therefore does not prove safe nested delivery.
+
+The option assessment is:
+
+| Member | Assessment |
+|---|---|
+| 1 — delete termination | Insufficient: the ARM failure occurs before the generic exit is reached. |
+| 2 — silently decline | Would suppress the required architectural abort. |
+| 3 — decline and announce once | Suitable for some unsupported accesses, not a substitute for instruction-fetch fault delivery. |
+| 4 — accept existing value | No successful translation exists on the failing path. |
+| 5 — fault | Correct guest-visible disposition, already attempted. |
+| 6 — invented backing store | Would manufacture an instruction mapping. |
+| 7 — implement missing behavior | Implement bounded exception dispatch and a valid return to execution scheduling. |
+
+These assessments follow the existing failure contract and exception path (`src/cpus/memory_arm.c:103-112,257-276`; `src/cpus/cpu_arm.c:730-733`). They are design recommendations, not implemented changes.
+
+Simply removing `quick_pc_to_pointers` is not a complete design: callers depend on exception PC state and instruction-dispatch pointers being coherent (`src/cpus/cpu_arm.c:725-733`; `src/cpus/cpu_dyntrans.c:830-833`). The correction should return control to a bounded dispatcher, retain the fault, and permit another architectural fetch attempt without growing the host call chain. A permanently faulting guest must still permit scheduling and debugger control.
+
+The list does not expressly name **contained CPU suspension** or **deferred exception delivery**. Suspension is a possible emulator containment policy, but no checked ARM manual passage establishes it as the hardware result. Deferred delivery describes the implementation mechanism rather than a different access disposition.
+
+The house latch is illustrated by `src/devices/dev_footbridge.c:573-580`: it tests an instance field, sets it, emits a diagnostic containing **`(once)`**, and returns without ending the process. Its fields are at `:86-95`. That precedent supports bounded diagnostics if needed; it does not justify dropping the ARM exception.
+
+**A regression check must distinguish host survival, guest progress, and correct exception state.** No observations below were measured in this task.
+
+| Channel | Before, from source | Required after correction |
+|---|---|---|
+| Host control flow | Persistent failure retains nested translation/exception calls. | Bounded call nesting and return to scheduling/debugger control. |
+| Process status | Stack exhaustion is predicted; its actual manifestation is **not checked**. | No host termination attributable to repeated vector-translation failure. |
+| Guest PC and banked state | Exception entry writes PC, LR, SPSR and CPSR before recurring. | Architectural exception state remains correct and observable. |
+| Handler execution | Selecting a vector does not establish that its instruction was fetched. | A usable vector executes; an unusable vector remains a fault. |
+| Diagnostics | Memory-fault output is quiet-mode gated; the same-mode warning is not (`memory_arm.c:261-265`; `cpu_arm.c:708-711`). | Any containment diagnostic is bounded; absence of output alone is not success. |
+| FAR/FSR | This source writes them in the Data Abort branch, not the Prefetch Abort branch (`memory_arm.c:268-273`). | A dispatch correction must not accidentally apply Data Abort writes to Prefetch Abort. |
+
+PC, general registers and CPSR already have debugger-visible output (`src/cpus/cpu_arm.c:385-420`), and FAR/FSR output exists at `:511-514`. Those channels can distinguish correct delivery from a silent CPU stop.
+
+Legal neighboring cases to retain are MMU-disabled identity translation; readable vector mappings; cache-hit and cache-miss success; low and high vector selection; supported section and coarse-page translations; User-denied but Abort-readable mappings; ordinary exception delivery; and exception-suppressed translation queries. Their acceptance paths are at `src/cpus/memory_arm.c:54-60,185-250,257-259`; `src/cpus/cpu_dyntrans.c:659-680,864-895`; `src/cpus/cpu_arm.c:674-733`. No newly introduced guard should reject these merely because execution is already in an exception mode.
+
+**The records need narrowing and several exact-text corrections.**
+
+- `OUTSTANDING_BUGS.md:21950-21951` says **“cpu_arm.c / cpu_ppc.c (possibly SH, M88K)”** and **“a predicted host stack overflow.”** Corrected sentence: “ARM, PowerPC and M88K can recursively resolve persistently untranslatable exception vectors before the preceding translation returns; SH’s checked repeated translation-fault path escapes through its direct-mapped reset vector. Stack exhaustion remains unmeasured in this reading.” The committed row still says MED. The later HIGH confirmation supplied in the brief was **not independently checked**. `CHANGELOG.md:1307-1308` accurately records the original MED filing as history.
+
+- `src/cpus/cpu_dyntrans.c:687` says **“The PC is now set to the exception handler.”** Alpha disproves that unconditional contract (`src/cpus/memory_alpha.c:192-198`). Corrected sentence: “If translation delivered an exception and returned, use the resulting PC for the retry.”
+
+- `src/cpus/memory_alpha.c:194-196` claims returning zero lets the caller raise the fault and **“keeps the emulator alive and debuggable.”** Corrected sentence: “Return translation failure; callers must handle it, and the current generic instruction-fetch caller can still exit.” Evidence: `src/cpus/cpu_dyntrans.c:721-732`.
+
+- `src/cpus/memory_arm.c:78` says **“arm_check_access(): 1 shouldn't be used”** inside `case 2`. Corrected diagnostic: “arm_check_access(): reserved domain access value 2”.
+
+- `src/cpus/cpu_arm.c:719` says **“Load the new register bank, if we switched:”**, but the following call is unconditional. Corrected sentence: “Load the selected exception register bank.”
+
+- `CHANGELOG.md:7900-7901` says **“SH and ARM exit only on RESET-class or unrecognised numbers.”** As a complete statement about ARM exception delivery, this omits register-bank exits and recursive failure. Corrected sentence: “The exception switches have explicit RESET or unsupported-case exits; their helper calls and vector-resolution paths have additional failure modes.”
+
+- The local `#193` change recorded at `CHANGELOG.md:20057` is accurate. It should not be interpreted as proof that an unusable exception vector is safely handled.
+
+**DENOMINATOR:** Numbered source passages read, including delegated reading, were:
+
+- `src/cpus/cpu_arm.c:41-253,379-430,507-758,1180-1820,2625-2686`; `memory_arm.c:1-278`; `cpu_arm_coproc.c:35-216`; `cpu_arm_instr.c:797-872,939-1110,1587-1630,2560-2670,4968-4990`.
+- `src/cpus/cpu_dyntrans.c:115-215,270-385,616-901,928-955,1030-1200,1470-1530,1550-1700,1710-1775,1810-2036`; `tmp_arm_head.c:1-67`; `tmp_arm_tail.c:1-71`.
+- `src/include/quick_pc_to_pointers.h:1-32`; `cpu_arm.h:85-146`; `arm_cpu_types.h:1-115`.
+- `src/cpus/cpu_ppc.c:210-420`; `memory_ppc.c:34-327`; `tmp_ppc_tail.c:38-50,99-114`.
+- `src/cpus/cpu_sh.c:886-1102`; `memory_sh.c:85-260,310-404`; `tmp_sh_tail.c:38-50`.
+- `src/cpus/cpu_m88k.c:390-485,510-630,685-1001`; `memory_m88k.c:90-421`; `tmp_m88k_tail.c:38-50`.
+- `src/cpus/memory_alpha.c:43-200`; line-only Alpha wiring matches at `cpu_alpha.c:89,679` and `tmp_alpha_tail.c:44,47,106,111`.
+- `src/core/debugmsg.c:40-137,357-400`; `src/devices/dev_footbridge.c:68-95,561-595`.
+- Under `src/machines/`: `machine_androidarm.c:144-198`; `machine_cats.c:80-151`; `machine_hpcarm.c:130-232`; `machine_iq80321.c:82-109`; `machine_iyonix.c:80-134`; `machine_netwinder.c:64-91`; `machine_rpi.c:43-78`; `machine_test.c:172-233`.
+- `OUTSTANDING_BUGS.md:2590-2700,20265-20387,21133-21170,21925-21970,22059-22083`; `CHANGELOG.md:1298-1310,7890-7905,20048-20060,23112-23132`.
+- Disk manuals: `_scratchpad/ddi0100i.txt:1582-1612,1943-2010,2180-2220,2348-2370,9488-9519,28821-28843`; `_scratchpad/ddi0406.txt:57300-57329,59112-59283,108203-108245`.
+
+Additional committed searches covered ARM model use, exception callers, termination markers, cache macros, latch markers, and matching record text; these were searches, not full-file reviews. Regression reading consisted only of matching lines in the permitted scripts, including `arm_flags_probe.py:78`, `diff_m8820x.c:114-115`, `diff_memory_rw.c:96-97,475-477`, `diff_wdc_identify.c:444`, `gate_hygiene.sh:70,129,134,139,149,439,443`, `gate_offline.sh:480,482,534,942`, `hpcmips_ctor_probe.py:538`, `lca_confbus_probe.py:45`, `m88k_exc_probe.py:3,6,16,73`, `pcc2_c040_probe.py:428`, `pit8253_latch_probe.py:463`, `selfmutant.py:73`, and `xscale_inten_probe.py:576,581,594`.
+
+Not checked: runtime behavior, generated machine code or frame sizes, complete manuals, processor-specific exception lockup rules, complete regression bodies, or all comments and records outside the stated reads. No working-tree source, alternate source copy, artifact contents, or `tools/pipeline/ledger.json` was read.

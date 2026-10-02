@@ -1,0 +1,20 @@
+ASTRARETRO_BUNDLE_DEBUGGER_ALIVE
+VERDICT: 1 findings (1 CODE live at HEAD, 0 RECORD, 0 TEST-GAP); 9 items checked clean
+
+F1 | src/debugger/debugger.c:775 | 5ee491e7 | CODE | live at HEAD: yes | **Changing machine focus can make `step call` miss calls indefinitely.** Entering the debugger clears only the initially focused machine’s translations (:791). Switching to another previously running machine leaves its cached handlers intact (`debugger_cmds.c:1116`), but step-call enables tracing without invalidating them (:1705). Guest calls through those handlers never set the transition flag: MIPS selects `jal` versus `jal_trace` during translation (`cpu_mips_instr.c:4827`), and single-stepping executes the cached handler directly (`cpu_dyntrans.c:325`). Consequently, repeated cached calls/returns can keep step-call running until Ctrl-C. No matching filing found in `OUTSTANDING_BUGS.md`. | Smallest check: statically follow these four sites and confirm no cache invalidation occurs between focus change and cached dispatch. | confidence high
+
+Checked clean:
+
+- `src/debugger/debugger_expr.c:377` — division guards the exact unsigned operand subsequently consumed.
+- `src/debugger/debugger_expr.c:385` — modulo has the equivalent zero-divisor guard.
+- `src/debugger/debugger_expr.c:345` — recursive failures propagate; new failure exits free the expression copy without consuming an invalid result.
+- `src/debugger/debugger.c:189` — displayed accounting arrays are initialized by both breakpoint-creation paths and remain aligned after deletion.
+- `src/debugger/debugger.c:529` — CTRL-T indexes within the breakpoint count; both formatting operations remain bounded.
+- `src/debugger/debugger.c:770` — scanning covers all focused-machine CPUs; call and return callbacks set the same checked field.
+- `src/debugger/debugger.c:768` — Ctrl-C ends step-call; arming clears stale cancellation state.
+- `src/debugger/debugger.c:778` — normal completion restores saved tracing state and clears transition flags before cache reset.
+- `src/debugger/debugger.c:865` — instruction breakpoints, translation failures, and the all-machines-stopped path cancel step-call through debugger reset.
+
+Records and regression probes were checked. Boot gating/manual verification was not treated as a promise of feature-specific regression rows. Review was static against committed HEAD; nothing was built, executed, or written.
+
+DENOMINATOR: read 7 of 7 hunks of the net diff

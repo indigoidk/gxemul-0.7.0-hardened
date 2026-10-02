@@ -1,0 +1,72 @@
+GROKJOBS_DOSSIER_ARMCOPROC_ALIVE
+VERDICT: 1 false or unsupported sentences
+
+All repository references below are at **`db8b1a33`**. Dossier locations refer to the named `codex_dossier_armcoproc.txt`.
+
+The false sentence is at **dossier line 141**:
+
+> “A disposition absent from the list is **stop the virtual CPU and enter the debugger while retaining the host process**; the shared decoder's unsupported-instruction path does this.”
+
+The decoder **requests** debugger entry; it does not guarantee debugger entry or host retention.
+
+- It sets `about_to_enter_single_step`, clears `cpu->running`, and resets debugger stepping state. (`src/cpus/cpu_dyntrans.c:2002`, `:2014`, `:2021`.)
+- When all CPUs have stopped, `machine_run()` returns false. (`src/machines/machine.c:741–746`.)
+- When no machine remains running, the emulation loop breaks unless `debugger_enter_at_end_of_run` is enabled. This happens before the next iteration could process the debugger request. (`src/core/emul.c:1033–1039`, `:1052–1059`.)
+- That setting defaults to false. After emulation returns, `main()` performs cleanup and returns zero. (`src/debugger/debugger.c:72`; `src/core/main.c:807–821`.)
+
+**Corrected sentence:** “The shared decoder stops the virtual CPU and requests debugger entry; when no machine remains running, the emulation loop instead ends unless end-of-run debugger entry is enabled.”
+
+The following sentence—“It remains a CPU stop, not continued execution or an architectural exception”—is still supported by the decoder’s implementation. (`src/cpus/cpu_dyntrans.c:2002–2024`.)
+
+**(a) Chosen disposition and available machinery**
+
+**Member 3 is defensible as provisional containment.** It is explicitly decline plus a bounded, latched announcement in the option set. The footbridge precedent implements that behavior. (`tools/CLAUDE.md:1892–1893`, `:2010–2013`; `src/devices/dev_footbridge.c:570–581`.)
+
+The required ARM latches are **not already implemented** in these handlers. Refusal must precede the PID, steering, and interrupt-status assignments; simply removing their exits would preserve the unsupported mutations. (`src/cpus/cpu_arm_coproc.c:50–529`, specifically `:260`, `:318`, `:329`.)
+
+This supports containment, not a universal hardware interpretation. The dossier correctly distinguishes ordinary CP15/r15 restrictions from optional cache-test operations and distinguishes hardware-unimplemented instructions from emulator omissions. (`_scratchpad/ddi0100i.txt:27698–27700`, `:32653–32674`, `:9365–9369`.)
+
+**Member 5 has real UND delivery machinery on this implementation:**
+
+- Existing call: `arm_cdp()` invokes `arm_exception(cpu, ARM_EXCEPTION_UND)`. (`src/cpus/cpu_arm.c:2674–2678`.)
+- Bank/status preservation, including `spsr_und`: `src/cpus/cpu_arm.c:669–680`.
+- ARM-state selection, exception mode, interrupt masking, and bank loading: `src/cpus/cpu_arm.c:693–720`.
+- LR, vector PC, and execution redirection: `src/cpus/cpu_arm.c:730–733`.
+
+The vector arithmetic is **1 × 4 + 0 = `0x00000004`**, or **1 × 4 + `0xffff0000` = `0xffff0004`**. The exception number is 1 and those are the two implemented vector bases. (`src/include/cpu_arm.h:123`; `src/cpus/cpu_arm.c:731–732`.)
+
+Whether UND is architecturally appropriate for each missing i80321/XScale operation remains **not checked**. Machinery availability does not settle that classification.
+
+**(b) Missed siblings**
+
+**No live termination was omitted from the finding file’s inventory.** Its seven exits are **62, 177, 264, 322, 331, 417, 528**; its six commented exits are **58, 87, 102, 128, 287, 294**. The endianness sibling is expressly acknowledged, rather than missed. All seven live sites are recorded together. (`src/cpus/cpu_arm_coproc.c:50–529`; `OUTSTANDING_BUGS.md:18721–18724`; dossier line 30.)
+
+Other files already cited by the dossier contain additional siblings that its inventory does not list:
+
+| File/site | Additional sibling | Record status |
+|---|---|---|
+| `src/cpus/memory_arm.c:78–79` | Access-check branch terminates the host. | Recorded as `armdacr2kill`, `OUTSTANDING_BUGS.md:22074–22079`. |
+| `src/cpus/memory_arm.c:252–254` | Translation-descriptor fallback terminates the host. | Recorded as `armdesc3kill`, `OUTSTANDING_BUGS.md:22065–22072`. |
+| `src/devices/dev_i80321.c:377–384` | Device-access default terminates the host. | A matching record was **not established**. |
+| `src/cpus/cpu_arm_instr.c:881–894`, `:2018–2022`, `:2063–2067` | SPSR-write and exclusive-access handlers stop the virtual CPU. | Record status **not checked**. |
+
+These are additions outside the dossier’s explicitly complete **coprocessor-file** inventory, not contradictions of that inventory.
+
+**(c) DENOMINATOR**
+
+I counted sentences and sentence-equivalent assertions: each machine-table row and selector-list bullet counts once; semicolons do not split a sentence. Proposed behavior was assessed as a design requirement, not as an executed result.
+
+| Dossier portion | Checked | Not independently checked |
+|---|---:|---:|
+| Opening/shared evidence, lines 2–32 | 52 | 1 |
+| Site 62, lines 36–48 | 23 | 0 |
+| Site 264, lines 52–64 | 27 | 0 |
+| Site 322, lines 68–80 | 23 | 2 |
+| Site 331, lines 84–96 | 20 | 0 |
+| Site 417, lines 100–117 | 20 | 1 |
+| Site 528, lines 121–139 | 25 | 2 |
+| Closing assertions, lines 141–145 | 11 | 0 |
+| Prior-review provenance, lines 149–156 | 0 | 10 |
+| **Total** | **201** | **16** |
+
+**200 checked units supported; 1 corrected; 0 accepted on trust.** The 16 withheld units are prior-review activity reports or explicit “not checked” statements. In particular, committed source cannot establish what the previous reviewer actually read, searched, built, or executed. Those provenance claims are **not checked**, rather than counted as demonstrated factual errors. Runtime behavior and the dossier’s declared model-specific hardware gaps remain **not checked**.

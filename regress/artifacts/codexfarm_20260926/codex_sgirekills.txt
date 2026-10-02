@@ -1,0 +1,139 @@
+VERDICT: Re-scope to five reachable MTE command exits and witness STIPPLE first
+
+I read committed HEAD `8ea26abb421a80231317bebb3f364025945f33f8` via `git show HEAD:<path>`. [`dev_sgi_re.c`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c), `OUTSTANDING_BUGS.md`, and the two probes match the working tree. `tools/pipeline/ledger.json` and `regress/gate_arm.sh` are locally modified, so all citations to those two are explicitly to their committed `@HEAD` versions, not the working copies. I changed nothing, built nothing, and ran no probe.
+
+## 1. Paths and re-derived count
+
+A raw search finds 13 `exit(1)` texts. Seven are comments at lines 273, 315, 453, 457, 931, 1187, and 1493. Removing line and block comments leaves exactly six active statements:
+
+| Statement | Reset-state guest trigger | Result |
+|---|---|---|
+| [`dev_sgi_re.c:1496–1498`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1496) | `sw 0x400` to `0xb5003800` | STIPPLE exit |
+| [`:1504–1506`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1504) | `sw 0x60` | source selector 3 > C |
+| [`:1577–1582`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1577) | `sw 0x810` | LINEAR_A + COPY |
+| [`:1585–1587`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1585) | `sw 0x110` | LINEAR_A + depth 16 |
+| [`:1596–1598`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1596) | `sw 0x10` | LINEAR_A + reset BYTEMASK 0 |
+| [`:1705–1720`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1705) | None | unreachable trailing `else` |
+
+Thus the ledger title’s “SIX active statements” still holds syntactically at HEAD. The operational count is five guest-reachable defect sites plus one dead statement.
+
+The shared path, read directly from HEAD, is:
+
+1. IP32 installs RE at physical `0x15000000` ([`machine_sgi.c:459–500`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:459)).
+2. Initialization zeroes the shared device state and registers MTE at base `+0x3000` ([`dev_sgi_re.c:843–855`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:843)).
+3. A MIPS `sw` computes its address and calls `memory_rw` ([`cpu_mips_instr_loadstore.c:43–46,127–129`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:43)).
+4. KSEG1 maps `0xb5003800` directly to physical `0x15003800` ([`memory_mips_v2p.c:224–240`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_mips_v2p.c:224)).
+5. `memory_rw` dispatches that physical access to the registered device ([`memory_rw.c:583–589`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583)).
+6. MTE recognizes address bit `0x800` as START, stores MODE, then calls `do_mte_transfer` ([`dev_sgi_re.c:1684–1709,1807–1808`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1684)). The register header defines START as an address bit ([`crmfbreg.h:316–317`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:316)).
+
+The trigger values above are inferred from the documented masks and shifts at [`crmfbreg.h:253–273`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:253). For a state-independent BYTEMASK sequence, first store zero to `0xb5003008`, then issue the MODE+START store.
+
+Line 1720 cannot execute: `len == 4` and `len != 4` are exact complements. Its surrounding real defect is that every non-four-byte access takes the two-register path; that belongs to `sgimtewidth`, as already recorded at [`OUTSTANDING_BUGS.md:14719–14740`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:14719).
+
+## 2. Documentation
+
+I listed the 428 direct-child `_scratchpad\*.txt` files. The actual manual set was:
+
+`21066_66a_hrm`, `ata2_x3t10_948d`, `dc21285`, `ddi0100i`, `ddi0406`, `i8254`, `idt_r30xx`, `mc88100`, `mips_r4000`, `mips32_volII`, `mips64_volII`, `mips-iv`, five PPC manuals, three SH-4 manuals, and `vmesbcp2`.
+
+Grepping those manuals for `CRIME_MTE`, `MTE_MODE`, `MTE_TLB`, `MTE_DEPTH`, `MTE_STIPPLE`, `CRMFB`, “Memory Transfer Engine,” and “RealityEngine” found no SGI CRM/CRIME MTE device documentation. Similar hits elsewhere in `_scratchpad` are copied source/audit artifacts, not manuals.
+
+The MIPS documentation establishes only access and exception mechanics:
+
+- KSEG1 is uncached and accesses physical memory or MMIO directly: [`mips_r4000.txt:685`](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/mips_r4000.txt:685).
+- DBE is the data load/store bus-error exception: [`mips_r4000.txt:1009`](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/mips_r4000.txt:1009).
+- Board circuitry may raise it for invalid physical addresses or access types: [`mips_r4000.txt:1132`](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/mips_r4000.txt:1132).
+- The relationship between load/store instructions and external bus errors is implementation-dependent: [`mips-iv.txt:86`](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/mips-iv.txt:86).
+
+The closest device description is the committed NetBSD-derived O2 CRM register header. It names:
+
+- TLB A/B/C, TEX, LIN_A/B, and CLIP selectors;
+- depth 8, 16, and 32;
+- STIPPLE;
+- COPY, explicitly “1-copy, 0-clear dst”;
+- the BYTEMASK register.
+
+See [`crmfbreg.h:239–273`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:239).
+
+Therefore:
+
+- The named fields are evidence that these are real command encodings, not grounds for terminating the emulator.
+- No supplied document defines stipple layout, partial-byte lane semantics, or all valid source/destination combinations well enough to implement them faithfully.
+- MIPS permits a modeled DBE, but nothing says these mapped, named MTE commands should fault. A command-level decline is better supported until an actual CRM specification is obtained.
+
+## 3. Options and supported disposition
+
+The tree’s seven-option menu is recorded at `tools/CLAUDE.md:1892–1898`: DELETE, silent DECLINE, latched DECLINE, ACCEPT, FAULT, BACKED ACCEPT, and IMPLEMENT.
+
+| Option | Tree precedent | Assessment here |
+|---|---|---|
+| Delete the exit and continue | Disabled `dst_y_step` exit at [`dev_sgi_re.c:1491–1494`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1491) | Unsafe: executes a different transfer |
+| Silent decline | Ignored status register at [`:1855–1857`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1855) | Possible, but loses a useful unsupported-command record |
+| Latched command decline | Drawing primitive at [`:1133–1146`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1133); width decline skips dependent work at [`:1214–1219,1438–1444`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1214) | Best immediate hardened disposition |
+| ACCEPT | Exact stored TLB readback at [`:507–528`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:507) | Only where correct behavior already exists |
+| FAULT | [`dev_unreadable.c:41–51`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41), converted to DBE at [`memory_rw.c:595–624`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595) | Mechanically available, but no MTE contract selects it |
+| BACKED ACCEPT | MTE register storage/readback at [`dev_sgi_re.c:1698–1717`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1698) | Register storage does not perform the commanded transfer |
+| IMPLEMENT | Existing tiled transfer at [`:1509–1576`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1509) and linear fill at [`:1637–1677`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1637) | Long-term answer, once semantics are sourced |
+
+Masking/coercion also has precedents—CRIME control masking at [`dev_sgi_ip32.c:331–350`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:331) and GD-ROM width coercion at [`dev_dreamcast_gdrom.c:1042–1048`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1042)—but lacks a warrant here.
+
+Per site:
+
+- **STIPPLE:** implement with a hardware contract; otherwise latched whole-command decline. Clearing STIPPLE would execute an unstippled transfer.
+- **Source selector:** split the predicate. A fill must ignore source bits because source is consumed only under COPY ([`dev_sgi_re.c:1564–1568`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1564)). For COPY, A/B/C are established. LIN_A has an existing path at [`:264–269`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:264), but that path labels itself “probably not correct”; validate it separately before widening. Unsupported copy sources should decline the entire command before any destination PUT.
+- **LINEAR COPY:** implement true copy or decline. Deleting/clearing COPY converts a copy into a background fill.
+- **LINEAR depth:** implement documented 16/32-bit behavior; decline until then. Forcing depth 8 changes byte counts and values. Field value 3 produces 64 internally but is not named by the header.
+- **BYTEMASK:** implement selective lanes when semantics are known; otherwise decline. Setting it to all ones writes bytes the guest disabled.
+- **Dead width arm:** remove or document only as dead-code cleanup under `sgimtewidth`; never reorder it into a live exit. The real width fix should explicitly accept supported sizes and gracefully decline others.
+
+Any latched implementation needs distinct bits per message site. The shared-struct collision rule and next free bit `1 << 13` are at [`dev_sgi_re.c:58–66,157–169`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:58).
+
+## 4. Existing probes, gates, and blast radius
+
+- [`sgi_re_width_probe.py:31–38`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:31) says #513 removed all six old read kills. It explicitly excludes `DEVICE_ACCESS(sgi_mte)` at [`:54–57`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:54).
+- Its current rows are readback or defined-decline rows at [`:366–445`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:366); there are no active `row(...kill...)` calls.
+- Committed `regress/gate_arm.sh@HEAD:1392–1460` gates that probe at 46 rows, and `@HEAD:1432–1438` explicitly says the six old `ld kill` rows are gone. No re-pin is owed.
+- [`sgi_mte_fill_probe.py:27`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:27) is not gate-wired. Its comments disclose LINEAR depth/COPY deaths at [`:58,81–89`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:58), but no row executes any of these five predicates.
+- `regress/gate_hygiene.sh:417` merely grandfathers the probe’s promptless harness name.
+- Nearby ownership remains separate: `sgimtewidth` owns the dead width arm; `sgimtedepth4dead` exercises tiled depth behavior; `sgirelinb` records that LIN_B cannot be implemented by symmetry alone ([`OUTSTANDING_BUGS.md:15769`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:15769)).
+
+A correct preflight decline should not alter existing supported tiled fill/copy results. The disturbance is chiefly test and latch bookkeeping:
+
+- Extend the existing MTE probe with per-site survival, attribution, once-only, and no-side-effect rows, then gate it with a completion sentinel and pinned denominator.
+- Add same-instance cross-latch checks.
+- Update or explicitly narrow the RE-width probe’s “all used latch bits” claim; new MTE bits otherwise make that claim stale even if its 46 product rows remain green.
+- Do not resurrect or re-pin the discharged six read-death rows.
+
+## 5. Smallest witness
+
+This is source-derived, not executed.
+
+On the unmodified in-tree `-E sgi -e ip32 -M 64` machine, preload:
+
+- `$a3 = 0xb5003800`
+- `$t0 = 0x00000400`
+
+Then execute one guest instruction: `sw $t0,0($a3)`.
+
+The handler stores MODE and synchronously starts MTE, reaching [`dev_sgi_re.c:1496–1498`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1496). The exact diagnostic, `[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]`, is the attribution control. The existing probe contains the same planted `sw` opcode and unmodified-IP32 harness at [`sgi_mte_fill_probe.py:132–144,224–228,273–283`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:132).
+
+Controls:
+
+- **Matched liveness:** issue the same MODE+START `sw` with value zero, then store/load/print a RAM sentinel. Reset TLB A is invalid, so the one-pixel tiled fill returns harmlessly. The existing RAM control is at [`sgi_mte_fill_probe.py:357–360`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:357).
+- **Device signature:** `lw` from `0xb5004000` must return `0x1e000000`, unlike RAM zero ([`sgi_mte_fill_probe.py:143–144,362–365`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:143)); the value is produced at [`dev_sgi_re.c:1840–1848`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1840).
+
+## 6. Record contradictions and superseded claims
+
+I read every `OUTSTANDING_BUGS.md` occurrence in order, latest last: lines 13784, 13872, 14259, 14353, 14593, 14672, 14676, 14736, 15899, 17917, 18025, 18114, 18186, 18267, 18270, 18842, and 18847. I also read the complete committed ledger row, `tools/pipeline/ledger.json@HEAD:29725–30161`, including every entry.
+
+The material contradictions are:
+
+- The old 21/20, 19, and 12/11 headlines are historical. HEAD is 13 textual hits, seven comments, six active statements, five reachable.
+- The old “inside `DEVICE_ACCESS`” scope at [`OUTSTANDING_BUGS.md:14259`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:14259) is false for the surviving five: all are in `do_mte_transfer`.
+- #513 already repaired the six old RE read exits—five ACCEPTs and one TEX decline ([`OUTSTANDING_BUGS.md:18114–18140`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18114)).
+- `ledger.json@HEAD:29730` is stale because it still calls six `ld kill` rows current witnesses. `@HEAD:30155` correctly says they were replaced and the re-pin is discharged.
+- `ledger.json@HEAD:30159` still asks the TEX accept-versus-decline question even though #513 chose and shipped decline.
+- The beginning of the enormous `state_note` at `@HEAD:30160` repeats the obsolete death-row obligation; its later text supersedes that same field.
+- Its active locations `1463/1471/1547/1552/1563/1685` have moved to `1498/1506/1582/1587/1598/1720`.
+- That note says six comment texts; HEAD now has seven. Its active-six result nevertheless remains correct.
+- The latest ownership statement is accurate: [`OUTSTANDING_BUGS.md:18841–18848`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18841) assigns `sgirekills` five command exits. The sixth active statement is the already-filed `sgimtewidth` dead arm.

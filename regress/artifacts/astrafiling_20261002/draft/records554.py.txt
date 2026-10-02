@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""records554.py gen | ledger  -- the records of #554 (astrafile): FILE the rows of the Astra review campaign.
+
+  gen     reads regress/artifacts/astrafiling_20261002/FILING.tsv and, if present, FILING_OVERLAY.tsv (the review
+          pass's corrections, one per line: `<id> TAB <field> TAB <value> TAB <who said so, where>`, field one of
+          sev | title | id | kind | note | DROP | ADD; for ADD the value is `wave|where|key|kind|sev|title`), and writes
+          <records>/bugs554.md (the OUTSTANDING_BUGS.md section), <records>/filed554.json (the ledger rows) and
+          <records>/counts554.txt (the numbers the CHANGELOG block quotes -- derived here, never typed).
+  ledger  appends filed554.json's rows to the ledger at $LEDGER_PATH (CRLF, indent 1, no trailing newline; refuses
+          on an id that exists).
+Every overlay line is applied exactly once or the run refuses; a table row the overlay does not name is filed as
+derived."""
+import io
+import json
+import os
+import re
+import sys
+
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+REC = os.path.dirname(os.path.abspath(__file__))
+F = os.path.join(SEC, "regress", "artifacts", "astrafiling_20261002")
+P = os.environ.get("LEDGER_PATH", os.path.join(SEC, "tools", "pipeline", "ledger.json"))
+DATE = "2026-10-02"
+EV = {"retro": "regress/artifacts/astraretro_20260926/DISPOSITIONS.md",
+      "harness": "regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md"}
+WAVE = {"retro": "wave 1, the emulator source", "harness": "wave 2, the regression harness"}
+ORDER = ["HIGH", "L2 obligation", "LOW/HIGH (disputed)", "MED", "LOW"]
+# HOW THE LOW ROWS ARE FILED.  "class" (the default): each wave's LOW rows go under ONE class row -- every id is still
+# written out in OUTSTANDING_BUGS.md with its title, so a grep finds it, and a row is promoted to its own ledger row
+# when a round takes it up.  "rows": every LOW row is its own ledger row too (the ledger grows by 495 instead of 203).
+LOWFORM = os.environ.get("FILE554_LOW", "class")
+CLASSID = {"retro": "astraretrolow", "harness": "astraharnesslow"}
+
+
+def table():
+    rows = []
+    for l in io.open(os.path.join(F, "FILING.tsv"), encoding="utf-8"):
+        if l.startswith("#") or not l.strip():
+            continue
+        w, where, key, kind, sev, ident, title, src = l.rstrip("\n").split("\t")
+        rows.append(dict(wave=w, where=where, key=key, kind=kind, sev=sev, id=ident, title=title, src=src, by=""))
+    ov = os.path.join(F, "FILING_OVERLAY.tsv")
+    applied = []
+    if os.path.isfile(ov):
+        for n, l in enumerate(io.open(ov, encoding="utf-8"), 1):
+            if l.startswith("#") or not l.strip():
+                continue
+            ident, field, value, who = (l.rstrip("\n").split("\t") + ["", "", ""])[:4]
+            if field == "ADD":
+                w, where, key, kind, sev, title = value.split("|", 5)
+                if any(r["id"] == ident for r in rows):
+                    sys.exit("REFUSED: overlay line %d ADDs %s, which the table has" % (n, ident))
+                rows.append(dict(wave=w, where=where, key=key, kind=kind, sev=sev, id=ident, title=title, src="(added by the review pass)", by=who))
+            else:
+                hit = [r for r in rows if r["id"] == ident]
+                if len(hit) != 1:
+                    sys.exit("REFUSED: overlay line %d names %s, found %d times" % (n, ident, len(hit)))
+                if field == "DROP":
+                    rows.remove(hit[0])
+                elif field == "note":
+                    hit[0]["by"] = (hit[0]["by"] + "; " if hit[0]["by"] else "") + value
+                elif field in ("sev", "title", "id", "kind"):
+                    hit[0][field] = value
+                    hit[0]["by"] = (hit[0]["by"] + "; " if hit[0]["by"] else "") + "%s corrected: %s" % (field, who)
+                else:
+                    sys.exit("REFUSED: overlay line %d: unknown field %r" % (n, field))
+            applied.append("%s %s" % (ident, field))
+    ids = [r["id"] for r in rows]
+    dup = sorted(set(i for i in ids if ids.count(i) > 1))
+    if dup or "?" in ids:
+        sys.exit("REFUSED: duplicate or missing ids after the overlay: %s" % (dup or "?"))
+    return rows, applied
+
+
+# EXISTING rows the retro RE-GRADED (Astra's afile_01 completed the list; D: lines are DISPOSITIONS.md's).  Applied to
+# the ledger's `sev` and, where the id has a heading that prints its grade, to that heading IN PLACE.  The peer
+# session's two rows (lcaisaphys, lcaisaphyshit -> HIGH, D:740, :752) are NOT touched: they are listed in the section
+# FOR THE PEER.  `sgirebufuninit` (D:655 leaves the queue's HIGH to its pending adjudication) and `pit8253lsbnotimer`
+# (D:783: not changed) are deliberately absent.
+REGRADES = [("excvecrecurse", "HIGH", "retro, DISPOSITIONS.md:159-162"), ("ppccr0modewidth", "MED", "retro, DISPOSITIONS.md:163-164"),
+            ("mipstiny", "MED", "retro, DISPOSITIONS.md:243-245: now a defect, no longer an unresolved disagreement"),
+            ("armdesc3kill", "HIGH", "retro, DISPOSITIONS.md:328-329"), ("lbsmask", "MED", "retro, DISPOSITIONS.md:477-480"),
+            ("sgirespanchk", "HIGH", "retro, DISPOSITIONS.md:615 -- the intra-struct RULE QUESTION travels with it"),
+            ("sgiretlbshiftub", "LOW", "retro, DISPOSITIONS.md:608"),
+            ("sgirebufshiftub", "LOW", "retro, DISPOSITIONS.md:607: the queue already said LOW, the ledger said MED"),
+            ("fiqenableread", "MED", "retro, DISPOSITIONS.md:791, for the readback defect"),
+            ("fbm2findings", "MED", "retro, DISPOSITIONS.md:792, for the periodic CLEAR reload"),
+            ("fbcsrdecodelanes", "MED", "retro, DISPOSITIONS.md:793"), ("fbsdrampair", "HIGH", "retro, DISPOSITIONS.md:808"),
+            ("ptywaitstatus", "HIGH", "harness, HARNESS_DISPOSITIONS.md:1029-1030 (GPT-6 Astra's amendments to `hpcc2widthprobe:F2` and "
+                                      "`hppcroundingprobe:F2`): the class lets an emulator death after the last observation pass a "
+                                      "probe's verdict.  THE HIGH IS DISPUTED: the raise is Astra's own, and the grok seat's first-hand "
+                                      "ruling (regress/artifacts/astrafiling_20261002/grok/grok_filehigh3.txt) is HIGH ONLY ON THE "
+                                      "RE-INTRODUCTION RULE -- no live process end on the paths it read -- which is the rule question of "
+                                      "the ten disputed harness rows that #554 files.  agy's facts at the two sites the re-grade names "
+                                      "(regress/artifacts/astrafiling_20261002/agy/agy_highfacts2.txt), verbatim, both sites: "
+                                      "\"Q1: CAN PASS | Q2: NO LONGER | Q3: NONE FOUND\" -- Q1 the check on a real emulator death, "
+                                      "Q2 the protected path today, Q3 a live instance")]
+# a re-grade on which two seats differ: the heading it corrects says so
+DISPUTED_REGRADES = ("ptywaitstatus",)
+PEER_REGRADES = [("lcaisaphys", "HIGH", "D:740, :752"), ("lcaisaphyshit", "HIGH", "D:740, :752 (included in the amended devlca:F1 ruling)")]
+
+
+def regrade_bugs(text):
+    """HEAD's OUTSTANDING_BUGS.md with the re-graded ids' headings corrected in place; returns (text, report lines)."""
+    lines, rep = text.split("\n"), []
+    for rid, new, why in REGRADES:
+        n = 0
+        for i, l in enumerate(lines):
+            if not re.match(r"^#{2,4} ", l):
+                continue
+            m = re.search(r"(`%s` \()(LOW|MED|HIGH|low|med|high)\b" % re.escape(rid), l)
+            if m and m.group(2).upper() != new:
+                lines[i] = l[:m.start(2)] + "%s%s; it said %s until #554 re-graded it, 2026-10-02" % (
+                    new, ", the grade disputed between two seats" if rid in DISPUTED_REGRADES else "", m.group(2)) + l[m.end(2):]
+                n += 1
+        rep.append("%s -> %s: %d heading(s) corrected in place" % (rid, new, n))
+    return "\n".join(lines), rep
+
+
+def sevkey(r):
+    return ORDER.index(r["sev"]) if r["sev"] in ORDER else len(ORDER)
+
+
+# a row this very commit FIXES: filed closed, with its witness, and kept out of the open headings and class lists
+CLOSED = {"nineseatreminder": "harness: tools/hooks/round_reminder.sh's `session` and `task` modes both emit valid JSON before and "
+                              "after the edit, and the new text names no model, states the PANEL_FIRE_AGY condition and no longer "
+                              "says `./panel.sh` (regress/artifacts/astrafiling_20261002/hookfix/)"}
+
+
+def gen():
+    allrows, applied = table()
+    rows = [r for r in allrows if r["id"] not in CLOSED]
+    closed = [r for r in allrows if r["id"] in CLOSED]
+    if len(closed) != len(CLOSED):
+        sys.exit("REFUSED: a row this commit closes is not in the table: %s" % sorted(set(CLOSED) - set(r["id"] for r in closed)))
+    out = []
+    counts = []
+    for wave in ("retro", "harness"):
+        wr = [r for r in rows if r["wave"] == wave]
+        out += ["", "### %s -- %d rows (%s)" % ("THE RETRO" if wave == "retro" else "THE HARNESS REVIEW", len(wr), WAVE[wave]), ""]
+        for sev in sorted(set(r["sev"] for r in wr), key=lambda s: ORDER.index(s) if s in ORDER else 9):
+            sr = [r for r in wr if r["sev"] == sev]
+            counts.append("%s %s %d" % (wave, sev, len(sr)))
+            if sev == "LOW" and LOWFORM == "class":
+                out.append("#### `%s` (LOW, a CLASS row) -- the %d LOW rows of %s, one line each; a row is promoted to its own ledger "
+                           "row when a round takes it up" % (CLASSID[wave], len(sr), WAVE[wave]))
+                out.append("`%s`; the table with each row's governing text: `regress/artifacts/astrafiling_20261002/FILING.tsv`." % EV[wave])
+                out.append("")
+                for r in sr:
+                    out.append("* `%s`%s -- %s (%s%s)%s" % (r["id"], " (test coverage)" if r["kind"] == "GAP" else "", r["title"], r["where"],
+                                                         (", " + r["key"]) if r["key"] != "-" else "", ("  [%s]" % r["by"]) if r["by"] else ""))
+                out.append("")
+                continue
+            for r in sr:
+                tag = {"NEW": "", "GAP": ", test coverage", "ID": ", an id for an entry this file already carries in prose"}[r["kind"]]
+                out.append("#### `%s` (%s%s) -- %s" % (r["id"], r["sev"], tag, r["title"]))
+                out.append("%s%s -- `%s`%s" % (r["where"], (", `%s`" % r["key"]) if r["key"] != "-" else "", EV[wave],
+                                              ("  [%s]" % r["by"]) if r["by"] else ""))
+                out.append("")
+    io.open(os.path.join(REC, "bugs554.body.md"), "w", encoding="utf-8", newline="\n").write("\n".join(out).rstrip("\n") + "\n")
+    filed = []
+    for wave in ("retro", "harness"):
+        low = [r for r in rows if r["wave"] == wave and r["sev"] == "LOW"]
+        if LOWFORM != "class" or not low:
+            continue
+        filed.append({"id": CLASSID[wave], "sev": "LOW", "state": "open", "opened": DATE, "commits": "", "witness": "", "hold_question": "",
+                      "title": "CLASS ROW: the %d LOW rows the Astra review campaign filed from %s -- diagnostics, latent code, records and "
+                               "test coverage; each is listed with its id in OUTSTANDING_BUGS.md (2026-10-02, #554) and promoted to its "
+                               "own row when a round takes it up" % (len(low), WAVE[wave]),
+                      "state_note": "MEMBERS (%d), id -- title: " % len(low) + " || ".join("%s -- %s" % (r["id"], r["title"]) for r in low),
+                      "entries": [{"phase": "assess", "seat": "fable5", "date": DATE, "grade": "", "grader": "", "ev": EV[wave],
+                                   "note": "[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by #554 from the Astra review campaign (%s).  "
+                                           "This row closes when every member is promoted, fixed or dropped; the members' rulings and "
+                                           "evidence are in %s and regress/artifacts/astrafiling_20261002/FILING.tsv.  NOT FIXED by #554."
+                                           % (WAVE[wave], EV[wave])}]})
+    for r in rows:
+        if LOWFORM == "class" and r["sev"] == "LOW":
+            continue
+        note = ("[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by #554 from the Astra review campaign (%s): %s%s.  "
+                "The finding, its ruling, its confirmation and the evidence are in %s; the filing table and its review are "
+                "in regress/artifacts/astrafiling_20261002/.  NOT FIXED by #554."
+                % (WAVE[r["wave"]], r["where"], (", " + r["key"]) if r["key"] != "-" else "", EV[r["wave"]]))
+        kindnote = {"NEW": "", "GAP": "TEST-COVERAGE ROW.  ",
+                    "ID": "AN ID FOR AN EXISTING PROSE ENTRY of OUTSTANDING_BUGS.md -- no second entry is opened.  "}[r["kind"]]
+        filed.append({"id": r["id"], "title": r["title"], "sev": r["sev"], "state": "open", "opened": DATE, "commits": "",
+                      "witness": "", "hold_question": "",
+                      "state_note": kindnote + "GOVERNING TEXT (from the dispositions file, cut at 400 characters): " + r["src"]
+                      + (("  [%s]" % r["by"]) if r["by"] else ""),
+                      "entries": [{"phase": "assess", "seat": "fable5", "date": DATE, "grade": "", "grader": "", "ev": EV[r["wave"]], "note": note}]})
+    for r in closed:
+        filed.append({"id": r["id"], "title": r["title"], "sev": r["sev"], "state": "closed", "opened": DATE, "commits": "",
+                      "witness": CLOSED[r["id"]], "hold_question": "",
+                      "state_note": "FILED AND CLOSED BY #554 (2026-10-02): the finding (%s, %s) is fixed by the same commit that files "
+                                    "it.  GOVERNING TEXT: %s" % (r["where"], r["key"], r["src"]),
+                      "entries": [{"phase": "assess", "seat": "fable5", "date": DATE, "grade": "", "grader": "", "ev": EV[r["wave"]],
+                                   "note": "[NOT A SEAT ANSWER] Filed and closed by GXEMUL [087a90] (main loop) by #554: the harness "
+                                           "review's finding, verified by the independent seat and confirmed by GPT-6 Astra (%s), is "
+                                           "corrected in tools/hooks/round_reminder.sh by this commit." % EV[r["wave"]]}]})
+    io.open(os.path.join(REC, "filed554.json"), "w", encoding="utf-8", newline="\n").write(json.dumps(filed, indent=1, ensure_ascii=False) + "\n")
+    summ = ["rows %d" % len(rows)] + counts + ["kinds " + ", ".join("%s %d" % (k, sum(1 for r in rows if r["kind"] == k)) for k in ("NEW", "GAP", "ID")),
+                                               "overlay lines applied %d" % len(applied)] + ["  " + a for a in applied]
+    io.open(os.path.join(REC, "counts554.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(summ) + "\n")
+    print("\n".join(summ[:12]))
+    print("bugs554.body.md %d lines; filed554.json %d rows" % (len(out), len(filed)))
+
+
+def ledger():
+    raw = open(P, "rb").read()
+    L = json.loads(raw.decode("utf-8"))
+    dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+    if dump(L) != raw:
+        sys.exit("REFUSED: the ledger does not round-trip byte-identical; its format changed")
+    filed = json.load(io.open(os.path.join(REC, "filed554.json"), encoding="utf-8"))
+    ids = {x["id"] for x in L["rows"]}
+    clash = [r["id"] for r in filed if r["id"] in ids]
+    if clash:
+        sys.exit("REFUSED: %d ids already exist: %s" % (len(clash), " ".join(clash[:8])))
+    for rid, new, why in REGRADES:
+        r = [x for x in L["rows"] if x["id"] == rid]
+        if len(r) != 1:
+            sys.exit("REFUSED: re-grade target %s found %d times" % (rid, len(r)))
+        old = str(r[0].get("sev"))
+        r[0]["sev"] = new
+        r[0]["state_note"] = ("[%s] RE-GRADED %s -> %s by #554 from the Astra review campaign (%s; the files are under regress/artifacts/"
+                              "astraretro_20260926/ and astraretro_harness_20260926/).  " % (DATE, old, new, why)) + (r[0].get("state_note") or "")
+    L["rows"].extend(filed)
+    open(P, "wb").write(dump(L))
+    print("ledger: +%d rows filed by #554 (%d rows now); %d existing rows re-graded" % (len(filed), len(L["rows"]), len(REGRADES)))
+
+
+def setcommits():
+    """setcommits <row> <sha> [...]: record a commit on existing rows (a previous round's pending record; this unit's
+    own closed row once its sha exists)."""
+    raw = open(P, "rb").read()
+    L = json.loads(raw.decode("utf-8"))
+    dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+    if dump(L) != raw:
+        sys.exit("REFUSED: the ledger does not round-trip byte-identical; its format changed")
+    a = sys.argv[2:]
+    for rid, sha in zip(a[0::2], a[1::2]):
+        r = [x for x in L["rows"] if x["id"] == rid]
+        if len(r) != 1:
+            sys.exit("REFUSED: row %s found %d times" % (rid, len(r)))
+        r[0]["commits"] = sha
+    open(P, "wb").write(dump(L))
+    print("ledger: commits recorded -- " + ", ".join("%s %s" % p for p in zip(a[0::2], a[1::2])))
+
+
+if __name__ == "__main__":
+    {"gen": gen, "ledger": ledger, "setcommits": setcommits}[sys.argv[1]]()

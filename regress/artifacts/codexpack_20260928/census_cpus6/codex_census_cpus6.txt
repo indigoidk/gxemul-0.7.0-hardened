@@ -1,0 +1,98 @@
+CODEXPACK_CENSUS_CPUS6_ALIVE
+VERDICT: 8 live calls classified -- 3 reachable by guest access at run time, 1 of those not recorded
+
+All source and queue citations below refer to `db8b1a33`. Manual citations refer to the permitted on-disk `_scratchpad` files. Reachability uses the committed source’s default configuration; external compiler defines were not checked. Dispositions are recommendations, not changes made.
+
+```text
+src/cpus/memory_sh.c:381 | sh_translate_v2p | WHEN: guest access | CONDITION: "if (flags & FLAG_INSTR)" (src/cpus/memory_sh.c:379), after earlier address and user-mode returns | GUEST LEVEL: privileged | RECORDED: NONE for this instruction-fetch defect; partial reserved-range overlap noted below | DISPOSITION: 7 — implement guest-local handling of prohibited instruction access | high classification; medium disposition
+src/cpus/memory_sh.c:400 | sh_translate_v2p | WHEN: guest access | CONDITION: "if (!(flags & FLAG_NOEXCEPTIONS))" (src/cpus/memory_sh.c:398), after instruction, mapped-P4 and no-exception returns | GUEST LEVEL: privileged | RECORDED: prose OUTSTANDING_BUGS.md:8148–8148 | DISPOSITION: 3 — decline reserved data access and announce once | high
+src/cpus/cpu.c:530 | cpu_run_init | WHEN: construction (pre-run machine validation) | CONDITION: "if (machine->ncpus == 0)" (src/cpus/cpu.c:528) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/cpu_arm_instr.c:72 | update_bdt_statistics | WHEN: unreachable (default source configuration) | CONDITION: "#ifdef GATHER_BDT_STATISTICS" (src/cpus/cpu_arm_instr.c:44), then "if (f == NULL)" after fopen (src/cpus/cpu_arm_instr.c:69–70) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 3 — disable failed optional statistics and announce once when enabled | high source; conditional configuration
+src/cpus/generate_arm_loadstore.c:46 | main | WHEN: construction (generator command line) | CONDITION: else of "if (argc == 1)", then "if (argc != 4)" (src/cpus/generate_arm_loadstore.c:41–44) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/generate_head.c:62 | main | WHEN: construction (generator command line) | CONDITION: "if (argc != 3)" (src/cpus/generate_head.c:58) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/generate_tail.c:58 | main | WHEN: construction (generator command line) | CONDITION: "if (argc != 3)" (src/cpus/generate_tail.c:54) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/cpus/memory_alpha.c:77 | alpha_translate_v2p | WHEN: guest access | CONDITION: "if (!userMode && base == 0)", then "if (vaddr == 0xfffffffd80000000ULL)" (src/cpus/memory_alpha.c:73–75) | GUEST LEVEL: privileged | RECORDED: alphavmkill | DISPOSITION: 7 — implement the missing virtual-memory behavior | high classification; medium disposition
+```
+
+The enumerated per-file counts match: `memory_sh.c` **2** `{381,400}`; `cpu.c` **1** `{530}`; `cpu_arm_instr.c` **1** `{72}`; `generate_arm_loadstore.c` **1** `{46}`; `generate_head.c` **1** `{62}`; `generate_tail.c` **1** `{58}`; `memory_alpha.c` **1** `{77}`. The `abort()/exit()` text at `src/cpus/memory_alpha.c:195` is a comment.
+
+The important classification evidence is:
+
+- SH determines privilege with `"int user = cpu->cd.sh.sr & SH_SR_MD? 0 : 1;"`; the user arm returns before either exit (`src/cpus/memory_sh.c:335`, `src/cpus/memory_sh.c:359–370`). Runtime instruction and memory paths invoke the translation hook (`src/cpus/cpu_dyntrans.c:679–680`, `src/cpus/memory_rw.c:248–252`). The address cases, explicitly enumerated, are:
+
+  | Address interval | Outcome before or at these sites |
+  |---|---|
+  | `0x00000000–0x7fffffff` | First translation arm (`src/cpus/memory_sh.c:339–349`). |
+  | `0x80000000–0xbfffffff` | Privileged direct mapping (`src/cpus/memory_sh.c:374–376`). |
+  | `0xc0000000–0xdfffffff` | First translation arm (`src/cpus/memory_sh.c:340–349`). |
+  | `0xe0000000–0xe3ffffff` | Store-queue identity mapping (`src/cpus/memory_sh.c:353–356`). |
+  | `0xe4000000–0xefffffff` | Privileged instruction access reaches `:381`; privileged data access reaches `:400` unless exceptions are suppressed (`src/cpus/memory_sh.c:379–400`). |
+  | `0xf0000000–0xffffffff` | Privileged instruction access reaches `:381`; privileged data access receives identity mapping (`src/cpus/memory_sh.c:379–387`). |
+
+- The SH queue entry explicitly says: `` `memory_sh.c:358-364` | kernel access to `0xe4000000..0xefffffff` → `fatal()` + `exit(1)` `` (`OUTSTANDING_BUGS.md:8148`). Its historical location and residual-data condition identify current `:400`. It overlaps the reserved-address part of `:381`, but does not identify the separate instruction-fetch guard or its mapped-P4 reachability. That distinction produces the verdict’s **one unrecorded guest site**.
+
+- The SH manual calls P4 instruction access **“Access prohibited”** (`_scratchpad/sh7750_hardware.txt:9493–9499`). The precise architectural response to privileged P4 fetch was not established by the passages checked; the instruction-address-error list names misalignment and high-address **user** fetches (`_scratchpad/sh7750_hardware.txt:12753–12757`). Hence member 7 at `:381`. Merely returning failure can reach the dyntrans retry-and-terminate path (`src/cpus/cpu_dyntrans.c:685–732`). Member 3 at `:400` is an emulator policy for a reserved region, whose hardware operation is expressly not guaranteed (`_scratchpad/sh7750_hardware.txt:8757`, `_scratchpad/sh7750_hardware.txt:9014–9017`).
+
+- `alphavmkill` says **“a guest virtual address ends the host”** and identifies the address and bootstrap-arm exit (`OUTSTANDING_BUGS.md:16022–16023`). It also says **“The disposition is genuinely not obvious”** (`OUTSTANDING_BUGS.md:16024`). Although a masked address is already assigned, that alone does not establish correct virtual-memory behavior; the source itself reports **“Alpha kernel virtual memory seems to want to be used. Not yet implemented.”** (`src/cpus/memory_alpha.c:74–76`). Member 4 is therefore unsupported.
+
+- `cpu_run_init` is invoked before the execution loop (`src/core/emul.c:962–983`). The generator programs are build tools with explicit generation recipes (`src/cpus/Makefile.skel:8`, `src/cpus/Makefile.skel:47–49`, `src/cpus/Makefile.skel:108–111`).
+
+- The statistics switch is literally `"/*  #define GATHER_BDT_STATISTICS  */"` (`src/cpus/cpu_arm_instr.c:41`). If externally enabled, the exit becomes a conditional runtime failure during block-transfer statistics collection, including user execution; both callers are guarded by that macro (`src/cpus/cpu_arm_instr.c:1946–1949`, `src/cpus/cpu_arm_instr.c:1978–1981`). That optional configuration is excluded from the verdict.
+
+For every `NONE`, the queue was searched by enclosing function, filename and diagnostic text. General census counts do not identify these individual defects; the queue itself calls those figures **“a triage population, not a finding”** (`OUTSTANDING_BUGS.md:20227–20230`).
+
+**(a) Guest-access ranking**
+
+1. `src/cpus/memory_alpha.c:77` — closest to ordinary kernel activity: the queue describes early-boot kernel virtual-memory use; an actual stock-OS triggering sequence was **not checked** (`OUTSTANDING_BUGS.md:16022–16027`).
+2. **Tied:** `src/cpus/memory_sh.c:381` — prohibited instruction fetch, rather than ordinary instruction memory (`_scratchpad/sh7750_hardware.txt:9493–9499`).
+2. **Tied:** `src/cpus/memory_sh.c:400` — reserved-region data access; no checked evidence orders its frequency against the prohibited fetch (`OUTSTANDING_BUGS.md:8148`).
+
+**(b) CPU-stop assignments**
+
+Here, “user” means reachable without guest privilege; privileged execution can also reach those handlers.
+
+```text
+src/cpus/cpu_arm_instr.c:367 | X(bx) | WHEN: guest access | CONDITION: "if (cpu->pc & 2 && ((cpu->pc & 1) == 0))" (src/cpus/cpu_arm_instr.c:365) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 3 | high
+src/cpus/cpu_arm_instr.c:398 | X(bx_trace) | WHEN: guest access | CONDITION: "if (cpu->pc & 2 && ((cpu->pc & 1) == 0))" (src/cpus/cpu_arm_instr.c:396), with trace handler selected at src/cpus/cpu_arm_instr.c:4239–4241 | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 3 | high
+src/cpus/cpu_arm_instr.c:451 | X(blx_imm) | WHEN: unreachable through decoder | CONDITION: "else" after "if (cpu->pc & 1)" (src/cpus/cpu_arm_instr.c:447–449) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 | high
+src/cpus/cpu_arm_instr.c:462 | X(blx_imm) | WHEN: unreachable | CONDITION: "if (cpu->pc & 2 && ((cpu->pc & 1) == 0))" (src/cpus/cpu_arm_instr.c:460), following the even-target return at src/cpus/cpu_arm_instr.c:454 | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: 1 | high
+src/cpus/cpu_arm_instr.c:499 | X(blx_reg) | WHEN: guest access | CONDITION: "if (cpu->pc & 2 && ((cpu->pc & 1) == 0))" (src/cpus/cpu_arm_instr.c:497) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 3 | high
+src/cpus/cpu_arm_instr.c:892 | X(msr_imm_spsr) | WHEN: guest access | CONDITION: "default:" in "switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE)" (src/cpus/cpu_arm_instr.c:860–881); USR32 and SYS32 are unhandled | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:20346–20350 | DISPOSITION: 3 | high
+src/cpus/cpu_arm_instr.c:935 | X(mrs_spsr) | WHEN: unreachable through checked normal guest mode transitions | CONDITION: "default:" in "switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE)" (src/cpus/cpu_arm_instr.c:926–934) | GUEST LEVEL: n.a. | RECORDED: prose OUTSTANDING_BUGS.md:20346–20350 | DISPOSITION: 3 — defensive decline | medium
+src/cpus/cpu_arm_instr.c:985 | X(reboot) | WHEN: guest access | CONDITION: unconditional stop in handler, selected by "if (iword == 0xef8c64eb)" (src/cpus/cpu_arm_instr.c:4996–4998) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 5 — normal SWI exception outside the intended PROM sentinel | high
+src/cpus/cpu_arm_instr.c:1797 | arm_pop | WHEN: guest access | CONDITION: "if (return_flag)", then mode-switch "default:" (src/cpus/cpu_arm_instr.c:1780–1795); incoming s_bit and "if (iw & 0x8000)" select return processing (src/cpus/cpu_arm_instr.c:1610–1618) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:20346–20350 | DISPOSITION: 3 | high
+src/cpus/cpu_arm_instr.c:2020 | X(ldrex) | WHEN: guest access | CONDITION: "if (addr & (sizeof(word)-1))" (src/cpus/cpu_arm_instr.c:2018) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:4181–4202 | DISPOSITION: 5 — data abort | high
+src/cpus/cpu_arm_instr.c:2065 | X(strex) | WHEN: guest access | CONDITION: "if (addr & (sizeof(word)-1))" (src/cpus/cpu_arm_instr.c:2063) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:4181–4202 | DISPOSITION: 5 — data abort | high
+```
+
+The assignment at `src/cpus/cpu.c:83`, `"cpu->running = 0;"`, initializes a newly allocated CPU; it does **not** stop an executing CPU (`src/cpus/cpu.c:58–83`). Retain it. The apparent assignment at `src/cpus/cpu_arm_instr.c:4660` is commented out. No CPU-stop assignment occurs in the complete SH, Alpha or generator files read (`src/cpus/memory_sh.c:1–405`, `src/cpus/memory_alpha.c:1–200`, `src/cpus/generate_arm_loadstore.c:1–392`, `src/cpus/generate_head.c:1–155`, `src/cpus/generate_tail.c:1–202`).
+
+Several distinctions matter for these rows:
+
+- **BLX reachability:** immediate decoding produces target low bits `01` for opcode `0xa`, and `11` for opcode `0xb`; neither enters `:451`. Independently, the earlier even-target return prevents `:462` (`src/cpus/cpu_arm_instr.c:4134–4143`, `src/cpus/cpu_arm_instr.c:447–465`). Register branches have low-bit possibilities `00`, `01`, `10`, `11`; only `10` triggers these guards. The manual calls that case **“UNPREDICTABLE”** and lists **“Exceptions … None”**, supporting member 3 rather than claiming a required fault (`_scratchpad/ddi0100i.txt:7135–7153`, `_scratchpad/ddi0100i.txt:7181–7195`). Declining must precede the PC/CPSR/LR changes already present in these handlers (`src/cpus/cpu_arm_instr.c:355–367`, `src/cpus/cpu_arm_instr.c:386–398`, `src/cpus/cpu_arm_instr.c:484–499`).
+
+- **SPSR defaults:** the queue names `` `msr_spsr` / `mrs_spsr` / `bdt_load` `default:` arms `` as `` `running = 0` landmines `` (`OUTSTANDING_BUGS.md:20346–20350`). That records the defaults, but does not explain the directly reachable USR32/SYS32 cases. In `arm_pop`, `"s_bit = 0;"` does not leave the already-entered block; the following PC-bit test still sets `"return_flag = 1;"` (`src/cpus/cpu_arm_instr.c:1610–1618`). User/System SPSR accesses are **“UNPREDICTABLE”** in the manual (`_scratchpad/ddi0100i.txt:1701–1702`).
+
+- **MRS is different:** its handled mode values are `0x10`, `0x11`, `0x12`, `0x13`, `0x17`, `0x1b`, `0x1f`; USR32/SYS32 explicitly return zero (`src/include/cpu_arm.h:108–114`, `src/cpus/cpu_arm_instr.c:926–934`). Checked guest mode-changing routes call `arm_load_register_bank`, whose unsupported-mode arm exits first (`src/cpus/cpu_arm_instr.c:830–847`, `src/cpus/cpu_arm_instr.c:1802–1812`, `src/cpus/cpu_arm_instr_dpi.c:218–232`, `src/cpus/cpu_arm.c:606–608`). Debugger-seeded invalid CPSR state was **not checked**.
+
+- **Reboot:** the intended CATS sentinel is installed by machine setup, but instruction decoding imposes no matching location, machine or privilege restriction (`src/machines/machine_cats.c:89–90`, `src/cpus/cpu_arm_instr.c:4991–5002`). Ordinary SWI handling already delivers `ARM_EXCEPTION_SWI` (`src/cpus/cpu_arm_instr.c:994–999`).
+
+- **Exclusive alignment:** the queue names LDREX/STREX and says **“raising a data abort is a choice under latitude, not a mandated fault”** for the unchecked-alignment configuration (`OUTSTANDING_BUGS.md:4181–4192`). Its older claim that alignment checking is permanently disabled is stale: current initialization sets `ARM_CONTROL_ALIGN` (`src/cpus/cpu_arm.c:128–129`). Preserve the alignment check; merely deleting it exposes the raw unaligned accesses (`OUTSTANDING_BUGS.md:4201–4202`).
+
+**(c) Denominator**
+
+Fully read target-file functions:
+
+| File | Functions read completely |
+|---|---|
+| `src/cpus/memory_sh.c` | `translate_via_mmu` (`:54`), `sh_translate_sq_v2p` (`:315`), `sh_translate_v2p` (`:332`). |
+| `src/cpus/memory_alpha.c` | `alpha_translate_v2p` (`:43`). |
+| `src/cpus/generate_arm_loadstore.c` | `main` (`:36`). |
+| `src/cpus/generate_head.c` | `uppercase` (`:36`), `main` (`:54`). |
+| `src/cpus/generate_tail.c` | `uppercase` (`:32`), `main` (`:50`). |
+| `src/cpus/cpu.c` | `cpu_new` (`:58`), `cpu_destroy` (`:160`), `cpu_tlbdump` (`:188`), `cpu_disassemble_instr` (`:203`), `cpu_register_dump` (`:223`), `cpu_functioncall_trace` (`:239`), `cpu_functioncall_trace_return` (`:294`), `cpu_create_or_reset_tc` (`:312`), `cpu_dumpinfo` (`:341`), `cpu_list_available_types` (`:370`), `cpu_run_deinit` (`:400`), `cpu_print_pc_indicator_in_disassembly` (`:431`), `cpu_show_cycles` (`:449`), `cpu_run_init` (`:524`), `add_cpu_family` (`:553`), `cpu_init` (`:586`). |
+| `src/cpus/cpu_arm_instr.c` | `update_bdt_statistics` (`:60`); `X(bx)` (`:353`), `X(bx_trace)` (`:384`), `X(bl)` (`:418`), `X(blx_imm)` (`:438`), `X(blx_reg)` (`:482`); `X(msr_imm)` (`:822`), `X(msr)` (`:850`), `X(msr_imm_spsr)` (`:856`), `X(msr_spsr)` (`:897`), `X(mrs)` (`:910`), `X(mrs_spsr)` (`:924`), `X(mcr_mrc)` (`:948`), `X(cdp)` (`:956`), `X(openfirmware)` (`:969`), `X(reboot)` (`:983`), `X(swi)` (`:994`), `X(bkpt)` (`:1007`), `X(und)` (`:1020`); `arm_pop` (`:1602`), `arm_push` (`:1833`), `X(bdt_load)` (`:1936`), `X(bdt_store)` (`:1968`), `X(ldrex)` (`:2006`), `X(strex)` (`:2050`). |
+
+Within the target files, no functions remain unread except in `cpu_arm_instr.c`: `X(to_be_translated)` was read **partially**, covering relevant decoding paths; every other body outside the enumerated list, and generated `Y` variants, was **not read in full** (`src/cpus/cpu_arm_instr.c:4026`, `src/cpus/cpu_arm_instr.c:4100–4355`, `src/cpus/cpu_arm_instr.c:4750–4862`, `src/cpus/cpu_arm_instr.c:4950–5013`).
+
+Supporting full-body reads were `arm_save_register_bank`, `arm_load_register_bank`, and `MEMORY_RW` (`src/cpus/cpu_arm.c:522–610`, `src/cpus/memory_rw.c:183–227`). Supporting construction, exception, translation, memory-worker, DPI and CATS setup reads were excerpts only. Their remaining functions, generated implementations, and actual runtime/stock-OS behavior were **not checked**.

@@ -1,0 +1,223 @@
+CODEXPACK_DOSSIER_PPCLLSC_ALIVE
+VERDICT: finding TRUE WITH CHANGES -- disposition member 7 -- replace the host exits with architecture-appropriate handling, including the doubleword siblings.
+
+All repository citations below refer to **`db8b1a33`**. Manual citations refer to the supplied files on disk. This is a static remediation review: nothing was built, executed as a test, or changed. I provide the decisive source evidence and sibling remediation sites without constructing executable triggers.
+
+**1. Finding**
+
+The reported exits remain. The scope also includes `ldarx` and `stdcx.`, because the decoder and handler group them with the word instructions.
+
+| Evidence | Committed source |
+|---|---|
+| Instruction bytes become `iword` through `iword = *p;` and `iword = BE32_TO_HOST(iword);`. | `src/cpus/cpu_ppc_instr.c:4124–4128` |
+| The opcode-31 decoder uses `xo = (iword >> 1) & 1023;`. | `src/cpus/cpu_ppc_instr.c:4613–4615` |
+| The cases are `PPC_31_LWARX`, `PPC_31_LDARX`, `PPC_31_STWCX_DOT`, and `PPC_31_STDCX_DOT`; they assign `ic->arg[0] = iword;` and `ic->f = instr(llsc);`. | `src/cpus/cpu_ppc_instr.c:4866–4872` |
+| The handler separately extracts `rc = iw & 1`. Its load cases set `load = 1`; the doubleword cases set `len = 8`, versus the initialized `len = 4`. | `src/cpus/cpu_ppc_instr.c:2278–2293` |
+| The load branch contains `if (rc)`, `fatal("ll: rc-bit set?\n");`, then `exit(1);`. | `src/cpus/cpu_ppc_instr.c:2304–2307` |
+| The store branch contains `if (!rc)`, `fatal("sc: rc-bit not set?\n");`, then `exit(1);`. | `src/cpus/cpu_ppc_instr.c:2329–2333` |
+
+These checks precede the load’s memory access and the store’s reservation test and memory access. Consequently, neither an operand-memory fault nor a failed reservation provides protection once execution reaches the corresponding check. The relevant later operations are at `src/cpus/cpu_ppc_instr.c:2309–2314,2342–2347,2357–2362`.
+
+The termination comes from **`exit(1)`**, not from the name `fatal`: `fatal()` itself calls the diagnostic machinery and returns. Its complete body is at `src/core/debugmsg.c:384–391`.
+
+Round #216’s memory-failure paths now execute `return;` at `src/cpus/cpu_ppc_instr.c:2314,2362`. They do not remove or bypass the record-bit exits.
+
+**2. Privilege, models, and machine coverage**
+
+The checked decoder and handler contain no supervisor-mode check around these instructions. The local manual identifies `lwarx` and `stwcx.` as UISA synchronization instructions, and identifies UISA as the user-level instruction set. Thus user and supervisor execution are within the source-level exposure; successful instruction fetch remains a prerequisite. (`src/cpus/cpu_ppc_instr.c:2276–2374,4866–4872`; `_scratchpad/ppc_pem32_rev2_2001.txt:7017,9729,9764–9786`.)
+
+The registered model names are explicitly:
+
+- **32-bit:** `PPC405GP`, `PPC601`, `PPC603`, `PPC603e`, `PPC604`, `MPC7400`, `MPC7455`, `PPC750`, `G4e`.
+- **64-bit:** `PPC620`, `PPC970`.
+
+These values come from `src/include/cpu_ppc.h:75–88`. The constructor chooses the execution engine by model bitness, and both engines include the same instruction implementation. There is no model-specific LL/SC gate in the checked dispatcher. (`src/cpus/cpu_ppc.c:76–135`; `src/cpus/tmp_ppc_tail.c:63–118`; `src/cpus/cpu_ppc_instr.c:4866–4872`.)
+
+The machine defaults found under `src/machines/` are:
+
+| Machine and subtype | Default CPU | Source |
+|---|---|---|
+| macppc G3; G4; G4plus; G5 | `PPC750`; `MPC7400`; `MPC7455`; `PPC970`, respectively | `src/machines/machine_macppc.c:170–184` |
+| mvmeppc MVME1600; MVME2100; MVME5500 | `PPC603e`; `PPC603e`; `PPC750`, respectively | `src/machines/machine_mvmeppc.c:161–176` |
+| pmppc | `PPC750` | `src/machines/machine_pmppc.c:76–87` |
+| prep IBM6050/6070; MVME2400 | `PPC604`; `PPC750`, respectively | `src/machines/machine_prep.c:150–188` |
+| bareppc; testppc | `PPC970`; `PPC970` | `src/machines/machine_test.c:448–474` |
+
+These are defaults: `if (m->cpu_name == NULL) machine_default_cputype(m);` precedes CPU construction. They are not an exhaustive list of possible user-selected pairings. (`src/core/emul.c:487–502`.)
+
+**No configuration-based immunity was established.** Translation readahead defers handler execution, rather than validating this field; ordinary execution subsequently calls the handler. A breakpoint can pause execution. Neither constitutes an LL/SC correction. (`src/cpus/cpu_dyntrans.c:1799–1848,1916–1933,1978`.) Build-time exclusions, every machine/model pairing’s bootability, and actual runtime reachability were **not checked**.
+
+**3. Hardware behavior**
+
+The supplied manuals do **not** support “both cases must take an illegal-instruction exception.”
+
+The older manual says:
+
+> “Attempting to execute an invalid form of an instruction either invokes the illegal instruction error handler (a program exception) or yields boundedly-undefined results.”
+
+It explicitly includes a reserved bit shown as zero being encoded as one. Its load and store diagrams show the required terminal values. (`_scratchpad/ppc_pem32_rev2_2001.txt:6856–6857,22738–22742,27667–27671`.)
+
+Book I v2.01 instead states:
+
+> “Reserved fields in instructions are ignored by the processor.”
+
+It defines `/` as a reserved field. Book II’s diagrams use that designation for the low bit of **both `lwarx` and `ldarx`**. Under this edition, that load bit must be ignored. (`_scratchpad/ppc_uisa_book1_v201.txt:432–439`; `_scratchpad/ppc_vea_book2_v201.txt:1259–1266`.)
+
+Store Conditional is treated differently. Book I explicitly classifies a disagreement with its specified fields as an invalid form, while Book II’s store diagrams require the terminal value one. Invalid forms may invoke the illegal-instruction handler **or** yield boundedly undefined results. (`_scratchpad/ppc_uisa_book1_v201.txt:1116–1128`; `_scratchpad/ppc_vea_book2_v201.txt:1298–1309`.)
+
+“Boundedly undefined” constrains outcomes to those achievable through defined instructions starting from the preceding machine state. Treating a malformed instruction as an appropriate valid instruction is a possible inference from that definition—not an explicitly prescribed normalization rule. (`_scratchpad/ppc_pem32_rev2_2001.txt:48039`; `_scratchpad/ppc_uisa_book1_v201.txt:451–465`.)
+
+For a chosen Program-exception disposition, the older manual specifies the excepting instruction’s address in SRR0, the illegal-instruction cause in SRR1, and execution at offset `0x00700` from the applicable base. Book III v2.01 likewise specifies the Program vector, saved instruction address, and illegal-instruction cause. (`_scratchpad/ppc_pem32_rev2_2001.txt:12026–12045`; `_scratchpad/ppc_oea_book3_v201.txt:3906–3918,3962–3963`.)
+
+Exact manual-edition applicability to **each emulated CPU model is not checked**. The 2005 combined manual also contains tension between excluding reserved fields and retaining the reserved-zero example; it should not be used to erase the clearer edition distinction above. (`_scratchpad/ppc_pem_32and64_2005.txt:6229–6230`.)
+
+**4. Siblings**
+
+The census here covers the original instruction file and its included decoder-failure tail, not every contextual dependency read for this dossier.
+
+Besides the reported exits:
+
+| Site | Condition class | Outstanding record |
+|---|---|---|
+| `src/cpus/cpu_ppc_instr.c:4119` | Failed instruction fetch through the slow path | **#10**, `OUTSTANDING_BUGS.md:2614–2615` |
+| `src/cpus/cpu_ppc_instr.c:244` | Internal invalid-handler sentinel | No matching entry found; a guest-selectable route was not established |
+
+The file contains no direct live assignment of `cpu->running = 0`; the relevant live assignment comes through its include at `src/cpus/cpu_ppc_instr.c:5431`:
+
+> `cpu->running = 0;`
+
+That is `src/cpus/cpu_dyntrans.c:2014`. The shared `bad` path returns during translation readahead; otherwise it announces an unimplemented instruction and stops the CPU. (`src/cpus/cpu_dyntrans.c:1983–2014`.)
+
+The remaining decoder rejection sites are listed below by remediation category, without additional executable trigger construction. “No match” means no matching entry was found in the record searches, not proof that differently worded prose does not exist.
+
+| Rejection site in `src/cpus/cpu_ppc_instr.c` | Condition category | Record |
+|---|---|---|
+| `:4154` | Unimplemented vector operation | No match |
+| `:4210` | ADDIC variants unsupported in the selected width | No match |
+| `:4341`, `:4998` | Disallowed base-register/update combination in immediate or indexed memory operations | No match |
+| `:4363` | Unsupported conditional-branch addressing form | No match |
+| `:4479` | Rejected BCCTR branch-option form | No match |
+| `:4531`, `:4609`, `:5172`, `:5426` | Unsupported opcode/subopcode defaults | No match |
+| `:4605` | Doubleword rotate operation rejected in 32-bit mode | Deliberate rejection described at `OUTSTANDING_BUGS.md:18894–18896`; no separate stop-defect entry |
+| `:4650` | Unsupported CNTLZW record form | No match |
+| `:4711` | Unsupported MTMSR/MTMSRD field form | No match |
+| `:4748`, `:4764` | Segment-register operations unsupported in the selected width | No match |
+| `:4850` | Unsupported time-base selector | No match |
+| `:5137` | Missing arithmetic record-form selection | No match |
+| `:5146` | Arithmetic operation rejected by the width-support guard | No match |
+| `:5218`, `:5410` | Unsupported floating-point operation defaults | Related prose: `OUTSTANDING_BUGS.md:1705–1716` |
+| `:5421` | Reserved-field rejection for floating-point forms without a record variant | No outstanding match; retained rejection discussed at `CHANGELOG.md:33117–33121` |
+
+Two further lexical guards need qualification: `src/cpus/cpu_ppc_instr.c:5085` is excluded by the currently recognized arithmetic opcode cases, and `src/cpus/cpu_ppc_instr.c:5224` has no recognized operation arriving with an unset record handler. They should not be presented as independently demonstrated guest routes. (`src/cpus/cpu_ppc_instr.c:5062–5085,5197–5225`; `src/include/opcodes_ppc.h:82–155`.)
+
+**5. Disposition**
+
+**Member 7 is the recommended complete design:** implement the applicable instruction-validity policy, accept the reserved load field where required, and provide a proper guest Program-exception path for invalid forms selected to fault. Choosing that permitted exception behavior is a design decision; the manuals do not uniquely mandate it.
+
+| Member | Assessment |
+|---|---|
+| **1 — Delete terminating calls** | Removing only `exit` leaves the diagnostics and falls into normal LL/SC effects. That is an implicit acceptance policy, not a complete validity decision. (`src/cpus/cpu_ppc_instr.c:2304–2374`.) |
+| **2 — Decline silently** | A blanket no-op is unsuitable for a load whose reserved field must be ignored and whose load/reservation effects must occur. (`_scratchpad/ppc_uisa_book1_v201.txt:432–433`; `_scratchpad/ppc_vea_book2_v201.txt:1272–1286`.) |
+| **3 — Decline and announce once** | A possible documented fallback for forms assigned bounded behavior, but not a substitute for required reserved-bit acceptance. PPC needs new per-CPU latch state for the requested idiom. |
+| **4 — Accept existing computation** | Fits the reserved load-bit case. Applying it to invalid forms requires an explicit bounded-behavior policy, rather than claiming a uniquely specified result. |
+| **5 — Deliver an exception** | Generic PPC entry exists, but complete Program/illegal-instruction handling is missing. |
+| **6 — Invent backing storage** | Does not address instruction validity; the handler already uses the memory subsystem and reservation state. (`src/cpus/cpu_ppc_instr.c:2309–2372`.) |
+| **7 — Implement missing behavior** | Covers the architecture distinction and the missing exception semantics together. |
+
+The existing foundation is `ppc_exception()`:
+
+- Saves `cpu->pc` into SRR0 and constructs SRR1.
+- Changes execution state.
+- Selects a vector and redirects instruction pointers.
+
+Those actions are at `src/cpus/cpu_ppc.c:318–345`. However, the declared exception set enumerates **DSI, ISI, EI, FPU, DEC, SC**, with no Program entry, and the checked PPC implementation has no dedicated illegal-instruction cause handling. (`src/include/cpu_ppc.h:251–257`; `src/cpus/cpu_ppc.c:318–345`.)
+
+A new synchronous exception also needs the **actual offending instruction PC**. The FPU exception macro reconstructs it before calling `ppc_exception`; LL/SC currently does not. Thus simply inserting an exception call would leave a cached-execution correctness problem. (`src/cpus/cpu_ppc_instr.c:215–225,2276–2374`; `src/cpus/cpu_ppc.c:321`.)
+
+Nearest precedents:
+
+- **Same handler:** #216’s memory-failure returns preserve continuation through whatever fault processing already occurred. (`src/cpus/cpu_ppc_instr.c:2309–2314,2357–2362`.)
+- **Same CPU, unsupported instruction:** `mtdcr` diagnoses and assigns `instr(nop)` without stopping. Its diagnostic is not latched. (`src/cpus/cpu_ppc_instr.c:4896–4899`.)
+- **House per-instance latch:** fbctrl uses `if (!d->warned_port)`, announces `"the selector is unchanged (once)"`, and sets the latch. (`src/devices/dev_fbctrl.c:120–135`.)
+- PPC’s existing SPR-warning bitmap is **process-global**, not per CPU. (`src/cpus/cpu_ppc.c:1746–1758,1789–1794`.)
+
+The list omits **stop the emulated CPU while retaining the debugger/process**. The shared `bad` path implements precisely that disposition. It would not satisfy guest-execution continuity. (`src/cpus/cpu_dyntrans.c:2002–2024`.)
+
+**6. Regression observations**
+
+These are proposed observations, not test results.
+
+| Case | Before correction | Expected after the recommended design |
+|---|---|---|
+| Invalid form assigned Program-exception behavior | Existing Rc diagnostic, followed by process exit status 1 | Host remains alive; guest exception entry exposes the offending PC and illegal-instruction cause |
+| Reserved load field assigned ignore semantics | Existing load-side diagnostic and process exit | Ordinary load result and reservation establishment; no invalid-form exception |
+| Legal load or conditional store | Existing normal behavior | Same register, memory, CR, and reservation behavior |
+| Existing operand-memory failure | Handler returns after unsuccessful access | Preserve that behavior; do not restore a host exit |
+
+The before evidence is `src/cpus/cpu_ppc_instr.c:2304–2333`. Normal effects are at `src/cpus/cpu_ppc_instr.c:2317–2328,2342–2372`; exception expectations come from the manual passages cited above.
+
+For a chosen invalid-form exception, the operand-memory transaction must not occur before the validity decision. Normal operand effects currently occur after the Rc checks. Exception-state changes are expected; ordinary destination-register or conditional-store success effects are not. (`src/cpus/cpu_ppc_instr.c:2304–2372`.)
+
+The legal neighbors that must remain supported are:
+
+- `lwarx` and `stwcx.` with their defined fields.
+- `ldarx` and `stdcx.` on models supporting those instructions.
+- Base-register-zero and nonzero address formation.
+- Successful reservation matching, absent reservation, and the model’s existing mismatched-reservation failure behavior.
+- Both byte-order branches, load destination updates, store CR updates, and reservation clearing.
+
+These paths are enumerated in `src/cpus/cpu_ppc_instr.c:2283–2372`. Hardware load/store effects are described at `_scratchpad/ppc_vea_book2_v201.txt:1272–1293,1344–1364`.
+
+A regression must distinguish **host survival**, **guest exception entry**, and **ordinary fall-through**. Surviving in a stopped CPU/debugger state is a different observation. Guest execution following an exception depends on the guest handler; it cannot be promised merely because the host survives. (`src/cpus/cpu_dyntrans.c:2002–2024`; `src/cpus/cpu_ppc.c:337–344`.)
+
+**7. Records**
+
+The following corrections are warranted.
+
+- **Overbroad closure:** `OUTSTANDING_BUGS.md:2615` says, **“the PPC data side is already fixed (#216).”**
+
+  Corrected: “#216 removed the LL/SC memory-failure exits; the record-bit exits remain.”
+
+- **Over-specific fault description:** the handler comments say **“memory_rw() raised a DSI”** at `src/cpus/cpu_ppc_instr.c:2311–2313,2359–2361`.
+
+  Corrected: “On an unsuccessful memory access, return and preserve any exception already raised by the memory subsystem.”
+
+  The PPC603 path delivers reload exceptions, while the generic device-failure return does not itself deliver a PPC exception. (`src/cpus/memory_ppc.c:307–324`; `src/cpus/memory_rw.c:603–624`.)
+
+- **Incorrect CR comment:** `src/cpus/cpu_ppc_instr.c:2340–2341` says **“The SO bit of the XER is copied to to bit 4 of Condition Register Field 0.”**
+
+  Corrected: “The SO bit of XER is copied to bit 3 of the Condition Register, the SO bit of CR0.”
+
+  The manual explicitly identifies that fourth field bit as CR bit 3. (`_scratchpad/ppc_uisa_book1_v201.txt:1367–1368`.)
+
+- **Stale sibling records:** `OUTSTANDING_BUGS.md:1610–1611,3085–3086` says **“`fnmadd`/`fnmsub` are not decoded and halt”** or **“are undecoded and halt.”** Related stale wording appears at `OUTSTANDING_BUGS.md:1705–1712`.
+
+  Corrected: “The decoder selects `fnmadd` and `fnmsub`; remaining unsupported floating-point operations still reach the shared decoder-stop path.” The current selections are at `src/cpus/cpu_ppc_instr.c:5263–5269`. The old aggregate count should not be retained without a fresh enumeration.
+
+`CHANGELOG.md:20119` accurately limits #216 to memory failures rather than claiming removal of every LL/SC exit. Its phrase **“let the raised DSI proceed”** should receive the same qualification above if rewritten as a statement covering every model and unsuccessful access.
+
+**DENOMINATOR**
+
+The following are the inspected committed context ranges; whole-file searches additionally found matching lines outside some windows. Searches were not complete semantic reviews.
+
+- `src/cpus/cpu_ppc_instr.c`: 1–270, 1700–1870, 2260–2410, 3085–3145, 3800–3865, 3910–3960, 3971–4160, 4190–4220, 4245–4370, 4440–4540, 4570–4660, 4685–4770, 4825–5005, 5060–5235, 5240–5433.
+- `src/cpus/cpu_dyntrans.c`: 102–165, 272–302, 1795–1851, 1857–2037.
+- `src/cpus/cpu_ppc.c`: 65–145, 260–355, 1735–1800.
+- `src/include/cpu_ppc.h`: 35–165, 241–280; `src/include/opcodes_ppc.h`: matching constants within 82–155; `src/include/memory.h`: 131–183.
+- `src/cpus/memory_ppc.c`: 255–328 plus exception/return search contexts; `src/cpus/memory_rw.c`: failure/return search contexts and 581–627.
+- `src/cpus/cpu_ppc_instr_loadstore.c`: 53–133; `src/cpus/tmp_ppc_tail.c`: 1–131; `src/cpus/tmp_ppc_loadstore.c`: 892–1010, 1922–2030.
+- `src/cpus/Makefile.skel`: 158–175; `src/cpus/cpu.c`: 58–115; `src/core/emul.c`: 470–513; `src/core/debugmsg.c`: 365–420.
+- `src/devices/dev_fbctrl.c`: 35–60, 100–143; `src/cpus/cpu_alpha_palcode.c`: 390–445; `src/cpus/cpu_arm_instr.c`: 4685–4712; `src/cpus/cpu_mips_instr.c`: 5390–5416.
+- `src/machines/automachine.c`: 85–138; `machine_macppc.c`: 170–215; `machine_mvmeppc.c`: 161–208; `machine_pmppc.c`: 76–88; `machine_prep.c`: 150–190; `machine_test.c`: 430–480.
+- `OUTSTANDING_BUGS.md`: 1600–1620, 1670–1724, 2579–2625, 3075–3094, 5630–5678, 18890–18904, 20180–20240, 21944–21959. `CHANGELOG.md`: 20100–20135, 33070–33140.
+- Additional committed searches covered PPC wiring, termination sites, warning latches, invalid-handler references, related records, and top-level regression files. The corrected LL/SC search of top-level `regress/*.py`, `*.sh`, and `*.c` returned no matches; regression behavior was not checked.
+
+Manual context ranges, all under `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\`:
+
+- `ppc_uisa_book1_v201.txt`: 385–489, 1020–1150, 1335–1377, 9590–9665.
+- `ppc_vea_book2_v201.txt`: 34–49, 700–715, 1240–1370, plus LL/SC search contexts within 328–675.
+- `ppc_oea_book3_v201.txt`: 231–277, 3833–3988.
+- `ppc_pem32_rev2_2001.txt`: 6840–6868, 6980–6989, 9720–9792, 11105–11120, 11988–12071, 22700–22778, 27600–27705, 44555–44628, 48030–48044, plus search matches.
+- `ppc_pem_32and64_2005.txt`: 6217–6234, 24980–25070, 32740–32840, 52522–52536.
+
+**Scope deviation:** an initial tree listing enumerated artifact paths, and an incorrectly recursive Git wildcard returned LL/SC matches from artifact copies under `ppcrldiclzero` and `ppcrlwimiwidth`. Those matches were excluded from the evidence; the search was corrected. No working-tree source, other source copy, or `tools/pipeline/ledger.json` was read. Complete manuals, per-model manual applicability, runtime reproduction, builds, and tests were not checked.

@@ -1,0 +1,70 @@
+CODEXPACK_CENSUS_DEVICES4_ALIVE
+VERDICT: 13 live calls classified -- 6 reachable by guest access at run time, 0 of those not recorded
+
+All citations refer to **`db8b1a33`**. Dispositions are recommendations. Stock-OS access order and hardware semantics not established by the committed source are **not checked**.
+
+```text
+src/devices/device.c:143 | pci_lookup_initf | WHEN: construction | CONDITION: "if (name == NULL)" (src/devices/device.c:141) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/device.c:168 | device_lookup | WHEN: construction | CONDITION: "if (name == NULL)" (src/devices/device.c:166) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/device.c:288 | device_add | WHEN: construction | CONDITION: "if (p == NULL)" followed by "if (device_exit_on_error)" (src/devices/device.c:285–287) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/device.c:311 | device_add | WHEN: construction | CONDITION: "if (s3 == s2)" followed by "if (device_exit_on_error)" (src/devices/device.c:308–310) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/device.c:334 | device_add | WHEN: construction / debugger command | CONDITION: "switch (devinit.pci_little_endian)" reaches "default:fatal(\"Bad pci_little_endian value.\n\");"; accepted cases are 0, 1 (src/devices/device.c:328–334) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: (3) decline and announce once | high
+src/devices/device.c:361 | device_add | WHEN: construction | CONDITION: final parameter-parser "else", diagnosing "unknown param: %s\n", followed by "if (device_exit_on_error)" (src/devices/device.c:358–360) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/device.c:387 | device_add | WHEN: construction | CONDITION: "if (!p->initf(&devinit))" followed by "if (device_exit_on_error)" (src/devices/device.c:384–386) | GUEST LEVEL: n.a. | RECORDED: NONE | DISPOSITION: KEEP | high
+src/devices/dev_dreamcast_g2.c:164 | dev_dreamcast_g2_extdma_access | WHEN: guest access | CONDITION: "case EXTDMA_CTRL_CHAN_ENABLE:", "if (writeflag == MEM_WRITE)", "if (idata != 0)" (src/devices/dev_dreamcast_g2.c:158–162) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md 8850–8857 | DISPOSITION: (7) implement the missing behaviour | high control flow; medium disposition
+src/devices/dev_dreamcast_g2.c:175 | dev_dreamcast_g2_extdma_access | WHEN: guest access | CONDITION: "case EXTDMA_CTRL_XFER_ENABLE:", "if (writeflag == MEM_WRITE)", "if (idata != 0)" (src/devices/dev_dreamcast_g2.c:169–173) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md 8850–8857 | DISPOSITION: (7) implement the missing behaviour | high control flow; medium disposition
+src/devices/dev_dreamcast_g2.c:188 | dev_dreamcast_g2_extdma_access | WHEN: guest access | CONDITION: "case EXTDMA_CTRL_STATUS:", "if (writeflag == MEM_WRITE)", "if (idata != 0)" (src/devices/dev_dreamcast_g2.c:180–184) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md 8850–8857 | DISPOSITION: (7) implement the missing behaviour | high control flow; medium disposition
+src/devices/dev_dreamcast_g2.c:215 | dev_dreamcast_g2_extdma_access | WHEN: guest access | CONDITION: "case EXTDMA_MAGIC:", "if (writeflag == MEM_WRITE)", "if (idata != EXTDMA_MAGIC_VALUE && idata != EXTDMA_MAGIC_VALUE_ROM)" (src/devices/dev_dreamcast_g2.c:209–212) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md 8850–8857 | DISPOSITION: (3) decline and announce once | high control flow; medium disposition
+src/devices/dev_dreamcast_g2.c:228 | dev_dreamcast_g2_extdma_access | WHEN: guest access | CONDITION: "switch (reg)" reaches "default:"; exit follows both read and write diagnostic arms (src/devices/dev_dreamcast_g2.c:121,220–228) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md 8850–8857 | DISPOSITION: (7) implement the missing behaviour | high control flow; medium disposition
+src/devices/dev_dreamcast_g2.c:260 | dev_dreamcast_g2_misc_access | WHEN: guest access | CONDITION: "case 0x64:", "if (writeflag != MEM_WRITE || idata != 0x1fffff)" (src/devices/dev_dreamcast_g2.c:256–258) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md 8850–8857 | DISPOSITION: (3) decline and announce once | high control flow; medium disposition
+```
+
+The counts match: `device.c` has **7**, enumerated as **143, 168, 288, 311, 334, 361, 387**; `dev_dreamcast_g2.c` has **6**, enumerated as **164, 175, 188, 215, 228, 260**. The additional textual occurrence is explicitly commented out: `"/*  exit(1);  */"` (`src/devices/dev_dreamcast_g2.c:272`).
+
+The NULL-name calls are defensive construction-API guards. The inspected lookup paths are `bus_pci_add` → `pci_lookup_initf` and `device_add` → `device_lookup`; the latter allocates and terminates its name before lookup (`src/devices/bus_pci.c:226`; `src/devices/device.c:274–284`). `device_unregister` also calls `device_lookup`; no committed `src/` caller of `device_unregister` was found (`src/devices/device.c:210–213`). No guest-access path to these guards was established.
+
+The debugger distinction matters: `"static int device_exit_on_error = 1;"` supplies the startup policy, while `"device_set_exit_on_error(0);"` precedes emulation (`src/devices/device.c:44`; `src/core/main.c:799–807`). The debugger calls `"device_add(m, args+4);"` (`src/debugger/debugger_cmds.c:552–553`). Line 334 ignores that policy flag. Its disposition means rejecting the debugger’s invalid parameter through the existing failure path, while preserving the setup-time failure policy; merely deleting the exit and continuing with an invalid value would not accomplish that (`src/devices/device.c:328–335,396–398`).
+
+“User” denotes the lowest privilege supported by the inspected emulator path, **with MMU translation disabled**. The translator determines user mode at `src/cpus/memory_sh.c:335`, then its U0/P0 branch accepts `"if (!(cpu->cd.sh.mmucr & SH4_MMUCR_AT))"` and returns read/write access before the later `"if (user)"` rejection (`src/cpus/memory_sh.c:330,338–359`). Dreamcast installs G2, which registers both callbacks; memory dispatch invokes the registered callback after translation (`src/machines/machine_dreamcast.c:147`; `src/devices/dev_dreamcast_g2.c:295–299`; `src/cpus/memory_rw.c:248–252,587–589`). MMU-enabled stock-OS user mappings were **not checked**.
+
+Queue searches covered the filenames, enclosing function names, and diagnostic text. No entry names the seven `device.c` sites or their defects. A generic `device_add` match instead identifies `"interrupt_handler_lookup() <-"` `"devinit_z8530()"`, a different failure (`OUTSTANDING_BUGS.md:7034–7035`).
+
+For G2, the queue explicitly introduces a census of “*code* exits” excluding construction failures, then records:
+
+> | `dev_dreamcast_g2.c` | 6 |
+
+(`OUTSTANDING_BUGS.md:8850–8857`.)
+
+The later tracking prose again names `"dev_dreamcast_g2.c"` with `"(6)"` (`OUTSTANDING_BUGS.md:18852–18855`). Thus all guest sites are **recorded in prose**, without claiming individual repair ownership. **OB-21 is not their terminating-call ID**: its recorded defect is `"C subobject OOB into adjacent misc_reg (device-state corruption)"` (`OUTSTANDING_BUGS.md:2908`).
+
+**(a) Guest-access ranking**
+
+This is an inferred ordering by ordinary register use, not a verified stock-OS execution sequence.
+
+1. **`src/devices/dev_dreamcast_g2.c:228`** — includes reads of explicitly named DMA status registers, making it relevant to ordinary status inspection; those registers are defined and normalized but lack switch cases (`src/devices/dev_dreamcast_g2.c:79–82,116–121,220–228`).
+2. **`src/devices/dev_dreamcast_g2.c:164`** — a nonzero channel-enable write encounters an explicit `"EXTDMA_CTRL_CHAN_ENABLE: todo\n"`; the source labels this register `"Channel enable"` (`src/devices/dev_dreamcast_g2.c:70,158–164`).
+3. **`src/devices/dev_dreamcast_g2.c:175`** — similarly blocks enabling a transfer, with `"EXTDMA_CTRL_XFER_ENABLE: todo\n"` (`src/devices/dev_dreamcast_g2.c:71,169–175`).
+4. **`src/devices/dev_dreamcast_g2.c:188`** — a nonzero control-status write; its diagnostic itself says `"TODO (start transfer?)"`, so the precise operation and normal driver ordering remain **not checked** (`src/devices/dev_dreamcast_g2.c:180–188`).
+5. **`src/devices/dev_dreamcast_g2.c:260`** — any read of this misc register, or a write other than the special accepted value; the comment’s `"resets a disabled GD-ROM drive?"` is explicitly tentative (`src/devices/dev_dreamcast_g2.c:256–260`).
+6. **`src/devices/dev_dreamcast_g2.c:215`** — a magic-register write outside the accepted values **`0x4659404f`, `0x46597f00`**; hardware validity of other values is **not checked** (`src/devices/dev_dreamcast_g2.c:75–77,209–215`).
+
+For line 228, the source-declared aligned status offsets are explicitly **`0xc0, 0xc4, 0xc8, 0xcc, 0xd0, 0xd4, 0xd8, 0xdc, 0xe0, 0xe4, 0xe8, 0xec, 0xf0, 0xf4, 0xf8, 0xfc`** (`src/devices/dev_dreamcast_g2.c:79–82,116–118`). This exit therefore cannot be classified solely as rejecting reserved accesses.
+
+Although both callbacks precompute reads from backing arrays, that does not establish the *correct hardware value* for missing status or reset behaviour. Hence disposition 4 is not justified by those assignments alone (`src/devices/dev_dreamcast_g2.c:97–99,250–258`). Likewise, simply returning failure would not deliver an SH architectural exception through the inspected callback-failure path, whose exception branches cover MIPS and M88K (`src/cpus/memory_rw.c:603–624`).
+
+**(b) CPU-stop sites**
+
+**None in either target file.** The complete function bodies contain no `cpu->running = 0` assignments (`src/devices/device.c:55–454`; `src/devices/dev_dreamcast_g2.c:85–302`).
+
+**(c) Denominator**
+
+Functions fully read in the target files:
+
+- `src/devices/device.c`: `device_entry_compar` (:55), `sort_entries` (:69), `device_register` (:89), `pci_register` (:114), `pci_lookup_initf` (:136), `device_lookup` (:162), `device_unregister` (:210), `device_add` (:252), `device_dumplist` (:408), `device_set_exit_on_error` (:433), `device_init` (:447).
+- `src/devices/dev_dreamcast_g2.c`: `dev_dreamcast_g2_extdma_access` (:85), `dev_dreamcast_g2_misc_access` (:242), `devinit_dreamcast_g2` (:286).
+
+**Functions not read in either target file: none.**
+
+Supporting complete reads included `bus_pci_add`, `bus_pci_setaddr`, `dev_gt_init`, `debugger_cmd_device`, `debugger_cmd_continue`, `sh_translate_v2p`, and the Dreamcast machine setup/default/registration functions (`src/devices/bus_pci.c:192–271`; `src/devices/dev_gt.c:225–308`; `src/debugger/debugger_cmds.c:505–598`; `src/cpus/memory_sh.c:332–404`; `src/machines/machine_dreamcast.c:1–182`).
+
+Only excerpts were read from the main/emulation setup, SH CPU constructor, memory-dispatch functions, and debugger input handling. Their remaining bodies, `translate_via_mmu`, guest instruction load/store implementations, stock-OS drivers, and hardware manuals were **not checked**.

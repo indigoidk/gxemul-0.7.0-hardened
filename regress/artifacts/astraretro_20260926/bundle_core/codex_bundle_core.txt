@@ -1,0 +1,45 @@
+ASTRARETRO_BUNDLE_CORE_ALIVE
+VERDICT: 6 findings (3 CODE live at HEAD, 2 RECORD, 1 TEST-GAP); 22 items checked clean
+
+Reviewed committed HEAD `8ea26abb` only. No writes, builds, or probe execution; line numbers below refer to committed objects.
+
+F1 | src/core/main.c:402 | 5ee491e7 | CODE | live at HEAD: yes | The new `-k` range accepts caches exceeding 4 GiB on 64-bit hosts, but dyntrans publishes offsets through `uint32_t` (`src/cpus/cpu_dyntrans.c:630`, `:797`). Guest execution that advances the cache cursor beyond that representation makes allocation and lookup disagree: allocation uses the full-width cursor at `:597`, while lookup reconstructs a different address at `:803`. Instruction dispatch can consequently consume unrelated cache contents. No matching OUTSTANDING entry found. | Smallest check: compare the accepted byte limit, cursor type, published offset type, and allocator/lookup addresses. | confidence high
+
+F2 | src/core/memory.c:366 | #182 | CODE | live at HEAD: yes | An accepted framebuffer enlargement can extend its registered range across the test machine’s controller mapping. Unlike registration, resizing performs no collision check. The dispatcher accepts `last_accessed_device` first (`src/cpus/memory_rw.c:476`), so subsequent controller accesses can reach framebuffer pixels instead. This contradicts the control-port contract in `doc/experiments.html:352`. No matching OUTSTANDING entry found. | Smallest check: check that device ranges remain disjoint after enlargement and that controller addresses retain their handler. | confidence high
+
+F3 | src/core/timer.c:284 | upstream, relied on by #428 | CODE | live at HEAD: yes | Bounding callbacks per signal does not bound their accumulated state. A guest leaving a running RTC unacknowledged eventually overflows signed `int pending_interrupts`: `src/devices/dev_rtc.c:71` increments without saturation; acknowledgment supplies the ordinary decrement. The MIPS callback has the same sibling defect (`src/cpus/cpu_mips_coproc.c:422`, signed declaration at `src/include/cpu_mips.h:277`). No matching OUTSTANDING entry found. | Smallest check: inspect all counter assignments and confirm that neither increment enforces an upper bound. | confidence high
+
+F4 | src/core/timer.c:94 | cdc48499 | RECORD | live at HEAD: yes | The comment still identifies Footbridge as a guest-reachable source of the timer core’s above-ceiling warning flood. At HEAD, #432 divides integer `emulated_hz` by an effective period of at least one (`src/devices/dev_footbridge.c:239`, `:276`); that caller cannot request an above-ceiling rate. The original hazard is recorded in OUTSTANDING_BUGS.md:5582, R4 residual item 4. | Smallest check: trace `footbridge_effective_cycles()` into `reload_timer_value()`. | confidence high
+
+F5 | src/core/timer.c:277 | cdc48499 | RECORD | live at HEAD: yes | The comment still describes `sh4_timer_tick()` calling `exit(1)` from SIGALRM. HEAD #449 removed that exit: the relevant branch reports once and continues into TMU processing (`src/devices/dev_sh4.c:448`). The original hazard is filed in OUTSTANDING_BUGS.md:5587, R4 residual item 5, and under `sh4rtcsr`; the host-exit defect is repaired. | Smallest check: inspect the committed callback for the claimed exit. | confidence high
+
+F6 | src/core/timer.c:207 | #427/#429, cdc48499 detector follow-up | TEST-GAP | live at HEAD: yes | The claimed frequency/interval agreement is unobserved for changed-rate updates. Both update sites in `regress/diff_timer.c:318` and `:353` repeat the normalized creation rate, taking the early return. Its reciprocal row tests creation only. `diff_rtc_range.c` and `diff_footbridge.c` stub the updater. No matching OUTSTANDING entry found. | Smallest check: add a different-rate update row asserting stored frequency, reciprocal interval, and rescheduled deadline. | confidence high
+
+Checked clean:
+
+- `src/core/emul_parse.c:239` — device-array capacity agrees with its insertion guard, consumption, and cleanup.
+- `src/core/misc.c:273` — `mystrlcpy` handles zero size, truncation, termination, and return length.
+- `src/core/misc.c:298` — `mystrlcat` bounds its destination scan, including zero size.
+- `src/core/misc.c:305` — append arithmetic handles exact fit and truncation without exceeding the destination.
+- `src/core/misc.c:221` — suffix scanning stays within the template; random-byte initialization and alphabet indexing are bounded.
+- `src/core/misc.c:229` — temporary-file creation uses bounded retries, exclusive creation, and descriptor cleanup.
+- `src/core/main.c:280` — numeric parsing rejects empty, trailing-garbage, saturated, and out-of-range inputs.
+- `src/core/main.c:401` — MiB multiplication itself occurs in `size_t` within its representable range.
+- `src/core/main.c:416` — RAM-option validation and conversion fit the destination field.
+- `src/core/main.c:427` — CPU-count validation rejects malformed and invalid allocation counts.
+- `src/core/main.c:410` — tap-device name duplication checks allocation failure.
+- `src/core/main.c:364` — `-f` is registered correctly and reaches the shared disk synchronization flag.
+- `src/core/memory.c:124` — `zeroed_alloc` recognizes `MAP_FAILED`.
+- `src/core/memory.c:174` — page-table and backing-block mmap failures both reach zero-initialized fallbacks (`:577`).
+- `src/core/memory.c:365` — shrinking updates length/end address; the framebuffer caller invalidates all CPUs’ translation caches.
+- `src/core/timer.c:101` — NaN, negative, and zero frequencies reach the positive floor.
+- `src/core/timer.c:104` — positive infinity and oversized frequencies reach the finite ceiling.
+- `src/core/timer.c:131` — creation stores matching normalized frequency and interval before publication.
+- `src/core/timer.c:199` — normalization precedes equality comparison, preserving repeated-request idempotence.
+- `src/core/timer.c:207` — changed-rate assignments correctly update frequency, interval, and deadline by inspection.
+- `src/core/timer.c:287` — the per-timer budget bounds each batch while retaining remaining backlog.
+- `src/core/timer.c:369` — the cap indicator uses `sig_atomic_t` and is reported and cleared outside the handler.
+
+Hunks read: timer 5, misc 3, main 6, memory 4, emul_parse 1.
+
+DENOMINATOR: read 19 of 19 hunks of the net diff

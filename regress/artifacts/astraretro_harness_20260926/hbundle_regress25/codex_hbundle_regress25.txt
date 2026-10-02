@@ -1,0 +1,46 @@
+ASTRARETRO_HBUNDLE_REGRESS25_ALIVE
+VERDICT: 7 findings (1 CANNOT-FAIL, 0 SELECTS-NOTHING, 1 STATUS-LAUNDERED, 0 ENCODING, 3 RECORD, 2 OTHER); 20 items checked clean
+
+All references are at HEAD `db8b1a33`. No writes, builds, or emulator runs. The PowerPC timing finding was checked with an in-memory mock of HEAD’s harness.
+
+F1 | regress/sh_rounding_probe.py:186 | #297 | CANNOT-FAIL | `ftrcD-neghalf` cannot verify the negative boundary described above it. For −2147483648.5, the pre-fix raw cast, HEAD’s correct normal conversion, and an incorrect cutoff at −2^31 selecting the invalid arm all produce the expected `0x80000000`. Both modes pass because the row observes only FPUL. The missing exception model is already recorded at `OUTSTANDING_BUGS.md:1961`; this ineffective boundary assertion is not separately identified. | Compare the normal and invalid paths at `src/cpus/cpu_sh_instr.c:3008`; boundary coverage requires observing classification or exception state. | confidence high
+
+F2 | regress/sh_rounding_probe.py:314 | #297 | RECORD | The claimed tripwire for accidentally wiring FTRC to FPSCR.RM cannot detect that source change: line 316 counts only hardcoded expectations and remains 9. Furthermore, all existing FTRC inputs give identical nearest-even and truncation results, so ordinary fractional mode dependence can remain green. | Inspect the counter’s dependencies; an in-range fractional case such as 1.75, expecting integer 1 under both modes, distinguishes the claimed error. | confidence high
+
+F3 | regress/ppc_halt_probe.py:191 | #392 | STATUS-LAUNDERED | If `step 1` times out and its `UNIMPLEMENTED instruction` message arrives during the following successful dump, the row reports `alive`. The loop discards `send(False)`, and line 193 snapshots `halted` before receiving the late message. A deterministic mock returned `HALTED` for timely delivery and `alive` for the same output delivered after the deadline. Discarded command statuses are already filed under **#363 residuals**, `OUTSTANDING_BUGS.md:4323`; this particular stale snapshot is not separately named. | Feed both delivery schedules through `run()` with a fake clock; the delayed halt must never return `alive`. | confidence high
+
+F4 | regress/ppc_halt_probe.py:55 | #344 | RECORD | The header still lists `fnmadd` and `fnmsub` among deferred instructions. HEAD classifies both as `FIXED` at lines 273–274 and implements both decoder cases. The deferred inventory therefore describes twelve instructions while the current table contains ten. | Compare the header list with `ROWS` and `src/cpus/cpu_ppc_instr.c:5263`. | confidence high
+
+F5 | regress/diff_diskimage_parse.c:77 | #418 | OTHER | Every invocation shares `/tmp/r418parse`. During concurrent gate runs, one process can truncate `fl2.img` through `fopen(...,"w+")` while another parses it. A production `stat()` between truncation and completion sees zero bytes, making correct code fail the floppy-type or exact-capacity assertions. | Trace that interleaving through lines 81–84 and `diskimage_recalc_size()`; per-invocation temporary directories remove the collision. | confidence high
+
+F6 | regress/diff_diskimage_parse.c:130 | 7e3b1204 | RECORD | The comment attributes detection of a narrowed comparator to the small pair. With 32-bit comparison, `1 != 2` still increments the failure counter, so the small sentinel succeeds; `2^32 == 0` loses the mismatch, so the **wide** sentinel detects narrowing. The resulting diagnostic’s claim that “every row … is inert” also overstates this case: the actual parser comparisons still fit within 32 bits. | Trace the two counter checks at lines 148–155 under narrowing. | confidence high
+
+F7 | regress/lca_widewrite_probe.py:320 | #530 / #538 | OTHER | No gate invokes this detector or consumes `WIDEWRITE_RESULT`, so failures in its four lane checks cannot affect the pipeline. `check_probe_wiring.py:2659` explicitly exempts it until 2026-10-26. Already filed as **wiringcliff**, `OUTSTANDING_BUGS.md:13702`, with subsequent updates under **wiringcliff/exemptcliff**. | Enumerate HEAD’s gate invocations and result-token consumers; neither invokes or scores this probe. | confidence high
+
+Checked clean:
+
+C1 | regress/lca_widewrite_probe.py:79 | Frozen-instrument comparison and archived table support the seventeen reported measurement outcomes.
+C2 | regress/lca_widewrite_probe.py:185 | Clean child exit is required; dead sessions cannot retry, and aggregate failure exits nonzero.
+C3 | regress/lca_widewrite_probe.py:205 | Missing register output becomes `None` and fails numeric assertions.
+C4 | regress/lca_widewrite_probe.py:244 | All four post-write values differ from retained presets: `44/41/42/f3` versus `5a/03/ff/b1`.
+C5 | regress/lca_widewrite_probe.py:251 | Four-lane coverage is explicitly asserted; HEAD’s GETENV length and chunk ladder produce one 16-byte chunk per cell.
+C6 | regress/lca_widewrite_probe.py:299 | Computed return address points immediately after the inline CALL_PAL.
+
+C7 | regress/diff_diskimage_parse.c:70 | Comparator failures propagate; both deliberate-mismatch sentinels work, and the identity count correctly totals 36 preceding assertions plus itself.
+C8 | regress/diff_diskimage_parse.c:179 | All four bare-image size controls agree with HEAD’s heuristic; unchanged defects are explicitly labeled records.
+C9 | regress/diff_diskimage_parse.c:200 | `d:` type/existence assertions detect the original omission; four capacity assertions detect premature type assignment.
+C10 | regress/diff_diskimage_parse.c:230 | IDE-default and explicit-prefix cases distinguish hardcoded SCSI and missing precedence guards, including `sd:` on an IDE-default machine.
+C11 | regress/diff_diskimage_parse.c:281 | ISO suppression and writable-state assertions distinguish deletion of the existing `!prefix_d` guard.
+
+C12 | regress/sh_rounding_probe.py:46 | Instruction fields and packed operation/store sequences agree with the architecture manual.
+C13 | regress/sh_rounding_probe.py:60 | Original rounding vectors distinguish RN/RZ; the D-division low-word check also distinguishes pre-#300 arithmetic.
+C14 | regress/sh_rounding_probe.py:124 | FSUB cancellation and FMAC tie-band expectations distinguish the pre-#299 results.
+C15 | regress/sh_rounding_probe.py:165 | Positive FTRC overflow cases distinguish pre-#297 results; NaN ordering and single-precision edge assertions constrain the conversion ladder.
+C16 | regress/sh_rounding_probe.py:201 | Subnormal expectations and DN clearing agree with the intended decode witnesses.
+C17 | regress/sh_rounding_probe.py:284 | Readback selects DEST, decodes little endian, and fails absent data; the gate pins all 36 mode-pairs.
+
+C18 | regress/ppc_halt_probe.py:105 | A/X encoding fields, FRC/XO overlap, and the `mtfsf` mask position are correct.
+C19 | regress/ppc_halt_probe.py:158 | Ordinary prompt handling requires the current command echo and a prompt in newly received output.
+C20 | regress/ppc_halt_probe.py:241 | Fourteen FIXED rows target genuinely corrected decoder paths; independent class expectations and gate checks pin four controls, fourteen FIXED, and ten PEND rows.
+
+DENOMINATOR: read 4 of 4 files in full

@@ -1,0 +1,74 @@
+CODEXPACK_CENSUS_DEVICES7_ALIVE
+VERDICT: 13 live calls classified -- 8 reachable by guest access at run time, 3 of those not recorded
+
+All citations below refer to **`db8b1a33`**. The verdict excludes the conditional SH4 debug exit and the unreachable framebuffer selector guard. External compiler flags were **not checked**: enabling `SH4_DEBUG` would add the recorded guest-access site at `src/devices/dev_sh4.c:2833`.
+
+`GUEST LEVEL: user` means reachable with these devices mapped into low physical memory on SH with address translation disabled: `sh_translate_v2p` returns read/write access before its user-mode rejection (`src/cpus/memory_sh.c:335-345`, `src/cpus/memory_sh.c:359-370`). Access from a stock OS’s ordinary user process was **not checked**.
+
+```text
+src/devices/dev_sh4.c:2833 | dev_sh4_access | WHEN: unreachable with SH4_DEBUG undefined | CONDITION: switch "default:" (src/devices/dev_sh4.c:2824), termination guarded by "#ifdef SH4_DEBUG" (src/devices/dev_sh4.c:2832); applies to reads and writes | GUEST LEVEL: n.a. | RECORDED: prose OUTSTANDING_BUGS.md:6967-6971,8796-8799 | DISPOSITION: 1 | high for source structure; external build flags not checked
+src/devices/dev_sh4.c:3008 | devinit_sh4 | WHEN: construction | CONDITION: "if (!interrupt_handler_lookup(tmp, &d->timer_irq[0]))" (src/devices/dev_sh4.c:3006) | GUEST LEVEL: n.a. | RECORDED: sh4cpudevscope | DISPOSITION: KEEP | high
+src/devices/dev_sh4.c:3014 | devinit_sh4 | WHEN: construction | CONDITION: "if (!interrupt_handler_lookup(tmp, &d->timer_irq[1]))" (src/devices/dev_sh4.c:3012) | GUEST LEVEL: n.a. | RECORDED: sh4cpudevscope | DISPOSITION: KEEP | high
+src/devices/dev_sh4.c:3020 | devinit_sh4 | WHEN: construction | CONDITION: "if (!interrupt_handler_lookup(tmp, &d->timer_irq[2]))" (src/devices/dev_sh4.c:3018) | GUEST LEVEL: n.a. | RECORDED: sh4cpudevscope | DISPOSITION: KEEP | high
+src/devices/dev_fbctrl.c:102 | fbctrl_command | WHEN: guest access | CONDITION: "default:fatal(\"fbctrl_command: Unimplemented command %i.\n\", cmd);" (src/devices/dev_fbctrl.c:101), reached through the COMMAND-port DATA write (src/devices/dev_fbctrl.c:149-152) | GUEST LEVEL: user | RECORDED: fbctrlcmdkill | DISPOSITION: 3 | high
+src/devices/dev_fbctrl.c:144 | dev_fbctrl_access | WHEN: unreachable | CONDITION: "if (d->current_port < 0 || d->current_port >= DEV_FBCTRL_NPORTS)" (src/devices/dev_fbctrl.c:141-142) | GUEST LEVEL: n.a. | RECORDED: fbctrlportkill | DISPOSITION: 1 | high
+src/devices/dev_fbctrl.c:160 | dev_fbctrl_access | WHEN: guest access | CONDITION: "switch (relative_addr)" / "default:" (src/devices/dev_fbctrl.c:115,157); only PORT and DATA have cases (src/devices/dev_fbctrl.c:117,138) | GUEST LEVEL: user | RECORDED: fbctrloffkill | DISPOSITION: 3 | high
+src/devices/dev_mb8696x.c:155 | dev_mb8696x_access | WHEN: guest access | CONDITION: "case FE_BMPR16:", "if (writeflag == MEM_WRITE)", "if (idata & ~(FE_B16_DOUT | FE_B16_DIN | FE_B16_SELECT | FE_B16_CLOCK))" (src/devices/dev_mb8696x.c:147-151) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: 3 | high classification; medium policy confidence
+src/devices/dev_mb8696x.c:194 | dev_mb8696x_access | WHEN: guest access | CONDITION: EEPROM control write in "case EEPROM_STATE_COMMAND:", "if (d->eeprom_bit_count == 8)", "if (!(d->eeprom_command&0x80))" (src/devices/dev_mb8696x.c:147-149,168-180,190) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: 3 | high classification; medium policy confidence
+src/devices/dev_mb8696x.c:229 | dev_mb8696x_access | WHEN: guest access | CONDITION: "case FE_BMPR17:", "if (writeflag == MEM_WRITE)", "if (idata & ~FE_B17_DATA)" (src/devices/dev_mb8696x.c:222-225) | GUEST LEVEL: user | RECORDED: prose OUTSTANDING_BUGS.md:2685-2689 | DISPOSITION: 3 | high classification; medium policy confidence
+src/devices/dev_rtl8139c.c:99 | eeprom_clk | WHEN: guest access | CONDITION: "if (d->eeprom_cur_cmd_bit == d->eeprom_address_width + 3)" followed by "switch (cmd)" default; only "case RL_9346_READ:" is implemented (src/devices/dev_rtl8139c.c:85-99) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 3 | high classification; medium policy confidence
+src/devices/dev_rtl8139c.c:175 | dev_rtl8139c_access | WHEN: guest access | CONDITION: "case 0x82:", "if (writeflag == MEM_WRITE)", "if (idata != 0x01)" (src/devices/dev_rtl8139c.c:168-172) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 3 | high classification; medium policy confidence
+src/devices/dev_rtl8139c.c:188 | dev_rtl8139c_access | WHEN: guest access | CONDITION: "switch (relative_addr)" / "default:if (writeflag == MEM_WRITE)" (src/devices/dev_rtl8139c.c:132,180); termination follows either diagnostic (src/devices/dev_rtl8139c.c:180-188) | GUEST LEVEL: user | RECORDED: NONE | DISPOSITION: 7 | high classification; medium implementation confidence
+```
+
+Counts match the supplied census: SH4 **4**, framebuffer **3**, MB8696x **3**, RTL8139C **3**, with the individual lines enumerated above. MB8696x’s additional textual occurrence is explicitly `"// exit(1);"` and does not count (`src/devices/dev_mb8696x.c:251`). No live `abort()` or `_exit()` was found in these files.
+
+The reachability qualifications are material:
+
+- **SH4 debug exit:** the committed `src/` search finds `SH4_DEBUG` only in the `#ifdef` occurrences at `src/devices/dev_sh4.c:699` and `src/devices/dev_sh4.c:2832`. If externally enabled, the latter becomes a privileged runtime exit through the P4 register mapping (`src/devices/dev_sh4.c:2859-2860`; `src/cpus/memory_sh.c:359-387`).
+- **Framebuffer selector guard:** initialization zeroes the selector, and its only assignment follows the unsigned bounds check (`src/devices/dev_fbctrl.c:120-135`, `src/devices/dev_fbctrl.c:175`). The stored possibilities are **0, 1, 2, 3, 4, 5, 6, 7**, as enumerated by the port definitions (`src/include/testmachine/dev_fb.h:27-35`). The source expressly says: **“unreachable while the PORT arm refuses”** (`src/devices/dev_fbctrl.c:139`). Therefore line 144 remains a census call but contributes no runtime guest exit.
+- **NIC attachment:** Dreamcast’s MB8696x attachment is commented out (`src/machines/machine_dreamcast.c:145`). Landisk’s RTL8139C attachment is conditional, with its enabling definition commented out (`src/machines/machine_landisk.c:63`, `src/machines/machine_landisk.c:97-100`). Both devices remain registered (`src/devices/autodev.c:199`, `src/devices/autodev.c:223`); configuration-file device entries reach `device_add`, which accepts an address and invokes the initializer (`src/core/emul_parse.c:659-673`; `src/core/emul.c:532-533`; `src/devices/device.c:318-325`, `src/devices/device.c:384`). Their runtime classification therefore requires explicit device configuration.
+
+Queue searches covered filenames, enclosing-function spellings, and diagnostic text. The recording evidence is:
+
+- **SH4 debug:** “`DEVICE_ACCESS(sh4)`'s own `default:` **does not kill at all**” and “its `exit(1)` is inside `#ifdef SH4_DEBUG`” (`OUTSTANDING_BUGS.md:6967-6969`).
+- **SH4 construction:** under `sh4cpudevscope`, the queue names “the three `interrupt_handler_lookup` failures near the end of `devinit`” (`OUTSTANDING_BUGS.md:8711`, `OUTSTANDING_BUGS.md:8720-8723`). It also explicitly records “one wrapped in `#ifdef SH4_DEBUG`, three on `interrupt_handler_lookup` construction failures” (`OUTSTANDING_BUGS.md:8796-8799`).
+- **Framebuffer command:** `fbctrlcmdkill` says the default exits for every command other than “NOP (0), SET_RESOLUTION (1) and GET_RESOLUTION (2)” (`OUTSTANDING_BUGS.md:22549-22553`).
+- **Framebuffer selector:** `fbctrlportkill` records “DATA arm then calls `exit(1)` on that same stored value” (`OUTSTANDING_BUGS.md:18778-18789`). This describes the historical defect; the committed selector refusal makes the retained call unreachable, as established above.
+- **Framebuffer offset:** `fbctrloffkill` names the default exit for offsets other than “PORT (0x00) and DATA (0x10)” (`OUTSTANDING_BUGS.md:22561-22564`).
+- **MB8696x:** the broad deferred record describes “`fatal("…TODO/unimplemented…"); exit(1)`” in guest-writable handlers and explicitly lists `dev_mb8696x.c` (`OUTSTANDING_BUGS.md:2685-2689`). This is file-level prose coverage, not three individual IDs.
+- **RTL8139C:** no matching filename, function, diagnostic, Realtek/8139, or EEPROM defect entry was found in the committed queue. Thus its enumerated sites **99, 175, 188** are `NONE`.
+
+Disposition **3** means a real refusal with a per-device announcement latch, following the existing `"selector is unchanged (once)"` idiom (`src/devices/dev_fbctrl.c:128-132`). In particular, merely deleting the MB8696x EEPROM exit would fall through into `EEPROM_STATE_READ`; refusal must avoid that transition (`src/devices/dev_mb8696x.c:190-201`). RTL’s EEPROM helper likewise continues into read-data handling after command dispatch (`src/devices/dev_rtl8139c.c:103-120`). Precise hardware refusal behavior was **not checked**.
+
+Disposition **7** for RTL’s register default reflects missing ordinary device functionality: the header defines interrupt-mask, interrupt-status, transmit-configuration and receive-configuration registers, while the callback handles only **0x37, 0x50, 0x82** (`src/include/thirdparty/rtl81x9reg.h:72-81`; `src/devices/dev_rtl8139c.c:134`, `src/devices/dev_rtl8139c.c:149`, `src/devices/dev_rtl8139c.c:168`). An invented register store would not establish their semantics.
+
+(a) **Guest-access ranking**, by the most ordinary operation each site rejects. These are static estimates; actual stock-OS access order was **not checked**. Equal ranks mean the available evidence does not establish an ordering.
+
+1. `src/devices/dev_rtl8139c.c:188` — rejects ordinary defined NIC registers, including IMR **0x3c**, ISR **0x3e**, TXCFG **0x40**, RXCFG **0x44**; strongest ordinary-driver candidate (`src/include/thirdparty/rtl81x9reg.h:75-78`; `src/devices/dev_rtl8139c.c:180-188`).
+2. `src/devices/dev_fbctrl.c:102` — rejects documented FILL **3** and COPY **4**, explicitly left as “TODO: Block copy and fill” (`src/include/testmachine/dev_fb.h:52-53`; `src/devices/dev_fbctrl.c:99-102`).
+3. **Tie:** `src/devices/dev_mb8696x.c:194` — rejects an EEPROM operation identified by the implementation as “WRITES to the EEPROM are not yet implemented”; ordinary EEPROM reads take the other branch (`src/devices/dev_mb8696x.c:190-201`).
+3. **Tie:** `src/devices/dev_rtl8139c.c:99` — rejects defined non-read EEPROM commands, including WRITE **0x5**, ERASE **0x7**, and enable/disable command **0x4** (`src/include/thirdparty/rtl81x9reg.h:315-321`; `src/devices/dev_rtl8139c.c:91-99`).
+5. **Tie:** `src/devices/dev_rtl8139c.c:175` — requires a value other than **0x01** at **0x82**; the source’s specific stock-driver example writes **0x01** and therefore survives (`src/devices/dev_rtl8139c.c:168-175`).
+5. **Tie:** `src/devices/dev_mb8696x.c:155` — requires bits outside the accepted control-bit set **0x04, 0x20, 0x40, 0x80**; hardware reserved-bit semantics were not checked (`src/include/thirdparty/mb86960reg.h:292-295`; `src/devices/dev_mb8696x.c:150-155`).
+5. **Tie:** `src/devices/dev_mb8696x.c:229` — requires bits outside the defined data bit **0x80**; hardware reserved-bit semantics were not checked (`src/include/thirdparty/mb86960reg.h:298`; `src/devices/dev_mb8696x.c:225-229`).
+5. **Tie:** `src/devices/dev_fbctrl.c:160` — rejects accesses outside the defined register starts **0x00, 0x10**, rather than a documented command (`src/include/testmachine/dev_fb.h:24-25`; `src/devices/dev_fbctrl.c:157-160`).
+
+(b) **CPU-stop sites:** none. Whole-file searches found no `cpu->running = 0` assignments in the four committed files. There are consequently no lower-grade stop rows to classify.
+
+(c) **Denominator, scoped to the four requested files.** Fully read functions:
+
+- `src/devices/dev_sh4.c`: `dev_sh4_access` at **1738**, `devinit_sh4` at **2844**.
+- `src/devices/dev_fbctrl.c`: `fbctrl_command` at **61**, `dev_fbctrl_access` at **107**, `devinit_fbctrl` at **170**.
+- `src/devices/dev_mb8696x.c`: `dev_mb8696x_access` at **82**, `devinit_mb8696x` at **262**.
+- `src/devices/dev_rtl8139c.c`: `eeprom_clk` at **76**, `dev_rtl8139c_access` at **124**, `devinit_rtl8139c` at **198**.
+
+Functions whose bodies were **not read**, all in `src/devices/dev_sh4.c`:
+
+- `sh4_timer_tick` (**414**); `sh4_pcic_interrupt_assert` (**533**); `sh4_pcic_interrupt_deassert` (**538**); `scif_reassert_interrupts` (**545**); `DEVICE_TICK(sh4)` (**569**).
+- `sh4_dmac_transfer` (**617**); `sh4_sci_cmd` (**814**); `sh4_sci_access` (**918**).
+- `DEVICE_ACCESS(sh4_itlb_aa)` (**973**); `DEVICE_ACCESS(sh4_itlb_da1)` (**1017**); `DEVICE_ACCESS(sh4_utlb_aa)` (**1104**); `DEVICE_ACCESS(sh4_utlb_da1)` (**1220**).
+- `sh4_pcic_first` (**1337**); `DEVICE_ACCESS(sh4_pcic)` (**1362**); `DEVICE_ACCESS(sh4_sq)` (**1574**).
+- `sh4_bsc16_shift` (**1620**); `sh4_bsc16_report` (**1646**); `sh4_val_first` (**1698**).
+
+No functions were left unread in the other three target files. Search coverage for terminating calls and CPU-stop assignments covered all four files; that coverage does not imply full review of the SH4 bodies listed as unread. Nothing was built, executed as a test, or written.

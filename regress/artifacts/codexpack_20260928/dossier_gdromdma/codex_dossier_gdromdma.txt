@@ -1,0 +1,340 @@
+CODEXPACK_DOSSIER_GDROMDMA_ALIVE
+VERDICT: finding TRUE WITH CHANGES -- disposition member 3 -- unbounded re-entry requires staged bytes 0 through 7 to fold to a nonzero value
+
+All repository citations below refer to commit `db8b1a33`.
+
+## 1. TRUE OR FALSE: TRUE WITH CHANGES
+
+The finding is reachable and produces unbounded, non-tail re-entry. The needed qualification is that the nested write must decode to a nonzero `idata`. A deterministic, disk-independent TOC buffer supplied by this model satisfies that condition.
+
+### Guest-to-handler path
+
+1. A concrete guest instruction is `0x2782`, recorded as `"MOV_L_R8_AT_R7 = 0x2782"` in `regress/gdrom_default_probe.py:219-220`. The decoder fetches two instruction bytes at `src/cpus/cpu_sh_instr.c:4045-4057`, converts little-endian at `:4065-4068`, and derives:
+
+   - `main_opcode = 2`
+   - `r8 = 7`
+   - `r4 = 8`
+   - `lo4 = 2`
+
+   from the expressions at `src/cpus/cpu_sh_instr.c:4070-4074`. The default operands make `Rm=r8` and `Rn=r7` at `:4086-4088`; opcode 2/subopcode 2 selects `"MOV.L Rm,@Rn"` at `:4290-4300`.
+
+2. The store takes its address and value directly from guest registers:
+
+   > `uint32_t addr = reg(ic->arg[1]);`  
+   > `SH_ALIGN_CHECK_ST(addr, 3);`  
+   > `uint32_t data = reg(ic->arg[0]);`
+
+   (`src/cpus/cpu_sh_instr.c:1408-1413`). Therefore the path requires a four-byte-aligned address. On the device path, it calls:
+
+   > `cpu->memory_rw(... addr, ... sizeof(data), MEM_WRITE, CACHE_DATA)`
+
+   (`src/cpus/cpu_sh_instr.c:1420-1425`).
+
+3. The Dreamcast device registers its DMA window as:
+
+   > `memory_device_register(... "gdrom_dma", 0x005f7400,`  
+   > `0x80, dev_dreamcast_gdrom_dma_access, ...)`
+
+   (`src/devices/dev_dreamcast_gdrom.c:1696-1697`). Device dispatch accepts `baseaddr <= paddr < endaddr`, subtracts the base, and calls one handler for the starting address (`src/cpus/memory_rw.c:480-494,583-589`).
+
+4. A diskless concrete staging sequence exists:
+
+   - Set `CNTLO=0x98` and `CNTHI=0x01`, producing 408; those byte stores assemble `d->cnt` at `src/devices/dev_dreamcast_gdrom.c:1190-1203`.
+   - Write `COND=0xa0`; the accepted arm sets busy and resets `cmd_count` to zero (`src/devices/dev_dreamcast_gdrom.c:1277-1281`).
+   - Submit packet bytes `0x14,0,0,0,0,0,0,0,0,0,0,0`. Each data write appends two bytes; at exactly 12 it clears busy and invokes `handle_command` (`src/devices/dev_dreamcast_gdrom.c:1105-1115`).
+   - `cmd[0]==0x14` selects TOC (`src/devices/dev_dreamcast_gdrom.c:683-685`); `cnt` must equal 408 (`:734-743`).
+   - Allocation success produces `data_len=408` and a buffer (`:641-646`).
+
+   The first eight staged bytes are explicitly:
+
+   | Index | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+   |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+   | Value | `10` | `00` | `00` | `96` | `41` | `00` | `2e` | `4c` |
+
+   (`src/devices/dev_dreamcast_gdrom.c:753-763`).
+
+5. DMA-register writes first enter through:
+
+   > `if (writeflag == MEM_WRITE)`  
+   > `idata = memory_readmax64(cpu, data, len);`
+
+   (`src/devices/dev_dreamcast_gdrom.c:1372-1373`). Writes to `+0x04`, `+0x08`, `+0x0c`, and `+0x14` break to the common store at `:1381-1385,1675-1676`.
+
+   A complete descriptor is therefore:
+
+   - `+0x04 = 0x005f7418`
+   - `+0x08 = 408`
+   - `+0x0c = 1`
+   - `+0x14 = 1`
+   - `+0x18 = 1`
+
+   The guest `+0x08` value is only copied into local `length`; the actual call later uses `d->data_len` (`src/devices/dev_dreamcast_gdrom.c:1393-1394,1497-1503`).
+
+6. The start arm requires every following condition:
+
+   - a write, so `idata` is populated (`:1372-1373`);
+   - exact relative address `0x18` (`:1387`);
+   - `idata != 0` (`:1389`);
+   - count exactly 1 and enable exactly 1 (`:1390-1391`);
+   - `d->data != NULL` (`:1395`).
+
+   If data is absent, the handler instead announces once, clears `idata`, and breaks (`src/devices/dev_dreamcast_gdrom.c:1465-1472`).
+
+7. Once those gates pass, it prints an apparent-success line and executes:
+
+   > `dst &= 0x0fffffff;`  
+   > `cpu->memory_rw(cpu, cpu->mem, dst,`  
+   > `    d->data, d->data_len, MEM_WRITE, PHYSICAL);`
+
+   (`src/devices/dev_dreamcast_gdrom.c:1497-1503`). Because `PHYSICAL` is present, the nested call directly sets `paddr=vaddr` (`src/cpus/memory_rw.c:245-247`).
+
+8. At destination `0x005f7418`, the relative address is `0x18`. The device ends at relative `0x80`, so the 408-byte request is clamped to:
+
+   `0x80 - 0x18 = 0x68 = 104`
+
+   by `src/cpus/memory_rw.c:494-524`. The same handler is then called once with relative address `0x18` and length `0x68` (`:583-589`).
+
+### Exact `memory_readmax64` folding
+
+The SH CPU is configured little-endian (`src/cpus/cpu_sh.c:93-96`). The little-endian loop is:
+
+> `for (i=len-1; i>=0; i--) {`  
+> `    x <<= 8;`  
+> `    x |= buf[i];`  
+> `}`
+
+(`src/core/memory.c:55-58,71-77`).
+
+For length 104 it visits, in exact order:
+
+`103, 102, 101, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0`.
+
+All 104 bytes are read and transiently folded, but `x` is only 64 bits. The final `idata` retains exactly:
+
+- byte 0 in bits 7:0;
+- byte 1 in bits 15:8;
+- byte 2 in bits 23:16;
+- byte 3 in bits 31:24;
+- byte 4 in bits 39:32;
+- byte 5 in bits 47:40;
+- byte 6 in bits 55:48;
+- byte 7 in bits 63:56.
+
+Bytes 8 through 103, enumerated earlier, have been shifted out. Thus:
+
+`idata = b0 | b1<<8 | b2<<16 | b3<<24 | b4<<32 | b5<<40 | b6<<48 | b7<<56`.
+
+For the synthesized TOC this is `0x4c2e004196000010`, which is nonzero. Its low 32 bits are `0x96000010`.
+
+No relevant state changes before the nested call: masking changes only local `dst`; `d->data`, destination, count, and enable remain unchanged (`src/devices/dev_dreamcast_gdrom.c:1390-1395,1501-1503`). Every nested frame therefore passes the same predicates and calls again.
+
+The completion event, `idata=0`, switch break, and register store occur only after the nested call (`src/devices/dev_dreamcast_gdrom.c:1505-1507,1538,1675-1676`), so they never execute. This is non-tail recursion because work remains after the call.
+
+There is no source-level `exit`, exception, or `cpu->running=0` on this path. The `"Transfering..."` `fatal()` is only an always-print logger: `fatal()` calls `va_debug()` and returns (`src/core/debugmsg.c:357-363,384-391`). `memory_rw` checks `cpu->running` only after the device handler returns (`src/cpus/memory_rw.c:586-592`). Eventual host stack/resource failure is expected, but its precise terminal manifestation was not run or checked.
+
+If staged bytes 0, 1, 2, 3, 4, 5, 6, and 7 are all zero, nested `idata` is zero; that nested invocation skips the body, clears/stores zero through the ordinary tail, and returns. That missing predicate is why the finding is `TRUE WITH CHANGES`. The deterministic TOC proves a reachable nonzero witness.
+
+### Other self-aimed destinations
+
+Let `V8=0x4c2e004196000010` and `V4=0x96000010` for the TOC above. The following is derived from the registered `0x80` length, clamp, switch cases, and common tail (`src/devices/dev_dreamcast_gdrom.c:1381-1387,1603-1632,1675-1676`; `src/cpus/memory_rw.c:494-524`).
+
+| Destination | Relative/index | Clamped len | Highest index read | Result |
+|---|---:|---:|---:|---|
+| `0x005f7400` | `00/0` | `80` | none | shadow `[0] = 0` |
+| `0x005f7404` | `04/1` | `7c` | 123 | destination becomes `V4` |
+| `0x005f7408` | `08/2` | `78` | 119 | guest length becomes `V4` |
+| `0x005f740c` | `0c/3` | `74` | 115 | count becomes `V4` |
+| `0x005f7410` | `10/4` | `70` | 111 | inert shadow `[4] = V4` |
+| `0x005f7414` | `14/5` | `6c` | 107 | enable becomes `V4` |
+| `0x005f7418` | `18/6` | `68` | 103 | recurses iff `V8 != 0` |
+| `0x005f741c` | `1c/7` | `64` | 99 | inert shadow `[7] = V4` |
+| `0x005f7420` | `20/8` | `60` | 95 | inert shadow `[8] = V4` |
+| `0x005f7424` | `24/9` | `5c` | 91 | inert shadow `[9] = V4` |
+| `0x005f7428` | `28/10` | `58` | 87 | inert shadow `[10] = V4` |
+| `0x005f742c` | `2c/11` | `54` | 83 | inert shadow `[11] = V4` |
+| `0x005f7430` | `30/12` | `50` | 79 | inert shadow `[12] = V4` |
+| `0x005f7434` | `34/13` | `4c` | 75 | inert shadow `[13] = V4` |
+| `0x005f7438` | `38/14` | `48` | 71 | inert shadow `[14] = V4` |
+| `0x005f743c` | `3c/15` | `44` | 67 | inert shadow `[15] = V4` |
+| `0x005f7440` | `40/16` | `40` | 63 | inert shadow `[16] = V4` |
+| `0x005f7444` | `44/17` | `3c` | 59 | inert shadow `[17] = V4` |
+| `0x005f7448` | `48/18` | `38` | 55 | inert shadow `[18] = V4` |
+| `0x005f744c` | `4c/19` | `34` | 51 | inert shadow `[19] = V4` |
+| `0x005f7450` | `50/20` | `30` | 47 | inert shadow `[20] = V4` |
+| `0x005f7454` | `54/21` | `2c` | 43 | inert shadow `[21] = V4` |
+| `0x005f7458` | `58/22` | `28` | 39 | inert shadow `[22] = V4` |
+| `0x005f745c` | `5c/23` | `24` | 35 | inert shadow `[23] = V4` |
+| `0x005f7460` | `60/24` | `20` | 31 | inert shadow `[24] = V4` |
+| `0x005f7464` | `64/25` | `1c` | 27 | inert shadow `[25] = V4` |
+| `0x005f7468` | `68/26` | `18` | 23 | inert shadow `[26] = V4` |
+| `0x005f746c` | `6c/27` | `14` | 19 | inert shadow `[27] = V4` |
+| `0x005f7470` | `70/28` | `10` | 15 | inert shadow `[28] = V4` |
+| `0x005f7474` | `74/29` | `0c` | 11 | inert shadow `[29] = V4` |
+| `0x005f7478` | `78/30` | `08` | 7 | inert shadow `[30] = V4` |
+| `0x005f747c` | `7c/31` | `04` | 3 | inert shadow `[31] = V4` |
+
+The `+0x00` anomaly occurs because `MEM_PCI_LITTLE_ENDIAN` equals decimal 128 (`src/include/memory.h:98`). A clamped `len=0x80` is mistaken for that flag and cleared to zero by `src/core/memory.c:60-63`.
+
+Therefore only exact `+0x18` can recurse. `+0x04`, `+0x08`, `+0x0c`, and `+0x14` return after corrupting their respective descriptor words. Other aligned offsets store into inert shadow words; the handler itself describes these as `"stored but inert"` (`src/devices/dev_dreamcast_gdrom.c:1613-1618`). Unaligned targets return before either common tail and are dropped (`:1621-1629`).
+
+The destination mask gives exactly sixteen aliases for the recursive target:
+
+`0x005f7418, 0x105f7418, 0x205f7418, 0x305f7418, 0x405f7418, 0x505f7418, 0x605f7418, 0x705f7418, 0x805f7418, 0x905f7418, 0xa05f7418, 0xb05f7418, 0xc05f7418, 0xd05f7418, 0xe05f7418, 0xf05f7418`.
+
+That follows from the `uint32_t dst` and `dst &= 0x0fffffff` at `src/devices/dev_dreamcast_gdrom.c:1393,1501`.
+
+## 2. Who can reach it
+
+Privilege: both privilege levels, subject to MMU configuration.
+
+- The `MOV.L` instruction itself has no MD privilege test (`src/cpus/cpu_sh_instr.c:1408-1425`); `SH_SR_MD` is the privileged-mode bit (`src/include/cpu_sh.h:194`).
+- With translation disabled, U0/P0 address `0x005f74xx` maps directly to the physical address and returns writable access (`src/cpus/memory_sh.c:338-345`). Thus unprivileged code can reach it in that configuration.
+- With translation enabled, an unprivileged write requires a PR=3, dirty writable mapping; PR=0, PR=1, PR=2-write, or PR=3 without D is rejected (`src/cpus/memory_sh.c:218-227`).
+- Privileged code can use U0/P0 or the P1/P2 direct-mapped aliases. User P1/P2 access is rejected at `src/cpus/memory_sh.c:359-370`; privileged P1/P2 is masked with `0x1fffffff` at `:373-376`.
+- The CPU starts privileged (`src/cpus/cpu_sh.c:122-123`).
+
+Machine and CPU instantiation:
+
+- A committed `src/machines/` search has exactly one `dreamcast_gdrom` instantiation: `device_add(machine, "dreamcast_gdrom");` in `src/machines/machine_dreamcast.c:148`.
+- That setup is registered as `"Dreamcast", MACHINE_DREAMCAST`, with alias `dreamcast` (`src/machines/machine_dreamcast.c:177-182`).
+- Its intended/default CPU is `"SH7750"` (`src/machines/machine_dreamcast.c:162-166`).
+- Other SH7750 machine matches—HPCsh and the bare/test SH machines—do not instantiate this device (`src/machines/machine_hpcsh.c:89,100-104`; `src/machines/machine_test.c:535-558`). Landisk defaults to SH7751R and likewise has no GD-ROM device (`src/machines/machine_landisk.c:125`).
+- The recognized SH-name table enumerates `SH7708R`, `SH7750`, `SH7750R`, and `SH7751R` (`src/include/cpu_sh.h:61-67`). `sh_cpu_new` accepts those names and installs little-endian SH memory handling (`src/cpus/cpu_sh.c:77-97`), although the file warns that the implementation only works for SH4, not SH3 (`:28-34`).
+- `-C` can preserve an explicit CPU name instead of the Dreamcast default (`src/core/main.c:320-323`; `src/machines/machine.c:665-667`). Therefore all four recognized SH names can mechanically be forced with Dreamcast. Non-SH override models were not enumerated or tested; there is no machine/CPU compatibility guard in this setup path.
+
+Configurations:
+
+- PROM-off does not remove the device: the `device_add` occurs at line 148, while the `!prom_emulation` return is later at `src/machines/machine_dreamcast.c:155-158`.
+- A disk image is unnecessary for the TOC witness; the accepted TOC arm locally allocates and synthesizes all 408 bytes (`src/devices/dev_dreamcast_gdrom.c:734-780`).
+- `d->data==NULL`, count not equal to 1, enable not equal to 1, a zero start value, or a destination that does not mask to `0x005f7418` prevents this exact recursive path (`src/devices/dev_dreamcast_gdrom.c:1387-1395,1465-1472,1501-1503`).
+- A non-Dreamcast machine lacks this device. No normal Dreamcast configuration that suppresses the DMA window was found.
+
+## 3. What the hardware does
+
+Not checked: none of the on-disk manuals covers Dreamcast Holly/GD-ROM DMA self-destination behavior.
+
+- The ATA document identifies itself as `"AT Attachment Interface with Extensions (ATA-2)"` and describes a generic host/device interface (`_scratchpad/ata2_x3t10_948d.txt:4-5,19-21`).
+- The SH-4 programming manual says, `"This programming manual gives details of the SH-4 instructions. For hardware details, refer to the relevant hardware manual"` (`_scratchpad/sh4_programming.txt:135-138`).
+- The SH7750 hardware manual scopes itself to the SH7750 CPU and integrated peripherals (`_scratchpad/sh7750_hardware.txt:249-265`).
+- The source confirms the gap:
+
+  > `0x005f74xx is Sega's Holly ASIC, outside the SH7750 manual, and this project holds NO documentation for it`
+
+  (`src/devices/dev_dreamcast_gdrom.c:1654-1658`).
+
+Accordingly, whether real hardware ignores, faults, completes, or updates registers for this self-target is not checked and must not be inferred.
+
+## 4. Siblings
+
+In `src/devices/dev_dreamcast_gdrom.c`, there is no `cpu->running=0`, and only one active literal `exit(1)` remains:
+
+> `if (d->busy & 0x08) {`  
+> `    if (d->cmd_count >= 12) {`  
+> `        fatal("Too much GDROM_DATA?\n");`  
+> `        exit(1);`
+
+(`src/devices/dev_dreamcast_gdrom.c:1105-1108`).
+
+Although guest stores control the surrounding state, the terminating conjunction is unreachable through modeled transitions:
+
+- accepted `COND=0xa0` sets busy and resets count to 0 (`:1277-1281`);
+- each DATA store increments it twice (`:1111-1112`);
+- at exactly 12, busy is cleared before another store (`:1113-1115`).
+
+The values at the `>=12` guard are exactly `0, 2, 4, 6, 8, 10`; 12 is first reached below the guard. `OUTSTANDING_BUGS.md` records this as `gdromexitsix`, including the same enumeration (`OUTSTANDING_BUGS.md:9409-9415`) and disposition `"KEEPS ITS exit(1)"` (`:9430-9432`).
+
+Two commented-out exits at `src/devices/dev_dreamcast_gdrom.c:1143,1186` are inactive.
+
+`CHECK_ALLOCATION` appears at `src/devices/dev_dreamcast_gdrom.c:645,1689`; it can expand to `exit(1)` only when an allocation returns null (`src/include/misc.h:181-193`). The first allocation size is indirectly guest-derived but bounded by this device’s accepted commands; allocator failure is not a deterministic guest-value predicate of the recursive-access class. The second occurs during device construction.
+
+Thus there is no other guest-reachable terminating call or CPU stop in the affected file.
+
+## 5. The option set
+
+Member 3—decline and announce once per device—is the best-supported disposition.
+
+The correction design should recognize the masked exact self-start target before printing `"Transfering"` or invoking `memory_rw`, use a new dedicated warning bit, print a diagnostic containing `(once)`, set `idata=0`, and break to the common tail. It should not fire the completion event.
+
+The nearest precedents are already in this same start arm:
+
+- no staged data: latch, announce `(once)`, `idata=0`, break (`src/devices/dev_dreamcast_gdrom.c:1465-1472`);
+- unsupported count/enable arming: latch, announce `(once)`, `idata=0` (`:1521-1536`).
+
+The required machinery already exists: the per-device `warned` carrier is at `src/devices/dev_dreamcast_gdrom.c:144-161`, named warning bits at `:223-248`, and a compile-time carrier-width bound at `:327-329`. The same CPU’s general DMAC also declines unsupported transfer sizes and address modes using latched diagnostics and returns (`src/devices/dev_sh4.c:658-665,672-693`).
+
+Why the other principal members do not fit:
+
+- Member 1 does not apply: there is no terminating call on this path to delete, and deleting the nested transfer call would also remove valid DMA.
+- Member 2 would avoid the crash but omit the project’s established once-only disclosure.
+- Members 4 and 6 would claim or invent hardware behavior for which no oracle exists.
+- Member 5 has generic CPU machinery but no applicable specified fault. `sh_exception()` saves state and vectors to `VBR+0x100` (`src/cpus/cpu_sh.c:886-893,941-955`), with modeled TLB and address-error cases at `:1023-1033,1075-1081`. However, the physical DMA bypasses translation, and failed-device exception dispatch in `memory_rw` contains MIPS and M88K branches, not SH (`src/cpus/memory_rw.c:603-624`).
+- Member 7 cannot be implemented faithfully without the missing Holly specification.
+
+The seven-member list is not exhaustive. The fork explicitly records two omitted dispositions: `"DIAGNOSE AND STOP EMULATION"` through `cpu->running=0`, and `"CHOOSE ANOTHER DEFINED RESULT"` (`OUTSTANDING_BUGS.md:17059-17071`). It also records a hybrid, `"accept the value, announce the missing consequence"` (`CHANGELOG.md:2317-2320`). None is preferable here.
+
+## 6. What a regression check would observe
+
+| Channel | Before correction | After member-3 correction |
+|---|---|---|
+| Guest execution | Initiating store never returns; a following sentinel does not execute | Store returns; following sentinel executes |
+| Diagnostic | Unbounded repetitions of `"Transfering ..."` from `src/devices/dev_dreamcast_gdrom.c:1497-1499` | Exactly one new decline line per device, containing `(once)`; later attempts silent |
+| `+0x18` readback | Not guest-observable because execution never returns; tail store is not reached | Reads idle zero after `idata=0` reaches the tail (`:1675-1679`) |
+| DMA completion event | Not reached (`:1505`) | Must remain unasserted for a declined transfer, matching `:1432-1435` |
+| Exception vector | None | None |
+| `cpu->running` | Not explicitly cleared | Remains running |
+| Staged buffer and `+04/+08/+0c/+14` | Unchanged by the recursive frames | Unchanged by the decline |
+| Exact host terminal result | Not checked; likely stack/resource failure | No host failure from this access |
+
+Legal neighbouring behavior that must remain:
+
+- Ordinary armed DMA to RAM must still transfer `d->data_len`, trigger `SYSASIC_EVENT_GDROM_DMA`, and clear start (`src/devices/dev_dreamcast_gdrom.c:1390-1394,1501-1507,1675-1679`).
+- Reads and writes of `+0x04`, `+0x08`, `+0x0c`, and `+0x14` must remain shadow-register accesses (`:1375-1385,1675-1679`).
+- Existing no-data and bad-arming declines must remain unchanged (`:1465-1472,1521-1536`).
+- Any nonzero ordinary start value must remain accepted; the existing condition is `idata != 0`, not `idata == 1` (`:1387-1389`).
+- Byte-width accesses to `+0x18` must not be blanket-refused: the file records that Linux byte-writes start and byte-reads completion there (`:1660-1666`).
+- The correction should be limited to the exact masked self-start destination. Other aligned self-window destinations terminate under current semantics and should not be newly refused without a separate hardware basis.
+
+## 7. Records
+
+Yes. Three record families are false or overbroad at `db8b1a33`.
+
+1. The source says:
+
+   > `"decline" in this window means store-and-return ... which is what the five implemented cases already do`
+
+   (`src/devices/dev_dreamcast_gdrom.c:1551-1555`).
+
+   The same assertion appears in `CHANGELOG.md:18401-18407` and `regress/gdrom_default_probe.py:655-660`.
+
+   Corrected sentence:
+
+   > The four passive implemented cases, and a `+0x18` start that does not self-reenter, reach the common tail; a correctly armed `+0x18` start whose masked destination is `+0x18` and whose folded operand is nonzero re-enters before the tail and does not return.
+
+2. The source says:
+
+   > `prints data_len, the count actually transferred`  
+   > `memory_rw below moves d->data_len`
+
+   (`src/devices/dev_dreamcast_gdrom.c:1493-1496`).
+
+   `CHANGELOG.md:18242-18244` and `OUTSTANDING_BUGS.md:20398-20408` repeat that premise. It is false for device targets because dispatch can clamp the call, and for the recursive target no transfer call returns.
+
+   Corrected sentence:
+
+   > The diagnostic prints `d->data_len`, the byte count requested from `memory_rw`; device dispatch may clamp that request, and completion is known only if the call returns.
+
+3. The source says:
+
+   > `If the claim below is wrong, the choice to decline WITHOUT signalling completion is wrong`
+
+   (`src/devices/dev_dreamcast_gdrom.c:1442-1452`).
+
+   `OUTSTANDING_BUGS.md:9643-9650` repeats that dependency. `CHANGELOG.md` already contradicts it: `"THE SHIP DECISION DOES NOT REST ON THEM"` and explains that a false completion reports success with garbage, whereas decline gives a detectable stall (`CHANGELOG.md:17788-17799`).
+
+   Corrected sentence:
+
+   > The unverified driver claims determine how gracefully the guest observes a decline; they do not determine the no-completion choice.
+
+No `OUTSTANDING_BUGS.md` entry found in the checked ranges records this exact self-reentry defect.
+
+DENOMINATOR: Read committed `db8b1a33` ranges: `src/devices/dev_dreamcast_gdrom.c:1-330,540-1701` plus whole-file termination/state searches; `src/core/memory.c:40-110,360-490`; `src/cpus/memory_rw.c:1-794`; `src/core/debugmsg.c:350-395`; `src/cpus/cpu_sh_instr.c:1320-1445,4018-4310`; `src/cpus/memory_sh.c:1-430`; `src/cpus/cpu_sh.c:28-130,884-1085`; `src/cpus/cpu.c:40-125`; `src/include/cpu_sh.h:50-75,185-200`; `src/include/memory.h:85-105,125-135`; `src/include/misc.h:178-200`; `src/devices/dev_sh4.c:630-705`; `src/devices/dev_dreamcast_maple.c:380-670`; `src/machines/machine_dreamcast.c:35-182`, `machine_hpcsh.c:80-105`, `machine_landisk.c:115-132`, `machine_test.c:515-562`, `machine.c:650-675`; `src/core/main.c:305-330,442-444`; `src/core/emul.c:486-535`; `regress/gdrom_default_probe.py:180-250,637-665,790-930,1010-1105,1150-1210,1290-1400`; `CHANGELOG.md:2280-2330,5290-5335,13730-13790,14340-14430,17700-18255,18375-18420`; `OUTSTANDING_BUGS.md:888-907,9380-10040,12135-12166,12375-12405,17035-17085,19700-19730,20055-20100,20240-20280,20375-20435,20660-20690,21335-21381`; and targeted whole-file term searches in the allowed source/record scopes. Read manual ranges `_scratchpad/ata2_x3t10_948d.txt:1-60`, `_scratchpad/sh4_programming.txt:1-140`, `_scratchpad/sh7750_hardware.txt:1-60,249-267`, and the empty `_scratchpad/sh4_manual.txt`, plus relevant keyword searches. An initial tree listing exposed artifact pathnames and an overbroad committed grep surfaced isolated matching lines from `regress/artifacts/`; no artifact file was opened and none was used as evidence. `tools/pipeline/ledger.json`, working-tree source, other project `src/` copies, and nonmanual scratchpad records were not read. No build, emulator execution, regression run, or write was performed.

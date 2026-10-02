@@ -1,0 +1,75 @@
+ASTRA RETRO-REVIEW `cpuppcinstr` -- GXemul fork, the net changes to 1 source file(s), at HEAD 8ea26abb
+
+Open your answer with the token `ASTRARETRO_CPUPPCINSTR_ALIVE` on its own line, then ONE verdict line:
+`VERDICT: <n> findings (<k> CODE live at HEAD, <r> RECORD, <t> TEST-GAP); <c> items checked clean`
+
+**Why you are asked.** This fork of GXemul 0.7.0 has shipped several hundred correction rounds since June 2026. Each
+was reviewed by a multi-model panel when it landed, but the panel's Codex seat was GPT-5.6-Sol until 2026-09-04 and
+was unavailable on several later days -- so most of these changes have never been read by you. This is that first
+reading. Please do not simply ratify: this project's recorded premises have been wrong often enough that a claim
+nobody checked is the likeliest place for a defect to sit. Check the premises, not only the derivations.
+
+**The tree.** Repository `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC` (git). Commit `39748e3c` is the unmodified upstream
+import; everything after it is the fork. Review HEAD ONLY:
+- the fork's net change to a file: `git diff 39748e3c HEAD -- <path>`
+- a file as committed: `git show HEAD:<path>`
+- one round's change: `git show --format= <sha> -- <path>` (never `git show <sha> | head`: the commit message
+  prints first and is long, so a cut shows no diff at all)
+- a round's record: its `#NNN` block in `CHANGELOG.md` (`git show HEAD:CHANGELOG.md | grep -n '#NNN'`)
+
+The WORKING-TREE copies carry other people's uncommitted work that is NOT under review, so do not read
+`GXEMUL-SEC/src/...` from disk. Ignore every other `src/` under the project root: `src/` (pristine 2021 upstream),
+`est/`, `build/`, `build-asan/` and `_archive/` are other copies, and a copy reports line numbers off by hundreds.
+
+**What the fork is for, and so what counts as a finding.**
+1. **CODE** -- nothing a guest does (instructions it executes, device registers it reads or writes, disk or network
+   data it supplies) should make the emulator index or copy outside an array or buffer, read uninitialised memory,
+   divide by zero, shift by the operand width or more, overflow a signed integer, loop without bound, or reach
+   `exit()`/`abort()`. Where a round changed guest-visible behaviour, it should match the documented hardware
+   (manuals: `ls _scratchpad/*.txt`; cite a line when a finding rests on one). **A round that corrected one path
+   and left a sibling in the old state -- another case label, another access width, the read versus the write
+   direction, the other array, the other unit -- is a finding.** So is a correction whose guard reads a different
+   field from the one its guarded body uses.
+2. **RECORD** -- a `/* #NNN: ... */` comment or the round's CHANGELOG sentence that is false of the code at HEAD.
+   A line number that has drifted a few lines is NOT a finding; a claim about behaviour the code does not have IS.
+3. **TEST-GAP** -- a behaviour a round says it pinned that no regression row under `regress/` observes (name the
+   probe you checked). Keep these short; CODE findings matter most.
+
+Upstream code the fork never touched is out of scope unless a fork change relies on it.
+
+**The files** (delta = lines added plus deleted since the import):
+
+| file | delta | rounds | before 2026-09-04 |
+|---|---|---|---|
+| `src/cpus/cpu_ppc_instr.c` | 1794 | 14 | 12 |
+
+**Their rounds**, oldest first (the bracket names which of these files each touched):
+
+- `8dd86b5a` 2026-06-28 the fork's first corrections batch, #1-#119 (subject abbreviated; read it with git log)  [cpu_ppc_instr.c]
+- `de1398e1` 2026-07-17 Hardening/fidelity/debuggability rounds 17–25 (#155–#250)  [cpu_ppc_instr.c]
+- `37daeeef` 2026-07-31 Fix #304/#305: the PowerPC narrowed with a host cast, and threw away every NaN it touched  [cpu_ppc_instr.c]
+- `638eff28` 2026-07-31 Fix #309/#310: two more decoders that stopped the machine on legal code  [cpu_ppc_instr.c]
+- `161641c4` 2026-08-01 Round 73 (#324, #325): PowerPC mtfsf wrote half its fields into thin air, fctiwz turned a NaN into zero, and the gate row recording that had been m...  [cpu_ppc_instr.c]
+- `37963fd9` 2026-08-01 Round 87 (#326): twenty-four legal PowerPC encodings stopped the emulator, and every floating-point record form was one of them  [cpu_ppc_instr.c]
+- `ad0e67da` 2026-08-01 Round 88 (#327): VX and FEX were stored, and the ISA defines them as derived  [cpu_ppc_instr.c]
+- `130ff1b5` 2026-08-02 Round 89 (#330): the exception causes VX and FEX had nothing to derive from  [cpu_ppc_instr.c]
+- `936a434f` 2026-08-02 Round 91 (#336): PowerPC double arithmetic never read its own rounding mode  [cpu_ppc_instr.c]
+- `b677ed9d` 2026-08-02 Round 92 (#335): fmadd rounded twice, and whether that was wrong depended on the compiler  [cpu_ppc_instr.c]
+- `6f916cd5` 2026-08-05 Round 96 (#344): the negative multiply-adds were never decoded, and halted the emulator  [cpu_ppc_instr.c]
+- `d492ddee` 2026-08-05 Round 95 (#343): the fused multiply-adds raised none of their exception causes  [cpu_ppc_instr.c]
+- `e777ff06` 2026-09-10 #522 (ppcrldiclzero): rldicl wrote ZERO to its destination on every execution — the mask was accumulated into the rotated value and ANDed with a va...  [cpu_ppc_instr.c]
+- `7e39a49e` 2026-09-12 #527 (ppcrlwimiwidth, ppcrldimimask): rlwimi rotated a 32-bit word at 64-bit width and never wrote a wrapping mask's high word; rldimi's rotate loo...  [cpu_ppc_instr.c]
+
+**One block per finding:**
+`F<n> | <path>:<line at HEAD> | <#NNN or sha that introduced it, or "upstream, relied on by #NNN"> | CODE / RECORD /
+TEST-GAP | live at HEAD: yes/no | the concrete guest action or input, and the wrong result | the smallest check that
+would settle it (a debugger session, a unit test, a grep) | confidence high/med/low`
+
+If `OUTSTANDING_BUGS.md` at HEAD already files it (`git show HEAD:OUTSTANDING_BUGS.md | grep -n <word>`), say so and
+give the id -- that is useful, not a failure.
+
+**Then the denominator.** List the items you checked and found correct, one line each with a line number at HEAD,
+and end with `DENOMINATOR: read <h> of <H> hunks of the net diff`. "No finding" and "not looked at" must not look the
+same.
+
+Read-only: write nothing, build nothing, run nothing that changes a file.

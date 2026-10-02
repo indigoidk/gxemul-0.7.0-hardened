@@ -1,0 +1,97 @@
+VERDICT: CONTROL effects belong to the low word at +0x0c if 32-bit accesses are supported.
+
+Read-only audit: no files changed, builds performed, or probes executed. “R17” below means the specified frozen `crime_width_probe.r17.py`. Recorded measurements are distinguished from source deductions.
+
+1. The tree documents the bit positions more clearly than it documents permissible access widths.
+
+   **Documentation:** the imported NetBSD header identifies CRIME’s base as `0x14000000` and says “all registers 64-bit access.” CONTROL is at offset `0x08`, with only its lower 14 bits valid. Its examples use `__uint64_t` accesses. This establishes a 64-bit register layout; it does **not** specify how hardware accepts, rejects, or aliases 32-bit transactions. See [crimereg.h:39](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crimereg.h:39), [crimereg.h:51](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crimereg.h:51), and [crimereg.h:65](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crimereg.h:65).
+
+   **Machine configuration:** SGI setup selects `EMUL_BIG_ENDIAN`; the IP32 arm installs CRIME at `0x14000000`. These are emulator configuration choices consistent with the proposed lane interpretation. See [machine_sgi.c:74](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:74) and [machine_sgi.c:494](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:494).
+
+   **Inference from those definitions:** under ordinary big-endian byte addressing, the mapping is:
+
+   | Offset from CRIME base | Register bits | Documented CONTROL fields |
+   |---|---:|---|
+   | `+0x08…+0x0b` | 63–32 | None |
+   | `+0x0c…+0x0d` | 31–16 | None |
+   | `+0x0e` | 15–8 | SYSADC bits 13/12; HARD_RESET 11; SOFT_RESET 10; DOG_ENABLE 9; ENDIANESS 8 |
+   | `+0x0f` | 7–0 | WBUF mask `0xf0`; CQUEUE mask `0x0f` |
+
+   Thus a 32-bit access at `+0x08` covers the high word, while one at `+0x0c` covers every defined CONTROL bit. The header’s WBUF shift is printed as `8` despite its `0xf0` mask; the lane inference uses the masks and lower-14-bit statement, not that inconsistent shift definition.
+
+   **PROM/OS observations recorded by the emulator author:** the CONTROL TODO says NetBSD 1.6.2 writes at `0x00c`; the following comment attributes `0x200` to NetBSD’s watchdog and `0x800` to the IP32 PROM’s reboot command. These are useful compatibility observations, but no accompanying instruction trace establishes the PROM’s store width or the complete NetBSD transaction. See [dev_sgi_ip32.c:353](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:353).
+
+   **Emulator choices:** every access forcibly replaces CONTROL with `0x100`. The handler suppresses DOG_ENABLE and ENDIANESS in its local diagnostic value; HARD_RESET stops all CPUs. It implements neither a watchdog timer here nor an actual machine reset. SOFT_RESET has a header definition but no corresponding reset action in this arm. See [dev_sgi_ip32.c:231](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:231) and [dev_sgi_ip32.c:356](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:356).
+
+   The supplied [bugs529.md:8](C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/records/bugs529.md:8) describes the discrepancy accurately. The saved [rows_base.out:20](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/opus_pass1_20260913/out/rows_base.out:20) records the contrasting word-write outcomes. That is evidence about the emulator, not real CRIME hardware.
+
+2. The 4-byte storage/read paths already implement the expected split; CONTROL’s side-effect dispatch contradicts them.
+
+   `memory_readmax64()` decodes the supplied bytes into a right-aligned integer using CPU byte order. It receives no register offset and therefore performs no register-lane placement. See [memory.c:55](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:55) and its call at [dev_sgi_ip32.c:216](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:216).
+
+   Both addresses select `d->reg[1]`. The width arm then does this:
+
+   | Four-byte access | Read selection | Write placement |
+   |---|---|---|
+   | `+0x08`, address bit 2 clear | Bits 63–32 | Replace high 32 bits; preserve low 32 |
+   | `+0x0c`, address bit 2 set | Bits 31–0 | Replace low 32 bits; preserve high 32 |
+
+   This follows directly from [dev_sgi_ip32.c:280](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:280). The read’s `int32_t` conversion does not change the selected four bytes; the common tail serializes only the requested length.
+
+   The following switch uses the **unmodified address**, and CONTROL examines **raw `idata`**, rather than the value positioned by the width arm:
+
+   - At `+0x08`, the supplied `0x800` occupies register bit **43** in storage, yet the handler interprets raw input bit **11** as HARD_RESET.
+   - At `+0x0c`, it occupies register bit **11**, but dispatch reaches `default`, bypassing CONTROL’s actions.
+   - A full-width access at `+0x08` has no such placement mismatch.
+
+   See [dev_sgi_ip32.c:322](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:322) and [dev_sgi_ip32.c:364](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:364).
+
+   Two qualifications matter:
+
+   - “`+0x0c` does nothing” means **no CONTROL-specific action**. Its accepted write updates the low backing word and reaches the default diagnostic. Its read already returns `0x100`.
+   - CONTROL is overwritten again at the next access. Consequently, a later read cannot establish whether the preceding CONTROL write persisted or reached its action handler.
+
+   A correction must make address, width, and written-bit interpretation agree. Merely adding a `0x0c` case leaves the erroneous high-word action intact. The treatment of unsupported widths and reserved high bits requires a separate policy decision.
+
+3. R17 mixes valid lane checks with channels that deliberately depend on this defect.
+
+   Its own [contract at R17:56](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:56) explicitly acknowledges that dependency.
+
+   | Rows / location | Present dependency | Needed after a lane correction |
+   |---|---|---|
+   | `sw08 halts` — [R17:693](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:693) | High-word write stops CPUs; expects the untouched sentinel. | Retain the high-word case as a **no-control-effect** check, expecting guest progress. Put the positive 32-bit action check on the supported low lane, alongside the full-width reference. |
+   | `sw08 msg ctl` — [R17:698](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:698) | A high-word write is interpreted as low CONTROL residue and produces one message. | Re-establish the positive diagnostic channel using an actual low-lane write. Derive high-word diagnostics from the reserved-bit policy. **Its count could remain one after correction**, if shifted reserved bits are still logged; green would not establish correct bit interpretation. |
+   | `sh08 pc/run`, `sb08 msg/run`, `sh08b msg/run` — [R17:746](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:746); `gate run` — [R17:865](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:865) | Erroneous fall-through into raw CONTROL handling causes a diagnostic or halt, exposing a missing decline jump. | Their normal refusal expectations remain valid, but their ability to detect fall-through must be re-established. A corrected handler may make high-lane fall-through harmless, or reject narrow effects independently. In that case these rows no longer prove that the switch was skipped. |
+   | `sh08b once/said` — [R17:777](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:777) | One width-refusal notice, attributed to the first halfword access. | Keep these expectations if #529’s refusal policy remains. Update the reported address only if the session moves. They do not require the lane defect. |
+   | `acc ctl4r`, `acc ctl0c`, and their `p` twins — [R17:1405](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1405), [R17:1516](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1516) | Already expect high word `0`, low word `0x100`, with the refusal latch clear and set. | **Keep these values** for a correction confined to write effects. Keep full-width `acc ctl ld` / `p acc ctl ld = 0x100` too. Change them only if access support or CONTROL state semantics also change. |
+   | `ctldog sw msg` / `ctldog sd msg` — [R17:981](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:981) | Both widths at `+0x08` are treated as DOG-only and DOG-plus-residue writes; expects one message. | Move the operational word cases to the low lane; the doubleword cases remain at the register base. The one-message expectation survives if existing residue handling is retained. High-word cases need their own expectations. |
+   | `ctlrst sw halt/msg`; `rst 4w`, `rst 4w msg/once` — [R17:998](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:998), [R17:1673](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1673) | Accepted high-word writes exercise reset handling before/after the refusal latch is set. | Re-derive the word sessions using the supported low lane, including their diagnostic twins. Full-width `ctlrst sd …` and `rst 8w …` retain their expectations under a lane-only change. The no-reset `rst alive` control and one-refusal counts remain applicable. |
+   | `rearm ctl msg`, `latch ctl msg`; surrounding `rearm once/surv`, `latch x5/surv/said` — [R17:1085](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1085), [R17:1126](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1126), [R17:1332](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1332) | `ACCEPTS` entries 10–13 and 43 put operational word writes at `+0x08`. Aggregate CONTROL counts expect four messages. | Rebuild the CONTROL portion of `ACCEPTS` to exercise low-word actions in both latch states, retaining high-word coverage separately. Recompute aggregate counts and coverage claims. Latch notice/survival rows can stay green while silently losing DOG-branch coverage. |
+   | `p acc ctl msg` — [R17:1509](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1509) | Counts four messages from two word and two doubleword CONTROL writes. | Move/rederive the two operational word cases. Four remains appropriate if they reproduce the same low-bit residue behavior. The independent full-width `acc ctl sd` remains applicable. |
+
+   The read pair deserves a precise limit: high-word zero alone cannot distinguish acceptance from a zero-answer decline. The low-word row supplies a nonzero observation, but cannot detect a bypass restricted specifically to `+0x08`. R17 explicitly corrects that earlier overclaim and records a separate `+0x0c` decline test at [R17:315](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:315).
+
+   The refused-read rows (`ctl v0`, `ctl lb v0`, `gate lb/lh v0`) and `free 2w said` continue to test #529’s zero-answer/announcement policy; they need no expectation change merely because accepted word writes are corrected.
+
+   Finally, both `sw08` controls participate in `CRIMEP_CONTROL`. That aggregation must be updated with the new controls, or a legitimate correction will report `CONTROL=FAIL`. See [R17:1756](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:1756).
+
+4. The smallest useful witness needs both lane discrimination and evidence of a real driver’s transaction.
+
+   At the regression-design level, use a small isolated guest MMIO conformance test containing the two word lanes, a full-width reference, and an independent guest-progress control. Its observations must distinguish:
+
+   - correct high/low read selection;
+   - absence of low-bit actions from a high-word write;
+   - equivalence between a supported low-word request and the corresponding full-width request;
+   - modeled CPU stopping versus host termination or a broken observation mechanism.
+
+   CONTROL readback alone is insufficient because the prelude overwrites it. R17’s existing distinction between a surviving host with stopped guest CPUs and an absent transcript is relevant, but does not establish hardware correctness. See [R17:646](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/crimewidthkill/final529r17_20260926/crime_width_probe.r17.py:646).
+
+   To settle compatibility, capture **instruction, access width, resolved address, transferred bytes, and observed result** from the actual IP32 PROM reboot path and NetBSD’s CONTROL/watchdog path—especially the NetBSD 1.6.2 case named by the TODO. That would establish whether the PROM uses a full-width transaction and whether NetBSD actually relies on a low-word transaction. Matching real-hardware behavior would resolve the remaining legality/aliasing question; an emulator trace establishes what the guest requests.
+
+   The available boot notes do not supply that evidence:
+
+   - The O2 documentation describes running a raw PROM with built-in firmware emulation disabled and identifies versions 2.3, 4.13, and 4.18, while disclosing the cache-probe workaround. See [machine_sgi_o2.html:515](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/machine_sgi_o2.html:515) and [machine_sgi_o2.html:537](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/machine_sgi_o2.html:537).
+   - Emulated ARCBIOS `Halt`, `Restart`, and `Reboot` directly stop CPUs, bypassing any need for a CRIME CONTROL transaction. See [arcbios.c:1293](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/arcbios.c:1293).
+   - The recorded NetBSD 8.2 O2 battery result reaches “banner+probes”; its sweep checks attachment output. Neither demonstrates CONTROL-lane behavior. See [BATTERY_RESULTS.md:13](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/battery/BATTERY_RESULTS.md:13) and [reg_sweep.sh:40](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/battery/reg_sweep.sh:40).
+
+   Therefore, the tree establishes an internal lane inconsistency. Choosing the hardware-faithful policy for partial accesses still needs the driver/PROM transaction evidence the queue row requests.

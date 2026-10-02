@@ -1,0 +1,87 @@
+VERDICT: 3 of 3 findings hold as stated -- all three identify genuine HIGH-severity denial-of-service or termination paths reachable by guest input.
+
+***
+
+### Q1. The Premise Audit
+
+* **[H4](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L131-L178) (CP15 control-register endianness switch exits process):**
+  * **Reachability:** Reachable from code running in the guest. In fact, it is reachable not only by a privileged supervisor but also by unprivileged user code: [`arm_mcr_mrc()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643) and [`arm_coproc_15()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L50) perform no mode or privilege checks. An `mcr p15, 0, Rd, c1, c0, 0` instruction with bit 7 (`ARM_CONTROL_BIG`) inverted relative to `cpu->byte_order` executes line 177: `fatal(...)` + `exit(1)`.
+  * **The ONE premise that would make it false if it failed:** That writing CP15 c1 with an altered `ARM_CONTROL_BIG` bit invokes `exit(1)` rather than ignoring the bit, raising an undefined instruction exception, or performing dynamic endianness reconfiguration.
+  * **Checkability:** Confirmed in [`src/cpus/cpu_arm_coproc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L161-L178), where the mismatch condition unconditionally calls `fatal(...)` followed by `exit(1)`.
+
+* **[H5](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L257-L277) (Exception vector translation failure causes unbounded host recursion):**
+  * **Reachability:** Reachable from code running in the guest. When the guest enables the MMU with translation tables that leave the exception vector page (0x00000000 or 0xffff0000 if high vectors are enabled via the V-bit) unmapped, any fault (e.g. an instruction prefetch fault) enters [`arm_translate_v2p_mmu()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L112). On failure, it calls [`arm_exception(cpu, ARM_EXCEPTION_PREF_ABT)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L695), which sets `cpu->pc` to the vector address and calls [`quick_pc_to_pointers(cpu)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/quick_pc_to_pointers.h#L6). Because the vector page is unmapped, [`DYNTRANS_PC_TO_POINTERS_GENERIC`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L625) calls `cpu->translate_v2p()` again synchronously on the vector address without returning. This re-triggers `arm_exception()`, recursing on the host C stack until stack exhaustion crashes the process (SIGSEGV).
+  * **The ONE premise that would make it false if it failed:** That `arm_exception()` invokes dynamic translation resolution synchronously (`quick_pc_to_pointers`) while inside `translate_v2p()` without detecting recursion or returning an error to `cpu_dyntrans.c`.
+  * **Checkability:** Confirmed in [`src/cpus/cpu_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L733), where `quick_pc_to_pointers(cpu)` is called unconditionally inside `arm_exception()`, and [`src/cpus/memory_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L268-L274), which invokes `arm_exception()` directly upon translation failure.
+
+* **[H6](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1604-L1808) (User/System-mode LDM with S-bit and R15 stops the virtual CPU):**
+  * **Reachability:** Reachable from code running in the guest. An unprivileged user program executing `ldm <base>, {..., pc}^` (an instruction with the S-bit set and R15 in the register list) is dispatched to [`bdt_load`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1936), which calls [`arm_pop()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1602). In `ARM_MODE_USR32`, line 1614 clears `s_bit = 0`, but line 1616 tests `iw & 0x8000` inside the outer `if (s_bit)` block, setting `return_flag = 1`. In `ARM_MODE_SYS32`, line 1616 likewise sets `return_flag = 1`. At line 1784, the return switch lacks cases for both `ARM_MODE_USR32` (0x10) and `ARM_MODE_SYS32` (0x1f), hitting `default:`, which sets `cpu->running = 0` and redirects `next_ic` to `nothing_call`. On single-CPU configurations (all GXemul ARM machines), this stops all execution and terminates the process via `main()`.
+  * **The ONE premise that would make it false if it failed:** That `return_flag` is set in USR32/SYS32 despite `s_bit` being cleared, and that the return switch at line 1784 lacks cases for USR32/SYS32 and halts via `default:` instead of either ignoring the S-bit or delivering an undefined instruction exception.
+  * **Checkability:** Confirmed in [`src/cpus/cpu_arm_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1610-L1620) and [lines 1784–1800](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1784-L1800).
+
+***
+
+### Q2. Which Disposition is Wrong?
+
+**Count: 1 disposition was wrong as originally queued (or 0 wrong among the confirmation rulings):**
+
+* **H5's queued disposition of MED was wrong in its severity.**
+  The queue originally recorded H5 as MED. Under the project's severity definitions:
+  * **HIGH:** input under guest control ends the emulator process, causes out-of-bounds memory accesses, or stops progress.
+  * **MED:** guest-visible behavior differs from hardware documentation without process termination.
+  Unbounded C-stack recursion terminates the emulator process via a host crash (segmentation fault / stack overflow). Because guest input (running with an unmapped vector table) crashes the host process, H5 is strictly **HIGH**, confirming the confirmation pass's escalation.
+* All three findings ([H4](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L177), [H5](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L269), [H6](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1797)) are genuine, non-duplicate, guest-reachable HIGH defects under the fork's rules.
+
+***
+
+### Q3. Correction Dispositions and Machinery
+
+Project disposition options: (1) delete terminating call; (2) decline silently; (3) decline and announce once per device or CPU; (4) accept; (5) fault -- deliver exception; (6) accept into invented backing store; (7) implement missing behavior.
+
+* **[H4](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L177) (CP15 Endianness Switch):**
+  * **Chosen Disposition:** **(3) Decline and announce once per CPU** (or **(2) Decline silently**).
+  * **Rationale:** As round #378 documented, dynamically switching endianness on ARM (option 7) would require invalidating translation caches (`invalidate_translation_caches(cpu, 0, INVALIDATE_ALL)`), flushing the instruction decoder, and refactoring the LDM/STM fast-path install gates. Rejecting changes to the `ARM_CONTROL_BIG` bit (preserving `cpu->byte_order` and the current control register bit) treats the B-bit as hardwired/read-only, matching real fixed-endian silicon.
+  * **Machinery Check:** The machinery exists on this CPU; it requires only ignoring the bit write and emitting a one-time warning via [`debugmsg_cpu()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L181).
+
+* **[H5](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L269) (Unmapped Vector Page Recursion):**
+  * **Chosen Disposition:** **(7) Implement missing behavior** by decoupling exception vector redirection from synchronous translation, falling back to clean CPU halting/termination.
+  * **Rationale:** In [`cpu_dyntrans.c:685–734`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L685-L734), GXemul already contains iterative translation logic designed for vector lookups (as implemented on MIPS, where [`mips_cpu_exception()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c#L1911) merely sets `cpu->pc` without invoking `pc_to_pointers`). `arm_exception()` should not call `quick_pc_to_pointers()` when invoked from inside `translate_v2p()`. If the vector page cannot be translated, the CPU cannot deliver another exception (option 5 would recurse) and cannot execute (options 4 and 6 do not apply).
+  * **Machinery Check:** The iterative failure handling in `cpu_dyntrans.c` line 732 already exists; suppressing `quick_pc_to_pointers()` inside `arm_exception()` allows line 732 to be reached cleanly.
+  * **Missing Member in the Dispositions List:** The list does **NOT** name **CPU HALT / PROCESSOR STOP / CONTROLLED TERMINATION** (stopping the virtual CPU via `cpu->running = 0` or halting the machine cleanly when the architecture encounters an unrecoverable double-fault/vector fetch failure).
+
+* **[H6](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1797) (LDM with S-bit and R15 in USR/SYS):**
+  * **Chosen Disposition:** **(2) Decline silently** (decline SPSR restore; perform standard LDM with PC load) OR **(5) Fault -- deliver `ARM_EXCEPTION_UND`**.
+  * **Rationale:** ARM DDI 0100I classifies this instruction as UNPREDICTABLE in User or System mode, explicitly stating that UNPREDICTABLE instructions must not halt the processor. At line 1614, Anders Gavare already wrote `s_bit = 0` for USR32, intending to decline the S-bit. Ensuring `return_flag = 0` when in USR32 or SYS32 allows the instruction to load registers and PC normally (option 2). Alternatively, delivering [`ARM_EXCEPTION_UND`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L695) (option 5) is standard for many ARM cores encountering UNPREDICTABLE user instructions.
+  * **Machinery Check:** Both exist on this CPU. Standard LDM branch/register-load logic is already present in [`arm_pop()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1602), and [`arm_exception(cpu, ARM_EXCEPTION_UND)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L695) is fully functional.
+
+***
+
+### Q4. Ranking by OS Exposure in Ordinary Operation
+
+1. **[H6](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1604-L1808) (Most Likely):**
+   * **Basis:** This instruction is completely unprivileged. Any user-mode binary, legacy ARMv3 26-bit binary (where `ldm ..., {..., pc}^` was standard subroutine return syntax), fuzzer, or compiler bug executing a single user-space instruction halts the virtual CPU and terminates the entire emulation. Furthermore, OS code executing in System mode (which shares user registers and has no SPSR) attempting an exception return idiom also triggers this halt.
+2. **[H4](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L131-L178) (Second):**
+   * **Basis:** An operating system in steady-state operation does not change its endianness. However, during early boot (`locore.S`), big-endian kernels (e.g., NetBSD/armeb) write to CP15 c1 with the B-bit set. Booting such an OS on an emulator instance configured with default endianness triggers `exit(1)` immediately. Furthermore, because GXemul lacks privilege checks on CP15, any unprivileged user process can also trigger this exit.
+3. **[H5](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L257-L277) (Least Likely):**
+   * **Basis:** In ordinary operation, a functioning operating system never maps page tables that leave the exception vector page (0x00000000 or 0xffff0000) unmapped, as real hardware would also be incapable of servicing traps, interrupts, or page faults. This path is encountered only during faulty kernel development, early MMU bootstrapping bugs, or catastrophic kernel page-table corruption.
+
+***
+
+### Standing License Observations
+
+1. **Total Absence of Privilege Checking on Coprocessor Instructions:**
+   Neither [`arm_mcr_mrc()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L2643) nor [`arm_coproc_15()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L50) consults `cpu->cd.arm.cpsr` for mode privilege. Any unprivileged guest program in User mode can directly write to CP15 c1 to disable the MMU, reconfigure cache settings, or hit the termination exits.
+2. **Reachable `exit(1)` Calls in [`src/cpus/cpu_arm_coproc.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c):**
+   Of the 7 active `exit(1)` calls in `cpu_arm_coproc.c`:
+   * Line 62 (`if (rd == ARM_PC)`): Reachable by any guest MCR/MRC to CP15 with Rd = r15 (such as the valid ARMv5 instruction `MRC p15, 0, r15, c7, c10, 3` to test-and-clean DCache into CPSR flags).
+   * Line 177: H4 (endianness switch).
+   * Line 264 (`cpu->cd.arm.pid != 0`): Reachable by writing any non-zero value to the FCSE PID register (CP15 c13).
+   * Lines 322, 331, and 417: In `arm_coproc_i80321_6()`, reachable on i80321 machines (IQ80321, Iyonix) by writing non-zero to `isteer` (c4), writing to `isrc` (c8), or unhandled CP6 opcodes.
+   * Line 528: In `arm_coproc_xscale_14()`, reachable on any XScale core via unhandled CP14 performance monitor accesses.
+   All 7 active `exit(1)` lines are reachable by guest instructions.
+3. **Cross-Architecture Vector Recursion (H5 Pattern):**
+   The H5 unbounded recursion pattern was verified across all non-MIPS CPU cores:
+   * **PowerPC:** [`src/cpus/cpu_ppc.c:338`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c#L338) (`ppc_exception()` calls `ppc32_pc_to_pointers()`).
+   * **SH:** [`src/cpus/cpu_sh.c:1091`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c#L1091) (`sh_exception()` calls `sh_pc_to_pointers()`).
+   * **M88K:** [`src/cpus/cpu_m88k.c:980`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c#L980) (`m88k_exception()` calls `m88k_pc_to_pointers()`).
+   Only MIPS ([`cpu_mips.c:1911`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c#L1911)) is immune, because it updates CP0 registers and `cpu->pc` without calling `pc_to_pointers()`, allowing `translate_v2p()` to return 0 and letting `cpu_dyntrans.c` handle vector resolution iteratively.
