@@ -1,3 +1,21 @@
+## #559 -- records: three wrong records in #558's committed text, from two Gemini-web readings (2026-10-06)
+
+* Gemini web (`gemini.google.com`, Flash, the packet-fed seat of 2026-10-02) read #558's drafts twice
+  (`regress/artifacts/idlessaudit_20261002/gemini_558texts/`, 11 files: `GX558TEXTS: 4 ATTACKS 1 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO` / `GX558TEXTS: 7 ATTACKS 4 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO`).  Adjudicated by the main loop (Opus 5.5) against `4c9c06d2`.
+* HOLD, corrected in place and marked `[#559]`: (1) #558's seat line said GPT-6 Astra gave "two checks and a
+  confirmation" (CHANGELOG) and "the check of the disposition, the confirmation" (OUTSTANDING_BUGS); it gave ten
+  answers, eight of them records checks of #558's own drafts and checker (`aconf_558` .. `aconf_558h`).  (2) Those
+  eight had no ledger entry; one `codex` review entry on `idlesslow` now names all eight with their verdicts.
+  (3) OUTSTANDING_BUGS's account of passage 2616 named only the MB89352 side; its PPC half is `qhppciphack`, as the
+  ledger already said.  (4) Found by GPT-6 Astra's check of this correction (`aconf_559`): the same seat line put every
+  Astra answer at `ultra`; `aconf_558e` .. `aconf_558h` ran at `max` (each `.err` header), because `tools/cxlaunch.sh`
+  passes `max` while the owner's standing effort is `ultra`.  The launcher is NOT changed here.
+* DISMISSED: "the ledger draft is truncated and breaks the JSON" (both readings): the PACKET cut that note
+  mid-sentence; the committed ledger parses.  A packet-generator defect, noted.
+* Files: `CHANGELOG.md`, `OUTSTANDING_BUGS.md`, `tools/pipeline/ledger.json`, `matrix.html`, the readings.  No `src/`.
+  Seats: Gemini web (two readings, packet-fed); GPT-6 Astra (the confirmation of this correction); Fable and Opus
+  agent seats deliberately not fired (owner, 2026-10-02); the adjudication is the main loop's.
+
 # `#558` (idlessaudit): agy's read-only audit of `#555`'s committed table -- 16 flags; one opens three MB89352 emulated-CPU-stop rows (HIGH), the rest change nothing; `boilerplateprefix`'s commits field filled
 
 **Why.**  The owner's instruction of 2026-10-02 is to keep agy on read-only audits and to CHECK its flags.  `#555`
@@ -44,8 +62,9 @@ left to this commit for the committed one).  `OUTSTANDING_BUGS.md` -- the `#558`
 it is the whole answer), the disposition (v3), Astra's checks, grok's ruling, Astra's confirmation, the generator, the
 runner's results.
 
-**Seats, by name.**  agy: five of six (one WALLED, a seat failure).  GPT-6 Astra: two checks and a confirmation; no
-wall, no refusal.  grok: one ruling.  Fable and Opus agent seats deliberately not fired (owner, 2026-10-02); kimi down;
+**Seats, by name.**  agy: five of six (one WALLED, a seat failure).  GPT-6 Astra: ten answers -- the disposition check, the
+confirmation of grok's ruling, and eight records checks of these drafts and the checker (`aconf_558` .. `aconf_558h`);
+no wall, no refusal.  **[#559: this said "two checks and a confirmation".]**  grok: one ruling.  Fable and Opus agent seats deliberately not fired (owner, 2026-10-02); kimi down;
 Ollama not fired.  No `src/` touched; no pass-2 receipt owed.
 
 # `#557` (closeassess): the rows closed with no commit are audited -- 18 commits fields filled, 4 members added to `closeassessrows`, the parked `boilerplateprefix` repair landed with its comment corrected, one parked repair held

@@ -24352,7 +24352,8 @@ eleven OWED flags as "clause-(e) debt that a live row exempts" was also wrong an
   16997-17000); the brief had named only the POINTER id, so agy read the pointer, found it partial, and said so --
   correctly, of the pointer.  **The fifth (#27, passage 2616,
   "dev_mb89352 fatal errors") is a real gap**: `qhm88kstops` carries ONE of the device's nine `cpu->running = 0` assignments (ten stop
-  messages: EXBF's write and read logging share one assignment).
+  messages: EXBF's write and read logging share one assignment).  **[#559]** The passage's PPC half is carried by
+`qhppciphack`, as the ledger's entry for that brief already said; this text named only the MB89352 side.
 * **11 OWED** -- a KEEP-AS-IS entry whose work is not done at `c29a5fd3`.  All eleven are the entries `#555` kept
   because an existing row already records the open work, in those words, in its own queue text; the carriers
   (`armbfiwidth`, `mapledmaaddr`, `ppcrldimimask`, `xscaleinten`) are open or in work.  `#555` dropped nothing; whether a carrier owes its work is the carrier's question.
@@ -24381,6 +24382,21 @@ rows), so the gap is a missing second reader.
 regress `[HELD AWAITING SEAT: fable5]` entry and `hold_question` that section I's rule 3 asks for (found by `#557`'s
 post-commit check of the working ledger).
 
-**Seats, by name.**  agy (gemini-3.8-flash-high): five of six briefs, one WALLED.  GPT-6 Astra (codex, `ultra`): the
-check of the disposition, the confirmation of grok's ruling.  grok (grok-4.7 xhigh): the ruling on Astra's finding.
+**Seats, by name.**  agy (gemini-3.8-flash-high): five of six briefs, one WALLED.  GPT-6 Astra (codex): the
+check of the disposition, the confirmation of grok's ruling, and eight records checks of #558's own drafts and checker
+(`aconf_558` .. `aconf_558h`) -- ten answers in all; the first six at `ultra`, `aconf_558e` .. `aconf_558h` at `max`
+(each `.err` header; `tools/cxlaunch.sh` passes `max`).  **[#559: this said "(codex, `ultra`): the check of the
+disposition, the confirmation", which undercounted and put every answer at `ultra`.]**  grok (grok-4.7 xhigh): the ruling on Astra's finding.
 The Fable and Opus agent seats were deliberately not fired (owner instruction, 2026-10-02); kimi down; Ollama not fired.
+
+### #559 -- three wrong records in #558's committed text (records only; 2026-10-06)
+
+Two Gemini-web readings of #558's drafts (`regress/artifacts/idlessaudit_20261002/gemini_558texts/gx_558texts_r1`, `_r2`; Flash; the reading verdicts were
+`GX558TEXTS: 4 ATTACKS 1 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO` and `GX558TEXTS: 7 ATTACKS 4 BROKEN 3 HOLDS 0 UNSETTLED DRAFTABLE:NO`) were adjudicated by the main loop (Opus 5.5) against the committed text at `4c9c06d2`.
+Three findings HOLD and are corrected in place, each marked `[#559]` (a fourth, the `ultra` label on Astra's
+`max` runs, was found by Astra's check of this correction): the Astra seat count (two places), the
+eight Astra checks of #558's drafts that had no ledger entry (now one `codex` entry on `idlesslow`, with the stage's no-panel record re-stated after it), and passage
+2616's PPC carrier `qhppciphack`, omitted from this file.  DISMISSED: "LEDGER:17 is truncated, the JSON is broken"
+(both readings) -- the packet cut that ledger note mid-sentence; the committed ledger is valid.  That is a defect of
+the packet generator, not of #558, and it is recorded here so the next packet built that way is fixed first.  No
+row's state changes.
