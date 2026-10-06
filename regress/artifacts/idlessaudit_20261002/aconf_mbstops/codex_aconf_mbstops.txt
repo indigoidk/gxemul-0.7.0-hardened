@@ -1,0 +1,44 @@
+ASTRA_MBSTOPS_ALIVE_1002
+VERDICT: CONFIRMED WITH CHANGES (3) -- correct reachability explanations, qualify carrier/title scope, and label evidence as source-only; retain three HIGH rows
+
+Read-only review at `c29a5fd3`; nothing written, built, or emulated. I’m providing source predicates, but omitting register/value sequences for reproducing the stops. All source references below refer to that commit.
+
+1 | WRONG: The live/dead classification survives, but several reachability explanations need qualification.
+
+Every DREG helper call requires a **nonzero count before decrement**. Zero-count accesses only warn. The phase and buffer guards additionally require a transfer object. Thus “unconditional” means independent of the abort flag, not independent of these prerequisites. The quoted phase examples omit the count prerequisite. [dev_mb89352.c:637](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mb89352.c:637)
+
+| Site | Source finding |
+|---|---|
+| `:146` | **RIGHT.** NULL-transfer read stop, behind the count gate; carried by `qhm88kstops`. |
+| `:169` | **RIGHT with qualification.** Unsupported read phase, after the transfer-object check. SCMD/PCTL handling supplies guest control over phase; the quoted excluded phase set is correct. |
+| `:176` | **RIGHT with qualification.** Bounds check against the selected DATAIN, STAT, or MSGIN buffer. Read completion changes phase **without resetting the cursor**, so a subsequent nonempty buffer can encounter this guard; it need not be the original DATAIN buffer. |
+| `:235` | **RIGHT with qualification.** Unsupported write phase; the quoted excluded set is correct, subject to the common prerequisites. |
+| `:242` | **Reachable, but the explanation is incomplete.** Increasing the count does not establish an overrun of a positive outgoing buffer: exact fill immediately executes completion and can change phase, making another write reach `:235`. Empty/unprepared outgoing-buffer states support the bounds-stop conclusion independently. |
+| `:290` | **Dead, with a corrected proof.** The first switch returns only for unsupported phases. DATAOUT/CMD **break**, reach the second switch without an intervening phase change, and exhaust its supported cases. |
+| `:312` | **RIGHT.** Non-byte callback access, gated by the fixed-true flag. |
+| `:533` | **RIGHT for SCMD writes.** The quoted accepted command set and reset-bit normalization are correct. An SCMD read does not execute this switch. |
+| `:676` / `:690` | **RIGHT.** WRITE logging at `:676` and READ logging at `:683` converge on the **same** assignment at `:690`. EXBF is the remaining register case. |
+
+The decisive control flow is at [dev_mb89352.c:139](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mb89352.c:139), [dev_mb89352.c:211](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mb89352.c:211), [dev_mb89352.c:356](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mb89352.c:356), and [dev_mb89352.c:674](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mb89352.c:674). Transfer allocation initializes buffer lengths to zero; zero-length buffer allocation also preserves logical length zero. [diskimage_scsicmd.c:89](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:89), [diskimage_scsicmd.c:147](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage_scsicmd.c:147)
+
+The census is correct: **nine assignments**, ten requested entries counting EXBF’s two directions separately. `:507` logs and breaks; the flag is `const true`.
+
+2 | WRONG: “Empty status: `b120`” is too broad as a carrier label.
+
+`b120` carries **the unknown-CDB producer omission and its empty-status consequence**. The dropped `mb89352halt` record explicitly names the disk dispatcher’s default and the controller’s status-length guard—not the SCMD default. It explicitly excludes the controller’s treatment of other empty-status paths. Grok correctly distinguishes `:533`; its brief’s contrary assertion is wrong. [ledger.json:25700](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:25700)
+
+`qhm88kstops` remains the NULL-transfer read. `mboutcapacity` concerns length/allocation disagreement, not this deliberate bounds-stop behavior. [ledger.json:60386](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:60386), [ledger.json:56301](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:56301)
+
+3 | RIGHT: Three rows remain a defensible partition, with these title/remedy qualifications.
+
+- **Phase row:** Specify a transfer object, nonzero count, and a phase unsupported **for the access direction**. “Log and continue” must mean keep the CPU running while **retaining the helper’s early return**. Preserve `:170`/`:236`.
+- **Flag row:** Say **“unhandled SCMD write.”** The shared fixed-true policy coherently groups `:312`, `:533`, and `:690`. Clearing it leaves all five unconditional DREG assignments intact.
+- **Bounds row:** Specify the selected buffer in a phase supported for that direction, with the common transfer/count prerequisites. Its residual includes other empty-buffer paths as well as nonempty-buffer cases. Preserve bounds protection and refuse the access or handle phase completion; removing the guard exposes the indexed accesses at `:180`/`:246`.
+
+These are three distinct repair shapes. Widening `qhm88kstops` would obscure them.
+
+4 | RIGHT: Retain HIGH under the stated project rubric.
+
+Each row has source-supported guest control reaching an emulated-CPU stop; nothing read establishes a reason to lower one. Add to **each** row: **“Reachability established by source inspection at `c29a5fd3`; no runtime witness measured.”** The demonstrated effect is clearing `cpu->running`, not proof of host-process termination. The existing comparator is explicitly HIGH. [ledger.json:60387](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json:60387)
+
+DENOMINATOR: 10 of 10 stop sites read; 3 of 3 proposed rows checked

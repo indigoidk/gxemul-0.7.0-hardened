@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""post558.py -- commit_unit.py's post step for #558.  ledger.json and matrix.html are `no_merge`, so the working ledger
+is rebuilt from the pre-commit backup (it carries the parked edits of other rows) with #558's ledger edits re-applied by
+the same function prep558.py used (boilerplateprefix's sha is idempotent there: post557 already filled the working
+copy); the working matrix.html is regenerated.  The dashboard is NOT published."""
+import glob
+import json
+import os
+import subprocess
+import sys
+
+REC = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REC)
+import prep558
+
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+L = os.path.join(SEC, "tools", "pipeline", "ledger.json")
+subj = subprocess.run(["git", "-C", SEC, "log", "-1", "--format=%h %s"], capture_output=True, text=True).stdout.strip()
+if not subj.split(" ", 1)[1].startswith("#558 "):
+    sys.exit("REFUSED: HEAD is %s, not #558's commit" % subj[:60])
+sha557 = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD~1"], capture_output=True, text=True).stdout.strip()
+if not subprocess.run(["git", "-C", SEC, "log", "-1", "--format=%s", "HEAD~1"], capture_output=True, text=True).stdout.startswith("#557 "):
+    sys.exit("REFUSED: HEAD~1 is not #557's commit")
+bks = [b for b in sorted(glob.glob(os.path.join(REC, "bk_558_*"))) if os.path.isfile(os.path.join(b, "commit.out"))]
+if not bks:
+    sys.exit("REFUSED: no bk_558_* backup of a --go run")
+raw = open(os.path.join(bks[-1], "tools", "pipeline", "ledger.json"), "rb").read()
+W = json.loads(raw.decode("utf-8"))
+dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+if dump(W) != raw:
+    sys.exit("REFUSED: the backup ledger does not round-trip byte-identical")
+spec = json.load(open(os.path.join(REC, "spec558.json")))
+astra = prep558.verdict(os.path.join(prep558.D, "aconf_agyflags", "codex_aconf_agyflags.txt"))
+n = prep558.edit_ledger(W, sha557, astra, prep558.answers(), len(spec["add_files"]))
+open(L, "wb").write(dump(W))
+print("working ledger rebuilt from %s: #558's %d entries re-applied on %s; boilerplateprefix commits = %s" % (bks[-1], n, prep558.ROW, sha557))
+r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py")], cwd=SEC, capture_output=True, text=True)
+print((r.stdout.strip() or r.stderr.strip())[-200:])
+sys.exit(r.returncode)

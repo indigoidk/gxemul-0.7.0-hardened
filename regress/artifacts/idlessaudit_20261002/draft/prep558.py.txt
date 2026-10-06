@@ -1,0 +1,461 @@
+#!/usr/bin/env python3
+"""prep558.py <GPT-6 Astra's aconf_agyflags verdict, one line> [--dry]
+
+Stages #558 (records): agy's read-only audit of #555's committed id-less table -- six briefs, five answers, one wall --
+and the main loop's disposition of its sixteen flags (one opened three MB89352 rows; one brief-generator defect), checked by
+Astra; plus the one field the committed ledger still owed from #557: `boilerplateprefix`'s commits = #557's sha.
+Every number in the texts is derived from the answer files; the stage refuses on placeholders and in-flight artifacts.
+Commits via commit_unit.py spec558.json (ledger + matrix no_merge; post558.py rebuilds the working ledger)."""
+import difflib
+import hashlib
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+REC = os.path.dirname(os.path.abspath(__file__))
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+ST = os.path.join(REC, "stage558")
+ARTS = os.path.join(SEC, "regress", "artifacts")
+D = os.path.join(ARTS, "idlessaudit_20261002")
+DIRS = ["idlessaudit_20261002"]
+REL = "regress/artifacts/idlessaudit_20261002"
+TEXT_EXT = (".c", ".h", ".py", ".sh", ".md", ".json", ".txt", ".tsv", ".diff", ".out", ".err")
+UNIT, DATE = "#558", "2026-10-02"
+ROW = "idlesslow"          # the only #555-wide row: the class row of its LOW filings
+DISP = REL + "/AGY_FLAGS_DISPOSITION.md"
+ANSWERS = ["icite2_1", "icite2_2", "ifiled2_1", "ifiled2_2", "ifiled2_3", "ikeep2"]
+WALLED = {"icite2_2"}
+# the flags, as the disposition file records them (counts are re-derived from the answers below and must agree)
+PARTLY = {"ifiled2_1": [15, 24, 26, 27], "ifiled2_3": [28]}
+OWED = {"ikeep2": list(range(8, 19))}
+CARRIERS = {"qhscifssr": "ifiled2_1 #15", "qhnetxlog": "ifiled2_1 #24", "qhslowifetch": "ifiled2_1 #26", "qhppciphack": "ifiled2_1 #27",
+            "qhm88kstops": "ifiled2_1 #27", "armcp15cp14exits": "ifiled2_3 #28"}
+LIVE = {"armbfiwidth": "#8", "xscaleinten": "#9", "ppcrldimimask": "#10-#14", "mapledmaaddr": "#15-#18"}
+# the one wrong disposition (ifiled2_1 #27): Astra found qhm88kstops carries only dev_mb89352.c:146 of the nine
+# `cpu->running = 0` sites; grok RULED three rows owed (grok/grok_mbstops.txt, CONCEDE IN PART); Astra CONFIRMS
+# (aconf_mbstops/codex_aconf_mbstops.txt) -- the stage refuses unless that verdict begins CONFIRMED.  Titles are grok's;
+# the sites, the carriers of the rest (:146 qhm88kstops, :176's empty-status case b120, :290 dead) and the fix shapes
+# are in each note.  Reachability is BY READING (grok, Astra), not measured -- the notes say so.
+GROK_MB = REL + "/grok/grok_mbstops.txt"
+ASTRA_MB = REL + "/aconf_mbstops/codex_aconf_mbstops.txt"
+NEWROWS = [
+    ("qhmbphasestops", "HIGH", "An MB89352 data-register access, with a transfer object and a nonzero count, in a phase unsupported for the access direction stops the emulated CPU",
+     "SITES (c29a5fd3, src/devices/dev_mb89352.c): :169 (DREG read, phase outside DATAIN/STAT/MSGIN) and :235 (DREG write, phase outside "
+     "DATAOUT/CMD).  :290 (the end-of-write default:) is UNREACHABLE: the first switch returns only for unsupported phases, and DATAOUT/CMD "
+     "break, reach the second switch with no intervening phase change, and exhaust its supported cases.  PREREQUISITES: every DREG helper call "
+     "needs a NONZERO count before decrement (a zero-count access only warns) and these guards additionally need a transfer object -- "
+     "'unconditional' means independent of the abort flag, nothing more.  REACHED BY (by reading, not measured): SCMD/PCTL give the guest "
+     "control of the phase.  FIX SHAPE: keep the CPU running while KEEPING the helper's early return (:170 / :236) -- the treatment #186 "
+     "gave the XFR command at :507."),
+    ("qhmbunimplstops", "HIGH", "An MB89352 access with a non-byte length, an unhandled SCMD write, or the EXBF register stops the emulated CPU while mb89352_abort_on_unimplemented_stuff is fixed true",
+     "SITES (c29a5fd3, src/devices/dev_mb89352.c): :312 (len != 1: a halfword or word callback access), :533 (an SCMD WRITE outside "
+     "{0x00, 0x20, 0x84, 0x8c, 0xc0} unless bit 0x10 rewrites it to BUS_REL -- an SCMD read does not execute this switch), and EXBF, register "
+     "index 15: WRITE logging at :676 and READ logging at :683 converge on the ONE assignment at :690.  All gated by const bool "
+     "mb89352_abort_on_unimplemented_stuff = true (:61), so live; the shared fixed-true policy is what groups them.  REACHED BY (by reading, "
+     "not measured): those accesses from the guest's register interface.  FIX SHAPE: the warning branch the flag already selects; clearing "
+     "the flag leaves all five live unconditional DREG assignments (:146, :169, :176, :235, :242; :290 is dead) intact.  NOT mb89352halt's stop: that dropped "
+     "row's record names the disk dispatcher's CDB default: and the controller's status-length guard, not :533."),
+    ("qhmbbufendstops", "HIGH", "An MB89352 data-register access at or past the end of the selected buffer, in a phase supported for the access direction, stops the emulated CPU",
+     "SITES (c29a5fd3, src/devices/dev_mb89352.c): :176 (DREG read, transfer_bufpos >= len against the selected DATAIN, STAT or MSGIN "
+     "buffer -- read completion changes phase WITHOUT resetting the cursor, so a subsequent nonempty buffer can meet this guard, not only the "
+     "original DATAIN buffer) and :242 (DREG write: reachable through empty or unprepared outgoing-buffer states; an exact fill runs "
+     "completion and can change phase so a further write reaches :235 instead).  PREREQUISITES: a transfer object and a nonzero count, as "
+     "for the phase guards (the count prerequisite applies to every DREG helper call; the :146 stop is the case with NO transfer object).  CARRIERS OF THE REST: b120 carries the unknown-CDB producer omission and its empty-status consequence; this row's "
+     "residual is every OTHER empty-buffer path and every nonempty-buffer case.  FIX SHAPE: keep the bounds protection and refuse the access "
+     "or handle phase completion -- removing the guard exposes the indexed accesses at :180 / :246 -- a CONTROLLER fix; b120 remains the "
+     "PRODUCER fix."),
+]
+
+
+def git(*a, binary=False):
+    r = subprocess.run(["git", "-C", SEC] + list(a), capture_output=True)
+    if r.returncode:
+        sys.exit("REFUSED: git %s: %s" % (" ".join(a), r.stderr.decode("utf-8", "replace")))
+    return r.stdout if binary else r.stdout.decode("utf-8")
+
+
+def md5(b):
+    return hashlib.md5(b).hexdigest()[:8]
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def put(rel, data):
+    p = os.path.join(ST, *rel.split("/"))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(data)
+    return p
+
+
+def verdict(p):
+    v = re.findall(r"VERDICT: ([^\n]*)", rd(p))
+    if not v:
+        sys.exit("REFUSED: no VERDICT line in %s" % p)
+    return v[0].replace("`", "").strip().rstrip(".")
+
+
+def answers():
+    """one dict per agy brief: verdict, flags (PARTLY/OWED item numbers as the answer gives them), size, walled"""
+    out = {}
+    for a in ANSWERS:
+        txt = os.path.join(D, a, "agy_%s.txt" % a)
+        err = os.path.join(D, a, "agy_%s.err" % a)
+        if a in WALLED:
+            e = rd(err) if os.path.isfile(err) else ""
+            if "quota" not in e:
+                sys.exit("REFUSED: %s is recorded as WALLED but its .err carries no quota text" % a)
+            out[a] = dict(verdict="SEAT WALLED (agy quota: %s)" % re.search(r"Resets in [0-9hms]+", e).group(0), flags=[], size=0, walled=True,
+                          err_line=e.strip().split("\n")[0][:160])
+            continue
+        t = rd(txt)
+        v = verdict(txt)
+        n = int(re.match(r"(\d+) of", v).group(1))
+        if a.startswith("ifiled"):
+            flags = [int(m.group(1)) for m in re.finditer(r"^(\d+) \| .*?\| COVERS: PARTLY", t, re.M)]
+        elif a.startswith("ikeep"):
+            flags = [int(m.group(1)) for m in re.finditer(r"^(\d+) \| OWED:", t, re.M)]
+        else:
+            flags = [int(m.group(1)) for m in re.finditer(r"^(\d+) \| .*?\b(WRONG|FLAG|MISCITED|NOT FOUND)\b", t, re.M)]
+        if len(flags) != n:
+            sys.exit("REFUSED: %s: verdict says %d flagged, %d flag lines found: %r" % (a, n, len(flags), flags))
+        out[a] = dict(verdict=v, flags=flags, size=len(t.encode("utf-8")), walled=False)
+    if {k: v["flags"] for k, v in out.items() if v["flags"]} != {**PARTLY, **OWED}:
+        sys.exit("REFUSED: the flags in the answers are not the ones the disposition file records: %r" % {k: v["flags"] for k, v in out.items()})
+    return out
+
+
+def edit_ledger(L, sha557, astra_verdict, ans, nfiles):
+    rows = dict((x["id"], x) for x in L["rows"])
+    # 1. the field #557 owed: boilerplateprefix's commits = #557's own sha (post557 filled the WORKING ledger; the
+    #    committed one is filled here).  Idempotent on the working copy; a different value is refused.
+    cur = rows["boilerplateprefix"].get("commits") or ""
+    if cur and cur != sha557:
+        sys.exit("REFUSED: boilerplateprefix.commits is %r, not empty and not #557's %s" % (cur, sha557))
+    rows["boilerplateprefix"]["commits"] = sha557
+    # ... and, now that the row is closed WITH commits, section I's rule 3 wants a regress review or a held one (found
+    # by #557's post-commit check of the working ledger, 2026-10-06): the same held regress entry and question #557
+    # gave its eight rows.  Idempotent: skipped if the row already has a regress entry.
+    bp = rows["boilerplateprefix"]
+    if "regress" not in set(e.get("phase") for e in bp.get("entries", [])):
+        bp.setdefault("entries", []).append(dict(
+            phase="regress", seat="fable5", date=DATE, grade="UNKNOWN", grader="", ev="not fired",
+            note="[HELD AWAITING SEAT: fable5] boilerplateprefix closed with commits %s (#557 landed its parked check_boilerplate.py "
+                 "repair) and so owes the REGRESS review, a distinct phase under the regress-is-fable-only directive.  Held by %s "
+                 "(%s); the Fable agent seat is deliberately not fired (owner instruction, 2026-10-02), so the hold stands for the "
+                 "owner's batched flagship sign-off.  The question is in the row's hold_question." % (sha557, UNIT, DATE)))
+        bp["hold_question"] = (("REGRESS (held %s by %s): does tools/pipeline/check_boilerplate.py as landed in %s -- the comparison key "
+                                "is the whole seat note, EXCERPT = 60 display-only -- still catch the boilerplate it exists to catch at "
+                                "HEAD, and is its corrected comment true of the code?  || " % (DATE, UNIT, sha557))
+                               + (bp.get("hold_question") or "")).rstrip(" |")
+    # 2. the carriers the disposition leans on must be what it says they are
+    for rid in CARRIERS:
+        if rid not in rows:      # #555 filed its LOW rows as members of the class row idlesslow, not as rows of their own
+            if rid not in json.dumps(rows["idlesslow"]) or rows["idlesslow"]["state"] not in ("open", "in work", "held"):
+                sys.exit("REFUSED: carrier %s is neither a ledger row nor a member of a live idlesslow" % rid)
+            continue
+        if rows[rid]["state"] not in ("open", "in work", "held"):
+            sys.exit("REFUSED: carrier %s is %s" % (rid, rows[rid]["state"]))
+    for rid in LIVE:
+        if rows[rid]["state"] not in ("open", "in work"):
+            sys.exit("REFUSED: live carrier %s is %s" % (rid, rows[rid]["state"]))
+    # 2b. the three rows grok ruled owed and Astra confirmed, inserted right after qhm88kstops (the row they complete)
+    mbv = verdict(os.path.join(SEC, *ASTRA_MB.split("/")))
+    if not mbv.startswith("CONFIRMED"):
+        sys.exit("REFUSED: Astra's confirmation of grok's MB89352 ruling is %r, not CONFIRMED" % mbv)
+    for rid, _, _, _ in NEWROWS:
+        if rid in rows:
+            sys.exit("REFUSED: %s already exists" % rid)
+    at = [i for i, x in enumerate(L["rows"]) if x["id"] == "qhm88kstops"]
+    if len(at) != 1:
+        sys.exit("REFUSED: qhm88kstops not found exactly once")
+    for k, (rid, sev, title, note) in enumerate(NEWROWS):
+        L["rows"].insert(at[0] + 1 + k, dict(
+            id=rid, title=title, sev=sev, state="open", opened=DATE, commits="", witness="", hold_question="",
+            state_note="FILED BY %s from queue passage 2616 at db8b1a33 ('#12 m88k CMMU / dev_mb89352 fatal errors'), which #555 gave ONE row "
+                       "(qhm88kstops, dev_mb89352.c:146).  %s  PROVENANCE: agy's ifiled2_1 flag #27 (PARTLY) -> GPT-6 Astra's finding that the "
+                       "title carries one of nine `cpu->running = 0` assignments (%s/aconf_agyflags/codex_aconf_agyflags.txt) -> grok's ruling, CONCEDE IN PART, three "
+                       "rows (%s) -> Astra's confirmation (%s: %s).  Severity HIGH by the qhm88kstops grade (a guest-drivable stop of the "
+                       "emulated CPU).  Reachability established by source inspection at c29a5fd3; no runtime witness measured -- the round that takes this row "
+                       "owes the rung-3 attempt.  NOT FIXED by %s." % (UNIT, note, REL, GROK_MB, ASTRA_MB, mbv, UNIT),
+            entries=[dict(phase="assess", seat="fable5", date=DATE, grade="", grader="", ev=GROK_MB,
+                          note="[NOT A SEAT ANSWER] Filed by GXEMUL [087a90] (main loop) by %s on grok's ruling (grok-4.7 xhigh, plan mode) and "
+                               "Astra's confirmation of it (GPT-6 Astra, ultra); the chain is in the row's note.  NOT FIXED by %s." % (UNIT, UNIT))]))
+        rows[rid] = L["rows"][at[0] + 1 + k]
+    # 3. the entries on the #555-wide row -- one per seat answer, each naming its file (section G's trigger)
+    r = rows[ROW]
+    if any(e.get("ev", "").startswith(REL) for e in r["entries"]):
+        sys.exit("REFUSED: %s already carries %s entries" % (ROW, REL))
+    new = []
+    for a in ANSWERS:
+        x = ans[a]
+        if x["walled"]:
+            new.append(dict(phase="review", seat="agy", date=DATE, grade="WALLED (seat failure)", grader="",
+                            ev="%s/%s/agy_%s.err" % (REL, a, a),
+                            note="%s audit of #555's table, brief %s/briefs/%s.md: the seat WALLED on launch (%s; the .txt is 0 bytes, the "
+                                 ".err is the whole answer).  The 20 rows it was to read (IDLESS_TABLE2.tsv rows 111-130, the ones agy's first set had not reached) "
+                                 "are unaudited by agy; Astra's ifile_04 (128/128 rows) and ifile_05 passes read them before #555 shipped.  The runner was stopped rather than left asleep "
+                                 "until the stated reset." % (UNIT, REL, a, x["err_line"])))
+            continue
+        fl = x["flags"]
+        if a in PARTLY:
+            what = ("%d PARTLY flag(s) (items %s): %s (%s)" % (len(fl), ", ".join(map(str, fl)),
+                    "#15, #24 and #26 are carried by rows #555 filed on the same queue lines (qhscifssr, qhnetxlog, qhslowifetch), which the "
+                    "brief did not name; #27 is a real gap -- qhppciphack carries its PPC half, qhm88kstops one MB89352 assignment of nine, "
+                    "and three rows are filed for the residual" if a == "ifiled2_1" else
+                    "#28 is carried by armcp15cp14exits, filed by #554 from queue lines 18721-18722 (not on #28's own lines 16997-17000), "
+                    "which the brief did not name", DISP))
+        elif a in OWED:
+            what = "%d OWED flag(s) (items %s): each recorded, in those words, in its LIVE carrier row's own queue text (%s); nothing owed by #555 (%s)" % (
+                len(fl), "-".join(map(str, (fl[0], fl[-1]))), ", ".join(sorted(LIVE)), DISP)
+        else:
+            what = "0 flags"
+        new.append(dict(phase="review", seat="agy", date=DATE, grade=x["verdict"], grader="", ev="%s/%s/agy_%s.txt" % (REL, a, a),
+                        note="%s read-only audit of #555's table at c29a5fd3 (gemini-3.8-flash-high, brief %s/briefs/%s.md; answer %d bytes): %s.  "
+                             "agy's agreement carries no weight (owner, 2026-10-02); its flags were CHECKED against the committed table, not judged." % (
+                                 UNIT, REL, a, x["size"], what)))
+    new.append(dict(phase="review", seat="codex", date=DATE, grade=astra_verdict, grader="", ev="%s/aconf_agyflags/codex_aconf_agyflags.txt" % REL,
+                    note="%s GPT-6 Astra (codex, ultra) on the main loop's disposition of agy's 16 flags (brief %s/briefs/aconf_agyflags.md): "
+                         "asked which of the sixteen 'nothing owed' dispositions is wrong, per flag, against IDLESS_TABLE2.tsv and the ledger "
+                         "at c29a5fd3." % (UNIT, REL)))
+    new.append(dict(phase="review", seat="grok", date=DATE, grade=verdict(os.path.join(SEC, *GROK_MB.split("/"))), grader="", ev=GROK_MB,
+                    note="%s grok (grok-4.7 xhigh, plan mode) RULING on Astra's finding about agy's flag ifiled2_1 #27 (brief %s/briefs/grok_mbstops.md): "
+                         "of dev_mb89352.c's nine cpu->running = 0 assignments (ten stop messages: EXBF's write and read share one), :146 is qhm88kstops, b120 carries the unknown-CDB producer omission and its empty-status consequence at :176, :290 is dead, "
+                         "and three rows are owed for the rest -- filed as %s." % (UNIT, REL, ", ".join(r_[0] for r_ in NEWROWS))))
+    new.append(dict(phase="review", seat="codex", date=DATE, grade=mbv, grader="", ev=ASTRA_MB,
+                    note="%s GPT-6 Astra (codex, ultra) CONFIRMING grok's ruling against the source at c29a5fd3 (brief %s/briefs/aconf_mbstops.md): "
+                         "per site, the reaching path, the carriers, the partition into three rows and the HIGH grade." % (UNIT, REL)))
+    new.append(dict(phase="review", seat="fable5", date=DATE, grade="", grader="", ev=DISP,
+                    note="[NOT A SEAT ANSWER] %s GXEMUL [087a90] (main loop): the disposition of agy's 16 flags (v3, after Astra's checks aconf_agyflags, "
+                         "aconf_558 and aconf_558b) -- 5 PARTLY: 4 carried by rows the brief had not named (%s), 1 (#27) WRONG IN PART per Astra -> grok's ruling -> "
+                         "three rows filed (%s); 11 OWED: each recorded in its live carrier's own queue text (%s), nothing owed by #555.  One defect "
+                         "in the brief generator (a passage with a pointer AND a new row was listed with the pointer alone), recorded and not re-run "
+                         "(agy walled until 2026-10-07 by its own message).  %d artifact files committed under %s.  Fable and Opus agent seats "
+                         "deliberately not fired (owner, 2026-10-02)." % (
+                             UNIT, "qhscifssr, qhnetxlog, qhslowifetch filed by #555 on the same lines; armcp15cp14exits filed by #554", ", ".join(r_[0] for r_ in NEWROWS),
+                             ", ".join(sorted(LIVE)), nfiles, REL)))
+    r["entries"].extend(new)
+    return len(new)
+
+
+def main():
+    dry = "--dry" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--dry"]
+    if len(args) != 1:
+        sys.exit(__doc__)
+    astra = args[0]
+    head = git("rev-parse", "--short=8", "HEAD").strip()
+    if not git("log", "-1", "--format=%s", "HEAD").startswith("#557 "):
+        sys.exit("REFUSED: HEAD %s is not #557's commit" % head)
+    if os.path.isdir(ST):
+        for root, dirs, files in os.walk(ST, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
+    os.makedirs(ST, exist_ok=True)
+    man = ["# #558 staged committed versions -- HEAD %s%s" % (head, "  (DRY)" if dry else "")]
+    ans = answers()
+    for a in ANSWERS:
+        man.append("agy %-10s %s%s" % (a, ans[a]["verdict"][:70], ("  flags " + str(ans[a]["flags"])) if ans[a]["flags"] else ""))
+    ap = os.path.join(D, "aconf_agyflags", "codex_aconf_agyflags.txt")
+    if not dry and verdict(ap) != astra:
+        sys.exit("REFUSED: the verdict given (%r) is not the one in %s (%r)" % (astra, ap, verdict(ap)))
+
+    # the artifacts (counted before the ledger so the main-loop entry can name the count)
+    afiles, skipped, empty = [], 0, 0
+    complete = re.compile(r"seat answered|SEAT WALLED|REFUSED|The answer is LOST|PANEL_COMPLETE|rc=")
+    tracked = set(git("ls-files", "regress/artifacts").split("\n"))
+    now = time.time()
+    for d in DIRS:
+        for root, _, fs in os.walk(os.path.join(ARTS, d)):
+            for f in sorted(fs):
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, SEC).replace(os.sep, "/")
+                keep_err = f == "agy_icite2_2.err"        # the wall is the whole answer; every other .err stays on disk
+                if rel in tracked or (f.endswith(".err") and not keep_err):
+                    skipped += f.endswith(".err")
+                    continue
+                if os.path.getsize(p) == 0:
+                    empty += 1
+                    continue
+                if now - os.path.getmtime(p) < 120 and not dry:
+                    sys.exit("REFUSED: %s changed in the last two minutes -- a job in flight?" % p)
+                if f.endswith(".launch.log") and not complete.search(rd(p)):
+                    if not dry:
+                        sys.exit("REFUSED: %s has no completion line -- a job in flight?" % p)
+                    man.append("(dry) IN FLIGHT, would refuse: %s" % rel)
+                if f.endswith(TEXT_EXT) and b"\0" in open(p, "rb").read():
+                    sys.exit("REFUSED: %s carries a NUL byte" % rel)
+                afiles.append(rel)
+    man.append("artifacts: %d files to add under %s; %d *.err and %d zero-byte files left on disk" % (len(afiles), ", ".join(DIRS), skipped, empty))
+
+    # the ledger
+    raw = git("show", "HEAD:tools/pipeline/ledger.json", binary=True)
+    L = json.loads(raw.decode("utf-8"))
+    dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+    if dump(L) != raw:
+        sys.exit("REFUSED: the ledger does not round-trip byte-identical")
+    nent = edit_ledger(L, head, astra, ans, len(afiles))
+    lp = put("tools/pipeline/ledger.json", dump(L))
+    mp = os.path.join(ST, "tools", "pipeline", "matrix.html")
+    r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py"), "--out", mp],
+                       env=dict(os.environ, GXLEDGER=lp), capture_output=True, text=True)
+    if r.returncode or not os.path.isfile(mp):
+        sys.exit("REFUSED: gen_dashboard: %s%s" % (r.stdout, r.stderr))
+    man.append("ledger: %d entries on %s; %d rows filed (%s); boilerplateprefix.commits = %s" % (nent, ROW, len(NEWROWS), ", ".join(r_[0] for r_ in NEWROWS), head))
+
+    # the texts
+    np_ = sum(len(v) for v in PARTLY.values())
+    no_ = sum(len(v) for v in OWED.values())
+    mbv = verdict(os.path.join(SEC, *ASTRA_MB.split("/")))
+    fmt = dict(unit=UNIT, head557=head, astra=astra, nfiles=len(afiles), npartly=np_, nowed=no_, nflags=np_ + no_, mbv=mbv,
+               newids=", ".join("`%s`" % r_[0] for r_ in NEWROWS),
+               newrows="\n".join("#### `%s` (%s, filed by %s) -- %s\n%s" % (rid, sev, UNIT, title, note) for rid, sev, title, note in NEWROWS),
+               carriers=", ".join("`%s`" % c for c in sorted(c for c in CARRIERS if c != "qhm88kstops")), live=", ".join("`%s`" % c for c in sorted(LIVE)),
+               wall=ans["icite2_2"]["err_line"],
+               agyrows="\n".join("| `%s` | %s | %s |" % (a, ans[a]["verdict"], (", ".join(map(str, ans[a]["flags"])) or "--")) for a in ANSWERS))
+    sec = SECTION.format(**fmt)
+    put("OUTSTANDING_BUGS.md", (git("show", "HEAD:OUTSTANDING_BUGS.md").rstrip("\n") + "\n" + sec).encode("utf-8"))
+    blk = CHANGELOG.format(**fmt)
+    put("CHANGELOG.md", (blk.rstrip("\n") + "\n\n" + git("show", "HEAD:CHANGELOG.md")).encode("utf-8"))
+    msg = MESSAGE.format(**fmt)
+    io.open(os.path.join(REC, "msg558.txt"), "w", encoding="utf-8", newline="\n").write(msg)
+    for t in (sec, blk, msg):
+        if ("<OWED" in t and not dry) or re.search(r"\{[a-z_0-9]+\}", t):
+            sys.exit("REFUSED: a placeholder survives in a generated text")
+    files = ["CHANGELOG.md", "OUTSTANDING_BUGS.md", "tools/pipeline/ledger.json", "tools/pipeline/matrix.html"]
+    spec = {"unit": UNIT, "head_subject_re": "^#557 ", "stage_dir": ST, "files": files, "neutral": ["tools/pipeline/check_probe_wiring.py"],
+            "add_dirs": [], "add_files": afiles, "exclude_dirs": [], "message": os.path.join(REC, "msg558.txt"), "sidecars": [], "pre": [],
+            "post": [["python", os.path.join(REC, "post558.py")]], "no_merge": ["tools/pipeline/ledger.json", "tools/pipeline/matrix.html"]}
+    io.open(os.path.join(REC, "spec558.json"), "w", encoding="utf-8", newline="\n").write(json.dumps(spec, indent=1) + "\n")
+    for rel in files:
+        new = open(os.path.join(ST, *rel.split("/")), "rb").read()
+        old = subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True).stdout
+        d2 = list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(), lineterm="", n=0))
+        man.append("%s  %-40s +%d -%d  (HEAD %s)" % (md5(new), rel, sum(1 for l in d2 if l.startswith("+") and not l.startswith("+++")),
+                                                    sum(1 for l in d2 if l.startswith("-") and not l.startswith("---")), md5(old)))
+    io.open(os.path.join(ST, "MANIFEST.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(man) + "\n")
+    print("\n".join(man))
+
+
+SECTION = """
+## 2026-10-02 -- GXEMUL [087a90]: `{unit}` -- agy's audit of `#555`'s id-less table: {nflags} flags; one opened THREE MB89352 emulated-CPU-stop rows, the rest changed nothing
+
+**What this is.**  `#555` gave ids to the prose entries of this file and committed its tables under
+`regress/artifacts/idless_20261002/`.  The owner's standing instruction (2026-10-02) is to keep agy busy on read-only
+audits and to take its FLAGS as facts to check while giving its agreement no weight.  Six briefs were generated from the
+committed tables (`regress/artifacts/idlessaudit_20261002/briefs/`; generator `mk_agy_idless2.py.txt`): two on the
+citations of the forty `#555` rows, three on the 104 passages `#555` points at an existing id, one on the 22 entries it
+ruled KEEP-AS-IS or UNSETTLED.  Five answered; `icite2_2` WALLED on launch (`{wall}`).
+
+| brief | agy's verdict | flagged items |
+|---|---|---|
+{agyrows}
+
+**The {nflags} flags, read against the committed table** (`AGY_FLAGS_DISPOSITION.md`, v3; v1 was checked by GPT-6 Astra,
+`aconf_agyflags/codex_aconf_agyflags.txt`: {astra} -- the one wrong disposition is #27 below, and v1's framing of the
+eleven OWED flags as "clause-(e) debt that a live row exempts" was also wrong and is corrected):
+* **{npartly} PARTLY** -- a passage pointed at an id that covers only part of it.  For four, the "left-out" item is
+  carried by a row the brief did not name: three filed by `#555` on the SAME queue lines (`qhscifssr`, `qhnetxlog`,
+  `qhslowifetch`) and one filed by `#554` from queue lines 18721-18722 (`armcp15cp14exits`, for #28's lines
+  16997-17000); the brief had named only the POINTER id, so agy read the pointer, found it partial, and said so --
+  correctly, of the pointer.  **The fifth (#27, passage 2616,
+  "dev_mb89352 fatal errors") is a real gap**: `qhm88kstops` carries ONE of the device's nine `cpu->running = 0` assignments (ten stop
+  messages: EXBF's write and read logging share one assignment).
+* **{nowed} OWED** -- a KEEP-AS-IS entry whose work is not done at `c29a5fd3`.  All eleven are the entries `#555` kept
+  because an existing row already records the open work, in those words, in its own queue text; the carriers
+  ({live}) are open or in work.  `#555` dropped nothing; whether a carrier owes its work is the carrier's question.
+
+**The three rows this opens** -- Astra's finding (`aconf_agyflags`), grok's ruling (`grok/grok_mbstops.txt`: CONCEDE IN
+PART), Astra's confirmation against the source at `c29a5fd3` (`aconf_mbstops/codex_aconf_mbstops.txt`: {mbv}).  Of the
+nine `cpu->running = 0` assignments in `src/devices/dev_mb89352.c`, `:146` is `qhm88kstops`, `b120` carries the unknown-CDB producer omission and its empty-status
+consequence at `:176`, `:290` is dead; the rest, three fix shapes, three rows, each HIGH by the `qhm88kstops` grade, each saying that its reachability
+is established by source inspection at `c29a5fd3`; no runtime witness was measured:
+
+{newrows}
+
+**What else changes: nothing in the queue text or the other ledger rows.**  The brief generator's defect -- a passage
+with both a pointer and a new row listed with the pointer alone -- is recorded and not re-run: agy is walled until
+2026-10-07 by its own message and the fix is one column.  `icite2_2`'s twenty rows (the ones the first agy set had not
+reached) are unaudited by agy; Astra's own passes read the whole table before `#555` shipped (`ifile_04`: 128/128
+rows), so the gap is a missing second reader.
+
+**Also in this commit:** the committed ledger's `boilerplateprefix` commits field, left for "the next commit" by
+`#557`'s post step, is filled with `{head557}`, and -- the row being closed WITH commits from then on -- it gets the
+regress `[HELD AWAITING SEAT: fable5]` entry and `hold_question` that section I's rule 3 asks for (found by `#557`'s
+post-commit check of the working ledger).
+
+**Seats, by name.**  agy (gemini-3.8-flash-high): five of six briefs, one WALLED.  GPT-6 Astra (codex, `ultra`): the
+check of the disposition, the confirmation of grok's ruling.  grok (grok-4.7 xhigh): the ruling on Astra's finding.
+The Fable and Opus agent seats were deliberately not fired (owner instruction, 2026-10-02); kimi down; Ollama not fired.
+"""
+
+CHANGELOG = """# `{unit}` (idlessaudit): agy's read-only audit of `#555`'s committed table -- {nflags} flags; one opens three MB89352 emulated-CPU-stop rows (HIGH), the rest change nothing; `boilerplateprefix`'s commits field filled
+
+**Why.**  The owner's instruction of 2026-10-02 is to keep agy on read-only audits and to CHECK its flags.  `#555`
+(`c29a5fd3`) was the largest records commit of the week -- 130 table rows and 37 ledger rows (36 rows plus the class row
+`idlesslow`), 104 pointed
+passages, 18 entries kept as they were and 4 left UNSETTLED -- read by grok and Astra, and in part by agy's first set
+(`icite_01`..`icite_03`); this second agy set was to read the forty rows that set had not reached (it read twenty: `icite2_2`'s twenty walled),
+the passages and the kept entries.
+
+**How.**  Six briefs generated from the committed tables (`regress/artifacts/idlessaudit_20261002/briefs/`,
+`mk_agy_idless2.py.txt`), run through the agy pack runner at MAXJ 2.  Five answered; `icite2_2` walled on launch
+(`{wall}`) and the runner, which would have slept until the stated reset, was stopped.  agy flagged {nflags} items; each was
+checked by the main loop against `IDLESS_TABLE2.tsv` and the ledger at `c29a5fd3` (`AGY_FLAGS_DISPOSITION.md`), the
+disposition was put to GPT-6 Astra as "which of the sixteen is wrong?" ({astra}), Astra's one finding went to grok for a
+ruling (the owner's arrangement: grok rules Astra's findings, Astra confirms), and Astra confirmed the ruling against
+the source ({mbv}).
+
+**What the flags were.**  {npartly} PARTLY: the `ifiled2` briefs listed, per passage, the id `#555` POINTS it at; where
+`#555` also FILED a new row on the same lines, the pointer alone was listed, so agy correctly found the pointer partial.
+For four, rows the brief did not name carry every "left-out" item (`qhscifssr`, `qhnetxlog`, `qhslowifetch` filed by
+`#555` on the same lines; `armcp15cp14exits` filed by `#554` from lines 18721-18722).  For the fifth -- queue passage 2616, "dev_mb89352
+fatal errors" -- `qhm88kstops` names ONE of the device's nine `cpu->running = 0` assignments, and beyond `b120`'s unknown-CDB producer omission and
+its empty-status consequence no row names the residual.
+{nowed} OWED: the `ikeep2` brief asked for OWED on any KEEP-AS-IS entry whose work is undone, "whatever the ruling
+says"; the eleven are exactly the entries `#555` kept because an existing row records the open work in its own text
+({live}).  Nothing is owed by `#555` for them.  (The disposition's first draft called them "clause-(e) debt under a live
+row, which owes nothing"; Astra corrected that framing -- clause (e) distinguishes a declared exclusion from a breach,
+and a live row exempts nothing -- and v2 and v3 state the test that was actually applied.)
+
+**What ships.**  `tools/pipeline/ledger.json`, `matrix.html` -- three new rows after `qhm88kstops` ({newids}, HIGH,
+open; sites, reaching paths, carriers and fix shapes in their notes, reachability marked as a reading); ten entries on
+`idlesslow` (one per agy brief including the wall, Astra's check, grok's ruling, Astra's confirmation, the main-loop
+disposition); `boilerplateprefix.commits = {head557}` plus its regress hold (the field `#557`'s post step filled in the working ledger and
+left to this commit for the committed one).  `OUTSTANDING_BUGS.md` -- the `{unit}` section with the three rows.
+`regress/artifacts/idlessaudit_20261002/` -- {nfiles} files: the briefs, the five answers, the wall's `.err` (kept because
+it is the whole answer), the disposition (v3), Astra's checks, grok's ruling, Astra's confirmation, the generator, the
+runner's results.
+
+**Seats, by name.**  agy: five of six (one WALLED, a seat failure).  GPT-6 Astra: two checks and a confirmation; no
+wall, no refusal.  grok: one ruling.  Fable and Opus agent seats deliberately not fired (owner, 2026-10-02); kimi down;
+Ollama not fired.  No `src/` touched; no pass-2 receipt owed.
+"""
+
+MESSAGE = """{unit} idlessaudit: agy's read-only audit of #555's committed table -- {nflags} flags; one opens three MB89352 emulated-CPU-stop rows (HIGH), the rest change nothing; boilerplateprefix's commits field filled
+
+Six briefs generated from #555's committed tables; five answered, icite2_2 walled on launch ({wall}).
+agy flagged {nflags} items: {npartly} PARTLY -- four carried by rows the brief had not named (qhscifssr, qhnetxlog,
+qhslowifetch filed by #555 on the same lines; armcp15cp14exits filed by #554), one real: queue passage 2616's "dev_mb89352 fatal errors" had ONE row (qhm88kstops) for
+nine cpu->running = 0 assignments; {nowed} OWED -- each recorded in its live carrier row's own queue text ({live}), nothing owed
+by #555.  Astra checked the disposition ({astra}); its one finding went to grok, who ruled CONCEDE IN PART (three rows
+owed, three fix shapes); Astra confirmed against the source ({mbv}).  Filed: {newids}, HIGH, reachability a reading.
+
+Also: the committed ledger's boilerplateprefix commits field = {head557} (#557's own sha, owed since #557's post step),
+with the regress hold section I then asks for.
+
+Ten ledger entries on idlesslow; {nfiles} artifact files.  No src/ touched.  Fable and Opus agent seats deliberately
+not fired (owner instruction).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+"""
+
+if __name__ == "__main__":
+    main()

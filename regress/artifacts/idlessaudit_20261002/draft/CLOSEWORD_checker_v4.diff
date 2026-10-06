@@ -1,0 +1,61 @@
+diff --git a/tools/pipeline/check_commit_attribution.py b/tools/pipeline/check_commit_attribution.py
+index e0dbe6b8..b29b091a 100644
+--- a/tools/pipeline/check_commit_attribution.py
++++ b/tools/pipeline/check_commit_attribution.py
+@@ -29,6 +29,9 @@ WHAT IT CHECKS, and the three grades are deliberately different failures:
+   HARD   a commit subject names row R with a CLOSURE word, and R.state != "closed".
+          EXCEPT when R.reopened names that commit: a closure a later pass of the same round
+          superseded, with the board saying so (2026-09-05, pcc2widthkills at b78bb0f).
++         AND EXCEPT when R.closure_word_elsewhere lists that commit (a whole hex token before
++         the field's first " -- "): the subject's closure word is about something else, and the
++         line reads NOT A CLOSURE, ungraded (#558, 2026-10-06, closeassessrows at e1871fa5).
+          The commit says the work is done; the board says it is not.  One of the two is
+          wrong and neither can be believed until someone looks.
+ 
+@@ -41,7 +44,7 @@ WHAT IT CHECKS, and the three grades are deliberately different failures:
+          other commits ("open row, commits=...").  Progress on an open row is ordinary, so it
+          is listed rather than failed and the drift stays visible.  THE GRADES ARE TAKEN IN
+          ORDER, and the order decides them: a closure word in the subject grades a non-closed
+-         row HARD (or REOPENED) before anything else is asked; a row that lists the commit is
++         row HARD (or REOPENED, or NOT A CLOSURE) before anything else is asked; a row that lists the commit is
+          attributed next; only then do records-only and the rest apply -- and a code commit
+          against an open row whose `commits` is EMPTY is HARD (main() says why).  (This
+          paragraph named only the records-only case, and called the empty-`commits` code case
+@@ -93,7 +96,8 @@ records, and the row correctly names its five CODE commits.  A row is authored b
+ not by what was written about it.  So a commit whose every path ends in .md is not a hard
+ failure on that ground; it is listed as soft when the row is open, and ignored when the row is
+ closed.  (This said "never a hard failure" until 2026-09-24 -- but a closure word in the subject
+-grades a non-closed row HARD before the records test is reached.)
++grades a non-closed row HARD -- unless the row's `reopened` or `closure_word_elsewhere` names the
++commit -- before the records test is reached.)
+ 
+ That distinction is the check's own version of the rule it exists to serve, and getting it
+ wrong would have made the gate fire on every research commit this project makes -- the fastest
+@@ -326,13 +330,24 @@ def main(argv):
+                 #  closed `pcc2widthkills`; its own pass 2 reopened it the same day and thirteen
+                 #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
+                 #  whose `reopened` field names the commit is a known reopening and is reported,
+-                #  not graded.  Any other closure/state contradiction stays HARD.  `reopened` may
++                #  not graded.  Any other closure/state contradiction stays HARD, bar the one below.  `reopened` may
+                 #  name several commits as 7-40 lowercase-hex tokens bounded by the field's edges or
+-                #  by characters outside ASCII [0-9A-Za-z]; the contradiction is HARD when none of
+-                #  them prefixes the scanned commit (wording from the codex seat, 2026-09-24).
++                #  by characters outside ASCII [0-9A-Za-z]; when none of them prefixes the scanned commit
++                #  (wording from the codex seat, 2026-09-24) the contradiction is HARD -- unless the
++                #  `closure_word_elsewhere` branch below matches it (#558).
+                 if names(row.get("reopened"), full):
+                     print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
+                     ok += 1
++                #  *** #558, 2026-10-06: A CLOSURE WORD ABOUT SOMETHING ELSE. ***  #557's subject reads "the rows
++                #  closed with no commit are audited -- ... 4 members added to closeassessrows": `closed` describes the
++                #  rows the census read, and the class row it names stays open by design.  `reopened` would be false
++                #  (nothing was closed and superseded), so a row may instead list such commits in
++                #  `closure_word_elsewhere` -- whole 7-40 hex tokens BEFORE the first " -- ", the reason after it, so a
++                #  hex-looking word in the reason exempts nothing.  Reported, not graded; any other contradiction
++                #  stays HARD.
++                elif lists((row.get("closure_word_elsewhere") or "").split(" -- ")[0], full):
++                    print("  NOT A CLOSURE %s %-14s %-8s row says this subject's closure word is about something else" % (h, rid, state))
++                    ok += 1
+                 else:
+                     hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
+             elif lists(row.get("commits"), full):

@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""mk_agy_idless2.py <rev of #555's commit>  -- the agy audits of the id-less table that did NOT run before its quota
+wall of 2026-10-02 (owner: "Make sure to push Agy"), rebuilt against the table AS FILED.
+
+The first set (mk_agy_idless.py) audited the first derivation; four of its nine jobs answered and their claims were
+ruled.  #555 then filed the adjudicated table (IDLESS_TABLE2.tsv).  These jobs audit what was filed and nobody outside
+the two ruling seats has read:
+    icite2_<k>   the NEW rows that no agy audit covered -- do the title and the queue passage agree with the source?
+    ifiled2_<k>  the passages #555 points at an id -- does that id cover the passage?
+    ikeep2       the entries that owe nothing, and the entries left unsettled -- is anything dropped?
+Everything is READ-ONLY.  agy's agreement carries no weight; every format makes a FLAG a line of its own, and what a
+flag changes is a later records round's work (ruled first by another seat).
+Writes regress/artifacts/idlessaudit_20261002/briefs/ and the runner's queue <scratchpad>/astraretro/agy_idless2_queue.tsv."""
+import io
+import os
+import re
+import subprocess
+import sys
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+D = os.path.join(SEC, "regress", "artifacts", "idless_20261002")
+OUT = os.path.join(SEC, "regress", "artifacts", "idlessaudit_20261002")
+HERE = os.path.dirname(os.path.abspath(__file__))
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+ART = WD + BS + "GXEMUL-SEC" + BS + "regress" + BS + "artifacts" + BS + "idless_20261002"
+if len(sys.argv) != 2:
+    sys.exit(__doc__)
+REV = sys.argv[1]
+subj = subprocess.run(["git", "-C", SEC, "log", "-1", "--format=%s", REV], capture_output=True).stdout.decode("utf-8", "replace")
+if not subj.startswith("#555 "):
+    sys.exit("REFUSED: %s is not #555's commit (%s)" % (REV, subj[:60]))
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def tsv(name):
+    return [l.split("\t") for l in rd(os.path.join(D, name)).split("\n")[1:] if l.strip()]
+
+
+rows = tsv("IDLESS_TABLE2.tsv")                        # id, grade, queue lines, title, where the text comes from
+gov = dict((r[0], r[9]) for r in tsv("IDLESS_FILING.tsv") if r[1] == "NEW")
+done = set()
+for b in ("icite_01", "icite_02a", "icite_02b", "icite_03"):
+    if os.path.isfile(os.path.join(D, b, "agy_%s.txt" % b)) and os.path.getsize(os.path.join(D, b, "agy_%s.txt" % b)) > 0:
+        done |= set(re.findall(r"(?m)^\d+\. `([a-z][a-zA-Z0-9_]+)` \|", rd(os.path.join(D, "briefs", b + ".md"))))
+todo = [r for r in rows if r[0] not in done]
+queue = subprocess.run(["git", "-C", SEC, "show", REV + ":OUTSTANDING_BUGS.md"], capture_output=True).stdout.decode("utf-8")
+sec = queue[queue.index("\n## 2026-10-02 -- GXEMUL [087a90]: `#555`"):]
+car = re.findall(r"(?m)^\* (\d[\d;, -]*?) -> (.*)$", sec[sec.index("### The passages an id carries"):sec.index("### The entries that stay UNSETTLED")])
+uns = re.findall(r"(?m)^\* (\d[\d-]*) -- (.*)$", sec[sec.index("### The entries that stay UNSETTLED"):])
+carried_passages = set(c[0] for c in car)
+keep = [r for r in tsv("IDLESS_NOTOWED.tsv") if r[1] == "KEEP-AS-IS" and r[4] not in carried_passages]
+
+COMMON = """READ-ONLY, always: write no file, run nothing that changes a file, build nothing, and stay in the foreground.  The
+tree under review is `%(wd)s%(bs)sGXEMUL-SEC` (git) at commit `%(rev)s`; read committed files
+(`git -C %(wd)s%(bs)sGXEMUL-SEC show %(rev)s:<path>`), and ignore any other `src/` under the project root -- the working
+tree also carries another session's uncommitted edits.  Queue line numbers below are commit `db8b1a33`'s: read that
+text with `git -C %(wd)s%(bs)sGXEMUL-SEC show db8b1a33:OUTSTANDING_BUGS.md`.
+
+**Context.**  This project's bug queue, `OUTSTANDING_BUGS.md`, names most rows by a short backticked id; some entries
+recorded open work in prose only.  Commit `%(rev)s` (`#555`) gave those entries ids: its section is at the end of the
+queue file at that commit, and its tables are in `%(art)s` (`IDLESS_TABLE2.tsv`, `IDLESS_CARRIED.tsv`).  Each row was
+ruled by one seat and confirmed by another.  YOUR AGREEMENT IS NOT WHAT IS WANTED.  What is wanted is a FLAG: a line
+that the committed source or the queue text does not support.  A line you cannot check is `NOT CHECKED: <why>`, never
+a pass.
+""" % {"wd": WD, "bs": BS, "art": ART, "rev": REV}
+
+os.makedirs(os.path.join(OUT, "briefs"), exist_ok=True)
+jobs = []
+
+
+def put(name, text):
+    p = os.path.join(OUT, "briefs", name + ".md")
+    io.open(p, "w", encoding="utf-8", newline="\n").write(text)
+    jobs.append((name, os.path.getsize(p)))
+
+
+def chunks(xs, n):
+    k = max(1, (len(xs) + n - 1) // n)
+    per = (len(xs) + k - 1) // k
+    return [xs[i * per:(i + 1) * per] for i in range(k)]
+
+
+for k, part in enumerate(chunks(todo, 22), 1):
+    name = "icite2_%d" % k
+    tok = "AGY_%s_ALIVE_1002" % name.upper()
+    head = ("ROWS FILED BY #555, part %d -- do the title and the queue passage of each row agree with the committed source?\n\n"
+            "FIRST line of your answer: `VERDICT: <f> of %d rows flagged, <n> not checked`.  SECOND line: the token `%s`.\n"
+            "THIRD line: quote verbatim the first line of `%s%s_scratchpad%sCHECKPOINT.md`.\n\n" % (k, len(part), tok, WD, BS, BS)
+            ) + COMMON + ("""
+**For each row below, ONE line:**
+`<id> | TITLE: TRUE / WIDER than the source shows: <what> / NARROWER: <what it leaves out> / NOT TRUE: <what the source shows> | PASSAGE: says this / says something else: <what> | <the lines you read>`
+* Read the queue passage (the line range) and the source it names.  A title is checked against the SOURCE at
+  `%s`, not against the wording of the ruling.
+* Where the title names a CONDITION (a CPU model, a mode bit, "latent", an owed measurement), check that the condition
+  is real and is stated.
+* A row that describes work already done at `%s` is `NOT TRUE: done -- <path:line>`.
+
+Then: **(a)** two rows of this part that are one piece of work (name both ids); **(b)** a row whose work the queue
+ALREADY files under another backticked id (name the id and the queue line);
+**(c)** `DENOMINATOR: <s> of %d rows read in the source`.
+
+**The rows** (id | grade | queue lines at db8b1a33 | title | the line that governs it, cut at 420 characters):
+""" % (REV, REV, len(part)))
+    body = []
+    for n, r in enumerate(part, 1):
+        g = gov.get(r[0], "(ruled later: %s -- read that file under the directory named above)" % r[4])
+        body.append("%d. `%s` | %s | %s | %s | %s" % (n, r[0], r[1], r[2], r[3], g if len(g) <= 420 else g[:417] + "..."))
+    put(name, head + "\n".join(body) + "\n")
+
+for k, part in enumerate(chunks(car, 36), 1):
+    name = "ifiled2_%d" % k
+    tok = "AGY_%s_ALIVE_1002" % name.upper()
+    head = ("PASSAGES #555 POINTS AT AN ID, part %d -- does the id cover the passage?\n\n"
+            "FIRST line of your answer: `VERDICT: <f> of %d passages flagged, <n> not checked`.  SECOND line: the token `%s`.\n"
+            "THIRD line: quote verbatim the first line of `%s%s_scratchpad%sCHECKPOINT.md`.\n\n" % (k, len(part), tok, WD, BS, BS)
+            ) + COMMON + ("""
+Each line below is a prose passage of the queue that gets no row of its own because an id is said to carry it.  That
+is only right if the named row really covers what the passage says is open.  A note in brackets says what kind of id
+it is: a row `#555` filed (its title is in that commit's section of the queue file), a ledger row and its state
+(`tools/pipeline/ledger.json` at `%(rev)s`), or an id that only the queue file names.
+
+**For each passage, ONE line:**
+`<n> | <id> | EXISTS: <where you found the row> / NOT FOUND | COVERS: YES / PARTLY: <what the passage says is open that the row leaves out> / NO: <why> | <the lines you read>`
+* `PARTLY` matters most: a passage with two open items pointed at a row that names one of them loses the other.
+* Where the only carrier is closed or dropped, say whether the passage still records work that is NOT done at
+  `%(rev)s`: `STILL OPEN: <what, path:line>` or `NOTHING OPEN`.
+
+Then `DENOMINATOR: <s> of %(n)d passages read in the queue and in the row each is pointed at`.
+
+**The passages** (n | queue lines at db8b1a33 | the id or ids, as `#555` lists them):
+""" % {"rev": REV, "n": len(part)})
+    put(name, head + "\n".join("%d. %s | %s" % (n, c[0], c[1]) for n, c in enumerate(part, 1)) + "\n")
+
+tok = "AGY_IKEEP2_ALIVE_1002"
+head = ("ENTRIES THAT OWE NOTHING, AND ENTRIES LEFT UNSETTLED -- does #555 drop anything?\n\n"
+        "FIRST line of your answer: `VERDICT: <f> of %d entries flagged, <n> not checked`.  SECOND line: the token `%s`.\n"
+        "THIRD line: quote verbatim the first line of `%s%s_scratchpad%sCHECKPOINT.md`.\n\n" % (len(keep) + len(uns), tok, WD, BS, BS)
+        ) + COMMON + ("""
+**Part 1 -- %d entries ruled KEEP-AS-IS** (history, or a rule; no row, no change of text, pointed at no id).  ONE line each:
+`<n> | NOTHING OWED: <the one fact that shows it> / OWED: <the open work the passage records, with path:line> | <the lines you read>`
+A passage that says something is still open, still unmeasured or still to be corrected, and whose work is not done at
+`%s`, is `OWED` whatever the ruling says.
+
+**Part 2 -- %d entries left UNSETTLED.**  ONE line each:
+`<n> | WHAT IS NAMED WOULD SETTLE IT / WOULD NOT: <what would> / ALREADY SETTLED: <path:line or document:line, and which way> | <the lines you read>`
+The extracted manuals are in `%s%s_scratchpad%s` (`*.txt`); a manual that is not there is a real answer.
+
+Then `DENOMINATOR: <s> of %d entries read in the queue text`.
+
+**Part 1 entries** (n | queue lines at db8b1a33 | the line that governs it, cut at 420 characters):
+""" % (len(keep), REV, len(uns), WD, BS, BS, len(keep) + len(uns)))
+body = ["%d. %s | %s" % (n, r[5], r[9] if len(r[9]) <= 420 else r[9][:417] + "...") for n, r in enumerate(keep, 1)]
+body += ["", "**Part 2 entries** (n | queue lines at db8b1a33 | what `#555` says is unsettled):"]
+body += ["%d. %s | %s" % (n, u[0], u[1] if len(u[1]) <= 700 else u[1][:697] + "...") for n, u in enumerate(uns, len(keep) + 1)]
+put("ikeep2", head + "\n".join(body) + "\n")
+
+q = os.path.join(HERE, "agy_idless2_queue.tsv")
+io.open(q, "w", encoding="utf-8", newline="\n").write(
+    "# artdir<TAB>id -- the agy audits of the id-less table as #555 filed it (%s)\n" % REV + "".join("idlessaudit_20261002\t%s\n" % j[0] for j in jobs))
+print("rows filed %d; covered by the four answered audits %d; to audit %d; passages %d; keep-as-is %d; unsettled %d"
+      % (len(rows), len(rows) - len(todo), len(todo), len(car), len(keep), len(uns)))
+print("briefs: %s" % ", ".join("%s %d b" % j for j in jobs))
+print("queue: %s (%d jobs)" % (q, len(jobs)))
