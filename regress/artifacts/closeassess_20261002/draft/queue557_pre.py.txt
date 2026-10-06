@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""queue557_pre.py -- commit_unit pre step for #557 (Astra aconf_557h item 2).  The hook's section that runs
+`gen_codex_wall.py --check` compares the WORKING tools/pipeline/fable_queue.md (not committed by #557: it carries
+uncommitted queue prose that names ten other rows) against the ledger the hook sees -- the STAGED one.  So before the
+hook runs, regenerate the working copy's GENERATED block from the staged ledger, in place (prose untouched), after
+keeping a byte copy of the working file beside this script.  post557.py regenerates it again from the rebuilt working
+ledger after the commit; after a --precheck, run `python queue557_pre.py --restore` to put the kept copy back."""
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+REC = os.path.dirname(os.path.abspath(__file__))
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+Q = os.path.join(SEC, "tools", "pipeline", "fable_queue.md")
+GEN = os.path.join(SEC, "tools", "pipeline", "gen_codex_wall.py")
+STAGED = os.path.join(REC, "stage557", "tools", "pipeline", "ledger.json")
+KEEP = os.path.join(REC, "queue557_working_before_pre.md")
+
+if "--restore" in sys.argv:
+    shutil.copyfile(KEEP, Q)
+    print("working fable_queue.md restored from %s" % KEEP)
+    sys.exit(0)
+shutil.copyfile(Q, KEEP)
+shutil.copyfile(Q, KEEP.replace(".md", "_%s.md" % time.strftime("%Y%m%d_%H%M%S")))
+env = dict(os.environ, GXLEDGER=STAGED, GXQUEUE=Q)
+r = subprocess.run([sys.executable, GEN], env=env, capture_output=True, text=True)
+if r.returncode:
+    sys.exit("gen_codex_wall failed: %s%s" % (r.stdout, r.stderr))
+r = subprocess.run([sys.executable, GEN, "--check"], env=env, capture_output=True, text=True)
+if r.returncode or "CODEX_WALL_OK" not in r.stdout:
+    shutil.copyfile(KEEP, Q)
+    sys.exit("REFUSED: the regenerated block does not check against the staged ledger (working file restored): %s" % r.stdout)
+before = open(KEEP, "rb").read().decode("utf-8").split("\n")
+after = open(Q, "rb").read().decode("utf-8").split("\n")
+print("working fable_queue.md block regenerated from the staged ledger (%s); %d -> %d lines; copy kept at %s"
+      % (r.stdout.strip().split("\n")[-1], len(before), len(after), KEEP))

@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""mk_closedcensus.py -- the grok brief for the rest of `closeassessrows`' population.
+
+#555 filed the class row `closeassessrows`: ledger rows closed with no fix commit whose own ruling keeps work alive.
+grok read eleven candidates and kept eight.  The population the class can draw from is wider and is derivable: every
+ledger row whose state is `closed` and whose `commits` field is empty.  This lists the ones no seat has read, with what
+the row itself says about its closure, and asks ONE line per row.  Writes
+regress/artifacts/closeassess_20261002/briefs/grok_closedcensus.md and prints the counts."""
+import io
+import json
+import os
+import subprocess
+
+SEC = "C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC"
+OUT = os.path.join(SEC, "regress", "artifacts", "closeassess_20261002")
+BS = chr(92)
+WD = "C:" + BS + "DocumentNoSnc" + BS + "CC" + BS + "GXEMUL"
+rev = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+L = json.loads(subprocess.run(["git", "-C", SEC, "show", "HEAD:tools/pipeline/ledger.json"], capture_output=True).stdout.decode("utf-8"))
+rows = L["rows"]
+cls = [r for r in rows if r["id"] == "closeassessrows"][0]
+note = cls["state_note"]
+members = note[note.index("MEMBERS ("):].split(":", 1)[1].split(".")[0].replace(" ", "").split(",")
+read = set(members) | {"m8sarseq", "xfamscope", "m437rtmp"}
+nc = [r for r in rows if r.get("state") == "closed" and not (r.get("commits") or "").strip()]
+todo = [r for r in nc if r["id"] not in read]
+dirty = subprocess.run(["git", "-C", SEC, "status", "--short", "--", "src", "regress", "tools"], capture_output=True, text=True).stdout
+dirty = [l[3:].strip() for l in dirty.split("\n") if l[:2].strip() == "M"]
+
+
+def one(s, n):
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+
+body = []
+for n, r in enumerate(todo, 1):
+    c = (r.get("closure") or {}).get("note") or ""
+    last = [e for e in (r.get("entries") or []) if (e.get("note") or "").strip()]
+    body.append("%d. `%s` | title: %s | witness: %s | closure note: %s | state note begins: %s | its last entry (%s): %s" % (
+        n, r["id"], one(r["title"], 150), one(r.get("witness"), 90) or "(none)", one(c, 220) or "(none)",
+        one(r.get("state_note"), 260) or "(none)",
+        ("%s %s %s" % (last[-1].get("phase"), last[-1].get("seat"), last[-1].get("date"))) if last else "none",
+        one(last[-1].get("note"), 260) if last else ""))
+
+text = """LEDGER CENSUS -- %(n)d rows that are CLOSED with an EMPTY commits field and that no seat has read: is each one's work done?
+
+Open with the token `GROK_CLOSEDCENSUS_ALIVE_1002` on its own line and the first line of
+`%(wd)s%(bs)s_scratchpad%(bs)sCHECKPOINT.md` quoted verbatim, then ONE verdict line:
+`VERDICT: <s> shipped, <n> nothing owed, <a> work still alive, <u> not determined, of %(n)d rows`.
+
+READ-ONLY.  Write nothing, build nothing, run no emulator.  This is a RECORDS check: whether a ledger row's state
+matches the committed tree.  The tree under review is `%(wd)s%(bs)sGXEMUL-SEC` at commit `%(rev)s`; ignore any other
+`src/` under the project root.  You cannot run `git show`, so you read the files on disk: these are DIRTY on disk
+(another session's uncommitted edits, or parked work) and their line numbers may differ from the commit --
+%(dirty)s.
+Every other file on disk is the committed one.  `tools/pipeline/ledger.json` on disk has the committed state of every
+row named below; `git log` is not available to you, so a commit is named from the text of the row, of `CHANGELOG.md`
+or of `OUTSTANDING_BUGS.md`.
+
+**Context.**  Commit `%(rev)s` (`#555`) filed the class row `closeassessrows`: on 2026-08-27 a sweep closed ledger
+rows on the adjudicator's note `CLOSE (assess)`, which signs off a row's assess STAGE, and eight of the rows it closed
+still name work that is not done (you ruled that: `regress%(bs)sartifacts%(bs)sidless_20261002%(bs)sgrok%(bs)sgrok_grok_irule_d.txt`,
+item 5).  The population that class can draw from is wider and is derivable from the ledger: %(all)d rows are `closed`
+with an empty `commits` field.  You have read %(seen)d of them (and `ns16550`, whose field names a records-only
+commit).  These are the other %(n)d.  Most will be fine -- a
+harness row closed by a fix whose commit was never written into the field, or a row retired by a ruling.  I do not
+know which, and I may be wrong that any is a problem: please do not assume there is something to find.
+
+**For each row, ONE line, in exactly one of these four forms:**
+`<n> | <id> | SHIPPED: <the commit or the #NNN round that did the work, and the line that says so> | <the lines you read>`
+`<n> | <id> | NOTHING OWED: <why -- retired, duplicate, answered by a ruling, a documented-only disposition> | <lines>`
+`<n> | <id> | WORK STILL ALIVE: <what the row names that is not done at %(rev)s, path:line; and whether an OPEN row carries it: `<id>` or "no carrier"> | <lines>`
+`<n> | <id> | NOT DETERMINED: <what you could not read> | <lines>`
+* SHIPPED needs the work to be IN the tree: read the code or the script the row is about, not only the row's note.
+* A row whose own ruling says the work rides a later round, stays queued, or is owed -- and it is not in the tree and
+  no open row carries it -- is WORK STILL ALIVE whatever its state says.
+
+Then two lists, ids only: `MEMBERS TO ADD TO closeassessrows: ...` (the WORK STILL ALIVE rows with no carrier) and
+`COMMITS FIELDS TO FILL: <id>=<commit or #NNN>, ...` (the SHIPPED rows).
+
+End with `DENOMINATOR: <a> of %(n)d rows read in the ledger and in the tree`.
+
+**The rows** (n | id | title | witness | closure note | state note | last entry -- each field cut short; the row is in
+`tools/pipeline/ledger.json`, search `"id": "<id>"`):
+""" % {"n": len(todo), "all": len(nc), "seen": len(nc) - len(todo), "wd": WD, "bs": BS, "rev": rev,
+       "dirty": ", ".join("`%s`" % d for d in dirty)}
+os.makedirs(os.path.join(OUT, "briefs"), exist_ok=True)
+p = os.path.join(OUT, "briefs", "grok_closedcensus.md")
+io.open(p, "w", encoding="utf-8", newline="\n").write(text + "\n".join(body) + "\n")
+print("closed with no commit %d; read already %d; in this brief %d; %d bytes -> %s" % (len(nc), len(nc) - len(todo), len(todo), os.path.getsize(p), p))

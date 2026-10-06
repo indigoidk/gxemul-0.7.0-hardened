@@ -1,0 +1,303 @@
+diff --git a/regress/gdrom_default_probe.py b/regress/gdrom_default_probe.py
+index d91b98a4..857f9629 100644
+--- a/regress/gdrom_default_probe.py
++++ b/regress/gdrom_default_probe.py
+@@ -52,8 +52,144 @@ not by intent:
+ 
+   * reinstatement of either `exit(1)`                        (Mb1, Mb2)
+   * loss, RELOCATION, CONDITIONING or LATCH-SCOPING of the
+-    `idata = 0` shadow clear, at either declining arm or at
+-    the success arm                          (M1, M3, M6, M7, M12)
++    `idata = 0` shadow clear.  *** THE ARMS AND WIDTHS THIS
++    COVERS ARE ENUMERATED IN THE MATRIX BELOW, NOT ASSERTED
++    IN PROSE ***                    (M1, M3a, M3b, M6, M7, M12)
++
++    *** THE LABEL `M3' USED TO STAND HERE ALONE AND IT COVERED
++    TWO DIFFERENT MUTANTS.  Split 2026-09-17 (L4, records only --
++    no row, oracle or score moves): ***
++        M3a  the ORIGINAL M3: relocates the shadow clear PAST
++             `break', so the clear never runs on that path.
++        M3b  repair-B's `M3_gdromsuccesswidth': `if (len == 4)'
++             at the SUCCESS arm -- a WIDTH conditioning, not a
++             relocation, and it reds `accept byte' alone (61/62).
++    One label for two mutants meant a reader re-deriving coverage
++    from this bullet could not tell WHICH mutant a given row was
++    measured against.  That is the ambiguity, and it is why the
++    matrix below -- not this bullet -- is the authority.
++
++*** THE COVERAGE MATRIX -- {arm} x {width}.  CLAIM ONLY WHAT HAS A ROW. ***
++
++Each cell names the row that holds it.  A cell with no row is DISCLOSED below,
++not silently implied by the bullet above.
++
++    arm        word width                      byte width
++    ---------  ------------------------------  -----------------------
++    no-data    `nodata twice`, `nodata len`    `nodata byte`   (latch FRESH)
++    arming     `arm idle`, `arm twice`         `arm bytetrig`  (latch FRESH)
++    success    `accept idle`                   `accept byte`   (latch FRESH)
++
++MEASURED, and each mutant reds EXACTLY ITS OWN CELL -- a single-cell kill, not
++a sweep (`artifacts/gdromdmadefault/repairB_20260917/logs/`, and
++`RUN2_classclosure.out` for the run-2 transcript; NOT `RUN.out`, which holds
++run 1):
++
++    probe_base.raw                    62/62   all six cells at want
++    probe_M2_gdromnodatawidth.raw     61/62   reds only `nodata byte`
++    probe_M3_gdromsuccesswidth.raw    61/62   reds only `accept byte`
++
++*** DELIBERATELY NOT COVERED -- DISCLOSED UNDER CLAUSE (e), NOT CLAIMED. ***
++
++These are PREDICTED escapes, named by the repair-chain pass-2 seat by reading.
++They are recorded here so a future escape is "outside the contract, as stated"
++rather than an argument about overclaiming.  NONE IS MEASURED; a measuring seat
++should build them rather than let them stand as folklore:
++
++  * `if (len != 2) idata = 0` at any of the three arms, and its `len != 8`
++    twin.  Every trigger this probe drives is `mov.b` (len 1) or `mov.l`
++    (len 4), so BOTH still clear and the row stays green.  PREDICTED 62/62.
++    *The matrix collapses `len` into {byte, wide}; `len` is an INPUT of the
++    function and that collapse is not the whole input space.*
++  * THE (no-data, byte, latch SET) CELL.  `nodata byte` drives a byte trigger
++    with the latch FRESH; `nodata twice` drives the SET state at WORD width.
++    A latch-scope that still clears the FIRST byte and sticks the SECOND is
++    predicted green on `nodata byte` and `nodata twice`.
++    *** NOT "green on both new rows", WHICH IS WHAT THIS BULLET SAID AND WAS
++    WRONG: `accept byte` is on the SUCCESS arm, and THE SUCCESS ARM HAS NO
++    WARN-BIT LATCH, so a no-data latch-scope cannot touch it.  The phrase was
++    carried over from the pass-2 framing without checking which arm each new
++    row sits on. ***  *Same diagonal a pre-review already refused once at the
++    SH4 site -- which is why X4c/X4d and `nodata byte` shipped as ADDITIONS
++    rather than as in-place edits of existing rows.*
++
++  * THE (arming, byte, latch SET) CELL -- the sibling of the one above, and it
++    was dropped when this list was written.  `arm bytetrig` is FRESH;
++    `arm twice` is SET at WORD.  Same joint, the other DECLINING arm.  (The
++    success arm has no latch, so this product has exactly two members, not
++    three.)  Every byte cell in the matrix is annotated `(latch FRESH)`, so
++    the cell is UNCLAIMED if that annotation is read -- but the disclose list
++    exists precisely so a later 62/62 is not an argument about whether
++    "arming x byte" included SET.  Spelling it out for no-data and not for
++    arming was implementing the matrix shape and half the disclose list.
++
++WIDTH IS NOT A CLAUSE-(d) FLOOR AXIS HERE, and the route decides the grading.
++`DEVICE_ACCESS(dreamcast_gdrom_dma)` never TESTS `len`: the head marshals with
++`memory_readmax64(cpu, data, len)` and the tail store is
++`d->dma_reg[relative_addr / sizeof(uint32_t)] = idata;`.  Width therefore
++induces no body partition, so the cells above are CONTRACT coverage.
++
++*** BUT CLAUSE (e) **IS** A FLOOR CLAUSE, AND THIS SENTENCE USED TO END "-- not
++as a floor breach", WHICH WOULD FILE THE NEXT CLAIMED-CELL MISS AS DEBT. ***
++The correct split, which is the whole point of writing the matrix down:
++
++  * an escape of a **CLAIMED** cell (one with a row in the matrix) is a
++    MEASURED FALSE PASS AGAINST THIS CONTRACT -- **L2, repaired in-round**;
++  * an escape of a **DISCLOSED** cell is OUTSIDE the contract, as stated, and
++    is adjudicated as coverage debt.
++
++"Width is not a clause-(d) axis" is a statement about the ENUMERATION, not a
++downgrade of what a claimed-cell escape costs.
++
++*** THE BREACH THAT BOUGHT THIS MATRIX -- MEASURED 2026-09-17, NOW REPAIRED. ***
++
++This contract used to claim the conditioning mutants were caught *"at EITHER
++declining arm or at the success arm"*.  **They were caught at ONE.**  The
++Opus 5 seat built `if (len == 4) idata = 0;` in the NO-DATA arm and it scored
++**60/60 on the then-60-row instrument -- a TOTAL ESCAPE** -- with a non-equivalence control showing what the
++table could not: base reads 0x0 at +0x18 (declined AND cleared), the mutant
++reads 0x5a -- the trigger STUCK IN THE SHADOW, so **+0x18 READS BUSY FOREVER**.
++That is the defect this fix's own comment calls "THE `idata = 0` IS
++LOAD-BEARING", re-opened at byte width.
++
++WHY THE TABLE COULD NOT SEE IT: the probe then held EXACTLY TWO byte stores
++into the DMA window -- `dma alias` (+0x05) and `arm bytetrig` (+0x18) -- and
++**No byte-width store had ever reached the NO-DATA arm**, and the 14-mutant
++#462 table contained NO WIDTH MUTANT AT ALL.
++
++*** THE CLAUSE "and BOTH were on the ARMING arm" STOOD HERE AND IS FALSE.
++Corrected 2026-09-17; named by the codex seat in BOTH panel_20260917_140502 and
++panel_20260917_142508, and the device's own source says it outright. ***
++`dev_dreamcast_gdrom.c` comments its own decode: "A byte access at +0x05 does
++not match `case 0x04` -- the switch tests" the whole address.  So `dma alias`
++falls to the DMA window's `default:` arm; only `arm bytetrig` (+0x18) lands on
++an implemented case.
++
++**THE CONCLUSION IS UNCHANGED AND THE CORRECTION STRENGTHENS IT.**  The point
++being made is that no byte store reached the NO-DATA arm, and that is still
++true; what was wrong is the tally of where the two byte stores DID land.  With
++`dma alias` on `default:`, the implemented-case byte coverage was ONE row, not
++two -- thinner than the sentence claimed, not thicker.
++
++*** AND THE BLIND SPOT WAS NAMED IN THIS FILE BEFORE IT WAS MEASURED. ***  The
++WIDTH BLIND SPOT note below names this exact mutant text, says it "passed the
++whole table", and says it is "not hypothetical: it breaks the one guest whose
++behaviour the round documented" -- and then closed it with `arm bytetrig` at
++the ARMING arm ONLY.  That is the #499 shape: repaired at the address the
++mutant used, leaving the symmetric cell open.
++
++**REPAIRED BY CLASS CLOSURE, not cell by cell** -- which is what the amendment
++demands once two consecutive passes find breaches of one class.  `nodata byte`
++closed the no-data cell and `accept byte` the success cell, IN ONE DIFF, and
++this matrix is the other half of that obligation.
++
++*(The OWED paragraph that used to sit here is DISCHARGED and has been removed
++rather than left standing: it demanded "a byte-width store reaching the no-data
++arm", which `nodata byte` now ships.  It also recommended reusing the second
++store of `nodata twice` as "the cheap form" -- and that in-place edit was
++REFUSED by a pre-review, because editing an existing row to carry a new cell
++trades one cell for another instead of adding one.)*
++
+   * collapse of the two warn-bit latches onto ONE bit (M2), or
+     loosening of the ARMING latch into a counter (M4)
+   * a completion event SET on a declined transfer            (M8, M9)
+@@ -117,6 +253,16 @@ adjudicated instead of re-argued:
+   * `gdromdmaguard` -- `count == 1` widened to `count <= 1`, so `(0,1)` is
+     accepted.  `arm halfarm` cannot see it.
+   * `gdromdmasilent` -- `if (idata != 0)` narrowed to `if (idata == 1)`.
++    *** THIS ESCAPE RECORD IS DATED, NOT DROPPED.  L4, 2026-09-17. ***
++    It escaped THE TABLE IT WAS MEASURED AGAINST.  Since then the row set
++    gained `arm bytetrig`, `nodata byte` and `accept byte`, all of which
++    trigger with 0x5a and **BY READING** would now red it.
++    **That is a PREDICTION, not a measurement, and the difference is the
++    whole point of dating this rather than deleting it:** dropping the line
++    would assert a re-measurement nobody ran, which is the frozen-number
++    class wearing a tidy-up's clothes.  The re-measurement is OWED; until
++    it runs, this reads as "escaped the table of its day, predicted caught
++    today".
+ 
+ *** THAT LIST IS THE HALF THAT DOES THE ADJUDICATING. ***  Without it, the
+ next reader to rediscover `gdromdmaclear` cannot tell a FLOOR BREACH (L2, fix
+@@ -1044,6 +1190,48 @@ t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+ row("nodata twice", printed(t, "r2") if alive else "died", "0x0",
+     "+0x18 idle after the SECOND no-data decline, not only the latched first")
+ 
++#  *** #462 L2 -- THE (nodata, byte, fresh) CELL.  Added 2026-09-17 after the Opus 5 seat MEASURED
++#  `if (len == 4) idata = 0;' in the NO-DATA arm at 60/60 -- A TOTAL ESCAPE -- and the Fable
++#  adjudication graded it L2 as a MEASURED FALSE PASS AGAINST THIS PROBE'S OWN CONTRACT, which
++#  THEN claimed to catch conditioning of the shadow clear "at either declining arm" and caught it
++#  at one.  *** PAST TENSE SINCE 2026-09-17: that prose claim is GONE.  The contract now carries a
++#  {arm} x {width} MATRIX naming the row that holds each cell, so this row is CITED by the contract
++#  rather than described by it.  Re-read the header, not this sentence, for what is claimed. ***
++#
++#  WHY THE TABLE COULD NOT SEE IT: this probe THEN CONTAINED exactly TWO byte stores into the DMA
++#  window -- *** IT NOW HAS FOUR: `dma alias', `arm bytetrig', `nodata byte', `accept byte'.
++#  Past-tensed 2026-09-17; the sentence was true when written and the class closure changed it. ***
++#  `dma alias' (+0x05) and `arm bytetrig' (+0x18), and BOTH are on the ARMING arm.  No byte-width
++#  store had ever reached the NO-DATA arm -- the arm the fix was primarily written for.
++#
++#  *** THIS IS A NEW ROW AND NOT AN IN-PLACE EDIT OF `nodata twice', AND THE REASON IS A GROK
++#  PRE-REVIEW THAT REFUSED THE IN-PLACE FORM BEFORE IT WAS BUILT. ***  Making that row's SECOND
++#  store a byte store would have DROPPED its (set, word) sample: it MOVES a cell rather than adding
++#  one, occupying the DIAGONAL (nodata, set, byte) while claiming to close {arm}x{width} AND
++#  {arm}x{latch} as two products.  Worse, it could be built WRONG and still look right -- on HEAD
++#  the second store is invisible because store 1 already left 0, so a nop, a missed arm or a bad
++#  opcode all read back 0x0, and after the width change M12 no longer proves the access is a byte.
++#
++#  THE ORACLE IS A PAIR, and the second half is the PRESENCE PIN the in-place form lacks: the
++#  readback must be 0x0 AND the no-data decline must have fired exactly ONCE.  A row that only
++#  checked the readback could pass with the byte store never executing.
++#
++#  Poison 0xa5 against a trigger of 0x5a -- they must DIFFER, the same three-outcome discipline
++#  `arm bytetrig' and `accept data' use, so "stuck" and "never ran" cannot both read back 0x5a.
++#  Registers: r7/r8 count, r3/r4 enable, r5/r6 the BYTE trigger, r1/r2 the readback -- `nodata
++#  twice' uses r5/r6 for ENABLE and `arm bytetrig' uses them for the TRIGGER, so reusing either
++#  layout wholesale would collide.  Every opcode here is already defined in this file.
++t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
++                         "r3=0x%x" % (DMA + 0x14), "r4=1",
++                         "r5=0x%x" % (DMA + 0x18), "r6=0x5a"],
++                        [MOV_L_R8_AT_R7, MOV_L_R4_AT_R3, MOV_B_R6_AT_R5])
++                   + ["r1=0x%x" % (DMA + 0x18), "r2=0xa5"]
++                   + run([MOV_L_AT_R1_R2], CODE + 0x220) + ["print r2"])
++row("nodata byte",
++    ("%s/%d" % (printed(t, "r2"), len(DMA_NOD.findall(t)))) if alive else "died", "0x0/1",
++    "a BYTE trigger on the NO-DATA arm declines AND clears, and the decline fired exactly once")
++
++
+ #  *** THE ARMING ARM'S OWN COMPLETION-EVENT ROW, and its absence was the
+ #  round's one UNDISCHARGED OBLIGATION (L3).  `nodata quiet` above pins "a
+ #  declined trigger must not signal completion" for ONE of the two declining
+@@ -1397,8 +1585,20 @@ t, alive, how = session(
+ #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] Transfering formerly printed
+ #  before the d->data == NULL check; #462 moved it below the check.  (hgdromdefaultprobe:F10:
+ #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+-row("accept dma", "yes" if ("Transfering" in t and alive) else "no", "yes",
+-    "a LEGAL arming is still accepted and enters the transfer path")
++#  *** CLAUSE (b) REPAIR, MEASURED 2026-09-17.  THE ORACLE USED TO BE `"Transfering" in t' --
++#  SUBSTRING PRESENCE, NO NUMBER -- while #462's fix at dev_dreamcast_gdrom.c is entirely about
++#  WHICH NUMBER is printed ("prints data_len, the count actually transferred").  So reverting
++#  `(int) d->data_len' to `length' AT A FIXED SITE was invisible to all 62 rows.
++#  THREE LEGS, artifacts/gdromdmadefault/acceptdma_20260917/logs/:
++#      probe_base.raw               62/62   base, TIGHTENED oracle      accept dma ok
++#      probe_M_lenrev.raw           61/62   mutant, TIGHTENED oracle    accept dma SOLE RED
++#      probe_M_lenrev_SHIPPED.raw   62/62   mutant, OLD oracle          accept dma ok -- THE ESCAPE
++#  Leg 3 is what makes the breach MEASURED rather than reasoned, and leg 1 is what proves the
++#  literal matches the real transcript -- which is why the tightened form lived in a frozen copy
++#  until both had run.  Breach first, fix second. ***
++row("accept dma", "yes" if ("Transfering 408 bytes" in t and alive) else "no", "yes",
++    "a LEGAL arming is accepted, enters the transfer path, AND MOVES data_len BYTES -- the count "
++    "is the oracle, not the word")
+ #  NOT an accept row -- see the block above.  Kept because it is live.
+ row("accept idle", printed(t, "r2") if alive else "died", "0x0",
+     "+0x18 polls IDLE after a real transfer (success-arm regression row)")
+@@ -1412,6 +1612,62 @@ row("accept quiet",
+ row("accept data", printed(t, "r4") if alive else "died", "0x10",
+     "and the DEVICE's own TOC byte actually LANDED at the destination")
+ 
++#  *** CLASS CLOSURE: the LAST cell of {arm} x {width}.  Added 2026-09-17. ***
++#
++#  The contract THEN claimed to catch CONDITIONING of the `idata = 0' shadow clear "at either
++#  declining arm or the SUCCESS arm".  *** PAST TENSE SINCE 2026-09-17: that prose claim is GONE.
++#  The header now carries a {arm} x {width} MATRIX naming the row that holds each cell, and this
++#  row is CITED by it.  Re-read the header, not this sentence. ***  Enumerating that product while
++#  answering a pass-2 floor question showed FIVE of six cells rowed and one empty:
++#
++#      arm        word                       byte
++#      no-data    nodata twice, nodata len   nodata byte      (added earlier today)
++#      arming     several                    arm bytetrig
++#      success    accept idle                *** THIS ROW ***
++#
++#  *** `dma alias' WAS LISTED IN THE ARMING-BYTE SLOT AND IS NOT AN ARMING-ARM CELL AT ALL -- it is
++#  a `default:'-arm store at +0x05, a different arm of the switch.  Removed 2026-09-17; the header
++#  matrix never listed it, and a pass-2 seat named it as a wrong cell. ***
++#
++#  The repair-chain amendment governs: when two consecutive passes find breaches of ONE CLASS, the
++#  next repair owes the CLASS CLOSURE -- enumerate the full space, close every cell in ONE diff, and
++#  state in the contract which cells are covered.  M2 was (no-data, byte); this is (success, byte),
++#  the same shape at the third arm.  Closing it ENDS the chain rather than extending it.
++#
++#  It is a CLONE of the accept session above, with ONE difference: the +0x18 trigger is a BYTE store
++#  (`mov.b r6,@r5`) instead of the word store that session uses.  Everything before it -- the TOC
++#  command that stages real device data, the destination, count and enable -- is identical, because
++#  the success arm requires `d->data != NULL` and only a real staged transfer provides that.
++#
++#  THE ORACLE IS A PAIR, for the reason `nodata byte' is: the readback alone is ambiguous.  A row
++#  that only checked +0x18 == 0 would PASS if the byte trigger never armed at all -- nothing would
++#  have set it, so nothing needs clearing.  Pairing it with "did the transfer actually run" makes
++#  the two outcomes distinguishable, which is the same three-outcome discipline `accept data' uses.
++t, alive, how = session(
++    ["r7=0x%x" % GDROM_CNTLO, "r8=0x98"] + run([MOV_W_R8_AT_R7])
++    + ["r7=0x%x" % GDROM_CNTHI, "r8=0x01"] + run([MOV_W_R8_AT_R7], CODE + 0x20)
++    + ["r7=0x%x" % GDROM_COND, "r8=0xa0"] + run([MOV_W_R8_AT_R7], CODE + 0x40)
++    + ["r7=0x%x" % GDROM_DATAP, "r8=0x0014"]
++    + run([MOV_W_R8_AT_R7] * 6, CODE + 0x60)
++    + ["r7=0x%x" % (DMA + 0x04), "r8=0x0c008000"]
++    + run([MOV_L_R8_AT_R7], CODE + 0x100)
++    + ["r7=0x%x" % (DMA + 0x0c), "r8=1"]
++    + run([MOV_L_R8_AT_R7], CODE + 0x120)
++    + ["r7=0x%x" % (DMA + 0x14), "r8=1"]
++    + run([MOV_L_R8_AT_R7], CODE + 0x140)
++    #  *** THE ONE DIFFERENCE: a BYTE trigger where the sibling uses a word. ***
++    + ["r5=0x%x" % (DMA + 0x18), "r6=0x5a"]
++    + run([MOV_B_R6_AT_R5], CODE + 0x160)
++    + ["r1=0x%x" % (DMA + 0x18), "r2=0xa5"]
++    + run([MOV_L_AT_R1_R2], CODE + 0x180)
++    + ["print r2"])
++row("accept byte",
++    ("%s/%s" % (printed(t, "r2"), "ran" if "Transfering" in t else "no")) if alive else "died",
++    "0x0/ran",
++    "SUCCESS arm at BYTE width: a byte trigger on staged data transfers AND clears the shadow.  "
++    "Poison 0xa5 against a trigger of 0x5a so never-ran and stuck are distinguishable")
++
++
+ 
+ n = sum(1 for _, ok in rows if ok)
+ print("GDROM_DEF_RESULT=%d/%d" % (n, len(rows)))

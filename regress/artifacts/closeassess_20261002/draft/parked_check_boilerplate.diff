@@ -1,0 +1,67 @@
+diff --git a/tools/pipeline/check_boilerplate.py b/tools/pipeline/check_boilerplate.py
+index 487bfb06..dbdbcb2b 100644
+--- a/tools/pipeline/check_boilerplate.py
++++ b/tools/pipeline/check_boilerplate.py
+@@ -39,7 +39,43 @@ HERE = os.path.dirname(os.path.abspath(__file__))
+ LEDGER = os.path.join(HERE, "ledger.json")
+ 
+ MIN_SEATS = 3            # two seats sharing a line is a summary; three is a pattern
+-PREFIX = 60              # compare this many chars once the seat name is gone
++EXCERPT = 60             # DISPLAY width only -- see below; NOT the comparison key
++
++#  *** THE KEY WAS `note[:60]` AND IT MADE 20 OF 64 CLUSTERS FALSE POSITIVES.
++#  Measured 2026-09-17 over every cluster in the ledger; owner-decided the same day. ***
++#
++#  A 60-character key compares the OPENING SENTENCE, not the note.  Cells that carry
++#  each seat's own finding but share an identifying preamble -- `LATE REVIEW of the six
++#  rows the seat audit flagged (panel panel_20260917_100431).` is 66 characters before
++#  the first seat writes a word -- clustered as boilerplate while satisfying this
++#  check's own stated rule, which asks for "each seat its own sentence from its own
++#  file".  They HAD their own sentence; the key could not see past the preamble.
++#
++#  MEASURED over every cluster in the ledger, both keys, same run:
++#      OLD  note[:60]   64 clusters   44 genuine   20 NOTES DIFFER (false positives)
++#      NEW  full note   54 clusters   54 genuine    0 notes differ
++#
++#  *** THE OLD KEY FAILED IN BOTH DIRECTIONS, AND THE SECOND HALF IS THE SURPRISE. ***
++#  The false positives were expected: 7 of the 20 were LIVE, each with SEVEN genuinely
++#  distinct notes sharing only a preamble.  But GENUINE STAMPS ALSO ROSE, 44 -> 54,
++#  because a 60-character bucket holding a real stamp ALONGSIDE other notes scored as
++#  one mixed cluster -- so the prefix key was HIDING TEN REAL STAMPS BY MERGING THEM.
++#  Truncation cost recall as well as precision; it never bought either.
++#
++#  THE COST, stated because it is real: boilerplate that shares 500 characters and
++#  differs only in a trailing clause is no longer caught.  NO INSTANCE OF THAT SHAPE
++#  EXISTS in the 64 measured, and if one appears the answer is a similarity threshold,
++#  not a return to a fixed prefix.
++#
++#  CONTROLLED IN BOTH DIRECTIONS on the day it landed: BOILERPLATE_PASS with the seven
++#  live false positives gone; an INJECTED identical paragraph across four seat cells
++#  post-cutoff turns it red and names the row; removing the injection restores green.
++#
++#  *A caution for the next reader, because it cost a wrong number here first:*
++#  *`shared_notes` returns its key with newlines replaced by spaces FOR DISPLAY.  A*
++#  *verification harness that compares a recomputed key against the RETURNED one*
++#  *silently matches nothing for any note containing a newline, and then reports the*
++#  *cluster as non-identical.  Recompute the bucket, do not compare against the key.*
+ 
+ #  *** FORWARD-ONLY BY DATE, NOT BY ROW, AND THE MEASUREMENT IS WHY. ***  The first draft
+ #  grandfathered six named rows, because six is what the reporting seat had found.  Running
+@@ -69,7 +105,7 @@ def shared_notes(rows):
+             note, seat = e.get("note") or "", e.get("seat") or "?"
+             if len(note) < 80:
+                 continue                      # too short to carry a claim either way
+-            buckets[strip_seat(note, seat)[:PREFIX].casefold()].add((seat, e.get("date") or ""))
++            buckets[strip_seat(note, seat).casefold()].add((seat, e.get("date") or ""))
+         for key, pairs in buckets.items():
+             seats = sorted({s for s, _ in pairs})
+             if len(seats) >= MIN_SEATS:
+@@ -90,7 +126,7 @@ def main(argv):
+     for rid, seats, key, is_live in found:
+         tag = "SHARED" if is_live else "ARCHIVED"
+         print("  %-9s %-13s x%d  %s" % (tag, rid, len(seats), ",".join(seats)))
+-        print("                          %s..." % key[:72])
++        print("                          %s..." % key[:EXCERPT])
+ 
+     print()
+     print("  A note shared verbatim by several seats records that they were FIRED, not that")

@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""post557.py -- commit_unit.py's post step for #557.  ledger.json and matrix.html are `no_merge`, so the working
+ledger is rebuilt from the pre-commit backup (it carries the parked edits of other rows) with #557's ledger edits
+re-applied by the same function prep557.py used, plus `boilerplateprefix`'s commits field = #557's own sha; the
+working matrix.html is regenerated.  The dashboard is NOT published."""
+import glob
+import json
+import os
+import subprocess
+import sys
+
+REC = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REC)
+import prep557
+
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+L = os.path.join(SEC, "tools", "pipeline", "ledger.json")
+subj = subprocess.run(["git", "-C", SEC, "log", "-1", "--format=%h %s"], capture_output=True, text=True).stdout.strip()
+if not subj.split(" ", 1)[1].startswith("#557 "):
+    sys.exit("REFUSED: HEAD is %s, not #557's commit" % subj[:60])
+sha = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+bks = [b for b in sorted(glob.glob(os.path.join(REC, "bk_557_*"))) if os.path.isfile(os.path.join(b, "commit.out"))]
+if not bks:
+    sys.exit("REFUSED: no bk_557_* backup of a --go run")
+raw = open(os.path.join(bks[-1], "tools", "pipeline", "ledger.json"), "rb").read()
+W = json.loads(raw.decode("utf-8"))
+dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+if dump(W) != raw:
+    sys.exit("REFUSED: the backup ledger does not round-trip byte-identical")
+members = prep557.edit_ledger(W, landed_sha=sha)
+open(L, "wb").write(dump(W))
+print("working ledger rebuilt from %s: #557's edits re-applied (%d members in %s); boilerplateprefix commits = %s" % (bks[-1], len(members), prep557.CLS, sha))
+# the queue file is NOT committed by #557; its WORKING copy's generated block is regenerated in place against the rebuilt
+# working ledger, so the eight regress holds appear there too (the prose around the block is untouched)
+r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_codex_wall.py")], cwd=SEC, capture_output=True, text=True)
+print("working fable_queue.md: generated block regenerated in place: %s" % (r.stdout.strip() or r.stderr.strip())[-160:])
+if r.returncode:
+    sys.exit(r.returncode)
+# the COMMITTED ledger also needs boilerplateprefix's sha -- that is the next commit's job (recorded in the checkpoint)
+r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py")], cwd=SEC, capture_output=True, text=True)
+print((r.stdout.strip() or r.stderr.strip())[-200:])
+sys.exit(r.returncode)

@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+"""prep557.py <GPT-6 Astra's closing verdict, one line> [--dry]
+Stage #557 -- the `closeassessrows` audit -- on HEAD (#556), into records/stage557, touching nothing in the tree:
+  tools/pipeline/check_boilerplate.py   the WORKING copy: the parked 2026-09-17 repair (full-note key) with its comment
+                                        corrected per Astra's review (aconf_parked 1b); lands `boilerplateprefix`
+  tools/pipeline/ledger.json            commits fields filled on the rows the census found shipped; member notes on
+                                        the rows found still alive; `closeassessrows` gains them; matrix regenerated
+  OUTSTANDING_BUGS.md                   HEAD's + the #557 section
+  CHANGELOG.md                          HEAD's with the #557 block prepended
+and write spec557.json and msg557.txt.  The census is grok's (grok_closedcensus.txt), confirmed by Astra
+(aconf_census: 34 of 37; three overturned); every sha below is Astra's, from `git log`, and is re-checked here."""
+import difflib
+import hashlib
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+REC = os.path.dirname(os.path.abspath(__file__))
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+ST = os.path.join(REC, "stage557")
+ARTS = os.path.join(SEC, "regress", "artifacts")
+D = os.path.join(ARTS, "closeassess_20261002")
+DIRS = ["closeassess_20261002"]
+TEXT_EXT = (".c", ".h", ".py", ".sh", ".md", ".json", ".txt", ".tsv", ".diff", ".out")
+UNIT, DATE = "#557", "2026-10-02"
+CLS = "closeassessrows"
+EV = "regress/artifacts/closeassess_20261002/grok/grok_closedcensus.txt"
+EVA = "regress/artifacts/closeassess_20261002/aconf_census/codex_aconf_census.txt"
+# the commits fields to fill: row -> (sha, how Astra tied it to the row), from aconf_census part B
+FILL = {"wdcwidth4": ("e61ccd89", "touches regress/wdc_addtoinbuf_probe.py (wdcatapistswap)"),
+        "m88kexcrrtrapmode": ("79cd12e8", "names #502; touches regress/m88k_exc_probe.py"),
+        "alphatbinegsel": ("65b007bf", "names the row and #520; touches src/cpus/cpu_alpha_palcode.c"),
+        "mk48nvramkill": ("21e75609", "names the row and #521; touches src/devices/dev_mk48txx.c"),
+        "ppcrldiclzero": ("e777ff06", "names the row and #522; touches src/cpus/cpu_ppc_instr.c"),
+        "scorehyphenfp": ("7440e129", "#529's commit; touches tools/pipeline/check_score_claims.py"),
+        "lcalenzerodrop": ("a11eaac4", "names the row and #538; touches regress/lca_widewrite_probe.py"),
+        "nineseatreminder": ("1202d342", "#554's commit; touches tools/hooks/round_reminder.sh"),
+        "panelargvcap": ("43106c20", "names the row; touches tools/panel.sh"),
+        "fbwitness": ("6014b7e7", "the first committed footbridge witness; touches regress/footbridge_sites_probe.py"),
+        "ledgerwitness": ("aa10c9f1", "touches tools/pipeline/check_witness.py and tools/precommit_check.sh"),
+        "smhang": ("1a85e27c", "touches regress/selfmutant.py: the timeout -- the row's standing regression is NOT shipped (a member below)"),
+        "hookctlgate": ("e61ccd89", "touches tools/precommit_check.sh: introduces the hook-control gate"),
+        "hookdurability": ("e61ccd89", "adds tools/hooks/round_reminder.sh"),
+        "propagatecpsilent": ("67120fd6", "adds tools/propagate_all_trees.sh with copy verification"),
+        "divsweeplines": ("6a5267c0", "touches regress/diag_div_sweep.py: newline preservation and the line calculation"),
+        "novpadfourth": ("e61ccd89", "touches tools/precommit_check.sh: the GXWSLTREE comparisons"),
+        "xfamscope": ("636c0239 a4c86f11", "636c0239 (#420 final panel) introduces the per-rig budget scoping and a4c86f11 completes the stale-comment "
+                                           "correction in regress/gate_crossfamily.sh (Astra, aconf_557 D: looked up on the closing check; grok had read "
+                                           "the row before the census and found the edits made)")}
+NOFILL = {"wiringshghost": "no commit shipped the deletion of the three .sh manifest keys -- they existed only in a working tree and were "
+                           "never committed (686d179c's parent 9c91999a has none of them); 686d179c RECORDS the resolution, adding the "
+                           "explanation at tools/pipeline/check_probe_wiring.py:1157-1176, and is kept here as provenance only.  The "
+                           "attribution rule distinguishes shipped work from records about it (check_commit_attribution.py) and permits a "
+                           "documented-only closure with an empty field (Astra, aconf_557b item 2, correcting its census line and the first "
+                           "draft of this unit)",
+          "asanunbuildable": "c7b32355 is the records commit that RECORDED the closure; the closure was a local build-tree back-fill, "
+                             "not a tree change, so the field stays empty on purpose (a populated field for work that did not ship is "
+                             "the opposite failure, and this ledger has one on record: ns16550)"}
+MEMBERS = {"cmtattr": "the CLOSE WITH NOTE says the soft rows must sit in the adjudication queue and lengthening ids shorter than 4 "
+                      "is FILED rather than done; no later entry shows either (grok; Astra confirmed)",
+           "gdromcontractresidual": "the two contract corrections are NOT at HEAD (regress/gdrom_default_probe.py:56 bare M3, :119 the "
+                                    "undated escape record) and the gdromdmasilent re-measurement is OWED (Astra, overturning grok).  "
+                                    "The parked 2026-09-17 edit that carries them is NOT landed by #557: Astra's review (aconf_parked, "
+                                    "2c) found it also adds two executable rows and tightens a third (54 -> 56 row() sites; the gate "
+                                    "pins 60 rows and the working probe makes 62), i.e. a detector change belonging to "
+                                    "M2_gdromnodatawidth and gdromacceptdmanum, and its docstring contradicts the gdromdmasilent record "
+                                    "in one place; it waits for a round of its own",
+           "unreadseats23": "the 23 answers were read, and the same note leaves four checks undone (a gate that matches the probe's "
+                            "printed strings; the PUT@8 contract overclaim; the `rgb not corrupt` inequality; no ABGR row) -- pending "
+                            "checks, not established defects (Astra: sgi_re_rgb_probe.py:343 already asserts the exact value)",
+           "smhang": "the timeout shipped (1a85e27c) but the row's standing 'SETUP within T seconds' regression is explicitly "
+                     "deferred (the fable5 ruling of 2026-08-19 in the row's entries: 'this should be its own round') with no carrier "
+                     "(Astra, overturning grok)"}
+# WHAT THE GATES SAID WHEN THE FIELDS WERE FILLED (the precheck of 19:10, bk_557_20261002_191036/precheck.out): a row
+# closed WITH commits owes a witness field (section K) and a regress review or a queued hold (section I).  The eighteen
+# rows had escaped both for as long as their commits fields were empty -- the closeassessrows class seen from the gates'
+# side.  Each population below is DERIVED from the staged ledger by the gate's own rule and asserted against the names
+# the hook printed, so a drift between the two refuses the stage instead of shipping a half-repair.
+K_NAMED = {"xfamscope", "fbwitness", "ledgerwitness", "lcalenzerodrop", "nineseatreminder"}
+I_NAMED = {"xfamscope", "fbwitness", "ledgerwitness", "smhang", "m88kexcrrtrapmode", "scorehyphenfp", "lcalenzerodrop", "nineseatreminder"}
+SHAPE = re.compile(r"^(boot:\S|probe:\S|construction:\S|harness:\S|detector:\S|none\b)")   # check_witness.py's, verbatim
+CUTOFF_REGRESS_FABLE = "2026-08-15"                                                        # check_fable_queue.py's
+# the three rows that never had a witness field: harness rounds, so `harness:<what proved it>`, each taken from the
+# closing commit's own message (6014b7e7, aa10c9f1, 636c0239 / a4c86f11) and claiming nothing the message does not
+WITNESS = {"fbwitness": "harness:regress/footbridge_sites_probe.py (6014b7e7) -- 10/10 in 1.9 s: a real guest ldr/str reaches the device through real address decode; TIMER_1_LOAD reads back "
+                        "masked to 24 bits by the handler, a one-instruction kill arm dies at 0x188 while the isolation arm survives; the "
+                        "MMU trap negative-controlled three ways (C2 reads CP15 c1 back, C3 shows the two arms differ, C4 is an inequality)",
+           "ledgerwitness": "harness:tools/pipeline/check_witness.py (aa10c9f1), precommit section K -- negative-controlled both ways on "
+                            "ledger copies: a witness removed -> WITNESS_FAIL, a bare #include differential named as the witness -> "
+                            "WITNESS_FAIL; its first run flagged gate3scope and found the ladder's own gap (the harness: term)",
+           "xfamscope": "harness:regress/gate_crossfamily.sh -- 636c0239 scoped the budget range to luna88k (a rig with a budget and no "
+                        "calibrated range now says so; the gate PASSed 18 checks, luna88k 0.500000,1.414214, landisk SH7751R,42) and "
+                        "a4c86f11 fixed the stale no-guest-input comment, comment-only (13 check rows before and after, the identical set)"}
+# hrecordowed: #556 (1329d894) placed 154 of the harness review's 181 corrections (155 notes, 65 files) and filed this row
+# for the 27 it could not place; the row was filed with an empty commits field, and the attribution check (section L)
+# fired on it at #557's precheck -- a pre-existing #556 leftover, not a consequence of the fills
+HREC = ("hrecordowed", "1329d894")
+LANDED = {"boilerplateprefix": "the repair (the full-note comparison key) sat UNCOMMITTED in the working tree from 2026-09-17 while "
+                               "this row read closed; the census found it (Astra, overturning grok, who had read the working copy).  "
+                               "#557 commits it, with its comment corrected per Astra's review (the preamble is 81 characters, not 66; "
+                               "the landing language; the recall overstatement; the stale header) and its controls re-run on the day "
+                               "(regress/artifacts/closeassess_20261002/draft/boilerplate_controls_20261002.out); the commits field is "
+                               "filled with #557's sha by its post step"}
+
+
+def git(*a, binary=False):
+    r = subprocess.run(["git", "-C", SEC] + list(a), capture_output=True)
+    if r.returncode:
+        sys.exit("REFUSED: git %s: %s" % (" ".join(a), r.stderr.decode("utf-8", "replace")))
+    return r.stdout if binary else r.stdout.decode("utf-8")
+
+
+def md5(b):
+    return hashlib.md5(b).hexdigest()[:8]
+
+
+def rd(p):
+    return io.open(p, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+
+
+def put(rel, data):
+    p = os.path.join(ST, *rel.split("/"))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(data)
+    return p
+
+
+def verdict(p):
+    v = re.findall(r"VERDICT: ([^\n]*)", rd(p))
+    if not v:
+        sys.exit("REFUSED: no VERDICT line in %s" % p)
+    return v[0].replace("`", "").strip().rstrip(".")
+
+
+def census():
+    """the census counts, DERIVED from the two artifacts every time the note is generated (prep reads them in the
+    artifacts dir, post reads the committed copies at the same path), never transcribed; each identity is checked"""
+    g = rd(os.path.join(D, "grok", "grok_closedcensus.txt"))
+    by = dict((m.group(1), m.group(2)) for m in re.finditer(r"^\d+ \| ([A-Za-z0-9_]+) \| (SHIPPED|NOTHING|WORK)\b", g, re.M))
+    ship = sorted(r for r, v in by.items() if v == "SHIPPED")
+    noth = sorted(r for r, v in by.items() if v == "NOTHING")
+    alive = sorted(r for r, v in by.items() if v == "WORK")
+    a = re.search(r"VERDICT: (\d+) confirmed, (\d+) wrong, 0 not checked, of (\d+) rows", rd(os.path.join(D, "aconf_census", "codex_aconf_census.txt")))
+    if not a or int(a.group(3)) != len(by):
+        sys.exit("REFUSED: Astra's census verdict line is missing or counts a different population than grok's %d rows" % len(by))
+    alive5 = sorted(set(MEMBERS) | set(LANDED))
+    overlap = sorted(set(ship) & set(alive5))
+    fill_census = [r for r in FILL if r in ship]
+    cen = dict(rows=len(by), ship=len(ship), noth=len(noth), alive=len(alive), conf=int(a.group(1)), wrong=int(a.group(2)),
+               alive5=alive5, overlap=overlap, fill_census=len(fill_census))
+    if cen["ship"] + cen["noth"] + cen["alive"] != cen["rows"] or cen["conf"] + cen["wrong"] != cen["rows"]:
+        sys.exit("REFUSED: the census verdicts do not partition the %d rows: %r" % (cen["rows"], cen))
+    if set(ship) != set(fill_census) | set(NOFILL) | set(LANDED):
+        sys.exit("REFUSED: grok's shipped set is not FILL-from-census + NOFILL + LANDED: %r" % (sorted(set(ship) ^ (set(fill_census) | set(NOFILL) | set(LANDED)))))
+    if set(FILL) - set(ship) != {"xfamscope"} or len(alive5) != 5 or overlap != ["boilerplateprefix", "smhang"]:
+        sys.exit("REFUSED: the fills outside the census, the alive five or the overlap are not what the texts say: %r" % cen)
+    if cen["ship"] + cen["noth"] + len(alive5) - len(overlap) != cen["rows"]:
+        sys.exit("REFUSED: shipped + nothing owed + alive - overlap != rows: %r" % cen)
+    return cen
+
+
+def edit_ledger(L, landed_sha=None):
+    """the #557 edits, applied to a parsed ledger (prep: HEAD's; post: the backup's working copy); returns the class
+    row's member list"""
+    rows = dict((x["id"], x) for x in L["rows"])
+    for rid, (sha, how) in FILL.items():
+        cur = rows[rid].get("commits") or ""
+        if (cur if isinstance(cur, str) else " ".join(cur)).strip():
+            sys.exit("REFUSED: %s already has commits %r" % (rid, rows[rid]["commits"]))
+        rows[rid]["commits"] = sha
+        rows[rid]["state_note"] = ("[%s] COMMITS FIELD FILLED by #557 from the census of closed rows with no commit (%s; Astra's git log, %s): "
+                                   "%s -- %s.  " % (DATE, EV, EVA, sha, how)) + (rows[rid].get("state_note") or "")
+    for rid, why in NOFILL.items():
+        rows[rid]["state_note"] = "[%s] COMMITS FIELD LEFT EMPTY by #557, on purpose: %s.  " % (DATE, why) + (rows[rid].get("state_note") or "")
+    for rid, why in MEMBERS.items():
+        if rows[rid].get("state") != "closed":
+            sys.exit("REFUSED: the member %s is not closed" % rid)
+        rows[rid]["state_note"] = ("[%s] A MEMBER OF `%s` (#557, from the census: %s; confirmed %s).  Work still alive: %s.  The row is NOT "
+                                   "re-opened here: that decision is the class row's work.  " % (DATE, CLS, EV, EVA, why)) + (rows[rid].get("state_note") or "")
+    for rid, why in LANDED.items():
+        rows[rid]["state_note"] = "[%s] %s.  " % (DATE, why) + (rows[rid].get("state_note") or "")
+    # K: a row closed with commits names its witness -- derived by check_witness.py's own SHAPE over the filled rows
+    k_rows = sorted(rid for rid in FILL if not SHAPE.match((rows[rid].get("witness") or "").strip()))
+    if set(k_rows) != K_NAMED:
+        sys.exit("REFUSED: section K's population is %r, the hook named %r" % (k_rows, sorted(K_NAMED)))
+    for rid in k_rows:
+        w = (rows[rid].get("witness") or "").strip()
+        if rid in WITNESS:
+            if w:
+                sys.exit("REFUSED: %s has a witness already: %r" % (rid, w))
+            rows[rid]["witness"] = WITNESS[rid]
+            rows[rid]["state_note"] = ("[%s] WITNESS FIELD ADDED by #557 (section K fired when the commits field was filled: a row closed with "
+                                       "commits names its witness, and this row had none because its field was empty): a harness round, so "
+                                       "`harness:<what proved it>`, taken from the closing commit's own message and claiming nothing it does "
+                                       "not.  " % DATE) + (rows[rid].get("state_note") or "")
+        else:
+            if not w.startswith("harness: "):
+                sys.exit("REFUSED: %s's witness is malformed in a way this script does not repair: %r" % (rid, w))
+            rows[rid]["witness"] = "harness:" + w[len("harness: "):]
+            rows[rid]["state_note"] = ("[%s] WITNESS FIELD RE-SHAPED by #557: `harness: ` -> `harness:` (check_witness.py's SHAPE wants a "
+                                       "non-space right after the colon; the text is unchanged).  Found when section K first saw the row -- "
+                                       "its commits field had been empty.  " % DATE) + (rows[rid].get("state_note") or "")
+        if not SHAPE.match(rows[rid]["witness"]):
+            sys.exit("REFUSED: %s's witness still fails SHAPE" % rid)
+    # I: a closed row that changed code owes a regress review or a queued hold -- check_fable_queue.py's rule 3
+    #  ... including its queue test: a row NAMED in fable_queue.md (a `### `id`` header, or any id inside the generated
+    #  codex-wall block) is "owed and queued" and not failed.  The hook reads the WORKING queue file, so this does too.
+    qraw = rd(os.path.join(SEC, "tools", "pipeline", "fable_queue.md"))
+    qb, qe = "<!-- BEGIN GENERATED: codex-wall", "<!-- END GENERATED: codex-wall -->"
+    qgen = qraw[qraw.index(qb):qraw.index(qe)] if qb in qraw and qe in qraw else ""
+    queued = set(re.findall(r"^###\s*(?:\d+\.\s*)?`([A-Za-z0-9_]+)`", qraw, re.M)) | set(re.findall(r"`([A-Za-z0-9_]+)`", qgen))
+    i_rows = sorted(rid for rid in FILL if rows[rid]["state"] == "closed" and rid not in queued
+                    and "regress" not in set(e.get("phase") for e in rows[rid].get("entries", []))
+                    and max([e.get("date", "") for e in rows[rid].get("entries", [])] or [""]) >= CUTOFF_REGRESS_FABLE)
+    if set(i_rows) != I_NAMED:
+        sys.exit("REFUSED: section I's population is %r, the hook named %r" % (i_rows, sorted(I_NAMED)))
+    for rid in i_rows:
+        sha, how = FILL[rid]
+        rows[rid].setdefault("entries", []).append(dict(
+            phase="regress", seat="fable5", date=DATE, grade="UNKNOWN", grader="", ev="not fired",
+            note="[HELD AWAITING SEAT: fable5] %s closed at %s and its commits field stayed EMPTY until #557 filled it, so section I never "
+                 "saw the row: the REGRESS review -- a distinct phase under the regress-is-fable-only directive -- was neither done nor held.  "
+                 "Held now by #557 (2026-10-02); the Fable agent seat is deliberately not fired (owner instruction, 2026-10-02), so the hold "
+                 "stands for the owner's batched flagship sign-off.  The question is in the row's hold_question." % (rid, sha)))
+        rows[rid]["hold_question"] = (("REGRESS (held %s by #557): the regression material this row shipped in %s (the census confirmation's "
+                                       "line: %s) -- does it still measure what the row's record claims at HEAD, and is the record true of "
+                                       "what shipped?  The row was closed with an EMPTY commits field, so section I's rule 3 never demanded this review.  "
+                                       "|| " % (DATE, sha, how))
+                                      + (rows[rid].get("hold_question") or "")).rstrip(" |")
+    # L: the ledger names the work that shipped -- #556's class row, filed with an empty field
+    rid, sha = HREC
+    if (rows[rid].get("commits") or "").strip():
+        sys.exit("REFUSED: %s already has commits %r" % (rid, rows[rid]["commits"]))
+    if rows[rid]["state"] != "open":
+        sys.exit("REFUSED: %s is %s, not open" % (rid, rows[rid]["state"]))
+    rows[rid]["commits"] = sha
+    rows[rid]["state_note"] = ("[%s] COMMITS FIELD = %s by #557: #556 placed 154 of the harness review's 181 corrections as 155 notes in 65 "
+                               "files and filed this row for the 27 it could not place, with the field empty; the attribution check (precommit section L) fired "
+                               "on it at #557's precheck -- a code commit against an open row whose commits field is EMPTY is HARD there -- "
+                               "so the filing commit is named.  The row stays open; its 27 members are unchanged.  " % (DATE, sha)) + (rows[rid].get("state_note") or "")
+    c = rows[CLS]
+    old_members = re.search(r"MEMBERS \((\d+)\): ([^.]*)\.", c["state_note"])
+    if not old_members:
+        sys.exit("REFUSED: the class row's note has no MEMBERS list")
+    members = old_members.group(2).replace(" ", "").split(",") + sorted(MEMBERS)
+    cen = census()
+    c["state_note"] = ("[%s] THE CENSUS (#557): grok read the %d closed-no-commit rows no seat had read (%s): %d shipped, %d nothing owed, %d work "
+                       "still alive.  Astra confirmed %d and overturned %d (%s): %s moved from shipped to alive (smhang's timeout shipped and its "
+                       "standing regression did not; boilerplateprefix's repair was uncommitted), gdromcontractresidual re-scoped.  So: %d commits "
+                       "fields filled from the twenty (smhang's among them, for the part that shipped) plus xfamscope's, read before the census -- "
+                       "%d fills; %d left empty on purpose (%s); boilerplateprefix's filled by the post step with #557's own sha; %d nothing owed; "
+                       "%d work still alive -- %d added as members below, the fifth, boilerplateprefix, landed by #557 itself.  %s are in both the "
+                       "shipped twenty and the alive five, which is why those three counts sum past %d.  FILLING THE FIELDS BROUGHT THE ROWS UNDER SECTIONS K "
+                       "AND I FOR THE FIRST TIME (the 19:10 precheck): %d witness fields added and %d re-shaped, %d regress reviews held with "
+                       "their questions -- K's witness-presence rule and I's missing-regress rule both key on the commits field, so a "
+                       "closed-with-no-commit row escapes exactly those two (the same precheck also found #556's hrecordowed unattributed, "
+                       "section L, a separate leftover).  MEMBERS NOW (%d): %s.  " % (
+                           DATE, cen["rows"], EV, cen["ship"], cen["noth"], cen["alive"], cen["conf"], cen["wrong"], EVA, " and ".join(cen["overlap"]),
+                           cen["fill_census"], len(FILL), len(NOFILL), ", ".join(sorted(NOFILL)), cen["noth"], len(cen["alive5"]), len(MEMBERS),
+                           " and ".join(cen["overlap"]), cen["rows"], len(WITNESS), len(K_NAMED) - len(WITNESS), len(I_NAMED), len(members), ", ".join(members))) + c["state_note"]
+    c["title"] = re.sub(r"\(8 members\)|eight members", "", c["title"])
+    if landed_sha:
+        for rid in LANDED:
+            rows[rid]["commits"] = landed_sha
+    return members
+
+
+def main():
+    dry = "--dry" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--dry"]
+    if len(args) != 1:
+        sys.exit(__doc__)
+    closing = args[0]
+    head = git("rev-parse", "--short=8", "HEAD").strip()
+    if not git("log", "-1", "--format=%s", "HEAD").startswith("#556 "):
+        sys.exit("REFUSED: HEAD %s is not #556's commit" % head)
+    if os.path.isdir(ST):
+        for root, dirs, files in os.walk(ST, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
+    os.makedirs(ST, exist_ok=True)
+    man = ["# #557 staged committed versions -- HEAD %s%s" % (head, "  (DRY)" if dry else "")]
+
+    # 1. every sha re-checked: it exists, and it touched the file Astra named or names the row/round in its subject
+    for rid, (shas, how) in FILL.items():
+        for sha in shas.split():           # a row may name two commits
+            subj = git("log", "-1", "--format=%s", sha).strip()
+            files = git("show", "--name-only", "--format=", sha).split("\n")
+            paths = re.findall(r"(?:src|regress|tools)/[A-Za-z0-9_./-]+", how)
+            okf = any(p in files for p in paths)
+            okn = (rid in subj) or any(("#%s" % n) in subj for n in re.findall(r"#(\d+)", how))
+            if not (okf or okn):
+                sys.exit("REFUSED: %s = %s: the commit neither touches %s nor names the row in its subject (%s)" % (rid, sha, paths, subj[:60]))
+            man.append("sha ok  %-18s %s  %s" % (rid, sha, subj[:70]))
+
+    # 2. the checker: the working copy, which must compile, pass on the working ledger, and differ from HEAD only as
+    #    parked_check_boilerplate_v2.diff shows
+    ck = os.path.join(SEC, "tools", "pipeline", "check_boilerplate.py")
+    src = open(ck, "rb").read()
+    if b"EXCERPT = 60" not in src or b"[:PREFIX]" in src:
+        sys.exit("REFUSED: the working check_boilerplate.py is not the repaired one")
+    r = subprocess.run([sys.executable, ck], capture_output=True, text=True)
+    if "BOILERPLATE_PASS" not in r.stdout:
+        sys.exit("REFUSED: the repaired checker does not pass on the working ledger: %s" % r.stdout[-300:])
+    put("tools/pipeline/check_boilerplate.py", src)
+    man.append("checker: compiles and passes on the working ledger (%s)" % r.stdout.strip().split("\n")[-1])
+
+    # 3. the ledger
+    raw = git("show", "HEAD:tools/pipeline/ledger.json", binary=True)
+    L = json.loads(raw.decode("utf-8"))
+    dump = lambda x: json.dumps(x, indent=1, ensure_ascii=False).replace("\n", "\r\n").encode("utf-8")
+    if dump(L) != raw:
+        sys.exit("REFUSED: the ledger does not round-trip byte-identical")
+    members = edit_ledger(L)
+    lp = put("tools/pipeline/ledger.json", dump(L))
+    mp = os.path.join(ST, "tools", "pipeline", "matrix.html")
+    r = subprocess.run([sys.executable, os.path.join(SEC, "tools", "pipeline", "gen_dashboard.py"), "--out", mp],
+                       env=dict(os.environ, GXLEDGER=lp), capture_output=True, text=True)
+    if r.returncode or not os.path.isfile(mp):
+        sys.exit("REFUSED: gen_dashboard: %s%s" % (r.stdout, r.stderr))
+    man.append("ledger: %d commits fields filled, %d left empty on purpose, %d members added (%d now), 1 row landed" % (len(FILL), len(NOFILL), len(MEMBERS), len(members)))
+
+    # 3b. the queue file is NOT committed (precheck 2026-10-06 11:47: staging HEAD + a regenerated block un-queued ten
+    #     other rows that only the working copy's uncommitted prose names).  #557's regress holds need no queue entry
+    #     (check_fable_queue.py: rule 2 skips the regress phase; rule 3 is met by the hold entry).  post557.py regenerates
+    #     the WORKING copy's generated block in place.
+    man.append("queue: fable_queue.md not committed; its working copy's generated block is regenerated by the post step")
+
+    # 4. the artifacts
+    afiles, skipped, empty = [], 0, 0
+    complete = re.compile(r"seat answered|SEAT WALLED|REFUSED|The answer is LOST|PANEL_COMPLETE|rc=")
+    tracked = set(git("ls-files", "regress/artifacts").split("\n"))
+    now = time.time()
+    for d in DIRS:
+        for root, _, fs in os.walk(os.path.join(ARTS, d)):
+            for f in sorted(fs):
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, SEC).replace(os.sep, "/")
+                if rel in tracked or f.endswith(".err"):
+                    skipped += f.endswith(".err")
+                    continue
+                if os.path.getsize(p) == 0:
+                    empty += 1
+                    continue
+                if now - os.path.getmtime(p) < 120 and not dry:
+                    sys.exit("REFUSED: %s changed in the last two minutes -- a job in flight?" % p)
+                if f.endswith(".launch.log") and not complete.search(rd(p)):
+                    if not dry:
+                        sys.exit("REFUSED: %s has no completion line -- a job in flight?" % p)
+                    man.append("(dry) IN FLIGHT, would refuse: %s" % rel)
+                if f.endswith(TEXT_EXT) and b"\0" in open(p, "rb").read():
+                    sys.exit("REFUSED: %s carries a NUL byte" % rel)
+                afiles.append(rel)
+    man.append("artifacts: %d files to add under %s; %d *.err and %d zero-byte files left on disk" % (len(afiles), ", ".join(DIRS), skipped, empty))
+
+    # 5. the texts
+    fmt = dict(unit=UNIT, nfill=len(FILL), nfill37=len(FILL) - 1, nnofill=len(NOFILL), nmem=len(MEMBERS), nmembers=len(members), members=", ".join("`%s`" % m for m in members),
+               newmem=", ".join("`%s`" % m for m in sorted(MEMBERS)), gc=verdict(os.path.join(D, "grok", "grok_closedcensus.txt")),
+               ac=verdict(os.path.join(D, "aconf_census", "codex_aconf_census.txt")), ap=verdict(os.path.join(D, "aconf_parked", "codex_aconf_parked.txt")),
+               closing=closing, nfilesart=len(afiles), head556=head,
+               v557=verdict(os.path.join(D, "aconf_557", "codex_aconf_557.txt")), v557b=verdict(os.path.join(D, "aconf_557b", "codex_aconf_557b.txt")),
+               v557c=verdict(os.path.join(D, "aconf_557c", "codex_aconf_557c.txt")), v557d=verdict(os.path.join(D, "aconf_557d", "codex_aconf_557d.txt")),
+               v557e=verdict(os.path.join(D, "aconf_557e", "codex_aconf_557e.txt")), v557f=verdict(os.path.join(D, "aconf_557f", "codex_aconf_557f.txt")), v557g=verdict(os.path.join(D, "aconf_557g", "codex_aconf_557g.txt")), v557h=verdict(os.path.join(D, "aconf_557h", "codex_aconf_557h.txt")), v557i=verdict(os.path.join(D, "aconf_557i", "codex_aconf_557i.txt")),
+               nwit=len(WITNESS), nwitfix=len(K_NAMED) - len(WITNESS), nhold=len(I_NAMED), holds=", ".join("`%s`" % r for r in sorted(I_NAMED)),
+               fills="\n".join("* `%s` -- `%s` (%s)" % (rid, sha, how) for rid, (sha, how) in sorted(FILL.items())),
+               memlist="\n".join("* `%s` -- %s." % (rid, why) for rid, why in sorted(MEMBERS.items())))
+    sec = SECTION.format(**fmt)
+    put("OUTSTANDING_BUGS.md", (git("show", "HEAD:OUTSTANDING_BUGS.md").rstrip("\n") + "\n" + sec).encode("utf-8"))
+    blk = CHANGELOG.format(**fmt)
+    put("CHANGELOG.md", (blk.rstrip("\n") + "\n\n" + git("show", "HEAD:CHANGELOG.md")).encode("utf-8"))
+    msg = MESSAGE.format(**fmt)
+    io.open(os.path.join(REC, "msg557.txt"), "w", encoding="utf-8", newline="\n").write(msg)
+    for t in (sec, blk, msg):
+        if ("<OWED" in t and not dry) or re.search(r"\{[a-z_0-9]+\}", t):
+            sys.exit("REFUSED: a placeholder survives in a generated text")
+    files = ["CHANGELOG.md", "OUTSTANDING_BUGS.md", "tools/pipeline/check_boilerplate.py", "tools/pipeline/ledger.json", "tools/pipeline/matrix.html",
+]
+    spec = {"unit": UNIT, "head_subject_re": "^#556 ", "stage_dir": ST, "files": files, "neutral": ["tools/pipeline/check_probe_wiring.py"],
+            "add_dirs": [], "add_files": afiles, "exclude_dirs": [], "message": os.path.join(REC, "msg557.txt"), "sidecars": [], "pre": [["python", os.path.join(REC, "queue557_pre.py")]],
+            "post": [["python", os.path.join(REC, "post557.py")]],
+            "no_merge": ["tools/pipeline/ledger.json", "tools/pipeline/matrix.html"]}
+    io.open(os.path.join(REC, "spec557.json"), "w", encoding="utf-8", newline="\n").write(json.dumps(spec, indent=1) + "\n")
+    for rel in files:
+        new = open(os.path.join(ST, *rel.split("/")), "rb").read()
+        old = subprocess.run(["git", "-C", SEC, "show", "HEAD:" + rel], capture_output=True).stdout
+        d2 = list(difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(), lineterm="", n=0))
+        man.append("%s  %-40s +%d -%d  (HEAD %s)" % (md5(new), rel, sum(1 for l in d2 if l.startswith("+") and not l.startswith("+++")),
+                                                    sum(1 for l in d2 if l.startswith("-") and not l.startswith("---")), md5(old)))
+    io.open(os.path.join(ST, "MANIFEST.txt"), "w", encoding="utf-8", newline="\n").write("\n".join(man) + "\n")
+    print("\n".join(man))
+
+
+SECTION = """
+## 2026-10-02 -- GXEMUL [087a90]: `{unit}` audits the rows closed with no commit: {nfill} commits fields filled, {nmem} members added to `closeassessrows`, one parked repair landed, one held
+
+**What this is.**  `#555` found that a 2026-08-27 sweep had closed ledger rows on an assess-stage sign-off and filed
+the class row `closeassessrows` with eight members.  The population the class draws from is every row `closed` with an
+empty `commits` field -- 47 at `#555`.  grok read the 37 no seat had read (`regress/artifacts/closeassess_20261002/
+grok/grok_closedcensus.txt`: {gc}); GPT-6 Astra confirmed or overturned each and looked every commit up in `git log`
+(`aconf_census/codex_aconf_census.txt`: {ac}).  Every sha below was re-checked when this text was generated: the commit
+exists and touches the file Astra named, or names the row or its round in its subject.
+
+**Shipped, the commits field now filled -- {nfill}** ({nfill37} of the twenty the census found shipped, plus `xfamscope`, one
+of the ten rows grok had read before the census, whose two commits Astra looked up on the closing check; of the other
+three shipped rows, two are left empty on purpose below and `boilerplateprefix`'s is filled by the post step):
+{fills}
+* `asanunbuildable` -- left EMPTY on purpose: the closure was a local build-tree back-fill, not a tree change
+  (`c7b32355` is the records commit that recorded it).
+* `wiringshghost` -- left EMPTY on purpose: no commit shipped the deletion of the three `.sh` manifest keys, which
+  existed only in a working tree; `686d179c` recorded the resolution (`check_probe_wiring.py:1157-1176`) and is named
+  in the row's note as provenance.  (Astra, on this unit's closing check, correcting its own census line.)
+
+**Nothing owed -- 14** (retired, duplicate, answered by a ruling, documented-only): `b118L`, `devexit`, `b82`, `b75`,
+`rtcdet`, `wdchpcmipsaddr`, `countderiver`, `preserveinstrument`, `rung1exempt`, `sgilinearnegidx`, `multilabelfloor`,
+`highrankunmeasured`, `probedeathoracle`, `grokampkill` -- each with the one fact that shows it, in grok's census.
+
+**Work still alive -- {nmem} added as MEMBERS of `closeassessrows` ({nmembers} now: {members}).**  Nothing is
+re-opened here; each member's ledger row carries a note; one decision per member is the class row's work.
+{memlist}
+
+**Two repairs the census found UNCOMMITTED since 2026-09-17, both reviewed by Astra (`aconf_parked`: {ap}):**
+* `boilerplateprefix` -- LANDED by this commit.  The parked repair of `tools/pipeline/check_boilerplate.py` (the
+  comparison key is the whole seat note, not its first 60 characters) was right in its code and wrong in its comment:
+  the quoted preamble is 81 characters, not 66; "the day it landed" was written for a landing that never happened;
+  "recall" overstated what the old key lost; the file's header still promised a prefix comparison and said the check
+  was outside the hard gate (it is in it: `precommit_check.sh` section O).  Corrected, and its controls re-run on the
+  day (`draft/boilerplate_controls_20261002.out`: the untouched ledger passes; one identical paragraph injected across
+  four seat cells after the cutoff reds it and names the row).
+* `gdromcontractresidual` -- HELD.  The parked edit of `regress/gdrom_default_probe.py` is not the docstring
+  correction it looked like: it also adds two executable rows and tightens a third (`row()` call sites 54 -> 56; the
+  gate pins 60 rows and the working probe makes 62), which is a detector change belonging to `M2_gdromnodatawidth` and
+  `gdromacceptdmanum` and owes a round with a pass on the diff; and one of its claims contradicts the `gdromdmasilent`
+  record.  The parked file stays in the working tree, uncommitted; the row is a member above.
+
+**What the gates said when the fields were filled** (`#557`'s precheck of 19:10; the repairs ride in this commit, each
+derived from the staged ledger by the gate's own rule and asserted against the names the hook printed):
+* section K (a row closed with commits names its witness): {nwit} rows had no witness field -- `fbwitness`, `ledgerwitness`,
+  `xfamscope`, harness rounds, each given `harness:<what proved it>` from its closing commit's own message -- and {nwitfix}
+  (`lcalenzerodrop`, `nineseatreminder`) had one the checker could not read: `harness: ` with a space, re-shaped, text unchanged;
+* section I (a closed row that changed code owes a regress review): {nhold} rows -- {holds} -- had never been reviewed or held,
+  because section I keys on the commits field.  Each now carries a `[HELD AWAITING SEAT: fable5]` regress entry and a
+  `hold_question`; the Fable agent seat is deliberately not fired (owner, 2026-10-02), so they wait for the batched sign-off;
+* section L (the ledger names the work that shipped): `hrecordowed`, filed by `#556` with an empty field, now names `1329d894`
+  (a pre-existing `#556` leftover the same precheck found -- a code commit against an OPEN row with an empty field is
+  HARD there -- not a consequence of the fills);
+* `tools/pipeline/fable_queue.md` is NOT committed.  A first attempt STAGED HEAD's bytes plus a regenerated block for the
+  commit, and the precheck of 2026-10-06 11:47 failed section I on ten OTHER rows that only the working copy's
+  uncommitted prose names; the eight holds need no queue entry (rule 2 skips the regress phase, rule 3 is met by the hold
+  itself).  The hook also checks the queue's generated block against the ledger (`gen_codex_wall.py --check`, section
+  I2), so a pre-step regenerates the WORKING copy's block from the staged ledger before the hook runs, and the post
+  step regenerates it from the working ledger after the commit; the prose around the block is never touched.
+
+**That is the class seen from the gates' side:** K's witness rule and I's missing-regress rule both key on the commits
+field, so a row closed with no commit escapes exactly those two and owes nothing under those two rules.  Filling eighteen fields
+produced thirteen obligations at once (3 + 2 under K, 8 under I).
+
+**Not done:** the re-open decisions for the {nmembers} members (the owner's or the flagship's); the detector round
+for the parked `gdrom_default_probe.py` edit; of the three rows grok read before this census and left out of the
+class, `m8sarseq` (carried by `m8sarrows`) and `m437rtmp` (owing no code) keep empty commits fields -- nothing shipped
+under them to attribute -- and `xfamscope`'s is filled above.
+"""
+
+CHANGELOG = """# `{unit}` (closeassess): the rows closed with no commit are audited -- {nfill} commits fields filled, {nmem} members added to `closeassessrows`, the parked `boilerplateprefix` repair landed with its comment corrected, one parked repair held
+
+**Why.**  `#555` filed `closeassessrows`: a 2026-08-27 sweep closed rows on the adjudicator's note `CLOSE (assess)`,
+which signs off the assess STAGE, and eight of them still named undone work.  The class draws from every row that is
+`closed` with an empty `commits` field (47).  This unit reads the rest of that population and records what each is.
+
+**How.**  grok read the 37 rows no seat had read, one line each with the lines it read
+(`regress/artifacts/closeassess_20261002/grok/grok_closedcensus.txt`: {gc}); GPT-6 Astra confirmed 34, overturned 3
+and looked up every commit (`aconf_census/codex_aconf_census.txt`: {ac}).  The three overturns are the point of a
+second seat: `smhang` (its standing regression is deferred, not shipped), `gdromcontractresidual` (its corrections
+are not at HEAD) and `boilerplateprefix` (grok had read the WORKING copy of the checker, where the repair sits
+uncommitted; HEAD still had `PREFIX = 60`).  Every sha is re-checked by the staging script: the commit exists and
+touches the file named or names the row or its round.
+
+**What ships.**
+* `tools/pipeline/ledger.json`, `matrix.html` -- {nfill} commits fields filled ({nfill37} of the census's twenty shipped rows, plus
+  `xfamscope` from the ten rows read before it); `asanunbuildable` and `wiringshghost` left empty on purpose
+  with a note (a populated field for work that did not ship is the opposite failure); {nmem} rows noted as members of
+  `closeassessrows` ({newmem}; the class row's note now lists {nmembers}); `boilerplateprefix` noted as landed.  AND what the
+  gates demanded once the fields were filled (the 19:10 precheck, three hard fails): {nwit} witness fields added and {nwitfix}
+  re-shaped (section K), {nhold} regress holds with questions on {holds} (section I), and `hrecordowed.commits = 1329d894`
+  (section L: a pre-existing #556 leftover the same precheck found, not a consequence of the fills).  K's witness rule and
+  I's missing-regress rule both key on the commits field, so a row closed with no commit escapes exactly those two;
+  eighteen fills produced thirteen obligations (3 + 2 + 8), all discharged or held here.
+* `tools/pipeline/fable_queue.md` -- NOT committed: staging HEAD plus a regenerated block (the first repair of
+  `aconf_557e`'s item 3) un-queued ten other rows that only the working copy's uncommitted prose names, and the precheck
+  of 2026-10-06 11:47 failed section I on them.  The eight regress holds need no queue entry (`check_fable_queue.py`
+  rule 2 skips the regress phase; rule 3 is met by the hold).  Because the hook also checks the generated block against
+  the ledger (`gen_codex_wall.py --check`), the WORKING copy's block is regenerated in place from the staged ledger
+  before the hook runs (pre-step) and from the working ledger after the commit (post step).
+* `tools/pipeline/check_boilerplate.py` -- the parked 2026-09-17 repair, landed: the comparison key is the whole
+  seat note (`strip_seat(note, seat).casefold()`), `EXCERPT = 60` is display width only; three code lines, the rest
+  comment.  Astra's review of the parked diff (`aconf_parked/codex_aconf_parked.txt`: {ap}) held it for its COMMENT:
+  the quoted preamble is 81 characters, not 66; "on the day it landed" described a landing that never happened; the
+  recall sentence overstated; the header promised a prefix comparison and said the check was outside the hard gate.
+  All four corrected in place with what they said kept.  Controls re-run today on scratch copies of the working
+  ledger: the untouched ledger `BOILERPLATE_PASS 54 archived, 0 new`; one identical paragraph injected across four seat
+  cells after the cutoff `BOILERPLATE_FAIL` naming the row (`draft/boilerplate_controls_20261002.out`).
+* `OUTSTANDING_BUGS.md` -- the `#557` section: the shipped rows with their shas, the 14 nothing-owed, the members,
+  the two parked repairs.
+* `regress/artifacts/closeassess_20261002/` -- {nfilesart} files: the census, its confirmation, the parked diffs, the
+  controls, the briefs and the scripts.
+
+**Held: the other parked repair.**  `regress/gdrom_default_probe.py`'s parked edit is not docstring-only: Astra found
+two executable rows added and a third tightened (`row()` sites 54 -> 56; the gate pins 60, the working probe makes
+62), a detector change that belongs to `M2_gdromnodatawidth` and `gdromacceptdmanum` and owes a round with a pass on
+the diff, plus one claim that contradicts the `gdromdmasilent` record.  It stays uncommitted in the working tree, and
+`gdromcontractresidual` is a member.
+
+**Astra's closing checks of this unit.**  `aconf_557`: {v557} -- a deferral dated wrong (2026-08-19, not 08-30), a
+commit described as a deletion when it recorded one, a stale artifact count, and `xfamscope`'s commits not looked up;
+all repaired.  `aconf_557b`, on those: {v557b} -- `wiringshghost`'s field is left EMPTY after all (no commit shipped
+the deletion), and a placeholder had moved.  `aconf_557c`, on those two: {v557c} -- the class row's note still said ONE
+field left empty; it now derives its counts from the two census artifacts and names the two rows (`smhang`,
+`boilerplateprefix`) that sit in both the shipped twenty and the alive five, and the message says the same.
+`aconf_557d`, on that: {v557d} -- clean; then the precheck failed three hard sections (K and I on the filled rows, L on
+`#556`'s `hrecordowed`) and the repairs went to `aconf_557e`: {v557e} -- a witness condition the commit did not record, the
+queue block not regenerated, `hrecordowed`'s numbers, and the invisibility claim overstated; all four repaired, checked by
+`aconf_557f`: {v557f} -- one clause ("owes nothing on paper") still overstated, qualified to "under those two rules";
+`aconf_557g`: {v557g} -- clean; then the precheck of 2026-10-06 failed section I on ten other rows, because staging
+the queue file's HEAD bytes dropped the working copy's uncommitted queue entries; the queue file is no longer committed,
+checked by `aconf_557h`: {v557h} -- the hook's own block check (`gen_codex_wall.py --check`) would then fail on the working
+copy, and the failed attempt had STAGED the queue, not committed it; a pre-step now regenerates the working block from the
+staged ledger, checked by `aconf_557i`: {v557i} -- two wordings left ("committing" for the staged attempt; the message
+named only one of `aconf_557h`'s two findings), both corrected, checked by `aconf_557j`: {closing}.
+
+**Seats, by name.**  grok (grok-4.7 xhigh): the census.  GPT-6 Astra (codex, `ultra`): the confirmation, the git
+log, the review of the parked repairs, the closing check; no wall, no refusal.  agy: not on this unit (its quota wall
+lifted at 18:21 and it is auditing `#555`'s table).  The Fable and Opus agent seats were deliberately not fired
+(owner instruction, 2026-10-02); kimi down; Ollama not fired.
+
+**Not done, and where it goes.**  Re-opening any member is one decision per member, for the owner or the flagship.
+The parked probe edit: its own round.  This commit touches no `src/`; the next one owes it no pass-2 receipt.
+"""
+
+MESSAGE = """{unit} closeassess: the rows closed with no commit are audited -- {nfill} commits fields filled, {nmem} members added to closeassessrows, the parked boilerplateprefix repair landed, one parked repair held
+
+#555's class row drew from 47 rows closed with an empty commits field.  grok read the 37 no seat had read ({gc});
+Astra confirmed 34, overturned 3 and looked up every commit in git log ({ac}).  Twenty shipped: {nfill37} commits
+fields filled (each sha re-checked by the staging script), two left empty on purpose (a local build; a resolution no
+commit shipped), boilerplateprefix's filled with this commit's own sha by the post step; xfamscope, read before the
+census, filled too.  Fourteen owe nothing.  Four still carry undone work and join closeassessrows ({newmem}) -- smhang
+is in both counts (its timeout shipped, its standing regression did not), as is boilerplateprefix, the fifth alive
+row, landed here; nothing is re-opened.
+
+The census also found two repairs uncommitted since 2026-09-17.  check_boilerplate.py's full-note key is landed here
+with its comment corrected per Astra's review ({ap}) and its controls re-run today; gdrom_default_probe.py's parked
+edit is held -- it adds executable rows (a detector change, its own round) and contradicts one record.  Astra's
+closing checks: aconf_557 ({v557}), aconf_557b ({v557b}), aconf_557c ({v557c}), aconf_557d ({v557d}); the precheck then
+failed sections K and I on the filled rows -- {nwit} witness fields added, {nwitfix} re-shaped, {nhold} regress holds with
+questions -- and L on #556's hrecordowed (commits = 1329d894, a
+pre-existing leftover); aconf_557e checked the repairs ({v557e}), aconf_557f the last four ({v557f}), aconf_557g the
+last clause ({v557g}).  A second precheck failed section I on ten other rows once the queue file was staged as HEAD
+plus a regenerated block (their queue entries live only in its uncommitted working copy); it is no longer committed --
+aconf_557h ({v557h}): the hook's block check needs the working copy regenerated from the staged ledger, now a pre-step,
+and the failed attempt had STAGED the queue file, not committed it --
+aconf_557i ({v557i}): two wordings, corrected -- aconf_557j ({closing}).
+
+No src/ touched.  The Fable and Opus agent seats were deliberately not fired (owner instruction).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+"""
+
+if __name__ == "__main__":
+    main()
