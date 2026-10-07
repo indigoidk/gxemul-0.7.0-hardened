@@ -6207,9 +6207,13 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
   2026-08-16 from the R7 pass-2 grok seat, which attacked its OWN pass-1 advice.) The fold sends
   `CMMU_FLUSH_{USER,SUPER}_SEGMENT` to the `all = 1` arm. That is the safe direction — under-
   invalidation is the one that leaves a stale translation — but it is **not** free of guest-
-  visible effect, and the shipped comment said it was. `memory_m88k.c:356-365` writes `PG_U`
-  (and `PG_M` on a write) back into the page descriptor **in emulated memory** on every walk,
-  while a PATC hit sets those bits only in the PATC copy (`:348-350`). So a guest that clears U
+  visible effect, and the shipped comment said it was. `memory_m88k.c:344-366` writes `PG_U`
+  (and `PG_M` on a write) back into the page descriptor **in emulated memory** after every
+  SUCCESSFUL table walk when `FLAG_NOEXCEPTIONS` is absent (a walk that faults does not update the
+  guest descriptor); a PATC READ hit sets `PG_U` only in the PATC copy (`:228-229`) when
+  `FLAG_NOEXCEPTIONS` is absent, but a PATC WRITE hit on an entry whose `PG_M` is clear ALSO updates
+  the guest descriptor when `FLAG_NOEXCEPTIONS` is absent, through `m8820x_mark_page_as_modified()`
+  (`:217-224`; it ORs `PG_M|PG_U` into the descriptor at `:86` and writes it back at `:93`). [#561] So a guest that clears U
   on a page in segment B, issues a segment-A flush, and then touches B observes a U bit that a
   correctly-scoped flush would have left clear. The tighter mapping needs no manual: match on
   the walker's own 4 MB segment size, `(sar ^ vaddr) & 0xffc00000`. Not done in R7 because it is
@@ -6284,17 +6288,19 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
      replaces.**
   2. **The write side is 98% `SAR` — 612,186 purges per boot — and `SAR` is never consulted by
      the translation path.** `m88k_translate_v2p` reads only `SAPR`/`UAPR` (`memory_m88k.c:135,137`),
-     BATC and PATC. `SAR` is read at exactly one place, `dev_m8820x.c:110`, as the *address
-     operand of a flush command* — and that command's own arm already purges at `:187`. So a
+     BATC and PATC. `SAR` is read in two places: by guest readback through the generic
+     `odata = regs[relative_addr / 4]` at `dev_m8820x.c:258`, and at `:110` as the *address operand
+     of a flush command* -- and that command's arm does its own INVALIDATE_ALL at `:187`. [#561] So a
      write to `SAR` owes no purge, **by exactly the argument #434 makes for reads**.
   3. Registers that genuinely can change a translation are **`SAPR` and `UAPR` ONLY** — 13,028
      of 917,504 accesses to this arm, about **1.4%**. #434 removes 32% of the arm's purges; this
      item is worth **2.1× as much** and is the same one-line shape.
 
      ***`SCTR` WAS LISTED HERE AND THAT WAS WRONG***, caught by a pass-1 seat on the round that
-     acted on this filing. `SCTR` appears **nowhere in `src/` outside its own case label** — the
-     translation path never reads it, so a write to it cannot change a translation and it belongs
-     with `SAR`/`PFSR`/`PFAR`, not with the area pointers. The error did not reach the code (the
+     acted on this filing. `SCTR` is stored at `dev_m8820x.c:460` and read back to the
+     guest through `:258`; NO TRANSLATION CONSUMER in `src/` reads `reg[CMMU_SCTR]` (the only other
+     occurrences are the definitions at `thirdparty/m8820x.h:64,118-120`), so a write to it cannot
+     change a translation and it belongs with `SAR`/`PFSR`/`PFAR`, not with the area pointers. [#561] The error did not reach the code (the
      round split the arm on the measured consumer table, not on this sentence), but it would have
      put `SCTR` on the wrong side of the argument for anyone reading the filing afterwards.
 
@@ -24444,3 +24450,27 @@ and build-tree propagation and so is its own round:
   - `hrec extra diff_ieee_store.c:296-301` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
 Still owed after this: the HELD edits, and the record places whose readings were FITS/UNSETTLED only, which are being
 re-read with packets that inline the cited lines.
+
+### #561 -- 21 ruled corrections from the previously-unsettled record places (records only; 2026-10-06)
+
+Rulings at `regress/artifacts/recordfix_20261002/adjudication_20261006/ADJ_UNSET_FINAL.md` (36 places, checked by GPT-6 Astra); the edits are `EDITS_561.json`.  Applied:
+21 in 5 files.  HELD (17) -- every `src/` comment, which owes `est/` byte-identity and build-tree
+propagation and so is its own round (together with #560's held src/ edits):
+  - `place 2 cpum88kinstr:F17` (src/cpus/cpu_m88k_instr.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 6 cpumipsinstr:F12` (src/cpus/cpu_mips_instr.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 7 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 8 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 9 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 10 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 13 devsgire:F6` (src/devices/dev_sgi_re.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 15 devm8820x:F7` (src/devices/dev_m8820x.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 18 devm8820x:F8` (src/devices/dev_m8820x.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 19 devm8820x:F8` (src/devices/dev_m8820x.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 29 cpush:F6` (src/cpus/cpu_sh.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 33 devpvr:F7` (src/devices/dev_pvr.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 35 cpuppc:F1` (src/cpus/cpu_ppc.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 37 cpualphapalcode:F3` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 38 cpualphapalcode:F3` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 39 cpualphapalcode:F4` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 40 cpualphapalcode:F5` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+Still owed: the HELD edits.

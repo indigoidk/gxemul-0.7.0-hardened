@@ -1,3 +1,35 @@
+## #561 -- records: 21 ruled corrections from the previously-unsettled record places (2026-10-06)
+
+* The 36 record places #560 could not rule (their packet-fed readings were FITS/UNSETTLED only) were settled against
+  the files by two read-only Opus helpers and ruled by the main loop (Claude Opus 5.5); GPT-6 Astra at `ultra` checked
+  all 36 (6 of 36 wrong -- each a helper over-correction -- and all six adopted: five places keep the ORIGINAL ruled
+  text, one is not false and gets no edit).  Rulings and evidence: `regress/artifacts/recordfix_20261002/adjudication_20261006/ADJ_UNSET_FINAL.md`.
+* Applied, each marked `#561`: 21 edits in 5 files -- `CHANGELOG.md` 13, `OUTSTANDING_BUGS.md` 3, `regress/artifacts/ip30abortkill/ip30_abort_probe.py` 1, `regress/lca_confbus_probe.py` 1, `regress/sh_iprbcd_probe.py` 3.  Three of them are wrong records found
+  outside the 36 (`regress/sh_iprbcd_probe.py`'s IPRB/IPRC slip; a CHANGELOG sentence its own table refutes; and
+  `regress/sh_iprbcd_probe.py:301-302`, which repeated place 31's false half -- eight shipped rows read the exposed
+  table, ruled in the addendum of `ADJ_UNSET_FINAL.md`).
+* HELD (17), every one a `src/` comment (it owes `est/` byte-identity and build-tree propagation -- its own round):
+  - `place 2 cpum88kinstr:F17` (src/cpus/cpu_m88k_instr.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 6 cpumipsinstr:F12` (src/cpus/cpu_mips_instr.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 7 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 8 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 9 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 10 devsgiip30:F2` (src/devices/dev_sgi_ip30.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 13 devsgire:F6` (src/devices/dev_sgi_re.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 15 devm8820x:F7` (src/devices/dev_m8820x.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 18 devm8820x:F8` (src/devices/dev_m8820x.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 19 devm8820x:F8` (src/devices/dev_m8820x.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 29 cpush:F6` (src/cpus/cpu_sh.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 33 devpvr:F7` (src/devices/dev_pvr.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 35 cpuppc:F1` (src/cpus/cpu_ppc.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 37 cpualphapalcode:F3` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 38 cpualphapalcode:F3` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 39 cpualphapalcode:F4` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+  - `place 40 cpualphapalcode:F5` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
+* Not edited (1): the one place ruled true.
+* No `src/` touched; no row state changes.  Seats: two Opus helpers and the main loop (adjudication); GPT-6 Astra
+  (checks and the confirmation of this commit).  Fable agent seat deliberately not fired (owner, 2026-10-02).
+
 ## #560 -- records: 55 ruled corrections to the project's records and harness comments (2026-10-06)
 
 * The record corrections owed by `recordowed` / `hrecordowed` (#556's census) were read by Gemini web (packet-fed),
@@ -2797,7 +2829,10 @@ carrying: a census keyed on `exit(` cannot see a host death spelled `abort()`.
 
 ## WITNESS — rung 3, on unmodified `-E sgi -e ip30`
 
-`regress/artifacts/ip30abortkill/ip30_abort_probe.py`, one fresh process per scored row, real
+`regress/artifacts/ip30abortkill/ip30_abort_probe.py`, one fresh process per SESSION -- most
+sessions score one row, but `tick 50`/`tick 50 txt` and `xbit isr`/`xbit tick` each score two
+rows from one process, by design (the cross-bit mutant needs both announce classes in one device
+lifetime) [#561], real
 guest instructions through real decode and real `memory_rw` (never `dump` — all four ip30
 registrations are `DM_DEFAULT`, so `dump` bypasses the handler and would prove nothing).
 
@@ -5570,7 +5605,9 @@ anywhere in the file.**
 
 `artifacts/alphatbinegsel/killtable_20260910/t3/SCORES.txt` -- scratch clone `/tmp/gx520`, baseline
 `cpu_alpha_palcode.c` from GXEMUL-SEC (the repo source, never a script's own backup), ONE frozen instrument
-(`alpha_tbi_probe.frozen.py`, byte-identical to the shipped `regress/alpha_tbi_probe.py`) for every leg, and
+(`alpha_tbi_probe.frozen.py`; the shipped `regress/alpha_tbi_probe.py` differs from it by 27 comment-only lines
+-- 6 removed, 21 added, all in the module docstring or in display-only row notes; see below [#561]) for every
+leg, and
 all twelve logs ending `ALPHATBI_DONE`. Sentinel dropped before mutant 1 and cleared only after BOTH parts
 verified.
 
@@ -6234,9 +6271,13 @@ The register pair shares one session deliberately: a bare *"reg 4 returns 0"* ro
 because unmapped space also reads 0, so the PAIR is the oracle — all-ones then zero, same window,
 only the register changing.
 
-**DISPOSITION, stated rather than assumed.** None of the three is a floor breach under the
-body-tested-partition reading: `lca_pci_conf` tests `writeflag` in its own code but never branches on
-`len`, `func` or `reg`, so they induce no partition and fall to clause (e). **They were closed anyway
+**DISPOSITION, stated rather than assumed.** `lca_pci_conf` tests `writeflag`, and `type1 && bus == 0`
+selects the refusal arm, whose answer tests `reg == 0` (all-ones for register 0, zero elsewhere); it
+never branches on `len` or `func`. The register axis is therefore a body-tested partition and its two
+rows (`t1 reg0`, `t1 reg4`) were owed as floor, not clause (e). The bus-value partition {0, other} is
+body-tested but identical for READS (a type-1 cycle to any other bus reaches bus_pci's empty-slot
+answer, the same all-ones/zero pair), so it stays disclosed; `len` and `func` fall to clause (e).
+[#561] **The `len` and `func` rows were closed anyway
 on the CLAIM -> ROW check**, because each falsifies a sentence the round's own comment asserts.
 
 **TWO RESIDUALS ARE DISCLOSED AND NOT BUILT**, on grok's own reasoning: the WRITE direction at a
@@ -6752,11 +6793,12 @@ under the mutant it would be chosen to catch; and `("continue", grace, "GXemul>"
 ZERO READS, because `rd()` matches `until` against the whole accumulated buffer, which already holds
 a prompt from the boot drain.
 
-**RESIDUAL, disclosed under clause (e):** these rows establish delivery under one source, one
-priority and two encounters.  They do not cover suppression that corrupts MASK/MIEN/pending state,
-suppression that stays stuck after C040 clears, or other sources and priorities.  Note also that
-suppression by a *different implementation route* is not a defect — the contract is behaviour, not
-the use of a particular local variable.
+**RESIDUAL, disclosed under clause (e):** these rows establish delivery and suppression for SCC TX
+at one priority, across two C040 encounters, recovery after C040 is cleared (`c040 recover`,
+M_sticky killed 11/12), and GENCTL readback with MIEN preserved (`c040 genctl`, M_mienclobber
+killed 12/13).  They do not cover suppression that corrupts MASK or the pending counts, or other
+sources and priorities.  Suppression by a *different implementation route* is not a defect -- the
+contract is behaviour, not the use of a particular local variable. [#561]
 
 ## PASS 1 — six seats, unanimous IMPLEMENT-WITH-REVISIONS, and both revisions were real
 
@@ -19757,22 +19799,26 @@ records both facts: it scored a clean 14/14 before those four rows existed.*
 *`scif txi` stays GREEN under `m_sciftxonly`, which is the point — the mutant does still map
 TXI. Three of four red is what "the loop lost its other members" looks like.*
 
-Every mutant is reddened by exactly the row built for it and nothing else.
+Not every mutant is reddened by exactly one row: `m_iprconly` (it drops the RTC block as well as
+IPRB) reddens both `iprb wdt` and `ipra rtc`, and `m_sciftxonly` reddens three SCIF rows; the
+table above lists each mutant's red rows. [#561]
 
 `m_iprconly` (drop the RTC and IPRB blocks) and `m_nortc` (drop the three RTC lines)
 each scored a **clean 10/10** against every behavioural row -- not because the rows are
 weak, but because **WDT, REF, SCI, GPIO, DMAC, H-UDI and RTC have no `INTERRUPT_ASSERT`
 anywhere in this tree.** Nothing a guest can DO depends on their priorities.
 
-So `#458` exposes `int_prio_and_pending[]`, `int_to_assert` and `int_level` through the
-settings interface, and two rows read the table directly: after a guest `IPRB := 0xa000`
-the WDT slot must read `0xa`, and after `IPRA := 0x000c` the RTC slot must read `0xc`.
-**Those two rows are the reason the exposure exists**; without them it is an unused
-convenience.
+So `#458` exposes `int_prio_and_pending[]` through the settings interface as `iprio_<intevt>`,
+and two rows were built to read it: after a guest `IPRB := 0xa000` the WDT slot must read `0xa`,
+and after `IPRA := 0x000c` the RTC slot must read `0xc`. **Those two rows are why the exposure was
+added**; the shipped detector has eight rows reading the table -- `iprb wdt`, `ipra rtc`, `iprd
+hold`, `iprd ctl` and `scif eri/rxi/bri/txi`. `int_to_assert` and `int_level` are deliberately NOT
+exposed (cpu_sh.c says why: no row reads them, and they are a software cache rather than
+architectural registers). [#561]
 
-*The widths are matched to the declarations rather than guessed -- `int_to_assert` is
-`int16_t` and `int_level` is `unsigned int`. These macros take the variable's ADDRESS,
-so a mismatched width reads neighbouring bytes and reports a plausible wrong number.*
+*Each entry is registered with `CPU_SETTINGS_ADD_REGISTER8`, matching the table's `uint8_t`
+declaration; the macros take the variable's ADDRESS, so a mismatched width would read
+neighbouring bytes.*
 
 ### What this round does NOT claim
 
@@ -19890,8 +19936,10 @@ construction. The word list is now one line with no continuations, and the two-s
   initialised to `0x33333333`, so SCIF sat at priority 3 out of reset; IPRA-IPRC reset to
   `H'0000`, which is what hardware does. Any SH4 guest that enables SCIF interrupts
   *without* programming IPRC now gets nothing where it previously got delivery at 3. landisk
-  programs IPRC — the boot witness shows it — and `machine_test.c` is the only other SH
-  machine in the tree, so nothing under test regresses. Recorded now rather than discovered.
+  programs IPRC -- the boot witness shows it. The other SH machines in the tree are `baresh` and
+  `testsh` (both in machine_test.c), `dreamcast` and `hpcsh`, all selecting an SH7750; whether their
+  guests program IPRC before enabling SCIF interrupts is not established here, so the no-regression
+  claim covers landisk and the regression battery, not every SH machine. [#561] Recorded now rather than discovered.
 * **The rescan lift is not behaviourally verbatim.** `sh_cpu_interrupt_assert()` selects with
   `int_to_assert == 0 || prio > int_level`; the rescan selects with `prio > int_level` from a
   zeroed base, ascending index. Running it on every IPR write therefore RE-ARBITRATES, and
@@ -20419,7 +20467,7 @@ non-fatal warnings, mostly in generated dyntrans code). Guests boot across **5 C
 | `file/file_macho.c` | #16, #19, #56, #57, #58 | (earlier: symbol/load-command bounds) **#56** bound LC_SYMTAB `nsyms`/`strsize`/`symoff`/`stroff` against the file size before `malloc`/`calloc`/`fread` (was file-controlled → huge/overflowed sizes); corrected the load-command loop bound to `header_size + sizeofcmds`; **#57** replace the blanket `pos+256` load-command guard with **per-command bounds** (it rejected a valid compact `LC_UNIXTHREAD`); **#58** bound the LC_SYMTAB *products* `symoff+12*nsyms` / `stroff+strsize` (the #56 individual-value checks still let a crafted symtab hard-`exit`/OOM); **#62** 256 MB alloc cap (sparse-file OOM); **#63** require `cmd_len >= need`; **#64** size_t alloc/read arithmetic | 
 | `cpus/generate_arm_r.c` | #13 | `1<<31` shift UB (build-time generator) |
 | `cpus/cpu_dyntrans.c`, `cpu_mips_instr.c`, `cpu_sh_instr.c` | #25, #29, #41, #47 | `1<<(index&31)` + `1<<31` shift UBs; **[P1] dyntrans global-buffer-overflow root-caused & fixed** — a *branch in a branch's delay slot* wiped `EXCEPTION_IN_DELAY_SLOT`, so the outer branch over-advanced `next_ic` past `nothing_call`; detect the nested case at branch entry. **#47** the same bug existed in the **SH4** core (`bt/s`/`bf/s`, found by this session's completeness review, newly reproduced on `testsh`) — same fix applied. Verified: MIPS + SH reproducers no-crash; pmax/arc/sgimips + NetBSD/landisk(SH4) boot (holder removed) |
-| `include/misc.h`, `cpus/cpu_{alpha,arm,arm_instr,i960,i960_instr}.c` | #45, #62 | `READ_WORD_LE/BE` macros (uint32_t-cast instruction-word assembly); 9 disassembler fetch sites converted; **#62** added the shared `LOADER_MAX_TABLE_BYTES` (256 MB) loader-allocation cap |
+| `include/misc.h`, `cpus/cpu_{alpha,arm,arm_instr,i960,i960_instr}.c` | #45, #62 | `READ_WORD_LE/BE` macros (uint32_t-cast instruction-word assembly); 9 instruction-word fetch sites converted -- 5 in disassemblers (cpu_alpha.c, cpu_arm.c x2, cpu_i960.c x2) and 4 in the execution translators' `X(to_be_translated)` (cpu_arm_instr.c x2, cpu_i960_instr.c x2) [#561]; **#62** added the shared `LOADER_MAX_TABLE_BYTES` (256 MB) loader-allocation cap |
 | `cpus/cpu_m88k.c`, `cpu_m88k_instr.c`, `cpu_ppc_instr.c`, `cpu_sh_instr.c` | #36–40, 46 | M88K/PPC/SH decode/execute **signed-shift, shift-by-32 (rotate sh=0), and negative-shift UBs** (6th/7th audit mutation fuzz) — casts/guards; **#46** M88K `ext` sign-extend via unsigned masks + PPC CR-compare `c<<bf_shift` cast (codex replay, 103 findings → 0) |
 | `devices/dev_gc.c`, `dev_bebox.c`, `dev_cpc700.c`, `dev_footbridge.c`, `dev_i80321.c`, `dev_irqc.c`, `dev_kn02.c`, `dev_kn02ba.c`, `dev_kn230.c`, `dev_sgi_ip32.c`, `dev_luna88k.c` | #24, #25 | `1<<i` / `byte<<24` interrupt-controller & setup shift UBs → `(uint32_t)` |
 | `include/thirdparty/bootblock.h`, `dp83932reg.h`, `pcireg.h`, `sgi_arcbios.h` | #11 | removed `#define __attribute__(x)` neutering (Debian root-cause for the link errors) |
@@ -20528,8 +20576,9 @@ verbosity, never crash). No bounds check removed.
 
 Rate-limited with `static` first-N guards (GXemul is single-threaded) so a hostile ROM cannot flood. `#95`
 (generic memory_rw zero-fill) left unwarned by consensus (would flood benign boots). Regression: gcc 0/0 +
-**clang 21 0/0 in all changed files**; full sweep + pmax deep (osiop/disk/net) + arc clean, 0 spurious
-warnings in normal operation.
+**clang 21 0/0 in all changed files**; full sweep + pmax deep (disk/net -- the pmax machines attach ASC or SII, never osiop, so the
+#114/#118 osiop guards were not exercised by that run) + arc clean, 0 spurious warnings in normal
+operation. [#561]
 
 ## #120–#129 — feature round (TODO items) + SuperH alignment
 Additive capability work drawn from upstream's `doc/TODO.html`, each regression‑gated:
@@ -21192,7 +21241,7 @@ Verified: build **0/0** both trees (223 pmax / 224 arc objects); **pmax 15/15 + 
 
 ## Forty-third round (#274, #275) — LANCE: descriptors held forever instead of dropped or failed
 Both corrections are in `devices/dev_le.c`, which is **not** one of the five divergent files, so the two trees stay byte-identical. This round finishes what **#262** (receive) and **#199** (transmit) started: in five places the emulated Am7990 reached a descriptor it could not use and simply **returned** — OWN left set, the ring pointer not advanced — so nothing was delivered, nothing was dropped, no interrupt was raised, and a well-formed descriptor queued behind the bad one was never reached. Everything below was **measured on the committed build first**, in the cold debugger: `dev_le_access()` ends every access with `dev_le_tick()`, so one guest CSR0 load pumps the engine and no boot is needed.
-- **#274** `devices/dev_le.c` (both trees): **receive.** A malformed receive descriptor — rmd2 without the `'1111'` mark, or a byte count outside the 12…1900 window the model accepts — made `le_rx()` `return 0` with the inbound frame still latched in `d->rx_packet`. Measured: the frame was **not delivered, not dropped, no RINT, no MISS**, and repairing the mark alone later delivered **the same frame** — held, not lost — while the bad-count arm re-emitted its `VERBOSITY_WARNING` on **every tick** for as long as the descriptor stayed bad. The **#262** lookahead that protects the chained case tested only the next descriptor's `OWN` bit, so a frame could still be walked into an OWNed-but-malformed descriptor mid-chain. The lookahead now requires the next descriptor to be **usable**, not merely chip-owned: `OWN` set **and** the mark **and** the count in range. That test and the one at the top of the loop now go through a single new static predicate, `le_rx_descr_ok()`, so their bounds cannot drift apart — a `<`/`<=` seam between the two is exactly where a frame could have slipped through. With the lookahead extended, the malformed arm at the top of the loop is reachable **only for the first buffer of a frame** (nothing changes under the engine within one call, and no exit leaves a frame in progress across calls any more), so it now mirrors the exhaustion path immediately above it: `CSR0.MISS`, release the frame, `return 1`. The descriptor is deliberately **not** written back and **no** `ERR|BUFF` is stamped — nothing was filled in, and the guest never updated rmd3, so consuming a descriptor we have just declared malformed would write status into a misconfigured ring entry. The `return 1` is load-bearing rather than tidy: returning 0 after freeing the frame lets `le_register_fix()` fall through and re-poll `net_ethernet_rx_avail()`, which **imports** packets on every call — the livelock trap that motivated #262's drain fix. The two arms collapse into one warning that names the descriptor and keeps the old `buflen = %i` text, and it is now emitted at most **once per dropped frame** instead of once per tick. Honest scope: the Am7990 manual defines **no** status for a descriptor that violates the `'1111'` programming rule, so reporting it as a missed packet is **hardened emulator policy, not proven silicon**.
+- **#274** `devices/dev_le.c` (both trees): **receive.** A malformed receive descriptor — rmd2 without the `'1111'` mark, or a byte count outside the 12…1900 window the model accepts — made `le_rx()` `return 0` with the inbound frame still latched in `d->rx_packet`. Measured: the frame was **not delivered, not dropped, no RINT, no MISS**, and repairing the mark alone later delivered **the same frame** — held, not lost — while the bad-count arm re-emitted its `VERBOSITY_WARNING` on **every tick** for as long as the descriptor stayed bad. The **#262** lookahead that protects the chained case tested only the next descriptor's `OWN` bit, so a frame could still be walked into an OWNed-but-malformed descriptor mid-chain. The lookahead now requires the next descriptor to be **usable**, not merely chip-owned: `OWN` set **and** the mark **and** the count in range. That test and the one at the top of the loop now go through a single new static predicate, `le_rx_descr_ok()`, so their bounds cannot drift apart — a `<`/`<=` seam between the two is exactly where a frame could have slipped through. With the lookahead extended, the malformed arm at the top of the loop is reachable **only for the first buffer of a frame within one call** (nothing changes under the engine within one call, and only the full-ring exit -- `return 0` at dev_le.c:663-667, after which `le_register_fix()` keeps the frame, :767-770 -- can leave a frame in progress across calls; that needs receive storage overlapping the descriptor ring, and a later call reaching this arm mid-frame drops the partial frame with MISS) [#561], so it now mirrors the exhaustion path immediately above it: `CSR0.MISS`, release the frame, `return 1`. The descriptor is deliberately **not** written back and **no** `ERR|BUFF` is stamped — nothing was filled in, and the guest never updated rmd3, so consuming a descriptor we have just declared malformed would write status into a misconfigured ring entry. The `return 1` is load-bearing rather than tidy: returning 0 after freeing the frame lets `le_register_fix()` fall through and re-poll `net_ethernet_rx_avail()`, which **imports** packets on every call — the livelock trap that motivated #262's drain fix. The two arms collapse into one warning that names the descriptor and keeps the old `buflen = %i` text, and it is now emitted at most **once per dropped frame** instead of once per tick. Honest scope: the Am7990 manual defines **no** status for a descriptor that violates the `'1111'` programming rule, so reporting it as a missed packet is **hardened emulator policy, not proven silicon**.
 - **#275** `devices/dev_le.c` (both trees): **transmit.** Four sites left a descriptor chip-owned forever. All four were measured on a two-entry ring with a well-formed **canary** behind the bad descriptor, which makes "did `txp` advance" directly observable: **(a)** a bad `'1111'` mark (`return`, and **totally silent**), **(b)** a byte count out of range (`return`, plus `le tx: buflen = N` **every tick**), **(c)** our own **#199** 64 KB aggregate cap (frees the host buffer, but never clears OWN and never writes back) and **(d)** an idle descriptor with `OWN` set and `STP` clear. In each case OWN stayed set, `d->txp` never advanced, the canary was never transmitted, `CSR0.TINT` was never raised and the guest waited forever; repairing tmd2 released both descriptors at once, proving the engine had been parked on the bad one. The "warns forever" long attributed to **(c)** is actually emitted by **(d)** on the following tick — the cap clears `tx_packet` while the descriptor still has `stp == 0` — and free-running it produced **82,264 warnings in 3.01 s (27,345 lines/second, 3.2 MB)** with `CSR0.TINT == 0`, a fixed point that never tells the guest anything.
   (a), (b) and (c) now **consume the descriptor with an error**, through one new helper `le_tx_abort()`: `ERR` in tmd1, `TBUFF|UFLO` in tmd3, the descriptor written back, `CSR0.TINT` set, `CSR0.TXON` cleared and `txp` advanced. `LE_TBUFF` is `0x8000`, **numerically identical to `LE_OWN`**; it belongs in tmd3 **only**, and the comment says so, because in tmd1 it would put OWN straight back and turn the hold into an own-forever. Clearing TXON is what the manual prescribes for this error class (`TMD3` bit 15: "BUFF error disables the transmitter (CSR0 = TXON = 0)") and it genuinely stops the engine here, since `le_register_fix()` gates the `le_tx()` call on `TXON` — which is also why the abort `return`s instead of walking on.
   **(d) gets a different fix, and the datasheet dictates it:** clear OWN, write tmd1 back, set TINT, advance — and set **no error bit at all**. The decision also moves **ahead** of the tmd2 validation, because while polling the chip reads TMD1 only and does not fetch the byte count from TMD2 until it has found OWN+STP; validating TMD2 on a descriptor hardware has not consumed is not hardware behaviour. Its message drops to `VERBOSITY_DEBUG`: skipping a bad-format entry is *defined* chip behaviour, not an error, and the guest is told through TINT. Neither NetBSD nor OpenBSD ever creates this condition (both stamp `OWN|STP|ENP` on every TX descriptor, and neither does TX data chaining), so **(d) is hardening, not a bug with a live victim**; (a) has no documented silicon behaviour either, so its consume-with-error is likewise **policy**.
@@ -22347,9 +22396,10 @@ with a real mutation as the negative control.
   runtime trigger needs a Dreamcast guest. NB: `audit-results-20260627_current-review/`
   holds **pre-fix** snapshots whose recorded outputs predate these fixes.
 - **#67 (perf, user-approved):** compiles 0/0 and the loader regression set is unchanged;
-  the alt-VRAM render path needs a Dreamcast guest to exercise at runtime. Behavior-wise it
-  marks the same dirty line range except for writes straddling the visible-FB edge (a few
-  extra lines, redrawn identically). **#67 refined** to per-bank min/max so a write touching
+  the alt-VRAM render path needs a Dreamcast guest to exercise at runtime. Behaviour-wise it
+  marks the same dirty line range for spans inside the visible frame; a span straddling the
+  visible-FB start is NOT redrawn identically (see pvrdirtyregion) -- this said 'a few extra lines,
+  redrawn identically' until the Astra retro-review. [#561] **#67 refined** to per-bank min/max so a write touching
   both 4 MB VRAM banks no longer dirties the gap between them.
 - **#68 (PVR stale Z-buffer, external proposal):** compiles 0/0; the inverted
   `pvr_geometry_updated()` condition is fixed so a guest resolution change frees the
@@ -23766,9 +23816,10 @@ than faulting the guest.
 ### #309 — an unimplemented MIPS REGIMM sub-opcode halted instead of raising RI
 
 REGIMM's `default` arm ran `fatal()` and fell into `goto bad`. The implemented
-sub-opcodes are the branches, the trap-immediates, the branch-and-links and three
-CPU-specific ones; everything else — rt = 4–7, 0xd, 0xf, 0x14–0x17, 0x1a–0x1e —
-stopped the machine. Real silicon raises a Reserved Instruction exception, which
+sub-opcodes are the eight conditional branches and branch-and-links (rt 0-3, 0x10-0x13)
+and the six trap-immediates (rt 8-0xc, 0xe); everything else -- rt 4-7, 0xd, 0xf, 0x14-0x1f,
+which includes MTSAB (0x18), MTSAH (0x19) and SYNCI (0x1f), none of which has a decoder
+case -- stopped the machine. [#561] Real silicon raises a Reserved Instruction exception, which
 is what the guest kernel is written to handle.
 
 Reproduced on both rigs with rt = 0x15, and again with 0x1e; BGEZ ran throughout
@@ -26582,9 +26633,13 @@ that name them.
 
 **grok attacked its own pass-1 advice, and was right.** It advised `SEGMENT ≡ ALL` on pass 1,
 then argued on pass 2 that the shipped comment's "the cost is performance, never correctness"
-is overstated. Checked, not judged: `memory_m88k.c:356-365` writes `PG_U` (and `PG_M` on a write)
-back into the page descriptor **in emulated memory** on every walk, while a PATC hit sets those
-bits only in the PATC copy (`:348-350`). So over-invalidation can set a U bit the guest cleared.
+is overstated. Checked, not judged: `memory_m88k.c:344-366` writes `PG_U` (and `PG_M` on a write)
+back into the page descriptor **in emulated memory** after every SUCCESSFUL table walk when
+`FLAG_NOEXCEPTIONS` is absent (a walk that faults does not update the guest descriptor); a PATC
+READ hit sets `PG_U` only in the PATC copy (`:228-229`) when `FLAG_NOEXCEPTIONS` is absent, but a
+PATC WRITE hit on an entry whose `PG_M` is clear ALSO updates the guest descriptor when
+`FLAG_NOEXCEPTIONS` is absent, through `m8820x_mark_page_as_modified()` (`:217-224`; it ORs
+`PG_M|PG_U` into the descriptor at `:86` and writes it back at `:93`). [#561] So over-invalidation can set a U bit the guest cleared.
 The direction is still the safe one — under-invalidation is what leaves a stale translation — but
 the cost is not purely performance. The comment is corrected; the tighter 4 MB mapping
 (`(sar ^ vaddr) & 0xffc00000`, the walker's own segment size, no manual needed) is filed as

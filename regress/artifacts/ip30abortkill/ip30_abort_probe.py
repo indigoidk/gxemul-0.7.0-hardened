@@ -184,7 +184,10 @@ def row(name, got, want, note=""):
 
 
 def session(cmds, settle=2.0, spin=2.5):
-    """One fresh process per scored row.  Returns (transcript, alive)."""
+    """One fresh process per SESSION -- most sessions score one row, but
+    `tick 50`/`tick 50 txt` and `xbit isr`/`xbit tick` each score two rows from
+    one process, by design (the cross-bit mutant needs both announce classes in
+    one device lifetime) (#561).  Returns (transcript, alive)."""
     pid, fd = pty.fork()
     if pid == 0:
         os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip30", "-M", "64",

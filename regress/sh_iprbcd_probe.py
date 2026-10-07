@@ -290,7 +290,7 @@ row("deassert", run_deliver(0x00f0, 0, deassert_scif()), "refused",
     "assert at 15 then clear SCSSR2, IMASK=0")
 
 #  ---- the two rows NO BEHAVIOURAL TEST CAN REPLACE ---------------------------
-#  *** MEASURED: dropping the IPRB/IPRC blocks, and dropping the three RTC lines,
+#  *** MEASURED: dropping the RTC and IPRB blocks (#561), and dropping the three RTC lines,
 #  each score a CLEAN 10/10 (10-row era) against every row above. ***  Not because those rows
 #  are weak -- because WDT, REF, SCI, GPIO, DMAC, H-UDI and RTC have no
 #  INTERRUPT_ASSERT anywhere in this tree.  Nothing a guest can DO depends on
@@ -298,8 +298,9 @@ row("deassert", run_deliver(0x00f0, 0, deassert_scif()), "refused",
 #
 #  #458 exposes int_prio_and_pending[] through the settings interface precisely
 #  so a row can ask what a source's priority WOULD be, without needing anything
-#  to raise it.  These two rows are the reason that exposure exists; without them
-#  it is an unused convenience, and with them the escape class is closed.
+#  to raise it.  These two rows read that exposure for the IPRB and IPRA sources;
+#  six more read it too (iprd hold, iprd ctl, scif eri/rxi/bri/txi), and together
+#  they close the escape class.  (#561)
 SH4_IPRB = 0xffd00008
 
 
@@ -323,7 +324,8 @@ def prio_of(t, slot):
 
 
 #  WDT lives in IPRB[15:12].  Nothing asserts it, so this is unobservable any
-#  other way -- and it is the sole killer of the drop-the-IPRB/IPRC mutant.
+#  other way.  This WDT row kills the RTC-and-IPRB deletion (`m_iprconly`); the
+#  RTC row also kills it (#561).
 t_b, alive_b = session(write_ipr_then_read(SH4_IPRB, 0xa000, 0x560), spin=1.0)
 row("iprb wdt", prio_of(t_b, 0x560) if alive_b else "died", "0xa",
     "IPRB[15:12]=10 -> WDT slot 0x560")
