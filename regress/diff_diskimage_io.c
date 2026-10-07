@@ -1557,8 +1557,14 @@ static void section_pass2_gaps(void)
 	check("[PROOF] READ at a NEGATIVE offset is refused", res, 0);
 	check("[PROOF] ... and still zero-fills the caller's buffer",
 	    buf[0] == 0 && buf[511] == 0, 1);
+	/*  The WRITE row is a CONTROL, not a proof of the `offset < 0'
+	    guard: on the fseeko path a negative seek fails and the write is
+	    refused anyway (diskimage.c:1256-1260 -> :1653-1657).  Only the
+	    READ row above reds when the guard is dropped (a short read
+	    returns 1, :1660).  On HACK_FSEEKO builds (:76-95) the write row
+	    does red (#560).  */
 	res = diskimage__internal_access(&d, 1, -4096, buf, 512);
-	check("[PROOF] WRITE at a NEGATIVE offset is refused", res, 0);
+	check("[CONTROL] WRITE at a NEGATIVE offset is refused", res, 0);
 	fclose(d.f);
 
 	/*

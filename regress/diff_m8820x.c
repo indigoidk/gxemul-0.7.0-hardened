@@ -499,7 +499,8 @@ int main(void)
 	fresh();
 	for (off = 0x800; off < 0x8c0; off += 4)
 		access_word(off, MEM_READ, 0, NULL);
-	check_u("B1 sixteen unhandled reads complain exactly once", fatal_calls, 1);
+	check_u("B1 48 reads, including 47 unhandled offsets, complain exactly once",
+	    fatal_calls, 1);	/*  (#560)  */
 	check("B2   ...and the rest are still visible under -v",
 	    debug_calls > 0 ? "yes" : "no", "yes");
 

@@ -154,7 +154,7 @@ print("--- F. the hold is BOUNDED -- a '[' must not stall the buffer forever ---
 # from the thing under test moves with it and pins nothing. 400 > the shipped 256 and is far
 # beyond the longest record ever observed (106 chars).
 body, tail, _ = feed(["[" + "x" * 400])
-check("a 400-char '[' run is released, not held (HOLD_MAX must stay sane)", tail, "")
+check("a 401-char '[' run is released, not held (HOLD_MAX must stay sane)", tail, "")  # (#560)
 check("HOLD_MAX is within the range the measurements justify",
       106 < HOLD_MAX <= 400, True)
 body, tail, _ = feed(["[ 33554432 inst", "rs; y]\n"])

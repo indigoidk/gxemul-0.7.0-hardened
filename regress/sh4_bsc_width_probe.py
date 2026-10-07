@@ -205,9 +205,9 @@ def row(name, ok, got, want):
 
 
 # ---------------------------------------------------------------- D1 / D2 / D6
-#  Write 0x89ab3ffd as ONE 4-byte store, then read it back 16-bit.  On a
+#  Write 0x89abc003 as ONE 4-byte store, then read it back 16-bit.  On a
 #  little-endian guest the register's own two bytes are idata[15:0], so the
-#  device must hold 0x3ffd & 0x3ffd.  Pre-fix this arm KILLS THE HOST.
+#  device must hold 0xc003 & 0x3ffd (#560).  Pre-fix this arm KILLS THE HOST.
 #  *** THE VALUE IS 0xc003 AND THAT IS THE WHOLE POINT OF THIS ROW. ***  It was 0x3ffd,
 #  and 0x3ffd & 0x3ffd == 0x3ffd -- so a row NAMED "masked" could not see the mask, and
 #  deleting `& 0x3ffd` passed 9/9.  0xc003 & 0x3ffd == 0x0001, so the masked and unmasked
@@ -219,7 +219,7 @@ buf, alive = session(
 d12 = dumped(buf)
 row("D1 4-byte write reaches BCR2 AND IS MASKED; host survives",
     alive and d12 == "01000000", "alive=%s val=%s" % (alive, d12),
-    "alive=True val=01000000 (0xc003 & 0x3ffd = 0x0001; unmasked would be 03c00000)")
+    "alive=True val=01000000 (0xc003 & 0x3ffd = 0x0001; unmasked 0xc003 sign-extends to 0xffffc003 and dumps 03c0ffff)")  # (#560)
 #  Assert the MESSAGE, not merely that one was printed: swapping the
 #  "Ignored"/"Servicing" ternary made the diagnostic state the opposite of what the code
 #  did, and passed 9/9 against a presence-only oracle.  A 4-byte access IS serviced.

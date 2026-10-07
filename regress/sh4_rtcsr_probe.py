@@ -31,8 +31,9 @@ clock-select bits too, and would leave the tick guard permanently false and any 
 READABLE BACK, so that fix design fails loudly instead of looking clean.
 
 WHAT IS NOT CLAIMED, and a seat checked each of these against the header:
-  * CMF and OVF are NEVER set by this device, on any path, and this round does not start
-    setting them -- that would invent a compare-match without an RTCNT to match against.
+  * The timer generates neither CMF nor OVF, and this round does not start generating
+    them -- that would invent a compare-match without an RTCNT to match against.  OVF is
+    guest-writable (a store of 0x04 is kept); a guest 1 written to CMF is dropped (#560).
     A guest polling CMF already waits forever with the enables CLEAR; this fix does not
     change that, it only lets a guest with them SET survive to wait.  Filed as `sh4rtcflags`.
   * RTCNT (`0xff800020`) has NO `case` in this device at all.  Filed with it.

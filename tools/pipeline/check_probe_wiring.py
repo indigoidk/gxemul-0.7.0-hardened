@@ -1562,7 +1562,7 @@ MANIFEST = {
     #  #518 lcabadval, landed with the round: the live detector (DETECTOR + dated EXEMPT below -- no
     #  gate runs an Alpha guest session, the #520 precedent) and its table-5 mutator.
     "lca_isalane_probe.py":
-        (CLASS_DETECTOR, "lcaisalane (#530): 37 rows on unmodified -E alphabook1 -- the 16-row rung-3 witness (sentinel re-pinned to 0x0bad1d8a) plus 21 detector rows for disposition B (byte for port P at (P & 3) % len on both arms; the six host-death cells, reads AND writes, rowed alive + value).  HEAD 19/37, fix 37/37 (artifacts/lcaisalane/fix530_20260914/); kill table 1 in that dir"),
+        (CLASS_DETECTOR, "lcaisalane (#530): 352 rows on unmodified -E alpha -e alphabook1, expanded from table 1's 37-row instrument; passing result LCAISALANE_RESULT=352/352 (artifacts/lcaisalane/repair6_20260916/probe_repair6_fix.out)."),  # (#560)
     "lca_badval_probe.py":
         (CLASS_DETECTOR, "lcabadval (#518): 75 rows on unmodified -E alphabook1 -- six IOC write arms that killed the host on manual-legal values, now stored by field (MASK validated) with latched announces.  Kill table 5 (artifacts/lcabadval/killtable5_20260912/): BASE 75/75, HEAD 15/75, seven mutants 74/75 each on one named row, every leg on prediction"),
     "artifacts/lcabadval/killtable5_20260912/mut518t5.py":
@@ -1715,7 +1715,7 @@ MANIFEST = {
     "artifacts/alphatbinegsel/killtable_20260910/t2/alpha_tbi_probe.frozen.py":
         (CLASS_RESEARCH, "alphatbinegsel (#520) table 2: the as-run 13-row instrument (probe_HEAD.raw 10/13, probe_BASE.raw 13/13) -- superseded when the pass-2 panel found the cast-width axis unrowed"),
     "artifacts/alphatbinegsel/killtable_20260910/t3/alpha_tbi_probe.frozen.py":
-        (CLASS_RESEARCH, "alphatbinegsel (#520) table 3: the CLOSING 15-row instrument, byte-identical to the shipped regress/alpha_tbi_probe.py -- one instrument for all eleven legs"),
+        (CLASS_RESEARCH, "alphatbinegsel (#520) table 3: the CLOSING 15-row instrument, matching the oracle logic of shipped regress/alpha_tbi_probe.py"),  # (#560)
 
     #  Kill-table drivers.  CLASS_TOOL: they mutate and score, they assert nothing about
     #  the emulator, and no gate should ever run them.
@@ -1881,12 +1881,12 @@ MANIFEST = {
     "artifacts/m88kexcdeliver/m88k_exc_probe.v16.frozen.py":
         (CLASS_RESEARCH, "m88kexcdeliver (#502) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
     "m88k_exc_probe.py":
-        (CLASS_DETECTOR, "m88kexcdeliver detector (#502): the m88k exception-delivery path, 54 fault rows + 2 controls, run by gate_m88k_rounding.sh"),
+        (CLASS_DETECTOR, "m88kexcdeliver detector (#502): the m88k exception-delivery path, 59 fault rows + 2 controls, run by gate_m88k_rounding.sh"),  # (#560)
     #  m88kexcdeliver (#502) and lunaabsentcpu (#503), 2026-09-06 evening: the pass-9..12 and pass-2
     #  additions.  One SHIPPED DETECTOR (luna_absentcpu_probe.py, gated in gate_m88k_rounding.sh);
     #  the rest are frozen instruments and one deriver, preserved beside the tables that ran them.
     "luna_absentcpu_probe.py":
-        (CLASS_DETECTOR, "lunaabsentcpu detector (#503): dev_luna88k.c reassert_interrupts(), 37 rows + liveness and device-signature controls, run by gate_m88k_rounding.sh.  Also the round's rung-3 WITNESS."),
+        (CLASS_DETECTOR, "lunaabsentcpu detector (#503): dev_luna88k.c reassert_interrupts(), 37 rows including liveness and device-signature controls, run by gate_m88k_rounding.sh.  Also the round's rung-3 WITNESS."),  # (#560)
     "artifacts/lunaabsentcpu/luna_absentcpu_probe.v8.frozen.py":
         (CLASS_RESEARCH, "lunaabsentcpu (#503): the v8 instrument (contract updated with table 6's measured members), preserved as evidence"),
     "artifacts/m88kexcdeliver/derive_cells.py":
@@ -2120,13 +2120,13 @@ MANIFEST = {
     "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
         (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),
 
-    #  #498's SHIPPING detector -- gate-wired in gate_arm.sh, 25 rows, sentinel
+    #  #498's SHIPPING detector -- gate-wired in gate_arm.sh, 30 rows (#560), sentinel
     #  OPUS498T_DONE.  CLASS_DETECTOR rather than research: the battery owes it a run.
     #  Self-contained by deliberate choice -- every committed probe in this tree rolls its
     #  own pty rather than importing the untracked _scratchpad/gxprobe.py, and following
     #  that precedent avoids making a committed file depend on one outside the repo.
     "sgi_de_width_probe.py":
-        (CLASS_DETECTOR, "#498 sgidewidth -- 25 rows, gate_arm.sh, every row from a measured mutant kill"),
+        (CLASS_DETECTOR, "#498 sgidewidth -- 30 rows, including controls, run by gate_arm.sh."),  # (#560)
 
     #  sgireunmapped #499: the SHIPPED detector.  Gate-run by gate_arm.sh -- invocation,
     #  OPUS499T_DONE sentinel check, controls by name, EVERY row named individually, and
@@ -3704,7 +3704,7 @@ def selftest(verbose=False):
 
     rg, chk = fresh()
     _st_apply(os.path.join(rg, "run.sh"), " gate_arm gate_ppc_halt", " gate_ppc_halt")
-    case("M9  dropping gate_arm from GATES unwires its 8", 1,
+    case("M9  dropping gate_arm from GATES unwires its detectors", 1,  # (#560)
          "UNWIRED DETECTOR  arm_flags_probe.py", chk, rg)
 
     rg, chk = fresh(); os.remove(os.path.join(rg, "gate_ppc.sh"))

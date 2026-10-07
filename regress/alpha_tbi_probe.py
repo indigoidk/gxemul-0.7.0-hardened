@@ -82,12 +82,12 @@ NOT ROWED, disclosed rather than left to be discovered later:
     ABSENCE. ***  a0 = 1 (ITB), 2 (DTB) and 3 (both) are ARCHITECTURALLY
     different requests; this model has ONE unified translation cache and
     services all three identically, through one arm with identical arguments.
-    So no row here can observe the split -- and, worse, "bnd lo" and "bnd mid"
-    would go RED ON A CORRECT IMPLEMENTATION of it: each flushes with one
-    selector and observes with an ordinary DATA load, so a real ITB-only flush
-    would leave the observing load reading the stale value.  A future round
-    implementing the split MUST re-pin these two oracles FIRST and measure them
-    red before changing the code, per the oracle-correction rule.  Recorded now
+    So no row here can observe the split -- and, worse, "bnd lo" (a0 = 1,
+    ITB) would go RED ON A CORRECT IMPLEMENTATION of it: it observes X with an
+    ordinary DATA load, so a real ITB-only flush leaves that load reading the
+    stale value.  "bnd mid" (a0 = 2, DTB) stays green.  A future round
+    implementing the split MUST re-pin "bnd lo" FIRST and measure it red
+    before changing the code, per the oracle-correction rule (#560).  Recorded now
     because found later this costs the whole re-pin-first dance.
 
 FIVE ROWS CARRY NO KILL AND ARE NOT MEANT TO.  "live", "tbia fill",

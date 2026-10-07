@@ -2714,8 +2714,9 @@
 > silent-success; Jazz `LB_IE` / dual-pending IRQ; ARC partition signed-`*512`; TCP-debug over-read; NE2000 TX
 > log-flood.
 > **New "not changed" (documented):** the MIPS `add/addi/sub` Integer-Overflow *trap* (`cpu_mips_instr.c`) —
-> defined 2's-complement wrap in practice; a real trap is the hottest instruction path + boot-regression risk,
-> so left per OB-24.
+> all six handlers contain overflow detection. The ADD/ADDI/DADD/DADDI
+> predicates are correct when their handlers execute; SUB/DSUB predicates fail for a minimum signed subtrahend.
+> Zero-destination decoding separately suppresses these handlers and their overflow exceptions. [#560]
 
 > ## 2026-07-10 — Cross-model re-review (Codex 5.6-Sol-Ultra + Fable panel): #182–#187 applied; deferred candidates
 > A full-tree adversarial re-review (Codex `gpt-5.6-sol`/ultra, 17 findings, + a 4-reviewer Fable panel, each
@@ -3621,10 +3622,15 @@ corruption without a clear host-OOB path.
 > `wb_addr` cannot be carried over: it exists only under `!defined(A__P) || defined(A__W)`, and
 > the plain offset-addressing word load has neither, so the rotation needs its own capture.
 >
-> **Version gating was rejected on a dominance argument, not a preference**, and the reasoning
-> should survive: rotation is correct for ARMv3/v4/v5 and for v6+ with `U == 0`, and where v6+
-> with `U == 1` wants a true unaligned access, masking and rotating are wrong EQUALLY — so
-> unconditional rotation is never worse than what it replaced, in any combination. Gating would
+> **Version gating was rejected.**  [#560: this said "on a dominance argument, not a preference, and the reasoning should
+> survive"; dominance fails for v6+ with `U == 1`, as the text below says, and the choice rests on the `U == 0` cases
+> and on gating being unsound.] rotation is the architected result for ARMv3/v4/v5 and for v6+
+> with `U == 0`, when alignment checking is off (`A == 0`). With `A == 1` an alignment Data Abort is owed,
+> and neither form raises it (A is enabled at reset and never enforced). For v6+ with `U == 1` the
+> architecture wants a true unaligned access, which neither masking nor masking-plus-rotation implements.
+> Each returns the required word only by coincidence of the data, and on different data, so rotation is
+> not 'never worse' there. The unconditional choice rests on the `U == 0` cases and on gating being
+> unsound. [#560] Gating would
 > also be unsound: there is no architecture level in the CPU type table (its own header says
 > "TODO: Include ARM level" and "Most of these are bogus"), deriving one from the ID register
 > misclassifies one part as ARMv6 — wrong in the direction that changes behaviour — and no
@@ -20178,7 +20184,8 @@ because a packet-fed seat cannot open the file.  It was the sharpest mutant of a
 ### `pcc2c040returnmutant` (MED, coverage/(d)-floor) -- filed 2026-09-17 per the LATE-DISSENT rule
 
 **THREE SEATS INDEPENDENTLY RE-FOUND A GAP THE SHIPPED CODE ALREADY ADMITS IN A COMMENT, AND NO
-QUEUE ITEM CARRIED IT.**  `src/devices/dev_pcc2.c` says, in product code:
+QUEUE ITEM CARRIED IT.**  *[#560: as filed; superseded by the DISPOSITION paragraph below -- the mutant had
+already been built and killed, so this was not an open gap.]*  `src/devices/dev_pcc2.c` says, in product code:
 
     `assert = 0' -> `return' at THIS line is a one-token mutant every shipped row passes.
 
@@ -20194,8 +20201,11 @@ form.  This is the CONTROL-FLOW form**, and the two fail at different places -- 
 the suppression, `return` additionally loses the deassert.  *Never amend shipped code under a closed
 round's number.*
 
-**DISPOSITION 3 (file as a new item), NOT disposition 2, and the distinction is honest rather than
-convenient: NOBODY HAS MEASURED IT.**  minimax, deepseek and kimi are all PACKET-FED -- they cannot
+**DISPOSITION 3 (file as a new item) was chosen on the belief that NOBODY HAD MEASURED IT, and that
+belief was false:** the `return' variant had already been built and KILLED, 9/10 by `c040 noassert'
+(killtable_20260908/M_return.raw, #512 table 2) and 14/16 on the repaired probe
+(ctlq_20260909/repaired_M_return.raw). The seats' prediction is a re-derivation of a measured, killed
+mutant, not an open gap. [#560]  minimax, deepseek and kimi are all PACKET-FED -- they cannot
 build -- and grok read rather than ran.  So this is a PREDICTION from four independent readers plus
 the commit's own comment.  A measured escape would make it L2.
 
@@ -20206,11 +20216,14 @@ the commit's own comment.  A measured escape would make it L2.
 > deassertion happens when C040 is set, this mutant is not pinned.  **This is the highest-yield Q2
 > finding in the brief.**"*
 
-**WHAT IT OWES:** one row whose oracle observes DEASSERTION (not merely "no assert"), then the
+**WHAT IT OWED, AS FILED** *[#560: superseded -- `M_return` was already built and killed (above), so no
+measurement is owed; whether a dedicated DEASSERTION-oracle row is still wanted is this row's own question]*:
+one row whose oracle observes DEASSERTION (not merely "no assert"), then the
 mutant built and scored.  If it escapes, L2 against the composite.
 
-*The records lesson is the one worth carrying: **a gap disclosed in a CODE COMMENT is invisible to
-the queue.**  Clause (e) makes a disclosed hole legitimate, but disclosure has to land where the
+*[#560: as written when filed; the "gap" here was already measured and killed, so the CODE COMMENT was the stale
+record, not an undetected hole.]  The records lesson is the one worth carrying: **a gap disclosed in a CODE COMMENT
+is invisible to the queue.**  Clause (e) makes a disclosed hole legitimate, but disclosure has to land where the
 queue can see it -- the row closed, the comment stayed, and four readers had to re-derive it.*
 
 
@@ -20296,7 +20309,8 @@ on -- which was right for that round.  **But no queue item carries them, so the 
 only in a code comment.**
 
 > **THAT IS THE SECOND INSTANCE TODAY OF A GAP DISCLOSED IN PRODUCT CODE AND INVISIBLE TO THE
-> QUEUE** (the first being `pcc2c040returnmutant`).  Clause (e) makes a disclosed hole legitimate --
+> QUEUE** (the first being `pcc2c040returnmutant` -- *[#560: which turned out not to be a gap at all: its mutant had
+> already been measured and killed; there the stale record was the code comment]*).  Clause (e) makes a disclosed hole legitimate --
 > but disclosure has to land where the queue can see it, or four readers re-derive it later.
 
 ## WHAT IT OWES
@@ -24400,3 +24414,33 @@ eight Astra checks of #558's drafts that had no ledger entry (now one `codex` en
 (both readings) -- the packet cut that ledger note mid-sentence; the committed ledger is valid.  That is a defect of
 the packet generator, not of #558, and it is recorded here so the next packet built that way is fixed first.  No
 row's state changes.
+
+### #560 -- 55 ruled record and harness corrections applied (records only; 2026-10-06)
+
+Rulings at `regress/artifacts/recordfix_20261002/adjudication_20261006/ADJ_FINAL.md` (36 record places) and `ADJ_HREC_FINAL.md` (27 harness keys plus one comment found by
+grok); the edits are `EDITS_560.json`.  Applied: 55 in 18 files.  HELD (20) -- the never-commit
+files, a file carrying the peer session's uncommitted work, `regress/diff_ieee_store.c` (no identity guard, which
+precommit section E requires of a touched differential), and every `src/` comment, which owes `est/` byte-identity
+and build-tree propagation and so is its own round:
+  - `rrec02/place14 devsgire:F7` (src/devices/dev_sgi_re.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec03/place22 devpcc2:F5` (src/devices/dev_pcc2.c): carries the peer session's uncommitted work
+  - `rrec03/place27 devle:F5` (src/devices/dev_le.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec06/place48 cpuarminstrloadstore:F7` (src/cpus/cpu_arm_instr_loadstore.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place54 devfootbridge:F7` (src/devices/dev_footbridge.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place55 devfootbridge:F7` (src/devices/dev_footbridge.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place58 memoryrw:F4` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place59 memoryrw:F5 (source comment)` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place62 memoryrw:F7` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place63 memoryrw:F8` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place66 netip:F5` (src/net/net_ip.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place68 net:F1` (src/net/net.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `hrec 2 hbundle_regress15:F7` (regress/ppc_rldicl_probe.py): on the owner's never-commit list
+  - `hrec 9 hbundle_tools1:F5` (tools/panel.sh): on the owner's never-commit list
+  - `hrec 10 hbundle_tools1:F6` (tools/panel.sh): on the owner's never-commit list
+  - `hrec 19a hdiffieeestore:F6 (header)` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec 19b hdiffieeestore:F6 (:476)` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec 19c hdiffieeestore:F6 (:490)` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec 20 hdiffieeestore:F7` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec extra diff_ieee_store.c:296-301` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+Still owed after this: the HELD edits, and the record places whose readings were FITS/UNSETTLED only, which are being
+re-read with packets that inline the cited lines.

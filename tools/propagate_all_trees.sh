@@ -6,12 +6,12 @@
 #        /mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/propagate_all_trees.sh \
 #        src/devices/dev_wdc.c
 #
-#  *** THERE ARE FOUR TREES AND THE GATE ENFORCES THREE.  THAT IS WHY THIS EXISTS. ***
+#  *** THERE ARE FOUR TREES.  precommit_check.sh compares est/ in section A and
+#  build/, build-asan/ and -- when //wsl.localhost is reachable -- WSL
+#  /tmp/gxsec-build in section B; source cmp only, no binary-freshness check
+#  (#560). ***
 #
-#  `precommit_check.sh` section B compares `build/` and `build-asan/` against SEC
-#  because they sit under the Windows project root and it can walk them.
-#  `/tmp/gxsec-build` -- the WSL arc tree -- lives in the WSL filesystem, which the
-#  Windows-side checker never sees.  On 2026-08-30 it was found holding a PRE-#494
+#  On 2026-08-30 `/tmp/gxsec-build` -- the WSL arc tree -- was found holding a PRE-#494
 #  `dev_wdc.c` while all three visible trees carried the fix, by a MEASURING SEAT that
 #  cmp'd its clone's donor before trusting it.  Filed as `novpadfourth`.
 #

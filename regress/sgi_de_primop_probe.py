@@ -635,9 +635,9 @@ t, alive, how = session(store(A, RE + 0x000, val="0x5a")       # TLBA_LEN  1<<0
 #  One extra draw closes it: with the latch working this session still announces
 #  ONCE, and under any foreign-bit bypass it announces TWICE.
 row("xlatch all", t.count(declined("0x02000000")), 1,
-    "decline fires with ALL NINE other latch bits set -- closes the alias space")
+    "decline fires with latch bits 0-8 set -- closes bits 0-8 alias space (bits 10-12 unset at HEAD)")  # (#560)
 row("xlatch alliv", printed(t, "v0") if alive else "died", "0x0",
-    "...and the guest RUNS ON through the eleven-access session")
+    "...and the guest RUNS ON through the twelve-access session")  # (#560)
 
 #  *** AND THE ROW ABOVE ASSERTS A PRECONDITION THAT NOTHING VERIFIED.  That is
 #  how its first version shipped green while touching none of the bits it named. ***

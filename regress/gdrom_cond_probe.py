@@ -350,7 +350,7 @@ print("%-14s %-12s %-12s %-46s %s" % ("row", "got", "want", "note", ""))
 A = Addr(CODE)
 t, alive, how = session(["put w 0x8c001800, 0x%08x" % LIVE] + load32(0x8c001800, A))
 row("live", printed(t, "r2"), "0x%x" % LIVE,
-    "LIVENESS: guest store then guest load, through RAM")
+    "LIVENESS: debugger put w then guest load, through RAM")  # (#560)
 
 #  *** COPIED VERBATIM FROM THE WITNESS, NOT RE-DERIVED, AND THE FIRST VERSION OF THIS ROW
 #  WAS WRITTEN FROM MEMORY AND WAS WRONG. ***  It read `load16(0xa4000150)`; the real row is

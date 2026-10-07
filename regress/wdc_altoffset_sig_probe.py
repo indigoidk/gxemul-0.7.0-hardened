@@ -256,7 +256,7 @@ out()
 out("  m3 escapes the 18-row main detector at 36 of 36 row predictions.  If its D")
 out("  reads 14/eb while the fix leg's reads 55/66, then m3 is NOT an equivalent mutant:")
 out("  it is a real escape of a real, guest-observable consequence, and the shipped")
-out("  detector is blind to it because its only two defect rows observe DRQ and the ring.")
+out("  detector is blind to it because its four defect rows (P2 s4/s5, P4 t5/t6) observe DRQ and the ring.")  # (#560)
 out("ALTOFF_SIG_DONE")
 
 with open(os.path.join(OUTDIR, "TABLE_C.txt"), "w") as f:

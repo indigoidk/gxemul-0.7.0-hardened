@@ -1,0 +1,23 @@
+I'll rule on the IEEE store differential from committed HEAD only, starting with the disputed row and the cited store paths.The disputed row is the S-format underflow equivalence. I'll read the committed store paths Astra cites and trace the four magnitudes through them.The four witnesses separate the two predicates. Astra's underflow term matches the bit patterns; the helper's lower bound does not. I'll record that ruling.GROKF6_ALIVE_1006
+VERDICT: ASTRA RIGHT
+
+Judged committed HEAD `96a44fe3` only. The helper's S-format biconditional is false. Astra's underflow term is the exact change-set. The helper's D-subnormal sentence is right and does not repair the S term.
+
+`new` is `ieee_store_float_value` (`regress/diff_ieee_store.c:193`, `:386`, `:415`), which calls `ieee_store_float_value_rm(..., IEEE_RM_LEGACY)` (`src/core/float_emul.c:713-715`). `old` is `store_old` (`regress/diff_ieee_store.c:100`). All four inputs are above `2^-1022`, so both sides take `FP_NORMAL` (`diff_ieee_store.c:123`, `float_emul.c:517`).
+
+Sign is stored first (`diff_ieee_store.c:113-114`, `float_emul.c:499-501`), then the magnitude is taken (`diff_ieee_store.c:124-125`, `float_emul.c:518-519`). `orig` keeps the signed input (`float_emul.c:427-428`). S bias is 127 (`diff_ieee_store.c:134`, `float_emul.c:590`). `2^-150` biases to `-23` and clamps to 0. `2^-140` biases to `-13` and clamps to 0 (`diff_ieee_store.c:135-136`, `float_emul.c:591-592`). Old then assigns `r = 0` (`diff_ieee_store.c:145-146`) and clears the sign. New keeps the sign and ORs `ieee_encode_subnormal(orig, S, LEGACY)` (`float_emul.c:663-665`). LEGACY truncates `ldexp(orig, 149)` (`float_emul.c:377`, `:380-381`) and then takes the magnitude (`float_emul.c:385-386`).
+
+| input | scaled | trunc magnitude | old | new | helper | Astra |
+|---|---|---|---|---|---|---|
+| `-2^-150` | `-0.5` | `0` | `0x00000000` | `0x80000000` | false | true |
+| `+2^-150` | `+0.5` | `0` | `0x00000000` | `0x00000000` | false | false |
+| `-2^-140` | `-512` | `0x200` | `0x00000000` | `0x80000200` | true | true |
+| `+2^-140` | `+512` | `0x200` | `0x00000000` | `0x00000200` | true | true |
+
+`trunc(-0.5)` is `-0.0`. `-0.0 < 0.0` is false, so the magnitude stays 0 and the cast ORs nothing. The sign kept at `float_emul.c:664` remains `0x80000000`. `2^-140` sits in `(2^-149, 2^-126)`. Both predicates accept it, and both signs differ.
+
+`trunc(|x| * 2^149)` is 0 exactly when `|x| < 2^-149`, and at least 1 when `|x| >= 2^-149` (`2^-149` scales to 1). Positive sub-quantum inputs agree. Negative sub-quantum inputs differ. At and above that quantum, both signs differ from old's cleared word. `|x| == 2^-126` has biased exponent 1, skips `float_emul.c:663`, and both sides emit `0x00800000` / `0x80800000`. Host subnormals stay out through `isnormal`: old returns the sign alone (`diff_ieee_store.c:148-149`), and new's subnormal arm (`float_emul.c:668-677`) scales a magnitude below `2^-1022` by `2^149` into a value below `2^-873`, which truncates to 0 and leaves the same signed zero. The `0 < abs(x)` conjunct adds no inputs once `isnormal` is present.
+
+The helper text copies `must_differ` (`diff_ieee_store.c:303-304`). The comment at `:296-301` says a sub-quantum input agrees with upstream. That is true for positive inputs only. The sweep still counts every `0 < |x| < 2^-126` difference as underflow (`diff_ieee_store.c:420`), so `-2^-150` is neither unexplained nor missed.
+
+On D, old's subnormal arm stores only the sign (`diff_ieee_store.c:148-149`, sign at bit 63 via `:109`). New ORs `ieee_encode_subnormal` (`float_emul.c:668-677`), and `ldexp` by 1074 (`float_emul.c:377`) restores the integer significand `1 .. 2^52-1`. Every D subnormal differs. `dD > 0` is the committed check (`diff_ieee_store.c:1302-1303`, `:1289-1294`).

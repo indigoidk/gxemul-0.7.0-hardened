@@ -155,7 +155,7 @@ ROWS = [
     ("site 2: ld CMMU_SCR",            False, 0x004, 0x00000000, "read of a write-only reg"),
     ("site 1: st CMMU_IDR",            True,  0x000, 0x00000001, "write to the read-only ID reg"),
     ("site 3: st CMMU_SSR",            True,  0x008, 0x00000001, "write to the status reg"),
-    ("site 4: st SCR cmd 0x34",        True,  0x004, 0x00000034, "FLUSH_SUPER_LINE: DEFINED in m8820x.h:112, unhandled"),
+    ("site 4: st SCR cmd 0x34",        True,  0x004, 0x00000034, "FLUSH_SUPER_LINE: DEFINED in m8820x.h:112, handled (#433 fold)"),  # (#560)
     ("site 4: st SCR cmd 0x24",        True,  0x004, 0x00000024, "PROBE_SUPER: DEFINED in m8820x.h:107, unhandled"),
     ("site 0: st CMMU_CTP0",           True,  0x840, 0x00000000, "cache tag port, DEFINED in m8820x.h:82"),
 ]

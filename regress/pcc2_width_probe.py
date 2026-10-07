@@ -875,7 +875,7 @@ row("ipl noig4", t.count("write to read-only PCCTWO_IPL"), 0, "a declined 4-byte
 t, alive, how = session(["put d 0x%x, 0xaab8ccdd00112244" % (PCC2 + IPL)])
 row("ipl noig8", t.count("write to read-only PCCTWO_IPL"), 0, "a declined 8-byte write never reaches the IPL print")
 t, alive, how = session(["put w 0x%x, 0xaab8ccdd" % (PCC2 + MASK)] * 2)
-row("latch samew", t.count(DECL), 1, "two 4-byte writes to MASK announce ONCE -- the latch is not keyed by width")
+row("latch samew", t.count(DECL), 1, "two 4-byte writes to MASK announce ONCE -- deduplication within width 4, not establishing cross-width latch behavior")  # (#560)
 t, alive, how = session(["put d 0x%x, 0xaab8ccdd00112244" % (PCC2 + MASK)] * 2)
 row("latch samed", t.count(DECL), 1, "two 8-byte writes to MASK announce ONCE")
 #  pass 7 (Opus seat): a value-test QUALIFIER `&& idata != 1' on the guard lets wide writes of

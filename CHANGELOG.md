@@ -1,3 +1,40 @@
+## #560 -- records: 55 ruled corrections to the project's records and harness comments (2026-10-06)
+
+* The record corrections owed by `recordowed` / `hrecordowed` (#556's census) were read by Gemini web (packet-fed),
+  then adjudicated by the main loop (Claude Opus 5.5) with read-only Opus helpers settling every flagged place against
+  the files; GPT-6 Astra at `ultra` checked every verdict (records: 1 of 36 wrong; harness: 2 of 27 wrong) and grok-4.7
+  ruled the one floating-point dispute (Astra right).  Rulings and evidence: `regress/artifacts/recordfix_20261002/adjudication_20261006/`.
+* Applied, each marked `#560`: 55 edits in 18 files -- `CHANGELOG.md` 23, `OUTSTANDING_BUGS.md` 8, `regress/alpha_tbi_probe.py` 1, `regress/diff_diskimage_io.c` 1, `regress/diff_m8820x.c` 1, `regress/gdrom_cond_probe.py` 1, `regress/m8820x_sites_probe.py` 1, `regress/pcc2_c040_probe.py` 1, `regress/pcc2_width_probe.py` 1, `regress/selftest_absorb.py` 1, `regress/sgi_de_primop_probe.py` 2, `regress/sh4_bsc_width_probe.py` 2, `regress/sh4_rtcsr_probe.py` 1, `regress/sh4_sci_probe.py` 2, `regress/wdc_altoffset_sig_probe.py` 1, `tools/pipeline/check_probe_wiring.py` 6, `tools/precommit_check.sh` 1, `tools/propagate_all_trees.sh` 1.
+* HELD, not applied here (20):
+  - `rrec02/place14 devsgire:F7` (src/devices/dev_sgi_re.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec03/place22 devpcc2:F5` (src/devices/dev_pcc2.c): carries the peer session's uncommitted work
+  - `rrec03/place27 devle:F5` (src/devices/dev_le.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec06/place48 cpuarminstrloadstore:F7` (src/cpus/cpu_arm_instr_loadstore.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place54 devfootbridge:F7` (src/devices/dev_footbridge.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place55 devfootbridge:F7` (src/devices/dev_footbridge.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place58 memoryrw:F4` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec07/place59 memoryrw:F5 (source comment)` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place62 memoryrw:F7` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place63 memoryrw:F8` (src/cpus/memory_rw.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place66 netip:F5` (src/net/net_ip.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `rrec08/place68 net:F1` (src/net/net.c): a src/ comment: owes est/ byte-identity and build-tree propagation, so it is its own round
+  - `hrec 2 hbundle_regress15:F7` (regress/ppc_rldicl_probe.py): on the owner's never-commit list
+  - `hrec 9 hbundle_tools1:F5` (tools/panel.sh): on the owner's never-commit list
+  - `hrec 10 hbundle_tools1:F6` (tools/panel.sh): on the owner's never-commit list
+  - `hrec 19a hdiffieeestore:F6 (header)` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec 19b hdiffieeestore:F6 (:476)` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec 19c hdiffieeestore:F6 (:490)` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec 20 hdiffieeestore:F7` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+  - `hrec extra diff_ieee_store.c:296-301` (regress/diff_ieee_store.c): precommit section E requires a touched diff_*.c to carry an identity guard and this one has none; adding the guard row is a harness change for its own round
+* Not edited (41): places whose readings were only FITS/UNSETTLED (being re-read with fuller packets), places ruled
+  true as placed, and sibling sentences the rulings name without replacement text -- listed in `EDITS_560.json`.
+* `regress/gate_offline.sh` on a scratch tree (HEAD exported, no `.git`): 13 of 359 FAIL both WITH #560 and on
+  bare HEAD, the failure lists identical line for line (`gate560_with560.out`, `gate560_baseline.out`) -- the scratch
+  environment's, and #560 adds none.  One edit was changed to keep a printed label `gate_offline.sh:277` matches.
+* No `src/` touched; no row state changes.  Seats: Gemini web (readings); three Opus helpers and the main loop
+  (adjudication); GPT-6 Astra (checks and the confirmation of this commit); grok (one ruling).  Fable agent seat
+  deliberately not fired (owner, 2026-10-02).
+
 ## #559 -- records: three wrong records in #558's committed text, from two Gemini-web readings (2026-10-06)
 
 * Gemini web (`gemini.google.com`, Flash, the packet-fed seat of 2026-10-02) read #558's drafts twice
@@ -5998,9 +6035,15 @@ nonzero is impossible by construction.
 **THE CHAIN CLOSES ON PASS 3.** Its zero floor breaches now carries a complete, measured denominator;
 the only material changed after it is contract TEXT, which is records, not floor-bound. No pass 4.
 
-**Two equivalents, each a RESULT with its warrant, not a gap.** M8 (`|=` -> `=` on the assert arm): the
-assert assignment runs only on the first assert, when `warned` is 0, because the stub is entered only
-on edges of the AGGREGATE `pic1->irr & ~pic1->ier`, which is 0 until the first assert -- NOT because
+**Two equivalents, each a RESULT with its warrant, not a gap.** M8 (`|=` -> `=` on the assert arm)
+measured EQUIVALENT on #516's detector, and the warrant is time-indexed: at #516 `warned` held only the
+two IRQ bits, so the first assert -- the only one that assigns -- saw `warned == 0`.  Since #518 the same
+word carries six IOC announce bits (dev_lca.c:53-60, written at :331 and :495), so an IOC announce before
+the first ISA interrupt makes `=` erase those latches: M8 is NOT equivalent at HEAD (whether #516's table
+would red on a re-run depends on row order and is not measured).  The aggregate-edge reasoning
+(`irr & ~ier`) is unchanged and still right [#560]: the first assert is the only one that assigns because
+the stub is entered only on edges of the AGGREGATE `pic1->irr & ~pic1->ier`, which is 0 until the first
+assert -- NOT because
 "nothing sets IRR but an assert", which an earlier README said and which is false (masked asserts set
 IRR without entering the stub). Three seats challenged this on pass 2 and were refuted by reading: all
 three `dev_8259.c` direct deassert sites are guarded by an aggregate-CHANGE test that cannot fire at
@@ -20355,7 +20398,7 @@ non-fatal warnings, mostly in generated dyntrans code). Guests boot across **5 C
 |------|-------------|--------------|
 | `configure` | #9 | Auto-detect & add `-fgnu89-inline` (fixes modern-glibc link errors) |
 | `devices/makeautodev.sh` | #61 | **#61** generate `autodev.c` via a PID-unique temp file + atomic `mv` (was a non-atomic append → concurrent recursive-make runs corrupted it → intermittent build failure) |
-| `core/emul.c` | #3, #4, #42, #60 | `system()` gzip → `fork`/exec (no shell injection); `tmpstr[20]→[32]`; **#42** absolute-path `gunzip` (anti-`$PATH`) + `fd != STDOUT_FILENO` close guard + `--` option-injection guard; **#60** pass the `mkstemp` fd to the child & `dup2` it instead of reopening by name (closes the same-user temp race) |
+| `core/emul.c` | #3, #4, #42, #60 | `system()` gzip → `fork`/exec (no shell injection); `tmpstr[20]→[32]`; **#42** prefer `/bin/gunzip` and `/usr/bin/gunzip`, with a PATH lookup fallback and the inherited environment retained, plus the `fd != STDOUT_FILENO` close guard and the `--` option-injection guard [#560]; **#60** pass the `mkstemp` fd to the child & `dup2` it instead of reopening by name (closes the same-user temp race) |
 | `core/misc.c` | #1, #2, #43 | `mystrlcpy`/`mystrlcat` bounded; `mymkstemp` hardened; **#43** suffix from `/dev/urandom` (unpredictable temp names) |
 | `symbol/symbol.c` | #18 | `fscanf("%s")` → `%79s` (stack-overflow) |
 | `file/file_aout.c` | #14, #17 | symbol `str_index` bounds; signed `symbsize`→`uint32_t` + file-size bound |
@@ -20481,7 +20524,7 @@ verbosity, never crash). No bounds check removed.
 | `devices/dev_osiop.c` | #118 | NULL guards in read_word/read_byte/write_byte + `osiop_hostpage_fault()` (warn-once + stop-script) + early-return in execute_scripts_instr — fixes a real host NULL-deref crash |
 | `devices/dev_osiop.c` | #114 | NULL-`xferp` data phase: quiet skip+fake-completion → warn-once + stop-script + return (no fake, no exit) |
 | `devices/dev_scc.c` | #101 | `% N_SCC_PORTS` alias → bounds-check + NO-OP out-of-range + warn-once (the bound kept, no aliasing) |
-| `devices/dev_disk.c, dev_pcc2.c, dev_vga.c, dev_pmagja.c, dev_ps2_gs.c, dev_pvr.c`, `net/net.c` | #119 | loud-once `fatal()`/first-N on each previously-silent OOB skip/zero/clamp |
+| `devices/dev_disk.c, dev_pcc2.c, dev_vga.c, dev_pmagja.c, dev_ps2_gs.c, dev_pvr.c`, `net/net.c` | #119 | loud-once `fatal()`/first-N on each previously-silent OOB skip/zero/clamp **[#560, 2026-10-06]** Superseded in net/net.c by 5ee491e7: the ARP (net.c:195) and RARP (net.c:221) paths each use one WARNING-level debugmsg, and the once-only latch is set after the call returns even when debugmsg prints nothing (verbosity below WARNING, no subsystem breakpoint, not single-stepping). |
 
 Rate-limited with `static` first-N guards (GXemul is single-threaded) so a hostile ROM cannot flood. `#95`
 (generic memory_rw zero-fill) left unwarned by consensus (would flood benign boots). Regression: gcc 0/0 +
@@ -20557,6 +20600,10 @@ uninitialized-heap disclosure to the guest). Then a MEDIUM tier (#160–#171, #1
 over-read, uncapped SCSI alloc, overlay `abort()`, GD-ROM/PVR guest-`exit(1)`, SCSI-phase NULL deref, cyclic-EBR
 hang, fused-MIPS starvation, a.out/android loader OOM) and a LOW tail (#172/#174/#175/#177: PS2-GIF stack
 over-read, PPC extended-BAT fidelity gate — no host escape, `mmap` vs `MAP_FAILED`, DHCP debug over-read).
+**[#560, 2026-10-06]** Annotation at 8ea26abb: the DHCP debug over-read clause for #177 does not match the dumps
+in that tree. The request dump's fixed reads stop at packet[33] and then use i < len. packet[85] is read only
+after packet = lp->data, on the allocated reply. At 39748e3c the text packet[85] does not occur in
+src/net/net_ip.c; at de1398e1a the only occurrence is this comment.
 Guest-reachable `exit(1)`/`abort()` were converted to log-and-continue per the #118/#119 ethos. **Deferred:** #173
 (overlay reopen-by-name TOCTOU) — assessed, not a cross-user hole.
 
@@ -20661,9 +20708,10 @@ sides — Codex's write-path root cause (#188) and Fable's translate-path (#189)
 | **#207** | HIGH | `devices/dev_px.c`: the PX/PXG `copyspans` re-read `memmove(dma_buf, &sram[sys_addr&0x1ffff], dma_len)` with a guest-forced `dma_len` up to 3080 and offset up to 0x1f800 → ~1 KB read past the 128 KiB `sram[]` into adjacent host heap. **Fix:** clamp the source span to the SRAM size. (Fable-found; the initial 224-byte read is provably in-bounds, left as-is.) |
 | **#208** | LOW | `devices/dev_ram.c`: `mmap()` failure was tested `== NULL` but returns `MAP_FAILED`; on failure it skipped the malloc fallback and registered RAM backed by `(void*)-1` (the #175 straggler). **Fix:** test `== MAP_FAILED`. |
 
-**#209 (`cpu_mips_instr.c`, MIPS integer add/sub — audit follow-up):** the MIPS Integer-Overflow *trap* turned out
-to be **already correctly implemented** — `add`/`addi`/`sub`/`dadd`/`daddi`/`dsub` raise `EXCEPTION_OV` on overflow
-(and OpenBSD boots with it). The audit's UBSan hit was the overflow-*detection* code itself computing `rs+rt` in
+**#209 (`cpu_mips_instr.c`, MIPS integer add/sub — audit follow-up):** the MIPS Integer-Overflow *trap*: all six handlers contain
+overflow detection. The ADD/ADDI/DADD/DADDI predicates are correct when their handlers execute; SUB/DSUB
+predicates fail for a minimum signed subtrahend. Zero-destination decoding separately suppresses these handlers
+and their overflow exceptions. [#560] The audit's UBSan hit was the overflow-*detection* code itself computing `rs+rt` in
 signed types (UB on the very overflow it detects); #209 recomputes the sum (and the `sub`/`dsub` negation) in
 unsigned at all six sites — bit-identical 2's-complement result, trap behavior unchanged, UBSan signature cleared.
 Verified: build 0/0 + OpenBSD 2.2/pmax boots to multiuser.
@@ -20706,10 +20754,10 @@ changes live.
 |---|---------------|
 | **#218** | `promemul/of.c`: OF `getprop`/`read`/`write` copy to a **guest** buffer pointer via `memory_rw(NO_EXCEPTIONS)`; a bad pointer now stops the copy / returns instead of `exit(1)`. |
 | **#219** | `promemul/of.c`: an unknown guest OF service keeps the clean `cpu->running=0` halt but drops the `exit(1)` that defeated the debugger. |
-| **#220** | `devices/dev_footbridge.c`: the reset port's col-0 `exit(1)` debug hack removed (`cpu->running=0` already halts); a PCI-config access decoding to bus 255 reads as no-device instead of `exit(1)`. |
+| **#220** | `devices/dev_footbridge.c`: the reset port's col-0 `exit(1)` debug hack removed (`cpu->running=0` already halts); a PCI-config access decoding to bus 255 announces itself and returns handled instead of `exit(1)` -- without going through `bus_pci_data_access()` or the read writeback, so a read there returns the pre-zeroed buffer (0). At register 0 that differs from the model's no-device answer elsewhere (all ones for the vendor-ID word); at other registers the two coincide. Filed as `fbpcibus255zero`. [#560] |
 | **#221** | `devices/dev_mp.c`: a guest `STARTUPCPU` on an arch without SP-init here starts the CPU anyway (warn) instead of `exit(1)`. |
 | **#222** | `devices/dev_kn02ba.c`: a guest MMIO access to an unimplemented DECstation 5000/1xx MER/MSR offset warns and ignores instead of `exit(1)`. |
-| **#223** | `devices/dev_8253.c`: five guest-writable i8253-timer paths (DMA-refresh TODO, latch-mode msb/lsb, BCD-mode, unimplemented offset) warn and continue instead of `exit(1)`. |
+| **#223** | `devices/dev_8253.c`: five `exit(1)` sites warn and continue -- the counter-1 DMA-refresh TODO, a count WRITE and a count READ to a counter with no programmed RW format (the `default:` arms), BCD-mode selection, and the unimplemented-offset `default:`.  Four are guest-reachable; the fifth is not: the device registers offsets 0-3 and all four have cases (`pit8253flood` records it as dead code). [#560] |
 
 **Fidelity baseline confirmed (not changed):** GXemul already raises AdEL/AdES (not TLBL) for unaligned *mapped*
 targets with correct ExcCode/CE/BadVAddr/EPC/Cause.BD — the general "exception-ordering" caveat is not a gap.
@@ -20867,7 +20915,9 @@ Applied to both trees; **build 0/0**; **pmax + arc boot**.
   fault-conversion diagnostics from rounds 18–23 (`fatal()` on every guest MMIO / PROM / ARC invocation) now route
   through the verbosity-gated `debugmsg` / `ENOUGH_VERBOSITY` channel at `VERBOSITY_DEBUG` (SUBSYS_DEVICE /
   SUBSYS_PROMEMUL), so a guest or fuzzer hammering an unimplemented ASC command / PROM service can no longer flood
-  the host log; full state stays available at `-v` or `break device` / `break promemul`. No new machinery (reuses
+  the host log; ARC's missing-handler and ordinary unsupported-vector state
+  dumps require SUBSYS_PROMEMUL verbosity VERBOSITY_DEBUG; a promemul subsystem breakpoint alone does not
+  enable them [#560]. No new machinery (reuses
   the #210 channel). 8 sites; the 4 PROM/ARC vector sites' unconditional register-dump + a0-string scaffolding is
   folded behind the same gate.
 - **#246 (C3)** `cpus/cpu_mips_coproc.c` (FPU denormals → real Unimplemented-Operation trap): the R3010/R4000 FPUs
@@ -21099,7 +21149,7 @@ Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`**; ins
 ---
 ## Thirty-seventh round (#267) — R4030 DMA translation-table limit (Codex + agy + Fable + Ollama)
 The last untreated R4030 DMA-engine gap from the #263 ASC + R4030 DMA-seam audit; the design was 4-model-panel-locked at **scope (a)** (bound-and-stop), unanimous, with the byte-size limit semantic pinned to the NetBSD/arc and Linux jazzdma drivers and confirmed by an instrumented arc boot.
-- **#267** `devices/dev_jazz.c` (both trees): `dev_jazz_dma_controller()` translated a DMA address to physical by reading the PTE at `dma_translation_table_base + (dma_addr>>12)*8` but never bounded that index against the programmed **TL_LIMIT**, so a DMA address past the end of the table read an **arbitrary guest word as a PTE** and moved data to/from whatever physical page that word encoded — guest-memory corruption on a misprogrammed or hostile transfer (it stays within guest RAM, so not a host overrun). The walk is now bounded: when the table byte-offset reaches a **non-zero** `TL_LIMIT` the transfer stops and reports the bytes completed so far. The real R4030 raises a translation-limit fault (`DMA_ENAB_TL_IE` / `DMA_INT_SRC`); that error/interrupt path is not modeled and is a documented gap, as is DMA0 count-register masking (`R4030_DMA_COUNT_MASK`, a separate future #268). The limit is a table **byte-size** (NetBSD/arc `JAZZ_DMATLB_SIZE`, Linux jazzdma `VDMA_PGTBL_SIZE`); a limit of **0** (never programmed) is fail-open, so it cannot regress a guest that does not use the table.
+- **#267** `devices/dev_jazz.c` (both trees): `dev_jazz_dma_controller()` translated a DMA address to physical by reading the PTE at `dma_translation_table_base + (dma_addr>>12)*8` but never bounded that index against the programmed **TL_LIMIT**, so a DMA address past the end of the table read an **arbitrary guest word as a PTE** and moved data to/from whatever physical page that word encoded — guest-memory corruption on a misprogrammed or hostile transfer (the resulting address is passed to the guest physical-memory dispatcher; the DMA controller does not confine it to RAM, and this observation does not establish a host buffer overrun) [#560]. The walk is now bounded: when the table byte-offset reaches a **non-zero** `TL_LIMIT` the transfer stops and reports the bytes completed so far. The real R4030 raises a translation-limit fault (`DMA_ENAB_TL_IE` / `DMA_INT_SRC`); that error/interrupt path is not modeled and is a documented gap, as is DMA0 count-register masking (`R4030_DMA_COUNT_MASK`, a separate future #268). The limit is a table **byte-size** (NetBSD/arc `JAZZ_DMATLB_SIZE`, Linux jazzdma `VDMA_PGTBL_SIZE`); a limit of **0** (never programmed) is fail-open, so it cannot regress a guest that does not use the table.
 Verified **empirically**: a non-enforcing probe observed OpenBSD 2.2/arc program **TL_LIMIT=0x8000** (4096 × 8) once at boot, the SCSI-root boot's **max table offset was 0x458** (~28 KB below the limit), and across **2602 DMA transfers 0** would exceed it — the bound never fires on the verified boot. Build **0/0** both trees; **arc 13/13 + pmax 15/15 boot → `uid=0(root)`**.
 ---
 ## Thirty-eighth round (#268) — R4030 DMA count-register width (Codex + agy + Fable + Ollama)
@@ -21115,7 +21165,7 @@ Documentation only (round 39; no correction number). This closes the full NCR 53
 ## Fortieth round (#269, #270) — self-review corrections: ASC FIFO diagnostic flood + breakpoint-listing honesty
 A five-model code review of our own #254–#268 batch (Codex 5.6-sol ultra + agy Gemini 3.6 + Kimi 3 MAX + Fable 5 + Opus 5; two passes, unanimous on scope) found two defects **we** introduced. Both are host-side diagnostics — no guest-visible behaviour changes in either correction.
 - **#269** `devices/dev_asc.c` (both trees): **#265** relocated the ASC FIFO overflow warning into the drop guard, which turned an at-most-once-per-fill message into **one host line per dropped byte** — measured, 24 overflow writes produced 24 host lines. The pre-existing read-side twin (the **#197** empty-FIFO guard, whose message says "overrun" for historical reasons although the condition is a read of an *empty* FIFO) behaves identically: 24 reads of an empty FIFO produced 24 lines. This matters beyond noise, because `fatal()` is **not verbosity-gated** and `va_debug()` writes stdout **one character at a time** — the same stream the boot harness pattern-matches — so an undrained pipe can block the single-threaded emulator. Both sites now warn **once per device**, via one-shot latches in `struct asc_data`, and deliberately keep `fatal()`: a verbosity-gated `debugmsg()` was rejected because under `-q` the harness verbosity settles at `VERBOSITY_ERROR` (`main.c` lowers it by one; `debugmsg_add_verbosity_level()` floors at 0), so a WARNING-level message would be **invisible to the boot-log hygiene grep**, while an ERROR-level one would change the printed form *and* would trip **#261**'s global break-on-ERROR whenever that is armed. The latches are deliberately **not** cleared by `dev_asc_reset()` or `dev_asc_fifo_flush()` — otherwise a guest could re-arm the flood with `RSTCHIP` — and are zeroed by the `memset` in `dev_asc_init()`. Everything the guest can observe (the dropped byte, the value returned by a read of an empty FIFO, the FIFO indices and count, the registers, the interrupts) is unchanged.
-- **#270** `core/debugmsg.c` (both trees): **#261**'s global break-on-ERROR toggle was **invisible** in the `breakpoint subsystem` listing. `breakpoint subsystem all error` arms that global *and* sets every per-subsystem level; a later `breakpoint subsystem <name> off` clears only that subsystem's level, so an ERROR-level message from it still enters the debugger — yet `debugmsg_print_breakpoints()`, which skips subsystems at level < 0, listed it as unarmed and never mentioned the global (measured: 24 rows after arming, 22 after `cpu off`, `cpu` absent, the global never named). The listing now discloses the global, and no longer prints "No breakpoints on subsystem messages set." while it is armed. The **override semantics are deliberately unchanged** (panel-unanimous): they are not observable on pmax/arc — neither has a runtime-reachable ERROR-level `debugmsg()` — and every redesign considered was worse than simply stating the behaviour. Display only.
+- **#270** `core/debugmsg.c` (both trees): **#261**'s global break-on-ERROR toggle was **invisible** in the `breakpoint subsystem` listing. `breakpoint subsystem all error` arms that global *and* sets every per-subsystem level; a later `breakpoint subsystem <name> off` clears only that subsystem's level, so an ERROR-level message from it still enters the debugger — yet `debugmsg_print_breakpoints()`, which skips subsystems at level < 0, listed it as unarmed and never mentioned the global (measured: 24 rows after arming, 22 after `cpu off`, `cpu` absent, the global never named). The listing now discloses the global, and no longer prints "No breakpoints on subsystem messages set." while it is armed. The **override semantics are deliberately unchanged** (panel-unanimous); the listing now states them explicitly. ARC's NE2000 transmit of an unimplemented IPv4 broadcast reaches `debugmsg(SUBSYS_NET, ..., VERBOSITY_ERROR)` through `net_ethernet_tx`. The caller gate is `ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_ERROR)`, and the default verbosity is INFO (2), so the call is made. Clearing the net breakpoint does not clear `debugmsg_break_on_error`, so the global override still requests debugger entry. pmax's LANCE (`dev_le.c:438`) reaches the same path through `net_ethernet_tx`. [#560]
 Verified: build **0/0** both trees; **pmax 15/15 + arc 13/13 → `uid=0(root)`**; log-hygiene greps all **0** (the "FIFO overrun" token is preserved, so that gate still works). Both flood probes drop from **24 host lines to 1** — write side and read side — while the deliberately-untouched `TRPAD` control still emits 10 lines for 10 commands. A single-session probe shows the two latches are **independent** (a 24-write overflow burst → 1 line; then, after draining the FIFO, a 24-read empty burst → 1 further line, which a shared latch would have suppressed) and that the latch **survives a guest `RSTCHIP`** (5 further empty reads → 0 lines, with `NCR_FFLAG` reading 0 afterwards, so those reads necessarily took the guard). For **#270**, the review probe's own assertion flips **false → true** with no edit to the probe, and `breakpoint subsystem all off` makes the new line disappear and the "No breakpoints …" message return.
 
 **Known gaps (documented, deliberately not fixed in this round).** `dev_asc.c` still contains **20 further unconditional `fatal()`/`printf()` diagnostics** of the same family (22 live call sites, minus the two now latched). Two are worth naming. The stray-register-access report (`dev_asc.c` `:936`/`:939` before this round, `:969`/`:972` after) prints one host line **per access** at asc offsets ≥ 0x10 (arc/PICA) or ≥ 0x40 (pmax/DEC); because it carries a **variable payload** — the offset and the value — a one-shot latch would hide real information, so it wants **#245**-style verbosity gating instead. The **#264** zero-length-`DATA_OUT` site is excluded on **scope-coherence** grounds and *not* because it is untestable: it reproduces cleanly (10 `TRPAD` commands → 10 host lines), but its `fatal()` was panel-locked for symmetry with the **#167** guard, so revisiting it belongs with that guard rather than here. These belong to a dedicated `fatal()`-hygiene round.
@@ -22007,8 +22057,12 @@ standing check capable of finding it. After the fix, `rpi` goes from 1 report to
 `cats`, `netwinder`, `iq80321`, `iyonix` and `testarm` all stay at 0. Both trees rebuild at
 0 warnings and 0 errors.
 
-The register is still marked "aren't used yet" in the source, so nothing observable to a
-guest changes today. This is correctness groundwork, not a visible bug fix.
+The source's "aren't used yet" TODO (`cpu_arm.c:163`) is about the iway/dway values, not the
+register. A guest reads the Cache Type register directly (MRC p15,0,Rd,c0,c0,1;
+`cpu_arm_coproc.c`'s case 1 returns `cachetype`). So the change is guest-visible on every CPU whose
+table entry leaves a cache size unspecified -- for ARM1136JSR1 (rpi), 0xffdea0ea becomes 0x0b02a0ea.
+[#560] So it is a guest-visible fix as well as correctness groundwork (this said "correctness groundwork, not a
+visible bug fix", which the sentences above contradict).
 
 ---
 
@@ -22317,7 +22371,10 @@ with a real mutation as the negative control.
   OpenBSD/arc 2.3 ran `hardclock` before `cpu_initclocks()` and faulted (null-deref at `[0]+0xb8`). Fix: add
   `PICA_TIMER_IRQ_MASK (1<<15)`, gate assert/deassert + DEVICE_TICK + the `EXT_IMASK` recompute on
   `int_asserted & int_enable_mask & {0x7fff, PICA_TIMER_IRQ_MASK}`, and route the pending-tick assert through
-  `jazz_timer_irq`. **OpenBSD/arc 2.3 now boots to the kernel idle loop on 0.7.0** (previously only gxemul
+  `jazz_timer_irq`. **[#560, 2026-10-06]** Superseded by 9d18d156: at 8ea26abb, JAZZ pending-line bits and
+  R4030 EXT_IMASK CPU-IP enable bits occupy separate namespaces. Timer pending is 0x8000; its IP6 enable is
+  0x10. IRQ3 requires a pending local-bus line and EXT_IP3 (0x02); IRQ6 requires pending timer line 15 and
+  EXT_IP6 (0x10). EXT_IMASK writes recompute these predicates, and timer delivery uses jazz_timer_irq. **OpenBSD/arc 2.3 now boots to the kernel idle loop on 0.7.0** (previously only gxemul
   ≤0.3.6 worked — a regression introduced by the 0.3.7 dyntrans timer rewrite). **pmax-safe:** DECstation
   (pmax) instantiates `dev_mc146818`, not `dev_jazz`, and is R3000/EXC3K — re-verified pmax still boots
   multiuser with the same binary. Builds 0/0. (NB: edit est/build sources *from WSL* — Windows-side writes lag
@@ -22749,12 +22806,15 @@ this round's panel: the MC88100 User's Manual §2.4.4, and the guest's own autho
 OpenBSD's m88k `<ieeefp.h>` (`FP_RM=2` toward −Inf, `FP_RP=3` toward +Inf) with libc
 `fpsetround()` writing exactly this field via `fstcr`.
 
-The trap in that fact: a decode that FORGETS the swap passes every sign-symmetric test,
-because the two directed modes simply trade places consistently. Only rows whose expected
-value differs by the *sign* of the operand catch it. Gate 11 therefore runs
-sign-asymmetric pairs — the same magnitudes with the sign flipped, where toward+Inf must
-truncate the negative sum it grew on the positive side — and asserts those four rows by
-name.
+The trap in that fact is narrower than a blind spot: a decode that FORGETS the swap is caught
+by any inexact directed-mode row on either sign (the mutant table below reds three positive-only
+rows), but a single red is shared with other wrong stores -- a truncating store also reds
+`fadd-pos toward+Inf`.  What is unique to the missing swap is the SIGNATURE: with the same
+magnitudes at both signs, all four directed rows go red together, because toward+Inf then
+truncates the positive sum and grows the negative one, where a truncating store reds two of the
+four and a nearest-only store the other two.  Gate 11 therefore runs sign-asymmetric pairs, the
+same magnitudes with the sign flipped, and asserts four negative-operand tripwire rows by name:
+`fadd-neg toward+Inf`, `fadd-neg toward-Inf`, `flt-neg toward-Inf`, `flt-neg toward+Inf`. [#560]
 
 Six sites wired: `fadd.sss`, `fsub.sss`, `fsub.sds` (the mixed double-minus-single arm),
 `fmul.sss`, `fdiv.sss`, and `flt.ss` (integer to single — exact into double, so the store
@@ -25926,11 +25986,17 @@ latch until it is read by the CPU (or until the Counter is reprogrammed) The cou
 unlatched automatically"*. So the last byte the format calls for releases it.
 
 **This corrects #439's stated reasoning where the two fixes meet.** #439's read arm took an
-early `break` "so no counter byte was consumed, leave the selector alone". Under the datasheet
-a latched read DOES consume one of the format's bytes, so the flip-flop now advances for it —
-and across the ordinary two-read `gettick()` the two designs are indistinguishable (two toggles
-return the flip-flop to LSB), which is why #439's measured behaviour is unchanged and only the
-sticking stops. Verified: R1/R2/R3, #439's own rows, stay green throughout.
+early `break` "so no counter byte was consumed, leave the selector alone".  Under the datasheet
+a latched read DOES consume one of the format's bytes: in the two-byte format the read flip-flop
+advances for it, and in a one-byte format the single read releases the latch.  Across a two-read
+`gettick()` entered at EVEN read parity the two designs agree (two toggles return the flip-flop to
+LSB: 0x0000 both); at ODD parity they do not -- the first read already has rw == MSB and releases
+the latch, the second returns the live low byte, so this round reads 0x9c00 for the 0x2e9c example
+where #439 read 0x0000 (#439's arm returned 0 for both reads at either parity).  That is a measured
+change, closer to the hardware; #439's reason for existing survives either way (the divisor is
+non-zero in both).  Verified: R1/R2/R3, #439's own rows, stay green throughout.  [This paragraph
+first said the designs were indistinguishable and #439's measured behaviour unchanged -- false at
+odd parity, as the pass-2 note below records.] [#560]
 
 **REPRODUCED at rung 3 before any edit**, on the committed build, by extending the round's own
 committed probe rather than starting a new one: `regress/pit8253_latch_probe.py` gains five
@@ -26665,8 +26731,9 @@ ships: **one helper, both consumers, the stored register untouched.**
 - **`TIMER_EXTERNAL` no longer kills the host.** Both prescaler bits set is `0x0C`, and the
   datasheet obtained for this round gives bits 3:2 as 00/01/10/11 = fclk / fclk÷16 / fclk÷256 /
   **External event** (§7.3.41, p. 7-51) — a CONFORMING guest selecting the external clock source
-  was reaching `fatal()` + `exit(1)`. The rate an external source would give depends on a pin this
-  model has no signal for, so it is not invented; the encoding gets a defined, survivable meaning.
+  was reaching `fatal()` + `exit(1)`. The model exposes the external interrupt
+  inputs, but its timers do not count their assertion edges; external mode instead substitutes the
+  internal timer cadence. [#560]
 
 **THE DATASHEET WAS OBTAINED MID-ROUND** (`_scratchpad/dc21285.pdf`, Intel 278115-001, Sept 1998,
 with a `pdftotext -layout` twin beside `ddi0100i`), and it did two things. It CONFIRMED the
@@ -26684,11 +26751,13 @@ the reset mode. Genuinely unknown only for periodic. And the failure-asymmetry a
 weighs two alternatives when there are three: read mechanically, periodic mode with a zero load
 reloads zero and interrupts every prescaled clock — a max-rate storm, which is the DANGEROUS
 branch, not the silent one. The shipped mapping avoids that too. The conclusion is unchanged and
-the argument was understating its own robustness. The choice rests on failure asymmetry (wrong-and-noisy beats wrong-and-silent: a
+the argument was understating its own robustness. The choice rests on failure asymmetry alone (wrong-and-noisy beats wrong-and-silent: a
 guest that gets a few unwanted interrupts limps visibly, a guest waiting on a tick that never
-comes hangs at boot) and on arithmetic (the 24-bit mask aliases a legitimate write of `0x1000000`
-to zero, so full-period is the unique choice that keeps the rate continuous across the register's
-own truncation).
+comes hangs at boot).  The arithmetic support this sentence first carried -- that the 24-bit mask
+aliases a legitimate write of `0x1000000` to zero and full-period keeps the rate continuous across
+the register's own truncation -- was WITHDRAWN against the datasheet (7.3.39: TimerNLoad bits 31:24
+read only as 0, so bit 24 is outside the writable field and there is no wrap to be continuous
+across); the source comment records the withdrawal, this paragraph did not. [#560]
 
 *** AND THE DATASHEET WITHDREW ONE OF THIS ROUND'S OWN ARGUMENTS. *** An earlier draft justified
 the mapping partly with "devinit resets every load to `TIMER_MAX_VAL`, so the model's own
@@ -26750,7 +26819,7 @@ page boundary the guest read — or wrote — the physical page that happened to
 
 **The split that was already there is not this guard**, and it is easy to mistake for it: the
 one at the end of the function fires at `BITS_PER_MEMBLOCK` (1 MB) granularity — one boundary
-in 256 — and its job is to stop the `memcpy` running off a host allocation. It is a
+per 1,024 split granules [#560] — and its job is to stop the `memcpy` running off a host allocation. It is a
 host-bounds guard, never a page guard.
 
 **The write side was worse than the read side, and the round nearly missed it.** The design
@@ -26778,7 +26847,8 @@ page. Both were found by building the instrument, not by reading.
   One compile flag turned a decorative row into a detector.
 - **Only when a translation actually happened.** Under `PHYSICAL`, or with no `translate_v2p`,
   `paddr == vaddr` and there is no per-page mapping to redo, so those go straight through.
-  Without that exemption a 16 MB DMA would turn one call into four thousand; with it, the
+  Without that exemption an aligned 16 MiB transfer would require 16,384 worker calls at the
+  1 KiB granule [#560]; with it, the
   memblock split stays alive and load-bearing instead of becoming dead code.
 - **The page size moved to one macro**, and the SPLIT GRANULE turned out to be a different
   number again. The mask is the HOST-page granule (8 KB under `MEM_ALPHA`, not 4 KB — one seat
@@ -26824,7 +26894,9 @@ way it does.** Two were code, one was the detector. (1) The split broke **#244's
 a failed read leaves the caller's WHOLE buffer zeroed: the worker zeroes only the chunk it was
 handed, so a fault before the last chunk left the rest as uninitialised host stack — measured,
 a 12,288-byte read faulting on its first page left **8,192 bytes untouched**, where the
-unsplit code zeroed all of them. The wrapper now zeroes the remainder. (2) `offset + len >
+unsplit code zeroed all of them. The wrapper now zeroes the remainder. **[#560, 2026-10-06]** The
+wrapper zeroes the failed chunk and everything after it; bytes already read by earlier chunks remain,
+so #244's whole-buffer zero is not fully restored. (2) `offset + len >
 granule` can WRAP for an absurd length, skipping the loop entirely; it is now
 `len > granule - offset`, which cannot. (3) The 4 KB granule, above. A seat also FUZZED the
 final arithmetic — 40,000 reads and 20,000 writes against a per-byte reference over a random
@@ -31580,11 +31652,14 @@ LDM/STM class this template cannot reach; `idle` reads one word but writes it on
 when provably zero, and rotating zero is zero; `cacheclean` performs no read at
 all; `scanc` and `strlen` are byte loads.
 
-**Applied unconditionally rather than gated on architecture version, by a
-dominance argument rather than a preference.** Rotation is correct for ARMv3/v4/v5
-and for v6+ with `U == 0`; where v6+ with `U == 1` wants a true unaligned access,
-masking and rotating are wrong *equally*. So this is never worse than what it
-replaces, in any combination. Gating would also be unsound here: there is no
+**Applied unconditionally rather than gated on architecture version.**  [#560: this said "by a dominance
+argument rather than a preference"; dominance fails for v6+ with `U == 1`, below.] Rotation is the architected result for ARMv3/v4/v5
+and for v6+ with `U == 0`, when alignment checking is off (`A == 0`). With `A == 1` an
+alignment Data Abort is owed, and neither form raises it (A is enabled at reset and never
+enforced). For v6+ with `U == 1` the architecture wants a true unaligned access, which
+neither masking nor masking-plus-rotation implements. Each returns the required word only by
+coincidence of the data, and on different data, so rotation is not 'never worse' there. The
+unconditional choice rests on the `U == 0` cases and on gating being unsound. [#560] Gating would also be unsound here: there is no
 architecture level in the CPU type table — its own header says "TODO: Include ARM
 level" and "Most of these are bogus" — deriving one from the ID register
 misclassifies one part as ARMv6, wrong in the direction that changes behaviour,
@@ -33469,9 +33544,9 @@ Gate 14 has only ever driven ARM-mode encodings, and the Thumb interpreter
 (`arm_cpu_interpret_thumb_SLOW`) is a completely separate implementation that #311 never
 touched. Thumb is entered **architecturally** here — an ARM `bx` to an odd address sets
 `ARM_FLAG_T` and `cpu_dyntrans.c` dispatches to the interpreter — and never by writing the
-T bit with the debugger, for the reason gate 14 already records about carry-in: a debugger
-write reaches `cpsr` but not the separate `flags` field the handlers read, so it would
-preset nothing. `mrs` is ARM-only in Thumb-1, so each row returns to ARM with a second
+T bit with the debugger, because the interpreter requires both an odd `pc` and
+`ARM_FLAG_T` in `cpsr` (`cpu_arm.c:1216`); the probe's BX establishes both conditions
+together in one guest instruction. [#560] `mrs` is ARM-only in Thumb-1, so each row returns to ARM with a second
 `bx` before publishing; `bx` touches no flags.
 
 ### What was wrong

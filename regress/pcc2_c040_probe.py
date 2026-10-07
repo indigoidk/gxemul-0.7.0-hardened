@@ -386,8 +386,9 @@ row("c040 predirty", ("yes" if SAYS in t4 else "no") if alive4 else "died(%s)" %
 #  `c040 noassert' / `c040 noassert2' -- 14/16 on the 16-row probe,
 #  artifacts/pcc2c040kill/ctlq_20260909/repaired_M_d1_noassert.raw), so a reader must not take this
 #  paragraph as the probe's contract.  Found by agy's late seat and codex, 2026-09-18.
-#  (The `return' variant meant here replaces `assert = 0' in the C040 block; dev_pcc2.c's own comment
-#  about an `assert=0 -> return' passing every shipped row names a DIFFERENT site -- fable5, #535.)
+#  (That `return' variant IS the one dev_pcc2.c's comment calls 'a one-token mutant every shipped row
+#  passes'; that comment was false when it shipped -- the same commit, 9fa07fe9, shipped `c040 noassert',
+#  which kills it 9/10 (killtable_20260908/M_return.raw).) (#560)
 #
 #  #535 CONTRACT -- DISCLOSED, MEASURED ESCAPES of the 17-row probe that this probe still does NOT
 #  catch (the Opus seat, artifacts/pcc2c040kill/r535_20260918/opus535/):

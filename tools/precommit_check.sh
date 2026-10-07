@@ -932,7 +932,7 @@ fi
 #  SCOPE is never mistaken for one that was checked and passed.
 _unstaged_src=$(git diff --name-only -- 'src/*' | tr '\n' ' ')
 if [ -n "$_unstaged_src" ]; then
-	warn "UNSTAGED src/ edits NOT audited by this run (they are when committed): $_unstaged_src"
+	warn "With nothing staged, A/B select modified source paths through the working-tree fallback.  When anything is staged, they select staged paths but inspect working-tree contents, including unstaged hunks in those paths; exclusively unstaged paths are omitted.  UNSTAGED src/: $_unstaged_src"  # (#560)
 fi
 say ""; say "Z. no tracked script invokes wsl -c with a bare dollar"
 #

@@ -136,7 +136,8 @@ def clock_byte(value):
 
 
 def drive(seq, label, kw):
-    """Clock every byte in `seq` through one session.  Returns (transfers, declines)."""
+    """Clock every byte in `seq` through one session.  Returns (started, alive,
+    transfers, declines) (#560)."""
     ops = []
     for v in seq:
         ops += clock_byte(v)
@@ -292,8 +293,10 @@ def main():
     row("J a legal pair still works AFTER a declined byte (the shifter re-arms)",
         st and alive and xf == [("write", "5", "c")] and dec == ["80"],
         "alive=%s transfers=%s declines=%s" % (alive, xf, dec),
-        "the write still lands: sci_bits_outputed is zeroed in the CALLER, and moving "
-        "that into the callee below the returns jams the shifter at 8 forever")
+        "the write still lands: sci_bits_outputed is reset in the CALLER after sh4_sci_cmd "
+        "returns; moving that reset below the callee's early returns leaves it at 8 after a "
+        "decline, later clocks push it past 8, and no later byte reaches the command handler "
+        "(R3, X, N and N2 also red)")  # (#560)
 
     #  ---- O: the oracle itself -- without this the 'no transfer' rows are unfalsifiable
     row("O the transfer oracle is LIVE (A2 observed a real transfer line)",
