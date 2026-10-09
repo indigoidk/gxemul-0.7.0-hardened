@@ -1,3 +1,16 @@
+# Probe wiring, 2026-10-09: `ppc_rldicl_probe.py`'s gate-wiring exemption came due on 2026-10-08 with its `gate_ppc.sh` block still owed, and every commit was refused -- re-dated to 2026-10-22 by owner ruling, in its own commit
+
+Found by `#562`'s pre-commit check: section R, `EXPIRED EXEMPTION  ppc_rldicl_probe.py came due 2026-10-08 (today
+2026-10-09) and is still run by no gate`, and the checker's own selftest red on the same date (M0, M2b) --
+`regress/artifacts/probewiring_redate_20261009/precheck_562_sectionR_expired.out`, `before_redate.out`.
+
+* `tools/pipeline/check_probe_wiring.py` -- the EXEMPT line for `ppc_rldicl_probe.py`: 2026-10-08 -> 2026-10-22, with a
+  comment saying a re-date is not a discharge.  Its owed work is unchanged: a `gate_ppc.sh` block scoring the probe's
+  rows, filed to `wiringcliff`.  With the new date the check reads `PROBEWIRING_PASS  73/83 detectors run by a gate, 10
+  dated-exempt` (`after_redate.out`).  No other line of the checker changed.
+* The working tree's copy of `ppc_rldicl_probe.py` carries uncommitted edits that are on this project's never-commit
+  list; this commit does not touch the probe.
+
 ## #561 -- records: 21 ruled corrections from the previously-unsettled record places (2026-10-06)
 
 * The 36 record places #560 could not rule (their packet-fed readings were FITS/UNSETTLED only) were settled against

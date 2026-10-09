@@ -2960,7 +2960,9 @@ EXEMPT = {
     #  want_rldimi, want_rlwimi, want_rlwinm or mask32 is called outside the helpers' own definitions
     #  (grep -nE '(want_rldimi|want_rlwimi|want_rlwinm|mask32)[(]' on the probe), so an edit of them
     #  is no prerequisite.
-    "ppc_rldicl_probe.py":         ("2026-10-08",
+    #  Re-dated 2026-10-08 -> 2026-10-22 on 2026-10-09 by owner ruling, in its own commit: it came due with its
+    #  gate_ppc.sh block still owed and refused every commit.  A re-date is not a discharge.
+    "ppc_rldicl_probe.py":         ("2026-10-22",
                                     "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); owed: a "
                                     "gate_ppc.sh block scoring its ok/FAIL rows as gate_arm.sh "
                                     "scores mk48's -- RESULT/CONTROL lines first is a chosen "
