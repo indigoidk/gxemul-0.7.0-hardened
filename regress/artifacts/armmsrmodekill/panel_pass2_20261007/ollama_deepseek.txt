@@ -1,0 +1,36 @@
+VERDICT: SHIP-WITH-CHANGES — measurement table contradicts “FIXED 26/26”; “three guest writers” premise unverified from packet. 0 confirmed floor breaches in the shown diff.
+
+**1. Premise audit — what is wrong or unverified**
+
+- READ from packet: the top bullet says **FIXED build 26/26**.  
+- READ from packet: the kill table contains `FIXED_probe2 RESULT=25/26 REDS=latch ind`.  
+- REASONED: these cannot both be true. At least one record is wrong or the table is not a single frozen-probe result. This is a record defect, not a code floor breach.
+
+- REASONED: the premise **“three guest writers”** is not established by the inlined diff. The diff shows only one MSR immediate site (`msr_imm`). A register-form `MSR CPSR_c, Rn` or any other CPSR-mode writer, if present, would be unguarded and would still reach `exit(1)`/backstop.  
+  Single fact that would settle it: existence of a register-form MSR path that writes CPSR mode.
+
+**2. Guard control-flow check**
+
+- READ from diff:  
+  - `msr_imm` guard is after `mask` computation and before `switch_register_banks`; it removes `ARM_FLAG_MODE` from `mask`, so no bank switch occurs.  
+  - `arm_pop` guard is after the early-return block and does **not** return; the PC load below still runs.  
+  - DPI guard sets `pc`, copies SPSR only when `spsr_copied` is true, writes CPSR, then writes flags and calls `arm_load_register_bank`. No early return.
+
+- REASONED: no path from the shown three writers reaches `exit(1)` or `running = 0`. The backstops return.  
+- REASONED: cannot verify absence of other CPSR-mode writers from the packet. If one exists, that is a floor breach.
+
+**3. Smallest edit that still passes all 26 rows**
+
+None found. The rows pin the independent latch bits: `latch ind` requires the three decline bits to be distinct, and `dbg both` requires the Save/Load backstop bits to be distinct. Removing or merging any guard or latch bit reds at least one row. The fix appears minimal for the frozen 26-row probe.
+
+**4. Floor check**
+
+- READ from table: pre-fix HEAD fails 16/26 with the expected red rows.  
+- READ from table: verbatim reinstatement of removed `exit(1)` is caught (`M_load_exit`, `M_save_exit`, `M_load_exit_latched`, `M_save_exit_latched`).  
+- READ from table: nulled repair is caught (`M_drop_msr`, `M_drop_pop`, `M_drop_dpi`, `M_uncond_both`, `M_uncond_pop`, `M_uncond_dpi`, `M_wholeop_msr`).  
+- REASONED: no DEPENDS-ON predicate appears un-mutated; the table includes mutants for shared decline/backstop bits and unconditional DPI guard.
+
+**5. Record claims**
+
+- READ from packet: the added comment **“Only the local mask changes: ic->arg[] is a cached translation”** is explicitly disclosed as not rowed. It is unsupported by any row or measurement above.  
+- READ from packet: the comment **“the three switches together define modelled”** is not directly measured by a row; it is a structural claim only.

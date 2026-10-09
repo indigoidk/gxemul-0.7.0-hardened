@@ -1,0 +1,215 @@
+--- a/src/include/cpu_arm.h
++++ b/src/include/cpu_arm.h
+@@ -113,6 +113,14 @@
+ #define	ARM_MODE_UND32	      0x1b
+ #define	ARM_MODE_SYS32	      0x1f
+ 
++/*  #562: arm_cpu.mode_warned bits -- the three guest declines and the two
++    register-bank backstops each announce once per CPU, independently.  */
++#define	ARM_MODEWARN_MSR	0x01
++#define	ARM_MODEWARN_POP	0x02
++#define	ARM_MODEWARN_DPI	0x04
++#define	ARM_MODEWARN_SAVE	0x08
++#define	ARM_MODEWARN_LOAD	0x10
++
+ #define ARM_EXCEPTION_TO_MODE	{	\
+ 	ARM_MODE_SVC32, ARM_MODE_UND32, ARM_MODE_SVC32, ARM_MODE_ABT32, \
+ 	ARM_MODE_ABT32, 0,              ARM_MODE_IRQ32, ARM_MODE_FIQ32 	}
+@@ -194,6 +202,10 @@
+ 	uint32_t		spsr_irq;
+ 	uint32_t		spsr_fiq;
+ 
++	/*  #562: once-latch for the unmodelled-mode announces, one
++	    ARM_MODEWARN_* bit per site (per CPU, zero at cpu_new).  */
++	uint32_t		mode_warned;
++
+ 
+ 	/*
+ 	 *  System Control Coprocessor registers:
+@@ -342,6 +354,7 @@
+ 	unsigned char *host_page, int writeflag, uint64_t paddr_page);
+ void arm_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+ void arm_invalidate_code_translation(struct cpu *cpu, uint64_t, int);
++int arm_mode_is_modelled(uint32_t mode);
+ void arm_load_register_bank(struct cpu *cpu);
+ void arm_save_register_bank(struct cpu *cpu);
+ int arm_memory_rw(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+--- a/src/cpus/cpu_arm.c
++++ b/src/cpus/cpu_arm.c
+@@ -517,6 +517,32 @@
+ 
+ 
+ /*
++ *  arm_mode_is_modelled():
++ *
++ *  #562: 1 if M[4:0] of `mode' is one of the seven modes this model banks
++ *  (10 11 12 13 17 1b 1f), else 0.  Its case list MUST stay equal to the
++ *  case lists of arm_save_register_bank() and arm_load_register_bank()
++ *  below: the three switches together define "modelled", and those two
++ *  default: arms are reached only for a mode this returns 0 for.  Extern,
++ *  not static: the DPI template is compiled as its own object.
++ */
++int arm_mode_is_modelled(uint32_t mode)
++{
++	switch (mode & ARM_FLAG_MODE) {
++	case ARM_MODE_USR32:
++	case ARM_MODE_SYS32:
++	case ARM_MODE_FIQ32:
++	case ARM_MODE_IRQ32:
++	case ARM_MODE_SVC32:
++	case ARM_MODE_ABT32:
++	case ARM_MODE_UND32:
++		return 1;
++	default:return 0;
++	}
++}
++
++
++/*
+  *  arm_save_register_bank():
+  */
+ void arm_save_register_bank(struct cpu *cpu)
+@@ -556,9 +582,20 @@
+ 		cpu->cd.arm.und_r13_r14[0] = cpu->cd.arm.r[13];
+ 		cpu->cd.arm.und_r13_r14[1] = cpu->cd.arm.r[14];
+ 		break;
+-	default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+-		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+-		exit(1);
++	default:/*  #562: reached only once an unmodelled mode is ALREADY in
++		    CPSR, which only a debugger `cpsr=' assignment can now put
++		    there (msr_imm and both SPSR restores decline it); after
++		    such a plant ANY later mode switch gets here -- a guest MSR
++		    to a modelled mode, an S-to-PC return, an exception or IRQ
++		    entry.  Backstop: announce once per CPU and return
++		    -- no exit(1), no rollback; r8-r14 are not saved.  */
++		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_SAVE)) {
++			cpu->cd.arm.mode_warned |= ARM_MODEWARN_SAVE;
++			fatal("arm_save_register_bank: unimplemented mode %i;"
++			    " registers not saved (once)\n",
++			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
++		}
++		return;
+ 	}
+ }
+ 
+@@ -603,9 +640,18 @@
+ 		cpu->cd.arm.r[13] = cpu->cd.arm.und_r13_r14[0];
+ 		cpu->cd.arm.r[14] = cpu->cd.arm.und_r13_r14[1];
+ 		break;
+-	default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+-		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+-		exit(1);
++	default:/*  #562: backstop, as in arm_save_register_bank(): reached
++		    only after a debugger `cpsr=' plant of an unmodelled mode,
++		    then by any later mode switch (guest MSR, S-to-PC return,
++		    exception or IRQ) that leaves it in place.  Announce once
++		    per CPU and return; r8-r14 keep their current values.  */
++		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_LOAD)) {
++			cpu->cd.arm.mode_warned |= ARM_MODEWARN_LOAD;
++			fatal("arm_load_register_bank: unimplemented mode %i;"
++			    " registers not loaded (once)\n",
++			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
++		}
++		return;
+ 	}
+ }
+ 
+--- a/src/cpus/cpu_arm_instr.c
++++ b/src/cpus/cpu_arm_instr.c
+@@ -827,6 +827,25 @@
+ 		mask &= 0xff000000;
+ 	}
+ 
++	/*
++	 *  #562: a mode-field write naming a mode this model does not bank
++	 *  (reserved, or 26-bit) used to reach arm_load_register_bank()'s
++	 *  exit(1).  The architecture makes the result UNPREDICTABLE (DDI
++	 *  0100I A2.5.7; ARMv7 lets it be UNDEFINED) and forbids halting.
++	 *  Declining the MODE FIELD only, with the rest of the write applied,
++	 *  is this emulator's POLICY, not an architectural requirement.  Only
++	 *  the local mask changes: ic->arg[] is a cached translation.
++	 */
++	if ((mask & ARM_FLAG_MODE) && !arm_mode_is_modelled(ic->arg[0])) {
++		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_MSR)) {
++			cpu->cd.arm.mode_warned |= ARM_MODEWARN_MSR;
++			fatal("[ msr_imm: mode 0x%02x is not modelled; mode field"
++			    " not written, other fields are (once) ]\n",
++			    (int)(ic->arg[0] & ARM_FLAG_MODE));
++		}
++		mask &= ~ARM_FLAG_MODE;
++	}
++
+ 	int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+ 	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+ 	    (ic->arg[0] & ARM_FLAG_MODE));
+@@ -1799,6 +1818,22 @@
+ 			return;
+ 		}
+ 
++		/*  #562: an SPSR naming an unmodelled mode (an MSR SPSR_c of a
++		    reserved value, or an SPSR never written: zero = mode 0)
++		    keeps the CURRENT mode in M[4:0]; every other bit comes from
++		    the SPSR.  Same POLICY as msr_imm.  No return here: the PC
++		    load below must still run.  */
++		if (!arm_mode_is_modelled(new_cpsr)) {
++			if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_POP)) {
++				cpu->cd.arm.mode_warned |= ARM_MODEWARN_POP;
++				fatal("[ arm_pop: SPSR mode 0x%02x is not modelled;"
++				    " mode kept (once) ]\n",
++				    (int)(new_cpsr & ARM_FLAG_MODE));
++			}
++			new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) |
++			    (cpu->cd.arm.cpsr & ARM_FLAG_MODE);
++		}
++
+ 		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+ 		    (new_cpsr & ARM_FLAG_MODE);
+ 
+--- a/src/cpus/cpu_arm_instr_dpi.c
++++ b/src/cpus/cpu_arm_instr_dpi.c
+@@ -215,19 +215,38 @@
+ 		cpu->pc = (uint32_t)c64;
+ #ifdef A__S
+ 		/*  Copy the right SPSR into CPSR:  */
++		uint32_t cur_mode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
++		uint32_t new_cpsr = cpu->cd.arm.cpsr;
++		int spsr_copied = 1;
+ 		arm_save_register_bank(cpu);
+-		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
++		switch (cur_mode) {
+ 		case ARM_MODE_FIQ32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
++			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+ 		case ARM_MODE_IRQ32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
++			new_cpsr = cpu->cd.arm.spsr_irq; break;
+ 		case ARM_MODE_SVC32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
++			new_cpsr = cpu->cd.arm.spsr_svc; break;
+ 		case ARM_MODE_ABT32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
++			new_cpsr = cpu->cd.arm.spsr_abt; break;
+ 		case ARM_MODE_UND32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
++			new_cpsr = cpu->cd.arm.spsr_und; break;
++		default:spsr_copied = 0;
+ 		}
++		/*  #562: an SPSR naming an unmodelled mode keeps the CURRENT mode
++		    in M[4:0]; the value assigned to CPSR below takes all other
++		    bits from the SPSR (msr_imm's POLICY) -- though T is forced
++		    after Load for an odd destination PC.  Only when an SPSR was
++		    copied; no early return (pc is set).  */
++		if (spsr_copied && !arm_mode_is_modelled(new_cpsr)) {
++			if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_DPI)) {
++				cpu->cd.arm.mode_warned |= ARM_MODEWARN_DPI;
++				fatal("[ dpi S-to-pc: SPSR mode 0x%02x is not "
++				    "modelled; mode kept (once) ]\n",
++				    (int)(new_cpsr & ARM_FLAG_MODE));
++			}
++			new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) | cur_mode;
++		}
++		cpu->cd.arm.cpsr = new_cpsr;
+ 		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+ 		arm_load_register_bank(cpu);
+ #else

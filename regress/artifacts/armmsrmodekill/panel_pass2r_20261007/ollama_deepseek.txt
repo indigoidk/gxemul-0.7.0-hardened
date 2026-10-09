@@ -1,0 +1,22 @@
+VERDICT: DO-NOT-SHIP | 2 floor breaches
+
+1. **Yes — one smallest edit exists.**  
+   READ/REASONED: Delete the `spsr_copied` gate in the DPI path (remove `int spsr_copied = 1;`, the `default:spsr_copied = 0;`, and change the guard to `if (!arm_mode_is_modelled(new_cpsr))`). All 38 rows stay green because no row drives a DPI S-to-PC from an unmodelled current mode with a clear DPI latch. `latch rpt` visits DPI twice, but the first visit already sets the latch, so the second cannot reveal the missing gate.  
+   Swept cells: msr_imm guard, arm_pop guard, DPI guard, five latch sites, helper case list (`USR32` is covered by `acc usr`, `SYS32` by accepted `src *` rows), restore label axes. Denominator: 38 rows.  
+   Floor breach: the detector does not require the `spsr_copied` condition.
+
+2. **No — the closure is incomplete.**  
+   READ/REASONED: Missing cells:  
+   - **Zero-SPSR declined cell** for pop and for non-SVC DPI labels. Only SVC/DPI is rowed.  
+   - **Latch-state × label interaction**: after a declined restore from one label sets the site latch, a declined restore from another label should not announce again. The 10 `src *` rows run in separate processes and do not test cross-label suppression.  
+   The product should be `{fiq,irq,abt,und,svc} × {declined 0x14, declined 0x00, accepted} × {dpi,pop}` plus a cross-label latch-suppression row.
+
+3. **False records found.**  
+   READ:  
+   - `NAMED-RED tally` says HEAD = 16/38 but then lists 22 red rows (kill 14, kill 15, save 2s, kill 1e, kill 03, rst movs, rst ldm, zero spsr, dbg save, dbg both, latch ind, latch rpt, ten src rows). That count is false.  
+   - `PRETABLE2` says HEAD 16/37, reds exactly the 21 named — also inconsistent with the 16/38 line.  
+   - The NOT CLAIMED list is stale: it omits `0x03` as a now-claimed unmodelled value (covered by `kill 03`).  
+   - The DPI comment “T is forced after Load for an odd destination PC” cannot be verified from the packet because the load function is not inlined. Label it uncheckable, not false.
+
+4. **Mostly honest, but one disclosed gap is misstated.**  
+   READ/REASONED: The unmodelled-values gap no longer excludes `0x03`; that line is outdated. The cached-translation gap is real and guest-reachable (re-executing the same MSR), but it is disclosed. Per-CPU latch isolation and USR/SYS paths are not guest-reachable on testarm as described. No hidden claim found beyond the stale NOT CLAIMED line.

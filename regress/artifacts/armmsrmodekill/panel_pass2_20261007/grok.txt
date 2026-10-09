@@ -1,0 +1,61 @@
+The brief's premises need a check against the uncommitted `GXEMUL-SEC` tree, not a ratification of the write-up. I'll read the four changed files and the real callers around them.VERDICT: SHIP-WITH-CHANGES -- the three writers and both backstops match the callers and the 26-row table; the comments that those defaults are reached only by a debugger `cpsr=` assignment are false. | 0 floor breaches
+
+## 1. Premise that is wrong
+
+"Both `default:` arms are reachable only by a debugger `cpsr=` assignment" is false. The same sentence is in the probe header and in both backstop comments in `cpu_arm.c`.
+
+`cpsr` is a raw settings word (`CPU_SETTINGS_ADD_REGISTER32("cpsr", cpu->cd.arm.cpsr)` in `arm_cpu_new`). The assignment stores the integer and returns. It does not call `arm_save_register_bank` or `arm_load_register_bank`.
+
+What reaches the defaults is the next bank call while `M[4:0]` is already unmodelled:
+
+- `dbg save` reaches Save from the guest `MSR CPSR_c,#0x13`. The immediate is modelled, so the new MSR guard does not run. `switch_register_banks` is true because the current mode is `0x14`. Save's `default:` announces and returns.
+- `dbg both` reaches both defaults from the guest `MOVS pc,lr`. Mode `0x14` has no SPSR, so `spsr_copied` stays 0, the DPI guard does not run, and the DPI template still calls Save and then Load.
+- `arm_exception()` calls `arm_save_register_bank()` at `cpu_arm.c:711` before it replaces `M[4:0]` (`:739-740`) and before Load (`:762`). A SWI, undefined instruction, prefetch abort, data abort, or a non-single-step IRQ taken while `M` is unmodelled hits Save's backstop, then continues into a modelled exception mode.
+
+The parenthetical in Save's comment ("msr_imm and both SPSR restores decline an unmodelled mode first") describes the value being written. It does not describe the current mode. `dbg save` is a guest `msr_imm` that enters Save's `default:`.
+
+## 2. Guards against real control flow
+
+The three new guards sit where the rows need them.
+
+- `msr_imm`: the mode bits are cleared from the local `mask` at `cpu_arm_instr.c:846`, and `switch_register_banks` is computed from that mask at `:849`. The register form `msr` writes `ic->arg[0]` from Rm and tail-calls `msr_imm`, so it is covered. `arg[0]` is the rotated immediate (`:4349-4352`), and a c-field mask is the whole low byte, so `M[4:0]` is either all written or not written.
+- `arm_pop`: on the FIQ/IRQ/SVC/ABT/UND path the new block does not return. The PC load at `:1851` is outside `if (return_flag)` and still runs. The pre-existing `default:` at `:1814` still sets `cpu->running = 0` and returns before that load.
+- DPI: `cur_mode` is sampled, `new_cpsr` starts as the current CPSR, `spsr_copied` is cleared only in the `default:` (USR, SYS, and any unmodelled current mode). The guard runs only when an SPSR was copied. `cpsr` is assigned at `:247`, then `flags` at `:248`, then Load. The PC was stored before this block. There is no return between the guard and Load.
+
+No guest write of a reserved mode through these three writers still reaches `exit(1)`. The bank `default:` arms return. `fatal()` only prints.
+
+`running = 0` is still reached when the current mode is already outside FIQ/IRQ/SVC/ABT/UND: `arm_pop`'s `default:`, `msr_imm_spsr`'s `default:`, and `mrs_spsr`'s `default:`. That set includes a reserved current mode and USR/SYS. After this fix a guest MSR, `LDM {pc}^`, or S-to-PC cannot install that current mode. A debugger poke followed by `LDM {pc}^` or `MSR/MRS SPSR` still stops the CPU. The same poke followed by `MOVS pc,lr` hits the backstops and stays alive. `arm_exception` index 5 still `exit(1)`s, and nothing in `src/` calls it.
+
+## 3. Smallest edit that still scores 26/26
+
+Set `#define ARM_MODEWARN_SAVE` to `0x01`, the same bit as `ARM_MODEWARN_MSR`.
+
+`dbg save` stays green. That session runs a guest MSR and Save's backstop in one process, but the MSR is `#0x13`, so the decline latch is never set. Save still prints, and `once_key="msr_imm"` does not match Save's text. `latch ind` also stays green: it never enters a backstop, and POP and DPI keep `0x02` and `0x04`. `dbg both` stays green because Load is still `0x10`.
+
+`M_shared_latch` is a different, larger edit. `regress/artifacts/armmsrmodekill/killtable_20261007/mutate.py` sets POP, DPI, SAVE, and LOAD all to `0x01`. That is why `M_shared_latch_probe2` reds both `dbg both` and `latch ind`. The save/load-only alias is `M_shared_saveload` (`LOAD` becomes `0x08`). It was scored only on the 25-row probe.
+
+## 4. Floor
+
+The inlined table matches the control flow and `mutate.py`. I did not rebuild.
+
+- Pre-fix: HEAD `16/26`, red on the ten rows that reach a bank `default:` and `exit(1)`. `save 2s` and `latch ind` die on the first `MSR #0x14`, the same Load death as `kill 14`. `dbg both` dies in Save before Load.
+- Verbatim `exit(1)` put back: `M_load_exit` reds `dbg both` only. `M_save_exit` reds `dbg save` and `dbg both`. The latched `return` to `exit(1)` pair does the same.
+- Nulled repair: dropped guards, unconditional restores, `M_pop_return`, `M_wholeop_msr`, `M_dpi_uncond_call`, `M_helper_always1`, and `M_helper_range` red the rows the contract names. `row count` is the identity row (`len(rows)+1` against 26, and the file has those 26 rows).
+
+Un-mutated DEPENDS-ON predicates, the ones the contract already discloses: a helper wrong only at `0x16`, `0x18-0x1a`, `0x1c-0x1d`, or `0x01-0x0f`; a single decline bit aliased with a single backstop bit; a second execution of the same translated MSR. Also un-mutated, and not in that disclosure: the `(mask & ARM_FLAG_MODE)` conjunct alone. Dropping it makes `no cbit` gain `once`, because `f_14`'s `arg[0]` is `0x14` and that row treats any `(once)` as the token. The row would catch it. No mutant was run.
+
+## 5. Comment claims the rows do not support
+
+These ship in the diff and are false against the rows above: "a guest instruction no longer gets here", and "only a debugger `cpsr=` assignment reaches it."
+
+"Only the local mask changes: `ic->arg[]` is a cached translation" is true of the C (`mask` is a local copy of `ic->arg[1]`). No row re-executes one translated MSR. The probe header already says so.
+
+"Each site announces independently" is measured for the three decline pairs (`latch ind`) and for Save versus Load (`dbg both` via `M_shared_saveload`). A decline bit shared with a backstop bit is not measured.
+
+`mode_warned` and the SPSRs are zero because `cpu_new` uses `zeroed_alloc`. The `once` tokens and `zero spsr` (`if=0`, mode kept) agree with that.
+
+## Else
+
+`announced()` is a substring test for `(once)` on one line. It does not count prints. A latch that never suppresses a second hit of the same site still scores 26/26.
+
+DDI 0100I A2.5.1 is "Types of PSR bits". I could not confirm from the pages opened here that A2.5.7 is the mode-field subsection. The UNPREDICTABLE rule and the glossary bar on halting are the ARMv7 CPSR.M wording.

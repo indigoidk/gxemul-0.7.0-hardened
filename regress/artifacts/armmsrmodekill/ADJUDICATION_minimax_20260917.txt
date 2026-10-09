@@ -1,0 +1,56 @@
+**VERDICT: STANDS-WITH-CORRECTIONS.** The defect itself (default arm fires on reserved 0x14, `fatal` prints decimal, `exit(1)` kills the process) is correctly described. The witness design is largely sound but has four real gaps that will produce false negatives or false positives if not closed. Listed by severity.
+
+---
+
+**Q1. THE ORACLE — "EOF AND exact text `unimplemented mode 20`"**
+
+Three ways the pair fails to separate this defect from others. None refutes the design; all require a one-line check against the source.
+
+(a) **`fatal()` writes to stderr; the pty captures stdout.** This is the standard convention for `fatal()`-named helpers, and GXemul is no exception. If stderr is not merged into the pty (the packet never says it is), the text never reaches the harness regardless of buffering. The oracle then degrades to EOF-alone — exactly the vacuous case the brief warns against. One-line check: `grep -n 'fprintf\|printf' src/cpus/cpu_arm.c` and `grep -n 'fatal' src/ *.c` to see whether `fatal()` is defined to write to stderr or stdout, and whether the harness does `2>&1`.
+
+(b) **`exit(1)` flushes stdio, so buffering is not the killer** — IF (a) is satisfied. So the buffering concern the brief raises is a red herring conditional on (a) being false. Worth recording: not checkable from packet.
+
+(c) **The pair cannot distinguish "defect fired, process died of the defect" from "defect fired, process died of something else five instructions later."** A mutant that keeps the print, drops `exit(1)`, and introduces a segfault in unrelated cleanup still produces (EOF + text). The witness attributes the death to the named defect. Not fatal for this finding — `exit(1)` is the kill here — but the oracle is coarser than the brief claims.
+
+**Q2. THE ARMING PREFIX (unscored but gating)**
+
+The hazard is real but the design choice is defensible. **The defect is that the prefix's outcome is invisible in the 14/16 → 16/16 tally.** A reader cannot tell whether the gate fired because the CPU was genuinely in 0x13, or because the harness's MRS read is broken in the *agreeable* direction (returns 0x13 for any CPSR), or because the gate is stubbed out. STANDS, but the witness MUST emit a per-row `prefix=armed/unarmed` line adjacent to the score, even if not counted. That makes the gate auditable without conflating harness health with the fix.
+
+The "exactly 0x13" check is sound: MRS is unprivileged in all ARM modes, so no mode-restriction concern (READ from packet + REASONED on ARM architecture).
+
+**Q3. ONE PROCESS PER ROW — what does it hide?**
+
+Two things, only one of which matters for this finding.
+
+(1) It hides cross-switch state defects — a bug that only fires on the *second* `arm_load_register_bank` call within one process. For a default-arm crash on a reserved mode, this is implausible: the default arm fires deterministically on every reserved-mode write, not on the second one. OUT OF SCOPE for this witness.
+
+(2) **12 sessions for 16 rows is unresolved in the packet.** "One fresh process per data row" + 16 rows + 12 sessions is either (a) 16 processes grouped into 12 harness sessions (each session reuses one pty across multiple processes — fine), or (b) 4 rows share a process with others (contradicts the design), or (c) 4 rows are identity/control and don't need fresh processes. The packet does not say which. **NOT CHECKABLE from packet.** Settled by stating the row→session mapping explicitly in the spec.
+
+**Q4. THE ACCEPT ROWS — "SP changed to 0"**
+
+Genuine gap. The check is: `SP != boot_value ∧ SP == 0`. A mutant that *skips the bank copy* but *unconditionally writes SP=0 on any mode switch* passes — mode bits correct, SP correct, no copy. The row proves "the destination SP register holds 0," not "the copy from the source bank ran." A second register that differs between banks (e.g., LR, or any FIQ32-only bank register r8–r14) read before and after would close this. For the minimal `testarm` machine this may not be available; if it isn't, the spec should say so and downgrade the claim from "copy ran" to "SP is correct post-switch." **STANDS-WITH-CORRECTIONS**: either strengthen the row or weaken the claim written next to it.
+
+**Q5. THE COUNT — why exactly 2?**
+
+The brief says "the fix changes behaviour at two separate `default:` arms." Only ONE is named (`arm_load_register_bank`). **The second arm is not identified in the packet.** If the fix touches only the named arm, then expected movement is N kill rows where N = number of rows that issue a reserved-mode MSR — not necessarily 2. If there is a symmetric `arm_save_register_bank` (or similar) default arm, the packet should name it; the 14/16 → 16/16 arithmetic depends on it. **NOT CHECKABLE from packet** — settle by grepping `cpu_arm.c` for other `default:` arms in the register-bank path.
+
+Separately: the kill rows should verify post-fix mode state (e.g., CPSR mode bits are unchanged, or set to a documented fallback), not merely "process survived." A fix that just `return`s from the default arm without handling the reserved value makes 16/16 GREEN while leaving the emulator in an architecturally undefined state for any guest that issues the MSR. The witness would then certify a fix that is not a fix. **STANDS-WITH-CORRECTIONS**: add a post-MSR CPSR read to the kill rows.
+
+**Q6. FREE SHOT**
+
+- **Encoding `0xE321F014` for `MSR CPSR_c, #0x14`** is asserted but not verifiable from the packet. Settle against ARMv7-A ARM §A8.8.132 (MSR, immediate). If wrong, the witness tests nothing.
+- **Where `fatal()` writes** is the single highest-leverage unknown — see Q1(a).
+- **PTY wiring** (stdout-only vs 2>&1) is not stated. Settle by reading the harness.
+- **The identity row** is named but its invariant is not stated. What makes it "identity"?
+- **The "after" run** depends on the fix actually being applied. The packet does not specify what the fix IS, only that it makes the rows go green. A "fix" that comments out `exit(1)` and nothing else would satisfy the witness as written. The post-fix CPSR check (Q5) is the guard against this.
+
+---
+
+**Summary of what must change before the witness is built:**
+1. State where `fatal()` writes and confirm stderr is merged into the pty. *(load-bearing — if wrong, the oracle is vacuous)*
+2. Add a post-MSR CPSR read to kill rows; they must verify defined state, not just survival. *(load-bearing — without this, a no-op fix passes)*
+3. Identify the second `default:` arm or correct the row count. *(load-bearing — arithmetic depends on it)*
+4. Emit `prefix=armed/unarmed` per row in the witness output. *(auditability, not correctness)*
+5. Either strengthen accept rows with a second bank-differing register or weaken the documented claim. *(honesty, not correctness)*
+
+Items 1, 2, 3 are gates. The spec as written will certify a wrong fix.

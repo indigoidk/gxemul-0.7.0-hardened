@@ -1,0 +1,2919 @@
+Reading additional input from stdin...
+OpenAI Codex v0.159.2
+--------
+workdir: C:\DocumentNoSnc\cc\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: ultra
+reasoning summaries: none
+session id: 01a1170e-9644-7690-8eee-328f34724315
+--------
+user
+# armmsrmodekill -- pass 1: how should a reserved ARM mode be handled at the register-bank switch?
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly.  **Check the premises, not just the derivations.**  Where I state something as
+fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`** (`C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`, HEAD `ef577140`).  There
+are THREE pristine-2021-upstream copies of GXemul under the project root (`./src/` and two under
+`_archive/audit-results-*/builds/`).  They are NOT this fork.  If your line numbers disagree with mine by hundreds
+you are reading one of them — say so rather than reconciling.  Read-only: write nothing, build nothing.
+
+**If you cannot read files that is expected** — every fact you need is inlined below.  Name any premise you cannot
+settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it.  And ENUMERATE THE RIGHT DOMAIN** — ask what the
+PRODUCER of a value can actually emit before walking it.
+
+**VERDICT LINE FIRST**, so your answer survives truncation:
+`VERDICT: <recommended disposition in one line> | <n> premises wrong`
+
+## 1. The defect (a design question; the reproduction is being repaired separately)
+
+`arm_save_register_bank()` and `arm_load_register_bank()` in `src/cpus/cpu_arm.c` each switch on
+`cpsr & ARM_FLAG_MODE` (5 bits) over the six modelled modes and end in
+
+    default: fatal("arm_..._register_bank: unimplemented mode %i\n", cpsr & ARM_FLAG_MODE);
+             exit(1);
+
+so a guest that puts a RESERVED mode in CPSR ends the emulator PROCESS.  The ARM ARM calls a reserved M[4:0]
+UNPREDICTABLE, not fatal.  A privileged `MSR CPSR_c, #0x14` (word `0xE321F014`) on `-E testarm` is the filed
+trigger.
+
+## 2. SETTLED PREMISES (re-inlined so nobody spends an answer re-deriving them; CHALLENGE any you doubt)
+
+* **Save is not the first hit for MSR** -- in `msr_imm`, Save runs on the OLD mode (e.g. SVC32, modelled) and
+  returns; CPSR is then rewritten; Load runs on the NEW (reserved) mode and dies.  A Load-only fix therefore makes
+  the NEXT mode switch die in Save (CPSR now holds the reserved mode).  -- row `armmsrmodekill`, grok trace 2026-09-17.
+* **Callers write CPSR BETWEEN Save and Load** (all four callers below).  So a decline placed only inside Load
+  leaves CPSR holding the reserved mode unless Load also rolls it back.  -- same row.
+* **Member 1, DELETE (just drop the `exit(1)`), is WRONG**: CPSR stays reserved and `r[]` stays on the previous
+  bank -> silent wrong-bank execution, then the next switch hits Save's default.  -- same row.
+* **Member 5, FAULT, is available on ARM but wrong for MSR**: the ARM ARM lists MSR as "Exceptions: None".
+  -- same row.  (For the SPSR-restore callers the question is open -- see §4.)
+* **`fatal()` does not exit**; it prints regardless of `-q`.  A guest-drivable `fatal()` needs a LATCH (house idiom
+  `N = 1` per instance + a `(once)` marker in the text), not a verbosity flag.  -- carrier rule.
+* **Has it shipped?**  `grep -c armmsrmodekill CHANGELOG.md` = 0; the three files last changed in `#524`
+  (`4dfc7165`).  No fix exists.
+
+## 3. The full code (verbatim at HEAD `ef577140`; line numbers in the left column)
+
+### `src/cpus/cpu_arm.c` -- both functions
+
+```c
+522	void arm_save_register_bank(struct cpu *cpu)
+523	{
+524		/*  Save away current registers:  */
+525		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+526		case ARM_MODE_USR32:
+527		case ARM_MODE_SYS32:
+528			memcpy(cpu->cd.arm.default_r8_r14,
+529			    &cpu->cd.arm.r[8], sizeof(uint32_t) * 7);
+530			break;
+531		case ARM_MODE_FIQ32:
+532			memcpy(cpu->cd.arm.fiq_r8_r14,
+533			    &cpu->cd.arm.r[8], sizeof(uint32_t) * 7);
+534			break;
+535		case ARM_MODE_IRQ32:
+536			memcpy(cpu->cd.arm.default_r8_r14,
+537			    &cpu->cd.arm.r[8], sizeof(uint32_t) * 5);
+538			cpu->cd.arm.irq_r13_r14[0] = cpu->cd.arm.r[13];
+539			cpu->cd.arm.irq_r13_r14[1] = cpu->cd.arm.r[14];
+540			break;
+541		case ARM_MODE_SVC32:   /* ... same shape, svc_r13_r14 ... */
+546			break;
+547		case ARM_MODE_ABT32:   /* ... same shape, abt_r13_r14 ... */
+552			break;
+553		case ARM_MODE_UND32:   /* ... same shape, und_r13_r14 ... */
+558			break;
+559		default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+560			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+561			exit(1);
+562		}
+563	}
+
+569	void arm_load_register_bank(struct cpu *cpu)
+570	{
+571		/*  Load new registers:  */
+572		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+573		case ARM_MODE_USR32:
+574		case ARM_MODE_SYS32:
+575			memcpy(&cpu->cd.arm.r[8],
+576			    cpu->cd.arm.default_r8_r14, sizeof(uint32_t) * 7);
+577			break;
+578		case ARM_MODE_FIQ32:
+579			memcpy(&cpu->cd.arm.r[8], cpu->cd.arm.fiq_r8_r14,
+580			    sizeof(uint32_t) * 7);
+581			break;
+582		case ARM_MODE_IRQ32:   /* memcpy default 5, then r13/r14 from irq_r13_r14 */
+587			break;
+588		case ARM_MODE_SVC32:   /* ... svc ... */
+593			break;
+594		case ARM_MODE_ABT32:   /* ... abt ... */
+599			break;
+600		case ARM_MODE_UND32:   /* ... und ... */
+605			break;
+606		default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+607			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+608			exit(1);
+609		}
+610	}
+```
+*(The SVC/ABT/UND arms are CONDENSED here -- each is the IRQ arm's shape with its own `_r13_r14` array.  Both
+functions are `void`; neither has any code after the switch.)*
+
+### Caller 1 -- `msr_imm` (and `msr`, which sets `arg[0]` from a register and calls it), `src/cpus/cpu_arm_instr.c`
+
+```c
+822	X(msr_imm)
+823	{
+824		uint32_t mask = ic->arg[1];
+826		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+827			mask &= 0xff000000;
+828		}
+830		int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+831		    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+832		    (ic->arg[0] & ARM_FLAG_MODE));
+833		uint32_t new_value = ic->arg[0];
+835		cpu->cd.arm.cpsr &= 0x0fffffff;
+836		cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+838		if (switch_register_banks)
+839			arm_save_register_bank(cpu);
+841		cpu->cd.arm.cpsr &= ~mask;
+842		cpu->cd.arm.cpsr |= (new_value & mask);
+844		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+846		if (switch_register_banks)
+847			arm_load_register_bank(cpu);
+848	}
+```
+
+### Caller 2 -- `LDM ... ^` with PC in the list (`bdt_load`), `src/cpus/cpu_arm_instr.c`
+
+```c
+	/* new_cpsr = the SPSR of the CURRENT mode, chosen by a switch whose default: is */
+1795		default:fatal("bdt_load: unimplemented mode %i\n",
+1796			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+1797			cpu->running = 0;
+1798			cpu->cd.arm.next_ic = &nothing_call;
+1799			return;
+1800		}
+1802		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+1803		    (new_cpsr & ARM_FLAG_MODE);
+1805		if (switch_register_banks)
+1806			arm_save_register_bank(cpu);
+1808		cpu->cd.arm.cpsr = new_cpsr;
+1809		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+1811		if (switch_register_banks)
+1812			arm_load_register_bank(cpu);
+```
+
+### Caller 3 -- data-processing with S and destination PC (`MOVS pc, lr`, `SUBS pc, lr, #4`), `src/cpus/cpu_arm_instr_dpi.c`
+
+```c
+216	#ifdef A__S
+217		/*  Copy the right SPSR into CPSR:  */
+218		arm_save_register_bank(cpu);
+219		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+220		case ARM_MODE_FIQ32:
+221			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+222		case ARM_MODE_IRQ32:
+223			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+224		case ARM_MODE_SVC32:
+225			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+226		case ARM_MODE_ABT32:
+227			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+228		case ARM_MODE_UND32:
+229			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+230		}
+231		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+232		arm_load_register_bank(cpu);
+```
+*(Note: unconditional Save and Load, no `switch_register_banks` test; no `default:` -- in USR/SYS32 CPSR is left
+unchanged.)*
+
+### Caller 4 -- `arm_exception()`, `src/cpus/cpu_arm.c`
+
+```c
+669		arm_save_register_bank(cpu);              /* on the CURRENT mode */
+   ...
+697		cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+698		cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];   /* always a modelled mode */
+   ...
+720		arm_load_register_bank(cpu);
+```
+*(Load here always sees a modelled mode.  Save sees whatever mode the guest was in -- so an exception taken while
+CPSR holds a reserved mode dies in Save.)*
+
+## 4. The question: which disposition, and where?
+
+The project's option set for a guest-drivable host kill has seven members; please consider every one, and say if
+there is an eighth:
+
+1 DELETE · 2 DECLINE (silent) · 3 DECLINE + LATCHED ANNOUNCE (`(once)`) · 4 ACCEPT · 5 FAULT · 6 BACKED ACCEPT ·
+7 IMPLEMENT.
+
+The row's working position (challenge it): **member 3, and the decline must happen BEFORE Save** -- i.e. a reserved
+mode is never allowed into CPSR at all -- because every caller writes CPSR between Save and Load.  That suggests one
+shared helper, e.g. `int arm_mode_is_modelled(uint32_t mode)`, consulted by each caller before it writes the mode
+bits, plus the two `default:` arms changed from `exit(1)` to a latched announce as a backstop.
+
+Questions:
+
+1. **Premise audit.**  Which premise in §2 or §3 is wrong?  In particular: can a reserved mode reach CPSR by any
+   path OTHER than the three writers shown (MSR, `LDM ^`, data-processing S-to-PC)?  Can it reach an SPSR (via
+   `MSR SPSR_c`, `msr_imm_spsr`) and so be restored later by callers 2 and 3?  Enumerate the writers of CPSR and of
+   each SPSR from the source if you can read it; say plainly if you cannot.
+2. **The disposition.**  For EACH caller, what should happen when the incoming mode is reserved?  For MSR the ARM
+   ARM says "Exceptions: None", so the mode write is declined -- but do the OTHER fields in the same MSR (flags, I/F
+   bits, the c-byte's T bit) still apply, or is the whole write declined?  For callers 2 and 3 (restoring an SPSR
+   the guest itself poisoned), is declining the mode change right, or is FAULT (undefined-instruction) the better
+   model?  Cite the architecture text you rely on, or say you are reasoning.
+3. **Where the decline lives.**  One helper consulted by every caller, versus guards inside Save/Load that roll CPSR
+   back, versus both.  What does each leave reachable?  Apply the sketch rule: a proposed edit must be run against
+   each caller's real control flow above, including what happens AFTER Load returns (the `flags` copy, the PC
+   write, `quick_pc_to_pointers`).
+4. **The backstop.**  If every caller is guarded, are the two `default:` arms dead?  Should they still be latched
+   announces (member 3) rather than deleted, and where does the latch state live (per-CPU field vs function-static)?
+5. **"What is the SMALLEST EDIT that breaks the fix and still passes?"**  Name the edit and the row of a detector
+   you would expect to stay green under it.  (The detector is a 17-row debugger-driven probe on `-E testarm` being
+   repaired now; its rows are: `enc ok`, `live`, `pc adv`, `armed`, `no cbit`, `kill 14`, `kill 15`, `save 2s`,
+   `acc usr`, `acc fiq/irq/abt/und/sys`, `same svc`, `usr mask`, `row count`.)
+
+**If, while verifying a claim, you found something ELSE — say so.**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll check the fork’s source and trace the mode writes and post-Load control flow, then compare the proposed disposition with the ARM architecture text. I’ll keep this read-only and won’t build or run the probes.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g cpu_arm.c -g cpu_arm_instr.c -g cpu_arm_instr_dpi.c -g cpu_arm.h -g CHANGELOG.md -g '*arm*' GXEMUL-SEC" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 4351ms:
+
+GXEMUL-SEC\CHANGELOG.md
+GXEMUL-SEC\doc\20060218-netbsd-evbarm.png
+GXEMUL-SEC\doc\20060218-netbsd-evbarm_small.png
+GXEMUL-SEC\doc\machine_evbarm.html
+GXEMUL-SEC\regress\arm_idle_probe.py
+GXEMUL-SEC\regress\arm_fold_marker_probe.py
+GXEMUL-SEC\regress\arm_flags_probe.py
+GXEMUL-SEC\regress\arm_endian_probe.py
+GXEMUL-SEC\regress\arm_bfx_width_probe.py
+GXEMUL-SEC\regress\arm_bfx_stub.bin
+GXEMUL-SEC\regress\arm_bdt_probe.py
+GXEMUL-SEC\regress\arm_strlen_probe.py
+GXEMUL-SEC\regress\arm_msrmode_probe.py
+GXEMUL-SEC\regress\arm_memcpy_probe.py
+GXEMUL-SEC\regress\gate_arm.sh
+GXEMUL-SEC\src\machines\machine_hpcarm.o
+GXEMUL-SEC\src\machines\machine_hpcarm.c
+GXEMUL-SEC\src\machines\machine_androidarm.o
+GXEMUL-SEC\src\machines\machine_androidarm.c
+GXEMUL-SEC\src\include\thirdparty\arm_cputypes.h
+GXEMUL-SEC\src\include\thirdparty\armreg.h
+GXEMUL-SEC\src\include\cpu_arm.h
+GXEMUL-SEC\src\include\arm_cpu_types.h
+GXEMUL-SEC\regress\artifacts\xscaleinten\killtable3_20260912\cpu_arm_coproc.HEAD.c
+GXEMUL-SEC\regress\artifacts\xscaleinten\killtable2_20260912\cpu_arm_coproc.HEAD.c
+GXEMUL-SEC\regress\artifacts\xscaleinten\gate_arm_20260912.log
+GXEMUL-SEC\regress\artifacts\xscaleinten\brief_armcoproc.md
+GXEMUL-SEC\src\cpus\tmp_arm_tail.c
+GXEMUL-SEC\src\cpus\tmp_arm_rf.o
+GXEMUL-SEC\src\cpus\tmp_arm_rf.c
+GXEMUL-SEC\src\cpus\tmp_arm_re.o
+GXEMUL-SEC\src\cpus\tmp_arm_re.c
+GXEMUL-SEC\src\cpus\tmp_arm_rd.o
+GXEMUL-SEC\src\cpus\tmp_arm_rd.c
+GXEMUL-SEC\src\cpus\tmp_arm_rc.o
+GXEMUL-SEC\src\cpus\tmp_arm_rc.c
+GXEMUL-SEC\src\cpus\tmp_arm_rb.o
+GXEMUL-SEC\src\cpus\tmp_arm_rb.c
+GXEMUL-SEC\src\cpus\tmp_arm_ra.o
+GXEMUL-SEC\src\cpus\tmp_arm_ra.c
+GXEMUL-SEC\src\cpus\tmp_arm_r9.o
+GXEMUL-SEC\src\cpus\tmp_arm_r9.c
+GXEMUL-SEC\src\cpus\tmp_arm_r8.o
+GXEMUL-SEC\src\cpus\tmp_arm_r8.c
+GXEMUL-SEC\src\cpus\tmp_arm_r7.o
+GXEMUL-SEC\src\cpus\tmp_arm_r7.c
+GXEMUL-SEC\src\cpus\tmp_arm_r6.o
+GXEMUL-SEC\src\cpus\tmp_arm_r6.c
+GXEMUL-SEC\src\cpus\tmp_arm_r5.o
+GXEMUL-SEC\src\cpus\tmp_arm_r5.c
+GXEMUL-SEC\src\cpus\tmp_arm_r4.o
+GXEMUL-SEC\src\cpus\tmp_arm_r4.c
+GXEMUL-SEC\src\cpus\tmp_arm_r3.o
+GXEMUL-SEC\src\cpus\tmp_arm_r3.c
+GXEMUL-SEC\src\cpus\tmp_arm_r2.o
+GXEMUL-SEC\src\cpus\tmp_arm_r2.c
+GXEMUL-SEC\src\cpus\tmp_arm_r1.o
+GXEMUL-SEC\src\cpus\tmp_arm_r1.c
+GXEMUL-SEC\src\cpus\tmp_arm_r0.o
+GXEMUL-SEC\src\cpus\tmp_arm_r0.c
+GXEMUL-SEC\src\cpus\tmp_arm_r.o
+GXEMUL-SEC\src\cpus\tmp_arm_r.c
+GXEMUL-SEC\src\cpus\tmp_arm_multi.o
+GXEMUL-SEC\src\cpus\tmp_arm_multi.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u1_w1.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u1_w1.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u1_w0.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u1_w0.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u0_w1.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u0_w1.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u0_w0.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p1_u0_w0.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u1_w1.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u1_w1.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u1_w0.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u1_w0.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u0_w1.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u0_w1.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u0_w0.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore_p0_u0_w0.c
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore.o
+GXEMUL-SEC\src\cpus\tmp_arm_loadstore.c
+GXEMUL-SEC\src\cpus\tmp_arm_head.c
+GXEMUL-SEC\src\cpus\tmp_arm_dpi.o
+GXEMUL-SEC\src\cpus\tmp_arm_dpi.c
+GXEMUL-SEC\src\cpus\memory_arm.o
+GXEMUL-SEC\src\cpus\memory_arm.c
+GXEMUL-SEC\src\cpus\generate_arm_r.c
+GXEMUL-SEC\src\cpus\generate_arm_r
+GXEMUL-SEC\src\cpus\generate_arm_multi.c
+GXEMUL-SEC\src\cpus\generate_arm_multi
+GXEMUL-SEC\src\cpus\generate_arm_loadstore.c
+GXEMUL-SEC\src\cpus\generate_arm_loadstore
+GXEMUL-SEC\src\cpus\generate_arm_dpi.c
+GXEMUL-SEC\src\cpus\generate_arm_dpi
+GXEMUL-SEC\src\cpus\experiment_arm_multi.c
+GXEMUL-SEC\src\cpus\cpu_arm_multi.txt
+GXEMUL-SEC\src\cpus\cpu_arm_instr_misc.c
+GXEMUL-SEC\src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC\src\cpus\cpu_arm_instr_dpi.c
+GXEMUL-SEC\src\cpus\cpu_arm_instr.c
+GXEMUL-SEC\src\cpus\cpu_arm_coproc.o
+GXEMUL-SEC\src\cpus\cpu_arm_coproc.c
+GXEMUL-SEC\src\cpus\cpu_arm.o
+GXEMUL-SEC\src\cpus\cpu_arm.c
+GXEMUL-SEC\src\cpus\arm_tmphead_1.h
+GXEMUL-SEC\regress\artifacts\wiringcliff\r536_20260918\gate_arm_20260918_2306.TIMES.txt
+GXEMUL-SEC\regress\artifacts\wiringcliff\r536_20260918\gate_arm_20260918_2306.log
+GXEMUL-SEC\regress\artifacts\wiringcliff\r536_20260918\gate_arm_20260918_2306.536rows.txt
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911h_floor\gate_arm_43rows.log
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911h_floor\arm_bdt_probe.FROZEN.py
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911g_closure\arm_bdt_probe.FROZEN.py
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911e\mutate_armbdt.py
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911d\mutate_armbdt.py
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911c\mutate_armbdt.py
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911b\mutate_armbdt.py
+GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911\mutate_armbdt.py
+GXEMUL-SEC\regress\artifacts\armbdt\agy_armbdt_witness_20260911.py
+GXEMUL-SEC\regress\artifacts\armbdt\agy_armbdt_run.out
+GXEMUL-SEC\regress\artifacts\armbdt\agy_armbdt_run.err
+GXEMUL-SEC\regress\artifacts\wdcrearmzero\rung3_20260913\wdcrearmzero_rung3_probe.py
+GXEMUL-SEC\regress\artifacts\wdcrearmzero\rung3_20260913\rearmzero.bin
+GXEMUL-SEC\regress\artifacts\wdcchunking\killtable_20260827\Md_widenarm.txt
+GXEMUL-SEC\regress\artifacts\wdcchunking\killtable_20260827\Md_armzero.txt
+GXEMUL-SEC\regress\artifacts\wdcchunking\killtable_20260827\Mb_rearm.txt
+GXEMUL-SEC\regress\artifacts\wdcchunking\killtable_20260827\Mb_arm.txt
+GXEMUL-SEC\regress\artifacts\wdccdbmidxfer\killtable2_20260827\Mr_readarm.out
+GXEMUL-SEC\regress\arm_writeback_probe.py
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\hgatearm\hgatearm.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\hgatearm\codex_hgatearm.txt
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\hgatearm\codex_hgatearm.err
+GXEMUL-SEC\regress\artifacts\fbsmlane\r537_20260918\opus5_p2\more\armdump\arm_pristine.stdout
+GXEMUL-SEC\regress\artifacts\fbsmlane\r537_20260918\opus5_p2\more\armdump\arm_mutant.stdout
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\runs_eq\rearm_wrap_M_eq.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\runs_eq\rearm_wrap_base.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\runs_eq\rearm_small_M_eq.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\runs_eq\rearm_small_base.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\p3\frozen\gate_arm.HEAD.sh
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\p3\frozen\gate_arm.COMMITTED.sh
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\p2\frozen\gate_arm.HEAD.sh
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\p2\frozen\gate_arm.COMMITTED.sh
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\f2\runs\rearm_small_t1_M_eq_n2.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\f2\runs\rearm_small_t1_base.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\c\runs\rearm_big_P_win.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\c\runs\rearm_big_base.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\c\runs\rearm_big2_P_win.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\c\runs\rearm_big2_base.out
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\c\frozen\gate_arm.HEAD.sh
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\opus548_measured\c\frozen\gate_arm.COMMITTED.sh
+GXEMUL-SEC\regress\artifacts\fbdrainwire_20260924\gates_final\gate_arm.TESTED.sh
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\harmflagsprobe\harmflagsprobe.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\harmflagsprobe\codex_harmflagsprobe.txt
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\harmflagsprobe\codex_harmflagsprobe.err
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\briefs\hgatearm.md
+GXEMUL-SEC\regress\artifacts\astraretro_harness_20260926\briefs\harmflagsprobe.md
+GXEMUL-SEC\regress\artifacts\mapledmaaddr\codex_readarm_20260910.txt
+GXEMUL-SEC\regress\artifacts\mapledmaaddr\codex_readarm_20260910.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\opus_arm.FALLBACK_NOTE.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\opus_arm.FALLBACK-opus-4-8.md
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\grok_arm.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\grok_arm.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\grok_arm.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\agy_arm.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\agy_arm.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\seats_20260930\agy_arm.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\panel_high\brief_high_arm.md
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstrloadstore\cpuarminstrloadstore.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstrloadstore\codex_cpuarminstrloadstore.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstrloadstore\codex_cpuarminstrloadstore.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstr\cpuarminstr.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstr\codex_cpuarminstr.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstr\codex_cpuarminstr.err
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_writeback.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_strlen.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_memcpy.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_idle.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_foldmark.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_endian.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_bdt.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm_545.log
+GXEMUL-SEC\regress\artifacts\fbd5\q2_20260923\r3f_20260923\gate_arm\gate_arm.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarm\cpuarm.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarm\codex_cpuarm.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarm\codex_cpuarm.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\briefs\cpuarminstrloadstore.md
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\briefs\cpuarminstr.md
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\briefs\cpuarm.md
+GXEMUL-SEC\regress\artifacts\armbfxwidth32\codex_armcapability_20260907.txt
+GXEMUL-SEC\regress\artifacts\armbfxwidth32\codex_armcapability_20260907.err
+GXEMUL-SEC\regress\artifacts\fbd5\p2_20260919\p2r\p2base_frozen\regress\gate_arm.sh
+GXEMUL-SEC\regress\artifacts\fbd5\p2_20260919\p2\d_gate_arm.sh.patch
+GXEMUL-SEC\regress\artifacts\fbd5\gate_20260919\rc_arm_b.txt
+GXEMUL-SEC\regress\artifacts\fbd5\gate_20260919\rc_arm.txt
+GXEMUL-SEC\regress\artifacts\fbd5\gate_20260919\gate_arm_545b.log
+GXEMUL-SEC\regress\artifacts\fbd5\gate_20260919\gate_arm_545.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable4_20260913\logs\probe_o_rearm_time.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable4_20260913\logs\probe_o_rearm4.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable4_20260913\logs\o_rearm_time.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable4_20260913\logs\o_rearm4.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable4_20260913\builds\build_o_rearm_time.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable4_20260913\builds\build_o_rearm4.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable3_20260913\logs\rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable3_20260913\logs\probe_T2INSTR_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable3_20260913\logs\probe_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable3_20260913\builds\build_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\T_D4b_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\N_rearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\N_datarearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\make_T_D4b_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\make_N_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\make_N_datarearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\make_G3b_getresrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\make_G3a_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\make_G2_rdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\G3b_getresrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\G3a_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table6\G2_rdrearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\r_rearm_dogclr.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\r_rearm_ctlrd.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\r_rearm_ctl0.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_r_rearm_dogclr.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_r_rearm_ctlrd.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_r_rearm_ctl0.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_o_rearm4.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_c2_rearm_txt.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_c2_rearm_rev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_c2_rearm_dog.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\probe_c2_bit8_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\o_rearm4.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\c2_rearm_txt.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\c2_rearm_rev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\c2_rearm_dog.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\logs\c2_bit8_rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close_20260913\logs\rearm_time.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close_20260913\logs\rearm4.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close_20260913\logs\probe_rearm_time.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close_20260913\logs\probe_rearm4.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_r_rearm_dogclr.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_r_rearm_ctlrd.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_r_rearm_ctl0.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_o_rearm4.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_c2_rearm_txt.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_c2_rearm_rev.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_c2_rearm_dog.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable7_20260913\builds\build_c2_bit8_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\T_D4b_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\N_rearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\N_datarearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\make_T_D4b_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\make_N_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\make_N_datarearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\make_G3b_getresrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\make_G3a_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\make_G2_rdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\G3b_getresrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\G3a_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table5\G2_rdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4b\make_G2_rdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4b\G2_rdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\T_D4b_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\N_rearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\N_datarearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\make_T_D4b_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\make_N_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\make_N_datarearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\make_G3b_getresrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\make_G3a_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\make_G2_rdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\G3b_getresrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table4\G3a_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_T4INSTR_c2_rearm_dog.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_o_rearm4.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_c2_rearm_txt.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_c2_rearm_rev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_c2_rearm_dog.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_c2_bit8_rearm_ALONE.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\probe_c2_bit8_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\o_rearm4.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\c2_rearm_txt.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\c2_rearm_rev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\c2_rearm_dog.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\logs\c2_bit8_rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\builds\build_o_rearm4.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\builds\build_c2_rearm_txt.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\builds\build_c2_rearm_rev.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\builds\build_c2_rearm_dog.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable5_20260913\builds\build_c2_bit8_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table3\T_D4b_cmdrearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table3\N_rearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table3\N_datarearm.raw
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table3\make_T_D4b_cmdrearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table3\make_N_rearm.log
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\table3\make_N_datarearm.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\x_rearm_rev8r.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\x_rearm_defhi.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\x_rearm_ctl8w0200.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\r_rearm_dogclr.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\r_rearm_ctlrd.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\r_rearm_ctl0.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_x_rearm_rev8r.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_x_rearm_defhi.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_x_rearm_ctl8w0200.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_r_rearm_dogclr.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_r_rearm_ctlrd.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_r_rearm_ctl0.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_d7_rearm_wrev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_d3_rearm_wtime.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_d1_rearm_dog0200.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_c2_rearm_txt.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_c2_rearm_rev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\probe_c2_rearm_dog.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\d7_rearm_wrev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\d3_rearm_wtime.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\d1_rearm_dog0200.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\c2_rearm_txt.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\c2_rearm_rev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\logs\c2_rearm_dog.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close6_20260915\mutants\C3r_rearm_b78.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_x_rearm_rev8r.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_x_rearm_defhi.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_x_rearm_ctl8w0200.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_r_rearm_dogclr.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_r_rearm_ctlrd.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_r_rearm_ctl0.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_rearm.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_d7_rearm_wrev.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_d3_rearm_wtime.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_d1_rearm_dog0200.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_c2_rearm_txt.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_c2_rearm_rev.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable8_20260914\builds\build_c2_rearm_dog.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close6_20260915\logs\ship_C3r_rearm_b78.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close5_20260914\logs\probe_P2_ctl_endi_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close5_20260914\logs\probe_P1_win8r_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close5_20260914\logs\probe_n_rearm_deflo.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close5_20260914\logs\aug_P2_ctl_endi_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close5_20260914\logs\aug_P1_win8r_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\x_rearm_rev8r.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\x_rearm_defhi.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\x_rearm_ctl8w0200.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\r_rearm_dogclr.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\r_rearm_ctlrd.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\r_rearm_ctl0.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_x_rearm_rev8r.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_x_rearm_defhi.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_x_rearm_ctl8w0200.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_r_rearm_dogclr.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_r_rearm_ctlrd.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_r_rearm_ctl0.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_P2_ctl_endi_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_P1_win8r_rearm.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_d7_rearm_wrev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_d7_rearm_wrev.KILLED.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_d3_rearm_wtime.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_d1_rearm_dog0200.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_d1_rearm_dog0200.KILLED.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_c2_rearm_txt.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_c2_rearm_txt.KILLED.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_c2_rearm_rev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\probe_c2_rearm_dog.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\P2_ctl_endi_rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\P1_win8r_rearm.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\d7_rearm_wrev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\d3_rearm_wtime.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\d1_rearm_dog0200.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\c2_rearm_txt.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\c2_rearm_rev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\logs\c2_rearm_dog.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_x_rearm_rev8r.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_x_rearm_defhi.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_x_rearm_ctl8w0200.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_r_rearm_dogclr.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_r_rearm_ctlrd.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_r_rearm_ctl0.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_rearm.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_P2_ctl_endi_rearm.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_P1_win8r_rearm.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_d7_rearm_wrev.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_d3_rearm_wtime.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_d1_rearm_dog0200.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_c2_rearm_txt.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_c2_rearm_rev.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\killtable9_20260914\builds\build_c2_rearm_dog.log
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close4_20260914\logs\probe_d7_rearm_wrev.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close4_20260914\logs\probe_d3_rearm_wtime.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close4_20260914\logs\probe_d1_rearm_dog0200.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close4_20260914\logs\d7_rearm_wrev.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close4_20260914\logs\d3_rearm_wtime.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close4_20260914\logs\d1_rearm_dog0200.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close3_20260913\logs\rearm_dogclr.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close3_20260913\logs\rearm_ctlrd.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close3_20260913\logs\rearm_ctl0.diff
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close3_20260913\logs\probe_rearm_dogclr.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close3_20260913\logs\probe_rearm_ctlrd.raw
+GXEMUL-SEC\regress\artifacts\crimewidthkill\opus_close3_20260913\logs\probe_rearm_ctl0.raw
+GXEMUL-SEC\regress\artifacts\fbclearread\rung3_20260913\pre_armT.out
+GXEMUL-SEC\regress\artifacts\fbclearread\rung3_20260913\post_armT.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\p2\probe_N_rearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\p2\probe_N_datarearm.out
+GXEMUL-SEC\regress\artifacts\cpusexitsweep\grok_armhalts_20260917.txt
+GXEMUL-SEC\regress\artifacts\cpusexitsweep\BRIEF_armhalts_20260917.md
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\shipped_T\T_D4b_cmdrearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\shipped_T\N_datarearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\proto_TN\T_D4b_cmdrearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\proto_TN\N_rearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\proto_TN\N_datarearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\proto_d4inP\T_D4b_cmdrearm.out
+GXEMUL-SEC\regress\artifacts\fbctrlportkill_20260924\opus549_measured\f2\proto_d4inP\N_datarearm.out
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\hpanel_arm\hpanel_arm.launch.log
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\hpanel_arm\codex_hpanel_arm.txt
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\hpanel_arm\codex_hpanel_arm.err
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\machines\machine_hpcarm.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\machines\machine_androidarm.c
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armvector\dossier_armvector.launch.log
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armvector\codex_dossier_armvector.txt
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armvector\codex_dossier_armvector.err
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armldmuser\dossier_armldmuser.launch.log
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armldmuser\codex_dossier_armldmuser.txt
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armldmuser\codex_dossier_armldmuser.err
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armcoproc\dossier_armcoproc.launch.log
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armcoproc\codex_dossier_armcoproc.txt
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armcoproc\codex_dossier_armcoproc.err
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armbyteorder\dossier_armbyteorder.launch.log
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armbyteorder\codex_dossier_armbyteorder.txt
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\dossier_armbyteorder\codex_dossier_armbyteorder.err
+GXEMUL-SEC\regress\artifacts\pcc2c040kill\r535_20260918\gate_arm_535.log
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\include\thirdparty\arm_cputypes.h
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\include\thirdparty\armreg.h
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\include\cpu_arm.h
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\include\arm_cpu_types.h
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\briefs\hpanel_arm.md
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\briefs\dossier_armvector.md
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\briefs\dossier_armldmuser.md
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\briefs\dossier_armcoproc.md
+GXEMUL-SEC\regress\artifacts\codexpack_20260928\briefs\dossier_armbyteorder.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armthumbabortkill.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armthumbabortkill.refused.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armthumbabortkill.refused.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armthumbabortkill.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armthumbabortkill.batchB_max.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armthumbabortkill.batchB_max.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armmsrmodekill.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armmsrmodekill.refused.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armmsrmodekill.refused.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armmsrmodekill.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armmsrmodekill.batchB_max.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\codex_armmsrmodekill.batchB_max.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\armthumbabortkill.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\armthumbabortkill.launch.log
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\armthumbabortkill.launch.batchB_max.log
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\armmsrmodekill.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\armmsrmodekill.launch.log
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\armmsrmodekill.launch.batchB_max.log
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\fable_farm_template.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\codex_astraconfirm_farm_f1c.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\codex_astraconfirm_farm_f1c.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\codex_astraconfirm_farm_f1b.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\codex_astraconfirm_farm_f1b.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\codex_astraconfirm_farm_f1a.txt
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\codex_astraconfirm_farm_f1a.err
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\astra_confirm_farm_f1c.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\astra_confirm_farm_f1b.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\astra_confirm_farm_f1a.md
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\astraconfirm_farm_f1c.launch.log
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\astraconfirm_farm_f1b.launch.log
+GXEMUL-SEC\regress\artifacts\codexfarm_20260926\adjudication\astraconfirm_farm_f1a.launch.log
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_tail.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_rf.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_re.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_rd.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_rc.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_rb.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_ra.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r9.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r8.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r7.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r6.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r5.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r4.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r3.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r2.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r1.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r0.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_r.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_multi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p1_u1_w1.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p1_u1_w0.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p1_u0_w1.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p1_u0_w0.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p0_u1_w1.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p0_u1_w0.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p0_u0_w1.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore_p0_u0_w0.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_loadstore.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_head.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\memory_arm.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\generate_arm_r.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\generate_arm_multi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\generate_arm_loadstore.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\generate_arm_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\experiment_arm_multi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_multi.txt
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr_misc.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_coproc.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\arm_tmphead_1.h
+GXEMUL-SEC\regress\artifacts\n6\gate_20260919\rc_arm.txt
+GXEMUL-SEC\regress\artifacts\n6\gate_20260919\gate_arm_539.log
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\diffs\regress_gate_arm.sh.diff
+GXEMUL-SEC\regress\artifacts\sgirandomcolour\killtable5_20260912\gate_arm_89rows.log
+GXEMUL-SEC\regress\artifacts\sgireunmapped\killtable_20260831\repin2\gate_arm.patch
+GXEMUL-SEC\regress\artifacts\sgireunmapped\killtable_20260831\pass4\gate_arm_pass4_50rows.log
+GXEMUL-SEC\regress\artifacts\sgireunmapped\killtable_20260831\pass4\gate_arm_pass4.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\grok_dossier_armvector.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\grok_dossier_armvector.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\dossier_armvector.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\codex_dossier_armvector.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\codex_dossier_armvector.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\agy_dossier_armvector.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\agy_dossier_armvector.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armvector\agy_dossier_armvector.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\grok_dossier_armldmuser.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\grok_dossier_armldmuser.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\dossier_armldmuser.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\codex_dossier_armldmuser.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\codex_dossier_armldmuser.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\agy_dossier_armldmuser.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\agy_dossier_armldmuser.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armldmuser\agy_dossier_armldmuser.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\grok_dossier_armcoproc.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\grok_dossier_armcoproc.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\dossier_armcoproc.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\codex_dossier_armcoproc.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\codex_dossier_armcoproc.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\agy_dossier_armcoproc.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\agy_dossier_armcoproc.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armcoproc\agy_dossier_armcoproc.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\grok_dossier_armbyteorder.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\grok_dossier_armbyteorder.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\dossier_armbyteorder.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\codex_dossier_armbyteorder.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\codex_dossier_armbyteorder.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\agy_dossier_armbyteorder.txt
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\agy_dossier_armbyteorder.launch.log
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\dossier_armbyteorder\agy_dossier_armbyteorder.err
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\briefs\dossier_armvector.md
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\briefs\dossier_armldmuser.md
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\briefs\dossier_armcoproc.md
+GXEMUL-SEC\regress\artifacts\grokjobs_20260930\briefs\dossier_armbyteorder.md
+Path                      
+----                      
+C:\DocumentNoSnc\cc\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC rev-parse HEAD; git -C GXEMUL-SEC log -1 --format='%h %s' -- src/cpus/cpu_arm.c src/cpus/cpu_arm_instr.c src/cpus/cpu_arm_instr_dpi.c; rg --files -g AGENTS.md -g '"'!_archive/**'"' -g '"'!GXEMUL-SEC/regress/artifacts/**'"'; rg -n 'armmsrmodekill|#524' GXEMUL-SEC/CHANGELOG.md" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'ARM_MODE_|ARM_FLAG_MODE|ARM_EXCEPTION_' GXEMUL-SEC/src/include/cpu_arm.h; rg -n 'fatal\\(|quiet_mode|verbosity' GXEMUL-SEC/src/main/misc.c; rg -n 'msr_imm|msr_spsr|arm_save_register_bank|arm_load_register_bank|arm_exception_to_mode|cpsr' GXEMUL-SEC/src/cpus/cpu_arm.c GXEMUL-SEC/src/cpus/cpu_arm_instr.c" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 7195ms:
+103:#define	ARM_FLAG_MODE	0x0000001f
+104:#define	ARM_MODE_USR26	      0x00
+105:#define	ARM_MODE_FIQ26	      0x01
+106:#define	ARM_MODE_IRQ26	      0x02
+107:#define	ARM_MODE_SVC26	      0x03
+108:#define	ARM_MODE_USR32	      0x10
+109:#define	ARM_MODE_FIQ32	      0x11
+110:#define	ARM_MODE_IRQ32	      0x12
+111:#define	ARM_MODE_SVC32	      0x13
+112:#define	ARM_MODE_ABT32	      0x17
+113:#define	ARM_MODE_UND32	      0x1b
+114:#define	ARM_MODE_SYS32	      0x1f
+116:#define ARM_EXCEPTION_TO_MODE	{	\
+117:	ARM_MODE_SVC32, ARM_MODE_UND32, ARM_MODE_SVC32, ARM_MODE_ABT32, \
+118:	ARM_MODE_ABT32, 0,              ARM_MODE_IRQ32, ARM_MODE_FIQ32 	}
+122:#define	ARM_EXCEPTION_RESET	0
+123:#define	ARM_EXCEPTION_UND	1
+124:#define	ARM_EXCEPTION_SWI	2
+125:#define	ARM_EXCEPTION_PREF_ABT	3
+126:#define	ARM_EXCEPTION_DATA_ABT	4
+128:#define	ARM_EXCEPTION_IRQ	6
+129:#define	ARM_EXCEPTION_FIQ	7
+rg: GXEMUL-SEC/src/main/misc.c: IO error for operation on GXEMUL-SEC/src/main/misc.c: The system cannot find the path specified. (os error 3)
+GXEMUL-SEC/src/cpus/cpu_arm.c:74:static int arm_exception_to_mode[N_ARM_EXCEPTIONS] = ARM_EXCEPTION_TO_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:127:	cpu->cd.arm.cpsr = ARM_FLAG_I | ARM_FLAG_F;
+GXEMUL-SEC/src/cpus/cpu_arm.c:133:		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+GXEMUL-SEC/src/cpus/cpu_arm.c:136:		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+GXEMUL-SEC/src/cpus/cpu_arm.c:190:	cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src/cpus/cpu_arm.c:196:	CPU_SETTINGS_ADD_REGISTER32("cpsr", cpu->cd.arm.cpsr);
+GXEMUL-SEC/src/cpus/cpu_arm.c:363:	int mode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:366:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src/cpus/cpu_arm.c:367:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src/cpus/cpu_arm.c:372:		debug("cpu%i:  cpsr = ", x);
+GXEMUL-SEC/src/cpus/cpu_arm.c:374:		    (cpu->cd.arm.cpsr & ARM_FLAG_N)? "N" : "n",
+GXEMUL-SEC/src/cpus/cpu_arm.c:375:		    (cpu->cd.arm.cpsr & ARM_FLAG_Z)? "Z" : "z",
+GXEMUL-SEC/src/cpus/cpu_arm.c:376:		    (cpu->cd.arm.cpsr & ARM_FLAG_C)? "C" : "c",
+GXEMUL-SEC/src/cpus/cpu_arm.c:377:		    (cpu->cd.arm.cpsr & ARM_FLAG_V)? "V" : "v",
+GXEMUL-SEC/src/cpus/cpu_arm.c:378:		    (cpu->cd.arm.cpsr & ARM_FLAG_Q)? "Q" : "q",
+GXEMUL-SEC/src/cpus/cpu_arm.c:379:		    (cpu->cd.arm.cpsr & ARM_FLAG_J)? "J" : "j",
+GXEMUL-SEC/src/cpus/cpu_arm.c:380:		    (cpu->cd.arm.cpsr & ARM_FLAG_E)? "E" : "e",
+GXEMUL-SEC/src/cpus/cpu_arm.c:381:		    (cpu->cd.arm.cpsr & ARM_FLAG_A)? "A" : "a",
+GXEMUL-SEC/src/cpus/cpu_arm.c:382:		    (cpu->cd.arm.cpsr & ARM_FLAG_I)? "I" : "i",
+GXEMUL-SEC/src/cpus/cpu_arm.c:383:		    (cpu->cd.arm.cpsr & ARM_FLAG_F)? "F" : "f",
+GXEMUL-SEC/src/cpus/cpu_arm.c:384:    		    (cpu->cd.arm.cpsr & ARM_FLAG_T)? "T" : "t");
+GXEMUL-SEC/src/cpus/cpu_arm.c:404:		int m = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:405:		debug("cpu%i:  cpsr = 0x%08x (", x, cpu->cd.arm.cpsr);
+GXEMUL-SEC/src/cpus/cpu_arm.c:520: *  arm_save_register_bank():
+GXEMUL-SEC/src/cpus/cpu_arm.c:522:void arm_save_register_bank(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_arm.c:525:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm.c:559:	default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+GXEMUL-SEC/src/cpus/cpu_arm.c:560:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm.c:567: *  arm_load_register_bank():
+GXEMUL-SEC/src/cpus/cpu_arm.c:569:void arm_load_register_bank(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_arm.c:572:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm.c:606:	default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+GXEMUL-SEC/src/cpus/cpu_arm.c:607:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm.c:667:	retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+GXEMUL-SEC/src/cpus/cpu_arm.c:669:	arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm.c:671:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src/cpus/cpu_arm.c:672:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src/cpus/cpu_arm.c:674:	switch (arm_exception_to_mode[exception_nr]) {
+GXEMUL-SEC/src/cpus/cpu_arm.c:676:		cpu->cd.arm.spsr_svc = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:678:		cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:680:		cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:682:		cpu->cd.arm.spsr_irq = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:684:		cpu->cd.arm.spsr_fiq = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:693:	cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm.c:695:	oldmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:697:	cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:698:	cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];
+GXEMUL-SEC/src/cpus/cpu_arm.c:707:	newmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:714:	cpu->cd.arm.cpsr |= ARM_FLAG_I;
+GXEMUL-SEC/src/cpus/cpu_arm.c:717:		cpu->cd.arm.cpsr |= ARM_FLAG_F;
+GXEMUL-SEC/src/cpus/cpu_arm.c:720:	arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm.c:1216:	if (!(cpu->pc & 1) || !(cpu->cd.arm.cpsr & ARM_FLAG_T)) {
+GXEMUL-SEC/src/cpus/cpu_arm.c:1517:					cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm.c:1519:						cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm.c:1530:						cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm.c:1681:				cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm.c:1683:				cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm.c:1777:			cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:355:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:358:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:360:		cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:362:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:386:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:389:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:391:		cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:393:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:441:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:448:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:457:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:488:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:490:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:492:		cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:494:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:819: *  msr_imm and msr_imm_spsr use arg[1] and arg[0].
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:820: *  msr and msr_spsr use arg[1] and arg[2].
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:822:X(msr_imm)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:826:	if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:831:	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:835:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:836:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:839:		arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:841:	cpu->cd.arm.cpsr &= ~mask;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:842:	cpu->cd.arm.cpsr |= (new_value & mask);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:844:	cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:847:		arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:849:Y(msr_imm)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:853:	instr(msr_imm)(cpu, ic);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:856:X(msr_imm_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:860:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:881:	default:fatal("msr_spsr: unimplemented mode %i\n",
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:882:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:890:			printf("msr_spsr: old pc = 0x%08" PRIx32"\n", old_pc);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:896:Y(msr_imm_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:897:X(msr_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:900:	instr(msr_imm_spsr)(cpu, ic);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:902:Y(msr_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:912:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:913:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:914:	reg(ic->arg[0]) = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:926:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:934:	default:fatal("mrs_spsr: unimplemented mode %i\n", cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1612:		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1751:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1781:		uint32_t new_cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1784:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1786:			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1788:			new_cpsr = cpu->cd.arm.spsr_abt; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1790:			new_cpsr = cpu->cd.arm.spsr_und; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1792:			new_cpsr = cpu->cd.arm.spsr_irq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1794:			new_cpsr = cpu->cd.arm.spsr_svc; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1796:			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1802:		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1803:		    (new_cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1806:			arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1808:		cpu->cd.arm.cpsr = new_cpsr;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1809:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1812:			arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1849:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4300:					ic->f = cond_instr(msr_imm_spsr);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4302:					ic->f = cond_instr(msr_imm);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4310:					ic->f = cond_instr(msr_spsr);
+
+ succeeded in 8837ms:
+ef577140b5e0b0a7a75b70fe3c2556c521c17ac5
+4dfc7165 #524 (armbdt): an ARM block transfer through a cold host page spliced bytes across a word boundary -- the same LDM/STM at the same unaligned base returned different bytes according to host page-cache warmth
+4745:# `#524` (armbdt): an ARM block transfer through a cold host page spliced bytes across a word boundary — the same instruction at the same unaligned base returned different bytes according to host page-cache warmth
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/regress/arm_msrmode_probe.py'; "'$s=Get-Content -LiteralPath $p; for($i=1;$i -le [Math]::Min(260,$s.Count);$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; rg -n '"'ARM_CPUTYPE|ARM[1-9]|XScale|armv' GXEMUL-SEC/src/include/arm_cpu_types.h GXEMUL-SEC/src/machines/machine_testarm.c" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_arm.c'; "'$s=Get-Content -LiteralPath $p; foreach($r in @(@(75,210),@(615,750))){ for($i=$r[0];$i -le $r[1];$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] } }; $p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; "'$s=Get-Content -LiteralPath $p; for($i=4225;$i -le 4340;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; rg -n '"'"'^void fatal|''^fatal'"\\(|void[ \\t]+fatal|fatal va_' GXEMUL-SEC/src -g '*.c'; rg -n '\\(once\\)|warn.*arm|arm.*warn' GXEMUL-SEC/src/include/cpu_arm.h GXEMUL-SEC/src/cpus/cpu_arm*.c" in C:\DocumentNoSnc\cc\GXEMUL
+ exited 1 in 5687ms:
+75:
+76:extern uint8_t condition_hi[16];
+77:extern uint8_t condition_ge[16];
+78:extern uint8_t condition_gt[16];
+79:
+80:/*  For quick_pc_to_pointers():  */
+81:void arm_pc_to_pointers(struct cpu *cpu);
+82:#include "quick_pc_to_pointers.h"
+83:
+84:void arm_irq_interrupt_assert(struct interrupt *interrupt);
+85:void arm_irq_interrupt_deassert(struct interrupt *interrupt);
+86:
+87:
+88:/*
+89: *  arm_cpu_new():
+90: *
+91: *  Create a new ARM cpu object by filling the CPU struct.
+92: *  Return 1 on success, 0 if cpu_type_name isn't a valid ARM processor.
+93: */
+94:int arm_cpu_new(struct cpu *cpu, struct memory *mem,
+95:	struct machine *machine, int cpu_id, char *cpu_type_name)
+96:{
+97:	int i, found;
+98:	struct arm_cpu_type_def cpu_type_defs[] = ARM_CPU_TYPE_DEFS;
+99:
+100:	/*  Scan the list for this cpu type:  */
+101:	i = 0; found = -1;
+102:	while (i >= 0 && cpu_type_defs[i].name != NULL) {
+103:		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+104:			found = i;
+105:			break;
+106:		}
+107:		i++;
+108:	}
+109:	if (found == -1)
+110:		return 0;
+111:
+112:	cpu->run_instr = arm_run_instr;
+113:	cpu->memory_rw = arm_memory_rw;
+114:	cpu->update_translation_table = arm_update_translation_table;
+115:	cpu->invalidate_translation_caches =
+116:	    arm_invalidate_translation_caches;
+117:	cpu->invalidate_code_translation = arm_invalidate_code_translation;
+118:	cpu->translate_v2p = arm_translate_v2p;
+119:
+120:	cpu->cd.arm.cpu_type = cpu_type_defs[found];
+121:	cpu->name            = strdup(cpu->cd.arm.cpu_type.name);
+122:	cpu->is_32bit        = 1;
+123:	cpu->byte_order      = EMUL_LITTLE_ENDIAN;
+124:
+125:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+126:
+127:	cpu->cd.arm.cpsr = ARM_FLAG_I | ARM_FLAG_F;
+128:	cpu->cd.arm.control = ARM_CONTROL_PROG32 | ARM_CONTROL_DATA32
+129:	    | ARM_CONTROL_CACHE | ARM_CONTROL_ICACHE | ARM_CONTROL_ALIGN;
+130:	/*  TODO: default auxctrl contents  */
+131:
+132:	if (cpu->machine->prom_emulation) {
+133:		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+134:		cpu->cd.arm.control |= ARM_CONTROL_S;
+135:	} else {
+136:		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+137:		cpu->cd.arm.control |= ARM_CONTROL_R;
+138:	}
+139:
+140:	/*  #291: the cache-size fields are 3 bits wide and encode the size as
+141:	    log2(bytes) - 9, but 32 of the entries in arm_cpu_types.h leave
+142:	    dcache_shift at 0 (ARM1136JSR1, which the rpi machine selects, is
+143:	    one). Those computed 0 - 9 = -9 and shifted it left, which is
+144:	    undefined behaviour -- UBSan reports it on upstream 0.7.0 too, so
+145:	    this is inherited, not introduced here.
+146:
+147:	    It is not merely undefined, it is WRONG: -9 does not stay inside
+148:	    its 3-bit field. ARM1136JSR1 yielded 0xffdea0ea where 0x0b02a0ea
+149:	    is correct, smearing 0xf4dc0000 across the CLASS and HARVARD
+150:	    fields as well.
+151:
+152:	    Casting to unsigned would silence the sanitizer and leave the
+153:	    register just as corrupt (measured: byte-identical 0xffdea0ea), so
+154:	    it is not the fix. An unspecified size encodes as 0, and each
+155:	    field is masked to its own width. CPUs that do specify both sizes
+156:	    are unaffected -- ARM920T, SA110 and 80321_400 all produce exactly
+157:	    the value they produced before.  */
+158:	uint32_t dsize = cpu->cd.arm.cpu_type.dcache_shift >= 9 ?
+159:	    (uint32_t) (cpu->cd.arm.cpu_type.dcache_shift - 9) : 0;
+160:	uint32_t isize = cpu->cd.arm.cpu_type.icache_shift >= 9 ?
+161:	    (uint32_t) (cpu->cd.arm.cpu_type.icache_shift - 9) : 0;
+162:
+163:	/*  TODO: Some of these values (iway and dway) aren't used yet:  */
+164:	cpu->cd.arm.cachetype =
+165:	      (5 << ARM_CACHETYPE_CLASS_SHIFT)
+166:	    | (1 << ARM_CACHETYPE_HARVARD_SHIFT)
+167:	    | ((dsize << ARM_CACHETYPE_DSIZE_SHIFT) & ARM_CACHETYPE_DSIZE)
+168:	    | (5 << ARM_CACHETYPE_DASSOC_SHIFT)		/*  32-way  */
+169:	    | (2 << ARM_CACHETYPE_DLINE_SHIFT)		/*  8 words/line  */
+170:	    | ((isize << ARM_CACHETYPE_ISIZE_SHIFT) & ARM_CACHETYPE_ISIZE)
+171:	    | (5 << ARM_CACHETYPE_IASSOC_SHIFT)		/*  32-way  */
+172:	    | (2 << ARM_CACHETYPE_ILINE_SHIFT);		/*  8 words/line  */
+173:
+174:	/*  Coprocessor 15 = the system control coprocessor.  */
+175:	cpu->cd.arm.coproc[15] = arm_coproc_15;
+176:
+177:	/*  Coprocessor 14 for XScale:  */
+178:	if (cpu->cd.arm.cpu_type.flags & ARM_XSCALE)
+179:		cpu->cd.arm.coproc[14] = arm_coproc_xscale_14;
+180:
+181:	/*
+182:	 *  NOTE/TODO: Ugly hack for OpenFirmware emulation:
+183:	 */
+184:	if (cpu->machine->prom_emulation) {
+185:		cpu->cd.arm.of_emul_addr = cpu->machine->physical_ram_in_mb
+186:		    * 1048576 - 8;
+187:		store_32bit_word(cpu, cpu->cd.arm.of_emul_addr, 0xef8c64be);
+188:	}
+189:
+190:	cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+191:
+192:	CPU_SETTINGS_ADD_REGISTER64("pc", cpu->pc);
+193:	for (i=0; i<N_ARM_REGS - 1; i++)
+194:		CPU_SETTINGS_ADD_REGISTER32(arm_regname[i], cpu->cd.arm.r[i]);
+195:
+196:	CPU_SETTINGS_ADD_REGISTER32("cpsr", cpu->cd.arm.cpsr);
+197:
+198:	/*  Register the CPU's "IRQ" and "FIQ" interrupts:  */
+199:	{
+200:		struct interrupt templ;
+201:		char name[50];
+202:		snprintf(name, sizeof(name), "%s.irq", cpu->path);
+203:
+204:                memset(&templ, 0, sizeof(templ));
+205:                templ.line = 0;
+206:                templ.name = name;
+207:                templ.extra = cpu;
+208:                templ.interrupt_assert = arm_irq_interrupt_assert;
+209:                templ.interrupt_deassert = arm_irq_interrupt_deassert;
+210:                interrupt_handler_register(&templ);
+615: */
+616:void arm_exception(struct cpu *cpu, int exception_nr)
+617:{
+618:	int oldmode, newmode;
+619:	uint32_t retaddr;
+620:
+621:	if (exception_nr < 0 || exception_nr >= N_ARM_EXCEPTIONS) {
+622:		fatal("arm_exception(): exception_nr = %i\n", exception_nr);
+623:		exit(1);
+624:	}
+625:
+626:	retaddr = cpu->pc;
+627:
+628:	if (!quiet_mode) {
+629:		debug("[ arm_exception(): ");
+630:		switch (exception_nr) {
+631:		case ARM_EXCEPTION_RESET:
+632:			fatal("RESET: TODO");
+633:			break;
+634:		case ARM_EXCEPTION_UND:
+635:			debug("UNDEFINED");
+636:			break;
+637:		case ARM_EXCEPTION_SWI:
+638:			debug("SWI");
+639:			break;
+640:		case ARM_EXCEPTION_PREF_ABT:
+641:			debug("PREFETCH ABORT");
+642:			break;
+643:		case ARM_EXCEPTION_IRQ:
+644:			debug("IRQ");
+645:			break;
+646:		case ARM_EXCEPTION_FIQ:
+647:			debug("FIQ");
+648:			break;
+649:		case ARM_EXCEPTION_DATA_ABT:
+650:			debug("DATA ABORT, far=0x%08x fsr=0x%02x",
+651:			    cpu->cd.arm.far, cpu->cd.arm.fsr);
+652:			break;
+653:		}
+654:		debug(" ]\n");
+655:	}
+656:
+657:	switch (exception_nr) {
+658:	case ARM_EXCEPTION_RESET:
+659:		cpu->running = 0;
+660:		fatal("ARM RESET: TODO");
+661:		exit(1);
+662:	case ARM_EXCEPTION_DATA_ABT:
+663:		retaddr += 4;
+664:		break;
+665:	}
+666:
+667:	retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+668:
+669:	arm_save_register_bank(cpu);
+670:
+671:	cpu->cd.arm.cpsr &= 0x0fffffff;
+672:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+673:
+674:	switch (arm_exception_to_mode[exception_nr]) {
+675:	case ARM_MODE_SVC32:
+676:		cpu->cd.arm.spsr_svc = cpu->cd.arm.cpsr; break;
+677:	case ARM_MODE_ABT32:
+678:		cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr; break;
+679:	case ARM_MODE_UND32:
+680:		cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr; break;
+681:	case ARM_MODE_IRQ32:
+682:		cpu->cd.arm.spsr_irq = cpu->cd.arm.cpsr; break;
+683:	case ARM_MODE_FIQ32:
+684:		cpu->cd.arm.spsr_fiq = cpu->cd.arm.cpsr; break;
+685:	default:fatal("arm_exception(): unimplemented exception nr\n");
+686:		exit(1);
+687:	}
+688:
+689:	/*
+690:	 *  Disable Thumb mode (because exception handlers always execute
+691:	 *  in ARM mode), set the exception mode, and disable interrupts:
+692:	 */
+693:	cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+694:
+695:	oldmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+696:
+697:	cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+698:	cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];
+699:
+700:	/*
+701:	 *  Usually, an exception should change modes (so that saved status
+702:	 *  bits don't get lost). However, Linux on ARM seems to use floating
+703:	 *  point instructions in the kernel (!), and it emulates those using
+704:	 *  its own fp emulation code. This leads to a situation where we
+705:	 *  sometimes change from SVC32 to SVC32.
+706:	 */
+707:	newmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+708:	if (oldmode == newmode && oldmode != ARM_MODE_SVC32) {
+709:		fatal("[ WARNING! Exception caused no mode change? "
+710:		    "mode 0x%02x (pc=0x%x) ]\n", newmode, (int)cpu->pc);
+711:		/*  exit(1);  */
+712:	}
+713:
+714:	cpu->cd.arm.cpsr |= ARM_FLAG_I;
+715:	if (exception_nr == ARM_EXCEPTION_RESET ||
+716:	    exception_nr == ARM_EXCEPTION_FIQ)
+717:		cpu->cd.arm.cpsr |= ARM_FLAG_F;
+718:
+719:	/*  Load the new register bank, if we switched:  */
+720:	arm_load_register_bank(cpu);
+721:
+722:	/*
+723:	 *  Set the return address and new PC.
+724:	 *
+725:	 *  NOTE: r[ARM_PC] is also set; see cpu_arm_instr_loadstore.c for
+726:	 *  details. (If an exception occurs during a load into the pc
+727:	 *  register, the code in that file assumes that the r[ARM_PC]
+728:	 *  was changed to the address of the exception handler.)
+729:	 */
+730:	cpu->cd.arm.r[ARM_LR] = retaddr;
+731:	cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 +
+732:	    ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);
+733:	quick_pc_to_pointers(cpu);
+734:}
+735:
+736:
+737:/*
+738: *  arm_cpu_tlbdump():
+739: *
+740: *  Called from the debugger to dump the TLB in a readable format.
+741: *
+742: *  If rawflag is nonzero, then the TLB contents isn't formated nicely,
+743: *  just dumped.
+744: */
+745:void arm_cpu_tlbdump(struct cpu *cpu, int rawflag)
+746:{
+747:	/*
+748:	 *  #367: this was an empty stub, so the state that decides fast-vs-slow
+749:	 *  load/store -- page presence in host_load/host_store and the
+750:	 *  is_userpage bit -- was unobservable from outside, while `tlbdump`
+4225:			ic->f = cond_instr(mull);
+4226:			ic->arg[0] = iword;
+4227:			break;
+4228:		}
+4229:		if ((iword & 0x0f900ff0) == 0x01000050) {
+4230:			if (!cpu->translation_readahead)
+4231:				fatal("TODO: q{,d}{add,sub}\n");
+4232:			goto bad;
+4233:		}
+4234:		if ((iword & 0x0ff000d0) == 0x01200010) {
+4235:			/*  bx or blx  */
+4236:			if (iword & 0x20)
+4237:				ic->f = cond_instr(blx_reg);
+4238:			else {
+4239:				if (cpu->machine->show_trace_tree &&
+4240:				    rm == ARM_LR)
+4241:					ic->f = cond_instr(bx_trace);
+4242:				else
+4243:					ic->f = cond_instr(bx);
+4244:			}
+4245:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rm]);
+4246:			ic->arg[2] = (addr & 0xffc) + 4;
+4247:                        break;
+4248:                }
+4249:		if ((iword & 0x0fb00ff0) == 0x1000090) {
+4250:			if (iword & 0x00400000)
+4251:				ic->f = cond_instr(swpb);
+4252:			else
+4253:				ic->f = cond_instr(swp);
+4254:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4255:			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4256:			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rn]);
+4257:			break;
+4258:		}
+4259:		if ((iword & 0x0fff0ff0) == 0x016f0f10) {
+4260:			ic->f = cond_instr(clz);
+4261:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rm]);
+4262:			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rd]);
+4263:			break;
+4264:		}
+4265:		if ((iword & 0x0ff00090) == 0x01000080) {
+4266:			/*  TODO: smlaXX  */
+4267:			goto bad;
+4268:		}
+4269:		if ((iword & 0x0ff00090) == 0x01400080) {
+4270:			/*  TODO: smlalY  */
+4271:			goto bad;
+4272:		}
+4273:		if ((iword & 0x0ff000b0) == 0x01200080) {
+4274:			/*  TODO: smlawY  */
+4275:			goto bad;
+4276:		}
+4277:		if ((iword & 0x0ff0f090) == 0x01600080) {
+4278:			/*  smulXY (16-bit * 16-bit => 32-bit)  */
+4279:			switch (iword & 0x60) {
+4280:			case 0x00: ic->f = cond_instr(smulbb); break;
+4281:			case 0x20: ic->f = cond_instr(smultb); break;
+4282:			case 0x40: ic->f = cond_instr(smulbt); break;
+4283:			default:   ic->f = cond_instr(smultt); break;
+4284:			}
+4285:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rm]);
+4286:			ic->arg[1] = (size_t)(&cpu->cd.arm.r[r8]);
+4287:			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rn]); /*  Rd  */
+4288:			break;
+4289:		}
+4290:		if ((iword & 0x0ff0f0b0) == 0x012000a0) {
+4291:			/*  TODO: smulwY  */
+4292:			goto bad;
+4293:		}
+4294:		if ((iword & 0x0fb0fff0) == 0x0120f000 ||
+4295:		    (iword & 0x0fb0f000) == 0x0320f000) {
+4296:			/*  msr: move to [S|C]PSR from a register or
+4297:			    immediate value  */
+4298:			if (iword & 0x02000000) {
+4299:				if (iword & 0x00400000)
+4300:					ic->f = cond_instr(msr_imm_spsr);
+4301:				else
+4302:					ic->f = cond_instr(msr_imm);
+4303:			} else {
+4304:				if (rm == ARM_PC) {
+4305:					if (!cpu->translation_readahead)
+4306:						fatal("msr PC?\n");
+4307:					goto bad;
+4308:				}
+4309:				if (iword & 0x00400000)
+4310:					ic->f = cond_instr(msr_spsr);
+4311:				else
+4312:					ic->f = cond_instr(msr);
+4313:			}
+4314:			imm = iword & 0xff;
+4315:			while (r8-- > 0)
+4316:				imm = (imm >> 2) | ((imm & 3) << 30);
+4317:			ic->arg[0] = imm;
+4318:			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4319:			{
+4320:				uint32_t arg1 = 0;
+4321:				if (iword & (1<<16)) arg1 |= 0x000000ff;
+4322:				if (iword & (1<<17)) arg1 |= 0x0000ff00;
+4323:				if (iword & (1<<18)) arg1 |= 0x00ff0000;
+4324:				if (iword & (1<<19)) arg1 |= 0xff000000;
+4325:				ic->arg[1] = arg1;
+4326:				if (arg1 == 0)
+4327:					ic->f = instr(nop);
+4328:			}
+4329:			break;
+4330:		}
+4331:		if ((iword & 0x0fbf0fff) == 0x010f0000) {
+4332:			/*  mrs: move from CPSR/SPSR to a register:  */
+4333:			if (rd == ARM_PC) {
+4334:				if (!cpu->translation_readahead)
+4335:					fatal("mrs PC?\n");
+4336:				goto bad;
+4337:			}
+4338:			if (iword & 0x00400000)
+4339:				ic->f = cond_instr(mrs_spsr);
+4340:			else
+GXEMUL-SEC/src\machines\machine_sgi.c:219:fatal("TODO: SGI legacy interrupt system rewrite!\n");
+GXEMUL-SEC/src\machines\machine_sgi.c:267:fatal("TODO: SGI legacy interrupt system rewrite!\n");
+GXEMUL-SEC/src\machines\machine_sgi.c:275:fatal("TODO: SGI legacy interrupt system rewrite!\n");
+GXEMUL-SEC/src\machines\machine_sgi.c:287:fatal("TODO: Legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_sgi.c:323:fatal("TODO: legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:365:fatal("TODO: Legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:383:fatal("TODO: dec_ioasic legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:388:fatal("TODO: kn03 dev_le_init rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:393:fatal("TODO: dec_ioasic legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:406:fatal("TODO: mc146818 irq\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:410:fatal("TODO: asc init rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:422:fatal("TODO: turbochannel rewrite init\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:536:fatal("TODO: Legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:564:fatal("TODO: dec_ioasic legacy rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:569:fatal("TODO: turbochannel rewrite!\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:595:fatal("TODO: xine dev_le_init rewrite\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:601:fatal("TODO: mc146818 irq\n");
+GXEMUL-SEC/src\machines\machine_pmax.c:605:fatal("TODO: xine asc init rewrite\n");
+GXEMUL-SEC/src\devices\dev_sgi_ip22.c:314:fatal("TODO: ip22 legacy interrupt rewrite!\n");
+GXEMUL-SEC/src\devices\dev_sgi_ip22.c:338:fatal("TODO: ip22 legacy interrupt rewrite!\n");
+GXEMUL-SEC/src\devices\dev_asc.c:373:fatal("TODO..............\n");
+GXEMUL-SEC/src\devices\dev_asc.c:574:fatal("TODO.......asdgasin\n");
+GXEMUL-SEC/src\core\debugmsg.c:384:void fatal(const char *fmt, ...)
+rg: GXEMUL-SEC/src/cpus/cpu_arm*.c: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+
+ exited 1 in 7807ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:88
++ ... nt -LiteralPath $p; for($i=1;$i -le [Math]::Min(260,$s.Count);$i++){  ...
++                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+rg: GXEMUL-SEC/src/machines/machine_testarm.c: The system cannot find the file specified. (os error 2)
+GXEMUL-SEC/src/include/arm_cpu_types.h:51:	{ "ARM3",	CPU_ID_ARM3,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:52:	{ "ARM610",	CPU_ID_ARM600,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:53:	{ "ARM610",	CPU_ID_ARM610,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:54:	{ "ARM620",	CPU_ID_ARM620,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:56:	{ "ARM700",	CPU_ID_ARM700,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:57:	{ "ARM710",	CPU_ID_ARM710,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:58:	{ "ARM710A",	CPU_ID_ARM710A,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:59:	{ "ARM720T",	CPU_ID_ARM720T,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:60:	{ "ARM740T4K",	CPU_ID_ARM740T4K,ARM_NO_MMU,	12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:61:	{ "ARM740T8K",	CPU_ID_ARM740T8K,ARM_NO_MMU,	13, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:62:	{ "ARM7500",	CPU_ID_ARM7500,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:63:	{ "ARM7500FE",	CPU_ID_ARM7500FE,0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:65:	{ "ARM810",	CPU_ID_ARM810,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:66:	{ "ARM920T",	CPU_ID_ARM920T,	0,		14, 1, 14, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:67:	{ "ARM922T",	CPU_ID_ARM922T,	0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:68:	{ "ARM940T",	CPU_ID_ARM940T,	ARM_NO_MMU,	12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:70:	{ "ARM946ES",	CPU_ID_ARM946ES,ARM_NO_MMU,	12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:71:	{ "ARM966ES",	CPU_ID_ARM966ES,ARM_NO_MMU,	12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:72:	{ "ARM966ESR1",	CPU_ID_ARM966ESR1,ARM_NO_MMU,	12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:74:	{ "ARM1020E",	CPU_ID_ARM1020E,0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:75:	{ "ARM1022ES",	CPU_ID_ARM1022ES,0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:76:	{ "ARM1026EJS",	CPU_ID_ARM1026EJS,0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:77:	{ "ARM1136JS",	CPU_ID_ARM1136JS,0,		12, 1,  0, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:78:	{ "ARM1136JSR1",CPU_ID_ARM1136JSR1,0,		12, 1,  0, 1 }, \
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git -C GXEMUL-SEC log -1 --format='%h %s' -- src/cpus/cpu_arm_instr.c; git -C GXEMUL-SEC log -1 --format='%h %s' -- src/cpus/cpu_arm_instr_dpi.c; rg -n '"'^(#|##).*armmsr|armmsrmodekill'"' GXEMUL-SEC/CHANGELOG.md; rg -n 'cpsr|spsr' GXEMUL-SEC/src -g '*.[ch]' -g '"'!tmp_*'"' -g '"'!cpu_arm.c'"' -g '"'!cpu_arm_instr.c'"' -g '"'!cpu_arm_instr_dpi.c'"' -g '"'!cpu_arm.h'"'" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/core/debugmsg.c'; "'$s=Get-Content -LiteralPath $p; for($i=375;$i -le 455;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; rg -n '"'once|warn' GXEMUL-SEC/src/include/cpu_arm.h; rg -n '\\(once\\)' GXEMUL-SEC/src/cpus -g 'cpu_arm*.c'; rg -n 'testarm|ARM926|ARM920|ARM610' GXEMUL-SEC/src/machines -g '*.c'; Get-Content -LiteralPath GXEMUL-SEC/regress/arm_msrmode_probe.py -TotalCount 260" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 554ms:
+4dfc7165 #524 (armbdt): an ARM block transfer through a cold host page spliced bytes across a word boundary -- the same LDM/STM at the same unaligned base returned different bytes according to host page-cache warmth
+a06e92fb Round 71 (#311, #312, #313): ARM -- two wrong flags and one more halt
+GXEMUL-SEC/src\cpus\cpu_dyntrans.c:208:		if (cpu->cd.arm.irq_asserted && !(cpu->cd.arm.cpsr & ARM_FLAG_I))
+GXEMUL-SEC/src\cpus\cpu_dyntrans.c:255:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+GXEMUL-SEC/src\core\emul.c:673:				cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\include\quick_pc_to_pointers.h:21:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {				\
+GXEMUL-SEC/src\cpus\memory_arm.c:123:	int user = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32;
+
+ succeeded in 671ms:
+375:	if ((quiet_mode && !ss) || v < 0)
+376:		return;
+377:
+378:	va_start(argp, fmt);
+379:	va_debug(argp, fmt);
+380:	va_end(argp);
+381:}
+382:
+383:
+384:void fatal(const char *fmt, ...)
+385:{
+386:	va_list argp;
+387:
+388:	va_start(argp, fmt);
+389:	va_debug(argp, fmt);
+390:	va_end(argp);
+391:}
+392:
+393:
+394:void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+395:{
+396:	if (subsystem != SUBSYS_ALL)
+397:		debugmsg_current_verbosity[subsystem] = verbosity;
+398:	else
+399:		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+400:			debugmsg_current_verbosity[i] = verbosity;
+401:}
+402:
+403:
+404:void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta)
+405:{
+406:	if (subsystem != SUBSYS_ALL)
+407:		debugmsg_current_verbosity[subsystem] += verbosity_delta;
+408:	else
+409:		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+410:			debugmsg_current_verbosity[i] += verbosity_delta;
+411:
+412:	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+413:		if (debugmsg_current_verbosity[i] < 0)
+414:			debugmsg_current_verbosity[i] = 0;
+415:}
+416:
+417:
+418:/*
+419: *  debugmsg_register_subsystem():
+420: *
+421: *  Registers a new subsystem.
+422: */
+423:int debugmsg_register_subsystem(const char* name)
+424:{
+425:	// TODO: Another way would be to support multiple names with e.g.
+426:	// a suffix. Such as "le0", "le1", "le2" for the name "le".
+427:	// But for now, simply return the same subsystem for all of them.
+428:	ssize_t subsys = -1;
+429:	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+430:		if (strcmp(name, debugmsg_subsystem_name[i]) == 0)
+431:			subsys = i;
+432:
+433:	if (subsys >= 0)
+434:		return subsys;
+435:	
+436:	subsys = debugmsg_nr_of_subsystems;
+437:
+438:	debugmsg_nr_of_subsystems ++;
+439:	debugmsg_subsystem_name = realloc(debugmsg_subsystem_name,
+440:	    sizeof(char*) * debugmsg_nr_of_subsystems);
+441:	debugmsg_current_verbosity = realloc(debugmsg_current_verbosity,
+442:	    sizeof(int) * debugmsg_nr_of_subsystems);;
+443:	debugmsg_breakpoint_level = realloc(debugmsg_breakpoint_level,
+444:	    sizeof(int) * debugmsg_nr_of_subsystems);
+445:
+446:	debugmsg_subsystem_name[subsys] = strdup(name);
+447:	debugmsg_breakpoint_level[subsys] = -1;
+448:	debugmsg_set_verbosity_level(subsys, default_verbosity);
+449:
+450:	return subsys;
+451:}
+452:
+453:
+454:/*
+455: *  debugmsg_change_settings():
+GXEMUL-SEC/src/machines\automachine.c:72:void machine_register_testarm(void);
+GXEMUL-SEC/src/machines\automachine.c:123:	machine_register_testarm();
+GXEMUL-SEC/src/machines\machine_test.c:187:MACHINE_SETUP(testarm)
+GXEMUL-SEC/src/machines\machine_test.c:212:MACHINE_DEFAULT_CPU(testarm)
+GXEMUL-SEC/src/machines\machine_test.c:226:MACHINE_REGISTER(testarm)
+GXEMUL-SEC/src/machines\machine_test.c:228:	MR_DEFAULT(testarm, "Test-machine for ARM", MACHINE_TESTARM);
+GXEMUL-SEC/src/machines\machine_test.c:230:	machine_entry_add_alias(me, "testarm");
+#!/usr/bin/env python3
+"""armmsrmodekill -- RUNG-3 WITNESS.  One privileged MSR ends the PROCESS on `-E testarm'.
+
+BUILT FROM regress/artifacts/armmsrmodekill/WITNESSSPEC_REWRITE_grok_20260917.txt, which is a
+REWRITE and not the original 16-row spec plus eight sticky notes.  That spec's amendments file
+carries a SUPERSEDED banner; do not build from it.
+
+THE DEFECT, verified by reading cpu_arm.c at HEAD:
+
+    cpu_arm.c:606-608   arm_load_register_bank: default: fatal("...unimplemented mode %i"); exit(1);
+    cpu_arm.c:559-561   arm_save_register_bank: default: same
+
+BOTH arms carry the kill.  That is why `save 2s' is an independent row and not a duplicate of
+`kill 14', and why member 3 is owed at BOTH `default:' arms.
+
+`0xE321F014' is `MSR CPSR_c, #0x14' -- mode 0x14 is a RESERVED ARM mode, so the Load arm's
+`default:' is reached and the process dies.  `%i' prints DECIMAL, so the message reads
+`unimplemented mode 20'.
+
+*** POLARITY: WANT IS POST-FIX CORRECT.  A PRE FAIL ON A DEFECT ROW *IS* THE REPRODUCTION. ***
+
+*** ORACLE: EOF ALONE => DEAD.  THE TEXT IS DIAGNOSIS, NEVER HALF THE TRIGGER. ***
+An EOF-AND-text oracle cannot see a build that still exit(1)s with a REWORDED message: that
+gives EOF and no matching text, the AND never fires, and the witness certifies a live defect
+GREEN.  The packet's own %i-vs-0x14 confusion makes "fix the format string, forget the exit"
+the most plausible near-miss fix, which is exactly the mutant the AND would miss.
+
+*** AND THE THREE CONTROLS BELOW ARE NECESSARY AND **NOT SUFFICIENT**, which is the correction
+that the rewrite made to my own framing. ***  Each has a smallest defeat: a dump of DEST proves
+MRS ran, not that the MSR word was planted or stepped; `no cbit' is greened by a decoder that
+never writes the mode field AT ALL -- which greens every kill row too; and `enc ok' walking a
+CONSTRUCTOR instead of the planted literal is the BFX incident repeating.  What actually closes
+false-green is all four of:
+
+    1. POST want is `m=13 sp once', not `m=13'.  Member 3 prints `(once)'; an encoding-nop, a
+       skipped step and a silent member-2 all print NOTHING, so the latch must be IN the got
+       string or its absence renders as a comment instead of a FAIL.
+    2. POISON at DEST+4, dumped at DEST+4 and never DEST+0, so a never-fired post-MSR store reds.
+    3. ONE `WORDS' dict: every `put w' is drawn from it and every session re-dumps the MSR slot.
+    4. A NAMED-RED tally -- HEAD must be EXACTLY the three named reds.  17/17 on HEAD is not
+       success, it is a broken vehicle.
+
+*** AND THE ALIVE DETECTION IS LOAD-BEARING HERE IN A WAY IT IS NOWHERE ELSE, because EVERY
+kill row of this probe is an EOF oracle.  MEASURED 2026-09-17 on ip30_abort_probe.py: a
+single waitpid(WNOHANG) reported `alive' for a process that had SIGABRT'd, because `rd()'
+RETURNS IMMEDIATELY ON EOF and so the `spin' that exists to give a dying child time to die is
+SKIPPED EXACTLY WHEN THE CHILD DIES.  Built on that form, THIS probe would report every kill
+row green and certify the MSR defect fixed while it is live.  POLL WITH A DEADLINE. ***
+
+Interrupts: `#0x14' clears I and F (bits 6-7 of the control byte are zero), so post-fix the
+guest sits in a reserved mode with interrupts unmasked.  That is INERT for this probe and the
+reason is measured, not assumed: ARM IRQ dispatch is inside `if (!single_step)' at
+cpu_dyntrans.c:206-209 and `-V' sets single_step; `fiq_asserted' has ZERO occurrences in all of
+src/, so there is no ARM FIQ dispatch to enable; and the debugger `timer_stop()'s across a
+`step'.  THE PIN IS: STAY ON `step', NEVER `continue' -- a `continue' after a LANDED #0x14 can
+take arm_exception and run Save on the reserved current mode, which is a free-run hazard.
+DO NOT change the stimulus to #0xD4.
+
+BANNED: `MSR CPSR_c, #0' -- ARM_MODE_USR26 is 0x00 and `grep -c "case ARM_MODE_USR26"' across
+src/ is ZERO, so #0 reaches the same `default:' and kills.  It is banned not because it is safe
+but because it rows the 26-bit hole, which is a DIFFERENT defect with its own disposition.
+"""
+import os
+import pty
+import re
+import select
+import signal
+import sys
+import time
+
+BIN = sys.argv[1] if len(sys.argv) > 1 else "../build/gxemul"
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+
+#  The stub is a GENERATED artefact (top-level regress/*.bin is NEVER STAGE).  All 11 top-level
+#  committed probes that reference such a stub CREATE IT IF ABSENT; without this block this
+#  would be the one committed probe that cannot run on a fresh clone.
+STUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arm_bfx_stub.bin")
+if not os.path.exists(STUB):
+    with open(STUB, "wb") as f:
+        f.write(b"\0" * 16)
+
+CODE = 0x8000
+DEST = 0x9000
+BOOT_SP = 0x03FFF000
+BOOT_CPSR = 0xD3
+POISON = 0xDEADBEEF
+
+#  *** ONE WORDS DICT.  Every `put w' is drawn from here and every session re-dumps the MSR
+#  slot against the same entry.  This is the load-bearing anti-false-green -- the thing
+#  amendment 6 hoped `enc ok' was. ***
+WORDS = {
+    "mrs_r3":   0xE10F3000,              # mrs  r3, cpsr
+    "str_r3":   0xE5843000,              # str  r3, [r4]
+    "str_r3_4": 0xE5843004,              # str  r3, [r4,#4]
+    "str_r3_c": 0xE584300C,              # str  r3, [r4,#12]
+    "str_sp_8": 0xE584D008,              # str  r13,[r4,#8]
+    "str_sp_10": 0xE584D010,             # str  r13,[r4,#16]
+    "mov_r0_2a": 0xE3A0002A,             # mov  r0, #0x2a
+    "str_r0":   0xE5840000,              # str  r0, [r4]
+    "b_self":   0xEAFFFFFE,              # b    .
+    "nop":      0xE1A00000,              # mov  r0,r0
+}
+for m in (0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x1B, 0x1F):
+    WORDS["c_%02x" % m] = 0xE321F000 | m     # msr cpsr_c, #m
+WORDS["f_14"] = 0xE328F014                   # msr cpsr_f, #0x14
+
+rows = []
+diagnosis = []
+
+
+def row(name, got, want, note=""):
+    rows.append((name, str(got), str(want), note))
+
+
+def session(cmds, settle=1.6, spin=1.6):
+    """ONE FRESH PROCESS per scored row that executes a guest instruction."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+                       "0x%x:%s" % (CODE, STUB)])
+        os._exit(127)
+    buf = ""
+
+    def rd(t):
+        nonlocal buf
+        end = time.time() + t
+        while time.time() < end:
+            try:
+                r, _, _ = select.select([fd], [], [], 0.1)
+            except OSError:
+                return
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return
+            if not d:
+                return
+            buf += d.decode("utf-8", "replace")
+
+    rd(settle)
+    for c in cmds:
+        try:
+            os.write(fd, (c + "\n").encode())
+        except OSError:
+            break
+        rd(0.3)
+    rd(spin)
+
+    #  *** POLL, NEVER SAMPLE ONCE -- see the module docstring.  This is the difference between
+    #  a witness and a false green on every kill row in this file. ***
+    alive = True
+    deadline = time.time() + 12.0
+    while time.time() < deadline:
+        try:
+            wpid, _st = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            alive = False
+            break
+        if wpid == pid:
+            alive = False
+            break
+        time.sleep(0.05)
+    if alive:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return buf.replace("\r", ""), alive
+
+
+def printed(t, reg):
+    #  COPIED VERBATIM from regress/lca_isalane_probe.py:397-399.  `print <reg>' emits a BARE
+    #  `0x...'; it is `reg' that carries the `r0 = ' prefix.  A builder who "fixed" this regex
+    #  to expect `r0 = 0x' would score EVERY print as ABSENT.
+    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+    return None if not m else int(m.group(1), 16)
+
+
+def dumpcmd(addr):
+    """*** ALWAYS DUMP FROM THE 16-BYTE-ALIGNED BASE. ***  `debugger_cmds.c:709` is
+    `addr = addr_start & ~0xf`, so an UNALIGNED `dump' still labels the line with the ALIGNED
+    address and BLANK-PADS the leading word groups -- which shifts every group index and makes
+    a naive parse return a NEIGHBOURING word.  Copied from arm_bdt_probe.py:123-149, which
+    measured this on 2026-09-11.  I wrote the naive form first; the remedy already existed."""
+    base = addr & ~0xF
+    return "dump 0x%x 0x%x" % (base, base + 16)
+
+
+def dumped(t, addr):
+    """The word stored at `addr', recovered from the aligned dump line.
+
+    *** THE DUMP RENDERS LITTLE-ENDIAN BYTES, NOT A WORD. ***  0x0000002a at 0x9000 prints as
+    `2a000000'.  `arm_flags_probe.py:191-193' carries `sw()' for exactly this and warns that
+    comparing the raw string to `deadbeef' reads the SENTINEL'S PARITY as a measurement."""
+    base = addr & ~0xF
+    label = "0x%08x" % base
+    idx = (addr & 0xF) // 4
+    for line in t.splitlines():
+        if line.startswith(label):
+            parts = line[12:48].split()
+            if idx < len(parts) and len(parts[idx]) == 8:
+                return int.from_bytes(bytes.fromhex(parts[idx]), "little")
+    return None
+
+
+def plant(ops, at=CODE):
+    """Every word comes from WORDS.  `ops' is a list of WORDS keys."""
+    out = []
+    for i, k in enumerate(ops):
+        out.append("put w 0x%x, 0x%08x" % (at + 4 * i, WORDS[k]))
+    out.append("put w 0x%x, 0x%08x" % (at + 4 * len(ops), WORDS["b_self"]))
+    return out
+
+
+def prologue():
+    """POISON the slots the post-MSR stores must overwrite, and point r4 at DEST."""
+    return ["put w 0x%x, 0x%08x" % (DEST + 4, POISON),
+            "put w 0x%x, 0x%08x" % (DEST + 8, POISON),
+            "put w 0x%x, 0x%08x" % (DEST + 12, POISON),
+            "put w 0x%x, 0x%08x" % (DEST + 16, POISON),
+            "r4=0x%x" % DEST]
+
+
+def classify(t, alive, sp_at=None, rt_at=None):
+    """The got string.  EOF ALONE => dead.
+
+    *** `sp_at' IS A PARAMETER BECAUSE THE ROWS PLANT SP AT DIFFERENT SLOTS, AND THE FIRST
+    VERSION OF THIS FUNCTION HARDCODED DEST+8 WHILE `save 2s' PLANTED SP AT DEST+16 VIA
+    `str_sp_10'.  Nothing wrote DEST+8 on that row, so ` sp' could NEVER appear and the row was
+    ALWAYS RED -- pre-fix and post-fix alike.  A row that cannot go green is not a witness of
+    anything; it is a row that reds for an apparatus reason and reads like a defect. ***"""
+    if not alive:
+        return "dead"
+    cpsr = dumped(t, DEST + 4)
+    if cpsr is None or cpsr == POISON:
+        #  The post-MSR MRS/STR never ran: never-fired, which an alive-only oracle cannot see.
+        return "nofire"
+    got = "m=%02x" % (cpsr & 0x1F)
+    if sp_at is not None and dumped(t, sp_at) == BOOT_SP:
+        got += " sp"
+    if "(once)" in t:
+        got += " once"
+    if rt_at is not None:
+        v = dumped(t, rt_at)
+        if v not in (None, POISON) and (v & 0x1F) == 0x13:
+            got += " rt"
+    return got
+
+
+# ---------------------------------------------------------------- enc ok  (no guest)
+#  *** THE FIELD NIBBLE IS BITS 19:16, AND A MASK CANNOT SUBSTITUTE FOR IT.  My first form
+#  tested `(w & 0x0FB0F000) == 0x0320F000' for the c-form and `== 0x0328F000' for the f-form;
+#  0xB0 kills bit 0x08, so BOTH forms reduce to 0x0320F000 and the test could not tell them
+
+codex
+The fork matches `ef577140` and the quoted bank-switch line numbers. Two factual corrections are clear: the switches handle seven mode values sharing six banks, and `cpu_arm_instr_dpi.c` last changed before #524. The exception table’s zero entry is not a counterexample: no current caller emits that index, and it would stop before writing CPSR anyway. I’m checking the restore continuations now, where an early return can leave partial instruction effects.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; "'$s=Get-Content -LiteralPath $p; for($i=850;$i -le 945;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/machines/machine_test.c'; "'$s=Get-Content -LiteralPath $p; for($i=185;$i -le 219;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; git -C GXEMUL-SEC log -1 --format='"'%h %s' -- src/cpus/cpu_arm.c; rg -n 'row\\(|classify\\(|\\(once\\)' GXEMUL-SEC/regress/arm_msrmode_probe.py" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c'; "'$s=Get-Content -LiteralPath $p; for($i=1;$i -le 270;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; "'$s=Get-Content -LiteralPath $p; for($i=1550;$i -le 1620;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; for($i=1730;$i -le 1830;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] };' in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 233ms:
+1:/*
+2: *  Copyright (C) 2005-2019  Anders Gavare.  All rights reserved.
+3: *
+4: *  Redistribution and use in source and binary forms, with or without
+5: *  modification, are permitted provided that the following conditions are met:
+6: *
+7: *  1. Redistributions of source code must retain the above copyright
+8: *     notice, this list of conditions and the following disclaimer.
+9: *  2. Redistributions in binary form must reproduce the above copyright
+10: *     notice, this list of conditions and the following disclaimer in the
+11: *     documentation and/or other materials provided with the distribution.
+12: *  3. The name of the author may not be used to endorse or promote products
+13: *     derived from this software without specific prior written permission.
+14: *
+15: *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16: *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17: *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18: *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+19: *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20: *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21: *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22: *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23: *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24: *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25: *  SUCH DAMAGE.
+26: *
+27: *
+28: *  ARM Data Processing Instructions
+29: *  --------------------------------
+30: *
+31: *  xxxx000a aaaSnnnn ddddcccc ctttmmmm  Register form
+32: *  xxxx001a aaaSnnnn ddddrrrr bbbbbbbb  Immediate form
+33: *
+34: *  4 bits to select which instruction, one of the following:
+35: *
+36: *	0000	and		1000	tst
+37: *	0001	eor		1001	teq
+38: *	0010	sub		1010	cmp
+39: *	0011	rsb		1011	cmn
+40: *	0100	add		1100	orr
+41: *	0101	adc		1101	mov
+42: *	0110	sbc		1110	bic
+43: *	0111	rsc		1111	mvn
+44: *
+45: *  1 bit to select Status flag update.
+46: *
+47: *  1 bit to select Register form or Immediate form.
+48: *
+49: *  1 bit to select if the PC register is used.
+50: *
+51: *  Each function must also (as always) be repeated for each possible ARM
+52: *  condition code (15 in total).  Total: 1920 functions.
+53: *
+54: *  NOTE: This does not include any special common cases, which might be
+55: *        nice to have. Examples: comparing against zero, moving common
+56: *        constants.
+57: *
+58: *  See src/tools/generate_arm_dpi.c for more details.
+59: */
+60:
+61:
+62:#ifndef NOTHING
+63:#define NOTHING
+64:// Used to break out of dyntrans. TODO: Duplicate of arm_instr_nothing
+65:// code in tmp_arm_head.cc.
+66:void abortdyntrans(struct cpu* cpu, struct arm_instr_call* ic) { cpu->cd.arm.next_ic --; }
+67:static struct arm_instr_call abortdyntrans_call = { abortdyntrans, {0,0,0} };
+68:#endif	// NOTHING
+69:
+70:
+71:/*
+72: *  arg[0] = pointer to rn
+73: *  arg[1] = int32_t immediate value   OR  ptr to a reg_func() function
+74: *  arg[2] = pointer to rd
+75: */
+76:void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
+77:{
+78:#if defined(A__RSB) || defined(A__RSC)
+79:#define VAR_A  b
+80:#define VAR_B  a
+81:#else
+82:#define VAR_A  a
+83:#define VAR_B  b
+84:#endif
+85:
+86:#ifdef A__REG
+87:	uint32_t (*reg_func)(struct cpu *, struct arm_instr_call *)
+88:	    = (uint32_t (*)(struct cpu *, struct arm_instr_call *))
+89:	      (void *)(size_t)ic->arg[1];
+90:#endif
+91:
+92:#ifdef A__S
+93:	uint32_t c32;
+94:#endif
+95:#if defined(A__CMP) || defined(A__CMN) || defined(A__ADC) || defined(A__ADD) \
+96: || defined(A__RSC) || defined(A__RSB) || defined(A__SBC) || defined(A__SUB)
+97:#ifdef A__S
+98:	uint64_t
+99:#else
+100:	uint32_t
+101:#endif
+102:#else
+103:	uint32_t
+104:#endif
+105:	    VAR_B =
+106:#ifdef A__REG
+107:	    reg_func(cpu, ic)
+108:#else
+109:#ifdef A__REGSHORT
+110:	    reg(ic->arg[1])
+111:#else
+112:	    ic->arg[1]
+113:#endif
+114:#endif
+115:	    , c64
+116:#if !defined(A__MOV) && !defined(A__MVN)
+117:	    , VAR_A = reg(ic->arg[0])
+118:#endif
+119:	    ;
+120:
+121:#if defined(A__MOV) || defined(A__MVN) || defined(A__TST) || defined(A__TEQ) \
+122: || defined(A__AND) || defined(A__BIC) || defined(A__EOR) || defined(A__ORR)
+123:#if !defined(A__REG) && !defined(A__REGSHORT) && defined(A__S)
+124:	/*
+125:	 *  TODO: This is not 100% correct, but should work with "recommended"
+126:	 *  ARM code: Immediate values larger than 255 are encoded with
+127:	 *  rotation. If the S-bit is set, then the carry bit is set to the
+128:	 *  highest bit of the operand.
+129:	 *
+130:	 *  TODO 2: Perhaps this check should be moved out from here, and into
+131:	 *  cpu_arm_instr.c. (More correct, and higher performance.)
+132:	 */
+133:	if (VAR_B > 255) {
+134:		if (VAR_B & 0x80000000)
+135:			cpu->cd.arm.flags |= ARM_F_C;
+136:		else
+137:			cpu->cd.arm.flags &= ~ARM_F_C;
+138:	}
+139:#endif
+140:#endif
+141:
+142:
+143:#if !defined(A__MOV) && !defined(A__MVN)
+144:#ifdef A__PC
+145:	if (ic->arg[0] == (size_t)&cpu->cd.arm.r[ARM_PC]) {
+146:		uint32_t low_pc = ((size_t)ic - (size_t)
+147:		    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+148:		VAR_A = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1)
+149:		    << ARM_INSTR_ALIGNMENT_SHIFT);
+150:		VAR_A += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT) + 8;
+151:		/*
+152:		 *  #311: keep the operand 32 bits wide. ARM's PC is 32 bits
+153:		 *  and reading it must wrap, but the sum above is computed
+154:		 *  in 64 bits under A__S and exceeds 2^32 for the last two
+155:		 *  instruction slots of the address space. Both carry tests
+156:		 *  below compare the full result against its low half, so an
+157:		 *  operand carrying high bits would report a borrow that did
+158:		 *  not happen -- and the add arm, which is older than this
+159:		 *  round, already reported a carry that did not happen there.
+160:		 *  For every operand below 2^32 this is a no-op, which is
+161:		 *  every operand the rigs here can reach; the top-of-space
+162:		 *  case needs RAM mapped at 0xfffff000 and is unmeasured.
+163:		 */
+164:		VAR_A = (uint32_t) VAR_A;
+165:	}
+166:#endif
+167:#endif
+168:
+169:	/*
+170:	 *  Perform the operation:
+171:	 */
+172:#if defined(A__AND) || defined(A__TST)
+173:	c64 = a & b;
+174:#endif
+175:#if defined(A__EOR) || defined(A__TEQ)
+176:	c64 = a ^ b;
+177:#endif
+178:#if defined(A__SUB) || defined(A__CMP) || defined(A__RSB)
+179:	c64 = a - b;
+180:#endif
+181:#if defined(A__ADD) || defined(A__CMN)
+182:	c64 = a + b;
+183:#endif
+184:#if defined(A__ADC)
+185:	c64 = a + b + (cpu->cd.arm.flags & ARM_F_C? 1 : 0);
+186:#endif
+187:#if defined(A__SBC) || defined(A__RSC)
+188:	c64 = a - b - (cpu->cd.arm.flags & ARM_F_C? 0 : 1);
+189:#endif
+190:#if defined(A__ORR)
+191:	c64 = a | b;
+192:#endif
+193:#if defined(A__MOV)
+194:	c64 = b;
+195:#endif
+196:#if defined(A__BIC)
+197:	c64 = a & ~b;
+198:#endif
+199:#if defined(A__MVN)
+200:	c64 = ~b;
+201:#endif
+202:
+203:
+204:#if defined(A__CMP) || defined(A__CMN) || defined(A__TST) || defined(A__TEQ)
+205:	/*  No write to rd for compare/test.  */
+206:#else
+207:#ifdef A__PC
+208:	if (ic->arg[2] == (size_t)&cpu->cd.arm.r[ARM_PC]) {
+209:#ifndef A__S
+210:		uint32_t old_pc = cpu->pc;
+211:		uint32_t mask_within_page = ((ARM_IC_ENTRIES_PER_PAGE-1)
+212:		    << ARM_INSTR_ALIGNMENT_SHIFT) |
+213:		    ((1 << ARM_INSTR_ALIGNMENT_SHIFT) - 1);
+214:#endif
+215:		cpu->pc = (uint32_t)c64;
+216:#ifdef A__S
+217:		/*  Copy the right SPSR into CPSR:  */
+218:		arm_save_register_bank(cpu);
+219:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+220:		case ARM_MODE_FIQ32:
+221:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+222:		case ARM_MODE_IRQ32:
+223:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+224:		case ARM_MODE_SVC32:
+225:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+226:		case ARM_MODE_ABT32:
+227:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+228:		case ARM_MODE_UND32:
+229:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+230:		}
+231:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+232:		arm_load_register_bank(cpu);
+233:#else
+234:		if ((old_pc & ~mask_within_page) ==
+235:		    ((uint32_t)cpu->pc & ~mask_within_page)) {
+236:			cpu->cd.arm.next_ic = cpu->cd.arm.cur_ic_page +
+237:			    ((cpu->pc & mask_within_page) >>
+238:			    ARM_INSTR_ALIGNMENT_SHIFT);
+239:		} else
+240:#endif
+241:			quick_pc_to_pointers(cpu);
+242:
+243:		if (cpu->pc & 1) {
+244:			// Switch to THUMB and break out of the dyntrans loop.
+245:			cpu->cd.arm.cpsr |= ARM_FLAG_T;
+246:			cpu->cd.arm.next_ic = &abortdyntrans_call;
+247:		}
+248:		return;
+249:	} else
+250:		reg(ic->arg[2]) = c64;
+251:#else
+252:	reg(ic->arg[2]) = c64;
+253:#endif
+254:#endif
+255:
+256:
+257:	/*
+258:	 *  Status flag update (if the S-bit is set):
+259:	 */
+260:#ifdef A__S
+261:	c32 = c64;
+262:	cpu->cd.arm.flags
+263:#if defined(A__CMP) || defined(A__CMN) || defined(A__ADC) || defined(A__ADD) \
+264: || defined(A__RSB) || defined(A__RSC) || defined(A__SBC) || defined(A__SUB)
+265:	    &= ~(ARM_F_V | ARM_F_C | ARM_F_Z | ARM_F_N);
+266:#else
+267:	    &= ~(ARM_F_Z | ARM_F_N);
+268:#endif
+269:
+270:#if defined(A__CMP) || defined(A__RSB) || defined(A__SUB) || \
+1550:		return;
+1551:	}
+1552:	reg(ic->arg[0]) = data;
+1553:}
+1554:Y(swpb)
+1555:
+1556:
+1557:extern void (*arm_load_store_instr[1024])(struct cpu *,
+1558:	struct arm_instr_call *);
+1559:X(store_w1_word_u1_p0_imm);
+1560:X(store_w0_byte_u1_p0_imm);
+1561:X(store_w0_word_u1_p0_imm);
+1562:X(store_w0_word_u1_p1_imm);
+1563:X(load_w0_word_u1_p0_imm);
+1564:X(load_w0_word_u1_p1_imm);
+1565:X(load_w1_word_u1_p0_imm);
+1566:X(load_w0_byte_u1_p1_imm);
+1567:X(load_w0_byte_u1_p1_reg);
+1568:X(load_w1_byte_u1_p1_imm);
+1569:
+1570:extern void (*arm_load_store_instr_pc[1024])(struct cpu *,
+1571:	struct arm_instr_call *);
+1572:
+1573:extern void (*arm_load_store_instr_3[2048])(struct cpu *,
+1574:	struct arm_instr_call *);
+1575:
+1576:extern void (*arm_load_store_instr_3_pc[2048])(struct cpu *,
+1577:	struct arm_instr_call *);
+1578:
+1579:extern uint32_t (*arm_r[8192])(struct cpu *, struct arm_instr_call *);
+1580:extern uint32_t arm_r_r3_t0_c0(struct cpu *cpu, struct arm_instr_call *ic);
+1581:
+1582:extern void (*arm_dpi_instr[2 * 2 * 2 * 16 * 16])(struct cpu *,
+1583:	struct arm_instr_call *);
+1584:extern void (*arm_dpi_instr_regshort[2 * 16 * 16])(struct cpu *,
+1585:	struct arm_instr_call *);
+1586:X(cmps);
+1587:X(teqs);
+1588:X(tsts);
+1589:X(sub);
+1590:X(add);
+1591:X(subs);
+1592:X(eor_regshort);
+1593:X(cmps_regshort);
+1594:
+1595:
+1596:#include "cpu_arm_instr_misc.c"
+1597:
+1598:
+1599:/*
+1600: *  Shared between regular ARM and the THUMB encoded 'pop'.
+1601: */
+1602:void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw)
+1603:{
+1604:	uint32_t addr = *np;
+1605:	unsigned char data[4];
+1606:	unsigned char *page;
+1607:	int i, return_flag = 0;
+1608:	uint32_t new_values[16];
+1609:
+1610:	if (s_bit) {
+1611:		/*  Load to USR registers:  */
+1612:		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+1613:			fatal("[ bdt_load: s-bit: in usermode? ]\n");
+1614:			s_bit = 0;
+1615:		}
+1616:		if (iw & 0x8000) {
+1617:			s_bit = 0;
+1618:			return_flag = 1;
+1619:		}
+1620:	}
+1730:		}
+1731:
+1732:		new_values[i] = value;
+1733:
+1734:		if (!p_bit) {
+1735:			if (u_bit)
+1736:				addr += sizeof(uint32_t);
+1737:			else
+1738:				addr -= sizeof(uint32_t);
+1739:		}
+1740:	}
+1741:
+1742:	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1743:		if (!((iw >> i) & 1)) {
+1744:			/*  Skip register i:  */
+1745:			continue;
+1746:		}
+1747:
+1748:		if (!s_bit) {
+1749:			cpu->cd.arm.r[i] = new_values[i];
+1750:		} else {
+1751:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1752:			case ARM_MODE_USR32:
+1753:			case ARM_MODE_SYS32:
+1754:				cpu->cd.arm.r[i] = new_values[i];
+1755:				break;
+1756:			case ARM_MODE_FIQ32:
+1757:				if (i >= 8 && i <= 14)
+1758:					cpu->cd.arm.default_r8_r14[i-8] =
+1759:					    new_values[i];
+1760:				else
+1761:					cpu->cd.arm.r[i] = new_values[i];
+1762:				break;
+1763:			case ARM_MODE_SVC32:
+1764:			case ARM_MODE_ABT32:
+1765:			case ARM_MODE_UND32:
+1766:			case ARM_MODE_IRQ32:
+1767:				if (i >= 13 && i <= 14)
+1768:					cpu->cd.arm.default_r8_r14[i-8] =
+1769:					    new_values[i];
+1770:				else
+1771:					cpu->cd.arm.r[i] = new_values[i];
+1772:				break;
+1773:			}
+1774:		}
+1775:	}
+1776:
+1777:	if (w_bit)
+1778:		*np = addr;
+1779:
+1780:	if (return_flag) {
+1781:		uint32_t new_cpsr;
+1782:		int switch_register_banks;
+1783:
+1784:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1785:		case ARM_MODE_FIQ32:
+1786:			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+1787:		case ARM_MODE_ABT32:
+1788:			new_cpsr = cpu->cd.arm.spsr_abt; break;
+1789:		case ARM_MODE_UND32:
+1790:			new_cpsr = cpu->cd.arm.spsr_und; break;
+1791:		case ARM_MODE_IRQ32:
+1792:			new_cpsr = cpu->cd.arm.spsr_irq; break;
+1793:		case ARM_MODE_SVC32:
+1794:			new_cpsr = cpu->cd.arm.spsr_svc; break;
+1795:		default:fatal("bdt_load: unimplemented mode %i\n",
+1796:			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+1797:			cpu->running = 0;
+1798:			cpu->cd.arm.next_ic = &nothing_call;
+1799:			return;
+1800:		}
+1801:
+1802:		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+1803:		    (new_cpsr & ARM_FLAG_MODE);
+1804:
+1805:		if (switch_register_banks)
+1806:			arm_save_register_bank(cpu);
+1807:
+1808:		cpu->cd.arm.cpsr = new_cpsr;
+1809:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+1810:
+1811:		if (switch_register_banks)
+1812:			arm_load_register_bank(cpu);
+1813:	}
+1814:
+1815:	/*  NOTE: Special case: Loading the PC  */
+1816:	if (iw & 0x8000) {
+1817:		cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;
+1818:		if (cpu->machine->show_trace_tree)
+1819:			cpu_functioncall_trace_return(cpu);
+1820:		/*  TODO: There is no need to update the
+1821:		    pointers if this is a return to the
+1822:		    same page!  */
+1823:		/*  Find the new physical page and update the
+1824:		    translation pointers:  */
+1825:		quick_pc_to_pointers_arm(cpu);
+1826:	}
+1827:}
+1828:
+1829:
+1830:/*
+
+ succeeded in 247ms:
+850:X(msr)
+851:{
+852:	ic->arg[0] = reg(ic->arg[2]);
+853:	instr(msr_imm)(cpu, ic);
+854:}
+855:Y(msr)
+856:X(msr_imm_spsr)
+857:{
+858:	uint32_t mask = ic->arg[1];
+859:	uint32_t new_value = ic->arg[0];
+860:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+861:	case ARM_MODE_FIQ32:
+862:		cpu->cd.arm.spsr_fiq &= ~mask;
+863:		cpu->cd.arm.spsr_fiq |= (new_value & mask);
+864:		break;
+865:	case ARM_MODE_ABT32:
+866:		cpu->cd.arm.spsr_abt &= ~mask;
+867:		cpu->cd.arm.spsr_abt |= (new_value & mask);
+868:		break;
+869:	case ARM_MODE_UND32:
+870:		cpu->cd.arm.spsr_und &= ~mask;
+871:		cpu->cd.arm.spsr_und |= (new_value & mask);
+872:		break;
+873:	case ARM_MODE_IRQ32:
+874:		cpu->cd.arm.spsr_irq &= ~mask;
+875:		cpu->cd.arm.spsr_irq |= (new_value & mask);
+876:		break;
+877:	case ARM_MODE_SVC32:
+878:		cpu->cd.arm.spsr_svc &= ~mask;
+879:		cpu->cd.arm.spsr_svc |= (new_value & mask);
+880:		break;
+881:	default:fatal("msr_spsr: unimplemented mode %i\n",
+882:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+883:		{
+884:			/*  Synchronize the program counter:  */
+885:			uint32_t old_pc, low_pc = ((size_t)ic - (size_t)
+886:			    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+887:			cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+888:			cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+889:			old_pc = cpu->pc;
+890:			printf("msr_spsr: old pc = 0x%08" PRIx32"\n", old_pc);
+891:		}
+892:		cpu->running = 0;
+893:		cpu->cd.arm.next_ic = &nothing_call;
+894:	}
+895:}
+896:Y(msr_imm_spsr)
+897:X(msr_spsr)
+898:{
+899:	ic->arg[0] = reg(ic->arg[2]);
+900:	instr(msr_imm_spsr)(cpu, ic);
+901:}
+902:Y(msr_spsr)
+903:
+904:
+905:/*
+906: *  mrs: Move from status/flag register to a normal register.
+907: *
+908: *  arg[0] = pointer to rd
+909: */
+910:X(mrs)
+911:{
+912:	cpu->cd.arm.cpsr &= 0x0fffffff;
+913:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+914:	reg(ic->arg[0]) = cpu->cd.arm.cpsr;
+915:}
+916:Y(mrs)
+917:
+918:
+919:/*
+920: *  mrs: Move from saved status/flag register to a normal register.
+921: *
+922: *  arg[0] = pointer to rd
+923: */
+924:X(mrs_spsr)
+925:{
+926:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+927:	case ARM_MODE_FIQ32: reg(ic->arg[0]) = cpu->cd.arm.spsr_fiq; break;
+928:	case ARM_MODE_ABT32: reg(ic->arg[0]) = cpu->cd.arm.spsr_abt; break;
+929:	case ARM_MODE_UND32: reg(ic->arg[0]) = cpu->cd.arm.spsr_und; break;
+930:	case ARM_MODE_IRQ32: reg(ic->arg[0]) = cpu->cd.arm.spsr_irq; break;
+931:	case ARM_MODE_SVC32: reg(ic->arg[0]) = cpu->cd.arm.spsr_svc; break;
+932:	case ARM_MODE_USR32:
+933:	case ARM_MODE_SYS32: reg(ic->arg[0]) = 0; break;
+934:	default:fatal("mrs_spsr: unimplemented mode %i\n", cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+935:		cpu->running = 0;
+936:		cpu->cd.arm.next_ic = &nothing_call;
+937:	}
+938:}
+939:Y(mrs_spsr)
+940:
+941:
+942:/*
+943: *  mcr_mrc:  Coprocessor move
+944: *  cdp:      Coprocessor operation
+945: *
+185:
+186:
+187:MACHINE_SETUP(testarm)
+188:{
+189:	machine->machine_name = strdup("ARM test machine");
+190:
+191:	default_test(machine, cpu);
+192:
+193:	/*
+194:	 *  Place a tiny stub at end of memory, and set the link register to
+195:	 *  point to it. This stub halts the machine (making it easy to try
+196:	 *  out simple stand-alone C functions).
+197:	 */
+198:	cpu->cd.arm.r[ARM_SP] = machine->physical_ram_in_mb * 1048576 - 4096;
+199:	cpu->cd.arm.r[ARM_LR] = cpu->cd.arm.r[ARM_SP] + 32;
+200:	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 0, 0xe3a00201);
+201:	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 4, 0xe5c00010);
+202:	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 8, 0xeafffffe);
+203:}
+204:
+205:
+206:MACHINE_DEFAULT_CPU(barearm)
+207:{
+208:	machine->cpu_name = strdup("SA1110");
+209:}
+210:
+211:
+212:MACHINE_DEFAULT_CPU(testarm)
+213:{
+214:	machine->cpu_name = strdup("SA1110");
+215:}
+216:
+217:
+218:MACHINE_REGISTER(barearm)
+219:{
+2c615c3c Round 112 (#367): path attribution stops being a comment and becomes a checked quantity
+35:    1. POST want is `m=13 sp once', not `m=13'.  Member 3 prints `(once)'; an encoding-nop, a
+111:def row(name, got, want, note=""):
+231:def classify(t, alive, sp_at=None, rt_at=None):
+248:    if "(once)" in t:
+272:row("enc ok", "clean" if not bad else ",".join(bad), "clean",
+281:row("live", "0x%x" % (dumped(t, DEST) or 0) if alive else "dead", "0x2a",
+283:row("pc adv", "0x%x" % (printed(t, "pc") or 0) if alive else "dead", "0x%x" % (CODE + 8),
+293:row("armed", armed, "0x%x/0x%x" % (BOOT_CPSR, BOOT_SP),
+302:row("no cbit", classify(t, alive, sp_at=DEST + 8), "m=13 sp",
+315:    row(nm, classify(t, alive, sp_at=DEST + 8), "m=13 sp once",
+336:row("save 2s", classify(t, alive, sp_at=DEST + 16, rt_at=DEST + 12),
+349:row("acc usr", classify(t, alive), "m=10",
+369:    row(nm, got, "m=%02x/m=13/sp" % want_m,
+378:row("same svc", classify(t, alive, sp_at=DEST + 8), "m=13 sp",
+386:row("usr mask", classify(t, alive), "m=10",
+390:row("row count", len(rows) + 1, 17, "identity row (floor clause (c)): the row set is complete.")
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/include/quick_pc_to_pointers.h'; "'$s=Get-Content -LiteralPath $p; for($i=1;$i -le 70;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$s=Get-Content -LiteralPath $p; for($i=238;$i -le 266;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_arm.c'; "'$s=Get-Content -LiteralPath $p; for($i=1195;$i -le 1240;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] };' in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 146ms:
+1:#ifdef quick_pc_to_pointers
+2:#undef quick_pc_to_pointers
+3:#endif
+4:
+5:#ifdef MODE32
+6:#define	quick_pc_to_pointers(cpu) {					\
+7:	uint32_t pc_tmp32 = cpu->pc;					\
+8:	struct DYNTRANS_TC_PHYSPAGE *ppp_tmp;				\
+9:	ppp_tmp = cpu->cd.DYNTRANS_ARCH.phys_page[pc_tmp32 >> 12];	\
+10:	if (ppp_tmp != NULL) {						\
+11:		cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp_tmp->ics[0];	\
+12:		cpu->cd.DYNTRANS_ARCH.next_ic =				\
+13:		    cpu->cd.DYNTRANS_ARCH.cur_ic_page +			\
+14:		    DYNTRANS_PC_TO_IC_ENTRY(pc_tmp32);			\
+15:	} else								\
+16:		DYNTRANS_PC_TO_POINTERS(cpu);				\
+17:}
+18:
+19:#ifndef quick_pc_to_pointers_arm
+20:#define	quick_pc_to_pointers_arm(cpu) {					\
+21:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {				\
+22:		cpu->cd.arm.next_ic = &nothing_call;			\
+23:	} else								\
+24:		quick_pc_to_pointers(cpu);				\
+25:}
+26:#endif
+27:
+28:#else
+29:#define quick_pc_to_pointers(cpu)	DYNTRANS_PC_TO_POINTERS(cpu)
+30:#endif
+31:
+32:
+33:
+34:
+35:
+36:
+37:
+38:
+39:
+40:
+41:
+42:
+43:
+44:
+45:
+46:
+47:
+48:
+49:
+50:
+51:
+52:
+53:
+54:
+55:
+56:
+57:
+58:
+59:
+60:
+61:
+62:
+63:
+64:
+65:
+66:
+67:
+68:
+69:
+70:
+238:		if (cpu->cd.ppc.dec_intr_pending && cpu->cd.ppc.msr & PPC_MSR_EE) {
+239:			if (!(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
+240:				ppc_exception(cpu, PPC_EXCEPTION_DEC);
+241:			cpu->cd.ppc.dec_intr_pending = 0;
+242:		}
+243:		if (cpu->cd.ppc.irq_asserted && cpu->cd.ppc.msr & PPC_MSR_EE)
+244:			ppc_exception(cpu, PPC_EXCEPTION_EI);
+245:#endif
+246:#ifdef DYNTRANS_SH
+247:		if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+248:		    && ((cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+249:		    < cpu->cd.sh.int_level)
+250:			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+251:#endif
+252:	}
+253:
+254:#ifdef DYNTRANS_ARM
+255:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+256:		// fatal("THUMB execution not implemented.\n");
+257:		// cpu->running = false;
+258:		// return 0;
+259:		
+260:		arm_cpu_interpret_thumb_SLOW(cpu);
+261:		return 1;
+262:	}
+263:#endif
+264:
+265:	cached_pc = cpu->pc;
+266:
+1195:		cpu->cd.arm.flags |= ARM_F_V;
+1196:
+1197:	return c32;
+1198:}
+1199:
+1200:
+1201:/*
+1202: *  arm_cpu_interpret_thumb_SLOW():
+1203: *
+1204: *  Slow interpretation of THUMB instructions.
+1205: *
+1206: *  TODO: Either replace this with dyntrans or
+1207: *  implement ARM (including THUMB) in the new framework. :-)
+1208: *  For now, this is better than nothing.
+1209: */
+1210:int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
+1211:{
+1212:	uint16_t iw;
+1213:	uint8_t ib[sizeof(uint16_t)];
+1214:	uint32_t addr = cpu->pc & ~1;
+1215:
+1216:	if (!(cpu->pc & 1) || !(cpu->cd.arm.cpsr & ARM_FLAG_T)) {
+1217:		fatal("arm_cpu_interpret_thumb_SLOW called when not in "
+1218:			"THUMB mode?\n");
+1219:		cpu->running = 0;
+1220:		return 0;
+1221:	}
+1222:
+1223:	if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+1224:			sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+1225:		fatal("arm_cpu_interpret_thumb_SLOW(): could not read "
+1226:			"the instruction\n");
+1227:		cpu->running = 0;
+1228:		return 0;
+1229:	}
+1230:	
+1231:	if (cpu->machine->instruction_trace) {
+1232:		uint64_t offset;
+1233:		char* symbol = get_symbol_name(&cpu->machine->symbol_context,
+1234:		    addr, &offset);
+1235:		if (symbol != NULL && offset == 0)
+1236:			debug("<%s>\n", symbol);
+1237:
+1238:		if (cpu->machine->ncpus > 1)
+1239:			debug("cpu%i:\t", cpu->cpu_id);
+1240:
+
+web search: https://kib.kiev.ua/x86docs/ARM/ARMARMv5/DDI0100I.pdf
+web search: 
+web search: 'UNPREDICTABLE behavior must not'
+codex
+The architecture text leaves the invalid-input behavior to the implementation; “Exceptions: None” does not establish that MSR must decline it. The main control-flow issue is also clear: LDM has already committed registers and writeback by the quoted guard point, and the data-processing path has already changed PC and can have changed carry. A whole-instruction decline needs earlier validation. I also found a writable debugger CPSR setting, so guarding the guest instructions alone would not make the defaults unreachable.
+
+web search: 
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/include/cpu.h'; "'$s=Get-Content -LiteralPath $p; for($i=526;$i -le 540;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/core/settings.c'; "'$s=Get-Content -LiteralPath $p; for($i=203;$i -le 235;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu.c'; "'$s=Get-Content -LiteralPath $p; for($i=64;$i -le 76;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/include/cpu_arm.h'; "'$s=Get-Content -LiteralPath $p; for($i=195;$i -le 243;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] };' in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 140ms:
+526:#define	INVALIDATE_VADDR_UPPER4		16	/*  useful for PPC emulation  */
+527:
+528:
+529:/*  Note: 64-bit processors running in 32-bit mode use a 32-bit
+530:    display format, even though the underlying data is 64-bits.  */
+531:#define	CPU_SETTINGS_ADD_REGISTER64(name, var)				   \
+532:	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT64,	   \
+533:	    cpu->is_32bit? SETTINGS_FORMAT_HEX32 : SETTINGS_FORMAT_HEX64,  \
+534:	    (void *) &(var));
+535:#define	CPU_SETTINGS_ADD_REGISTER32(name, var)				   \
+536:	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT32,	   \
+537:	    SETTINGS_FORMAT_HEX32, (void *) &(var));
+538:#define	CPU_SETTINGS_ADD_REGISTER16(name, var)				   \
+539:	settings_add(cpu->settings, name, 1, SETTINGS_TYPE_UINT16,	   \
+540:	    SETTINGS_FORMAT_HEX16, (void *) &(var));
+203:	return SETTINGS_OK;
+204:}
+205:
+206:
+207:/*
+208: *  settings_write():
+209: *
+210: *  Used internally by settings_access().
+211: */
+212:static int settings_write(struct settings *settings, int i, uint64_t *valuep)
+213:{
+214:	if (!settings->writable[i])
+215:		return SETTINGS_READONLY;
+216:
+217:	switch (settings->storage_type[i]) {
+218:	case SETTINGS_TYPE_INT:
+219:	case SETTINGS_TYPE_UINT:
+220:		*((int *) settings->ptr[i]) = *valuep;
+221:		break;
+222:	case SETTINGS_TYPE_INT8:
+223:	case SETTINGS_TYPE_UINT8:
+224:		*((int8_t *) settings->ptr[i]) = *valuep;
+225:		break;
+226:	case SETTINGS_TYPE_INT16:
+227:	case SETTINGS_TYPE_UINT16:
+228:		*((int16_t *) settings->ptr[i]) = *valuep;
+229:		break;
+230:	case SETTINGS_TYPE_INT32:
+231:	case SETTINGS_TYPE_UINT32:
+232:		*((int32_t *) settings->ptr[i]) = *valuep;
+233:		break;
+234:	case SETTINGS_TYPE_INT64:
+235:	case SETTINGS_TYPE_UINT64:
+64:	if (name == NULL) {
+65:		debugmsg(SUBSYS_CPU, "", VERBOSITY_ERROR, "cpu name = NULL?");
+66:		return NULL;
+67:	}
+68:
+69:	CHECK_ALLOCATION(cpu_type_name = strdup(name));
+70:
+71:	struct cpu *cpu = (struct cpu *) zeroed_alloc(sizeof(struct cpu));
+72:
+73:	CHECK_ALLOCATION(cpu->path = (char *) malloc(strlen(machine->path) + 15));
+74:	snprintf(cpu->path, strlen(machine->path) + 15,
+75:	    "%s.cpu[%i]", machine->path, cpu_id);
+76:
+195:	uint32_t		spsr_fiq;
+196:
+197:
+198:	/*
+199:	 *  System Control Coprocessor registers:
+200:	 */
+201:	uint32_t		cachetype;	/*  Cache Type Register  */
+202:	uint32_t		control;	/*  Control Register  */
+203:	uint32_t		auxctrl;	/*  Aux. Control Register  */
+204:	uint32_t		ttb;		/*  Translation Table Base  */
+205:	uint32_t		dacr;		/*  Domain Access Control  */
+206:	uint32_t		fsr;		/*  Fault Status Register  */
+207:	uint32_t		far;		/*  Fault Address Register  */
+208:	uint32_t		pid;		/*  Process Id Register  */
+209:	uint32_t		cpar;		/*  CoProcessor Access Reg.  */
+210:
+211:	/*  i80321 Coprocessor 6: ICU (Interrupt controller)  */
+212:	uint32_t		i80321_inten;	/*  enable  */
+213:	uint32_t		i80321_isteer;
+214:	uint32_t		i80321_isrc;	/*  current assertions  */
+215:	uint32_t		tmr0;
+216:	uint32_t		tmr1;
+217:	struct interrupt	tmr0_irq;
+218:	struct interrupt	tmr1_irq;
+219:	uint32_t		tcr0;
+220:	uint32_t		tcr1;
+221:	uint32_t		trr0;
+222:	uint32_t		trr1;
+223:	uint32_t		tisr;
+224:	uint32_t		wdtcr;
+225:
+226:	/*  XScale Coprocessor 14: (Performance Monitoring Unit)  */
+227:	/*  XSC1 access style:  */
+228:	uint32_t		xsc1_pmnc;	/*  Perf. Monitor Ctrl Reg.  */
+229:	uint32_t		xsc1_ccnt;	/*  Clock Counter  */
+230:	uint32_t		xsc1_pmn0;	/*  Perf. Counter Reg. 0  */
+231:	uint32_t		xsc1_pmn1;	/*  Perf. Counter Reg. 1  */
+232:	/*  XSC2 access style:  */
+233:	uint32_t		xsc2_pmnc;	/*  Perf. Monitor Ctrl Reg.  */
+234:	uint32_t		xsc2_ccnt;	/*  Clock Counter  */
+235:	uint32_t		xsc2_inten;	/*  Interrupt Enable  */
+236:	uint32_t		xsc2_flag;	/*  Overflow Flag Register  */
+237:	uint32_t		xsc2_evtsel;	/*  Event Selection Register  */
+238:	uint32_t		xsc2_pmn0;	/*  Perf. Counter Reg. 0  */
+239:	uint32_t		xsc2_pmn1;	/*  Perf. Counter Reg. 1  */
+240:	uint32_t		xsc2_pmn2;	/*  Perf. Counter Reg. 2  */
+241:	uint32_t		xsc2_pmn3;	/*  Perf. Counter Reg. 3  */
+242:
+243:	/*  For caching the host address of the L1 translation table:  */
+
+codex
+VERDICT: Member 3, with whole-operation decline before side effects and explicit bank-helper failure propagation | 4 premises wrong
+
+I read `GXEMUL-SEC/src/` at **`ef577140b5e0b0a7a75b70fe3c2556c521c17ac5`**. The quoted bank-switch line numbers match. I wrote nothing, built nothing, and ran no probes or gates.
+
+The four corrections I count are:
+
+1. **Seven modelled modes, six register banks.** USR and SYS share a bank; they remain distinct mode values.
+2. **The three files did not all last change in #524.** Individual file histories give `cpu_arm.c`: `2c615c3c` (#367); `cpu_arm_instr.c`: `4dfc7165` (#524); `cpu_arm_instr_dpi.c`: `a06e92fb` (#311–313). The reviewed defaults still contain `exit(1)`.
+3. **“Exceptions: None” does not establish that FAULT is forbidden for an UNPREDICTABLE operand.** MSR explicitly classifies reserved mode writes as UNPREDICTABLE. Arm’s current glossary expressly permits implementing an UNPREDICTABLE instruction as UNDEFINED. That is not evidence of actual SA1110 behavior, but it defeats the categorical inference. [ARM ARM, A4-77–79](https://kib.kiev.ua/x86docs/ARM/ARMARMv5/DDI0100I.pdf), [Arm Glossary, p.54](https://documentation-service.arm.com/static/64bea01c38511951cb7a0949)
+4. **“Must decline before Save” is stronger than the bank invariant requires.** Saving a valid old bank and then declining before committing CPSR is safe. Conversely, declining immediately before Save is already too late for a *whole-instruction* decline in the two restore callers.
+
+I do **not** count the questions about other ingress paths as asserted false premises.
+
+The arithmetic domains matter here.
+
+Both register MSR and immediate MSR can produce every low-five-bit value; unrotated immediates alone establish that. The complete partition is:
+
+| Bank-switch treatment | Mode values, hexadecimal |
+|---|---|
+| Modelled: **7** | `10 USR`, `11 FIQ`, `12 IRQ`, `13 SVC`, `17 ABT`, `1b UND`, `1f SYS` |
+| Unmodelled: **25** | `00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 14 15 16 18 19 1a 1c 1d 1e` |
+
+Do not call that entire second row “architecturally reserved” across all supported CPU names: [cpu_arm.h](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h:103) names `00–03` as legacy 26-bit modes. A modelled-mode predicate measures emulator capability, not architectural validity for every processor.
+
+The actual MSR decoder emits these **16 byte masks**, in field-selector order `0–f`:
+
+```text
+00000000 000000ff 0000ff00 0000ffff
+00ff0000 00ff00ff 00ffff00 00ffffff
+ff000000 ff0000ff ff00ff00 ff00ffff
+ffff0000 ffff00ff ffffff00 ffffffff
+```
+
+Zero becomes NOP, leaving **15 masks reaching handlers**. USR restriction reduces the effective mask to `{00000000, ff000000}`. Consequently, `mask & ARM_FLAG_MODE` is only `{0, 1f}`: **there is no partial-mode-bit producer in this decoder**. Validate the effective write after privilege masking; arbitrary low operand bits in a flags-only write must not cause rejection. See [the decoder](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4319).
+
+The exception table’s indices `0,1,2,3,4,5,6,7` map respectively to `13,1b,13,17,17,00,12,11`. But the **actual call-site producers** are:
+
+| Exception number | Producer | New mode |
+|---:|---|---|
+| 1 | Undefined instruction | `1b` |
+| 2 | SWI | `13` |
+| 3 | Prefetch abort | `17` |
+| 4 | Data abort | `17` |
+| 6 | IRQ | `12` |
+
+There is no current producer of `0`, `5`, or `7`. Moreover, an artificial index-5 call exits during SPSR selection, before writing CPSR. Thus **“exception Load sees a modelled mode” survives examination**; the zero table entry does not refute it.
+
+The source writer inventory is broader than the three guest instruction families.
+
+| Source | CPSR writes |
+|---|---|
+| [cpu.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:71) | Whole CPU zero-initialization, before ARM initialization. |
+| [cpu_arm.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:127) | Initialization at 127/133/136 establishes SVC; exception mode assignment at 697–698; NZCV synchronization at 366–367 and 671–672; T/I/F writes at 693,714,717,1517,1519,1530,1681,1683,1777. **Writable CPSR setting registered at 196.** |
+| [cpu_arm_instr.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:822) | MSR assignment at 841–842, register wrapper at 850–853; LDM restore at 1808; NZCV synchronization at 835–836 and 912–913; T writes at 358,360,389,391,448,490,492. |
+| [cpu_arm_instr_dpi.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:215) | Five SPSR-to-CPSR assignments at 221,223,225,227,229; T write at 245. |
+| [emul.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul.c:673) | T-bit initialization from entry-point state. |
+
+Only the three identified guest instruction families introduce arbitrary mode values during ordinary guest execution. **The debugger/settings route is another ingress globally:** registration stores a writable pointer, and [settings_write](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/settings.c:212) writes through it without bank switching or cached-flags synchronization.
+
+Each SPSR has these writers:
+
+| SPSR | Masked MSR writes, `cpu_arm_instr.c` | Exception capture, `cpu_arm.c` |
+|---|---:|---:|
+| FIQ | 862–863 | 684 |
+| ABT | 866–867 | 678 |
+| UND | 870–871 | 680 |
+| IRQ | 874–875 | 682 |
+| SVC | 878–879 | 676 |
+
+All five initially contain zero from CPU allocation. `msr_spsr` feeds a register operand into `msr_imm_spsr`; neither validates the incoming mode. Thus **yes, arbitrary SPSR mode bits can be stored and restored later**. Invalid restore input also need not originate in an explicit poisoning write. I found no additional SPSR writer or debugger registration.
+
+For disposition, I recommend a documented emulator policy: **decline the entire invalid instruction’s architectural effects, announce once per CPU, and continue sequentially.** This is a policy choice, not behavior uniquely prescribed by ARM.
+
+The architecture references do not mandate applying the remaining fields after an invalid mode request. Changing CPSR.T through MSR is independently UNPREDICTABLE; MOV also lists “Exceptions: None,” undermining the proposed MSR-versus-MOVS distinction. LDM(3) specifies SPSR restoration and a PC transfer, with Data Abort listed, but no required reserved-mode fault. [ARM ARM, A4-40–42, A4-68–69, A4-77–79](https://kib.kiev.ua/x86docs/ARM/ARMARMv5/DDI0100I.pdf)
+
+Applied to each caller:
+
+| Caller | Recommended behavior and required placement |
+|---|---|
+| **MSR CPSR** | After privilege masking, reject the whole effective write if it requests an unmodelled mode. Preserve logical flags, I/F, T, mode, and banks. Flags-only writes and USR-masked control writes retain their ordinary behavior. Preflight before the existing synchronization/Save/commit sequence. |
+| **LDM exception return** | Reject the whole instruction before memory reads, register commits, and writeback. Preserve registers, CPSR, flags, and the sequential continuation; do not branch to the loaded PC. |
+| **Data-processing S-to-PC** | Preflight before operand helpers or carry changes. Reject without updating flags or taking the computed branch. |
+| **Exception entry** | With a valid current mode, proceed: its destination is already modelled. An invalid current mode is an invariant failure requiring explicit containment; declining the destination mode cannot repair it. |
+
+A mode-only decline is another possible policy: preserve old M while applying permitted remaining fields. But that deliberately allows an exception-return target to execute in the old mode. I prefer whole-operation rejection because its state transition is easier to specify and review. FAULT is also a possible chosen response; I found no architecture basis for preferring it only for the restore callers.
+
+All seven members, plus an eighth:
+
+| Member | Assessment |
+|---|---|
+| **1 DELETE** | Insufficient. Removing both exits leaves unresolved mode/bank correspondence. Save subsequently reaches its default, although it no longer exits if that exit was also removed. |
+| **2 DECLINE silently** | Can preserve state correctly, but omits the requested diagnostic. |
+| **3 DECLINE + latched announce** | Recommended at instruction preflight, with explicit rejection scope. |
+| **4 ACCEPT** | Unsupported without defined bank behavior. Continuing with reserved CPSR and the previous bank is not coherent acceptance. |
+| **5 FAULT** | Possible implementation policy for UNPREDICTABLE input; requires correct exception entry and suppression of ordinary instruction continuation. |
+| **6 BACKED ACCEPT** | Meaningful only with defined storage and semantics for the accepted state. Spare storage alone does not define reserved-mode behavior. |
+| **7 IMPLEMENT** | Appropriate for a real missing architectural mode, such as a separately scoped legacy-mode implementation. Reserved encodings have no missing standard bank semantics to implement. |
+| **8 CPU stop/debugger handoff** | Useful containment for an unexpected internal state, distinct from an architectural guest exception or normal decline. It must preserve host control explicitly. |
+
+The omitted surrounding control flow changes the implementation requirements:
+
+- **MSR copies cached flags before Load**, at line 844. A Load rollback that restores only CPSR can leave `flags` inconsistent.
+- **LDM has already committed registers and writeback** at 1749 onward and 1777–1778. After Load, it writes `cpu->pc` at 1817 and invokes `quick_pc_to_pointers_arm` at 1825. A return inserted near Save produces partial execution.
+- **DPI writes PC before Save**, at 215. Earlier register-shifter evaluation and immediate handling can already change carry. After Load, it updates translation pointers at 241; an odd PC can then set T and replace `next_ic` at 243–246.
+- **Exception entry continues after Load** by writing LR/PC and translation pointers at 730–733.
+
+Therefore I recommend **both caller preflight and defensive bank-helper checks**, with different responsibilities. A shared predicate avoids divergent mode lists; callers define the instruction’s transaction. Bank helpers report failure, and callers must propagate that failure before further state or continuation writes.
+
+Save/Load cannot implement reliable rollback with their present signatures: they receive neither the old CPSR nor a complete snapshot. Merely setting a stopping continuation inside a helper is also insufficient because subsequent PC helpers can overwrite it.
+
+The defaults are **not globally dead** while direct debugger CPSR writes remain possible. Even accepting a modelled value through that route can bypass the required bank transition. Route such writes through coherent state-setting logic before claiming the invariant holds globally.
+
+Keep explicit defaults, but **latched logging followed by ordinary return is not a sufficient backstop**. Use a per-CPU diagnostic latch and an explicit failure result. A function-static latch incorrectly shares suppression between CPUs; inside generated DPI specializations, separate statics can instead multiply announcements. `fatal()` itself indeed returns and bypasses the quiet-mode check: [debugmsg.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384).
+
+For the smallest edit that breaks the proposed contract while staying green: **change the per-CPU announcement latch into a function-static latch**. That breaks “once per instance”; `kill 14` should remain green because the current probe uses a fresh, single-CPU process for each executing row. This is a source-based prediction, not a measurement.
+
+The more substantial coverage gap is an omitted SPSR-restore preflight: the MSR-only `kill 14`, `kill 15`, and `save 2s` rows do not establish coverage of either restore family. Also, [classify()](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py:231) checks whether `(once)` appears, not its occurrence count.
+
+The advertised **17 rows** do enumerate correctly: `enc ok`, `live`, `pc adv`, `armed`, `no cbit`, `kill 14`, `kill 15`, `save 2s`, `acc usr`, `acc fiq`, `acc irq`, `acc abt`, `acc und`, `acc sys`, `same svc`, `usr mask`, `row count`.
+
+Before accepting the eventual fix, I would want measurements of mixed-field rejection, both SPSR-restore continuations, exception entry after rejection, CPSR/cached-flags/PC agreement, and diagnostic isolation between CPU instances. None of those outcomes is established merely by the listed 17-row floor.
+tokens used
+60,371
+VERDICT: Member 3, with whole-operation decline before side effects and explicit bank-helper failure propagation | 4 premises wrong
+
+I read `GXEMUL-SEC/src/` at **`ef577140b5e0b0a7a75b70fe3c2556c521c17ac5`**. The quoted bank-switch line numbers match. I wrote nothing, built nothing, and ran no probes or gates.
+
+The four corrections I count are:
+
+1. **Seven modelled modes, six register banks.** USR and SYS share a bank; they remain distinct mode values.
+2. **The three files did not all last change in #524.** Individual file histories give `cpu_arm.c`: `2c615c3c` (#367); `cpu_arm_instr.c`: `4dfc7165` (#524); `cpu_arm_instr_dpi.c`: `a06e92fb` (#311–313). The reviewed defaults still contain `exit(1)`.
+3. **“Exceptions: None” does not establish that FAULT is forbidden for an UNPREDICTABLE operand.** MSR explicitly classifies reserved mode writes as UNPREDICTABLE. Arm’s current glossary expressly permits implementing an UNPREDICTABLE instruction as UNDEFINED. That is not evidence of actual SA1110 behavior, but it defeats the categorical inference. [ARM ARM, A4-77–79](https://kib.kiev.ua/x86docs/ARM/ARMARMv5/DDI0100I.pdf), [Arm Glossary, p.54](https://documentation-service.arm.com/static/64bea01c38511951cb7a0949)
+4. **“Must decline before Save” is stronger than the bank invariant requires.** Saving a valid old bank and then declining before committing CPSR is safe. Conversely, declining immediately before Save is already too late for a *whole-instruction* decline in the two restore callers.
+
+I do **not** count the questions about other ingress paths as asserted false premises.
+
+The arithmetic domains matter here.
+
+Both register MSR and immediate MSR can produce every low-five-bit value; unrotated immediates alone establish that. The complete partition is:
+
+| Bank-switch treatment | Mode values, hexadecimal |
+|---|---|
+| Modelled: **7** | `10 USR`, `11 FIQ`, `12 IRQ`, `13 SVC`, `17 ABT`, `1b UND`, `1f SYS` |
+| Unmodelled: **25** | `00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 14 15 16 18 19 1a 1c 1d 1e` |
+
+Do not call that entire second row “architecturally reserved” across all supported CPU names: [cpu_arm.h](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h:103) names `00–03` as legacy 26-bit modes. A modelled-mode predicate measures emulator capability, not architectural validity for every processor.
+
+The actual MSR decoder emits these **16 byte masks**, in field-selector order `0–f`:
+
+```text
+00000000 000000ff 0000ff00 0000ffff
+00ff0000 00ff00ff 00ffff00 00ffffff
+ff000000 ff0000ff ff00ff00 ff00ffff
+ffff0000 ffff00ff ffffff00 ffffffff
+```
+
+Zero becomes NOP, leaving **15 masks reaching handlers**. USR restriction reduces the effective mask to `{00000000, ff000000}`. Consequently, `mask & ARM_FLAG_MODE` is only `{0, 1f}`: **there is no partial-mode-bit producer in this decoder**. Validate the effective write after privilege masking; arbitrary low operand bits in a flags-only write must not cause rejection. See [the decoder](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4319).
+
+The exception table’s indices `0,1,2,3,4,5,6,7` map respectively to `13,1b,13,17,17,00,12,11`. But the **actual call-site producers** are:
+
+| Exception number | Producer | New mode |
+|---:|---|---|
+| 1 | Undefined instruction | `1b` |
+| 2 | SWI | `13` |
+| 3 | Prefetch abort | `17` |
+| 4 | Data abort | `17` |
+| 6 | IRQ | `12` |
+
+There is no current producer of `0`, `5`, or `7`. Moreover, an artificial index-5 call exits during SPSR selection, before writing CPSR. Thus **“exception Load sees a modelled mode” survives examination**; the zero table entry does not refute it.
+
+The source writer inventory is broader than the three guest instruction families.
+
+| Source | CPSR writes |
+|---|---|
+| [cpu.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:71) | Whole CPU zero-initialization, before ARM initialization. |
+| [cpu_arm.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:127) | Initialization at 127/133/136 establishes SVC; exception mode assignment at 697–698; NZCV synchronization at 366–367 and 671–672; T/I/F writes at 693,714,717,1517,1519,1530,1681,1683,1777. **Writable CPSR setting registered at 196.** |
+| [cpu_arm_instr.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:822) | MSR assignment at 841–842, register wrapper at 850–853; LDM restore at 1808; NZCV synchronization at 835–836 and 912–913; T writes at 358,360,389,391,448,490,492. |
+| [cpu_arm_instr_dpi.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:215) | Five SPSR-to-CPSR assignments at 221,223,225,227,229; T write at 245. |
+| [emul.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul.c:673) | T-bit initialization from entry-point state. |
+
+Only the three identified guest instruction families introduce arbitrary mode values during ordinary guest execution. **The debugger/settings route is another ingress globally:** registration stores a writable pointer, and [settings_write](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/settings.c:212) writes through it without bank switching or cached-flags synchronization.
+
+Each SPSR has these writers:
+
+| SPSR | Masked MSR writes, `cpu_arm_instr.c` | Exception capture, `cpu_arm.c` |
+|---|---:|---:|
+| FIQ | 862–863 | 684 |
+| ABT | 866–867 | 678 |
+| UND | 870–871 | 680 |
+| IRQ | 874–875 | 682 |
+| SVC | 878–879 | 676 |
+
+All five initially contain zero from CPU allocation. `msr_spsr` feeds a register operand into `msr_imm_spsr`; neither validates the incoming mode. Thus **yes, arbitrary SPSR mode bits can be stored and restored later**. Invalid restore input also need not originate in an explicit poisoning write. I found no additional SPSR writer or debugger registration.
+
+For disposition, I recommend a documented emulator policy: **decline the entire invalid instruction’s architectural effects, announce once per CPU, and continue sequentially.** This is a policy choice, not behavior uniquely prescribed by ARM.
+
+The architecture references do not mandate applying the remaining fields after an invalid mode request. Changing CPSR.T through MSR is independently UNPREDICTABLE; MOV also lists “Exceptions: None,” undermining the proposed MSR-versus-MOVS distinction. LDM(3) specifies SPSR restoration and a PC transfer, with Data Abort listed, but no required reserved-mode fault. [ARM ARM, A4-40–42, A4-68–69, A4-77–79](https://kib.kiev.ua/x86docs/ARM/ARMARMv5/DDI0100I.pdf)
+
+Applied to each caller:
+
+| Caller | Recommended behavior and required placement |
+|---|---|
+| **MSR CPSR** | After privilege masking, reject the whole effective write if it requests an unmodelled mode. Preserve logical flags, I/F, T, mode, and banks. Flags-only writes and USR-masked control writes retain their ordinary behavior. Preflight before the existing synchronization/Save/commit sequence. |
+| **LDM exception return** | Reject the whole instruction before memory reads, register commits, and writeback. Preserve registers, CPSR, flags, and the sequential continuation; do not branch to the loaded PC. |
+| **Data-processing S-to-PC** | Preflight before operand helpers or carry changes. Reject without updating flags or taking the computed branch. |
+| **Exception entry** | With a valid current mode, proceed: its destination is already modelled. An invalid current mode is an invariant failure requiring explicit containment; declining the destination mode cannot repair it. |
+
+A mode-only decline is another possible policy: preserve old M while applying permitted remaining fields. But that deliberately allows an exception-return target to execute in the old mode. I prefer whole-operation rejection because its state transition is easier to specify and review. FAULT is also a possible chosen response; I found no architecture basis for preferring it only for the restore callers.
+
+All seven members, plus an eighth:
+
+| Member | Assessment |
+|---|---|
+| **1 DELETE** | Insufficient. Removing both exits leaves unresolved mode/bank correspondence. Save subsequently reaches its default, although it no longer exits if that exit was also removed. |
+| **2 DECLINE silently** | Can preserve state correctly, but omits the requested diagnostic. |
+| **3 DECLINE + latched announce** | Recommended at instruction preflight, with explicit rejection scope. |
+| **4 ACCEPT** | Unsupported without defined bank behavior. Continuing with reserved CPSR and the previous bank is not coherent acceptance. |
+| **5 FAULT** | Possible implementation policy for UNPREDICTABLE input; requires correct exception entry and suppression of ordinary instruction continuation. |
+| **6 BACKED ACCEPT** | Meaningful only with defined storage and semantics for the accepted state. Spare storage alone does not define reserved-mode behavior. |
+| **7 IMPLEMENT** | Appropriate for a real missing architectural mode, such as a separately scoped legacy-mode implementation. Reserved encodings have no missing standard bank semantics to implement. |
+| **8 CPU stop/debugger handoff** | Useful containment for an unexpected internal state, distinct from an architectural guest exception or normal decline. It must preserve host control explicitly. |
+
+The omitted surrounding control flow changes the implementation requirements:
+
+- **MSR copies cached flags before Load**, at line 844. A Load rollback that restores only CPSR can leave `flags` inconsistent.
+- **LDM has already committed registers and writeback** at 1749 onward and 1777–1778. After Load, it writes `cpu->pc` at 1817 and invokes `quick_pc_to_pointers_arm` at 1825. A return inserted near Save produces partial execution.
+- **DPI writes PC before Save**, at 215. Earlier register-shifter evaluation and immediate handling can already change carry. After Load, it updates translation pointers at 241; an odd PC can then set T and replace `next_ic` at 243–246.
+- **Exception entry continues after Load** by writing LR/PC and translation pointers at 730–733.
+
+Therefore I recommend **both caller preflight and defensive bank-helper checks**, with different responsibilities. A shared predicate avoids divergent mode lists; callers define the instruction’s transaction. Bank helpers report failure, and callers must propagate that failure before further state or continuation writes.
+
+Save/Load cannot implement reliable rollback with their present signatures: they receive neither the old CPSR nor a complete snapshot. Merely setting a stopping continuation inside a helper is also insufficient because subsequent PC helpers can overwrite it.
+
+The defaults are **not globally dead** while direct debugger CPSR writes remain possible. Even accepting a modelled value through that route can bypass the required bank transition. Route such writes through coherent state-setting logic before claiming the invariant holds globally.
+
+Keep explicit defaults, but **latched logging followed by ordinary return is not a sufficient backstop**. Use a per-CPU diagnostic latch and an explicit failure result. A function-static latch incorrectly shares suppression between CPUs; inside generated DPI specializations, separate statics can instead multiply announcements. `fatal()` itself indeed returns and bypasses the quiet-mode check: [debugmsg.c](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384).
+
+For the smallest edit that breaks the proposed contract while staying green: **change the per-CPU announcement latch into a function-static latch**. That breaks “once per instance”; `kill 14` should remain green because the current probe uses a fresh, single-CPU process for each executing row. This is a source-based prediction, not a measurement.
+
+The more substantial coverage gap is an omitted SPSR-restore preflight: the MSR-only `kill 14`, `kill 15`, and `save 2s` rows do not establish coverage of either restore family. Also, [classify()](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py:231) checks whether `(once)` appears, not its occurrence count.
+
+The advertised **17 rows** do enumerate correctly: `enc ok`, `live`, `pc adv`, `armed`, `no cbit`, `kill 14`, `kill 15`, `save 2s`, `acc usr`, `acc fiq`, `acc irq`, `acc abt`, `acc und`, `acc sys`, `same svc`, `usr mask`, `row count`.
+
+Before accepting the eventual fix, I would want measurements of mixed-field rejection, both SPSR-restore continuations, exception entry after rejection, CPSR/cached-flags/PC agreement, and diagnostic isolation between CPU instances. None of those outcomes is established merely by the listed 17-row floor.

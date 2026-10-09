@@ -869,6 +869,79 @@ MANIFEST = {
         (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 2"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.FROZEN3.py":
         (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 3"),
+    #  #562 armmsrmodekill, landed with the round: the detector and its preserved instruments.
+    "arm_msrmode_probe.py":
+        (CLASS_DETECTOR, "#562 armmsrmodekill: a privileged guest MSR, or an SPSR restore, naming a mode this model does not bank ended the emulator -- the mode field declined, announced once per site; 47 rows on unmodified -E testarm, gate 14 (gate_arm.sh) pins 47"),
+    "artifacts/armmsrmodekill/killtable2_20261007/mutate2.py":
+        (CLASS_TOOL, "#562 killtable2_20261007 the implementation helper's: mutate.py <tree> <mutant> -- apply one #562 kill-table mutant to <tree>/src."),
+    "artifacts/armmsrmodekill/killtable2_20261007/mutate3.py":
+        (CLASS_TOOL, "#562 killtable2_20261007 the implementation helper's: mutate3.py <tree> <mutant> -- #562 table 3 (Opus pass-2 additions)."),
+    "artifacts/armmsrmodekill/killtable4_20261008/mutate5.py":
+        (CLASS_TOOL, "#562 killtable4_20261008 the implementation helper's: mutate5.py <tree> <mutant>|LIST -- #562 repair 4 additions: two probes of closure rules (1)/(2) at cells the closure claims but no earlier mutant targ"),
+    "artifacts/armmsrmodekill/killtable5_20261008/edit_v6.py":
+        (CLASS_TOOL, "#562 killtable5_20261008 the implementation helper's: (no docstring)"),
+    "artifacts/armmsrmodekill/killtable5_20261008/grid_block.py":
+        (CLASS_TOOL, "#562 killtable5_20261008 the implementation helper's: [(kind, label, OLD, NEW, WANT)] for one path -- the whole generated table."),
+    "artifacts/armmsrmodekill/killtable5_20261008/mutate6.py":
+        (CLASS_TOOL, "#562 killtable5_20261008 the implementation helper's: mutate6.py <tree> <mutant>|LIST -- #562 repair 5: the pass-2r4 escapes, rebuilt from the coordinator's and the panel's descriptions (Opus's own file w"),
+    "artifacts/armmsrmodekill/killtable5_20261008/mutr4.py":
+        (CLASS_TOOL, "#562 killtable5_20261008 the implementation helper's: mutr4.py <tree> <mutant>|LIST|LANE1|LANE2|LANE3 -- Opus pass-2R4 candidates for #562 repair 4."),
+    "artifacts/armmsrmodekill/killtable5_20261008/probe_frozen.py":
+        (CLASS_RESEARCH, "#562 killtable5_20261008 the frozen instrument a table ran: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/killtable_20261007/mutate.py":
+        (CLASS_TOOL, "#562 killtable_20261007 the implementation helper's: mutate.py <tree> <mutant> -- apply one #562 kill-table mutant to <tree>/src."),
+    "artifacts/armmsrmodekill/opus_pass2_20261007/mut.py":
+        (CLASS_RESEARCH, "#562 opus_pass2_20261007 the Opus 5.5 measuring seat's: (no docstring)"),
+    "artifacts/armmsrmodekill/opus_pass2_20261007/mut2.py":
+        (CLASS_RESEARCH, "#562 opus_pass2_20261007 the Opus 5.5 measuring seat's: (no docstring)"),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/mkclosure.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: mkclosure.py <frozen probe> <out> -- build the Opus CLASS-CLOSURE variant of the 40-row probe: src rows: accept SPSR 0xffffffdf (every bit but T), and"),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/mkclosure2.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: mkclosure2.py <closure probe> <out> -- adds row `encl2': the enclosing-predicate and per-path cells the closure probe still does not hold: S-DPI with "),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/mutr3.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: mutr3.py <tree> <mutant>|LIST|LANE1|LANE2 -- Opus pass-2R3 candidates for #562 repair 3."),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/mutr3b.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: mutr3.py <tree> <mutant>|LIST|LANE1|LANE2 -- Opus pass-2R3 candidates for #562 repair 3."),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/probe_closure.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/probe_closure2.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r3_20261008/probe_frozen.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r3_20261008 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r4_20261008/fixm.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r4_20261008 the Opus 5.5 measuring seat's: (no docstring)"),
+    "artifacts/armmsrmodekill/opus_pass2r4_20261008/mutr4.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r4_20261008 the Opus 5.5 measuring seat's: mutr4.py <tree> <mutant>|LIST|LANE1|LANE2|LANE3 -- Opus pass-2R4 candidates for #562 repair 4."),
+    "artifacts/armmsrmodekill/opus_pass2r4_20261008/probe_frozen.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r4_20261008 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/gatetest/mkfx.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: Build adversarial gate fixtures from the preserved fixed log."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/gridcov_scope.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: gridcov_scope.py <probe> -- OFFLINE: what does the `grid cov' row actually certify?"),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/latchcov.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: latchcov.py <probe> -- OFFLINE, LATCH-AWARE re-derivation of the grid's G1 table."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/loop_row.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: (no docstring)"),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/loop_standalone.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: loop_standalone.py <frozen probe> <loop_row.py> <gxemul> <label> -- run ONLY the prototype `msr loop' row, with the frozen probe's own helpers (its te"),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/mk_probe47r.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: mk_probe47r.py <frozen 47-row probe> <out> -- PROTOTYPE of the zero-observation L2 repair for the latch-clear restore cells: in grid_obs(), for the DP"),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/mk_probe48.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: mk_probe48.py <frozen 47-row probe> <loop_row.py> <out> -- the PROTOTYPE 48-row probe (Q2)."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/mutr5.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: mutr5.py <tree> <mutant>|LIST|<LANE> -- Opus pass-2R5 candidates for #562 repair 5."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/probe47r.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/probe48.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/probe_frozen.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r5_20261009/probe_sec_0326.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r5_20261009 the Opus 5.5 measuring seat's: armmsrmodekill -- RUNG-3 WITNESS."),
+    "artifacts/armmsrmodekill/opus_pass2r_20261007/mutr.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r_20261007 the Opus 5.5 measuring seat's: mutr.py <tree> <mutant>|LIST -- Opus pass-2R candidates for #562."),
+    "artifacts/armmsrmodekill/opus_pass2r_20261007/mutr2.py":
+        (CLASS_RESEARCH, "#562 opus_pass2r_20261007 the Opus 5.5 measuring seat's: mutr2.py <tree> <mutant>|LIST -- coordinator-requested panel predictions (grok/codex/deepseek) for #562 pass-2R."),
     #  #529 crimewidthkill, landed with the round: the detector and its untracked instruments.
     "crime_width_probe.py":
         (CLASS_DETECTOR, "#529 crimewidthkill: a guest lb/lbu/lh/lhu/sb/sh to the IP32 CRIME ended the emulator -- declined, announced once; 226 rows on unmodified -E sgi -e ip32, gate 14 (gate_arm.sh) pins 226"),

@@ -113,6 +113,14 @@ struct arm_cpu_type_def {
 #define	ARM_MODE_UND32	      0x1b
 #define	ARM_MODE_SYS32	      0x1f
 
+/*  #562: arm_cpu.mode_warned bits -- the three guest declines and the two
+    register-bank backstops each announce once per CPU, independently.  */
+#define	ARM_MODEWARN_MSR	0x01
+#define	ARM_MODEWARN_POP	0x02
+#define	ARM_MODEWARN_DPI	0x04
+#define	ARM_MODEWARN_SAVE	0x08
+#define	ARM_MODEWARN_LOAD	0x10
+
 #define ARM_EXCEPTION_TO_MODE	{	\
 	ARM_MODE_SVC32, ARM_MODE_UND32, ARM_MODE_SVC32, ARM_MODE_ABT32, \
 	ARM_MODE_ABT32, 0,              ARM_MODE_IRQ32, ARM_MODE_FIQ32 	}
@@ -193,6 +201,10 @@ struct arm_cpu {
 	uint32_t		spsr_und;
 	uint32_t		spsr_irq;
 	uint32_t		spsr_fiq;
+
+	/*  #562: once-latch for the unmodelled-mode announces, one
+	    ARM_MODEWARN_* bit per site (per CPU, zero at cpu_new).  */
+	uint32_t		mode_warned;
 
 
 	/*
@@ -342,6 +354,7 @@ void arm_update_translation_table(struct cpu *cpu, uint64_t vaddr_page,
 	unsigned char *host_page, int writeflag, uint64_t paddr_page);
 void arm_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
 void arm_invalidate_code_translation(struct cpu *cpu, uint64_t, int);
+int arm_mode_is_modelled(uint32_t mode);
 void arm_load_register_bank(struct cpu *cpu);
 void arm_save_register_bank(struct cpu *cpu);
 int arm_memory_rw(struct cpu *cpu, struct memory *mem, uint64_t vaddr,

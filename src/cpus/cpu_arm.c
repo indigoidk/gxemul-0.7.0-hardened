@@ -517,6 +517,32 @@ void arm_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
 
 
 /*
+ *  arm_mode_is_modelled():
+ *
+ *  #562: 1 if M[4:0] of `mode' is one of the seven modes this model banks
+ *  (10 11 12 13 17 1b 1f), else 0.  Its case list MUST stay equal to the
+ *  case lists of arm_save_register_bank() and arm_load_register_bank()
+ *  below: the three switches together define "modelled", and those two
+ *  default: arms are reached only for a mode this returns 0 for.  Extern,
+ *  not static: the DPI template is compiled as its own object.
+ */
+int arm_mode_is_modelled(uint32_t mode)
+{
+	switch (mode & ARM_FLAG_MODE) {
+	case ARM_MODE_USR32:
+	case ARM_MODE_SYS32:
+	case ARM_MODE_FIQ32:
+	case ARM_MODE_IRQ32:
+	case ARM_MODE_SVC32:
+	case ARM_MODE_ABT32:
+	case ARM_MODE_UND32:
+		return 1;
+	default:return 0;
+	}
+}
+
+
+/*
  *  arm_save_register_bank():
  */
 void arm_save_register_bank(struct cpu *cpu)
@@ -556,9 +582,22 @@ void arm_save_register_bank(struct cpu *cpu)
 		cpu->cd.arm.und_r13_r14[0] = cpu->cd.arm.r[13];
 		cpu->cd.arm.und_r13_r14[1] = cpu->cd.arm.r[14];
 		break;
-	default:fatal("arm_save_register_bank: unimplemented mode %i\n",
-		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
-		exit(1);
+	default:/*  #562: reached only once an unmodelled mode is ALREADY in
+		    CPSR, which only a debugger `cpsr=' assignment can now put
+		    there (msr_imm and both SPSR restores decline it).  After
+		    such a plant, Save runs on it from a guest MSR to a modelled
+		    mode, a DPI S-to-PC return, or exception/IRQ entry; an
+		    LDM {..pc}^ return does not get here -- arm_pop's own
+		    selector default: stops the CPU first (pre-existing).
+		    Backstop: announce once per CPU and return -- no exit(1),
+		    no rollback; r8-r14 are not saved.  */
+		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_SAVE)) {
+			cpu->cd.arm.mode_warned |= ARM_MODEWARN_SAVE;
+			fatal("arm_save_register_bank: unimplemented mode %i;"
+			    " registers not saved (once)\n",
+			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+		}
+		return;
 	}
 }
 
@@ -603,9 +642,20 @@ void arm_load_register_bank(struct cpu *cpu)
 		cpu->cd.arm.r[13] = cpu->cd.arm.und_r13_r14[0];
 		cpu->cd.arm.r[14] = cpu->cd.arm.und_r13_r14[1];
 		break;
-	default:fatal("arm_load_register_bank: unimplemented mode %i\n",
-		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
-		exit(1);
+	default:/*  #562: backstop, as in arm_save_register_bank().  After a
+		    debugger `cpsr=' plant of an unmodelled mode, the only
+		    caller that gets here is a DPI S-to-PC executed in that
+		    mode: it has no SPSR to copy, so Load runs on the plant.  A
+		    guest MSR, an exception or an IRQ calls Load on the MODELLED
+		    mode it switches to.  Announce once per CPU and return;
+		    r8-r14 keep their current values.  */
+		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_LOAD)) {
+			cpu->cd.arm.mode_warned |= ARM_MODEWARN_LOAD;
+			fatal("arm_load_register_bank: unimplemented mode %i;"
+			    " registers not loaded (once)\n",
+			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+		}
+		return;
 	}
 }
 

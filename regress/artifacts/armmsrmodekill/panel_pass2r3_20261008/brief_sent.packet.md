@@ -1,0 +1,403 @@
+# armmsrmodekill (#562) -- PASS 2 ON REPAIR 3 (the class closure)
+
+Open with `VERDICT: SHIP / SHIP-WITH-CHANGES / DO-NOT-SHIP | <n> floor breaches` (VERDICT LINE FIRST).  Read-only;
+write nothing, build nothing.  Tree under review: `GXEMUL-SEC/src/` working tree (HEAD `ef577140`) -- ignore any
+other `src/` under the project root (pristine 2021 upstream) and the peer session's unrelated uncommitted files
+(cpu_alpha_palcode.c, dev_lca.c, dev_pcc2.c, dev_sh4.c, mvme_pcctworeg.h).
+
+**Please do not simply ratify.**  Check premises, not only derivations.  Seats: GPT-6 Astra (codex), grok, agy, glm,
+deepseek, minimax, kimi, Opus 5.5.  Fable 5.1 DELIBERATELY NOT FIRED (owner, 2026-10-07).
+
+## Shared findings from the previous pass, and my disposition on each (the panel's findings, shared)
+
+Previous pass (repair 2, 38-row probe): codex/grok/deepseek DO-NOT-SHIP, glm/kimi-k3 SHIP-WITH-CHANGES, agy/minimax
+SHIP.  The Opus 5.5 seat then MEASURED 23 fix-side mutants: 21 kept 38/38.  agy's and minimax's SHIP verdicts were
+therefore wrong; the dissenting seats' predictions held.  Dispositions (all ADOPTED, all measured):
+1. helper projection widened `ARM_FLAG_MODE`->`0xff` escaped (Opus) -> rows now drive I/F-set values.
+2. restore keep-mode mask narrowing (grok) escaped 7/7 -> declined SPSR 0xcf; each of bits 0-3 has a label with
+   that bit clear (bit0 IRQ, bit1 FIQ, bit2 FIQ/IRQ/UND/SVC, bit3 FIQ/IRQ/ABT/SVC); bit 4 is set in every modelled
+   mode, so its narrowing is behaviour-preserving (stated, not rowed).
+3. label x latch x outcome (codex) escaped 6/6 -> each src session: accept, decline, decline (latch set), accept.
+4. I forced on decline (codex) escaped -> mode re-entered with I/F CLEAR before the declines.
+5. enclosing predicates return_flag / DPI rd==PC / non-S restore (codex) escaped -> new `encl` session.
+6. pop declining only 0x14 (grok) escaped -> killed by the 0xcf decline at pop.
+7. msr_imm guard skipped at one label (Opus, graded (e)) -> killed anyway by new `msr lbl` row.
+8. spsr_copied gate deletion (deepseek) -> was ALREADY killed (37/38, dbg both); its prediction was wrong.
+9. records: Load/Save backstop comments (grok, codex, Opus) -> rewritten (below); NOT CLAIMED range; contract
+   N/Z/I/F claim; "dbg both only carrier".
+**Which of these nine dispositions is wrong?**  Seats whose finding was adopted: be hardest on the FIX for it.
+
+## Measured on repair 3 (logs `regress/artifacts/armmsrmodekill/killtable3_20261008/`)
+
+fixed 40/40, HEAD 17/40 (23 named reds; `encl` green on HEAD by design).  65 mutants (Opus's 23 + the earlier 42) in
+3 parallel lanes, each lane baseline 40/40 before and after: ALL 65 red.  PRETABLE3 written 01:58:03, before the
+table.  Product code changed only in the two backstop comments vs repair 2 (the full fix vs HEAD is below).
+
+## Probe header: contract, NOT CLAIMED, tally (verbatim)
+
+```
+CONTRACT (floor clause (e)) -- the edits this detector is DESIGNED to catch:
+  * exit(1) reinstated at Save's default: (dbg save, dbg both, latch rpt) or Load's (dbg both,
+    latch rpt);
+  * the helper answering 1 always (kill 14/15/1e), admitting 0x1c-0x1e (kill 1e), dropping its
+    `& ARM_FLAG_MODE' projection (src rows: N|Z set) or WIDENING it, e.g. `& 0xff' (src rows and
+    msr lbl: I|F set in the operand);
+  * the guard dropped at msr_imm (kill rows), arm_pop (rst ldm, src pop x FIQ IRQ ABT UND SVC) or
+    DPI (rst movs, zero spsr, src dpi x FIQ IRQ ABT UND SVC), or restricted to ONE label, or to
+    one unmodelled value such as 0x14 (src rows decline 0x0f);
+  * the msr_imm guard skipped at one current-mode label (msr lbl: a decline from each of FIQ IRQ
+    ABT UND SYS);
+  * the msr_imm decline clearing fewer than all five mode bits, e.g. `& ~0x0f' (kill 03: the
+    only driven mode value with bit 4 CLEAR); the restore keep-mode mask clearing fewer than bits
+    0-3 (src rows, per the bit/label table above);
+  * a restore guard made unconditional, or unconditional for one label, or skipped / forced for one
+    label x latch-state cell (src rows: all 40 cells; acc movs, acc ldm);
+  * a WHOLE-OPERATION decline in msr_imm instead of field-only (the `if=' pin on kill rows);
+  * the restore not taking N, Z, I or F from the SPSR -- forced clear, or kept from the old CPSR
+    (src rows: the whole CPSR word; the declined SPSR has N Z I F SET while the CPSR it replaces
+    has them CLEAR);
+  * any two of the five latch sites sharing a bit (latch rpt: all five in one process; also
+    dbg both, latch ind);
+  * a latch that never SUPPRESSES (`|=' -> `&=', or the `|=' line deleted), or a repair applied
+    only while its latch is clear (latch rpt: every site visited TWICE; src rows per label);
+  * the enclosing predicates of both restores made unconditional: arm_pop's `if (return_flag)',
+    the DPI template's `rd == PC' compare, and the restore's `#ifdef A__S' (encl: a plain
+    `ldmia r5,{pc}', a non-S `add pc,r6,#0' and `add r0,pc,#0' -- NOT `mov pc,lr', which the
+    decoder turns into `ret' and so never reaches the DPI template).
+NOT CLAIMED, disclosed: unmodelled values a helper could get wrong unseen -- those never driven
+through ANY path: 0x01, 0x02, 0x04-0x0e, 0x16, 0x18-0x1a, 0x1c, 0x1d.  Per path: msr_imm drives
+0x03 0x14 0x15 0x1e; DPI drives 0x00 (SVC only), 0x0f, 0x14 (SVC only); arm_pop drives 0x0f,
+0x14 (SVC only).  The msr_imm comment's "only the LOCAL mask changes: ic->arg[] is a cached translation"
+-- no row re-executes ONE translated MSR, so a guard that wrote ic->arg[] would go unseen;
+per-CPU latch isolation (one CPU only); exception entry as a Save-backstop route (no row);
+T-bit / execution-state coherence on restore; the USR/SYS `LDM {pc}^' and `MSR SPSR' paths that
+stop the CPU (filed separately).
+
+NAMED-RED tally: HEAD = 17/40, RED exactly the 23 rows kill 14, kill 15, save 2s, kill 1e,
+kill 03, rst movs, rst ldm, zero spsr, dbg save, dbg both, latch ind, latch rpt, the ten src *
+rows and msr lbl, CONTROL=OK.  `encl' drives no unmodelled mode and is GREEN on HEAD.  `save 2s'
+on HEAD is the SAME Load death as `kill 14' (EOF on the first MSR) -- it is not an independent
+HEAD reproduction of Save; nor is `dbg both' a HEAD reproduction of Load (HEAD dies in Save
+first).  40/40 on HEAD is a broken vehicle, not success.
+
+Stay on `step', never `continue' (IRQ dispatch is inside `if (!single_step)').
+"""
+import os
+import pty
+```
+
+## PRETABLE3 (verbatim)
+
+```
+PRETABLE3 -- #562 repair 3 (CLASS CLOSURE), written BEFORE kill table 4 (mtime precedes every
+KILLTABLE3 / LANE output).
+Baseline: HEAD ef577140 export + CURRENT GXEMUL-SEC working-tree 4 src files (= msr3/src_v3,
+cmp-verified) with repair-3 COMMENT-ONLY edits to cpu_arm.c's two backstop comments = msr4/src_v4.
+No product-code change: no real defect found.  Probe = installed 38-row probe + repair-3 rows = 40.
+Fixed build 40/40 (run_fixed.out).
+
+0. THE ENUMERATION (from the restore repair's inputs, per the chain rule's class closure)
+   label {FIQ IRQ ABT UND SVC} x latch {clear, set} x outcome {declined, accepted} x path {DPI,POP}
+   = 40 cells: every src session = one (label, path), restores R1 accept/clear, R2 decline/clear,
+   R3 decline/set, R4 accept/set.  Masked SPSR bits 0-3 x labels (declined value 0x0f mode bits):
+     bit0 clear at IRQ; bit1 at FIQ; bit2 at FIQ IRQ UND SVC; bit3 at FIQ IRQ ABT SVC -- each bit
+     has >=1 label per path.  Bit 4: equivalent (all modelled modes have it set).
+   Helper operand bits 7:5 driven SET (c_dX entries, 0xcf/0xdf SPSRs) and CLEAR (c_XX rows); 31:30
+   SET (N|Z).  msr_imm guard x labels FIQ IRQ ABT UND SYS (msr lbl), SVC (kill rows).
+   Enclosing predicates of both restores: return_flag, DPI rd==PC compare, #ifdef A__S (encl).
+
+1. SIBLING PARITY: DPI and POP sessions are cell-for-cell identical (same values, same labels,
+   same four restores); differ only in the chaining instruction (movs pc,r5 vs ldmia r6!,{pc}^).
+   msr_imm has no latch x label product rowed beyond msr lbl (latch set at labels 2-5) -- its
+   repair does not read the latch (the latch only gates the message).
+
+2. CLAIM -> ROW (comments changed in repair 3)
+   Save backstop "Save runs on it from a guest MSR to a modelled mode": dbg save.
+     "a DPI S-to-PC return": dbg both, latch rpt.  "or exception/IRQ entry": NOT rowed (disclosed).
+     "an LDM {..pc}^ return does not get here -- arm_pop's selector default: stops the CPU":
+     NOT rowed (pre-existing behaviour, filed separately).
+   Load backstop "the only caller that gets here is a DPI S-to-PC executed in that mode":
+     dbg both, latch rpt.  "A guest MSR, an exception or an IRQ calls Load on the MODELLED mode":
+     dbg save (MSR -> Load(SVC) gives SP 0, no load text).
+   Probe header: every CONTRACT bullet names its rows; NOT CLAIMED re-derived per path.
+
+3. GUARD FIELD vs BODY FIELD: restore guard reads new_cpsr (selected by label), body reads
+   new_cpsr + cur_mode/cpsr mode + mode_warned (latch).  Joint cells label x latch x outcome all
+   rowed (section 0).  I/F: label re-entered with I/F CLEAR before the declines while the SPSR
+   has them SET, so the two sources disagree in every decline cell.
+
+4. PER ROW -- kills: <mutant> via <channel>   (new/changed rows; earlier rows as in PRETABLE2)
+   Keep-mode narrowing ~X lets SPSR mode bits NOT in X through: ~0x1e -> bit0, ~0x1d -> bit1,
+   ~0x17 -> bit3, ~0x14 -> bits 0,1,3.  Visible at a label whose own bit is clear.
+   src dpi fiq   kills: R_dpi_clr1d (bit1), R_dpi_clr17 (bit3), H_proj_ff, F_dpi_iclr,
+                 L_dpi_latchlabel (R3), N_dpi_svc_only, M_drop_dpi, M_uncond_dpi
+                 via R1..R4 CPSR words (mode/I/F) and the n= announce count
+   src dpi irq   kills: R_dpi_clr1e (bit0), R_dpi_clr17 (bit3), E_dpi_irqlatch (R3), E_dpi_irqacc
+                 (R1), N_dpi_keep_irq (R1/R4), L_dpi_latchlabel -- via R1..R4, n=
+   src dpi abt   kills: R_dpi_clr17 (bit3), L_dpi_latchlabel (R3) -- via R2/R3 mode
+   src dpi und   kills: L_dpi_latchlabel (R3), H_proj_ff, F_dpi_iclr; no BUILT narrowing is
+                 UND-visible (UND shows only bit 2, i.e. ~0x1b, not built) -- via R1..R4
+   src dpi svc   kills: R_dpi_clr17 (bit3), F_dpi_iclr, H_proj_ff -- via R1..R4
+   src pop <lab> the same per label for arm_pop: R_pop_clr17/1e/1d, R_pop_clr14 (FIQ IRQ ABT SVC), B_pop_only14 (0x0f is not
+                 0x14), L_pop_latchlabel, E_pop_irqlatch, E_pop_irqacc, F_pop_iclr,
+                 N_pop_svc_only, N_pop_keep_abt, M_drop_pop, M_uncond_pop
+   msr lbl       kills: E_msr_notfiq (R1 = 14 -> backstop chain), H_proj_ff (c_dX entries
+                 declined), M_drop_msr -- via the five mode readbacks and n=
+   encl          kills: C_pop_retflag1 (m1 = 1f: SPSR restored by a plain LDM), D_dpi_snots
+                 (m2 = 1f: non-S ADD pc restores), D_dpi_pccmp1 (r0 store skipped -> nofire)
+   N_msr_clr1e   (Opus negative control) kill 14 / save 2s / kill 1e / latch ind, as measured.
+   G_dpi_nocopied dbg both (` once' from the DPI decline on a plant), as measured.
+   All 42 earlier mutants (tables 1-3): the rows PRETABLE2 lists; the src rows are now stronger
+   (four readbacks), so no earlier kill depends on a row that was weakened.
+   CHANNEL check: every channel above is a CPSR word, an r0 value, an exact announce count, or
+   alive/dead; none is survive-only.
+END PRETABLE3
+
+```
+
+## The fix vs HEAD (verbatim, 9 hunks)
+
+```diff
+--- a/src/include/cpu_arm.h
++++ b/src/include/cpu_arm.h
+@@ -113,6 +113,14 @@
+ #define	ARM_MODE_UND32	      0x1b
+ #define	ARM_MODE_SYS32	      0x1f
+ 
++/*  #562: arm_cpu.mode_warned bits -- the three guest declines and the two
++    register-bank backstops each announce once per CPU, independently.  */
++#define	ARM_MODEWARN_MSR	0x01
++#define	ARM_MODEWARN_POP	0x02
++#define	ARM_MODEWARN_DPI	0x04
++#define	ARM_MODEWARN_SAVE	0x08
++#define	ARM_MODEWARN_LOAD	0x10
++
+ #define ARM_EXCEPTION_TO_MODE	{	\
+ 	ARM_MODE_SVC32, ARM_MODE_UND32, ARM_MODE_SVC32, ARM_MODE_ABT32, \
+ 	ARM_MODE_ABT32, 0,              ARM_MODE_IRQ32, ARM_MODE_FIQ32 	}
+@@ -194,6 +202,10 @@
+ 	uint32_t		spsr_irq;
+ 	uint32_t		spsr_fiq;
+ 
++	/*  #562: once-latch for the unmodelled-mode announces, one
++	    ARM_MODEWARN_* bit per site (per CPU, zero at cpu_new).  */
++	uint32_t		mode_warned;
++
+ 
+ 	/*
+ 	 *  System Control Coprocessor registers:
+@@ -342,6 +354,7 @@
+ 	unsigned char *host_page, int writeflag, uint64_t paddr_page);
+ void arm_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+ void arm_invalidate_code_translation(struct cpu *cpu, uint64_t, int);
++int arm_mode_is_modelled(uint32_t mode);
+ void arm_load_register_bank(struct cpu *cpu);
+ void arm_save_register_bank(struct cpu *cpu);
+ int arm_memory_rw(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+--- a/src/cpus/cpu_arm.c
++++ b/src/cpus/cpu_arm.c
+@@ -517,6 +517,32 @@
+ 
+ 
+ /*
++ *  arm_mode_is_modelled():
++ *
++ *  #562: 1 if M[4:0] of `mode' is one of the seven modes this model banks
++ *  (10 11 12 13 17 1b 1f), else 0.  Its case list MUST stay equal to the
++ *  case lists of arm_save_register_bank() and arm_load_register_bank()
++ *  below: the three switches together define "modelled", and those two
++ *  default: arms are reached only for a mode this returns 0 for.  Extern,
++ *  not static: the DPI template is compiled as its own object.
++ */
++int arm_mode_is_modelled(uint32_t mode)
++{
++	switch (mode & ARM_FLAG_MODE) {
++	case ARM_MODE_USR32:
++	case ARM_MODE_SYS32:
++	case ARM_MODE_FIQ32:
++	case ARM_MODE_IRQ32:
++	case ARM_MODE_SVC32:
++	case ARM_MODE_ABT32:
++	case ARM_MODE_UND32:
++		return 1;
++	default:return 0;
++	}
++}
++
++
++/*
+  *  arm_save_register_bank():
+  */
+ void arm_save_register_bank(struct cpu *cpu)
+@@ -556,9 +582,22 @@
+ 		cpu->cd.arm.und_r13_r14[0] = cpu->cd.arm.r[13];
+ 		cpu->cd.arm.und_r13_r14[1] = cpu->cd.arm.r[14];
+ 		break;
+-	default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+-		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+-		exit(1);
++	default:/*  #562: reached only once an unmodelled mode is ALREADY in
++		    CPSR, which only a debugger `cpsr=' assignment can now put
++		    there (msr_imm and both SPSR restores decline it).  After
++		    such a plant, Save runs on it from a guest MSR to a modelled
++		    mode, a DPI S-to-PC return, or exception/IRQ entry; an
++		    LDM {..pc}^ return does not get here -- arm_pop's own
++		    selector default: stops the CPU first (pre-existing).
++		    Backstop: announce once per CPU and return -- no exit(1),
++		    no rollback; r8-r14 are not saved.  */
++		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_SAVE)) {
++			cpu->cd.arm.mode_warned |= ARM_MODEWARN_SAVE;
++			fatal("arm_save_register_bank: unimplemented mode %i;"
++			    " registers not saved (once)\n",
++			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
++		}
++		return;
+ 	}
+ }
+ 
+@@ -603,9 +642,20 @@
+ 		cpu->cd.arm.r[13] = cpu->cd.arm.und_r13_r14[0];
+ 		cpu->cd.arm.r[14] = cpu->cd.arm.und_r13_r14[1];
+ 		break;
+-	default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+-		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+-		exit(1);
++	default:/*  #562: backstop, as in arm_save_register_bank().  After a
++		    debugger `cpsr=' plant of an unmodelled mode, the only
++		    caller that gets here is a DPI S-to-PC executed in that
++		    mode: it has no SPSR to copy, so Load runs on the plant.  A
++		    guest MSR, an exception or an IRQ calls Load on the MODELLED
++		    mode it switches to.  Announce once per CPU and return;
++		    r8-r14 keep their current values.  */
++		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_LOAD)) {
++			cpu->cd.arm.mode_warned |= ARM_MODEWARN_LOAD;
++			fatal("arm_load_register_bank: unimplemented mode %i;"
++			    " registers not loaded (once)\n",
++			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
++		}
++		return;
+ 	}
+ }
+ 
+--- a/src/cpus/cpu_arm_instr.c
++++ b/src/cpus/cpu_arm_instr.c
+@@ -827,6 +827,25 @@
+ 		mask &= 0xff000000;
+ 	}
+ 
++	/*
++	 *  #562: a mode-field write naming a mode this model does not bank
++	 *  (reserved, or 26-bit) used to reach arm_load_register_bank()'s
++	 *  exit(1).  The architecture makes the result UNPREDICTABLE (DDI
++	 *  0100I A2.5.7; ARMv7 lets it be UNDEFINED) and forbids halting.
++	 *  Declining the MODE FIELD only, with the rest of the write applied,
++	 *  is this emulator's POLICY, not an architectural requirement.  Only
++	 *  the local mask changes: ic->arg[] is a cached translation.
++	 */
++	if ((mask & ARM_FLAG_MODE) && !arm_mode_is_modelled(ic->arg[0])) {
++		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_MSR)) {
++			cpu->cd.arm.mode_warned |= ARM_MODEWARN_MSR;
++			fatal("[ msr_imm: mode 0x%02x is not modelled; mode field"
++			    " not written, other fields are (once) ]\n",
++			    (int)(ic->arg[0] & ARM_FLAG_MODE));
++		}
++		mask &= ~ARM_FLAG_MODE;
++	}
++
+ 	int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+ 	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+ 	    (ic->arg[0] & ARM_FLAG_MODE));
+@@ -1799,6 +1818,22 @@
+ 			return;
+ 		}
+ 
++		/*  #562: an SPSR naming an unmodelled mode (an MSR SPSR_c of a
++		    reserved value, or an SPSR never written: zero = mode 0)
++		    keeps the CURRENT mode in M[4:0]; every other bit comes from
++		    the SPSR.  Same POLICY as msr_imm.  No return here: the PC
++		    load below must still run.  */
++		if (!arm_mode_is_modelled(new_cpsr)) {
++			if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_POP)) {
++				cpu->cd.arm.mode_warned |= ARM_MODEWARN_POP;
++				fatal("[ arm_pop: SPSR mode 0x%02x is not modelled;"
++				    " mode kept (once) ]\n",
++				    (int)(new_cpsr & ARM_FLAG_MODE));
++			}
++			new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) |
++			    (cpu->cd.arm.cpsr & ARM_FLAG_MODE);
++		}
++
+ 		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+ 		    (new_cpsr & ARM_FLAG_MODE);
+ 
+--- a/src/cpus/cpu_arm_instr_dpi.c
++++ b/src/cpus/cpu_arm_instr_dpi.c
+@@ -215,19 +215,38 @@
+ 		cpu->pc = (uint32_t)c64;
+ #ifdef A__S
+ 		/*  Copy the right SPSR into CPSR:  */
++		uint32_t cur_mode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
++		uint32_t new_cpsr = cpu->cd.arm.cpsr;
++		int spsr_copied = 1;
+ 		arm_save_register_bank(cpu);
+-		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
++		switch (cur_mode) {
+ 		case ARM_MODE_FIQ32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
++			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+ 		case ARM_MODE_IRQ32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
++			new_cpsr = cpu->cd.arm.spsr_irq; break;
+ 		case ARM_MODE_SVC32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
++			new_cpsr = cpu->cd.arm.spsr_svc; break;
+ 		case ARM_MODE_ABT32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
++			new_cpsr = cpu->cd.arm.spsr_abt; break;
+ 		case ARM_MODE_UND32:
+-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
++			new_cpsr = cpu->cd.arm.spsr_und; break;
++		default:spsr_copied = 0;
+ 		}
++		/*  #562: an SPSR naming an unmodelled mode keeps the CURRENT mode
++		    in M[4:0]; the value assigned to CPSR below takes all other
++		    bits from the SPSR (msr_imm's POLICY) -- though T is forced
++		    after Load for an odd destination PC.  Only when an SPSR was
++		    copied; no early return (pc is set).  */
++		if (spsr_copied && !arm_mode_is_modelled(new_cpsr)) {
++			if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_DPI)) {
++				cpu->cd.arm.mode_warned |= ARM_MODEWARN_DPI;
++				fatal("[ dpi S-to-pc: SPSR mode 0x%02x is not "
++				    "modelled; mode kept (once) ]\n",
++				    (int)(new_cpsr & ARM_FLAG_MODE));
++			}
++			new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) | cur_mode;
++		}
++		cpu->cd.arm.cpsr = new_cpsr;
+ 		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+ 		arm_load_register_bank(cpu);
+ #else
+
+```
+
+## Questions -- `<n> | <answer>`
+1. FLOOR on the SHIPPED COMPOSITE: is there a smallest edit to the fix that keeps all 40 rows green?  Give the
+   DENOMINATOR -- the cells/shapes you swept.  A zero without a denominator does not close this chain.
+2. Is the class closure complete for the two classes found twice (mask width; label x latch x outcome)?  Name any
+   cell of the enumerated space the rows do not hold (e.g. `~0x1b`, visible only at UND, is disclosed).
+3. Records: are the two rewritten backstop comments, the contract and NOT CLAIMED now TRUE?
+4. Which of the nine dispositions above is wrong?
+**If, while verifying, you found something ELSE -- say so.**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.

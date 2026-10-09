@@ -1,0 +1,95 @@
+VERDICT: SHIP | 0 floor breaches
+
+### Adversarial Review of `brief_sent.md` (#562 Pass 2 Repair)
+
+---
+
+### Questions and Review-Asks
+
+#### 1 | FLOOR on the Shipped Composite
+**Answer:** Zero floor breaches found across the entire shipped composite.
+
+**Denominator swept (42 mutants evaluated across Table 2 and Table 3, plus exhaustive structural audit):**
+1. **Helper [`arm_mode_is_modelled()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L529-L542):**
+   - Dropping `& ARM_FLAG_MODE` projection: tested via mutant `N_helper_nomask`. SPSRs carrying flags in bits 31:30 fail all 10 `src *` rows (scored 27/37 in Table 2, [KILLTABLE2.out:52](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L52)).
+   - Widening domain by range (e.g. admitting 0x1c–0x1e): tested via mutant `M_helper_range`, caught by `kill 1e` (scored 36/37, [KILLTABLE2.out:106](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L106)).
+   - Default returning 1: tested via mutant `M_helper_always1`, failing 19 rows (scored 18/37, [KILLTABLE2.out:85](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L85)).
+   - Dropping any of the 7 valid mode cases (USR, SYS, FIQ, IRQ, SVC, ABT, UND): directly kills the corresponding `acc *` or `src *` rows.
+2. **Dominating Predicates and Declines:**
+   - **`msr_imm` ([cpu_arm_instr.c:839-847](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L839-L847)):**
+     - Dropping `mask & ARM_FLAG_MODE`: causes `MSR CPSR_f, #0x14` to falsely trigger the decline and announce, failing `no cbit` ([arm_msrmode_probe.py:550](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L550)).
+     - Dropping the guard entirely: tested via mutant `M_drop_msr`, failing 6 rows (scored 31/37, [KILLTABLE2.out:109](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L109)).
+     - Clearing only 4 mode bits (`mask &= ~0x0f`): tested via mutant `O_mask_nibble`, failing `kill 03` with mode 0x03 readback (scored 37/38 in Table 3, [KILLTABLE2.out:237](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L237)).
+     - Whole-op decline (`return;`): tested via mutant `M_wholeop_msr`, failing `kill 14, 15, 1e` on the `if=0` pin (scored 34/37, [KILLTABLE2.out:168](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L168)).
+   - **`arm_pop` ([cpu_arm_instr.c:1826-1835](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1826-L1835)):**
+     - Dropping guard: tested via mutant `M_drop_pop`, failing `rst ldm`, `latch ind`, `latch rpt`, and all 5 `src pop *` rows (scored 29/37, [KILLTABLE2.out:117](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L117)).
+     - Making guard unconditional: tested via mutant `M_uncond_pop`, failing `acc ldm` and all 5 `src pop *` rows (scored 31/37, [KILLTABLE2.out:152](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L152)).
+     - Restricting guard to SVC only: tested via mutant `N_pop_svc_only`, failing all 4 non-SVC `src pop *` rows (scored 33/37, [KILLTABLE2.out:40](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L40)).
+     - Inserting early return: tested via mutant `M_pop_return`, skipping PC load and failing 8 rows (scored 29/37, [KILLTABLE2.out:197](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L197)).
+     - Mode-keeping logic restricted to ABT only: tested via mutant `N_pop_keep_abt`, failing `src pop abt` (scored 36/37, [KILLTABLE2.out:49](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L49)).
+   - **`dpi S-to-pc` ([cpu_arm_instr_dpi.c#L220-L248](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L220-L248)):**
+     - Omitting `spsr_copied &&` gate: tested via mutant `M_dpi_uncond_call`, emitting false DPI announce during unmodelled debugger plants, failing `dbg both` (scored 36/37, [KILLTABLE2.out:194](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L194)).
+     - Dropping guard: tested via mutant `M_drop_dpi`, failing 9 rows (scored 28/37, [KILLTABLE2.out:127](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L127)).
+     - Making guard unconditional: tested via mutant `M_uncond_dpi`, failing 6 rows (scored 31/37, [KILLTABLE2.out:160](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L160)).
+     - Restricting guard to SVC only: tested via mutant `N_dpi_svc_only`, failing all 4 non-SVC `src dpi *` rows (scored 33/37, [KILLTABLE2.out:34](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L34)).
+     - Mode-keeping logic restricted to IRQ only: tested via mutant `N_dpi_keep_irq`, failing `src dpi irq` (scored 36/37, [KILLTABLE2.out:46](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L46)).
+3. **The Five Latch Sites:**
+   - **Latch suppression (`|=` -> `&=`):** tested at each of the 5 sites via `N_latch_and_{msr,pop,dpi,save,load}`, each failing `latch rpt` with announce counts of 2 (scored 36/37 each in Table 2, [KILLTABLE2.out:4, 7, 10, 13, 16](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L4)).
+   - **Latch deletion:** tested at each of the 5 sites via `D_del_{msr,pop,dpi,save,load}`, each failing `latch rpt` (scored 37/38 each in Table 3, [KILLTABLE2.out:240-252](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L240-L252)).
+   - **Repair applied only while latch clear:** tested at each of the 5 sites via `N_cond_{msr,pop,dpi,save,load}`, each failing `latch rpt` on visit 2 (scored 36/37 each in Table 2, [KILLTABLE2.out:19, 22, 25, 28, 31](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L19)).
+   - **Latch bit aliasing ([cpu_arm.h:118-122](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L118-L122)):** tested via `M_shared_latch`, `M_shared_saveload`, `M_shared_msrpop`, `M_shared_msrdpi`, `M_shared_popdpi`, and `N_alias_save_msr`, failing `latch ind`, `dbg both`, or `latch rpt` ([KILLTABLE2.out:64, 173-192](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L64)).
+4. **Register Bank Backstops ([cpu_arm.c:585-599, 643-655](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L585-L599)):**
+   - Reinstating `exit(1)` in default cases: tested unlatched (`M_save_exit`, `M_load_exit`) and latched (`M_save_exit_latched`, `M_load_exit_latched`), failing `dbg save`, `dbg both`, and `latch rpt` ([KILLTABLE2.out:67, 71, 76, 80](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out#L67)).
+
+---
+
+#### 2 | The 2026-09-09 Label Clause Closure
+**Answer:** The rowed product `{fiq, irq, abt, und, svc} x {declined, accepted} x {dpi, pop}` is the correct closure for the mode selector axis.
+
+- **Domain closure:** In the ARM architecture, exactly five modes possess an SPSR: FIQ (0x11), IRQ (0x12), SVC (0x13), ABT (0x17), and UND (0x1b). USR (0x10) and SYS (0x1f) do not have an SPSR; attempting SPSR operations in USR/SYS is handled by the pre-#562 CPU stop paths ([cpu_arm_instr.c:1814-1818](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1814-L1818)).
+- **Complete matrix:** All 20 cells (`5 modes x 2 outcomes x 2 restore instructions`) are actively exercised and verified in the 10 `src *` rows ([arm_msrmode_probe.py:762-794](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L762-L794)). Each row checks whole-word CPSR readback (`c00000<mode>` for declined, `c000001f` for accepted), verifying that N|Z flags are propagated and the current mode selector correctly flows into `new_cpsr`.
+- **Asymmetry analysis:** 
+  - The zero-SPSR cell (`mode 0x00`) is rowed only for SVC/DPI ([arm_msrmode_probe.py:660-665](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L660-L665)). This is legitimate: testarm boots in SVC32 with all SPSRs zero-filled by `calloc` at `cpu_new`; mode 0x00 exercises the identical predicate branch in `arm_mode_is_modelled()` as mode 0x14, and this asymmetry is honestly disclosed in PRETABLE2 item 1 ([brief_sent.md:104-106](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/_scratchpad/panel_20261007_230103/brief_sent.md#L104-L106)).
+  - Latch state x label: `cpu->cd.arm.mode_warned` is a unified scalar bitfield on `struct arm_cpu` ([cpu_arm.h:207](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L207)), not a per-mode table. `latch rpt` visits all 5 sites twice to verify latch suppression and independence; crossing all 5 mode labels with latch state is not architecturally meaningful because no per-mode latch bits exist.
+
+---
+
+#### 3 | Records and Documentation Audit
+**Answer:** Every comment, contract line, citation, and tally in `brief_sent.md` is strictly true and verified against the tree:
+
+1. **Backstop Comments:**
+   - Citing [cpu_arm.c:585-591](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L585-L591) (Save backstop) and [cpu_arm.c:643-647](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L643-L647) (Load backstop). The claim that "only a debugger `cpsr=` assignment can now put [an unmodelled mode] there" is true because:
+     - All guest MSR writes (both immediate and register forms) funnel through `msr_imm` ([cpu_arm_instr.c:869-873](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L869-L873)), which masks out `ARM_FLAG_MODE`.
+     - Both SPSR restores (`arm_pop` at [cpu_arm_instr.c:1826](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1826) and DPI at [cpu_arm_instr_dpi.c:240](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L240)) force retention of the current mode.
+     - Exception entry vectors only to modelled modes ([cpu_arm.h:124-126](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L124-L126)).
+2. **DPI Comment on Thumb bit:**
+   - Citing [cpu_arm_instr_dpi.c:237-238](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L237-L238): "though T is forced after Load for an odd destination PC." Verified true: `arm_load_register_bank(cpu)` runs at [cpu_arm_instr_dpi.c:251](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L251), and `if (cpu->pc & 1) { cpu->cd.arm.cpsr |= ARM_FLAG_T; ... }` executes subsequently at [cpu_arm_instr_dpi.c:262-265](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L262-L265).
+3. **Pre-#562 Defect Citations:**
+   - Citations `cpu_arm.c:606-608` and `cpu_arm.c:559-561` match HEAD commit `ef577140` exactly ([git show ef577140:src/cpus/cpu_arm.c:559, 606](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c)).
+4. **Probe Contract and Tallies:**
+   - Contract inlined at [brief_sent.md:54-88](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/_scratchpad/panel_20261007_230103/brief_sent.md#L54-L88) matches [regress/arm_msrmode_probe.py:55-100](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L55-L100) verbatim.
+   - Fixed 38/38 and HEAD 16/38 (22 reds) verified against [run_fixed.out:41](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/run_fixed.out#L41) and [run_head.out:41](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/run_head.out#L41).
+   - Table 2 and Table 3 individual mutant scores verified against [KILLTABLE2.out](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable2_20261007/KILLTABLE2.out).
+
+---
+
+#### 4 | Honesty of the NOT CLAIMED List
+**Answer:** The NOT CLAIMED list ([arm_msrmode_probe.py:74-79](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L74-L79)) is completely honest and masks no guest-reachable defects:
+
+- **Unmodelled values other than 0x00, 0x14, 0x15, 0x1e:** The fix in [`arm_mode_is_modelled()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L529-L542) uses an explicit whitelist switch of the 7 modelled modes, returning 0 for all other 25 values uniformly. Disclosing that the probe stimulus exercises a subset (0x00, 0x03, 0x14, 0x15, 0x1e) is honest.
+- **Cached translation re-execution:** In [`msr_imm`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L824-L846), `mask` is a stack-local variable copied from `ic->arg[1]`. `mask &= ~ARM_FLAG_MODE` does not mutate `ic->arg[1]`, so subsequent executions re-evaluate the local mask correctly without halting.
+- **Multi-CPU latch isolation:** testarm is a single-core machine; per-CPU field storage on `struct arm_cpu` ([cpu_arm.h:207](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L207)) is structurally sound.
+- **USR/SYS `LDM {pc}^` and `MSR SPSR` CPU stops:** Pre-#562 upstream architecture stops execution via `cpu->running = 0` on unpermitted SPSR access in non-privileged modes; this is tracked under a separate issue.
+
+---
+
+### Additional Findings
+
+1. **Flags Sync Coupled with CPSR Readback:**
+   In [src/cpus/cpu_arm_instr.c:929-934](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L929-L934), `X(mrs)` reconstructs CPSR by masking the lower 28 bits and ORing in `(cpu->cd.arm.flags << 28)`. Thus, the `src *` rows requiring `0xc00000XX` readbacks inherently enforce that `cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28` was executed in both [cpu_arm_instr.c:1844](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1844) and [cpu_arm_instr_dpi.c:250](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L250).
+2. **Clean Working Tree Isolation:**
+   The unrelated uncommitted edits in peer session files ([cpu_alpha_palcode.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c), [dev_lca.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c), [dev_pcc2.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c), [dev_sh4.c](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c), [mvme_pcctworeg.h](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h)) have had zero interference with the ARM #562 hunks.
+
+---
+
+GO

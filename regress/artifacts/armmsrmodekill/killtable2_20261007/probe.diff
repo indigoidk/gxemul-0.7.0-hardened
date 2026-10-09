@@ -1,0 +1,349 @@
+--- a/regress/arm_msrmode_probe.py
++++ b/regress/arm_msrmode_probe.py
+@@ -35,7 +35,8 @@
+   R8  canary accept rows also check arrival SP == 0 (spec: "arrive m=XX SP=0"), and `acc usr'
+       now passes sp_at so a Load-skip (SP still BOOT_SP in USR32) reds it.
+ 
+-THE DEFECT, verified by reading cpu_arm.c at HEAD:
++THE DEFECT, verified by reading cpu_arm.c at HEAD ef577140 -- PRE-#562; #562 replaced both exits
++with latched backstops, so these lines describe the unfixed tree only:
+ 
+     cpu_arm.c:606-608   arm_load_register_bank: default: fatal("...unimplemented mode %i"); exit(1);
+     cpu_arm.c:559-561   arm_save_register_bank: default: same
+@@ -49,36 +50,53 @@
+ #562 THE FIX AND WHAT THIS PROBE NOW DETECTS.  Three guest writers can put an unmodelled mode
+ (anything but 10 11 12 13 17 1b 1f) into CPSR, and each now DECLINES THE MODE FIELD ONLY, with a
+ `(once)' announce naming its site: msr_imm (`MSR CPSR_c'), arm_pop's `LDM {..pc}^' SPSR restore,
+-and the DPI `MOVS pc,..' SPSR restore.  The restores keep the CURRENT mode in M[4:0] and take
+-every other bit from the SPSR.  The Save/Load `default:' arms are BACKSTOPS (latched announce,
+-return, no exit(1)), reachable only by a debugger `cpsr=' assignment.  POST-FIX the guest is in
+-SVC32 with the I/F bits the write set -- `#0x14' clears I and F -- NOT in a reserved mode.  Rows
+-added by #562: kill 1e, rst movs, rst ldm, zero spsr, acc movs, acc ldm, dbg save, dbg both,
+-latch ind,
+-and the `if=' (I/F) pin on kill 14 / kill 15.
++and the DPI `MOVS pc,..' SPSR restore.  The restores keep the CURRENT mode in M[4:0] and assign
++every other bit from the SPSR (DPI later forces T for an odd destination PC; not driven here).
++The Save/Load `default:' arms are BACKSTOPS (latched announce, return, no exit(1)), reached only
++once an unmodelled mode is ALREADY in CPSR -- then by any later bank switch, including a guest
++`MSR CPSR_c' to a modelled mode (dbg save) or `MOVS pc,lr' (dbg both); no guest instruction can
++now install such a mode, only a debugger `cpsr=' assignment.  POST-FIX the guest is in SVC32 with
++the I/F bits the write set -- `#0x14' clears I and F -- NOT in a reserved mode.  Rows added by
++#562: kill 1e, kill 03, rst movs, rst ldm, zero spsr, acc movs, acc ldm, dbg save, dbg both, latch ind,
++latch rpt, src dpi/src pop x {fiq irq abt und svc}, the `if=' (I/F) pin on kill 14 / kill 15,
++and ` sp0' (an actual zero SP readback) on the rows whose SP is a never-loaded bank.
+ 
+ MODES 0x00-0x0F ARE NOW CLAIMED.  This header used to BAN `MSR CPSR_c, #0' as "the 26-bit hole,
+ a different defect".  The helper declines 0x00-0x0F like any other unmodelled value, and
+ `zero spsr' drives exactly mode 0x00 (an SPSR never written is zero: cpu_new zero-fills).
+ 
+ CONTRACT (floor clause (e)) -- the edits this detector is DESIGNED to catch:
+-  * exit(1) reinstated at Save's default: (dbg save, dbg both) or Load's default: (dbg both);
+-  * the helper answering 1 always (kill 14/15/1e), or admitting 0x1c-0x1e (kill 1e);
+-  * the guard dropped at msr_imm (kill rows), arm_pop (rst ldm) or DPI (rst movs, zero spsr);
+-  * a restore guard made unconditional, always keeping the current mode (acc movs, acc ldm);
++  * exit(1) reinstated at Save's default: (dbg save, dbg both, latch rpt) or Load's (dbg both,
++    latch rpt);
++  * the helper answering 1 always (kill 14/15/1e), admitting 0x1c-0x1e (kill 1e), or dropping its
++    `& ARM_FLAG_MODE' projection (src * rows: their SPSRs carry N and Z);
++  * the guard dropped at msr_imm (kill rows), arm_pop (rst ldm [SVC], src pop x FIQ IRQ ABT UND
++    SVC) or DPI (rst movs, zero spsr [SVC], src dpi x FIQ IRQ ABT UND SVC), or restricted to ONE
++    current-mode label (the src * rows: those five SPSR-bearing modes x both paths);
++  * the msr_imm decline clearing fewer than all five mode bits, e.g. `& ~0x0f' (kill 03: the
++    only driven mode value with bit 4 CLEAR);
++  * a restore guard made unconditional, or unconditional for one label (acc movs, acc ldm, the
++    valid-SPSR half of each src * row);
+   * a WHOLE-OPERATION decline in msr_imm instead of field-only (the `if=' pin on kill rows);
+-  * Save and Load sharing one latch bit (dbg both, which fires both in one instruction);
+-  * any two of the three DECLINE sites (msr_imm, arm_pop, DPI) sharing a latch bit (latch ind).
++  * the restore not taking N/Z/I/F from the SPSR (src * rows read the whole CPSR word);
++  * any two of the five latch sites sharing a bit (latch rpt: all five in one process; also
++    dbg both, latch ind);
++  * a latch that never SUPPRESSES (`|=' -> `&=', or the `|=' line deleted), or a repair applied
++    only while its latch is clear (latch rpt: every site visited TWICE, exactly ONE announce each,
++    repair still applied).
+ NOT CLAIMED, disclosed: unmodelled values other than 0x00, 0x14, 0x15, 0x1e (a helper wrong only
+-at 0x16, 0x18-0x1a, 0x1c-0x1d or 0x01-0x0f escapes); a DECLINE bit shared with a BACKSTOP bit
+-(no row drives a guest decline and a backstop in one process); T-bit / execution-state coherence
+-on restore;
+-the USR/SYS `LDM {pc}^' and `MSR SPSR' paths that stop the CPU (filed separately).
+-
+-NAMED-RED tally: HEAD = 16/26, RED exactly kill 14, kill 15, save 2s, kill 1e, rst movs, rst ldm,
+-zero spsr, dbg save, dbg both, latch ind, CONTROL=OK.  `save 2s' on HEAD is the SAME Load death as
+-`kill 14' (EOF on the first MSR) -- it is not an independent HEAD reproduction of Save; nor is
+-`dbg both' a HEAD reproduction of Load (HEAD dies in Save first).  26/26 on HEAD
++at 0x16, 0x18-0x1a, 0x1c-0x1d or 0x01-0x0f escapes); the msr_imm comment's "only the LOCAL mask
++changes: ic->arg[] is a cached translation" -- no row re-executes ONE translated MSR, so a guard
++that wrote ic->arg[] would go unseen; per-CPU latch isolation (one CPU only); T-bit /
++execution-state coherence on restore; the USR/SYS `LDM {pc}^' and `MSR SPSR' paths that stop the
++CPU (filed separately).
++
++NAMED-RED tally: HEAD = 16/38, RED exactly kill 14, kill 15, save 2s, kill 1e, kill 03, rst movs,
++rst ldm,
++zero spsr, dbg save, dbg both, latch ind, latch rpt, and the ten src * rows, CONTROL=OK.  `save
++2s' on HEAD is the SAME Load death as `kill 14' (EOF on the first MSR) -- it is not an
++independent HEAD reproduction of Save; nor is `dbg both' a HEAD reproduction of Load (HEAD dies
++in Save first).  38/38 on HEAD
+ is a broken vehicle, not success.
+ 
+ Stay on `step', never `continue' (IRQ dispatch is inside `if (!single_step)').
+@@ -121,7 +139,7 @@
+     "str_r0":   0xE5840000,              # str  r0, [r4]
+     "b_self":   0xEAFFFFFE,              # b    .
+ }
+-for m in (0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x1B, 0x1E, 0x1F):
++for m in (0x03, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x1B, 0x1E, 0x1F):
+     WORDS["c_%02x" % m] = 0xE321F000 | m     # msr cpsr_c, #m
+ WORDS["f_14"] = 0xE328F014                   # msr cpsr_f, #0x14
+ #  #562: SPSR poisoning and the two restore paths.
+@@ -134,6 +152,12 @@
+ LDMW = 0x9100                                # where `ldm_r5_pc_s' loads pc from
+ TGT_OPS = ["mrs_r3", "str_r3_4", "str_sp_8"]
+ TGT2 = 0x8140                                # `latch ind': readback after the chained MOVS
++#  #562 pass 2: words for `latch rpt' and the `src *' rows.
++WORDS["ldm_r6_pc_s"] = 0xE8D68000            # ldmia r6, {pc}^
++WORDS["mov_lr_8100"] = 0xE3A0EC81            # mov  lr, #0x8100  (0x81 ror 24)
++WORDS["add_lr_40"] = 0xE28EE040              # add  lr, lr, #0x40
++WORDS["sf_c0"] = 0xE368F103                  # msr  spsr_f, #0xc0000000  (N and Z; 0x03 ror 2)
++NZ = 0xC0000000
+ 
+ rows = []
+ diagnosis = []
+@@ -340,6 +364,42 @@
+     return True
+ 
+ 
++def prog_session(code_ops, blocks=(), data=None, regs=(), segments=((), ()), late_end=DEST + 12):
++    """#562 pass 2: a multi-block program.  code_ops at CODE (after PREFIX), each (addr, ops) block
++    at addr, each {addr: word} data word planted; every block and data word is ARMED (dumped and
++    checked before MARK).  `segments' = ((pokes, steps), ...) after MARK: debugger assignments,
++    then `step N'."""
++    data = data or {}
++    full = PREFIX + list(code_ops)
++    cmds = prologue() + plant(full)
++    extra = {}
++    for a, ops in blocks:
++        cmds += plant(ops, at=a)
++        for i, k in enumerate(list(ops) + ["b_self"]):
++            extra[a + 4 * i] = WORDS[k]
++    for a, w in data.items():
++        cmds.append("put w 0x%x, 0x%08x" % (a, w))
++        extra[a] = w
++    cmds += list(regs) + ["pc=0x%x" % CODE, "step 2", dumpcmd(DEST),
++                          dumpcmd(CODE, CODE + 4 * len(full))]
++    for a, ops in blocks:
++        cmds.append(dumpcmd(a, a + 4 * len(ops)))
++    for a in data:
++        cmds.append(dumpcmd(a))
++    cmds.append(MARK)
++    for pokes, steps in segments:
++        cmds += list(pokes) + (["step %d" % steps] if steps else [])
++    cmds.append(dumpcmd(DEST, late_end))
++    early, late, alive, marked = _session_split(cmds)
++    return early, late, alive, marked, (full, extra)
++
++
++def announces(t, key):
++    """#562 pass 2: how MANY `(once)' lines the named site printed -- a latch that never
++    suppresses prints twice when its site is visited twice; any() could not see that."""
++    return sum(1 for ln in t.splitlines() if key in ln and "(once)" in ln)
++
++
+ def diag_unimpl(nm, t):
+     """#562: which register-bank `unimplemented mode' text a session printed (HEAD: the
+     function that exit(1)ed -- the reason under test; fixed: the backstop that announced)."""
+@@ -369,8 +429,14 @@
+     got = "m=%02x" % (cpsr & 0x1F)
+     if pin_if:
+         got += " if=%d" % ((cpsr >> 6) & 3)
+-    if sp_at is not None and dumped(late, sp_at) == BOOT_SP:
+-        got += " sp"
++    if sp_at is not None:
++        v = dumped(late, sp_at)
++        #  #562 pass 2: ` sp0' is an ACTUAL zero readback (a never-loaded bank), not merely
++        #  "not BOOT_SP" -- a missing or POISON slot now renders neither token.
++        if v == BOOT_SP:
++            got += " sp"
++        elif v == 0:
++            got += " sp0"
+     t = early + late
+     if (announced(t, once_key) if once_key else "(once)" in t):
+         got += " once"
+@@ -426,6 +492,22 @@
+         if (w >> 21) & 0xF != 0xD or not (w >> 20) & 1 or (w >> 12) & 0xF != 15 \
+                 or w & 0xFFF != 14 or (w >> 25) & 7 != 0:
+             bad.append(k)
++    if k in ("ldm_r6_pc_s", "mov_lr_8100", "add_lr_40", "sf_c0"):
++        #  #562 pass 2: whole-word field decode against the intended operation.
++        ok = {"ldm_r6_pc_s": (w >> 25) & 7 == 0b100 and (w >> 20) & 1 and (w >> 22) & 1
++              and not (w >> 21) & 1 and (w >> 16) & 0xF == 6 and w & 0xFFFF == 0x8000,
++              "mov_lr_8100": (w >> 25) & 7 == 1 and (w >> 21) & 0xF == 0xD
++              and not (w >> 20) & 1 and (w >> 12) & 0xF == 14
++              and (((w & 0xFF) >> (2 * ((w >> 8) & 0xF))) | ((w & 0xFF)
++                   << (32 - 2 * ((w >> 8) & 0xF)))) & 0xFFFFFFFF == TGT,
++              "add_lr_40": (w >> 25) & 7 == 1 and (w >> 21) & 0xF == 0x4
++              and not (w >> 20) & 1 and (w >> 16) & 0xF == 14 and (w >> 12) & 0xF == 14
++              and w & 0xFFF == 0x40,
++              "sf_c0": (w & 0x0FB0F000) == 0x0320F000 and (w & 0x00400000)
++              and ((w >> 16) & 0xF) == 0b1000 and ((w >> 8) & 0xF) == 1 and (w & 0xFF) == 3,
++              }[k]
++        if not ok:
++            bad.append(k)
+     if k == "ldm_r5_pc_s":
+         #  LDM: bits 27:25 = 100, L set, S (bit 22) set, W clear, Rn = 5, list = {pc} only
+         if (w >> 25) & 7 != 0b100 or not (w >> 20) & 1 or not (w >> 22) & 1 \
+@@ -501,7 +583,7 @@
+ # ---------------------------------------------------------------- S6..S13: accept side
+ cmds, full = msr_cmds(["c_10", "mrs_r3", "str_r3_4", "str_sp_8"], [4])
+ early, late, alive, marked = _session_split(cmds)
+-row("acc usr", classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=10",
++row("acc usr", classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=10 sp0",
+     "USR32 is ONE-WAY (the USR mask strips the c-byte). SP is the USR bank's (0), so ` sp' in "
+     "the got means the bank Load did not happen.")
+ 
+@@ -550,6 +632,16 @@
+     "MSR CPSR_c, #0x1e: unmodelled, like 0x14/0x15. Kills a helper widened by RANGE to 0x1e.")
+ diag_unimpl("kill 1e", early + late)
+ 
++#  kill 03: the only driven mode value with bit 4 CLEAR.  Every other MSR value here has bit 4
++#  set, so a decline that cleared only M[3:0] from the mask (`& ~0x0f') still wrote bit 4 = 0 from
++#  this value and reached Load's backstop with mode 0x03; the rows before this one could not see it.
++cmds, full = msr_cmds(["c_03", "mrs_r3", "str_r3_4", "str_sp_8"], [1, 3])
++early, late, alive, marked = _session_split(cmds)
++row("kill 03", classify(early, late, alive, marked, full, sp_at=DEST + 8, once_key="msr_imm",
++                        pin_if=True), "m=13 if=0 sp once",
++    "MSR CPSR_c, #0x03 (bit 4 clear): declined, mode unchanged. Pins the full 5-bit mode mask.")
++diag_unimpl("kill 03", early + late)
++
+ #  The two SPSR restores.  `MSR SPSR_c, #0x14' poisons spsr_svc (I=F=0, mode 0x14); the restore
+ #  must land at TGT (else `nofire') in SVC32 -- current mode kept -- with I/F FROM THE SPSR
+ #  (if=0; a restore that skipped the CPSR write keeps the boot if=3) and the SVC SP.
+@@ -578,11 +670,12 @@
+     cmds, full = msr_cmds(["s_1f", op], [6], restore=True)
+     early, late, alive, marked = _session_split(cmds)
+     row(nm, classify(early, late, alive, marked, full, sp_at=DEST + 8, pin_if=True),
+-        "m=1f if=0",
++        "m=1f if=0 sp0",
+         "MSR SPSR_c,#0x1f then %s: SYS32 restored, SP from the usr/sys bank (0), no announce."
+         % op)
+ 
+-#  The BACKSTOPS: reachable only by the debugger `cpsr=' ASSIGNMENT (no bank switch, no flags
++#  The BACKSTOPS: reached only with an unmodelled mode already in CPSR, which only the debugger
++#  `cpsr=' ASSIGNMENT can now install (no bank switch, no flags
+ #  sync).  NOT `put', which writes MEMORY.  The poke follows the arming dumps.  once_key names
+ #  a DECLINE site that must NOT announce: a plant is not a guest decline (dbg both: the DPI
+ #  guard runs only when an SPSR was copied, and mode 0x14 has none).
+@@ -590,9 +683,9 @@
+ early, late, alive, marked = _session_split(cmds)
+ row("dbg save", classify(early, late, alive, marked, full, sp_at=DEST + 8, backstops=True,
+                          once_key="msr_imm"),
+-    "m=13 save",
++    "m=13 sp0 save",
+     "cpsr=0xd4 then MSR CPSR_c,#0x13: Save's default: (HEAD exit(1)) announces and returns; "
+-    "Load(SVC) gives the never-saved svc SP (0, so no ` sp').")
++    "Load(SVC) gives the never-saved svc SP: an actual 0, ` sp0'.")
+ diag_unimpl("dbg save", early + late)
+ 
+ cmds, full = msr_cmds(["movs_pc_lr"], [4], restore=True, poke=["cpsr=0xd4"])
+@@ -618,7 +711,89 @@
+     "MSR, LDM^ and MOVS declines in ONE session: three distinct latch bits, three texts.")
+ diag_unimpl("latch ind", early + late)
+ 
+-row("row count", len(rows) + 1, 26, "identity row (floor clause (c)): the row set is complete.")
++# ---------------------------------------------------------------- #562 pass 2: latch rpt
++#  EVERY one of the five latch sites visited TWICE in ONE process.  Wants EXACTLY ONE announce per
++#  site (a latch that never suppresses prints two; two sites sharing a bit print one between
++#  them) AND the repair still applied on the second visit: the declines leave SVC32 (a=13/..),
++#  the backstops leave the planted 0x14 alive (b=14/..).
++#    CODE  c_14 c_15 (msr x2)  s_14  ldm r5 -> T1      T1  ldm r6 -> T2  (pop x2)
++#    T2    movs pc,lr -> T3                            T3  add lr,#0x40 ; movs -> T4  (dpi x2)
++#    T4    mrs ; str [r4,#4] ; str sp,[r4,#8]
++#  then cpsr=0xd4, pc=T5, lr=T6:
++#    T5    movs pc,lr -> T6  (save+load)   T6  add lr,#0x40 ; movs -> T7  (save+load again)
++#    T7    mrs ; str [r4,#12] ; str sp,[r4,#16]
++LR1, LR2, LR3, LR4, LR5, LR6, LR7 = 0x8100, 0x8140, 0x8180, 0x81C0, 0x8200, 0x8240, 0x8280
++early, late, alive, marked, full = prog_session(
++    ["c_14", "c_15", "s_14", "ldm_r5_pc_s"],
++    blocks=[(LR1, ["ldm_r6_pc_s"]), (LR2, ["movs_pc_lr"]), (LR3, ["add_lr_40", "movs_pc_lr"]),
++            (LR4, ["mrs_r3", "str_r3_4", "str_sp_8"]), (LR5, ["movs_pc_lr"]),
++            (LR6, ["add_lr_40", "movs_pc_lr"]), (LR7, ["mrs_r3", "str_r3_c", "str_sp_10"])],
++    data={LDMW: LR1, LDMW + 4: LR2},
++    regs=["r5=0x%x" % LDMW, "r6=0x%x" % (LDMW + 4), "lr=0x%x" % LR3],
++    segments=(((), 11), (["cpsr=0xd4", "pc=0x%x" % LR5, "lr=0x%x" % LR6], 6)),
++    late_end=DEST + 16)
++if not marked or not arming(early, full):
++    got = "unarmed"
++elif not alive:
++    got = "dead"
++else:
++    def _half(ca, sa):
++        c, v = dumped(late, ca), dumped(late, sa)
++        if c in (None, POISON):
++            return "nofire"
++        return "%02x/%d/%s" % (c & 0x1F, (c >> 6) & 3,
++                               "sp" if v == BOOT_SP else ("0" if v == 0 else "x"))
++    t = early + late
++    got = "a=%s b=%s msr%d pop%d dpi%d save%d load%d" % (
++        _half(DEST + 4, DEST + 8), _half(DEST + 12, DEST + 16),
++        announces(t, "msr_imm"), announces(t, "arm_pop"), announces(t, "dpi S-to-pc"),
++        announces(t, "arm_save_register_bank"), announces(t, "arm_load_register_bank"))
++row("latch rpt", got, "a=13/0/sp b=14/3/sp msr1 pop1 dpi1 save1 load1",
++    "Five latch sites x2 in ONE process: exactly one announce each, repair kept on visit 2.")
++diag_unimpl("latch rpt", early + late)
++
++# ---------------------------------------------------------------- #562 pass 2: src dpi / src pop
++#  The SPSR SOURCE LABEL is a floor axis: FIQ/IRQ/ABT/UND/SVC each select a different spsr_* that
++#  feeds new_cpsr in BOTH restore paths.  Per label and path, ONE session: enter the mode by a
++#  modelled MSR, set its SPSR to N|Z|0x14 (reserved) and restore (DECLINED: mode kept, N Z from
++#  the SPSR, I/F clear), then re-arm SPSR_c=#0x1f and restore again (ACCEPTED: 0xc000001f).  The
++#  whole CPSR word is read back each time: N/Z pin "every other bit from the SPSR" and the cached
++#  flags sync; a nonzero high byte pins the helper's `& ARM_FLAG_MODE' projection.
++for lab, ck, mode in (("fiq", "c_11", 0x11), ("irq", "c_12", 0x12), ("abt", "c_17", 0x17),
++                      ("und", "c_1b", 0x1B), ("svc", "c_13", 0x13)):
++    for path in ("dpi", "pop"):
++        if path == "dpi":
++            early, late, alive, marked, full = prog_session(
++                [ck, "mov_lr_8100", "sf_c0", "s_14", "movs_pc_lr"],
++                blocks=[(TGT, ["mrs_r3", "str_r3_4", "s_1f", "add_lr_40", "movs_pc_lr"]),
++                        (TGT + 0x40, ["mrs_r3", "str_r3_8"])],
++                segments=(((), 12),))
++            key = "dpi S-to-pc"
++        else:
++            early, late, alive, marked, full = prog_session(
++                [ck, "sf_c0", "s_14", "ldm_r5_pc_s"],
++                blocks=[(TGT, ["mrs_r3", "str_r3_4", "s_1f", "ldm_r6_pc_s"]),
++                        (TGT + 0x40, ["mrs_r3", "str_r3_8"])],
++                data={LDMW: TGT, LDMW + 4: TGT + 0x40},
++                regs=["r5=0x%x" % LDMW, "r6=0x%x" % (LDMW + 4)],
++                segments=(((), 10),))
++            key = "arm_pop"
++        if not marked or not arming(early, full):
++            got = "unarmed"
++        elif not alive:
++            got = "dead"
++        else:
++            c1, c2 = dumped(late, DEST + 4), dumped(late, DEST + 8)
++            got = "%s %s%s" % (
++                "nofire" if c1 in (None, POISON) else "%08x" % c1,
++                "nofire" if c2 in (None, POISON) else "%08x" % c2,
++                " once" if announces(early + late, key) == 1 else "")
++        row("src %s %s" % (path, lab), got, "%08x %08x once" % (NZ | mode, NZ | 0x1F),
++            "%s from %s: SPSR N|Z|0x14 declined (mode kept), then N|Z|0x1f accepted."
++            % (path.upper(), lab.upper()))
++        diag_unimpl("src %s %s" % (path, lab), early + late)
++
++row("row count", len(rows) + 1, 38, "identity row (floor clause (c)): the row set is complete.")
+ 
+ # ---------------------------------------------------------------- report
+ print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+@@ -635,7 +810,10 @@
+ print("ARMMSRMODE_REDS=%s" % (",".join(reds) if reds else "none"))
+ for d in diagnosis:
+     print("  diag  %s" % d)
+-EXPECT = "kill 14,kill 15,save 2s,kill 1e,rst movs,rst ldm,zero spsr,dbg save,dbg both,latch ind"
++EXPECT = ("kill 14,kill 15,save 2s,kill 1e,kill 03,rst movs,rst ldm,zero spsr,dbg save,dbg both,"
++          "latch ind,latch rpt," + ",".join("src %s %s" % (p, m) for m in
++                                          ("fiq", "irq", "abt", "und", "svc")
++                                          for p in ("dpi", "pop")))
+ print("ARMMSRMODE_EXPECT_HEAD_REDS=%s" % EXPECT)
+ print("ARMMSRMODE_TALLY_MATCHES_HEAD_EXPECT=%s" % ("yes" if ",".join(reds) == EXPECT else "no"))
+ print("ARMMSRMODE_DONE")

@@ -1,0 +1,33 @@
+Verdict: STANDS-WITH-CORRECTIONS — the defect mechanism is coherent and reachable, but the witness spec is not buildable as written: “one fresh emulator process per data row” plus 15 data rows requires 15 sessions, not 12, and the accept oracle “SP==0” does not prove the bank copy ran.
+
+**1. Load-bearing claims**
+- READ: `arm_load_register_bank()` default prints `arm_load_register_bank: unimplemented mode 20`, then the next line `exit(1)` kills the process.
+- READ: `MSR CPSR_c, #0x14` writes reserved mode 0x14 from privileged SVC32.
+- READ: `testarm` boots in SVC32.
+- READ: expected result is 14/16 before fix, 16/16 after.
+- READ: the spec says one fresh process per data row, but also says 12 guest sessions for 16 rows — mutually inconsistent.
+- REASONED: the pty can observe the exact diagnostic text and EOF.
+- REASONED: SP changing to 0 proves the register-bank copy ran — this is the weakest load-bearing claim.
+
+**2. Which could be false**
+- Oracle: false if a mutant prints the same text but then dies from a later fault instead of the specific `exit(1)`. The pair text+EOF would still pass. Also, if the output is buffered and death is by signal rather than `exit`, the text may not survive; from the packet alone this cannot be settled.
+- Arming prefix: false if `MRS` reports 0x13 even when the real mode bits are wrong, or if the prefix is skipped. Since it can fail the row but is called unscored, the failure is hidden from the tally.
+- One-process-per-row: false if a defect only appears on a second mode switch in the same process. Fresh processes hide that. This is outside the narrow single-instruction defect, but the 12-vs-15 session contradiction is not.
+- Accept rows: false if a mutant sets SP to 0 directly without copying the banked register file. The row would still pass. Also, if boot SP is already 0, the check proves nothing.
+- Count: cannot settle from the packet whether the fix changes two separate `default:` arms. If it does, exactly two rows changing is only adequate if one row hits each arm; otherwise one arm is uncovered or a row is dead.
+
+**3. Circular or assumed reasoning**
+- The oracle assumes text+EOF jointly identify the specific `exit(1)` kill; that is asserted, not demonstrated.
+- The accept-row reasoning assumes SP==0 implies bank copy, which is exactly the property needing proof.
+- The arming prefix assumes `MRS` truthfully reports mode bits; if `MRS` is broken, the gate is blind.
+
+**4. Reachability**
+- READ/REASONED: `MSR CPSR_c, #0x14` from SVC32 is architecturally reachable and is not an undefined encoding. The reserved-mode write is a real guest-reachable path, so the defect is not on a dead path.
+
+**5. Can the proposed test fail?**
+- The kill rows can fail: if the text is absent or no EOF occurs, they fail.
+- But the accept rows cannot fail against a mutant that zeroes SP without copying banked registers. They would still pass, so the proposed accept oracle is weaker than intended.
+- The arming prefix, if skipped or hard-coded to 0x13, would not fail.
+
+**6. Verdict**
+STANDS-WITH-CORRECTIONS. The mechanism that breaks the spec as written is the session-count inconsistency plus the weak accept-row oracle; the oracle also cannot distinguish the specific `exit(1)` from a later crash after the same diagnostic.

@@ -1,0 +1,42 @@
+I'll verify the repair-4 claims against the working tree and the 43-row probe, starting with the fix, the detector, and the closure-rule rows.The floor question is whether a one-predicate edit of the fix still passes all 43 rows. I'll read the probe's contract and the four fix sites against that.VERDICT: DO-NOT-SHIP | 1 floor breach
+
+The shipped helper is right, and the 91 built mutants are red (KILLTABLE4: 91 run, 0 escapes). One canonical mask narrowing is outside that set and still scores 43/43.
+
+## 1. Floor
+
+Yes. In `arm_mode_is_modelled`, change `switch (mode & ARM_FLAG_MODE)` to `switch (mode & 0x17)` (drop bit 3 only). Every driven operand keeps the same 0/1 answer, so all 43 rows stay green. The same pre-mask written at any one call site (`arm_mode_is_modelled(x & 0x17)` in `msr_imm`, `arm_pop`, or the DPI restore) also stays green.
+
+`0x1f & ~8` is `0x17`. Modelled values still hit a case: `0x1f→0x17` (ABT), `0x1b→0x13` (SVC), `0xffffffd1→0x11`, `0x3f→0x17`. Driven declines stay in `default`: `0x14→0x14`, `0x15→0x15`, `0x1e→0x16`, `0x0f→0x07`, `0x00→0x00`, `0x03→0x03`, `0x34→0x14`, `0xffffffcf→0x07`. The values that flip are exactly `0x18→0x10`, `0x19→0x11`, `0x1a→0x12`. Each encodes as `msr cpsr_c, #imm`. The guest mode is written, then Load's backstop returns instead of `exit(1)`.
+
+This pass did not build it (read-only). The confirming run is that one mutant against the 43-row probe; expected score 43/43. Closing the class is one decline of `0x18`, `0x19`, or `0x1a` on each of MSR, DPI, and pop, so a per-site pre-mask cannot hide.
+
+Denominator swept by reading the oracles, plus the 91:
+
+- Helper mask: drop (killed, `N_helper_nomask`); widen any of bits 31:5 (killed; bit 5 only by `tbit`, since `0xffffffdf` has T clear); narrow bit 0 (`& 0x1e`), bit 1 (`& 0x1d`), or bit 4 (`& 0x0f`) — each rejects the SYS accept `0xffffffdf`; narrow bit 2 (`& 0x1b`) false-accepts driven `0x14`. Narrow bit 3 is the open cell.
+- MSR `mask &= ~0x1f`, one mode bit left writable: bits 0, 1, 2 die on `kill 14` (SVC `0x13` vs `#0x14`); bit 3 dies on `kill 1e` (`#0x1e`); bit 4 dies on `kill 03`. Any non-empty subset includes one of those bits.
+- Restore `(new & ~0x1f) | cur_mode`: bits 0–3 die on the src label whose bit is clear against SPSR `0x0f` (bit0 IRQ, bit1 FIQ, bit2 FIQ/IRQ/UND/SVC, bit3 FIQ/IRQ/ABT/SVC). Bit 4 is equivalent: `cur_mode` is OR'd and every modelled mode has bit 4 set. Keeping or clearing T dies on `tbit`.
+- Provenance of bits 31:6 dies on src R2/R3 (`0xffffffc0|mode`) and on `msr wide` (`00000011`). The 91 are a separate, already-red set and do not contain `& 0x17`.
+
+Closure rule, checked against the rows:
+
+- No operand bit is missing from the accepts on a path. DPI and pop: `0xffffffdf` sets 31:6 and 4:0, `tbit`'s `0x3f` sets bit 5. MSR: `0xffffffd1` sets 31:6, bit 4, and bit 0 only (bits 3:1 are clear); bits 3:1 are set by the accepts `c_17` / `c_1b` / `c_1f` and by `msr lbl`'s entries `c_d7` / `c_db` / `c_df`. Bit 5 is `c_3f`.
+- T (bit 5) does not differ at src R2/R3 (old `0x0000000m` after `msr cpsr_fsx,#0` plus `msr cpsr_c,#mode`, SPSR `0xffffffcf`, both T clear) or at `msr wide` (`0xffffffd1` vs `0x14`, both T clear). T does differ at `tbit` on all three paths (`0x34` over re-armed `0xd3`). A decline that always keeps T is red there. The "at every decline" wording is not met for T; the per-bit union is.
+
+## 2. Records
+
+Two lines are false.
+
+- CLASS CLOSURE (2), "At EVERY decline, every bit the decline RESTORES differs," is false for T at src R2/R3 and at `msr wide`. The bullets under it, and PRETABLE4's "except T", already place T on `tbit` only. PRETABLE4's "Missing cells: NONE" matches that union and contradicts the lead sentence.
+- The contract's "msr wide: bits 31:6, 4:0" overclaims `0xffffffd1`. Bits 3:1 of that word are clear. PRETABLE4's next clause names the real carriers (`c_17` / `c_1b` / `c_1f`).
+
+NOT CLAIMED's factual list is true: those immediates are never driven. `cf_0` really is `msr cpsr_fsx,#0` and the re-entry MSR really does leave old CPSR `0x0000000m`. Fixed 43/43, HEAD 17/43 with those 26 reds, and `encl` absent from the HEAD reds, match `run_fixed.out` and `run_head.out`. KILLTABLE4's last line is 91 run, 0 escapes.
+
+## 3. NOT CLAIMED
+
+Yes. `0x18`, `0x19`, and `0x1a` are guest `msr cpsr_c` immediates, and they are the whole image of the bit-3 narrowing above. They are the (d) cell, filed as (e).
+
+The other undriven immediates (`0x01`, `0x02`, `0x04–0x0e`, `0x16`, `0x1c`, `0x1d`) are one-case additions inside `default`. No one-bit narrowing of `0x1f` admits them while still passing the driven rows. That disclosure holds.
+
+The remaining NOT CLAIMED items are outside this repair: accept-side I/F (the accept assigns the whole SPSR; an unconditional keep dies at R2), other DPI opcodes (one template; the opcode is not an operand of the repair), `ic->arg[]` (the shipped guard only changes the local mask; `X(msr)` rewrites `arg[0]` from the register before `msr_imm`), one CPU, exception entry into the same Save backstop, T-bit coherence past the bit `tbit` already reads, and the pre-existing USR/SYS `LDM {pc}^` / `MSR SPSR` stop.
+
+Else: the comment above the src-row loop still says the oracle is `c00000df` / `c00000c0|label`. The scored want, and `run_fixed.out`, are `ffffffdf` / `ffffffc0|mode`.

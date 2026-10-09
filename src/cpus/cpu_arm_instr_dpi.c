@@ -215,19 +215,38 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
 		cpu->pc = (uint32_t)c64;
 #ifdef A__S
 		/*  Copy the right SPSR into CPSR:  */
+		uint32_t cur_mode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+		uint32_t new_cpsr = cpu->cd.arm.cpsr;
+		int spsr_copied = 1;
 		arm_save_register_bank(cpu);
-		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+		switch (cur_mode) {
 		case ARM_MODE_FIQ32:
-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+			new_cpsr = cpu->cd.arm.spsr_fiq; break;
 		case ARM_MODE_IRQ32:
-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+			new_cpsr = cpu->cd.arm.spsr_irq; break;
 		case ARM_MODE_SVC32:
-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+			new_cpsr = cpu->cd.arm.spsr_svc; break;
 		case ARM_MODE_ABT32:
-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+			new_cpsr = cpu->cd.arm.spsr_abt; break;
 		case ARM_MODE_UND32:
-			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+			new_cpsr = cpu->cd.arm.spsr_und; break;
+		default:spsr_copied = 0;
 		}
+		/*  #562: an SPSR naming an unmodelled mode keeps the CURRENT mode
+		    in M[4:0]; the value assigned to CPSR below takes all other
+		    bits from the SPSR (msr_imm's POLICY) -- though T is forced
+		    after Load for an odd destination PC.  Only when an SPSR was
+		    copied; no early return (pc is set).  */
+		if (spsr_copied && !arm_mode_is_modelled(new_cpsr)) {
+			if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_DPI)) {
+				cpu->cd.arm.mode_warned |= ARM_MODEWARN_DPI;
+				fatal("[ dpi S-to-pc: SPSR mode 0x%02x is not "
+				    "modelled; mode kept (once) ]\n",
+				    (int)(new_cpsr & ARM_FLAG_MODE));
+			}
+			new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) | cur_mode;
+		}
+		cpu->cd.arm.cpsr = new_cpsr;
 		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
 		arm_load_register_bank(cpu);
 #else

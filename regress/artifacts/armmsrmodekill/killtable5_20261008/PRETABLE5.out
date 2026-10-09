@@ -1,0 +1,99 @@
+PRETABLE5 -- #562 repair 5 (GENERATED FULL GRID), written BEFORE kill table 5 (mtime precedes every
+LANE output).  Baseline: HEAD ef577140 export + CURRENT GXEMUL-SEC working-tree 4 src files
+(= msr5/src_v5, cmp-verified) = msr6/src_v6, UNCHANGED (no product edit: no real defect found).
+Probe: the installed 43-row probe + the generated grid (grid msr / grid dpi / grid pop / grid cov)
++ records = 47 rows, 43 sessions (ARMMSRMODE_SESSIONS; the grid adds 3).  Fixed 47/47, HEAD 18/47
+with exactly the 29 named reds; each grid row dies on HEAD in Load at mode 14 (= 0x0e, the first
+generated decline, FIQ ^ 0x1f) -- the reason under test.
+
+0. THE GENERATOR (grid_obs, in the probe; tables MODELLED, UNMODELLED, RESTORE_LABELS, MSR_LABELS)
+   per path: label ^ 0x1f declines x 2 polarities; all 25 unmodelled values declined (labels and
+   polarities cycling); accepts of a mode != label x 2 polarities per label; all 7 modelled modes
+   accepted; pop adds {ldmia r6,{pc} / {r0}^ / {r0}} x 2 polarities.
+   observations: msr 56, dpi 52, pop 58 (= 166).  Every result is the WHOLE CPSR word by
+   `print cpsr', compared exactly; announce count per site == 1; no backstop text.
+   Complementary pairs: p1 OLD = label, NEW = 0xffffffe0|m; p2 OLD = 0xffffffc0|label, NEW = m.
+
+1. COVERAGE TABLE (grid cov, re-derived from the generator, run offline before the table):
+   msr 0 uncovered, dpi 0, pop 0, over (accept, decline) x bits 0..31 x polarity {0,1} = 128 cells
+   per path, minus the NAMED EQUIVALENTS:
+     bit 4 polarity 0 (no modelled mode or label has bit 4 clear);
+     bit 4 on ACCEPT at polarity 1 (OLD's bit 4 is always 1: keep-old / force-1 = right answer);
+     bit 5 polarity 0 vs OLD (OLD T is always 0 -- the guest runs ARM; keep-old T caught at p1).
+   G2 msr label x mode-bit: 6 labels x 5 bits = 30/30 (label ^ 0x1f differs in all five); restore
+   labels 5 x 5 = 25/25 per path.  (codex counted 20/30 on the 43-row probe.)
+   G3 helper boundary: 25/25 unmodelled and 7/7 modelled values on EACH path.
+   G4 pop enclosing: 4/4 cells, both polarities.
+
+2. CLAIM -> ROW: every CONTRACT bullet in the probe header names its rows; the three records
+   (`c00000df' inline comment, "at EVERY decline" = a UNION, 0xffffffd1 bits 3:1) corrected in the
+   header; NOT CLAIMED shrinks to: DPI opcodes other than MOV/SUB; the IMMEDIATE msr form's
+   re-execution (the register form is re-executed 56x by grid msr); one CPU; exception entry;
+   T-state coherence beyond the CPSR word; the USR/SYS CPU-stop paths.
+
+3. GUARD FIELD vs BODY FIELD: unchanged from PRETABLE4; the grid adds the forced-constant
+   alternative (force-0 / force-1) per bit, which the old/new-differ rule could not see.
+
+4. PER ROW -- kills: <mutant> via <channel>
+   grid msr  H_narrow_17 (0x18-0x1a accepted), M_msr_clr0f_iaus / M_msr_clr0f_irq (label^0x1f
+             at IRQ etc.), W_msr_keepflags, M_wholeop_msr, H_proj_*, M_drop_msr, N_cond_msr,
+             N_latch_and_msr (n=), E_msr_notfiq, X_msr_latchsvc  -- via the CPSR word, n=
+   grid dpi  H_narrow_17, N_dpi_forceN (p2 wants N=0), R_dpi_clr*, N_dpi_keep*/grok, F_dpi_iclr,
+             E_dpi_*, L_dpi_latchlabel, N_dpi_svc_only, N_dpi_keep_irq -- via the CPSR word, n=.
+             (O_dpi_movonly is NOT a grid dpi kill: the grid restores through MOVS only;
+             encl2's `subs pc,lr' carries it.)
+   grid pop  H_narrow_17, N_pop_Tlatch (p1 T-set declines with the latch set), N_pop_forceN,
+             C_pop_nonS_nopc / C_pop_retflag1 / C_pop_retflagS (G4), R_pop_clr*, B_pop_only14,
+             K_pop_ionly, N_pop_keep*/F_pop_iclr, E_pop_*, L_pop_latchlabel  -- via the word, n=
+   grid cov  static; reds only if the generator loses a cell (no mutant targets it).
+   earlier rows: as PRETABLE2-4.
+
+5. THE TABLE: 92 DISTINCT mutants = the 85 distinct of tables 1-4 (mutr 10, mutr2 13, mutate2 36,
+   mutate3 6, mutr3b 18 new, mutate5 2) + mutate6.py 7 (the four pass-2r4 escapes H_narrow_17,
+   M_msr_clr0f_iaus, N_pop_Tlatch, N_dpi_forceN rebuilt from their descriptions, plus
+   M_msr_clr0f_irq, N_pop_forceN, C_pop_nonS_nopc for codex's named cells).  Opus's own
+   pass-2r4 file (regress/artifacts/armmsrmodekill/opus_pass2r4_20261008/) was NOT published
+   when this table started; it runs as a second table when it appears.  4 lanes, own clone each,
+   BASE before/after per lane.  Predicted equivalent: NONE.
+END PRETABLE5
+
+ADDENDUM (written BEFORE table 5b) -- Opus mutr4.py, 18 mutants, run as the SECOND table on the
+same frozen 47-row probe.  Six share a NAME with mutate6.py (H_narrow_17, M_msr_clr0f_iaus,
+M_msr_clr0f_irq, N_pop_Tlatch, N_dpi_forceN, N_pop_forceN) but are Opus's own texts; the other
+twelve are new.  Predicted kills on the grid probe:
+   A  H_narrow_17, H_case_18          grid msr/dpi/pop (0x18 declined on every path)
+   B  M_msr_clr0f_iaus/irq, M_msr_clr03_abt, M_msr_clr17_fiq   grid msr (label ^ 0x1f per label)
+   C  N_dpi_forceN, N_pop_forceN, N_dpi_orold, N_pop_orold     grid dpi/pop p2 declines (OLD
+      upper bits all ones, SPSR upper bits zero)
+   D  N_pop_Tlatch, N_dpi_Tlatch, N_msr_Tlatch                 grid p1 declines (T set, latch set)
+      E_pop_Tacc                                               grid pop p1 accepts (T set, latch set)
+   M_msr_argmask  grid msr: every observation re-executes the SAME translated register-form
+      `msr cpsr_fsxc,r1'; once a decline strips arg[1]'s mode bits, every later ACCEPT through it
+      stays in the old mode.  Predicted KILLED -- if so the NOT CLAIMED cached-translation item
+      shrinks to the IMMEDIATE form only (already worded so).
+   controls H_narrow_1b, N_dpi_flagslatch, M_msr_forceN       killed (as Opus measured).
+   Predicted equivalent: NONE.
+
+CORRECTIONS (appended 2026-10-09 by the main loop, after the table; the text above is kept as written):
+  * Sec. 2 lines 30-31 ("the IMMEDIATE msr form's re-execution (the register form is re-executed 56x by grid
+    msr)") and the addendum's M_msr_argmask entry ("every observation re-executes the SAME translated
+    register-form ... Predicted KILLED") are FALSE.  MEASURED: M_msr_argmask 47/47 (kt1b/M_msr_argmask.out,
+    LANE1b.out).  The instruction is executed 56 times, but each run is a NEW translation: every re-execution
+    follows a debugger interaction, and debugger() clears every dyntrans translation when it interacts
+    (src/debugger/debugger.c, "Clear all dyntrans translations"; it returns before that clear only while a
+    `step N' count or a `step call' is still running).  The FAILED PREDICTION is the record; the probe header's
+    NOT CLAIMED was corrected the same day, comment-only (SHIPPED_vs_FROZEN.txt).
+  * Every other distinct mutant scored red (103 of 104; KILLTABLE5_lanes.out, KILLTABLE5_lanes_opus.out).  Whether
+    each red came on the channel predicted above is NOT re-checked in this note.
+  * Sec. 1 lists G2, G3 and G4 under "COVERAGE TABLE (grid cov ...)".  `grid cov' asserts the G1 table ONLY;
+    G2-G4 hold by the generator's construction, not by a row.  Measured offline by the Opus 5.5 seat on the final
+    pass: dropping 0x18-0x1a from G3, or SYS from the msr labels, still leaves `grid cov' at 0 uncovered
+    (opus_pass2r5_20261009/gridcov_scope.py).  A `grid cov' assertion over G2-G4 is filed with the follow-up row.
+  * The final pass also measured the latch-CLEAR cells this table's G1 aggregates over: five one-line edits made
+    only while the latch is clear score 47/47 (opus_pass2r5_20261009/KTR5_LANE1..4.out).  The probe header's
+    contract was narrowed comment-only on 2026-10-09 (owner ruling); the measured closure is filed.
+  * (appended 2026-10-09 ~13:4x, on Fable 5.1's adjudication, change 3) The FIRST LINE's "(mtime precedes every
+    LANE output)" has been VOID since the CORRECTIONS above were appended at 08:13 on 2026-10-09, after the lanes
+    ran (lane*.log 00:2x-02:37 the same day).  The write-before-the-table order now rests on the lane*.log times and
+    the main loop's record, not on this file's mtime.  Later corrections to a PRETABLE go to a SIBLING file, so the
+    original keeps its mtime as the order witness.

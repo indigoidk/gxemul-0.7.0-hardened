@@ -1,0 +1,58 @@
+```
+VERDICT: Accept proposed disposition (member 3, decline-before-Save via shared helper, latched backstop in Save/Load defaults; per-CPU latch) | 1 premise arithmetically wrong, 3 not checkable from packet
+```
+
+---
+
+## Premise audit
+
+**CORRECT (READ from inlined code):**
+- The MSR sequence is Save-on-old, CPSR-write, Load-on-new. Save sees OLD mode (modelled), Load sees NEW mode. The first FAILURE is Load, not Save. The brief's phrasing "Save is not the first hit" is awkward but the meaning is unambiguous.
+- All four shown callers (msr_imm, bdt_load, data-proc S-to-PC, arm_exception) write CPSR between Save and Load. Verified line-by-line against the inlined snippets.
+- `fatal(...)` does not exit: the inlined `fatal(...); exit(1);` pattern makes this self-evident (otherwise `exit(1)` is unreachable).
+
+**CORRECT (REASONED):**
+- Member 1 (just delete `exit(1)`) is wrong: CPSR is left reserved, r[] stays on the previous bank, next mode switch hits Save's default. The "silent wrong-bank" pathology is real.
+- Member 5 (FAULT) is wrong for MSR: MSR (CPSR_c) in a privileged mode is "Exceptions: None" in the ARM ARM, so architecturally you cannot take an exception *from* the instruction. UNPREDICTABLE allows anything, but raising an undefined-instruction exception is inconsistent with the formal description. (For LDM ^ / MOVS pc,lr the formal descriptions similarly do not list an SPSR-reserved-mode exception, so the same objection applies, but the author already flags this as open.)
+- A reserved mode CAN reach an SPSR via `MSR SPSR_c, #<reserved>`. The SPSR is a plain `uint32_t` with no write-side validation, and a later exception-return (LDM ^ / S-to-PC) would restore it. The author's concern is valid and the proposed helper, consulted at the *restore* site, handles it correctly even if the SPSR write itself is not declined.
+- Decline-before-Save is the only consistent principle given that every caller writes CPSR between Save and Load. A Load-only fix leaves CPSR reserved and is exactly the "next switch dies in Save" trap the brief already names.
+
+**NOT CHECKABLE from packet (named, with the one fact that would settle each):**
+- "Has it shipped? grep -c armmsrmodekill CHANGELOG.md = 0; files last changed in #524 (4dfc7165)" — settle by reading `CHANGELOG.md` and `git log` on the three files at HEAD.
+- "House idiom: `N = 1` per instance + `(once)` marker" — settle by grepping the tree for existing latched-`fatal` sites.
+- Full enumeration of CPSR / SPSR writers — only four are shown. There may be others (RFE if implemented, coprocessor-induced mode changes, Thumb/ARM interworking edge cases, init paths, anything in `arm_exception`'s callers I haven't been shown). Settle by grepping `cpu->cd.arm.cpsr =` and `cpu->cd.arm.spsr_* =` across `src/`.
+
+**WRONG (arithmetic, exactly the kind the brief asks me to enumerate):**
+- "`MSR CPSR_c, #0x14` (word `0xE321F014`)". Under the standard ARM data-processing-immediate encoding, `0xE321F014` decomposes as `imm8 = 0x14`, `rotate_imm = 0xF` (i.e. ROR #30). The producer (assembler / hand-encoder) of this word therefore emits the immediate `0x14 ROR 30 = 0x14 ROL 2 = 0x50` — **not** `0x14`. If the emulator honours the standard rotated immediate, M[4:0] becomes `0x50 & 0x1F = 0x10` (USR32), which is **not** reserved, and the filed trigger does not actually fire on a reserved mode. The brief is correct only if either (a) the word is a typo for `0xE320F014` (rotate_imm = 0, immediate = 0x14, M[4:0] = 0x14 = reserved), or (b) the toolchain / disassembler on `-E testarm` displays the un-rotated imm8. One fact would settle it: the disassembled `imm` field that the testarm build actually prints for that word, or the raw bytes the assembler accepts for `MSR CPSR_c, #0x14`. The brief's §3 code path is unaffected — the *disposition* analysis stands either way — but the trigger example is internally inconsistent as written.
+
+---
+
+## Answers to the five questions
+
+**1. Premise audit (the author's).** Above. The substantive defect is the word/immediate. The "three writers" enumeration is also incomplete in a quiet way: `arm_exception` (Caller 4) is a fourth writer of CPSR, but as the author notes it always writes a modelled mode, so it is not a *source* of reserved modes — only a Save-side casualty if one slipped in elsewhere. I cannot enumerate other writers from the packet.
+
+**2. Disposition per caller.**
+- **MSR CPSR_c/x/cx, #imm:** "Exceptions: None" forbids raising an exception from the instruction itself. UNPREDICTABLE permits any implementation choice. Decline the mode bits is the conservative pick; whether to also decline the rest of the write (flags / I / F / T) is a design call. Reasoning: the architecture does not promise the rest of the byte is applied, so declining the whole write is the safer of the two valid choices; the brief's "decline" language is consistent with the safer one. If the project wants a "partial decline" (apply non-mode fields, skip mode), that is a different member of the option set — call it member 8 (DECLINE_PARTIAL) — and is *not* what the brief's member 3 says.
+- **LDM ^ (bdt_load) and data-processing S-to-PC:** restoring an SPSR the guest itself poisoned. The formal descriptions of these exception-return forms do not list an SPSR-reserved-mode exception either, so the same objection to FAULT applies; UNPREDICTABLE allows it, but it is architecturally inconsistent. Decline the mode bits (or the whole restore) matches the MSR choice and is the principled pick.
+- **arm_exception:** the new mode is always modelled (`arm_exception_to_mode[exception_nr]`), so the Load-side check is a no-op here. The Save side is the open question: if a previous un-caught write left CPSR reserved, Save in arm_exception dies. The brief's "reserved mode is never allowed into CPSR at all" stance is the right answer — it is exactly the property that makes the Save side safe by induction. This does, however, require the helper to be consulted at the *entry* of every writer, including the Save entry of arm_exception (since Save runs on the *current* mode, not the about-to-be-written one). The brief's wording ("consulted by each caller before it writes the mode bits") does not explicitly cover the Save-side check in arm_exception; this is a small but real gap in the proposal.
+
+**3. Where the decline lives.** Helper in every caller + backstop in Save/Load is the right shape. A guard *inside* Save/Load alone cannot work: by the time Save runs, CPSR has either been written (callers 1/2/3 — too late) or not yet (caller 4 — Save runs first and would itself be the check site). Save/Load-internal rollback after the fact also doesn't compose with the post-Load side effects the sketch rule calls out (`flags = cpsr >> 28`, the PC write, `quick_pc_to_pointers`); rolling back CPSR after Load has already done `r[] = bank` would invert the wrong direction. Helper-first, backstop-second is the only order that survives the four control-flow shapes.
+
+**4. The backstop.** With every caller guarded, the two `default:` arms are dead. Keep them as latched announces (member 3), not deleted — that's the whole point of having a backstop. The latch state must be **per-CPU**, not function-static: in a multi-CPU run a function-static latch would silence the announce on CPUs 2..N the first time CPU 1 trips, and per-instance "first time this CPU sees it" is what the project actually wants. I cannot verify from the packet whether this emulator is multi-CPU, but the safer default is per-CPU and costs nothing.
+
+**5. Smallest edit that breaks the fix and still passes the detector.** Without the row definitions I can only rank candidates; the *smallest* is one line. Ordered by edit size and detectability:
+
+- **Smallest (1 line):** change the helper to `return 1;` (always-modelled). CPSR is written with the reserved value, the backstop's latched announce fires instead of `exit(1)`, so `kill 14` / `kill 15` / `live` stay green. The fix is defeated: CPSR holds a reserved mode, the bank is wrong, and the next mode switch's Save hits the backstop again. The detector row most likely to catch this is one that asserts CPSR's mode bits *after* the declined write — something like a strengthened `acc usr` (verify the new mode is what was requested AND that CPSR's M[4:0] is modelled after the dust settles) or `save 2s` (a follow-up Save that should now succeed on a modelled mode). If none of the 17 rows assert post-state CPSR, this mutant slips through.
+- **2nd smallest:** consult the helper only in MSR, not in `bdt_load` / data-proc S-to-PC. A guest that poisons an SPSR via `MSR SPSR_c` and then returns via LDM ^ defeats the fix. Caught by any row that drives an exception-return path, not just MSR.
+- **3rd smallest:** decline the *whole* MSR write instead of just the mode bits. The non-mode fields (flags / I / F / T) silently fail to update. Likely caught by `usr mask` (which exercises the USR-mode top-byte-only path) and by any row that checks `cpsr >> 28` after the write.
+
+The "smallest edit" answer therefore names a one-line change to the helper and points at whichever of the 17 rows asserts *post-write* CPSR state — that is the row the detector needs to stay robust.
+
+---
+
+## Other things found while verifying
+
+- The brief's enumeration of CPSR writers in question 1 says "the three writers shown (MSR, LDM ^, data-processing S-to-PC)". Caller 4 (`arm_exception`) is the fourth and the author already explains why it can't introduce a reserved mode; the count is therefore defensible, but a reader skimming could misread it as a complete enumeration. Worth tightening to "three writers that can introduce a reserved mode; `arm_exception` is a fourth writer that cannot".
+- The proposed helper needs to be consulted on the *Save* entry of `arm_exception` too, not just on the mode-bit write. The brief's wording covers the latter; the former is implicit in the "never allowed into CPSR at all" claim but should be made explicit so a reviewer doesn't miss it.
+- The `(once)` marker / `N = 1` idiom is not checkable from the packet; I would not sign off on the backstop wording without grepping for one existing instance of the idiom in the tree and copying its shape.
+- The brief says `fatal()` "prints regardless of `-q`". I can read the second half of that (the `fatal+exit` pattern) but not the `-q` interaction. If the codebase has a quiet mode that *does* suppress `fatal`, the "(once)" + per-CPU latch is still the right answer, but the rationale shifts from "fatal bypasses verbosity" to "fatal is the wrong verb for guest-drivable soft failure regardless of verbosity." Worth confirming.

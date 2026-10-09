@@ -1,0 +1,64 @@
+PRETABLE -- #562 armmsrmodekill, written BEFORE kill table 1 (this file's mtime precedes KILLTABLE.out)
+Baseline: HEAD ef577140 export + the #562 fix (fix.diff) in /tmp/gxmsr2/mut; probe frozen as
+/tmp/gxmsr2/probe_frozen.py (= scratchpad msr2/arm_msrmode_probe.py, 25 rows).  Fixed build 25/25
+(run_fixed.out); HEAD build 16/25, reds exactly the nine named (run_head.out).
+
+1. SIBLING PARITY -- the three guest guards and the two backstops
+   site            stimulus channel         decline shape                     announce key       row(s)
+   msr_imm         MSR CPSR_c,#imm          local mask &= ~MODE (field-only)  "msr_imm"          kill 14, kill 15, kill 1e, save 2s
+   arm_pop ^       LDM {..pc}^ SPSR         new_cpsr M[4:0] := current mode   "arm_pop"          rst ldm (+ acc ldm)
+   DPI S-to-PC     MOVS pc,.. SPSR          new_cpsr M[4:0] := current mode   "dpi S-to-pc"      rst movs, zero spsr (+ acc movs)
+   Save default:   debugger cpsr= only      latch + return                    "arm_save_..."     dbg save, dbg both
+   Load default:   debugger cpsr= only      latch + return                    "arm_load_..."     dbg both
+   Asymmetries: (i) zero-SPSR (mode 0x00) is rowed on the DPI path only; arm_pop is rowed only with
+   the 0x14 poison -- same helper, so a helper defect at 0x00 shows on zero spsr; a pop-local defect
+   specific to 0x00 is not rowed (disclosed).  (ii) The msr decline has an I/F pin that
+   distinguishes field-only from whole-op; the restores have no whole-op alternative (pc and the LDM
+   loads are already done) so their I/F pin distinguishes "SPSR applied" from "CPSR write skipped".
+   (iii) Load's backstop has exactly ONE carrier (dbg both); Save's has two.
+
+2. CLAIM -> ROW (added comment sentences asserting an observable consequence)
+   cpu_arm.c helper "case list MUST stay equal to Save/Load": kill 14/15/1e (domain), acc * (range)
+              -- a list differing at an UNDRIVEN value (0x16, 0x18-0x1a, 0x1c-0x1d, 0x01-0x0f): NO ROW, disclosed in contract.
+   Save default "a guest instruction no longer gets here": all guest rows show no "save" text; dbg save/both show it.
+   Save default "announce once per CPU and return -- no exit(1)": dbg save, dbg both (alive + save).
+   Save default "r8-r14 ... not saved": dbg save (SP after Load(SVC) is the never-saved 0, no ` sp').
+   Load default "announce once per CPU and return": dbg both (alive + load).
+   Load default "r8-r14 keep their current values": dbg both (` sp' = BOOT_SP survives).
+   cpu_arm.h "each announce once per CPU, independently": dbg both (Save and Load in one instruction).
+              -- independence between two DECLINE sites, and between a decline and a backstop: NO ROW, disclosed.
+   msr_imm "declining the MODE FIELD only, with the rest of the write applied": kill 14/15/1e if=0.
+   msr_imm "only the local mask changes: ic->arg[] is a cached translation": NO ROW (each row executes
+              the MSR once; a re-execution row would be needed) -- disclosed.
+   arm_pop "keeps the CURRENT mode ... every other bit from the SPSR": rst ldm m=13 if=0.
+   arm_pop "No return here: the PC load below must still run": rst ldm (reaches TGT, else nofire).
+   DPI "keeps the CURRENT mode ... all other bits from the SPSR": rst movs, zero spsr (m=13 if=0).
+   DPI "Only when an SPSR was copied": dbg both (no "dpi S-to-pc" announce on a plant).
+   DPI "no early return (pc is set)": rst movs / zero spsr (reach TGT).
+
+3. GUARD FIELD vs BODY FIELD
+   msr_imm guard reads ic->arg[0] M[4:0] and mask; body writes cpsr from new_value (= ic->arg[0]) &
+     mask.  Same source word -- no disagreeing-state row owed.  The USR mask line runs first (usr mask row).
+   arm_pop/DPI guard reads new_cpsr (the SPSR) M[4:0]; body writes cpsr from new_cpsr and decides
+     the bank switch on it.  Same value.  DPI also reads cur_mode (captured before the switch) and
+     spsr_copied (set by the switch's default:): disagreeing state = "current mode has no SPSR"
+     (USR/SYS, or a planted reserved mode) -> dbg both rows it (planted 0x14).
+   Latch: mode_warned, a per-CPU field; writers = the five announce sites only (grep mode_warned).
+     A shared-bit collision is the only cross-site hazard -> dbg both.
+
+4. PER ROW: the mutant it kills, and the observable that differs
+   kill 14/15     M_d helper=1, M_drop_msr: Load backstop, m=14/15 + "load" text not "msr_imm"; M_wholeop: if=3
+   kill 1e        M_range: m=1e (Load backstop)
+   save 2s        M_drop_msr: m=14 at slot, then Save backstop; (pre-existing row)
+   rst movs       M_drop_dpi: m=14, no "dpi S-to-pc"; M_d: same
+   rst ldm        M_drop_pop: m=14, no "arm_pop"; M_pop_return: nofire (PC load skipped)
+   zero spsr      M_drop_dpi: m=00 (+ Load backstop)
+   acc movs       M_uncond_dpi: m=13 not m=1f (+ "dpi" announce absent but SP differs: sp)
+   acc ldm        M_uncond_pop: m=13 not m=1f
+   dbg save       M_save_exit (verbatim), M_save_exit_latched: dead
+   dbg both       M_load_exit (verbatim), M_load_exit_latched: dead; M_save_exit: dead;
+                  M_shared_latch / M_shared_saveload: " load" missing; M_dpi_uncond_call: " once" appears
+   CHANNEL check: every row's channel is a readback slot or an announce line that differs under its
+   named mutant; none is survive-only (all also require alive, but the readback is what kills the
+   non-exit mutants).
+END PRETABLE

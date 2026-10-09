@@ -1,0 +1,642 @@
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py	2026-09-17 19:00:10.764794800 -0500
++++ /c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/msr/arm_msrmode_probe.py	2026-10-07 10:55:44.866564500 -0500
+@@ -5,60 +5,53 @@
+ REWRITE and not the original 16-row spec plus eight sticky notes.  That spec's amendments file
+ carries a SUPERSEDED banner; do not build from it.
+ 
++REPAIRED after regress/artifacts/armmsrmodekill/PROBEATTACK_grok_20260917.txt (the attack on the
++never-run first draft) -- see the `REPAIR' notes inline.  Summary of the repairs:
++  R1  dump parsing: aligned base + little-endian assembly (read_mem32() in arm_bdt_probe.py,
++      sw() in arm_flags_probe.py).  The first draft already carried both; kept.
++  R2  EARLY/LATE SPLIT.  Every MSR session dumps the 0x9000 line TWICE (the arming dump of DEST
++      before the stimulus, the result dump after it).  A first-match parse returns the EARLY
++      line, where every post-MSR slot is still POISON -- so a correct fix would have read
++      `nofire' on every kill row.  An `@MARK' pseudo-command becomes `print 0x5eed5eed' and
++      the transcript is split at that token; arming is parsed only from before it, results
++      only from after it.
++  R3  `save 2s' plant and classifier agree, on the spec's own slots: return CPSR at DEST+8,
++      SP at DEST+12, both inside the one dumped line.  The first draft planted SP at DEST+16
++      and never dumped 0x9010, so ` sp' could never appear -- the row was ALWAYS red.  `rt'
++      requires mode == 0x13 at the return slot, not mere existence.
++  R4  the plant-dump of the MSR slot is SCORED: every MSR session dumps its whole planted
++      stream before the stimulus and checks each word against WORDS, plus DEST == 0xd3 (the
++      spec's "every later session repeats DEST==0xd3 + plant-dump").  A failure renders the
++      row `unarmed', never `dead'.  This is what separates "died at the MSR" from "the MSR was
++      never the instruction that ran".
++  R5  CONTROL=DEAD stops the probe: `enc ok' red stops before any guest session; `live' or
++      `pc adv' red stops before `armed'; `armed' red stops before any kill row.
++  R6  `enc ok' note quoted the removed (w & 0x0FB0F000) mask; it now states the field-nibble
++      test the code performs.  f_14 additionally checks rot == 0.
++  R7  liveness: EOF on the pty is recorded; on EOF the child is reaped with a long deadline,
++      without EOF with a short one (a live emulator never exits, and every live session used to
++      burn the full 12 s).  The SIGKILL tail now READS THE STATUS: if waitpid shows the child
++      exited on its own (not by our SIGKILL), alive is False.
++  R8  canary accept rows also check arrival SP == 0 (spec: "arrive m=XX SP=0"), and `acc usr'
++      now passes sp_at so a Load-skip (SP still BOOT_SP in USR32) reds it.
++
+ THE DEFECT, verified by reading cpu_arm.c at HEAD:
+ 
+     cpu_arm.c:606-608   arm_load_register_bank: default: fatal("...unimplemented mode %i"); exit(1);
+     cpu_arm.c:559-561   arm_save_register_bank: default: same
+ 
+-BOTH arms carry the kill.  That is why `save 2s' is an independent row and not a duplicate of
+-`kill 14', and why member 3 is owed at BOTH `default:' arms.
+-
+ `0xE321F014' is `MSR CPSR_c, #0x14' -- mode 0x14 is a RESERVED ARM mode, so the Load arm's
+-`default:' is reached and the process dies.  `%i' prints DECIMAL, so the message reads
+-`unimplemented mode 20'.
++`default:' is reached and the process dies.  `%i' prints DECIMAL: `unimplemented mode 20'.
+ 
+ *** POLARITY: WANT IS POST-FIX CORRECT.  A PRE FAIL ON A DEFECT ROW *IS* THE REPRODUCTION. ***
+-
+ *** ORACLE: EOF ALONE => DEAD.  THE TEXT IS DIAGNOSIS, NEVER HALF THE TRIGGER. ***
+-An EOF-AND-text oracle cannot see a build that still exit(1)s with a REWORDED message: that
+-gives EOF and no matching text, the AND never fires, and the witness certifies a live defect
+-GREEN.  The packet's own %i-vs-0x14 confusion makes "fix the format string, forget the exit"
+-the most plausible near-miss fix, which is exactly the mutant the AND would miss.
+-
+-*** AND THE THREE CONTROLS BELOW ARE NECESSARY AND **NOT SUFFICIENT**, which is the correction
+-that the rewrite made to my own framing. ***  Each has a smallest defeat: a dump of DEST proves
+-MRS ran, not that the MSR word was planted or stepped; `no cbit' is greened by a decoder that
+-never writes the mode field AT ALL -- which greens every kill row too; and `enc ok' walking a
+-CONSTRUCTOR instead of the planted literal is the BFX incident repeating.  What actually closes
+-false-green is all four of:
+-
+-    1. POST want is `m=13 sp once', not `m=13'.  Member 3 prints `(once)'; an encoding-nop, a
+-       skipped step and a silent member-2 all print NOTHING, so the latch must be IN the got
+-       string or its absence renders as a comment instead of a FAIL.
+-    2. POISON at DEST+4, dumped at DEST+4 and never DEST+0, so a never-fired post-MSR store reds.
+-    3. ONE `WORDS' dict: every `put w' is drawn from it and every session re-dumps the MSR slot.
+-    4. A NAMED-RED tally -- HEAD must be EXACTLY the three named reds.  17/17 on HEAD is not
+-       success, it is a broken vehicle.
+-
+-*** AND THE ALIVE DETECTION IS LOAD-BEARING HERE IN A WAY IT IS NOWHERE ELSE, because EVERY
+-kill row of this probe is an EOF oracle.  MEASURED 2026-09-17 on ip30_abort_probe.py: a
+-single waitpid(WNOHANG) reported `alive' for a process that had SIGABRT'd, because `rd()'
+-RETURNS IMMEDIATELY ON EOF and so the `spin' that exists to give a dying child time to die is
+-SKIPPED EXACTLY WHEN THE CHILD DIES.  Built on that form, THIS probe would report every kill
+-row green and certify the MSR defect fixed while it is live.  POLL WITH A DEADLINE. ***
+-
+-Interrupts: `#0x14' clears I and F (bits 6-7 of the control byte are zero), so post-fix the
+-guest sits in a reserved mode with interrupts unmasked.  That is INERT for this probe and the
+-reason is measured, not assumed: ARM IRQ dispatch is inside `if (!single_step)' at
+-cpu_dyntrans.c:206-209 and `-V' sets single_step; `fiq_asserted' has ZERO occurrences in all of
+-src/, so there is no ARM FIQ dispatch to enable; and the debugger `timer_stop()'s across a
+-`step'.  THE PIN IS: STAY ON `step', NEVER `continue' -- a `continue' after a LANDED #0x14 can
+-take arm_exception and run Save on the reserved current mode, which is a free-run hazard.
+-DO NOT change the stimulus to #0xD4.
+-
+-BANNED: `MSR CPSR_c, #0' -- ARM_MODE_USR26 is 0x00 and `grep -c "case ARM_MODE_USR26"' across
+-src/ is ZERO, so #0 reaches the same `default:' and kills.  It is banned not because it is safe
+-but because it rows the 26-bit hole, which is a DIFFERENT defect with its own disposition.
++
++NAMED-RED tally (spec): HEAD = 14/17, RED exactly kill 14, kill 15, save 2s, CONTROL=OK.
++`save 2s' on HEAD is the SAME Load death as `kill 14' (EOF on the first MSR) -- it is not an
++independent HEAD reproduction of Save.  17/17 on HEAD is a broken vehicle, not success.
++
++Stay on `step', never `continue' (IRQ dispatch is inside `if (!single_step)').  `MSR CPSR_c,
++#0' is BANNED (26-bit hole, a different defect).
+ """
+ import os
+ import pty
+@@ -71,9 +64,6 @@
+ BIN = sys.argv[1] if len(sys.argv) > 1 else "../build/gxemul"
+ LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+ 
+-#  The stub is a GENERATED artefact (top-level regress/*.bin is NEVER STAGE).  All 11 top-level
+-#  committed probes that reference such a stub CREATE IT IF ABSENT; without this block this
+-#  would be the one committed probe that cannot run on a fresh clone.
+ STUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arm_bfx_stub.bin")
+ if not os.path.exists(STUB):
+     with open(STUB, "wb") as f:
+@@ -84,21 +74,22 @@
+ BOOT_SP = 0x03FFF000
+ BOOT_CPSR = 0xD3
+ POISON = 0xDEADBEEF
++MARK = "@MARK"
+ 
+-#  *** ONE WORDS DICT.  Every `put w' is drawn from here and every session re-dumps the MSR
+-#  slot against the same entry.  This is the load-bearing anti-false-green -- the thing
+-#  amendment 6 hoped `enc ok' was. ***
++#  *** ONE WORDS DICT.  Every `put w' is drawn from here and every MSR session dumps its whole
++#  planted stream against these entries before the stimulus (R4). ***
+ WORDS = {
+     "mrs_r3":   0xE10F3000,              # mrs  r3, cpsr
+     "str_r3":   0xE5843000,              # str  r3, [r4]
+     "str_r3_4": 0xE5843004,              # str  r3, [r4,#4]
++    "str_r3_8": 0xE5843008,              # str  r3, [r4,#8]
+     "str_r3_c": 0xE584300C,              # str  r3, [r4,#12]
+     "str_sp_8": 0xE584D008,              # str  r13,[r4,#8]
++    "str_sp_c": 0xE584D00C,              # str  r13,[r4,#12]
+     "str_sp_10": 0xE584D010,             # str  r13,[r4,#16]
+     "mov_r0_2a": 0xE3A0002A,             # mov  r0, #0x2a
+     "str_r0":   0xE5840000,              # str  r0, [r4]
+     "b_self":   0xEAFFFFFE,              # b    .
+-    "nop":      0xE1A00000,              # mov  r0,r0
+ }
+ for m in (0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x1B, 0x1F):
+     WORDS["c_%02x" % m] = 0xE321F000 | m     # msr cpsr_c, #m
+@@ -113,45 +104,53 @@
+ 
+ 
+ def session(cmds, settle=1.6, spin=1.6):
+-    """ONE FRESH PROCESS per scored row that executes a guest instruction."""
++    """ONE FRESH PROCESS per scored row that executes a guest instruction.  Returns (t, alive);
++    _session_split() turns the `@MARK' pseudo-command into the early/late split (R2)."""
+     pid, fd = pty.fork()
+     if pid == 0:
+         os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+                        "0x%x:%s" % (CODE, STUB)])
+         os._exit(127)
+     buf = ""
++    eof = False
+ 
+     def rd(t):
+-        nonlocal buf
++        nonlocal buf, eof
+         end = time.time() + t
+         while time.time() < end:
+             try:
+                 r, _, _ = select.select([fd], [], [], 0.1)
+             except OSError:
++                eof = True
+                 return
+             if not r:
+                 continue
+             try:
+                 d = os.read(fd, 65536)
+             except OSError:
++                eof = True
+                 return
+             if not d:
++                eof = True
+                 return
+             buf += d.decode("utf-8", "replace")
+ 
+     rd(settle)
+     for c in cmds:
++        if eof:
++            break
+         try:
+             os.write(fd, (c + "\n").encode())
+         except OSError:
++            eof = True
+             break
+         rd(0.3)
+     rd(spin)
+ 
+-    #  *** POLL, NEVER SAMPLE ONCE -- see the module docstring.  This is the difference between
+-    #  a witness and a false green on every kill row in this file. ***
++    #  *** POLL, NEVER SAMPLE ONCE. ***  rd() returns immediately on EOF, so a dying child must
++    #  be given time to die.  On EOF reap with a long deadline; without EOF a short one (R7).
+     alive = True
+-    deadline = time.time() + 12.0
++    deadline = time.time() + (12.0 if eof else 3.0)
+     while time.time() < deadline:
+         try:
+             wpid, _st = os.waitpid(pid, os.WNOHANG)
+@@ -165,9 +164,16 @@
+     if alive:
+         try:
+             os.kill(pid, signal.SIGKILL)
+-            os.waitpid(pid, 0)
+         except OSError:
+             pass
++        try:
++            _w, st = os.waitpid(pid, 0)
++            #  R7: if the child exited on its own between the last poll and our kill, the
++            #  status says so -- do not leave alive=True for a process that died by itself.
++            if os.WIFEXITED(st) or (os.WIFSIGNALED(st) and os.WTERMSIG(st) != signal.SIGKILL):
++                alive = False
++        except ChildProcessError:
++            pass
+     try:
+         os.close(fd)
+     except OSError:
+@@ -175,43 +181,57 @@
+     return buf.replace("\r", ""), alive
+ 
+ 
++def _session_split(cmds):
++    #  Insert a unique, harmless marker command at MARK so the split survives \r stripping:
++    #  `print 0x5eed5eed' is answered by the debugger (sh_intprio_probe.py measured `print
++    #  0x1234'), and even if it were not, its echo carries the token.
++    real = []
++    for c in cmds:
++        real.append("print 0x5eed5eed" if c == MARK else c)
++    t, alive = session(real)
++    i = t.find("5eed5eed")
++    if i < 0:
++        return t, "", alive, False
++    #  late = everything after the marker's answer line (skip echo + answer)
++    j = t.rfind("5eed5eed")
++    nl = t.find("\n", j)
++    late = t[nl + 1:] if nl >= 0 else ""
++    return t[:i], late, alive, True
++
++
+ def printed(t, reg):
+-    #  COPIED VERBATIM from regress/lca_isalane_probe.py:397-399.  `print <reg>' emits a BARE
+-    #  `0x...'; it is `reg' that carries the `r0 = ' prefix.  A builder who "fixed" this regex
+-    #  to expect `r0 = 0x' would score EVERY print as ABSENT.
++    #  COPIED VERBATIM from regress/lca_isalane_probe.py.  `print <reg>' emits a BARE `0x...'.
+     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+     return None if not m else int(m.group(1), 16)
+ 
+ 
+-def dumpcmd(addr):
+-    """*** ALWAYS DUMP FROM THE 16-BYTE-ALIGNED BASE. ***  `debugger_cmds.c:709` is
+-    `addr = addr_start & ~0xf`, so an UNALIGNED `dump' still labels the line with the ALIGNED
+-    address and BLANK-PADS the leading word groups -- which shifts every group index and makes
+-    a naive parse return a NEIGHBOURING word.  Copied from arm_bdt_probe.py:123-149, which
+-    measured this on 2026-09-11.  I wrote the naive form first; the remedy already existed."""
++def dumpcmd(addr, end=None):
++    """*** ALWAYS DUMP FROM THE 16-BYTE-ALIGNED BASE. ***  debugger_cmd_dump does
++    `addr = addr_start & ~0xf' and blank-pads groups before addr_start (arm_bdt_probe.py
++    read_mem32(), measured 2026-09-11)."""
+     base = addr & ~0xF
+-    return "dump 0x%x 0x%x" % (base, base + 16)
++    top = ((end if end is not None else addr) + 16) & ~0xF
++    if top <= base:
++        top = base + 16
++    return "dump 0x%x 0x%x" % (base, top)
+ 
+ 
+ def dumped(t, addr):
+-    """The word stored at `addr', recovered from the aligned dump line.
+-
+-    *** THE DUMP RENDERS LITTLE-ENDIAN BYTES, NOT A WORD. ***  0x0000002a at 0x9000 prints as
+-    `2a000000'.  `arm_flags_probe.py:191-193' carries `sw()' for exactly this and warns that
+-    comparing the raw string to `deadbeef' reads the SENTINEL'S PARITY as a measurement."""
+-    base = addr & ~0xF
+-    label = "0x%08x" % base
++    """The word stored at `addr', from the LAST aligned dump line in `t' (R2: callers pass the
++    early or the late half, never the whole transcript).  Memory-order bytes, little-endian
++    guest: assemble like sw() in arm_flags_probe.py."""
++    label = "0x%08x" % (addr & ~0xF)
+     idx = (addr & 0xF) // 4
++    val = None
+     for line in t.splitlines():
+         if line.startswith(label):
+             parts = line[12:48].split()
+-            if idx < len(parts) and len(parts[idx]) == 8:
+-                return int.from_bytes(bytes.fromhex(parts[idx]), "little")
+-    return None
++            if len(parts) == 4 and len(parts[idx]) == 8:
++                val = int.from_bytes(bytes.fromhex(parts[idx]), "little")
++    return val
+ 
+ 
+ def plant(ops, at=CODE):
+-    """Every word comes from WORDS.  `ops' is a list of WORDS keys."""
+     out = []
+     for i, k in enumerate(ops):
+         out.append("put w 0x%x, 0x%08x" % (at + 4 * i, WORDS[k]))
+@@ -220,191 +240,192 @@
+ 
+ 
+ def prologue():
+-    """POISON the slots the post-MSR stores must overwrite, and point r4 at DEST."""
+-    return ["put w 0x%x, 0x%08x" % (DEST + 4, POISON),
+-            "put w 0x%x, 0x%08x" % (DEST + 8, POISON),
+-            "put w 0x%x, 0x%08x" % (DEST + 12, POISON),
+-            "put w 0x%x, 0x%08x" % (DEST + 16, POISON),
+-            "r4=0x%x" % DEST]
+-
+-
+-def classify(t, alive, sp_at=None, rt_at=None):
+-    """The got string.  EOF ALONE => dead.
+-
+-    *** `sp_at' IS A PARAMETER BECAUSE THE ROWS PLANT SP AT DIFFERENT SLOTS, AND THE FIRST
+-    VERSION OF THIS FUNCTION HARDCODED DEST+8 WHILE `save 2s' PLANTED SP AT DEST+16 VIA
+-    `str_sp_10'.  Nothing wrote DEST+8 on that row, so ` sp' could NEVER appear and the row was
+-    ALWAYS RED -- pre-fix and post-fix alike.  A row that cannot go green is not a witness of
+-    anything; it is a row that reds for an apparatus reason and reads like a defect. ***"""
++    """POISON DEST..DEST+16 (the post-MSR stores must overwrite them) and point r4 at DEST."""
++    return ["put w 0x%x, 0x%08x" % (DEST + o, POISON) for o in (0, 4, 8, 12, 16)] \
++        + ["r4=0x%x" % DEST]
++
++
++PREFIX = ["mrs_r3", "str_r3"]
++
++
++def msr_cmds(ops, steps_after, late_end=DEST + 12):
++    """Standard MSR session: prefix MRS/STR to DEST, arming dumps (DEST and the whole planted
++    stream), MARK, the stimulus steps, then the result dump."""
++    full = PREFIX + ops
++    return (prologue() + plant(full)
++            + ["pc=0x%x" % CODE, "step 2", dumpcmd(DEST),
++               dumpcmd(CODE, CODE + 4 * len(full)), MARK]
++            + ["step %d" % s for s in steps_after]
++            + [dumpcmd(DEST, late_end)]), full
++
++
++def arming(early, full):
++    """R4: DEST == 0xd3 after the prefix, and every planted word reads back as its WORDS entry."""
++    if dumped(early, DEST) != BOOT_CPSR:
++        return False
++    for i, k in enumerate(full):
++        if dumped(early, CODE + 4 * i) != WORDS[k]:
++            return False
++    return True
++
++
++def classify(early, late, alive, marked, full, cpsr_at=DEST + 4, sp_at=None, rt_at=None):
++    """The got string.  EOF ALONE => dead.  Arming is checked first, from the EARLY half."""
++    if not marked or not arming(early, full):
++        return "unarmed"
+     if not alive:
+         return "dead"
+-    cpsr = dumped(t, DEST + 4)
++    cpsr = dumped(late, cpsr_at)
+     if cpsr is None or cpsr == POISON:
+-        #  The post-MSR MRS/STR never ran: never-fired, which an alive-only oracle cannot see.
+         return "nofire"
+     got = "m=%02x" % (cpsr & 0x1F)
+-    if sp_at is not None and dumped(t, sp_at) == BOOT_SP:
++    if sp_at is not None and dumped(late, sp_at) == BOOT_SP:
+         got += " sp"
+-    if "(once)" in t:
++    if "(once)" in early + late:
+         got += " once"
+     if rt_at is not None:
+-        v = dumped(t, rt_at)
++        v = dumped(late, rt_at)
+         if v not in (None, POISON) and (v & 0x1F) == 0x13:
+             got += " rt"
+     return got
+ 
+ 
++def report_dead(why):
++    print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
++    print("ARMMSRMODE_CONTROL=DEAD")
++    print("ARMMSRMODE_RESULT=0/0")
++    print("  *** SETUP FAILED (%s) -- the vehicle is not the vehicle.  NOT 'no defect'. ***" % why)
++    for nm, got, want, note in rows:
++        print("  %-11s got=%-16s want=%-16s %s" % (nm, got, want, note[:56]))
++    print("ARMMSRMODE_DONE")
++    raise SystemExit(0)
++
++
+ # ---------------------------------------------------------------- enc ok  (no guest)
+-#  *** THE FIELD NIBBLE IS BITS 19:16, AND A MASK CANNOT SUBSTITUTE FOR IT.  My first form
+-#  tested `(w & 0x0FB0F000) == 0x0320F000' for the c-form and `== 0x0328F000' for the f-form;
+-#  0xB0 kills bit 0x08, so BOTH forms reduce to 0x0320F000 and the test could not tell them
+-#  apart -- an `enc ok' row that cannot distinguish the control from the stimulus.  Caught by
+-#  a static self-check before the probe was ever run. ***
+-#  MSR immediate:  cond 00110 010 fsxc 1111 rot imm8   ->  field = (w >> 16) & 0xF
++#  MSR immediate:  cond 00110 R 10 field(19:16) 1111 rot(11:8) imm8.  The field nibble is
++#  bits 19:16 and a mask cannot substitute for it (0x0FB0F000 kills bit 0x08 and cannot tell
++#  the c-form from the f-form).
+ bad = []
+ for k, w in WORDS.items():
+     if k.startswith("c_"):
+-        if ((w >> 16) & 0xF) != 0b0001 or (w & 0xFF) != int(k[2:], 16)            or ((w >> 8) & 0xF) != 0 or (w & 0x00400000):
++        if ((w >> 16) & 0xF) != 0b0001 or (w & 0xFF) != int(k[2:], 16) \
++                or ((w >> 8) & 0xF) != 0 or (w & 0x00400000) or (w & 0x0FB0F000) != 0x0320F000:
+             bad.append(k)
+     if k == "f_14":
+-        if ((w >> 16) & 0xF) != 0b1000 or (w & 0xFF) != 0x14 or (w & 0x00400000):
++        if ((w >> 16) & 0xF) != 0b1000 or (w & 0xFF) != 0x14 or ((w >> 8) & 0xF) != 0 \
++                or (w & 0x00400000) or (w & 0x0FB0F000) != 0x0320F000:
+             bad.append(k)
+ row("enc ok", "clean" if not bad else ",".join(bad), "clean",
+-    "CONTROL=DEAD. Decoder match on the PLANTED literals, not on a constructor: c-form field "
+-    "0001, rot 0, bit 22 clear, (w & 0x0FB0F000) == 0x0320F000. The BFX incident was a session "
+-    "planting a literal its enc row never checked.")
+-
+-# ---------------------------------------------------------------- S1: live / pc adv / armed
+-t, alive = session(prologue()
+-                   + plant(["mov_r0_2a", "str_r0"])
+-                   + ["pc=0x%x" % CODE, "step 2", dumpcmd(DEST), "print pc"])
+-row("live", "0x%x" % (dumped(t, DEST) or 0) if alive else "dead", "0x2a",
++    "CONTROL=DEAD. Decoder match on the PLANTED literals: MSR-imm frame (w & 0x0FB0F000) == "
++    "0x0320F000, field nibble (w>>16)&0xF = 0001 c-form / 1000 f-form, rot 0, bit 22 clear, imm8 "
++    "== the key's mode.")
++if bad:
++    report_dead("enc ok")
++
++# ---------------------------------------------------------------- S1: live / pc adv
++early, late, alive, marked = _session_split(
++    prologue() + plant(["mov_r0_2a", "str_r0"])
++    + ["pc=0x%x" % CODE, "step 2", dumpcmd(DEST), "print pc"])
++row("live", "0x%x" % (dumped(early, DEST) or 0) if alive else "dead", "0x2a",
+     "CONTROL=DEAD. Plant, step and dump executed at all.")
+-row("pc adv", "0x%x" % (printed(t, "pc") or 0) if alive else "dead", "0x%x" % (CODE + 8),
++row("pc adv", "0x%x" % (printed(early, "pc") or 0) if alive else "dead", "0x%x" % (CODE + 8),
+     "CONTROL=DEAD. The words were translated as 4-byte ARM instructions.")
++if rows[-2][1] != rows[-2][2] or rows[-1][1] != rows[-1][2]:
++    report_dead("live/pc adv")
+ 
+-t, alive = session(prologue()
+-                   + plant(["mrs_r3", "str_r3_4", "str_sp_8"])
+-                   + ["pc=0x%x" % CODE, "step 3",
+-                      dumpcmd(DEST + 4), dumpcmd(DEST + 8)])
+-armed = "%s/%s" % (
+-    ("0x%x" % dumped(t, DEST + 4)) if (alive and dumped(t, DEST + 4) is not None) else "?",
+-    ("0x%x" % dumped(t, DEST + 8)) if (alive and dumped(t, DEST + 8) is not None) else "?")
++# ---------------------------------------------------------------- S1b: armed
++early, late, alive, marked = _session_split(
++    prologue() + plant(["mrs_r3", "str_r3_4", "str_sp_8"])
++    + ["pc=0x%x" % CODE, "step 3", dumpcmd(DEST, DEST + 8)])
++a4, a8 = dumped(early, DEST + 4), dumped(early, DEST + 8)
++armed = "%s/%s" % (("0x%x" % a4) if (alive and a4 is not None) else "?",
++                   ("0x%x" % a8) if (alive and a8 is not None) else "?")
+ row("armed", armed, "0x%x/0x%x" % (BOOT_CPSR, BOOT_SP),
+     "CONTROL=DEAD. SVC32 privileged testarm -- not USR32, not barearm, and not a debugger cpsr "
+-    "write. If this reds the vehicle is not the vehicle and NO kill row may be scored.")
++    "write. If this reds NO kill row may be scored.")
++if armed != rows[-1][2]:
++    report_dead("armed")
+ 
+ # ---------------------------------------------------------------- S2: no cbit
+-t, alive = session(prologue()
+-                   + plant(["f_14", "mrs_r3", "str_r3_4", "str_sp_8"])
+-                   + ["pc=0x%x" % CODE, "step 4",
+-                      dumpcmd(DEST + 4), dumpcmd(DEST + 8)])
+-row("no cbit", classify(t, alive, sp_at=DEST + 8), "m=13 sp",
++cmds, full = msr_cmds(["f_14", "mrs_r3", "str_r3_4", "str_sp_8"], [4])
++early, late, alive, marked = _session_split(cmds)
++row("no cbit", classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=13 sp",
+     "MSR CPSR_f writes the FLAGS byte, so the mode field is untouched and the host must live. "
+-    "NOT a CONTROL=DEAD row: a red here is a decoder finding, and the tally must not then be "
+-    "reported as a reproduction.")
++    "NOT CONTROL=DEAD: a red here is a decoder finding, not a reproduction.")
+ 
+ # ---------------------------------------------------------------- S3/S4: the kill rows
+ for nm, key, dec in (("kill 14", "c_14", 20), ("kill 15", "c_15", 21)):
+-    t, alive = session(prologue()
+-                       + plant(["mrs_r3", "str_r3", key, "mrs_r3", "str_r3_4", "str_sp_8"])
+-                       + ["pc=0x%x" % CODE, "step 2",
+-                          dumpcmd(DEST), dumpcmd(CODE + 8),
+-                          "step 1", "step 3",
+-                          dumpcmd(DEST + 4), dumpcmd(DEST + 8)])
+-    row(nm, classify(t, alive, sp_at=DEST + 8), "m=13 sp once",
+-        "MSR CPSR_c, #0x%02x into a RESERVED mode reaches arm_load_register_bank's default: "
+-        "and exit(1)s. PRE is `dead' -- EOF ALONE -- and that FAIL is the reproduction." % int(key[2:], 16))
+-    #  *** DIAGNOSIS IS NOT A SCORED ROW.  The spec says so in as many words ("Diagnosis (not
+-    #  colour)"), and scoring it here made the table 19 rows against an EXPECT_ROWS of 17 --
+-    #  with `row count' wanting 17 while computing 19, so the identity row would have reported
+-    #  the very defect it exists to catch and been read as a miscount. ***
+-    #  It is PRINTED beside the tally so a reader can tell "died at the right site" from
+-    #  "died somewhere else", without it ever being half the trigger.
+-    diagnosis.append("%s: %s" % (nm, "mode %d seen" % dec
+-                                 if ("unimplemented mode %d" % dec) in t else "NO TEXT"))
++    cmds, full = msr_cmds([key, "mrs_r3", "str_r3_4", "str_sp_8"], [1, 3])
++    early, late, alive, marked = _session_split(cmds)
++    row(nm, classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=13 sp once",
++        "MSR CPSR_c, #0x%02x into a RESERVED mode reaches arm_load_register_bank's default: and "
++        "exit(1)s. PRE is `dead' -- EOF ALONE -- and that FAIL is the reproduction." % int(key[2:], 16))
++    t = early + late
++    diagnosis.append("%s: %s" % (nm, "load mode %d seen" % dec
++                                 if ("arm_load_register_bank: unimplemented mode %d" % dec) in t
++                                 else "NO LOAD TEXT"))
+ 
+ # ---------------------------------------------------------------- S5: save 2s
+-t, alive = session(prologue()
+-                   + plant(["mrs_r3", "str_r3", "c_14", "mrs_r3", "str_r3_4",
+-                            "c_13", "mrs_r3", "str_r3_c", "str_sp_10"])
+-                   + ["pc=0x%x" % CODE, "step 2",
+-                      dumpcmd(DEST), dumpcmd(CODE + 8),
+-                      "step 1", "step 2", "step 1", "step 3",
+-                      dumpcmd(DEST + 4), dumpcmd(DEST + 8),
+-                      dumpcmd(DEST + 12)])
+-row("save 2s", classify(t, alive, sp_at=DEST + 16, rt_at=DEST + 12),
++#  R3: the spec's slots -- post-MSR1 CPSR at DEST+4, return CPSR at DEST+8, SP at DEST+12.
++cmds, full = msr_cmds(["c_14", "mrs_r3", "str_r3_4", "c_13", "mrs_r3", "str_r3_8", "str_sp_c"],
++                      [1, 2, 1, 3])
++early, late, alive, marked = _session_split(cmds)
++row("save 2s", classify(early, late, alive, marked, full, sp_at=DEST + 12, rt_at=DEST + 8),
+     "m=13 sp once rt",
+-    "*** THE ROW AMENDMENT 3 MISREAD. *** The original two reds were `kill 14' and `kill 15' -- "
+-    "two LOAD holes catching the == 0x14 special case -- NOT Load vs Save. Without a scored "
+-    "two-write row a Load-only skip-memcpy POSTs clean and STILL dies on the write OUT of the "
+-    "reserved mode: 16/17, this row red on the SECOND MSR. That is the point of the row. "
+-    "SCORE IT; KEEP `kill 15'; do not replace one with the other.")
++    "#0x14 then #0x13 in one process. On HEAD it dies on the FIRST MSR (the same Load death as "
++    "kill 14). A Load-only fix still dies on the SECOND (Save of the reserved mode). Keep kill 15.")
++t = early + late
++diagnosis.append("save 2s: load=%s save=%s" % (
++    "yes" if "arm_load_register_bank: unimplemented mode 20" in t else "no",
++    "yes" if "arm_save_register_bank: unimplemented mode 20" in t else "no"))
+ 
+ # ---------------------------------------------------------------- S6..S13: accept side
+-t, alive = session(prologue()
+-                   + plant(["c_10", "mrs_r3", "str_r3_4", "str_sp_8"])
+-                   + ["pc=0x%x" % CODE, "step 4",
+-                      dumpcmd(DEST + 4), dumpcmd(DEST + 8)])
+-row("acc usr", classify(t, alive), "m=10",
+-    "USR32 is ONE-WAY: the USR mask strips the c-byte, so there is no return MSR and NO canary. "
+-    "SP is the USR bank's, not BOOT_SP, so `sp' must NOT appear in the want.")
++cmds, full = msr_cmds(["c_10", "mrs_r3", "str_r3_4", "str_sp_8"], [4])
++early, late, alive, marked = _session_split(cmds)
++row("acc usr", classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=10",
++    "USR32 is ONE-WAY (the USR mask strips the c-byte). SP is the USR bank's (0), so ` sp' in "
++    "the got means the bank Load did not happen.")
+ 
+ for nm, key, want_m in (("acc fiq", "c_11", 0x11), ("acc irq", "c_12", 0x12),
+                         ("acc abt", "c_17", 0x17), ("acc und", "c_1b", 0x1B),
+                         ("acc sys", "c_1f", 0x1F)):
+-    t, alive = session(prologue()
+-                       + plant([key, "mrs_r3", "str_r3_4", "c_13", "mrs_r3",
+-                                "str_r3_c", "str_sp_10"])
+-                       + ["pc=0x%x" % CODE, "step 7",
+-                          dumpcmd(DEST + 4), dumpcmd(DEST + 12),
+-                          dumpcmd(DEST + 16)])
+-    arrive = dumped(t, DEST + 4)
+-    back = dumped(t, DEST + 12)
+-    sp_back = dumped(t, DEST + 16)
+-    got = "dead" if not alive else "%s/%s/%s" % (
+-        "m=%02x" % (arrive & 0x1F) if arrive not in (None, POISON) else "nofire",
+-        "m=%02x" % (back & 0x1F) if back not in (None, POISON) else "nofire",
+-        "sp" if sp_back == BOOT_SP else "nosp")
+-    row(nm, got, "m=%02x/m=13/sp" % want_m,
+-        "ACCEPT + CANARY, folded into one row rather than two. ARRIVAL ALONE WOULD GREEN A SAVE "
+-        "NO-OP: the banks are BSS-zero via zeroed_alloc, so a Save that does nothing returns "
+-        "SP=0, and only checking BOOT_SP after the RETURN catches it.")
+-
+-t, alive = session(prologue()
+-                   + plant(["c_13", "mrs_r3", "str_r3_4", "str_sp_8"])
+-                   + ["pc=0x%x" % CODE, "step 4",
+-                      dumpcmd(DEST + 4), dumpcmd(DEST + 8)])
+-row("same svc", classify(t, alive, sp_at=DEST + 8), "m=13 sp",
+-    "SAME-MODE: Load is not called at all, so SP-UNCHANGED *IS* the preservation check. "
+-    "Want is NOT 0xd3 -- member 3 refuses the MODE FIELD, so I|F stay clear at 0x13. Record "
+-    "I|F; do not want them.")
+-
+-t, alive = session(prologue()
+-                   + plant(["c_10", "c_14", "mrs_r3", "str_r3_4"])
+-                   + ["pc=0x%x" % CODE, "step 4", dumpcmd(DEST + 4)])
+-row("usr mask", classify(t, alive), "m=10",
+-    "In USR32 the c-byte is STRIPPED, so the following #0x14 must NOT reach the mode field and "
+-    "must NOT produce a Load line. The host lives and the mode stays 0x10.")
++    cmds, full = msr_cmds([key, "mrs_r3", "str_r3_4", "str_sp_8",
++                           "c_13", "mrs_r3", "str_r3_c", "str_sp_10"], [8],
++                          late_end=DEST + 16)
++    early, late, alive, marked = _session_split(cmds)
++    if not marked or not arming(early, full):
++        got = "unarmed"
++    elif not alive:
++        got = "dead"
++    else:
++        arrive, sp_arr = dumped(late, DEST + 4), dumped(late, DEST + 8)
++        back, sp_back = dumped(late, DEST + 12), dumped(late, DEST + 16)
++        got = "%s/%s/%s/%s" % (
++            "m=%02x" % (arrive & 0x1F) if arrive not in (None, POISON) else "nofire",
++            "0" if sp_arr == 0 else "x",
++            "m=%02x" % (back & 0x1F) if back not in (None, POISON) else "nofire",
++            "sp" if sp_back == BOOT_SP else "nosp")
++    row(nm, got, "m=%02x/0/m=13/sp" % want_m,
++        "ACCEPT + CANARY in one row: arrive mode/SP==0 (banked, BSS-zero), return mode 0x13 with "
++        "SP==BOOT_SP. A Save no-op returns SP=0; a Load no-op arrives with SP=BOOT_SP.")
++
++cmds, full = msr_cmds(["c_13", "mrs_r3", "str_r3_4", "str_sp_8"], [4])
++early, late, alive, marked = _session_split(cmds)
++row("same svc", classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=13 sp",
++    "SAME-MODE: Load is not called, so SP-UNCHANGED *IS* the preservation check. Not 0xd3 -- "
++    "#0x13 clears I|F.")
++
++cmds, full = msr_cmds(["c_10", "c_14", "mrs_r3", "str_r3_4"], [4])
++early, late, alive, marked = _session_split(cmds)
++row("usr mask", classify(early, late, alive, marked, full), "m=10",
++    "In USR32 the c-byte is STRIPPED, so the following #0x14 must NOT reach the mode field. "
++    "The host lives and the mode stays 0x10.")
+ 
+ row("row count", len(rows) + 1, 17, "identity row (floor clause (c)): the row set is complete.")
+ 
+ # ---------------------------------------------------------------- report
+-CONTROL = "OK"
+-for nm, got, want, _ in rows:
+-    if nm in ("enc ok", "live", "pc adv", "armed") and got != want:
+-        CONTROL = "DEAD"
+-
+ print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+-print("ARMMSRMODE_CONTROL=%s" % CONTROL)
+-if CONTROL == "DEAD":
+-    print("ARMMSRMODE_RESULT=0/0")
+-    print("  *** SETUP FAILED -- the vehicle is not the vehicle.  NOT 'no defect'. ***")
+-    for nm, got, want, note in rows:
+-        print("  %-11s got=%-16s want=%-16s %s" % (nm, got, want, note[:56]))
+-    print("ARMMSRMODE_DONE")
+-    raise SystemExit(0)
+-
++print("ARMMSRMODE_CONTROL=OK")
+ n = 0
+ reds = []
+ for nm, got, want, note in rows:
+@@ -412,11 +433,12 @@
+     n += 1 if ok else 0
+     if not ok:
+         reds.append(nm)
+-    print("  %-11s got=%-16s want=%-16s %-4s %s" % (nm, got, want, "ok" if ok else "FAIL", note[:64]))
++    print("  %-11s got=%-18s want=%-18s %-4s %s" % (nm, got, want, "ok" if ok else "FAIL", note[:64]))
+ print("ARMMSRMODE_RESULT=%d/%d" % (n, len(rows)))
+ print("ARMMSRMODE_REDS=%s" % (",".join(reds) if reds else "none"))
+-#  THE NAMED-RED TALLY.  17/17 on HEAD is NOT success -- it is a broken vehicle.
+ for d in diagnosis:
+     print("  diag  %s" % d)
+-print("ARMMSRMODE_EXPECT_HEAD_REDS=kill 14,kill 15,save 2s")
++EXPECT = "kill 14,kill 15,save 2s"
++print("ARMMSRMODE_EXPECT_HEAD_REDS=%s" % EXPECT)
++print("ARMMSRMODE_TALLY_MATCHES_HEAD_EXPECT=%s" % ("yes" if ",".join(reds) == EXPECT else "no"))
+ print("ARMMSRMODE_DONE")

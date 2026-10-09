@@ -24474,3 +24474,115 @@ propagation and so is its own round (together with #560's held src/ edits):
   - `place 39 cpualphapalcode:F4` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
   - `place 40 cpualphapalcode:F5` (src/cpus/cpu_alpha_palcode.c): src/** comment: owes est/ and build-tree propagation (excluded by the brief)
 Still owed: the HELD edits.
+
+## 2026-10-09 — GXEMUL [087a90]: `#562` armmsrmodekill; what its review files
+
+Evidence: `regress/artifacts/armmsrmodekill/` -- the panels (`panel_pass1_20261007` .. `panel_pass2r5_20261009`), the Opus 5.5 seat's answers and measurements (`witness_20261007/opus_*.md`,
+`opus_pass2*_2026100*/`), the kill tables (`killtable_20261007/` .. `killtable5_20261008/`), and agy's MMU research
+in `regress/artifacts/armmmuvehicle/`.
+
+### `armusrstop` (MEDIUM, cpu) — a USR- or SYS-mode guest stops the CPU: `LDM {..pc}^` and `MSR SPSR_x` reach default: arms that set `running = 0`
+
+USR32 and SYS32 have no SPSR, and two guest instructions select one by switching on the CURRENT mode with no arm for
+them: `arm_pop`'s `^` restore (`bdt_load: unimplemented mode %i`, then `cpu->running = 0; next_ic = &nothing_call;
+return;`) and `msr_imm_spsr` (`msr_spsr: unimplemented mode %i`, a pc sync, then `cpu->running = 0`) -- both in
+`src/cpus/cpu_arm_instr.c`, found by `grep -n 'unimplemented mode' src/cpus/cpu_arm_instr.c`.  A guest reaches either
+from USR32 with no debugger: one `MSR CPSR_c,#0x10` (a modelled mode, accepted) and then the instruction.  The
+architecture makes an SPSR access from USR/SYS UNPREDICTABLE, which "must not halt or hang the processor"
+(`_scratchpad/ddi0100i.txt:45064`).  `running = 0` stops THIS CPU; with no other CPU running, emulation ends.  `mrs_spsr`'s
+`default:` is the third arm of the shape but answers 0 for USR/SYS and is reached only after a debugger `cpsr=` plant.
+Found by the Opus 5.5 seat on #562's pass 1 (`witness_20261007/opus_pass1.md`); filed as its own row by owner ruling,
+2026-10-07.  NOT witnessed; the rung-3 attempt is owed and is cheap -- `regress/arm_msrmode_probe.py`'s vehicle already
+enters modes by MSR.  Option set: decline (no SPSR to read: leave CPSR unchanged, or treat `^` as a plain load) +
+latched announce is the #562 shape; ARMv7 explicitly permits UNDEFINED (`_scratchpad/ddi0406.txt:143212`) --
+earlier-version permission is not established here.
+
+### `armspsrthumb` (MEDIUM, cpu) — an SPSR restore that sets T keeps decoding ARM words until the run loop is next entered
+
+Both SPSR restores #562 touched (`arm_pop`'s `^`, the DPI S-to-PC in `cpu_arm_instr_dpi.c`) assign the whole SPSR to
+CPSR, T included -- but the Thumb interpreter is chosen only at the ENTRY of the dyntrans run function
+(`cpu_dyntrans.c`: `if (cpu->cd.arm.cpsr & ARM_FLAG_T) { arm_cpu_interpret_thumb_SLOW(cpu); return 1; }`).  The DPI path
+breaks out of the loop (`abortdyntrans_call`) only for an ODD destination PC; `arm_pop` never breaks out, and loads the
+PC as `r[ARM_PC] & 0xfffffffc`, dropping bit 1 of a halfword-aligned Thumb address.  So after a restore that sets T,
+the CPU can go on decoding ARM words from a word-aligned PC until the loop is next entered -- the CPSR word and the
+decoder disagree for an unspecified stretch.  (Read from the source on 2026-10-08, not measured.)  Raised
+by codex on #562's §F2 pass (disposition 6: "Mode filtering alone does not make applying T safe or coherent") and
+disclosed in `arm_msrmode_probe.py`'s NOT CLAIMED list (T-bit / execution-state coherence on restore); filed as its own
+row by owner ruling, 2026-10-07.  The probe's `tbit` row pins the T BIT's provenance through all three paths; it does not
+claim the decoder follows it.  NOT witnessed.
+
+### `armmmuvehicle` (MEDIUM, harness) — a rung-3 ARM vehicle with the MMU ON, owed before `armthumbabortkill`
+
+`armthumbabortkill`'s own reopen condition is "an MMU-on ARM vehicle built for a higher-ranked defect"; #562's probe
+runs with the MMU off, so it does not meet it.  Owner ruling 2026-10-07: build this first, then `armthumbabortkill`.
+agy's read-only research (`regress/artifacts/armmmuvehicle/agy_research_20261008.txt`; facts to re-derive, not
+agreement): CP15 c1/c2/c3 cannot be set from the debugger, so the guest must `mcr` them; `put` writes VIRTUAL memory;
+`step` keeps working with the MMU on; a one-section map is a descriptor 0x00000c02 at a 16 KB-aligned TTB with DACR 1;
+and the vehicle MUST map the exception vectors, or a fault reaches `cpu_dyntrans.c`'s "could not find physical address
+of the exception handler" `exit(1)` (`alphaifetchkill`).  It also found no per-CPU Thumb capability flag -- the T bit
+alone selects the Thumb interpreter -- which answers this row's open question about testarm's default SA1110.  Of the
+process kills and CPU stops agy listed on that path, these match existing rows by their titles: `armdesc3kill`,
+`armdacr2kill`, `armcp15cp14exits`, `armendianexit`, `qharmexalign`, `alphaifetchkill`.  The mapping is NOT complete
+and two of agy's entries were wrong as given (GPT-6 Astra's confirmation of #562): `armsa1110areset` is the reset
+alignment-control default, not the `ARM_EXCEPTION_RESET` exit agy listed -- that exit may be unfiled -- and the CPU
+stop agy called `wfi` in `cpu_arm_instr.c` is `X(reboot)`.  Witness kind for its round: `harness:`.
+
+### `armmsrmodedebt` (LOW, detector) — #562's measured residue: latch-clear cells, msr label x latch, the cached translation; with measured closures for the five restore-flag escapes and the cached-translation mutants
+
+#562's 47-row `regress/arm_msrmode_probe.py` discloses, in its NOT CLAIMED list, cells that the final pass MEASURED
+open (`regress/artifacts/armmsrmodekill/opus_pass2r5_20261009/`, `KTR5_LANE1..5.out`; owner ruling 2026-10-09:
+commit, file the rest):
+
+* **Latch-CLEAR x bits 31:8 at the restores.**  Each grid session has ONE latch-clear decline (its first), and every
+  latch-clear restore decline that reads back the whole CPSR has SPSR bits 31:8 SET while the old CPSR's are 0 -- so
+  `N_pop_forceN_first`, `N_dpi_forceN_first`, `N_pop_orold_first`, `N_dpi_orold_first` and `E_pop_forceN_clracc` all
+  score 47/47 (the force-0 twins are killed, 41/47).  The bodies never test bits 31:8, so these sit outside the
+  joint-cell floor; the contract claimed them and was narrowed comment-only.  **MEASURED CLOSURE:** move one
+  polarity-2 accept and the first polarity-2 decline to the front of the DPI and pop grid sessions -- no observation
+  added, no expected value changed: the fix stays 47/47 and all five go red at 46/47 (`KTR5W2_*.out`,
+  `probe47r.py`, `mk_probe47r.py`).  It shifts carriers (`N_pop_clrN_first` 41/47 -> 42/47), so it owes a FULL
+  re-table and its own pass.
+* **msr label x latch.**  msr has no latch-clear decline at IRQ, ABT, UND or SYS (`msr lbl`'s first decline is FIQ's),
+  and the restores' latch-clear mode-bit cells at IRQ/bit 1, ABT/bits 0-2 and UND/bits 0,1,3 are unobserved --
+  `M_msr_clr0f_irq_first` and `M_msr_skip_irq_first` 47/47.  Static count, codex and the Opus seat agreeing: 126 of
+  160 label x latch x mode-bit cells observed.
+* **The cached translation (`M_msr_argmask`, 47/47).**  None of the shipped 47 rows detects a write to `ic->arg[]`:
+  each of their re-executions crosses a debugger interaction, and `debugger()` clears every dyntrans translation when
+  it interacts.  **MEASURED CLOSURE:** a 48th row that re-executes
+  ONE translated register-form MSR and one translated `msr cpsr_c,#0x14` inside a single `step 72` (eight passes):
+  fix 48/48, `M_msr_argmask` 47/48, `M_msr_arg0cur` (the immediate form's twin) 47/48, HEAD 18/48 (`probe48.py`,
+  `loop_row.py`, `KTR5_LANE5.out`).  **Dissent carried verbatim:** deepseek, glm and kimi-k3 graded it OWED on the
+  final pass -- glm: "The loop row that pins `M_msr_argmask` is OWED, not disclosable ... sitting in exactly the regime
+  the fix's own comment declares load-bearing"; grok, codex, minimax, agy and the Opus seat graded it disclosure.
+* **`grid cov` asserts the G1 table only.**  Dropping 0x18-0x1a from G3, or SYS from the msr labels, still leaves it at
+  0 uncovered (`gridcov_scope.py`); asserting the G2/G3/G4 sets in `grid cov` is cheap.
+* **Gate 14 parser:** a dead vehicle (`CONTROL=DEAD` prints no REDS line) is reported as malformed output -- it fails
+  closed, misdiagnosed; and a log with one row replaced by a duplicate of another still passes -- no check establishes
+  row IDENTITY or uniqueness (the Opus seat, `opus_pass2r5.md`).  (The other parser hole it measured -- a FAIL row under
+  a 47/47 trailer -- was closed in #562 by a `rows failed` check.)  **And that check is itself fragile** (Fable 5.1,
+  #562's adjudication): `grep -E ' want=' | grep -cE ' FAIL '` is green only because the probe cuts notes to 64
+  characters, which ends the `kill 14` note before its " FAIL " text; a note edit can turn gate 14 RED falsely --
+  loud, the safe direction.  Key the check on the row's verdict column, not on free text.
+
+Owed together: one repair adopting the reorder and the loop row (48 rows), a full re-table on the 48-row probe, and its
+own pass -- the repair-chain rule.
+
+### `headerstaleobj` (MEDIUM, harness) — a HEADER change leaves stale objects, and neither propagation path nor the two-part clearance can see them
+
+Found by #562's own gate 14.  #562 inserted `uint32_t mode_warned` into `struct arm_cpu` (`src/include/cpu_arm.h`)
+ahead of `i80321_inten`/`i80321_isrc`, `tmr0`, `tmr0_irq`/`tmr1_irq` and `tisr`.  This build tracks no header
+dependencies, and every #562 build rebuilt only `src/cpus/*.o` -- the carrier's recipe, the round's propagation script
+and every kill-table clone -- so each linked a `dev_i80321.o` compiled against the OLD layout.  The device set `isrc` at
+the old offset and the guest read 0: gate 14's xscale section (`-E iq80321`) went red, `ANCHOR_ISRC` and `ANCHOR_EXC`,
+28/30, while a HEAD build scored 30/30 -- each twice (`regress/artifacts/armmsrmodekill/gate14_20261009/xscale_ab.out`).
+**The two-part clearance PASSED on all three trees**: every binary was newer than every edited source.
+The repo's `tools/propagate_all_trees.sh` can relink and report clearance success while header-dependent objects stay
+stale: `rm -f "${F%.c}.o"` deletes nothing for a `.h`, and the link recipe relinks unconditionally (GPT-6 Astra's
+confirmation; this entry first said the tool would report the header stale -- false).  Scope, measured by grep:
+`dev_i80321.c` is the only object outside `src/cpus` that reads a field after the insertion point, and `cd` is the
+last member of `struct cpu`, so no subsequent `struct cpu` member shifted and every other non-CPU ARM access precedes
+the insertion; #562's
+msrmode probe drives `-E testarm`, which attaches no i80321, so its kill tables are unaffected.  #562 itself was
+rebuilt clean (every object deleted) before its final gate run.  Owed: when a propagated path is a header, delete every
+object that includes it (or every object) and rebuild; and a THIRD clearance part -- no object older than any edited
+header -- in the tool and in the checkpoint step.

@@ -1,0 +1,32 @@
+VERDICT: SHIP-WITH-CHANGES | 0 floor breaches, 1 record defect, 1 closure-rule technicality
+
+**Closure rule (2), MSR path, msr wide decline — REASONED**
+The text claims "31:8 + I/F at msr wide" and "every non-mode bit except T differs" for the 0x00000014 over 0xffffffd1 decline. They don't. XOR = 0xffffffc5. Bits 31:8, 2, 0 differ. Bits 7, 6 (I, F) and 5 (T) and 4, 3, 1 (mode) are identical in both words. So the closure rule is technically violated for I/F at this specific decline — a bug that took I/F from the old CPSR rather than the operand would be invisible here.
+
+But I/F ARE covered on the MSR path: the kill rows exercise `msr cpsr_c` with I/F deliberately differing between source and operand, and the msr_imm write logic is the same `cpsr = (cpsr & ~mask) | (operand & mask)` regardless of which field is named (after the decline clears the mode bits from `mask`). So the coverage is complete; the record is just wrong about where it lives. Suggested correction: drop "I/F" from the msr wide bullet and add a one-line note that I/F on fsxc are covered by the kill rows on c.
+
+**Closure rule (1) — REASONED, no defect**
+- DPI/POP: 0xffffffdf covers bits 31:6, 4:0; tbit's 0x3f covers bit 5. All 32 bits.
+- MSR: 0xffffffd1 covers bits 31:6, 4, 0; c_17/c_1b/c_1f cover bits 1, 2, 3, 4 (c_1f alone sets all of 0–4); c_3f covers bit 5. All 32 bits.
+
+**FLOOR / smallest edit — REASONED, no smaller edit found**
+The 5 ARM_MODEWARN_* bits, the `mode_warned` field, `arm_mode_is_modelled` (could be inlined as a macro at the cost of a duplicated switch — not a smaller diff), the two backstops, and the three decline sites are each load-bearing for at least one row. The latches cannot be dropped without breaking the once-per-CPU contract that backstop rows and latch-rpt exercise. Denominator ≈ the shipped fix.
+
+**Records — READ, one false line**
+- PRETABLE4 §1 MSR bullet, and the parallel line in the probe header's CLASS CLOSURE paragraph, assert I/F differ at msr wide. They do not. Everything else in the contract / NOT CLAIMED / PRETABLE4 I checked is consistent with the inlined diff and the 43/43 result.
+
+**NOT CLAIMED vs. round claim — REASONED, no breach**
+- Unmodelled values never driven (0x01, 0x02, 0x04–0x0e, 0x16, 0x18–0x1a, 0x1c, 0x1d): the fix routes them through the same `arm_mode_is_modelled` gate as the driven values, so correctness is by construction, not by coverage. Disclosed, not a gap.
+- T-bit / execution-state coherence on restore: the fix takes T from the operand/SPSR on the unmodelled-mode path — a policy choice on UNPREDICTABLE architecture, not a claimed architectural property. Not a floor item.
+- USR/SYS `LDM {pc}^` and `MSR SPSR` stop-the-CPU paths: outside this round's claim (the DPI decline's `spsr_copied=0` branch correctly preserves pre-fix behavior for USR/SYS, where no SPSR is banked).
+- ic->arg[] cached-translation comment: no row re-executes one translated MSR, so a guard that wrote ic->arg[] would be unseen — disclosed.
+- `print cpsr` low-byte only: rung-3 debugger observation, not a test-channel defect.
+
+**Other observations while verifying**
+- The "encl" row being GREEN on HEAD is expected (HEAD doesn't widen the predicates); the row is a guard against future widening, not a current-defect detector. Fine.
+- `save 2s` and `dbg both` not being independent HEAD reproductions of Save/Load is correctly noted — they're downstream effects of the same Save death. Fine.
+- The DPI refactor (`cur_mode`, `new_cpsr`, `spsr_copied`, post-switch assignment) preserves the original switch's effect for the five banked modes and adds the unmodelled-mode check only when an SPSR was actually copied. The `spsr_copied=0` branch for USR/SYS is behavior-preserving. Fine.
+- The three decline sites all funnel through the same `arm_mode_is_modelled`, so the case list staying in lockstep with Save/Load is enforced by construction (one function, not three switches). The header comment says so. Fine.
+
+**Recommendation**
+Ship after correcting the msr-wide line in PRETABLE4 §1 and the probe header's CLASS CLOSURE paragraph to remove the false "I/F" claim and note that I/F on the fsxc decline are carried by the kill rows. No code change needed.

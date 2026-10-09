@@ -1,0 +1,33 @@
+VERDICT: SHIP | 0 floor breaches
+
+---
+
+**Q1 — Floor (smallest edit that keeps 47/47):**
+REASONED. The CONTRACT names five independent decline sites (msr_imm, arm_pop, DPI, Save backstop, Load backstop) plus a shared helper with a specific shape. The 47 rows test each site independently (grid msr/dpi/pop, src rows, tbit, msr lbl, msr wide, kill rows, dbg/latch rows). Any sub-edit that drops one site or narrows/widens/drops the helper is killed by at least one named row — this is inferable from the CONTRACT's claim-to-row mapping in PRETABLE5 §2 and §4. But the *exact* minimum (e.g., can the Save backstop be removed if Load's backstop catches all the Save-triggered deaths?) is not directly demonstrated by a sweep in the packet. The grid cov row is static and would not catch a missing site. A seat that wants a tighter floor should ask for a sweep that removes each of the five sites independently and reports which rows go red.
+
+**Q2 — `M_msr_argmask`:**
+REASONED. Disclosure (clause (e)) is defensible. The fix's own comment ("ic->arg[] is a cached translation") acknowledges the cache, but the corrected NOT CLAIMED explains why the probe cannot exercise it: every re-execution in the probe follows a debugger interaction, and `debugger()` clears dyntrans translations (per the cited `src/debugger/debugger.c` loop), so a write to `ic->arg[]` never reaches the next execution. The mutant's `ic->arg[1] &= ~ARM_FLAG_MODE` poisons the cache for subsequent re-executions of the *same* translation within a single `step N` — a scenario the probe does not build ("not built" is the author's own word). Under the stated assumption (cache cleared between executions), the fix and the mutant are observationally equivalent. If the debugger-clears-cache claim is false, the fix is incomplete; but the claim is stated as a correction found by reading the code, and the author investigated the escape rather than papering over it. I would not block ship on this. A belt-and-suspenders fix would also strip `ic->arg[0]`'s mode bits (or assert), but that is a judgment call, not a floor breach.
+
+**Q3 — Records:**
+READ. The NAMED-RED tally (29 rows) checks out arithmetically: 5 (kill 14/15/1e/03 + save 2s) + 3 (rst movs/ldm, zero spsr) + 2 (dbg save/both) + 2 (latch ind/rpt) + 10 (src *) + 4 (msr lbl, tbit, encl2, msr wide) + 3 (grid msr/dpi/pop) = 29. The observation counts (56 + 52 + 58 = 166) are consistent with the generator description (declines × polarities + unmodelled sweep + accepts + pop's three forms). HEAD = 18/47 follows (47 − 29 = 18).
+
+One record defect: the session count is stated as "43 sessions (ARMMSRMODE_SESSIONS; the grid adds 3)" but 43 + 3 = 46 sessions against 47 rows — `grid cov` is static and adds a row but no session. The gate pins to 47 rows, not sessions, so this is cosmetic, but the wording is slightly misleading.
+
+The `<OWED ...>` placeholder in the gate 14 pin comment is a real gap: the pin to the literal `47` under the stem `arm_msrmode` cites a measurement that is not provided. The pin value is structurally correct (43 base + 4 grid = 47), but the citation is owed. Not a floor breach; a records hole.
+
+The corrected NOT CLAIMED about `debugger()` clearing dyntrans translations is internally consistent and was produced by reading the cited code path. I cannot verify the claim independently (no file access), but the author found the original error ("pins the register form") while investigating the `M_msr_argmask` escape and corrected it before this pass — that is the right disposition.
+
+**Q4 — Gate 14:**
+REASONED. The gate parses correctly: it requires exactly one `ARMMSRMODE_RESULT=` matching `(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$`, one `ARMMSRMODE_CONTROL=(OK|DEAD)$`, one `ARMMSRMODE_REDS=`, and exactly one line that is `ARMMSRMODE_DONE` (strict `grep -cx`, so trailing whitespace would fail — worth noting if the probe is edited). On parse failure it short-circuits to a single "no" check and a tail, which is clean.
+
+On score: the checks are `CONTROL=OK`, `mrc=0`, `${mres#*/} == 47` (run), `${mres%/*} == 47` (correct), `grep -cE '^  [^ ].* got=.* want=' == 47` (emitted), `REDS=none`. On the fixed log (47/47, CONTROL=OK, REDS=none, exit 0) all pass. On the HEAD log (18/47, CONTROL=DEAD, REDS=29 names, non-zero exit) the parse succeeds but four of the six score checks fail — exactly the desired behavior.
+
+One subtlety: the `rows emitted` regex requires `got=` before `want=` on the same line. The brief says rows do not end in their status token (a note follows), so the format is `  rowname … got=X want=Y note…` (or similar). The regex `'^  [^ ].* got=.* want='` is greedy and will match as long as `got=` precedes `want=`. If the probe's emitter ever puts `want=` before `got=`, this check silently reports 0 and fails with a confusing message. Low risk; worth a one-line comment in the probe's emitter to lock the order.
+
+The FAIL-row display grep (`grep -E ' want=' | grep -E ' FAIL '`) is for human display only; the source of truth is `ARMMSRMODE_REDS`, which the gate checks. This is the right design given the "note follows status token" format.
+
+**Additional:**
+- The `M_msr_argmask` mutant is a real semantic divergence from the fix in the cached scenario (subsequent re-executions of the same translation with a *modelled* operand would not write the mode field, because the cached mask has been stripped). The fix avoids this by not touching the cache. The probe cannot catch it because the probe's re-executions are separated by debugger interactions that clear the cache. This is a real limitation of the probe's coverage, but it is disclosed and the fix is correct under the stated assumption. I would not block ship, but I would note in the commit message that the fix's correctness in a non-debugger guest loop depends on the emulator's dyntrans invalidation policy, not on anything the fix itself does.
+- The brief's "47/47 on HEAD is a broken vehicle, not success" is a general warning, not a description of the measured result (HEAD is correctly 18/47). Reading it as "if you ever see 47/47 on HEAD, the probe is broken" is correct; the probe is not broken.
+
+**Summary:** The fix is correct, the probe is correct for the CONTRACT, the gate is correct, and the records are mostly complete. The one real gap is the owed measurement citation in the gate's pin comment. The `M_msr_argmask` disclosure is acceptable but worth a one-line caveat in the commit message about the dyntrans invalidation dependency. SHIP.

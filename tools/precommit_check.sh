@@ -343,7 +343,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  RAISED 31 -> 32 ON 2026-10-02, DELIBERATELY.  One newly gated probe: crime_width_probe.py
 	#  (#529, pinned UNQUOTED in gate_arm.sh at 226 rows; the working tree had carried its bump since
 	#  2026-09-13, re-telling this history with #529 in the 29 -> 30 slot).
-	SCORE_CLAIMS_MANIFEST=32
+	#  RAISED 32 -> 33 ON 2026-10-09, DELIBERATELY.  One newly gated probe: arm_msrmode_probe.py
+	#  (#562, pinned UNQUOTED in gate_arm.sh at 47 rows).
+	SCORE_CLAIMS_MANIFEST=33
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

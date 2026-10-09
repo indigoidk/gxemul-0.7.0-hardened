@@ -1,0 +1,82 @@
+VERDICT: 3 of 12 dispositions wrong
+
+Tree reviewed at HEAD `ef577140` under [`GXEMUL-SEC/src/`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src). Read-only review; no files written, nothing built.
+
+---
+
+### 1. Adjudication of Dispositions 1–12
+
+* **1 | RIGHT**: Member 3 (decline + latched announce `(once)`) is the project disposition. ARM architecture defines reserved mode values as `UNPREDICTABLE` (ARM DDI 0100I §A2.5.7) and expressly forbids halting the processor (§Glossary p. 45064). Crashing the host via `fatal(); exit(1)` in [`arm_save_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L559-L561) and [`arm_load_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L606-L608) is a host kill defect. Per-instance latched announcement satisfies carrier rules.
+* **2 | RIGHT**: There are **7 modelled 32-bit mode values** and **6 register banks**. Mode values defined in [`src/include/cpu_arm.h:108-114`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L108-L114) are `0x10` (`USR32`), `0x11` (`FIQ32`), `0x12` (`IRQ32`), `0x13` (`SVC32`), `0x17` (`ABT32`), `0x1b` (`UND32`), and `0x1f` (`SYS32`). In [`cpu_arm.c:526-558`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L526-L558) and [`cpu_arm.c:573-605`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L573-L605), `USR32` and `SYS32` share `default_r8_r14` (6 distinct banks total).
+* **3 | WRONG**: Disposition 3 asserts that *"the guard sits at the CPSR write, before Load; Save on the old mode is harmless"*.
+  1. *Redundant Bank Reload & Sketch Contradiction*: In [`msr_imm`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L830-L847), `switch_register_banks` is computed at line 830. If the decline only occurs at the CPSR write (line 841), `switch_register_banks` remains 1: Save executes on the old mode at line 839, the mode write is declined at line 841, and then line 847 executes Load on the old mode (saving and immediately reloading the exact same bank). The brief's own proposed sketch (§3 line 43) directly contradicts Disposition 3 by placing the guard *before* `switch_register_banks` is computed (before Save).
+  2. *Pre-corrupted CPSR Hazard*: "Save on the old mode is harmless" assumes the old mode is always modelled. If CPSR already holds a reserved mode (e.g., planted via debugger `put cpsr` as Disposition 11 asserts), Save at line 839 runs on an unmodelled mode and trips Save's backstop. The guard belongs *before* `switch_register_banks` / before Save.
+* **4 | RIGHT**: In [`src/cpus/cpu.c:71`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c#L71), [`cpu_new()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c#L58) allocates `struct cpu` via `zeroed_alloc`. In [`src/cpus/cpu_arm.c:127-138`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L127-L138), `spsr_svc` (and all other SPSRs) are never initialized and hold `0x00000000`. An initial `MOVS pc, lr` ([`cpu_arm_instr_dpi.c:225,232`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L225-L232)) or `LDM {..pc}^` ([`cpu_arm_instr.c:1794,1808,1812`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1794-L1812)) from boot `SVC32` copies `0x00` into CPSR and terminates the emulator in [`arm_load_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L606-L608).
+* **5 | RIGHT**: [`msr_imm_spsr`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L856-L880) writes unvalidated mode bits directly into `spsr_*`. A subsequent restore via `arm_pop` `^` or DPI S-to-PC commits that poisoned mode into CPSR and kills the emulator in Load. Guarding only `msr_imm` leaves every current row of [`regress/arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py) green because no current row exercises SPSR restoration.
+* **6 | WRONG**: Disposition 6 asserts *"Decline ONLY the mode field; apply the rest of the write (flags, I/F, T)"*.
+  1. *T-bit violation*: MSR is architecturally forbidden from modifying CPSR.T (ARM DDI 0100I §A4-78: *"The MSR instruction must not be used to alter the T bit in the CPSR. If such an attempt is made, the results are UNPREDICTABLE"*). In GXemul, applying bit 5 from MSR flips `cpu->cd.arm.cpsr`'s `ARM_FLAG_T` without switching translation pointers or aborting dyntrans, corrupting interpreter/dyntrans synchronization.
+  2. *Interrupt unmasking hazard*: Stimulus `MSR CPSR_c, #0x14` has control byte bits 7:6 clear (I=0, F=0). Declining mode while committing the mask unmasks interrupts inside a supervisor critical section that intended a mode change.
+  3. *Privilege escalation on exception return*: On `MOVS pc, lr` and `LDM {..pc}^`, substituting the current mode while transferring control to a returned PC allows unprivileged user code to execute with supervisor privileges in `SVC32`.
+* **7 | WRONG**: Disposition 7's warrant for rejecting whole-operation decline (*"MSR's architected effect on the other fields is defined; only M[4:0] is UNPREDICTABLE"*) is factually false. ARM DDI 0100I §A2.5.7 states: *"Writing a reserved value to M[4:0] causes the result to be UNPREDICTABLE"*—the entire instruction is unpredictable, not just the mode field. Codex's dissent identified that whole-operation decline prevents:
+  - Unexpected interrupt unmasking (clearing I/F) on malformed mode writes.
+  - Asynchronous T-bit corruption.
+  - Catastrophic privilege escalation on exception return paths.
+* **8 | RIGHT**: The ARMv7 glossary permits implementing `UNPREDICTABLE` as `UNDEFINED`, but for GXemul's ARMv5/ARMv4T model, non-halting decline (Member 3) is the minimal safe policy choice.
+* **9 | RIGHT**: Keying on the 7 canonical `case` labels in [`cpu_arm.c:526-558`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L526-L558) guarantees unity with Save/Load. Placing the helper out-of-line in [`cpu_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c) avoids bloating [`src/cpus/cpu_arm_instr_dpi.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c) (included ~140 times in `tmp_arm_dpi.c`).
+* **10 | RIGHT**: In [`msr_imm`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L822-L848), modifying `ic->arg[0]` or `ic->arg[1]` mutates the dyntrans cache in place. Only the local `mask` must be altered.
+* **11 | RIGHT**: Keeping both `default:` arms as per-CPU latched announces with `return` and no rollback is necessary. Direct operator register mutation via debugger `put cpsr` ([`src/cpus/cpu_arm.c:196`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L196) via `CPU_SETTINGS_ADD_REGISTER32`) bypasses instruction preflight and reaches both bank switchers.
+* **12 | RIGHT**: An unprivileged user-mode guest executing `LDMFD sp!, {..pc}^` ([`cpu_arm_instr.c:1795-1798`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1795-L1798)) or `MSR SPSR_x` ([`cpu_arm_instr.c:881-893`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L881-L893)) hits unhandled `default:` arms that set `cpu->running = 0`, terminating the entire emulator process. Properly filed as a separate defect.
+
+---
+
+### 2. Caller Control Flow Verification (Sketch Rule)
+
+1. **Caller 1: [`msr_imm`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L822-L848)**
+   - *Flow*: At line 828 (after the USR32 check), checking `(mask & ARM_FLAG_MODE)` and clearing `mask &= ~ARM_FLAG_MODE` before line 830 forces `switch_register_banks` to 0.
+   - *Result*: Save (line 839) and Load (line 847) are skipped. Mode in CPSR remains untouched.
+   - *Defect in Sketch*: Line 842 still applies `(new_value & mask)`. If `new_value` has bits 7:6 (I/F) or 5 (T) set or cleared, those bits commit without mode change, unmasking interrupts or desynchronizing Thumb state without dyntrans invalidate.
+
+2. **Caller 2: `arm_pop` / `bdt_load` ([`cpu_arm_instr.c:1780-1825`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1780-L1825))**
+   - *Flow*: At lines 1784–1800, `new_cpsr` is loaded from the current mode's SPSR. Preflight before line 1802 forces `switch_register_banks` to 0.
+   - *Hazard*: The sketch replaces M[4:0] with the current mode, commits CPSR at line 1808, and proceeds to lines 1816–1825 to set `cpu->pc = r[ARM_PC]` and call [`quick_pc_to_pointers_arm(cpu)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1825). If returning from an exception handler (`SVC32`) into user code, the guest branch executes in supervisor mode (`SVC32`), creating a severe privilege escalation flaw.
+   - *Pre-existing bug*: If current mode is `USR32` or `SYS32`, line 1795 hits `default:` and sets `cpu->running = 0` before the sketch guard is reached.
+
+3. **Caller 3: DPI S-to-PC ([`cpu_arm_instr_dpi.c:207-248`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L207-L248))**
+   - *Flow*: Line 215 updates `cpu->pc = (uint32_t)c64`. Line 218 calls [`arm_save_register_bank(cpu)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L218) **unconditionally before the switch**.
+   - *Breakage in Sketch*: The sketch claims *"bank switch decided on the result"*, but line 218 has already executed Save. If `arm_save_register_bank` is not moved after SPSR extraction and guarded by `if (switch_register_banks)`, Save executes unconditionally. Furthermore, line 232 calls [`arm_load_register_bank(cpu)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L232) unconditionally.
+   - *Hazard*: Same privilege escalation as Caller 2.
+
+4. **Caller 4: [`arm_exception()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L669-L720)**
+   - *Flow*: Save runs at line 669 on the entry mode. New mode is selected from `arm_exception_to_mode[]` (always modelled: `SVC32`, `UND32`, `ABT32`, `IRQ32`, `FIQ32`). Load runs at line 720 on a valid mode.
+   - *Backstop*: If entry mode was corrupted via debugger `put cpsr`, line 669 trips Save's backstop, returns without aborting, and exception handling vectors successfully.
+
+---
+
+### 3. Smallest Edit Analysis
+
+1. **Smallest Breaking Edit (Mutant) that Passes Expanded Rows (a)–(d)**:
+   - **Static latch instead of per-CPU latch**: Replace `cpu->cd.arm.warned_mode` with a local `static int warned = 0`.
+   - *Why it stays green*: In [`regress/arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py), [`session()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L106-L182) spawns a fresh single-CPU GXemul process for every scored row. A static latch passes all 17 base rows and rows (a)–(d), while silently breaking multi-core CPU instance isolation.
+2. **Smallest Correcting Edit to Fix the Sketched Implementation**:
+   - In [`cpu_arm_instr.c:826-833`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L826-L833): Preflight `ic->arg[0]` before line 830; clear `mask &= ~ARM_FLAG_MODE` and strip `ARM_FLAG_T` if unmodelled.
+   - In [`cpu_arm_instr_dpi.c:216-233`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L216-L233): Move [`arm_save_register_bank(cpu)`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L218) below the SPSR selection switch; gate both Save and Load behind `if (switch_register_banks)`.
+   - In [`arm_save_register_bank`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L559-L561) and [`arm_load_register_bank`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L606-L608): Replace `fatal(...); exit(1);` with latched announcement `(once)` and `return;`.
+
+---
+
+### Additional Findings ("Something ELSE")
+
+1. **Unlatched `fatal()` in debugger `mrs_spsr`**: In [`src/cpus/cpu_arm_instr.c:934`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L934), `mrs_spsr` prints unlatched `fatal("mrs_spsr: unimplemented mode %i\n", ...)` when read in `USR32` or `SYS32`, though it returns 0 without stopping the emulator.
+2. **MSR CPSR T-bit interpretation hazard**: In [`src/cpus/cpu_arm_instr.c:841-842`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L841-L842), if a guest executes `MSR CPSR_c, #0x33` (requesting Thumb bit 5), GXemul writes bit 5 into CPSR without invalidating the dyntrans page pointer or switching to Thumb decoding, violating ARMv4T/ARMv5 architecture.
+
+---
+
+### Final Disposition
+
+**GO-WITH-CHANGES**
+
+*Required changes before commit:*
+1. Correct Disposition 3 to enforce preflight *before* `switch_register_banks` (before Save) across all callers.
+2. In DPI S-to-PC ([`cpu_arm_instr_dpi.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c)), move `arm_save_register_bank` below SPSR extraction and make both Save and Load conditional on `switch_register_banks`.
+3. In `msr_imm`, reject or strip T-bit updates alongside unmodelled mode decline.
+4. On exception return paths (`arm_pop` `^` and DPI S-to-PC), refuse supervisor privilege escalation when SPSR is unmodelled.

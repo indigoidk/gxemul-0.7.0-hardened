@@ -1,0 +1,20 @@
+#!/bin/bash
+# xscale_ab.sh -- read-only A/B: is gate 14's xscale ANCHOR failure #562's, or does HEAD fail the same way?
+# Runs the committed-tree probe against a HEAD-only build, the HEAD+#562 build, and build/'s binary, twice each.
+SEC=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+P=/tmp/gx562xs/xscale_inten_probe.py
+mkdir -p /tmp/gx562xs && cp "$SEC/regress/xscale_inten_probe.py" "$P"
+cd /tmp/gx562xs || exit 9
+STUB=/tmp/gx562xs/arm_stub.bin
+python3 -c "
+import struct,sys
+open(sys.argv[1],'wb').write(struct.pack('<I',0xe1a00000))
+" "$STUB"
+echo "probe md5 $(md5sum $P | cut -c1-8); HEAD export $(cat /tmp/gxmsr6/HEAD.sha 2>/dev/null)"
+for B in /tmp/gxmsr6/head/gxemul /tmp/gxmsr6/fix/gxemul /mnt/c/DocumentNoSnc/cc/GXEMUL/build/gxemul; do
+    for i in 1 2; do
+        out=$(python3 -u "$P" "$B" gate "$STUB" 2>&1)
+        echo "$B run$i: $(echo "$out" | grep -E '^XSCALE_RESULT=|^XSCALE_CONTROL=|^FAILING:' | tr '\n' ' ')"
+    done
+done
+echo XSCALE_AB_DONE

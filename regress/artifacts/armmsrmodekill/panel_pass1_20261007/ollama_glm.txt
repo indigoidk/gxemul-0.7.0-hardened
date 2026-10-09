@@ -1,0 +1,40 @@
+VERDICT: Member 3, refined — one shared helper consulted at each guest mode-write site (MSR→CPSR, MSR→SPSR, LDM^, DPI-S-to-PC) that declines ONLY the mode bits of that write; both `default:` arms retained as latched announce+decline backstops with a per-CPU latch field | 2 premises wrong, 1 necessity claim overclaimed, ~5 unsettleable from packet
+
+## 1. Premise audit (Q1)
+
+**WRONG (READ): "the six modelled modes."** The inlined switches contain **seven** case labels — USR32(0x10), FIQ32(0x11), IRQ32(0x12), SVC32(0x13), ABT32(0x17), UND32(0x1B), SYS32(0x1F). USR and SYS share an arm; that makes six *arms/banks*, seven *modes*. This is load-bearing: a helper written to "six" misclassifies SYS32, and the probe's own `acc …sys` row (which accepts seven modes: usr + fiq/irq/abt/und/sys + `same svc`) would go red on a legal guest MSR to SYS.
+
+**Verified by enumeration (REASONED from the packet's word): the trigger claim holds.** 0xE321F014: cond=E(AL); bits 27–23 = 00110 → MSR(immediate); bit22=0 → CPSR; bits 21–20 = 10; bits 19–16 = 0001 → field mask `c`; bits 15–12 = 1111 (SBZ as required); rotate=0; imm8=0x14 → immediate 0x14. 0x14 = 0b10100 ∉ {0x10,0x11,0x12,0x13,0x17,0x1B,0x1F} → reserved. Note also (READ) that `msr_imm` masks only USR32, not SYS32 — correct, SYS is privileged — so the trigger fires from SYS too.
+
+**WRONG as derived, right in conclusion (READ+REASONED): §2's member-1 bullet.** "Silent wrong-bank execution, then the next switch hits Save's default" fails twice under member 1 as stated ("just drop the exit(1)"): (a) it is not silent — per the packet's own carrier rule, `fatal()` still prints on every hit; (b) the next Save-default hit does **not** kill, because member 1 as the fix neuters both defaults — the machine prints, falls through, and self-heals into the new mode with a stale bank (the reserved period's r13/r14 were stored nowhere). Member 1 is still wrong, but for the stale/wrong-bank corruption, not because the kill merely relocates.
+
+**Overclaimed (REASONED): "the decline must happen BEFORE Save."** The load-bearing placement is at/before the mode *write* (hence always before Load). Save runs on the old modelled mode in all four callers and is harmless; "because every caller writes CPSR between Save and Load" establishes only "not inside Save alone or Load alone," not before-Save.
+
+**Holds (READ):** Save-not-first-hit for MSR (check `switch_register_banks` against the code: SVC32→0x14 sets it); Load-only-fix ⇒ next Save dies (every later writer Saves on the poisoned CPSR); all four callers write CPSR between Save and Load; MSR's "Exceptions: None" (accepted from memory of the ARMv5 ARM — REASONED).
+
+**Cannot be settled from this packet — named:**
+- "always a modelled mode" for `arm_exception_to_mode[]` — table not inlined. Settled by the table's contents plus the domain of `exception_nr`.
+- `msr_imm_spsr`/`msr` SPSR forms — named, never inlined. Settled by their source.
+- "all four callers" — the Save/Load call-site set may not be closed. Settled by a call-site grep.
+- Non-guest CPSR writers (debugger register-set, reset/init) — settled by a `cpsr =` write-site grep.
+- `fatal()` semantics and the CHANGELOG/#524 facts — taken READ on the packet's word.
+
+**Writer enumeration (REASONED from ARMv4/5 architecture, READ where the packet shows code):** guest-controlled CPSR mode writers are exactly MSR CPSR (both forms) and CPSR←SPSR restores (LDM^, DPI-S-to-PC); exception entry writes modelled modes only (asserted, unverified); reset/init presumed modelled. **SPSR is poisonable via `msr_imm_spsr` (0x14 into SPSR_svc), and callers 2/3 later restore it into CPSR — so yes, the restore sites must consult the helper on the *incoming SPSR mode*, and the helper must also be applied at the SPSR writer itself (the poisoning writer is not among the four shown callers).** Exception entry's SPSR write (SPSR_newmode ← old CPSR) can never carry a reserved mode once CPSR is guarded.
+
+## 2. Disposition per caller (Q2) — and the seven members
+
+MSR: decline the M-field only; **all other fields in the same write still apply** (f-field flags, I, F, T). REASONED: the UNPREDICTABLE is scoped to the reserved mode *value*, not the instruction, and MSR lists "Exceptions: None"; whole-write decline would also discard legal flag/I/F/T writes bundled with a bad mode. LDM^ / DPI-S-to-PC: restore CPSR from the SPSR with the mode bits forced to the current mode; keep the register loads and the PC transfer; keep the SPSR's T bit (it governs PC interpretation). FAULT is worse here: no architecturally indicated UNDEF exists for the restore, and synthesizing one mid-exception-return corrupts the guest's exception state a second time. arm_exception: no guard (producer asserted modelled — flagged above). Member disposal: 1 rejected (stale-bank corruption, and the print spam survives); 2 rejected vs 3 (loses all diagnostic signal on an UNPREDICTABLE a real guest may hit; a once-print is free); **3 accepted (refined)**; 4 meaningless (no defined semantics to accept); 5 rejected ("Exceptions: None"); 6 rejected (you cannot "back" a guest-driven process kill as semantics — that is the row's bug); 7 rejected (UNPREDICTABLE has nothing to implement; a bankless pseudo-mode adds untestable semantics). **No eighth member**: the nearest candidate, SANITIZE (force a chosen modelled mode), is a granularity variant of decline and dominated — keeping the current mode keeps r13/r14 banked reality consistent with what the guest has been executing.
+
+## 3. Where the decline lives (Q3)
+
+Helper at each guest mode-write, plus backstop defaults; **not** rollback-inside-Load (Load cannot know the old mode once CPSR is overwritten, and the decision becomes invisible to the write's other fields). Sketch against post-Load code: `msr_imm`'s `flags = cpsr >> 28` (line 844) is mode-independent ✓; callers 2/3's PC write and `quick_pc_to_pointers` depend on the T bit, which per-field decline preserves — a whole-write decline would misexecute a T=1 restore.
+
+## 4. The backstop (Q4)
+
+With all writers guarded the defaults are unreachable by construction — keep them anyway as latched announce+decline: they are the only guard against unenumerated writers (debugger poke, a fifth caller, future ARMv6 RFE/CPS/SRS). Latch state: **per-CPU field**, not function-static — a static is shared across CPU instances on multi-CPU machines and survives machine re-init; "per instance" in the house idiom should mean per CPU.
+
+## 5. Smallest edit that breaks the fix and passes (Q5)
+
+**Guard only caller 1 (`msr`/`msr_imm`); leave callers 2/3 unguarded.** All 17 rows drive the MSR path, so every row stays green while `MSR SPSR_c, #0x14` followed by `SUBS pc, lr, #0` still reaches Load's `exit(1)`. The false-assurance row is `save 2s` (one expects it to prove Save can't die; the probe never poisons an SPSR). Missing row: "spsr poison → restore: survive, mode retained, announce fires once, no second announce" (doubles as the latch check). Secondary mutant: whole-write decline instead of mode-field decline — passes all 17 because no row checks that a mode-reserved MSR still applies I/F/T/flags.
+
+**Else-found:** bdt_load's own SPSR-selection `default:` (line 1795) is a second, differently-shaped guest-drivable stop (`running = 0`), also catching LDM^ in USR/SYS (UNPREDICTABLE) — same family, different row, decide separately. Also: in pristine code, callers 2/3's current-mode switches always see a modelled mode (any CPSR writer would have died in its Load first), so this defect's deaths are always in **Load** — consistent with, and slightly sharpening, §2's first bullet.

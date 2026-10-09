@@ -1,0 +1,328 @@
+I'll specify the rung-3 probe from source, not from the packet: first the live tree and decoder, then the row set, controls, and the traps in S3–S4.I'll open the decoder, both `default:` arms, `testarm` setup, and the ARM probes that already set the probe shape.S4 is the part that can still collapse the spec. I'll check the build tree, then smoke `print cpsr` and the `0xE321F014` step on the committed binary.**VERDICT:** Specify `regress/arm_msrmode_probe.py` as a **16-row witness** (15 data + identity) on unmodified `-E testarm`. Expected **14/16 on HEAD → 16/16 after member 3 at both `default:` arms**. Do not ship documented-only. The witness is cheap. Two premises in the packet are wrong as stated, and neither kills the vehicle.
+
+`0xE321F014` is a correct `MSR CPSR_c, #0x14`. `testarm` under `-V` is still SVC32 privileged at the first `step`. **`#0` on this emulator is not the `#449` fake-green:** it writes mode `0` (USR26) and still hits `exit(1)`. Do not use it anyway — it rows the 26-bit hole, not the reserved 32-bit hole.
+
+---
+
+## S4 — the two things that could have collapsed this
+
+### Encoding: `0xE321F014` is correct
+
+Verified against `to_be_translated` (`cpu_arm_instr.c`), not against a mnemonic.
+
+| Field | Bits | Value | Check |
+|---|---|---|---|
+| cond | 31:28 | `1110` = AL | reaches execute |
+| main_opcode | 27:24 | `0011` = 3 | falls in `case 0x0..0x3` |
+| I (immform) | 25 | 1 | `iword & 0x02000000` → `msr_imm`, not `msr` |
+| R / s (SPSR) | 22 | 0 | not `msr_imm_spsr` |
+| bits 23:20 | | `0010` = `0s10` | MSR shape |
+| field mask | 19:16 | `0001` | **c only** → `arg[1] = 0x000000ff` |
+| SBO | 15:12 | `1111` | required by the match |
+| rotate_imm | 11:8 | `0000` | `r8 = 0` |
+| imm8 | 7:0 | `0x14` | `arg[0] = 0x14` (loop never runs) |
+
+Decoder match, in order, so nothing steals the word first:
+
+```
+(iword & 0x0fb0f000) == 0x0320f000     # 0xE321F014 & 0x0FB0F000 = 0x0320F000
+```
+
+ldrex/strex/mul/bx/swp/clz/smul* all miss. Then:
+
+```
+imm = iword & 0xff;          # 0x14
+while (r8-- > 0) ...         # r8=0, body never runs
+ic->arg[0] = 0x14
+ic->arg[1] = 0x000000ff      # bit 16 only
+ic->f = cond_instr(msr_imm)
+```
+
+`X(msr_imm)`: current mode is not USR32, so the flags-only mask does not fire; `mask & ARM_FLAG_MODE` is `0x1f`; `0x13 != 0x14`; save on SVC32 returns; the write lands; load sees `0x14` and `exit(1)`.
+
+Generic constructor, rotate 0, c-bit only:
+
+```
+msr_c_imm(m) = 0xE321F000 | (m & 0xff)
+```
+
+`0x14 → 0xE321F014`, `0x15 → 0xE321F015`, `0x10 → 0xE321F010`, … `0x1f → 0xE321F01F`. `enc ok` must check **imm, rotate, c-bit, SPSR-clear**, not merely the MSR mask. A mask-only check would bless `MSR CPSR_c, #0x10` (USR32, modelled, **green on a live defect**).
+
+The translator rotate (`>>2` × `r8`) and the disassembler rotate (`>>1` × `(iw>>7)&30`) are the same function. At rotate 0 they agree.
+
+### `#0` — the packet’s fake-green is true of DDI 0100I and **false of this emulator**
+
+There is no PrivMask in `msr_imm`. `#0` with the c-byte mask `0xff` writes mode **`0x00` (USR26)**. Load’s `default:` still fires: `unimplemented mode 0`. A `#0` probe would still go **red** on HEAD. That is the wrong hole (26-bit, named in the header, not implemented) and the wrong decimal (`0` not `20`). Keep the ban; change the reason.
+
+### Boot mode: SVC32 privileged survives the span that could have changed it
+
+`arm_cpu_new` is not the whole story. The span that would contain a later change, in order:
+
+| Site | What it does to `cpsr` |
+|---|---|
+| `cpu_arm.c` create | `cpsr = I\|F` (`0xC0`), then **both** prom and non-prom arms `\| ARM_MODE_SVC32` → **`0xD3`**. MMU bit is not set. `flags = cpsr >> 28` = 0. |
+| PROM hook (`prom_emulation` defaults **on**, `machine.c`) | `store_32bit_word` of `0xef8c64be` (a SWI) at `RAM-8`. **No `cpsr` write.** |
+| `MACHINE_SETUP(testarm)` | SP = `R-4096`, LR = SP+32, three-word halt stub at LR. **No `cpsr` write.** `default_test` only adds devices. |
+| `emul.c` load | `cpsr \|= ARM_FLAG_T` **only if `pc & 1`**. Plant at `CODE=0x8000` is even. **Mode bits untouched.** |
+| `-V` | `single_step = true` (and `-K`). Nothing executes until `step`. Interrupts are suppressed while stepping; MSR is synchronous inside the instruction. |
+| `arm_setup_initial_translation_table` | **Not called** for testarm. That is the cats/MMU line. Irrelevant here. |
+
+At the first `GXemul>` prompt: `cpsr = 0x000000d3`, mode `0x13`, privileged (not USR32), MMU off, T clear, SP = `0x03fff000` (`-M 64`). Debugger `print cpsr` is `PARSE_SETTINGS` → `cpsr = 0xd3`. Mode bits live in `cpsr` itself, not in `flags`, so they are not the stale-NZCV bug. **Still read them with guest `MRS`**, because that is the architectural path and it is the signature.
+
+The probe must never assign `cpsr=...`. A debugger write of a reserved mode would skip Load and let the next guest `MSR` hit Save — a state a guest cannot occupy on HEAD. That is laundering Save’s unreachability.
+
+---
+
+## File, vehicle, polarity
+
+```
+regress/arm_msrmode_probe.py
+Usage:  arm_msrmode_probe.py <gxemul-binary> [label]
+Launch: -V -A -E testarm -M 64  0x8000:<stub>
+Stub:   reuse regress/arm_bfx_stub.bin (contents irrelevant; every word is overwritten)
+```
+
+Copy `session()`, wait-for-`GXemul>`, dump/`sw()`, and the `-A` colour trap from **`arm_flags_probe.py`**, not from `arm_bfx_width_probe.py`. BFX’s `printed()` regex is not gated (`gate_arm.sh` does not call it) and it looks for `0x…` as the first token of the reply line; the debugger actually prints `r0 = 0x…`. Flags stores via guest `STR` and `dump`s — proven in gate 14.
+
+This is a **witness**. Rows assert **correct** post-fix behaviour. HEAD is allowed to be 14/16 with two named reds. Do not gate it until it is 16/16.
+
+```
+CODE = 0x8000
+DEST = 0x9000          # flags probe’s DEST; clear of the LR stub and the PROM hook
+BOOT_SP = 0x03fff000   # 64*1048576 - 4096; MACHINE_SETUP(testarm)
+BOOT_CPSR = 0xd3       # I|F|SVC32
+MRS_R0   = 0xE10F0000  # mrs r0,cpsr   (flags probe has E10F3000 for r3)
+STR_R0   = 0xE5840000  # str r0,[r4]
+STR_R0_4 = 0xE5840004  # str r0,[r4,#4]
+STR_SP_8 = 0xE584D008  # str sp,[r4,#8]  — debugger name is sp, not r13
+MOV_2A   = 0xE3A0002A  # mov r0,#0x2a
+```
+
+Stay on `step`. MSR is a guest instruction, not a host-timer path.
+
+---
+
+## S3 — one session per MSR row. That is not a 2× multiplier
+
+A process that `exit(1)`s cannot run the next row. **`acc usr` is one-way** (the USR32 mask then strips the c-byte). Sharing a process is how both traps fire.
+
+**Do what `run_word()` in BFX already does: one fresh `-V` process per data row** (live and `pc adv` share one session, as BFX does). Kill rows do not sit last in a shared session; they do not share with anyone.
+
+| Accounting | Count |
+|---|---|
+| Scored rows | **16** (15 data + identity) |
+| Guest sessions | **12** (enc ok and identity have none; live+pc adv share) |
+| Arming prefix per MSR session | **not a scored row** — if the prefix fails, that row’s got is `unarmed` and it FAILs. Silent fake-green is the thing this exists to stop |
+| If arming were scored per session | ~28. That is the tidy-looking number. Do not write it |
+
+**Cost to the accept rows: zero.** They never share a process with a kill, and `acc usr` cannot poison `acc fiq`. Twelve process starts of a handful of `step`s is the same shape as BFX. Cheap.
+
+Do not debugger-write `cpsr` to reach Save. Save’s `default:` is unreachable on HEAD (Load dies first) and stays unreachable after a **before-save** decline (reserved mode never lands). A Load-only skip-memcpy that leaves `cpsr` reserved is a clause-(d) mutant of the Load repair; row it in the **detector** as `save 2s` (MSR `#0x14` then MSR `#0x13`; channel is `arm_save_register_bank: unimplemented mode 20`). It is vacuous as a HEAD-vs-POST witness row (same colour as `kill 14` on both sides). Disclose, do not score it here.
+
+---
+
+## The two ladder controls (this is a CPU, not a device)
+
+The footbridge failure was “0x0 everywhere, RAM control green.” Here RAM is the instruction word at `CODE`.
+
+**Liveness — `live`.** `mov r0,#0x2a` through the same `put w` / `step` / dump path. Want `0x2a` at DEST. RAM at `CODE` is `0xe3a0002a`, not `0x2a`. If this is `SENT`/`None`, the harness never executed. **`pc adv`:** pc is `CODE+4`. An untranslatable word does not quietly return 0x2a.
+
+**Signature — `armed`.** Guest `MRS r0,cpsr` stored at DEST, plus `STR sp` at DEST+8, before any MSR.
+
+| Observed | Cannot have come from |
+|---|---|
+| DEST = `0x000000d3` | RAM at `CODE` (`0xe10f0000`), or r0 planted 0 |
+| bits 4:0 = `0x13` | USR32 (`0x10`) — that is the fake-green: the c-byte mask fires, nothing switches, kill rows go green while Load’s `default:` is live |
+| DEST+8 = `0x03fff000` | `barearm` (never writes SP) or a machine that is not `MACHINE_SETUP(testarm)` |
+
+`0xd3` is I|F|SVC32. Privileged is the same fact: mode is not USR32. Require **exactly `0x13`**, not merely “privileged” — SYS32 is privileged and is not the boot mode.
+
+If `live`, `pc adv`, or `armed` is red: print `ARMMSRMODE_CONTROL=DEAD` and `ARMMSRMODE_RESULT=0/0` and **stop**. That is setup failure, not “no defect.”
+
+---
+
+## Arming proof, per session, not extra rows
+
+Every MSR session plants this prefix and **fails the row** if it does not hold:
+
+```
+r4 = DEST
+put the MRS/STR pair at CODE
+pc = CODE
+step 2
+dump DEST  → must be 0xd3, bits 4:0 == 0x13
+dump sp    → 0x03fff000   (or STR sp before the MSR)
+then the MSR under test
+```
+
+That is the USR32 fake-green caught at the moment of decision, on the process that is about to issue the MSR. Scoring it once as `armed` proves the vehicle; the prefix stops a later session that somehow is not that vehicle.
+
+---
+
+## Oracle for a dead process — EOF plus the **decimal** line, not EOF
+
+`exit(1)` closes the pty. `running = 0` does not (`-V` implies `-K`; the prompt returns). A crash closes the pty with no Load line.
+
+| | pty | process | line |
+|---|---|---|---|
+| **this defect** | EOF mid-`step` | dead | `arm_load_register_bank: unimplemented mode 20` |
+| `running = 0` | prompt returns | alive | no such line; `print pc` still works |
+| crash / other `fatal; exit` | EOF | dead | **no** that line |
+| member 3 | prompt returns | alive | one `(once)` line; MRS still `0x13` in bits 4:0; SP still `BOOT_SP` |
+
+`fatal()` is raw `va_debug` — **no** `cpu0:` prefix. `%i` prints **20**, not `0x14`. A hex grep matches nothing and reports a clean, confident, wrong answer. Key on the function name **and** the decimal. `mode 0` is a forgotten-register or `#0` plant; treat it as `unarmed` / setup fail, not as this defect.
+
+EOF alone is vacuous under a crash mutant. The line alone is vacuous under a mutant that keeps the print and drops `exit(1)` (alive, mode possibly reserved). **Both, together, are the channel.** POST additionally requires mode still `0x13` (the decline refused the write) and SP still `BOOT_SP` (Load did not run). The `(once)` is the member-3 pin, not the death pin; a silent member-2 decline would hold the mode and omit it.
+
+`fatal()` cannot be silenced by `-q`; `-V` ignores `-q` anyway. Do not key on `{ arm memory fault:`-style quiet-gated text.
+
+---
+
+## Accept rows — all six are reachable from SVC32 by this store
+
+The USR32 mask tests **current** mode `== ARM_MODE_USR32`. Boot is SVC32. The c-byte mask is `0xff`, which contains `ARM_FLAG_MODE`. From SVC32 a guest `MSR CPSR_c, #imm8` can write every modelled mode:
+
+| imm | mode | reachable from SVC32? | one-way? | SP after Load (fresh process, banks are BSS zero) |
+|---|---|---|---|---|
+| `0x10` | USR32 | **yes** | **yes** — later c-bit MSRs become flags-only | `0` (USR/SYS bank r13 was never saved; SVC save writes 5 words) |
+| `0x11` | FIQ32 | **yes** | no | `0` (fiq r13) |
+| `0x12` | IRQ32 | **yes** | no | `0` |
+| `0x13` | SVC32 | yes, but **same-mode skip** — save/load **not** called | no | **unchanged** `BOOT_SP`; I\|F **cleared** (`#0x13` writes the whole c-byte) |
+| `0x17` | ABT32 | **yes** | no | `0` |
+| `0x1b` | UND32 | **yes** | no | `0` |
+| `0x1f` | SYS32 | **yes** | no | `0` (same bank as USR) |
+
+26-bit `0x00..0x03` and holes `0x14/15/16/18/19/1a/1c/1d/1e` are reserved and kill today. They are not accept rows.
+
+**SP dropping from `BOOT_SP` to 0 is the bank-Load signature.** A mutant that writes the mode bits and skips `memcpy` would MRS-read the new mode with SP still `0x03fff000`. Mode-only accept rows are blind to that. Row both.
+
+`same svc` does **not** call Load (modes equal). It pins “writing `0x13` is still legal” against a before-save decline that grew to reject SVC32. Against a `default:`-arm growth it is inert — disclose that. I\|F become 0; want mode `0x13`, **not** `0xd3`.
+
+**Order:** with per-session processes, scored order does not matter. Inside a session, never issue `acc usr` and then another mode write except `usr mask` (which is that sequence on purpose).
+
+**Failability (de-escalation, measured kill, not existence).** The latch is a per-CPU `warned` flag, not a mode mask, so guard-only is the non-equivalent form. For each `acc X`, the mutant is **delete `case ARM_MODE_X` from the whitelist** (or add `&& mode != X` to `arm_mode_ok`). That row must go red: mode stays `0x13`, SP stays `BOOT_SP`. One mutant per accept row. `same svc` reddens only if the decline inspects the **new** mode **before** the same-mode skip.
+
+---
+
+## The row set
+
+`%-16s`, names ≤ 14 (two spaces left for a later `^$v  ` gate pin). Longest name below is 9.
+
+`EXPECT_ROWS = 16`. Last row: `row("row count", len(rows)+1, 16)`.
+
+Polarity: **want is POST-fix correct.** A PRE FAIL is the reproduction.
+
+`classify()` for a kill step:
+
+```
+if not alive and "arm_load_register_bank: unimplemented mode 20" in t: "load 20"
+elif not alive and "arm_save_register_bank: unimplemented mode 20" in t: "save 20"
+elif not alive: "dead"
+else: "m=%02x" % (new_cpsr & 0x1f)
+```
+
+POST kill want is `m=13` (and SP still `BOOT_SP`, one `(once)`).
+
+### Controls — GREEN both sides. CONTROL=DEAD if 2–4 fail
+
+| # | Name | Stimulus | Oracle | PRE | POST |
+|---|---|---|---|---|---|
+| 1 | `enc ok` | every planted word | each `msr_c_imm(m)` has mask `0x0320f000`, field `0001`, rot 0, imm `m`, bit 22 clear; MRS/STR/MOV match the decoder | ok | ok |
+| 2 | `live` | `MOV r0,#0x2a`; STR; dump | DEST / `0x2a` | ok | ok |
+| 3 | `pc adv` | same session | pc / `CODE+4` | ok | ok |
+| 4 | `armed` | MRS; STR; STR sp | DEST=`0xd3` **and** SP=`0x03fff000` | ok | ok |
+| 5 | `no cbit` | `0xE328F014` = `MSR CPSR_f, #0x14` | alive, mode `0x13`, SP unchanged | ok | ok |
+
+`no cbit` is the encoding control: if the c-bit were ignored and every MSR switched, this would die on HEAD and tell you the plant is not what you think.
+
+### Defect — RED on HEAD, GREEN after member 3
+
+| # | Name | Stimulus | want | PRE | POST | Channel |
+|---|---|---|---|---|---|---|
+| 6 | `kill 14` | `MSR CPSR_c, #0x14` | `m=13` + alive + `(once)` + SP=`BOOT_SP` | **`load 20`** | `m=13` | Load `default:` + decimal 20 |
+| 7 | `kill 15` | `#0x15` (decimal **21**) | same with `mode 21` on PRE | **`load 21`** | `m=13` | a `== 0x14` decline greens 6 and leaves 7 dead |
+
+Do not add register-form `MSR CPSR_c, r1` here. `X(msr)` copies `rm` into `arg[0]` and calls `msr_imm`; one encoding is enough for the witness. Clause (e): register form, 26-bit holes, SPSR-then-`MOVS pc` (the second guest path in the bug file).
+
+### Accept / de-escalation — GREEN both sides; each reddens under its own case-delete
+
+| # | Name | `#imm` | want | PRE | POST | Growth mutant |
+|---|---|---|---|---|---|---|
+| 8 | `acc usr` | `0x10` | mode `0x10`, SP=`0`, alive, **no** Load line | ok | ok | drop `case USR32` |
+| 9 | `acc fiq` | `0x11` | mode `0x11`, SP=`0` | ok | ok | drop FIQ32 |
+| 10 | `acc irq` | `0x12` | mode `0x12`, SP=`0` | ok | ok | drop IRQ32 |
+| 11 | `acc abt` | `0x17` | mode `0x17`, SP=`0` | ok | ok | drop ABT32 |
+| 12 | `acc und` | `0x1b` | mode `0x1b`, SP=`0` | ok | ok | drop UND32 |
+| 13 | `acc sys` | `0x1f` | mode `0x1f`, SP=`0` | ok | ok | drop SYS32 |
+| 14 | `same svc` | `0x13` | mode `0x13`, SP=**`BOOT_SP`** (Load not called) | ok | ok | before-save decline that rejects SVC32 |
+| 15 | `usr mask` | USR32, then `#0x14` | still mode `0x10`, alive, **no** Load line | ok | ok | delete the USR32 `mask &= 0xff000000` |
+
+`usr mask` is GREEN on HEAD. It is the fake-green the other way: 0x14 from USR is **not** this defect. If it reds, the USR filter is gone and every later “I started in USR” story becomes a kill.
+
+### Identity
+
+| # | Name | want | PRE | POST |
+|---|---|---|---|---|
+| 16 | `row count` | `len(rows)+1 == 16` | ok | ok |
+
+---
+
+## Tally
+
+```
+HEAD  (committed exit(1) still in Load default:):
+    14/16     kill 14 and kill 15 red; everything else green
+    ARMMSRMODE_CONTROL=OK
+
+POST  (member 3, decline BEFORE save — or cpsr rollback in Load — both defaults, one (once) latch):
+    16/16
+```
+
+Header must **name the two reds**. 14/16 without that sentence reads as “almost working.”
+
+```
+ARMMSRMODE_CONTROL=OK|DEAD
+ARMMSRMODE_RESULT=<passed>/<total>
+ARMMSRMODE_DONE
+```
+
+Exit: flags-probe idiom (tally printed; a later gate greps RESULT, not process status). `probeexitzero` is open.
+
+---
+
+## Plant for a kill session (the order is load-bearing)
+
+```
+r4=DEST, r0=0
+CODE+0  MRS r0,cpsr
+CODE+4  STR r0,[r4]          # arming word
+CODE+8  MSR CPSR_c, #0x14
+CODE+12 MRS r0,cpsr
+CODE+16 STR r0,[r4,#4]       # POST held mode
+CODE+20 STR sp,[r4,#8]
+pc=CODE
+step 2
+dump DEST                    # must be 0xd3 or the row is unarmed
+step 1                       # the MSR
+# HEAD: EOF + "arm_load_register_bank: unimplemented mode 20"
+# POST: prompt returns; step 3; dump DEST+4 == 0xd3 (mode 0x13, I|F still,
+#        because the mode-field write was refused, not rewritten as #0x13);
+#        DEST+8 == BOOT_SP; one (once) line
+```
+
+Accept sessions are the same plant with a legal `#imm`; `step` through the MSR and the second MRS; dump all three words. HEAD and POST both complete.
+
+---
+
+## What I would still not claim without a run
+
+This is a specification. Encoding and the boot-mode span are readings of `GXEMUL-SEC/src/` (line numbers: Load `default:` is 606–608, Save 559–561, `msr_imm` 822–848, translator 4294–4328, create 127–138, testarm setup 187–203, `-V` at `main.c` 473–476, T-bit at `emul.c` 671–673). **No guest was executed this pass.**
+
+Two things a first run can still break without the defect being absent:
+
+1. Dump-after-`step 2` vs icache invalidation — `put w` already invalidates the ARM ic page in BFX/flags; if DEST dump of `0xd3` fails, the MRS encoding or the dump swap is wrong, not Load.
+2. The exact fatal spelling in the pty (raw `fatal()`, no subsystem prefix). If the line is wrapped or CRLF-split, grep `unimplemented mode 20` not a full-line `^$`.
+
+If either fails, that is a setup bug in this spec. The stop condition is still: `live` / `pc adv` / `armed` green, then read `kill 14`.
+
+The witness is cheap: same machine as two shipped ARM probes, no CP15, no page table, no Thumb, no MMU-on trap. An honest “documented-only” would be the wrong sentence.

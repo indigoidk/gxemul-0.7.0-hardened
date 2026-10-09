@@ -1,0 +1,57 @@
+VERDICT: 0 of 12 dispositions wrong (three are partly unverifiable from the packet: 4, 9, 11)
+
+I went through all twelve looking for a defect and did not find one. The author has explicitly asked the panel to be hardest on the adopted findings and on the fix; my hard look is below, with three premises I cannot settle from the packet flagged as such, not as wrong.
+
+Per-disposition:
+
+1 | RIGHT (READ + REASONED). M2 evidence (17/17, "msr_imm refuses a reserved mode field with a (once) latch") is in the packet and matches "decline + latched announce"; all eight seats concur. M1 is the negative control: silent decline (`exit(1)` -> `return`) leaves `m=14` in CPSR, which is exactly the failure mode the latched announce + field-clear is meant to prevent.
+
+2 | RIGHT (READ). `10 11 12 13 17 1b 1f` is seven values; USR (0x10) and SYS (0x1F) share a bank -> six banks. The correction is a wording fix, not a logic fix.
+
+3 | RIGHT (REASONED). "Save on the old (modelled) mode" is the architecturally necessary shape: helper_save_cpsr reads the *current* CPSR, whose mode is by construction modelled because every prior writer has been guarded. The "save 2s" diagnosis `load=yes save=no` in the inlined witness is the smoking gun: the Save default: arm never fires (the old mode is fine), only the Load default: arm fires (the new mode is reserved). The guard at the CPSR write, before Load, is the right placement.
+
+4 | RIGHT (REASONED, NOT CHECKABLE FROM PACKET). The zero-initialised SPSR path is a real defect: an early `MOVS pc,lr` / `LDM {..pc}^` from SVC32 before any exception loads `spsr_svc = 0`, mode field 0x00, which is not in the seven modelled labels. Single fact that would settle it: read `cpu_new` in `cpu.c` and confirm the `cpu` struct is zero-allocated (the brief cites `cpu.c` zero-alloc as the source, but I cannot see it). Detector row (c) is the right place to nail this down.
+
+5 | RIGHT (REASONED). M2 covers the `msr_imm` guest writer; it does not cover `arm_pop ^` or the DPI S-to-PC restore, which read SPSR and write CPSR directly. "Smallest breaking edit" passing 17 rows is consistent with M2; it is not consistent with passing rows (a) and (b). Two detector rows owed is the right count. Minor wording nit (not a defect): the phrase "MSR SPSR_c poisoning" overstates the post-M2 attack surface, since M2 also catches MSR SPSR_c. The real non-MSR poisoning vectors are zero-init (disposition 4) and exception entry with a CPSR that was corrupted via `put cpsr` (disposition 11). The finding stands; the wording is a touch loose.
+
+6 | RIGHT (REASONED). Per ARM ARM, on an MSR CPSR write only M[4:0] is UNPREDICTABLE; the control bits (I, F, T, etc.) and the flags are architecturally defined. Field-only decline matches that distinction.
+
+7 | RIGHT (the ruling, REASONED). The author explicitly asks: "What does whole-operation decline buy that field-only loses, measured on a guest?" My answer: nothing of architectural significance. A guest writing CPSR_cfs with a reserved mode is, per the ARM ARM, writing an UNPREDICTABLE mode -- the guest's intent on the *other* fields is still well-defined. Field-only honors the well-defined bits; whole-operation silently discards them. For an emulator that aims to run real guests, field-only is the correct minimal surprise. The dissent is recorded; the ruling stands. (The disposition being on the *defensive* side here is a panel-politics point, not a technical one.)
+
+8 | RIGHT (READ). The author cites `ddi0100i` ARMv5 directly: MSR "Exceptions: None", data-processing none, LDM(3) Data Abort only. The glossary's "may be implemented as UNDEFINED" is an ARMv7 reading; on ARMv5 the only architecturally honest policy is to decline, not to fault. Recorded as a policy choice, not an architectural requirement -- correct.
+
+9 | RIGHT (REASONED, NOT CHECKABLE FROM PACKET). "One source of truth" for the seven case labels is the right design. Single fact that would settle it: grep the DPI template (`#include` count or `case` label count) to confirm "~140 times" and confirm the helper can live outside the template without forcing a recompile cascade. Plausible on the face of it; I cannot verify the count.
+
+10 | RIGHT (REASONED). `ic->arg[0]` / `ic->arg[1]` are the cached translation and are likely read by helpers other than the one being modified; mutating them retroactively is the kind of change that breaks three things and fixes one. Local `mask` is the right scope.
+
+11 | RIGHT (REASONED, NOT CHECKABLE FROM PACKET). Keeping the backstop is correct defense-in-depth, and the per-CPU latch with distinct bits for the decline vs. each backstop is the right structure. The reachability claim via `put cpsr` is the part I cannot check: the parenthetical "(writable setting, no bank switch)" describes a debugger path that *does not* go through `switch_register_banks`, which is where the Save/Load default: arms live. Two ways the backstop can still fire from `put cpsr` and not be dead code: (a) the next guest instruction does a bank switch, which then trips the Load default: arm with the now-bad mode; (b) there is a separate CPSR-write helper in the `put cpsr` path that has its own check. Single fact that would settle it: read the `put cpsr` handler in the debugger and check whether the next bank switch goes through the Save/Load helpers. The debugger-driven row (d) is the right test; if the row goes red, this disposition is wrong; if it goes green, the disposition is correct.
+
+12 | RIGHT (as filing, REASONED). A USR-mode `LDM ^` or `MSR SPSR_x` is privileged in real ARM (UNDEFINED in USR/SYS). The current default: arms that set `running = 0` in `arm_pop` and `msr_imm_spsr` are a real defect, correctly carved out as its own row rather than folded into this PR. With the sketch's change to `latched fatal, return`, those paths no longer halt the emulator, but the guest is still left in an invalid state -- which is exactly why this is filed, not fixed here.
+
+Question 2: sketch vs. each caller's control flow.
+
+- `msr_imm`: the check sits after the USR mask line, so it only runs when the guest is actually trying to write the mode field (USR-mode guests have already been masked to 0); it sits before `switch_register_banks`, so the bank switch is computed on the cleaned mask. Correct.
+- `arm_pop ^`: the SPSR is read first, the mode is checked, the bad mode is replaced with the current mode, the cleaned value is written via the existing bank-switch path. Correct.
+- DPI S-to-PC: the `new_cpsr` local is added before the switch so the bank switch sees the cleaned value, not the raw SPSR. Plausible; I cannot verify the DPI template's exact shape from the packet.
+- Save/Load `default:`: the `latched fatal, return` is the backstop. With the default: arm placed *before* the CPSR write (which is the natural shape for a `switch (mode & ARM_FLAG_MODE)`), `return` prevents the bad write; "no rollback" is then just "nothing to roll back," which is consistent.
+
+Leaves reachable: (i) USR-mode guest doing privileged ops (disposition 12, filed); (ii) anything that writes CPSR without going through `switch_register_banks` at all and never triggers a subsequent bank switch (the `put cpsr` + no-further-instruction path, which is a debugger concern, not a guest one).
+
+Breaks: the original `exit(1)` / `running = 0` on reserved-mode MSR. That is the bug being fixed; the change is intentional.
+
+Question 3: smallest edit that passes 17 rows + (a)-(d).
+
+- One helper, `arm_mode_is_modelled(uint32_t mode)`, in `cpu_arm.c` (declared in `cpu_arm.h`), keyed on the seven case labels, returning 0 for `default`.
+- `msr_imm`: one branch after the USR mask line -- `if (mask & ARM_FLAG_MODE && !arm_mode_is_modelled(new_value)) { latch; mask &= ~ARM_FLAG_MODE; }`. Per disposition 10, do not touch `ic->arg[0]` / `ic->arg[1]`.
+- `arm_pop ^`: same shape, against the SPSR value being written, replacing M[4:0] with the current mode if not modelled.
+- DPI S-to-PC: a `new_cpsr` local introduced before the switch, with the same one-branch check.
+- Save/Load `default:`: `fatal(... (once) ...)`, latch in a per-CPU field, `return`. No `exit(1)`, no rollback.
+- Detector rows (a)-(d) and the I/F pin in the kill rows' readback.
+
+Nothing else. Any attempt to remove the helper and inline the seven labels in the three call sites duplicates the list and is exactly what disposition 9 warns against. Any attempt to skip the restore-path fixes and rely on `msr_imm` alone passes the 17 rows but fails (a) and (b); any attempt to skip `msr_imm` and rely on the restore-path fixes alone fails the 17 rows. All three call sites are load-bearing.
+
+Things else I found, in case useful:
+
+- The "save 2s" diagnosis `load=yes save=no` is consistent with disposition 3 and is, in effect, a witness that Save's default: arm is dead code in normal operation (the old mode is by construction modelled). That is what makes the Save default: arm a pure backstop, not a primary guard.
+- M1's `m=14 sp` evidence is the key proof that "decline" must mean "replace the bad mode with the current mode" (or equivalently "clear the mode bits in the mask so the old mode is retained"), not "skip the write and return." A skip-and-return leaves `m=14` in CPSR; a replace-and-apply-rest leaves the current mode and applies I/F/T/flags. The sketch's `mask &= ~ARM_FLAG_MODE` is the latter.
+- Disposition 5's wording ("MSR SPSR_c poisoning") is slightly loose post-M2: the MSR-level poisoning vector is closed by the `msr_imm` check. The remaining poisoning vectors are non-MSR (zero-init, `put cpsr` then exception entry). The finding (restore-path guards are required) is correct; the wording is the only thing I'd tighten.

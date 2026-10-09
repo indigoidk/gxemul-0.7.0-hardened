@@ -1,0 +1,52 @@
+VERDICT: corroborate member 3 (decline + latched announce) as pre-write guards at each CPSR writer plus latched Save/Load backstops — with one correction: the accept-domain is **7 mode values, not "six modelled modes"** | 1 premise wrong, 5 not settleable from this packet
+
+## Premise audit (§2/§3)
+
+**WRONG — §1 "six modelled modes" [READ].** The inlined switch handles **7 distinct mode values**: `ARM_MODE_USR32` and `ARM_MODE_SYS32` are two values sharing one case label; FIQ/IRQ/SVC/ABT/UND are five more. Six is the count of *case labels / bank layouts*, not modes. This is consequential, not pedantic: `arm_mode_is_modelled()` must enumerate 7 accept values — {0x10, 0x11, 0x12, 0x13, 0x17, 0x1B, 0x1F} (values assumed from standard ARM; the constants are not inlined — settle via the header). The reserved domain is then **25 of 32** encodings: 0x00–0x0F plus 0x14, 0x15, 0x16, 0x18, 0x19, 0x1A, 0x1C, 0x1D, 0x1E. A 6-entry accept list that drops `SYS32` declines legal System-mode writes (the detector's `acc …/sys` row would catch it, but a row that didn't exist yet wouldn't).
+
+**Not settleable from the packet — named, with the settling fact:**
+1. §2 "No fix exists" (CHANGELOG grep = 0, last change #524). Settle by: CHANGELOG.md content at HEAD and `git log` on `cpu_arm.c/cpu_arm_instr.c/cpu_arm_instr_dpi.c`.
+2. §2 "fatal() prints regardless of `-q`" and the latch idiom. Settle by: definition of `fatal()`. [READ-consistent: the inlined `exit(1)` immediately after every `fatal()` call supports "fatal() returns."]
+3. §3 caller 4 "`arm_exception_to_mode[]` always a modelled mode." Asserted, not inlined. Settle by: the table's initializer.
+4. `msr_imm_spsr` existence/behavior (mentioned in Q1 but not inlined in §3). Settle by: `grep -n "spsr" src/cpus/cpu_arm_instr.c`.
+5. The complete set of CPSR/SPSR writers. Only four writers are inlined. Settle by: `grep -n "cd\.arm\.cpsr" src/cpus/cpu_arm*.c` (and likewise `spsr_`). Also `ARM_FLAG_MODE`'s value — the entire 25-of-32 enumeration presumes it is `0x1f`.
+
+**Confirmed consistent [READ unless noted]:** "Save runs on OLD mode, CPSR written between Save and Load, Load sees NEW mode" — true for all four inlined callers; "Member 1 DELETE is wrong" [REASONED: CPSR stays reserved, `r[]` keeps the previous bank silently]; trigger word `0xE321F014` decodes as `msr CPSR_c, #0x14` (cond AL, MSR-imm 00110, R=0→CPSR, field mask 0001→c, imm8 0x14); 0x14 = M[4:0] `10100`, reserved [REASONED-arch]; 0x15 (`kill 15`) likewise. The USR path (line 826–828, `mask &= 0xff000000`) means the trigger must be privileged — consistent with the brief. "MSR: Exceptions: None" is **not verifiable from the packet** but matches ARM DDI 0100I (MSR pages: Exceptions None; reserved M value: UNPREDICTABLE) [REASONED].
+
+## Q1 — paths
+
+From the packet, CPSR writers are exactly the four shown; #4 is table-driven and safe **if** premise 3 above holds. A reserved value reaches an SPSR via `MSR SPSR_*, …` [REASONED-arch: SPSR writes are unvalidated stores, no bank switch involved; e.g. `0xE361F014` = same word with R=1], and callers 2 and 3 later copy that SPSR into CPSR. **So guarding only caller 1 leaves the kill reachable via callers 2/3.** I cannot enumerate the fork's full writer set — named above as unsettleable.
+
+## Q2 — per-caller disposition
+
+- **Caller 1 (MSR CPSR):** decline **only the M bits** (`mask &= ~ARM_FLAG_MODE` + latched announce). Flags nibble, I/F, and T still apply. Architecturally the whole instruction is UNPREDICTABLE so this is permitted, and it is the least-surprising least-delta choice; T is in the c byte, but applying T is exactly what a legal MSR does today, so this is no regression [REASONED].
+- **Caller 2 (`LDM …^ …pc`):** substitute current mode bits into `new_cpsr` before line 1802, keep the rest of the SPSR (flags/I/F/T). Not FAULT — no architecture text lists an exception for restoring an SPSR with reserved M; it is UNPREDICTABLE [REASONED, DDI 0100I LDM(3)]. The guest poisoned its own SPSR; inventing a #UD is not the better model.
+- **Caller 3 (`MOVS pc,lr` etc.):** same substitution after the SPSR pick, before assignment. `flags = cpsr >> 28` (231) is fine — the flags copy is mode-independent.
+- **Caller 4 (`arm_exception`):** unreachable for reserved input by construction; no new guard needed, backstop suffices.
+
+## Q3 — where the decline lives
+
+**At the writers, before the `switch_register_banks` computation / CPSR assignment:**
+- Caller 1: before line 830, on `(mask & ARM_FLAG_MODE) && !modelled(new_value & ARM_FLAG_MODE)` → clear mode bits from `mask`, announce. Then `switch_register_banks` computes false, Save is skipped, other fields apply at 841–842, Load is skipped. Nothing after Load is disturbed.
+- Caller 2: before line 1802, substitute mode bits in `new_cpsr`; the compare at 1802 then yields no switch.
+- Caller 3: substitute after the SPSR select. Save at 218 already ran — on the *current* (valid) CPSR, so it is safe — and Load then round-trips the same bank, an identity.
+
+**Rollback-inside-Load is not viable** [READ]: Load receives a CPSR that caller code has already overwritten and holds no copy of the old mode; rolling back requires each caller to stash CPSR anyway — at which point you have re-implemented writer-side guards with more state. **Both** leaves: writer guards everywhere + backstops that announce-and-no-op; the backstop is then reachable only from a future unguarded writer or store corruption of the cpsr field.
+
+## Q4 — backstop
+
+The two `default:` arms are not dead after guards — they guard future/missed writers. Keep them, with `exit(1)` → latched announce + **no bank copy** [READ-consistent with the carrier idiom, whose house idiom itself I cannot verify from the packet]. Latch: function-static `int` per default arm, "(once)" in the text — per the idiom as stated; per-CPU field only buys per-CPU silencing. Recommend the announce be paired with the **stop-this-CPU** pattern rather than silent continuation (see found-else-where below).
+
+## Q5 — smallest breaking edit that still passes
+
+Implement the guard **in `msr_imm` only**. The SPSR route (`msr SPSR_c, #0x14` → `MOVS pc, lr` or `LDM …^ …pc`) still reaches caller 3's or caller 2's Load `default:` → `exit(1)`, while every listed detector row stays green: `kill 14`, `kill 15`, `usr mask`, `acc …`, `save 2s` are all MSR-CPSR-side rows; **no named row exercises an SPSR-restore**. Contrast: the tempting 6-entry accept list (dropping SYS32, per the wrong premise) would be caught by `acc …/sys` — so of these two errors only the SPSR gap hides from this battery. A detector row doing poison-SPSR-then-`MOVS pc,lr` is the coverage to demand.
+
+## Eighth member
+
+**Member 3 + sticky observable:** decline + latched announce + a per-CPU "unmodelled-mode-requested" bit that the debugger/detector can read without console scraping. Keeps the guest alive, keeps the event machine-visible. Sanitizing SPSR writes too (decline at `msr_imm_spsr` as well as at restore) is a policy layering of member 3, not a new member — either is UNPREDICTABLE-compliant; decline-at-consume is the smaller delta.
+
+## Something else found (READ)
+
+Caller 2's **own** `default:` (lines 1795–1799) already demonstrates the non-fatal house pattern in-file: `fatal(); cpu->running = 0; next_ic = &nothing_call; return;` — this is the precedent the Save/Load backstops should mirror, and I would have it stop the CPU rather than silently continue on a wrong bank. Related asymmetry [READ]: caller 3's SPSR-pick switch has **no `default:` at all** while caller 2's identically-purposed switch has one — under a (post-fix impossible, pre-fix reachable) reserved *current* CPSR, caller 2 stops politely but caller 3 falls through to Load's `exit(1)`. Uniform treatment there is a free cleanup in the same patch.
+
+Measurements I would want (named, not run): header values of `ARM_FLAG_MODE`/`ARM_MODE_*32`; the `arm_exception_to_mode[]` initializer; the `fatal()` definition; the two greps named in the audit above. Per the operational rule, no gates were requested or run.

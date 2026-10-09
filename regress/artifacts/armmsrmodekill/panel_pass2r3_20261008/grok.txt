@@ -1,0 +1,19 @@
+I'll review the repair-3 composite against the code and the probe, starting with the keep-mode mask and the backstop comments, and I won't treat the prior pass as settled.The bit-4 keep-mask claim and the MSR operand checks are the premises I do not yet trust. I am reading the probe oracle and the three write sites next.The SPSR plant may itself be declined by the MSR guard. I am reading that path before treating the bit-4 claim as closed.VERDICT: DO-NOT-SHIP | 1 floor breach
+
+The keep line really is `(new_cpsr & ~X) | cur_mode`, and every label that reaches it has mode bit 4 set, so dropping bit 4 from `X` is behaviour-preserving. That part of disposition 2 holds. The contract sentence disposition 9 adopts does not: at a decline the CPSR being replaced already has N and Z set.
+
+**1.** One edit keeps all 40 rows green. On both restore keep lines, take the flag nibble from the CPSR being replaced and the mode bits from the current mode:
+
+`new_cpsr = (new_cpsr & ~0xf000001f) | cur_mode | (cpsr & 0xf0000000)`
+
+with pop using `(cpsr & ARM_FLAG_MODE)` as `cur_mode`. I and F still come from the SPSR. N and Z match only because both sources are already `0xC` on every driven decline.
+
+Denominator swept: keep-mask `X` over the 31 nonempty subsets of bits 0-4, form `(new & ~X) | cur_mode`, five labels, both paths; flag nibble and I/F as {from SPSR, from old CPSR, forced 0} at accept R1 and decline R2/R3, both paths; MSR clear-mask subsets of `0x1f`, plus supersets `0x3f` and `0xff`; the 40 label × latch × outcome cells; the three enclosing predicates. Bits 0-3 move a full-word readback at a label whose own bit is clear (`~0x1b`, bit 2, at FIQ, IRQ, UND and SVC, not only UND). Bit 4 does not move. I and F on a decline do move (measured `F_dpi_iclr` / `F_pop_iclr`: `c0000051` against `c00000d1`). N and Z move on accept R1 only.
+
+**2.** Label × latch × outcome is complete: each `src` session is accept/clear, decline/clear, decline/set, accept/set, and the latch-set mutants go red on R3. Mask width is not. `~0x1b` is held by those four labels' words, not disclosed. The unheld cell is the decline-line flag nibble, both paths: N and Z (and C and V, same nibble, unclaimed) agree across the two sources, so "kept from the old CPSR" stays green.
+
+**3.** The two backstop comments match the callers. Save's default is reachable only with an unmodelled mode already in CPSR; the guest writers decline it, and a plant plus MSR, DPI S-to-PC, or exception/IRQ is what calls Save. Load's default is the DPI S-to-PC in that planted mode (`spsr_copied` stays 0); MSR, exception and IRQ call Load on the modelled mode they install; `LDM {pc}^` stops in `arm_pop`'s selector first. NOT CLAIMED's value lists match the probe. `dbg both` is only a carrier on HEAD, and `G_dpi_nocopied` is red there because of the extra DPI `once`. The N/Z/I/F bullet is false for N and Z.
+
+**4.** Disposition 9. The inline session note is right and only claims I and F. The contract bullet adds N and Z. Re-entry is `msr cpsr_c`, whose mask is the control byte, so the flag nibble written by the R1 accept (`0xC00000DF`) is still in CPSR at R2 (`0xC0000011` beside SPSR `0xC00000CF`). Forced-clear of N|Z is red. Sourcing them from the old CPSR is not. Dispositions 1 through 8 match the code and the kill-table channels, including bit 4 and the `0xcf` pop decline.
+
+Also unheld, not counted in the 1: `mask &= ~0x3f` at `msr_imm` (clears T as well as M[4:0]). Every driven immediate and CPSR has T clear, so all 40 stay green. NOT CLAIMED names the T bit only on restore.

@@ -1,0 +1,109 @@
+I'll attack the unexecuted probe from the source, the witness spec, and the surrounding ARM/debugger paths rather than ratify the three defects you already closed. First I'll read HEAD, the checkpoint, the spec, and the live probe.Git from this shell was blocked; I'll read the probe, spec, and ARM bank paths directly and keep the emulator idle while the other measurement is running.The spec and probe already disagree on plants, dumps, and session sharing. Next I’ll pin those against the ARM bank/MSR path and how existing probes parse `dump`/`put`.**VERDICT: DO NOT RUN IT AS A WITNESS.** The process will start, and then `ARMMSRMODE_CONTROL=DEAD` / `0/0`. `live` and `armed` cannot match their wants, so the three named HEAD reds never become a result. The three defects you already closed are closed. These are new.
+
+I did not execute it (you asked for an attack before a run; another emulator job is also in flight). Every claim below is from `GXEMUL-SEC/src/` plus the shipped ARM probes that already measured the same dump traps.
+
+---
+
+## Q1 — It runs. It does not score.
+
+Step counts match the plants. `classify()` is not reading the slots those plants write.
+
+**`dumped()` is the vehicle-kill.** Two independent misses, both already measured in this tree:
+
+1. **Line labels are 16-byte aligned.** `debugger_cmd_dump` does `addr = addr_start & ~0xf` and prints that aligned address. `dump 0x9004` / `0x9008` / `0x900c` / `0x8008` emit `0x00009000` / `0x00008000`. The regex hunts `0x0*9004` etc. and returns `None`.
+   `arm_bdt_probe.py` recorded this on 2026-09-11: an unaligned dump still labels the aligned base and blank-pads the leading groups. Its `read_mem32()` always dumps `addr & ~0xF`. This probe does not.
+
+2. **Little-endian byte string, not a word.** The dump prints memory order (`%02x` per byte). `0x0000002a` at `0x9000` is `2a000000`. `dumped()` then does `int(..., 16)` with no swap.
+   `arm_flags_probe.py` has `sw()` for this exact reason and warns that comparing the dump string to `deadbeef` reads the sentinel’s parity as a measurement.
+
+`DEST=0x9000` is aligned, so `live` *does* match a line — and then wants `0x2a` against `0x2a000000`. `armed` dumps `DEST+4` and `DEST+8` (both unaligned) → `?/?`. Either one alone is `CONTROL=DEAD`. Together they make the named-red path unreachable.
+
+**`classify()` on `save 2s` is a third, independent miss**, even after `dumped()` is copied from `arm_bdt_probe.py`:
+
+| slot | plant writes | `classify()` reads |
+|---|---|---|
+| post-1st-MSR CPSR | `str_r3_4` → `DEST+4` | `DEST+4` (ok) |
+| SP | `str_sp_10` → `DEST+16` | `DEST+8` (still POISON; never dumped) |
+| return CPSR | `str_r3_c` → `DEST+12` | `DEST+12` as `rt` (existence, not mode==0x13) |
+
+POST want is `m=13 sp once rt`. `sp` requires `DEST+8 == BOOT_SP`. Nothing writes `DEST+8`. A correct member-3 fix still reds `save 2s`. HEAD reds it as `dead`. **Always red.** That is not a witness of Save.
+
+The spec’s own SAVE plant put return CPSR at `dest+8` and SP at `dest+c`. The probe planted neither of those, then ran the kill-row classifier anyway.
+
+**What would read `nofire` / `ABSENT` for apparatus reasons**
+
+- Every `classify()` row that dumps `DEST+4` (`no cbit`, POST kill/save, `acc usr`, `same svc`, `usr mask`): `cpsr is None` → `nofire`.
+- Accept-canary `arrive`/`back`: `DEST+4` and `DEST+12` unaligned → `nofire/nofire/nosp` (and `DEST+16` is aligned, so endian would still make `nosp`).
+- `print pc` is **not** in this set. `debugger_parse_expression` returns `PARSE_NUMBER` on success, so `print pc` is a bare `0x...`. After `step 2`, want `CODE+8` is right (`arm_bfx_width_probe.py` wants `CODE+4` after `step 1`). The spec table’s `CODE+4` is the wrong half; do not “fix” the probe down to it.
+- `enc ok` does not touch the guest. It should pass.
+- Mid-stream `dump CODE+8` is issued and **never scored**. Unarmed vs defect is indistinguishable on HEAD (both `dead`).
+
+Step arithmetic itself is fine: kill `2+1+3=6` on 6 plants; save `2+1+2+1+3=9` on 9; canary `step 7` on 7; one-way rows `step 4` on 4. They do not execute `b_self`. `-M 64` gives `BOOT_SP = 64*1048576-4096 = 0x03FFF000`. `cpsr` reset is `ARM_FLAG_I|F|SVC32 = 0xD3`. Those constants are right.
+
+`CONTROL=DEAD` is decided **after** every session. Spec said stop before `armed` if `live` fails. The probe still burns the rest of the table, and every surviving session waits the full 12 s poll. That is cost, not colour.
+
+---
+
+## Q2 — No scored row is vacuous by construction. `save 2s` is worse: unsatisfiable.
+
+Vacuity = named channel cannot vary under the named mutant. Unsatisfiable = both colours miss `want`.
+
+| row | named mutant | named channel | verdict |
+|---|---|---|---|
+| `enc ok` | wrong literal in `WORDS` | field nibble / imm8 | varies. Note still quotes the old `(w & 0x0FB0F000)` mask you removed from the check — L4 in the comment, not a dead row. `f_14` still does not check rot=0; c-form does. |
+| `live` | plant/step/dump dead | DEST word `0x2a` | would vary **if** `dumped()` swapped. As written it is apparatus-red, not vacuous. |
+| `pc adv` | word not translated as 4-byte ARM | `print pc` = `CODE+8` | varies. |
+| `armed` | not SVC32 `testarm` | DEST+4=`0xd3` and DEST+8=`BOOT_SP` | would vary; unaligned dump makes it always `?/?`. |
+| `no cbit` | f-form writes the mode field | EOF vs `m=13 sp` | varies (`dead` vs live). |
+| `kill 14` | Load `default:` + `exit(1)` | EOF-alone vs `m=13 sp once` | varies. `(once)` in the want is what makes encoding-nop / silent member-2 a FAIL. |
+| `kill 15` | `== 0x14` special-case decline | same, on `#0x15` | varies. Not a duplicate of `kill 14`. |
+| **`save 2s`** | Load-only skip-memcpy (Save residual) | 2nd MSR EOF, or `rt` | **channel can vary (`dead` vs `m=13 once rt`) and never equals `m=13 sp once rt`.** Always red. Not vacuous — broken. `rt` is also only “slot not poison”, not “mode==0x13”. |
+| `acc usr` | delete `case ARM_MODE_USR32` | `m=10` vs `dead` | varies. No canary by construction (USR is one-way). |
+| `acc fiq/irq/abt/und/sys` | delete that `case`, or Save no-op | arrive/back/return-SP | would vary. Arrival SP==0 was dropped; return `BOOT_SP` is what catches Save no-op (`zeroed_alloc` of `struct cpu`). |
+| `same svc` | same-mode path calls Load | `sp` present vs SP=0 | varies. `msr_imm` skips banks when modes equal; I\|F still clear. Want `m=13 sp` is right. |
+| `usr mask` | USR c-byte not stripped | `m=10` vs `dead` (next `#0x14` hits Load) | varies. `msr_imm` does `mask &= 0xff000000` in USR32. |
+| `row count` | drop/add a `row()` | `len+1==17` | varies. Identity. |
+
+The unused `dump CODE+8` is a vacuous *check*, not a vacuous row. Spec called plant-dump of the MSR slot load-bearing; the probe emits it and ignores it. POST `once` in the want is doing that job instead.
+
+---
+
+## Q3 — Polling form is correct for the measured bug. It is not the false-green still in this file.
+
+Copied from `ip30_abort_probe.py`: 12 s of `waitpid(WNOHANG)` after `rd()` has already returned on EOF. That is the right repair for “one sample landed on a dying child.” `exit(1)` also does not write a 6 MB core, so the abort delay is less of a factor here.
+
+Residual in the SIGKILL tail: if the 12 s loop never observes the pid, they `kill` + `waitpid(pid, 0)` and **leave `alive=True`**. That is a false-alive, not a false-green of a kill row. A live defect that already `exit(1)`’d will have no post-MSR dump → `nofire` or `dead`, not `m=13 sp once`. `(once)` is not in the `fatal()` text.
+
+**Other false-green paths, actually closed:** EOF-alone (not EOF∧text). Stay on `step` (`cpu_dyntrans.c` IRQ is inside `if (!single_step)`; `-V` sets it). `#0` banned. USR strip is real in `msr_imm`.
+
+**Other false-green paths, still open:**
+
+- **`dumped()` as written never lets a kill row go green on HEAD**, so it cannot false-green them either. It false-deads the vehicle instead.
+- After a dump fix, **unscored plant-dump** still lets an unarmed kill look like the defect on HEAD (`dead` either way). POST `once` catches encoding-nop; it does not catch “died somewhere else.”
+- **`save 2s` cannot go green POST**, so it cannot false-green the Save residual. It can false-claim the residual is still live after a correct fix.
+
+I do not see a path to `got == want` on a kill row while `exit(1)` is still in Load `default:`.
+
+---
+
+## Q4 — The named-red expectation is right of the *defect* and unreachable on *this* vehicle.
+
+If `dumped()` and `save 2s` were the spec, HEAD should be exactly `kill 14`, `kill 15`, `save 2s`. `save 2s` PRE is the same Load death as `kill 14` (`msr_imm` Saves *current* SVC, then writes CPSR, then Loads the reserved mode). That is one defect counted twice, and the spec already said to name it.
+
+**As written, a correct HEAD run will not show that tally.** `live` fails endian, `armed` fails alignment → `CONTROL=DEAD`, `RESULT=0/0`, and `ARMMSRMODE_EXPECT_HEAD_REDS` is never printed (it sits on the scoring path). `17/17` is also unreachable. The broken-vehicle signal you will actually get is `CONTROL=DEAD`, which is the right *class* of answer and the wrong *instance*.
+
+If only `dumped()` were fixed and `save 2s` left as-is: HEAD still reds the three named rows (`dead`), and POST still reds `save 2s`. You would then read a live Save residual after a correct dual-arm fix.
+
+No extra HEAD red from accept / `no cbit` / `usr mask` / `same svc` *if* dump parsing worked. Those modes are implemented. I would not expect a fourth named red from the CPU model.
+
+---
+
+## Q5 — Do not delete a scored row. Delete the extra process.
+
+The spec’s 13 sessions already shared `live` / `pc adv` / `armed` on S1. The probe spends a 14th session on `armed` alone. That is the session that earns least.
+
+Do not drop `kill 15` or `save 2s`. Do not drop a canary accept to pay for dump bugs. `acc usr` is the weakest *row* against the Save residual (one-way, no canary, never reaches Save `default:`), and it is still the USR accept the de-escalation clause owes. Cut it only after the vehicle scores.
+
+---
+
+**Minimum to make a run mean anything:** copy `arm_bdt_probe.read_mem32()` (aligned base + LE assemble); replant `save 2s` so SP and return CPSR sit where `classify()` looks, or teach `classify()` the spec’s slots; score the CODE+8 plant-dump or drop the command. Until then a HEAD run is a `CONTROL=DEAD` confirmation of `dumped()`, not a reproduction of `cpu_arm.c:606-608`.

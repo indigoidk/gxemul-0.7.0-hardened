@@ -1,0 +1,44 @@
+**VERDICT: STANDS-WITH-CORRECTIONS.** The defect premise is coherent and the stimulus encoding hand-decodes correctly; the witness spec has four defects, one of which is a bare self-contradiction in the packet's own numbers (12 sessions vs. 15 data rows under a one-fresh-process-per-row rule). None is fatal to the design; all four are correctable by supplying missing facts or one oracle rule.
+
+## 1. Load-bearing claims (outer rubric, READ/REASONED)
+
+- **C1 (READ)** Boot is SVC32 (0x13), privileged; mode bits therefore writable. One-step check: the spec's own arming prefix (MRS==0x13) does this — keep it scored-by-consequence.
+- **C2 (READ + REASONED)** `MSR CPSR_c,#0x14` = `0xE321F014`. I hand-decoded it: AL / 001 1001 0 / mask 0001 (`_c`) / 1111 (SBO) / rot 0 / imm 0x14 — this *is* the MSR-immediate space; `MSR CPSR_c,#0xd3` famously assembles to e321f0d3, same shape. **The packet's encoding is correct.** Also 0x14 = 20 decimal (so `%i` prints "mode 20" ✓ READ-consistent) and 0x14 is genuinely not among the seven ✓.
+- **C3 (READ)** fatal() prints and returns; exit(1) is the kill. This is asserted, not shown; if this fork's fatal() exits internally, the oracle rationale's mutant taxonomy ("drop the exit(1)") is ill-posed. One fact: fatal()'s body.
+- **C4 (READ — contradiction)** "One fresh emulator process per data row" **and** "12 guest sessions" for 15 data rows. 12 < 15. Either ≥3 sessions host ≥2 rows (reintroducing exactly the sharing hazards the rule cites), or the count is wrong. The row→session schedule settles it; it is missing.
+- **C5 (READ — unestablished)** "The fix changes behaviour at two separate `default:` arms." The defect section inlines exactly **one** arm. The second exists only as Q5's preamble. One fact: the second arm's code and callers.
+- **C6 (unstated assumption)** All six target banks' r13 read 0 at boot. The accept rows' oracle dies if any bank SP is boot-initialised nonzero. One fact: boot/GXemul register init.
+- **C7 (REASONED)** exit() flushes stdio; stderr is unbuffered; a pty is line-buffered at the trailing `\n`. The defect's own death therefore preserves the text — the buffering fear is real only for signal-deaths, i.e. mutant territory.
+- **C8 (REASONED)** The USR32 write-mask one-way door is true on ARM hardware; whether *this emulator* implements it is unverified. If it doesn't, the fresh-process rationale is wrong (though only over-conservative, not unsafe).
+
+## 2. Inner Q1 — the oracle
+
+**Named failure the pair cannot separate: a build that still `exit(1)`s but with a reworded message.** The packet itself spotlights the `%i`/`0x14` confusion, making "fix the format string, forget the exit" the most plausible near-miss fix. That mutant produces EOF but no matching text; the strict AND never fires; the row goes GREEN; the witness certifies a build where guest MSR still kills the emulator. The AND as specified guards the *safe* direction (false-RED from an unrelated crash) at the cost of a **false-GREEN**, which is the dangerous direction for a certification witness. Correction: on an armed kill row, **EOF alone ⇒ RED; the text is the diagnosis, not half the trigger.** Under that rule the brief's own feared cases close: crash-elsewhere ⇒ RED (conservative, acceptable); print-without-exit ⇒ no death ⇒ GREEN (correct — the defect *is* the process death). The "prints then dies of something else" hypothetical is not actually a misfire: any death in the armed MSR's window satisfies the row's claim. Buffering: answered by C7.
+
+## 3. Inner Q2 — the unscored prefix
+
+Both sides: against — an unscored gate can be skipped with nothing in the tally showing it; for — the spec makes prefix failure propagate ("row reports unarmed and FAILS"), so it is scored by consequence and fails closed, and a broken MRS mutant sends *every* row to unarmed, which is loud. I believe the design is right **on one load-bearing condition**: `unarmed` must land as a tally FAILURE, not a "not-run" status. If a scorer treats unarmed as skipped, a broken harness regex converts the whole witness to zero armed coverage while reporting a perfect score. Not settleable from the packet; one fact: the scorer's `unarmed` branch.
+
+## 4. Inner Q3 — fresh process per row
+
+What it hides: state-accumulation and cross-switch defects — no row as specified *must* perform two mode writes in one process. Yet the packet's own Q5 premise (two `default:` arms) **requires** the second RED row to do exactly that (enter reserved mode, then switch away or take an exception), because the store-side default can only fire when the *current* mode is reserved. So the design's stated rationale forbids the chaining its own count requires — this is C4 and C5 colliding. Scope answer: for the named single-instruction defect, one-switch coverage is the minimum owed; second-switch coverage is owed exactly to the extent the fix touches the store arm, which the packet claims it does. One positive note: the rule's *stated* reasons omit its best one — bank-state cleanliness, since the accept rows' SP==0 oracle assumes the target bank was never written.
+
+## 5. Inner Q4 — accept rows
+
+Two attacks. **(a) SVC32 is incoherent as generically stated.** A same-bank switch cannot change SP; an exception-entry into SVC32 loads the SVC bank whose r13 *is* the nonzero boot value. "SP changed from boot value to 0" is unsatisfiable for SVC32 unless the row is an unstated leave-and-return construction. One fact settles it: the SVC32 row's stimulus. **(b) Named wrong implementation the rows pass:** a "fix" that repairs both load arms but no-ops the save/store arm — every accept row passes (mode ✓, SP==0 ✓) because nothing checks *preservation* (canary-write r13/r14 pre-switch, verify restoration post-return, for every mode except USR32, which is one-way). Also C6: if any bank SP is nonzero at boot, six rows false-RED (caught in calibration, but the expectation table is wrong).
+
+## 6. Inner Q5 — the count
+
+"Two" is coherent only given C5, which is asserted, not established. Even granting it: pre-fix, the store-side default is not independently reachable — the load default kills on entry to a reserved mode — so any store-side row pre-fix dies at its *first* MSR with the identical EOF+text signature. That is fine for RED, but it means the second row differs from the first **only if its stimulus contains a second mode write**. If both RED rows are single-MSR-0x14, they are duplicates, a load-only fix turns both green, and the witness certifies a build that still dies on the write *out* of reserved mode. One fact settles it: the two RED rows' stimuli. Secondary: one stimulus value (0x14) is adequate coverage *if* the fix is at the `default:` arm (all nine reserved values funnel through it by construction); the fix's shape is unstated, so a 0x14-only special case would pass unremarked.
+
+## 7. Inner Q6 — free shot, and what I cannot settle
+
+**Free finding (REASONED, architecture):** the stimulus writes the whole control byte 0x14 — bits 6,7 are 0, so it **unmasks IRQ and FIQ**. Pre-fix this is irrelevant (synchronous death at the CPSR write). Post-fix or post-partial-fix, the guest sits in a reserved mode with interrupts enabled; any pending source takes an exception whose bank-save runs with the reserved current mode — the store arm walks in by itself, asynchronously, making row timing nondeterministic. Whether this matters depends on whether testarm has a pending source at that point.
+
+**Reachability (outer Q4) — the defect itself survives:** the instruction is legal and assemblable from the mode testarm boots in; no undefined encoding is required. Only the *effect* of writing a reserved mode is architecturally UNPREDICTABLE — which is precisely what an emulator must tolerate rather than exit(1) on. Not a dead path.
+
+**Cannot be settled from this packet:** (1) row→session schedule; (2) the 16-row list and the two RED rows' stimuli; (3) the second `default:` arm's code/callers; (4) banked r13 init at boot; (5) the scorer's `unarmed` semantics; (6) fatal()'s actual body in this fork; (7) whether the emulator implements the USR write-mask; (8) pending interrupt sources in testarm; (9) identity-row semantics; (10) the fix's shape (arm-level vs. enumerated).
+
+## Corrections required for STANDS
+
+1. Resolve 12-vs-15: publish the schedule (C4). 2. Oracle: EOF on an armed step ⇒ RED; text is diagnostic (Q1). 3. State the SVC32 accept construction and add a save-side canary check (Q4). 4. Inline the second `default:` arm and the second RED row's stimulus as facts, like the first (Q5).

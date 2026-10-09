@@ -1,0 +1,125 @@
+I'll settle this from the repo and the ARM paths, starting with HEAD, the open HIGH rows, and the mode-switch code rather than the brief's framing.HEAD matches the checkpoint. Next I’ll read the mode-switch arms, the two HIGH rows, and what gates actually execute.The switch and both `exit(1)` arms are confirmed. Next I’ll enumerate handled vs reserved modes and trace exception entry, not just MSR.Exception 5 maps to mode 0 in the table. I’ll check whether that path is ever raised, then every CPSR write that skips save/load.**VERDICT: `ip30abortkill` is the next fix round, despite the in-tree reachability gap. A correctly functioning ARM guest does not write a reserved `M[4:0]`. `armmsrmodekill` is a real process death on a planted privileged `MSR`, not a boot-path death.**
+
+HEAD `9c91999`. Tree `GXEMUL-SEC/`. Reading, not a probe run. `regress/arm_msrmode_probe.py` is built and unrun; it would not have settled this question.
+
+---
+
+## Q1 — Real guest `MSR` of a reserved mode: **no**
+
+`arm_save_register_bank` / `arm_load_register_bank` case on `cpsr & 0x1f`. Seven arms, both `default:`s `fatal(); exit(1)`.
+
+**Handled (7):**
+
+| `M[4:0]` | Name | Switch |
+|---|---|---|
+| `0x10` | USR32 | yes (shared bank with SYS) |
+| `0x11` | FIQ32 | yes |
+| `0x12` | IRQ32 | yes |
+| `0x13` | SVC32 | yes (boot: `arm_cpu_new` ORs this on both prom arms) |
+| `0x17` | ABT32 | yes |
+| `0x1b` | UND32 | yes |
+| `0x1f` | SYS32 | yes (same bank as USR) |
+
+**Unhandled (25 of 32):**
+
+| Values | What they are | Would a real in-tree guest produce them? |
+|---|---|---|
+| `0x00–0x03` | 26-bit USR/FIQ/IRQ/SVC (`cpu_arm.h` names them; **zero** `case ARM_MODE_USR26` in `src/`) | **No.** CATS/testarm/barearm are SA-110/SA1110. The in-tree NetBSD `armreg.h` does not even define 26-bit modes. |
+| `0x04–0x0F` | unused | **No.** |
+| `0x14, 0x15, 0x18, 0x19, 0x1c, 0x1d, 0x1e` | reserved | **No.** DDI 0100I A2.5.7: *“If any other value is programmed into the mode bits M[4:0], the result is UNPREDICTABLE.”* MSR exceptions: **None.** |
+| `0x16` | Monitor (`PSR_MON32_MODE` in the tree’s NetBSD `armreg.h`) | **Not on any in-tree CPU.** TrustZone firmware/OS, not SA-110/SA1110/i80321/ARM1136 guest code. |
+| `0x1a` | Hyp (`PSR_HYP32_MODE` in the same header) | **Not on any in-tree CPU.** ARMv7-A virt. |
+
+A real kernel’s CPSR writes are the named constants plus `I`/`F`: `msr cpsr_c, #PSR_SVC32_MODE|I32_bit|F32_bit` (`0xD3`), IRQ (`0x12`), FIQ setup, USR on process start, SYS for some kernel copy paths. Locore is `bic r0, r0, #0x1f; orr r0, r0, #<legal>; msr cpsr_c, r0`.
+
+Userspace cannot do it: `X(msr_imm)` strips the c-byte in USR32 (`mask &= 0xff000000`).
+
+The second instruction path — `MSR SPSR` (unvalidated) then `MOVS PC, LR` / `LDM {..,pc}^` — copies SPSR into CPSR with no mode check, then Load dies the same way. A correct kernel’s SPSR is the CPSR saved at exception entry (a legal mode), or a sigreturn frame. Linux `valid_user_regs` rejects anything whose `MODE_MASK` is not USR/USR26 and forces USR32. That is not a reserved-mode write.
+
+**Denominator of paths checked (reading, not a boot):**
+
+1. Both bank-switch functions’ `switch` (7 cases + `default:` `exit(1)`).
+2. Every `arm_load_register_bank` / `arm_save_register_bank` caller: `msr_imm`, DPI S-bit-to-PC, `bdt_load` exception-return, `arm_exception`.
+3. `ARM_EXCEPTION_TO_MODE` and every `arm_exception(` site.
+4. MSR decode mask (`c` → `0x000000ff`, so `M[4:0]` is writable from privileged modes; no `PrivMask`, no `arm_mode_ok`).
+5. DDI 0100I A2.5.7 Table A2-2 and A4.1.39 (Exceptions: None; reserved `M[4:0]` is UNPREDICTABLE).
+6. In-tree NetBSD `armreg.h` mode list (includes MON/HYP as names, not as cats/SA-110 execution).
+7. In-tree ARM machines: `testarm`/`barearm` SA1110, `cats`/`netwinder` SA110, `iq80321` XScale, `rpi` ARM1136 — none have Hyp; none run a Monitor-mode guest OS.
+8. Gate 14 UDF rows that already assert `UND32` after a real `arm_exception(UND)`.
+
+I am **not** claiming a kernel bug or a corrupted `pt_regs` cannot compute garbage. That is guest-broken, the same class as “store a reserved encoding.” UNPREDICTABLE still must not `exit(1)`. It is not a booting NetBSD/OpenBSD/Linux on `cats`.
+
+---
+
+## Q2 — Exception path into an unhandled mode: **no, and it would not be silent**
+
+`ARM_EXCEPTION_TO_MODE`:
+
+| # | Exception | Target mode | Ever raised? |
+|---|---|---|---|
+| 0 | RESET | SVC32 | **No caller.** The arm itself `exit(1)`s. Init sets SVC32 directly. |
+| 1 | UND | UND32 | Yes (`X(und)`, LDC/STC routed to `und`) |
+| 2 | SWI | SVC32 | Yes (`X(swi)`) |
+| 3 | PREF_ABT | ABT32 | Yes (`X(bkpt)`, `memory_arm.c`) |
+| 4 | DATA_ABT | ABT32 | Yes (`memory_arm.c`) |
+| 5 | old 26-bit address exception | **`0` (USR26)** | **No caller.** If it were: `arm_exception`’s mode switch hits `default: fatal("unimplemented exception nr"); exit(1)` **before** Load. Different kill, still dead code. |
+| 6 | IRQ | IRQ32 | Yes (`cpu_dyntrans.c`, only when `!single_step`) |
+| 7 | FIQ | FIQ32 | **No.** `/* FIQ: TODO */`. `fiq_asserted` has zero ARM occurrences. |
+
+Every live exception lands in a modelled 32-bit mode. Save runs on the **old** mode first; from boot that is SVC32, so Save’s `default:` is not first-hit. Save’s kill becomes live only after Load has installed a reserved mode and returned — which today never happens, because Load `exit(1)`s.
+
+So: **no exception path is worse than the MSR.** An exception cannot plant a reserved mode without a prior reserved CPSR.
+
+---
+
+## Q3 — What in-tree gates actually exercise: **legal switches, not the killing values**
+
+Gate 14’s 358 checks **do** take a mode switch. `arm_flags_probe.py` `run_und` plants a handler at the UND vector, steps a UDF, and scores:
+
+- `udf UND32 mode` want `ARM_MODE_UND32` (`0x1b`)
+- handler-ran marker, `lr=pc+4`
+
+That is `arm_exception(UND)` → Save(SVC32) → Load(UND32). Those DISC rows are in the 358 and they are green. LDC/STC is the same `cond_instr(und)` path; the file comments that this is how Linux/ARM emulates FPA.
+
+What gate 14 does **not** do: feed `0xE321F014` or any other unhandled `M[4:0]`. IRQ is also not taken there (`-V` ⇒ `single_step` ⇒ the dyntrans IRQ guard).
+
+A NetBSD/cats boot **does** take IRQs (Footbridge timer, free-running). Battery record: *“ARM | cats (NetBSD GENERIC only) | boot only — no shell path”* — classified as a guest-limit, not a host death. A reserved-mode `exit(1)` would have been a crashed emulator, not “boot only.”
+
+So the bound is already measured: **legal mode switches happen and survive; the defect is the 25 unhandled values, which those boots and gates do not write.**
+
+---
+
+## Q4 — Rank: **`ip30abortkill` first**
+
+Equal: both are host process death (`abort()` / `exit(1)`), both have a rung-3 vehicle.
+
+The severity input that differs is **what a correct matching guest does.**
+
+| | `ip30abortkill` | `armmsrmodekill` |
+|---|---|---|
+| Matching guest | Linux/IP30 HEART driver. `set_isr` at `+0x10020` is the document the file cites. | NetBSD/OpenBSD/Linux on SA-110/SA1110. They write the seven modelled modes. |
+| In-tree that guest? | **No** Octane image. | **Yes** — cats has been booted here; gate 14 runs ARM decode every commit. |
+| In-tree path today | `gate_asan_sweep.sh` `for s in … ip30` is `-E sgi -e ip30 /dev/null`. Construction + null kernel. It never touches HEART. GREEN does not mean the abort is unreachable; it means the sweep does not walk `0x10020`. | Gate 14 and cats boot **do** call Save/Load, on legal modes, and live. |
+| Killing access | A **legal, documented** load/store the driver is supposed to issue. | An **UNPREDICTABLE** `M[4:0]`. Hardware does not stop; this emulator `exit(1)`s. |
+
+“ARM decode is exercised” is a fact about the CPU being used, not about the killing values being used. The UDF rows already prove the functions run. They also prove the kill is not on that path.
+
+**ip30, despite nobody here booting Octane:** a process death on the documented interrupt path of the guest the machine exists to run outranks a process death that requires the guest to program a reserved mode. The gap on ip30 is “we do not run that OS here.” The gap on armmsr is “that OS would not do this.”
+
+Keep `armmsrmodekill` as a real HIGH *letter* (guest-issuable `exit(1)`, same band as other probe-HIGH process deaths). Do not take it next. Do not promote it over ip30 because ARM gates exist.
+
+---
+
+## Q5 — Cheapest measurement
+
+**Reading already settled Q1–Q4.** Do not burn `arm_msrmode_probe.py` on this ranking. That probe answers “does `MSR CPSR_c, #0x14` kill on `testarm`?” The source already says yes; the probe is the fix-round witness.
+
+If a run is still wanted, the cheap one is **not a boot and not the 17-row probe:**
+
+Disassemble a NetBSD/cats (or NetBSD/evbarm) kernel for MSR immediates whose mode field is outside `{0x10,0x11,0x12,0x13,0x17,0x1b,0x1f}`:
+
+`msr cpsr_c, #imm` is `0xE321F000 | (imm & 0xff)` (and the `I`/`F` forms `0xE321F0C0` etc.). A zero count of reserved `M[4:0]` in the kernel text is the real-guest census. A cats boot grepping for `unimplemented mode` is the expensive confirmation of the same fact, and the battery’s “boot only” line already implies it.
+
+---
+
+**Stop condition for this question:** a correctly functioning ARM guest on any in-tree machine does not reach those `default:` arms. The next round is ip30.

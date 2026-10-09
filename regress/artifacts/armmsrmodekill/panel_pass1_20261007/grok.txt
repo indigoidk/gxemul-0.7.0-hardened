@@ -1,0 +1,90 @@
+I'll audit the premises against `GXEMUL-SEC/src/` at `ef577140` before recommending a disposition. First I need the real CPSR and SPSR writers, not the brief's summary of them.The bank switch and the four callers are where the brief says they are. Next I’ll enumerate every CPSR and SPSR write, including paths the brief did not list.VERDICT: Member 3 — refuse only M[4:0] at the CPSR write that sits between Save and Load; I/F/T, flags, and the rest of a masked MSR or SPSR still commit; no bank switch; both `default:` arms stay as latched no-exit backstops | 3 premises wrong
+
+Read `GXEMUL-SEC/src/` (line numbers match this brief, so this is the fork). Nothing built. `ddi0100i.txt` is not in the scratchpad that is actually on disk, so the architecture lines below are the public ARM text, not a page read from that file. `git` was not run, so `4dfc7165` is unchecked. `CHANGELOG.md` has zero `armmsrmodekill` hits.
+
+## 1. Premises
+
+The §2 bullets that say Save is not the first hit on `MSR CPSR_c, #0x14`, that all four callers store CPSR between Save and Load, that deleting `exit(1)` leaves the old bank in `r[]`, and that `fatal()` prints and returns, all match the source. `fatal()` (`src/core/debugmsg.c:384`) calls `va_debug` with no `-q` test. `debug()` is the one that returns early under `-q`.
+
+Three claims are wrong.
+
+**"Six modelled modes."** The switch arms are seven modes and six banks. Modelled M[4:0] values are `0x10, 0x11, 0x12, 0x13, 0x17, 0x1b, 0x1f`. USR32 and SYS32 share `default_r8_r14`. An MSR control byte can carry any of the 32 encodings (`Rm[4:0]`, or an immediate's low byte). The other 25 are unmodelled: `0x00–0x03` (the 26-bit constants, which have no `case`), `0x16` Monitor, `0x1a` Hyp, and 19 reserved encodings including `0x14` and `0x15`.
+
+**"The decline must happen before Save."** Save reads the mode already in CPSR. On the filed stimulus that mode is SVC32 (`0x13`), and Save returns. The store that can introduce a bad mode is the assignment between Save and Load (`msr_imm` at `cpu_arm_instr.c:841`, `arm_pop` at `:1808`, the DPI switch at `cpu_arm_instr_dpi.c:221–229`, `arm_exception` at `cpu_arm.c:697`). A check that only precedes Save, after which the caller still assigns the raw value, leaves the bad mode in CPSR. The refusal has to change that assigned value.
+
+**The after-Load tail in question 3.** Flags are copied before Load in callers 1, 2, and 3 (`:844`, `:1809`, `dpi.c:231`). Caller 1 then returns. It does not write PC and does not call `quick_pc_to_pointers`. Caller 3 writes `cpu->pc` at `dpi.c:215`, before Save. `quick_pc_to_pointers` is after Load (`:241`), and `pc & 1` can still set T at `:243`. Caller 2's PC write and `quick_pc_to_pointers_arm` are after the `return_flag` block (`:1816–1825`), which is after Load, and they are skipped by the `return` at `:1799`.
+
+**FAULT, as stated in §2.** "Exceptions: None" is the defined MSR. A reserved M[4:0] is UNPREDICTABLE ("the effect of setting M[4:0] to a reserved value is unpredictable"). The ARMv7 glossary allows an UNPREDICTABLE operation to be implemented as UNDEFINED. FAULT is a legal implementation of that sentence and a bad one here. Reject it because the encoding is defined, and because callers 2 and 3 have already retired part of the instruction before the mode value is consumed (LDM has written the list; DPI has written `cpu->pc`). An undefined-instruction exception at that point is imprecise. The in-tree probe also wants execution to continue in the old mode (`m=13 sp once` in `regress/arm_msrmode_probe.py`).
+
+`#524` / `4dfc7165` as the last touch of the three files: not checked. The only `#524` text in `cpu_arm_instr.c` is the `armbdt` alignment comment, not the bank switch.
+
+## Writers, and what they can emit
+
+CPSR mode is stored only in `cpu->cd.arm.cpsr`. `flags` is just bits 31:28. Guest writers of M[4:0]:
+
+| Writer | What it can put in M[4:0] |
+|---|---|
+| `arm_cpu` init (`cpu_arm.c:127–136`) | SVC32 only |
+| `msr_imm` / `msr` (`:841`) | any 5-bit value, if the c-byte survives the USR32 mask |
+| `arm_pop` return path (`:1808`) | the current mode's SPSR, verbatim |
+| DPI S-to-PC (`dpi.c:221–229`) | that same SPSR, and only from FIQ/IRQ/SVC/ABT/UND. USR/SYS leave CPSR alone |
+| `arm_exception` (`:697–698`) | the table in `cpu_arm.h:116`. Every called entry is modelled. Slot 5 is `0` and is not called. RESET `exit(1)`s before Save |
+
+T-bit updates (BX/BLX, `emul.c:673`, the Thumb interpreter) do not write M[4:0]. No RFE, SRS, CPS, or SETEND writer exists. SETEND is undecoded (`cpu_arm_instr.c:4813`).
+
+There is one non-guest writer. `CPU_SETTINGS_ADD_REGISTER32("cpsr", …)` at `cpu_arm.c:196` is writable (`cpu.h:535`, `writable=1`). A debugger assignment stores the word and does not call Save or Load.
+
+SPSR writers are `msr_imm_spsr` (`:860–880`), which applies the mask and does not look at the mode nibble, and `arm_exception` (`:674–684`), which snapshots CPSR into the target mode's SPSR. `msr_imm_spsr`'s `default:` (`:881`) is USR32, SYS32, and anything unmodelled. It `fatal()`s, sets `running = 0`, and does not `exit(1)`.
+
+The producer the brief did not name: `cpu_new` zero-fills the `cpu` (`cpu.c:71`). An SPSR that nobody has written is the word `0`. M[4:0] of that word is `0x00` (`ARM_MODE_USR26`), which is not a switch arm. Boot CPSR is SVC32, so the first `MOVS pc, lr` or `LDM … {pc}^` from SVC copies `spsr_svc == 0` and dies in Load. That path needs no `MSR SPSR`. After a real exception, the snapshot path has stored a modelled mode, so a normal return is a different value.
+
+`MSR SPSR_c, #0x14` from SVC is a defined write. The reserved nibble is allowed to sit in SPSR. It becomes UNPREDICTABLE only when callers 2 or 3 copy it into CPSR.
+
+## 2. Disposition per caller
+
+Member 3. Refuse M[4:0] only. Keep a single per-CPU latch and one `fatal` that contains `(once)`.
+
+**Caller 1, MSR.** Run the existing USR32 mask first (`mask &= 0xff000000`). Only then, if `(mask & ARM_FLAG_MODE)` is nonzero and `(new_value & ARM_FLAG_MODE)` is not one of the seven, clear `ARM_FLAG_MODE` out of `mask`, force the bank-switch flag off, and announce once. I, F, and T in that same c-byte still commit, and so do the f/s/x bytes. The c-byte is one field mask, but the unpredictable sentence names M[4:0]. Sibling bits have defined meanings. Whole-instruction refusal is also inside UNPREDICTABLE latitude. The probe cannot see it: `classify()` keeps `cpsr & 0x1F` only, so a CPSR left at `0xD3` and a CPSR reduced to `0x13` both print `m=13`. Prefer keeping I/F/T so a c-byte whose other bits are defined still does what those bits say. Do not take undefined. Do not call `quick_pc_to_pointers` from this path. MSR never did, including when a legal MSR sets T. That T-bit hole is older than this row.
+
+**Callers 2 and 3.** Same rule on the SPSR value about to be stored. Substitute the current mode into M[4:0], announce once, copy the rest (NZCV, I, F, T, the reserved PSR bits), and skip the bank switch because the mode did not change. FAULT is the wrong model for the same retirement reason as above. USR/SYS on caller 3 still have no SPSR. Leave that `switch` with no `default:` and do not announce.
+
+**Caller 4.** No decline. The value written is a modelled table entry. Save is safe while the invariant "CPSR's mode is one of the seven" holds. If Save's backstop does run, announce, skip the `memcpy`, and let the exception continue. Swallowing the exception is worse than losing the unsaved `r13`/`r14` of a mode that should not have been current.
+
+Member 1 leaves the old bank under a CPSR whose mode the next Save cannot name. Member 4 (accept the nibble with no bank) is that same state without the message. Member 6 (keep the nibble, pin it to some real bank) makes MRS return `0x14`, which fails `kill 14`'s `m=13`, and every later Save, exception entry, and SPSR snapshot has to tolerate the stuck nibble. Member 7 (real Monitor/Hyp/26-bit banks) is a different machine. Member 2 (silent refusal) is the same state update as member 3 without the line the probe requires and without an operator-visible reason. No eighth member. "Stop the guest" (`running = 0`), which `bdt_load` already does for its own USR/SYS default, is a harsher variant of decline and turns `kill 14` into `nofire`.
+
+This helper treats `0x00–0x03` like `0x14`. The probe bans `MSR CPSR_c, #0` so that the 26-bit hole can have its own later disposition. Leaving `0x00` on `exit(1)` keeps a guest-reachable process kill (the zero SPSR). Decline it in this same fix. A later round can still replace that decline with real 26-bit banks.
+
+## 3. Where it lives
+
+One predicate, `arm_mode_is_modelled(mode & ARM_FLAG_MODE)`, consulted at the three CPSR stores. Plus the two `default:` arms as backstops. A rollback that lives only inside Load can be made correct, and it is the worse place. Load does not know the previous mode unless the caller saved it, and it runs after the store.
+
+Walked:
+
+- **MSR.** Mask, then maybe strip M[4:0], then the existing sync, the gated Save, the masked store, the flags copy, the gated Load. With the switch flag cleared, Save and Load are not called. `r[]` stays on the bank it had. The next instruction in the dyntrans loop is the instruction after the MSR, which is what the probe's `step` assumes. An early `return` before the masked store also greens the probe and drops I/F. That is the whole-write choice, not this one.
+- **LDM ^ with PC.** The list is written before `return_flag` (`s_bit` is cleared when bit 15 is set, so the loads hit `r[]`, the current bank). Then substitute M[4:0], assign CPSR, copy flags, skip Save/Load. Fall through into `:1816`. That block does `cpu->pc = r[15] & ~3` and `quick_pc_to_pointers_arm`. A `return` copied from the USR/SYS `default:` leaves `r15` updated and the fetch PC on the LDM's successor.
+- **DPI S-to-PC.** `cpu->pc` is already the ALU result. Save of the old mode, substitute into the SPSR copy, flags copy, Load of that same mode. Save+Load of one modelled bank is an identity here. Nothing writes `r[8..14]` between them. Then `quick_pc_to_pointers` and the `pc & 1` T-bit store must still run, and the function must still `return` at `:248`. Falling out of the `A__PC` block lets the ALU flag update at `:260` overwrite the SPSR flags.
+- **Exception.** Unchanged on the guest path. Load's mode is the table entry.
+
+## 4. Backstop
+
+With the three stores guarded, a guest instruction does not reach either `default:`. They are still reachable through the writable `cpsr` setting, and through the next writer someone adds. Deleting them turns that into member 1 (silent wrong bank). Keep both as member 3: one latched `fatal`, no `memcpy`, no `exit(1)`.
+
+The latch is an `int` on `struct arm_cpu`, not a function-static. The house rule is one latch per instance. Each `session()` in the probe is a fresh process, so a function-static greens every row too. One flag is enough. A guest MSR should print one line, not a caller line plus a Save line plus a Load line.
+
+## 5. Smallest edit that breaks the fix and still passes
+
+Fix only `msr_imm`: strip M[4:0], skip the bank switch, `fatal("… (once)")` once. Leave both `exit(1)`s. Leave `arm_pop` and the DPI S-to-PC path alone.
+
+All 17 rows stay green, including `save 2s`. That row's MRS at `DEST+4` is the CPSR after the first MSR. The want `m=13` means the reserved nibble never landed, so the following `MSR #0x13` is a same-mode write and does not call Save. `save 2s` does not execute Save's `default:`. The comment at `arm_msrmode_probe.py:337` describes a Load that skips the `memcpy` and leaves mode `0x14` in CPSR. `kill 14` already fails that mutant, because its want is `m=13`, not `m=14`.
+
+What still kills the process: `MOVS pc, lr` or `LDMFD sp!, {…,pc}^` from SVC while `spsr_svc` is still `0`, and the same pair after `MSR SPSR_c, #0x14`. None of those words are in the probe's `WORDS` dict.
+
+A second edit the same oracle misses: delete the `if (!warned)` guard and keep the characters `(once)` in the format string. Each scored session fires the decline once (`save 2s`'s second MSR is the legal mode `0x13`), and `"(once)" in t` is not a count.
+
+## Else found
+
+`LDM` with S and PC from SYS32 takes `bdt_load`'s `default:` (`:1795`): unlatched `fatal`, `running = 0`, `return` before the PC update. From USR32 the same instruction prints the unlatched "s-bit: in usermode" line at `:1613` and then that `default:` as well. Separate from this row.
+
+`msr_imm` still does not retarget `next_ic` when a legal MSR changes T. Out of scope, and the decline path should not grow a special case for it.
+
+IRQ delivery is under `if (!single_step)` at `cpu_dyntrans.c:206`. There is no `fiq_asserted` anywhere under `src/`. The probe's "stay on `step`" note matches the source. Refusing the mode means a later `continue` never enters Save in mode `0x14`.

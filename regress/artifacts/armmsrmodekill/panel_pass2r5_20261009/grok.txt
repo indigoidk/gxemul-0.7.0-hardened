@@ -1,0 +1,57 @@
+I'll review repair 5 against the working tree and the 47-row probe, and check the grid, the `ic->arg[]` claim, the records, and the gate wiring before any verdict.VERDICT: SHIP-WITH-CHANGES | 0 floor breaches
+
+The product diff can commit. Two record lines should be corrected in that same commit: the G1 sentence in the probe header, and the unfilled `MEASURED:` stub in the gate block. The block is not in `regress/gate_arm.sh` yet (the file ends at the crime-width pins and `gate_end`, line 1946).
+
+## 1. Floor
+
+One smallest edit keeps all 47 rows green: in the `msr_imm` decline, `ic->arg[1] &= ~ARM_FLAG_MODE` beside `mask &= ~ARM_FLAG_MODE` (`M_msr_argmask`, `kt1b/LANE1b.out`, `RESULT=47/47 REDS=none`). Grade in question 2. Nothing else I swept stays green.
+
+Denominator, re-derived from `grid_obs` / `grid_cov` and the fix sites. Counts match the header: msr 12+25+12+7 = 56, dpi 10+25+10+7 = 52, pop 52+6 = 58. Call sites sum to 43 sessions and 47 rows, including `row count`.
+
+- Helper image: all 25 unmodelled values and all 7 modelled modes, on each path (G3). That includes `0x18`–`0x1a`, the repair-4 `& 0x17` cell. Dropping the helper's `& ARM_FLAG_MODE` rejects the grid's full-word accepts (`0xffffffe0|mode`).
+- MSR clear width: `label ^ 0x1f` at all six labels (each differs in all five mode bits; each result is unmodelled). Clearing T as well dies on `tbit` and on grid polarity 1.
+- MSR field-only versus a whole-operation decline: the `if=` pin and `msr wide`.
+- MSR skipped at one current mode: `msr lbl` (FIQ IRQ ABT UND SYS) and `latch rpt` (SVC, latch set).
+- Restore keep-mask letting any SPSR mode bit through: G2 on dpi and pop, five labels. Unconditional guard, or one label × latch cell skipped: the ten `src` rows (40 cells) and `acc movs` / `acc ldm`.
+- Bits 31:5, keep-old / force-0 / force-1, both polarities, accept and decline, three paths. `grid_cov`'s rule is the right one: for a decline, mode bits (0..4) are covered when the kept label bit differs from the operand bit; every other bit is covered when the result differs from the old CPSR. Under that rule the uncovered set is empty outside the named skips, and those skips are real: bit 4 polarity 0 (no label and no modelled mode has bit 4 clear); bit 4 on an accept (old and new both have it set, so keep-old and force-1 match the wanted word; force-0 still changes every accept); T polarity 0 (the guest is ARM, so old T is 0). G2, G3 and the four pop cells hold. Pop encodings: `0xE8D68000` (S+PC), `0xE8968000` (non-S+PC), `0xE8D60001` (S, no PC), `0xE8960001` (non-S, no PC). `return_flag` is set only when S is set and the list contains PC.
+- DPI enclosing: `encl`, and `encl2`'s `subs pc,lr`.
+- Five latch bits, two visits, no sharing: `latch rpt`, `latch ind`, `dbg both`.
+- `exit(1)` put back on Save or Load: `dbg save`, `dbg both`, `latch rpt`.
+
+## 2. `M_msr_argmask` — disclosure
+
+Disclosure under clause (e). The loop row is the pin for that disclosed cell. It is not owed to close this floor.
+
+The comment is a real depends-on. `X(msr)` writes `ic->arg[0]` from the register on every call, then calls `msr_imm`. `ic->arg[1]` is the field mask filled once at decode and never refreshed. The decline copies it into a local `mask` and clears `ARM_FLAG_MODE` there. A second execution of that same `ic` still declines, or still writes a later modelled mode, only if `arg[1]` still contains the mode bits.
+
+`ic->arg[1] &= ~ARM_FLAG_MODE` breaks that for the register form: after one decline, that translated MSR never writes M[4:0] again, so a later accept through it stays in the old mode. The same write on an immediate MSR is guest-equivalent even in a loop, because that instruction's mode field is a constant unmodelled value. Stripping the cached mask's mode bits forever still declines the mode and still writes the other fields.
+
+This probe cannot see the register-form case. Each grid observation is preceded by debugger commands, and `debugger()` clears every dyntrans translation before it reads them (`debugger.c` 781–797). It returns before that clear only while `debugger_n_steps_left_before_interaction > 0` (`debugger_cmd_step` sets that to `n - 1`). Inside one `step 2` the two MSRs are different PCs, so different `ic`s. The header's account of this is accurate, and `kt1b/LANE1b.out` is the measurement it cites.
+
+Last pass's `& 0x17` cell was owed because the contract claimed the helper's answer on every mode value, and `0x18`–`0x1a` were the image of that one-bit edit. This contract now says the cached-mask write is not pinned, and says why. That is what clause (e) is for.
+
+## 3. Records
+
+The corrected `ic->arg[]` paragraph and the tally are true. PRETABLE5 §2 and the addendum's premise for `M_msr_argmask` are false, and the header already replaces them. One live G1 sentence is false.
+
+True, checked against the code:
+
+- `debugger()` clears translations on the way into an interaction, and skips that clear only while a `step N` count is still running. (`step call` also returns early; this probe never sends it.)
+- HEAD's named 29 reds match the probe's `EXPECT` string. `encl` drives no unmodelled mode. `grid cov` only re-derives `grid_obs()`, so it is green on HEAD. `save 2s` dies on the first MSR, the same Load death as `kill 14`. `dbg both` runs Save before Load, so on HEAD it dies in Save.
+- 43 sessions and 47 rows, by call-site count.
+
+False, and superseded by the corrected header: PRETABLE5 §2 ("NOT CLAIMED shrinks to the immediate form; the register form is re-executed 56 times") and the addendum's "every observation re-executes the same translated `msr cpsr_fsxc,r1`" / "Predicted KILLED". The instruction runs 56 times. Each run is a new translation. The addendum's other predicted kills match the lane logs (grid rows go red; `M_msr_argmask` does not).
+
+False, and still in the header: G1's "result bit must equal the SPSR / operand while the old CPSR's bit differs (OLD 0 / NEW all-ones-with-T, and OLD all-ones / NEW 0)". For a decline, mode bits equal the label, and the bit that must differ is the operand's. p1's old value is the label with bits 31:5 clear, not 0. p2's old value is `0xffffffc0|label` (T clear), not all-ones, which the next sentence also says. The code comment above `grid_obs` and `grid_cov` state the real pairs. G2 is right. The generator covers the cells. The lead sentence should be rewritten to those pairs before it is the record of the grid.
+
+## 4. Gate 14
+
+The pasted block scores the two log shapes you named. It is not in the tree. It has to be inserted before `gate_end`. A paste after `gate_end` never runs, and gate 14 stays green without the probe.
+
+On a finished log the checks do what they say. `ARMMSRMODE_RESULT`, `CONTROL`, `REDS` and `DONE` are each required once, with the result and control shapes checked. Rows are scored from `REDS` and from the `N/M` split, which matches a note sitting after `FAIL`. The emitted pattern `^  [^ ].* got=.* want=` matches the 47 row lines and not the `  diag` lines. `arm_msrmode` is one token and `47` is an unquoted literal, so `check_score_claims.py`'s PIN regex sees it. The docstring's live fractions are `18/47` and `47/47`. `kill 14/15/1e` is a longer slash-run, which that scanner rejects.
+
+What it does not let through: a `18/47` log fails `rows correct` and `reds`. A short or long row list fails `rows emitted`. A missing or duplicated record fails the parse check. `report_dead` prints `CONTROL=DEAD`, `RESULT=0/0` and `DONE`, and no `REDS` line, and exits 0. The parser then fails closed ("does not parse") and never reaches the controls check. A setup failure is red, reported as a bad parse. The probe also exits 0 when rows are red, so the exit-status check stays green on HEAD. `rows correct` and `reds` still fail.
+
+The `MEASURED:` line is still the placeholder `<OWED the committed probe's base leg...>`. The pin's number matches the probe. The citation does not name a log. Name the fixed base leg there, the same way the crime-width block names its base leg.
+
+Else: the DPI comment and the probe's opening already say an odd destination PC forces T after the restore, and the grid's targets are even (`0x8300`). That composition is disclosed and undriven.

@@ -1,0 +1,28 @@
+VERDICT: Member 3, but per-caller guards are required; one shared helper consulted before every write is insufficient for the `dpi` caller. Backstop default arms should be latched per-CPU. | 0 premises wrong
+
+## Premise audit
+
+READ: The packet inlines four CPSR writers: `msr_imm`, `bdt_load`, `dpi` S-to-PC, and `arm_exception`.  
+REASONED: A reserved mode can reach CPSR through SPSR restore. If `msr_imm_spsr` writes M[4:0] directly into an SPSR, a later exception return (`MOVS pc,lr` or `SUBS pc,lr,#4` via `dpi`) or `LDM ^` will copy that SPSR into CPSR. This is not one of the three writers named in the question, but it is reachable from the code shape shown.  
+READ: I cannot enumerate all CPSR/SPSR writers from this packet; the source is not fully inlined. A full answer would need a grep for `cpsr =` and `spsr_* =`.
+
+## Disposition per caller
+
+- **MSR (`msr_imm`)**: Decline only the mode field, not the whole write. The ARM ARM says MSR has no exceptions, and reserved mode is UNPREDICTABLE. A safe emulator can ignore the M-field while still applying flags, I/F, and T bits. Concretely: if `new_mode` is reserved, clear `ARM_FLAG_MODE` from `mask` and force `switch_register_banks = 0`.
+- **`bdt_load` (`LDM ^`)**: Decline the mode change, not FAULT. If `new_cpsr` mode is reserved, mask out the mode bits before assigning to CPSR and set `switch_register_banks = 0`. Other fields from SPSR may still apply.
+- **`dpi` (S-to-PC)**: Decline the mode change, not FAULT. The caller already saves the old bank; after the SPSR-copy switch, if the new CPSR mode is reserved, restore the old mode bits and let Load proceed. This requires a guard after the SPSR copy, not a single pre-write helper.
+- **`arm_exception`**: With correct guards elsewhere, Save never sees a reserved mode. The default arms remain only as backstop.
+
+## Where the decline lives
+
+A single helper consulted by every caller before it writes mode bits is insufficient for `dpi`, because `dpi` overwrites CPSR inside a switch with no default and no separate `new_mode` variable. That caller needs either a temporary copy of the SPSR with validation before assignment, or a post-copy rollback of the mode bits.  
+Guards inside Save/Load that roll back CPSR would need stored previous mode state and are messier.  
+Recommendation: per-caller guards to prevent reserved mode entry, plus latched announce in the two default arms as a backstop.
+
+## Backstop
+
+The default arms become dead only if every writer is correctly guarded; that cannot be proved from the packet alone. Keep them as latched announces, not `exit(1)`. Latch state should be a per-CPU field, not a function-static variable, to avoid cross-CPU suppression and to allow per-instance reset.
+
+## Smallest edit that breaks the fix and still passes
+
+Remove the guard from `dpi` (or `bdt_load`) while keeping the `msr_imm` guard and the latched backstop. The 17-row probe appears to exercise only the direct MSR immediate path (`kill 14`, `kill 15`), so `kill 14` would stay green; the SPSR-restore reserved-mode kill would not be detected.

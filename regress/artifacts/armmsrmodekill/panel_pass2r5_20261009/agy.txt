@@ -1,0 +1,161 @@
+VERDICT: SHIP-WITH-CHANGES | 0 floor breaches
+
+Reviewing [brief_sent.md](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md) adversarially against the working tree at HEAD `ef577140` and the test/artifact suite under [`GXEMUL-SEC`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/).
+
+---
+
+### 1. FLOOR on the Shipped Composite: Smallest Edit & Swept Denominator
+
+**Answer:** There is **no smaller edit** to the fix that keeps all 47 rows green. The fix is minimal and tightly bounded across every site.
+
+#### Denominator and Swept Shapes
+Across kill tables 1 through 5 ([`killtable5_20261008`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/)), **104 distinct mutants** across **110 lane runs** were evaluated:
+- Tables 1–4: 85 distinct mutants (`mutr`: 10, `mutr2`: 13, `mutate2`: 36, `mutate3`: 6, `mutr3b`: 18 new, `mutate5`: 2).
+- `mutate6.py`: 7 mutants ([`mutate6.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/mutate6.py)).
+- `mutr4.py`: 18 mutants (Opus pass-2r4 mutants, 12 new + 6 re-tests in [`mutr4.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/mutr4.py)).
+
+Of these 104 mutants, **103 were killed (red)**, and exactly **one** survived (`M_msr_argmask`, discussed in Question 2).
+
+#### Verification of Generated Grid Claims
+Verified directly against the generator in [`arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L1073-L1223):
+- **G1 (Complementary Pairs & Bit Covariance)** ([`arm_msrmode_probe.py#L1058-L1064`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L1058-L1064)):
+  Tested via complementary pairs:
+  - Polarity 1 ($p_1$): $\text{OLD} = \text{label}$ (bits 31:5 zero), $\text{NEW} = \text{0xffffffe0} \mid \text{mode}$ (bits 31:5 set, T set).
+  - Polarity 2 ($p_2$): $\text{OLD} = \text{0xffffffc0} \mid \text{label}$ (bits 31:6 set, T clear), $\text{NEW} = \text{mode}$ (bits 31:5 zero).
+  Executing `grid_cov(path)` on all three paths (`msr`, `dpi`, `pop`) confirms `0 uncovered` across all $(outcome, bit, polarity)$ cells outside the named equivalents (bit 4 pol 0, bit 4 on accept, bit 5 pol 0 vs OLD).
+- **G2 (Label $\oplus$ 0x1f)** ([`arm_msrmode_probe.py#L1113-L1115`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L1113-L1115)):
+  At all 6 MSR labels (`0x11, 0x12, 0x13, 0x17, 0x1b, 0x1f`) and 5 restore labels (`0x11, 0x12, 0x13, 0x17, 0x1b`), $\text{label} \oplus \text{0x1f}$ inverts all 5 mode bits. Because all modelled modes have bit 4 set, $\text{label} \oplus \text{0x1f}$ yields unmodelled modes in range `0x00..0x0e`. Any incomplete mode mask (such as `M_msr_clr0f_irq`, `M_msr_clr03_abt`, `M_msr_clr17_fiq`) is detected in [`KILLTABLE5_lanes_opus.out`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/KILLTABLE5_lanes_opus.out#L8-L55).
+- **G3 (All 25 Unmodelled & 7 Modelled Modes Swept)** ([`arm_msrmode_probe.py#L1073-L1076`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L1073-L1076)):
+  All 25 unmodelled values (`0x00-0x0f`, `0x14-0x16`, `0x18-0x1a`, `0x1c-0x1e`) are driven as declines, and all 7 modelled modes (`0x10, 0x11, 0x12, 0x13, 0x17, 0x1b, 0x1f`) are driven as accepts on all three paths. Any narrowed helper (e.g. `H_narrow_17` admitting `0x18-0x1a` or `H_case_18`) is killed at `grid msr`, `grid dpi`, and `grid pop` ([`KILLTABLE5_lanes_opus.out#L4-L7, L49-L52`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/KILLTABLE5_lanes_opus.out#L4-L7)).
+- **G4 (Enclosing Cells for `arm_pop`)** ([`arm_msrmode_probe.py#L1129-L1133`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L1129-L1133)):
+  All four cells of $\{S, \text{non-}S\} \times \{PC, \text{no } PC\}$ (`ldm_r6_pc_s`, `ldm_r6_pc`, `ldm_r6_r0_s`, `ldm_r6_r0`) are exercised in both polarities.
+- **Backstop minimality**: Reinstating `exit(1)` in [`arm_save_register_bank`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L331-L339) or [`arm_load_register_bank`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L650-L663) fails `dbg save`, `dbg both`, and `latch rpt` ([`run_head.out#L26-L29`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/run_head.out#L26-L29)).
+- **Latch minimality**: Sharing warning bits or failing to latch (`|=` replaced with `&=`) fails `latch ind` and `latch rpt` ([`KILLTABLE5_lanes.out#L32-L36, L64-L73`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/KILLTABLE5_lanes.out#L32-L36)).
+
+No smaller sub-fix or deletion can pass the 47 rows.
+
+---
+
+### 2. `M_msr_argmask`: Disclosure vs Owed Floor Cell
+
+**Answer:** **DISCLOSURE under clause (e) is the correct grade; the loop row is NOT OWED as a floor cell.**
+
+#### Grounding in DEPENDS-ON and Testing Policy
+Under project adjudication rules recorded in [`tools/CLAUDE.md#L1409-L1417`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md#L1409-L1417):
+> *"DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues EXACTLY WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM... A value or combination the body never tests as a case (`idata == k`; a byte no conditional distinguishes...) is DISCLOSED under clause (e)."*
+
+1. **The repair body does not touch `ic->arg[1]`**:
+   In [`src/cpus/cpu_arm_instr.c#L824, L839-L847`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L824):
+   ```c
+   uint32_t mask = ic->arg[1];
+   ...
+   if ((mask & ARM_FLAG_MODE) && !arm_mode_is_modelled(ic->arg[0])) {
+       if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_MSR)) {
+           cpu->cd.arm.mode_warned |= ARM_MODEWARN_MSR;
+           ...
+       }
+       mask &= ~ARM_FLAG_MODE;
+   }
+   ```
+   The repair's read-set is `mask`, `ic->arg[0]`, and `cpu->cd.arm.mode_warned`. Its write-set is the stack local `mask` and `cpu->cd.arm.mode_warned`.
+   The field `ic->arg[1]` is never written, modified, or tested by the repair body.
+2. **Mutant `M_msr_argmask` injects an unwritten side-effect**:
+   `M_msr_argmask` injects `ic->arg[1] &= ~ARM_FLAG_MODE;` into the decline body ([`mutr4.py#L49`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/mutr4.py#L49)). Under the floor doctrine, tests do not enumerate arbitrary unwritten struct mutations.
+3. **The comment is rationale, not a code dependency**:
+   The code comment `Only the local mask changes: ic->arg[] is a cached translation` explains why the developer chose `mask &= ~ARM_FLAG_MODE;` rather than mutating `ic`. While informative, commentary cannot expand the DEPENDS-ON floor beyond the diff's code dependencies.
+4. **Dyntrans Translation Flushing in Debugger Interactions**:
+   As verified in [`src/debugger/debugger.c#L781-L797`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L781-L797):
+   ```c
+   if (debugger_n_steps_left_before_interaction > 0) {
+       debugger_n_steps_left_before_interaction --;
+       return;
+   }
+   for (i=0; i<debugger_machine->ncpus; i++)
+       if (debugger_machine->cpus[i]->translation_cache != NULL) {
+           cpu_create_or_reset_tc(debugger_machine->cpus[i]);
+           debugger_machine->cpus[i]->invalidate_translation_caches(
+               debugger_machine->cpus[i], 0, INVALIDATE_ALL);
+       }
+   ```
+   Between debugger segments, every cached translation is invalidated. Because the probe steps interactively, `ic` is recompiled on each step. Catching a mutated `ic->arg[1]` would require constructing an unassisted multi-iteration guest loop without debugger interaction. This gap is appropriately classified and disclosed under clause (e).
+
+---
+
+### 3. Verification of Records Claims
+
+Every cited claim in the probe header, CONTRACT, NOT CLAIMED, PRETABLE5, and tally sections of [brief_sent.md](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md) was checked against the codebase:
+
+| Claim in Brief | Source Evidence | Status |
+| :--- | :--- | :--- |
+| **Translation cache clearing on debugger interaction** ([brief_sent.md#L28-L31, L136-L140](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L28-L31)) | [`src/debugger/debugger.c#L781-L797`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L781-L797): `debugger()` decrements `debugger_n_steps_left_before_interaction`, returning before cache flush only while stepping, and flushes `cpu_create_or_reset_tc()` and `invalidate_translation_caches()` when interacting. | **TRUE** |
+| **`M_msr_argmask` escape measurement** ([brief_sent.md#L22-L24, L141-L142](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L22-L24)) | [`killtable5_20261008/KILLTABLE5_lanes_opus.out#L14-L15`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/KILLTABLE5_lanes_opus.out#L14-L15) and [`killtable5_20261008/kt1b/LANE1b.out#L14-L15`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/kt1b/LANE1b.out#L14-L15): `M_msr_argmask RESULT=47/47 REDS=none tail=ARMMSRMODE_DONE`. | **TRUE** |
+| **HEAD score 18/47 with exactly 29 named reds** ([brief_sent.md#L21, L146-L150](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L21)) | [`run_head.out#L50-L52, L80-L81`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/run_head.out#L50-L52): `ARMMSRMODE_RESULT=18/47`, `ARMMSRMODE_REDS=...` (29 names match verbatim), `ARMMSRMODE_TALLY_MATCHES_HEAD_EXPECT=yes`. | **TRUE** |
+| **Fixed score 47/47 across 43 sessions** ([brief_sent.md#L21, L169](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L21)) | [`run_fixed.out#L50-L52`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/run_fixed.out#L50-L52): `ARMMSRMODE_RESULT=47/47`, `ARMMSRMODE_SESSIONS=43`, `ARMMSRMODE_REDS=none`. | **TRUE** |
+| **Grid rows on HEAD die in Load at mode 14 (0x0e)** ([brief_sent.md#L170-L172](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L170-L172)) | [`run_head.out#L77-L79`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/run_head.out#L77-L79): `diag grid msr: load mode 14`, `diag grid dpi: load mode 14`, `diag grid pop: load mode 14`. First decline is FIQ $\oplus$ `0x1f` = `0x11 ^ 0x1f` = `0x0e` = decimal 14. | **TRUE** |
+| **Observation counts: msr 56, dpi 52, pop 58 (total 166)** ([brief_sent.md#L177](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L177)) | [`arm_msrmode_probe.py#L1168-L1215`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L1168-L1215), [`run_fixed.out#L45-L47`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/armmsrmodekill/killtable5_20261008/run_fixed.out#L45-L47): `grid msr got=56/56`, `grid dpi got=52/52`, `grid pop got=58/58`. Sum = 166. | **TRUE** |
+| **`msr wide` accept `0xffffffd1` sets bits 31:6, 4, 0 (bits 3:1 clear)** ([brief_sent.md#L149-L150](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L149-L150)) | Binary of `0xffffffd1` is `...1101 0001` (bit 4 is 1, bits 3:1 are 0, bit 0 is 1). Correctly remedies the repair-4 docstring error. | **TRUE** |
+
+No false claims or records discrepancies were found.
+
+---
+
+### 4. Gate 14 Section Review and Adversarial Verification
+
+Inspecting the bash snippet destined for [`regress/gate_arm.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh) ([brief_sent.md#L45-L72](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L45-L72)):
+
+#### Parsing, Scoring, and Pinning
+- **PARSE-BEFORE-SCORE block**:
+  Matches strictly: exactly one `ARMMSRMODE_RESULT`, valid integer format `(0|[1-9][0-9]*)/(0|[1-9][0-9]*)`, exactly one `ARMMSRMODE_CONTROL=(OK|DEAD)`, exactly one `ARMMSRMODE_REDS`, and exactly one `ARMMSRMODE_DONE`.
+- **Score Checks**:
+  - `check "msrmode probe output parses" "yes" "yes"`
+  - `check "msrmode controls" "$ctrl" "OK"`
+  - `check "msrmode probe exit status" "$mrc" "0"`
+  - `check "arm_msrmode rows run" "${mres#*/}" 47` (unquoted literal `47` matches `PIN` regex in [`tools/pipeline/check_score_claims.py#L75`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py#L75))
+  - `check "arm_msrmode rows correct" "${mres%/*}" "47"`
+  - `check "arm_msrmode rows emitted" "$(grep -cE '^  [^ ].* got=.* want=' "$MSRLOG")" "47"`
+  - `check "arm_msrmode reds" "$reds" "none"`
+- **Score claims compliance**:
+  Verified with [`check_score_claims.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_score_claims.py): all docstring mentions in [`arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py) match denominator 47 (`47/47`, `18/47`).
+
+---
+
+### Findings Found During Adversarial Review
+
+During review, **two implementation issues** in the gate wiring and probe completion reporting were discovered:
+
+#### 1. Unfulfilled Placeholder in Gate 14 Comment ([brief_sent.md#L67](file:///C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/panel_20261009_030821/brief_sent.md#L67))
+Line 67 contains an unexpanded draft placeholder:
+```sh
+#  MEASURED: <OWED the committed probe's base leg, named, run BEFORE this pin was written>.
+```
+Per project commit discipline (and preceding pins in [`regress/gate_arm.sh#L1913-L1935`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1913-L1935)), every score pin must cite its preserved base leg artifact log. This placeholder must be replaced with the measured base leg:
+```sh
+#  MEASURED: regress/artifacts/armmsrmodekill/killtable5_20261008/run_fixed.out, 47/47.
+```
+
+#### 2. Masking of `CONTROL=DEAD` by Missing `ARMMSRMODE_REDS` in `report_dead()`
+In [`regress/arm_msrmode_probe.py#L543-L551`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L543-L551):
+```python
+def report_dead(why):
+    print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+    print("ARMMSRMODE_CONTROL=DEAD")
+    print("ARMMSRMODE_RESULT=0/0")
+    print("  *** SETUP FAILED (%s) -- the vehicle is not the vehicle.  NOT 'no defect'. ***" % why)
+    for nm, got, want, note in rows:
+        print("  %-11s got=%-16s want=%-16s %s" % (nm, got, want, note[:56]))
+    print("ARMMSRMODE_DONE")
+    raise SystemExit(0)
+```
+`report_dead()` does **not** print an `ARMMSRMODE_REDS=` line.
+However, Gate 14's parser requires `[ "$(grep -c '^ARMMSRMODE_REDS=' "$MSRLOG")" != "1" ]` to be false for all parses.
+Consequently, if a probe setup fails and triggers `report_dead()`, the gate triggers the parse failure arm:
+```sh
+check "msrmode probe output parses" "no" "yes"
+```
+and the `else` branch with `check "msrmode controls" "$ctrl" "OK"` is **never reached**. While the gate still halts and fails, the control failure diagnostic is masked as a syntax/parse error. `report_dead()` should emit `ARMMSRMODE_REDS=none` (or `dead`), or the parser should allow `ARMMSRMODE_REDS` to be absent when `CONTROL=DEAD`.
+
+---
+
+### Final Determination
+
+**GO-WITH-CHANGES** (Fix the `<OWED...>` placeholder in the Gate 14 section to name `killtable5_20261008/run_fixed.out` before appending to [`regress/gate_arm.sh`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh), and align `report_dead()`'s output records with Gate 14's parser).

@@ -1,0 +1,69 @@
+PRETABLE2 -- #562 pass-2 repair, written BEFORE kill table 2 (mtime precedes KILLTABLE2.out)
+Baseline: HEAD ef577140 export + the CURRENT GXEMUL-SEC working-tree cpu_arm.c / cpu_arm_instr.c /
+cpu_arm_instr_dpi.c / cpu_arm.h (copied to msr3/sec_baseline/, byte-identical to the msr2 fix) with
+the pass-2 COMMENT-ONLY edits (D) applied = msr3/src; installed probe + pass-2 rows = 37 rows.
+Fixed 37/37 (run_fixed.out); HEAD 16/37, reds exactly the 21 named (run_head.out), each `dead' in
+Load (mode 20 / 21 / 30 / 0) or Save (dbg save, dbg both).
+
+1. SIBLING PARITY after the repair
+   Five latch sites, each now visited TWICE in one process (latch rpt), count-checked (==1), with a
+   readback after the second visit.  Two restore paths x five SPSR-bearing labels, each with a
+   declined and an accepted cell in one session (src dpi/pop x fiq irq abt und svc).  Remaining
+   asymmetry: the SPSR source label is crossed with the reserved value 0x14 only, the zero-SPSR
+   cell stays SVC/DPI only (disclosed in the header as values-other-than / one CPU).
+
+2. CLAIM -> ROW (comments changed or newly relied on)
+   cpu_arm.h "each announce once per CPU, independently": latch rpt (five sites, x2, count==1).
+              "per CPU": NOT rowed (testarm has one CPU) -- disclosed.
+   Save default (reworded) "reached only once an unmodelled mode is ALREADY in CPSR -- then any
+              later bank switch (guest MSR, S-to-PC, exception entry)": dbg save (guest MSR),
+              dbg both + latch rpt (guest MOVS).  Exception entry: NOT rowed (single-step
+              suppresses IRQ dispatch; no SWI/UND row) -- disclosed by omission, noted here.
+   Load default (reworded): dbg both, latch rpt.
+   DPI (reworded) "value assigned below takes all other bits from the SPSR": src dpi * (whole-word
+              readback c0000011.. / c000001f).  "T forced for an odd destination PC": NOT rowed.
+   arm_pop "every other bit comes from the SPSR": src pop * (whole word).
+   msr_imm "only the local mask changes: ic->arg[] is a cached translation": NOT rowed -- now in the
+              header's NOT CLAIMED list.
+   probe acc usr/acc movs/acc ldm/dbg save "SP is 0": ` sp0' requires dumped == 0.
+
+3. GUARD FIELD vs BODY FIELD
+   Restore guards read new_cpsr (selected by the CURRENT mode label: spsr_fiq/irq/svc/abt/und);
+   the body writes cpsr from new_cpsr and decides the bank switch on it.  The selector (current
+   mode) flows into new_cpsr -> per the selector-data-flow rule each label is an axis: rowed x
+   {declined, accepted} x {DPI, POP}.  Helper reads `mode & ARM_FLAG_MODE'; the src SPSRs carry
+   N|Z in bits 31:30 so the projection's operand has a nonzero high part.
+   Latch field: the five `|=' writers; latch rpt reads every bit's suppression and independence.
+
+4. PER MUTANT: predicted killing row and the differing observable
+   N_latch_and_{msr,pop,dpi,save,load}   latch rpt: msr2 / pop2 / dpi2 / save2 / load2
+   N_cond_msr     latch rpt: 2nd MSR (#0x15) applied -> s_14 in mode 0x15 -> msr_imm_spsr default
+                  (running=0) -> a=nofire (or dead)
+   N_cond_pop     latch rpt: 2nd LDM^ applies 0x14 -> Load backstop -> a=14/.. + load text
+   N_cond_dpi     latch rpt: 2nd MOVS applies 0x14 -> a=14/.., load text
+   N_cond_save    latch rpt: 2nd Save visit -> exit(1) -> dead
+   N_cond_load    latch rpt: 2nd Load visit -> exit(1) -> dead
+   N_dpi_svc_only src dpi {fiq,irq,abt,und}: c1 = c0000014 (applied), Load backstop
+   N_pop_svc_only src pop {fiq,irq,abt,und}: same
+   N_dpi_keep_irq src dpi irq: c2 = c0000012 not c000001f
+   N_pop_keep_abt src pop abt: c2 = c0000017 not c000001f
+   N_helper_nomask  every src * row: c2 = c00000XX (valid SPSR declined because N|Z is set);
+                  also ` once' count may change
+   N_alias_save_msr latch rpt: save0 (Save's text suppressed by the msr decline's bit)
+   M_* (table-1 set, re-run on the 37-row probe as regression): same killing rows as table 1,
+   plus latch rpt where the edit touches a latch site or a backstop.
+   CHANNEL check: every listed observable is a readback word, an exact announce COUNT or alive/
+   dead; none is survive-only.
+END PRETABLE2
+
+ADDENDUM (written BEFORE table 3 runs) -- Opus 5.5 pass-2 additions
+   New row: kill 03 (MSR CPSR_c,#0x03 -- the only driven mode value with bit 4 clear).
+   Records: docstring's cpu_arm.c:606-608/:559-561 marked PRE-#562; contract names the modes
+   rowed per restore path; mask width now CLAIMED (kill 03); src_v3 rewords both backstop comments
+   ("only after a debugger plant, then by any later mode switch, exception or IRQ") -- comments only.
+   Predictions:
+   O_mask_nibble   kill 03: bit 4 written 0 -> mode 0x03 -> Load backstop -> m=03 (no msr text
+                   is still printed, since the guard ran; the readback is the channel).  On the
+                   37-row probe2: predicted ESCAPE (all its MSR values have bit 4 set).
+   D_del_msr/pop/dpi/save/load   latch rpt: the deleted site's count = 2 (msr2 / pop2 / dpi2 /
+                   save2 / load2), everything else unchanged.

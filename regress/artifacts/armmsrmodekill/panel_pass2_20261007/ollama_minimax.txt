@@ -1,0 +1,69 @@
+VERDICT: SHIP-WITH-CHANGES — the FIX is sound; the packet has two defects and one thing I cannot check.
+
+---
+
+**Claim labels:** READ = stated in the packet; REASONED = derived from inlined text/code. I cannot measure.
+
+---
+
+## 1. Premise audit — what is wrong
+
+### Defect A (READ-vs-READ contradiction in the table)
+The table contains **two** `FIXED_probe2` rows:
+- first: `RESULT=25/26  REDS=latch ind`
+- second: `RESULT=26/26  REDS=none`
+
+The brief asserts "FIXED build 26/26" — that matches the second row. The first row is unexplained and, if real, means the detector red-fails the fix on the very row the fix was supposed to add. The brief author presents both without comment. Either (i) the first is a stale/earlier reading and should be removed, or (ii) there was a transient that matters. As written, the packet is self-contradictory on a floor clause. *(REASONED from the table.)*
+
+### Defect B (mutant description vs. measurement)
+`M_shared_latch` is described as "Save and Load sharing one latch bit". On the new probe it REDS = `dbg both, latch ind`. The `latch ind` row tests the three **decline** sites (msr/pop/dpi) having distinct bits. The five bits are defined in the header as `MSR=0x01, POP=0x02, DPI=0x04, SAVE=0x08, LOAD=0x10`. A narrow "SAVE/LOAD share" mutation (e.g. both map to 0x08) leaves 0x01/0x02/0x04 untouched, so the three decline sites still announce distinctly and the row should pass. For `latch ind` to red, the mutant must also collapse the decline bits. The name is therefore narrower than the measured effect — the floor check for "Save and Load sharing" is actually exercising a broader mutant, and the detector's ability to catch a *narrow* SAVE/LOAD share is not demonstrated. *(REASONED from the bit layout and the row's `declines=True` classify.)*
+
+### Everything else stated checks out
+- The three writers all decline the **mode field only**; the diff shows `mask &= ~ARM_FLAG_MODE` (msr_imm), `new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) | cur_mode` (arm_pop and DPI). *(REASONED from the diff.)*
+- After the declines, the value handed to `arm_save_register_bank` / `arm_load_register_bank` is always a modelled mode in guest flow, so the `default:` backstops are reachable only via debugger `cpsr=`. The `dbg save` / `dbg both` rows are the positive test; no row directly negates guest-reaches-backstop, but the implication holds by construction. *(REASONED.)*
+- `cpu_new` zero-fills the struct, so an SPSR never written is `0x00` (mode `0x00`). The `zero spsr` row drives exactly that and is RED on HEAD, GREEN on FIXED. *(READ + REASONED.)*
+- The helper's case list (USR32/SYS32/FIQ32/IRQ32/SVC32/ABT32/UND32 = 10 11 12 13 17 1b 1f) matches the stated set and the `(once)` text in the three decline sites. *(READ.)*
+
+---
+
+## 2. Guards vs. call-site control flow
+- **msr_imm:** guard sits *before* `switch_register_banks`; `mask &= ~ARM_FLAG_MODE` guarantees `switch_register_banks == 0` for an unmodelled new mode. ✓
+- **arm_pop:** guard has **no `return`**; `new_cpsr`'s mode is replaced with the current mode, so `switch_register_banks == 0`, and the PC load below still runs. ✓
+- **DPI S-to-PC:** `new_cpsr` / `spsr_copied` are local; no early return; `cpu->cd.arm.cpsr = new_cpsr` precedes `flags = cpsr >> 28`, which precedes `arm_load_register_bank`. The save call uses `cur_mode` (cpsr at entry, always modelled in guest flow). ✓
+- **Path to `exit(1)` by a reserved mode through these three writers:** none. The two `default: exit(1)`s are deleted; the replacements `return`. *(REASONED from the diff — I cannot prove no other `exit(1)` was added elsewhere in the tree.)*
+- **Path to `running = 0`:** the diff does not touch any `running` variable and the backstops plain-`return`. Not checkable from the packet — name the single fact that would settle it: *does any other site in `src/` set `running = 0` on an unmodelled CPSR mode after this diff?* I cannot see other files.
+
+---
+
+## 3. Smallest edit to the FIX that still passes all 26 rows
+**Drop the per-CPU latching entirely** — delete the `mode_warned` field, the five `ARM_MODEWARN_*` macros, and the five `if (!(… & ARM_MODEWARN_*))` guards around the `fatal()` calls. Leave the `fatal()`s unconditional. The decline arithmetic (`mask &= ~ARM_FLAG_MODE`, `new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) | cur_mode`) stays.
+
+Why every row stays green:
+- The classify `announced(t, once_key)` is a **substring** check, so printing every time still sets the `once` tag.
+- The `latch ind` row's `declines=True` channel just needs the three text fragments to appear; they now appear every time, so `msr pop dpi` is still produced.
+- The `dbg *` rows' `backstops=True` channel needs the two backstop text fragments; both still appear.
+
+**The row that stays green as a canary is `latch ind`** — it is the row specifically built around the latch mechanism, and it passes trivially once the latch is gone. Note: the *mutants* `M_shared_*` are no longer distinguishable from the fix, so this edit sacrifices detector power; it is the smallest passing edit, not the best one.
+
+---
+
+## 4. Floor check
+- **HEAD 16/26:** ✓ (10 named reds match the table).
+- **Verbatim `exit(1)` reinstatement:** `M_save_exit` 23/25 (`dbg save, dbg both`), `M_load_exit` 24/25 (`dbg both`); the `_latched` variants give the same reds because `exit(1)` still fires regardless of the print latch. ✓
+- **Nulled repair:** `M_drop_msr` 21/25, `M_drop_pop` 24/25 (`rst ldm`), `M_drop_dpi` 23/25 (`rst movs, zero spsr`), `M_uncond_both` 23/25 (`acc movs, acc ldm`), `M_helper_always1` 18/25, `M_helper_range` 24/25 (`kill 1e`), `M_wholeop_msr` 22/25 (the `if=` pin). ✓
+- **Shared latches:** `M_shared_msrpop` 25/26 (`latch ind`), `M_shared_msrdpi` 25/26 (`latch ind`), `M_shared_popdpi` 25/26 (`latch ind`) — narrow decline-bit sharing is caught. `M_shared_latch` 24/26 (`dbg both, latch ind`) — caught, but see Defect B above; we do not have a measurement for a *narrow* SAVE/LOAD share.
+- **DEPENDS-ON predicates un-mutated:** not checkable from the packet. The single fact that would settle it: *the actual source of each mutant.* I cannot see it.
+
+---
+
+## 5. Records / added comments
+Every comment claim in the diff is either supported by a row, supported by the measurement, or a direct mechanical consequence of the visible code. The one I would flag is the strong form of "reachable **only** by a debugger `cpsr=` assignment" — it is true by construction but is not exercised by a negative row (no row attempts to drive the backstops from a guest path on the fix). Acceptable, but worth a negative-test note. *(REASONED.)*
+
+---
+
+## One thing found while verifying
+The probe header claims "`MSR CPSR_c, #0` is BANNED (26-bit hole, a different defect)" was the *old* text and that "MODES 0x00-0x0F ARE NOW CLAIMED." This is consistent with the helper (`0x00` falls into `default: return 0`) and the `zero spsr` row. But the `NOT CLAIMED, disclosed` list then says "unmodelled values other than 0x00, 0x14, 0x15, 0x1e … escapes" — note `0x16, 0x18–0x1a, 0x1c–0x1d, 0x01–0x0f` are all *also* unmodelled and not rowed. The `kill 1e` row pins 0x1e via the range mutant, and `zero spsr` pins 0x00, so the helper is rowed at two points (0x00 and 0x1e) plus 0x14/0x15 from the kill rows. The disclosure correctly admits the gap, but the `MODES 0x00-0x0F ARE NOW CLAIMED` line in the header is louder than the disclosure — it could mislead a reader into thinking 0x01–0x0f are individually covered. *(REASONED.)*
+
+---
+
+**VERDICT: SHIP-WITH-CHANGES — fix the packet's first-row FIXED_probe2 stale reading and reconcile the M_shared_latch description with its measured effect; the code itself is correct and ready.**

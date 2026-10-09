@@ -827,6 +827,25 @@ X(msr_imm)
 		mask &= 0xff000000;
 	}
 
+	/*
+	 *  #562: a mode-field write naming a mode this model does not bank
+	 *  (reserved, or 26-bit) used to reach arm_load_register_bank()'s
+	 *  exit(1).  The architecture makes the result UNPREDICTABLE (DDI
+	 *  0100I A2.5.7; ARMv7 lets it be UNDEFINED) and forbids halting.
+	 *  Declining the MODE FIELD only, with the rest of the write applied,
+	 *  is this emulator's POLICY, not an architectural requirement.  Only
+	 *  the local mask changes: ic->arg[] is a cached translation.
+	 */
+	if ((mask & ARM_FLAG_MODE) && !arm_mode_is_modelled(ic->arg[0])) {
+		if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_MSR)) {
+			cpu->cd.arm.mode_warned |= ARM_MODEWARN_MSR;
+			fatal("[ msr_imm: mode 0x%02x is not modelled; mode field"
+			    " not written, other fields are (once) ]\n",
+			    (int)(ic->arg[0] & ARM_FLAG_MODE));
+		}
+		mask &= ~ARM_FLAG_MODE;
+	}
+
 	int switch_register_banks = (mask & ARM_FLAG_MODE) &&
 	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
 	    (ic->arg[0] & ARM_FLAG_MODE));
@@ -1797,6 +1816,22 @@ void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int
 			cpu->running = 0;
 			cpu->cd.arm.next_ic = &nothing_call;
 			return;
+		}
+
+		/*  #562: an SPSR naming an unmodelled mode (an MSR SPSR_c of a
+		    reserved value, or an SPSR never written: zero = mode 0)
+		    keeps the CURRENT mode in M[4:0]; every other bit comes from
+		    the SPSR.  Same POLICY as msr_imm.  No return here: the PC
+		    load below must still run.  */
+		if (!arm_mode_is_modelled(new_cpsr)) {
+			if (!(cpu->cd.arm.mode_warned & ARM_MODEWARN_POP)) {
+				cpu->cd.arm.mode_warned |= ARM_MODEWARN_POP;
+				fatal("[ arm_pop: SPSR mode 0x%02x is not modelled;"
+				    " mode kept (once) ]\n",
+				    (int)(new_cpsr & ARM_FLAG_MODE));
+			}
+			new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) |
+			    (cpu->cd.arm.cpsr & ARM_FLAG_MODE);
 		}
 
 		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=

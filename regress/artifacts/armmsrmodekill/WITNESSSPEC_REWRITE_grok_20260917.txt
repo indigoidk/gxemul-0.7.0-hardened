@@ -1,0 +1,247 @@
+I'll start from the spec and the eight amendments, then check the ARM MSR path in `GXEMUL-SEC/` so the row table is derived from source rather than patched by memory.The spec and amendments are in; next I’ll check the MSR load/save arms, existing ARM probe session shape, and whether `testarm` can take an interrupt after the reserved-mode write.IRQ dispatch is gated on `!single_step`; next I’ll check FIQ, `testarm` devices, and whether a two-write Save row can still race after I/F are cleared.The original 16-row spec does not close under the amendments: session arithmetic was already wrong, and 1+6 and 3+5 change what the oracles have to pin. I’m writing a standalone rewrite a builder can use without the sticky notes.**VERDICT: REWRITE. Do not build the 16-row spec plus eight sticky notes.** The vehicle stands (`-E testarm`, `0xE321F014`, member 3 at both `default:` arms, one process per scored MSR row, mid-stream dump). The row list, oracles, and session arithmetic do not. Tally is **`14/17 → 17/17`**, not `14/16 → 16/16`. Sessions are **13**, not 12. Three of the eight amendments correct the spec; one of those (amendment 3) also misreads *why* the spec had two reds.
+
+Checked against `GXEMUL-SEC/src/`, not against the packet: `arm_load_register_bank` / `arm_save_register_bank` `default:` + `exit(1)`, `X(msr_imm)` unfiltered store, IRQ dispatch inside `if (!single_step)`, no ARM FIQ dispatch, banks BSS-zero via `zeroed_alloc`, `fatal()` does not exit.
+
+---
+
+## S4 — the reconciliation is not coherent as a patch
+
+Eight amendments on a spec that already disagreed with itself (12 sessions vs 15 data rows) is a `#392` shape. A builder applying them in order will get **1+6** wrong (EOF-alone makes never-fired look like a decline unless the *want* changes) and will either treat `save 2s` as a duplicate of `kill 14` or **replace** `kill 15` with it (losing the `== 0x14` pin).
+
+Rewrite the table. Keep the encodings, the machine, and the disposition.
+
+---
+
+## S3 — the two interactions, against source
+
+### Amendments 1 and 6: EOF-alone does **not** make `enc ok` / `no cbit` / dump-DEST the only backstop
+
+Amendment 1: armed kill row, **EOF alone ⇒ RED**; the `unimplemented mode 20` line is diagnosis. Amendment 6: encoding-nop / c-bit-off / MSR-never-stepped produces **no EOF** and looks like a correct decline.
+
+Alive-without-EOF is the POST colour. So never-fired is a false green **unless the want distinguishes decline from silence**.
+
+Those three rows are **necessary and not sufficient**. Smallest defeat of each, if you lean on it alone:
+
+| control as the spec named it | smallest defeat | what you actually need |
+|---|---|---|
+| dump DEST after `step 2` | proves MRS ran, not that the MSR word was planted or stepped | dump the **MSR slot** against the same dict entry `put w` used |
+| `no cbit` (`MSR CPSR_f, #0x14`) | want is already `alive, m=13`. A decoder that **never writes the mode field** greens `no cbit` **and** every kill row | accept rows GREEN on HEAD are the execution proof `no cbit` cannot be |
+| `enc ok` walking a constructor | session plants a literal (the BFX incident). Plant `0xE321F010` (USR32, modelled) under a `kill 14` label | **one `WORDS` dict**. `enc ok` iterates it. Every `put w` comes from it. Per-session plant-dump must match |
+
+What actually closes false-green — all required:
+
+1. **POST want is `m=13 sp once`, not `m=13`.** Member 3 prints `(once)`. Encoding-nop, skipped-step, and silent member-2 print nothing. `classify()` must put ` once` in the *got* string so a missing latch is a FAIL, not a comment.
+2. **Poison `DEST+4` with `0xdeadbeef`.** After an alive MSR step, dump `DEST+4` (never `DEST+0`). Poison still there ⇒ post-MSR `MRS/STR` never ran ⇒ RED.
+3. **One `WORDS` dict + plant-dump of the MSR slot.** This is the load-bearing anti-false-green, the way amendment 6 hoped `enc ok` was. Treat it with the same scrutiny as the kill rows.
+4. **Named-red tally.** HEAD must be exactly the three named reds. `17/17` on HEAD is not success.
+
+So: under amendment 1 those rows stop being conveniences **for attribution**. They are not, by themselves, the thing that stops a false green. Drop `(once)` from the want and amendment 6’s encoding-nop greens POST.
+
+### Amendments 3 and 5: two writes do **not** make `save 2s` nondeterministic on this probe
+
+Amendment 3 is half-right. The original two reds were `kill 14` and `kill 15` (two **Load** holes, catching `== 0x14`) — **not** Load vs Save. The spec already disclosed `save 2s` as detector-only. The underlying point stands: without a scored two-write row, a Load-only skip-memcpy POSTs clean and still dies on the write *out* of reserved mode. The round’s disposition is member 3 at **both** defaults. **Score `save 2s`. Keep `kill 15`. Do not replace one with the other.**
+
+Amendment 5 is true of the encoding (`#0x14` clears I and F) and true of testarm (cons/ether/rtc hang off `irqc` in `default_test`). It does **not** make a stepped `save 2s` racy:
+
+- ARM IRQ dispatch is inside `if (!single_step)` in `cpu_dyntrans.c`. `-V` sets `single_step`.
+- There is no ARM FIQ dispatch in that file and no `fiq_asserted` on the ARM cpu struct. Clearing F is a no-op for delivery here.
+- Debugger interaction `timer_stop()`s; `step N` does not run host-timer callbacks.
+- `dump` is host `memory_rw`.
+
+**What pins it: stay on `step`; never `continue`.** A `continue` after a *landed* `#0x14` (Load-only POST) can take `arm_exception` → Save on the reserved current mode. That is a free-run hazard, not a step hazard. Do not change the filed stimulus to `#0xD4`.
+
+---
+
+## Final row table
+
+`EXPECT_ROWS = 17`. Names ≤ 9 chars. Polarity: **want is POST-fix correct**. A PRE FAIL on a defect row *is* the reproduction.
+
+Kill/save colour, amendment 1:
+
+```
+if not alive: got = "dead"          # EOF ALONE. Text is diagnosis.
+else:         got = "m=%02x" % (post_cpsr & 0x1f)
+              if post_sp == BOOT_SP: got += " sp"
+              if "(once)" in transcript: got += " once"
+              if round-trip slot valid: got += " rt"
+```
+
+`fatal()` is raw `va_debug` — no `cpu0:` prefix, and it does **not** exit; `exit(1)` is the next statement. `%i` prints **decimal**.
+
+Do **not** pin kill-row POST `cpsr == 0xd3`. That assumed the fix refuses the whole c-byte. Member 3 is “refuse the mode-field write or roll `cpsr` back inside Load”; a mode-only refuse leaves I|F clear (`0x13`). Record I|F; do not want them.
+
+| name | sess | stimulus | oracle (want) | PRE | POST | role |
+|---|---|---|---|---|---|---|
+| `enc ok` | — | every `WORDS` entry | decoder match: c-form field `0001`, `f 14` field `1000`, rot 0, bit 22 clear, `(w & 0x0FB0F000)==0x0320F000` | ok | ok | **CONTROL=DEAD** |
+| `live` | S1 | `mov r0,#0x2a`; STR; dump | DEST / `0x2a` | ok | ok | **CONTROL=DEAD** |
+| `pc adv` | S1 | same | `print pc` / `CODE+4` | ok | ok | **CONTROL=DEAD** |
+| `armed` | S1 | re-plant MRS; STR; STR sp | DEST=`0xd3` **and** SP=`BOOT_SP` | ok | ok | **CONTROL=DEAD** |
+| `no cbit` | S2 | `MSR CPSR_f, #0x14` | alive, `m=13`, SP=`BOOT_SP` | ok | ok | enc control, **not** CONTROL=DEAD |
+| `kill 14` | S3 | `MSR CPSR_c, #0x14` | `m=13 sp once` | **dead** | `m=13 sp once` | Load `default:` |
+| `kill 15` | S4 | `MSR CPSR_c, #0x15` | `m=13 sp once` | **dead** | `m=13 sp once` | `== 0x14` decline |
+| `save 2s` | S5 | `#0x14` then `#0x13` | `m=13 sp once rt` | **dead** | `m=13 sp once rt` | Save residual |
+| `acc usr` | S6 | `#0x10` | `m=10`, SP=`0`, alive, no `unimplemented mode` | ok | ok | accept, one-way, **no canary** |
+| `acc fiq` | S7 | `#0x11` then `#0x13` | arrive `m=11` SP=`0`; return `m=13` SP=`BOOT_SP` | ok | ok | accept + canary |
+| `acc irq` | S8 | `#0x12` then `#0x13` | arrive `m=12` SP=`0`; return `m=13` SP=`BOOT_SP` | ok | ok | accept + canary |
+| `acc abt` | S9 | `#0x17` then `#0x13` | arrive `m=17` SP=`0`; return `m=13` SP=`BOOT_SP` | ok | ok | accept + canary |
+| `acc und` | S10 | `#0x1b` then `#0x13` | arrive `m=1b` SP=`0`; return `m=13` SP=`BOOT_SP` | ok | ok | accept + canary |
+| `acc sys` | S11 | `#0x1f` then `#0x13` | arrive `m=1f` SP=`0`; return `m=13` SP=`BOOT_SP` | ok | ok | accept + canary |
+| `same svc` | S12 | `#0x13` | `m=13`, SP=`BOOT_SP` (Load not called). **Not** `0xd3` — I\|F clear | ok | ok | accept; SP-unchanged **is** preservation |
+| `usr mask` | S13 | `#0x10` then `#0x14` | still `m=10`, alive, no Load line | ok | ok | USR c-byte strip |
+| `row count` | — | `len(rows)+1` | 17 | ok | ok | identity |
+
+PRE `dead` is EOF. Diagnosis (not colour):
+
+- `kill 14` / `save 2s` PRE → `arm_load_register_bank: unimplemented mode 20`
+- `kill 15` PRE → `... mode 21` (EOF with `mode 20` on this row is **unarmed**, wrong immediate)
+- `save 2s` on a Load-only POST → `arm_save_register_bank: unimplemented mode 20` — HEAD never reaches this; that is why the row exists
+
+`acc usr` cannot return (USR32 mask then strips the c-byte). `same svc` does not switch banks; `BOOT_SP` unchanged is the preservation check. Amendment 4’s SVC32 complaint was against a generic “SP drops to 0” heading; the spec’s `same svc` *row* was already right.
+
+Canary is **folded into S7–S11**, not new rows. Banks are BSS-zero (`zeroed_alloc` of `struct cpu`); a Save no-op returns SP=`0`, so `BOOT_SP` after the return MSR is enough. Arrival-only would green a Save no-op and certify a Load-only-looking accept suite.
+
+---
+
+## Row → session schedule (13, not 12)
+
+The original “12” was already false: 16 scored − `enc ok` − identity − 1 for live/pc sharing = **13**. They wrote 12.
+
+Rule, so amendment 2 cannot be read as “one MSR per process”: **one fresh `-V` process per scored row that executes a guest instruction, except live + pc adv + armed share S1 (re-plant between the MOV and the MRS). `enc ok` and `row count` execute nothing.** Two MSRs in one process is *required* for `save 2s`, `usr mask`, and every canary accept. That is not session sharing across scored rows.
+
+| sess | rows | why this process |
+|---|---|---|
+| — | `enc ok` | no guest |
+| **S1** | `live`, `pc adv`, `armed` | MOV first; overwrite CODE with MRS/STR; `pc=CODE`; `step 2`; dump. If `live` fails, stop before `armed`. MOV does not touch `cpsr`. |
+| **S2** | `no cbit` | f-bit MSR; must not share with a c-bit row |
+| **S3** | `kill 14` | dies; owns the process |
+| **S4** | `kill 15` | dies; owns the process |
+| **S5** | `save 2s` | dies on HEAD at MSR 1; owns the process |
+| **S6** | `acc usr` | one-way; no later mode write |
+| **S7** | `acc fiq` | arrival then return in the **same** stream |
+| **S8** | `acc irq` | same |
+| **S9** | `acc abt` | same |
+| **S10** | `acc und` | same |
+| **S11** | `acc sys` | same |
+| **S12** | `same svc` | same-mode skip |
+| **S13** | `usr mask` | USR then `#0x14`; one-way after first |
+| — | `row count` | no guest |
+
+**13 sessions.** Kill rows do not sit last in a shared session and do not share with anyone.
+
+---
+
+## Tally (moved — carrying `14/16 → 16/16` is the frozen-number defect)
+
+```
+HEAD  (committed exit(1) in Load default:):
+    14/17
+    RED: kill 14, kill 15, save 2s
+    ARMMSRMODE_CONTROL=OK
+    save 2s PRE is the SAME Load death as kill 14 (EOF on the first MSR).
+    It is not an independent HEAD reproduction of Save. Name that, or
+    14/17 reads as three defects.
+
+POST  (member 3 at both default: arms, decline BEFORE save or cpsr
+       rollback in Load, one (once) latch per CPU):
+    17/17
+    A Load-only skip-memcpy that leaves cpsr reserved is 16/17:
+    save 2s RED on the second MSR. That is the point.
+```
+
+Header must **name the three reds**.
+
+```
+ARMMSRMODE_CONTROL=OK|DEAD
+ARMMSRMODE_RESULT=<passed>/<total>
+ARMMSRMODE_DONE
+```
+
+---
+
+## CONTROL=DEAD (setup-failed, not “no defect”)
+
+These four red ⇒ print `ARMMSRMODE_CONTROL=DEAD`, `ARMMSRMODE_RESULT=0/0`, **stop**. Do not score kill rows on a vehicle that is not this vehicle.
+
+| row | what a red means |
+|---|---|
+| `enc ok` | the words you will plant are not MSRs / not c-bit / not the claimed immediate |
+| `live` | plant/step/dump never executed |
+| `pc adv` | the word was not translated as a 4-byte ARM insn |
+| `armed` | not SVC32 privileged `testarm` (USR32, `barearm`, or a debugger `cpsr` write) |
+
+Every later session **repeats** `DEST==0xd3` + plant-dump of the MSR slot. Prefix failure there is that row `unarmed` FAIL, not a second CONTROL=DEAD (the vehicle was already proved on S1).
+
+**Not CONTROL=DEAD:** `no cbit`, the accept rows, `usr mask`, `row count`. A red `no cbit` is a decoder finding; the tally will not be `14/17` and must not be reported as reproduction.
+
+---
+
+## Plants (order is load-bearing)
+
+```
+CODE=0x8000  DEST=0x9000  BOOT_SP=0x03fff000  BOOT_CPSR=0xd3  POISON=0xdeadbeef
+msr_c_imm(m) = 0xE321F000 | (m & 0xff)
+msr_f_imm(m) = 0xE328F000 | (m & 0xff)
+```
+
+**One `WORDS` dict.** `enc ok` iterates it. Every `put w` comes from it. A mask-only check blesses `msr_c_imm(0x10)` (USR32, modelled) as a kill word.
+
+Per MSR session, before the stimulus step:
+
+1. `r4=DEST`, poison `DEST`..`DEST+16`
+2. plant stream at `CODE` from `WORDS`
+3. `pc=CODE`; `step 2` (MRS; STR)
+4. dump DEST → must be `0xd3`, bits 4:0 `== 0x13`
+5. dump the **MSR slot** → must `sw()` to that row’s `WORDS` entry
+6. then the stimulus step(s)
+
+**Do not copy `arm_flags_probe.py` `session()`.** It dumps once at the end; the kill process is already dead. Do not copy BFX `session()` as the driver either: kill/`save 2s` **branch on EOF** after a mid-stream dump. Reuse `wait`/`send`/`rd`/`sw()`/`-A`. Copy `printed()` **verbatim** from `regress/lca_isalane_probe.py:397-399` for `print pc`. Debugger `print <reg>` emits a **bare** `0x...`; `reg` is the command with the `r0 =` prefix. Stay on `step`. Never `continue`. Never debugger-write `cpsr`. Ban `#0` (26-bit hole, not a fake-green — `ARM_MODE_USR26` still hits `default:`).
+
+**KILL (S3, S4):**
+
+```
+CODE+0 MRS  +4 STR  +8 c 14|c 15  +12 MRS  +16 STR dest+4  +20 STR sp dest+8
+step 2; dump DEST; dump CODE+8
+step 1                    # the MSR
+HEAD: EOF => dead
+POST: step 3; dump DEST+4 (NOT DEST+0); want mode 0x13, DEST+8==BOOT_SP, one (once)
+      DEST+4 still POISON => never-fired => FAIL
+```
+
+**SAVE 2s (S5):**
+
+```
+CODE+0 MRS  +4 STR  +8 c 14  +12 MRS  +16 STR dest+4
+     +20 c 13  +24 MRS  +28 STR dest+8  +32 STR sp dest+c
+step 2; dump DEST; dump CODE+8          # must be c 14
+step 1                                  # first MSR
+if not alive: dead                      # HEAD (Load)
+if alive:
+    dump DEST+4                         # not POISON; mode 0x13
+    dump CODE+20                        # must be c 13
+    step 1                              # second MSR
+    if not alive: dead                  # Load-only residual (Save)
+    else: step 3; rt iff DEST+8 mode==0x13 (not POISON)
+          want m=13 sp once rt
+```
+
+**ACCEPT with canary (S7–S11):** one stream, both halves one scored row.
+
+```
++8 c XX;  arrival at dest+4 / SP at dest+8
++24 c 13; return  at dest+c / SP at dest+10
+Arrival: mode==XX, SP==0.  Return: mode==0x13, SP==BOOT_SP.
+```
+
+**One-way / same-mode (S2, S6, S12, S13):** stop after the first MSR + arrival stores. `usr mask` adds a second MSR `c 14` and wants still `m=10`.
+
+---
+
+## What was dropped, and clause (e)
+
+Dropped from the original spec: EOF∧text as the kill trigger; `12` sessions; “two reds because two `default:` arms”; POST `0xd3` on `kill 14`; already-USR32 as the fake-green; copy-flags-`session()`; copy-flags-`printed()` (it has none). Amendment 8 belongs on the Alpha spec, not here.
+
+**Clause (e), disclosed, not rowed:** register-form MSR (`X(msr)` copies `rm` into `arg[0]` and calls `msr_imm`); 26-bit holes; other 32-bit holes `0x16/18/19/1a/1c/1d/1e` (`kill 14`+`kill 15` catch a one-value special case, not a two-value one); SPSR-then-`MOVS pc`; free-run IRQ after a landed reserved write (pinned by stay-on-step).
+
+Failability lives in the **detector**, not this witness: delete `case ARM_MODE_X` must redden that accept row; `save 2s` must redden under Load-only skip-memcpy. The witness owes the channels those mutants will use.
+
+Launch: `-V -A -E testarm -M 64  0x8000:<regress/arm_bfx_stub.bin>`. Stub contents irrelevant; every word is overwritten.

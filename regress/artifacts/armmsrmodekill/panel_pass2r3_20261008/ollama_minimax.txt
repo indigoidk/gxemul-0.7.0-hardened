@@ -1,0 +1,31 @@
+```
+VERDICT: SHIP | 0 floor breaches
+
+(Packet-only audit. Each claim READ (inlined text) or REASONED; nothing MEASURED.)
+
+Q1 / Floor. Denominator = the 40-row probe: 40 src cells (5 labels × 2 latch × 2 outcome × 2 paths) plus the 13 ancillaries the CONTRACT names (msr lbl, kill 14, kill 15, kill 1e, save 2s, kill 03, rst movs, rst ldm, zero spsr, dbg save, dbg both, latch ind, latch rpt) plus encl plus CONTROL. Each of the 8 hunks is load-bearing for at least one row — helper + ARM_MODEWARN_* defines + mode_warned field for every latched row; Save backstop for dbg save/dbg both/latch rpt; Load backstop for dbg both/latch rpt; msr_imm guard for kill rows + msr lbl + c_dX; arm_pop guard for src pop + B_pop_only14; DPI guard + cur_mode/new_cpsr/spsr_copied refactor for src dpi + rst movs/rst ldm/zero spsr + dbg both. No removable subset; smallest edit = the full composite.
+
+Q2 / Class closure. Closed with disclosed cells.
+(a) Mask width: built ~0x1e/~0x1d/~0x17/~0x14 cover bit 0, bit 1, bit 3 individually and (bits 0+1+3); bit 2 leaks visible at FIQ/IRQ/UND/SVC and caught via ~0x14's bit-2-keeping-window. Disclosed cells:
+   * ~0x1b (bit 2 only — disclosed UND-only per §0 bit/label table).
+   * ~0x10 / bit-4-only un-narrowing — rows drive 0xcf and 0x0f SPSRs (SPSR bit 4 = 0); a mask that kept bit 4 from SPSR WOULD be detected (SPSR 0 ≠ cpsr 1), but ~0x17 and ~0x14 keep bit 4 from SPSR too, so the row's "CPSR word differs" assertion catches it incidentally — no separate row needed (this is what disposition #2 is really saying; "behaviour-preserving" is imprecise wording for the same thing). The rows drive I/F-set operands (c_dX, 0xcf/0xdf) and I/F-clear operands (c_XX, 0x0f/0x1f), so a helper widening to 0xff that returns (mode & 0xff) is detected at any row with a non-zero low byte that includes unmodelled mode bits.
+(b) Label × latch × outcome: 5×2×2×2 = 40 cells, all rowed (§0). NOT CLAIMED values 0x01, 0x02, 0x04-0x0e, 0x16, 0x18-0x1a, 0x1c, 0x1d match the path-driven list (msr_imm drives 0x03, 0x14, 0x15, 0x1e; DPI drives 0x00 SVC-only, 0x0f, 0x14 SVC-only; arm_pop drives 0x0f, 0x14 SVC-only). Per-CPU latch isolation is a same-bit-isolation question — disclosed in NOT CLAIMED, not rowed.
+
+Q3 / Records. TRUE.
+- Save backstop comment: "MSR to modelled" rowed via dbg save; "DPI S-to-PC" rowed via dbg both; "exception/IRQ entry" NOT rowed (disclosed); "LDM return does not get here — arm_pop's selector default stops CPU first" TRUE for the SPSR-unmodelled case. The unstated {plant + arm_pop with modelled SPSR_X ≠ cur_mode} route reaches Save backstop (cpsr = unmodelled → switch_register_banks = TRUE → Save called with unmodelled CPSR); this is implicitly covered by the latch structure (dbg both / latch ind / latch rpt consume both backstops), not a fix defect.
+- Load backstop comment: "only caller = DPI S-to-PC executed in that mode" TRUE for {plant + DPI S-to-PC at unmodelled cur_mode} and {plant-to-USR + DPI S-to-PC at USR with unmodelled SPSR_USR}; "MSR/exception/IRQ call Load on the MODELLED mode" TRUE for MSR-from-modelled-to-modelled and exception-handler scenarios (Load's switch case matches).
+- Contract: every clause names the row that kills it (src rows for keep-mask narrowing and CPSR-word readback; kill rows for msr_imm decline; msr lbl for per-label guard; encl for predicates; latch ind/rpt for shared bits and latch suppression; dbg both for Save+Load backstop; etc.).
+- NOT CLAIMED: accurate to the path-driven values.
+
+Q4 / Which disposition is wrong. None is substantively wrong from the packet. Wording concerns only:
+- #2 ("bit 4 narrowing is behaviour-preserving (stated, not rowed)"): imprecise. A bit-4-only un-narrowing (mask = ~0x10) WOULD produce a CPSR bit 4 = 0 ≠ cpsr 1 on 0xcf/0x0f SPSR rows and thus IS detectable; the substantive claim holds only because ~0x17 and ~0x14 masks also keep bit 4 from SPSR, so the rows' CPSR-word assertions catch the un-narrowing incidentally. The decision (don't build a separate row for bit-4-only) is defensible.
+- #4 ("I forced on decline (codex) escaped → mode re-entered with I/F CLEAR before the declines"): ambiguous. Under PRETABLE3 §3 (SPSR has I/F SET in decline cells), the reading that makes the disposition's detection claim hold is "mutant forces I CLEAR", giving fix = SET ≠ mutant = CLEAR. The other reading ("mutant forces I SET") would be equivalent to fix at SPSR I = SET and not detected. The packet pins the test setup but not the mutant direction unambiguously — documentation pin-hole, not fix defect.
+- The remaining seven (1, 3, 5, 6, 7, 8, 9) hold cleanly from packet alone.
+
+Else (things noted but not blocking).
+(i) Save backstop comment's enumeration of routes omits {plant + arm_pop with modelled SPSR_X}; the latch structure handles this (both Save and the subsequent Load backstop are latched), but the comment could be tightened to disclose it.
+(ii) PRETABLE3 §3 says "SPSR has them SET" in decline cells; the "I forced on decline" disposition pairs this with an "I/F CLEAR" re-entry; this is consistent only for the "mutant forces I CLEAR" reading. Pin it.
+(iii) NOT CLAIMED correctly excludes 0x00 (driven at DPI SVC) and 0x03/0x0f/0x14/0x15/0x1e (driven at various paths). The pre-existing comment "an LDM {..pc}^ return does not get here" in the Save backstop is also in NOT CLAIMED ("LDM {pc}^ and MSR SPSR paths that stop the CPU filed separately") — consistent.
+
+CONCLUSION. SHIP. Records hold, denominators close, class closure is complete with disclosed gaps, all 9 dispositions are substantively correct. The two wording concerns on #2 and #4 are audit-side polish, not fix defects.
+```

@@ -1,0 +1,33 @@
+VERDICT: SHIP-WITH-CHANGES | 2 floor breaches (helper's USR case never driven; announce VALUES unpinned) + 1 unsettled completeness premise (MSR register-operand form) that would flip me to DO-NOT-SHIP
+
+## Q1 — Floor on the shipped composite
+
+**The floor is not zero.** Denominator swept (REASONED, blind): helper {7 modelled-case deletions, 25 unmodelled-value admissions, projection bits 5/6/7, mask drop}; msr_imm {decline-mask bits 0–4, whole-op decline, arg[]-write, label/latch conditioning}; pop + DPI {keep-mask bits 0–4 × 2 sites, 40 label×latch×outcome cells × 2 paths, early-return, spsr_copied gate}; backstops {latch, announce, return-vs-exit, body} × 2; latch {5 bit assignments, `|=` semantics}; 5 announce printfs; 3 enclosing predicates.
+
+**Survivor 1 (real defect, high severity).** READ: the packet's own per-path value enumeration — msr_imm drives 0x03 0x14 0x15 0x1e; DPI drives 0x00 0x0f 0x14; arm_pop drives 0x0f 0x14; re-entries cover the five labels; accepted SPSRs are 0xcf/0xdf (mode 0x0f/0x1f). **The mode value 0x10 (USR) appears nowhere as a driven value.** REASONED: therefore `delete "case ARM_MODE_USR32:" from arm_mode_is_modelled()` answers every driven value identically — all 40 rows stay green — while every restore-to-USR (the canonical guest user-return) is declined and the mode is kept. This is the smallest edit I can construct that is both green and genuinely broken. Settling fact (one): the SPSR/operand mode values driven by `acc movs` and `acc ldm` (or any row that MSRs to USR). If one of them restores a USR-mode SPSR, this breach closes and I withdraw it.
+
+**Survivor 2 (real, cosmetic).** READ: the channel list is "a CPSR word, an r0 value, an exact announce count, or alive/dead", plus the one text pin I can find, G_dpi_nocopied's "` once`". REASONED: the five fatal printfs' `& ARM_FLAG_MODE` masks (and the printed mode values generally) are not named as pinned anywhere; dropping one misreports the mode in a once-per-CPU warning with counts and "(once)" intact → 40/40 green. Settling fact (one): the announce-channel grep patterns (does any row pin the printed value, e.g. "mode 0x0f" / "mode 20"?).
+
+Benign survivors, not counted: latch-bit permutation (0x01..0x10 are arbitrary labels — the rows pin distinctness, which is all that matters); DPI's `cur_mode` reread (Save does not touch CPSR — equivalent); backstop `return` vs fall-through if nothing follows the switch (not settleable, and minimal-edit-unreachable).
+
+## Q2 — Class closure
+
+**Mask width: closed at the functional sites.** REASONED verification from the encodings (0x11 0x12 0x13 0x17 0x1b 0x1f, READ for 0x1b/0x1f): the bit/label table is arithmetically correct (bit0→IRQ only, bit1→FIQ, bit2→FIQ/IRQ/UND/SVC, bit3→FIQ/IRQ/ABT/SVC). The msr decline is robust: for any modelled base mode, single-bit narrowings flip on some driven arg — bits 0,1,2 via kill 14/15, bit 3 via kill 1e, bit 4 via kill 03 (READ: 0x03 is indeed the only msr_imm-driven value with bit 4 clear). Restore bit 4 is equivalent **under the packet's stated mutant form** (`~X` on the SPSR side, the keep term still ORs the full current mode, and every modelled mode has bit 4 set) — see Q4. Note the disclosed `~0x1b` example is a **build** gap, not a row gap: a bit-2 leak flips FIQ/IRQ/SVC, so the rows hold it.
+
+**Cells not held:** (i) the helper's USR case (Survivor 1 — a *modelled* value, so NOT CLAIMED's unmodelled-value list cannot cover it); (ii) the five printf masks (same class, unrowed, undisclosed).
+
+**label×latch×outcome: complete.** READ: 5 labels × 2 latch × 2 outcome × 2 paths = 40 = the ten src rows × R1–R4; the msr latch×label product is disclosed as behaviour-equivalent (its guard doesn't read the latch). No unheld cell found in this space. Residual, minor: backstop latch × label cells are not enumerated (the latch mechanism is site-local and uniform; latch rpt covers it once, not per label).
+
+## Q3 — Records
+
+**Backstop comments: TRUE as to the code shown**, on two premises the packet cannot settle: (a) Save's "only a debugger `cpsr=' assignment can now put there" — REASONED-true for the three guarded paths and exception entry (ARM_EXCEPTION_TO_MODE values are all modelled), but false if the tree has an unguarded **MSR register-operand** form; (b) the arm_pop selector claim is context-truncated but disclosed as filed separately. **Contract: TRUE** — every bullet names rows and the encl `mov pc,lr` decoder caveat is honest. **NOT CLAIMED: TRUE and arithmetically closed** — 7 modelled + 6 driven-unmodelled + 19 never-driven = 32 ✓ — but it needs two additions: the unseen *modelled* value 0x10, and the announce-value masks.
+
+## Q4 — Which disposition is wrong
+
+None is wrong in outcome. **#2 is the one to flag, on justification:** "bit 4 is set in every modelled mode, so its narrowing is behaviour-preserving" holds only because the built mutant narrows the SPSR-side mask while the keep term ORs the full current mode. Under the literal reading of "keep-mode mask" (narrowing the term that keeps the current mode), the *same fact* makes bit-4 narrowing visible at every label (mode → 0x0X, unmodelled, Load backstop, CPSR-word mismatch) — and then the existing src rows kill it. So the no-row-needed outcome survives both readings, but the stated reason survives only one; the class label and the mutant form should be pinned in the records. #8 is consistent (the measurement, READ, falsified deepseek's prediction).
+
+## Something else
+
+1. **The premise that can flip the verdict:** the packet treats msr_imm as the only CPSR-mode-write MSR path. If the tree implements `msr cpsr_*, Rm` as its own template, it is unguarded by this fix, unrowed, and undisclosed — post-fix it yields a silent wrong-bank run plus a backstop announce instead of the exit it used to give, and the Save comment's "only a debugger" claim is false. One fact settles it: the instruction table's MSR forms and whether any non-immediate template writes `cd.arm.cpsr` mode bits. If it exists unguarded: DO-NOT-SHIP.
+2. `mode_warned` "zero at cpu_new" has no init hunk in the diff — it relies on pre-existing zeroing of the cpu struct. The green announce-count rows (READ) imply it holds in the measured build; one explicit init would make the comment self-evident.
+3. Checks that **passed** and are worth recording: 23 named reds = 12 + 10 + 1 ✓; the src setup (label re-entered with I/F clear; declined SPSR 0xcf has N/Z/I/F set) pins N/Z/I/F sourcing and, transitively, the helper's denials for the six driven modelled values and load's per-label cases; the save-2s/dbg-both HEAD-death caveats are internally coherent with the row names as given.

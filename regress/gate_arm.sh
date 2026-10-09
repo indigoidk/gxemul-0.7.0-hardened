@@ -1943,4 +1943,48 @@ else
     check "crime_width rows failed"  "$(grep -c ' FAIL$' "$CRIMELOG")" "0"
 fi
 
+#  #562 armmsrmodekill.  A privileged guest MSR naming a mode this model does not bank (MSR CPSR_c,#0x14 =
+#  0xE321F014), or an SPSR restore (MOVS pc,lr; LDM {..pc}^) whose SPSR names one -- including an SPSR never written,
+#  which is zero -- reached arm_load_register_bank()'s default: and ended the emulator.  msr_imm and both restores now
+#  decline the MODE FIELD only, announced once per site per CPU, and Save/Load's default: arms are latched backstops.
+#  The probe's CONTRACT, its generated grid and its NOT CLAIMED list are in its header; the kill tables and the
+#  review chain's measurements are in regress/artifacts/armmsrmodekill/.  Rows do not end in their status token
+#  (a note follows it), so failed rows are checked twice: ARMMSRMODE_REDS must read `none', and no row line may carry
+#  ` FAIL ' after its `want=' (the `rows failed' check below).  Neither establishes row IDENTITY or uniqueness: a log
+#  with one row replaced by a duplicate of another still passes (measured by the Opus 5.5 seat; filed, armmsrmodedebt).
+MSRLOG=$LOGDIR/gate_arm_msrmode.log
+mrc=0
+python3 -u arm_msrmode_probe.py "$PMAX" gate > "$MSRLOG" 2>&1 || mrc=$?
+
+#  PARSE BEFORE SCORE: exactly one valid record of each kind.
+if [ "$(grep -c '^ARMMSRMODE_RESULT=' "$MSRLOG")" != "1" ] ||
+   ! grep -Eq '^ARMMSRMODE_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$MSRLOG" ||
+   [ "$(grep -c '^ARMMSRMODE_CONTROL=' "$MSRLOG")" != "1" ] ||
+   ! grep -Eq '^ARMMSRMODE_CONTROL=(OK|DEAD)$' "$MSRLOG" ||
+   [ "$(grep -c '^ARMMSRMODE_REDS=' "$MSRLOG")" != "1" ] ||
+   [ "$(grep -cx 'ARMMSRMODE_DONE' "$MSRLOG")" != "1" ]; then
+    note "msrmode probe produced no unique, valid completion record; last lines follow"
+    tail -5 "$MSRLOG" | sed 's/^/       /'
+    check "msrmode probe output parses" "no" "yes"
+else
+    check "msrmode probe output parses" "yes" "yes"
+    grep -E ' want=' "$MSRLOG" | grep -E ' FAIL ' | sed 's/^/       /'
+    check "msrmode controls" "$(sed -n 's/^ARMMSRMODE_CONTROL=//p' "$MSRLOG")" "OK"
+    check "msrmode probe exit status" "$mrc" "0"
+    mres=$(sed -n 's/^ARMMSRMODE_RESULT=//p' "$MSRLOG")
+    #  Pinned by hand to a LITERAL, UNQUOTED, under the ONE-TOKEN stem arm_msrmode (check_score_claims.py's PIN regex
+    #  takes one whitespace-free token before `rows run'; the stem also puts the probe's docstring under that scan).
+    #  MEASURED before this pin was written: 47/47 on the fix in every base leg of kill table 5, before and after each
+    #  lane (artifacts/armmsrmodekill/killtable5_20261008/kt1..kt4/BASE_L*.out and BASE_AFTER_L*.out, and the
+    #  kt1b..kt4b lanes), on the frozen probe 8a9a9cac -- the committed probe is AST-identical to it but for its module
+    #  docstring (killtable5_20261008/SHIPPED_vs_FROZEN.txt).  HEAD ef577140: 18/47 (killtable5_20261008/run_head.out).
+    check "arm_msrmode rows run"     "${mres#*/}" 47
+    check "arm_msrmode rows correct" "${mres%/*}" "47"
+    check "arm_msrmode rows emitted" "$(grep -cE '^  [^ ].* got=.* want=' "$MSRLOG")" "47"
+    check "arm_msrmode reds"         "$(sed -n 's/^ARMMSRMODE_REDS=//p' "$MSRLOG")" "none"
+    #  The row lines must agree with the trailer: a FAIL row under a 47/47 RESULT is a contradiction, not a pass
+    #  (the Opus 5.5 seat measured a synthetic log of that shape passing every check above).
+    check "arm_msrmode rows failed"  "$(grep -E ' want=' "$MSRLOG" | grep -cE ' FAIL ')" "0"
+fi
+
 gate_end

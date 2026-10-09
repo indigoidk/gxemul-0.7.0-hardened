@@ -1,0 +1,36 @@
+VERDICT: 1 of 12 wrong — disposition 11's *warrant* is false as stated: by the packet's own facts the debugger route reaches only the **Save** backstop; the **Load** backstop is unreachable after the guards, so "they stay reachable" and row (d)'s coverage are overstated. Dispositions 5 and 9 cannot be settled from the packet and may each be incomplete as stated (settling facts named below). 1–4, 6–8, 10, 12 are consistent with the packet's facts as far as the packet allows.
+
+## The wrong one: #11
+
+READ: the packet states debugger `put cpsr` is a "writable setting, **no bank switch**"; the sketch guards every guest writer of CPSR mode (msr_imm masks the mode bit; both restores substitute the mode field).
+
+REASONED: after the fix, CPSR holds a reserved mode **only** if the debugger put it there. The next `switch_register_banks` therefore runs Save on the reserved mode (Save default fires — reachable) and Load on a guest-written, guarded, modelled mode. No packet fact gives a second route to an unmodelled *new* mode at a switch: exceptions write modelled modes, msr_imm masks, both restores substitute.
+
+READ: row (d) is "debugger put cpsr reserved value then a mode switch" — that sequence exercises exactly one arm.
+
+CONCLUSION: "they stay reachable" is wrong for the Load arm, and no fix edit can make row (d) prove both arms. The action (keep both arms, latched, no rollback) still stands as defense-in-depth — narrow the claim, don't keep the warrant. The one fact that could overturn me: whether a restore path calls `switch_register_banks` even when the substituted mode equals the current mode; if it does, the double-poisoned corner (debugger put 0x14 + poisoned-SPSR restore) fires both arms. That fact lives in the callers, which I cannot read.
+
+## Hardest on the adopted findings (as instructed)
+
+- **#4 zero-SPSR**: the premise "`cpu_new` zero-fills" is READ-claimed by grok from source, not in this packet, and the witness never exercised it (row (c) is *owed*, not run). Settling fact: the allocation call in `cpu_new` and the absence of explicit `spsr_*` init. The derivation is sound *given* the premise (0x00 is not one of the seven labels), but #4 should not be recorded as fact until row (c) runs green.
+- **#5 "guard all three guest writers"**: the enumeration is asserted, not shown. The packet never mentions the **register form** of MSR to CPSR (`MSR CPSR_c, Rm`), a distinct instruction from `msr_imm` that, if the tree implements it, is a fourth guest writer the sketch leaves fully live — `MSR CPSR_c, Rm` with Rm=0x14 recreates the kill. One grep settles it: all writers of the CPSR mode field / callers of `switch_register_banks`. If a fourth exists, #5 commits the same class of omission it corrects.
+- **#9 "one source of truth"**: as sketched it is **two** sources — the helper plus the untouched case labels in Save/Load. A future added mode must be edited in both or guard and backstops silently disagree. Either route the Save/Load defaults through the helper or record the duplication.
+- **#7 (the codex challenge, answered)**: REASONED — whole-operation decline buys no measurable behavior here and loses defined ones. Only M[4:0] is UNPREDICTABLE; N/Z/C/V/I/F/T are defined effects of MSR. Field-only applies the defined parts; whole-op discard makes *more* of the instruction unpredictable than the architecture does. Guest-visible difference: `MSR CPSR_c, #(0x14 | 0x80)` — field-only masks IRQ and declines the mode; whole-op leaves IRQ unmasked and a guest's "critical section" runs interruptible. Nothing counter-balances; whole-op is also incoherent on restore paths, where "the whole operation" includes the PC write of `MOVS pc,lr`. The ruling stands; the pin-I/F readback is the right enforcement.
+
+## Q2 — sketch vs callers (packet-only)
+
+- Passes all 17 under every interpretation of `save 2s` I can construct (msr_imm-mediated → guard; restore-mediated → guard; debugger-mediated → Save backstop). REASONED.
+- **Corner the sketch doesn't name**: when the *current* mode is debugger-poisoned, the restore substitution writes the reserved current mode back. The decline announce fires, no death, but the reserved mode persists in CPSR — the exact state M1 was rejected for, now confined to debugger-created states. Decide explicitly (accept + document, or substitute a modelled fallback when current isn't modelled).
+- **Breaks nothing** I can derive: latch is per-CPU so per-row fresh runs reset it; DPI gains only a stack local, consistent with #10.
+- One confirm: the sketch's backstop says `fatal(...)` then "no exit(1)" — this presumes this tree's `fatal()` is print-and-continue. If it exits, the backstop is still a death. Settling fact: `fatal()`'s definition.
+
+## Q3 — smallest edit
+
+REASONED: for 17 + (a)–(d) *exactly as specified*, the sketch needs **no edit** — (a),(b),(c) go green via the restore guards, (d) via the Save backstop, the I/F pin via the field-only mask. The smallest edits that carry real content: (1) if the register-MSR grep finds a fourth writer, add one `arm_mode_is_modelled` check at its CPSR-mode write (one call site, same helper, same latch bit); (2) if row (d) must prove *both* backstops, no fix edit can do it — edit the row instead (narrow it to "Save backstop", or double-poison to reach the Load arm, which only works if the restore switch is unconditional — settle that fact first).
+
+## Something else, as invited
+
+- **Radix reconciliation**: "load mode 20 / 21" against row names "kill 14 / 15" only cohere if the fatal prints decimal (0x14→"20", 0x15→"21"). If the panel instead read 0x20/0x21 as literal mode values, the mode field is ≥6 bits and the helper's `mode & ARM_FLAG_MODE` width must match. Settling fact: the fatal's format string.
+- **M2-vs-save2s coherence**: M2 as described (msr_imm-only guard) scoring 17/17 *requires* save2s's kill to be msr_imm-mediated; if save2s is debugger- or restore-mediated, M2's description and its 17/17 cannot both be true. Settling fact: save2s's arming sequence in the probe source. Confirm before citing M2 again as #5's demonstration.
+
+No gates, runs, or files touched; every claim above is READ from the packet or REASONED from it.

@@ -1,0 +1,92 @@
+I have launched the grep command to find `ARM_FLAG_MODE` and will proceed as soon as the results are received.
+Waiting for search task to complete.
+VERDICT: GO-WITH-CHANGES (Member 3 pre-Save helper with non-fatal backstop) | 5 premises wrong
+
+---
+
+### Adversarial Review of `brief_sent.md`
+
+#### 1. Premise & Code Audit (§1, §2, §3)
+
+1. **Modelled Modes Count (§1)**:
+   - **Brief Claim**: Switches over "six modelled modes".
+   - **Source Evidence**: [`src/include/cpu_arm.h:108-114`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L108-L114) and [`src/cpus/cpu_arm.c:525-558`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L525-L558).
+   - **Correction**: There are **7** architectural 32-bit modes modelled (`ARM_MODE_USR32` (0x10), `ARM_MODE_FIQ32` (0x11), `ARM_MODE_IRQ32` (0x12), `ARM_MODE_SVC32` (0x13), `ARM_MODE_ABT32` (0x17), `ARM_MODE_UND32` (0x1b), and `ARM_MODE_SYS32` (0x1f)). `USR32` and `SYS32` share register bank [`default_r8_r14`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L528), resulting in 6 switch branches for 7 distinct modes.
+
+2. **Commit Lineage of Affected Files (§2)**:
+   - **Brief Claim**: "the three files last changed in `#524` (`4dfc7165`)".
+   - **Source Evidence**:
+     - [`src/cpus/cpu_arm_instr.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c): commit `4dfc7165` (`#524`).
+     - [`src/cpus/cpu_arm.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c): commit `2c615c3c` (Round 112, `#367`).
+     - [`src/cpus/cpu_arm_instr_dpi.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c): commit `a06e92fb` (Round 71, `#311, #312, #313`).
+   - **Correction**: Only `cpu_arm_instr.c` was touched in `#524`.
+
+3. **`fatal()` Latch Idiom Misapplication (§2)**:
+   - **Brief Claim**: "A guest-drivable `fatal()` needs a LATCH (house idiom `N = 1` per instance + a `(once)` marker in the text)... carrier rule."
+   - **Source Evidence**: [`src/cpus/cpu_alpha_palcode.c:444-452`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c#L444-L452) explicitly documents that `(once)` is a `src/devices/` idiom (40 occurrences) and appeared *zero* times under `src/cpus/`. In CPU execution, unhandled conditions cleanly halt the vCPU ([`cpu->running = 0`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1797)) rather than relying on host stdout latches.
+
+4. **Omission of SPSR Poisoning Path (§2 & §3)**:
+   - **Brief Claim**: Only 4 callers are involved; callers only restore SPSR.
+   - **Source Evidence**: [`src/cpus/cpu_arm_instr.c:856-896`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L856-L896) (`msr_imm_spsr`) and [`897-900`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L897-L900) (`msr_spsr`).
+   - **Correction**: Privileged instructions `MSR SPSR_c, <val>` write `(new_value & mask)` directly into `spsr_fiq`, `spsr_abt`, `spsr_und`, `spsr_irq`, and `spsr_svc` with zero mode validation. SPSR can thus be poisoned directly, which later detonates callers 2 and 3.
+
+5. **Detector Row Count Conflation (§4 Q5)**:
+   - **Brief Claim**: Lists 13 row strings for a "17-row" probe, grouping `acc fiq/irq/abt/und/sys`.
+   - **Source Evidence**: [`regress/arm_msrmode_probe.py:353-372`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L353-L372).
+   - **Correction**: Those are 5 individual scored rows (`acc fiq`, `acc irq`, `acc abt`, `acc und`, `acc sys`), totaling 17 distinct test rows.
+
+---
+
+#### 2. Domain & Arithmetic Enumeration
+
+- **CPSR Mode Bits Domain**: `cpsr & ARM_FLAG_MODE` evaluates across all 5 bits $M[4:0] \in [0, 31]$ (0x00..0x1F):
+  - **Modelled 32-bit modes (7 values)**: `0x10` (USR), `0x11` (FIQ), `0x12` (IRQ), `0x13` (SVC), `0x17` (ABT), `0x1B` (UND), `0x1F` (SYS).
+  - **Unmodelled/Fatal modes (25 values)**:
+    - 26-bit legacy modes (4 values): `0x00`, `0x01`, `0x02`, `0x03` (unhandled in [`arm_save_register_bank`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L525) / [`arm_load_register_bank`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L572)).
+    - Reserved modes (21 values): `0x04..0x0F` (12), `0x14..0x16` (3), `0x18..0x1A` (3), `0x1C..0x1E` (3).
+- **CPSR & SPSR Writers Audit**:
+  - Entire tree survey of `cpu->cd.arm.cpsr` writes reveals only **3** guest-controllable sites for mode bits:
+    1. [`src/cpus/cpu_arm_instr.c:841-842`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L841-L842) (`msr_imm` / `msr`).
+    2. [`src/cpus/cpu_arm_instr.c:1808`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1808) (`bdt_load`, `LDM ... ^` with PC).
+    3. [`src/cpus/cpu_arm_instr_dpi.c:221-229`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L221-L229) (DPI S-bit with Rd=PC).
+    *(Reset at [`cpu_arm.c:133`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L133) and exceptions at [`cpu_arm.c:698`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L698) write hardcoded architectural modes; branch/Thumb instructions only modify `ARM_FLAG_T`).*
+  - SPSR writers:
+    1. [`src/cpus/cpu_arm.c:676-684`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L676-L684) (`arm_exception`: captures current CPSR).
+    2. [`src/cpus/cpu_arm_instr.c:862-879`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L862-L879) (`msr_imm_spsr` / `msr_spsr`: unvalidated guest write).
+
+---
+
+#### 3. Questions & Review-Asks Responses
+
+##### Q1: Premise Audit
+Answered in sections 1 and 2 above. A reserved mode reaches CPSR strictly via `msr_imm`/`msr`, or via restore from SPSR in `bdt_load` / DPI S-to-PC after SPSR has been poisoned by `msr_imm_spsr`/`msr_spsr`.
+
+##### Q2: The Disposition
+- **For `msr_imm` / `msr`**: In ARMv5 ARM DDI 0100I §A4.1.40, MSR has "Exceptions: None". Writing a reserved value to M[4:0] is architecturally UNPREDICTABLE. Declining only the mode change (`mask &= ~ARM_FLAG_MODE`) is the correct disposition:
+  - Other requested bits (e.g., flags from field `f`, interrupt masks $I/F$ from field `c`) continue to apply normally.
+- **For Callers 2 & 3 (`bdt_load` & DPI S-to-PC)**: In ARM DDI 0100I §A4.1.22 and §A4.1.27, restoring an unallocated mode from SPSR is also UNPREDICTABLE with "Exceptions: None". Injecting FAULT (`ARM_EXCEPTION_UND`) is architecturally ungrounded and will panic kernels without an unallocated-mode UND vector. Declining the mode switch while completing the PC and flag transfer preserves emulator integrity.
+- **For `msr_imm_spsr`**: Masking out reserved mode bits when writing SPSR stops poison injection at the source.
+
+##### Q3: Where the Decline Lives
+- **Guards in Save/Load with rollback**: Fails. By the time `arm_load_register_bank()` runs, the old mode is already overwritten in CPSR. In Caller 3, `arm_save_register_bank()` is called unconditionally *before* SPSR is inspected. Caller 4 would crash in Save on any prior unhandled reserved mode.
+- **Shared helper before mode update**: Complete success. With `arm_mode_is_modelled(mode)`:
+  - In `msr_imm`: If `!arm_mode_is_modelled(new_val & ARM_FLAG_MODE)`, clear `ARM_FLAG_MODE` from `mask`. `switch_register_banks` evaluates to 0, Save and Load are skipped, and non-mode bits are applied safely.
+  - In `bdt_load`: Check `new_cpsr`. If unmodelled, preserve current mode in `new_cpsr` and set `switch_register_banks = 0`.
+  - In DPI S-to-PC: Gate bank switching and mode overwrite on `arm_mode_is_modelled(spsr_mode)`.
+
+##### Q4: The Backstop
+The `default:` arms in [`cpu_arm.c:559-561`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L559-L561) and [`cpu_arm.c:606-608`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L606-L608) should remain as defensive backstops, but **`exit(1)` must be removed**. If reached, they should log a warning and stop the virtual processor (`cpu->running = 0; cpu->cd.arm.next_ic = &nothing_call;`) matching [`bdt_load:1797-1798`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1797-L1798), rather than aborting the host emulator process.
+
+##### Q5: Smallest Edit that Breaks Fix and Passes Detector
+- **Mutant**: In [`msr_imm`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L822), add a narrow guard matching only modes 0x14 and 0x15:
+  ```c
+  if ((ic->arg[0] & 0x1e) == 0x14) { mask &= ~ARM_FLAG_MODE; fatal("... (once)\n"); }
+  ```
+  while leaving modes 0x16, 0x04..0x0f unhandled, and leaving `bdt_load`, DPI S-to-PC, and `msr_imm_spsr` completely unpatched.
+- **Detector Outcome**: [`regress/arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py) only tests `c_14` and `c_15` on MSR immediate. It has no probes for mode 0x16, no probes for SPSR writes, and no probes for `LDM ^` or DPI S-to-PC. All 17 rows (`kill 14`, `kill 15`, `save 2s`, controls, and accepts) turn **17/17 green**, while the host-kill defect remains fully exploitable.
+
+---
+
+### Final Disposition
+
+GO-WITH-CHANGES

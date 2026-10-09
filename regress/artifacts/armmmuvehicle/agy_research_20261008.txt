@@ -1,0 +1,160 @@
+VERDICT: GXemul's `-E testarm` machine fully supports ARM MMU translation via CP15 c1/c2/c3 and section/page mappings with debugger single-stepping intact, but crashes the host via `exit(1)` if descriptor formats are unsupported (e.g. Fine pages), if DACR domain access is set to 2, or if translation-fault exception vectors are not mapped in the page table.
+
+---
+
+### 1. ARM CPU Types for `-E testarm` (`-C`), Thumb Support, and Default CPU
+
+* **Default CPU for `testarm`:**
+  * **SA1110**
+  * Citation: [src/machines/machine_test.c:212-215](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L212-L215) (`MACHINE_DEFAULT_CPU(testarm)` sets `machine->cpu_name = strdup("SA1110");`, registered via `MACHINE_REGISTER(testarm)` at [src/machines/machine_test.c:226-231](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L226-L231)).
+
+* **CPU types accepted by `-C`:**
+  * Flag `-C` assigns `m->cpu_name` in [src/core/main.c:321](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/main.c#L321), which is passed to `cpu_new()` in [src/core/emul.c:502](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul.c#L502).
+  * In [src/cpus/cpu_arm.c:94-110](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L94-L110) (`arm_cpu_new`), the name is matched case-insensitively against the table `ARM_CPU_TYPE_DEFS`.
+  * The full list of supported ARM CPU names defined in [src/include/arm_cpu_types.h:50-113](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L50-L113) contains 50 entries:
+    `ARM3`, `ARM610` (two definitions: CPU IDs `0x41560600` and `0x41560610`), `ARM620`, `ARM700`, `ARM710`, `ARM710A`, `ARM720T`, `ARM740T4K`, `ARM740T8K`, `ARM7500`, `ARM7500FE`, `ARM810`, `ARM920T`, `ARM922T`, `ARM940T`, `ARM946ES`, `ARM966ES`, `ARM966ESR1`, `ARM1020E`, `ARM1022ES`, `ARM1026EJS`, `ARM1136JS`, `ARM1136JSR1`, `SA110`, `SA1100`, `SA1110`, `TI925T`, `IXP1200`, `80200`, `PXA210`, `PXA210A`, `PXA210B`, `PXA210C`, `PXA250`, `PXA250A`, `PXA250B`, `PXA250C`, `PXA27X`, `IXP425_255`, `IXP425_400`, `IXP425_533`, `CORTEX-A5`, `SnapdragonS2`, `80219_400`, `80219_600`, `80321_400`, `80321_400_B0`, `80321_600`, `80321_600_B0`, `80321_600_2`.
+
+* **Thumb support flag/table:**
+  * **There is NO CPU flag or table for Thumb capability in GXemul.**
+  * In [src/include/arm_cpu_types.h:39-43](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L39-L43), the only CPU feature flags defined are `ARM_NO_MMU` (`1`), `ARM_DUAL_ENDIAN` (`2`), and `ARM_XSCALE` (`4`).
+  * In [src/include/cpu_arm.h:40-48](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L40-L48), `struct arm_cpu_type_def` has no Thumb field.
+  * In this emulator, **ALL** ARM CPU types are treated as supporting Thumb. Thumb execution is purely gated at runtime by the CPSR Thumb bit (`ARM_FLAG_T = 0x20`, [src/include/cpu_arm.h:101](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L101)). When `cpu->cd.arm.cpsr & ARM_FLAG_T` is set (via `bx`/`blx` with bit 0 set, [src/cpus/cpu_arm_instr.c:358](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L358), or entry point bit 0, [src/core/emul.c:671-673](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/emul.c#L671-L673)), `src/cpus/cpu_dyntrans.c:255-262` unconditionally invokes `arm_cpu_interpret_thumb_SLOW(cpu)` regardless of which CPU model was selected.
+
+---
+
+### 2. Enabling MMU, Reading TTB (c2) and DACR (c3), and Accepted Descriptors
+
+* **Enabling the MMU (CP15 c1 bit):**
+  * Handled in [src/cpus/cpu_arm_coproc.c:91-143](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L91-L143) (`arm_coproc_15`, `crn == 1`, `opcode2 == 0`).
+  * Writes to CP15 c1 update `cpu->cd.arm.control = cpu->cd.arm.r[rd];` ([src/cpus/cpu_arm_coproc.c:135](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L135)).
+  * When bit 0 (`ARM_CONTROL_MMU`, [src/include/thirdparty/armreg.h:177](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L177)) changes:
+    [src/cpus/cpu_arm_coproc.c:140-143](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L140-L143) swaps the function pointer:
+    ```c
+    cpu->translate_v2p = cpu->cd.arm.control & ARM_CONTROL_MMU ?
+        arm_translate_v2p_mmu : arm_translate_v2p;
+    ```
+* **Where TTB (c2) and DACR (c3) are written and read:**
+  * **CP15 c2 (TTB):**
+    * Written in [src/cpus/cpu_arm_coproc.c:186-197](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L186-L197): masks to 16 KB alignment (`cpu->cd.arm.ttb = cpu->cd.arm.r[rd] & 0xffffc000;`).
+    * Read in [src/cpus/memory_arm.c:133-138](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L133-L138): resolves `cpu->cd.arm.translation_table = memory_paddr_to_hostaddr(cpu->mem, cpu->cd.arm.ttb & 0x0fffffff, 0);` and indexes L1 descriptor `d` at offset `addr = ((vaddr & 0xfff00000ULL) >> 18);` ([src/cpus/memory_arm.c:131, 141](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L131)).
+  * **CP15 c3 (DACR):**
+    * Written in [src/cpus/cpu_arm_coproc.c:199-204](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L199-L204): `cpu->cd.arm.dacr = cpu->cd.arm.r[rd];`.
+    * Read in [src/cpus/memory_arm.c:152-153](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L152-L153): extracts the 2-bit domain access value:
+      `domain = (d >> 5) & 15;`
+      `dav = (cpu->cd.arm.dacr >> (domain * 2)) & 3;`
+* **Descriptor formats accepted by the translation walk in `memory_arm.c`:**
+  * **First-level (L1) descriptor `d`** (`switch (d & 3)`, [src/cpus/memory_arm.c:155](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L155)):
+    * `d & 3 == 0`: Fault / Unmapped section (`fs = FAULT_TRANS_S;`, [src/cpus/memory_arm.c:157-159](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L157-L159)).
+    * `d & 3 == 1`: **Coarse Page Table** ([src/cpus/memory_arm.c:161-238](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L161-L238)). Points to L2 base `ptba = d & 0xfffffc00`.
+      Second-level (L2) descriptor `d2` (`switch (d2 & 3)`, [src/cpus/memory_arm.c:185](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L185)):
+      * `d2 & 3 == 0`: Page Translation Fault (`fs = FAULT_TRANS_P;`, [src/cpus/memory_arm.c:186](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L186)).
+      * `d2 & 3 == 1`: **16 KB Large Page** ([src/cpus/memory_arm.c:188-197](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L188-L197)).
+      * `d2 & 3 == 2`: **4 KB Small Page** ([src/cpus/memory_arm.c:211-232](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L211-L232)).
+      * `d2 & 3 == 3`: **1 KB Tiny Page** ([src/cpus/memory_arm.c:202-207](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L202-L207); on XScale CPUs with `ARM_XSCALE`, handled as 4 KB page [src/cpus/memory_arm.c:198-200, 223-225](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L198-L200)).
+    * `d & 3 == 2`: **1 MB Section descriptor** ([src/cpus/memory_arm.c:239-250](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L239-L250)). Physical address is `(d & 0xfff00000) | (vaddr & 0x000fffff)`.
+    * `d & 3 == 3`: **Fine Page Table is NOT accepted** ([src/cpus/memory_arm.c:252-255](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L252-L255)). Hits `default:` and terminates the host emulator via `exit(1)`.
+
+---
+
+### 3. Minimal Setup, Debugger `put`, and Single-Stepping (`step`)
+
+* **Does `put` write physical or virtual memory?**
+  * `put` writes **VIRTUAL memory**.
+  * In [src/debugger/debugger_cmds.c:1459-1461, 1506-1508, 1543](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L1459-L1461) and [src/core/memory.c:806-808](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L806-L808), `put` calls `cpu->memory_rw(..., addr, ..., MEM_WRITE, ...)` without the `PHYSICAL` flag.
+  * In [src/cpus/memory_rw.c:186, 245-248](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L186), unless `PHYSICAL` is explicitly specified, `memory_rw` invokes `cpu->translate_v2p()` on `addr`.
+  * When the MMU is OFF, virtual equals physical (`arm_translate_v2p` identity maps in [src/cpus/memory_arm.c:54-60](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L54-L60)). Once the MMU is ON, `put` translates through `arm_translate_v2p_mmu`.
+
+* **Does debugger `step` keep working after the MMU turns on?**
+  * **YES**.
+  * Entering the debugger calls `cpu_create_or_reset_tc()` and `invalidate_translation_caches(..., INVALIDATE_ALL)` ([src/debugger/debugger.c:792-797](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L792-L797)).
+  * On `step`, [src/cpus/cpu_dyntrans.c:287-288](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L287-L288) disassembles the instruction via `memory_rw` and [src/cpus/cpu_dyntrans.c:190, 679-680](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L190) resolves the translated physical page via `cpu->translate_v2p` (now `arm_translate_v2p_mmu`). As long as PC's virtual page has a valid mapping, `step` continues to single-step instructions without issue.
+
+* **Minimal guest instructions / debugger writes to configure and enable MMU:**
+  * CP15 registers cannot be modified directly via debugger commands (`reg` is read-only in [src/debugger/debugger_cmds.c:1644-1673](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L1644-L1673), and CP15 is not part of `settings_access` in [src/debugger/debugger_expr.c:128-174](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_expr.c#L128-L174)). They must be set via guest `mcr` instructions.
+  * **Section Descriptor Format:**
+    For identity mapping section 0 (`0x00000000`–`0x000fffff`):
+    `d = 0x00000c02` (bits 31:20 = base `0x000`; bits 11:10 `AP = 3` for full R/W access; bits 8:5 `domain = 0`; bits 1:0 `type = 2` for section descriptor).
+  * **Debugger writes (while MMU is off):**
+    Choose a 16 KB-aligned TTB address, e.g., `0x4000`:
+    `put w 0x4000, 0xc02` (writes the L1 descriptor for virtual address `0x00000000`).
+  * **Minimal guest instructions (placed at current PC):**
+    ```arm
+    mov   r0, #0x4000
+    mcr   p15, 0, r0, c2, c0, 0    ; set c2 (TTB) = 0x4000
+    mov   r1, #1                   ; domain 0 client (or 3 for manager)
+    mcr   p15, 0, r1, c3, c0, 0    ; set c3 (DACR) = 1
+    mrc   p15, 0, r2, c1, c0, 0    ; read c1 (Control)
+    orr   r2, r2, #1               ; set bit 0 (M bit: MMU enable)
+    mcr   p15, 0, r2, c1, c0, 0    ; write c1: MMU enabled
+    ```
+    *(If written purely by guest code without `put`, prepend `mov r3, #0xc02` and `str r3, [r0]` to populate the table).*
+    Because `0x00000000` is identity-mapped, the next sequential instruction word at `PC + 4` executes seamlessly at the identical virtual address.
+
+---
+
+### 4. Translation Fault Handling: Instruction Fetch vs Data Load
+
+Handled in `exception_return` in [src/cpus/memory_arm.c:257-277](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L257-L277):
+
+* **(a) Instruction Fetch (`flags & FLAG_INSTR`, [src/cpus/memory_arm.c:119, 268-269](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L119)):**
+  * **Exception:** `ARM_EXCEPTION_PREF_ABT` (Prefetch Abort, [src/cpus/memory_arm.c:269](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L269)).
+    * In [src/cpus/cpu_arm.c:724, 739-744, 776-778](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L724), sets CPSR mode to `ARM_MODE_ABT32` (`0x17`), saves CPSR to `spsr_abt`, disables interrupts (`ARM_FLAG_I`), clears Thumb (`ARM_FLAG_T`), saves return address (`PC + 4`) to `r14_abt`, and sets `PC` to vector `0x0000000c` (or `0xffff000c` if `ARM_CONTROL_V` is set in c1).
+  * **FSR/FAR updates:** **NONE** (unchanged). Lines 271–272 are bypassed.
+  * **Citations:** [src/cpus/memory_arm.c:268-269](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L268-L269), [src/cpus/cpu_arm.c:662-780](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L662-L780).
+
+* **(b) Data Load (`!(flags & FLAG_INSTR)`, [src/cpus/memory_arm.c:270-274](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L270-L274)):**
+  * **Exception:** `ARM_EXCEPTION_DATA_ABT` (Data Abort, [src/cpus/memory_arm.c:273](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L273)).
+    * In [src/cpus/cpu_arm.c:708-713, 724, 744, 776-778](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L708-L713), sets CPSR mode to `ARM_MODE_ABT32`, saves CPSR to `spsr_abt`, disables interrupts, clears Thumb, saves return address (`PC + 8`) to `r14_abt`, and sets `PC` to vector `0x00000010` (or `0xffff0010` if `ARM_CONTROL_V`).
+  * **FAR update:**
+    * `cpu->cd.arm.far = vaddr;` ([src/cpus/memory_arm.c:271](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L271)).
+  * **FSR update:**
+    * `cpu->cd.arm.fsr = (domain << 4) | fs;` ([src/cpus/memory_arm.c:272](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L272)).
+    * `domain`: extracted from descriptor bits 8:5 `(d >> 5) & 15` ([src/cpus/memory_arm.c:152](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L152)) or `0` on Section Translation fault ([src/cpus/memory_arm.c:157](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L157)).
+    * `fs`:
+      * `FAULT_TRANS_S` (`0x5`, [src/include/thirdparty/armreg.h:234](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L234)): Section Translation fault ([src/cpus/memory_arm.c:158](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L158)).
+      * `FAULT_TRANS_P` (`0x7`, [src/include/thirdparty/armreg.h:236](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L236)): Page Translation fault / missing L2 page ([src/cpus/memory_arm.c:173, 186](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L173)).
+      * `FAULT_DOMAIN_S` (`0x9`, [src/include/thirdparty/armreg.h:238](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L238)): Section Domain fault ([src/cpus/memory_arm.c:241](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L241)).
+      * `FAULT_DOMAIN_P` (`0xb`, [src/include/thirdparty/armreg.h:240](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L240)): Page Domain fault ([src/cpus/memory_arm.c:163](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L163)).
+      * `FAULT_PERM_S` (`0xd`, [src/include/thirdparty/armreg.h:242](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L242)): Section Permission fault ([src/cpus/memory_arm.c:249](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L249)).
+      * `FAULT_PERM_P` (`0xf`, [src/include/thirdparty/armreg.h:244](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L244)): Page Permission fault ([src/cpus/memory_arm.c:236](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L236)).
+  * **Citations:** [src/cpus/memory_arm.c:270-274](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L270-L274), [src/cpus/cpu_arm.c:662-780](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L662-780).
+
+---
+
+### 5. Places in That Path That Terminate the Process (`exit(1)`) or Stop the CPU (`running = 0`)
+
+#### Process Terminations (`exit(1)`):
+1. **Unmapped/Faulting Exception Vector:**
+   * [src/cpus/cpu_dyntrans.c:730-733](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L730-L733): In `DYNTRANS_PC_TO_POINTERS_GENERIC`, when an instruction fetch translation fault redirects PC to the Prefetch Abort handler vector (`0x0000000c` / `0xffff000c`), if the page table does not map the exception vector address itself, translation fails (`!ok`) and terminates the host:
+     `fatal("FATAL: could not find physical address of the exception handler?"); exit(1);`
+2. **Unsupported L1 Descriptor (Fine Page Table / Type 3):**
+   * [src/cpus/memory_arm.c:252-255](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L252-L255): If `d & 3 == 3` in the L1 translation table:
+     `default: fatal("TODO: descriptor for vaddr 0x%08x: 0x%08x (unimplemented type %i)\n", vaddr, d, d&3); exit(1);`
+3. **Reserved DACR Domain Access Value (`dav == 2`):**
+   * [src/cpus/memory_arm.c:78-79](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L78-L79): In `arm_check_access`, if guest DACR sets domain value `2` (reserved in ARM architecture):
+     `case 2: fatal("arm_check_access(): 1 shouldn't be used\n"); exit(1);`
+4. **CP15 MCR/MRC with `Rd = r15/PC`:**
+   * [src/cpus/cpu_arm_coproc.c:60-63](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L60-L63): If guest code targets CP15 with register `r15`:
+     `if (rd == ARM_PC) { fatal("[ TODO: arm_coproc_15: rd = PC ]\n"); exit(1); }`
+5. **Switching Endianness via CP15 c1:**
+   * [src/cpus/cpu_arm_coproc.c:161-178](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L161-L178): If guest code toggles the B-bit (`ARM_CONTROL_BIG`, bit 7) in CP15 c1:
+     `fatal("ERROR: Trying to switch endianness. Not supported yet.\n"); exit(1);`
+6. **Non-zero PID in CP15 c13:**
+   * [src/cpus/cpu_arm_coproc.c:261-265](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L261-L265): If guest code writes a non-zero value to the PID register:
+     `fatal("ARM TODO: pid!=0. Fast Context Switch Extension not implemented yet\n"); exit(1);`
+7. **Reset Exception or Unimplemented Exception Mapping:**
+   * [src/cpus/cpu_arm.c:704-707](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L704-L707): `ARM_EXCEPTION_RESET` halts and exits: `cpu->running = 0; fatal("ARM RESET: TODO"); exit(1);`.
+   * [src/cpus/cpu_arm.c:731-733](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L731-L733): Unmapped exception mode: `exit(1);`.
+
+#### CPU Halts (`running = 0`):
+1. **Unimplemented Instruction at PC or Exception Vector:**
+   * [src/cpus/cpu_dyntrans.c:2014](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L2014): Label `bad:` executes `cpu->running = 0;` if guest memory contains an unimplemented/unsupported opcode.
+2. **Misaligned Branch Target in ARM Mode:**
+   * [src/cpus/cpu_arm_instr.c:365-371, 396-402, 497-503](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L365-L371): In `bx`, `bx_trace`, or `blx_reg`, jumping to an unaligned 32-bit address (`cpu->pc & 2 && (cpu->pc & 1) == 0`):
+     `fatal("[ ARM pc misaligned? 0x%08x ]\n", (int)cpu->pc); cpu->running = 0;`
+3. **Wait For Interrupt (`wfi`):**
+   * [src/cpus/cpu_arm_instr.c:1004](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1004): Guest executing `wfi` sets `cpu->running = 0;`.
+4. **Unimplemented PSR / Bank Mode:**
+   * [src/cpus/cpu_arm_instr.c:911, 954, 1816](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L911): In `msr`, `mrs_spsr`, or `ldm_reg_pc_cpsr`, encountering an unmodeled mode sets `cpu->running = 0;`.
+5. **Unaligned `ldrex` / `strex`:**
+   * [src/cpus/cpu_arm_instr.c:2054-2056, 2099-2101](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L2054-L2056): Unaligned access on `ldrex`/`strex` triggers `cpu->running = 0;`.

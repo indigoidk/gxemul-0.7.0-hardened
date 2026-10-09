@@ -1,0 +1,77 @@
+PRETABLE4 -- #562 repair 4 (last closure), written BEFORE kill table 4 (mtime precedes every LANE
+output).  Baseline: HEAD ef577140 export + the CURRENT GXEMUL-SEC working-tree 4 src files
+(= msr4/src_v4, cmp-verified) = msr5/src_v5, UNCHANGED: no product edit -- no real defect found,
+and Opus re-verified both backstop comments true (Q3).  Probe: Opus `probe_closure2.py'
+(reproduced byte-for-byte from the installed probe by mkclosure.py + mkclosure2.py) + row
+`msr wide' + header records = 43 rows.  Fixed 43/43, HEAD 17/43 with exactly the 26 named reds
+(run_fixed.out, run_head.out).
+
+0. REVIEW OF probe_closure2.py (taken over, not rewritten)
+   src rows: accept SPSR 0xffffffdf (sf_ff/ss_ff/sx_ff/s_df); `msr cpsr_fsx,#0' + label re-entry
+   (I/F/T clear) before EACH decline -> old CPSR 0x0000000m vs SPSR 0xffffffcf at R2 and R3.
+   Checked: R1 = R4 = ffffffdf, R2 = R3 = ffffffc0|m on all ten (run_fixed.out).
+   tbit: T-set accept 0x3f via pop, DPI, msr; T-set decline 0x34 via msr, pop, DPI; read by the
+   debugger `print cpsr' (low byte), re-armed with cpsr=0xd3 between steps.  n=3 (one announce
+   per decline site).
+   encl2: S-DPI Rd!=PC (adds r0,pc,#0 then mov r0,#0x2a), S-LDM without pc (ldmia r5,{r0}^),
+   DPI restore through SUB (subs pc,lr,#0 with spsr 0x14), msr_imm `#0x03' decline from FIQ.
+   New WORDS got whole-word field decodes in `enc ok' (they had none).
+
+1. THE CLOSURE RULE, CHECKED PER PATH (see the probe header's CLASS CLOSURE paragraph)
+   (1) every operand bit SET in an accept:
+       DPI   bits 31:6,4:0 src R1/R4 (0xffffffdf); bit 5 tbit (0x3f)           -- complete
+       POP   same                                                               -- complete
+       MSR   bits 31:6,4:0 msr wide (0xffffffd1, NEW ROW); bit 5 tbit (c_3f);
+             bits 3:1 of the MODE are set in accepts by c_17/c_1b/c_1f (msr lbl, acc rows)  -- complete
+   (2) every restored bit differs old-vs-new at each decline:
+       DPI   31:6 at R2 and R3 (src); 5 at tbit (0x34 over re-armed 0xd3)       -- complete
+       POP   same                                                               -- complete
+       MSR   c-byte I/F at kill 14 etc.; T at tbit; 31:8 + I/F at msr wide
+             (0x00000014 over 0xffffffd1: every non-mode bit except T differs)  -- complete
+   Missing cells: NONE against the rule.  Accept-side provenance (R1/R4 I/F equal in both
+   sources) is OUTSIDE the rule and disclosed as (e).
+
+2. (e) ITEMS -- graded
+   DPI repair compiled into MOV only        -> ROWED (encl2 subs pc,lr)
+   msr `~0x0f' at non-SVC labels            -> ROWED (encl2 #0x03 from FIQ)
+   `mask &= ~0x3f'                          -> ROWED (tbit)
+   accept-side I/F provenance               -> DISCLOSED (pre-existing assignment; unconditional
+                                               forms caught at R2)
+   msr operand bits 31:8                    -> ROWED (msr wide, new)
+
+3. RECORDS corrected in the probe header (all six Opus listed):
+   (a) WIDENING: now "by ANY bit 31:5" with the per-bit carriers named.
+   (b) N/Z provenance: the false "replaced CPSR has them CLEAR" sentence replaced by rule (2),
+       and quoted as the corrected wording.
+   (c) rd==PC: both S and non-S cells named (encl / encl2).
+   (d) msr mask width: kill 03 (SVC) + encl2 (FIQ) for bit 4; tbit for ~0x3f.
+   (e) "bits 7:5 SET" (PRETABLE3 and header) replaced by the per-bit carrier list.
+   (f) `~0x1b': stated HELD (killed on both paths), not disclosed.
+   PRETABLE3's "no BUILT narrowing is UND-visible ... ~0x1b, not built" is superseded by this.
+
+4. PER ROW -- kills: <mutant> via <channel>   (rows new or changed in repairs 3-4)
+   src dpi <lab>  R_dpi_clr17/1e/1d/1b per bit/label table, H_proj_ff, H_proj_c (R1/R4 declined; H_proj_3f is NOT
+                  visible here -- 0xffffffdf has T clear -- tbit carries it),
+                  N_dpi_keepflags/keepN/keepNZ/grok, F_dpi_iclr (R2/R3 word), L_dpi_latchlabel,
+                  E_dpi_irqlatch/irqacc, N_dpi_svc_only, N_dpi_keep_irq, M_drop_dpi,
+                  M_uncond_dpi, N_latch_and_dpi, N_cond_dpi, D_del_dpi (n=), H_proj_11f (R1)
+                  -- via the four CPSR words and n=
+   src pop <lab>  the pop mirrors of the above, plus B_pop_only14, K_pop_ionly, R_pop_clr14
+   tbit           H_proj_3f (accepts of 0x3f declined -> 33), M_msr_clr3f (msr decline loses T)
+   encl           C_pop_retflag1, D_dpi_pccmp1, D_dpi_snots
+   encl2          D_dpi_pccmpS (adds r0,pc jumps), C_pop_retflagS (ldm {r0}^ restores),
+                  O_dpi_movonly (subs pc,lr applies 0x14), M_msr_clr0f_nonsvc (#0x03 at FIQ)
+   msr wide       W_msr_keepflags (decline keeps NZCV: f0000011), H_proj_11f / H_proj_c /
+                  H_proj_ff (accept 0xffffffd1 declined), M_drop_msr, M_wholeop_msr
+   msr lbl        E_msr_notfiq, N_msr_clr1e, H_proj_ff (c_dX entries)
+   latch rpt      every latch-suppression / alias / cond mutant, X_msr_latchsvc
+   kill rows, rst/acc/dbg/latch ind: as PRETABLE2.
+   CHANNEL: CPSR words, r0 value, exact announce counts, `print cpsr' low byte, alive/dead --
+   none survive-only.
+
+5. THE TABLE: 91 mutants = mutr.py 10 + mutr2.py 13 + mutate2.py 36 + mutate3.py 6 (the 65) +
+   Opus mutr3b.py 24 (its 18 new + 6 re-runs, a superset of mutr3.py) + mutate5.py 2 (rule
+   probes).  4 lanes, own clone each, BASE before/after per lane.
+   Predicted equivalent: NONE (Opus graded no built mutant equivalent; its only equivalence is
+   bit 4 of the keep-mode mask, which was never built as a mutant).
+END PRETABLE4

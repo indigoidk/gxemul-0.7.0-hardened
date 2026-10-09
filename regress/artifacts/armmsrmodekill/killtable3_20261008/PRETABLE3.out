@@ -1,0 +1,63 @@
+PRETABLE3 -- #562 repair 3 (CLASS CLOSURE), written BEFORE kill table 4 (mtime precedes every
+KILLTABLE3 / LANE output).
+Baseline: HEAD ef577140 export + CURRENT GXEMUL-SEC working-tree 4 src files (= msr3/src_v3,
+cmp-verified) with repair-3 COMMENT-ONLY edits to cpu_arm.c's two backstop comments = msr4/src_v4.
+No product-code change: no real defect found.  Probe = installed 38-row probe + repair-3 rows = 40.
+Fixed build 40/40 (run_fixed.out).
+
+0. THE ENUMERATION (from the restore repair's inputs, per the chain rule's class closure)
+   label {FIQ IRQ ABT UND SVC} x latch {clear, set} x outcome {declined, accepted} x path {DPI,POP}
+   = 40 cells: every src session = one (label, path), restores R1 accept/clear, R2 decline/clear,
+   R3 decline/set, R4 accept/set.  Masked SPSR bits 0-3 x labels (declined value 0x0f mode bits):
+     bit0 clear at IRQ; bit1 at FIQ; bit2 at FIQ IRQ UND SVC; bit3 at FIQ IRQ ABT SVC -- each bit
+     has >=1 label per path.  Bit 4: equivalent (all modelled modes have it set).
+   Helper operand bits 7:5 driven SET (c_dX entries, 0xcf/0xdf SPSRs) and CLEAR (c_XX rows); 31:30
+   SET (N|Z).  msr_imm guard x labels FIQ IRQ ABT UND SYS (msr lbl), SVC (kill rows).
+   Enclosing predicates of both restores: return_flag, DPI rd==PC compare, #ifdef A__S (encl).
+
+1. SIBLING PARITY: DPI and POP sessions are cell-for-cell identical (same values, same labels,
+   same four restores); differ only in the chaining instruction (movs pc,r5 vs ldmia r6!,{pc}^).
+   msr_imm has no latch x label product rowed beyond msr lbl (latch set at labels 2-5) -- its
+   repair does not read the latch (the latch only gates the message).
+
+2. CLAIM -> ROW (comments changed in repair 3)
+   Save backstop "Save runs on it from a guest MSR to a modelled mode": dbg save.
+     "a DPI S-to-PC return": dbg both, latch rpt.  "or exception/IRQ entry": NOT rowed (disclosed).
+     "an LDM {..pc}^ return does not get here -- arm_pop's selector default: stops the CPU":
+     NOT rowed (pre-existing behaviour, filed separately).
+   Load backstop "the only caller that gets here is a DPI S-to-PC executed in that mode":
+     dbg both, latch rpt.  "A guest MSR, an exception or an IRQ calls Load on the MODELLED mode":
+     dbg save (MSR -> Load(SVC) gives SP 0, no load text).
+   Probe header: every CONTRACT bullet names its rows; NOT CLAIMED re-derived per path.
+
+3. GUARD FIELD vs BODY FIELD: restore guard reads new_cpsr (selected by label), body reads
+   new_cpsr + cur_mode/cpsr mode + mode_warned (latch).  Joint cells label x latch x outcome all
+   rowed (section 0).  I/F: label re-entered with I/F CLEAR before the declines while the SPSR
+   has them SET, so the two sources disagree in every decline cell.
+
+4. PER ROW -- kills: <mutant> via <channel>   (new/changed rows; earlier rows as in PRETABLE2)
+   Keep-mode narrowing ~X lets SPSR mode bits NOT in X through: ~0x1e -> bit0, ~0x1d -> bit1,
+   ~0x17 -> bit3, ~0x14 -> bits 0,1,3.  Visible at a label whose own bit is clear.
+   src dpi fiq   kills: R_dpi_clr1d (bit1), R_dpi_clr17 (bit3), H_proj_ff, F_dpi_iclr,
+                 L_dpi_latchlabel (R3), N_dpi_svc_only, M_drop_dpi, M_uncond_dpi
+                 via R1..R4 CPSR words (mode/I/F) and the n= announce count
+   src dpi irq   kills: R_dpi_clr1e (bit0), R_dpi_clr17 (bit3), E_dpi_irqlatch (R3), E_dpi_irqacc
+                 (R1), N_dpi_keep_irq (R1/R4), L_dpi_latchlabel -- via R1..R4, n=
+   src dpi abt   kills: R_dpi_clr17 (bit3), L_dpi_latchlabel (R3) -- via R2/R3 mode
+   src dpi und   kills: L_dpi_latchlabel (R3), H_proj_ff, F_dpi_iclr; no BUILT narrowing is
+                 UND-visible (UND shows only bit 2, i.e. ~0x1b, not built) -- via R1..R4
+   src dpi svc   kills: R_dpi_clr17 (bit3), F_dpi_iclr, H_proj_ff -- via R1..R4
+   src pop <lab> the same per label for arm_pop: R_pop_clr17/1e/1d, R_pop_clr14 (FIQ IRQ ABT SVC), B_pop_only14 (0x0f is not
+                 0x14), L_pop_latchlabel, E_pop_irqlatch, E_pop_irqacc, F_pop_iclr,
+                 N_pop_svc_only, N_pop_keep_abt, M_drop_pop, M_uncond_pop
+   msr lbl       kills: E_msr_notfiq (R1 = 14 -> backstop chain), H_proj_ff (c_dX entries
+                 declined), M_drop_msr -- via the five mode readbacks and n=
+   encl          kills: C_pop_retflag1 (m1 = 1f: SPSR restored by a plain LDM), D_dpi_snots
+                 (m2 = 1f: non-S ADD pc restores), D_dpi_pccmp1 (r0 store skipped -> nofire)
+   N_msr_clr1e   (Opus negative control) kill 14 / save 2s / kill 1e / latch ind, as measured.
+   G_dpi_nocopied dbg both (` once' from the DPI decline on a plant), as measured.
+   All 42 earlier mutants (tables 1-3): the rows PRETABLE2 lists; the src rows are now stronger
+   (four readbacks), so no earlier kill depends on a row that was weakened.
+   CHANNEL check: every channel above is a CPSR word, an r0 value, an exact announce count, or
+   alive/dead; none is survive-only.
+END PRETABLE3

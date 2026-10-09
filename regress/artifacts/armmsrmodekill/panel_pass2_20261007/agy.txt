@@ -1,0 +1,120 @@
+VERDICT: SHIP-WITH-CHANGES -- Code fix is sound and passes all floor checks; premise and kill table record defects in the brief require correction | 0 floor breaches
+
+---
+
+### Part I: Adversarial Audit of Questions & Review-Asks
+
+#### 1. Premise Audit: Which Statements in the Brief Are Wrong?
+An adversarial audit of the brief's premises against the working tree at [`GXEMUL-SEC`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC) identified the following inaccuracies:
+
+1. **Measurement Table Contradiction vs. "Probe Frozen" Premise:**
+   - *Brief Premise (Lines 21, 23, 46–51):* The brief asserts that the FIXED build is `26/26` and that in the kill table "each mutant built in a scratch clone, probe frozen".
+   - *Source Reality:* Lines 46–48 of the inlined table record:
+     ```text
+     FIXED_probe2               RESULT=25/26             REDS=latch ind
+     BASE_probe2                RESULT=25/26             REDS=latch ind
+     ```
+     before lines 49–51 record `FIXED_probe2 RESULT=26/26 REDS=none`. A truly frozen probe cannot yield both `25/26` and `26/26` against the identical codebase. The table exposes intermediate test artifact tuning (adjusting step counts in `msr_cmds` for `latch ind`) rather than a single pass with a frozen probe.
+2. **"Three Guest Writers" Incompleteness:**
+   - *Brief Premise (Lines 13–15):* "Guest paths: `MSR CPSR_c,#0x14`; an SPSR poisoned by `MSR SPSR_c` then restored by `MOVS pc,lr` (DPI S-to-PC) or `LDM {..pc}^` (arm_pop)... decline the MODE FIELD only at those three writers".
+   - *Source Reality:* The brief omits the register-form MSR (`MSR CPSR_c, Rm`), implemented in [`src/cpus/cpu_arm_instr.c:869-873`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L869-L873):
+     ```c
+     X(msr)
+     {
+         ic->arg[0] = reg(ic->arg[2]);
+         instr(msr_imm)(cpu, ic);
+     }
+     ```
+     While `X(msr)` delegates to `instr(msr_imm)` and is therefore guarded at runtime, claiming only three guest writers exist in the architecture overlooks this separate instruction encoding.
+3. **"Reachable only by a debugger `cpsr=` assignment" Inaccuracy:**
+   - *Brief Premise (Lines 17–18, and comments in [`cpu_arm.c:583-584, 641-642`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L582-L585)):* Claims the `default:` backstops are reachable *only* by a debugger `cpsr=` assignment.
+   - *Source Reality:*
+     - A debugger `cpsr=` assignment does *not* directly call [`arm_save_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L548) or [`arm_load_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L604); it only writes the struct field via `CPU_SETTINGS_ADD_REGISTER32("cpsr", cpu->cd.arm.cpsr)` ([`src/cpus/cpu_arm.c:196`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L196)). The backstops are reached by subsequent guest instructions executing after the register poke (such as `MSR CPSR_c, #0x13` in `dbg save` or `MOVS pc, lr` in `dbg both`).
+     - Furthermore, hardware exception entry via [`arm_cpu_exception()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L711) directly executes `arm_save_register_bank(cpu)` if an exception occurs while in an unmodelled state.
+4. **Git Commit Status Premise:**
+   - *Brief Premise (Line 71):* `regress/arm_msrmode_probe.py (NEW FILE in the commit)`.
+   - *Source Reality:* As noted in Line 5 and confirmed via `git status`, [`regress/arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py) is an untracked file in the working tree, not yet staged or committed.
+
+---
+
+#### 2. Caller Control Flow Verification & Unhandled Escapes
+Every guard was analyzed against its surrounding control flow in [`GXEMUL-SEC`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC):
+
+1. **`msr_imm` ([`src/cpus/cpu_arm_instr.c:839-866`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L839-L866)):**
+   - The guard `if ((mask & ARM_FLAG_MODE) && !arm_mode_is_modelled(ic->arg[0]))` clears the mode bits (`mask &= ~ARM_FLAG_MODE;`) *prior* to computing `switch_register_banks`.
+   - `switch_register_banks` evaluates to false (`0`), preventing calls to both [`arm_save_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L548) and [`arm_load_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L604).
+   - Only `mask` is modified; other fields (such as I/F bits) are updated via `(new_value & mask)`. Flags are synchronized at [`line 863`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L863).
+2. **`arm_pop` ([`src/cpus/cpu_arm_instr.c:1826-1861`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1826-L1861)):**
+   - Guarded after SPSR extraction and after the USR/SYS check.
+   - If `!arm_mode_is_modelled(new_cpsr)`, the mode in `new_cpsr` is overwritten with the current CPSR mode: `new_cpsr = (new_cpsr & ~ARM_FLAG_MODE) | (cpu->cd.arm.cpsr & ARM_FLAG_MODE);`.
+   - `switch_register_banks` becomes `0`.
+   - Crucially, there is **no early return**: execution proceeds to [`lines 1851-1861`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1851-L1861) where the PC load `cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;` and translation pointer update `quick_pc_to_pointers_arm(cpu);` execute properly.
+3. **DPI S-to-PC ([`src/cpus/cpu_arm_instr_dpi.c:215-250`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L215-L250)):**
+   - `cpu->pc = (uint32_t)c64;` is assigned unconditionally at [`line 215`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L215) prior to SPSR handling.
+   - `spsr_copied` tracks whether the mode has an SPSR (0 for USR/SYS/unmodelled).
+   - If `spsr_copied && !arm_mode_is_modelled(new_cpsr)`, the current mode is kept.
+   - `cpu->cd.arm.cpsr = new_cpsr;` is written first, followed by `cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;` ([`line 248`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L248)), then [`arm_load_register_bank(cpu);`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L249).
+4. **Reachable `exit(1)` or `running = 0` paths:**
+   - Both `default:` cases in [`arm_save_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L582-L597) and [`arm_load_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L638-L653) replace `fatal(...); exit(1);` with a latched warning and `return;`.
+   - No path reachable by a reserved mode can terminate the process or halt the CPU.
+
+---
+
+#### 3. Smallest Edit to the Fix That Still Passes All 26 Rows
+- **Edit:** In [`src/include/cpu_arm.h:121`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L121), change:
+  ```c
+  #define ARM_MODEWARN_SAVE   0x08
+  ```
+  to:
+  ```c
+  #define ARM_MODEWARN_SAVE   0x01
+  ```
+  (1 character changed: aliases `ARM_MODEWARN_SAVE` with `ARM_MODEWARN_MSR`).
+- **Row expected to stay green:** Both [`dbg save`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L574-L581) and [`latch ind`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py#L596-L604) stay green (`26/26` passes).
+- **Mechanism:** `latch ind` chains only the three guest decline sites (`MSR`, `arm_pop`, `DPI`), while `dbg save` triggers `Save`'s backstop via a modelled MSR (`#0x13`) that never declines. Because no probe row drives both a guest decline and a backstop in the same process (as disclosed in probe header lines 73–74), this latch collision escapes the test battery completely.
+
+---
+
+#### 4. Floor Check: Mutation Analysis & Oracle Verification
+Verification of the mutant measurement rows reported in the kill table:
+1. **Pre-fix HEAD:** Fails `16/26` (reds on `kill 14`, `kill 15`, `save 2s`, `kill 1e`, `rst movs`, `rst ldm`, `zero spsr`, `dbg save`, `dbg both`, `latch ind`). All 10 defect rows exit with `dead` (EOF on process exit).
+2. **Reinstatement of `exit(1)`:**
+   - Save backstop: Caught by `dbg save` and `dbg both` (`M_save_exit`: 23/25, `M_save_exit_latched`: 23/25).
+   - Load backstop: Caught by `dbg both` (`M_load_exit`: 24/25, `M_load_exit_latched`: 24/25).
+3. **Nulled Repairs:**
+   - Drop `msr_imm` guard: Caught by `kill 14`, `kill 15`, `save 2s`, `kill 1e` (`M_drop_msr`: 21/25).
+   - Drop `arm_pop` guard: Caught by `rst ldm` (`M_drop_pop`: 24/25).
+   - Drop `DPI` guard: Caught by `rst movs`, `zero spsr` (`M_drop_dpi`: 23/25).
+   - Unconditional restore guards: Caught by `acc movs`, `acc ldm` (`M_uncond_both`: 23/25, `M_uncond_pop`: 24/25, `M_uncond_dpi`: 24/25).
+   - Whole-operation MSR decline: Caught by `if=` pin on `kill 14`, `kill 15`, `kill 1e` (`M_wholeop_msr`: 22/25).
+4. **DEPENDS-ON Predicates:** All dependent predicates are mutated and caught, except for the explicitly disclosed gaps (unprobed modes `0x16`, `0x18-0x1a`, `0x1c-0x1d`, `0x01-0x0f`, and backstop-to-decline bit aliasing).
+
+---
+
+#### 5. Added Comment Claims Audit
+Review of comment claims in the diff against test probe evidence:
+1. **[`src/cpus/cpu_arm_instr.c:836-837`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L836-L837):**
+   - *Comment:* `"Only the local mask changes: ic->arg[] is a cached translation."`
+   - *Status:* **Unsupported by probe rows.** Every probe row executes in a fresh process instance; no row loops or re-executes the same translated MSR call to confirm that `ic->arg[]` was uncorrupted across translation runs (disclosed on line 61). Furthermore, `X(msr)` in [`line 871`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L871) directly overwrites `ic->arg[0] = reg(ic->arg[2])`.
+2. **[`src/cpus/cpu_arm.c:522-524`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L522-L524):**
+   - *Comment:* `"the three switches together define 'modelled'"`
+   - *Status:* **Structural assertion.** Verified through code alignment across [`arm_mode_is_modelled()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L527), [`arm_save_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L548), and [`arm_load_register_bank()`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L604), though not measured dynamically.
+
+---
+
+### Part II: Source-Level Verification (`GXEMUL-SEC`)
+
+| Claim | Source File & Line | Status | Evidence Summary |
+|---|---|---|---|
+| Mode check helper logic | [`src/cpus/cpu_arm.c:527-539`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L527-L539) | **Verified** | `arm_mode_is_modelled` returns 1 for 10, 11, 12, 13, 17, 1b, 1f; 0 for all others. |
+| Save bank latched backstop | [`src/cpus/cpu_arm.c:582-598`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L582-L598) | **Verified** | Bit `ARM_MODEWARN_SAVE` latched; logs warning once and returns without `exit(1)`. |
+| Load bank latched backstop | [`src/cpus/cpu_arm.c:638-654`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L638-L654) | **Verified** | Bit `ARM_MODEWARN_LOAD` latched; logs warning once and returns without `exit(1)`. |
+| `msr_imm` mode guard | [`src/cpus/cpu_arm_instr.c:839-847`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L839-L847) | **Verified** | Clears `ARM_FLAG_MODE` from `mask`; warns once with `ARM_MODEWARN_MSR`. |
+| `arm_pop` mode guard | [`src/cpus/cpu_arm_instr.c:1826-1835`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c#L1826-L1835) | **Verified** | Keeps current mode in `new_cpsr`; warns once with `ARM_MODEWARN_POP`; falls through to PC load at L1851. |
+| DPI S-to-PC mode guard | [`src/cpus/cpu_arm_instr_dpi.c:238-246`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c#L238-L246) | **Verified** | PC assigned at L215; guards when `spsr_copied`; keeps `cur_mode`; flags written at L248 after CPSR. |
+| Per-CPU warning bitfield | [`src/include/cpu_arm.h:118-122, 206`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h#L118-L122) | **Verified** | 5 distinct bitflags defined; `mode_warned` added to `struct arm_cpu`. Zero-filled at alloc ([`cpu.c:71`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c#L71)). |
+| Numstat fidelity | `git diff --numstat` | **Verified** | `cpu_arm.c` (+48/-6), `cpu_arm_instr.c` (+35/-0), `cpu_arm_instr_dpi.c` (+23/-6), `cpu_arm.h` (+13/-0). |
+
+---
+
+GO-WITH-CHANGES

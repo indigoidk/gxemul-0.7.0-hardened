@@ -1,0 +1,24 @@
+#!/bin/bash
+# cleanbuild.sh -- #562 changed src/include/cpu_arm.h (struct arm_cpu grew); the build has NO header dependency
+# tracking, so every object compiled against the old header is stale.  Delete EVERY object in each build tree and
+# rebuild, then check: sources cmp clean, binary newer than every source, AND every object newer than the header.
+SEC=/mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC
+FILES="src/cpus/cpu_arm.c src/cpus/cpu_arm_instr.c src/cpus/cpu_arm_instr_dpi.c src/include/cpu_arm.h"
+H=src/include/cpu_arm.h
+for T in /mnt/c/DocumentNoSnc/cc/GXEMUL/build /tmp/gxsec-build /mnt/c/DocumentNoSnc/cc/GXEMUL/build-asan; do
+    echo "=== $T  $(date '+%F %T')"
+    [ -e "$T/.MUTANT" ] && { echo "  SENTINEL PRESENT -- not touching"; continue; }
+    n=$(find "$T/src" -name '*.o' | wc -l)
+    find "$T/src" -name '*.o' -delete
+    ( cd "$T" && make -j4 > "$T/.cleanbuild562.log" 2>&1 ); echo "  deleted $n objects; make rc=$?"
+    for f in $FILES; do
+        cmp -s "$SEC/$f" "$T/$f" && p1=ok || p1=FAIL
+        [ "$T/gxemul" -nt "$T/$f" ] && p2=ok || p2=FAIL
+        echo "  $f part1=$p1 part2=$p2"
+    done
+    stale=$(find "$T/src" -name '*.o' ! -newer "$T/$H" | wc -l)
+    total=$(find "$T/src" -name '*.o' | wc -l)
+    echo "  objects: $total, of which older than $H: $stale"
+    [ -e "$T/src/devices/dev_i80321.o" ] && echo "  dev_i80321.o $(stat -c %y "$T/src/devices/dev_i80321.o")  header $(stat -c %y "$T/$H")"
+done
+echo CLEANBUILD562_DONE

@@ -1,0 +1,216 @@
+I'll scope the privileged-guest `MSR` process-death finding as a new row: first the repo truth, then a full instruction-to-`switch` trace so we can confirm or kill the reachability claim.The combined shell call was blocked; I'll use file tools and narrower commands instead.The row is still unfiled; next I’ll open the fork’s ARM bank and `MSR` paths and check whether a mode filter actually sits between the guest write and `default:`.Three call sites feed the bank switch. I’ll read the `MSR` store, the exception-return DPI, and the BDT `^` path for any mode filter.Init is SVC32, so Save is not the first hit. Next I’ll check the ARM manual for illegal-mode writes and whether any other path can plant a reserved mode without going through Load.**VERDICT: FILE as HIGH, one round, member 3 at both defaults. Reachability CONFIRMED for Load; Save is not a first-hit. Encoding `MSR CPSR_c, #0x14` on `testarm`. Member 1 DELETE is still wrong. This runs before the Thumb row.**
+
+Source-trace only — no guest was executed this pass. The cheap probe in Q3 is still owed. Two corrections to the earlier finding: Save is not first-hit reachable, and `#0` is the wrong reserved value.
+
+---
+
+## S4 — the reachability claim, attacked first
+
+**CONFIRMED for Load (`:606`). Not confirmed as a first-hit for Save (`:559`).** No mode-validity filter sits between a privileged `MSR` and `cpsr & ARM_FLAG_MODE`. Three things look like filters and are not, for this encoding.
+
+### The chain (instruction → CPSR → switch)
+
+Boot (`cpu_arm.c` `arm_cpu_new`):
+
+```c
+cpu->cd.arm.cpsr = ARM_FLAG_I | ARM_FLAG_F;
+cpu->cd.arm.cpsr |= ARM_MODE_SVC32;   /* both prom and non-prom arms */
+```
+
+`testarm` starts at **SVC32 = `0x13`**, privileged. `USR32` is not the boot mode.
+
+Decode (`cpu_arm_instr.c`, the `msr` block):
+
+```c
+if ((iword & 0x0fb0fff0) == 0x0120f000 ||
+    (iword & 0x0fb0f000) == 0x0320f000) {
+    /* immediate, R=0 → msr_imm */
+    if (iword & (1<<16)) arg1 |= 0x000000ff;   /* c-byte: mode, T, F, I */
+    ic->arg[1] = arg1;
+    if (arg1 == 0) ic->f = instr(nop);
+}
+```
+
+`0xE321F014` (`MSR CPSR_c, #0x14`, AL, rot=0) matches `0x0320f000`, sets the c-byte, is not a nop. Immediate `0x14` lands in `arg[0]` with `r8==0` so no rotation.
+
+Store (`X(msr_imm)`):
+
+```c
+if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32)
+    mask &= 0xff000000;                          /* (1) User: flags only */
+
+int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+     (ic->arg[0] & ARM_FLAG_MODE));              /* (2) same-mode skip */
+
+if (switch_register_banks)
+    arm_save_register_bank(cpu);                 /* CURRENT mode = 0x13 */
+
+cpu->cd.arm.cpsr &= ~mask;
+cpu->cd.arm.cpsr |= (new_value & mask);          /* (3) unfiltered write */
+
+if (switch_register_banks)
+    arm_load_register_bank(cpu);                 /* NEW mode = 0x14 → default → exit(1) */
+```
+
+There is no `arm_mode_ok`. The seven modelled cases are USR32/SYS32/FIQ32/IRQ32/SVC32/ABT32/UND32. `0x14` is none of them.
+
+### What would have refuted it (the #449 shape)
+
+| Candidate filter | What it actually does to `0xE321F014` from SVC32 |
+|---|---|
+| **(1) User-mode mask** | Does not fire. The test is `== ARM_MODE_USR32` only — **SYS32 is not included**. Boot is SVC32. |
+| **(2) Same-mode skip** | `0x13 != 0x14`, and `mask & 0x1f` is `0x1f`. Banks switch. |
+| **c-bit not set** | Bit 16 is set. `arg1 = 0x000000ff`. |
+| **Immediate cannot encode the mode** | 8-bit imm, rot=0, value `0x14`. In range. |
+| **Thumb has no `MSR`** | True on SA1110 (ARMv4T). Irrelevant: this is ARM-state. |
+| **DDI 0100I Table A4-1 `PrivMask = 0x0000000F`** | Prose at A2.5.1 says I, F, **and M[4:0]** are privileged; the extracted table contradicts that (stagger hazard). Even if the `0x0F` reading were real, bits 3:0 of `0x14` are `0x4` and M4 is already 1 from SVC32, so the stored mode is **still `0x14`**. This encoding survives that filter. |
+| **Architecture rejects reserved modes** | A2.5.7 / A4.1.39: reserved `M[4:0]` is **UNPREDICTABLE**, and MSR lists **Exceptions: None**. Hardware does not UND and does not kill the host. The emulator writes, then `exit(1)`. |
+| **Debugger `put cpsr`** | Writes the settings word **without** save/load. Not a guest path. Do not use it as a witness. |
+
+**The encoding that *would* have been the #449 trap: `MSR CPSR_c, #0`.** If `PrivMask` really were `0x0F`, that write would keep M4 and become USR32 (`0x10`) — modelled, no kill — while this emulator stores `0x00` and dies. Do not witness with `#0`. Witness with **`0x14`** (also `0x15/0x16/0x18/0x19/0x1a/0x1c/0x1d/0x1e`).
+
+### Save is not a first-hit
+
+`arm_save_register_bank` runs **before** the write, on the **old** mode. From boot SVC32 it hits `case ARM_MODE_SVC32` and returns. The process dies in **Load**.
+
+Save’s `default:` becomes guest-reachable only after Load has already installed a reserved mode and returned. Today Load never returns. **A Load-only DELETE ships a residual `exit(1)` on the next legal `MSR` back.** That is why they are one round anyway.
+
+Second guest path, same first-hit: `MSR SPSR_c, #0x14` (no bank switch, SPSR is unvalidated) then `MOVS PC, LR` / `LDM {…,pc}^`. DPI copies SPSR into CPSR with **no mask**, then Load dies the same way. Direct CPSR `MSR` is the cheaper witness.
+
+---
+
+## Q1 — member, per site, and what the guest sees
+
+**One member for both: 3 DECLINE + LATCHED ANNOUNCE.** They are not symmetric in *effect* if you accept the write; they are the same decision if you refuse it.
+
+| Member | Why not |
+|---|---|
+| **1 DELETE** | Fall-through leaves `cpsr` reserved and `r[]` as the previous bank. Next `MSR` to a legal mode hits Save’s remaining `exit(1)` if Load was the only edit. Converts process death into silent wrong-bank execution, then into a second kill. |
+| **2 silent decline** | Same guest result, no tripwire. House idiom is N=1 plus a marker. |
+| **4 ACCEPT** | Nothing here computes a correct bank and then discards it. |
+| **5 FAULT UND** | Does not transfer. `arm_cdp` is UNDEFINED; MSR is **Exceptions: None**; reserved mode is UNPREDICTABLE (A2.5.7). Raising UND is a guest-visible exception real hardware does not take. Member 5 is *available* on ARM (`arm_exception(UND)` exists) and still *wrong here*. |
+| **6 BACKED ACCEPT** | Inventing slots for 9 reserved encodings (or aliasing onto USR) is “cannot hurt.” Addition licence refuses it. 26-bit modes are named in the header (`USR26`…`SVC26`) and **not** implemented; `is_32bit = 1` and `ARM_CONTROL_PROG32\|DATA32`. |
+| **7 IMPLEMENT** | Reserved `M[4:0]` has no architecture to implement. 26-bit ARM is a different CPU this model is not. |
+
+**Load (`:606`):** there is no correct value to load. Least-wrong is **do not commit the new mode**. Leave `cpsr` and `r[]` as they were. UNPREDICTABLE allows a no-op; it does not allow `exit(1)`.
+
+**Save (`:559`):** no bank to store into. Same decline as backstop: skip the `memcpy`, do not `exit`. If the write was refused, this arm never sees a reserved mode.
+
+**Where the decline has to sit.** Callers write `cpsr` *between* save and load. A Load-only skip-memcpy leaves `cpsr` reserved; then `msr_spsr` / `mrs_spsr` / `bdt_load` `default:` become `running = 0` landmines (those three already halt, they do not `exit`). **Refuse the mode-field write before save, or roll `cpsr` back in Load.** One latch shared by both defaults, `(once)`, per CPU.
+
+**Guest afterwards (member 3):** process alive; mode still `0x13`; registers unchanged; one `fatal()` with `(once)`. Not `running = 0`. Not UND at `0x04`.
+
+---
+
+## Q2 — one round, not two
+
+**One round.** Reopening rule, applied:
+
+- Same file (`cpu_arm.c`).
+- Same semantic class: `switch (cpsr & ARM_FLAG_MODE)` on an unimplemented mode in the save/load pair that **always runs together**.
+- One fix design covers both (both `default:` arms, plus refuse-the-write so `cpsr` never holds the hole).
+- Same detector, no new oracle: death vs the Load `fatal()` line; a second `MSR` in a later session pins Save if it still kills.
+
+Save is not independently first-hit witnessed. That does **not** split the round. A Load-only fix *creates* the Save kill. Sibling parity, not a second queue item.
+
+Exception-return writers (`cpu_arm_instr_dpi.c` S+PC, `arm_pop` `return_flag`) are the same class. If the decline lives inside save/load, they are covered without a new oracle. Do not open a second row for them. Disclose `msr_spsr` / `mrs_spsr` / `bdt_load` `running = 0` defaults as residuals **if and only if** a reserved mode is allowed to land in `cpsr`.
+
+---
+
+## Q3 — the witness (cheaper than Thumb, and it does not fake-green on MMU-off)
+
+| | |
+|---|---|
+| **Machine** | `-E testarm` (SA1110, LE, SVC32, MMU off). Same construction as `arm_bfx_width_probe.py` / `arm_flags_probe.py`. Needs a load stub; plant over it. |
+| **Instruction** | ARM `MSR CPSR_c, #0x14` = **`0xE321F014`**. |
+| **Reserved mode** | `0x14` (20 decimal). First hole above SVC32; survives a `PrivMask=0x0F` reading. |
+| **Not Thumb** | SA1110 Thumb has no `MSR`. Do not `bx` to odd PC. |
+| **Not `#0`** | That is the filtered-store near-miss. |
+
+**What `exit(1)` looks like, vs the two things it can be confused with.**
+
+`arm_bfx_width_probe.py` already has the channel: `os.read` returning empty sets `alive = False` (pty EOF). Use that, plus the **message**, plus a **survive control**. Survival alone is vacuous (CHANNEL line): a `running = 0` halt, a crash, and a declined `MSR` can all be “not EOF” or all “died” depending on how you cut it.
+
+| Event | Pty | Process | Distinctive text |
+|---|---|---|---|
+| **This defect** (`exit(1)`) | EOF mid-`step` | dead | `arm_load_register_bank: unimplemented mode 20` (`fatal` `%i`, so **20 not `0x14`**) |
+| **`running = 0`** (Thumb row, `msr_spsr` default, `#312` `bad`) | debugger prompt returns | alive | no that line; `print pc` still works |
+| **Crash** | EOF | dead | no that line; maybe ASAN/segfault |
+| **Post-fix decline** | prompt returns | alive | one `(once)` line; `MRS r0, cpsr` still `0x13` in bits 4:0 |
+
+Do **not** `print cpsr` as the aftermath oracle. `arm_flags_probe.py` already recorded that a debugger CPSR print can show stale NZCV (`flags` vs `cpsr`). Mode bits live in `cpsr`, but the architectural read is **`MRS r0, cpsr`** (`X(mrs)` does not switch on mode). Death row never reaches it; accept rows must use it.
+
+**Liveness + device-signature (rung 3 clause ii):**
+
+1. `live` — `MOV r0, #0x2a`, `step`, `print r0` → `0x2a` (same control as the BFX probe).
+2. `devsig` — `MRS r0, cpsr` before the reserved `MSR`; bits 4:0 are `0x13`. Proves SVC32, not User, not a planted debugger CPSR.
+3. `kill` — plant `0xE321F014`, `pc=CODE`, `step 1` → `alive==False` **and** the Load line with `20`.
+4. `accept` — plant `0xE321F017` (`MSR CPSR_c, #0x17`, ABT32), `step`, alive, `MRS` bits 4:0 == `0x17`.
+
+Session shape: `put w` + `step 1`, MMU off, ARM state. No CP15, no Thumb, no faulting load. That is why it is cheaper than the Thumb row, and why MMU-off `testarm` is the *right* machine here and the *wrong* machine there.
+
+---
+
+## Q4 — de-escalation / accept rows / operand reachability
+
+Removing `exit(1)` deletes the tripwire that announced an unmodelled mode. Accept rows are part of the fix’s cost.
+
+**Modelled modes in the switch:** `0x10` USR32, `0x11` FIQ32, `0x12` IRQ32, `0x13` SVC32, `0x17` ABT32, `0x1b` UND32, `0x1f` SYS32.
+
+**Adjacent to the hole at `0x14`:** `0x13` SVC32 below, `0x17` ABT32 above (`0x15`/`0x16` are also reserved).
+
+**The same-mode skip makes `0x13` from boot vacuous.** `MSR CPSR_c, #0x13` in SVC32 sets `switch_register_banks = 0`. Save/load never run. An accept row at the window’s *current* value tests the skip, not the switch. **Put the accept row at `0x17` (and one more at `0x11` FIQ, which actually changes r8–r14).**
+
+**Can a guest store leave the value in the predicate’s operand?** Yes, from SVC32, with the c-bit set. Cite the store, not the interface:
+
+```c
+cpu->cd.arm.cpsr &= ~mask;
+cpu->cd.arm.cpsr |= (new_value & mask);     /* msr_imm, mask 0x000000ff */
+```
+
+Then Load reads `cpu->cd.arm.cpsr & ARM_FLAG_MODE`. Field mask is **byte** granularity, so bits 4:0 of the source land intact.
+
+**The store-arm filter that would fake an accept row:** starting in **USR32**. Same function, three lines up:
+
+```c
+if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32)
+    mask &= 0xff000000;
+```
+
+The guest can still *encode* a mode in the instruction; the predicate never sees it. Do not start an accept (or kill) row in User. `testarm` boot is SVC32; `devsig` must show that before `step`.
+
+Write-1-to-clear / read-only do not apply: this is a full overwrite of the c-byte.
+
+Growth mutant for accept-row failability: drop `case ARM_MODE_ABT32` (or widen `default`). The `0x17` row must red — either death (if `exit(1)` returns) or `MRS` mode ≠ `0x17` (if the new default declines). A survive-only accept row is vacuous under a decline-shaped growth.
+
+---
+
+## Q5 — severity and rank vs the Thumb row
+
+**HIGH.** Privileged guest instruction → `exit(1)`. `fatal()` does not exit; the next line does. `-q` does not silence it.
+
+Rung does not order the queue. Both items are eligible once witnessed. Order by **host harm** and **gate blind-spot**:
+
+| | This row | `armthumbabortkill` |
+|---|---|---|
+| Symptom | process death | `running = 0` after abort already delivered |
+| Guest path | UNPREDICTABLE reserved mode | **legal** Thumb data/prefetch abort |
+| Witness | one ARM `MSR`, MMU off | MMU **on** + Thumb + unmapped load (MMU-off greens by setup failure) |
+| Gate 14 | never feeds reserved-mode `MSR` (358 checks; no `0xE321…` in `regress/`) | never feeds a *faulting* Thumb access |
+
+**Run this first.** Process death outranks a clean halt; the witness is cheaper and does not have the Thumb row’s fake-green trap. Gate 14 is blind to both.
+
+Caveat, not a rank reversal: a correct kernel never writes `0x14`; a correct Thumb guest takes data aborts. Workload frequency favours Thumb. This project’s rule is severity plus blind-spots, and on those this row wins.
+
+---
+
+## What to file (this pass does not file it)
+
+- **id:** `armmsrbankkill` (not `armthumbabortkill`; not a census leftover).
+- **sev:** HIGH. **witness:** still `null` until the Q3 probe runs. The round that takes it owes the rung-3 attempt; the attempt is the probe above, not a boot.
+- **Sites:** `cpu_arm.c` Load `:606` first-hit; Save `:559` residual of a Load-only fix; same round.
+- **Disposition:** member 3, refuse unimplemented mode in CPSR, latch `(once)`, keep `fatal()`, drop `exit(1)`.
+- **Detector cost:** death row on `0xE321F014` (EOF **and** `unimplemented mode 20`); accept rows on `0x17` and `0x11` from SVC32 via guest `MRS`; identity row on the planted encoding.
+
+I did not execute `0xE321F014`. If that step translates to `nop`/`bad`/`und` instead of `msr_imm`, this row dies and the Thumb row stays first. That is the measurement the round starts with.

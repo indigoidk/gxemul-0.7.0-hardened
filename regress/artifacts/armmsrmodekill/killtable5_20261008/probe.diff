@@ -1,0 +1,385 @@
+--- a/regress/arm_msrmode_probe.py
++++ b/regress/arm_msrmode_probe.py
+@@ -61,7 +61,8 @@
+ first (pre-existing; not this fix).  POST-FIX the guest is in SVC32 with the I/F bits the write
+ set -- `#0x14' clears I and F -- NOT in a reserved mode.  Rows added by #562: kill 1e, kill 03,
+ rst movs, rst ldm, zero spsr, acc movs, acc ldm, dbg save, dbg both, latch ind, latch rpt, src
+-dpi/src pop x {fiq irq abt und svc}, msr lbl, encl, tbit, encl2, msr wide, the `if=' (I/F) pin on
++dpi/src pop x {fiq irq abt und svc}, msr lbl, encl, tbit, encl2, msr wide, grid msr, grid dpi,
++grid pop, grid cov, the `if=' (I/F) pin on
+ kill 14 / kill 15, and ` sp0' (an actual zero SP readback) on the rows whose SP is a never-loaded
+ bank.
+ 
+@@ -69,90 +70,79 @@
+ a different defect".  The helper declines 0x00-0x0F like any other unmodelled value, and
+ `zero spsr' drives exactly mode 0x00 (an SPSR never written is zero: cpu_new zero-fills).
+ 
+-CLASS CLOSURE (repair 4) -- by the PER-BIT rule, on each path (msr_imm, DPI, arm_pop):
+-  (1) EVERY bit of the helper's operand is SET in at least one ACCEPT, so a widened projection
+-      declines a valid value somewhere:
+-        DPI / arm_pop: SPSR 0xffffffdf (src rows R1, R4: every bit but T) + 0x3f (tbit: T);
+-        msr_imm:       0xffffffd1 through `msr cpsr_fsxc,r0' (msr wide: bits 31:6, 4:0) +
+-                       `msr cpsr_c,#0x3f' (tbit: T).
+-  (2) At EVERY decline, every bit the decline RESTORES differs between the old CPSR and the new
+-      value, so a decline that keeps any bit from the old CPSR (or forces it) changes the
+-      readback:
+-        DPI / arm_pop: `msr cpsr_fsx,#0' + label re-entry before each decline leaves the old CPSR
+-                       0x0000000m (I F T clear) beside SPSR 0xffffffcf -- bits 31:6 differ at R2
+-                       (latch clear) and R3 (latch set); bit 5 (T) differs in tbit (SPSR 0x34 vs
+-                       the re-armed 0xd3);
+-        msr_imm:       the field-only decline writes the non-mode bits of the fields named:
+-                       msr wide declines 0x00000014 over 0xffffffd1 (bits 31:5 differ except T);
+-                       tbit declines 0x34 over 0xd3 (T, I, F differ); kill 14 (I/F).
+-  Mode bits: the restore keep-mode is checked per bit -- the declined SPSR sets mode bits 0-3
+-  and each has a label whose own bit is CLEAR on both paths (bit0 IRQ; bit1 FIQ; bit2 FIQ IRQ UND
+-  SVC; bit3 FIQ IRQ ABT SVC), so `~0x1e', `~0x1d', `~0x1b', `~0x17' and `~0x14' are all HELD
+-  (`~0x1b' measured killed 33/40 on both paths by Opus repair-3 table, and re-run here).  Bit 4 is
+-  EQUIVALENT (set in every modelled mode).  The msr_imm decline mask: bit 4 by kill 03 (SVC) and
+-  encl2 (`#0x03' from FIQ), bit 5 by tbit (`~0x3f').
+-  Labels x latch x outcome: each `src <path> <label>' session runs ACCEPT (latch clear), DECLINE
+-  (latch clear -> set), DECLINE (latch set), ACCEPT (latch set) in ONE process, one announce;
+-  {FIQ IRQ ABT UND SVC} x {clear, set} x {declined, accepted} x {DPI, POP} = 40 cells, all rowed.
+-  Enclosing predicates: DPI {rd==PC, rd!=PC} x {S, non-S} -- encl (non-S rd==PC `add pc,r6,#0';
+-  non-S rd!=PC `add r0,pc,#0') and encl2 (S rd!=PC `adds r0,pc,#0'; S rd==PC is every restore
+-  row); arm_pop {S, non-S} x {pc, no pc} -- encl (non-S with pc), encl2 (S without pc `ldmia
+-  r5,{r0}^'), the restore rows (S with pc).  DPI opcode: MOV (src, rst, ...) and SUB (encl2's
+-  `subs pc,lr,#0' declining 0x14).
++THE GENERATED GRID (repair 5; owner ruling 2026-10-08).  The restore/MSR coverage is GENERATED
++from tables (grid_obs(): labels, MODELLED, UNMODELLED, complementary value pairs), not written row
++by row: `grid msr', `grid dpi', `grid pop' run every generated observation and compare the WHOLE
++CPSR word; `grid cov' re-derives the coverage table from the same generator and reds on any gap.
++  G1 every (path, outcome, bit 0..31, polarity) cell has an observation whose result bit must
++     equal the SPSR / operand value while the OLD CPSR's bit differs (complementary pairs:
++     OLD 0 / NEW all-ones-with-T, and OLD all-ones / NEW 0), so keep-old, force-0 and force-1 all
++     change the word.  This is a UNION across observations, not a property of every decline.
++     Named equivalents: bit 4 polarity 0 and bit 4 on accept (every modelled mode and label
++     has bit 4 set, so keep-old / force-1 equal the right answer there), and T
++     polarity 0 against OLD T = 1 (the guest runs ARM code, so OLD T is always 0; keep-old T is
++     caught at polarity 1).  The latch is SET for every decline after a session's first.
++  G2 every msr_imm label (FIQ IRQ SVC ABT UND SYS) declines label ^ 0x1f, which differs in all
++     five mode bits; the restore labels decline the same value as the SPSR.
++  G3 all 25 unmodelled values are declined and all 7 modelled modes accepted on EACH path.
++  G4 arm_pop's enclosing cells {S, non-S} x {PC, no PC}, all four, in grid pop.
++  The hand-written rows below remain (G5): label x latch x outcome (src), tbit (T with the latch
++  clear, by `print cpsr'), encl / encl2 (the DPI enclosing cells), msr wide, msr lbl.  Sessions:
++  the probe prints ARMMSRMODE_SESSIONS.
+ 
+ CONTRACT (floor clause (e)) -- the edits this detector is DESIGNED to catch:
+   * exit(1) reinstated at Save's default: (dbg save, dbg both, latch rpt) or Load's (dbg both,
+     latch rpt);
+-  * the helper answering 1 always (kill 14/15/1e), admitting 0x1c-0x1e (kill 1e), dropping its
+-    `& ARM_FLAG_MODE' projection (src rows), or WIDENING it by ANY bit 31:5 (closure rule (1):
+-    src rows, tbit, msr wide, msr lbl);
++  * the helper answering 1 always (kill 14/15/1e), wrong on ANY of the 32 mode values on ANY path
++    -- narrowed (e.g. `& 0x17' admits 0x18-0x1a), widened by any bit 31:5, or dropped (grid *:
++    G3 drives all 25 unmodelled and all 7 modelled values through each path; src rows, tbit,
++    msr wide);
+   * the guard dropped at msr_imm (kill rows), arm_pop (rst ldm, src pop x FIQ IRQ ABT UND SVC) or
+     DPI (rst movs, zero spsr, src dpi x FIQ IRQ ABT UND SVC), or restricted to ONE label, or to
+     one unmodelled value such as 0x14 (src rows decline 0x0f), or compiled into the MOV instance
+     only (encl2: `subs pc,lr');
+   * the msr_imm guard skipped at one current-mode label (msr lbl: a decline from each of FIQ IRQ
+     ABT UND SYS; latch rpt: SVC with the latch set);
+-  * the msr_imm decline clearing fewer than all five mode bits, at any label (`& ~0x0f': kill 03
+-    at SVC, encl2 at FIQ), or clearing MORE (`& ~0x3f', T lost: tbit); the restore keep-mode mask
+-    clearing fewer than bits 0-3 (src rows, per the bit/label table above);
++  * the msr_imm decline clearing fewer than all five mode bits at ANY label (grid msr: G2
++    declines label ^ 0x1f at all six labels; kill 03, encl2), or clearing MORE (`& ~0x3f', T lost:
++    tbit, grid msr); the restore keep-mode mask letting any SPSR mode bit through (grid dpi/pop:
++    G2; src rows);
+   * a restore guard made unconditional, or unconditional for one label, or skipped / forced for one
+     label x latch-state cell (src rows: all 40 cells; acc movs, acc ldm);
+   * a WHOLE-OPERATION decline in msr_imm instead of field-only (the `if=' pin on kill rows; msr
+     wide);
+-  * a decline taking ANY bit 31:5 from the old CPSR (or forcing it) instead of the SPSR / operand
+-    (closure rule (2): src rows R2/R3, tbit, msr wide) -- this replaces the repair-3 sentence
+-    "the declined SPSR has N Z I F SET while the CPSR it replaces has them CLEAR", which was FALSE
+-    for N and Z (the replaced CPSR then was c00000xx);
++  * a decline OR accept taking ANY bit 31:5 from the old CPSR, or forcing it to 0 or to 1,
++    with the latch clear or set (grid *: G1 complementary pairs; src R2/R3; tbit; msr wide) --
++    this replaces the repair-3 sentence "the declined SPSR has N Z I F SET while the CPSR it
++    replaces has them CLEAR" (FALSE for N and Z) and repair 4's "at EVERY decline, every restored
++    bit differs" (FALSE for T at src R2/R3 and msr wide: it held only as a UNION);
+   * any two of the five latch sites sharing a bit (latch rpt: all five in one process; also
+     dbg both, latch ind);
+   * a latch that never SUPPRESSES (`|=' -> `&=', or the `|=' line deleted), or a repair applied
+     only while its latch is clear (latch rpt: every site visited TWICE; src rows per label);
+-  * the enclosing predicates widened in ANY of their cells (see the closure paragraph): arm_pop's
+-    `if (return_flag)' (encl: non-S LDM with pc; encl2: S-LDM without pc), the DPI template's
++  * the enclosing predicates widened in ANY of their cells: arm_pop's `if (return_flag)' (grid
++    pop: all four {S, non-S} x {PC, no PC}; also encl, encl2), the DPI template's
+     `rd == PC' compare (encl: non-S `add r0,pc'; encl2: S `adds r0,pc'), and the restore's
+     `#ifdef A__S' (encl: non-S `add pc,r6,#0' -- NOT `mov pc,lr', which the decoder turns into
+     `ret' and so never reaches the DPI template).
+-NOT CLAIMED, disclosed: unmodelled values a helper could get wrong unseen -- those never driven
+-through ANY path: 0x01, 0x02, 0x04-0x0e, 0x16, 0x18-0x1a, 0x1c, 0x1d.  Per path: msr_imm drives
+-0x03 0x14 0x15 0x1e (and 0x14 with T set); DPI drives 0x00 (SVC only), 0x0f, 0x14 (SVC, and 0x34
+-in tbit); arm_pop drives 0x0f, 0x14 (SVC, and 0x34 in tbit).  ACCEPT-side provenance of the
+-restored bits: at R1/R4 the replaced CPSR and the SPSR agree on I/F, so a restore that kept I/F
+-from the old CPSR on an ACCEPT only would go unseen -- that is the pre-existing `cpsr = spsr'
+-assignment, outside the repair path (graded (e)), and any unconditional form is caught at R2.
+-DPI opcode instances other than MOV and SUB (graded (e): the opcode flows into nothing the repair
+-reads).  The msr_imm comment's "only the LOCAL mask changes: ic->arg[] is a cached translation"
+--- no row re-executes ONE translated MSR, so a guard that wrote ic->arg[] would go unseen;
+-per-CPU latch isolation (one CPU only); exception entry as a Save-backstop route (no row);
+-T-bit / execution-state coherence on restore; the USR/SYS `LDM {pc}^' and `MSR SPSR' paths that
+-stop the CPU (filed separately).  The `tbit' row reads CPSR with the debugger's `print cpsr'
+-(low byte only: the raw word's top nibble can lag `flags') -- a rung-3 debugger observation.
++NOT CLAIMED, disclosed: DPI opcode instances other than MOV and SUB (graded (e): the opcode
++flows into nothing the repair reads).  The msr_imm comment's "only the LOCAL mask changes:
++ic->arg[] is a cached translation" -- every grid observation re-executes the SAME translated
++`msr cpsr_fsxc,r1' with a different r1, which pins the register form; the IMMEDIATE form's
++re-execution is not rowed.  Per-CPU latch isolation (one CPU only); exception entry as a
++Save-backstop route (no row); T-bit / execution-state coherence after a T-set restore beyond the
++CPSR word itself; the USR/SYS `LDM {pc}^' and `MSR SPSR' paths that stop the CPU (filed
++separately).  The grid, tbit and `print cpsr' readbacks are rung-3 debugger observations.  The
++`msr wide' accept 0xffffffd1 sets operand bits 31:6, 4 and 0 only (bits 3:1 are clear: the grid's
++accepts and c_17 / c_1b / c_1f carry them) -- repair 4's header said "bits 31:6, 4:0".
+ 
+-NAMED-RED tally: HEAD = 17/43, RED exactly the 26 rows kill 14, kill 15, save 2s, kill 1e,
++NAMED-RED tally: HEAD = 18/47, RED exactly the 29 rows kill 14, kill 15, save 2s, kill 1e,
+ kill 03, rst movs, rst ldm, zero spsr, dbg save, dbg both, latch ind, latch rpt, the ten src *
+-rows, msr lbl, tbit, encl2 and msr wide, CONTROL=OK.  `encl' drives no unmodelled mode and is
+-GREEN on HEAD.  `save 2s' on HEAD is the SAME Load death as `kill 14' (EOF on the first MSR) -- it
+-is not an independent HEAD reproduction of Save; nor is `dbg both' a HEAD reproduction of Load
+-(HEAD dies in Save first).  43/43 on HEAD is a broken vehicle, not success.
++rows, msr lbl, tbit, encl2, msr wide, grid msr, grid dpi, grid pop, CONTROL=OK.  `encl' drives no
++unmodelled mode and `grid cov' is static, so both are GREEN on HEAD.  `save 2s' on HEAD is the
++SAME Load death as `kill 14' (EOF on the first MSR) -- it is not an independent HEAD reproduction
++of Save; nor is `dbg both' a HEAD reproduction of Load (HEAD dies in Save first).  47/47 on HEAD
++is a broken vehicle, not success.
+ 
+ Stay on `step', never `continue' (IRQ dispatch is inside `if (!single_step)').
+ """
+@@ -250,9 +240,13 @@
+     rows.append((name, str(got), str(want), note))
+ 
+ 
++NSESS = [0]
++
++
+ def session(cmds, settle=1.6, spin=1.6):
+     """ONE FRESH PROCESS per scored row that executes a guest instruction.  Returns (t, alive);
+     _session_split() turns the `@MARK' pseudo-command into the early/late split (R2)."""
++    NSESS[0] += 1
+     pid, fd = pty.fork()
+     if pid == 0:
+         os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+@@ -889,8 +883,9 @@
+ #                                                    restore     -> DECLINE, latch SET   (R3)
+ #                                 SPSR_c := 0xdf;   restore     -> ACCEPT, latch set    (R4)
+ #  DPI chains through `movs pc,r5' (lr is banked; r5 is not) with r5 += 0x40 per block; POP chains
+-#  through `ldmia r6!,{pc}^' over a table of block addresses.  Want R1 = R4 = c00000df and R2 = R3
+-#  = c00000c0|label (mode kept, N Z I F from the SPSR), and EXACTLY ONE announce from the site.
++#  through `ldmia r6!,{pc}^' over a table of block addresses.  Want R1 = R4 = ffffffdf and R2 = R3
++#  = ffffffc0|label (mode kept, every other bit from the SPSR 0xffffffcf; `msr cpsr_fsx,#0' and the
++#  label re-entry before each decline leave the old CPSR 0x0000000m), and EXACTLY ONE announce.
+ BLK = [TGT + 0x40 * i for i in range(4)]     # 0x8100 0x8140 0x8180 0x81c0
+ for lab, mode in (("fiq", 0x11), ("irq", 0x12), ("abt", 0x17), ("und", 0x1B), ("svc", 0x13)):
+     ck = "c_%02x" % (0xC0 | mode)            # first entry: I|F SET (helper operand bits 7:6)
+@@ -1038,7 +1033,188 @@
+     "MSR CPSR_fsxc,r0: accept 0xffffffd1 (all operand bits 31:6), decline 0x14 field-only.")
+ diag_unimpl("msr wide", early + late)
+ 
+-row("row count", len(rows) + 1, 43, "identity row (floor clause (c)): the row set is complete.")
++# ---------------------------------------------------------------- #562 repair 5: the GENERATED GRID
++#  Owner ruling 2026-10-08: the restore/MSR detector rows are GENERATED from the full space, not
++#  written by hand.  Three sessions (one per path: msr_imm, DPI S-to-PC, arm_pop), each a list of
++#  OBSERVATIONS produced by grid_obs() below.  One observation:
++#      debugger:  cpsr=0xd3 (re-arm; a previous result may have T set), pc=<block>, r0=OLD, r1=NEW
++#      guest:     msr cpsr_fsxc,r0           -- OLD CPSR, a modelled label, set by a real MSR
++#                                               (bank switch and `flags' both correct)
++#                 msr spsr_fsxc,r1           -- (restore paths only) SPSR := NEW
++#                 the instruction under test -- msr cpsr_fsxc,r1 / movs pc,r2 / ldmia r6,{pc}^
++#                                               (pop also: ldmia r6,{pc}, ldmia r6,{r0}^, ldmia r6,{r0})
++#      debugger:  print cpsr                 -- the WHOLE result word, compared exactly with WANT
++#  WANT is computed: accept -> NEW; decline -> (NEW & ~0x1f) | label; a non-restoring pop form
++#  -> OLD.  The first decline in a session runs with the site's latch CLEAR, every later one with
++#  it SET; the site must announce exactly once and no Save/Load backstop text may appear.
++#
++#  G1 per path x outcome x bit 0..31 x polarity: observations come in COMPLEMENTARY PAIRS --
++#     p1: OLD = label (bits 31:5 all 0)          NEW = 0xffffffe0 | mode (bits 31:5 all 1, T SET)
++#     p2: OLD = 0xffffffc0 | label (31:6 all 1)  NEW = mode (bits 31:5 all 0)
++#     so for every non-mode bit both result polarities are observed with the OLD value different
++#     (keep-old, force-0 and force-1 all change the word).  T cannot be 1 in OLD (the guest runs
++#     ARM code), so T polarity 0 is observed only with OLD T = 0 -- keep-old T is caught at p1.
++#  G2 MSR label x mode bit: each label also declines label ^ 0x1f, which differs in EVERY mode bit
++#     (and is always unmodelled, since bit 4 is cleared); on the restore paths the same value is
++#     the declined SPSR, so a keep-mode mask that lets any SPSR mode bit through changes the word.
++#  G3 helper boundary: ALL 25 unmodelled values (0x00-0x0f, 0x14-0x16, 0x18-0x1a, 0x1c-0x1e) are
++#     declined on EVERY path, labels cycling; ALL 7 modelled modes are accepted on every path.
++#     A narrowed projection (e.g. `& 0x17' admits 0x18-0x1a) or widened one changes some word.
++#  G4 pop enclosing cells: {S, non-S} x {PC, no PC} all four, both polarities.
++#  The `grid cov' row re-derives the bit x polarity table from the generated observations and
++#  reds if any cell outside the named equivalents is uncovered.
++MODELLED = (0x10, 0x11, 0x12, 0x13, 0x17, 0x1B, 0x1F)
++UNMODELLED = tuple(m for m in range(32) if m not in MODELLED)          # 25 values
++RESTORE_LABELS = (0x11, 0x12, 0x13, 0x17, 0x1B)                        # SPSR-bearing
++MSR_LABELS = (0x11, 0x12, 0x13, 0x17, 0x1B, 0x1F)                      # USR strips the c-byte
++WORDS["msr_spsr_fsxc_r1"] = 0xE16FF001       # msr spsr_fsxc, r1
++WORDS["movs_pc_r2"] = 0xE1B0F002             # movs pc, r2
++WORDS["ldm_r6_pc"] = 0xE8968000              # ldmia r6, {pc}        (non-S, PC)
++WORDS["ldm_r6_r0_s"] = 0xE8D60001            # ldmia r6, {r0}^       (S, no PC)
++WORDS["ldm_r6_r0"] = 0xE8960001              # ldmia r6, {r0}        (non-S, no PC)
++GRID_CHECK = {"msr_spsr_fsxc_r1": lambda w: w & 0x0FFFFFF0 == 0x016FF000 and w & 0xF == 1,
++              "movs_pc_r2": lambda w: (w >> 21) & 0xF == 0xD and (w >> 20) & 1
++              and (w >> 12) & 0xF == 15 and w & 0xFFF == 2 and (w >> 25) & 7 == 0,
++              "ldm_r6_pc": lambda w: w & 0x0FFFFFFF == 0x08968000,
++              "ldm_r6_r0_s": lambda w: w & 0x0FFFFFFF == 0x08D60001,
++              "ldm_r6_r0": lambda w: w & 0x0FFFFFFF == 0x08960001}
++GBAD = [k for k, f in GRID_CHECK.items() if not f(WORDS[k]) or WORDS[k] >> 28 != 0xE]
++for k in ("ldm_r6_pc_s",):
++    if WORDS[k] & 0x0FFFFFFF != 0x08D68000:
++        GBAD.append(k)
++
++HI1, HI0 = 0xFFFFFFE0, 0xFFFFFFC0             # bits 31:5 set (T set) / bits 31:6 set (T clear)
++
++
++def grid_obs(path):
++    """[(kind, label, OLD, NEW, WANT)] for one path -- the whole generated table."""
++    labels = MSR_LABELS if path == "msr" else RESTORE_LABELS
++    obs = []
++
++    def add(kind, lab, new, pol):
++        old = lab if pol == 1 else (HI0 | lab)
++        newv = (HI1 | new) if pol == 1 else new
++        if kind == "acc":
++            want = newv
++        elif kind == "dec":
++            want = (newv & ~0x1F) | lab
++        else:                                    # non-restoring pop forms
++            want = old
++        obs.append((kind, lab, old, newv, want))
++
++    i = 0
++    for lab in labels:                           # G2 complement declines, both polarities
++        for pol in (1, 2):
++            add("dec", lab, lab ^ 0x1F, pol)
++    for m in UNMODELLED:                         # G3 every unmodelled value
++        add("dec", labels[i % len(labels)], m, 1 + (i % 2))
++        i += 1
++    j = 0
++    for lab in labels:                           # accepts: every modelled mode, both polarities,
++        for pol in (1, 2):                       # mode != label
++            cands = [m for m in MODELLED if m != lab]
++            add("acc", lab, cands[(j * 3) % len(cands)], pol)
++            j += 1
++    for m in MODELLED:                           # and every modelled mode as an accept target
++        lab = [l for l in labels if l != m][j % (len(labels) - 1)]
++        add("acc", lab, m, 1 + (j % 2))
++        j += 1
++    if path == "pop":                            # G4 the three non-restoring enclosing cells
++        for kind in ("ldm_pc", "ldm_r0_s", "ldm_r0"):
++            for pol in (1, 2):
++                add(kind, 0x13 if pol == 1 else 0x12, 0x1F, pol)
++    return obs
++
++
++def grid_cov(path):
++    """Uncovered (outcome, bit, polarity) cells of path's observations, outside the named
++    equivalents.  Covered: some observation whose WANT bit == pol while the alternative differs --
++    OLD's bit for every non-mode bit and for accept mode bits, NEW's (the SPSR / operand's) bit
++    for decline mode bits.  Named equivalents: bit 4 polarity 0 (no modelled mode or label has it
++    clear), bit 4 on ACCEPT at either polarity (OLD's bit 4 is always 1, as is the accepted
++    mode's, so keep-old and force-1 equal the right answer), and bit 5 polarity 0 vs OLD (OLD T
++    is always 0: the guest runs ARM code)."""
++    miss = []
++    obs = grid_obs(path)
++    for outc in ("acc", "dec"):
++        for bit in range(32):
++            for pol in (0, 1):
++                if (bit == 4 and pol == 0) or (bit == 5 and pol == 0) or                         (bit == 4 and outc == "acc"):
++                    continue
++                ok = False
++                for kind, lab, old, new, want in obs:
++                    if kind != outc or ((want >> bit) & 1) != pol:
++                        continue
++                    alt = new if (outc == "dec" and bit < 5) else old
++                    if ((alt >> bit) & 1) != pol:
++                        ok = True
++                        break
++                if not ok:
++                    miss.append("%s/b%d/%d" % (outc, bit, pol))
++    return miss
++
++
++GRID_SITE = {"msr": "msr_imm", "dpi": "dpi S-to-pc", "pop": "arm_pop"}
++GB0, GB1, GB2, GB3, GTGT = 0x8200, 0x8240, 0x8280, 0x82C0, 0x8300
++for path in ("msr", "dpi", "pop"):
++    obs = grid_obs(path)
++    if path == "msr":
++        blocks = [(GB0, ["msr_fsxc_r0", "msr_fsxc_r1"])]
++        where = {"acc": (GB0, 2), "dec": (GB0, 2)}
++    elif path == "dpi":
++        blocks = [(GB0, ["msr_fsxc_r0", "msr_spsr_fsxc_r1", "movs_pc_r2"]), (GTGT, [])]
++        where = {"acc": (GB0, 3), "dec": (GB0, 3)}
++    else:
++        blocks = [(GB0, ["msr_fsxc_r0", "msr_spsr_fsxc_r1", "ldm_r6_pc_s"]),
++                  (GB1, ["msr_fsxc_r0", "msr_spsr_fsxc_r1", "ldm_r6_pc"]),
++                  (GB2, ["msr_fsxc_r0", "msr_spsr_fsxc_r1", "ldm_r6_r0_s"]),
++                  (GB3, ["msr_fsxc_r0", "msr_spsr_fsxc_r1", "ldm_r6_r0"]), (GTGT, [])]
++        where = {"acc": (GB0, 3), "dec": (GB0, 3), "ldm_pc": (GB1, 3), "ldm_r0_s": (GB2, 3),
++                 "ldm_r0": (GB3, 3)}
++    segs = [((), 0)]
++    first = True
++    for kind, lab, old, new, want in obs:
++        pc, nst = where[kind]
++        pk = ([] if first else ["print cpsr"]) + ["cpsr=0xd3", "pc=0x%x" % pc,
++                                                  "r0=0x%x" % old, "r1=0x%x" % new]
++        segs.append((pk, nst))
++        first = False
++    segs.append((["print cpsr"], 0))
++    early, late, alive, marked, full = prog_session(
++        [], blocks=blocks, data={LDMW: GTGT},
++        regs=["r2=0x%x" % GTGT, "r6=0x%x" % LDMW], segments=tuple(segs))
++    if GBAD:
++        got = "enc " + ",".join(GBAD)
++    elif not marked or not arming(early, full):
++        got = "unarmed"
++    elif not alive:
++        got = "dead"
++    else:
++        vals = [int(v, 16) for v in re.findall(r"print\s+cpsr\s*\n\s*(0x[0-9a-f]+)", late)]
++        bad = ["%d:%08x!=%08x" % (k, v, o[4]) for k, (v, o) in enumerate(zip(vals, obs))
++               if v != o[4]]
++        t = early + late
++        nbank = announces(t, "register_bank")
++        got = "%d/%d n=%d" % (len(vals) - len(bad), len(obs), announces(t, GRID_SITE[path]))
++        if len(vals) != len(obs):
++            got += " read=%d" % len(vals)
++        if nbank:
++            got += " bank=%d" % nbank
++        if bad:
++            got += " " + " ".join(bad[:2])
++            diagnosis.append("grid %s mismatches: %s" % (path, " ".join(bad[:12])))
++    row("grid %s" % path, got, "%d/%d n=1" % (len(obs), len(obs)),
++        "GENERATED: %d observations (G1-G4) on the %s path; whole-CPSR readback each." %
++        (len(obs), path))
++    diag_unimpl("grid %s" % path, early + late)
++
++GMISS = sum((["%s:%s" % (p, c) for c in grid_cov(p)] for p in ("msr", "dpi", "pop")), [])
++row("grid cov", "%d uncovered" % len(GMISS), "0 uncovered",
++    "Static: every (path, outcome, bit, polarity) cell outside the named equivalents is observed.")
++if GMISS:
++    diagnosis.append("grid cov uncovered: " + " ".join(GMISS[:20]))
++
++row("row count", len(rows) + 1, 47, "identity row (floor clause (c)): the row set is complete.")
+ 
+ # ---------------------------------------------------------------- report
+ print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+@@ -1052,13 +1228,14 @@
+         reds.append(nm)
+     print("  %-11s got=%-18s want=%-18s %-4s %s" % (nm, got, want, "ok" if ok else "FAIL", note[:64]))
+ print("ARMMSRMODE_RESULT=%d/%d" % (n, len(rows)))
++print("ARMMSRMODE_SESSIONS=%d" % NSESS[0])
+ print("ARMMSRMODE_REDS=%s" % (",".join(reds) if reds else "none"))
+ for d in diagnosis:
+     print("  diag  %s" % d)
+ EXPECT = ("kill 14,kill 15,save 2s,kill 1e,kill 03,rst movs,rst ldm,zero spsr,dbg save,dbg both,"
+           "latch ind,latch rpt," + ",".join("src %s %s" % (p, m) for m in
+                                           ("fiq", "irq", "abt", "und", "svc")
+-                                          for p in ("dpi", "pop")) + ",msr lbl,tbit,encl2,msr wide")
++                                          for p in ("dpi", "pop")) + ",msr lbl,tbit,encl2,msr wide,grid msr,grid dpi,grid pop")
+ print("ARMMSRMODE_EXPECT_HEAD_REDS=%s" % EXPECT)
+ print("ARMMSRMODE_TALLY_MATCHES_HEAD_EXPECT=%s" % ("yes" if ",".join(reds) == EXPECT else "no"))
+ print("ARMMSRMODE_DONE")

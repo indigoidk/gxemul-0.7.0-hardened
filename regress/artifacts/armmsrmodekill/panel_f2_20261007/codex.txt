@@ -1,0 +1,2736 @@
+Reading additional input from stdin...
+OpenAI Codex v0.159.2
+--------
+workdir: C:\DocumentNoSnc\cc\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: ultra
+reasoning summaries: none
+session id: 01a11720-3d54-7f20-944e-32bf0a3c1119
+--------
+user
+# armmsrmodekill -- pass 1 ADJUDICATION: the panel's findings, shared, with my disposition on each
+
+Open with `VERDICT: <n> of 12 dispositions wrong` (VERDICT LINE FIRST).  Read-only; write nothing, build nothing.
+Tree `GXEMUL-SEC/src/` at HEAD `ef577140` (ignore any other src/ under the project root).
+
+Pass 1 (brief `FIXDESIGN_brief_20261007.md`) was answered by: GPT-6 Astra (codex), grok, agy, glm, deepseek, minimax,
+kimi-k3:cloud, and Opus 5.5.  Fable 5.1 adjudication is ON HOLD by owner instruction (2026-10-07) -- deliberately not
+fired.  **This pass shares every seat's findings so you can correct each other.**  Seats whose finding is ADOPTED below:
+be HARDEST on that finding, including whether the FIX is right, not only whether the finding was.
+
+**THE LOAD-BEARING QUESTION: which of my 12 dispositions is wrong?**
+
+## Measured since pass 1 (the witness)
+
+The 17-row rung-3 probe `regress/arm_msrmode_probe.py` (repaired by the Opus seat in a scratch clone: aligned dump,
+little-endian swap, arming-vs-result transcript split, `save 2s` slots) on a FRESH HEAD build: **14/17, the three
+named reds exactly** (`kill 14`, `kill 15`, `save 2s`: each `dead`, diagnosis `load mode 20` / `load mode 21` /
+`load=yes save=no`); all controls green.  Mutant M1 (both `default:` arms `exit(1)` -> `return;`): still the same three
+reds (got `m=14 sp` etc. -- a silent decline leaves the reserved mode in CPSR, which is not the fixed state).  Mutant
+M2 (a sketch: `msr_imm` refuses a reserved mode field with a `(once)` latch): 17/17.
+
+## The findings and my dispositions
+
+| # | finding | seat(s) | disposition |
+|---|---|---|---|
+| 1 | Member 3 (decline + latched announce) is the disposition | all eight | ADOPTED |
+| 2 | "six modelled modes" is wrong: SEVEN mode values (`10 11 12 13 17 1b 1f`), six banks (USR/SYS share) | glm, kimi, codex, grok, minimax | ADOPTED -- wording corrected in the round's records |
+| 3 | "decline must happen BEFORE Save" overstates: the bad mode enters at the CPSR write between Save and Load; Save runs on the old (modelled) mode | codex, grok | ADOPTED -- the guard sits at the CPSR write, before Load; Save on the old mode is harmless |
+| 4 | ZERO-INITIALISED SPSR: `cpu_new` zero-fills the cpu (`cpu.c` zero-alloc), so an SPSR never written holds mode `0x00`; the first `MOVS pc,lr` / `LDM {..pc}^` from SVC32 before any exception writes `spsr_svc` loads mode 0 and dies -- NO MSR needed | grok | ADOPTED -- the restore-path guards are REQUIRED, not optional; a detector row is owed for it |
+| 5 | Restore paths (callers 2 `arm_pop` `^`, 3 DPI S-to-PC) also reach the kill via `MSR SPSR_c` poisoning; a fix guarding only `msr_imm` leaves every current row green (the "smallest breaking edit") | opus, kimi, deepseek, minimax, agy | ADOPTED -- guard all three guest writers; TWO detector rows owed (one per restore path) |
+| 6 | Decline ONLY the mode field; apply the rest of the write (flags, I/F, T) | grok, opus, glm, agy | ADOPTED -- see 7 |
+| 7 | DISSENT: decline the WHOLE operation before side effects (codex: "whole-operation decline before side effects and explicit bank-helper failure propagation") | codex | NOT ADOPTED -- under the owner's arrangement grok rules Astra's findings, and grok ruled field-only.  Warrant: MSR's architected effect on the other fields is defined; only M[4:0] is UNPREDICTABLE.  **Codex: be hard on this ruling.  What does whole-operation decline buy that field-only loses, measured on a guest?** |
+| 8 | FAULT is a LEGAL implementation of UNPREDICTABLE (ARMv7 glossary: may be implemented as UNDEFINED) -- the brief's "member 5 is wrong" overstated | codex, grok | ADOPTED as a correction of the premise; NOT chosen -- ARMv5 text (`ddi0100i`) lists MSR "Exceptions: None", data-processing none, LDM(3) Data Abort only, and the glossary forbids halting; decline is the minimal policy.  Recorded as a policy choice, not an architectural requirement |
+| 9 | The helper should key on the SAME seven `case` labels as Save/Load (one source of truth), living outside the DPI template (included ~140 times) | opus | ADOPTED |
+| 10 | In `msr_imm`, change only the LOCAL `mask`; never write `ic->arg[0]` / `ic->arg[1]` (cached translation) | opus | ADOPTED |
+| 11 | Backstops: keep both `default:` arms as per-CPU latched announces with NO rollback; they stay reachable via the debugger `put cpsr` (writable setting, no bank switch) -- a debugger-driven row is owed to carry the backstop claim | opus, codex, glm, deepseek | ADOPTED -- latch in a per-CPU field, distinct bits for the decline and each backstop; message carries `(once)` |
+| 12 | NEW DEFECT (not this row): a USER-mode guest stops the whole emulator: `LDMFD sp!,{..pc}^` and `MSR SPSR_x` in USR/SYS reach `default:` arms that set `running = 0` (`arm_pop`, `msr_imm_spsr`) | opus | FILED as its own row (owner, 2026-10-07); NOT fixed here |
+
+## The proposed fix, as a sketch (CHECK IT against each caller's real control flow)
+
+* `static int arm_mode_is_modelled(uint32_t mode)` in `cpu_arm.c` (declared in `cpu_arm.h`): `switch (mode & ARM_FLAG_MODE)` over the seven labels -> 1, `default` -> 0.
+* `msr_imm`: after the USR mask line, if `(mask & ARM_FLAG_MODE)` and `!arm_mode_is_modelled(new_value)`: latched
+  announce `(once)`, then `mask &= ~ARM_FLAG_MODE` -- BEFORE `switch_register_banks` is computed (so no bank switch).
+* `arm_pop` `^` restore and DPI S-to-PC restore: if the SPSR's mode is not modelled, latched announce, then replace
+  M[4:0] of the value written to CPSR with the CURRENT mode (all other bits from the SPSR apply); bank switch decided
+  on the result.  In DPI there is no `new_cpsr` local -- the sketch adds one before the switch.
+* Save/Load `default:`: `fatal(... (once) ...)` latched per-CPU, then `return` -- no `exit(1)`, no rollback.
+* Detector: add rows for (a) SPSR-poisoned `MOVS pc,lr`, (b) SPSR-poisoned `LDM {..pc}^`, (c) zero-SPSR `MOVS pc,lr`
+  from boot SVC32, (d) a debugger `put cpsr` reserved value then a mode switch (backstop), and pin I/F in the kill rows'
+  readback (field-only vs whole-operation).
+
+Questions, each `<n> | RIGHT / WRONG: <why>`:
+1. Which of dispositions 1-12 is wrong?
+2. Check the sketch against each caller's control flow (sketch rule): what does it leave reachable, or break?
+3. "What is the SMALLEST EDIT to the sketched fix that still passes the 17 rows PLUS rows (a)-(d)?"
+**If, while verifying, you found something ELSE — say so.**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll check the specified tree and each caller’s control flow, then assess the dispositions and detector coverage. I’ll keep this read-only and run no builds or harnesses.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g FIXDESIGN_brief_20261007.md -g '*arm_msrmode*' -g cpu_arm.c -g cpu_arm.h -g cpu.c -g '*arm*dpi*' -g '*arm*instr*' GXEMUL-SEC" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 196ms:
+
+GXEMUL-SEC\src\include\cpu_arm.h
+GXEMUL-SEC\src\cpus\cpu_arm_instr.c
+GXEMUL-SEC\src\cpus\cpu_arm.c
+GXEMUL-SEC\src\cpus\cpu.c
+GXEMUL-SEC\src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC\src\cpus\cpu_arm_instr_dpi.c
+GXEMUL-SEC\src\cpus\cpu_arm_instr_misc.c
+GXEMUL-SEC\regress\arm_msrmode_probe.py
+GXEMUL-SEC\src\cpus\generate_arm_dpi
+GXEMUL-SEC\src\cpus\generate_arm_dpi.c
+GXEMUL-SEC\src\cpus\tmp_arm_dpi.o
+GXEMUL-SEC\src\cpus\tmp_arm_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\include\cpu_arm.h
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\tmp_arm_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\generate_arm_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr_misc.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr_dpi.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm_instr.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu_arm.c
+GXEMUL-SEC\regress\artifacts\stateaudit_20260923\peer_carriers\scratch\waifk\head_tree\src\cpus\cpu.c
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstrloadstore\cpuarminstrloadstore.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstrloadstore\codex_cpuarminstrloadstore.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstrloadstore\codex_cpuarminstrloadstore.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstr\cpuarminstr.launch.log
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstr\codex_cpuarminstr.txt
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\cpuarminstr\codex_cpuarminstr.err
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\briefs\cpuarminstrloadstore.md
+GXEMUL-SEC\regress\artifacts\astraretro_20260926\briefs\cpuarminstr.md
+GXEMUL-SEC\regress\artifacts\armmsrmodekill\FIXDESIGN_brief_20261007.md
+Path                      
+----                      
+C:\DocumentNoSnc\cc\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content GXEMUL-SEC/regress/artifacts/armmsrmodekill/FIXDESIGN_brief_20261007.md; rg -n 'arm_save_register_bank|arm_load_register_bank|X\\(msr_imm|arm_pop|spsr|ARM_FLAG_MODE|include.*dpi' GXEMUL-SEC/src/cpus/cpu_arm_instr.c GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c GXEMUL-SEC/src/cpus/cpu_arm.c GXEMUL-SEC/src/include/cpu_arm.h" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -g AGENTS.md -g '*ddi0100*' -g '*arm*pdf' -g '*ARM*pdf' .; git -C GXEMUL-SEC rev-parse HEAD; git -C GXEMUL-SEC status --short" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 425ms:
+# armmsrmodekill -- pass 1: how should a reserved ARM mode be handled at the register-bank switch?
+
+## READ THIS FIRST �?" PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly.  **Check the premises, not just the derivations.**  Where I state something as
+fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`** (`C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`, HEAD `ef577140`).  There
+are THREE pristine-2021-upstream copies of GXemul under the project root (`./src/` and two under
+`_archive/audit-results-*/builds/`).  They are NOT this fork.  If your line numbers disagree with mine by hundreds
+you are reading one of them �?" say so rather than reconciling.  Read-only: write nothing, build nothing.
+
+**If you cannot read files that is expected** �?" every fact you need is inlined below.  Name any premise you cannot
+settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it.  And ENUMERATE THE RIGHT DOMAIN** �?" ask what the
+PRODUCER of a value can actually emit before walking it.
+
+**VERDICT LINE FIRST**, so your answer survives truncation:
+`VERDICT: <recommended disposition in one line> | <n> premises wrong`
+
+## 1. The defect (a design question; the reproduction is being repaired separately)
+
+`arm_save_register_bank()` and `arm_load_register_bank()` in `src/cpus/cpu_arm.c` each switch on
+`cpsr & ARM_FLAG_MODE` (5 bits) over the six modelled modes and end in
+
+    default: fatal("arm_..._register_bank: unimplemented mode %i\n", cpsr & ARM_FLAG_MODE);
+             exit(1);
+
+so a guest that puts a RESERVED mode in CPSR ends the emulator PROCESS.  The ARM ARM calls a reserved M[4:0]
+UNPREDICTABLE, not fatal.  A privileged `MSR CPSR_c, #0x14` (word `0xE321F014`) on `-E testarm` is the filed
+trigger.
+
+## 2. SETTLED PREMISES (re-inlined so nobody spends an answer re-deriving them; CHALLENGE any you doubt)
+
+* **Save is not the first hit for MSR** -- in `msr_imm`, Save runs on the OLD mode (e.g. SVC32, modelled) and
+  returns; CPSR is then rewritten; Load runs on the NEW (reserved) mode and dies.  A Load-only fix therefore makes
+  the NEXT mode switch die in Save (CPSR now holds the reserved mode).  -- row `armmsrmodekill`, grok trace 2026-09-17.
+* **Callers write CPSR BETWEEN Save and Load** (all four callers below).  So a decline placed only inside Load
+  leaves CPSR holding the reserved mode unless Load also rolls it back.  -- same row.
+* **Member 1, DELETE (just drop the `exit(1)`), is WRONG**: CPSR stays reserved and `r[]` stays on the previous
+  bank -> silent wrong-bank execution, then the next switch hits Save's default.  -- same row.
+* **Member 5, FAULT, is available on ARM but wrong for MSR**: the ARM ARM lists MSR as "Exceptions: None".
+  -- same row.  (For the SPSR-restore callers the question is open -- see A4.)
+* **`fatal()` does not exit**; it prints regardless of `-q`.  A guest-drivable `fatal()` needs a LATCH (house idiom
+  `N = 1` per instance + a `(once)` marker in the text), not a verbosity flag.  -- carrier rule.
+* **Has it shipped?**  `grep -c armmsrmodekill CHANGELOG.md` = 0; the three files last changed in `#524`
+  (`4dfc7165`).  No fix exists.
+
+## 3. The full code (verbatim at HEAD `ef577140`; line numbers in the left column)
+
+### `src/cpus/cpu_arm.c` -- both functions
+
+```c
+522	void arm_save_register_bank(struct cpu *cpu)
+523	{
+524		/*  Save away current registers:  */
+525		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+526		case ARM_MODE_USR32:
+527		case ARM_MODE_SYS32:
+528			memcpy(cpu->cd.arm.default_r8_r14,
+529			    &cpu->cd.arm.r[8], sizeof(uint32_t) * 7);
+530			break;
+531		case ARM_MODE_FIQ32:
+532			memcpy(cpu->cd.arm.fiq_r8_r14,
+533			    &cpu->cd.arm.r[8], sizeof(uint32_t) * 7);
+534			break;
+535		case ARM_MODE_IRQ32:
+536			memcpy(cpu->cd.arm.default_r8_r14,
+537			    &cpu->cd.arm.r[8], sizeof(uint32_t) * 5);
+538			cpu->cd.arm.irq_r13_r14[0] = cpu->cd.arm.r[13];
+539			cpu->cd.arm.irq_r13_r14[1] = cpu->cd.arm.r[14];
+540			break;
+541		case ARM_MODE_SVC32:   /* ... same shape, svc_r13_r14 ... */
+546			break;
+547		case ARM_MODE_ABT32:   /* ... same shape, abt_r13_r14 ... */
+552			break;
+553		case ARM_MODE_UND32:   /* ... same shape, und_r13_r14 ... */
+558			break;
+559		default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+560			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+561			exit(1);
+562		}
+563	}
+
+569	void arm_load_register_bank(struct cpu *cpu)
+570	{
+571		/*  Load new registers:  */
+572		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+573		case ARM_MODE_USR32:
+574		case ARM_MODE_SYS32:
+575			memcpy(&cpu->cd.arm.r[8],
+576			    cpu->cd.arm.default_r8_r14, sizeof(uint32_t) * 7);
+577			break;
+578		case ARM_MODE_FIQ32:
+579			memcpy(&cpu->cd.arm.r[8], cpu->cd.arm.fiq_r8_r14,
+580			    sizeof(uint32_t) * 7);
+581			break;
+582		case ARM_MODE_IRQ32:   /* memcpy default 5, then r13/r14 from irq_r13_r14 */
+587			break;
+588		case ARM_MODE_SVC32:   /* ... svc ... */
+593			break;
+594		case ARM_MODE_ABT32:   /* ... abt ... */
+599			break;
+600		case ARM_MODE_UND32:   /* ... und ... */
+605			break;
+606		default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+607			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+608			exit(1);
+609		}
+610	}
+```
+*(The SVC/ABT/UND arms are CONDENSED here -- each is the IRQ arm's shape with its own `_r13_r14` array.  Both
+functions are `void`; neither has any code after the switch.)*
+
+### Caller 1 -- `msr_imm` (and `msr`, which sets `arg[0]` from a register and calls it), `src/cpus/cpu_arm_instr.c`
+
+```c
+822	X(msr_imm)
+823	{
+824		uint32_t mask = ic->arg[1];
+826		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+827			mask &= 0xff000000;
+828		}
+830		int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+831		    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+832		    (ic->arg[0] & ARM_FLAG_MODE));
+833		uint32_t new_value = ic->arg[0];
+835		cpu->cd.arm.cpsr &= 0x0fffffff;
+836		cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+838		if (switch_register_banks)
+839			arm_save_register_bank(cpu);
+841		cpu->cd.arm.cpsr &= ~mask;
+842		cpu->cd.arm.cpsr |= (new_value & mask);
+844		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+846		if (switch_register_banks)
+847			arm_load_register_bank(cpu);
+848	}
+```
+
+### Caller 2 -- `LDM ... ^` with PC in the list (`bdt_load`), `src/cpus/cpu_arm_instr.c`
+
+```c
+	/* new_cpsr = the SPSR of the CURRENT mode, chosen by a switch whose default: is */
+1795		default:fatal("bdt_load: unimplemented mode %i\n",
+1796			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+1797			cpu->running = 0;
+1798			cpu->cd.arm.next_ic = &nothing_call;
+1799			return;
+1800		}
+1802		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+1803		    (new_cpsr & ARM_FLAG_MODE);
+1805		if (switch_register_banks)
+1806			arm_save_register_bank(cpu);
+1808		cpu->cd.arm.cpsr = new_cpsr;
+1809		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+1811		if (switch_register_banks)
+1812			arm_load_register_bank(cpu);
+```
+
+### Caller 3 -- data-processing with S and destination PC (`MOVS pc, lr`, `SUBS pc, lr, #4`), `src/cpus/cpu_arm_instr_dpi.c`
+
+```c
+216	#ifdef A__S
+217		/*  Copy the right SPSR into CPSR:  */
+218		arm_save_register_bank(cpu);
+219		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+220		case ARM_MODE_FIQ32:
+221			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+222		case ARM_MODE_IRQ32:
+223			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+224		case ARM_MODE_SVC32:
+225			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+226		case ARM_MODE_ABT32:
+227			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+228		case ARM_MODE_UND32:
+229			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+230		}
+231		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+232		arm_load_register_bank(cpu);
+```
+*(Note: unconditional Save and Load, no `switch_register_banks` test; no `default:` -- in USR/SYS32 CPSR is left
+unchanged.)*
+
+### Caller 4 -- `arm_exception()`, `src/cpus/cpu_arm.c`
+
+```c
+669		arm_save_register_bank(cpu);              /* on the CURRENT mode */
+   ...
+697		cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+698		cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];   /* always a modelled mode */
+   ...
+720		arm_load_register_bank(cpu);
+```
+*(Load here always sees a modelled mode.  Save sees whatever mode the guest was in -- so an exception taken while
+CPSR holds a reserved mode dies in Save.)*
+
+## 4. The question: which disposition, and where?
+
+The project's option set for a guest-drivable host kill has seven members; please consider every one, and say if
+there is an eighth:
+
+1 DELETE A� 2 DECLINE (silent) A� 3 DECLINE + LATCHED ANNOUNCE (`(once)`) A� 4 ACCEPT A� 5 FAULT A� 6 BACKED ACCEPT A�
+7 IMPLEMENT.
+
+The row's working position (challenge it): **member 3, and the decline must happen BEFORE Save** -- i.e. a reserved
+mode is never allowed into CPSR at all -- because every caller writes CPSR between Save and Load.  That suggests one
+shared helper, e.g. `int arm_mode_is_modelled(uint32_t mode)`, consulted by each caller before it writes the mode
+bits, plus the two `default:` arms changed from `exit(1)` to a latched announce as a backstop.
+
+Questions:
+
+1. **Premise audit.**  Which premise in A2 or A3 is wrong?  In particular: can a reserved mode reach CPSR by any
+   path OTHER than the three writers shown (MSR, `LDM ^`, data-processing S-to-PC)?  Can it reach an SPSR (via
+   `MSR SPSR_c`, `msr_imm_spsr`) and so be restored later by callers 2 and 3?  Enumerate the writers of CPSR and of
+   each SPSR from the source if you can read it; say plainly if you cannot.
+2. **The disposition.**  For EACH caller, what should happen when the incoming mode is reserved?  For MSR the ARM
+   ARM says "Exceptions: None", so the mode write is declined -- but do the OTHER fields in the same MSR (flags, I/F
+   bits, the c-byte's T bit) still apply, or is the whole write declined?  For callers 2 and 3 (restoring an SPSR
+   the guest itself poisoned), is declining the mode change right, or is FAULT (undefined-instruction) the better
+   model?  Cite the architecture text you rely on, or say you are reasoning.
+3. **Where the decline lives.**  One helper consulted by every caller, versus guards inside Save/Load that roll CPSR
+   back, versus both.  What does each leave reachable?  Apply the sketch rule: a proposed edit must be run against
+   each caller's real control flow above, including what happens AFTER Load returns (the `flags` copy, the PC
+   write, `quick_pc_to_pointers`).
+4. **The backstop.**  If every caller is guarded, are the two `default:` arms dead?  Should they still be latched
+   announces (member 3) rather than deleted, and where does the latch state live (per-CPU field vs function-static)?
+5. **"What is the SMALLEST EDIT that breaks the fix and still passes?"**  Name the edit and the row of a detector
+   you would expect to stay green under it.  (The detector is a 17-row debugger-driven probe on `-E testarm` being
+   repaired now; its rows are: `enc ok`, `live`, `pc adv`, `armed`, `no cbit`, `kill 14`, `kill 15`, `save 2s`,
+   `acc usr`, `acc fiq/irq/abt/und/sys`, `same svc`, `usr mask`, `row count`.)
+
+**If, while verifying a claim, you found something ELSE �?" say so.**
+GXEMUL-SEC/src/include/cpu_arm.h:103:#define	ARM_FLAG_MODE	0x0000001f
+GXEMUL-SEC/src/include/cpu_arm.h:191:	uint32_t		spsr_svc;
+GXEMUL-SEC/src/include/cpu_arm.h:192:	uint32_t		spsr_abt;
+GXEMUL-SEC/src/include/cpu_arm.h:193:	uint32_t		spsr_und;
+GXEMUL-SEC/src/include/cpu_arm.h:194:	uint32_t		spsr_irq;
+GXEMUL-SEC/src/include/cpu_arm.h:195:	uint32_t		spsr_fiq;
+GXEMUL-SEC/src/include/cpu_arm.h:345:void arm_load_register_bank(struct cpu *cpu);
+GXEMUL-SEC/src/include/cpu_arm.h:346:void arm_save_register_bank(struct cpu *cpu);
+GXEMUL-SEC/src/include/cpu_arm.h:361:void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw);
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:218:		arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:219:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:221:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:223:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:225:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:227:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:229:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:232:		arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm.c:363:	int mode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:404:		int m = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:520: *  arm_save_register_bank():
+GXEMUL-SEC/src/cpus/cpu_arm.c:522:void arm_save_register_bank(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_arm.c:525:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm.c:559:	default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+GXEMUL-SEC/src/cpus/cpu_arm.c:560:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm.c:567: *  arm_load_register_bank():
+GXEMUL-SEC/src/cpus/cpu_arm.c:569:void arm_load_register_bank(struct cpu *cpu)
+GXEMUL-SEC/src/cpus/cpu_arm.c:572:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm.c:606:	default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+GXEMUL-SEC/src/cpus/cpu_arm.c:607:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm.c:669:	arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm.c:676:		cpu->cd.arm.spsr_svc = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:678:		cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:680:		cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:682:		cpu->cd.arm.spsr_irq = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:684:		cpu->cd.arm.spsr_fiq = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src/cpus/cpu_arm.c:695:	oldmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:697:	cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:707:	newmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src/cpus/cpu_arm.c:720:	arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm.c:1677:			arm_pop(cpu, &cpu->cd.arm.r[ARM_SP], 0, 1, 0, 1, (iw & 0xff) |
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:819: *  msr_imm and msr_imm_spsr use arg[1] and arg[0].
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:820: *  msr and msr_spsr use arg[1] and arg[2].
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:822:X(msr_imm)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:826:	if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:830:	int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:831:	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:832:	    (ic->arg[0] & ARM_FLAG_MODE));
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:839:		arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:847:		arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:856:X(msr_imm_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:860:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:862:		cpu->cd.arm.spsr_fiq &= ~mask;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:863:		cpu->cd.arm.spsr_fiq |= (new_value & mask);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:866:		cpu->cd.arm.spsr_abt &= ~mask;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:867:		cpu->cd.arm.spsr_abt |= (new_value & mask);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:870:		cpu->cd.arm.spsr_und &= ~mask;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:871:		cpu->cd.arm.spsr_und |= (new_value & mask);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:874:		cpu->cd.arm.spsr_irq &= ~mask;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:875:		cpu->cd.arm.spsr_irq |= (new_value & mask);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:878:		cpu->cd.arm.spsr_svc &= ~mask;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:879:		cpu->cd.arm.spsr_svc |= (new_value & mask);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:881:	default:fatal("msr_spsr: unimplemented mode %i\n",
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:882:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:890:			printf("msr_spsr: old pc = 0x%08" PRIx32"\n", old_pc);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:896:Y(msr_imm_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:897:X(msr_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:900:	instr(msr_imm_spsr)(cpu, ic);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:902:Y(msr_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:924:X(mrs_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:926:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:927:	case ARM_MODE_FIQ32: reg(ic->arg[0]) = cpu->cd.arm.spsr_fiq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:928:	case ARM_MODE_ABT32: reg(ic->arg[0]) = cpu->cd.arm.spsr_abt; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:929:	case ARM_MODE_UND32: reg(ic->arg[0]) = cpu->cd.arm.spsr_und; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:930:	case ARM_MODE_IRQ32: reg(ic->arg[0]) = cpu->cd.arm.spsr_irq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:931:	case ARM_MODE_SVC32: reg(ic->arg[0]) = cpu->cd.arm.spsr_svc; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:934:	default:fatal("mrs_spsr: unimplemented mode %i\n", cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:939:Y(mrs_spsr)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1602:void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw)
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1612:		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1751:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1784:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1786:			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1788:			new_cpsr = cpu->cd.arm.spsr_abt; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1790:			new_cpsr = cpu->cd.arm.spsr_und; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1792:			new_cpsr = cpu->cd.arm.spsr_irq; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1794:			new_cpsr = cpu->cd.arm.spsr_svc; break;
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1796:			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1802:		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1803:		    (new_cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1806:			arm_save_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1812:			arm_load_register_bank(cpu);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1849:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1906:			    the LDM site in arm_pop() for the full reasoning.
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1957:	arm_pop(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2919:	 *  Idiom open-coded from arm_push/arm_pop (bdt_load), not SWAP32, so the two
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4300:					ic->f = cond_instr(msr_imm_spsr);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4310:					ic->f = cond_instr(msr_spsr);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4339:				ic->f = cond_instr(mrs_spsr);
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4807:		 *  bdt_store (via arm_pop/arm_push) swap on both their warm and
+
+ succeeded in 488ms:
+.\_scratchpad\ddi0100i.txt
+.\_scratchpad\ddi0100i.pdf
+ef577140b5e0b0a7a75b70fe3c2556c521c17ac5
+ M regress/artifacts/recordfix_20261002/chk_hrec.py.txt
+ M regress/gate_sh_rounding.sh
+ M regress/gdrom_default_probe.py
+ M regress/ppc_rldicl_probe.py
+ M regress/sh4_chcr_probe.py
+ M src/cpus/cpu_alpha_palcode.c
+ M src/devices/dev_lca.c
+ M src/devices/dev_pcc2.c
+ M src/devices/dev_sh4.c
+ M src/include/thirdparty/mvme_pcctworeg.h
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/adjudicate.sh
+ M tools/panel.sh
+ M tools/pipeline/check_probe_wiring.py
+ M tools/pipeline/fable_queue.md
+ M tools/pipeline/ledger.json
+ M tools/pipeline/matrix.html
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/arm_msrmode_probe.py
+?? regress/artifacts/agypack_20261001/idlessverify_01/agy_idlessverify_01.err
+?? regress/artifacts/agypack_20261001/idlessverify_02/agy_idlessverify_02.err
+?? regress/artifacts/agypack_20261001/idlessverify_03/agy_idlessverify_03.err
+?? regress/artifacts/agypack_20261001/idlessverify_04/agy_idlessverify_04.err
+?? regress/artifacts/agypack_20261001/idlessverify_05/agy_idlessverify_05.err
+?? regress/artifacts/agypack_20261001/idlessverify_06/agy_idlessverify_06.err
+?? regress/artifacts/agypack_20261001/idlessverify_07/agy_idlessverify_07.err
+?? regress/artifacts/agypack_20261001/idlessverify_08/agy_idlessverify_08.err
+?? regress/artifacts/agypack_20261001/idlessverify_09/agy_idlessverify_09.err
+?? regress/artifacts/allocsize_20260917/
+?? regress/artifacts/alphaifetchkill/killtable2_20260921/
+?? regress/artifacts/alphaifetchkill/killtable3_20260921/
+?? regress/artifacts/alphaifetchkill/killtable_20260919/
+?? regress/artifacts/alphaifetchkill/opus_p2_20260919/
+?? regress/artifacts/alphavmkill/killtable2_20260919/
+?? regress/artifacts/alphavmkill/killtable3_20260919/
+?? regress/artifacts/alphavmkill/killtable4_20260919/
+?? regress/artifacts/alphavmkill/killtable5_20260921/
+?? regress/artifacts/alphavmkill/killtable6_20260921/
+?? regress/artifacts/alphavmkill/killtable7_20260921/
+?? regress/artifacts/alphavmkill/killtable_20260919/
+?? regress/artifacts/alphavmkill/neighbours_20260918/
+?? regress/artifacts/alphavmkill/opus_p2_20260919/
+?? regress/artifacts/alphavmkill/witness_HEAD_20260918/
+?? regress/artifacts/armmsrmodekill/
+?? regress/artifacts/armthumbabortkill/
+?? regress/artifacts/astrafiling_20261002/afile_01/codex_afile_01.err
+?? regress/artifacts/astrafiling_20261002/afile_02/codex_afile_02.err
+?? regress/artifacts/astrafiling_20261002/afile_03/codex_afile_03.err
+?? regress/artifacts/astrafiling_20261002/afile_04/codex_afile_04.err
+?? regress/artifacts/astrafiling_20261002/afile_05/codex_afile_05.err
+?? regress/artifacts/astrafiling_20261002/afile_06/codex_afile_06.err
+?? regress/artifacts/astrafiling_20261002/afile_07/codex_afile_07.err
+?? regress/artifacts/astrafiling_20261002/afile_08/codex_afile_08.err
+?? regress/artifacts/astrafiling_20261002/afile_09/codex_afile_09.err
+?? regress/artifacts/astrafiling_20261002/afile_10/codex_afile_10.err
+?? regress/artifacts/astrafiling_20261002/afile_11/codex_afile_11.err
+?? regress/artifacts/astrafiling_20261002/afile_12/codex_afile_12.err
+?? regress/artifacts/astrafiling_20261002/agy/agy_highfacts.err
+?? regress/artifacts/astrafiling_20261002/agy/agy_highfacts2.err
+?? regress/artifacts/astrafiling_20261002/grok/grok_file3ids.err
+?? regress/artifacts/astrafiling_20261002/grok/grok_filehigh.err
+?? regress/artifacts/astrafiling_20261002/grok/grok_filehigh2.err
+?? regress/artifacts/astrafiling_20261002/grok/grok_filehigh3.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3a.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3b.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3c.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3d.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3e.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3f.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3g.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_3h.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch1a.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch1b.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch2a.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch2b.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch2c.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch2d.err
+?? regress/artifacts/astraretro_20260926/adjudication/codex_astraconfirm_batch2e.err
+?? regress/artifacts/astraretro_20260926/adjudication/grok_20260930/grok_check2c.err
+?? regress/artifacts/astraretro_20260926/adjudication/grok_20260930/grok_check2d.err
+?? regress/artifacts/astraretro_20260926/adjudication/grok_20261002/grok_dispute3fh.err
+?? regress/artifacts/astraretro_20260926/adjudication/grok_20261002/grok_rule3f.err
+?? regress/artifacts/astraretro_20260926/adjudication/grok_20261002/grok_rule3g.err
+?? regress/artifacts/astraretro_20260926/adjudication/grok_20261002/grok_rule3h.err
+?? regress/artifacts/astraretro_20260926/arcbios/codex_arcbios.err
+?? regress/artifacts/astraretro_20260926/bundle_console/codex_bundle_console.err
+?? regress/artifacts/astraretro_20260926/bundle_core/codex_bundle_core.err
+?? regress/artifacts/astraretro_20260926/bundle_cpus1/codex_bundle_cpus1.err
+?? regress/artifacts/astraretro_20260926/bundle_cpus2/codex_bundle_cpus2.err
+?? regress/artifacts/astraretro_20260926/bundle_debugger/codex_bundle_debugger.err
+?? regress/artifacts/astraretro_20260926/bundle_devices1/codex_bundle_devices1.err
+?? regress/artifacts/astraretro_20260926/bundle_devices2/codex_bundle_devices2.err
+?? regress/artifacts/astraretro_20260926/bundle_devices3/codex_bundle_devices3.err
+?? regress/artifacts/astraretro_20260926/bundle_devices4/codex_bundle_devices4.err
+?? regress/artifacts/astraretro_20260926/bundle_devices5/codex_bundle_devices5.err
+?? regress/artifacts/astraretro_20260926/bundle_devices6/codex_bundle_devices6.err
+?? regress/artifacts/astraretro_20260926/bundle_disk/codex_bundle_disk.err
+?? regress/artifacts/astraretro_20260926/bundle_file/codex_bundle_file.err
+?? regress/artifacts/astraretro_20260926/bundle_include1/codex_bundle_include1.err
+?? regress/artifacts/astraretro_20260926/bundle_include2/codex_bundle_include2.err
+?? regress/artifacts/astraretro_20260926/bundle_include3/codex_bundle_include3.err
+?? regress/artifacts/astraretro_20260926/bundle_machines/codex_bundle_machines.err
+?? regress/artifacts/astraretro_20260926/bundle_net/codex_bundle_net.err
+?? regress/artifacts/astraretro_20260926/bundle_promemul/codex_bundle_promemul.err
+?? regress/artifacts/astraretro_20260926/cpualpha/codex_cpualpha.err
+?? regress/artifacts/astraretro_20260926/cpualphapalcode/codex_cpualphapalcode.err
+?? regress/artifacts/astraretro_20260926/cpuarm/codex_cpuarm.err
+?? regress/artifacts/astraretro_20260926/cpuarminstr/codex_cpuarminstr.err
+?? regress/artifacts/astraretro_20260926/cpuarminstrloadstore/codex_cpuarminstrloadstore.err
+?? regress/artifacts/astraretro_20260926/cpum88k/codex_cpum88k.err
+?? regress/artifacts/astraretro_20260926/cpum88kinstr/codex_cpum88kinstr.err
+?? regress/artifacts/astraretro_20260926/cpumips/codex_cpumips.err
+?? regress/artifacts/astraretro_20260926/cpumipscoproc/codex_cpumipscoproc.err
+?? regress/artifacts/astraretro_20260926/cpumipsinstr/codex_cpumipsinstr.err
+?? regress/artifacts/astraretro_20260926/cpuppc/codex_cpuppc.err
+?? regress/artifacts/astraretro_20260926/cpuppcinstr/codex_cpuppcinstr.err
+?? regress/artifacts/astraretro_20260926/cpush/codex_cpush.err
+?? regress/artifacts/astraretro_20260926/cpushinstr/codex_cpushinstr.err
+?? regress/artifacts/astraretro_20260926/debuggercmds/codex_debuggercmds.err
+?? regress/artifacts/astraretro_20260926/debugmsg/codex_debugmsg.err
+?? regress/artifacts/astraretro_20260926/dev8253/codex_dev8253.err
+?? regress/artifacts/astraretro_20260926/devasc/codex_devasc.err
+?? regress/artifacts/astraretro_20260926/devdreamcastgdrom/codex_devdreamcastgdrom.err
+?? regress/artifacts/astraretro_20260926/devfootbridge/codex_devfootbridge.err
+?? regress/artifacts/astraretro_20260926/devjazz/codex_devjazz.err
+?? regress/artifacts/astraretro_20260926/devlca/codex_devlca.err
+?? regress/artifacts/astraretro_20260926/devle/codex_devle.err
+?? regress/artifacts/astraretro_20260926/devm8820x/codex_devm8820x.err
+?? regress/artifacts/astraretro_20260926/devne2000/codex_devne2000.err
+?? regress/artifacts/astraretro_20260926/devosiop/codex_devosiop.err
+?? regress/artifacts/astraretro_20260926/devpcc2/codex_devpcc2.err
+?? regress/artifacts/astraretro_20260926/devpvr/codex_devpvr.err
+?? regress/artifacts/astraretro_20260926/devsgiip30/codex_devsgiip30.err
+?? regress/artifacts/astraretro_20260926/devsgire/codex_devsgire.err
+?? regress/artifacts/astraretro_20260926/devsh4/codex_devsh4.err
+?? regress/artifacts/astraretro_20260926/devwdc/codex_devwdc.err
+?? regress/artifacts/astraretro_20260926/diskimage/codex_diskimage.err
+?? regress/artifacts/astraretro_20260926/diskimagescsicmd/codex_diskimagescsicmd.err
+?? regress/artifacts/astraretro_20260926/emul/codex_emul.err
+?? regress/artifacts/astraretro_20260926/floatemul/codex_floatemul.err
+?? regress/artifacts/astraretro_20260926/generatem88kbcnd/codex_generatem88kbcnd.err
+?? regress/artifacts/astraretro_20260926/memoryrw/codex_memoryrw.err
+?? regress/artifacts/astraretro_20260926/net/codex_net.err
+?? regress/artifacts/astraretro_20260926/netip/codex_netip.err
+?? regress/artifacts/astraretro_20260926/panel_high/seats_20260930/agy_arm.err
+?? regress/artifacts/astraretro_20260926/panel_high/seats_20260930/agy_dev.err
+?? regress/artifacts/astraretro_20260926/panel_high/seats_20260930/agy_ppc.err
+?? regress/artifacts/astraretro_20260926/panel_high/seats_20260930/grok_arm.err
+?? regress/artifacts/astraretro_20260926/panel_high/seats_20260930/grok_dev.err
+?? regress/artifacts/astraretro_20260926/panel_high/seats_20260930/grok_ppc.err
+?? regress/artifacts/astraretro_20260926/symbol/codex_symbol.err
+?? regress/artifacts/astraretro_20260926/tmpm88kbcnd/codex_tmpm88kbcnd.err
+?? regress/artifacts/astraretro_harness_20260926/adjudication/grok_20261002/grok_hopen3.err
+?? regress/artifacts/astraretro_harness_20260926/adjudication/grok_20261002/grok_htiebreak.err
+?? regress/artifacts/astraretro_harness_20260926/harmflagsprobe/codex_harmflagsprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hbuildasan/codex_hbuildasan.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_hooks/codex_hbundle_hooks.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_pipeline1/codex_hbundle_pipeline1.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_pipeline2/codex_hbundle_pipeline2.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_pipeline3/codex_hbundle_pipeline3.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_pipeline4/codex_hbundle_pipeline4.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress1/codex_hbundle_regress1.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress10/codex_hbundle_regress10.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress11/codex_hbundle_regress11.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress12/codex_hbundle_regress12.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress13/codex_hbundle_regress13.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress14/codex_hbundle_regress14.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress15/codex_hbundle_regress15.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress16/codex_hbundle_regress16.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress17/codex_hbundle_regress17.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress18/codex_hbundle_regress18.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress19/codex_hbundle_regress19.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress2/codex_hbundle_regress2.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress20/codex_hbundle_regress20.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress21/codex_hbundle_regress21.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress22/codex_hbundle_regress22.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress23/codex_hbundle_regress23.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress24/codex_hbundle_regress24.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress25/codex_hbundle_regress25.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress26/codex_hbundle_regress26.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress27/codex_hbundle_regress27.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress28/codex_hbundle_regress28.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress29/codex_hbundle_regress29.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress3/codex_hbundle_regress3.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress30/codex_hbundle_regress30.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress31/codex_hbundle_regress31.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress32/codex_hbundle_regress32.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress33/codex_hbundle_regress33.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress4/codex_hbundle_regress4.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress5/codex_hbundle_regress5.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress6/codex_hbundle_regress6.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress7/codex_hbundle_regress7.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress8/codex_hbundle_regress8.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_regress9/codex_hbundle_regress9.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_tools1/codex_hbundle_tools1.err
+?? regress/artifacts/astraretro_harness_20260926/hbundle_tools2/codex_hbundle_tools2.err
+?? regress/artifacts/astraretro_harness_20260926/hcheckprobewiring/codex_hcheckprobewiring.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_01/codex_hconfirm_01.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_02/codex_hconfirm_02.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_03/codex_hconfirm_03.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_04/codex_hconfirm_04.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_05/codex_hconfirm_05.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_06/codex_hconfirm_06.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_07/codex_hconfirm_07.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_08/codex_hconfirm_08.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_09/codex_hconfirm_09.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_10/codex_hconfirm_10.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_11/codex_hconfirm_11.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_12/codex_hconfirm_12.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_13/codex_hconfirm_13.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_14/codex_hconfirm_14.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_15/codex_hconfirm_15.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_16/codex_hconfirm_16.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_17/codex_hconfirm_17.err
+?? regress/artifacts/astraretro_harness_20260926/hconfirm_18/codex_hconfirm_18.err
+?? regress/artifacts/astraretro_harness_20260926/hdiffdiskimageio/codex_hdiffdiskimageio.err
+?? regress/artifacts/astraretro_harness_20260926/hdifffootbridge/codex_hdifffootbridge.err
+?? regress/artifacts/astraretro_harness_20260926/hdiffieeestore/codex_hdiffieeestore.err
+?? regress/artifacts/astraretro_harness_20260926/hdiffm8820x/codex_hdiffm8820x.err
+?? regress/artifacts/astraretro_harness_20260926/hdiffm8invread/codex_hdiffm8invread.err
+?? regress/artifacts/astraretro_harness_20260926/hdiffwdcidentify/codex_hdiffwdcidentify.err
+?? regress/artifacts/astraretro_harness_20260926/hfbpendingdrainprobe/codex_hfbpendingdrainprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hgatearm/codex_hgatearm.err
+?? regress/artifacts/astraretro_harness_20260926/hgatehygiene/codex_hgatehygiene.err
+?? regress/artifacts/astraretro_harness_20260926/hgateoffline/codex_hgateoffline.err
+?? regress/artifacts/astraretro_harness_20260926/hgateshrounding/codex_hgateshrounding.err
+?? regress/artifacts/astraretro_harness_20260926/hgdromcondprobe/codex_hgdromcondprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hgdromdefaultprobe/codex_hgdromdefaultprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hhpcmipsctorprobe/codex_hhpcmipsctorprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hlcaisalaneprobe/codex_hlcaisalaneprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hlunaabsentcpuprobe/codex_hlunaabsentcpuprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hm88kroundingprobe/codex_hm88kroundingprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hpcc2widthprobe/codex_hpcc2widthprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hppcroundingprobe/codex_hppcroundingprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hprecommitcheck/codex_hprecommitcheck.err
+?? regress/artifacts/astraretro_harness_20260926/hseatverdicts/codex_hseatverdicts.err
+?? regress/artifacts/astraretro_harness_20260926/hsgideprimopprobe/codex_hsgideprimopprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hsgirecolourdefaultprobe/codex_hsgirecolourdefaultprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hsh4pcicprobe/codex_hsh4pcicprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hsh4valprobe/codex_hsh4valprobe.err
+?? regress/artifacts/astraretro_harness_20260926/hwdcaddtoinbufprobe/codex_hwdcaddtoinbufprobe.err
+?? regress/artifacts/b115/
+?? regress/artifacts/b120/
+?? regress/artifacts/batterymissedruns_20260925/
+?? regress/artifacts/closeassess_20261002/aconf_557/codex_aconf_557.err
+?? regress/artifacts/closeassess_20261002/aconf_557b/codex_aconf_557b.err
+?? regress/artifacts/closeassess_20261002/aconf_557c/codex_aconf_557c.err
+?? regress/artifacts/closeassess_20261002/aconf_557d/codex_aconf_557d.err
+?? regress/artifacts/closeassess_20261002/aconf_557e/codex_aconf_557e.err
+?? regress/artifacts/closeassess_20261002/aconf_557f/codex_aconf_557f.err
+?? regress/artifacts/closeassess_20261002/aconf_557g/codex_aconf_557g.err
+?? regress/artifacts/closeassess_20261002/aconf_557h/codex_aconf_557h.err
+?? regress/artifacts/closeassess_20261002/aconf_557i/codex_aconf_557i.err
+?? regress/artifacts/closeassess_20261002/aconf_557j/codex_aconf_557j.err
+?? regress/artifacts/closeassess_20261002/aconf_census/codex_aconf_census.err
+?? regress/artifacts/closeassess_20261002/aconf_parked/codex_aconf_parked.err
+?? regress/artifacts/closeassess_20261002/grok/grok_closedcensus.err
+?? regress/artifacts/codex_research_20260913/
+?? regress/artifacts/codexfarm_20260926/adjudication/codex_astraconfirm_farm_f1a.err
+?? regress/artifacts/codexfarm_20260926/adjudication/codex_astraconfirm_farm_f1b.err
+?? regress/artifacts/codexfarm_20260926/adjudication/codex_astraconfirm_farm_f1c.err
+?? regress/artifacts/codexfarm_20260926/codex_agentrefusal.err
+?? regress/artifacts/codexfarm_20260926/codex_armmsrmodekill.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_armmsrmodekill.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_armmsrmodekill.err
+?? regress/artifacts/codexfarm_20260926/codex_armmsrmodekill.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_armmsrmodekill.refused.txt
+?? regress/artifacts/codexfarm_20260926/codex_armthumbabortkill.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_armthumbabortkill.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_armthumbabortkill.err
+?? regress/artifacts/codexfarm_20260926/codex_armthumbabortkill.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_armthumbabortkill.refused.txt
+?? regress/artifacts/codexfarm_20260926/codex_carrierq3.err
+?? regress/artifacts/codexfarm_20260926/codex_crimectllane.err
+?? regress/artifacts/codexfarm_20260926/codex_fbctrlcmdkill.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_fbctrlcmdkill.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_fbctrlcmdkill.err
+?? regress/artifacts/codexfarm_20260926/codex_fbctrlcmdkill.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_fbctrlcmdkill.refused.txt
+?? regress/artifacts/codexfarm_20260926/codex_ledgerstates.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2c040kill.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2c040kill.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_pcc2c040kill.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2c040kill.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2c040kill.refused.txt
+?? regress/artifacts/codexfarm_20260926/codex_pcc2widthkills.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2widthkills.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_pcc2widthkills.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2widthkills.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_pcc2widthkills.refused.txt
+?? regress/artifacts/codexfarm_20260926/codex_pit8253lsbnotimer.err
+?? regress/artifacts/codexfarm_20260926/codex_ppcrlwhighhalf.err
+?? regress/artifacts/codexfarm_20260926/codex_scripts529.err
+?? regress/artifacts/codexfarm_20260926/codex_sgirekills.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_sgirekills.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_sgirekills.err
+?? regress/artifacts/codexfarm_20260926/codex_sgirekills.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_sgirekills.refused.txt
+?? regress/artifacts/codexfarm_20260926/codex_vmedefaultkill.batchB_max.err
+?? regress/artifacts/codexfarm_20260926/codex_vmedefaultkill.batchB_max.txt
+?? regress/artifacts/codexfarm_20260926/codex_vmedefaultkill.err
+?? regress/artifacts/codexfarm_20260926/codex_vmedefaultkill.refused.err
+?? regress/artifacts/codexfarm_20260926/codex_vmedefaultkill.refused.txt
+?? regress/artifacts/codexpack_20260928/census_cpus1/codex_census_cpus1.err
+?? regress/artifacts/codexpack_20260928/census_cpus2/codex_census_cpus2.err
+?? regress/artifacts/codexpack_20260928/census_cpus3/codex_census_cpus3.err
+?? regress/artifacts/codexpack_20260928/census_cpus4/codex_census_cpus4.err
+?? regress/artifacts/codexpack_20260928/census_cpus5/codex_census_cpus5.err
+?? regress/artifacts/codexpack_20260928/census_cpus6/codex_census_cpus6.err
+?? regress/artifacts/codexpack_20260928/census_devices1/codex_census_devices1.err
+?? regress/artifacts/codexpack_20260928/census_devices10/codex_census_devices10.err
+?? regress/artifacts/codexpack_20260928/census_devices2/codex_census_devices2.err
+?? regress/artifacts/codexpack_20260928/census_devices3/codex_census_devices3.err
+?? regress/artifacts/codexpack_20260928/census_devices4/codex_census_devices4.err
+?? regress/artifacts/codexpack_20260928/census_devices5/codex_census_devices5.err
+?? regress/artifacts/codexpack_20260928/census_devices6/codex_census_devices6.err
+?? regress/artifacts/codexpack_20260928/census_devices7/codex_census_devices7.err
+?? regress/artifacts/codexpack_20260928/census_devices8/codex_census_devices8.err
+?? regress/artifacts/codexpack_20260928/census_devices9/codex_census_devices9.err
+?? regress/artifacts/codexpack_20260928/census_disk1/codex_census_disk1.err
+?? regress/artifacts/codexpack_20260928/census_net1/codex_census_net1.err
+?? regress/artifacts/codexpack_20260928/census_promemul1/codex_census_promemul1.err
+?? regress/artifacts/codexpack_20260928/census_promemul2/codex_census_promemul2.err
+?? regress/artifacts/codexpack_20260928/dossier_armbyteorder/codex_dossier_armbyteorder.err
+?? regress/artifacts/codexpack_20260928/dossier_armcoproc/codex_dossier_armcoproc.err
+?? regress/artifacts/codexpack_20260928/dossier_armldmuser/codex_dossier_armldmuser.err
+?? regress/artifacts/codexpack_20260928/dossier_armvector/codex_dossier_armvector.err
+?? regress/artifacts/codexpack_20260928/dossier_gdromdma/codex_dossier_gdromdma.err
+?? regress/artifacts/codexpack_20260928/dossier_gdromdma/codex_dossier_gdromdma.refused.err
+?? regress/artifacts/codexpack_20260928/dossier_gdromdma/codex_dossier_gdromdma.refused.txt
+?? regress/artifacts/codexpack_20260928/dossier_ppcbat/codex_dossier_ppcbat.err
+?? regress/artifacts/codexpack_20260928/dossier_ppcfused/codex_dossier_ppcfused.err
+?? regress/artifacts/codexpack_20260928/dossier_ppcllsc/codex_dossier_ppcllsc.err
+?? regress/artifacts/codexpack_20260928/draft_2c/codex_draft_2c.err
+?? regress/artifacts/codexpack_20260928/draft_2d/codex_draft_2d.err
+?? regress/artifacts/codexpack_20260928/draft_2e/codex_draft_2e.err
+?? regress/artifacts/codexpack_20260928/draft_3a/codex_draft_3a.err
+?? regress/artifacts/codexpack_20260928/draft_3b/codex_draft_3b.err
+?? regress/artifacts/codexpack_20260928/draft_3c/codex_draft_3c.err
+?? regress/artifacts/codexpack_20260928/draft_3d/codex_draft_3d.err
+?? regress/artifacts/codexpack_20260928/draft_3e/codex_draft_3e.err
+?? regress/artifacts/codexpack_20260928/draft_3f/codex_draft_3f.err
+?? regress/artifacts/codexpack_20260928/draft_3g/codex_draft_3g.err
+?? regress/artifacts/codexpack_20260928/draft_3h/codex_draft_3h.err
+?? regress/artifacts/codexpack_20260928/grok_20260930/grok_censusverify.err
+?? regress/artifacts/codexpack_20260928/hpanel_arm/codex_hpanel_arm.err
+?? regress/artifacts/codexpack_20260928/hpanel_dev/codex_hpanel_dev.err
+?? regress/artifacts/codexpack_20260928/hpanel_ppc/codex_hpanel_ppc.err
+?? regress/artifacts/codexpack_20260928/idless_01/codex_idless_01.err
+?? regress/artifacts/codexpack_20260928/idless_02/codex_idless_02.err
+?? regress/artifacts/codexpack_20260928/idless_03/codex_idless_03.err
+?? regress/artifacts/codexpack_20260928/idless_04/codex_idless_04.err
+?? regress/artifacts/codexpack_20260928/idless_05/codex_idless_05.err
+?? regress/artifacts/codexpack_20260928/idless_06/codex_idless_06.err
+?? regress/artifacts/codexpack_20260928/idless_07/codex_idless_07.err
+?? regress/artifacts/codexpack_20260928/idless_08/codex_idless_08.err
+?? regress/artifacts/codexpack_20260928/idless_09/codex_idless_09.err
+?? regress/artifacts/codexpack_20260928/rec529audit2/codex_rec529audit2.err
+?? regress/artifacts/cpusexitsweep/
+?? regress/artifacts/cpusweep_20260917/
+?? regress/artifacts/crimewidthkill/ctl0c_discharge_20260917/bin/
+?? regress/artifacts/cxultra_20260926/
+?? regress/artifacts/fbclearread/rung3_20260913/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/gdromdmadefault/
+?? regress/artifacts/grokjobs_20260930/dossier_armbyteorder/agy_dossier_armbyteorder.err
+?? regress/artifacts/grokjobs_20260930/dossier_armbyteorder/codex_dossier_armbyteorder.err
+?? regress/artifacts/grokjobs_20260930/dossier_armbyteorder/grok_dossier_armbyteorder.err
+?? regress/artifacts/grokjobs_20260930/dossier_armbyteorder/grok_dossier_armbyteorder.txt
+?? regress/artifacts/grokjobs_20260930/dossier_armcoproc/agy_dossier_armcoproc.err
+?? regress/artifacts/grokjobs_20260930/dossier_armcoproc/codex_dossier_armcoproc.err
+?? regress/artifacts/grokjobs_20260930/dossier_armcoproc/grok_dossier_armcoproc.err
+?? regress/artifacts/grokjobs_20260930/dossier_armcoproc/grok_dossier_armcoproc.txt
+?? regress/artifacts/grokjobs_20260930/dossier_armldmuser/agy_dossier_armldmuser.err
+?? regress/artifacts/grokjobs_20260930/dossier_armldmuser/codex_dossier_armldmuser.err
+?? regress/artifacts/grokjobs_20260930/dossier_armldmuser/grok_dossier_armldmuser.err
+?? regress/artifacts/grokjobs_20260930/dossier_armldmuser/grok_dossier_armldmuser.txt
+?? regress/artifacts/grokjobs_20260930/dossier_armvector/agy_dossier_armvector.err
+?? regress/artifacts/grokjobs_20260930/dossier_armvector/codex_dossier_armvector.err
+?? regress/artifacts/grokjobs_20260930/dossier_armvector/grok_dossier_armvector.err
+?? regress/artifacts/grokjobs_20260930/dossier_armvector/grok_dossier_armvector.txt
+?? regress/artifacts/grokjobs_20260930/dossier_gdromdma/agy_dossier_gdromdma.err
+?? regress/artifacts/grokjobs_20260930/dossier_gdromdma/codex_dossier_gdromdma.err
+?? regress/artifacts/grokjobs_20260930/dossier_gdromdma/grok_dossier_gdromdma.err
+?? regress/artifacts/grokjobs_20260930/dossier_gdromdma/grok_dossier_gdromdma.txt
+?? regress/artifacts/grokjobs_20260930/dossier_ppcbat/agy_dossier_ppcbat.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcbat/codex_dossier_ppcbat.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcbat/grok_dossier_ppcbat.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcbat/grok_dossier_ppcbat.txt
+?? regress/artifacts/grokjobs_20260930/dossier_ppcfused/agy_dossier_ppcfused.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcfused/codex_dossier_ppcfused.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcfused/grok_dossier_ppcfused.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcfused/grok_dossier_ppcfused.txt
+?? regress/artifacts/grokjobs_20260930/dossier_ppcllsc/agy_dossier_ppcllsc.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcllsc/codex_dossier_ppcllsc.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcllsc/grok_dossier_ppcllsc.err
+?? regress/artifacts/grokjobs_20260930/dossier_ppcllsc/grok_dossier_ppcllsc.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3a/agy_draftcheck_3a.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3a/codex_draftcheck_3a.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3a/grok_draftcheck_3a.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3a/grok_draftcheck_3a.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3b/agy_draftcheck_3b.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3b/codex_draftcheck_3b.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3b/grok_draftcheck_3b.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3b/grok_draftcheck_3b.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3c/agy_draftcheck_3c.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3c/codex_draftcheck_3c.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3c/grok_draftcheck_3c.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3c/grok_draftcheck_3c.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3d/agy_draftcheck_3d.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3d/codex_draftcheck_3d.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3d/grok_draftcheck_3d.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3d/grok_draftcheck_3d.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3e/agy_draftcheck_3e.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3e/codex_draftcheck_3e.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3e/grok_draftcheck_3e.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3e/grok_draftcheck_3e.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3f/agy_draftcheck_3f.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3f/codex_draftcheck_3f.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3f/grok_draftcheck_3f.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3f/grok_draftcheck_3f.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3g/agy_draftcheck_3g.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3g/codex_draftcheck_3g.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3g/grok_draftcheck_3g.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3g/grok_draftcheck_3g.txt
+?? regress/artifacts/grokjobs_20260930/draftcheck_3h/agy_draftcheck_3h.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3h/codex_draftcheck_3h.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3h/grok_draftcheck_3h.err
+?? regress/artifacts/grokjobs_20260930/draftcheck_3h/grok_draftcheck_3h.txt
+?? regress/artifacts/grokjobs_20260930/hverify_01/grok_hverify_01.err
+?? regress/artifacts/grokjobs_20260930/hverify_02/grok_hverify_02.err
+?? regress/artifacts/grokjobs_20260930/hverify_03/grok_hverify_03.err
+?? regress/artifacts/grokjobs_20260930/hverify_04/grok_hverify_04.err
+?? regress/artifacts/grokjobs_20260930/hverify_05/grok_hverify_05.err
+?? regress/artifacts/grokjobs_20260930/hverify_06/grok_hverify_06.err
+?? regress/artifacts/grokjobs_20260930/hverify_07/agy_hverify_07.err
+?? regress/artifacts/grokjobs_20260930/hverify_07/codex_hverify_07.err
+?? regress/artifacts/grokjobs_20260930/hverify_07/grok_hverify_07.err
+?? regress/artifacts/grokjobs_20260930/hverify_08/grok_hverify_08.err
+?? regress/artifacts/grokjobs_20260930/hverify_09/agy_hverify_09.err
+?? regress/artifacts/grokjobs_20260930/hverify_09/codex_hverify_09.err
+?? regress/artifacts/grokjobs_20260930/hverify_09/grok_hverify_09.err
+?? regress/artifacts/grokjobs_20260930/hverify_10/grok_hverify_10.err
+?? regress/artifacts/grokjobs_20260930/hverify_11/agy_hverify_11.err
+?? regress/artifacts/grokjobs_20260930/hverify_11/codex_hverify_11.err
+?? regress/artifacts/grokjobs_20260930/hverify_11/grok_hverify_11.err
+?? regress/artifacts/grokjobs_20260930/hverify_12/agy_hverify_12.err
+?? regress/artifacts/grokjobs_20260930/hverify_12/codex_hverify_12.err
+?? regress/artifacts/grokjobs_20260930/hverify_12/grok_hverify_12.err
+?? regress/artifacts/grokjobs_20260930/hverify_13/agy_hverify_13.err
+?? regress/artifacts/grokjobs_20260930/hverify_13/codex_hverify_13.err
+?? regress/artifacts/grokjobs_20260930/hverify_13/grok_hverify_13.err
+?? regress/artifacts/grokjobs_20260930/hverify_13/grok_hverify_13.txt
+?? regress/artifacts/grokjobs_20260930/hverify_14/agy_hverify_14.err
+?? regress/artifacts/grokjobs_20260930/hverify_14/codex_hverify_14.err
+?? regress/artifacts/grokjobs_20260930/hverify_14/grok_hverify_14.err
+?? regress/artifacts/grokjobs_20260930/hverify_14/grok_hverify_14.txt
+?? regress/artifacts/grokjobs_20260930/hverify_15/agy_hverify_15.err
+?? regress/artifacts/grokjobs_20260930/hverify_15/codex_hverify_15.err
+?? regress/artifacts/grokjobs_20260930/hverify_15/grok_hverify_15.err
+?? regress/artifacts/grokjobs_20260930/hverify_15/grok_hverify_15.txt
+?? regress/artifacts/grokjobs_20260930/hverify_16/agy_hverify_16.err
+?? regress/artifacts/grokjobs_20260930/hverify_16/codex_hverify_16.err
+?? regress/artifacts/grokjobs_20260930/hverify_16/grok_hverify_16.err
+?? regress/artifacts/grokjobs_20260930/hverify_16/grok_hverify_16.txt
+?? regress/artifacts/grokjobs_20260930/hverify_17/agy_hverify_17.err
+?? regress/artifacts/grokjobs_20260930/hverify_17/codex_hverify_17.err
+?? regress/artifacts/grokjobs_20260930/hverify_17/grok_hverify_17.err
+?? regress/artifacts/grokjobs_20260930/hverify_17/grok_hverify_17.txt
+?? regress/artifacts/grokjobs_20260930/hverify_18/agy_hverify_18.err
+?? regress/artifacts/grokjobs_20260930/hverify_18/codex_hverify_18.err
+?? regress/artifacts/grokjobs_20260930/hverify_18/grok_hverify_18.err
+?? regress/artifacts/grokjobs_20260930/hverify_18/grok_hverify_18.txt
+?? regress/artifacts/haltclass/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/idless_20261002/aconf_01/codex_aconf_01.err
+?? regress/artifacts/idless_20261002/aconf_02a/codex_aconf_02a.err
+?? regress/artifacts/idless_20261002/aconf_02b/codex_aconf_02b.err
+?? regress/artifacts/idless_20261002/aconf_03/codex_aconf_03.err
+?? regress/artifacts/idless_20261002/aconf_04/codex_aconf_04.err
+?? regress/artifacts/idless_20261002/aconf_05/codex_aconf_05.err
+?? regress/artifacts/idless_20261002/aconf_06/codex_aconf_06.err
+?? regress/artifacts/idless_20261002/aconf_07/codex_aconf_07.err
+?? regress/artifacts/idless_20261002/aconf_08/codex_aconf_08.err
+?? regress/artifacts/idless_20261002/aconf_09/codex_aconf_09.err
+?? regress/artifacts/idless_20261002/agy/agy_closures.err
+?? regress/artifacts/idless_20261002/grok/grok_grok_irule_d.err
+?? regress/artifacts/idless_20261002/grok/grok_icompound.err
+?? regress/artifacts/idless_20261002/grok/grok_irule_a.err
+?? regress/artifacts/idless_20261002/grok/grok_irule_b.err
+?? regress/artifacts/idless_20261002/grok/grok_irule_c.err
+?? regress/artifacts/idless_20261002/grok/grok_ititles.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_01.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_02a.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_02b.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_03.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_04.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_05.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_06.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_07.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_08.err
+?? regress/artifacts/idless_20261002/grok/grok_ruleidless_09.err
+?? regress/artifacts/idless_20261002/icite_01/agy_icite_01.err
+?? regress/artifacts/idless_20261002/icite_02a/agy_icite_02a.err
+?? regress/artifacts/idless_20261002/icite_02b/agy_icite_02b.err
+?? regress/artifacts/idless_20261002/icite_03/agy_icite_03.err
+?? regress/artifacts/idless_20261002/icite_04to09/agy_icite_04to09.err
+?? regress/artifacts/idless_20261002/icite_04to09/agy_icite_04to09.txt
+?? regress/artifacts/idless_20261002/ifile_01/codex_ifile_01.err
+?? regress/artifacts/idless_20261002/ifile_02/codex_ifile_02.err
+?? regress/artifacts/idless_20261002/ifile_03/codex_ifile_03.err
+?? regress/artifacts/idless_20261002/ifile_04/codex_ifile_04.err
+?? regress/artifacts/idless_20261002/ifile_05/codex_ifile_05.err
+?? regress/artifacts/idless_20261002/ifile_06/codex_ifile_06.err
+?? regress/artifacts/idless_20261002/ifiled_a/agy_ifiled_a.err
+?? regress/artifacts/idless_20261002/ifiled_a/agy_ifiled_a.txt
+?? regress/artifacts/idless_20261002/ifiled_b/agy_ifiled_b.err
+?? regress/artifacts/idless_20261002/ifiled_b/agy_ifiled_b.txt
+?? regress/artifacts/idlessaudit_20261002/aconf_558/codex_aconf_558.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558b/codex_aconf_558b.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558c/codex_aconf_558c.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558d/codex_aconf_558d.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558e/codex_aconf_558e.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558f/codex_aconf_558f.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558g/codex_aconf_558g.err
+?? regress/artifacts/idlessaudit_20261002/aconf_558h/codex_aconf_558h.err
+?? regress/artifacts/idlessaudit_20261002/aconf_559/
+?? regress/artifacts/idlessaudit_20261002/aconf_559b/
+?? regress/artifacts/idlessaudit_20261002/aconf_agyflags/codex_aconf_agyflags.err
+?? regress/artifacts/idlessaudit_20261002/aconf_mbstops/codex_aconf_mbstops.err
+?? regress/artifacts/idlessaudit_20261002/briefs/aconf_559.md
+?? regress/artifacts/idlessaudit_20261002/briefs/aconf_559b.md
+?? regress/artifacts/idlessaudit_20261002/draft559/
+?? regress/artifacts/idlessaudit_20261002/grok/grok_mbstops.err
+?? regress/artifacts/idlessaudit_20261002/icite2_1/agy_icite2_1.err
+?? regress/artifacts/idlessaudit_20261002/icite2_2/agy_icite2_2.txt
+?? regress/artifacts/idlessaudit_20261002/ifiled2_1/agy_ifiled2_1.err
+?? regress/artifacts/idlessaudit_20261002/ifiled2_2/agy_ifiled2_2.err
+?? regress/artifacts/idlessaudit_20261002/ifiled2_3/agy_ifiled2_3.err
+?? regress/artifacts/idlessaudit_20261002/ikeep2/agy_ikeep2.err
+?? regress/artifacts/idlessread_20261002/grok/grok_grok_iunsettled.err
+?? regress/artifacts/ip30abortkill/PROBEATTACK_grok_20260917.txt
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/lcaconfwidth/head_20260917/
+?? regress/artifacts/lcaisaphys/WITNESSSPEC_brief_20260917.md
+?? regress/artifacts/lcaisaphys/WITNESSSPEC_grok_20260917.txt
+?? regress/artifacts/lcaisaphys/apply540_manifest.py
+?? regress/artifacts/lcaisaphys/codex_design_20260911.err
+?? regress/artifacts/lcaisaphys/codex_design_20260911.txt
+?? regress/artifacts/lcaisaphys/codex_design_RETRY_20260911.err
+?? regress/artifacts/lcaisaphys/codex_design_RETRY_20260911.txt
+?? regress/artifacts/lcaisaphys/g1ctl_20260919/
+?? regress/artifacts/lcaisaphys/killtable2_20260919/
+?? regress/artifacts/lcaisaphys/killtable3_20260919/
+?? regress/artifacts/lcaisaphys/killtable_20260918/
+?? regress/artifacts/lcaisaphys/opus_p2_20260919/
+?? regress/artifacts/lcaisaphys/opus_p3_20260919/
+?? regress/artifacts/lcaisaphys/witness22_FIX_20260918/
+?? regress/artifacts/lcaisaphys/witness22_HEAD_20260918/
+?? regress/artifacts/lcaisaphys/witness_HEAD_20260918/
+?? regress/artifacts/lcaisasize/
+?? regress/artifacts/lunadefaultstop_20260917/
+?? regress/artifacts/makercfalse/codex_design_20260911.err
+?? regress/artifacts/makercfalse/codex_design_20260911.txt
+?? regress/artifacts/multiaccesswarms/
+?? regress/artifacts/n6/p1_20260919/fable5_p1_20260919.md
+?? regress/artifacts/neverqueued_20260917/
+?? regress/artifacts/panelseatlabel/
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_20260911.txt
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_RETRY_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_RETRY_20260911.txt
+?? regress/artifacts/ppcrlwhighhalf/codex_witness_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_witness_20260911.txt
+?? regress/artifacts/ppcwitnessmaskoracle/
+?? regress/artifacts/probedeathoracle_20260917/
+?? regress/artifacts/probewiring/
+?? regress/artifacts/recordfix_20261002/RRECORD.tsv
+?? regress/artifacts/recordfix_20261002/arrec_01/
+?? regress/artifacts/recordfix_20261002/arrec_02/
+?? regress/artifacts/recordfix_20261002/arrec_03/
+?? regress/artifacts/recordfix_20261002/arrec_04/
+?? regress/artifacts/recordfix_20261002/briefs/arrec_01.md
+?? regress/artifacts/recordfix_20261002/briefs/arrec_02.md
+?? regress/artifacts/recordfix_20261002/briefs/arrec_03.md
+?? regress/artifacts/recordfix_20261002/briefs/arrec_04.md
+?? regress/artifacts/recordfix_20261002/briefs/rrec_01.md
+?? regress/artifacts/recordfix_20261002/briefs/rrec_02.md
+?? regress/artifacts/recordfix_20261002/briefs/rrec_03.md
+?? regress/artifacts/recordfix_20261002/briefs/rrec_04.md
+?? regress/artifacts/recordfix_20261002/codex_arrec_results.tsv
+?? regress/artifacts/recordfix_20261002/grok/grok_hrectext.err
+?? regress/artifacts/recordfix_20261002/hplace_01/codex_hplace_01.err
+?? regress/artifacts/recordfix_20261002/hplace_02/codex_hplace_02.err
+?? regress/artifacts/recordfix_20261002/hplace_03/codex_hplace_03.err
+?? regress/artifacts/recordfix_20261002/hplace_04/codex_hplace_04.err
+?? regress/artifacts/recordfix_20261002/hplace_05/codex_hplace_05.err
+?? regress/artifacts/recordfix_20261002/hplace_06/codex_hplace_06.err
+?? regress/artifacts/recordfix_20261002/hplace_07/codex_hplace_07.err
+?? regress/artifacts/recordfix_20261002/hplace_08/codex_hplace_08.err
+?? regress/artifacts/recordfix_20261002/hplace_09/codex_hplace_09.err
+?? regress/artifacts/recordfix_20261002/hplace_10/codex_hplace_10.err
+?? regress/artifacts/recordfix_20261002/hplace_11/codex_hplace_11.err
+?? regress/artifacts/recordfix_20261002/hrec_01/agy_hrec_01.err
+?? regress/artifacts/recordfix_20261002/hrec_02/agy_hrec_02.err
+?? regress/artifacts/recordfix_20261002/hrec_03/agy_hrec_03.err
+?? regress/artifacts/recordfix_20261002/hrec_03/agy_hrec_03.txt
+?? regress/artifacts/recordfix_20261002/hrec_03/codex_hrec_03.err
+?? regress/artifacts/recordfix_20261002/hrec_04/agy_hrec_04.err
+?? regress/artifacts/recordfix_20261002/hrec_04/agy_hrec_04.txt
+?? regress/artifacts/recordfix_20261002/hrec_04/codex_hrec_04.err
+?? regress/artifacts/recordfix_20261002/hrec_05/codex_hrec_05.err
+?? regress/artifacts/recordfix_20261002/hrec_06/codex_hrec_06.err
+?? regress/artifacts/recordfix_20261002/hrec_07/codex_hrec_07.err
+?? regress/artifacts/recordfix_20261002/hrec_08/codex_hrec_08.err
+?? regress/artifacts/recordfix_20261002/hrec_09/codex_hrec_09.err
+?? regress/artifacts/recordfix_20261002/hrec_10/codex_hrec_10.err
+?? regress/artifacts/recordfix_20261002/hrec_11/codex_hrec_11.err
+?? regress/artifacts/recordfix_20261002/mk_rrecord.py.txt
+?? regress/artifacts/recordsaudit_20260917/
+?? regress/artifacts/seataudit_20260917/
+?? regress/artifacts/sgirandomcolour/opus_impl_20260910.md
+?? regress/artifacts/sh4dmacie/
+?? regress/artifacts/sh4rtcflags/
+?? regress/artifacts/sh4sqwrite/
+?? regress/artifacts/shprotld/
+?? regress/artifacts/sighunt_20260917/
+?? regress/artifacts/stateaudit_20260923/ledger.before_audit_20260923.json
+?? regress/artifacts/stateaudit_20260923/peer_carriers/
+?? regress/artifacts/upstreamdeleteprose_20260924/gate8_bead6ad9_export.out
+?? regress/artifacts/vmedefaultkill/
+?? regress/artifacts/wdcaltdigin/killtable_20260911_drdy/run_BASE/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260911_drdy/run_M_DRDY/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_BASE/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_E_EQUIV49/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_HEAD/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRDY/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRDYDRQ/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRQERR/disk.img
+?? regress/artifacts/wdcerrfamily/
+?? regress/artifacts/wdcnullxfer/
+?? regress/artifacts/wdcrearmzero/
+?? regress/artifacts/wiringcliff/codex_ppcgate_20260910.err
+?? regress/artifacts/wiringcliff/codex_ppcgate_20260910.txt
+?? regress/artifacts/witnessspecset/
+?? regress/lca_isaphys_probe.py
+?? regress/sgi_mte_dummy.bin
+?? tools/pipeline/check_fix_seats.py
+?? tools/pipeline/check_probe_wiring.py.orig
+?? tools/pipeline/ledger.json.before_nul546
+?? tools/precommit_check.sh.orig
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$files=@('"'AGENTS.md','C:/DocumentNoSnc/cc/AGENTS.md','C:/DocumentNoSnc/AGENTS.md','C:/AGENTS.md'); foreach("'$f in $files){if(Test-Path -LiteralPath $f){Write-Output $f; Get-Content -LiteralPath $f}}; rg -n '"'arm_mode|arm_.*register_bank|cd\\.arm\\.cpsr\\s*[|&"'^+'"\\-]?=|spsr_\\w+\\s*[|&"'^+'"\\-]?=|\"cpsr\"' GXEMUL-SEC/src -g '*.c' -g '*.h' -g '"'!tmp*'"'" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; "'$s=Get-Content $p; for($i=795;$i -le 945;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; for($i=4230;$i -le 4330;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; Get-Content GXEMUL-SEC/src/cpus/Makefile -TotalCount 100; rg -n '"'UNPREDICTABLE|Unpredictable|unpredictable|MSR' _scratchpad/ddi0100i.txt | Select-Object -First 60" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 209ms:
+GXEMUL-SEC/src\core\emul.c:673:				cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:127:	cpu->cd.arm.cpsr = ARM_FLAG_I | ARM_FLAG_F;
+GXEMUL-SEC/src\cpus\cpu_arm.c:133:		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+GXEMUL-SEC/src\cpus\cpu_arm.c:136:		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+GXEMUL-SEC/src\cpus\cpu_arm.c:190:	cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src\cpus\cpu_arm.c:196:	CPU_SETTINGS_ADD_REGISTER32("cpsr", cpu->cd.arm.cpsr);
+GXEMUL-SEC/src\cpus\cpu_arm.c:363:	int mode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src\cpus\cpu_arm.c:366:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src\cpus\cpu_arm.c:367:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src\cpus\cpu_arm.c:372:		debug("cpu%i:  cpsr = ", x);
+GXEMUL-SEC/src\cpus\cpu_arm.c:374:		    (cpu->cd.arm.cpsr & ARM_FLAG_N)? "N" : "n",
+GXEMUL-SEC/src\cpus\cpu_arm.c:375:		    (cpu->cd.arm.cpsr & ARM_FLAG_Z)? "Z" : "z",
+GXEMUL-SEC/src\cpus\cpu_arm.c:376:		    (cpu->cd.arm.cpsr & ARM_FLAG_C)? "C" : "c",
+GXEMUL-SEC/src\cpus\cpu_arm.c:377:		    (cpu->cd.arm.cpsr & ARM_FLAG_V)? "V" : "v",
+GXEMUL-SEC/src\cpus\cpu_arm.c:378:		    (cpu->cd.arm.cpsr & ARM_FLAG_Q)? "Q" : "q",
+GXEMUL-SEC/src\cpus\cpu_arm.c:379:		    (cpu->cd.arm.cpsr & ARM_FLAG_J)? "J" : "j",
+GXEMUL-SEC/src\cpus\cpu_arm.c:380:		    (cpu->cd.arm.cpsr & ARM_FLAG_E)? "E" : "e",
+GXEMUL-SEC/src\cpus\cpu_arm.c:381:		    (cpu->cd.arm.cpsr & ARM_FLAG_A)? "A" : "a",
+GXEMUL-SEC/src\cpus\cpu_arm.c:382:		    (cpu->cd.arm.cpsr & ARM_FLAG_I)? "I" : "i",
+GXEMUL-SEC/src\cpus\cpu_arm.c:383:		    (cpu->cd.arm.cpsr & ARM_FLAG_F)? "F" : "f",
+GXEMUL-SEC/src\cpus\cpu_arm.c:384:    		    (cpu->cd.arm.cpsr & ARM_FLAG_T)? "T" : "t");
+GXEMUL-SEC/src\cpus\cpu_arm.c:404:		int m = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src\cpus\cpu_arm.c:405:		debug("cpu%i:  cpsr = 0x%08x (", x, cpu->cd.arm.cpsr);
+GXEMUL-SEC/src\cpus\cpu_arm.c:520: *  arm_save_register_bank():
+GXEMUL-SEC/src\cpus\cpu_arm.c:522:void arm_save_register_bank(struct cpu *cpu)
+GXEMUL-SEC/src\cpus\cpu_arm.c:525:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm.c:559:	default:fatal("arm_save_register_bank: unimplemented mode %i\n",
+GXEMUL-SEC/src\cpus\cpu_arm.c:560:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src\cpus\cpu_arm.c:567: *  arm_load_register_bank():
+GXEMUL-SEC/src\cpus\cpu_arm.c:569:void arm_load_register_bank(struct cpu *cpu)
+GXEMUL-SEC/src\cpus\cpu_arm.c:572:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm.c:606:	default:fatal("arm_load_register_bank: unimplemented mode %i\n",
+GXEMUL-SEC/src\cpus\cpu_arm.c:607:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src\cpus\cpu_arm.c:667:	retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+GXEMUL-SEC/src\cpus\cpu_arm.c:669:	arm_save_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm.c:671:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src\cpus\cpu_arm.c:672:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src\cpus\cpu_arm.c:676:		cpu->cd.arm.spsr_svc = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src\cpus\cpu_arm.c:678:		cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src\cpus\cpu_arm.c:680:		cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src\cpus\cpu_arm.c:682:		cpu->cd.arm.spsr_irq = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src\cpus\cpu_arm.c:684:		cpu->cd.arm.spsr_fiq = cpu->cd.arm.cpsr; break;
+GXEMUL-SEC/src\cpus\cpu_arm.c:693:	cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:695:	oldmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src\cpus\cpu_arm.c:697:	cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+GXEMUL-SEC/src\cpus\cpu_arm.c:698:	cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];
+GXEMUL-SEC/src\cpus\cpu_arm.c:707:	newmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+GXEMUL-SEC/src\cpus\cpu_arm.c:714:	cpu->cd.arm.cpsr |= ARM_FLAG_I;
+GXEMUL-SEC/src\cpus\cpu_arm.c:717:		cpu->cd.arm.cpsr |= ARM_FLAG_F;
+GXEMUL-SEC/src\cpus\cpu_arm.c:720:	arm_load_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm.c:1216:	if (!(cpu->pc & 1) || !(cpu->cd.arm.cpsr & ARM_FLAG_T)) {
+GXEMUL-SEC/src\cpus\cpu_arm.c:1517:					cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:1519:						cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:1530:						cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:1681:				cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:1683:				cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm.c:1777:			cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_dyntrans.c:208:		if (cpu->cd.arm.irq_asserted && !(cpu->cd.arm.cpsr & ARM_FLAG_I))
+GXEMUL-SEC/src\cpus\cpu_dyntrans.c:255:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:218:		arm_save_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:219:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:221:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:223:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:225:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:227:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:229:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:231:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:232:		arm_load_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c:245:			cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:355:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:358:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:360:		cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:362:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:386:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:389:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:391:		cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:393:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:441:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:448:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:457:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:488:	uint32_t old_cpsr = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:490:		cpu->cd.arm.cpsr |= ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:492:		cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:494:	if (cpu->cd.arm.cpsr != old_cpsr)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:826:	if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:831:	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:835:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:836:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:839:		arm_save_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:841:	cpu->cd.arm.cpsr &= ~mask;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:842:	cpu->cd.arm.cpsr |= (new_value & mask);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:844:	cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:847:		arm_load_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:860:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:862:		cpu->cd.arm.spsr_fiq &= ~mask;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:863:		cpu->cd.arm.spsr_fiq |= (new_value & mask);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:866:		cpu->cd.arm.spsr_abt &= ~mask;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:867:		cpu->cd.arm.spsr_abt |= (new_value & mask);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:870:		cpu->cd.arm.spsr_und &= ~mask;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:871:		cpu->cd.arm.spsr_und |= (new_value & mask);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:874:		cpu->cd.arm.spsr_irq &= ~mask;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:875:		cpu->cd.arm.spsr_irq |= (new_value & mask);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:878:		cpu->cd.arm.spsr_svc &= ~mask;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:879:		cpu->cd.arm.spsr_svc |= (new_value & mask);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:882:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:912:	cpu->cd.arm.cpsr &= 0x0fffffff;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:913:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:914:	reg(ic->arg[0]) = cpu->cd.arm.cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:926:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:934:	default:fatal("mrs_spsr: unimplemented mode %i\n", cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1612:		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1751:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1781:		uint32_t new_cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1784:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1786:			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1788:			new_cpsr = cpu->cd.arm.spsr_abt; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1790:			new_cpsr = cpu->cd.arm.spsr_und; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1792:			new_cpsr = cpu->cd.arm.spsr_irq; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1794:			new_cpsr = cpu->cd.arm.spsr_svc; break;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1796:			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1802:		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1803:		    (new_cpsr & ARM_FLAG_MODE);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1806:			arm_save_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1808:		cpu->cd.arm.cpsr = new_cpsr;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1809:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1812:			arm_load_register_bank(cpu);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1849:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+GXEMUL-SEC/src\include\cpu_arm.h:88:#define	ARM_F_C		2	/*  of cpsr.                       */
+GXEMUL-SEC/src\include\cpu_arm.h:185:	 *  NOTE: 'flags' just contains the 4 flag bits. When cpsr is read,
+GXEMUL-SEC/src\include\cpu_arm.h:186:	 *  the flags should be copied from 'flags', and when cpsr is written
+GXEMUL-SEC/src\include\cpu_arm.h:190:	uint32_t		cpsr;
+GXEMUL-SEC/src\include\cpu_arm.h:345:void arm_load_register_bank(struct cpu *cpu);
+GXEMUL-SEC/src\include\cpu_arm.h:346:void arm_save_register_bank(struct cpu *cpu);
+GXEMUL-SEC/src\cpus\memory_arm.c:123:	int user = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32;
+GXEMUL-SEC/src\include\quick_pc_to_pointers.h:21:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {				\
+
+ exited 1 in 291ms:
+795:	if ((old_pc & ~mask_within_page) == (cpu->pc & ~mask_within_page)) {
+796:		cpu->cd.arm.next_ic = cpu->cd.arm.cur_ic_page +
+797:		    ((cpu->pc & mask_within_page) >> ARM_INSTR_ALIGNMENT_SHIFT);
+798:	} else {
+799:		/*  Find the new physical page and update pointers:  */
+800:		quick_pc_to_pointers_arm(cpu);
+801:	}
+802:}
+803:Y(ret_trace)
+804:X(ret)
+805:{
+806:	cpu->pc = cpu->cd.arm.r[ARM_LR];
+807:	quick_pc_to_pointers_arm(cpu);
+808:}
+809:Y(ret)
+810:
+811:
+812:/*
+813: *  msr: Move to status register from a normal register or immediate value.
+814: *
+815: *  arg[0] = immediate value
+816: *  arg[1] = mask
+817: *  arg[2] = pointer to rm
+818: *
+819: *  msr_imm and msr_imm_spsr use arg[1] and arg[0].
+820: *  msr and msr_spsr use arg[1] and arg[2].
+821: */
+822:X(msr_imm)
+823:{
+824:	uint32_t mask = ic->arg[1];
+825:
+826:	if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+827:		mask &= 0xff000000;
+828:	}
+829:
+830:	int switch_register_banks = (mask & ARM_FLAG_MODE) &&
+831:	    ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+832:	    (ic->arg[0] & ARM_FLAG_MODE));
+833:	uint32_t new_value = ic->arg[0];
+834:
+835:	cpu->cd.arm.cpsr &= 0x0fffffff;
+836:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+837:
+838:	if (switch_register_banks)
+839:		arm_save_register_bank(cpu);
+840:
+841:	cpu->cd.arm.cpsr &= ~mask;
+842:	cpu->cd.arm.cpsr |= (new_value & mask);
+843:
+844:	cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+845:
+846:	if (switch_register_banks)
+847:		arm_load_register_bank(cpu);
+848:}
+849:Y(msr_imm)
+850:X(msr)
+851:{
+852:	ic->arg[0] = reg(ic->arg[2]);
+853:	instr(msr_imm)(cpu, ic);
+854:}
+855:Y(msr)
+856:X(msr_imm_spsr)
+857:{
+858:	uint32_t mask = ic->arg[1];
+859:	uint32_t new_value = ic->arg[0];
+860:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+861:	case ARM_MODE_FIQ32:
+862:		cpu->cd.arm.spsr_fiq &= ~mask;
+863:		cpu->cd.arm.spsr_fiq |= (new_value & mask);
+864:		break;
+865:	case ARM_MODE_ABT32:
+866:		cpu->cd.arm.spsr_abt &= ~mask;
+867:		cpu->cd.arm.spsr_abt |= (new_value & mask);
+868:		break;
+869:	case ARM_MODE_UND32:
+870:		cpu->cd.arm.spsr_und &= ~mask;
+871:		cpu->cd.arm.spsr_und |= (new_value & mask);
+872:		break;
+873:	case ARM_MODE_IRQ32:
+874:		cpu->cd.arm.spsr_irq &= ~mask;
+875:		cpu->cd.arm.spsr_irq |= (new_value & mask);
+876:		break;
+877:	case ARM_MODE_SVC32:
+878:		cpu->cd.arm.spsr_svc &= ~mask;
+879:		cpu->cd.arm.spsr_svc |= (new_value & mask);
+880:		break;
+881:	default:fatal("msr_spsr: unimplemented mode %i\n",
+882:		    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+883:		{
+884:			/*  Synchronize the program counter:  */
+885:			uint32_t old_pc, low_pc = ((size_t)ic - (size_t)
+886:			    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+887:			cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+888:			cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+889:			old_pc = cpu->pc;
+890:			printf("msr_spsr: old pc = 0x%08" PRIx32"\n", old_pc);
+891:		}
+892:		cpu->running = 0;
+893:		cpu->cd.arm.next_ic = &nothing_call;
+894:	}
+895:}
+896:Y(msr_imm_spsr)
+897:X(msr_spsr)
+898:{
+899:	ic->arg[0] = reg(ic->arg[2]);
+900:	instr(msr_imm_spsr)(cpu, ic);
+901:}
+902:Y(msr_spsr)
+903:
+904:
+905:/*
+906: *  mrs: Move from status/flag register to a normal register.
+907: *
+908: *  arg[0] = pointer to rd
+909: */
+910:X(mrs)
+911:{
+912:	cpu->cd.arm.cpsr &= 0x0fffffff;
+913:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+914:	reg(ic->arg[0]) = cpu->cd.arm.cpsr;
+915:}
+916:Y(mrs)
+917:
+918:
+919:/*
+920: *  mrs: Move from saved status/flag register to a normal register.
+921: *
+922: *  arg[0] = pointer to rd
+923: */
+924:X(mrs_spsr)
+925:{
+926:	switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+927:	case ARM_MODE_FIQ32: reg(ic->arg[0]) = cpu->cd.arm.spsr_fiq; break;
+928:	case ARM_MODE_ABT32: reg(ic->arg[0]) = cpu->cd.arm.spsr_abt; break;
+929:	case ARM_MODE_UND32: reg(ic->arg[0]) = cpu->cd.arm.spsr_und; break;
+930:	case ARM_MODE_IRQ32: reg(ic->arg[0]) = cpu->cd.arm.spsr_irq; break;
+931:	case ARM_MODE_SVC32: reg(ic->arg[0]) = cpu->cd.arm.spsr_svc; break;
+932:	case ARM_MODE_USR32:
+933:	case ARM_MODE_SYS32: reg(ic->arg[0]) = 0; break;
+934:	default:fatal("mrs_spsr: unimplemented mode %i\n", cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+935:		cpu->running = 0;
+936:		cpu->cd.arm.next_ic = &nothing_call;
+937:	}
+938:}
+939:Y(mrs_spsr)
+940:
+941:
+942:/*
+943: *  mcr_mrc:  Coprocessor move
+944: *  cdp:      Coprocessor operation
+945: *
+4230:			if (!cpu->translation_readahead)
+4231:				fatal("TODO: q{,d}{add,sub}\n");
+4232:			goto bad;
+4233:		}
+4234:		if ((iword & 0x0ff000d0) == 0x01200010) {
+4235:			/*  bx or blx  */
+4236:			if (iword & 0x20)
+4237:				ic->f = cond_instr(blx_reg);
+4238:			else {
+4239:				if (cpu->machine->show_trace_tree &&
+4240:				    rm == ARM_LR)
+4241:					ic->f = cond_instr(bx_trace);
+4242:				else
+4243:					ic->f = cond_instr(bx);
+4244:			}
+4245:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rm]);
+4246:			ic->arg[2] = (addr & 0xffc) + 4;
+4247:                        break;
+4248:                }
+4249:		if ((iword & 0x0fb00ff0) == 0x1000090) {
+4250:			if (iword & 0x00400000)
+4251:				ic->f = cond_instr(swpb);
+4252:			else
+4253:				ic->f = cond_instr(swp);
+4254:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4255:			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4256:			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rn]);
+4257:			break;
+4258:		}
+4259:		if ((iword & 0x0fff0ff0) == 0x016f0f10) {
+4260:			ic->f = cond_instr(clz);
+4261:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rm]);
+4262:			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rd]);
+4263:			break;
+4264:		}
+4265:		if ((iword & 0x0ff00090) == 0x01000080) {
+4266:			/*  TODO: smlaXX  */
+4267:			goto bad;
+4268:		}
+4269:		if ((iword & 0x0ff00090) == 0x01400080) {
+4270:			/*  TODO: smlalY  */
+4271:			goto bad;
+4272:		}
+4273:		if ((iword & 0x0ff000b0) == 0x01200080) {
+4274:			/*  TODO: smlawY  */
+4275:			goto bad;
+4276:		}
+4277:		if ((iword & 0x0ff0f090) == 0x01600080) {
+4278:			/*  smulXY (16-bit * 16-bit => 32-bit)  */
+4279:			switch (iword & 0x60) {
+4280:			case 0x00: ic->f = cond_instr(smulbb); break;
+4281:			case 0x20: ic->f = cond_instr(smultb); break;
+4282:			case 0x40: ic->f = cond_instr(smulbt); break;
+4283:			default:   ic->f = cond_instr(smultt); break;
+4284:			}
+4285:			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rm]);
+4286:			ic->arg[1] = (size_t)(&cpu->cd.arm.r[r8]);
+4287:			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rn]); /*  Rd  */
+4288:			break;
+4289:		}
+4290:		if ((iword & 0x0ff0f0b0) == 0x012000a0) {
+4291:			/*  TODO: smulwY  */
+4292:			goto bad;
+4293:		}
+4294:		if ((iword & 0x0fb0fff0) == 0x0120f000 ||
+4295:		    (iword & 0x0fb0f000) == 0x0320f000) {
+4296:			/*  msr: move to [S|C]PSR from a register or
+4297:			    immediate value  */
+4298:			if (iword & 0x02000000) {
+4299:				if (iword & 0x00400000)
+4300:					ic->f = cond_instr(msr_imm_spsr);
+4301:				else
+4302:					ic->f = cond_instr(msr_imm);
+4303:			} else {
+4304:				if (rm == ARM_PC) {
+4305:					if (!cpu->translation_readahead)
+4306:						fatal("msr PC?\n");
+4307:					goto bad;
+4308:				}
+4309:				if (iword & 0x00400000)
+4310:					ic->f = cond_instr(msr_spsr);
+4311:				else
+4312:					ic->f = cond_instr(msr);
+4313:			}
+4314:			imm = iword & 0xff;
+4315:			while (r8-- > 0)
+4316:				imm = (imm >> 2) | ((imm & 3) << 30);
+4317:			ic->arg[0] = imm;
+4318:			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4319:			{
+4320:				uint32_t arg1 = 0;
+4321:				if (iword & (1<<16)) arg1 |= 0x000000ff;
+4322:				if (iword & (1<<17)) arg1 |= 0x0000ff00;
+4323:				if (iword & (1<<18)) arg1 |= 0x00ff0000;
+4324:				if (iword & (1<<19)) arg1 |= 0xff000000;
+4325:				ic->arg[1] = arg1;
+4326:				if (arg1 == 0)
+4327:					ic->f = instr(nop);
+4328:			}
+4329:			break;
+4330:		}
+#
+#  DO NOT EDIT THIS FILE! It is automagically created by
+#  the configure script, based on Makefile.skel.
+#
+
+XINCLUDE=-I/usr/X11R6/include
+XLIB=-L/usr/X11R6/lib -lX11 -Wl,-rpath,/usr/X11R6/lib
+CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+INCLUDE=-Iinclude/
+DINCLUDE=-I../include/
+INCLUDE2=-I../../include/
+CC=cc
+OTHERLIBS=-lm 
+CPU_ARCHS= cpu_alpha.o cpu_alpha_palcode.o memory_alpha.o cpu_arm.o cpu_arm_coproc.o memory_arm.o  tmp_arm_loadstore.o tmp_arm_loadstore_p0_u0_w0.o tmp_arm_loadstore_p0_u0_w1.o tmp_arm_loadstore_p0_u1_w0.o tmp_arm_loadstore_p0_u1_w1.o tmp_arm_loadstore_p1_u0_w0.o tmp_arm_loadstore_p1_u0_w1.o tmp_arm_loadstore_p1_u1_w0.o tmp_arm_loadstore_p1_u1_w1.o tmp_arm_dpi.o tmp_arm_r.o tmp_arm_r0.o tmp_arm_r1.o tmp_arm_r2.o tmp_arm_r3.o tmp_arm_r4.o tmp_arm_r5.o tmp_arm_r6.o tmp_arm_r7.o tmp_arm_r8.o tmp_arm_r9.o tmp_arm_ra.o tmp_arm_rb.o tmp_arm_rc.o tmp_arm_rd.o tmp_arm_re.o tmp_arm_rf.o tmp_arm_multi.o cpu_i960.o memory_i960.o cpu_m88k.o memory_m88k.o cpu_mips.o cpu_mips_coproc.o  cpu_mips_instr_unaligned.o cpu_ppc.o cpu_riscv.o memory_riscv.o cpu_sh.o memory_sh.o
+CPU_TOOLS= generate_alpha_misc generate_arm_dpi generate_arm_r generate_arm_loadstore generate_arm_multi generate_m88k_bcnd generate_m88k_loadstore generate_mips_loadstore generate_mips_loadstore_multi generate_ppc_loadstore
+PREFIX=/usr
+MANDIR=/usr/share/man
+DESTDIR=
+
+#
+#  Makefile for GXemul src/cpus
+#
+
+CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+
+OBJS=cpu.o $(CPU_ARCHS) $(CPU_BACKENDS)
+TOOLS=generate_head generate_tail $(CPU_TOOLS)
+
+
+all: $(TOOLS)
+	$(MAKE) buildobjs
+
+
+buildobjs: $(OBJS)
+
+
+$(OBJS): Makefile
+
+
+
+###############################################################################
+
+cpu_alpha.o: cpu_alpha.c cpu_alpha_instr.c cpu_dyntrans.c memory_rw.c \
+	tmp_alpha_head.c tmp_alpha_tail.c
+
+cpu_alpha_instr.c: cpu_alpha_instr_alu.c tmp_alpha_misc.c
+
+tmp_alpha_misc.c: cpu_alpha_instr_loadstore.c generate_alpha_misc
+	./generate_alpha_misc > tmp_alpha_misc.c
+
+tmp_alpha_head.c: generate_head
+	./generate_head alpha Alpha > tmp_alpha_head.c
+
+tmp_alpha_tail.c: generate_tail
+	./generate_tail alpha Alpha > tmp_alpha_tail.c
+
+
+###############################################################################
+
+cpu_arm.o: cpu_arm.c cpu_arm_instr.c cpu_dyntrans.c memory_rw.c \
+	tmp_arm_head.c tmp_arm_tail.c
+
+cpu_arm_instr.c: cpu_arm_instr_misc.c
+
+tmp_arm_loadstore.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore > tmp_arm_loadstore.c
+tmp_arm_loadstore_p0_u0_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 0 0 > tmp_arm_loadstore_p0_u0_w0.c
+tmp_arm_loadstore_p0_u0_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 0 1 > tmp_arm_loadstore_p0_u0_w1.c
+tmp_arm_loadstore_p0_u1_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 1 0 > tmp_arm_loadstore_p0_u1_w0.c
+tmp_arm_loadstore_p0_u1_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 1 1 > tmp_arm_loadstore_p0_u1_w1.c
+tmp_arm_loadstore_p1_u0_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 0 0 > tmp_arm_loadstore_p1_u0_w0.c
+tmp_arm_loadstore_p1_u0_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 0 1 > tmp_arm_loadstore_p1_u0_w1.c
+tmp_arm_loadstore_p1_u1_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 1 0 > tmp_arm_loadstore_p1_u1_w0.c
+tmp_arm_loadstore_p1_u1_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 1 1 > tmp_arm_loadstore_p1_u1_w1.c
+
+tmp_arm_multi.c: generate_arm_multi cpu_arm_multi.txt
+	./generate_arm_multi `cat cpu_arm_multi.txt` > tmp_arm_multi.c
+
+tmp_arm_dpi.c: cpu_arm_instr_dpi.c generate_arm_dpi
+	./generate_arm_dpi > tmp_arm_dpi.c
+
+tmp_arm_r0.c: generate_arm_r
+	./generate_arm_r 0x000 0x0ff > tmp_arm_r0.c
+tmp_arm_r1.c: generate_arm_r
+	./generate_arm_r 0x100 0x1ff > tmp_arm_r1.c
+tmp_arm_r2.c: generate_arm_r
+	./generate_arm_r 0x200 0x2ff > tmp_arm_r2.c
+tmp_arm_r3.c: generate_arm_r
+	./generate_arm_r 0x300 0x3ff > tmp_arm_r3.c
+tmp_arm_r4.c: generate_arm_r
+	./generate_arm_r 0x400 0x4ff > tmp_arm_r4.c
+530:              � The rules determining which PSR bits are updated by an MSR instruction are clarified and extended to
+1063:      execution. Before ARMv5 these instructions were UNPREDICTABLE.
+1168:              other affected instructions UNPREDICTABLE.
+1512:               MSR    R3, R14
+1517:               MSR
+1616:              instruction descriptions. Usually, the instruction is UNPREDICTABLE if R15 is used in a manner that breaks
+1683:                      If they are not, the results are UNPREDICTABLE.
+1702:      that read or write the SPSR are UNPREDICTABLE when executed in User mode or System mode.
+1728:                            Privileged MSR instructions that write to the CPSR execution state bits must write
+1730:                            of them, the resulting behavior is UNPREDICTABLE. This restriction applies only to
+1786:       � Execution of an MSR instruction, as part of its function of writing a new value to the CPSR or SPSR.
+1879:       UNPREDICTABLE.
+1930:              page A2-11, and the usage notes for the MSR instruction on page A4-76 for more details.
+2069:       R14_svc = UNPREDICTABLE value    /* Enter Supervisor mode */
+2070:       SPSR_svc = UNPREDICTABLE value   /* Execute in ARM state */
+2278:�              UNPREDICTABLE otherwise.
+2288:                      a modified value written to it. All instructions that allow this to be specified have UNPREDICTABLE
+2318:              5. If the instruction loads more than one general-purpose register, UNPREDICTABLE values are left in
+2321:              6. If the instruction loads coprocessor registers, UNPREDICTABLE values are left in the destination
+2703:              Prior to ARMv6, word-aligned doubleword operations are UNPREDICTABLE with doubleword-aligned
+2723:              the address space, the result is UNPREDICTABLE. In other words, programs should not rely on sequential
+2729:              become UNPREDICTABLE until and unless the prefetched instructions are actually executed.
+2733:              overflows the top of the address space, the result is UNPREDICTABLE. In other words, programs should not
+2738:              the byte at address 0x00000000 as part of the instruction is UNPREDICTABLE.
+2990:          The behavior of SETEND instructions (or any other instruction that modifies the CPSR) is UNPREDICTABLE
+3032:       are UNPREDICTABLE. Also, data accesses to non-aligned word and halfword data are treated as aligned from
+3058:              Writing an unaligned address to R15 is UNPREDICTABLE, except in the specific cases where the instructions
+3090:              when the behavior of an access is architecturally UNPREDICTABLE. It also gives details of precisely which
+3162:                               UNPREDICTABLE -              Operation unaffected by
+3178:0 0 xx1, x1x     WSync       UNPREDICTABLE -              -
+3184:0 0 xx1, x1x,                UNPREDICTABLE -              NEW ARMv6
+3241:          Other reasons for unaligned accesses to be UNPREDICTABLE
+3244:          resultant unaligned accesses to be UNPREDICTABLE:
+3247:                  Normal behavior instead has UNPREDICTABLE behavior.
+3250:                  The reason this applies only to LDR is that most other load instructions are UNPREDICTABLE regardless
+3254:                  either UNPREDICTABLE or Alignment Fault regardless of the destination register.
+3258:                  as having Normal behavior instead has UNPREDICTABLE behavior.
+3262:                  UNPREDICTABLE behavior.
+3389:       In non-shared memory, it is UNPREDICTABLE whether a store to a tagged physical address will cause a tag
+3444:              STREX and STR instructions. The transition from Exclusive Access to Open Access is UNPREDICTABLE when
+3566:                      region. It is UNPREDICTABLE whether this causes any previous request for exclusive access to any
+3668:exclusives monitor implemented) is UNPREDICTABLE.
+3681:        preceding LDREX within the same execution thread, it can lead to UNPREDICTABLE behavior. As a
+3714:                      UNPREDICTABLE parts of the definitions in Summary of operation on page A2-49. are designed to
+3725:              9. The effect of data aborts are UNPREDICTABLE on the state of monitors. It is recommended that abort
+3800:       SPSR, CPSR_all or, SPSR_all syntax for the destination of an MSR instruction only ceases to work when
+3802:       In addition, J is always 0 at times that an MSR instruction is executed. This ensures there are no unexpected
+3803:       side-effects of existing instructions such as MSR CPSR_f,#0xF0000000, that are used to put the flags into a
+3839:� In privileged modes, execution of an MSR instruction that attempts to set the J or T bit of the CPSR to
+3840:        1 has UNPREDICTABLE results.
+3842:� In unprivileged (User) mode, execution of an MSR instruction that attempts to set the J or T bit of the
+3971:� It must not do anything that is illegal for an UNPREDICTABLE instruction. That is, it must not generate
+3980:       � Entering Jazelle state from FIQ mode has UNPREDICTABLE results.
+4196:                      is UNPREDICTABLE.
+4475:                      and enter Jazelle state, hence any return routine that tries to do so is issuing an UNPREDICTABLE
+4478:                      copied correctly when exceptions are entered and when MSR, MRS and exception return instructions are
+4598:      All other bit patterns are UNPREDICTABLE or UNDEFINED. See Extending the instruction set on page A3-32
+4652:      3. If the cond field is 1111, this instruction is UNPREDICTABLE prior to ARMv5.
+4689:              � In ARMv4, any instruction with a condition field of 0b1111 is UNPREDICTABLE.
+5440:              Attempts to enter or leave Thumb or Jazelle state by directly altering the T or J bits have UNPREDICTABLE
+
+codex
+The literal sketch has two integration issues: the shared helper needs external linkage for the separately compiled DPI code, and DPI’s new CPSR local needs initialization for its no-SPSR cases. The architecture text also does not support the claim that only the mode field becomes unpredictable. I’m separating those issues from the field-only policy choice.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'def |rows|check|assert|once|mode|flags|cpsr|save 2s|acc |kill |usr mask' GXEMUL-SEC/regress/arm_msrmode_probe.py; "'$p='"'GXEMUL-SEC/src/cpus/cpu_arm.c'; "'$s=Get-Content $p; for($i=610;$i -le 742;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; rg -n '"'running|exit|return' GXEMUL-SEC/src/main/emul.c GXEMUL-SEC/src/core/emul.c GXEMUL-SEC/src/cpus/cpu.c GXEMUL-SEC/src/cpus/cpu_dyntrans.c | Select-Object -First 75" in C:\DocumentNoSnc\cc\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; "'$s=Get-Content $p; for($i=1594;$i -le 1640;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; for($i=1710;$i -le 1830;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c'; "'$s=Get-Content $p; for($i=130;$i -le 252;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; Get-Content GXEMUL-SEC/src/include/quick_pc_to_pointers.h -TotalCount 75' in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 169ms:
+1594:
+1595:
+1596:#include "cpu_arm_instr_misc.c"
+1597:
+1598:
+1599:/*
+1600: *  Shared between regular ARM and the THUMB encoded 'pop'.
+1601: */
+1602:void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw)
+1603:{
+1604:	uint32_t addr = *np;
+1605:	unsigned char data[4];
+1606:	unsigned char *page;
+1607:	int i, return_flag = 0;
+1608:	uint32_t new_values[16];
+1609:
+1610:	if (s_bit) {
+1611:		/*  Load to USR registers:  */
+1612:		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+1613:			fatal("[ bdt_load: s-bit: in usermode? ]\n");
+1614:			s_bit = 0;
+1615:		}
+1616:		if (iw & 0x8000) {
+1617:			s_bit = 0;
+1618:			return_flag = 1;
+1619:		}
+1620:	}
+1621:
+1622:	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1623:		uint32_t value;
+1624:
+1625:		if (!((iw >> i) & 1)) {
+1626:			/*  Skip register i:  */
+1627:			continue;
+1628:		}
+1629:
+1630:		if (p_bit) {
+1631:			if (u_bit)
+1632:				addr += sizeof(uint32_t);
+1633:			else
+1634:				addr -= sizeof(uint32_t);
+1635:		}
+1636:
+1637:		page = cpu->cd.arm.host_load[addr >> 12];
+1638:		if (page != NULL) {
+1639:			uint32_t *p32 = (uint32_t *) page;
+1640:			value = p32[(addr & 0xfff) >> 2];
+1710:			    figure "22/22" appears in no .raw and in no SCORES.txt,
+1711:			    only in briefs and seat answers.  Stated here by
+1712:			    construction, which is what the evidence supports. ***
+1713:			    The generated fast dispatch already separates access
+1714:			    from writeback the same way (generate_arm_multi.c,
+1715:			    `addr &= 0xffc').  */
+1716:			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
+1717:			    sizeof(data), MEM_READ, CACHE_DATA)) {
+1718:				/*  load failed  */
+1719:				return;
+1720:			}
+1721:			if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+1722:				value = data[0] +
+1723:				    (data[1] << 8) + (data[2] << 16)
+1724:				    + ((uint32_t)data[3] << 24);
+1725:			} else {
+1726:				value = data[3] +
+1727:				    (data[2] << 8) + (data[1] << 16)
+1728:				    + ((uint32_t)data[0] << 24);
+1729:			}
+1730:		}
+1731:
+1732:		new_values[i] = value;
+1733:
+1734:		if (!p_bit) {
+1735:			if (u_bit)
+1736:				addr += sizeof(uint32_t);
+1737:			else
+1738:				addr -= sizeof(uint32_t);
+1739:		}
+1740:	}
+1741:
+1742:	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1743:		if (!((iw >> i) & 1)) {
+1744:			/*  Skip register i:  */
+1745:			continue;
+1746:		}
+1747:
+1748:		if (!s_bit) {
+1749:			cpu->cd.arm.r[i] = new_values[i];
+1750:		} else {
+1751:			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1752:			case ARM_MODE_USR32:
+1753:			case ARM_MODE_SYS32:
+1754:				cpu->cd.arm.r[i] = new_values[i];
+1755:				break;
+1756:			case ARM_MODE_FIQ32:
+1757:				if (i >= 8 && i <= 14)
+1758:					cpu->cd.arm.default_r8_r14[i-8] =
+1759:					    new_values[i];
+1760:				else
+1761:					cpu->cd.arm.r[i] = new_values[i];
+1762:				break;
+1763:			case ARM_MODE_SVC32:
+1764:			case ARM_MODE_ABT32:
+1765:			case ARM_MODE_UND32:
+1766:			case ARM_MODE_IRQ32:
+1767:				if (i >= 13 && i <= 14)
+1768:					cpu->cd.arm.default_r8_r14[i-8] =
+1769:					    new_values[i];
+1770:				else
+1771:					cpu->cd.arm.r[i] = new_values[i];
+1772:				break;
+1773:			}
+1774:		}
+1775:	}
+1776:
+1777:	if (w_bit)
+1778:		*np = addr;
+1779:
+1780:	if (return_flag) {
+1781:		uint32_t new_cpsr;
+1782:		int switch_register_banks;
+1783:
+1784:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1785:		case ARM_MODE_FIQ32:
+1786:			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+1787:		case ARM_MODE_ABT32:
+1788:			new_cpsr = cpu->cd.arm.spsr_abt; break;
+1789:		case ARM_MODE_UND32:
+1790:			new_cpsr = cpu->cd.arm.spsr_und; break;
+1791:		case ARM_MODE_IRQ32:
+1792:			new_cpsr = cpu->cd.arm.spsr_irq; break;
+1793:		case ARM_MODE_SVC32:
+1794:			new_cpsr = cpu->cd.arm.spsr_svc; break;
+1795:		default:fatal("bdt_load: unimplemented mode %i\n",
+1796:			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+1797:			cpu->running = 0;
+1798:			cpu->cd.arm.next_ic = &nothing_call;
+1799:			return;
+1800:		}
+1801:
+1802:		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+1803:		    (new_cpsr & ARM_FLAG_MODE);
+1804:
+1805:		if (switch_register_banks)
+1806:			arm_save_register_bank(cpu);
+1807:
+1808:		cpu->cd.arm.cpsr = new_cpsr;
+1809:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+1810:
+1811:		if (switch_register_banks)
+1812:			arm_load_register_bank(cpu);
+1813:	}
+1814:
+1815:	/*  NOTE: Special case: Loading the PC  */
+1816:	if (iw & 0x8000) {
+1817:		cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;
+1818:		if (cpu->machine->show_trace_tree)
+1819:			cpu_functioncall_trace_return(cpu);
+1820:		/*  TODO: There is no need to update the
+1821:		    pointers if this is a return to the
+1822:		    same page!  */
+1823:		/*  Find the new physical page and update the
+1824:		    translation pointers:  */
+1825:		quick_pc_to_pointers_arm(cpu);
+1826:	}
+1827:}
+1828:
+1829:
+1830:/*
+130:	 *  TODO 2: Perhaps this check should be moved out from here, and into
+131:	 *  cpu_arm_instr.c. (More correct, and higher performance.)
+132:	 */
+133:	if (VAR_B > 255) {
+134:		if (VAR_B & 0x80000000)
+135:			cpu->cd.arm.flags |= ARM_F_C;
+136:		else
+137:			cpu->cd.arm.flags &= ~ARM_F_C;
+138:	}
+139:#endif
+140:#endif
+141:
+142:
+143:#if !defined(A__MOV) && !defined(A__MVN)
+144:#ifdef A__PC
+145:	if (ic->arg[0] == (size_t)&cpu->cd.arm.r[ARM_PC]) {
+146:		uint32_t low_pc = ((size_t)ic - (size_t)
+147:		    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+148:		VAR_A = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1)
+149:		    << ARM_INSTR_ALIGNMENT_SHIFT);
+150:		VAR_A += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT) + 8;
+151:		/*
+152:		 *  #311: keep the operand 32 bits wide. ARM's PC is 32 bits
+153:		 *  and reading it must wrap, but the sum above is computed
+154:		 *  in 64 bits under A__S and exceeds 2^32 for the last two
+155:		 *  instruction slots of the address space. Both carry tests
+156:		 *  below compare the full result against its low half, so an
+157:		 *  operand carrying high bits would report a borrow that did
+158:		 *  not happen -- and the add arm, which is older than this
+159:		 *  round, already reported a carry that did not happen there.
+160:		 *  For every operand below 2^32 this is a no-op, which is
+161:		 *  every operand the rigs here can reach; the top-of-space
+162:		 *  case needs RAM mapped at 0xfffff000 and is unmeasured.
+163:		 */
+164:		VAR_A = (uint32_t) VAR_A;
+165:	}
+166:#endif
+167:#endif
+168:
+169:	/*
+170:	 *  Perform the operation:
+171:	 */
+172:#if defined(A__AND) || defined(A__TST)
+173:	c64 = a & b;
+174:#endif
+175:#if defined(A__EOR) || defined(A__TEQ)
+176:	c64 = a ^ b;
+177:#endif
+178:#if defined(A__SUB) || defined(A__CMP) || defined(A__RSB)
+179:	c64 = a - b;
+180:#endif
+181:#if defined(A__ADD) || defined(A__CMN)
+182:	c64 = a + b;
+183:#endif
+184:#if defined(A__ADC)
+185:	c64 = a + b + (cpu->cd.arm.flags & ARM_F_C? 1 : 0);
+186:#endif
+187:#if defined(A__SBC) || defined(A__RSC)
+188:	c64 = a - b - (cpu->cd.arm.flags & ARM_F_C? 0 : 1);
+189:#endif
+190:#if defined(A__ORR)
+191:	c64 = a | b;
+192:#endif
+193:#if defined(A__MOV)
+194:	c64 = b;
+195:#endif
+196:#if defined(A__BIC)
+197:	c64 = a & ~b;
+198:#endif
+199:#if defined(A__MVN)
+200:	c64 = ~b;
+201:#endif
+202:
+203:
+204:#if defined(A__CMP) || defined(A__CMN) || defined(A__TST) || defined(A__TEQ)
+205:	/*  No write to rd for compare/test.  */
+206:#else
+207:#ifdef A__PC
+208:	if (ic->arg[2] == (size_t)&cpu->cd.arm.r[ARM_PC]) {
+209:#ifndef A__S
+210:		uint32_t old_pc = cpu->pc;
+211:		uint32_t mask_within_page = ((ARM_IC_ENTRIES_PER_PAGE-1)
+212:		    << ARM_INSTR_ALIGNMENT_SHIFT) |
+213:		    ((1 << ARM_INSTR_ALIGNMENT_SHIFT) - 1);
+214:#endif
+215:		cpu->pc = (uint32_t)c64;
+216:#ifdef A__S
+217:		/*  Copy the right SPSR into CPSR:  */
+218:		arm_save_register_bank(cpu);
+219:		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+220:		case ARM_MODE_FIQ32:
+221:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_fiq; break;
+222:		case ARM_MODE_IRQ32:
+223:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_irq; break;
+224:		case ARM_MODE_SVC32:
+225:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_svc; break;
+226:		case ARM_MODE_ABT32:
+227:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_abt; break;
+228:		case ARM_MODE_UND32:
+229:			cpu->cd.arm.cpsr = cpu->cd.arm.spsr_und; break;
+230:		}
+231:		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+232:		arm_load_register_bank(cpu);
+233:#else
+234:		if ((old_pc & ~mask_within_page) ==
+235:		    ((uint32_t)cpu->pc & ~mask_within_page)) {
+236:			cpu->cd.arm.next_ic = cpu->cd.arm.cur_ic_page +
+237:			    ((cpu->pc & mask_within_page) >>
+238:			    ARM_INSTR_ALIGNMENT_SHIFT);
+239:		} else
+240:#endif
+241:			quick_pc_to_pointers(cpu);
+242:
+243:		if (cpu->pc & 1) {
+244:			// Switch to THUMB and break out of the dyntrans loop.
+245:			cpu->cd.arm.cpsr |= ARM_FLAG_T;
+246:			cpu->cd.arm.next_ic = &abortdyntrans_call;
+247:		}
+248:		return;
+249:	} else
+250:		reg(ic->arg[2]) = c64;
+251:#else
+252:	reg(ic->arg[2]) = c64;
+#ifdef quick_pc_to_pointers
+#undef quick_pc_to_pointers
+#endif
+
+#ifdef MODE32
+#define	quick_pc_to_pointers(cpu) {					\
+	uint32_t pc_tmp32 = cpu->pc;					\
+	struct DYNTRANS_TC_PHYSPAGE *ppp_tmp;				\
+	ppp_tmp = cpu->cd.DYNTRANS_ARCH.phys_page[pc_tmp32 >> 12];	\
+	if (ppp_tmp != NULL) {						\
+		cpu->cd.DYNTRANS_ARCH.cur_ic_page = &ppp_tmp->ics[0];	\
+		cpu->cd.DYNTRANS_ARCH.next_ic =				\
+		    cpu->cd.DYNTRANS_ARCH.cur_ic_page +			\
+		    DYNTRANS_PC_TO_IC_ENTRY(pc_tmp32);			\
+	} else								\
+		DYNTRANS_PC_TO_POINTERS(cpu);				\
+}
+
+#ifndef quick_pc_to_pointers_arm
+#define	quick_pc_to_pointers_arm(cpu) {					\
+	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {				\
+		cpu->cd.arm.next_ic = &nothing_call;			\
+	} else								\
+		quick_pc_to_pointers(cpu);				\
+}
+#endif
+
+#else
+#define quick_pc_to_pointers(cpu)	DYNTRANS_PC_TO_POINTERS(cpu)
+#endif
+
+
+
+ exited 1 in 242ms:
+2:"""armmsrmodekill -- RUNG-3 WITNESS.  One privileged MSR ends the PROCESS on `-E testarm'.
+4:BUILT FROM regress/artifacts/armmsrmodekill/WITNESSSPEC_REWRITE_grok_20260917.txt, which is a
+8:REPAIRED after regress/artifacts/armmsrmodekill/PROBEATTACK_grok_20260917.txt (the attack on the
+11:      sw() in arm_flags_probe.py).  The first draft already carried both; kept.
+15:      `nofire' on every kill row.  An `@MARK' pseudo-command becomes `print 0x5eed5eed' and
+18:  R3  `save 2s' plant and classifier agree, on the spec's own slots: return CPSR at DEST+8,
+21:      requires mode == 0x13 at the return slot, not mere existence.
+23:      stream before the stimulus and checks each word against WORDS, plus DEST == 0xd3 (the
+28:      `pc adv' red stops before `armed'; `armed' red stops before any kill row.
+30:      test the code performs.  f_14 additionally checks rot == 0.
+35:  R8  canary accept rows also check arrival SP == 0 (spec: "arrive m=XX SP=0"), and `acc usr'
+40:    cpu_arm.c:606-608   arm_load_register_bank: default: fatal("...unimplemented mode %i"); exit(1);
+43:`0xE321F014' is `MSR CPSR_c, #0x14' -- mode 0x14 is a RESERVED ARM mode, so the Load arm's
+44:`default:' is reached and the process dies.  `%i' prints DECIMAL: `unimplemented mode 20'.
+49:NAMED-RED tally (spec): HEAD = 14/17, RED exactly kill 14, kill 15, save 2s, CONTROL=OK.
+50:`save 2s' on HEAD is the SAME Load death as `kill 14' (EOF on the first MSR) -- it is not an
+82:    "mrs_r3":   0xE10F3000,              # mrs  r3, cpsr
+95:    WORDS["c_%02x" % m] = 0xE321F000 | m     # msr cpsr_c, #m
+96:WORDS["f_14"] = 0xE328F014                   # msr cpsr_f, #0x14
+98:rows = []
+102:def row(name, got, want, note=""):
+103:    rows.append((name, str(got), str(want), note))
+106:def session(cmds, settle=1.6, spin=1.6):
+117:    def rd(t):
+184:def _session_split(cmds):
+202:def printed(t, reg):
+208:def dumpcmd(addr, end=None):
+219:def dumped(t, addr):
+222:    guest: assemble like sw() in arm_flags_probe.py."""
+234:def plant(ops, at=CODE):
+242:def prologue():
+251:def msr_cmds(ops, steps_after, late_end=DEST + 12):
+262:def arming(early, full):
+272:def classify(early, late, alive, marked, full, cpsr_at=DEST + 4, sp_at=None, rt_at=None):
+273:    """The got string.  EOF ALONE => dead.  Arming is checked first, from the EARLY half."""
+278:    cpsr = dumped(late, cpsr_at)
+279:    if cpsr is None or cpsr == POISON:
+281:    got = "m=%02x" % (cpsr & 0x1F)
+284:    if "(once)" in early + late:
+285:        got += " once"
+293:def report_dead(why):
+294:    print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+298:    for nm, got, want, note in rows:
+321:    "== the key's mode.")
+333:if rows[-2][1] != rows[-2][2] or rows[-1][1] != rows[-1][2]:
+344:    "CONTROL=DEAD. SVC32 privileged testarm -- not USR32, not barearm, and not a debugger cpsr "
+345:    "write. If this reds NO kill row may be scored.")
+346:if armed != rows[-1][2]:
+353:    "MSR CPSR_f writes the FLAGS byte, so the mode field is untouched and the host must live. "
+356:# ---------------------------------------------------------------- S3/S4: the kill rows
+357:for nm, key, dec in (("kill 14", "c_14", 20), ("kill 15", "c_15", 21)):
+360:    row(nm, classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=13 sp once",
+361:        "MSR CPSR_c, #0x%02x into a RESERVED mode reaches arm_load_register_bank's default: and "
+364:    diagnosis.append("%s: %s" % (nm, "load mode %d seen" % dec
+365:                                 if ("arm_load_register_bank: unimplemented mode %d" % dec) in t
+368:# ---------------------------------------------------------------- S5: save 2s
+373:row("save 2s", classify(early, late, alive, marked, full, sp_at=DEST + 12, rt_at=DEST + 8),
+374:    "m=13 sp once rt",
+376:    "kill 14). A Load-only fix still dies on the SECOND (Save of the reserved mode). Keep kill 15.")
+378:diagnosis.append("save 2s: load=%s save=%s" % (
+379:    "yes" if "arm_load_register_bank: unimplemented mode 20" in t else "no",
+380:    "yes" if "arm_save_register_bank: unimplemented mode 20" in t else "no"))
+385:row("acc usr", classify(early, late, alive, marked, full, sp_at=DEST + 8), "m=10",
+389:for nm, key, want_m in (("acc fiq", "c_11", 0x11), ("acc irq", "c_12", 0x12),
+390:                        ("acc abt", "c_17", 0x17), ("acc und", "c_1b", 0x1B),
+391:                        ("acc sys", "c_1f", 0x1F)):
+409:        "ACCEPT + CANARY in one row: arrive mode/SP==0 (banked, BSS-zero), return mode 0x13 with "
+415:    "SAME-MODE: Load is not called, so SP-UNCHANGED *IS* the preservation check. Not 0xd3 -- "
+420:row("usr mask", classify(early, late, alive, marked, full), "m=10",
+421:    "In USR32 the c-byte is STRIPPED, so the following #0x14 must NOT reach the mode field. "
+422:    "The host lives and the mode stays 0x10.")
+424:row("row count", len(rows) + 1, 17, "identity row (floor clause (c)): the row set is complete.")
+427:print("arm_msrmode_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+431:for nm, got, want, note in rows:
+437:print("ARMMSRMODE_RESULT=%d/%d" % (n, len(rows)))
+441:EXPECT = "kill 14,kill 15,save 2s"
+610:}
+611:
+612:
+613:/*
+614: *  arm_exception():
+615: */
+616:void arm_exception(struct cpu *cpu, int exception_nr)
+617:{
+618:	int oldmode, newmode;
+619:	uint32_t retaddr;
+620:
+621:	if (exception_nr < 0 || exception_nr >= N_ARM_EXCEPTIONS) {
+622:		fatal("arm_exception(): exception_nr = %i\n", exception_nr);
+623:		exit(1);
+624:	}
+625:
+626:	retaddr = cpu->pc;
+627:
+628:	if (!quiet_mode) {
+629:		debug("[ arm_exception(): ");
+630:		switch (exception_nr) {
+631:		case ARM_EXCEPTION_RESET:
+632:			fatal("RESET: TODO");
+633:			break;
+634:		case ARM_EXCEPTION_UND:
+635:			debug("UNDEFINED");
+636:			break;
+637:		case ARM_EXCEPTION_SWI:
+638:			debug("SWI");
+639:			break;
+640:		case ARM_EXCEPTION_PREF_ABT:
+641:			debug("PREFETCH ABORT");
+642:			break;
+643:		case ARM_EXCEPTION_IRQ:
+644:			debug("IRQ");
+645:			break;
+646:		case ARM_EXCEPTION_FIQ:
+647:			debug("FIQ");
+648:			break;
+649:		case ARM_EXCEPTION_DATA_ABT:
+650:			debug("DATA ABORT, far=0x%08x fsr=0x%02x",
+651:			    cpu->cd.arm.far, cpu->cd.arm.fsr);
+652:			break;
+653:		}
+654:		debug(" ]\n");
+655:	}
+656:
+657:	switch (exception_nr) {
+658:	case ARM_EXCEPTION_RESET:
+659:		cpu->running = 0;
+660:		fatal("ARM RESET: TODO");
+661:		exit(1);
+662:	case ARM_EXCEPTION_DATA_ABT:
+663:		retaddr += 4;
+664:		break;
+665:	}
+666:
+667:	retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+668:
+669:	arm_save_register_bank(cpu);
+670:
+671:	cpu->cd.arm.cpsr &= 0x0fffffff;
+672:	cpu->cd.arm.cpsr |= (cpu->cd.arm.flags << 28);
+673:
+674:	switch (arm_exception_to_mode[exception_nr]) {
+675:	case ARM_MODE_SVC32:
+676:		cpu->cd.arm.spsr_svc = cpu->cd.arm.cpsr; break;
+677:	case ARM_MODE_ABT32:
+678:		cpu->cd.arm.spsr_abt = cpu->cd.arm.cpsr; break;
+679:	case ARM_MODE_UND32:
+680:		cpu->cd.arm.spsr_und = cpu->cd.arm.cpsr; break;
+681:	case ARM_MODE_IRQ32:
+682:		cpu->cd.arm.spsr_irq = cpu->cd.arm.cpsr; break;
+683:	case ARM_MODE_FIQ32:
+684:		cpu->cd.arm.spsr_fiq = cpu->cd.arm.cpsr; break;
+685:	default:fatal("arm_exception(): unimplemented exception nr\n");
+686:		exit(1);
+687:	}
+688:
+689:	/*
+690:	 *  Disable Thumb mode (because exception handlers always execute
+691:	 *  in ARM mode), set the exception mode, and disable interrupts:
+692:	 */
+693:	cpu->cd.arm.cpsr &= ~ARM_FLAG_T;
+694:
+695:	oldmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+696:
+697:	cpu->cd.arm.cpsr &= ~ARM_FLAG_MODE;
+698:	cpu->cd.arm.cpsr |= arm_exception_to_mode[exception_nr];
+699:
+700:	/*
+701:	 *  Usually, an exception should change modes (so that saved status
+702:	 *  bits don't get lost). However, Linux on ARM seems to use floating
+703:	 *  point instructions in the kernel (!), and it emulates those using
+704:	 *  its own fp emulation code. This leads to a situation where we
+705:	 *  sometimes change from SVC32 to SVC32.
+706:	 */
+707:	newmode = cpu->cd.arm.cpsr & ARM_FLAG_MODE;
+708:	if (oldmode == newmode && oldmode != ARM_MODE_SVC32) {
+709:		fatal("[ WARNING! Exception caused no mode change? "
+710:		    "mode 0x%02x (pc=0x%x) ]\n", newmode, (int)cpu->pc);
+711:		/*  exit(1);  */
+712:	}
+713:
+714:	cpu->cd.arm.cpsr |= ARM_FLAG_I;
+715:	if (exception_nr == ARM_EXCEPTION_RESET ||
+716:	    exception_nr == ARM_EXCEPTION_FIQ)
+717:		cpu->cd.arm.cpsr |= ARM_FLAG_F;
+718:
+719:	/*  Load the new register bank, if we switched:  */
+720:	arm_load_register_bank(cpu);
+721:
+722:	/*
+723:	 *  Set the return address and new PC.
+724:	 *
+725:	 *  NOTE: r[ARM_PC] is also set; see cpu_arm_instr_loadstore.c for
+726:	 *  details. (If an exception occurs during a load into the pc
+727:	 *  register, the code in that file assumes that the r[ARM_PC]
+728:	 *  was changed to the address of the exception handler.)
+729:	 */
+730:	cpu->cd.arm.r[ARM_LR] = retaddr;
+731:	cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 +
+732:	    ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);
+733:	quick_pc_to_pointers(cpu);
+734:}
+735:
+736:
+737:/*
+738: *  arm_cpu_tlbdump():
+739: *
+740: *  Called from the debugger to dump the TLB in a readable format.
+741: *
+742: *  If rawflag is nonzero, then the TLB contents isn't formated nicely,
+rg: GXEMUL-SEC/src/main/emul.c: The system cannot find the path specified. (os error 3)
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:54:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:59:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:150:			cpu->running = 0;				\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:151:			return 0;					\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:159:		fatal("NOOOOOO\n"); exit(1);		\
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:257:		// cpu->running = false;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:258:		// return 0;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:261:		return 1;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:465:	return n_instrs;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:732:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:889:	return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:891:	/*  Quick return path:  */
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:978:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1051:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1055:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1059:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1079:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1092:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1101:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1126:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1151:		exit(1);*/
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1157:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1173:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1180:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1254:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1273:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1288:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1354:			return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1376:			return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1506:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1538:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1625:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1630:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1645:				exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1651:			exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1670:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1679:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1751:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1763:		exit(1);
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1848:				goto stop_running_translated;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1918:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1933:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1980:	return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1991:		return;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2014:	cpu->running = 0;
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:2017:stop_running_translated:
+GXEMUL-SEC/src/core/emul.c:75: *  created temp file 'dst_fd' by running gunzip directly via fork()/exec(),
+GXEMUL-SEC/src/core/emul.c:88:		return -1;
+GXEMUL-SEC/src/core/emul.c:97:			_exit(127);
+GXEMUL-SEC/src/core/emul.c:110:		_exit(127);
+GXEMUL-SEC/src/core/emul.c:117:			return -1;
+GXEMUL-SEC/src/core/emul.c:121:		return 0;
+GXEMUL-SEC/src/core/emul.c:123:	return -1;
+GXEMUL-SEC/src/core/emul.c:158:				exit(1);
+GXEMUL-SEC/src/core/emul.c:187:	 *  halt instead of exiting). Never cleared once set.
+GXEMUL-SEC/src/core/emul.c:234:	return e;
+GXEMUL-SEC/src/core/emul.c:270: *  returns a pointer to the new machine.
+GXEMUL-SEC/src/core/emul.c:301:	return m;
+GXEMUL-SEC/src/core/emul.c:342:		return;
+GXEMUL-SEC/src/core/emul.c:444:		return false;
+GXEMUL-SEC/src/core/emul.c:506:			return false;
+GXEMUL-SEC/src/core/emul.c:549:				return false;
+GXEMUL-SEC/src/core/emul.c:555:			return false;
+GXEMUL-SEC/src/core/emul.c:572:		 *  gzipped files are automagically gunzipped, by running
+GXEMUL-SEC/src/core/emul.c:603:					exit(1);
+GXEMUL-SEC/src/core/emul.c:616:					exit(1);
+GXEMUL-SEC/src/core/emul.c:666:				return false;
+GXEMUL-SEC/src/core/emul.c:679:				return false;
+GXEMUL-SEC/src/core/emul.c:687:				return false;
+GXEMUL-SEC/src/core/emul.c:716:				return false;
+GXEMUL-SEC/src/core/emul.c:730:			return false;
+GXEMUL-SEC/src/core/emul.c:748:	cpu->running = true;
+GXEMUL-SEC/src/core/emul.c:753:			m->cpus[i]->running = false;
+GXEMUL-SEC/src/core/emul.c:817:	return true;
+GXEMUL-SEC/src/core/emul.c:864:		return false;
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'GXEMUL-SEC/src/debugger/debugger_cmds.c'; "'$s=Get-Content $p; for($i=1368;$i -le 1425;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; for($i=1534;$i -le 1548;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/debugger/debugger.c'; "'$s=Get-Content $p; for($i=197;$i -le 250;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_arm.c'; "'$s=Get-Content $p; for($i=1192;$i -le 1226;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; $p='"'GXEMUL-SEC/src/cpus/cpu_dyntrans.c'; "'$s=Get-Content $p; for($i=245;$i -le 266;$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }; rg -n '"'put|assignment' GXEMUL-SEC/src/debugger/debugger_cmds.c | Select-Object -Last 15" in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 239ms:
+1368:	if (p != NULL) {
+1369:		*p++ = '\0';
+1370:		while (*p == ' ' && *p)
+1371:			p++;
+1372:		while (strlen(copy) >= 1 &&
+1373:		    copy[strlen(copy) - 1] == ' ')
+1374:			copy[strlen(copy) - 1] = '\0';
+1375:
+1376:		/*  printf("L = '%s', R = '%s'\n", copy, p);  */
+1377:
+1378:		q = copy;
+1379:		p2 = strchr(q, ' ');
+1380:
+1381:		if (p2 != NULL) {
+1382:			*p2 = '\0';
+1383:			if (strlen(q) != 1) {
+1384:				printf("Invalid type '%s'\n", q);
+1385:				return;
+1386:			}
+1387:			put_type = *q;
+1388:			q = p2 + 1;
+1389:		}
+1390:
+1391:		/*  printf("type '%c', L '%s', R '%s'\n", put_type, q, p);  */
+1392:		syntax_ok = 1;
+1393:	}
+1394:
+1395:	if (!syntax_ok) {
+1396:		printf("syntax: put [b|h|w|d|q|s|z] addr, data\n");
+1397:		printf("   b    byte        (8 bits)\n");
+1398:		printf("   h    half-word   (16 bits)\n");
+1399:		printf("   w    word        (32 bits)\n");
+1400:		printf("   d    doubleword  (64 bits)\n");
+1401:		printf("   q    quad-word   (128 bits)\n");
+1402:		printf("   s    string (without terminating nul)\n");
+1403:		printf("   z    nul-terminated string\n");
+1404:		return;
+1405:	}
+1406:
+1407:	if (put_type == ' ') {
+1408:		printf("No type specified.\n");
+1409:		return;
+1410:	}
+1411:
+1412:	/*  here: q is the address, p is the data.  */
+1413:	res = debugger_parse_expression(m, q, 0, &addr);
+1414:	switch (res) {
+1415:	case PARSE_NOMATCH:
+1416:		printf("Couldn't parse the address.\n");
+1417:		return;
+1418:	case PARSE_MULTIPLE:
+1419:		printf("Multiple matches for the address."
+1420:		    " Try prefixing with %%, $, or @.\n");
+1421:		return;
+1422:	case PARSE_SETTINGS:
+1423:	case PARSE_SYMBOL:
+1424:	case PARSE_NUMBER:
+1425:		break;
+1534:			printf("0x%016" PRIx64, (uint64_t) addr);
+1535:
+1536:		printf(": %08x", (int)data);
+1537:
+1538:		if (data > 0xffffffff && (data >> 32) != 0
+1539:		    && (data >> 32) != 0xffffffff)
+1540:			printf(" (NOTE: truncating %0" PRIx64")",
+1541:			    (uint64_t) data);
+1542:
+1543:		res = store_32bit_word(m->cpus[0], addr, data);
+1544:		if (!res)
+1545:			printf("  FAILED!\n");
+1546:		printf("\n");
+1547:		return;
+1548:	case 'd':
+197:/****************************************************************************/
+198:
+199:
+200:#include "debugger_cmds.c"
+201:
+202:
+203:/****************************************************************************/
+204:
+205:
+206:/*
+207: *  debugger_assignment():
+208: *
+209: *  cmd contains something like "pc=0x80001000", or "r31=memcpy+0x40".
+210: */
+211:void debugger_assignment(struct machine *m, char *cmd)
+212:{
+213:	char *left, *right;
+214:	int res_left, res_right;
+215:	uint64_t tmp;
+216:	uint64_t old_pc = m->cpus[0]->pc;	/*  TODO: multiple cpus?  */
+217:
+218:	CHECK_ALLOCATION(left = (char *) malloc(MAX_CMD_BUFLEN));
+219:	strlcpy(left, cmd, MAX_CMD_BUFLEN);
+220:	right = strchr(left, '=');
+221:	if (right == NULL) {
+222:		fprintf(stderr, "internal error in the debugger\n");
+223:		exit(1);
+224:	}
+225:	*right = '\0';
+226:
+227:	/*  Remove trailing spaces in left:  */
+228:	while (strlen(left) >= 1 && left[strlen(left)-1] == ' ')
+229:		left[strlen(left)-1] = '\0';
+230:
+231:	/*  Remove leading spaces in right:  */
+232:	right++;
+233:	while (*right == ' ' && *right != '\0')
+234:		right++;
+235:
+236:	/*  printf("left  = '%s'\nright = '%s'\n", left, right);  */
+237:
+238:	res_right = debugger_parse_expression(m, right, 0, &tmp);
+239:	switch (res_right) {
+240:	case PARSE_NOMATCH:
+241:		printf("No match for the right-hand side of the assignment.\n");
+242:		break;
+243:	case PARSE_MULTIPLE:
+244:		printf("Multiple matches for the right-hand side of the "
+245:		    "assignment.\n");
+246:		break;
+247:	default:
+248:		res_left = debugger_parse_expression(m, left, 1, &tmp);
+249:		switch (res_left) {
+250:		case PARSE_NOMATCH:
+1192:	if (carry)
+1193:		cpu->cd.arm.flags |= ARM_F_C;
+1194:	if (overflow)
+1195:		cpu->cd.arm.flags |= ARM_F_V;
+1196:
+1197:	return c32;
+1198:}
+1199:
+1200:
+1201:/*
+1202: *  arm_cpu_interpret_thumb_SLOW():
+1203: *
+1204: *  Slow interpretation of THUMB instructions.
+1205: *
+1206: *  TODO: Either replace this with dyntrans or
+1207: *  implement ARM (including THUMB) in the new framework. :-)
+1208: *  For now, this is better than nothing.
+1209: */
+1210:int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
+1211:{
+1212:	uint16_t iw;
+1213:	uint8_t ib[sizeof(uint16_t)];
+1214:	uint32_t addr = cpu->pc & ~1;
+1215:
+1216:	if (!(cpu->pc & 1) || !(cpu->cd.arm.cpsr & ARM_FLAG_T)) {
+1217:		fatal("arm_cpu_interpret_thumb_SLOW called when not in "
+1218:			"THUMB mode?\n");
+1219:		cpu->running = 0;
+1220:		return 0;
+1221:	}
+1222:
+1223:	if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+1224:			sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+1225:		fatal("arm_cpu_interpret_thumb_SLOW(): could not read "
+1226:			"the instruction\n");
+245:#endif
+246:#ifdef DYNTRANS_SH
+247:		if (cpu->cd.sh.int_to_assert > 0 && !(cpu->cd.sh.sr & SH_SR_BL)
+248:		    && ((cpu->cd.sh.sr & SH_SR_IMASK) >> SH_SR_IMASK_SHIFT)
+249:		    < cpu->cd.sh.int_level)
+250:			sh_exception(cpu, 0, cpu->cd.sh.int_to_assert, 0);
+251:#endif
+252:	}
+253:
+254:#ifdef DYNTRANS_ARM
+255:	if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+256:		// fatal("THUMB execution not implemented.\n");
+257:		// cpu->running = false;
+258:		// return 0;
+259:		
+260:		arm_cpu_interpret_thumb_SLOW(cpu);
+261:		return 1;
+262:	}
+263:#endif
+264:
+265:	cached_pc = cpu->pc;
+266:
+1355:	static char put_type = ' ';  /*  Remembered across multiple calls.  */
+1365:	/*  syntax: put [b|h|w|d|q] addr, data  */
+1387:			put_type = *q;
+1391:		/*  printf("type '%c', L '%s', R '%s'\n", put_type, q, p);  */
+1396:		printf("syntax: put [b|h|w|d|q|s|z] addr, data\n");
+1407:	if (put_type == ' ') {
+1434:	if (put_type == 's' || put_type == 'z') {
+1444:		if (put_type == 'z')
+1471:		    put_type == 'z'? " (including terminating nul)" : "");
+1495:	switch (put_type) {
+1568:		printf("Unimplemented type '%c'\n", put_type);
+1683: *  call trace output ("trace") implicitly turned on while stepping.
+2067:	{ "put", "[b|h|w|d|q|s|z] addr, data", 0, debugger_cmd_put,
+2110:	{ "x = expr", "", 0, NULL, "generic assignment" },
+2210:	printf("\nIn generic assignments, x must be a register or other "
+
+web search: site.developer.arm.com DDI0100I MSR UNPREDICTABLE T bit mode ...
+codex
+Disposition 11 has a concrete detector error: `put` writes memory; it does not assign CPSR. Also, a mode switch from a debugger-corrupted CPSR to a valid mode exercises Save’s fallback, then a valid Load—not both fallbacks. I also found existing T/PC handling inconsistencies that the mode guard would leave in place.
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'_scratchpad/ddi0100i.txt'; "'$s=Get-Content $p; foreach($r in @(@(1710,1732),@(1860,1883),@(9618,9641),@(9682,9696),@(9710,9722),@(45054,45068))){for($i=$r[0];$i -le $r[1];$i++){ '"'{0}:{1}' -f "'$i,$s[$i-1] }}; git -C GXEMUL-SEC diff --name-only HEAD -- src/cpus/cpu_arm.c src/cpus/cpu_arm_instr.c src/cpus/cpu_arm_instr_dpi.c src/include/cpu_arm.h src/cpus/cpu.c src/debugger/debugger.c src/debugger/debugger_cmds.c src/include/quick_pc_to_pointers.h src/cpus/cpu_dyntrans.c' in C:\DocumentNoSnc\cc\GXEMUL
+ succeeded in 415ms:
+1710:A2.5.1 Types of PSR bits
+1711:
+1712:      PSR bits fall into four categories, depending on the way in which they can be updated:
+1713:
+1714:      Reserved bits         Reserved for future expansion. Implementations must read these bits as 0 and ignore
+1715:                            writes to them. For maximum compatibility with future extensions to the
+1716:                            architecture, they must be written with values read from the same bits.
+1717:
+1718:      User-writable bits Can be written from any mode. The N, Z, C, V, Q, GE[3:0], and E bits are
+1719:                                  user-writable.
+1720:
+1721:      Privileged bits       Can be written from any privileged mode. Writes to privileged bits in User mode are
+1722:                            ignored. The A, I, F, and M[4:0] bits are privileged.
+1723:
+1724:      Execution state bits  Can be written from any privileged mode. Writes to execution state bits in User
+1725:                            mode are ignored. The J and T bits are execution state bits, and are always zero in
+1726:                            ARM state.
+1727:
+1728:                            Privileged MSR instructions that write to the CPSR execution state bits must write
+1729:                            zeros to them, in order to avoid changing them. If ones are written to either or both
+1730:                            of them, the resulting behavior is UNPREDICTABLE. This restriction applies only to
+1731:                            the CPSR execution state bits, not the SPSR execution state bits.
+1732:
+1860:
+1861:A2.5.7 The mode bits
+1862:              M[4:0] are the mode bits. These determine the mode in which the processor operates. Their interpretation
+1863:              is shown in Table A2-2.
+1864:
+1865:                                                                                                          Table A2-2 The mode bits
+1866:
+1867:       M[4:0]       Mode                            Accessible registers
+1868:
+1869:       0b10000      User                            PC, R14 to R0, CPSR
+1870:       0b10001      FIQ                             PC, R14_fiq to R8_fiq, R7 to R0, CPSR, SPSR_fiq
+1871:       0b10010      IRQ                             PC, R14_irq, R13_irq, R12 to R0, CPSR, SPSR_irq
+1872:       0b10011      Supervisor                      PC, R14_svc, R13_svc, R12 to R0, CPSR, SPSR_svc
+1873:       0b10111      Abort                           PC, R14_abt, R13_abt, R12 to R0, CPSR, SPSR_abt
+1874:       0b11011      Undefined                       PC, R14_und, R13_und, R12 to R0, CPSR, SPSR_und
+1875:       0b11111      System                          PC, R14 to R0, CPSR (ARMv4 and above)
+1876:
+1877:       Not all combinations of the mode bits define a valid processor mode. Only those combinations explicitly
+1878:       described can be used. If any other value is programmed into the mode bits M[4:0], the result is
+1879:       UNPREDICTABLE.
+1880:
+1881:A2-14               Copyright c 1996-1998, 2000, 2004, 2005 ARM Limited. All rights reserved.  ARM DDI 0100I
+1882:                                                                                            Programmers' Model
+1883:
+9618:                           (if field_mask[3] == 1 then 0xFF000000 else 0x00000000)
+9619:
+9620:               if R == 0 then
+9621:
+9622:               if InAPrivilegedMode() then
+9623:
+9624:                     if (operand AND StateMask) != 0 then
+9625:
+9626:                           UNPREDICTABLE    /* Attempt to set non-ARM execution state */
+9627:
+9628:                     else
+9629:
+9630:                           mask = byte_mask AND (UserMask OR PrivMask)
+9631:
+9632:                     else
+9633:
+9634:                     mask = byte_mask AND UserMask
+9635:
+9636:                     CPSR = (CPSR AND NOT mask) OR (operand AND mask)
+9637:
+9638:               else /* R == 1 */
+9639:
+9640:                     if CurrentModeHasSPSR() then
+9641:
+9682:
+9683:       As an exception to the above rule, it is legitimate to use the immediate form of the instruction to modify the
+9684:       flags byte, despite the fact that bits[26:25] of the PSRs have no allocated function at present. For example,
+9685:       you can use MSR to set all four flags (and clear the Q flag if the processor implements the Enhanced DSP
+9686:       extension):
+9687:
+9688:       MSR CPSR_f,#0xF0000000
+9689:
+9690:       Any functionality allocated to bits[26:25] in a future version of the ARM architecture will be designed so
+9691:       that such code does not have unexpected side effects. Several bits must not be changed to reserved values
+9692:       or the results are UNPREDICTABLE. For example, an attempt to write a reserved value to the mode bits (4:0),
+9693:       or changing the J-bit (24).
+9694:
+9695:A4-78             Copyright c 1996-1998, 2000, 2004, 2005 ARM Limited. All rights reserved.  ARM DDI 0100I
+9696:                                                                                                                          ARM Instructions
+9710:
+9711:Obsolete field specification
+9712:                   The CPSR, CPSR_flg, CPSR_ctl, CPSR_all, SPSR, SPSR_flg, SPSR_ctl and SPSR_all forms of PSR
+9713:                   field specification have been superseded by the csxf format shown on page A4-76.
+9714:                   CPSR, SPSR, CPSR_all and SPSR_all produce a field mask of 0b1001.
+9715:                   CPSR_flg and SPSR_flg produce a field mask of 0b1000.
+9716:                   CPSR_ctl and SPSR_ctl produce a field mask of 0b0001.
+9717:
+9718:The T bit or J bit
+9719:                   The MSR instruction must not be used to alter the T bit or the J bit in the CPSR. If such an
+9720:                   attempt is made, the results are UNPREDICTABLE.
+9721:
+9722:Addressing modes
+45054:
+45055:Unindexed addressing
+45056:              Indicates addressing in which the base register value is used directly as the virtual address to send to
+45057:              memory, without adding or subtracting an offset. In most types of addressing mode, unindexed addressing
+45058:              is performed by using offset addressing with an immediate offset of 0. ARM Addressing Mode 5 (used for
+45059:              LDC and STC instructions) has an explicit unindexed addressing mode which allows the offset field in the
+45060:              instruction to be used to specify additional coprocessor options.
+45061:
+45062:UNPREDICTABLE
+45063:              Means the result of an instruction cannot be relied upon. UNPREDICTABLE instructions or results must not
+45064:              represent security holes. UNPREDICTABLE instructions must not halt or hang the processor, or any parts of
+45065:              the system.
+45066:
+45067:UNPREDICTABLE fields (UNP)
+45068:              Do not contain valid data, and a value can vary from moment to moment, instruction to instruction, and
+
+web search: https://developer.arm.com/documentation/ddi0406/cd/Glossary
+codex
+VERDICT: 2 of 12 dispositions wrong
+
+**#6 and #11 need correction.** Rejecting whole-operation decline in #7 remains a defensible policy choice, but its architectural warrant is wrong.
+
+Verified HEAD `ef577140` and inspected only the specified source tree. No writes, builds, or execution; the supplied measurements remain the only runtime evidence.
+
+1 | RIGHT: Member 3 is a reasonable policy. Preventing an invalid mode from entering CPSR is essential; changing the bank helpers alone does not establish that invariant.
+
+2 | RIGHT: Seven mode values, six bank configurations: USR/SYS share their bank.
+
+3 | RIGHT: Save normally sees the old, modelled mode. Validation must precede committing the incoming mode. In MSR, adjusting the mask before calculating `switch_register_banks` also avoids unnecessary banking.
+
+4 | RIGHT: [`cpu_new`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:71) zero-allocates the CPU; ARM initialization does not initialize the SPSRs. Restore validation is required independently of MSR poisoning.
+
+5 | RIGHT: Both SPSR-consuming restore paths require guards. Your reported M2 result establishes that the existing 17 rows do not require those guards.
+
+6 | WRONG: **Unqualified “apply … T” is incomplete against this implementation.** MSR changes to CPSR.T/J are themselves UNPREDICTABLE; they are not ordinary defined writes that architecture requires preserving. SPSR restores can legitimately restore execution state, but these callers have existing PC/dispatch inconsistencies. Mode filtering alone does not make applying T safe or coherent. Retain the chosen flags/I/F policy, but give execution-state handling an explicit policy and implementation. See [DDI0100I, A4-79](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/1023/ARM-Architecture.pdf) and the caller findings below.
+
+7 | RIGHT: **The rejection is permissible; the warrant is false.** DDI0100I says a reserved mode makes the instruction’s results UNPREDICTABLE, without guaranteeing every other field’s effect. Whole-operation decline buys preservation of flags and interrupt masks, and—if implemented sufficiently early—avoids the return’s PC, register-load and writeback effects. Field-only deliberately preserves those effects. Neither policy is architecturally mandatory. Your proposed I/F readback would distinguish them; the supplied measurements do not yet do so. [Local architecture text](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ddi0100i.txt:9691).
+
+8 | RIGHT: Recording decline as a policy choice corrects the original overstatement. Normal exception lists do not independently settle every UNPREDICTABLE case. Keep the ARMv7 quotation identified as ARMv7 evidence.
+
+9 | RIGHT: Shared classification outside the repeated DPI template is appropriate. However, copying seven labels into another switch does not mechanically establish one source of truth, and the proposed `static` linkage is wrong.
+
+10 | RIGHT: Modify the execution-local mask. The guard must not permanently alter cached translation arguments. The existing register-form wrapper’s assignment to `arg[0]` is separate from this restriction.
+
+11 | WRONG: **The debugger mechanism and both-backstops reachability claim are wrong.** `put` writes memory: it evaluates its destination as an address and performs a store. Register/settings writes use the debugger’s assignment mechanism. Moreover, after the completed sketch, a transition from an invalid current mode to a valid destination exercises Save’s fallback and then a valid Load. With conditional DPI banking, none of the four callers demonstrates debugger-only reachability of Load’s default. Retain that fallback defensively, but row (d) cannot substantiate both backstops. [Debugger memory write](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1413), [settings assignment](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:207).
+
+12 | RIGHT: Filing the separate CPU-stop defect is appropriate. Correct “whole emulator” to **current CPU; execution ends when no machine remains running**. The defaults do not universally terminate every CPU or the process. In `arm_pop`, clearing `s_bit` in the USR check does not escape the already-entered outer block or prevent its subsequent PC-list check.
+
+Against each caller’s actual flow, the sketch needs these corrections:
+
+| Location | Required correction or limitation |
+|---|---|
+| Shared helper | Define it with **external linkage** in `cpu_arm.c`, with a matching header declaration. `static` cannot serve the separately compiled generated DPI code. |
+| `msr_imm` | Move `new_value`’s declaration before the proposed guard; HEAD declares it after the banking decision. Apply USR masking first, validate the effective mode write, then calculate banking. Preserve flag synchronization. |
+| `arm_pop` restore | Sanitize `new_cpsr` after selecting the SPSR and before comparing modes. Loads and base writeback have already occurred, so returning here would not implement whole-operation decline. Continue the intended PC transfer. |
+| DPI S-to-PC restore | Initialize the new local from current CPSR, or explicitly handle modes without an SPSR. Its existing switch has five cases and **no default**. An uninitialized local would introduce undefined behavior in USR/SYS. Make Save and Load use the same banking decision. |
+| Exception entry | The destination mode is already constrained. An invalid current mode can reach Save’s fallback, but returning from that fallback cannot recover the lost association between live registers and their bank. |
+
+The relevant restore ordering is visible in [`arm_pop`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1748) and the [DPI template](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:215). No-rollback backstops provide containment; they do not repair debugger-corrupted bank state.
+
+For question 3, **a minimal diagnostic-only counterexample is one constant change that makes Save and Load share their warning bit**. This violates #11’s distinct-bit requirement while preserving mode validation. Nothing in the described rows distinguishes those implementations: ordinary guarded paths avoid the defaults, and corrected row (d) exercises Save only.
+
+That is a static prediction, not a measured pass; the actual assertions for (a)–(d) have not been supplied. The missing measurement is independent warning suppression for both fallback sites within one CPU, followed by isolation on a second CPU. Checking only for the presence of `(once)` cannot establish those properties.
+
+Something else: **execution-state handling is already inconsistent beyond reserved modes**:
+
+- `msr_imm` updates CPSR without arranging an execution-state transition.
+- `arm_pop` restores CPSR, then clears both low PC bits.
+- DPI can force T from an odd PC after restoring SPSR, overriding its restored execution state.
+
+The Thumb interpreter requires its internal PC representation and T to agree, and [stops the CPU otherwise](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1216). This is an existing, separate correctness issue that the sketch leaves reachable. The additional measurement owed is **execution-state coherence and next-instruction progress after status restoration**, including CPU-running state—not CPSR readback alone.
+tokens used
+47,501
+VERDICT: 2 of 12 dispositions wrong
+
+**#6 and #11 need correction.** Rejecting whole-operation decline in #7 remains a defensible policy choice, but its architectural warrant is wrong.
+
+Verified HEAD `ef577140` and inspected only the specified source tree. No writes, builds, or execution; the supplied measurements remain the only runtime evidence.
+
+1 | RIGHT: Member 3 is a reasonable policy. Preventing an invalid mode from entering CPSR is essential; changing the bank helpers alone does not establish that invariant.
+
+2 | RIGHT: Seven mode values, six bank configurations: USR/SYS share their bank.
+
+3 | RIGHT: Save normally sees the old, modelled mode. Validation must precede committing the incoming mode. In MSR, adjusting the mask before calculating `switch_register_banks` also avoids unnecessary banking.
+
+4 | RIGHT: [`cpu_new`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:71) zero-allocates the CPU; ARM initialization does not initialize the SPSRs. Restore validation is required independently of MSR poisoning.
+
+5 | RIGHT: Both SPSR-consuming restore paths require guards. Your reported M2 result establishes that the existing 17 rows do not require those guards.
+
+6 | WRONG: **Unqualified “apply … T” is incomplete against this implementation.** MSR changes to CPSR.T/J are themselves UNPREDICTABLE; they are not ordinary defined writes that architecture requires preserving. SPSR restores can legitimately restore execution state, but these callers have existing PC/dispatch inconsistencies. Mode filtering alone does not make applying T safe or coherent. Retain the chosen flags/I/F policy, but give execution-state handling an explicit policy and implementation. See [DDI0100I, A4-79](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/1023/ARM-Architecture.pdf) and the caller findings below.
+
+7 | RIGHT: **The rejection is permissible; the warrant is false.** DDI0100I says a reserved mode makes the instruction’s results UNPREDICTABLE, without guaranteeing every other field’s effect. Whole-operation decline buys preservation of flags and interrupt masks, and—if implemented sufficiently early—avoids the return’s PC, register-load and writeback effects. Field-only deliberately preserves those effects. Neither policy is architecturally mandatory. Your proposed I/F readback would distinguish them; the supplied measurements do not yet do so. [Local architecture text](C:/DocumentNoSnc/cc/GXEMUL/_scratchpad/ddi0100i.txt:9691).
+
+8 | RIGHT: Recording decline as a policy choice corrects the original overstatement. Normal exception lists do not independently settle every UNPREDICTABLE case. Keep the ARMv7 quotation identified as ARMv7 evidence.
+
+9 | RIGHT: Shared classification outside the repeated DPI template is appropriate. However, copying seven labels into another switch does not mechanically establish one source of truth, and the proposed `static` linkage is wrong.
+
+10 | RIGHT: Modify the execution-local mask. The guard must not permanently alter cached translation arguments. The existing register-form wrapper’s assignment to `arg[0]` is separate from this restriction.
+
+11 | WRONG: **The debugger mechanism and both-backstops reachability claim are wrong.** `put` writes memory: it evaluates its destination as an address and performs a store. Register/settings writes use the debugger’s assignment mechanism. Moreover, after the completed sketch, a transition from an invalid current mode to a valid destination exercises Save’s fallback and then a valid Load. With conditional DPI banking, none of the four callers demonstrates debugger-only reachability of Load’s default. Retain that fallback defensively, but row (d) cannot substantiate both backstops. [Debugger memory write](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1413), [settings assignment](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:207).
+
+12 | RIGHT: Filing the separate CPU-stop defect is appropriate. Correct “whole emulator” to **current CPU; execution ends when no machine remains running**. The defaults do not universally terminate every CPU or the process. In `arm_pop`, clearing `s_bit` in the USR check does not escape the already-entered outer block or prevent its subsequent PC-list check.
+
+Against each caller’s actual flow, the sketch needs these corrections:
+
+| Location | Required correction or limitation |
+|---|---|
+| Shared helper | Define it with **external linkage** in `cpu_arm.c`, with a matching header declaration. `static` cannot serve the separately compiled generated DPI code. |
+| `msr_imm` | Move `new_value`’s declaration before the proposed guard; HEAD declares it after the banking decision. Apply USR masking first, validate the effective mode write, then calculate banking. Preserve flag synchronization. |
+| `arm_pop` restore | Sanitize `new_cpsr` after selecting the SPSR and before comparing modes. Loads and base writeback have already occurred, so returning here would not implement whole-operation decline. Continue the intended PC transfer. |
+| DPI S-to-PC restore | Initialize the new local from current CPSR, or explicitly handle modes without an SPSR. Its existing switch has five cases and **no default**. An uninitialized local would introduce undefined behavior in USR/SYS. Make Save and Load use the same banking decision. |
+| Exception entry | The destination mode is already constrained. An invalid current mode can reach Save’s fallback, but returning from that fallback cannot recover the lost association between live registers and their bank. |
+
+The relevant restore ordering is visible in [`arm_pop`](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1748) and the [DPI template](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_dpi.c:215). No-rollback backstops provide containment; they do not repair debugger-corrupted bank state.
+
+For question 3, **a minimal diagnostic-only counterexample is one constant change that makes Save and Load share their warning bit**. This violates #11’s distinct-bit requirement while preserving mode validation. Nothing in the described rows distinguishes those implementations: ordinary guarded paths avoid the defaults, and corrected row (d) exercises Save only.
+
+That is a static prediction, not a measured pass; the actual assertions for (a)–(d) have not been supplied. The missing measurement is independent warning suppression for both fallback sites within one CPU, followed by isolation on a second CPU. Checking only for the presence of `(once)` cannot establish those properties.
+
+Something else: **execution-state handling is already inconsistent beyond reserved modes**:
+
+- `msr_imm` updates CPSR without arranging an execution-state transition.
+- `arm_pop` restores CPSR, then clears both low PC bits.
+- DPI can force T from an odd PC after restoring SPSR, overriding its restored execution state.
+
+The Thumb interpreter requires its internal PC representation and T to agree, and [stops the CPU otherwise](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:1216). This is an existing, separate correctness issue that the sketch leaves reachable. The additional measurement owed is **execution-state coherence and next-instruction progress after status restoration**, including CPU-running state—not CPSR readback alone.

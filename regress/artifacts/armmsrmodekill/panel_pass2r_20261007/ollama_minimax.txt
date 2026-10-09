@@ -1,0 +1,61 @@
+VERDICT: SHIP | 0 floor breaches
+
+## 1. Floor (Q1) — REASONED
+
+I swept the following cells. None can be removed without breaking at least one of the 38 rows:
+
+- **Five independent latch bits** (`ARM_MODEWARN_MSR/POP/DPI/SAVE/LOAD` in `cpu_arm.h`, the `mode_warned` field, and the five `|=` sites in `cpu_arm.c`/`cpu_arm_instr.c`/`cpu_arm_instr_dpi.c`):
+  - Collapsing to ≤4 bits: `latch ind` fires (it asserts the bits are independent — verified by the "Save bit aliased to MSR bit" mutant scoring 36/37 with one row killed, which is `latch ind`).
+  - Removing any one bit: that site no longer latches, so its `latch rpt` second-visit announces again, count goes to 2, `latch rpt` red.
+- **The `arm_mode_is_modelled` helper**: the three guards (`msr_imm`, `arm_pop`, DPI) all call it. Removing it breaks every kill row, every `src *` row, and `latch rpt` (the `|=`-deletion mutants each score 37/38 on the 38-row probe — verified).
+- **`msr_imm` guard**: required for `kill 14/15/1e/03`, `dbg save`, `dbg both`, and `latch rpt` (N_cond_msr). The "decline clearing fewer than all five mode bits" mutant is the inverse (clears only 3:0, escape reproduced on the 37-row probe at 37/37, killed on 38/38 by `kill 03` — consistent).
+- **`arm_pop` guard**: required for `zero spsr`, `rst ldm`, and the five `src pop *` rows (N_pop_svc_only mutant 33/37 with the four non-SVC `src pop` rows killed — consistent).
+- **DPI guard (with the `new_cpsr`/`spsr_copied` refactor)**: required for `rst movs` and the five `src dpi *` rows (N_dpi_svc_only mutant 33/37 — consistent). The refactor is the minimum to keep the pre-assignment readback channel alive; without it the guard cannot inspect `new_cpsr` before `cpu->cd.arm.cpsr` is clobbered, so the guard is structurally inseparable from the refactor.
+- **Save backstop change**: required for `dbg save`, `dbg both`, and the `save2` arm of `latch rpt`.
+- **Load backstop change**: required for `dbg both` and the `load2` arm of `latch rpt`.
+
+The fix is minimal w.r.t. the 38-row detector. **No smaller edit keeps all 38 green.**
+
+## 2. Closure (Q2) — REASONED
+
+The rowed product `{fiq,irq,abt,und,svc} × {dpi,pop} = 10 rows` is the correct closure for "select by current-mode label × restore path". Each row carries both cells (declined, accepted) so the 2×2 within-row product is fully exercised. Three reasons no cell is missing:
+
+- **USR/SYS excluded**: `arm_pop`'s switch and the DPI switch have no USR/SYS case for SPSR read (`spsr_copied = 0` in DPI; the pop switch falls through to the default that does not feed `new_cpsr` from an SPSR). Including them would test nothing new — they're in the NOT CLAIMED list ("USR/SYS `LDM {pc}^' and `MSR SPSR' paths that stop the CPU, filed separately").
+- **Zero-SPSR cell stays SVC/DPI only**: the ` sp0` token requires an actual zero SP readback. In FIQ/IRQ/ABT/UND, SP is banked separately and is not the USR/SYS SP that holds the 0 sentinel; the test would fail for an unrelated reason. The brief discloses this (values-other-than / one CPU) and notes the asymmetry explicitly.
+- **Latch state × label not crossed**: the latch is a per-CPU scalar; it is tested in its own row (`latch rpt`), not crossed into the label axis. Per-CPU isolation is in the NOT CLAIMED list (testarm has one CPU).
+
+The 10-row closure is right.
+
+## 3. Records (Q3) — REASONED
+
+I cross-checked the inlined numbers and the diff. No false claims found, with three notes:
+
+- **Tally arithmetic**: HEAD `16/38` ⇒ 22 reds, matches the 22 named (`12 + 10 src`). `save 2s` and `dbg both` are noted as dependent on the same EOF (Load death / Save death) — they still count as red because the harness reports EOF as red, but they are not independent reproductions. This is a fair characterization, not a defect.
+- **Helper mutant 27/37**: the brief does not explain *why* dropping the `& ARM_FLAG_MODE` projection in the helper changes behaviour. It does: `src *` accepted cells set the SPSR to `N|Z|0x1f = 0xc000001f`. With the projection, `0xc000001f & 0x1f = 0x1f` matches SYS, returns 1, guard does not fire. Without the projection, `0xc000001f` is compared directly to `case 0x1f:`, fails, default returns 0, guard fires, mode is kept, readback becomes `cur_mode` instead of `c000001f` — row killed. So 10 accepted cells killed, 27 pass = 27/37, 0 escapes. The mechanism is consistent with the score.
+- **DPI comment "T is forced after Load for an odd destination PC"**: this is a claim about pre-existing code, not new code. I cannot from the packet confirm the claim (no read of the file), but it is not a claim introduced by the round and not a contract line. Flagged for the record; not a defect of this round.
+- **Backstop comments**: both reworded comments check out. `msr_imm`, `arm_pop`, and DPI all decline unmodelled modes (verified in the diff), so guest code cannot plant one. The "exception or IRQ entry" qualifier is slightly loose — the trigger is the *pre-existing* unmodelled CPSR at save time, not the exception itself — but the brief separately notes "Exception entry: NOT rowed" and the backstop does fire when a debugger plant precedes an exception.
+
+## 4. NOT CLAIMED (Q4) — REASONED
+
+The list is honest. The round claims only:
+- the three guards decline unmodelled modes,
+- the helper projects `& ARM_FLAG_MODE`,
+- the Save/Load backstops announce once and return,
+- the five latch bits are independent and per-CPU.
+
+Each disclosure in the NOT CLAIMED list corresponds to a real gap that the round does **not** claim to cover:
+- `0x16, 0x18–0x1a, 0x1c–0x1d, 0x01–0x0f`: same helper return value as `0x14` (default 0), so no functional difference — disclosed.
+- `ic->arg[]` is a cached translation: the guard writes the local `mask`, not `ic->arg[]`; a guard that did write `ic->arg[]` would be unseen because no row re-executes a single translated MSR — disclosed.
+- Per-CPU isolation: testarm has one CPU — disclosed.
+- T-bit / execution-state coherence: not touched by the new rows; the DPI comment is documentary, not a contract line.
+- USR/SYS `LDM {pc}^` and `MSR SPSR`: filed separately.
+
+Nothing in the list hides a fix claim.
+
+## 5. Other — REASONED
+
+- **Timing of the addendum vs table 3**: 16:04 → 21:19 is 5h+ before table 3 starts; PRETABLE2 was 31 s before table 2. No precedence violation.
+- **The DPI refactor's `spsr_copied` gate** is the only way to suppress the guard when the switch fell through to default (no SPSR was read). This is structural, not removable.
+- **The "comments only" line in the brief** is internally consistent if read as "the *pass-2 repair* (this round) added/updated only three comments over the pass-2 diff; the 9 hunks are the cumulative fix." The pass-2 itself added the code; the pass-2 repair added the reworded backstop comments and the DPI comment.
+
+No additional defects. The brief is internally consistent and the fix is minimal w.r.t. the 38-row detector.

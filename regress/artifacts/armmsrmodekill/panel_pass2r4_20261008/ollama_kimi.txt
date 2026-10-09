@@ -1,0 +1,35 @@
+VERDICT: SHIP-WITH-CHANGES | 0 contract-floor breaches proven for built edits; 1 record claim ("bit 4 of the keep-mode mask is behaviour-preserving") is contradicted by the packet's own decline rows; ≥4 disclosed surviving edit families on the composite (graded (e)/NOT CLAIMED) keep the shipped-edit denominator nonzero.
+
+## Headline finding: the one claimed equivalence looks NON-equivalent by the packet's own data
+
+READ (PRETABLE4 §0): the src rows decline with SPSR 0xffffffcf (mode 0x0f, bit 4 CLEAR) against old CPSR 0x0000000m, and every label mode m is 0x1x (bit 4 SET). Checked values: R2 = R3 = ffffffc0|m.
+READ (tally): "bit 4 of the keep-mode mask is behaviour-preserving and was never built as a mutant."
+REASONED: the restore-site mutant (`(old & 0x1f)` → `(old & 0x0f)`, pop and DPI) takes mode bit 4 from the SPSR instead of the current CPSR. At the src 0x0f declines that yields mode 0x0x → CPSR ffffffcx, versus the asserted ffffffdx — a one-nibble difference in a channel ("the four CPSR words") the probe explicitly checks. It would also plant an unmodelled mode, tripping a backstop announce later. By the packet's own row values this mutant is RED if built, not equivalent. Either the record line is false, or the row descriptions are; they cannot both hold.
+Not checkable from the packet which. The single settling fact: build that one mutant (keep-mask bit 4, both restore sites) and run it against the 43 rows. My prediction from the inlined values: RED at src dpi/pop R2/R3. If so, no product change is needed — but the contract/PRETABLE record must drop the "behaviour-preserving" sentence, and the closure argument gets stronger, not weaker.
+
+## Q1 — Floor on the composite; closure-rule cells
+
+Closure rule, per packet data (READ + REASONED): I find no missing cell. Every operand bit is set in some accept on each path (DPI/pop: 0xffffffdf for 31:6 and 4:0, 0x3f for bit 5; msr: 0xffffffd1 plus c_17/c_1b/c_1f for mode bits 3:1, c_3f for bit 5). Every restored bit differs old-vs-SPSR at some decline on each path (DPI/pop: 31:6 at R2/R3, T at tbit; msr: 31:6 via msr wide, T via tbit; mode bit 4 differs at the 0x0f declines — which is exactly why the claimed equivalence above fails).
+
+DENOMINATOR — smallest edits to the shipped composite surviving 43/43:
+- Built mutants: 0 of 91 (READ).
+- Claimed unbuilt equivalent: 1 (bit 4, contested above; predicted red).
+- Disclosed survivor families on shipped fix lines (READ as disclosures, REASONED as surviving edits): (i) accept-side flag provenance on the restore assignment (`cpsr = new_cpsr` is a line the fix rewrote, so this is an edit to the fix, whatever "pre-existing" pedigree it has) — 2 site-instances, pop and DPI; (ii) the msr guard writing `ic->arg[0]` instead of the local mask; (iii) the DPI restore gated to MOV+SUB opcode instances only ("opcode instances other than MOV and SUB" is graded (e)); (iv) `mode_warned` aliased across CPUs (one CPU exercised). So: ≥4 families, ≥5 instances — none of which the contract (e) claims, by design, but the composite floor is not zero.
+
+## Q2 — False record lines
+
+- The bit-4 equivalence parenthetical: contested, per headline. REASONED likely-false.
+- READ (NOT CLAIMED): "at R1/R4 the replaced CPSR and the SPSR agree on I/F" only. REASONED: last pass's own wording had rows setting upper bits 0xc00000c0, i.e. N and Z also equal in both sources at accepts; if the old CPSR at R1/R4 still carries N/Z set, an accept-conditional NZ-keep also survives and the disclosure under-describes which flag bits agree. Not checkable from the packet; settling fact: the old CPSR word asserted at R1/R4.
+- Everything else I checked internally coheres (READ): 26 named reds + 17 greens = 43; the named-red list counts to 26; helper case-drops are carried by msr lbl accepts (c_17/c_1b/c_1f) since DPI/pop accepts drive only SYS — consistent, not a hole; msr SVC-skip is covered by kill 03 declining at SVC even though msr lbl's five labels are FIQ/IRQ/ABT/UND/SYS; PRETABLE4 mtime precedes lane outputs.
+
+## Q3 — Guest-reachable NOT CLAIMED items
+
+READ: two remain guest-reachable and mode-triggered: the USR/SYS `LDM {pc}^` and `MSR SPSR` paths that still stop the CPU, and T-bit/execution-state coherence after restore. REASONED: under the contract's scoping (three decline paths + two backstops; stops "filed separately") these are not breaches. But a guest can still halt the CPU through an unmodelled-mode-adjacent path, so the round's broad claim needs the narrow reading to stand. `ic->arg[]` and latch isolation are floor holes (counted in Q1), not behavioural claims.
+
+## Something else
+
+- READ: the diff never shows `mode_warned` being zeroed; the comment asserts "zero at cpu_new". Settling fact: whether `struct cpu` is zero-allocated at creation — trivial, but the once-per-CPU property depends on it.
+- READ-assumed: `ARM_FLAG_MODE` = 0x1f is never inlined; the mode table (0x10–0x1f) makes 0x0f impossible, so this is safe, but stated for completeness.
+- `fatal()`-does-not-exit is load-bearing for every backstop and is corroborated by the restored-code shape (`fatal(...); exit(1);`) plus exact announce counts in the tally — READ-consistent, not independently checkable by me.
+
+Bottom line: no product edit indicated from this packet; the pass is not "nothing found" — one record claim must be settled by the single named mutant run (predicted RED) and, if red, struck from the records.
