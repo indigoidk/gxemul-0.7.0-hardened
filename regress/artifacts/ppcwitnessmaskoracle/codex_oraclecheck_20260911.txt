@@ -1,0 +1,218 @@
+VERDICT: PASS. Both corrections match Book I v2.01 for the stated input ranges and helper semantics. The assertion and all reported counts hold.  
+CODEX_ORACLECHECK_20260911
+
+I checked only the two permitted manuals and performed arithmetic checks in memory. Book I governs, consistent with [PEM:302](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:302). Quotations below join the extracted text’s line breaks; RTL transcriptions restore assignment arrows and subscript notation.
+
+1. **Yes, `mask_range` implements the architecture’s `MASK`.**
+
+   Book I defines `MASK(x, y)` as:
+
+   > Mask having 1s in positions x through y (wrapping if x > y) and 0s elsewhere
+
+   — [Book I:578](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:578)
+
+   Its detailed definition makes the endpoint treatment explicit:
+
+   > The mask is 64 bits long, and consists of 1-bits from a start bit, mstart, through and including a stop bit, mstop, and 0-bits elsewhere.
+
+   — [Book I:4015](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4015)
+
+   It then specifies the wrap direction:
+
+   > If mstart > mstop, the 1-bits wrap around from position 63 to position 0.
+
+   — [Book I:4018](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4018)
+
+   Thus the selected positions are:
+
+   ```text
+   b <= e:  b, b+1, …, e
+   b >  e:  b, b+1, …, 63, 0, 1, …, e
+   ```
+
+   Both endpoints are included. Your intersection implements the first case, and your union implements the second.
+
+   **When `b == e`, exactly one bit is selected:** the integer mask is `1 << (63-b)`. Equality belongs in the non-wrapping branch, exactly as you wrote it.
+
+2. **Yes, `assert m != 0` is legitimate. The sentence is specification prose, not a labeled note.**
+
+   Your exact wording occurs in the PEM:
+
+   > It is not possible to specify an all-zero mask.
+
+   — [PEM:6882](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6882)
+
+   Book I’s corresponding sentence is:
+
+   > There is no way to specify an all-zero mask.
+
+   — [Book I:4031](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4031)
+
+   Both occur in the ordinary mask-definition text. Book I’s statement is part of the normative architectural description, outside any Programming Note.
+
+   More decisively, the definition itself proves the assertion. For valid endpoints:
+
+   ```text
+   number of selected bits = ((e - b) modulo 64) + 1
+   ```
+
+   That number lies in `1..64`. Consequently, your assertion cannot reject a legal endpoint pair if the primitive helpers implement the stated bit sets.
+
+   The general premise about notes needs a qualification: a sentence being non-normative would not itself establish that a legal counterexample exists. Here the invariant follows directly from `MASK`, independently of the explanatory sentence.
+
+3. **Yes, `rldimi` uses the second endpoint `63-SH`.**
+
+   Book I’s entry says:
+
+   > The contents of register RS are rotated64 left SH bits. A mask is generated having 1-bits from bit MB through bit 63- SH and 0-bits elsewhere. The rotated data are inserted into register RA under control of the generated mask.
+
+   — [Book I:4322](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4322)
+
+   Its RTL, with notation normalized, is:
+
+   ```text
+   n  ← sh[5] || sh[0:4]
+   r  ← ROTL64((RS), n)
+   b  ← mb[5] || mb[0:4]
+   m  ← MASK(b, ¬n)
+   RA ← (r & m) | ((RA) & ¬m)
+   ```
+
+   — [Book I:4315](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4315)
+
+   Here `n` is six bits, so its complement has unsigned value `63-n`. Your arguments must represent the decoded numerical SH and MB operands, as stipulated in the question.
+
+   For every `sh` in `0..63`:
+
+   ```python
+   (63 - sh) & 63 == 63 - sh == (~sh & 63)
+   ```
+
+   **The `& 63` is correct but redundant over that domain.** The subtraction already produces a value in `0..63`.
+
+   Boundary checks: `SH=0` gives endpoint 63; `SH=63` gives endpoint 0. When `MB=63-SH`, the mask selects exactly one bit. The destination-preservation expression also matches the RTL: `~m & M64` is the required 64-bit complement.
+
+4. **Yes, the word-form mask is `mask_range(mb+32, me+32)`, and wrapping selects the entire high half.**
+
+   Book I’s `rlwinm` RTL is:
+
+   ```text
+   n  ← SH
+   r  ← ROTL32((RS)[32:63], n)
+   m  ← MASK(MB+32, ME+32)
+   RA ← r & m
+   ```
+
+   — [Book I:4125](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4125)
+
+   Book I also explicitly describes `ROTL32` as rotating two copies of the source’s low word, one in each half. Your duplicated-rotation interpretation agrees with that definition. [Book I:4008](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4008)
+
+   For `mb <= me`, the selected interval lies entirely within positions `32..63`. The old and new masks are identical.
+
+   For `mb > me`, the selected positions are:
+
+   ```text
+   mb+32 … 63, then 0 … me+32
+   ```
+
+   Since `me+32 >= 32`, that second interval includes **every position `0..31`**. Within the low word, the selected positions remain exactly those selected by your old wrapping loop. Therefore:
+
+   ```python
+   new_mask = old_mask | 0xFFFFFFFF00000000   # every wrapping pair
+   ```
+
+   Let `r32` be the rotated low word. For wrapping pairs:
+
+   ```python
+   old_result = r32 & old_mask
+   new_result = (r32 << 32) | old_result
+   ```
+
+   Hence **there is no legal encoding or source value for which this correction changes the low word of `want_rlwinm`**. Duplication supplies the high-half data; AND masking cannot transfer those bits into the low half.
+
+   For example, `MB=31, ME=0` produces:
+
+   ```text
+   old mask: 0000000080000001
+   new mask: FFFFFFFF80000001
+   ```
+
+   With `SH=0` and source low word `12345679`, the results are respectively `0000000000000001` and `1234567900000001`. Their low words agree.
+
+   **There is a real manual discrepancy here.** The PEM’s general `rlwinm` description says:
+
+   > The upper 32 bits of rA are cleared.
+
+   — [PEM:30065](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30065)
+
+   Applied universally, that contradicts Book I and the PEM’s own RTL. Book I’s narrower statement is:
+
+   > For all the uses given above, the high-order 32 bits of register RA are cleared.
+
+   — [Book I:4195](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4195)
+
+   That sentence belongs to the Programming Note beginning at [Book I:4166](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4166), and qualifies its listed usage patterns. It does not impose universal clearing on wrapping encodings.
+
+   The same `MASK(MB+32, ME+32)` expression appears for `rlwnm` and `rlwimi`. [Book I:4241](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4241), [Book I:4317](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4317)
+
+5. **There is no off-by-one in the supplied endpoint arithmetic.**
+
+   Given your stated primitive-helper semantics, their integer representations are:
+
+   ```python
+   mask_b_63(b) = (1 << (64 - b)) - 1
+   mask_0_e(e)  = ((1 << (e + 1)) - 1) << (63 - e)
+   ```
+
+   The suffix contains `64-b` bits; the prefix contains `e+1` bits. Those counts include both named endpoints.
+
+   Useful boundary values are:
+
+   | Expression | 64-bit mask |
+   |---|---|
+   | `mask_range(0, 0)` | `8000000000000000` |
+   | `mask_range(63, 63)` | `0000000000000001` |
+   | `mask_range(0, 63)` | `FFFFFFFFFFFFFFFF` |
+   | `mask_range(63, 0)` | `8000000000000001` |
+   | `mask_range(1, 0)` | `FFFFFFFFFFFFFFFF` |
+
+   The last two distinguish a two-bit wrap from a full-width wrap. Adjacent endpoints with `b=e+1` select all 64 bits.
+
+   The `+32` offsets correctly map word-local positions `0..31` onto 64-bit positions `32..63`. In particular:
+
+   ```text
+   integer bit position = 63 - (word_position + 32)
+                        = 31 - word_position
+   ```
+
+   That is exactly the exponent in your old helper’s `1 << (31-b)`. Book I’s M-form field definition independently specifies a 64-bit mask from `MB+32` through `ME+32` inclusive. [Book I:950](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:950)
+
+   Finally, `63-SH` already lies in range, so `& 63` neither moves an endpoint nor changes an inclusive interval’s length.
+
+6. **All counts hold, including the equality boundaries.**
+
+   For `rldimi`, fix `SH=s`. The endpoint is `e=63-s`.
+
+   Non-wrapping MB values are `0..e`, giving `64-s` choices. Wrapping MB values are `e+1..63`, giving `s` choices. Therefore:
+
+   ```text
+   non-wrapping = Σ(64-s), s=0..63 = 64×65/2 = 2080
+   wrapping     = Σs,      s=0..63 = 63×64/2 = 2016
+   total                                      = 4096
+   ```
+
+   On each wrapping pair, the old intersection combines disjoint intervals and is zero. On each non-wrapping pair, it equals the new mask. Thus the old zero count is exactly **2016**, the new zero count is **0**, and **2080** masks—and therefore results for all register inputs—remain identical.
+
+   For the word masks, fix `MB=b`. There are `b` choices with `ME<b`, and `32-b` choices with `ME>=b`:
+
+   ```text
+   wrapping     = Σb,      b=0..31 = 31×32/2 = 496
+   non-wrapping = Σ(32-b), b=0..31 = 32×33/2 = 528
+   total                                     = 1024
+   ```
+
+   Equality contributes 64 pairs to the first non-wrapping partition and 32 to the second. Every wrapping word mask differs by exactly the all-ones high half, so all **496** differ as full masks and all **496** agree in their low words.
+
+   I independently enumerated all **4096** general endpoint pairs using circular-distance membership, obtaining zero disagreements with your corrected expression. Separate enumeration reproduced both reported partitions. Checking all 32 source basis bits across all 32 word rotations and all 1024 word-mask pairs—**1,048,576 cases**—also produced zero low-word result disagreements.
+
+   These are counts of masks. A changed mask does not guarantee a changed result for every data input; for example, a zero source low word makes both `rlwinm` results zero even on a wrapping pair.

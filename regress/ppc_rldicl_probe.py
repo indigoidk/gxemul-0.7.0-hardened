@@ -132,6 +132,46 @@ def mask_0_e(e):
     return (((1 << (e + 1)) - 1) << (63 - e)) & M64
 
 
+def mask_range(b, e):
+    """MASK(b,e) -- the architecture's own mask generator, INCLUSIVE and WRAPPING.
+
+       PowerPC Book I v2.01, _scratchpad/ppc_uisa_book1_v201.txt:
+         :578     "Mask having 1s in positions x through y (WRAPPING IF x > y)"
+         :4015    "The mask is 64 bits long"
+         :4022-29  if mstart <= mstop: mask[mstart..mstop] = ones
+                   else:               mask[mstart..63] = ones ; mask[0..mstop] = ones
+         :4031    "There is no way to specify an all-zero mask."   <-- the assert below
+
+       *** THE WRAPPING BRANCH IS A UNION.  An INTERSECTION is EMPTY whenever b > e,
+       which is exactly the all-zero mask :4031 says cannot exist -- and that was this
+       file's want_rldimi for 2016 of 4096 (MB, SH) pairs.  See
+       regress/artifacts/ppcwitnessmaskoracle/ENUMERATION_20260911.txt. ***"""
+    assert 0 <= b <= 63 and 0 <= e <= 63
+    m = (mask_b_63(b) & mask_0_e(e)) if b <= e else (mask_b_63(b) | mask_0_e(e))
+    assert m != 0, "MASK(%d,%d) came out all-zero, which the architecture forbids" % (b, e)
+    #  *** THIS ASSERT IS DEAD, AND SAYING SO IS THE POINT.  Found by the glm seat, 2026-09-17,
+    #  and verified: the assert above already constrains b, e to [0, 63], so the b <= e branch
+    #  covers at least bit b and the wrapping branch covers at least bits b..63 AND 0..e.  Neither
+    #  can produce zero, so this can never fire.
+    #
+    #  KEPT rather than deleted because it CARRIES A CITATION -- Book I :4031, "There is no way to
+    #  specify an all-zero mask" -- and a future edit that widens the domain above would make it
+    #  live again.  **But an assert that cannot fire is a check-that-cannot-fail, and this project
+    #  files those as defects when they are passed off as guards.**  It is annotated as DEAD so no
+    #  reader mistakes it for one.
+    return m
+
+
+#  *** CONTRACT, 2026-10-09 (owner ruling on Fable 5.1's 7n-3; GPT-6 Astra confirmed): NO ROW IN THIS FILE
+#  CONSUMES want_rldimi, mask32, want_rlwinm OR want_rlwimi.  Every row calls want_rldicl / want_rldicr, which the
+#  oracle repair below leaves unchanged -- re-derived over every (SH, MB) and (SH, ME) at four sources, with the
+#  enumeration of the repaired helpers, in regress/artifacts/ppcwitnessmaskoracle/enumcheck_20261009.out.  The
+#  repaired helpers stay here as the Book I definitions (this mask32 is now the same form as
+#  regress/ppc_rlwimi_probe.py's), and they owe nothing until a row is wired to them: the oracle-correction bound
+#  is one measured red per oracle a ROW consumes.  The red for rlwinm/rlwnm on committed HEAD is
+#  regress/artifacts/ppcrlwhighhalf/witness_committed_20261009/. ***
+
+
 def want_rldicl(rs_val, sh, mb):
     return rotl64(rs_val, sh) & mask_b_63(mb)
 
@@ -141,9 +181,19 @@ def want_rldicr(rs_val, sh, me):
 
 
 def want_rldimi(rs_val, ra_val, sh, mb):
-    """manual :29908 -- m <- MASK(b, ~n); prose :29909 "1 bits from bit MB
-       through bit 63 - SH"."""
-    m = mask_b_63(mb) & mask_0_e((63 - sh) & 63)
+    """Book I :4319 -- m <- MASK(b, not n), i.e. MASK(MB, 63-SH): INCLUSIVE and WRAPPING.
+
+       *** CORRECTED 2026-09-11.  This computed `mask_b_63(mb) & mask_0_e(63-sh)' -- the
+       INTERSECTION -- which is EMPTY for every wrapping encoding: 2016 of 4096 (MB, SH)
+       pairs, 49.2% of the space, produced the all-zero mask Book I :4031 forbids.  The
+       oracle then returned the untouched destination and would have AGREED with any
+       implementation that also omitted the wrap. ***
+
+       The prose at :4323-4324 ("1 bits from bit MB through bit 63-SH") describes the
+       NON-WRAPPING reading, and quoting it beside the formula is how the error got in;
+       :4022-4029 is the definition that governs.  The PEM citation the old docstring
+       carried (:29908) is superseded: PEM :302 names Book I as the defining manual."""
+    m = mask_range(mb, (63 - sh) & 63)
     return (rotl64(rs_val, sh) & m) | (ra_val & (~m & M64))
 
 
@@ -156,15 +206,64 @@ def rotl32(x, n):
 
 
 def mask32(mb, me):
-    """MASK(mb+32, me+32) confined to the low 32 bits, PowerPC wrap-around form."""
-    m = 0
-    b = mb
-    while True:
-        m |= 1 << (31 - b)
-        if b == me:
-            break
-        b = (b + 1) & 31
-    return m
+    """MASK(MB+32, ME+32) at SIXTY-FOUR bits -- NOT confined to the low word.
+
+       *** CORRECTED 2026-09-11.  This was a low-32-confined loop, so want_rlwinm ANDed
+       away the duplication rotl32 correctly produces, and want_rlwimi preserved ALL of
+       [*** SENTENCE TRUNCATED.  The rest of this 2026-09-11 clause was lost when the
+       correction block below was inserted AT A LINE BOUNDARY rather than a sentence
+       boundary.  Found by the Opus 5 seat 2026-09-17, which found the SAME habit in
+       mvme_pcctworeg.h in the same working set.  THE MISSING WORDS ARE NOT
+       RECONSTRUCTED HERE -- inventing them would be the wrong repair in a file whose
+       whole method is `quote what you refute', and the surviving fragment is the CLAIM
+       BEING CORRECTED, cut off before it says what was wrong.  [2026-10-09: this note
+       said to recover it with `git show' on the 2026-09-11 revision -- FALSE, that
+       revision was never committed.  The clause survives verbatim in the brief that
+       inlined the 2026-09-17 diff (_scratchpad/grokpush_20260917/BRIEF_ppcmask.md,
+       lines 131-135); after "preserved ALL of" it read: <<RA's high half.  Measured
+       against the SHIPPED X(rlwinm), the old helper agreed on 131072 of 131072 cells
+       -- not "usually green" but INCAPABLE of red, against a defect this project has
+       filed as ppcrlwhighhalf. ***>>  Its `Measured' is the claim corrected below.] ***]
+       *** CORRECTED 2026-09-17 by the grok seat, which went and READ the artifact. ***
+       An earlier wording here said this was "Measured against the SHIPPED X(rlwinm)" on
+       "131072 of 131072 cells".  **THE WORD `Measured' IS NOT SUPPORTED BY THE ARTIFACT.**
+       `artifacts/ppcwitnessmaskoracle/ENUMERATION_20260911.txt' contains ZERO occurrences of
+       131072, and says of itself at :49: "it is a MODEL enumeration, not an emulator
+       measurement.  No binary was built".  The identity is ALGEBRA -- the old `mask32' simply
+       IS the shipped handler's mask-and-zero-extend, so the two agree by construction, for
+       every source and not merely for 2^17 encodings.
+       *** THE REPAIR IS STILL WARRANTED, AND BY A STRONGER ARGUMENT THAN THE NUMBER WAS. ***
+       It is warranted by that IDENTITY WITH THE SHIPPED HANDLER -- an oracle that is a copy of
+       the implementation it grades cannot go red against it, which is this project's
+       check-that-cannot-fail shape in its purest form.  A count of agreeing cells was never the
+       reason and, stated as a measurement, was a WRONG RECORD of the score-claim class: a number
+       in a measured column that no run produced.
+
+       Book I gives rlwinm at :4126-4128 and rlwimi at :4316-4318 with the IDENTICAL mask
+       term, and ROTL32 (:501-504) produces the low word DUPLICATED into both halves.
+       MB, ME are 5-bit, so mstart/mstop lie in 32..63; when MB > ME the mask covers
+       MB+32..63 AND 0..ME+32, and that second range contains every position 0..31 -- the
+       whole high half -- so the rotated word lands there.
+
+       *** :4033-4035 IS NOT A COUNTER-TEXT, THOUGH IT READS LIKE ONE. ***  It says the
+       mask "start and stop POSITIONS are always in the low-order 32 bits" -- true, they
+       are 32..63 -- and says nothing about where the 1-bits reach.  :4015 says the mask
+       is 64 bits long and :4026-4028 gives the wrap explicitly.
+
+       BOOK I'S CLEARING SENTENCES ARE SCOPED; THE PEM'S IS UNCONDITIONAL.  Book I has
+       TWO, at :4195-4196 (rlwinm) and :4291-4292 (rlwnm), each inside a Programming Note
+       and each qualified "for all the uses given above" -- and every enumerated use fixes
+       a NON-WRAPPING (MB, ME).  The 2005 PEM carries the qualified form at :30074 AND an
+       unconditional one at :30065; it is the unconditional claim that Book I lacks.
+       **Book I states no clearing for rlwimi at all** -- its entry (:4304-4358) is RTL only.
+
+       ONE SHARED HELPER FEEDS BOTH want_rlwinm AND want_rlwimi, DELIBERATELY: the manual
+       gives them the same mask term, and a per-instruction split is how an oracle gets
+       fitted to one implementation.  Enumeration: 528 non-wrapping pairs IDENTICAL under
+       old and new, 496 wrapping pairs differing in exactly the high 32 bits.  See
+       regress/artifacts/ppcwitnessmaskoracle/ENUMERATION_20260911.txt."""
+    assert 0 <= mb <= 31 and 0 <= me <= 31
+    return mask_range(mb + 32, me + 32)
 
 
 def want_rlwinm(rs_val, sh, mb, me):

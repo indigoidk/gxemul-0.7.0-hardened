@@ -19226,7 +19226,7 @@ where both repairs do their new work**. An uncorrected oracle would score a corr
 with a repair that fixes only the non-wrapping half — a check that cannot fail, because the oracle omits
 the wrap in the same way the implementation does.
 
-### `ppcrlwhighhalf` (MED) -- filed 2026-09-10, and it is a DISPUTE rather than a defect
+### `ppcrlwhighhalf` (HIGH) -- filed 2026-09-10 as a dispute and RESOLVED THE SAME DAY as a DEFECT against Book I [L4 2026-10-09, 7n-3: this heading read "(MED) -- filed 2026-09-10, and it is a DISPUTE rather than a defect"]; rung-3 witness on committed HEAD: `regress/artifacts/ppcrlwhighhalf/witness_committed_20261009/`
 
 I told the review that `rlwinm` and `rlwnm` are the correct idiom `rlwimi` fails to follow. **They are
 correct about the low word and, on the RTL reading, wrong about the high one.** The decoder builds a
@@ -24664,3 +24664,16 @@ and on a refusal prints "ROUTE THIS BRIEF TO GROK" (rc 7); `grep -n daybreak too
 once".  The fallback the owner ruled (2026-10-01: `gpt-daybreak-blue-latest` on an Astra AUP refusal) exists only in
 `_scratchpad/codexpack_20260928/cxlaunch_pack.run-*.sh`.  Fix: give `cxlaunch.sh` the pack runner's fallback, and
 correct the comment when `panel.sh` is next reviewed (it carries unreviewed deltas).
+
+### 2026-10-09 -- `ppcrlwhighhalf` / `ppcwitnessmaskoracle`: the oracle repair committed alone, the rung-3 witness on committed HEAD
+
+* **`ppcwitnessmaskoracle` (in work):** `regress/ppc_rldicl_probe.py`'s oracle repair is COMMITTED, by owner ruling on
+  Fable 5.1's 7n-3, re-derived against its enumeration (`regress/artifacts/ppcwitnessmaskoracle/enumcheck_20261009.out`).
+  No row in that file consumes the corrected helpers.  Closure waits for a Fable regress review.
+* **`ppcrlwhighhalf` (HIGH, open):** WITNESSED on committed HEAD 2026-10-09 --
+  `regress/artifacts/ppcrlwhighhalf/witness_committed_20261009/`: r4 = 0x0 / CR0 EQ where Book I gives
+  0x0000000200000000 / GT, for `rlwinm.`, `rlwinm` and `rlwnm` (RB 1 and 33), controls green.  **Owner: witness only;
+  the fix round is not scheduled.**  When it is: the in-handler repair per the 2026-09-11 harvest and the 2026-09-26
+  codex job (`iword` already in scope; `#ifndef MODE32`, not `DYNTRANS_DUALMODE_32`; both Rc forms via `DOT0`, since
+  agy flagged that `update_cr0` then reads the zeroed register; alias rows RA=RS / RA=RB; the `(1,0)` vs `(0,31)`
+  same-low-mask pair; a row rejecting unconditional masked replication).

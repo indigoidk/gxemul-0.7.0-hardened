@@ -1,0 +1,32 @@
+VERDICT: WITNESSED
+
+### Measurement Table
+
+| row | got | Book I want | predicted HEAD | matches Book I? |
+|---|---|---|---|---|
+| `pvr` | `0x00390000` | `0x00390000` | `0x00390000` | YES |
+| `live` | `0x1234` | `0x1234` | `0x1234` | YES |
+| `disasm` | `rlwinm. r4,r3,1,31,0` | `rlwinm. r4,r3,1,31,0` | `rlwinm. r4,r3,1,31,0` | YES |
+| `nowrap` | `0x2` | `0x2` | `0x2` | YES |
+| `target.` | r4 = `0x0000000000000000`, CR = `0x20000000` (CR0 = `2`) | r4 = `0x0000000200000000`, CR0 = `4` | r4 = `0x0`, CR0 = `2` | NO |
+| `target` | `0x0000000000000000` | `0x0000000200000000` | `0x0` | NO |
+| `rlwnm1` | `0x0000000000000000` | `0x0000000200000000` | `0x0` | NO |
+| `rlwnm33` | `0x0000000000000000` | `0x0000000200000000` | `0x0` | NO |
+
+**High-half loss**: Rows `target.`, `target`, `rlwnm1`, and `rlwnm33` all demonstrate high-half loss. In all four wrapping cases (where Book I defines `MASK(MB+32, ME+32)` wrapping from bit 63 to 0 and preserving rotated low-word data duplicated into bits 0:31), committed HEAD truncates the result to a 32-bit `uint32_t` and zero-extends it into the 64-bit destination register, returning `0x0` instead of `0x0000000200000000`.
+
+### Controls
+
+All four controls came out right:
+- `pvr`: Returned `0x00390000` (matching the PPC970 processor version register in [`src/include/cpu_ppc.h`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/cpu_ppc.h#L87)), proving guest SPR readback and correct 64-bit CPU model instantiation.
+- `live`: `li r9, 0x1234` placed immediately after the target instruction in the `target.` session executed cleanly and updated `r9` from its sentinel value to `0x1234`, proving that execution stepped past the target instruction without hanging or faulting.
+- `disasm`: The emulator's built-in `unassemble` on the target word `0x54640fc1` produced mnemonic `rlwinm.` and operands `r4,r3,1,31,0`, confirming exact agreement between probe encoding and emulator disassembly.
+- `nowrap`: Non-wrapping mask `rlwinm r4,r3,1,0,31` produced `0x2`, confirming valid register assignment and rotation arithmetic when the mask does not wrap.
+
+### Paths and Checksums
+
+- Probe script: `C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\ppcwit\agywork\ppc_rlwhigh_witness.py` (WSL: `/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/ppcwit/agywork/ppc_rlwhigh_witness.py`)
+- Probe output: `C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\ppcwit\agywork\witness.out` (WSL: `/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/ppcwit/agywork/witness.out`)
+- Binary source MD5 (`/tmp/gxppcwit/src/cpus/cpu_ppc_instr.c`): `87a766e0a8c1f8bbc41ebea8d9255d27` (matches committed `git show HEAD:src/cpus/cpu_ppc_instr.c`)
+
+FLAG: Even though `X(rlwimi)` previously received a fix for wrapping masks (`if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);`), sibling instructions `X(rlwinm)` and `X(rlwnm)` were left strictly computing 32-bit values (`tmp &= (uint32_t)ic->arg[1]; reg(ic->arg[0]) = tmp;`); as a direct consequence, `DOT0(rlwinm)` calls `update_cr0(cpu, reg(ic->arg[0]))` on the zeroed register, corrupting the Condition Register by setting CR0 to EQ (`2`) instead of GT (`4`).

@@ -1,0 +1,34 @@
+"""Re-derive ENUMERATION_20260911.txt's counts from the two versions of ppc_rldicl_probe.py's helpers.
+Functions are lifted with ast (the probe runs the emulator at import, so it is never imported)."""
+import ast, sys
+def lift(path, names):
+    src = open(path, encoding="utf-8").read()
+    tree = ast.parse(src)
+    ns = {"M64": (1 << 64) - 1}
+    keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    mod = ast.Module(body=keep, type_ignores=[])
+    exec(compile(mod, path, "exec"), ns)
+    return ns
+names = {"mask_b_63", "mask_0_e", "mask_range", "rotl64", "rotl32", "mask32", "want_rldimi", "want_rlwinm", "want_rlwimi", "want_rldicl", "want_rldicr"}
+old = lift(sys.argv[1], names); new = lift(sys.argv[2], names)
+print("old defines:", sorted(k for k in old if k in names)); print("new defines:", sorted(k for k in new if k in names))
+M32HI = 0xFFFFFFFF00000000
+nw = sum(1 for mb in range(32) for me in range(32) if mb <= me)
+nw_same = sum(1 for mb in range(32) for me in range(32) if mb <= me and old["mask32"](mb, me) == new["mask32"](mb, me))
+w = sum(1 for mb in range(32) for me in range(32) if mb > me)
+w_diff = sum(1 for mb in range(32) for me in range(32) if mb > me and old["mask32"](mb, me) != new["mask32"](mb, me))
+w_hi = sum(1 for mb in range(32) for me in range(32) if mb > me and (new["mask32"](mb, me) & M32HI) == M32HI)
+w_lo = sum(1 for mb in range(32) for me in range(32) if mb > me and (new["mask32"](mb, me) & 0xFFFFFFFF) == (old["mask32"](mb, me) & 0xFFFFFFFF))
+print("mask32: non-wrapping %d, old==new %d | wrapping %d, old!=new %d, new high half all-ones %d, low word unchanged %d" % (nw, nw_same, w, w_diff, w_hi, w_lo))
+def oldmask_rldimi(mb, sh): return old["mask_b_63"](mb) & old["mask_0_e"]((63 - sh) & 63)
+zero_old = sum(1 for mb in range(64) for sh in range(64) if oldmask_rldimi(mb, sh) == 0)
+newm = lambda mb, sh: new["mask_range"](mb, (63 - sh) & 63)
+zero_new = sum(1 for mb in range(64) for sh in range(64) if newm(mb, sh) == 0)
+agree_nonwrap = sum(1 for mb in range(64) for sh in range(64) if mb <= ((63 - sh) & 63) and oldmask_rldimi(mb, sh) == newm(mb, sh))
+nonwrap = sum(1 for mb in range(64) for sh in range(64) if mb <= ((63 - sh) & 63))
+print("rldimi mask: old all-zero %d of 4096, new all-zero %d; non-wrapping pairs %d, old==new %d" % (zero_old, zero_new, nonwrap, agree_nonwrap))
+# rldicl/rldicr unchanged?  (the only helpers the probe's rows call)
+same_cl = all(old["want_rldicl"](v, sh, mb) == new["want_rldicl"](v, sh, mb) for v in (0, 1, 0xDEADBEEFCAFEF00D, (1<<64)-1) for sh in range(64) for mb in range(64))
+same_cr = all(old["want_rldicr"](v, sh, me) == new["want_rldicr"](v, sh, me) for v in (0, 1, 0xDEADBEEFCAFEF00D, (1<<64)-1) for sh in range(64) for me in range(64))
+print("want_rldicl unchanged: %s   want_rldicr unchanged: %s" % (same_cl, same_cr))
+print("ENUMCHECK_DONE")

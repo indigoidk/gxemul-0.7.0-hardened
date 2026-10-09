@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""ppc_rlwhigh_witness.py -- Rung-3 witness for rlwinm / rlwnm high-half loss on committed HEAD.
+
+Harness copied from regress/ppc_rlwimi_probe.py per brief instructions.
+Machine: -E bareppc -M 64 (unmodified PPC970, 64-bit).
+"""
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+if len(sys.argv) < 2:
+    sys.stderr.write("usage: ppc_rlwhigh_witness.py <gxemul> [label]\n")
+    sys.exit(2)
+
+BIN = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "local"
+
+_TMPDIR = tempfile.mkdtemp(prefix="ppc_rlwhigh_")
+DUMMY = os.path.join(_TMPDIR, "dummy.bin")
+open(DUMMY, "wb").write(b"\x00\x00\x00\x00")
+
+CODE = 0x10000
+M64 = (1 << 64) - 1
+SENT = 0x5A5A5A5A5A5A5A5A
+
+# ----------------------------------------------------------------- architecture
+def rotl64(x, n):
+    n &= 63
+    return ((x << n) | (x >> (64 - n))) & M64 if n else x & M64
+
+
+def mask_b_63(b):
+    """MASK(b,63), big-endian bit numbering = the low (64-b) bits."""
+    assert 0 <= b <= 63
+    return (1 << (64 - b)) - 1
+
+
+def mask_0_e(e):
+    """MASK(0,e), big-endian = the high (e+1) bits."""
+    assert 0 <= e <= 63
+    return (((1 << (e + 1)) - 1) << (63 - e)) & M64
+
+
+def mask_range(b, e):
+    """MASK(b,e), the architecture's own wrapping mask generator (Book I:578, PEM:6879)."""
+    assert 0 <= b <= 63 and 0 <= e <= 63
+    m = (mask_b_63(b) & mask_0_e(e)) if b <= e else (mask_b_63(b) | mask_0_e(e))
+    assert m != 0, "MASK(%d,%d) came out all-zero, which architecture forbids" % (b, e)
+    return m
+
+
+def rotl32(x, n):
+    """ROTL[32] per Book I:4008 -- two copies of (RS)[32:63], then rotate."""
+    lo = x & 0xFFFFFFFF
+    n &= 31
+    r32 = ((lo << n) | (lo >> (32 - n))) & 0xFFFFFFFF if n else lo
+    return (r32 << 32) | r32
+
+
+def mask32(mb, me):
+    """MASK(MB+32, ME+32) at 64 bits (Book I:4125, 4310)."""
+    assert 0 <= mb <= 31 and 0 <= me <= 31
+    return mask_range(mb + 32, me + 32)
+
+
+def want_rlwinm(rs_val, sh, mb, me):
+    """Architectural rlwinm result per Book I:4125."""
+    m = mask32(mb, me)
+    return rotl32(rs_val, sh) & m
+
+
+# -------------------------------------------------------------------- encodings
+def enc_m(op, rs, ra, sh, mb, me, rc=0):
+    """Opcode 20 (rlwimi) / 21 (rlwinm) / 23 (rlwnm). Book I format M."""
+    assert 0 <= op <= 63 and 0 <= rs <= 31 and 0 <= ra <= 31
+    assert 0 <= sh <= 31 and 0 <= mb <= 31 and 0 <= me <= 31 and 0 <= rc <= 1
+    return ((op << 26) | (rs << 21) | (ra << 16) | (sh << 11)
+            | (mb << 6) | (me << 1) | rc) & 0xFFFFFFFF
+
+
+def RLWINM(ra, rs, sh, mb, me, rc=0):
+    return enc_m(21, rs, ra, sh, mb, me, rc)
+
+
+def RLWNM(ra, rs, rb, mb, me, rc=0):
+    return enc_m(23, rs, ra, rb, mb, me, rc)
+
+
+def LI(rd, simm):
+    return ((14 << 26) | (rd << 21) | (0 << 16) | (simm & 0xFFFF)) & 0xFFFFFFFF
+
+
+def ORI(ra, rs, imm):
+    return ((24 << 26) | (rs << 21) | (ra << 16) | (imm & 0xFFFF)) & 0xFFFFFFFF
+
+
+def MFSPR(rd, spr):
+    spr_lo = spr & 31
+    spr_hi = (spr >> 5) & 31
+    return ((31 << 26) | (rd << 21) | (spr_lo << 16) | (spr_hi << 11) | (339 << 1)) & 0xFFFFFFFF
+
+
+NOP = ORI(0, 0, 0)
+
+
+# ---------------------------------------------------------------------- sessions
+def session(setup, insns, timeout=90, machine="bareppc", cpu=None):
+    """Place `insns' at CODE, seed registers, step exactly len(insns), dump regs."""
+    cmds = list(setup)
+    for i, w in enumerate(insns):
+        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    if insns:
+        cmds.append("unassemble 0x%x 0x%x" % (CODE, CODE + 4 * len(insns)))
+    cmds.append("pc=0x%x" % CODE)
+    if insns:
+        cmds.append("step %d" % len(insns))
+    cmds.append("reg")
+    argv = [BIN, "-V", "-x", "-E", machine, "-M", "64"]
+    if cpu:
+        argv += ["-C", cpu]
+    argv += ["0x%x:%s" % (CODE, DUMMY)]
+    inp = ("\n".join(cmds + ["quit"]) + "\n").encode("latin-1")
+    try:
+        p = subprocess.run(argv, input=inp, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        out = (e.output or b"").decode("latin-1", "replace").replace("\r", "")
+        return {}, [], out, "TIMEOUT"
+    t = p.stdout.decode("latin-1", "replace").replace("\r", "")
+    rc = p.returncode
+    how = ("sig%d" % -rc) if rc < 0 else ("exit%d" % rc)
+    idx = t.rfind("GXemul> reg")
+    regs = {}
+    if idx >= 0:
+        for m in re.finditer(r"\br(\d\d) = (0x[0-9a-fA-F]+)", t[idx:]):
+            regs[int(m.group(1))] = int(m.group(2), 16)
+        m_cr = re.search(r"\bcr\s*=\s*(0x[0-9a-fA-F]+)", t[idx:])
+        if m_cr:
+            regs["cr"] = int(m_cr.group(1), 16)
+        m_xer = re.search(r"\bxer\s*=\s*(0x[0-9a-fA-F]+)", t[idx:])
+        if m_xer:
+            regs["xer"] = int(m_xer.group(1), 16)
+    dis = []
+    di = t.find("GXemul> unassemble")
+    if di >= 0:
+        seg = t[di:t.find("GXemul> pc=", di) if t.find("GXemul> pc=", di) > 0
+                else len(t)]
+        for m in re.finditer(r"^[0-9a-f]{16}: ([0-9a-f]{8})\s*(?:<- )?(\S+)"
+                             r"(?:\t(\S+))?", seg, re.M):
+            dis.append((int(m.group(1), 16), m.group(2), m.group(3) or ""))
+    return regs, dis, t, how
+
+
+def seed(pairs):
+    return ["r%d=0x%x" % (r, v) for r, v in pairs]
+
+
+print("ppc_rlwhigh_witness: Rung-3 witness for rlwinm / rlwnm high-half loss")
+print("binary: %s" % BIN)
+print("machine: -E bareppc -M 64 (PPC970, 64-bit, MSR[SF]=1)")
+print("")
+
+table_rows = []
+
+def record_row(name, got_val, want_val, pred_val, matches_book_i, note=""):
+    table_rows.append({
+        "row": name,
+        "got": got_val,
+        "want": want_val,
+        "pred": pred_val,
+        "matches": matches_book_i,
+        "note": note
+    })
+
+# Check encoder word for target.
+w_target_dot = RLWINM(4, 3, 1, 31, 0, rc=1)
+assert w_target_dot == 0x54640fc1, "target. encoding mismatch: got 0x%08x, expected 0x54640fc1" % w_target_dot
+
+# ============================================================ 1. PVR
+pvr_insns = [MFSPR(6, 287)]
+pvr_setup = seed([(4, SENT)])
+regs_pvr, dis_pvr, t_pvr, how_pvr = session(pvr_setup, pvr_insns)
+got_pvr = regs_pvr.get(6, None)
+want_pvr = 0x00390000
+pred_pvr = 0x00390000
+record_row("pvr", "0x%08x" % got_pvr if got_pvr is not None else "None",
+           "0x%08x" % want_pvr, "0x%08x" % pred_pvr,
+           got_pvr == want_pvr, "PPC970 PVR readback via mfspr r6, 287")
+
+# ============================================================ 2. TARGET. SESSION (live, disasm, target.)
+tgt_insns = [
+    w_target_dot,     # rlwinm. r4,r3,1,31,0
+    LI(9, 0x1234)     # li r9, 0x1234 (placed after target)
+]
+tgt_setup = ["r3=0x1", "r4=0x%x" % SENT, "r9=0x%x" % SENT, "xer=0x0"]
+regs_tgt, dis_tgt, t_tgt, how_tgt = session(tgt_setup, tgt_insns)
+
+# Row: live
+got_live = regs_tgt.get(9, None)
+want_live = 0x1234
+pred_live = 0x1234
+record_row("live", "0x%x" % got_live if got_live is not None else "None",
+           "0x%x" % want_live, "0x%x" % pred_live,
+           got_live == want_live, "li r9, 0x1234 executed after target")
+
+# Row: disasm
+if dis_tgt:
+    dis_w, dis_mnem, dis_ops = dis_tgt[0]
+    got_disasm = "%s %s" % (dis_mnem, dis_ops)
+else:
+    dis_mnem = ""
+    dis_ops = ""
+    got_disasm = "None"
+want_disasm = "rlwinm. r4,r3,1,31,0"
+pred_disasm = "rlwinm. r4,r3,1,31,0"
+record_row("disasm", got_disasm, want_disasm, pred_disasm,
+           (dis_mnem == "rlwinm." and dis_ops == "r4,r3,1,31,0"),
+           "tree's unassemble of 0x54640fc1")
+
+# Row: target.
+got_tgt_dot = regs_tgt.get(4, None)
+cr_tgt_dot = regs_tgt.get("cr", None)
+if cr_tgt_dot is not None:
+    cr0_nibble = (cr_tgt_dot >> 28) & 0xf
+    cr_str = "cr=0x%08x, CR0 nibble=%x" % (cr_tgt_dot, cr0_nibble)
+else:
+    cr0_nibble = None
+    cr_str = "cr not in reg dump"
+want_tgt_dot = want_rlwinm(1, 1, 31, 0) # 0x0000000200000000
+pred_tgt_dot = 0x0
+got_tgt_str = ("r4=0x%016x, cr=0x%08x, CR0=%x" % (got_tgt_dot, cr_tgt_dot, cr0_nibble)) if got_tgt_dot is not None else "None"
+want_tgt_str = "r4=0x%016x, CR0=4" % want_tgt_dot
+pred_tgt_str = "r4=0x0, CR0=2"
+record_row("target.", got_tgt_str, want_tgt_str, pred_tgt_str,
+           (got_tgt_dot == want_tgt_dot and cr0_nibble == 4),
+           cr_str)
+
+# ============================================================ 3. NOWRAP
+nowrap_insns = [RLWINM(4, 3, 1, 0, 31, rc=0)]
+nowrap_setup = ["r3=0x1", "r4=0x%x" % SENT]
+regs_nowrap, dis_nowrap, t_nowrap, how_nowrap = session(nowrap_setup, nowrap_insns)
+got_nowrap = regs_nowrap.get(4, None)
+want_nowrap = want_rlwinm(1, 1, 0, 31) # 0x2
+pred_nowrap = 0x2
+record_row("nowrap", "0x%x" % got_nowrap if got_nowrap is not None else "None",
+           "0x%x" % want_nowrap, "0x%x" % pred_nowrap,
+           got_nowrap == want_nowrap, "non-wrapping mask control (SH=1, MB=0, ME=31)")
+
+# ============================================================ 4. TARGET (Rc=0)
+target_insns = [RLWINM(4, 3, 1, 31, 0, rc=0)]
+target_setup = ["r3=0x1", "r4=0x%x" % SENT]
+regs_target, dis_target, t_target, how_target = session(target_setup, target_insns)
+got_target = regs_target.get(4, None)
+want_target = want_rlwinm(1, 1, 31, 0) # 0x0000000200000000
+pred_target = 0x0
+record_row("target", "0x%016x" % got_target if got_target is not None else "None",
+           "0x%016x" % want_target, "0x%x" % pred_target,
+           got_target == want_target, "wrapping mask target Rc=0")
+
+# ============================================================ 5. RLWNM1
+rlwnm1_insns = [RLWNM(4, 3, 5, 31, 0, rc=0)]
+rlwnm1_setup = ["r3=0x1", "r4=0x%x" % SENT, "r5=0x1"]
+regs_rlwnm1, dis_rlwnm1, t_rlwnm1, how_rlwnm1 = session(rlwnm1_setup, rlwnm1_insns)
+got_rlwnm1 = regs_rlwnm1.get(4, None)
+want_rlwnm1 = want_rlwinm(1, 1, 31, 0) # 0x0000000200000000
+pred_rlwnm1 = 0x0
+record_row("rlwnm1", "0x%016x" % got_rlwnm1 if got_rlwnm1 is not None else "None",
+           "0x%016x" % want_rlwnm1, "0x%x" % pred_rlwnm1,
+           got_rlwnm1 == want_rlwnm1, "rlwnm with rb=1")
+
+# ============================================================ 6. RLWNM33
+rlwnm33_insns = [RLWNM(4, 3, 5, 31, 0, rc=0)]
+rlwnm33_setup = ["r3=0x1", "r4=0x%x" % SENT, "r5=0x21"] # 33 decimal = 0x21
+regs_rlwnm33, dis_rlwnm33, t_rlwnm33, how_rlwnm33 = session(rlwnm33_setup, rlwnm33_insns)
+got_rlwnm33 = regs_rlwnm33.get(4, None)
+want_rlwnm33 = want_rlwinm(1, 33 & 31, 31, 0) # 0x0000000200000000
+pred_rlwnm33 = 0x0
+record_row("rlwnm33", "0x%016x" % got_rlwnm33 if got_rlwnm33 is not None else "None",
+           "0x%016x" % want_rlwnm33, "0x%x" % pred_rlwnm33,
+           got_rlwnm33 == want_rlwnm33, "rlwnm with rb=33 (low 5 bits count)")
+
+# ============================================================ PRINT SUMMARY TABLE
+print("%-10s | %-40s | %-28s | %-16s | %s" %
+      ("row", "got", "want (Book I)", "predicted HEAD", "matches Book I?"))
+print("-" * 115)
+for r in table_rows:
+    print("%-10s | %-40s | %-28s | %-16s | %s" %
+          (r["row"], r["got"], r["want"], r["pred"], "YES" if r["matches"] else "NO"))
+
+print("")
+print("CR details for target. session:")
+print("  CR from reg dump : 0x%08x" % cr_tgt_dot if cr_tgt_dot is not None else "  CR not present in reg dump")
+print("  CR0 top nibble   : 0x%x (%s)" % (cr0_nibble, "EQ" if cr0_nibble == 2 else ("GT" if cr0_nibble == 4 else "other")) if cr0_nibble is not None else "  CR0: N/A")
+print("")
+controls = ["pvr", "live", "disasm", "nowrap"]
+controls_ok = all(r["matches"] for r in table_rows if r["row"] in controls)
+target_rows = ["target.", "target", "rlwnm1", "rlwnm33"]
+high_half_lost = all(not r["matches"] for r in table_rows if r["row"] in target_rows)
+
+print("Controls (%s): %s" % (", ".join(controls), "OK" if controls_ok else "FAIL"))
+print("High-half defect on target rows (%s): %s" %
+      (", ".join(target_rows), "WITNESSED (lost to 0x0)" if high_half_lost else "NOT WITNESSED"))
+
+if not controls_ok:
+    verdict = "APPARATUS FAILED"
+elif high_half_lost:
+    verdict = "WITNESSED"
+else:
+    verdict = "NOT WITNESSED"
+
+print("VERDICT: %s" % verdict)
+
+# Clean up temp
+try:
+    os.remove(DUMMY)
+    os.rmdir(_TMPDIR)
+except OSError:
+    pass
+
+print("PPCRLWHIGH_WITNESS_DONE")

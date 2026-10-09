@@ -1,3 +1,43 @@
+## 2026-10-09 -- records: the PowerPC mask oracle repair committed ALONE, and the rung-3 rlwinm/rlwnm witness on committed HEAD
+
+**Owner ruling 2026-10-09, on Fable 5.1's 7n-3 (GPT-6 Astra confirmed with changes,
+`regress/artifacts/fablequeue7n_20261009/`):** `regress/ppc_rldicl_probe.py`'s oracle repair -- `mask_range()`, the
+corrected `want_rldimi()` and the 64-bit `mask32()`, uncommitted since 2026-09-11 / 2026-09-17 -- is committed in
+its own records commit, BEFORE any `rlwinm`/`rlwnm` handler edit, so commit order shows the test came first.
+* **Checked against `regress/artifacts/ppcwitnessmaskoracle/ENUMERATION_20260911.txt` by re-deriving it** from both
+  helper versions, lifted by `ast` from HEAD's file and the working file (`enumcheck_20261009.out`, script
+  `enumcheck_20261009.py.txt`): `mask32` 528 of 528 non-wrapping pairs identical and 496 of 496 wrapping pairs
+  differing only by an all-ones high half with the low word unchanged; the old `want_rldimi` mask all-zero on 2016 of
+  4096 (MB, SH) pairs, the new one on none, the 2080 non-wrapping pairs identical; `want_rldicl` / `want_rldicr` --
+  the only helpers the file's rows call -- unchanged.  **So no row in that file consumes the corrected helpers**, the
+  oracle-correction bound (one measured red per oracle a ROW consumes) owes nothing there, and the probe now says so
+  in a CONTRACT comment.  Its `mask32` is now the same Book I form as `regress/ppc_rlwimi_probe.py`'s: one definition
+  per semantics.
+* **The probe's truncation note gave false recovery advice** -- recover the lost 2026-09-11 clause "with `git show`
+  on the 2026-09-11 revision"; that revision was never committed.  The clause is quoted back from the brief that
+  inlined the 2026-09-17 diff (`_scratchpad/grokpush_20260917/BRIEF_ppcmask.md`, lines 131-135).
+* `regress/artifacts/ppcwitnessmaskoracle/` -- the enumeration, the 2026-09-11 codex oracle check and the
+  re-derivation -- is committed with it; it was untracked until now, so the enumeration's own order claim rested on
+  the mtime of a file git had never seen.
+
+**The rung-3 witness (owner 2026-10-09: WITNESS ONLY, the fix round stays unscheduled):**
+`regress/artifacts/ppcrlwhighhalf/witness_committed_20261009/`.  agy, as measuring seat, ran a probe copied from
+`regress/ppc_rlwimi_probe.py`'s cold-debugger harness (kept as `ppc_rlwhigh_witness.py.txt`) against a binary built
+from `git archive 200671b6` (`cpu_ppc_instr.c` md5 87a766e0, HEAD's), on unmodified `-E bareppc -M 64` (PPC970):
+`rlwinm. r4,r3,1,31,0` with r3 = 1 gives **r4 = 0x0 and CR0 = 2 (EQ)** where Book I gives **0x0000000200000000 and
+CR0 = 4 (GT)**; `rlwinm` (Rc = 0) and `rlwnm` with RB = 1 and RB = 33 give 0x0 as well.  Controls green: PVR
+0x00390000 through `mfspr`, a following `li` (liveness), the tree's own disassembly of 0x54640fc1, and the
+non-wrapping `rlwinm r4,r3,1,0,31` = 0x2.  The probe was read before this record: r4 is seeded 0x5A5A5A5A5A5A5A5A,
+so a 0x0 is a real write.  One artifact, three obligations: the order discriminator for the re-pinned oracle, the
+row's witness, and reproduce-before-edit for the fix round.
+
+**Records, L4 (7n-3):** `ppcrlwhighhalf`'s title and its OUTSTANDING_BUGS heading still read DISPUTE / unresolved /
+MED -- stale since the 2026-09-10 Book I adjudication; `ppcwitnessmaskoracle`'s note said twice that `want_rldimi`'s
+implementation "is still wrong" -- false since #527 (2026-09-12) -- and its 47,616 figure is now labelled DERIVED.
+The 2026-09-26 codex review `regress/artifacts/codexfarm_20260926/codex_ppcrlwhighhalf.txt`, which no record cited
+until Fable's 7n-3 answer found it (the unread-review class, fourth instance), is recorded on the row.  No `src/`
+change.
+
 # Records, 2026-10-09: the Fable queue file's batches 7n and 8n, committed by owner ruling
 
 `tools/pipeline/fable_queue.md` had carried 187 uncommitted lines since 2026-09-11 and 2026-09-18: batch 7n (five RULE
