@@ -1,3 +1,41 @@
+# Records, 2026-10-09: the Fable queue file's batches 7n and 8n, committed by owner ruling
+
+`tools/pipeline/fable_queue.md` had carried 187 uncommitted lines since 2026-09-11 and 2026-09-18: batch 7n (five RULE
+questions for the flagship seat) and batch 8n (queue entries for closed rows owing a regress review, and two held
+review stages).  Without them the COMMITTED tree failed precommit section I -- ten closed rows owing a Fable regress
+review with no queue entry -- and the gates passed only because they read the working copy.  Owner ruling 2026-10-09:
+commit them in their own commit, checked against the ledger first.
+
+**Checked, row by row, against the ledger** (each heading's row and its live holds, by `stage_tokens.live_holds`):
+ten closed rows still owe a regress review (`alphapfnoffset`, `alphaswpctxptbr`, `diskimagesign`, `heldmasked`,
+`lcashiftub`, `n6`, `pcc2c040mienannounce`, `sgirergbroundtrip`, `stagetokens`, `wdcaltctrlbit`); three holds are live
+(`alphavmkill` research, `fbsmlane` regress, `pcc2c040assertrow` review); two were discharged today and are marked
+(`asiceventaddr`, `wdcrearmzero`, answered by late Fable 5.1 + Opus 5.5 seats in `200671b6`).  **Two more,
+`landiskaux` and `lcaisalane`, look discharged to section I and are not:** each carries only Opus-seat `regress`
+entries -- `landiskaux`'s says in its own words it is NOT the owed flagship review -- so the flagship regress review
+is still owed, and section I cannot see it because it treats ANY regress-phase entry as the review.  That checker gap
+is filed with the next records.  The five 7n rule questions are being answered by Fable 5.1 now.  The generated
+held-stages block is regenerated against the ledger (33 held stages).  No src/ change.
+
+**The five 7n RULE questions are answered** (Fable 5.1, 2026-10-09; `regress/artifacts/fablequeue7n_20261009/`) and
+marked in the queue.  7n-1, 7n-2, 7n-3 and 7n-5 were confirmed by GPT-6 Astra with eight factual corrections
+(`codex_astra_confirm.txt` beside them): no closed round reopens; a pre-fix leg is clause (a) mislabelled, not a
+breach; shortread's clause (c) was MEASURED red (`regress/artifacts/shortread/nullmedium_20261009/RECEIPT.txt`, its
+counts re-derived from the preserved logs because the run's stdout was not kept); the oracle-correction order
+discriminator is available while a defect is open; a derived input is graded by what the body tests on it.  By owner
+ruling the rule text went into the live `CLAUDE.md` and `BRIEF_TEMPLATE.md` (§C6) -- those files are NOT in this
+commit (they carry older uncommitted edits; committing them is a separate owner decision).  **7n-4 stays OPEN**: the
+FAULT ruling for `dev_vme.c`'s `default:` arm reaches population 1 only, and population 2 goes back to the owner,
+because the in-tree OpenBSD 2.2 guest accesses six of those registers unconditionally (Astra's check is running).
+
+**`tools/pipeline/check_commit_attribution.py`: `regress/pass2_ledger.tsv` is a record** (owner ruling).  Records
+commit `200671b6` carried #562's pass-2 receipt and filed six rows, one named in its subject; the receipt file alone
+made `records_only()` score it as authorship, so every later precheck hard-failed section L with "work shipped and the
+row does not name it" on `armvecrecurse`, whose only commit FILED it.  The exemption is that one file, by exact name.
+Controlled both ways (`regress/artifacts/attribution_pass2ledger_20261009/CONTROLS.out`, `CONTROLS_PASS`): HEAD's
+checker reproduces the HARD on `200671b6` and the fixed one grades it SOFT; a real commit touching the receipt file AND
+code (`db8b1a33`) is still authorship, as are `regress/pass2_ledger.tsv.bak` and `regress/other_ledger.tsv`.
+
 # Records, 2026-10-09: #562's pass-2 receipt, Fable 5.1's first queue batch, the MMU vehicle's pass 1 -- six rows filed
 
 **#562's receipt.**  `regress/pass2_ledger.tsv` gains #562's (`4f908ad5`) pass-2 receipt and `armmsrmodekill`'s `commits`

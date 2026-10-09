@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5; design:fable5,opus5) · `armbfiwidth` (design:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5; review:fable5,opus5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `fbsmlane` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2c040assertrow` (review:deepseek,glm,kimi,minimax) · `pcc2widthkills` (assess:opus5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirekills` (assess:kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 25 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 33 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -99,6 +99,47 @@ is the same defect this project has now recorded for the `_scratchpad/*.pdf` inv
 seat-status tables.  Name no rows here that the ledger can name for you.*
 
 <!-- END GENERATED: codex-wall -->
+
+### `alphavmkill` (#541) — research stage — **QUEUED 2026-09-19**, a first-hand ruling owed
+
+The pass-1 "fable5" answer (`panel_20260918_223507/fable5_p1.md`) was WRITTEN BY claude-opus-4-8 after a Fable
+REFUSAL at the synthesis step (measured from the subagent transcript; `agentrefusal`).  The ledger entry is corrected
+in place and the stage is HELD.  **Question:** is member 4 -- VA 0xfffffffd80000000 takes the base == 0 arm's identity
+result like the rest of its window, the announcement latched once per CPU -- the right disposition against the full
+option set?  **How:** at #541's pass-3 boundary, by RESUMING a Fable agent with a short verdict-first follow-up (the
+measured remedy for a refusal fallback), then checking its turns with `_scratchpad/agent_models.py` before crediting.
+
+### `pcc2c040assertrow` (#512, `9fa07fe`) — regress stage — **QUEUED 2026-09-11**
+
+Surfaced by `check_fable_queue.py` while it was refusing an unrelated commit: *"closed at 9fa07fe
+with NO regress entry and not queued"*.  **Holding a stage and queueing it are ONE action**, and
+this row had done neither — it simply closed.
+
+The row itself is the interesting part, and it is why the regress review is worth Fable's time
+rather than being a formality.  `#512`'s detector had a **MEASURED clause-(d) escape**: a fix that
+announces correctly and forgets `assert = 0` scored **7/7**.  The repair needed a **FREE-RUNNING**
+probe, because the ICR INT bit is masked out of every guest-writable arm and its only producer is a
+host-timer callback that `step` STOPS — `debugger.c:800` calls `timer_stop()` and the step command
+returns before `timer_start()`, so a stepped probe reads "not delivered" on a correct build and on
+a mutant alike.  That is the vacuous shape in its purest form, and it is a trap any future
+interrupt-delivery detector in this tree can fall into.
+
+It closed with `detector:regress/pcc2_c040_probe.py` naming four L2 rows (`irq pending`,
+`irq live`, `c040 noassert`, `c040 noassert2`), with all three previously-sweeping clause-(d)
+mutants killed.
+
+**THE REGRESS QUESTION, stated so the seat is not guessing what it is asked** (a stage held FOR a
+seat must carry the question it is held for — this queue's own rule, which scored zero compliance
+once already):
+
+> The four rows were added in response to a measured escape.  **Does the free-running oracle they
+> depend on carry a wall-clock budget, and if so is it load-sensitive?**  This project has a
+> recorded case of a free-running interrupt row being the SOLE discriminator for a mutant while
+> also being the most timing-fragile row in its suite (`xscaleinten`'s `ANCHOR_EXC`, 2026-09-11).
+> If `pcc2_c040_probe.py` has the same shape, the round shipped a detector whose only guard against
+> its own measured escape can flake in a gate.
+
+---
 
 ### `lethalonly` (#462, `7c9dd9e` + `15c4b0a`) — regress stage — **QUEUED 2026-08-24**
 
@@ -2422,3 +2463,147 @@ debug-level announce worth its line, or is silence right?**
 
 *Stage state: design ran SIX seats. opus5 and fable5 preserved for this adjudication; agy is the
 measurement reserve. Held and queued as one action.*
+
+
+## 7n. THE NULL-MEDIUM SWEEP AND THE ORACLE-ORDER PROBLEM — four RULE questions from 2026-09-11
+
+*Staged ahead of the seat's window rather than during it.  All four change how future rounds run, which is the carrier's own test for what may not wait.*
+
+### ~~7n-1. (HIGH) IS THE PRE-FIX-AS-NULL-MEDIUM SUBSTITUTION A HOUSE CONVENTION OR A FLOOR BREACH?~~ — **ANSWERED 2026-10-09** by Fable 5.1, GPT-6 Astra CONFIRM WITH CHANGES (8): NEITHER -- a pre-fix leg is clause (a) written in clause (c)'s column, an L4 label to correct in place; clause (c) is unmeasured there, not breached; a breach is a genuine null medium coming back GREEN; ppcrldimimask and ppcrlwimiwidth RELEASED; two unwired probes (ppc_rldicl, alpha_tbi) owe a measured leg.  Rule text written into CLAUDE.md and BRIEF_TEMPLATE.md §C6 by owner ruling.  `regress/artifacts/fablequeue7n_20261009/`
+
+An owner-approved sweep of ~165 kill-table units found **one** leg that could never fail (`ppcrlwimiwidth`'s `NULL_MEDIUM`, which compiled byte-identical code to BASE; repaired, honest leg now 12/28).  But it also found **~16 tables that discharge clause (c) with a whole-file PRE-FIX medium** -- `ppcrldimimask`, `ppcrldiclzero`, `mk48nvramkill`, `alphatbinegsel`, `lcabadval`, `sgirandomcolour`.  Every one scored well below BASE, so none is vacuous.
+
+**The difficulty: pre-fix is clause (a)'s medium.**  Using it for (c) collapses (c) into (a) and cannot demonstrate identity rows independently.  `CHANGELOG.md:222` and `:357` record it as an established convention, and two rounds disclose the substitution honestly.
+
+> **THE MEASURED DATA THAT MAKE THIS DECIDABLE — TWO ROUNDS, INDEPENDENTLY, SAME DIRECTION:**
+>
+>     ppcrlwimiwidth   identity 12/28 (16 red)   pre-fix leg 14/28 (14 red)
+>     ppcrldimimask    identity 13/27 (14 red)   pre-fix leg 17/27 (10 red)
+>
+> **In both, the identity medium reddens MORE rows than the pre-fix medium the convention substitutes for it.**  The identity form is strictly sharper, and in both cases it was available and cost one extra leg (~8 minutes).
+
+**QUESTION: does "a strictly sharper form was available and cheap" convert an established convention into a breach?**  If YES, ~16 tables owe a re-run and `ppcrldimimask` is first (agy is building its leg now).  If NO, the convention stands and clause (c) needs re-wording to say pre-fix is admissible, because as written it is not.  **A third answer -- that (c) means something different for an offline differential than for a built binary -- is open and may be the true one.**
+
+### ~~7n-2. (HIGH) A SHIPPED DETECTOR THAT *CLAIMS* CLAUSE (c) AND NEVER MEASURED IT — L4 OR L2?~~ — **ANSWERED 2026-10-09** by Fable 5.1, Astra-confirmed: NEITHER, ZERO rounds reopen -- luna's and sgirekills' labels are true by-construction claims; shortread's 'pinned at 90' is L4 (no preserved 90-row output; the differential pins 98) and its clause (c) was MEASURED red (`regress/artifacts/shortread/nullmedium_20261009/RECEIPT.txt`).  Rule: L4 exactly when a record asserts a measurement or number not made.  `regress/artifacts/fablequeue7n_20261009/`
+
+Three detectors, all **shipped**, name clause (c) and discharge it by assertion:
+* `regress/luna_absentcpu_probe.py:23` — `identity (floor c): 0x12345678 back`.  **The project's own CHANGELOG already ruled that `live` "is a liveness control and CANNOT DO MORE".**
+* `sgirekills/PASS2_brief.md:505` — `(c) identity rows -- live, live64, devsig stat`, discharged by naming three rows.
+* `shortread/round_20260827/brief_p2.md:86` — `(c) null medium | [IDENTITY] row count pinned at 90`, **while the probe's own output reads 98.**
+
+~113 other tables never attempted (c) at all.  **Silence and a false claim are different things**, and only these three assert coverage a measurement would refute.
+
+**QUESTION: is a claimed-but-unmeasured floor clause an L4 (wrong record, correct the prose in place) or an L2 (floor breach, replace the detector in-round)?**  The stopping rule governs findings against SHIPPED material, and L2 says *replace in-round however late it is found* -- so the answer decides whether three closed rounds reopen.  **I incline to L4 for the two that merely mislabel a real row, and L2 for `shortread`, whose pinned number is refuted by its own probe -- but that split is exactly what I want tested rather than adopted.**
+
+### ~~7n-3. (HIGH) CAN AN ORACLE CORRECTION BE DISTINGUISHED FROM A FIT WHEN THE CODE DOES NOT MOVE?~~ — **ANSWERED 2026-10-09** by Fable 5.1, Astra-confirmed: the order discriminator IS available (rlwinm/rlwnm are still defective at HEAD -- measure the re-pinned oracle RED on HEAD before any fix); the divergence + provenance pair is corroboration, never a substitute; the shared-mask-helper rule NOT adopted.  Owed for ppcrlwhighhalf: records L4s, the oracle repair committed first, a rung-3 witness on HEAD, then the fix round.  `regress/artifacts/fablequeue7n_20261009/`
+
+The oracle-correction rule's discriminator is ORDER: re-pin first, measure the committed build RED, then change the code.  **For `ppcrlwhighhalf` that order is unavailable** -- the defect is open and unfixed, so the oracle is the only thing moving.
+
+Worse, the honest limit: **for `want_rlwimi` taken ALONE no measurement can distinguish a correct derivation from a fit**, because the repair is correct and the corrected oracle agrees with it.  Agreement with a correct implementation is what a right oracle and a fitted oracle both look like.
+
+Two substitutes are proposed:
+1. **THE DIVERGENCE TEST.** One shared `mask_range` feeds all four `want_*`.  Correcting it makes `want_rlwimi` agree with the repair AND makes `want_rlwinm` **DISAGREE with shipped code on 47,616 of 131,072 cells** -- a red on a defect filed *before* this correction, in a handler nobody was fitting to.  *A fitted oracle cannot produce a red on a sibling it was never fitted to.*
+2. **PROVENANCE.** `mask_range` was written 2026-09-10 for `want_rldimi`, **whose implementation is still wrong today** -- so the helper predates and outlives the repair it is accused of matching.
+
+**QUESTION (a): is that pair sufficient where the order discriminator is unavailable, or does the round owe something stronger?**  **QUESTION (b): should "KEEP ONE MASK HELPER SHARED BY ALL FOUR `want_*`" be minted as a rule?**  Its warrant is structural rather than stylistic: **the only way to fit one instruction while staying green on its sibling is to give the two DIFFERENT masks -- which Book I gives identically at `:4127` and `:4317` -- so a per-instruction split is the tell, and it is visible in the diff.**
+
+### 7n-4. (MED) THE VME `default:` ARM IS THREE POPULATIONS. DOES THE FAULT RULING REACH ALL THREE? — **ANSWERED 2026-10-09 by Fable 5.1 (GPT-6 Astra confirmation pending); OPEN for the OWNER's re-ruling of population 2**: FAULT binds population 1 only.  Population 2 (26 header-named, unimplemented registers) is CONTRADICTED by the ruling's own warrant -- the in-tree OpenBSD 2.2 guest accesses MASTERCTL / MASTER3 / MASTER4 / MASTER4MOD at attach and IRQSTAT / IRQCLR in its abort handler, unconditionally and unprobed, so FAULT would turn the host kill into a guest panictrap; default pending the re-ruling is DECLINE + latched announce (the #501 shape), BACKED ACCEPT not licensed.  Population 3 (sub-word lanes) is a width question: 'serve the containing word' refuted; filed as its own row, with a population 4 (cased offsets at len != 4, served lane-wrong).  `regress/artifacts/fablequeue7n_20261009/fable5_rule7n_4.md`
+
+The owner ruled **FAULT (`return 0`)** for `dev_vme.c`'s `default:` arm, and a codex seat independently ruled the same way.  But the seat then split the arm in a way neither of us had:
+1. offsets with **no register defined anywhere** — FAULT is honest;
+2. **named registers the header defines and the emulator does not implement** — `VME2_DMACTL`, `VME2_T2CMP`, `VME2_T2COUNT`, `VME2_PRESCALE`.  **FAULT says "nothing is here" about something the board documents as present;**
+3. **sub-word lanes of registers that ARE implemented** — a byte access at `0x51` is inside T1CMP.  **FAULT raises a bus error on a register that exists**, which is arguably a worse wrong answer than the host kill it replaces.
+
+**QUESTION: does the FAULT ruling govern populations 2 and 3, or do they need their own dispositions?**  Population 3 has an obvious alternative (serve the containing word); population 2 is the genuinely open one, and BACKED ACCEPT is available for it under the addition licence.  **The owner ruled on the arm as a whole because I presented it as one thing; this is me saying it was not.**
+
+### ~~7n-5. (HIGH) FLOOR OR DEBT — ARE A DERIVED-COORDINATE ESCAPE AND A VALUE SLICE THE SAME SPECIES?~~ — **ANSWERED 2026-10-09** by Fable 5.1, Astra-confirmed: NO -- 'closable by a finite row set' is the rejected 09-04 finiteness bound; a derived input is graded by what the body tests on IT, so #519's survivors (tile index, TLB contents, value slices) are all clause (e); one debt row of four readbacks; three L4s; EXHAUSTED/SAMPLED adopted.  Rule text written into CLAUDE.md by owner ruling.  `regress/artifacts/fablequeue7n_20261009/`
+
+**Raised by the measuring seat AGAINST ITS OWN ROUND, and explicitly left unsettled: *"this round grades the tile-index escapes as FLOOR while treating value slices as DEBT, and those are arguably the same species.  It needs one ruling, not two."*
+
+`#519`'s class closure shipped 59 -> 77 rows and killed all six 59/59 escapes.  Two kinds of surviving sweep remain, and the round treats them differently:
+
+* **GRADED FLOOR** — the tile-index family (`M30`/`M31`/`M32`/`M33`), all now dead.  Warrant: `tile_nr` and friends are **pure functions of `(x, y, bufdepth, tlb_mode)`**, so the free input set is finite, read off the function, and closable in one diff.  It was.
+* **GRADED DEBT** — `mode & 1`, `x & 1`, `y & 2`, and the `M28` nibble family.  Warrant: these are **within-class value slices, not closable by any finite row set.**
+
+**AND A THIRD CASE SITS BETWEEN THEM, FILED AS OWED RATHER THAN FIXED:** the TLB array's *contents*.  The seat named it as an input to `tileptr`, dropped it from its completeness conclusion, and an audit caught that.  **`tileptr` is the store's ADDRESS OPERAND**, so by the same data-flow test that makes `tlb_mode` a floor axis, the array value looks floor-shaped — and `if (ok || (tileptr & 0xfff00000))` is predicted **77/77**.
+
+**QUESTION: is "closable by a finite row set" the right discriminator between floor and debt?**  If YES, the TLB-array-contents gap is floor (L2, owes a repair and its own pass) and the value slices are correctly debt.  If NO, the round has graded one species two ways and the contract's new **EXHAUSTED vs SAMPLED** split is the thing to formalise instead.
+
+*Note the seat rewrote its contract to separate EXHAUSTED axes (`tlb_mode`, `bufdepth`, `color_mode`) from SAMPLED ones rather than calling all of them closed — which is an honest disclosure, but it is a NEW vocabulary entering a contract without adjudication, and that is the half I most want ruled on.*
+
+
+## BATCH 8n -- QUEUED 2026-09-18, ALL SURFACED BY READING SEAT ANSWERS NOBODY HAD OPENED
+
+*Provenance: a sweep read 23 unread seat answers off disk and recorded them.  That took both stage
+gates from GREEN to RED -- 19 violations where HEAD had zero -- because recording a seat's remark
+about a row promotes that row's stage from ABSENT to a "short panel".  **The gates fired because the
+record got more honest.**  Nine of the nineteen were annotated as never-convened stages; these are
+the ones that are genuinely owed.*
+
+### `lcaisalane`  (HIGH -- and see the new row `lcalenzerodrop`)
+
+FOUR of five scriptable seats on `#530`'s CLOSING PASS said DO NOT CLOSE; the round closed on the
+fifth.  Their shared argument is a contradiction: if the comment's premise *`len 0 has no producer`*
+is TRUE then `if (len == 0) return 0;` is DEAD CODE, so a DROP of it is observationally identical to
+base, scores **352/352**, and contradicts the round's own claim that no leg scored 352/352.
+Codex adds an omitted **WIDTH** class (`writeflag == MEM_WRITE && len <= 8`, also predicted 352/352)
+and flags an *expected -- not measured* 352/352.  **Build both mutants and report with the log named.**
+
+**PASS 2 ON 8bd97e4 (closing pass 7), 2026-09-18 -- the §F2 adjudication pass runs next; fable5 rules LAST.**  PASS 2 ON 8bd97e4 (closing pass 7), D1 -- the rule question: the width row misses seven one-edit variants -- a cut-off at 16 (`&& len <= 16`, `len > 16` refused), wide writes serviced only at lane 3, a refusal below port 0x200, a refusal at k = 16 (two shapes), a second-chunk refusal -- each MEASURED undetected by the composite and each killed by the same GETENV instrument at another reachable cell (regress/artifacts/lcalenzerodrop/opus_p2_20260918/RESULTS.txt).  Are they L2 floor breaches, making pass 6 + pass 7 two consecutive width-class breaches that owe the CLASS CLOSURE in one diff, or clause-(e) debt that owes only an honest contract now that a shipped instrument can reach every cell?  Seats: L2 -- codex (a,b,c), glm (a,b,c,g), kimi (c,e), deepseek and minimax (all five); debt -- agy, grok (but the contract's 'any' must narrow), opus5 (pass 6's 'uncatchable' read as a condition on discharge).  The research question above now has measured answers on both halves: M1_lenzero 352/352 (equivalent by no producer), and the width class was pass 6's L2 -- the row shipped in 8bd97e4.
+
+### ~~`wdcrearmzero`  (MED)~~ — **DISCHARGED 2026-10-09**: Fable 5.1 and Opus 5.5 answered the held review stage as late seats (both measured: the held question is CLOSED at HEAD, and an L2 floor breach of #473's shipped detector was found and filed as `wdc473floor`); recorded in `200671b6`.
+
+The 2026-08-27 pass-2 panel ran eight scriptable transports only; opus5 and fable5 were never fired,
+and the kimi seat was LOST on both transports (CLI 403 weekly wall, substitute HTTP 503).  Three cloud
+seats recovered 2026-09-18 all RATIFY.  Minimax's premise audit is the open item: the 513-block figure
+*"assumes `WDC_MAX_SECTORS=512` -- the author states this but the value is not in the brief"*.
+
+### 8n-3. SIX CLOSED ROWS OWE A `regress` REVIEW  (regress is FABLE-ONLY by standing directive)
+
+Each closed with commits and carries no `regress` entry.  They are named here individually because a
+prose mention does not count as queued -- an id counts only if it HEADS an entry.
+
+### `wdcaltctrlbit`
+### `diskimagesign`
+### `sgirergbroundtrip`
+### `lcashiftub`
+### `alphapfnoffset`
+### `alphaswpctxptbr`
+
+### `landiskaux`
+
+`regress` review owed (flagship-only): #533 shipped in e16a8b7 -- fix `+0x2c`, detector regress/landisk_aux_probe.py (gate_sh_rounding.sh), rung-4 boot witness regress/artifacts/landiskaux/boot_20260918/.
+
+### ~~`asiceventaddr`~~ — **DISCHARGED 2026-10-09**: Fable 5.1, Opus 5.5 and a deepseek re-fire answered the held review stage as late seats, and opus5's unrecorded 2026-08-26 pass-2 answer is now recorded; in `200671b6`.  The row stays OPEN for its closure round (a compile-only detector for the guard, and the records it found wrong).
+REVIEW stage held 2026-09-18 (#534 F1): panel_20260826_222557 was PASS 2 on this row's own commit 9ca9cca and ran 6/9.
+fable5 and opus5 were never fired; deepseek's answer there is a thinking burn (seat failure).  Question: is 9ca9cca's
+comment-only disposition for SYSASIC_EVENT_RANGE_OK right, given codex's finding that the guard protects the ADDR macro
+and not the BITMASK macro, and kimi/minimax's dissent that a name-insensitive build-time check is possible?
+
+### `pcc2c040assertrow`
+REVIEW stage reopened and held by OWNER DECISION 2026-09-18 (#534 R3): re-fire glm, deepseek, minimax, kimi(sub) on a
+brief that inlines ASSERTROW_brief.md's rows and mutants (panel_20260917_100431 gave them dev_pcc2.c's stale comment).
+Question: is the assert=0 -> return mutant (skips INTERRUPT_DEASSERT) killed by any shipped row; if not, what row is owed?
+NB check_stage_panels reports this stage 9/9 complete because a full count masks a live HELD marker -- filed `heldmasked`.
+
+### `n6`
+ASSESS stage held 2026-09-18 (#534 F2 pass): rule on the 2026-08-30 fable5 entry -- (a) a seat answer re-opening the stage,
+(b) a single-seat re-read, or (c) an adjudication record.  My own RE_READ tag was reverted as self-dealing (5 of 7 seats).
+
+### `stagetokens`
+`regress` review owed (flagship-only): #534 shipped in 09ded75 -- stage_tokens.py + four readers; controls
+regress/artifacts/stagetokens/controls_534/ (49/49, 33 mutants).  fable5 already ruled last on the diff; this is the regress pass.
+
+### `heldmasked`
+`regress` review owed (flagship-only): fixed inside #534 (09ded75) -- live holds beat a full count; rows t_fullhold,
+t_fullclosed, t_discharged, t_samedayhold.
+
+### `pcc2c040mienannounce`
+`regress` review owed (flagship-only): #535 shipped in bb8efbf -- two rows close the {presence,count} x {MIEN} product for
+the C040 announce; pcc2_c040_probe.py reclassified DETECTOR and gated in gate_arm.sh (18 rows).
+
+### `fbsmlane`
+`regress` review owed (flagship-only): #537 shipped in cdbe7d7 -- the fbpending_bound self-mutant lane wired in
+gate_offline.sh, pinned on R3's case-qualified row (not the verdict-equivalent R4); measured P0-P4 in
+regress/artifacts/fbsmlane/r537_20260918/f2_pin/out/, gate 2 345/346.  fable5 already ruled LAST on the diff; this is
+the regress pass (is the R3 pin the right pin, or is further lane coverage owed?).

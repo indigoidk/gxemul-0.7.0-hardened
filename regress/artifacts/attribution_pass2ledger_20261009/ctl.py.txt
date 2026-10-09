@@ -1,0 +1,34 @@
+import importlib.util, sys, io, contextlib
+SEC = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+def load(p, name):
+    s = importlib.util.spec_from_file_location(name, p); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); m.SEC = SEC; return m
+H = load(r"C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\attrctl\attr_HEAD.py", "attr_head"); F = load(r"C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\attrctl\attr_FIX.py", "attr_fix")
+ok = True
+def chk(label, got, want):
+    global ok; ok &= (got == want); print("   %-62s -> %-5s want %-5s %s" % (label, got, want, "ok" if got == want else "*** WRONG ***"))
+print("1. 200671b6 (filed armvecrecurse; carried #562's receipt in regress/pass2_ledger.tsv):")
+chk("HEAD records_only (the defect)", H.records_only("200671b6"), False)
+chk("FIX  records_only", F.records_only("200671b6"), True)
+real = "db8b1a33"
+print("2. real history:")
+if real:
+    chk("FIX  records_only(%s) -- touches the receipt file AND code" % real, F.records_only(real), False)
+else:
+    print("   no commit in the last 400 that touches the receipt file also touches code")
+print("3. synthetic path sets (git stubbed), FIX version:")
+real_git = F.git
+for c, w in [(("src/devices/dev_wdc.c", "regress/pass2_ledger.tsv"), False), (("regress/gate_arm.sh", "regress/pass2_ledger.tsv"), False),
+             (("regress/pass2_ledger.tsv.bak",), False), (("regress/other_ledger.tsv",), False),
+             (("regress/pass2_ledger.tsv", "CHANGELOG.md", "tools/pipeline/ledger.json"), True)]:
+    F.git = lambda *a, c=c: "\n".join(c) + "\n"
+    chk(" + ".join(c), F.records_only("x"), w)
+F.git = real_git
+print("4. end to end:")
+for lab, m in (("HEAD", H), ("FIX", F)):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        try: rc = m.main([])
+        except SystemExit as e: rc = e.code
+    lines = [l for l in buf.getvalue().splitlines() if l.startswith(("  HARD", "ATTRIBUTION_")) or "armvecrecurse" in l]
+    print("   %s rc=%s: %s" % (lab, rc, " | ".join(x.strip() for x in lines[:4])))
+print("CONTROLS_%s" % ("PASS" if ok else "FAIL"))

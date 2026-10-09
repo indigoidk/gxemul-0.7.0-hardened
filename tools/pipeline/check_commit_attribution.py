@@ -256,10 +256,21 @@ def records_only(h):
     #  The boundary is unchanged and is what keeps this from becoming a hole: a SHIPPED
     #  detector lives in regress/ ITSELF (regress/sgi_re_unmapped_probe.py), not under
     #  artifacts/, and is still authorship.  Only the evidence directory is exempt.
+    #
+    #  *** AND regress/pass2_ledger.tsv IS A RECORD -- THE THIRD WIDENING, 2026-10-09, OWNER
+    #  RULING. ***  It is the PASS-2 RECEIPT LEDGER (precommit section F reads it): one line per
+    #  reviewed commit, written ABOUT a round after it lands.  Records commit 200671b6 carried
+    #  #562's receipt AND filed six new rows, one of them named in its subject (`armvecrecurse`);
+    #  the receipt file alone made it "authorship", so every later precheck hard-failed with
+    #  "work shipped and the row does not name it" on a row whose only commit had FILED it.
+    #  The exemption is the one FILE, named exactly -- not regress/*.tsv -- so a gate pin or a
+    #  manifest elsewhere in regress/ is still authorship.  Controlled both ways on the day
+    #  (regress/artifacts/attribution_pass2ledger_20261009/CONTROLS.out).
     return bool(paths) and all(
         p.lower().endswith((".md", ".txt"))
         or p.startswith("tools/pipeline/")
         or p.startswith("regress/artifacts/")
+        or p == "regress/pass2_ledger.tsv"
         for p in paths)
 
 
