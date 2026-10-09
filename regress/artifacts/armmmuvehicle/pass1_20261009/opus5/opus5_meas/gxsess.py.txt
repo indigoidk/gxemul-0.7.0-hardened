@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""opus5 seat, armmmuvehicle pass 1 -- shared pty session driver (modelled on
+regress/arm_msrmode_probe.py's session(): -V -A -E testarm -M 64, a 16-byte zero stub at 0x8000,
+one command per 0.3 s, EOF => dead).  Returns the transcript, liveness and the wait status."""
+import os
+import pty
+import select
+import signal
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+STUB = os.path.join(HERE, "stub16.bin")
+if not os.path.exists(STUB):
+    with open(STUB, "wb") as f:
+        f.write(b"\0" * 16)
+
+
+def session(binpath, cmds, settle=1.6, spin=1.6, per_cmd=0.3, extra_args=(), slow_after=None,
+            fast=None):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(binpath, [binpath, "-V", "-A", "-E", "testarm", "-M", "64"]
+                 + list(extra_args) + ["0x%x:%s" % (0x8000, STUB)])
+        os._exit(127)
+    buf = ""
+    eof = False
+
+    def rd(t):
+        nonlocal buf, eof
+        end = time.time() + t
+        while time.time() < end:
+            try:
+                r, _, _ = select.select([fd], [], [], 0.1)
+            except OSError:
+                eof = True
+                return
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                eof = True
+                return
+            if not d:
+                eof = True
+                return
+            buf += d.decode("utf-8", "replace")
+
+    rd(settle)
+    for c in cmds:
+        if eof:
+            break
+        try:
+            os.write(fd, (c + "\n").encode())
+        except OSError:
+            eof = True
+            break
+        t = per_cmd
+        if c.startswith("step ") and slow_after is not None:
+            t = slow_after
+        if fast is not None and (c.startswith("put ") or ("=" in c and " " not in c)):
+            t = fast
+        rd(t)
+    rd(spin)
+    alive = True
+    status = "running"
+    deadline = time.time() + (12.0 if eof else 3.0)
+    while time.time() < deadline:
+        try:
+            wpid, st = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            alive = False
+            status = "reaped?"
+            break
+        if wpid == pid:
+            alive = False
+            if os.WIFEXITED(st):
+                status = "exit(%d)" % os.WEXITSTATUS(st)
+            elif os.WIFSIGNALED(st):
+                status = "signal(%d)" % os.WTERMSIG(st)
+            break
+        time.sleep(0.05)
+    if alive:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            _w, st = os.waitpid(pid, 0)
+            if os.WIFEXITED(st):
+                alive = False
+                status = "exit(%d) (late)" % os.WEXITSTATUS(st)
+            elif os.WIFSIGNALED(st) and os.WTERMSIG(st) != signal.SIGKILL:
+                alive = False
+                status = "signal(%d) (late)" % os.WTERMSIG(st)
+            else:
+                status = "alive (SIGKILLed by driver)"
+        except ChildProcessError:
+            pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return buf.replace("\r", ""), alive, status
+
+
+def dumped(t, addr):
+    """Word at addr from the LAST aligned dump line in t (little-endian guest)."""
+    label = "0x%08x" % (addr & ~0xF)
+    idx = (addr & 0xF) // 4
+    val = None
+    for line in t.splitlines():
+        if line.startswith(label):
+            parts = line[12:48].split()
+            if len(parts) == 4 and len(parts[idx]) == 8:
+                val = int.from_bytes(bytes.fromhex(parts[idx]), "little")
+    return val
+
+
+def dumpcmd(addr, end=None):
+    base = addr & ~0xF
+    top = ((end if end is not None else addr) + 16) & ~0xF
+    if top <= base:
+        top = base + 16
+    return "dump 0x%x 0x%x" % (base, top)

@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+# fable5 late review of #473 -- SCRATCH ONLY, never shipped from here.
+# Adds two rows that pin each clamp's BOUND from one byte PAST it, and bumps
+# the identity count by the three row increments they add.  Every edit must
+# match exactly once.
+import io, re, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = io.open(src, encoding="utf-8", newline="").read()
+
+ROWS = r'''
+/*  fable5 (late review of #473, SCRATCH): THE BOUND IS PINNED FROM ONE BYTE PAST IT.
+    Every shipped re-arm row sits at a remainder of 4998, 7232 or 68930, and every
+    arm row at 10..512 or 263168 -- so a clamp bound relaxed anywhere between the
+    near rows and the far row escapes them all while the register read path clamps
+    the byte count to 32768 and hides the over-push from a byte-count oracle.
+    32769 is the smallest remainder each clamp must act on.  */
+static int fb_asserts = 0;
+static void fb_sink(struct interrupt *a) { (void)a; fb_asserts++; }
+
+static void row_fb_rearm_justpast(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[4];
+	unsigned char *payload;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = fb_sink;
+	if (d.inbuf == NULL) { printf("  SETUP fb inbuf failed\n"); return; }
+	payload = (unsigned char *) malloc(32768 + 32769);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP fb payload failed\n"); return; }
+	memset(payload, 0xc3, 32768 + 32769);
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 32768 + 32769;	/*  65537: remainder 32769 after chunk 1  */
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 32766;	/*  the transfer's FIRST re-arm  */
+	d.atapi_len = 2;
+	wdc_addtoinbuf(&d, 0x5a);
+	wdc_addtoinbuf(&d, 0x5a);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (d.atapi_len != 32768) {
+		printf("  FAIL %-38s atapi_len = %i, want 32768\n",
+		    "fb: re-arm bound, one past it", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "fb: re-arm bound, one past it", d.atapi_len);
+	}
+	rows ++;
+	if (occ != 32768) {
+		printf("  FAIL %-38s occupancy = %i, want 32768\n",
+		    "fb: re-arm pushes one chunk at 32769", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "fb: re-arm pushes one chunk at 32769", occ);
+	}
+	free(payload);
+	free(d.inbuf);
+}
+
+static void row_fb_arm_justpast(void)
+{
+	struct wdc_data d;
+	unsigned char buf[4];
+	int i, occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = fb_sink;
+	if (d.inbuf == NULL) { printf("  SETUP fb arm inbuf failed\n"); return; }
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+	for (i = 0; i < 10; i++)
+		wdc_addtoinbuf(&d, 0x00);
+
+	stub_datain_len = 32769;	/*  one byte past the arm's clamp  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	stub_datain_len = 0;
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 32768) {
+		printf("  FAIL %-38s occupancy = %i, want 32768\n",
+		    "fb: arm bound, one past it", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "fb: arm bound, one past it", occ);
+	}
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+'''
+
+def one(pat, rep, s, flags=0):
+    n = len(re.findall(pat, s, flags))
+    if n != 1:
+        sys.stderr.write("ADDROWS_FAULT: %r matched %d times\n" % (pat, n)); sys.exit(9)
+    return re.sub(pat, rep, s, count=1, flags=flags)
+
+# plain replace, NOT re.sub: a replacement string has its backslashes processed, which
+# turned the C printf "\n" escapes above into real newlines on the first attempt.
+if s.count("\nint main(void)\n") != 1:
+    sys.stderr.write("ADDROWS_FAULT: main() anchor count != 1\n"); sys.exit(9)
+s = s.replace("\nint main(void)\n", ROWS + "\nint main(void)\n", 1)
+s = one(r"(\trow_q2_short_last_chunk\(\);\n)", r"\1\trow_fb_rearm_justpast();\n\trow_fb_arm_justpast();\n", s)
+s = one(r"if \(rows != 128\) \{", "if (rows != 131) {", s)
+s = one(r'rows = %i, want 128\\n', r'rows = %i, want 131\\n', s)
+io.open(dst, "w", encoding="utf-8", newline="").write(s)
+print("ADDROWS_OK")

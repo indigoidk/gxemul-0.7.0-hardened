@@ -1,3 +1,33 @@
+# Records, 2026-10-09: #562's pass-2 receipt, Fable 5.1's first queue batch, the MMU vehicle's pass 1 -- six rows filed
+
+**#562's receipt.**  `regress/pass2_ledger.tsv` gains #562's (`4f908ad5`) pass-2 receipt and `armmsrmodekill`'s `commits`
+field names it.
+
+**Fable 5.1's first queue batch (the owner lifted the 2026-10-07 hold on 2026-10-09).**  Two stages held since
+2026-09-18 were completed by late REVIEW seats, Fable 5.1 AND Opus 5.5 on each, both measuring in scratch clones:
+
+* `wdcrearmzero` (#473): the held question is CLOSED -- at HEAD the data ring is empty at every re-arm (Opus: 0 of
+  26,315 measured; Fable: every producer and consumer read), at `1f1a02b` it was not and `#495` fixed that.  But both
+  seats measured escapes of the SHIPPED detector `regress/diff_wdc_identify.c`: Fable four one-token moves of the
+  clamps' bounds, Opus four content variants (every check reads only a chunk's first byte), each 0 of 128 red --
+  a clause-(d) floor breach of shipped material, filed as **`wdc473floor`** for a follow-up round (owner: next).
+* `asiceventaddr` (#466): `#468`/`#469`'s compile-time guard is SOUND (measured) and the row's defect cannot be
+  compiled, but no detector pins the guard, and the records carry wrong numbers (352 for 288), a wrong commit
+  attribution (the two-sided bound is `4d7b2f41`), no CHANGELOG blocks for #466/#468/#469, and a hold that named
+  opus5 although it answered #466's pass 2 (the 2026-08-26 answer is now recorded).  deepseek, whose 2026-08-26
+  answer was a thinking burn, was re-fired once and answered.  The fixes are the `asiceventaddr` closure round.
+
+**`armmmuvehicle`'s pass 1** (`regress/artifacts/armmmuvehicle/pass1_20261009/`): agy, grok, glm, deepseek and the
+kimi seat BUILD WITH CHANGES, minimax BUILD AS DESIGNED; GPT-6 Astra REFUSED twice by its content filter (the second
+time on a neutral, read-scoped rewrite) and the owner's Daybreak fallback answered (BUILD WITH CHANGES (9), recorded
+as Daybreak's); grok's dedicated adversarial job; Fable 5.1 (7 changes) and Opus 5.5 (9 changes, an 11-mutant table:
+the proposed rows caught 1) both MEASURED the design.  The design changes go to the vehicle's own round.
+
+**Rows filed:** `wdc473floor` (MEDIUM), **`armvecrecurse` (HIGH: an abort with the vector page unmapped recurses until
+the host process dies, MEASURED)**, `sysasicbitmask31` (LOW), `armusrwarmap` (MEDIUM, MEASURED), `armthumbabtlr`
+(MEDIUM, MEASURED), `cxlaunchdaybreak` (LOW).  `armthumbabortkill`'s note records the vehicle measurements of its
+symptom.  No src/ change.
+
 # `#562` (armmsrmodekill): one privileged guest `MSR` naming a mode this model does not bank -- or an SPSR restore whose SPSR names one, including an SPSR never written -- ended the emulator; the mode field is declined now and announced once per site, defended by a 47-row detector whose review chain ran five repairs
 
 **The defect, witnessed at rung 3.**  `arm_load_register_bank()` and `arm_save_register_bank()` in

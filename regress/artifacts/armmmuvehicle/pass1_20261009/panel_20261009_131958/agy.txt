@@ -1,0 +1,249 @@
+`VERDICT: BUILD WITH CHANGES (4) -- robust vehicle foundation, but case 0 domain zeroing and c2 mask are unkilled mutants; §1.6 put h premise is incorrect; DEST poisoning required.`
+
+---
+
+### Part 1: Verification of Settled Premises (§1) Against `GXEMUL-SEC`
+
+Every premise in §1 was audited directly against the source tree under `GXEMUL-SEC/`:
+
+1. **Claim 1.1: `-E testarm`'s default CPU is `SA1110`**
+   - **Status:** **VERIFIED**
+   - **Evidence:** [`src/machines/machine_test.c:212-215`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L212-L215)
+     ```c
+     MACHINE_DEFAULT_CPU(testarm)
+     {
+         machine->cpu_name = strdup("SA1110");
+     }
+     ```
+   - [`src/include/arm_cpu_types.h:82`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h#L82) defines `SA1110` with flags = `0`.
+
+2. **Claim 1.2: No per-CPU Thumb capability flag; CPSR T bit alone sends execution to `arm_cpu_interpret_thumb_SLOW`**
+   - **Status:** **VERIFIED**
+   - **Evidence:** [`src/cpus/cpu_dyntrans.c:254-263`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L254-L263)
+     ```c
+     #ifdef DYNTRANS_ARM
+         if (cpu->cd.arm.cpsr & ARM_FLAG_T) {
+             arm_cpu_interpret_thumb_SLOW(cpu);
+             return 1;
+         }
+     #endif
+     ```
+
+3. **Claim 1.3: `MACHINE_SETUP(testarm)` sets `SP`, `LR = SP + 32`, and plants three-word halt stub at `LR`**
+   - **Status:** **VERIFIED**
+   - **Evidence:** [`src/machines/machine_test.c:198-203`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c#L198-L203)
+     ```c
+     cpu->cd.arm.r[ARM_SP] = machine->physical_ram_in_mb * 1048576 - 4096;
+     cpu->cd.arm.r[ARM_LR] = cpu->cd.arm.r[ARM_SP] + 32;
+     store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 0, 0xe3a00201);
+     store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 4, 0xe5c00010);
+     store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 8, 0xeafffffe);
+     ```
+
+4. **Claim 1.4: Stub location with `-M 64` is `0x03fff020` in the last 1 MB section (unmapped if only section 0 is mapped)**
+   - **Status:** **VERIFIED (Arithmetic confirmed)**
+   - **Derivation:** $64 \times 1048576 = \text{0x04000000}$. $\text{SP} = \text{0x04000000} - 4096 = \text{0x03fff000}$. $\text{LR} = \text{SP} + 32 = \text{0x03fff020}$. Section index $= \text{0x03fff020} \gg 20 = \text{0x03f}$ (section 63). Any L1 table mapping only section 0 (`0x000xxxxx`) leaves section 63 unmapped.
+
+5. **Claim 1.5: CP15 c1/c2/c3/c8 cannot be set from debugger; c1 writes `control` and swaps `cpu->translate_v2p` without cache invalidation**
+   - **Status:** **VERIFIED**
+   - **Evidence:**
+     - Debugger parser only exposes GPRs `r0..r15` and `cpsr` ([`src/cpus/cpu_arm.c:396-410`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L396-L410), [`src/debugger/debugger_cmds.c:2210`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L2210)).
+     - [`src/cpus/cpu_arm_coproc.c:134-143`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L134-L143):
+       ```c
+       old_control = cpu->cd.arm.control;
+       cpu->cd.arm.control = cpu->cd.arm.r[rd];
+       if ((old_control & ARM_CONTROL_MMU) !=
+           (cpu->cd.arm.control & ARM_CONTROL_MMU)) {
+           debug("[ %s the MMU ]\n", cpu->cd.arm.control &
+               ARM_CONTROL_MMU? "enabling" : "disabling");
+           cpu->translate_v2p =
+               cpu->cd.arm.control & ARM_CONTROL_MMU?
+               arm_translate_v2p_mmu : arm_translate_v2p;
+       }
+       ```
+       No call to `invalidate_translation_caches()` is made.
+
+6. **Claim 1.6: c2 stores `r[rd] & 0xffffc000`; c3 stores `r[rd]`; c5/c6 readable & writable; c8 opcode2=0 is `INVALIDATE_ALL`**
+   - **Status:** **VERIFIED**
+   - **Evidence:**
+     - c2: [`src/cpus/cpu_arm_coproc.c:191-196`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L191-L196) (`cpu->cd.arm.ttb &= 0xffffc000;`).
+     - c3: [`src/cpus/cpu_arm_coproc.c:203`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L203) (`cpu->cd.arm.dacr = cpu->cd.arm.r[rd];`).
+     - c5 (FSR): [`src/cpus/cpu_arm_coproc.c:208-212`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L208-L212) (`fsr = cpu->cd.arm.r[rd] & 0xff;`).
+     - c6 (FAR): [`src/cpus/cpu_arm_coproc.c:215-219`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L215-L219) (`far = cpu->cd.arm.r[rd];`).
+     - c8: [`src/cpus/cpu_arm_coproc.c:237-243`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L237-L243):
+       ```c
+       if (opcode2 == 0)
+           cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+       else
+           cpu->invalidate_translation_caches(cpu, cpu->cd.arm.r[rd], INVALIDATE_VADDR);
+       ```
+
+7. **Claim 1.7: Control-register reset (`arm_cpu_new`) sets `S` or `R`; AP=0 load succeeds in privileged mode**
+   - **Status:** **VERIFIED**
+   - **Evidence:**
+     - [`src/cpus/cpu_arm.c:128-138`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L128-L138):
+       ```c
+       cpu->cd.arm.control = ARM_CONTROL_PROG32 | ARM_CONTROL_DATA32
+           | ARM_CONTROL_CACHE | ARM_CONTROL_ICACHE | ARM_CONTROL_ALIGN;
+       if (cpu->machine->prom_emulation) {
+           cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+           cpu->cd.arm.control |= ARM_CONTROL_S;
+       } else {
+           cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+           cpu->cd.arm.control |= ARM_CONTROL_R;
+       }
+       ```
+     - In [`src/cpus/memory_arm.c:85-101`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L85-L101): With `AP = 0`, if `S=1, R=0` (`s+r=1`), `user ? 0 : 1` returns `1` for privileged accesses (`user == 0`). If `S=0, R=2` (`s+r=2`), it returns `1`. In both cases `access = 1`. In [`src/cpus/memory_arm.c:356`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L356), `if (access > writeflag)`: for load (`writeflag = 0`), `1 > 0` returns 1 (success); for store (`writeflag = 1`), `1 > 1` is false, dropping through to `fs = FAULT_PERM_S` (fault).
+
+8. **Claim 1.8: Exception offsets and return addresses in `cpu_arm.c`**
+   - **Status:** **VERIFIED**
+   - **Evidence:** [`src/cpus/cpu_arm.c:676, 712-717, 780-782`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L676):
+     ```c
+     retaddr = cpu->pc;
+     ...
+     case ARM_EXCEPTION_DATA_ABT: retaddr += 4; break;
+     ...
+     retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+     ...
+     cpu->cd.arm.r[ARM_LR] = retaddr;
+     cpu->pc = cpu->cd.arm.r[ARM_PC] = exception_nr * 4 +
+         ((cpu->cd.arm.control & ARM_CONTROL_V)? 0xffff0000 : 0);
+     ```
+     Vector 3 (`PREF_ABT`): `retaddr = pc + 4`, `pc = 0x0c`.
+     Vector 4 (`DATA_ABT`): `retaddr = pc + 4 + 4 = pc + 8`, `pc = 0x10`.
+
+9. **Claim 1.9: Debugger memory access and translation warming semantics**
+   - **Status:** **DISCREPANCY FOUND (Partially False in Brief)**
+   - **Evidence:**
+     - The brief asserts: *"the byte/halfword put paths and dump use `CACHE_NONE | NO_EXCEPTIONS`."*
+     - **Truth:**
+       - [`src/debugger/debugger_cmds.c:1506-1507`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L1506-L1507): `put b` uses `CACHE_NONE | NO_EXCEPTIONS`.
+       - [`src/debugger/debugger_cmds.c:1523`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L1523): **`put h` calls `store_16bit_word()`!**
+       - [`src/core/memory.c:827-828`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/memory.c#L827-L828): `store_16bit_word()` passes `CACHE_DATA` (flags = 0), which leaves exceptions **enabled** and **warms** the translation table via [`src/cpus/memory_rw.c:746`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L746)!
+       - [`src/debugger/debugger_cmds.c:716-717`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c#L716-L717): `dump` uses `CACHE_NONE | NO_EXCEPTIONS`.
+       - [`src/debugger/debugger.c:781-797`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L781-L797): Debugger entry calls `cpu_create_or_reset_tc` and `invalidate_translation_caches(..., INVALIDATE_ALL)` only when `debugger_n_steps_left_before_interaction == 0`. Inside `step N`, it returns early without invalidation.
+
+10. **Claim 1.10: Precedents in `regress/`**
+    - **Status:** **VERIFIED**
+    - **Evidence:**
+      - [`regress/arm_msrmode_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py) exists uncommitted in the working tree (47 rows, uses `-A` raw mode, `dump` of DEST, `step N`).
+      - [`regress/sh4_pcic_probe.py`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sh4_pcic_probe.py) is imported by `sh4_chcr_probe.py`, `sh4_rtcsr_probe.py`, `sh4_sci_probe.py`, `sh4_tlbda2_probe.py`, `sh4_val_probe.py`, etc.
+
+---
+
+### Part 2: Answers to the Questions (§5)
+
+#### 1 | Premise Audit
+
+- **1a | Vector Fetch After Data Abort:**
+  - When `arm_exception(cpu, ARM_EXCEPTION_DATA_ABT)` sets `cpu->pc = 0x10`, it invokes `quick_pc_to_pointers(cpu)` ([`src/cpus/cpu_arm.c:783`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L783)).
+  - At abort time, `phys_page[0]` is NULL because page 0 has not yet been executed in this process.
+  - Execution falls into `DYNTRANS_PC_TO_POINTERS_GENERIC` ([`src/cpus/cpu_dyntrans.c:622`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L622)). Since `host_load[0]` is NULL (cleared by `MCR c8`), it calls `cpu->translate_v2p(cpu, 0x10, &paddr, FLAG_INSTR)` ([`src/cpus/cpu_dyntrans.c:679`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L679)).
+  - This calls `arm_translate_v2p_mmu()` for `vaddr = 0x10`. Because section 0 is mapped (`0x00000c02`, AP=3, domain 0), translation succeeds (`ok = 2`), returning `paddr = 0x10`.
+  - It does **not** hit the "could not find physical address of the exception handler" exit ([`src/cpus/cpu_dyntrans.c:730`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L730)), does not use an unmapped/physical bypass, and uses the exact same L1 translation table.
+
+- **1b | Scope of `MCR c8` Invalidation:**
+  - `MCR c8` with `opcode2 == 0` calls `arm_invalidate_translation_caches(cpu, 0, INVALIDATE_ALL)` ([`src/cpus/cpu_arm_coproc.c:237`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L237)).
+  - In [`src/cpus/cpu_dyntrans.c:1276-1288`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1276-L1288), `DYNTRANS_INVALIDATE_TC` loops over all valid `vph_tlb_entry` slots and clears `host_load`, `host_store`, `phys_addr`, and marks the TLB entry invalid.
+  - **However, `MCR c8` does NOT invalidate compiled instruction translation blocks (`translation_cache` / `DYNTRANS_INVALIDATE_TC_CODE`).** Compiled basic blocks are only flushed upon entering the debugger via `cpu_create_or_reset_tc()` ([`src/debugger/debugger.c:793`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L793)).
+  - Because `host_load` is cleared, no load from an unmapped page can be serviced by a stale entry from before the M bit. Stale instruction code pages inside a single `step N` are not an issue here because stimulus, handlers, and vectors all reside in section 0 (which remains mapped).
+
+- **1c | Implicit Unmapped Address Accesses:**
+  - **None.**
+  - `0x03fff020` (testarm halt stub): The guest handlers end in `b .` inside section 0. With bounded `step N`, `LR` is never jumped to.
+  - Console device: Located at PA `0x10000000` ([`src/include/testmachine/dev_cons.h:11`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_cons.h#L11)). Never accessed unless the halt stub is executed.
+  - `step` disassembly: [`src/cpus/cpu_dyntrans.c:287`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L287) reads `cached_pc = cpu->pc` using `CACHE_INSTRUCTION`. For prefetch abort (`B 0x00100000`), the branch instruction's `quick_pc_to_pointers_arm()` faults during translation and diverts `cpu->pc` to `0x0c` before the next step's disassembly begins; `0x0c` is mapped.
+  - Register display: Reads CPU register structures directly, without memory translation.
+
+- **1d | `prom_emulation` Setting and Impact:**
+  - `machine->prom_emulation` is initialized to `1` by default in [`src/machines/machine.c:85`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/machines/machine.c#L85), and is set for `-E testarm` (cleared only if `-Q` is passed, [`src/core/main.c:443`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/core/main.c#L443)).
+  - It does **not** matter for this vehicle: in [`src/cpus/memory_arm.c:88-100`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L88-L100), if `prom_emulation` is 1, `ARM_CONTROL_S` is set (`s=1, r=0 -> case 1: user ? 0 : 1`), returning `1` for privileged accesses (`user == 0`). If `prom_emulation` were 0, `ARM_CONTROL_R` is set (`s=0, r=2 -> case 2: 1`), returning `1`. Privileged read-only behavior is identical in both cases.
+
+- **1e | FSR Enumeration:**
+  - From [`src/cpus/memory_arm.c:266-381`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L266-L381) and [`src/include/thirdparty/armreg.h:387-392`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/include/thirdparty/armreg.h#L387-L392):
+    1. `data trans` (unmapped section): `case 0:` sets `domain = 0`, `fs = FAULT_TRANS_S (0x05)`. $\text{FSR} = (0 \ll 4) \mid 0\text{x}05 = \mathbf{0x05}$.
+    2. `page trans` (coarse entry 1 = 0): `case 1:` coarse table has descriptor `0x00005001` (domain 0). Sub-table `case 0:` sets `fs = FAULT_TRANS_P (0x07)` without touching `domain`. $\text{FSR} = (0 \ll 4) \mid 0\text{x}07 = \mathbf{0x07}$.
+    3. `domain` (domain 1, DACR=0): `case 2:` sets `fs = FAULT_DOMAIN_S (0x09)`. Descriptor `0x00500c22` has domain 1. $\text{FSR} = (1 \ll 4) \mid 0\text{x}09 = \mathbf{0x19}$.
+    4. `perm` (section AP=0 store): `case 2:` sets `fs = FAULT_PERM_S (0x0d)`. Domain is 0. $\text{FSR} = (0 \ll 4) \mid 0\text{x}0d = \mathbf{0x0d}$.
+  - **Coarse descriptor naming domain 3:** If the coarse descriptor at `0x4010` named domain 3 (`0x00005061`), `domain = (d >> 5) & 15 = 3`. Because coarse `case 0:` does **not** zero `domain`, $\text{FSR} = (3 \ll 4) \mid 0\text{x}07 = \mathbf{0x37}$, **not** `0x07`.
+
+- **1f | Handler Nested Abort Risk:**
+  - **None**, provided the handler avoids stack pushes to uninitialized `SP_abt` and writes only to `DEST = 0x9000`.
+  - The handler resides at `0x8400`/`0x8500` and writes to `0x9000`; both are within section 0 (identity mapped, AP=3, client domain 0). `MRS` to `spsr` and `MRC` to CP15 c5/c6 are privileged operations valid in ABT32 mode.
+
+---
+
+#### 2 | Smallest Unkilled Mutants That Break MMU Fault Paths
+
+1. **Mutant 1 (Primary Blind Spot): Delete `domain = 0;` at [`src/cpus/memory_arm.c:266`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L266)**
+   ```diff
+   - case 0: domain = 0;
+   + case 0:
+             fs = FAULT_TRANS_S;
+             goto exception_return;
+   ```
+   - **Why all proposed rows stay green:** In the proposed `data trans` row, the unmapped L1 descriptor is 0 (`0x00000000`). Pre-switch `domain = (d >> 5) & 15` evaluates to `0`. Deleting `domain = 0;` leaves `domain = 0`, producing $\text{FSR} = 0\text{x}05$. Every single proposed row stays green!
+   - **Fix:** Add a section translation fault row with non-zero domain bits in the unmapped descriptor (e.g. `d = 0x000000e0`, type 0, domain 7) and assert `FSR == 0x05` (verifying domain zeroing).
+
+2. **Mutant 2: Delete `& 0xffffc000` at [`src/cpus/cpu_arm_coproc.c:195`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L195)**
+   ```diff
+   - cpu->cd.arm.ttb &= 0xffffc000;
+   ```
+   - **Why all proposed rows stay green:** The proposed test only ever writes `0x4000` into `c2`, which already has bits [13:0] clear. The alignment mask is never exercised.
+   - **Fix:** Have `ttb rd` write `0x4005` to `c2` and assert `MRC c2 == 0x4000`.
+
+3. **Mutant 3: Delete `|| cpu->cd.arm.ttb != cpu->cd.arm.last_ttb` at [`src/cpus/memory_arm.c:243`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c#L243)**
+   - **Why all proposed rows stay green:** The vehicle sets TTB once and never switches tables.
+
+---
+
+#### 3 | Option-Set Completeness
+
+- **(i) Packaging:**
+  - Must be a single importable gated detector: `regress/arm_mmu_probe.py` (`CLASS_DETECTOR`).
+  - [`tools/pipeline/check_probe_wiring.py:3898-3928`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py#L3898-L3928) requires all Python files in `regress/` to be registered in `MANIFEST`. A standalone helper module would cause wiring failures unless separately classified and exempted.
+  - Follow the `sh4_pcic_probe.py` precedent: define functions and rows in `arm_mmu_probe.py`, run it in `regress/gate_arm.sh`, and let downstream witnesses (`armthumbabort_witness.py`, etc.) `import arm_mmu_probe as M`.
+
+- **(ii) Row Set:**
+  - For `armthumbabortkill`: The consumer needs to enter Thumb mode under the MMU. Adding a control row that executes `BX` to a mapped Thumb stub in section 0 that returns cleanly establishes that MMU + Thumb state works before attacking the fault path.
+
+- **(iii) Collision with Defects:**
+  - `armdesc3kill`: Descriptors use types 0, 1, and 2 only. Type 3 is never planted.
+  - `armdacr2kill`: DACR is programmed to `0x00000001` (values 1 and 0 only). Value 2 is never planted.
+  - Vector fetch exit: Vectors are at `0x0c` and `0x10` in section 0, mapped identity with AP=3. Never reached.
+
+- **(iv) Thumb Data Abort Return Address Finding:**
+  - **Confirmed True:** In [`src/cpus/cpu_arm.c:713-717`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c#L713-L717):
+    ```c
+    case ARM_EXCEPTION_DATA_ABT: retaddr += 4; break;
+    ...
+    retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+    ```
+    In Thumb mode, `retaddr = pc + 4 + 2 = pc + 6`.
+    Per ARM DDI 0100I §A2.6.6, Data Abort `LR_abt` is $\text{PC} + 8$ in **both** ARM and Thumb states. GXemul's computation of `pc + 6` in Thumb state is an architectural defect.
+
+---
+
+#### 4 | Session Plan
+
+1. **Process Sharing:**
+   - Controls (`live`, `mmu bit`, `ttb rd`, `remap`, `page map`, `hole dump`) can share a single process because none transition to ABT32 or fault.
+   - Abort rows (`data trans`, `pref trans`, `page trans`, `domain`, `perm`) **must each run in an isolated process** to avoid inherited ABT32 mode and corrupted SPSR/FAR/FSR state.
+
+2. **Step Count $N$:**
+   - Arming: 6 instructions (`MCR c2`, `MCR c3`, `MRC c1`, `ORR`, `MCR c1`, `MCR c8`).
+   - Stimulus: 1 instruction (faulting `LDR` / `STR` / `B`).
+   - Vector jump: 1 instruction (`B` at `0x0c` / `0x10`).
+   - Handler: 8 instructions (store `LR`, read/store `SPSR`, read/store `FSR`, read/store `FAR`, write marker).
+   - Tail: 1 instruction (`b .`).
+   - Total $N = 17$ steps.
+
+3. **Step Count Verification & Integrity:**
+   - The DEST marker at `0x9010` is necessary but not sufficient on its own.
+   - The harness must implement **Poisoning + Marker verification** (Repair R2 of `arm_msrmode_probe.py`): plant poison (`0xdeadbeef`) across `0x9000-0x901c` via `put w` prior to stepping, and verify the marker word at `0x9010` after stepping.
+
+---
+
+### Final Decision
+
+**GO-WITH-CHANGES** (incorporating: section translation fault with dirty domain bits to kill Mutant 1, unaligned TTB write to kill Mutant 2, DEST poisoning, and `put h` documentation correction).

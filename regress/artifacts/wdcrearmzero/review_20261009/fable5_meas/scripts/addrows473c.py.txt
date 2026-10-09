@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+# fable5 late review of #473 -- SCRATCH ONLY.  Adds the just-BELOW rows (remainder 32767
+# at the re-arm; a 32767-byte transfer at the arm) to the copy that already carries the
+# just-past rows, and bumps the identity count 131 -> 134.
+import io, re, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = io.open(src, encoding="utf-8", newline="").read()
+
+ROWS = r'''
+/*  fable5 (late review of #473, SCRATCH): THE OTHER SIDE OF EACH BOUND.  A bound LOWERED
+    (e.g. `> 16384') clamps a 32767-byte remainder UP to 32768 and pushes one byte past
+    data_in; the just-past rows above cannot see it because 32769 clamps correctly under
+    any lowered bound.  {32767, 32769} pins the bound as tightly as it is observable
+    (`> 32767', `>= 32768' and `> 32768' are the same clamp).  */
+static void row_fb_rearm_justbelow(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[4];
+	unsigned char *payload;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = fb_sink;
+	if (d.inbuf == NULL) { printf("  SETUP fb2 inbuf failed\n"); return; }
+	payload = (unsigned char *) malloc(32768 + 32767);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP fb2 payload failed\n"); return; }
+	memset(payload, 0xc3, 32768 + 32767);
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 32768 + 32767;	/*  65535: remainder 32767 after chunk 1  */
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 32766;
+	d.atapi_len = 2;
+	wdc_addtoinbuf(&d, 0x5a);
+	wdc_addtoinbuf(&d, 0x5a);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (d.atapi_len != 32767) {
+		printf("  FAIL %-38s atapi_len = %i, want 32767\n",
+		    "fb: re-arm bound, one below it", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "fb: re-arm bound, one below it", d.atapi_len);
+	}
+	rows ++;
+	if (occ != 32767) {
+		printf("  FAIL %-38s occupancy = %i, want 32767\n",
+		    "fb: re-arm pushes 32767 at 32767", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "fb: re-arm pushes 32767 at 32767", occ);
+	}
+	free(payload);
+	free(d.inbuf);
+}
+
+static void row_fb_arm_justbelow(void)
+{
+	struct wdc_data d;
+	unsigned char buf[4];
+	int i, occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = fb_sink;
+	if (d.inbuf == NULL) { printf("  SETUP fb2 arm inbuf failed\n"); return; }
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+	for (i = 0; i < 10; i++)
+		wdc_addtoinbuf(&d, 0x00);
+
+	stub_datain_len = 32767;	/*  one byte below the arm's clamp  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	stub_datain_len = 0;
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 32767) {
+		printf("  FAIL %-38s occupancy = %i, want 32767\n",
+		    "fb: arm bound, one below it", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "fb: arm bound, one below it", occ);
+	}
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+'''
+
+def one(pat, rep, s):
+    n = len(re.findall(pat, s))
+    if n != 1:
+        sys.stderr.write("ADDROWS_FAULT: %r matched %d times\n" % (pat, n)); sys.exit(9)
+    return re.sub(pat, rep, s, count=1)
+
+if s.count("\nint main(void)\n") != 1:
+    sys.stderr.write("ADDROWS_FAULT: main() anchor count != 1\n"); sys.exit(9)
+s = s.replace("\nint main(void)\n", ROWS + "\nint main(void)\n", 1)
+s = one(r"(\trow_fb_arm_justpast\(\);\n)", r"\1\trow_fb_rearm_justbelow();\n\trow_fb_arm_justbelow();\n", s)
+s = one(r"if \(rows != 131\) \{", "if (rows != 134) {", s)
+s = one(r'rows = %i, want 131\\n', r'rows = %i, want 134\\n', s)
+io.open(dst, "w", encoding="utf-8", newline="").write(s)
+print("ADDROWS_C_OK")

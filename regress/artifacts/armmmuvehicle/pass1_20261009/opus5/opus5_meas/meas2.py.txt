@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""opus5 seat, meas2: follow-ups -- (1) the brief's L2 table at 0x5000 lies INSIDE the L1 table's
+16 KB span (0x4000-0x7fff), so its words double as L1 descriptors for VA 0x400xxxxx; (2) -Q
+(prom_emulation off) sets R instead of S; (3) LDRT (user permission) on the AP=0 section and on
+section 0; (4) `put h' after the M bit to an unmapped VA (exceptions enabled?)."""
+import os
+import re
+import sys
+from gxsess import session, dumped, dumpcmd, HERE
+
+BIN = sys.argv[1]
+CODE, PH, DH, DEST, LIVE, TTB = 0x8000, 0x8400, 0x8500, 0x9000, 0x9100, 0x4000
+POISON = 0xDEADBEEF
+
+
+def b_to(src, dst):
+    return 0xEA000000 | (((dst - (src + 8)) >> 2) & 0xFFFFFF)
+
+
+def str_r3(off):
+    return 0xE5843000 | off
+
+
+def str_lr(off):
+    return 0xE584E000 | off
+
+
+def mov_r3(i):
+    return 0xE3A03000 | i
+
+
+H = lambda m: [str_lr(4), 0xE14F3000, str_r3(8), 0xE10F3000, str_r3(12), 0xEE153F10, str_r3(16),
+               0xEE163F10, str_r3(20), mov_r3(m), str_r3(24), 0xEAFFFFFE]
+ARM = [0xEE021F10, 0xEE032F10, 0xEE110F10, 0xE3800001, 0xEE010F10, 0xEE080F17]
+L1 = {TTB: 0x00000C02, TTB + 8: 0x00300C02, TTB + 0x10: 0x00005001, TTB + 0x14: 0x00500C22,
+      TTB + 0x18: 0x00600002}
+L2 = {0x5000: 0x00600FF2}
+DATA = {0x00200000: 0x22222222, 0x00300000: 0x33333333, 0x00400000: 0x44444444,
+        0x00600000: 0x66666666, LIVE: 0x11111111}
+
+
+def words(code):
+    w = {}
+    for i, v in enumerate(code):
+        w[CODE + 4 * i] = v
+    for i, v in enumerate(H(0xDA)):
+        w[DH + 4 * i] = v
+    for i, v in enumerate(H(0xBF)):
+        w[PH + 4 * i] = v
+    w[0x0C] = b_to(0x0C, PH)
+    w[0x10] = b_to(0x10, DH)
+    for o in range(0, 0x40, 4):
+        w[DEST + o] = POISON
+    w.update(L1)
+    w.update(L2)
+    w.update(DATA)
+    return w
+
+
+def go(name, code, regs, steps, post=(), extra_args=()):
+    cmds = ["put w 0x%x, 0x%08x" % (a, v) for a, v in sorted(words(code).items())]
+    cmds += ["%s=0x%x" % (r, v) for r, v in regs] + ["pc=0x%x" % CODE]
+    cmds += ["step %d" % s for s in steps] + ["print pc", "print cpsr", dumpcmd(DEST, DEST + 0x3C)]
+    cmds += list(post) + ["print 0x5eedd0ae"]
+    t, alive, st = session(BIN, cmds, per_cmd=0.25, fast=0.1, spin=2.0, extra_args=extra_args)
+    with open(os.path.join(HERE, "T2_%s.txt" % name), "w") as f:
+        f.write(t)
+    d = {o: dumped(t, DEST + o) for o in range(0, 0x40, 4)}
+    print("=== %s alive=%s status=%s" % (name, alive, st))
+    print("    faults: %s" % re.findall(r"\{ arm memory fault: (vaddr=0x[0-9a-f]+ domain=\d+ dav=\d+ "
+                                         r"ap=\d+ access=\d+ user=\d+)", t))
+    print("    DEST: " + " ".join("+%02x=%s" % (o, "P" if d[o] == POISON else
+                                               ("-" if d[o] is None else "%x" % d[o]))
+                                  for o in range(0, 0x40, 4)))
+    return t, d
+
+
+REGS = [("r1", TTB), ("r2", 1), ("r4", DEST)]
+
+# (1) L2-in-L1 overlap: VA 0x40000000's L1 index is 0x400 -> the word at 0x4000+0x1000 = 0x5000,
+#     which is the coarse table's entry 0 (0x00600ff2: type 2 = SECTION, base 0x00600000, AP 3,
+#     domain (0xff2>>5)&15 = 15 -> DACR field 15).  With DACR 0x01 domain 15 is NO ACCESS (domain
+#     fault 0xf9); with DACR 0xc0000001 (domain 15 = manager) the guest reads PA 0x00600000.
+code = ARM + [0xE5953000, str_r3(0x30), mov_r3(0xC3), str_r3(0x38), 0xEAFFFFFE]   # ldr r3,[r5]
+t, d = go("l2inl1_mgr", code, [("r1", TTB), ("r2", 0xC0000001), ("r4", DEST), ("r5", 0x40000000)],
+          [len(code) + 1], post=["dump 0x40000000 0x40000010", "dump 0x40100000 0x40100010"])
+for ln in t.splitlines():
+    if ln.startswith("0x40000000") or ln.startswith("0x40100000"):
+        print("    DUMPLINE " + ln)
+t, d = go("l2inl1_dacr1", code, REGS + [("r5", 0x40000000)], [6 + 1 + 1 + 11 + 2])
+
+# (2) -Q: prom emulation off -> R instead of S in the reset control word
+t, d = go("dashQ", [0xEE113F10, str_r3(0x20), 0xEAFFFFFE], [("r4", DEST)], [3], extra_args=["-Q"])
+print("    control(-Q) = %s" % ("-" if d[0x20] is None else "%x" % d[0x20]))
+
+# (3) LDRT (user-permission load) from SVC: section 0 (AP 3) succeeds, AP=0 section faults
+#     ldrt r3,[r5],#0 = 0xE4B53000
+code = ARM + [0xE4B53000, str_r3(0x30), 0xE4B63000, str_r3(0x34), 0xEAFFFFFE]   # ldrt r3,[r6]
+t, d = go("ldrt", code, REGS + [("r5", LIVE), ("r6", 0x00600000)], [6 + 2 + 1 + 1 + 11 + 2])
+
+# (4) post-M `put h' / `put w' / `put b' to an unmapped VA: does the debugger deliver a guest abort?
+code = ARM + [mov_r3(0xC4), str_r3(0x38), 0xEAFFFFFE]
+t, d = go("put_after_m2", code, REGS, [9],
+          post=["put h 0x00100008, 0x6666", "print pc", "print cpsr", "print lr",
+                "put b 0x00100004, 0x55", "print pc", "print cpsr"])
+seg = t[t.find("put h 0x00100008"):]
+print("    PUTSEG:\n" + "\n".join("      " + x for x in seg.splitlines()[:24]))
+print("MEAS2_DONE")

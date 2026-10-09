@@ -1,0 +1,23 @@
+VERDICT: The comment is internally consistent and is a defensible disposition under the stated constraints, but two load-bearing premises—max defined event is 67, and the 0x10 clobber is reachable—are not checkable from the packet and must be verified before ratification.
+
+**Claims**
+
+1. **“correct only for e in [0,95]”** — READ.  
+   `e>>5` yields 0,1,2 for e in [0,95], mapping to offsets `0x00, 0x04, 0x08`, the three owned words of the first register group. For e ≥ 96 the offset becomes `0x0c` (unowned fourth word) or later group bases, so the bound follows from the macro arithmetic and the stated group layout.
+
+2. **“e 128..159 -> +0x10 … CLOBBERS mask_13[0]”** — NOT SETTLED from the packet.  
+   The diff says case `0x10` writes `d->mask_13[r]`, but the decode control flow is not inlined here. If no earlier check rejects event values 128..159, “clobbers” is accurate; if such a guard exists, it is not.  
+   *Single fact needed:* dev_dreamcast_asic.c’s decode path for offset `0x10` with an event number in 128..159, and whether any prior validation rejects it.
+
+3. **“e >= 2048 -> outside the device window”** — READ.  
+   `4*(2048>>5) = 4*64 = 0x100`. The device window is `[SYSASIC_BASE, +0x100)`, so e = 2048 maps exactly one byte past the end. Boundary is correct.
+
+**Premises**
+
+- **No product code changed** — READ from the diff; only comment lines were added.
+- **Fork never edited this file** — NOT CHECKABLE from the packet; needs `git log --all -- 'src/include/thirdparty/*'`.
+- **Highest defined event is 67** — NOT CHECKABLE from the packet; the diff does not include the full list of 21 defines. Need the complete header to count and confirm no event ≥ 96 already exists.
+
+**Disposition**
+
+The author’s reasoning against `_Static_assert` is sound: a static assert can only reference named terms, so a future `#define SYSASIC_EVENT_FOO 96` would compile clean and not trigger it. A build-time scanner that greps the header for `#define SYSASIC_EVENT_*` and rejects values ≥ 96 would catch the feared edit without rewriting the vendored file, and would be stronger than a comment—if such tooling is acceptable in the project. Otherwise, placing the comment beside the macro is the correct location, because a future event-adder will see it at the point of change.

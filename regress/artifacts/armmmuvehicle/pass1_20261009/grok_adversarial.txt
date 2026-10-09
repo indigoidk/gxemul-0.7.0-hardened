@@ -1,0 +1,94 @@
+I'll attack the `armmmuvehicle` design the same way as the Thumb witness spec: read the brief, then hunt the source for a green report over a broken MMU fault path.The brief's fault-path claims have to be re-derived from this tree. I'll read the walk, the exception entry, and the CP15 writes next.**VERDICT: `page trans` stays green if the coarse L2 index `>> 10` is changed to `>> 8`, because every unplanted L2 word is zero and the row never sees which slot it walked.**
+
+The tree read was `GXEMUL-SEC\src\`. `arm_exception` is at `cpu_arm.c:712`, the walk index at `memory_arm.c:167`. Those match this fork.
+
+## 1. GREEN while the walk is wrong
+
+**READ.** `memory_arm.c:167` is the only coarse index:
+
+```c
+addr = ptba + ((vaddr & 0x000ff000) >> 10);
+```
+
+The plant is one live word and a sea of zeros. L2 base `0x5000` (`ptba = 0x00005001 & 0xfffffc00`, `memory_arm.c:166`).
+
+| VA | `(vaddr & 0x000ff000) >> 10` | byte | word | value |
+|---|---|---|---|---|
+| `0x00400000` | `0` | `0x5000` | 0 | `0x00600ff2` (planted) |
+| `0x00401000` | `0x1000 >> 10 = 4` | `0x5004` | 1 | `0` (planted) |
+| any other page in the section | 8, 12, 16, … | `0x5008` upward | 2..255 | `0` (RAM, never written) |
+
+`page trans` faults word 1: `d2 & 3 == 0` → `fs = FAULT_TRANS_P` (`memory_arm.c:186`, `armreg.h:388` = `0x07`). L1 `0x00005001` has domain `(0x00005001 >> 5) & 15 = 0`, and this path does not zero domain. FSR = `(0 << 4) | 0x07 = 0x07`. FAR is the VA, `0x00401000`.
+
+**REASONED.** Edit `>> 10` to `>> 8`:
+
+- `0x00400000`: `0 >> 8 = 0`. `page map` still hits word 0 and still returns PA `0x00600000`. Green.
+- `0x00401000`: `0x1000 >> 8 = 16`, address `0x5010`, word 4, still zero. Same FSR `0x07`, same FAR, same handler. **`page trans` stays green.**
+- Section rows (`data trans`, `domain`, `perm`, `pref trans`, `remap`) never execute line 167. `live`, `mmu bit`, `ttb rd`, `hole dump`, `enc ok` neither.
+
+`>> 12` does not have this property. `0x1000 >> 12 = 1` is an unaligned load of `0x00600ff2`'s bytes; on a little-endian host with the guest little-endian (`cpu_arm.c:123`, no swap) that is `d2 = 0x0000600f`, `d2 & 3 == 3`. SA1110's flags word is 0 (`arm_cpu_types.h:82`), not `ARM_XSCALE`, so `memory_arm.c:201` treats it as a 1 KB page and the load succeeds. That edit reddens `page trans`. `>> 8` and `>> 9` (`0x1000 >> 9 = 8` → `0x5008`, also zero) do not.
+
+Same degeneracy, second edit, also all-green: `cpu->cd.arm.far = vaddr & 0xfffff000` at `memory_arm.c:271`. The only FAR oracle is `data trans`'s `0x00100000`, which is already on a 4 KB boundary. `page trans`, `domain` and `perm` do not read FAR. `pref trans` never takes the assignment (`memory_arm.c:268` returns before it).
+
+`c8` made a no-op does **not** survive, and `hole dump` is not the row that catches it. See §3.
+
+## 2. Consumer lie — `armthumbabortkill` POST stays red after a real fix
+
+**READ.** Data-abort link:
+
+```712:717:src/cpus/cpu_arm.c
+	case ARM_EXCEPTION_DATA_ABT:
+		retaddr += 4;
+		break;
+	}
+	retaddr += (cpu->cd.arm.cpsr & ARM_FLAG_T ? 2 : 4);
+```
+
+`arm_cpu_interpret_thumb_SLOW` refuses a PC with bit 0 clear (`cpu_arm.c:1266`). The three reachable data sites call `memory_rw` before `cpu->pc += 2` (`cpu_arm.c:1647`, `:1676`, `:1700`, increment at `:1864`). So at the fault `cpu->pc` is still odd and T is still set.
+
+**REASONED.** Thumb data abort: `LR_abt = cpu->pc + 4 + 2 = cpu->pc + 6`. With bit 0 set that is `(instruction_address + 7)`, not `instruction_address + 8`. The brief's arithmetic is true of `cpu->pc`. The stored value is odd.
+
+The vehicle's importable data oracle is `LR = faulting pc + 8` (`data trans`), recorded by the handler via STR to DEST. A Thumb consumer that imports that parser:
+
+- HEAD: handler never runs (`running = 0` after `arm_exception` already wrote the odd LR). DEST empty. Red, for the halt.
+- POST: `running = 0` deleted, handler runs, DEST holds `instruction+7`. Parser wants `+8`. **Red.** The fix looks broken. The row cannot go green.
+
+The brief's DDI 0100I comparison (data-abort entry wants the aborted instruction + 8 in both states) matches this code: ARM state is `pc+8` (`+4` then `+4`), Thumb state is not.
+
+Second lie, HEAD green, same consumer, the ifetch site. `arm_run_instr` calls generic `pc_to_pointers` before the T check (`cpu_dyntrans.c:190`, then `:255`). `quick_pc_to_pointers_arm` short-circuits on T (`quick_pc_to_pointers.h:21`); the generic one does not. `BX` to `unmapped|1` sets T and returns without translating (`cpu_arm.c:1574`). The next step's generic translate takes `PREF_ABT` with `FLAG_INSTR` (`memory_rw.c:252`), clears T, and never enters `arm_cpu_interpret_thumb_SLOW`. Line `1273` (`CACHE_INSTRUCTION` fetch, then `running = 0`) does not run. The vehicle's prefetch handler does run. An oracle copied from `pref trans` ("handler ran, mode `0x17`, FAR/FSR still the sentinels") is **green on HEAD**.
+
+That same stolen step also executes the vector. The `I` macro is `next_ic++` then call (`cpu_dyntrans.c:114`). A fault inside the opening `pc_to_pointers` sets `next_ic` at `0x0c`, and `I` then runs that instruction in the same step. The vehicle's own `B` faults inside `X(b)` (`cpu_arm_instr.c:256`), so the vector is the next step. A consumer who reuses the vehicle's prefetch `step N` is one instruction off. `b .` absorbs an overrun. An exact count stops short of the marker. POST red again.
+
+`armdesc3kill`: L1 type 3 is `exit(1)` (`memory_arm.c:252`). L2 type 3 on this CPU is a 1 KB page (`memory_arm.c:201`), not the exit. The vehicle's only second-level table is the natural place to plant "a type 3". That stimulus never reaches the defect, the host stays up, and a "process survived" oracle is green on HEAD.
+
+`armdacr2kill`: `dav == 0` returns at `memory_arm.c:162` and `:240`, before `arm_check_access`. `dav == 2` is the `exit(1)` at `:78`. The arming MCR writes DACR `0x00000001`, so domain 1 is no-access. A consumer who plants a domain-1 descriptor and does not overwrite c3 takes FSR `0x19` and the handler runs. The exit is not reached.
+
+## 3. Reopened hole, and a fourteenth
+
+**Hole 8, reopened inside `perm`.** An abort is a one-way door into ABT32 (`cpu_arm.c:747`, then `arm_load_register_bank`). `perm` puts the faulting STR and the AP=0 load that must succeed in one abort process. The load is a load only when it is the earlier instruction. After the STR, the following steps are the handler. The design states both results and does not state that order.
+
+**Hole 3, reopened as the import.** §2 restates it. §3 then exports `pref trans` (`B` to `0x00100000`, handler-ran = success) as the prefetch recipe. That is the stolen path. Importing it is how the Thumb ifetch row goes green on HEAD.
+
+**Hole 4, reopened for the PC-relative Thumb load.** `cpu_arm.c:1604` passes `CACHE_INSTRUCTION`, which sets `FLAG_INSTR` (`memory_rw.c:252`), so the walk takes `PREF_ABT` and does not write FAR/FSR (`memory_arm.c:268`). Every load in this vehicle is a data abort. A consumer who classifies "load" with `data trans` pins FSR `0x05` on a prefetch. POST stays red after the halt is fixed, because the sentinels are what a correct prefetch leaves behind.
+
+**Fourteenth.** `hole dump` does not prove c8. `debugger()` invalidates every translation on entry (`debugger.c:786-796`) and returns early, without invalidating, only inside `step N` (`debugger.c:781`). The dump is the next command, so it runs after that invalidate. It also uses `CACHE_NONE | NO_EXCEPTIONS` (`debugger_cmds.c:716`), so it translates and never reads `host_load`. `data trans`'s VA `0x00100000` is never `put w`'d, so there is no stale `host_load` for c8 to drop. The row that actually pins c8 is `perm`: `put w` of `0x00600000` is `store_32bit_word` → `memory_rw` with the MMU off, `arm_translate_v2p` returns 2, and `memory_rw.c:746` passes `ok - 1 == 1` into `update_translation_table`, which sets `host_store`. The STR fast path writes that pointer and does not recheck AP (`cpu_arm_instr_loadstore.c:440`). A kill table that drops the c8 call and scores `hole dump` plus `data trans` stays green.
+
+## Premises, enumerated
+
+**READ.**
+
+- After a data abort, `pc = 0x10` (`cpu_arm.c:781`, V clear). The next step translates that VA with `FLAG_INSTR` through `arm_translate_v2p_mmu`. Section `0x00000c02` is identity, AP `(>> 10) & 3 = 3`. The fetch is the MMU. The `exit(1)` at `cpu_dyntrans.c:730` runs only when that second translate also fails.
+- c8 `opcode2 == 0` calls `invalidate_translation_caches(..., INVALIDATE_ALL)` (`cpu_arm_coproc.c:237`). That walks `vph_tlb_entry[].valid` and clears `host_load`, `host_store` and `phys_page` (`cpu_dyntrans.c:1276`, `:1028`). It does not call `arm_invalidate_code_translation`. The L1 host pointer (`translation_table` / `last_ttb`, `memory_arm.c:133`) is untouched; descriptor words are loaded on every walk.
+- `arm_exception` writes registers only. SP and LR are not read. With `-V`, `single_step` is set (`main.c:474`) and the IRQ check is skipped (`cpu_dyntrans.c:206`). Step disassembly reads `cpu->pc`, which stays in section 0 if the handler does. `prom_emulation` defaults to 1 (`machine.c:85`); the design does not pass `-Q`. `arm_cpu_new` then sets `ARM_CONTROL_S` (`cpu_arm.c:132`).
+- AP=0 with S set: `s+r = 1`, privileged access returns 1 (`memory_arm.c:89`). A load has `writeflag = 0`, `1 > 0` succeeds. A store has `writeflag = 1`, `1 > 1` fails, `FAULT_PERM_S`. The non-prom path sets R instead, `s+r = 2`, and also returns 1 (`memory_arm.c:90`). The perm accept row passes for either bit. `-Q` does not flip it.
+- FSR from this plant and DACR `0x00000001`: `data trans` `0x05` (domain forced 0, `FAULT_TRANS_S`). `page trans` `0x07` (domain already 0). `domain` `(1 << 4) | 0x09 = 0x19`. `perm` `(0 << 4) | 0x0d = 0x0d`. A coarse descriptor with domain 3 and this DACR has `dav = 0`, so the walk never reaches the L2 zero word: `FAULT_DOMAIN_P`, FSR `(3 << 4) | 0x0b = 0x3b`. A page-translation FSR of `0x37` appears only if that domain's DACR field is client or manager first.
+- Testarm SP is `64MB - 4096 = 0x03fff000`, LR `0x03fff020` (`machine_test.c:198`). Section 63 is not in the table. A handler `PUSH` or `STR [sp]` data-aborts in ABT32, hits the same-mode warning (`cpu_arm.c:758`), and overwrites `SPSR_abt` and `LR_abt` before DEST is written.
+
+**REASONED.** Controls can share a process until the first abort. `perm`'s load joins them only if it precedes its STR; the STR needs its own process end. Abort `step N` is arming MCRs (c2, c3, c1 read-modify-write, c8), the one stimulus, the vector `B`, and the handler through its last store, with `b .` absorbing any extra step. A DEST word written by that last store proves the handler finished. It does not prove the count if an earlier store is the marker, and it does not prove a consumer who appended Thumb instructions and kept the vehicle's N.
+
+## ELSE
+
+- The Thumb `pc+6` result above is true in this tree. It is the consumer lie, not an out-of-scope aside.
+- `ARM_CONTROL_ALIGN` is set at reset (`cpu_arm.c:129`) and nothing reads it (`cpu_arm_instr.c:1689`). An unaligned Thumb address will not take an alignment fault. Out of this round's rows, which are all aligned.
+- Section words `0x00000c02`, `0x00300c02`, `0x00500c22`, `0x00600002` leave descriptor bit 4 clear. The walk keys only on `d & 3`. `enc ok` will pin that form. The emulator accepts it.
+- Guest devices from `default_test` sit at `0x10000000` and above (`dev_cons.h:11` and the siblings). The vehicle's sections `0x000`–`0x006` do not alias them. The console store in the halt stub is the unmapped LR stub, which is the reason `b .` has to be in section 0.

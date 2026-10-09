@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Summarise kt_out/KT_<binary>.out into a kill matrix (which rows RED under which binary)."""
+import glob
+import os
+import re
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+res = {}
+order = []
+for f in sorted(glob.glob(os.path.join(HERE, "kt_out", "KT_*.out"))):
+    b = os.path.basename(f)[3:-4]
+    rows = []
+    tail = ""
+    for ln in open(f, encoding="utf-8", errors="replace"):
+        m = re.match(r"^  (\S.*?)\s+got=(\S*)\s+want=(\S+)\s+(ok|RED)$", ln.rstrip("\n"))
+        if m:
+            rows.append((m.group(1).strip(), m.group(2), m.group(3), m.group(4)))
+        if ln.startswith("KT_BRIEF"):
+            tail = ln.strip()
+    res[b] = (rows, tail)
+    if not order:
+        order = [r[0] for r in rows]
+bins = ["BASE"] + sorted(k for k in res if k != "BASE")
+for b in bins:
+    rows, tail = res.get(b, ([], "MISSING"))
+    reds = [(n, g) for n, g, w, s in rows if s == "RED"]
+    br = [n for n, g in reds if n.startswith("B.")]
+    xr = [n for n, g in reds if n.startswith("X.")]
+    print("%-11s %-26s rows=%-3d B-red=%-2d X-red=%-2d" % (b, tail, len(rows), len(br), len(xr)))
+    for n, g in reds:
+        print("              RED %-22s got=%s" % (n, g))
+print("KT_MATRIX_DONE")

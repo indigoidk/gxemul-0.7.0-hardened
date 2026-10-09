@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""opus5 seat: apply ONE named mutant to a scratch clone (never a project tree).
+usage: mutants.py <clone-root> <mutant-name>     (prints MUTANT_APPLIED or exits 3)"""
+import io
+import os
+import sys
+
+M = {
+    # memory_arm.c
+    "M_dom0": ("src/cpus/memory_arm.c",
+               "\tcase 0:\tdomain = 0;\n\t\tfs = FAULT_TRANS_S;",
+               "\tcase 0:\t/* M_dom0 */\n\t\tfs = FAULT_TRANS_S;"),
+    "M_farpage": ("src/cpus/memory_arm.c",
+                  "\t\tcpu->cd.arm.far = vaddr;",
+                  "\t\tcpu->cd.arm.far = vaddr & ~0xfffU;\t/* M_farpage */"),
+    "M_ttbstale": ("src/cpus/memory_arm.c",
+                   "\tif (cpu->cd.arm.translation_table == NULL ||\n\t    cpu->cd.arm.ttb != cpu->cd.arm.last_ttb) {",
+                   "\tif (cpu->cd.arm.translation_table == NULL) {\t/* M_ttbstale */"),
+    "M_l2idx11": ("src/cpus/memory_arm.c",
+                  "\t\taddr = ptba + ((vaddr & 0x000ff000) >> 10);",
+                  "\t\taddr = ptba + ((vaddr & 0x000ff000) >> 11);\t/* M_l2idx11 */"),
+    "M_domPS": ("src/cpus/memory_arm.c",
+                "\t\t\tfs = FAULT_DOMAIN_P;",
+                "\t\t\tfs = FAULT_DOMAIN_S;\t/* M_domPS */"),
+    "M_ckR": ("src/cpus/memory_arm.c",
+              "\t\tcase 2:\treturn 1;\n\t\t}",
+              "\t\tcase 2:\treturn 2;\t/* M_ckR */\n\t\t}"),
+    "M_pgdom0": ("src/cpus/memory_arm.c",
+                 "\t\tcase 0:\tfs = FAULT_TRANS_P;\n\t\t\tgoto exception_return;",
+                 "\t\tcase 0:\tdomain = 0; fs = FAULT_TRANS_P;\t/* M_pgdom0 */\n\t\t\tgoto exception_return;"),
+    "M_permPS": ("src/cpus/memory_arm.c",
+                 "\t\tfs = FAULT_PERM_P;",
+                 "\t\tfs = FAULT_PERM_S;\t/* M_permPS */"),
+    # cpu_arm.c -- a CONTROL mutant the brief's rows must kill
+    "M_dabtret": ("src/cpus/cpu_arm.c",
+                  "\tcase ARM_EXCEPTION_DATA_ABT:\n\t\tretaddr += 4;\n\t\tbreak;",
+                  "\tcase ARM_EXCEPTION_DATA_ABT:\n\t\t/* M_dabtret */\n\t\tbreak;"),
+    # cpu_arm_coproc.c
+    "M_c8nop": ("src/cpus/cpu_arm_coproc.c",
+                "\t\t\tcpu->invalidate_translation_caches(cpu, 0,\n\t\t\t    INVALIDATE_ALL);",
+                "\t\t\t{ /* M_c8nop */ }"),
+    "M_c2mask": ("src/cpus/cpu_arm_coproc.c",
+                 "\t\tcpu->cd.arm.ttb &= 0xffffc000;",
+                 "\t\t/* M_c2mask */"),
+}
+
+root, name = sys.argv[1], sys.argv[2]
+if "/tmp/gxopusmmuv_" not in root:
+    print("REFUSED: not a scratch mutant clone: %s" % root)
+    sys.exit(3)
+f, old, new = M[name]
+p = os.path.join(root, f)
+s = io.open(p, encoding="utf-8", newline="").read()
+n = s.count(old)
+if n != 1:
+    print("MUTANT_TEXT_COUNT=%d (want 1) for %s in %s" % (n, name, f))
+    sys.exit(3)
+s = s.replace(old, new)
+io.open(p, "w", encoding="utf-8", newline="").write(s)
+with open(os.path.join(root, ".MUTANT"), "w") as fh:
+    fh.write("%s %s\n" % (f, name))
+print("MUTANT_APPLIED %s %s" % (name, f))

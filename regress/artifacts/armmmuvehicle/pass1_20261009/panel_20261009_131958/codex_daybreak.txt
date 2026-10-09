@@ -1,0 +1,315 @@
+VERDICT: BUILD WITH CHANGES (9) -- the MMU vehicle is viable, but the filed command cannot launch, the L2 overlaps the L1, and several cache, handler, and coverage oracles need tightening.
+
+The nine counted changes are:
+
+1. Supply a load argument, e.g. `0x8000:<temporary-stub>`; the proposed command exits with “No filename given.” Also, `-A` means “disable color,” not raw mode.
+2. Move the L2 table out of the L1’s `0x4000..0x7fff` range; `0xa000` is suitable.
+3. Freeze every row’s exact instruction stream, sentinels, poison values, identity signatures, and fallback loop before assigning `step N`.
+4. Make handlers explicitly stackless and distinguish them with pre-poisoned handler IDs.
+5. Explicitly warm the fault/remap VAs while MMU-off and keep enable, c8, stimulus, vector, and handler in one uninterrupted `step N`.
+6. Use register-offset faulting LDRs; immediate LDRs are implicitly pre-walked by the single-step disassembler.
+7. Make section/page translation-domain behavior discriminating: use a type-0 L1 word with nonzero domain bits and a domain-3 coarse descriptor with DACR `0x41`.
+8. Either assert the fault-diagnostic fields or stop describing diagnostics as a tested channel; parse the hole dump command-locally.
+9. Make `arm_mmu_probe.py` genuinely import-safe and parameterized, and treat the wiring-checker classification as an unresolved build-pass gate.
+
+## 1 | Premise audit
+
+### a. Exception-vector translation
+
+The next instruction after a data abort is the vector instruction at VA `0x10`, not the handler at `0x8500`.
+
+`arm_exception()` sets PC and immediately calls `quick_pc_to_pointers()` ([cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:676)). On a cache miss, the generic path invokes `translate_v2p(..., FLAG_INSTR)` ([cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:622)).
+
+Enumerating the addresses:
+
+- `0x00000010 -> L1 offset 0x0000 -> TTB word 0x4000`
+- `0x00008400 -> L1 offset 0x0000 -> TTB word 0x4000`
+- `0x00008500 -> L1 offset 0x0000 -> TTB word 0x4000`
+
+Thus the vector and both handlers use ordinary MMU translation through L1[0]. There is no physical-vector bypass. At dyntrans-page granularity, the vector is page 0 while CODE/handlers share page 8; the handler page may reuse the valid post-c8 mapping established while executing CODE.
+
+If an instruction address fails translation, generic `pc_to_pointers` assumes the translator installed an exception PC and retries that new PC. If that also fails, its written fallback calls `fatal()` and exits. ARM has an additional caveat: the walker synchronously calls `arm_exception()`, which immediately calls `quick_pc_to_pointers()` again. An unmapped abort vector can therefore recursively prefetch-abort before the outer fallback completes. No handler is reached.
+
+### b. c8 invalidation
+
+Qualified yes. c8/opcode2 0 calls `INVALIDATE_ALL` ([cpu_arm_coproc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:230)), which walks every valid virtual-to-physical entry and clears:
+
+- `is_userpage`
+- `host_load`
+- `host_store`
+- `phys_addr`
+- `phys_page`
+- `vaddr_to_tlbindex`
+- the VPH valid bit
+
+Therefore an old virtual mapping cannot subsequently serve a load, store, or PC lookup.
+
+It does not literally destroy every dyntrans object. Decoded physical IC pages remain allocated, and the current `cur_ic_page`/`next_ic` pointers are not reset. This is safe under one `step N`: single-step executes one instruction per `run_instr`, and the following call starts with PC-to-pointers lookup. Outside single-step, sequential decoded instructions could continue after c8 without that lookup.
+
+The L1 host pointer is also retained, as stated. Each walk still rereads `d` from that pointer, so descriptor changes at an unchanged TTB are seen.
+
+### c. Implicit session accesses
+
+There is no implicit access to the stop stub, console MMIO, or guest memory from register display:
+
+- `-V` enables single-step; only `-r` enables automatic register dumps.
+- The LR stub is reached only through guest control flow.
+- Single-step suppresses IRQ delivery.
+- `step` disassembles the instruction about to execute, not a later post-step instruction.
+
+The stop-stub arithmetic is:
+
+- SP: `64 × 1048576 - 4096 = 0x03fff000`
+- LR: `0x03fff000 + 0x20 = 0x03fff020`
+- section index: `0x03f = 63`
+- L1 byte offset: `63 × 4 = 0xfc`
+- TTB word: `0x4000 + 0xfc = 0x40fc`, unplanted
+
+There is, however, an implicit unmapped access omitted by the brief. While running, the ARM disassembler recognizes immediate LDRs and performs a `NO_EXCEPTIONS` read of their effective address for annotation ([cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:2511)). It causes no abort, diagnostic, FAR/FSR update, or fast-cache insertion, but it does walk the bad VA before the guest instruction.
+
+Use a register-offset form such as `0xe797000c` (`ldr r0,[r7,r12]`, with `r12=0`) for faulting loads.
+
+### d. S/R and `prom_emulation`
+
+The premise is correct.
+
+The base control value contains neither S nor R; `arm_cpu_new()` then sets exactly S when `prom_emulation` is true, otherwise exactly R ([cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:127)). `machine_new()` defaults `prom_emulation=1`, and only `-Q` clears it ([machine.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c:79), [main.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:442)). `testarm` does not override it.
+
+For this invocation: S=1, R=0. Privileged AP=0 produces access 1/read-only:
+
+- load: `1 > writeflag(0)` succeeds
+- store: `1 > writeflag(1)` is false, yielding a permission fault
+
+The non-PROM R=1 case also returns read-only for privileged AP=0.
+
+### e. FSR walk
+
+The 32-bit VA producer can emit section fields:
+
+`0,1,2,3,...,4092,4093,4094,4095`
+
+The resulting L1 byte offsets are:
+
+`0,4,8,0xc,...,0x3ff0,0x3ff4,0x3ff8,0x3ffc`
+
+There are 4096 unique offsets. Relevant values are:
+
+| VA | L1 offset | L1 word |
+|---|---:|---:|
+| `0x00000000` | `0x0000` | `0x4000` |
+| `0x00100000` | `0x0004` | `0x4004` |
+| `0x00200000` | `0x0008` | `0x4008` |
+| `0x00400000` / `0x00401000` | `0x0010` | `0x4010` |
+| `0x00500000` | `0x0014` | `0x4014` |
+| `0x00600000` | `0x0018` | `0x4018` |
+
+The coarse-table page producer emits indices `0,1,2,3,...,252,253,254,255`, hence byte offsets `0,4,8,0xc,...,0x3f0,0x3f4,0x3f8,0x3fc`.
+
+- `data trans`: L1 `0x4004`, `d=0`; case 0 forces domain 0 and `FAULT_TRANS_S=5`. FSR is `(0<<4)|5 = 0x05`.
+- `pref trans`: same internal fault selection, but the `instr` branch calls PREF_ABT without writing FAR or FSR. Both sentinels remain.
+- `page trans`: L1 `0x4010`; L2 offset for `0x00401000` is `(0x1000>>10)=4`, hence L2 word `0x5004` as proposed, or `0xa004` after relocation. `d2=0` selects `FAULT_TRANS_P=7`; domain remains 0, giving `0x07`.
+- `domain`: descriptor domain is 1; DACR `0x1` emits values `[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]` for domains 0 through 15. Domain 1 therefore has DAV 0; `FAULT_DOMAIN_S=9`, so FSR is `(1<<4)|9 = 0x19`.
+- `perm`: domain 0/DAV 1/AP 0 gives access 1. A store fails and selects `FAULT_PERM_S=0x0d`; FSR is `0x0d`. The preceding load succeeds.
+
+For a coarse descriptor naming domain 3:
+
+- If domain 3 is client, L2 type 0 retains domain 3: `(3<<4)|7 = 0x37`.
+- With the proposed DACR `0x1`, domain 3 has DAV 0, so the walk stops earlier: `(3<<4)|FAULT_DOMAIN_P(0xb) = 0x3b`.
+
+I recommend DACR `0x41`, whose domain values are `[1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]`, and a coarse descriptor `0x0000a061`. No field is 2.
+
+Also consider planting L1[1] as `0x00000060`: it remains type 0 but initially names domain 3. Expected FSR remains `0x05`, thereby actually pinning the explicit `domain=0` assignment in L1 case 0.
+
+### f. Handler safety
+
+A concrete stackless handler using only MRC, MRS, aligned `STR [r4,#imm]`, and mapped branches cannot take a second abort:
+
+- vector and handler fetches use mapped section 0
+- MRC/MRS have no memory operand
+- DEST is mapped AP=3 and aligned
+- the final branch remains in section 0
+
+The prose alone is insufficient to prove this because no handler words were supplied. In particular, ABT r13 is banked and is not testarm’s initialized SVC stack. A push/compiler prologue could store near `0xffffffff` and fault again. Require stackless handlers or explicitly initialize ABT SP.
+
+### Additional premise failures
+
+The proposed command cannot start. With no executable or disk image, [main.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:571) prints “No filename given. Aborting.” The existing ARM probe correctly supplies `0x8000:<stub>` ([arm_msrmode_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_msrmode_probe.py:278)).
+
+Also, `-A` only disables colorized output; the address-prefixed image argument selects raw loading.
+
+The L2 layout overlaps the L1:
+
+- L1 word addresses: `0x4000,0x4004,...,0x7ff8,0x7ffc`
+- `0x5000` is L1 word index `(0x5000-0x4000)/4 = 1024`, corresponding to VA section `0x40000000`
+- `0x53fc` is index 1279, corresponding to section `0x4ff00000`
+
+Thus L2 word `0x00600ff2` is simultaneously an unintended L1 type-2 descriptor for VA `0x40000000`, with domain 15 and AP=3. Move the L2 to `0xa000` and use coarse descriptor `0x0000a001`, or `0x0000a061` for domain 3.
+
+The Thumb LR candidate is real, with a stronger representation correction. The source computes internal `cpu->pc + 4 + 2`. Thumb execution requires internal PC bit 0 set, so for an instruction at aligned address `A`, `cpu->pc=A|1` and the stored LR is `A+7`—odd—not architectural `A+8`. The relevant Thumb memory sites do not advance PC before `memory_rw`. This is out of this round’s scope but should be filed accurately.
+
+## 2 | Coverage
+
+| Row | Statements its expected value depends on |
+|---|---|
+| `live` | MMU-off identity access only; none of §4 or `arm_exception`. |
+| `mmu bit` | c1 MCR/MRC and mapped section-0 execution/store. It does not by itself prove that `translate_v2p` switched. |
+| `ttb rd` | c2 write/read and mapped execution. Aligned `0x4000` does not test either low-bit mask or warning. |
+| `remap` | L1 lookup/indexing, type-2 section path, domain/AP extraction, PA composition, access success, and—if VA `0x00200000` was explicitly warmed—the c8 invalidation of stale load translation. |
+| `page map` | Coarse-table base/index/host lookup, L2 type 2, AP selection, small-page PA composition, and success. With all four AP fields equal to 3 it does not discriminate the subpage selector. |
+| `hole dump` | L1 type 0 reaching `exception_return`, then `NO_EXCEPTIONS` returning failure. Its result does not depend on the selected FS value or FAR/FSR writes. |
+| `data trans` | L1 type 0, data FAR/FSR writes, DATA_ABT selection, `retaddr=pc`, data `+4`, ARM common `+4`, ABT mode/LR, low-vector reachability, and handler MRC/MRS/stores. |
+| `pref trans` | Instruction-abort branch, absence of FAR/FSR writes, c5/c6 sentinel MCR/MRC, ARM `target+4` LR, ABT mode, and low-vector reachability. |
+| `page trans` | Coarse lookup, L2 type 0, `FAULT_TRANS_P`, FAR/FSR data-abort path. Domain 0 does not pin preservation of a nonzero coarse domain. |
+| `domain` | Descriptor-domain extraction, DACR field selection, outer section `dav==0`, `FAULT_DOMAIN_S`, and `(domain<<4)|fs`. |
+| `perm` | `writeflag`, section AP extraction, AP=0 privileged S behavior, `access > writeflag`, and `FAULT_PERM_S`; its load observation pins read-only success. |
+| `enc ok` | Static literals only. |
+| `identity rows` | Cannot be audited: the brief does not define their names, producers, or expected values. |
+
+No proposed expected value depends on these statements or distinctions:
+
+- L1 type-0’s explicit `domain=0`: the proposed invalid descriptor already contains domain 0.
+- L2 type-0 preserving a nonzero coarse domain.
+- Descriptor freshness after a descriptor is modified following an earlier walk.
+- TTB change after `translation_table` has already been initialized, a null/out-of-RAM L1 table, or the descriptor endian-swap branch.
+- USR mode or `MEMORY_USER_ACCESS`.
+- DACR value 2 or manager value 3; AP 1, AP 2, and the other AP=0 S/R/user combinations.
+- L1 type 3.
+- Coarse-table domain fault, an out-of-RAM L2 table, 16-KiB pages, non-XScale 1-KiB pages, XScale type-3 pages, unequal subpage AP fields, `MEMORY_NOT_FULL_PAGE`, or page permission faults.
+- Exact diagnostic text unless it is parsed.
+- Thumb’s `+2` return-address arm, high-vector selection, SPSR contents, T clearing, or an I-bit transition. I is already set at reset, so merely reading CPSR after the abort does not pin `cpsr |= I`.
+- Correct vector-number selection if both vector targets produce identical outputs. Distinct handler IDs are needed.
+- c2 low-bit masking/warning, c3 MRC, c8 read rejection, or c8 opcode2-nonzero `INVALIDATE_VADDR`.
+- c5 read masking versus c5 write masking separately; a high-bit sentinel can only pin their combined observable behavior.
+- Store and instruction-cache invalidation by c8 unless explicit warmed store and prefetch targets are added. As filed, only the warmed remap load is clearly discriminating.
+- Physical decoded-code eviction—which c8 correctly does not perform.
+
+## 3 | Option-set completeness
+
+### i. Packaging
+
+Use one importable gated `arm_mmu_probe.py`:
+
+- helpers and constants at module scope
+- no argv parsing, stub creation, sessions, or reporting at import time
+- execution only under `main()` and `if __name__ == "__main__":`
+
+That matches the `sh4_pcic_probe.py` precedent ([sh4_pcic_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh4_pcic_probe.py:1015)). Do not import `arm_msrmode_probe.py`; it reads argv, creates a file, and executes rows at module scope. Port its machinery.
+
+I cannot settle how `tools/pipeline/check_probe_wiring.py` classifies an imported probe from the permitted source set. The checker is outside `src/` and `regress/*.py`, and no inlined premise specifies its algorithm. The SH4 imports prove precedent, not checker classification. Make that an explicit build-pass check rather than guessing.
+
+A separate neutral helper plus thin gated entrypoints is the fallback if the checker rejects imported gated probes. Copying the vehicle into three consumers is the weakest option because fixes and cache discipline can drift.
+
+### ii. Later consumers
+
+These rows do not establish:
+
+- Thumb execution, internal odd PC, a specific Thumb faulting site, T clearing, SPSR preservation, or Thumb LR.
+- High vectors. `0xffff000c` and `0xffff0010` both produce L1 offset `0x3ffc`, word index 4095, TTB address `0x7ffc`. With a section-0 descriptor, their physical offsets would be `0x000f000c` and `0x000f0010`, which must be planted.
+- USR32 entry or user-side AP=0/1/2 behavior.
+
+The reusable API should therefore parameterize DACR, c1 bits, page-table patches, entry mode/state, handlers, and stimulus.
+
+### iii. Forbidden paths
+
+The proposed L1 descriptor types are:
+
+`2,0,2,1,2,2`
+
+The L2 types are:
+
+`2,0`
+
+The accidental overlap adds another L1 type 2, not type 3. No row exercises the descriptor-type-3 exit.
+
+DACR `0x1` emits domain values:
+
+`[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]`
+
+Recommended DACR `0x41` emits:
+
+`[1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]`
+
+Neither contains 2.
+
+With V clear:
+
+- PREF_ABT vector: `3×4 = 0x0c`
+- DATA_ABT vector: `4×4 = 0x10`
+
+Both use mapped L1[0]. No row tests exception-vector translation failure. The deliberate branch to `0x00100000` tests stimulus prefetch failure, not failure to translate the abort vector.
+
+### iv. Unnamed option
+
+A data-driven common engine plus thin per-round entrypoints is a useful fourth packaging form. It preserves one implementation of planting/session/parsing while allowing the pipeline to gate only executable entrypoints. Use it only if the wiring checker requires the split.
+
+## 4 | Session plan
+
+As filed, exact `step N` values are not derivable because the handler words, order, sentinels, identity rows, and permission-row placement are unspecified.
+
+A concrete corrected arming stream is:
+
+```text
+8000  ee021f10  mcr p15,0,r1,c2,c0,0
+8004  ee032f10  mcr p15,0,r2,c3,c0,0
+8008  ee110f10  mrc p15,0,r0,c1,c0,0
+800c  e3800001  orr r0,r0,#1
+8010  ee010f10  mcr p15,0,r0,c1,c0,0
+8014  ee080f17  mcr p15,0,r0,c8,c7,0
+```
+
+Use this ten-instruction stackless handler body at both `0x8400` and `0x8500`, with distinct ID immediates:
+
+```text
++00  e584e000  str lr,[r4]
++04  e10f3000  mrs r3,cpsr
++08  e5843004  str r3,[r4,#4]
++0c  ee153f10  mrc p15,0,r3,c5,c0,0
++10  e5843008  str r3,[r4,#8]
++14  ee163f10  mrc p15,0,r3,c6,c0,0
++18  e584300c  str r3,[r4,#12]
++1c  e3a03003  mov r3,#3       ; PREF handler
+      e3a03004  mov r3,#4       ; DATA handler
++20  e5843010  str r3,[r4,#16] ; completion/handler ID
++24  eafffffe  b .
+```
+
+The vector encodings remain correct:
+
+- `0x0c -> 0x8400`: `0xea0020fb`
+- `0x10 -> 0x8500`: `0xea00213a`
+
+With data/page/domain faulting at `0x8018`, prefetch sentinel writes at `0x8018/0x801c`, and permission’s load/store sequence at `0x8018/0x801c/0x8020`:
+
+| Row | Count through first execution of `b .` | Command | Expected LR |
+|---|---:|---:|---:|
+| `data trans` | `6 arm + 1 fault + 1 vector + 10 handler = 18` | `step 18` | `0x8020` |
+| `page trans` | `6 + 1 + 1 + 10 = 18` | `step 18` | `0x8020` |
+| `domain` | `6 + 1 + 1 + 10 = 18` | `step 18` | `0x8020` |
+| `pref trans` | `6 + 2 sentinel MCR + 1 branch/fault + 1 vector + 10 = 20` | `step 20` | `0x00100004` |
+| `perm` | `6 + 1 accepted LDR + 1 result STR + 1 faulting STR + 1 vector + 10 = 20` | `step 20` | `0x8028` |
+
+If the AP=0 accept observation moves to the shared control process, permission becomes `step 18`, faults at `0x8018`, and expects LR `0x8020`.
+
+The prefetch miss is part of executing the target branch; it is not an extra counted instruction.
+
+One process may contain `live`, `mmu bit`, `ttb rd`, `remap`, `page map`, `hole dump`, and AP=0 load acceptance. A concrete control stream is:
+
+`2 live + 6 arm + 3 c1 readback + 2 c2 readback + 2 remap + 2 page map + 2 AP0 acceptance + 1 b. = 20`
+
+so it uses `step 20`. Each of the five abort rows needs a fresh process. Static `enc ok` needs no emulator process.
+
+Before enabling the MMU, explicitly warm these aligned VAs with distinct safe words:
+
+- `0x00100000`
+- `0x00200000`
+- `0x00300000`
+- `0x00400000`
+- `0x00401000`
+- `0x00500000`
+- `0x00600000`
+
+Use `b .` at the physical prefetch target and a fallback `b .` after every data stimulus. Missing c8 then produces a safe loop/poison result rather than wandering into the stop stub. Do not split arming and stimulus across debugger commands: final debugger re-entry invalidates all mappings ([debugger.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:781)).
+
+Finally, no: a DEST word written by the final recording `STR` proves execution reached that store, but it cannot prove the following `b .` executed. Pre-poison the ID slot, check the distinct ID, encoding-check the loop, and require the single-step trace/alive prompt to include the loop instruction. PC alone does not distinguish “stopped before a self-branch” from “executed the self-branch,” because both are the branch’s own address.
+
+Scope note: one initial broad search emitted a few path/match lines from `regress/artifacts` before I tightened the search; none was used above. I did not inspect the ledger or changelog.

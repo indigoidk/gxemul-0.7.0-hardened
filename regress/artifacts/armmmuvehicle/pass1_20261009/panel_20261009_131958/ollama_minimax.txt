@@ -1,0 +1,94 @@
+VERDICT: BUILD AS DESIGNED -- with three gaps the panel should weigh before "as designed" is recorded as "green for the wrong reason".
+
+---
+
+## §5.1 Premise audit
+
+**a. Vector fetch after a data abort, only section 0 mapped.**
+The vectors are at `0x0c` and `0x10`; both are inside section 0. The handler stubs are at `0x8400`/`0x8500`, also inside section 0. With section 0 identity, the vector fetch goes through `arm_translate_v2p_mmu`, returns the planted `B` word, the `B` executes, the handler runs. The `pc_to_pointers` "could not find physical address of the exception handler" exit in `cpu_dyntrans.c` is NOT reached. The §1.5 vectoring code is reached only after `arm_translate_v2p_mmu` succeeds, so a vector miss there would be a translation fault, not a `pc_to_pointers` exit. REASONED. (The §4 code does not itself call `pc_to_pointers`; the brief's wording could be read either way and the reader has to trust §1.5 + §4 together.)
+
+**b. `MCR c8` INVALIDATE_ALL drop.**
+The §4 walk caches only the L1 host pointer (keyed on `ttb != last_ttb`); every L1 and L2 descriptor is read fresh from host memory. The dyntrans `host_load`/`host_store` pages are a separate cache. `MCR c8` INVALIDATE_ALL is described in §1.3 as dropping the dyntrans cache. A `put w` made while identity was live warms a dyntrans page; after `MCR c8` that page is dropped, and the guest's first access rewarms it under the new translation. So a `put w` cannot service a load after the flush. REASONED. The exact list of what `INVALIDATE_ALL` drops is a packet-untested premise; the brief's §1.3 sentence is the warrant.
+
+**c. Implicit touches of unmapped addresses.**
+The testarm halt stub at `0x03FFF020` is never reached (the stimulus aborts or halts inside section 0). The brief does not mention a console device for `-E testarm`; `-V` is the verbose flag, not a polled UART. The `step` command's disassembly reads from PC, which is inside CODE (`0x8000`, section 0). The debugger's register display touches no memory. So no implicit touches. REASONED. (A polled console device, if one exists and the guest ever touches it, would be a problem; the packet does not name one.)
+
+**d. AP=0 privileged read-only, one of S/R always set at reset.**
+The §4 `arm_check_access` for `ap=0` computes `s = (control & S)? 1 : 0` and `r = (control & R)? 2 : 0`. For `user=0` (privileged), the `s+r` cases 1 and 2 both return 1 (read-only). Since reset sets exactly one of S or R, `s+r` is 1 or 2, never 0. So an AP=0 privileged LOAD returns 1 (read-only, success), and a privileged STORE faults (`1 > 1` is false). Whether `prom_emulation` is set for `-E testarm` is **not in the packet**; the conclusion is independent of it. REASONED for the AP=0 asymmetry. The `prom_emulation` value is a premise I cannot settle from the packet, named as such.
+
+**e. FSR enumeration from §4.**
+
+| row | VA | L1 / L2 | `dav` | `fs` | `domain` (at OR time) | FSR |
+|---|---|---|---|---|---|---|
+| `data trans` | `0x00100000` | `d=0` (unplanted) | 1 | `FAULT_TRANS_S`=5 | 0 (zeroed by `case 0:`) | `0x05` ✓ |
+| `page trans` | `0x00401000` | L1 `0x00005001` d=coarse d0; L2 entry 1 = 0 | 1 | `FAULT_TRANS_P`=7 | 0 (from L1; coarse `case 0:` does NOT zero domain) | `0x07` ✓ |
+| `domain` | `0x00500000` | `d=0x00500c22` (section, d1) | 0 | `FAULT_DOMAIN_S`=9 | 1 (from L1) | `0x19` ✓ |
+| `perm` | `0x00600000` | `d=0x00600002` (section, d0, AP=0) | 1 | `FAULT_PERM_S`=0xd | 0 (from L1) | `0x0d` ✓ |
+
+The brief's Q1.e prompt: if the coarse descriptor named domain 3 and the L2 entry faulted, the page-translation FSR would be `(3 << 4) | 7 = 0x37`. The coarse `case 0:` (line `case 0: fs = FAULT_TRANS_P; goto exception_return;` inside the `switch (d2 & 3)`) does NOT zero `domain`, so the FSR carries the L1 descriptor's domain. This is an asymmetry the brief flags and the rows do not test. REASONED.
+
+**f. Nested abort in the handler.**
+The handler is inside section 0 (identity under the new translation). Its instructions are: coprocessor (`MRC c5/c6`, `MRS`) -- no MMU; register move; `STR` to DEST (`0x9000`, section 0) -- succeeds; `B .` to itself (section 0) -- succeeds. No instruction in the handler can fault with only section 0 mapped. So no nested abort overwriting `LR_abt`/`SPSR_abt` before DEST is written. REASONED.
+
+## §5.2 Smallest edit that breaks the MMU fault path and keeps the proposed rows green
+
+**Primary candidate: remove `domain = 0;` from `case 0:` in §4 (one line, at `case 0: domain = 0; fs = FAULT_TRANS_S; goto exception_return;`).**
+This breaks the FSR for section translation faults whose descriptor has a non-zero domain. The proposed design's unplanted L1 entries are all-zero, so `domain` is already 0 and FSR is `0x05` with or without the line. All proposed rows stay green. The brief's Q1.e flags exactly this asymmetry, so the brief author has already conceded the gap. A future consumer that needs a non-zero domain on an unmapped section would not be covered.
+
+**Secondary candidates (also not caught):**
+- `MCR c8` made a no-op: every `put w` in the design is into section 0, which is identity under both translations, so the warmed page is consistent. All rows stay green.
+- Remove the `if (ttb != last_ttb) { ... }` re-resolution: the proposed design never changes the TTB. All rows stay green.
+- Remove `& 0xffffc000` from the c2 store: the proposed TTB is already 16 KB-aligned. All rows stay green.
+
+If the panel wants the MMU fault path to be fully pinned, the vehicle needs a row that exercises section-translation fault with a non-zero domain, or a TTB-swap row. The brief has explicitly excluded these as out of scope for this round, which is defensible -- but the row set then does not cover the `domain = 0` zeroing, and that should be recorded, not silently absorbed.
+
+## §5.3 Option-set completeness
+
+**(i) Packaging.** The single importable gated detector (the `sh4_pcic_probe.py` precedent) is the right shape for three consumer rounds to import helpers from. Cannot verify the precedent's wiring into `check_probe_wiring.py` from the packet; named as not-checkable. REASONED.
+
+**(ii) Row set gaps the brief does not name.**
+- Section-translation fault with non-zero `domain` in the descriptor (would catch the §5.2 edit).
+- TTB swap (would catch the `if (ttb != last_ttb)` removal; also useful for the high-vector case below).
+- Coarse-table domain fault (`dav==0` at the coarse descriptor): not tested; the design uses `dav==0` only on a section.
+- Page permission fault (coarse, `d2` type 2, `access <= writeflag`): not tested; the design's only permission fault is a section.
+- 16 KB page (L2 type 1): not tested; the design uses only type 2.
+- High vectors (`c1.V`, vector at `0xffff0000`): not tested. If a consumer round needs high vectors, the row set is incomplete.
+- USR-mode access: not tested. The design assumes the guest runs in SVC32 throughout. `arm_check_access` for `user=1` takes a different branch and is not exercised.
+- Re-plant after an abort (one process that survives an abort and exercises the path again with different descriptors): not tested.
+
+**(iii) Accidental reach of the three later-round defects.**
+- `armdesc3kill` (L1 type 3): not reached. Every planted L1 entry is type 0, 1, or 2. The L2 entries are type 0 and 2. REASONED.
+- `armdacr2kill` (DACR value 2): not reached. DACR is `0x00000001` (domain 0 client, domain 1 no-access); `dav` is computed as `(dacr >> (domain*2)) & 3`, which is 0 or 1 in the proposed walks. The `arm_check_access` `case 2:` is never taken. REASONED.
+- Vector-fetch `pc_to_pointers` exit: not reached. Vectors and handlers are all in section 0. REASONED.
+
+**(iv) Members the brief did not name.**
+- The `enc ok` row is mentioned but its scope is not enumerated. It needs to cover: every planted CODE word, every planted handler word, every planted vector word, every planted L1 descriptor, every planted L2 descriptor. The §1.6 `put w` warms the page, so a bad `put w` (typo in the value) would plant a wrong descriptor and the row that uses it would read the wrong sentinel. `enc ok` is the only line of defence.
+- The "identity rows" are mentioned as a tail but not specified. The controls process should include at least one MMU-on load whose VA and PA are in the same section (e.g. VA `0x00001000` -> PA `0x00001000`), so that a regression to identity-after-M-bit is caught. Without this, the remap row alone tests the MMU-on path; if a future change accidentally makes the MMU pass-through identity for the stimulus's section, the remap row would catch it (because it expects a non-identity result) -- so this is partially covered. But a positive identity assertion is cleaner.
+
+## §5.4 Session plan
+
+**Process sharing.** Controls (live, mmu bit, ttb rd, remap, page map, hole dump, enc ok, identity rows) in one process that never aborts. Each abort row is its own process (data trans, pref trans, page trans, domain, perm). Enc ok is a static check (dump + compare) and can be a separate process or part of the controls process. REASONED.
+
+**Step counts (approximate, exact count is an implementation artefact of the assembled handler).**
+
+| row | arming | plant | stimulus | vector B | handler | total |
+|---|---|---|---|---|---|---|
+| controls | 5 (MCR c2, c3, MRC c1, ORR, MCR c1, MCR c8) | -- | varies (live before arming, then mmu bit/ttb rd/remap/page map STRs) | -- | -- | depends; the live check is 2 instr before the M bit, then arming, then ~8 instr after |
+| data trans | 5 | -- | 1 (LDR, faults) | 1 (B at `0x10`) | ~9 (4 MRC/MRS, 4 STR, B .) | ~16 |
+| pref trans | 5 | 2 (MCR c5, c6 for sentinels) | 1 (B, faults on target fetch) | 1 (B at `0x0c`) | ~9 | ~18 |
+| page trans | 5 | -- | 1 (LDR, faults) | 1 | ~9 | ~16 |
+| domain | 5 | -- | 1 (LDR, faults) | 1 | ~9 | ~16 |
+| perm | 5 | -- | 2 (LDR succeeds, STR faults) | 1 | ~9 | ~17 |
+
+**Proving the step count ran.** The brief's suggestion (DEST word the last handler instruction writes) is half an answer. The handler's last writing instruction is the last `STR` to DEST, not the terminal `B .`. The `STR` of LR to `DEST+12` is a natural marker: its presence proves the handler reached the final `STR`. Combined with the four prior `STR`s, the full DEST block is written only if every handler instruction ran. A "step-counter incremented in DEST" would be tighter, but the DEST-block-present check plus the `step N`-only discipline (no `continue`) is sufficient for this vehicle. The risk the brief names (overrun into the LR stub) is real and is the reason the `b .` at the end of the handler is in section 0, not at the LR stub address. REASONED.
+
+## §5 (out-of-scope) Thumb data-abort LR
+
+From §1.5: `retaddr = cpu->pc;` then `case DATA_ABT: retaddr += 4;` then `retaddr += (T ? 2 : 4);`. In Thumb state, `retaddr = pc + 4 + 2 = pc + 6`. DDI 0100I (ARM ARM) data-abort entry says `LR_abt = aborted_instruction + 8` in both ARM and Thumb states. So in Thumb, the implementation gives `pc + 6`, the architecture gives `pc + 8`. The brief is correct: this is a real defect, owned by `armthumbabortkill`'s round. REASONED.
+
+## Other things the brief asks to be flagged
+
+- The `dump` command's MMU behavior (whether it routes through `arm_translate_v2p_mmu` or reads physical memory directly) is a **packet-untested premise**. The `hole dump` row depends on `dump` going through the MMU. If `dump` reads PA directly, the row always reports "memory access succeeded" with whatever is at PA `0x100000`, and the row reddens on HEAD. The §1.6 "CACHE_NONE | NO_EXCEPTIONS" describes the flags, not the routing. Named as a premise that needs one fact to settle: read the `dump` command's implementation in the debugger and confirm it calls `arm_translate_v2p_mmu` (or whatever the current `translate_v2p` is after the M bit).
+- The §1.3 "c1 writes `control` and, when the M bit changes, swaps `cpu->translate_v2p` between `arm_translate_v2p` and `arm_translate_v2p_mmu` with no cache invalidation" is consistent with §2 hole 2's "MCR c8 AFTER the M bit, always". REASONED. But the actual `invalidate_translation_caches` call in the c1 handler (if any) is a packet-untested premise; the brief's sentence asserts there is none.
+- The "r1/r2 preset by the debugger" sentence does not name the registers the stimulus uses. If the stimulus reuses r1/r2 after the arming, the MCRs have already been issued and the overwrites are harmless; if the stimulus hardcodes VA in the instruction (`LDR r0, [pc, #offset]` from a literal pool), no register preset is needed. The implementation will need to pick one. Not a defect in the design, but a gap the implementer must close.
+- The step counts in §5.4 above are my enumeration; the brief did not give them, and the exact number depends on the handler the probe assembles. The "one process per abort row, step N counted exactly" discipline is the load-bearing rule; the numbers follow from the chosen handler.

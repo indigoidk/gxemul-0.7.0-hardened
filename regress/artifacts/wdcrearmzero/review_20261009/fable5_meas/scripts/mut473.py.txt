@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+# fable5 late review of #473: build ONE mutant of dev_wdc.c into dst.
+# Every edit is a regex that must match EXACTLY ONCE, so a mutant that silently
+# selected nothing (or two sites) is a FAULT, never a measurement.
+import io, re, sys
+
+src, dst, name = sys.argv[1], sys.argv[2], sys.argv[3]
+s = io.open(src, encoding="utf-8", newline="").read()
+
+REARM = r"(d->atapi_received;\n\s*)if \(d->atapi_len > 32768\)"
+ARM   = r"(d->atapi_len = d->atapi_st->data_in_len;\n\s*)if \(d->atapi_len > 32768\)"
+REARM_ASSIGN = r"(d->atapi_received;\n\s*if \(d->atapi_len > 32768\)\n\s*d->atapi_len = )32768;"
+
+MUT = {
+    # positive control: predicted KILLED by the length row (wants 32768)
+    "ctrl_rearm32767": (REARM_ASSIGN, r"\g<1>32767;"),
+    # clause (d), operand swap to a body-read field: misbehaves ONLY at received <= 65536,
+    # i.e. the transfer's FIRST re-arm (received == 32768)
+    "M1_opswap_received": (REARM, r"\1if (d->atapi_received > 65536)"),
+    # clause (d), "a bound relaxed" -- the carrier's own canonical example
+    "M2_rearm_relax65536": (REARM, r"\1if (d->atapi_len > 65536)"),
+    # the same relaxation on the INITIAL arm's clamp
+    "M2b_arm_relax65536": (ARM, r"\1if (d->atapi_len > 65536)"),
+    # the bound moved the OTHER way (over-pushes on a (16384, 32768] remainder: reads past data_in)
+    "M3_rearm_lower16384": (REARM, r"\1if (d->atapi_len > 16384)"),
+}
+
+pat, rep = MUT[name]
+n = len(re.findall(pat, s))
+if n != 1:
+    sys.stderr.write("MUTANT_FAULT %s: pattern matched %d times, want 1\n" % (name, n))
+    sys.exit(9)
+out = re.sub(pat, rep, s, count=1)
+if out == s:
+    sys.stderr.write("MUTANT_FAULT %s: no change\n" % name)
+    sys.exit(9)
+io.open(dst, "w", encoding="utf-8", newline="").write(out)
+print("MUTANT_OK %s (1 site)" % name)

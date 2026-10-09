@@ -1,0 +1,28 @@
+VERDICT: BUILD WITH CHANGES (1) -- add an unmapped-section descriptor with nonzero domain to pin case-0 domain zeroing; otherwise design is sound.
+
+1a. **REASONED.** Conditional on c8 invalidate-all working (1b), after a data abort sets `pc=0x10`, the next fetch goes through `arm_translate_v2p_mmu` using the section 0 identity mapping. The vector address is mapped, so no physical bypass or generic `pc_to_pointers` exit should occur.
+
+1b. **NOT CHECKABLE from packet.** The packet states c8 opcode2=0 is `INVALIDATE_ALL`, but does not inline its implementation or prove it invalidates both dyntrans load/store pages and cached instruction translations. The single fact that would settle it: the c8 handler in `cpu_arm_coproc.c` and the invalidation routine it calls.
+
+1c. **NOT CHECKABLE from packet.** Premise 6 says debugger `dump` uses `NO_EXCEPTIONS` and entering the debugger invalidates caches, but it does not enumerate every implicit access of `step N` or register display. The missing fact is whether `step`’s disassembly or display path touches memory outside the current `pc` and whether it uses `NO_EXCEPTIONS`.
+
+1d. **READ/REASONED.** §1.4 states one of `ARM_CONTROL_S`/`ARM_CONTROL_R` is set at reset. In `arm_check_access` AP=0, both S and R settings return read-only for privileged access (`user=0`). `prom_emulation` is not stated, but it does not matter for this AP=0 privileged case. So AP=0 load succeeds, store faults.
+
+1e. **READ/REASONED** from code and ARM FSR encodings:
+- `data trans`: domain 0, `FAULT_TRANS_S`=0x05 → `0x05`
+- `page trans`: domain 0, `FAULT_TRANS_P`=0x07 → `0x07`
+- `domain`: domain 1, `FAULT_DOMAIN_S`=0x09 → `0x19`
+- `perm`: domain 0, `FAULT_PERM_S`=0x0d → `0x0d`
+
+For coarse L2 type 0 with domain 3, `domain` is not zeroed in the L2 `case 0:`, so FSR = `(3<<4)|0x07 = 0x37`. This is exactly the gap the added row should cover.
+
+1f. **REASONED.** No nested abort if the handler executes only from mapped section 0 and writes DEST in mapped section 0 without using the initial SP at `0x03fff000` (unmapped). The described stubs do that; if they used SP or touched unmapped memory, they could overwrite `LR_abt`/`SPSR_abt` before DEST is written.
+
+2. **Remove the `case 0:` `domain = 0;` line** in the first-level descriptor switch. The row that stays green is `data trans` — its unmapped descriptor is zero, so `domain` is already 0 and FSR remains `0x05`. The mutant breaks the fault path for unmapped sections with nonzero domain, but no proposed row catches it.
+
+3. (i) **Packaging:** one importable gated probe is fine; precedent supports it.  
+(ii) **Missing:** a nonzero-domain unmapped section row (added). For consumer rounds: `armthumbabortkill` will need a Thumb entry/abort row, but that cannot be green on HEAD now because of the defect; it belongs in that round. `armdacr2kill` needs DACR 2; `armdesc3kill` needs type-3 descriptor — both correctly deferred.  
+(iii) **No accidental reach:** design uses only descriptor types 0/1/2, DACR 0x1, and all ARM state.  
+(iv) High vectors not covered; not needed for these three defects unless a consumer round wants c1.V, but none stated.
+
+4. **Controls** (`live`, `mmu bit`, `ttb rd`, `remap`, `page map`, `hole dump`) can share one process because they never abort. **Abort rows** one process each. Exact `step N` cannot be computed from the packet without handler instruction encodings; method: `N = 6 arming + 1 stimulus + H handler instructions up to and including the final marker-writing instruction`, then land on `b .`. A distinct DEST marker written as the last handler instruction is sufficient to prove handler completion; because handlers end in `b .` in section 0, a few extra steps loop safely.

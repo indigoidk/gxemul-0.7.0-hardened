@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""opus5 seat, armmmuvehicle pass 1 -- MEASURE the brief's premises (a)-(f) on the working tree.
+
+Every experiment is ONE fresh `gxemul -V -A -E testarm -M 64' process; its full transcript is saved
+as T_<name>.txt beside this script.  Nothing here writes to any project tree.
+"""
+import os
+import re
+import sys
+from gxsess import session, dumped, dumpcmd, HERE
+
+BIN = sys.argv[1]
+TAG = sys.argv[2] if len(sys.argv) > 2 else "base"
+ONLY = sys.argv[3].split(",") if len(sys.argv) > 3 else None
+
+CODE, PH, DH, DEST, LIVE, TTB, L2 = 0x8000, 0x8400, 0x8500, 0x9000, 0x9100, 0x4000, 0x5000
+POISON = 0xDEADBEEF
+
+
+def b_to(src, dst):
+    off = ((dst - (src + 8)) >> 2) & 0xFFFFFF
+    return 0xEA000000 | off
+
+
+W = {
+    "mcr_c2_r1": 0xEE021F10,   # mcr p15,0,r1,c2,c0,0   TTB <- r1
+    "mcr_c3_r2": 0xEE032F10,   # mcr p15,0,r2,c3,c0,0   DACR <- r2
+    "mrc_c1_r0": 0xEE110F10,   # mrc p15,0,r0,c1,c0,0
+    "orr_r0_1":  0xE3800001,   # orr r0,r0,#1
+    "mcr_c1_r0": 0xEE010F10,   # mcr p15,0,r0,c1,c0,0   control <- r0 (M on)
+    "mcr_c8_r0": 0xEE080F17,   # mcr p15,0,r0,c8,c7,0   invalidate TLB (all)
+    "nop":       0xE1A00000,   # mov r0,r0
+    "mcr_c5_r6": 0xEE056F10,   # mcr p15,0,r6,c5,c0,0   FSR <- r6 (sentinel)
+    "mcr_c6_r7": 0xEE067F10,   # mcr p15,0,r7,c6,c0,0   FAR <- r7 (sentinel)
+    "ldr_r3_r5": 0xE5953000,   # ldr r3,[r5]
+    "str_r3_r5": 0xE5853000,   # str r3,[r5]
+    "str_r3_r4": 0xE5843000,   # str r3,[r4]
+    "mrc_c1_r3": 0xEE113F10,
+    "mrc_c2_r3": 0xEE123F10,
+    "mrc_c5_r3": 0xEE153F10,
+    "mrc_c6_r3": 0xEE163F10,
+    "mrs_r3":    0xE10F3000,   # mrs r3,cpsr
+    "mrs_r3_s":  0xE14F3000,   # mrs r3,spsr
+    "b_self":    0xEAFFFFFE,
+    "ldr_r3_r8": 0xE5983000,   # ldr r3,[r8]
+    "ldr_r3_r9": 0xE5993000,   # ldr r3,[r9]
+    "ldr_r3_r10": 0xE59A3000,  # ldr r3,[r10]
+    "ldr_r3_r11": 0xE59B3000,  # ldr r3,[r11]
+    "str_r3_sp_pre": 0xE52D3004,  # str r3,[sp,#-4]!   (handler stack use -> nested abort probe)
+    "bx_r5":     0xE12FFF15,   # bx r5
+    "thumb_ldr_r0_r1": 0x6808,  # (thumb) ldr r0,[r1,#0]
+}
+
+
+def str_r3(off):
+    return 0xE5843000 | off      # str r3,[r4,#off]
+
+
+def str_lr(off):
+    return 0xE584E000 | off      # str lr,[r4,#off]
+
+
+def mov_r3(imm8):
+    return 0xE3A03000 | imm8     # mov r3,#imm8
+
+
+def handler(marker, first=None):
+    ops = []
+    if first is not None:
+        ops.append(first)
+    ops += [str_lr(4), W["mrs_r3_s"], str_r3(8), W["mrs_r3"], str_r3(12),
+            W["mrc_c5_r3"], str_r3(16), W["mrc_c6_r3"], str_r3(20), mov_r3(marker), str_r3(24),
+            W["b_self"]]
+    return ops
+
+
+L1_BASE = {TTB + 0x00: 0x00000C02,   # section 0 identity AP=3 dom0
+           TTB + 0x08: 0x00300C02,   # VA 0x002 -> PA 0x003
+           TTB + 0x10: 0x00005001,   # VA 0x004 -> coarse @0x5000 dom0
+           TTB + 0x14: 0x00500C22,   # VA 0x005 section dom1
+           TTB + 0x18: 0x00600002}   # VA 0x006 section AP=0 dom0
+L2_BASE = {L2 + 0x0: 0x00600FF2}     # VA 0x00400000 -> PA 0x00600000 small page AP=3
+DATA_BASE = {0x00100000: 0x11100111, 0x00123458: 0x12345858, 0x00200000: 0x22222222,
+             0x00300000: 0x33333333, 0x00400000: 0x44444444, 0x00401000: 0x44401000,
+             0x00500000: 0x55555555, 0x00600000: 0x66666666, LIVE: 0x11111111}
+
+
+def plants(words):
+    return ["put w 0x%x, 0x%08x" % (a, v) for a, v in sorted(words.items())]
+
+
+def program(code_ops, dh_ops=None, ph_ops=None, extra=None):
+    w = {}
+    for i, v in enumerate(code_ops):
+        w[CODE + 4 * i] = v
+    for i, v in enumerate(dh_ops or handler(0xDA)):
+        w[DH + 4 * i] = v
+    for i, v in enumerate(ph_ops or handler(0xBF)):
+        w[PH + 4 * i] = v
+    w[0x0C] = b_to(0x0C, PH)
+    w[0x10] = b_to(0x10, DH)
+    for o in range(0, 0x40, 4):
+        w[DEST + o] = POISON
+    if extra:
+        w.update(extra)
+    return w
+
+
+ARM_FLUSH = [W["mcr_c2_r1"], W["mcr_c3_r2"], W["mrc_c1_r0"], W["orr_r0_1"], W["mcr_c1_r0"],
+             W["mcr_c8_r0"]]
+ARM_NOFLUSH = ARM_FLUSH[:5] + [W["nop"]]
+
+FAULT_RE = re.compile(r"\{ arm memory fault: vaddr=0x([0-9a-f]+) domain=(\d+) dav=(\d+) ap=(\d+) "
+                      r"access=(\d+) user=(\d+)\s*d=0x([0-9a-f]+) d2=0x([0-9a-f]+) pc=0x([0-9a-f]+) \}")
+TRACE_RE = re.compile(r"^([0-9a-f]{8}):  ([0-9a-f]{8}|[0-9a-f]{4})\s", re.M)
+
+results = []
+
+
+def run(name, words, regs, steps, post=(), extra_args=(), presteps=None, between=()):
+    """presteps: a `step K' + dumps BEFORE the main step (a debugger re-entry); between: commands
+    in that second interaction (before the main `step')."""
+    if ONLY and name not in ONLY:
+        return None
+    cmds = plants(words) + ["%s=0x%x" % (r, v) for r, v in regs] + ["pc=0x%x" % CODE]
+    cmds.append("unassemble 0x%x 0x%x" % (CODE, CODE + 0x40))
+    if presteps:
+        cmds += ["step %d" % presteps, "print 0x5eed0001"] + list(between)
+    cmds += ["step %d" % s for s in steps]
+    cmds += ["print pc", "print cpsr", dumpcmd(DEST, DEST + 0x3C)] + list(post)
+    t, alive, st = session(BIN, cmds, per_cmd=0.25, extra_args=extra_args)
+    with open(os.path.join(HERE, "T_%s_%s.txt" % (TAG, name)), "w") as f:
+        f.write(t)
+    faults = FAULT_RE.findall(t)
+    k = t.find("GXemul> step ")
+    trace = [a for a, _w in TRACE_RE.findall(t[k:] if k >= 0 else "")]
+    d = {o: dumped(t, DEST + o) for o in range(0, 0x40, 4)}
+    res = {"name": name, "alive": alive, "status": st, "faults": faults, "trace": trace, "dest": d,
+           "t": t}
+    results.append(res)
+    return res
+
+
+def hx(v):
+    return "None" if v is None else ("POISON" if v == POISON else "0x%08x" % v)
+
+
+def show(res, slots):
+    if res is None:
+        return
+    print("=== %s  alive=%s status=%s" % (res["name"], res["alive"], res["status"]))
+    print("    faults(%d): %s" % (len(res["faults"]), "; ".join(
+        "vaddr=0x%s dom=%s dav=%s ap=%s acc=%s user=%s d=0x%s d2=0x%s pc=0x%s" % f
+        for f in res["faults"])))
+    tr = res["trace"]
+    print("    trace(%d): %s" % (len(tr), " ".join(x.lstrip("0") or "0" for x in tr)))
+    print("    DEST: " + "  ".join("+%02x=%s" % (o, hx(res["dest"][o])) for o in slots))
+
+
+DACR = 0x00000001
+REGS = [("r1", TTB), ("r2", DACR), ("r4", DEST)]
+HSLOTS = [0, 4, 8, 12, 16, 20, 24]
+STEPS_DABT = 6 + 1 + 1 + 11      # arming + faulting LDR + vector B + handler through the marker STR
+
+# ---------------------------------------------------------------- (a)+(d)+(f) controls, c8 after M
+ctl_code = [W["ldr_r3_r11"], str_r3(0x3C)] + ARM_FLUSH + [
+    W["mrc_c1_r3"], str_r3(0x20), W["mrc_c2_r3"], str_r3(0x24),
+    W["ldr_r3_r8"], str_r3(0x28), W["ldr_r3_r9"], str_r3(0x2C),
+    W["ldr_r3_r10"], str_r3(0x30), W["ldr_r3_r11"], str_r3(0x34),
+    mov_r3(0xC1), str_r3(0x38), W["b_self"]]
+words = program(ctl_code, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+r = run("ctl", words, REGS + [("r8", 0x00200000), ("r9", 0x00400000), ("sl", 0x00600000),
+                              ("fp", LIVE)], [len(ctl_code) - 1 + 2],
+        post=["dump 0x00100000 0x00100010", "dump 0x00123450 0x00123460",
+              "dump 0x00200000 0x00200010", "dump 0x00400000 0x00400010",
+              "dump 0x00401000 0x00401010", "dump 0x00500000 0x00500010",
+              "dump 0x00600000 0x00600010", "dump 0x03fff020 0x03fff030",
+              "dump 0x0 0x20", "print 0x5eedd0d0"])
+show(r, [0x20, 0x24, 0x28, 0x2C, 0x30, 0x34, 0x38, 0x3C])
+if r:
+    for line in r["t"].splitlines():
+        if line.startswith("0x001") or line.startswith("0x002") or line.startswith("0x004") \
+           or line.startswith("0x005") or line.startswith("0x006") or line.startswith("0x03fff02") \
+           or line.startswith("0x0000000") or line.startswith("0x0000001"):
+            print("    DUMPLINE " + line)
+
+# ---------------------------------------------------------------- (b) data aborts
+for nm, addr, dacr in (("dtrans", 0x00100000, DACR), ("dtrans_odd", 0x00123458, DACR),
+                       ("pgtrans", 0x00401000, DACR), ("domain", 0x00500000, DACR)):
+    code = ARM_FLUSH + [W["ldr_r3_r5"], W["str_r3_r4"], W["b_self"]]
+    words = program(code, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+    r = run(nm, words, [("r1", TTB), ("r2", dacr), ("r4", DEST), ("r5", addr)], [STEPS_DABT, 3])
+    show(r, HSLOTS)
+
+# perm: STR to the AP=0 section (store faults), and its accept: an AP=0 LOAD succeeds
+code = ARM_FLUSH + [W["ldr_r3_r5"], str_r3(0x30), mov_r3(0x77), W["str_r3_r5"], W["str_r3_r4"],
+                    W["b_self"]]
+words = program(code, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+r = run("perm", words, REGS + [("r5", 0x00600000)], [6 + 2 + 2 + 1 + 1 + 11, 3],
+        post=["dump 0x00600000 0x00600010"])
+show(r, HSLOTS + [0x30])
+
+# page trans with the coarse descriptor in DOMAIN 3 (DACR domain 3 = client) -- brief Q1e
+l1d3 = dict(L1_BASE)
+l1d3[TTB + 0x10] = 0x00005061        # coarse @0x5000, domain 3
+code = ARM_FLUSH + [W["ldr_r3_r5"], W["str_r3_r4"], W["b_self"]]
+words = program(code, extra={**l1d3, **L2_BASE, **DATA_BASE})
+r = run("pgtrans_dom3", words, [("r1", TTB), ("r2", 0x00000041), ("r4", DEST), ("r5", 0x00401000)],
+        [STEPS_DABT, 3])
+show(r, HSLOTS)
+# ... and with domain 3 NO-ACCESS (DACR 0x01): a DOMAIN fault on the coarse path
+r = run("pgdomain_dom3", words, [("r1", TTB), ("r2", 0x00000001), ("r4", DEST), ("r5", 0x00401000)],
+        [STEPS_DABT, 3])
+show(r, HSLOTS)
+
+# ---------------------------------------------------------------- (c) prefetch abort, sentinels first
+pcode = [W["mcr_c5_r6"], W["mcr_c6_r7"]] + ARM_FLUSH + [b_to(CODE + 8 + 4 * 6, 0x00100000), W["b_self"]]
+words = program(pcode, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+r = run("ptrans", words, REGS + [("r6", 0xA4A5A6A7), ("r7", 0xFA4F0F00)],
+        [2 + 6 + 1 + 1 + 11, 3])
+show(r, HSLOTS)
+
+# ---------------------------------------------------------------- (e) put-w warm translation vs c8
+e_code = ARM_NOFLUSH + [W["ldr_r3_r5"], W["str_r3_r4"], W["ldr_r3_r8"], str_r3(0x28),
+                        W["ldr_r3_r9"], str_r3(0x2C), mov_r3(0xE0), str_r3(0x38), W["b_self"]]
+ewords = program(e_code, extra={**L1_BASE, **L2_BASE, **DATA_BASE, 0x00100000: 0xCAFEF00D})
+e_regs = REGS + [("r5", 0x00100000), ("r8", 0x00200000), ("r9", 0x00400000)]
+r = run("e_noflush", ewords, e_regs, [len(e_code) - 1 + 2],
+        post=["dump 0x00100000 0x00100010", "tlbdump r"])
+show(r, [0, 0x28, 0x2C, 0x38] + HSLOTS[1:])
+if r:
+    for line in r["t"].splitlines():
+        if line.startswith("0x00100000"):
+            print("    DUMPLINE " + line)
+e_code_f = ARM_FLUSH + e_code[6:]
+ewords_f = program(e_code_f, extra={**L1_BASE, **L2_BASE, **DATA_BASE, 0x00100000: 0xCAFEF00D})
+r = run("e_flush", ewords_f, e_regs, [len(e_code_f) - 1 + 2 + 12])
+show(r, [0, 0x28, 0x2C, 0x38] + HSLOTS[1:])
+# same NO-flush program, but the plants are separated from the stimulus by a debugger re-entry
+r = run("e_noflush_reentry", ewords, e_regs, [len(e_code) - 2 + 12], presteps=1)
+show(r, [0, 0x28, 0x2C, 0x38] + HSLOTS[1:])
+# guest-made warm translation: the GUEST loads 0x00100000 with the MMU off, then M on, no flush
+g_code = [W["nop"], W["ldr_r3_r5"], str_r3(0x3C)] + ARM_NOFLUSH + [
+    W["ldr_r3_r5"], W["str_r3_r4"], mov_r3(0xE1), str_r3(0x38), W["b_self"]]
+gwords = program(g_code, extra={**L1_BASE, **L2_BASE, **DATA_BASE, 0x00100000: 0xCAFEF00D})
+r = run("e_guestwarm_noflush", gwords, e_regs, [len(g_code) - 1 + 2 + 12], presteps=1)
+show(r, [0, 0x38, 0x3C] + HSLOTS[1:])
+g_code_f = g_code[:3] + ARM_FLUSH + g_code[9:]
+gwords_f = program(g_code_f, extra={**L1_BASE, **L2_BASE, **DATA_BASE, 0x00100000: 0xCAFEF00D})
+r = run("e_guestwarm_flush", gwords_f, e_regs, [len(g_code_f) - 1 + 2 + 12], presteps=1)
+show(r, [0, 0x38, 0x3C] + HSLOTS[1:])
+
+# ---------------------------------------------------------------- (f) implicit touches after M:
+# debugger put after the M bit (w / h / b) to an unmapped VA, then where is the CPU?
+code = ARM_FLUSH + [mov_r3(0xC2), str_r3(0x38), W["b_self"]]
+words = program(code, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+r = run("put_after_m", words, REGS, [6 + 2 + 1],
+        post=["print pc", "print cpsr", "put b 0x00100004, 0x55", "print pc", "print cpsr",
+              "put h 0x00100008, 0x6666", "print pc", "print cpsr",
+              "put w 0x0010000c, 0x77777777", "print pc", "print cpsr", "print lr",
+              "dump 0x00100000 0x00100010", "step 14", "print pc", dumpcmd(DEST, DEST + 0x3C)])
+show(r, HSLOTS + [0x38])
+if r:
+    seg = r["t"][r["t"].find("put b 0x00100004"):]
+    print("    PUTSEG:\n" + "\n".join("      " + x for x in seg.splitlines()[:60]))
+
+# handler stack use: SP_abt is never loaded -> a push from the handler nests a data abort
+nh = handler(0xDA, first=W["str_r3_sp_pre"])
+code = ARM_FLUSH + [W["ldr_r3_r5"], W["str_r3_r4"], W["b_self"]]
+words = program(code, dh_ops=nh, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+r = run("nested", words, REGS + [("r5", 0x00100000)], [STEPS_DABT + 1, 3],
+        post=["print sp", "print lr", "print cpsr"])
+show(r, HSLOTS)
+
+# ---------------------------------------------------------------- out of scope: Thumb LR values
+# Thumb DATA abort: bx to a Thumb `ldr r0,[r1,#0]' with r1 unmapped (MMU on).
+tcode = ARM_FLUSH + [W["bx_r5"], W["b_self"]]
+tw = program(tcode, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+tw[0x8100] = W["thumb_ldr_r0_r1"] | (0x46C0 << 16)    # ldr r0,[r1,#0] ; nop (mov r8,r8)
+r = run("thumb_dabt", tw, REGS + [("r5", 0x8101), ("r1", 0x00100000)], [6 + 1 + 1 + 1, 4],
+        post=["print pc", "print cpsr", "print lr", "print 0x5eedbeef"])
+show(r, HSLOTS)
+if r:
+    seg = r["t"][r["t"].find("step 9"):]
+    print("    THUMBSEG:\n" + "\n".join("      " + x for x in seg.splitlines()[:40]))
+# Thumb PREFETCH abort: bx to an unmapped odd address
+tcode = ARM_FLUSH + [W["bx_r5"], W["b_self"]]
+tw = program(tcode, extra={**L1_BASE, **L2_BASE, **DATA_BASE})
+r = run("thumb_pabt", tw, REGS + [("r5", 0x00100001)], [6 + 1 + 1 + 1 + 11, 3])
+show(r, HSLOTS)
+# ARM-state BX to an unmapped EVEN address (control for the Thumb prefetch row)
+r = run("arm_bx_pabt", tw, REGS + [("r5", 0x00100000)], [6 + 1 + 1 + 1 + 11, 3])
+show(r, HSLOTS)
+
+# ---------------------------------------------------------------- vector page unmapped
+# section 0 through a coarse table at 0x5400 whose page 0 (the vectors) is UNMAPPED; pages 8, 9 identity
+vu = dict(L1_BASE)
+vu[TTB + 0x00] = 0x00005401
+vl2 = {0x5400 + 4 * 8: 0x00008FF2, 0x5400 + 4 * 9: 0x00009FF2}
+code = ARM_FLUSH + [W["ldr_r3_r5"], W["str_r3_r4"], W["b_self"]]
+words = program(code, extra={**vu, **L2_BASE, **vl2, **DATA_BASE})
+r = run("vec_unmapped", words, REGS + [("r5", 0x00100000)], [8, 3])
+if r:
+    print("=== vec_unmapped alive=%s status=%s faults=%d" % (r["alive"], r["status"],
+                                                            len(r["faults"])))
+    print("    first faults: %s" % (r["faults"][:4],))
+    print("    tail: %r" % r["t"][-600:])
+    print("    'could not find physical' present: %s" % ("could not find physical" in r["t"]))
+
+print("MEAS1_DONE tag=%s" % TAG)

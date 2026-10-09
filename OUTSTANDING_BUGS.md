@@ -24586,3 +24586,81 @@ msrmode probe drives `-E testarm`, which attaches no i80321, so its kill tables 
 rebuilt clean (every object deleted) before its final gate run.  Owed: when a propagated path is a header, delete every
 object that includes it (or every object) and rebuild; and a THIRD clearance part -- no object older than any edited
 header -- in the tool and in the checkpoint step.
+
+## 2026-10-09 — GXEMUL [087a90]: what Fable 5.1's first queue batch and the `armmmuvehicle` pass-1 panel filed
+
+Fable 5.1 adjudication resumed 2026-10-09 (owner).  Its first batch -- late REVIEW seats on `wdcrearmzero` (#473) and
+`asiceventaddr` (#466), each answered by Fable 5.1 AND Opus 5.5, both measuring in scratch clones -- and the MMU
+vehicle's pass-1 design panel produced these rows.  Seat answers: `regress/artifacts/wdcrearmzero/review_20261009/`,
+`regress/artifacts/asiceventaddr/review_20261009/`, `regress/artifacts/armmmuvehicle/pass1_20261009/`.
+
+### `wdc473floor` (MEDIUM, detector) — #473's shipped clamp detector passes all 128 rows under eight one-token variants, and #495's write guard is ungated
+
+`regress/diff_wdc_identify.c` (gate 2) is the detector `#473` (`1f1a02b`) shipped for the ATAPI re-arm and arm clamps
+in `src/devices/dev_wdc.c`.  Two seats each built four variants that keep the fix's guard and null its repair, and
+each scored 0 failures out of 128 at HEAD:
+
+* **Bound position (Fable 5.1):** the re-arm `atapi_len > 32768` relaxed to `65536` or lowered to `16384`, the arm's
+  bound relaxed to `65536`, and the re-arm operand swapped to `atapi_received > 65536`.  No row's remainder or
+  transfer size sits near 32768 on either side (re-arm remainders 4998, 7232, 68930; arm sizes up to 263168).
+  MEASURED repair: rows at 32767 and 32769 on each clamp kill all four.  A just-PAST row alone cannot see a LOWERED
+  bound -- both sides are owed.
+* **Content (Opus 5.5):** `Md_frozenj` (codex's, named on #473's pass 2 and never built), `Md_revwalk` (glm's),
+  `Md_halfj`, `Md_armfrozen` -- every content check reads only the first byte of the chunk.  MEASURED repair: three
+  rows (`proposed_opus/PROPOSED.diff`), which also kill HEAD with `#495`'s write guard removed.
+
+"A bound relaxed" is the vacuity floor's own clause-(d) example, on the predicate the fix depends on, so this is a
+FLOOR BREACH of shipped material: **L2, a follow-up round under the late-dissent rule** (never under #473's number).
+Owner ruling 2026-10-09: this round first, ahead of the `asiceventaddr` closure and the MMU vehicle.  The held
+question itself is CLOSED: at HEAD the data ring is always empty when the re-arm runs (Opus: 0 of 26,315 measured
+re-arms; Fable: by reading every producer and consumer) -- it was not at `1f1a02b`, which `#495` fixed.
+
+### `armvecrecurse` (HIGH, cpu) — an abort with the vector page unmapped recurses until the HOST process dies
+
+MEASURED by the Opus 5.5 seat on `armmmuvehicle`'s pass 1 (unmodified `-E testarm`, MMU on, section 0 through a coarse
+table whose page 0 is unmapped, one data abort): **47,591 nested `{ arm memory fault ...}` lines and "Exception caused no
+mode change?" warnings in 10.6 s, then signal 11** (`regress/artifacts/armmmuvehicle/pass1_20261009/opus5/opus5_meas/meas3_base.out`: `bytes=10473809 faults=47591 status=signal(11) elapsed=10.6s`, the status from `waitpid`; `T3_vec_unmapped.txt` beside it is the script's head-and-tail excerpt of that transcript).  The `cpu_dyntrans.c` exit "could not find physical address of the
+exception handler" never appears: `arm_exception()` ends in `quick_pc_to_pointers()`, whose failed translation raises
+`arm_exception(PREF_ABT)` again before the generic lookup's second chance runs -- unbounded recursion.  A guest that
+unmaps its own vectors and takes any abort ends the emulator.  Guest-drivable process death, so it ranks above the
+fidelity rows; the vehicle (`armmmuvehicle`) is its witness path.  The unlatched diagnostics are also a flood.
+
+### `sysasicbitmask31` (LOW, device header) — `SYSASIC_EVENT_TO_BITMASK` is a signed `1 << 31` for events 31, 63 and 95
+
+`src/include/thirdparty/dreamcast_sysasicvar.h`: `SYSASIC_EVENT_TO_BITMASK(e)` is `(1 << ((e) & 31))`.  For e = 31,
+63 and 95 -- INSIDE the `[0,95]` domain `SYSASIC_EVENT_RANGE_OK` enforces -- that is a signed left shift into the sign
+bit, undefined in C99; GCC yields `0xffffffff80000000` and UBSan reports it (both seats, MEASURED).  LATENT: no defined
+event satisfies `e & 31 == 31`.  The ledger's recorded remedy (`+ SYSASIC_EVENT_RANGE_OK(e)`) is INERT for this --
+it compiles at 31.  The fix is `1u << ((e) & 31)`; the 21 defined events' masks are unchanged.  Its witness can only
+be `detector:` -- a compile-and-run UBSan row, red on `1 <<` and green on `1u <<` (both seats measured both ways) --
+with the rung-3 attempt recorded as impossible by construction while no defined event has `e & 31 == 31` (a guest
+path would need a new raise site, which is laundering).  Provenance: the kimi substitute and codex on `#466`'s pass 2
+(2026-08-26).
+
+### `armusrwarmap` (MEDIUM, cpu) — a USR-mode access through a translation warmed by a privileged access skips the AP check
+
+ARM dyntrans: `cpu_arm_instr_loadstore.c`'s fast path indexes `host_load`/`host_store` by virtual page alone and
+consults `is_userpage` only for the LDRT/STRT forms; nothing invalidates on a mode change.  MEASURED by Fable 5.1
+(2026-10-09, `-E testarm` with the MMU on): in ONE `step N`, a privileged `LDR` of an AP=0 section (privileged
+read-only under the reset S bit) succeeds and warms the page; `MSR CPSR_c,#0x10`; the same `LDR` in USR32 is SERVED
+(no abort).  Cold, the USR load takes the architectural permission fault (FSR `0x0d`).  Red on HEAD, so it is not a
+vehicle row; its own round, with `armmmuvehicle` as the vehicle and Fable's session S8 as the witness shape.
+
+### `armthumbabtlr` (MEDIUM, cpu) — Thumb-state aborts save the wrong return address (data abort +7, prefetch abort +3)
+
+`cpu_arm.c` `arm_exception()`: `retaddr = cpu->pc` (`+ 4` for a data abort) `+ (T ? 2 : 4)`, and in Thumb state
+`cpu->pc` carries bit 0.  MEASURED by Fable 5.1 (2026-10-09): a Thumb `LDR` to an unmapped VA gives `LR_abt` =
+instruction + 7, and a Thumb `BX` to an unmapped VA gives target + 3, where DDI 0100I gives + 8 (A2.6.6) and + 4
+(A2.6.5) in both states.  IRQ and FIQ are also "+ 4 in both states", so the `T ? 2 : 4` term is right only for
+SWI/UND.  grok read the same defect the same day.  A sibling of `armthumbabortkill` (same Thumb abort path) and
+reachable only with the MMU on -- after `armmmuvehicle`.
+
+### `cxlaunchdaybreak` (LOW, harness) — `tools/cxlaunch.sh` has no Daybreak fallback, though `panel.sh` says it does
+
+Measured 2026-10-09: the codex seat (GPT-6 Astra) was refused twice by its content filter on the `armmmuvehicle`
+pass-1 brief (the second time on a neutral, read-scoped rewrite).  `tools/cxlaunch.sh` runs `gpt-6-astra` at `max`
+and on a refusal prints "ROUTE THIS BRIEF TO GROK" (rc 7); `grep -n daybreak tools/*.sh` finds only `panel.sh`'s
+`CODEX_EFFORT` comment, which says to re-fire "through tools/cxlaunch.sh, whose Daybreak fallback ... re-runs it
+once".  The fallback the owner ruled (2026-10-01: `gpt-daybreak-blue-latest` on an Astra AUP refusal) exists only in
+`_scratchpad/codexpack_20260928/cxlaunch_pack.run-*.sh`.  Fix: give `cxlaunch.sh` the pack runner's fallback, and
+correct the comment when `panel.sh` is next reviewed (it carries unreviewed deltas).

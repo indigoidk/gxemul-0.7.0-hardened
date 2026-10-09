@@ -1,0 +1,114 @@
+==== PROMPT (first 2500 chars)
+Open with OPUS_466P2_ALIVE, then VERDICT LINE FIRST.
+
+You are a review seat on a panel examining a COMMENT-ONLY commit to a vendored header. Read the brief at `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\brief_466_pass2.md` — it inlines the complete diff.
+
+*** THE TREE IS `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`. *** The project root holds a pristine April-2021 upstream copy that is NOT this fork; a seat reading it will be confidently and detailedly wrong, and the tell is line numbers off by hundreds.
+
+**PLEASE DO NOT RATIFY.** A recent panel had seven of nine seats confirm a premise the brief stated wrongly. Check the premises, not just the derivations.
+
+**Priority order for you specifically — you can build and run, so the empirical questions are yours:**
+
+1. **THE ONE THAT WOULD MAKE THE ROUND WRONG: is the defect actually LATENT?** The comment says so because the highest defined event is 67. **Count the `#define SYSASIC_EVENT_*` values yourself.** If any is ≥ 96, this is LIVE, not latent, and the round shipped a comment where it owed a fix. This is the single highest-value thing you can check.
+
+2. **Verify the three band claims by arithmetic and by reading the switch**, not by trusting me: that the macro is correct only for e in [0,95]; that e in [128,159] reaches `case 0x10:` and clobbers `mask_13[0]`; that e ≥ 2048 leaves the device window at `+0x100`.
+
+3. **Is there a build-time construction that WOULD catch the feared edit** — a future `#define SYSASIC_EVENT_FOO 96` — without rewriting a vendored header? An adjudicator rejected `_Static_assert` on shape: it can only reference NAMED terms, so the new define adds a name it does not mention and compiles clean. That reasoning looks right to me, **but you can test it** — write a candidate, add a high event, and see whether it actually catches it. If something does work, I would rather have it than a comment. If nothing does, that is a real negative result worth recording.
+
+4. **Does the comment claim anything a measurement refutes?** It is prose in product code, so a wrong claim there is an L4 wrong record in the worst place — a file a future event-adder is told to trust.
+
+**Build discipline if you build:** copy the tree, build the copy, never write to `GXEMUL-SEC`. Build inside `wsl -d Gentoo` (the default distro has no `make`), `rm src/cpus/*.o` first, and check `[ binary -nt source ]` because MAKE_RC has been observed reporting 0 on a failed build.
+
+**The owner has reserved the machine for timing-sensitive
+
+==== FINAL ASSISTANT TEXT
+OPUS_466P2_ALIVE
+
+**VERDICT: DO NOT CLOSE AS-IS. The round's central claim survives — the defect IS latent (MEASURED) — but three things are wrong. (1) The commit BROKE a cross-file citation in product code: `dev_dreamcast_asic.c:184` says `dreamcast_sysasicvar.h:74 is 4*((e)>>5)`; before `9ca9cca` that was true, and #466's 18-line insertion moved the macro to `:92`. L4, introduced by this round, pointing at the very macro it documents. (2) A build-time check DOES exist and I BUILT AND RAN IT: the adjudicator's shape objection is correct only for a *standalone* assert — moving the check INSIDE the macro catches `#define SYSASIC_EVENT_FOO 96` as a hard compile error, is clean under `-std=c89 -pedantic-errors` (so the C11/C99 objection was never the binding constraint), and leaves all 21 event addresses byte-identical. (3) The comment's band table omits the entire `mask_9` group and understates the clobber domain by 5.5x.**
+
+---
+
+## 1. Is the defect LATENT? — YES. MEASURED. The round is not wrong here.
+
+| check | result |
+|---|---|
+| `#define SYSASIC_EVENT_*` count | **21** (mechanical grep count, not transcribed) |
+| max value | **67** → `67>>5 == 2` → `+0x08` → `pending_irq[2]` — correct |
+| any define ≥ 96 anywhere in `src/` | **none** |
+| call sites passing a non-constant | **none** — all 15 pass a named literal |
+
+Nothing ≥ 96 exists and nothing computes an event at runtime. **LATENT confirmed.**
+
+## 2. Band claims — arithmetic correct, taxonomy incomplete
+
+I enumerated every `e` in `[0,8192)` against the real `switch` and `r = (relative_addr/4)&3`:
+
+```
+    0..95    +0x00/04/08  CORRECT  pending_irq[0..2]
+   96..127   +0x0c  r=3   DROPPED
+  128..159   +0x10  r=0   CLOBBER  mask_13[0]     <- comment names this
+  160..191   +0x14  r=1   CLOBBER  mask_13[1]     <- MISSING
+  192..223   +0x18  r=2   CLOBBER  mask_13[2]     <- MISSING
+  224..255   +0x1c  r=3   DROPPED
+  256..287   +0x20  r=0   CLOBBER  mask_11[0]     <- comment names this
+  288..351   +0x24/28     CLOBBER  mask_11[1,2]   <- MISSING
+  352..383   +0x2c  r=3   DROPPED
+  384..479   +0x30/34/38  CLOBBER  mask_9[0,1,2]  <- ENTIRE GROUP MISSING
+  480..2047                DROPPED
+ >= 2048     +0x100+       outside window
+```
+
+- **`[0,95]` bound: CORRECT.** `e=95` clean, `e=96` first failure.
+- **`128..159 → mask_13[0]`: CORRECT, and "clobbers" is the right word.** Nothing upstream prevents it — I traced `SYSASIC_TRIGGER_EVENT`: it writes 8 bytes of `bitmask | 0x100000000ULL`; at `case 0x10:` there is no hack-bit discrimination (unlike `case 0/4/8`), and the assignment to `uint32_t mask_13[3]` truncates the hack bit away, so `mask_13[0]` is **wholesale replaced** by `1<<(e&31)` and `dev_dreamcast_asic_tick()` is called immediately at `:216`. Stronger than the comment says: the raise both fails *and* destroys the guest's IRQ-13 mask configuration.
+- **`e >= 2048`: boundary CORRECT** (`4*(2047>>5)=0xfc` in, `4*(2048>>5)=0x100` out). Minor: "outside the device window entirely" understates — `e in [6144,6175]` lands on `+0x300` = `0x5f6c00`, which is the **maple device** (`dev_dreamcast_maple.c:652`, size `0x100`). Absurd magnitude, completeness only.
+- **`"e 96..127 -> +0x0c, +0x1c, ..."` is an L4 mispairing.** `[96,127]` maps to `+0x0c` and to nothing else; `+0x1c` is `[224,255]`. This is the same band-to-address error class that `dev_dreamcast_asic.c:186-188` explicitly corrected an earlier draft for — the header re-introduces a weaker form of it.
+- **Coverage:** the clobber domain is `e in [128,479]` — 352 values across nine mask words. The comment names 64 of them and never mentions `mask_9`.
+
+## 3. A build-time construction DOES exist — MEASURED, not argued
+
+I compiled all of this under the real build compiler (`cc` = Gentoo GCC 15.2.1, the WSL Gentoo toolchain), in a scratchpad copy. **`GXEMUL-SEC` was not touched.**
+
+| variant | feared edit `#define FOO 96` + call | 21 real events |
+|---|---|---|
+| **V0 shipped macro** | **CLEAN** (rc=0) — defect confirmed, no signal | CLEAN |
+| **V1 standalone `_Static_assert`** | **CLEAN** (rc=0) — **adjudicator's shape objection CONFIRMED** | CLEAN |
+| **V2 check inside the macro** | **ERROR** `size of unnamed array is negative` | CLEAN |
+| **V3 bitfield width** | **ERROR** `negative width in bit-field` | CLEAN |
+
+```c
+/*  V3 — strictly dominates V2; both need only C89.  */
+#define	SYSASIC_EVENT_RANGE_OK(e) \
+	((int)sizeof(struct { int sysasic_event_lt_96 : ((e) < 96) ? 1 : -1; }) * 0)
+#define	SYSASIC_EVENT_TO_ADDR(e) \
+	(SYSASIC_BASE + 4*((e)>>5) + SYSASIC_EVENT_RANGE_OK(e))
+```
+
+Controls, all MEASURED:
+- **Value control:** V2/V3 produce **byte-identical addresses for all 21 events** vs V0 (diff clean, 21 rows). Type stays `int`.
+- **Portability:** V2 and V3 both CLEAN under `-std=c99 -pedantic-errors` **and `-std=c89 -pedantic-errors`**, `-Wall -Wextra`, zero warnings. **The "`_Static_assert` is C11" objection is irrelevant — this idiom predates C99.**
+- **Other bands caught:** `e=128` ERROR, `e=2048` ERROR, `e=95` CLEAN.
+- **V2's hole, V3's fix:** with a runtime-variable `e`, V2 silently degrades to a VLA (CLEAN; `-Wvla` warns). **V3 hard-errors** (`width not an integer constant`). Prefer V3.
+
+**Honest contract for the guard:** it fires at a *call site*, not at a *definition*. A define of 96 that is never raised compiles clean (MEASURED). 8 of the 21 defines have no call site today (`8BIT, AICA, EXT, MAPLE_ERROR, MATOUTOFMEM, PRIMOUTOFMEM, SPU_DMA, SPU_IRQ`). **That gap is benign by construction** — an event never passed to the macro cannot reach the defect — so the guard's domain is exactly the set that can go wrong. This is a *stronger* property than a name-based assert, not weaker.
+
+**So the option set had three members, not two:** comment / standalone assert / **assert inside the macro**. The adjudication rejected member 2 on a correct reading and never named member 3. Same shape as the three-membered-option-set rule already in the carrier.
+
+## 4. Wrong records
+
+1. **`dev_dreamcast_asic.c:184` — BROKEN BY THIS COMMIT.** `git show 9ca9cca^` confirms `:74` was the macro; it is now the comment's first line. Sibling citation at `:189` (`h:72` for the max) still holds — insertion was below it. Fix `:184` to `:92`, or better, drop the number.
+2. **`"this tree is C99"` — false about the build.** MEASURED: the shipped `cc` reports `__STDC_VERSION__ 202311L` (gnu23); `configure` passes no `-std` and there is no `_Static_assert` anywhere in `src/`. True as a *portability policy*, false as a statement about what compiles. It also does no work, since the workable construction needs no C11.
+3. **`"e 96..127 -> +0x0c, +0x1c"`** — see §2.
+
+## 5. Other premises
+
+- **"No product code changed" — MEASURED STRONGER THAN CLAIMED.** I preprocessed the header before and after (`cc -E -P`, blank-stripped): **byte-identical, 11 bytes each.** Provably semantically null, not merely comment-shaped.
+- **"Fork never edited this file" — CONFIRMED.** `git log --all` on the file: `39748e3` (import) + `9ca9cca` only.
+- **Propagation — CONFIRMED and correct.** `est/`, `build/` and `build-asan/` copies are all byte-identical (`cmp`), and the file is not in `tools/est_divergence.txt`, so section A stays green.
+- **Placement — CHECKED, and the brief's premise HOLDS.** A new define lands at `:73`; the comment opens at `:74`, immediately adjacent, with its claim in caps on the first line. Adequate. The one weakness is framing: it addresses "THIS MACRO", not the define-adder. One line at the end of the define block would close that — and the in-macro guard makes placement moot entirely.
+- **`#466` has NO round record.** MEASURED: zero occurrences in `CHANGELOG.md` or `OUTSTANDING_BUGS.md`, committed *or* working tree (`grep -c` with real exit status, not a pipeline). `OUTSTANDING_BUGS.md:10052`'s `asiceventaddr` entry still reads "corrected this round" about **#463** and never mentions #466. Undischarged obligation.
+
+## Recommendation
+
+Ship **V3 in place of (or beside) the comment** — 3 lines, C89-clean, zero value change, and it fails on the exact mutant the comment was written to warn about, which the comment cannot do. Keep the comment's headline and structural sentence; fix the `+0x1c` mispairing, add `mask_9`, and state the clobber domain as `[128,479]` or, better, structurally: *the macro treats the event's high bits as a word index into the whole 64-word register file, when only words 0–2 are the `pending_irq` group.* Then repair `dev_dreamcast_asic.c:184` and write the round block.
+
+**Machine discipline:** no rigs, no battery, no wall-clock gate touched. All compiles were sub-second standalone `cc` invocations in the scratchpad against copies; `GXEMUL-SEC` was never written to (verified — no `.MUTANT`, tree clean apart from pre-existing unrelated modifications).

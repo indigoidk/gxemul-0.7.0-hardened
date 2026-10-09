@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""opus5 seat, meas3: (1) the Thumb DATA-abort LR, re-run with a base register that does not
+clobber the TTB operand (meas1's thumb_dabt set r1 -- the MCR c2 operand -- to 0x00100000, so its
+TTB pointed at data: a SETUP ERROR of mine, kept as evidence of the unmapped-vector storm);
+(2) the vector page UNMAPPED, drained to EOF so the process's real fate is recorded."""
+import os
+import pty
+import re
+import select
+import signal
+import sys
+import time
+from gxsess import session, dumped, dumpcmd, HERE, STUB
+
+BIN = sys.argv[1]
+CODE, PH, DH, DEST, TTB = 0x8000, 0x8400, 0x8500, 0x9000, 0x4000
+POISON = 0xDEADBEEF
+
+
+def b_to(src, dst):
+    return 0xEA000000 | (((dst - (src + 8)) >> 2) & 0xFFFFFF)
+
+
+def str_r3(off):
+    return 0xE5843000 | off
+
+
+def str_lr(off):
+    return 0xE584E000 | off
+
+
+H = lambda m: [str_lr(4), 0xE14F3000, str_r3(8), 0xE10F3000, str_r3(12), 0xEE153F10, str_r3(16),
+               0xEE163F10, str_r3(20), 0xE3A03000 | m, str_r3(24), 0xEAFFFFFE]
+ARM = [0xEE021F10, 0xEE032F10, 0xEE110F10, 0xE3800001, 0xEE010F10, 0xEE080F17]
+L1 = {TTB: 0x00000C02, TTB + 8: 0x00300C02}
+
+
+def words(code, l1=L1, extra=None):
+    w = {}
+    for i, v in enumerate(code):
+        w[CODE + 4 * i] = v
+    for i, v in enumerate(H(0xDA)):
+        w[DH + 4 * i] = v
+    for i, v in enumerate(H(0xBF)):
+        w[PH + 4 * i] = v
+    w[0x0C] = b_to(0x0C, PH)
+    w[0x10] = b_to(0x10, DH)
+    for o in range(0, 0x20, 4):
+        w[DEST + o] = POISON
+    w.update(l1)
+    if extra:
+        w.update(extra)
+    return w
+
+
+# (1) Thumb data abort: bx r5 -> 0x8101 (Thumb); `ldr r0,[r6,#0]' (0x6830) with r6 unmapped
+code = ARM + [0xE12FFF15, 0xEAFFFFFE]                     # bx r5 ; b .
+w = words(code, extra={0x8100: 0x46C06830})              # ldr r0,[r6,#0] ; mov r8,r8
+cmds = ["put w 0x%x, 0x%08x" % (a, v) for a, v in sorted(w.items())]
+cmds += ["r1=0x%x" % TTB, "r2=0x1", "r4=0x%x" % DEST, "r5=0x8101", "r6=0x100000", "pc=0x8000",
+         "step 7", "print pc", "print cpsr", "step 1", "print pc", "print cpsr", "print lr",
+         "print 0x5eedbeef", "step 3", "print pc", dumpcmd(DEST, DEST + 0x1C)]
+t, alive, st = session(BIN, cmds, per_cmd=0.3, fast=0.1, spin=2.0)
+open(os.path.join(HERE, "T3_thumb_dabt.txt"), "w").write(t)
+print("=== thumb_dabt alive=%s status=%s" % (alive, st))
+seg = t[t.find("GXemul> step 7"):]
+print("\n".join("    " + x for x in seg.splitlines()[:60]))
+
+# (2) vector page UNMAPPED: section 0 through a coarse table at 0x3000 (OUTSIDE the L1 span),
+#     pages 8 and 9 identity, page 0 (the vectors) unmapped.  Stimulus: ldr r3,[r5] with r5
+#     unmapped.  Drain the pty to EOF (or 90 s) and record the exit status.
+vl1 = {TTB: 0x00003001}
+vl2 = {0x3000 + 4 * 8: 0x00008FF2, 0x3000 + 4 * 9: 0x00009FF2}
+code = ARM + [0xE5953000, 0xE5843000, 0xEAFFFFFE]
+w = words(code, l1=vl1, extra=vl2)
+cmds = ["put w 0x%x, 0x%08x" % (a, v) for a, v in sorted(w.items())]
+cmds += ["r1=0x%x" % TTB, "r2=0x1", "r4=0x%x" % DEST, "r5=0x100000", "pc=0x8000", "step 9"]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64", "0x8000:%s" % STUB])
+    os._exit(127)
+buf = bytearray()
+t0 = time.time()
+
+
+def rd(sec):
+    end = time.time() + sec
+    while time.time() < end:
+        try:
+            r, _, _ = select.select([fd], [], [], 0.1)
+        except OSError:
+            return False
+        if r:
+            try:
+                d = os.read(fd, 1 << 16)
+            except OSError:
+                return False
+            if not d:
+                return False
+            buf.extend(d)
+    return True
+
+
+rd(1.6)
+for c in cmds:
+    os.write(fd, (c + "\n").encode())
+    rd(0.1 if c.startswith("put") else 0.3)
+live = rd(90.0)      # drain: keeps the child from blocking on a full pty
+status = "still running after 90 s of draining"
+try:
+    wpid, stt = os.waitpid(pid, os.WNOHANG)
+    if wpid == pid:
+        status = ("exit(%d)" % os.WEXITSTATUS(stt)) if os.WIFEXITED(stt) else \
+                 ("signal(%d)" % os.WTERMSIG(stt))
+    else:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+except ChildProcessError:
+    status = "reaped?"
+txt = buf.decode("utf-8", "replace").replace("\r", "")
+open(os.path.join(HERE, "T3_vec_unmapped.txt"), "w").write(txt[:200000] + "\n...\n" + txt[-20000:])
+nf = len(re.findall(r"\{ arm memory fault", txt))
+print("=== vec_unmapped: bytes=%d faults=%d status=%s elapsed=%.1fs" % (len(buf), nf, status,
+                                                                     time.time() - t0))
+print("    'could not find physical address' present: %s" % ("could not find physical" in txt))
+print("    first fault lines:")
+for m in re.findall(r"\{ arm memory fault[^}]*\}", txt)[:4]:
+    print("      " + m)
+print("    tail: %r" % txt[-400:])
+print("MEAS3_DONE")

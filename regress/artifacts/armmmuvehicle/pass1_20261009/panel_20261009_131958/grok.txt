@@ -1,0 +1,76 @@
+I'll audit the premises against `GXEMUL-SEC/src/` before judging the design. The verdict depends on whether the walk, the session, and the FSR numbers are actually what this tree does.The fault-status constants match the brief. Next I’ll walk the producer side: reset, CP15 writes, the exception entry, and what a debugger step actually touches.VERDICT: BUILD WITH CHANGES (6) -- the proposed rows stay green if `domain = 0` is deleted, if the coarse index shifts `>> 10` to `>> 9`, or if the section mask drops bits 31:23; the handler must not use SP, and `hole dump` does not prove the flush.
+
+Read from `GXEMUL-SEC/src/` (working tree, including the uncommitted `#562` comments). Fault constants checked there: `FAULT_TRANS_S 0x05`, `FAULT_TRANS_P 0x07`, `FAULT_DOMAIN_S 0x09`, `FAULT_DOMAIN_P 0x0b`, `FAULT_PERM_S 0x0d`.
+
+## 1. Premise audit
+
+**1a.** With this map and `MCR c8` before the stimulus, the vector fetch walks `arm_translate_v2p_mmu` and hits section 0. Two other paths exist in the code and are not taken on that sequence. `quick_pc_to_pointers` uses `phys_page[pc >> 12]` and never calls `translate_v2p` when that pointer is set. The generic fallback uses `host_load[]` the same way, and only if both miss does it walk. If that walk returns 0 it tries the handler address once more and then `exit(1)`s with "could not find physical address of the exception handler". `c8`'s `INVALIDATE_ALL` clears `phys_page` and `host_load` for every valid dyntrans TLB entry, and nothing in the arming sequence refills page 0, so the abort's fetch of `0x10` (or `0x0c`) is a real walk. Section descriptor `0x00000c02` is type 2, domain 0, AP 3; DACR domain 0 is client; the walk returns success and `paddr = 0x10`. There is no physical bypass once `translate_v2p` is the MMU function. A stale `phys_page` for page 0 would still execute the planted vector, because section 0 is identity either way. The `exit(1)` is reached if that walk returns 0 (V bit set, or section 0 not mapped).
+
+**1b.** Yes for the dyntrans arrays. `INVALIDATE_ALL` walks `vph_tlb_entry[]` and clears `host_load`, `host_store`, `phys_addr`, and `phys_page`. Every fill of those arrays goes through `update_translation_table`, which installs a TLB entry, so a `put w` made under identity cannot satisfy a later load or instruction fetch after `c8`. It does not wipe the physical instruction-cache pages; those are matched by physical address and are reused only after a new walk. `arm_translate_v2p_mmu` caches only the L1 table's host pointer, keyed on `translation_table == NULL || ttb != last_ttb`, and re-reads every descriptor. `c8` does not clear that pointer. This vehicle never changes TTB after the first walk, so the pointer stays valid.
+
+**1c.** No implicit guest access to the halt stub at `0x03fff020`, the console at `0x10000000`, or the other test devices (`0x11000000` and up), as long as PC stays in section 0. The prompt does not disassemble and does not dump registers (`-r` is absent). Each single step does one thing the brief does not name: before the instruction runs, `run_instr` reads PC with `CACHE_INSTRUCTION` and exceptions enabled, in order to disassemble it. That read is a real MMU walk of PC. It faults only when PC itself is unmapped. Devices and the halt stub are never that address.
+
+**1d.** The privileged result is right, and `prom_emulation` is 1 on the proposed command line. `machine_new` sets it; only `-Q` clears it; the argv has no `-Q`. `arm_cpu_new` therefore sets `ARM_CONTROL_S` and not `ARM_CONTROL_R`, and mode `SVC32`. The guest's `MRC` / `ORR #1` / `MCR` preserves S. In `arm_check_access`, AP 0 with S set and R clear gives `s+r = 1`, which returns 1 for a non-USR access: the load's `writeflag` is 0 and succeeds, the store's `writeflag` is 1 and takes `FAULT_PERM_S`. R-only (what `-Q` would select) returns 1 for user and privileged alike, so this row's result does not change. The row does not pin which of S or R is set. `prom_emulation` also plants `0xef8c64be` at `RAM-8` (`0x03fffff8`); nothing in this session fetches it. Alignment checking is announced and not enforced (`cpu_arm_instr.c` records that nothing consults `ARM_CONTROL_ALIGN`).
+
+**1e.** Producer is the walk, then `fsr = (domain << 4) | fs`. Domain is taken from the L1 descriptor, except L1 `case 0`, which forces `domain = 0` first.
+
+| row | descriptor the walk actually loads | domain after the fault arm | fs | fsr |
+|---|---|---|---|---|
+| `data trans` VA `0x00100000` | unplanted word 0, `d & 3 == 0` | forced 0 | `0x05` | `0x05` |
+| `page trans` VA `0x00401000` | L1 `0x00005001` (domain `(0x5001 >> 5) & 15 = 0`, dav 1), L2 word 0 | stays 0; L2 `case 0` does not clear it | `0x07` | `0x07` |
+| `domain` VA `0x00500000` | `0x00500c22`, domain 1, dav `(dacr >> 2) & 3 = 0` | stays 1 | `0x09` | `0x19` |
+| `perm` STR VA `0x00600000` | `0x00600002`, domain 0, AP `(>> 10) & 3 = 0`, access 1, `1 > 1` is false | stays 0 | `0x0d` | `0x0d` |
+
+The four expected numbers are right for these descriptors. They are right because every planted domain field that reaches a translation or permission fault is 0, except the domain row's 1.
+
+A coarse descriptor with domain 3 does not produce a page-translation FSR under this DACR. `0x00000001` makes domain 3's field 0, so `case 1` takes `FAULT_DOMAIN_P` before it ever reads L2: `(3 << 4) | 0x0b = 0x3b`. The page-translation FSR keeps the L1 domain only when that domain's DACR field is 1 or 3. Then L2 type 0 leaves domain alone and the FSR is `(3 << 4) | 0x07 = 0x37`.
+
+**1f.** A handler that uses only registers and `STR` to `0x9000` does not fault: those addresses are in section 0, AP 3, domain 0. `MRC c5` returns `fsr & 0xff`, and `0x05`, `0x07`, `0x19`, `0x0d` all fit. The hazard is the stack. Exception entry loads the ABT bank, so the handler's SP is `r13_abt`, which nothing ever sets. It is 0, not the SVC stack at `0x03fff000`. A push through SP writes VA 0, which is mapped, and overwrites the vectors. An explicit store to `0x03fff000` is a section translation fault in ABT mode. The "no mode change" `exit(1)` is commented out, and the second abort still writes `SPSR_abt` and `LR_abt` before any later `STR` to DEST. The single-step disassembly read of a mapped handler PC succeeds and does not nest.
+
+## 2. Smallest edit that stays green
+
+Delete `domain = 0` in L1 `case 0`. `data trans` stays green: the unmapped word is 0, so `(0 >> 5) & 15` is already 0 and the FSR stays `0x05`. No proposed row plants a type-0 word with a nonzero domain field.
+
+Two equally small edits also stay green, on rows that look like they cover them:
+
+* Coarse index `(vaddr & 0x000ff000) >> 10` changed to `>> 9`. `page map` stays green because VA `0x00400000` indexes slot 0 under any shift. `page trans` stays green because VA `0x00401000` then reads `0x5008`, another unplanted zero, and the FSR is still `0x07`.
+* Section mask `0xfff00000` narrowed to `0x00700000`. Every planted section base (`0x000`, `0x003`, `0x005`, `0x006`) sits in bits 22:20, so `remap` still returns PA `0x00300000`.
+
+`c8` as a no-op does not stay green if the identity decoy at PA `0x00200000` was written with `put w`. The LDR fast path checks `host_load[addr >> 12]` at execute time and returns that page. `hole dump` stays green anyway: `dump` calls `translate_v2p` with `NO_EXCEPTIONS` and never reads `host_load`.
+
+## 3. Option set
+
+**(i)** One importable file, gated from `gate_arm.sh`, same shape as `sh4_pcic_probe.py` (one `CLASS_DETECTOR`, siblings `import` it). A second helper module under `regress/` is its own Python artefact. The classifier is `tools/pipeline/check_probe_wiring.py`'s `MANIFEST`, not a script in `regress/`. An unlisted file is a wiring failure, and a probe whose only `endswith("GXemul>")` lives in a helper is counted promptless. `arm_msrmode_probe.py` is on `gate_hygiene.sh`'s `GRANDFATHERED_PROMPTLESS` list and has no `endswith`. Copying that wait reds the census. The new file has to contain the literal `endswith("GXemul>")` itself, plus a `MANIFEST` line and a `gate_arm.sh` invocation in the same round.
+
+**(ii)** The three consumers need the arming sequence, a fresh process per abort, and a mapped place to plant one extra descriptor. They do not need high vectors: setting V with only section 0 mapped makes the vector walk return 0 and hits the `exit(1)` in 1a. They do not need a USR access. `armthumbabortkill` does need a mapped Thumb entry. `BX` to an unmapped odd address never reaches the five Thumb sites: the next `run_instr` calls generic `pc_to_pointers` before the T-bit check, the prefetch abort clears T, and the Thumb interpreter is not entered. A non-aborting Thumb instruction at a mapped odd address (an `adds`, then `BX` back) is reachable on HEAD and does not touch those `running = 0` sites. This vehicle should ship that control. It should not ship a Thumb data abort; those sites set `running = 0` after `arm_exception` and the handler will not run.
+
+**(iii)** Nothing here reaches the three kills. L1 words are type 2 (`0x00000c02`, `0x00300c02`, `0x00500c22`, `0x00600002`), type 1 (`0x00005001`), or unplanted 0. The L2 word `0x00600ff2` is type 2. No `d & 3 == 3`, so the `default: exit(1)` is not taken. SA1110's flag word is 0, not `ARM_XSCALE`. DACR `0x00000001` is domain 0 = 1 and domain 1 = 0; no field is 2, so `arm_check_access`'s `case 2` is not taken. The vector walk succeeds, as in 1a. `enc ok` has to dump the planted words before the enabling `step`. A type-3 typo that is only checked after the guest runs is a dead host, not a red row.
+
+**(iv)** Members the brief did not name. `put h` goes through `store_16bit_word` with `CACHE_DATA` and exceptions enabled. The "byte/halfword `put` uses `NO_EXCEPTIONS`" claim is true for `put b` and `dump`, and false for `put h`. `put b` also does not warm `host_load` (`update_translation_table` is skipped when `NO_EXCEPTIONS` is set), so the remap decoy has to be a `put w`. CODE at `0x8000` and both handlers share the 4 KB page `0x8000-0x8fff`; the control sequence needs its own `b .` so a long `step` cannot fall into the handler. `c2`'s `& 0xffffc000` is unpinned because the vehicle writes an already-aligned `0x4000`. The `ttb != last_ttb` re-check is unpinned because TTB never changes after the first walk. The V bit is unpinned because a mutant that always uses low vectors stays green.
+
+## 4. Session plan
+
+One control process, never an abort. Plant with `put w` while the MMU is off, `enc ok` by `dump` before any `step`, then one guest program: MMU-off load of LIVE, then the six-instruction arming sequence, then remap, page map, the AP=0 load, an MMU-on load of LIVE (section 0 identity), an unaligned TTB write `0x4003` whose `MRC c2` must read back `0x4000`, and the mapped Thumb round trip. End that program in `b .` inside section 0. `hole dump` of `0x00100000` is a debugger command after that `step`. It checks the walk, not the flush.
+
+Five abort processes, one each for `data trans`, `pref trans`, `page trans`, `domain`, and the AP=0 store. The AP=0 load stays in the control process so its result is not sitting in a handler that just aborted.
+
+Abort `step` count, enumerated for this handler and no other. Handler uses r3 = `0x9000` and r8 = marker, both preloaded (r0–r12 are not banked in ABT). It does not touch SP.
+
+| step | instruction |
+|---|---|
+| 1–6 | `MCR c2`, `MCR c3`, `MRC c1`, `ORR #1`, `MCR c1`, `MCR c8` |
+| 7 | stimulus; the abort sets PC to `0x10` (data) or `0x0c` (prefetch) |
+| 8 | vector `B` into the handler |
+| 9–16 | `MRS`, `MRC c5`, `MRC c6`, `MOV` of LR, four `STR`s of LR/CPSR/FSR/FAR |
+| 17 | `STR` of the marker; the post-step PC sync leaves PC at `b .` |
+| 18 | `b .` itself; PC stays on `b .` |
+
+`N = 17` is the landing. CPSR is `I|F|ABT32` plus the flag nibble (`F` was already set at reset), so the mode check is `CPSR & 0x1f == 0x17`. Data-abort LR is the faulting instruction's address + 8. Prefetch LR is the branch target + 4, and FSR/FAR stay at the sentinels planted with `MCR c5/c6`. Prefetch must not expect a fault diagnostic to have written them; the `if (instr)` arm does not.
+
+The marker alone does not prove N. Step 18 leaves DEST and PC unchanged, and so does every further lap of `b .`. Pin PC equal to the `b .` address and count the disassembly lines emitted during the `step` (one per instruction; the `{ arm memory fault:` line is not one of them). That count is the exact-N proof. It is available because `-V` already prints every ARM instruction. Thumb instructions inside the control do not: the T-bit path returns before the single-step disassembler.
+
+## Also found
+
+The Thumb data-abort claim is true as an operation on `cpu->pc` and false as an instruction address. `arm_exception` does `retaddr = cpu->pc`, then `+= 4` for a data abort, then `+= 2` because T is set. In `arm_cpu_interpret_thumb_SLOW`, `cpu->pc` is odd for the whole instruction (the entry check requires bit 0, and the load/store cases do not clear it). The value stored is `(IA | 1) + 6 = IA + 7`. DDI 0100I's data-abort LR is the aborted instruction's address + 8 in both states. The sites then set `running = 0`, so that LR is stored and the handler never runs. A Thumb prefetch fault on the interpreter's own fetch is `(IA | 1) + 2 = IA + 3`, because the data-abort `+= 4` is not applied. Both are outside this round.
+
+The `c8` fast-path conclusion and the `N = 17` PC sync are read off the source (`host_load` checked in the LDR fast path; PC rebuilt from `next_ic` at the end of a single step). They were not executed on a gxemul binary.

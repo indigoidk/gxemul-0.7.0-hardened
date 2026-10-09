@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""fable5 pass-1 experiment for armmmuvehicle: run the proposed arming/abort sequence against a
+COPY of build/gxemul (read-only on every project tree).  Session machinery copied in shape from
+regress/arm_msrmode_probe.py (pty.fork, -V -A -E testarm -M 64, step N, dump from aligned base).
+Writes one transcript per session beside this file and prints a parsed summary."""
+import os, pty, re, select, signal, sys, time
+
+BIN = sys.argv[1]
+HERE = os.path.dirname(os.path.abspath(__file__))
+STUB = os.path.join(HERE, "stub.bin")
+with open(STUB, "wb") as f:
+    f.write(b"\0" * 16)
+
+CODE, DEST, PREF, DATA = 0x8000, 0x9000, 0x8400, 0x8500
+POISON = 0xDEADBEEF
+
+
+def session(name, cmds, settle=2.0, spin=2.0):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64", "0x%x:%s" % (CODE, STUB)])
+        os._exit(127)
+    buf, eof = "", False
+
+    def rd(t):
+        nonlocal buf, eof
+        end = time.time() + t
+        while time.time() < end:
+            try:
+                r, _, _ = select.select([fd], [], [], 0.1)
+            except OSError:
+                eof = True
+                return
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                eof = True
+                return
+            if not d:
+                eof = True
+                return
+            buf += d.decode("utf-8", "replace")
+
+    rd(settle)
+    for c in cmds:
+        if eof:
+            break
+        try:
+            os.write(fd, (c + "\n").encode())
+        except OSError:
+            eof = True
+            break
+        rd(0.2)
+    rd(spin)
+    alive = True
+    deadline = time.time() + (12.0 if eof else 2.0)
+    while time.time() < deadline:
+        try:
+            wpid, _st = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            alive = False
+            break
+        if wpid == pid:
+            alive = False
+            break
+        time.sleep(0.05)
+    if alive:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    t = buf.replace("\r", "")
+    with open(os.path.join(HERE, "S_%s.txt" % name), "w") as f:
+        f.write(t)
+    return t, alive
+
+
+def printed(t, reg):
+    m = re.findall(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+    return [int(x, 16) for x in m]
+
+
+def dumped(t, addr):
+    label = "0x%08x" % (addr & ~0xF)
+    idx = (addr & 0xF) // 4
+    vals = []
+    for line in t.splitlines():
+        if line.startswith(label):
+            parts = line[12:48].split()
+            if len(parts) == 4 and len(parts[idx]) == 8:
+                vals.append(int.from_bytes(bytes.fromhex(parts[idx]), "little"))
+            elif "memory access failed" in line:
+                vals.append("FAILED")
+    return vals
+
+
+def put(addr, w):
+    return "put w 0x%x, 0x%08x" % (addr, w)
+
+
+def plant(words, at):
+    return [put(at + 4 * i, w) for i, w in enumerate(words)]
+
+
+ARM = [
+    0xE3A01901,  # mov r1,#0x4000
+    0xE3A02001,  # mov r2,#1
+    0xEE021F10,  # mcr p15,0,r1,c2,c0,0   TTB
+    0xEE032F10,  # mcr p15,0,r2,c3,c0,0   DACR
+    0xEE110F10,  # mrc p15,0,r0,c1,c0,0
+    0xE3800001,  # orr r0,r0,#1
+    0xEE010F10,  # mcr p15,0,r0,c1,c0,0   M bit
+    0xEE080F17,  # mcr p15,0,r0,c8,c7,0   invalidate all
+]
+NOP = 0xE1A00000  # mov r0,r0
+HANDLER = lambda marker: [
+    0xE3A05A09,  # mov r5,#0x9000
+    0xE10F6000,  # mrs r6,cpsr
+    0xE5856000,  # str r6,[r5]
+    0xEE157F10,  # mrc p15,0,r7,c5,c0,0  FSR
+    0xE5857004,  # str r7,[r5,#4]
+    0xEE168F10,  # mrc p15,0,r8,c6,c0,0  FAR
+    0xE5858008,  # str r8,[r5,#8]
+    0xE585E00C,  # str lr,[r5,#12]
+    0xE3A09000 | marker,  # mov r9,#marker
+    0xE5859010,  # str r9,[r5,#16]
+    0xEAFFFFFE,  # b .
+]
+FALL = [0xE3A05A09, 0xE5853014, 0xEAFFFFFE]  # mov r5,#0x9000 ; str r3,[r5,#0x14] ; b .
+
+TABLE = [
+    put(0x4000, 0x00000C02), put(0x4008, 0x00300C02), put(0x4010, 0x00005001),
+    put(0x4014, 0x00500C22), put(0x4018, 0x00600002), put(0x5000, 0x00600FF2),
+    put(0x0C, 0xEA0020FB), put(0x10, 0xEA00213A),
+    put(0x200000, 0x22222222), put(0x300000, 0x33333333), put(0x600000, 0x66666666),
+    put(0x9100, 0x11111111),
+] + [put(DEST + o, POISON) for o in range(0, 0x18, 4)] \
+  + plant(HANDLER(0xA5), PREF) + plant(HANDLER(0xDA), DATA)
+
+NH = len(HANDLER(0))  # 11 incl. b .
+
+
+def run(name, stim, steps_list, extra_before=(), tail=()):
+    code = ARM + stim + FALL
+    cmds = TABLE + list(extra_before) + plant(code, CODE) + ["pc=0x%x" % CODE]
+    for s in steps_list:
+        cmds += s if isinstance(s, list) else ["step %d" % s]
+    cmds += ["dump 0x%x 0x%x" % (DEST, DEST + 0x20)] + list(tail)
+    t, alive = session(name, cmds)
+    print("=" * 78)
+    print("SESSION %s  alive=%s  code_len=%d" % (name, alive, len(code)))
+    print("  DEST[0..5] =", ["0x%08x" % v if isinstance(v, int) else v
+                           for v in [ (dumped(t, DEST + o) or ["?"])[-1] for o in range(0, 0x18, 4)]])
+    for reg in ("pc", "lr", "cpsr", "r4", "r6", "r7"):
+        vals = printed(t, reg)
+        if vals:
+            print("  print %-4s ->" % reg, ["0x%08x" % v for v in vals])
+    hd = dumped(t, 0x100000)
+    if hd:
+        print("  dump 0x100000 ->", hd)
+    lv = dumped(t, 0x9100)
+    if lv:
+        print("  dump 0x9100   ->", ["0x%08x" % v if isinstance(v, int) else v for v in lv])
+    for ln in t.splitlines():
+        if "arm memory fault" in ln or "arm_exception" in ln or "FATAL" in ln or "WARNING" in ln \
+           or "unimplemented" in ln.lower() or "TODO" in ln:
+            print("  LOG:", ln.strip()[:150])
+    return t
+
+
+# S1: stepwise data abort on LDR VA 0x100000 (unmapped section): arming 8, then hole dump + LIVE dump
+#     with the MMU on, then mov r3 + ldr (2), print pc/lr/cpsr, vector B (1), handler (NH), dump.
+run("S1_data_stepwise",
+    [0xE3A03601, 0xE5934000],                       # mov r3,#0x100000 ; ldr r4,[r3]
+    [8, ["dump 0x100000 0x100010", "dump 0x9100 0x9110"], 2,
+     ["print pc", "print lr", "print cpsr"], 1, ["print pc"], NH])
+
+# S2: ONE step N; VA 0x100000 pre-warmed by a debugger put w while the MMU is off; c8 present.
+run("S2_oneshot_warm_c8",
+    [0xE3A03601, 0xE5934000],
+    [8 + 2 + 1 + NH, ["print r4"]],
+    extra_before=[put(0x100000, 0x5A5A5A5A)])
+
+# S3: same, but the c8 flush replaced by a NOP (the guest omits the flush) -- the §2.2 hole.
+ARM_NOC8 = ARM[:7] + [NOP]
+def run_noc8():
+    global ARM
+    saved = ARM
+    ARM = ARM_NOC8
+    try:
+        run("S3_oneshot_warm_noc8", [0xE3A03601, 0xE5934000], [8 + 2 + 1 + NH, ["print r4"]],
+            extra_before=[put(0x100000, 0x5A5A5A5A)])
+    finally:
+        ARM = saved
+run_noc8()
+
+# S4: permission: AP=0 section at 0x600000; LDR succeeds (print r4), STR faults FSR 0x0d.
+run("S4_perm",
+    [0xE3A03606, 0xE5934000, 0xE5833000],            # mov r3,#0x600000 ; ldr r4,[r3] ; str r3,[r3]
+    [8 + 3 + 1 + NH, ["print r4"]])
+
+# S5: prefetch abort: FSR/FAR sentinels planted by MCR c5/c6, then bx to VA 0x100000.
+run("S5_pref",
+    [0xE3A06055, 0xEE056F10, 0xE3A07066, 0xEE067F10,  # mov r6,#0x55 ; mcr c5 ; mov r7,#0x66 ; mcr c6
+     0xE3A03601, 0xE12FF313],                        # mov r3,#0x100000 ; bx r3
+    [8 + 6 + 1 + NH, ["print lr"]])
+
+# S6: remap (VA 0x200000 -> PA 0x300000), page map (VA 0x400000 -> PA 0x600000), domain fault
+#     (VA 0x500000, domain 1, DACR bits 3:2 = 00) -> FSR 0x19.
+run("S6_remap_page_domain",
+    [0xE3A03602, 0xE5934000, 0xE3A03604, 0xE5936000, 0xE3A03605, 0xE5937000],
+    [8 + 6 + 1 + NH, ["print r4", "print r6", "print r7"]])
+
+# S7: page translation fault: VA 0x401000 (L2 entry 1 unplanted) -> FSR 0x07.
+run("S7_pagetrans",
+    [0xE3A03604, 0xE3833A01, 0xE5934000],            # mov r3,#0x400000 ; orr r3,r3,#0x1000 ; ldr r4,[r3]
+    [8 + 3 + 1 + NH])
+
+print("EXP_DONE")

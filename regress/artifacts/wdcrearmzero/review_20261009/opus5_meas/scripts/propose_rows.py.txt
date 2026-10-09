@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# opus5 late seat: add THREE PROPOSED rows to a SCRATCH COPY of the HEAD offline detector
+# (regress/diff_wdc_identify.c).  Never applied to any project tree.
+#   P1  re-arm: the WHOLE refilled chunk equals data_in[received ..]   (payload gets a
+#       position pattern first; the existing markers are re-set on top of it)
+#   P2  arm: the chunk BODY (bytes 1 and 32767) is the stub's 0xc3, not byte 0 repeated
+#   P3  the #495 write route, offline: arm through the real dispatch, drain chunk 1 to
+#       2 bytes, store 2 bytes to the data port, drain the last 2 -> the refilled chunk
+#       must start with data_in[32768] and hold exactly 32768.
+# and the [IDENTITY] guard 128 -> 131.  Each anchor must match exactly once (exit 3).
+import io, sys
+path = sys.argv[1]
+T = chr(9)
+NL = "\n"
+with io.open(path, "r", encoding="latin-1", newline="") as f:
+    src = f.read()
+
+def sub1(old, new, tag):
+    global src
+    n = src.count(old)
+    if n != 1:
+        sys.stderr.write("%s: anchor count=%d (want 1)\n" % (tag, n))
+        sys.exit(3)
+    src = src.replace(old, new)
+
+# P1a: position pattern in row_rearm_zero's payload, before its markers
+a = T + "payload[0]      = 0xaa;" + NL + T + "payload[131072] = 0x3c;" + NL
+sub1(a, T + "{ int k_; for (k_ = 0; k_ < 200000; k_++) payload[k_] = (unsigned char) (k_ * 151 + 7); }" + NL + a, "P1a")
+
+# P1b: the whole-chunk row, inserted before the dirty-ring commentary block
+b = T + "/*  *** THE REFILL IS NOT CONDITIONAL ON THE RING BEING EMPTY, AND A CLEAN"
+p1 = (T + "/*  OPUS5 PROPOSED (P1): the WHOLE refilled chunk, not its first byte.  */" + NL +
+      T + "{" + NL +
+      T*2 + "int k_, bad_ = -1;" + NL +
+      T*2 + "for (k_ = 0; k_ < 32768; k_++)" + NL +
+      T*3 + "if (d.inbuf[(d.inbuf_tail + k_) % WDC_INBUF_SIZE] != payload[131072 + k_]) { bad_ = k_; break; }" + NL +
+      T*2 + "rows ++;" + NL +
+      T*2 + "if (bad_ >= 0) {" + NL +
+      T*3 + 'printf("  FAIL %-38s first wrong byte at +%i\\n", "re-arm: the WHOLE chunk is data_in", bad_);' + NL +
+      T*3 + "failures ++;" + NL +
+      T*2 + "} else" + NL +
+      T*3 + 'printf("  ok   %-38s 32768\\n", "re-arm: the WHOLE chunk is data_in");' + NL +
+      T + "}" + NL + NL)
+sub1(b, p1 + b, "P1b")
+
+# P2: the arm body row, before row_arm_overrun's cleanup
+c = ('"arm: block 0 survives the push", first);' + NL + T + "}" + NL + NL +
+     T + "if (d.atapi_st != NULL) {" + NL)
+p2 = ('"arm: block 0 survives the push", first);' + NL + T + "}" + NL + NL +
+      T + "/*  OPUS5 PROPOSED (P2): the chunk BODY, not only byte 0.  */" + NL +
+      T + "rows ++;" + NL +
+      T + "if (d.inbuf[(d.inbuf_tail + 1) % WDC_INBUF_SIZE] != 0xc3 ||" + NL +
+      T + "    d.inbuf[(d.inbuf_tail + 32767) % WDC_INBUF_SIZE] != 0xc3) {" + NL +
+      T*2 + 'printf("  FAIL %-38s byte1 0x%02x last 0x%02x, want c3\\n", "arm: the chunk BODY is data_in",' + NL +
+      T*2 + "    d.inbuf[(d.inbuf_tail + 1) % WDC_INBUF_SIZE], d.inbuf[(d.inbuf_tail + 32767) % WDC_INBUF_SIZE]);" + NL +
+      T*2 + "failures ++;" + NL +
+      T + "} else" + NL +
+      T*2 + 'printf("  ok   %-38s 0xc3\\n", "arm: the chunk BODY is data_in");' + NL + NL +
+      T + "if (d.atapi_st != NULL) {" + NL)
+sub1(c, p2, "P2")
+
+# P3: a new row function placed before row_identity(), and called from main before it
+d_anchor = "static void row_identity(void)"
+p3 = ("/*  OPUS5 PROPOSED (P3): the #495 write route, OFFLINE, through the real dispatch.  */" + NL +
+      "static void row_opus_write_route(void)" + NL + "{" + NL +
+      T + "struct wdc_data d;" + NL +
+      T + "unsigned char buf[4];" + NL +
+      T + "int i, occ, first;" + NL + NL +
+      T + "memset(&d, 0, sizeof(d));" + NL +
+      T + "d.addr_mult  = 1;" + NL +
+      T + "d.io_enabled = 1;" + NL +
+      T + "d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);" + NL +
+      T + "d.irq.interrupt_assert = arm_sink;" + NL +
+      T + "if (d.inbuf == NULL) { printf(\"  SETUP opus inbuf failed\\n\"); return; }" + NL +
+      T + "d.cur_command = ATAPI_PKT_CMD;" + NL +
+      T + "d.atapi_cmd_in_progress = 1;" + NL +
+      T + "d.atapi_phase = PHASE_CMDOUT;" + NL +
+      T + "for (i = 0; i < 10; i++)" + NL +
+      T*2 + "wdc_addtoinbuf(&d, 0x00);" + NL +
+      T + "stub_datain_len = 65536;" + NL +
+      T + "memset(buf, 0, sizeof(buf));" + NL +
+      T + "dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);" + NL +
+      T + "stub_datain_len = 0;" + NL +
+      T + "for (i = 0; i < 16383; i++)	/*  drain chunk 1 to its last 2 bytes  */" + NL +
+      T*2 + "dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);" + NL +
+      T + "buf[0] = 0xa5; buf[1] = 0xa5;	/*  the out-of-protocol store  */" + NL +
+      T + "dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);" + NL +
+      T + "dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);	/*  -> re-arm  */" + NL +
+      T + "occ = d.inbuf_head - d.inbuf_tail;" + NL +
+      T + "while (occ < 0)" + NL +
+      T*2 + "occ += WDC_INBUF_SIZE;" + NL +
+      T + "first = d.inbuf[d.inbuf_tail];" + NL +
+      T + "rows ++;" + NL +
+      T + "if (occ != 32768 || first != 0xc3) {" + NL +
+      T*2 + 'printf("  FAIL %-38s occ %i first 0x%02x, want 32768 / c3\\n", "write route: chunk 2 is not shifted", occ, first);' + NL +
+      T*2 + "failures ++;" + NL +
+      T + "} else" + NL +
+      T*2 + 'printf("  ok   %-38s %i 0x%02x\\n", "write route: chunk 2 is not shifted", occ, first);' + NL +
+      T + "if (d.atapi_st != NULL) {" + NL +
+      T*2 + "free(d.atapi_st->data_in);" + NL +
+      T*2 + "free(d.atapi_st->cmd);" + NL +
+      T*2 + "free(d.atapi_st);" + NL +
+      T + "}" + NL +
+      T + "free(d.inbuf);" + NL +
+      "}" + NL + NL + NL)
+sub1(d_anchor + NL, p3 + d_anchor + NL, "P3def")
+
+e = T + "row_rearm_zero();" + NL
+sub1(e, e + T + "row_opus_write_route();" + NL, "P3call")
+
+sub1(T + "if (rows != 128) {", T + "if (rows != 131) {", "IDENT")
+
+with io.open(path, "w", encoding="latin-1", newline="") as f:
+    f.write(src)
+print("PROPOSED ROWS applied (P1, P2, P3; identity 131)")
