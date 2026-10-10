@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `fbsmlane` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2c040assertrow` (review:deepseek,glm,kimi,minimax) · `pcc2widthkills` (assess:opus5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirekills` (assess:kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5)
+`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirekills` (assess:kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 33 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 31 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2565,14 +2565,14 @@ seats recovered 2026-09-18 all RATIFY.  Minimax's premise audit is the open item
 Each closed with commits and carries no `regress` entry.  They are named here individually because a
 prose mention does not count as queued -- an id counts only if it HEADS an entry.
 
-### `wdcaltctrlbit`
-### `diskimagesign`
-### `sgirergbroundtrip`
+### ~~`wdcaltctrlbit`~~ — **DISCHARGED 2026-10-09**: Fable 5.1's regress review, REGRESS CLEAN (`regress/artifacts/fablequeue8n_20261009/regress_devices/`).
+### ~~`diskimagesign`~~ — **DISCHARGED 2026-10-09**: REGRESS WITH FINDINGS (3), all records, applied in place.
+### ~~`sgirergbroundtrip`~~ — **DISCHARGED 2026-10-09**: REGRESS CLEAN.
 ### `lcashiftub`
 ### `alphapfnoffset`
 ### `alphaswpctxptbr`
 
-### `landiskaux`
+### ~~`landiskaux`~~ — **DISCHARGED 2026-10-09**: Fable 5.1's regress review, REGRESS WITH FINDINGS (1) -- a stale hold, dated in place.
 
 `regress` review owed (flagship-only): #533 shipped in e16a8b7 -- fix `+0x2c`, detector regress/landisk_aux_probe.py (gate_sh_rounding.sh), rung-4 boot witness regress/artifacts/landiskaux/boot_20260918/.
 
@@ -2582,29 +2582,31 @@ fable5 and opus5 were never fired; deepseek's answer there is a thinking burn (s
 comment-only disposition for SYSASIC_EVENT_RANGE_OK right, given codex's finding that the guard protects the ADDR macro
 and not the BITMASK macro, and kimi/minimax's dissent that a name-insensitive build-time check is possible?
 
-### `pcc2c040assertrow`
-REVIEW stage reopened and held by OWNER DECISION 2026-09-18 (#534 R3): re-fire glm, deepseek, minimax, kimi(sub) on a
+### ~~`pcc2c040assertrow`~~ (review stage) — **DISCHARGED 2026-10-09**: the four packet-fed seats re-fired (three ROW OWED, one CLOSED); both proposed one-line variants MEASURED undetected, 18/18 each; Fable 5.1 (v3, GPT-6 Astra concurring) graded both clause-(e) debt -- filed `pcc2c040assertxor` and `pcc2c040warnedeq` -- and the row is closed again, with the owner's ruling on the rule question it raised recorded (keep the written rule).  Its REGRESS stage, queued 2026-09-11 above, is still owed.
+*As queued:* REVIEW stage reopened and held by OWNER DECISION 2026-09-18 (#534 R3): re-fire glm, deepseek, minimax, kimi(sub) on a
 brief that inlines ASSERTROW_brief.md's rows and mutants (panel_20260917_100431 gave them dev_pcc2.c's stale comment).
 Question: is the assert=0 -> return mutant (skips INTERRUPT_DEASSERT) killed by any shipped row; if not, what row is owed?
 NB check_stage_panels reports this stage 9/9 complete because a full count masks a live HELD marker -- filed `heldmasked`.
 
 ### `n6`
-ASSESS stage held 2026-09-18 (#534 F2 pass): rule on the 2026-08-30 fable5 entry -- (a) a seat answer re-opening the stage,
+**RULE QUESTION ANSWERED 2026-10-09**: Fable 5.1 ruled (a), a seat answer that re-opened the stage (`regress/artifacts/fablequeue8n_20261009/regress_harness/fable5_regress_harness.md`, section 4); GPT-6 Astra confirmed (a) on the owner's entry-[5] choice and the seven answers that completed the panel, and corrected two of the four reasons (`regress/artifacts/fablequeue8n_20261009/astra_confirm/`).  No further assess panel is owed.  **STILL OWED UNDER THIS HEADING: the `regress` review of #539 (`7836071`)** -- which is why the heading stays un-struck.
+
+*As queued:* ASSESS stage held 2026-09-18 (#534 F2 pass): rule on the 2026-08-30 fable5 entry -- (a) a seat answer re-opening the stage,
 (b) a single-seat re-read, or (c) an adjudication record.  My own RE_READ tag was reverted as self-dealing (5 of 7 seats).
 
-### `stagetokens`
+### ~~`stagetokens`~~ — **DISCHARGED 2026-10-09**: REGRESS WITH FINDINGS (5) -- two records L4s applied in place; filed `stagetokenscontrols` and `dashokclass`; one finding folded into `fablequeueregress`.
 `regress` review owed (flagship-only): #534 shipped in 09ded75 -- stage_tokens.py + four readers; controls
 regress/artifacts/stagetokens/controls_534/ (49/49, 33 mutants).  fable5 already ruled last on the diff; this is the regress pass.
 
-### `heldmasked`
+### ~~`heldmasked`~~ — **DISCHARGED 2026-10-09**: REGRESS WITH FINDINGS (1), filed in `stagetokenscontrols`.
 `regress` review owed (flagship-only): fixed inside #534 (09ded75) -- live holds beat a full count; rows t_fullhold,
 t_fullclosed, t_discharged, t_samedayhold.
 
-### `pcc2c040mienannounce`
+### ~~`pcc2c040mienannounce`~~ — **DISCHARGED 2026-10-09**: REGRESS WITH FINDINGS (2), both records, applied in place.
 `regress` review owed (flagship-only): #535 shipped in bb8efbf -- two rows close the {presence,count} x {MIEN} product for
 the C040 announce; pcc2_c040_probe.py reclassified DETECTOR and gated in gate_arm.sh (18 rows).
 
-### `fbsmlane`
+### ~~`fbsmlane`~~ — **DISCHARGED 2026-10-09**: REGRESS WITH FINDINGS (1), a wording L4 applied in place; R3 is the right pin and no further lane coverage is owed.
 `regress` review owed (flagship-only): #537 shipped in cdbe7d7 -- the fbpending_bound self-mutant lane wired in
 gate_offline.sh, pinned on R3's case-qualified row (not the verdict-equivalent R4); measured P0-P4 in
 regress/artifacts/fbsmlane/r537_20260918/f2_pin/out/, gate 2 345/346.  fable5 already ruled LAST on the diff; this is

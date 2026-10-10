@@ -1,0 +1,70 @@
+#!/bin/bash
+# fable5 REGRESS seat (8n): run each COMMITTED probe (one instrument, taken from the commit's own regress dir)
+# against the PARENT and COMMIT binaries; then the pcc2 L2 mutants on the commit tree.  Private scratch only.
+set -u
+S=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/fable_rgd
+D=/tmp/gxfable_rgd
+LOG=$D/runprobes.log
+exec > "$LOG" 2>&1
+KERNEL=/mnt/c/DocumentNoSnc/cc/GXEMUL/_images/openbsd76-landisk-bsd.rd
+echo "python3: $(python3 --version 2>&1)  start $(date +%T)"
+for L in sgi_commit sgi_parent land_commit land_parent pcc2_commit; do
+  [ -x "$D/$L/gxemul" ] && echo "binary $L: $(stat -c '%s %y' "$D/$L/gxemul")" || echo "binary $L: MISSING"
+done
+echo; echo "##### sgirergbroundtrip: committed 7a41b3f probe vs parent a264a34d and commit 7a41b3f binaries"
+cd "$D/sgi_commit/regress" || exit 9
+echo "probe md5: $(md5sum sgi_re_rgb_probe.py)"
+for pair in "sgi_parent PARENT_a264a34d" "sgi_commit COMMIT_7a41b3f"; do
+  set -- $pair
+  echo "=== run $1 ($2) $(date +%T)"
+  python3 -u sgi_re_rgb_probe.py "$D/$1/gxemul" "$2" > "$S/probe_sgi_$1.out" 2>&1; echo "PROBE_RC=$?"
+  grep -E '^SGIRGB_(RESULT|WITNESS|DONE)| FAIL$' "$S/probe_sgi_$1.out"
+done
+echo; echo "##### landiskaux: committed e16a8b7 probe vs parent 686d179c and commit e16a8b7 binaries"
+cd "$D/land_commit/regress" || exit 9
+echo "probe md5: $(md5sum landisk_aux_probe.py)   kernel: $(stat -c '%s' "$KERNEL") bytes"
+for pair in "land_parent PARENT_686d179c" "land_commit COMMIT_e16a8b7"; do
+  set -- $pair
+  echo "=== run $1 ($2) $(date +%T)"
+  python3 -u landisk_aux_probe.py "$D/$1/gxemul" "$KERNEL" > "$S/probe_land_$1.out" 2>&1; echo "PROBE_RC=$?"
+  grep -E '^LANDISK_AUX_(RESULT|VECTOR|DONE)| FAIL$' "$S/probe_land_$1.out"
+done
+echo; echo "##### pcc2c040mienannounce: committed bb8efbf probe vs bb8efbf base, then mutants A, F (pass-2 L2) and M_announce_notmien (pass-1 L2)"
+CL=$D/pcc2_commit; cd "$CL" || exit 9
+cp src/devices/dev_pcc2.c "$D/pcc2_base_bb8efbf.c"
+echo "probe md5: $(md5sum regress/pcc2_c040_probe.py)   dev_pcc2.c md5: $(md5sum src/devices/dev_pcc2.c)"
+mut() {  # name
+python3 - "$1" "$D/pcc2_base_bb8efbf.c" "$CL/src/devices/dev_pcc2.c" <<'PY'
+import sys, shutil
+name, base, tgt = sys.argv[1:4]
+LT = "\t\tif (!(d->warned & (1u << PCC2_W_C040))) {\n"
+LS = "\t\t\td->warned |= (1u << PCC2_W_C040);\n"
+MUT = {
+ "BASE": [],
+ "A_latch_bypass_mien": [(LT, "\t\tif ((d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN) ||\n\t\t    !(d->warned & (1u << PCC2_W_C040))) {\n")],
+ "F_latchset_mienclear": [(LS, "\t\t\tif (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN))\n\t\t\t\td->warned |= (1u << PCC2_W_C040);\n")],
+ "M_announce_notmien": [(LT, "\t\tif (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN) &&\n\t\t    !(d->warned & (1u << PCC2_W_C040))) {\n")],
+}
+shutil.copyfile(base, tgt)
+s = open(tgt, "rb").read().decode("latin-1")
+for f, r in MUT[name]:
+    if s.count(f) != 1: sys.exit("ANCHOR count %d for %r -- REFUSING" % (s.count(f), f))
+    s = s.replace(f, r, 1)
+open(tgt, "wb").write(s.encode("latin-1")); print("applied", name)
+PY
+}
+echo "sentinel: dev_pcc2.c mutants (fable_rgd)" > .MUTANT
+for M in BASE A_latch_bypass_mien F_latchset_mienclear M_announce_notmien BASE_restore; do
+  echo "===== $M $(date +%T)"
+  N=$M; [ "$M" = BASE_restore ] && N=BASE
+  mut "$N" || exit 9
+  rm -f src/devices/dev_pcc2.o
+  make -j4 > "$D/build_pcc2_$M.log" 2>&1; echo "MAKE_RC=$?"
+  [ gxemul -nt src/devices/dev_pcc2.c ] && echo FRESH=OK || { echo FRESH=STALE; exit 9; }
+  [ "$M" = BASE_restore ] && continue
+  (cd regress && python3 -u pcc2_c040_probe.py "$CL/gxemul" "$M" > "$S/probe_pcc2_$M.out" 2>&1; echo "PROBE_RC=$?")
+  grep -E '^PCC2C040_(RESULT|WITNESS|DONE)| FAIL$' "$S/probe_pcc2_$M.out"
+done
+cmp src/devices/dev_pcc2.c "$D/pcc2_base_bb8efbf.c" && [ gxemul -nt src/devices/dev_pcc2.c ] && rm -f .MUTANT && echo "CLEARED (restored == bb8efbf, binary fresh)"
+echo "PROBERUNS_DONE $(date +%T)"
+cp "$LOG" "$S/runprobes_rgd.log"

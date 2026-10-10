@@ -1,0 +1,74 @@
+#!/bin/bash
+#  The fbpending_bound self-mutant lane at HEAD, re-run in the regress seat's scratch clone.
+#  Mirrors regress/artifacts/fbsmlane/r537_20260918/f2_pin/run537b.sh (the #537 F2 measurement) but
+#  against /tmp/gxrgh (HEAD a05660af) with objects from that clone's own build.
+#    P0  the gate's exact lane call, HEAD harness, new (R3) pin          want SELFMUTANT_OK via R3
+#    P1  composite (R3 blinded + R1 tightened), new pin                  want SELFMUTANT_FAIL (not via the named row)
+#    P2  the same composite, OLD R4 pin                                  want SELFMUTANT_OK -- the escape the R3 pin closes
+#    P3  R3 blinded alone, new pin                                       want SELFMUTANT_FAIL
+#    P4  R1 tightened alone, new pin                                     want SELFMUTANT_OK (the composite's second edit is inert alone)
+#    P5  HEAD harness, OLD R4 pin                                        want SELFMUTANT_OK (R4 still kills; it is the pin's attribution that is weak)
+#    P6  the gate's pin with ONE space fewer                             want SELFMUTANT_SETUP (drift is loud, per gate_offline.sh's comment)
+set -u
+S=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/fable_rgh
+T=/tmp/gxrgh/GXEMUL-SEC
+OUT=$S/lane_out
+W=/tmp/sm_rgh
+rm -rf "$OUT" "$W"; mkdir -p "$OUT" "$W"
+OBJS=$(find "$T/src" -name '*.o' ! -name 'main.o' ! -name 'dev_footbridge.o' 2>/dev/null | sort | tr '\n' ' ')
+echo "HEAD $(cat "$S/HEAD.sha")" | tee "$OUT/SUMMARY.txt"
+echo "objects linked: $(printf '%s' "$OBJS" | wc -w)" | tee -a "$OUT/SUMMARY.txt"
+XF="-std=gnu99 -I../src/include -I../src/include/thirdparty -I../src/devices $OBJS -L/usr/X11R6/lib -lX11"
+NEWPIN="R3 the reset still owes one interrupt        cats, slowest legal"
+OLDPIN="R4 every case bounded"
+SHORTPIN="R3 the reset still owes one interrupt       cats, slowest legal"
+echo "gate_offline.sh carries the new pin on its selfmutant_one line: $(grep -c "selfmutant_one diff_fbpending_bound.c src/devices/dev_footbridge.c fbpending_bound \"$NEWPIN\"" "$T/regress/gate_offline.sh")" | tee -a "$OUT/SUMMARY.txt"
+echo "gate_offline.sh lane flags use relative -I: $(grep -c -- '"-std=gnu99 -I../src/include -I../src/include/thirdparty -I../src/devices $(find "$SEC/../build/src"' "$T/regress/gate_offline.sh")" | tee -a "$OUT/SUMMARY.txt"
+
+mkcopy() {  # dir harness-file
+    local d=$1/GXEMUL-SEC
+    mkdir -p "$d/regress/selfmutants"
+    cp -a "$T/src" "$d/src"
+    cp "$T/config.h" "$d/config.h"
+    cp "$T/regress/selfmutant.py" "$d/regress/"
+    cp "$T/regress/selfmutants/fbpending_bound.old" "$T/regress/selfmutants/fbpending_bound.new" "$d/regress/selfmutants/"
+    cp "$2" "$d/regress/diff_fbpending_bound.c"
+}
+lane() {  # tag sec-root pin
+    local tag=$1 sc=$2 pin=$3 rc
+    ( cd /tmp && SELFMUTANT_EXTRA_FLAGS="$XF" python3 "$sc/regress/selfmutant.py" \
+        diff_fbpending_bound.c src/devices/dev_footbridge.c \
+        "$sc/regress/selfmutants/fbpending_bound.old" "$sc/regress/selfmutants/fbpending_bound.new" \
+        "$pin" ) > "$OUT/$tag.txt" 2>&1
+    rc=$?
+    echo "$tag rc=$rc token=$(grep -oE 'SELFMUTANT_(OK|FAIL|SETUP)' "$OUT/$tag.txt" | tail -1)" | tee -a "$OUT/SUMMARY.txt"
+    grep -E '^       ' "$OUT/$tag.txt" | sed 's/^/    /' | tee -a "$OUT/SUMMARY.txt"
+}
+variant() {  # src dst kind
+    local src=$1 dst=$2 kind=$3
+    cp "$src" "$dst"
+    if [ "$kind" = blindR3 ] || [ "$kind" = composite ]; then
+        [ "$(grep -c "worst_trough >= 1," "$dst")" = 1 ] || { echo "R3 anchor not unique" | tee -a "$OUT/SUMMARY.txt"; exit 5; }
+        sed -i "s/worst_trough >= 1,/worst_trough >= 0,/" "$dst"
+    fi
+    if [ "$kind" = tightenR1 ] || [ "$kind" = composite ]; then
+        [ "$(grep -c "worst_peak <= ceiling && worst_trough >= 0," "$dst")" = 1 ] || { echo "R1 anchor not unique" | tee -a "$OUT/SUMMARY.txt"; exit 5; }
+        sed -i "s/worst_peak <= ceiling \&\& worst_trough >= 0,/worst_peak <= ceiling \&\& worst_trough >= 1,/" "$dst"
+    fi
+    echo "$kind written: $(diff "$src" "$dst" | grep -c '^>') line(s) changed, CR kept: $(grep -c $'\r' "$dst")"
+}
+lane P0_newpin "$T" "$NEWPIN"
+lane P5_head_oldpin "$T" "$OLDPIN"
+lane P6_shortpin "$T" "$SHORTPIN"
+variant "$T/regress/diff_fbpending_bound.c" "$W/composite.c" composite | tee -a "$OUT/SUMMARY.txt"
+mkcopy "$W/comp" "$W/composite.c"
+lane P1_composite_newpin "$W/comp/GXEMUL-SEC" "$NEWPIN"
+lane P2_composite_oldpin "$W/comp/GXEMUL-SEC" "$OLDPIN"
+variant "$T/regress/diff_fbpending_bound.c" "$W/blind.c" blindR3 | tee -a "$OUT/SUMMARY.txt"
+mkcopy "$W/blind" "$W/blind.c"
+lane P3_blindR3_newpin "$W/blind/GXEMUL-SEC" "$NEWPIN"
+variant "$T/regress/diff_fbpending_bound.c" "$W/tight.c" tightenR1 | tee -a "$OUT/SUMMARY.txt"
+mkcopy "$W/tight" "$W/tight.c"
+lane P4_tightenR1_newpin "$W/tight/GXEMUL-SEC" "$NEWPIN"
+rm -rf "$W"
+echo "LANE_RGH_DONE" | tee -a "$OUT/SUMMARY.txt"

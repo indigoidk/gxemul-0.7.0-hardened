@@ -1,0 +1,37 @@
+#!/bin/bash
+# Measure two REASONED escapes of the shipped pcc2_c040_probe.py (13 rows), named by the Ollama seats on the
+# pcc2c040assertrow held review stage (2026-10-09): X = `assert = 0;` -> `assert ^= 1;` in the C040 arm;
+# W = `d->warned |= (1u << PCC2_W_C040);` -> `d->warned = (1u << PCC2_W_C040);`.  Scratch trees in /tmp only,
+# built from a git archive of committed HEAD (src unchanged since 200671b6).  One instrument (the committed probe).
+set -u
+TAR="$1"; OUT="$2"
+mkdir -p "$OUT"
+for V in base xor eq; do
+  W=/tmp/gxpcc_$V; rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 3
+  tar -xf "$TAR" || { echo "TAR_FAILED $V"; exit 3; }
+  python3 - "$V" <<'PY'
+import sys
+v = sys.argv[1]
+p = "src/devices/dev_pcc2.c"
+s = open(p).read()
+edits = {"base": [],
+         "xor": [("\t\tassert = 0;\n\t}\n\n\tif (assert)\n\t\tINTERRUPT_ASSERT(d->cpu_irq);",
+                  "\t\tassert ^= 1;\n\t}\n\n\tif (assert)\n\t\tINTERRUPT_ASSERT(d->cpu_irq);")],
+         "eq": [("\t\t\td->warned |= (1u << PCC2_W_C040);", "\t\t\td->warned = (1u << PCC2_W_C040);")]}[v]
+for old, new in edits:
+    assert s.count(old) == 1, (v, s.count(old))
+    s = s.replace(old, new)
+open(p, "w").write(s)
+print("EDIT_APPLIED", v, len(edits))
+PY
+  ./configure > configure.log 2>&1; echo "CONFIGURE_RC_$V=$?"
+  make -j2 > make.log 2>&1; echo "MAKE_RC_$V=$?"
+  if [ -f gxemul ] && [ gxemul -nt src/devices/dev_pcc2.c ]; then echo "BINARY_FRESH_$V=yes"; else echo "BINARY_FRESH_$V=no"; fi
+  echo "dev_pcc2.c md5 $V: $(md5sum src/devices/dev_pcc2.c | cut -c1-8)"
+done
+cp /tmp/gxpcc_base/regress/pcc2_c040_probe.py "$OUT/pcc2_c040_probe.FROZEN.py"
+for V in base xor eq; do
+  ( cd /tmp/gxpcc_base/regress && python3 -u "$OUT/pcc2_c040_probe.FROZEN.py" /tmp/gxpcc_$V/gxemul "$V" ) > "$OUT/probe_$V.raw" 2>&1
+  echo "$V: $(grep -E 'PCC2C040_RESULT|PCC2C040_DONE' "$OUT/probe_$V.raw" | tr '\n' ' ')"
+done
+echo "PCCMEAS_DONE"

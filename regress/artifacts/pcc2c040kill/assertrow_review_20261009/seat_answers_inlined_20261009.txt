@@ -1,0 +1,128 @@
+================= glm NOT JSON (Expecting value: line 1 column 1 (char 0)) -- RAW FOLLOWS
+VERDICT: ROW OWED (line 375 `assert = 0;` → `assert ^= 1;` — passes all 13; owed row: a free-running "C040 SET with no line raised: reach completion, NOT vector 0x8" — the one cell of the {C040}×{line} product no shipped row observes. A second, host-side-only escape, L371 `|=` → `=`, is in the body.)
+
+**The panel's two mutants are dead, and the shipped comment says otherwise.**
+
+* READ: M_d1 (delete `assert = 0;`) and M_return (`→ return;`) both FAIL `c040 noassert` — got 0x8, want 0x1001c (10-row tables).
+* READ: the killing row is still in the shipped 13 — row 10, want 0x10020, note verbatim-identical. The 0x1001c→0x10020 shift is a completion-marker relocation (`c040 noassert2` moved 0x10020→0x10024 the same way), so REASONED the kill persists: the mutants' got is 0x8 (parked in the vector), which no marker relocation rescues.
+* READ + consequence: the shipped comment (lines 356–357) asserts "`assert = 0' -> `return' at THIS line is a one-token mutant every shipped row passes." The packet's own M_return table refutes this. The comment is the stale belief it itself warns against ("a wrong reason gets reused"); fed only the comment, the 09-17 panel named a dead mutant as an escape. The comment text needs correcting, not just the instrument.
+
+**The escape: `assert = 0;` → `assert ^= 1;` (line 375).**
+
+REASONED mechanics: `assert` is strictly 0/1 (set at 332, cleared at 340/375). `^=1` gives 1→0 — identical to the fix — and 0→1 — a spurious INTERRUPT_ASSERT.
+
+* `c040 noassert`/`noassert2` (already-asserted line ⇒ IPL>mask, MIEN on ⇒ assert==1 entering the arm): ^1 = 0 → DEASSERT → completions 0x10020/0x10024. This is the same cell where M_d1/M_return measured 0x8, i.e. the row's whole discriminating power is this pre-state.
+* `irq live`/`c040 recover`: C040 clear, arm not entered → 0x8 as shipped.
+* `irq pending`: observes the SCCTX bit (0x33), which the arm never touches; if C040 were still set at that store, the just-raised line makes assert==1 → ^1=0 ≡ fix.
+* `genctl ctl/ctlq/kill/attrib/says/once/predirty/genctl`: announce, aliveness, count, and readback are untouched; the only new effect is pin state, which none of these wants reads. Even if those sessions free-run, a spurious dispatch parks the guest at the 0x8 handler and every want still holds (alive stays alive; the once-count is 1 whether the second write executes or not — the first announce already happened).
+* Contrast: token `0`→`1` is killed by `c040 noassert` (REASONED: leaves the line asserted in the covered cell, the measured M_d1 failure shape). The instrument pins the pin wherever assert==1; it never observes the pin where assert==0 with C040 set. The delivery rows vary the C040 axis while holding the line asserted throughout — `c040 recover`'s "fourth product cell" note overstates a one-dimensional product.
+
+Guest-visible change (REASONED): with C040 set and no assert-worthy request — line idle, request masked, or MIEN off — a free-running guest takes a spurious interrupt (vector 0x8) where the fix declines; it even delivers masked and MIEN-disabled requests through the normal pin, precisely the delivery #512 suppressed. Smallest row that sees it: free-run the existing `c040 kill` write to a completion marker (want completion; mutant got 0x8), or a `c040 noassert` sibling that skips the clmpcc raise. Sibling forms: `assert -= 1;` (0→−1, truthy); token `0`→`!assert`.
+
+**Other edits checked, each with its killing row (all REASONED unless marked READ):**
+
+* 369 `&`→`&&`: killed by `irq live`/`c040 recover` — MIEN keeps GENCTL nonzero, arm fires with C040 clear, suppression never ends, got ≠ 0x8.
+* 369 `&`→`|`: `irq live` (always fires, no delivery) and `genctl ctlq`.
+* 369 `PCC2_C040`→`PCC2_MIEN`: `irq live`. →`PCC2_IRQ_IPL`(0x07): `irq live` (GENCTL=0x02 overlaps). Any mask disjoint from {0x02,0x04}: arm never fires on the 0x06 write → `c040 says`.
+* 369 register swap: announce decouples from the 0x04 write → `c040 says` or `c040 noassert` (unentered arm leaves the line asserted).
+* 370 delete `!`: `c040 says`. 370 `&`→`&&`: the pre-dirtied foreign bit silences the announce → `c040 predirty`. `1u`→`0u` (370 or 371): latch never latches → `c040 once` (got 2).
+* Latch-bit swap at one site only: check bit A, set bit B → announces every encounter → `c040 once`.
+* 378 `assert`→`!assert`/`0`: `irq live`. →`1`: `c040 noassert`.
+* 379 ASSERT↔DEASSERT: `irq live`. 381 DEASSERT→ASSERT: `c040 noassert`. `d->cpu_irq`→other field: `irq live`.
+* 372 `fatal`→`debug`: announce leaves the observed stream → `c040 says` (caveat: NOT CHECKABLE #3).
+* Behavior-identical variants pass 13/13 but change nothing (no row owed): `if`→`while` at 370 (the latch-set falsifies the condition, one pass); `=`→`&=` at 375.
+
+**Second, lesser escape: L371 `|=` → `=`.** REASONED passes 13/13: the C040 announce and once-latch stay intact, but the first C040 encounter now clobbers foreign `warned` bits. `c040 predirty` protects bits flowing INTO the latch; no row re-checks a foreign bit AFTER the C040 write. Guest-visible change: none (per the established fact, only DELIVERY is guest-visible) — so this is a latch-charter row, not a delivery row: re-trigger the pre-dirtied warning after the C040 announce and want exactly-once for it too.
+
+**NOT CHECKABLE:**
+
+1. Whether the five announce-side rows single-step or free-run — i.e., whether the `^=` escape's spurious assert already delivers inside them. The escape holds under both mechanics (shown above), and no run of the `^=` mutant exists in the packet. Single settling fact: a 13-row run of a `^=` label (or the probe's per-row stepping mode).
+2. No 13-row rerun of M_return/M_d1 is in the packet (both tables are 10-row); their continued kill is REASONED. Settling fact: rerun both labels on the shipped 13.
+3. Whether `c040 attrib` matches the announce text exactly or by substring — bounds only edits inside the fatal string, which are guest-invisible either way. Settling fact: the probe's match pattern.
+4. The mechanism by which `fatal()` at L372 announces without exiting: the tables force the behavior (`c040 kill` alive with the EVIDENCE line printed) but the fork's `fatal` semantics are never stated. Settling fact: the fork's `fatal()` definition.
+================= deepseek NOT JSON (Expecting value: line 1 column 1 (char 0)) -- RAW FOLLOWS
+VERDICT: ROW OWED (line 371: `d->warned |= (1u << PCC2_W_C040);` -> `d->warned = (1u << PCC2_W_C040);`, row `c040 predirty` as written does not catch it)
+
+READ: The shipped 13-row instrument contains `c040 predirty` with got/want `yes/yes`, and its note only requires that a different warned bit set first must not silence the C040 announce.  
+REASONED: Replacing `|=` with `=` on line 371 is a one-token edit. On the first C040 write it still sets the C040 warned bit, so `c040 once` passes. On a predirtied `d->warned` it still enters the announce block because the C040 bit is not yet set, so `c040 predirty` passes. It clears any other warned bits, but no shipped row checks that those other bits survive. Therefore all 13 rows pass.
+
+Guest-visible behaviour changed: none from the packet’s own established facts — `d->warned` is a host-side field with no guest-readable reflection. The smallest row that would see this edit is a tightened `c040 predirty` that also checks the predirtied warned bit remains set after the C040 write.
+
+Other edits checked:  
+- Deleting `assert = 0;` on line 375 still fails `c040 noassert` (`got 0x8` vs `want 0x10020`).  
+- `assert = 0;` -> `return;` still fails `c040 noassert` for the same reason.  
+- `&` -> `==` on line 369 fails `c040 noassert` when GENCTL is MIEN|C040 (0x06), because the condition becomes false and suppression is skipped.  
+- `if (assert)` -> `if (!assert)` fails `c040 noassert` by inverting the deassert/assert decision.
+================= minimax NOT JSON (Expecting value: line 1 column 1 (char 0)) -- RAW FOLLOWS
+VERDICT: CLOSED (no escape found — both 2026-09-17 mutants are killed by rows still present in the shipped 13; no other one-token edit I can derive from lines 369-381 passes all 13)
+
+---
+
+**Edit-by-edit, rows 369-381, against the 13-row instrument**
+
+All inputs below are READ from the packet tables; every prediction is REASONED.
+
+**1. Delete `assert = 0;` (line 375) — the M_d1_noassert mutant**
+- `c040 noassert` (row 10, present in 13): READ want 0x10020, M_d1_noassert got 0x8. Branch entered with C040 set, latch already on so `fatal` is skipped, but with the suppression gone `assert` stays at whatever line 332 set it to (1, because IPL>mask from SCCTX's INT-bit liveness). INTERRUPT_ASSERT is called, free-run delivers vector 0x8. FAIL — same kill as on the 10-row stage.
+- `c040 noassert2` (row 11, NEW in 13): REASONED — identical mechanism on a second C040 encounter. Latch is on (warned bit set), branch enters, no suppression, vector 0x8, want 0x10024. FAIL.
+- `c040 recover` (row 12, NEW): REASONED — C040 cleared, branch not entered, `assert=1` from IPL>mask so INTERRUPT_ASSERT is called (line already high, no-op), got 0x8 == want 0x8. PASS.
+- `c040 genctl` (row 13, NEW): REASONED — register readback not touched by suppression code. PASS.
+- Verdict on this edit: **killed by c040 noassert (and c040 noassert2)**. Killing row IS in shipped 13.
+
+**2. `assert = 0;` → `return;` (line 375) — the M_return mutant**
+- The packet's code comment asserts "every shipped row passes"; the M_return measurement (READ got 0x8, READ want 0x10020 on c040 noassert) contradicts that. The comment itself flags this as a wrong reason for a right position.
+- `c040 noassert` (row 10, present in 13): READ fail in M_return; the 13-row instrument is the same modulo the three additions, so still FAIL.
+- `c040 noassert2` (row 11, NEW): REASONED — `return` exits before INTERRUPT_DEASSERT on the second encounter too; vector 0x8, want 0x10024. FAIL.
+- `c040 recover` (row 12, NEW): REASONED — C040 clear, branch not entered, no return, ASSERT path reached. PASS.
+- `c040 genctl` (row 13, NEW): PASS.
+- Verdict on this edit: **killed by c040 noassert (and c040 noassert2)**. Killing row IS in shipped 13.
+
+**3. `assert = 0;` → `assert = 1;`**: would make the suppression branch set `assert` to truthy. REASONED: kills c040 noassert and noassert2 (vector delivered when C040 set, same mechanism as #1 without the deletion).
+
+**4. `assert = 0;` → `;` (no-op)**: REASONED: functionally identical to #1 — kills c040 noassert / noassert2.
+
+**5. `assert = 0;` → `--assert` / `++assert` / `assert &= 0`**: REASONED: `assert` stays truthy in the C040 case — same kill as #1 / #3.
+
+**6. Flip the branch predicate: `if (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040))`**: REASONED — suppression now fires when C040 is CLEAR. `c040 says` / `c040 once` killed (the C040=0x04 st.b no longer enters the announce branch); `c040 noassert` no longer suppressed. Multiple rows fail.
+
+**7. `PCC2_C040` → some other constant on line 369**: REASONED — detaches the suppress+announce from the C040 bit. `c040 once`, `c040 noassert`, and the diagnostic attribution move off; killing at least one of c040 once / c040 noassert / c040 says depending on which constant picks.
+
+**8. Swap `INTERRUPT_ASSERT` ↔ `INTERRUPT_DEASSERT` on lines 379/381**: REASONED — inverts the post-suppression logic. Kills `irq live` (the positive control: C040 clear, line should be raised, so vector must be reached).
+
+**9. Delete the `fatal(...)` lines (one-token removal)**: REASONED — kills `c040 attrib` and `c040 says` (announcement must carry the unique diagnostic; `c040 says`'s "yes"/"yes" requires the diagnostic to print). Doesn't rescue anything.
+
+**10. Change `(1u << PCC2_W_C040)` to `1u`**: REASONED — latch set on bit 0, checked on bit PCC2_W_C040. The check `!(d->warned & (1u << PCC2_W_C040))` stays true after the first call; `c040 once` fails (more than one announcement).
+
+---
+
+**NOT CHECKABLE:** I cannot enumerate the entire open set of one-token edits to lines 369-381 from the packet alone, nor rule out a stranger edit (e.g. one whose effect depends on a macro expansion or a header constant I cannot see) without the source. What the packet DOES settle is that the two mutations the 2026-09-17 panel named are not rescued by the 13-row instrument: `c040 noassert` is still present and still kills both, `c040 noassert2` kills them again by the same mechanism, and `c040 recover` passes them — it does not flip the sign.
+
+**Summary against the asked question:** no one-token edit to lines 369-381 of the shipped code passes all 13 rows. The fix as shipped (the `assert = 0;` line, inside the C040 branch, before the `if (assert)` split) is the only configuration among those I can derive that the 13 rows are consistent with — and the packet's own code comment, which claims the `return;` mutant "every shipped row passes", is contradicted by the M_return row data the same packet preserves.
+================= kimi NOT JSON (Expecting value: line 1 column 1 (char 0)) -- RAW FOLLOWS
+VERDICT: ROW OWED — edit: line 371 `d->warned |= (1u << PCC2_W_C040);` → `d->warned = (1u << PCC2_W_C040);` (one token, all 13 rows stay green); row owed: a `c040 predirty`-with-refire row (pre-set another warned bit, C040 write, refire that other warning, count its announces: shipped 1, mutant 2). Every suppression-path one-token mutant on 369–381 reds on a shipped row, and both 2026-09-17 mutants still die on `c040 noassert`, which IS in the shipped 13.
+
+**1. The two named mutants — killing row still present (READ).** `c040 noassert` is row 10 of the 13. In the 10-row runs its want was 0x1001c; in the shipped 13 it is 0x10020 (REASONED: the three added probe rows shift the guest completion address — mienclobber at 13 shows noassert2 at 0x10024, sticky at 12 shows noassert at 0x1001c — but the discriminant is unchanged: 0x8 = vector entry 8×EXCEPTION_INTERRUPT vs the completion address). Both mutants got 0x8 (delivered) at `c040 noassert`: deletion leaves `assert == 1`; `return;` skips `INTERRUPT_DEASSERT` on a line the clmpcc store already asserted. On the 13, both would additionally red `c040 noassert2` (same mechanism, latch already set; want 0x10024), and pass `c040 recover`/`c040 genctl` — so the shipped instrument is redundant, not merely sufficient, against them (REASONED from the got/want semantics).
+
+**2. Enumeration of one-token edits of 369–381, and the row that reds each.** (REASONED throughout; kills routed via rows whose want values make the scenario state provable from the packet — e.g. `irq live` wants 0x8, which requires MIEN set, so GENCTL is nonzero in that row; the unstated benign control value is never needed.)
+
+- `assert = 0;` → deleted / `return;` / `= 1;` / `|= 0;` / `^= 0;` / wrong lvalue → `c040 noassert` red (assert survives at 1 → delivery → 0x8).
+- `= 0;` → `&= 0;` → equivalent mutant (x&0 == 0); passes, changes nothing reachable.
+- Line 369 `&` → `&&` or `|`, or `PCC2_C040` → `PCC2_MIEN` → `irq live` red: MIEN is set there (else want couldn't be 0x8), widened test suppresses the asserted line → got completion, want 0x8. Test nullified (`& 0`, always-false) → `c040 says` red (no announce) AND `c040 noassert` red (no suppression → 0x8).
+- Line 369 `if` → `while` → host spins in the arm (GENCTL&C040 never cleared inside) → `c040 kill` red (not "alive").
+- Line 370 drop `!`, or `&` → `|` → first C040 write never announces → `c040 says` red (got no).
+- Line 370 `&` → `&&` → `c040 predirty` red: any pre-set warned bit makes `warned && mask` true → announce silenced. (This row exists for exactly this.)
+- Single-sided latch-bit change (rename only on 370 or only on 371; `1u` → `2u`; `|=` → `&=`) → test and set desynchronize, latch never lands → announce fires twice → `c040 once` red (got 2, want 1). A consistent rename on BOTH lines is undetectable but is a two-token edit — out of scope.
+- Line 371 `|=` → `^=` → equivalent mutant: line 370's guard guarantees the bit is clear at entry, so `^=` and `|=` coincide on every reachable path; passes all 13, no observable ever.
+- Line 378 `if (assert)` → `if (!assert)`, or swap 379/381 → `irq live` red (live case deasserted) and `c040 noassert` red (suppressed case asserted → 0x8).
+- 379 `INTERRUPT_ASSERT` → `INTERRUPT_DEASSERT` → `irq live` red (never delivers). 381 `INTERRUPT_DEASSERT` → `INTERRUPT_ASSERT` → `c040 noassert` red (delivers → 0x8).
+- Measured tables cover the rest: MIEN-clobber reds only on `c040 genctl` (0x04 vs 0x06) — why row 13 exists; sticky latch reds only on `c040 recover` (0x10020 vs 0x8) — why row 12 exists.
+
+**3. The escape (REASONED through all 13 got/want).** `|=` → `=` at line 371: ctl/ctlq don't enter the arm; kill/attrib/says/once are identical because `warned == 0` at first entry in those rows; predirty still announces (the test at 370 reads `warned` BEFORE the clobber); pending/live/noassert/noassert2/recover never touch `warned`; genctl untouched. 13/13. Guest-visible change: a C040 write destroys every previously latched (once) warning bit, so the next recurrence of that other warning RE-announces — observable the same way `says`/`once` observe, on the console. Smallest seeing row: predirty's setup plus a refire of the pre-set warning with an announce counter (got 2, want 1). No shipped row re-fires a non-C040 warning, so none sees it.
+
+**4. Defect in the shipped comment (READ).** Lines 356–357 assert "`assert = 0` -> `return` at THIS line is a one-token mutant every shipped row passes." The packet's own M_return table falsifies that (got 0x8, FAIL, at `c040 noassert`). The claim was true only while the instrument single-stepped and delivery was suppressed; it is stale relative to the free-running rows the comment's own witness row requires. Right position, right code — but the parenthetical is now a false escape claim sitting in the shipped text, and it is exactly the kind of statement this stage exists to re-check.
+
+**5. NOT CHECKABLE lines.**
+
+NOT CHECKABLE: the probe's match granularity for `c040 says`/`c040 attrib` (exact evidence string vs substring, and whether `debug()` output reaches the session log at all) — this decides whether a one-token edit of the message text, or `fatal` → `debug`, reds or escapes. Settling fact: the match pattern in the probe and the verbosity gating of `debug()`.
+
+NOT CHECKABLE: the numeric value of `PCC2_W_C040` — decides whether `(1u << PCC2_W_C040)` → `(1u >> PCC2_W_C040)` is an equivalent mutant (W==0: identical, passes all 13) or a `c040 once` fail (W>0: mask 0, announce twice, got 2). Settling fact: the enum value in the header.

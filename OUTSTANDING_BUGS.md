@@ -786,7 +786,7 @@
 >
 > ### OPEN -- filed 2026-08-29: what the re-run battery found behind a five-day-old red
 >
-> **`diskimagesign`** -- IN WORK as `#491`.  `#472`'s clamp introduced two
+> ✅ **`diskimagesign` RESOLVED by `#491` (`18893de`); ticked in place 2026-10-09 by its flagship regress review (F2.2) -- this line said "IN WORK as `#491`" after the ledger had closed the row.**  `#472`'s clamp introduced two
 > `-Wsign-compare` warnings at `diskimage.c:1382`.  **Not a live bug** (`remain` is in
 > `[1,512]` by construction) but `gate_build` wants ZERO warnings, so it FAILED --
 > and because it withdraws `$RIG/gxsec-gxemul` at start and republishes only on
@@ -20147,7 +20147,9 @@ would move that row**, so this is not the one-line change it looks like.
 intended, and the fourth time this session that a seat checking one claim found another.
 
 
-### `diskimageternaryoob` (HIGH, coverage/(d)-floor) -- filed 2026-09-17, kimi seat via the late-review panel
+### `diskimageternaryoob` (WITHDRAWN; it said HIGH, coverage/(d)-floor, until 2026-10-09) -- filed 2026-09-17, kimi seat via the late-review panel
+
+*[2026-10-09, Fable 5.1's regress review of `diskimagesign` (F2.1): WITHDRAWN the day it was filed -- the ledger has this row `dropped`, titled "WITHDRAWN -- #491's ternary swap is NOT undetected".  `regress/diff_diskimage_io.c` reds on the arm swap: 10 rows red, then a stack-smashing abort with no PASS token (`regress/artifacts/fablequeue8n_20261009/regress_devices/offline_out/io_HEAD_armswap.out`).  The text below is as filed.]*
 
 **`#491`'s CLAMP CAN BE NULLED BY SWAPPING TWO TERNARY ARMS, AND NOTHING IN THIS TREE WOULD
 NOTICE.**  The shipped line in `fread_helper()` is
@@ -21887,7 +21889,7 @@ depend on that kill and all must move in the same commit (codex).  deepseek's sp
 
 ### `fiqenableread` (MED; it said LOW until #554 re-graded it, 2026-10-02) -- a read of FIQ_ENABLE_SET (+0x288) returns 0, not `d->fiq_enable` (grok, n6 assess)
 
-### `pcc2c040mienannounce` (LOW) -- predicted: an announce gated on !MIEN passes all 16 rows (agy, late seat on `pcc2c040kill`)
+### `pcc2c040mienannounce` (MED; it said LOW until 2026-10-09 -- the ledger graded it MED as an L2 repair, done by `#535`) -- predicted: an announce gated on !MIEN passes all 16 rows (agy, late seat on `pcc2c040kill`)
 Plus a stale "does NOT catch" probe comment contradicted by the 9 L2 rows below it (wrong record) and t2/t3 rebinding.
 
 ### Owner-ordered missing seats -- ALL FIRED 2026-09-18
@@ -24698,3 +24700,30 @@ correct the comment when `panel.sh` is next reviewed (it carries unreviewed delt
   of the labels is owed, not re-runs.
 * **`fablequeueregress` (MEDIUM, open)** -- `check_fable_queue.py` credits any regress-phase entry as the flagship's
   review; `landiskaux` and `lcaisalane` read as reviewed on Opus-seat entries alone.  Key the check on fable5.
+
+### 2026-10-09 -- batch 8n's regress reviews (Fable 5.1), the n6 rule question, and the pcc2 C040 review-stage ruling
+
+* **`stagetokenscontrols` (LOW, open)** -- `regress/artifacts/stagetokens/controls_534/run_controls.py`: 13 of 49
+  expectations are reddened by no shipped variant.  Six one-line extra variants make twelve of them fail (32/49 to
+  45/49); the thirteenth, `CSP t_reread one-seat filing`, can only assert "t_reread is not a violation", and a
+  filing-shortcut variant passes 49/49.  Adopt the seven variants and re-pin `t_reread` on its listing line, one
+  commit.  Includes `heldmasked`'s one regress finding (`t_discharged` has no shipped killing variant).
+* **`dashokclass` (LOW, open)** -- `tools/pipeline/gen_dashboard.py`: `D_CLASS` maps only the four glyphs, so the 439
+  ledger entries whose `d` is "OK" (365 matrix cells) render in the seat-failure class.  One line or a ledger sweep;
+  either owes the controls a `DASH` row with `d` "OK".  Display only.
+* **`cxlaunchquotation` (LOW, open)** -- `tools/cxlaunch.sh`'s wall check greps the seat's answer for `quota`, so an
+  answer containing "quotation" is reported SEAT WALLED (rc 8).  Measured 2026-10-09 on a complete GPT-6 Astra answer.
+  Word-anchor it and test stdout only when no verdict line is present; controls both ways.
+* **`fablequeueregress` (MEDIUM, open)** gains Fable 5.1's stagetokens finding 5: section I's regress guarantee is
+  narrower than its docstring -- precommit I2 (the codex wall), not I, forces a held regress review into the queue.
+
+* **`pcc2c040assertrow` -- review hold DISCHARGED; the row is CLOSED again.**  The four re-fired packet-fed seats were
+  given the 13-row 2026-09-08 instrument instead of HEAD's 18 rows (a brief defect); both variants they proposed were
+  then MEASURED undetected on the 18-row probe (18/18 each) and FILED below.  Fable 5.1's final ruling (v3) and GPT-6
+  Astra agree: clause (e), not floor.
+* **`pcc2c040assertxor` (MED, open)** -- `assert = 0;` -> `assert ^= 1;` in the C040 arm passes all 18 rows; with C040
+  set and nothing pending it delivers a spurious interrupt.  Pin (predicted, not measured): a free-running `c040 idle`
+  row with an SCCTX = 0x13 state control.  **Owner question (does a repair's own write target, tested by the enclosing
+  function's next statement, enter DEPENDS-ON?) answered 2026-10-09: keep the written rule** -- it stays debt.
+* **`pcc2c040warnedeq` (MED, open)** -- `d->warned |=` -> `=` in the C040 arm passes all 18 rows; it clears the twelve
+  other width-warning latch bits.  Pin: a second width-decline store in the `c040 predirty` session, counting announces.

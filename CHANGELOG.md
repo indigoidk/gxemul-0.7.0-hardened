@@ -1,3 +1,61 @@
+## 2026-10-09 -- records: Fable 5.1's regress reviews of batch 8n, the n6 rule question, and the pcc2 C040 review-stage ruling
+
+**Eight closed rows owed a flagship `regress` review (queue batch 8n); Fable 5.1 did all eight, measuring, in two
+batches.**  The harness rows (`regress/artifacts/fablequeue8n_20261009/regress_harness/fable5_regress_harness.md`): the
+stage-token controls, run from a HEAD archive, still give base 49/49 with all 33 shipped variants caught and output
+byte-identical to the committed v3 file; the held-count fix's verbatim pre-fix reinstatement scores 42/49; the
+`fbpending_bound` self-variant lane, re-run on a clean HEAD build exactly as gate 2 invokes it, reproduces every
+recorded leg, and R3 is the right pin (the only row that sees this variant) with no further lane coverage owed.  The
+device rows (`.../regress_devices/fable5_regress_devices.md`), each on fresh builds of the true parent and the commit with
+ONE committed instrument: `wdcaltctrlbit` re-measured at HEAD (Md_bitswap 11/128, Mb_revert 12/128); `diskimagesign`'s
+two warnings at the parent and none after, and the ternary arm swap -- warning-free, as the 2026-09-17 dissent said --
+ABORTS the gated `diff_diskimage_io.c`, so the dissent's conclusion is false; `sgirergbroundtrip` 4/10 -> 10/10;
+`landiskaux` 1/6 -> 6/6, value-identical to the round's preserved pre-fix run; `pcc2c040mienannounce` A and F 17/18, the
+pass-1 variant 16/18.  **Verdicts: two REGRESS CLEAN, six REGRESS WITH FINDINGS -- every finding a record, none a
+defect in shipped code.**  Applied in place here: `stagetokens`' stale "PASS 2 IS OWED" and a v3 count that predates its
+last row; `fbsmlane`'s "the SM_EXEMPT line is gone" (the line stays; the entry went); `diskimagesign`'s witness re-keyed
+from a directory of logs to its two detectors; `landiskaux`'s and `pcc2c040mienannounce`'s holds dated as history; the
+latter's witness re-keyed from `probe:` to `detector:` (a round that changed no `src/`); `wdcaltctrlbit`'s "Controls at
+HEAD" dated; `sgirergbroundtrip`'s witness given its same-script pair; and three `OUTSTANDING_BUGS.md` lines --
+`diskimageternaryoob` still standing as HIGH though withdrawn the day it was filed, `diskimagesign` still "IN WORK", and
+`pcc2c040mienannounce` still (LOW).  **Filed:** `stagetokenscontrols` (LOW: 13 of the controls' 49 expectations are
+reddened by no shipped variant; six one-line extra variants make twelve fail, and the `t_reread` expectation cannot see
+filing-vs-grandfathered at all -- a filing-shortcut variant passes 49/49) and `dashokclass` (LOW: the 365 matrix cells
+whose `d` is "OK" render in the seat-failure class), and -- found the same evening -- `cxlaunchquotation` (LOW: the codex
+launcher's wall check matches "quotation" in a seat's answer and reports a complete answer as walled).  Section I's
+regress guarantee is narrower than its docstring
+(I2 is what actually forces a held regress review into the queue) -- folded into `fablequeueregress`.
+
+**`n6`'s rule question: RULED (a)** -- the 2026-08-30 fable5 assess entry is a seat answer that re-opened the stage.
+GPT-6 Astra (`.../astra_confirm/codex_astra_n6pcc2.txt`) confirmed (a) on the decisive warrant -- the owner's choice
+recorded in entry [5] and the seven answers that completed the panel -- and corrected two of Fable's four reasons:
+`live_holds()` reads canonical HELD tokens, which n6's hold never carried, and `is_answer()` also accepts RE_READ, so it
+cannot separate (a) from (b); CONFIRMED and UPHELD are not answer-exclusive.  The row's stale hold_question is dated in
+place; `#539`'s regress review of the row stays owed, and its queue heading stays.
+
+**`pcc2c040assertrow`'s review stage, held by the owner on 2026-09-18 for four packet-fed seats: DISCHARGED, and the
+row closed again with both new variants FILED.**  The re-fire (`_scratchpad/panel_20261009_191953`) returned glm ROW
+OWED (`assert = 0;` -> `assert ^= 1;`), deepseek and kimi (kimi-k3:cloud) ROW OWED (`d->warned |=` -> `=`) and minimax
+CLOSED.  The main loop MEASURED both variants on the 18-row HEAD probe before any ruling -- base, X and W each 18/18
+(`regress/artifacts/pcc2c040kill/assertrow_review_20261009/probe_*.raw`) -- which refutes minimax's "no other one-token
+edit passes".  **A packet defect is recorded against the main loop: the packet inlined the 13-row 2026-09-08
+instrument, not HEAD's 18 rows**, so those four answers settle only the hold's narrow return-variant question (caught by
+`c040 noassert`, 9/10 and 14/16) and earn no credit as a review of the 18-row detector.  **The ruling took three
+versions, recorded in `RULING_PROVENANCE.txt`:** v1 was written by claude-opus-4-8 after two Fable refusals and is not
+credited; v2 (Fable 5.1) graded X floor; GPT-6 Astra confirmed with five changes and dissented on X; v3 (Fable 5.1)
+reversed v2 -- the C040 guarded block writes `assert` and tests nothing on it, and `if (assert)` after the block cannot
+dominate the edited line, so by DEPENDS-ON's written bound X is clause (e).  Filed: `pcc2c040assertxor` and
+`pcc2c040warnedeq` (both MED, both with 18/18 receipts; X's `c040 idle` pin is predicted, not measured).  Astra's other
+changes applied: entries [5] and [6] on the row annotated in place where the 9/10 and 14/16 results refute them, and W's
+explanation keyed on the tested partition (twelve other bits, not thirteen; `warned_unimpl` untouched).  **OWNER
+QUESTION, named by v3 and decided by neither seat: does a repair's own write target, tested by the enclosing function's
+next statement, enter DEPENDS-ON?  The owner answered the same evening: KEEP THE WRITTEN RULE**, so
+`pcc2c040assertxor` stays clause-(e) debt.  The stale `dev_pcc2.c` comment
+beside the C040 arm is corrected by #560's held comment batch.
+
+No `src/` change; no gate run (records only).  The two Fable regress batches ran in the seats' own WSL clones and left
+no tree mutated.
+
 ## 2026-10-09 -- records: Fable 5.1's regress review of #562, and the 7n rulings' record consequences
 
 **#562's REGRESS review (Fable 5.1, `regress/artifacts/armmsrmodekill/regress_20261009/fable5_regress562.md`):

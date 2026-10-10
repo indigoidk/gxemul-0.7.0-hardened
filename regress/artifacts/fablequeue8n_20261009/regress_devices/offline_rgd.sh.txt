@@ -1,0 +1,95 @@
+#!/bin/bash
+# fable5 REGRESS seat (8n): OFFLINE legs -- wdcaltctrlbit (diff_wdc_identify.c) and diskimagesign.
+# Private WSL scratch only; project trees untouched.
+set -u
+S=/mnt/c/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/fable_rgd
+D=/tmp/gxfable_rgd/off
+rm -rf "$D"; mkdir -p "$D/run"
+LOG=/tmp/gxfable_rgd/offline.log
+exec > "$LOG" 2>&1
+ex() { mkdir -p "$D/$2"; tar -xf "$S/work/$1.tar" -C "$D/$2"; echo "extract $1 -> $2 rc=$?";
+       (cd "$D/$2" && ./configure > configure.log 2>&1; echo "configure $2 rc=$? config.h: $(test -f config.h && echo present || echo MISSING)"); }
+ex aa3faff1 wdc_parent; ex 867c697 wdc_commit; ex a05660af head; ex fb0cc783 di_parent; ex 18893de di_commit
+# wdc_prefix = COMMIT's differential + PARENT's device (the pre-fix leg, one instrument)
+cp -a "$D/wdc_commit" "$D/wdc_prefix"; cp "$D/wdc_parent/src/devices/dev_wdc.c" "$D/wdc_prefix/src/devices/dev_wdc.c"
+cmp -s "$D/wdc_prefix/src/devices/dev_wdc.c" "$D/wdc_parent/src/devices/dev_wdc.c" && echo "wdc_prefix device == parent device  OK"
+# HEAD mutants: bitswap (predicate back to WDCTL_4BIT, repair intact) and revert (verbatim pre-#481 arm)
+cp -a "$D/head" "$D/head_bitswap"; cp -a "$D/head" "$D/head_revert"
+python3 - "$D" <<'PY'
+import sys
+D = sys.argv[1]
+GUARD = ("\t\tif (idata & WDCTL_RST) {\n"
+         "\t\t\td->cur_command = COMMAND_RESET;\n"
+         "\t\t\twdc_new_command_reset(d);\n"
+         "\t\t}\n")
+for tree, new in (("head_bitswap", GUARD.replace("idata & WDCTL_RST", "idata & WDCTL_4BIT")),
+                  ("head_revert", "\t\tif (idata & WDCTL_4BIT)\n\t\t\td->cur_command = COMMAND_RESET;\n")):
+    p = D + "/" + tree + "/src/devices/dev_wdc.c"
+    t = open(p, encoding="latin-1").read()
+    n = t.count(GUARD)
+    if n != 1:
+        print("ANCHOR count", n, "for", tree, "-- REFUSING"); continue
+    open(p, "w", encoding="latin-1").write(t.replace(GUARD, new, 1))
+    print("applied", tree)
+PY
+wdcrun() {   # tree label
+    local T="$D/$1" L=$2 B="$D/run/wdc_$2"
+    gcc -O2 -std=c99 -I"$T/src/include" -I"$T/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$B" "$T/regress/diff_wdc_identify.c" > "$B.cc" 2>&1
+    local rc=$?
+    echo "=== wdc[$L] differential=$(md5sum < "$T/regress/diff_wdc_identify.c" | cut -c1-8) device=$(md5sum < "$T/src/devices/dev_wdc.c" | cut -c1-8) compile_rc=$rc"
+    if [ $rc -ne 0 ]; then head -5 "$B.cc"; return; fi
+    "$B" > "$B.out" 2>&1; echo "run_rc=$?"
+    echo "FAIL rows: $(grep -c '^  FAIL' "$B.out")"; grep '^  FAIL' "$B.out" | sed 's/^/    /'
+    tail -2 "$B.out" | sed 's/^/    /'
+}
+wdcrun wdc_parent  PARENT_aa3faff1_own_detector
+wdcrun wdc_prefix  PREFIX_867c697_detector_vs_parent_device
+wdcrun wdc_commit  COMMIT_867c697
+wdcrun head        HEAD_a05660af
+wdcrun head_bitswap HEAD_Md_bitswap
+wdcrun head_revert  HEAD_Mb_revert
+echo
+echo "##### diskimagesign"
+(cd "$D/di_commit" && grep -m1 -nE '^CWARNINGS' Makefile)
+W="-Wshadow -Wcast-align -Wstrict-aliasing -Wall -Wextra -Wno-unused-parameter -Wno-cast-align"
+wcomp() {  # tree label
+    local T="$D/$1" L=$2 out rc bytes warn
+    out=$(gcc -std=gnu99 $W -O3 -DNDEBUG -I"$T/src/include" -I"$T/src/include/machines" -c "$T/src/disk/diskimage.c" -o "$D/run/di_$L.o" 2>&1); rc=$?
+    bytes=0; [ -f "$D/run/di_$L.o" ] && bytes=$(stat -c%s "$D/run/di_$L.o")
+    warn=$(printf '%s\n' "$out" | grep -cE 'diskimage\.c:[0-9]+:[0-9]+:.*sign-compare')
+    echo "=== diskimage[$L] device=$(md5sum < "$T/src/disk/diskimage.c" | cut -c1-8) rc=$rc obj=$bytes warn_signcompare=$warn  clamp: $(grep -n 'lentoread = ' "$T/src/disk/diskimage.c" | head -1)"
+    printf '%s\n' "$out" | grep -E 'sign-compare' | head -4 | sed 's/^/      W /'
+}
+cp -a "$D/head" "$D/head_swap"
+python3 - "$D" <<'PY'
+import sys
+D = sys.argv[1]; p = D + "/head_swap/src/disk/diskimage.c"
+old = "lentoread = len > (size_t) remain? remain : (off_t) len;"
+new = "lentoread = len > (size_t) remain? (off_t) len : remain;"
+t = open(p, encoding="latin-1").read(); n = t.count(old)
+print("swap anchor count", n, "-- REFUSING" if n != 1 else "applied head_swap")
+if n == 1: open(p, "w", encoding="latin-1").write(t.replace(old, new, 1))
+PY
+wcomp di_parent PARENT_fb0cc783
+wcomp di_commit COMMIT_18893de
+wcomp head      HEAD_a05660af
+wcomp head_swap HEAD_armswap
+iorun() {  # tree label
+    local T="$D/$1" L=$2 B="$D/run/io_$2"
+    gcc -O2 -std=gnu99 -I"$T/src/include" -I"$T/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$B" "$T/regress/diff_diskimage_io.c" > "$B.cc" 2>&1
+    local rc=$?
+    echo "=== diff_diskimage_io[$L] differential=$(md5sum < "$T/regress/diff_diskimage_io.c" | cut -c1-8) device=$(md5sum < "$T/src/disk/diskimage.c" | cut -c1-8) compile_rc=$rc"
+    if [ $rc -ne 0 ]; then head -5 "$B.cc"; return; fi
+    (cd "$D/run" && "$B" > "$B.out" 2>&1; echo "run_rc=$?")
+    grep -n '^  FAIL' "$B.out" | head -3 | sed 's/^/    rawFAILline: /'; echo "FAIL rows: $(grep -c '^  FAIL' "$B.out")  failures-line: $(grep -oE '[0-9]+ failures' "$B.out" | tail -1)  faults-line: $(grep -oE '[0-9]+ faults' "$B.out" | tail -1)  PASS-token: $(grep -c DISKIMAGE_IO_PASS "$B.out")"
+    grep '^  FAIL' "$B.out" | head -12 | sed 's/^/    /'; tail -2 "$B.out" | sed 's/^/    /'
+}
+iorun di_commit COMMIT_18893de
+iorun head      HEAD_a05660af
+iorun head_swap HEAD_armswap
+echo "OFFLINE_DONE $(date +%T)"
+cp "$LOG" "$S/offline_rgd.log"

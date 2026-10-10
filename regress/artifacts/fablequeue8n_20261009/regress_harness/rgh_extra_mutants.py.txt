@@ -1,0 +1,39 @@
+"""fable_rgh regress seat: the 49 shipped expectations vs the 33 shipped mutants, by SUBSTRING (three
+expectation names carry commas), then a handful of EXTRA mutants aimed at the rows no shipped mutant reds.
+Runs run_controls.run() from the HEAD scratch copy; writes nothing into any project tree."""
+import io, os, re, sys
+CTRL = os.path.join(sys.argv[1], "headtools", "regress", "artifacts", "stagetokens", "controls_534")
+sys.path.insert(0, CTRL)
+os.chdir(CTRL)
+import run_controls as rc
+S = sys.argv[1]
+src = io.open("run_controls.py", encoding="utf-8").read()
+names = re.findall(r'^\s+\("([^"]+)",\s', src, re.M)
+out = io.open(S + "/controls_HEAD.out", encoding="utf-8").read()
+redlists = [l.split("red:")[1] for l in out.splitlines() if "red:" in l]
+never = [n for n in names if not any(n in r for r in redlists)]
+print("expectations %d; reddened by no shipped mutant: %d" % (len(names), len(never)))
+for n in never: print("   NEVER:", n)
+EXTRA = {
+    "X_is_held_exact": ("stage_tokens.py", "    return HELD in _note(e)", "    return HELD == _note(e)"),
+    "X_never_discharge": ("stage_tokens.py",
+                          '            done = any((e.get("seat") or "").lower() == seat and is_answer(e)',
+                          '            done = False and any((e.get("seat") or "").lower() == seat and is_answer(e)'),
+    "X_notseat_is_answer": ("stage_tokens.py",
+                            "    if HELD in n or NOTSEAT in n or ANNOTATION in n or NOPANEL in n:",
+                            "    if HELD in n or ANNOTATION in n or NOPANEL in n:"),
+    "X_annotation_is_answer": ("stage_tokens.py",
+                               "    if HELD in n or NOTSEAT in n or ANNOTATION in n or NOPANEL in n:",
+                               "    if HELD in n or NOTSEAT in n or NOPANEL in n:"),
+    "X_nopanel_not_exempt": ("stage_tokens.py",
+                             "STAGE_EXEMPT = (ANNOTATION, RE_READ, NOPANEL)",
+                             "STAGE_EXEMPT = (ANNOTATION, RE_READ)"),
+    "X_dash_tok_blank": ("gen_dashboard.py", "        return ('<td class=\"c tok\">", "        return ('<td class=\"c none\">"),
+    "X_filing_is_zero": ("check_stage_panels.py", "            if len(got) == 1:", "            if len(got) == 0:"),
+}
+rc.MUTANTS.update(EXTRA)
+print()
+for n in EXTRA:
+    msg, green = rc.run(n, False)
+    print("%-24s %s" % (n, msg))
+print("RGH_EXTRA_DONE")
