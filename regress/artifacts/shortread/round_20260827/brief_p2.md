@@ -55,6 +55,8 @@ Same script, same binary-build recipe, opposite colour:
 ```
 PRE-FIX   90 rows, 13 failures, 0 faults    DISKIMAGE_IO_FAIL
 POST-FIX  90 rows,  0 failures, 0 faults    DISKIMAGE_IO_PASS
+
+*[L4 2026-10-09, queue 7n-2 (Fable 5.1; GPT-6 Astra): no preserved 90-row output was found in this directory -- the preserved runs are `seat_table_86rows` and the 98-row pair (`PREFIX_98rows.out`: "98 rows, 18 failures"; `POSTFIX_98rows.out`: "98 rows, 0 failures"), and the shipped differential pins `[IDENTITY]` at 98.  The 90 / 13 figures in this packet were never measured as written; the shipped instrument's pre-fix count is 18.]*
 ```
 
 The 13 pre-fix failures are the defect at three positions plus their anchors:
@@ -83,7 +85,7 @@ The 13 pre-fix failures are the defect at three positions plus their anchors:
 |---|---|
 | (a) fails pre-fix | 13 rows, above |
 | (b) verbatim reinstatement | `M1_revert` killed by the original four plus L and I |
-| (c) null medium | `[IDENTITY]` row count pinned at 90 |
+| (c) null medium | `[IDENTITY]` row count pinned at 90 *[L4 2026-10-09, 7n-2: `[IDENTITY]` is precommit E1's self-count pin (98 at HEAD), not clause (c); (c) is the `#include` of the product, MEASURED red on a comment-only `diskimage.c` -- `../nullmedium_20261009/RECEIPT.txt`]* |
 | (d) null-repair | `M3_countonly` (guard kept, count reverted) killed; `M2_pred0`, `M5_gtzero` killed |
 | (e) contract | written into the section header — see §6 |
 | (f) anchor | six `[ANCHOR]` rows pin *where* each region is |

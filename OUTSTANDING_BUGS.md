@@ -24677,3 +24677,24 @@ correct the comment when `panel.sh` is next reviewed (it carries unreviewed delt
   codex job (`iword` already in scope; `#ifndef MODE32`, not `DYNTRANS_DUALMODE_32`; both Rc forms via `DOT0`, since
   agy flagged that `update_cr0` then reads the zeroed register; alias rows RA=RS / RA=RB; the `(1,0)` vs `(0,31)`
   same-low-mask pair; a row rejecting unconditional masked replication).
+
+### 2026-10-09 -- five rows filed from the 7n rulings and the queue reconciliation; `vmedefaultkill` measured and ruled (DECLINE + announce once)
+
+* **`vmedefaultkill` (HIGH, open) -- MEASURED, then RULED.**  Fable 5.1's 7n-4: the FAULT ruling reaches population 1
+  only.  Population 2 (MASTERCTL/MASTER3/MASTER4/MASTER4MOD at attach, IRQSTAT/IRQCLR in the abort handler of the
+  in-tree OpenBSD 2.2 guest; seven access sites), measured by rung-3 probe
+  (`regress/artifacts/vmedefaultkill/measure_20261009/`): HEAD kills the emulator at all seven; FAULT would make the
+  guest PANIC at attach (CMMU PFSR left 0 -> `trap.c` `panictrap()`); DECLINE lets attach complete.  **OWNER: population
+  2 -> DECLINE + ANNOUNCE ONCE** (reads 0, writes dropped, one `fatal()` per register, `(once)` marker); population 1
+  keeps FAULT.  This is the round's design; it owes the ordinary lifecycle (the measurement is its witness).
+* **`vmewidthlanes` (LOW, open)** -- sub-word VME2 accesses: 40 width/address combinations at 30 offsets reach
+  `default:`; a cased base at len != 4 is served with word semantics, lane-wrong on big-endian.  No in-tree guest
+  does it.
+* **`sgirecontentslice` (LOW, open)** -- `#519`'s detector: the TLB-array-contents slice and three value slices are
+  clause-(e) debt; four readbacks in existing sessions, pin 89 -> 93 (a proposed budget).  Below `sgirebufuninit`.
+* **`nullmediumlegs` (LOW, open)** -- `ppc_rldicl_probe.py` and `alpha_tbi_probe.py` owe a MEASURED clause-(c) leg
+  (neither has runtime wiring or an equality pin); the identity-body medium is the recommended form.
+* **`nullmediumsweep` (LOW, open)** -- the ~165-unit clause-(c) sweep has no durable artifact; a reproducible census
+  of the labels is owed, not re-runs.
+* **`fablequeueregress` (MEDIUM, open)** -- `check_fable_queue.py` credits any regress-phase entry as the flagship's
+  review; `landiskaux` and `lcaisalane` read as reviewed on Opus-seat entries alone.  Key the check on fable5.

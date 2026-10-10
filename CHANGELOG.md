@@ -1,3 +1,53 @@
+## 2026-10-09 -- records: Fable 5.1's regress review of #562, and the 7n rulings' record consequences
+
+**#562's REGRESS review (Fable 5.1, `regress/artifacts/armmsrmodekill/regress_20261009/fable5_regress562.md`):
+REGRESS WITH FINDINGS (2), both records, no code.**  Fresh builds of `04f3e7c0` and `4f908ad5` in the seat's own
+clone, ONE committed probe for both runs: parent 18/47 with the 29 named reds, commit 47/47, row-for-row and
+diag-for-diag identical to the committed `run_head.out` / `run_fixed.out` (`probe_parent.out` / `probe_commit.out`,
+both ending `ARMMSRMODE_DONE`); AST minus docstring 412a7157 for the committed probe and all three frozen copies.
+Its two L4s are applied here: `killtable5_20261008/SHIPPED_vs_FROZEN.txt` named the gate-TESTED blob 5ddc3242 where
+59b99365 shipped (an UPDATE line appended), and `armthumbabortkill`'s "SA1110 has no Thumb (unchecked)" is answered by
+the tree (`arm_cpu_types.h` has no Thumb capability field; `ARM_FLAG_T` alone selects the Thumb interpreter).  Its
+notes go to `armmsrmodedebt` (`tbit`/`encl2` have no diag line).
+
+**7n-1 / 7n-2 (Fable 5.1, GPT-6 Astra CONFIRM WITH CHANGES (8)) -- the L4s in place.**  Every "null medium" label
+written over a whole-file PRE-FIX leg is corrected to clause (a), quoting what it refutes: the `ppcrldiclzero`,
+`mk48nvramkill` and `alphatbinegsel` blocks below and their ledger `witness` fields, `sgirandomcolour`'s 2026-09-10
+opus5 entry, and four `check_probe_wiring.py` descriptions.  Clause (c) for `mk48nvramkill` is BY CONSTRUCTION
+(gate_arm.sh's DONE sentinel, per-row presence and 57/57/0 equality pins); for `ppcrldiclzero` and `alphatbinegsel` it
+is OWED, because neither probe has runtime gate wiring or an equality pin (Astra -- the ruling had predicted zero such
+tables): filed as `nullmediumlegs`.  `#488`'s "pinned at 90" is corrected in its block below and in the pass-2
+packet it came from (`shortread/round_20260827/brief_p2.md`): no preserved 90-row output exists there, the shipped
+differential pins 98, it reds 18 rows pre-fix, not 13, and clause (c) was MEASURED red on 2026-10-09
+(`regress/artifacts/shortread/nullmedium_20261009/RECEIPT.txt`).  `#503` (luna) and `#513` (sgirekills) get their
+disclosure sentence -- (c) by construction via their gates' equality pins, leg not run -- with Astra's corrected
+dead-run scores (luna 0/14 with four gate checks red; SGI 6/46, still rejected by the pins).  ZERO closed rounds
+reopen.  `nullmediumsweep` files the ~165-unit sweep that has no durable artifact.
+
+**7n-4 (Fable 5.1; GPT-6 Astra CONFIRM WITH CHANGES (7), `regress/artifacts/fablequeue7n_20261009/astra_7n4/`) and
+the owner's re-ruling.**  The FAULT ruling binds population 1 only.  Population 2 -- the in-tree OpenBSD 2.2 guest's
+MASTERCTL/MASTER3/MASTER4/MASTER4MOD at attach and IRQSTAT/IRQCLR in its abort handler: six registers, SEVEN access
+sites (Astra) -- went to the owner, who ruled **MEASURE FIRST**, and it was measured the same evening
+(`regress/artifacts/vmedefaultkill/measure_20261009/`; agy, rung 3, unmodified mvme187, the committed build plus two
+throwaway sketches of the `default:` arm).  HEAD ends the emulator at all seven sites.  FAULT vectors the guest to
+VBR+0x18 with the 88100 data-unit registers set but the data CMMU's PFSR still 0 -- the very word the guest's `eh.S`
+saves as `dpfsr` -- so `trap.c` finds neither a guarded bus error nor a page fault and reaches `panictrap()`: **the
+attach would PANIC** (and a modelled bus error would not save it, because guarded recovery covers only `badaddr()`'s
+window).  DECLINE lets attach complete.  **On that measurement the owner ruled population 2 DECLINE + ANNOUNCE ONCE**
+(reads 0, writes dropped, one `fatal()` per register with the `(once)` marker, `#501`'s shape); population 1 keeps
+FAULT.  Astra also corrected: `vmematch()` reads no VME register; the guest
+panic under FAULT is conditional on unmeasured CMMU state; the five cased siblings `debug()` per access (no latch);
+serving IRQSTAT as 0 makes an invoked abort handler return before clearing the interrupt or calling `nmihand()`.
+Populations 3 and 4 (sub-word starts; a cased base at len != 4, lane-wrong) are filed as `vmewidthlanes`.
+
+**7n-5 (Fable 5.1, Astra-confirmed).**  `sgirandomcolour`'s tile-index escapes, TLB-contents slice and value slices are
+one species, clause (e); the contents gap is DEBT, filed as `sgirecontentslice` (four readbacks, 89 -> 93 a PROPOSED
+budget per Astra).  Its three L4s stay owed in that row's closure-records commit, as ruled; the row now says so.
+
+**Also:** `fablequeueregress` (MEDIUM) files the check that credits ANY regress-phase entry as the flagship's review;
+the queue's 7n-4 heading is marked answered and a numbering note added (the `alphaswpctxreg` entry carries an older,
+unrelated `#### 7n-1..3`); `ppcwitnessmaskoracle.commits` names the oracle-repair commit.  No `src/` change.
+
 ## 2026-10-09 -- records: the PowerPC mask oracle repair committed ALONE, and the rung-3 rlwinm/rlwnm witness on committed HEAD
 
 **Owner ruling 2026-10-09, on Fable 5.1's 7n-3 (GPT-6 Astra confirmed with changes,
@@ -5627,7 +5677,7 @@ Scratch clone, one frozen instrument per leg, sentinel cleared only after both c
 **ZERO ESCAPES across nine mutants.** `M_SH5` is red on the two shift rows and nothing else; `M_CR0` is
 red on the condition-register row alone. **Each added row is the sole killer of the mutant it was written
 for**, which is the test of whether a row is necessary rather than decoration. All three also redden under
-the original defect and the null medium, so they satisfy the floor's first two clauses as well.
+the original defect and the null medium, so they satisfy the floor's first two clauses as well.  *[L4 2026-10-09, queue 7n-1: "the null medium" is the table's HEAD row -- the whole-file PRE-FIX build, clause (a)'s medium and never clause (c)'s; with the original defect (clause (b)) the conclusion stands and only the label was wrong.  Clause (c) is UNMEASURED here and cannot be carried by construction -- `ppc_rldicl_probe.py` has no runtime gate wiring or equality pin -- so its leg is OWED: row `nullmediumlegs`.]*
 
 **This reproduces the measuring seat's own numbers exactly** — two independently written mutators, two
 clones, same figures.
@@ -5773,6 +5823,8 @@ before mutant 1 and cleared only after both clearance parts verified.
 | HEAD | whole-file null medium | 16/57 | as M_OLD |
 | RESTORED | restore verified | **57/57** | — |
 
+> *[L4 2026-10-09, queue 7n-1: the HEAD row's "whole-file null medium" is the whole-file PRE-FIX build -- clause (a)'s medium, never clause (c)'s; it scores exactly as `M_OLD` because it IS the old code.  Not `M_NULL` (47/57), which is a clause-(d) NULL-REPAIR.  Clause (c): by construction via gate_arm.sh's mk48 section (DONE sentinel, per-row presence, 57/57/0 equality pins), leg not run.]*
+
 **ZERO ESCAPES.** `csr rise` is M_ICSR's only red, so it is necessary rather than decoration, and it stays
 green under the three mutants that leave the switch reachable, so it is aimed rather than indiscriminate.
 
@@ -5909,6 +5961,8 @@ verified.
 | M_I | `&& a1 < 0x8000` | 14/15 | `bnd a1hi` |
 | HEAD | null medium (`7d7e055`) | 11/15 | `tbia obs`, `tbiap obs`, `bnd out`, `bnd wide` |
 | RESTORED | restore verified | **15/15** | -- |
+
+> *[L4 2026-10-09, queue 7n-1: the HEAD row's "null medium (`7d7e055`)" is the whole-file PRE-FIX build -- clause (a)'s medium, never clause (c)'s.  Clause (c) is UNMEASURED and cannot be carried by construction (`alpha_tbi_probe.py` has no runtime gate wiring or equality pin), so its leg is OWED: row `nullmediumlegs`.]*
 
 **BOTH OF THE PRE-TABLE'S PREDICTED CLEAN SWEEPS ARE NOW DEAD.** `PRETABLE.out` (written 10:34, an hour
 before the first t3 log at 11:39, so its own mtime proves the order) predicted M_D at 10/10 as a floor
@@ -15011,7 +15065,7 @@ lived in another.**
 
 ### The vacuity floor, clause by clause
 
-(a) 13 rows red pre-fix. (b) `M1_revert` killed. (c) `[IDENTITY]` pinned at 90.
+(a) 13 rows red pre-fix. (b) `M1_revert` killed. (c) `[IDENTITY]` pinned at 90.  *[L4 2026-10-09, queue 7n-2: the shipped 98-row differential reds 18 rows pre-fix (`regress/artifacts/shortread/round_20260827/PREFIX_98rows.out`: "98 rows, 18 failures"), not 13; "pinned at 90" was never a measured count -- no preserved 90-row output was found in that directory, and `regress/diff_diskimage_io.c` pins `[IDENTITY]` at 98.  `[IDENTITY]` is precommit E1's self-count pin, NOT clause (c).  Clause (c) is the differential's `#include` of the product: a comment-only `diskimage.c` fails to compile and the gate reds -- MEASURED 2026-10-09, `regress/artifacts/shortread/nullmedium_20261009/RECEIPT.txt` (counts re-derived; that run's own stdout was not kept).]*
 (d) `M3_countonly` -- guard kept, count reverted -- killed, as `glm`, `minimax`, `grok` and
 `codex` all independently predicted. (e) contract in the section header. (f) **ten** `[ANCHOR]` rows --
 deriver `grep -c 'check("\[ANCHOR\]' regress/diff_diskimage_io.c`, because an earlier

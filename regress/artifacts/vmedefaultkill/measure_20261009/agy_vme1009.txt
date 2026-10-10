@@ -1,0 +1,149 @@
+VERDICT: MEASURED
+
+### Source Diffs against HEAD
+
+#### Diff: `HEAD` vs `FAULT` (`src/devices/dev_vme.c`)
+```diff
+--- /tmp/gxppcwit/src/devices/dev_vme.c
++++ /tmp/gxvme_fault/src/devices/dev_vme.c
+@@ -140,7 +140,7 @@
+ 		else
+ 			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+ 			    "0x%x ]\n", (int)relative_addr, (int)idata);
+-		exit(1);
++		return 0;
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
+```
+
+#### Diff: `HEAD` vs `DECLINE` (`src/devices/dev_vme.c`)
+```diff
+--- /tmp/gxppcwit/src/devices/dev_vme.c
++++ /tmp/gxvme_decline/src/devices/dev_vme.c
+@@ -140,7 +140,8 @@
+ 		else
+ 			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+ 			    "0x%x ]\n", (int)relative_addr, (int)idata);
+-		exit(1);
++		odata = 0;
++		break;
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
+```
+
+---
+
+### 1. Site Measurement Table (Site × Binary)
+
+*Notes on columns:*
+- **Survived?**: Whether the GXemul process survived the 2-instruction step (`exit0` vs `exit1`).
+- **PC after**: Instruction pointer after `step 2`. Under `DECLINE`, stepped to `0x00010008` (passed the liveness instruction). Under `FAULT`, vectored to `0x00000018` (`VBR + 8 * 3`).
+- **r2 after**: Value of `r2` after the step. For reads: seeded with sentinel `0xdeadbeef`. For writes: seeded with `0x5a5a1234`.
+- **r4 (liveness)**: Value of `r4` after `step 2`. Seeded with `0x00000000`; liveness instruction at `0x10004` is `or r4, r0, 0x1234`.
+- **Fault Record (FAULT only)**: `DMT0`, `DMD0`, `DMA0` recorded from the 88100 data unit; Data CMMU PFSR (`0xfff7f108`) and PFAR (`0xfff7f10c`) loaded via guest `ld` in a second session.
+
+| Site | Reg & Access | Offset | Binary | Survived? | PC after | r2 after | r4 (live) | Fault Record (FAULT only) |
+|---|---|---|---|---|---|---|---|---|
+| A1 | MASTERCTL (read) | 0x28 | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| A1 | MASTERCTL (read) | 0x28 | **FAULT** | YES (`exit0`) | `0x00000018` | `0xdeadbeef` | `0x00000000` | `DMT0=0x0000413d`, `DMD0=0x00000000`, `DMA0=0xfff40028`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| A1 | MASTERCTL (read) | 0x28 | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x00000000` | `0x00001234` | N/A |
+| A2 | MASTER3 (write) | 0x1c | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| A2 | MASTER3 (write) | 0x1c | **FAULT** | YES (`exit0`) | `0x00000018` | `0x5a5a1234` | `0x00000000` | `DMT0=0x0000403f`, `DMD0=0x5a5a1234`, `DMA0=0xfff4001c`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| A2 | MASTER3 (write) | 0x1c | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x5a5a1234` | `0x00001234` | N/A |
+| A3 | MASTER4 (write) | 0x20 | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| A3 | MASTER4 (write) | 0x20 | **FAULT** | YES (`exit0`) | `0x00000018` | `0x5a5a1234` | `0x00000000` | `DMT0=0x0000403f`, `DMD0=0x5a5a1234`, `DMA0=0xfff40020`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| A3 | MASTER4 (write) | 0x20 | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x5a5a1234` | `0x00001234` | N/A |
+| A4 | MASTER4MOD (write) | 0x24 | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| A4 | MASTER4MOD (write) | 0x24 | **FAULT** | YES (`exit0`) | `0x00000018` | `0x5a5a1234` | `0x00000000` | `DMT0=0x0000403f`, `DMD0=0x5a5a1234`, `DMA0=0xfff40024`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| A4 | MASTER4MOD (write) | 0x24 | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x5a5a1234` | `0x00001234` | N/A |
+| A5 | MASTERCTL (write) | 0x28 | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| A5 | MASTERCTL (write) | 0x28 | **FAULT** | YES (`exit0`) | `0x00000018` | `0x5a5a1234` | `0x00000000` | `DMT0=0x0000403f`, `DMD0=0x5a5a1234`, `DMA0=0xfff40028`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| A5 | MASTERCTL (write) | 0x28 | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x5a5a1234` | `0x00001234` | N/A |
+| H1 | IRQSTAT (read) | 0x68 | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| H1 | IRQSTAT (read) | 0x68 | **FAULT** | YES (`exit0`) | `0x00000018` | `0xdeadbeef` | `0x00000000` | `DMT0=0x0000413d`, `DMD0=0x00000000`, `DMA0=0xfff40068`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| H1 | IRQSTAT (read) | 0x68 | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x00000000` | `0x00001234` | N/A |
+| H2 | IRQCLR (write) | 0x74 | **HEAD** | NO (`exit1`) | N/A (died) | N/A | N/A | N/A |
+| H2 | IRQCLR (write) | 0x74 | **FAULT** | YES (`exit0`) | `0x00000018` | `0x5a5a1234` | `0x00000000` | `DMT0=0x0000403f`, `DMD0=0x5a5a1234`, `DMA0=0xfff40074`, VBR=`0x00000000`; CMMU PFSR=`0x00000000`, PFAR=`0x00000000` |
+| H2 | IRQCLR (write) | 0x74 | **DECLINE** | YES (`exit0`) | `0x00010008` | `0x5a5a1234` | `0x00001234` | N/A |
+
+---
+
+### 2. Controls Results (per binary)
+
+1. **Control (a) — Cased register round-trip (`T1CMP` at offset 0x50 / `0xfff40050`):**
+   - Sequence: `st r2, r3, 0` with `r2=0x12345678`, then `ld r5, r3, 0` (seeded with `0xdeadbeef`), followed by `or r4, r0, 0x1234`; `step 3`.
+   - **HEAD**: `r5 = 0x12345678`, `r4 = 0x00001234`, `pc = 0x0001000c`, exit code `0`. **PASS**.
+   - **FAULT**: `r5 = 0x12345678`, `r4 = 0x00001234`, `pc = 0x0001000c`, exit code `0`. **PASS**.
+   - **DECLINE**: `r5 = 0x12345678`, `r4 = 0x00001234`, `pc = 0x0001000c`, exit code `0`. **PASS**.
+2. **Control (b) — Liveness `or` (`or r4, r0, 0x1234` at `0x10004`):**
+   - Seeded `r4 = 0x00000000` before stepping.
+   - Under **DECLINE**: stepped past slot 0, executed liveness `or`, resulting in `r4 = 0x00001234` across all 7 sites. **PASS**.
+   - Under **FAULT**: access at slot 0 raised data access exception and vectored to `0x18`; instruction at `0x10004` was never reached, confirming `r4 = 0x00000000` across all 7 sites. **PASS**.
+   - Under **HEAD**: host process terminated at slot 0 (`exit1`), confirming host death before slot 1 could execute. **PASS**.
+3. **Control (c) — Debugger `unassemble` verification:**
+   - Debugger `unassemble 0x10000 0x10008` inspected before stepping in every session.
+   - For reads: verified `ld\tr2,r3,0x0` and `or\tr4,r0,0x1234`. **PASS**.
+   - For writes: verified `st\tr2,r3,0x0` and `or\tr4,r0,0x1234`. **PASS**.
+
+All controls passed across all binaries.
+
+---
+
+### 3. Guest Experience Analysis
+
+#### ATTACH (`vme2chip_init`, sites A1–A5)
+Defined in [`vme.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c#L443-L543):
+- **HEAD**: At site A1 line 452 (`ctl = vme2->vme2_masterctl`), `dev_vme.c` executes `exit(1)`. The emulator process terminates immediately; the guest kernel dies during early device attachment before autoconfiguration completes.
+- **FAULT**: At site A1 line 452, `dev_vme.c` returns 0. In [`memory_rw.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L614-L623), `m88k_exception(cpu, M88K_EXCEPTION_DATA_ACCESS, 0)` is invoked. Execution vectors to `VBR + 0x18` (`0x00000018`), saving `DMT0=0x0000413d` and `DMA0=0xfff40028`. The low-level exception handler in [`eh.S`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/eh.S#L1016-L1018) reads the Data CMMU's PFSR (`CMMU_D + 0x108`) and stores it into `frame->dpfsr`. Because `memory_rw.c` does not update the CMMU model, PFSR reads `0x00000000` (`CMMU_PFSR_SUCCESS`). In [`trap.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/trap.c#L319-L369), lines 319 (`bus error`, 0x3) and 342 (`seg/page fault`, 0x4/0x5) evaluate false; line 368 (`if (!p->p_addr->u_pcb.pcb_onfault) panictrap(frame->vector, frame);`) triggers because `pcb_onfault` is NULL during autoconfiguration. The guest kernel encounters an unrecoverable kernel panic (`panictrap`).
+- **DECLINE**: At site A1 line 452, reading `vme2_masterctl` returns `0x00000000`. The guest initializes `ctl = 0`. At lines 467, 480, and 482 (sites A2, A3, A4), writes to `vme2_master3`, `vme2_master4`, and `vme2_master4mod` are silently dropped. At line 494 (site A5), writing `ctl` back to `vme2_masterctl` is silently dropped. The guest kernel continues executing past `vme2chip_init` without an exception or panic, although hardware VME master address translation windows are unmapped.
+
+#### ABORT HANDLER (`vme2abort`, sites H1–H2)
+Defined in [`vme.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c#L569-L585):
+```c
+int
+vme2abort(void *cap, void *frame)
+{
+	struct vmesoftc *sc = (struct vmesoftc *) vme_cd.cd_devs[0];
+	struct vme2reg *vme2 = (struct vme2reg *)sc->sc_vaddr;
+	extern void nmihand(void *);
+
+	if (!(vme2->vme2_irqstat & VME2_IRQ_AB)) {
+		printf("vme2abort irq not set\n");
+		return 0;
+	}
+
+	vme2->vme2_irqclr = VME2_IRQ_AB;
+	nmihand(frame);
+	return 1;
+}
+```
+- **HEAD**: Upon receiving the abort interrupt, site H1 line 576 (`vme2->vme2_irqstat & VME2_IRQ_AB`) attempts a 32-bit read from offset `0x68`. `dev_vme.c` calls `exit(1)`, killing the emulator process immediately.
+- **FAULT**: Site H1 line 576 returns 0, raising `M88K_EXCEPTION_DATA_ACCESS` (`DMT0=0x0000413d`, `DMA0=0xfff40068`). Just as in A1, the Data CMMU PFSR reads `0x00000000`, causing [`trap.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/trap.c#L368) to invoke `panictrap(frame->vector, frame)`.
+- **DECLINE**: Site H1 line 576 reads `vme2_irqstat` as `0x00000000`. In the expression `!(vme2->vme2_irqstat & VME2_IRQ_AB)`, `0x00000000 & 0x40000000` evaluates to `0`, and `!(0)` evaluates to true. `vme2abort` immediately prints `"vme2abort irq not set\n"` and returns `0` at line 578. It never reaches line 581 (site H2, `vme2->vme2_irqclr = VME2_IRQ_AB`) and never calls `nmihand(frame);`. The abort switch event is discarded as a spurious interrupt.
+
+---
+
+### 4. Paths and Checksums
+
+- **Probe script path**:
+  [`C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/vme_sites_probe.py`](file:///C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/vme_sites_probe.py)
+- **Output file paths**:
+  - HEAD: [`C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/run_HEAD.out`](file:///C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/run_HEAD.out)
+  - FAULT: [`C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/run_FAULT.out`](file:///C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/run_FAULT.out)
+  - DECLINE: [`C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/run_DECLINE.out`](file:///C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/vmemeas/agywork/run_DECLINE.out)
+- **MD5 checksums of `src/devices/dev_vme.c`**:
+  - `HEAD` (`/tmp/gxppcwit/src/devices/dev_vme.c` & `GXEMUL-SEC`): `2516a82bc777fe780f2dc6ccc00fd6c3`
+  - `FAULT` (`/tmp/gxvme_fault/src/devices/dev_vme.c`): `5b9d510f9100de268e2be38e08bed292`
+  - `DECLINE` (`/tmp/gxvme_decline/src/devices/dev_vme.c`): `a53b7d69b93f7860ab05d94cbcc4ba4a`
+
+---
+
+### 5. Flags
+
+FLAG: Under FAULT, while [`m88k_exception`](file:///C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c#L908-L921) updates the MC88100 data unit control registers (DMT0=0x0000413d for reads, DMT0=0x0000403f for writes, DMD0=data, DMA0=target offset), it never touches the MC88200 data CMMU registers; a guest `ld` of PFSR (`0xfff7f108`) and PFAR (`0xfff7f10c`) returns `0x00000000`.
+FLAG: Because Data CMMU PFSR reads `0x00000000` (`CMMU_PFSR_SUCCESS`), the guest kernel fault handler in [`eh.S`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/eh.S#L1017) records `dpfsr=0`, preventing [`trap.c`](file:///C:/DocumentNoSnc/cc/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/trap.c#L319) from identifying the condition as a bus error (`0x3`), which causes an unexpected kernel panic via `panictrap()` during autoconfiguration.
+FLAG: Under FAULT, stepping 2 instructions from `0x10000` causes step 1 to take the data-access exception to `0x00000018` (`VBR + 0x18`), and step 2 attempts to execute at `0x00000018`. With uninitialized memory (zeroes) at `0x18`, GXemul encounters an unimplemented instruction (`0x00000000`), halts all CPUs, and keeps `PC=0x00000018`.
+FLAG: In GXemul, VBR is initialized to `0x00000000` at machine setup, verifying that MC88100 vector 3 correctly vectors directly to physical address `0x00000018`.
+FLAG: In MC88100 instruction encoding, the primary opcode occupies bits 31..26 (`op26 << 26`); control (c) unassemble validation was crucial to verify `0x14430000` (`ld r2,r3,0x0`), `0x24430000` (`st r2,r3,0x0`), and `0x58801234` (`or r4,r0,0x1234`) against hand-assembly errors.

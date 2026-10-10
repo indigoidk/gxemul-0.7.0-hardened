@@ -1700,7 +1700,7 @@ MANIFEST = {
     #  historically drove 32-bit parts before gate_ppc.sh wired 64-bit ppc_rldimi_probe.py.  (hcheckprobewiring:F11:
     #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
     "ppc_rldicl_probe.py":
-        (CLASS_DETECTOR, "ppcrldiclzero (#522): 24 rows on unmodified -E bareppc.  A 190-cell (SH,MB) census, value rows at SH 0/8/32/63, a record-form CR0 row, a deliberately-vacuous cell showing where the vacuity boundary is, a negative-apparatus control asserting its own liveness oracle CAN go red, and a disassembler cross-check of every placed word.  BASE 24/24, null medium 16/24, EIGHT mutants 16-23/24, ZERO ESCAPES (killtable_20260910/t2/SCORES.txt)"),
+        (CLASS_DETECTOR, "ppcrldiclzero (#522): 24 rows on unmodified -E bareppc.  A 190-cell (SH,MB) census, value rows at SH 0/8/32/63, a record-form CR0 row, a deliberately-vacuous cell showing where the vacuity boundary is, a negative-apparatus control asserting its own liveness oracle CAN go red, and a disassembler cross-check of every placed word.  BASE 24/24, whole-file pre-fix leg 16/24 (clause (a); 'null medium' until 2026-10-09, 7n-1), EIGHT mutants 16-23/24, ZERO ESCAPES (killtable_20260910/t2/SCORES.txt)"),
 
     #  The frozen copies are the instruments as-run.  t1 is the 19-row form that pass 2
     #  escaped TWICE; t2 is the 24-row closure; t0 is an apparatus failure kept on purpose.
@@ -1762,7 +1762,7 @@ MANIFEST = {
     "artifacts/ppcrldiclzero/pass2_20260910/t0_backslash_apparatus_failure/probe_plus3.BROKEN.py":
         (CLASS_RESEARCH, "ppcrldiclzero (#522) pass 2: THE SEAT'S OWN APPARATUS FAILURE, preserved rather than deleted -- a regex built through a non-raw string turned a backslash-b into a literal BACKSPACE, so the pattern matched nothing and failed a row on EVERY leg including BASE.  Two documented traps stacked into a confident wrong answer; the corrected run added a negative control so the regex cannot silently match nothing again"),
     "mk48_nvram_probe.py":
-        (CLASS_DETECTOR, "mk48nvramkill (#521): 57 rows on unmodified -E mvme88k -e mvme187.  Sixteen kill cells (eight offsets x read/write), nine round-trip rows closing the survive-only class, a CSR rising-edge row for the control case's side effect, four device-signature controls in two encodings, and a negative-apparatus control that asserts its own liveness oracle CAN go red.  BASE 57/57, null medium 16/57, five mutants 16-56/57, ZERO ESCAPES (killtable_20260910/t3/SCORES.txt)"),
+        (CLASS_DETECTOR, "mk48nvramkill (#521): 57 rows on unmodified -E mvme88k -e mvme187.  Sixteen kill cells (eight offsets x read/write), nine round-trip rows closing the survive-only class, a CSR rising-edge row for the control case's side effect, four device-signature controls in two encodings, and a negative-apparatus control that asserts its own liveness oracle CAN go red.  BASE 57/57, whole-file pre-fix leg 16/57 (clause (a); 'null medium' until 2026-10-09, 7n-1), five mutants 16-56/57, ZERO ESCAPES (killtable_20260910/t3/SCORES.txt)"),
 
     #  The three FROZEN copies are the instruments as-run, one per table.  Evidence, not live
     #  detectors: t1 is the 47-row form whose M_ICSR escape opened the floor breach, t2 the
@@ -1777,7 +1777,7 @@ MANIFEST = {
     "artifacts/mk48nvramkill/killtable_20260910/mutate.py":
         (CLASS_TOOL, "mk48nvramkill (#521): the mutator -- one named literal find/replace per mutant with MUTANT-TEXT-NOT-FOUND a hard failure.  ITS OWN PRESENCE PIN CAUGHT TWO MISTAKES: an ambiguous anchor matching twice, and an M_NULL that replaced a statement with a COMMENT so `goto ret' became the if-body and the leg measured a different mutant than the record claimed"),
     "alpha_tbi_probe.py":
-        (CLASS_DETECTOR, "alphatbinegsel (#520): 15 rows closing the tbi selector guard's NINE axes -- the window's four sides, the interior, the negative selectors, a1 zero-vs-nonzero, a1 magnitude and a0 magnitude.  BASE 15/15, null medium 11/15, nine mutants 12-14/15 (killtable_20260910/t3/SCORES.txt); every accept row carries a measured kill, checked by tally_kills.py"),
+        (CLASS_DETECTOR, "alphatbinegsel (#520): 15 rows closing the tbi selector guard's NINE axes -- the window's four sides, the interior, the negative selectors, a1 zero-vs-nonzero, a1 magnitude and a0 magnitude.  BASE 15/15, whole-file pre-fix leg 11/15 (clause (a); 'null medium' until 2026-10-09, 7n-1), nine mutants 12-14/15 (killtable_20260910/t3/SCORES.txt); every accept row carries a measured kill, checked by tally_kills.py"),
 
     #  The three FROZEN copies are the instruments as-run, one per table.  They are
     #  evidence, not live detectors: a citation into the live probe decays the moment the
@@ -1846,7 +1846,7 @@ MANIFEST = {
     "artifacts/sgirandomcolour/pass2_20260911/sgi_re_colourdefault_probe.P2FROZEN.py":
         (CLASS_RESEARCH, "#519 pass 2: the frozen instrument the pass-2 measurements ran"),
     "artifacts/sgirandomcolour/killtable_20260910/mut519.py":
-        (CLASS_RESEARCH, "sgirandomcolour (#519) table 1: the mutator for M1..M12 (M11 copies the pre-fix file wholesale as the null medium); its M1/M7/M12 find-strings quote the pre-bracket literal and will not apply to the current source, which the round records rather than silently repairs"),
+        (CLASS_RESEARCH, "sgirandomcolour (#519) table 1: the mutator for M1..M12 (M11 copies the pre-fix file wholesale: the whole-file pre-fix leg, clause (a) -- labelled the null medium until 2026-10-09, 7n-1); its M1/M7/M12 find-strings quote the pre-bracket literal and will not apply to the current source, which the round records rather than silently repairs"),
     "artifacts/sgirandomcolour/killtable_20260910/mut519b.py":
         (CLASS_RESEARCH, "sgirandomcolour (#519): the measuring seat's own mutator, for the two clause-(d) operand swaps it built after every planned mutant had died -- M13_widthdecline and M14_lineardecline, both TOTAL ESCAPES"),
     "artifacts/sgirandomcolour/killtable_20260910/t2/mut519x.py":

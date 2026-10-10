@@ -1,0 +1,44 @@
+VERDICT: CONFIRM WITH CHANGES (7)
+
+**1 | Seven factual corrections or qualifications:**
+
+1. **“six unconditional, non-probe, word-width accesses.”** There are **six registers and seven access sites**: five initialization operations across MASTERCTL, MASTER3, MASTER4 and MASTER4MOD; two abort-handler operations. Initialization is straight-line once the enabled VME2 branch runs. IRQSTAT is read when the handler runs; IRQCLR is written **only if the abort-status bit is set**. None has a local probe/recovery wrapper. The cited guest-header field widths were outside the permitted reading. See [initialization](/C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:443) and [abort handler](/C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:570).
+
+2. **“has ALREADY matched (on offset 0, served).”** False for this guest: `vmematch()` checks attachment information and returns without accessing any VME register. The attribution of the emulator’s probing comment to “some later OpenBSD” is unsupported by the inspected sources. See [vmematch](/C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:73).
+
+3. **“models no DPFSR at all”** and **“would instead end the GUEST at the same instruction.”** The first inference is unsupported; the second is conditional, not established. Guest assembly obtains DPFSR through a **memory-mapped CMMU status read**, so absence of a `dpfsr` token in CPU sources cannot settle its emulated value. The cited trap path supports recovery and calls `panictrap()` at its unresolved-fault tail only when `pcb_onfault` is zero. Actual exception state and boot reachability remain unmeasured. See [CMMU reads](/C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/eh.S:1009) and [fault handling](/C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/mvme88k/trap.c:292).
+
+4. **“the file’s own sibling idiom (DECLINE + latched announce…).”** The **latched** part is false as a description of this file. Five existing cases call `debug()` on each applicable access; there is no announcement-latch state. Latching is a proposed addition or externally cited precedent. See [device state and cases](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:52).
+
+5. **“40 … sub-word starts.”** The arithmetic is correct, but the unit needs precision: **40 width/address combinations at 30 distinct offsets**—30 byte accesses plus 10 aligned halfword accesses. Sixteen combinations concern the four storing words; 24 concern the six other cased words. CPU-path reachability was not independently checked because the CPU sources are excluded.
+
+6. **“per-chapter page-footer census … 7: 12; 8: 38; 9: 9.”** These reproduce regex matches, **not chapter page counts**. The [PDF](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.pdf) contains:
+
+   | Contents | Physical pages | Count |
+   |---|---:|---:|
+   | Front matter | 1–24 | 24 |
+   | Chapter 5 | 25–94 | 70 |
+   | Chapter 6 | 95–146 | 52 |
+   | Chapter 7 | 147–160 | 14 |
+   | Chapter 8 | 161–200 | 40 |
+   | Chapter 9 | 201–224 | 24 |
+   | Index | 225–240 | 16 |
+
+   **240 PDF pages and 240 text form feeds are confirmed. Chapter 4 is absent from the body.** The chapter-4 regex match is an index continuation. “Only 6 near-empty pages” depends on an unstated threshold and alone does not prove absence; the complete page inventory does. The cover explicitly says [“Part 2 of 2”](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt:4), identifying `VMESBCA2/PG1`. This establishes absence from the inspected volume, not absence everywhere “on disk” or accidental truncation.
+
+7. **ELSE #1: “lane-wrong, silently” / “No kill, no announce,”** and the asserted guest doubleword behavior. The blanket description is too broad: five cased arms call `debug()`, and only four store backing words. The concrete VBR byte defects are supported. A single length-eight callback would truncate a storing assignment, but these permitted files do **not** establish that a guest doubleword instruction reaches it as one such callback. See [device dispatch](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:68).
+
+The other requested checks pass:
+
+- **26 named-but-unhandled registers:** 36 header-defined register offsets minus ten cases.
+- **Containing-word shortcut:** on big-endian reads it returns the low byte/halfword, ignoring the requested lane. Consequently byte lanes +1/+2 are wrong; +3 happens to agree, as does halfword +2. Sub-word writes to storing cases replace the entire backing word. [Helpers](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:55).
+- **T1COUNT side effect:** reads increment backing state by 100 and return the **pre-increment** snapshot. Interior accesses trigger this only under the hypothetical rounded dispatch; currently they reach `default:`. [T1COUNT](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:90).
+- **Unchanged since import:** the sole file-history commit is `39748e3c`, dated 2026-06-28; the current working-tree content matches its imported blob.
+
+**2 | Yes.** The five direct initialization operations remain evidence of ordinary driver traffic outside a local probe/recovery wrapper. That supports returning population 2 to the owner with corrected facts. It does not establish inevitable guest panic or independently select the pending disposition.
+
+**3 | The owner needs the initialization and abort consequences separated, and the actual CMMU/exception state established before treating guest termination as certain.** Registration of the abort handler does not establish its invocation; guest configuration and field-width claims also remain outside this check.
+
+**ELSE found:** serving IRQSTAT as zero has a concrete consequence omitted from the ruling: an invoked abort handler returns zero before clearing the interrupt or calling `nmihand()`. Thus the proposed zero-read behavior also needs an explicit consequence statement. [Abort branch](/C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:576).
+
+Read-only throughout; nothing written or built. Excluded artifacts and ledger claims were not independently checked.

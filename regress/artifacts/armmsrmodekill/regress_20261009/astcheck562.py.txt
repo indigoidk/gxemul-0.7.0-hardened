@@ -1,0 +1,20 @@
+import ast, hashlib, sys, difflib
+def load(p):
+    src = open(p, encoding="utf-8").read()
+    t = ast.parse(src)
+    doc = ast.get_docstring(t, clean=False) or ""
+    if t.body and isinstance(t.body[0], ast.Expr) and isinstance(getattr(t.body[0], "value", None), ast.Constant):
+        t.body = t.body[1:]
+    d = ast.dump(t, include_attributes=False)
+    return hashlib.md5(d.encode()).hexdigest()[:8], hashlib.md5(src.encode()).hexdigest()[:8], doc
+res = {}
+for p in sys.argv[1:]:
+    h, m, doc = load(p)
+    res[p] = (h, m, doc)
+    print("ast(no-docstring)=%s md5=%s  %s" % (h, m, p))
+base = sys.argv[1]
+for p in sys.argv[2:]:
+    a, b = res[base][2].splitlines(), res[p][2].splitlines()
+    dl = [l for l in difflib.unified_diff(b, a, lineterm="", n=0) if not l.startswith(("---","+++","@@"))]
+    print("--- docstring diff %s -> committed: %d changed lines" % (p.split('/')[-1], len(dl)))
+    for l in dl[:40]: print("   ", l[:200])
