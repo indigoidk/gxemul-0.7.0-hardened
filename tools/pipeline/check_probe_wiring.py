@@ -3094,8 +3094,14 @@ EXEMPT = {
     #  mtimes: keep_p1_logs.out one directory up), because each surviving
     #  session waits out the 12 s death poll -- a long gate guest until that window shrinks without
     #  reading a delayed abort as alive.
+    #  Re-dated 2026-10-15 -> 2026-10-30 on 2026-10-16, in its own commit, by a four-seat ruling (Fable 5.1, GPT-6
+    #  Astra, Grok 4.7 and GLM 5.3 answered; three ruled re-date now, Astra ruled wire now): it came due with no gate
+    #  running it and refused every commit in both sessions (regress/artifacts/adj_20261016/wiringcliff/).  A re-date is
+    #  not a discharge: the wiring is owed by wiringcliff.  #550 measured the probe at 568 s standalone for its 33 rows
+    #  (regress/artifacts/exemptredate_20260925/opus550_measured_p2/keep_p1_logs.out); gate_arm.sh runs in the weekly
+    #  battery and as an attended targeted gate, never per commit.
     "artifacts/ip30abortkill/ip30_abort_probe.py":
-                                   ("2026-10-15",
+                                   ("2026-10-30",
                                     "no gate runs an SGI IP30 guest session (gate_asan_sweep.sh "
                                     "constructs only); filed to wiringcliff with #518/#520/#530"),
 }

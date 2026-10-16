@@ -1,3 +1,25 @@
+# Probe wiring, 2026-10-16: `ip30_abort_probe.py`'s gate-wiring exemption came due on 2026-10-15 with no gate running it, and every commit in both sessions was refused -- re-dated to 2026-10-30 by a four-seat ruling, in its own commit
+
+Found by the 2026-10-16 adjudication (Fable 5.1 measured it; the records and premise-audit pre-screens found it
+independently): section R, `EXPIRED EXEMPTION  artifacts/ip30abortkill/ip30_abort_probe.py came due 2026-10-15 (today
+2026-10-16) and is still run by no gate` -- `regress/artifacts/probewiring_redate_20261016/before_redate.out`.
+
+* `tools/pipeline/check_probe_wiring.py` -- the EXEMPT line for `ip30_abort_probe.py`: 2026-10-15 -> 2026-10-30, with a
+  comment saying a re-date is not a discharge.  The owed work is unchanged: wiring the probe into `gate_arm.sh`, which
+  already runs probes of this shape (#550 measured this one at 568 s standalone for its 33 rows), filed to `wiringcliff`.
+  With the new date the check reads `PROBEWIRING_PASS  74/84 detectors run by a gate, 10 dated-exempt`
+  (`after_redate.out`).  No other line of the checker changed; its `--selftest` is judged by this commit's own pre-commit
+  run (section R), where the staged file sits at its real path.
+* The ruling, `regress/artifacts/adj_20261016/wiringcliff/`: all four seats answered -- Grok 4.7, GLM 5.3 and Fable 5.1
+  ruled re-date now; GPT-6 Astra ruled wire now.  Astra's objection (an extension before wiring repeats the problem) is
+  answered by scheduling, not overruled: wiring is the next probe-wiring task, and each coming expiry is decided ON OR
+  BEFORE its own date -- 2026-10-22 (`ppc_rldicl_probe.py`, owed to `gate_ppc.sh`; `alpha_tbi_probe.py`, owed to
+  `gate_crossfamily.sh`), then 2026-10-23, 2026-10-26 and 2026-10-27 (the three LCA probes, the other session's rows).
+  A stamped date is its entry's last green day (`d < today`).
+* Not in this commit, recorded so nobody is surprised by it: this session's working copy of the checker carries two
+  uncommitted hunks of its own (manifest lines for five untracked 2026-09-13 rung-3 probe files, and a #563 records note),
+  so the working-tree checker run directly still reports those five files as missing.  They land with their own unit.
+
 ## 2026-10-09 -- records: Fable 5.1's regress reviews of batch 8n, the n6 rule question, and the pcc2 C040 review-stage ruling
 
 **Eight closed rows owed a flagship `regress` review (queue batch 8n); Fable 5.1 did all eight, measuring, in two
