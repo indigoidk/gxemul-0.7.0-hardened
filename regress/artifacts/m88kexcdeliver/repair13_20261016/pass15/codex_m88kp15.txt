@@ -1,0 +1,94 @@
+ASTRA_M88KP15_20261016
+VERDICT: CLOSE (28/28 floor cells verified; no new floor escape or vacuous row found; 78/78 under the stated census convention).
+
+Read-only review. I checked the actual source, row definitions, scoring code and table-19 logs. No files written or emulator runs performed. The current probe’s executable code matches frozen v23; their differences are introductory documentation.
+
+**Q1. All 28 credited cells are reached. No miscredited cell.**
+
+Columns below give `(SFRZ, slot)` **on entry to switch 1**, before any ERROR re-route.
+
+| Label | (0,0) | (0,1) | (1,0) | (1,1) |
+|---|---|---|---|---|
+| MISALIGN | misalign | dslotmisalign | errc | errdslotmisalign |
+| UNIMPL | unimpl | dslotunimpl | errunimpl | errdslotunimpl |
+| PRIV | priv | dslotpriv | errpriv | errdslotpriv |
+| BOUNDS | bounds | dslotbounds | trapfrozen | trapfrozen7dslot |
+| DIV0 | div0 | dslot | errdiv0 | errdslotdiv0 |
+| OVF | indclr | dslotovf | errovf | errdslotovf |
+| ERROR | errortb | dsloterror | trapfrozen10 | trapfrozen10dslot |
+
+The important reachability checks in the [row definitions](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py:345) hold:
+
+- `errdslotdiv0` writes `PSR_FRZSUP=0x80000003`: SFRZ remains set and SFD1 clears, so its slot raises DIV0 rather than SFU1.
+- `errdslotpriv` and `errdslotunimpl` write `PSR_FRZUSER=3`: user mode with SFRZ retained.
+- Both frozen traps retain supervisor mode and have r3 bit 0 set.
+- The five frozen instruction faults enter their original labels, then become ERROR. They do **not** supply switch-1 ERROR coverage; `trapfrozen10dslot` supplies that cell.
+
+**Q2. None of the ten new rows is vacuous under its credited mutant.**
+
+I independently extracted the failing rows from all table-19 logs; they match the packet.
+
+| New rows | Credited mutant | Measured result |
+|---|---|---|
+| `dslotbounds`, `dsloterror` | Corresponding `M_DSNOT_<L>` | Each mutant scores 71/73; its unfrozen and frozen slot rows HALT |
+| Five `errdslot*` rows | Corresponding `M_DSFRZ_<L>` | Each scores 72/73; exactly its frozen row HALTs |
+| `trapfrozen7dslot` | `M_DSFRZ_BOUNDS_CHECK_VIOLATION` | 72/73; this row HALTs |
+| `trapfrozen10dslot` | `M_DSFRZ_ERROR` | 72/73; this row HALTs |
+| `usfu1dslot` | `M_FBDS` | 72/73; this row changes HALT → TAILHALT |
+
+G3’s specific discharge is also sound:
+
+- `M_RRNTDS`: **68/73**, precisely the five `errdslot*` rows STOP at their original vectors.
+- `M_RRTDS`: **71/73**. `trapfrozen7dslot` STOPs at `0x50`; `trapfrozen10dslot` reaches `0x50` but fails **`bad=refatal`**. Thus the latter’s equal destination does not conceal the regression.
+- `M_DS865`: **66/73**, all seven frozen-slot rows STOP at `0x48` or `0x4c`. The `+8` geometry exposes lost delivery without landing on the ERROR breakpoint.
+
+The [refatal assertion](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py:724) and branch targets provide distinct, effective channels.
+
+**Q3. No 73/73 survivor found inside the enumerated floor.**
+
+I found no additional edit to propose with a predicted clean sweep within that scope. The five `M_RRDS_<L>` clean sweeps are real, measured **73/73**, but belong to the explicitly disclosed additional trap-route subdivisions discussed below.
+
+This finding does not assert that every possible edit anywhere in `m88k_exception()` is detected; the contract retains named exclusions.
+
+**Q4. The remainder is correctly classified within the stated scope.**
+
+The five frozen trap-in-slot routes subdivide state cells already held by instruction-fault rows. Under the carrier’s device-state bound, `is_trap` is a per-raise selector rather than another persistent state axis. Their disclosure as clause-(e) debt is therefore defensible, and all five advertised escapes are measured.
+
+The other PSR bits are not tested as cases by this delivery path. Their joints with delay-slot state remain clause (e). Vectors 0..3 retain their separately disclosed upstream scope.
+
+Two qualifications preserve the claim’s precision:
+
+- “Three-or-more-axis joints” means **additional joints outside the enumerated floor**; it cannot exclude the enumerated `{label} × {SFRZ} × {slot}` product itself.
+- This is the delay-slot remainder. The existing disclosures for SSBR, DMT, floating-point exception state and `M_DELAYALWAYS` still apply.
+
+**Q5. Neither D3 nor D4 is wrong.**
+
+D3 follows from the jointly reachable SFRZ and delay-slot states, including the observable consumption of the exception flag by `X(br_n)`.
+
+D4 follows from emulator reachability: `X(tb1)` permits these sequences. Architectural silence limits what the oracle may claim; it does not make those emulator states unreachable. The implementation-behavior wording is appropriate.
+
+**Q6. No G1–G15 disposition needs reversal.**
+
+Three evidentiary qualifications:
+
+- G1/G12’s deriver uses manually transcribed fault/state mappings. Its generated grid is not independently a reachability proof; the source checks in Q1 supply that verification.
+- G10 records birth time and append provenance. Birth time alone cannot prove the earlier prediction contents.
+- G13 remains a promised ledger correction, not a completed write. Acceptance of that disposition should not be recorded as verification that it has already landed.
+
+G3’s former escapes are now measured failures, and G5’s geometry correction is effective.
+
+**Q7. Yes: 78/78 under the packet’s counting convention, comprising 28 floor cells and 50 voluntarily closed clause-(e) obligations.**
+
+| Coverage family | Closed |
+|---|---:|
+| Delay-slot grid | 28/28 |
+| Seven labels × five other PSR bits, less two unreachable MODE cases | 33/33 |
+| Fallback × six PSR bits | 6/6 |
+| Non-trap re-route × five variable PSR bits | 5/5 |
+| Trap exemption × five variable PSR bits | 5/5 |
+| Fallback × delay slot | 1/1 |
+| **Total** | **78/78** |
+
+Removing the seven arm×SFRZ obligations is correct: their two polarities are already represented by each label’s two slot-0 cells. The separate fallback and re-route obligations remain distinct even where the same row witnesses them.
+
+“78” counts the declared coverage obligations; it is not a count of disjoint execution states or a claim of exhaustive emulator behavior.

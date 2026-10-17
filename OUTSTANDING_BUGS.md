@@ -15672,7 +15672,8 @@ rows.  BASE 59/59 opening and closing; scratch clone clean against SEC, no senti
 the bits a constant clears reads like a complete decode and is not one.  Both cells are closed regardless, and
 the polarity control **proves** the MODE closure rather than asserting it: it reddened every MODE-set trap row
 and left `trapfrozenuser` alone.  Honest cost, stated rather than glossed: **`trapfrozensfd1` has zero measured
-delta against its own enumerated mutant** -- delete it and `M_RRTRAPSFD1` is still caught at 58/58.  Its warrant
+delta against its own enumerated mutant** -- delete it and `M_RRTRAPSFD1` is still caught at 57/58 [CORRECTED
+2026-10-16, GPT-6 Astra: this said 58/58, the score of a mutant NOT caught; table 15 measured 57/59 with two rows red].  Its warrant
 is single-axis attribution, because a row varying two bits cannot say which one fired.
 
 *This is the FOURTH time this chain has closed an axis at some cells and called the rest something else -- and it happened inside the census written to end that pattern.*
@@ -15773,9 +15774,16 @@ breach — the bit-trick does not *read* like the same check, and every single-t
 rowed and dies.  **Closure is one `-n 3` session and closes the whole family**; check first that `-n 3` boots the
 committed rig.
 
+**`m88ksfd1row` -- CLOSED 2026-10-16: KEPT, NOT OWED (all four seats of the close adjudication; the record of the ruling is
+`tools/pipeline/fable_queue.md`'s m88ksfd1row item and `regress/artifacts/adj_20261016/m88kexcdeliver/`).  The row's delta
+is NOT zero against every mutant: the disclosed joint re-route `if (!is_trap || ((PSR & MODE) && !(PSR & SFD1)))` reds it and
+no other row, MEASURED 62/63 (table 16b, `regress/artifacts/m88kexcdeliver/repair13_20261016/`); the shared-constant hazard
+below now has two import-time asserts in the probe.  The 58/58 below is corrected to 57/58 in place.  The question as filed
+is kept as it was written:**
+
 **`m88ksfd1row` (LOW — a RULE QUESTION for the 2026-09-09 adjudication, not a defect).**  Does the ADDITION
 LICENCE authorise a detector row with **zero measured delta** whose benefit is telling you *which* axis fired?
-`#502`'s `trapfrozensfd1` is redundant against its own mutant (58/58 without it), and codex ruled the attribution
+`#502`'s `trapfrozensfd1` is redundant against its own mutant (57/58 without it -- this said 58/58 until 2026-10-16), and codex ruled the attribution
 warrant does not transfer — the anchor rule repairs *self-comparing* oracles, and row demand is bounded "per
 enumerated mutant, never per attribution need".  **Kept pending adjudication on the same seat's own next
 paragraph**: removing it leaves SFD1 coverage resting on `PSR_FRZUSER`, shared with `errpriv`/`errunimpl`, where

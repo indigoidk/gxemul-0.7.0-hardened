@@ -1,0 +1,64 @@
+PRETABLE -- m88kexcdeliver repair 13 (probe v19 -> v20), written 2026-10-16 BEFORE table 16 runs (this file's mtime is the order proof).
+Trigger: the 2026-10-16 four-seat adjudication (adj_20261016/m88kexcdeliver/).  Fable 5.1 ruled DO NOT CLOSE and predicted
+`implemented = !cpu->delay_slot' at MISALIGN/UNIMPL/PRIV/OVF would sweep the 59-row instrument; MEASURED at HEAD 7b23b785 in the
+WSL scratch clone /tmp/gxm88kds (delayslot_20261016/): all four 59/59, each probe log byte-identical to BASE (md5 898eb0a7).
+Their polarity twins (`cpu->delay_slot ? true : false') were caught: OVF 50/59, MISALIGN 51/59, PRIV 53/59, UNIMPL 54/59.
+Grade: L2 (a floor breach in the shipped composite detector), repaired in-round; the row is still "in work", so this is not a late dissent.
+
+1. SIBLING PARITY.  The seven delivered switch-1 arms (MISALIGN 4, UNIMPL 5, PRIV 6, BOUNDS 7, DIV0 8, OVF 9, ERROR 10) all share
+   the delivery body.  Only DIV0 had a row faulting IN A DELAY SLOT (`dslot').  Asymmetry -> rows owed at the other arms that a guest
+   INSTRUCTION can raise from a delay slot: MISALIGN (ld with an odd address), UNIMPL (prom_call in user mode), PRIV (ldcr in user
+   mode), OVF (add 0x7fffffff + 1).  BOUNDS and ERROR are raised by no instruction (only a trap instruction naming 7 or 10, or tbnd,
+   which is not implemented -- row m88ktbnd); their delay-slot cell needs a TRAP INSTRUCTION IN A DELAY SLOT.  mc88100.txt:9433-9440
+   (6.7.2 note 6) speaks of instructions in the delay slot OF a trap-taken instruction, never of a trap instruction IN a slot, so its
+   legality is unsettled from the manual -> DISCLOSED, per the flagship ruling; both mutants are MEASURED in table 16 so the
+   disclosure states a measured escape, not a prediction.  The trap route x {delay slot} at the five other arms (tb1 naming 4/5/6/8/9
+   in a slot) is the same unsettled case -> disclosed with them.
+
+2. CLAIM -> ROW.  The v20 contract sentence: "{class} x {delay slot}: DIV0 dslot, MISALIGNED dslotmisalign, UNIMPLEMENTED
+   dslotunimpl, PRIVILEGE dslotpriv, OVERFLOW dslotovf" -> one row each.  "BOUNDS and ERROR x {delay slot}, and every trap
+   instruction in a slot, are disclosed" -> no row, with the measured escape named (M_DSNOT_BOUNDS, M_DSNOT_ERROR).
+
+3. GUARD FIELD vs BODY FIELD.  Guard: `implemented', assigned per arm, reads nothing in the shipped form.  The delivery body after the
+   switch reads: vector, is_trap, cr[PSR] (SFRZ tested; the rest copied/ORed), cpu->delay_slot, cpu->pc, cd.m88k.delay_target,
+   cr[VBR].  PARTITIONS THE BODY INDUCES: delay_slot {0, nonzero} (`if (cpu->delay_slot)'), and inside nonzero, vector {DATA_ACCESS,
+   INSTRUCTION_ACCESS, other} -- all seven arms take `other' (the else-arm: SNIP = pc+4, SFIP = delay_target); is_trap {0, 1};
+   PSR & SFRZ {0, 1}; VBR, pc and delay_target are NOT tested (no partition; vbrtb anchors VBR).  So the single-axis floor added
+   here is {7 arms} x {delay_slot set}: DIV0 rowed, four owed (section 1), two disclosed.  EXHAUSTED after v20 at the five
+   instruction-reachable arms; multi-axis joints (delay slot x SFRZ, delay slot x is_trap, delay slot x a PSR bit) stay clause (e).
+
+4. CHANNEL, per new row (all: a br.n +16 immediately before the faulting word, so delay_target = fault_pc + 12 != fault_pc + 4).
+   dslotmisalign  [br.n +16, ld r2,r3,0] r3 = DATA+1, fault 0x10008, entry 0x20
+                  kills M_DSNOT_MISALIGN: the fallback HALT (`unimplemented vector=0x004' + `machines stopped') replaces DELIVER.
+   dslotunimpl    [stcr r3,cr1 (user), br.n +16, prom_call] fault 0x1000c, entry 0x28, EPSR = PSR_USER
+                  kills M_DSNOT_UNIMPL: HALT replaces DELIVER.
+   dslotpriv      [stcr r3,cr1 (user), br.n +16, ldcr r2,cr1] fault 0x1000c, entry 0x30, EPSR = PSR_USER
+                  kills M_DSNOT_PRIV: HALT replaces DELIVER.
+   dslotovf       [br.n +16, add r2,r3,r4] r3 = 0x7fffffff r4 = 1, fault 0x10008, entry 0x48
+                  kills M_DSNOT_OVF: HALT replaces DELIVER.
+   Each row also pins the else-arm shadows for its arm (SNIP = fault_pc+4, SFIP = fault_pc+12) -- AS IMPLEMENTED, exactly as
+   dslot does; m88kdslotshadow (the manual says the else-arm returns WRONG) re-pins all five rows in one place when it lands,
+   because the five share one scoring branch.  The existing dslot row's want-dict is unchanged by the generalisation
+   (CODE + 4 + 16 == 0x10008 + 12).
+
+PREDICTIONS (written before the run; table 16 = the v20 probe against these builds):
+   BASE (HEAD 7b23b785)       63/63
+   M_DSNOT_MISALIGN           62/63  dslotmisalign HALT
+   M_DSNOT_UNIMPL             62/63  dslotunimpl HALT
+   M_DSNOT_PRIV               62/63  dslotpriv HALT
+   M_DSNOT_OVF                62/63  dslotovf HALT
+   M_DSNOT_DIV0 (control)     62/63  dslot HALT -- the existing row still kills its own arm after the scoring generalisation
+   M_DSNOT_BOUNDS (disclosed) 63/63  ESCAPE, as disclosed
+   M_DSNOT_ERROR  (disclosed) 63/63  ESCAPE, as disclosed
+   polarity twins (ds)        MISALIGN 55/63, UNIMPL 58/63, PRIV 57/63, OVF 54/63 (v19's kills + the four new rows, which
+                              deliver under the twin: delay_slot set -> implemented true)
+
+ADDENDUM 16b -- written 2026-10-16 BEFORE table 16b runs (append; the mtime of this file now orders 16b, not 16).
+Instrument: the COMMITTED-FORM v20 probe (the table-16 frozen copy plus records-only edits: the two import-time asserts on
+PSR_FRZUSER / PSR_FRZSUP, the 57/58 correction and the m88ksfd1row ruling text -- no ROWS, scoring or output change).
+   BASE (HEAD rebuilt in the clone)  63/63 -- the committed instrument's own BASE, and the proof the asserts pass.
+   M_RRTRAPJOINT  (the re-route's `if (!is_trap) {' -> `if (!is_trap || ((PSR & MODE) && !(PSR & SFD1))) {'):
+                  Fable 5.1's REASONED claim that this disclosed joint mutant reds trapfrozensfd1 and NO other row --
+                  every other frozen-trap row has SFD1 set (PSR_EXC / FRZNOIND / FRZC / FRZSER) or MODE clear (FRZUSER).
+                  PREDICTED 62/63, red = trapfrozensfd1 only (re-routed to ERROR 0x50 with the refatal diagnostic).
+                  Not owed (a two-axis joint: clause (e)); measured because it is the stated warrant for KEEPING the row.

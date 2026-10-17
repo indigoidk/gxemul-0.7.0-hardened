@@ -1303,7 +1303,7 @@ therefore *owed and written down*, not *blocking*.
 
 **Read this section first on the 9th.** It is ordered by what a late dissent could still change.
 
-### 1. `m88kexcdeliver` (#502) — passes 2 through 8, and the deferred ADJUDICATION
+### ~~1. `m88kexcdeliver` (#502) — passes 2 through 8, and the deferred ADJUDICATION~~ — **ANSWERED 2026-10-16** by Fable 5.1; GPT-6 Astra, Grok 4.7 and GLM 5.3 held it moot for the closure — the block at the end of this item
 
 **Held for: fable5 (all passes), opus5 (passes 6-8).** Eight panel passes ran; the flagship seat
 answered none of them. Packets, newest first:
@@ -1330,6 +1330,20 @@ same directory, with every seat's answer under `pass<N>_panel_*/`.
 Second question, count named: of the pass-7 dispositions (five row closures; one seat claim
 refuted by measurement; one disclosure narrowed; one mis-cut row repaired from the BASE gate;
 one records note; one L4), **which is wrong?**
+
+> **ANSWERED 2026-10-16, in the four-seat close adjudication (`regress/artifacts/adj_20261016/m88kexcdeliver/`).**
+> Fable 5.1: the cut question is answered by the carrier's own later pins -- "tests" means masks or compares as a case
+> (2026-09-25) and a derived input is graded by what the body tests on it (2026-10-09).  `m88k_exception()` tests ONE
+> PSR bit, SFRZ, so {site} x {MODE, SFD1, IND, C, SER} is clause-(e) coverage at all four sites: the cut was right about
+> the arms and wrong about the re-route, whose PSR-bit cells were graded L2 on passes 7 and 11 under a reads-PSR criterion
+> the 09-25 pin does not support.  No row depends on it -- all those cells are rowed -- so it is recorded as one sentence,
+> not as an L4.  GPT-6 Astra ("moot for closure, unresolved generally"), Grok 4.7 ("moot as stated") and GLM 5.3 ("moot as
+> to rows") disagreed only about whether it needed answering now; pass 14 was asked to attack the sentence (D1).
+> The second question is overtaken: opus5 measured the narrowed pass-7 disclosure wrong three ways on pass 8 and v16
+> corrected it.  **And the same adjudication found what the chain's denominator had missed**: the delivery path also TESTS
+> `cpu->delay_slot`, and `implemented = !cpu->delay_slot` swept the 59-row probe at four arms (measured,
+> `regress/artifacts/m88kexcdeliver/delayslot_20261016/`) -- repaired as probe v22 (repair 13), and, when pass 14 found the class wider (Fable 5.1: the {7 labels} x {SFRZ} x
+> {delay_slot} grid, 28 cells), as probe v23 (repair 14), which rows all 28 in one diff.
 
 ### 2. `lunaabsentcpu` (#503) — passes 1 through 4
 
@@ -1488,10 +1502,12 @@ the instruction.** Pushing back is the right answer and the template does not in
 **Proposed wording, held rather than applied:** keep the question, add *"or say NONE and name the
 forcing assumption as the defect"*.
 
-### `m88ksfd1row` (LOW) — does the addition licence authorise a zero-delta row that buys attribution?
+### ~~`m88ksfd1row` (LOW) — does the addition licence authorise a zero-delta row that buys attribution?~~ — **RULED 2026-10-16** by four seats: KEEP, not owed — the block after THE ASK
 
 `trapfrozensfd1`'s measured delta against its own mutant is **ZERO** — delete it and the mutant is
-still caught 58/58 by `trapfrozenuser`. I claimed the anchor rule one level down: a row varying two
+still caught by `trapfrozenuser`, at 57/58 [CORRECTED 2026-10-16, GPT-6 Astra: this said "58/58", the score of a
+mutant NOT caught; table 15 measured 57/59 with two rows red, so removing one leaves 57/58 -- arithmetic, not a preserved
+run]. I claimed the anchor rule one level down: a row varying two
 bits cannot say which one fired. **codex rejected that**, citing the carrier — the anchor rule repairs
 an oracle comparing a path with *itself*, which this is not, and row demand is bounded *"per enumerated
 mutant, never per attribution need"*. Its verdict: close the chain.
@@ -1505,6 +1521,17 @@ deleting the only SFD1-clear stimulus, and **BASE alone would not notice.**
 some other way — noting that a comment is memory, and this project's finding is that memory does not
 fire; or (b) a distinguishing failure signature IS a licensed benefit when the alternative concentrates
 an axis on a shared constant, in which case the licence's wording should say so, because it does not.
+
+> **RULED 2026-10-16 (`regress/artifacts/adj_20261016/m88kexcdeliver/`): KEEP, not owed -- all four seats.**  Fable 5.1
+> supplied the stronger warrant: the row's delta is NOT zero against every mutant.  The disclosed joint re-route
+> `if (!is_trap || ((PSR & MODE) && !(PSR & SFD1)))` reds `trapfrozensfd1` and no other row -- MEASURED 62/63, table
+> 16b (`regress/artifacts/m88kexcdeliver/repair13_20261016/ANALYSIS.out`) -- so it holds a third of the trap side's four
+> {MODE} x {SFD1} joint cells: coverage, not attribution.  The shared-constant hazard got a STRUCTURAL answer instead of
+> a sentence: two import-time asserts on `PSR_FRZUSER` / `PSR_FRZSUP` in the probe (`assert_controls.out`: each of four
+> bit edits stops it at startup).  On the wording, 2-2: Grok 4.7 and GLM 5.3 want a sentence in the addition licence
+> (Grok's form: a zero-delta row is licensed when it is the only stimulus for an enumerated cell not on a constant shared
+> with rows whose oracles do not observe that bit); Fable 5.1 and GPT-6 Astra want none.  No carrier wording was written;
+> the ledger line cites the warrant, and the wording is an OWNER rule question.
 
 ### *** `sgilinearnegidxpostmortem` — NEW, RAISED 2026-09-07 BY THE FAILURE ITSELF ***
 

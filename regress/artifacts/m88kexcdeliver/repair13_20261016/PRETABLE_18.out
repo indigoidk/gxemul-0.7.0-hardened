@@ -1,0 +1,37 @@
+PRETABLE 18 -- written 2026-10-16 BEFORE table 18 runs (its own file; this mtime orders table 18 alone).
+Instrument: the v21 CANDIDATE (m88k_exc_probe_v21cand.FROZEN.py) -- v20 plus the delay-slot CLASS CLOSURE: five rows.
+It is a candidate, not the working tree, because pass-14 seats were still reading v20 when it was built; whether any of
+its cells is floor is the pass-14 adjudication's call.  Base: HEAD 7b23b785.
+
+THE CLASS, from the function's own inputs: m88k_exception() tests cpu->delay_slot (840, and 865 whose result X(br_n)
+consumes at cpu_m88k_instr.c:99 to choose the exception vector over the branch target).  Sites: the seven switch-1
+arms, the fallback (799), the SFRZ re-route's non-trap and trap sides (811/816).  10 cells.  v20 rows 5 (DIV0, MISALIGN,
+UNIMPL, PRIV, OVF).  v21 adds:
+
+  SIBLING PARITY / CLAIM -> ROW / CHANNEL, per new row:
+  dslotbounds     [br.n +16, tb1 0,r3,7] r3=1, fault 0x10008, entry 0x38, else-arm shadows as implemented
+                  kills M_DSNOT_BOUNDS (`implemented = !cpu->delay_slot' at BOUNDS): fallback HALT replaces DELIVER
+  dsloterror      [br.n +16, tb1 0,r3,10] r3=1, fault 0x10008, entry 0x50
+                  kills M_DSNOT_ERROR: HALT replaces DELIVER
+  errdslot        first fault divu by zero; frozen handler at 0x40 = [br.n +16, ld r6,r5,0] r5 odd -> re-routed to ERROR 0x50,
+                  frozen shadows, refatal present
+                  kills M_RRNTDS (`if (!is_trap && !cpu->delay_slot)'): delivered to MISALIGN 0x20 instead -> STOP
+  trapfrozendslot first fault divu by zero; frozen handler = [br.n +16, tb1 0,r3,7] r3=0x11 -> exempt, 0x38, no refatal
+                  kills M_RRTDS (`if (!is_trap || cpu->delay_slot)'): re-routed to ERROR 0x50 -> STOP
+  usfu1dslot      [stcr r5,cr1 (user, SFD1 set), br.n +16, divu r6,r5,r4] -> SFU1 (114) in a slot -> fallback HALT naming 0x072
+                  kills M_FBDS (`... && !implemented && !cpu->delay_slot'): no halt -> TAILHALT or a delivery, never HALT
+
+  GUARD FIELD vs BODY FIELD: delay_slot partition {0, nonzero}; EXHAUSTED at all 10 cells after v21.
+
+PREDICTIONS (score; red set):
+   BASE                 68/68
+   M_DSNOT_MISALIGN     66/68  dslotmisalign, errdslot (errdslot's frozen slot fault enters the MISALIGN arm before the re-route)
+   M_DSNOT_UNIMPL       67/68  dslotunimpl
+   M_DSNOT_PRIV         67/68  dslotpriv
+   M_DSNOT_OVF          67/68  dslotovf
+   M_DSNOT_DIV0         67/68  dslot (errdslot/trapfrozendslot fault FIRST at DIV0 outside a slot -- unaffected)
+   M_DSNOT_BOUNDS       66/68  dslotbounds, trapfrozendslot (its frozen slot trap enters the BOUNDS arm)
+   M_DSNOT_ERROR        67/68  dsloterror (errdslot becomes ERROR only AFTER switch 1, so it never enters that arm)
+   M_RRNTDS             67/68  errdslot
+   M_RRTDS              67/68  trapfrozendslot
+   M_FBDS               67/68  usfu1dslot

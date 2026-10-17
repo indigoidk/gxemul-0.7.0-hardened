@@ -1,0 +1,54 @@
+PRETABLE 19 -- written 2026-10-16 BEFORE table 19 runs (its own file; this mtime orders table 19 alone).
+Instrument: probe v23 (m88k_exc_probe_v23.FROZEN.py, md5 1d400b64...) = v22 + repair 14, the delay-slot CLASS CLOSURE as
+Fable 5.1 enumerated it on pass 14.  It REPLACES the table-18 candidate: that candidate's two frozen rows used br.n +16
+inside the handler at 0x40, whose target 0x50 is the ERROR entry, so a lost ERROR delivery would have read DELIVER
+(errdslot could not see M_DS865 at all).  Base: HEAD 7b23b785.
+
+THE ENUMERATION (to be VERIFIED by the closing pass, not hunted): the delivery path TESTS PSR & SFRZ (:811) and
+cpu->delay_slot (:840, and :865 whose write X(br_n) consumes at cpu_m88k_instr.c:99).  Floor = {7 labels} x {SFRZ} x
+{delay_slot} = 28 cells; v22 rows 19; v23 adds 9 -> 28/28:
+  (0,1) BOUNDS dslotbounds, ERROR dsloterror           -- unfrozen tb1 in a slot (the trap route is the only route there)
+  (1,1) MISALIGN errdslotmisalign, OVF errdslotovf, DIV0 errdslotdiv0, PRIV errdslotpriv, UNIMPL errdslotunimpl,
+        BOUNDS trapfrozen7dslot, ERROR trapfrozen10dslot  -- the frozen div0 handler re-faults in a br.n +8 slot
+  plus usfu1dslot (the fallback, clause (e) by the tests-not-reads criterion, rowed on its measured escape).
+DISCLOSED, clause (e), each measured below as an escape: the trap route at the five instruction labels in a frozen slot
+(M_RRDS_<L>); {delay slot} x {a PSR bit other than SFRZ}; three-or-more-axis joints; vectors 0..3 (m88kexchwtraps).
+
+CHANNEL per new row and the mutant it kills (73 fault rows):
+  dslotbounds / dsloterror        M_DSNOT_BOUNDS / _ERROR: fallback HALT replaces DELIVER at 0x38 / 0x50
+  errdslot<L> (five)              M_DSFRZ_<L> (`implemented = !(delay_slot && (PSR & SFRZ))' at L): HALT replaces DELIVER at 0x50
+                                  M_RRNTDS (`!is_trap && !delay_slot'): delivered to L's own vector -> STOP
+                                  M_DS865 (`delay_slot && update_shadow_regs' at :865): X(br_n) jumps to the SELF after the
+                                  handler -> STOP
+  trapfrozen7dslot                M_DSFRZ_BOUNDS: HALT; M_RRTDS (`!is_trap || delay_slot'): re-routed to 0x50 -> STOP; M_DS865: STOP
+  trapfrozen10dslot               M_DSFRZ_ERROR: HALT; M_RRTDS: 0x50 WITH the re-route diagnostic -> BADREGS(refatal); M_DS865: STOP
+  usfu1dslot                      M_FBDS (`&& !delay_slot' at :799): no halt -> TAILHALT or a delivery, never HALT
+
+PREDICTIONS (score; red set):
+   BASE                                  73/73
+   M_DSNOT_MISALIGNED_ACCESS             71/73  dslotmisalign errdslotmisalign
+   M_DSNOT_UNIMPLEMENTED_OPCODE          71/73  dslotunimpl errdslotunimpl
+   M_DSNOT_PRIVILEGE_VIOLATION           71/73  dslotpriv errdslotpriv
+   M_DSNOT_BOUNDS_CHECK_VIOLATION        71/73  dslotbounds trapfrozen7dslot
+   M_DSNOT_ILLEGAL_INTEGER_DIVIDE        71/73  dslot errdslotdiv0
+   M_DSNOT_INTEGER_OVERFLOW              71/73  dslotovf errdslotovf
+   M_DSNOT_ERROR                         71/73  dsloterror trapfrozen10dslot
+   M_DSFRZ_MISALIGNED_ACCESS             72/73  errdslotmisalign
+   M_DSFRZ_UNIMPLEMENTED_OPCODE          72/73  errdslotunimpl
+   M_DSFRZ_PRIVILEGE_VIOLATION           72/73  errdslotpriv
+   M_DSFRZ_BOUNDS_CHECK_VIOLATION        72/73  trapfrozen7dslot
+   M_DSFRZ_ILLEGAL_INTEGER_DIVIDE        72/73  errdslotdiv0
+   M_DSFRZ_INTEGER_OVERFLOW              72/73  errdslotovf
+   M_DSFRZ_ERROR                         72/73  trapfrozen10dslot
+   M_DS865                               66/73  the seven frozen-slot rows
+   M_RRTDS                               71/73  trapfrozen7dslot trapfrozen10dslot
+   M_RRNTDS                              68/73  the five errdslot* rows
+   M_RRDS_MISALIGNED_ACCESS              73/73  (disclosed escape)
+   M_RRDS_UNIMPLEMENTED_OPCODE           73/73  (disclosed escape)
+   M_RRDS_PRIVILEGE_VIOLATION            73/73  (disclosed escape)
+   M_RRDS_ILLEGAL_INTEGER_DIVIDE         73/73  (disclosed escape)
+   M_RRDS_INTEGER_OVERFLOW               73/73  (disclosed escape)
+   M_FBDS                                72/73  usfu1dslot
+(Fable 5.1's own table predicted "the existing M_DSNOT at the five instruction labels keep their red sets exactly"; on v23
+each of them ALSO reds the frozen-slot row at its label, as above -- written down here so the difference is a prediction,
+not a surprise.)

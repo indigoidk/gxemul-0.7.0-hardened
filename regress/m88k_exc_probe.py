@@ -35,6 +35,21 @@ rather than executing zeros, `breakpoint add <8*vector>`, `continue`, then `reg`
              `fip != nip + 4' arm say the else-arm returns WRONG (codex, grok, pass 2: the fallthrough executes
              before the target).  Pre-existing, out of this diff's scope, filed as m88kdslotshadow; when that round
              lands this row is RE-PINNED FIRST (oracle-correction rule: re-pin, measure HEAD red, then fix). ***
+  dslotmisalign/dslotunimpl/dslotpriv/dslotovf   v22 (repair 13, 2026-10-16): the same br.n +16 with the fault IN ITS
+             DELAY SLOT at the four other arms a guest INSTRUCTION can raise -- ld r2,r3,0 (r3 odd), prom_call and
+             ldcr r2,cr1 after stcr r3,cr1 (user mode), add 7fffffff+1.  `implemented = !cpu->delay_slot' at each of those
+             arms swept HEAD's v21 59/59 (artifacts/m88kexcdeliver/delayslot_20261016/, predicted by Fable 5.1 -- who also
+             UNDER-ENUMERATED it: the SFRZ slice was left for pass 14, below); each row
+             kills its own arm's form.  Scored like dslot (the else-arm, AS IMPLEMENTED): SNIP = fault+4,
+             SFIP = fault+12 = the branch's delay_target                                       0x20/0x28/0x30/0x48
+  dslotbounds/dsloterror   v23 (repair 14, 2026-10-16): a TRAP instruction in a br.n +16 slot -- tb1 naming 7 / 10, the
+             only route into those two labels.  Pinned AS THIS EMULATOR BEHAVES (X(tb1) has no delay-slot guard); the
+             MC88100 manual does not define a trap in a slot                                                 0x38/0x50
+  errdslotmisalign/ovf/div0/priv/unimpl, trapfrozen7dslot/trapfrozen10dslot   v23: the frozen div0 handler re-faults
+             INSIDE a br.n +8 slot, one row per label -- the {SFRZ set} x {slot set} column of the grid.  A non-trap fault is
+             still re-routed to ERROR (0x50, refatal); a trap is still exempt (0x38 / 0x50, no refatal).  +8, never +16:
+             0x40 + 16 is the ERROR entry, so a lost delivery would land on the row's own breakpoint      0x50/0x38/0x50
+  usfu1dslot v23: SFU1 (114) raised in a delay slot still HALTs at the fallback, naming 0x072
   errortb    tb1  0,r3,10 (r3=1)      f003d80a  supervisor trap naming ERROR (10) directly -- the
              only route to switch 1's ERROR arm (the double-fault route enters at the re-route AFTER
              switch 1, so it cannot see that arm: M_ERRORDROP escaped the error row 9/9, table 1)  0x50
@@ -180,7 +195,25 @@ row is owed as its own revision with its own BASE run (codex, pass 8). ***) ({SF
 DIV0 errdiv0 -- the handler clears SFD1 first, with it set the divu raises SFU1 instead (sfu1h) --, PRIVILEGE errpriv
 and UNIMPLEMENTED errunimpl -- the handler drops to user mode keeping SFRZ; BOUNDS and ERROR have no non-trap route,
 the frozen TRAP is trapfrozen); a wrong return address; the delay-slot else-arm's SFIP source (dslot, +16
-geometry); a trap re-routed to ERROR while frozen, per class ({SFRZ set, is_trap} x {every switch-1 label a trap can NAME -- 0..3 are deliverable too and are unrowed, disclosed as
+geometry); a delay-slot-conditioned `implemented' on any class a guest INSTRUCTION can raise from a delay slot ({class} x
+{delay slot} closure, v22: DIV0 dslot, MISALIGNED dslotmisalign, UNIMPLEMENTED dslotunimpl, PRIVILEGE dslotpriv, OVERFLOW
+dslotovf -- `implemented = !cpu->delay_slot' at the four latter arms swept v21 59/59, delayslot_20261016/, and the body's own
+`if (cpu->delay_slot)' is what makes delay_slot a floor axis.  v23 then closed the whole CLASS, because passes 13 and 14
+each found cells of it open (repair 14, the class-closure rule), as Fable 5.1 enumerated it on pass 14: the delivery path
+TESTS PSR & SFRZ and cpu->delay_slot, so the floor is {7 labels} x {SFRZ} x {delay_slot}, 28 cells, all rowed -- the
+(SFRZ clear, slot) column by the five rows above plus dslotbounds and dsloterror (a tb1 naming 7 / 10 in a slot, pinned as
+this emulator behaves: the MC88100 manual does not define a trap in a slot, and manual silence decides what a row may
+CLAIM, not whether the cell is owed); the (SFRZ set, slot) column by errdslotmisalign, errdslotovf, errdslotdiv0,
+errdslotpriv, errdslotunimpl, trapfrozen7dslot and trapfrozen10dslot (line 865's write is what X(br_n) reads to keep the
+vector over the branch target); and the fallback, clause (e) but rowed on its measured escape, by usfu1dslot.  Table 19
+(artifacts/m88kexcdeliver/repair13_20261016/).  OPEN, NOT DISCLOSED -- pass 15 (Fable 5.1, GLM 5.3) overturned that filing:
+the delivery path also TESTS is_trap (:816), so a TRAP in a slot at the five instruction labels is floor (the carrier's
+generating-set clause; the chain's own *tb and trapfrozen<L> rows already write is_trap both ways at every slot-0 cell), and
+`if (!is_trap || (vector == L && cpu->delay_slot))' swept this instrument 73/73 at each of the five (table 19) -- repair
+15 owes ten rows.  Disclosed, clause (e): {delay slot} x {a PSR bit other than SFRZ} (copied or ORed, never tested); the
+user-trap labels (128, 0x1c2, MVMEPROM_VECTOR, the default) x {slot}, outside the fix's seven labels -- their delivery
+predates #502 (named by GLM 5.3 on pass 15); and vectors 0..3's own delay-slot code (upstream; its coverage debt is
+m88kexcdebt -- the tail arms themselves are m88kexchwtraps, a different defect; Grok 4.7, pass 15)); a trap re-routed to ERROR while frozen, per class ({SFRZ set, is_trap} x {every switch-1 label a trap can NAME -- 0..3 are deliverable too and are unrowed, disclosed as
 m88kexchwtraps; the word EVERY overclaimed until v16}: trapfrozen (7),
 trapfrozen4/5/6/8/9/10/128/450/496/511 -- the ten labels 4..10, 128, 0x1c2, MVMEPROM_VECTOR, enumerated from switch 1's `case' list, plus
 the far edge of the user range (511) --
@@ -230,6 +263,14 @@ PSR_FRZUSER = 0x00000003        # IND | SFRZ: a frozen handler dropping to user 
                                 # presents SFD1 clear as well.  A constant's comment that lists SOME of the bits it clears
                                 # reads like a complete decode and is not one.
 PSR_USERSFD1 = 0x0000000a       # IND | SFD1, MODE CLEAR: user mode with the FPU disabled -- a legal divu raises SFU1 (kimi, pass 5)
+#  v22 (Fable 5.1, 2026-10-16 four-seat adjudication of the close): the re-route's TRAP side has its SFD1-clear stimulus
+#  on TWO constants -- PSR_FRZUSER (trapfrozenuser: MODE clear AND SFD1 clear; shared with errpriv and errunimpl) and
+#  PSR_FRZSUP (trapfrozensfd1: MODE set, SFD1 clear; shared with errdiv0).  An edit such as PSR_FRZUSER 0x03 -> 0x0b
+#  keeps errpriv and errunimpl green and deletes one of those stimuli, and BASE alone would not notice.  A comment is
+#  memory; these fire at startup, before any session runs.
+PSR_BIT_MODE, PSR_BIT_SFD1 = 0x80000000, 0x00000008
+assert not (PSR_FRZUSER & (PSR_BIT_MODE | PSR_BIT_SFD1)), "PSR_FRZUSER must keep MODE and SFD1 clear (trapfrozenuser's cell)"
+assert (PSR_FRZSUP & PSR_BIT_MODE) and not (PSR_FRZSUP & PSR_BIT_SFD1), "PSR_FRZSUP must keep MODE set, SFD1 clear (trapfrozensfd1's cell)"
 PSR_FRZNOIND = 0x80000009       # MODE | SFD1 | SFRZ, IND CLEAR: a frozen handler that re-enables interrupts (grok, pass 7)
 PSR_FRZC = 0x9000000b           # C | MODE | SFD1 | IND | SFRZ: a frozen handler with the carry bit set (grok, pass 7)
 PSR_SUPCNOIND = 0xb0000000      # SER | MODE | C, IND CLEAR: supervisor, carry set, interrupts enabled, SERIAL MODE set.  ONE value
@@ -256,6 +297,7 @@ DIVU_R6_R5_R4 = tri(0x68, 6, 5, 4)               # f4c56804 -- a LEGAL divide in
                                                  #   SFU1_PRECISE (114) before it looks at the divisor -> the fallback must still HALT
 ADD_R2_R3_R4 = tri(0x70, 2, 3, 4)                # f4437004
 LD_R2_R3_0 = 0x14000000 | (2 << 21) | (3 << 16)  # 14430000 (major opcode 5, ld)
+LD_R6_R5_0 = 0x14000000 | (6 << 21) | (5 << 16)  # 14c50000 -- the `error' row's handler load, named for errdslotmisalign (v23)
 TB1_0_R3_7 = 0xf003d807                          # tb1 0,r3,7   (computed vector 7, supervisor)
 TB1_0_R4_8 = 0xf004d808                          # tb1 0,r4,8
 TB1_0_R3_10 = 0xf003d80a
@@ -315,6 +357,43 @@ ROWS = [
     ("error",    [DIVU_R2_R3_R0],               {"r3": 0x10, "r5": DATA + 1},    V_ERROR,    0x10004, PSR_RESET,
                  [0x14000000 | (6 << 21) | (5 << 16)]),       # handler at 0x40: ld r6,r5,0 with r5 odd -> 2nd fault
     ("dslot",    [BR_N_PLUS16, DIVU_R2_R3_R0],  {"r3": 0x10},                    V_DIV0,     0x10008, PSR_RESET, None),
+    #  ---- v22, repair 13 (2026-10-16): {class} x {delay slot} at the four other arms an INSTRUCTION reaches from a slot.
+    #  `implemented = !cpu->delay_slot' at MISALIGNED/UNIMPL/PRIV/OVF swept v21 59/59 (delayslot_20261016/); dslot held
+    #  only DIV0.  BOUNDS and ERROR need a trap instruction IN a slot -- disclosed in the contract with measured escapes.
+    ("dslotmisalign", [BR_N_PLUS16, LD_R2_R3_0], {"r3": DATA + 1},               V_MISALIGN, 0x10008, PSR_RESET, None),
+    ("dslotunimpl", [STCR_R3_CR1, BR_N_PLUS16, PROM_CALL], {"r3": PSR_USER},      V_UNIMPL,   0x1000c, PSR_USER,  None),
+    ("dslotpriv", [STCR_R3_CR1, BR_N_PLUS16, LDCR_R2_CR1], {"r3": PSR_USER},      V_PRIV,     0x1000c, PSR_USER,  None),
+    ("dslotovf", [BR_N_PLUS16, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1},     V_OVF,      0x10008, PSR_RESET, None),
+    #  ---- v23, repair 14 (2026-10-16): THE DELAY-SLOT CLASS CLOSURE.  Passes 13 and 14 each found the axis open, so this
+    #  repair closes the whole space in one diff, as Fable 5.1 enumerated it on pass 14: the delivery path TESTS two state
+    #  values, PSR & SFRZ and cpu->delay_slot, so the grid is {7 labels} x {SFRZ} x {delay_slot} -- 28 cells, 19 rowed by
+    #  v22.  The nine below, plus the fallback row.
+    #  (a) the two TRAP-ONLY labels in a slot, unfrozen.  A tb1 in a .n slot: the MC88100 manual does not define it, X(tb1)
+    #  has no slot guard, so these pin THIS EMULATOR'S behaviour (the else-arm shadows, like every dslot* row).
+    ("dslotbounds", [BR_N_PLUS16, TB1_0_R3_7],  {"r3": 1},                       V_BOUNDS,   0x10008, PSR_RESET, None),
+    ("dsloterror", [BR_N_PLUS16, TB1_0_R3_10],  {"r3": 1},                       V_ERROR,    0x10008, PSR_RESET, None),
+    #  (b) the seven labels with SFRZ SET and the fault IN A SLOT: the div0 handler at 0x40 re-faults inside a br.n's slot.
+    #  *** br.n +8, NEVER +16, inside a handler: 0x40 + 16 = 0x50 is the ERROR entry, so a lost delivery (`:865' not
+    #  writing EXCEPTION_IN_DELAY_SLOT, after which X(br_n) jumps to delay_target) would land on the row's own breakpoint
+    #  and read DELIVER.  +8 targets the SELF word planted after the handler, so a lost delivery reads STOP (Fable 5.1). ***
+    #  Frozen shadows throughout, so none of these pins the else-arm or owes the m88kdslotshadow re-pin.
+    ("errdslotmisalign", [DIVU_R2_R3_R0],       {"r3": 0x10, "r5": DATA + 1},    V_ERROR,    0x10004, PSR_RESET,
+                 [BR_N_PLUS8, LD_R6_R5_0]),                   # ld r6,r5,0 (odd) in the slot -> MISALIGNED frozen -> ERROR
+    ("errdslotovf", [DIVU_R2_R3_R0],            {"r3": 0x7fffffff, "r4": 1},     V_ERROR,    0x10004, PSR_RESET,
+                 [BR_N_PLUS8, ADD_R2_R3_R4]),                 # add 7fffffff+1 in the slot -> OVERFLOW frozen -> ERROR
+    ("errdslotdiv0", [DIVU_R2_R3_R0],           {"r3": 0x10, "r5": PSR_FRZSUP},  V_ERROR,    0x10004, PSR_RESET,
+                 [STCR_R5_CR1, BR_N_PLUS8, DIVU_R2_R3_R0]),   # SFD1 cleared first (else SFU1), divu in the slot -> DIV0 frozen
+    ("errdslotpriv", [DIVU_R2_R3_R0],           {"r3": 0x10, "r5": PSR_FRZUSER}, V_ERROR,    0x10004, PSR_RESET,
+                 [STCR_R5_CR1, BR_N_PLUS8, LDCR_R2_CR1]),     # user mode, SFRZ kept, ldcr in the slot -> PRIVILEGE frozen
+    ("errdslotunimpl", [DIVU_R2_R3_R0],         {"r3": 0x10, "r5": PSR_FRZUSER}, V_ERROR,    0x10004, PSR_RESET,
+                 [STCR_R5_CR1, BR_N_PLUS8, PROM_CALL]),       # user mode, SFRZ kept, prom_call in the slot -> UNIMPL frozen
+    ("trapfrozen7dslot", [DIVU_R2_R3_R0],       {"r3": 0x11},                    V_BOUNDS,   0x10004, PSR_RESET,
+                 [BR_N_PLUS8, TB1_0_R3_7]),                   # a frozen TRAP in the slot is still exempt: 0x38, no refatal
+    ("trapfrozen10dslot", [DIVU_R2_R3_R0],      {"r3": 0x11},                    V_ERROR,    0x10004, PSR_RESET,
+                 [BR_N_PLUS8, TB1_0_R3_10]),                  # naming 10: exempt, 0x50, and NO refatal -- the channel
+    #  (c) the fallback, which is clause (e) by the carrier's tests-not-reads criterion (all four pass-14 seats), rowed
+    #  because its escape was measured (table 17: `&& !cpu->delay_slot' at the fallback swept v22 63/63).
+    ("usfu1dslot", [STCR_R5_CR1, BR_N_PLUS16, DIVU_R6_R5_R4], {"r5": PSR_USERSFD1, "r4": 0x10}, V_SFU1, 0x1000c, PSR_USERSFD1, None),
     ("errortb",  [TB1_0_R3_10],                 {"r3": 1},                       V_ERROR,    0x10004, PSR_RESET, None),
     ("misaligntb", [TB1_0_R3_4],                {"r3": 1},                       V_MISALIGN, 0x10004, PSR_RESET, None),
     ("unimpltb", [TB1_0_R3_5],                  {"r3": 1},                       V_UNIMPL,   0x10004, PSR_RESET, None),
@@ -411,7 +490,9 @@ ROWS = [
     #  under an SFD1-conditioned mutant too.  It is still the UNIQUE carrier of the MODE cell, and the polarity
     #  control proves that rather than asserting it: CTL_RRTRAPINV reddened all fifteen MODE-set trap rows and
     #  left this one alone.  trapfrozensfd1 below is the SINGLE-AXIS discriminator (MODE set, SFD1 clear): its
-    #  measured delta against its own mutant is ZERO -- trapfrozenuser alone catches M_RRTRAPSFD1 at 58/58.
+    #  measured delta against its own mutant is ZERO -- trapfrozenuser alone catches M_RRTRAPSFD1 at 57/58.
+    #  [CORRECTED 2026-10-16, GPT-6 Astra: this said "at 58/58", which is the score of a mutant NOT caught.  Table 15
+    #  measured 57/59 with two rows red; removing one leaves 57/58 -- arithmetic, not a preserved run.]
     #
     #  *** THE ATTRIBUTION WARRANT WAS RULED NOT TO TRANSFER, AND THE RULING IS RECORDED HERE RATHER THAN
     #  ARGUED WITH (codex/GPT-6 Astra at max, pass 12, the closing adjudication). ***  This round claimed the
@@ -421,6 +502,13 @@ ROWS = [
     #  demand "per enumerated mutant, never per attribution need".  Removing this row loses NONE of the 56
     #  closed cells and none of table 15's kills.
     #
+    #  *** RULED 2026-10-16: KEPT, NOT OWED -- all four seats (Fable 5.1, GPT-6 Astra, Grok 4.7, GLM 5.3) said KEEP. ***
+    #  Fable 5.1 added the stronger reason: the row's delta is NOT zero against every mutant -- the disclosed joint
+    #  `if (!is_trap || ((PSR & MODE) && !(PSR & SFD1)))' reds this row and no other (REASONED, not measured), so it
+    #  holds a third of the trap side's four {MODE} x {SFD1} cells; that is coverage, not attribution.  The asserts after
+    #  PSR_USERSFD1 are the structural answer to the shared-constant hazard below.  Grok 4.7 and GLM 5.3 also asked for
+    #  a sentence in the addition licence; Fable 5.1 and GPT-6 Astra said no wording -- carried to the owner as a rule
+    #  question, not settled here.  The text that follows is kept as it was written:
     #  IT IS KEPT PENDING THE 2026-09-09 ADJUDICATION, and the reason is the same seat's own next paragraph:
     #  after removal, SFD1 coverage rests entirely on trapfrozenuser, whose PSR_FRZUSER (0x03) is SHARED with
     #  errpriv and errunimpl -- so changing it to 0x0b would preserve THEIR routes while silently removing the
@@ -449,7 +537,7 @@ VBR_OF = {"vbrtb": VBR_TEST}                     # rows that relocate the vector
 #  NEGATIVE CONTROLS: rows whose CORRECT result is the fallback HALT.  They pin the boundary the diff keeps on purpose --
 #  vectors 11..113/116..127 and SFU1 (114/115) still stop the machine -- and separate the shipped D1 form from the rejected
 #  D4 (tail-default-delivers) and from delivering SFU1 (row m88kexcsfu1).  A mutant that delivers them turns these rows RED.
-EXPECT_RESULT = {"resid50": "HALT", "resid127": "HALT", "resid11": "HALT", "resid50ind": "HALT", "resid50c": "HALT", "resid50ser": "HALT", "sfu1h": "HALT", "usfu1": "HALT"}
+EXPECT_RESULT = {"usfu1dslot": "HALT", "resid50": "HALT", "resid127": "HALT", "resid11": "HALT", "resid50ind": "HALT", "resid50c": "HALT", "resid50ser": "HALT", "sfu1h": "HALT", "usfu1": "HALT"}
 PSR_WANT = {"errc": 0x9000000b,   # v14: exception entry ORs MODE|SFRZ|IND|SFD1 and leaves C alone (mc88100 manual: "the shadow freeze,
                                   #      SFD1, and IND bits of the PSR are set"), so the C-set handler row keeps C -- table 11 BASE read
                                   #      45/46 bad=psr on this row before any mutant: a MIS-CUT ROW, not the fix (case 3)
@@ -462,7 +550,7 @@ PSR_WANT = {"errc": 0x9000000b,   # v14: exception entry ORs MODE|SFRZ|IND|SFD1 
             "errser": 0xa000000b}                # v17: the non-trap re-route with SER set -- also the MISALIGNED x SER cell
 #  indclr wants the default PSR_EXC (0x8000000b): IND was CLEAR before the fault and must be SET by the exception path;
 #  EPSR keeps the pre-fault 0x80000000.  A write that drops `| M88K_PSR_IND' leaves 0x80000009 -> bad=psr.
-EXPECT_VECTOR = {"resid50": 0x032, "resid127": 0x07f, "resid11": 0x00b, "resid50ind": 0x032, "resid50c": 0x032, "resid50ser": 0x032, "sfu1h": 0x072, "usfu1": 0x072}
+EXPECT_VECTOR = {"usfu1dslot": 0x072, "resid50": 0x032, "resid127": 0x07f, "resid11": 0x00b, "resid50ind": 0x032, "resid50c": 0x032, "resid50ser": 0x032, "sfu1h": 0x072, "usfu1": 0x072}
 #  (the vector the fallback diagnostic must NAME for an expected-HALT row -- the comment that used to trail the dict above)
 #  refatal: the re-route prints `[ SFRZ already set in PSR => ERROR ]' (fatal() is a plain print in this fork); a re-routed non-trap row
 #  must SEE it, a frozen-trap row must NOT -- the channel that tells the exemption arm from the re-route arm when both land on 0x50
@@ -472,7 +560,9 @@ REFATAL_EXPECT = {"error": True, "errovf": True, "errdiv0": True, "errpriv": Tru
                   "trapfrozen": False, "trapfrozen4": False, "trapfrozen5": False, "trapfrozen6": False, "trapfrozen8": False,
                   "trapfrozen9": False, "trapfrozen10": False, "trapfrozen128": False, "trapfrozen450": False, "trapfrozen496": False, "trapfrozen511": False,
                   "trapfrozenind": False, "trapfrozenc": False, "trapfrozenser": False,
-                  "trapfrozenuser": False, "trapfrozensfd1": False}   # v19: the exemption must hold with MODE and
+                  "trapfrozenuser": False, "trapfrozensfd1": False,
+                  "errdslotmisalign": True, "errdslotovf": True, "errdslotdiv0": True, "errdslotpriv": True,
+                  "errdslotunimpl": True, "trapfrozen7dslot": False, "trapfrozen10dslot": False}   # v23   # v19: the exemption must hold with MODE and
                   #      SFD1 clear too -- and this is the CHANNEL that makes the two rows non-vacuous, because the
                   #      mutant re-routes the trap and the diagnostic then APPEARS where these expect none
 #  (v12 COPIED this dict's trailing comment up to EXPECT_VECTOR, where it belongs, and claimed to have REMOVED it here.
@@ -616,16 +706,22 @@ def run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, grace=6.0, ha
         if name in ("error", "trapfrozen", "errovf", "errdiv0", "errpriv", "errunimpl", "errind", "errc", "errser",
                     "trapfrozen4", "trapfrozen5", "trapfrozen6", "trapfrozen8", "trapfrozen9", "trapfrozen10", "trapfrozen128",
                     "trapfrozen450", "trapfrozen496", "trapfrozen511",
-                    "trapfrozenind", "trapfrozenc", "trapfrozenser", "trapfrozenuser", "trapfrozensfd1"):
+                    "trapfrozenind", "trapfrozenc", "trapfrozenser", "trapfrozenuser", "trapfrozensfd1",
+                    "errdslotmisalign", "errdslotovf", "errdslotdiv0", "errdslotpriv", "errdslotunimpl",
+                    "trapfrozen7dslot", "trapfrozen10dslot"):
             # the second fault runs with SFRZ set: the shadows stay FROZEN at the first fault's values.  For
             # `trapfrozen' the second fault is a TRAP, which the manual (:8633-8636, 6.10 :10613-10614) exempts from
             # the ERROR re-route: it must deliver to ITS OWN vector (0x38), shadows still frozen.  M_SFRZTRAP sends it to 0x50.
             want.update(sxip=(0x10004 | XIP_V), snip=(0x10008 | XIP_V), sfip=(0x1000c | XIP_V), epsr=PSR_RESET)
-        elif name == "dslot":
+        elif name.startswith("dslot"):
             # the else-arm of the delay-slot branch: SNIP = (pc + 4) | V, SFIP = delay_target | V.  br.n +16 puts
             # delay_target at 0x10014 while slot_pc+4 is 0x1000c, so the two channels are DIFFERENT numbers (with
             # br.n +8 they were both 0x1000e and M_SFIPNOTGT / M_DSLOTSWAP escaped 10/10 -- Opus, pass 2).
-            want.update(snip=((fault_pc + 4) | XIP_V), sfip=((CODE + 4 + 16) | XIP_V))
+            # *** RE-PIN THIS BRANCH FIRST when m88kdslotshadow lands: it serves all seven dslot* rows, and the manual
+            # says the else-arm returns WRONG (the oracle-correction order: re-pin, measure HEAD red, then fix). ***
+            # v22: every dslot* row puts the br.n +16 IMMEDIATELY before its faulting word, so delay_target is
+            # (fault_pc - 4) + 16 -- for dslot itself that is 0x10014, the CODE + 4 + 16 this line used to spell.
+            want.update(snip=((fault_pc + 4) | XIP_V), sfip=((fault_pc - 4 + 16) | XIP_V))
             assert want["snip"] != want["sfip"], "dslot geometry collapsed: SNIP and SFIP would be one number"
         else:
             want.update(snip=((fault_pc + 4) | XIP_V), sfip=((fault_pc + 8) | XIP_V))
@@ -653,6 +749,8 @@ def main():
         name, prog, regs, vector, fault_pc, epsr_exp, handler = row[:7]
         handler_at = row[7] if len(row) > 7 else V_DIV0
         res = run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, handler_at=handler_at)
+        #  NAME COLUMN: `%-9s' pads to nine and `dslotpriv' is exactly nine, so the ONE literal space after it is all the
+        #  gate's ` +RESULT' has to match on that row.  Never drop that space (the padded-column class; Fable 5.1, pass 14).
         print("M88KEXC_ROW=%-9s RESULT=%-8s pc=%s sxip=%s snip=%s sfip=%s psr=%s epsr=%s r2=%s%s" % (
             name, res.get("result"), fmt(res.get("pc")), fmt(res.get("sxip")), fmt(res.get("snip")),
             fmt(res.get("sfip")), fmt(res.get("psr")), fmt(res.get("epsr")), fmt(res.get("r2")),

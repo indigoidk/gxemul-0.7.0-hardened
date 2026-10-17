@@ -1,0 +1,55 @@
+I'll verify the v23 grid against the rows and the delivery path, starting from the probe, the cell deriver, and the mutants that table 19 actually ran.The pass-15 verdict turns on whether five frozen trap-in-slot cells are really unrowed and really sweep. I am checking those measurements and the contract's classification before I answer.GROK_M88KP15_20261016
+
+VERDICT: CLOSE (the 28-cell delay-slot floor is held and the five frozen trap-in-slot escapes are the disclosed clause-(e) sub-cells; the proposed 78 double-counts ten cells already inside that 28)
+
+HEAD's probe is v21. Pass 14's "v20" is v22. This repair is v23. D3 and D4, which were this seat's pass-14 positions, are withdrawn in Q5.
+
+**Q1.** No mis-credited cell on the shipped grid. `derive_cells.py` keys a cell by the switch-1 arm entered, by fault index (`k == 1` means SFRZ set), and by `INSLOT`. The ten v23 rows match their programs:
+
+| Cell | Credited row | What the second or only fault actually is |
+|---|---|---|
+| (MISALIGN, 0, 1) through (ERROR, 0, 1) | `dslotmisalign`, `dslotunimpl`, `dslotpriv`, `dslotbounds`, `dslot`, `dslotovf`, `dsloterror` | The fault word is the `.n` slot, SFRZ clear. `dslotbounds` / `dsloterror` are `tb1` naming 7 / 10. |
+| (MISALIGN, 1, 1) through (OVF, 1, 1) | `errdslotmisalign`, `errdslotunimpl`, `errdslotpriv`, `errdslotdiv0`, `errdslotovf` | Handler slot, SFRZ kept. Second arms are MISALIGN, UNIMPL, PRIV, DIV0, OVF. |
+| (BOUNDS, 1, 1), (ERROR, 1, 1) | `trapfrozen7dslot`, `trapfrozen10dslot` | Frozen `tb1` naming 7 / 10. |
+
+The `+N` members of the (SFRZ set, slot clear) column are the same arm. MISALIGN's `errc +4` is `error`, `errind`, `errser`, `trapfrozen4`. UNIMPL's `+1` is `trapfrozen5`. PRIV's `+1` is `trapfrozen6`. BOUNDS's `trapfrozen +4` is `trapfrozenind`, `trapfrozenc`, `trapfrozenser`, `trapfrozensfd1`. DIV0's `+1` is `trapfrozen8`. OVF's `+1` is `trapfrozen9`. (ERROR, SFRZ set, slot clear) is `trapfrozen10` alone: the `error` row's second fault is MISALIGN, and the re-route is applied after switch 1, so that row never enters the ERROR arm. Fable's pass-14 sketch had credited that cell to the re-route row. The shipped deriver credits `trapfrozen10`.
+
+`errdslotdiv0` does raise DIV0. Its handler `stcr`s `PSR_FRZSUP` (`0x80000003`, SFD1 clear) before the slot `divu`. Under `M_DSFRZ_ILLEGAL_INTEGER_DIVIDE` that row is HALT at `pc=0x4c` with `psr=0x80000003`: the DIV0 arm ran, the fallback returned before the PSR OR, and `X(br_n)` took the `+8` target from `0x44`.
+
+**Q2.** None of the ten new rows is vacuous. The row that reds is the row credited with the cell.
+
+- `M_DSNOT_BOUNDS_CHECK_VIOLATION`: `dslotbounds` HALT at `pc=0x00010014`, `psr=0x80000002`; `trapfrozen7dslot` HALT at `pc=0x48`. `dsloterror` stays DELIVER at `0x50`.
+- `M_DS865`: `errdslotmisalign` STOP at `0x48`, `errdslotdiv0` STOP at `0x4c`, `trapfrozen7dslot` STOP at `0x48`. Those are the planted SELF words. A lost `:865` write does not land on the ERROR entry.
+- `M_RRNTDS`: `errdslotmisalign` STOP at `0x20`, `errdslotdiv0` STOP at `0x40`. `trapfrozen7dslot` stays DELIVER at `0x38`. The five `errdslot*` rows are the channel; table 19's red set is those five STOP.
+- `M_RRTDS`: `trapfrozen7dslot` STOP at `0x50`; `trapfrozen10dslot` BADREGS `bad=refatal` at `0x50`. The five `errdslot*` stay DELIVER. Score `71/73`.
+- `M_FBDS`: `usfu1dslot` TAILHALT at `pc=0x390`, `sxip=0x1000e`, `epsr=0x0000000a`. The kill is real. The result word is TAILHALT; Fable's pass-14 prediction said DELIVER.
+
+**Q3.** Inside the 28, no single edit of `m88k_exception()` sweeps the 73-row probe. Measured scores: each `M_DSNOT_*` `71/73`, each `M_DSFRZ_*` `72/73`, `M_DS865` `66/73`, `M_RRNTDS` `68/73`, `M_RRTDS` `71/73`. The five `M_RRDS_*` edits (`if (!is_trap || (vector == L && cpu->delay_slot))` for MISALIGNED_ACCESS, UNIMPLEMENTED_OPCODE, PRIVILEGE_VIOLATION, ILLEGAL_INTEGER_DIVIDE, INTEGER_OVERFLOW) each score `73/73`. They are the disclosed sub-cells in Q4, outside this floor. `M_FBDS` is `72/73` and sits on the fallback, which is clause (e).
+
+**Q4.** The remainder is complete, and the classification holds, with one warrant sentence restated and one filing pointer corrected.
+
+The five frozen trap-in-slot entries at labels 4, 5, 6, 8 and 9 are clause (e). Pass 11's owed floor is the switch-1 labels crossed with the device-state lvalues the repair path tests and that are jointly reachable: `PSR & SFRZ` and `cpu->delay_slot`. `is_trap` is a parameter, tested only inside the SFRZ block. A joint the body distinguishes and that product does not owe is clause (e). The contract names the mutant, and table 19 measures the escape at each of the five. Under `M_RRDS_INTEGER_OVERFLOW`, `errdslotovf` stays DELIVER at `0x50` and `trapfrozen9` stays DELIVER at `0x48`. The floor coordinate (OVF, SFRZ set, slot set) is occupied by `errdslotovf`. The `is_trap = 1` entry of that same coordinate is unheld. That is the disclosure. The label-free form is already killed by `trapfrozen7dslot` and `trapfrozen10dslot` (`M_RRTDS`, `71/73`). At SFRZ clear the body does not test `is_trap`, so an unfrozen trap in a slot is the same cell as `dslot*`.
+
+`{delay slot} × {a PSR bit other than SFRZ}` is clause (e) by G7: the only PSR mask in the function is `SFRZ` at `:811`. Three-or-more-axis joints stay clause (e). Vectors 0..3 stay upstream of this seven-label de-fatalisation. The parenthetical that files their delay-slot code under `m88kexchwtraps` points at the wrong record: that filing is a supervisor `tb1` naming 0/1/2/3 and landing in the tail arms. The delay-slot debt for those vectors is `m88kexcdebt`, and the shadow arm is `m88kdslotshadow`.
+
+**Q5.** Both rulings stand. This seat withdraws D3 and D4.
+
+D3. `(SFRZ set, slot set)` is floor. `:865` tests `cpu->delay_slot` on the frozen path, where `update_shadow_regs` is false and `:840` is skipped, and `X(br_n)` reads the value `:865` writes. `M_DS865` makes that observable (STOP at `0x48` / `0x4c`). `M_RRNTDS` is killed by the five `errdslot*` rows at the original vector. The pass-14 "disclosed joint" was the nine-cell hole v23 closed. The cells are rowed, and the floor classification is right on its own.
+
+D4. BOUNDS and ERROR in a slot are floor. `X(tb1)` has no delay-slot guard, so the writers reach the cell. `M_DSNOT_BOUNDS` turns `dslotbounds` into HALT at the branch target `0x10014` with the reset PSR still in place. The rows pin this emulator's policy and say the manual does not define a trap in a slot.
+
+**Q6.** No accepted disposition G1–G15 is wrong.
+
+G6's classification is clause (e), and that stands. Its phrase "a cell the fault row already holds" needs the restatement in Q4: the fault row holds the floor coordinate and leaves the `is_trap = 1` entry green. Read as "kills this mutant," the phrase is false, and the measurement is what makes the disclosure true.
+
+G13 is a commit obligation, and the working tree does not contain it yet. `tools/pipeline/ledger.json` still has `m88ksfd1row` at `"state": "open"` with the witness "58/58 without it". `OUTSTANDING_BUGS.md` and `fable_queue.md` already carry the 2026-10-16 ruling (kept, not owed, table 16b at 62/63). The commit that lands v23 includes that ledger hunk. G14's carve-out stands; the filing pointer is the one Q4 corrects.
+
+**Q7.** The SFRZ-column removal is right. The 78 is not a count of distinct cells.
+
+The PSR census is closed 40 of 42, with BOUNDS×MODE and ERROR×MODE open because a user `tb1` below 128 raises PRIVILEGE. Dropping the seven SFRZ cells, which the delay-slot grid's slot-clear half already contains, leaves 33. The fallback's six bit cells and the one fallback×slot cell (`usfu1dslot`, clause (e), rowed on the measured TAILHALT) are further distinct cells.
+
+The non-trap re-route 5 and the trap exemption 5 are the two arms of the five instruction-label cells at (SFRZ set, slot clear). The deriver records that by `+N` (`errc +4` includes `trapfrozen4`, `errovf +1` is `trapfrozen9`, and the same for UNIMPL, PRIV and DIV0). Adding those ten again counts cells the 28 already holds. They are also the wrong citation for "clause (e) by G7 and G4": G7 is the five unread PSR bits, and G4 is the fallback crossed with `delay_slot`.
+
+The five frozen trap-in-slot sub-cells are absent from the 78 and present in the probe contract. On this grain they are disclosed clause (e), unrowed, measured `73/73`.
+
+Distinct total: 28 floor + 33 PSR + 6 fallback bits + 1 fallback×slot + 5 disclosed sub-cells = 73. Of those, 28 are floor and rowed; the other 45 are clause (e), four of the clause-(e) buckets closed voluntarily by rows already in the probe, and the five sub-cells left unrowed on purpose. Splitting `is_trap` into the owed floor would make those five owed and this close would fail. Pass 11 does not split it: the owed axes are device-state lvalues, and `is_trap` is the parameter of the SFRZ block.

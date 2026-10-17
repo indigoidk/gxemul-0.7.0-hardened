@@ -1972,6 +1972,26 @@ MANIFEST = {
         (CLASS_RESEARCH, "m88kexcdeliver (#502): the v20 instrument (records-only over v19), preserved as evidence"),
     "artifacts/m88kexcdeliver/m88k_exc_probe.v21.frozen.py":
         (CLASS_RESEARCH, "m88kexcdeliver (#502): the v21 instrument (the pass-12 ruling recorded in place), preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/analyze_t16.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) tables 16/16b: the red-set analyzer against the PRETABLE predictions, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/analyze_t18.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 18: the red-set analyzer against PRETABLE_18, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/analyze_t19.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) tables 19/19b: the red-set analyzer against PRETABLE_19/19b, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/m88k_exc_probe_v20.FROZEN.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) repair 13: the frozen probe v22 (named v20 there; NAMING.txt) tables 16 and the delay-slot run scored, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/m88k_exc_probe_v20final.FROZEN.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) repair 13: the committed-form probe v22 table 16b and 19b scored, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/m88k_exc_probe_v21cand.FROZEN.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the unshipped repair-14 candidate table 18 scored, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/m88k_exc_probe_v23.FROZEN.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) repair 14: the frozen probe v23 table 19 scored, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/mut17.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 17: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/mut18.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 18: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/mut19.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) tables 19 and 19b: the frozen mutant generator, preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/wdcaltoff_rung3_probe.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":

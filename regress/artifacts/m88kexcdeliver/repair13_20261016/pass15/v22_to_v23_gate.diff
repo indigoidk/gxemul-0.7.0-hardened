@@ -1,0 +1,42 @@
+diff --git a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/m88kv20/snap_v22/gate_m88k_rounding.sh b/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_m88k_rounding.sh
+index 4098ef1a..063cb14d 100644
+--- a/C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-cc-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/m88kv20/snap_v22/gate_m88k_rounding.sh
++++ b/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_m88k_rounding.sh
+@@ -326,12 +326,12 @@ fi
+ #  grew: every trap-like class stopped the machine.  With the final instrument the 7 are resid50, resid127,
+ #  resid11, resid50ind, resid50c and usfu1, whose CORRECT answer is HALT, and the pre-existing user vector 128 (usertb); sfu1h reads STOP
+ #  on HEAD because the FIRST divu halts on vector 0x008, not its own 0x072 -- probe10_head.out /
+-#  probe_v3_head.out .. probe_v11_head.out) and the DETECTOR (63 fault rows -- 59 until v22, 2026-10-16 -- + 2
++#  probe_v3_head.out .. probe_v11_head.out) and the DETECTOR (73 fault rows -- 59 until v22, 63 in v22, 2026-10-16 -- + 2
+ #  controls; kill tables killtable/, killtable2/, killtable3/, killtable4/ + killtable4b/
+ #  (M_TAILRETURN), killtable5/ (the {class} x {MODE} and {SFRZ set, non-trap} x {class} closures), killtable6/ (the fallback far bound, resid127), killtable7/ (the frozen-TRAP rows per class), killtable8/ (the fallback in user mode, usfu1), killtable10/ (the frozen ERROR trap, the near bound, the fallback PSR-bit cells, the frozen user trap, the refatal channel; table 9 was folded into it), killtable11/ (the frozen traps naming the 0x1c2, MVMEPROM and 511 labels; the ERROR-arm-frozen and MISALIGNED-C representatives; the re-route x {IND, C} cells, errind/errc), killtable12/ (the re-route TRAP side x {IND, C}: both swept 46/46 before the rows existed), killtable13/ (the six previously-sweeping mutants, all killed), killtable14/ (grok's three predicted SER sweeps -- each 54/54 on the frozen v16 instrument and killed on v17 by its own row)
+ #  under regress/artifacts/m88kexcdeliver/).  Only the detector half runs here.
+ #
+-#  The pins are NAMED so that deleting a row is visible: `M88KEXC_RESULT=63/63' pins the
++#  The pins are NAMED so that deleting a row is visible: `M88KEXC_RESULT=73/73' pins the
+ #  denominator (a row that stops running shrinks it); resid50 and sfu1h are the two rows
+ #  whose CORRECT answer is HALT -- they separate the shipped fix from a form that delivers
+ #  every vector (the rejected D4) or SFU1 (row m88kexcsfu1); vbrtb is the one ANCHORED row
+@@ -350,14 +350,18 @@ if ! grep -q "M88KEXC_DONE" "$EXCLOG"; then
+ else
+     check "m88k exc: CR parse self-test (PSR at reset == 0x80000002)" \
+           "$(grep -c 'M88KEXC_SELFTEST=OK' "$EXCLOG")" "1"
+-    check "m88k exc: 63 fault rows, all as expected (the denominator is the pin)" \
+-          "$(grep -c 'M88KEXC_RESULT=63/63' "$EXCLOG")" "1"
++    check "m88k exc: 73 fault rows, all as expected (the denominator is the pin)" \
++          "$(grep -c 'M88KEXC_RESULT=73/73' "$EXCLOG")" "1"
+     #  v22, repair 13 (2026-10-16): {class} x {delay slot}.  Before it only DIV0 faulted in a delay slot, and the
+     #  form implemented = !cpu->delay_slot at MISALIGNED/UNIMPL/PRIV/OVF swept the 59-row probe clean at all four arms
+     #  (artifacts/m88kexcdeliver/delayslot_20261016/).  BOUNDS and ERROR in a slot need a trap instruction there,
+     #  which the manual does not settle -- disclosed in the probe's contract (repair13_20261016/, table 16).
+-    check "m88k exc: a fault IN A DELAY SLOT is delivered at every class an instruction raises there (dslot 0x40, dslotmisalign 0x20, dslotunimpl 0x28, dslotpriv 0x30, dslotovf 0x48)" \
+-          "$(grep -cE '^M88KEXC_ROW=(dslot +RESULT=DELIVER +pc=0x00000040|dslotmisalign +RESULT=DELIVER +pc=0x00000020|dslotunimpl +RESULT=DELIVER +pc=0x00000028|dslotpriv +RESULT=DELIVER +pc=0x00000030|dslotovf +RESULT=DELIVER +pc=0x00000048) ' "$EXCLOG")" "5"
++    #  v23, repair 14: the delay-slot GRID, {7 labels} x {SFRZ} x {delay_slot} (table 19).  Unfrozen, all seven labels:
++    check "m88k exc: a fault IN A DELAY SLOT is delivered at all seven labels (dslot 0x40, dslotmisalign 0x20, dslotunimpl 0x28, dslotpriv 0x30, dslotovf 0x48, dslotbounds 0x38, dsloterror 0x50)" \
++          "$(grep -cE '^M88KEXC_ROW=(dslot +RESULT=DELIVER +pc=0x00000040|dslotmisalign +RESULT=DELIVER +pc=0x00000020|dslotunimpl +RESULT=DELIVER +pc=0x00000028|dslotpriv +RESULT=DELIVER +pc=0x00000030|dslotovf +RESULT=DELIVER +pc=0x00000048|dslotbounds +RESULT=DELIVER +pc=0x00000038|dsloterror +RESULT=DELIVER +pc=0x00000050) ' "$EXCLOG")" "7"
++    #  ... and FROZEN, all seven labels, plus the fallback row:
++    check "m88k exc: with SFRZ set, a slot fault is still re-routed (errdslot* at 0x50) and a slot trap still exempt (trapfrozen7dslot 0x38, trapfrozen10dslot 0x50); SFU1 in a slot still halts (usfu1dslot)" \
++          "$(grep -cE '^M88KEXC_ROW=(errdslot(misalign|ovf|div0|priv|unimpl) +RESULT=DELIVER +pc=0x00000050|trapfrozen7dslot +RESULT=DELIVER +pc=0x00000038|trapfrozen10dslot +RESULT=DELIVER +pc=0x00000050|usfu1dslot +RESULT=HALT) ' "$EXCLOG")" "8"
+     check "m88k exc: IND set by the exception path from a pre-fault PSR with IND clear (indclr)" \
+           "$(grep -cE '^M88KEXC_ROW=indclr +RESULT=DELIVER .*psr=0x8000000b .*epsr=0x80000000' "$EXCLOG")" "1"
+     check "m88k exc: user-mode MISALIGNED and OVERFLOW deliver (umisalign 0x20, uovf 0x48 -- the {class} x {MODE} closure)" \

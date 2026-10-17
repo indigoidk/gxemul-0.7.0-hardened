@@ -1,3 +1,82 @@
+# `#502` m88kexcdeliver, repairs 13 and 14 (2026-10-16): a guest fault in a branch delay slot was invisible to the detector -- the close adjudication was settled by a measurement, and the delay-slot class is rowed on its three STATE axes (probe v21 -> v23, 59 -> 73 rows); the chain stays OPEN for the fourth, is_trap
+
+**The chain did not close on the adjudication that was meant to close it.**  The 2026-10-16 four-seat close adjudication
+(`regress/artifacts/adj_20261016/m88kexcdeliver/`) split 3-1: GPT-6 Astra, Grok 4.7 and GLM 5.3 ruled CLOSE on pass 12's
+56-cell denominator; Fable 5.1 ruled DO NOT CLOSE, because that denominator omits `cpu->delay_slot`, which
+`m88k_exception()`'s delivery path TESTS.  Settled by measurement, not by the count: `implemented = !cpu->delay_slot;` at
+MISALIGNED_ACCESS, UNIMPLEMENTED_OPCODE, PRIVILEGE_VIOLATION and INTEGER_OVERFLOW each scored **59/59** on the shipped probe,
+every log byte-identical to BASE (`regress/artifacts/m88kexcdeliver/delayslot_20261016/`, a WSL scratch clone of HEAD
+7b23b785).  A guest `add` that overflows, or a misaligned load, scheduled into a `.n` slot would have stopped every guest CPU
+again -- the pre-fix symptom -- and no row would have noticed.  Graded **L2**, repaired in-round.
+
+**Repair 13 (probe v22)** added the four rows Fable named (`dslotmisalign`, `dslotunimpl`, `dslotpriv`, `dslotovf`: a `br.n
++16` immediately before the faulting word, scored like `dslot`).  **Pass 14** (`repair13_20261016/pass14/`) found the axis
+open further, and the class is wider than the arms: Fable 5.1 enumerated it as **{7 labels} x {SFRZ} x {delay_slot}, 28
+cells** -- the delivery path tests `PSR & SFRZ` and `cpu->delay_slot`, the latter at :840 and at :865, whose write `X(br_n)`
+reads to keep the exception vector over the branch target -- of which v22 rowed 19; GPT-6 Astra independently named the
+re-route's two sides, and both of its predicted mutants measured 63/63 on v22 (table 17).  Two consecutive passes, one
+class: **repair 14 (probe v23)** closes the whole grid in one diff, as the carrier's class-closure rule requires.
+
+* `regress/m88k_exc_probe.py` v23 (73 fault rows): `dslotbounds`, `dsloterror` -- a `tb1` naming 7 / 10 in a slot, the only
+  route into those labels, pinned AS THIS EMULATOR BEHAVES (the MC88100 manual does not define a trap in a slot; X(tb1) has no
+  slot guard); seven frozen rows, `errdslotmisalign`, `errdslotovf`, `errdslotdiv0`, `errdslotpriv`, `errdslotunimpl`,
+  `trapfrozen7dslot`, `trapfrozen10dslot` -- the div0 handler re-faults INSIDE a `br.n +8` slot, so a non-trap fault must
+  still re-route to ERROR and a trap must still be exempt; and `usfu1dslot`, SFU1 in a slot must still halt (the fallback
+  cell, clause (e), rowed on its measured escape).  **`br.n +8`, never +16, inside a handler**: 0x40 + 16 is the ERROR entry,
+  so a lost delivery would land on the row's own breakpoint and read DELIVER (Fable 5.1's geometry trap -- it is why the
+  table-18 candidate, which used +16, was not shipped).  Two import-time asserts guard `PSR_FRZUSER` / `PSR_FRZSUP`; the
+  shared `dslot*` scoring branch carries the `m88kdslotshadow` re-pin-first note; the name column's width is commented.
+* `regress/gate_m88k_rounding.sh`: the pin `M88KEXC_RESULT=59/59` -> `73/73`; a check that all seven unfrozen delay-slot rows
+  deliver at their entries, and one that the seven frozen ones and the fallback row behave.
+* `regress/artifacts/m88kexcdeliver/derive_cells.py` prints the delay-slot GRID from the row definitions: v21 15/28, v22
+  19/28, v23 28/28; `CELLCENSUS.out` regenerated (its v16 and v17/v18 PSR grids unchanged).
+* MEASURED, every score as predicted in a PRETABLE written before its run (`repair13_20261016/`, `ANALYSIS*.out`): table 16
+  (v22: BASE 63/63, each arm's `!cpu->delay_slot` 62/63 on its own row, BOUNDS/ERROR 63/63), 16b (the committed v22 form;
+  the disclosed joint re-route mutant reds `trapfrozensfd1` alone, 62/63), 17 (v22: the two re-route mutants and the fallback
+  mutant 63/63 each), 18 (the unshipped candidate), 19 (v23: BASE 73/73; all 23 mutants as predicted, each red on exactly
+  its predicted rows -- the seven `!cpu->delay_slot' and seven `!(delay_slot && SFRZ)' label forms, `:865' 66/73, the
+  re-route both ways, the fallback -- and the five label-conditioned frozen-trap re-routes 73/73), 19b (v22: Fable's
+  eight predicted sweeps, measured 63/63 each), and gate 11 PASS on v22 (110 checks) and on v23 (111 checks).  Table 19
+  measured the committed code: the frozen instrument (md5 1d400b64), the form gate 11 ran (e05ad051) and the committed
+  probe (ac72cab1) differ only inside the module docstring -- the code is AST-identical.
+  The PRETABLE.out append for 16b spent that file's mtime as table 16's order proof (GPT-6 Astra); `PRETABLE_ORDER.txt`
+  records its birth time, 17:59:43, before table 16's build at 18:00:57; every later table has its own PRETABLE file.
+* NAMING: HEAD's probe was already v21, so this directory's "v20" files are v22 (`repair13_20261016/NAMING.txt`).
+
+**The close adjudication's other findings, all in this commit:** GPT-6 Astra's correction of the "58/58" quoted for
+`m88ksfd1row` (it is the score of a mutant NOT caught; table 15's 57/59 had two rows red, so removal leaves 57/58), corrected
+in place in the probe, `fable_queue.md`, `OUTSTANDING_BUGS.md`, the ledger witness and this file's #502 block; Grok 4.7's stale
+census deriver; `m88ksfd1row` CLOSED, kept not owed, on a MEASURED warrant (the joint re-route mutant, table 16b) with two
+asserts for the shared-constant hazard -- no addition-licence wording, which Grok and GLM asked for on the close pass and
+withdrew on pass 14.  And the deferred cut question, answered (Fable 5.1; the other seats: moot for closure): the delivery
+path TESTS only `PSR & SFRZ`, so the PSR-bit cells other than SFRZ at all four sites are clause-(e) coverage closed
+voluntarily, and their recorded L2 grades on v16/v17/v19 came from a reads-PSR criterion out of clause (d)(2) -- which
+enumerates MUTANTS TO BUILD, not CELLS TO ROW.  The criterion this round uses, named: **a state value the delivery path
+TESTS** -- which is exactly why `delay_slot` is floor and MODE/SFD1/IND/C/SER are not.
+
+**Disclosed, clause (e):** {delay slot} x {a PSR bit other than SFRZ} (copied or ORed, never tested); the user-trap
+labels x {slot}; vectors 0..3's own delay-slot code (`m88kexcdebt`).  **Open:** the ten is_trap cells (repair 15, below).
+
+**Pass 15** (`repair13_20261016/pass15/`), the closing pass on v23, split 2-2 and does NOT close.  GPT-6 Astra and Grok 4.7:
+CLOSE -- every one of the 28 cells verified against the row definitions, no vacuous row, every credited row red under its
+mutant.  Fable 5.1 and GLM 5.3: DO NOT CLOSE.  Fable: `m88k_exception()` TESTS four inputs and v23 crossed the labels with
+three; `is_trap` (:816) is the fourth.  By the carrier's generating-set clause (an input bit the body tests is written both
+clear and set at every floor cell) and by this chain's own rows (the `*tb` and `trapfrozen<L>` rows already write is_trap
+both ways at every slot-0 cell, and the pass-5/7 `!is_trap || vector == <class>` escapes were repaired in-round), a TRAP in
+a slot at the five instruction labels is floor -- and `if (!is_trap || (vector == L && cpu->delay_slot))` swept v23 73/73
+at each of the five (table 19, measured): L2.  Grok and Astra held `is_trap` a per-raise parameter outside the floor's
+device-state axes.  Ruled by the argument, not the count: the carrier added the generating-set clause precisely because a
+bare state floor graded an input-bit escape as debt, and this chain had already repaired this very shape in-round.  GLM:
+the user-trap labels (128 and up) in a slot were neither rowed nor disclosed -- now disclosed (Fable: outside the fix's
+seven labels; their delivery predates #502).  **The chain stays OPEN**: repair 15 (probe v24 -- the ten is_trap cells, the
+grid {7 labels} x {SFRZ} x {slot} x {is_trap} = 48 reachable cells, after which the function has no untested input left) is
+in flight and is NOT in this commit; v23's contract says so.  Also from pass 15, in this commit: the contract's pointer for
+vectors 0..3 corrected to `m88kexcdebt` (Grok); the ledger now carries the close adjudication and passes 14 and 15.
+
+Seats: the four the owner named for 2026-10-16 (Fable 5.1, GPT-6 Astra, Grok 4.7, GLM 5.3) on the close adjudication and on
+passes 14 and 15; Opus, agy, kimi, deepseek and minimax DELIBERATELY NOT FIRED under that roster.  Records: this block; ledger
+rows `m88kexcdeliver`, `m88ksfd1row`, `m88kdslotshadow`; `fable_queue.md`; `OUTSTANDING_BUGS.md`.  No `src/` touched.
+
 # Probe wiring, 2026-10-16: `ip30_abort_probe.py`'s gate-wiring exemption came due on 2026-10-15 with no gate running it, and every commit in both sessions was refused -- re-dated to 2026-10-30 by a four-seat ruling, in its own commit
 
 Found by the 2026-10-16 adjudication (Fable 5.1 measured it; the records and premise-audit pre-screens found it
@@ -9304,7 +9383,9 @@ comment that lists SOME of the bits it clears reads like a complete decode and i
 `trapfrozenuser` alone.  That is exactly the discrimination the row exists to provide.
 
 **AND THE HONEST COST, stated rather than glossed:** `trapfrozensfd1` has **ZERO measured delta against its own
-enumerated mutant** -- delete it and `M_RRTRAPSFD1` is still caught, by `trapfrozenuser`, at 58/58.  Under the
+enumerated mutant** -- delete it and `M_RRTRAPSFD1` is still caught, by `trapfrozenuser`, at 57/58 [CORRECTED
+2026-10-16, GPT-6 Astra: this said "58/58", the score of a mutant NOT caught; table 15 measured 57/59 with two rows
+red, so removing one leaves 57/58 -- arithmetic, not a preserved run].  Under the
 addition licence *"it cannot hurt"* is not a warrant, so the row needs a real one: it is the SINGLE-AXIS
 discriminator, because a row varying two bits cannot say which one fired.  A future edit that opens SFD1 while
 leaving MODE closed reds `trapfrozensfd1` and nothing else.  That is the anchor rule's principle one level down.
