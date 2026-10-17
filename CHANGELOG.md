@@ -1,3 +1,9 @@
+# Records, 2026-10-17: `cxlaunchquotation` and `cxlaunchdaybreak` name their closing commit 7aa2c41f
+
+The landing commit 7aa2c41f closed the row(s) and cannot name itself; this adds it to each `commits` field: `cxlaunchquotation` (now `7aa2c41f`); `cxlaunchdaybreak` (now `7aa2c41f`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  Ledger, matrix and this block only.
+
 # `cxlaunchquotation` + `cxlaunchdaybreak` (2026-10-17): the codex launcher lands in `tools/cxlaunch.sh` -- an rc-0 run with a non-empty stdout is never scored WALLED or REFUSED for what its stderr quotes, a content-filter refusal on Astra is re-run ONCE on Daybreak, and a different model named by codex's OPENING header exits 5 (after the refusal, wall and empty-stdout checks); the controls row each listed decision's VALUES and used states, not only its defaults (v7: 289 checks, 144 mutants)
 
 **Ruled before any code** by Fable 5.1, GPT-6 Astra and Grok 4.7 (`regress/artifacts/adj_20261016/RULINGS_C_records.md`,
