@@ -1,3 +1,71 @@
+# `#502` m88kexcdeliver, repair 15 (2026-10-16): the is_trap axis -- a TRAP in a delay slot at the five instruction labels, unfrozen and frozen; the delay-slot class is now rowed on all four inputs the delivery path tests (probe v23 -> v24, 73 -> 84 rows), and pass 16 CLOSES the chain (four seats, all CLOSE)
+
+**Pass 15 (`repair13_20261016/pass15/`) split 2-2 and was ruled on Fable 5.1's argument** (recorded in the block for
+16512e9c): `m88k_exception()` TESTS four inputs -- vector, `PSR & SFRZ`, `cpu->delay_slot` and `is_trap` (:816) -- and v23
+had crossed the labels with three.  By the carrier's generating-set clause and this chain's own `*tb` / `trapfrozen<L>`
+rows, a TRAP in a slot at MISALIGN, UNIMPL, PRIV, DIV0 and OVF is floor; `if (!is_trap || (vector == L &&
+cpu->delay_slot))` had swept v23 73/73 at each of the five (table 19).
+
+* `regress/m88k_exc_probe.py` v24: `dslotmisaligntb`, `dslotunimpltb`, `dslotprivtb`, `dslotdiv0tb`, `dslotovftb` (a tb1 naming
+  the label in a `br.n +16` slot, unfrozen, else-arm shadows); `trapfrozen4dslot`, `trapfrozen5dslot`, `trapfrozen6dslot`,
+  `trapfrozen8dslot`, `trapfrozen9dslot` (the same trap frozen, in the div0 handler's slot: still exempt, frozen shadows, no
+  re-route diagnostic); and `sfu1hdslot` (SFU1 in a slot with SFRZ set still HALTs -- the fallback's last slot FAULT cell,
+  clause (e), rowed on its measured escape).  The grid is {7 labels} x {SFRZ} x {delay_slot} x {is_trap}: 56 cells, 8
+  UNREACHABLE (no non-trap raise site names 7 or 10, and the decoder has no `instr(tbnd)` although `cpu_m88k.c`'s
+  disassembler names tbnd -- a warrant that expires when X(tbnd) lands, row `m88ktbnd`), 48 reachable, all rowed; the
+  function has no fifth tested input.
+* **TABLE 20 FOUND A DEFECT IN THE REPAIR ITSELF, before any commit (L1).**  `trapfrozen9dslot` first used `br.n +8` from the
+  handler at 0x40, whose target 0x48 is the OVERFLOW entry -- the row's OWN breakpoint -- so under `:865` conditioned on the
+  frozen path it read DELIVER (73/84 where PRETABLE_20 predicted 72/84).  The pass-14 geometry trap, recurring at the one
+  label whose entry equals the +8 target; every other frozen row was checked and differs.  The row now uses `br.n +16`
+  (target 0x50; its breakpoint is 0x48); table 20b re-measured every mutant touching it, all as predicted.
+* `regress/gate_m88k_rounding.sh`: pin `M88KEXC_RESULT=84/84`; the unfrozen delay-slot check now counts 12 rows (the seven
+  fault rows and the five trap rows), the frozen check 14 (the twelve frozen slot rows and both SFU1 rows).  Gate 11 PASS on
+  the committed bytes (111 checks).
+* `derive_cells.py` prints the 4-axis grid with the unreachable cells NAMED (v21 25/48, v22 29/48, v23 38/48, v24 48/48), and
+  now carries a NAME-SET CHECK: the hand table must name exactly the probe's fault rows (84 = 84), or the census refuses to
+  print (Fable 5.1, pass 16 -- the unsafe direction is a row deleted from the probe and left in the table, which printed
+  ROWED).  Controlled 3/3 on temp copies, each failing for the reason under test (`NAMECHECK_CONTROLS.txt`).
+* MEASURED, every score as predicted in a PRETABLE written first in its own file: table 20 (v24's first draft, 38 mutants:
+  every label's `!cpu->delay_slot`, `!(delay_slot && SFRZ)` and `!(delay_slot && is_trap)` form, the SFRZ-clear `is_trap`
+  form, `:865` on the frozen path, the re-route both ways and per label, the fallback twice, and GLM 5.3's user-trap family
+  measured as DISCLOSED escapes at :816 and :840, 84/84 each) -- all as predicted except `:865`, the defect above; table 20b
+  (the corrected v24): all seven as predicted, `:865` 72/84 with all twelve frozen-slot rows red.  The kills, attributed (Fable
+  5.1 and GPT-6 Astra, pass 16): the 24 slot cells in tables 20 / 20b -- 14 under a single-cell discriminator (ARMTSU_<L>,
+  RRDS_<L>, DSFRZ_BOUNDS/ERROR), 10 under a 2-to-4-cell mutant containing the cell, their single-cell forms PREDICTED by
+  containment; the 24 slot-clear cells in killtables 5, 7, 10, 11 and 13 on the instruments of their day.
+* Disclosed, clause (e), each with its mutant and now FILED: the user-trap labels (128, 0x1c2, MVMEPROM_VECTOR, the default) x
+  {slot} -- outside the fix's seven labels, their delivery predates #502; two MEASURED 84/84 escapes -- as `m88kutrapdslot`;
+  the fallback x {slot} x {is_trap = 1} (a supervisor trap in a slot naming a residual vector or 114/115; `&& !(cpu->delay_slot
+  && is_trap)` at :799 a PREDICTED 84/84 escape) as `m88kresidtbdslot`.  Unchanged: {slot} x {MODE, SER, C, SFD1, IND}
+  (copied or ORed, never tested); vectors 0..3's own delay-slot code (`m88kexcdebt`).
+* `m88kdslotshadow`'s note: the else-arm is now pinned by TWELVE dslot* rows through the one shared scoring branch.
+
+**Pass 16** (`repair13_20261016/pass16/`, verify the enumeration): **all four seats CLOSE.**  GPT-6 Astra (ultra; launch log
+`ran: model: gpt-6-astra`) verified all 48 credits, withdrew its pass-15 D5 position, and narrowed the table-20 kill
+attribution (in the contract and above).  Grok 4.7 verified the 48 cells, the eleven rows on the +16 instrument and the
+four inputs, withdrew its pass-15 is_trap exclusion on the carrier's generating-set text, and REFUSED the first draft's
+alias of the user-trap family onto `m88kexcdebt`, whose filed scope is the post-delivery else-branch, vectors 0..3 and
+the BOUNDS expiry -- so the family has its own row.  GLM 5.3 (packet-fed; its answer opens with the Fable seat's token,
+the transport `glm-5.3:cloud` identifies it) asked for that tracker and named the no-literal-7/10 premise as not checkable
+from the packet (Fable 5.1 and Grok 4.7 verified it by grep).  Fable 5.1 (`agent_models.py`: claude-fable-5-1 throughout)
+re-checked all 48 cells against ROWS, the 81-site raise census and t20b_BASE, found none of the eleven rows vacuous, and
+carried five records items, all applied: the kill attribution, the tbnd warrant, the fallback trap-in-slot filing, the
+name-set check, and the three probe md5s -- `a035efeb` (table 20's instrument, the +8 draft; 32 of its 38 mutant scores
+transfer to v24b, table 20b re-ran the other six), `a1359e12` (table 20b's instrument = the shipped CODE), `17f1db3a`
+(the committed file: a docstring-only delta from `a1359e12`, AST-identical code).  It also corrected its own pass-15
+citation: MISALIGNED is raised at `cpu_m88k_instr_loadstore.c:172`, not `memory_m88k.c:417`.  **THE CHAIN CLOSES ON THIS
+PASS**: zero floor breaches surviving adjudication, the diff delivered (nine hunks), the roster complete under the owner's
+four-seat roster, and the zero carried with its denominator -- the 48 reachable cells above plus the clause-(e) list.
+
+The close owes the flagship's REGRESS review (regress is Fable-only, batched to the Sunday sign-off after the battery):
+it is HELD with its question in the row's `hold_question`, and `fable_queue.md`'s generated block names the row (precommit
+section I refused the first attempt at this commit until it did).
+
+Seats: Fable 5.1, GPT-6 Astra, Grok 4.7, GLM 5.3 (the owner's roster); Opus, agy, kimi, deepseek and minimax deliberately
+not fired.  Records: this block; ledger rows `m88kexcdeliver` (CLOSED), `m88kdslotshadow`, and two filed rows,
+`m88kutrapdslot` and `m88kresidtbdslot` (OUTSTANDING_BUGS.md).  No `src/` touched.
+
 # Records, 2026-10-16: the day's adjudications landed -- packets A to D committed as artifacts, seven rows filed (three HIGH) from packets C and D
 
 The owner's request of 2026-10-16 ("adjudicate any pending findings with Fable, Astra and Grok") produced four packets; their

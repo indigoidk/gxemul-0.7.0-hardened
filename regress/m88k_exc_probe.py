@@ -50,6 +50,11 @@ rather than executing zeros, `breakpoint add <8*vector>`, `continue`, then `reg`
              still re-routed to ERROR (0x50, refatal); a trap is still exempt (0x38 / 0x50, no refatal).  +8, never +16:
              0x40 + 16 is the ERROR entry, so a lost delivery would land on the row's own breakpoint      0x50/0x38/0x50
   usfu1dslot v23: SFU1 (114) raised in a delay slot still HALTs at the fallback, naming 0x072
+  dslotmisaligntb/unimpltb/privtb/div0tb/ovftb, trapfrozen4/5/6/8/9dslot   v24 (repair 15): a TRAP instruction (tb1
+             naming the label) in a slot at the five instruction labels, unfrozen (br.n +16, else-arm shadows) and frozen
+             (br.n +8 in the handler, exempt, frozen shadows -- +16 for trapfrozen9dslot, whose +8 target would be its own
+             OVERFLOW breakpoint 0x48: table 20 measured that, table 20b the fix) -- the is_trap axis  0x20/0x28/0x30/0x40/0x48
+  sfu1hdslot v24: SFU1 in a slot with SFRZ set (the frozen handler's legal divu) still HALTs, naming 0x072
   errortb    tb1  0,r3,10 (r3=1)      f003d80a  supervisor trap naming ERROR (10) directly -- the
              only route to switch 1's ERROR arm (the double-fault route enters at the re-route AFTER
              switch 1, so it cannot see that arm: M_ERRORDROP escaped the error row 9/9, table 1)  0x50
@@ -206,13 +211,25 @@ this emulator behaves: the MC88100 manual does not define a trap in a slot, and 
 CLAIM, not whether the cell is owed); the (SFRZ set, slot) column by errdslotmisalign, errdslotovf, errdslotdiv0,
 errdslotpriv, errdslotunimpl, trapfrozen7dslot and trapfrozen10dslot (line 865's write is what X(br_n) reads to keep the
 vector over the branch target); and the fallback, clause (e) but rowed on its measured escape, by usfu1dslot.  Table 19
-(artifacts/m88kexcdeliver/repair13_20261016/).  OPEN, NOT DISCLOSED -- pass 15 (Fable 5.1, GLM 5.3) overturned that filing:
-the delivery path also TESTS is_trap (:816), so a TRAP in a slot at the five instruction labels is floor (the carrier's
-generating-set clause; the chain's own *tb and trapfrozen<L> rows already write is_trap both ways at every slot-0 cell), and
-`if (!is_trap || (vector == L && cpu->delay_slot))' swept this instrument 73/73 at each of the five (table 19) -- repair
-15 owes ten rows.  Disclosed, clause (e): {delay slot} x {a PSR bit other than SFRZ} (copied or ORed, never tested); the
+(artifacts/m88kexcdeliver/repair13_20261016/).  Pass 15 (Fable 5.1, GLM 5.3) then found the fourth tested input: is_trap
+(:816).  By the carrier's generating-set clause and the chain's own *tb and trapfrozen<L> rows, a TRAP in a slot at the five
+instruction labels is floor, and `if (!is_trap || (vector == L && cpu->delay_slot))' had swept v23 73/73 at each of the five
+(table 19).  v24 (repair 15) rows them: dslot<L>tb unfrozen and trapfrozen<L>dslot frozen, so the grid is {7 labels} x
+{SFRZ} x {slot} x {is_trap} -- 56 cells, 8 unreachable (no non-trap raise site names 7 or 10, and the decoder has no
+instr(tbnd) though cpu_m88k.c's disassembler names tbnd -- a warrant that EXPIRES when X(tbnd) lands, row m88ktbnd), 48
+reachable, ALL ROWED; the function has no fifth tested input.  sfu1hdslot rows the fallback's frozen slot cell (clause
+(e)).  The 24 slot cells are each killed in table 20 / 20b: 14 under a single-cell discriminator (ARMTSU_<L>, RRDS_<L>,
+DSFRZ_BOUNDS/ERROR) and 10 under a 2-to-4-cell mutant containing the cell (DSNOT_<L> for dslot<L>, DSFRZ_<L> for
+errdslot<L>, DSNOT/ARMTS_BOUNDS/ERROR for dslotbounds/dsloterror), their single-cell forms PREDICTED by containment; the
+24 slot-clear cells were killed in killtables 5, 7, 10, 11 and 13 on the instruments of their day (Fable 5.1 and GPT-6
+Astra, pass 16).
+Disclosed, clause (e): {delay slot} x {a PSR bit other than SFRZ} (copied or ORed, never tested); the fallback x {slot} x
+{is_trap = 1} -- a supervisor trap in a slot naming a residual vector or 114/115 -- unrowed, `&& !(cpu->delay_slot &&
+is_trap)' at :799 a PREDICTED 84/84 escape (Fable 5.1, pass 16; filed as m88kresidtbdslot); the
 user-trap labels (128, 0x1c2, MVMEPROM_VECTOR, the default) x {slot}, outside the fix's seven labels -- their delivery
-predates #502 (named by GLM 5.3 on pass 15); and vectors 0..3's own delay-slot code (upstream; its coverage debt is
+predates #502 (named by GLM 5.3 on pass 15; MEASURED escapes in table 20, `!is_trap || (vector >= USER_TRAPS_START &&
+cpu->delay_slot)' at :816 and `cpu->delay_slot && vector < USER_TRAPS_START' at :840, 84/84 each; filed as
+m88kutrapdslot, pass 16); and vectors 0..3's own delay-slot code (upstream; its coverage debt is
 m88kexcdebt -- the tail arms themselves are m88kexchwtraps, a different defect; Grok 4.7, pass 15)); a trap re-routed to ERROR while frozen, per class ({SFRZ set, is_trap} x {every switch-1 label a trap can NAME -- 0..3 are deliverable too and are unrowed, disclosed as
 m88kexchwtraps; the word EVERY overclaimed until v16}: trapfrozen (7),
 trapfrozen4/5/6/8/9/10/128/450/496/511 -- the ten labels 4..10, 128, 0x1c2, MVMEPROM_VECTOR, enumerated from switch 1's `case' list, plus
@@ -394,6 +411,40 @@ ROWS = [
     #  (c) the fallback, which is clause (e) by the carrier's tests-not-reads criterion (all four pass-14 seats), rowed
     #  because its escape was measured (table 17: `&& !cpu->delay_slot' at the fallback swept v22 63/63).
     ("usfu1dslot", [STCR_R5_CR1, BR_N_PLUS16, DIVU_R6_R5_R4], {"r5": PSR_USERSFD1, "r4": 0x10}, V_SFU1, 0x1000c, PSR_USERSFD1, None),
+    #  ---- v24, repair 15 (2026-10-16): THE is_trap AXIS.  m88k_exception() tests FOUR inputs -- vector, PSR & SFRZ,
+    #  cpu->delay_slot and is_trap (:816) -- and v23 crossed the labels with the first three only, rowing a TRAP in a slot
+    #  just where the trap is the only route (7, 10).  `if (!is_trap || (vector == L && cpu->delay_slot))' then swept v23
+    #  73/73 at each of the five instruction labels (table 19) -- floor breaches, by the carrier's generating-set clause
+    #  and the chain's own *tb / trapfrozen<L> rows, which already write is_trap both ways at every slot-0 cell (Fable
+    #  5.1, pass 15, against its own pass-14 ruling).  The grid is now {7 labels} x {SFRZ} x {slot} x {is_trap}, 48
+    #  reachable cells, and the function has no fifth tested input to enumerate.
+    #  (a) a TRAP in a slot, unfrozen, at the five instruction labels (else-arm shadows, as every dslot* row):
+    ("dslotmisaligntb", [BR_N_PLUS16, TB1_0_R3_4], {"r3": 1},                    V_MISALIGN, 0x10008, PSR_RESET, None),
+    ("dslotunimpltb", [BR_N_PLUS16, TB1_0_R3_5], {"r3": 1},                      V_UNIMPL,   0x10008, PSR_RESET, None),
+    ("dslotprivtb", [BR_N_PLUS16, TB1_0_R3_6],  {"r3": 1},                       V_PRIV,     0x10008, PSR_RESET, None),
+    ("dslotdiv0tb", [BR_N_PLUS16, TB1_0_R3_8],  {"r3": 1},                       V_DIV0,     0x10008, PSR_RESET, None),
+    ("dslotovftb", [BR_N_PLUS16, TB1_0_R3_9],   {"r3": 1},                       V_OVF,      0x10008, PSR_RESET, None),
+    #  (b) a FROZEN trap in a br.n +8 slot at the same five: still exempt, delivered to its own vector, no refatal.
+    ("trapfrozen4dslot", [DIVU_R2_R3_R0],       {"r3": 0x11},                    V_MISALIGN, 0x10004, PSR_RESET,
+                 [BR_N_PLUS8, TB1_0_R3_4]),
+    ("trapfrozen5dslot", [DIVU_R2_R3_R0],       {"r3": 0x11},                    V_UNIMPL,   0x10004, PSR_RESET,
+                 [BR_N_PLUS8, TB1_0_R3_5]),
+    ("trapfrozen6dslot", [DIVU_R2_R3_R0],       {"r3": 0x11},                    V_PRIV,     0x10004, PSR_RESET,
+                 [BR_N_PLUS8, TB1_0_R3_6]),
+    ("trapfrozen8dslot", [ADD_R2_R3_R4],        {"r3": 0x7fffffff, "r4": 1},     V_DIV0,     0x10004, PSR_RESET,
+                 [BR_N_PLUS8, TB1_0_R3_8], V_OVF),            # trapfrozen8's shape: first fault OVERFLOW, handler at
+                                                              # 0x48 because the row's breakpoint is 0x40; br.n +8 from 0x48
+                                                              # targets 0x50's SELF, safe HERE since the breakpoint is 0x40
+    ("trapfrozen9dslot", [DIVU_R2_R3_R0],       {"r3": 0x11},                    V_OVF,      0x10004, PSR_RESET,
+                 [BR_N_PLUS16, TB1_0_R3_9]),                  # +16, NOT +8: from 0x40, +8 targets 0x48 -- the OVERFLOW
+                                                              # entry, THIS row's own breakpoint -- so a lost delivery read
+                                                              # DELIVER (table 20: `:865' unconditioned on the frozen path
+                                                              # left this row green, 73/84).  +16 targets 0x50's SELF,
+                                                              # safe here because this row's breakpoint is 0x48
+    #  (c) the fallback's (SFRZ set, slot) cell -- clause (e) like usfu1dslot, rowed on its measured escape: a frozen
+    #  handler's legal divu with SFD1 set, in a slot, raises SFU1 and must still HALT naming 0x072.
+    ("sfu1hdslot", [DIVU_R2_R3_R0],             {"r3": 0x10, "r5": 0x60, "r4": 0x10}, V_SFU1, 0x10004, PSR_RESET,
+                 [BR_N_PLUS8, DIVU_R6_R5_R4]),
     ("errortb",  [TB1_0_R3_10],                 {"r3": 1},                       V_ERROR,    0x10004, PSR_RESET, None),
     ("misaligntb", [TB1_0_R3_4],                {"r3": 1},                       V_MISALIGN, 0x10004, PSR_RESET, None),
     ("unimpltb", [TB1_0_R3_5],                  {"r3": 1},                       V_UNIMPL,   0x10004, PSR_RESET, None),
@@ -537,7 +588,7 @@ VBR_OF = {"vbrtb": VBR_TEST}                     # rows that relocate the vector
 #  NEGATIVE CONTROLS: rows whose CORRECT result is the fallback HALT.  They pin the boundary the diff keeps on purpose --
 #  vectors 11..113/116..127 and SFU1 (114/115) still stop the machine -- and separate the shipped D1 form from the rejected
 #  D4 (tail-default-delivers) and from delivering SFU1 (row m88kexcsfu1).  A mutant that delivers them turns these rows RED.
-EXPECT_RESULT = {"usfu1dslot": "HALT", "resid50": "HALT", "resid127": "HALT", "resid11": "HALT", "resid50ind": "HALT", "resid50c": "HALT", "resid50ser": "HALT", "sfu1h": "HALT", "usfu1": "HALT"}
+EXPECT_RESULT = {"sfu1hdslot": "HALT", "usfu1dslot": "HALT", "resid50": "HALT", "resid127": "HALT", "resid11": "HALT", "resid50ind": "HALT", "resid50c": "HALT", "resid50ser": "HALT", "sfu1h": "HALT", "usfu1": "HALT"}
 PSR_WANT = {"errc": 0x9000000b,   # v14: exception entry ORs MODE|SFRZ|IND|SFD1 and leaves C alone (mc88100 manual: "the shadow freeze,
                                   #      SFD1, and IND bits of the PSR are set"), so the C-set handler row keeps C -- table 11 BASE read
                                   #      45/46 bad=psr on this row before any mutant: a MIS-CUT ROW, not the fix (case 3)
@@ -550,7 +601,7 @@ PSR_WANT = {"errc": 0x9000000b,   # v14: exception entry ORs MODE|SFRZ|IND|SFD1 
             "errser": 0xa000000b}                # v17: the non-trap re-route with SER set -- also the MISALIGNED x SER cell
 #  indclr wants the default PSR_EXC (0x8000000b): IND was CLEAR before the fault and must be SET by the exception path;
 #  EPSR keeps the pre-fault 0x80000000.  A write that drops `| M88K_PSR_IND' leaves 0x80000009 -> bad=psr.
-EXPECT_VECTOR = {"usfu1dslot": 0x072, "resid50": 0x032, "resid127": 0x07f, "resid11": 0x00b, "resid50ind": 0x032, "resid50c": 0x032, "resid50ser": 0x032, "sfu1h": 0x072, "usfu1": 0x072}
+EXPECT_VECTOR = {"sfu1hdslot": 0x072, "usfu1dslot": 0x072, "resid50": 0x032, "resid127": 0x07f, "resid11": 0x00b, "resid50ind": 0x032, "resid50c": 0x032, "resid50ser": 0x032, "sfu1h": 0x072, "usfu1": 0x072}
 #  (the vector the fallback diagnostic must NAME for an expected-HALT row -- the comment that used to trail the dict above)
 #  refatal: the re-route prints `[ SFRZ already set in PSR => ERROR ]' (fatal() is a plain print in this fork); a re-routed non-trap row
 #  must SEE it, a frozen-trap row must NOT -- the channel that tells the exemption arm from the re-route arm when both land on 0x50
@@ -562,7 +613,9 @@ REFATAL_EXPECT = {"error": True, "errovf": True, "errdiv0": True, "errpriv": Tru
                   "trapfrozenind": False, "trapfrozenc": False, "trapfrozenser": False,
                   "trapfrozenuser": False, "trapfrozensfd1": False,
                   "errdslotmisalign": True, "errdslotovf": True, "errdslotdiv0": True, "errdslotpriv": True,
-                  "errdslotunimpl": True, "trapfrozen7dslot": False, "trapfrozen10dslot": False}   # v23   # v19: the exemption must hold with MODE and
+                  "errdslotunimpl": True, "trapfrozen7dslot": False, "trapfrozen10dslot": False,   # v23
+                  "trapfrozen4dslot": False, "trapfrozen5dslot": False, "trapfrozen6dslot": False,
+                  "trapfrozen8dslot": False, "trapfrozen9dslot": False}                             # v24   # v19: the exemption must hold with MODE and
                   #      SFD1 clear too -- and this is the CHANNEL that makes the two rows non-vacuous, because the
                   #      mutant re-routes the trap and the diagnostic then APPEARS where these expect none
 #  (v12 COPIED this dict's trailing comment up to EXPECT_VECTOR, where it belongs, and claimed to have REMOVED it here.
@@ -708,7 +761,8 @@ def run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, grace=6.0, ha
                     "trapfrozen450", "trapfrozen496", "trapfrozen511",
                     "trapfrozenind", "trapfrozenc", "trapfrozenser", "trapfrozenuser", "trapfrozensfd1",
                     "errdslotmisalign", "errdslotovf", "errdslotdiv0", "errdslotpriv", "errdslotunimpl",
-                    "trapfrozen7dslot", "trapfrozen10dslot"):
+                    "trapfrozen7dslot", "trapfrozen10dslot",
+                    "trapfrozen4dslot", "trapfrozen5dslot", "trapfrozen6dslot", "trapfrozen8dslot", "trapfrozen9dslot"):
             # the second fault runs with SFRZ set: the shadows stay FROZEN at the first fault's values.  For
             # `trapfrozen' the second fault is a TRAP, which the manual (:8633-8636, 6.10 :10613-10614) exempts from
             # the ERROR re-route: it must deliver to ITS OWN vector (0x38), shadows still frozen.  M_SFRZTRAP sends it to 0x50.

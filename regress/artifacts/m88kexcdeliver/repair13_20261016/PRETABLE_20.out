@@ -1,0 +1,35 @@
+PRETABLE 20 -- written 2026-10-16 BEFORE table 20 runs (its own file; this mtime orders table 20 alone).
+Instrument: probe v24 (m88k_exc_probe_v24.FROZEN.py, md5 a035efeb...) = v23 + repair 15, the is_trap axis (Fable 5.1, pass 15):
+m88k_exception() TESTS four inputs -- vector, PSR & SFRZ (:811), cpu->delay_slot (:840, :865) and is_trap (:816) -- so the floor
+is {7 labels} x {SFRZ} x {delay_slot} x {is_trap}: 56 cells, 8 unreachable (is_trap 0 at BOUNDS and ERROR: no non-trap raise
+site names 7 or 10 -- tcnd/tb0/tb1 are the only is_trap=1 sites and the only routes into 7/10), 48 reachable, 38 rowed by v23.
+v24 adds the 10 open cells (a TRAP in a slot at MISALIGN, UNIMPL, PRIV, DIV0, OVF -- unfrozen dslot<L>tb, frozen
+trapfrozen<L>dslot) and one clause-(e) row, sfu1hdslot (the fallback at SFRZ set in a slot).  84 fault rows.  Base HEAD 7b23b785.
+
+DISCLOSED, clause (e), measured below as escapes: the user-trap labels (128 / 0x1c2 / MVMEPROM_VECTOR / default) x {slot}
+-- outside the fix's seven labels; their delivery predates #502 (trapfrozen128/450/496/511 were voluntary closures of the
+exemption's label range); {delay slot} x {MODE, SER, C, SFD1, IND} (copied or ORed, never tested); vectors 0..3's own
+delay-slot code (upstream, m88kexchwtraps).
+
+CHANNEL per new row and the mutant it kills:
+  dslot<L>tb (five)         M_ARMTSU_<L> (`implemented = !(delay_slot && is_trap && !(PSR & SFRZ))' at L): HALT replaces DELIVER
+  trapfrozen<L>dslot (five) M_RRDS_<L> (`!is_trap || (vector == L && delay_slot)' at :816): re-routed to 0x50 -> STOP
+  sfu1hdslot                M_FBFRZDS (`&& !(delay_slot && (PSR & SFRZ))' at :799): no halt -> re-routed / delivered, not HALT
+
+PREDICTIONS (score; red set) -- L5 = the five instruction labels:
+   BASE                          84/84
+   M_RRDS_<L5>                   83/84  trapfrozen<L>dslot (STOP)
+   M_ARMTS_<L5>                  82/84  dslot<L>tb trapfrozen<L>dslot                 (`!(delay_slot && is_trap)' at L)
+   M_ARMTS_BOUNDS / _ERROR       82/84  dslotbounds trapfrozen7dslot / dsloterror trapfrozen10dslot
+   M_ARMTSU_<L5>                 83/84  dslot<L>tb
+   M_DSNOT_<L5>                  80/84  dslot<L> errdslot<L> dslot<L>tb trapfrozen<L>dslot   (DIV0's unfrozen row is `dslot')
+   M_DSNOT_BOUNDS / _ERROR       82/84  dslotbounds trapfrozen7dslot / dsloterror trapfrozen10dslot
+   M_DSFRZ_<L5>                  82/84  errdslot<L> trapfrozen<L>dslot
+   M_DSFRZ_BOUNDS / _ERROR       83/84  trapfrozen7dslot / trapfrozen10dslot
+   M_DS865                       72/84  the twelve frozen-slot rows (five errdslot*, seven trapfrozen*dslot), STOP
+   M_RRTDS                       77/84  the seven frozen slot traps (six STOP, trapfrozen10dslot BADREGS refatal)
+   M_RRNTDS                      79/84  the five errdslot*
+   M_FBDS                        82/84  usfu1dslot sfu1hdslot
+   M_FBFRZDS                     83/84  sfu1hdslot
+   M_RRUT  (`!is_trap || (vector >= USER_TRAPS_START && delay_slot)' at :816)   84/84  disclosed escape
+   M_DS840UT (`if (cpu->delay_slot && vector < USER_TRAPS_START)' at :840)       84/84  disclosed escape

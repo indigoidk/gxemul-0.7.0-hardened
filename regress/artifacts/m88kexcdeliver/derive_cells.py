@@ -83,12 +83,21 @@ FAULTS = {
  "errdslotunimpl": [("DIV0", RESET), ("UNIMPL", FRZUSER)],
  "trapfrozen7dslot": [("DIV0", RESET), ("BOUNDS", EXC)], "trapfrozen10dslot": [("DIV0", RESET), ("ERROR", EXC)],
  "usfu1dslot": [],
+ # v24 (repair 15): the is_trap axis -- a trap in a slot at the five instruction labels, unfrozen and frozen
+ "dslotmisaligntb": [("MISALIGN", RESET)], "dslotunimpltb": [("UNIMPL", RESET)], "dslotprivtb": [("PRIV", RESET)],
+ "dslotdiv0tb": [("DIV0", RESET)], "dslotovftb": [("OVF", RESET)],
+ "trapfrozen4dslot": [("DIV0", RESET), ("MISALIGN", EXC)], "trapfrozen5dslot": [("DIV0", RESET), ("UNIMPL", EXC)],
+ "trapfrozen6dslot": [("DIV0", RESET), ("PRIV", EXC)], "trapfrozen8dslot": [("OVF", RESET), ("DIV0", EXC)],
+ "trapfrozen9dslot": [("DIV0", RESET), ("OVF", EXC)],
+ "sfu1hdslot": [("DIV0", RESET)],
 }
 V16_ONLY = {"ovftbser", "resid50ser", "errser"}     # the three rows v17 ADDED
 V19_ROWS = {"trapfrozenuser", "trapfrozensfd1"}      # the two rows v19 added
 V22_ROWS = {"dslotmisalign", "dslotunimpl", "dslotpriv", "dslotovf"}   # the four rows v22 added
 V23_ROWS = {"dslotbounds", "dsloterror", "errdslotmisalign", "errdslotovf", "errdslotdiv0", "errdslotpriv",
             "errdslotunimpl", "trapfrozen7dslot", "trapfrozen10dslot", "usfu1dslot"}   # the ten rows v23 added
+V24_ROWS = {"dslotmisaligntb", "dslotunimpltb", "dslotprivtb", "dslotdiv0tb", "dslotovftb", "trapfrozen4dslot",
+            "trapfrozen5dslot", "trapfrozen6dslot", "trapfrozen8dslot", "trapfrozen9dslot", "sfu1hdslot"}   # v24, eleven
 V16_PSR = {"unimpltbc": 0x90000000, "privtbc": 0x90000000, "boundstbc": 0x90000000,
            "div0tbc": 0x90000000, "errortbc": 0x90000000}   # SUPCNOIND before v17 ORed SER in
 
@@ -102,6 +111,21 @@ def census(rows, psr_override):
                 seen.setdefault(arm, {}).setdefault(bn, set()).add(1 if (psr & bv) else 0)
     return seen
 
+# NAME-SET CHECK (Fable 5.1, pass 16): the hand table above must name exactly the probe's fault rows.  The unsafe
+# direction is a row deleted from the probe and left here, which this census would still print as ROWED.
+def _probe_fault_rows():
+    import ast, os
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "m88k_exc_probe.py")
+    mod = ast.parse(open(src, encoding="utf-8").read())
+    for node in mod.body:
+        if isinstance(node, ast.Assign) and [getattr(x, "id", None) for x in node.targets] == ["ROWS"]:
+            names = [e.elts[0].value for e in node.value.elts]
+            return set(names) - {"live", "attrib"}, len(names)
+    raise SystemExit("NAME-SET CHECK: no ROWS assignment found in " + src)
+_probe, _nrows = _probe_fault_rows()
+if _probe != set(FAULTS):
+    raise SystemExit("NAME-SET CHECK FAILED: only in the probe %s; only here %s" % (sorted(_probe - set(FAULTS)), sorted(set(FAULTS) - _probe)))
+print("NAME-SET CHECK: the hand table names exactly the probe's fault rows (%d = %d; ROWS holds %d with the two controls)" % (len(FAULTS), len(_probe), _nrows))
 ALL = [r for r in FAULTS]
 def report(title, rows, override):
     s = census(rows, override)
@@ -121,9 +145,9 @@ def report(title, rows, override):
           ", ".join("%s x %s%s" % (a, b, v) for a, b, v in openc) or "none"))
     return closed, openc
 
-report("v23 -- the SHIPPED instrument (73 fault rows)", ALL, {})
-report("v17/v18 -- history (57 fault rows)", [r for r in ALL if r not in V19_ROWS | V22_ROWS | V23_ROWS], {})
-report("v16 -- the instrument pass 9 reviewed", [r for r in ALL if r not in V16_ONLY | V19_ROWS | V22_ROWS | V23_ROWS], V16_PSR)
+report("v24 -- the SHIPPED instrument (84 fault rows)", ALL, {})
+report("v17/v18 -- history (57 fault rows)", [r for r in ALL if r not in V19_ROWS | V22_ROWS | V23_ROWS | V24_ROWS], {})
+report("v16 -- the instrument pass 9 reviewed", [r for r in ALL if r not in V16_ONLY | V19_ROWS | V22_ROWS | V23_ROWS | V24_ROWS], V16_PSR)
 
 # ---- THE OTHER TWO SITES, because a pass-10 seat (minimax) asked the right question about one of them.
 # It read `resid50ser''s description -- "the fallback, whose own blurb already claimed every settable bit on
@@ -160,46 +184,69 @@ site("SFRZ RE-ROUTE, non-trap side -- v16", RR_NONTRAP, drop=("errser",))
 site("SFRZ RE-ROUTE, trap side -- v19 onward; v22/v23 add no new PSR value here (SFRZ invariant BY CONSTRUCTION: it is the guard)", RR_TRAP)
 site("SFRZ RE-ROUTE, trap side -- v17/v18, history", RR_TRAP, drop=tuple(V19_ROWS))
 
-# ---- v22/v23: THE DELAY-SLOT AXIS, as a GRID.  m88k_exception()'s delivery path TESTS two state values: PSR & SFRZ (:811)
-# and cpu->delay_slot (:840, and :865, whose write X(br_n) reads to keep the exception vector over the branch target).
-# So the floor is {7 labels} x {SFRZ} x {delay_slot}: 28 cells (Fable 5.1, pass 14 -- its pass-13 answer had crossed
-# delay_slot with the labels at SFRZ CLEAR only, and v22 repaired exactly that slice).  A cell (label, sfrz, slot) is
-# ROWED iff some row raises that label with that SFRZ and that slot state.  Per row: its faults in order (FAULTS), the
-# second fault of every two-fault row runs FROZEN (SFRZ set), and INSLOT names which fault sits in a delay slot.
+# ---- v22-v24: THE DELAY-SLOT AXIS, as a GRID.  m88k_exception()'s delivery path TESTS four inputs: vector (the labels),
+# PSR & SFRZ (:811), cpu->delay_slot (:840, and :865, whose write X(br_n) reads to keep the exception vector over the branch
+# target) and is_trap (:816).  So the floor is {7 labels} x {SFRZ} x {delay_slot} x {is_trap}: 56 cells, 8 of them
+# UNREACHABLE -- is_trap 0 at BOUNDS and ERROR in every (SFRZ, slot) state, because tcnd/tb0/tb1 are the only is_trap=1 raise
+# sites and the only routes into 7 and 10 -- so 48 reachable (Fable 5.1, passes 14 and 15; v22 rowed the SFRZ-clear slot
+# slice, v23 the SFRZ axis, v24 the is_trap axis).  A cell (label, sfrz, slot, trap) is ROWED iff some row raises that label
+# with those values.  Per row: its faults in order (FAULTS); the second fault of every two-fault row runs FROZEN (SFRZ set);
+# INSLOT names the fault that sits in a delay slot; TRAPAT names the fault raised by a trap instruction (is_trap = 1).
 INSLOT = {"dslot": 0, "dslotmisalign": 0, "dslotunimpl": 0, "dslotpriv": 0, "dslotovf": 0,           # v22 (and dslot)
           "dslotbounds": 0, "dsloterror": 0,                                                         # v23, unfrozen trap
           "errdslotmisalign": 1, "errdslotovf": 1, "errdslotdiv0": 1, "errdslotpriv": 1,             # v23, frozen
-          "errdslotunimpl": 1, "trapfrozen7dslot": 1, "trapfrozen10dslot": 1}
+          "errdslotunimpl": 1, "trapfrozen7dslot": 1, "trapfrozen10dslot": 1,
+          "dslotmisaligntb": 0, "dslotunimpltb": 0, "dslotprivtb": 0, "dslotdiv0tb": 0, "dslotovftb": 0,   # v24
+          "trapfrozen4dslot": 1, "trapfrozen5dslot": 1, "trapfrozen6dslot": 1, "trapfrozen8dslot": 1,
+          "trapfrozen9dslot": 1}
+TRAPAT = {r: 0 for r in ("bounds", "errortb", "misaligntb", "unimpltb", "div0tb", "ovftb", "vbrtb", "privsuptb",
+                         "unimpltbc", "privtbc", "boundstbc", "div0tbc", "errortbc", "ovftbser", "dslotbounds", "dsloterror",
+                         "dslotmisaligntb", "dslotunimpltb", "dslotprivtb", "dslotdiv0tb", "dslotovftb")}
+TRAPAT.update({r: 1 for r in ("trapfrozen", "trapfrozen4", "trapfrozen5", "trapfrozen6", "trapfrozen8", "trapfrozen9",
+                              "trapfrozen10", "trapfrozenind", "trapfrozenc", "trapfrozenser", "trapfrozensfd1",
+                              "trapfrozen7dslot", "trapfrozen10dslot", "trapfrozen4dslot", "trapfrozen5dslot",
+                              "trapfrozen6dslot", "trapfrozen8dslot", "trapfrozen9dslot")})
+#  privtb is NOT here: a user-mode tb1 naming a vector below 128 raises PRIVILEGE with is_trap 0 (X(tb1)'s user filter).
+TRAP_ONLY = {"BOUNDS", "ERROR"}
 
 
 def ds_grid(title, rows):
-    cells = {}                      # (label, sfrz, slot) -> rows
+    cells = {}                      # (label, sfrz, slot, trap) -> rows
     for r in rows:
         for k, (arm, _psr) in enumerate(FAULTS.get(r, [])):
             if arm in ARMS:
-                cells.setdefault((arm, 1 if k == 1 else 0, 1 if INSLOT.get(r) == k else 0), []).append(r)
+                key = (arm, 1 if k == 1 else 0, 1 if INSLOT.get(r) == k else 0, 1 if TRAPAT.get(r) == k else 0)
+                cells.setdefault(key, []).append(r)
     print("\n=== %s  (%d rows) ===" % (title, len(rows)))
-    print("%-9s %-22s %-22s %-22s %-22s" % ("label", "(SFRZ 0, slot 0)", "(0, slot 1)", "(SFRZ 1, slot 0)", "(1, slot 1)"))
-    rowed = 0
+    cols = [(s, d, t) for s in (0, 1) for d in (0, 1) for t in (0, 1)]
+    print("%-9s %s" % ("label", " ".join("%-13s" % ("S%d D%d %s" % (s, d, "trap" if t else "fault")) for s, d, t in cols)))
+    rowed = reach = 0
     for a in ARMS:
         out = []
-        for key in ((0, 0), (0, 1), (1, 0), (1, 1)):
-            got = sorted(cells.get((a,) + key, []))
+        for (s, d, t) in cols:
+            if t == 0 and a in TRAP_ONLY:
+                out.append("%-13s" % "unreachable")
+                continue
+            reach += 1
+            got = sorted(cells.get((a, s, d, t), []))
             if got:
                 rowed += 1
-                out.append("%-22s" % ((got[0] + (" +%d" % (len(got) - 1) if len(got) > 1 else ""))[:22]))
+                out.append("%-13s" % ((got[0] + (" +%d" % (len(got) - 1) if len(got) > 1 else ""))[:13]))
             else:
-                out.append("%-22s" % "OPEN")
+                out.append("%-13s" % "OPEN")
         print("%-9s %s" % (a, " ".join(out)))
-    print("rowed %d of %d cells of {7 labels} x {SFRZ} x {delay_slot}" % (rowed, 4 * len(ARMS)))
+    print("rowed %d of %d reachable cells of {7 labels} x {SFRZ} x {delay_slot} x {is_trap} (%d unreachable: is_trap 0 at "
+          "BOUNDS/ERROR)" % (rowed, reach, 4 * len(ARMS) * 2 - reach))
 
 
-ds_grid("DELAY-SLOT GRID -- v23, the SHIPPED instrument", ALL)
-ds_grid("DELAY-SLOT GRID -- v22, history", [r for r in ALL if r not in V23_ROWS])
-ds_grid("DELAY-SLOT GRID -- v21 (HEAD: v19's 59 rows), the instrument the close adjudication reviewed",
-        [r for r in ALL if r not in V22_ROWS | V23_ROWS])
+ds_grid("DELAY-SLOT x is_trap GRID -- v24, the SHIPPED instrument", ALL)
+ds_grid("DELAY-SLOT x is_trap GRID -- v23, history", [r for r in ALL if r not in V24_ROWS])
+ds_grid("DELAY-SLOT x is_trap GRID -- v22, history", [r for r in ALL if r not in V23_ROWS | V24_ROWS])
+ds_grid("DELAY-SLOT x is_trap GRID -- v21 (HEAD before 2026-10-16: v19's 59 rows)",
+        [r for r in ALL if r not in V22_ROWS | V23_ROWS | V24_ROWS])
 
-# The fallback (:799) halts without testing anything the delivery path tests, so {fallback} x {delay slot} is clause (e)
-# by the tests-not-reads criterion; v23 rows it anyway, on its measured escape (`&& !cpu->delay_slot' at :799 swept v22).
-print("\n=== the FALLBACK x {delay slot} -- v23 ===")
-print("  %s" % ("ROWED   usfu1dslot (SFU1 in a slot still HALTs, naming 0x072)" if "usfu1dslot" in FAULTS else "open"))
+# The fallback (:799) halts without testing anything the delivery path tests, so {fallback} x {SFRZ} x {slot} is clause (e)
+# by the tests-not-reads criterion; v23/v24 row its slot cells anyway, on their measured escapes.
+print("\n=== the FALLBACK x {SFRZ} x {delay slot} -- v24 ===")
+for name, what in (("usfu1dslot", "SFRZ clear, in a slot"), ("sfu1hdslot", "SFRZ set, in a slot")):
+    print("  %-11s %s" % (name, ("ROWED  (" + what + "): SFU1 must still HALT naming 0x072") if name in FAULTS else "open"))

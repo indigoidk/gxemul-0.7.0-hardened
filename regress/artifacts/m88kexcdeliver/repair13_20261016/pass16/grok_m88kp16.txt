@@ -1,0 +1,41 @@
+I'll verify the v24 grid against the probe and `m88k_exception()`, starting from the four tested inputs, the 48 cell credits, and the carrier text that ruled D5.GROK_M88KP16_20261016
+VERDICT: CLOSE (48 reachable cells rowed and killed; the eleven new rows hold on the +16 instrument; no fifth tested input. Drop the working-tree alias of user-trap×slot onto m88kexcdebt before commit.)
+
+## Q1
+The 48 credits match the row tuples in `regress/m88k_exc_probe.py`. The 8 unreachable cells are unreachable.
+
+`is_trap = 1` is only `tcnd` (`cpu_m88k_instr.c:2529`), `tb0` (`:2551`) and `tb1` (`:2564`). A user-mode trap naming a vector below 128 raises `PRIVILEGE` with `is_trap` 0 (`:2515`, `:2546`, `:2559`). No call passes vector 7 or 10 with `is_trap` 0. `tbnd` exists only in the disassembler (`cpu_m88k.c:1649`, `:1675`); the decoder sends those encodings to `goto bad`, which halts and does not call `m88k_exception`. The `:817` rewrite to `ERROR` happens after switch 1, so that entry is the `err*` / `errdslot*` cell, already rowed. The expiry stays `m88ktbnd`.
+
+Unfrozen slot traps: `dslotmisaligntb`, `dslotunimpltb`, `dslotprivtb`, `dslotdiv0tb`, `dslotovftb` are `br.n +16` then `tb1` naming 4, 5, 6, 8, 9, with `r3 = 1` and `PSR_RESET`. Supervisor mode, so the user filter does not fire. `dslotbounds` and `dsloterror` cover 7 and 10. Frozen slot traps: `trapfrozen4/5/6dslot` take a first-fault divide by `r0` (that sets SFRZ) and a handler `[br.n +8, tb1]` at `0x40`. `trapfrozen8dslot` first-faults the overflowing `add`, handler at `0x48`, breakpoint `0x40`. `trapfrozen9dslot` uses `br.n +16` at `0x40`, breakpoint `0x48`. `privtb` is `is_trap` 0 and belongs in the fault column beside `priv`.
+
+`d26 = ((iword & 0x03ffffff) << 6) >> 4` (`cpu_m88k_instr.c:3037`), so `0xc4000002` is +8 and `0xc4000004` is +16. `X(br_n)` runs the delay slot, then keeps the exception PC only when `delay_slot & EXCEPTION_IN_DELAY_SLOT` (`:99`). `:865` is that write. Table 20b `M_DS865` shows `trapfrozen9dslot` STOP at `pc=0x50`.
+
+## Q2
+None of the eleven is vacuous on the shipped instrument.
+
+Each `dslot<L>tb` is the only red row of `M_ARMTSU_<L>` (83/84, HALT). Each `trapfrozen<L>dslot`, including `trapfrozen9dslot` on table 20b, is the only red row of `M_RRDS_<L>` (83/84, STOP). `sfu1hdslot` is the only red row of `M_FBFRZDS`: the fallback returns at `:807`, before `:811`, so a correct run HALTs naming `0x072`; skipping that halt lets `!is_trap` re-route SFU1 to ERROR and the SFU1 breakpoint misses (STOP).
+
+The +8 form of `trapfrozen9dslot` was vacuous under `M_DS865` alone (73/84 against a predicted 72/84, DELIVER at its own `0x48`). +16 closes it. In `t20b_M_DS865.out` the other frozen handlers land at `0x48`, `0x4c` or `0x50`, and none of those addresses is that row's breakpoint. `errdslotdiv0`, `errdslotpriv` and `errdslotunimpl` land at `0x4c` because `br.n` follows the `stcr`.
+
+## Q3
+The function tests four inputs. `vector` (both switches, the `< 128` tests, and `DATA_ACCESS` / `INSTRUCTION_ACCESS` at `:841`, `:844`, `:859`). `PSR & SFRZ` at `:811`, the only PSR bit masked or compared. `cpu->delay_slot` at `:840` and `:865`; `:902` re-reads the value `:865` just wrote, and only on the instruction-access arm. `is_trap` at `:816`. `update_shadow_regs` is SFRZ's local. `implemented` is switch 1's result. `ncpus` is the host loop bound on the halt and reset paths; emptying that loop fails the resid HALT rows, which require "machines stopped".
+
+No single edit sweeps inside the 48. The two measured 84/84 results are `M_RRUT` and `M_DS840UT`, and both are the identity for every vector below 128. A one-label or one-polarity edit reds the row that holds that cell (`M_ARMTSU`, `M_RRDS`, `M_RRNTDS`, `M_DSNOT`, `M_DSFRZ`, `M_DS865`).
+
+## Q4
+The three disclosures are the right class.
+
+User-trap labels × slot stay outside the fix: vector ≥ 128 never enters the `:799` fallback. `M_RRUT` and `M_DS840UT` measure the escapes at 84/84. Slot × a PSR bit other than SFRZ: the body copies PSR to EPSR and ORs `MODE|SFRZ|IND|SFD1`, and compares only SFRZ. Vectors 0..3's delay-slot arm is upstream; the probe points that arm at `m88kexcdebt` and leaves the tail arms on `m88kexchwtraps`, which matches `OUTSTANDING_BUGS.md:365-369`.
+
+One records correction before this docstring is committed. The working tree now says the user-trap family is "tracked in `m88kexcdebt`" (`m88k_exc_probe.py:225-226`). That bug's filed scope is the post-delivery `delay_slot` else-branch, vectors 0..3 unrowed, and `implemented = is_trap` at BOUNDS until `tbnd`. The user-trap family is none of those. The section-5 diff did not have the alias. Drop it, or give the family its own id.
+
+## Q5
+D5 stands. I withdraw the pass-15 parameter exclusion. The generating-set amendment in `tools/CLAUDE.md` (2026-09-04) says that at each floor cell every bit the guarded body tests is written both clear and set, because a bare state floor graded `M_ICLR` as debt while the CHANGELOG graded it L2. "Tests" means masks or compares as a case. `if (!is_trap)` is that compare. No later sentence takes a tested parameter back out. Excluding it would regrade the pass-5 `!is_trap || vector == <class>` repairs and the pass-7 `!is_trap || vector == 0x1c2` / `>= 129` repairs as voluntary clause-(e) rows. The v23 CHANGELOG records them as repaired in-round, which is the grade that clause exists to produce.
+
+D6 is disclosure. User vectors never reach the edited fallback, so rows would pin pre-#502 delivery. The measured escapes are the record. Representative rows would be voluntary, the same species as `trapfrozen128`, `trapfrozen450`, `trapfrozen496` and `trapfrozen511`.
+
+## Q6
+K1 through K8 hold on the floor. K3 accepted a disclosure; the `m88kexcdebt` alias is a later docstring edit. K5's split (delay-slot code → `m88kexcdebt`, tail arms → `m88kexchwtraps`) matches the bug file. K7's drop of the 78 is right: those re-route buckets are untested PSR-bit cells, and they are separate from the grid's (SFRZ set, slot clear) cells.
+
+## Q7
+The floor is the 48 reachable cells of {7 labels} × {SFRZ} × {delay_slot} × {is_trap}, all rowed. Tables 20 and 20b kill the 24 slot cells, the ten new trap-in-slot cells under an isolating mutant each, and `trapfrozen9dslot` under `M_DS865` once the handler is `br.n +16`. The 24 slot-clear cells were killed in the earlier tables. "Each of the 48 killed in table 20" does not survive; the working-tree contract already separates the two halves. Everything this chain enumerated outside the 48 is clause (e): a voluntary row, or a disclosure with a measured escape. `sfu1hdslot` is the fallback's frozen slot cell, clause (e), rowed because `M_FBFRZDS` swept. The probe denominator is 84 fault rows.

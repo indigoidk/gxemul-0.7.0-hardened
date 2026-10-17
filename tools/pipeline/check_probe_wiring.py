@@ -1992,6 +1992,16 @@ MANIFEST = {
         (CLASS_RESEARCH, "m88kexcdeliver (#502) table 18: the frozen mutant generator, preserved as evidence"),
     "artifacts/m88kexcdeliver/repair13_20261016/mut19.py":
         (CLASS_RESEARCH, "m88kexcdeliver (#502) tables 19 and 19b: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/analyze_t20.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 20: the red-set analyzer against PRETABLE_20, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/analyze_t20b.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 20b: the red-set analyzer against PRETABLE_20b, preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/m88k_exc_probe_v24.FROZEN.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) repair 15: the first-draft probe v24 table 20 scored (trapfrozen9dslot at +8), preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/m88k_exc_probe_v24b.FROZEN.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) repair 15: the corrected probe v24 table 20b scored (the shipped code), preserved as evidence"),
+    "artifacts/m88kexcdeliver/repair13_20261016/mut20.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) tables 20 and 20b: the frozen mutant generator, preserved as evidence"),
     "artifacts/adj_20261016/fable5/meas_B/scripts/gen_media.py":
         (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the Fable seat's media generator), preserved as evidence"),
     "artifacts/adj_20261016/fable5/meas_B/scripts/mk_indomain.py":

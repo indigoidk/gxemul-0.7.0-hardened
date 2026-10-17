@@ -24748,3 +24748,16 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
 * **`wdczerolendatain` (LOW, open)** -- dev_wdc.c: a zero-length allocation presents a DATAIN phase with DRQ set and no bytes behind it -- the presentation is established from the source; any guest or driver consequence is not
 * **`agyselfupdate` (LOW, open)** -- agy pack runner: an rc-127 'No such file' launch failure (the agy binary renamed to .old mid-pack, causation INFERRED as a self-update) is not distinguished from a seat answer, and the pre-flight `agy models' failure is reported as 'model absent', which stops the whole pack
 * **`panelshrefused` (LOW, held)** -- tools/panel.sh scores a content-filter-REFUSED codex answer as 'answered': check() greps the whole file for a verdict token and the tally counts any non-thin file -- seat_verdicts.py v3 fixes the extractor only
+
+### 2026-10-16 -- #502 repair 15 (probe v24): two rows filed from pass 16 (both clause-(e) coverage debt, LOW)
+
+* **`m88kutrapdslot` (LOW, open)** -- #502's detector: the user-trap labels (128, 0x1c2, MVMEPROM_VECTOR, the default) x
+  {delay slot} are DISCLOSED clause-(e) coverage debt -- outside the fix's seven labels, their delivery predates #502.
+  Measured escapes (table 20, `regress/artifacts/m88kexcdeliver/repair13_20261016/ANALYSIS_20.out`): `!is_trap ||
+  (vector >= USER_TRAPS_START && cpu->delay_slot)` at :816 and `cpu->delay_slot && vector < USER_TRAPS_START` at :840,
+  84/84 each.  Named by GLM 5.3 on pass 15; on pass 16 GLM 5.3 asked for a tracker and Grok 4.7 refused an alias onto
+  `m88kexcdebt`, whose filed scope is the post-delivery else-branch, vectors 0..3 and the BOUNDS expiry.
+* **`m88kresidtbdslot` (LOW, open)** -- #502's detector: the :799 fallback x {delay slot} x {is_trap = 1} cell -- a
+  supervisor trap in a slot naming a residual vector (11..113, 116..127) or 114/115 -- is unrowed.  `&& !(cpu->delay_slot
+  && is_trap)` at :799 is a PREDICTED 84/84 escape, not measured (Fable 5.1, pass 16, `pass16/fable5_m88kp16.md` section
+  4).  Pin if ever rowed: `residtbdslot` = `[BR_N_PLUS16, TB1_0_R3_50]`, r3 = 1, expected HALT naming 0x032.
