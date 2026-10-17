@@ -1,0 +1,124 @@
+def walk_name(path, name, use_ok):
+    tree = ast.parse(io.open(path, encoding="utf-8").read())
+    parent = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    probs = []
+    stores = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Store)]
+    top = [n for n in tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+           and n.targets[0].id == name]
+    if len(stores) != 1 or len(top) != 1:
+        probs.append("%d stores, %d module-level assignments" % (len(stores), len(top)))
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Del):
+            probs.append("del")
+        elif isinstance(n, (ast.Global, ast.Nonlocal)) and name in n.names:
+            probs.append("global/nonlocal")
+        elif isinstance(n, (ast.Import, ast.ImportFrom)) and any((a.asname or a.name.split(".")[0]) == name for a in n.names):
+            probs.append("import alias")
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name == name:
+            probs.append("def/class")
+        elif isinstance(n, ast.ExceptHandler) and n.name == name:
+            probs.append("except name")
+        elif isinstance(n, ast.arg) and n.arg == name:
+            probs.append("parameter")
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name == name:
+            probs.append("match name")
+        elif isinstance(n, ast.Attribute) and n.attr == name and not isinstance(n.ctx, ast.Load):
+            probs.append("attribute store")
+        elif (isinstance(n, ast.Subscript) and not isinstance(n.ctx, ast.Load) and isinstance(n.slice, ast.Constant)
+              and n.slice.value == name):
+            probs.append("subscript store keyed by the name")
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in BANNED:
+            probs.append("call to " + n.func.id)
+        #  v7: by ATTRIBUTE (`builtins.exec', `builtins.setattr', `object.__setattr__'), by an uncalled REFERENCE (`_e =
+        #  exec'), a mapping-pattern REST capture, a subscript store into a CALL or a frame's globals -- each changed the
+        #  renderer's effective D_CLASS past the v6 walk (GPT-6 Astra, GLM 5.3, Grok 4.7, Fable 5.1, v6 pass)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in BANNED_ATTR:
+            probs.append("call to ." + n.func.attr)
+        elif (isinstance(n, ast.Name) and n.id in BANNED and isinstance(n.ctx, ast.Load)
+              and not (isinstance(parent.get(n), ast.Call) and parent.get(n).func is n)):
+            probs.append("a reference to " + n.id)
+        elif isinstance(n, ast.MatchMapping) and n.rest == name:
+            probs.append("match rest")
+        elif (isinstance(n, ast.Subscript) and not isinstance(n.ctx, ast.Load)
+              and (isinstance(n.value, ast.Call) or (isinstance(n.value, ast.Attribute) and n.value.attr in DUNDER))):
+            probs.append("a subscript store into a call or a namespace")
+        elif isinstance(n, ast.Attribute) and n.attr in DUNDER:
+            probs.append(n.attr)
+        elif isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load) and not use_ok(n, parent):
+            probs.append("a use at line %d" % n.lineno)
+    #  v7: a NON-LITERAL store is refused, never crashed on -- `ast.literal_eval' raised on `tuple((...))' and the run died
+    #  before its tally, the driver scoring the kill INCOMPLETE (V19's class; Grok 4.7, GLM 5.3, Fable 5.1, v6 pass)
+    lit = None
+    if len(top) == 1:
+        try:
+            lit = ast.literal_eval(top[0].value)
+        except (ValueError, SyntaxError, TypeError):
+            probs.append("a non-literal binding")
+    uses = collections.Counter(use_ok(n, parent) for n in ast.walk(tree)
+                               if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load) and use_ok(n, parent))
+    return lit, probs, uses
+
+
+BANNED_ATTR = ("exec", "eval", "globals", "vars", "locals", "setattr", "delattr", "__import__", "__setattr__", "__delattr__")
+DUNDER = ("__dict__", "__globals__", "f_globals", "f_locals")
+
+
+def in_compare(n, parent):
+    p = parent.get(n)
+    return (isinstance(p, ast.Compare) and n in p.comparators
+            and isinstance(p.ops[p.comparators.index(n)], (ast.In, ast.NotIn)))
+
+
+#  each use returns its KIND (v7: the kinds are COUNTED -- a use site inlined with a literal is a removed use)
+def dom_use(n, parent):
+    p = parent.get(n)
+    if in_compare(n, parent):
+        return "in"
+    return "join" if (isinstance(p, ast.Call) and p.args == [n] and isinstance(p.func, ast.Attribute)
+                      and p.func.attr == "join" and isinstance(p.func.value, ast.Constant)) else None
+
+
+def dcls_use(n, parent):
+    p = parent.get(n)
+    if in_compare(n, parent):
+        return "in"
+    return "get" if (isinstance(p, ast.Attribute) and p.attr == "get" and isinstance(parent.get(p), ast.Call)
+                     and parent.get(p).func is p) else None
+
+
+dom, dprobs, duses = walk_name(CHECKER, "DOMAIN", dom_use)
+dcls, cprobs, cuses = walk_name(RENDER, "D_CLASS", dcls_use)
+#  v7: the EFFECTIVE sets, read by EXECUTING each file as __main__ on a fixture and taking its globals after the run -- any
+#  rebinding the run executes, in the module body or the main block, whatever its syntax.  v6 imported the checker, so a
+#  rebinding under `if __name__ == "__main__"' was invisible to it (GLM 5.3), and read nothing of the renderer, so
+#  `builtins.setattr' and a frame-globals store passed (Fable 5.1, v6 pass, measured).
+#  the run is a real MODULE registered as sys.modules["__main__"], as a script's is -- a bare namespace dict let
+#  `setattr(sys.modules[__name__], ...)' land on the wrapper instead of the run
+RUN_MAIN = ("import io, sys, types\npath, name = sys.argv[1], sys.argv[2]\nsys.argv = [path] + sys.argv[3:]\n"
+            "sys.path.insert(0, __import__('os').path.dirname(path))\n"
+            "mod = types.ModuleType('__main__')\nmod.__file__ = path\nsys.modules['__main__'] = mod\n"
+            "try:\n    exec(compile(io.open(path, encoding='utf-8').read(), path, 'exec'), mod.__dict__)\nexcept SystemExit:\n    pass\n"
+            "print('EFFECTIVE ' + ascii(mod.__dict__.get(name)))\n")
+
+
+def effective(path, name, ledger, *args):
+    env = dict(os.environ, GXLEDGER=ledger, PYTHONIOENCODING="utf-8")
+    env.pop("GXDOMAIN_BASELINE", None)
+    r = subprocess.run([sys.executable, "-c", RUN_MAIN, path, name] + list(args), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env)
+    last = [l for l in r.stdout.splitlines() if l.startswith("EFFECTIVE ")]
+    try:
+        return ast.literal_eval(last[-1][len("EFFECTIVE "):]) if last else None
+    except (ValueError, SyntaxError):
+        return None
+
+
+eff = effective(DEFAULT_CHECKER, "DOMAIN", LEDGER)
+effd = os.path.join(T, "eff_render")
+os.makedirs(effd, exist_ok=True)
+shutil.copy(RENDER, os.path.join(effd, "gen_dashboard.py"))
+shutil.copy(os.path.join(PIPE, "stage_tokens.py"), effd)
+effc = effective(os.path.join(effd, "gen_dashboard.py"), "D_CLASS", LEDGER, "--out", os.path.join(effd, "out.html"))
+four = ("✓", "✕", "⏸", "…")
+DCLS = {"✓": "ok", "⏸": "hold", "✕": "bad", "…": "pend"}
+say("C27 the glyph sets: one literal binding each, no named way to change it, each use counted, and BOTH files' EFFECTIVE "

@@ -1,0 +1,116 @@
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/dashokclass_20261016/staged_v3/tools/pipeline/check_entry_domain.py
++++ /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/dashokclass_20261016/staged_v4/tools/pipeline/check_entry_domain.py
+@@ -7,9 +7,9 @@
+ `d` outside the four, 1,356 of them ANSWERS (OK 439, N/A 248, y 89, dates, blank 23, NOT-FIRED ...; the latest dated
+ 2026-09-19).  Until the same commit every such answer that reached a cell rendered as a SEAT FAILURE; the renderer now shows
+ them as one residue class, "legacy -- verdict unclassified", and this check keeps answers with NEW content from appearing.
+-Ruled by Fable
+-5.1, GPT-6 Astra and Grok 4.7 (regress/artifacts/adj_20261016/RULINGS_C_records.md, F2): every mechanical sweep of the old
+-entries is withdrawn -- an OK becomes ✓ or anything else only when a reader rewrites that one entry.
++Ruled by Fable 5.1, GPT-6 Astra and Grok 4.7 (regress/artifacts/adj_20261016/RULINGS_C_records.md F2, which upheld
++packet_C_records.md's F2): every mechanical sweep of the old entries is withdrawn, and -- that packet's clause (d), upheld
++there without restatement -- an OK becomes ✓ or anything else only when a reader rewrites that one entry.
+ 
+ ASTRA'S FOUR COMPLETENESS CONDITIONS (adj_20261016/astra/C_records/codex_adjC.txt):
+   1. a MISSING `d` passes -- it renders as … (an explicit blank does NOT: it is an off-domain value);
+@@ -19,9 +19,10 @@
+ 
+ GRANDFATHERING IS A CEILING OVER SELECTED CONTENT -- NOT A DATE, AND NOT AN ENTRY IDENTITY.  An off-domain answer passes
+ only while the ledger holds no more answers with its (row, phase, seat, date, `d`, sha1 of its NOTE) than
+-`entry_domain_baseline.json` froze when this check landed, and only if it is not dated on or after CUTOFF.  So a new answer
+-fails, a back-dated or undated one fails, a copy fails, and an old one EDITED in any of those six fields fails: editing such
+-an entry means classifying it -- a glyph, or no `d` at all (it renders as …), or a non-answer record token if it is not an
++`entry_domain_baseline.json` froze when this check landed, and only if it is not dated on or after CUTOFF.  So UNMATCHED
++selected content fails and so does an EXCESS occurrence -- a new answer, a back-dated or undated one, a copy, an old one
++EDITED in any of those six fields -- while an admitted replacement, identical in all six, can be new (GPT-6 Astra, v3 pass).
++Editing such an entry means classifying it -- a glyph, or no `d` at all (it renders as …), or a non-answer record token if it is not an
+ answer.  For a NOTE-only correction that is this check's toll, not the ruling's: the ruling withdraws every mechanical sweep
+ and classifies an entry when a reader rewrites it, and says nothing of note edits (Grok 4.7, adjudication pass).  (Pass 2,
+ 2026-10-16: a per-(row, phase, seat, date, d)
+@@ -53,7 +54,8 @@
+ 
+ Usage: check_entry_domain.py          (GXLEDGER overrides the ledger path; GXDOMAIN_BASELINE the baseline's)
+ Exit: 0 clean; 1 an off-domain answer beyond the frozen ceiling (each named); 2 apparatus failure (baseline or ledger
+-unreadable or misshapen, or the baseline's md5 is not the pinned one)."""
++unreadable or misshapen -- every container level is type-checked before it is walked -- or the baseline's md5 is not the
++pinned one)."""
+ import collections, hashlib, io, json, os, re, sys
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+@@ -90,6 +92,26 @@
+     return out
+ 
+ 
++def ledger_shape(ledger):
++    #  the first structural problem, or None.  A container of the wrong type WALKS AS EMPTY and passes -- {"rows": {}} and a
++    #  string entry were rc 0 (GPT-6 Astra, v3 pass) -- so every level is checked before anything is walked
++    if not isinstance(ledger, dict):
++        return "the ledger is not an object"
++    rows = ledger.get("rows")
++    if not isinstance(rows, list):
++        return "rows is not a list"
++    for i, r in enumerate(rows):
++        if not isinstance(r, dict):
++            return "row %d is not an object" % i
++        ents = r.get("entries", [])
++        if not isinstance(ents, list):
++            return "row %r: entries is not a list" % (r.get("id"),)
++        for x in ents:
++            if not isinstance(x, dict):
++                return "row %r: an entry is not an object" % (r.get("id"),)
++    return None
++
++
+ def main():
+     #  precommit runs this with stdout on a PIPE, which Windows python opens as cp1252: a glyph or a non-ASCII `d` in the
+     #  failure lines raised UnicodeEncodeError and buried the instruction under a traceback (Fable 5.1, pass 2, measured)
+@@ -106,13 +128,19 @@
+             print("APPARATUS FAIL: %s has md5 %s, not the pinned %s -- a re-freeze is a reviewed decision: change BASELINE_MD5 "
+                   "in the same commit, with its reason" % (BASELINE, md, BASELINE_MD5)); return 2
+         base = collections.Counter()
+-        for k in json.loads(raw.decode("utf-8")):
++        rows_b = json.loads(raw.decode("utf-8"))
++        if not isinstance(rows_b, list):
++            raise ValueError("the baseline is not a list")
++        for k in rows_b:
+             if not (isinstance(k, list) and len(k) == 7 and all(isinstance(v, str) for v in k[:6]) and type(k[6]) is int
+                     and k[6] > 0):
+                 raise ValueError("baseline row %r is not [row, phase, seat, date, d, note_sha, count]" % (k,))
+             base[tuple(k[:6])] += k[6]
+     except Exception as ex:
+         print("APPARATUS FAIL: baseline unreadable or misshapen: %s (%s)" % (BASELINE, ex)); return 2
++    shape = ledger_shape(ledger)
++    if shape:
++        print("APPARATUS FAIL: ledger misshapen: %s (%s)" % (LEDGER, shape)); return 2
+     try:
+         cur = off_domain_answers(ledger)
+     except Exception as ex:      # {"rows": null}, a row that is not an object ... (GPT-6 Astra, adjudication pass)
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/dashokclass_20261016/staged_v3/tools/pipeline/gen_dashboard.py
++++ /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/dashokclass_20261016/staged_v4/tools/pipeline/gen_dashboard.py
+@@ -78,7 +78,8 @@
+ #  The fallback was `pend`, so 1,397 entries whose `d` is "OK", "N/A", a date, "y", "HELD", blank ... -- 439 of them "OK",
+ #  365 displayed cells -- all read as "no answer / seat failure".  Mapping "OK" to `ok` was REJECTED (it canonises one
+ #  off-domain spelling as approval); every mechanical sweep of the entries was withdrawn.  So an explicit `d` the map does
+-#  not know renders as ONE residue class, LEGACY, keeping its text, with the reason first in its tooltip (after a refused
++#  not know, on the ANSWER a cell shows, renders as ONE residue class, LEGACY (a live hold and a non-answer record keep their
++#  own rendering whatever their `d` -- GPT-6 Astra, v3 pass), keeping its text, with the reason first in its tooltip (after a refused
+ #  exemption's line, if any -- Fable 5.1, adjudication pass); a MISSING `d` is
+ #  still `…`, an explicit blank shows `?`.  The class says only that the `d` is unclassified -- three legacy cells (`WALL`)
+ #  record real seat failures in their notes, so the tooltip sends the reader to the note rather than denying either reading
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/dashokclass_20261016/staged_v3/tools/precommit_check.sh
++++ /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/dashokclass_20261016/staged_v4/tools/precommit_check.sh
+@@ -501,11 +501,11 @@
+ #  baseline holds.  Not a date (a date-only cutoff cannot stop a back-dated or undated addition), not a count without the
+ #  note (a converted entry's allowance could be refilled; pass 2), and NOT an entry identity: a byte-identical revert of a
+ #  normalised entry passes, and the dashboard's legacy count can still rise through exempt records and re-exposed older
+-#  answers (adjudication pass, GPT-6 Astra).  HARD.  It fails on a NEW off-domain answer and on an OLD one edited in any
+-#  of those fields: editing such an entry means classifying it -- a glyph, no `d`, or a non-answer record token (Fable
++#  answers (adjudication pass, GPT-6 Astra).  HARD.  It fails on UNMATCHED content and on an EXCESS occurrence -- a NEW
++#  off-domain answer, or an OLD one edited in any of those fields (an admitted replacement can be new; v3 pass): editing such an entry means classifying it -- a glyph, no `d`, or a non-answer record token (Fable
+ #  5.1); for a note-only correction that toll is this check's, not the ruling's (Grok 4.7).  It reds (rc 2) when the ledger
+ #  or the baseline is unreadable or misshapen or the baseline's md5 is not the pinned one, never silently green.
+-say ""; say "Q2. a ledger answer carries a d the dashboard classifies, or is a frozen legacy entry"
++say ""; say "Q2. a ledger answer carries a d the dashboard classifies, or is within the frozen legacy ceiling"
+ CED=$_HERE/pipeline/check_entry_domain.py
+ if [ ! -f "$CED" ]; then
+ 	bad "check_entry_domain.py MISSING -- the entry-domain check proved nothing"

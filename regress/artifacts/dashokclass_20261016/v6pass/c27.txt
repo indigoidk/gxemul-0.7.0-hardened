@@ -1,0 +1,66 @@
+def walk_name(path, name, use_ok):
+    tree = ast.parse(io.open(path, encoding="utf-8").read())
+    parent = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    probs = []
+    stores = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Store)]
+    top = [n for n in tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+           and n.targets[0].id == name]
+    if len(stores) != 1 or len(top) != 1:
+        probs.append("%d stores, %d module-level assignments" % (len(stores), len(top)))
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Del):
+            probs.append("del")
+        elif isinstance(n, (ast.Global, ast.Nonlocal)) and name in n.names:
+            probs.append("global/nonlocal")
+        elif isinstance(n, (ast.Import, ast.ImportFrom)) and any((a.asname or a.name.split(".")[0]) == name for a in n.names):
+            probs.append("import alias")
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name == name:
+            probs.append("def/class")
+        elif isinstance(n, ast.ExceptHandler) and n.name == name:
+            probs.append("except name")
+        elif isinstance(n, ast.arg) and n.arg == name:
+            probs.append("parameter")
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name == name:
+            probs.append("match name")
+        elif isinstance(n, ast.Attribute) and n.attr == name and not isinstance(n.ctx, ast.Load):
+            probs.append("attribute store")
+        elif (isinstance(n, ast.Subscript) and not isinstance(n.ctx, ast.Load) and isinstance(n.slice, ast.Constant)
+              and n.slice.value == name):
+            probs.append("subscript store keyed by the name")
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in BANNED:
+            probs.append("call to " + n.func.id)
+        elif isinstance(n, ast.Attribute) and n.attr in ("__dict__", "__globals__"):
+            probs.append(n.attr)
+        elif isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load) and not use_ok(n, parent):
+            probs.append("a use at line %d" % n.lineno)
+    return (ast.literal_eval(top[0].value) if len(top) == 1 else None), probs
+
+
+def in_compare(n, parent):
+    p = parent.get(n)
+    return (isinstance(p, ast.Compare) and n in p.comparators
+            and isinstance(p.ops[p.comparators.index(n)], (ast.In, ast.NotIn)))
+
+
+def dom_use(n, parent):
+    p = parent.get(n)
+    return in_compare(n, parent) or (isinstance(p, ast.Call) and p.args == [n] and isinstance(p.func, ast.Attribute)
+                                     and p.func.attr == "join" and isinstance(p.func.value, ast.Constant))
+
+
+def dcls_use(n, parent):
+    p = parent.get(n)
+    return in_compare(n, parent) or (isinstance(p, ast.Attribute) and p.attr == "get" and isinstance(parent.get(p), ast.Call)
+                                     and parent.get(p).func is p)
+
+
+dom, dprobs = walk_name(CHECKER, "DOMAIN", dom_use)
+dcls, cprobs = walk_name(RENDER, "D_CLASS", dcls_use)
+r_imp = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import check_entry_domain as c; "
+                        "print(ascii(c.DOMAIN))", os.path.dirname(DEFAULT_CHECKER)], capture_output=True, text=True)
+try:
+    eff = ast.literal_eval(r_imp.stdout.strip()) if r_imp.returncode == 0 else None
+except (ValueError, SyntaxError):
+    eff = None
+four = ("✓", "✕", "⏸", "…")
+say("C27 ONE binding each and no other way to change it: DOMAIN (and its EFFECTIVE value) and D_CLASS's keys are ✓ ✕ ⏸ …",

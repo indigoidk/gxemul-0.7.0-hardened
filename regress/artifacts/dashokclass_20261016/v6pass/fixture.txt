@@ -1,0 +1,78 @@
+SEATS = [s["id"] for s in L0["seats"]]
+EXPECT = {   # seat -> (entry fields, class, glyph)
+    "fable5": ({"d": "✓"}, "ok", "✓"),
+    "opus5": ({"d": "OK"}, "legacy", "OK"),
+    "codex": ({}, "pend", "…"),
+    "agy": ({"d": ""}, "legacy", "?"),
+    "grok": ({"d": "HELD", "note": st.HELD + " grok] waiting"}, "hold", "⏸"),
+    "kimi": ({"d": "OK", "note": st.NOTSEAT + " a main-loop record"}, "tok", "∅"),
+    "glm": ({"d": "✕"}, "bad", "✕"),
+    "deepseek": ({"d": "⏸"}, "hold", "⏸"),
+    "minimax": ({"d": "N/A"}, "legacy", "N/A"),
+}
+assert set(EXPECT) == set(SEATS), SEATS
+#  the legacy cell's WHOLE tooltip: the class line, the date, the note -- joined and escaped exactly as cell() does.  A prefix
+#  check let "(not approval, not a seat failure)" return after the checked words (GPT-6 Astra and GLM 5.3, adjudication pass)
+LEGACY_TIP = html.escape("legacy -- verdict unclassified: d = 'OK' is outside ✓ ✕ ⏸ …; read the note for the outcome"
+                         " — 2026-10-16 — a renderer control", quote=True)
+LEGEND_LINE = ('<span><span class="g" style="color:var(--muted);font-style:italic">OK</span> legacy -- verdict text outside '
+               '✓ ✕ ⏸ …, unclassified (read the note; <span class="g" style="color:var(--muted);font-style:italic">?</span> = '
+               'an explicit blank)</span>')
+REC_NOTE = st.NOTSEAT + " a record beside the answer"
+REF_A = {"phase": "research", "seat": "fable5", "date": "2026-10-16", "d": "OK", "note": st.RE_READ + " refused re-read control"}
+FX = copy.deepcopy(L0)
+ents = []
+for s in SEATS:
+    e = {"phase": "review", "seat": s, "date": "2026-10-16", "note": "a renderer control"}
+    e.update(EXPECT[s][0])
+    ents.append(e)
+FX["rows"] = [{"id": "ctlrow", "title": "renderer control row", "sev": "LOW", "state": "open", "commits": "", "entries": ents},
+              {"id": "ctlesc", "title": "escape control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": "<b>&", "note": "escape control"}]},
+              #  a whitespace-only `d` must show `?`, never an invisible glyph (0 such values in the ledger; Fable 5.1,
+              #  adjudication pass, measured `{e(d) if d else "?"}` passing every v2 control)
+              {"id": "ctlws", "title": "whitespace control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": " ", "note": "whitespace control"},
+                           #  a TAB-only d: `.strip(" ")` would keep it invisible (Grok 4.7, v3 pass)
+                           {"phase": "assess", "seat": "grok", "date": "2026-10-16", "d": "\t", "note": "tab control"},
+                           #  v5: a newline and an NBSP -- `.strip(" \t")' kept both invisible and passed all 72 v4
+                           #  controls (Fable 5.1, Grok 4.7, v4 pass)
+                           {"phase": "assess", "seat": "opus5", "date": "2026-10-16", "d": "\n", "note": "newline control"},
+                           {"phase": "assess", "seat": "codex", "date": "2026-10-16", "d": "\xa0", "note": "nbsp control"}]},
+              #  v5: an explicit null d renders legacy with the glyph None -- a renderer that treats null as missing (…) or
+              #  skips its class line passed all 72 v4 controls (Fable 5.1, Grok 4.7, GPT-6 Astra, v4 pass)
+              {"id": "ctlnull", "title": "null control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": None, "note": "null control"}]},
+              #  R1e: an ANSWER with a non-answer RECORD beside it in one cell -- deleting the record line passed every v3
+              #  control and drops the note from 32 displayed cells (GPT-6 Astra, v3 pass)
+              {"id": "ctlrec", "title": "record control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "review", "seat": "fable5", "date": "2026-10-16", "d": "OK", "note": "record control answer"},
+                           {"phase": "review", "seat": "fable5", "date": "2026-10-16", "note": REC_NOTE}]},
+              #  R1f: a legacy answer carrying a stage exemption (a re-read), refused by a LATER answer in its stage
+              #  R1h: a PADDED glyph " ✓" is outside the domain and renders legacy (the checker refuses it as off-domain);
+              #  `D_CLASS.get(str(d).strip(), ...)` would class it ok (Fable 5.1, v3 pass: caught only as a presence pin)
+              {"id": "ctlpad", "title": "padded glyph control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": " ✓", "note": "padded glyph control"},
+                           #  v6: the other end -- a renderer reading `str(d).rstrip()' would class it ok (GPT-6 Astra)
+                           {"phase": "assess", "seat": "grok", "date": "2026-10-16", "d": "✓ ", "note": "padded trailing control"}]},
+              #  v6 (R1o): a legacy answer carrying a grade, a badge and evidence -- with only a date and a note, `tip.insert(-2,
+              #  ...)' and `if cls == LEGACY and not ent.get("ev")' each passed all 96 v5 controls, while 649 and 642 of the 670
+              #  shipped legacy cells lost the class line (GPT-6 Astra, v5 pass)
+              #  v6 (R1q): a legacy answer with NO date and NO note -- its tooltip is the class line alone; `if cls == LEGACY
+              #  and tip:' would leave it empty (Fable 5.1, v5 pass: equivalent on the ledger, every off-domain answer has a note)
+              {"id": "ctlbare", "title": "bare legacy control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "assess", "seat": "fable5", "d": "BARE"}]},
+              {"id": "ctlopt", "title": "optional fields control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": "OK", "grade": "MANUAL", "b": "A",
+                            "ev": "regress/artifacts/x/ctl.txt", "note": "optional fields control"}]},
+              {"id": "ctlref", "title": "refused exemption control row", "sev": "LOW", "state": "open", "commits": "",
+               "entries": [REF_A, {"phase": "research", "seat": "grok", "date": "2026-10-17", "d": "✓", "note": "a later answer"}]}]
+#  v6 (R1w): EVERY whitespace code point alone as d, nine per row (one cell per seat) -- R1d's four were a SAMPLE of the set
+#  `str.strip()' removes, and `.strip(" \t\n\xa0")' passed all 96 v5 controls but R3's presence pin (Fable 5.1, v5 pass)
+WS = [chr(c) for c in range(0x110000) if chr(c).isspace()]
+for i in range(0, len(WS), len(SEATS)):
+    FX["rows"].append({"id": "ctlws%02d" % (i // len(SEATS)), "title": "whitespace set control row", "sev": "LOW", "state": "open",
+                       "commits": "", "entries": [{"phase": "assess", "seat": SEATS[j], "date": "2026-10-16", "d": ch,
+                                                   "note": "ws control U+%04X" % ord(ch)}
+                                                  for j, ch in enumerate(WS[i:i + len(SEATS)])]})
+fx_path = wjson("fx_render.json", FX)

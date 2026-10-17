@@ -492,6 +492,38 @@ else
 	rm -f "$_mx"
 fi
 
+#  ---- Q2 --------------------------------------------------------------------------
+#  A LEDGER ANSWER CARRIES A `d` THE DASHBOARD CLASSIFIES, OR IS WITHIN THE FROZEN LEGACY CEILING.  2026-10-16, ledger `dashokclass`
+#  (ruled by Fable 5.1, GPT-6 Astra and Grok 4.7, regress/artifacts/adj_20261016/RULINGS_C_records.md F2).
+#  gen_dashboard.py maps four glyphs; 1,397 entries carried a `d` outside them ("OK" 439 of them) and all that reached a
+#  cell rendered as SEAT FAILURES.  The renderer now shows them as one LEGACY class; this section holds the off-domain
+#  ANSWERS to a CEILING frozen at landing: for each row, phase, seat, date, d and note, no more answers than the md5-pinned
+#  baseline holds.  Not a date (a date-only cutoff cannot stop a back-dated or undated addition), not a count without the
+#  note (a converted entry's allowance could be refilled; pass 2), and NOT an entry identity: a byte-identical revert of a
+#  normalised entry passes, and the dashboard's legacy count can still rise through exempt records and re-exposed older
+#  answers (adjudication pass, GPT-6 Astra).  HARD.  It fails on UNMATCHED content and on an EXCESS occurrence -- a NEW
+#  off-domain answer, or an OLD one edited in any of those fields (an admitted replacement can be new; v3 pass): editing such an entry means classifying it -- a glyph, no `d`, or a non-answer record token (Fable
+#  5.1); for a note-only correction that toll is this check's, not the ruling's (Grok 4.7).  It reds (rc 2) when the ledger
+#  or the baseline is unreadable or misshapen or the baseline's md5 is not the pinned one, never silently green.
+say ""; say "Q2. a ledger answer carries a d the dashboard classifies, or is within the frozen legacy ceiling"
+CED=$_HERE/pipeline/check_entry_domain.py
+if [ ! -f "$CED" ]; then
+	bad "check_entry_domain.py MISSING -- the entry-domain check proved nothing"
+else
+	#  the overrides are for the controls, never for a commit: an exported GXDOMAIN_BASELINE would swap in another baseline
+	#  and skip the md5 pin (Grok 4.7, pass 2), and an exported GXLEDGER would check another ledger (adjudication pass), so
+	#  the section checks the real ledger against the pinned baseline
+	_ced=$(env -u GXDOMAIN_BASELINE -u GXLEDGER python "$CED" 2>&1); _cedrc=$?
+	if [ $_cedrc -eq 0 ]; then
+		good "$(printf '%s\n' "$_ced" | head -1)"
+	elif [ $_cedrc -eq 1 ]; then
+		bad "an off-domain ledger answer is beyond the frozen legacy ceiling (a new one, a copy, or an old one edited):"
+		printf '%s\n' "$_ced" | sed 's/^/          /'
+	else
+		bad "check_entry_domain.py could not run (rc $_cedrc): $(printf '%s\n' "$_ced" | head -1)"
+	fi
+fi
+
 #  ---- R ---------------------------------------------------------------------------
 #  A COMMITTED DETECTOR THAT NO GATE RUNS DEFENDS NOTHING BETWEEN BATTERIES.
 #

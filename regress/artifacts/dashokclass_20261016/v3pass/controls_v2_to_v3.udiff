@@ -1,0 +1,299 @@
+--- run_controls_v2.py
++++ run_controls_v3.py
+@@ -1,13 +1,15 @@
+ #!/usr/bin/env python3
+-"""Controls for `dashokclass` (2026-10-16, v2 after the four-seat pass 2): gen_dashboard.py's LEGACY class, check_entry_domain.py
+-(identity-keyed, md5-pinned baseline) and its precommit section Q2.  Everything runs on temp copies and fixture ledgers;
+-nothing in the tree is written.  Exit 0 only if every control holds.  CTL_CHECKER / CTL_RENDER / CTL_PRECOMMIT override the
+-three files under test (run_mutants.py uses them); the defaults are the tree's.
++"""Controls for `dashokclass` (2026-10-16, v3 after the four-seat adjudication pass): gen_dashboard.py's LEGACY class,
++check_entry_domain.py (a ceiling over selected content, md5-pinned baseline) and its precommit section Q2.  Everything runs on
++temp copies and fixture ledgers; nothing in the tree is written.  Exit 0 only if every control holds.  CTL_CHECKER /
++CTL_RENDER / CTL_PRECOMMIT override the three files under test (run_mutants_v3.py and the staged runs use them); the defaults
++are the tree's.
+ 
+-  CHECKER (Astra's four conditions, the ruling's grandfathering amendment, and pass 2's findings):
+-    C1   shipped ledger, shipped baseline (the md5 pin is checked on the default path)             -> 0, all frozen
++  CHECKER (Astra's four conditions, the ruling's grandfathering amendment, pass 2's and the adjudication pass's findings):
++    C1   shipped ledger, shipped baseline (the md5 pin is checked on the default path)             -> 0, all within the ceiling
+     C2   an answer ON the cutoff with a valid glyph (positive)                                      -> 0
+     C2b  an answer AFTER the cutoff with a valid glyph (positive)                                   -> 0
++    C2c  / C2d  an answer after the cutoff with ⏸ / with … (positive, one row per glyph)            -> 0 / 0
+     C3   an answer ON the cutoff with "OK" (inclusive)                                              -> 1
+     C4   an answer AFTER the cutoff with "OK"                                                       -> 1
+     C5   a new answer dated BEFORE the cutoff with "OK" (back-dated)                                -> 1
+@@ -24,25 +26,35 @@
+          date, d) with another note -- the per-tuple count let this through on pass 2                -> 1
+     C16  a frozen entry's NOTE edited, its d left off-domain (editing means normalising)            -> 1
+     C17  a misshapen baseline (override; counts as strings)                                         -> 2
++    C17b a key SPLIT across two baseline rows (override) must sum -- the loader once kept the last  -> 0
+     C18  the md5 PIN: a temp copy of the pipeline with one baseline line changed -> 2; unchanged -> 0
+-    C19  malformed dates on new answers: "10/18/2026" and a number -- rc 1, never a traceback         -> 1 / 1
++    C18b the same baseline with CRLF line endings (a fresh clone under core.autocrlf=true) passes the pin -> 0
++    C19  malformed dates on new answers: "10/18/2026" and a number -- rc 1, never a traceback, and the
++         output NAMES the date as not ISO                                                         -> 1 / 1
+     C20  a new answer whose d is non-ASCII, under the precommit's cp1252 pipe -- rc 1, no traceback   -> 1
++    C21  misshapen LEDGERS -- {"rows": null}, a row that is not an object, a list -- rc 2, no traceback -> 2 / 2 / 2
++    C22  a frozen entry's `ev` edited -- outside the six fields (positive)                          -> 0
+   RENDERER:
+     R1   a fixture row, one entry per seat: class AND glyph per cell (the record cell's glyph included), and the
+-         legacy cell's tooltip opens with the unclassified wording
++         legacy cell's tooltip EXACTLY (the whole string, not a prefix)
+     R1b  an escapable `d` ("<b>&") renders escaped
++    R1c  the fixture page says neither "not approval" nor "not a seat failure" anywhere
++    R1d  a whitespace-only `d` (" ") shows `?`
+     R2   the shipped ledger, BEFORE vs AFTER: only pend -> legacy moves; the strip's five numbers sum to the ledger's
+          actual entry count, and its legacy number is the ledger's own count of explicit off-domain `d`
+-    R4   the legend carries the legacy line
++    R4   the legend carries the legacy line EXACTLY
+     R3   MUTANT renderers (fallback -> ok, -> pend; the escape dropped) must RENDER and then fail R1 / R1b -- a crash
+          is not a kill
+-  WIRING (section Q2, extracted from precommit_check.sh and run with reporters that COUNT failures):
++  WIRING (section Q2, extracted from precommit_check.sh and run with reporters that COUNT failures -- stand-ins for the
++  production good/bad and its final exit, which are correct by inspection and not executed here; each first line must also
++  carry its BRANCH's own words):
+     W1   the shipped ledger                    -> GOOD, failures 0
+-    W2   a new off-domain answer               -> BAD, failures >= 1
+-    W3   the baseline absent (rc 2 path)       -> BAD, failures >= 1
++    W2   a new off-domain answer               -> BAD "beyond the frozen legacy ceiling", failures >= 1
++    W3   the baseline absent (rc 2 path)       -> BAD "could not run (rc 2)", failures >= 1
+     W4   an exported GXDOMAIN_BASELINE that would admit a new entry is IGNORED -> BAD, failures >= 1
++    W5   an exported GXLEDGER naming a CLEAN ledger is IGNORED; the bad default ledger is read -> BAD, failures >= 1
+ """
+-import collections, copy, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile
++import collections, copy, hashlib, html, io, json, os, re, shutil, subprocess, sys, tempfile
+ 
+ if hasattr(sys.stdout, "reconfigure"):          # this file prints glyphs (R2's strip); run it anywhere, piped or not
+     sys.stdout.reconfigure(encoding="utf-8")
+@@ -54,7 +66,11 @@
+ RENDER = os.environ.get("CTL_RENDER") or os.path.join(PIPE, "gen_dashboard.py")
+ PRE = os.environ.get("CTL_PRECOMMIT") or os.path.join(REPO, "tools", "precommit_check.sh")
+ BEFORE = os.path.join(HERE, "gen_dashboard_before.py")      # HEAD's renderer at the landing, preserved
+-BASELINE = os.path.join(PIPE, "entry_domain_baseline.json")
++#  the baseline travels WITH the checker under test: staged runs keep it beside the staged checker, and on the tree the two
++#  directories are the same
++BASELINE = os.path.join(os.path.dirname(os.path.abspath(CHECKER)), "entry_domain_baseline.json")
++if not os.path.exists(BASELINE):
++    BASELINE = os.path.join(PIPE, "entry_domain_baseline.json")
+ LEDGER = os.path.join(PIPE, "ledger.json")
+ sys.path.insert(0, PIPE)
+ import stage_tokens as st  # noqa: E402
+@@ -130,16 +146,21 @@
+             str(e["d"]), hashlib.sha1(str(e.get("note") or "").encode("utf-8")).hexdigest()[:16]]
+ 
+ 
+-print("# dashokclass controls (v2) -- checker %s | renderer %s | precommit %s"
++print("# dashokclass controls (v3) -- checker %s | renderer %s | precommit %s | baseline %s"
+       % (hashlib.md5(open(CHECKER, "rb").read()).hexdigest()[:8], hashlib.md5(open(RENDER, "rb").read()).hexdigest()[:8],
+-         hashlib.md5(open(PRE, "rb").read()).hexdigest()[:8]))
++         hashlib.md5(open(PRE, "rb").read()).hexdigest()[:8], hashlib.md5(open(BASELINE, "rb").read()).hexdigest()[:8]))
+ # ------------------------------------------------------------------ the checker
+ rc, out = run_checker(LEDGER)
+ first = out[0] if out else ""
+-say("C1 shipped ledger, shipped baseline, md5 pin live", rc == 0 and ("%d frozen" % N_OFF) in first, "rc %d: %s" % (rc, first))
++say("C1 shipped ledger, shipped baseline, md5 pin live", rc == 0 and ("%d within the frozen ceiling" % N_OFF) in first,
++    "rc %d: %s" % (rc, first))
+ for lab, ent, want in [
+     ("C2 ON the cutoff, a valid glyph (positive)", ans("2026-10-17", d="✓"), 0),
+     ("C2b AFTER the cutoff, a valid glyph (positive)", ans("2026-10-18", d="✕"), 0),
++    #  ⏸ and … were positive-pinned only INCIDENTALLY, by the shipped ledger's own 21 and 35 such answers (Fable 5.1,
++    #  adjudication pass): one direct row each
++    ("C2c AFTER the cutoff, d ⏸ (positive)", ans("2026-10-18", d="⏸"), 0),
++    ("C2d AFTER the cutoff, d … (positive)", ans("2026-10-18", d="…"), 0),
+     ("C3 ON the cutoff, d OK (inclusive)", ans("2026-10-17", d="OK"), 1),
+     ("C4 AFTER the cutoff, d OK", ans("2026-10-18", d="OK"), 1),
+     ("C5 a new answer BEFORE the cutoff, d OK (back-dated)", ans("2026-09-01", d="OK", seat="minimax"), 1),
+@@ -153,8 +174,12 @@
+ ]:
+     rc, out = run_checker(with_entries([(ROW0, ent)]))
+     tb = any("Traceback" in l for l in out)
+-    say(lab, rc == want and not tb, "rc %d (want %d)%s" % (rc, want, " TRACEBACK" if tb else ""))
+-# a frozen entry, found from the shipped baseline: copied (C9), rewritten (C10), refilled (C15), note-edited (C16)
++    #  a malformed date must be NAMED in the reason, not only refused: v1's lexical `t[3] >= CUTOFF` and a deleted suffix each
++    #  passed every v2 control while calling a numeric date "on or after the cutoff" (Fable 5.1, adjudication pass)
++    why = (not lab.startswith("C19")) or any("its date is not ISO" in l for l in out)
++    say(lab, rc == want and not tb and why, "rc %d (want %d)%s%s" % (rc, want, " TRACEBACK" if tb else "",
++                                                                    "" if why else " REASON NOT NAMED"))
++# a frozen entry, found from the shipped baseline: copied (C9), rewritten (C10), refilled (C15), note-edited (C16), ev-edited (C22)
+ base = [json.loads(l.rstrip(",\n")) for l in io.open(BASELINE, encoding="utf-8") if l.startswith("[\"")]
+ k0 = base[0]
+ 
+@@ -181,6 +206,9 @@
+ L2 = copy.deepcopy(L0); f = find_frozen(L2); f["note"] = (f.get("note") or "") + " (a later correction)"
+ rc, out = run_checker(wjson("l_noteedit.json", L2))
+ say("C16 a frozen entry's note edited, d left off-domain", rc == 1, "rc %d" % rc)
++L3 = copy.deepcopy(L0); f = find_frozen(L3); f["ev"] = (f.get("ev") or "") + " (a corrected path)"
++rc, out = run_checker(wjson("l_evedit.json", L3))
++say("C22 a frozen entry's ev edited, outside the six fields (positive)", rc == 0, "rc %d" % rc)
+ rc, out = run_checker(LEDGER, wjson("b_empty.json", []))
+ nb = sum(1 for l in out if "OFF-DOMAIN ANSWER" in l)
+ say("C11 baseline emptied: every shipped off-domain answer named", rc == 1 and nb == N_OFF, "rc %d, %d of %d named" % (rc, nb, N_OFF))
+@@ -194,6 +222,12 @@
+ say("C13 an unreadable baseline", rc == 2, "rc %d" % rc)
+ rc, out = run_checker(LEDGER, wjson("b_shape.json", [k[:6] + [str(k[6])] for k in base]))
+ say("C17 a misshapen baseline (counts as strings)", rc == 2, "rc %d" % rc)
++#  C17b: one key of count >= 2 split into two rows; the sum must hold (pass 2 fixed last-wins; the adjudication pass found
++#  nothing pinned the sum -- GPT-6 Astra and GLM 5.3)
++k2 = next(k for k in base if k[6] >= 2)
++split = [k for k in base if k is not k2] + [k2[:6] + [1], k2[:6] + [k2[6] - 1]]
++rc, out = run_checker(LEDGER, wjson("b_split.json", split))
++say("C17b a key split across two baseline rows sums (%s %s %s %s %r x%d)" % (tuple(k2[:5]) + (k2[6],)), rc == 0, "rc %d" % rc)
+ txt = io.open(BASELINE, encoding="utf-8").read()
+ lines = txt.split("\n")
+ lines[1] = lines[1].replace('"y"', '"Y"', 1) if '"y"' in lines[1] else lines[1].replace(", 1]", ", 2]", 1)
+@@ -201,6 +235,16 @@
+ rc_same, _ = run_checker(LEDGER, checker=pipe_copy("md5same", txt))
+ say("C18 md5 pin: one baseline line changed -> 2, unchanged -> 0", rc_mod == 2 and rc_same == 0,
+     "changed rc %d, unchanged rc %d" % (rc_mod, rc_same))
++#  C18b: the same bytes checked out with CRLF -- what a fresh clone under core.autocrlf=true writes (measured 06a3ffc6 ->
++#  89d1d370 raw at the adjudication pass) -- must pass the pin, which folds line endings
++rc_crlf, _ = run_checker(LEDGER, checker=pipe_copy("md5crlf", txt.replace("\n", "\r\n")))
++say("C18b md5 pin: the baseline checked out with CRLF line endings -> 0", rc_crlf == 0, "rc %d" % rc_crlf)
++for lab, obj in (('C21a a misshapen ledger: {"rows": null}', {"rows": None}),
++                 ("C21b a misshapen ledger: a row that is not an object", {"rows": [42]}),
++                 ("C21c a misshapen ledger: a list, not an object", [])):
++    rc, out = run_checker(wjson("l_shape_%d.json" % len(res), obj))
++    tb = any("Traceback" in l for l in out)
++    say(lab, rc == 2 and not tb, "rc %d%s" % (rc, " TRACEBACK" if tb else ""))
+ 
+ # ------------------------------------------------------------------ the renderer
+ SEATS = [s["id"] for s in L0["seats"]]
+@@ -216,6 +260,13 @@
+     "minimax": ({"d": "N/A"}, "legacy", "N/A"),
+ }
+ assert set(EXPECT) == set(SEATS), SEATS
++#  the legacy cell's WHOLE tooltip: the class line, the date, the note -- joined and escaped exactly as cell() does.  A prefix
++#  check let "(not approval, not a seat failure)" return after the checked words (GPT-6 Astra and GLM 5.3, adjudication pass)
++LEGACY_TIP = html.escape("legacy -- verdict unclassified: d = 'OK' is outside ✓ ✕ ⏸ …; read the note for the outcome"
++                         " — 2026-10-16 — a renderer control", quote=True)
++LEGEND_LINE = ('<span><span class="g" style="color:var(--muted);font-style:italic">OK</span> legacy -- verdict text outside '
++               '✓ ✕ ⏸ …, unclassified (read the note; <span class="g" style="color:var(--muted);font-style:italic">?</span> = '
++               'an explicit blank)</span>')
+ FX = copy.deepcopy(L0)
+ ents = []
+ for s in SEATS:
+@@ -224,7 +275,11 @@
+     ents.append(e)
+ FX["rows"] = [{"id": "ctlrow", "title": "renderer control row", "sev": "LOW", "state": "open", "commits": "", "entries": ents},
+               {"id": "ctlesc", "title": "escape control row", "sev": "LOW", "state": "open", "commits": "",
+-               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": "<b>&", "note": "escape control"}]}]
++               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": "<b>&", "note": "escape control"}]},
++              #  a whitespace-only `d` must show `?`, never an invisible glyph (0 such values in the ledger; Fable 5.1,
++              #  adjudication pass, measured `{e(d) if d else "?"}` passing every v2 control)
++              {"id": "ctlws", "title": "whitespace control row", "sev": "LOW", "state": "open", "commits": "",
++               "entries": [{"phase": "assess", "seat": "fable5", "date": "2026-10-16", "d": " ", "note": "whitespace control"}]}]
+ fx_path = wjson("fx_render.json", FX)
+ 
+ 
+@@ -240,9 +295,9 @@
+     return io.open(out, encoding="utf-8").read() if r.returncode == 0 and os.path.exists(out) else None
+ 
+ 
+-def cells(html):
++def cells(html_text):
+     got = []
+-    for m in re.finditer(r'<td class="c ([a-z]+)">(.*?)</td>', html, re.S):
++    for m in re.finditer(r'<td class="c ([a-z]+)">(.*?)</td>', html_text, re.S):
+         if m.group(1) == "none":
+             continue
+         g = re.search(r'<span class="g">(.*?)</span>', m.group(2))
+@@ -251,37 +306,51 @@
+     return got
+ 
+ 
+-def r1(html):
+-    if html is None:
++def r1(html_text):
++    if html_text is None:
+         return False, "render FAILED (a crash is not a kill)"
+-    got = [c for c in cells(html) if "escape control" not in c[2]]     # the control row's nine cells, in seat order
++    got = [c for c in cells(html_text) if "escape control" not in c[2] and "whitespace control" not in c[2]]   # nine, in seat order
+     want = [(EXPECT[s][1], EXPECT[s][2]) for s in SEATS]
+     head = got[:len(want)]
+     bad = [(s, g[:2], w) for s, g, w in zip(SEATS, head, want) if (g[0], g[1]) != w]
+     legacy_tip = head[SEATS.index("opus5")][2] if len(head) == len(want) else ""
+-    tip_ok = legacy_tip.startswith("legacy -- verdict unclassified: d = &#x27;OK&#x27; is outside")
+-    return (len(head) == len(want) and not bad and tip_ok), ("%d cells; mismatches %s; legacy tip %s" % (len(head), bad[:3], "ok" if tip_ok else "WRONG"))
++    tip_ok = legacy_tip == LEGACY_TIP
++    return (len(head) == len(want) and not bad and tip_ok), ("%d cells; mismatches %s; legacy tip %s" % (
++        len(head), bad[:3], "exact" if tip_ok else "WRONG: %r" % legacy_tip[:120]))
+ 
+ 
+-def r1b(html):
+-    if html is None:
++def r1b(html_text):
++    if html_text is None:
+         return False, "render FAILED (a crash is not a kill)"
+-    got = [c for c in cells(html) if "escape control" in c[2]]
++    got = [c for c in cells(html_text) if "escape control" in c[2]]
+     esc = got[0] if got else ("", "", "")
+     return (esc[0] == "legacy" and esc[1] == "&lt;b&gt;&amp;"), "escape cell %r" % (esc[:2],)
+ 
+ 
++def r1d(html_text):
++    if html_text is None:
++        return False, "render FAILED (a crash is not a kill)"
++    got = [c for c in cells(html_text) if "whitespace control" in c[2]]
++    ws = got[0] if got else ("", "", "")
++    return (ws[0] == "legacy" and ws[1] == "?"), "whitespace cell %r" % (ws[:2],)
++
++
+ ha_fx = render(RENDER, fx_path, "after")
+-ok, det = r1(ha_fx); say("R1 fixture row: class, glyph and legacy tooltip per seat", ok, det)
++ok, det = r1(ha_fx); say("R1 fixture row: class, glyph and the legacy tooltip EXACTLY, per seat", ok, det)
+ ok, det = r1b(ha_fx); say("R1b an escapable d renders escaped", ok, det)
++ok, det = r1d(ha_fx); say("R1d a whitespace-only d shows ?", ok, det)
++low = (ha_fx or "").lower()
++hits = [p for p in ("not approval", "not a seat failure") if p in low]
++say("R1c the fixture page says neither 'not approval' nor 'not a seat failure'", ha_fx is not None and not hits,
++    "render %s; found %s" % ("ok" if ha_fx is not None else "FAILED", hits or "none"))
+ leg = re.search(r'<div class="legend">(.*?)</div>', ha_fx or "", re.S)
+-say("R4 the legend carries the legacy line", bool(leg) and "legacy -- verdict text outside" in leg.group(1),
++say("R4 the legend carries the legacy line EXACTLY", bool(leg) and LEGEND_LINE in leg.group(1),
+     "legend %s" % ("found" if leg else "MISSING"))
+ 
+ 
+-def census(html):
+-    c = collections.Counter(m.group(1) for m in re.finditer(r'<td class="c ([a-z]+)"', html))
+-    s = re.search(r'<span class="k">entries</span><b>([^<]*)</b>', html).group(1)
++def census(html_text):
++    c = collections.Counter(m.group(1) for m in re.finditer(r'<td class="c ([a-z]+)"', html_text))
++    s = re.search(r'<span class="k">entries</span><b>([^<]*)</b>', html_text).group(1)
+     return c, s
+ 
+ 
+@@ -341,12 +410,20 @@
+     new_led = with_entries([(ROW0, ans("2026-10-10", d="OK", seat="deepseek", note="W new off-domain"))])
+     permissive = wjson("b_permissive.json", base + [ident(ROW0, ans("2026-10-10", d="OK", seat="deepseek",
+                                                                       note="W new off-domain")) + [1]])
+-    for lab, tools, envx, want, wantf in (
+-            ("W1 Q2 on the shipped ledger", w_tools("1", LEDGER), {}, "GOOD", 0),
+-            ("W2 Q2 with a new off-domain answer", w_tools("2", new_led), {}, "BAD", 1),
+-            ("W3 Q2 with the baseline absent (rc 2 path)", w_tools("3", LEDGER, "<absent>"), {}, "BAD", 1),
++    #  the FIRST LINE names which branch fired: W2 the rc-1 refusal, W3 the rc-2 apparatus line -- `-eq 1` -> `-eq 7` and a
++    #  rewritten message each passed every v2 control, which tested only the BAD prefix and the counter (Fable 5.1,
++    #  adjudication pass)
++    for lab, tools, envx, want, wantf, msg in (
++            ("W1 Q2 on the shipped ledger", w_tools("1", LEDGER), {}, "GOOD", 0, "within the frozen ceiling"),
++            ("W2 Q2 with a new off-domain answer", w_tools("2", new_led), {}, "BAD", 1, "beyond the frozen legacy ceiling"),
++            ("W3 Q2 with the baseline absent (rc 2 path)", w_tools("3", LEDGER, "<absent>"), {}, "BAD", 1,
++             "could not run (rc 2)"),
+             ("W4 Q2 ignores an exported GXDOMAIN_BASELINE that would admit the entry", w_tools("4", new_led),
+-             {"GXDOMAIN_BASELINE": permissive}, "BAD", 1)):
++             {"GXDOMAIN_BASELINE": permissive}, "BAD", 1, "beyond the frozen legacy ceiling"),
++            #  the bad ledger is the block's DEFAULT; the exported GXLEDGER names the clean shipped one, so only the strip
++            #  decides W5 (deleting `-u GXLEDGER` passed all 35 v2 controls -- GPT-6 Astra, adjudication pass)
++            ("W5 Q2 ignores an exported GXLEDGER naming a clean ledger", w_tools("5", new_led), {"GXLEDGER": LEDGER},
++             "BAD", 1, "beyond the frozen legacy ceiling")):
+         env = dict(os.environ)
+         for k in ("GXLEDGER", "GXDOMAIN_BASELINE", "PYTHONIOENCODING", "PYTHONUTF8"):
+             env.pop(k, None)
+@@ -356,7 +433,7 @@
+         firstl = outl[0] if outl else ""
+         fl = [l for l in outl if l.startswith("FAILURES ")]
+         nf = int(fl[-1].split()[1]) if fl else -1
+-        ok = firstl.startswith(want + " ") and ((nf == 0) if wantf == 0 else (nf >= 1))
++        ok = firstl.startswith(want + " ") and msg in firstl and ((nf == 0) if wantf == 0 else (nf >= 1))
+         say(lab, ok, "%s | failures %d" % (firstl[:90], nf))
+ 
+ shutil.rmtree(T, ignore_errors=True)

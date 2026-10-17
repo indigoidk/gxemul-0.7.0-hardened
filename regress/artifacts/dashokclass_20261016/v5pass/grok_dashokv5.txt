@@ -1,0 +1,80 @@
+I will verify the v5 pins at both edges against the staged checker, renderer, and Q2 block, starting from the rest of the packet and the staged files. Nothing will be written into the project tree.The packet’s v5 claim is that every pin now holds on both edges. I will measure the staged files, the 96 controls, and the binding, whitespace, and Q2 edges the v4 pins did not see.The v4 pins were one-sided. I am checking the staged sources and measuring the edges those pins still do not cover.GROK_DASHOKV5_20261017
+VERDICT: SHIP WITH CHANGES (12)
+
+The shell was denied in this session, so I did not re-run the 96 or the 105. Every survivor below is traced from the staged sources and from `run_controls_v5.py` (READ) and then deduced (REASONED). Searches of the baseline and the ledger are marked MEASURED. The named v5 mutants are killed by the rows their lines name. Eleven one-edit mutants are outside the table and still pass every assertion those 96 rows actually make, and K19's measurement sentence is false.
+
+## 1. The dispositions
+
+I checked K1–K28 against the staged checker, the renderer diff's landing lines, Q2, and the control predicates.
+
+K1, K2's named mutant, K3–K13, K15–K18, and K20–K28 are right, and the row named for each goes red for the reason named. K14's named mutant `r_wsset` goes red on R1d (a newline-only `d` and an NBSP-only `d` stay visible). A further narrowing of `str(d).strip()` to those four characters also removes the source text R3 searches for, `{e(d) if str(d).strip() else "?"}`, so that edit is red on R3 as well. I am not counting a CR-only glyph as a green survivor.
+
+K19 is wrong. `is_answer` tests `HELD in note` (and the same for NOTSEAT, ANNOTATION, NOPANEL) on whatever `_note` returns. `_note` is `e.get("note") or ""`.
+
+- A list note is skipped when the token string is an element, and a dict note is skipped when the token string is a key. Both are rc 0.
+- A list or dict that does not hold the token is an answer. An off-domain `d` is then rc 1.
+- `None` becomes `""`, which is an answer, rc 1 when `d` is off-domain.
+- `True` raises `TypeError` inside `in`, and the walk's except-arm returns rc 2.
+- `False` is falsy, so `_note` becomes `""`, the entry is an answer, and an off-domain `d` is rc 1.
+
+"Nothing is skipped" does not hold, and "a bool is rc 2" holds for `True`.
+
+## 2. Both edges, and the decisions checked
+
+The v5 rows do kill the v4 one-edge mutants. That is not the whole of each decision. These are the eleven edits the 96 do not see. Each is one replacement, and none of them is in `run_mutants_v5.py`.
+
+1. **Exact membership, trailing end of a glyph.** C28 and R1h use a leading space, `" ✓"`. On the checker, `x["d"] in DOMAIN` changed to `str(x["d"]).rstrip() in DOMAIN` still fails C28 (`" ✓".rstrip()` is `" ✓"`), still fails C25c (the frozen `d` is `y`), and still fails C25n. MEASURED: the ledger has no `"d": "✓ "`, `"✕ "`, `"⏸ "`, or `"… "`. A new answer whose `d` is `"✓ "` is then inside the four. The same edit on the renderer's `D_CLASS.get(d, LEGACY)` line is red, because R3 requires that source text unchanged.
+
+2. **Each of the six baseline fields is a str.** C17h is a numeric field 0 and C17i is a numeric field 5. `k[:6]` changed to `k[:1] + k[2:6]` still rejects those two rows, still rejects eight fields, a bool, a negative, a zero, and a float, and accepts a numeric phase. The same hole is fields 2, 3, and 4 (seat, date, `d`).
+
+3. **The ISO shape is `YYYY-MM-DD`, not only an end anchor.** C12s kills `^...$`. `r"^\d{4}-\d{2}-\d{2}"` changed to `r"^\d{4}-\d{2}-"` still matches every control date, including `2026-10-17T12:00:00`, so C12s stays rc 1, and `10/18/2026` still misses. MEASURED on the baseline: no time suffix, no one-digit day before the closing quote, and no full `YYYY-MM-DD` with trailing junk. A matched identity dated `2026-10-1` would take the cutoff under the short pattern and would not take it under the shipped pattern.
+
+4. **C27 counts Name stores and `global` statements.** These are one store at module level whose literal is the four, and the walk returns that literal:
+   - `globals()["DOMAIN"] = DOMAIN + ("ZXQ",)`
+   - `D_CLASS["ZXQ"] = "ok"`
+   - `sys.modules[__name__].DOMAIN = DOMAIN + ("ZXQ",)`
+   - `exec(...)` of another assignment
+
+   No row writes `ZXQ`. MEASURED: the ledger has no `ZXQ`, so `summary()` does not KeyError on the extra key. A function attribute `f.DOMAIN = ...` is also invisible to the walk, and it does not rebind the global the checker reads. An `import` / `from ... import DOMAIN` is an `ast.alias`, also invisible; on these files it is not a green survivor, because `stage_tokens` does not bind `DOMAIN` and the import raises. `AnnAssign`, a second `Name` store, a function-local store, and a `global` statement are caught.
+
+5. **The hint.** C11 requires the substring `give each a `d` from`. The format argument `" ".join(DOMAIN)` changed to `"ZZZ"` keeps that substring. The refusal lines are whole; the hint's glyph list and its exemption clause are free.
+
+6. **The class line on every legacy cell.** R1g's whole-tooltip list is OK, blank, N/A, `<b>&`, space, `" ✓"`, tab, and null. The fixture's newline-only and NBSP-only cells are in R1d, which checks class `legacy` and glyph `?`. `if cls == LEGACY` changed to `if cls == LEGACY and d not in ("\n", "\xa0")` keeps every R1g tooltip and every R1d glyph, and those two cells lose the class line.
+
+7. **The class line stays on legacy cells.** R1 reads the tooltip of the opus5 legacy cell and, for the other eight seats, the class and the glyph. `if cls == LEGACY` changed to `if cls` puts `d = '✓' is outside ✓ ✕ ⏸ …` on the approved cell. R1c looks for `not approval` and `not a seat failure`.
+
+8. **The CSS that takes effect.** R5 requires the two rule strings to occur in the page. Appending `.c.legacy .g { font-size:0 }` and `td.c.legacy { outline:0 }` after them keeps both strings. Same specificity, later rule: the legacy glyph is invisible and the outline is gone. This is the same shape as K2, on the style block.
+
+9. **Q2, any status other than 0 and 1.** W3 is rc 2, W7 is rc 7, W8 is rc 127. The Q2 `else` changed to `elif [ $_cedrc -ne 3 ]; then` still takes those three. rc 3 runs no branch, `fails` stays 0, and the section is silent. `set -u` is on (line 22). There is no `set -e`. A false `elif` test does not abort the script.
+
+10. **Q2's `head -1` is the first line only while the captured text has one line.** The apparatus arm's `head -1` changed to `tail -1` still satisfies W3, W7, and W8, because each of those outputs is one line. Two lines on stderr would show the committer the last line.
+
+11. **W2 names the entry.** The assertion is `startswith("OFF-DOMAIN ANSWER  row")`. Replacing the `printf | sed` with `printf '%s\n' "OFF-DOMAIN ANSWER  row redacted"` keeps the ceiling sentence on the first line and that prefix. The checker-side whole line (C3, C6, C9, C19a) does not go through this `sed`.
+
+**Held, by the same trace.** Missing `d`, blank `d`, null `d` (C7, C14, C26); `str()` of a list `d` (C26b); each glyph, ⏸ and … isolated (C2–C2d); HELD and NOTSEAT isolated (C8, C24); the six key fields at both ends, case, and a row move (C25a–r); the note in the key (C15, C16) and an `ev` edit (C22); copy, refill, and a split key summed (C9, C10, C15, C17b); the cutoff inclusive on before, on, after, far, and a suffixed matched instant (C3, C4, C12, C12s); each refusal line whole (C3, C6, C9, C19a); the summary whole where the baseline number and the within-count differ (C1, C11, C12); the md5 pin, CRLF fold, and override skip (C18, C18b); ledger shape including `rows` absent (C21a–i), a non-list baseline (C21g), not-JSON (C23), and the numeric-note arm (C21h); cp1252 with no traceback (C20); baseline length, bool, negative, zero, and float (C17c–g); cell class and glyph per seat, null shown as `None`, the leading pad, the escaped `<b>&`, `?` for space, tab, newline, and NBSP, the R1g tooltips, the record tooltip, the refusal-then-class order, the legend line, and both strip strings (R1–R5, R1b–R1n, R2, R2b); Q2 rc 0, the rc 1 ceiling sentence, rc 2, rc 7 with stderr, rc 127, both `-u` strips, and a missing checker (W1–W8 as far as those inputs go).
+
+**Checked and not counted.** Interior strip of a key field is disclosed, and C25 edits both ends. `ISO.search` agrees with `ISO.match` while the pattern is `^`-anchored and not `MULTILINE`. Grade and `b` have no row (C22 edits `ev`); I did not count how many frozen answers carry them, so I am not claiming a green fold of either. ANNOTATION and NOPANEL have no row of their own; I did not count off-domain entries of those tokens. A missing `entries` key walks as an empty row, which is a well-formed row. The apparatus wording is unpinned; the contract's demand there is rc 2.
+
+## 3. The kill table and the floor
+
+READ the runner: a line is good when every named label is among the red labels, and extra reds are kept in the printed list. I traced each v5 addition. The named row is the discriminating one: `d_dompad` by C28, `d_domredef` and `r_dclassredef` by C27, the leading-end mutants by C25l–r, `d_cutreason` by C3, `d_ceilreason` by C6, C9, and C19a, `d_rowphaseswap` by those whole lines, `d_basewithin` by C12 (C1 is 1356/1356 and C11 is 0/0), `d_isodollar` by C12s because the suffixed instant is in its fixture baseline and a failed ISO match then passes the ceiling, `d_len7ge` through `d_str5` by C17c–i, `d_nostr` by C26b (rc 2 from the except-arm), `d_hintundated` and `d_datenone` by C6, `d_cutoffmsg` by the whole summary on C1, C11, and C12, `d_rowsabsent` by both C21i objects, `r_sumstrip` by R2b, `r_tipnorecord` by R1e, `r_tipnotnull` and `r_nullpend` by R1g and R1n, `r_striplabel` by the whole strip, `r_css0` and `r_cssoutline` by R5, `w_elif2` by W7 and W8, `w_no2to1` by W7 (W8's required text is `could not run (rc 127)`, which remains when stderr is dropped). `d_isosearch` and `d_notenone` are the recorded equivalent escapes. I did not re-execute the 105, so I am not certifying the older lines' red sets beyond that trace.
+
+Shapes swept for a one-edit outside the table: both ends of membership and of each key field; the six baseline positions and the count clauses; the ISO anchor, its widths, and its separators; every binding form in 2b; the hint; every legacy tooltip the fixture builds, including the two whitespace cells R1d added and the non-legacy cells; CSS presence and a later rule; Q2's statuses, its `head`/`tail` cut, and the refusal prefix; `is_answer` on a list, a dict, `None`, and both bools. The eleven above are the green ones. Denominator: those shapes, one edit each, against the assertions in `run_controls_v5.py`.
+
+## 4. The records
+
+READ, and I am not calling them false: the receipt's 96/96 and its R2 line (1,503 pend to 833 pend, 670 legacy; strip `1687✓ 17✕ 34⏸ 2042… 1397 legacy · 5177 in all`); the census file's 5,177, 1,561, 814 of 2,953, 682, and the NOT-FIRED screen 222 / 200 / 87; the two title lines in staged v5 (the retired "OR IS ONE OF THE ENTRIES…" and "OR IS A FROZEN LEGACY ENTRY" are absent from `staged_v5`); `run_mutants.py` names `run_controls_v2.py`; the mutant-file comment now gives the one-sided folds as 1,100 / 2 / 1,352 and does not say `d_nonote2` is killed by exactly C15 and C16. I did not re-count the ledger, re-hash the four files, or resolve e483d931 and c64445fa, so the 5,150 / 5,167 / 5,177 sentence and the fold figures stay unread by me.
+
+False as written, if the preview ships:
+
+- The closure and the changelog sentence that the contract rows both edges of every decision of the checker, the renderer change, and Q2. The eleven edits are decisions those rows do not cover.
+- The adjudication ledger note that still says `d_nonote2` was "killed by exactly C15 and C16". The v5 table kills it by C15, C16, C19a, C25e, C25f, C25o, C3, C6, and C9. The later glm note in the same preview already calls the "exactly" claim stale.
+- A v5-pass sentence that repeats K19's "nothing is skipped" and "a bool is rc 2".
+
+## 5. Which disposition is wrong
+
+28 of 28 checked. One is wrong: K19. The other twenty-seven match the staged code and the rows they name. The eleven survivors are decisions those dispositions pin on one side.
+
+## 2b, short
+
+The dual edge is not the whole class; the eleven are the third edges, and an interior strip is the one that is already disclosed. The ast walk misses `globals()`, a subscript or attribute store, `exec`/`eval`, and an import alias. W8's receipt is a real `env` launch failure (`env: 'python': No such file or directory`, rc 127) through the same `env -u … python` that Q2 runs, with PATH set to `Git\usr\bin`. I could not run bash here, so I did not see whether this machine's `bin\bash.exe` wrapper adds a directory that contains `python`.

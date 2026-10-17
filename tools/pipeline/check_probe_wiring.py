@@ -2987,6 +2987,67 @@ MANIFEST = {
                                     "measures selftest_absorb.py's KILL RATE by hand over 22 "
                                     "rebuilt mutants. The gated artefact is selftest_absorb.py; "
                                     "this grades that detector and is not one itself."),
+    #  dashokclass (2026-10-16/17), landed with the round: its controls, kill-table drivers, staged blobs and seat
+    #  measurements, preserved beside the receipts.  The gated check is tools/pipeline/check_entry_domain.py (precommit
+    #  Q2), which this MANIFEST does not cover (tools/ is outside the domain); none of these is a gated detector.
+    "artifacts/dashokclass_20261016/dashmissingd_census.py":
+        (CLASS_RESEARCH, "dashokclass: counts the ledger answers carrying no d -- the census behind the LEGACY class, preserved as evidence"),
+    "artifacts/dashokclass_20261016/gen_dashboard_before.py":
+        (CLASS_RESEARCH, "dashokclass: the renderer as it stood before the landing (md5 93dcb7ea), the controls' BEFORE column"),
+    "artifacts/dashokclass_20261016/run_controls.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v1 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_controls_v2.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v2 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_controls_v3.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v3 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_controls_v4.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v4 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_controls_v5.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v5 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_controls_v6.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v6 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_controls_v7.py":
+        (CLASS_RESEARCH, "dashokclass: the landing's v7 controls, preserved as evidence -- the gated check is tools/pipeline/check_entry_domain.py, precommit Q2"),
+    "artifacts/dashokclass_20261016/run_mutants.py":
+        (CLASS_TOOL, "dashokclass: the v1 kill-table driver (one-edit mutants of the renderer and checker), preserved as run"),
+    "artifacts/dashokclass_20261016/run_mutants_v3.py":
+        (CLASS_TOOL, "dashokclass: the v3 kill-table driver (one-edit mutants of the renderer and checker), preserved as run"),
+    "artifacts/dashokclass_20261016/run_mutants_v4.py":
+        (CLASS_TOOL, "dashokclass: the v4 kill-table driver (one-edit mutants of the renderer and checker), preserved as run"),
+    "artifacts/dashokclass_20261016/run_mutants_v5.py":
+        (CLASS_TOOL, "dashokclass: the v5 kill-table driver (one-edit mutants of the renderer and checker), preserved as run"),
+    "artifacts/dashokclass_20261016/run_mutants_v6.py":
+        (CLASS_TOOL, "dashokclass: the v6 kill-table driver (one-edit mutants of the renderer and checker), preserved as run"),
+    "artifacts/dashokclass_20261016/run_mutants_v7.py":
+        (CLASS_TOOL, "dashokclass: the v7 kill-table driver (one-edit mutants of the renderer and checker), preserved as run"),
+    "artifacts/dashokclass_20261016/staged/tools/pipeline/check_entry_domain.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 1 of tools/pipeline/check_entry_domain.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged/tools/pipeline/gen_dashboard.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 1 of tools/pipeline/gen_dashboard.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v2/tools/pipeline/check_entry_domain.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 2 of tools/pipeline/check_entry_domain.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v2/tools/pipeline/gen_dashboard.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 2 of tools/pipeline/gen_dashboard.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v3/tools/pipeline/check_entry_domain.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 3 of tools/pipeline/check_entry_domain.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v3/tools/pipeline/gen_dashboard.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 3 of tools/pipeline/gen_dashboard.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v4/tools/pipeline/check_entry_domain.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 4 of tools/pipeline/check_entry_domain.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v4/tools/pipeline/gen_dashboard.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 4 of tools/pipeline/gen_dashboard.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v5/tools/pipeline/check_entry_domain.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 5, the landed blob of tools/pipeline/check_entry_domain.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/staged_v5/tools/pipeline/gen_dashboard.py":
+        (CLASS_RESEARCH, "dashokclass: the round's staged copy 5, the landed blob of tools/pipeline/gen_dashboard.py, preserved as evidence"),
+    "artifacts/dashokclass_20261016/v4pass/fable5_meas/census.py":
+        (CLASS_RESEARCH, "dashokclass: the Fable 5.1 v4-pass seat's re-derivation of the packet's numbers, preserved as run"),
+    "artifacts/dashokclass_20261016/v4pass/fable5_meas/extra_mutants.py":
+        (CLASS_TOOL, "dashokclass: the Fable 5.1 v4-pass seat's extra one-edit mutants, preserved as run"),
+    "artifacts/dashokclass_20261016/write_baseline.py":
+        (CLASS_TOOL, "dashokclass: the one-time writer of tools/pipeline/entry_domain_baseline.json, preserved as run"),
+    "artifacts/dashokclass_20261016/write_baseline_v1.py":
+        (CLASS_TOOL, "dashokclass: the first form of that one-time baseline writer, preserved as run"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that
