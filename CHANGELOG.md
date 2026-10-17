@@ -1,3 +1,11 @@
+# Records, 2026-10-17: `dashokclass` names its closing commit dd2d4e01
+
+The landing commit dd2d4e01 closed the row(s) and cannot name itself; this adds it to each `commits` field: `dashokclass` (now `dd2d4e01`); `dashmissingd` (open, filed by it; now `dd2d4e01`); `dashokcov` (open, filed by it; now `dd2d4e01`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  It also FILED `dashmissingd` and `dashokcov`, which its subject names; check_commit_attribution grades a code commit naming an open row
+whose `commits` is EMPTY as HARD (the field is not closure-only), so each lists the commit that filed it.
+Ledger, matrix and this block only.
+
 # `dashokclass` (2026-10-17): the dashboard's LEGACY class and the entry-domain check -- every explicit `d` outside ✓ ✕ ⏸ … on the answer a cell shows renders as one class, "legacy -- verdict unclassified", instead of a seat failure (670 displayed cells at HEAD 8bf8b5a1), and precommit section Q2 holds the off-domain answers to a ceiling frozen at landing
 
 **Ruled before any code** by Fable 5.1, GPT-6 Astra and Grok 4.7 (`regress/artifacts/adj_20261016/RULINGS_C_records.md`,
