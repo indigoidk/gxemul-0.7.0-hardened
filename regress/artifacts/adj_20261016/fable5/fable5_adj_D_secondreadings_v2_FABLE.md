@@ -1,0 +1,7 @@
+VERDICT: UPHOLD WITH CHANGES (2) -- H1/H2/H3 are real, unfixed, un-declined process-termination paths and file as HIGH rows (H1 and H2 carry the rung-3 measurement in meas_D/); sections 3, 5 and 6 stand; section 4's "adopt as written" is narrowed to anchor-and-re-derive, and one same-kind termination path the pre-screens missed is added (SH prom_emul default, cpu_sh_instr.c:3833-3834).
+
+FABLE_ADJ_D_20261016 -- Fable 5.1, own verdict, written after the fallback run. Verbatim line from meas_main/libcq.out: `malloc(0) -> non-NULL`. Evidence basis: every site below was opened at HEAD e483d931 by me in this session (READ); the measurement cited is meas_D/witness_hostexit.out, made in the fallback run by claude-opus-4-8 on a private build of e483d931 (binary md5 579abef4, meas_D/build_provenance.txt), cited as that model's measurement, not mine. Nothing in the fallback file is relied on without my own read.
+
+## H1, H2, H3
+
+- **H1 `ofemulnodata` -- FILE, HIGH, separate row; may share a round with `ofopenexit`/`ofpeerexit`.** READ: of.c:1098-1101 `if (of_data == NULL) { fatal(...); exit(1); }`; the only writer of `md.of_data` is of.c:1078 in `of_emul_init`, called only from machine_macppc.c:99 behind `if (!machine->prom_emulation) return;` (:93-94); `md` is a union (machine.h:206-210) zeroed by machine_new (machines/machine.c:67); the magic words decode with no machine or mode test (cpu_arm_instr.c:5034-5036, cpu_ppc_instr.c:4400-4402).

@@ -1,3 +1,28 @@
+# Records, 2026-10-16: the day's adjudications landed -- packets A to D committed as artifacts, seven rows filed (three HIGH) from packets C and D
+
+The owner's request of 2026-10-16 ("adjudicate any pending findings with Fable, Astra and Grok") produced four packets; their
+packets, the three seats' answers, the pre-screens, the seats' measurements and the main loop's consolidations are committed
+here under `regress/artifacts/adj_20261016/` (the wiring-cliff and m88kexcdeliver parts landed with 7b23b785 and 16512e9c).
+
+* **Packet D (the agy pack's second readings)** -- `RULINGS_D_secondreadings.md` completed: all three seats FILE the three new
+  HIGH rows the packet verified at HEAD, each its own row: `ofemulnodata` (the OpenFirmware emulation entry exits the process
+  when the machine set up no OpenFirmware data, reachable from the ARM and PowerPC decoders), `mipssyscallprom` (`syscall` with
+  the PROM-emulation code reaches X(promemul)'s exiting default arm on machine types without PROM emulation -- #235 gated only
+  the `break` form) and `asccmdwidecount` (the ASC COMMAND-phase sibling of `ascwidecount`; one repair round, two ids).  A
+  rung-3 attempt for the first two exists in `fable5/meas_D/`, made by claude-opus-4-8 in the Fable seat's fallback run, so it
+  is cited as an attempt owing review, not as a witness.  The packet's wholesale adoption of the pre-screen record corrections
+  and premises was narrowed by all three seats to ROW-BY-ROW adoption when each row is prepared; its MED/LOW candidate rows
+  are left for that, named in the rulings file.
+* **Packet C (records and harness)** -- the four filings it ruled: `seatverdictrefusal`, `wdczerolendatain`, `agyselfupdate`
+  (all LOW, open) and `panelshrefused` (LOW, HELD with its question: `tools/panel.sh` is never-commit until its own deltas are
+  reviewed).  Its two harness landings (the codex launcher rule, the dashboard's legacy class) owe their own controlled
+  commits and are not here.
+* **Packets A and B** (`#563` REPAIR4 and the `asiceventaddr` pins) were ruled; their builds are the next work on those chains.
+* `tools/pipeline/check_probe_wiring.py`: twelve MANIFEST entries, CLASS_RESEARCH, for the Fable seat's measurement scripts in
+  `fable5/meas_B/` and `fable5/meas_D/`.
+
+Records: this block; `OUTSTANDING_BUGS.md` (one section naming the seven rows); `ledger.json` (seven rows).  No `src/` touched.
+
 # `#502` m88kexcdeliver, repairs 13 and 14 (2026-10-16): a guest fault in a branch delay slot was invisible to the detector -- the close adjudication was settled by a measurement, and the delay-slot class is rowed on its three STATE axes (probe v21 -> v23, 59 -> 73 rows); the chain stays OPEN for the fourth, is_trap
 
 **The chain did not close on the adjudication that was meant to close it.**  The 2026-10-16 four-seat close adjudication

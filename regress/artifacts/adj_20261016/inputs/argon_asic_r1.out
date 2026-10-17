@@ -1,0 +1,97 @@
+## 1. Testing M1, M2, and M4 against the Inlined Lines
+
+* **M1 (Wide length argument `0x100000008` to `memory_rw`):**
+  * **Stub truncation (`rw_len`):** **TRUE** (`CASES:204`, `CASES:232`, `CASES:244`). `id_rw` receives `size_t len` at `CASES:232`, truncates it via `rw_len = (int)len;` into `static int rw_len` at `CASES:244` (`(int)0x100000008` is `8`), and prints it with `%d` at `CASES:261`/`CASES:264`. Note also that `CASES:234` clamps the payload loop count via `n = len < 8 ? len : 8;`, so `rw_pay` (`CASES:247`-`CASES:248`) also fails to observe `len > 8`.
+  * **Passing every row / product object assembly (`mov $0x8` vs `movabs $0x100000008`):** **UNSETTLED** (settle in the test driver script/harness and `regress/sysasic_range_cases.c` lines 1–185 / >275, plus the compiled product binary).
+* **M2 (Short buffer `uint8_t buf[4]` in `SYSASIC_TRIGGER_EVENT`):**
+  * **Serializer writes 8 bytes into `buf` and stub fails to observe array size:** **TRUE** (`HDR:144`, `HDR:148`, `CASES:217`, `CASES:224`-`CASES:228`). `SYSASIC_TRIGGER_EVENT` passes `buf` and `8` to `memory_writemax64(cpu, buf, 8, tmp2)` at `HDR:148`. At `CASES:217`, `buf` decays to `unsigned char *buf`, losing its array bound. `CASES:224` records only the pointer `ser_buf = buf;`, and `CASES:225`-`CASES:228` writes `min(len, 8)` = 8 bytes unconditionally.
+  * **Driver ignoring `-Wstringop-overflow` and reading only `error:` lines:** **UNSETTLED** (settle in the test driver script/harness).
+* **M4 (Stub-side drift of fixture's `MEM_WRITE` to `2`):**
+  * **Symbolic match inside `id_rw`:** **TRUE** (`HDR:150`, `CASES:237`). Both `SYSASIC_TRIGGER_EVENT` (`HDR:150`) and `id_rw` (`CASES:237`: `if (writeflag != MEM_WRITE)`) reference the macro `MEM_WRITE` rather than a literal `1` (`MEM:118`). If both translation units see a drifted `MEM_WRITE`, `writeflag == MEM_WRITE` holds and `CASES:237` fails to observe the numeric change.
+  * **Fixture's own `MEM_WRITE` define and driver checking `PHYSICAL` against `32` independently:** **UNSETTLED** (settle in `regress/sysasic_range_cases.c` lines 1–185 and the test driver script/harness).
+
+---
+
+## 2. Evaluation of Proposed Pins P1 and P2
+
+* **P1 (Full `size_t` width check on `len`):**
+  * **Turns M1 red?** **Yes.** On 64-bit targets where `0x100000008` fits in `size_t`, avoiding `(int)` truncation (`CASES:244`) or requiring `len == 8` at full `size_t` width catches `0x100000008 != 8`.
+  * **Turns harmless (product-identical) variants red?** **No.** Every expression with value `8` that converts to `size_t` value `8` at the `memory_rw` call site (`HDR:149`) evaluates to `(size_t)8` in `id_rw` (`CASES:232`).
+  * **Smallest correct form in `CASES`:** Leave `REC_FMT` unchanged by gating `rw_len` on full `size_t` equality at `CASES:244`:
+    ```c
+    rw_len = (len == 8) ? 8 : -1;
+    ```
+    *(Or, to preserve exact width in output: change `rw_len` at `CASES:204` to `size_t` (or `unsigned long long`), set `rw_len = len;` at `CASES:244`, and format with `%zu` / `%llu` at `CASES:261`,`CASES:264`.)*
+
+* **P2 (Capturing `sizeof(buf)` at the serializer call vs. ASAN / `-Werror=stringop-overflow`):**
+  * **Turns M2 red?** **Yes.** If `uint8_t buf[8]` (`HDR:144`) is shrunk to `buf[4]`, `sizeof(buf)` at `HDR:148` is `4 != 8`.
+  * **Turns harmless (product-identical) variants red?**
+    * **Macro `sizeof(buf)` pin:** **Yes (flaw in P2's `sizeof` formulation).** If `SYSASIC_TRIGGER_EVENT` (`HDR:144`-`HDR:149`) is refactored into a product-identical form where a pointer is passed to `memory_writemax64` (for example, `uint8_t raw[8], *buf = raw;` or `(uint8_t *)buf` or `buf + 0`), `sizeof(buf)` evaluates to `sizeof(uint8_t *)` (which is `4` on ILP32 targets, or `8` by coincidence on LP64 even if `raw` was `raw[4]`!). Conversely, on LP64 where `sizeof(void *) == 8`, replacing `uint8_t buf[8]` with a pointer to a 4-byte buffer (`uint8_t raw[4], *buf = raw;`) makes `sizeof(buf) == 8`, fooling P2's `sizeof` check! Furthermore, if `uint8_t buf[16]` is allocated (harmless oversize stack buffer with identical 8-byte write and 8-byte `memory_rw`), requiring `sizeof(buf) == len` (`16 == 8`) falsely turns a harmless variant red, whereas `sizeof(buf) >= (size_t)(len)` only checks sufficiency.
+    * **`-Werror=stringop-overflow` / ASAN leg:** Does not suffer from pointer-decay `sizeof` artifacts on `buf`, though compiler warning heuristics depend on optimization level.
+  * **Smallest correct form in `CASES` (for the `sizeof` capture after `CASES:229`):**
+    ```c
+    #define memory_writemax64(c, b, l, d) \
+        memory_writemax64((c), (b), (sizeof(b) == (size_t)(l) ? (l) : -1), (d))
+    ```
+    *(Note: requires `b` in `HDR:148` to be an array identifier of exact size `l`.)*
+
+* **Defensive Review of `HDR` and `CASES`:**
+  * Every step in `HDR:135`-`HDR:151` (`SYSASIC_EVENT_RANGE_OK`, `SYSASIC_EVENT_TO_ADDR`, `SYSASIC_EVENT_TO_BITMASK`, `SYSASIC_TRIGGER_EVENT`) is valid for `e` in `[0, 95]` and leaves all guest/host state untouched outside the target 8-byte `SYSASIC_BASE + 4*((e)>>5)` physical write (`HDR:140`, `HDR:149`-`HDR:150`).
+  * In `HDR:74`-`HDR:134`, two claims in the comments require scrutiny:
+    1. `HDR:91`: *"all 21 real events keep BYTE-IDENTICAL addresses"* — **UNSETTLED** (only 3 event defines are visible in `HDR:70`-`HDR:72`; the remaining 18 are in `src/include/thirdparty/dreamcast_sysasicvar.h` lines 1–69).
+    2. `HDR:127`: *"because `4*((-1)>>5)` is -4"* — relies on signed right-shift `(-1) >> 5 == -1`, which holds on standard two's-complement compilers (and C23 `202311L` mentioned at `HDR:85`), though implementation-defined in C89/C99.
+
+---
+
+## 3. Stub Argument Pinning Table & Further One-Token Changes
+
+A memory_writemax64.cpu | PINNED | CASES:222
+A memory_writemax64.buf | PINNED | CASES:224
+A memory_writemax64.len | PINNED | CASES:223
+A memory_writemax64.data | PINNED | CASES:226
+A id_rw.cpu | PINNED | CASES:240
+A id_rw.mem | PINNED | CASES:241
+A id_rw.vaddr | PINNED | CASES:245
+A id_rw.data | PINNED | CASES:242
+A id_rw.len | NARROWED | CASES:244
+A id_rw.writeflag | PINNED | CASES:237
+A id_rw.cache_flags | PINNED | CASES:243
+
+### Details of Comparison Widths in `CASES`
+
+1. `memory_writemax64.cpu` (`struct cpu *`): **PINNED** at full pointer width (`sizeof(struct cpu *)`) via `ser_cpu_ok = (cpu == want_cpu);` (`CASES:222`), printed as `"ok"`/`"BAD"` (`CASES:265`). *(Single-call note: overwritten if called twice, though `ser_calls` at `CASES:221` pins call count to 1.)*
+2. `memory_writemax64.buf` (`unsigned char *`): **PINNED** at full pointer width (`sizeof(unsigned char *)`) via `ser_buf = buf;` (`CASES:224`) cross-checked against `id_rw.data` in `rw_buf_ok = (data == ser_buf);` (`CASES:242`), and dereferenced for 8 bytes (`CASES:225`-`CASES:228`).
+3. `memory_writemax64.len` (`int`): **PINNED** at full `int` width (`sizeof(int)`) via `ser_len = len;` (`CASES:203`, `CASES:223`), printed with `%d` (`CASES:261`, `CASES:265`). *(Wait: if the caller passes a 64-bit integer token like `0x100000008` to `memory_writemax64`, the prototype `int len` at `CASES:217` implicitly converts it to `int` (`8`) before entering the function!)*
+4. `memory_writemax64.data` (`uint64_t`): **PINNED** at full 64-bit width (`uint64_t`, 64 bits) only when `len >= 8` and `id_rw` reads 8 bytes (`CASES:225`-`CASES:228` writes 8 bytes into `buf[0..7]`, reconstructed into `uint64_t rw_pay` at `CASES:247`-`CASES:248` and printed with `0x%llx` at `CASES:260`, `CASES:262`).
+5. `id_rw.cpu` (`struct cpu *`): **PINNED** at full pointer width (`sizeof(struct cpu *)`) via `rw_cpu_ok = (cpu == want_cpu);` (`CASES:240`), printed at `CASES:263`.
+6. `id_rw.mem` (`struct memory *`): **PINNED** at full pointer width (`sizeof(struct memory *)`) via `rw_mem_ok = (mem == want_mem);` (`CASES:241`), printed at `CASES:263`.
+7. `id_rw.vaddr` (`uint64_t`): **PINNED** at full 64-bit width (`uint64_t`) via `rw_addr = vaddr;` (`CASES:205`, `CASES:245`), printed with `0x%llx` (`CASES:260`, `CASES:262`).
+8. `id_rw.data` (`unsigned char *`): **PINNED** at full pointer width (`sizeof(unsigned char *)`) via `rw_buf_ok = (data == ser_buf);` (`CASES:242`), printed at `CASES:264`.
+9. `id_rw.len` (`size_t`): **NARROWED** from `size_t` to `int` (`sizeof(int)`) via `rw_len = (int)len;` (`CASES:204`, `CASES:232`, `CASES:244`), printed with `%d` (`CASES:261`, `CASES:264`).
+10. `id_rw.writeflag` (`int`): **PINNED** at full `int` width (`sizeof(int)`) against the symbol `MEM_WRITE` via `if (writeflag != MEM_WRITE) return 1;` (`CASES:237`) coupled with `rw_writes++` (`CASES:239`), printed with `%d` (`CASES:260`, `CASES:263`).
+11. `id_rw.cache_flags` (`int`): **PINNED** at full `int` width (`sizeof(int)`) via `rw_flags = cache_flags;` (`CASES:204`, `CASES:243`), printed with `%d` (`CASES:261`, `CASES:264`).
+
+### Further One-Token `SYSASIC_TRIGGER_EVENT` Changes That Pass All Rows After P1 and P2
+
+1. **Changing `uint8_t` (`HDR:144`) to `int8_t` or `char`:**
+   In `HDR:144`, `buf` is declared as `uint8_t buf[8];`. Changing `uint8_t` to `char` or `int8_t` keeps `sizeof(buf) == 8` (passing P2) and passes `buf` to `memory_writemax64` and `cpu->memory_rw` (passing P1 and all value checks). Even if `-Wpointer-sign` is enabled under `-Wall`, M2 notes that the driver reads only `error:` lines (`MEASURED:M2`).
+2. **Changing `uint64_t` on `tmp1` (`HDR:145`) to `uint32_t` or `int`:**
+   In `HDR:145`, `uint64_t tmp1 = SYSASIC_EVENT_TO_ADDR(e);` holds an address near `SYSASIC_BASE` (`0x005f6900`, inferred from `HDR:126` where `SYSASIC_BASE - 4` is `0x005f68fc`), which fits in 32 bits (`uint32_t` or `int`). When passed to `cpu->memory_rw` (`HDR:149`), it implicitly widens back to `uint64_t vaddr` (`CASES:231`) with the exact same value, passing all rows while changing the local variable type.
+3. **Changing `8` in `memory_writemax64(cpu, buf, 8, tmp2)` (`HDR:148`) to `0x100000008` (if P2 uses `sizeof(b) == 8` or `-Werror=stringop-overflow`/ASAN instead of `sizeof(b) == (size_t)(l)`):**
+   Because `memory_writemax64` takes `int len` (`CASES:217`), passing `0x100000008` to `memory_writemax64` at `HDR:148` implicitly truncates to `int` (`8`) at the call boundary (`mov $0x8` in the caller, or truncation before `CASES:223`), so `ser_len` records `8`. (If P2 is written specifically as `sizeof(b) == (size_t)(l)` in a wrapper macro, `(size_t)0x100000008` catches it; if P2 is implemented via the ASAN leg or `-Werror=stringop-overflow` leg offered in `MEASURED:M3`, `0x100000008` at `HDR:148` truncates to `int` `8` and passes!)
+
+---
+
+## 4. Independent Check for `MEM_WRITE`
+
+* **Should `MEM_WRITE` get the same independent check `PHYSICAL` has?**
+  **Yes.** Because `CASES:237` checks `if (writeflag != MEM_WRITE)` using the macro name `MEM_WRITE` rather than its ABI value `1` (`MEM:118`), any drift in `MEM_WRITE` (such as M4's drift to `2`) or a missing check in the driver leaves `id_rw` comparing a drifted macro against itself. Either `id_rw` should record `rw_writeflag = writeflag` into `REC_FMT` so the driver checks the numeric value `1` directly (just as `rw_flags = cache_flags` at `CASES:243` outputs `32` for `PHYSICAL` via `flags=%d` at `CASES:261`), or `CASES:237` must verify the constant value `1`.
+* **Line in `CASES` that would host it:**
+  `CASES:237` (or `CASES:261` if exported via `REC_FMT`). Quoting `CASES:237`:
+  ```c
+  CASES:237  	if (writeflag != MEM_WRITE)
+  ```
+  *(Checking `if (writeflag != 1 || MEM_WRITE != 1)` at `CASES:237`—or printing `writeflag` at `CASES:261`—pins `MEM_WRITE` to `1` (`MEM:118`). Note: the line where the driver currently checks `PHYSICAL` against `32` is outside the excerpt and **UNSETTLED** in the test driver file / `regress/sysasic_range_cases.c` lines 1–185.)*
+
+P-ASICFINAL-823e
+ASICFINAL: 10 ATTACKS 1 BROKEN 5 HOLDS 4 UNSETTLED DRAFTABLE:NO

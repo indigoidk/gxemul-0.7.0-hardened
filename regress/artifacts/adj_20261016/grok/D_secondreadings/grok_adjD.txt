@@ -1,0 +1,107 @@
+I will adjudicate packet D read-only against GXEMUL-SEC at HEAD e483d931, opening the cited sources before any ruling.The shell was blocked, so I am reading the measurement output and the cited sources directly.The packet is still open. I will finish the twenty-five-row spot check against the files on disk, then give the verdict. Nothing will be written.GROK_ADJ_D_20261016
+malloc(0) -> non-NULL
+
+VERDICT: UPHOLD WITH CHANGES (7 rulings changed) -- H1 and H2 stay HIGH new rows; H3 stays HIGH as its own row in the ascwidecount round; the blanket adopt of the pre-screen rows does not survive the spot check.
+
+`git show e483d931:` was not available in this sitting. The lines below are the working tree. `check_probe_wiring.py`, `ledger.json`, and `dev_sh4.c` are dirty. The H1, H2, and H3 sources were not in the earlier modified list. The project-root 2021 `src/` was not used. Nothing was written.
+
+## 1. H1, H2, H3, then the other new rows
+
+**H1 `ofemulnodata` -- FILE, HIGH, own row.** READ. `of_emul()` exits when `machine->md.of_data == NULL` (`src/promemul/of.c:1098-1100`). `of_emul_init` is the only writer (`of.c:1078`) and the only caller is `machine_macppc.c:99`, after `if (!machine->prom_emulation) return`. The magic words install the handler with no mode test: ARM SWI `0xef8c64be` (`cpu_arm_instr.c:5034-5036` to `X(openfirmware)` at `:988-991`) and PowerPC `sc` `0x44ee0002` (`cpu_ppc_instr.c:4400-4402` to `X(openfirmware)` at `:3956-3958`). `ofopenexit` and `ofpeerexit` are other sites. Cross-link them. One guest instruction ends the host on every ARM machine and on every PowerPC machine that did not take that init, user mode included.
+
+**H2 `mipssyscallprom` -- FILE, HIGH, own row.** READ. `SPECIAL_SYSCALL` with code `0x30378` installs `X(promemul)` at any address (`cpu_mips_instr.c:4650-4656`). The default arm is `fatal` plus `exit(1)` (`:2649-2650`) for every machine type other than PMAX, PS2, ARC, SGI, and EVBMIPS. `#235` gated only `break 0x30378` on `(addr & 0x1fffffff) == 0x1fc00000` (`:4659-4669`). `mipsresetalias` is that BREAK gate. On the five PROM machines the same word is an ungated PROM entry, including from user mode. One row, the same address gate as `#235`. The witness word `0x00C0DE0C` is REASONED (`0x30378 << 6` plus syscall funct `0x0c`).
+
+**H3 `asccmdwidecount` -- FILE, HIGH, same round as `ascwidecount`, separate id.** READ. `reg_wo[0x10]` is `uint32_t` (`dev_asc.c:154`) and a write stores the whole `idata` (`:1155`). In `dev_asc_select`, `len` is `int` (`:892`) and the DMA command path does `len = reg_wo[NCR_TCL] + reg_wo[NCR_TCM] * 256` (`:987-992`) with no mask, then `scsi_transfer_allocbuf`. A zero count is rewritten to 65536, so this is not `malloc(0)`. A `uint32_t` sum above `INT_MAX` becomes a negative `int` on this gcc and a huge `size_t`; a positive count near 2 GB can also fail `malloc`. Either failure takes `exit(1)` (`diskimage_scsicmd.c:151-155`). The path runs only when `diskimage_exist` is true (`dev_asc.c:1377-1393`); `SELNATN` sets `n_messagebytes = 0` and falls through. The DATA_OUT sibling `len2` (`:577`) is clamped before the copy. A memcpy-only fix leaves this exit. I did not re-check the "pmax OpenBSD issues SELATN|DMA on every command" sentence.
+
+**Other new rows**
+
+- MIPS `X(ei_or_di)` skips `cop0_availability_check`: **UPHOLD, FILE, MED.** READ `cpu_mips_instr.c:2719-2726` and the install at `:4982-5002`. Only MIPS32/64 revision 2; an older ISA installs `reserved`. Separate from `mipscop0tail`, whose `goto bad` is COP0 fn `0x38`/`0x39` (`:4918-4928`). The CpU sentence in the MIPS manual was not re-opened (REASONED).
+- `armcp15c1fallthrough`: **CHANGED -- FILE, HIGH, own row, cross-link `armendianexit`.** READ `cpu_arm_coproc.c:124-135`: `opcode2` outside `{0,1}` prints a fatal whose `exit(1)` is commented out, then falls into the control-register write, which exits at `:175-177` when the B bit disagrees. `arm_mcr_mrc` (`cpu_arm.c:2693-2705`) has no mode check. Deleting only the B-bit exit leaves the silent SCTLR overwrite. The pre-screen's MED is too low.
+- ARM TTB/L2 mask `0x0fffffff`: **UPHOLD, FILE, MED, own row.** READ `memory_arm.c:136` and `:169`. `#193` already turns a NULL L2 host page into a guest translation fault (`:170-174`), so this aliases a high table into low RAM. It is not `armdesc3kill`'s `exit(1)`.
+- Coarse domain fault before the L2 fetch: **CHANGED -- FILE, LOW, with the FSR numbers qualified.** READ `memory_arm.c:161-165`: coarse L1 and `dav == 0` takes `FAULT_DOMAIN_P` (`0x0b`, `armreg.h:390`) before the L2 fetch. FSR is `(domain << 4) | fs` (`memory_arm.c:272`). `0x3b` versus `0x37` is domain 3 only. The DDI clause was not re-opened (REASONED).
+- Thumb LDR(3) raises Prefetch Abort: **UPHOLD, FILE, MED, sibling of `armthumbabortkill`.** READ. The only site is the slow interpreter (`cpu_arm.c:1604-1608`), and it passes `CACHE_INSTRUCTION`. `memory_rw.c:252` sets `FLAG_INSTR`, and `memory_arm.c:268-273` then raises prefetch abort and skips FAR/FSR. The same failure also sets `cpu->running = 0`; that stop stays on the sibling row. The DDI clause was not re-opened (REASONED).
+- Coarse-L2 type 3 as a 1 KB page (N2): **UPHOLD, FILE, LOW, own row.** READ `memory_arm.c:198-207`. XScale falls through to the 4 KB case. The L1 type-3 `exit(1)` at `:252-254` is `armdesc3kill`. The DDI clause was not re-opened (REASONED).
+- MB89352 three conversions for two arguments (N1): **CHANGED -- FILE, LOW, own row; the same round as `qhmbunimplstops` is fine.** READ `dev_mb89352.c:305-309`: `"%i"` / `"%x"` / `"%x"` and arguments `len * 8`, `relative_addr`. Folding it into the CPU-stop row would leave the format mismatch.
+- DEC21143 unbudgeted RX drain: **CHANGED -- FILE its own row, HIGH conditional on sustained TAP input before a setup frame.** READ `dev_dec21143.c:356-366` and `dec21143_rx_drop_packet` at `:273-307`: TAP only, and `drop_packet == NULL` frees the buffer and continues with no budget. `ne2krxbudget` is the NE2000 loop.
+- BE case-4 byte-lane shift: **CHANGED -- do not FILE.** READ. `fable5_ruling_v2.md:124` says "Filed". The later adjudication (`fable5_563_adjudication.md:96`) puts the 4-byte accept lanes under disclose, no row, because of the constant fill. The records fix is a ruling erratum. I did not re-derive the four equal bytes.
+- `pvr` F15: **UPHOLD, FOLD into `gdromcondhow`.** READ `gdrom_cond_probe.py:410-412` (a decline row asserts announced and survived), `:436` (R3 counts the diagnostic only), and `:516` (R4 counts diagnostics only). An `exit(1)` after one diagnostic passes both.
+- `mk_briefs4.py` severity key: **UPHOLD, one tooling row.** READ `_scratchpad/agypack_20261013/mk_briefs4.py:17` uses `r.get("severity", "?")`. The ledger key on `wdc473floor` is `sev` (`ledger.json:62361`). Every brief from this builder shows `(?, open)`.
+- `#554` governing-text window: **UPHOLD the mechanism as one tooling row; the count is ruling 7 below.** READ `mk_filing.py.txt:83` (`clean(src, 400)`) and `:187` (`text[max(0, m.start()-60):m.end()+300]`).
+
+`wiringcliff` is still true and stays packet C's ruling. Working tree `check_probe_wiring.py:3112-3114` is `"2026-10-15"`, and `:3956` is `elif d < today`. Today is 2026-10-16. CD5-CD8 and CD10/CD13 are not ruled.
+
+## 2. Fix specs
+
+**No. None of the five is ready to build.**
+
+I re-opened the call sites, not the draft diffs. `count()` prints `0` when `grep` produces no stdout (`regress/lib.sh:326-331`), so an unreadable file looks clean. `gate_arm.sh:74` is `set -u` and `:1397` feeds `$(count ...)` to `$(( ))`, so a word token aborts the gate. The ip30 exemption is already expired. The pre-screen's other blockers (a root chmod that cannot redden, nothing invokes `nightly_check.sh`, the SessionStart hook drops its JSON, Argon's heredoc diff does not compile, neither `-c` draft was run) were not re-opened. They stay premises of the next draft. No draft is adopted. HF5 still needs the seven status runs the pre-screen named.
+
+## 3. Which class adoptions are wrong
+
+**Ruling 5: do not adopt every CONFIRMED record correction and every premise pointer.** Adopt the rows named HOLD below. Leave the rest unchecked. A premise pointer is allowed only where the grade survived.
+
+**Ruling 6, inside that class: CL2 does not hold as written.** READ. `ledger.json:25059` does say "fable5 and opus5 were never fired". The next entry, `:25062-25067` (2026-10-09), already says the Agent seat did answer and names that sentence as the counting trap. `CHANGELOG.md:2874-2875` says the panel "ran 6/9: now HELD for fable5, opus5 and deepseek", and does not say "never fired". `OUTSTANDING_BUGS.md:21869` says "now HELD fable5/opus5/deepseek", and does not say "never fired". A new erratum that quotes "never fired" at all three sites would invent two of them and repeat the ledger correction that is already in the following entry.
+
+**Ruling 7: do not adopt "the compare sees 68928", and do not adopt "117 of 221".** READ. `REPAIR3.c:820-840` sets `data_in_len = 200000`, `atapi_received = 131070`, `atapi_len = 2`, then reads 2 bytes. The comment says "68930 remain". The executable check is `d.atapi_len != 32768`. `dev_wdc.c:1293-1294` does `atapi_len -= consumed` and `atapi_received += consumed` before the re-arm at `:1424-1428`, which clamps `data_in_len - atapi_received` at 32768. Before the read the remainder is `200000 - 131070 = 68930`. After `received += 2` the re-arm computes `68928`, then stores `32768`. The oracle sees `32768`. The comment may stay if it says "68930 before the read"; replacing it because "the compare sees 68928" is the wrong sentence. `OUTSTANDING_BUGS.md:24607` was not re-opened. The 117-of-221 window count was not re-derived.
+
+No REFUTED grade I re-opened is wrong. `pass2_ledger.tsv`, the PDF census, PC2, and most CC/CN line re-keys were not opened.
+
+Spot check, five per file:
+
+`prescreen_563.md`
+
+- c563_edges F15 / changelog F20: the two comments exist; the adopted "compare sees 68928" wording does not hold (ruling 7).
+- changelog F11: "Filed" at `fable5_ruling_v2.md:124` holds; filing a new row does not (ruling 1).
+- changelog F14: HOLDS. The ledger title says "EIGHT one-token variants" (`ledger.json:62365`). `CHANGELOG.md:197-198` splits four one-token clamp moves and four content variants.
+- wdcrearmwalk F4: HOLDS. The state note says `head + 32768 == 262656` after eight drained chunks (`ledger.json:26688`). `8 * 32768 = 262144`. Seven chunks plus 512 is 229888, and `229888 + 32768 = 262656`.
+- c563_seats F4: HOLDS. `seat_verdicts.py:354` heads the column "bytes" and `:535` prints `len(t)`.
+
+`prescreen_asic.md`
+
+- CL2: does not hold as written (ruling 6).
+- CL4: HOLDS. `OUTSTANDING_BUGS.md:21609-21611` still says to give BITMASK `SYSASIC_EVENT_RANGE_OK`. `dreamcast_sysasicvar.h:141` is `(1 << ((e) & 31))` with no guard. ADDR at `:139-140` uses the guard.
+- Item 10: HOLDS for the named stub. `sysasic_range_cases.c:42-47` puts `mem` first. `cpu.h:346-348` starts `struct cpu` with `machine`. This is a fixture disclosure, not a new product row.
+- Header history at `dreamcast_sysasicvar.h:121-137`: HOLDS. The comment says `#468` guarded only the upper end and `#469` guards both ends.
+- CL19's product name: HOLDS. The macro is `sysasic_event_in_range` (`:136`). Argon's draft text was not re-opened.
+
+`prescreen_records.md`
+
+- CC1: HOLDS. `diskimage.c:1763` is the `"NULL ptr"` message. The prefix guard `prefix_i + prefix_f + prefix_s > 1` is at `:1879`.
+- CC7: HOLDS on the product side I opened. `console_putchar` is `dev_footbridge.c:558`. `:545-549` is a TODO write with no `exit`. `UART_RX_STAT` is `:561`. The carrier sentence and the timer cite `:663` were not re-opened.
+- CC16: HOLDS on the dirty working tree. `cpu_sh.c:458` cites `dev_sh4.c:2386-2388` as the IRLM refusal. `:2386` is the CHCR fallthrough. The IRLM `fatal` is `:2635-2637`. HEAD's line number was not shown.
+- HF1: HOLDS. An existing file whose `grep` prints nothing becomes `0` (`lib.sh:326-331`).
+- HF3: the call site HOLDS (`gate_arm.sh:74`, `:1397`). The draft text was not re-opened.
+
+`prescreen_prep.md`
+
+- mips_two F2: HOLDS. `mipscop0tail`'s title says "EI/DI off-R5900" (`ledger.json:57811`). The `goto bad` is the R5900 COP0 form (`cpu_mips_instr.c:4918-4928`). MIPS32r2 EI/DI is the other arm.
+- mips_two F11: HOLDS, FILE MED (question 1).
+- armdesc3kill F17: HOLDS as its own MED row (question 1).
+- armthumbabortkill F8: HOLDS as a MED sibling (question 1).
+- N1: HOLDS as its own LOW row (question 1).
+
+`prescreen_audits5.md`
+
+- of_two F9: HOLDS, and it is H1.
+- pvr F15: HOLDS, fold into `gdromcondhow`.
+- net_three F8: the drain code HOLDS; the fold does not (question 1).
+- net_three F16 and F18: the code split HOLDS. `:788-789` is `realloc(cur_tx_buf, len + bufsize)` after a warning that does not return (`:780-782`). F16 is `realloc(p, 0)`. F18 is `realloc(NULL, 0)`. The measurement splits them (question 5).
+- loaders_four F7: HOLDS. `file_ecoff.c:278` and `:332` ignore `fseek`'s return. `:281-284` and `:333-337` exit only on a short `fread`.
+
+## 4. What the pre-screens missed
+
+Three guest-reachable PowerPC host exits. A working-tree ledger search for the fatal strings found no row. `ppcllscrcexit` and `ppcbatppkill` are already filed and are different sites.
+
+- **FILE, HIGH:** `memory_ppc.c:285-288`, `fatal("TODO: ppc 64-bit translation\n"); exit(1);`, when `bits != 32` and MSR IR or DR is set. The early-out at `:258-261` returns the raw address when the matching relocation bit is clear. `PPC620` and `PPC970` are 64-bit (`cpu_ppc.h:82`, `:87`). `cpu_ppc.c:99` copies that width. MacPPC G5 selects `PPC970` (`machine_macppc.c:182-183`). Reset does not set IR or DR: `cpu_ppc.c:102-103` is a comment. A guest or firmware `mtmsr` that turns relocation on reaches the exit. `ppc_bat`'s `bits != 32` exit at `:92-94` is not this path; the translator calls `ppc_bat` only inside `bits == 32` (`:269`).
+- **FILE, HIGH, same new row's second site:** `memory_ppc.c:263-266` exits for `PPC_601` once IR or DR is set. `PPC601` is a real type (`cpu_ppc.h:78`). `ppc_bat:96-98` is the same TODO and is unreachable from this translator because `:263` fires first.
+- **FILE, HIGH, own row:** `cpu_ppc_instr.c:4115-4119`. If `memory_rw` fails, the `goto bad` is commented out and the host exits. `MEMORY_ACCESS_FAILED` is 0 (`memory.h:141`). On the 32-bit path a translation miss raises ISI or DSI and returns 0 (`memory_ppc.c:314-326`), and the fetch then exits the host anyway. On the 64-bit path `:287` exits earlier, so this site is the 32-bit fetch-fault exit. It is not `excvecrecurse`.
+
+`X(invalid)` and the MIPS delay-slot `end_of_page` fatal are internal dyntrans failures. I am not filing them as guest encodings.
+
+## 5. Section 6
+
+**`arczeroalloc` / arcbios F9: the malloc(0) sentence is right.** MEASURED: `malloc(0)` is non-NULL here, errno on the realloc line is 0 for a different call. READ: both the read (`arcbios.c:1754-1759`) and the write (`:1835-1840`) call `malloc(A2)` for every `A2` that is not greater than 64 MiB, including 0, and `CHECK_ALLOCATION` exits only on NULL (`misc.h:190-192`). That exit is not reached on this host. C99 still permits NULL. Portability only.
+
+**`dectxzero`: the grouping is wrong. This is ruling 6 of the verdict's section-6 half, counted in the 7.** The first segment already avoids `malloc(0)` (`dev_dec21143.c:770-774`, `malloc(bufsize == 0 ? 1 : bufsize)`). The live hazard is the continuation at `:788-789`. MEASURED: `realloc(p, 0)` returns NULL and frees the block, errno 0, so `CHECK_ALLOCATION` exits. An empty first segment (`cur_tx_buf` non-NULL, length 0) followed by a zero-length continuation is that call. **F16's "IS reached" is right for `realloc(p, 0)`.** **F18 is not that call:** no first segment does `realloc(NULL, 0)`, which is `malloc(0)` and does not trip here.
+
+**loaders_four F7: the libc half is right, and the loader does not check.** MEASURED: `fseek(f, -8, SEEK_SET)` and `fseeko(f, -1, SEEK_SET)` return -1, errno 22, and the position stays put (`ftell=5` on the first). READ: the cited seeks ignore that return. A negative offset is a read at the old position. The short-read `exit(1)` happens only when `fread` itself is short.

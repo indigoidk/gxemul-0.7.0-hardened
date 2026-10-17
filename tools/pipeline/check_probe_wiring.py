@@ -1992,6 +1992,30 @@ MANIFEST = {
         (CLASS_RESEARCH, "m88kexcdeliver (#502) table 18: the frozen mutant generator, preserved as evidence"),
     "artifacts/m88kexcdeliver/repair13_20261016/mut19.py":
         (CLASS_RESEARCH, "m88kexcdeliver (#502) tables 19 and 19b: the frozen mutant generator, preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/scripts/gen_media.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the Fable seat's media generator), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/scripts/mk_indomain.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the Fable seat's in-domain sample builder), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/scripts/mk_variant2.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the Fable seat's second variant builder), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/scripts/mk_variants.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the Fable seat's variant builder), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/orig/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured orig variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/pinned/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured pinned variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/pinned_mw2/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured pinned_mw2 variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/pinned_preflight/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured pinned_preflight variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/pinned_sample/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured pinned_sample variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/pinned_shape/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured pinned_shape variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_B/variants/sizeof_both/sysasic_range_check.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet B: the measured sizeof_both variant of sysasic_range_check.py), preserved as evidence"),
+    "artifacts/adj_20261016/fable5/meas_D/witness_hostexit.py":
+        (CLASS_RESEARCH, "the 2026-10-16 adjudication (packet D: the rung-3 attempt for ofemulnodata / mipssyscallprom, made by claude-opus-4-8 in the Fable seat's FALLBACK run), preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/wdcaltoff_rung3_probe.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":

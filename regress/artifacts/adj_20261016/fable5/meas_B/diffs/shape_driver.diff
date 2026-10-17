@@ -1,0 +1,44 @@
+241a242,246
+> TX_LINE = re.compile(r"^TX (?P<tag>\w+) e=(?P<e>-?\d+) " + REC)
+> #  ARGUMENT SHAPE through TRIGGER: in-domain values spelled as low-precedence expressions (the tag names the
+> #  spelling; the value is 33 -- word 1, bit 1 -- so a lost parenthesis at ADDR's or BITMASK's operand moves
+> #  the address (4*33) or the payload bit (1 << 33)).
+> TX_WANT = [("cond33", 33), ("or33", 33)]
+297c302,310
+<                  ("((unsigned char)96)", 96)]
+---
+>                  ("((unsigned char)96)", 96),
+>                  #  ARGUMENT SHAPE: an out-of-domain value spelled as a low-precedence expression.  `(e)'
+>                  #  -> `e' at either RANGE_OK site accepts it (measured: s11_latent) while the committed
+>                  #  header refuses it; ?: binds looser than && and <.
+>                  ("1 ? 200 : 5", 200),
+>                  #  and an IN-DOMAIN one: ADDR's `4*((e)>>5)' without its operand parentheses gives
+>                  #  4*33 for this (SWEEP's typedef asserts the value on both legs; TVAL's TX raises
+>                  #  carry it through TRIGGER, where BITMASK's `(e) & 31' is pinned).
+>                  ("1 ? 33 : 0", 33)]
+444c457
+<     seen, typed, bad = {}, {}, []
+---
+>     seen, typed, shaped, bad = {}, {}, {}, []
+447c460
+<         tag = None
+---
+>         tag, shape = None, False
+450a464,466
+>                 m = TX_LINE.match(ln)
+>                 shape = True
+>             if not m:
+455a472,473
+>         elif shape:
+>             shaped[(tag, e)] = shaped.get((tag, e), 0) + 1
+469a488,489
+>     if sorted(shaped) != TX_WANT or any(v != 1 for v in shaped.values()):
+>         return False, "%d argument-shape raises, want each of %s once" % (sum(shaped.values()), TX_WANT)
+471,473c491,493
+<         return False, "%d of 112 raises WRONG: %s" % (len(bad), "; ".join(bad[:3]))
+<     return True, ("96 of 96 int raises and 16 of 16 typed edge raises: address and device-visible "
+<                   "payload exact; every argument pin held")
+---
+>         return False, "%d of 114 raises WRONG: %s" % (len(bad), "; ".join(bad[:3]))
+>     return True, ("96 of 96 int raises, 16 of 16 typed edge raises and 2 of 2 argument-shape raises: address "
+>                   "and device-visible payload exact; every argument pin held")

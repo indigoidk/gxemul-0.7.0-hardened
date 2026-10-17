@@ -24735,3 +24735,16 @@ correct the comment when `panel.sh` is next reviewed (it carries unreviewed delt
   function's next statement, enter DEPENDS-ON?) answered 2026-10-09: keep the written rule** -- it stays debt.
 * **`pcc2c040warnedeq` (MED, open)** -- `d->warned |=` -> `=` in the C040 arm passes all 18 rows; it clears the twelve
   other width-warning latch bits.  Pin: a second width-decline store in the `c040 predirty` session, counting announces.
+
+### 2026-10-16 -- the day's adjudications landed: seven rows filed (three HIGH) from packets C and D
+
+Rulings: `regress/artifacts/adj_20261016/RULINGS_C_records.md` and `RULINGS_D_secondreadings.md` (three seats each:
+Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its source citations.
+
+* **`ofemulnodata` (HIGH, open)** -- src/promemul/of.c of_emul(): the OpenFirmware emulation entry calls fatal() + exit(1) when machine->md.of_data is NULL, which is true on every machine except macppc -- and the ARM and PowerPC decoders route their OpenFirmware magic instruction to it with no machine or privilege check
+* **`mipssyscallprom` (HIGH, open)** -- cpu_mips_instr.c: `syscall' carrying the PROM-emulation code is routed to X(promemul) at ANY address, and X(promemul)'s default arm calls fatal() + exit(1) on every machine type without PROM emulation -- #235 gated the `break' form by address; the `syscall' form was never gated
+* **`asccmdwidecount` (HIGH, open)** -- dev_asc.c: the COMMAND-phase DMA length is built from transfer-count registers that hold the guest's whole 32-bit write, so an out-of-range count reaches scsi_transfer_allocbuf, whose allocation-failure path calls exit(1) -- the COMMAND-phase sibling of ascwidecount (DATA_OUT)
+* **`seatverdictrefusal` (LOW, open)** -- tools/pipeline/seat_verdicts.py (v3): a substantive answer that quotes a STRONG wall phrase inside its last 4,000 bytes and carries no recognised verdict line is scored WALLED -- the verdict gate, not the window, rescues the other fixtures
+* **`wdczerolendatain` (LOW, open)** -- dev_wdc.c: a zero-length allocation presents a DATAIN phase with DRQ set and no bytes behind it -- the presentation is established from the source; any guest or driver consequence is not
+* **`agyselfupdate` (LOW, open)** -- agy pack runner: an rc-127 'No such file' launch failure (the agy binary renamed to .old mid-pack, causation INFERRED as a self-update) is not distinguished from a seat answer, and the pre-flight `agy models' failure is reported as 'model absent', which stops the whole pack
+* **`panelshrefused` (LOW, held)** -- tools/panel.sh scores a content-filter-REFUSED codex answer as 'answered': check() greps the whole file for a verdict token and the tally counts any non-thin file -- seat_verdicts.py v3 fixes the extractor only
