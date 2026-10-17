@@ -1,0 +1,1255 @@
+
+## 3. The repair, v4 -> v5
+
+### 3a. `tools/cxlaunch.sh` -- WHOLE, as it ships (md5 af18158ed30b740cb13604de64013323)
+
+```bash
+     1	#!/bin/bash
+     2	#  A codex launcher that CANNOT report a refused seat as a clean run.
+     3	#
+     4	#  *** THE TWO DEFECTS THIS REPLACES, both mine, both measured 2026-09-07 on the lcaconfwidth
+     5	#  census. ***
+     6	#    1. The content check grepped the .txt for refusal text.  A codex CONTENT-FILTER REFUSAL writes
+     7	#       NOTHING to stdout and puts "ERROR: This content was flagged..." on STDERR -- so the check
+     8	#       reported `refusal hits: 0` on a refusal.  A check that looks in the wrong stream answers the
+     9	#       same whether or not the thing it tests is true.
+    10	#    2. The script ended on a successful command, so it exited 0 while holding `codex rc=1`.  The
+    11	#       harness then reported the task as COMPLETED.  A failure laundered into a clean completion.
+    12	#
+    13	#  *** LANDED HERE 2026-10-16 (ledger `cxlaunchquotation`; ruled by Fable 5.1, GPT-6 Astra and Grok 4.7 in
+    14	#  regress/artifacts/adj_20261016/RULINGS_C_records.md, F1).  Until then THIS file ran Astra at `max` with the
+    15	#  2026-09-07 classifier, while most farm jobs ran an UNTRACKED scratchpad copy (cxlaunch_u.sh) carrying the two
+    16	#  owner directives of 2026-09-26 -- and the carrier described the copy's behaviour as this file's.  Not every job
+    17	#  ran the copy: the 2026-10-09 asicconverge confirm used the old classifier and reported an rc-0, 10,466-byte answer
+    18	#  as WALLED (fablequeue8n_20261009/astra_confirm/cxlaunch_asicconverge_stdout.txt). ***
+    19	#    1. "Astra (ultra) can replace codex 5.6 sol" -- the effort is `ultra`.  MEASURED 2026-09-26 before use: the
+    20	#       server's enum lists 'none'..'xhigh','max' and rejects a bogus value with 400 invalid_enum_value; `ultra` is
+    21	#       accepted (rc 0, header `reasoning effort: ultra`, liveness token and a verbatim CHECKPOINT.md quote returned).
+    22	#       The CLI's own model cache describes it as "Maximum reasoning with automatic task delegation" -- max plus
+    23	#       delegation, so it is a CLI tier above max, not a server one.
+    24	#    2. "use daybreak ... if encountering AUP error" -- on a content-filter refusal (codex's own `ERROR: This content
+    25	#       was flagged for possible cybersecurity risk` on stderr) the brief is re-run ONCE on the Daybreak model
+    26	#       (gpt-daybreak-blue-latest, the CLI's only Daybreak slug: "frontier agentic coding model for broad defensive
+    27	#       cybersecurity work"; liveness-verified 2026-09-26).  The refused run's files are KEPT as
+    28	#       codex_<tag>.refused.{txt,err}, and the log names which model answered -- a Daybreak answer is recorded as
+    29	#       Daybreak's, never as Astra's.  The receipt of the fallback firing on a REAL refusal is
+    30	#       regress/artifacts/codexpack_20260928/dossier_gdromdma/dossier_gdromdma.launch.log; the controls below test
+    31	#       the classifier on fixtures, which is a different claim.
+    32	#    3. (2026-10-16, Fable 5.1) codex's diagnostics are matched AFTER ANSI colour is stripped.  7 of 453 panel.sh
+    33	#       codex.txt files carry a column-0 `ERROR:` coloured as ESC[1m ESC[31m ERROR: ESC[0m
+    34	#       (adj_20261016/fable5/meas_C/ansi_census.txt; 0 of 593 launcher .err files), and one is a REAL codex refusal:
+    35	#       _scratchpad/panel_20260919_013302/codex_adv540p2.REFUSED1.err, where `grep '^ERROR:'` finds 0 lines unstripped
+    36	#       and 2 stripped.  Unstripped, such a run reads exit 6 "seat down" (Fable's Q3 is the wall-shaped twin).
+    37	#    4. (2026-10-16, GPT-6 Astra) the `model:` line of codex's HEADER BLOCK is COMPARED to the model asked for.  This
+    38	#       file printed both and compared neither, so "a wrong name is a SEAT FAILURE" was unenforced.  On record: 322
+    39	#       asked/ran pairs across 519 launch logs under the project root, 319 across 493 inside GXEMUL-SEC (Astra), no
+    40	#       header absent and no mismatch -- so a mismatch is new, and it exits 5.  Only the OPENING header block is read
+    41	#       (pass 2 and the adjudication pass, Astra): a `model:` line anywhere else in stderr is streamed source or the
+    42	#       brief -- it can name a model, and it is never READ (GLM 5.3 and Grok 4.7, v3 pass).
+    43	#
+    44	#  KNOWN RESIDUALS -- recorded, NOT fixed (the ruling's own wording; no real run has either shape, 0 of 387 launch
+    45	#  lines are off the diagonal of {rc 0 with stdout, rc 1 with empty stdout} -- adj_20261016/fable5/meas_C/
+    46	#  launchlog_census.txt):
+    47	#    * rc != 0 WITH an answer AND column-0 quoted wall text -> exit 8 (fixture N4).  Reading only codex's LAST
+    48	#      `ERROR:` line does not fix it: in N4 that line is itself a quotation.
+    49	#    * its refusal twin: a quoted `flagged for possible cybersecurity` line on rc != 0 -> the Daybreak re-run fires
+    50	#      and the first answer is renamed codex_<tag>.refused.* (Grok 4.7).
+    51	#    * a run whose stderr carries NO opening codex header block is reported "model UNVERIFIED" and is not failed -- 0 of
+    52	#      330 launcher-captured answered runs on record lack it (counted on pass 2); failing it would lose every answer to a
+    53	#      CLI format change.  A block whose closing rule never comes is read for 30 lines at most.
+    54	#    * the ANSI strip widens both residuals above to colour-prefixed quoted lines on a failed or empty run (GLM 5.3,
+    55	#      pass 2): a quoted line whose only prefix was colour becomes column-0 -- still inside the classify-on-failure gate.
+    56	#    * a REFUSED first run's header is printed (`ran:`) but not compared; its answer is discarded, and the fallback's
+    57	#      own run is the one compared (GLM 5.3, pass 2).
+    58	#    * exit 5 is new to callers: the farm's pack runner special-cases 7 and 8 only, so it RETRIES a 5 rather than
+    59	#      recording an answer (Grok 4.7, pass 2) -- a different model having answered is not an answer from this seat.
+    60	#      The mechanism (_scratchpad/codexpack_20260928/run_pack_body.sh, read 2026-10-17): it reports a 7, STOPs the pack
+    61	#      on an 8, and its done_job counts a job done only when the launch log says `seat answered` or `The answer is
+    62	#      LOST` -- so a 5 or a 6 is left not done and the next pack run fires it again.  Those two phrases, and the
+    63	#      `answered by: <model>` the runner records, are therefore part of this file's contract (controls row PK, v5).
+    64	#
+    65	#  Overrides, each only so the branches are testable without the network: CX_MODEL, CX_EFFORT, CX_AUP_MODEL (set it
+    66	#  EMPTY to disable the fallback), CX_AUP_EFFORT, CX_CODEX_BIN.
+    67	#
+    68	#  Exit status: 0 answered; 5 a different model ran; 6 empty stdout with no refusal or wall text; 7 refused (after
+    69	#  the fallback, if any); 8 walled; 9 the brief is above the argv cap or the project dir is missing; otherwise
+    70	#  codex's own nonzero rc.  An answered run whose model is unverified still exits 0, and says so instead of naming
+    71	#  a model.  Controls: regress/artifacts/cxlaunchland_20261016/run_controls_v5.sh (RECEIPT_v5.txt; the kill table is
+    72	#  KILLTABLE_v5.txt).  Its header is the CONTRACT: the decisions found by reading every predicate, pattern alternative,
+    73	#  redirection, constant and caller-read log phrase of this file, each with the rows that pin its edges or the reason
+    74	#  it is not pinned.  RECEIPT.txt and RECEIPT_v2.txt to RECEIPT_v4.txt are the receipts of the earlier versions.
+    75	#
+    76	#  Usage: cxlaunch.sh <brief-path> <out-dir> <tag>   -- ABSOLUTE paths.  The brief's size and `mkdir` resolve in the caller's
+    77	#  directory, codex's files after `cd "$PROJ"`, so a relative path breaks: measured 2026-10-17, a relative pointer read 787
+    78	#  bytes, then codex got no brief and the run exited 1, NOT a clean run.  Every caller on record passes absolute paths.
+    79	set -u
+    80	BRIEF="$1"; OUT="$2"; TAG="$3"
+    81	PROJ=/c/DocumentNoSnc/CC/GXEMUL
+    82	CODEX="${CX_CODEX_BIN:-$HOME/AppData/Local/Programs/OpenAI/Codex/bin/codex}"
+    83	MODEL="${CX_MODEL:-gpt-6-astra}"
+    84	EFFORT="${CX_EFFORT:-ultra}"
+    85	AUP_MODEL="${CX_AUP_MODEL-gpt-daybreak-blue-latest}"
+    86	AUP_EFFORT="${CX_AUP_EFFORT:-ultra}"
+    87	mkdir -p "$OUT"
+    88	TXT="$OUT/codex_${TAG}.txt"; ERR="$OUT/codex_${TAG}.err"
+    89	ESC=$(printf '\033')
+    90	
+    91	sz=$(wc -c < "$BRIEF")
+    92	echo "brief bytes: $sz"
+    93	[ "$sz" -gt 30000 ] && { echo "*** above the argv cap -- use the pointer form"; exit 9; }
+    94	
+    95	cd "$PROJ" || exit 9
+    96	
+    97	strip_ansi() { sed "s/${ESC}\[[0-9;]*[A-Za-z]//g" "$1" 2>/dev/null; }
+    98	
+    99	run_codex() {    # $1 model, $2 effort
+   100	    "$CODEX" exec --sandbox read-only --skip-git-repo-check -m "$1" \
+   101	        -c model_reasoning_effort="$2" "$(cat "$BRIEF")" > "$TXT" 2> "$ERR" < /dev/null
+   102	    rc=$?
+   103	    #  codex's OPENING header block -- `OpenAI Codex vX`, then the lines between the next two `--------` rules -- names the
+   104	    #  model and effort it actually ran.  Read only that block, and only at the TOP of stderr: the banner and its first
+   105	    #  rule must appear by line 12 and the block is read for at most 30 lines.  On record the block's `model:` line is
+   106	    #  line 5 of stderr in 599 of 600 codex .err files and line 7 in one (two pre-header lines; Astra).  A `model:` line
+   107	    #  anywhere else is streamed source or the brief and is never READ -- including a complete QUOTED header block, which
+   108	    #  N1's own stderr carries at line 5528 (GPT-6 Astra, adjudication pass: v2 matched the banner anywhere).
+   109	    HDR=$(strip_ansi "$ERR" | awk 'NR > 12 && h < 2 { exit }
+   110	        h == 0 && /^OpenAI Codex/ { h = 1; next }
+   111	        h == 1 && /^--------/ { h = 2; next }
+   112	        h == 2 && /^--------/ { exit }
+   113	        h == 2 { if (++n > 30) exit; print }')
+   114	    RAN=$(printf '%s\n' "$HDR" | grep -m1 '^model:' | sed 's/^model:[[:space:]]*//; s/[[:space:]]*$//')
+   115	    echo "codex rc=$rc   stdout=$(wc -c < "$TXT") b   stderr=$(wc -c < "$ERR") b   asked: $1 / $2"
+   116	    echo "  ran: ${RAN:+model: $RAN} / $(printf '%s\n' "$HDR" | grep -m1 '^reasoning effort:')"
+   117	}
+   118	
+   119	#  CONTENT CHECK.  Verify by content, never by size -- and NOT by grepping stderr for codex's diagnostics alone.
+   120	#
+   121	#  *** MEASURED 2026-09-07, on the run that installed this file: codex STREAMS THE SOURCE IT READS into stderr, so a
+   122	#  bare grep over stderr matches any file containing the words -- hence the `^ERROR:` anchor. ***
+   123	#
+   124	#  *** AND THE ANCHOR IS NOT ENOUGH.  MEASURED 2026-09-26: THREE REAL ANSWERS WERE REPORTED "SEAT WALLED" -- astra549
+   125	#  (rc 0, 11,472 b), astra550 (rc 0, 4,265 b), rec529audit (rc 0, 13,442 b) -- because each read an old panel file
+   126	#  whose lines BEGIN with a codex wall message ("ERROR: You've hit your usage limit ... 7:01 AM"), and codex streamed
+   127	#  those lines into stderr at column 0.  A quoted marker re-arms the tool that reads it (the carrier's own rule). ***
+   128	#
+   129	#  So the discriminator is the EXIT STATUS and the ANSWER, which quoted text cannot forge.  stderr's `ERROR:` lines are
+   130	#  classified ONLY WHEN rc != 0 OR stdout IS EMPTY; rc 0 with a non-empty stdout is an ANSWER, whatever stderr quotes.
+   131	#  Every real wall and refusal on record is rc 1 with an EMPTY stdout, and every rc-0 run carries an answer: 362 + 25
+   132	#  of 387 launch lines, nothing off that diagonal (launchlog_census.txt) -- the residuals above are the off-diagonal.
+   133	classify() {
+   134	    #  `grep -a`: a stderr carrying a NUL byte is "binary" to grep, which then prints `Binary file (standard input)
+   135	    #  matches` instead of the lines.  A real wall was recorded exit 6 "seat down" that way:
+   136	    #  _scratchpad/cxfarm3_20260919/out/codex_l1_batterypreflight.err (rc 1, empty stdout, 1,449 NULs from byte 2,318,517;
+   137	    #  its two column-0 `ERROR: You've hit your usage limit` lines come after them) -- Grok 4.7, pass 2, re-run here.
+   138	    CXERR=$(strip_ansi "$ERR" | grep -a '^ERROR:')
+   139	    verd=$(grep -ic 'VERDICT' "$TXT" 2>/dev/null)
+   140	    body=$(wc -c < "$TXT")
+   141	    refus=0; wall=0
+   142	    if [ "$rc" -ne 0 ] || [ "$body" -eq 0 ]; then
+   143	        refus=$(printf '%s' "$CXERR" | grep -ic 'flagged for possible cybersecurity\|cannot help with\|can.t help with\|I won.t help')
+   144	        wall=$(printf '%s' "$CXERR" | grep -ic 'usage limit\|quota\|rate limit\|not authenticated')
+   145	    else
+   146	        q=$(printf '%s' "$CXERR" | grep -c .)
+   147	        [ "$q" -gt 0 ] && echo "  note: $q ERROR:-shaped line(s) in stderr IGNORED -- rc 0 with an answer, so they are quoted source"
+   148	    fi
+   149	    echo "  verdict-in-stdout: $verd   refusal: $refus   wall: $wall   (classified only when rc != 0 or stdout is empty)"
+   150	}
+   151	
+   152	run_codex "$MODEL" "$EFFORT"; classify
+   153	ANSWERED_BY="$MODEL"
+   154	
+   155	if [ "$refus" -gt 0 ] && [ -n "$AUP_MODEL" ] && [ "$AUP_MODEL" != "$MODEL" ]; then
+   156	    echo "  *** SEAT REFUSED on $MODEL (content filter):"
+   157	    printf '%s\n' "$CXERR" | grep -m1 -i 'flagged for possible cybersecurity' | cut -c1-160 | sed 's/^/    /'
+   158	    mv -f "$TXT" "$OUT/codex_${TAG}.refused.txt"; mv -f "$ERR" "$OUT/codex_${TAG}.refused.err"
+   159	    echo "  *** AUP FALLBACK: re-running ONCE on $AUP_MODEL / $AUP_EFFORT (the refused run is kept as codex_${TAG}.refused.*)"
+   160	    run_codex "$AUP_MODEL" "$AUP_EFFORT"; classify
+   161	    ANSWERED_BY="$AUP_MODEL"
+   162	fi
+   163	
+   164	if [ "$refus" -gt 0 ]; then
+   165	    echo "  *** SEAT REFUSED (content filter) on $ANSWERED_BY.  The answer is LOST, whatever the token count says."
+   166	    printf '%s\n' "$CXERR" | grep -m2 -i 'flagged for possible cybersecurity' | cut -c1-160 | sed 's/^/    /'
+   167	    echo "  *** REPHRASE (neutral test-coverage wording) or ROUTE THIS BRIEF TO GROK."
+   168	    exit 7
+   169	fi
+   170	if [ "$wall" -gt 0 ]; then echo "  *** SEAT WALLED ($ANSWERED_BY)."; exit 8; fi
+   171	if [ "$body" -eq 0 ]; then echo "  *** EMPTY STDOUT with no refusal/wall text -- seat down, cause NOT established."; exit 6; fi
+   172	if [ -n "$RAN" ] && [ "$RAN" != "$ANSWERED_BY" ]; then
+   173	    echo "  *** A DIFFERENT MODEL RAN: asked $ANSWERED_BY, codex's header says $RAN -- a SEAT FAILURE; the answer is not $ANSWERED_BY's."
+   174	    exit 5
+   175	fi
+   176	if [ "$rc" -ne 0 ];  then echo "  *** codex exited $rc -- NOT a clean run."; exit "$rc"; fi
+   177	if [ -z "$RAN" ]; then
+   178	    echo "  seat answered -- model UNVERIFIED: no codex header block in stderr (requested: $ANSWERED_BY)"
+   179	else
+   180	    echo "  seat answered. (answered by: $ANSWERED_BY)"
+   181	fi
+```
+
+### 3a'. its v4 -> v5 diff -- comments only (15 changed lines)
+
+```diff
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/cxlaunchland_20261016/cxlaunch_landed_v4.sh	2026-10-17 01:23:15.224968700 -0500
++++ /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/cxlaunch.sh	2026-10-17 03:31:55.562960900 -0500
+@@ -57,6 +57,10 @@
+ #      own run is the one compared (GLM 5.3, pass 2).
+ #    * exit 5 is new to callers: the farm's pack runner special-cases 7 and 8 only, so it RETRIES a 5 rather than
+ #      recording an answer (Grok 4.7, pass 2) -- a different model having answered is not an answer from this seat.
++#      The mechanism (_scratchpad/codexpack_20260928/run_pack_body.sh, read 2026-10-17): it reports a 7, STOPs the pack
++#      on an 8, and its done_job counts a job done only when the launch log says `seat answered` or `The answer is
++#      LOST` -- so a 5 or a 6 is left not done and the next pack run fires it again.  Those two phrases, and the
++#      `answered by: <model>` the runner records, are therefore part of this file's contract (controls row PK, v5).
+ #
+ #  Overrides, each only so the branches are testable without the network: CX_MODEL, CX_EFFORT, CX_AUP_MODEL (set it
+ #  EMPTY to disable the fallback), CX_AUP_EFFORT, CX_CODEX_BIN.
+@@ -64,11 +68,14 @@
+ #  Exit status: 0 answered; 5 a different model ran; 6 empty stdout with no refusal or wall text; 7 refused (after
+ #  the fallback, if any); 8 walled; 9 the brief is above the argv cap or the project dir is missing; otherwise
+ #  codex's own nonzero rc.  An answered run whose model is unverified still exits 0, and says so instead of naming
+-#  a model.  Controls: regress/artifacts/cxlaunchland_20261016/run_controls_v4.sh (RECEIPT_v4.txt; the kill table is
+-#  KILLTABLE_v4.txt; its header is the CONTRACT -- which edge of each decision this file makes is pinned, and which is
+-#  deliberately not).  RECEIPT.txt, RECEIPT_v2.txt and RECEIPT_v3.txt are the receipts of the earlier versions.
++#  a model.  Controls: regress/artifacts/cxlaunchland_20261016/run_controls_v5.sh (RECEIPT_v5.txt; the kill table is
++#  KILLTABLE_v5.txt).  Its header is the CONTRACT: the decisions found by reading every predicate, pattern alternative,
++#  redirection, constant and caller-read log phrase of this file, each with the rows that pin its edges or the reason
++#  it is not pinned.  RECEIPT.txt and RECEIPT_v2.txt to RECEIPT_v4.txt are the receipts of the earlier versions.
+ #
+-#  Usage: cxlaunch.sh <brief-path> <out-dir> <tag>
++#  Usage: cxlaunch.sh <brief-path> <out-dir> <tag>   -- ABSOLUTE paths.  The brief's size and `mkdir` resolve in the caller's
++#  directory, codex's files after `cd "$PROJ"`, so a relative path breaks: measured 2026-10-17, a relative pointer read 787
++#  bytes, then codex got no brief and the run exited 1, NOT a clean run.  Every caller on record passes absolute paths.
+ set -u
+ BRIEF="$1"; OUT="$2"; TAG="$3"
+ PROJ=/c/DocumentNoSnc/CC/GXEMUL
+```
+
+### 3b. the controls, `run_controls_v5.sh`, WHOLE (the CONTRACT is its header)
+
+```bash
+     1	#!/bin/bash
+     2	#  Controls for the tools/cxlaunch.sh landing of 2026-10-16 (ledger `cxlaunchquotation`, `cxlaunchdaybreak`; RULINGS_C_records.md
+     3	#  F1), v5 after the four-seat pass 2, the adjudication pass, the v3 pass and the v4 pass.  Every row runs a launcher against a FAKE
+     4	#  codex that replays a fixture -- nothing here calls the network -- on THREE launchers, and compares each exit status with the
+     5	#  expected one:
+     6	#
+     7	#    tracked  cxlaunch_tracked.sh  = `git show HEAD:tools/cxlaunch.sh` before the landing (md5 cb180d9d...), the file the
+     8	#             landing REPLACES -- it names its codex binary under $HOME and has no override
+     9	#    before   cxlaunch_before.sh   = the untracked production copy the farm ran (md5 3c51a757...)
+    10	#    after    tools/cxlaunch.sh    = the landed file (or $CXL_AFTER, which the mutant table uses)
+    11	#
+    12	#  The tracked column is the PRE-FIX state (Fable 5.1's pass-2 C1, via its Opus 4.8 fallback): N1 and N2 are the
+    13	#  `cxlaunchquotation' false wall (exit 8 there, 0 after), D1 the missing Daybreak fallback (7 there, 0 after).  The tracked and
+    14	#  before expectations RECORD what the two old files do; only the after column is a claim.  Those of the rows v5 added were
+    15	#  recorded from a calibration run of this file (RECEIPT_v5_calibration.txt); every after expectation was written before it.
+    16	#
+    17	#  v5 -- the v4 pass (Fable 5.1, GPT-6 Astra, Grok 4.7, GLM 5.3) measured one-edit mutants passing all 116 v4 controls at
+    18	#  decisions the v4 CONTRACT did not list -- codex's own rc passed through, the fallback's second and third conjuncts, the
+    19	#  header's ANSI strip, the stdin redirect, the output names, the pattern alternatives, the two `-eq 0` body tests, the default
+    20	#  codex path.  The v4 CONTRACT was derived from the three passes' FINDINGS, not from the file (Fable 5.1).  v5's is derived from
+    21	#  the file: every predicate, conjunct, pattern alternative, redirection, constant, exit-cascade order and caller-read log
+    22	#  phrase, each asked "which row goes red if this changes".  Every launcher run is under `timeout 120' (a looping mutant exits
+    23	#  124 and reds; an honest run takes about 0.6 s -- Fable 5.1, v4 pass) and is fed a MARKER file on stdin; HOME is a scratch
+    24	#  dir holding a second fake at the launcher's default codex path, which marks the runs that reach it.
+    25	#
+    26	#  THE CONTRACT -- each decision of the landed launcher (by construct), the rows that pin its edges, and what is not pinned:
+    27	#  configuration
+    28	#    CX_CODEX_BIN honoured, its `:-'      E0b (no after run but DP's and EO's reaches the default-path fake); EO (set EMPTY)
+    29	#    the default codex path               DP (CX_CODEX_BIN unset: the run reaches $HOME/AppData/Local/Programs/.../codex)
+    30	#    CX_MODEL, CX_EFFORT, CX_AUP_EFFORT, their `:-' and defaults
+    31	#                                         E1, E2 (the whole argument sequence); EO (each set EMPTY -> its default)
+    32	#    CX_AUP_MODEL, its default and `-' (EMPTY disables the fallback)
+    33	#                                         E2; FD (every row that sets it empty makes exactly one call)
+    34	#    the output names and the stdout/stderr redirections, `mkdir -p "$OUT"'
+    35	#                                         N1F (codex_N1.txt and .err byte-for-byte the fixture's, nothing else written)
+    36	#    `< /dev/null' on codex's stdin       SI (no after run's codex reads the marker the launcher is fed)
+    37	#    `cd "$PROJ"'                         CWD (every after run's codex starts in the project root)
+    38	#    the argv cap `sz -gt 30000', exit 9  X14 (30,000 accepted) / X15 (30,001: exit 9, codex never called)
+    39	#  the call
+    40	#    the argument sequence                E1 (one call), E2 and EO (Astra, then Daybreak), DP -- each compared whole
+    41	#  the opening header
+    42	#    ANSI strip on the header             CH (the real coloured header of fx/R2.stderr, asked as gpt-6-other -> 5)
+    43	#    the window `NR > 12 && h < 2'        W12 / W13 (first rule at line 12 read, at 13 not); X13 (the real banner-at-4 header);
+    44	#                                         X9, X10 (no opening block, a quoted one at line 21)
+    45	#    the banner: `h == 0 &&', `/^OpenAI Codex/'
+    46	#                                         HB (a banner-shaped line inside the block does not restart it); BA (a banner with a
+    47	#                                         prefix, above the real one, is not a banner); every header row (the text)
+    48	#    the first rule: `h == 1 &&', 8 dashes, `next'
+    49	#                                         BA (a rule before any banner is not the first rule); R7A (seven dashes are not a
+    50	#                                         rule; nine find no block anywhere); every header row (`next')
+    51	#    the closing rule: `h == 2 &&', 8 dashes, `exit'
+    52	#                                         BA (a rule before any banner closes nothing); R7B (seven dashes do not close the
+    53	#                                         block); NM (no model line in the block: a model line after the close is not read)
+    54	#    the body: `h == 2', the cap `++n > 30'
+    55	#                                         R7A (the lines between banner and first rule are not body); K30 / K31 (a model at
+    56	#                                         body line 30 read, at 31 not)
+    57	#    the first `model:' line, anchored    TM (two model lines: the first is read); MA (`fallback model:' is not a model line);
+    58	#                                         M1, X5
+    59	#    the model line's two trims           WS (`model:<TAB><SP><SP>gpt-6-astra<SP><CR>' verifies)
+    60	#  classification
+    61	#    the gate `rc -ne 0 || body -eq 0'    N1, N2, X2, N4; RC2W (rc 2 with an answer IS classified); B1G (a 1-byte rc-0
+    62	#                                         answer is NOT)
+    63	#    `^ERROR:', `grep -a'                 X1; X8
+    64	#    ANSI strip on the ERROR lines        A1, Q3, R2X (SGR, one code per escape); CSI (a non-SGR CSI and a `;'-joined SGR)
+    65	#    the refusal alternatives, `-i'       P2, Q1, A1 (`flagged for possible cybersecurity'); RF1 (`cannot help with');
+    66	#                                         RF2 (`can't help with'); RF3 (`I won't help'); RFC (the first, upper case)
+    67	#    the wall alternatives, `-i'          P1, Q2, Q3, X8 (`usage limit'); WL1 (`quota'); WL2 (`rate limit');
+    68	#                                         WL3 (`not authenticated'); WLC (the first, upper case)
+    69	#    refusal count `refus -gt 0', at BOTH guards
+    70	#                                         P2, Q1, A1, D1 (count 1); R2X (2, the final guard); D3 (2, the fallback)
+    71	#    wall count `wall -gt 0'              W1L (count 1); P1, Q2, Q3, X8 (2); N4 (6)
+    72	#  the fallback
+    73	#    trigger `refus -gt 0 && -n AUP_MODEL && AUP_MODEL != MODEL'
+    74	#                                         D1, D2, D3 fire; FB1, FB2 do not (an answer, a wall; the fallback on); FD (empty:
+    75	#                                         never); D5 (asked ON Daybreak and refused: no second run)
+    76	#    once                                 D4 (refused, then refused on Daybreak: exactly two calls)
+    77	#    the refused run's files kept         D1R (codex_D1.refused.txt and .refused.err byte-for-byte the first run's; codex_D1.txt
+    78	#                                         and .err the Daybreak run's)
+    79	#    the answer credited to the fallback  D1, D3 (Daybreak credited); D2 (Daybreak compared -> 5)
+    80	#  the exit cascade: refused 7, walled 8, empty 6, a different model 5, codex's own rc
+    81	#    each status                          P2 (7); P1 (8); N3, X1 (6); M1 (5); RC1A (1); RC3A (3: the RAW rc, not a 1)
+    82	#    the order, each adjacent pair        RW (refusal + wall -> 7); P2 (refusal + empty + rc 1 -> 7); RI (refusal + another
+    83	#                                         model's header -> 7); P1 (wall + empty -> 8); WI (wall + another header -> 8);
+    84	#                                         EM (empty + another header -> 6); X1 (empty + rc 1 -> 6); IR (rc 1, an answer,
+    85	#                                         another header -> 5)
+    86	#    the empty test `body -eq 0'          N3, X1 (0 bytes -> 6); B1E (1 byte -> 0)
+    87	#    identity `-n RAN && RAN != ANSWERED_BY'
+    88	#                                         M1, D2, X5, W12, K30, X13, CH, IR, BA -> 5; M2, X6, X9, W13, K31, NM, HB -> UNVERIFIED, 0
+    89	#  the log phrases a caller reads (_scratchpad/codexpack_20260928/run_pack_body.sh: done_job and reap)
+    90	#    `seat answered' iff exit 0; `The answer is LOST' iff exit 7; `answered by: <model>' iff an exit 0 whose model verified
+    91	#                                         PK (every after run); N1V, WMT (which model); M2, X6, X9, W13, K31, NM, HB (none)
+    92	#    the `codex rc=N   stdout=N b   stderr=N b   asked: M / E' line, which the launch-log censuses this file cites parse
+    93	#                                         LOG (N1)
+    94	#  NOT PINNED, each with its reason:
+    95	#    `|| exit 9' after `cd'               needs a missing project dir -- untestable without editing the file
+    96	#    `set -u'                             reached only by a missing positional argument (a usage error, exit 1); every caller
+    97	#                                         passes three, and a row without them would write outside the scratch dir under a
+    98	#                                         mutant that drops it
+    99	#    the banner rule's `next'             equivalent: the banner line matches no later rule
+   100	#    RELATIVE paths                       the brief's size and `mkdir' resolve in the caller's directory, codex's files after
+   101	#                                         `cd "$PROJ"', so a relative brief or out path breaks (measured 2026-10-17: a relative
+   102	#                                         pointer read 787 bytes, codex got no brief, exit 1 -- NOT a clean run, nothing
+   103	#                                         laundered).  Disclosed in the usage line; every caller on record, and every row here,
+   104	#                                         passes absolute paths
+   105	#    display only -- printed, read by no decision and no caller: `brief bytes'; the `ran:' line (the header's effort is
+   106	#                                         printed, never compared); `verdict-in-stdout' (verd exists for that line alone); the
+   107	#                                         IGNORED note; the refusal excerpts (`-m1'/`-m2', `cut -c1-160'); the REPHRASE line;
+   108	#                                         the wording of the 5, 6, 8 and rc messages beyond the phrases above
+   109	#  SYNTHETIC SHAPES, pinned because a constant's edges are what an edge row is for: RF1-RF3, RFC, WL1-WL3, WLC, RW, BA, HB,
+   110	#  R7A, R7B, NM, TM, MA, WS, K30, K31 and W12/W13 have 0 instances on record, and so does CSI's non-SGR half (CENSUS_v5.txt,
+   111	#  which names each count).  CSI's other half is NOT synthetic: a `;'-joined SGR sits in 44 of the 2,425 codex .err files on
+   112	#  record, so the strip's `;' is load-bearing.
+   113	#
+   114	#  Exit 0 only if every expectation holds (v1 ended on an echo and exited 0 whatever the tally -- GPT-6 Astra, pass 2).
+   115	#  Usage: bash run_controls_v5.sh   ($CXL_AFTER overrides the after launcher; CXL_AFTER_ONLY=1 runs only the after column, which
+   116	#  the mutant table uses; writes only to a scratch dir it removes)
+   117	set -u
+   118	HERE=$(cd "$(dirname "$0")" && pwd)
+   119	REPO=$(cd "$HERE/../../.." && pwd)
+   120	TRACKED="$HERE/cxlaunch_tracked.sh"
+   121	BEFORE="$HERE/cxlaunch_before.sh"
+   122	AFTER="${CXL_AFTER:-$REPO/tools/cxlaunch.sh}"
+   123	ONLY="${CXL_AFTER_ONLY:-}"
+   124	N1D="$REPO/regress/artifacts/exemptredate_20260925/final550"
+   125	QD="$REPO/regress/artifacts/adj_20261016/fable5/meas_C/cxctl_fable"
+   126	NROWS=65
+   127	NFD=56
+   128	for f in "$TRACKED" "$BEFORE" "$AFTER" "$N1D/codex_astra550.txt" "$N1D/codex_astra550.err" "$QD/Q1.stderr" "$QD/Q2.stderr" \
+   129	         "$QD/Q3.stderr" "$HERE/fx/P1.stderr" "$HERE/fx/P2.stderr" "$HERE/fx/N2.stdout" "$HERE/fx/R2.stderr"; do
+   130	    [ -s "$f" ] || { echo "APPARATUS FAIL: missing $f"; exit 9; }
+   131	done
+   132	T=$(mktemp -d)
+   133	trap 'rm -rf "$T"' EXIT
+   134	ESC=$(printf '\033')
+   135	
+   136	mkfx() {    # $1 name, $2 rc, $3 stdout source or "", $4 stderr source or "" (or "-" to read stderr from stdin)
+   137	    mkdir -p "$T/fx/$1"; echo "$2" > "$T/fx/$1/rc"
+   138	    if [ -n "$3" ]; then cp "$3" "$T/fx/$1/stdout"; else : > "$T/fx/$1/stdout"; fi
+   139	    if [ "$4" = "-" ]; then cat > "$T/fx/$1/stderr"; elif [ -n "$4" ]; then cp "$4" "$T/fx/$1/stderr"; else : > "$T/fx/$1/stderr"; fi
+   140	}
+   141	printf 'A complete review answer.\nVERDICT: SHIP\n' > "$T/ans_verdict.txt"
+   142	#  NOT the word "verdict" in any case: the launcher counts it case-insensitively, and a first draft of this fixture said
+   143	#  "no verdict line" -- so it HAD one, and the kill table measured X2 blind to the mutant it exists for.
+   144	printf 'A complete review answer that ends without its summary line.\n' > "$T/ans_noverdict.txt"
+   145	printf 'x' > "$T/ans_1byte.txt"
+   146	hdr() {    # $1 the model -- a minimal closed opening header block
+   147	    printf 'OpenAI Codex v0.153.4\n--------\nmodel: %s\nreasoning effort: ultra\n--------\n' "$1"
+   148	}
+   149	hdr gpt-6-astra > "$T/hdr_astra.txt"
+   150	hdr gpt-6-other > "$T/hdr_other.txt"
+   151	grep -m1 '^ERROR:' "$HERE/fx/P2.stderr" > "$T/refusal_line.txt"
+   152	grep -m1 '^ERROR:' "$HERE/fx/P1.stderr" > "$T/wall_line.txt"
+   153	[ -s "$T/refusal_line.txt" ] && [ -s "$T/wall_line.txt" ] || { echo "APPARATUS FAIL: no column-0 ERROR line in P1 or P2"; exit 9; }
+   154	mkfx P1 1 "" "$HERE/fx/P1.stderr"
+   155	mkfx P2 1 "" "$HERE/fx/P2.stderr"
+   156	mkfx N1 0 "$N1D/codex_astra550.txt" "$N1D/codex_astra550.err"
+   157	mkfx N2 0 "$HERE/fx/N2.stdout" ""
+   158	mkfx N3 0 "" ""
+   159	mkfx N4 1 "$N1D/codex_astra550.txt" "$N1D/codex_astra550.err"
+   160	mkfx Q1 1 "" "$QD/Q1.stderr"
+   161	mkfx Q2 0 "" "$QD/Q2.stderr"
+   162	mkfx Q3 1 "" "$QD/Q3.stderr"
+   163	sed "s/^ERROR:/${ESC}[1m${ESC}[31mERROR:${ESC}[0m${ESC}[0m/" "$HERE/fx/P2.stderr" | mkfx A1 1 "" -
+   164	hdr gpt-daybreak-blue-latest | mkfx DB_OK 0 "$HERE/fx/N2.stdout" -
+   165	mkfx DB_WRONG 0 "$HERE/fx/N2.stdout" "$T/hdr_astra.txt"
+   166	sed 's/^/regress\/artifacts\/old_panel\/codex.txt:17:/' "$HERE/fx/P2.stderr" | mkfx X1 1 "" -
+   167	mkfx X2 0 "$T/ans_noverdict.txt" "$HERE/fx/P1.stderr"
+   168	printf 'streamed source, quoted while the review read a file:\nmodel: gpt-6-other\nreasoning effort: low\n' | mkfx X6 0 "$T/ans_verdict.txt" -
+   169	{ printf 'streamed binary from a file the review read: \000\001\002 end\n'; cat "$HERE/fx/P1.stderr"; } | mkfx X8 1 "" -
+   170	#  X9/X10: twenty lines of streamed text, then a complete codex header block QUOTED from a file the review read (the shape
+   171	#  N1's stderr carries from line 5528) -- and no opening header at all
+   172	latehdr() {    # $1 the quoted block's model
+   173	    i=1; while [ $i -le 20 ]; do printf 'streamed line %d of a file the review read\n' $i; i=$((i + 1)); done
+   174	    printf 'OpenAI Codex v0.153.4\n--------\nworkdir: C:\\DocumentNoSnc\\CC\\GXEMUL\nmodel: %s\nprovider: openai\n' "$1"
+   175	    printf 'reasoning effort: ultra\n--------\nuser\nthe quoted session brief\n'
+   176	}
+   177	latehdr gpt-6-astra | mkfx X9 0 "$T/ans_verdict.txt" -
+   178	latehdr gpt-6-other | mkfx X10 0 "$T/ans_verdict.txt" -
+   179	#  v4 (the v3 pass): the window's and the cap's EDGES, the real warning-prefixed header, a real doubled refusal, one wall line
+   180	hdrat() {    # $1 lines before the banner, $2 the block's model -- a CLOSED opening block whose banner is line $1+1
+   181	    i=1; while [ $i -le "$1" ]; do printf 'startup line %d\n' $i; i=$((i + 1)); done
+   182	    printf 'OpenAI Codex v0.153.4\n--------\nworkdir: C:\\DocumentNoSnc\\CC\\GXEMUL\nmodel: %s\nprovider: openai\n' "$2"
+   183	    printf 'reasoning effort: ultra\n--------\nuser\nthe session brief\n'
+   184	}
+   185	hdrat 10 gpt-6-other | mkfx W12 0 "$T/ans_verdict.txt" -      # banner line 11, first rule line 12: inside the window
+   186	hdrat 11 gpt-6-other | mkfx W13 0 "$T/ans_verdict.txt" -      # banner line 12, first rule line 13: outside it
+   187	head -14 "$REPO/regress/artifacts/ppcrldimimask/codex_book1check_20260910.err" | mkfx X13 0 "$T/ans_verdict.txt" -
+   188	capat() {    # $1 body lines before the block's `model:' line -- an UNTERMINATED opening block
+   189	    printf 'OpenAI Codex v0.153.4\n--------\n'
+   190	    i=1; while [ $i -le "$1" ]; do printf 'body line %d\n' $i; i=$((i + 1)); done
+   191	    printf 'model: gpt-6-other\nreasoning effort: ultra\n'
+   192	    i=1; while [ $i -le 20 ]; do printf 'streamed line %d\n' $i; i=$((i + 1)); done
+   193	}
+   194	capat 29 | mkfx K30 0 "$T/ans_verdict.txt" -                  # the model is body line 30: read
+   195	capat 30 | mkfx K31 0 "$T/ans_verdict.txt" -                  # the model is body line 31: not read
+   196	mkfx R2 1 "" "$HERE/fx/R2.stderr"
+   197	mkfx W1L 1 "" "$T/wall_line.txt"
+   198	mkfx ANS 0 "$T/ans_verdict.txt" "$T/hdr_astra.txt"
+   199	#  v5 (the v4 pass): the rc pass-through, the gate's and the empty test's 1-byte edge, the real coloured header, each pattern
+   200	#  alternative and the case fold, a non-SGR strip, each adjacent pair of the exit cascade, and every awk guard and constant
+   201	mkfx RC1A 1 "$T/ans_verdict.txt" "$T/hdr_astra.txt"
+   202	mkfx RC3A 3 "$T/ans_verdict.txt" "$T/hdr_astra.txt"
+   203	mkfx RC2W 2 "$T/ans_verdict.txt" "$HERE/fx/P1.stderr"
+   204	mkfx B1G 0 "$T/ans_1byte.txt" "$HERE/fx/P1.stderr"
+   205	mkfx B1E 0 "$T/ans_1byte.txt" "$T/hdr_astra.txt"
+   206	head -12 "$HERE/fx/R2.stderr" | mkfx CH 0 "$T/ans_verdict.txt" -      # its opening block only: `ESC[1mmodel:ESC[0m gpt-6-astra'
+   207	printf 'ERROR: I cannot help with that request.\n' | mkfx RF1 1 "" -
+   208	printf "ERROR: I can't help with that request.\n" | mkfx RF2 1 "" -
+   209	printf "ERROR: I won't help with that request.\n" | mkfx RF3 1 "" -
+   210	printf 'ERROR: THIS CONTENT WAS FLAGGED FOR POSSIBLE CYBERSECURITY RISK.\n' | mkfx RFC 1 "" -
+   211	printf 'ERROR: quota exceeded for this workspace.\n' | mkfx WL1 1 "" -
+   212	printf 'ERROR: rate limit reached; retry in 60s.\n' | mkfx WL2 1 "" -
+   213	printf 'ERROR: not authenticated -- run codex login.\n' | mkfx WL3 1 "" -
+   214	printf "ERROR: You've hit your USAGE LIMIT.\n" | mkfx WLC 1 "" -
+   215	printf '%s\n' "${ESC}[2K${ESC}[1;31mERROR:${ESC}[0m This content was flagged for possible cybersecurity risk." | mkfx CSI 1 "" -
+   216	cat "$T/refusal_line.txt" "$T/wall_line.txt" | mkfx RW 1 "" -
+   217	cat "$T/hdr_other.txt" "$T/refusal_line.txt" | mkfx RI 1 "" -
+   218	cat "$T/hdr_other.txt" "$T/wall_line.txt" | mkfx WI 1 "" -
+   219	mkfx EM 0 "" "$T/hdr_other.txt"
+   220	mkfx IR 1 "$T/ans_verdict.txt" "$T/hdr_other.txt"
+   221	printf 'OpenAI Codex v0.153.4\n--------\nmodel:\t  gpt-6-astra \r\nreasoning effort: ultra\n--------\n' | mkfx WS 0 "$T/ans_verdict.txt" -
+   222	printf 'OpenAI Codex v0.153.4\n--------\nfallback model: gpt-6-other\nmodel: gpt-6-astra\nreasoning effort: ultra\n--------\n' \
+   223	    | mkfx MA 0 "$T/ans_verdict.txt" -
+   224	printf 'OpenAI Codex v0.153.4\n--------\nmodel: gpt-6-astra\nmodel: gpt-6-other\nreasoning effort: ultra\n--------\n' \
+   225	    | mkfx TM 0 "$T/ans_verdict.txt" -
+   226	printf 'OpenAI Codex v0.153.4\n--------\nworkdir: x\nreasoning effort: ultra\n--------\nuser\nmodel: gpt-6-other\n' \
+   227	    | mkfx NM 0 "$T/ans_verdict.txt" -
+   228	printf '> OpenAI Codex v0.1 (a quoted transcript)\n--------\nmodel: gpt-6-other\n--------\n' > "$T/ba_pre.txt"
+   229	cat "$T/ba_pre.txt" "$T/hdr_astra.txt" | mkfx BA 0 "$T/ans_verdict.txt" -
+   230	printf 'OpenAI Codex v0.153.4\n--------\nOpenAI Codex v0.1 (quoted)\n--------\nmodel: gpt-6-other\n--------\n' \
+   231	    | mkfx HB 0 "$T/ans_verdict.txt" -
+   232	printf 'OpenAI Codex v0.153.4\n-------\nmodel: gpt-6-other\n--------\nmodel: gpt-6-astra\nreasoning effort: ultra\n--------\n' \
+   233	    | mkfx R7A 0 "$T/ans_verdict.txt" -
+   234	printf 'OpenAI Codex v0.153.4\n--------\n-------\nmodel: gpt-6-astra\nreasoning effort: ultra\n--------\n' \
+   235	    | mkfx R7B 0 "$T/ans_verdict.txt" -
+   236	
+   237	#  the fake codex: replays $FX (or $FX2 when the requested -m equals $FX2_MODEL); logs its arguments to $FX_ARGS, its working
+   238	#  directory to $FX_ARGS.cwd and the first 60 bytes of its stdin to $FX_ARGS.stdin
+   239	cat > "$T/fakecodex.sh" <<'EOF'
+   240	#!/bin/bash
+   241	D="$FX"; prev=""
+   242	for a in "$@"; do
+   243	    if [ "$prev" = "-m" ] && [ -n "${FX2_MODEL:-}" ] && [ "$a" = "$FX2_MODEL" ]; then D="$FX2"; fi
+   244	    prev="$a"
+   245	done
+   246	if [ -n "${FX_ARGS:-}" ]; then
+   247	    { printf 'CALL\n'; for a in "$@"; do printf 'ARG %s\n' "$a"; done; } >> "$FX_ARGS"
+   248	    pwd >> "$FX_ARGS.cwd"
+   249	    head -c 60 >> "$FX_ARGS.stdin"
+   250	fi
+   251	cat "$D/stdout"; cat "$D/stderr" 1>&2; exit "$(cat "$D/rc")"
+   252	EOF
+   253	chmod +x "$T/fakecodex.sh"
+   254	#  the default-path fake under the scratch HOME: it marks the run, then is the same fake (the tracked launcher names only this
+   255	#  path; the after launcher reaches it only when CX_CODEX_BIN is unset or empty)
+   256	DEFBIN="$T/home/AppData/Local/Programs/OpenAI/Codex/bin"
+   257	mkdir -p "$DEFBIN"
+   258	printf '#!/bin/bash\n[ -n "${FX_ARGS:-}" ] && echo DEFAULT >> "$FX_ARGS.default"\nexec bash "%s" "$@"\n' "$T/fakecodex.sh" > "$DEFBIN/codex"
+   259	chmod +x "$DEFBIN/codex"
+   260	printf 'control brief\n' > "$T/brief.md"
+   261	printf '%30000s' '' | tr ' ' b > "$T/brief30000.md"
+   262	printf '%30001s' '' | tr ' ' b > "$T/brief30001.md"
+   263	printf 'STDIN MARKER -- codex must never read this\n' > "$T/stdin_marker"
+   264	
+   265	pass=0; total=0
+   266	run() {    # $1 row, $2 launcher label, $3 launcher, $4 expected exit (? = record only, counted as a failure), then env
+   267	    local row="$1" lab="$2" sh="$3" want="$4"; shift 4
+   268	    local out="$T/out_${row}_${lab}"
+   269	    case " $* " in *" CX_AUP_MODEL= "*) : > "$T/disabled_${row}_${lab}" ;; esac
+   270	    ( export HOME="$T/home" CX_CODEX_BIN="$T/fakecodex.sh" FX2= FX2_MODEL= FX_ARGS="$T/args_${row}_${lab}"
+   271	      for kv in "$@"; do export "$kv"; done
+   272	      [ "${UNSET_CODEX_BIN:-}" = 1 ] && unset CX_CODEX_BIN
+   273	      timeout 120 bash "$sh" "${BRIEF_OVERRIDE:-$T/brief.md}" "$out" "$row" < "$T/stdin_marker" ) > "$T/log_${row}_${lab}.txt" 2>&1
+   274	    local got=$?
+   275	    echo "$got" > "$T/exit_${row}_${lab}"
+   276	    total=$((total + 1))
+   277	    local ok="NO"; [ "$got" = "$want" ] && { ok="ok"; pass=$((pass + 1)); }
+   278	    printf '%-4s %-7s exit=%-3s want=%-3s %s\n' "$row" "$lab" "$got" "$want" "$ok"
+   279	    sed 's/^/      /' "$T/log_${row}_${lab}.txt" | grep -v '^      brief bytes' | cut -c1-170
+   280	}
+   281	three() {    # $1 row, $2 want-tracked, $3 want-before, $4 want-after, then env
+   282	    local row="$1" wt="$2" wb="$3" wa="$4"; shift 4
+   283	    if [ "$ONLY" != 1 ]; then
+   284	        run "$row" tracked "$TRACKED" "$wt" "$@"
+   285	        run "$row" before "$BEFORE" "$wb" "$@"
+   286	    fi
+   287	    run "$row" after "$AFTER" "$wa" "$@"
+   288	}
+   289	check() {    # $1 label, $2 0/1 result
+   290	    total=$((total + 1))
+   291	    if [ "$2" = 0 ]; then pass=$((pass + 1)); echo "$1  ok"; else echo "$1  NO"; fi
+   292	}
+   293	
+   294	echo "# cxlaunch landing controls (v5), $(date '+%Y-%m-%d %H:%M:%S')${ONLY:+ -- AFTER COLUMN ONLY}"
+   295	echo "# tracked: $(md5sum < "$TRACKED" | cut -c1-32)  cxlaunch_tracked.sh"
+   296	echo "# before:  $(md5sum < "$BEFORE" | cut -c1-32)  cxlaunch_before.sh"
+   297	echo "# after:   $(md5sum < "$AFTER" | cut -c1-32)  $AFTER"
+   298	three P1 8 8 8 FX="$T/fx/P1" CX_AUP_MODEL=
+   299	three P2 7 7 7 FX="$T/fx/P2" CX_AUP_MODEL=
+   300	three N1 8 0 0 FX="$T/fx/N1" CX_AUP_MODEL=
+   301	three N2 8 0 0 FX="$T/fx/N2" CX_AUP_MODEL=
+   302	three N3 6 6 6 FX="$T/fx/N3" CX_AUP_MODEL=
+   303	three N4 8 8 8 FX="$T/fx/N4" CX_AUP_MODEL=
+   304	three Q1 7 7 7 FX="$T/fx/Q1" CX_AUP_MODEL=
+   305	three Q2 8 8 8 FX="$T/fx/Q2" CX_AUP_MODEL=
+   306	three Q3 6 6 8 FX="$T/fx/Q3" CX_AUP_MODEL=
+   307	three A1 6 6 7 FX="$T/fx/A1" CX_AUP_MODEL=
+   308	three M1 8 0 5 FX="$T/fx/N1" CX_AUP_MODEL= CX_MODEL=gpt-6-other
+   309	three M2 8 0 0 FX="$T/fx/N2" CX_AUP_MODEL=
+   310	three D1 7 0 0 FX="$T/fx/P2" FX2="$T/fx/DB_OK" FX2_MODEL=gpt-daybreak-blue-latest
+   311	three D2 7 0 5 FX="$T/fx/P2" FX2="$T/fx/DB_WRONG" FX2_MODEL=gpt-daybreak-blue-latest
+   312	three X1 6 6 6 FX="$T/fx/X1" CX_AUP_MODEL=
+   313	three X2 8 0 0 FX="$T/fx/X2" CX_AUP_MODEL=
+   314	three X5 8 0 5 FX="$T/fx/N1" CX_AUP_MODEL= CX_MODEL=gpt-5-astra
+   315	three X6 0 0 0 FX="$T/fx/X6" CX_AUP_MODEL=
+   316	three X8 6 6 8 FX="$T/fx/X8" CX_AUP_MODEL=
+   317	three X9 0 0 0 FX="$T/fx/X9" CX_AUP_MODEL=
+   318	three X10 0 0 0 FX="$T/fx/X10" CX_AUP_MODEL=
+   319	three W12 0 0 5 FX="$T/fx/W12" CX_AUP_MODEL=
+   320	three W13 0 0 0 FX="$T/fx/W13" CX_AUP_MODEL=
+   321	three X13 0 0 5 FX="$T/fx/X13" CX_AUP_MODEL= CX_MODEL=gpt-6-other
+   322	three K30 0 0 5 FX="$T/fx/K30" CX_AUP_MODEL=
+   323	three K31 0 0 0 FX="$T/fx/K31" CX_AUP_MODEL=
+   324	three R2X 6 6 7 FX="$T/fx/R2" CX_AUP_MODEL=
+   325	three D3 6 6 0 FX="$T/fx/R2" FX2="$T/fx/DB_OK" FX2_MODEL=gpt-daybreak-blue-latest
+   326	three D4 7 7 7 FX="$T/fx/P2" FX2="$T/fx/P2" FX2_MODEL=gpt-daybreak-blue-latest
+   327	three W1L 8 8 8 FX="$T/fx/W1L" CX_AUP_MODEL=
+   328	#  CX_AUP_MODEL is left UNSET -- the fallback on, as production runs it -- by FB1 and FB2 (no refusal), by D1-D5 and EO
+   329	#  (refusals), and set EMPTY by every other row.  (v4 said "every other row disables it" beside FB1/FB2, which D1-D4 refuted;
+   330	#  GLM 5.3, v4 pass.)
+   331	three FB1 8 0 0 FX="$T/fx/N1"
+   332	three FB2 8 8 8 FX="$T/fx/P1"
+   333	three X14 0 0 0 FX="$T/fx/ANS" CX_AUP_MODEL= BRIEF_OVERRIDE="$T/brief30000.md"
+   334	three X15 9 9 9 FX="$T/fx/ANS" CX_AUP_MODEL= BRIEF_OVERRIDE="$T/brief30001.md"
+   335	#  v5 rows
+   336	three RC1A 1 1 1 FX="$T/fx/RC1A" CX_AUP_MODEL=
+   337	three RC3A 3 3 3 FX="$T/fx/RC3A" CX_AUP_MODEL=
+   338	three RC2W 8 8 8 FX="$T/fx/RC2W" CX_AUP_MODEL=
+   339	three B1G 8 0 0 FX="$T/fx/B1G" CX_AUP_MODEL=
+   340	three B1E 0 0 0 FX="$T/fx/B1E" CX_AUP_MODEL=
+   341	three D5 7 7 7 FX="$T/fx/P2" CX_MODEL=gpt-daybreak-blue-latest
+   342	three CH 0 0 5 FX="$T/fx/CH" CX_AUP_MODEL= CX_MODEL=gpt-6-other
+   343	three DP 0 0 0 FX="$T/fx/ANS" CX_AUP_MODEL= UNSET_CODEX_BIN=1
+   344	three EO 7 0 0 FX="$T/fx/P2" FX2="$T/fx/DB_OK" FX2_MODEL=gpt-daybreak-blue-latest CX_CODEX_BIN= CX_MODEL= CX_EFFORT= CX_AUP_EFFORT=
+   345	three RF1 7 7 7 FX="$T/fx/RF1" CX_AUP_MODEL=
+   346	three RF2 7 7 7 FX="$T/fx/RF2" CX_AUP_MODEL=
+   347	three RF3 7 7 7 FX="$T/fx/RF3" CX_AUP_MODEL=
+   348	three RFC 7 7 7 FX="$T/fx/RFC" CX_AUP_MODEL=
+   349	three WL1 8 8 8 FX="$T/fx/WL1" CX_AUP_MODEL=
+   350	three WL2 8 8 8 FX="$T/fx/WL2" CX_AUP_MODEL=
+   351	three WL3 8 8 8 FX="$T/fx/WL3" CX_AUP_MODEL=
+   352	three WLC 8 8 8 FX="$T/fx/WLC" CX_AUP_MODEL=
+   353	three CSI 6 6 7 FX="$T/fx/CSI" CX_AUP_MODEL=
+   354	three RW 7 7 7 FX="$T/fx/RW" CX_AUP_MODEL=
+   355	three RI 7 7 7 FX="$T/fx/RI" CX_AUP_MODEL=
+   356	three WI 8 8 8 FX="$T/fx/WI" CX_AUP_MODEL=
+   357	three EM 6 6 6 FX="$T/fx/EM" CX_AUP_MODEL=
+   358	three IR 1 1 5 FX="$T/fx/IR" CX_AUP_MODEL=
+   359	three WS 0 0 0 FX="$T/fx/WS" CX_AUP_MODEL=
+   360	three MA 0 0 0 FX="$T/fx/MA" CX_AUP_MODEL=
+   361	three TM 0 0 0 FX="$T/fx/TM" CX_AUP_MODEL=
+   362	three NM 0 0 0 FX="$T/fx/NM" CX_AUP_MODEL=
+   363	three BA 0 0 5 FX="$T/fx/BA" CX_AUP_MODEL= CX_MODEL=gpt-6-other
+   364	three HB 0 0 0 FX="$T/fx/HB" CX_AUP_MODEL=
+   365	three R7A 0 0 0 FX="$T/fx/R7A" CX_AUP_MODEL=
+   366	three R7B 0 0 5 FX="$T/fx/R7B" CX_AUP_MODEL= CX_MODEL=gpt-6-other
+   367	
+   368	#  E0: the fake ran for every row of every column but X15's, and never for X15's (it must exit 9 BEFORE codex); the run count is
+   369	#  pinned, so a deleted row is visible.  The other aggregate checks read the AFTER runs; each pins its own denominator.
+   370	cols=3; [ "$ONLY" = 1 ] && cols=1
+   371	nruns=$(ls "$T"/log_* 2>/dev/null | wc -l)
+   372	miss=""; extra=""
+   373	for f in "$T"/log_*; do b=${f##*/log_}; b=${b%.txt}
+   374	    case "$b" in X15_*) [ -e "$T/args_$b" ] && extra="$extra $b" ;; *) [ -s "$T/args_$b" ] || miss="$miss $b" ;; esac
+   375	done
+   376	[ "$nruns" = $((NROWS * cols)) ] && [ -z "$miss" ] && [ -z "$extra" ]; check "E0  all  the fake codex was reached by every run but X15's, and by none of X15's ($NROWS rows x $cols = $nruns of $((NROWS * cols)), pinned)${miss:+ -- NOT reached:$miss}${extra:+ -- X15 REACHED it:$extra}" $?
+   377	nafter=0; dbad=""; sbad=""; ns=0; cbad=""; nc=0; pbad=""; fbad=""; nfd=0
+   378	for f in "$T"/exit_*_after; do r=${f##*/exit_}; r=${r%_after}; nafter=$((nafter + 1))
+   379	    case "$r" in
+   380	        DP|EO) [ -e "$T/args_${r}_after.default" ] || dbad="$dbad $r(not reached)" ;;
+   381	        *) [ -e "$T/args_${r}_after.default" ] && dbad="$dbad $r" ;;
+   382	    esac
+   383	    if [ -e "$T/args_${r}_after.stdin" ]; then ns=$((ns + 1)); [ -s "$T/args_${r}_after.stdin" ] && sbad="$sbad $r"; fi
+   384	    if [ -e "$T/args_${r}_after.cwd" ]; then nc=$((nc + 1))
+   385	        while IFS= read -r d; do [ "$(printf '%s' "$d" | tr 'A-Z' 'a-z')" = /c/documentnosnc/cc/gxemul ] || cbad="$cbad $r"; done < "$T/args_${r}_after.cwd"
+   386	    fi
+   387	    e=$(cat "$f"); L="$T/log_${r}_after.txt"
+   388	    a=$(grep -c 'seat answered' "$L"); l=$(grep -c 'The answer is LOST' "$L"); b=$(grep -c 'answered by: ' "$L"); u=$(grep -c 'model UNVERIFIED' "$L")
+   389	    case "$e" in
+   390	        0) { [ "$a" -ge 1 ] && [ "$l" = 0 ] && [ $((b + u)) = 1 ]; } || pbad="$pbad $r" ;;
+   391	        7) { [ "$l" -ge 1 ] && [ "$a" = 0 ] && [ "$b" = 0 ]; } || pbad="$pbad $r" ;;
+   392	        *) { [ "$a" = 0 ] && [ "$l" = 0 ] && [ "$b" = 0 ]; } || pbad="$pbad $r" ;;
+   393	    esac
+   394	    if [ -e "$T/disabled_${r}_after" ] && [ "$r" != X15 ]; then nfd=$((nfd + 1))
+   395	        [ "$(grep -c '^CALL$' "$T/args_${r}_after" 2>/dev/null)" = 1 ] || fbad="$fbad $r"
+   396	    fi
+   397	done
+   398	[ "$nafter" = "$NROWS" ] && [ -z "$dbad" ]; check "E0b after  the default-path fake was reached by DP's and EO's after runs and by no other (of $nafter)${dbad:+ -- wrong:$dbad}" $?
+   399	[ "$ns" = $((NROWS - 1)) ] && [ -z "$sbad" ]; check "SI  after  no after run's codex read the stdin the launcher was fed ($ns runs that reached codex, of $((NROWS - 1)))${sbad:+ -- READ IT:$sbad}" $?
+   400	[ "$nc" = $((NROWS - 1)) ] && [ -z "$cbad" ]; check "CWD after  every after run's codex started in the project root ($nc of $((NROWS - 1)))${cbad:+ -- elsewhere:$cbad}" $?
+   401	[ "$nfd" = "$NFD" ] && [ -z "$fbad" ]; check "FD  after  every row that sets CX_AUP_MODEL empty made exactly one call ($nfd rows, $NFD pinned)${fbad:+ -- more:$fbad}" $?
+   402	[ "$nafter" = "$NROWS" ] && [ -z "$pbad" ]; check "PK  after  'seat answered' iff exit 0, 'The answer is LOST' iff exit 7, 'answered by:' iff a verified exit 0 ($nafter runs)${pbad:+ -- wrong:$pbad}" $?
+   403	grep -qE '^codex rc=0   stdout=[0-9]+ b   stderr=[0-9]+ b   asked: gpt-6-astra / ultra$' "$T/log_N1_after.txt"; check "LOG after  N1's 'codex rc=0   stdout=N b   stderr=N b   asked: gpt-6-astra / ultra' line, as the launch-log censuses parse it" $?
+   404	[ "$(ls "$T/out_N1_after" | wc -l)" = 2 ] && cmp -s "$T/out_N1_after/codex_N1.txt" "$T/fx/N1/stdout" && cmp -s "$T/out_N1_after/codex_N1.err" "$T/fx/N1/stderr"; check "N1F after  out dir holds exactly codex_N1.txt and codex_N1.err, byte-for-byte the fixture's stdout and stderr" $?
+   405	grep -qF 'seat answered. (answered by: gpt-6-astra)' "$T/log_N1_after.txt"; check "N1V after  N1 is credited to gpt-6-astra" $?
+   406	grep -qF 'seat answered. (answered by: gpt-6-astra)' "$T/log_WS_after.txt" && grep -qF 'seat answered. (answered by: gpt-6-astra)' "$T/log_MA_after.txt" && grep -qF 'seat answered. (answered by: gpt-6-astra)' "$T/log_TM_after.txt"; check "WMT after  WS, MA and TM verify gpt-6-astra (not UNVERIFIED)" $?
+   407	#  content, not exit status -- on the AFTER logs
+   408	for r in M2 X6 X9 W13 K31 NM HB; do
+   409	    grep -q 'model UNVERIFIED' "$T/log_${r}_after.txt" && ! grep -q 'answered by:' "$T/log_${r}_after.txt"; check "$r  after  says model UNVERIFIED and names no model" $?
+   410	done
+   411	cmp -s "$T/out_D1_after/codex_D1.refused.txt" "$T/fx/P2/stdout" && cmp -s "$T/out_D1_after/codex_D1.refused.err" "$T/fx/P2/stderr" \
+   412	    && cmp -s "$T/out_D1_after/codex_D1.txt" "$T/fx/DB_OK/stdout" && cmp -s "$T/out_D1_after/codex_D1.err" "$T/fx/DB_OK/stderr" \
+   413	    && grep -q 'answered by: gpt-daybreak-blue-latest' "$T/log_D1_after.txt"; check "D1R after  refused run kept byte-for-byte as .refused.txt/.err, Daybreak's run as .txt/.err, Daybreak credited" $?
+   414	[ "$(grep -c '^CALL$' "$T/args_FB1_after" 2>/dev/null)" = 1 ] && ! ls "$T/out_FB1_after"/*.refused.* >/dev/null 2>&1; check "FB1 after  the fallback on, an answer: ONE call, nothing renamed .refused" $?
+   415	[ "$(grep -c '^CALL$' "$T/args_FB2_after" 2>/dev/null)" = 1 ]; check "FB2 after  the fallback on, a wall: ONE call" $?
+   416	[ "$(grep -c '^CALL$' "$T/args_D4_after" 2>/dev/null)" = 2 ]; check "D4  after  refused, then refused on Daybreak: EXACTLY two calls" $?
+   417	[ "$(grep -c '^CALL$' "$T/args_D3_after" 2>/dev/null)" = 2 ] && grep -q 'answered by: gpt-daybreak-blue-latest' "$T/log_D3_after.txt"; check "D3  after  a doubled refusal re-runs on Daybreak: two calls, Daybreak credited" $?
+   418	[ "$(grep -c '^CALL$' "$T/args_D5_after" 2>/dev/null)" = 1 ]; check "D5  after  asked ON Daybreak and refused: ONE call, no re-run on the same model" $?
+   419	[ ! -e "$T/args_X15_after" ]; check "X15 after  a 30,001-byte brief never reaches codex" $?
+   420	grep -qF "codex's header says gpt-6-astra" "$T/log_CH_after.txt"; check "CH  after  the coloured header is read: the log names gpt-6-astra as the model that ran" $?
+   421	#  E1/E2: the exact argument sequence of each call, one argument per line, compared whole
+   422	callseq() {    # $1 model -- the sequence one call must receive
+   423	    printf 'CALL\nARG exec\nARG --sandbox\nARG read-only\nARG --skip-git-repo-check\nARG -m\nARG %s\nARG -c\n' "$1"
+   424	    printf 'ARG model_reasoning_effort=ultra\nARG control brief\n'
+   425	}
+   426	callseq gpt-6-astra > "$T/want_E1"
+   427	{ callseq gpt-6-astra; callseq gpt-daybreak-blue-latest; } > "$T/want_E2"
+   428	cmp -s "$T/want_E1" "$T/args_N1_after"; check "E1  after  N1: exactly one call, exactly exec --sandbox read-only ... -m gpt-6-astra, effort ultra, the brief" $?
+   429	cmp -s "$T/want_E2" "$T/args_D1_after"; check "E2  after  D1: exactly two calls, Astra then Daybreak, the same exact arguments each" $?
+   430	cmp -s "$T/want_E2" "$T/args_EO_after"; check "EO  after  CX_CODEX_BIN, CX_MODEL, CX_EFFORT, CX_AUP_EFFORT set EMPTY: the defaults, both calls exactly as E2" $?
+   431	cmp -s "$T/want_E1" "$T/args_DP_after"; check "DP  after  CX_CODEX_BIN unset: the default-path codex, called exactly as E1" $?
+   432	echo "CONTROLS: $pass/$total as expected"
+   433	echo "CXLAND_CONTROLS_DONE"
+   434	[ "$pass" = "$total" ]
+```
+
+### 3c. the mutant list, `mut_launcher_v5.py`, WHOLE (each mutant's exact edit and the controls named to kill it)
+
+```python
+     1	#!/usr/bin/env python3
+     2	"""mut_launcher_v5.py <launcher.sh> <out dir> -- write one-edit mutants of tools/cxlaunch.sh (2026-10-17 landing, v5) for the
+     3	controls' kill table (run_mutants_v5.sh).  Each mutant names the controls expected to catch it; v5 pins every decision its
+     4	CONTRACT lists, so no mutant is UNPINNED (v4's three -- m_eq1, m_sgr, m_prec -- are pinned by RC2W, CSI and RW).  The v4 list is
+     5	kept whole; v5 adds one mutant per decision the v4 pass found unpinned and per decision the v5 enumeration reads off the file
+     6	(run_controls_v5.sh's CONTRACT).  m_twice inserts a line and the m_ord_* mutants MOVE one block of the exit cascade: each is
+     7	still one edit.  A find-text that is absent, or present more than once, is an apparatus failure, never a silent skip."""
+     8	import io, os, sys
+     9	
+    10	src, out = sys.argv[1], sys.argv[2]
+    11	t = io.open(src, encoding="utf-8", newline="").read()
+    12	#  the opening-header awk, as v3/v4 read it, so the find-text cannot drift
+    13	AWK = ('HDR=$(strip_ansi "$ERR" | awk \'NR > 12 && h < 2 { exit }\n        h == 0 && /^OpenAI Codex/ { h = 1; next }\n'
+    14	       '        h == 1 && /^--------/ { h = 2; next }\n        h == 2 && /^--------/ { exit }\n'
+    15	       '        h == 2 { if (++n > 30) exit; print }\')')
+    16	STRIP = 'strip_ansi() { sed "s/${ESC}\\[[0-9;]*[A-Za-z]//g" "$1" 2>/dev/null; }'
+    17	REF = r"grep -ic 'flagged for possible cybersecurity\|cannot help with\|can.t help with\|I won.t help'"
+    18	WAL = r"grep -ic 'usage limit\|quota\|rate limit\|not authenticated'"
+    19	GATE = 'if [ "$rc" -ne 0 ] || [ "$body" -eq 0 ]; then'
+    20	TRIG = 'if [ "$refus" -gt 0 ] && [ -n "$AUP_MODEL" ] && [ "$AUP_MODEL" != "$MODEL" ]; then'
+    21	
+    22	#  the exit cascade, cut from the launcher itself into its five blocks: refusal 7, wall 8, empty 6, identity 5, codex's rc
+    23	R0 = 'if [ "$refus" -gt 0 ]; then\n    echo "  *** SEAT REFUSED (content filter) on $ANSWERED_BY.'
+    24	W0 = 'if [ "$wall" -gt 0 ]; then echo "  *** SEAT WALLED'
+    25	E0 = 'if [ "$body" -eq 0 ]; then echo "  *** EMPTY STDOUT'
+    26	I0 = 'if [ -n "$RAN" ] && [ "$RAN" != "$ANSWERED_BY" ]; then'
+    27	C0 = 'if [ "$rc" -ne 0 ];  then echo "  *** codex exited $rc'
+    28	C1 = 'exit "$rc"; fi\n'
+    29	starts = [t.find(x) for x in (R0, W0, E0, I0, C0)]
+    30	cend = t.find(C1, starts[4]) + len(C1) if starts[4] >= 0 else -1
+    31	if min(starts) < 0 or cend < 0 or starts != sorted(starts) or any(t.count(x) != 1 for x in (R0, W0, E0, I0, C0)):
+    32	    print("CASCADE_NOT_FOUND (starts %s)" % starts); sys.exit(1)
+    33	B = dict(zip("RWEIC", [t[starts[i]:(starts[i + 1] if i < 4 else cend)] for i in range(5)]))
+    34	CASCADE = "".join(B[k] for k in "RWEIC")
+    35	
+    36	def order(seq):
+    37	    return (CASCADE, "".join(B[k] for k in seq))
+    38	
+    39	MUTANTS = [
+    40	    #  v4's table, unchanged
+    41	    ("m_anchor", "X1", "grep -a '^ERROR:'", "grep -a 'ERROR:'"),
+    42	    ("m_bodyverd", "X2", GATE, 'if [ "$rc" -ne 0 ] || [ "$verd" -eq 0 ]; then'),
+    43	    ("m_suffix", "X5", '[ "$RAN" != "$ANSWERED_BY" ]', '[ "${RAN##*-}" != "${ANSWERED_BY##*-}" ]'),
+    44	    ("m_effort", "E1 E2", '-c model_reasoning_effort="$2"', '-c model_reasoning_effort="$1"'),
+    45	    ("m_head40", "X6", AWK, 'HDR=$(strip_ansi "$ERR" | head -n 40)'),
+    46	    ("m_v2awk", "X9 X10", AWK,
+    47	     """HDR=$(strip_ansi "$ERR" | awk '/^OpenAI Codex/ { h = 1; next } h == 1 && /^--------/ { h = 2; next } h == 2 && /^--------/ { exit } h == 2')"""),
+    48	    ("m_effortx", "E1 E2", '-c model_reasoning_effort="$2"', '-c model_reasoning_effort="$2x"'),
+    49	    ("m_sandbox", "E1 E2", "--sandbox read-only", "--sandbox workspace-write"),
+    50	    ("m_brief", "E1 E2", '"$(cat "$BRIEF")"', '"$BRIEF"'),
+    51	    ("m_noa", "X8", "grep -a '^ERROR:'", "grep '^ERROR:'"),
+    52	    ("m_nostrip", "Q3 A1 CH", STRIP, 'strip_ansi() { cat "$1" 2>/dev/null; }'),
+    53	    ("m_noident", "M1 D2 X5", I0, "if false; then"),
+    54	    ("m_nofallback", "D1 D2 E2", 'AUP_MODEL="${CX_AUP_MODEL-gpt-daybreak-blue-latest}"', 'AUP_MODEL=""'),
+    55	    ("m_nogate", "N1 X2", GATE, "if true; then"),
+    56	    ("m_claimmodel", "M2 X6", 'echo "  seat answered -- model UNVERIFIED: no codex header block in stderr (requested: $ANSWERED_BY)"',
+    57	     'echo "  seat answered. (answered by: $ANSWERED_BY)"'),
+    58	    ("m_eq1", "RC2W", GATE, 'if [ "$rc" -eq 1 ] || [ "$body" -eq 0 ]; then'),
+    59	    ("m_sgr", "CSI", STRIP, 'strip_ansi() { sed "s/${ESC}\\[[0-9;]*m//g" "$1" 2>/dev/null; }'),
+    60	    ("m_prec", "RW", "        wall=$(printf '%s' \"$CXERR\" | " + WAL + ")",
+    61	     "        wall=$(printf '%s' \"$CXERR\" | " + WAL + "); [ \"$wall\" -gt 0 ] && refus=0"),
+    62	    ("m_win11", "W12", "NR > 12 && h < 2", "NR > 11 && h < 2"),
+    63	    ("m_win13", "W13", "NR > 12 && h < 2", "NR > 13 && h < 2"),
+    64	    ("m_win3", "W12 X13", "NR > 12 && h < 2", "NR > 3 && h < 2"),
+    65	    ("m_cap29", "K30", "if (++n > 30) exit", "if (++n > 29) exit"),
+    66	    ("m_cap31", "K31", "if (++n > 30) exit", "if (++n > 31) exit"),
+    67	    ("m_nocap", "K31", "h == 2 { if (++n > 30) exit; print }", "h == 2 { print }"),
+    68	    ("m_fbeq1", "D3", 'if [ "$refus" -gt 0 ] && [ -n "$AUP_MODEL" ]', 'if [ "$refus" -eq 1 ] && [ -n "$AUP_MODEL" ]'),
+    69	    ("m_refeq1", "R2X", 'if [ "$refus" -gt 0 ]; then\n    echo', 'if [ "$refus" -eq 1 ]; then\n    echo'),
+    70	    ("m_wallgt1", "W1L", 'if [ "$wall" -gt 0 ]; then', 'if [ "$wall" -gt 1 ]; then'),
+    71	    ("m_fbge0", "FB1", 'if [ "$refus" -gt 0 ] && [ -n "$AUP_MODEL" ]', 'if [ "$refus" -ge 0 ] && [ -n "$AUP_MODEL" ]'),
+    72	    ("m_fbwall", "FB2", 'if [ "$refus" -gt 0 ] && [ -n "$AUP_MODEL" ]',
+    73	     'if { [ "$refus" -gt 0 ] || [ "$wall" -gt 0 ]; } && [ -n "$AUP_MODEL" ]'),
+    74	    ("m_twice", "D4 E2", '    run_codex "$AUP_MODEL" "$AUP_EFFORT"; classify\n',
+    75	     '    run_codex "$AUP_MODEL" "$AUP_EFFORT"; classify\n    run_codex "$AUP_MODEL" "$AUP_EFFORT"; classify\n'),
+    76	    ("m_argv1", "X15", '[ "$sz" -gt 30000 ]', '[ "$sz" -gt 30001 ]'),
+    77	    ("m_argv2", "X14", '[ "$sz" -gt 30000 ]', '[ "$sz" -gt 29999 ]'),
+    78	    #  v5 -- configuration
+    79	    ("m_defpath", "DP", 'Codex/bin/codex}"', 'Codex/bin/codex2}"'),
+    80	    ("m_binignore", "E0b", '"${CX_CODEX_BIN:-', '"${CX_CODEX_BINX:-'),
+    81	    ("m_bincolon", "EO", '"${CX_CODEX_BIN:-', '"${CX_CODEX_BIN-'),
+    82	    ("m_modelcolon", "EO", '"${CX_MODEL:-', '"${CX_MODEL-'),
+    83	    ("m_effortcolon", "EO", '"${CX_EFFORT:-', '"${CX_EFFORT-'),
+    84	    ("m_aupeffcolon", "EO", '"${CX_AUP_EFFORT:-', '"${CX_AUP_EFFORT-'),
+    85	    ("m_aupcolon", "FD", '"${CX_AUP_MODEL-', '"${CX_AUP_MODEL:-'),
+    86	    ("m_nomkdir", "N1", 'mkdir -p "$OUT"', ': mkdir -p "$OUT"'),
+    87	    ("m_txtname", "N1F", 'TXT="$OUT/codex_${TAG}.txt"', 'TXT="$OUT/codex_${TAG}.out"'),
+    88	    ("m_errname", "N1F", 'ERR="$OUT/codex_${TAG}.err"', 'ERR="$OUT/codex_${TAG}.log"'),
+    89	    ("m_swapio", "N1F", '> "$TXT" 2> "$ERR" < /dev/null', '> "$ERR" 2> "$TXT" < /dev/null'),
+    90	    ("m_nostdin", "SI", '2> "$ERR" < /dev/null', '2> "$ERR"'),
+    91	    ("m_cd", "CWD", 'cd "$PROJ" || exit 9', 'cd "$HOME" || exit 9'),
+    92	    ("m_noskip", "E1", ' --skip-git-repo-check', ''),
+    93	    #  v5 -- the opening header
+    94	    ("m_hdrnostrip", "CH", 'HDR=$(strip_ansi "$ERR" | awk', 'HDR=$(cat "$ERR" | awk'),
+    95	    ("m_hlt1", "W13", "NR > 12 && h < 2", "NR > 12 && h < 1"),
+    96	    ("m_hlt3", "K30 W12", "NR > 12 && h < 2", "NR > 12 && h < 3"),
+    97	    ("m_bannerun", "BA", "h == 0 && /^OpenAI Codex/", "h == 0 && /OpenAI Codex/"),
+    98	    ("m_bannerh", "HB", "h == 0 && /^OpenAI Codex/", "/^OpenAI Codex/"),
+    99	    ("m_rule1h", "BA", "h == 1 && /^--------/ { h = 2; next }", "/^--------/ { h = 2; next }"),
+   100	    ("m_rule7a", "R7A", "h == 1 && /^--------/", "h == 1 && /^-------/"),
+   101	    ("m_rule1next", "M1", "{ h = 2; next }", "{ h = 2 }"),
+   102	    ("m_close2h", "BA", "h == 2 && /^--------/ { exit }", "/^--------/ { exit }"),
+   103	    ("m_rule7b", "R7B", "h == 2 && /^--------/ { exit }", "h == 2 && /^-------/ { exit }"),
+   104	    ("m_exitnext", "NM", "h == 2 && /^--------/ { exit }", "h == 2 && /^--------/ { next }"),
+   105	    ("m_bodyh1", "R7A", "h == 2 { if (++n > 30) exit; print }", "h >= 1 { if (++n > 30) exit; print }"),
+   106	    ("m_capn", "K31", "if (++n > 30) exit", "if (n++ > 30) exit"),
+   107	    ("m_m2", "TM", "grep -m1 '^model:'", "grep -m2 '^model:'"),
+   108	    ("m_modelanchor", "MA", "grep -m1 '^model:'", "grep -m1 'model:'"),
+   109	    ("m_trailws", "WS", "s/^model:[[:space:]]*//; s/[[:space:]]*$//'", "s/^model:[[:space:]]*//'"),
+   110	    ("m_leadws", "WS", "s/^model:[[:space:]]*//", "s/^model: //"),
+   111	    ("m_nomodelsed", "N1", "sed 's/^model:[[:space:]]*//; s/", "sed 's/"),
+   112	    #  v5 -- classification
+   113	    ("m_strip_nog", "A1 CSI", '[A-Za-z]//g" "$1"', '[A-Za-z]//" "$1"'),
+   114	    ("m_strip_nosemi", "CSI", '\\[[0-9;]*[A-Za-z]', '\\[[0-9]*[A-Za-z]'),
+   115	    ("m_noinit", "N1", "refus=0; wall=0", ":"),
+   116	    ("m_gateand", "N4 RC2W", GATE, 'if [ "$rc" -ne 0 ] && [ "$body" -eq 0 ]; then'),
+   117	    ("m_gatele1", "B1G", GATE, 'if [ "$rc" -ne 0 ] || [ "$body" -le 1 ]; then'),
+   118	    ("m_ref1", "P2", REF, r"grep -ic 'cannot help with\|can.t help with\|I won.t help'"),
+   119	    ("m_ref2", "RF1", REF, r"grep -ic 'flagged for possible cybersecurity\|can.t help with\|I won.t help'"),
+   120	    ("m_ref3", "RF2", REF, r"grep -ic 'flagged for possible cybersecurity\|cannot help with\|I won.t help'"),
+   121	    ("m_ref4", "RF3", REF, r"grep -ic 'flagged for possible cybersecurity\|cannot help with\|can.t help with'"),
+   122	    ("m_refcase", "RFC", REF, REF.replace("grep -ic", "grep -c")),
+   123	    ("m_wall1", "P1", WAL, r"grep -ic 'quota\|rate limit\|not authenticated'"),
+   124	    ("m_wall2", "WL1", WAL, r"grep -ic 'usage limit\|rate limit\|not authenticated'"),
+   125	    ("m_wall3", "WL2", WAL, r"grep -ic 'usage limit\|quota\|not authenticated'"),
+   126	    ("m_wall4", "WL3", WAL, r"grep -ic 'usage limit\|quota\|rate limit'"),
+   127	    ("m_wallcase", "WLC", WAL, WAL.replace("grep -ic", "grep -c")),
+   128	    #  v5 -- the fallback
+   129	    ("m_samemodel", "D5", TRIG, 'if [ "$refus" -gt 0 ] && [ -n "$AUP_MODEL" ]; then'),
+   130	    ("m_noempty", "FD", TRIG, 'if [ "$refus" -gt 0 ] && [ "$AUP_MODEL" != "$MODEL" ]; then'),
+   131	    ("m_norefusedtxt", "D1R", 'mv -f "$TXT" "$OUT/codex_${TAG}.refused.txt"; ', ''),
+   132	    ("m_norefusederr", "D1R", '; mv -f "$ERR" "$OUT/codex_${TAG}.refused.err"', ''),
+   133	    ("m_ansby", "D1 D2", '    ANSWERED_BY="$AUP_MODEL"', '    ANSWERED_BY="$MODEL"'),
+   134	    #  v5 -- the exit cascade
+   135	    ("m_emptyle1", "B1E", E0, 'if [ "$body" -le 1 ]; then echo "  *** EMPTY STDOUT'),
+   136	    ("m_noransep", "M2", I0, 'if [ "$RAN" != "$ANSWERED_BY" ]; then'),
+   137	    ("m_zflip", "M2 N1V", 'if [ -z "$RAN" ]; then', 'if [ -n "$RAN" ]; then'),
+   138	    ("m_rcpass", "RC1A RC3A", 'if [ "$rc" -ne 0 ];  then', 'if false;  then'),
+   139	    ("m_rcgt1", "RC1A", 'if [ "$rc" -ne 0 ];  then', 'if [ "$rc" -gt 1 ];  then'),
+   140	    ("m_rcone", "RC3A", C1, 'exit 1; fi\n'),
+   141	    ("m_ord_wr", "RW",) + order("WREIC"),
+   142	    ("m_ord_re", "P2",) + order("ERWIC"),
+   143	    ("m_ord_ri", "RI",) + order("IRWEC"),
+   144	    ("m_ord_rc", "P2",) + order("CRWEI"),
+   145	    ("m_ord_we", "P1",) + order("REWIC"),
+   146	    ("m_ord_wi", "WI",) + order("RIWEC"),
+   147	    ("m_ord_wc", "P1",) + order("RCWEI"),
+   148	    ("m_ord_ei", "EM",) + order("RWIEC"),
+   149	    ("m_ord_ec", "X1",) + order("RWCEI"),
+   150	    ("m_ord_ic", "IR",) + order("RWECI"),
+   151	    #  v5 -- the log phrases a caller reads
+   152	    ("m_msganswered", "PK", 'echo "  seat answered. (answered by:', 'echo "  seat replied. (answered by:'),
+   153	    ("m_msganswered2", "PK", 'echo "  seat answered -- model UNVERIFIED', 'echo "  seat replied -- model UNVERIFIED'),
+   154	    ("m_msglost", "PK", "The answer is LOST, whatever", "The answer is gone, whatever"),
+   155	    ("m_msgby", "PK N1V", "(answered by: $ANSWERED_BY)", "(by: $ANSWERED_BY)"),
+   156	    ("m_rcline", "LOG", 'echo "codex rc=$rc   stdout=', 'echo "codex rc=$rc stdout='),
+   157	]
+   158	os.makedirs(out, exist_ok=True)
+   159	bad = 0
+   160	names = set()
+   161	with io.open(os.path.join(out, "MUTANTS.list"), "w", encoding="utf-8", newline="\n") as lst:
+   162	    for name, catches, find, repl in MUTANTS:
+   163	        n = t.count(find)
+   164	        if n != 1 or name in names or find == repl:
+   165	            print("MUTANT_TEXT_NOT_FOUND %s (found %d)" % (name, n)); bad += 1; continue
+   166	        names.add(name)
+   167	        io.open(os.path.join(out, name + ".sh"), "w", encoding="utf-8", newline="").write(t.replace(find, repl))
+   168	        lst.write("%s\t%s\n" % (name, catches))
+   169	print("mutants written: %d of %d" % (len(MUTANTS) - bad, len(MUTANTS)))
+   170	sys.exit(1 if bad else 0)
+```
+
+### 3d. `CENSUS_v5.txt` (`census_v5.py`)
+
+```
+roots: C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC C:\DocumentNoSnc\cc\GXEMUL\_scratchpad
+POPULATIONS: CODEX 2425 files | ALLERR 8590 files | LAUNCH 699 files (466 carrying a `codex rc=' line)
+1. CODEX opening blocks by the landed rule (window 12, cap 30): 975 of 2425 files | no model line: 0 | two or more: 0 | not closed within the cap: 0
+   banner line: {2: 974, 4: 1}
+   first rule line: {3: 974, 5: 1}
+   model line (file line): {5: 974, 7: 1}
+   blocks carrying ANSI escapes: 149 of 975 (answered runs -- sibling .txt non-empty: 105)
+   synthetic row shapes, blocks (R7: files): WS 0 | MA 0 | HB 0 | NM 0 | BA 0 | R7 0 (of 2425 files)
+2. CODEX escapes: 2425 files read | with ESC 198 | non-SGR CSI 0 | `;'-joined SGR 44 | OSC 0 | other ESC 2
+2. ALLERR escapes: 8590 files read | with ESC 198 | non-SGR CSI 0 | `;'-joined SGR 44 | OSC 0 | other ESC 2
+3. CODEX column-0 ERROR lines (after the strip): 1095 lines in 498 files
+   refusal: flagged for possible cybersecurity case-insensitive   456 lines /  308 files | case-sensitive   456 | case-only 0
+   refusal: cannot help with            case-insensitive     0 lines /    0 files | case-sensitive     0 | case-only 0
+   refusal: can.t help with             case-insensitive     0 lines /    0 files | case-sensitive     0 | case-only 0
+   refusal: I won.t help                case-insensitive     0 lines /    0 files | case-sensitive     0 | case-only 0
+   wall: usage limit                    case-insensitive   209 lines /  143 files | case-sensitive   209 | case-only 0
+   wall: quota                          case-insensitive     0 lines /    0 files | case-sensitive     0 | case-only 0
+   wall: rate limit                     case-insensitive     0 lines /    0 files | case-sensitive     0 | case-only 0
+   wall: not authenticated              case-insensitive     0 lines /    0 files | case-sensitive     0 | case-only 0
+4. the empty-or-absent-sibling subset of CODEX: 410 of 2425 files | carrying BOTH a refusal and a wall ERROR line: 0
+5. LAUNCH `codex rc=' lines: 474 | rc 0 stdout: 440, rc 1 empty: 34
+CENSUS_V5_DONE
+```
+
+## 4. The receipts
+
+### 4a. `RECEIPT_v5.txt` -- the AFTER rows and every content check (the tracked and before rows, which record the old
+files, and the indented per-run output are in the file)
+
+```
+# cxlaunch landing controls (v5), 2026-10-17 04:02:07
+# tracked: cb180d9d58da2c0b05defe48c65b7ad0  cxlaunch_tracked.sh
+# before:  3c51a7579065c5e6bebd5fd59d32b3ed  cxlaunch_before.sh
+# after:   af18158ed30b740cb13604de64013323  /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/cxlaunch.sh
+P1   after   exit=8   want=8   ok
+P2   after   exit=7   want=7   ok
+N1   after   exit=0   want=0   ok
+N2   after   exit=0   want=0   ok
+N3   after   exit=6   want=6   ok
+N4   after   exit=8   want=8   ok
+Q1   after   exit=7   want=7   ok
+Q2   after   exit=8   want=8   ok
+Q3   after   exit=8   want=8   ok
+A1   after   exit=7   want=7   ok
+M1   after   exit=5   want=5   ok
+M2   after   exit=0   want=0   ok
+D1   after   exit=0   want=0   ok
+D2   after   exit=5   want=5   ok
+X1   after   exit=6   want=6   ok
+X2   after   exit=0   want=0   ok
+X5   after   exit=5   want=5   ok
+X6   after   exit=0   want=0   ok
+X8   after   exit=8   want=8   ok
+X9   after   exit=0   want=0   ok
+X10  after   exit=0   want=0   ok
+W12  after   exit=5   want=5   ok
+W13  after   exit=0   want=0   ok
+X13  after   exit=5   want=5   ok
+K30  after   exit=5   want=5   ok
+K31  after   exit=0   want=0   ok
+R2X  after   exit=7   want=7   ok
+D3   after   exit=0   want=0   ok
+D4   after   exit=7   want=7   ok
+W1L  after   exit=8   want=8   ok
+FB1  after   exit=0   want=0   ok
+FB2  after   exit=8   want=8   ok
+X14  after   exit=0   want=0   ok
+X15  after   exit=9   want=9   ok
+RC1A after   exit=1   want=1   ok
+RC3A after   exit=3   want=3   ok
+RC2W after   exit=8   want=8   ok
+B1G  after   exit=0   want=0   ok
+B1E  after   exit=0   want=0   ok
+D5   after   exit=7   want=7   ok
+CH   after   exit=5   want=5   ok
+DP   after   exit=0   want=0   ok
+EO   after   exit=0   want=0   ok
+RF1  after   exit=7   want=7   ok
+RF2  after   exit=7   want=7   ok
+RF3  after   exit=7   want=7   ok
+RFC  after   exit=7   want=7   ok
+WL1  after   exit=8   want=8   ok
+WL2  after   exit=8   want=8   ok
+WL3  after   exit=8   want=8   ok
+WLC  after   exit=8   want=8   ok
+CSI  after   exit=7   want=7   ok
+RW   after   exit=7   want=7   ok
+RI   after   exit=7   want=7   ok
+WI   after   exit=8   want=8   ok
+EM   after   exit=6   want=6   ok
+IR   after   exit=5   want=5   ok
+WS   after   exit=0   want=0   ok
+MA   after   exit=0   want=0   ok
+TM   after   exit=0   want=0   ok
+NM   after   exit=0   want=0   ok
+BA   after   exit=5   want=5   ok
+HB   after   exit=0   want=0   ok
+R7A  after   exit=0   want=0   ok
+R7B  after   exit=5   want=5   ok
+E0  all  the fake codex was reached by every run but X15's, and by none of X15's (65 rows x 3 = 195 of 195, pinned)  ok
+E0b after  the default-path fake was reached by DP's and EO's after runs and by no other (of 65)  ok
+SI  after  no after run's codex read the stdin the launcher was fed (64 runs that reached codex, of 64)  ok
+CWD after  every after run's codex started in the project root (64 of 64)  ok
+FD  after  every row that sets CX_AUP_MODEL empty made exactly one call (56 rows, 56 pinned)  ok
+PK  after  'seat answered' iff exit 0, 'The answer is LOST' iff exit 7, 'answered by:' iff a verified exit 0 (65 runs)  ok
+LOG after  N1's 'codex rc=0   stdout=N b   stderr=N b   asked: gpt-6-astra / ultra' line, as the launch-log censuses parse it  ok
+N1F after  out dir holds exactly codex_N1.txt and codex_N1.err, byte-for-byte the fixture's stdout and stderr  ok
+N1V after  N1 is credited to gpt-6-astra  ok
+WMT after  WS, MA and TM verify gpt-6-astra (not UNVERIFIED)  ok
+M2  after  says model UNVERIFIED and names no model  ok
+X6  after  says model UNVERIFIED and names no model  ok
+X9  after  says model UNVERIFIED and names no model  ok
+W13  after  says model UNVERIFIED and names no model  ok
+K31  after  says model UNVERIFIED and names no model  ok
+NM  after  says model UNVERIFIED and names no model  ok
+HB  after  says model UNVERIFIED and names no model  ok
+D1R after  refused run kept byte-for-byte as .refused.txt/.err, Daybreak's run as .txt/.err, Daybreak credited  ok
+FB1 after  the fallback on, an answer: ONE call, nothing renamed .refused  ok
+FB2 after  the fallback on, a wall: ONE call  ok
+D4  after  refused, then refused on Daybreak: EXACTLY two calls  ok
+D3  after  a doubled refusal re-runs on Daybreak: two calls, Daybreak credited  ok
+D5  after  asked ON Daybreak and refused: ONE call, no re-run on the same model  ok
+X15 after  a 30,001-byte brief never reaches codex  ok
+CH  after  the coloured header is read: the log names gpt-6-astra as the model that ran  ok
+E1  after  N1: exactly one call, exactly exec --sandbox read-only ... -m gpt-6-astra, effort ultra, the brief  ok
+E2  after  D1: exactly two calls, Astra then Daybreak, the same exact arguments each  ok
+EO  after  CX_CODEX_BIN, CX_MODEL, CX_EFFORT, CX_AUP_EFFORT set EMPTY: the defaults, both calls exactly as E2  ok
+DP  after  CX_CODEX_BIN unset: the default-path codex, called exactly as E1  ok
+CONTROLS: 224/224 as expected
+CXLAND_CONTROLS_DONE
+```
+
+### 4b. `KILLTABLE_v5_md5_236cda5f.txt`, whole (`run_mutants_v5.sh`: each mutant through the after column; the base run is all three)
+
+It ran at 03:00 on launcher md5 236cda5f and controls md5 362c8a93.  Since then the launcher gained the three-line usage
+comment of U21 and the controls the two disclosures of U21/U22 -- comments only (section 3a' carries the launcher's
+diff).  The receipt in 4a is of the FINAL files (af18158e); the table's re-run on them is in progress and is the one the
+record will cite.
+
+```
+mutants written: 105 of 105
+# kill table for /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/cxlaunch.sh (236cda5fc25147cd427c1dfb328a1416), 2026-10-17 03:00:25, 4 at a time; controls 362c8a93095ca2cc8b38fe65c97583e6
+BASE      CONTROLS: 224/224 as expected
+BASE      65 rows; a mutant's after-only run must total 94
+m_anchor        93/94    killed by: X1                                                  [X1]
+m_bodyverd      92/94    killed by: B1G X2                                              [X2]
+m_suffix        93/94    killed by: X5                                                  [X5]
+m_effort        90/94    killed by: DP E1 E2 EO                                         [E1 E2]
+m_head40        80/94    killed by: BA HB K31 NM R7A W13 X10 X6 X9                      [X6]
+m_v2awk         86/94    killed by: HB K31 W13 X10 X9                                   [X9 X10]
+m_effortx       90/94    killed by: DP E1 E2 EO                                         [E1 E2]
+m_sandbox       90/94    killed by: DP E1 E2 EO                                         [E1 E2]
+m_brief         90/94    killed by: DP E1 E2 EO                                         [E1 E2]
+m_noa           93/94    killed by: X8                                                  [X8]
+m_nostrip       86/94    killed by: A1 CH CSI D3 Q3 R2X                                 [Q3 A1 CH]
+m_noident       83/94    killed by: BA CH D2 IR K30 M1 R7B W12 X13 X5                   [M1 D2 X5]
+m_nofallback    85/94    killed by: D1 D1R D2 D3 D4 E2 EO                               [D1 D2 E2]
+m_nogate        87/94    killed by: B1G FB1 M1 N1 N1V X2 X5                             [N1 X2]
+m_claimmodel    87/94    killed by: HB K31 M2 NM W13 X6 X9                              [M2 X6]
+m_eq1           93/94    killed by: RC2W                                                [RC2W]
+m_sgr           93/94    killed by: CSI                                                 [CSI]
+m_prec          93/94    killed by: RW                                                  [RW]
+m_win11         93/94    killed by: W12                                                 [W12]
+m_win13         92/94    killed by: W13                                                 [W13]
+m_win3          91/94    killed by: BA W12 X13                                          [W12 X13]
+m_cap29         93/94    killed by: K30                                                 [K30]
+m_cap31         92/94    killed by: K31                                                 [K31]
+m_nocap         92/94    killed by: K31                                                 [K31]
+m_fbeq1         92/94    killed by: D3                                                  [D3]
+m_refeq1        93/94    killed by: R2X                                                 [R2X]
+m_wallgt1       88/94    killed by: W1L WI WL1 WL2 WL3 WLC                              [W1L]
+m_fbge0         91/94    killed by: FB1 FB2                                             [FB1]
+m_fbwall        93/94    killed by: FB2                                                 [FB2]
+m_twice         90/94    killed by: D3 D4 E2 EO                                         [D4 E2]
+m_argv1         89/94    killed by: CWD E0 SI X15                                       [X15]
+m_argv2         89/94    killed by: CWD E0 FD SI X14                                    [X14]
+m_defpath       85/94    killed by: CWD DP E0 E0b EO FD SI                              [DP]
+m_binignore     93/94    killed by: E0b                                                 [E0b]
+m_bincolon      88/94    killed by: CWD E0 E0b EO SI                                    [EO]
+m_modelcolon    93/94    killed by: EO                                                  [EO]
+m_effortcolon   93/94    killed by: EO                                                  [EO]
+m_aupeffcolon   93/94    killed by: EO                                                  [EO]
+m_aupcolon      93/94    killed by: FD                                                  [FD]
+m_nomkdir       4/94     killed by: A1 B1E B1G BA CH CSI CWD D1 D1R D2 D3 D4 D5 DP E0 E0b E1 E2 EM EO FB1 FB2 FD HB IR K30 K31 LOG M1 M2 MA N1 N1F N1V N2 N3 N4 NM P1 P2 Q1 Q2 Q3 R2X R7A R7B RC2W RC3A RF1 RF2 RF3 RFC RI RW SI TM W12 W13 W1L WI WL1 WL2 WL3 WLC WMT WS X1 X10 X13 X14 X2 X5 X6 X8 X9  [N1]
+m_txtname       92/94    killed by: D1R N1F                                             [N1F]
+m_errname       92/94    killed by: D1R N1F                                             [N1F]
+m_swapio        41/94    killed by: A1 BA CH CSI D1 D1R D2 D3 D4 D5 E2 EM EO FB2 IR K30 M1 M2 N1F N1V N2 N4 P1 P2 Q1 Q2 Q3 R2X R7B RC2W RF1 RF2 RF3 RFC RI RW W12 W1L WI WL1 WL2 WL3 WLC WMT X1 X13 X5 X8  [N1F]
+m_nostdin       93/94    killed by: SI                                                  [SI]
+m_cd            93/94    killed by: CWD                                                 [CWD]
+m_noskip        90/94    killed by: DP E1 E2 EO                                         [E1]
+m_hdrnostrip    92/94    killed by: CH                                                  [CH]
+m_hlt1          92/94    killed by: W13                                                 [W13]
+m_hlt3          92/94    killed by: K30 W12                                             [K30 W12]
+m_bannerun      93/94    killed by: BA                                                  [BA]
+m_bannerh       92/94    killed by: HB                                                  [HB]
+m_rule1h        89/94    killed by: BA HB NM                                            [BA]
+m_rule7a        93/94    killed by: R7A                                                 [R7A]
+m_rule1next     79/94    killed by: BA CH D1R D2 D3 IR K30 M1 N1V R7B W12 WMT X13 X5    [M1]
+m_close2h       93/94    killed by: BA                                                  [BA]
+m_rule7b        93/94    killed by: R7B                                                 [R7B]
+m_exitnext      90/94    killed by: HB NM                                               [NM]
+m_bodyh1        93/94    killed by: R7A                                                 [R7A]
+m_capn          92/94    killed by: K31                                                 [K31]
+m_m2            92/94    killed by: TM WMT                                              [TM]
+m_modelanchor   92/94    killed by: MA WMT                                              [MA]
+m_trailws       92/94    killed by: WMT WS                                              [WS]
+m_leadws        92/94    killed by: WMT WS                                              [WS]
+m_nomodelsed    75/94    killed by: B1E CH D1 D1R D3 DP EO FB1 MA N1 N1V R7A RC1A RC3A TM WMT WS X14  [N1]
+m_strip_nog     87/94    killed by: A1 CH CSI D3 Q3 R2X                                 [A1 CSI]
+m_strip_nosemi  93/94    killed by: CSI                                                 [CSI]
+m_noinit        50/94    killed by: B1E B1G BA CH D1 D1R D2 D3 DP EO FB1 HB K30 K31 M1 M2 MA N1 N1V N2 NM R7A R7B TM W12 W13 WMT WS X10 X13 X14 X2 X5 X6 X9  [N1]
+m_gateand       91/94    killed by: N4 Q2 RC2W                                          [N4 RC2W]
+m_gatele1       93/94    killed by: B1G                                                 [B1G]
+m_ref1          75/94    killed by: A1 CSI D1 D1R D2 D3 D4 D5 E2 EO P2 Q1 R2X RFC RI RW  [P2]
+m_ref2          93/94    killed by: RF1                                                 [RF1]
+m_ref3          93/94    killed by: RF2                                                 [RF2]
+m_ref4          93/94    killed by: RF3                                                 [RF3]
+m_refcase       93/94    killed by: RFC                                                 [RFC]
+m_wall1         84/94    killed by: FB2 N4 P1 Q2 Q3 RC2W W1L WI WLC X8                  [P1]
+m_wall2         93/94    killed by: WL1                                                 [WL1]
+m_wall3         93/94    killed by: WL2                                                 [WL2]
+m_wall4         93/94    killed by: WL3                                                 [WL3]
+m_wallcase      93/94    killed by: WLC                                                 [WLC]
+m_samemodel     93/94    killed by: D5                                                  [D5]
+m_noempty       93/94    killed by: FD                                                  [FD]
+m_norefusedtxt  93/94    killed by: D1R                                                 [D1R]
+m_norefusederr  93/94    killed by: D1R                                                 [D1R]
+m_ansby         88/94    killed by: D1 D1R D2 D3 EO                                     [D1 D2]
+m_emptyle1      92/94    killed by: B1E B1G                                             [B1E]
+m_noransep      76/94    killed by: B1G HB K31 M2 N2 NM W13 X10 X2 X6 X9                [M2]
+m_zflip         83/94    killed by: D1R D3 HB K31 M2 N1V NM W13 WMT X6 X9               [M2 N1V]
+m_rcpass        92/94    killed by: RC1A RC3A                                           [RC1A RC3A]
+m_rcgt1         93/94    killed by: RC1A                                                [RC1A]
+m_rcone         93/94    killed by: RC3A                                                [RC3A]
+m_ord_wr        93/94    killed by: RW                                                  [RW]
+m_ord_re        70/94    killed by: A1 CSI D4 D5 FB2 P1 P2 Q1 Q2 Q3 R2X RF1 RF2 RF3 RFC RI RW W1L WI WL1 WL2 WL3 WLC X8  [P2]
+m_ord_ri        91/94    killed by: EM RI WI                                            [RI]
+m_ord_rc        67/94    killed by: A1 CSI D4 D5 FB2 IR N4 P1 P2 Q1 Q3 R2X RC2W RF1 RF2 RF3 RFC RI RW W1L WI WL1 WL2 WL3 WLC X1 X8  [P2]
+m_ord_we        83/94    killed by: FB2 P1 Q2 Q3 W1L WI WL1 WL2 WL3 WLC X8              [P1]
+m_ord_wi        92/94    killed by: EM WI                                               [WI]
+m_ord_wc        80/94    killed by: FB2 IR N4 P1 Q3 RC2W W1L WI WL1 WL2 WL3 WLC X1 X8   [P1]
+m_ord_ei        93/94    killed by: EM                                                  [EM]
+m_ord_ec        92/94    killed by: IR X1                                               [X1]
+m_ord_ic        93/94    killed by: IR                                                  [IR]
+m_msganswered   91/94    killed by: N1V PK WMT                                          [PK]
+m_msganswered2  93/94    killed by: PK                                                  [PK]
+m_msglost       93/94    killed by: PK                                                  [PK]
+m_msgby         89/94    killed by: D1R D3 N1V PK WMT                                   [PK N1V]
+m_rcline        93/94    killed by: LOG                                                 [LOG]
+KILL TABLE: 105/105 as recorded
+CXLAND_MUTANTS_DONE
+```
+
+## 5. The records this landing writes AT COMMIT (previews against HEAD)
+
+### 5a. OUTSTANDING_BUGS.md
+
+```diff
+--- OUTSTANDING_BUGS.md@HEAD
++++ OUTSTANDING_BUGS.md@preview
+@@ -16561,6 +16561,11 @@
+ 
+ `tools/cxlaunch.sh` anchors stderr tests on codex's own `^ERROR:` lines and greps stdout freely;
+ exit 7 refusal, 8 wall, 6 empty-with-neither, else `rc`. Controlled in four states.
++*[2026-10-17, the `cxlaunchquotation` landing: the two lines above are kept as written and are NO LONGER TRUE -- "greps
++stdout freely" was the very defect `cxlaunchquotation` was filed for.  The landed file classifies codex's `^ERROR:` lines
++(ANSI-stripped, read with `grep -a`) ONLY when rc != 0 or stdout is empty, never greps stdout for wall words, re-runs a
++refused brief once on Daybreak, and exits 5 when codex's OPENING header block names a different model.  Controls:
++`regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt`.]*
+ 
+ *`panel.sh` already had a better, POSITION-based discriminator (head/tail 400 bytes) with the
+ incident that taught it recorded in its own comment. A claim here that it did not was false and is
+@@ -22509,6 +22514,10 @@
+ tool that reads it).  Fix shape: key the stderr test on codex's own error block at the END of the stream, and give the
+ stdout patterns word boundaries; negative-control both directions (a real wall still reds; these two runs do not).
+ Found while confirming `#550`.
++**MERGED 2026-10-17 into the `cxlaunchquotation` landing, with its fix shape WITHDRAWN** (the three-seat ruling,
++regress/artifacts/adj_20261016/RULINGS_C_records.md F1): keying on codex's LAST `ERROR:` line does not work -- in fixture
++N4 that line is itself a quotation -- so the landed rule keys on the exit status and an empty stdout instead.  This filing
++never had a ledger row; both of its false positives are controlled in `regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt` (N1, N2).
+ 
+ ## 2026-09-25 — GXEMUL [087a90]: `#551` wdcidselfcheck; what its review files
+ 
+@@ -24674,6 +24683,12 @@
+ once".  The fallback the owner ruled (2026-10-01: `gpt-daybreak-blue-latest` on an Astra AUP refusal) exists only in
+ `_scratchpad/codexpack_20260928/cxlaunch_pack.run-*.sh`.  Fix: give `cxlaunch.sh` the pack runner's fallback, and
+ correct the comment when `panel.sh` is next reviewed (it carries unreviewed deltas).
++**CLOSED 2026-10-17** (the landing; the heading above is kept as written -- it was true of the tracked file until then).
++The fallback is controlled in `regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt` by D1, D2, D3 (a real doubled refusal) and D4 (fires ONCE on a second
++refusal), by FB1/FB2 (it does not fire on an answer or a wall), and by E1/E2 (the exact arguments of both calls); the
++real-run receipt of it firing is `regress/artifacts/codexpack_20260928/dossier_gdromdma/dossier_gdromdma.launch.log`.
++The working-tree `panel.sh` already carries the corrected comment beside `CODEX_EFFORT`, uncommitted with that file's
++other unreviewed deltas; HEAD's `panel.sh` does not yet.
+ 
+ ### 2026-10-09 -- `ppcrlwhighhalf` / `ppcwitnessmaskoracle`: the oracle repair committed alone, the rung-3 witness on committed HEAD
+ 
+@@ -24722,6 +24737,10 @@
+ * **`cxlaunchquotation` (LOW, open)** -- `tools/cxlaunch.sh`'s wall check greps the seat's answer for `quota`, so an
+   answer containing "quotation" is reported SEAT WALLED (rc 8).  Measured 2026-10-09 on a complete GPT-6 Astra answer.
+   Word-anchor it and test stdout only when no verdict line is present; controls both ways.
++  **CLOSED 2026-10-17 by the landing, and the fix prescribed above was REPLACED, not applied** (RULINGS_C F1): stdout is
++  never grepped for wall words; codex's `^ERROR:` lines are classified only when rc != 0 or stdout is empty.  The tracked
++  file the landing replaced exits 8 on N1 (a captured real answer whose stderr quotes a codex wall line) and N2 (a
++  synthetic answer carrying the four wall words), and the landed one 0 (`regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt`).
+ * **`fablequeueregress` (MEDIUM, open)** gains Fable 5.1's stagetokens finding 5: section I's regress guarantee is
+   narrower than its docstring -- precommit I2 (the codex wall), not I, forces a held regress review into the queue.
+ 
+@@ -24761,3 +24780,12 @@
+   supervisor trap in a slot naming a residual vector (11..113, 116..127) or 114/115 -- is unrowed.  `&& !(cpu->delay_slot
+   && is_trap)` at :799 is a PREDICTED 84/84 escape, not measured (Fable 5.1, pass 16, `pass16/fable5_m88kp16.md` section
+   4).  Pin if ever rowed: `residtbdslot` = `[BR_N_PLUS16, TB1_0_R3_50]`, r3 = 1, expected HALT naming 0x032.
++
++### 2026-10-17 -- the codex launcher landed in `tools/cxlaunch.sh` (`cxlaunchquotation`, `cxlaunchdaybreak` closed)
++
++* No row filed.  The three one-edit escapes pass 2 left UNPINNED BY RULING (0 instances on record) -- `-ne 0` -> `-eq 1`
++  in the classify gate, the ANSI strip narrowed to SGR, refusal-before-wall precedence -- are PINNED in v5 (rows RC2W,
++  CSI, RW of `regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt`), with every other decision of the file: its controls' CONTRACT is
++  derived from the file -- every predicate, pattern alternative, redirection, constant, exit-cascade order and
++  caller-read log phrase -- each pinned at its edges or disclosed with its reason (`regress/artifacts/cxlaunchland_20261016/KILLTABLE_v5.txt`;
++  `regress/artifacts/cxlaunchland_20261016/CENSUS_v5.txt` names the on-record count behind each synthetic row).
+```
+
+### 5b. the ledger rows
+
+```
+# ledger changes the tools/cxlaunch.sh landing makes, against HEAD (a preview; applied at commit)
+
+== cxlaunchdaybreak 
+  closure: {"by": "opus5-mainloop", "badge": "A", "note": "CLOSED by the same landing: a content-filter refusal on Astra is re-run ONCE on gpt-daybreak-blue-latest, the refused run kept as .refused.*, the answer credited to Daybreak; it does not fire on an answer or a wall, nor on a refusal asked of Daybreak itself, nor with the fallback set empty (D1-D5, D1R, FB1, FB2, FD, E1, E2 in RECEIPT_v5.txt; the real-run receipt is codexpack_20260928/dossier_gdromdma/dossier_gdromdma.launch.log)."}
+  + entry: {"phase": "regress", "seat": "fable5", "date": "2026-10-17", "grade": "UNKNOWN", "grader": "", "ev": "not fired", "note": "[HELD AWAITING SEAT: fable5] cxlaunchdaybreak closed by the tools/cxlaunch.sh landing and owes the REGRESS review, a distinct phase under the regress-is-fable-only directive, batched to the Sunday flagship sign-off after the battery.  The question is in the row's hold_question."}
+  hold_question: "REGRESS (held 2026-10-17 at the tools/cxlaunch.sh landing): does regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt still run the TRACKED file the landing replaced, the farm copy and the landed launcher against the same fixtures and get the recorded exits -- in particular N1/N2 8 -> 0 (the quoted-wall false positive), D1 7 -> 0 (the Daybreak fallback), X8 6 -> 8 (a NUL in stderr), the v4 edge rows (W12/W13, K30/K31, R2X/D3, W1L, FB1/FB2, X14/X15) and the v5 rows (RC1A/RC3A codex's own rc, D5, FD, CH, SI, N1F, D1R, DP/EO/E0b, the alternatives RF1-RF3/WL1-WL3/RFC/WLC, the cascade pairs RW/RI/WI/EM/IR, the awk guards HB/BA/R7A/R7B/NM/TM/MA/WS, PK and LOG) -- and does regress/artifacts/cxlaunchland_20261016/KILLTABLE_v5.txt still kill every one of its mutants as named?  Is the record (the launcher's header, the controls' CONTRACT, the CHANGELOG block, the OB corrections) true of what shipped?"
+  state: "closed"
+  witness: "harness:regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt -- D1: the tracked launcher exits 7 on a refusal (no fallback), the landed one re-runs it once on gpt-daybreak-blue-latest and credits Daybreak (exit 0); D3 (a real doubled refusal), D4 (exactly two calls on a second refusal), FB1/FB2 (no re-run on an answer or a wall) and E1/E2 (both calls' exact arguments) pin it; the real-run receipt is regress/artifacts/codexpack_20260928/dossier_gdromdma/dossier_gdromdma.launch.log"
+
+== cxlaunchquotation 
+  closure: {"by": "opus5-mainloop", "badge": "A", "note": "CLOSED by the tools/cxlaunch.sh landing: the production rule (codex's ^ERROR: lines, ANSI-stripped and read with grep -a, classified ONLY when rc != 0 or stdout is empty; stdout never grepped for wall words) replaces the classifier that scored a complete answer WALLED for the word 'quota' or a quoted wall line.  Witness: the tracked file exits 8 on N1/N2, the landed one 0 (RECEIPT_v5.txt).  The controls' CONTRACT (run_controls_v5.sh) is derived from the file -- every predicate, pattern alternative, redirection, constant, exit-cascade order and caller-read log phrase, each pinned at its edges or disclosed with its reason; KILLTABLE_v5.txt kills each of its mutants as named.  Five passes on the landed file -- pass 2, the adjudication pass and the v3, v4 and v5 passes, the owner's four-seat roster each time (Fable 5.1 stalled on the adjudication and v3 passes; Opus, agy, kimi, deepseek and minimax not fired)."}
+  + entry: {"phase": "regress", "seat": "fable5", "date": "2026-10-17", "grade": "UNKNOWN", "grader": "", "ev": "not fired", "note": "[HELD AWAITING SEAT: fable5] cxlaunchquotation closed by the tools/cxlaunch.sh landing and owes the REGRESS review, a distinct phase under the regress-is-fable-only directive, batched to the Sunday flagship sign-off after the battery.  The question is in the row's hold_question."}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "codex", "note": "PASS 2 (the landed launcher, v1): SHIP WITH CHANGES (2) -- GPT-6 Astra (ultra, `ran: model: gpt-6-astra'): read the model only from codex's header block and stop crediting 'answered by' when it is absent; make the controls exit non-zero on a bad tally and pin the `^ERROR:' anchor and the effort argument.  Both applied in v2.", "ev": "regress/artifacts/cxlaunchland_20261016/pass2/codex_cxland.txt", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "glm", "note": "PASS 2: SHIP WITH CHANGES (2) -- GLM 5.3 (glm-5.3:cloud): reword the UNVERIFIED note to what was searched and put a count behind the header window; record that the ANSI strip widens both residuals.  Applied (v2 dropped the window for the header block; the residual is in the launcher's header).", "ev": "regress/artifacts/cxlaunchland_20261016/pass2/glm_cxland.txt", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "grok", "note": "PASS 2: SHIP WITH CHANGES (1) -- Grok 4.7 (xhigh): grep without -a reads a NUL-bearing stderr as binary and drops the wall lines -- the real 2026-09-19 battery-preflight wall was recorded exit 6.  Measured on that file and fixed (grep -a, control X8).", "ev": "regress/artifacts/cxlaunchland_20261016/pass2/grok_cxland.txt", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "fable5", "note": "PASS 2: SHIP WITH CHANGES (2) -- Fable 5.1, in two parts: its first run FELL BACK to claude-opus-4-8 after two refusals (FALLBACK_opus48_cxland.md, credited as Opus 4.8, and that run executed the TRACKED launcher unmodified and fired nine real Astra calls -- disclosed, no tree writes); resumed, Fable 5.1 wrote v2 itself: C1 add the tracked file as the pre-fix column, C2 correct two bug-file statements by content, pin four escapes and leave two unpinned.  All applied.", "ev": "regress/artifacts/cxlaunchland_20261016/pass2/fable5_cxland_v2.md", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "codex", "note": "ADJUDICATION PASS (v2): SHIP WITH CHANGES (3) -- GPT-6 Astra: the header-block awk matched the banner ANYWHERE (N1's own stderr quotes four complete headers from line 5528), so v3 reads only the OPENING block; E1/E2 matched a substring, so `ultrax' passed -- v3 compares the exact argument sequence; and the record edits the packet called done were not yet in the tree.", "ev": "regress/artifacts/cxlaunchland_20261016/f2/codex_cxlandf2.txt", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "grok", "note": "ADJUDICATION PASS (v2): SHIP WITH CHANGES (3) -- Grok 4.7: launcher, controls and kill table hold; the three changes are the records the packet described as written (F10, F19, the cxlaunchunpinned filing), which were prepared but not yet applied.", "ev": "regress/artifacts/cxlaunchland_20261016/f2/grok_cxlandf2.txt", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "glm", "note": "ADJUDICATION PASS (v2): SHIP WITH CHANGES (3) -- GLM 5.3, answering under the Fable seat's token (the packet listed all four; the transport is glm-5.3:cloud): cite RECEIPT_v2 not RECEIPT in the header, correct m_eq1's reason (N4 is rc 1; the observable shape is an rc outside {0,1} with an answer), pin --sandbox read-only and the brief.  All applied in v3.", "ev": "regress/artifacts/cxlaunchland_20261016/f2/glm_cxlandf2.txt", "d": "✓"}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "fable5", "note": "ADJUDICATION PASS (v2): SEAT FAILURE -- the Fable 5.1 agent STALLED (stream watchdog, no progress for 600 s) after its opening line; no answer file.  Re-fired on the v3 pass, not counted as agreement."}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "codex", "note": "V3 PASS: SHIP WITH CHANGES (3) -- GPT-6 Astra: FLOOR BREACHES in v3's controls -- `NR > 12' -> `NR > 3' (the one real warning-prefixed header on record would go UNVERIFIED), the refusal guards `-gt 0' -> `-eq 1' at both sites and the wall guard `-gt 0' -> `-gt 1' (every fixture carried count 1 or 2+), refusal-then-refusal unrowed; the header comment's 'never names the model' survived; and 'no stderr on record carries both' is false for rc-0 answers.  All addressed in v4 (the class closure).", "ev": "regress/artifacts/cxlaunchland_20261016/v3pass/codex_cxlandv3.txt", "d": "✓"}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "grok", "note": "V3 PASS: SHIP WITH CHANGES (3) -- Grok 4.7: FLOOR BREACH -- the fallback test `-gt 0' -> `-ge 0' (or widened with the wall count) passes all 70 because every row but D1/D2 disables the fallback, while production would re-run Daybreak on every answer; the window pinned only up to 20; the G9 bracket named the stale lines wrong.  All addressed in v4 (FB1/FB2 run with the fallback on).", "ev": "regress/artifacts/cxlaunchland_20261016/v3pass/grok_cxlandv3.txt", "d": "✓"}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "glm", "note": "V3 PASS: SHIP WITH CHANGES (2) -- GLM 5.3: FLOOR BREACHES -- a window widened up to `NR > 20' passes (X9's quoted block sits at line 21), and the 30-line cap is pinned by nothing (`print' unconditional passes all 70).  Both addressed in v4 (W12/W13 and K30/K31 at the edges).", "ev": "regress/artifacts/cxlaunchland_20261016/v3pass/glm_cxlandv3.txt", "d": "✓"}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "fable5", "note": "V3 PASS: SEAT FAILURE -- the Fable 5.1 agent STALLED again (stream watchdog, 600 s), after reading the launcher and before writing an answer; most likely the whole 18-mutant kill table run as ONE foreground command (about 13 minutes).  Re-fired on the v4 pass with that hazard named."}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "opus5", "note": "PASS 2 through the v5 pass, NOT FIRED: outside the owner's four-seat roster; the measurements an Opus seat would make were the main loop's control and kill-table runs, each receipted."}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "agy", "note": "PASS 2 through the v5 pass, NOT FIRED: agy is not on the owner's roster for this landing."}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "kimi", "note": "PASS 2 through the v5 pass, NOT FIRED: the kimi seat sat outside the roster; nothing was sent."}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "deepseek", "note": "PASS 2 through the v5 pass, NOT FIRED: GLM 5.3 was the one packet-fed seat fired."}
+  + entry: {"date": "2026-10-16", "phase": "review", "seat": "minimax", "note": "PASS 2 through the v5 pass, NOT FIRED: minimax-m3 was not given any packet; the roster, not a wall."}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "fable5", "note": "V4 PASS: SHIP WITH CHANGES (7) -- Fable 5.1 (claude-fable-5-1 throughout, no fallback): the v4 CONTRACT's 'every decision' sentence is FALSE -- twelve MEASURED one-edit escapes of the 116 controls, seven at decisions it never named: codex's own rc passed through, the fallback's same-model and empty-disable conjuncts, the header's ANSI strip (149 of 975 opening blocks on record carry ANSI, 105 answered), `< /dev/null', the output names, six pattern alternatives with 0 instances; the v4 enumeration came from the passes' findings, not the file.  Addressed in v5, whose CONTRACT is derived from the file; its DISCLOSE for the alternatives was overridden (pinned) and put back to it.", "ev": "regress/artifacts/cxlaunchland_20261016/v4pass/fable5_cxlandv4.md", "d": "✓"}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "codex", "note": "V4 PASS: SHIP WITH CHANGES (3) -- GPT-6 Astra: the CONTRACT is incomplete -- the .refused.txt move, codex's rc pass-through, the wall alternatives and the same-model conjunct each pass all 116; the kill-table driver accepted a run without its sentinel; census_v4 omitted the 30-line cap and V10's 410 counts empty-or-absent siblings, not exit status; 'never scored WALLED' and the unconditional exit-5 sentence over-claim.  All addressed in v5.", "ev": "regress/artifacts/cxlaunchland_20261016/v4pass/codex_cxlandv4.txt", "d": "✓"}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "grok", "note": "V4 PASS: SHIP WITH CHANGES (5) -- Grok 4.7: five one-edit survivors traced against every row -- both `body -eq 0' sites (the smallest answer fixture was 40 bytes), the final rc test, the header strip, the .refused.txt move, the default codex path; V10 does not hold as written; the census figures named three populations; the panel.sh note is stale.  All addressed in v5.", "ev": "regress/artifacts/cxlaunchland_20261016/v4pass/grok_cxlandv4.txt", "d": "✓"}
+  + entry: {"date": "2026-10-17", "phase": "review", "seat": "glm", "note": "V4 PASS: SHIP WITH CHANGES (5) -- GLM 5.3 (glm-5.3:cloud, packet-fed): the classification tail -- an rc outside {0,1} with an answer -- undisclosed (pinned in v5: RC3A, RC2W); the cap rows are synthetic, unterminated blocks (disclosed); the FB comment false (fixed); the m_sgr figure cited at three populations (census_v5 measures its own); its F1 (W12/K30 set CX_MODEL) refuted by grep.", "ev": "regress/artifacts/cxlaunchland_20261016/v4pass/glm_cxlandv4.txt", "d": "✓"}
+  hold_question: "REGRESS (held 2026-10-17 at the tools/cxlaunch.sh landing): does regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt still run the TRACKED file the landing replaced, the farm copy and the landed launcher against the same fixtures and get the recorded exits -- in particular N1/N2 8 -> 0 (the quoted-wall false positive), D1 7 -> 0 (the Daybreak fallback), X8 6 -> 8 (a NUL in stderr), the v4 edge rows (W12/W13, K30/K31, R2X/D3, W1L, FB1/FB2, X14/X15) and the v5 rows (RC1A/RC3A codex's own rc, D5, FD, CH, SI, N1F, D1R, DP/EO/E0b, the alternatives RF1-RF3/WL1-WL3/RFC/WLC, the cascade pairs RW/RI/WI/EM/IR, the awk guards HB/BA/R7A/R7B/NM/TM/MA/WS, PK and LOG) -- and does regress/artifacts/cxlaunchland_20261016/KILLTABLE_v5.txt still kill every one of its mutants as named?  Is the record (the launcher's header, the controls' CONTRACT, the CHANGELOG block, the OB corrections) true of what shipped?"
+  state: "closed"
+  state_note: "filed 2026-10-09: measured on GPT-6 Astra's check of the asiceventaddr convergence -- a complete 10,466-byte answer with its verdict line, no `ERROR:` line on stderr, and the launcher printed 'SEAT WALLED' (LAUNCH_RC=8) because the answer's own sentence '... its quotation must retain ...' matched `grep -ic 'quota'` (the answer: regress/artifacts/fablequeue8n_20261009/astra_confirm/codex_astra_asicconverge.txt; the launcher's own output: cxlaunch_asicconverge_stdout.txt beside it).  tools/cxlaunch.sh:44 builds `wall` from the `ERROR:` lines PLUS the whole stdout, so any answer that uses the words quota / quotation / rate limit / usage limit reads as a wall -- the carrier's quoting-re-arms-the-reader class, one level down (the script's own comment at :33-41 diagnoses the stderr half and kept the stdout half).  Fix: word-anchor the pattern and test stdout only when no verdict line is present; owes controls both ways (a real 403/quota notice still reds; an answer containing 'quotation' does not).  LOW: a human reads the answer; an unattended runner would discard it.\n\n[2026-10-17] CLOSED by the tools/cxlaunch.sh landing -- and the fix this note prescribes (\"word-anchor the pattern and test stdout only when no verdict line is present\") was REPLACED by the three-seat ruling's production rule, not applied: stdout is never grepped for wall words; codex's ^ERROR: lines are classified only when rc != 0 or stdout is empty (regress/artifacts/adj_20261016/RULINGS_C_records.md F1).  Merges the 2026-09-26 filing cxlaunchwallfp (no ledger row)."
+  witness: "harness:regress/artifacts/cxlaunchland_20261016/RECEIPT_v5.txt -- the TRACKED launcher (cb180d9d) exits 8 on N1, a captured real Astra answer whose stderr quotes a codex wall line, and on N2, a synthetic answer carrying the four wall words ('quota' among them); the landed file exits 0 on both; regress/artifacts/cxlaunchland_20261016/KILLTABLE_v5.txt kills every pinned one-edit mutant of the landed file"
+```
+
+### 5c. the CHANGELOG block (a DRAFT: its v5-pass sentence is written from this pass's answers)
+
+# `cxlaunchquotation` + `cxlaunchdaybreak` (2026-10-17): the codex launcher lands in `tools/cxlaunch.sh` -- an rc-0 run with a non-empty stdout is never scored WALLED or REFUSED for what its stderr quotes, a content-filter refusal on Astra is re-run ONCE on Daybreak, and a different model named by codex's OPENING header exits 5 (after the refusal, wall and empty-stdout checks); the controls' CONTRACT is derived from the file (v5: 224 checks, 105 mutants)
+
+**Ruled before any code** by Fable 5.1, GPT-6 Astra and Grok 4.7 (`regress/artifacts/adj_20261016/RULINGS_C_records.md`,
+F1): codex's `^ERROR:` lines are classified ONLY when rc != 0 or stdout is empty, and stdout is never grepped for wall
+words -- the discriminator is the exit status and the answer, which quoted text cannot forge.  Every real wall and refusal
+on record is rc 1 with an empty stdout, and every rc-0 run carries an answer: 474 launch-log rows, 440 rc 0 with stdout and
+34 rc 1 empty, nothing else (`CENSUS_v5.txt`).
+
+* `tools/cxlaunch.sh`: until this landing the tracked file ran Astra at `max` with the 2026-09-07 classifier while most farm
+  jobs ran an untracked scratchpad copy -- and the carrier described the copy's behaviour as the tracked file's.  The landed
+  file: ANSI colour stripped and `grep -a` before the `^ERROR:` anchor (a real coloured refusal read exit 6 unstripped; a
+  real NUL-bearing wall read exit 6 without `-a`); the Daybreak fallback (`gpt-daybreak-blue-latest`, the refused run kept
+  as `.refused.*`, the answer credited to Daybreak; not fired on an answer, a wall, a refusal asked of Daybreak itself, or
+  with the fallback set empty); the model read ONLY from codex's OPENING header block -- banner and first rule by line 12,
+  the block for at most 30 lines -- and compared with the model asked for (exit 5 on a mismatch, "model UNVERIFIED", exit
+  0, with no opening block); the effort `ultra`.  Its header records the residuals (N4 and its refusal twin), exit 5's
+  novelty to the pack runner and the log phrases that runner reads, the usage requirement of ABSOLUTE paths, and the
+  controls.  Its executable lines are v3's; v4 and v5 changed comments only.
+* Controls `regress/artifacts/cxlaunchland_20261016/run_controls_v5.sh`: every row drives three launchers -- the TRACKED
+  file the landing replaced (the pre-fix column), the farm copy, and the landed file -- against a fake codex replaying a
+  fixture.  224/224 (`RECEIPT_v5.txt`): N1/N2 8 -> 0 (the quoted-wall false positive), D1 7 -> 0 (the fallback), X8 6 -> 8
+  (a NUL in stderr), IR 1 -> 5 (a different model), CH 0 -> 5 (a coloured header), CSI 6 -> 7 (a non-SGR escape).  Its
+  header is the CONTRACT, derived from the FILE rather than from the reviews (v5): every predicate, conjunct, pattern
+  alternative, redirection, constant, exit-cascade order and caller-read log phrase, each with the rows that pin its edges
+  or the reason it is not pinned (`|| exit 9` after the `cd`; `set -u`; a relative path; display-only lines).  The synthetic
+  rows pin constants with 0 instances on record, which `CENSUS_v5.txt` counts; the strip's `;` is not synthetic (44 codex
+  `.err` files carry a `;`-joined SGR).  Kill table `run_mutants_v5.sh`: 105/105 as recorded (`KILLTABLE_v5.txt`), every
+  mutant killed by the controls its line names -- the three escapes pass 2 left unpinned (`m_eq1`, `m_sgr`, `m_prec`) are
+  pinned (RC2W, CSI, RW).
+* Records: `cxlaunchquotation` and `cxlaunchdaybreak` closed (witness `harness:`; REGRESS reviews HELD for the flagship);
+  `cxlaunchwallfp` (2026-09-26, no ledger row) merged with its tail-key fix WITHDRAWN; the bug file's stale "greps stdout
+  freely", "has no Daybreak fallback" and "panel.sh's comment is still owed" statements bracketed by content; RULINGS_C's
+  drifted line citations re-cited by id.  No row filed.
+
+**Pass 2** (`pass2/`, on v1): Astra SWC 2, GLM SWC 2, Grok SWC 1 (the NUL-bearing wall, measured), Fable SWC 2 (its first run
+fell back to claude-opus-4-8 after two refusals -- disclosed, credited as Opus 4.8; resumed, Fable 5.1 wrote v2).
+**Adjudication pass** (`f2/`, on v2): Astra SWC 3 (the header awk matched the banner ANYWHERE; E1/E2 matched a substring),
+Grok SWC 3 and GLM SWC 3 (records; the receipt citation; `m_eq1`'s reason); Fable SEAT FAILURE (a stall).  **V3 pass**
+(`v3pass/`): Astra SWC 3, Grok SWC 3, GLM SWC 2 -- one-edit mutants passing all 70 v3 controls at the window and cap
+constants, the multiplicity guards and the fallback predicate, so v4 closed that class; Fable SEAT FAILURE (a second
+stall).  **V4 pass** (`v4pass/`): Fable SWC 7, Astra SWC 3, Grok SWC 5, GLM SWC 5 -- the v4 CONTRACT was derived from the
+passes' FINDINGS, not the file, and decisions no pass had named had one-edit mutants passing all 116 v4 controls (codex's
+own rc, the fallback's second and third conjuncts, the header strip, the stdin redirect, the output names, the pattern
+alternatives, the body tests, the default codex path), so v5 derived the CONTRACT from the file.  **V5 pass** (`v5pass/`):
+[to be written from its answers].  Opus, agy, kimi, deepseek and minimax not fired, by the owner's roster of 2026-10-16.
+

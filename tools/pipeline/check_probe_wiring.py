@@ -3048,6 +3048,39 @@ MANIFEST = {
         (CLASS_TOOL, "dashokclass: the one-time writer of tools/pipeline/entry_domain_baseline.json, preserved as run"),
     "artifacts/dashokclass_20261016/write_baseline_v1.py":
         (CLASS_TOOL, "dashokclass: the first form of that one-time baseline writer, preserved as run"),
+    #  cxlaunchquotation + cxlaunchdaybreak (2026-10-16/17), the tools/cxlaunch.sh landing: its mutant writers, censuses
+    #  and seat measurements, preserved beside the receipts.  The controls and kill-table drivers are shell scripts, outside
+    #  this MANIFEST's .py domain; none of these is a gated detector.
+    "artifacts/cxlaunchland_20261016/census_v4.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the read-only census of the on-record codex runs behind the v4 contract, preserved as evidence"),
+    "artifacts/cxlaunchland_20261016/census_v5.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the read-only census of the on-record codex runs behind the v5 contract, preserved as evidence"),
+    "artifacts/cxlaunchland_20261016/mut_launcher.py":
+        (CLASS_TOOL, "cxlaunch landing: the v2 one-edit mutant writer of tools/cxlaunch.sh for the controls' kill table, preserved as run"),
+    "artifacts/cxlaunchland_20261016/mut_launcher_v3.py":
+        (CLASS_TOOL, "cxlaunch landing: the v3 one-edit mutant writer of tools/cxlaunch.sh for the controls' kill table, preserved as run"),
+    "artifacts/cxlaunchland_20261016/mut_launcher_v4.py":
+        (CLASS_TOOL, "cxlaunch landing: the v4 one-edit mutant writer of tools/cxlaunch.sh for the controls' kill table, preserved as run"),
+    "artifacts/cxlaunchland_20261016/mut_launcher_v5.py":
+        (CLASS_TOOL, "cxlaunch landing: the v5 one-edit mutant writer of tools/cxlaunch.sh for the controls' kill table, preserved as run"),
+    "artifacts/cxlaunchland_20261016/mut_launcher_v6.py":
+        (CLASS_TOOL, "cxlaunch landing: the v6 one-edit mutant writer of tools/cxlaunch.sh for the controls' kill table, preserved as run"),
+    "artifacts/cxlaunchland_20261016/mut_launcher_v7.py":
+        (CLASS_TOOL, "cxlaunch landing: the v7 one-edit mutant writer of tools/cxlaunch.sh for the controls' kill table, preserved as run"),
+    "artifacts/cxlaunchland_20261016/v4pass/fable5_meas/census_fable.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the Fable 5.1 v4-pass seat's measurement script census_fable.py, preserved as run"),
+    "artifacts/cxlaunchland_20261016/v4pass/fable5_meas/colhdr.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the Fable 5.1 v4-pass seat's measurement script colhdr.py, preserved as run"),
+    "artifacts/cxlaunchland_20261016/v4pass/fable5_meas/cooc.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the Fable 5.1 v4-pass seat's measurement script cooc.py, preserved as run"),
+    "artifacts/cxlaunchland_20261016/v4pass/fable5_meas/mkctlx.py":
+        (CLASS_TOOL, "cxlaunch landing: the Fable 5.1 v4-pass seat's control-variant builder mkctlx.py, preserved as run"),
+    "artifacts/cxlaunchland_20261016/v4pass/fable5_meas/mkctlx2.py":
+        (CLASS_TOOL, "cxlaunch landing: the Fable 5.1 v4-pass seat's control-variant builder mkctlx2.py, preserved as run"),
+    "artifacts/cxlaunchland_20261016/v6pass/main_meas/esc_where.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the v7 contract's two escape disclosures, measured over census_v5.py's scope, preserved as evidence"),
+    "artifacts/cxlaunchland_20261016/v6pass/main_meas/nul_blocks.py":
+        (CLASS_RESEARCH, "cxlaunch landing: the count of NUL-bearing codex header blocks on record, by the landed rule, preserved as evidence"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

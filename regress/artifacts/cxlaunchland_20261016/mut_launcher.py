@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""mut_launcher.py <launcher.sh> <out dir> -- write one-edit mutants of tools/cxlaunch.sh (2026-10-16 landing, v2) for the
+controls' kill table (run_mutants.sh).  Each mutant names the control expected to catch it, or UNPINNED with the reason it
+is deliberately not pinned (Fable 5.1, pass 2: inside the recorded N4 residual, or a shape with 0 instances on record).
+A find-text that is absent is an apparatus failure, never a silent skip."""
+import io, os, sys
+
+src, out = sys.argv[1], sys.argv[2]
+t = io.open(src, encoding="utf-8", newline="").read()
+MUTANTS = [
+    ("m_anchor", "X1", "grep -a '^ERROR:'", "grep -a 'ERROR:'"),
+    ("m_bodyverd", "X2", 'if [ "$rc" -ne 0 ] || [ "$body" -eq 0 ]; then', 'if [ "$rc" -ne 0 ] || [ "$verd" -eq 0 ]; then'),
+    ("m_suffix", "X5", '[ "$RAN" != "$ANSWERED_BY" ]', '[ "${RAN##*-}" != "${ANSWERED_BY##*-}" ]'),
+    ("m_effort", "E1 E2", '-c model_reasoning_effort="$2"', '-c model_reasoning_effort="$1"'),
+    ("m_head40", "X6", """HDR=$(strip_ansi "$ERR" | awk '/^OpenAI Codex/ { h = 1; next } h == 1 && /^--------/ { h = 2; next } h == 2 && /^--------/ { exit } h == 2')""",
+     'HDR=$(strip_ansi "$ERR" | head -n 40)'),
+    ("m_noa", "X8", "grep -a '^ERROR:'", "grep '^ERROR:'"),
+    ("m_nostrip", "Q3 A1", 'strip_ansi() { sed "s/${ESC}\\[[0-9;]*[A-Za-z]//g" "$1" 2>/dev/null; }', 'strip_ansi() { cat "$1" 2>/dev/null; }'),
+    ("m_noident", "M1 D2 X5", 'if [ -n "$RAN" ] && [ "$RAN" != "$ANSWERED_BY" ]; then', "if false; then"),
+    ("m_nofallback", "D1 D2 E2", 'AUP_MODEL="${CX_AUP_MODEL-gpt-daybreak-blue-latest}"', 'AUP_MODEL=""'),
+    ("m_nogate", "N1 X2", 'if [ "$rc" -ne 0 ] || [ "$body" -eq 0 ]; then', "if true; then"),
+    ("m_claimmodel", "M2 X6", 'echo "  seat answered -- model UNVERIFIED: no codex header block in stderr (requested: $ANSWERED_BY)"',
+     'echo "  seat answered. (answered by: $ANSWERED_BY)"'),
+    ("m_eq1", "UNPINNED (only rc not in {0,1} WITH an answer -- the N4 residual)",
+     'if [ "$rc" -ne 0 ] || [ "$body" -eq 0 ]; then', 'if [ "$rc" -eq 1 ] || [ "$body" -eq 0 ]; then'),
+    ("m_sgr", "UNPINNED (non-SGR CSI: 0 of 2,372 .err files on record)",
+     'strip_ansi() { sed "s/${ESC}\\[[0-9;]*[A-Za-z]//g" "$1" 2>/dev/null; }', 'strip_ansi() { sed "s/${ESC}\\[[0-9;]*m//g" "$1" 2>/dev/null; }'),
+    ("m_prec", "UNPINNED (a refusal and a wall in one stderr: 0 on record)",
+     """        wall=$(printf '%s' "$CXERR" | grep -ic 'usage limit\|quota\|rate limit\|not authenticated')""",
+     """        wall=$(printf '%s' "$CXERR" | grep -ic 'usage limit\|quota\|rate limit\|not authenticated'); [ "$wall" -gt 0 ] && refus=0"""),
+]
+os.makedirs(out, exist_ok=True)
+bad = 0
+with io.open(os.path.join(out, "MUTANTS.list"), "w", encoding="utf-8", newline="\n") as lst:
+    for name, catches, find, repl in MUTANTS:
+        n = t.count(find)
+        if n != 1:
+            print("MUTANT_TEXT_NOT_FOUND %s (found %d)" % (name, n)); bad += 1; continue
+        io.open(os.path.join(out, name + ".sh"), "w", encoding="utf-8", newline="").write(t.replace(find, repl))
+        lst.write("%s\t%s\n" % (name, catches))
+print("mutants written: %d of %d" % (len(MUTANTS) - bad, len(MUTANTS)))
+sys.exit(1 if bad else 0)

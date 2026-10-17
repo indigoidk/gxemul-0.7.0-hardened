@@ -1,0 +1,47 @@
+--- /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/cxlaunchland_20261016/cxlaunch_landed_v2.sh	2026-10-16 23:36:29.485179100 -0500
++++ /c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/tools/cxlaunch.sh	2026-10-16 23:36:29.511982700 -0500
+@@ -47,9 +47,9 @@
+ #      `ERROR:` line does not fix it: in N4 that line is itself a quotation.
+ #    * its refusal twin: a quoted `flagged for possible cybersecurity` line on rc != 0 -> the Daybreak re-run fires
+ #      and the first answer is renamed codex_<tag>.refused.* (Grok 4.7).
+-#    * a run whose stderr carries NO codex header block is reported "model UNVERIFIED" and is not failed -- 0 of 330
+-#      launcher-captured answered runs on record lack it (counted on pass 2); failing it would lose every answer to a
+-#      CLI format change.
++#    * a run whose stderr carries NO opening codex header block is reported "model UNVERIFIED" and is not failed -- 0 of
++#      330 launcher-captured answered runs on record lack it (counted on pass 2); failing it would lose every answer to a
++#      CLI format change.  A block whose closing rule never comes is read for 30 lines at most.
+ #    * the ANSI strip widens both residuals above to colour-prefixed quoted lines on a failed or empty run (GLM 5.3,
+ #      pass 2): a quoted line whose only prefix was colour becomes column-0 -- still inside the classify-on-failure gate.
+ #    * a REFUSED first run's header is printed (`ran:`) but not compared; its answer is discarded, and the fallback's
+@@ -63,7 +63,8 @@
+ #  Exit status: 0 answered; 5 a different model ran; 6 empty stdout with no refusal or wall text; 7 refused (after
+ #  the fallback, if any); 8 walled; 9 the brief is above the argv cap or the project dir is missing; otherwise
+ #  codex's own nonzero rc.  An answered run whose model is unverified still exits 0, and says so instead of naming
+-#  a model.  Controls: regress/artifacts/cxlaunchland_20261016/ (RECEIPT.txt).
++#  a model.  Controls: regress/artifacts/cxlaunchland_20261016/run_controls_v3.sh (RECEIPT_v3.txt; the kill table is
++#  KILLTABLE_v3.txt -- RECEIPT.txt and RECEIPT_v2.txt are the pass-2 and adjudication-pass receipts of earlier versions).
+ #
+ #  Usage: cxlaunch.sh <brief-path> <out-dir> <tag>
+ set -u
+@@ -90,10 +91,17 @@
+     "$CODEX" exec --sandbox read-only --skip-git-repo-check -m "$1" \
+         -c model_reasoning_effort="$2" "$(cat "$BRIEF")" > "$TXT" 2> "$ERR" < /dev/null
+     rc=$?
+-    #  codex's HEADER BLOCK -- `OpenAI Codex vX`, then the lines between the next two `--------` rules -- names the model
+-    #  and effort it actually ran.  Read only that block (on record its `model:` line is line 5 of stderr in 599 of 600
+-    #  codex .err files and line 7 in one, Astra); a `model:` line anywhere else is streamed source or the brief.
+-    HDR=$(strip_ansi "$ERR" | awk '/^OpenAI Codex/ { h = 1; next } h == 1 && /^--------/ { h = 2; next } h == 2 && /^--------/ { exit } h == 2')
++    #  codex's OPENING header block -- `OpenAI Codex vX`, then the lines between the next two `--------` rules -- names the
++    #  model and effort it actually ran.  Read only that block, and only at the TOP of stderr: the banner and its first
++    #  rule must appear by line 12 and the block is read for at most 30 lines.  On record the block's `model:` line is
++    #  line 5 of stderr in 599 of 600 codex .err files and line 7 in one (two pre-header lines; Astra).  A `model:` line
++    #  anywhere else is streamed source or the brief and is never READ -- including a complete QUOTED header block, which
++    #  N1's own stderr carries at line 5528 (GPT-6 Astra, adjudication pass: v2 matched the banner anywhere).
++    HDR=$(strip_ansi "$ERR" | awk 'NR > 12 && h < 2 { exit }
++        h == 0 && /^OpenAI Codex/ { h = 1; next }
++        h == 1 && /^--------/ { h = 2; next }
++        h == 2 && /^--------/ { exit }
++        h == 2 { if (++n > 30) exit; print }')
+     RAN=$(printf '%s\n' "$HDR" | grep -m1 '^model:' | sed 's/^model:[[:space:]]*//; s/[[:space:]]*$//')
+     echo "codex rc=$rc   stdout=$(wc -c < "$TXT") b   stderr=$(wc -c < "$ERR") b   asked: $1 / $2"
+     echo "  ran: ${RAN:+model: $RAN} / $(printf '%s\n' "$HDR" | grep -m1 '^reasoning effort:')"
