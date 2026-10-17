@@ -1,3 +1,9 @@
+# Records, 2026-10-16: `m88kexcdeliver` names its closing commit 01aef04f
+
+The #502 repair-15 commit 01aef04f closed the row and cannot name itself; this adds it to the row's `commits` field
+(now `79cd12e 16512e9c 01aef04f`).  check_commit_attribution grades a closed row whose subject-naming commit is unlisted
+HARD on the next commit, the peer session's included, so this lands at once and alone.  Ledger, matrix and this block only.
+
 # `#502` m88kexcdeliver, repair 15 (2026-10-16): the is_trap axis -- a TRAP in a delay slot at the five instruction labels, unfrozen and frozen; the delay-slot class is now rowed on all four inputs the delivery path tests (probe v23 -> v24, 73 -> 84 rows), and pass 16 CLOSES the chain (four seats, all CLOSE)
 
 **Pass 15 (`repair13_20261016/pass15/`) split 2-2 and was ruled on Fable 5.1's argument** (recorded in the block for
