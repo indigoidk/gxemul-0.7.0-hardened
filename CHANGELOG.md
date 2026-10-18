@@ -1,3 +1,35 @@
+# Records, 2026-10-18: the 2026-10-16 rulings A (#563) and B (asiceventaddr) corrected against their own seats -- read before either build
+
+An Argon reading checked both consolidations against the seat answers they consolidate and raised 27 flags
+(`regress/artifacts/adj_20261016/fidelity_20261018/`).  GPT-6 Astra and Grok 4.7 then verified every flag from the seat
+files, independently -- Astra 6 confirmed, 11 partly, 10 refuted; Grok 17, 8, 2 -- and the main loop settled their 13
+splits by reading the cited lines.  A shared-findings pass on the settlements raised flags of wording and attribution
+only (Astra 5, Grok 6, GLM 6, Argon 2; none against a settlement's grade), and every one was applied or refuted from a
+file.  Astra's confirm then raised one, a sentence that credited one expression with exposing all five equivalent
+removals; a second confirm on that one sentence added its type caveat (removing the `(int)` cast changes the
+expression's type, which a comparison would see), and the item now carries that seat's own wording.  Fable 5.1 is held
+by the owner's 2026-10-17 directive and was not fired; GLM sat out the first verification, which needs the seat files
+open.
+
+Each rulings file gains a FIDELITY CORRECTIONS block above its rulings, and pointers on the build-list lines it
+changes.  Nothing existing is deleted.  **No grade, pin, sample or row oracle changes.**  What changes for a builder:
+
+* **#563 REPAIR4.**  N5 uses the MEASURED store sequence -- 2, 4, 4, 4, then 2-byte stores to 514 -- not the reasoned
+  all-4-byte stride; VD1 is coded as the ternary `len == 4 ? 4 : 2`; the PRETABLE gains three measurements (N2's
+  one-sided count qualification, flagged as stated once and without an oracle; N3's driven reachability; Grok's
+  expected-green `atapi_cmd_in_progress || (atapi_len != 0 && atapi_received != 0)` control); N6 is measured against
+  Astra's second-pop variants; "every existing row byte-identical" names N4 and R14/R15 as its exceptions; the disabled
+  READ/WRITE cells are owed in the per-guard ledger; the flag-only G0 member keeps its row.
+* **asiceventaddr.**  Leave the cases-file comment alone -- pin C makes it true -- and rewrite only packet record 3;
+  DISCLOSES spells out the five EQUIVALENT removals (with `SYSASIC_EVENT_TO_ADDR(e) * 2` exposing, by its numeric
+  value, only ADDR's outer-parenthesis removal), LeakSanitizer and the gate VOID sentence; VOID comes only from the
+  capability preflight, while a candidate's own compile failure and its post-link sanitizer abort stay row FAILs; the
+  frozen PRETABLE keeps an erratum beside it; the extent-pin claim is limited to `buf[16]`.
+
+And the record: Fable 5.1's own votes stand beside FB-A's; Grok's N4-N6 dissent is written beside those rows; F15's
+overturn shows as 1 of 3, standing on deepseek's own verdict line; the prescreen's ten items are labelled the main
+loop's reading of a file all three seats reported absent.
+
 # Records, 2026-10-18: `sgirandomcolour` names its closing commit 50805312
 
 The landing commit 50805312 closed the row(s) and cannot name itself; this adds it to each `commits` field: `sgirandomcolour` (now `fd15065 50805312`).

@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""assemble_f2.py <fid scratch> <artifact dir> -- the shared-findings pass on the rulings A/B fidelity corrections: every
+seat sees both verifications, the 27-row split table with the main loop's settlement and the block item that carries it,
+and the two correction blocks verbatim.  Packet-fed seats get the two verification answers inline."""
+import difflib, io, os, re, sys
+F, D = sys.argv[1], sys.argv[2]
+def rd(p): return io.open(p, encoding="utf-8", newline="").read()
+SET = {"A1": ("PARTLY", "A7"), "A2": ("PARTLY", "A7"), "A3": ("PARTLY", "A7"), "A4": ("CONFIRMED", "A7"),
+       "A5": ("PARTLY", "A7"), "A6": ("CONFIRMED", "A1"), "A7": ("PARTLY", "A7"), "A8": ("CONFIRMED", "A2"),
+       "A9": ("PARTLY", "A7"), "A10": ("REFUTED", "A7"), "A11": ("PARTLY", "A7"), "A12": ("CONFIRMED", "A7"),
+       "A13": ("CONFIRMED", "A3"), "A14": ("CONFIRMED", "A3"), "A15": ("PARTLY", "A3"),
+       "B1": ("PARTLY -- clarified, not reversed", "B1"), "B2": ("PARTLY", "B7"), "B3": ("CONFIRMED", "B8"),
+       "B4": ("CONFIRMED", "B8"), "B5": ("CONFIRMED", "B6"), "B6": ("CONFIRMED", "B6"), "B7": ("REFUTED", "B8"),
+       "B8": ("PARTLY", "B8"), "B9": ("CONFIRMED", "B7"), "B10": ("CONFIRMED", "B3"),
+       "B11": ("PARTLY -- made explicit", "B2"), "B12": ("PARTLY -- made explicit", "B2")}
+def verdicts(fn):
+    out = {}
+    for m in re.finditer(r"^([AB]\d+): (CONFIRMED|REFUTED|PARTLY)", rd(os.path.join(D, fn)), re.M):
+        out.setdefault(m.group(1), m.group(2))
+    return out
+a, g = verdicts("codex_fid.txt"), verdicts("grok_fid.txt")
+rows = ["| flag | GPT-6 Astra | Grok 4.7 | main loop's settlement | carried by block item |", "|---|---|---|---|---|"]
+for k in sorted(SET, key=lambda k: (k[0], int(k[1:]))):
+    s, it = SET[k]
+    rows.append("| %s | %s | %s | %s | %s %s |" % (k, a[k], g[k], ("**" + s + "**") if a[k] != g[k] else s,
+                                                    "ruling " + it[0] + ", item", it[1:]))
+table = "\n".join(rows)
+diffs = []
+for f in ("RULINGS_A_563", "RULINGS_B_asic"):
+    h, c = rd(os.path.join(F, f + "_head.md")), rd(os.path.join(F, f + "_commit.md"))
+    diffs.append("".join(difflib.unified_diff(h.splitlines(True), c.splitlines(True), "a/" + f + ".md", "b/" + f + ".md", n=1)))
+Q = """## Questions
+
+**Please do not simply ratify.**  Thirteen of the 27 flags split the two verifying seats, and the main loop settled each
+split itself.  The load-bearing question is **WHICH OF MY 27 SETTLEMENTS IS WRONG?** -- and a seat whose verdict a
+settlement OVERRODE is asked to be hardest on that one, and equally hard on any settlement that ADOPTED its own verdict.
+
+**Q1.**  For each of the 13 SPLIT rows (bold in the table), one line: `<flag>: RIGHT | WRONG | PARTLY -- <why>`, with
+the file:line that settles it.  A FILE-READING seat checks the seat files under
+`GXEMUL-SEC/regress/artifacts/adj_20261016/` (S-files named in `fidelity_20261018/fid_brief.md`); a packet-fed seat rules
+from the two verification answers inlined below and says NOT CHECKABLE where they do not settle it.
+
+**Q2.**  Does any block item MISSTATE a seat, a file or a number -- especially items A1-A6 and B1-B5, which change what a
+builder does?
+
+**Q3.**  Is any build-changing correction still missing from the blocks?
+
+**Format:** your token first, then ONE line `VERDICT: <n> flags -- <one line>`, then Q1..Q3.  Every defect is a line
+starting `FLAG:`.  Facts and flags only.
+"""
+def packet(tok, inline):
+    parts = ["**Your token: `%s`** -- open your answer with it." % tok, "",
+             "# The rulings A/B fidelity corrections -- the shared-findings pass", "",
+             "## 0. What this is", "",
+             ("On 2026-10-16 the main loop consolidated two adjudications (`regress/artifacts/adj_20261016/RULINGS_A_563.md`, "
+              "#563; `RULINGS_B_asic.md`, asiceventaddr) from three seats each.  On 2026-10-18 an Argon reading flagged 27 places "
+              "where the consolidations depart from their seats; GPT-6 Astra and Grok 4.7 then verified every flag against the "
+              "seat files, independently.  The main loop settled their 13 splits by reading the cited lines and wrote the "
+              "results as two FIDELITY CORRECTIONS blocks, plus inline pointers on the build-list lines they change.  Nothing "
+              "existing is deleted.  The tree is `C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC`; the corrections are NOT yet in its "
+              "files.  READ-ONLY."), "",
+             "## 1. The 27 flags, both verifications, and the settlement", "", table, "",
+             "## 2. Block A, as it will sit in RULINGS_A_563.md", "", rd(os.path.join(F, "block_A.md")), "",
+             "## 3. Block B, as it will sit in RULINGS_B_asic.md", "", rd(os.path.join(F, "block_B.md")), "",
+             "## 4. The inline pointers (the whole diff of both files)", "", "```diff", diffs[0] + diffs[1], "```", ""]
+    if inline:
+        parts += ["## 5. The two verifications, verbatim", "",
+                  "---- GPT-6 Astra (`fidelity_20261018/codex_fid.txt`) ----", rd(os.path.join(D, "codex_fid.txt")), "",
+                  "---- Grok 4.7 (`fidelity_20261018/grok_fid.txt`) ----", rd(os.path.join(D, "grok_fid.txt")), ""]
+    else:
+        parts += ["## 5. The two verifications", "",
+                  "Read them in full: `regress/artifacts/adj_20261016/fidelity_20261018/codex_fid.txt` (GPT-6 Astra) and "
+                  "`grok_fid.txt` (Grok 4.7); Argon's numbered flags beside them.", ""]
+    return "\n".join(parts + [Q])
+for seat, inline in (("ASTRA", False), ("GROK", False), ("GLM", True)):
+    tok = "%s_FIDF2_20261018" % seat
+    p = os.path.join(D, "packet_fidf2_%s.md" % seat)
+    io.open(p, "w", encoding="utf-8", newline="\n").write(packet(tok, inline))
+    print("%-5s %6d bytes  %s" % (seat, os.path.getsize(p), tok))
+io.open(os.path.join(D, "fidf2_bundle_argon.md"), "w", encoding="utf-8", newline="\n").write(packet("ARGON_FIDF2_20261018", True))
+print("ASSEMBLED")
