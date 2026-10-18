@@ -1,3 +1,9 @@
+# Records, 2026-10-18: `sgirandomcolour` names its closing commit 50805312
+
+The landing commit 50805312 closed the row(s) and cannot name itself; this adds it to each `commits` field: `sgirandomcolour` (now `fd15065 50805312`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  Ledger, matrix and this block only.
+
 # Records, 2026-10-18: `sgirandomcolour` closes -- the 7n-5 ruling's L4s placed beside the sentences they correct
 
 `#519` landed as `fd15065` on 2026-09-12 with the 89-row instrument, and the row stayed `in work` for its closure
