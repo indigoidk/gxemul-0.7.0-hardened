@@ -18757,6 +18757,12 @@ the author hit the exit he happened to reach while developing and not the siblin
 far stronger warrant than "it is a host kill", and it is one grep away* -- which is exactly what the
 option-set rule's sibling check is for.
 
+*[CORRECTED 2026-10-18 at the row's closure (the closure checks of GPT-6 Astra and Grok 4.7,
+regress/artifacts/xscaleinten/close_20261018/, each finding it independently; verified at source): `case 4:`'s STORE
+arm is not quiet -- a nonzero store calls `fatal()` and `exit(1)` (the `i80321_isteer` store in
+src/cpus/cpu_arm_coproc.c).  Only its LOAD arm is quiet, and the load arm is the sibling this warrant needs; the
+ledger's copy already draws that line.]*
+
 Reachability is explicit rather than inferred: `machine_iq80321.c` installs it with
 `cpu->cd.arm.coproc[6] = arm_coproc_i80321_6;`, and Iyonix does the same. Emulated firmware reading its
 own interrupt-enable register is the natural consumer, and the generic coprocessor dispatcher enforces no
@@ -19329,6 +19335,12 @@ selects SVC32 with interrupts masked.
 CP15 MRC/MCR on `cats`, *** and `footbridge_sites_probe.py` is the directly reusable pattern -- plant
 instructions in RAM, set the pc, step, inspect registers -- pointed at IQ80321 instead. **No machine or
 device addition is required**, which is what the witness ladder demands.
+
+*[CORRECTED 2026-10-18 at the row's closure (the closure checks of GPT-6 Astra and Grok 4.7,
+regress/artifacts/xscaleinten/close_20261018/, each finding it independently; verified at source): four of the five
+run on `cats` (`footbridge_sites_probe.py`, `fbpending_witness.py`, `fbpending_drain_probe.py`,
+`pit8253_latch_probe.py`); the fifth, gate 14's `arm_flags_probe.py`, runs on `testarm` -- as the ledger's copy of
+this sentence says.]*
 
 **An oracle trap that applies well beyond this row: a printed step disassembly does NOT prove the
 instruction executed, or even that its condition passed** -- the engine prints the disassembly *before*

@@ -1,3 +1,25 @@
+# Records, 2026-10-18: `xscaleinten` closes -- `#526` finished on 2026-09-12 and was never moved out of `in work`; three wrong records corrected at the closure
+
+`#526` committed its fix as `eb26590` on 2026-09-12 -- a guest read of the i80321 XScale CP6 interrupt-enable register
+keeps the value it already loads into `rd` and no longer ends the emulator (member 4, ACCEPT) -- and Fable 5.1's
+adjudication ruling (`regress/artifacts/xscaleinten/fable_adjudication_20260912.md`) closed its repair chain with zero
+floor breaches.  The ledger row was never moved: it sat `in work`, with no closure, for five weeks.  This commit closes it
+and holds its REGRESS review for the flagship; the question names the two builds to re-run (HEAD, and `eb26590`'s parent
+`85f8b465`, which was HEAD when kill table 3's pre-fix leg ran).
+
+**The closure check** (`regress/artifacts/xscaleinten/close_20261018/`): GPT-6 Astra and Grok 4.7 each found, from the
+files and independently, the SAME three wrong records still standing, and every drafted fact true (the commit, the
+30-row detector and gate 14's pin of 30, its 922-check PASS, kill table 3's 30/30 and 12/30, the parent and the table's
+timestamp).  Each wrong record is corrected IN PLACE beside the sentence it corrects:
+* `OUTSTANDING_BUGS.md`: "case 4 ... carries **no `fatal()` and no `exit()`**" -- its STORE arm calls both on a nonzero
+  value; only its LOAD arm is quiet, which is the sibling the warrant needs.
+* `OUTSTANDING_BUGS.md`: "FIVE probes already execute CP15 MRC/MCR on `cats`" -- four do; gate 14's `arm_flags_probe.py`
+  runs on `testarm`.
+* the ledger note: "FAULT is unavailable here in any case ... this is ARM" -- retracted in the bug file on 2026-09-11 and
+  never in the ledger: `arm_cdp()` raises `ARM_EXCEPTION_UND`; ACCEPT stands on its own warrant.
+Astra then confirmed the three corrections' wording and placement: 0 flags.  GLM was deliberately not fired (a records question that needs files opened); Fable 5.1 is held by the owner's
+2026-10-17 directive.  No `src/` change.
+
 # Records, 2026-10-18: `mapledmaaddr` names its closing commit d9990129
 
 The landing commit d9990129 closed the row(s) and cannot name itself; this adds it to each `commits` field: `mapledmaaddr` (now `ca3be4e d9990129`).
