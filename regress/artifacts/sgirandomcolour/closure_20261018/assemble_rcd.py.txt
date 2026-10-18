@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""assemble_rcd.py <rc scratch dir> <out dir> -- the DELTA pass on `sgirandomcolour''s closure records: the same evidence
+as pass 1 (E1-E4, cut by line number from HEAD's files), plus pass 1's own flags verbatim (E5) and the HEAD text of every
+newly corrected site (E6), and the corrections marked UNCHANGED / CHANGED / NEW against pass 1's packet -- only the
+CHANGED and NEW ones in full.  One packet per seat, each with its own token."""
+import difflib, io, json, os, re, subprocess, sys
+
+D, OUT = sys.argv[1], sys.argv[2]
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+P1 = io.open(os.path.join(OUT, "packet_rc_GLM.md"), encoding="utf-8").read()
+def head(path):
+    return subprocess.run(["git", "-C", SEC, "show", "HEAD:" + path], capture_output=True, check=True).stdout.decode("utf-8")
+def rd(n): return io.open(os.path.join(D, n), encoding="utf-8", newline="").read()
+def numbered(label, text, a, b, must=None):
+    seg = text.split("\n")[a - 1:b]
+    if must: assert must in "\n".join(seg), (label, must)
+    return "\n".join("%s:%d  %s" % (label, a + i, l) for i, l in enumerate(seg))
+HEADSHA = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+# E1-E4 exactly as pass 1 had them (sections 1-4 of the pass-1 packet)
+ev = P1[P1.index("## 1. E1"):P1.index("## 5. R")].rstrip("\n")
+# E5: pass 1's flags, verbatim
+def grab(path, start, end=None):
+    t = io.open(os.path.join(OUT, path), encoding="utf-8").read()
+    i = t.index(start); j = t.index(end, i) if end else len(t)
+    return t[i:j].rstrip("\n")
+E5 = "\n\n".join([
+    "---- E5a  Astra (codex_rcclose.txt), its Q2 ----\n" + grab("codex_rcclose.txt", "Q2.", "Q3."),
+    "---- E5b  Grok (grok_rcclose.txt), its FLAG lines and Q2 ----\n" + grab("grok_rcclose.txt", "FLAG: C5", "**Q1**") + "\n" +
+    grab("grok_rcclose.txt", "**Q2**", "**Q3**"),
+    "---- E5c  GLM (glm_rcclose.txt), its Q2 and FLAG ----\n" + grab("glm_rcclose.txt", "**Q2:**", "**Q3:**") + "\n" +
+    grab("glm_rcclose.txt", "FLAG: C9")])
+probe_h = head("regress/sgi_re_colourdefault_probe.py")
+res_h = head("regress/artifacts/sgirandomcolour/killtable4_20260911/RESIDUALS.md")
+E6 = "\n".join([
+    "---- E6a  regress/sgi_re_colourdefault_probe.py at HEAD, the disclosure headline and what follows it ----",
+    numbered("E6a", probe_h, 277, 297, must="MEASURED TO BE FLOOR BREACHES"),
+    "---- E6b  the same file, the pass-4 block's header and its bound ----",
+    numbered("E6b", probe_h, 563, 581, must="so this closes the CLASS"),
+    "---- E6c  the same file, the pass-4 block's SAMPLED list and its historical paragraph ----",
+    numbered("E6c", probe_h, 593, 617, must="genuinely FLOOR-shaped"),
+    "---- E6d  regress/artifacts/sgirandomcolour/killtable4_20260911/RESIDUALS.md at HEAD, R5 ----",
+    numbered("E6d", res_h, 92, 127, must="It needs ONE ruling, not two")])
+
+# ---- the corrections, marked against pass 1 ----------------------------------------------------------------------
+TAGP = "  [CORRECTED 2026-10-18 by the 7n-5 ruling"
+led_c = json.loads(rd("ledger_commit.json"))
+rows_h = {r["id"]: r for r in json.loads(head("tools/pipeline/ledger.json"))["rows"]}
+rc = [r for r in led_c["rows"] if r["id"] == "sgirandomcolour"][0]
+n = rc["note"]
+items = []
+i = 0
+while True:
+    j = n.find(TAGP, i)
+    if j < 0: break
+    e = j + 2                                # the tag's own opening '['
+    assert n[e] == "["
+    depth = 0
+    while True:                              # the tag's own text may hold `[...]`-free prose only; find its closing ']'
+        e += 1
+        if n[e] == "[": depth += 1
+        elif n[e] == "]":
+            if depth == 0: break
+            depth -= 1
+    ins = n[j:e + 1]
+    items.append(("ledger row `sgirandomcolour`, `note`", n[max(0, j - 400):j], ins))
+    i = e + 1
+def mark(ins):
+    return "UNCHANGED since pass 1" if ins.strip() in P1 else "CHANGED or NEW since pass 1"
+R = []
+k = 0
+for where, ctx, ins in items:
+    k += 1
+    m = mark(ins)
+    if m.startswith("UNCHANGED"):
+        R.append("D%d  [%s]  (%s)  -- the insertion beginning: %s..." % (k, m, where, ins[2:120]))
+    else:
+        R.append("D%d  [%s]  (%s)\n  THE TEXT IT SITS BESIDE (unchanged, the ~400 characters before it):\n    ...%s\n  INSERTED:\n   %s"
+                 % (k, m, where, ctx, ins))
+d = "".join(difflib.unified_diff(probe_h.splitlines(True), rd("probe_commit.py").splitlines(True),
+                                 "a/regress/sgi_re_colourdefault_probe.py", "b/regress/sgi_re_colourdefault_probe.py", n=3))
+k += 1
+R.append("D%d  [the probe's FOUR comment notes, whole diff; the module's syntax tree is unchanged.  Pass 1 saw ONE of them, the "
+         "end-of-historical-part note, in an earlier wording]\n%s" % (k, d))
+d = "".join(difflib.unified_diff(res_h.splitlines(True), rd("residuals_commit.md").splitlines(True),
+                                 "a/regress/artifacts/sgirandomcolour/killtable4_20260911/RESIDUALS.md",
+                                 "b/regress/artifacts/sgirandomcolour/killtable4_20260911/RESIDUALS.md", n=2))
+k += 1
+R.append("D%d  [NEW since pass 1]  (RESIDUALS.md R5)\n%s" % (k, d))
+k += 1
+R.append("D%d  [CHANGED since pass 1]  (the ledger row's closure fields; the receipt line and the bug-file notes are "
+         "UNCHANGED since pass 1)\n  closure: %s\n  hold_question: %s\n  state_note (head): %s\n  NEW ENTRIES: %s" % (
+    k, json.dumps(rc["closure"], ensure_ascii=False), rc["hold_question"], rc["state_note"][:330],
+    "\n    ".join(json.dumps(e, ensure_ascii=False) for e in rc["entries"][len(rows_h["sgirandomcolour"]["entries"]):])))
+k += 1
+R.append("D%d  [CHANGED since pass 1]  (CHANGELOG.md, the block prepended at the top)\n%s" % (k, rd("changelog_block.md")))
+
+Q = """## 7. Questions -- a DELTA pass: only what changed since pass 1
+
+**Please do not simply ratify.**  Check the changes against E1-E6, not against each other.
+
+**Q1.**  For EACH D marked CHANGED or NEW, one line: `D<n>: FAITHFUL | OVERREACH | CONTRADICTS | FACT-WRONG |
+WRONG-SITE -- <why>`, citing the `E<x>:<line>` that settles it.
+
+**Q2.**  For EACH pass-1 flag and named sibling in E5, one line: `FIXED | NOT FIXED | FIXED WRONGLY -- <which D>`.
+
+**Q3.**  Is any sentence still standing that grades the M28 / M30-M33 / M37 / TLB-contents / value-slice family as floor,
+as owed, as a mandated closure, or as "not closable by a finite row set" -- with no correction beside it after this
+commit?  A FILE-READING seat: the working tree's files are still at HEAD (none of D1.. is in them yet); search the
+`sgirandomcolour` row of `tools/pipeline/ledger.json`, `regress/sgi_re_colourdefault_probe.py`, `regress/pass2_ledger.tsv`
+(the fd15065 line), `OUTSTANDING_BUGS.md`'s `sgirandomcolour` entry, `CHANGELOG.md`'s `#519` block and
+`regress/artifacts/sgirandomcolour/killtable4_20260911/RESIDUALS.md`, and quote each hit with file and line.  A seat
+that cannot read files: `Q3: NOT CHECKABLE`, then name any risk the packet shows.
+
+**Q4.**  Name the ONE change most likely to be wrong, and why -- or say none, with the check that rules each out.
+
+**Format:** your token first, then ONE line `VERDICT: <n> flags -- <one line>`, then Q1..Q4.  Every defect is a line
+starting `FLAG:` citing `D<n>` and its evidence.  Facts and flags only.
+"""
+def packet(tok):
+    return "\n".join([
+        "**Your token: `%s`** -- open your answer with it." % tok, "",
+        "# `sgirandomcolour`'s closure records -- the DELTA pass (pass 2 of the records review)", "",
+        "## 0. What this is", "",
+        ("Pass 1 reviewed ten corrections that apply the 7n-5 ruling (Fable 5.1, 2026-10-09; GPT-6 Astra confirming) to the "
+         "records of the ledger row `sgirandomcolour` (round `#519`, committed as `fd15065`).  Its seats raised five flags and "
+         "named several uncorrected sibling sentences (E5).  Each was applied.  This pass reviews ONLY what changed.  The "
+         "tree is `C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC` at HEAD %s; ignore any other `src/` you find.  READ-ONLY: write "
+         "nothing to any project tree." % HEADSHA), "",
+        ev, "",
+        "## 5. E5 -- pass 1's flags and named siblings, verbatim", "", E5, "",
+        "## 6. E6 -- the HEAD text of the newly corrected sites", "", E6, "",
+        "## 6b. R -- the corrections, marked against pass 1", "", "\n\n".join(R), "", Q])
+
+for seat in ("ASTRA", "GROK", "GLM"):
+    tok = "%s_RCDELTA_20261018" % seat
+    io.open(os.path.join(OUT, "packet_rcd_%s.md" % seat), "w", encoding="utf-8", newline="\n").write(packet(tok))
+    print("%-6s %7d bytes  token %s" % (seat, os.path.getsize(os.path.join(OUT, "packet_rcd_%s.md" % seat)), tok))
+io.open(os.path.join(OUT, "astra_pointer_rcd.md"), "w", encoding="utf-8", newline="\n").write(
+    "ASTRA seat -- a records check, second pass: does each changed or new documentation correction say what an existing\n"
+    "ruling says, were the first pass's flags fixed correctly, and is any sibling sentence still uncorrected?  An ordinary\n"
+    "documentation-accuracy review of a test project's ledger, changelog and test comments.\n\n"
+    "Read this file and answer it exactly as its Questions section (section 7) directs:\n\n"
+    "    " + OUT.replace("\\", "/") + "/packet_rcd_ASTRA.md\n\n"
+    "READ-ONLY: write nothing to any project tree.  The tree is C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC at HEAD " + HEADSHA + ";\n"
+    "the corrections are NOT yet in its files (they are in the packet).  Scope your reading to GXEMUL-SEC.\n\n"
+    "Open your answer with the token ASTRA_RCDELTA_20261018, then ONE line:\nVERDICT: <n> flags -- <one line>\n")
+print("DELTA_ASSEMBLY_OK", len(R), "items")

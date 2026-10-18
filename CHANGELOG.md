@@ -1,3 +1,34 @@
+# Records, 2026-10-18: `sgirandomcolour` closes -- the 7n-5 ruling's L4s placed beside the sentences they correct
+
+`#519` landed as `fd15065` on 2026-09-12 with the 89-row instrument, and the row stayed `in work` for its closure
+records.  The 2026-10-09 block below records the 7n-5 ruling (Fable 5.1, `regress/artifacts/fablequeue7n_20261009/
+fable5_rule7n_35.md`; GPT-6 Astra confirming with corrections) and says its three L4s "stay owed in that row's
+closure-records commit".  This is that commit.  Each correction sits beside the sentence it corrects, which stays in
+place unedited.
+
+* **The ruling's three sites.**  The row note's "genuine floor-shaped gap ... Filed as OWED", its pass-2 "FLOOR BREACH"
+  heading and its "not closable by any finite row set"; the probe's historical pass-4 paragraphs; and `fd15065`'s
+  receipt in `regress/pass2_ledger.tsv`, whose disclosure list gains the SAMPLED axes and the four derived sweeps
+  (predicted 77/77, never run).
+* **Astra's fourth.**  `OUTSTANDING_BUGS.md`'s `sgirandomcolour` entry: a note under its heading, and two beside the flow
+  warrant and the closure-owed sentence it "repeats".
+* **The siblings the closure-records review found** (`regress/artifacts/sgirandomcolour/closure_20261018/`: Astra, Grok
+  and GLM, plus an Argon reading).  In the row note: the flow warrant, "owes the closure in ONE DIFF", the "two free
+  variables" bound, and both sentences that made M28 floor.  In the probe: the "FLOOR BREACHES, NOT DEBT" headline, and
+  the pass-4 block's "closes the CLASS" and its "two free variables" bound.  And `killtable4_20260911/RESIDUALS.md` R5,
+  which asked for exactly this ruling.  Every probe edit is a comment; the module's syntax tree is unchanged.
+* **And `tools/pipeline/fable_queue.md`'s 7n-5 entry**, whose struck heading carries the answer: a note beside its
+  GRADED FLOOR, "finite" and OWED bullets.
+
+**The review, three passes** (`closure_20261018/`).  Pass 1: Astra 2 flags, Grok 2, GLM 1, Argon 0.  Pass 2, on what
+changed: Astra 0, Grok 2, GLM 4 -- two of GLM's refuted from the files (the class-closure amendment's trigger is
+BREACHES, in the carrier's own words; `tlb_mode`'s other four values return before the store), the rest applied.
+Pass 3, Astra confirming the final changes: 0 flags.  Fable 5.1 walled (HTTP 429) on pass 1 and was not re-fired.
+
+**Closed** with REGRESS held for the flagship; the question is in `hold_question`.  The owner's 2026-10-17 directive
+holds Fable adjudication, so this commit makes no new ruling: it applies the 2026-10-09 one.  The coverage debt stays
+filed as `sgirecontentslice`.  No `src/` change.
+
 # Records, 2026-10-18: `sgirekills` names its closing commit e7fc97e6, and e7fc97e6's pass-2 receipt
 
 The landing commit e7fc97e6 closed the row(s) and cannot name itself; this adds it to each `commits` field: `sgirekills` (now `e302c98 e7fc97e6`).

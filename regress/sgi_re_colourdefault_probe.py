@@ -277,6 +277,15 @@ row("determinism", got_det, "identical",
 #  *** DISCLOSURES (i), (ii) AND (iii) BELOW WERE MEASURED TO BE FLOOR BREACHES, NOT DEBT, AND
 #  ARE NOW CLOSED BY THE PASS-4 BLOCK AT THE END OF THIS FILE.  The text is kept because it is
 #  the record being corrected, and because its REASON was wrong in a way worth not repeating. ***
+#  *** CORRECTED 2026-10-18 by the 7n-5 ruling (regress/artifacts/fablequeue7n_20261009/
+#  fable5_rule7n_35.md, GPT-6 Astra confirming).  "FLOOR BREACHES, NOT DEBT" is wrong AS A
+#  GRADE.  The six pass-2 escapes are measured and real, but the body tests none of them as a
+#  case -- tile_nr only at >= 256 (tiled) and >= 32 (LIN_A), x and y only against their bounds,
+#  *color not at all, the twelve default: nibbles only as one label -- so each is clause (e)
+#  (D1, 2026-09-25), and the closure the pass-4 block records was L1 strengthening on a
+#  severity warrant.  The paragraphs below give two reasons that ruling rejects: flow alone
+#  (tile_nr "flows into `tileptr'") is not the test, and "the COMPLETE free input set" is the
+#  2026-09-04 finiteness bound under a new name.  ***
 #
 #  (i) said `color_mode' "does not flow into any lvalue the guarded body reads".  THAT IS FALSE:
 #  color_mode selects among four arms every one of which writes `buf', and `buf' is the store's
@@ -567,6 +576,10 @@ for _i, (_n, _m) in enumerate((("d1", 0x10f0), ("d2", 0x11f0), ("d8", 0x13f0))):
 #  shape: a decline conditioned on an input the rows hold at a SINGLE VALUE.  M13/M14 were that
 #  shape on bufdepth and tlb_mode; M28 on color_mode; M30/M31/M32 on the tile index, M33 on y,
 #  M37 on the foreground colour.  The rule forbids buying another cell, so this closes the CLASS.
+#  *** CORRECTED 2026-10-18 by the 7n-5 ruling: no class closure was owed.  Each of the six pass-2
+#  mutants is clause (e) -- the body tests none of them as a case -- so the closure this block
+#  records is L1 strengthening on a severity warrant.  The CORRECTED notes earlier in this file and
+#  at the end of this block's historical part give the reasons.  ***
 #
 #  THE ENUMERATION, from the function's own inputs rather than from a list of mutant forms.
 #  The guarded store reads exactly four lvalues -- tileptr, ofs, buf, bufdepth -- and their
@@ -579,6 +592,10 @@ for _i, (_n, _m) in enumerate((("d1", 0x10f0), ("d2", 0x11f0), ("d8", 0x13f0))):
 #  THE BOUND: tile_nr, tile_nr_x, tile_nr_y, xofs and ofs are NOT independent axes.  Each is a
 #  pure function of (x, y, bufdepth, tlb_mode).  So "close every derived coordinate" IS "close
 #  the pair (x, y)" -- two free variables, not an open-ended demand.
+#  *** CORRECTED 2026-10-18 by the 7n-5 ruling: this is the 2026-09-04 finiteness bound under a
+#  new name, and it bounds nothing -- (x, y) ranges over 2048 x 128 after `y &= 127', and the four
+#  coordinate cells SAMPLE it.  The derived coordinates are clause (e) because the body does not
+#  test them as a case.  ***
 #
 #  *** AND THE WORD "COMPLETE" DOES NOT BELONG HERE.  An earlier draft of this block said "the
 #  complete free input set is therefore { x, y, *color, color_mode-within-default }" and that
@@ -615,6 +632,20 @@ for _i, (_n, _m) in enumerate((("d1", 0x10f0), ("d2", 0x11f0), ("d8", 0x13f0))):
 #  exception that is genuinely FLOOR-shaped, because the value flows into the address operand;
 #  it is filed as owed rather than fixed in this diff, because a repair made in response to a
 #  review owes its own pass and this block has not had one.
+#
+#  *** CORRECTED 2026-10-18 by the 7n-5 ruling
+#  (regress/artifacts/fablequeue7n_20261009/fable5_rule7n_35.md, GPT-6 Astra confirming).  This
+#  block is HISTORICAL: the 2026-09-12 CONTRACT banner at the top of this file supersedes it.  Its
+#  "as much a floor axis" and "genuinely FLOOR-shaped" are wrong AS A GRADE -- a value the body does
+#  not TEST AS A CASE is clause (e), whatever it flows into (D1, 2026-09-25).  tileptr's only tested
+#  bit is 31, constant-cleared before the store, so `if (ok || (tileptr & 0xfff00000))' is
+#  equivalent to the fix on every driven row, by inspection; tile_nr is tested only at >= 256
+#  (tiled) and >= 32 (LIN_A).  The array-contents slice is coverage debt, one of the four readbacks
+#  filed as sgirecontentslice, not owed.  "Not closable by any finite row set" is the 2026-09-04
+#  finiteness bound under a new name: each slice is predicted one-row closable (derived, never run)
+#  and only the family is not.  And EXHAUSTED above means every cell of the BODY-TESTED partition of
+#  that lvalue is rowed -- not every value of its reachable domain, though for these three the two
+#  coincide (tiny domains; tlb_mode's other four values return before the store).  ***
 #
 #  STILL DISCLOSED rather than rowed, and named so a later escape is inside or outside the
 #  contract by inspection: (a) a predicate that ENUMERATES this cell set by value

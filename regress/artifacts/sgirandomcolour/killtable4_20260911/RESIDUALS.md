@@ -125,6 +125,15 @@ slices of a store input. If value slices are floor, these are live floor breache
 debt, the earlier grading was wrong. **The round currently asserts the first and ships the
 second.** It needs ONE ruling, not two. Recorded here rather than decided.
 
+**[RULED -- the 7n-5 ruling of 2026-10-09 (`regress/artifacts/fablequeue7n_20261009/fable5_rule7n_35.md`; GPT-6 Astra
+confirming), applied here 2026-10-18 at the row's closure.]**  The tension resolves to DEBT, not floor.  A value the
+body does not test as a case is clause (e), whatever it flows into (D1, 2026-09-25), so the tile-index and
+tiled-origin escapes AND the `tileptr` contents slice are all clause (e), and the earlier FLOOR grading was wrong as a
+grade.  `tileptr`'s only tested bit is 31, constant-cleared before the store, so `if (ok || (tileptr & 0xfff00000))`
+is equivalent to the fix on every driven row, by inspection: coverage debt, not OWED.  `x & 1` and `y & 2` are each
+predicted one-row closable (derived, never run) and only the family is not, so finiteness separates nothing.  The
+readbacks are filed as `sgirecontentslice`.
+
 ## R6. SMALLER ITEMS FROM THE SAME AUDIT, each verified before filing
 
 * The pass-4 sessions are the two longest in the probe (~275 and ~200 debugger commands) and

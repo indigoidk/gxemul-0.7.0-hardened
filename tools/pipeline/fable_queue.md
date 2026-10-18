@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `cxlaunchdaybreak` (regress:fable5) · `cxlaunchquotation` (regress:fable5) · `dashokclass` (regress:fable5) · `es438` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcdeliver` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirekills` (regress:fable5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5)
+`alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `cxlaunchdaybreak` (regress:fable5) · `cxlaunchquotation` (regress:fable5) · `dashokclass` (regress:fable5) · `es438` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcdeliver` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirandomcolour` (regress:fable5) · `sgirekills` (regress:fable5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 35 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 36 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2555,6 +2555,13 @@ The owner ruled **FAULT (`return 0`)** for `dev_vme.c`'s `default:` arm, and a c
 * **GRADED DEBT** — `mode & 1`, `x & 1`, `y & 2`, and the `M28` nibble family.  Warrant: these are **within-class value slices, not closable by any finite row set.**
 
 **AND A THIRD CASE SITS BETWEEN THEM, FILED AS OWED RATHER THAN FIXED:** the TLB array's *contents*.  The seat named it as an input to `tileptr`, dropped it from its completeness conclusion, and an audit caught that.  **`tileptr` is the store's ADDRESS OPERAND**, so by the same data-flow test that makes `tlb_mode` a floor axis, the array value looks floor-shaped — and `if (ok || (tileptr & 0xfff00000))` is predicted **77/77**.
+
+*[CORRECTED 2026-10-18 at the row's closure, by this entry's own answer (the heading above;
+`regress/artifacts/fablequeue7n_20261009/fable5_rule7n_35.md`): the GRADED FLOOR bullet was wrong as a grade -- the
+tile-index family is clause (e), like the value slices and the TLB contents -- and the closure it credits was L1
+strengthening on a severity warrant.  "Not closable by any finite row set" separates nothing: each slice is predicted
+one-row closable (derived, never run) and only the family is not.  The contents slice is coverage debt, not owed:
+`if (ok || (tileptr & 0xfff00000))` is equivalent to the fix on every driven row, by inspection.]*
 
 **QUESTION: is "closable by a finite row set" the right discriminator between floor and debt?**  If YES, the TLB-array-contents gap is floor (L2, owes a repair and its own pass) and the value slices are correctly debt.  If NO, the round has graded one species two ways and the contract's new **EXHAUSTED vs SAMPLED** split is the thing to formalise instead.
 

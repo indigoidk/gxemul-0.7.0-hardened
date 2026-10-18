@@ -19355,6 +19355,14 @@ argument resting on "the timer arms are plain storage" would be wrong.
 
 ### `sgirandomcolour` -- *** `#519` DOES NOT CLOSE.  PASS 2 MEASURED A FLOOR BREACH, 2026-09-11. ***
 
+*[CORRECTED 2026-10-18 by the 7n-5 ruling (`regress/artifacts/fablequeue7n_20261009/fable5_rule7n_35.md`; GPT-6 Astra confirming, and naming
+this heading): the heading is HISTORICAL and its grade is wrong.  `#519` shipped as `fd15065` with the 89-row
+instrument, after the 59 -> 77 -> 89 repairs -- not the 59-row one this entry calls shipped.  The six escapes below are
+measured and real, but each is clause (e): the body tests `tile_nr` only at `>= 256` (tiled) and `>= 32` (LIN_A), `x`
+and `y` only against their bounds (`< 0`, `>= 2048`), `*color` not at all, and the twelve nibbles that reach `default:`
+only as that one cell (D1, 2026-09-25).  The repairs were L1 strengthening on a severity
+warrant, so no further pass was owed; the row closed 2026-10-18 with its REGRESS held.]*
+
 **Six mutants score 59/59 on the shipped instrument and every one writes uninitialised host stack into
 guest memory.** `regress/artifacts/sgirandomcolour/pass2_20260911/` -- 13 builds, 11 instrument runs,
 13 controls.
@@ -19384,6 +19392,10 @@ guarded store's address operand at least as directly as `tlb_mode` does, and `#1
 function already calls `tile_nr` guest-derived and bounds it. My PRETABLE named only `tlb_mode` and
 `bufdepth` as `ofs`'s dependencies, while `ofs = 512*y + (x % tilewidth) * bufdepth` contains x and y.
 
+*[CORRECTED 2026-10-18 by the 7n-5 ruling: flow is not the test.  `tlb_mode` is a label the body tests as a case AND flows into
+`tileptr`; `tile_nr` flows and is tested only at `>= 256` (tiled) and `>= 32` (LIN_A), never for zero, so the tile-index
+family is clause (e).  Flow alone is the transitive chasing the 2026-08-24 DEPENDS-ON bound forbids.]*
+
 **Three reading seats independently found the warrant false before the measurement showed what it
 cost**, and one of them made the symmetry argument outright: `M13` (bufdepth), `M14` (linear) and
 `M28` (color_mode) are **one guard-weakening shape on three fields**, so *"an instrument-relative
@@ -19393,6 +19405,9 @@ escape is not a contract-relative exemption."*
 repair owes the closure in ONE diff, not another cell.** The 16-cell closure was principled and
 **incomplete on its own principle**. Reachability is a `sw` to `DE_MODE_DST`, not a driver design
 choice.
+
+*[CORRECTED 2026-10-18 by the 7n-5 ruling: no closure was owed.  The cells were clause (e), so the closure that
+followed (59 -> 77 -> 89 rows) was L1 strengthening chosen on a severity warrant.]*
 
 **Also measured, and it trims rather than grows the instrument:** the four `ann cum` rows earn no kill
 (delete them and `M5`/`M7` still die via `ann1`/`once`); `tA/tB/tC silent` kill sets are strict

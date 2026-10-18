@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""assemble_rc.py <rc scratch dir> <out dir> -- the records-review packets for `sgirandomcolour''s closure-records
+commit: the 7n-5 ruling and GPT-6 Astra's confirmation VERBATIM (E1, E2), the source the corrections describe (E3), the
+other evidence (E4), and every correction numbered C1..C10 with the text it sits beside (R).  One packet per seat, each
+with its own token.  Every quoted span is cut by line number from a named file at HEAD and refuses if an anchor moved."""
+import difflib, io, json, os, subprocess, sys
+
+D, OUT = sys.argv[1], sys.argv[2]
+SEC = "C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC"
+os.makedirs(OUT, exist_ok=True)
+def head(path):
+    return subprocess.run(["git", "-C", SEC, "show", "HEAD:" + path], capture_output=True, check=True).stdout.decode("utf-8")
+def rd(n): return io.open(os.path.join(D, n), encoding="utf-8", newline="").read()
+def numbered(label, text, a, b, must=None):
+    L = text.split("\n")
+    seg = L[a - 1:b]
+    if must: assert must in "\n".join(seg), (label, must)
+    return "\n".join("%s:%d  %s" % (label, a + i, l) for i, l in enumerate(seg))
+
+HEADSHA = subprocess.run(["git", "-C", SEC, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True).stdout.strip()
+RUL = "regress/artifacts/fablequeue7n_20261009/fable5_rule7n_35.md"
+AST = "regress/artifacts/fablequeue7n_20261009/codex_astra_confirm.txt"
+E1 = numbered("E1", head(RUL), 60, 102, must="## 7n-5.  FLOOR OR DEBT")
+E2 = "\n".join(numbered("E2", head(AST), a, b) for a, b in ((25, 26), (47, 47), (57, 57), (60, 60)))
+src = head("src/devices/dev_sgi_re.c")
+E3 = (numbered("E3", src, 250, 290, must="tile_nr >= 256") + "\n...\n" +
+      numbered("E3", src, 326, 337, must="tileptr &= ~0x80000000;") + "\n...\n" +
+      numbered("E3", src, 380, 391, must="#519: a declined type stores nothing"))
+probe_h = head("regress/sgi_re_colourdefault_probe.py")
+E4 = "\n".join([
+    "---- E4a  regress/sgi_re_colourdefault_probe.py at HEAD (the controlling contract) ----",
+    numbered("E4a", probe_h, 24, 28, must="This is the controlling coverage"),
+    "---- E4b  regress/artifacts/sgirandomcolour/killtable5_20260912/SCORES.txt (legs BASE, HEAD and the first two controls) ----",
+    numbered("E4b", head("regress/artifacts/sgirandomcolour/killtable5_20260912/SCORES.txt"), 1, 26, must="SGICOLOUR_RESULT=28/89"),
+    "---- E4c  regress/gate_arm.sh (the colourdefault block's pins) ----",
+    numbered("E4c", head("regress/gate_arm.sh"), 1605, 1626, must='"sgi_re colourdefault rows correct" "${col%/*}" 89'),
+    "---- E4d  CHANGELOG.md, the 2026-10-09 records block's 7n-5 paragraph ----",
+    numbered("E4d", head("CHANGELOG.md"), 596, 598, must="Its three L4s stay owed"),
+])
+led_h = json.loads(head("tools/pipeline/ledger.json"))
+rows = {r["id"]: r for r in led_h["rows"]}
+cs = rows["sgirecontentslice"]
+E4 += "\n---- E4e  ledger row sgirecontentslice at HEAD ----\nE4e  title: %s\nE4e  state: %s %s\nE4e  state_note: %s" % (
+    cs["title"], cs["state"], cs["sev"], cs["state_note"])
+n_h = rows["sgirandomcolour"]["note"]
+s = n_h.find("13 builds, 11 instrument runs"); E4 += "\n---- E4f  the row note's six escapes, as recorded ----\nE4f  " + n_h[s:s + 700]
+s = n_h.find("Kill table 5 (regress/"); E4 += "\n---- E4g  the row note's closing measurements ----\nE4g  " + n_h[s - 60:s + 600]
+
+# ---- R: the corrections, each with the text it sits beside -----------------------------------------------------------
+led_c = json.loads(rd("ledger_commit.json"))
+rc = [r for r in led_c["rows"] if r["id"] == "sgirandomcolour"][0]
+n_c = rc["note"]
+TAGP = "  [CORRECTED 2026-10-18 by the 7n-5 ruling"
+R = []
+i = 0
+k = 0
+while True:
+    j = n_c.find(TAGP, i)
+    if j < 0: break
+    e = n_c.find("]", n_c.find("): ", j)) + 1
+    while n_c[e - 2:e] != ".]" and n_c[e - 2:e] != "t]":   # the tag's own text holds no ']' before its end; guard anyway
+        e = n_c.find("]", e) + 1
+    k += 1
+    R.append("C%d  (ledger row `sgirandomcolour`, `note`)\n  THE TEXT IT SITS BESIDE (unchanged, the ~400 characters before it):\n    ...%s\n  INSERTED:\n   %s"
+             % (k, n_c[max(0, j - 400):j], n_c[j:e]))
+    i = e
+assert k == 5, k
+d = "".join(difflib.unified_diff(head("regress/sgi_re_colourdefault_probe.py").splitlines(True), rd("probe_commit.py").splitlines(True),
+                                 "a/regress/sgi_re_colourdefault_probe.py", "b/regress/sgi_re_colourdefault_probe.py", n=6))
+R.append("C6  (regress/sgi_re_colourdefault_probe.py -- comment lines only; the module's AST is byte-identical before and after)\n" + d)
+t_h, t_c = head("regress/pass2_ledger.tsv"), rd("pass2_commit.tsv")
+ln = [l for l in t_c.split("\n") if l not in t_h.split("\n")]
+assert len(ln) == 1
+cut = ln[0].find(TAGP)
+R.append("C7  (regress/pass2_ledger.tsv, fd15065's receipt line -- the end of the existing line, then the insertion)\n    ...%s\n  INSERTED:\n   %s" % (ln[0][cut - 500:cut], ln[0][cut:]))
+d = "".join(difflib.unified_diff(head("OUTSTANDING_BUGS.md").splitlines(True), rd("ob_commit.md").splitlines(True),
+                                 "a/OUTSTANDING_BUGS.md", "b/OUTSTANDING_BUGS.md", n=4))
+R.append("C8  (OUTSTANDING_BUGS.md, the sgirandomcolour entry: a note under the heading and two beside the rationale it repeats)\n" + d)
+R.append("C9  (the ledger row's closure fields)\n  state: %s -> %s\n  closure: %s\n  hold_question: %s\n  state_note (head): %s\n  NEW ENTRY: %s" % (
+    rows["sgirandomcolour"]["state"], rc["state"], json.dumps(rc["closure"], ensure_ascii=False), rc["hold_question"],
+    rc["state_note"][:420], json.dumps(rc["entries"][-1], ensure_ascii=False)))
+R.append("C10  (CHANGELOG.md, the block prepended at the top)\n" + rd("changelog_block.md"))
+
+Q = """## 6. Questions
+
+**Please do not simply ratify.**  A recent panel had seven of nine seats confirm a premise its brief stated wrongly.
+Check the corrections against E1-E4, not against each other.
+
+**Q1.**  For EACH of C1..C10, one line: `C<n>: FAITHFUL | OVERREACH | CONTRADICTS | FACT-WRONG | WRONG-SITE -- <why>`,
+citing the `E<x>:<line>` that settles it.  OVERREACH = says more than E1/E2 rule; FACT-WRONG = a source, number, date
+or name E3/E4 contradict; WRONG-SITE = the correction sits beside a sentence that does not make the claim it corrects.
+
+**Q2.**  Siblings.  Is there any OTHER sentence in the records that grades the M30-M33 / TLB-contents / value-slice family
+as floor, as owed, or as "not closable by a finite row set", and that carries no correction after this commit?  A
+FILE-READING seat: search the working tree's `tools/pipeline/ledger.json` (row `sgirandomcolour`),
+`regress/sgi_re_colourdefault_probe.py`, the `fd15065` line of `regress/pass2_ledger.tsv`, the `sgirandomcolour` entry of
+`OUTSTANDING_BUGS.md`, and the `#519` block of `CHANGELOG.md` -- those files are still at HEAD in the working tree, so
+none of C1..C10 is in them yet.  Quote each hit with its file and line.  A seat that cannot read files: answer
+`Q2: NOT CHECKABLE`.
+
+**Q3.**  The closure (C9).  Does its note match E4 (scores, pins, filed debt)?  Is `hold_question` a question a seat can
+answer from named artifacts?
+
+**Q4.**  Name the ONE correction most likely to be wrong, and say why -- or say none, with the check that rules each out.
+
+**Format:** your token first, then ONE line `VERDICT: <n> flags -- <one line>`, then Q1..Q4.  Every defect is a line
+starting `FLAG:` citing `C<n>` and the `E<x>:<line>` evidence.  Facts and flags only; no rewording proposals needed.
+"""
+
+def packet(tok):
+    return "\n".join([
+        "**Your token: `%s`** -- open your answer with it." % tok, "",
+        "# `sgirandomcolour`'s closure records -- a records check before they land", "",
+        "## 0. What this is", "",
+        ("A records-only commit (no `src/` change) closes the ledger row `sgirandomcolour` -- round `#519`, committed as "
+         "`fd15065` on 2026-09-12 -- by APPLYING a ruling already made: the 7n-5 ruling of 2026-10-09 (Fable 5.1), confirmed "
+         "with corrections by GPT-6 Astra.  E4d is the project's own record that its L4 (wrong-record) corrections were owed "
+         "in this commit.  Every correction sits BESIDE the sentence it corrects and quotes or names it; nothing is deleted.  "
+         "The tree is `C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC` at HEAD %s; ignore any other `src/` you find.  READ-ONLY: "
+         "write nothing to any project tree." % HEADSHA), "",
+        "## 1. E1 -- the ruling, verbatim (%s, lines 60-102)" % RUL, "", E1, "",
+        "## 2. E2 -- GPT-6 Astra's confirmation, its 7n-5 items, verbatim (%s)" % AST, "", E2, "",
+        "## 3. E3 -- `src/devices/dev_sgi_re.c` at HEAD %s, the lines the corrections describe" % HEADSHA, "", E3, "",
+        "## 4. E4 -- the other evidence, verbatim", "", E4, "",
+        "## 5. R -- the corrections under review", "", "\n\n".join(R), "", Q])
+
+for seat in ("ASTRA", "GROK", "GLM", "FABLE"):
+    tok = "%s_RCCLOSE_20261018" % seat
+    io.open(os.path.join(OUT, "packet_rc_%s.md" % seat), "w", encoding="utf-8", newline="\n").write(packet(tok))
+    print("%-6s %7d bytes  token %s" % (seat, os.path.getsize(os.path.join(OUT, "packet_rc_%s.md" % seat)), tok))
+io.open(os.path.join(OUT, "astra_pointer_rc.md"), "w", encoding="utf-8", newline="\n").write(
+    "ASTRA seat -- a records check: does each of ten wrong-record corrections say what an existing ruling says, and are\n"
+    "its facts true?  An ordinary documentation-accuracy review of a test project's ledger, changelog and test comments.\n\n"
+    "Read this file and answer it exactly as its Questions section (section 6) directs:\n\n"
+    "    " + OUT.replace("\\", "/") + "/packet_rc_ASTRA.md\n\n"
+    "READ-ONLY: write nothing to any project tree.  The tree is C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC at HEAD " + HEADSHA + ";\n"
+    "the corrections are NOT yet in its files (they are in the packet).  Scope your reading to GXEMUL-SEC.\n\n"
+    "Open your answer with the token ASTRA_RCCLOSE_20261018, then ONE line:\nVERDICT: <n> flags -- <one line>\n")
+print("ASSEMBLY_OK")
