@@ -136,6 +136,9 @@
 > pure-Python row whose channel cannot vary under any emulator mutant"* -- vacuous by construction.
 > Demote it to a print.
 >
+> *[2026-10-18, `#565`: the 19-row comments are corrected in place and gate 13 pins the 24-row denominator
+> by equality.  The demotion above is STILL OWED; doing it moves gate 13's literals 24 -> 23.]*
+>
 > ### OPEN -- filed 2026-09-11 from #524's table 4: a probe's memory read indexed dump COLUMNS by
 > ### 16-byte offset while ISSUING an unaligned dump, so it silently returned a NEIGHBOURING word
 >
@@ -24760,6 +24763,8 @@ other unreviewed deltas; HEAD's `panel.sh` does not yet.
   clause-(e) debt; four readbacks in existing sessions, pin 89 -> 93 (a proposed budget).  Below `sgirebufuninit`.
 * **`nullmediumlegs` (LOW, open)** -- `ppc_rldicl_probe.py` and `alpha_tbi_probe.py` owe a MEASURED clause-(c) leg
   (neither has runtime wiring or an equality pin); the identity-body medium is the recommended form.
+  *[2026-10-18, `#565`: the rldicl half is MEASURED with the identity body -- 11 of gate 13's 30 rldicl checks red
+  (`regress/artifacts/ppcrldiclzero/gatewire_20261018/nullmedium/identity/`).  The `alpha_tbi_probe.py` half stays owed.]*
 * **`nullmediumsweep` (LOW, open)** -- the ~165-unit clause-(c) sweep has no durable artifact; a reproducible census
   of the labels is owed, not re-runs.
 * **`fablequeueregress` (MEDIUM, open)** -- `check_fable_queue.py` credits any regress-phase entry as the flagship's
@@ -24910,3 +24915,18 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
 * **`sgirexbit12`** (the item above, "tex xbit does not prime SGIRE_W_BADCOLOR") -- `#564` added five more latch bits
   (`SGIRE_W_MTE_STIPPLE` .. `SGIRE_W_MTE_BYTEMASK`, `1 << 13` .. `1 << 17`) that `tex xbit` does not prime either.
   `#564`'s own probe covers the other direction -- a new bit aliased onto bits 0-12 -- with its crossbit session.
+
+### 2026-10-18 -- `#565`: `ppc_rldicl_probe.py` wired into gate 13 (`wiringcliff` stays open); `nullmediumlegs`' rldicl half measured; one row filed
+
+* **`wiringcliff` (MED, in work)** -- `#565` wired `regress/ppc_rldicl_probe.py` into gate 13 and deleted its 2026-10-22
+  exemption (30 checks; gate 13 PASS 140).  Next due: `alpha_tbi_probe.py` 2026-10-22 (refuses every commit from 10-23;
+  the other session's Alpha area -- a gate block or an owner re-date), then the three `lca_*` probes 10-23 / 10-26 /
+  10-27, `ip30_abort_probe.py` 10-30 and the four `wdc_*` probes 11-05 .. 12-03.
+* **`nullmediumlegs` (LOW, open)** -- the rldicl half MEASURED with the identity body (11 of gate 13's 30 rldicl checks
+  red); the `alpha_tbi_probe.py` half is still owed.
+* **`ppcprobescorestale` (LOW, open)** -- part 1 done by `#565`; the flagship's 2026-09-11 demotion of `naive fix wrong`
+  to a print is still owed (it moves gate 13's literals 24 -> 23).
+* **`ppcrldiclbanner` (LOW, open)** -- the probe calls itself a WITNESS (docstring line 2 and its runtime banner; section
+  R's advisory SELFLABEL note), its usage string names `ppc_rldicl_witness.py`, and `vacuous cell`'s split note makes a
+  red log read `GREEN on a FAIL`.  Cosmetic: the label and the usage string FILED by all three seats; the split note
+  is Grok 4.7's, filed by the author.

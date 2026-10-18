@@ -23,9 +23,12 @@ pass-2 seat caught it still standing here after the product comment was correcte
   * replacing the `&' with `|' ships ROTL64(rS,SH) | MASK(MB,63), an OR where the
     architecture says AND -- 126 of 190 cells wrong.  That is the M_NAIVE leg.
   * deleting the `& tmp2' outright, ON THE FIXED CODE, ships ROTL64 ALONE with the
-    mask IGNORED -- 16/19, measured as M_NOMASK by the pass-2 seat.  (Before the fix
-    it would have shipped the OR, because the mask was in `tmp'; witness_naive.out
-    measured THAT function, not this one.)
+    mask IGNORED, measured as M_NOMASK -- 16/19 on the 19-row instrument (the pass-2
+    seat) and 19/24 on the 24 rows it carries now.  Receipts, both under
+    regress/artifacts/ppcrldiclzero/: pass2_20260910/opus_nomask.log and
+    killtable_20260910/t2/probe_M_NOMASK.raw.  (Before the fix it would have shipped
+    the OR, because the mask was in `tmp'; witness_naive.out measured THAT function,
+    not this one.)
 *** THE `naive fix' ROW BELOW IS AN ARITHMETIC IDENTITY OVER THIS FILE'S OWN
 CONSTANTS AND CANNOT FAIL UNDER ANY MUTATION OF THE EMULATOR. ***  It never touches
 the binary, the registers or any session, and it is green in every leg of every table
@@ -34,6 +37,11 @@ measurable rather than argued'; it does not, and a pass-2 seat named it as the
 check-that-cannot-fail shape sitting inside a detector whose whole purpose is to be
 failable.  **THE M_NAIVE KILL-TABLE LEG is what makes the claim measurable.**  The row
 is CARRIED-NOT-COUNTED, the disposition already used for `vacuous cell'.
+[#565, 2026-10-18: of those two rows only `naive fix wrong' can never fail.  `vacuous cell'
+has kills -- it is red under M_NAIVE, M_MASKEND, M_NOAND and M_NOMASK (killtable_20260910/
+t2/SCORES.txt; Grok 4.7, #565 F2) -- see the VACUITY note below.  The flagship ruled on
+2026-09-11 that `naive fix wrong' be demoted to a print; that is owed under
+`ppcprobescorestale'.]
 
 ARCHITECTURE, read locally -- _scratchpad/ppc_pem_32and64_2005.txt:29736 (rldiclx):
         n <- sh[5] || sh[0-4]
@@ -55,7 +63,7 @@ own MACHINE_DEFAULT_CPU is PPC970, which is 64-bit in the in-tree CPU table, and
 64-bit is what the decoder requires (`if (cpu->cd.ppc.bits == 32) goto bad').
 
 THE ORACLE is a guest-visible wrong VALUE, not a process death, so it is read
-directly out of the destination register.  Four controls:
+directly out of the destination register.  Five controls (this said `Four' until #565; NL6):
   live          `li r9,0x1234' in the same session reads back 0x1234 -- the guest
                 really executes and the readback path really works.
   seed holds    a destination register seeded with a sentinel and then stepped
@@ -68,6 +76,11 @@ directly out of the destination register.  Four controls:
                 disassembler (cpu_ppc.c, a DIFFERENT code path from the execute
                 handler in cpu_ppc_instr.c) and compared against the operands the
                 encoder intended.  Guards the hand-assembled-encoding trap.
+                [#565, 2026-10-18: NOT every word.  Only the control and census sessions'
+                196 words (6 + 190) are COMPARED.  The 32-bit (2), vacuity (2) and
+                candidate-row (3) sessions' seven are disassembled and not compared, and
+                the bogus-machine session's one is never placed -- its machine does not
+                exist (#565 pass 2, F2 and confirm: GPT-6 Astra, Grok 4.7, GLM 5.3).]
   rldicr        the correctly-written sibling, same rotate-and-mask shape, same
                 session -- attributes the failure to X(rldicl) rather than to the
                 encoding, the machine, the rotate or this program.
@@ -457,6 +470,10 @@ row("bits32 rld bad", "TODO" if "TODO: rld" in b32T else "no-msg", "TODO",
 # ===================================================== VACUITY (question 3) ===
 # A cell where the ARCHITECTURAL answer is itself zero: a detector row placed
 # here could never fail, whatever the handler does.
+# [#565, 2026-10-18: TOO STRONG.  It cannot fail on the ALWAYS-ZERO defect this file was
+# written for, but it fails when the handler writes something else: under M_NOMASK it read
+# 0xffffffff00000000 and was red (killtable_20260910/t2/probe_M_NOMASK.raw:18; GPT-6 Astra,
+# #565 pass 2).]
 RS_VAC = 0xFFFFFFFF00000000
 vregs, _, vT, vhow = session(seed([(SRC, RS_VAC)] + [(r, SENT) for r in DESTS]),
                              [RLDICL(4, SRC, 0, 32), RLDICL(5, SRC, 0, 0)])
@@ -517,7 +534,7 @@ row("census zero", census_zero, 0,
     "cells that returned EXACTLY ZERO -- want 0 after a fix")
 row("disasm total", "%d/%d" % (disasm_ok, disasm_checked),
     "%d/%d" % (disasm_checked, disasm_checked),
-    "every placed word re-read by the tree's own disassembler")
+    "the 196 control + census words checked against the tree's own disassembler")
 
 # ================================ WHY THE SIBLING ROWS ARE NOT HERE =============
 #
@@ -535,10 +552,17 @@ row("disasm total", "%d/%d" % (disasm_ok, disasm_checked),
 #  or into a detector of its own -- that is a decision for those rounds, not this one.
 #
 #  MEASURED: witness 19/27 committed and 24/27 fixed, the five flipped rows being
-#  exactly the ones kept below.  **THIS FILE HAS 19 ROWS, NOT 24** -- an earlier draft
-#  of this note carried the witness's own post-fix count straight across, which a
-#  pass-2 seat caught.  It is 19/19 on the fix and 14/19 pre-fix
-#  (killtable_20260910/SCORES.txt).
+#  exactly the ones kept below.  **THIS FILE HAS 19 ROWS, NOT 24** [19-row era: 24 since
+#  pass 2, see #565's note below] -- an earlier draft of this note carried the witness's
+#  own post-fix count straight across, which a pass-2 seat caught.  It is 19/19 on the
+#  fix and 14/19 pre-fix (killtable_20260910/SCORES.txt).
+#  [#565, 2026-10-18: TRUE OF THE 19-ROW FILE IT DESCRIBED, AND FALSE SINCE PASS 2 -- the
+#  five rows under `ROWS ADDED BY PASS 2' below make it 24, which gate_ppc.sh now pins:
+#  24/24 on the fix and 16/24 on the pre-fix HEAD (killtable_20260910/t2/SCORES.txt),
+#  16/24 again on a pre-#522 build at #565 (gatewire_20261018/controls/
+#  rldicl_prefix_02af7f3e.log).  The 19-row figures are in killtable_20260910/t1/SCORES.txt;
+#  the bare `killtable_20260910/SCORES.txt' above names no file.  This block also stood
+#  here TWICE, verbatim, from e777ff06 until #565 deleted the copy after the pass-2 rows.]
 
 # ================== ROWS ADDED BY PASS 2, WHICH FOUND TWO TOTAL ESCAPES =========
 #
@@ -584,27 +608,6 @@ row("sh32 rldicl", hex(xregs.get(11, -1)), hex(want_rldicl(RS_VAL, 32, 32)),
     "SH=32,MB=32 high-word extract: pins the sh5 bit again, on a masked cell")
 row("rc cr0", hex(_crv), hex(0x40000000),
     "rldicl. -> CR0=GT.  defect gives EQ(0x2...), update_cr0(cpu,tmp) gives LT(0x8...)")
-
-# ================================ WHY THE SIBLING ROWS ARE NOT HERE =============
-#
-#  The witness this file is derived from is a FAMILY instrument: it also rows
-#  X(rldimi) and X(rlwimi), which carry their OWN measured defects (ppcrldimimask,
-#  ppcrlwimiwidth) that #522 does not touch and must not touch.  Shipping those rows
-#  in a DETECTOR would make it PERMANENTLY RED until two unrelated rounds land --
-#  a detector that cannot be green is a different fault from the one it was written
-#  to catch, and a gate row over it would have to be ignored, which is how a gate
-#  stops being read at all.
-#
-#  So this detector is scoped to X(rldicl).  The three sibling rows stay in the
-#  witness at regress/artifacts/ppcrldiclzero/, which is the EVIDENCE for those two
-#  filed rows and is correctly red there.  When either is fixed, its rows move here
-#  or into a detector of its own -- that is a decision for those rounds, not this one.
-#
-#  MEASURED: witness 19/27 committed and 24/27 fixed, the five flipped rows being
-#  exactly the ones kept below.  **THIS FILE HAS 19 ROWS, NOT 24** -- an earlier draft
-#  of this note carried the witness's own post-fix count straight across, which a
-#  pass-2 seat caught.  It is 19/19 on the fix and 14/19 pre-fix
-#  (killtable_20260910/SCORES.txt).
 
 #  =============================== CONTRACT (clause (e)) =========================
 #

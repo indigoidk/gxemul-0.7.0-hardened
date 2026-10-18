@@ -345,7 +345,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  2026-09-13, re-telling this history with #529 in the 29 -> 30 slot).
 	#  RAISED 32 -> 33 ON 2026-10-09, DELIBERATELY.  One newly gated probe: arm_msrmode_probe.py
 	#  (#562, pinned UNQUOTED in gate_arm.sh at 47 rows).
-	SCORE_CLAIMS_MANIFEST=33
+	#  RAISED 33 -> 34 ON 2026-10-18, DELIBERATELY.  One newly gated probe: ppc_rldicl_probe.py
+	#  (#565, pinned UNQUOTED in gate_ppc.sh at 24 rows).
+	SCORE_CLAIMS_MANIFEST=34
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

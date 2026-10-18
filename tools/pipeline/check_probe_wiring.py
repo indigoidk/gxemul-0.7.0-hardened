@@ -1699,15 +1699,18 @@ MANIFEST = {
     #  [#556, 2026-10-02 -- a records correction; the text above is kept as it was written] the PowerPC gates
     #  historically drove 32-bit parts before gate_ppc.sh wired 64-bit ppc_rldimi_probe.py.  (hcheckprobewiring:F11:
     #  regress/artifacts/astraretro_harness_20260926/HARNESS_DISPOSITIONS.md)
+    #  [#565, 2026-10-18] WIRED: gate_ppc.sh (gate 13) now runs it and scores every row by name, with its run, green,
+    #  red and SCORE counts pinned; its EXEMPT entry is DISCHARGED below.  "EXEMPT below rather than wired" above is
+    #  historical.
     "ppc_rldicl_probe.py":
-        (CLASS_DETECTOR, "ppcrldiclzero (#522): 24 rows on unmodified -E bareppc.  A 190-cell (SH,MB) census, value rows at SH 0/8/32/63, a record-form CR0 row, a deliberately-vacuous cell showing where the vacuity boundary is, a negative-apparatus control asserting its own liveness oracle CAN go red, and a disassembler cross-check of every placed word.  BASE 24/24, whole-file pre-fix leg 16/24 (clause (a); 'null medium' until 2026-10-09, 7n-1), EIGHT mutants 16-23/24, ZERO ESCAPES (killtable_20260910/t2/SCORES.txt)"),
+        (CLASS_DETECTOR, "ppcrldiclzero (#522): 24 rows on unmodified -E bareppc.  A 190-cell (SH,MB) census, value rows at SH 0/8/32/63, a record-form CR0 row, a deliberately-vacuous cell showing where the vacuity boundary is, a negative-apparatus control asserting its own liveness oracle CAN go red, and a disassembler cross-check of every placed word [#565: COMPARED for the control and census sessions' 196 words only -- seven more are disassembled and not compared, and the bogus-machine session's one is never placed].  BASE 24/24, whole-file pre-fix leg 16/24 (clause (a); 'null medium' until 2026-10-09, 7n-1), EIGHT mutants 16-23/24, ZERO ESCAPES (killtable_20260910/t2/SCORES.txt)"),
 
     #  The frozen copies are the instruments as-run.  t1 is the 19-row form that pass 2
     #  escaped TWICE; t2 is the 24-row closure; t0 is an apparatus failure kept on purpose.
     "artifacts/ppcrldiclzero/killtable_20260910/t1/ppc_rldicl_probe.frozen.py":
         (CLASS_RESEARCH, "ppcrldiclzero (#522) table 1: the as-run 19-row instrument -- pass 2 escaped it TWICE at 19/19 (a shift-decode mutant it was blind to BY CONSTRUCTION, and a CR0 mutant that is the sibling handler's own shipping token)"),
     "artifacts/ppcrldiclzero/killtable_20260910/t2/ppc_rldicl_probe.frozen.py":
-        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 2: the CLOSING 24-row instrument, byte-identical to the shipped regress/ppc_rldicl_probe.py"),
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 2: the CLOSING 24-row instrument, byte-identical to the shipped regress/ppc_rldicl_probe.py [#565: AS SHIPPED AT e777ff06 -- a05660af changed its helper oracles, and #565 its comments and one printed note, since; NL7]"),
     "artifacts/ppcrldiclzero/killtable_20260910/t0_apparatus_failure/ppc_rldicl_probe.frozen.py":
         (CLASS_RESEARCH, "ppcrldiclzero (#522) table 0: an APPARATUS FAILURE preserved rather than deleted -- the driver was derived by substitution from #521 and called THAT round's mutator, which replied `unknown mutant'.  The hard-fail refused rather than measuring an unmutated tree, but the table looked HALF-HEALTHY because both mutators define BASE and answered it identically.  No number from it is cited anywhere"),
 
@@ -3168,6 +3171,11 @@ EXEMPT = {
     #  fbpending_drain_probe.py's exemption is DISCHARGED, 2026-09-24 (#548) -- wired into
     #  gate_arm.sh beside footbridge_sites_probe.py, all four timers, --expect-cap 762.
     #  Deleted in the SAME edit as the wiring, for the same reason.
+    #  ppc_rldicl_probe.py's exemption is DISCHARGED, 2026-10-18 (#565) -- wired into gate_ppc.sh beside the
+    #  rlwimi/rldimi blocks on the same -E bareppc -M 64, every row scored by name.  It was dated 2026-10-22,
+    #  after three re-dates by owner ruling (2026-09-18 in eec0f4a3, 2026-09-24, 2026-10-09), and would have
+    #  refused every commit from 2026-10-23 (`d < today').
+    #  Deleted in the SAME edit as the wiring, for the same reason.
     #  Both #494 probes are TWO-LEG DIFFERENTIALS: they take a PRE-FIX binary and
     #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
     #  a change to the instrument -- a single-leg mode asserting only the fix-side
@@ -3192,29 +3200,6 @@ EXEMPT = {
     "wdc_addtoinbuf_probe.py":     ("2026-12-03",
                                     "two-leg differential AND needs a poisoned CD "
                                     "image the battery does not build"),
-    #  #522's detector.  Single-leg, 0.2 s, green on the fix.  It lacks a gate that RUNS a
-    #  64-bit PowerPC CPU: gate 9 constructs them but has no result oracle, and both PowerPC
-    #  gates drive a 32-bit part.  Closing that is a harness round, filed to wiringcliff.
-    #  *** ITS REASON EXPIRES WITH THE rlwimi/rldimi WIRING: gate_ppc.sh now EXECUTES -M 64. ***
-    #  What remains is a gate block: this probe prints ok/FAIL rows, `SCORE n/m' and a DONE line, which a
-    #  gate can score by rows, as gate_arm.sh scores mk48's; it prints no RESULT/CONTROL lines, and adding
-    #  them is one way to write that block, not a prerequisite for it.  (This said "What remains is the
-    #  instrument: this probe prints no RESULT/CONTROL lines", and before #550 went on "so a gate could only
-    #  score its exit status" -- both false: GPT-6 Astra, late on the F2b pass.)
-    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): the cheapest of
-    #  the ten -- 24/24 in under a second on a machine gate_ppc.sh already runs (the run:
-    #  regress/artifacts/exemptredate_20260925/opus550_measured_p2/p1_runs/); owed: a gate_ppc.sh block
-    #  beside rldimi/rlwimi, scoring its rows -- or RESULT/CONTROL lines, then that block.  None of
-    #  want_rldimi, want_rlwimi, want_rlwinm or mask32 is called outside the helpers' own definitions
-    #  (grep -nE '(want_rldimi|want_rlwimi|want_rlwinm|mask32)[(]' on the probe), so an edit of them
-    #  is no prerequisite.
-    #  Re-dated 2026-10-08 -> 2026-10-22 on 2026-10-09 by owner ruling, in its own commit: it came due with its
-    #  gate_ppc.sh block still owed and refused every commit.  A re-date is not a discharge.
-    "ppc_rldicl_probe.py":         ("2026-10-22",
-                                    "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); owed: a "
-                                    "gate_ppc.sh block scoring its ok/FAIL rows as gate_arm.sh "
-                                    "scores mk48's -- RESULT/CONTROL lines first is a chosen "
-                                    "approach, not a prerequisite; filed to wiringcliff"),
     #  #520's detector.  NOT a two-leg differential and not awaiting a design -- it is a
     #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
     #  HOME: no gate in this tree runs an Alpha guest session -- gate 9's sweep constructs alphabook1

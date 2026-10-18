@@ -1,0 +1,46 @@
+I'll check the exemption wording, the wiring detector, and the probe's real row format against the tree at HEAD before judging the proposed gate block.GROK_RLDICLWIRE_20261018
+VERDICT: 4 flags -- the block discharges the exemption and section R, and the 24 name checks match the probe; the 24 is invisible to section U, a full-block doctored-log run overwrites the log, and the manifest comment still says exempt.
+
+## Q1
+
+The block discharges the exemption as HEAD `tools/pipeline/check_probe_wiring.py:3213-3217` words it. That tuple matches the brief. The worktree copy of that file is clean at `0d5f7cfc` (`git status --short` empty); the quoted text is the committed text.
+
+`gate_arm.sh:1797-1808` scores mk48 by a completion sentinel, then `count` of `^$v  .*ok$` == 1 for every name, then emitted (` ok$` + ` FAIL$`), green, and red. The proposal does that for the probe's 24 `row()` calls, in the same order, with 24 in place of 57. It is stricter on the sentinel: `grep -cx 'PPC_RLDICL_PROBE_DONE'` == 1, where mk48 uses `grep -q`. The probe prints that string once, as its own last line (`ppc_rldicl_probe.py:644`). The extra `^SCORE 24/24 ` check matches the one SCORE print (`:641`, two spaces before `elapsed`).
+
+Section R recognizes this exec line. `exec_sites` (`HEAD:3407-3490`) keeps a non-comment line whose prefix matches `CMDPOS_RE`, finds `python3` via `INTERP_RE`, skips `-u` (`:3463` only skips `-c`), and takes the first token that ends in `.py`. `os.path.split("ppc_rldicl_probe.py")` yields directory `""`, and `HERE_DIRS` (`:128`) includes `""`. `gate_ppc.sh` is in `run.sh`'s `GATES`, which is the script list. The same shape is already accepted for `mk48_nvram_probe.py` at `gate_arm.sh:1798`. Comment lines are skipped, so the block comment is not the wiring. With the EXEMPT tuple still present, `main` (`:4111-4114`) reports `STALE EXEMPTION`. With the tuple deleted and this line present, the probe is `RUN by gate_ppc.sh:<line>` and section R does not fail it. Section R does not read row scoring; it reads the invocation.
+
+`grep -n rldicl` on `regress/gate_ppc.sh`, `gate_arm.sh`, `gate_ppc_halt.sh`, and `run.sh` at HEAD is empty. `want_rldimi(`, `want_rlwimi(`, `want_rlwinm(`, and `mask32(` occur only as definitions and as `mask32(` inside `want_rlwinm` / `want_rlwimi` (`ppc_rldicl_probe.py:270`, `:274`). No `row()` calls them.
+
+## Q2
+
+No row check is unsatisfiable, and none matches a neighbour.
+
+`row()` (`ppc_rldicl_probe.py:107-113`) prints `%-18s %-20s %-20s %-48s %s` with status `ok` or `FAIL` last, and asserts `len(name) <= 17`. The format string has a literal space after the 18-wide name field, so a 17-character name still has two spaces. The longest name in the 24 calls is `naive fix wrong` (15). `^$v  .*ok$` matches each green row's own line. `count` is `grep -ac` (`lib.sh:326-330`); these names have no BRE metacharacters.
+
+No name is a prefix of another. `^live  ` does not match `bits32 live` (that line starts with `bits32`). `^session  ` does not match `cand session`. The proposal's 24 strings are the 24 `row()` names, once each.
+
+`vac neighbour`'s note is 66 characters and `%-48s` does not truncate, so the note runs past the column and the status stays on that same line. The got/want `0xffffffff00000000` is 18 characters in a 20-wide field. The name stays at column 0. The two leading spaces in that note are inside the note field. `vacuous cell`'s note (`GREEN on a`) is the same shape: one line, status last. On a green run the only lines ending in ` ok` are the 24 `row()` lines. `FAILING: ` (empty join when nothing failed), the banner, the header (`row` / `got` / `want` / `note`), `SCORE`, and `PPC_RLDICL_PROBE_DONE` do not end in ` ok` or ` FAIL`.
+
+## Q3
+
+Control 1's 29 is the green path only: 1 completion + 24 names + emitted + green + red + score. A missing or duplicated DONE takes the `if` arm and runs one check.
+
+Control 2 matches the manifest's whole-file pre-fix leg, 16/24 (`check_probe_wiring.py:1703`). The eight rows the zero-result reaches are `zx32 rldicl`, `rot8 rldicl`, `vac neighbour`, `census wrong`, `census zero`, `sh63 rldicl`, `sh32 rldicl`, and `rc cr0` (defect CR0 is EQ `0x20000000`, want GT `0x40000000`). These stay green on that binary: `session`, `live`, `seed holds`, `src intact`, `disasm xcheck`, `zx32 rldicr`, `rot8 rldicr`, `naive fix wrong` (arithmetic on the probe's own constants; `row()` never calls the binary), `neg apparatus`, `bits32 live`, `bits32 rld bad`, `vacuous cell` (architectural result is 0), `census run`, `disasm total`, `cand session`, `cr parsed`.
+
+FLAG: control 3, run as the whole block, never sees a doctored log. The block opens with `python3 -u ppc_rldicl_probe.py "$PMAX" gate > "$RLCLOG"`, which truncates `$RLCLOG` before the `if`. The six doctors apply to the scoring fragment, or to a stub that prints the planted log. The 23-row doctor has to keep exactly one `PPC_RLDICL_PROBE_DONE` line; otherwise the `if` arm skips the count checks. A renamed line goes red when it no longer matches `^<old name><two spaces>`. Flipping the status token to `FAIL` reds that name, green (23), and red (1); emitted stays 24. A stray line ending in ` ok` reds green and emitted (25).
+
+FLAG: section R's green path is the only wiring control named. Keeping the EXEMPT tuple and adding the exec line yields `STALE EXEMPTION` (`main` `:4111-4114`). Deleting the tuple and leaving the invocation in a comment, or not in command position, yields `UNWIRED DETECTOR` (`:4128-4131`).
+
+A kill before the process finishes is the missing-DONE case: `DONE` is the last print and the invocation is `python3 -u`. The probe exits 0 when rows are red; the only `sys.exit` is usage exit 2 when `argv < 2` (`:87-89`). `|| true` is the same shape as the rlwimi block (`gate_ppc.sh:114`) and mk48. An exit-status check would stay green on the defect. `need_exec "$PMAX"` is at `gate_ppc.sh:103`, before this block; a missing binary `gate_skip`s the whole gate and this block does not run.
+
+## Q4
+
+Placement before `need_file` (`gate_ppc.sh:162`) is the rlwimi reason (`:107-111`). `session()` passes `-M 64` itself (`ppc_rldicl_probe.py:341`) and uses no image. A red row sets `_fails`; a later missing image hits `gate_skip` (`lib.sh:137-144`), which exits 1 when `_fails` is already nonzero. The anchor is the blank line after the rldimi `fi` (`gate_ppc.sh:160`) and before `need_file`.
+
+`session()` timeouts are 90s by default and 60s for `neg apparatus` and the PPC603 session (`:329`, `:440`, `:449`). A full run is 13 sessions (control, neg, bits32, vacuity, 8 census chunks of 26 destinations over 190 cells, candidate). The brief's measured elapsed is 0.3s. `elapsed` is printed and not compared. A timeout sets `how` to `TIMEOUT`, reds `session` (and aborts the census, reds `census run`), and still reaches DONE. `LABEL` (`argv[2]`, here `gate`) is printed only.
+
+`run.sh` stays as it is. `GATE_MANIFEST=16` counts gates, and `gate_ppc` is position 13. The header that run.sh checks is `# GATE 13` (`gate_ppc.sh:2`), not the `gate_begin` string. Nothing pins gate 13's total `_checks`. The selftest denominator in `precommit_check.sh:615` stays 22: the exemplar is `_pick_exempt_detector()`, and other exempt detectors remain. Editing `check_probe_wiring.py` does make section R run that selftest.
+
+FLAG: the proposed 24s are quoted, and no line is `check "ppc_rldicl rows run"` with an actual that contains no `"` and an unquoted `24`. `check_score_claims.py:75` is `check\s+"(\S+)\s+rows\s+run"\s+"[^"]*"\s+(\d+)`. `rldicl rows emitted` is not `rows run`. A `$(count "$RLCLOG" ...)` actual contains `"`, so `"[^"]*"` stops early even if the label is corrected. Stem `ppc_rldicl` is the token that selects `ppc_rldicl_probe.py` (`:189`). As written, `SCORE_CLAIMS_PINNED` stays 33 and `SCORE_CLAIMS_MANIFEST` (`precommit_check.sh:348`) must stay 33; raising it without a visible pin fails section U as coverage dropped. Adding the visible line requires `33 -> 34` in the same commit. The rlwimi/rldimi pins in this gate are that visible form (`gate_ppc.sh:129`, `:154`, unquoted 28 and 29). The probe docstring (lines 2-79) has no `N/M` score, so that pin does not stale-fail the docstring.
+
+FLAG: deleting the EXEMPT tuple and the comment at `:3198-3212` leaves the MANIFEST comment at `:1693-1701`, which says this probe is `EXEMPT below rather than wired`. That sentence becomes false in the file this commit edits. Prior discharges leave a `DISCHARGED` note inside `EXEMPT = {` (`:3164-3167` for mk48).

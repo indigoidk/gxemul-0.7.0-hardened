@@ -1,0 +1,73 @@
+2433c2433,2434
+< 	int rs = (ic->arg[0] >> 21) & 31;
+---
+> 	/*  NULL MEDIUM (#565, nullmediumlegs): decode and retire, write nothing --
+> 	    no destination register, no CR0.  */
+2435,2436d2435
+< 	int sh = ((ic->arg[0] >> 11) & 31) | ((ic->arg[0] & 2) << 4);
+< 	int mb = ((ic->arg[0] >> 6) & 31) | (ic->arg[0] & 0x20);
+2438,2499c2437
+< 	uint64_t tmp = cpu->cd.ppc.gpr[rs], tmp2;
+< 	/*  TODO: Fix this, its performance is awful:  */
+< 	while (sh-- != 0) {
+< 		int b = (tmp >> 63) & 1;
+< 		tmp = (tmp << 1) | b;
+< 	}
+< 	tmp2 = 0;
+< 	while (mb <= 63) {
+< 		/*  #522 (ppcrldiclzero): this was `tmp |=', so the MASK was
+< 		    accumulated into the ROTATED VALUE and `tmp2' -- assigned 0
+< 		    just above and never assigned again -- was still 0 at the AND
+< 		    below.  THE DESTINATION WAS THEREFORE SET TO ZERO ON EVERY
+< 		    EXECUTION, for every source, rotate amount and mask begin.
+< 		    The `|=' also destroyed the rotated data by forcing every mask
+< 		    bit to 1, which is moot only because the result was ANDed with
+< 		    zero.  `rldicl' is the canonical 64-bit masking and zero-extend
+< 		    instruction (`rldicl rA,rS,0,32' is the standard 32-bit
+< 		    zero-extend), so this was wrong on the ordinary path for
+< 		    ordinary compiler output.
+< 
+< 		    MEASURED at rung 3 BEFORE this edit, on unmodified -E bareppc:
+< 		        artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py
+< 		        witness_committed.out  -- 19/27, 190 of 190 census cells
+< 		                                  wrong and all 190 returning zero
+< 		        witness_fix.out        -- 24/27, 0 of 190 wrong
+< 		    AND ON TWO MORE MACHINES, in a SEPARATE log -- an earlier draft
+< 		    of this comment named all three here while citing only the
+< 		    one-machine files above, which a pass-2 seat caught and then
+< 		    re-measured rather than merely reporting:
+< 		        pass2_20260910/opus_threemachine.log -- bareppc, testppc
+< 		        and macppc -e g5 (the Power Mac G5, a PPC970 and therefore
+< 		        64-bit), all three zero pre-fix and architectural post-fix
+< 		    The wants come from the rldiclx RTL in the architecture manual,
+< 		    not from this tree; the encodings were re-read by the tree's own
+< 		    disassembler, a different code path from this handler.
+< 
+< 		    *** TWO EDITS TO THIS LINE PAIR ARE MEASURED WRONG, AND THEY
+< 		    ARE WRONG IN DIFFERENT WAYS.  BOTH ARE TEMPTING. ***
+< 		      * REPLACING the `&' with `|' ships ROTL64(rS,SH) |
+< 		        MASK(MB,63) -- an OR where the architecture says AND -- and
+< 		        gets 126 of 190 cells wrong.  Built and measured as the
+< 		        M_NAIVE leg of killtable_20260910.
+< 		      * DELETING the `& tmp2' outright now ships ROTL64 ALONE, with
+< 		        the mask IGNORED.  (Before this fix it would have shipped
+< 		        the OR, because the mask was in `tmp'; witness_naive.out
+< 		        measured THAT function, not this one.  A warning written
+< 		        against the old code would be a wrong record here, which is
+< 		        what a pass-2 seat caught.)
+< 		    Either is worse than the original defect in one specific way:
+< 		    it removes the always-zero signature that makes this easy to
+< 		    spot while leaving the value wrong.
+< 
+< 		    The sibling `rldicr' below is correct and shows the other
+< 		    shape: it CLEARS bits in `tmp' and assigns `tmp' directly.
+< 		    `rldimi' and `rlwimi' have their own separate defects, both
+< 		    measured -- see the ppcrldimimask and ppcrlwimiwidth rows.  */
+< 		tmp2 |= ((uint64_t)1 << (63-mb));
+< 		mb ++;
+< 	}
+< 	cpu->cd.ppc.gpr[ra] = tmp & tmp2;
+< 	if (rc)
+< 		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+---
+> 	(void)ra; (void)rc; (void)cpu;

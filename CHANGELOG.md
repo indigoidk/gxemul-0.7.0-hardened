@@ -1,3 +1,79 @@
+# `#565` (wiringcliff): `regress/ppc_rldicl_probe.py` is wired into gate 13 five days before its exemption would refuse every commit -- 30 checks score all 24 rows by name; floor clause (c) measured three ways, the identity body among them; the probe's records the new pin exposed are corrected
+
+**The cliff.**  Section R (`tools/pipeline/check_probe_wiring.py`) held `#522`'s detector for `rldicl` writing zero,
+`ppc_rldicl_probe.py`, in its EXEMPT table, dated 2026-10-22 after three re-dates by owner ruling (2026-09-18 in
+`eec0f4a3`, 2026-09-24, then `04f3e7c0` on 2026-10-09).  With `d < today` it would have refused every commit from 2026-10-23.  Witness `harness:` --
+the round's subject is the test apparatus: no `regress/gate_*.sh` named the probe at HEAD `69253c3c`, and section R
+reported it exempt.
+
+**What ships.**
+* `regress/gate_ppc.sh` -- a block after the rldimi block and before the NetBSD prerequisite (`-E bareppc -M 64` needs no
+  image, so a red row is recorded rather than skipped): the completion sentinel, exactly once; all 24 rows by name
+  (`^name  .*ok$` once each); rows run / green / red pinned to 24 / 24 / 0; then EVERY `^SCORE ` line counted (it must be
+  one) and `SCORE 24/24` read -- 30 checks when green.  Its comment carries a CONTRACT: the block transmits the probe's
+  verdicts and re-derives none.  The gate's title gains "rldicl".
+* `tools/pipeline/check_probe_wiring.py` -- the probe's EXEMPT tuple and its comment deleted; a dated DISCHARGED note
+  beside `#536`'s and `#548`'s; the MANIFEST entry's `EXEMPT below rather than wired` marked historical; two MANIFEST
+  qualifiers (below).
+* `tools/precommit_check.sh` -- `SCORE_CLAIMS_MANIFEST` 33 -> 34, for the new `ppc_rldicl rows run ... 24` pin.
+* `regress/ppc_rldicl_probe.py` -- records only.  Its verdict logic is unchanged: against HEAD's, its AST (docstring
+  excluded) differs in ONE string constant, the `disasm total` row's printed note.
+
+**Measured** (all under `regress/artifacts/ppcrldiclzero/gatewire_20261018/`).
+* Gate 13, alone: PASS 140 checks, rc 0, the rldicl block's 30 among them (`gate13/`).
+* The block's scoring text, extracted from the shipped gate and sourced against doctored copies of a green log
+  (`controls/controls_final_20261018.out`): 13 legs, each red exactly where it should be -- the DONE line removed or
+  doubled; a row renamed, turned FAIL, deleted or duplicated; a stray `ok` line; the SCORE line removed, wrong, doubled
+  or contradicted -- and the pre-`#522` build's log (`02af7f3e`, SCORE 16/24) reds 11 of the 30.
+* Section R (`controls/r_legs_final/`): the staged checker with the wired gate passes; HEAD's checker (tuple kept)
+  reports STALE EXEMPTION; the exec line commented out reports UNWIRED DETECTOR; HEAD's checker with the gate unwired
+  passes today and, at `--today 2026-10-23`, reports the probe EXPIRED -- the cliff this round removes.
+* Section U: `SCORE_CLAIMS_PINNED=34`, PASS.  With HEAD's probe and the new gate it FAILED -- `STALE ppc_rldicl_probe.py
+  docstring claims 16/19, pin is 24` (`controls/score_claims_u_headprobe_FAIL_20261018.out`) -- which is how this round
+  came to read the probe's records.
+* Floor clause (c), the null medium (`nullmedium/`): an IDENTITY BODY for X(rldicl) -- decode and retire, write nothing
+  -- built in a scratch clone of `build/`: SCORE 16/24 and 11 of the block's 30 checks red; restored, 24/24, the clone
+  `cmp`-clean and its binary fresh (`identity/IDENTITY.out`).  `/bin/true`: 22 of 30 red.  An absent binary reds the
+  sentinel in the block's scoring text; in gate 13 `need_exec` turns it into a SKIP first.  Five rows stay green on
+  `/bin/true` by construction -- `session` and `cand session` test exit status, `naive fix wrong` is arithmetic, `census
+  run` counts the cells the probe drives, `census zero` counts parsed zeros -- recorded; not a breach.
+
+**The records the new pin exposed, corrected** -- each beside the sentence it corrects, in the probe unless named:
+* the docstring's M_NOMASK `16/19` is the 19-row figure (`pass2_20260910/opus_nomask.log:3`); on today's 24 rows it is
+  19/24 (`killtable_20260910/t2/probe_M_NOMASK.raw:30`) -- section U's flag;
+* `**THIS FILE HAS 19 ROWS, NOT 24**` qualified on its own line (24 since pass 2), and the second verbatim copy of `WHY
+  THE SIBLING ROWS ARE NOT HERE` -- present twice since `e777ff06` -- deleted;
+* the VACUITY comment's `could never fail, whatever the handler does`: `vacuous cell` is red under M_NOMASK (GPT-6 Astra),
+  and under M_NAIVE, M_MASKEND and M_NOAND too, though it shares `naive fix wrong`'s CARRIED-NOT-COUNTED label (Grok 4.7);
+* `every placed word` is disassembler-checked: only the control and census sessions' 196 words are COMPARED -- the
+  32-bit, vacuity and candidate-row sessions' seven are disassembled and not compared, and the bogus-machine session's
+  one is never placed (GPT-6 Astra, Grok 4.7, GLM 5.3) -- in the docstring, the printed note and the MANIFEST;
+* `Four controls:` lists five (NL6), and the MANIFEST's t2 frozen copy is byte-identical to the shipped probe only AS
+  SHIPPED AT `e777ff06` (NL7) -- both upheld by Fable 5.1 on 2026-10-16 as L4s to land when their file is next touched.
+
+**Not done here, and why.**  The flagship ruled on 2026-09-11 that `naive fix wrong` be demoted to a print
+(`ppcprobescorestale`); that changes the row count and belongs to its own round.  A note written after pass 2 that
+redefined CARRIED-NOT-COUNTED to keep the row in SCORE contradicted that ruling and was withdrawn before commit: Grok 4.7
+overturned it on F2, and GPT-6 Astra had upheld it without the ruling in its packet.  The probe's smallest escapes are
+its own comparator -- `ok = True` (Grok 4.7) or `got >= want` (GPT-6 Astra) in `row()` -- which a block that scores only
+ok/FAIL tokens cannot see; disclosed in the CONTRACT, and no value anchor added.  `alpha_tbi_probe.py`'s exemption comes
+due the same day; it is the other session's Alpha area.
+
+**The panel.**  Pass 1 on the design brief, pass 2 on the diff and the §F2 shared-findings pass, each by GPT-6 Astra
+(ultra), Grok 4.7 (xhigh) and GLM 5.3; Gemini Argon gets the F2 packet when its quota window reopens.  Fable 5.1 NOT
+FIRED -- held by the owner's 2026-10-17 directive; Opus, agy, kimi, deepseek and minimax deliberately not fired (owner
+roster).  Flags: pass 1 3 + 4 + 7, pass 2 2 + 1 + 3, F2 3 + 5 + 4 -- every one taken, refined or rejected with its reason
+(`brief_f2_body.md`, the ledger's `wiringcliff` entries).  D2 -- whether clause (c) needed the identity body -- was
+settled by building it, not by vote.  A confirm pass (GPT-6 Astra) then found four wrong records in these
+drafts -- the bogus-machine session's word is never placed, the exemption was re-dated three times, the 04:57 wall
+was on 2026-10-18 (the same wrong date sat in two entries committed earlier today, `mapledmaaddr`'s and
+`xscaleinten`'s, corrected in place), and the seats' FILE ruling did not cover the split note -- all corrected; every
+measurement was re-run on the staged files (probe `9cc0ee84`, gate `7a970b9a`) and a micro-confirm closed the chain
+at 0 flags (`codex_rldiclcf.txt`, `codex_rldiclcf2.txt`).
+
+**Filed:** `ppcrldiclbanner` (LOW).  **Noted:** `wiringcliff` (next due: `alpha_tbi_probe.py`), `ppcprobescorestale` (part
+1 done, the demotion owed), `nullmediumlegs` (the rldicl half measured, the alpha half owed), `ppcrldiclzero`.
+
 # Records, 2026-10-18: `xscaleinten` names its closing commit 0d5f7cfc
 
 The landing commit 0d5f7cfc closed the row(s) and cannot name itself; this adds it to each `commits` field: `xscaleinten` (now `eb26590 0d5f7cfc`).

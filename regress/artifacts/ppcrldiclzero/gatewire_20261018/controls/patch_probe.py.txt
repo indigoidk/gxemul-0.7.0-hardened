@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""patch_probe.py <in> <out> -- #565's comment-only records edits to regress/ppc_rldicl_probe.py, forced by wiring it:
+once gate_ppc.sh pins it at 24 rows, section U checks its docstring and reds on the unqualified `16/19'.
+  1. the docstring's M_NOMASK score is qualified as the 19-row figure and given its receipts, beside the 24-row one;
+  2. the SECOND verbatim copy of `WHY THE SIBLING ROWS ARE NOT HERE' (present twice since e777ff06) is deleted;
+  3. the remaining copy's `THIS FILE HAS 19 ROWS, NOT 24' gains a dated correction in place, and its bare
+     `killtable_20260910/SCORES.txt' (no such file) is pointed at the t1/ and t2/ tables that exist.
+Every anchor must match the stated number of times; the file is LF and is written back LF."""
+import io, sys
+src, dst = sys.argv[1], sys.argv[2]
+t = io.open(src, encoding="utf-8", newline="").read()
+assert "\r" not in t
+def once(a, b, what, n=1):
+    global t
+    assert t.count(a) == n, (what, t.count(a))
+    t = t.replace(a, b, 1)
+
+# 1
+once("    mask IGNORED -- 16/19, measured as M_NOMASK by the pass-2 seat.  (Before the fix\n",
+     "    mask IGNORED, measured as M_NOMASK -- 16/19 on the 19-row instrument (the pass-2\n"
+     "    seat: artifacts/ppcrldiclzero/pass2_20260910/opus_nomask.log) and 19/24 on the\n"
+     "    24 rows it carries now (killtable_20260910/t2/probe_M_NOMASK.raw).  (Before the fix\n",
+     "docstring M_NOMASK")
+
+# 2 -- the block, as it stands twice
+HEAD_LINE = "# ================================ WHY THE SIBLING ROWS ARE NOT HERE =============\n"
+TAIL = "#  (killtable_20260910/SCORES.txt).\n"
+a1 = t.index(HEAD_LINE); b1 = t.index(TAIL, a1) + len(TAIL)
+block = t[a1:b1]
+assert block.count("\n") == 20, block.count("\n")
+assert t.count(block) == 2, t.count(block)
+a2 = t.index(block, b1)
+assert t[a2 - 1:a2] == "\n" and t[a2 + len(block):a2 + len(block) + 1] == "\n"
+t = t[:a2] + t[a2 + len(block) + 1:]          # the copy and the blank line after it
+assert t.count(block) == 1
+
+# 3 -- the one copy left
+once(TAIL,
+     "#  (killtable_20260910/SCORES.txt).\n"
+     "#  [#565, 2026-10-18: TRUE OF THE 19-ROW FILE IT DESCRIBED, AND FALSE SINCE PASS 2 -- the\n"
+     "#  five rows under `ROWS ADDED BY PASS 2' below make it 24, which gate_ppc.sh now pins:\n"
+     "#  24/24 on the fix and 16/24 on the pre-fix HEAD (killtable_20260910/t2/SCORES.txt),\n"
+     "#  16/24 again on a pre-#522 build at #565 (gatewire_20261018/controls/\n"
+     "#  rldicl_prefix_02af7f3e.log).  The 19-row figures are in killtable_20260910/t1/SCORES.txt;\n"
+     "#  the bare `killtable_20260910/SCORES.txt' above names no file.  This block also stood\n"
+     "#  here TWICE, verbatim, from e777ff06 until #565 deleted the copy after the pass-2 rows.]\n",
+     "sibling-block correction")
+io.open(dst, "w", encoding="utf-8", newline="").write(t)
+print("patched", dst)

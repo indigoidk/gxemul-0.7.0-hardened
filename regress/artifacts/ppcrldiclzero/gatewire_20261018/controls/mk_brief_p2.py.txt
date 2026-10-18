@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""mk_brief_p2.py -- builds #565's pass-2 packets from the template, inlining every diff and receipt MECHANICALLY (the
+pass-1 brief truncated a transcribed line and two seats caught it).  REFUSES at zero diff hunks, and refuses if any
+placeholder survives.  Writes brief_p2_body.md, packet_p2_{ASTRA,GROK,GLM}.md, astra_pointer_p2.md into the artifacts dir."""
+import io, os, re, subprocess, sys
+R = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+P = r"C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\ppcw"
+A = os.path.join(R, r"regress\artifacts\ppcrldiclzero\gatewire_20261018")
+def rd(p): return io.open(p, encoding="utf-8", newline="").read()
+def git(*a): return subprocess.run(["git", "-C", R] + list(a), capture_output=True, text=True, encoding="utf-8").stdout
+def strip_hdr(d):   # drop `diff --git` / `index` lines; keep ---/+++ and hunks
+    return "\n".join(l for l in d.splitlines() if not l.startswith(("diff --git", "index "))).strip("\n")
+gate = strip_hdr(git("diff", "HEAD", "--", "regress/gate_ppc.sh"))
+pre = strip_hdr(git("diff", "HEAD", "--", "tools/precommit_check.sh"))
+probe = strip_hdr(git("diff", "HEAD", "--", "regress/ppc_rldicl_probe.py"))
+cpw = subprocess.run(["git", "diff", "--no-index", "--", os.path.join(P, "cpw_head.py"), os.path.join(P, "cpw_commit.py")],
+                     capture_output=True, text=True, encoding="utf-8").stdout
+cpw = strip_hdr(re.sub(r"^--- .*$", "--- a/tools/pipeline/check_probe_wiring.py", re.sub(
+    r"^\+\+\+ .*$", "+++ b/tools/pipeline/check_probe_wiring.py", cpw, flags=re.M), flags=re.M))
+hunks = {k: len(re.findall(r"^@@ ", v, re.M)) for k, v in
+         (("gate", gate), ("cpw", cpw), ("pre", pre), ("probe", probe))}
+print("diff hunks inlined:", hunks)
+if min(hunks.values()) == 0:
+    sys.exit("REFUSING: a file's diff inlined ZERO hunks -- the brief would be blind to it")
+ctl = [l for l in rd(os.path.join(A, r"controls\controls_wtblock_20261018.out")).splitlines()
+       if re.match(r"^(V\d+ |     red:|CONTROLS_DONE)", l)]
+rlegs = rd(os.path.join(A, r"controls\r_legs\R_LEGS.out")).strip("\n")
+nullm = rd(os.path.join(A, r"nullmedium\NULLMEDIUM.out")).strip("\n")
+P1 = """| # | seat | pass-1 flag | disposition |
+|---|---|---|---|
+| 1 | Astra, GLM | the brief's transcript of `naive fix wrong` was truncated at `M_NOM`, dropping ` ok` | a PACKET error: the probe prints the whole row (`...see M_NOMASK ok`); this brief inlines its receipts mechanically |
+| 2 | Astra | no control isolates the SCORE check; an appended contradictory `SCORE 0/24` would pass | TAKEN: a `score lines` check counts EVERY `^SCORE ` line (must be 1) beside `score 24/24`; controls V8-V11 |
+| 3 | Astra | refusal date one day early -- `d < today`, so 2026-10-22 is still valid | TAKEN; MEASURED by legs H1/G1 (`--today 2026-10-23`) |
+| 4 | Grok | the whole block truncates `$RLCLOG` before the `if`, so a doctored log is never scored | TAKEN: controls source ONLY the text after the exec line; the 23-row doctor keeps exactly one DONE |
+| 5 | Grok | section R's STALE EXEMPTION and UNWIRED DETECTOR legs not named | TAKEN; MEASURED (legs S, U) |
+| 6 | Grok | the 24s were quoted and the label was `rows emitted`, invisible to section U | TAKEN: `check "ppc_rldicl rows run" "$rlcrun" 24`, unquoted; manifest 33 -> 34 |
+| 7 | Grok | the MANIFEST comment would still say `EXEMPT below rather than wired`; prior discharges leave a DISCHARGED note | TAKEN: both notes, section 2b |
+| 8 | GLM | section R's wiring test not settle-able from the packet | settled by MEASUREMENT (legs G/S/U) |
+| 9 | GLM | the mk48 manner claim was asserted, not evidenced | settled by reading `gate_arm.sh`'s mk48 block: sentinel, every row by name, counts |
+| 10 | GLM | "re-dated once" undercounts (2026-09-24 and 2026-10-09) | TAKEN: "re-dated twice by owner ruling" |
+| 11 | GLM | the exemption text's RESULT/CONTROL sentences read as contradictory | moot: the tuple and its comment are deleted |
+| 12 | GLM | no duplicated-row control; no stated scope for a stalled probe | TAKEN: V7; the block comment states the probe's own 90 s / 60 s subprocess backstops |
+| 13 | GLM | same-commit companions (count pins, manifests, title) not settle-able | settled: section U's manifest is the one (row 6); nothing pins the title or the check count |
+| 14 | GLM | the 24 (count-of-rows) premise rests on every row ending ok/FAIL | settled with row 1: all 24 rows end ` ok` in the green log |"""
+t = rd(os.path.join(P, "brief_p2_template.md"))
+for k, v in (("{P1_TABLE}", P1), ("{HUNKS}", str(sum(hunks.values()))), ("{GATE_DIFF}", gate), ("{CPW_DIFF}", cpw),
+             ("{PRE_DIFF}", pre), ("{PROBE_DIFF}", probe), ("{CONTROLS}", "\n".join(ctl)), ("{RLEGS}", rlegs),
+             ("{NULLMED}", nullm)):
+    assert t.count(k) == 1, k
+    t = t.replace(k, v)
+left = re.findall(r"\{[A-Z0-9_]+\}", t)
+if left: sys.exit("REFUSING: placeholders left: %s" % left)
+io.open(os.path.join(A, "brief_p2_body.md"), "w", encoding="utf-8", newline="\n").write(t)
+for seat in ("ASTRA", "GROK", "GLM"):
+    io.open(os.path.join(A, "packet_p2_%s.md" % seat), "w", encoding="utf-8", newline="\n").write(
+        "**Your token: `%s_RLDICLWIRE2_20261018`** -- open your answer with it.\n\n" % seat + t)
+io.open(os.path.join(A, "astra_pointer_p2.md"), "w", encoding="utf-8", newline="\n").write(
+    "ASTRA seat -- diff review, pass 2: wiring an existing regression test into a test gate before its dated exemption\n"
+    "expires.  An ordinary test-harness review of a C emulator's regression suite.\n\n"
+    "Read this file and answer it exactly as its Questions section (section 4) directs:\n\n"
+    "    C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/gatewire_20261018/packet_p2_ASTRA.md\n\n"
+    "READ-ONLY: write nothing to any project tree.\n\n"
+    "Open your answer with the token ASTRA_RLDICLWIRE2_20261018, then ONE line:\nVERDICT: <n> flags -- <one line>\n")
+print("brief bytes:", len(t.encode("utf-8")))

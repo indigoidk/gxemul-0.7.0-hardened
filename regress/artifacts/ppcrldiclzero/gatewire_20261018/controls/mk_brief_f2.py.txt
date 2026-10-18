@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""mk_brief_f2.py -- builds #565's shared-findings (F2) packets from f2_template.md, inlining every repair hunk and
+receipt MECHANICALLY.  REFUSES at zero hunks in any repaired file and if any placeholder survives.  Writes
+brief_f2_body.md, packet_f2_{ASTRA,GROK,GLM}.md and astra_pointer_f2.md into the round's artifacts dir."""
+import io, os, re, subprocess, sys
+R = r"C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC"
+P = r"C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-cc-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad\ppcw"
+A = os.path.join(R, r"regress\artifacts\ppcrldiclzero\gatewire_20261018")
+def rd(p): return io.open(p, encoding="utf-8", newline="").read()
+def nodiff(a, b, name):
+    d = subprocess.run(["git", "diff", "--no-index", "--", a, b], capture_output=True, text=True, encoding="utf-8").stdout
+    d = re.sub(r"^--- .*$", "--- a/" + name, d, flags=re.M)
+    d = re.sub(r"^\+\+\+ .*$", "+++ b/" + name, d, flags=re.M)
+    return "\n".join(l for l in d.splitlines() if not l.startswith(("diff --git", "index "))).strip("\n")
+probe = nodiff(os.path.join(P, "probe_p1edit.py"), os.path.join(R, r"regress\ppc_rldicl_probe.py"), "regress/ppc_rldicl_probe.py")
+cpw = nodiff(os.path.join(P, "cpw_commit.py"), os.path.join(P, "cpw_commit_final.py"), "tools/pipeline/check_probe_wiring.py")
+gate = nodiff(os.path.join(P, r"rctl\gate_ppc.sh.bak"), os.path.join(R, r"regress\gate_ppc.sh"), "regress/gate_ppc.sh")
+hunks = {k: len(re.findall(r"^@@ ", v, re.M)) for k, v in (("probe", probe), ("cpw", cpw), ("gate", gate))}
+print("repair hunks inlined:", hunks)
+if min(hunks.values()) == 0:
+    sys.exit("REFUSING: a repaired file's diff inlined ZERO hunks")
+ns = subprocess.run(["git", "-C", R, "diff", "--numstat", "HEAD", "--", "regress/gate_ppc.sh", "regress/ppc_rldicl_probe.py",
+                     "tools/precommit_check.sh"], capture_output=True, text=True).stdout.strip().splitlines()
+cn = subprocess.run(["git", "diff", "--no-index", "--numstat", "--", os.path.join(P, "cpw_head.py"), os.path.join(P, "cpw_commit_final.py")],
+                    capture_output=True, text=True).stdout.split()
+ns.append("%s\t%s\ttools/pipeline/check_probe_wiring.py (HEAD -> the staged text)" % (cn[0], cn[1]))
+ns = ["%-55s INLINED (pass 2 brief, plus 3a-3c here)" % l for l in ns] + [
+      "regress/artifacts/ppcrldiclzero/gatewire_20261018/   NEW: briefs, packets, seat answers, controls, null medium -- SUMMARIZED (section 4)",
+      "tools/pipeline/ledger.json, CHANGELOG.md, matrix.html   NOT YET WRITTEN (section 5)"]
+ctl = [l for l in rd(os.path.join(A, r"controls\controls_final_20261018.out")).splitlines() if re.match(r"^(V\d+ |     red:|CONTROLS_DONE)", l)]
+rl = []
+for leg in ("G", "S", "G1", "U", "H0", "H1"):
+    t = rd(os.path.join(A, r"controls\r_legs_final\R_%s.out" % leg)).splitlines()
+    rl.append("%-3s %s" % (leg, t[-1]))
+    rl += ["      " + l.strip() for l in t if l.lstrip().startswith("FAIL  ")]
+nullm = rd(os.path.join(A, r"nullmedium\NULLMEDIUM.out")).strip("\n")
+t = rd(os.path.join(P, "f2_template.md"))
+for k, v in (("{PROBE_DIFF}", probe), ("{CPW_DIFF}", cpw), ("{GATE_DIFF}", gate), ("{NUMSTAT}", "\n".join(ns)),
+             ("{CONTROLS}", "\n".join(ctl)), ("{RLEGS}", "\n".join(rl)), ("{NULLMED}", nullm)):
+    assert t.count(k) == 1, k
+    t = t.replace(k, v)
+left = re.findall(r"\{[A-Z0-9_]+\}", t)
+if left: sys.exit("REFUSING: placeholders left: %s" % left)
+io.open(os.path.join(A, "brief_f2_body.md"), "w", encoding="utf-8", newline="\n").write(t)
+for seat in ("ASTRA", "GROK", "GLM"):
+    io.open(os.path.join(A, "packet_f2_%s.md" % seat), "w", encoding="utf-8", newline="\n").write(
+        "**Your token: `%s_RLDICLWIRE_F2_20261018`** -- open your answer with it.\n\n" % seat + t)
+io.open(os.path.join(A, "astra_pointer_f2.md"), "w", encoding="utf-8", newline="\n").write(
+    "ASTRA seat -- the shared-findings pass on a test-harness change: wiring an existing regression test into a test gate,\n"
+    "and the record corrections the review produced.  An ordinary test-harness and records review of a C emulator's suite.\n\n"
+    "Read this file and answer it exactly as its Questions section (section 6) directs:\n\n"
+    "    C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/gatewire_20261018/packet_f2_ASTRA.md\n\n"
+    "READ-ONLY: write nothing to any project tree.\n\n"
+    "Open your answer with the token ASTRA_RLDICLWIRE_F2_20261018, then ONE line:\nVERDICT: <n> flags -- <one line>\n")
+print("brief bytes:", len(t.encode("utf-8")))
