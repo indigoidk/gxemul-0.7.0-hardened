@@ -1,3 +1,9 @@
+# Records, 2026-10-18: `xscaleinten` names its closing commit 0d5f7cfc
+
+The landing commit 0d5f7cfc closed the row(s) and cannot name itself; this adds it to each `commits` field: `xscaleinten` (now `eb26590 0d5f7cfc`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  Ledger, matrix and this block only.
+
 # Records, 2026-10-18: `xscaleinten` closes -- `#526` finished on 2026-09-12 and was never moved out of `in work`; three wrong records corrected at the closure
 
 `#526` committed its fix as `eb26590` on 2026-09-12 -- a guest read of the i80321 XScale CP6 interrupt-enable register
