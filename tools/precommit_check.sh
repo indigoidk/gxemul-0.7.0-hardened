@@ -347,7 +347,13 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  (#562, pinned UNQUOTED in gate_arm.sh at 47 rows).
 	#  RAISED 33 -> 34 ON 2026-10-18, DELIBERATELY.  One newly gated probe: ppc_rldicl_probe.py
 	#  (#565, pinned UNQUOTED in gate_ppc.sh at 24 rows).
-	SCORE_CLAIMS_MANIFEST=34
+	#  RAISED 34 -> 35 ON 2026-10-18, DELIBERATELY.  One newly gated probe:
+	#  artifacts/ip30abortkill/ip30_abort_probe.py (#566, pinned UNQUOTED in gate_arm.sh at 33 rows
+	#  under the stem ip30_abort).  The checker reads only comment lines (`#', `*' or `//') that contain
+	#  the stem, and only a docstring at regress/<stem>_probe.py or regress/<stem>.py; no comment line
+	#  names ip30_abort and the probe lives under artifacts/, so for this pin it checks no prose -- only
+	#  the pin is counted.
+	SCORE_CLAIMS_MANIFEST=35
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

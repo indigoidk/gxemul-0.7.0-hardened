@@ -21615,6 +21615,8 @@ the pile-up formed.
 > *** THE SHIPPED INSTRUMENT IS NOW **28 ROWS**, NOT 21, AND THE WITNESS PAIR ABOVE WAS NOT RE-MEASURED ON IT.  Stated rather than smoothed. ***  The instrument grew twice AFTER the witness pair was taken -- 21 -> 27 at the pass-2 class closure, 27 -> 28 at the §F2 sibling-parity repair -- and every added row exists for DETECTOR STRENGTH, not to witness the defect.  The pair is therefore valid for what it claims (the fix changes the behaviour, measured on one instrument, pre and post) and is NOT a claim about the instrument that ships.
 >
 > **The shipped instrument's POST-FIX figure IS measured: 28/28** (`killtable3_20260918/base.raw`, sentinel `IP30ABORT_DONE`).  What is not measured is its PRE-FIX counterpart.  **OWED: one clone build to take PRE-FIX at 28 rows**, which would give a matched pair on the instrument that actually ships.  Deliberately not run while a measuring seat is in flight.  *(The 18-row pair 11/18 -> 18/18 is SUPERSEDED: pass 2 found four defects, and repairing them grew the instrument.  The re-pin's own order proof stays on the 18-row form by design.)*
+>
+> *** [#566, 2026-10-18] THE SHIPPED INSTRUMENT IS **33 ROWS**, AND ITS PRE-FIX COUNTERPART IS NOW MEASURED ON IT. ***  The latch-axis class closure took it 28 -> 32 (kill table 4) -> 33 (`xbit rev2`, kill table 5, base 33/33).  `#566` rebuilt HEAD in a scratch clone with `dev_sgi_ip30.c` set to `686d179c^`'s (all four `abort()` calls back): **PRE-FIX 10/33, POST-FIX 33/33 on the one 33-row instrument** (`regress/artifacts/ip30abortkill/gatewire_20261018/legs/`) -- the matched pair owed above.  The 8/21 -> 21/21 pair is unchanged: a 21-row witness, not a claim about the file that ships.  The "Still owed before close: panel pass 2" line below was discharged by `#531`'s own pass 2 (`_scratchpad/panel_20260917_215210`, 2026-09-17), its F2 adjudication (fable5, roster 9/9, 2026-09-18) and kill tables 3-5 (2026-09-18).
 
 Four guest-reachable `abort()` calls in `dev_sgi_ip30.c` on the advertised `-E sgi -e ip30`.
 **Three `exit(` sweeps of this queue walked past all four**, because `abort()` contains no
@@ -21637,7 +21639,7 @@ aborted.
 re-pinned oracle was measured on a pre-fix clone — **8/18, those three rows failing** — before
 being trusted.
 
-**Still owed before close: panel pass 2 on the real diff.**
+**Still owed before close: panel pass 2 on the real diff.**  *[#566, 2026-10-18: discharged -- see the dated note at the top of this entry.]*
 
 
 ### `asiceventaddr` -- **A THIRD PARTIAL GUARD IN ONE HEADER, from an unread review.** Recorded
@@ -24947,3 +24949,34 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   the Rc=1-only insertion skip, `CENSUS_SHRINK`, `R_NOGUARD`), moved here from `ppcrldimimask`, which the 2026-10-02
   disposition had made their carrier.  Coverage debt and named measurements; none a floor breach.
 * **`ppcgateimageskip` CLOSED as discharged** -- the rlwimi, rldimi and rldicl blocks run before `need_file` in gate 13.
+
+### 2026-10-18 -- `#566`: `ip30_abort_probe.py` wired into gate 14 (`wiringcliff` stays open; `ip30abortkill` stays in work); two rows filed
+
+* **`wiringcliff` (MED, in work)** -- `#566` wired `regress/artifacts/ip30abortkill/ip30_abort_probe.py` into gate 14
+  (`regress/gate_arm.sh`, 41 checks: one parse check, controls, exit status, the 33 rows by name, five pinned counts) and
+  deleted its 2026-10-30 exemption.  Next due: `alpha_tbi_probe.py` 2026-10-22 and the three `lca_*` probes 10-23 / 10-26
+  / 10-27 (the other session's), then the four `wdc_*` probes 11-05 .. 12-03.
+* **`ip30abortkill` (HIGH, in work)** -- its detector now runs in gate 14, and the pre-fix counterpart on the shipped
+  33-row instrument is measured: 10/33, 23 rows red, against 33/33.  Still owed before it closes: the witness field still
+  leads with the 21-row pair (the 33-row pair is added beside it here); clause (b) -- `abort()` re-inserted at each fixed
+  site of the FIXED file, re-run at 33 rows -- is held by no kill table (`#566`'s pre-fix leg is clause (a)); and the
+  closure decides whether the two disclosed escapes (`V7_nocounter`; the width axis `V8_len4` -- both in the row's state
+  note and the probe's CONTRACT) need a carrier that survives the close (Grok 4.7: no).  Target: before the 2026-10-25
+  weekly battery.
+* **`ip30stallgreen` (LOW, open)** -- `ip30_abort_probe.py`'s `session()` returns `alive=True` for a session its 12 s
+  poll kills, holding only the transcript read before the poll; a load stall therefore reads as a run whose remaining
+  accesses never happened.  A stall before a session's access leaves its `alive` and `no` rows green (the kill rows,
+  `acc 30 rd`, `tick 49`, the read arms' `txt` rows) and its `yes` row red; a count row that wants ONE announce reads
+  green whenever exactly one was captured -- on `V2_assigntick` only `xbit rev2` reds, so that session stalling with one
+  ISR announce captured, every other session passing, leaves all 41 gate-14 checks green.  Repair shape: a per-session
+  completion marker every row requires (a probe change, owing a kill table).  GPT-6 Astra and Grok 4.7, `#566` pass 2
+  and F2.
+* **`fableheldform` (MED, open)** -- of the 32 fable5 entries dated since the owner's 2026-10-17 hold at HEAD `2036a3d5`
+  (before `#566` adds two HELD markers), 10 are HELD markers, 6 are Fable's own answers, and 16 -- on ten rows (`cxlaunchquotation` 3, `sgirekills` 3, `sgirandomcolour` 2,
+  `wiringcliff` 2, `dashokclass`, `mapledmaaddr`, `ppcgateimageskip`, `ppcrldimimask`, `ppcrlwimiwidth`, `xscaleinten`) --
+  record a NON-answer (`NOT FIRED`, `SEAT FAILURE`, walled) with no stage token.  An untokened note is an ANSWER to
+  `stage_tokens.is_answer()`, so `check_fable_queue.py` and `check_stage_panels.py` count Fable as having answered --
+  the agreement the directive says a wall must never be -- and nothing queued the work.  The directive's form is a HELD
+  marker carrying a `hold_question`.  Owed: the 16 converted and the queue regenerated, in a records commit after `#566`.
+  From GPT-6 Astra's `#566` pass-2 queue flag; the `SEAT FAILURE` half from Grok 4.7's F2 (the first count, keyed on the
+  spelling `NOT FIRED`, found eight).

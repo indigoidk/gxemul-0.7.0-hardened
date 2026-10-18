@@ -663,11 +663,14 @@ MANIFEST = {
     #  TURNED THIS CHECKER RED -- the same shape as #532's stage gates: completing the
     #  record is what made the gap visible.  That is the manifest working as designed (an
     #  unlisted file is RED so a new detector cannot arrive unnoticed), not a defect. ***
+    #  [#566, 2026-10-18] WIRED: gate_arm.sh (gate 14) runs it and scores every row by name, with its run,
+    #  correct, emitted, green and red counts pinned; its EXEMPT entry is DISCHARGED below.
     "artifacts/ip30abortkill/ip30_abort_probe.py":
         (CLASS_DETECTOR, "#531 ip30abortkill: four guest-reachable abort() calls in dev_sgi_ip30.c. "
                          "33 rows, base 33/33, GREEN once the fix is in -- a DETECTOR by this file's own "
                          "definition at the top, and labelled one rather than filed as a `witness' to "
-                         "dodge the gate requirement.  *** RUNS IN NO GATE: see EXEMPT. ***"),
+                         "dodge the gate requirement.  *** RAN IN NO GATE until #566 (2026-10-18) wired it into "
+                         "gate_arm.sh; its EXEMPT entry is discharged. ***"),
     "artifacts/ip30abortkill/ip30_abort_probe.18row_20260917.frozen.py":
         (CLASS_TOOL, "the FROZEN 18-row instrument table 1 ran against"),
     "artifacts/ip30abortkill/opusF2_20260918/probe.frozen.py":
@@ -706,7 +709,8 @@ MANIFEST = {
     #  KNOWN DODGE IN THIS VERY FILE. ***  The flagship seat found ungated DETECTORS relabelled
     #  WITNESS here so that the checker would then verify they are ungated -- a check that
     #  cannot fail.  This is not that: #531's shipped detector is `ip30_abort_probe.py` above,
-    #  classed DETECTOR and dated-exempt in the open.  THIS file is a REACHABILITY measurement
+    #  classed DETECTOR and dated-exempt in the open [#566: until it was wired into gate_arm.sh on
+    #  2026-10-18; its EXEMPT entry is discharged].  THIS file is a REACHABILITY measurement
     #  -- its own docstring calls itself an "ip30 TICK-ROW BUILDABILITY MEASUREMENT" and asks
     #  whether the FOURTH abort(), inside DEVICE_TICK, can be reached from a STEPPING probe at
     #  all.  It answered a disagreement between two seats by combining them, and the answer is
@@ -3176,6 +3180,11 @@ EXEMPT = {
     #  after three re-dates by owner ruling (2026-09-18 in eec0f4a3, 2026-09-24, 2026-10-09), and would have
     #  refused every commit from 2026-10-23 (`d < today').
     #  Deleted in the SAME edit as the wiring, for the same reason.
+    #  artifacts/ip30abortkill/ip30_abort_probe.py's exemption is DISCHARGED, 2026-10-18 (#566) -- wired into
+    #  gate_arm.sh beside the sgi probes, from its artifacts path, every row scored by name.  It was dated
+    #  2026-09-20 with #531 and re-dated three times (eec0f4a3 to 2026-09-27, 04500deb to 2026-10-15, 7b23b785
+    #  to 2026-10-30), and would have refused every commit from 2026-10-31 (`d < today').
+    #  Deleted in the SAME edit as the wiring, for the same reason.
     #  Both #494 probes are TWO-LEG DIFFERENTIALS: they take a PRE-FIX binary and
     #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
     #  a change to the instrument -- a single-leg mode asserting only the fix-side
@@ -3236,34 +3245,6 @@ EXEMPT = {
                                     "no gate runs an Alpha guest session (gate 9 only "
                                     "constructs them); gate_crossfamily.sh "
                                     "is the named home, filed to wiringcliff with #518/#520"),
-    #  #531's detector, on the SAME footing as #518/#520/#530 (it took their date too, so the
-    #  cliff stayed one date, until #550 dispersed the block).  This comment said: "`grep -ln
-    #  "E sgi|-e ip30" gate_*.sh` matches ONLY gate_asan_sweep.sh ... no gate in this tree that could
-    #  host it today."  CORRECTED by #550: as written that grep matches nothing (`|' is literal in a
-    #  basic regex), and as an extended regex it matches one line, gate 9's #450 row, which constructs
-    #  ip12, ip28, ip30, ip32 and ip35 on /dev/null and runs no guest session; guest-session probes exec
-    #  the machine themselves, and gate_arm.sh already runs seven cold-debugger probes of this shape
-    #  (grep -cE '^python3 sgi_[a-z0-9_]+_probe[.]py' regress/gate_arm.sh), each naming `-e ip32' in its
-    #  own exec line, so a home exists.  *** NOT classified `witness' to escape the requirement: the flagship seat found
-    #  that exact dodge elsewhere in this manifest -- an ungated DETECTOR relabelled WITNESS,
-    #  after which the checker verifies it is ungated -- and named it a check that cannot
-    #  fail.  This entry is the honest form: DETECTOR, ungated, dated, and filed. ***
-    #  #550 (2026-09-25, re-dated individually by owner ruling 2026-09-24): gate_arm.sh hosts
-    #  seven sgi cold-debugger probes of this shape; 33/33 on build/gxemul in 568 s (the rows:
-    #  regress/artifacts/exemptredate_20260925/opus550_measured_p2/p1_runs/; the time, from the logs'
-    #  mtimes: keep_p1_logs.out one directory up), because each surviving
-    #  session waits out the 12 s death poll -- a long gate guest until that window shrinks without
-    #  reading a delayed abort as alive.
-    #  Re-dated 2026-10-15 -> 2026-10-30 on 2026-10-16, in its own commit, by a four-seat ruling (Fable 5.1, GPT-6
-    #  Astra, Grok 4.7 and GLM 5.3 answered; three ruled re-date now, Astra ruled wire now): it came due with no gate
-    #  running it and refused every commit in both sessions (regress/artifacts/adj_20261016/wiringcliff/).  A re-date is
-    #  not a discharge: the wiring is owed by wiringcliff.  #550 measured the probe at 568 s standalone for its 33 rows
-    #  (regress/artifacts/exemptredate_20260925/opus550_measured_p2/keep_p1_logs.out); gate_arm.sh runs in the weekly
-    #  battery and as an attended targeted gate, never per commit.
-    "artifacts/ip30abortkill/ip30_abort_probe.py":
-                                   ("2026-10-30",
-                                    "no gate runs an SGI IP30 guest session (gate_asan_sweep.sh "
-                                    "constructs only); filed to wiringcliff with #518/#520/#530"),
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

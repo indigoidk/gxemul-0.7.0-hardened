@@ -12,6 +12,41 @@ corrected 2026-09-18. ***  8/21 pre-fix -> 21/21 post-fix on one instrument, the
 the pass-2 class closure.
 
 ================================================================================
+[#566, 2026-10-18 -- a records correction; the text below it is kept as it was written.]
+The CATCHES list, the fourteen-cell paragraph and "THE CLOSURE IS OWED" below are the 27-row
+instrument's of 2026-09-18; the DOES NOT CATCH list was updated later and is current.  The
+probe that ships has 33 rows, and these statements below are no longer true of it:
+  * the F13 silent-decline repair made both READ arms (0x10020, 0x10028) decline WITHOUT an
+    announce: there are FOUR announce sites, not six; THREE ISR sites print the shared string,
+    not five (THE ATTRIBUTION RULE); and `kill 20 rd txt' / `kill 28 rd txt' pin the SILENCE
+    (want `no');
+  * `latch 1x' was re-aimed onto the two WRITE arms (0x10020-WR, then 0x10028-WR) when the
+    read arms went silent;
+  * THE LATCH-AXIS CLASS CLOSURE, further down, enumerated TEN cells -- {4 announce sites} x
+    {announce fires, latch sets} + {2 collision directions} -- six rowed before it (the four
+    write/tick announce rows, `latch 1x' and `xbit') and four rowed there (`latch 28wr',
+    `latch 30wr', `latch tick', `xbit rev').  In kill table 4 (32 rows) `latch 1x', `latch
+    28wr', `latch 30wr', `latch tick' (ME_nolatchsettick) and `xbit rev' (MA_assign20wr) each
+    killed its mutant; V2_assigntick (MD's shape: the tick's latch set made an assignment)
+    still escaped that table at 32/32, so `xbit rev2' (ISR -> TICK -> ISR) was added; kill
+    table 5 measured base 33/33,
+    V1_assign20wr 32/33 and V2_assigntick 32/33 (regress/artifacts/ip30abortkill/
+    killtable4_20260918/, killtable5_20260918/).  MF's cell, a latch set on the 0x10028 READ,
+    no longer exists;
+  * the pre-fix red is no longer `13 rows': on this instrument the pre-fix build reds 23 of 33
+    rows, scoring 10/33 (#566's prefix leg, clause (a): regress/artifacts/ip30abortkill/
+    gatewire_20261018/legs/probe_prefix.log);
+  * `Every CATCH below has a MEASURED kill in killtable{,2}' overstates the first CATCH:
+    reinstating the four abort() calls rests on the PRE-FIX build (clause (a): the 21-row
+    PREFIX_21row_20260917.out and the 33-row leg above); no table here holds abort()
+    re-inserted into the FIXED file (clause (b));
+  * THE CLAIM UNDER TEST quotes the PRE-FIX dev_sgi_ip30.c (`at HEAD' there meant HEAD before
+    #531), and the row it calls `kill 30 rd' is named `acc 30 rd' in every copy of this probe.
+Two escapes remain DISCLOSED: MH_nocounter (V7_nocounter, 32/32 in table 4), under MEASURED
+ESCAPES below, and the WIDTH axis (V8_len4, 33/33 in table 5), under DOES NOT CATCH.  Since
+#566 this probe runs in gate 14 (regress/gate_arm.sh); a load stall can read green there
+(ip30stallgreen).
+================================================================================
 THE CONTRACT -- vacuity-floor clause (e).  A detector that says what it catches is
 FALSIFIABLE; one that claims completeness is not.  Every CATCH below has a MEASURED
 kill in regress/artifacts/ip30abortkill/killtable{,2}_20260917/.

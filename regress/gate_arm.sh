@@ -1507,6 +1507,81 @@ else
     check "sgi_mte rows red"     "$(count "$MTELOG" " FAIL$")" "0"
 fi
 
+#  ---- #566 ip30abortkill (#531, 686d179c): dev_sgi_ip30.c's four guest-reachable abort() calls -- a guest load or
+#  ---- store at 0x0ff10020 or 0x0ff10028, a store to 0x0ff10030, and DEVICE_TICK once a legal imask0 write sets bit
+#  ---- 50 -- are gone since #531: the two loads decline silently, the 0x10020/0x10028 stores keep their effect, the
+#  ---- 0x10030 store is dropped, and the three stores announce once between them (one shared ISR latch) and the tick
+#  ---- once (its own).  Its detector shipped with that fix and ran in no gate:
+#  ---- check_probe_wiring.py held it EXEMPT, dated 2026-09-20 and re-dated three times (eec0f4a3 to 09-27, #550's
+#  ---- 04500deb to 10-15, 7b23b785 on 2026-10-16 to 10-30), and HEAD's checker run with --today 2026-10-31 FAILS on it
+#  ---- (measured 2026-10-18).  This block discharges that exemption.  The probe's CONTRACT, its MEASURED ESCAPES and
+#  ---- its DOES NOT CATCH list are in its header; its kill tables are in regress/artifacts/ip30abortkill/.  At depth 0,
+#  ---- so another probe's missing sentinel cannot swallow it.
+#  ----
+#  ---- RUN TIME, about 9.5 minutes -- 568 s on build/gxemul (#550), 567 s on a HEAD rebuild (#566) -- because every
+#  ---- session that survives waits out the probe's 12 s death poll.  That poll is what stops a slow abort reading as
+#  ---- `alive', so it is not shortened here.  Every wait is wall-clock up to that poll's SIGKILL; the reap after it
+#  ---- blocks, and nothing here times the probe out.  A load stall is NOT always a red.  A session the poll kills
+#  ---- reports `alive' with only the transcript read before the poll began (nothing printed during it is collected),
+#  ---- so it reads like a run whose remaining accesses never happened.  A stall BEFORE a session's access leaves its
+#  ---- `alive' and `no' rows green and its `yes' announce row red.  `acc 30 rd' and `tick 49' carry no `yes' row, and
+#  ---- neither do the `kill 20 rd' and `kill 28 rd' sessions, so those read a stall green outright -- the two kill
+#  ---- sessions even on a build that would have aborted; the write-arm and bit-50 tick sessions carry one, and red.
+#  ---- A count row that wants ONE announce (`latch 1x', `latch 28wr', `latch 30wr', `latch tick', `xbit rev',
+#  ---- `xbit rev2') reads green whenever exactly one announce was captured, so a stall between its first and second
+#  ---- access hides the latch defeat or clobber it exists to catch: on V2_assigntick only `xbit rev2' reds, so that
+#  ---- session stalling with one announce captured, every other session passing, leaves all 41 checks green.  Filed
+#  ---- as ip30stallgreen.  gate_arm.sh runs in the weekly battery, alone, and as an attended targeted gate -- never
+#  ---- per commit.
+#  ----
+#  ---- Run from its artifacts path, as gate_sh_rounding.sh runs gdrom_pio_null_probe.py; a missing file fails the parse
+#  ---- check below -- a FAIL, never a SKIP.
+IP30LOG=$LOGDIR/ip30_abort.log
+ip30rc=0
+python3 -u artifacts/ip30abortkill/ip30_abort_probe.py "$PMAX" gate > "$IP30LOG" 2>&1 || ip30rc=$?
+
+#  PARSE BEFORE SCORE: exactly one well-formed RESULT, CONTROL and DONE line.  A crash or kill before the report, or a
+#  missing file, leaves none and reds here; a death AFTER the report passes here and reds `probe exit status' below.
+if [ "$(grep -c '^IP30ABORT_RESULT=' "$IP30LOG")" != "1" ] ||
+   ! grep -Eq '^IP30ABORT_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$IP30LOG" ||
+   [ "$(grep -c '^IP30ABORT_CONTROL=' "$IP30LOG")" != "1" ] ||
+   ! grep -Eq '^IP30ABORT_CONTROL=(OK|DEAD)$' "$IP30LOG" ||
+   [ "$(grep -cx 'IP30ABORT_DONE' "$IP30LOG")" != "1" ]; then
+    note "ip30_abort probe produced no unique, valid completion record; last lines follow"
+    tail -5 "$IP30LOG" | sed 's/^/       /'
+    check "ip30_abort probe output parses" "no" "yes"
+else
+    check "ip30_abort probe output parses" "yes" "yes"
+    grep -E '^  .* got=.* want=.* FAIL  ' "$IP30LOG" | sed 's/^/       /'
+    #  CONTROLS: `live' (a RAM plant returns through a guest load) and `devsig' (0x20 answers 0x80010000, which RAM
+    #  cannot).  A DEAD vehicle prints a zero-row RESULT and rows with no status token, so every row check below reds too.
+    check "ip30_abort controls" "$(sed -n 's/^IP30ABORT_CONTROL=//p' "$IP30LOG")" "OK"
+    check "ip30_abort probe exit status" "$ip30rc" "0"
+
+    #  EVERY ROW BY NAME, EXACTLY ONCE -- identity and uniqueness, which the counts below cannot give.  The probe prints
+    #  `  %-12s got=%-12s want=%-12s <ok|FAIL>  <note>': the status token is NOT at the end of the line, so ` ok$'
+    #  matches nothing here, and six names (`kill 20 rd txt', `isr 20 rd val', ...) are longer than their 12-column
+    #  field.  So a row is matched by position -- its name, the got= and want= tokens (no value carries a space), then
+    #  the status and its two trailing spaces -- and `^  <name>  *got=' cannot match a longer name beginning with this
+    #  one (`kill 20 rd' / `kill 20 rd txt', `xbit rev' / `xbit rev2').  count() is plain grep: every `*' is BRE.
+    for v in "live" "devsig" "acc 18" "acc 30 rd" "acc 20000" "acc 30000" "acc imask" "kill 20 rd" "kill 20 rd txt" "kill 28 rd" "kill 28 rd txt" "kill 30 wr" "kill 30 txt" "tick 50" "tick 50 txt" "tick 49" "kill 20 wr" "kill 20 wr txt" "kill 28 wr" "kill 28 wr txt" "isr keep" "isr clr" "isr drop 30" "xbit isr" "xbit tick" "latch 1x" "isr 20 rd val" "isr 28 rd val" "latch 28wr" "latch 30wr" "latch tick" "xbit rev" "xbit rev2"; do
+        check "ip30_abort row: $v" "$(count "$IP30LOG" "^  $v  *got=[^ ]*  *want=[^ ]*  *ok  ")" "1"
+    done
+
+    #  DENOMINATORS, pinned to LITERALS: `rows run' is the probe's own count (RESULT's), `rows emitted' the row lines it
+    #  printed -- two, because one cannot tell a LOST row from a failing one.  `[^=]*' stops at the first `=', which in a
+    #  row line is got='s.  All 33 green on build/gxemul, measured before these pins were written
+    #  (regress/artifacts/ip30abortkill/gatewire_20261018/).
+    ip30res=$(sed -n 's/^IP30ABORT_RESULT=//p' "$IP30LOG")
+    ip30ok=$(count "$IP30LOG" '^  [^=]* got=[^ ]*  *want=[^ ]*  *ok  ')
+    ip30bad=$(count "$IP30LOG" '^  [^=]* got=[^ ]*  *want=[^ ]*  *FAIL  ')
+    check "ip30_abort rows run"     "${ip30res#*/}" 33
+    check "ip30_abort rows correct" "${ip30res%/*}" "33"
+    check "ip30_abort rows emitted" "$((ip30ok + ip30bad))" "33"
+    check "ip30_abort rows green"   "$ip30ok" "33"
+    check "ip30_abort rows red"     "$ip30bad" "0"
+fi
+
 #  ---- *** MOVED OUT ONE NESTING LEVEL, 2026-08-31.  It was pasted INSIDE the
 #  ---- sgi_re_width probe's success branch, so if THAT probe missed its sentinel this
 #  ---- block was never invoked at all -- 28 rows, three denominators and its own
