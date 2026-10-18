@@ -1,3 +1,11 @@
+# Records, 2026-10-18: `sgirekills` names its closing commit e7fc97e6, and e7fc97e6's pass-2 receipt
+
+The landing commit e7fc97e6 closed the row(s) and cannot name itself; this adds it to each `commits` field: `sgirekills` (now `e302c98 e7fc97e6`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  Ledger, matrix, this block, and `regress/pass2_ledger.tsv`'s
+pass-2 receipt for e7fc97e6 -- precommit section F refused the first attempt of this follow-up without it: the passes
+ran (pass 2, its shared-findings pass, the repair's pass 3 and its scope pass) and the receipt line was not written.
+
 # `#564` (sgirekills, the MTE half): `do_mte_transfer()`'s five guest-reachable exits -- a stipple mode, a source buffer past TLB C, and a COPY, a depth other than 8 or a partial BYTEMASK to a linear destination -- decline the transfer and announce once per site, defended by a 68-row detector whose kill tables ran 34/34, 2/2 and 29/29
 
 **The defect, witnessed at rung 3.**  `do_mte_transfer()` in `src/devices/dev_sgi_re.c` refused five transfer
