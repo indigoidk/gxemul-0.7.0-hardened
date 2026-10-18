@@ -1,3 +1,18 @@
+# Records, 2026-10-18: `mapledmaaddr` closes -- `#528` finished on 2026-09-12 and was never moved out of `in work`
+
+`#528` committed its fix as `ca3be4e` on 2026-09-12 -- the Maple DMA-address read arm returns the value the model already
+computed (member 4, ACCEPT) -- and Fable 5.1's closing ruling (`regress/artifacts/mapledmaaddr/fable_close_20260912.md`)
+closed its repair chain on kill table 7.  The ledger row was never moved: it sat `in work`, with no closure, for five
+weeks.  This commit closes it and holds its REGRESS review for the flagship; the question names the two builds to
+re-run (HEAD, and `ca3be4e`'s parent `7457c04b`, which was HEAD when kill table 7's pre-fix leg ran).
+
+**The closure check** (`regress/artifacts/mapledmaaddr/close_20261018/`): GPT-6 Astra 0 flags and Grok 4.7 0 flags,
+each from the files.  Nothing is owed -- the shutdown-tick control and the member-5 wording are filed, and
+`mapledmaadvance` exists -- and every drafted fact holds: the parent, table 7's 37/37 and 11/37, gate 10's committed pin
+of 37 and its 391-check PASS, and the two mutants disclosed outside the contract.  GLM was deliberately not fired (a
+records question that needs files opened); Fable 5.1 is held by the owner's 2026-10-17 directive; an Argon reading was
+cancelled when the meter's quota guard put it to sleep until the next window.  No `src/` change.
+
 # Records, 2026-10-18: the 2026-10-16 rulings A (#563) and B (asiceventaddr) corrected against their own seats -- read before either build
 
 An Argon reading checked both consolidations against the seat answers they consolidate and raised 27 flags
