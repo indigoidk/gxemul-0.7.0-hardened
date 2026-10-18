@@ -1,3 +1,9 @@
+# Records, 2026-10-18: `mapledmaaddr` names its closing commit d9990129
+
+The landing commit d9990129 closed the row(s) and cannot name itself; this adds it to each `commits` field: `mapledmaaddr` (now `ca3be4e d9990129`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  Ledger, matrix and this block only.
+
 # Records, 2026-10-18: `mapledmaaddr` closes -- `#528` finished on 2026-09-12 and was never moved out of `in work`
 
 `#528` committed its fix as `ca3be4e` on 2026-09-12 -- the Maple DMA-address read arm returns the value the model already
