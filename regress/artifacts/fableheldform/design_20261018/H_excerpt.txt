@@ -1,0 +1,47 @@
+186:             d = by_stage.setdefault(ent.get("phase"), {})
+187:             d.setdefault("seats", set()).add(ent.get("seat"))
+188:             d["newest"] = max(d.get("newest", ""), ent.get("date", ""))
+189: 
+190:         for stage in STAGES:
+191:             info = by_stage.get(stage)
+192:             if not info:
+193:                 continue                       # stage never ran; not this check's business
+194:             if "seats" not in info:
+195:                 #  #534 F2 pass (codex, Opus): a stage whose only entry is a LIVE hold was skipped
+196:                 #  here, before any hold test, so a CLOSED row could carry one with H green.
+197:                 live0 = st.live_holds(info.get("_all", []))
+198:                 if live0 and row.get("state") == "closed":
+199:                     violations.append((row["id"], "CLOSED-WHILE-HELD", stage, 0,
+200:                                        ["a round may not close while a stage awaits a seat"]))
+201:                 elif live0:
+202:                     held.append((row["id"], stage, 0, ", ".join(live0), "",
+203:                                  (row.get("hold_question") or "").strip()))
+204:                 continue
+205:             got, newest = info["seats"], info.get("newest", "")
+206:             #  #534 (heldmasked, an L3 of this round per its pass 2): a LIVE hold -- a named seat not
+207:             #  answered in this stage at a strictly later date -- beats a full count.  Before this,
+208:             #  the count test ran first, so an owner-decision hold over nine misdirected answers
+209:             #  reported `ok 9/9` and the row could be CLOSED with H, I and the wall all green
+210:             #  (Opus, measured).  A DISCHARGED marker does not hold a full stage.
+211:             live = st.live_holds(info.get("_all", []))
+212:             if len(got) >= n_seats and not live:
+213:                 complete += 1
+214:                 if listing:
+215:                     print("  ok    %-14s %-9s %d/%d" % (row["id"], stage, len(got), n_seats))
+216:                 continue
+217:             #  HELD is checked BEFORE the one-seat "filed" shortcut, so a stage that is
+218:             #  genuinely waiting on a named seat is reported as waiting even if only one
+219:             #  other seat has answered so far.
+220:             #  ... and ONLY a live hold holds a SHORT stage either.  A marker every named seat has
+221:             #  since answered is history: treating it as a hold printed "awaiting: fable5" over
+222:             #  pcc2c040kill's 8/9 review whose real gap is agy (codex + Opus, #534 F2 pass).
+223:             if live:
+224:                 if row.get("state") == "closed":
+225:                     violations.append((row["id"], "CLOSED-WHILE-HELD", stage, len(got),
+226:                                        ["a round may not close while a stage awaits a seat"]))
+227:                 else:
+228:                     #  Every marker, de-duplicated, order preserved -- so two holds report
+229:                     #  two seats and the operator sees the whole debt.
+230:                     names = list(live)
+231:                     held.append((row["id"], stage, len(got), ", ".join(names),
+232:                                      newest, (row.get("hold_question") or "").strip()))

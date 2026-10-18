@@ -1,0 +1,42 @@
+     1	def is_held(e):
+     2	    return HELD in _note(e)
+     3	
+     4	
+     5	def exempts_stage(e):
+     6	    n = _note(e)
+     7	    #  HELD and NOTSEAT both dominate: a hold is a promise and NOTSEAT says "this entry only" -- an
+     8	    #  entry carrying either can never exempt the stage, whatever else it quotes (minimax, #534 pass 2:
+     9	    #  the docstring promised this of NOTSEAT and the code did not deliver it).
+    10	    return (not is_held(e)) and NOTSEAT not in n and any(t in n for t in STAGE_EXEMPT)
+    11	
+    12	
+    13	def is_answer(e):
+    14	    n = _note(e)
+    15	    if HELD in n or NOTSEAT in n or ANNOTATION in n or NOPANEL in n:
+    16	        return False
+    17	    return True          # RE_READ entries ARE answers; so is every untokened entry
+    18	
+    19	def live_holds(entries):
+    20	    """Seats still awaited in one (row, phase): named by a HELD entry and NOT answered by that seat
+    21	    in this stage at a STRICTLY LATER date -- the carrier's discharge rule, applied here so every
+    22	    reader agrees on it.  (#534 pass 2, codex + Opus: two of the three stages that showed a full count
+    23	    over a hold were DISCHARGED holds, and one was live; a reader must tell them apart.)"""
+    24	    out = []
+    25	    for h in entries:
+    26	        if not is_held(h):
+    27	            continue
+    28	        hd = h.get("date") or ""
+    29	        named = held_seats(h)
+    30	        if not named:
+    31	            #  a hold in no parseable shape can never be discharged by an answer -- it holds until
+    32	            #  someone writes it properly; a malformed marker must not read as "nothing owed"
+    33	            #  (codex, #534 F2 pass: `[HELD AWAITING SEAT: glm,]` let a closed row pass H and I)
+    34	            if MALFORMED not in out:
+    35	                out.append(MALFORMED)
+    36	            continue
+    37	        for seat in named:
+    38	            done = any((e.get("seat") or "").lower() == seat and is_answer(e)
+    39	                       and (e.get("date") or "") > hd for e in entries)
+    40	            if not done and seat not in out:
+    41	                out.append(seat)
+    42	    return out
