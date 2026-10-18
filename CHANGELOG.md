@@ -1,3 +1,93 @@
+# `#564` (sgirekills, the MTE half): `do_mte_transfer()`'s five guest-reachable exits -- a stipple mode, a source buffer past TLB C, and a COPY, a depth other than 8 or a partial BYTEMASK to a linear destination -- decline the transfer and announce once per site, defended by a 68-row detector whose kill tables ran 34/34, 2/2 and 29/29
+
+**The defect, witnessed at rung 3.**  `do_mte_transfer()` in `src/devices/dev_sgi_re.c` refused five transfer
+parameters it does not implement with `fatal(); exit(1);` -- S1 `mode & MTE_MODE_STIPPLE` and S2 `src > MTE_TLB_C`
+before `switch (dst_tlb)`, and S3 `mode & MTE_MODE_COPY`, S4 `depth != 8` and S5 `bytemask != 0xffffffff` inside its
+linear arm.  Every one is reachable by an ordinary guest store: the MTE registers are guest-written, and a write whose
+address carries `CRIME_DE_START` (0x800) runs the transfer (so does a START-tagged READ -- filed, `mtestartread`).
+`regress/artifacts/sgirekills/witness_20261017/sgi_mte_exit_witness.py` on the unmodified `-E sgi -e ip32`, HEAD
+`2951694f`: 4/9, five deaths each with only its own site's text (`witness_HEAD_2951694f.out`); the fix 9/9
+(`witness_FIX_564.out`).
+
+**The disposition -- member 3, decline + latched announce, at all five sites** (pass 1 unanimous: GPT-6 Astra, Grok
+4.7, GLM 5.3; Fable 5.1 a SEAT FAILURE, HTTP 429).  The `return` is OUTSIDE the latch, so every refused transfer is
+refused and only the announcement is once; each site has its own bit.  S2 stays `src > MTE_TLB_C` for fills AND
+copies: a fill never reads the source, but nothing establishes what the hardware does with SRC_BUF on a fill (filed,
+`mtesrcfill`).  Declined: moving S5 above the linear arm's `debug()` (host-only).
+
+**What ships.**
+* `src/devices/dev_sgi_re.c` -- `SGIRE_W_MTE_STIPPLE`, `_SRC`, `_COPY`, `_DEPTH`, `_BYTEMASK` = `1 << 13` .. `1 << 17`;
+  each site announces `... -- transfer declined (once)` with its old key phrase kept (the witness attributes on it;
+  S5 gains the `[ sgi_mte:` prefix it lacked) and returns before any transfer data is written.  The enum's
+  "next free bit" sentence moves to `1 << 18`.  The sixth `exit(1)` in the file, `DEVICE_ACCESS(sgi_mte)`'s width
+  `else`, is unreachable and stays `sgimtewidth`'s.
+* `regress/sgi_mte_decline_probe.py` (md5 422583b6) -- 68 rows in 17 sessions on the unmodified machine, real guest
+  stores and loads: every refused transfer is aimed at a destination it would write, pre-painted, and read back; the
+  ACCEPT side at every label; the latch (once, suppression, `return` inside the latch, shared and aliased bits --
+  one session sets every pre-existing bit 0-12 first and proves it, `xbit primed`); a legal fill after a decline;
+  the device's status.  Its CONTRACT names what it catches and, under NOT CLAIMED, every cell ruled outside the
+  floor.
+* `regress/gate_arm.sh` -- the block after the `sgi_re_width_probe` block, at depth 0: controls by name, all 68 rows by
+  name, rows emitted 68, green 68, red 0.
+
+**Measured** (all under `regress/artifacts/sgirekills/`).  The 53-row detector (`detector_564_20261017/`, one
+instrument for both builds): HEAD 8/53 -- the controls and five ACCEPT rows green, every decline row `died` -- the fix
+53/53; null medium (`/bin/true`) 0/53.  Kill table 1 (`killtable_564_20261017/`, PRETABLE.out written before it): 34
+one-edit mutants, **34/34**; table 2 (the S1 and S3 accept-side growth mutants table 1 lacked): **2/2**.  The repaired
+68-row detector (`killtable3_564_20261017/`, PRETABLE3.out before it): base 68/68, null 0/68, HEAD 10/68 (13 of the 15
+new rows red; `fill b ok` and `fill c ok` are legal fills, green on HEAD too); kill table 3: 29 mutants -- the 20
+latch-conditioned label exemptions of S1/S2, one alias per new bit onto a pre-existing one, S1/S2 grown to refuse B or
+C -- **29/29**, each red on its own cell's row.  `gate_arm.sh`: the 53-row block 59/59 checks
+(`gate_564_20261017/`, that run stopped deliberately after every sgi section passed); on the final state the whole
+gate 14, **PASS, 1184 checks** (`gate2_564_20261018/gate_arm.out`, GATE_ARM_RC=0, zero FAIL), its sgi_mte block 74/74 --
+the 3 controls, the 68 rows by name, emitted 68 / green 68 / red 0 (`gate2_564_20261018/sgi_mte_decline.log`, 68/68).
+The shipped probe 422583b6 differs from the tabled 8928a02f in comment lines only (the pass-3 records fixes; the edit
+script refused any non-comment change).
+
+**Two construction defects caught before any table (L1).**  The first draft compared `lw` results -- which
+SIGN-EXTEND, so the paint 0x99999999 read back 0xffffffff99999999 -- against the 32-bit literal: every `paint kept`
+row read "written" on the fix and every `landed` row was vacuous (`detector_564_20261017/*.v1_signext.out`).  Then two
+14-character names in a 14-column field met the gate's two-space pattern: the field went to 16 columns (format only;
+the tabled instrument was reconstructed and its md5 reproduced).
+
+**The review chain -- three passes, two shared-findings passes, one repair.**
+* **Pass 2** (`pass2_564_20261017/`): Astra SWC 3, Grok SWC 2, GLM SWC 3; Fable 429.  Two FLOOR breaches (L2): S1's and
+  S2's `return` bypasses `switch (dst_tlb)`, so under the 2026-09-25 skipped-dispatch label clause -- its first reuse
+  on a second device, fit checked -- the floor is {A, B, C, LIN_A, LIN_B} x latch {CLEAR, SET} per site, 20 cells of
+  which 9 were held (`if (src > MTE_TLB_C && dst_tlb != MTE_TLB_B)` kept all 53 green); and a new latch bit ALIASED
+  onto a pre-existing one escaped, because no session set bits 1-12 (`SGIRE_W_MTE_STIPPLE = 1 << 10`).  Records: a
+  START-tagged READ also runs the transfer, so the fix's "the register store that carried START" was corrected.  A
+  late Gemini 4 Argon reading of the same packet rediscovered both breaches.  GLM's "a fourth diff hunk was never
+  shown" was refuted (four were, net +53).
+* **The shared-findings pass** (`f2_564_20261017/`): Astra ALL UPHELD, GLM ALL UPHELD, Grok "1 WRONG (F9)" -- the floor
+  upheld, the append recipe corrected (B and LIN_B mapped where first used, every cell repainted, linear cells at
+  depth 8 / full mask / no COPY).
+* **The repair**: 15 rows -- the 11 empty label x latch cells, legal tiled fills at B and C, the crossbit session --
+  and the records fixes; table 3, above.
+* **Pass 3** (`pass3_564_20261018/`): Grok **CLOSE**, zero breaches with its swept denominator; Astra SWC 3 (S1/S2's
+  ACCEPT face with the latch SET at B, C, LIN_B, and S5's accept face after a decline); GLM SWC 3 (S3-S5's label x
+  latch cells); Fable 429 (its third wall this round -- the re-fire-once rule discharged); Argon SWC 1, refuted (its
+  "the bit-3 priming text is a substring of the bit-11 text" -- `for` vs `from`).
+* **The shared-findings pass for pass 3** (`f2b_564_20261018/`), on one scope question with the rule texts quoted:
+  **unanimous G1 OUT, G2 OUT, G3 OUT** (Astra, GLM, Grok).  The floor crosses a guard's DOMINATING predicates with
+  the state its repair path reads, and the repair path never runs on the accept face; the skipped-dispatch label axis
+  attaches only where the `return` bypasses the dispatch, which S3-S5's do not; the 2026-09-09 clause bounds labels
+  to the guard operand's partition, never their cross with the latch.  Those cells are DISCLOSED in the probe's NOT
+  CLAIMED list (clause e).  **The chain closes on pass 3**: zero floor breaches surviving adjudication, carried with
+  the swept denominators.
+* Records corrected in place, never in the order-proof files: `killtable_564_20261017/PRETABLE_ERRATA.txt` (8 entries)
+  and `killtable3_564_20261017/PRETABLE3_ERRATA.txt` (6 entries), each quoting the text it corrects.
+* Seats: the owner's roster of 2026-10-17 (Fable, Grok, Astra, GLM; Fable's adjudication HELD); Opus, agy, kimi,
+  deepseek and minimax DELIBERATELY NOT FIRED.
+
+**Records.**  `sgirekills` CLOSED -- its MTE half is this round, its six RE read arms were `#513`, and its sixth exit is
+unreachable (`sgimtewidth`); witness `probe:regress/artifacts/sgirekills/witness_20261017/sgi_mte_exit_witness.py`.
+REGRESS held for the flagship, with the row's earlier TEX question carried in its hold.  Filed: `mtestartread`,
+`mtesrcfill`, `mteimplement`, `sgimteystep`, `mtedeclinecov`.  The bug file's `sgirexbit12` item gains a note: `tex xbit` primes
+none of the five new bits either.  Section R: `tools/pipeline/check_probe_wiring.py`'s MANIFEST classifies the round's `.py`
+files -- the detector DETECTOR (wired in `gate_arm.sh`), the witness WITNESS, the mutant writers, summarizers and
+table generators TOOL, the preserved instruments RESEARCH.
+
 # Records, 2026-10-17: `cxlaunchquotation` and `cxlaunchdaybreak` name their closing commit 7aa2c41f
 
 The landing commit 7aa2c41f closed the row(s) and cannot name itself; this adds it to each `commits` field: `cxlaunchquotation` (now `7aa2c41f`); `cxlaunchdaybreak` (now `7aa2c41f`).

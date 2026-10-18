@@ -1,0 +1,79 @@
+`GLM_MTE564P1_20261017`
+
+VERDICT: PROCEED WITH CHANGES (5) — the design and disposition are sound; the detector has one critical hole (no row drives the BYTEMASK reset default, the single most guest-reachable value at S5) and four smaller ones.
+
+The five changes, up front:
+1. **Add a `bytemask default` row driving BYTEMASK = 0 (unwritten).** This is the floor hole Q2 exploits; it also live-tests the Q1.5 premise.
+2. **The `<site> once` rows must check the destination paint after the SECOND transfer, and gain a two-different-sites session row.** As designed they cannot see a `return` moved inside the latch (text count stays one, transfer 2 writes) or a bit shared across sites.
+3. **Pin the Q-d latch granularity explicitly and make it observable.** I endorse 5 bits (guard-as-site, label-agnostic texts), but the packet's width-bit precedent pulls toward 8; either way a row must be able to tell the two apart (announce presence at LIN_B after a LIN_A decline at the same site). Today no row can.
+4. **S2 stays unscoped this round; the COPY-scoping narrowing is filed as its own row; add one COPY-with-src>2 row.** S2's active side (a copy, not a fill) is driven by no proposed row under any disposition.
+5. **Add label-axis rows for the pre-switch sites S1/S2** (e.g. STIPPLE with a LIN_A destination). The `lin b` rows cover only S3-S5's block; S1/S2 fire for any destination and a repair that scopes them into the tiled cases would escape every row.
+(Nit: section 8's "`src` 3 (B+1)" mislabels 3 — 3 is `MTE_TLB_TEX`, i.e. C+1; B+1 = 2 = C is the accepted bound already covered by `src c fill`.)
+
+---
+
+## Q1 — Premise audit
+
+**1. Census.** READ: against every inlined region of the file, I enumerate exactly six live `exit(1);`: 1498 (S1), 1506 (S2), 1582 (S3), 1587 (S4), 1598 (S5), and 1720 (width arm). The commented `// exit(1);` at 1493 and the `exit(1)` mentioned inside the 3d comment (line ~273) are correctly excluded by the stated comment-stripping method — an unstripped scan would over-count, so the method matters and is consistent. REASONED: the 1720 arm is unreachable because `len == 4` and `len != 4` are exact complements over all integers. NOT CHECKABLE FROM PACKET: whether the un-inlined ranges (≈1-57, 170-256, 309-1457, 1815-1832, 1874+) hold a seventh — the design does not depend on them, since the function under edit, its caller, and the width arm are fully inlined.
+
+**2. Attribution.** READ: the five fatal literals are pairwise distinct — "MTE_MODE_STIPPLE" (1497), "unimplemented SRC" (1505), "MTE_MODE_COPY" (1581), "MTE_DEPTH_x" (1586), "MTE bytemask 0x%08x" (1597) — so no cross-site aliasing. REASONED, enumerated per row against every *earlier* guard: `stipple` 0x600 (STIPPLE is the first guard; src=0 anyway), `src tex` 0x260 (STIPPLE clear), `lin copy` 0x810 (STIPPLE clear, src=0), `lin depth` 0x110 (STIPPLE clear, src=0, COPY clear), `bytemask` 0x010 (COPY clear, depth field 0 → depth 8 passes S4). Also REASONED: the START write (`DST1|0x800` → relative 0x838 → masked 0x038 → +0x3000 = `CRIME_MTE_DST1`) lands on its own case, and no register the rows touch is a fatal arm (STIPPLEMASK/NULL/FLUSH are untouched), so no stray texts. Residual insufficiency: attribution proves *guard fired and fired first*, not the death mechanism — but each fatal is immediately followed by `exit(1)`, so text ⇒ death is deterministic. **Sufficient.**
+
+**3. Decline-before-any-memory-write.** READ: S1/S2 precede the switch (1496/1504 vs 1509); S3-S5 precede `memset(zerobuf, ...)` (1637) and the loop's `memory_rw` (1668). Between function top and the guards there are only `debug()` prints and the print-only `dst_y_step` fatal (1492). `memset(zerobuf)` is host stack, and the declines return before it anyway. One caveat, correctly not claimed by the brief: the register store itself (1707) has already happened in the caller — device state, correctly left standing.
+
+**4. A fill never reads the source selector.** Split. REASONED, true *within this code*: `src` is read only at 1504 (S2's own guard); `src_tlb` feeds only `src_mode` (1533), consumed only under `if (mode & MTE_MODE_COPY)` at 1564-1566 in the tiled arm; the linear arm (1577-1678) reads no source. **NOT CHECKABLE FROM PACKET: what the hardware does with SRC_BUF on a non-COPY transfer.** The single settling fact: an SGI CRIME/MTE manual statement, or the NetBSD crmfb driver source, on SRC_BUF semantics for fills.
+
+**5. Zeroed BYTEMASK reaches S5.** READ/REASONED: index arithmetic verified — BYTEMASK is `mte_reg[2]` both in `do_mte_transfer` ((0x3008-0x3000)/4) and in the caller (relative 0x0008 → regnr 2 → case 0x3008); guard `0 != 0xffffffff` fires. GIVEN section 6's init `memset` (the init code is not inlined; taken as the settled premise it is declared to be), the premise holds. Note the corollary the round must face: **the reset default is the most guest-reachable value at S5**, and no proposed row drives it (→ Q2, Q6).
+
+**6. No completion-status hang.** READ: 3c returns the constant `0x1E000000` (= IDLE|SETUP_IDLE|PIXPIPE_IDLE|MTE_IDLE — I re-derived the OR; it matches the witness's `devsig` row). REASONED framing: a decline introduces no *new* hang, because status is byte-identical whether the transfer proceeded, declined, or never ran. Out of packet: an interrupt-driven wait — but that would hang equally on HEAD after a *successful* transfer, so it is not decline-specific.
+
+Also verified in passing: all six witness MODE decodings against section 4 (0x600 = depth 2/STIPPLE/dst A/src A; 0x260 = depth 2/src 3; 0x810 = COPY+LIN_A+depth 0; 0x110 = LIN_A+depth 1; 0x010 = LIN_A+depth 0), and `MTEEXIT_RESULT=4/9` is consistent with four controls and five site rows.
+
+## Q2 — The smallest defect-bringing edit
+
+**At S5, split the decline on the reset default**: `if (bytemask != 0xffffffff) { if (bytemask == 0) { fatal(...); exit(1); } ...latched decline... } }`. One line of substance. Every proposed row stays green, enumerated: `bytemask lo`/`hi` drive 0xfffffffe and 0x7fffffff (correctly declined); the S5 surv/nowrite/once rows drive 0x0000ffff; `lin fill` drives 0xffffffff; no other row reaches S5 at all (stipple/src rows decline pre-switch; lin copy/lin depth decline at S3/S4 first). **The row I expect to stay green: `bytemask lo`** — 0xfffffffe is declined, survives, paint intact. The defect is maximal: process death for any guest that never writes BYTEMASK — per Q1.5 the *common* case. The rows undersample the producer's domain; the producer of a BYTEMASK value is also "a guest that wrote nothing."
+
+Runner-up, same family: share one latch bit across S3/S4/S5 (or reuse `SGIRE_W_BADMODE` — no enum edit at all). Per-site `once` rows each repeat *their own* site in a fresh session (the latch is per-instance and resets per process), so all five stay green while a session hitting two different unimplemented parameters sees only the first announced. Caught only by the two-different-sites row the table lacks.
+
+## Q3 — Option-set completeness
+
+- **Unnamed member: unlatched announce + decline** (`fatal(...); return;` — every occurrence). It is a real disposition the seven-member set omits; it is dominated by 3 here because a guest can re-fire transfers in a loop and this campaign already files unlatched fatal floods as rows (`mtetlbflood`).
+- **Second, unnamed: decline + modeled error status** (report the refusal through `CRIME_DE_STATUS` or an error register). A real design point, but no warrant in the packet for what hardware reports, and 3c's own TODO marks status simulation as unfinished business — set aside.
+- **Member 4 is live at exactly one place**: S2 scoped to fills (accept because the parameter is dead for the operation) — and it is not settleable from the packet (Q1.4). It is a separate row, not this round.
+- **Member 5 rightly excluded**, with the reason sharpened: faulting the *access* would reject the register write itself, which is implemented and legal — a worse, different defect. **Member 6 rightly excluded** (nothing is read back from a transfer).
+- I cannot grep the fork from this seat; the in-packet precedents (3d's complete example, dev_wdc.c's mutual-exclusivity rule as quoted, the 92-marker census) all support member 3 as the house shape. Whether *other* DMA engines add a precedent is not checkable from the packet.
+
+## Q4 — Q-a to Q-e
+
+**Q-a: member 1 is wrong.** At S4 the fill is `memset(zerobuf, bg, ...)` — at 16/32 bpp the destination gets bg's *low byte* repeated (0x11223344 → 0x44 bytes), silently after the latch. At S5 the loop applies no mask at all, so bytes the mask says to leave are written. At S1 stipple silently becomes solid. That is exactly the #509 defect shape (wrong-width write publishing wrong bytes) this campaign fixes. Note the `dst_y_step` "precedent" is itself this defect live in HEAD: the linear loop (1637-1677) never reads `dst_y_step`, so that site already announces-and-writes-approximately — it is a cautionary example, not a licence. "Untouched" beats "written approximately": the decline is observable once and fabricates nothing; the approximate write is silent after the latch and deterministically corrupts guest memory. Neither matches hardware; only one is contained.
+
+**Q-b: decline exactly what is refused today; file the narrowing separately.** The emulator-internal claim is verified (Q1.4). Extra, REASONED: S2 is coarser than the code's own capability — src=4 (LIN_A as source) is refused at 1504 although `horrible_getputpixel` implements linear-A source reads (3d case 4, lines 264-271), and src=3 would be declined per-pixel by the helper's own default arm anyway (3d) — so S2 is partly redundant and partly over-broad. That is evidence of over-breadth, not a hardware warrant. No warrant in packet → the conservative disposition is the guard verbatim; the COPY-scoping narrowing (which also makes the helper's case-4 path reachable from the MTE — a real functional change, not a harmless accept) is its own row. Consequence: the `src tex`/`src clip` rows encode this choice (they drive fills and expect decline) and must flip if the narrowing ever lands.
+
+**Q-c: no licence; member 7 is separate row(s).** S4 is a pattern-width change whose interaction with bytemask (per byte? per pixel?) is undefined without docs. S5 needs a read-merge-write, i.e. a TLB-gated *read* path the linear loop does not have — it only writes (1668). Nothing in the packet measures or transfers a warrant. The #509 comment's own "16-bit and reserved-3 cells not closed" shows the depth family has open landmines — more reason not to fold implementation in.
+
+**Q-d: five bits, guard-as-site — but say so and make it testable.** The argument for 5: the announce's information ("this feature is unimplemented") is label-invariant, and the natural unit is the guard — splitting S3 by destination label invites splitting S4 by depth value, which nobody proposes. The argument for 8: 3d's width comment treats *windows* as sites ("six different address windows... walked in ONE session"), splits LINA from LINB, and dev_wdc.c licenses sharing only across mutually exclusive sites — LIN_A and LIN_B transfers are not mutually exclusive. The packet does not settle which reading governs transfer-parameter guards. My endorsement: 5 bits (1<<13..1<<17), label-agnostic texts, Q-d's silence (LIN_B quiet after LIN_A) accepted *in writing*. Either choice needs a detector that can tell them apart — today none can (see Q6).
+
+**Q-e: nothing else should be skipped.** Between function top and the guards: `debug()` prints (verbosity-gated, no guest effect; S5 sits after the LINEAR debug at 1590 — harmless) and the `dst_y_step` unlatched fatal (1492), which will co-print on a declined transfer if a guest sets an odd step — pre-existing, its own row, not fixed here. The register store (1707) precedes the call and should stand: the access is legal, the *transfer* is declined. The caller's tail (1810-1813) is harmless for a START write (MEM_WRITE → no readback; `return 1`). Multi-guard transfers announce at the first failing guard only (S3→S4→S5 order preserved by the returns) — same first-exit-wins as HEAD.
+
+## Q5 — Round scope
+
+Yes, together, **conditional on Q-b's answer being "keep S2 unscoped."** Same device, same function, same semantic class (unsupported transfer parameter → decline before side effects), each site independently witnessed with per-site attribution, one fix shape, one probe. The #513 precedent supports multi-site rounds. If S2 is narrowed, it *changes transfer semantics* (fills that died now write memory) — a different class from decline-only — and must leave the round.
+
+## Q6 — Detector audit, per row
+
+- `<site> surv`: channel varies (process ends under reinstated exit) ✓.
+- `<site> nowrite`: channel varies (paint overwritten under member 1) ✓ — and note under member 1 at S4/S5 the fill writes *more* than the correct behavior would (mask ignored), so the paint channel still moves. Requires the probe to program the destination the transfer writes (tiled tile page / linear TLB entry) — stated, and the mechanics exist (`sgi_mte_fill_probe.py` for tiled; the `re_linear_*` registers are programmaple through the RE window).
+- `<site> once`: varies for a missing latch or missing announce (same site) ✓. **Does not vary for a bit shared across sites or across labels** (each row repeats one site, fresh session). **Blind to `return` moved inside the latch** — text count stays one while transfer 2 writes; needs the paint check after transfer 2. Two real gaps.
+- `lin b <site>`: varies for a LIN_A-conditioned repair (the transfer proceeds at LIN_B → paint moves) ✓. Does not observe the announce, so it cannot pin Q-d's choice — add announce presence per the chosen granularity.
+- `src c fill` / `src tex` / `src clip`: boundaries vary ✓ (I checked `>=`, `> 3`, `> 6`, and single-value mutants against {2, 3, 6} — all caught). **Gap: every src row drives a fill; none drives COPY with src>2**, so S2's active side is untested under either Q-b disposition. Add one row.
+- `bytemask lo`/`hi`: vary under narrowed compares ✓. **Missing bound: 0x00000000** — the reset default, the value an unwriting producer emits. This is change 1.
+- `depth 16/32/64`: vary ✓, and this family is the one domain-complete axis (fields 0-3 all driven: 0 via `lin fill`, 1/2/3 here — including the reserved encoding).
+- `lin fill`/`lin b fill`: vary under guard growth ✓ (accept side).
+- Controls ✓; clause (c) honestly deferred to measurement.
+
+Direct answer to the asked floor cells: the destination-label axis is covered for S3-S5 by the `lin b` rows but **not for S1/S2**, which fire pre-switch for *any* destination — a repair that scopes STIPPLE or the src check into the tiled cases escapes every row (change 5). S2's bounds are covered on the fill side only (change 4). S5's missing bound is 0 (change 1). Clause (c)'s null-medium leg is fine as an intended measurement.
+
+## Also found
+
+- The `dst_y_step` site (1491-1494) is member-1-shaped **today**: the linear loop never reads `dst_y_step`, so HEAD already announces-and-writes-approximately there. When `mtetlbflood`'s round comes, it deserves the same member-3-vs-1 scrutiny, not a rubber stamp from its "precedent" status.
+- `devsig` 0x1E000000 re-derived from the four constants — the witness output is internally consistent everywhere I could check it.
+- Process claims not checkable from this seat (md5s, the archive copies, the uncommitted-edit list) — none touch the design; taken as stated.

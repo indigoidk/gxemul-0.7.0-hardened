@@ -1,0 +1,100 @@
+PRETABLE -- #564 sgirekills (MTE half), detector regress/sgi_mte_decline_probe.py, md5 8d625289: HEAD 8/53, the fix
+53/53, one instrument for both (detector_564_20261017/probe_HEAD_2951694f.out, probe_FIX_564.out).  Its first draft,
+md5 ceed62be, compared sign-extended `lw' results against the 32-bit paint and read every kept paint as written;
+those runs are preserved as *.v1_signext.out.  This block was
+written 2026-10-17 BEFORE kill table 1.  The fix: regress/../src/devices/dev_sgi_re.c md5 1d65cdc1 (HEAD 60203f67).
+Mutant list: mutants_564.py beside this file (34 one-edit mutants of the fixed file, each with its predicted catchers).
+
+== 1. SIBLING PARITY (each de-fatalised arm against its nearest sibling)
+S1 vs S2: both sit before the destination switch and refuse for every destination; both carry the same three channels
+  (survival, paint at a destination the transfer WOULD write, the announce count).  S1 is rowed at tiled A/B/C, tiled A
+  COPY, LIN_A, LIN_B; S2 at tiled A fill for every refused src {3,4,5,6,7}, tiled A COPY (src 3), LIN_A (src 3).
+  ASYMMETRY, deliberate: S2 is not rowed at tiled B/C -- its predicate reads `src', not the destination, and a
+  destination-scoped S2 mutant is caught at LIN_A (`src 3 lin', mutant s2tiled); S1 at tiled B/C exists because the
+  witness seats asked for the destination axis at the pre-switch sites.  OWED: none.
+S3 vs S4 vs S5: all three sit in the block serving MTE_TLB_LIN_A and MTE_TLB_LIN_B; each is rowed at BOTH labels
+  (copy lin a/b; depth a/b x 16/32/64; mask at LIN_A plus `mask lin b').  Parity holds.
+The tree's own sibling disposition (`dst_y_step' fatal with the exit commented out; the `default:' dst arm) is NOT
+  this round's (rows mtetlbflood, sgimtetlbdefault) and gets no rows.
+
+== 2. CLAIM -> ROW (every ADDED comment sentence asserting an observable consequence)
+"The decline returns before any TRANSFER data is written"          -> every `* paint kept' row, and `latch paint'.
+"the register store that carried START has already landed ... and stays" -> no row: the MTE register file is not read
+  back by any row after a START (a register round-trip WITHOUT START is `mode rt'); disclosed, not claimed.
+"the caller's common tail still answers"                           -> `after status' (a read after a decline answers
+  0x1e000000) and every `*surv' row (a RAM load after the decline returns its value).
+"Each site has its own latch bit"                                  -> `latch texts' (five distinct texts once each).
+"the `return' is OUTSIDE the latch, so every refused transfer is refused and only the announcement is once"
+                                                                   -> `latch paint' (the repeat of S1), and each site
+  session's second and later refusals (stip b/c/..., src 4..7, depth *, mask *).
+"Each old message's key phrase is kept in the new one"            -> the HEAD witness re-run post-fix (its attribution
+  needles are the old phrases) -- witness_FIX_564.out; no probe row.
+"kept as `src > MTE_TLB_C' for fills AND copies"                  -> src 3..7 fill rows, `src 3 copy', `src c fill',
+  `src c copy'.
+"BYTEMASK is zeroed at init, so a guest that never stores it reaches this decline" -> `mask unwritten'.
+The enum's "THE NEXT FREE BIT IS 1 << 18 ..." -> no row: a maintenance claim, not an observable.
+
+== 3. GUARD FIELD vs BODY FIELD, and the partition each body induces
+S1  guard reads `mode' (bit 0x400).  Body reads `d->warned' (bit SGIRE_W_MTE_STIPPLE) and `mode' (printed).
+    Partition of mode at the guard: {STIPPLE clear, STIPPLE set}.  EXHAUSTED (both cells rowed: every accept row has it
+    clear).  `dst_tlb' is NOT read by the guard; it is crossed anyway (tiled A/B/C, COPY, LIN_A/B) because a repair
+    scoped by destination is the plausible one-token edit (s1tiled, s1copy).
+S2  guard reads `src' = (mode & 0xe0) >> 5, domain {0..7}.  Partition: {0,1,2} accept / {3..7} refuse.  EXHAUSTED on
+    the refuse side (3,4,5,6,7 each a row) and at the bound on the accept side (2 = MTE_TLB_C, fill and copy); 0 and 1
+    are SAMPLED by every other row (src 0).  Edges per rule D2: 2 (at the bound, accepted) and 3 (one past).
+S3  guard reads `mode' bit 0x800 inside the LIN block.  Partition: {COPY clear, set} x labels {LIN_A, LIN_B}.  EXHAUSTED.
+S4  guard reads `depth' = 8 << field, domain {8,16,32,64}.  Partition {8} / {16,32,64}, x labels.  EXHAUSTED (all four
+    values at LIN_A, all four at LIN_B: 8 via `lin fill b').
+S5  guard reads `bytemask' (32 bits).  Partition {0xffffffff} / everything else, x labels.  The refused side is SAMPLED:
+    0 (never stored), 0x0000ffff, 0xfffffffe, 0x7fffffff, and all 32 single-zero masks (one row, `mask sweep');
+    multi-zero masks beyond those are disclosed (contract).
+Latch field `d->warned': a SHARED bitfield.  Who else writes it?  `grep -c "d->warned |=" dev_sgi_re.c' at the fix:
+    the 13 pre-existing sites plus the five new ones (MEASURED: HEAD 13, the fix 18); most pre-existing bits are set by ordinary RE register traffic
+    (width declines), so the rows that read the latch drive one pre-existing bit (SGIRE_W_TLBA_LEN, by a 4-byte store
+    to CRIME_RE_TLB_A) before the new sites and again after them (`latch old bit').
+
+== 4. CHANNEL -- per row, the mutant it is meant to catch and the observable that differs under it
+controls  live / devsig / mode rt                -- none (bootstrap); a dead session reds `live'.
+stip a, b, c, copy, lin a, lin b                 -- b1 (session dies), d1 (paint written), r1 (b..lin b written: second
+                                                    and later refusals), s1copy (copy), s1tiled (lin a/b).  Paint read
+                                                    from a destination the transfer writes: tiled tile 0x8002 -> phys
+                                                    0x20000; linear page 0x30 mapped in ONLY the array the arm reads.
+stip surv                                        -- b1 (the RAM load after six refusals never returns).
+stip once                                        -- a missing latch (count 6) or a missing announce (count 0).
+src 3..7                                         -- b2, d2 (the tiled fill lands), s2up (3), s2no7 (7), s2copy (all).
+src 3 copy                                       -- b2, d2 (the tiled COPY lands the source byte), s2up.
+src 3 lin                                        -- d2, s2tiled, s2copy (the linear fill lands 0x44444444).
+src c fill / src c copy (ACCEPT)                 -- s2down (the bound value refused: paint kept / 0x99 not 0x1a).
+copy lin a / copy lin b                          -- b3, d3 (the linear arm runs as a fill: 0x44444444), s3laba (b only).
+depth a/b 16/32/64                               -- b4, d4, s4one (32, 64), s4laba (b *).
+mask unwritten                                   -- d5, b5, s5zero (the fill lands with BYTEMASK 0).
+mask 0000ffff / fffffffe / 7fffffff / sweep / lin b -- d5, b5, r5 (later refusals), s5low (7fffffff, sweep),
+                                                    s5hi (fffffffe, sweep), s5inner (sweep ONLY), s5laba (lin b).
+lin fill a / b / ecc (ACCEPT)                    -- s4grow (lin fill b), eccgrow (lin fill ecc): the fill refused, so
+                                                    the paint stays where 0x44444444 is wanted.
+tile mask / tile copy mask (ACCEPT)              -- s5hoist (a bytemask refusal hoisted out of the linear branch
+                                                    refuses the tiled transfers).
+latch paint                                      -- r1 (the repeated S1 lands).
+latch texts                                      -- shared (S2 silent after S1: 1/0/1/1/1), wrongbit (S5 silent after
+                                                    S4), assign (S1 re-announces on the repeat: 2/...).
+latch old bit                                    -- assign (`d->warned = X' clears SGIRE_W_TLBA_LEN, so the second
+                                                    4-byte store announces again: 2).
+after fill / after status                        -- b1 (the session ends at the decline); after fill also catches a
+                                                    decline that leaves the engine refusing everything (no mutant
+                                                    rowed for that shape -- disclosed).
+
+CHANNEL check, asked by the carrier of the first mandated application: is each row's channel knowable at WRITING
+time?  Yes for every row above EXCEPT one, stated before the table: `after status' cannot vary under any mutant in
+the list (the status handler is a constant), so it is a CONTROL, not a detector row -- it pins the claim "a guest
+polling after a decline is not held", and only a mutant of sgi_de_status (out of scope) could red it.
+
+== 5. CLAUSE (c) -- the null medium
+A non-emulator binary (`/bin/true') in place of gxemul: every session dies at once; predicted 0/53 (no row reads a
+value from a dead session; the `once' rows require a live session).  MEASURED in this table as `null', not claimed.
+
+== 6. THE (d) DEPENDS-ON enumeration (bounded to the enclosing function, do_mte_transfer)
+Predicates dominating the edited lines: S1 (mode & STIPPLE); S2 (src > C); the switch labels LIN_A/LIN_B for S3-S5;
+S3 (mode & COPY); S4 (depth != 8); S5 (bytemask != all ones).  Each is weakened in the list: s1copy, s1tiled; s2up,
+s2down, s2no7, s2copy, s2tiled; s3laba; s4one, s4laba; s5zero, s5low, s5hi, s5inner, s5laba.  The decline body reads
+`d->warned' only, so the operand-swap form is the latch mutants (shared, assign, nolatch, wrongbit).  The repair
+itself (`return') is nulled in d1-d5 and moved in r1, r5.

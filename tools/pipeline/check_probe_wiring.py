@@ -3081,6 +3081,33 @@ MANIFEST = {
         (CLASS_RESEARCH, "cxlaunch landing: the v7 contract's two escape disclosures, measured over census_v5.py's scope, preserved as evidence"),
     "artifacts/cxlaunchland_20261016/v6pass/main_meas/nul_blocks.py":
         (CLASS_RESEARCH, "cxlaunch landing: the count of NUL-bearing codex header blocks on record, by the landed rule, preserved as evidence"),
+    #  #564 sgirekills, the MTE half (2026-10-17/18): do_mte_transfer()'s five exits become latched declines.  ONE new
+    #  DETECTOR (wired into gate_arm.sh in the same commit), the rung-3 WITNESS, and the three kill tables' mutant writers,
+    #  summarizers and the review packets' table generators (TOOL), and two preserved instruments (RESEARCH).
+    "sgi_mte_decline_probe.py":
+        (CLASS_DETECTOR, "#564 sgi_mte five-site latched decline -- 68 rows, wired into gate_arm.sh (HEAD 2951694f 10/68, the fix 68/68; kill tables 34/34, 2/2, 29/29)"),
+    "artifacts/sgirekills/witness_20261017/sgi_mte_exit_witness.py":
+        (CLASS_WITNESS, "#564 rung-3 witness: the five do_mte_transfer() exits on unmodified -E sgi -e ip32 -- 4/9 on HEAD 2951694f, 9/9 fixed"),
+    "artifacts/sgirekills/killtable_564_20261017/mutants_564.py":
+        (CLASS_TOOL, "#564 kill table 1's mutant writer: 34 one-edit mutants of the fixed dev_sgi_re.c, each with its predicted catchers"),
+    "artifacts/sgirekills/killtable_564_20261017/mutants_564b.py":
+        (CLASS_TOOL, "#564 kill table 2's mutant writer: the S1 and S3 accept-side growth mutants table 1 lacked"),
+    "artifacts/sgirekills/killtable_564_20261017/summarize_564.py":
+        (CLASS_TOOL, "#564 kill table 1's summarizer (KILLTABLE.txt from raw/)"),
+    "artifacts/sgirekills/killtable_564_20261017/summarize_564b.py":
+        (CLASS_TOOL, "#564 kill table 2's summarizer (KILLTABLE2.txt from raw2/)"),
+    "artifacts/sgirekills/killtable_564_20261017/sgi_mte_decline_probe.tabled.py":
+        (CLASS_RESEARCH, "#564 the instrument kill table 1 scored (md5 8d625289, 14-column names), preserved as evidence"),
+    "artifacts/sgirekills/pass2_564_20261017/p2_tables.py":
+        (CLASS_TOOL, "#564 pass-2 packet's table generator: the shipped-instrument join and the per-row never-red table, from the logs"),
+    "artifacts/sgirekills/killtable3_564_20261017/mutants_564c.py":
+        (CLASS_TOOL, "#564 kill table 3's mutant writer: the 20 label x latch exemptions of S1/S2, five latch aliases, four label growths"),
+    "artifacts/sgirekills/killtable3_564_20261017/summarize_564c.py":
+        (CLASS_TOOL, "#564 kill table 3's summarizer (KILLTABLE3.txt from raw3/, with the HEAD leg)"),
+    "artifacts/sgirekills/pass3_564_20261018/p3_tables.py":
+        (CLASS_TOOL, "#564 pass-3 packet's per-row catcher table, computed from kill table 3's logs"),
+    "artifacts/sgirekills/pass3_564_20261018/sgi_mte_decline_probe.pass2_86caed24.py":
+        (CLASS_RESEARCH, "#564 the 53-row detector as pass 2 reviewed it (md5 86caed24), preserved as the base of the repair diff"),
 }
 
 #  DATED, NAMED DEBT -- not a count and not a silent allowlist.  gate_offline.sh MEASURED that

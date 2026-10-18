@@ -24860,3 +24860,26 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   WALLED`) and the `codex rc=` line's numbers -- each LISTED decision pinned by named rows and mutants or disclosed with
   its reason; briefs, tags and out-dir states are SAMPLED, not exhausted (`regress/artifacts/cxlaunchland_20261016/KILLTABLE_v7.txt`; `regress/artifacts/cxlaunchland_20261016/CENSUS_v5.txt` names the
   on-record count behind each synthetic codex-output row).
+
+### 2026-10-18 -- `#564`: do_mte_transfer()'s five exits decline and announce once (`sgirekills` closed); five rows filed
+
+* **`sgirekills` CLOSED by `#564`** -- the MTE half: S1-S5 now decline with a latched announcement, one bit per site;
+  detector `regress/sgi_mte_decline_probe.py` (68 rows, in `gate_arm.sh`); kill tables 34/34, 2/2, 29/29; three passes,
+  the chain closed on pass 3 with the out-of-floor cells disclosed.  The CHANGELOG's `#564` block is the record.
+* **`mtestartread` (LOW, open)** -- `DEVICE_ACCESS(sgi_mte)` runs the transfer on a START-tagged READ as well as a write
+  (`if (startFlag) do_mte_transfer(cpu, d);` tests no `writeflag`).  Hardware question; no row drives a read.
+* **`mtesrcfill` (LOW, open)** -- S2 refuses a FILL whose SRC_BUF field is past `MTE_TLB_C`, though a fill never reads the
+  source; narrowing S2 to COPY needs a hardware warrant (`#564`'s pass-1 ruling kept it for both).
+* **`mteimplement` (LOW, open)** -- linear transfers at a depth other than 8, or with a partial BYTEMASK, are declined
+  (`#564`); implementing them is feature work and must re-score the probe's depth and mask rows.
+* **`sgimteystep` (LOW, open)** -- a `dst_y_step` other than 0/1/-1 prints an unlatched `fatal()` on every transfer (no
+  newline) and the step is then ignored; the flood class, beside the `dst_tlb` default arm (`mtetlbflood`,
+  `sgimtetlbdefault`).  From a Gemini 4 Argon reading on `#564`'s pass 2, checked in the source.
+* **`mtedeclinecov` (LOW, open)** -- the probe's clause-(e) coverage debt, each a one-cell edit that keeps all 68 rows
+  green: S1/S2 grown at B, C or LIN_B only once their own latch is SET; S5 grown after its own decline; S3-S5 narrowed
+  or grown at one linear label in one latch state (all three groups ruled OUTSIDE the floor, unanimously,
+  `regress/artifacts/sgirekills/f2b_564_20261018/`); source 1 never driven; the refused sources 4-7 driven only with
+  S2's latch SET, a COPY only from source 3; multi-zero masks sampled.  Ranked below live defects.
+* **`sgirexbit12`** (the item above, "tex xbit does not prime SGIRE_W_BADCOLOR") -- `#564` added five more latch bits
+  (`SGIRE_W_MTE_STIPPLE` .. `SGIRE_W_MTE_BYTEMASK`, `1 << 13` .. `1 << 17`) that `tex xbit` does not prime either.
+  `#564`'s own probe covers the other direction -- a new bit aliased onto bits 0-12 -- with its crossbit session.

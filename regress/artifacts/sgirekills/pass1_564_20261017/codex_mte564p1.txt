@@ -1,0 +1,128 @@
+ASTRA_MTE564P1_20261017
+VERDICT: PROCEED WITH CHANGES (4)
+
+**Q1 — Premise audit**
+
+The four changes are: **C1**, qualify the behavioral contract and option-set claims; **C2**, strengthen latch tests; **C3**, prove writable fixtures and destination coverage; **C4**, complete boundary and acceptance tests. Keep member 3 at all five sites, preserving their predicates and order.
+
+I checked the allowed source file; its MD5 is `60203f67973c303d09cf381181e7412f`, matching the packet. Paths below are relative to `GXEMUL-SEC`. I did not inspect the witness artifacts or rerun the reported measurements.
+
+1. **Census confirmed.** After stripping comments and literals, the executable `exit(` calls are at `src/devices/dev_sgi_re.c:1498`, `:1506`, `:1582`, `:1587`, `:1598`, and `:1720`. The last is unreachable because its preceding conditions are exact complements: `len == 4` and `len != 4` (`:1705`, `:1710`). The other five are reachable with the supplied register settings.
+
+2. **The reported attribution is sufficient for these HEAD paths.** The five diagnostic strings are distinct, and each immediately precedes its own exit. Independently decoding the supplied modes gives:
+
+   | Row | Source | Destination | Depth | COPY | First terminating guard |
+   |---|---|---|---:|---|---|
+   | stipple | A | A | 32 | clear | S1 |
+   | src tex | TEX | A | 32 | clear | S2 |
+   | lin copy | A | LIN_A | 8 | set | S3 |
+   | lin depth | A | LIN_A | 16 | clear | S4 |
+   | bytemask | A | LIN_A | 8 | clear | S5 |
+   | lin fill | A | LIN_A | 8 | clear | none |
+
+   The masks supplied for the last four rows establish the stated distinction. An earlier terminating guard could not execute and then reach the intended diagnostic. Thus death plus the unique intended text supports the attribution; death alone would not. This validates the packet’s interpretation of its transcript, not independently its execution history.
+
+   I also enumerated the extraction results: source and destination each produce `{0,1,2,3,4,5,6,7}`; depth fields produce `{0,1,2,3}`, yielding `{8,16,32,64}`. Encoding 3 has no named depth constant. Sources: `src/include/thirdparty/crmfbreg.h:256`, `:265`, `:267`; extraction at `src/devices/dev_sgi_re.c:1479`.
+
+3. **Confirmed for transfer-generated guest-memory writes, not literally every memory write.** S1/S2 precede the destination switch; S3–S5 precede the linear `memset` and DMA writes. The tiled PUT is at `src/devices/dev_sgi_re.c:1570`, and linear writes at `:1668`. However, the triggering register store has already updated `mte_reg[]` (`:1707`), and the proposed warning latch updates device state. **C1:** promise “no transfer data writes,” while preserving register programming and diagnostics.
+
+4. **The source-data claim is correct; “never reads the source selector” is too broad.** The function extracts and checks that selector even for fills (`src/devices/dev_sgi_re.c:1480`, `:1501`, `:1504`) and constructs `src_mode` (`:1533`). Only COPY passes it to a source-memory GET (`:1564`). A fill does not fetch source data. This does not establish hardware acceptance of every unused source encoding.
+
+5. **Zeroed BYTEMASK confirmed, with the earlier-guard qualification.** `mte_reg[]` belongs to the structure zeroed at initialization (`src/devices/dev_sgi_re.c:186`, `:848`). A linear fill that passes S1–S4 and never programs BYTEMASK therefore reaches S5 with zero.
+
+6. **Idle-status polling cannot be held busy by this decline.** The status handler always returns the four idle bits, `0x1e000000` (`src/devices/dev_sgi_re.c:1844`). The caller still executes its common tail and returns success (`:1807`). **C1:** this is not a guarantee that every guest progresses: software could wait for destination data that the declined transfer never produces.
+
+**Q3 — Option-set completeness**
+
+The set omits **device-level error completion or command abort, potentially with a defined interrupt**. That differs from treating an MMIO address as unmapped:
+
+- Unsupported ASC commands set interrupt and illegal-command state (`src/devices/dev_asc.c:1490`, `:1501`).
+- Unsupported WDC commands set `WDCE_ABRT` and assert completion independently of the diagnostic latch (`src/devices/dev_wdc.c:1155`).
+- PVR DMA supplies a direct refusal precedent: unsupported resource selection diagnoses and returns (`src/devices/dev_pvr.c:311`).
+
+Stopping the emulated CPU is another existing policy (`src/devices/dev_mb89352.c:527`), but would undermine this round’s continuation objective.
+
+None establishes an MTE error encoding or interrupt response for these cases. **C1:** acknowledge error completion as an alternative, then reject inventing it without an MTE-specific warrant.
+
+The argument excluding ACCEPT merely because this is a transfer is also too strong: acceptance applies to commands and writes. Nevertheless, no supplied evidence establishes correct execution for these rejected classes. S2 fills are a plausible acceptance candidate, subject to Q4-b. Fabricated backing does not supply missing transfer semantics. Mappedness alone does not logically exclude a hardware-defined bus fault, but there is no warrant here for introducing one.
+
+**Q4 — Q-a through Q-e**
+
+**Q-a.** Delete-only is wrong as the general repair. It ignores stippling, turns linear COPY into fill, repeats BG’s low byte for unsupported linear depths, and disregards the byte mask (`src/devices/dev_sgi_re.c:1580`, `:1637`). For unsupported tiled COPY sources, a declined helper GET can leave `bg` unchanged while the caller still performs its dependent PUT (`:308`, `:1564`, `:1570`).
+
+Leaving the destination untouched is preferable as a bounded emulator refusal: it avoids fabricating transfer results and preserves recoverable contents. It is not a claim of hardware fidelity or universally better guest behavior.
+
+**Q-b.** **Keep S2 unchanged this round.** The header says COPY clear means “clear dst” (`src/include/thirdparty/crmfbreg.h:273`), and the implementation proves source data is unused. Neither establishes that hardware skips validation of SRC_BUF during fill, especially reserved encoding 7. I found no explicit warrant in the allowed material for accepting all five currently refused source values during fills.
+
+**Q-c.** IMPLEMENT belongs in a separate row. The packet establishes termination, not correct wider-pattern or byte-mask semantics. Pattern alignment, byte ordering, mask interpretation, and whether read-merge-write is appropriate remain unestablished. A familiar implementation technique is not a transferred warrant.
+
+**Q-d.** **One bit per site per device instance.** LIN_A and LIN_B encounter the same unsupported feature at S3–S5; suppressing the second diagnostic is consistent with that policy. Their transfer refusal must still occur every time.
+
+The existing bit indices enumerate as `0` through `12`; proposed indices `13,14,15,16,17` are free. Their values are `0x2000,0x4000,0x8000,0x10000,0x20000`. Move the last-enumerator comment and make its next-free index **18** (`src/devices/dev_sgi_re.c:165`, `:203`).
+
+**Q-e.** No preceding transfer data write needs rollback. There are local calculations, debug output, and potentially the unsupported-`dst_y_step` diagnostic (`src/devices/dev_sgi_re.c:1484`, `:1491`, `:1590`). The caller’s register update is intentional and should remain.
+
+Put the unconditional `return` **outside** the warning-latch condition. The preexisting unlatched diagnostics mean this change bounds these five announcements, not every possible MTE message.
+
+**Q5 — Round scope**
+
+**Yes, all five qualify together**, taking the supplied five attributed reproductions as evidence. They are in the same device, reject unsupported transfer parameters before data movement, and admit one implementation pattern and the same survival/diagnostic/paint observables.
+
+Different mapping setup for tiled and linear destinations does not require a new oracle.
+
+If S2 were narrowed to COPY, its remaining rejection would still belong to this class, but the change would additionally accept formerly refused fills. That requires separate behavioral justification and positive fill coverage. The existing death reproductions alone do not authorize that semantic expansion.
+
+**Q6 — Test review**
+
+The proposed observables can discriminate as follows:
+
+| Proposed rows | Assessment |
+|---|---|
+| Five `<site> surv` | Yes: require actual guest execution and the expected RAM round-trip after START. Process existence alone is insufficient. |
+| Five `<site> nowrite` | Yes, provided the destination is mapped, the transfer is nonempty, and continuing would change the sampled paint. |
+| Five `<site> once` | Detect missing announcements and missing suppression. **Do not detect shared bits in isolated sessions.** Counting text also misses a return incorrectly placed inside the latch. |
+| Three `lin b <site>` | Paint distinguishes fall-through; survival distinguishes reinstated exits. Survival alone cannot detect an A-only return repair. |
+| `src c fill` | Correctly distinguishes `> C` from `>= C`: the legal fill must land. It does not exercise a source fetch. |
+| `src tex` / `src clip` | TEX=3 distinguishes `>2` from `>3`. CLIP=6 does **not** distinguish that particular mutation, since both predicates reject 6. |
+| `lin fill`, `lin b fill` | Useful acceptance controls, provided they verify changed memory through their respective mappings. |
+| `bytemask lo`, `bytemask hi` | Useful complementary tests. `7fffffff` catches low-16/low-8-only comparisons; `fffffffe` still declines under those comparisons and instead catches checks that ignore its low bit. |
+| `depth 16/32/64` | All distinguish a restriction to one rejected depth, with COPY clear, valid source, and full BYTEMASK. |
+| `live`, `devsig`, `mode rt` | Useful bootstrap controls. A register round-trip without START does not establish transfer execution. |
+
+**C2 — Make latch behavior observable.**
+
+- Check paint and continued execution after **both** repeated transfers. Otherwise, a return inside the latch rejects the first request and writes on the second while still logging exactly once.
+- Exercise S1→S2→S3→S4→S5→S1 in one instance, requiring each diagnostic exactly once. This detects shared new bits and assignment that clears earlier warning bits.
+- Prime and verify all existing warning sites before exercising the new ones. The existing priming recipe covers bits 0–11; its bad-color operation supplies bit 12 (`regress/sgi_re_colourdefault_probe.py:357`, `:391`).
+- Vary rejected values and alternate LIN_A/LIN_B within repeated-site tests. Identical repetitions cannot distinguish per-site suppression from unnecessarily finer suppression.
+
+**C3 — Prove mapping and label coverage.**
+
+For each fixture, establish that a corresponding supported transfer changes the same destination. In particular, configure only the selected linear array; configuring both identically could conceal incorrect array selection (`src/devices/dev_sgi_re.c:1654`).
+
+A concrete linear fixture is:
+
+- Physical destination `0x20000..0x20003`, painted `0x99999999`.
+- Selected linear entry `0x80000020`, installed by an aligned 64-bit register write.
+- BG=`0x11223344`, depth 8, full BYTEMASK.
+- Legal transfer produces `0x44444444`; declined transfer preserves paint.
+
+Register packing is established at `src/devices/dev_sgi_re.c:705` and `:784`; fill and matching at `:1637` and `:1658`. The tiled fixture already has usable packing in `regress/sgi_mte_fill_probe.py:296`.
+
+Cover S1/S2 beyond tiled-A fill: tiled B/C, both linear destinations, and COPY where applicable. Cross S4’s rejected depths and S5’s mask tests with both linear labels. A single LIN_B depth-16 row does not cover its other depth cells.
+
+Destination encodings `{3,6,7}` already reach a default arm that writes nothing (`src/devices/dev_sgi_re.c:1679`). Paint there cannot detect a missing S1/S2 return; use diagnostic precedence or explicitly disclose that limitation.
+
+**C4 — Complete boundaries and accepted-path protection.**
+
+- Enumerate S2’s small source domain: accepted `{0,1,2}`, rejected `{3,4,5,6,7}`. Test rejected sources under COPY as well as fill. Include a real accepted COPY at source C.
+- Add supported tiled COPY and tiled fill controls with non-full BYTEMASK. These catch accidentally moving the linear COPY/BYTEMASK restrictions outside their branch. A suitable COPY fixture already exists at `regress/sgi_mte_fill_probe.py:329`.
+- Add an unwritten-BYTEMASK row. Explicitly writing `0000ffff` does not test the reset-zero premise.
+- Full BYTEMASK is the sole accepted value. The proposed endpoint masks do not cover arbitrary ignored interior bits. Enumerating the 32 single-zero masks, `ffffffff ^ (1u << b)` for `b=0..31`, closes that specific omission family. Retain the full-mask acceptance control.
+- Follow a decline with a supported transfer and a status read in the same instance, checking that the next transfer lands and status remains `0x1e000000`.
+
+Measure the null-medium leg as proposed, and make missing output, failed startup, and absent post-START observations explicit failures. I did not inspect `gate_arm.sh`, which is outside the allowed reading scope, or execute probes.
+
+**Additional finding:** START is tested without checking `writeflag`; a read through a START-tagged address also invokes the transfer (`src/devices/dev_sgi_re.c:1807`). The write witness remains valid, but the trigger description is narrower than the implementation. Keep that separate from this repair.
+
+No files were written.

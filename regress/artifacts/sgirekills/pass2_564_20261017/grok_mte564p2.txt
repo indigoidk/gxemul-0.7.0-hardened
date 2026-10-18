@@ -1,0 +1,73 @@
+The brief's premises get checked against the tree, not re-derived from the brief. I'll start with the fix, the latch enum, and the detector's constants.GROK_MTE564P2_20261017
+
+VERDICT: SHIP WITH CHANGES (2)
+
+The five declines match the pass-1 design. The detector does not. Two one-edit mutants leave all 53 rows green.
+
+## Q1
+
+1. **Yes.** Each `return` sits after the latch brace and before any guest write. The writes in this function are `horrible_getputpixel` (tiled arm, `dev_sgi_re.c:1600`) and `memory_rw` (linear arm, `:1721`). The five returns are `:1527`, `:1542`, `:1623`, `:1633`, `:1651`. S1 and S2 return before `switch (dst_tlb)` at `:1545`. S3, S4, and S5 return inside the linear arm, before `memset` at `:1690`. `debug()` at `:1636` runs before S5 and only prints (`debugmsg.c:365-380`).
+
+2. **Yes.** The enum is `1 << 0` through `1 << 12` for the thirteen old bits (`dev_sgi_re.c:69-170`) and `1 << 13` through `1 << 17` for the five new ones (`:182-186`). No value repeats. `warned` is `uint32_t` (`:220`), so bit 17 fits. The live sentence at `:178` ("THE NEXT FREE BIT IS 1 << 18, AND THIS IS THE LAST ENUMERATOR") is true. The BADCOLOR comment quotes the old ending and says those bits were added below it (`:165-169`); that quotation is accurate, and the live claim is the one on the last enumerator.
+
+3. **Yes.** The witness needles are the old phrases (`regress/artifacts/sgirekills/witness_20261017/sgi_mte_exit_witness.py:151-156`), and each new `fatal` still contains its phrase. S5 at HEAD was `fatal("unimplemented MTE bytemask 0x%08x\n", ...)`. The new text is `"[ sgi_mte: unimplemented MTE bytemask 0x%08x ... -- transfer declined (once) ]"` (`dev_sgi_re.c:1647-1649`), so the bracket prefix is new. `witness_FIX_564.out` is `MTEEXIT_RESULT=9/9` with "own text PRESENT" on all five; HEAD is `4/9`.
+
+4. **Yes, for the mutants that were run.** All 36 table-1 logs (`raw/*.out`, 34 mutants plus base and null) and all 4 table-2 logs end in `MTEDECL_DONE`. Scores match `KILLTABLE.txt` and `KILLTABLE2.txt`: base `53/53`, null `0/53`, `34/34` and `2/2` killed. The red rows match the edits. `s2tiled.out` reddens only `src 3 lin`. `d1.out` turns `stip b`, `stip c`, and `stip lin b` into `written`. I did not rebuild the 36 binaries this sitting.
+
+5. **Yes.** The block is at column 0, after the width probe's `fi` (`regress/gate_arm.sh:1472-1507`). I counted 53 names in the `for v` list and 53 `row()` calls; the names are the same list. The longest are `mask unwritten` and `tile copy mask`, 14 characters, in a `%-16s` field (`sgi_mte_decline_probe.py:61`). The shipped log shows three spaces after `mask unwritten` before `paint kept` (`probe_FIX_564_shipped.out:38`). `count()` is `grep -ac` (`regress/lib.sh:326-330`), BRE, so `.*` and `$` work, and no name contains a metacharacter. `^stip c  ` does not match `stip copy` (the next character is `o`). The two denominators are arithmetic equality to `53`.
+
+## Q2
+
+Smallest edit, one character, in the enumerator:
+
+```c
+SGIRE_W_MTE_STIPPLE = 1 << 10,
+```
+
+`1 << 10` is already `SGIRE_W_BADMODE` (`dev_sgi_re.c:139`). A duplicate enumerator is legal and silent; this file says so at `:97-98`. `MTE_MODE_STIPPLE` is `0x400` (`crmfbreg.h:272`), the same bit. The decline still returns, so nothing is written, and a stipple-only session still announces once. The missing announcement shows up when anything has already set `SGIRE_W_BADMODE`: the stipple message never fires. The probe never enters `horrible_getputpixel`'s `default` arm (`dev_sgi_re.c:289-325`); tiled accepts use `tlb_mode` 0–2. So bit 10 stays clear for the whole instrument. `latch texts` stays `1/1/1/1/1`. The same one-character shape aliases `SGIRE_W_MTE_COPY` (`1 << 15`) onto `SGIRE_W_TEX_RD` (`1 << 11`), and `MTE_MODE_COPY` is `0x800`.
+
+The row that stays green is `latch texts`. It catches sharing with a bit this session sets (`shared` aliases S2 onto bit 13, and S1 has already set it). It does not catch sharing with a bit the session never sets. The session primes only `SGIRE_W_TLBA_LEN`.
+
+Clause (d) also sweeps, on a different edit. S2's `return` skips `switch (dst_tlb)`. The arms that write are `MTE_TLB_A/B/C` and `MTE_TLB_LIN_A/B` (`crmfbreg.h:257-262`). Rows drive S2 only at A and LIN_A. This stays 53/53:
+
+```c
+if (src > MTE_TLB_C && dst_tlb != MTE_TLB_B) {
+```
+
+`stip b` stays green because that row has `MTE_MODE_STIPPLE` set and returns at S1 (`:1521`) before S2 is evaluated. A fill with `src == 3` and destination B falls into the arm `d1.out` already measured writing (`stip b` is `written` there). The same sweep exists for `MTE_TLB_C` and `MTE_TLB_LIN_B`. `s2tiled` (`dst_tlb <= MTE_TLB_C`) was killed only by `src 3 lin` (`s2tiled.out:21`), so a conjunct that still refuses LIN_A is invisible to that row. Pass 1 accepted "S2 at tiled A and LIN_A" (`pass1_564_20261017/CONVERGENCE.md` item 5). That discharges a mutant which drops every linear label. It leaves the single-label exemptions open.
+
+I did not execute either mutant. On every row the probe builds, the edited expression has the same truth value as the fix.
+
+## Q3
+
+No other product row is frozen under the mutant PRETABLE section 4 names for it. `lin fill a` is red under `s3growa` (`raw2/s3growa.out`, `50/53`). The three controls are red under nothing, which section 4 already says.
+
+`after status` does vary. PRETABLE section 4 says no mutant can move it. `b1.out:56` is `died` / `FAIL`, because that session's first transfer is the stipple `exit(1)`.
+
+Yes. These rows stay green when the guarded path and the unguarded path both survive:
+
+| row | unguarded mutant | log |
+|---|---|---|
+| `stip surv`, `stip once` | `d1` (return removed, `fatal` kept, transfer runs) | `d1.out:13-14` both `ok` |
+| `src surv` | `d2` | `d2.out:24` `ok` |
+| `copy surv` | `d3` | `d3.out:28` `ok` |
+| `depth surv` | `d4` | `d4.out:36` `ok` |
+| `mask unw surv`, `mask surv` | `d5` | `d5.out:39,45` `ok` |
+| `after status` | `d1` | `d1.out:56` still `0x1e000000` |
+
+The paint rows are what go red on those mutants. The `*surv` rows and `after status` separate `exit(1)` from a return. They stay green when the transfer runs.
+
+## Q4
+
+The added comments that state an observable are true of the code, and PRETABLE section 2's row map matches them. "Returns before any transfer data is written" is the paint rows. "Common tail still answers" is `after status` and the `*surv` rows. "One bit per site" and "return outside the latch" are `latch texts` and `latch paint`. "Old key phrase kept" is the witness, and the probe contract says so. "`src > MTE_TLB_C` for fills and copies" is `src 3`, `src 3 copy`, `src c fill`, `src c copy`. "BYTEMASK is zero at init" is `mask unwritten`, and `dev_sgi_re_init` does `memset(d, 0, sizeof(struct sgi_re_data))` (`:865`) before `dev_sgi_mte_init` (`:871`, `:1873-1876`) writes no register. "A fill never reads the source" is true in this function: the source read is under `mode & MTE_MODE_COPY` (`:1600`), and the linear arm never reads `src`. The START-store readback is disclosed as no row; the store really does happen first (`:1759-1766`, then `:1860`).
+
+`fatal()` returns. `debugmsg.c:384-391` is `va_start` / `va_debug` / `va_end`, and `va_debug` (`:118-138`) only `printf`s.
+
+Two sentences in section 1 are false, and the inlined `DEVICE_ACCESS(sgi_mte)` is enough to see the first:
+
+- "A transfer runs only on a WRITE whose address carries the START bit." `startFlag = relative_addr & CRIME_DE_START` (`:1742`) is tested at `:1860` with no `writeflag` test. A read of a START-tagged address also calls `do_mte_transfer`. The same brief files that read as later work. The index bound is separately true: `DEV_SGI_MTE_LENGTH` is `0x1000` (`src/include/devices.h:416`), `mte_reg` is 1024 words, and after clearing `0x800` the largest `regnr + 1` is 512.
+- "`CRIME_DE_STATUS` is the constant `0x1e000000`." The macro is the offset `0x4000` (`crmfbreg.h:422`). The value read at `dev_sgi_re.c:1897-1901` is `CRIME_DE_IDLE | CRIME_DE_SETUP_IDLE | CRIME_DE_PIXPIPE_IDLE | CRIME_DE_MTE_IDLE`, which is `0x10000000 | 0x08000000 | 0x04000000 | 0x02000000` (`crmfbreg.h:423-426`). The probe's expected word `0x1e000000` is the right value under the wrong name.
+
+Section 2's scores match the logs I opened: witness `4/9` and `9/9`, shipped probe `8/53` and `53/53`, null `0/53`. PRETABLE's "after status cannot vary" does not match `b1.out`. PRETABLE's "S2 at B/C, owed: none" is the label sweep above.
+
+The two changes: row S2 at `MTE_TLB_B`, `MTE_TLB_C`, and `MTE_TLB_LIN_B` (refuse side, `src == 3`), and prime the pre-existing latch bits, including `SGIRE_W_BADMODE`, before S1 in the latch session.

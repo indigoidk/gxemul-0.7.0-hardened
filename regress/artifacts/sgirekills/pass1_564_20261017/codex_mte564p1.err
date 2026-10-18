@@ -1,0 +1,2782 @@
+Reading additional input from stdin...
+OpenAI Codex v0.159.2
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: ultra
+reasoning summaries: none
+session id: 01a14b84-0809-7c80-89be-717da8d26307
+--------
+user
+ASTRA seat, PASS 1 of round #564 -- an ordinary design review of error handling in an emulated graphics
+transfer engine: what the device model should do when a guest programs a transfer mode the model does not support.
+
+The packet is too large to pass inline.  Read this file and answer it exactly as its Questions section (section 9)
+directs:
+
+    C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirekills/pass1_564_20261017/packet_564p1_ASTRA.md
+
+READ-ONLY: write nothing to any project tree.  The tree is C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC at HEAD 2951694f.
+Scope your reading to GXEMUL-SEC/src/ and GXEMUL-SEC/regress/*.py.  Ignore the pristine upstream copy at
+C:/DocumentNoSnc/cc/GXEMUL/src/.
+
+Open your answer with the token ASTRA_MTE564P1_20261017, then ONE line:
+VERDICT: PROCEED AS PROPOSED / PROCEED WITH CHANGES (<n>) / REDESIGN (<one line>)
+codex
+I’ll read the packet, inspect the relevant device code and regressions within the allowed scope, and answer in section 9’s format.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirekills/pass1_564_20261017/packet_564p1_ASTRA.md'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 538ms:
+**Your token: `ASTRA_MTE564P1_20261017`** -- open your answer with it.
+
+# `#564` sgirekills (MTE half) -- PASS 1 DESIGN BRIEF: five terminating calls in `dev_sgi_re.c`'s `do_mte_transfer()`
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated wrongly.  **Check the premises,
+not just the derivations.**  Where I state something as fact, ask whether it is true.  A seat that re-derives a
+premise from something this brief did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/` AT HEAD `2951694f`.**  There are THREE pristine-2021-upstream copies of
+GXemul under the project root (`./src/` and two under `_archive/audit-results-*/builds/`).  They are NOT this fork.  If
+your line numbers disagree with mine by hundreds you are reading one of them -- say so rather than reconciling.  The
+working tree carries another session's uncommitted edits to OTHER files (`dev_lca.c`, `dev_pcc2.c`, `dev_sh4.c`,
+`cpu_alpha_palcode.c`); `dev_sgi_re.c` is clean (md5 `60203f67`, identical to HEAD).
+
+**If you cannot read files that is expected** -- every fact you need is inlined below.  Name any premise you cannot
+settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim -- a field width, a count of reachable values -- ENUMERATE it rather than
+reasoning about it.**  And enumerate the right DOMAIN: ask what the producer of a value can actually emit.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+---
+
+## 1. The round
+
+**Row `sgirekills` (HIGH, open).**  Its first half shipped as `#513` (the RE register read-back arms -- accept / decline,
+2026-09-08).  That round's design deliberately EXCLUDED the transfer engine, and what remains of the row is exactly
+this: **five guest-reachable terminating calls in `do_mte_transfer()`**, each `fatal(...); exit(1);`.  A sixth
+`exit(1)` in the same file sits in `DEVICE_ACCESS(sgi_mte)`'s width chain under `if (len == 4) ... else if (len != 4)
+... else { ... }` -- exact complements, so it is unreachable; it is out of scope here and already filed (`sgimtewidth`).
+
+| site | guarding condition (verbatim) | where |
+|---|---|---|
+| S1 | `if (mode & MTE_MODE_STIPPLE)` | before the destination switch -- any destination |
+| S2 | `if (src > MTE_TLB_C)` | before the destination switch -- any destination, fill or copy |
+| S3 | `if (mode & MTE_MODE_COPY)` | inside `case MTE_TLB_LIN_A: case MTE_TLB_LIN_B:` only (tiled COPY is implemented) |
+| S4 | `if (depth != 8)` | inside the linear cases only |
+| S5 | `if (bytemask != 0xffffffff)` | inside the linear cases only, after S3 and S4 |
+
+The census of `exit(` in `dev_sgi_re.c` at HEAD -- comments and string literals stripped, then a whole-word search --
+finds six statements, at the five sites above plus the unreachable width arm.  **Check that census against section 3
+rather than accepting it.**
+
+## 2. The witness -- MEASURED on the committed build, BEFORE any edit (test-first)
+
+A rung-3 cold-debugger probe on the UNMODIFIED `-E sgi -e ip32` machine: every MTE register is programmed by a REAL
+GUEST STORE (`sw`) through real address decode and `memory_rw`, and the transfer is fired the way the device defines
+it -- a write whose ADDRESS carries `CRIME_DE_START` (0x800), here `DST1 | START` written last.  One session per site,
+because the process ends.  Each site row then performs a RAM store and load AFTER the transfer: `survived` means the
+session lived and the later load returned its value.  **The site rows expect the post-fix behaviour, so they are RED
+on HEAD.**  The binary is a scratch build of HEAD `2951694f` (`git archive`, configure, make, in WSL
+`/tmp/gxsk_2951694f`; `[ gxemul -nt src/devices/dev_sgi_re.c ]` true, its `dev_sgi_re.c` md5 `60203f67` = HEAD's).
+
+Instrument (frozen, for the file-reading seats): `regress/artifacts/sgirekills/witness_20261017/sgi_mte_exit_witness.py`
+(md5 `dcbb328d`).  The values each site row writes (MODE field layout from `crmfbreg.h`, section 4):
+
+| row | MODE written | BYTEMASK written | expected HEAD site |
+|---|---|---|---|
+| `stipple` | `0x600` = depth field 2 (32 bpp), STIPPLE 0x400, dst A, src A | not written | S1 |
+| `src tex` | `0x260` = depth 32, src field 3 (`MTE_TLB_TEX`) | not written | S2 |
+| `lin copy` | `0x810` = dst field 4 (`LIN_A`), COPY 0x800, depth 8 | `0xffffffff` | S3 |
+| `lin depth` | `0x110` = dst LIN_A, depth field 1 (16 bpp) | `0xffffffff` | S4 |
+| `bytemask` | `0x010` = dst LIN_A, depth 8 | `0x0000ffff` | S5 |
+| `lin fill` (control) | `0x010` | `0xffffffff` | none -- every guarded value legal |
+
+BG is `0x11223344`, DST0 = 0, DST1 = 0 (written with START).
+
+**The run, verbatim** (`regress/artifacts/sgirekills/witness_20261017/witness_HEAD_2951694f.out`):
+
+```
+# witness md5 dcbb328d7077d43a14408bd94d57ba83; binary /tmp/gxsk_2951694f/gxemul (HEAD-2951694f); 2026-10-17 15:10:07
+# sgirekills MTE exit witness, binary /tmp/gxsk_2951694f/gxemul, label HEAD-2951694f, 2026-10-17 15:10:07
+row          got                    want       note                                                       
+live         0x5a5a5a5a             0x5a5a5a5a RAM round-trip: the session and the CPU run                ok
+devsig       0x1e000000             0x1e000000 CRIME_DE_STATUS: only the device answers this              ok
+mode rt      0x600                  0x600      an MTE register through the sgi_mte decode; no START       ok
+lin fill     survived               survived   LINEAR arm, every guarded value legal: the path itself lives ok
+stipple      died                   survived   own text PRESENT; other sites' texts none                  FAIL
+src tex      died                   survived   own text PRESENT; other sites' texts none                  FAIL
+lin copy     died                   survived   own text PRESENT; other sites' texts none                  FAIL
+lin depth    died                   survived   own text PRESENT; other sites' texts none                  FAIL
+bytemask     died                   survived   own text PRESENT; other sites' texts none                  FAIL
+MTEEXIT_RESULT=4/9
+MTEEXIT_ATTRIBUTED_DEATHS=5/5 (died with ONLY that site's own fatal text)
+MTEEXIT_DONE
+```
+
+## 3. The code, verbatim from HEAD 2951694f (`src/devices/dev_sgi_re.c`, md5 60203f67), real line numbers
+
+### 3a. `do_mte_transfer()` -- WHOLE, every exit path (the function under edit)
+
+```c
+ 1458  /****************************************************************************/
+ 1459  
+ 1460  /*
+ 1461   *  SGI "mte", NetBSD sources describes it as a "memory transfer engine".
+ 1462   *
+ 1463   *  If the relative address has the 0x0800 (CRIME_DE_START) flag set, it means
+ 1464   *  "go ahead with the transfer". Otherwise, it is just reads and writes of the
+ 1465   *  registers.
+ 1466   */
+ 1467  
+ 1468  void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+ 1469  {
+ 1470  	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+ 1471  	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+ 1472  	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+ 1473  	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+ 1474  	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+ 1475  	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+ 1476  	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+ 1477  	uint32_t dstlen = dst1 - dst0 + 1, fill_addr;
+ 1478  	unsigned char zerobuf[4096];
+ 1479  	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+ 1480  	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+ 1481  	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+ 1482  	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+ 1483  
+ 1484  	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+ 1485  	    " dst1=0x%08x dst_y_step=%i bg=0x%x bytemask=0x%x ]\n",
+ 1486  	    mode,
+ 1487  	    src0, src1, src_y_step,
+ 1488  	    dst0, dst1, dst_y_step,
+ 1489  	    bg, bytemask);
+ 1490  
+ 1491  	if (dst_y_step != 0 && dst_y_step != 1 && dst_y_step != -1) {
+ 1492  		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+ 1493  		// exit(1);
+ 1494  	}
+ 1495  
+ 1496  	if (mode & MTE_MODE_STIPPLE) {
+ 1497  		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+ 1498  		exit(1);
+ 1499  	}
+ 1500  
+ 1501  	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+ 1502  	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+ 1503  	
+ 1504  	if (src > MTE_TLB_C) {
+ 1505  		fatal("[ sgi_mte: unimplemented SRC ]");
+ 1506  		exit(1);
+ 1507  	}
+ 1508  
+ 1509  	switch (dst_tlb) {
+ 1510  	case MTE_TLB_A:
+ 1511  	case MTE_TLB_B:
+ 1512  	case MTE_TLB_C:
+ 1513  		// Used by NetBSD's crmfb_fill_rect. It puts graphical
+ 1514  		// coordinates in dst0 and dst1.
+ 1515  		{
+ 1516  			int x1 = (dst0 >> 16) & 0xfff;
+ 1517  			int y1 = dst0 & 0xfff;
+ 1518  			int x2 = (dst1 >> 16) & 0xfff;
+ 1519  			int y2 = dst1 & 0xfff;
+ 1520  			x1 /= (depth / 8);
+ 1521  			x2 /= (depth / 8);
+ 1522  
+ 1523  			int src_x1 = (src0 >> 16) & 0xfff;
+ 1524  			int src_y1 = src0 & 0xfff;
+ 1525  			// int src_x2 = (src1 >> 16) & 0xfff;
+ 1526  			// int src_y2 = src1 & 0xfff;
+ 1527  			src_x1 /= (depth / 8);
+ 1528  			// src_x2 /= (depth / 8);
+ 1529  
+ 1530  			int dx = x1 > x2 ? -1 : 1;
+ 1531  			int dy = y1 > y2 ? -1 : 1;
+ 1532  			
+ 1533  			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+ 1534  			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+ 1535  
+ 1536  			// Hack. The MTE perhaps doesn't deal with colors per se,
+ 1537  			// but this makes sure that we copy 32 bits when doing 32-bit
+ 1538  			// transfers.
+ 1539  			/*  #509: was `depth == 4' -- UNREACHABLE.  `depth' is
+ 1540  			    a count of BITS (8 << a two-bit field, so 8/16/32/64
+ 1541  			    only); 4 is the corresponding BYTE count, which the
+ 1542  			    author used correctly in the `/ (depth / 8)' lines
+ 1543  			    just above.  So both assignments were dead, every
+ 1544  			    tiled transfer took the CI arm, and at 32 bits CI
+ 1545  			    assigns buf[0] alone while memory_rw copies four --
+ 1546  			    publishing three bytes of host stack into guest
+ 1547  			    memory.  The comment above states the intended
+ 1548  			    condition in words: 32-bit transfers.
+ 1549  
+ 1550  			    This repairs the 32-bit cell ONLY.  The 16-bit and
+ 1551  			    reserved-encoding-3 cells assign fewer bytes than
+ 1552  			    they copy for the same reason and are NOT closed
+ 1553  			    here -- see the uninitialised-buffer sibling.  */
+ 1554  			if (depth == 32) {	/*  #509  */
+ 1555  				src_mode |= DE_MODE_TYPE_RGBA;
+ 1556  				dst_mode |= DE_MODE_TYPE_RGBA;
+ 1557  			}
+ 1558  
+ 1559  			int src_y = src_y1;
+ 1560  			for (int y = y1; y != y2+dy; y += dy) {
+ 1561  				int src_x = src_x1;
+ 1562  				
+ 1563  				for  (int x = x1; x != x2+dx; x += dx) {
+ 1564  					if (mode & MTE_MODE_COPY) {
+ 1565  						horrible_getputpixel(0, cpu, d,
+ 1566  							src_x, src_y, &bg, src_mode);
+ 1567  						src_x += dx;
+ 1568  					}
+ 1569  
+ 1570  					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+ 1571  				}
+ 1572  				
+ 1573  				src_y += dy;
+ 1574  			}
+ 1575  		}
+ 1576  		break;
+ 1577  	case MTE_TLB_LIN_A:
+ 1578  	case MTE_TLB_LIN_B:
+ 1579  		// Used by the PROM to zero-fill memory (?).
+ 1580  		if (mode & MTE_MODE_COPY) {
+ 1581  			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+ 1582  			exit(1);
+ 1583  		}
+ 1584  
+ 1585  		if (depth != 8) {
+ 1586  			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+ 1587  			exit(1);
+ 1588  		}
+ 1589  
+ 1590  		debug("[ sgi_mte: LINEAR TRANSFER: mode=0x%08x dst0=0x%016llx,"
+ 1591  		    " dst1=0x%016llx (length 0x%llx), dst_y_step=%i bg=0x%x, bytemask=0x%x ]\n",
+ 1592  		    mode,
+ 1593  		    (long long)dst0, (long long)dst1,
+ 1594  		    (long long)dstlen, dst_y_step, (int)bg, (int)bytemask);
+ 1595  
+ 1596  		if (bytemask != 0xffffffff) {
+ 1597  			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
+ 1598  			exit(1);
+ 1599  		}
+ 1600  
+ 1601  		/*
+ 1602  		 *  Horrible hack:
+ 1603  		 *
+ 1604  		 *  During bootup, the PROM fills memory at 0x40000000 and
+ 1605  		 *  forward. This corresponds to the lowest possible RAM address.
+ 1606  		 *  However, these fills are not going via the CPU's cache,
+ 1607  		 *  which contains things such as the return address on the
+ 1608  		 *  stack. If we _really_ write this data in the emulator (which
+ 1609  		 *  doesn't emulate the cache), it would overwrite the stack.
+ 1610  		 *
+ 1611  		 *  So let's not.
+ 1612  		 *
+ 1613  		 *  (If some guest OS or firmware variant actually depends on
+ 1614  		 *  the ability to write to the start of memory this way,
+ 1615  		 *  it would not work in the emulator.)
+ 1616  		 */
+ 1617  		// if (dst0 >= 0x40000000 && dst0 < 0x40004000 && dst1 > 0x40004000) {
+ 1618  		//	dst0 += 0x4000;
+ 1619  		//	dstlen -= 0x4000;
+ 1620  		// }
+ 1621  
+ 1622  		/*
+ 1623  		 *  HUH?
+ 1624  		 *
+ 1625  		 *  Note that due to a bug (?) in the PROM firmware when it
+ 1626  		 *  is setting up the TLB entries, only every _second_ page is
+ 1627  		 *  actually put correctly in the TLB. This means that even
+ 1628  		 *  though it then tries to fill 0x40000000 .. 0x40007fff with
+ 1629  		 *  zeroes, it only fills 0x40001000 .. 0x40001fff,
+ 1630  		 *  0x40003000 .. 0x40003fff and so on!
+ 1631  		 *
+ 1632  		 *  So the Horrible hack above is not needed.
+ 1633  		 *
+ 1634  		 *  Ironic.
+ 1635  		 */
+ 1636  
+ 1637  		memset(zerobuf, bg, dstlen < sizeof(zerobuf) ? dstlen : sizeof(zerobuf));
+ 1638  		fill_addr = dst0;
+ 1639  		while (dstlen != 0) {
+ 1640  			uint64_t fill_len;
+ 1641  			if (dstlen > sizeof(zerobuf))
+ 1642  				fill_len = sizeof(zerobuf);
+ 1643  			else
+ 1644  				fill_len = dstlen;
+ 1645  
+ 1646  			uint64_t starting_page = fill_addr & ~0xfff;
+ 1647  			uint64_t ending_page = (fill_addr + fill_len - 1) & ~0xfff;
+ 1648  			if (starting_page != ending_page) {
+ 1649  				fill_len = starting_page + 4096 - fill_addr;
+ 1650  			}
+ 1651  
+ 1652  			// Find starting_page in the TLB in question.
+ 1653  			starting_page >>= 12;
+ 1654  			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+ 1655  			int match = 0;
+ 1656  			for (int i = 0; i < 32; ++i) {
+ 1657  				uint32_t entry = tlb[i];
+ 1658  				if (entry & 0x80000000) {
+ 1659  					entry &= ~0x80000000;
+ 1660  					if (entry == starting_page) {
+ 1661  						match = 1;
+ 1662  						break;
+ 1663  					}
+ 1664  				}
+ 1665  			}
+ 1666  			
+ 1667  			if (match) {
+ 1668  				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
+ 1669  					MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+ 1670  			} else {
+ 1671  				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
+ 1672  					(long long)fill_addr);
+ 1673  			}
+ 1674  
+ 1675  			fill_addr += fill_len;
+ 1676  			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
+ 1677  		}
+ 1678  		break;
+ 1679  	default:
+ 1680  		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+ 1681  	}
+ 1682  }
+```
+
+### 3b. `DEVICE_ACCESS(sgi_mte)` -- WHOLE: its only caller, and the common tail a `return` in 3a cannot skip
+
+```c
+ 1684  DEVICE_ACCESS(sgi_mte)
+ 1685  {
+ 1686  	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+ 1687  	uint64_t idata = 0, odata = 0;
+ 1688  	int regnr;
+ 1689  	int startFlag = relative_addr & CRIME_DE_START;
+ 1690  
+ 1691  	relative_addr &= ~CRIME_DE_START;
+ 1692  
+ 1693  	idata = memory_readmax64(cpu, data, len);
+ 1694  	regnr = relative_addr / sizeof(uint32_t);
+ 1695  
+ 1696  	relative_addr += 0x3000;
+ 1697  
+ 1698  	/*
+ 1699  	 *  Treat all registers as read/write, by default.  Sometimes these
+ 1700  	 *  are accessed as 32-bit words, sometimes as 64-bit words.
+ 1701  	 *
+ 1702  	 *  NOTE: The lowest bits are internally stored in the "low" (+0)
+ 1703  	 *  register, and the higher bits are stored in the "+1" word.
+ 1704  	 */
+ 1705  	if (len == 4) {
+ 1706  		if (writeflag == MEM_WRITE)
+ 1707  			d->mte_reg[regnr] = idata;
+ 1708  		else
+ 1709  			odata = d->mte_reg[regnr];
+ 1710  	} else if (len != 4) {
+ 1711  		if (writeflag == MEM_WRITE) {
+ 1712  			d->mte_reg[regnr+1] = idata >> 32;
+ 1713  			d->mte_reg[regnr] = idata;
+ 1714  		} else {
+ 1715  			odata = ((uint64_t)d->mte_reg[regnr+1] << 32) +
+ 1716  			    d->mte_reg[regnr];
+ 1717  		}
+ 1718  	} else {
+ 1719  		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+ 1720  		exit(1);
+ 1721  	}
+ 1722  
+ 1723  	switch (relative_addr) {
+ 1724  
+ 1725  	case CRIME_MTE_MODE:
+ 1726  		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+ 1727  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1728  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1729  		break;
+ 1730  
+ 1731  	case CRIME_MTE_BYTEMASK:
+ 1732  		debug("[ sgi_mte: %s CRIME_MTE_BYTEMASK: 0x%016llx ]\n",
+ 1733  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1734  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1735  		break;
+ 1736  
+ 1737  	case CRIME_MTE_STIPPLEMASK:
+ 1738  		fatal("[ sgi_mte: %s CRIME_MTE_STIPPLEMASK: 0x%016llx ]\n",
+ 1739  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1740  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1741  		break;
+ 1742  
+ 1743  	case CRIME_MTE_BG:
+ 1744  		debug("[ sgi_mte: %s CRIME_MTE_BG: 0x%016llx ]\n",
+ 1745  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1746  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1747  		break;
+ 1748  
+ 1749  	case CRIME_MTE_SRC0:
+ 1750  		debug("[ sgi_mte: %s CRIME_MTE_SRC0: 0x%016llx ]\n",
+ 1751  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1752  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1753  		break;
+ 1754  
+ 1755  	case CRIME_MTE_SRC1:
+ 1756  		debug("[ sgi_mte: %s CRIME_MTE_SRC1: 0x%016llx ]\n",
+ 1757  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1758  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1759  		break;
+ 1760  
+ 1761  	case CRIME_MTE_DST0:
+ 1762  		debug("[ sgi_mte: %s CRIME_MTE_DST0: 0x%016llx ]\n",
+ 1763  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1764  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1765  		break;
+ 1766  
+ 1767  	case CRIME_MTE_DST1:
+ 1768  		debug("[ sgi_mte: %s CRIME_MTE_DST1: 0x%016llx ]\n",
+ 1769  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1770  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1771  		break;
+ 1772  
+ 1773  	case CRIME_MTE_SRC_Y_STEP:
+ 1774  		debug("[ sgi_mte: %s CRIME_MTE_SRC_Y_STEP: 0x%016llx ]\n",
+ 1775  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1776  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1777  		break;
+ 1778  
+ 1779  	case CRIME_MTE_DST_Y_STEP:
+ 1780  		debug("[ sgi_mte: %s CRIME_MTE_DST_Y_STEP: 0x%016llx ]\n",
+ 1781  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1782  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1783  		break;
+ 1784  
+ 1785  	case CRIME_MTE_NULL:
+ 1786  		fatal("[ sgi_mte: %s CRIME_MTE_NULL: 0x%016llx ]\n",
+ 1787  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1788  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1789  		break;
+ 1790  
+ 1791  	case CRIME_MTE_FLUSH:
+ 1792  		fatal("[ sgi_mte: %s CRIME_MTE_FLUSH: 0x%016llx ]\n",
+ 1793  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1794  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1795  		break;
+ 1796  
+ 1797  	default:
+ 1798  		if (writeflag == MEM_WRITE)
+ 1799  			fatal("[ sgi_mte: unimplemented write to "
+ 1800  			    "address 0x%llx, data=0x%016llx ]\n",
+ 1801  			    (long long)relative_addr, (long long)idata);
+ 1802  		else
+ 1803  			fatal("[ sgi_mte: unimplemented read from address"
+ 1804  			    " 0x%llx ]\n", (long long)relative_addr);
+ 1805  	}
+ 1806  
+ 1807  	if (startFlag)
+ 1808  		do_mte_transfer(cpu, d);
+ 1809  
+ 1810  	if (writeflag == MEM_READ)
+ 1811  		memory_writemax64(cpu, data, len, odata);
+ 1812  
+ 1813  	return 1;
+ 1814  }
+```
+
+### 3c. `DEVICE_ACCESS(sgi_de_status)` -- the status a guest polls (a constant)
+
+```c
+ 1833  DEVICE_ACCESS(sgi_de_status)
+ 1834  {
+ 1835  	// struct sgi_re_data *d = (struct sgi_re_data *) extra;
+ 1836  	uint64_t idata = 0, odata = 0;
+ 1837  
+ 1838  	idata = memory_readmax64(cpu, data, len);
+ 1839  
+ 1840  	relative_addr += 0x4000;
+ 1841  
+ 1842  	switch (relative_addr) {
+ 1843  
+ 1844  	case CRIME_DE_STATUS:	// 0x4000
+ 1845  		odata = CRIME_DE_IDLE |
+ 1846  			CRIME_DE_SETUP_IDLE |
+ 1847  			CRIME_DE_PIXPIPE_IDLE |
+ 1848  			CRIME_DE_MTE_IDLE;
+ 1849  
+ 1850  		/*
+ 1851  		 *  TODO: Actually simulate pipeline of a number of commands?
+ 1852  		 */
+ 1853  		break;
+ 1854  
+ 1855  	case 0x4008:
+ 1856  		/*  Unknown. Ignore for now.  */
+ 1857  		break;
+ 1858  
+ 1859  	default:
+ 1860  		if (writeflag == MEM_WRITE)
+ 1861  			debug("[ sgi_de_status: unimplemented write to "
+ 1862  			    "address 0x%llx, data=0x%016llx ]\n",
+ 1863  			    (long long)relative_addr, (long long)idata);
+ 1864  		else
+ 1865  			debug("[ sgi_de_status: unimplemented read from address"
+ 1866  			    " 0x%llx ]\n", (long long)relative_addr);
+ 1867  	}
+ 1868  
+ 1869  	if (writeflag == MEM_READ)
+ 1870  		memory_writemax64(cpu, data, len, odata);
+ 1871  
+ 1872  	return 1;
+ 1873  }
+```
+
+### 3d. The house idiom in this file: the latch enum's head and tail, and one complete latched decline
+
+```c
+   58  /*
+   59   *  #497: one latch bit per WIDTH-guard site in DEVICE_ACCESS(sgi_re).
+   60   *
+   61   *  SIX FLAGS, NOT ONE.  dev_wdc.c's own comment adjudicates this: sharing a
+   62   *  latch is licensed only across sites that are MUTUALLY EXCLUSIVE at
+   63   *  runtime.  These six are six different address windows, and any driver
+   64   *  bringing up the rendering engine walks all of them in ONE session, so a
+   65   *  shared latch would report the first odd-width access and silence the
+   66   *  other five.
+   67   */
+   68  enum {
+   69  	SGIRE_W_TLBA_LEN  = 1 << 0,
+   70  	SGIRE_W_TLBB_LEN  = 1 << 1,
+   71  	SGIRE_W_TLBC_LEN  = 1 << 2,
+   72  	SGIRE_W_TEX_LEN   = 1 << 3,
+   73  	SGIRE_W_LINA_LEN  = 1 << 4,
+   74  	SGIRE_W_LINB_LEN  = 1 << 5,
+   75  
+  ...
+  139  	SGIRE_W_BADMODE   = 1 << 10,
+  140  
+  141  	/*
+  142  	    #513: THE TEX READ DECLINE GETS ITS OWN BIT, not SGIRE_W_TEX_LEN.
+  143  	    Sharing one was measured at 23/25 for SGIRE_W_DE_LEN in #498: an
+  144  	    ordinary narrow write fires the width latch, and the read decline is
+  145  	    then silently suppressed for the life of the instance.  The detector
+  146  	    has a row for exactly this (`tex xbit', which fires all six width
+  147  	    latches before reading).
+  148  
+  149  	    (This comment used to end "THE NEXT FREE BIT IS 1 << 12, AND THIS
+  150  	    IS THE LAST ENUMERATOR".  #519 added SGIRE_W_BADCOLOR = 1 << 12
+  151  	    BELOW this line and moved the sentence with it, as this comment
+  152  	    itself instructed.  Demoted, not deleted, for the same reason as
+  153  	    the two demotions above it.)
+  154  	 */
+  155  	SGIRE_W_TEX_RD    = 1 << 11,
+  156  
+  157  	/*  #519 (sgirandomcolour): the colour-type PUT decline in
+  158  	    horrible_getputpixel() gets its OWN bit, per the rule every entry
+  159  	    above records: the helper is per-pixel, the struct is shared by
+  160  	    four handlers, and a latch shared with any other site is silenced
+  161  	    by that site's ordinary traffic.  SGIRE_W_BADMODE (1 << 10) is the
+  162  	    TLB/mode switch's decline in the same function and is a different
+  163  	    event with a different text; sharing it would collapse the two.
+  164  
+  165  	    THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR --
+  166  	    which is where that claim belongs, per the convention above.  A
+  167  	    maintainer adding a bit BELOW this line must move this sentence
+  168  	    with it and demote the copy here.  */
+  169  	SGIRE_W_BADCOLOR  = 1 << 12,
+  170  };
+  ...
+  257  	switch (tlb_mode) {
+  258  	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+  259  		break;
+  260  	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+  261  		break;
+  262  	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+  263  		break;
+  264  	case 4:	tile_nr = x >> 12;
+  265  		if (tile_nr >= 32)
+  266  			return;
+  267  		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+  268  		ofs = x & 4095;
+  269  		// TODO... probably not correct!
+  270  		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+  271  		break;
+  272  	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+  273  		    its exit(1) commented out -- so a failed GET handed the CALLER a
+  274  		    random value, and draw_primitive() then wrote it to the destination
+  275  		    in the same loop iteration, since `color' is shared by the XFER GET
+  276  		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+  277  		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+  278  		    reachable with a DOCUMENTED mode, not only with a junk one.
+  279  		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+  280  		    and 0x7433cdc1 on successive runs of
+  281  		    regress/sgi_re_randompixel_probe.py.
+  282  
+  283  		    NOW DECLINED: `*color' is left alone, so the caller's own
+  284  		    `uint32_t color = fg' stands and what lands is at least
+  285  		    DETERMINISTIC.  The announce is latched because this helper is
+  286  		    per-pixel.
+  287  
+  288  		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+  289  		    caller STILL PERFORMS its dependent PUT, so a declined GET still
+  290  		    writes fg (row sgirandomskipput -- suppressing it needs a return
+  291  		    value and every GET site changed, which is more than one site);
+  292  		    LIN_B is still not implemented, and the panel refused to endorse
+  293  		    implementing it as LIN_A-with-the-other-array on symmetry alone
+  294  		    (row sgirelinb); and the COLOUR-mode switch below carries the same
+  295  		    random() shape at its own default (row sgirandomcolour).  */
+  296  		if (!(d->warned & SGIRE_W_BADMODE)) {
+  297  			d->warned |= SGIRE_W_BADMODE;
+  298  			/*  `dst_mode' is kept from the original text although the
+  299  			    parameter is also passed as src_mode on a GET: the probe
+  300  			    anchors on this literal, and rewording it here would be
+  301  			    scope creep AND would move an oracle anchor mid-round,
+  302  			    which is the laundering shape whatever the intent.
+  303  			    Filed as sgirenamedstmode.  */
+  304  			fatal("[ sgi_re: unimplemented dst_mode %i for "
+  305  			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+  306  			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+  307  		}
+  308  		return;
+  309  	}
+```
+
+## 4. The constants (`src/include/thirdparty/crmfbreg.h` at HEAD)
+
+```c
+  238  
+  239  /* memory transfer engine from 0x3000*/
+  240  #define CRIME_MTE_MODE		0x3000
+  241  #define CRIME_MTE_BYTEMASK	0x3008
+  242  #define CRIME_MTE_STIPPLEMASK	0x3010
+  243  #define CRIME_MTE_BG		0x3018
+  244  #define CRIME_MTE_SRC0		0x3020	/* start */
+  245  #define CRIME_MTE_SRC1		0x3028	/* end */
+  246  #define CRIME_MTE_DST0		0x3030	/* start */
+  247  #define CRIME_MTE_DST1		0x3038	/* end */
+  248  #define CRIME_MTE_SRC_Y_STEP	0x3040
+  249  #define CRIME_MTE_DST_Y_STEP	0x3048
+  250  #define CRIME_MTE_NULL		0x3070
+  251  #define CRIME_MTE_FLUSH		0x3078
+  252  
+  253  /* CRIME_MTE_MODE */
+  254  #define MTE_MODE_DST_ECC	0x00000001	/* enable ECC in DST */
+  255  #define MTE_MODE_SRC_ECC	0x00000002	/* enable ECC in SRC */
+  256  #define MTE_MODE_DST_BUF_MASK	0x0000001c
+  257  	#define MTE_TLB_A	0
+  258  	#define MTE_TLB_B	1
+  259  	#define MTE_TLB_C	2
+  260  	#define MTE_TLB_TEX	3
+  261  	#define MTE_TLB_LIN_A	4
+  262  	#define MTE_TLB_LIN_B	5
+  263  	#define MTE_TLB_CLIP	6
+  264  	#define MTE_DST_TLB_SHIFT 2
+  265  #define MTE_MODE_SRC_BUF_MASK	0x000000e0
+  266  	#define MTE_SRC_TLB_SHIFT 5
+  267  #define MTE_MODE_DEPTH_MASK	0x00000300
+  268  	#define MTE_DEPTH_8	0
+  269  	#define MTE_DEPTH_16	1
+  270  	#define MTE_DEPTH_32	2
+  271  	#define MTE_DEPTH_SHIFT 8
+  272  #define MTE_MODE_STIPPLE	0x00000400
+  273  #define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+  274  
+  275  /* drawing engine from 0x2000 */
+  ...
+  422  #define CRIME_DE_STATUS		0x4000
+  423  #define CRIME_DE_IDLE		0x10000000
+  424  #define CRIME_DE_SETUP_IDLE	0x08000000
+  425  #define CRIME_DE_PIXPIPE_IDLE	0x04000000
+  426  #define CRIME_DE_MTE_IDLE	0x02000000
+```
+
+## 5. The file's own idiom and the sibling dispositions (all quoted from HEAD in section 3 or below)
+
+* **The house idiom in this file is a latched decline with a `(once)` marker**, one bit of `uint32_t warned` in
+  `struct sgi_re_data` per site.  The enum's last enumerator at HEAD is `SGIRE_W_BADCOLOR = 1 << 12`, and its own
+  comment says *"THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR"*.  Every entry above it records the
+  rule *"a latch shared with any other site is silenced by that site's ordinary traffic"*, so each site gets its OWN
+  bit.  A complete example, `horrible_getputpixel()`'s mode decline, is inlined in section 3d.
+* **Census of suppression markers, run at brief-writing time against HEAD `2951694f`** (all `src/devices/*.c`, adjacent C
+  string literals joined first): 92 markers in 13 spellings -- `(once)` 52, `(once per offset)` 12, `(once per offset
+  per direction)` 5, `(further occurrences suppressed)` 5, `(once per bit)` 5, `(once per encoding)` 5, `(reported once)`
+  2, and one each of `(once for each channel)`, `(once per direction)`, `(reported once per cpu)`, `(once per channel)`,
+  `(reported once per register)`, `(once per timer)`.  (The raw scan printed a fourteenth spelling: one `(once per
+  offset per direction)` torn across a COMMENT continuation, which the string-literal join does not repair.)
+  `dev_sgi_re.c` carries 14 markers, all `(once)`.
+* **The siblings inside `do_mte_transfer()` itself announce and CONTINUE, unlatched:** the `dst_y_step` check is
+  `fatal(...); // exit(1);` (the call disabled by a comment), and the `switch (dst_tlb)` `default:` arm is a bare
+  `fatal(...)`.  Both are guest-drivable and unlatched; both are FILED as their own rows (`mtetlbflood`,
+  `sgimtetlbdefault`, LOW) and are NOT in this round.  The register arms `CRIME_MTE_STIPPLEMASK`, `CRIME_MTE_NULL` and
+  `CRIME_MTE_FLUSH` in `DEVICE_ACCESS(sgi_mte)` are unlatched `fatal()`s too.
+* **No completion status can hang the guest:** `CRIME_DE_STATUS` returns the constant `CRIME_DE_IDLE |
+  CRIME_DE_SETUP_IDLE | CRIME_DE_PIXPIPE_IDLE | CRIME_DE_MTE_IDLE` whatever the transfer did (section 3c).
+
+## 6. PREMISES ALREADY SETTLED, RE-INLINED SO NOBODY SPENDS AN ANSWER RE-DERIVING THEM
+
+* **`fatal()` does not end the process** -- it prints and returns (`src/core/debugmsg.c`); only the `exit(1)` beside it
+  terminates.  Settled repeatedly in this campaign; `debug()` has a verbosity early-out, `fatal()` has none.
+* **`do_mte_transfer()` is called from exactly one place**: the end of `DEVICE_ACCESS(sgi_mte)`, `if (startFlag)
+  do_mte_transfer(cpu, d);`, followed by that handler's common tail (`if (writeflag == MEM_READ)
+  memory_writemax64(...); return 1;`) -- section 3b.  `do_mte_transfer()` returns `void` and has NO statements after its
+  `switch`, so a `return` inside it skips nothing the caller depends on.
+* **`mte_reg[]` is zeroed at device init** (`memset(d, 0, sizeof(struct sgi_re_data))` in `dev_sgi_re_init()`), so
+  `BYTEMASK` reads 0 until a guest writes it: a LINEAR fill by a guest that never writes BYTEMASK reaches S5 today.
+* **The sixth `exit(1)` is unreachable** (`if (len == 4) ... else if (len != 4) ... else`) -- GPT-6 Astra, 2026-09-09,
+  re-derivable from section 3b; filed as `sgimtewidth`.
+* **Grok 4.7's 2026-09-07 design answer already classed these five** as *"unimplemented transfer features (member 7 /
+  decline-the-transfer, not member 4)"*, separate from the RE read arms by function, trigger, member and detector -- which
+  is why `#513` excluded them.  It also noted that the `depth == 4` dead branch (`#509`, row `sgimtedepth4dead`) is on
+  the TILED path and that declining linear `depth != 8` does not touch it.
+
+## 7. The disposition -- my leaning, stated as QUESTIONS
+
+The option set has SEVEN members: **1 DELETE** the terminating call only (announce and continue, the `dst_y_step`
+shape) / **2 DECLINE silently** / **3 DECLINE + LATCHED ANNOUNCE** / **4 ACCEPT** (the model already computes the right
+answer) / **5 FAULT** (model the space as unmapped -- `dev_unreadable.c`) / **6 BACKED ACCEPT** (fabricate storage) /
+**7 IMPLEMENT** the feature.  Members 4 and 6 do not fit a TRANSFER (there is no value being read back), and member 5
+does not fit an access to a mapped register whose only fault is the parameter it carries -- **say so if you disagree.**
+
+**My leaning: member 3 at all five sites** -- `if (<guard>) { if (!(d->warned & SGIRE_W_MTE_<x>)) { d->warned |=
+SGIRE_W_MTE_<x>; fatal("[ sgi_mte: ... -- transfer declined (once) ]\n", ...); } return; }`, five new bits `1 << 13`
+.. `1 << 17`, the enum's "last enumerator" sentence moved with them.  The transfer is refused BEFORE any memory write:
+S1 and S2 return before the destination switch, S3-S5 return before the fill loop (`memset(zerobuf, ...)` and the
+`memory_rw` calls).  **Check each part of that:**
+
+* **Q-a.** Is member 1 (delete only the `exit(1)`, keep going -- the file's own `dst_y_step` precedent) wrong here?
+  My reason: at S3-S5 continuing runs the LINEAR fill with the unsupported parameter ignored -- at S4 the fill is
+  `memset(zerobuf, bg, ...)`, which repeats only the LOW BYTE of `bg` at 16/32 bpp; at S5 it writes every byte the mask
+  says to leave.  That is a silently wrong guest-visible result plus an unlatched message per transfer.  At S1 a
+  stippled fill would become a solid fill.  Is "the destination is left untouched" actually better for a guest than
+  "the destination is written approximately"?  Neither matches hardware.
+* **Q-b. S2 refuses FILLS over a field a fill never reads.**  `src` is read only by S2's guard; `src_tlb` feeds only
+  `src_mode`, which is used only under `if (mode & MTE_MODE_COPY)` in the tiled arm, and the linear arm reads no source
+  at all (section 3a).  So today `src = 3..7` with COPY CLEAR ends the process for a transfer that would never touch
+  the source.  Should S2 be scoped to COPY -- decline only `(mode & MTE_MODE_COPY) && src > MTE_TLB_C`, and let a fill
+  with an unused source field proceed?  That would be a NARROWING of a guard, so it needs a warrant, not "cannot hurt":
+  is there one (an SGI/NetBSD source, a manual) for what the hardware does with SRC_BUF on a fill?  If there is none,
+  is the conservative answer to decline exactly what is refused today?
+* **Q-c. Member 7 (implement) at S4 and S5.**  A depth-16/32 linear fill is a pattern-width change to an existing
+  loop, and a byte mask is a read-merge-write per page.  The addition licence here requires a measured delta or a
+  transferred warrant.  Is there one, or is IMPLEMENT a separate row?
+* **Q-d. Latch granularity.**  One bit per SITE (five bits), or one per site AND destination label (S3-S5 sit in a block
+  shared by `MTE_TLB_LIN_A` and `MTE_TLB_LIN_B`)?  A per-site bit means a LIN_B transfer is silent after a LIN_A one at
+  the same site.
+* **Q-e. Decline scope.**  The decline skips every remaining side effect and still answers through the caller's
+  common exit (section 6).  Is anything between the top of `do_mte_transfer()` and S1-S5 a side effect that should not
+  happen on a declined transfer?  (I see `debug()` calls and the `dst_y_step` `fatal()`; S5 sits after the linear arm's
+  `debug(... LINEAR TRANSFER ...)`.)
+
+## 8. The detector I propose (it ships WITH the fix; written before any table runs)
+
+A new probe, `regress/sgi_mte_decline_probe.py`, grown from the witness (same session mechanics), wired into
+`regress/gate_arm.sh` beside `sgi_re_width_probe.py` with its row counts pinned by equality.  Rows, each with the
+mutant it is meant to catch and the observable that differs (the CHANNEL line):
+
+| row(s) | what it drives | catches | channel |
+|---|---|---|---|
+| `<site> surv`, five | the witness's transfer | `exit(1)` reinstated (floor clause b) | the process ends |
+| `<site> nowrite`, five | the same transfer at a destination the transfer WOULD write, pre-painted (tiled: the `TLBA_TILE` page `sgi_mte_fill_probe.py` uses; linear: a `re_linear_a/b` entry mapping the page) | member 1 -- `exit(1)` deleted, no `return` | the paint is overwritten |
+| `<site> once`, five | two transfers in one session | a missing latch, a missing announce, a shared bit | the site's text appears exactly once |
+| `lin b <site>`, three (S3-S5 at `MTE_TLB_LIN_B`) | the label the linear block also serves | a repair conditioned on `dst_tlb == MTE_TLB_LIN_A` | survival / paint at LIN_B |
+| `src c fill` | a tiled fill with `src` field 2 (`MTE_TLB_C`, the bound) | `src > C` moved down one (`>= C`): the at-the-bound value would be refused | the fill lands |
+| `src tex` / `src clip` | `src` 3 (B+1) and 6 | `src > C` moved up one (`> 3`): the first refused value would pass | decline |
+| `lin fill`, `lin b fill` | every guarded value legal, at both labels | guard growth at S3-S5 (the de-escalation clause's accept side) | the fill lands |
+| `bytemask lo`, `bytemask hi` | `0xfffffffe` and `0x7fffffff` | a narrowed mask compare (`(bytemask & 0xffff) != 0xffff`, `& 0xff...`) | decline vs fill |
+| `depth 16/32/64` | fields 1, 2, 3 at LIN_A | `depth != 8` qualified to one value | decline |
+| `live`, `devsig`, `mode rt` | as in the witness | -- | controls |
+
+Clause (c), the null medium: an absent or non-emulator binary -- every session dies, so every `surv` and `nowrite` row
+reds and the gate's equality pin on rows-green fails; I intend to MEASURE that leg rather than claim it by construction.
+Clause (e), the contract, goes in the probe header.  A `PRETABLE.out` is written before table 1.
+
+## 9. Questions
+
+**Scope your reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.**  Do not read `regress/artifacts/` or
+`tools/pipeline/ledger.json` -- everything this brief takes from them is inlined above.  This is an ordinary review of
+error handling in a device model: what the code does when a guest programs a transfer the model does not support.
+
+Answer in this order, each with its number.  Facts you checked carry `path:line` or a quoted line.
+
+**Q1 -- PREMISE AUDIT.  These are the premises the design stands on; please test them, not ratify them:**
+  1. the census -- six `exit(` statements in `dev_sgi_re.c` at HEAD, five reachable (S1-S5), the sixth unreachable;
+  2. each measured row in section 2 reached ITS OWN site -- the attribution is "own diagnostic text present, the other
+     four sites' texts absent".  Is that a sufficient answer to "did it stop for the reason under test?"  Could two
+     sites share a text, or a row pass an earlier check it was meant to stop at?
+  3. the proposed handling returns before ANY memory write at every site (section 7, the paragraph after the leaning);
+  4. Q-b's claim that a FILL never reads the source selector;
+  5. the zeroed `BYTEMASK` (a linear fill that never wrote BYTEMASK reaches S5);
+  6. no completion status can leave a guest waiting after a refused transfer.
+
+**Q2 is not asked of this seat.**
+
+**Q3 -- OPTION-SET COMPLETENESS.**  Is there a disposition this brief did not name?  Look at how other transfer or DMA
+engines in `src/devices/*.c` refuse an unsupported request (`grep -rn 'declined' src/devices/*.c` is a start) -- the
+tree's own precedents are part of the design space.  And is any member I set aside (4, 5, 6) actually right at one
+site?
+
+**Q4 -- the round-specific questions Q-a to Q-e in section 7**, one answer each.
+
+**Q5 -- ROUND SCOPE.**  This project's scope rule: a round takes ONE site; a second joins only if it is reproduced, in
+the same device and the same semantic class (one design covers both), and covered by the same test with no new oracle.
+Do all five meet that together?  If Q-b's answer is "scope S2 to COPY", is S2 still the same class?
+
+**Q6 -- THE TEST (section 8).**  For each proposed row: can its observable actually differ between the correct code and
+the defect it is meant to catch?  A row whose observable is the same either way tells us nothing.  Which cell of the
+input space is missing -- in particular the destination-label axis (`LIN_A` / `LIN_B` share S3-S5's block, and the
+linear body reads `dst_tlb` to pick `re_linear_a` or `re_linear_b`) and the bounds in S2 and S5?
+
+If, while verifying a claim, you found something ELSE -- say so.
+
+Format: open with your token, then ONE line `VERDICT: PROCEED AS PROPOSED / PROCEED WITH CHANGES (<n>) / REDESIGN
+(<one line>)`, then Q1 and Q3-Q6.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'exit\\s*\\(|do_mte_transfer|CRIME_DE_STATUS|SGIRE_W_|memset\\(d|warned|memory_rw' src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirekills/pass1_564_20261017/packet_564p1_ASTRA.md'; "'$v=Get-Content -LiteralPath $p; $v[330..489]' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 152ms:
+69:	SGIRE_W_TLBA_LEN  = 1 << 0,
+70:	SGIRE_W_TLBB_LEN  = 1 << 1,
+71:	SGIRE_W_TLBC_LEN  = 1 << 2,
+72:	SGIRE_W_TEX_LEN   = 1 << 3,
+73:	SGIRE_W_LINA_LEN  = 1 << 4,
+74:	SGIRE_W_LINB_LEN  = 1 << 5,
+84:	    It must be its OWN bit.  Reusing SGIRE_W_TLBA_LEN scored 23/25: the
+87:	SGIRE_W_DE_LEN    = 1 << 6,
+93:	    PLACED AFTER SGIRE_W_DE_LEN ON PURPOSE.  An earlier draft inserted
+94:	    these two after SGIRE_W_LINB_LEN (1 << 5), which left the enum ending
+104:	SGIRE_W_UNMAP_WR  = 1 << 7,
+105:	SGIRE_W_UNMAP_RD  = 1 << 8,
+108:	    for the reason #498 measured on SGIRE_W_DE_LEN: a latch shared with
+115:	    added SGIRE_W_BADMODE = 1 << 10 BELOW this line.  Demoted rather
+121:	SGIRE_W_PRIM_OP   = 1 << 9,
+133:	    added SGIRE_W_TEX_RD = 1 << 11 BELOW this line -- the SAME failure,
+135:	    happening to SGIRE_W_PRIM_OP.  Demoted rather than deleted, for that
+139:	SGIRE_W_BADMODE   = 1 << 10,
+142:	    #513: THE TEX READ DECLINE GETS ITS OWN BIT, not SGIRE_W_TEX_LEN.
+143:	    Sharing one was measured at 23/25 for SGIRE_W_DE_LEN in #498: an
+150:	    IS THE LAST ENUMERATOR".  #519 added SGIRE_W_BADCOLOR = 1 << 12
+155:	SGIRE_W_TEX_RD    = 1 << 11,
+161:	    by that site's ordinary traffic.  SGIRE_W_BADMODE (1 << 10) is the
+169:	SGIRE_W_BADCOLOR  = 1 << 12,
+194:	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+196:	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+203:	uint32_t	warned;
+273:		    its exit(1) commented out -- so a failed GET handed the CALLER a
+296:		if (!(d->warned & SGIRE_W_BADMODE)) {
+297:			d->warned |= SGIRE_W_BADMODE;
+315:		//exit(1);
+365:			if (!(d->warned & SGIRE_W_BADCOLOR)) {
+366:				d->warned |= SGIRE_W_BADCOLOR;
+374:			cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+377:		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+446:	 *     coerced to -1 by cpus/memory_rw.c and raise EXCEPTION_DBE in the
+453:	 *     below still exit(1)s, so odata is never assigned today".  #499 MADE IT
+457:	 *     arms below DO still exit(1) -- that half is unchanged and is sgirekills. ***
+492:			if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+493:				d->warned |= SGIRE_W_TLBA_LEN;
+531:			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+532:				d->warned |= SGIRE_W_TLBB_LEN;
+555:			if (!(d->warned & SGIRE_W_TLBC_LEN)) {
+556:				d->warned |= SGIRE_W_TLBC_LEN;
+579:			if (!(d->warned & SGIRE_W_TEX_LEN)) {
+580:				d->warned |= SGIRE_W_TEX_LEN;
+616:			if (!(d->warned & SGIRE_W_TEX_RD)) {
+617:				d->warned |= SGIRE_W_TEX_RD;
+634:			 *      ADES/ADEL WITHOUT calling memory_rw at all
+639:			 *      three of its memory_rw calls, so it cannot deliver an
+648:			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+664:			if (!(d->warned & SGIRE_W_LINA_LEN)) {
+665:				d->warned |= SGIRE_W_LINA_LEN;
+723:			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+747:			 *      ADES/ADEL WITHOUT calling memory_rw at all
+752:			 *      three of its memory_rw calls, so it cannot deliver an
+761:			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+777:			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+778:				d->warned |= SGIRE_W_LINB_LEN;
+802:			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+816:			if (!(d->warned & SGIRE_W_UNMAP_WR)) {
+817:				d->warned |= SGIRE_W_UNMAP_WR;
+824:			if (!(d->warned & SGIRE_W_UNMAP_RD)) {
+825:				d->warned |= SGIRE_W_UNMAP_RD;
+848:	memset(d, 0, sizeof(struct sgi_re_data));
+931:			// exit(1);
+1139:		if (!(d->warned & SGIRE_W_PRIM_OP)) {
+1140:			d->warned |= SGIRE_W_PRIM_OP;
+1187:		 *  "len = N not implemented" and exit(1), 4/4.
+1211:		 *  would be coerced to -1 by cpus/memory_rw.c and raise
+1214:		if (!(d->warned & SGIRE_W_DE_LEN)) {
+1215:			d->warned |= SGIRE_W_DE_LEN;
+1468:void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+1493:		// exit(1);
+1498:		exit(1);
+1506:		exit(1);
+1545:			    assigns buf[0] alone while memory_rw copies four --
+1582:			exit(1);
+1587:			exit(1);
+1598:			exit(1);
+1668:				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
+1720:		exit(1);
+1808:		do_mte_transfer(cpu, d);
+1844:	case CRIME_DE_STATUS:	// 0x4000
+
+ succeeded in 216ms:
+ 1689  	int startFlag = relative_addr & CRIME_DE_START;
+ 1690  
+ 1691  	relative_addr &= ~CRIME_DE_START;
+ 1692  
+ 1693  	idata = memory_readmax64(cpu, data, len);
+ 1694  	regnr = relative_addr / sizeof(uint32_t);
+ 1695  
+ 1696  	relative_addr += 0x3000;
+ 1697  
+ 1698  	/*
+ 1699  	 *  Treat all registers as read/write, by default.  Sometimes these
+ 1700  	 *  are accessed as 32-bit words, sometimes as 64-bit words.
+ 1701  	 *
+ 1702  	 *  NOTE: The lowest bits are internally stored in the "low" (+0)
+ 1703  	 *  register, and the higher bits are stored in the "+1" word.
+ 1704  	 */
+ 1705  	if (len == 4) {
+ 1706  		if (writeflag == MEM_WRITE)
+ 1707  			d->mte_reg[regnr] = idata;
+ 1708  		else
+ 1709  			odata = d->mte_reg[regnr];
+ 1710  	} else if (len != 4) {
+ 1711  		if (writeflag == MEM_WRITE) {
+ 1712  			d->mte_reg[regnr+1] = idata >> 32;
+ 1713  			d->mte_reg[regnr] = idata;
+ 1714  		} else {
+ 1715  			odata = ((uint64_t)d->mte_reg[regnr+1] << 32) +
+ 1716  			    d->mte_reg[regnr];
+ 1717  		}
+ 1718  	} else {
+ 1719  		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+ 1720  		exit(1);
+ 1721  	}
+ 1722  
+ 1723  	switch (relative_addr) {
+ 1724  
+ 1725  	case CRIME_MTE_MODE:
+ 1726  		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+ 1727  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1728  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1729  		break;
+ 1730  
+ 1731  	case CRIME_MTE_BYTEMASK:
+ 1732  		debug("[ sgi_mte: %s CRIME_MTE_BYTEMASK: 0x%016llx ]\n",
+ 1733  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1734  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1735  		break;
+ 1736  
+ 1737  	case CRIME_MTE_STIPPLEMASK:
+ 1738  		fatal("[ sgi_mte: %s CRIME_MTE_STIPPLEMASK: 0x%016llx ]\n",
+ 1739  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1740  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1741  		break;
+ 1742  
+ 1743  	case CRIME_MTE_BG:
+ 1744  		debug("[ sgi_mte: %s CRIME_MTE_BG: 0x%016llx ]\n",
+ 1745  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1746  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1747  		break;
+ 1748  
+ 1749  	case CRIME_MTE_SRC0:
+ 1750  		debug("[ sgi_mte: %s CRIME_MTE_SRC0: 0x%016llx ]\n",
+ 1751  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1752  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1753  		break;
+ 1754  
+ 1755  	case CRIME_MTE_SRC1:
+ 1756  		debug("[ sgi_mte: %s CRIME_MTE_SRC1: 0x%016llx ]\n",
+ 1757  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1758  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1759  		break;
+ 1760  
+ 1761  	case CRIME_MTE_DST0:
+ 1762  		debug("[ sgi_mte: %s CRIME_MTE_DST0: 0x%016llx ]\n",
+ 1763  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1764  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1765  		break;
+ 1766  
+ 1767  	case CRIME_MTE_DST1:
+ 1768  		debug("[ sgi_mte: %s CRIME_MTE_DST1: 0x%016llx ]\n",
+ 1769  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1770  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1771  		break;
+ 1772  
+ 1773  	case CRIME_MTE_SRC_Y_STEP:
+ 1774  		debug("[ sgi_mte: %s CRIME_MTE_SRC_Y_STEP: 0x%016llx ]\n",
+ 1775  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1776  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1777  		break;
+ 1778  
+ 1779  	case CRIME_MTE_DST_Y_STEP:
+ 1780  		debug("[ sgi_mte: %s CRIME_MTE_DST_Y_STEP: 0x%016llx ]\n",
+ 1781  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1782  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1783  		break;
+ 1784  
+ 1785  	case CRIME_MTE_NULL:
+ 1786  		fatal("[ sgi_mte: %s CRIME_MTE_NULL: 0x%016llx ]\n",
+ 1787  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1788  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1789  		break;
+ 1790  
+ 1791  	case CRIME_MTE_FLUSH:
+ 1792  		fatal("[ sgi_mte: %s CRIME_MTE_FLUSH: 0x%016llx ]\n",
+ 1793  		    writeflag == MEM_WRITE ? "write to" : "read from",
+ 1794  		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+ 1795  		break;
+ 1796  
+ 1797  	default:
+ 1798  		if (writeflag == MEM_WRITE)
+ 1799  			fatal("[ sgi_mte: unimplemented write to "
+ 1800  			    "address 0x%llx, data=0x%016llx ]\n",
+ 1801  			    (long long)relative_addr, (long long)idata);
+ 1802  		else
+ 1803  			fatal("[ sgi_mte: unimplemented read from address"
+ 1804  			    " 0x%llx ]\n", (long long)relative_addr);
+ 1805  	}
+ 1806  
+ 1807  	if (startFlag)
+ 1808  		do_mte_transfer(cpu, d);
+ 1809  
+ 1810  	if (writeflag == MEM_READ)
+ 1811  		memory_writemax64(cpu, data, len, odata);
+ 1812  
+ 1813  	return 1;
+ 1814  }
+```
+
+### 3c. `DEVICE_ACCESS(sgi_de_status)` -- the status a guest polls (a constant)
+
+```c
+ 1833  DEVICE_ACCESS(sgi_de_status)
+ 1834  {
+ 1835  	// struct sgi_re_data *d = (struct sgi_re_data *) extra;
+ 1836  	uint64_t idata = 0, odata = 0;
+ 1837  
+ 1838  	idata = memory_readmax64(cpu, data, len);
+ 1839  
+ 1840  	relative_addr += 0x4000;
+ 1841  
+ 1842  	switch (relative_addr) {
+ 1843  
+ 1844  	case CRIME_DE_STATUS:	// 0x4000
+ 1845  		odata = CRIME_DE_IDLE |
+ 1846  			CRIME_DE_SETUP_IDLE |
+ 1847  			CRIME_DE_PIXPIPE_IDLE |
+ 1848  			CRIME_DE_MTE_IDLE;
+ 1849  
+ 1850  		/*
+ 1851  		 *  TODO: Actually simulate pipeline of a number of commands?
+ 1852  		 */
+ 1853  		break;
+ 1854  
+ 1855  	case 0x4008:
+ 1856  		/*  Unknown. Ignore for now.  */
+ 1857  		break;
+ 1858  
+ 1859  	default:
+ 1860  		if (writeflag == MEM_WRITE)
+ 1861  			debug("[ sgi_de_status: unimplemented write to "
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/devices/dev_sgi_re.c'; "'$v=Get-Content -LiteralPath $p; 1467..1813 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/devices/dev_sgi_re.c'; "'$v=Get-Content -LiteralPath $p; @(154..210)+@(837..873)+@(1832..1876) | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; Get-FileHash -LiteralPath $p -Algorithm MD5; rg -n '"'MTE_MODE_|MTE_TLB_|MTE_DEPTH_|CRIME_DE_(START|IDLE|SETUP_IDLE|PIXPIPE_IDLE|MTE_IDLE)' src/include/thirdparty/crmfbreg.h; rg -n 'void fatal|fatal\\(|fatal_exit|quiet_mode|debug_indent' src/core/debugmsg.c" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'MTE_MODE_SRC_BUF_MASK|MTE_SRC_TLB_SHIFT|MTE_MODE_COPY|MTE_MODE_STIPPLE|MTE_MODE_DEPTH_MASK|do_mte_transfer|sgi_mte' src regress -g '*.c' -g '*.h' -g '*.py' -g '"'!artifacts/**'"' -g '"'!regress/artifacts/**'"'" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 183ms:
+regress\sgi_de_width_probe.py:70:#      * anything in sgi_re, sgi_mte or sgi_de_status.
+regress\sgi_de_primop_probe.py:211:#  MISLABELLED throughout: phys 0x15003000 is the sgi_mte window; sgi_de_status
+regress\sgi_de_primop_probe.py:520:#  It matters because the four sgi_re/sgi_de/sgi_mte/sgi_de_status handlers share
+regress\sgi_re_width_probe.py:55:#      * anything in DEVICE_ACCESS(sgi_de) or (sgi_mte), including sgi_de's own
+regress\sgi_re_width_probe.py:56:#        width kill (accept set {4,8}, filed sgidewidth) and sgi_mte's
+regress\sgi_re_unmapped_probe.py:103:#      * anything in sgi_mte, or in sgi_de_status beyond the signature control.
+src\include\devices.h:420:void dev_sgi_mte_init(struct memory *mem, uint64_t baseaddr, struct sgi_re_data *);
+regress\sgi_mte_fill_probe.py:5:#      :1311  int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);   /* BITS */
+regress\sgi_mte_fill_probe.py:82:#    * `depth == 32 && !(mode & MTE_MODE_COPY)' -- provably unkillable by this instrument; the
+regress\sgi_mte_fill_probe.py:118:#  Usage:  sgi_mte_fill_probe.py <gxemul-binary> [label]
+regress\sgi_mte_fill_probe.py:151:DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sgi_mte_dummy.bin")
+regress\sgi_mte_fill_probe.py:162:#  `if (startFlag) do_mte_transfer(cpu, d);' sits at the END of DEVICE_ACCESS(sgi_mte), so any MTE
+regress\sgi_mte_fill_probe.py:167:#  MTE_MODE_COPY 0x800 CLEAR = fill.  (0x800 here is a MODE bit; the 0x800 in the address is START.)
+regress\sgi_mte_fill_probe.py:185:MODE_COPY  = 0x800                # MTE_MODE_COPY (a MODE bit; the 0x800 in an ADDRESS is START)
+regress\sgi_mte_fill_probe.py:306:    c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+regress\sgi_mte_fill_probe.py:314:    mode word carries MTE_MODE_DST_BUF so do_mte_transfer()'s `dst_tlb' is 1 or 2, not 0.
+regress\sgi_mte_fill_probe.py:325:    c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+regress\sgi_mte_fill_probe.py:351:    c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+regress\sgi_mte_fill_probe.py:354:print("sgi_mte_fill_probe -- binary=%s label=%s machine=sgi/ip32" % (BIN, LABEL))
+regress\sgi_mte_fill_probe.py:425:#  (a) UNDER A `&& (mode & MTE_MODE_COPY)' MUTANT THE COPY ROWS ARE A WRONG-REASON KILL.  The
+regress\sgi_mte_fill_probe.py:431:#  (b) THE DUAL, `if (depth == 32 && !(mode & MTE_MODE_COPY))', IS NOT PINNED AND CANNOT BE.
+regress\sgi_mte_fill_probe.py:439:#      exactly `src_mode |= ...; dst_mode |= ...' -- it does not read MTE_MODE_COPY, which is
+src\devices\dev_sgi_re.c:688:			 *  [ sgi_mte: STARTING TRANSFER: mode=0x00000011
+src\devices\dev_sgi_re.c:854:	dev_sgi_mte_init(mem, baseaddr + 0x3000, d);
+src\devices\dev_sgi_re.c:1468:void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+src\devices\dev_sgi_re.c:1479:	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+src\devices\dev_sgi_re.c:1480:	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+src\devices\dev_sgi_re.c:1484:	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+src\devices\dev_sgi_re.c:1492:		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+src\devices\dev_sgi_re.c:1496:	if (mode & MTE_MODE_STIPPLE) {
+src\devices\dev_sgi_re.c:1497:		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+src\devices\dev_sgi_re.c:1501:	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+src\devices\dev_sgi_re.c:1505:		fatal("[ sgi_mte: unimplemented SRC ]");
+src\devices\dev_sgi_re.c:1533:			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+src\devices\dev_sgi_re.c:1534:			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+src\devices\dev_sgi_re.c:1564:					if (mode & MTE_MODE_COPY) {
+src\devices\dev_sgi_re.c:1580:		if (mode & MTE_MODE_COPY) {
+src\devices\dev_sgi_re.c:1581:			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+src\devices\dev_sgi_re.c:1586:			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+src\devices\dev_sgi_re.c:1590:		debug("[ sgi_mte: LINEAR TRANSFER: mode=0x%08x dst0=0x%016llx,"
+src\devices\dev_sgi_re.c:1671:				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
+src\devices\dev_sgi_re.c:1680:		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+src\devices\dev_sgi_re.c:1684:DEVICE_ACCESS(sgi_mte)
+src\devices\dev_sgi_re.c:1719:		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+src\devices\dev_sgi_re.c:1726:		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1732:		debug("[ sgi_mte: %s CRIME_MTE_BYTEMASK: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1738:		fatal("[ sgi_mte: %s CRIME_MTE_STIPPLEMASK: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1744:		debug("[ sgi_mte: %s CRIME_MTE_BG: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1750:		debug("[ sgi_mte: %s CRIME_MTE_SRC0: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1756:		debug("[ sgi_mte: %s CRIME_MTE_SRC1: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1762:		debug("[ sgi_mte: %s CRIME_MTE_DST0: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1768:		debug("[ sgi_mte: %s CRIME_MTE_DST1: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1774:		debug("[ sgi_mte: %s CRIME_MTE_SRC_Y_STEP: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1780:		debug("[ sgi_mte: %s CRIME_MTE_DST_Y_STEP: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1786:		fatal("[ sgi_mte: %s CRIME_MTE_NULL: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1792:		fatal("[ sgi_mte: %s CRIME_MTE_FLUSH: 0x%016llx ]\n",
+src\devices\dev_sgi_re.c:1799:			fatal("[ sgi_mte: unimplemented write to "
+src\devices\dev_sgi_re.c:1803:			fatal("[ sgi_mte: unimplemented read from address"
+src\devices\dev_sgi_re.c:1808:		do_mte_transfer(cpu, d);
+src\devices\dev_sgi_re.c:1818: *  dev_sgi_mte_init():
+src\devices\dev_sgi_re.c:1820:void dev_sgi_mte_init(struct memory *mem, uint64_t baseaddr, struct sgi_re_data *d)
+src\devices\dev_sgi_re.c:1822:	memory_device_register(mem, "sgi_mte", baseaddr, DEV_SGI_MTE_LENGTH,
+src\devices\dev_sgi_re.c:1823:	    dev_sgi_mte_access, (void *)d, DM_DEFAULT, NULL);
+src\include\thirdparty\crmfbreg.h:265:#define MTE_MODE_SRC_BUF_MASK	0x000000e0
+src\include\thirdparty\crmfbreg.h:266:	#define MTE_SRC_TLB_SHIFT 5
+src\include\thirdparty\crmfbreg.h:267:#define MTE_MODE_DEPTH_MASK	0x00000300
+src\include\thirdparty\crmfbreg.h:272:#define MTE_MODE_STIPPLE	0x00000400
+src\include\thirdparty\crmfbreg.h:273:#define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+
+ succeeded in 262ms:
+1468: void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+1469: {
+1470: 	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+1471: 	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+1472: 	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+1473: 	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+1474: 	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+1475: 	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1476: 	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1477: 	uint32_t dstlen = dst1 - dst0 + 1, fill_addr;
+1478: 	unsigned char zerobuf[4096];
+1479: 	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+1480: 	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1481: 	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+1482: 	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+1483: 
+1484: 	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+1485: 	    " dst1=0x%08x dst_y_step=%i bg=0x%x bytemask=0x%x ]\n",
+1486: 	    mode,
+1487: 	    src0, src1, src_y_step,
+1488: 	    dst0, dst1, dst_y_step,
+1489: 	    bg, bytemask);
+1490: 
+1491: 	if (dst_y_step != 0 && dst_y_step != 1 && dst_y_step != -1) {
+1492: 		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+1493: 		// exit(1);
+1494: 	}
+1495: 
+1496: 	if (mode & MTE_MODE_STIPPLE) {
+1497: 		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+1498: 		exit(1);
+1499: 	}
+1500: 
+1501: 	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1502: 	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+1503: 	
+1504: 	if (src > MTE_TLB_C) {
+1505: 		fatal("[ sgi_mte: unimplemented SRC ]");
+1506: 		exit(1);
+1507: 	}
+1508: 
+1509: 	switch (dst_tlb) {
+1510: 	case MTE_TLB_A:
+1511: 	case MTE_TLB_B:
+1512: 	case MTE_TLB_C:
+1513: 		// Used by NetBSD's crmfb_fill_rect. It puts graphical
+1514: 		// coordinates in dst0 and dst1.
+1515: 		{
+1516: 			int x1 = (dst0 >> 16) & 0xfff;
+1517: 			int y1 = dst0 & 0xfff;
+1518: 			int x2 = (dst1 >> 16) & 0xfff;
+1519: 			int y2 = dst1 & 0xfff;
+1520: 			x1 /= (depth / 8);
+1521: 			x2 /= (depth / 8);
+1522: 
+1523: 			int src_x1 = (src0 >> 16) & 0xfff;
+1524: 			int src_y1 = src0 & 0xfff;
+1525: 			// int src_x2 = (src1 >> 16) & 0xfff;
+1526: 			// int src_y2 = src1 & 0xfff;
+1527: 			src_x1 /= (depth / 8);
+1528: 			// src_x2 /= (depth / 8);
+1529: 
+1530: 			int dx = x1 > x2 ? -1 : 1;
+1531: 			int dy = y1 > y2 ? -1 : 1;
+1532: 			
+1533: 			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1534: 			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1535: 
+1536: 			// Hack. The MTE perhaps doesn't deal with colors per se,
+1537: 			// but this makes sure that we copy 32 bits when doing 32-bit
+1538: 			// transfers.
+1539: 			/*  #509: was `depth == 4' -- UNREACHABLE.  `depth' is
+1540: 			    a count of BITS (8 << a two-bit field, so 8/16/32/64
+1541: 			    only); 4 is the corresponding BYTE count, which the
+1542: 			    author used correctly in the `/ (depth / 8)' lines
+1543: 			    just above.  So both assignments were dead, every
+1544: 			    tiled transfer took the CI arm, and at 32 bits CI
+1545: 			    assigns buf[0] alone while memory_rw copies four --
+1546: 			    publishing three bytes of host stack into guest
+1547: 			    memory.  The comment above states the intended
+1548: 			    condition in words: 32-bit transfers.
+1549: 
+1550: 			    This repairs the 32-bit cell ONLY.  The 16-bit and
+1551: 			    reserved-encoding-3 cells assign fewer bytes than
+1552: 			    they copy for the same reason and are NOT closed
+1553: 			    here -- see the uninitialised-buffer sibling.  */
+1554: 			if (depth == 32) {	/*  #509  */
+1555: 				src_mode |= DE_MODE_TYPE_RGBA;
+1556: 				dst_mode |= DE_MODE_TYPE_RGBA;
+1557: 			}
+1558: 
+1559: 			int src_y = src_y1;
+1560: 			for (int y = y1; y != y2+dy; y += dy) {
+1561: 				int src_x = src_x1;
+1562: 				
+1563: 				for  (int x = x1; x != x2+dx; x += dx) {
+1564: 					if (mode & MTE_MODE_COPY) {
+1565: 						horrible_getputpixel(0, cpu, d,
+1566: 							src_x, src_y, &bg, src_mode);
+1567: 						src_x += dx;
+1568: 					}
+1569: 
+1570: 					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+1571: 				}
+1572: 				
+1573: 				src_y += dy;
+1574: 			}
+1575: 		}
+1576: 		break;
+1577: 	case MTE_TLB_LIN_A:
+1578: 	case MTE_TLB_LIN_B:
+1579: 		// Used by the PROM to zero-fill memory (?).
+1580: 		if (mode & MTE_MODE_COPY) {
+1581: 			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+1582: 			exit(1);
+1583: 		}
+1584: 
+1585: 		if (depth != 8) {
+1586: 			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+1587: 			exit(1);
+1588: 		}
+1589: 
+1590: 		debug("[ sgi_mte: LINEAR TRANSFER: mode=0x%08x dst0=0x%016llx,"
+1591: 		    " dst1=0x%016llx (length 0x%llx), dst_y_step=%i bg=0x%x, bytemask=0x%x ]\n",
+1592: 		    mode,
+1593: 		    (long long)dst0, (long long)dst1,
+1594: 		    (long long)dstlen, dst_y_step, (int)bg, (int)bytemask);
+1595: 
+1596: 		if (bytemask != 0xffffffff) {
+1597: 			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
+1598: 			exit(1);
+1599: 		}
+1600: 
+1601: 		/*
+1602: 		 *  Horrible hack:
+1603: 		 *
+1604: 		 *  During bootup, the PROM fills memory at 0x40000000 and
+1605: 		 *  forward. This corresponds to the lowest possible RAM address.
+1606: 		 *  However, these fills are not going via the CPU's cache,
+1607: 		 *  which contains things such as the return address on the
+1608: 		 *  stack. If we _really_ write this data in the emulator (which
+1609: 		 *  doesn't emulate the cache), it would overwrite the stack.
+1610: 		 *
+1611: 		 *  So let's not.
+1612: 		 *
+1613: 		 *  (If some guest OS or firmware variant actually depends on
+1614: 		 *  the ability to write to the start of memory this way,
+1615: 		 *  it would not work in the emulator.)
+1616: 		 */
+1617: 		// if (dst0 >= 0x40000000 && dst0 < 0x40004000 && dst1 > 0x40004000) {
+1618: 		//	dst0 += 0x4000;
+1619: 		//	dstlen -= 0x4000;
+1620: 		// }
+1621: 
+1622: 		/*
+1623: 		 *  HUH?
+1624: 		 *
+1625: 		 *  Note that due to a bug (?) in the PROM firmware when it
+1626: 		 *  is setting up the TLB entries, only every _second_ page is
+1627: 		 *  actually put correctly in the TLB. This means that even
+1628: 		 *  though it then tries to fill 0x40000000 .. 0x40007fff with
+1629: 		 *  zeroes, it only fills 0x40001000 .. 0x40001fff,
+1630: 		 *  0x40003000 .. 0x40003fff and so on!
+1631: 		 *
+1632: 		 *  So the Horrible hack above is not needed.
+1633: 		 *
+1634: 		 *  Ironic.
+1635: 		 */
+1636: 
+1637: 		memset(zerobuf, bg, dstlen < sizeof(zerobuf) ? dstlen : sizeof(zerobuf));
+1638: 		fill_addr = dst0;
+1639: 		while (dstlen != 0) {
+1640: 			uint64_t fill_len;
+1641: 			if (dstlen > sizeof(zerobuf))
+1642: 				fill_len = sizeof(zerobuf);
+1643: 			else
+1644: 				fill_len = dstlen;
+1645: 
+1646: 			uint64_t starting_page = fill_addr & ~0xfff;
+1647: 			uint64_t ending_page = (fill_addr + fill_len - 1) & ~0xfff;
+1648: 			if (starting_page != ending_page) {
+1649: 				fill_len = starting_page + 4096 - fill_addr;
+1650: 			}
+1651: 
+1652: 			// Find starting_page in the TLB in question.
+1653: 			starting_page >>= 12;
+1654: 			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+1655: 			int match = 0;
+1656: 			for (int i = 0; i < 32; ++i) {
+1657: 				uint32_t entry = tlb[i];
+1658: 				if (entry & 0x80000000) {
+1659: 					entry &= ~0x80000000;
+1660: 					if (entry == starting_page) {
+1661: 						match = 1;
+1662: 						break;
+1663: 					}
+1664: 				}
+1665: 			}
+1666: 			
+1667: 			if (match) {
+1668: 				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
+1669: 					MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+1670: 			} else {
+1671: 				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
+1672: 					(long long)fill_addr);
+1673: 			}
+1674: 
+1675: 			fill_addr += fill_len;
+1676: 			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
+1677: 		}
+1678: 		break;
+1679: 	default:
+1680: 		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+1681: 	}
+1682: }
+1683: 
+1684: DEVICE_ACCESS(sgi_mte)
+1685: {
+1686: 	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+1687: 	uint64_t idata = 0, odata = 0;
+1688: 	int regnr;
+1689: 	int startFlag = relative_addr & CRIME_DE_START;
+1690: 
+1691: 	relative_addr &= ~CRIME_DE_START;
+1692: 
+1693: 	idata = memory_readmax64(cpu, data, len);
+1694: 	regnr = relative_addr / sizeof(uint32_t);
+1695: 
+1696: 	relative_addr += 0x3000;
+1697: 
+1698: 	/*
+1699: 	 *  Treat all registers as read/write, by default.  Sometimes these
+1700: 	 *  are accessed as 32-bit words, sometimes as 64-bit words.
+1701: 	 *
+1702: 	 *  NOTE: The lowest bits are internally stored in the "low" (+0)
+1703: 	 *  register, and the higher bits are stored in the "+1" word.
+1704: 	 */
+1705: 	if (len == 4) {
+1706: 		if (writeflag == MEM_WRITE)
+1707: 			d->mte_reg[regnr] = idata;
+1708: 		else
+1709: 			odata = d->mte_reg[regnr];
+1710: 	} else if (len != 4) {
+1711: 		if (writeflag == MEM_WRITE) {
+1712: 			d->mte_reg[regnr+1] = idata >> 32;
+1713: 			d->mte_reg[regnr] = idata;
+1714: 		} else {
+1715: 			odata = ((uint64_t)d->mte_reg[regnr+1] << 32) +
+1716: 			    d->mte_reg[regnr];
+1717: 		}
+1718: 	} else {
+1719: 		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+1720: 		exit(1);
+1721: 	}
+1722: 
+1723: 	switch (relative_addr) {
+1724: 
+1725: 	case CRIME_MTE_MODE:
+1726: 		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+1727: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1728: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1729: 		break;
+1730: 
+1731: 	case CRIME_MTE_BYTEMASK:
+1732: 		debug("[ sgi_mte: %s CRIME_MTE_BYTEMASK: 0x%016llx ]\n",
+1733: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1734: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1735: 		break;
+1736: 
+1737: 	case CRIME_MTE_STIPPLEMASK:
+1738: 		fatal("[ sgi_mte: %s CRIME_MTE_STIPPLEMASK: 0x%016llx ]\n",
+1739: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1740: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1741: 		break;
+1742: 
+1743: 	case CRIME_MTE_BG:
+1744: 		debug("[ sgi_mte: %s CRIME_MTE_BG: 0x%016llx ]\n",
+1745: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1746: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1747: 		break;
+1748: 
+1749: 	case CRIME_MTE_SRC0:
+1750: 		debug("[ sgi_mte: %s CRIME_MTE_SRC0: 0x%016llx ]\n",
+1751: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1752: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1753: 		break;
+1754: 
+1755: 	case CRIME_MTE_SRC1:
+1756: 		debug("[ sgi_mte: %s CRIME_MTE_SRC1: 0x%016llx ]\n",
+1757: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1758: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1759: 		break;
+1760: 
+1761: 	case CRIME_MTE_DST0:
+1762: 		debug("[ sgi_mte: %s CRIME_MTE_DST0: 0x%016llx ]\n",
+1763: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1764: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1765: 		break;
+1766: 
+1767: 	case CRIME_MTE_DST1:
+1768: 		debug("[ sgi_mte: %s CRIME_MTE_DST1: 0x%016llx ]\n",
+1769: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1770: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1771: 		break;
+1772: 
+1773: 	case CRIME_MTE_SRC_Y_STEP:
+1774: 		debug("[ sgi_mte: %s CRIME_MTE_SRC_Y_STEP: 0x%016llx ]\n",
+1775: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1776: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1777: 		break;
+1778: 
+1779: 	case CRIME_MTE_DST_Y_STEP:
+1780: 		debug("[ sgi_mte: %s CRIME_MTE_DST_Y_STEP: 0x%016llx ]\n",
+1781: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1782: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1783: 		break;
+1784: 
+1785: 	case CRIME_MTE_NULL:
+1786: 		fatal("[ sgi_mte: %s CRIME_MTE_NULL: 0x%016llx ]\n",
+1787: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1788: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1789: 		break;
+1790: 
+1791: 	case CRIME_MTE_FLUSH:
+1792: 		fatal("[ sgi_mte: %s CRIME_MTE_FLUSH: 0x%016llx ]\n",
+1793: 		    writeflag == MEM_WRITE ? "write to" : "read from",
+1794: 		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+1795: 		break;
+1796: 
+1797: 	default:
+1798: 		if (writeflag == MEM_WRITE)
+1799: 			fatal("[ sgi_mte: unimplemented write to "
+1800: 			    "address 0x%llx, data=0x%016llx ]\n",
+1801: 			    (long long)relative_addr, (long long)idata);
+1802: 		else
+1803: 			fatal("[ sgi_mte: unimplemented read from address"
+1804: 			    " 0x%llx ]\n", (long long)relative_addr);
+1805: 	}
+1806: 
+1807: 	if (startFlag)
+1808: 		do_mte_transfer(cpu, d);
+1809: 
+1810: 	if (writeflag == MEM_READ)
+1811: 		memory_writemax64(cpu, data, len, odata);
+1812: 
+1813: 	return 1;
+1814: }
+
+ succeeded in 421ms:
+155: 	SGIRE_W_TEX_RD    = 1 << 11,
+156: 
+157: 	/*  #519 (sgirandomcolour): the colour-type PUT decline in
+158: 	    horrible_getputpixel() gets its OWN bit, per the rule every entry
+159: 	    above records: the helper is per-pixel, the struct is shared by
+160: 	    four handlers, and a latch shared with any other site is silenced
+161: 	    by that site's ordinary traffic.  SGIRE_W_BADMODE (1 << 10) is the
+162: 	    TLB/mode switch's decline in the same function and is a different
+163: 	    event with a different text; sharing it would collapse the two.
+164: 
+165: 	    THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR --
+166: 	    which is where that claim belongs, per the convention above.  A
+167: 	    maintainer adding a bit BELOW this line must move this sentence
+168: 	    with it and demote the copy here.  */
+169: 	SGIRE_W_BADCOLOR  = 1 << 12,
+170: };
+171: 
+172: struct sgi_re_data {
+173: 	// Rendering engine registers:
+174: 	uint16_t	re_tlb_a[256];
+175: 	uint16_t	re_tlb_b[256];
+176: 	uint16_t	re_tlb_c[256];
+177: 	uint16_t	re_tex[112];
+178: 	// todo: clip_ids registers.
+179: 	uint32_t	re_linear_a[32];
+180: 	uint32_t	re_linear_b[32];
+181: 
+182: 	// Drawing engine registers:
+183: 	uint32_t	de_reg[DEV_SGI_DE_LENGTH / sizeof(uint32_t)];
+184: 
+185: 	// Memory transfer engine registers:
+186: 	uint32_t	mte_reg[DEV_SGI_MTE_LENGTH / sizeof(uint32_t)];
+187: 
+188: 	/*
+189: 	 *  #497: width-guard decline latches; see the enum above.
+190: 	 *
+191: 	 *  PLACED LAST, DELIBERATELY, AND THE ORDER IS LOAD-BEARING.
+192: 	 *  re_linear_a/b are written at [tlbi] AND [tlbi+1] with tlbi able to
+193: 	 *  reach 31, so index 32 of either array lands on whichever field
+194: 	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+195: 	 *  re_linear_b and de_reg; measured with offsetof, that made
+196: 	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+197: 	 *  falsified the adjacency the two LINEAR site comments cite, and made
+198: 	 *  an over-run SET WARNING LATCH BITS and silence this device's own
+199: 	 *  diagnostics.  Keeping the latch after mte_reg restores the
+200: 	 *  documented adjacency: re_linear_a[32] is re_linear_b[0] and
+201: 	 *  re_linear_b[32] is de_reg[0].
+202: 	 */
+203: 	uint32_t	warned;
+204: };
+205: 
+206: 
+207: /*
+208:  *  horrible_getputpixel():
+209:  *
+210:  *  This routine gets/puts a pixel in one of the tiles, from the perspective of
+211:  *  the rendering/drawing engine. Given x and y, it figures out which tile
+838: 
+839: 
+840: /*
+841:  *  dev_sgi_re_init():
+842:  */
+843: void dev_sgi_re_init(struct machine *machine, struct memory *mem, uint64_t baseaddr)
+844: {
+845: 	struct sgi_re_data *d;
+846: 
+847: 	CHECK_ALLOCATION(d = (struct sgi_re_data *) malloc(sizeof(struct sgi_re_data)));
+848: 	memset(d, 0, sizeof(struct sgi_re_data));
+849: 
+850: 	memory_device_register(mem, "sgi_re", baseaddr + 0x1000, DEV_SGI_RE_LENGTH,
+851: 	    dev_sgi_re_access, d, DM_DEFAULT, NULL);
+852: 
+853: 	dev_sgi_de_init(mem, baseaddr + 0x2000, d);
+854: 	dev_sgi_mte_init(mem, baseaddr + 0x3000, d);
+855: 	dev_sgi_de_status_init(mem, baseaddr + 0x4000, d);
+856: }
+857: 
+858: 
+859: 
+860: /****************************************************************************/
+861: 
+862: /*
+863:  *  SGI "de", NetBSD sources describes it as a "drawing engine".
+864:  */
+865: 
+866: void draw_primitive(struct cpu* cpu, struct sgi_re_data *d)
+867: {
+868: 	uint32_t op = d->de_reg[(CRIME_DE_PRIMITIVE - 0x2000) / sizeof(uint32_t)];
+869: 	uint32_t drawmode = d->de_reg[(CRIME_DE_DRAWMODE - 0x2000) / sizeof(uint32_t)];
+870: 	uint32_t dst_mode = d->de_reg[(CRIME_DE_MODE_DST - 0x2000) / sizeof(uint32_t)];
+871: 	uint32_t src_mode = d->de_reg[(CRIME_DE_MODE_SRC - 0x2000) / sizeof(uint32_t)];
+872: 	uint32_t fg = d->de_reg[(CRIME_DE_FG - 0x2000) / sizeof(uint32_t)];
+873: 	uint32_t bg = d->de_reg[(CRIME_DE_BG - 0x2000) / sizeof(uint32_t)];
+874: 	uint32_t rop = d->de_reg[(CRIME_DE_ROP - 0x2000) / sizeof(uint32_t)];
+1833: DEVICE_ACCESS(sgi_de_status)
+1834: {
+1835: 	// struct sgi_re_data *d = (struct sgi_re_data *) extra;
+1836: 	uint64_t idata = 0, odata = 0;
+1837: 
+1838: 	idata = memory_readmax64(cpu, data, len);
+1839: 
+1840: 	relative_addr += 0x4000;
+1841: 
+1842: 	switch (relative_addr) {
+1843: 
+1844: 	case CRIME_DE_STATUS:	// 0x4000
+1845: 		odata = CRIME_DE_IDLE |
+1846: 			CRIME_DE_SETUP_IDLE |
+1847: 			CRIME_DE_PIXPIPE_IDLE |
+1848: 			CRIME_DE_MTE_IDLE;
+1849: 
+1850: 		/*
+1851: 		 *  TODO: Actually simulate pipeline of a number of commands?
+1852: 		 */
+1853: 		break;
+1854: 
+1855: 	case 0x4008:
+1856: 		/*  Unknown. Ignore for now.  */
+1857: 		break;
+1858: 
+1859: 	default:
+1860: 		if (writeflag == MEM_WRITE)
+1861: 			debug("[ sgi_de_status: unimplemented write to "
+1862: 			    "address 0x%llx, data=0x%016llx ]\n",
+1863: 			    (long long)relative_addr, (long long)idata);
+1864: 		else
+1865: 			debug("[ sgi_de_status: unimplemented read from address"
+1866: 			    " 0x%llx ]\n", (long long)relative_addr);
+1867: 	}
+1868: 
+1869: 	if (writeflag == MEM_READ)
+1870: 		memory_writemax64(cpu, data, len, odata);
+1871: 
+1872: 	return 1;
+1873: }
+1874: 
+1875: 
+1876: /*
+1877:  *  dev_sgi_de_status_init():
+
+Algorithm       Hash                                                                   Path                            
+---------       ----                                                                   ----                            
+MD5             60203F67973C303D09CF381181E7412F                                       C:\DocumentNoSnc\cc\GXEMUL\GX...
+254:#define MTE_MODE_DST_ECC	0x00000001	/* enable ECC in DST */
+255:#define MTE_MODE_SRC_ECC	0x00000002	/* enable ECC in SRC */
+256:#define MTE_MODE_DST_BUF_MASK	0x0000001c
+257:	#define MTE_TLB_A	0
+258:	#define MTE_TLB_B	1
+259:	#define MTE_TLB_C	2
+260:	#define MTE_TLB_TEX	3
+261:	#define MTE_TLB_LIN_A	4
+262:	#define MTE_TLB_LIN_B	5
+263:	#define MTE_TLB_CLIP	6
+265:#define MTE_MODE_SRC_BUF_MASK	0x000000e0
+267:#define MTE_MODE_DEPTH_MASK	0x00000300
+268:	#define MTE_DEPTH_8	0
+269:	#define MTE_DEPTH_16	1
+270:	#define MTE_DEPTH_32	2
+271:	#define MTE_DEPTH_SHIFT 8
+272:#define MTE_MODE_STIPPLE	0x00000400
+273:#define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+316:#define CRIME_DE_START		0x0800	/* OR this to a register address in
+423:#define CRIME_DE_IDLE		0x10000000
+424:#define CRIME_DE_SETUP_IDLE	0x08000000
+425:#define CRIME_DE_PIXPIPE_IDLE	0x04000000
+426:#define CRIME_DE_MTE_IDLE	0x02000000
+56: *	Convert existing debug() and fatal() calls to the new debugmsg() call.
+76:int quiet_mode = 0;
+106:static size_t debug_indent = 0;
+116: *  Used internally by the old debug() and fatal() functions.
+127:			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+174:			fatal("[ subsystem breakpoint: %s ]\n",
+204:				for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; ++i)
+210:			    (debug_indent == 0 || (name == NULL || name[0] == '\0'));
+260:				for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; ++i)
+337: *  debug_indentation():
+342: *  This affects both the older debug() and fatal() functions, and the new
+345:void debug_indentation(int diff)
+347:	debug_indent += diff;
+349:	if ((ssize_t)debug_indent < 0) {
+350:		fprintf(stderr, "WARNING: debug_indent too low!\n");
+351:		debug_indent = 0;
+357: *  debug() and fatal():
+361: *  at the default level, and fatal() is used to always print stuff. With some
+375:	if ((quiet_mode && !ss) || v < 0)
+384:void fatal(const char *fmt, ...)
+
+
+
+codex
+The device file matches the packet’s MD5 and line numbers, and the five terminating guards are where the packet says they are. The test plan needs closer attention: repeating one site cannot detect a latch shared with another site, and an unchanged destination proves little unless the fixture would be writable if execution continued.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import pathlib,re
+p=pathlib.Path('src/devices/dev_sgi_re.c'); s=p.read_text()
+pat=r'/\\*.*?\\*/|//["'^'"\\n]*|\"(?:\\\\.|["'^"'"\\\\])*\"|\\x27(?:\\\\.|["'^'"\\x27\\\\])*\\x27'
+c=re.sub(pat,lambda m: ''.join('\\n' if x=='\\n' else ' ' for x in m[0]),s,flags=re.S)
+print('exit call line census:',[c.count('\\n',0,m.start())+1 for m in re.finditer(r'\\bexit\\s*\\(',c)])
+print('do_mte_transfer occurrence line census:',[c.count('\\n',0,m.start())+1 for m in re.finditer(r'\\bdo_mte_transfer\\s*\\(',c)])
+h=pathlib.Path('src/include/thirdparty/crmfbreg.h').read_text()
+def macro(name):
+ return int(re.search(r'"'^'"\\s*#define\\s+'+name+r'\\s+(\\w+)',h,re.M)[1],0)
+for kind,maskn,shiftn in [('src','MTE_MODE_SRC_BUF_MASK','MTE_SRC_TLB_SHIFT'),('dst','MTE_MODE_DST_BUF_MASK','MTE_DST_TLB_SHIFT'),('depth field','MTE_MODE_DEPTH_MASK','MTE_DEPTH_SHIFT')]:
+ mask,shift=macro(maskn),macro(shiftn)
+ values=sorted({(m&mask)>>shift for m in range(4096)})
+ print(kind,values, 'count',len(values))
+ if kind=='depth field': print('derived depths:',[8<<f for f in values])
+for name,m,mask in [('stipple',0x600,0),('src tex',0x260,0),('lin copy',0x810,0xffffffff),('lin depth',0x110,0xffffffff),('bytemask',0x010,0xffff),('lin fill',0x010,0xffffffff)]:
+ src=(m&macro('MTE_MODE_SRC_BUF_MASK'))>>macro('MTE_SRC_TLB_SHIFT'); dst=(m&macro('MTE_MODE_DST_BUF_MASK'))>>macro('MTE_DST_TLB_SHIFT'); depth=8<<((m&macro('MTE_MODE_DEPTH_MASK'))>>macro('MTE_DEPTH_SHIFT'))
+ first='S1' if m&0x400 else 'S2' if src>2 else 'S3' if dst in [4,5] and m&0x800 else 'S4' if dst in [4,5] and depth"'!=8 else '"'S5' if dst in [4,5] and mask"'!=0xffffffff else '"'none'
+ print(name,dict(src=src,dst=dst,depth=depth,copy=bool(m&0x800),first=first))
+print('existing warning shift indices:',[int(v) for v in re.findall(r'SGIRE_W_\\w+\\s*=\\s*1\\s*<<\\s*(\\d+)',c)])
+print('proposed warning values:',[hex(1<<i) for i in range(13,18)])
+print('single-zero bytemasks:',', '.join(f'{0xffffffff"'^(1<<b):08x}'"' for b in range(32)))
+for mask in [0xffffffff,0xfffffffe,0x7fffffff,0x0000ffff,0]:
+ print('mask mutation',hex(mask),'full decline',mask"'!=0xffffffff,'"'low16 decline',(mask&0xffff)"'!=0xffff,'"'low8 decline',(mask&0xff)"'!=0xff,'"'high16 decline',(mask&0xffff0000)"'!=0xffff0000)
+'"'@ | python -" in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'regress/sgi_mte_fill_probe.py'; "'$v=Get-Content -LiteralPath $p; @(151..207)+@(280..352)+@(407..456) | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/devices/dev_sgi_re.c'; "'$v=Get-Content -LiteralPath $p; 217..398 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; $p='"'src/core/debugmsg.c'; "'$v=Get-Content -LiteralPath $p; 356..409 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 291ms:
+exit call line census: [1498, 1506, 1582, 1587, 1598, 1720]
+do_mte_transfer occurrence line census: [1468, 1808]
+src [0, 1, 2, 3, 4, 5, 6, 7] count 8
+dst [0, 1, 2, 3, 4, 5, 6, 7] count 8
+depth field [0, 1, 2, 3] count 4
+derived depths: [8, 16, 32, 64]
+stipple {'src': 0, 'dst': 0, 'depth': 32, 'copy': False, 'first': 'S1'}
+src tex {'src': 3, 'dst': 0, 'depth': 32, 'copy': False, 'first': 'S2'}
+lin copy {'src': 0, 'dst': 4, 'depth': 8, 'copy': True, 'first': 'S3'}
+lin depth {'src': 0, 'dst': 4, 'depth': 16, 'copy': False, 'first': 'S4'}
+bytemask {'src': 0, 'dst': 4, 'depth': 8, 'copy': False, 'first': 'S5'}
+lin fill {'src': 0, 'dst': 4, 'depth': 8, 'copy': False, 'first': 'none'}
+existing warning shift indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+proposed warning values: ['0x2000', '0x4000', '0x8000', '0x10000', '0x20000']
+single-zero bytemasks: fffffffe, fffffffd, fffffffb, fffffff7, ffffffef, ffffffdf, ffffffbf, ffffff7f, fffffeff, fffffdff, fffffbff, fffff7ff, ffffefff, ffffdfff, ffffbfff, ffff7fff, fffeffff, fffdffff, fffbffff, fff7ffff, ffefffff, ffdfffff, ffbfffff, ff7fffff, feffffff, fdffffff, fbffffff, f7ffffff, efffffff, dfffffff, bfffffff, 7fffffff
+mask mutation 0xffffffff full decline False low16 decline False low8 decline False high16 decline False
+mask mutation 0xfffffffe full decline True low16 decline True low8 decline True high16 decline False
+mask mutation 0x7fffffff full decline True low16 decline False low8 decline False high16 decline True
+mask mutation 0xffff full decline True low16 decline False low8 decline False high16 decline True
+mask mutation 0x0 full decline True low16 decline True low8 decline True high16 decline True
+
+ succeeded in 289ms:
+218:  *  For "linear" modes, y is ignored and x is an offset to select which linear
+219:  *  TLB entry to use.
+220:  */
+221: void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+222: 	int x, int y, uint32_t* color, int mode)
+223: {
+224: 	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+225: 	int bufdepth = 1 << ((mode >> 8) & 3); 
+226: 
+227: 	// dst_mode (see NetBSD's crmfbreg.h):
+228: 	// #define DE_MODE_TLB_A           0x00000000
+229: 	// #define DE_MODE_TLB_B           0x00000400
+230: 	// #define DE_MODE_TLB_C           0x00000800
+231: 	// #define DE_MODE_LIN_A           0x00001000
+232: 	// #define DE_MODE_LIN_B           0x00001400
+233: 	uint32_t tlb_mode = (mode >> 10) & 0x7;
+234: 	int linear = tlb_mode > 3;
+235: 
+236: 	if (!linear && (x < 0 || y < 0 || x >= 2048 || y >= 2048))
+237: 		return;
+238: 
+239: 	int tilewidth_in_pixels = 512 / bufdepth;
+240: 	
+241: 	int tile_nr_x = x / tilewidth_in_pixels;
+242: 	int tile_nr_y = y >> 7;
+243: 
+244: 	unsigned int tile_nr = tile_nr_y * 16 + tile_nr_x;
+245: 
+246: 	y &= 127;
+247: 	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+248: 	int ofs = 512 * y + xofs;
+249: 
+250: 	uint32_t tileptr = 0;
+251: 
+252: 	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+253: 	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+254: 	if (tlb_mode <= 2 && tile_nr >= 256)
+255: 		return;
+256: 
+257: 	switch (tlb_mode) {
+258: 	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+259: 		break;
+260: 	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+261: 		break;
+262: 	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+263: 		break;
+264: 	case 4:	tile_nr = x >> 12;
+265: 		if (tile_nr >= 32)
+266: 			return;
+267: 		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+268: 		ofs = x & 4095;
+269: 		// TODO... probably not correct!
+270: 		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+271: 		break;
+272: 	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+273: 		    its exit(1) commented out -- so a failed GET handed the CALLER a
+274: 		    random value, and draw_primitive() then wrote it to the destination
+275: 		    in the same loop iteration, since `color' is shared by the XFER GET
+276: 		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+277: 		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+278: 		    reachable with a DOCUMENTED mode, not only with a junk one.
+279: 		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+280: 		    and 0x7433cdc1 on successive runs of
+281: 		    regress/sgi_re_randompixel_probe.py.
+282: 
+283: 		    NOW DECLINED: `*color' is left alone, so the caller's own
+284: 		    `uint32_t color = fg' stands and what lands is at least
+285: 		    DETERMINISTIC.  The announce is latched because this helper is
+286: 		    per-pixel.
+287: 
+288: 		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+289: 		    caller STILL PERFORMS its dependent PUT, so a declined GET still
+290: 		    writes fg (row sgirandomskipput -- suppressing it needs a return
+291: 		    value and every GET site changed, which is more than one site);
+292: 		    LIN_B is still not implemented, and the panel refused to endorse
+293: 		    implementing it as LIN_A-with-the-other-array on symmetry alone
+294: 		    (row sgirelinb); and the COLOUR-mode switch below carries the same
+295: 		    random() shape at its own default (row sgirandomcolour).  */
+296: 		if (!(d->warned & SGIRE_W_BADMODE)) {
+297: 			d->warned |= SGIRE_W_BADMODE;
+298: 			/*  `dst_mode' is kept from the original text although the
+299: 			    parameter is also passed as src_mode on a GET: the probe
+300: 			    anchors on this literal, and rewording it here would be
+301: 			    scope creep AND would move an oracle anchor mid-round,
+302: 			    which is the laundering shape whatever the intent.
+303: 			    Filed as sgirenamedstmode.  */
+304: 			fatal("[ sgi_re: unimplemented dst_mode %i for "
+305: 			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+306: 			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+307: 		}
+308: 		return;
+309: 	}
+310: 
+311: 	// The highest bit seems to be set for a "valid" tile pointer.
+312: 	if (!(tileptr & 0x80000000)) {
+313: 		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+314: 		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+315: 		//exit(1);
+316: 		return;
+317: 	}
+318: 	
+319: 	tileptr &= ~0x80000000;
+320: 
+321: 	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+322: 	if (put) {
+323: 		int ok = 1;	/*  #519: cleared by the default arm below  */
+324: 		switch (color_mode) {
+325: 		case DE_MODE_TYPE_CI:
+326: 			buf[0] = *color;
+327: 			break;
+328: 		case DE_MODE_TYPE_RGB:
+329: 			buf[0] = *color >> 24;
+330: 			buf[1] = *color >> 16;
+331: 			buf[2] = *color >> 8;
+332: 			buf[3] = 0;
+333: 			break;
+334: 		case DE_MODE_TYPE_RGBA:
+335: 			buf[0] = *color >> 24;
+336: 			buf[1] = *color >> 16;
+337: 			buf[2] = *color >> 8;
+338: 			buf[3] = *color;
+339: 			break;
+340: 		case DE_MODE_TYPE_ABGR:
+341: 			buf[0] = *color;
+342: 			buf[1] = *color >> 8;
+343: 			buf[2] = *color >> 16;
+344: 			buf[3] = *color >> 24;
+345: 			break;
+346: 		default:/*  #519 (sgirandomcolour): this arm was `buf[0..3] = random()'
+347: 			    and an UNLATCHED per-pixel fatal(), after which the common
+348: 			    store below wrote four HOST-PRNG bytes into guest memory.
+349: 			    Twelve of the sixteen type nibbles reach here, the documented
+350: 			    DE_MODE_TYPE_YCRCB among them.  MEASURED at rung 3
+351: 			    (regress/sgi_re_colourdefault_probe.py): a destination
+352: 			    pre-painted 0x11223344 read 0x56e8857a and 0x38abc4e1 on two
+353: 			    runs -- neither the paint nor any packing of the colour, and
+354: 			    different each run because main.c seeds random() per process.
+355: 
+356: 			    NOW DECLINED, member 3: the STORE IS SKIPPED, so the
+357: 			    destination keeps what the guest had -- not a zero fill, which
+358: 			    would publish a colour the guest never asked for (random() with
+359: 			    the entropy stripped) -- and the announce is latched on its own
+360: 			    bit because this helper is per-pixel.  The old literal is kept
+361: 			    as the prefix: the witness attributes on it.  A declined PUT
+362: 			    never reads buf, so the width question (sgirebufuninit) is a
+363: 			    separate row, and the GET default below is untouched.  */
+364: 			ok = 0;
+365: 			if (!(d->warned & SGIRE_W_BADCOLOR)) {
+366: 				d->warned |= SGIRE_W_BADCOLOR;
+367: 				fatal("[ put: color mode = 0x%x ] [ sgi_re: unimplemented "
+368: 				    "colour type in horrible_getputpixel, x=%i y=%i; store "
+369: 				    "declined (once) ]\n", color_mode, x, y);
+370: 			}
+371: 		}
+372: 
+373: 		if (ok)	/*  #519: a declined type stores nothing  */
+374: 			cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+375: 			    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+376: 	} else {
+377: 		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+378: 		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+379: 
+380: 		switch (color_mode) {
+381: 		case DE_MODE_TYPE_CI:
+382: 			*color = buf[0];
+383: 			break;
+384: 		case DE_MODE_TYPE_RGB:
+385: 			/*  #505: this read buf[1..3] while the PUT arm above
+386: 			    writes the three channels at buf[0..2] and an
+387: 			    explicit pad at buf[3] -- so an RGB pixel did not
+388: 			    survive its own round trip, shifting one byte left
+389: 			    with a zero fill on every RGB source read.
+390: 
+391: 			    The PUT arm is the authoritative one, and the
+392: 			    warrant is OUTSIDE this function: dev_sgi_gbe.c's
+393: 			    scanout reads the same tile memory back for display
+394: 			    as (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3],
+395: 			    then CRMFB_MODE_TYP_RGB8 takes R,G,B from bits
+396: 			    31..24, 23..16 and 15..8 -- byte 0 is R and byte 3
+397: 			    is UNUSED.  So the pad sits at buf[3] because the
+398: 			    consumer ignores buf[3], not because PUT writes a
+399: 			    zero there; that is what makes this non-circular.
+357:  *  debug() and fatal():
+358:  *
+359:  *  These are here because of all the legacy code that uses them. Basically,
+360:  *  debug() is mapped to something that is only displayed with verbosity
+361:  *  at the default level, and fatal() is used to always print stuff. With some
+362:  *  hacks to make it work reasonable with -q and when executing normally or
+363:  *  when executing single-stepping.
+364:  */
+365: void debug(const char *fmt, ...)
+366: {
+367: 	va_list argp;
+368: 	bool ss = single_step || about_to_enter_single_step;
+369: 	int v = verbose;
+370: 	if (emul_executing)
+371: 		v--;
+372: 	if (ss)
+373: 		v++;
+374: 
+375: 	if ((quiet_mode && !ss) || v < 0)
+376: 		return;
+377: 
+378: 	va_start(argp, fmt);
+379: 	va_debug(argp, fmt);
+380: 	va_end(argp);
+381: }
+382: 
+383: 
+384: void fatal(const char *fmt, ...)
+385: {
+386: 	va_list argp;
+387: 
+388: 	va_start(argp, fmt);
+389: 	va_debug(argp, fmt);
+390: 	va_end(argp);
+391: }
+392: 
+393: 
+394: void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+395: {
+396: 	if (subsystem != SUBSYS_ALL)
+397: 		debugmsg_current_verbosity[subsystem] = verbosity;
+398: 	else
+399: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+400: 			debugmsg_current_verbosity[i] = verbosity;
+401: }
+402: 
+403: 
+404: void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta)
+405: {
+406: 	if (subsystem != SUBSYS_ALL)
+407: 		debugmsg_current_verbosity[subsystem] += verbosity_delta;
+408: 	else
+409: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+410: 			debugmsg_current_verbosity[i] += verbosity_delta;
+
+ succeeded in 290ms:
+152: if not os.path.exists(DUMMY):
+153:     with open(DUMMY, "wb") as f:
+154:         f.write(b"\0" * 8)
+155: 
+156: # ---------------------------------------------------------------- the MTE registers
+157: #  CRIME RE base 0xb5000000; CRIME_MTE_* offsets from crmfbreg.h.
+158: MTE_MODE       = 0xb5003000
+159: MTE_BG         = 0xb5003018
+160: MTE_DST0       = 0xb5003030
+161: MTE_DST1_START = 0xb5003838       # CRIME_MTE_DST1 0x3038 | CRIME_DE_START 0x0800
+162: #  `if (startFlag) do_mte_transfer(cpu, d);' sits at the END of DEVICE_ACCESS(sgi_mte), so any MTE
+163: #  write with bit 0x800 in its ADDRESS fires the transfer.  DST1 is written last, with START.
+164: 
+165: #  dst_tlb = (mode & MTE_MODE_DST_BUF_MASK 0x1c) >> 2  -> MTE_TLB_A = 0
+166: #  depth   = 8 << ((mode & 0x300) >> 8)                -> MTE_DEPTH_32 = 2 gives 32
+167: #  MTE_MODE_COPY 0x800 CLEAR = fill.  (0x800 here is a MODE bit; the 0x800 in the address is START.)
+168: MODE_TILED_FILL = 0x200
+169: BG_VAL          = 0x11223344      # four distinct bytes, so dest[0] names which arm ran
+170: CI_TOP          = 0x44            # what the DEFECT writes at dest[0]
+171: RGBA_TOP        = 0x11            # what a CORRECT RGBA selection writes there
+172: PAINT           = 0x99999999      # neither -- liveness only, NOT a tail oracle
+173: PAINT_TOP       = 0x99
+174: 
+175: #  DEPTH IS AN AXIS, NOT A CONSTANT.  Two seats independently showed the six-row witness blind to
+176: #  an OVER-REACH mutant: `depth >= 16' fires at 32 (so `fill top' stays green) and is cold at 8
+177: #  (so `depth8 top' stays green).  The adjacent DOCUMENTED cell -- 16 -- is what catches it.
+178: MODE_D8    = 0x000                # MTE_DEPTH_8  << MTE_DEPTH_SHIFT
+179: MODE_D16   = 0x100                # MTE_DEPTH_16 << MTE_DEPTH_SHIFT
+180: MODE_D32   = 0x200                # MTE_DEPTH_32 << MTE_DEPTH_SHIFT
+181: #  *** FIELD VALUE 3.  The header defines NO MTE_DEPTH_64, but the code computes 8 << 3 = 64 for
+182: #  it, and the branch under repair is reachable there.  A row here does NOT assert what 64bpp
+183: #  OUGHT to do -- it asserts what this round does NOT CHANGE, exactly like depth8/depth16. ***
+184: MODE_D64   = 0x300                # field value 3: undefined by the header, computed as 64
+185: MODE_COPY  = 0x800                # MTE_MODE_COPY (a MODE bit; the 0x800 in an ADDRESS is START)
+186: MTE_SRC0   = 0xb5003020           # CRIME_MTE_SRC0 0x3020 -- no 0x800, so it does not fire START
+187: 
+188: #  *** THE FIRST SOURCE BYTE IS DELIBERATELY BELOW 0x80. ***  The RGB and RGBA GET arms compute
+189: #  `buf[0] << 24' on a uint8_t, which promotes to signed int -- so a first byte >= 0x80 shifts
+190: #  past INT_MAX and is undefined behaviour.  That is a SEPARATE filed defect ([[sgirebufshiftub]],
+191: #  re-derived independently by the pass-1 codex seat); this probe must not stand on it, so the
+192: #  copy rows use 0x1a as byte 0.  Four distinct bytes, so each names its own position.
+193: #  (An earlier draft said "EVERY GET arm".  False, and the pass-2 codex seat caught it: CI shifts
+194: #  nothing at all, and ABGR and the default arm shift `buf[3]', not `buf[0]'.  Four of five arms,
+195: #  two of them a different byte.  The filed [[sgirebufshiftub]] row's own TITLE carried the same
+196: #  overclaim and is corrected there too.)
+197: SRC_WORD   = 0x1a2b3c4d
+198: SRC_B0     = 0x1a                 # what BOTH correct copy shapes put at dest[0]
+199: SRC_B1     = 0x2b                 # what only a REAL RGBA copy puts at dest[1]
+200: SRC_B3     = 0x4d                 # the byte RGB DROPS -- the only channel that sees it
+201: SRC_PIX_X  = 4                    # src0's x field; /(depth/8) = 1 -> source byte offset 4
+202: 
+203: RE_TLB_A   = 0xb5001000
+204: TLBA_TILE  = 0x8002               # re_tlb_a[0].  BIT 15 IS THE VALID BIT.
+205: #  *** THE DESTINATION-LABEL AXIS, added 2026-09-09.  CRIME_RE_TLB_A/B/C are 0x1000/0x1200/0x1400
+206: #  and MTE_DST_TLB_SHIFT is 2, so the mode word's DST_BUF field selects which of re_tlb_a/b/c
+207: #  horrible_getputpixel() reads: `dst_mode = (dst_tlb << 10) + ...', and that helper's
+208: #  `switch (tlb_mode)' cases 0/1/2 are the three arrays.  THE TILE VALUE IS THE SAME 0x8002 IN ALL
+281: 
+282: def load(A, addr):
+283:     return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LW_V0_AT], A.take(1))
+284: 
+285: def topbyte(s):
+286:     if not s.startswith("0x"):
+287:         return s
+288:     return "0x%02x" % ((int(s, 16) >> 24) & 0xff)
+289: 
+290: def byte_n(s, n):
+291:     """Byte n of the big-endian word, n = 0 at the LOWEST address."""
+292:     if not s.startswith("0x"):
+293:         return s
+294:     return "0x%02x" % ((int(s, 16) >> (8 * (3 - n))) & 0xff)
+295: 
+296: def fill(A, depth=MODE_D32):
+297:     """Program a tiled FILL at `depth' and fire it.  Every store is a REAL GUEST INSTRUCTION."""
+298:     #  re_tlb_a[0] = 0x8002.  The RE TLB write walks `len' in halfwords from tlbi 0, so an `sd'
+299:     #  carrying the tile in its TOP halfword lands it at index 0 -- the packing sgi_re_rgb_probe.py
+300:     #  established, and getting it wrong leaves the valid bit clear and the transfer silent.
+301:     c  = store(A, RE_TLB_A, TLBA_TILE << 48, op=OP_SD_T0_A3)
+302:     c += store(A, DEST, PAINT)                     # pre-paint: liveness, NOT a tail oracle
+303:     c += store(A, MTE_MODE, depth)
+304:     c += store(A, MTE_BG,   BG_VAL)
+305:     c += store(A, MTE_DST0, DST0)
+306:     c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+307:     return c
+308: 
+309: def fill_at(A, tlbreg, dstsel):
+310:     """`fill()' at a NON-DEFAULT destination TLB label.  Added 2026-09-09.
+311: 
+312:     Byte for byte the same instruction sequence as fill(depth=MODE_D32), with two constants
+313:     changed: the tile goes into re_tlb_b[0] or re_tlb_c[0] instead of re_tlb_a[0], and the
+314:     mode word carries MTE_MODE_DST_BUF so do_mte_transfer()'s `dst_tlb' is 1 or 2, not 0.
+315: 
+316:     The oracle address is UNCHANGED, because the tile value is the same.  So `fill top',
+317:     `fill b top' and `fill c top' read the same byte of the same address after the same
+318:     transfer, and differ in exactly one variable -- which is what makes them a closure of
+319:     the label axis rather than three unrelated rows."""
+320:     c  = store(A, tlbreg, TLBA_TILE << 48, op=OP_SD_T0_A3)
+321:     c += store(A, DEST, PAINT)                     # pre-paint: a silent no-op reports 0x99
+322:     c += store(A, MTE_MODE, MODE_D32 | dstsel)
+323:     c += store(A, MTE_BG,   BG_VAL)
+324:     c += store(A, MTE_DST0, DST0)
+325:     c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+326:     return c
+327: 
+328: 
+329: def copy(A):
+330:     """Tiled 32-bit COPY of ONE pixel: source (1,0) -> dest (0,0), both in TLB_A's tile.
+331: 
+332:     These rows exist because a FILL never reads `src_mode': deleting only
+333:     `src_mode |= DE_MODE_TYPE_RGBA' is invisible to every fill row.  Three seats confirmed both
+334:     the prediction and the byte walk.  dest[0] is 0x1a under BOTH correct shapes -- so `copy top'
+335:     distinguishes neither HEAD nor the fix, and that IS its job: it reds only under a ONE-SIDED
+336:     edit (source-only -> 0x4d, dest-only -> 0x00).
+337: 
+338:     A note the kimi seat asked for, so a future reader does not "correct" the want: the
+339:     dest-only cell gives 0x00 because the CI GET *assigns* `*color = buf[0]', zero-extending it.
+340:     Had the GET left `bg' untouched, an RGBA PUT would have emitted bg>>24 instead.  The row is
+341:     right; the reason is the assignment, not "the high byte of a low-byte colour" in general.
+342: 
+343:     The destination is PRE-PAINTED so that a transfer which silently does nothing (an invalid
+344:     TLB entry, say) reports 0x99 rather than looking like a plausible byte."""
+345:     c  = store(A, RE_TLB_A, TLBA_TILE << 48, op=OP_SD_T0_A3)
+346:     c += store(A, DEST + 4, SRC_WORD)              # the source pixel, four distinct bytes
+347:     c += store(A, DEST,     PAINT)                 # the destination, so a no-op is visible
+348:     c += store(A, MTE_MODE, MODE_D32 | MODE_COPY)
+349:     c += store(A, MTE_SRC0, SRC_PIX_X << 16)       # src x=4 -> pixel 1 at depth 32, y=0
+350:     c += store(A, MTE_DST0, DST0)
+351:     c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+352:     return c
+353: 
+408: #  `printed()' returns the FIRST match, which is what is wanted here: `got' and `fullword' are
+409: #  deliberately the SAME sample, read at two byte positions.
+410: #
+411: #  *** THE GATE IS ONE SHARED FLAG COMPUTED FROM THE **FILL** SESSION, NOT A PER-ROW TEST. ***
+412: #  It is named `fill_top_ok' and not `rgba_ran' on the pass-2 codex seat's correction: fill
+413: #  dest[0] == 0x11 is produced by the RGB arm as well as by RGBA, so the flag means "the fill PUT
+414: #  put bg>>24 at dest[0]" -- NOT "RGBA specifically ran".  `fill bot' is the row that separates
+415: #  those two.  A flag whose name overclaims is how a future reader builds on a fact nobody has.
+416: #  The pass-2 glm seat derived this from the packet alone -- under a per-row reading the copy
+417: #  rows could never pass, since their own dest[0] is 0x1a and not 0x11, so BASE 13/13 would be
+418: #  impossible.  It is a FIX-PRESENCE indicator: it says the repaired branch fired at all, which
+419: #  is the precondition for any tail byte being defined.  A copy row therefore reports n/a when
+420: #  the FILL was CI, even if the copy path itself was fine -- see the message text below.
+421: #
+422: #  *** TWO MEASURED LIMITS OF THIS PROXY, both from the pass-2 grok seat, recorded rather than
+423: #  glossed because they are the kind of thing a future round would otherwise rediscover: ***
+424: #
+425: #  (a) UNDER A `&& (mode & MTE_MODE_COPY)' MUTANT THE COPY ROWS ARE A WRONG-REASON KILL.  The
+426: #      copy path there really does take RGBA -- dest[3] would be 0x4d and would PASS -- but the
+427: #      FILL is CI, so the gate closes and both rows red anyway.  Their own bytes do not move.
+428: #      That mutant is still killed by `fill top', so nothing escapes; but the CHANNEL those two
+429: #      rows report under it is vacuous, and the pre-table CHANNEL check is what should have
+430: #      caught it.
+431: #  (b) THE DUAL, `if (depth == 32 && !(mode & MTE_MODE_COPY))', IS NOT PINNED AND CANNOT BE.
+432: #      Every fill row stays green; `copy top' stays green because dest[0] of a same-type copy
+433: #      is invariant; and the gate OPENS, so these two rows would score dest[1]/dest[3] of a
+434: #      CI-CI copy -- bytes the PUT never wrote.  There is no copy-local four-byte signal that
+435: #      is not those bytes themselves.  DISCLOSED as clause-(e) coverage debt.
+436: #
+437: #      *** AND THAT IS WHY M4 IS CLAUSE (e), NOT (d).  DEPENDS-ON enumerates the predicates
+438: #      DOMINATING the edited line plus the lvalues the GUARDED BODY reads.  The guarded body is
+439: #      exactly `src_mode |= ...; dst_mode |= ...' -- it does not read MTE_MODE_COPY, which is
+440: #      tested later in the transfer loop and does not dominate.  Filing M4 as (d) would import
+441: #      its dual into the FLOOR, and (b) shows that dual cannot be legitimately killed. ***
+442: fill_top_ok = (got == "0x%02x" % RGBA_TOP)
+443: fullword = printed(t, "v0") if alive else "died"
+444: row("fill bot", byte_n(fullword, 3) if fill_top_ok else "n/a: FILL dest[0] not RGBA -- fix absent",
+445:     "0x%02x" % CI_TOP,
+446:     "dest[3] must be bg's LOW byte -- RGB writes 0x00 there and still passes `fill top'")
+447: 
+448: #  ---- THE DESTINATION-LABEL AXIS.  *** ADDED 2026-09-09 AS AN L2 FLOOR REPAIR, AFTER A MEASURED
+449: #  TOTAL ESCAPE. ***  `if (depth == 32) {' -> `if (depth == 32 && dst_tlb == MTE_TLB_A) {' scored
+450: #  14/14 against a 14/14 base -- not merely an equal score, an IDENTICAL log but for the label on
+451: #  line 1 -- and so did the weaker `&& dst_tlb != MTE_TLB_C'  (killtable3_20260909/M_tlbA.raw,
+452: #  M_tlbAB.raw).  Every one of the eleven rows above that performs a transfer drives
+453: #  dst_tlb == MTE_TLB_A, because no mode word any of them writes has a bit of
+454: #  MTE_MODE_DST_BUF_MASK (0x1c) set.  The detector could not observe the label at all.
+455: #
+456: #  `switch (dst_tlb)' DOMINATES the repaired line inside the enclosing function and admits three
+457: #  labels, so `if (X)' -> `if (X && dst_tlb == <one of them>)' is clause (d)'s canonical form on a
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'regress/sgi_de_primop_probe.py'; "'$v=Get-Content -LiteralPath $p; 510..580 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; $p='"'src/devices/dev_sgi_re.c'; "'$v=Get-Content -LiteralPath $p; @(652..716)+@(768..810)+@(1114..1150) | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/devices/dev_asc.c'; "'$v=Get-Content -LiteralPath $p; 1478..1507 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; $p='"'src/devices/dev_wdc.c'; "'$v=Get-Content -LiteralPath $p; 1124..1170 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; $p='"'src/devices/dev_mb89352.c'; "'$v=Get-Content -LiteralPath $p; 512..542 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 240ms:
+1479: 					d->reg_ro[NCR_STAT] |= NCRSTAT_INT;
+1480: 					d->reg_ro[NCR_STEP] = (d->reg_ro[
+1481: 					    NCR_STEP] & ~7) | 0;
+1482: 					if (d->xferp != NULL)
+1483: 						scsi_transfer_free(d->xferp);
+1484: 					d->xferp = NULL;
+1485: 				}
+1486: 			}
+1487: 			break;
+1488: 
+1489: 		default:
+1490: 			/*  #240: An unimplemented/illegal ASC command must not
+1491: 			    halt the host. The illegal-command interrupt has
+1492: 			    been asserted (NCRSTAT_INT | NCRINTR_ILL) and
+1493: 			    dev_asc_tick() delivers it to the guest, exactly as
+1494: 			    real hardware reports an illegal command.  */
+1495: 			/*  #245: route the guest-spammable diagnostic through the
+1496: 			    verbosity-gated SUBSYS_DEVICE channel (suppressed by
+1497: 			    default, shown at -v or `break device`) so a guest
+1498: 			    hammering NCR_CMD can't flood the host log.  */
+1499: 			debugmsg_cpu(cpu, SUBSYS_DEVICE, "asc", VERBOSITY_DEBUG,
+1500: 			    "unimplemented command 0x%02x", (int)idata);
+1501: 			d->reg_ro[NCR_STAT] |= NCRSTAT_INT;
+1502: 			d->reg_ro[NCR_INTR] |= NCRINTR_ILL;
+1503: 		}
+1504: 	}
+1505: 
+1506: 	if (regnr == NCR_INTR && writeflag == MEM_READ) {
+1507: 		/*
+1508: 		 *  Reading the interrupt register de-asserts the
+1125: 		    #464 exists to bound.  Row `unimpl 2op` pins the
+1126: 		    per-device spec by firing TWO different opcodes and
+1127: 		    demanding ONE line -- which also kills a
+1128: 		    "last-warned-opcode" latch, under which an alternating guest
+1129: 		    would flood forever.  */
+1130: 		/*  #485: see the WDCC_SEC_* arm above for the invariant and the
+1131: 		    warrant.  This is the other terminal arm that never raised its
+1132: 		    completion interrupt.
+1133: 
+1134: 		    *** THE ASSERT IS OUTSIDE THE LATCH, AND THAT IS NOT A STYLE
+1135: 		    CHOICE. ***  Moved inside `if (!d->warned_unimpl_cmd)` below,
+1136: 		    only the FIRST unimplemented command per device would interrupt
+1137: 		    and every later one would go silent again.  It is what a tidying
+1138: 		    maintainer writes -- group the response with the warning -- and a
+1139: 		    sweep using one fresh device per opcode CANNOT SEE IT, because
+1140: 		    the latch is 0 on every leg.  Row `irq 2nd` exists for exactly
+1141: 		    that mutant.
+1142: 		
+1143: 		    *** THAT SENTENCE NAMED A ROW `irq 2nd` THAT DOES NOT EXIST.
+1144: 		    Repo-wide it occurred in this comment and nowhere else. ***  The
+1145: 		    real artifact is an unnamed SUB-LEG of row_completion_irq(),
+1146: 		    printing a `2nd` field inside a row named "a terminated command
+1147: 		    raises its irq".  What makes the error dangerous rather than
+1148: 		    untidy is the company it kept: the SAME sentence cites `abrt 2nd`,
+1149: 		    which IS a real row -- so a true citation stood next to a
+1150: 		    fabricated one and lent it credibility.
+1151: 		
+1152: 		    #464 already found the ABORT BIT wrongly inside
+1153: 		    this same guard and shipped `abrt 2nd` for it; the interrupt
+1154: 		    needed the same row.  */
+1155: 		d->error |= WDCE_ABRT;
+1156: 		d->int_assert = 1;
+1157: 		if (!d->warned_unimpl_cmd) {
+1158: 			d->warned_unimpl_cmd = 1;
+1159: 			fatal("[ wdc: WARNING! Unimplemented command 0x%02x "
+1160: 			    "(drive %i, head %i, cyl %i, sector %i, nsecs %i)"
+1161: 			    " ]\n", d->cur_command, d->drive, d->head,
+1162: 			    d->cyl_hi*256+d->cyl_lo, d->sector, d->seccnt);
+1163: 		}
+1164: 	}
+1165: }
+1166: 
+1167: 
+1168: DEVICE_ACCESS(wdc)
+1169: {
+1170: 	struct wdc_data *d = (struct wdc_data *) extra;
+1171: 	uint64_t idata = 0, odata = 0;
+513: 						    a valid SCMD_XFR; log and break, don't exit(1).  */
+514: 						break;
+515: 					}
+516: 
+517: 					if (!(d->phase & 1))
+518: 						d->reg[INTS] |= INTS_CMD_DONE;
+519: 				}
+520: 				break;
+521: 
+522: 			case SCMD_RST_ACK:
+523: 				d->reg[SSTS] &= ~(SSTS_INITIATOR | SSTS_TARGET);
+524: 				d->reg[PSNS] &= ~PSNS_REQ;
+525: 				break;
+526: 
+527: 			default:
+528: 				debugmsg_cpu(cpu, d->subsys, "",
+529: 				    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
+530: 			    	    "unimplemented SCMD: 0x%x", (int) idata);
+531: 
+532: 				if (mb89352_abort_on_unimplemented_stuff) {
+533: 					cpu->running = 0;
+534: 					return 0;
+535: 				}
+536: 			}
+537: 		}
+538: 		break;
+539: 
+540: 	case TMOD:
+541: 		if (writeflag == MEM_WRITE) {
+542: 			d->reg[regnr] = idata;
+543: 			if (idata != 0)
+
+ succeeded in 254ms:
+511: 
+512: # --------------------------------------------------- the CROSS-LATCH row
+513: #  *** EVERY ROW ABOVE RUNS IN A FRESH SESSION WITH NO PRIOR DEVICE TRAFFIC, AND A
+514: #  REVIEW SEAT POINTED OUT WHAT THAT CANNOT SEE: a bit-value mutant onto an
+515: #  ALREADY-USED bit (1 << 6 is #498's SGIRE_W_DE_LEN, 1 << 8 is #499's UNMAP_RD)
+516: #  leaves those latches CLEAR in a fresh session, so the announce still fires and
+517: #  every row above passes.  The collision is only visible once something else has
+518: #  ALREADY SET the colliding bit. ***
+519: #
+520: #  It matters because the four sgi_re/sgi_de/sgi_mte/sgi_de_status handlers share
+521: #  ONE malloc'd struct, so `d->warned' is shared ACROSS DEVICES -- #498 measured a
+522: #  reused bit at 23/25, and BOTH #499 and this round were originally designed for
+523: #  1 << 7.  The collision was caught by a human listing the enum, which is exactly
+524: #  the kind of catch that should not be relied upon.
+525: #
+526: #  So: fire the #498 width latch FIRST with a byte access, THEN trigger the draw,
+527: #  and require the prim-op decline ANYWAY.  Under a colliding bit the first access
+528: #  pre-sets it and this row goes silent.
+529: A = Addr(CODE)
+530: t, alive, how = session(store(A, DE + 0x0, val="0x5a", op=OP_SB_T0_A3)
+531:                         + store(A, DE + PRIM_START, val="0x02000000")
+532:                         + load(A, 0xffffffff80002000) + ["print v0"])
+533: row("xlatch decl", t.count(declined("0x02000000")), 1,
+534:     "prim-op decline fires even AFTER another latch set -- kills a shared bit")
+535: row("xlatch live", printed(t, "v0") if alive else "died", "0x0",
+536:     "...and the guest survives the composed session")
+537: 
+538: #  *** AND ONE PRE-SET LATCH IS ONE CELL, NOT THE CLASS -- SAME MISTAKE, SAME
+539: #  ROUND, ONE ROW OVER.  Two seats found it independently. ***
+540: #
+541: #  `xlatch decl' above pre-fires exactly ONE colliding bit, #498's 1 << 6.  The
+542: #  enum's OTHER already-used bits are #499's 1 << 7 (UNMAP_WR) and 1 << 8
+543: #  (UNMAP_RD), and NO row in this file raises either before drawing -- so
+544: #  aliasing SGIRE_W_PRIM_OP onto 1 << 7 or 1 << 8 left all 30 rows green while
+545: #  making the decline go silent after ordinary unmapped traffic.  A one-token
+546: #  edit to the very constant this round ADDED: floor clause (d), not coverage
+547: #  debt.
+548: #
+549: #  The four handlers share one `d->warned', so the unmapped windows on sgi_re
+550: #  set latches that the sgi_de draw path then tests.  Raising BOTH in one
+551: #  session closes the remaining pair; with 1 << 6 above, every already-used bit
+552: #  in the enum is now pre-set by some row.
+553: A = Addr(CODE)
+554: t, alive, how = session(store(A, RE + UNMAP_W, val="0x5a")
+555:                         + load(A, RE + UNMAP_R)
+556:                         + store(A, DE + PRIM_START, val="0x02000000")
+557:                         + load(A, 0xffffffff80002000) + ["print v0"])
+558: row("xlatch unm", t.count(declined("0x02000000")), 1,
+559:     "decline fires after BOTH #499 unmapped latches -- kills an alias onto 1<<7 or 1<<8")
+560: row("xlatch unliv", printed(t, "v0") if alive else "died", "0x0",
+561:     "...and the guest RUNS ON through the four-access session")
+562: 
+563: #  *** AND THREE PRE-SET BITS IS THREE CELLS, NOT THE CLASS.  FOUND BY THE
+564: #  PRE-TABLE BLOCK -- the mandatory check I had SKIPPED, run late, which located
+565: #  in one grep what four panels had left. ***
+566: #
+567: #  The block asks: WHO ELSE WRITES THIS FIELD, AND CAN THEY SET MY BIT?  The
+568: #  answer is `grep -c "d->warned |=" dev_sgi_re.c` -> TEN sites, bits 0..9.
+569: #  The rows above pre-set THREE of them (1<<6 via a byte access, 1<<7 and 1<<8
+570: #  via the unmapped windows).  Aliasing SGIRE_W_PRIM_OP onto any of 1<<0..1<<5
+571: #  -- the six *_LEN latches -- escaped every row, for exactly the reason 1<<7
+572: #  did: nothing raised those latches before drawing.
+573: #
+574: #  ONE ROW CLOSES THE WHOLE SPACE, and that is the point.  Every *_LEN latch
+575: #  fires on a wrong length at its own window, so a WORD store to each of the six
+576: #  windows raises bits 0-5; the byte access raises 6; the unmapped write and
+577: #  read raise 7 and 8.  With bits 0-8 all set, an alias onto ANY of them goes
+578: #  silent and this row reds.  Nine cells, one row -- because the closure is over
+579: #  the FIELD, not over the individual bits.
+580: #
+581: #  The narrower rows above are KEPT: they are already measured, they cost
+653: 			 *  The over-run itself stays filed as sgilinearoob, and it is
+654: 			 *  NOT guest-reachable while this guard stands.
+655: 			 *
+656: 			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+657: 			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+658: 			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+659: 			 *  behaviour and a SILENT clobber of the adjacent register array,
+660: 			 *  reaching a DRAWING-engine register from a rendering-engine
+661: 			 *  write -- not a wild write outside the allocation, and not
+662: 			 *  something plain ASAN would flag.  Declining keeps it shut.
+663: 			 */
+664: 			if (!(d->warned & SGIRE_W_LINA_LEN)) {
+665: 				d->warned |= SGIRE_W_LINA_LEN;
+666: 				fatal("[ sgi_re: unimplemented len=%i for "
+667: 				    "CRIME_RE_LINEAR_A -- declined.  (once) ]\n",
+668: 				    (int) len);
+669: 			}
+670: 		} else if (writeflag == MEM_WRITE) {
+671: 			/*
+672: 			 *  Very interesting. NetBSD writes stuff such as:
+673: 			 *
+674: 			 *  CRIME_RE_LINEAR_A IDATA = 8000173080001731
+675: 			 *  CRIME_RE_LINEAR_A IDATA = 8000173280001733
+676: 			 *  CRIME_RE_LINEAR_A IDATA = 8000173480001735
+677: 			 *  ...
+678: 			 *
+679: 			 *  but the PROM writes something which looks like wrongly
+680: 			 *  32-bit sign-extended words:
+681: 			 *
+682: 			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040001
+683: 			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040003
+684: 			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040005
+685: 			 *  ...
+686: 			 *
+687: 			 *  followed by
+688: 			 *  [ sgi_mte: STARTING TRANSFER: mode=0x00000011
+689: 			 *    dst0=0x0000000040000000, dst1=0x0000000040007fff
+690: 			 *    (length 0x8000), dst_y_step=0 bg=0x0, bytemask=0xffffffff ]
+691: 			 *
+692: 			 *  indicating that it really meant to put both 0x80040000
+693: 			 *  and 0x80040001 into the first LINEAR_A entry.
+694: 			 *
+695: 			 *  The first guess would be a bug in the implementation of
+696: 			 *  one or more instructions in the emulator while coming up
+697: 			 *  with those values, but debugging the PROM so far has NOT
+698: 			 *  revealed any such bug. It may even be that the PROM code
+699: 			 *  is buggy (?) and never really set the LINEAR entries
+700: 			 *  correctly. Perhaps the hardware simply ignores the
+701: 			 *  weird values and does not fill it (using the MTE)
+702: 			 *  when asked to.
+703: 			 */
+704: 			// printf("CRIME_RE_LINEAR_A IDATA = %016llx\n", (long long)idata);
+705: 			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+706: 			d->re_linear_a[tlbi] = idata >> 32ULL;
+707: 			d->re_linear_a[tlbi+1] = idata;
+708: 			debug("[ d->re_linear_a[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+709: 				tlbi, d->re_linear_a[tlbi], tlbi+1, d->re_linear_a[tlbi+1]);
+710: 		} else {
+711: 			/*
+712: 			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+713: 			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+714: 			 *
+715: 			 *  The [tlbi+1] here has the SAME exposure as the write's
+716: 			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+717: 			 *
+769: 			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+770: 			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+771: 			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+772: 			 *  behaviour and a SILENT clobber of the adjacent register array,
+773: 			 *  reaching a DRAWING-engine register from a rendering-engine
+774: 			 *  write -- not a wild write outside the allocation, and not
+775: 			 *  something plain ASAN would flag.  Declining keeps it shut.
+776: 			 */
+777: 			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+778: 				d->warned |= SGIRE_W_LINB_LEN;
+779: 				fatal("[ sgi_re: unimplemented len=%i for "
+780: 				    "CRIME_RE_LINEAR_B -- declined.  (once) ]\n",
+781: 				    (int) len);
+782: 			}
+783: 		} else if (writeflag == MEM_WRITE) {
+784: 			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+785: 			d->re_linear_b[tlbi] = idata >> 32ULL;
+786: 			d->re_linear_b[tlbi+1] = idata;
+787: 			debug("[ d->re_linear_b[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+788: 				tlbi, d->re_linear_b[tlbi], tlbi+1, d->re_linear_b[tlbi+1]);
+789: 		} else {
+790: 			/*
+791: 			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+792: 			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+793: 			 *
+794: 			 *  The [tlbi+1] here has the SAME exposure as the write's
+795: 			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+796: 			 *
+797: 			 *  *** AN EARLIER WORDING OF THIS SENTENCE SAID THE TWO ARE
+798: 			 *  "bounded only by the len == 8 guard keeping tlbi even".
+799: 			 *  THAT IS FALSE: WIDTH DOES NOT IMPLY ALIGNMENT.  The guard
+800: 			 *  tests LENGTH.  What keeps tlbi even is the CPU-side
+801: 			 *  alignment described at the write arm above -- ld/sd raise
+802: 			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+803: 			 *  the address itself.  Corrected on this round's pass 2;
+804: 			 *  the older surrounding comment had it right and my new one
+805: 			 *  did not. ***  This fix
+806: 			 *  deliberately does NOT add a clamp -- an unlicensed addition
+807: 			 *  here would change the index behaviour that sgilinearoob is
+808: 			 *  filed to fix across all five arms with ONE design.
+809: 			 */
+810: 			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+811: 			odata = ((uint64_t) d->re_linear_b[tlbi] << 32)
+1115: 		    is 256 values and only two are implemented -- DE_PRIM_LINE
+1116: 		    (0x01) and DE_PRIM_RECTANGLE (0x03).
+1117: 
+1118: 		    *** THE TWO KILLERS THAT MATTER ARE NOT EXOTIC VALUES: THEY
+1119: 		    ARE NAMED PRIMITIVES, AND ONE OF THEM IS THE RESET STATE. ***
+1120: 		    crmfbreg.h defines them as FULL 32-BIT VALUES, not top-byte
+1121: 		    indices: DE_PRIM_POINT 0x00000000, LINE 0x01000000,
+1122: 		    TRIANGLE 0x02000000, RECTANGLE 0x03000000.  Writing them
+1123: 		    as "0x01" invites a `case 0x02:' that can NEVER match,
+1124: 		    since the switch compares `op & 0xff000000'.  POINT and
+1125: 		    TRIANGLE land
+1126: 		    here.  And dev_sgi_re_init memsets the whole device struct,
+1127: 		    so CRIME_DE_PRIMITIVE reads 0 -- which IS POINT -- until a
+1128: 		    guest writes it.  A guest that sets the START bit having
+1129: 		    never written the primitive register at all therefore died
+1130: 		    here.  It need not choose a bad value; it need only omit a
+1131: 		    good one.
+1132: 
+1133: 		    Now a LATCHED DECLINE that falls out of the switch and
+1134: 		    returns.  The diagnostic is kept in full -- it names the op
+1135: 		    and the vertices, which is what a maintainer implementing
+1136: 		    the primitive would want -- and gains `-- declined.  (once)'
+1137: 		    so it cannot be mistaken for the old host kill and cannot
+1138: 		    flood a guest loop.  */
+1139: 		if (!(d->warned & SGIRE_W_PRIM_OP)) {
+1140: 			d->warned |= SGIRE_W_PRIM_OP;
+1141: 			fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x,"
+1142: 			    " x1=%i y1=%i x2=%i y2=%i fg=0x%x bg=0x%x"
+1143: 			    " pattern=0x%08x -- declined.  (once) ]\n",
+1144: 			    op, x1, y1, x2, y2, fg, bg, pattern);
+1145: 		}
+1146: 		break;
+1147: 	}
+1148: }
+1149: 
+1150: DEVICE_ACCESS(sgi_de)
+1151: {
+
+codex
+The proposed latched decline still looks appropriate for all five sites, with the current guards preserved. Other devices in this tree report unsupported commands through device error status and interrupts, so the option set is incomplete; I found no corresponding MTE behavior established by the allowed sources. The repeat tests also need to check destination paint after the second transfer, since a return mistakenly placed inside the warning latch would reject only the first request.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/devices/dev_pvr.c'; "'$v=Get-Content -LiteralPath $p; 288..326 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; $p='"'src/include/thirdparty/crmfbreg.h'; "'$v=Get-Content -LiteralPath $p; 421..433 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'regress/sgi_re_colourdefault_probe.py'; "'$v=Get-Content -LiteralPath $p; 348..404 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }; $p='"'src/devices/dev_sgi_re.c'; "'$v=Get-Content -LiteralPath $p; 400..419 | ForEach-Object { '"'{0}: {1}' -f ("'$_+1),$v[$_] }' in C:\DocumentNoSnc\cc\GXEMUL\GXEMUL-SEC
+ succeeded in 194ms:
+289: 					dev_pvr_ta_access(cpu, cpu->mem, ofs, buf, chunksize,
+290: 					    MEM_WRITE, d);
+291: 				}
+292: 
+293: 				count --;
+294: 				sar += src_delta;
+295: 			}
+296: 		}
+297: 
+298: 		// Transfer End. TODO: _EXACTLY_ what happens at the end of
+299: 		// a transfer?
+300: 		cpu->cd.sh.dmac_chcr[channel] |= CHCR_TE;
+301: 		cpu->cd.sh.dmac_chcr[channel] &= ~CHCR_TD;
+302: 		cpu->cd.sh.dmac_sar[channel] = sar;
+303: 		cpu->cd.sh.dmac_tcr[channel] = count;
+304: 
+305: 		// d->dma_reg[PVR_ADDR / sizeof(uint32_t)] = ???;
+306: 		d->dma_reg[PVR_COUNT / sizeof(uint32_t)] = 0;
+307: 
+308: 		SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_PVR_DMA);
+309: 
+310: 		break;
+311: 	default:
+312: 		fatal("Unimplemented SH4 RS DMAC: 0x%08x (PVR)\n",
+313: 		    (int) (chcr & CHCR_RS));
+314: 		/*  #166: (Codex/Fable) guest-controlled CHCR; log and skip,
+315: 		    don't exit(1)  */
+316: 		return;
+317: 	}
+318: 
+319: 	if (cause_interrupt) {
+320: 		/*  #166: (Codex/Fable) guest-controlled CHCR_IE; log,
+321: 		    don't exit(1)  */
+322: 		fatal("TODO: pvr sh4 dmac interrupt!\n");
+323: 	}
+324: }
+325: 
+326: 
+327: DEVICE_ACCESS(pvr_dma)
+422: #define CRIME_DE_STATUS		0x4000
+423: #define CRIME_DE_IDLE		0x10000000
+424: #define CRIME_DE_SETUP_IDLE	0x08000000
+425: #define CRIME_DE_PIXPIPE_IDLE	0x04000000
+426: #define CRIME_DE_MTE_IDLE	0x02000000
+427: #define CRIME_DE_LEVEL_MASK	0x01fc0000
+428: #define CRIME_DE_RD_PTR_MASK	0x0003f000
+429: #define CRIME_DE_WR_PTR_MASK	0x00000fc0
+430: #define CRIME_DE_BUF_START	0x0000003f
+431: 
+432: #define CRIME_DE_LEVEL_SHIFT	18
+433: /*
+434:  * XXX
+
+ succeeded in 196ms:
+349: A = Addr(CODE)
+350: VTX41 = (4 << 16) | 1
+351: t_x1, alive_x1 = session(setup_put(A, MODE_YCRCB, vertex=VTX41) + load(A, DST_KSEG1 + 4) + ["print v0"])
+352: row("ycrcb x4y1", printed(t_x1, "v0") if alive_x1 else "died", "0x%08x" % DST_PAINT,
+353:     "a declined PUT at (4,1) leaves the second word (linear ofs = x & 4095): kills `if (ok || x)' and `|| y'")
+354: row("x4y1 announce", t_x1.count("horrible_getputpixel, x=4 y=1") if alive_x1 else "died", 1,
+355:     "and the one announce names that vertex in its own text (x=4 y=1)")
+356: 
+357: #  ---- CLASS CLOSURE on the latch-collision axis: every other bit set FIRST, then the colour decline -----
+358: #  sgi_re_width_probe.py's `tex xbit' row proved this priming sequence fires bits 0-10 (bits 0-5 by a byte
+359: #  store to each RE window; 6 a byte store to the DE window; 7/8 a store to and a load from the straggler
+360: #  offset 0x1800; 9 an unimplemented drawing op; 10 a LIN_B rectangle) and its `tex rd lat1' row that a
+361: #  64-bit read of CRIME_RE_TEX fires bit 11.  With bits 0-11 all set, a BADCOLOR latch that SHARES any of
+362: #  them is already silenced when the YCRCB PUT arrives and `allbits announce' reads 0.  `allbits primed'
+363: #  counts the twelve priming announces so a priming access that silently stops firing reds the row
+364: #  instead of leaving a hole (the width probe's own repair for the same vacuity).  One session; the
+365: #  paint row is the decline control.  Added on the pass-2 repair chain at codex's finding.  LOAD
+366: #  SENSITIVITY (codex, by reading session()): 197 commands at fixed 0.22 s windows and a 4.0 s final
+367: #  spin -- a delayed-but-healthy emulator can leave `print v0' unread and the paint row reads `absent'.
+368: #  That is a loud false RED on the fix, never a false green; re-run alone before believing it.
+369: A = Addr(CODE)
+370: RE_WINDOWS = (0xb5001000, 0xb5001200, 0xb5001400, 0xb5001600, 0xb5001700, 0xb5001780)  # TLB_A..LINEAR_B
+371: DE_BASE   = 0xb5002000            # DEVICE_ACCESS(sgi_de): a byte access fires SGIRE_W_DE_LEN
+372: OUTSIDE   = 0xb5001800            # past LINEAR_B: the straggler arm (UNMAP_WR / UNMAP_RD)
+373: PRIM_BAD  = 0x05020000            # an UNIMPLEMENTED drawing op (only LINE and RECTANGLE exist)
+374: TEX_BASE  = 0xb5001600
+375: prime = []
+376: for _w in RE_WINDOWS:
+377:     prime += store(A, _w, 0x1, op=OP_SB_T0_A3)             # bits 0-5
+378: prime += store(A, DE_BASE, 0x1, op=OP_SB_T0_A3)            # bit 6
+379: prime += store(A, OUTSIDE, 0x1, op=OP_SB_T0_A3)            # bit 7
+380: prime += loadop(A, OUTSIDE, OP_LW_V0_AT)                   # bit 8
+381: prime += setup_put(A, MODE_LINB_RGBA)                      # bit 10 (a real 1x1 rectangle into LIN_B)
+382: prime += store(A, DE_PRIM_START, PRIM_BAD)                 # bit 9
+383: prime += loadop(A, TEX_BASE, OP_LD_V0_AT)                  # bit 11
+384: PRIME_LIT = ["for CRIME_RE_%s -- declined." % _n for _n in ("TLB_A", "TLB_B", "TLB_C", "TEX", "LINEAR_A", "LINEAR_B")] + [
+385:     "[ sgi_de: unimplemented len=",                       # bit 6  DE_LEN
+386:     "unimplemented write to address 0x1800",              # bit 7  UNMAP_WR
+387:     "unimplemented read from address 0x1800",             # bit 8  UNMAP_RD
+388:     "UNIMPLEMENTED drawing op",                           # bit 9  PRIM_OP
+389:     "unimplemented dst_mode",                             # bit 10 BADMODE
+390:     "unimplemented read from CRIME_RE_TEX -- declined."]  # bit 11 TEX_RD
+391: t_all, alive_all = session(prime + setup_put(A, MODE_YCRCB) + load(A, DST_KSEG1) + ["print v0"], spin=4.0)
+392: fired_all = sum(1 for _lit in PRIME_LIT if _lit in t_all)
+393: row("allbits primed", "%i/%i" % (fired_all, len(PRIME_LIT)) if alive_all else "died", "%i/%i" % (len(PRIME_LIT), len(PRIME_LIT)),
+394:     "all twelve other latches PROVEN fired before the colour decline (the row proves its own setup)")
+395: row("allbits announce", t_all.count(ANN) if alive_all else "died", 1,
+396:     "with every other bit set, the colour decline still announces once: a latch sharing ANY bit reads 0")
+397: row("allbits paint", printed(t_all, "v0") if alive_all else "died", "0x%08x" % DST_PAINT,
+398:     "and the declined PUT stored nothing (control)")
+399: 
+400: #  ---- the latch bit is its own: a BADMODE decline first, then a colour decline still announces --
+401: A = Addr(CODE)
+402: t_ind, alive_ind = session(setup_put(A, MODE_LINB_RGBA) + setup_put(A, MODE_YCRCB)
+403:                            + load(A, DST_KSEG1) + ["print v0"])
+404: row("latch indep", t_ind.count(ANN) if alive_ind else "died", 1,
+405:     "LIN_B fires SGIRE_W_BADMODE first; the colour decline still announces once (a shared bit reads 0)")
+401: 			    both lay [R,G,B,x] in memory despite opposite
+402: 			    register word orders -- which leaves this GET the
+403: 			    lone container outlier among the 32-bit arms.
+404: 
+405: 			    The low byte stays ZERO on purpose: RGB carries
+406: 			    three channels, so a corrected read of 0xaabbccdd
+407: 			    yields 0xaabbcc00, NOT the source word.  */
+408: 			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8);
+409: 			break;
+410: 		case DE_MODE_TYPE_RGBA:
+411: 			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
+412: 			break;
+413: 		case DE_MODE_TYPE_ABGR:
+414: 			*color = (buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+415: 			break;
+416: 		default:// Read "raw" 32-bit value:
+417: 			*color = (buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+418: 			fatal("[ get: color mode = 0x%x ]\n", color_mode);
+419: 		}
+420: 	}
+
+codex
+ASTRA_MTE564P1_20261017
+VERDICT: PROCEED WITH CHANGES (4)
+
+**Q1 — Premise audit**
+
+The four changes are: **C1**, qualify the behavioral contract and option-set claims; **C2**, strengthen latch tests; **C3**, prove writable fixtures and destination coverage; **C4**, complete boundary and acceptance tests. Keep member 3 at all five sites, preserving their predicates and order.
+
+I checked the allowed source file; its MD5 is `60203f67973c303d09cf381181e7412f`, matching the packet. Paths below are relative to `GXEMUL-SEC`. I did not inspect the witness artifacts or rerun the reported measurements.
+
+1. **Census confirmed.** After stripping comments and literals, the executable `exit(` calls are at `src/devices/dev_sgi_re.c:1498`, `:1506`, `:1582`, `:1587`, `:1598`, and `:1720`. The last is unreachable because its preceding conditions are exact complements: `len == 4` and `len != 4` (`:1705`, `:1710`). The other five are reachable with the supplied register settings.
+
+2. **The reported attribution is sufficient for these HEAD paths.** The five diagnostic strings are distinct, and each immediately precedes its own exit. Independently decoding the supplied modes gives:
+
+   | Row | Source | Destination | Depth | COPY | First terminating guard |
+   |---|---|---|---:|---|---|
+   | stipple | A | A | 32 | clear | S1 |
+   | src tex | TEX | A | 32 | clear | S2 |
+   | lin copy | A | LIN_A | 8 | set | S3 |
+   | lin depth | A | LIN_A | 16 | clear | S4 |
+   | bytemask | A | LIN_A | 8 | clear | S5 |
+   | lin fill | A | LIN_A | 8 | clear | none |
+
+   The masks supplied for the last four rows establish the stated distinction. An earlier terminating guard could not execute and then reach the intended diagnostic. Thus death plus the unique intended text supports the attribution; death alone would not. This validates the packet’s interpretation of its transcript, not independently its execution history.
+
+   I also enumerated the extraction results: source and destination each produce `{0,1,2,3,4,5,6,7}`; depth fields produce `{0,1,2,3}`, yielding `{8,16,32,64}`. Encoding 3 has no named depth constant. Sources: `src/include/thirdparty/crmfbreg.h:256`, `:265`, `:267`; extraction at `src/devices/dev_sgi_re.c:1479`.
+
+3. **Confirmed for transfer-generated guest-memory writes, not literally every memory write.** S1/S2 precede the destination switch; S3–S5 precede the linear `memset` and DMA writes. The tiled PUT is at `src/devices/dev_sgi_re.c:1570`, and linear writes at `:1668`. However, the triggering register store has already updated `mte_reg[]` (`:1707`), and the proposed warning latch updates device state. **C1:** promise “no transfer data writes,” while preserving register programming and diagnostics.
+
+4. **The source-data claim is correct; “never reads the source selector” is too broad.** The function extracts and checks that selector even for fills (`src/devices/dev_sgi_re.c:1480`, `:1501`, `:1504`) and constructs `src_mode` (`:1533`). Only COPY passes it to a source-memory GET (`:1564`). A fill does not fetch source data. This does not establish hardware acceptance of every unused source encoding.
+
+5. **Zeroed BYTEMASK confirmed, with the earlier-guard qualification.** `mte_reg[]` belongs to the structure zeroed at initialization (`src/devices/dev_sgi_re.c:186`, `:848`). A linear fill that passes S1–S4 and never programs BYTEMASK therefore reaches S5 with zero.
+
+6. **Idle-status polling cannot be held busy by this decline.** The status handler always returns the four idle bits, `0x1e000000` (`src/devices/dev_sgi_re.c:1844`). The caller still executes its common tail and returns success (`:1807`). **C1:** this is not a guarantee that every guest progresses: software could wait for destination data that the declined transfer never produces.
+
+**Q3 — Option-set completeness**
+
+The set omits **device-level error completion or command abort, potentially with a defined interrupt**. That differs from treating an MMIO address as unmapped:
+
+- Unsupported ASC commands set interrupt and illegal-command state (`src/devices/dev_asc.c:1490`, `:1501`).
+- Unsupported WDC commands set `WDCE_ABRT` and assert completion independently of the diagnostic latch (`src/devices/dev_wdc.c:1155`).
+- PVR DMA supplies a direct refusal precedent: unsupported resource selection diagnoses and returns (`src/devices/dev_pvr.c:311`).
+
+Stopping the emulated CPU is another existing policy (`src/devices/dev_mb89352.c:527`), but would undermine this round’s continuation objective.
+
+None establishes an MTE error encoding or interrupt response for these cases. **C1:** acknowledge error completion as an alternative, then reject inventing it without an MTE-specific warrant.
+
+The argument excluding ACCEPT merely because this is a transfer is also too strong: acceptance applies to commands and writes. Nevertheless, no supplied evidence establishes correct execution for these rejected classes. S2 fills are a plausible acceptance candidate, subject to Q4-b. Fabricated backing does not supply missing transfer semantics. Mappedness alone does not logically exclude a hardware-defined bus fault, but there is no warrant here for introducing one.
+
+**Q4 — Q-a through Q-e**
+
+**Q-a.** Delete-only is wrong as the general repair. It ignores stippling, turns linear COPY into fill, repeats BG’s low byte for unsupported linear depths, and disregards the byte mask (`src/devices/dev_sgi_re.c:1580`, `:1637`). For unsupported tiled COPY sources, a declined helper GET can leave `bg` unchanged while the caller still performs its dependent PUT (`:308`, `:1564`, `:1570`).
+
+Leaving the destination untouched is preferable as a bounded emulator refusal: it avoids fabricating transfer results and preserves recoverable contents. It is not a claim of hardware fidelity or universally better guest behavior.
+
+**Q-b.** **Keep S2 unchanged this round.** The header says COPY clear means “clear dst” (`src/include/thirdparty/crmfbreg.h:273`), and the implementation proves source data is unused. Neither establishes that hardware skips validation of SRC_BUF during fill, especially reserved encoding 7. I found no explicit warrant in the allowed material for accepting all five currently refused source values during fills.
+
+**Q-c.** IMPLEMENT belongs in a separate row. The packet establishes termination, not correct wider-pattern or byte-mask semantics. Pattern alignment, byte ordering, mask interpretation, and whether read-merge-write is appropriate remain unestablished. A familiar implementation technique is not a transferred warrant.
+
+**Q-d.** **One bit per site per device instance.** LIN_A and LIN_B encounter the same unsupported feature at S3–S5; suppressing the second diagnostic is consistent with that policy. Their transfer refusal must still occur every time.
+
+The existing bit indices enumerate as `0` through `12`; proposed indices `13,14,15,16,17` are free. Their values are `0x2000,0x4000,0x8000,0x10000,0x20000`. Move the last-enumerator comment and make its next-free index **18** (`src/devices/dev_sgi_re.c:165`, `:203`).
+
+**Q-e.** No preceding transfer data write needs rollback. There are local calculations, debug output, and potentially the unsupported-`dst_y_step` diagnostic (`src/devices/dev_sgi_re.c:1484`, `:1491`, `:1590`). The caller’s register update is intentional and should remain.
+
+Put the unconditional `return` **outside** the warning-latch condition. The preexisting unlatched diagnostics mean this change bounds these five announcements, not every possible MTE message.
+
+**Q5 — Round scope**
+
+**Yes, all five qualify together**, taking the supplied five attributed reproductions as evidence. They are in the same device, reject unsupported transfer parameters before data movement, and admit one implementation pattern and the same survival/diagnostic/paint observables.
+
+Different mapping setup for tiled and linear destinations does not require a new oracle.
+
+If S2 were narrowed to COPY, its remaining rejection would still belong to this class, but the change would additionally accept formerly refused fills. That requires separate behavioral justification and positive fill coverage. The existing death reproductions alone do not authorize that semantic expansion.
+
+**Q6 — Test review**
+
+The proposed observables can discriminate as follows:
+
+| Proposed rows | Assessment |
+|---|---|
+| Five `<site> surv` | Yes: require actual guest execution and the expected RAM round-trip after START. Process existence alone is insufficient. |
+| Five `<site> nowrite` | Yes, provided the destination is mapped, the transfer is nonempty, and continuing would change the sampled paint. |
+| Five `<site> once` | Detect missing announcements and missing suppression. **Do not detect shared bits in isolated sessions.** Counting text also misses a return incorrectly placed inside the latch. |
+| Three `lin b <site>` | Paint distinguishes fall-through; survival distinguishes reinstated exits. Survival alone cannot detect an A-only return repair. |
+| `src c fill` | Correctly distinguishes `> C` from `>= C`: the legal fill must land. It does not exercise a source fetch. |
+| `src tex` / `src clip` | TEX=3 distinguishes `>2` from `>3`. CLIP=6 does **not** distinguish that particular mutation, since both predicates reject 6. |
+| `lin fill`, `lin b fill` | Useful acceptance controls, provided they verify changed memory through their respective mappings. |
+| `bytemask lo`, `bytemask hi` | Useful complementary tests. `7fffffff` catches low-16/low-8-only comparisons; `fffffffe` still declines under those comparisons and instead catches checks that ignore its low bit. |
+| `depth 16/32/64` | All distinguish a restriction to one rejected depth, with COPY clear, valid source, and full BYTEMASK. |
+| `live`, `devsig`, `mode rt` | Useful bootstrap controls. A register round-trip without START does not establish transfer execution. |
+
+**C2 — Make latch behavior observable.**
+
+- Check paint and continued execution after **both** repeated transfers. Otherwise, a return inside the latch rejects the first request and writes on the second while still logging exactly once.
+- Exercise S1→S2→S3→S4→S5→S1 in one instance, requiring each diagnostic exactly once. This detects shared new bits and assignment that clears earlier warning bits.
+- Prime and verify all existing warning sites before exercising the new ones. The existing priming recipe covers bits 0–11; its bad-color operation supplies bit 12 (`regress/sgi_re_colourdefault_probe.py:357`, `:391`).
+- Vary rejected values and alternate LIN_A/LIN_B within repeated-site tests. Identical repetitions cannot distinguish per-site suppression from unnecessarily finer suppression.
+
+**C3 — Prove mapping and label coverage.**
+
+For each fixture, establish that a corresponding supported transfer changes the same destination. In particular, configure only the selected linear array; configuring both identically could conceal incorrect array selection (`src/devices/dev_sgi_re.c:1654`).
+
+A concrete linear fixture is:
+
+- Physical destination `0x20000..0x20003`, painted `0x99999999`.
+- Selected linear entry `0x80000020`, installed by an aligned 64-bit register write.
+- BG=`0x11223344`, depth 8, full BYTEMASK.
+- Legal transfer produces `0x44444444`; declined transfer preserves paint.
+
+Register packing is established at `src/devices/dev_sgi_re.c:705` and `:784`; fill and matching at `:1637` and `:1658`. The tiled fixture already has usable packing in `regress/sgi_mte_fill_probe.py:296`.
+
+Cover S1/S2 beyond tiled-A fill: tiled B/C, both linear destinations, and COPY where applicable. Cross S4’s rejected depths and S5’s mask tests with both linear labels. A single LIN_B depth-16 row does not cover its other depth cells.
+
+Destination encodings `{3,6,7}` already reach a default arm that writes nothing (`src/devices/dev_sgi_re.c:1679`). Paint there cannot detect a missing S1/S2 return; use diagnostic precedence or explicitly disclose that limitation.
+
+**C4 — Complete boundaries and accepted-path protection.**
+
+- Enumerate S2’s small source domain: accepted `{0,1,2}`, rejected `{3,4,5,6,7}`. Test rejected sources under COPY as well as fill. Include a real accepted COPY at source C.
+- Add supported tiled COPY and tiled fill controls with non-full BYTEMASK. These catch accidentally moving the linear COPY/BYTEMASK restrictions outside their branch. A suitable COPY fixture already exists at `regress/sgi_mte_fill_probe.py:329`.
+- Add an unwritten-BYTEMASK row. Explicitly writing `0000ffff` does not test the reset-zero premise.
+- Full BYTEMASK is the sole accepted value. The proposed endpoint masks do not cover arbitrary ignored interior bits. Enumerating the 32 single-zero masks, `ffffffff ^ (1u << b)` for `b=0..31`, closes that specific omission family. Retain the full-mask acceptance control.
+- Follow a decline with a supported transfer and a status read in the same instance, checking that the next transfer lands and status remains `0x1e000000`.
+
+Measure the null-medium leg as proposed, and make missing output, failed startup, and absent post-START observations explicit failures. I did not inspect `gate_arm.sh`, which is outside the allowed reading scope, or execute probes.
+
+**Additional finding:** START is tested without checking `writeflag`; a read through a START-tagged address also invokes the transfer (`src/devices/dev_sgi_re.c:1807`). The write witness remains valid, but the trigger description is narrower than the implementation. Keep that separate from this repair.
+
+No files were written.
+tokens used
+51,074

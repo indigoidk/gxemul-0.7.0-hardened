@@ -1,0 +1,80 @@
+ASTRA_MTE564P3_20261018
+VERDICT: SHIP WITH CHANGES (3)
+
+**Q1 — Premise audit**
+
+1. **All 20 refusal-exemption cells are held.**
+
+| Site / destination | CLEAR witness | SET witness |
+|---|---|---|
+| S1 A | `stip a` | `stip copy`; `latch paint` |
+| S1 B | `stip b clr` | `stip b` |
+| S1 C | `stip c clr` | `stip c` |
+| S1 LIN_A | `stip la clr` | `stip lin a` |
+| S1 LIN_B | `stip lb clr` | `stip lin b` |
+| S2 A | `src 3`; `latch paint` | `src 4`–`src 7`; `src 3 copy` |
+| S2 B | `src b clr` | `src 3 b` |
+| S2 C | `src c clr` | `src 3 c` |
+| S2 LIN_A | `src la clr` | `src 3 lin` |
+| S2 LIN_B | `src lb clr` | `src 3 lin b` |
+
+The original sessions establish A-CLEAR before subsequent SET accesses. Each new paired session starts fresh, invokes S1 once, then S2 once. Those sites have distinct bits; the S1 operation carries source 0 and cannot prime S2. See [regress/sgi_mte_decline_probe.py:255](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:255), [:274](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:274), [:312](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:312), and [src/devices/dev_sgi_re.c:182](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:182).
+
+2. **Every new refusal cell would write if exempted.** B/C have their own TLB entries mapped to the painted physical page. Every cell repaints before START and reads afterward. Linear cells select the correct array, target four bytes at `0x30000`, and use depth 8, full BYTEMASK and COPY clear. Escapes therefore reach a tiled BG write or the linear `0x44444444` fill. See [regress/sgi_mte_decline_probe.py:220](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:220), [:283](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:283), [:305](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:305), and [src/devices/dev_sgi_re.c:1608](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1608), [:1723](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1723).
+
+3. **Crossbit priming is sound for the claimed single-alias mutations.** The accesses set bits 0–5, 6, 7, 8, 10, 9, 11 and 12 before S1 starts. `PRIME_LIT` contains 13 distinct site-specific strings; `xbit primed` checks each string’s presence, rather than accepting any thirteen announcements. The corresponding warning updates use `|=`, so every one of the **65 new-site→old-bit aliases** suppresses a required new-site announcement. Five are packet-reported measurements; the other 60 follow by construction. See [regress/sgi_mte_decline_probe.py:430](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:430) and [:438](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:438).
+
+4. **The strict append-preservation premise is false; the gate premise is true.** New S2 transfers precede the existing scratch store/read at [regress/sgi_mte_decline_probe.py:287](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:287). Thus `src surv` has a changed command prefix, while `src once` counts the expanded session. Existing transfer-paint reads retain their prefixes.
+
+   A read-only, in-memory expansion found **68 unique emitted names**, exactly matching the gate’s 68 unique names; maximum name length is 14. The emitted/green denominators are both 68, and red is pinned to zero at [regress/gate_arm.sh:1499](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1499).
+
+**Q3 — New-row validity**
+
+**None of the 15 new rows is unable to change under its stated mutant.** The eleven refusal cells observe overwritten paint; the two acceptance cells observe a missing write; `xbit primed` observes a missing priming text; `xbit texts` observes a missing new-site announcement.
+
+Pairing does not confound the named exemption mutations: the first result is read before the second repaint, and each site initially has its own latch clear. However, the paired sessions check only paint, so a *grown S1 guard* can perform the second operation’s refusal without its missing S2 announcement being noticed. That matters to the separate coverage finding below. See [regress/sgi_mte_decline_probe.py:312](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:312).
+
+**Q4 — Records and additional findings**
+
+**Change 1: add acceptance after S5 has latched.** This whole-detector survivor is outside the repaired cells:
+
+```c
+if (bytemask != 0xffffffff ||
+    (d->warned & SGIRE_W_MTE_BYTEMASK)) {
+```
+
+Replacing the guard at [src/devices/dev_sgi_re.c:1644](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1644) wrongly refuses every otherwise legal linear fill after the first S5 decline. No session tests that transition: the mask sessions finish with refusals, LATCH returns to tiled traffic, CROSSBIT ends, and ACCEPT starts fresh. See [regress/sgi_mte_decline_probe.py:346](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:346), [:398](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:398), and [:454](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:454).
+
+Static extraction found **91 START transfers across 17 sessions, with zero legal linear fills after S5 becomes SET**. This mutant changes none of their guard decisions. Add a repainted, full-mask legal linear fill after an S5 decline and check its result.
+
+**Change 2: cover the six remaining S1/S2 acceptance-state holes.** For example:
+
+```c
+if (src > MTE_TLB_C ||
+    (dst_tlb == MTE_TLB_B && (d->warned & SGIRE_W_MTE_SRC))) {
+```
+
+This passes the composite: the accepted B fill runs with S2 CLEAR, and B traffic with S2 SET already declines. The same hole exists for **each of S1/S2 at B, C and LIN_B with its own latch SET**. Add those six legal-transfer checks after priming the respective latch. See [regress/sgi_mte_decline_probe.py:283](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:283), [:372](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:372), and [:390](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:390).
+
+My source-derived sweep denominator is:
+
+| Mutant family | Swept | Caught | Survive |
+|---|---:|---:|---:|
+| S1/S2 label exemptions × five labels × CLEAR/SET | 20 | 20 | 0 |
+| S1/S2 label guard growth × five labels × CLEAR/SET | 20 | 14 | 6 |
+| S1–S5 whole-guard exemptions conditioned on CLEAR/SET | 10 | 10 | 0 |
+| S1–S5 whole-guard growth conditioned on CLEAR/SET | 10 | 9 | 1 |
+| New-site bit aliased onto an old bit | 65 | 65 | 0 |
+
+These are source deductions, not executed mutation results. S1/S2 growth at SET+LIN_A is caught indirectly by missing later S3–S5 texts; SET+A has existing acceptance witnesses.
+
+**Unsettled floor premise:** the packet does not reproduce the complete governing clause (d). The coverage holes above are definite; PRETABLE3’s assertion that conditioned acceptance belongs to clause (e) does not establish its exclusion from (d). S5 uses precisely the own-latch partition its body tests. I cannot certify whole-detector floor closure from the supplied rule text.
+
+**Change 3: correct the records, preserving historical predictions as historical.**
+
+- Replace “AFTER every existing check” and “no existing row’s command sequence before its read changed” with the narrower preservation claim from Q1. Explicitly account for `src surv` and `src once`.
+- The generator’s claim that latch-conditioned acceptance omissions are “disclosed in the probe’s contract” is false: [regress/sgi_mte_decline_probe.py:47](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/regress/sgi_mte_decline_probe.py:47) contains no such disclosure.
+- Annotate PRETABLE3’s prediction “the new rows must all red”: its own HEAD table has `fill b ok` and `fill c ok` green. The supplied result is **13/15 new rows red**, consistent with HEAD’s 10/68 green.
+- Annotate “red ONLY its own cell’s row(s)”: the supplied table shows additional effects, including `s1aclr` reddening latch/crossbit texts and `s2aclr` reddening subsequent A rows because its latch never becomes set.
+
+The corrected START comment is supported by the register-store, dispatch and common-tail ordering at [src/devices/dev_sgi_re.c:1760](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1760) and [:1862](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1862); its untested register/read consequences are explicitly disclosed. The sweep read-once correction and other stated no-row limitations are accurate. The errata’s source explanations also hold, including source-3 COPY retaining BG after the failed GET and STATUS being offset `0x4000` with returned word `0x1e000000` ([src/devices/dev_sgi_re.c:325](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:325), [:1900](C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1900)). Historical measurements and timestamps remain supplied evidence, not independently rerun evidence.

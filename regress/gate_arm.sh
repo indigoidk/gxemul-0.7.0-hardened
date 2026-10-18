@@ -1470,6 +1470,43 @@ else
 
 fi
 
+#  ---- #564 sgirekills (MTE half): do_mte_transfer()'s five refusals of an unsupported transfer parameter --
+#  ---- stipple, a source buffer past MTE_TLB_C, and COPY / depth != 8 / a partial BYTEMASK to a LINEAR
+#  ---- destination -- each DECLINE with a latched announcement, where each used to end the process.  Wired
+#  ---- IN THE SAME COMMIT as the fix.  Measured with one instrument: 8/53 on the pre-fix build (HEAD
+#  ---- 2951694f; only the controls and the five ACCEPT rows green) and 53/53 on the fix
+#  ---- (regress/artifacts/sgirekills/detector_564_20261017/); the pass-2 repair took it to 68 rows
+#  ---- (regress/artifacts/sgirekills/killtable3_564_20261017/).  Modelled on the sgi_re_width_probe block
+#  ---- (find it with `grep -n 'sgi_re_width_probe.py "$PMAX"' gate_arm.sh`), at depth 0 so a sibling
+#  ---- probe's missing sentinel cannot swallow it.
+MTELOG=$LOGDIR/sgi_mte_decline.log
+python3 sgi_mte_decline_probe.py "$PMAX" gate > "$MTELOG" 2>&1 || true
+
+if ! grep -q "MTEDECL_DONE" "$MTELOG"; then
+    note "sgi_mte decline probe did not reach its completion sentinel; last lines follow"
+    tail -5 "$MTELOG" | sed 's/^/       /'
+    check "sgi_mte decline probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$MTELOG" | sed 's/^/       /'
+
+    #  CONTROLS BY NAME: a run whose controls died is an APPARATUS failure, not 50 product failures.
+    for c in "live" "devsig" "mode rt"; do
+        check "sgi_mte control: $c" "$(count "$MTELOG" "^$c  .*ok$")" "1"
+    done
+
+    #  PER ROW, ONE LINE.  The probe prints a name of at most 14 characters in a 16-column field, so every
+    #  name is followed by TWO spaces and "^<name>  " cannot match a longer name that starts with it.
+    for v in "live" "devsig" "mode rt" "stip a" "stip b" "stip c" "stip copy" "stip lin a" "stip lin b" "stip surv" "stip once" "src 3" "src 4" "src 5" "src 6" "src 7" "src 3 copy" "src 3 lin" "src c fill" "src c copy" "src surv" "src once" "copy lin a" "copy lin b" "copy surv" "copy once" "depth a 16" "depth a 32" "depth a 64" "depth b 16" "depth b 32" "depth b 64" "depth surv" "depth once" "mask unwritten" "mask unw surv" "mask 0000ffff" "mask fffffffe" "mask 7fffffff" "mask sweep" "mask lin b" "mask surv" "mask once" "lin fill a" "lin fill b" "lin fill ecc" "tile mask" "tile copy mask" "latch paint" "latch texts" "latch old bit" "after fill" "after status" "src 3 b" "src 3 c" "src 3 lin b" "stip b clr" "src c clr" "stip c clr" "src b clr" "stip la clr" "src lb clr" "stip lb clr" "src la clr" "fill b ok" "fill c ok" "xbit primed" "xbit texts"; do
+        check "sgi_mte row: $v" "$(count "$MTELOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR PINNED TO A LITERAL, summed arithmetically (count() is plain grep: a `|' would be literal).
+    check "sgi_mte rows emitted" \
+          "$(( $(count "$MTELOG" " ok$") + $(count "$MTELOG" " FAIL$") ))" "68"
+    check "sgi_mte rows green"   "$(count "$MTELOG" " ok$")"   "68"
+    check "sgi_mte rows red"     "$(count "$MTELOG" " FAIL$")" "0"
+fi
+
 #  ---- *** MOVED OUT ONE NESTING LEVEL, 2026-08-31.  It was pasted INSIDE the
 #  ---- sgi_re_width probe's success branch, so if THAT probe missed its sentinel this
 #  ---- block was never invoked at all -- 28 rows, three denominators and its own

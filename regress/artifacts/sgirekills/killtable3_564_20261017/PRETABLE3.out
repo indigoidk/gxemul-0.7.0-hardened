@@ -1,0 +1,76 @@
+PRETABLE3 -- #564 sgirekills (MTE half), the PASS-2 REPAIR.  Written 2026-10-17 BEFORE kill table 3 (its mtime is the
+order proof).  Detector regress/sgi_mte_decline_probe.py, md5 8928a02f, 68 rows (53 before the repair); the fix
+src/devices/dev_sgi_re.c md5 23fa76aa (1d65cdc1 plus F1's comment correction only -- no executable change).
+Mutant list: mutants_564c.py beside this file, 29 mutants, each with its predicted catchers.
+The findings and their adjudication: regress/artifacts/sgirekills/pass2_564_20261017/ (Astra, Grok, GLM SWC; Fable 429)
+and f2_564_20261017/ (Astra ALL UPHELD, GLM ALL UPHELD, Grok "1 WRONG (F9)" -- the floor upheld, the packet's append
+recipe corrected: B and LIN_B mapped inline, every cell repainted, linear cells at depth 8 / full mask / COPY clear).
+
+== 1. SIBLING PARITY
+N/A: the repair adds rows, not arms.  The five arms and their parity were PRETABLE.out section 1.
+
+== 2. CLAIM -> ROW (every ADDED or CHANGED sentence asserting an observable consequence)
+* dev_sgi_re.c, F1: "On a START-tagged write the register store has already landed in the caller and stays" -- no row
+  reads an MTE register after a START; disclosed (probe contract NOT CLAIMED, and PRETABLE.out section 2).
+  "a START-tagged READ reaches here too (filed separately)" -- no row drives a START-tagged read; disclosed in the
+  contract and filed (mtestartread).  "either way the caller's common tail still answers" -- `after status', the
+  `*surv' rows (a write); the read tail has no row (same disclosure).
+* probe contract: "S1 and S2 at EVERY destination label whose arm writes guest memory ... each in BOTH latch states"
+  -> the 20 cell rows of section 3; "a new site's bit ALIASED onto a pre-existing one" -> `xbit primed' + `xbit
+  texts'; "the paint is read ONCE, at its end" (the sweep) -> `mask sweep' (unchanged); the NOT CLAIMED additions
+  (source 1, the printed VALUES, an MTE register written by a decline, a START-tagged READ) are explicit no-row
+  sentences.
+
+== 3. GUARD FIELD vs BODY FIELD -- the skipped-dispatch cells (2026-09-25 clause, first reuse; fit checked)
+S1's and S2's `return' bypasses `switch (dst_tlb)'.  Guest-observable labels: A, B, C (tiled arm writes via
+horrible_getputpixel) and LIN_A, LIN_B (memory_rw fill); 3 (TEX), 6 (CLIP), 7 reach `default:', which only prints
+(dev_sgi_re.c:1732-1733) -- excluded as host-debug only.  Each repair path tests its OWN latch bit, so the floor is
+labels x {CLEAR, SET} per site.  The partition the body induces on each lvalue: d->warned -- one bit per site, tested
+as a case (set / clear); dst_tlb -- not read by S1/S2's body, an axis only through the bypassed dispatch.
+    cell                 row(s) that hold it
+    S1 A   CLEAR         stip a                       S1 A   SET   stip copy; latch paint (s1again)
+    S1 B   CLEAR         stip b clr          (new)    S1 B   SET   stip b
+    S1 C   CLEAR         stip c clr          (new)    S1 C   SET   stip c
+    S1 LA  CLEAR         stip la clr         (new)    S1 LA  SET   stip lin a
+    S1 LB  CLEAR         stip lb clr         (new)    S1 LB  SET   stip lin b
+    S2 A   CLEAR         src 3; latch paint           S2 A   SET   src 4..7, src 3 copy
+    S2 B   CLEAR         src b clr           (new)    S2 B   SET   src 3 b       (new)
+    S2 C   CLEAR         src c clr           (new)    S2 C   SET   src 3 c       (new)
+    S2 LA  CLEAR         src la clr          (new)    S2 LA  SET   src 3 lin
+    S2 LB  CLEAR         src lb clr          (new)    S2 LB  SET   src 3 lin b   (new)
+The ACCEPT face at each label (guard false): A (tile mask, after fill, src c fill), LIN_A / LIN_B (lin fill a / b) and,
+new, B and C (fill b ok, fill c ok).  The latch-conditioned accept-face variants are DISCLOSED (clause e), not rowed.
+
+== 4. CHANNEL -- per new row, the mutant it is for and the observable that differs under it
+    stip/src <lab> clr   the CLEAR-conditioned label exemption at <lab>    the paint at that label is overwritten
+    src 3 b / 3 c / 3 lin b   the SET-conditioned exemption at B / C / LB      the paint is overwritten
+    fill b ok / fill c ok     S1 or S2 grown to refuse every transfer to B / C  the legal fill does NOT land (paint kept)
+    xbit primed          (setup proof) a priming access that stops announcing  fewer than 13 priming texts
+    xbit texts           a new site's bit aliased onto a pre-existing one      that site's count reads 0
+Every new linear cell runs at depth 8, BYTEMASK 0xffffffff, COPY clear, so S3-S5 cannot hide an escape; every tiled
+cell maps its own tile (B and C are mapped where they are first used) and repaints before its transfer -- A, B and C
+share one physical page, so an unrepainted cell could red on its neighbour's write.  CHECKED AT WRITING TIME: no new
+row's channel is a survival oracle at a refusal-effect site.
+
+== 5. CLAUSE (c) -- the null medium
+`null' (/bin/true) in this table: every session dies, every row that reads a value or a survival reds.  Measured, not
+claimed, below.
+
+== 6. THE (d) DEPENDS-ON ENUMERATION for the repair, and what table 3 measures
+* the 20 latch-conditioned label exemptions (S1, S2) x {A, B, C, LA, LB} x {SET, CLEAR} -- each predicted to red ONLY
+  its own cell's row(s), section 3.  A plain label exemption exempts a superset of cells; its detection follows from
+  either conditioned variant's and is recorded as that consequence, not as a measurement.
+* one alias per new latch bit onto a pre-existing bit no other session sets: STIPPLE -> 10, SRC -> 6, COPY -> 11,
+  DEPTH -> 12, BYTEMASK -> 8 -- each predicted to red `xbit texts' only.  Every other (site, pre-existing bit) pair
+  -- 60 of them -- is covered BY CONSTRUCTION via `xbit primed' (all 13 set) AND `xbit texts' (each site announced
+  once): every writer of d->warned is `|=', so a site whose bit equals a primed one takes its silent branch.  Not
+  covered: a compound mutation that also CLEARS warning state.
+* the ACCEPT face at B and C: S1 and S2 grown by `|| dst_tlb == B' / `== C' -- each predicted to red `fill b ok' /
+  `fill c ok' (and nothing else: the refused transfers stay refused).
+* `head' -- HEAD 2951694f's build, clause (a) for the repaired instrument: every row that drives a refused transfer
+  dies there; the new rows must all red, the controls stay green.
+TABLE 1 (34) and TABLE 2 (2) stand as OLD-INSTRUMENT evidence for the 53 rows they scored: the repair APPENDS -- the
+S2 session's new transfers come after its last existing check, the ACCEPT session's after its last, and the other new
+rows are new sessions -- so no existing row's command sequence before its read changed.  Aggregate rows CAN change
+value under a mutant (`src once' counts the whole session: a missing-suppression mutant now reads 10 where it read 7;
+a death in the appended tail reads `died') -- both still red.  This is a source-derived argument, not a re-measurement.

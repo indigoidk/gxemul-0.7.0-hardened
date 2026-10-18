@@ -1,0 +1,53 @@
+The repair's own pass has to re-check the premises and ask the floor question of the whole 68-row detector. I'll read the shipped sites, the new rows, and the latch writers rather than treating the kill table as proof.GROK_MTE564P3_20261018
+
+VERDICT: CLOSE
+
+**Q1**
+
+1. All 20 label × latch cells are held, and every CLEAR cell is the first refusal of that site in its session. S1’s and S2’s `return`s sit before `switch (dst_tlb)` (`dev_sgi_re.c:1529` and `:1544`, switch at `:1547`). Guest-writing labels are A, B, C, LIN_A, LIN_B (`crmfbreg.h:257-262`; TEX=3, CLIP=6 and field 7 fall into `default:` at `dev_sgi_re.c:1734-1735`, which only prints).
+
+| Cell | Row | Why that latch state |
+|---|---|---|
+| S1 A CLEAR / SET | `stip a` / `stip copy` (also latch `s1again`) | first stipple of that session / fourth, after A, B, C |
+| S1 B CLEAR / SET | `stip b clr` / `stip b` | own session, first transfer / second stipple, after `stip a` |
+| S1 C CLEAR / SET | `stip c clr` / `stip c` | own session / third stipple |
+| S1 LA CLEAR / SET | `stip la clr` / `stip lin a` | own session / after A, B, C, COPY |
+| S1 LB CLEAR / SET | `stip lb clr` / `stip lin b` | own session / sixth stipple |
+| S2 A CLEAR / SET | `src 3` (also latch paint) / `src 4`..`src 7`, `src 3 copy` | first S2 / later S2s in that session |
+| S2 B CLEAR / SET | `src b clr` / `src 3 b` | first S2 of its session / after the A and LIN_A refusals |
+| S2 C CLEAR / SET | `src c clr` / `src 3 c` | same shape |
+| S2 LA CLEAR / SET | `src la clr` / `src 3 lin` | same shape |
+| S2 LB CLEAR / SET | `src lb clr` / `src 3 lin b` | same shape |
+
+The four CLEAR sessions (`sgi_mte_decline_probe.py:312-317`) each do one stipple and then one `SRC(3)`. Those are different bits (`SGIRE_W_MTE_STIPPLE` `1<<13`, `SGIRE_W_MTE_SRC` `1<<14`, `dev_sgi_re.c:182-183`), so the S1 refusal does not set S2’s latch. `tiles()` and `lin_map()` do not call `do_mte_transfer`. `raw3/s2laset.out` keeps `src la clr` while `src 3 lin` goes `written`; `raw3/s2laclr.out` does the opposite.
+
+2. An exempted new cell writes. Tiled B and C use `TILE<<48` (`0x8002`), and `horrible_getputpixel` case 1/2 shifts that entry to physical `0x20000`, which is `TDEST` `0xa0020000`. The S2 session maps C at the start and only adds B later (`tiles()` writes the arrays it is asked for). Each transfer repaints `TDEST` first, so the shared page cannot leak into the next check. Linear cells go through `refuse()` at depth 8, `bytemask=0xffffffff`, COPY clear (`sgi_mte_decline_probe.py:310-311`). Past an exempted S1/S2, S3–S5 all miss and the fill matches page `0x30` (`dev_sgi_re.c:1709-1724`) and stores BG’s low byte over `0x99999999`. Measured: `s1bclr` makes only `stip b clr` `written`; `s2cset` makes only `src 3 c` `written`; `s2lbclr` makes only `src lb clr` `written`; `s1laclr` makes only `stip la clr` `written`.
+
+3. The crossbit session sets bits 0–12 before S1..S5, and `xbit primed` ties each bit to its own text. The sequence matches `sgi_re_colourdefault_probe.py:370-391` (byte stores to the six RE windows, DE byte store, straggler store and load at `0xb5001800`, LIN_B RGBA rectangle, bad primitive, 64-bit TEX read) plus that probe’s YCRCB put. `relative_addr += 0x1000` (`dev_sgi_re.c:452`) is why the straggler prints `0x1800`. Each fatal sits in the same branch as its `|=`: bits 0–5 at `:509-795`, bit 6 at `:1231`, bits 7–8 at `:833-842`, bit 9 at `:1156`, bit 10 at `:313` (`0x1620` is tlb_mode 5, the default arm, and it returns before the colour switch), bit 11 at `:633`, bit 12 at `:382` (`0x12f0` is tlb_mode 4). The thirteen literals do not nest: TEX length is `for CRIME_RE_TEX` (`:598-599`) and TEX read is `read from CRIME_RE_TEX` (`:635-636`). `raw3/base.out` is `13/13` and `1/1/1/1/1`. `xs1b10` silences only S1 (`0/1/1/1/1`); `xs3b11` only S3; `xs5b8` only S5. Every `d->warned` writer in this file is `|=`.
+
+4. The gate pins the probe’s 68 names, and both denominators are 68 (`gate_arm.sh:1499-1507`). Emissions are 3 controls + 8 stipple + 14 source + 8 clear-pair + 4 copy + 8 depth + 9 mask + 7 accept + 3 latch + 2 crossbit + 2 after. Names are unique and at most 14 characters, so `^<name>  ` does not swallow `stip b clr` or `src 3 lin b`. The repair appends every paint check’s commands. It does not append the S2 session’s live read: `src 3 b`, `src 3 c` and `src 3 lin b` are inserted before `s.check(SCRATCH, "live")` (`sgi_mte_decline_probe.py:283-287`). `src surv` and `src once` therefore see ten refusals. PRETABLE3’s sentence that no existing row’s commands before its read changed is false for those two. A later refusal can raise `src once` or kill `src surv`; both stay red. It cannot turn a table-1 red back to green.
+
+**Q2**
+
+Zero. The sweep, over `do_mte_transfer` only:
+
+- **20 skipped-dispatch cells.** {A, B, C, LIN_A, LIN_B} × {CLEAR, SET} × {S1, S2}. Table 3 killed each conditioned exemption on its own row (`KILLTABLE3.txt`, 20/20). A plain label exemption is the union of the two latch states, so it reds both rows. TEX, CLIP and 7 are out of the product (host-debug `default:`) and are named in the probe’s NOT CLAIMED list.
+- **65 latch aliases.** 5 new bits × pre-existing bits 0–12. Five were measured, one per site (bits 10, 6, 11, 12, 8), each red only on `xbit texts`. The other 60 are the same channel: the bit is set before S1..S5, the test is `warned & bit`, and `xbit texts` wants `1/1/1/1/1`. Sharing two new sites, or a mask of 0, is the older `latch texts` / `* once` channel (table 1 `shared`, `wrongbit`).
+- **Accept growth onto one tiled label.** S1 or S2 widened with `|| dst == B` or `|| dst == C`. `fill b ok` and `fill c ok`. `s1gc` leaves every decline row green and turns `fill c ok` into `paint`.
+- **The five sites’ own partitions, already killed on the 53 and still killed after the append.** Stipple present versus absent. `src > MTE_TLB_C` pinned at 2 (`src c fill`, `src c copy`) and 3 (every S2 cell, including the new ones). Source values 4..7. S2 COPY at tiled A (`src 3 copy`). S3 at both linear labels, first CLEAR then SET. S4 at {16, 32, 64} × both labels, with depth 8 accepted by `lin fill a/b`. S5 at 0, `0x0000ffff`, `0xfffffffe`, `0x7fffffff`, all 32 single-zero masks (one write sticks until the single read), and LIN_B. Return removed (`d1`..`d5`). Return moved inside the latch: S1 by `r1`, S5 by `r5`, S2/S3/S4 by their SET paint rows (`src 4`, `copy lin b`, `depth a 32`). Exit put back (`b1`..`b5`, the `*surv` rows). Hoisted S5 (`s5hoist`) still hits `tile mask`, whose commands are before the accept-session append. `assign` still hits `latch old bit`.
+
+Excluded, with the reason: S3–S5 label × latch cells such as LIN_B CLEAR. Those returns are inside `case MTE_TLB_LIN_A: case MTE_TLB_LIN_B:` (`dev_sgi_re.c:1615-1653`), so they do not bypass the switch. The 2026-09-25 disjunct is the bypass. The decline bodies print `dst_tlb` and do not compare it, which is the fall-through shape the 2026-09-09 clause leaves as (e). The plain one-label cuts are rowed and were killed (`s3laba`, `s4laba`, `s5laba`). COPY at a destination other than tiled A is not a test on S2’s repair path. Source value 1, masks with two or more zero bits, and latch-conditioned accept growth are named limits (contract NOT CLAIMED, and PRETABLE3 §3 for the accept-face latch). A second edit that clears `warned` is outside this generating set; the only writer form on the tree is `|=`.
+
+**Q3**
+
+No new row is stuck. Section 4’s mutant changes the observable on each of them: CLEAR and SET exemptions overwrite that cell’s paint (`s1bclr`, `s2cset`, `s2lbclr`, `s1laclr`, `s2laclr`), B/C growth keeps the legal fill (`s1gc`), and an alias drops that site’s count to 0 while the other four stay 1 (`xs1b10`, `xs3b11`, `xs5b8`).
+
+Pairing one S1-CLEAR with one S2-CLEAR does not hide either. The two checks use different latch bits, and `refuse()` repaints, and for linear labels remaps, before the second transfer. `s1bclr` writes `stip b clr` and leaves `src c clr` kept. `s1laclr` writes `stip la clr` and leaves the S2-CLEAR rows kept.
+
+**Q4**
+
+The F1 comment matches the caller. A START-tagged read calls `do_mte_transfer` with no `writeflag` test (`dev_sgi_re.c:1744`, `:1862-1863`). On a write, the register store at `:1760-1762` happens before that call and the decline does not undo it. The read path, the printed values, source 1, and an MTE register read back after START are explicit no-row sentences in the probe contract.
+
+The contract’s “20 cells, each held by a row”, the depth-8 / full-mask / COPY-clear line, the sweep’s single paint read, and “one measured alias per new site, the other pairs by `xbit primed`” all match the code and `raw3/base.out`. The errata’s count of the 11 empty cells matches the table above.
+
+Two added sentences over-claim the append. The probe comment says the three new S2 checks were placed after every existing check of that session, and PRETABLE3 §6 says no existing row’s commands before its read changed. The live check is after those three transfers, so `src surv` and `src once` changed. The same PRETABLE3 paragraph then says those aggregate rows can change value and stay red, which is the behaviour Q1.4 checked. The contract’s accept bullet was not extended with `fill b ok` / `fill c ok`; PRETABLE3 §3 is the sentence that claims them, and §3 also records latch-conditioned accept growth as an explicit no-row.

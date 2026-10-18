@@ -1,0 +1,143 @@
+The brief's premises need a check against `GXEMUL-SEC` at `2951694f`, including the exit census and what those mode fields can actually emit. I'll read that tree first and only then answer.The exit lines in `GXEMUL-SEC/src/devices/dev_sgi_re.c` match the brief. Next I’ll check HEAD, the init path, and what the mode fields can actually produce.GROK_MTE564P1_20261017
+VERDICT: PROCEED WITH CHANGES (4) — member 3 at all five sites, S2 left as `src > MTE_TLB_C`; the detector must also drive BYTEMASK 0, src 4/5/7, stipple on TLB_B and with COPY, and depth 32/64 at LIN_B; one same-session cross-site latch row; print the refused value and move the S5 test above the linear debug.
+
+Read `GXEMUL-SEC` at `2951694f` (`.git/refs/heads/main`). Line numbers match the packet. The md5 was not recomputed here.
+
+## Q1 — Premise audit
+
+**1. Census: true.** In `GXEMUL-SEC/src/devices/dev_sgi_re.c`, `\bexit\s*\(` hits 13 lines. Six are statements: 1498, 1506, 1582, 1587, 1598, 1720. The other seven are comments (315, 931, 1493 commented out; 273, 453, 457, 1187 in comment text). `do_mte_transfer` is called only at 1808.
+
+The sixth is dead. `len` is `size_t` (`src/include/memory.h:151`). `len == 4` and `len != 4` cover every `size_t`. The `else` at 1718–1720 cannot run.
+
+**2. Attribution: sufficient for these five words, and only for them.** The witness needles (`sgi_mte_exit_witness.py:151-157`) are not substrings of each other. `fatal()` prints and returns (`src/core/debugmsg.c:384-391`); the `exit(1)` is the next statement. `DST_Y_STEP` is never stored, the struct is zeroed (`dev_sgi_re.c:848`), and `dst_y_step == 0` fails the test at 1491, so that `fatal` does not also print.
+
+Enumerating each mode word (masks from `crmfbreg.h:256-273`):
+
+| row | mode | stipple | copy | depth field → bits | src (3 bits) | dst (3 bits) | first true guard |
+|---|---|---|---|---|---|---|---|
+| stipple | `0x600` | 1 | 0 | 2 → 32 | 0 | 0 TLB_A | S1 |
+| src tex | `0x260` | 0 | 0 | 2 → 32 | 3 | 0 TLB_A | S2 |
+| lin copy | `0x810` | 0 | 1 | 0 → 8 | 0 | 4 LIN_A | S3 |
+| lin depth | `0x110` | 0 | 0 | 1 → 16 | 0 | 4 LIN_A | S4 |
+| bytemask | `0x010` | 0 | 0 | 0 → 8 | 0 | 4 LIN_A | S5, mask `0x0000ffff` |
+
+`lin copy` also stores `0xffffffff`, so if S3 were absent, S4 and S5 would still be false. Death plus that needle is S3.
+
+Limit: a linear COPY with src 3 dies at S2 and never reaches S3. None of these five words do that. `mode rt` stores `0x600` with no `CRIME_DE_START` (`witness` script lines 187–189), so it never enters `do_mte_transfer`.
+
+**3. No guest-memory write before the return: true.** `memory_rw` in this function is only at 1668, and `horrible_getputpixel` only at 1565 and 1570. S1 (1496) and S2 (1504) are above the switch. S3 (1580) and S4 (1585) are above `memset` (1637). S5 (1596) is above `memset`. A `return` at any of them performs no guest store.
+
+The caller's `d->mte_reg[regnr] = idata` (1707, 1712–1713) has already happened. That store is the register write that carried `CRIME_DE_START`. It stays.
+
+**4. A fill does not read the source selector: true.** `src` is used only in the comparison at 1504. `src_tlb` is used only to build `src_mode` at 1533. `src_mode` is passed only inside `if (mode & MTE_MODE_COPY)` at 1564–1566. The linear arm never mentions `src`, `src_tlb`, `src0`, or `src1`.
+
+That stops at fills. On a COPY, src 4 is `DE_MODE_LIN_A` (`src_tlb << 10` = `0x1000`), and `horrible_getputpixel` case 4 (264–270) does perform a GET. S2 is what stops that today.
+
+**5. Zero BYTEMASK reaches S5: true of the code, not of the witness.** `memset(d, 0, sizeof(struct sgi_re_data))` at 848 covers `mte_reg[]`. The only stores are the handler at 1707 and 1713. Index: `(0x3008 - 0x3000) / 4 = 2`. A linear clear that never stores BYTEMASK reads 0, and `0 != 0xffffffff`, so S5 runs. The witness's bytemask row stores `0x0000ffff` (`sgi_mte_exit_witness.py:204`). It does not exercise the omitted store.
+
+Same file, same init, already recorded for the drawing engine: a zeroed primitive register is POINT, and a START that never wrote it died there (`dev_sgi_re.c:1118-1131`).
+
+**6. A status poll cannot hang: true.** `CRIME_DE_STATUS` returns `CRIME_DE_IDLE | CRIME_DE_SETUP_IDLE | CRIME_DE_PIXPIPE_IDLE | CRIME_DE_MTE_IDLE` with no dependence on device state (1844–1848). That OR is `0x1e000000`, which is the witness's `devsig`. `do_mte_transfer` does not write that register. This file has no interrupt raise. A guest spinning on `CRIME_DE_MTE_IDLE` sees it set before and after a decline. The legal `lin fill` path has the same idle word, so the decline adds no wait.
+
+The idle word is also a false success. This handler has no error latch to set. That is the existing model of every transfer, including one that completes.
+
+## Q2 — Smallest edit that stays green
+
+```c
+if (bytemask != 0xffffffff && bytemask != 0)
+```
+
+BYTEMASK left at its init value 0 then passes S5, reaches `memset` and `memory_rw`, and overwrites a mapped page. The proposed S5 rows store `0x0000ffff`, `0xfffffffe`, and `0x7fffffff`. **`bytemask nowrite` stays green.** So do `bytemask surv`, `bytemask once`, `bytemask lo`, `bytemask hi`, and `lin fill`.
+
+The producer of that register is a `uint32_t` store, or no store at all. One accepted value (`0xffffffff`). The rows sample three refused values. `0` is the one init emits.
+
+Same size, same hole on S2: `if (src > MTE_TLB_C && src != 7)`. Src is `(mode & 0xe0) >> 5`, so the producer emits 0..7, eight values. `src > 2` refuses five: 3, 4, 5, 6, 7. The rows refuse only 3 and 6. **`src clip` stays green**, and a tiled fill with src 7 writes. `crmfbreg.h` names 0..6 only. The mask still emits 7.
+
+## Q3 — Option set
+
+Member 3 is the right member at all five sites. Members 4, 5, and 6 are wrong here.
+
+Member 4 would be right only for the fill subset of S2, and only with a warrant that the hardware ignores `SRC_BUF` on a clear. Section Q-b has none. S1 has no stipple test in the body. S3 falls into a clear. S4's `memset(zerobuf, bg, n)` repeats the low 8 bits of `bg`. S5 writes every byte.
+
+Member 5 faults a mapped register. This file already records that `return 0` from a `DEVICE_ACCESS` is turned into `EXCEPTION_DBE` (`dev_sgi_re.c:1208-1212`). The guest's store of MODE or DST1 is a legal register write.
+
+Member 6 fabricates something to read back. The failure is a transfer parameter. Nothing is being read.
+
+Two dispositions the list does not name, both already in this tree, both rejected for this round:
+
+- Latched announce, then fall through. `dev_dreamcast_gdrom.c:1230-1241` records that removing the kill and leaving the operation in place is a silent guest-visible write. The latch only stops the flood.
+- A guest-visible error, the way `dev_asc.c:1490-1502` raises an illegal-command interrupt. `sgi_de_status` has nowhere to put one. Inventing a bit is a different row.
+
+`return` inside `do_mte_transfer` is the right control shape. The function is `void`, nothing follows the switch, and the caller's tail (1810–1813) still answers a read and returns 1. A `goto` would be the same transfer of control with more machinery. `dev_sh4.c` is on the dirty list in the brief, so it is not used as a HEAD precedent.
+
+## Q4 — Q-a through Q-e
+
+**Q-a.** Continuing is the wrong outcome at S1, S3, S4, S5, and at S2 when COPY is set. The body then writes a different operation than the mode bits name: a solid paint (S1), a clear in place of a copy (S3), a repeated low byte (S4; `0x11223344` becomes `0x44`), every byte the mask told it to keep (S5), or a GET/PUT through `horrible_getputpixel` (S2 with COPY). The `dst_y_step` shape at 1491–1494 is an unlatched `fatal` with the exit already commented out, filed as its own row. It is not a pattern to copy onto a guard whose failure is a wrong store.
+
+On an S2 fill the selector is unread, so continuing would perform the fill the tiled or linear arm already implements. That subset is Q-b, and it stays a decline.
+
+**Q-b.** Keep `src > MTE_TLB_C` for fills and copies. Decline the set that dies today.
+
+NetBSD `crmfb_fill_rect` writes `MTE_TLB_A` into the source field on a clear (copy bit 0). The X solid-fill path does the same with `MTE_DEPTH_32` and both buffers TLB_A. Both program a legal source. Neither says what the chip does with TEX, LIN_A, LIN_B, CLIP, or 7 on a clear. Narrowing the guard would turn today's kill into a successful fill for those five source values. That needs a manual, and this packet does not have one.
+
+Src domain, from the mask, not from the names:
+
+| extracted src | name in `crmfbreg.h` | `src > MTE_TLB_C` (C is 2) |
+|---|---|---|
+| 0 | TLB_A | pass |
+| 1 | TLB_B | pass |
+| 2 | TLB_C | pass |
+| 3 | TEX | refuse |
+| 4 | LIN_A | refuse |
+| 5 | LIN_B | refuse |
+| 6 | CLIP | refuse |
+| 7 | none | refuse |
+
+**Q-c.** IMPLEMENT is a separate row. No measured delta and no mask layout beyond "not all-ones dies". The tiled arm's own comment (1539–1553) left the 16-bit cell and encoding 3 unfixed on purpose. The PROM trace quoted at 688–690 is `mode=0x00000011` (DST_ECC, dst LIN_A, src 0, depth 8, clear) with `bytemask=0xffffffff`. That transfer misses every guard, so this decline does not remove it.
+
+Depth domain is four values, because the field is `(mode & 0x300) >> 8` and `depth = 8 << field`: 8, 16, 32, 64. Encoding 3 has no macro. `8 << 3` is 64, and the shift is in range. S4 refuses three of the four. There is no fifth depth.
+
+**Q-d.** One bit per site: `1 << 13` through `1 << 17`, on `uint32_t warned` (203). `SGIRE_W_BADCOLOR` is `1 << 12` and is the last enumerator (169). Five bits fit. Move the "next free bit" sentence with them.
+
+LIN_A and LIN_B are two values of one guard, the same shape as `SGIRE_W_BADMODE` covering every unimplemented `tlb_mode` with one bit and the mode number in the text (296–307). A second bit per label, with no same-session LIN_A-then-LIN_B row, is an untested latch. Print `dst_tlb` in the S3–S5 line so the first label is in the one announce. Print `src` at S2 and `depth` at S4. The current S2 text does not include the value.
+
+**Q-e.** Nothing before these guards writes guest memory. `debug()` returns before printing when verbosity is down (`debugmsg.c:375-376`). The `dst_y_step` `fatal` at 1492 can still fire on the way into a decline; it is `mtetlbflood`, and it stays.
+
+S5 sits under the "LINEAR TRANSFER" `debug` at 1590. Move the bytemask test above that `debug`, so a declined transfer does not log that a linear transfer started. The caller's register update stays, and `return` still reaches 1810–1813.
+
+## Q5 — Scope
+
+All five stay in this round. Each was witnessed, all five are in `do_mte_transfer`, and one design covers them: latched `fatal`, `return` before any guest store, same three channels (process alive, paint unchanged, text once). The extra rows use those channels.
+
+S2 stays in the class because the guard stays `src > MTE_TLB_C` for fills and copies. Scoping S2 to COPY would be a different change, a successful fill where HEAD dies, and it would leave the round.
+
+Leave out the dead width `exit` (`sgimtewidth`), the `dst_y_step` flood, the `default` dst arm, and the unlatched `STIPPLEMASK` / `NULL` / `FLUSH` fatals in the handler. The known depth-32 MTE user (X copy and solid fill) is tiled. S4 is the linear arm only. The tiled 16-bit and encoding-3 cells stay on their own row.
+
+## Q6 — Detector
+
+| row | does the named channel move? |
+|---|---|
+| `<site> surv` | Yes for `exit(1)` put back. Survival does not move if the `exit` is deleted and the body runs. `nowrite` is what sees that. |
+| `<site> nowrite` | Yes, if the destination is one the body will actually write. Linear: the TLB is a presence test, and the store is to `fill_addr` itself (1654–1669), so the entry must be `0x80000000 \| (dst0 >> 12)` in the array that arm reads, and the paint must sit at physical `dst0`. A miss skips the store and the row stays green while the defect is real. Tiled: the tile needs the valid bit, as in `regress/sgi_mte_fill_probe.py` (`TLBA_TILE = 0x8002`). |
+| `<site> once` | Yes for a missing latch on that site (two texts) and a missing announce (zero). **No for a shared bit.** Each row fires one site, in the witness's one-session-per-row shape. A bit shared by all five still prints once per fresh process. `#513` caught sharing by firing the other latches first in the same session (`tex xbit`, `dev_sgi_re.c:142-147`). |
+| `lin b` S3–S5 | Paint moves if the repair is `dst_tlb == LIN_A` and the row programs `re_linear_b`. Survival does not move: fall-through does not `exit`. A `lin b` row that records survival is vacuous for that mutant. |
+| `src c fill` | Yes. `src >= 2` refuses the boundary and the fill does not land. |
+| `src tex`, `src clip` | Yes for `src > 3`, which lets 3 through. They do not pin 4, 5, or 7. "Decline" has to be the text or the paint. Survival is true for both a decline and a completed fill. |
+| `lin fill`, `lin b fill` | Yes for a guard that rejects this mode word (`0x010`, bytemask `0xffffffff`). They do not pin DST_ECC. The PROM trace's mode is `0x11`, which is `0x010` plus bit 0. |
+| `bytemask lo`, `bytemask hi` | Yes for the two narrowings named in the brief (`& 0xffff`, a high-byte mask). They stay green for `&& bytemask != 0`. |
+| `depth 16/32/64` | Yes at LIN_A. The depth producer has only those three refused values, so LIN_A is covered. `lin b` S4 drives one depth. Depth 32 and 64 at LIN_B are open: refuse 16 always, and refuse 32/64 only on LIN_A. |
+| `live`, `devsig`, `mode rt` | Controls. `mode rt` is a stipple mode with no START, so it stays green across every transfer edit. |
+
+Floor cells the proposed table does not have:
+
+- BYTEMASK 0, by not storing it. This is the Q2 edit.
+- Src 4, 5, and 7. Src 6 is CLIP, not the top of the 3-bit field.
+- S1 and S2 on a destination other than TLB_A. They stand above the switch, so they apply to all eight dst values. A LIN_B stipple at the witness depth (32) does not write: S4 still refuses depth 16/32/64. The S1 write that slips through is TLB_B or TLB_C, or `STIPPLE|COPY` on TLB_A (the tiled COPY arm runs; S3 is linear-only).
+- Depth 32 and depth 64 at LIN_B.
+- One session that fires S1, then S2, then S3, then S4, then S5, and expects five distinct texts.
+
+`lin fill` on HEAD surviving does not show that a fill was stored. dst0 = dst1 = 0, the linear TLB is zero, bit 31 is clear, `match` stays 0, and the store is skipped. The control shows that the legal path does not `exit`.
+
+## Else
+
+The five `fatal` format strings at S1–S4 have no `\n`. S5 has one, and it has no `[ sgi_mte:` prefix. The new lines want the bracket prefix, the refused value, and `-- transfer declined (once)`. The new probe owns those anchors. The HEAD witness anchors the old strings and stays the pre-fix red run.

@@ -162,11 +162,28 @@ enum {
 	    TLB/mode switch's decline in the same function and is a different
 	    event with a different text; sharing it would collapse the two.
 
-	    THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR --
+	    (This comment used to end "THE NEXT FREE BIT IS 1 << 13, AND THIS
+	    IS THE LAST ENUMERATOR".  #564 added SGIRE_W_MTE_STIPPLE ..
+	    SGIRE_W_MTE_BYTEMASK = 1 << 13 .. 1 << 17 BELOW this line and moved
+	    the sentence with them, as this comment itself instructed.  Demoted,
+	    not deleted, for the same reason as the demotions above it.)  */
+	SGIRE_W_BADCOLOR  = 1 << 12,
+
+	/*  #564 (sgirekills, MTE half): do_mte_transfer()'s five declines, ONE
+	    BIT PER SITE, for the reason every entry above records -- a latch
+	    shared with another site is silenced by that site's traffic.  LIN_A
+	    and LIN_B are two values of ONE guard at S3-S5, the shape of
+	    SGIRE_W_BADMODE (one bit, the value in the text).
+
+	    THE NEXT FREE BIT IS 1 << 18, AND THIS IS THE LAST ENUMERATOR --
 	    which is where that claim belongs, per the convention above.  A
 	    maintainer adding a bit BELOW this line must move this sentence
 	    with it and demote the copy here.  */
-	SGIRE_W_BADCOLOR  = 1 << 12,
+	SGIRE_W_MTE_STIPPLE  = 1 << 13,
+	SGIRE_W_MTE_SRC      = 1 << 14,
+	SGIRE_W_MTE_COPY     = 1 << 15,
+	SGIRE_W_MTE_DEPTH    = 1 << 16,
+	SGIRE_W_MTE_BYTEMASK = 1 << 17,
 };
 
 struct sgi_re_data {
@@ -1493,17 +1510,38 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
 		// exit(1);
 	}
 
+	/*  #564: S1-S5 below DECLINE an unsupported transfer, with a latched
+	    announcement; each used to end the process (fatal() + exit(1)).  The
+	    decline returns before any TRANSFER data is written.  On a
+	    START-tagged write the register store has already landed in the
+	    caller and stays; a START-tagged READ reaches here too (filed
+	    separately), and either way the caller's common tail still answers.
+	    Each site has its own
+	    latch bit (see the enum), and the `return' is OUTSIDE the latch, so
+	    every refused transfer is refused and only the announcement is once.
+	    Each old message's key phrase is kept in the new one.  */
 	if (mode & MTE_MODE_STIPPLE) {
-		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
-		exit(1);
+		if (!(d->warned & SGIRE_W_MTE_STIPPLE)) {
+			d->warned |= SGIRE_W_MTE_STIPPLE;
+			fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE (mode "
+			    "0x%08x) -- transfer declined (once) ]\n", mode);
+		}
+		return;
 	}
 
 	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
 	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
 	
 	if (src > MTE_TLB_C) {
-		fatal("[ sgi_mte: unimplemented SRC ]");
-		exit(1);
+		/*  #564: kept as `src > MTE_TLB_C' for fills AND copies.  A fill
+		    never reads the source, but nothing establishes what the
+		    hardware does with SRC_BUF on a fill (filed separately).  */
+		if (!(d->warned & SGIRE_W_MTE_SRC)) {
+			d->warned |= SGIRE_W_MTE_SRC;
+			fatal("[ sgi_mte: unimplemented SRC %i -- transfer "
+			    "declined (once) ]\n", src);
+		}
+		return;
 	}
 
 	switch (dst_tlb) {
@@ -1578,13 +1616,23 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
 	case MTE_TLB_LIN_B:
 		// Used by the PROM to zero-fill memory (?).
 		if (mode & MTE_MODE_COPY) {
-			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
-			exit(1);
+			if (!(d->warned & SGIRE_W_MTE_COPY)) {
+				d->warned |= SGIRE_W_MTE_COPY;
+				fatal("[ sgi_mte: unimplemented MTE_MODE_COPY to "
+				    "linear dst_tlb %i -- transfer declined (once)"
+				    " ]\n", dst_tlb);
+			}
+			return;
 		}
 
 		if (depth != 8) {
-			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
-			exit(1);
+			if (!(d->warned & SGIRE_W_MTE_DEPTH)) {
+				d->warned |= SGIRE_W_MTE_DEPTH;
+				fatal("[ sgi_mte: unimplemented MTE_DEPTH_x: depth "
+				    "%i to linear dst_tlb %i -- transfer declined "
+				    "(once) ]\n", depth, dst_tlb);
+			}
+			return;
 		}
 
 		debug("[ sgi_mte: LINEAR TRANSFER: mode=0x%08x dst0=0x%016llx,"
@@ -1594,8 +1642,15 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
 		    (long long)dstlen, dst_y_step, (int)bg, (int)bytemask);
 
 		if (bytemask != 0xffffffff) {
-			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
-			exit(1);
+			/*  #564: BYTEMASK is zeroed at init, so a guest that never
+			    stores it reaches this decline.  */
+			if (!(d->warned & SGIRE_W_MTE_BYTEMASK)) {
+				d->warned |= SGIRE_W_MTE_BYTEMASK;
+				fatal("[ sgi_mte: unimplemented MTE bytemask 0x%08x "
+				    "to linear dst_tlb %i -- transfer declined (once)"
+				    " ]\n", (int)bytemask, dst_tlb);
+			}
+			return;
 		}
 
 		/*
