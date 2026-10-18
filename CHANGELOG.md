@@ -1,3 +1,9 @@
+# Records, 2026-10-18: `ppcrlwimiwidth, ppcrldimimask, ppcgateimageskip` names its closing commit 22c278cd
+
+The landing commit 22c278cd closed the row(s) and cannot name itself; this adds it to each `commits` field: `ppcrlwimiwidth` (now `7e39a49 22c278cd`); `ppcrldimimask` (now `7e39a49 22c278cd`); `ppcgateimageskip` (now `7e39a49e 8d038908 22c278cd`).
+check_commit_attribution grades a closed row whose subject-naming commit is unlisted HARD on the next commit, the
+peer session's included, so this lands at once and alone.  Ledger, matrix and this block only.
+
 # Records, 2026-10-18: `ppcrlwimiwidth` and `ppcrldimimask` close -- `#527` finished on 2026-09-12 and was left in work; its five residuals move to `ppc527residual`; `ppcgateimageskip` closes as discharged
 
 `#527` committed both PowerPC fixes as `7e39a49e` on 2026-09-12 -- `rlwimi` rotates the 32-bit word at 32-bit width and
