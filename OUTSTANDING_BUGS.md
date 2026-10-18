@@ -21617,6 +21617,8 @@ the pile-up formed.
 > **The shipped instrument's POST-FIX figure IS measured: 28/28** (`killtable3_20260918/base.raw`, sentinel `IP30ABORT_DONE`).  What is not measured is its PRE-FIX counterpart.  **OWED: one clone build to take PRE-FIX at 28 rows**, which would give a matched pair on the instrument that actually ships.  Deliberately not run while a measuring seat is in flight.  *(The 18-row pair 11/18 -> 18/18 is SUPERSEDED: pass 2 found four defects, and repairing them grew the instrument.  The re-pin's own order proof stays on the 18-row form by design.)*
 >
 > *** [#566, 2026-10-18] THE SHIPPED INSTRUMENT IS **33 ROWS**, AND ITS PRE-FIX COUNTERPART IS NOW MEASURED ON IT. ***  The latch-axis class closure took it 28 -> 32 (kill table 4) -> 33 (`xbit rev2`, kill table 5, base 33/33).  `#566` rebuilt HEAD in a scratch clone with `dev_sgi_ip30.c` set to `686d179c^`'s (all four `abort()` calls back): **PRE-FIX 10/33, POST-FIX 33/33 on the one 33-row instrument** (`regress/artifacts/ip30abortkill/gatewire_20261018/legs/`) -- the matched pair owed above.  The 8/21 -> 21/21 pair is unchanged: a 21-row witness, not a claim about the file that ships.  The "Still owed before close: panel pass 2" line below was discharged by `#531`'s own pass 2 (`_scratchpad/panel_20260917_215210`, 2026-09-17), its F2 adjudication (fable5, roster 9/9, 2026-09-18) and kill tables 3-5 (2026-09-18).
+>
+> *** [2026-10-18, the closure records] THE CLOSE IS HELD FOR THE FLAGSHIP, AND CLAUSE (b) IS MEASURED ON THE SHIPPED INSTRUMENT. ***  HEAD's `dev_sgi_ip30.c` with the removed `fatal("IP30 legacy interrupt rewrite: TODO\n"); abort();` pair re-inserted verbatim at all four fixed sites -- after DEVICE_TICK's latched bit-50 announce, after the `0x10020` and `0x10028` arms' if/else, after the `0x10030` write announce -- scores **14/33**: the six kill rows DEAD and thirteen state rows `died`, the 19 reds named row by row before the run (`regress/artifacts/ip30abortkill/close_20261018/`, `CLAUSE_B.txt`).  The witness field now leads with the 33-row pair and that leg; the 21-row pair and the 18-row order proof stay as history.  `V7_nocounter`, `V8_len4` and the three questions `#531`'s CHANGELOG block filed (the announce string's truth, the per-instance latch axis, fall-through after a non-exiting `fatal()`) are carried by `ip30abortresidual` (LOW, open); this file's stale comment counts stay `#561`'s held places 7-10, carried by `heldrecedits`.  Fable 5.1 walled on the closure check, so the row is HELD for it rather than closed (the row's `hold_question`); the close, and its REGRESS hold, follow Fable's answer.
 
 Four guest-reachable `abort()` calls in `dev_sgi_ip30.c` on the advertised `-E sgi -e ip30`.
 **Three `exit(` sweeps of this queue walked past all four**, because `abort()` contains no
@@ -24980,3 +24982,27 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   marker carrying a `hold_question`.  Owed: the 16 converted and the queue regenerated, in a records commit after `#566`.
   From GPT-6 Astra's `#566` pass-2 queue flag; the `SEAT FAILURE` half from Grok 4.7's F2 (the first count, keyed on the
   spelling `NOT FIRED`, found eight).
+
+### 2026-10-18 -- `ip30abortkill`'s closure records (clause (b) measured, 14/33); the close is held for Fable; two rows filed
+
+* **`ip30abortkill` (HIGH) HELD for fable5** -- `#531` (`686d179c`, committed 2026-09-18) and its 33-row detector, in
+  gate 14 since `#566` (`8faf4a16`).  The floor on the shipped instrument: clause (a) 10/33 (`686d179c^`'s file,
+  `#566`'s legs); clause (b) 14/33 -- the removed `fatal()` + `abort()` pair re-inserted verbatim at all four fixed sites
+  of the fixed file, the 19 reds named before the run (`regress/artifacts/ip30abortkill/close_20261018/`); clause (c)
+  CONTROL=DEAD for an absent and a non-emulator binary (`#566`).  The witness field now leads with the 33-row pair; the
+  21-row pair and the 18-row order proof stay as history.  Fable 5.1 walled on the closure check, and a row may not
+  close while a stage awaits a seat, so it is held with the closure-review question; the close and its REGRESS hold
+  follow Fable's answer.
+* **`ip30abortresidual` (LOW, open)** -- `V7_nocounter` (delete `d->reg_0x20000 += 1000`: 32/32 in kill table 4, on
+  the 32-row instrument; the shipped `acc 20000` row accepts N = 0 and cannot see it) and the width axis `V8_len4`
+  (`&& len == 4` on the `0x10020` write guard: 33/33 in kill table 5), coverage debt disclosed in the probe's CONTRACT;
+  and three questions `#531`'s own CHANGELOG block filed and no row carried -- whether `interrupt-status rewrite not
+  implemented` is true at the `0x10020` and `0x10028` write arms, which keep their stores (glm, kimi), the per-instance
+  latch axis (kimi), and fall-through after a non-exiting `fatal()` (deepseek).  None is claimed repaired.  Grok 4.7
+  dissented: V7/V8 need no carrier.  None is a floor breach.
+* **`heldrecedits` (LOW, open)** -- 30 of the 37 corrections `#560` and `#561` HELD on 2026-10-06 (the lists above) are
+  on no ledger row: the 29 `src/` comments (`#560`'s 12, `#561`'s 17) and `#560`'s `hrec extra` in
+  `regress/diff_ieee_store.c`.  The other seven are `hrecordowed`'s.  Four of the 29 are `#561`'s places 7-10,
+  `dev_sgi_ip30.c`'s stale comment counts.  Each is reconciled against HEAD before it is applied (`#565` has since
+  corrected one held item's claim).
+* **`wiringcliff`** -- its commits field gains `#566`'s `8faf4a16`.
