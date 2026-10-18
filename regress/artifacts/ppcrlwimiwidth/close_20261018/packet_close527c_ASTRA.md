@@ -1,0 +1,27 @@
+# #527's closure unit -- MICRO-CONFIRM of your four confirm flags
+
+**Please do not simply ratify.**  READ-ONLY.  Your confirm answer is `regress/artifacts/ppcrlwimiwidth/close_20261018/codex_close527b.txt` (4 flags).  Each fix, as now built:
+
+1. **The REGRESS queue.**  The unit stages `tools/pipeline/fable_queue.md` (spec `files`, staged after commit): HEAD's copy with its generated CODEX WALL block REWRITTEN by HEAD's `gen_codex_wall.py` from the unit's ledger.  Its diff against HEAD:
+
+```diff
+44c44
+< `alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `cxlaunchdaybreak` (regress:fable5) · `cxlaunchquotation` (regress:fable5) · `dashokclass` (regress:fable5) · `es438` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcdeliver` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `mapledmaaddr` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirandomcolour` (regress:fable5) · `sgirekills` (regress:fable5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5) · `xscaleinten` (regress:fable5)
+---
+> `alphaswpctxreg` (design:opus5) · `alphatbinegsel` (design:opus5) · `alphavmkill` (research:fable5) · `armbfiwidth` (design:opus5) · `armbfxwidth32` (assess:opus5; review:opus5) · `boilerplateprefix` (regress:fable5) · `carrier` (regress:fable5) · `cxlaunchdaybreak` (regress:fable5) · `cxlaunchquotation` (regress:fable5) · `dashokclass` (regress:fable5) · `es438` (regress:fable5) · `fbwitness` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:opus5) · `lcaconfbus1kill` (review:opus5) · `lcalenzerodrop` (regress:fable5) · `ledgerwitness` (regress:fable5) · `m88kexcdeliver` (regress:fable5) · `m88kexcrrtrapmode` (regress:fable5) · `mapledmaaddr` (regress:fable5) · `nineseatreminder` (regress:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:opus5) · `ppcgateimageskip` (regress:fable5) · `ppcrldimimask` (regress:fable5) · `ppcrlwimiwidth` (regress:fable5) · `scorehyphenfp` (regress:fable5) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5) · `sgirandomcolour` (regress:fable5) · `sgirekills` (regress:fable5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:opus5) · `sh4sci` (regress:fable5) · `smhang` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (regress:fable5) · `xscaleinten` (regress:fable5)
+63c63
+< **This is ONE outage plus one allocation, not 38 decisions, and it is written once rather than once per panel.**
+---
+> **This is ONE outage plus one allocation, not 41 decisions, and it is written once rather than once per panel.**
+```
+
+   Section I2 on the built pair (`gen_codex_wall.py --check` with GXLEDGER/GXQUEUE pointed at them): `CODEX_WALL_OK  41 held stages, section matches the ledger`.  Section I: `FABLE_QUEUE_PASS`.  H: `STAGE_PANELS_PASS`.  L: `ATTRIBUTION_PASS 0 hard, 3 soft`.
+2. **The negative controls**, in both notes' bracket and the CHANGELOG: [2026-10-18, at the #527 closure (Grok 4.7): DONE before #527 committed -- kill table 3 (killtable3_20260912/), the gate log (gate_ppc_20260912.log, PASS 110 checks) and the gate's eleven negative-control cases, ten expected to FAIL and one GOOD baseline (gate_negctl_20260912.out).  History, not open debt.]
+3. **`ppcgateimageskip`'s closure note:** CLOSED 2026-10-18 as DISCHARGED, on #527's closure check (GPT-6 Astra): every bareppc-only detector in gate_ppc.sh now runs BEFORE `need_file "$IMAGES/netbsd401-macppc-GENERIC"` -- the rlwimi and rldimi blocks, placed there 'ON PURPOSE' by #527 (7e39a49e), and the rldicl block by #565 (8d038908) -- so a missing image no longer turns their coverage into a SKIP.  The sections after need_file load the NetBSD kernel so the macppc machine constructs -- it is never executed; their probe reads the cold debugger -- and so need the image by construction.  Gate 13 on the current tree: PASS 140 (regress/artifacts/ppcrldiclzero/gatewire_20261018/gate13/).
+4. **Its witness:** harness:regress/gate_ppc.sh -- the three bareppc blocks (ppc_rlwimi_probe.py, ppc_rldimi_probe.py, ppc_rldicl_probe.py) precede need_file "$IMAGES/netbsd401-macppc-GENERIC"; gate 13 PASS 140 (regress/artifacts/ppcrldiclzero/gatewire_20261018/gate13/)
+
+## Questions
+
+**Q1.**  Is each fix right?  **Q2.**  Does any fix introduce a new false sentence?  **Q3.**  Anything else before this unit commits?
+
+**Format:** open with the token `ASTRA_CLOSE527C_20261018`, then ONE line `VERDICT: <n> flags -- <one line>`, then Q1..Q3.  Every defect is a line starting `FLAG:`.  Facts and flags only.

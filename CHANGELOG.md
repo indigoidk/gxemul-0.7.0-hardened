@@ -1,3 +1,37 @@
+# Records, 2026-10-18: `ppcrlwimiwidth` and `ppcrldimimask` close -- `#527` finished on 2026-09-12 and was left in work; its five residuals move to `ppc527residual`; `ppcgateimageskip` closes as discharged
+
+`#527` committed both PowerPC fixes as `7e39a49e` on 2026-09-12 -- `rlwimi` rotates the 32-bit word at 32-bit width and
+writes a wrapping mask's high word; `rldimi`'s rotate loop no longer consumes its own shift count, and its mask walk is
+circular -- with `regress/ppc_rlwimi_probe.py` (28 rows) and `regress/ppc_rldimi_probe.py` (29 rows) pinned in gate 13
+(PASS 110 checks then, `regress/artifacts/ppcrlwimiwidth/gate_ppc_20260912.log`).  Kill table 3: the fixes 28/28 and
+29/29, the pre-fix HEAD legs 14/28 and 17/29, the identity bodies 12/28 and 13/29, all fifteen mutants killed (17 legs,
+zero escapes; `killtable3_20260912/`).  Fable 5.1's ruling closed the chain (`regress/artifacts/xscaleinten/
+fable_adjudication_20260912.md`).  Both ledger rows were nevertheless still `in work` five weeks later.  This commit:
+
+* CLOSES both rows, each with REGRESS held for the flagship: its hold_question asks whether both probes still score
+  28/28 and 29/29 on HEAD, and 14/28 and 17/29 on `7e39a49e`'s parent `eb26590b` -- which changed no PowerPC source, so
+  it carries the file table 3's HEAD leg measured;
+* MOVES #527's five residuals to a new carrier, `ppc527residual` (LOW, open).  Fable's ruling graded them clause (e) or
+  named measurements and asked that they be filed; the 2026-10-02 disposition (`regress/artifacts/idlessaudit_20261002/
+  AGY_FLAGS_DISPOSITION.md`) made `ppcrldimimask` their carrier, and a carrier "owes its recorded work whenever its
+  round runs" -- so closing it bare would have dropped them (GPT-6 Astra's closure check; Grok 4.7 read Fable's ruling
+  alone and found nothing owed);
+* CORRECTS in place `ppcrldimimask`'s title, whose bit counts were wrong (the defect overwrote the LOW SH bits for a
+  non-wrapping mask and omitted the insertion for a wrapping one), and both notes' stale "ALL UNMEASURED.  OWED" (done
+  before `#527` committed: table 3, the gate log, and the eleven negative-control cases -- ten expected to FAIL, one
+  GOOD baseline -- Grok 4.7);
+* CLOSES `ppcgateimageskip` as discharged: the rlwimi and rldimi blocks (`#527`) and the rldicl block (`#565`) all run
+  before `need_file`, so a missing NetBSD image no longer turns their coverage into a SKIP (GPT-6 Astra); its REGRESS
+  question asks for the image-absent run;
+* adds `#565`'s `8d038908` to `wiringcliff`'s commits field (section L had graded its absence SOFT).
+
+Closure check (`regress/artifacts/ppcrlwimiwidth/close_20261018/`): GPT-6 Astra 4 flags and Grok 4.7 1, all taken;
+the confirm pass (GPT-6 Astra) found four more in the revision -- the queue's generated block
+(now staged; section I2 matches at 41 held stages), the negative-control count, a "boot NetBSD" for a kernel that is
+never executed, and a `-u` the rlwimi/rldimi lines lack -- all fixed, and a micro-confirm closed at 0 flags
+(`codex_close527b.txt`, `codex_close527c.txt`).  GLM 5.3 deliberately not fired (a records question needing the files; GLM is packet-fed); Fable 5.1 NOT FIRED
+(held by the owner's 2026-10-17 directive).  Ledger, bug file, matrix and this block only.
+
 # `#565` (wiringcliff): `regress/ppc_rldicl_probe.py` is wired into gate 13 five days before its exemption would refuse every commit -- 30 checks score all 24 rows by name; floor clause (c) measured three ways, the identity body among them; the probe's records the new pin exposed are corrected
 
 **The cliff.**  Section R (`tools/pipeline/check_probe_wiring.py`) held `#522`'s detector for `rldicl` writing zero,

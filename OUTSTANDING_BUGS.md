@@ -126,6 +126,8 @@
 > register-to-register instructions read through the cold debugger, needing no guest OS and no image
 > at all -- so wiring them behind that prerequisite couples a detector that needs no image to an
 > image that may be absent, and the failure renders as SKIP rather than red.
+> *[2026-10-18: CLOSED as discharged -- the rlwimi and rldimi blocks (`#527`) and the rldicl block (`#565`) run
+> BEFORE `need_file`, so a missing image no longer skips them (GPT-6 Astra, `#527`'s closure check).]*
 >
 > **`ppcprobescorestale`** (LOW) -- `regress/ppc_rldicl_probe.py`'s comments claim **19 rows** while
 > the file makes **24 `row()` calls**, and `naive fix wrong` contributes to SCORE despite being
@@ -19621,6 +19623,11 @@ Filed, each ruled clause (e) or a named measurement, NOT owed:
   made `tmp >> 32` at SH=0 undefined and the guard LOAD-BEARING (Fable).  A red would only relabel it
   "host-dependent equivalent"; no row can pin it.
 
+*[2026-10-18, `#527`'s closure-records commit: both rows CLOSED.  The 2026-10-02 disposition had made `ppcrldimimask`
+the carrier of these five (`regress/artifacts/idlessaudit_20261002/AGY_FLAGS_DISPOSITION.md`), so they move to
+`ppc527residual` (LOW, open) rather than close with it -- GPT-6 Astra, the closure check.  "none owed" above means
+none owed before `#527` committed.]*
+
 ### `mapledmaaddr` -- SHIPPED as `#528` (2026-09-12); residuals FILED, none owed
 
 The fix (ACCEPT: delete the `fatal` + `exit(1)` around the `MAPLE_DMAADDR` read) and its 37-row detector shipped as
@@ -24930,3 +24937,13 @@ Fable 5.1, GPT-6 Astra, Grok 4.7).  Each row's ledger `state_note` carries its s
   R's advisory SELFLABEL note), its usage string names `ppc_rldicl_witness.py`, and `vacuous cell`'s split note makes a
   red log read `GREEN on a FAIL`.  Cosmetic: the label and the usage string FILED by all three seats; the split note
   is Grok 4.7's, filed by the author.
+
+### 2026-10-18 -- `#527`'s rows close (`ppcrlwimiwidth`, `ppcrldimimask`); their residuals move to `ppc527residual`; `ppcgateimageskip` closes as discharged
+
+* **`ppcrlwimiwidth`, `ppcrldimimask` CLOSED** -- `#527` (`7e39a49e`, 2026-09-12) shipped both fixes with 28- and 29-row
+  detectors in gate 13; kill table 3 zero escapes; Fable 5.1 closed the chain on 2026-09-12.  REGRESS held for the
+  flagship (each row's hold_question).
+* **`ppc527residual` (LOW, open)** -- #527's five residuals (the SH=63/MB=1 rldimi row, the wrapping stale-rS alias row,
+  the Rc=1-only insertion skip, `CENSUS_SHRINK`, `R_NOGUARD`), moved here from `ppcrldimimask`, which the 2026-10-02
+  disposition had made their carrier.  Coverage debt and named measurements; none a floor breach.
+* **`ppcgateimageskip` CLOSED as discharged** -- the rlwimi, rldimi and rldicl blocks run before `need_file` in gate 13.
